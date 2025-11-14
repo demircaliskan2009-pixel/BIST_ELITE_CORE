@@ -11,3 +11,21 @@ data/
 !data/samples/
 
 src_file_backup_*/
+# --- security harden before public ---
+config/*.yml
+config/*.yaml
+data/
+*.env
+.env*
+secrets/
+*.pem
+*.key
+*.p12
+*.cer
+*.crt
+*.der
+*.keystore
+*.jks
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
