@@ -1,0 +1,7 @@
+{
+  "spread_bps_max": 80,
+  "auction_ratio_max": 0.15,
+  "adv_tl_min": 30000000,
+  "vbts_must_be": "NONE",
+  "data_freshness_days_max": 2
+}

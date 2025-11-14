@@ -1,0 +1,26 @@
+{
+  "mom_fast": 5,
+  "mom_slow": 20,
+  "vol_window": 20,
+  "kap_positive_keywords": [
+    "ihale",
+    "sözleşme",
+    "yeni iş",
+    "yatırım",
+    "kapasite",
+    "temettü"
+  ],
+  "kap_negative_keywords": [
+    "iptal",
+    "durdur",
+    "fesih",
+    "soruşturma",
+    "tazminat",
+    "borç"
+  ],
+  "kap_weight": 1.0,
+  "mom_weight": 1.0,
+  "vol_weight": 0.5,
+  "score_buy": 1.5,
+  "score_watch": 0.5
+}
