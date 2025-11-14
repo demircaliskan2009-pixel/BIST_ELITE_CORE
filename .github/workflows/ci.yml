@@ -1,16 +1,29 @@
 name: CI
 on:
   push:
+    branches: [ "main" ]
   pull_request:
+    branches: [ "main" ]
+
+# En az izin
+permissions:
+  contents: read
+
+# Yinelenen koşuları iptal et
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
+    name: tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - run: python -V
+          python-version: "3.12"
+          cache: "pip"
       - run: pip install -U pip pytest
       - name: Run tests
         run: pytest -q
