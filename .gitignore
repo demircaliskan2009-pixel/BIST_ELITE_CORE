@@ -9,3 +9,5 @@ __pycache__/
 # Veri: sadece örnekler repo'da takip edilsin
 data/
 !data/samples/
+
+src_file_backup_*/
