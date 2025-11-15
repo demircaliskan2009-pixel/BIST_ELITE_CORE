@@ -1,25 +1,12 @@
-name: Faz-2: service(MarketData) + equal-weight strategy + CLI (eod→plan→orders)
+name: ci
 
 on:
   push:
-    branches: [ main ]
-    paths:
-      - "src/**"
-      - "tests/**"
-      - ".github/workflows/ci.yml"
   pull_request:
-    branches: [ main ]
-    paths:
-      - "src/**"
-      - "tests/**"
-      - ".github/workflows/ci.yml"
 
 jobs:
   tests:
     runs-on: ubuntu-latest
-    env:
-      PYTHONPATH: src
-      TZ: UTC
 
     steps:
       - name: Checkout
@@ -29,30 +16,21 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install runtime + test deps
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
-          pip install pytest
-          pytest --version
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; else pip install pytest; fi
 
-      - name: Clean previous EOD snapshots
+      - name: Reset EOD snapshots
         run: rm -rf data/eod/snapshots/* || true
 
-      - name: Run Faz-2 smoke tests
+      - name: Run Faz-2 smoke tests (deterministic)
+        env:
+          # Hem kökü hem src'yi PYTHONPATH'e koy: iki import stilini de kapsar
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/src
+          TZ: UTC
         run: |
-          set -e
-          pytest -q \
-            tests/test_faz2_plan_cli.py::test_plan_cli_equal_weight \
-            tests/test_faz2_orders_cli.py::test_cli_orders \
-            tests/test_faz2_localcsv_provider.py::test_local_csv_provider_symbols_and_close
+          pytest -q -k "test_plan_cli_equal_weight or test_cli_orders or test_local_csv_provider_symbols_and_close"
