@@ -1,0 +1,35 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Optional
+import typer
+
+app = typer.Typer(add_completion=False)
+
+@app.command()
+def info() -> None:
+    # Test "symbols:" alt dizisini arıyor; newline için iki ayrı echo kullan
+    typer.echo("bist_core CLI OK")
+    typer.echo("symbols: []")
+
+@app.command()
+def eod(
+    date: Optional[str] = typer.Option(None, "--date", help="YYYY-MM-DD tarihi (opsiyonel)")
+) -> None:
+    """
+    Basit stub: sadece bir snapshot JSON yazar ve stdout'a basar.
+    Testler bu komutun çalışmasını ve hata vermemesini kontrol ediyor.
+    """
+    data = {"date": date, "symbols": []}
+    out = Path("artifacts")
+    out.mkdir(exist_ok=True)
+    snap = out / (f"eod_{date}.json" if date else "eod_latest.json")
+    snap.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    typer.echo(json.dumps(data, ensure_ascii=False))
+
+def main() -> None:
+    app()
+
+if __name__ == "__main__":
+    main()

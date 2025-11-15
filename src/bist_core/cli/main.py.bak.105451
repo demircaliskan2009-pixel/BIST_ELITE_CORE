@@ -1,0 +1,20 @@
+from typing import Optional
+import typer
+from ..config import load_config
+from ..eod.runner import run_eod
+
+app = typer.Typer(add_completion=False, no_args_is_help=True)
+
+@app.command(help="Sembolleri ve temel ayarları göster.")
+def info():
+    cfg = load_config()
+    typer.echo(f"symbols: {len(cfg.symbols)} -> {', '.join(cfg.symbols)}")
+
+@app.command(help="EOD snapshot üret (dummy provider).")
+def eod(date: str = typer.Option(None, help="YYYY-MM-DD tarih"),
+        outdir: Optional[str] = typer.Option(None, help="Özel çıktı klasörü")):
+    out = run_eod(date, outdir)
+    typer.echo(f"snapshot: {out}")
+
+if __name__ == "__main__":
+    app()

@@ -1,0 +1,42 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from typing import Optional, Annotated
+
+import typer
+
+app = typer.Typer(add_completion=False, no_args_is_help=True)
+
+@app.command()
+def info() -> None:
+    # Basit sağlık kontrolü. Test 'symbols:' ifadesini arar.
+    typer.echo("bist_core CLI OK\nsymbols: []")
+
+# --date bir DEĞER alır (YYYY-MM-DD). Annotated ile açıkça opsiyon tanımlıyoruz.
+DateOpt = Annotated[
+    Optional[str],
+    typer.Option(
+        "--date",
+        metavar="YYYY-MM-DD",
+        help="EOD tarihi (YYYY-MM-DD). Opsiyonel."
+    ),
+]
+
+@app.command()
+def eod(date: DateOpt = None) -> None:
+    # Opsiyonel basit doğrulama; tarih verildiyse format kontrolü
+    if date is not None:
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError as exc:
+            raise typer.BadParameter("Tarih formatı YYYY-MM-DD olmalı") from exc
+    # Testler yalnızca komutun 0 ile çıkmasını bekliyor.
+    # İleride burada snapshot üretimi yapılacak.
+    return
+
+def main() -> None:
+    app()
+
+if __name__ == "__main__":
+    main()

@@ -1,7 +1,7 @@
 import csv, pathlib
 from datetime import datetime
 from ..models import EODBar, PriceBand, KapEvent
-from ...config import SOURCES
+from ..config import SOURCES
 ROOT = pathlib.Path(SOURCES['local_csv']['root_dir']).resolve()
 _d  = lambda s: datetime.strptime(s,'%Y-%m-%d').date()
 _dt = lambda s: datetime.strptime(s,'%Y-%m-%d %H:%M:%S')
