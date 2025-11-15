@@ -1,46 +1,29 @@
 name: CI
-
 on:
   push:
   pull_request:
 
-permissions:
-  contents: read
-
 jobs:
   tests:
-    runs-on: ubuntu-latest    # DÜZELTME: run-os değil, runs-on
-    defaults:
-      run:
-        shell: bash
-
+    runs-on: ubuntu-latest
     steps:
-      - name: Check out repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements*.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install deps
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
 
-      - name: Run Faz-2 smoke tests (deterministic)
+      # Faz-2 deterministik smoke: sadece 3 test
+      - name: Run pytest (Faz-2 smoke)
         env:
-          PYTHONPATH: ${{ github.workspace }}/src   # src-layout için emniyet kemeri
-          TZ: "UTC"
+          PYTHONPATH: ${{ github.workspace }}/src
         run: |
           pytest -q \
             tests/test_faz2_plan_cli.py::test_plan_cli_equal_weight \
