@@ -2,18 +2,24 @@ name: Faz-2: service(MarketData) + equal-weight strategy + CLI (eod→plan→ord
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/ci.yml"
   pull_request:
-    branches: [ "main" ]
+    branches: [ main ]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/ci.yml"
 
 jobs:
-  smoke:
+  tests:
     runs-on: ubuntu-latest
-    # Job-level env (tüm adımlar için geçerli)
     env:
-      PYTHONUNBUFFERED: "1"
-      PYTHONPATH: "src"
-      TZ: "UTC"
+      PYTHONPATH: src
+      TZ: UTC
 
     steps:
       - name: Checkout
@@ -28,8 +34,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements*.txt') }}
-          restore-keys: ${{ runner.os }}-pip-
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
       - name: Install runtime + test deps
         run: |
