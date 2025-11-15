@@ -44,5 +44,18 @@ def eod(
 def main() -> None:
     app()
 
+
+@app.command()
+def plan(date: str = typer.Option(None, "--date", help="EOD tarihi (YYYY-MM-DD).")) -> None:
+    """
+    EOD snapshot içindeki sembollere eşit ağırlıklı plan üretir.
+    """
+    if date is None:
+        raise typer.BadParameter("Tarih YYYY-MM-DD olmalı")
+    from pathlib import Path
+    from bist_core.strategy.equal_weight import build_equal_weight_plan
+    out = build_equal_weight_plan(date, base=Path("data/eod/snapshots"))
+    typer.echo(f"Plan yazıldı: {out}")
+
 if __name__ == "__main__":
     main()
