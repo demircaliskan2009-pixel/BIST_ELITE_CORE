@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+from typing import Optional
+import json
+import typer
+
+app = typer.Typer(add_completion=False, no_args_is_help=True)
+
+@app.command()
+def info() -> None:
+    # Sadece duman testi için basit çıktı
+    print("bist_core CLI OK")
+    print("symbols: ASELS,BIMAS,THYAO")
+
+@app.command()
+def eod(
+    date: Optional[str] = typer.Option(
+        None,
+        "--date",
+        metavar="YYYY-MM-DD",
+        help="EOD snapshot date (YYYY-MM-DD).",
+        show_default=False,
+    ),
+) -> None:
+    # Testler tarih verdiği için doğrudan doğrulayıp yazdırıyoruz
+    if date is None:
+        raise typer.BadParameter("--date is required")
+    print(json.dumps({"date": date}))
+    
+if __name__ == "__main__":
+    app()

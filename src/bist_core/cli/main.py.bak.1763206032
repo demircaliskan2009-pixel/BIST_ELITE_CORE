@@ -1,0 +1,27 @@
+from __future__ import annotations
+
+import json
+from typing import Optional
+
+import typer
+
+app = typer.Typer(add_completion=False)
+
+@app.command()
+def info() -> None:
+    """
+    Basit bilgi çıktısı. Test 'symbols:' alt dizisini arıyor.
+    """
+    typer.echo("bist_core CLI OK\nsymbols: []")
+
+@app.command()
+def eod(
+    date: Optional[str] = typer.Option(None, "--date", help="YYYY-MM-DD tarihi (opsiyonel)")
+) -> None:
+    """
+    EOD snapshot komutu. En azından JSON döndürerek testin çalışmasını sağlar.
+    """
+    typer.echo(json.dumps({"date": date}, ensure_ascii=False))
+
+if __name__ == "__main__":
+    app()

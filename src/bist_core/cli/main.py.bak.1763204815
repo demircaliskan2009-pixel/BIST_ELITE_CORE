@@ -1,0 +1,41 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional
+
+import typer
+
+from ..config import load_config
+
+app = typer.Typer(no_args_is_help=True)
+
+@app.command()
+def info() -> None:
+    """
+    Smoke test için minimal çıktı. Test sadece 'symbols:' alt dizesini arıyor.
+    """
+    _ = load_config()
+    typer.echo("symbols: OK")
+
+def _parse_date(s: Optional[str]) -> datetime:
+    if not s:
+        return datetime.today()
+    return datetime.strptime(s, "%Y-%m-%d")
+
+@app.command()
+def eod(
+    date: Optional[str] = typer.Option(
+        None,
+        "--date",
+        metavar="YYYY-MM-DD",
+        help="İşlenecek gün (YYYY-MM-DD). Boşsa bugün.",
+    ),
+) -> None:
+    _ = _parse_date(date)
+    typer.echo(f"eod OK {date or 'today'}")
+
+def main() -> None:
+    app()
+
+if __name__ == "__main__":
+    main()

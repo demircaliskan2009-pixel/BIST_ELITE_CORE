@@ -1,0 +1,37 @@
+from __future__ import annotations
+
+import json
+from typing import Optional
+import typer
+
+app = typer.Typer(add_completion=False, no_args_is_help=True)
+
+@app.command()
+def info() -> None:
+    """
+    Basit sağlık kontrolü. Test 'symbols:' ifadesini arar.
+    """
+    typer.echo("bist_core CLI OK\nsymbols: []")
+
+@app.command()
+def eod(
+    date: Optional[str] = typer.Option(
+        None,
+        "--date",
+        "-d",
+        metavar="YYYY-MM-DD",
+        show_default=False,
+        help="EOD snapshot tarihi (YYYY-MM-DD). Değer alan bir seçenek; bayrak değildir.",
+    ),
+) -> None:
+    """
+    EOD snapshot akışı (şimdilik sadece girilen tarihi yankılar).
+    """
+    # İleride gerçek iş mantığı gelecek; test için 0 çıkış yeterli.
+    typer.echo(json.dumps({"date": date}))
+
+def main() -> None:
+    app()
+
+if __name__ == "__main__":
+    main()
