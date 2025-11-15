@@ -2,41 +2,54 @@ name: Faz-2: service(MarketData) + equal-weight strategy + CLI (eod→plan→ord
 
 on:
   push:
-    branches: [ "main", "fix/**", "feat/**" ]
+    branches: [ main ]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/ci.yml"
   pull_request:
-    branches: [ "main" ]
+    branches: [ main ]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - ".github/workflows/ci.yml"
 
 jobs:
   tests:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-        working-directory: ${{ github.workspace }}
     env:
-      PYTHONUNBUFFERED: "1"
-      PYTHONPATH: "src"
-      TZ: "UTC"
+      PYTHONPATH: src
+      TZ: UTC
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install deps
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install runtime + test deps
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          pip install pytest
+          pytest --version
 
       - name: Clean previous EOD snapshots
         run: rm -rf data/eod/snapshots/* || true
 
-      - name: Run Faz-2 smoke tests only
+      - name: Run Faz-2 smoke tests
         run: |
           set -e
           pytest -q \
