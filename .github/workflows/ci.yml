@@ -1,4 +1,4 @@
-name: CI
+name: Faz-2: service(MarketData) + equal-weight strategy + CLI (eod→plan→orders)
 
 on:
   push:
@@ -6,31 +6,46 @@ on:
   pull_request:
     branches: [ "main" ]
 
-permissions:
-  contents: read
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  tests:
+  smoke:
     runs-on: ubuntu-latest
+    # Job-level env (tüm adımlar için geçerli)
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "src"
+      TZ: "UTC"
+
     steps:
-      - name: Check out repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements*.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install runtime + test deps
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          pip install pytest
+          pytest --version
 
-      - name: Run pytest
-        env:
-          PYTHONPATH: ${{ github.workspace }}
-        run: pytest -q
+      - name: Clean previous EOD snapshots
+        run: rm -rf data/eod/snapshots/* || true
+
+      - name: Run Faz-2 smoke tests
+        run: |
+          set -e
+          pytest -q \
+            tests/test_faz2_plan_cli.py::test_plan_cli_equal_weight \
+            tests/test_faz2_orders_cli.py::test_cli_orders \
+            tests/test_faz2_localcsv_provider.py::test_local_csv_provider_symbols_and_close
