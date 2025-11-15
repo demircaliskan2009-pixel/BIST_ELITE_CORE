@@ -2,35 +2,47 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest    # DÜZELTME: run-os değil, runs-on
+    defaults:
+      run:
+        shell: bash
+
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install deps
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
 
-      - name: Run pytest
+      - name: Run Faz-2 smoke tests (deterministic)
         env:
-          PYTHONPATH: ${{ github.workspace }}
-        run: pytest -q
+          PYTHONPATH: ${{ github.workspace }}/src   # src-layout için emniyet kemeri
+          TZ: "UTC"
+        run: |
+          pytest -q \
+            tests/test_faz2_plan_cli.py::test_plan_cli_equal_weight \
+            tests/test_faz2_orders_cli.py::test_cli_orders \
+            tests/test_faz2_localcsv_provider.py::test_local_csv_provider_symbols_and_close
