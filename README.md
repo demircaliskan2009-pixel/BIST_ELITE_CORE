@@ -1,3 +1,5 @@
+![CI](https://github.com/<user>/<repo>/actions/workflows/ci.yml/badge.svg)
+**Faz-3 / Adım-1: TAMAMLANDI** — local CSV ingest + dataset registry + smoke tests
 # BIST_ELITE_CORE — Minimal Working Core
 Runs offline on CSVs; plug-in ready for vendors and brokers.
 ### Faz-2: CLI akışı (eod → plan → orders)
