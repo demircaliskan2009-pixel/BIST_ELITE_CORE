@@ -1,12 +1,9 @@
-from pathlib import Path
+from __future__ import annotations
+
 import csv
 import pytest
+from pathlib import Path
 from bist_core.data.ingest import read_csv, register_dataset, load_registered_dataset
-    read_csv,
-    train_rows,
-    register_dataset,
-    load_registered_dataset,
-)
 
 def _write_sample_csv(tmp_path: Path) -> Path:
     p = tmp_path / "quotes.csv"
