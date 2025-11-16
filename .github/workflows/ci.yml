@@ -2,27 +2,22 @@ name: ci
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
     paths:
       - "src/**"
       - "tests/**"
       - ".github/workflows/ci.yml"
-      - "requirements.txt"
-      - "requirements-dev.txt"
+      - "requirements*.txt"
       - "pyproject.toml"
-      - "poetry.lock"
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
     paths:
       - "src/**"
       - "tests/**"
       - ".github/workflows/ci.yml"
-      - "requirements.txt"
-      - "requirements-dev.txt"
+      - "requirements*.txt"
       - "pyproject.toml"
-      - "poetry.lock"
 
-# Aynı ref için paralel workflow’ları iptal et (daha hızlı ve deterministik CI)
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -35,23 +30,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # Sadece src/ kökü import yoluna eklenir
+      # src-layout için kritik: Python, 'src' altını paket kökü olarak görsün
       PYTHONPATH: ${{ github.workspace }}/src
-      # Derlenmiş dosya bırakma (eski .pyc çakışmalarını önlemek için)
-      PYTHONDONTWRITEBYTECODE: "1"
       TZ: UTC
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
+          cache: "pip"
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
@@ -64,19 +56,22 @@ jobs:
 
       - name: Clean compiled artifacts
         run: |
-          find . -name "*.pyc" -delete || true
-          find . -name "__pycache__" -type d -exec rm -rf {} + || true
+          find . -name "__pycache__" -type d -print -exec rm -rf {} + || true
+          rm -rf .pytest_cache tests/.pytest_cache || true
 
-      - name: Sanity (paths & versions)
+      - name: Sanity (path check)
         run: |
-          python -V
-          echo "PYTHONPATH=$PYTHONPATH"
-          ls -la
-          ls -la src || true
-          ls -la tests || true
+          python - <<'PY'
+          import os, sys, importlib.util, pathlib
+          print("PYTHONPATH=", os.environ.get("PYTHONPATH"))
+          print("sys.path[0:3]=", sys.path[0:3])
+          for m in ("bist_core","bist_core.data","bist_core.data.ingest"):
+              spec = importlib.util.find_spec(m)
+              print(m, "->", "FOUND" if spec else "MISSING", getattr(spec, "origin", None))
+          PY
 
       - name: Run Faz-3 deterministic tests
         run: |
           set -euo pipefail
-          # Sadece bu modülün testi: import yolu hatalarını kolay teşhis eder
-          pytest -q tests/test_faz3_data_core_ingest_local_csv.py
+          # Ek güvenlik için env satırında da genişletiyoruz
+          PYTHONPATH="$PYTHONPATH" pytest -q tests/test_faz3_data_core_ingest_local_csv.py
