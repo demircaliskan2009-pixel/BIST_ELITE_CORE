@@ -2,21 +2,25 @@ name: ci
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
     paths:
-      - "src/**"
-      - "tests/**"
-      - ".github/workflows/ci.yml"
-      - "requirements*.txt"
-      - "pyproject.toml"
+      - 'src/**'
+      - 'tests/**'
+      - '.github/workflows/ci.yml'
+      - 'requirements.txt'
+      - 'requirements-dev.txt'
+      - 'pyproject.toml'
+      - 'poetry.lock'
   pull_request:
-    branches: ["main"]
+    branches: [ "main" ]
     paths:
-      - "src/**"
-      - "tests/**"
-      - ".github/workflows/ci.yml"
-      - "requirements*.txt"
-      - "pyproject.toml"
+      - 'src/**'
+      - 'tests/**'
+      - '.github/workflows/ci.yml'
+      - 'requirements.txt'
+      - 'requirements-dev.txt'
+      - 'pyproject.toml'
+      - 'poetry.lock'
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -30,11 +34,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # src-layout için kritik: Python, 'src' altını paket kökü olarak görsün
-      PYTHONPATH: ${{ github.workspace }}/src
       TZ: UTC
-      PIP_DISABLE_PIP_VERSION_CHECK: "1"
-
+      PYTHONPATH: ${{ github.workspace }}/src
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,7 +44,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
+          cache: pip
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
@@ -53,25 +54,25 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; else pip install pytest; fi
+          pytest --version
 
       - name: Clean compiled artifacts
         run: |
-          find . -name "__pycache__" -type d -print -exec rm -rf {} + || true
+          find . -name "__pycache__" -type d -prune -exec rm -rf {} + || true
           rm -rf .pytest_cache tests/.pytest_cache || true
 
-      - name: Sanity (path check)
+      - name: Sanity (path & import)
         run: |
           python - <<'PY'
-          import os, sys, importlib.util, pathlib
+          import sys, importlib.util as iu, os
           print("PYTHONPATH=", os.environ.get("PYTHONPATH"))
-          print("sys.path[0:3]=", sys.path[0:3])
           for m in ("bist_core","bist_core.data","bist_core.data.ingest"):
-              spec = importlib.util.find_spec(m)
-              print(m, "->", "FOUND" if spec else "MISSING", getattr(spec, "origin", None))
+              print(m, "FOUND" if iu.find_spec(m) else "MISSING")
+          from bist_core.data import ingest as x
+          assert all(hasattr(x,a) for a in ("read_csv","register_dataset","load_registered_dataset"))
           PY
 
       - name: Run Faz-3 deterministic tests
         run: |
           set -euo pipefail
-          # Ek güvenlik için env satırında da genişletiyoruz
-          PYTHONPATH="$PYTHONPATH" pytest -q tests/test_faz3_data_core_ingest_local_csv.py
+          pytest -q tests/test_faz3_data_core_ingest_local_csv.py
