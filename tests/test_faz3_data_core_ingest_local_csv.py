@@ -1,5 +1,4 @@
 from __future__ import annotations
-import csv
 import pytest
 from pathlib import Path
 from bist_core.data.ingest import read_csv, register_dataset, load_registered_dataset
