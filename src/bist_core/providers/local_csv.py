@@ -2,7 +2,6 @@
 from __future__ import annotations
 from pathlib import Path
 import csv
-from typing import Dict, List
 
 class LocalCSVProvider:
     """
