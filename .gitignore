@@ -41,3 +41,7 @@ __pycache__/
 
 __pycache__/
 *.pyc
+
+# keep package code under src/bist_core/data
+!src/bist_core/data/
+!src/bist_core/data/**
