@@ -1,2 +1,2 @@
-__all__ = ["__version__"]
-__version__ = "0.2.0-faz2"
+from .data import read_csv, register_dataset, load_registered_dataset
+__all__ = ["read_csv", "register_dataset", "load_registered_dataset"]
