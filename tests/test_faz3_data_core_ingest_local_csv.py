@@ -1,7 +1,7 @@
 from pathlib import Path
 import csv
 import pytest
-from bist_core.data.ingest import (
+from bist_core.data.ingest import read_csv, register_dataset, load_registered_dataset
     read_csv,
     train_rows,
     register_dataset,
