@@ -1,159 +1,186 @@
-# src/bist_core/cli/main.py
 from __future__ import annotations
 
-import csv
-import json
-import math
-from datetime import date as _date
+import argparse
+import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
-import typer
+import pandas as pd
 
-app = typer.Typer(add_completion=False, no_args_is_help=True)
-SNAP_BASE = Path("data/eod/snapshots")
-
-
-def _parse_date(date_str: Optional[str]) -> str:
-    """YYYY-MM-DD; None/boş ise bugün."""
-    if not date_str:
-        return _date.today().isoformat()
-    try:
-        _ = _date.fromisoformat(date_str)
-        return date_str
-    except Exception as exc:
-        raise typer.BadParameter("Tarih YYYY-MM-DD olmalı") from exc
+from bist_core.data import DatasetRegistry, get_default_registry
+from bist_core.data.eod import (
+    build_and_store_eod_snapshot,
+    get_default_snapshot_root,
+    read_eod_snapshot,
+)
 
 
-@app.command("info")
-def info() -> None:
-    """Basit sağlık kontrolü."""
-    typer.echo("bist_core CLI OK; symbols: []")
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="bist_core",
+        description="BIST_ELITE_CORE command-line interface",
+    )
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # bist_core data ...
+    data_parser = subparsers.add_parser("data", help="Data management commands")
+    data_subparsers = data_parser.add_subparsers(
+        dest="data_command",
+        required=True,
+    )
+
+    # bist_core data register ...
+    register_parser = data_subparsers.add_parser(
+        "register",
+        help="Register a dataset in the registry",
+    )
+    register_parser.add_argument("--name", required=True, help="Dataset name")
+    register_parser.add_argument(
+        "--kind",
+        required=True,
+        help="Dataset kind (e.g. 'local_csv')",
+    )
+    register_parser.add_argument(
+        "--path",
+        required=True,
+        help="Root path of the dataset (directory)",
+    )
+    register_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing dataset metadata if present",
+    )
+
+    # bist_core data load ...
+    load_parser = data_subparsers.add_parser(
+        "load",
+        help="Load a registered dataset and print a small summary",
+    )
+    load_parser.add_argument("--name", required=True, help="Dataset name")
+    load_parser.add_argument(
+        "--as-of",
+        help="Optional as-of date (YYYY-MM-DD) for using/creating EOD snapshot",
+    )
+    load_parser.add_argument(
+        "--use-snapshot",
+        action="store_true",
+        help=(
+            "Load from EOD snapshot instead of raw dataset. "
+            "If snapshot does not exist and --as-of is given, "
+            "it will be created."
+        ),
+    )
+    load_parser.add_argument(
+        "--snapshot-root",
+        help="Optional override for snapshot root directory",
+    )
+    load_parser.add_argument(
+        "--head",
+        type=int,
+        default=5,
+        help="Number of rows from the head to display",
+    )
+
+    return parser
 
 
-@app.command("eod")
-def eod(date: Optional[str] = typer.Option(None, "--date", help="EOD tarihi (YYYY-MM-DD)")) -> None:
-    """
-    EOD snapshot klasörü ve meta oluşturur.
-    Testler, snapshot.csv içinde en az 'TEST' satırını ve close=0.0 bekliyor.
-    """
-    day = _parse_date(date)
-    base = SNAP_BASE / day
-    base.mkdir(parents=True, exist_ok=True)
+def _cmd_data_register(args: argparse.Namespace) -> int:
+    registry: DatasetRegistry = get_default_registry()
+    path = Path(args.path)
 
-    # meta
-    meta = {"day": day}
-    (base / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    meta = registry.register(
+        name=args.name,
+        kind=args.kind,
+        path=path,
+        overwrite=args.overwrite,
+    )
 
-    # snapshot
-    snap = base / "snapshot.csv"
-    with snap.open("w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["symbol", "close"])
-        w.writerow(["TEST", "0.0"])  # provider testi 0.0 bekliyor
-
-    typer.echo(f"EOD yazıldı: {snap}")
+    print(
+        f"registered dataset {meta.name!r} "
+        f"kind={meta.kind!r} path={meta.path!r}"
+    )
+    return 0
 
 
-@app.command("plan")
-def plan(date: Optional[str] = typer.Option(None, "--date", help="EOD tarihi (YYYY-MM-DD)")) -> None:
-    """
-    snapshot.csv'deki sembollere eşit ağırlık planı yazar.
-    Test, plan CSV başlığını 'symbol,weight' ve stdout'ta 'Plan yazıldı:' bekler.
-    Toplamın 1.0'a abs_tol=1e-6 ile kapanması için son ağırlık '1 - sum(öncekiler)' verilir.
-    """
-    day = _parse_date(date)
-    base = SNAP_BASE / day
-    snap = base / "snapshot.csv"
-    out = base / "plan_equal_weight.csv"
+def _load_dataframe_from_registry(
+    registry: DatasetRegistry,
+    name: str,
+    as_of: Optional[str],
+    use_snapshot: bool,
+    snapshot_root_arg: Optional[str],
+) -> pd.DataFrame:
+    meta = registry.get(name)
 
-    if not snap.exists():
-        typer.echo("snapshot bulunamadı", err=True)
-        raise typer.Exit(code=2)
+    if use_snapshot:
+        snapshot_root = get_default_snapshot_root(
+            Path(snapshot_root_arg) if snapshot_root_arg else None
+        )
+        if as_of is None:
+            raise SystemExit(
+                "--use-snapshot specified but --as-of date is missing"
+            )
 
-    rows = list(csv.DictReader(snap.open("r", encoding="utf-8")))
-    syms = [r.get("symbol", "").strip() for r in rows if r.get("symbol")]
-    syms = [s for s in syms if s]
-    if not syms:
-        typer.echo("snapshot boş", err=True)
-        raise typer.Exit(code=2)
-
-    n = len(syms)
-    base_w = 1.0 / n
-    weights = []
-    if n == 1:
-        weights = [1.0]
-    else:
-        for i in range(n - 1):
-            weights.append(round(base_w, 6))
-        last = 1.0 - sum(weights)
-        # Güvenlik: mutlak tolerans içinde kalacak şekilde yuvarla
-        last = round(last, 6)
-        weights.append(last)
-
-    with out.open("w", encoding="utf-8", newline="") as f:
-        wcsv = csv.writer(f)
-        # TEST: plan 'weight' sütun adını bekliyor
-        wcsv.writerow(["symbol", "weight"])
-        for s, w in zip(syms, weights):
-            wcsv.writerow([s, f"{w:.6f}"])
-
-    typer.echo(f"Plan yazıldı: {out}")
-
-
-@app.command("orders")
-def orders_cmd(date: Optional[str] = typer.Option(None, "--date", help="EOD tarihi (YYYY-MM-DD)")) -> None:
-    """
-    Eşit ağırlık planından risk kontrollü sipariş dosyası üretir.
-    PASS → exit 0, FAIL → exit 2 (dosyalar yine yazılır).
-    """
-    day = _parse_date(date)
-    base = SNAP_BASE / day
-
-    plan = base / "plan_equal_weight.csv"
-    out_orders = base / "orders_equal_weight.csv"
-    out_meta = base / "orders_meta.txt"
-
-    if not plan.exists():
-        typer.echo("plan not found", err=True)
-        raise typer.Exit(code=2)
-
-    rows = list(csv.DictReader(plan.open("r", encoding="utf-8")))
-    if not rows:
-        typer.echo("plan boş", err=True)
-        raise typer.Exit(code=2)
-
-    # plan'da hem 'weight' hem de 'target_weight' destekle
-    weights = []
-    symbols = []
-    for r in rows:
-        symbols.append(r.get("symbol", ""))
+        # Eğer snapshot yoksa, oluştur.
         try:
-            w = float(r.get("weight") or r.get("target_weight") or "nan")
-        except Exception:
-            w = float("nan")
-        weights.append(w)
+            df = read_eod_snapshot(snapshot_root, name, as_of)
+        except FileNotFoundError:
+            path = build_and_store_eod_snapshot(
+                dataset_name=name,
+                as_of=as_of,
+                registry=registry,
+                snapshot_root=snapshot_root,
+            )
+            print(f"created EOD snapshot at {path}")
+            df = read_eod_snapshot(snapshot_root, name, as_of)
+        return df
 
-    # risk kapısı: [0,1] aralığı ve toplam ~= 1.0 (abs_tol=1e-6)
-    ok_bounds = all((not math.isnan(w)) and (0.0 <= w <= 1.0) for w in weights)
-    s = sum(w for w in weights if not math.isnan(w))
-    ok_sum = math.isclose(s, 1.0, rel_tol=0.0, abs_tol=1e-6)
+    # use_snapshot=False ⇒ raw dataset'ten oku
+    root = Path(meta.path)
+    if meta.kind == "local_csv":
+        csv_files = sorted(root.glob("*.csv"))
+        if not csv_files:
+            raise SystemExit(f"No CSV files found under {root}")
+        frames = [pd.read_csv(p) for p in csv_files]
+        return pd.concat(frames, ignore_index=True)
 
-    # orders dosyası: TEST 'target_weight' başlığını bekliyor
-    with out_orders.open("w", encoding="utf-8", newline="") as f:
-        wcsv = csv.writer(f)
-        wcsv.writerow(["symbol", "target_weight"])
-        for sym, w in zip(symbols, weights):
-            wcsv.writerow([sym, f"{w:.6f}"])
+    raise SystemExit(f"Unsupported dataset kind: {meta.kind!r}")
 
-    with out_meta.open("w", encoding="utf-8") as f:
-        if ok_bounds and ok_sum:
-            f.write(f"PASS sum_w={s:.6f}\n")
-        else:
-            f.write(f"FAIL sum_w={s:.6f} bounds={ok_bounds}\n")
 
-    raise typer.Exit(code=0 if (ok_bounds and ok_sum) else 2)
+def _cmd_data_load(args: argparse.Namespace) -> int:
+    registry: DatasetRegistry = get_default_registry()
+
+    df = _load_dataframe_from_registry(
+        registry=registry,
+        name=args.name,
+        as_of=args.as_of,
+        use_snapshot=args.use_snapshot,
+        snapshot_root_arg=args.snapshot_root,
+    )
+
+    rows, cols = df.shape
+    print(
+        f"loaded dataset {args.name!r} with {rows} rows, {cols} columns"
+    )
+    if args.head > 0:
+        print(df.head(args.head).to_string(index=False))
+
+    return 0
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    if args.command == "data":
+        if args.data_command == "register":
+            return _cmd_data_register(args)
+        if args.data_command == "load":
+            return _cmd_data_load(args)
+
+    parser.print_help()
+    return 1
 
 
 if __name__ == "__main__":
-    app()
+    raise SystemExit(main())
