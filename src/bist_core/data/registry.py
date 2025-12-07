@@ -185,6 +185,7 @@ def register_dataset(
     path: Path | str,
     *,
     kind: str = "local_csv",
+    overwrite: bool = False,
     **meta: Any,
 ) -> DatasetMetadata:
     """
@@ -192,13 +193,27 @@ def register_dataset(
     
     Registers a dataset using the default registry.
     Uses dataset_id as the name for backward compatibility.
+    
+    Args:
+        dataset_id: Name of the dataset in the registry
+        path: Root path to the dataset directory
+        kind: Dataset kind (e.g., 'local_csv')
+        overwrite: If True, allow overwriting existing dataset. Defaults to False
+            for safety. Set to True explicitly to update existing entries.
+        **meta: Additional metadata (currently unused, reserved for future use)
+    
+    Returns:
+        DatasetMetadata for the registered dataset
+        
+    Raises:
+        ValueError: If dataset already exists and overwrite=False
     """
     registry = get_default_registry()
     return registry.register(
         name=dataset_id,
         kind=kind,
         path=path,
-        overwrite=True,  # Default to overwrite for compatibility
+        overwrite=overwrite,
     )
 
 

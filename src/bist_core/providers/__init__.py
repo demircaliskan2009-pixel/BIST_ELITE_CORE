@@ -1,2 +1,3 @@
 from .local_csv import LocalCSVProvider
-__all__ = ['LocalCSVProvider']
+from .dummy import DummyProvider
+__all__ = ['LocalCSVProvider', 'DummyProvider']
