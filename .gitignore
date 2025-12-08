@@ -1,22 +1,66 @@
-__pycache__/
-*.pyc
+########################################
+# Python bytecode & cache (global)
+########################################
+**/__pycache__/
+**/*.py[cod]
+*.pyo
+
+########################################
+# Test / lint / type-check caches
+########################################
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+########################################
+# Jupyter
+########################################
 .ipynb_checkpoints/
+
+########################################
+# Virtual environments
+########################################
 .venv/
-.env
+venv/
+ENV/
+env/
+
+########################################
+# IDE / OS
+########################################
 .vscode/
+.idea/
+.DS_Store
+Thumbs.db
 
-# Veri: sadece örnekler repo'da takip edilsin
-data/
-!data/samples/
-
-src_file_backup_*/
-# --- security harden before public ---
-config/*.yml
-config/*.yaml
-data/
+########################################
+# Local environment files
+########################################
+.env
+.env.*
 *.env
-.env*
+
+########################################
+# Data: repo'da sadece örnekler takip edilsin
+########################################
+/data/
+!/data/samples/
+!/data/samples/**
+
+########################################
+# Backups
+########################################
+src_file_backup_*/
+
+########################################
+# Security hardening
+# (root config + secret patterns)
+########################################
+/config/*.yml
+/config/*.yaml
+
 secrets/
 *.pem
 *.key
@@ -26,22 +70,3 @@ secrets/
 *.der
 *.keystore
 *.jks
-__pycache__/
-.ipynb_checkpoints/
-.DS_Store
-
-# Python cache
-__pycache__/
-*.pyc
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.ruff_cache/
-*.egg-info/
-
-__pycache__/
-*.pyc
-
-# keep package code under src/bist_core/data
-!src/bist_core/data/
-!src/bist_core/data/**
