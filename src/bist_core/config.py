@@ -10,13 +10,6 @@ DATA_DIR = Path(os.getenv("BIST_DATA_DIR", REPO_ROOT / "data"))
 SAMPLES_DIR = Path(os.getenv("BIST_SAMPLES_DIR", DATA_DIR / "samples"))
 EOD_SNAPSHOT_DIR = Path(os.getenv("BIST_EOD_SNAPSHOT_DIR", DATA_DIR / "eod_snapshots"))
 
-# Repositories/local_csv.py beklediği anahtarlar
-SOURCES: Dict[str, Dict[str, Any]] = {
-    "local_csv": {
-        "root_dir": str(SAMPLES_DIR),   # tests/local_csv bu anahtarı okuyor
-    }
-}
-
 def _load_json_config(rel_path: str) -> Dict[str, Any]:
     """Config JSON dosyasını yükler."""
     config_path = REPO_ROOT / rel_path
@@ -25,6 +18,14 @@ def _load_json_config(rel_path: str) -> Dict[str, Any]:
 
 # Config dosyalarını yükle
 CORE = _load_json_config("config/core.json")
+SOURCES_RAW = _load_json_config("config/sources.json")
+
+# SOURCES dict'ini oluştur, local_csv root_dir'i override et
+SOURCES: Dict[str, Dict[str, Any]] = SOURCES_RAW.copy()
+if "local_csv" in SOURCES:
+    # local_csv root_dir'i SAMPLES_DIR ile override et (tests için)
+    SOURCES["local_csv"] = SOURCES["local_csv"].copy()
+    SOURCES["local_csv"]["root_dir"] = str(SAMPLES_DIR)
 
 def load_config() -> Dict[str, Any]:
     """
@@ -38,7 +39,10 @@ def load_config() -> Dict[str, Any]:
         "eod_snapshot_dir": str(EOD_SNAPSHOT_DIR),
         "sources": SOURCES,
     }
-    for p in (DATA_DIR, SAMPLES_DIR, EOD_SNAPSHOT_DIR, Path(SOURCES["local_csv"]["root_dir"])):
+    dirs_to_create = [DATA_DIR, SAMPLES_DIR, EOD_SNAPSHOT_DIR]
+    if "local_csv" in SOURCES and "root_dir" in SOURCES["local_csv"]:
+        dirs_to_create.append(Path(SOURCES["local_csv"]["root_dir"]))
+    for p in dirs_to_create:
         Path(p).mkdir(parents=True, exist_ok=True)
     return cfg
 

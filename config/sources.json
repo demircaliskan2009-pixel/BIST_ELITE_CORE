@@ -7,6 +7,7 @@
     "enabled": false,
     "eod_endpoint": "",
     "kap_endpoint": "",
+    "timeout": 5.0,
     "auth": {
       "api_key": ""
     }

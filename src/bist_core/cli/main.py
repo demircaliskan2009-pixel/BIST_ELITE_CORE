@@ -17,6 +17,8 @@ from bist_core.strategy.equal_weight import (
     build_equal_weight_plan, 
     generate_equal_weight_orders
 )
+from bist_core import config
+from bist_core.services.marketdata import MarketData
 
 
 def _snapshot_root() -> Path:
@@ -59,12 +61,21 @@ def _cmd_eod(args: argparse.Namespace) -> int:
     root = _snapshot_root()
     day_dir = root / snapshot_date.isoformat()
     day_dir.mkdir(parents=True, exist_ok=True)
-
-    # Faz-2 deterministik test datası
-    df = pd.DataFrame([{"symbol": "TEST", "close": 0.0}])
-
     snapshot_path = day_dir / "snapshot.csv"
-    df.to_csv(snapshot_path, index=False)
+
+    if config.SOURCES["vendor_api"]["enabled"]:
+        data = MarketData()
+        symbols = data.symbols(args.date)        # API'den o güne ait semboller
+        close_map = data.close_map(args.date)    # her sembol için kapanış fiyatı
+        # Bir DataFrame oluşturup snapshot.csv'ye yazabiliriz:
+        df = pd.DataFrame([
+            {"symbol": sym, "close": close_map.get(sym, float("nan"))} for sym in symbols
+        ])
+        df.to_csv(snapshot_path, index=False)
+    else:
+        # mevcut TEST verisi yazma kodu
+        df = pd.DataFrame([{"symbol": "TEST", "close": 0.0}])
+        df.to_csv(snapshot_path, index=False)
 
     print(f"snapshot created at {snapshot_path}")
     return 0
