@@ -13,7 +13,10 @@ from bist_core.data.registry import (
     get_default_registry,
     load_registered_dataset,
 )
-from bist_core.strategy.equal_weight import build_equal_weight_plan, generate_equal_weight_orders
+from bist_core.strategy.equal_weight import (
+    build_equal_weight_plan, 
+    generate_equal_weight_orders
+)
 
 
 def _snapshot_root() -> Path:
@@ -99,9 +102,9 @@ def _cmd_orders(args: argparse.Namespace) -> int:
 
     try:
         orders_path = generate_equal_weight_orders(args.date, base=root)
-    except FileNotFoundError:
+    except FileNotFoundError as e:
         raise SystemExit(
-            f"Bu tarih için plan bulunamadı: {args.date}. Lütfen önce 'plan' komutunu çalıştır."
+            f"Bu tarih için plan bulunamadı: {args.date}. Lütfen önce 'plan' komutunu çalıştırın."
         )
 
     if orders_path is None:

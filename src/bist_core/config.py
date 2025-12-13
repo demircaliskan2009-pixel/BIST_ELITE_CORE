@@ -1,6 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 import os
+import json
 from typing import Dict, Any
 
 # ---- Proje kökleri / data yolları ----
@@ -15,6 +16,15 @@ SOURCES: Dict[str, Dict[str, Any]] = {
         "root_dir": str(SAMPLES_DIR),   # tests/local_csv bu anahtarı okuyor
     }
 }
+
+def _load_json_config(rel_path: str) -> Dict[str, Any]:
+    """Config JSON dosyasını yükler."""
+    config_path = REPO_ROOT / rel_path
+    with config_path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+# Config dosyalarını yükle
+CORE = _load_json_config("config/core.json")
 
 def load_config() -> Dict[str, Any]:
     """
@@ -34,5 +44,5 @@ def load_config() -> Dict[str, Any]:
 
 __all__ = [
     "REPO_ROOT", "DATA_DIR", "SAMPLES_DIR", "EOD_SNAPSHOT_DIR",
-    "SOURCES", "load_config",
+    "SOURCES", "CORE", "load_config",
 ]
