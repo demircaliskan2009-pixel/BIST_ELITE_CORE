@@ -13,6 +13,7 @@ from bist_core.data.registry import (
     get_default_registry,
     load_registered_dataset,
 )
+from bist_core.strategy.equal_weight import build_equal_weight_plan, generate_equal_weight_orders
 
 
 def _snapshot_root() -> Path:
@@ -67,26 +68,51 @@ def _cmd_eod(args: argparse.Namespace) -> int:
 
 
 def _cmd_plan(args: argparse.Namespace) -> int:
+    # Sadece equal_weight stratejisini destekliyoruz
     strategy = getattr(args, "strategy", None) or "equal_weight"
     if strategy != "equal_weight":
-        raise SystemExit(f"Unsupported strategy: {strategy}")
+        raise SystemExit(f"Unsupported strategy: {strategy!r}")
 
-    # plan testi önce snapshot ister
-    _cmd_eod(argparse.Namespace(date=args.date))
+    # Snapshot yoksa oluştur
+    root = _snapshot_root()
+    snapshot_path = root / args.date / "snapshot.csv"
+    if not snapshot_path.exists():
+        _cmd_eod(argparse.Namespace(date=args.date))
 
-    plan_root = Path("data/plans") / args.date
-    plan_root.mkdir(parents=True, exist_ok=True)
-    plan_path = plan_root / f"plan_{strategy}.txt"
+    # Plan output (snapshot_root ile tutarlı)
+    plan_path = build_equal_weight_plan(args.date, base=root)
 
-    plan_path.write_text(
-        f"strategy={strategy}\ndate={args.date}\n",
-        encoding="utf-8",
-    )
-
-    # Testin beklediği ifade
+    # Testin beklediği çıktı
     print(f"Plan yazıldı: {plan_path}")
     print(strategy)
     return 0
+
+
+
+def _cmd_orders(args: argparse.Namespace) -> int:
+    # Sadece equal_weight stratejisini destekliyoruz
+    strategy = getattr(args, "strategy", None) or "equal_weight"
+    if strategy != "equal_weight":
+        raise SystemExit(f"Unsupported strategy: {strategy!r}")
+
+    root = _snapshot_root()
+
+    try:
+        orders_path = generate_equal_weight_orders(args.date, base=root)
+    except FileNotFoundError:
+        raise SystemExit(
+            f"Bu tarih için plan bulunamadı: {args.date}. Lütfen önce 'plan' komutunu çalıştır."
+        )
+
+    if orders_path is None:
+        # Risk limiti FAIL → exit code 2
+        print("Risk limiti aşıldı; siparişler oluşturulmadı.")
+        return 2
+
+    # PASS → exit code 0
+    print(f"Orders yazıldı: {orders_path}")
+    return 0
+
 
 
 def _cmd_data_register(args: argparse.Namespace) -> int:
@@ -163,6 +189,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_plan.add_argument("--date", required=True)
     p_plan.add_argument("--strategy", default="equal_weight")
     p_plan.set_defaults(func=_cmd_plan)
+
+    p_orders = sub.add_parser("orders")
+    p_orders.add_argument("--date", required=True)
+    p_orders.add_argument("--strategy", default="equal_weight")
+    p_orders.set_defaults(func=_cmd_orders)
 
     p_data = sub.add_parser("data")
     sub_data = p_data.add_subparsers(dest="data_cmd", required=True)
