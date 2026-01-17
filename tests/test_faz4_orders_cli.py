@@ -7,7 +7,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _run(mod: str, *args: str) -> str:
     """CLI komutunu çalıştırıp stdout döndürür (returncode 0 olmalı)."""
-    r = run(["python", "-m", mod, *args], stdout=PIPE, stderr=PIPE, text=True)
+    r = run(
+        ["python", "-m", mod, *args],
+        stdout=PIPE,
+        stderr=PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+    )
     assert r.returncode == 0, f"Komut başarısız oldu: {r.stderr}"
     return r.stdout
 
@@ -60,6 +67,8 @@ def test_orders_cli_equal_weight_risk_fail():
         stdout=PIPE,
         stderr=PIPE,
         text=True,
+        encoding="utf-8",
+        errors="strict",
     )
     assert r.returncode == 2, "Riskli durumda çıkış kodu 2 olmalı"
     # 3) Çıktıları kontrol et
@@ -76,13 +85,31 @@ def test_orders_cli_equal_weight_risk_fail():
 def test_orders_risk_fail():
     day = "2025-01-15"
     # 1) Önce snapshot oluştur (tek sembollü). CLI 'eod' komutunu kullanabiliriz:
-    result = run(["python", "-m", "bist_core.cli.main", "eod", "--date", day], stdout=PIPE, text=True)
+    result = run(
+        ["python", "-m", "bist_core.cli.main", "eod", "--date", day],
+        stdout=PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+    )
     assert result.returncode == 0, "EOD snapshot oluşturulamadı"
     # 2) Ardından plan oluştur (equal_weight stratejisi varsayılan):
-    result = run(["python", "-m", "bist_core.cli.main", "plan", "--date", day], stdout=PIPE, text=True)
+    result = run(
+        ["python", "-m", "bist_core.cli.main", "plan", "--date", day],
+        stdout=PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+    )
     assert result.returncode == 0, "Plan komutu başarısız oldu"
     # 3) Şimdi orders komutunu çalıştır ve risk kontrolünün tetiklendiğini doğrula
-    result = run(["python", "-m", "bist_core.cli.main", "orders", "--date", day], stdout=PIPE, text=True)
+    result = run(
+        ["python", "-m", "bist_core.cli.main", "orders", "--date", day],
+        stdout=PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+    )
     # Beklenen: risk limiti aşıldı, exit code 2 ile çıkılmalı
     assert result.returncode == 2, "Risk limitine rağmen orders komutu 2 ile çıkmadı"
     # Konsol çıktısında uyarı mesajı olmalı:
@@ -110,10 +137,22 @@ def test_orders_risk_pass():
         for i in range(100):
             writer.writerow([f"SYM{i:03d}", "100.0"])  # SYM000, SYM001, ..., SYM099
     # 2) Plan komutunu çalıştır
-    result = run(["python", "-m", "bist_core.cli.main", "plan", "--date", day], stdout=PIPE, text=True)
+    result = run(
+        ["python", "-m", "bist_core.cli.main", "plan", "--date", day],
+        stdout=PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+    )
     assert result.returncode == 0, "Plan komutu başarısız (çoklu sembol)"
     # 3) Orders komutunu çalıştır
-    result = run(["python", "-m", "bist_core.cli.main", "orders", "--date", day], stdout=PIPE, text=True)
+    result = run(
+        ["python", "-m", "bist_core.cli.main", "orders", "--date", day],
+        stdout=PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+    )
     assert result.returncode == 0, "Risk limiti aşılmadığı halde orders komutu başarısız"
     assert "Orders yazıldı:" in result.stdout  # başarı mesajı
     # Orders dosyası oluşmalı ve içeriğini kontrol edelim

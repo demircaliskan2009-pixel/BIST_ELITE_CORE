@@ -6,7 +6,14 @@ import csv
 ROOT = Path(__file__).resolve().parents[1]
 
 def _run(mod: str, *args: str) -> str:
-    r = run(["python", "-m", mod, *args], stdout=PIPE, stderr=PIPE, text=True)
+    r = run(
+        ["python", "-m", mod, *args],
+        stdout=PIPE,
+        stderr=PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+    )
     assert r.returncode == 0, r.stderr
     return r.stdout
 

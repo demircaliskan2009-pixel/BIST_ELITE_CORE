@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Optional, Sequence
@@ -19,6 +21,7 @@ from bist_core.strategy.equal_weight import (
 )
 from bist_core import config
 from bist_core.services.marketdata import MarketData
+from bist_core.services.advisor import build_advice_for_symbol
 
 
 def _snapshot_root() -> Path:
@@ -188,6 +191,91 @@ def _cmd_data_load(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ask(args: argparse.Namespace) -> int:
+    base = _snapshot_root()
+    if getattr(args, "day", None):
+        day_value = args.day
+    else:
+        day_value = _latest_snapshot_day(base)
+        if day_value is None:
+            print("Uyarı: Snapshot bulunamadı; bugünün tarihine düşülüyor.")
+            day_value = date.today()
+
+    day_str = day_value if isinstance(day_value, str) else day_value.isoformat()
+
+    symbols = [args.symbol]
+    if getattr(args, "all", False):
+        try:
+            md = MarketData(base)
+            symbols = md.symbols(day_str)
+        except Exception:
+            symbols = []
+        if not symbols:
+            symbols = [args.symbol]
+
+    for idx, sym in enumerate(symbols):
+        try:
+            advice = build_advice_for_symbol(sym, day_str, root=base)
+            payload = _advice_payload(advice, day_str)
+            text_out = advice.text
+        except Exception as exc:
+            payload = _fallback_payload(sym, day_str, exc)
+            text_out = payload["text"]
+
+        if getattr(args, "json", False):
+            print(json.dumps(payload, ensure_ascii=False))
+        else:
+            if idx > 0:
+                print()
+            print(text_out)
+    return 0
+
+
+def _latest_snapshot_day(snapshots_dir: Path) -> Optional[str]:
+    if not snapshots_dir.exists():
+        return None
+    latest: Optional[date] = None
+    for entry in snapshots_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            day = date.fromisoformat(entry.name)
+        except ValueError:
+            continue
+        if latest is None or day > latest:
+            latest = day
+    return latest.isoformat() if latest else None
+
+
+def _advice_payload(advice, day_str: str) -> dict:
+    return {
+        "symbol": advice.symbol,
+        "day": day_str,
+        "decision_raw": advice.decision_raw,
+        "score": advice.score,
+        "signals": advice.signals,
+        "plan": advice.plan,
+        "text": advice.text,
+    }
+
+
+def _fallback_payload(symbol: str, day_str: str, exc: Exception) -> dict:
+    err = exc.__class__.__name__
+    text = (
+        f"Güvenli mod: {err}. "
+        "Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
+    )
+    return {
+        "symbol": symbol,
+        "day": day_str,
+        "decision_raw": "PASS",
+        "score": 0.0,
+        "signals": [],
+        "plan": None,
+        "text": text,
+    }
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="bist_core")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -228,10 +316,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_load.set_defaults(func=_cmd_data_load)
 
+    p_ask = sub.add_parser("ask")
+    p_ask.add_argument("symbol")
+    p_ask.add_argument("--day", default=None)
+    p_ask.add_argument("--json", action="store_true")
+    p_ask.add_argument("--all", action="store_true")
+    p_ask.set_defaults(func=_cmd_ask)
+
     return p
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
     parser = _build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))

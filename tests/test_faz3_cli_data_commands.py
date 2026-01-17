@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from bist_core.cli import main
+from bist_core.cli.main import main
 from bist_core.data.registry import DatasetRegistry
 
 
