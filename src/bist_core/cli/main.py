@@ -263,18 +263,34 @@ def _cmd_data_snapshot(args: argparse.Namespace) -> int:
         raise SystemExit(f"Invalid date format: {day}. Use YYYY-MM-DD")
 
     df_raw = load_registered_dataset(dataset_id)
-    if "date" not in df_raw.columns or "symbol" not in df_raw.columns or "close" not in df_raw.columns:
-        raise SystemExit("Dataset must include date, symbol, close columns")
+    required = {"symbol", "close", "date"}
+    optional = {"open", "high", "low", "volume", "turnover"}
+    cols = set(df_raw.columns)
+    missing = required - cols
+    unexpected = cols - required - optional
+    if missing or unexpected:
+        raise SystemExit(
+            f"Snapshot schema invalid: missing={sorted(missing)} "
+            f"unexpected={sorted(unexpected)}"
+        )
 
     df_day = df_raw[df_raw["date"] == day]
     if df_day.empty:
         raise SystemExit(f"No data for day: {day}")
 
-    df_out = (
-        df_day[["symbol", "close"]]
-        .groupby("symbol", as_index=False)
-        .last()
-    )
+    has_ohlcv = {"open", "high", "low", "volume"}.issubset(cols)
+    if not has_ohlcv:
+        print(
+            "Uyarı: Snapshot sadece close içeriyor; OHLCV verisi yok.",
+            file=sys.stderr,
+        )
+
+    out_cols = ["symbol", "close"]
+    for col in ["open", "high", "low", "volume", "turnover"]:
+        if col in cols:
+            out_cols.append(col)
+
+    df_out = df_day[out_cols].groupby("symbol", as_index=False).last()
 
     root = _snapshot_root()
     out_dir = root / day

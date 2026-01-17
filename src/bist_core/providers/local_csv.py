@@ -33,3 +33,47 @@ class LocalCSVProvider:
                 c = row.get("close")
                 out[sym] = float(c) if c not in (None, "") else float("nan")
         return out
+
+    def has_ohlcv(self, date: str) -> bool:
+        path = self._file(date)
+        with path.open(newline="", encoding="utf-8") as f:
+            rdr = csv.DictReader(f)
+            headers = set(rdr.fieldnames or [])
+        required = {"open", "high", "low", "volume"}
+        return required.issubset(headers)
+
+    def ohlcv_map(self, date: str) -> dict[str, dict[str, float | int]]:
+        if not self.has_ohlcv(date):
+            raise ValueError("OHLCV columns not available in snapshot")
+        path = self._file(date)
+        out: dict[str, dict[str, float | int]] = {}
+        with path.open(newline="", encoding="utf-8") as f:
+            rdr = csv.DictReader(f)
+            for row in rdr:
+                sym = row.get("symbol")
+                if not sym:
+                    continue
+                out[sym] = {
+                    "open": _to_float(row.get("open")),
+                    "high": _to_float(row.get("high")),
+                    "low": _to_float(row.get("low")),
+                    "close": _to_float(row.get("close")),
+                    "volume": _to_int(row.get("volume")),
+                }
+                if "turnover" in row:
+                    out[sym]["turnover"] = _to_int(row.get("turnover"))
+                if "turnover_tl" in row:
+                    out[sym]["turnover_tl"] = _to_int(row.get("turnover_tl"))
+        return out
+
+
+def _to_float(val: str | None) -> float:
+    if val in (None, ""):
+        return float("nan")
+    return float(val)
+
+
+def _to_int(val: str | None) -> int:
+    if val in (None, ""):
+        return 0
+    return int(float(val))

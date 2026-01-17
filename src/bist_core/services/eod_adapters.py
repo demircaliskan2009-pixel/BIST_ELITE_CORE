@@ -29,15 +29,16 @@ def build_bar_for_symbol_day(
         return None
 
     close = float(close_val)
-    caps = _capabilities(md)
+    has_ohlcv = _supports_ohlcv(md, day)
 
-    if caps.get("ohlcv"):
-        ohlcv_map = getattr(md, "ohlcv_map")(day)
+    if has_ohlcv:
+        ohlcv_map = md.ohlcv_map(day)
         row = ohlcv_map.get(symbol, {})
         high = float(row.get("high", close))
         low = float(row.get("low", close))
         volume = int(row.get("volume", 0))
-        turnover_tl = int(row.get("turnover_tl", 0))
+        turnover_val = row.get("turnover_tl", row.get("turnover", 0))
+        turnover_tl = int(turnover_val)
     else:
         high = close
         low = close
@@ -89,7 +90,10 @@ def build_bands_for_day(day: str, md: MarketData, cfg) -> List[PriceBand]:
         return []
 
 
-def _capabilities(md: MarketData) -> Dict[str, bool]:
-    return {
-        "ohlcv": hasattr(md, "ohlcv_map"),
-    }
+def _supports_ohlcv(md: MarketData, day: str) -> bool:
+    if hasattr(md, "has_ohlcv"):
+        try:
+            return md.has_ohlcv(day)
+        except Exception:
+            return False
+    return hasattr(md, "ohlcv_map")

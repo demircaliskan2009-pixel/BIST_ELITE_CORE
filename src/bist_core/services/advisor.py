@@ -69,7 +69,22 @@ def build_advice_for_symbol(
         signals = result.get("signals", [])
         plan = result.get("plan")
 
-        text = _render_advice_text(symbol, day, decision_raw, score, signals, plan)
+        has_ohlcv = False
+        try:
+            if hasattr(md, "has_ohlcv"):
+                has_ohlcv = md.has_ohlcv(day_str)
+        except Exception:
+            has_ohlcv = False
+
+        text = _render_advice_text(
+            symbol,
+            day,
+            decision_raw,
+            score,
+            signals,
+            plan,
+            has_ohlcv,
+        )
 
         return Advice(
             symbol=symbol,
@@ -92,6 +107,7 @@ def _render_advice_text(
     score: float,
     signals: Any,
     plan: Any | None,
+    has_ohlcv: bool,
 ) -> str:
     decision_sentence = f"{symbol} için karar {decision_raw}; skor {score:.2f}."
 
@@ -114,10 +130,10 @@ def _render_advice_text(
             )
 
     coverage_note = ""
-    if decision_raw == "PASS" and score == 0.0:
+    if decision_raw == "PASS" and score == 0.0 and not has_ohlcv:
         coverage_note = (
-            "Eksik veri: Snapshot yalnızca kapanış (close) içeriyor; "
-            "hacim/turnover olmadığı için hacim sinyali devre dışı."
+            "Eksik veri: sadece close var; hacim/turnover olmadığı için "
+            "hacim sinyali devre dışı."
         )
 
     reconsider_sentence = (

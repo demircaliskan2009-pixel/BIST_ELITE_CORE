@@ -24,3 +24,13 @@ class MarketData:
 
     def close_map(self, day: str) -> Dict[str, float]:
         return self._prov.close_map(day)
+
+    def has_ohlcv(self, day: str) -> bool:
+        if hasattr(self._prov, "has_ohlcv"):
+            return self._prov.has_ohlcv(day)
+        return False
+
+    def ohlcv_map(self, day: str) -> Dict[str, Dict[str, float | int]]:
+        if not hasattr(self._prov, "ohlcv_map"):
+            raise ValueError("OHLCV not supported by provider")
+        return self._prov.ohlcv_map(day)
