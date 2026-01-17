@@ -113,6 +113,12 @@ def _render_advice_text(
                 f"Plan: entry {entry}, stop {stop}, t1 {t1}."
             )
 
+    coverage_note = ""
+    if decision_raw == "PASS" and score == 0.0 and not summaries:
+        coverage_note = (
+            "Not: Hacim/turnover verisi yoksa hacim sinyali devre dışı kalır."
+        )
+
     reconsider_sentence = (
         "Fiyat bandı dışına çıkma, ters haber akışı veya güçlü hacim kırılması olursa "
         "yeniden değerlendir."
@@ -120,7 +126,7 @@ def _render_advice_text(
 
     first_paragraph = f"{decision_sentence} {signal_sentence}"
     second_paragraph = " ".join(
-        part for part in [plan_sentence, reconsider_sentence] if part
+        part for part in [plan_sentence, coverage_note, reconsider_sentence] if part
     )
 
     return f"{first_paragraph}\n\n{second_paragraph}".strip()

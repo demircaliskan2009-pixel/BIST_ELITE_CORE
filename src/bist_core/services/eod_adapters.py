@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date as Date
 import math
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from bist_core.models import EODBar, PriceBand
 from bist_core.repositories import local_csv as repo
@@ -29,14 +29,29 @@ def build_bar_for_symbol_day(
         return None
 
     close = float(close_val)
+    caps = _capabilities(md)
+
+    if caps.get("ohlcv"):
+        ohlcv_map = getattr(md, "ohlcv_map")(day)
+        row = ohlcv_map.get(symbol, {})
+        high = float(row.get("high", close))
+        low = float(row.get("low", close))
+        volume = int(row.get("volume", 0))
+        turnover_tl = int(row.get("turnover_tl", 0))
+    else:
+        high = close
+        low = close
+        volume = 0
+        turnover_tl = 0
+
     return EODBar(
         symbol=symbol,
         date=day_date,
         close=close,
-        high=close,
-        low=close,
-        volume=0,
-        turnover_tl=0,
+        high=high,
+        low=low,
+        volume=volume,
+        turnover_tl=turnover_tl,
     )
 
 
@@ -72,3 +87,9 @@ def build_bands_for_day(day: str, md: MarketData, cfg) -> List[PriceBand]:
         return repo.price_bands()
     except Exception:
         return []
+
+
+def _capabilities(md: MarketData) -> Dict[str, bool]:
+    return {
+        "ohlcv": hasattr(md, "ohlcv_map"),
+    }
