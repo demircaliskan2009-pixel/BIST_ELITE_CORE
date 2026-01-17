@@ -23,13 +23,16 @@ def test_cli_ask_fail_closed_output():
     result = subprocess.run(
         cmd,
         capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
         env=env,
         check=False,
     )
 
-    stdout = result.stdout.decode("utf-8", errors="replace").strip()
-    stderr = result.stderr.decode("utf-8", errors="replace").strip()
+    stdout = result.stdout.strip()
+    stderr = result.stderr.strip()
 
     assert stdout, "stdout boş olmamalı"
-    assert "g\u00fcvenli mod" in stdout.lower()
+    assert "güvenli mod" in stdout.lower()
     assert "RuntimeWarning" not in stderr

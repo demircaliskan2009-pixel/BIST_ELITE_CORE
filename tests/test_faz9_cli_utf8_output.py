@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -24,9 +25,14 @@ def test_cli_utf8_json_output() -> None:
     result = subprocess.run(
         cmd,
         capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
         env=env,
         check=False,
     )
 
-    stdout = result.stdout.decode("utf-8", errors="replace")
-    assert "G\u00fcvenli mod" in stdout
+    stdout = result.stdout.strip()
+    assert "Güvenli mod" in stdout
+    payload = json.loads(stdout)
+    assert payload["text"]
