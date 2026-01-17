@@ -19,6 +19,7 @@ from bist_core.strategy.equal_weight import (
 )
 from bist_core import config
 from bist_core.services.marketdata import MarketData
+from bist_core.services.advisor import build_advice_for_symbol
 
 
 def _snapshot_root() -> Path:
@@ -188,6 +189,36 @@ def _cmd_data_load(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ask(args: argparse.Namespace) -> int:
+    if getattr(args, "day", None):
+        day_value = args.day
+    else:
+        day_value = _latest_snapshot_day()
+        if day_value is None:
+            print("Uyarı: Snapshot bulunamadı; bugünün tarihine düşülüyor.")
+            day_value = date.today()
+    advice = build_advice_for_symbol(args.symbol, day_value)
+    print(advice.text)
+    return 0
+
+
+def _latest_snapshot_day() -> Optional[str]:
+    root = Path(config.REPO_ROOT) / "data" / "eod" / "snapshots"
+    if not root.exists():
+        return None
+    latest: Optional[date] = None
+    for entry in root.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            day = date.fromisoformat(entry.name)
+        except ValueError:
+            continue
+        if latest is None or day > latest:
+            latest = day
+    return latest.isoformat() if latest else None
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="bist_core")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -227,6 +258,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_load.add_argument("--as-of", default=None)
 
     p_load.set_defaults(func=_cmd_data_load)
+
+    p_ask = sub.add_parser("ask")
+    p_ask.add_argument("symbol")
+    p_ask.add_argument("--day", default=None)
+    p_ask.set_defaults(func=_cmd_ask)
 
     return p
 
