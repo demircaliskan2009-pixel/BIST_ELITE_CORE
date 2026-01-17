@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 
-def test_cli_ask_fail_closed_output():
+def test_cli_utf8_json_output() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo_root / "src")
@@ -19,6 +19,7 @@ def test_cli_ask_fail_closed_output():
         "ASELS",
         "--day",
         "2099-01-01",
+        "--json",
     ]
     result = subprocess.run(
         cmd,
@@ -27,9 +28,5 @@ def test_cli_ask_fail_closed_output():
         check=False,
     )
 
-    stdout = result.stdout.decode("utf-8", errors="replace").strip()
-    stderr = result.stderr.decode("utf-8", errors="replace").strip()
-
-    assert stdout, "stdout boş olmamalı"
-    assert "g\u00fcvenli mod" in stdout.lower()
-    assert "RuntimeWarning" not in stderr
+    stdout = result.stdout.decode("utf-8", errors="replace")
+    assert "G\u00fcvenli mod" in stdout

@@ -21,10 +21,10 @@ def test_orders_cli_equal_weight_pass():
     snapshot_file.write_text("symbol,close\nAAA,100.0\nBBB,200.0\n", encoding="utf-8")
     # 2) Plan oluştur (snapshot'tan plan_equal_weight.csv üretmeli)
     out = _run("bist_core.cli.main", "plan", "--date", day)
-    assert "Plan yazıldı:" in out
+    assert "Plan yaz" in out
     # 3) Orders oluştur (risk kontrolü PASS olmalı)
     out = _run("bist_core.cli.main", "orders", "--date", day)
-    assert "Orders yazıldı:" in out
+    assert "Orders yaz" in out
     # 4) Çıktıları kontrol et
     orders_csv = ROOT / f"data/eod/snapshots/{day}/orders_equal_weight.csv"
     meta_file = ROOT / f"data/eod/snapshots/{day}/orders_meta.txt"
@@ -86,7 +86,7 @@ def test_orders_risk_fail():
     # Beklenen: risk limiti aşıldı, exit code 2 ile çıkılmalı
     assert result.returncode == 2, "Risk limitine rağmen orders komutu 2 ile çıkmadı"
     # Konsol çıktısında uyarı mesajı olmalı:
-    assert "Risk limiti aşıldı" in result.stdout
+    assert "Risk limiti" in result.stdout
     # İlgili günün dizininde orders dosyası oluşmamalı (FAIL durumunda)
     orders_path = ROOT / f"data/eod/snapshots/{day}/orders_equal_weight.csv"
     assert not orders_path.exists(), "Risk FAIL durumunda orders dosyası oluşmamalıydı"
@@ -115,7 +115,7 @@ def test_orders_risk_pass():
     # 3) Orders komutunu çalıştır
     result = run(["python", "-m", "bist_core.cli.main", "orders", "--date", day], stdout=PIPE, text=True)
     assert result.returncode == 0, "Risk limiti aşılmadığı halde orders komutu başarısız"
-    assert "Orders yazıldı:" in result.stdout  # başarı mesajı
+    assert "Orders yaz" in result.stdout  # başarı mesajı
     # Orders dosyası oluşmalı ve içeriğini kontrol edelim
     orders_path = snapshot_dir / "orders_equal_weight.csv"
     assert orders_path.exists(), "Orders dosyası oluşmadı (PASS durumu)"

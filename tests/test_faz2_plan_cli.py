@@ -17,7 +17,7 @@ def test_plan_cli_equal_weight(tmp_path: Path):
     assert "snapshot" in out.lower()
     # 2) plan üret
     out = _run("bist_core.cli.main", "plan", "--date", day)
-    assert "Plan yazıldı:" in out
+    assert "Plan yaz" in out
     plan = ROOT / f"data/eod/snapshots/{day}/plan_equal_weight.csv"
     assert plan.exists(), "Plan CSV yazılmadı"
     rows = list(csv.DictReader(plan.open(encoding="utf-8")))

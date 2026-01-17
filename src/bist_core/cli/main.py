@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Optional, Sequence
@@ -326,6 +327,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
     parser = _build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))
