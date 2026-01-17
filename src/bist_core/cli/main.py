@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from datetime import date
 from pathlib import Path
@@ -190,16 +191,42 @@ def _cmd_data_load(args: argparse.Namespace) -> int:
 
 
 def _cmd_ask(args: argparse.Namespace) -> int:
+    base = _snapshot_root()
     if getattr(args, "day", None):
         day_value = args.day
     else:
-        snapshots_dir = Path(config.REPO_ROOT) / "data" / "eod" / "snapshots"
-        day_value = _latest_snapshot_day(snapshots_dir)
+        day_value = _latest_snapshot_day(base)
         if day_value is None:
             print("Uyarı: Snapshot bulunamadı; bugünün tarihine düşülüyor.")
             day_value = date.today()
-    advice = build_advice_for_symbol(args.symbol, day_value)
-    print(advice.text)
+
+    day_str = day_value if isinstance(day_value, str) else day_value.isoformat()
+
+    symbols = [args.symbol]
+    if getattr(args, "all", False):
+        try:
+            md = MarketData(base)
+            symbols = md.symbols(day_str)
+        except Exception:
+            symbols = []
+        if not symbols:
+            symbols = [args.symbol]
+
+    for idx, sym in enumerate(symbols):
+        try:
+            advice = build_advice_for_symbol(sym, day_str, root=base)
+            payload = _advice_payload(advice, day_str)
+            text_out = advice.text
+        except Exception as exc:
+            payload = _fallback_payload(sym, day_str, exc)
+            text_out = payload["text"]
+
+        if getattr(args, "json", False):
+            print(json.dumps(payload, ensure_ascii=False))
+        else:
+            if idx > 0:
+                print()
+            print(text_out)
     return 0
 
 
@@ -217,6 +244,35 @@ def _latest_snapshot_day(snapshots_dir: Path) -> Optional[str]:
         if latest is None or day > latest:
             latest = day
     return latest.isoformat() if latest else None
+
+
+def _advice_payload(advice, day_str: str) -> dict:
+    return {
+        "symbol": advice.symbol,
+        "day": day_str,
+        "decision_raw": advice.decision_raw,
+        "score": advice.score,
+        "signals": advice.signals,
+        "plan": advice.plan,
+        "text": advice.text,
+    }
+
+
+def _fallback_payload(symbol: str, day_str: str, exc: Exception) -> dict:
+    err = exc.__class__.__name__
+    text = (
+        f"Güvenli mod: {err}. "
+        "Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
+    )
+    return {
+        "symbol": symbol,
+        "day": day_str,
+        "decision_raw": "PASS",
+        "score": 0.0,
+        "signals": [],
+        "plan": None,
+        "text": text,
+    }
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -262,6 +318,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ask = sub.add_parser("ask")
     p_ask.add_argument("symbol")
     p_ask.add_argument("--day", default=None)
+    p_ask.add_argument("--json", action="store_true")
+    p_ask.add_argument("--all", action="store_true")
     p_ask.set_defaults(func=_cmd_ask)
 
     return p
