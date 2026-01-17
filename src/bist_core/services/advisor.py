@@ -7,9 +7,8 @@ import json
 from typing import Any, Dict, List, Optional
 
 from bist_core import config
-from bist_core.models import EODBar, PriceBand
-from bist_core.repositories import local_csv as repo
 from bist_core.services.marketdata import MarketData
+from bist_core.services.eod_adapters import build_bars_for_day, build_bands_for_day
 from bist_core.strategy import engine
 
 
@@ -39,39 +38,17 @@ def build_advice_for_symbol(
         md = MarketData(base)
 
         day_str = day.isoformat()
-        close_map = md.close_map(day_str)
-        close = close_map.get(symbol, 0.0)
-
-        bars = [
-            EODBar(
-                symbol=symbol,
-                date=day,
-                close=close,
-                high=close * 1.02 if close > 0 else 100.0,
-                low=close * 0.98 if close > 0 else 100.0,
-                volume=1000000,
-                turnover_tl=int(close * 1000000) if close > 0 else 100000000,
-            )
-        ]
-
-        try:
-            bands = repo.price_bands()
-        except (FileNotFoundError, KeyError):
-            bands = [
-                PriceBand(
-                    price_min=0.01,
-                    price_max=1000000.0,
-                    tick=0.01,
-                    up_limit_pct=20.0,
-                    down_limit_pct=20.0,
-                )
-            ]
-
-        kap_events: dict = {}
-
+        bars = build_bars_for_day(day_str, md)
         cfg = config.CORE
+        bands = build_bands_for_day(day_str, md, cfg)
+
+        kap_events = _load_kap_events(md, day_str)
+
         gates_cfg = _load_json_config("config/gates.json")
         strat_cfg = _load_json_config("config/strategy.json")
+
+        if not bars:
+            return _safe_advice(symbol, day, "NoBars")
 
         decisions = engine.decide(
             symbols=[symbol],
@@ -82,7 +59,10 @@ def build_advice_for_symbol(
             gates_cfg=gates_cfg,
             strat_cfg=strat_cfg,
         )
-        result = decisions[0] if decisions else {}
+        if not decisions:
+            return _safe_advice(symbol, day, "NoDecision")
+
+        result = decisions[0]
 
         decision_raw = result.get("decision_raw", result.get("decision", "PASS"))
         score = float(result.get("score", 0.0))
@@ -102,18 +82,7 @@ def build_advice_for_symbol(
         )
     except Exception as exc:
         err = exc.__class__.__name__
-        return Advice(
-            symbol=symbol,
-            date=_safe_date(date),
-            decision_raw="PASS",
-            score=0.0,
-            signals=[],
-            plan=None,
-            text=(
-                "Veri/karar üretimi başarısız, güvenli mod aktif. "
-                f"Hata tipi: {err}."
-            ),
-        )
+        return _safe_advice(symbol, _safe_date(date), err)
 
 
 def _render_advice_text(
@@ -164,6 +133,32 @@ def _safe_date(value: Date | str) -> Date:
         return Date.fromisoformat(value)
     except Exception:
         return Date.today()
+
+
+def _safe_advice(symbol: str, day: Date | str, err: str) -> Advice:
+    day_value = _safe_date(day)
+    return Advice(
+        symbol=symbol,
+        date=day_value,
+        decision_raw="PASS",
+        score=0.0,
+        signals=[],
+        plan=None,
+        text=(
+            "Veri/karar üretimi başarısız, güvenli mod aktif. "
+            f"Hata tipi: {err}."
+        ),
+    )
+
+
+def _load_kap_events(md: MarketData, day: str):
+    prov = getattr(md, "_prov", None)
+    if prov and hasattr(prov, "kap_events"):
+        try:
+            return prov.kap_events(day)
+        except Exception:
+            return {}
+    return {}
 
 
 def _load_json_config(rel_path: str) -> Dict[str, Any]:
