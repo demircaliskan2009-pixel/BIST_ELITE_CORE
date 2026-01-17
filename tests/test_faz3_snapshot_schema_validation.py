@@ -25,18 +25,72 @@ def test_snapshot_schema_validation(tmp_path: Path) -> None:
     env["BIST_CORE_REGISTRY_PATH"] = str(tmp_path / "registry.json")
     env["BIST_CORE_SNAPSHOT_DIR"] = str(tmp_path / "snapshots")
 
+    legacy_dir = tmp_path / "legacy"
+    legacy_dir.mkdir()
+    (legacy_dir / "legacy.csv").write_text(
+        "symbol,close\nAAA,10.0\n",
+        encoding="utf-8",
+    )
+    new_dir = tmp_path / "new"
+    new_dir.mkdir()
+    (new_dir / "new.csv").write_text(
+        "symbol,close,date\nAAA,10.0,2025-01-01\n",
+        encoding="utf-8",
+    )
     bad_dir = tmp_path / "bad"
     bad_dir.mkdir()
     (bad_dir / "bad.csv").write_text(
-        "symbol,date,price\nAAA,2025-01-01,10.0\n",
+        "ticker,last\nAAA,10.0\n",
         encoding="utf-8",
     )
-    ok_dir = tmp_path / "ok"
-    ok_dir.mkdir()
-    (ok_dir / "ok.csv").write_text(
-        "symbol,date,close\nAAA,2025-01-01,10.0\n",
-        encoding="utf-8",
+
+    result = _run_cli(
+        env,
+        "data",
+        "register",
+        "--id",
+        "legacy_ds",
+        "--path",
+        str(legacy_dir),
+        "--format",
+        "csv",
     )
+    assert result.returncode == 0
+
+    result = _run_cli(
+        env,
+        "data",
+        "snapshot",
+        "--id",
+        "legacy_ds",
+        "--day",
+        "2025-01-01",
+    )
+    assert result.returncode == 0
+
+    result = _run_cli(
+        env,
+        "data",
+        "register",
+        "--id",
+        "new_ds",
+        "--path",
+        str(new_dir),
+        "--format",
+        "csv",
+    )
+    assert result.returncode == 0
+
+    result = _run_cli(
+        env,
+        "data",
+        "snapshot",
+        "--id",
+        "new_ds",
+        "--day",
+        "2025-01-01",
+    )
+    assert result.returncode == 0
 
     result = _run_cli(
         env,
@@ -62,27 +116,3 @@ def test_snapshot_schema_validation(tmp_path: Path) -> None:
     )
     assert result.returncode != 0
     assert "Snapshot schema invalid" in (result.stdout + result.stderr)
-
-    result = _run_cli(
-        env,
-        "data",
-        "register",
-        "--id",
-        "ok_ds",
-        "--path",
-        str(ok_dir),
-        "--format",
-        "csv",
-    )
-    assert result.returncode == 0
-
-    result = _run_cli(
-        env,
-        "data",
-        "snapshot",
-        "--id",
-        "ok_ds",
-        "--day",
-        "2025-01-01",
-    )
-    assert result.returncode == 0

@@ -263,8 +263,8 @@ def _cmd_data_snapshot(args: argparse.Namespace) -> int:
         raise SystemExit(f"Invalid date format: {day}. Use YYYY-MM-DD")
 
     df_raw = load_registered_dataset(dataset_id)
-    required = {"symbol", "close", "date"}
-    optional = {"open", "high", "low", "volume", "turnover"}
+    required = {"symbol", "close"}
+    optional = {"open", "high", "low", "volume", "turnover", "date"}
     cols = set(df_raw.columns)
     missing = required - cols
     unexpected = cols - required - optional
@@ -274,9 +274,30 @@ def _cmd_data_snapshot(args: argparse.Namespace) -> int:
             f"unexpected={sorted(unexpected)}"
         )
 
-    df_day = df_raw[df_raw["date"] == day]
-    if df_day.empty:
-        raise SystemExit(f"No data for day: {day}")
+    has_date = "date" in cols
+    if has_date:
+        invalid = []
+        for value in df_raw["date"].dropna().unique():
+            try:
+                _ = date.fromisoformat(str(value))
+            except ValueError:
+                invalid.append(value)
+        if invalid:
+            raise SystemExit(
+                f"Snapshot schema invalid: unparseable date values={invalid}"
+            )
+    else:
+        if cols != {"symbol", "close"}:
+            raise SystemExit(
+                "Snapshot schema invalid: legacy snapshot must contain only symbol,close"
+            )
+
+    if has_date:
+        df_day = df_raw[df_raw["date"] == day]
+        if df_day.empty:
+            raise SystemExit(f"No data for day: {day}")
+    else:
+        df_day = df_raw
 
     has_ohlcv = {"open", "high", "low", "volume"}.issubset(cols)
     if not has_ohlcv:
