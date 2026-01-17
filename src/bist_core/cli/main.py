@@ -22,6 +22,7 @@ from bist_core.strategy.equal_weight import (
 from bist_core import config
 from bist_core.services.marketdata import MarketData
 from bist_core.services.advisor import build_advice_for_symbol
+from bist_core.services.dossier import build_dossiers_for_day
 
 
 def _snapshot_root() -> Path:
@@ -252,6 +253,37 @@ def _cmd_ask(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_dossier_build(args: argparse.Namespace) -> int:
+    base = _snapshot_root()
+    if getattr(args, "day", None):
+        day_value = args.day
+    else:
+        day_value = _latest_snapshot_day(base)
+        if day_value is None:
+            print("Uyarı: Snapshot bulunamadı; bugünün tarihine düşülüyor.")
+            day_value = date.today().isoformat()
+
+    day_str = day_value if isinstance(day_value, str) else day_value.isoformat()
+
+    outdir = Path(args.outdir) if getattr(args, "outdir", None) else None
+    if outdir is None:
+        outdir = Path("data") / "dossier" / day_str
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    dossiers = build_dossiers_for_day(day_str, root=base, symbols=None)
+    error_count = 0
+    for dossier in dossiers:
+        symbol = dossier.get("symbol", "UNKNOWN")
+        if dossier.get("error_marker"):
+            error_count += 1
+        out_path = outdir / f"{symbol}.json"
+        with out_path.open("w", encoding="utf-8") as f:
+            json.dump(dossier, f, ensure_ascii=False, indent=2)
+
+    print(f"dossier build: wrote {len(dossiers)} files, errors {error_count}")
+    return 0
+
+
 def _cmd_data_snapshot(args: argparse.Namespace) -> int:
     dataset_id = args.id
     if not dataset_id:
@@ -421,6 +453,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ask.add_argument("--json", action="store_true")
     p_ask.add_argument("--all", action="store_true")
     p_ask.set_defaults(func=_cmd_ask)
+
+    p_dossier = sub.add_parser("dossier")
+    sub_dossier = p_dossier.add_subparsers(dest="dossier_cmd", required=True)
+
+    p_dossier_build = sub_dossier.add_parser("build")
+    p_dossier_build.add_argument("--day", default=None)
+    p_dossier_build.add_argument("--all", action="store_true")
+    p_dossier_build.add_argument("--outdir", default=None)
+    p_dossier_build.set_defaults(func=_cmd_dossier_build)
 
     return p
 
