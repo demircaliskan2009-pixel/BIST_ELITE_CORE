@@ -193,7 +193,8 @@ def _cmd_ask(args: argparse.Namespace) -> int:
     if getattr(args, "day", None):
         day_value = args.day
     else:
-        day_value = _latest_snapshot_day()
+        snapshots_dir = Path(config.REPO_ROOT) / "data" / "eod" / "snapshots"
+        day_value = _latest_snapshot_day(snapshots_dir)
         if day_value is None:
             print("Uyarı: Snapshot bulunamadı; bugünün tarihine düşülüyor.")
             day_value = date.today()
@@ -202,12 +203,11 @@ def _cmd_ask(args: argparse.Namespace) -> int:
     return 0
 
 
-def _latest_snapshot_day() -> Optional[str]:
-    root = Path(config.REPO_ROOT) / "data" / "eod" / "snapshots"
-    if not root.exists():
+def _latest_snapshot_day(snapshots_dir: Path) -> Optional[str]:
+    if not snapshots_dir.exists():
         return None
     latest: Optional[date] = None
-    for entry in root.iterdir():
+    for entry in snapshots_dir.iterdir():
         if not entry.is_dir():
             continue
         try:
