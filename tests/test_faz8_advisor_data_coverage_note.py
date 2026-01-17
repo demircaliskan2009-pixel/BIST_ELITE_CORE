@@ -14,5 +14,5 @@ def test_advisor_data_coverage_note(tmp_path: Path) -> None:
 
     advice = build_advice_for_symbol("TEST", "2099-01-01", root=snapshots_dir)
     assert advice.decision_raw == "PASS"
-    assert "veri" in advice.text.lower()
+    assert "eksik veri" in advice.text.lower()
     assert "hacim/turnover" in advice.text.lower()

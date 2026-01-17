@@ -114,9 +114,10 @@ def _render_advice_text(
             )
 
     coverage_note = ""
-    if decision_raw == "PASS" and score == 0.0 and not summaries:
+    if decision_raw == "PASS" and score == 0.0:
         coverage_note = (
-            "Not: Hacim/turnover verisi yoksa hacim sinyali devre dışı kalır."
+            "Eksik veri: Snapshot yalnızca kapanış (close) içeriyor; "
+            "hacim/turnover olmadığı için hacim sinyali devre dışı."
         )
 
     reconsider_sentence = (
