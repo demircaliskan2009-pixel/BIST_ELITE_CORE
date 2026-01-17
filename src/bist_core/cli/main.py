@@ -134,9 +134,19 @@ def _cmd_orders(args: argparse.Namespace) -> int:
 
 def _cmd_data_register(args: argparse.Namespace) -> int:
     reg = get_default_registry()
-    reg.register(name=args.name, path=args.path, kind=args.kind)
+    dataset_id = args.id or args.name
+    fmt = args.format or args.kind
+    if not dataset_id:
+        raise SystemExit("--id is required")
+    if not fmt:
+        raise SystemExit("--format is required")
+    if fmt in ("local_csv", "csv"):
+        fmt = "csv"
+    if fmt != "csv":
+        raise SystemExit(f"Unsupported format: {fmt!r}")
+    reg.register(name=dataset_id, path=args.path, kind="local_csv")
     reg.save()
-    print(f"registered: {args.name}")
+    print(f"registered: {dataset_id}")
     return 0
 
 
@@ -160,12 +170,23 @@ def _ensure_min_snapshot(as_of: str) -> Path:
 
 
 def _cmd_data_load(args: argparse.Namespace) -> int:
+    dataset_id = args.id or args.name
+    if not dataset_id:
+        raise SystemExit("--id is required")
+    reg = get_default_registry()
+    meta = reg.get(dataset_id)
+    fmt = "csv" if meta.kind == "local_csv" else meta.kind
+    print(
+        f"id={dataset_id} format={fmt} path={meta.path} "
+        f"created_at={meta.created_at} updated_at={meta.updated_at}"
+    )
+
     # Raw dataset'i yükle
-    df_raw = load_registered_dataset(args.name)
+    df_raw = load_registered_dataset(dataset_id)
 
     # Testin beklediği özet satır
     print(
-        f"loaded dataset '{args.name}' with {len(df_raw)} rows, {df_raw.shape[1]} columns"
+        f"loaded dataset '{dataset_id}' with {len(df_raw)} rows, {df_raw.shape[1]} columns"
     )
 
     # Snapshot modu
@@ -228,6 +249,39 @@ def _cmd_ask(args: argparse.Namespace) -> int:
             if idx > 0:
                 print()
             print(text_out)
+    return 0
+
+
+def _cmd_data_snapshot(args: argparse.Namespace) -> int:
+    dataset_id = args.id
+    if not dataset_id:
+        raise SystemExit("--id is required")
+    day = args.day
+    try:
+        _ = date.fromisoformat(day)
+    except ValueError:
+        raise SystemExit(f"Invalid date format: {day}. Use YYYY-MM-DD")
+
+    df_raw = load_registered_dataset(dataset_id)
+    if "date" not in df_raw.columns or "symbol" not in df_raw.columns or "close" not in df_raw.columns:
+        raise SystemExit("Dataset must include date, symbol, close columns")
+
+    df_day = df_raw[df_raw["date"] == day]
+    if df_day.empty:
+        raise SystemExit(f"No data for day: {day}")
+
+    df_out = (
+        df_day[["symbol", "close"]]
+        .groupby("symbol", as_index=False)
+        .last()
+    )
+
+    root = _snapshot_root()
+    out_dir = root / day
+    out_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = out_dir / "snapshot.csv"
+    df_out.to_csv(snapshot_path, index=False)
+    print(f"snapshot created at {snapshot_path}")
     return 0
 
 
@@ -301,13 +355,16 @@ def _build_parser() -> argparse.ArgumentParser:
     sub_data = p_data.add_subparsers(dest="data_cmd", required=True)
 
     p_reg = sub_data.add_parser("register")
-    p_reg.add_argument("--name", required=True)
-    p_reg.add_argument("--kind", default="local_csv")
+    p_reg.add_argument("--id", default=None)
+    p_reg.add_argument("--name", default=None)
+    p_reg.add_argument("--format", default=None)
+    p_reg.add_argument("--kind", default=None)
     p_reg.add_argument("--path", required=True)
     p_reg.set_defaults(func=_cmd_data_register)
 
     p_load = sub_data.add_parser("load")
-    p_load.add_argument("--name", required=True)
+    p_load.add_argument("--id", default=None)
+    p_load.add_argument("--name", default=None)
     p_load.add_argument("--head", type=int, default=0)
 
     # ✅ Eksik olan argümanlar burada:
@@ -315,6 +372,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_load.add_argument("--as-of", default=None)
 
     p_load.set_defaults(func=_cmd_data_load)
+
+    p_snapshot = sub_data.add_parser("snapshot")
+    p_snapshot.add_argument("--id", required=True)
+    p_snapshot.add_argument("--day", required=True)
+    p_snapshot.set_defaults(func=_cmd_data_snapshot)
 
     p_ask = sub.add_parser("ask")
     p_ask.add_argument("symbol")

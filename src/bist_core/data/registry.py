@@ -79,9 +79,20 @@ class DatasetRegistry:
             return
 
         if self._path.is_file():
-            with self._path.open("r", encoding="utf-8") as f:
-                raw = json.load(f)
-            raw_datasets = raw.get("datasets", {})
+            try:
+                with self._path.open("r", encoding="utf-8") as f:
+                    raw = json.load(f)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Registry JSON is invalid: {self._path}"
+                ) from exc
+
+            if not isinstance(raw, dict):
+                raise ValueError(f"Registry JSON schema invalid: {self._path}")
+            raw_datasets = raw.get("datasets")
+            if not isinstance(raw_datasets, dict):
+                raise ValueError(f"Registry JSON schema invalid: {self._path}")
+
             self._datasets = {
                 name: DatasetMetadata.from_dict(meta)
                 for name, meta in raw_datasets.items()
