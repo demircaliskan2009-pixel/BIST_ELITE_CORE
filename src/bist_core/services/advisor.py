@@ -145,8 +145,8 @@ def _safe_advice(symbol: str, day: Date | str, err: str) -> Advice:
         signals=[],
         plan=None,
         text=(
-            "Veri/karar üretimi başarısız, güvenli mod aktif. "
-            f"Hata tipi: {err}."
+            f"Güvenli mod: {err}. "
+            "Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
         ),
     )
 
