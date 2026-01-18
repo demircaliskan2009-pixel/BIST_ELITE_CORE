@@ -28,6 +28,7 @@ from bist_core.services.dossier import (
     build_dossiers_for_day,
     build_manifest,
 )
+from bist_core.services.eod_pipeline import run_eod_pipeline
 
 
 def _snapshot_root() -> Path:
@@ -62,6 +63,8 @@ def _cmd_info(args: argparse.Namespace) -> int:
 
 
 def _cmd_eod(args: argparse.Namespace) -> int:
+    if not getattr(args, "date", None):
+        raise SystemExit("--date is required")
     try:
         snapshot_date = date.fromisoformat(args.date)
     except ValueError:
@@ -88,6 +91,62 @@ def _cmd_eod(args: argparse.Namespace) -> int:
 
     print(f"snapshot created at {snapshot_path}")
     return 0
+
+
+def _cmd_eod_run(args: argparse.Namespace) -> int:
+    base = _snapshot_root()
+    if getattr(args, "day", None):
+        day_value = args.day
+    else:
+        day_value = _latest_snapshot_day(base)
+        if day_value is None:
+            print("Uyarı: Snapshot bulunamadı; bugünün tarihine düşülüyor.")
+            day_value = date.today().isoformat()
+
+    day_str = day_value if isinstance(day_value, str) else day_value.isoformat()
+
+    outdir = Path(args.outdir) if getattr(args, "outdir", None) else None
+    if outdir is None:
+        outdir = config.REPO_ROOT / "data" / "eod" / "runs" / day_str
+
+    symbols = None
+    if getattr(args, "symbols", None):
+        raw = [s.strip() for s in args.symbols.split(",")]
+        symbols = [s for s in raw if s]
+
+    cli_args = {
+        "symbols": getattr(args, "symbols", None),
+        "regex": getattr(args, "regex", None),
+        "limit": getattr(args, "limit", None),
+        "strict": bool(getattr(args, "strict", False)),
+        "outdir": str(outdir),
+        "day": day_str,
+        "jsonl": bool(getattr(args, "jsonl", True)),
+    }
+    manifest, code = run_eod_pipeline(
+        day_str,
+        snapshot_root=base,
+        outdir=outdir,
+        strict=bool(getattr(args, "strict", False)),
+        symbols=symbols,
+        regex=getattr(args, "regex", None),
+        limit=getattr(args, "limit", None),
+        jsonl=bool(getattr(args, "jsonl", True)),
+        git_sha=_env_git_sha(),
+        cli_args=cli_args,
+    )
+
+    stages = manifest.get("stages", {})
+    snapshot_stage = stages.get("snapshot", {})
+    advice_stage = stages.get("advice", {})
+    dossier_stage = stages.get("dossier", {})
+    print(
+        "eod run: "
+        f"snapshot errors={snapshot_stage.get('errors', 0)}; "
+        f"advice ok={advice_stage.get('ok', 0)}/{advice_stage.get('total', 0)}; "
+        f"dossier ok={dossier_stage.get('ok', 0)}/{dossier_stage.get('total', 0)}"
+    )
+    return int(code)
 
 
 def _cmd_plan(args: argparse.Namespace) -> int:
@@ -474,8 +533,20 @@ def _build_parser() -> argparse.ArgumentParser:
     p_info.set_defaults(func=_cmd_info)
 
     p_eod = sub.add_parser("eod")
-    p_eod.add_argument("--date", required=True)
+    p_eod.add_argument("--date", required=False)
     p_eod.set_defaults(func=_cmd_eod)
+    sub_eod = p_eod.add_subparsers(dest="eod_cmd", required=False)
+
+    p_eod_run = sub_eod.add_parser("run")
+    p_eod_run.add_argument("--day", default=None)
+    p_eod_run.add_argument("--outdir", default=None)
+    p_eod_run.add_argument("--strict", action="store_true")
+    p_eod_run.add_argument("--symbols", default=None)
+    p_eod_run.add_argument("--regex", default=None)
+    p_eod_run.add_argument("--limit", type=int, default=None)
+    p_eod_run.add_argument("--jsonl", action="store_true", default=True)
+    p_eod_run.add_argument("--no-jsonl", action="store_false", dest="jsonl")
+    p_eod_run.set_defaults(func=_cmd_eod_run)
 
     p_plan = sub.add_parser("plan")
     p_plan.add_argument("--date", required=True)

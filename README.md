@@ -26,3 +26,10 @@ python -m bist_core.cli.main orders --date 2025-01-15
 python -m bist_core.cli ask ASELS --day 2099-01-01
 python -m bist_core.cli ask ASELS --day 2099-01-01 --json
 ```
+
+### EOD pipeline (snapshot → advice → dossier)
+Snapshot kontratı için yukarıdaki bölüme bakın.
+
+```bash
+python -m bist_core.cli eod run --day 2099-01-01 --outdir data/eod/runs/2099-01-01
+```

@@ -19,7 +19,7 @@ def build_dossier_for_symbol_day(
     base = Path(root) if root is not None else Path("data/eod/snapshots")
     day_str = day.isoformat() if isinstance(day, Date) else str(day)
 
-    _, provider = _marketdata_meta(base, day_str)
+    has_ohlcv, provider = _marketdata_meta(base, day_str)
     provenance = {"snapshot_root": str(base), "provider": provider}
 
     try:
