@@ -5,6 +5,7 @@ import json
 import os
 import platform
 import sys
+import time
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
@@ -22,7 +23,7 @@ from bist_core.strategy.equal_weight import (
     generate_equal_weight_orders
 )
 from bist_core import config
-from bist_core.models import validate_events
+from bist_core.services import eventstore
 from bist_core.services.marketdata import MarketData
 from bist_core.services.advisor import build_advice_for_symbol
 from bist_core.services.dossier import (
@@ -491,55 +492,118 @@ def _cmd_events_ingest(args: argparse.Namespace) -> int:
         raise SystemExit(f"Invalid date format: {args.day}. Use YYYY-MM-DD")
 
     if not getattr(args, "input", None):
-        raise SystemExit("--input is required")
+        print("--input is required")
+        return 2
     input_path = Path(args.input)
     if not input_path.exists():
-        raise SystemExit(f"Input not found: {input_path}")
+        print(f"Input not found: {input_path}")
+        return 2
 
     outdir = Path(args.outdir) if getattr(args, "outdir", None) else None
     if outdir is None:
-        outdir = config.REPO_ROOT / "data" / "events" / args.day
+        outdir = config.REPO_ROOT / "data" / "eod" / "events" / args.day
     outdir.mkdir(parents=True, exist_ok=True)
     out_path = outdir / "events.jsonl"
 
-    raw_rows, total = _read_events_input(input_path)
-    events, errors = validate_events(raw_rows)
-    ok = len(events)
-    skipped = max(total - ok, 0)
+    start = time.perf_counter()
+    raw_rows, total_in, errors = _read_events_input(input_path)
+    existing_events, _ = eventstore.load_events_for_day(args.day, base_dir=outdir.parent)
+    existing_list = [ev for items in existing_events.values() for ev in items]
+    existing_keys = {eventstore.dedupe_key(ev) for ev in existing_list}
+    seen_keys = set(existing_keys)
 
-    _write_events_jsonl(out_path, events)
+    accepted_events = []
+    duplicates = 0
+
+    for idx, row in raw_rows:
+        event, err = eventstore.normalize_event(row, idx)
+        if err:
+            errors.append({"idx": idx, "error_marker": err})
+            continue
+        key = eventstore.dedupe_key(event)
+        if key in seen_keys:
+            duplicates += 1
+            continue
+        seen_keys.add(key)
+        accepted_events.append(event)
+
+    merged = eventstore.sort_events([*existing_list, *accepted_events])
+    _write_events_jsonl(out_path, merged)
+    runtime_ms = int((time.perf_counter() - start) * 1000)
+    rejected = len(errors)
+
+    manifest = {
+        "schema_version": 1,
+        "day": args.day,
+        "input": str(input_path),
+        "outdir": str(outdir),
+        "total_in": total_in,
+        "accepted": len(accepted_events),
+        "rejected": rejected,
+        "duplicates": duplicates,
+        "errors": errors,
+        "runtime_ms": runtime_ms,
+        "provenance": {
+            "cli_args": {
+                "day": args.day,
+                "input": str(input_path),
+                "outdir": str(outdir),
+                "strict": bool(getattr(args, "strict", False)),
+            },
+            "python": sys.version.split()[0],
+            "platform": platform.platform(),
+        },
+    }
+    manifest_path = outdir / "_manifest.json"
+    atomic_write_json(manifest_path, manifest)
 
     print(
-        f"events ingest: total={total} ok={ok} skipped={skipped} errors={len(errors)}"
+        "events ingest: "
+        f"total={total_in} accepted={len(accepted_events)} "
+        f"rejected={rejected} duplicates={duplicates}"
     )
+    print(f"events path: {out_path}")
+    print(f"manifest path: {manifest_path}")
+    if getattr(args, "strict", False) and rejected > 0:
+        return 2
     return 0
 
 
-def _read_events_input(path: Path) -> tuple[list[dict], int]:
+def _read_events_input(path: Path) -> tuple[list[tuple[int, dict]], int, list[dict]]:
     text = path.read_text(encoding="utf-8")
     if path.suffix.lower() == ".jsonl":
-        rows: list[dict] = []
+        rows: list[tuple[int, dict]] = []
+        errors: list[dict] = []
         total = 0
-        for line in text.splitlines():
+        for idx, line in enumerate(text.splitlines()):
             if not line.strip():
                 continue
             total += 1
             try:
                 row = json.loads(line)
             except Exception:
+                errors.append({"idx": idx, "error_marker": "InvalidJSON"})
                 continue
             if isinstance(row, dict):
-                rows.append(row)
-        return rows, total
+                rows.append((idx, row))
+            else:
+                errors.append({"idx": idx, "error_marker": "InvalidRow"})
+        return rows, total, errors
 
     try:
         data = json.loads(text)
     except Exception:
-        return [], 0
+        return [], 0, [{"idx": 0, "error_marker": "InvalidJSON"}]
     if isinstance(data, list):
-        rows = [row for row in data if isinstance(row, dict)]
-        return rows, len(data)
-    return [], 0
+        rows: list[tuple[int, dict]] = []
+        errors: list[dict] = []
+        for idx, row in enumerate(data):
+            if isinstance(row, dict):
+                rows.append((idx, row))
+            else:
+                errors.append({"idx": idx, "error_marker": "InvalidRow"})
+        return rows, len(data), errors
+    return [], 0, [{"idx": 0, "error_marker": "InvalidJSON"}]
 
 
 def _write_events_jsonl(path: Path, events: list) -> None:
@@ -683,6 +747,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_events_ingest.add_argument("--day", required=True)
     p_events_ingest.add_argument("--input", required=True)
     p_events_ingest.add_argument("--outdir", default=None)
+    p_events_ingest.add_argument("--strict", action="store_true")
     p_events_ingest.set_defaults(func=_cmd_events_ingest)
 
     return p

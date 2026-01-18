@@ -20,7 +20,7 @@ def test_advisor_mentions_events(tmp_path: Path) -> None:
     )
     env["BIST_CORE_SNAPSHOT_DIR"] = str(snapshot_root)
 
-    events_root = tmp_path / "data" / "events"
+    events_root = tmp_path / "data" / "eod" / "events"
     events_day = events_root / "2099-01-01"
     events_day.mkdir(parents=True)
     (events_day / "events.jsonl").write_text(
