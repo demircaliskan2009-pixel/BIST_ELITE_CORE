@@ -24,6 +24,7 @@ from bist_core.services import castore
 from bist_core.providers.corporate_actions.offline_file import (
     OfflineFileCorporateActionsProvider,
 )
+from bist_core.services import instrument_timeline
 
 
 def run_eod_pipeline(
@@ -44,6 +45,7 @@ def run_eod_pipeline(
     ca_provider: Optional[str] = None,
     ca_input: Optional[Path | str] = None,
     ca_outdir: Optional[Path | str] = None,
+    resolve_aliases: bool = False,
     git_sha: Optional[str] = None,
     cli_args: Optional[dict] = None,
 ) -> tuple[dict, int]:
@@ -61,9 +63,11 @@ def run_eod_pipeline(
         "events": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
         "instruments": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
         "corporate_actions": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
+        "universe": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
     }
     instruments_manifest = None
     corporate_actions_manifest = None
+    universe_manifest = None
 
     if not snapshot_path.exists():
         stages["snapshot"]["ok"] = False
@@ -85,6 +89,40 @@ def run_eod_pipeline(
     base_symbols = _load_symbols(root, day_str)
     filtered = _filter_symbols(base_symbols, symbols, regex, limit)
     sorted_symbols = sorted(filtered)
+    if resolve_aliases:
+        try:
+            instruments_path = (
+                Path(instruments_outdir) / "instruments.jsonl"
+                if instruments_outdir is not None
+                else (config.REPO_ROOT / "data" / "eod" / "instruments" / day_str / "instruments.jsonl")
+            )
+            if instruments_input and not instruments_path.exists():
+                instruments_path = Path(instruments_input)
+            actions_path = (
+                Path(ca_outdir) / "actions.jsonl"
+                if ca_outdir is not None
+                else (config.REPO_ROOT / "data" / "eod" / "corporate_actions" / day_str / "actions.jsonl")
+            )
+            timeline, errors = instrument_timeline.build_timeline(
+                day_str,
+                instruments_path,
+                actions_path,
+            )
+            alias_map = timeline.get("alias_map", {})
+            remapped = []
+            seen = set()
+            for sym in sorted_symbols:
+                target = alias_map.get(sym, sym)
+                if target not in seen:
+                    remapped.append(target)
+                    seen.add(target)
+            sorted_symbols = remapped
+            if errors:
+                stages["universe"]["errors"] = len(errors)
+                stages["universe"]["notes"] = ["alias_resolution_errors"]
+        except Exception:
+            stages["universe"]["errors"] = 1
+            stages["universe"]["notes"] = ["alias_resolution_failed"]
 
     advice_path = out_path / ("advice.jsonl" if jsonl else "advice.json")
     advice_records, advice_errors = _build_advice_records(
@@ -307,6 +345,40 @@ def run_eod_pipeline(
     else:
         stages["corporate_actions"]["notes"] = ["ca_skipped"]
 
+    instruments_dir = (
+        Path(instruments_outdir)
+        if instruments_outdir is not None
+        else config.REPO_ROOT / "data" / "eod" / "instruments" / day_str
+    )
+    ca_dir = (
+        Path(ca_outdir)
+        if ca_outdir is not None
+        else config.REPO_ROOT / "data" / "eod" / "corporate_actions" / day_str
+    )
+    if instruments_dir.exists() and (instruments_dir / "instruments.jsonl").exists():
+        try:
+            universe_dir = out_path / "universe" / day_str
+            universe_dir.mkdir(parents=True, exist_ok=True)
+            timeline, universe_manifest = instrument_timeline.resolve_timeline(
+                day_str,
+                instruments_dir / "instruments.jsonl",
+                ca_dir / "actions.jsonl",
+                universe_dir,
+                args={"day": day_str},
+            )
+            stages["universe"] = {
+                "total": len(timeline.get("resolved", [])),
+                "ok": len(timeline.get("resolved", [])) - universe_manifest["errors"],
+                "errors": universe_manifest["errors"],
+                "path": str(universe_dir),
+                "notes": [],
+            }
+        except Exception as exc:
+            stages["universe"]["errors"] = 1
+            stages["universe"]["notes"] = [f"universe_error:{exc.__class__.__name__}"]
+    else:
+        stages["universe"]["notes"] = ["universe_skipped"]
+
     runtime_ms = int((time.perf_counter() - start) * 1000)
     manifest = _pipeline_manifest(
         day_str,
@@ -319,6 +391,7 @@ def run_eod_pipeline(
     )
     manifest["instruments_manifest"] = instruments_manifest
     manifest["corporate_actions_manifest"] = corporate_actions_manifest
+    manifest["universe_manifest"] = universe_manifest
     atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
 
     stage_errors = (
@@ -328,6 +401,7 @@ def run_eod_pipeline(
         + stages["events"]["errors"]
         + stages["instruments"]["errors"]
         + stages["corporate_actions"]["errors"]
+        + stages["universe"]["errors"]
     )
     return manifest, 2 if strict and stage_errors > 0 else 0
 

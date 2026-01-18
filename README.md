@@ -50,3 +50,10 @@ Instrument kayıtları `symbol, isin, name, status, listing_start, listing_end, 
 python -m bist_core.cli instruments pull --day 2099-01-01 --provider offline_file --input sample_instruments.jsonl --outdir data/eod/instruments/2099-01-01
 python -m bist_core.cli instruments ingest --day 2099-01-01 --input data/eod/instruments/2099-01-01/instruments.jsonl
 ```
+
+### Universe / instrument timeline
+```bash
+python -m bist_core.cli corporate-actions pull --day 2099-01-01 --provider offline_file --input sample_actions.jsonl --outdir data/eod/corporate_actions/2099-01-01
+python -m bist_core.cli instruments timeline --day 2099-01-01 --instruments-dir data/eod/instruments/2099-01-01 --ca-dir data/eod/corporate_actions/2099-01-01 --outdir data/eod/universe/2099-01-01
+python -m bist_core.cli eod run --day 2099-01-01 --outdir data/eod/runs/2099-01-01 --instruments-provider offline_file --instruments-input sample_instruments.jsonl --ca-provider offline_file --ca-input sample_actions.jsonl
+```

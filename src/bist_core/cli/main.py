@@ -45,6 +45,7 @@ from bist_core.providers.corporate_actions.offline_file import (
     OfflineFileCorporateActionsProvider,
 )
 from bist_core.services.adjustments import apply_close_adjustments
+from bist_core.services import instrument_timeline
 
 
 def _snapshot_root() -> Path:
@@ -147,6 +148,7 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         "ca_provider": getattr(args, "ca_provider", None),
         "ca_input": getattr(args, "ca_input", None),
         "ca_outdir": getattr(args, "ca_outdir", None),
+        "resolve_aliases": bool(getattr(args, "resolve_aliases", False)),
     }
     manifest, code = run_eod_pipeline(
         day_str,
@@ -166,6 +168,7 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         ca_provider=getattr(args, "ca_provider", None),
         ca_input=getattr(args, "ca_input", None),
         ca_outdir=getattr(args, "ca_outdir", None),
+        resolve_aliases=bool(getattr(args, "resolve_aliases", False)),
         git_sha=_env_git_sha(),
         cli_args=cli_args,
     )
@@ -777,6 +780,39 @@ def _cmd_instruments_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_instruments_timeline(args: argparse.Namespace) -> int:
+    if not getattr(args, "day", None):
+        raise SystemExit("--day is required")
+    day = args.day
+    instruments_dir = Path(args.instruments_dir) if getattr(args, "instruments_dir", None) else None
+    if instruments_dir is None:
+        instruments_dir = config.REPO_ROOT / "data" / "eod" / "instruments" / day
+    ca_dir = Path(args.ca_dir) if getattr(args, "ca_dir", None) else None
+    if ca_dir is None:
+        ca_dir = config.REPO_ROOT / "data" / "eod" / "corporate_actions" / day
+    outdir = Path(args.outdir) if getattr(args, "outdir", None) else None
+    if outdir is None:
+        outdir = config.REPO_ROOT / "data" / "eod" / "universe" / day
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    timeline, manifest = instrument_timeline.resolve_timeline(
+        day,
+        instruments_dir / "instruments.jsonl",
+        ca_dir / "actions.jsonl",
+        outdir,
+        args={
+            "day": day,
+            "instruments_dir": str(instruments_dir),
+            "ca_dir": str(ca_dir),
+            "outdir": str(outdir),
+            "strict": bool(getattr(args, "strict", False)),
+        },
+    )
+    if getattr(args, "strict", False) and manifest["errors"] > 0:
+        return 2
+    return 0
+
+
 def _cmd_corporate_actions_pull(args: argparse.Namespace) -> int:
     if not getattr(args, "day", None):
         raise SystemExit("--day is required")
@@ -1092,6 +1128,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_run.add_argument("--ca-provider", dest="ca_provider", default=None)
     p_eod_run.add_argument("--ca-input", dest="ca_input", default=None)
     p_eod_run.add_argument("--ca-outdir", dest="ca_outdir", default=None)
+    p_eod_run.add_argument("--resolve-aliases", action="store_true")
     p_eod_run.set_defaults(func=_cmd_eod_run)
 
     p_plan = sub.add_parser("plan")
@@ -1189,6 +1226,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_instruments_ingest.add_argument("--outdir", default=None)
     p_instruments_ingest.add_argument("--strict", action="store_true")
     p_instruments_ingest.set_defaults(func=_cmd_instruments_ingest)
+
+    p_instruments_timeline = sub_instruments.add_parser("timeline")
+    p_instruments_timeline.add_argument("--day", required=True)
+    p_instruments_timeline.add_argument("--instruments-dir", default=None)
+    p_instruments_timeline.add_argument("--ca-dir", default=None)
+    p_instruments_timeline.add_argument("--outdir", default=None)
+    p_instruments_timeline.add_argument("--strict", action="store_true")
+    p_instruments_timeline.set_defaults(func=_cmd_instruments_timeline)
 
     p_ca = sub.add_parser("corporate-actions")
     sub_ca = p_ca.add_subparsers(dest="ca_cmd", required=True)
