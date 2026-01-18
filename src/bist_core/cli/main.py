@@ -22,7 +22,7 @@ from bist_core.strategy.equal_weight import (
 from bist_core import config
 from bist_core.services.marketdata import MarketData
 from bist_core.services.advisor import build_advice_for_symbol
-from bist_core.services.dossier import build_dossiers_for_day
+from bist_core.services.dossier import build_dossiers_for_day, build_manifest
 
 
 def _snapshot_root() -> Path:
@@ -270,7 +270,18 @@ def _cmd_dossier_build(args: argparse.Namespace) -> int:
         outdir = Path("data") / "dossier" / day_str
     outdir.mkdir(parents=True, exist_ok=True)
 
-    dossiers = build_dossiers_for_day(day_str, root=base, symbols=None)
+    symbols = None
+    if getattr(args, "symbols", None):
+        raw = [s.strip() for s in args.symbols.split(",")]
+        symbols = [s for s in raw if s]
+
+    dossiers, runtime_ms, provenance = build_dossiers_for_day(
+        day_str,
+        root=base,
+        symbols=symbols,
+        regex=getattr(args, "regex", None),
+        limit=getattr(args, "limit", None),
+    )
     error_count = 0
     for dossier in dossiers:
         symbol = dossier.get("symbol", "UNKNOWN")
@@ -280,7 +291,20 @@ def _cmd_dossier_build(args: argparse.Namespace) -> int:
         with out_path.open("w", encoding="utf-8") as f:
             json.dump(dossier, f, ensure_ascii=False, indent=2)
 
+    manifest = build_manifest(
+        day_str,
+        outdir,
+        dossiers,
+        runtime_ms,
+        provenance,
+    )
+    manifest_path = outdir / "_manifest.json"
+    with manifest_path.open("w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+
     print(f"dossier build: wrote {len(dossiers)} files, errors {error_count}")
+    if getattr(args, "strict", False) and error_count > 0:
+        return 2
     return 0
 
 
@@ -460,6 +484,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_dossier_build = sub_dossier.add_parser("build")
     p_dossier_build.add_argument("--day", default=None)
     p_dossier_build.add_argument("--all", action="store_true")
+    p_dossier_build.add_argument("--symbols", default=None)
+    p_dossier_build.add_argument("--regex", default=None)
+    p_dossier_build.add_argument("--limit", type=int, default=None)
+    p_dossier_build.add_argument("--strict", action="store_true")
     p_dossier_build.add_argument("--outdir", default=None)
     p_dossier_build.set_defaults(func=_cmd_dossier_build)
 

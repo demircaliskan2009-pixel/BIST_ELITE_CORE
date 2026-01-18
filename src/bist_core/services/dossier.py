@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date as Date
 from pathlib import Path
+import re
+import time
 from typing import List, Optional
 
 from bist_core.services.advisor import build_advice_for_symbol
@@ -16,7 +18,7 @@ def build_dossier_for_symbol_day(
     base = Path(root) if root is not None else Path("data/eod/snapshots")
     day_str = day.isoformat() if isinstance(day, Date) else str(day)
 
-    has_ohlcv, provider = _marketdata_meta(base, day_str)
+    _, provider = _marketdata_meta(base, day_str)
     provenance = {"snapshot_root": str(base), "provider": provider}
 
     try:
@@ -61,21 +63,89 @@ def build_dossiers_for_day(
     day: Date | str,
     root: Optional[Path | str] = None,
     symbols: Optional[List[str]] = None,
-) -> List[dict]:
+    regex: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> tuple[List[dict], int, dict]:
     base = Path(root) if root is not None else Path("data/eod/snapshots")
     day_str = day.isoformat() if isinstance(day, Date) else str(day)
 
-    if symbols is None:
-        try:
-            md = MarketData(base)
-            symbols = md.symbols(day_str)
-        except Exception:
-            symbols = []
+    try:
+        md = MarketData(base)
+        base_symbols = md.symbols(day_str)
+    except Exception:
+        base_symbols = []
+
+    symbols = _filter_symbols(
+        base_symbols,
+        symbols=symbols,
+        regex=regex,
+        limit=limit,
+    )
+
+    start = time.perf_counter()
+    has_ohlcv, provider = _marketdata_meta(base, day_str)
+    provenance = {"snapshot_root": str(base), "provider": provider}
 
     dossiers: List[dict] = []
     for sym in symbols:
         dossiers.append(build_dossier_for_symbol_day(sym, day_str, root=base))
-    return dossiers
+    runtime_ms = int((time.perf_counter() - start) * 1000)
+    return dossiers, runtime_ms, provenance
+
+
+def build_manifest(
+    day: Date | str,
+    outdir: Path | str,
+    dossiers: List[dict],
+    runtime_ms: int,
+    provenance: dict,
+) -> dict:
+    day_str = day.isoformat() if isinstance(day, Date) else str(day)
+    error_list = [
+        {"symbol": d.get("symbol", "UNKNOWN"), "error_marker": d.get("error_marker")}
+        for d in dossiers
+        if d.get("error_marker")
+    ]
+    errors = len(error_list)
+    total = len(dossiers)
+    return {
+        "schema_version": 1,
+        "day": day_str,
+        "outdir": str(outdir),
+        "total": total,
+        "ok": total - errors,
+        "errors": errors,
+        "error_list": error_list,
+        "runtime_ms": int(runtime_ms),
+        "provenance": provenance,
+    }
+
+
+def _filter_symbols(
+    base_symbols: List[str],
+    symbols: Optional[List[str]] = None,
+    regex: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> List[str]:
+    ordered = list(base_symbols)
+    if symbols:
+        requested = [s for s in symbols if s]
+        requested_set = set(requested)
+        ordered = [s for s in ordered if s in requested_set]
+        missing = [s for s in requested if s not in set(ordered)]
+        ordered.extend(missing)
+
+    if regex:
+        try:
+            matcher = re.compile(regex)
+            ordered = [s for s in ordered if matcher.search(s)]
+        except re.error:
+            ordered = []
+
+    if isinstance(limit, int) and limit >= 0:
+        ordered = ordered[:limit]
+
+    return ordered
 
 
 def _marketdata_meta(base: Path, day_str: str) -> tuple[bool, str | None]:
