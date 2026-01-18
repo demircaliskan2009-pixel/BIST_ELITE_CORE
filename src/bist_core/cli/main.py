@@ -40,6 +40,11 @@ from bist_core.providers.events.offline_file import OfflineFileEventsProvider
 from bist_core.providers.events.kap_html import KapHtmlEventsProvider
 from bist_core.services import instrumentstore
 from bist_core.providers.instruments.offline_file import OfflineFileInstrumentsProvider
+from bist_core.services import castore
+from bist_core.providers.corporate_actions.offline_file import (
+    OfflineFileCorporateActionsProvider,
+)
+from bist_core.services.adjustments import apply_close_adjustments
 
 
 def _snapshot_root() -> Path:
@@ -139,6 +144,9 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         "instruments_provider": getattr(args, "instruments_provider", None),
         "instruments_input": getattr(args, "instruments_input", None),
         "instruments_outdir": getattr(args, "instruments_outdir", None),
+        "ca_provider": getattr(args, "ca_provider", None),
+        "ca_input": getattr(args, "ca_input", None),
+        "ca_outdir": getattr(args, "ca_outdir", None),
     }
     manifest, code = run_eod_pipeline(
         day_str,
@@ -155,6 +163,9 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         instruments_provider=getattr(args, "instruments_provider", None),
         instruments_input=getattr(args, "instruments_input", None),
         instruments_outdir=getattr(args, "instruments_outdir", None),
+        ca_provider=getattr(args, "ca_provider", None),
+        ca_input=getattr(args, "ca_input", None),
+        ca_outdir=getattr(args, "ca_outdir", None),
         git_sha=_env_git_sha(),
         cli_args=cli_args,
     )
@@ -766,6 +777,176 @@ def _cmd_instruments_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_corporate_actions_pull(args: argparse.Namespace) -> int:
+    if not getattr(args, "day", None):
+        raise SystemExit("--day is required")
+    try:
+        _ = date.fromisoformat(args.day)
+    except ValueError:
+        raise SystemExit(f"Invalid date format: {args.day}. Use YYYY-MM-DD")
+
+    if not getattr(args, "provider", None):
+        raise SystemExit("--provider is required")
+    if not getattr(args, "input", None):
+        raise SystemExit("--input is required")
+    input_path = Path(args.input)
+    if not input_path.exists():
+        raise SystemExit(f"Input not found: {input_path}")
+
+    outdir = Path(args.outdir) if getattr(args, "outdir", None) else None
+    if outdir is None:
+        outdir = config.REPO_ROOT / "data" / "eod" / "corporate_actions" / args.day
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    if args.provider != "offline_file":
+        raise SystemExit(f"Unsupported provider: {args.provider}")
+
+    provider = OfflineFileCorporateActionsProvider(input_path)
+    records, errors = castore.parse_actions(input_path)
+    deduped = castore.dedupe_actions(records)
+    castore.atomic_write_jsonl(outdir / "actions.jsonl", deduped)
+
+    manifest = castore.build_manifest(
+        args.day,
+        outdir,
+        total=len(records),
+        ok=len(deduped) - len(errors),
+        errors=errors,
+        runtime_ms=0,
+        provenance={"cli_args": {}},
+        args_summary={
+            "day": args.day,
+            "provider": args.provider,
+            "input": str(input_path),
+            "outdir": str(outdir),
+            "strict": bool(getattr(args, "strict", False)),
+        },
+    )
+    castore.atomic_write_json(outdir / "_manifest.json", manifest)
+
+    print(
+        "corporate-actions pull: "
+        f"total={manifest['total']} ok={manifest['ok']} errors={manifest['errors']}"
+    )
+    print(f"actions path: {outdir / 'actions.jsonl'}")
+    print(f"manifest path: {outdir / '_manifest.json'}")
+    if getattr(args, "strict", False) and manifest["errors"] > 0:
+        return 2
+    return 0
+
+
+def _cmd_corporate_actions_ingest(args: argparse.Namespace) -> int:
+    if not getattr(args, "day", None):
+        raise SystemExit("--day is required")
+    try:
+        _ = date.fromisoformat(args.day)
+    except ValueError:
+        raise SystemExit(f"Invalid date format: {args.day}. Use YYYY-MM-DD")
+
+    if not getattr(args, "input", None):
+        raise SystemExit("--input is required")
+    input_path = Path(args.input)
+    if not input_path.exists():
+        raise SystemExit(f"Input not found: {input_path}")
+
+    outdir = Path(args.outdir) if getattr(args, "outdir", None) else None
+    if outdir is None:
+        outdir = config.REPO_ROOT / "data" / "eod" / "corporate_actions" / args.day
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    records, errors = castore.parse_actions(input_path)
+    deduped = castore.dedupe_actions(records)
+    castore.atomic_write_jsonl(outdir / "actions.jsonl", deduped)
+    manifest = castore.build_manifest(
+        args.day,
+        outdir,
+        total=len(records),
+        ok=len(deduped) - len(errors),
+        errors=errors,
+        runtime_ms=0,
+        provenance={"cli_args": {}},
+        args_summary={
+            "day": args.day,
+            "input": str(input_path),
+            "outdir": str(outdir),
+            "strict": bool(getattr(args, "strict", False)),
+        },
+    )
+    castore.atomic_write_json(outdir / "_manifest.json", manifest)
+
+    print(
+        "corporate-actions ingest: "
+        f"total={manifest['total']} ok={manifest['ok']} errors={manifest['errors']}"
+    )
+    print(f"actions path: {outdir / 'actions.jsonl'}")
+    print(f"manifest path: {outdir / '_manifest.json'}")
+    if getattr(args, "strict", False) and manifest["errors"] > 0:
+        return 2
+    return 0
+
+
+def _cmd_corporate_actions_apply_close(args: argparse.Namespace) -> int:
+    if not getattr(args, "day", None):
+        raise SystemExit("--day is required")
+    day = args.day
+    actions_dir = Path(args.actions_dir) if getattr(args, "actions_dir", None) else None
+    if actions_dir is None:
+        actions_dir = config.REPO_ROOT / "data" / "eod" / "corporate_actions" / day
+    snapshot_dir = Path(args.snapshot_dir) if getattr(args, "snapshot_dir", None) else None
+    if snapshot_dir is None:
+        snapshot_dir = config.REPO_ROOT / "data" / "eod" / "snapshots" / day
+    outdir = Path(args.outdir) if getattr(args, "outdir", None) else None
+    if outdir is None:
+        outdir = config.REPO_ROOT / "data" / "eod" / "adjusted" / day
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    actions_path = actions_dir / "actions.jsonl"
+    snapshot_path = snapshot_dir / "snapshot.csv"
+    errors: list[dict] = []
+    if not actions_path.exists():
+        errors.append({"error_marker": "MissingActions"})
+    if not snapshot_path.exists():
+        errors.append({"error_marker": "MissingSnapshot"})
+    if errors:
+        manifest = castore.build_manifest(
+            day,
+            outdir,
+            total=0,
+            ok=0,
+            errors=[{"idx": idx, "symbol": "", "effective_date": "", "error_marker": err["error_marker"]} for idx, err in enumerate(errors)],
+            runtime_ms=0,
+            provenance={"cli_args": {}},
+            args_summary={},
+        )
+        castore.atomic_write_json(outdir / "_manifest.json", manifest)
+        if getattr(args, "strict", False):
+            return 2
+        return 0
+
+    actions, action_errors = castore.parse_actions(actions_path)
+    adjusted_rows, notes = apply_close_adjustments(
+        _load_snapshot_rows(snapshot_path),
+        actions,
+    )
+    adjusted_path = outdir / "adjusted_snapshot.csv"
+    _write_adjusted_snapshot(adjusted_path, adjusted_rows)
+    manifest = {
+        "schema_version": 1,
+        "day": day,
+        "outdir": str(outdir),
+        "total": len(adjusted_rows),
+        "ok": len(adjusted_rows),
+        "errors": len(action_errors),
+        "error_list": action_errors,
+        "runtime_ms": 0,
+        "notes": notes,
+    }
+    castore.atomic_write_json(outdir / "_manifest.json", manifest)
+    if getattr(args, "strict", False) and action_errors:
+        return 2
+    return 0
+
+
 def _read_events_input(path: Path) -> tuple[list[tuple[int, dict]], int, list[dict]]:
     text = path.read_text(encoding="utf-8")
     if path.suffix.lower() == ".jsonl":
@@ -809,6 +990,30 @@ def _write_events_jsonl(path: Path, events: list) -> None:
         for event in events:
             f.write(json.dumps(asdict(event), ensure_ascii=False))
             f.write("\n")
+    tmp_path.replace(path)
+
+
+def _load_snapshot_rows(snapshot_path: Path) -> list[dict]:
+    df = pd.read_csv(snapshot_path)
+    rows: list[dict] = []
+    for _, row in df.iterrows():
+        rows.append(
+            {
+                "symbol": row.get("symbol"),
+                "date": row.get("date") if "date" in df.columns else snapshot_path.parent.name,
+                "close": row.get("close"),
+            }
+        )
+    return rows
+
+
+def _write_adjusted_snapshot(path: Path, rows: list[dict]) -> None:
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    df = pd.DataFrame(rows)
+    if "date" not in df.columns:
+        df["date"] = ""
+    df_out = df[["symbol", "close", "date"]]
+    df_out.to_csv(tmp_path, index=False)
     tmp_path.replace(path)
 
 
@@ -884,6 +1089,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_run.add_argument("--instruments-provider", dest="instruments_provider", default=None)
     p_eod_run.add_argument("--instruments-input", dest="instruments_input", default=None)
     p_eod_run.add_argument("--instruments-outdir", dest="instruments_outdir", default=None)
+    p_eod_run.add_argument("--ca-provider", dest="ca_provider", default=None)
+    p_eod_run.add_argument("--ca-input", dest="ca_input", default=None)
+    p_eod_run.add_argument("--ca-outdir", dest="ca_outdir", default=None)
     p_eod_run.set_defaults(func=_cmd_eod_run)
 
     p_plan = sub.add_parser("plan")
@@ -981,6 +1189,32 @@ def _build_parser() -> argparse.ArgumentParser:
     p_instruments_ingest.add_argument("--outdir", default=None)
     p_instruments_ingest.add_argument("--strict", action="store_true")
     p_instruments_ingest.set_defaults(func=_cmd_instruments_ingest)
+
+    p_ca = sub.add_parser("corporate-actions")
+    sub_ca = p_ca.add_subparsers(dest="ca_cmd", required=True)
+
+    p_ca_pull = sub_ca.add_parser("pull")
+    p_ca_pull.add_argument("--day", required=True)
+    p_ca_pull.add_argument("--provider", required=True)
+    p_ca_pull.add_argument("--input", required=True)
+    p_ca_pull.add_argument("--outdir", default=None)
+    p_ca_pull.add_argument("--strict", action="store_true")
+    p_ca_pull.set_defaults(func=_cmd_corporate_actions_pull)
+
+    p_ca_ingest = sub_ca.add_parser("ingest")
+    p_ca_ingest.add_argument("--day", required=True)
+    p_ca_ingest.add_argument("--input", required=True)
+    p_ca_ingest.add_argument("--outdir", default=None)
+    p_ca_ingest.add_argument("--strict", action="store_true")
+    p_ca_ingest.set_defaults(func=_cmd_corporate_actions_ingest)
+
+    p_ca_apply = sub_ca.add_parser("apply-close")
+    p_ca_apply.add_argument("--day", required=True)
+    p_ca_apply.add_argument("--actions-dir", default=None)
+    p_ca_apply.add_argument("--snapshot-dir", default=None)
+    p_ca_apply.add_argument("--outdir", default=None)
+    p_ca_apply.add_argument("--strict", action="store_true")
+    p_ca_apply.set_defaults(func=_cmd_corporate_actions_apply_close)
 
     return p
 

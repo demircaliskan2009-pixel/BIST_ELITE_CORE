@@ -20,6 +20,10 @@ from bist_core.services.events_pipeline import build_events_jsonl_for_day, inges
 from bist_core.providers.events.offline_file import OfflineFileEventsProvider
 from bist_core.services import instrumentstore
 from bist_core.providers.instruments.offline_file import OfflineFileInstrumentsProvider
+from bist_core.services import castore
+from bist_core.providers.corporate_actions.offline_file import (
+    OfflineFileCorporateActionsProvider,
+)
 
 
 def run_eod_pipeline(
@@ -37,6 +41,9 @@ def run_eod_pipeline(
     instruments_provider: Optional[str] = None,
     instruments_input: Optional[Path | str] = None,
     instruments_outdir: Optional[Path | str] = None,
+    ca_provider: Optional[str] = None,
+    ca_input: Optional[Path | str] = None,
+    ca_outdir: Optional[Path | str] = None,
     git_sha: Optional[str] = None,
     cli_args: Optional[dict] = None,
 ) -> tuple[dict, int]:
@@ -53,8 +60,10 @@ def run_eod_pipeline(
         "dossier": {"total": 0, "ok": 0, "errors": 0, "path": ""},
         "events": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
         "instruments": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
+        "corporate_actions": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
     }
     instruments_manifest = None
+    corporate_actions_manifest = None
 
     if not snapshot_path.exists():
         stages["snapshot"]["ok"] = False
@@ -250,6 +259,54 @@ def run_eod_pipeline(
             stages["instruments"]["errors"] = 1
             stages["instruments"]["notes"] = [f"instruments_error:{exc.__class__.__name__}"]
 
+    if ca_provider:
+        try:
+            if ca_provider != "offline_file":
+                stages["corporate_actions"]["errors"] = 1
+                stages["corporate_actions"]["notes"] = ["unsupported_provider"]
+            else:
+                if not ca_input:
+                    stages["corporate_actions"]["errors"] = 1
+                    stages["corporate_actions"]["notes"] = ["missing_input"]
+                else:
+                    ca_dir = (
+                        Path(ca_outdir)
+                        if ca_outdir is not None
+                        else config.REPO_ROOT / "data" / "eod" / "corporate_actions" / day_str
+                    )
+                    ca_dir.mkdir(parents=True, exist_ok=True)
+                    provider = OfflineFileCorporateActionsProvider(Path(ca_input))
+                    provider.pull(day_str, ca_dir)
+                    records, errors = castore.parse_actions(ca_dir / "actions.jsonl")
+                    deduped = castore.dedupe_actions(records)
+                    castore.atomic_write_jsonl(ca_dir / "actions.jsonl", deduped)
+                    corporate_actions_manifest = castore.build_manifest(
+                        day_str,
+                        ca_dir,
+                        total=len(records),
+                        ok=len(deduped) - len(errors),
+                        errors=errors,
+                        runtime_ms=0,
+                        provenance={"cli_args": {}},
+                        args_summary={},
+                    )
+                    castore.atomic_write_json(
+                        ca_dir / "_manifest.json",
+                        corporate_actions_manifest,
+                    )
+                    stages["corporate_actions"] = {
+                        "total": corporate_actions_manifest["total"],
+                        "ok": corporate_actions_manifest["ok"],
+                        "errors": corporate_actions_manifest["errors"],
+                        "path": str(ca_dir),
+                        "notes": [],
+                    }
+        except Exception as exc:
+            stages["corporate_actions"]["errors"] = 1
+            stages["corporate_actions"]["notes"] = [f"ca_error:{exc.__class__.__name__}"]
+    else:
+        stages["corporate_actions"]["notes"] = ["ca_skipped"]
+
     runtime_ms = int((time.perf_counter() - start) * 1000)
     manifest = _pipeline_manifest(
         day_str,
@@ -261,6 +318,7 @@ def run_eod_pipeline(
         cli_args=cli_args or {},
     )
     manifest["instruments_manifest"] = instruments_manifest
+    manifest["corporate_actions_manifest"] = corporate_actions_manifest
     atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
 
     stage_errors = (
@@ -269,6 +327,7 @@ def run_eod_pipeline(
         + stages["dossier"]["errors"]
         + stages["events"]["errors"]
         + stages["instruments"]["errors"]
+        + stages["corporate_actions"]["errors"]
     )
     return manifest, 2 if strict and stage_errors > 0 else 0
 
