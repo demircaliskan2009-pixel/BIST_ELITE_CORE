@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date as Date
 from pathlib import Path
+import json
 import re
 import time
 from typing import List, Optional
@@ -84,7 +85,14 @@ def build_dossiers_for_day(
 
     start = time.perf_counter()
     has_ohlcv, provider = _marketdata_meta(base, day_str)
-    provenance = {"snapshot_root": str(base), "provider": provider}
+    provenance = {
+        "snapshot_root": str(base),
+        "provider": provider,
+        "snapshot_meta": {
+            "ohlcv": bool(has_ohlcv),
+            "close_only": not bool(has_ohlcv),
+        },
+    }
 
     dossiers: List[dict] = []
     for sym in symbols:
@@ -119,6 +127,13 @@ def build_manifest(
         "runtime_ms": int(runtime_ms),
         "provenance": provenance,
     }
+
+
+def atomic_write_json(path: Path, payload: dict) -> None:
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    tmp_path.replace(path)
 
 
 def _filter_symbols(

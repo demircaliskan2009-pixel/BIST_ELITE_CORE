@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import sys
 from datetime import date
 from pathlib import Path
@@ -22,7 +23,11 @@ from bist_core.strategy.equal_weight import (
 from bist_core import config
 from bist_core.services.marketdata import MarketData
 from bist_core.services.advisor import build_advice_for_symbol
-from bist_core.services.dossier import build_dossiers_for_day, build_manifest
+from bist_core.services.dossier import (
+    atomic_write_json,
+    build_dossiers_for_day,
+    build_manifest,
+)
 
 
 def _snapshot_root() -> Path:
@@ -288,8 +293,25 @@ def _cmd_dossier_build(args: argparse.Namespace) -> int:
         if dossier.get("error_marker"):
             error_count += 1
         out_path = outdir / f"{symbol}.json"
-        with out_path.open("w", encoding="utf-8") as f:
-            json.dump(dossier, f, ensure_ascii=False, indent=2)
+        atomic_write_json(out_path, dossier)
+
+    git_sha = _env_git_sha()
+    cli_args = {
+        "symbols": getattr(args, "symbols", None),
+        "regex": getattr(args, "regex", None),
+        "limit": getattr(args, "limit", None),
+        "strict": bool(getattr(args, "strict", False)),
+        "outdir": str(outdir),
+        "day": day_str,
+    }
+    provenance = {
+        **provenance,
+        "git_sha": git_sha,
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "cwd": os.getcwd(),
+        "cli_args": cli_args,
+    }
 
     manifest = build_manifest(
         day_str,
@@ -299,13 +321,34 @@ def _cmd_dossier_build(args: argparse.Namespace) -> int:
         provenance,
     )
     manifest_path = outdir / "_manifest.json"
-    with manifest_path.open("w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    existing_runtime = _load_manifest_runtime(manifest_path)
+    if existing_runtime is not None:
+        manifest["runtime_ms"] = existing_runtime
+    atomic_write_json(manifest_path, manifest)
 
     print(f"dossier build: wrote {len(dossiers)} files, errors {error_count}")
     if getattr(args, "strict", False) and error_count > 0:
         return 2
     return 0
+
+
+def _env_git_sha() -> str | None:
+    for key in ("GIT_SHA", "GITHUB_SHA"):
+        value = os.getenv(key)
+        if value:
+            return value[:7]
+    return None
+
+
+def _load_manifest_runtime(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    runtime = data.get("runtime_ms")
+    return runtime if isinstance(runtime, int) else None
 
 
 def _cmd_data_snapshot(args: argparse.Namespace) -> int:
