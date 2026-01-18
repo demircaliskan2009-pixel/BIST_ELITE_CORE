@@ -7,6 +7,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from bist_core import config
+from bist_core.services import eventstore
 from bist_core.services.marketdata import MarketData
 from bist_core.services.eod_adapters import build_bars_for_day, build_bands_for_day
 from bist_core.strategy import engine
@@ -76,6 +77,8 @@ def build_advice_for_symbol(
         except Exception:
             has_ohlcv = False
 
+        events, events_errors = _load_events(symbol, day_str)
+
         text = _render_advice_text(
             symbol,
             day,
@@ -84,6 +87,8 @@ def build_advice_for_symbol(
             signals,
             plan,
             has_ohlcv,
+            events,
+            events_errors,
         )
 
         return Advice(
@@ -108,6 +113,8 @@ def _render_advice_text(
     signals: Any,
     plan: Any | None,
     has_ohlcv: bool,
+    events: list[eventstore.EventRecord],
+    events_errors: list[str],
 ) -> str:
     decision_sentence = f"{symbol} için karar {decision_raw}; skor {score:.2f}."
 
@@ -145,8 +152,9 @@ def _render_advice_text(
     second_paragraph = " ".join(
         part for part in [plan_sentence, coverage_note, reconsider_sentence] if part
     )
+    events_paragraph = _render_events_section(events, events_errors)
 
-    return f"{first_paragraph}\n\n{second_paragraph}".strip()
+    return f"{first_paragraph}\n\n{second_paragraph}\n\n{events_paragraph}".strip()
 
 
 def _safe_date(value: Date | str) -> Date:
@@ -191,6 +199,29 @@ def _load_json_config(rel_path: str) -> Dict[str, Any]:
             return json.load(f)
     except Exception:
         return {}
+
+
+def _load_events(
+    symbol: str,
+    day_str: str,
+) -> tuple[list[eventstore.EventRecord], list[str]]:
+    try:
+        return eventstore.load_events_for_symbol_day(symbol, day_str)
+    except Exception as exc:
+        return [], [f"EventStoreError:{exc.__class__.__name__}"]
+
+
+def _render_events_section(
+    events: list[eventstore.EventRecord],
+    errors: list[str],
+) -> str:
+    header = "Olaylar (KAP/diğer):"
+    if events:
+        items = [f"- {ev.title}" for ev in events[:3]]
+        return "\n".join([header, *items])
+    if errors:
+        return f"{header}\nKAP/olay verisi yok veya erişilemedi."
+    return f"{header}\nKAP/olay verisi yok veya erişilemedi."
 
 
 def _summarize_signals(signals: Any) -> List[str]:

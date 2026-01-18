@@ -5,6 +5,7 @@ import json
 import os
 import platform
 import sys
+from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 from typing import Optional, Sequence
@@ -21,6 +22,7 @@ from bist_core.strategy.equal_weight import (
     generate_equal_weight_orders
 )
 from bist_core import config
+from bist_core.models import validate_events
 from bist_core.services.marketdata import MarketData
 from bist_core.services.advisor import build_advice_for_symbol
 from bist_core.services.dossier import (
@@ -480,6 +482,75 @@ def _cmd_data_snapshot(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_events_ingest(args: argparse.Namespace) -> int:
+    if not getattr(args, "day", None):
+        raise SystemExit("--day is required")
+    try:
+        _ = date.fromisoformat(args.day)
+    except ValueError:
+        raise SystemExit(f"Invalid date format: {args.day}. Use YYYY-MM-DD")
+
+    if not getattr(args, "input", None):
+        raise SystemExit("--input is required")
+    input_path = Path(args.input)
+    if not input_path.exists():
+        raise SystemExit(f"Input not found: {input_path}")
+
+    outdir = Path(args.outdir) if getattr(args, "outdir", None) else None
+    if outdir is None:
+        outdir = config.REPO_ROOT / "data" / "events" / args.day
+    outdir.mkdir(parents=True, exist_ok=True)
+    out_path = outdir / "events.jsonl"
+
+    raw_rows, total = _read_events_input(input_path)
+    events, errors = validate_events(raw_rows)
+    ok = len(events)
+    skipped = max(total - ok, 0)
+
+    _write_events_jsonl(out_path, events)
+
+    print(
+        f"events ingest: total={total} ok={ok} skipped={skipped} errors={len(errors)}"
+    )
+    return 0
+
+
+def _read_events_input(path: Path) -> tuple[list[dict], int]:
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() == ".jsonl":
+        rows: list[dict] = []
+        total = 0
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            total += 1
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+        return rows, total
+
+    try:
+        data = json.loads(text)
+    except Exception:
+        return [], 0
+    if isinstance(data, list):
+        rows = [row for row in data if isinstance(row, dict)]
+        return rows, len(data)
+    return [], 0
+
+
+def _write_events_jsonl(path: Path, events: list) -> None:
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
+        for event in events:
+            f.write(json.dumps(asdict(event), ensure_ascii=False))
+            f.write("\n")
+    tmp_path.replace(path)
+
+
 def _latest_snapshot_day(snapshots_dir: Path) -> Optional[str]:
     if not snapshots_dir.exists():
         return None
@@ -604,6 +675,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_dossier_build.add_argument("--strict", action="store_true")
     p_dossier_build.add_argument("--outdir", default=None)
     p_dossier_build.set_defaults(func=_cmd_dossier_build)
+
+    p_events = sub.add_parser("events")
+    sub_events = p_events.add_subparsers(dest="events_cmd", required=True)
+
+    p_events_ingest = sub_events.add_parser("ingest")
+    p_events_ingest.add_argument("--day", required=True)
+    p_events_ingest.add_argument("--input", required=True)
+    p_events_ingest.add_argument("--outdir", default=None)
+    p_events_ingest.set_defaults(func=_cmd_events_ingest)
 
     return p
 

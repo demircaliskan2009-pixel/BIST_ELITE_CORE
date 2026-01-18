@@ -8,6 +8,7 @@ import time
 from typing import List, Optional
 
 from bist_core.services.advisor import build_advice_for_symbol
+from bist_core.services import eventstore
 from bist_core.services.marketdata import MarketData
 
 
@@ -21,6 +22,8 @@ def build_dossier_for_symbol_day(
 
     has_ohlcv, provider = _marketdata_meta(base, day_str)
     provenance = {"snapshot_root": str(base), "provider": provider}
+    events, events_errors = _load_events(symbol, day_str)
+    events_payload = [_event_payload(ev) for ev in events][:20]
 
     try:
         advice = build_advice_for_symbol(symbol, day_str, root=base)
@@ -39,6 +42,8 @@ def build_dossier_for_symbol_day(
             "capabilities": {"ohlcv": bool(has_ohlcv)},
             "provenance": provenance,
             "error_marker": error_marker,
+            "events": events_payload,
+            "events_errors": events_errors,
         }
     except Exception as exc:
         err = exc.__class__.__name__
@@ -57,6 +62,8 @@ def build_dossier_for_symbol_day(
             "capabilities": {"ohlcv": False},
             "provenance": provenance,
             "error_marker": err,
+            "events": events_payload,
+            "events_errors": events_errors,
         }
 
 
@@ -173,3 +180,19 @@ def _marketdata_meta(base: Path, day_str: str) -> tuple[bool, str | None]:
     except Exception:
         has_ohlcv = False
     return has_ohlcv, provider
+
+
+def _load_events(symbol: str, day_str: str) -> tuple[list[eventstore.EventRecord], list[str]]:
+    try:
+        return eventstore.load_events_for_symbol_day(symbol, day_str)
+    except Exception as exc:
+        return [], [f"EventStoreError:{exc.__class__.__name__}"]
+
+
+def _event_payload(event: eventstore.EventRecord) -> dict:
+    return {
+        "ts": event.ts,
+        "kind": event.kind,
+        "title": event.title,
+        "url": event.url,
+    }

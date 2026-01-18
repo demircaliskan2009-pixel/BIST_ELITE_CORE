@@ -33,3 +33,10 @@ Snapshot kontratı için yukarıdaki bölüme bakın.
 ```bash
 python -m bist_core.cli eod run --day 2099-01-01 --outdir data/eod/runs/2099-01-01
 ```
+
+### Events (KAP) sözleşmesi ve ingest
+Event kayıtları `symbol, ts, kind, title` alanlarını içerir. (Kısa JSONL veya JSON array.)
+
+```bash
+python -m bist_core.cli events ingest --day 2099-01-01 --input sample_events.jsonl
+```
