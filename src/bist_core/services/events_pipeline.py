@@ -23,9 +23,11 @@ def build_events_jsonl_for_day(
     raw_events: list[dict] = []
     provider_name = getattr(provider, "name", provider.__class__.__name__)
     input_value = str(getattr(provider, "path", ""))
+    source_url = None
 
     try:
         raw_events = provider.fetch_events_for_day(day)
+        source_url = getattr(provider, "source_url", None)
     except Exception as exc:
         errors.append({"idx": -1, "error_marker": f"ProviderError:{exc.__class__.__name__}"})
 
@@ -60,17 +62,20 @@ def build_events_jsonl_for_day(
     else:
         _write_jsonl(out_path, events_sorted)
 
+    error_list = sorted(errors, key=lambda item: item.get("idx", 0))
     manifest = {
         "schema_version": 1,
         "day": day,
         "provider": provider_name,
         "input": input_value,
+        "source_url": source_url,
         "out_path": str(out_path),
         "total_in": total_in,
         "accepted": accepted,
         "rejected": rejected,
         "duplicates": duplicates,
-        "errors": errors,
+        "errors": error_list,
+        "error_list": error_list,
         "runtime_ms": int((time.perf_counter() - start) * 1000),
         "provenance": {
             "cli_args": {},
@@ -87,6 +92,8 @@ def ingest_events_from_file(
     day: str,
     input_path: Path,
     outdir: Path,
+    *,
+    cli_args: dict | None = None,
 ) -> dict:
     start = time.perf_counter()
     raw_rows, total_in, errors = _read_events_input(input_path)
@@ -114,6 +121,7 @@ def ingest_events_from_file(
     out_path = outdir / "events.jsonl"
     _atomic_write_jsonl(out_path, merged)
 
+    error_list = sorted(errors, key=lambda item: item.get("idx", 0))
     manifest = {
         "schema_version": 1,
         "day": day,
@@ -123,10 +131,11 @@ def ingest_events_from_file(
         "accepted": len(accepted_events),
         "rejected": len(errors),
         "duplicates": duplicates,
-        "errors": errors,
+        "errors": error_list,
+        "error_list": error_list,
         "runtime_ms": int((time.perf_counter() - start) * 1000),
         "provenance": {
-            "cli_args": {},
+            "cli_args": cli_args or {},
             "python": _python_version(),
             "platform": platform.platform(),
         },

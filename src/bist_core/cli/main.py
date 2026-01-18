@@ -32,8 +32,12 @@ from bist_core.services.dossier import (
     build_manifest,
 )
 from bist_core.services.eod_pipeline import run_eod_pipeline
-from bist_core.services.events_pipeline import build_events_jsonl_for_day
+from bist_core.services.events_pipeline import (
+    build_events_jsonl_for_day,
+    ingest_events_from_file,
+)
 from bist_core.providers.events.offline_file import OfflineFileEventsProvider
+from bist_core.providers.events.kap_html import KapHtmlEventsProvider
 
 
 def _snapshot_root() -> Path:
@@ -591,8 +595,6 @@ def _cmd_events_pull(args: argparse.Namespace) -> int:
         raise SystemExit("--input is required")
 
     input_path = Path(args.input)
-    if not input_path.exists():
-        raise SystemExit(f"Input not found: {input_path}")
 
     outdir = Path(args.outdir) if getattr(args, "outdir", None) else None
     if outdir is None:
@@ -600,10 +602,20 @@ def _cmd_events_pull(args: argparse.Namespace) -> int:
     outdir.mkdir(parents=True, exist_ok=True)
     out_path = outdir / "events.jsonl"
 
-    if args.provider != "offline_file":
+    provider = None
+    if args.provider == "offline_file":
+        if not input_path.exists():
+            raise SystemExit(f"Input not found: {input_path}")
+        provider = OfflineFileEventsProvider(input_path)
+    elif args.provider == "kap_html":
+        provider = KapHtmlEventsProvider(
+            base_url=getattr(args, "base_url", None) or "https://www.kap.org.tr",
+            url_template=getattr(args, "url_template", None),
+            timeout_s=int(getattr(args, "timeout", 15)),
+        )
+    else:
         raise SystemExit(f"Unsupported provider: {args.provider}")
 
-    provider = OfflineFileEventsProvider(input_path)
     manifest = build_events_jsonl_for_day(args.day, provider, out_path, atomic=True)
     manifest["provenance"]["cli_args"] = {
         "day": args.day,
@@ -611,6 +623,9 @@ def _cmd_events_pull(args: argparse.Namespace) -> int:
         "input": str(input_path),
         "outdir": str(outdir),
         "strict": bool(getattr(args, "strict", False)),
+        "base_url": getattr(args, "base_url", None),
+        "url_template": getattr(args, "url_template", None),
+        "timeout": getattr(args, "timeout", None),
     }
     manifest_path = outdir / "_manifest.json"
     atomic_write_json(manifest_path, manifest)
@@ -819,6 +834,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_events_pull.add_argument("--input", required=True)
     p_events_pull.add_argument("--outdir", default=None)
     p_events_pull.add_argument("--strict", action="store_true")
+    p_events_pull.add_argument("--base-url", dest="base_url", default=None)
+    p_events_pull.add_argument("--url-template", dest="url_template", default=None)
+    p_events_pull.add_argument("--timeout", dest="timeout", type=int, default=15)
     p_events_pull.set_defaults(func=_cmd_events_pull)
 
     return p

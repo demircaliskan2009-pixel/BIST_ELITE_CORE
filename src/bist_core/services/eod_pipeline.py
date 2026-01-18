@@ -115,9 +115,43 @@ def run_eod_pipeline(
     }
 
     events_manifest = None
-    if events_provider and events_input:
+    if events_provider and (events_provider == "kap_html" or events_input):
         try:
-            if events_provider != "offline_file":
+            if events_provider == "kap_html":
+                pull_dir = out_path / "events_pull" / day_str
+                pull_dir.mkdir(parents=True, exist_ok=True)
+                pull_out = pull_dir / "events.jsonl"
+                provider = OfflineFileEventsProvider(Path(events_input)) if events_input else None
+                if provider is None:
+                    from bist_core.providers.events.kap_html import KapHtmlEventsProvider
+                    provider = KapHtmlEventsProvider()
+                pull_manifest = build_events_jsonl_for_day(
+                    day_str,
+                    provider,
+                    pull_out,
+                    atomic=True,
+                )
+
+                ingest_outdir = (
+                    Path(events_outdir)
+                    if events_outdir is not None
+                    else config.REPO_ROOT / "data" / "eod" / "events" / day_str
+                )
+                ingest_outdir.mkdir(parents=True, exist_ok=True)
+                ingest_manifest = ingest_events_from_file(
+                    day_str,
+                    pull_out,
+                    ingest_outdir,
+                )
+                total_errors = pull_manifest["rejected"] + ingest_manifest["rejected"]
+                stages["events"] = {
+                    "total": pull_manifest["total_in"],
+                    "ok": ingest_manifest["accepted"],
+                    "errors": total_errors,
+                    "path": str(ingest_outdir),
+                    "notes": [],
+                }
+            elif events_provider != "offline_file":
                 stages["events"]["errors"] = 1
                 stages["events"]["notes"] = ["unsupported_provider"]
             else:

@@ -40,4 +40,5 @@ Event kayıtları `symbol, ts, kind, title` alanlarını içerir. (Kısa JSONL v
 ```bash
 python -m bist_core.cli events pull --day 2099-01-01 --provider offline_file --input sample_events.jsonl --outdir data/eod/events/2099-01-01
 python -m bist_core.cli events ingest --day 2099-01-01 --input data/eod/events/2099-01-01/events.jsonl
+python -m bist_core.cli events pull --day 2099-01-01 --provider kap_html --url-template "/kap_sample.html" --outdir data/eod/events/2099-01-01
 ```
