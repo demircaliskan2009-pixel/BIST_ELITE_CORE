@@ -8,6 +8,7 @@ import platform
 import time
 from typing import Iterable, Optional
 
+from bist_core import config
 from bist_core.services.advisor import build_advice_for_symbol
 from bist_core.services.dossier import (
     atomic_write_json,
@@ -15,6 +16,8 @@ from bist_core.services.dossier import (
     build_manifest,
 )
 from bist_core.services.marketdata import MarketData
+from bist_core.services.events_pipeline import build_events_jsonl_for_day, ingest_events_from_file
+from bist_core.providers.events.offline_file import OfflineFileEventsProvider
 
 
 def run_eod_pipeline(
@@ -26,6 +29,9 @@ def run_eod_pipeline(
     regex: Optional[str] = None,
     limit: Optional[int] = None,
     jsonl: bool = True,
+    events_provider: Optional[str] = None,
+    events_input: Optional[Path | str] = None,
+    events_outdir: Optional[Path | str] = None,
     git_sha: Optional[str] = None,
     cli_args: Optional[dict] = None,
 ) -> tuple[dict, int]:
@@ -40,6 +46,7 @@ def run_eod_pipeline(
         "snapshot": {"ok": True, "errors": 0, "notes": []},
         "advice": {"total": 0, "ok": 0, "errors": 0, "path": ""},
         "dossier": {"total": 0, "ok": 0, "errors": 0, "path": ""},
+        "events": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
     }
 
     if not snapshot_path.exists():
@@ -107,6 +114,49 @@ def run_eod_pipeline(
         "path": str(dossier_dir),
     }
 
+    events_manifest = None
+    if events_provider and events_input:
+        try:
+            if events_provider != "offline_file":
+                stages["events"]["errors"] = 1
+                stages["events"]["notes"] = ["unsupported_provider"]
+            else:
+                pull_dir = out_path / "events_pull" / day_str
+                pull_dir.mkdir(parents=True, exist_ok=True)
+                pull_out = pull_dir / "events.jsonl"
+                provider = OfflineFileEventsProvider(Path(events_input))
+                pull_manifest = build_events_jsonl_for_day(
+                    day_str,
+                    provider,
+                    pull_out,
+                    atomic=True,
+                )
+
+                ingest_outdir = (
+                    Path(events_outdir)
+                    if events_outdir is not None
+                    else config.REPO_ROOT / "data" / "eod" / "events" / day_str
+                )
+                ingest_outdir.mkdir(parents=True, exist_ok=True)
+                ingest_manifest = ingest_events_from_file(
+                    day_str,
+                    pull_out,
+                    ingest_outdir,
+                )
+                total_errors = pull_manifest["rejected"] + ingest_manifest["rejected"]
+                stages["events"] = {
+                    "total": pull_manifest["total_in"],
+                    "ok": ingest_manifest["accepted"],
+                    "errors": total_errors,
+                    "path": str(ingest_outdir),
+                    "notes": [],
+                }
+        except Exception as exc:
+            stages["events"]["errors"] = 1
+            stages["events"]["notes"] = [f"events_error:{exc.__class__.__name__}"]
+    else:
+        stages["events"]["notes"] = ["events_skipped"]
+
     runtime_ms = int((time.perf_counter() - start) * 1000)
     manifest = _pipeline_manifest(
         day_str,
@@ -123,6 +173,7 @@ def run_eod_pipeline(
         stages["snapshot"]["errors"]
         + stages["advice"]["errors"]
         + stages["dossier"]["errors"]
+        + stages["events"]["errors"]
     )
     return manifest, 2 if strict and stage_errors > 0 else 0
 

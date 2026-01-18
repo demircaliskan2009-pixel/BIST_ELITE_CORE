@@ -127,6 +127,9 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         "outdir": str(outdir),
         "day": day_str,
         "jsonl": bool(getattr(args, "jsonl", True)),
+        "events_provider": getattr(args, "events_provider", None),
+        "events_input": getattr(args, "events_input", None),
+        "events_outdir": getattr(args, "events_outdir", None),
     }
     manifest, code = run_eod_pipeline(
         day_str,
@@ -137,6 +140,9 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         regex=getattr(args, "regex", None),
         limit=getattr(args, "limit", None),
         jsonl=bool(getattr(args, "jsonl", True)),
+        events_provider=getattr(args, "events_provider", None),
+        events_input=getattr(args, "events_input", None),
+        events_outdir=getattr(args, "events_outdir", None),
         git_sha=_env_git_sha(),
         cli_args=cli_args,
     )
@@ -735,6 +741,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_run.add_argument("--limit", type=int, default=None)
     p_eod_run.add_argument("--jsonl", action="store_true", default=True)
     p_eod_run.add_argument("--no-jsonl", action="store_false", dest="jsonl")
+    p_eod_run.add_argument("--events-provider", dest="events_provider", default=None)
+    p_eod_run.add_argument("--events-input", dest="events_input", default=None)
+    p_eod_run.add_argument("--events-outdir", dest="events_outdir", default=None)
     p_eod_run.set_defaults(func=_cmd_eod_run)
 
     p_plan = sub.add_parser("plan")
