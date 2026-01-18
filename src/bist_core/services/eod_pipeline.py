@@ -18,6 +18,8 @@ from bist_core.services.dossier import (
 from bist_core.services.marketdata import MarketData
 from bist_core.services.events_pipeline import build_events_jsonl_for_day, ingest_events_from_file
 from bist_core.providers.events.offline_file import OfflineFileEventsProvider
+from bist_core.services import instrumentstore
+from bist_core.providers.instruments.offline_file import OfflineFileInstrumentsProvider
 
 
 def run_eod_pipeline(
@@ -32,6 +34,9 @@ def run_eod_pipeline(
     events_provider: Optional[str] = None,
     events_input: Optional[Path | str] = None,
     events_outdir: Optional[Path | str] = None,
+    instruments_provider: Optional[str] = None,
+    instruments_input: Optional[Path | str] = None,
+    instruments_outdir: Optional[Path | str] = None,
     git_sha: Optional[str] = None,
     cli_args: Optional[dict] = None,
 ) -> tuple[dict, int]:
@@ -47,7 +52,9 @@ def run_eod_pipeline(
         "advice": {"total": 0, "ok": 0, "errors": 0, "path": ""},
         "dossier": {"total": 0, "ok": 0, "errors": 0, "path": ""},
         "events": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
+        "instruments": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
     }
+    instruments_manifest = None
 
     if not snapshot_path.exists():
         stages["snapshot"]["ok"] = False
@@ -191,6 +198,58 @@ def run_eod_pipeline(
     else:
         stages["events"]["notes"] = ["events_skipped"]
 
+    if instruments_provider:
+        try:
+            if instruments_provider != "offline_file":
+                stages["instruments"]["errors"] = 1
+                stages["instruments"]["notes"] = ["unsupported_provider"]
+            else:
+                if not instruments_input:
+                    stages["instruments"]["errors"] = 1
+                    stages["instruments"]["notes"] = ["missing_input"]
+                else:
+                    instruments_dir = (
+                        Path(instruments_outdir)
+                        if instruments_outdir is not None
+                        else config.REPO_ROOT / "data" / "eod" / "instruments" / day_str
+                    )
+                    instruments_dir.mkdir(parents=True, exist_ok=True)
+                    provider = OfflineFileInstrumentsProvider(Path(instruments_input))
+                    provider.pull(day_str, instruments_dir)
+                    records, errors = instrumentstore.parse_instruments(
+                        instruments_dir / "instruments.jsonl",
+                        source=provider.name,
+                    )
+                    deduped = instrumentstore.dedupe_instruments(records)
+                    instrumentstore.atomic_write_jsonl(
+                        instruments_dir / "instruments.jsonl",
+                        deduped,
+                    )
+                    instruments_manifest = instrumentstore.build_manifest(
+                        day_str,
+                        instruments_dir,
+                        total=len(records),
+                        ok=len(deduped) - len(errors),
+                        errors=errors,
+                        runtime_ms=0,
+                        provenance={"cli_args": {}},
+                        args_summary={},
+                    )
+                    instrumentstore.atomic_write_json(
+                        instruments_dir / "_manifest.json",
+                        instruments_manifest,
+                    )
+                    stages["instruments"] = {
+                        "total": instruments_manifest["total"],
+                        "ok": instruments_manifest["ok"],
+                        "errors": instruments_manifest["errors"],
+                        "path": str(instruments_dir),
+                        "notes": [],
+                    }
+        except Exception as exc:
+            stages["instruments"]["errors"] = 1
+            stages["instruments"]["notes"] = [f"instruments_error:{exc.__class__.__name__}"]
+
     runtime_ms = int((time.perf_counter() - start) * 1000)
     manifest = _pipeline_manifest(
         day_str,
@@ -201,6 +260,7 @@ def run_eod_pipeline(
         git_sha=git_sha,
         cli_args=cli_args or {},
     )
+    manifest["instruments_manifest"] = instruments_manifest
     atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
 
     stage_errors = (
@@ -208,6 +268,7 @@ def run_eod_pipeline(
         + stages["advice"]["errors"]
         + stages["dossier"]["errors"]
         + stages["events"]["errors"]
+        + stages["instruments"]["errors"]
     )
     return manifest, 2 if strict and stage_errors > 0 else 0
 

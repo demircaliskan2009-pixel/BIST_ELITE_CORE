@@ -42,3 +42,11 @@ python -m bist_core.cli events pull --day 2099-01-01 --provider offline_file --i
 python -m bist_core.cli events ingest --day 2099-01-01 --input data/eod/events/2099-01-01/events.jsonl
 python -m bist_core.cli events pull --day 2099-01-01 --provider kap_html --url-template "/kap_sample.html" --outdir data/eod/events/2099-01-01
 ```
+
+### Instruments (master v1)
+Instrument kayıtları `symbol, isin, name, status, listing_start, listing_end, market, source, ts` alanlarını içerir.
+
+```bash
+python -m bist_core.cli instruments pull --day 2099-01-01 --provider offline_file --input sample_instruments.jsonl --outdir data/eod/instruments/2099-01-01
+python -m bist_core.cli instruments ingest --day 2099-01-01 --input data/eod/instruments/2099-01-01/instruments.jsonl
+```
