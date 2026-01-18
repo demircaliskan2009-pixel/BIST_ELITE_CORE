@@ -32,6 +32,8 @@ from bist_core.services.dossier import (
     build_manifest,
 )
 from bist_core.services.eod_pipeline import run_eod_pipeline
+from bist_core.services.events_pipeline import build_events_jsonl_for_day
+from bist_core.providers.events.offline_file import OfflineFileEventsProvider
 
 
 def _snapshot_root() -> Path:
@@ -569,6 +571,58 @@ def _cmd_events_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_events_pull(args: argparse.Namespace) -> int:
+    if not getattr(args, "day", None):
+        raise SystemExit("--day is required")
+    try:
+        _ = date.fromisoformat(args.day)
+    except ValueError:
+        raise SystemExit(f"Invalid date format: {args.day}. Use YYYY-MM-DD")
+
+    if not getattr(args, "provider", None):
+        raise SystemExit("--provider is required")
+    if not getattr(args, "input", None):
+        raise SystemExit("--input is required")
+
+    input_path = Path(args.input)
+    if not input_path.exists():
+        raise SystemExit(f"Input not found: {input_path}")
+
+    outdir = Path(args.outdir) if getattr(args, "outdir", None) else None
+    if outdir is None:
+        outdir = config.REPO_ROOT / "data" / "eod" / "events" / args.day
+    outdir.mkdir(parents=True, exist_ok=True)
+    out_path = outdir / "events.jsonl"
+
+    if args.provider != "offline_file":
+        raise SystemExit(f"Unsupported provider: {args.provider}")
+
+    provider = OfflineFileEventsProvider(input_path)
+    manifest = build_events_jsonl_for_day(args.day, provider, out_path, atomic=True)
+    manifest["provenance"]["cli_args"] = {
+        "day": args.day,
+        "provider": args.provider,
+        "input": str(input_path),
+        "outdir": str(outdir),
+        "strict": bool(getattr(args, "strict", False)),
+    }
+    manifest_path = outdir / "_manifest.json"
+    atomic_write_json(manifest_path, manifest)
+
+    print(
+        "events pull: "
+        f"total={manifest['total_in']} "
+        f"accepted={manifest['accepted']} "
+        f"rejected={manifest['rejected']} "
+        f"duplicates={manifest['duplicates']}"
+    )
+    print(f"events path: {out_path}")
+    print(f"manifest path: {manifest_path}")
+    if getattr(args, "strict", False) and manifest["rejected"] > 0:
+        return 2
+    return 0
+
+
 def _read_events_input(path: Path) -> tuple[list[tuple[int, dict]], int, list[dict]]:
     text = path.read_text(encoding="utf-8")
     if path.suffix.lower() == ".jsonl":
@@ -749,6 +803,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_events_ingest.add_argument("--outdir", default=None)
     p_events_ingest.add_argument("--strict", action="store_true")
     p_events_ingest.set_defaults(func=_cmd_events_ingest)
+
+    p_events_pull = sub_events.add_parser("pull")
+    p_events_pull.add_argument("--day", required=True)
+    p_events_pull.add_argument("--provider", required=True)
+    p_events_pull.add_argument("--input", required=True)
+    p_events_pull.add_argument("--outdir", default=None)
+    p_events_pull.add_argument("--strict", action="store_true")
+    p_events_pull.set_defaults(func=_cmd_events_pull)
 
     return p
 
