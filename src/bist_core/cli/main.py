@@ -32,6 +32,7 @@ from bist_core.services.dossier import (
     build_manifest,
 )
 from bist_core.services.eod_pipeline import run_eod_pipeline
+from bist_core.services.eod_batch import run_eod_batch
 from bist_core.services.events_pipeline import (
     build_events_jsonl_for_day,
     ingest_events_from_file,
@@ -187,6 +188,55 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         f"advice ok={advice_stage.get('ok', 0)}/{advice_stage.get('total', 0)}; "
         f"dossier ok={dossier_stage.get('ok', 0)}/{dossier_stage.get('total', 0)}"
     )
+    return int(code)
+
+
+def _cmd_eod_batch(args: argparse.Namespace) -> int:
+    base = _snapshot_root()
+    if not getattr(args, "date_from", None) or not getattr(args, "date_to", None):
+        raise SystemExit("--from and --to are required")
+    date_from = args.date_from
+    date_to = args.date_to
+
+    outdir = Path(args.outdir) if getattr(args, "outdir", None) else None
+    if outdir is None:
+        outdir = config.REPO_ROOT / "data" / "eod" / "batch" / f"{date_from}_to_{date_to}"
+
+    symbols = None
+    if getattr(args, "symbols", None):
+        raw = [s.strip() for s in args.symbols.split(",")]
+        symbols = [s for s in raw if s]
+
+    run_kwargs = {
+        "symbols": symbols,
+        "regex": getattr(args, "regex", None),
+        "limit": getattr(args, "limit", None),
+        "jsonl": bool(getattr(args, "jsonl", True)),
+        "events_provider": getattr(args, "events_provider", None),
+        "events_input": getattr(args, "events_input", None),
+        "events_outdir": getattr(args, "events_outdir", None),
+        "instruments_provider": getattr(args, "instruments_provider", None),
+        "instruments_input": getattr(args, "instruments_input", None),
+        "instruments_outdir": getattr(args, "instruments_outdir", None),
+        "ca_provider": getattr(args, "ca_provider", None),
+        "ca_input": getattr(args, "ca_input", None),
+        "ca_outdir": getattr(args, "ca_outdir", None),
+        "resolve_aliases": bool(getattr(args, "resolve_aliases", False)),
+        "git_sha": _env_git_sha(),
+        "cli_args": {"batch": True},
+    }
+
+    manifest, code = run_eod_batch(
+        date_from,
+        date_to,
+        outdir,
+        snapshot_root=base,
+        strict=bool(getattr(args, "strict", False)),
+        calendar_file=Path(args.calendar_file) if getattr(args, "calendar_file", None) else None,
+        ignore_calendar=bool(getattr(args, "ignore_calendar", False)),
+        run_kwargs=run_kwargs,
+    )
+    print(f"eod batch: days={len(manifest.get('days', []))} errors={len(manifest.get('errors', []))}")
     return int(code)
 
 
@@ -1136,6 +1186,30 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_run.add_argument("--calendar-file", dest="calendar_file", default=None)
     p_eod_run.add_argument("--ignore-calendar", action="store_true")
     p_eod_run.set_defaults(func=_cmd_eod_run)
+
+    p_eod_batch = sub_eod.add_parser("batch")
+    p_eod_batch.add_argument("--from", dest="date_from", required=True)
+    p_eod_batch.add_argument("--to", dest="date_to", required=True)
+    p_eod_batch.add_argument("--outdir", default=None)
+    p_eod_batch.add_argument("--strict", action="store_true")
+    p_eod_batch.add_argument("--symbols", default=None)
+    p_eod_batch.add_argument("--regex", default=None)
+    p_eod_batch.add_argument("--limit", type=int, default=None)
+    p_eod_batch.add_argument("--jsonl", action="store_true", default=True)
+    p_eod_batch.add_argument("--no-jsonl", action="store_false", dest="jsonl")
+    p_eod_batch.add_argument("--events-provider", dest="events_provider", default=None)
+    p_eod_batch.add_argument("--events-input", dest="events_input", default=None)
+    p_eod_batch.add_argument("--events-outdir", dest="events_outdir", default=None)
+    p_eod_batch.add_argument("--instruments-provider", dest="instruments_provider", default=None)
+    p_eod_batch.add_argument("--instruments-input", dest="instruments_input", default=None)
+    p_eod_batch.add_argument("--instruments-outdir", dest="instruments_outdir", default=None)
+    p_eod_batch.add_argument("--ca-provider", dest="ca_provider", default=None)
+    p_eod_batch.add_argument("--ca-input", dest="ca_input", default=None)
+    p_eod_batch.add_argument("--ca-outdir", dest="ca_outdir", default=None)
+    p_eod_batch.add_argument("--resolve-aliases", action="store_true")
+    p_eod_batch.add_argument("--calendar-file", dest="calendar_file", default=None)
+    p_eod_batch.add_argument("--ignore-calendar", action="store_true")
+    p_eod_batch.set_defaults(func=_cmd_eod_batch)
 
     p_plan = sub.add_parser("plan")
     p_plan.add_argument("--date", required=True)
