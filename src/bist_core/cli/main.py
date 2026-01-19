@@ -149,6 +149,8 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         "ca_input": getattr(args, "ca_input", None),
         "ca_outdir": getattr(args, "ca_outdir", None),
         "resolve_aliases": bool(getattr(args, "resolve_aliases", False)),
+        "calendar_file": getattr(args, "calendar_file", None),
+        "ignore_calendar": bool(getattr(args, "ignore_calendar", False)),
     }
     manifest, code = run_eod_pipeline(
         day_str,
@@ -169,6 +171,8 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         ca_input=getattr(args, "ca_input", None),
         ca_outdir=getattr(args, "ca_outdir", None),
         resolve_aliases=bool(getattr(args, "resolve_aliases", False)),
+        calendar_file=getattr(args, "calendar_file", None),
+        ignore_calendar=bool(getattr(args, "ignore_calendar", False)),
         git_sha=_env_git_sha(),
         cli_args=cli_args,
     )
@@ -1129,6 +1133,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_run.add_argument("--ca-input", dest="ca_input", default=None)
     p_eod_run.add_argument("--ca-outdir", dest="ca_outdir", default=None)
     p_eod_run.add_argument("--resolve-aliases", action="store_true")
+    p_eod_run.add_argument("--calendar-file", dest="calendar_file", default=None)
+    p_eod_run.add_argument("--ignore-calendar", action="store_true")
     p_eod_run.set_defaults(func=_cmd_eod_run)
 
     p_plan = sub.add_parser("plan")

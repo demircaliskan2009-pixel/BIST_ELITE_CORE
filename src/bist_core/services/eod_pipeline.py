@@ -25,6 +25,7 @@ from bist_core.providers.corporate_actions.offline_file import (
     OfflineFileCorporateActionsProvider,
 )
 from bist_core.services import instrument_timeline
+from bist_core.services import trading_calendar
 
 
 def run_eod_pipeline(
@@ -46,6 +47,8 @@ def run_eod_pipeline(
     ca_input: Optional[Path | str] = None,
     ca_outdir: Optional[Path | str] = None,
     resolve_aliases: bool = False,
+    calendar_file: Optional[Path | str] = None,
+    ignore_calendar: bool = False,
     git_sha: Optional[str] = None,
     cli_args: Optional[dict] = None,
 ) -> tuple[dict, int]:
@@ -64,10 +67,23 @@ def run_eod_pipeline(
         "instruments": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
         "corporate_actions": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
         "universe": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
+        "calendar": {"ok": True, "errors": 0, "path": "", "notes": []},
     }
     instruments_manifest = None
     corporate_actions_manifest = None
     universe_manifest = None
+
+    calendar_path = Path(calendar_file) if calendar_file is not None else None
+    if ignore_calendar:
+        stages["calendar"] = {"ok": True, "errors": 0, "path": "", "notes": ["ignored"]}
+    else:
+        calendar_gate = trading_calendar.gate_day(day_str, calendar_path)
+        stages["calendar"] = {
+            "ok": bool(calendar_gate["ok"]),
+            "errors": len(calendar_gate["errors"]),
+            "path": calendar_gate.get("path", ""),
+            "notes": calendar_gate.get("notes", []),
+        }
 
     if not snapshot_path.exists():
         stages["snapshot"]["ok"] = False
@@ -83,8 +99,44 @@ def run_eod_pipeline(
             git_sha=git_sha,
             cli_args=cli_args or {},
         )
+        manifest["calendar"] = stages["calendar"]
         atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
-        return manifest, 2 if strict else 0
+        stage_errors = (
+            stages["snapshot"]["errors"]
+            + stages["advice"]["errors"]
+            + stages["dossier"]["errors"]
+            + stages["events"]["errors"]
+            + stages["instruments"]["errors"]
+            + stages["corporate_actions"]["errors"]
+            + stages["universe"]["errors"]
+            + stages["calendar"]["errors"]
+        )
+        return manifest, 2 if strict and stage_errors > 0 else 0
+
+    if not stages["calendar"]["ok"]:
+        runtime_ms = int((time.perf_counter() - start) * 1000)
+        manifest = _pipeline_manifest(
+            day_str,
+            root,
+            out_path,
+            stages,
+            runtime_ms,
+            git_sha=git_sha,
+            cli_args=cli_args or {},
+        )
+        manifest["calendar"] = stages["calendar"]
+        atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
+        stage_errors = (
+            stages["snapshot"]["errors"]
+            + stages["advice"]["errors"]
+            + stages["dossier"]["errors"]
+            + stages["events"]["errors"]
+            + stages["instruments"]["errors"]
+            + stages["corporate_actions"]["errors"]
+            + stages["universe"]["errors"]
+            + stages["calendar"]["errors"]
+        )
+        return manifest, 2 if strict and stage_errors > 0 else 0
 
     base_symbols = _load_symbols(root, day_str)
     filtered = _filter_symbols(base_symbols, symbols, regex, limit)
@@ -392,6 +444,7 @@ def run_eod_pipeline(
     manifest["instruments_manifest"] = instruments_manifest
     manifest["corporate_actions_manifest"] = corporate_actions_manifest
     manifest["universe_manifest"] = universe_manifest
+    manifest["calendar"] = stages["calendar"]
     atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
 
     stage_errors = (
@@ -402,6 +455,7 @@ def run_eod_pipeline(
         + stages["instruments"]["errors"]
         + stages["corporate_actions"]["errors"]
         + stages["universe"]["errors"]
+        + stages["calendar"]["errors"]
     )
     return manifest, 2 if strict and stage_errors > 0 else 0
 
