@@ -226,6 +226,10 @@ def _cmd_eod_batch(args: argparse.Namespace) -> int:
         "cli_args": {"batch": True},
     }
 
+    max_failures = int(getattr(args, "max_failures", 0) or 0)
+    if max_failures < 0:
+        return 2
+
     manifest, code = run_eod_batch(
         date_from,
         date_to,
@@ -234,6 +238,9 @@ def _cmd_eod_batch(args: argparse.Namespace) -> int:
         strict=bool(getattr(args, "strict", False)),
         calendar_file=Path(args.calendar_file) if getattr(args, "calendar_file", None) else None,
         ignore_calendar=bool(getattr(args, "ignore_calendar", False)),
+        resume=bool(getattr(args, "resume", False)),
+        rerun_failed=bool(getattr(args, "rerun_failed", False)),
+        max_failures=max_failures,
         run_kwargs=run_kwargs,
     )
     print(f"eod batch: days={len(manifest.get('days', []))} errors={len(manifest.get('errors', []))}")
@@ -1209,6 +1216,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_batch.add_argument("--resolve-aliases", action="store_true")
     p_eod_batch.add_argument("--calendar-file", dest="calendar_file", default=None)
     p_eod_batch.add_argument("--ignore-calendar", action="store_true")
+    p_eod_batch.add_argument("--resume", action="store_true")
+    p_eod_batch.add_argument("--rerun-failed", dest="rerun_failed", action="store_true")
+    p_eod_batch.add_argument("--max-failures", dest="max_failures", type=int, default=0)
     p_eod_batch.set_defaults(func=_cmd_eod_batch)
 
     p_plan = sub.add_parser("plan")

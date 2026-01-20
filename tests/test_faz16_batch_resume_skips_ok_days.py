@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 
-def test_eod_batch_calendar_skip_and_strict(tmp_path: Path) -> None:
+def test_batch_resume_skips_ok_days(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo_root / "src")
@@ -22,21 +22,8 @@ def test_eod_batch_calendar_skip_and_strict(tmp_path: Path) -> None:
         )
     env["BIST_CORE_SNAPSHOT_DIR"] = str(snapshot_root)
 
-    calendar_file = tmp_path / "calendar.json"
-    calendar_file.write_text(
-        json.dumps(
-            {
-                "holidays": ["2099-01-01"],
-                "trading_days": ["2099-01-02"],
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
     outdir = tmp_path / "data" / "eod" / "batch"
-    result = subprocess.run(
+    first = subprocess.run(
         [
             sys.executable,
             "-m",
@@ -49,9 +36,7 @@ def test_eod_batch_calendar_skip_and_strict(tmp_path: Path) -> None:
             "2099-01-02",
             "--outdir",
             str(outdir),
-            "--calendar-file",
-            str(calendar_file),
-            "--strict",
+            "--ignore-calendar",
         ],
         capture_output=True,
         text=True,
@@ -60,16 +45,16 @@ def test_eod_batch_calendar_skip_and_strict(tmp_path: Path) -> None:
         env=env,
         check=False,
     )
-    assert result.returncode == 0
-    index_manifest = json.loads((outdir / "_index_manifest.json").read_text(encoding="utf-8"))
-    day_map = {d["day"]: d for d in index_manifest["days"]}
-    assert day_map["2099-01-01"]["status"] == "skipped_calendar"
-    assert (outdir / "2099-01-01").exists() is False
-    assert day_map["2099-01-02"]["status"] == "ok"
-    assert (outdir / "2099-01-02" / "advice.jsonl").exists()
+    assert first.returncode == 0
+    manifest_paths = {
+        day: (outdir / day / "_pipeline_manifest.json")
+        for day in ["2099-01-01", "2099-01-02"]
+    }
+    before_contents = {
+        day: path.read_text(encoding="utf-8") for day, path in manifest_paths.items()
+    }
 
-    outdir_error = tmp_path / "data" / "eod" / "batch_error"
-    result_error = subprocess.run(
+    second = subprocess.run(
         [
             sys.executable,
             "-m",
@@ -79,12 +64,11 @@ def test_eod_batch_calendar_skip_and_strict(tmp_path: Path) -> None:
             "--from",
             "2099-01-01",
             "--to",
-            "2099-01-01",
+            "2099-01-02",
             "--outdir",
-            str(outdir_error),
-            "--calendar-file",
-            str(tmp_path / "missing_calendar.json"),
-            "--strict",
+            str(outdir),
+            "--ignore-calendar",
+            "--resume",
         ],
         capture_output=True,
         text=True,
@@ -93,8 +77,10 @@ def test_eod_batch_calendar_skip_and_strict(tmp_path: Path) -> None:
         env=env,
         check=False,
     )
-    assert result_error.returncode == 2
-    index_error = json.loads(
-        (outdir_error / "_index_manifest.json").read_text(encoding="utf-8")
-    )
-    assert index_error["errors"]
+    assert second.returncode == 0
+    index_manifest = json.loads((outdir / "_index_manifest.json").read_text(encoding="utf-8"))
+    assert index_manifest["schema_version"] == 2
+    assert index_manifest["summary"]["skipped_ok_existing"] == 2
+    assert index_manifest["summary"]["ran"] == 0
+    for day, path in manifest_paths.items():
+        assert path.read_text(encoding="utf-8") == before_contents[day]
