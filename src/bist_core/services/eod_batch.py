@@ -33,6 +33,7 @@ def run_eod_batch(
     resume: bool = False,
     rerun_failed: bool = False,
     max_failures: int = 0,
+    dry_run: bool = False,
     run_kwargs: Optional[dict] = None,
 ) -> tuple[dict, int]:
     start = time.perf_counter()
@@ -97,7 +98,7 @@ def run_eod_batch(
     resume_errors: List[str] = []
     if resume:
         prior_index, resume_errors = _load_prior_index(outdir / "_index_manifest.json")
-        if resume_errors:
+        if resume_errors and not dry_run:
             errors.extend(resume_errors)
 
     current = start_date
@@ -117,9 +118,13 @@ def run_eod_batch(
                 rerun_failed,
             )
             if resume_decision is not None:
-                days.append(resume_decision)
-                if resume_decision.exit_code != 0:
-                    failures += 1
+                if dry_run:
+                    planned = _plan_from_resume(resume_decision)
+                    days.append(planned)
+                else:
+                    days.append(resume_decision)
+                    if resume_decision.exit_code != 0:
+                        failures += 1
                 current = current + timedelta(days=1)
                 continue
 
@@ -149,7 +154,7 @@ def run_eod_batch(
             days.append(
                 DayResult(
                     day=day_str,
-                    status="skipped_calendar",
+                    status="planned_skipped_calendar" if dry_run else "skipped_calendar",
                     exit_code=0,
                     manifest_path="",
                     reason=reason,
@@ -157,6 +162,19 @@ def run_eod_batch(
                 )
             )
         else:
+            if dry_run:
+                days.append(
+                    DayResult(
+                        day=day_str,
+                        status="planned_run",
+                        exit_code=0,
+                        manifest_path="",
+                        reason="planned",
+                        errors=[],
+                    )
+                )
+                current = current + timedelta(days=1)
+                continue
             manifest, code = run_eod_pipeline(
                 day_str,
                 snapshot_root=snapshot_root,
@@ -214,10 +232,14 @@ def run_eod_batch(
         max_failures=max_failures,
         stopped_early=stopped_early,
         stop_reason=stop_reason,
+        dry_run=dry_run,
     )
     _atomic_write_json(outdir / "_index_manifest.json", manifest)
 
     failed = any(d.exit_code != 0 or d.status.startswith("error") for d in days) or bool(errors)
+    calendar_errors = any(d.status == "error_calendar" for d in days)
+    if dry_run and strict:
+        return manifest, 2 if calendar_errors else 0
     return manifest, 2 if strict and (failed or stopped_early) else 0
 
 
@@ -237,6 +259,7 @@ def _index_manifest(
     max_failures: int,
     stopped_early: bool,
     stop_reason: str,
+    dry_run: bool,
 ) -> Dict[str, Any]:
     summary = _build_summary(days)
     return {
@@ -253,6 +276,7 @@ def _index_manifest(
             "rerun_failed": bool(rerun_failed),
             "max_failures": int(max_failures),
         },
+        "dry_run": bool(dry_run),
         "stopped_early": bool(stopped_early),
         "stop_reason": stop_reason or "",
         "days": [
@@ -373,12 +397,24 @@ def _build_summary(days: List[DayResult]) -> Dict[str, int]:
     ran = sum(1 for d in days if d.status in {"ok", "error", "error_calendar"})
     skipped_ok_existing = sum(1 for d in days if d.status == "skipped_ok_existing")
     skipped_calendar = sum(1 for d in days if d.status == "skipped_calendar")
+    skipped_failed_existing = sum(1 for d in days if d.status == "skipped_failed_existing")
+    not_run = sum(1 for d in days if d.status == "not_run")
+    planned_run = sum(1 for d in days if d.status == "planned_run")
+    planned_skipped_calendar = sum(1 for d in days if d.status == "planned_skipped_calendar")
+    planned_skipped_ok = sum(1 for d in days if d.status == "planned_skipped_ok_existing")
+    planned_skipped_failed = sum(1 for d in days if d.status == "planned_skipped_failed_existing")
     errors = sum(1 for d in days if d.exit_code != 0)
     return {
         "total": total,
         "ran": ran,
         "skipped_ok_existing": skipped_ok_existing,
         "skipped_calendar": skipped_calendar,
+        "skipped_failed_existing": skipped_failed_existing,
+        "not_run": not_run,
+        "planned_run": planned_run,
+        "planned_skipped_calendar": planned_skipped_calendar,
+        "planned_skipped_ok_existing": planned_skipped_ok,
+        "planned_skipped_failed_existing": planned_skipped_failed,
         "errors": errors,
     }
 
@@ -403,3 +439,105 @@ def _pipeline_errors(manifest: dict | None) -> int:
         if isinstance(stage, dict):
             total += int(stage.get("errors", 0))
     return total
+
+
+def _plan_from_resume(decision: DayResult) -> DayResult:
+    if decision.status == "skipped_ok_existing":
+        return DayResult(
+            day=decision.day,
+            status="planned_skipped_ok_existing",
+            exit_code=0,
+            manifest_path=decision.manifest_path,
+            reason=decision.reason,
+            errors=[],
+        )
+    if decision.status == "skipped_failed_existing":
+        return DayResult(
+            day=decision.day,
+            status="planned_skipped_failed_existing",
+            exit_code=0,
+            manifest_path=decision.manifest_path,
+            reason=decision.reason,
+            errors=[],
+        )
+    return DayResult(
+        day=decision.day,
+        status="planned_run",
+        exit_code=0,
+        manifest_path=decision.manifest_path,
+        reason=decision.reason,
+        errors=[],
+    )
+
+
+def audit_eod_batch(outdir: Path, strict: bool = False) -> tuple[dict, int]:
+    start = time.perf_counter()
+    errors: List[str] = []
+    index_path = outdir / "_index_manifest.json"
+    if not index_path.exists():
+        errors.append("MissingIndexManifest")
+        manifest = _audit_manifest(outdir, [], errors, int((time.perf_counter() - start) * 1000))
+        _atomic_write_json(outdir / "_audit_manifest.json", manifest)
+        return manifest, 2
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except Exception:
+        errors.append("IndexParseError")
+        manifest = _audit_manifest(outdir, [], errors, int((time.perf_counter() - start) * 1000))
+        _atomic_write_json(outdir / "_audit_manifest.json", manifest)
+        return manifest, 2 if strict else 0
+    if not isinstance(index, dict) or index.get("schema_version") != 2:
+        errors.append("IndexSchemaVersion")
+    days = index.get("days", [])
+    if not isinstance(days, list):
+        errors.append("IndexDaysSchemaError")
+        days = []
+    day_entries = [d for d in days if isinstance(d, dict) and d.get("day")]
+    day_entries.sort(key=lambda d: d.get("day", ""))
+    listed_days = {d.get("day") for d in day_entries}
+
+    for entry in day_entries:
+        status = entry.get("status")
+        manifest_path = entry.get("pipeline_manifest_path") or ""
+        if status in {"ok", "error"}:
+            if not manifest_path:
+                errors.append(f"MissingPipelineManifest:{entry.get('day')}")
+                continue
+            path = Path(manifest_path)
+            if not path.exists():
+                errors.append(f"MissingPipelineManifest:{entry.get('day')}")
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                errors.append(f"PipelineManifestParseError:{entry.get('day')}")
+                continue
+            if not isinstance(payload, dict):
+                errors.append(f"PipelineManifestSchemaError:{entry.get('day')}")
+
+    for item in sorted(outdir.iterdir(), key=lambda p: p.name):
+        if not item.is_dir():
+            continue
+        manifest_file = item / "_pipeline_manifest.json"
+        if manifest_file.exists() and item.name not in listed_days:
+            errors.append(f"UnlistedDayManifest:{item.name}")
+
+    manifest = _audit_manifest(outdir, day_entries, errors, int((time.perf_counter() - start) * 1000))
+    _atomic_write_json(outdir / "_audit_manifest.json", manifest)
+    if errors and strict:
+        return manifest, 2
+    return manifest, 0
+
+
+def _audit_manifest(outdir: Path, days: List[dict], errors: List[str], runtime_ms: int) -> dict:
+    return {
+        "schema_version": 1,
+        "outdir": str(outdir),
+        "days": days,
+        "errors": errors,
+        "summary": {
+            "total": len(days),
+            "errors": len(errors),
+        },
+        "runtime_ms": int(runtime_ms),
+    }

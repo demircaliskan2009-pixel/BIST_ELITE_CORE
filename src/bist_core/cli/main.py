@@ -32,7 +32,7 @@ from bist_core.services.dossier import (
     build_manifest,
 )
 from bist_core.services.eod_pipeline import run_eod_pipeline
-from bist_core.services.eod_batch import run_eod_batch
+from bist_core.services.eod_batch import audit_eod_batch, run_eod_batch
 from bist_core.services.events_pipeline import (
     build_events_jsonl_for_day,
     ingest_events_from_file,
@@ -227,8 +227,6 @@ def _cmd_eod_batch(args: argparse.Namespace) -> int:
     }
 
     max_failures = int(getattr(args, "max_failures", 0) or 0)
-    if max_failures < 0:
-        return 2
 
     manifest, code = run_eod_batch(
         date_from,
@@ -241,10 +239,38 @@ def _cmd_eod_batch(args: argparse.Namespace) -> int:
         resume=bool(getattr(args, "resume", False)),
         rerun_failed=bool(getattr(args, "rerun_failed", False)),
         max_failures=max_failures,
+        dry_run=bool(getattr(args, "dry_run", False)),
         run_kwargs=run_kwargs,
     )
-    print(f"eod batch: days={len(manifest.get('days', []))} errors={len(manifest.get('errors', []))}")
+    _print_batch_summary(manifest, int(code))
     return int(code)
+
+
+def _cmd_eod_batch_audit(args: argparse.Namespace) -> int:
+    outdir = Path(args.outdir) if getattr(args, "outdir", None) else None
+    if outdir is None:
+        raise SystemExit("--outdir is required")
+    manifest, code = audit_eod_batch(outdir, strict=bool(getattr(args, "strict", False)))
+    _print_batch_summary(manifest, int(code))
+    return int(code)
+
+
+def _print_batch_summary(manifest: dict, exit_code: int) -> None:
+    summary = manifest.get("summary", {}) if isinstance(manifest, dict) else {}
+    ran = int(summary.get("ran", 0))
+    skipped_calendar = int(summary.get("skipped_calendar", 0))
+    skipped_ok_existing = int(summary.get("skipped_ok_existing", 0))
+    errors = int(summary.get("errors", 0))
+    stopped_early = bool(manifest.get("stopped_early", False))
+    print(
+        "EOD_BATCH: "
+        f"ran={ran} "
+        f"skipped_calendar={skipped_calendar} "
+        f"skipped_ok_existing={skipped_ok_existing} "
+        f"errors={errors} "
+        f"stopped_early={stopped_early} "
+        f"exit_code={exit_code}"
+    )
 
 
 def _cmd_plan(args: argparse.Namespace) -> int:
@@ -1219,7 +1245,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_batch.add_argument("--resume", action="store_true")
     p_eod_batch.add_argument("--rerun-failed", dest="rerun_failed", action="store_true")
     p_eod_batch.add_argument("--max-failures", dest="max_failures", type=int, default=0)
+    p_eod_batch.add_argument("--dry-run", action="store_true")
     p_eod_batch.set_defaults(func=_cmd_eod_batch)
+
+    p_eod_batch_audit = sub_eod.add_parser("batch-audit")
+    p_eod_batch_audit.add_argument("--outdir", required=True)
+    p_eod_batch_audit.add_argument("--strict", action="store_true")
+    p_eod_batch_audit.set_defaults(func=_cmd_eod_batch_audit)
 
     p_plan = sub.add_parser("plan")
     p_plan.add_argument("--date", required=True)
