@@ -16,12 +16,15 @@ def build_dossier_for_symbol_day(
     symbol: str,
     day: Date | str,
     root: Optional[Path | str] = None,
+    snapshot_hash: Optional[dict] = None,
 ) -> dict:
     base = Path(root) if root is not None else Path("data/eod/snapshots")
     day_str = day.isoformat() if isinstance(day, Date) else str(day)
 
     has_ohlcv, provider = _marketdata_meta(base, day_str)
     provenance = {"snapshot_root": str(base), "provider": provider}
+    if snapshot_hash is not None:
+        provenance["snapshot_hash"] = snapshot_hash
     events, events_errors = _load_events(symbol, day_str)
     events_payload = [_event_payload(ev) for ev in events][:20]
 
@@ -73,6 +76,7 @@ def build_dossiers_for_day(
     symbols: Optional[List[str]] = None,
     regex: Optional[str] = None,
     limit: Optional[int] = None,
+    snapshot_hash: Optional[dict] = None,
 ) -> tuple[List[dict], int, dict]:
     base = Path(root) if root is not None else Path("data/eod/snapshots")
     day_str = day.isoformat() if isinstance(day, Date) else str(day)
@@ -100,10 +104,19 @@ def build_dossiers_for_day(
             "close_only": not bool(has_ohlcv),
         },
     }
+    if snapshot_hash is not None:
+        provenance["snapshot_hash"] = snapshot_hash
 
     dossiers: List[dict] = []
     for sym in symbols:
-        dossiers.append(build_dossier_for_symbol_day(sym, day_str, root=base))
+        dossiers.append(
+            build_dossier_for_symbol_day(
+                sym,
+                day_str,
+                root=base,
+                snapshot_hash=snapshot_hash,
+            )
+        )
     runtime_ms = int((time.perf_counter() - start) * 1000)
     return dossiers, runtime_ms, provenance
 

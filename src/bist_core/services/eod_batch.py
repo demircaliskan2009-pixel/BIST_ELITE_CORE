@@ -517,10 +517,12 @@ def audit_eod_batch(outdir: Path, strict: bool = False) -> tuple[dict, int]:
                 errors.append(f"PipelineManifestSchemaError:{entry.get('day')}")
                 continue
             snapshot_root = payload.get("snapshot_root")
-            if isinstance(snapshot_root, str):
-                errors.extend(_audit_snapshot_hash(snapshot_root, entry.get("day", "")))
-            else:
+            prov = payload.get("provenance", {}) if isinstance(payload.get("provenance", {}), dict) else {}
+            snap = prov.get("snapshot_hash")
+            if not isinstance(snapshot_root, str):
                 errors.append(f"SnapshotRootMissing:{entry.get('day')}")
+                continue
+            errors.extend(_audit_snapshot_hash(snapshot_root, entry.get("day", ""), snap))
 
     for item in sorted(outdir.iterdir(), key=lambda p: p.name):
         if not item.is_dir():
@@ -550,29 +552,21 @@ def _audit_manifest(outdir: Path, days: List[dict], errors: List[str], runtime_m
     }
 
 
-def _audit_snapshot_hash(snapshot_root: str, day: str) -> list[str]:
+def _audit_snapshot_hash(snapshot_root: str, day: str, snapshot_hash: object) -> list[str]:
     errors: list[str] = []
     snapshot_path = Path(snapshot_root) / day / "snapshot.csv"
-    hash_path = snapshot_path.parent / "_snapshot_hash.json"
     if not snapshot_path.exists():
         errors.append(f"SnapshotMissing:{day}")
         return errors
-    if not hash_path.exists():
+    if not isinstance(snapshot_hash, dict):
         errors.append(f"SnapshotHashMissing:{day}")
         return errors
-    try:
-        payload = json.loads(hash_path.read_text(encoding="utf-8"))
-    except Exception:
-        errors.append(f"SnapshotHashParseError:{day}")
-        return errors
-    if not isinstance(payload, dict):
-        errors.append(f"SnapshotHashSchemaError:{day}")
-        return errors
-    expected = payload.get("sha256")
-    if not isinstance(expected, str):
+    algo = snapshot_hash.get("algo")
+    value = snapshot_hash.get("value")
+    if algo != "sha256" or not isinstance(value, str):
         errors.append(f"SnapshotHashSchemaError:{day}")
         return errors
     actual = snapshot_integrity.compute_sha256(snapshot_path)
-    if actual != expected:
+    if actual != value:
         errors.append(f"SnapshotHashMismatch:{day}")
     return errors

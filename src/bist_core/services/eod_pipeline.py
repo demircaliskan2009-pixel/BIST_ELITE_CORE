@@ -86,6 +86,7 @@ def run_eod_pipeline(
             "notes": calendar_gate.get("notes", []),
         }
 
+    snapshot_hash = None
     if not snapshot_path.exists():
         stages["snapshot"]["ok"] = False
         stages["snapshot"]["errors"] = 1
@@ -99,6 +100,7 @@ def run_eod_pipeline(
             runtime_ms,
             git_sha=git_sha,
             cli_args=cli_args or {},
+            snapshot_hash=None,
         )
         manifest["calendar"] = stages["calendar"]
         atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
@@ -120,6 +122,7 @@ def run_eod_pipeline(
             snapshot_path.parent / "_snapshot_hash.json",
             hash_manifest,
         )
+        snapshot_hash = {"algo": "sha256", "value": hash_manifest["sha256"]}
     except Exception:
         stages["snapshot"]["errors"] += 1
         stages["snapshot"]["notes"] = stages["snapshot"]["notes"] + ["snapshot_hash_error"]
@@ -134,6 +137,7 @@ def run_eod_pipeline(
             runtime_ms,
             git_sha=git_sha,
             cli_args=cli_args or {},
+            snapshot_hash=snapshot_hash,
         )
         manifest["calendar"] = stages["calendar"]
         atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
@@ -209,6 +213,7 @@ def run_eod_pipeline(
         symbols=symbols,
         regex=regex,
         limit=limit,
+        snapshot_hash=snapshot_hash,
     )
     dossiers_sorted = sorted(
         dossiers, key=lambda d: d.get("symbol", "")
@@ -451,6 +456,7 @@ def run_eod_pipeline(
         runtime_ms,
         git_sha=git_sha,
         cli_args=cli_args or {},
+        snapshot_hash=snapshot_hash,
     )
     manifest["instruments_manifest"] = instruments_manifest
     manifest["corporate_actions_manifest"] = corporate_actions_manifest
@@ -479,6 +485,7 @@ def _pipeline_manifest(
     runtime_ms: int,
     git_sha: Optional[str],
     cli_args: dict,
+    snapshot_hash: Optional[dict],
 ) -> dict:
     return {
         "schema_version": 1,
@@ -492,6 +499,7 @@ def _pipeline_manifest(
             "platform": platform.platform(),
             "cli_args": cli_args,
             "git_sha": git_sha,
+            "snapshot_hash": snapshot_hash,
         },
     }
 
