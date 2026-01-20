@@ -26,6 +26,7 @@ from bist_core.providers.corporate_actions.offline_file import (
 )
 from bist_core.services import instrument_timeline
 from bist_core.services import trading_calendar
+from bist_core.services import snapshot_integrity
 
 
 def run_eod_pipeline(
@@ -112,6 +113,16 @@ def run_eod_pipeline(
             + stages["calendar"]["errors"]
         )
         return manifest, 2 if strict and stage_errors > 0 else 0
+
+    try:
+        hash_manifest = snapshot_integrity.build_snapshot_hash_manifest(snapshot_path)
+        snapshot_integrity.atomic_write_json(
+            snapshot_path.parent / "_snapshot_hash.json",
+            hash_manifest,
+        )
+    except Exception:
+        stages["snapshot"]["errors"] += 1
+        stages["snapshot"]["notes"] = stages["snapshot"]["notes"] + ["snapshot_hash_error"]
 
     if not stages["calendar"]["ok"]:
         runtime_ms = int((time.perf_counter() - start) * 1000)

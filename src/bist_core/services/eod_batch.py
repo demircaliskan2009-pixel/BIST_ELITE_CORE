@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from bist_core.services.eod_pipeline import run_eod_pipeline
 from bist_core.services import trading_calendar
+from bist_core.services import snapshot_integrity
 
 
 @dataclass
@@ -514,6 +515,12 @@ def audit_eod_batch(outdir: Path, strict: bool = False) -> tuple[dict, int]:
                 continue
             if not isinstance(payload, dict):
                 errors.append(f"PipelineManifestSchemaError:{entry.get('day')}")
+                continue
+            snapshot_root = payload.get("snapshot_root")
+            if isinstance(snapshot_root, str):
+                errors.extend(_audit_snapshot_hash(snapshot_root, entry.get("day", "")))
+            else:
+                errors.append(f"SnapshotRootMissing:{entry.get('day')}")
 
     for item in sorted(outdir.iterdir(), key=lambda p: p.name):
         if not item.is_dir():
@@ -541,3 +548,31 @@ def _audit_manifest(outdir: Path, days: List[dict], errors: List[str], runtime_m
         },
         "runtime_ms": int(runtime_ms),
     }
+
+
+def _audit_snapshot_hash(snapshot_root: str, day: str) -> list[str]:
+    errors: list[str] = []
+    snapshot_path = Path(snapshot_root) / day / "snapshot.csv"
+    hash_path = snapshot_path.parent / "_snapshot_hash.json"
+    if not snapshot_path.exists():
+        errors.append(f"SnapshotMissing:{day}")
+        return errors
+    if not hash_path.exists():
+        errors.append(f"SnapshotHashMissing:{day}")
+        return errors
+    try:
+        payload = json.loads(hash_path.read_text(encoding="utf-8"))
+    except Exception:
+        errors.append(f"SnapshotHashParseError:{day}")
+        return errors
+    if not isinstance(payload, dict):
+        errors.append(f"SnapshotHashSchemaError:{day}")
+        return errors
+    expected = payload.get("sha256")
+    if not isinstance(expected, str):
+        errors.append(f"SnapshotHashSchemaError:{day}")
+        return errors
+    actual = snapshot_integrity.compute_sha256(snapshot_path)
+    if actual != expected:
+        errors.append(f"SnapshotHashMismatch:{day}")
+    return errors
