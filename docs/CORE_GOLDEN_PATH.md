@@ -45,6 +45,20 @@ Replay writes:
 - `scorecard.json` (unless `--no-scorecard`)
 - per-day folders (`YYYY-MM-DD/`) with pipeline outputs
 
+## Rules validation and explanation
+
+Run:
+
+```bash
+python -m bist_core.cli rules validate --file path/to/rules.json
+python -m bist_core.cli rules explain --file path/to/rules.json --symbol AAA --price 10 --side BUY --qty 100 --day YYYY-MM-DD
+```
+
+## Expected artifacts (when enabled)
+- `dossiers/` per-symbol outputs with `_manifest.json`
+- `orders/orders_intent.json` when `--emit-orders`
+- `scorecard.json` in replay outdir when `--scorecard`
+
 ## Strict behavior
 - `--strict` returns exit code `2` on any gate or validation error.
 - Manifests include error lists and notes to diagnose failures.
