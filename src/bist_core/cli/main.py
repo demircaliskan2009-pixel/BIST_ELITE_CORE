@@ -32,6 +32,7 @@ from bist_core.services.dossier import (
     build_manifest,
 )
 from bist_core.services.eod_pipeline import run_eod_pipeline
+from bist_core.services.eod_replay import run_eod_replay
 from bist_core.services.eod_batch import audit_eod_batch, run_eod_batch
 from bist_core.services.events_pipeline import (
     build_events_jsonl_for_day,
@@ -272,6 +273,30 @@ def _cmd_eod_batch(args: argparse.Namespace) -> int:
         run_kwargs=run_kwargs,
     )
     _print_batch_summary(manifest, int(code))
+    return int(code)
+
+
+def _cmd_eod_replay(args: argparse.Namespace) -> int:
+    snapshot_root = (
+        Path(args.snapshot_root)
+        if getattr(args, "snapshot_root", None)
+        else _snapshot_root()
+    )
+    manifest, code = run_eod_replay(
+        getattr(args, "date_from"),
+        getattr(args, "date_to"),
+        Path(getattr(args, "outdir")),
+        snapshot_root=snapshot_root,
+        strict=bool(getattr(args, "strict", False)),
+        policy_file=getattr(args, "policy_file", None),
+        emit_orders=bool(getattr(args, "emit_orders", False)),
+        orders_strategy=getattr(args, "orders_strategy", None) or "equal_weight",
+        orders_top_n=int(getattr(args, "orders_top_n", 10) or 10),
+        metrics=bool(getattr(args, "metrics", True)),
+    )
+    if bool(getattr(args, "json", False)):
+        summary = manifest.get("summary", {})
+        print(json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2))
     return int(code)
 
 
@@ -1316,6 +1341,21 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_batch.add_argument("--audit-json", dest="audit_json", action="store_true")
     p_eod_batch.add_argument("--policy-file", dest="policy_file", default=None)
     p_eod_batch.set_defaults(func=_cmd_eod_batch)
+
+    p_eod_replay = sub_eod.add_parser("replay")
+    p_eod_replay.add_argument("--from", dest="date_from", required=True)
+    p_eod_replay.add_argument("--to", dest="date_to", required=True)
+    p_eod_replay.add_argument("--snapshot-root", dest="snapshot_root", default=None)
+    p_eod_replay.add_argument("--outdir", required=True)
+    p_eod_replay.add_argument("--strict", action="store_true")
+    p_eod_replay.add_argument("--policy-file", dest="policy_file", default=None)
+    p_eod_replay.add_argument("--emit-orders", action="store_true")
+    p_eod_replay.add_argument("--orders-strategy", dest="orders_strategy", default="equal_weight")
+    p_eod_replay.add_argument("--orders-top-n", dest="orders_top_n", type=int, default=10)
+    p_eod_replay.add_argument("--metrics", action="store_true", default=True)
+    p_eod_replay.add_argument("--no-metrics", dest="metrics", action="store_false")
+    p_eod_replay.add_argument("--json", action="store_true")
+    p_eod_replay.set_defaults(func=_cmd_eod_replay)
 
     p_eod_batch_audit = sub_eod.add_parser("batch-audit")
     p_eod_batch_audit.add_argument("--outdir", required=True)
