@@ -92,6 +92,13 @@ def run_eod_pipeline(
         stages["snapshot"]["errors"] = 1
         stages["snapshot"]["notes"] = ["snapshot_missing"]
         runtime_ms = int((time.perf_counter() - start) * 1000)
+        policy_file = os.getenv("BIST_CORE_POLICY_FILE")
+        policy_hash = None
+        if policy_file:
+            try:
+                policy_hash = snapshot_integrity.compute_sha256(Path(policy_file))
+            except Exception:
+                policy_hash = None
         manifest = _pipeline_manifest(
             day_str,
             root,
@@ -101,6 +108,8 @@ def run_eod_pipeline(
             git_sha=git_sha,
             cli_args=cli_args or {},
             snapshot_hash=None,
+            policy_file=policy_file,
+            policy_hash=policy_hash,
         )
         manifest["calendar"] = stages["calendar"]
         atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
@@ -129,6 +138,13 @@ def run_eod_pipeline(
 
     if not stages["calendar"]["ok"]:
         runtime_ms = int((time.perf_counter() - start) * 1000)
+        policy_file = os.getenv("BIST_CORE_POLICY_FILE")
+        policy_hash = None
+        if policy_file:
+            try:
+                policy_hash = snapshot_integrity.compute_sha256(Path(policy_file))
+            except Exception:
+                policy_hash = None
         manifest = _pipeline_manifest(
             day_str,
             root,
@@ -138,6 +154,8 @@ def run_eod_pipeline(
             git_sha=git_sha,
             cli_args=cli_args or {},
             snapshot_hash=snapshot_hash,
+            policy_file=policy_file,
+            policy_hash=policy_hash,
         )
         manifest["calendar"] = stages["calendar"]
         atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
@@ -448,6 +466,14 @@ def run_eod_pipeline(
         stages["universe"]["notes"] = ["universe_skipped"]
 
     runtime_ms = int((time.perf_counter() - start) * 1000)
+    policy_file = os.getenv("BIST_CORE_POLICY_FILE")
+    policy_hash = None
+    if policy_file:
+        try:
+            policy_hash = snapshot_integrity.compute_sha256(Path(policy_file))
+        except Exception:
+            policy_hash = None
+
     manifest = _pipeline_manifest(
         day_str,
         root,
@@ -457,6 +483,8 @@ def run_eod_pipeline(
         git_sha=git_sha,
         cli_args=cli_args or {},
         snapshot_hash=snapshot_hash,
+        policy_file=policy_file,
+        policy_hash=policy_hash,
     )
     manifest["instruments_manifest"] = instruments_manifest
     manifest["corporate_actions_manifest"] = corporate_actions_manifest
@@ -486,6 +514,8 @@ def _pipeline_manifest(
     git_sha: Optional[str],
     cli_args: dict,
     snapshot_hash: Optional[dict],
+    policy_file: Optional[str],
+    policy_hash: Optional[str],
 ) -> dict:
     return {
         "schema_version": 1,
@@ -500,6 +530,8 @@ def _pipeline_manifest(
             "cli_args": cli_args,
             "git_sha": git_sha,
             "snapshot_hash": snapshot_hash,
+            "policy_file": policy_file,
+            "policy_hash": policy_hash,
         },
     }
 

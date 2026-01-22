@@ -39,6 +39,7 @@ from bist_core.services.events_pipeline import (
 )
 from bist_core.providers.events.offline_file import OfflineFileEventsProvider
 from bist_core.providers.events.kap_html import KapHtmlEventsProvider
+from bist_core.policy import rules_engine, rules_schema
 from bist_core.services import instrumentstore
 from bist_core.providers.instruments.offline_file import OfflineFileInstrumentsProvider
 from bist_core.services import castore
@@ -290,6 +291,38 @@ def _print_batch_summary(manifest: dict, exit_code: int) -> None:
         f"stopped_early={stopped_early} "
         f"exit_code={exit_code}"
     )
+
+
+def _cmd_rules_validate(args: argparse.Namespace) -> int:
+    file_path = Path(args.file)
+    try:
+        ruleset = rules_schema.load_ruleset(file_path)
+    except Exception:
+        print(json.dumps({"valid": False, "errors": ["RulesetLoadError"]}, ensure_ascii=False))
+        return 2
+    errors = rules_schema.validate_ruleset(ruleset)
+    valid = len(errors) == 0
+    print(json.dumps({"valid": valid, "errors": sorted(errors)}, ensure_ascii=False))
+    return 0 if valid else 2
+
+
+def _cmd_rules_explain(args: argparse.Namespace) -> int:
+    file_path = Path(args.file)
+    try:
+        ruleset = rules_schema.load_ruleset(file_path)
+    except Exception:
+        print(json.dumps({"allowed": False, "errors": ["RulesetLoadError"]}, ensure_ascii=False))
+        return 2
+    result = rules_engine.explain_order(
+        ruleset,
+        symbol=args.symbol,
+        price=float(args.price),
+        side=str(args.side),
+        qty=float(args.qty),
+        day=str(args.day),
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result.get("allowed") and not result.get("errors") else 2
 
 
 def _cmd_plan(args: argparse.Namespace) -> int:
@@ -1284,6 +1317,20 @@ def _build_parser() -> argparse.ArgumentParser:
     p_orders.add_argument("--date", required=True)
     p_orders.add_argument("--strategy", default="equal_weight")
     p_orders.set_defaults(func=_cmd_orders)
+
+    p_rules = sub.add_parser("rules")
+    sub_rules = p_rules.add_subparsers(dest="rules_cmd", required=True)
+    p_rules_validate = sub_rules.add_parser("validate")
+    p_rules_validate.add_argument("--file", required=True)
+    p_rules_validate.set_defaults(func=_cmd_rules_validate)
+    p_rules_explain = sub_rules.add_parser("explain")
+    p_rules_explain.add_argument("--file", required=True)
+    p_rules_explain.add_argument("--symbol", required=True)
+    p_rules_explain.add_argument("--price", required=True)
+    p_rules_explain.add_argument("--side", required=True)
+    p_rules_explain.add_argument("--qty", required=True)
+    p_rules_explain.add_argument("--day", required=True)
+    p_rules_explain.set_defaults(func=_cmd_rules_explain)
 
     p_data = sub.add_parser("data")
     sub_data = p_data.add_subparsers(dest="data_cmd", required=True)
