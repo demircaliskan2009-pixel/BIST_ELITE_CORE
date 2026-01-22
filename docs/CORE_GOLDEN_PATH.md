@@ -51,6 +51,7 @@ Run:
 
 ```bash
 python -m bist_core.cli rules validate --file path/to/rules.json
+python -m bist_core.cli rules validate --file src/bist_core/policy/bist_ruleset.example.json
 python -m bist_core.cli rules explain --file path/to/rules.json --symbol AAA --price 10 --side BUY --qty 100 --day YYYY-MM-DD
 ```
 

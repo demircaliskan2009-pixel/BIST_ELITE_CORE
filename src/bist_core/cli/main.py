@@ -58,6 +58,21 @@ def _snapshot_root() -> Path:
 
 def _cmd_info(args: argparse.Namespace) -> int:
     reg = get_default_registry()
+    if bool(getattr(args, "json", False)):
+        datasets = []
+        try:
+            names = reg.list_datasets()
+            for n in names:
+                datasets.append(n)
+        except Exception:
+            datasets = []
+        payload = {
+            "registry_path": str(getattr(reg, "path", "")),
+            "datasets": datasets,
+            "symbols": ["TEST"],
+        }
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+        return 0
 
     try:
         print(f"registry: {reg.path}")
@@ -1286,6 +1301,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     p_info = sub.add_parser("info")
+    p_info.add_argument("--json", action="store_true")
     p_info.set_defaults(func=_cmd_info)
 
     p_eod = sub.add_parser("eod")

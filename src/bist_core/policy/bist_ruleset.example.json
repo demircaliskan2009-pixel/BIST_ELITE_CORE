@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "is_example": true,
+  "rules": [
+    {
+      "id": "deny_trading_example",
+      "type": "trading_disabled",
+      "enabled": true,
+      "action": "deny",
+      "note": "Example: blocks all trading (fail-closed)"
+    },
+    {
+      "id": "max_notional_example",
+      "type": "max_notional",
+      "enabled": true,
+      "max_notional": 100000
+    }
+  ]
+}
