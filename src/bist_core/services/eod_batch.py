@@ -471,22 +471,36 @@ def _plan_from_resume(decision: DayResult) -> DayResult:
     )
 
 
-def audit_eod_batch(outdir: Path, strict: bool = False) -> tuple[dict, int]:
+def audit_eod_batch(outdir: Path, deep: bool = False, strict: bool = False) -> tuple[dict, int]:
     start = time.perf_counter()
     errors: List[str] = []
     index_path = outdir / "_index_manifest.json"
     if not index_path.exists():
         errors.append("MissingIndexManifest")
-        manifest = _audit_manifest(outdir, [], errors, int((time.perf_counter() - start) * 1000))
+        errors_sorted = sorted(errors)
+        manifest = _audit_manifest(
+            outdir,
+            [],
+            errors_sorted,
+            int((time.perf_counter() - start) * 1000),
+            deep=deep,
+        )
         _atomic_write_json(outdir / "_audit_manifest.json", manifest)
-        return manifest, 2
+        return manifest, 2 if strict and errors_sorted else 0
     try:
         index = json.loads(index_path.read_text(encoding="utf-8"))
     except Exception:
         errors.append("IndexParseError")
-        manifest = _audit_manifest(outdir, [], errors, int((time.perf_counter() - start) * 1000))
+        errors_sorted = sorted(errors)
+        manifest = _audit_manifest(
+            outdir,
+            [],
+            errors_sorted,
+            int((time.perf_counter() - start) * 1000),
+            deep=deep,
+        )
         _atomic_write_json(outdir / "_audit_manifest.json", manifest)
-        return manifest, 2 if strict else 0
+        return manifest, 2 if strict and errors_sorted else 0
     if not isinstance(index, dict) or index.get("schema_version") != 2:
         errors.append("IndexSchemaVersion")
     days = index.get("days", [])
@@ -498,31 +512,38 @@ def audit_eod_batch(outdir: Path, strict: bool = False) -> tuple[dict, int]:
     listed_days = {d.get("day") for d in day_entries}
 
     for entry in day_entries:
-        status = entry.get("status")
+        status = entry.get("status", "")
+        day = entry.get("day", "")
+        if status in {"skipped_calendar", "planned_skipped_calendar"}:
+            continue
         manifest_path = entry.get("pipeline_manifest_path") or ""
         if status in {"ok", "error"}:
             if not manifest_path:
-                errors.append(f"MissingPipelineManifest:{entry.get('day')}")
+                errors.append(f"MissingPipelineManifest:{day}")
                 continue
             path = Path(manifest_path)
             if not path.exists():
-                errors.append(f"MissingPipelineManifest:{entry.get('day')}")
+                errors.append(f"MissingPipelineManifest:{day}")
                 continue
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
-                errors.append(f"PipelineManifestParseError:{entry.get('day')}")
+                errors.append(f"PipelineManifestUnreadable:{day}")
                 continue
             if not isinstance(payload, dict):
-                errors.append(f"PipelineManifestSchemaError:{entry.get('day')}")
+                errors.append(f"PipelineManifestSchemaError:{day}")
                 continue
+            if "schema_version" not in payload:
+                errors.append(f"PipelineManifestSchemaVersionMissing:{day}")
             snapshot_root = payload.get("snapshot_root")
             prov = payload.get("provenance", {}) if isinstance(payload.get("provenance", {}), dict) else {}
             snap = prov.get("snapshot_hash")
             if not isinstance(snapshot_root, str):
-                errors.append(f"SnapshotRootMissing:{entry.get('day')}")
-                continue
-            errors.extend(_audit_snapshot_hash(snapshot_root, entry.get("day", ""), snap))
+                errors.append(f"SnapshotRootMissing:{day}")
+            else:
+                errors.extend(_audit_snapshot_hash(snapshot_root, day, snap))
+            if deep:
+                errors.extend(_audit_pipeline_artifacts(payload, day))
 
     for item in sorted(outdir.iterdir(), key=lambda p: p.name):
         if not item.is_dir():
@@ -531,24 +552,37 @@ def audit_eod_batch(outdir: Path, strict: bool = False) -> tuple[dict, int]:
         if manifest_file.exists() and item.name not in listed_days:
             errors.append(f"UnlistedDayManifest:{item.name}")
 
-    manifest = _audit_manifest(outdir, day_entries, errors, int((time.perf_counter() - start) * 1000))
+    errors_sorted = sorted(errors)
+    manifest = _audit_manifest(
+        outdir,
+        day_entries,
+        errors_sorted,
+        int((time.perf_counter() - start) * 1000),
+        deep=deep,
+    )
     _atomic_write_json(outdir / "_audit_manifest.json", manifest)
-    if errors and strict:
+    if errors_sorted and strict:
         return manifest, 2
     return manifest, 0
 
 
-def _audit_manifest(outdir: Path, days: List[dict], errors: List[str], runtime_ms: int) -> dict:
+def _audit_manifest(
+    outdir: Path,
+    days: List[dict],
+    errors: List[str],
+    runtime_ms: int,
+    *,
+    deep: bool,
+) -> dict:
+    summary = _audit_summary(days, errors)
     return {
         "schema_version": 1,
         "outdir": str(outdir),
         "days": days,
         "errors": errors,
-        "summary": {
-            "total": len(days),
-            "errors": len(errors),
-        },
+        "summary": summary,
         "runtime_ms": int(runtime_ms),
+        "deep": bool(deep),
     }
 
 
@@ -559,14 +593,108 @@ def _audit_snapshot_hash(snapshot_root: str, day: str, snapshot_hash: object) ->
         errors.append(f"SnapshotMissing:{day}")
         return errors
     if not isinstance(snapshot_hash, dict):
-        errors.append(f"SnapshotHashMissing:{day}")
+        errors.append(f"MissingSnapshotHash:{day}")
         return errors
     algo = snapshot_hash.get("algo")
     value = snapshot_hash.get("value")
-    if algo != "sha256" or not isinstance(value, str):
-        errors.append(f"SnapshotHashSchemaError:{day}")
+    if algo != "sha256" or not isinstance(value, str) or not value:
+        errors.append(f"MissingSnapshotHash:{day}")
         return errors
     actual = snapshot_integrity.compute_sha256(snapshot_path)
     if actual != value:
         errors.append(f"SnapshotHashMismatch:{day}")
+    return errors
+
+
+def _audit_summary(days: List[dict], errors: List[str]) -> dict:
+    summary = {
+        "total": 0,
+        "ok": 0,
+        "error": 0,
+        "skipped_calendar": 0,
+        "skipped_ok_existing": 0,
+        "not_run": 0,
+        "planned": 0,
+        "errors": len(errors),
+    }
+    for day in days:
+        if not isinstance(day, dict):
+            continue
+        status = str(day.get("status", ""))
+        summary["total"] += 1
+        if status == "ok":
+            summary["ok"] += 1
+        if status.startswith("error"):
+            summary["error"] += 1
+        if status == "skipped_calendar":
+            summary["skipped_calendar"] += 1
+        if status == "skipped_ok_existing":
+            summary["skipped_ok_existing"] += 1
+        if status == "not_run":
+            summary["not_run"] += 1
+        if status.startswith("planned_"):
+            summary["planned"] += 1
+    return summary
+
+
+def _audit_pipeline_artifacts(manifest: dict, day: str) -> list[str]:
+    errors: list[str] = []
+    stages = manifest.get("stages", {})
+    if not isinstance(stages, dict):
+        return errors
+
+    def stage_ok_count(stage_name: str) -> int:
+        stage = stages.get(stage_name, {})
+        if isinstance(stage, dict):
+            return int(stage.get("ok", 0) or 0)
+        return 0
+
+    def stage_total(stage_name: str) -> int:
+        stage = stages.get(stage_name, {})
+        if isinstance(stage, dict):
+            return int(stage.get("total", 0) or 0)
+        return 0
+
+    def stage_path(stage_name: str) -> Optional[str]:
+        stage = stages.get(stage_name, {})
+        if isinstance(stage, dict):
+            path = stage.get("path")
+            if isinstance(path, str) and path:
+                return path
+        return None
+
+    def stage_notes(stage_name: str) -> list[str]:
+        stage = stages.get(stage_name, {})
+        if isinstance(stage, dict):
+            notes = stage.get("notes", [])
+            if isinstance(notes, list):
+                return [str(n) for n in notes]
+        return []
+
+    def require_file(stage_name: str) -> None:
+        path = stage_path(stage_name)
+        if not path or not Path(path).is_file():
+            errors.append(f"MissingArtifact:{day}:{stage_name}")
+
+    def require_dir(stage_name: str) -> None:
+        path = stage_path(stage_name)
+        if not path or not Path(path).is_dir():
+            errors.append(f"MissingArtifact:{day}:{stage_name}")
+
+    if stage_ok_count("advice") > 0:
+        require_file("advice")
+    if stage_ok_count("dossier") > 0:
+        require_dir("dossier")
+    if stage_total("events") > 0:
+        require_dir("events")
+    if stage_total("instruments") > 0:
+        require_dir("instruments")
+    if stage_total("corporate_actions") > 0:
+        require_dir("corporate_actions")
+
+    universe_stage = stages.get("universe", {})
+    universe_notes = stage_notes("universe")
+    if isinstance(universe_stage, dict) and "universe_skipped" not in universe_notes:
+        require_dir("universe")
+
     return errors

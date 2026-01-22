@@ -193,14 +193,33 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
 
 def _cmd_eod_batch(args: argparse.Namespace) -> int:
     base = _snapshot_root()
-    if not getattr(args, "date_from", None) or not getattr(args, "date_to", None):
+    audit = bool(getattr(args, "audit", False))
+    deep_audit = bool(getattr(args, "deep_audit", False))
+    if deep_audit:
+        audit = True
+
+    date_from = getattr(args, "date_from", None)
+    date_to = getattr(args, "date_to", None)
+    if not audit and (not date_from or not date_to):
         raise SystemExit("--from and --to are required")
-    date_from = args.date_from
-    date_to = args.date_to
 
     outdir = Path(args.outdir) if getattr(args, "outdir", None) else None
     if outdir is None:
+        if audit:
+            raise SystemExit("--outdir is required for --audit")
         outdir = config.REPO_ROOT / "data" / "eod" / "batch" / f"{date_from}_to_{date_to}"
+
+    if audit:
+        manifest, code = audit_eod_batch(
+            outdir,
+            deep=deep_audit,
+            strict=bool(getattr(args, "strict", False)),
+        )
+        if bool(getattr(args, "audit_json", False)):
+            print(json.dumps(manifest, ensure_ascii=False))
+        else:
+            _print_batch_summary(manifest, int(code))
+        return int(code)
 
     symbols = None
     if getattr(args, "symbols", None):
@@ -1221,8 +1240,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_run.set_defaults(func=_cmd_eod_run)
 
     p_eod_batch = sub_eod.add_parser("batch")
-    p_eod_batch.add_argument("--from", dest="date_from", required=True)
-    p_eod_batch.add_argument("--to", dest="date_to", required=True)
+    p_eod_batch.add_argument("--from", dest="date_from", required=False)
+    p_eod_batch.add_argument("--to", dest="date_to", required=False)
     p_eod_batch.add_argument("--outdir", default=None)
     p_eod_batch.add_argument("--strict", action="store_true")
     p_eod_batch.add_argument("--symbols", default=None)
@@ -1246,6 +1265,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_batch.add_argument("--rerun-failed", dest="rerun_failed", action="store_true")
     p_eod_batch.add_argument("--max-failures", dest="max_failures", type=int, default=0)
     p_eod_batch.add_argument("--dry-run", action="store_true")
+    p_eod_batch.add_argument("--audit", action="store_true")
+    p_eod_batch.add_argument("--deep-audit", dest="deep_audit", action="store_true")
+    p_eod_batch.add_argument("--audit-json", dest="audit_json", action="store_true")
     p_eod_batch.set_defaults(func=_cmd_eod_batch)
 
     p_eod_batch_audit = sub_eod.add_parser("batch-audit")
