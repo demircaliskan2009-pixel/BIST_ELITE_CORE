@@ -33,6 +33,7 @@ from bist_core.services.dossier import (
 )
 from bist_core.services.eod_pipeline import run_eod_pipeline
 from bist_core.services.eod_replay import run_eod_replay
+from bist_core.services.scorecard import build_scorecard
 from bist_core.services.eod_batch import audit_eod_batch, run_eod_batch
 from bist_core.services.events_pipeline import (
     build_events_jsonl_for_day,
@@ -293,11 +294,20 @@ def _cmd_eod_replay(args: argparse.Namespace) -> int:
         orders_strategy=getattr(args, "orders_strategy", None) or "equal_weight",
         orders_top_n=int(getattr(args, "orders_top_n", 10) or 10),
         metrics=bool(getattr(args, "metrics", True)),
+        scorecard=bool(getattr(args, "scorecard", True)),
     )
     if bool(getattr(args, "json", False)):
         summary = manifest.get("summary", {})
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2))
     return int(code)
+
+
+def _cmd_eod_scorecard(args: argparse.Namespace) -> int:
+    outdir = Path(getattr(args, "outdir"))
+    scorecard = build_scorecard(outdir)
+    if bool(getattr(args, "json", False)):
+        print(json.dumps(scorecard, ensure_ascii=False, sort_keys=True, indent=2))
+    return 0
 
 
 def _cmd_eod_batch_audit(args: argparse.Namespace) -> int:
@@ -1354,8 +1364,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_replay.add_argument("--orders-top-n", dest="orders_top_n", type=int, default=10)
     p_eod_replay.add_argument("--metrics", action="store_true", default=True)
     p_eod_replay.add_argument("--no-metrics", dest="metrics", action="store_false")
+    p_eod_replay.add_argument("--scorecard", action="store_true", default=True)
+    p_eod_replay.add_argument("--no-scorecard", dest="scorecard", action="store_false")
     p_eod_replay.add_argument("--json", action="store_true")
     p_eod_replay.set_defaults(func=_cmd_eod_replay)
+
+    p_eod_scorecard = sub_eod.add_parser("scorecard")
+    p_eod_scorecard.add_argument("--outdir", required=True)
+    p_eod_scorecard.add_argument("--json", action="store_true")
+    p_eod_scorecard.set_defaults(func=_cmd_eod_scorecard)
 
     p_eod_batch_audit = sub_eod.add_parser("batch-audit")
     p_eod_batch_audit.add_argument("--outdir", required=True)

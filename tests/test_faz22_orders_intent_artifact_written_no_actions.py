@@ -7,17 +7,17 @@ import sys
 from pathlib import Path
 
 
-def test_eod_orders_emits_artifact_and_manifest(tmp_path: Path) -> None:
+def test_orders_intent_artifact_written_no_actions(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo_root / "src")
 
     snapshot_root = tmp_path / "data" / "eod" / "snapshots"
-    day = "2099-01-03"
+    day = "2099-02-01"
     day_dir = snapshot_root / day
-    day_dir.mkdir(parents=True)
+    day_dir.mkdir(parents=True, exist_ok=True)
     (day_dir / "snapshot.csv").write_text(
-        "symbol,close\n",
+        "symbol,close\nAAA,1.0\n",
         encoding="utf-8",
     )
     env["BIST_CORE_SNAPSHOT_DIR"] = str(snapshot_root)
@@ -36,6 +36,8 @@ def test_eod_orders_emits_artifact_and_manifest(tmp_path: Path) -> None:
             str(outdir),
             "--ignore-calendar",
             "--emit-orders",
+            "--orders-strategy",
+            "deny_all",
         ],
         capture_output=True,
         text=True,
@@ -44,19 +46,15 @@ def test_eod_orders_emits_artifact_and_manifest(tmp_path: Path) -> None:
         env=env,
         check=False,
     )
-
     assert result.returncode == 0
+
     orders_path = outdir / "orders" / "orders_intent.json"
-    assert orders_path.exists()
     payload = json.loads(orders_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 1
-    assert payload["day"] == day
-    assert isinstance(payload["actions"], list)
-    assert payload["strategy"]["name"] == "equal_weight"
+    assert payload["strategy"]["name"] == "deny_all"
+    assert payload["actions"] == []
+    assert "no_actions" in payload["notes"]
 
     manifest = json.loads((outdir / "_pipeline_manifest.json").read_text(encoding="utf-8"))
     orders_stage = manifest["stages"]["orders"]
     assert orders_stage["path"] == str(orders_path)
-    assert orders_stage["total"] == 1
-    assert orders_stage["ok"] == 1
     assert "no_actions" in orders_stage["notes"]

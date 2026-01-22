@@ -73,4 +73,4 @@ def test_eod_orders_failclosed_when_blocked(tmp_path: Path) -> None:
     manifest = json.loads((outdir / "_pipeline_manifest.json").read_text(encoding="utf-8"))
     orders_stage = manifest["stages"]["orders"]
     assert orders_stage["ok"] == 0
-    assert "blocked" in orders_stage["notes"]
+    assert "blocked_by_policy" in orders_stage["notes"]

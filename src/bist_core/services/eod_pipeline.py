@@ -28,6 +28,7 @@ from bist_core.services import instrument_timeline
 from bist_core.services import trading_calendar
 from bist_core.services import snapshot_integrity
 from bist_core.policy import rules_engine, rules_schema
+from bist_core.strategies import resolve_strategy
 
 
 def run_eod_pipeline(
@@ -273,7 +274,8 @@ def run_eod_pipeline(
         orders_path = orders_dir / "orders_intent.json"
         orders_payload, orders_notes, orders_ok = _build_orders_intent(
             day_str,
-            advice_records,
+            universe=sorted_symbols,
+            advice_records=advice_records,
             strategy=orders_strategy,
             top_n=orders_top_n,
             policy_ruleset=policy_ruleset,
@@ -593,87 +595,65 @@ def _pipeline_manifest(
 
 def _build_orders_intent(
     day_str: str,
-    advice_records: list[dict],
     *,
+    universe: list[str],
+    advice_records: list[dict],
     strategy: str,
     top_n: int,
     policy_ruleset: Optional[dict],
     policy_errors: list[str],
 ) -> tuple[dict, list[str], bool]:
     notes: list[str] = []
-    orders: list[dict] = []
-    blocked = False
+    blocked_by_policy = False
 
     if policy_errors:
-        blocked = True
-        notes.append("policy_invalid")
+        blocked_by_policy = True
+        notes.append("blocked_by_policy")
     if policy_ruleset is not None:
-        allowed, reasons = rules_engine.evaluate(
+        allowed, _ = rules_engine.evaluate(
             policy_ruleset,
             trading_context={"day": day_str},
         )
         if not allowed:
-            blocked = True
-            notes.extend(reasons)
+            blocked_by_policy = True
+            notes.append("blocked_by_policy")
 
-    if strategy != "equal_weight":
-        blocked = True
-        notes.append("unsupported_strategy")
+    params = {"top_n": top_n}
+    try:
+        strategy_impl = resolve_strategy(strategy)
+    except ValueError:
+        notes.append("strategy_not_found")
+        payload = {
+            "schema_version": 1,
+            "strategy": {"name": str(strategy), "params": params},
+            "day": day_str,
+            "universe_size": len(universe),
+            "actions": [],
+            "notes": sorted(set(notes)),
+        }
+        return payload, payload["notes"], False
 
-    actionable: list[dict] = []
-    if not advice_records:
-        notes.append("no_advice")
-    else:
-        for record in advice_records:
-            decision = str(record.get("decision_raw", "PASS")).upper()
-            if decision and decision != "PASS":
-                actionable.append(record)
+    payload = strategy_impl.build_intent(
+        day=day_str,
+        universe=universe,
+        advice_records=advice_records,
+        params=params,
+    )
+    notes = list(payload.get("notes", []))
 
-    selected: list[dict] = []
-    if actionable:
-        ranked = sorted(
-            actionable,
-            key=lambda rec: (-float(rec.get("score", 0.0)), str(rec.get("symbol", ""))),
-        )
-        if isinstance(top_n, int) and top_n > 0:
-            selected = ranked[:top_n]
-        else:
-            selected = ranked
-
-    if not selected:
-        if advice_records:
-            notes.append("no_actions")
-    else:
-        weight = 1.0 / len(selected)
-        if weight > 0.5:
-            blocked = True
-            notes.append("blocked")
-        else:
-            for record in selected:
-                symbol = str(record.get("symbol", ""))
-                decision = str(record.get("decision_raw", "BUY")).upper()
-                side = "SELL" if decision == "SELL" else "BUY"
-                orders.append(
-                    {
-                        "symbol": symbol,
-                        "side": side,
-                        "target_weight": round(weight, 6),
-                        "score": float(record.get("score", 0.0)),
-                    }
-                )
-
-    if blocked and "blocked" not in notes:
-        notes.append("blocked")
+    if blocked_by_policy:
+        payload["actions"] = []
+        notes.append("blocked_by_policy")
+        payload["notes"] = sorted(set(notes))
+        return payload, payload["notes"], False
 
     notes = sorted(set(notes))
-    payload = {
-        "schema_version": 1,
-        "day": day_str,
-        "strategy": strategy,
-        "orders": orders,
-        "notes": notes,
-    }
-    return payload, notes, not blocked
+    payload["notes"] = notes
+    if not payload.get("actions"):
+        if "no_actions" not in payload["notes"]:
+            payload["notes"].append("no_actions")
+        payload["notes"] = sorted(set(payload["notes"]))
+    return payload, payload["notes"], True
 
 
 def _build_advice_records(

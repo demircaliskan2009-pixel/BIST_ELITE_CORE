@@ -9,6 +9,7 @@ from typing import Optional
 
 from bist_core.services.dossier import atomic_write_json
 from bist_core.services.eod_pipeline import run_eod_pipeline
+from bist_core.services.scorecard import build_scorecard
 from bist_core.services import snapshot_integrity
 from bist_core.services import trading_calendar
 
@@ -33,6 +34,7 @@ def run_eod_replay(
     orders_strategy: str = "equal_weight",
     orders_top_n: int = 10,
     metrics: bool = True,
+    scorecard: bool = True,
 ) -> tuple[dict, int]:
     start = time.perf_counter()
     out_path = Path(outdir)
@@ -45,7 +47,7 @@ def run_eod_replay(
 
     orders_emitted_days = 0
     orders_blocked_days = 0
-    no_actions_days = 0
+    orders_no_actions_days = 0
     ok_days = 0
     error_days = 0
 
@@ -114,7 +116,7 @@ def run_eod_replay(
             if orders_stage.get("ok") == 0:
                 orders_blocked_days += 1
             if "no_actions" in notes:
-                no_actions_days += 1
+                orders_no_actions_days += 1
 
         days.append(
             ReplayDay(
@@ -132,8 +134,9 @@ def run_eod_replay(
         "total": total_days,
         "ok": ok_days,
         "error": error_days,
-        "blocked_orders": orders_blocked_days,
-        "no_actions": no_actions_days,
+        "orders_emitted_days": orders_emitted_days,
+        "orders_no_actions_days": orders_no_actions_days,
+        "orders_blocked_days": orders_blocked_days,
         "runtime_ms": runtime_ms,
     }
     replay_manifest = {
@@ -162,9 +165,12 @@ def run_eod_replay(
             "error_days": error_days,
             "orders_emitted_days": orders_emitted_days,
             "orders_blocked_days": orders_blocked_days,
-            "no_actions_days": no_actions_days,
+            "no_actions_days": orders_no_actions_days,
         }
         atomic_write_json(out_path / "metrics.json", metrics_payload)
+
+    if scorecard:
+        build_scorecard(out_path)
 
     exit_code = 2 if strict and error_days > 0 else 0
     return replay_manifest, exit_code
