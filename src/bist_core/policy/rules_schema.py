@@ -26,12 +26,23 @@ def validate_ruleset(payload: Dict[str, Any]) -> List[str]:
             continue
         if not rule.get("id"):
             errors.append(f"RuleMissingId:{idx}")
-        if rule.get("type") not in {"max_notional"}:
+        rule_type = rule.get("type")
+        if rule_type not in {"max_notional", "trading_disabled"}:
             errors.append(f"RuleUnknownType:{rule.get('id','')}")
-        if rule.get("type") == "max_notional":
+        if rule_type == "max_notional":
             max_notional = rule.get("max_notional")
             if not isinstance(max_notional, (int, float)):
                 errors.append(f"RuleMaxNotionalInvalid:{rule.get('id','')}")
+        if rule_type == "trading_disabled":
+            action = rule.get("action", "deny")
+            if action not in {"deny"}:
+                errors.append(f"RuleTradingActionInvalid:{rule.get('id','')}")
+            enabled = rule.get("enabled", True)
+            if not isinstance(enabled, bool):
+                errors.append(f"RuleTradingEnabledInvalid:{rule.get('id','')}")
+            reason = rule.get("reason")
+            if reason is not None and not isinstance(reason, str):
+                errors.append(f"RuleTradingReasonInvalid:{rule.get('id','')}")
     return errors
 
 

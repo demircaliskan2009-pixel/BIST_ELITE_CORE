@@ -154,6 +154,9 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         "calendar_file": getattr(args, "calendar_file", None),
         "ignore_calendar": bool(getattr(args, "ignore_calendar", False)),
         "policy_file": getattr(args, "policy_file", None),
+        "emit_orders": bool(getattr(args, "emit_orders", False)),
+        "orders_strategy": getattr(args, "orders_strategy", None),
+        "orders_top_n": getattr(args, "orders_top_n", None),
     }
     manifest, code = run_eod_pipeline(
         day_str,
@@ -177,6 +180,9 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         calendar_file=getattr(args, "calendar_file", None),
         ignore_calendar=bool(getattr(args, "ignore_calendar", False)),
         policy_file=getattr(args, "policy_file", None),
+        emit_orders=bool(getattr(args, "emit_orders", False)),
+        orders_strategy=getattr(args, "orders_strategy", None) or "equal_weight",
+        orders_top_n=int(getattr(args, "orders_top_n", 10) or 10),
         git_sha=_env_git_sha(),
         cli_args=cli_args,
     )
@@ -1274,6 +1280,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_run.add_argument("--calendar-file", dest="calendar_file", default=None)
     p_eod_run.add_argument("--ignore-calendar", action="store_true")
     p_eod_run.add_argument("--policy-file", dest="policy_file", default=None)
+    p_eod_run.add_argument("--emit-orders", action="store_true")
+    p_eod_run.add_argument("--orders-strategy", dest="orders_strategy", default="equal_weight")
+    p_eod_run.add_argument("--orders-top-n", dest="orders_top_n", type=int, default=10)
     p_eod_run.set_defaults(func=_cmd_eod_run)
 
     p_eod_batch = sub_eod.add_parser("batch")

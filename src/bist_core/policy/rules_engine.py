@@ -33,6 +33,17 @@ def explain_order(
     violations: List[Dict[str, Any]] = []
     notional = float(price) * float(qty)
     for rule in normalized["rules"]:
+        if rule.get("type") == "trading_disabled":
+            enabled = rule.get("enabled", True)
+            action = str(rule.get("action", "deny")).lower()
+            if enabled and action == "deny":
+                violations.append(
+                    {
+                        "id": rule.get("id"),
+                        "type": "trading_disabled",
+                        "message": rule.get("reason", "Trading disabled by policy"),
+                    }
+                )
         if rule.get("type") == "max_notional":
             max_notional = float(rule.get("max_notional"))
             rule_side = str(rule.get("side") or "").upper()
@@ -61,3 +72,24 @@ def explain_order(
             "day": day,
         },
     }
+
+
+def evaluate(
+    ruleset: Dict[str, Any],
+    *,
+    trading_context: Dict[str, Any] | None = None,
+) -> tuple[bool, List[str]]:
+    normalized = normalize_ruleset(ruleset)
+    errors = validate_ruleset(normalized)
+    if errors:
+        return False, sorted(errors)
+    reasons: List[str] = []
+    for rule in normalized["rules"]:
+        if rule.get("type") != "trading_disabled":
+            continue
+        enabled = rule.get("enabled", True)
+        action = str(rule.get("action", "deny")).lower()
+        if enabled and action == "deny":
+            reason = rule.get("reason") or rule.get("id") or "trading_disabled"
+            reasons.append(str(reason))
+    return len(reasons) == 0, sorted(set(reasons))

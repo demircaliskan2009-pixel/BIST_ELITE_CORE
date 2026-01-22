@@ -27,7 +27,7 @@ from bist_core.providers.corporate_actions.offline_file import (
 from bist_core.services import instrument_timeline
 from bist_core.services import trading_calendar
 from bist_core.services import snapshot_integrity
-from bist_core.policy import rules_schema
+from bist_core.policy import rules_engine, rules_schema
 
 
 def run_eod_pipeline(
@@ -52,6 +52,9 @@ def run_eod_pipeline(
     calendar_file: Optional[Path | str] = None,
     ignore_calendar: bool = False,
     policy_file: Optional[Path | str] = None,
+    emit_orders: bool = False,
+    orders_strategy: str = "equal_weight",
+    orders_top_n: int = 10,
     git_sha: Optional[str] = None,
     cli_args: Optional[dict] = None,
 ) -> tuple[dict, int]:
@@ -93,20 +96,21 @@ def run_eod_pipeline(
     policy_effective = (
         str(policy_file) if policy_file is not None else os.getenv("BIST_CORE_POLICY_FILE")
     )
-    policy_hash = None
     policy_errors: list[str] = []
     policy_prov = None
+    policy_ruleset = None
     if policy_effective:
         policy_path = Path(policy_effective)
         policy_prov = {"file": str(policy_path), "hash": {"algo": "sha256", "value": ""}}
         try:
-            policy_hash = snapshot_integrity.compute_sha256(policy_path)
-            policy_prov["hash"]["value"] = policy_hash
+            policy_prov["hash"]["value"] = snapshot_integrity.compute_sha256(policy_path)
         except Exception:
             policy_errors.append("PolicyHashError")
         try:
             ruleset = rules_schema.load_ruleset(policy_path)
             policy_errors.extend(rules_schema.validate_ruleset(ruleset))
+            if not policy_errors:
+                policy_ruleset = ruleset
         except Exception:
             policy_errors.append("PolicyLoadError")
         if policy_errors:
@@ -262,6 +266,26 @@ def run_eod_pipeline(
         "errors": advice_errors,
         "path": str(advice_path),
     }
+
+    if emit_orders:
+        orders_dir = out_path / "orders"
+        orders_dir.mkdir(parents=True, exist_ok=True)
+        orders_path = orders_dir / "orders_intent.json"
+        orders_payload, orders_notes, orders_ok = _build_orders_intent(
+            day_str,
+            advice_records,
+            strategy=orders_strategy,
+            top_n=orders_top_n,
+            policy_ruleset=policy_ruleset,
+            policy_errors=policy_errors,
+        )
+        atomic_write_json(orders_path, orders_payload)
+        stages["orders"] = {
+            "ok": int(orders_ok),
+            "total": 1,
+            "path": str(orders_path),
+            "notes": orders_notes,
+        }
 
     dossier_dir = out_path / "dossiers"
     dossier_dir.mkdir(parents=True, exist_ok=True)
@@ -506,14 +530,6 @@ def run_eod_pipeline(
         stages["universe"]["notes"] = ["universe_skipped"]
 
     runtime_ms = int((time.perf_counter() - start) * 1000)
-    policy_file = os.getenv("BIST_CORE_POLICY_FILE")
-    policy_hash = None
-    if policy_file:
-        try:
-            policy_hash = snapshot_integrity.compute_sha256(Path(policy_file))
-        except Exception:
-            policy_hash = None
-
     manifest = _pipeline_manifest(
         day_str,
         root,
@@ -541,6 +557,7 @@ def run_eod_pipeline(
         + stages["universe"]["errors"]
         + stages["calendar"]["errors"]
         + stages["policy"]["errors"]
+        + (1 if stages.get("orders", {}).get("ok", 1) == 0 else 0)
     )
     return manifest, 2 if strict and stage_errors > 0 else 0
 
@@ -572,6 +589,91 @@ def _pipeline_manifest(
             "policy": policy_prov,
         },
     }
+
+
+def _build_orders_intent(
+    day_str: str,
+    advice_records: list[dict],
+    *,
+    strategy: str,
+    top_n: int,
+    policy_ruleset: Optional[dict],
+    policy_errors: list[str],
+) -> tuple[dict, list[str], bool]:
+    notes: list[str] = []
+    orders: list[dict] = []
+    blocked = False
+
+    if policy_errors:
+        blocked = True
+        notes.append("policy_invalid")
+    if policy_ruleset is not None:
+        allowed, reasons = rules_engine.evaluate(
+            policy_ruleset,
+            trading_context={"day": day_str},
+        )
+        if not allowed:
+            blocked = True
+            notes.extend(reasons)
+
+    if strategy != "equal_weight":
+        blocked = True
+        notes.append("unsupported_strategy")
+
+    actionable: list[dict] = []
+    if not advice_records:
+        notes.append("no_advice")
+    else:
+        for record in advice_records:
+            decision = str(record.get("decision_raw", "PASS")).upper()
+            if decision and decision != "PASS":
+                actionable.append(record)
+
+    selected: list[dict] = []
+    if actionable:
+        ranked = sorted(
+            actionable,
+            key=lambda rec: (-float(rec.get("score", 0.0)), str(rec.get("symbol", ""))),
+        )
+        if isinstance(top_n, int) and top_n > 0:
+            selected = ranked[:top_n]
+        else:
+            selected = ranked
+
+    if not selected:
+        if advice_records:
+            notes.append("no_actions")
+    else:
+        weight = 1.0 / len(selected)
+        if weight > 0.5:
+            blocked = True
+            notes.append("blocked")
+        else:
+            for record in selected:
+                symbol = str(record.get("symbol", ""))
+                decision = str(record.get("decision_raw", "BUY")).upper()
+                side = "SELL" if decision == "SELL" else "BUY"
+                orders.append(
+                    {
+                        "symbol": symbol,
+                        "side": side,
+                        "target_weight": round(weight, 6),
+                        "score": float(record.get("score", 0.0)),
+                    }
+                )
+
+    if blocked and "blocked" not in notes:
+        notes.append("blocked")
+
+    notes = sorted(set(notes))
+    payload = {
+        "schema_version": 1,
+        "day": day_str,
+        "strategy": strategy,
+        "orders": orders,
+        "notes": notes,
+    }
+    return payload, notes, not blocked
 
 
 def _build_advice_records(
