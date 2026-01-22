@@ -4,6 +4,7 @@
 Run:
 ```
 python -m bist_core.cli eod run --day YYYY-MM-DD --outdir data/eod/runs/YYYY-MM-DD
+python -m bist_core.cli eod run --day YYYY-MM-DD --outdir data/eod/runs/YYYY-MM-DD --policy-file path/to/rules.json
 ```
 Artifacts land under `data/eod/runs/YYYY-MM-DD/`:
 - `_pipeline_manifest.json`

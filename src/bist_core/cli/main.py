@@ -153,6 +153,7 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         "resolve_aliases": bool(getattr(args, "resolve_aliases", False)),
         "calendar_file": getattr(args, "calendar_file", None),
         "ignore_calendar": bool(getattr(args, "ignore_calendar", False)),
+        "policy_file": getattr(args, "policy_file", None),
     }
     manifest, code = run_eod_pipeline(
         day_str,
@@ -175,6 +176,7 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         resolve_aliases=bool(getattr(args, "resolve_aliases", False)),
         calendar_file=getattr(args, "calendar_file", None),
         ignore_calendar=bool(getattr(args, "ignore_calendar", False)),
+        policy_file=getattr(args, "policy_file", None),
         git_sha=_env_git_sha(),
         cli_args=cli_args,
     )
@@ -242,6 +244,7 @@ def _cmd_eod_batch(args: argparse.Namespace) -> int:
         "ca_input": getattr(args, "ca_input", None),
         "ca_outdir": getattr(args, "ca_outdir", None),
         "resolve_aliases": bool(getattr(args, "resolve_aliases", False)),
+        "policy_file": getattr(args, "policy_file", None),
         "git_sha": _env_git_sha(),
         "cli_args": {"batch": True},
     }
@@ -1270,6 +1273,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_run.add_argument("--resolve-aliases", action="store_true")
     p_eod_run.add_argument("--calendar-file", dest="calendar_file", default=None)
     p_eod_run.add_argument("--ignore-calendar", action="store_true")
+    p_eod_run.add_argument("--policy-file", dest="policy_file", default=None)
     p_eod_run.set_defaults(func=_cmd_eod_run)
 
     p_eod_batch = sub_eod.add_parser("batch")
@@ -1301,6 +1305,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_batch.add_argument("--audit", action="store_true")
     p_eod_batch.add_argument("--deep-audit", dest="deep_audit", action="store_true")
     p_eod_batch.add_argument("--audit-json", dest="audit_json", action="store_true")
+    p_eod_batch.add_argument("--policy-file", dest="policy_file", default=None)
     p_eod_batch.set_defaults(func=_cmd_eod_batch)
 
     p_eod_batch_audit = sub_eod.add_parser("batch-audit")
