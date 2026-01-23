@@ -381,7 +381,11 @@ def _cmd_rules_explain(args: argparse.Namespace) -> int:
         day=str(args.day),
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result.get("allowed") and not result.get("errors") else 2
+    if result.get("errors"):
+        return 2
+    if getattr(args, "strict_exit", False) and result.get("allowed") is False:
+        return 2
+    return 0
 
 
 def _cmd_plan(args: argparse.Namespace) -> int:
@@ -1417,6 +1421,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_rules_explain.add_argument("--side", required=True)
     p_rules_explain.add_argument("--qty", required=True)
     p_rules_explain.add_argument("--day", required=True)
+    p_rules_explain.add_argument("--strict-exit", action="store_true")
     p_rules_explain.set_defaults(func=_cmd_rules_explain)
 
     p_data = sub.add_parser("data")
