@@ -507,17 +507,55 @@ def _ensure_min_snapshot(as_of: str) -> Path:
 def _cmd_data_load(args: argparse.Namespace) -> int:
     dataset_id = args.id or args.name
     if not dataset_id:
-        raise SystemExit("--id is required")
+        raise SystemExit("--id or --name is required")
     reg = get_default_registry()
     meta = reg.get(dataset_id)
     fmt = "csv" if meta.kind == "local_csv" else meta.kind
+
+    # Raw dataset'i yükle
+    df_raw = load_registered_dataset(dataset_id)
+
+    out_path = Path(args.out) if getattr(args, "out", None) else None
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        df_raw.to_csv(out_path, index=False, lineterminator="\n")
+
+    if getattr(args, "json", False):
+        cols = [str(c) for c in df_raw.columns]
+        payload = {
+            "name": dataset_id,
+            "kind": meta.kind,
+            "path": meta.path,
+            "rows": int(len(df_raw)),
+            "cols": cols,
+        }
+
+        date_col = getattr(meta, "date_col", None)
+        if not date_col and "date" in df_raw.columns:
+            date_col = "date"
+        if date_col and date_col in df_raw.columns:
+            parsed = pd.to_datetime(df_raw[date_col], errors="coerce").dropna()
+            if not parsed.empty:
+                payload["date_min"] = parsed.min().isoformat()
+                payload["date_max"] = parsed.max().isoformat()
+
+        symbol_col = getattr(meta, "symbol_col", None)
+        if not symbol_col and "symbol" in df_raw.columns:
+            symbol_col = "symbol"
+        if symbol_col and symbol_col in df_raw.columns:
+            symbols = df_raw[symbol_col].dropna().astype(str).unique()
+            payload["symbols_count"] = int(len(symbols))
+
+        if out_path is not None:
+            payload["out"] = str(out_path)
+
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+        return 0
+
     print(
         f"id={dataset_id} format={fmt} path={meta.path} "
         f"created_at={meta.created_at} updated_at={meta.updated_at}"
     )
-
-    # Raw dataset'i yükle
-    df_raw = load_registered_dataset(dataset_id)
 
     # Testin beklediği özet satır
     print(
@@ -1513,6 +1551,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_load.add_argument("--id", default=None)
     p_load.add_argument("--name", default=None)
     p_load.add_argument("--head", type=int, default=0)
+    p_load.add_argument("--json", action="store_true")
+    p_load.add_argument("--out", default=None)
 
     # ✅ Eksik olan argümanlar burada:
     p_load.add_argument("--use-snapshot", action="store_true")

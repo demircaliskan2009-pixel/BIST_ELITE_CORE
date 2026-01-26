@@ -52,6 +52,7 @@ Run:
 ~~~bash
 python -m bist_core.cli data register --name eq_daily --path path/to/csvs --format csv --symbol-col symbol --date-col date
 python -m bist_core.cli data list --json
+python -m bist_core.cli data load --name eq_daily --json
 python -m bist_core.cli data snapshot --name eq_daily --day YYYY-MM-DD --out data/eod/snapshots/eq_daily_YYYY-MM-DD.csv
 ~~~
 
