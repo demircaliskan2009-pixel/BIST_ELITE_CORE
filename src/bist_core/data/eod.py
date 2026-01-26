@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
-from .registry import DatasetRegistry, get_default_registry
+from .registry import DatasetRegistry, get_default_registry, get_bist_core_home
 
 
 __all__ = [
@@ -20,7 +20,7 @@ __all__ = [
 ]
 
 DEFAULT_SNAPSHOT_ENV = "BIST_CORE_SNAPSHOT_DIR"
-DEFAULT_SNAPSHOT_RELATIVE = ".bist_core/eod/snapshots"
+DEFAULT_SNAPSHOT_RELATIVE = "eod/snapshots"
 
 
 def get_default_snapshot_root(path: Optional[Path] = None) -> Path:
@@ -39,7 +39,7 @@ def get_default_snapshot_root(path: Optional[Path] = None) -> Path:
     if env_path:
         return Path(env_path).expanduser()
 
-    home = Path.home()
+    home = get_bist_core_home()
     return home / DEFAULT_SNAPSHOT_RELATIVE
 
 

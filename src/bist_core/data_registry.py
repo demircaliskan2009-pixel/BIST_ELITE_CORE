@@ -2,11 +2,48 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-DEFAULT_REGISTRY_PATH = Path.home() / ".bist_core" / "registry.json"
+DEFAULT_HOME_ENV = "BIST_CORE_HOME"
+
+
+def _get_bist_core_home() -> Path:
+    env_home = os.getenv(DEFAULT_HOME_ENV)
+    if env_home:
+        return Path(env_home).expanduser()
+    return Path.home() / ".bist_core"
+
+
+def _default_registry_path() -> Path:
+    return _get_bist_core_home() / "registry.json"
+
+
+def _save_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(payload, ensure_ascii=False, indent=2)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=path.name + ".",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(data)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp_name, path)
+    finally:
+        try:
+            if os.path.exists(tmp_name):
+                os.remove(tmp_name)
+        except OSError:
+            pass
 
 
 @dataclass
@@ -30,7 +67,7 @@ class DatasetRegistry:
     def __init__(self, path: Optional[Path] = None) -> None:
         if path is None:
             env_path = os.getenv("BIST_CORE_REGISTRY_PATH")
-            self._path = Path(env_path).expanduser() if env_path else DEFAULT_REGISTRY_PATH
+            self._path = Path(env_path).expanduser() if env_path else _default_registry_path()
         else:
             self._path = path.expanduser()
 
@@ -66,7 +103,6 @@ class DatasetRegistry:
         self._loaded = True
 
     def save(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "version": 1,
             "datasets": {
@@ -74,10 +110,7 @@ class DatasetRegistry:
                 for name, meta in sorted(self._datasets.items())
             },
         }
-        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        with tmp.open("w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, sort_keys=True)
-        tmp.replace(self._path)
+        _save_json_atomic(self._path, payload)
 
     def register(self, name: str, path: str, kind: str = "local_csv") -> None:
         self.load()
@@ -100,7 +133,7 @@ def get_default_registry() -> DatasetRegistry:
     env_path = os.getenv("BIST_CORE_REGISTRY_PATH")
     if env_path:
         return DatasetRegistry(Path(env_path).expanduser())
-    return DatasetRegistry(DEFAULT_REGISTRY_PATH)
+    return DatasetRegistry(_default_registry_path())
 
 
 def load_registered_dataset(dataset_id: str, **kwargs: Any) -> "pd.DataFrame":
@@ -126,7 +159,6 @@ def load_registered_dataset(dataset_id: str, **kwargs: Any) -> "pd.DataFrame":
 __all__ = [
     "DatasetMetadata",
     "DatasetRegistry",
-    "DEFAULT_REGISTRY_PATH",
     "get_default_registry",
     "load_registered_dataset",
 ]

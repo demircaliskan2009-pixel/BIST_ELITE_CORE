@@ -438,19 +438,50 @@ def _cmd_orders(args: argparse.Namespace) -> int:
 
 def _cmd_data_register(args: argparse.Namespace) -> int:
     reg = get_default_registry()
-    dataset_id = args.id or args.name
+    dataset_id = args.name or args.id
     fmt = args.format or args.kind
     if not dataset_id:
-        raise SystemExit("--id is required")
+        raise SystemExit("--name is required")
     if not fmt:
         raise SystemExit("--format is required")
     if fmt in ("local_csv", "csv"):
-        fmt = "csv"
-    if fmt != "csv":
+        kind = "local_csv"
+    else:
         raise SystemExit(f"Unsupported format: {fmt!r}")
-    reg.register(name=dataset_id, path=args.path, kind="local_csv")
-    reg.save()
-    print(f"registered: {dataset_id}")
+    meta = reg.register(
+        name=dataset_id,
+        kind=kind,
+        path=args.path,
+        symbol_col=getattr(args, "symbol_col", None),
+        date_col=getattr(args, "date_col", None),
+        tz=getattr(args, "tz", None),
+        overwrite=bool(getattr(args, "overwrite", False)),
+    )
+    payload = {
+        "ok": True,
+        "name": meta.name,
+        "registry_path": str(reg.path),
+    }
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def _cmd_data_list(args: argparse.Namespace) -> int:
+    reg = get_default_registry()
+    payload = reg.to_payload()
+    if getattr(args, "json", False):
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+        return 0
+
+    names = sorted(payload.get("datasets", {}).keys())
+    if not names:
+        print("datasets: <empty>")
+        return 0
+    for name in names:
+        meta = payload["datasets"][name]
+        fmt = meta.get("format") or meta.get("kind")
+        path = meta.get("path")
+        print(f"- name={name} format={fmt} path={path}")
     return 0
 
 
@@ -650,72 +681,107 @@ def _load_manifest_runtime(path: Path) -> int | None:
 
 
 def _cmd_data_snapshot(args: argparse.Namespace) -> int:
-    dataset_id = args.id
+    dataset_id = args.name or args.id
     if not dataset_id:
-        raise SystemExit("--id is required")
+        raise SystemExit("--name is required")
     day = args.day
     try:
         _ = date.fromisoformat(day)
     except ValueError:
         raise SystemExit(f"Invalid date format: {day}. Use YYYY-MM-DD")
 
+    if not getattr(args, "out", None):
+        df_raw = load_registered_dataset(dataset_id)
+        required = {"symbol", "close"}
+        optional = {"open", "high", "low", "volume", "turnover", "date"}
+        cols = set(df_raw.columns)
+        missing = required - cols
+        unexpected = cols - required - optional
+        if missing or unexpected:
+            raise SystemExit(
+                f"Snapshot schema invalid: missing={sorted(missing)} "
+                f"unexpected={sorted(unexpected)}"
+            )
+
+        has_date = "date" in cols
+        if has_date:
+            invalid = []
+            for value in df_raw["date"].dropna().unique():
+                try:
+                    _ = date.fromisoformat(str(value))
+                except ValueError:
+                    invalid.append(value)
+            if invalid:
+                raise SystemExit(
+                    f"Snapshot schema invalid: unparseable date values={invalid}"
+                )
+        else:
+            if cols != {"symbol", "close"}:
+                raise SystemExit(
+                    "Snapshot schema invalid: legacy snapshot must contain only symbol,close"
+                )
+
+        if has_date:
+            df_day = df_raw[df_raw["date"] == day]
+            if df_day.empty:
+                raise SystemExit(f"No data for day: {day}")
+        else:
+            df_day = df_raw
+
+        has_ohlcv = {"open", "high", "low", "volume"}.issubset(cols)
+        if not has_ohlcv:
+            print(
+                "Uyarı: Snapshot sadece close içeriyor; OHLCV verisi yok.",
+                file=sys.stderr,
+            )
+
+        out_cols = ["symbol", "close"]
+        for col in ["open", "high", "low", "volume", "turnover"]:
+            if col in cols:
+                out_cols.append(col)
+
+        df_out = df_day[out_cols].groupby("symbol", as_index=False).last()
+
+        root = _snapshot_root()
+        out_dir = root / day
+        out_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_path = out_dir / "snapshot.csv"
+        df_out.to_csv(snapshot_path, index=False)
+        print(f"snapshot created at {snapshot_path}")
+        return 0
+
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    reg = get_default_registry()
+    meta = reg.get(dataset_id)
     df_raw = load_registered_dataset(dataset_id)
-    required = {"symbol", "close"}
-    optional = {"open", "high", "low", "volume", "turnover", "date"}
-    cols = set(df_raw.columns)
-    missing = required - cols
-    unexpected = cols - required - optional
-    if missing or unexpected:
-        raise SystemExit(
-            f"Snapshot schema invalid: missing={sorted(missing)} "
-            f"unexpected={sorted(unexpected)}"
-        )
+    cols = list(df_raw.columns)
 
-    has_date = "date" in cols
-    if has_date:
-        invalid = []
-        for value in df_raw["date"].dropna().unique():
-            try:
-                _ = date.fromisoformat(str(value))
-            except ValueError:
-                invalid.append(value)
-        if invalid:
-            raise SystemExit(
-                f"Snapshot schema invalid: unparseable date values={invalid}"
-            )
-    else:
-        if cols != {"symbol", "close"}:
-            raise SystemExit(
-                "Snapshot schema invalid: legacy snapshot must contain only symbol,close"
-            )
+    symbol_col = meta.symbol_col or ("symbol" if "symbol" in cols else None)
+    date_col = meta.date_col or ("date" if "date" in cols else None)
+    if not symbol_col or symbol_col not in cols:
+        raise SystemExit("Snapshot requires a symbol column; register with --symbol-col")
+    if not date_col or date_col not in cols:
+        raise SystemExit("Snapshot requires a date column; register with --date-col")
 
-    if has_date:
-        df_day = df_raw[df_raw["date"] == day]
-        if df_day.empty:
-            raise SystemExit(f"No data for day: {day}")
-    else:
-        df_day = df_raw
+    df_raw = df_raw.copy()
+    df_raw[date_col] = df_raw[date_col].astype(str)
+    df_day = df_raw[df_raw[date_col] == day]
+    if df_day.empty:
+        raise SystemExit(f"No data for day: {day}")
 
-    has_ohlcv = {"open", "high", "low", "volume"}.issubset(cols)
-    if not has_ohlcv:
-        print(
-            "Uyarı: Snapshot sadece close içeriyor; OHLCV verisi yok.",
-            file=sys.stderr,
-        )
+    df_day = df_day.sort_values(by=[symbol_col, date_col], kind="mergesort")
+    ordered_cols = [symbol_col, date_col]
+    for col in sorted([c for c in cols if c not in ordered_cols]):
+        ordered_cols.append(col)
+    df_out = df_day[ordered_cols]
 
-    out_cols = ["symbol", "close"]
-    for col in ["open", "high", "low", "volume", "turnover"]:
-        if col in cols:
-            out_cols.append(col)
-
-    df_out = df_day[out_cols].groupby("symbol", as_index=False).last()
-
-    root = _snapshot_root()
-    out_dir = root / day
-    out_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_path = out_dir / "snapshot.csv"
-    df_out.to_csv(snapshot_path, index=False)
-    print(f"snapshot created at {snapshot_path}")
+    tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+    df_out.to_csv(tmp_path, index=False, lineterminator="\n")
+    tmp_path.replace(out_path)
+    payload = {"ok": True, "out": str(out_path), "rows": int(len(df_out))}
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return 0
 
 
@@ -1433,7 +1499,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_reg.add_argument("--format", default=None)
     p_reg.add_argument("--kind", default=None)
     p_reg.add_argument("--path", required=True)
+    p_reg.add_argument("--symbol-col", dest="symbol_col", default=None)
+    p_reg.add_argument("--date-col", dest="date_col", default=None)
+    p_reg.add_argument("--tz", default=None)
+    p_reg.add_argument("--overwrite", action="store_true")
     p_reg.set_defaults(func=_cmd_data_register)
+
+    p_list = sub_data.add_parser("list")
+    p_list.add_argument("--json", action="store_true")
+    p_list.set_defaults(func=_cmd_data_list)
 
     p_load = sub_data.add_parser("load")
     p_load.add_argument("--id", default=None)
@@ -1447,8 +1521,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_load.set_defaults(func=_cmd_data_load)
 
     p_snapshot = sub_data.add_parser("snapshot")
-    p_snapshot.add_argument("--id", required=True)
+    p_snapshot.add_argument("--id", default=None)
+    p_snapshot.add_argument("--name", default=None)
     p_snapshot.add_argument("--day", required=True)
+    p_snapshot.add_argument("--out", default=None)
     p_snapshot.set_defaults(func=_cmd_data_snapshot)
 
     p_ask = sub.add_parser("ask")

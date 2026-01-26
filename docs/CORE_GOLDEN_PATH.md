@@ -45,6 +45,16 @@ Replay writes:
 - `scorecard.json` (unless `--no-scorecard`)
 - per-day folders (`YYYY-MM-DD/`) with pipeline outputs
 
+## Data registry and snapshot
+
+Run:
+
+~~~bash
+python -m bist_core.cli data register --name eq_daily --path path/to/csvs --format csv --symbol-col symbol --date-col date
+python -m bist_core.cli data list --json
+python -m bist_core.cli data snapshot --name eq_daily --day YYYY-MM-DD --out data/eod/snapshots/eq_daily_YYYY-MM-DD.csv
+~~~
+
 ## Rules validation and explanation
 
 Run:

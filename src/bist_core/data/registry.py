@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,12 +15,65 @@ __all__ = [
     "get_default_registry",
     "register_dataset",
     "load_registered_dataset",
+    "get_bist_core_home",
+    "load_registry",
+    "save_registry_atomic",
+    "list_datasets",
+    "get_dataset",
     "DEFAULT_REGISTRY_ENV",
     "DEFAULT_REGISTRY_RELATIVE",
+    "DEFAULT_HOME_ENV",
 ]
 
 DEFAULT_REGISTRY_ENV = "BIST_CORE_REGISTRY_PATH"
 DEFAULT_REGISTRY_RELATIVE = ".bist_core/registry.json"
+DEFAULT_HOME_ENV = "BIST_CORE_HOME"
+
+
+def get_bist_core_home() -> Path:
+    env_home = os.getenv(DEFAULT_HOME_ENV)
+    if env_home:
+        return Path(env_home).expanduser()
+    return Path.home() / ".bist_core"
+
+
+def _save_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=path.name + ".",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(data)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        last_exc: Exception | None = None
+        for attempt in range(12):
+            try:
+                os.replace(tmp_name, path)
+                last_exc = None
+                break
+            except PermissionError as exc:
+                last_exc = exc
+                win_error = getattr(exc, "winerror", None)
+                if win_error in (5, 32):
+                    time.sleep(0.05 * (attempt + 1))
+                    continue
+                raise
+        if last_exc is not None:
+            raise last_exc
+    finally:
+        try:
+            if os.path.exists(tmp_name):
+                os.remove(tmp_name)
+        except OSError:
+            pass
 
 
 @dataclass
@@ -37,13 +92,29 @@ class DatasetMetadata:
     path: str
     created_at: str
     updated_at: str
+    symbol_col: Optional[str] = None
+    date_col: Optional[str] = None
+    tz: Optional[str] = None
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        data = asdict(self)
+        data["format"] = _format_from_kind(self.kind)
+        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "DatasetMetadata":
-        return cls(**data)
+        fmt = str(data.get("format") or data.get("kind") or data.get("type") or "")
+        kind = _kind_from_format(fmt)
+        return cls(
+            name=str(data.get("name") or ""),
+            kind=kind,
+            path=str(data.get("path") or ""),
+            created_at=str(data.get("created_at") or ""),
+            updated_at=str(data.get("updated_at") or ""),
+            symbol_col=data.get("symbol_col"),
+            date_col=data.get("date_col"),
+            tz=data.get("tz"),
+        )
 
 
 class DatasetRegistry:
@@ -66,9 +137,8 @@ class DatasetRegistry:
         if env_path:
             return Path(env_path).expanduser()
 
-        # default: ~/.bist_core/registry.json
-        home = Path.home()
-        return home / DEFAULT_REGISTRY_RELATIVE
+        home = get_bist_core_home()
+        return home / "registry.json"
 
     @property
     def path(self) -> Path:
@@ -91,29 +161,24 @@ class DatasetRegistry:
                 raise ValueError(f"Registry JSON schema invalid: {self._path}")
             raw_datasets = raw.get("datasets")
             if not isinstance(raw_datasets, dict):
-                raise ValueError(f"Registry JSON schema invalid: {self._path}")
+                if "schema_version" not in raw and "version" not in raw:
+                    raw_datasets = raw
+                else:
+                    raise ValueError(f"Registry JSON schema invalid: {self._path}")
 
-            self._datasets = {
-                name: DatasetMetadata.from_dict(meta)
-                for name, meta in raw_datasets.items()
-            }
+            datasets: Dict[str, DatasetMetadata] = {}
+            for name, meta in raw_datasets.items():
+                if not isinstance(meta, dict):
+                    continue
+                datasets[name] = DatasetMetadata.from_dict({**meta, "name": name})
+            self._datasets = datasets
         else:
             self._datasets = {}
 
         self._loaded = True
 
     def save(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "version": 1,
-            "datasets": {
-                name: meta.to_dict() for name, meta in sorted(self._datasets.items())
-            },
-        }
-        tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
-        with tmp_path.open("w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, sort_keys=True)
-        tmp_path.replace(self._path)
+        _save_json_atomic(self._path, self.to_payload())
 
     def list_datasets(self) -> List[str]:
         self.load()
@@ -126,6 +191,10 @@ class DatasetRegistry:
         except KeyError as exc:
             raise KeyError(f"Dataset not found in registry: {name!r}") from exc
 
+    def to_payload(self) -> Dict[str, Any]:
+        self.load()
+        return _registry_payload(self._datasets)
+
     def _now_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -134,6 +203,9 @@ class DatasetRegistry:
         name: str,
         kind: str,
         path: Path | str,
+        symbol_col: Optional[str] = None,
+        date_col: Optional[str] = None,
+        tz: Optional[str] = None,
         overwrite: bool = False,
     ) -> DatasetMetadata:
         """
@@ -156,6 +228,9 @@ class DatasetRegistry:
             # created_at korunur, updated_at yenilenir
             meta.kind = kind
             meta.path = path_str
+            meta.symbol_col = symbol_col
+            meta.date_col = date_col
+            meta.tz = tz
             meta.updated_at = now
         else:
             meta = DatasetMetadata(
@@ -164,6 +239,9 @@ class DatasetRegistry:
                 path=path_str,
                 created_at=now,
                 updated_at=now,
+                symbol_col=symbol_col,
+                date_col=date_col,
+                tz=tz,
             )
 
         self._datasets[name] = meta
@@ -187,6 +265,24 @@ def get_default_registry(path: Optional[Path] = None) -> DatasetRegistry:
     Library call'lar için kısayol.
     """
     return DatasetRegistry(path=path)
+
+
+def load_registry(path: Optional[Path] = None) -> DatasetRegistry:
+    registry = DatasetRegistry(path=path)
+    registry.load()
+    return registry
+
+
+def save_registry_atomic(registry: DatasetRegistry) -> None:
+    registry.save()
+
+
+def list_datasets(path: Optional[Path] = None) -> List[str]:
+    return load_registry(path=path).list_datasets()
+
+
+def get_dataset(name: str, path: Optional[Path] = None) -> DatasetMetadata:
+    return load_registry(path=path).get(name)
 
 
 # ---- compatibility helper functions ----------------------------------------
@@ -224,6 +320,9 @@ def register_dataset(
         name=dataset_id,
         kind=kind,
         path=path,
+        symbol_col=meta.get("symbol_col"),
+        date_col=meta.get("date_col"),
+        tz=meta.get("tz"),
         overwrite=overwrite,
     )
 
@@ -249,4 +348,38 @@ def load_registered_dataset(dataset_id: str) -> "pd.DataFrame":
         raise FileNotFoundError(f"No CSV files found under {root}")
     frames = [pd.read_csv(p) for p in csv_files]
     return pd.concat(frames, ignore_index=True)
+
+
+def _format_from_kind(kind: str) -> str:
+    return "csv" if kind == "local_csv" else str(kind or "")
+
+
+def _kind_from_format(value: str) -> str:
+    fmt = (value or "").strip().lower()
+    if fmt in ("csv", "local_csv"):
+        return "local_csv"
+    return fmt or "local_csv"
+
+
+def _metadata_payload(meta: DatasetMetadata) -> Dict[str, Any]:
+    data = meta.to_dict()
+    optional_keys = ("symbol_col", "date_col", "tz")
+    cleaned: Dict[str, Any] = {}
+    for key in sorted(data.keys()):
+        value = data[key]
+        if key in optional_keys and value is None:
+            continue
+        cleaned[key] = value
+    return cleaned
+
+
+def _registry_payload(datasets: Dict[str, DatasetMetadata]) -> Dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "version": 1,
+        "datasets": {
+            name: _metadata_payload(meta)
+            for name, meta in sorted(datasets.items())
+        },
+    }
 
