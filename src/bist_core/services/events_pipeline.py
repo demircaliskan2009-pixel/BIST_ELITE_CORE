@@ -5,6 +5,7 @@ import json
 import platform
 from pathlib import Path
 import time
+from typing import Any
 
 from bist_core.providers.events.base import EventsProvider
 from bist_core.services import eventstore
@@ -24,10 +25,12 @@ def build_events_jsonl_for_day(
     provider_name = getattr(provider, "name", provider.__class__.__name__)
     input_value = str(getattr(provider, "path", ""))
     source_url = None
+    raw_cache = None
 
     try:
         raw_events = provider.fetch_events_for_day(day)
         source_url = getattr(provider, "source_url", None)
+        raw_cache = _provider_raw_cache(provider)
     except Exception as exc:
         errors.append({"idx": -1, "error_marker": f"ProviderError:{exc.__class__.__name__}"})
 
@@ -69,6 +72,7 @@ def build_events_jsonl_for_day(
         "provider": provider_name,
         "input": input_value,
         "source_url": source_url,
+        "raw_cache": raw_cache,
         "out_path": str(out_path),
         "total_in": total_in,
         "accepted": accepted,
@@ -198,3 +202,26 @@ def _python_version() -> str:
     import sys
 
     return sys.version.split()[0]
+
+
+def _provider_raw_cache(provider: Any) -> dict | None:
+    """
+    Best-effort extraction of provider-level raw cache/provenance.
+
+    Providers may optionally expose:
+    - raw_path: str | Path | None
+    - raw_sha256: str | None
+    - cache_only: bool | None
+    """
+    path_val = getattr(provider, "raw_path", None)
+    if isinstance(path_val, Path):
+        path_val = str(path_val)
+
+    payload = {
+        "path": path_val,
+        "sha256": getattr(provider, "raw_sha256", None),
+        "cache_only": getattr(provider, "cache_only", None),
+    }
+    if all(v is None for v in payload.values()):
+        return None
+    return payload
