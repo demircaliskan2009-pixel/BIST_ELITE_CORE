@@ -16,7 +16,11 @@ from bist_core.services.dossier import (
     build_manifest,
 )
 from bist_core.services.marketdata import MarketData
-from bist_core.services.events_pipeline import build_events_jsonl_for_day, ingest_events_from_file
+from bist_core.services.events_pipeline import (
+    build_events_jsonl_for_day,
+    ingest_events_from_file,
+    _provider_raw_cache,
+)
 from bist_core.providers.events.offline_file import OfflineFileEventsProvider
 from bist_core.services import instrumentstore
 from bist_core.providers.instruments.offline_file import OfflineFileInstrumentsProvider
@@ -216,7 +220,7 @@ def run_eod_pipeline(
         )
         return manifest, 2 if stage_errors > 0 else 0
 
-    base_symbols = _load_symbols(root, day_str)
+    base_symbols, eod_raw_cache = _load_symbols(root, day_str)
     filtered = _filter_symbols(base_symbols, symbols, regex, limit)
     sorted_symbols = sorted(filtered)
     if resolve_aliases:
@@ -542,6 +546,7 @@ def run_eod_pipeline(
         cli_args=cli_args or {},
         snapshot_hash=snapshot_hash,
         policy_prov=policy_prov,
+        eod_raw_cache=eod_raw_cache,
     )
     manifest["instruments_manifest"] = instruments_manifest
     manifest["corporate_actions_manifest"] = corporate_actions_manifest
@@ -574,8 +579,9 @@ def _pipeline_manifest(
     cli_args: dict,
     snapshot_hash: Optional[dict],
     policy_prov: Optional[dict],
+    eod_raw_cache: Optional[dict] = None,
 ) -> dict:
-    return {
+    out = {
         "schema_version": 1,
         "day": day_str,
         "snapshot_root": str(snapshot_root),
@@ -591,6 +597,9 @@ def _pipeline_manifest(
             "policy": policy_prov,
         },
     }
+    if eod_raw_cache is not None:
+        out["raw_cache"] = eod_raw_cache
+    return out
 
 
 def _build_orders_intent(
@@ -709,12 +718,14 @@ def _write_advice(path: Path, records: list[dict], jsonl: bool) -> None:
     tmp_path.replace(path)
 
 
-def _load_symbols(snapshot_root: Path, day_str: str) -> list[str]:
+def _load_symbols(snapshot_root: Path, day_str: str) -> tuple[list[str], Optional[dict]]:
     try:
         md = MarketData(snapshot_root)
-        return md.symbols(day_str)
+        symbols = md.symbols(day_str)
+        raw_cache = _provider_raw_cache(md._prov)
+        return symbols, raw_cache
     except Exception:
-        return []
+        return [], None
 
 
 def _filter_symbols(
