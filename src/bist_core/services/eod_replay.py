@@ -33,6 +33,7 @@ def run_eod_replay(
     emit_orders: bool = False,
     orders_strategy: str = "equal_weight",
     orders_top_n: int = 10,
+    risk_rules_file: Optional[Path | str] = None,
     metrics: bool = True,
     scorecard: bool = True,
 ) -> tuple[dict, int]:
@@ -100,6 +101,7 @@ def run_eod_replay(
             emit_orders=emit_orders,
             orders_strategy=orders_strategy,
             orders_top_n=orders_top_n,
+            risk_rules_file=risk_rules_file,
         )
         stage_errors = _pipeline_errors(manifest)
         day_error = code != 0 or stage_errors > 0

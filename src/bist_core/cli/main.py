@@ -174,6 +174,7 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         "emit_orders": bool(getattr(args, "emit_orders", False)),
         "orders_strategy": getattr(args, "orders_strategy", None),
         "orders_top_n": getattr(args, "orders_top_n", None),
+        "risk_rules_file": getattr(args, "risk_rules_file", None),
     }
     manifest, code = run_eod_pipeline(
         day_str,
@@ -200,6 +201,7 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         emit_orders=bool(getattr(args, "emit_orders", False)),
         orders_strategy=getattr(args, "orders_strategy", None) or "equal_weight",
         orders_top_n=int(getattr(args, "orders_top_n", 10) or 10),
+        risk_rules_file=getattr(args, "risk_rules_file", None),
         git_sha=_env_git_sha(),
         cli_args=cli_args,
     )
@@ -308,6 +310,7 @@ def _cmd_eod_replay(args: argparse.Namespace) -> int:
         emit_orders=bool(getattr(args, "emit_orders", False)),
         orders_strategy=getattr(args, "orders_strategy", None) or "equal_weight",
         orders_top_n=int(getattr(args, "orders_top_n", 10) or 10),
+        risk_rules_file=getattr(args, "risk_rules_file", None),
         metrics=bool(getattr(args, "metrics", True)),
         scorecard=bool(getattr(args, "scorecard", True)),
     )
@@ -1501,6 +1504,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_run.add_argument("--emit-orders", action="store_true")
     p_eod_run.add_argument("--orders-strategy", dest="orders_strategy", default="equal_weight")
     p_eod_run.add_argument("--orders-top-n", dest="orders_top_n", type=int, default=10)
+    p_eod_run.add_argument("--risk-rules-file", dest="risk_rules_file", default=None)
     p_eod_run.set_defaults(func=_cmd_eod_run)
 
     p_eod_batch = sub_eod.add_parser("batch")
@@ -1545,6 +1549,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_replay.add_argument("--emit-orders", action="store_true")
     p_eod_replay.add_argument("--orders-strategy", dest="orders_strategy", default="equal_weight")
     p_eod_replay.add_argument("--orders-top-n", dest="orders_top_n", type=int, default=10)
+    p_eod_replay.add_argument("--risk-rules-file", dest="risk_rules_file", default=None)
     p_eod_replay.add_argument("--metrics", action="store_true", default=True)
     p_eod_replay.add_argument("--no-metrics", dest="metrics", action="store_false")
     p_eod_replay.add_argument("--scorecard", action="store_true", default=True)

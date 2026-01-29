@@ -40,6 +40,7 @@ from bist_core.services import trading_calendar
 from bist_core.services import snapshot_integrity
 from bist_core.policy import rules_engine, rules_schema
 from bist_core.strategies import resolve_strategy
+from bist_core.risk import load_risk_rules, validate_orders_intent
 
 
 def run_eod_pipeline(
@@ -67,6 +68,7 @@ def run_eod_pipeline(
     emit_orders: bool = False,
     orders_strategy: str = "equal_weight",
     orders_top_n: int = 10,
+    risk_rules_file: Optional[Path | str] = None,
     git_sha: Optional[str] = None,
     cli_args: Optional[dict] = None,
 ) -> tuple[dict, int]:
@@ -337,6 +339,18 @@ def run_eod_pipeline(
             policy_ruleset=policy_ruleset,
             policy_errors=policy_errors,
         )
+        risk_rules, risk_errors = load_risk_rules(risk_rules_file)
+        if risk_errors:
+            orders_payload["actions"] = []
+            orders_notes = sorted(set(orders_notes + risk_errors))
+            orders_ok = False
+        elif risk_rules is not None:
+            risk_ok, risk_notes = validate_orders_intent(orders_payload, risk_rules)
+            if not risk_ok:
+                orders_payload["actions"] = []
+                orders_notes = sorted(set(orders_notes + risk_notes))
+                orders_ok = False
+        orders_payload["notes"] = sorted(set(orders_payload.get("notes", []) + orders_notes))
         atomic_write_json(orders_path, orders_payload)
         orders_intent_path_written = orders_path
         stages["orders"] = {
