@@ -632,15 +632,18 @@ def _pipeline_manifest(
 
 
 def _write_pipeline_manifest(out_path: Path, day_str: str, manifest: dict) -> None:
-    """Write pipeline_manifest.json under outdir; prefer outdir/<day>/ if day-scoped dir exists.
-    Also write outdir/_pipeline_manifest.json for backward compatibility."""
-    if (out_path / "events_pull" / day_str).exists():
-        path = out_path / day_str / "pipeline_manifest.json"
-    else:
-        path = out_path / "pipeline_manifest.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, manifest)
-    atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
+    """Write pipeline manifest to three deterministic locations (same content):
+    (a) out_path/pipeline_manifest.json  (root)
+    (b) out_path/<day_str>/pipeline_manifest.json  (day-scoped; parent dir created)
+    (c) out_path/_pipeline_manifest.json  (backward compatibility)
+    Uses existing atomic_write_json helper."""
+    root_path = out_path / "pipeline_manifest.json"
+    day_path = out_path / day_str / "pipeline_manifest.json"
+    legacy_path = out_path / "_pipeline_manifest.json"
+    day_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(root_path, manifest)
+    atomic_write_json(day_path, manifest)
+    atomic_write_json(legacy_path, manifest)
 
 
 def _build_orders_intent(
