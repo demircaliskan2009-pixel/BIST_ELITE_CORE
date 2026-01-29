@@ -52,7 +52,7 @@ def test_topn_strategy_action_count(tmp_path: Path) -> None:
     )
     assert result.returncode == 0
 
-    orders_path = outdir / "orders" / "orders_intent.json"
+    orders_path = outdir / "orders" / day / "orders_intent.json"
     payload = json.loads(orders_path.read_text(encoding="utf-8"))
     actions = payload["actions"]
     assert len(actions) == 5

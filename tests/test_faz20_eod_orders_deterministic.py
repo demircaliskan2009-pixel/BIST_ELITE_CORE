@@ -52,6 +52,6 @@ def test_eod_orders_deterministic(tmp_path: Path) -> None:
     _run_eod(tmp_path, day, outdir_a)
     _run_eod(tmp_path, day, outdir_b)
 
-    a_payload = (outdir_a / "orders" / "orders_intent.json").read_text(encoding="utf-8")
-    b_payload = (outdir_b / "orders" / "orders_intent.json").read_text(encoding="utf-8")
+    a_payload = (outdir_a / "orders" / day / "orders_intent.json").read_text(encoding="utf-8")
+    b_payload = (outdir_b / "orders" / day / "orders_intent.json").read_text(encoding="utf-8")
     assert a_payload == b_payload

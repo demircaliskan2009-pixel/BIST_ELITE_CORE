@@ -46,7 +46,7 @@ def test_eod_orders_emits_artifact_and_manifest(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0
-    orders_path = outdir / "orders" / "orders_intent.json"
+    orders_path = outdir / "orders" / day / "orders_intent.json"
     assert orders_path.exists()
     payload = json.loads(orders_path.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 1
@@ -55,6 +55,7 @@ def test_eod_orders_emits_artifact_and_manifest(tmp_path: Path) -> None:
     assert payload["strategy"]["name"] == "equal_weight"
 
     manifest = json.loads((outdir / "_pipeline_manifest.json").read_text(encoding="utf-8"))
+    assert manifest.get("orders_intent_path") == str(orders_path)
     orders_stage = manifest["stages"]["orders"]
     assert orders_stage["path"] == str(orders_path)
     assert orders_stage["total"] == 1

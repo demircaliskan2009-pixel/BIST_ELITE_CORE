@@ -48,7 +48,7 @@ def test_orders_intent_artifact_written_no_actions(tmp_path: Path) -> None:
     )
     assert result.returncode == 0
 
-    orders_path = outdir / "orders" / "orders_intent.json"
+    orders_path = outdir / "orders" / day / "orders_intent.json"
     payload = json.loads(orders_path.read_text(encoding="utf-8"))
     assert payload["strategy"]["name"] == "deny_all"
     assert payload["actions"] == []

@@ -323,8 +323,9 @@ def run_eod_pipeline(
         stages["features"]["errors"] = 1
         stages["features"]["notes"] = ["feature_compute_error"]
 
+    orders_intent_path_written: Optional[Path] = None
     if emit_orders:
-        orders_dir = out_path / "orders"
+        orders_dir = out_path / "orders" / day_str
         orders_dir.mkdir(parents=True, exist_ok=True)
         orders_path = orders_dir / "orders_intent.json"
         orders_payload, orders_notes, orders_ok = _build_orders_intent(
@@ -337,6 +338,7 @@ def run_eod_pipeline(
             policy_errors=policy_errors,
         )
         atomic_write_json(orders_path, orders_payload)
+        orders_intent_path_written = orders_path
         stages["orders"] = {
             "ok": int(orders_ok),
             "total": 1,
@@ -625,6 +627,7 @@ def run_eod_pipeline(
         snapshot_hash=snapshot_hash,
         policy_prov=policy_prov,
         eod_raw_cache=eod_raw_cache,
+        orders_intent_path=orders_intent_path_written,
     )
     manifest["instruments_manifest"] = instruments_manifest
     manifest["corporate_actions_manifest"] = corporate_actions_manifest
@@ -663,6 +666,7 @@ def _pipeline_manifest(
     snapshot_hash: Optional[dict],
     policy_prov: Optional[dict],
     eod_raw_cache: Optional[dict] = None,
+    orders_intent_path: Optional[Path] = None,
 ) -> dict:
     out = {
         "schema_version": 1,
@@ -682,6 +686,8 @@ def _pipeline_manifest(
     }
     if eod_raw_cache is not None:
         out["raw_cache"] = eod_raw_cache
+    if orders_intent_path is not None:
+        out["orders_intent_path"] = str(orders_intent_path)
     return out
 
 
