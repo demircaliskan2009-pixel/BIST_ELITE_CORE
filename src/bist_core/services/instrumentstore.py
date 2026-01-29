@@ -97,6 +97,32 @@ def build_manifest(
     }
 
 
+def load_instruments_jsonl(path: Path, source: str | None = None) -> List[Dict[str, Any]]:
+    """
+    Standard loader for instruments.jsonl. Returns list of dicts with normalized
+    schema: symbol, isin, name, status, market, source, ts. Skips rows with missing symbol.
+    Returns [] if path does not exist or is not a file.
+    """
+    if not path.exists() or not path.is_file():
+        return []
+    rows_tuples = _read_rows(path)
+    out: List[Dict[str, Any]] = []
+    for idx, row in rows_tuples:
+        record, _ = _normalize_row(row, idx, source)
+        if not (record.get("symbol") or "").strip():
+            continue
+        out.append({
+            "symbol": record.get("symbol", ""),
+            "isin": record.get("isin"),
+            "name": record.get("name"),
+            "status": record.get("status", "unknown"),
+            "market": record.get("market"),
+            "source": record.get("source", source or "offline_file"),
+            "ts": record.get("ts"),
+        })
+    return out
+
+
 def _read_rows(input_path: Path) -> List[Tuple[int, Dict[str, Any]]]:
     text = input_path.read_text(encoding="utf-8")
     if input_path.suffix.lower() == ".jsonl":

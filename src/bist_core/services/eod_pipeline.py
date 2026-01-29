@@ -233,46 +233,55 @@ def run_eod_pipeline(
     base_symbols, eod_raw_cache = _load_symbols(root, day_str)
     filtered = _filter_symbols(base_symbols, symbols, regex, limit)
     sorted_symbols = sorted(filtered)
+    safe_mode_reason: Optional[str] = None
     if resolve_aliases:
-        try:
-            instruments_path = (
-                Path(instruments_outdir) / "instruments.jsonl"
-                if instruments_outdir is not None
-                else (config.REPO_ROOT / "data" / "eod" / "instruments" / day_str / "instruments.jsonl")
-            )
-            if instruments_input and not instruments_path.exists():
-                instruments_path = Path(instruments_input)
-            actions_path = (
-                Path(ca_outdir) / "actions.jsonl"
-                if ca_outdir is not None
-                else (config.REPO_ROOT / "data" / "eod" / "corporate_actions" / day_str / "actions.jsonl")
-            )
-            timeline, errors = instrument_timeline.build_timeline(
-                day_str,
-                instruments_path,
-                actions_path,
-            )
-            alias_map = timeline.get("alias_map", {})
-            remapped = []
-            seen = set()
-            for sym in sorted_symbols:
-                target = alias_map.get(sym, sym)
-                if target not in seen:
-                    remapped.append(target)
-                    seen.add(target)
-            sorted_symbols = remapped
-            if errors:
-                stages["universe"]["errors"] = len(errors)
-                stages["universe"]["notes"] = ["alias_resolution_errors"]
-        except Exception:
+        instruments_path = (
+            Path(instruments_outdir) / "instruments.jsonl"
+            if instruments_outdir is not None
+            else (config.REPO_ROOT / "data" / "eod" / "instruments" / day_str / "instruments.jsonl")
+        )
+        if instruments_input and not instruments_path.is_file():
+            instruments_path = Path(instruments_input)
+        actions_path = (
+            Path(ca_outdir) / "actions.jsonl"
+            if ca_outdir is not None
+            else (config.REPO_ROOT / "data" / "eod" / "corporate_actions" / day_str / "actions.jsonl")
+        )
+        if not instruments_path.is_file() or not actions_path.is_file():
+            stages["universe"]["ok"] = False
             stages["universe"]["errors"] = 1
-            stages["universe"]["notes"] = ["alias_resolution_failed"]
+            stages["universe"]["notes"] = ["instruments_or_ca_missing"]
+            safe_mode_reason = "Alias resolution skipped (instruments/CA missing)."
+        else:
+            try:
+                timeline, errors = instrument_timeline.build_timeline(
+                    day_str,
+                    instruments_path,
+                    actions_path,
+                )
+                alias_map = timeline.get("alias_map", {})
+                remapped = []
+                seen = set()
+                for sym in sorted_symbols:
+                    target = alias_map.get(sym, sym)
+                    if target not in seen:
+                        remapped.append(target)
+                        seen.add(target)
+                sorted_symbols = remapped
+                if errors:
+                    stages["universe"]["errors"] = len(errors)
+                    stages["universe"]["notes"] = stages["universe"].get("notes", []) + ["alias_resolution_errors"]
+            except Exception:
+                stages["universe"]["errors"] = 1
+                stages["universe"]["notes"] = stages["universe"].get("notes", []) + ["alias_resolution_failed"]
+                safe_mode_reason = "Alias resolution failed (exception)."
 
     advice_path = out_path / ("advice.jsonl" if jsonl else "advice.json")
     advice_records, advice_errors = _build_advice_records(
         sorted_symbols,
         day_str,
         root,
+        safe_mode_reason=safe_mode_reason,
     )
     _write_advice(advice_path, advice_records, jsonl=jsonl)
     stages["advice"] = {
@@ -550,7 +559,8 @@ def run_eod_pipeline(
             stages["universe"]["errors"] = 1
             stages["universe"]["notes"] = [f"universe_error:{exc.__class__.__name__}"]
     else:
-        stages["universe"]["notes"] = ["universe_skipped"]
+        if not stages["universe"].get("notes"):
+            stages["universe"]["notes"] = ["universe_skipped"]
 
     runtime_ms = int((time.perf_counter() - start) * 1000)
     manifest = _pipeline_manifest(
@@ -723,12 +733,17 @@ def _build_advice_records(
     symbols: Iterable[str],
     day_str: str,
     snapshot_root: Path,
+    safe_mode_reason: Optional[str] = None,
 ) -> tuple[list[dict], int]:
     records: list[dict] = []
     errors = 0
     for symbol in symbols:
         try:
             advice = build_advice_for_symbol(symbol, day_str, root=snapshot_root)
+            text = advice.text
+            if safe_mode_reason:
+                prefix = f"Güvenli mod: {safe_mode_reason} "
+                text = (prefix + (text or "")) if text else prefix
             payload = {
                 "symbol": advice.symbol,
                 "day": day_str,
@@ -736,9 +751,9 @@ def _build_advice_records(
                 "score": advice.score,
                 "signals": advice.signals,
                 "plan": advice.plan,
-                "text": advice.text,
+                "text": text,
             }
-            if isinstance(advice.text, str) and "Güvenli mod" in advice.text:
+            if isinstance(text, str) and "Güvenli mod" in text:
                 errors += 1
         except Exception as exc:
             err = exc.__class__.__name__

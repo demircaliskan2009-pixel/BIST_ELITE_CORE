@@ -7,6 +7,8 @@ from pathlib import Path
 import time
 from typing import Any, Dict, List, Tuple
 
+from bist_core.services import instrumentstore
+
 
 @dataclass
 class TimelineEntry:
@@ -25,7 +27,7 @@ def build_timeline(
     instruments_path: Path,
     actions_path: Path,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    instruments = _read_jsonl(instruments_path)
+    instruments = instrumentstore.load_instruments_jsonl(instruments_path)
     actions = _read_jsonl(actions_path)
     errors: List[Dict[str, Any]] = []
     notes: List[str] = []
@@ -93,12 +95,13 @@ def build_timeline(
     resolved_list = sorted(
         resolved.values(), key=lambda r: (r["symbol"], r.get("isin") or "")
     )
+    alias_map_deterministic = dict(sorted(alias_map.items()))
 
     output = {
         "schema_version": 1,
         "day": day,
         "resolved": resolved_list,
-        "alias_map": alias_map,
+        "alias_map": alias_map_deterministic,
         "errors": errors,
         "notes": notes,
     }
