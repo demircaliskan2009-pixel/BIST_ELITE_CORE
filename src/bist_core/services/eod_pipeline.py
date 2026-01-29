@@ -25,6 +25,11 @@ from bist_core.services.events_pipeline import (
 )
 from bist_core.providers.events.offline_file import OfflineFileEventsProvider
 from bist_core.services import instrumentstore
+from bist_core.services.features import (
+    compute_features,
+    load_history as features_load_history,
+    write_features,
+)
 from bist_core.providers.instruments.offline_file import OfflineFileInstrumentsProvider
 from bist_core.services import castore
 from bist_core.providers.corporate_actions.offline_file import (
@@ -80,6 +85,7 @@ def run_eod_pipeline(
         "instruments": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
         "corporate_actions": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
         "universe": {"total": 0, "ok": 0, "errors": 0, "path": "", "notes": []},
+        "features": {"total": 0, "ok": True, "errors": 0, "path": "", "notes": []},
         "calendar": {"ok": True, "errors": 0, "path": "", "notes": []},
         "policy": {"ok": True, "errors": 0, "notes": []},
     }
@@ -292,6 +298,30 @@ def run_eod_pipeline(
         "errors": advice_errors,
         "path": str(advice_path),
     }
+
+    try:
+        def _context_provider(sym: str, d: str) -> dict:
+            return features_load_history(root, sym, d, lookback_days=21)
+
+        feature_rows, feature_notes = compute_features(
+            list(sorted_symbols),
+            day_str,
+            _context_provider,
+        )
+        feat_path = write_features(out_path, day_str, feature_rows)
+        stages["features"] = {
+            "total": len(feature_rows),
+            "ok": len(feature_notes) == 0,
+            "errors": len(feature_notes),
+            "path": str(feat_path),
+            "notes": list(dict.fromkeys(feature_notes)),
+        }
+        if feature_notes:
+            stages["features"]["ok"] = False
+    except Exception:
+        stages["features"]["ok"] = False
+        stages["features"]["errors"] = 1
+        stages["features"]["notes"] = ["feature_compute_error"]
 
     if emit_orders:
         orders_dir = out_path / "orders"

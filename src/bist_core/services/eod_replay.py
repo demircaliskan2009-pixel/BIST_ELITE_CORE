@@ -184,7 +184,9 @@ def _pipeline_errors(manifest: dict | None) -> int:
     if not isinstance(stages, dict):
         return 0
     total = 0
-    for stage in stages.values():
+    for name, stage in stages.items():
+        if name == "features":
+            continue
         if isinstance(stage, dict):
             total += int(stage.get("errors", 0))
     return total
