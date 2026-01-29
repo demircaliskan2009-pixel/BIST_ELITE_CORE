@@ -66,9 +66,20 @@ python -m bist_core.cli rules validate --file src/bist_core/policy/bist_ruleset.
 python -m bist_core.cli rules explain --file path/to/rules.json --symbol AAA --price 10 --side BUY --qty 100 --day YYYY-MM-DD
 ```
 
+## Execution
+After EOD run with `--emit-orders`, send orders to a provider (e.g. paper) via the risk gate:
+```bash
+python -m bist_core.cli eod execute --day YYYY-MM-DD --outdir data/eod/runs/YYYY-MM-DD --provider paper --dry-run
+python -m bist_core.cli eod execute --day YYYY-MM-DD --outdir data/eod/runs/YYYY-MM-DD --provider paper --live
+```
+- Loads `orders_intent.json` from EOD output and pipeline manifest stages. Risk gate is fail-closed: any stage errors or policy deny → execution blocked (exit nonzero, output contains "blocked").
+- `--dry-run` (default): provider is called but no file written.
+- `--live`: paper provider writes `outdir/<day>/orders_sent.json`.
+
 ## Expected artifacts (when enabled)
 - `dossiers/` per-symbol outputs with `_manifest.json`
 - `orders/orders_intent.json` when `--emit-orders`
+- `orders_sent.json` under `outdir/<day>/` when `eod execute --live` with paper provider
 - `scorecard.json` in replay outdir when `--scorecard`
 
 ## Strict behavior

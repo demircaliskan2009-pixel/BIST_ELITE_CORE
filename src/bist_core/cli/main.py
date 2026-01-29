@@ -31,7 +31,7 @@ from bist_core.services.dossier import (
     build_dossiers_for_day,
     build_manifest,
 )
-from bist_core.services.eod_pipeline import run_eod_pipeline
+from bist_core.services.eod_pipeline import locate_manifest, run_eod_pipeline
 from bist_core.services.eod_replay import run_eod_replay
 from bist_core.services.scorecard import build_scorecard
 from bist_core.services.eod_batch import audit_eod_batch, run_eod_batch
@@ -51,6 +51,8 @@ from bist_core.providers.corporate_actions.offline_file import (
 from bist_core.services.adjustments import apply_close_adjustments
 from bist_core.services import instrument_timeline
 from bist_core.brokers import PaperBroker
+from bist_core.execution import PaperExecutionProvider
+from bist_core.risk.gates import RiskGateEngine
 from bist_core.services.backtest import run_backtest, walk_forward
 
 
@@ -337,6 +339,51 @@ def _cmd_eod_batch_audit(args: argparse.Namespace) -> int:
     manifest, code = audit_eod_batch(outdir, strict=bool(getattr(args, "strict", False)))
     _print_batch_summary(manifest, int(code))
     return int(code)
+
+
+def _cmd_eod_execute(args: argparse.Namespace) -> int:
+    day = getattr(args, "day", None) or ""
+    outdir = Path(getattr(args, "outdir", None) or "")
+    provider_name = getattr(args, "provider", None) or "paper"
+    live = bool(getattr(args, "live", False))
+    dry_run = not live
+    if not day or not outdir:
+        raise SystemExit("--day and --outdir are required")
+    manifest_path = locate_manifest(outdir, day)
+    if manifest_path is None:
+        print("blocked: no pipeline manifest found", file=sys.stderr)
+        return 2
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    stages = manifest.get("stages") or {}
+    orders_intent_path = manifest.get("orders_intent_path")
+    if not orders_intent_path:
+        orders_intent_path = outdir / "orders" / day / "orders_intent.json"
+    else:
+        orders_intent_path = Path(orders_intent_path)
+    if not orders_intent_path.is_file():
+        print("blocked: orders_intent.json not found", file=sys.stderr)
+        return 2
+    orders_intent = json.loads(orders_intent_path.read_text(encoding="utf-8"))
+    gate = RiskGateEngine()
+    allowed, notes = gate.evaluate(orders_intent, policy_ruleset=None, stages=stages)
+    if not allowed:
+        print("blocked: risk gate denied", file=sys.stderr)
+        for n in notes:
+            print(f"  {n}", file=sys.stderr)
+        return 2
+    if provider_name == "paper":
+        provider = PaperExecutionProvider(outdir, day)
+    else:
+        print(f"Unknown provider: {provider_name!r}", file=sys.stderr)
+        return 2
+    result = provider.submit_orders(orders_intent, dry_run=dry_run)
+    if not result.get("ok", True):
+        print("execute failed", file=sys.stderr)
+        for e in result.get("errors", []):
+            print(f"  {e}", file=sys.stderr)
+        return 2
+    print(f"execute: broker={result.get('broker', '')} sent={result.get('sent', 0)} dry_run={dry_run}")
+    return 0
 
 
 def _print_batch_summary(manifest: dict, exit_code: int) -> None:
@@ -1651,6 +1698,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_batch_audit.add_argument("--outdir", required=True)
     p_eod_batch_audit.add_argument("--strict", action="store_true")
     p_eod_batch_audit.set_defaults(func=_cmd_eod_batch_audit)
+
+    p_eod_execute = sub_eod.add_parser("execute")
+    p_eod_execute.add_argument("--day", required=True)
+    p_eod_execute.add_argument("--outdir", required=True)
+    p_eod_execute.add_argument("--provider", default="paper")
+    p_eod_execute.add_argument("--dry-run", dest="dry_run", action="store_true", default=True)
+    p_eod_execute.add_argument("--live", action="store_true", dest="live")
+    p_eod_execute.set_defaults(func=_cmd_eod_execute)
 
     p_plan = sub.add_parser("plan")
     p_plan.add_argument("--date", required=True)
