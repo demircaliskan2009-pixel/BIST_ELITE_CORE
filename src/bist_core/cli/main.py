@@ -51,7 +51,7 @@ from bist_core.providers.corporate_actions.offline_file import (
 from bist_core.services.adjustments import apply_close_adjustments
 from bist_core.services import instrument_timeline
 from bist_core.brokers import PaperBroker
-from bist_core.services.backtest import run_backtest
+from bist_core.services.backtest import run_backtest, walk_forward
 
 
 def _snapshot_root() -> Path:
@@ -478,6 +478,35 @@ def _cmd_backtest_run(args: argparse.Namespace) -> int:
     if not outdir:
         raise SystemExit("--outdir is required")
     root = Path(snapshot_root) if snapshot_root else _snapshot_root()
+
+    if bool(getattr(args, "walk_forward", False)):
+        window = getattr(args, "window", None)
+        step = getattr(args, "step", None)
+        if window is None or window < 1:
+            raise SystemExit("--walk-forward requires --window (positive integer)")
+        run_config = {
+            "snapshot_root": root,
+            "date_from": date_from,
+            "date_to": date_to,
+            "outdir": Path(outdir),
+            "strategy": strategy,
+            "top_n": top_n,
+            "window": window,
+            "step": step if step is not None and step >= 1 else 1,
+            "min_trades": getattr(args, "min_trades", None),
+            "max_dd": getattr(args, "max_dd", None),
+            "strict": bool(getattr(args, "strict", False)),
+        }
+        result = walk_forward(run_config)
+        if bool(getattr(args, "json", False)):
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            agg = result.get("aggregate", {})
+            print(f"Walk-forward: {result.get('num_windows', 0)} windows, gates_passed={result.get('gates_passed', False)}")
+            print(f"  total_fills={agg.get('total_fills', 0)}, worst_max_dd={agg.get('worst_max_drawdown', 0)}, mean_return={agg.get('mean_return', 0)}")
+            print(f"  manifest: {result.get('manifest_path', '')}")
+        return int(result.get("exit_code", 0))
+
     metrics = run_backtest(
         snapshot_root=root,
         date_from=date_from,
@@ -1654,6 +1683,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_backtest_run.add_argument("--snapshot-root", dest="snapshot_root", default=None)
     p_backtest_run.add_argument("--strategy", default="equal_weight")
     p_backtest_run.add_argument("--top-n", dest="top_n", type=int, default=10)
+    p_backtest_run.add_argument("--walk-forward", dest="walk_forward", action="store_true")
+    p_backtest_run.add_argument("--window", type=int, default=None)
+    p_backtest_run.add_argument("--step", type=int, default=None)
+    p_backtest_run.add_argument("--min-trades", dest="min_trades", type=int, default=None)
+    p_backtest_run.add_argument("--max-dd", dest="max_dd", type=float, default=None)
+    p_backtest_run.add_argument("--strict", action="store_true")
     p_backtest_run.add_argument("--json", action="store_true")
     p_backtest_run.set_defaults(func=_cmd_backtest_run)
 

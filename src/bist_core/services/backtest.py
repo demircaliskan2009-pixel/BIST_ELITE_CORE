@@ -1,4 +1,4 @@
-"""FAZ38: Walk-forward backtest harness — snapshot + strategy + paper broker; metrics + equity curve."""
+"""FAZ38/FAZ39: Walk-forward backtest harness — snapshot + strategy + paper broker; metrics + equity curve; walk-forward splits + gates."""
 from __future__ import annotations
 
 import csv
@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from bist_core.brokers import PaperBroker
+from bist_core.services import snapshot_integrity
 from bist_core.strategies import resolve_strategy
 
 
@@ -165,3 +166,137 @@ def run_backtest(
     metrics["equity_curve_path"] = str(equity_path)
     metrics["metrics_path"] = str(metrics_path)
     return metrics
+
+
+def _walk_forward_windows(date_from: Date, date_to: Date, window_days: int, step_days: int) -> List[tuple[Date, Date]]:
+    """Deterministic window splits: [(start, end), ...] with start + (window_days-1) <= end, step by step_days."""
+    if date_from > date_to or window_days < 1 or step_days < 1:
+        return []
+    windows: List[tuple[Date, Date]] = []
+    start = date_from
+    while start <= date_to:
+        end = start + timedelta(days=window_days - 1)
+        if end > date_to:
+            break
+        windows.append((start, end))
+        start = start + timedelta(days=step_days)
+    return windows
+
+
+def walk_forward(run_config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Walk-forward backtest: deterministic window splits, per-window metrics + aggregate, gates.
+    run_config: snapshot_root, date_from, date_to, outdir, strategy, top_n, window (days), step (days),
+                min_trades (gate: total_fills >= min_trades), max_dd (gate: worst max_drawdown <= max_dd), strict.
+    Writes artifacts under outdir/backtest/walk_forward/ (manifest + aggregate_metrics + windows/<from>_<to>/).
+    If gate fails and strict: returns exit_code=2 but still writes all artifacts.
+    """
+    root = Path(run_config["snapshot_root"])
+    out_path = Path(run_config["outdir"])
+    backtest_dir = out_path / "backtest"
+    wf_dir = backtest_dir / "walk_forward"
+    wf_dir.mkdir(parents=True, exist_ok=True)
+    (wf_dir / "windows").mkdir(parents=True, exist_ok=True)
+
+    date_from = Date.fromisoformat(str(run_config["date_from"]))
+    date_to = Date.fromisoformat(str(run_config["date_to"]))
+    if date_from > date_to:
+        date_from, date_to = date_to, date_from
+    window_days = int(run_config.get("window") or 0)
+    step_days = int(run_config.get("step") or 1)
+    min_trades = run_config.get("min_trades")  # None = no gate
+    max_dd = run_config.get("max_dd")  # None = no gate
+    strict = bool(run_config.get("strict", False))
+    strategy = str(run_config.get("strategy") or "equal_weight")
+    top_n = int(run_config.get("top_n") or 10)
+
+    windows = _walk_forward_windows(date_from, date_to, window_days, step_days)
+    per_window: List[Dict[str, Any]] = []
+    for w_start, w_end in windows:
+        w_from = w_start.isoformat()
+        w_to = w_end.isoformat()
+        window_key = f"{w_from}_{w_to}"
+        window_outdir = wf_dir / "windows" / window_key
+        window_outdir.mkdir(parents=True, exist_ok=True)
+        m = run_backtest(
+            snapshot_root=root,
+            date_from=w_from,
+            date_to=w_to,
+            outdir=window_outdir,
+            strategy=strategy,
+            top_n=top_n,
+        )
+        if m.get("error"):
+            per_window.append({"date_from": w_from, "date_to": w_to, "error": m["error"], "total_fills": 0, "max_drawdown": 0.0})
+        else:
+            per_window.append({
+                "date_from": w_from,
+                "date_to": w_to,
+                "metrics_path": m.get("metrics_path", ""),
+                "equity_curve_path": m.get("equity_curve_path", ""),
+                "num_days": m.get("num_days", 0),
+                "total_fills": m.get("total_fills", 0),
+                "total_return": m.get("total_return", 0.0),
+                "max_drawdown": m.get("max_drawdown", 0.0),
+                "final_equity": m.get("final_equity", 0.0),
+            })
+
+    total_fills = sum(w.get("total_fills", 0) for w in per_window)
+    worst_max_dd = max((w.get("max_drawdown", 0.0) for w in per_window), default=0.0)
+    returns = [w.get("total_return", 0.0) for w in per_window if w.get("error") is None]
+    mean_return = sum(returns) / len(returns) if returns else 0.0
+
+    gate_min_trades_ok = min_trades is None or total_fills >= min_trades
+    gate_max_dd_ok = max_dd is None or worst_max_dd <= float(max_dd)
+    gates_passed = gate_min_trades_ok and gate_max_dd_ok
+
+    aggregate = {
+        "schema_version": 1,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "window_days": window_days,
+        "step_days": step_days,
+        "num_windows": len(per_window),
+        "total_fills": total_fills,
+        "worst_max_drawdown": round(worst_max_dd, 6),
+        "mean_return": round(mean_return, 6),
+        "min_trades_gate": min_trades,
+        "max_dd_gate": max_dd,
+        "gates_passed": gates_passed,
+    }
+    manifest = {
+        "schema_version": 1,
+        "walk_forward": True,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "window_days": window_days,
+        "step_days": step_days,
+        "num_windows": len(per_window),
+        "windows": per_window,
+        "aggregate": aggregate,
+        "gates_passed": gates_passed,
+        "manifest_path": "",
+        "aggregate_metrics_path": "",
+    }
+
+    aggregate_path = wf_dir / "aggregate_metrics.json"
+    manifest_path = wf_dir / "manifest.json"
+    manifest_legacy1 = backtest_dir / "_walk_forward_manifest.json"
+    manifest_legacy2 = wf_dir / "_manifest.json"
+    snapshot_integrity.atomic_write_json(aggregate_path, aggregate)
+    manifest["aggregate_metrics_path"] = str(aggregate_path)
+    manifest["manifest_path"] = str(manifest_path)
+    snapshot_integrity.atomic_write_json(manifest_path, manifest)
+    snapshot_integrity.atomic_write_json(manifest_legacy1, manifest)
+    snapshot_integrity.atomic_write_json(manifest_legacy2, manifest)
+
+    exit_code = 2 if (strict and not gates_passed) else 0
+    return {
+        "gates_passed": gates_passed,
+        "exit_code": exit_code,
+        "aggregate": aggregate,
+        "manifest_path": str(manifest_path),
+        "aggregate_metrics_path": str(aggregate_path),
+        "num_windows": len(per_window),
+        "windows": per_window,
+    }
