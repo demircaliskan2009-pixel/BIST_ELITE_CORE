@@ -4,6 +4,48 @@ from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
 
+# Minimal CA action schema: type (kind), ex_date (effective_date), ratio/amount, symbol.
+# Split/bonus_issue/rights_issue use ratio; reverse_split uses ratio; cash_dividend uses amount (placeholder).
+
+
+def build_adjust_factors(
+    series: List[Dict[str, Any]],
+    actions: List[Dict[str, Any]],
+    *,
+    date_key: str = "date",
+    symbol_key: str = "symbol",
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Build adjust factors for a price series. Returns (factors_list, notes).
+    factors_list: sorted list of {symbol, date, factor}; factor is cumulative backward
+    multiplier (price_adjusted = price / factor). Split/bedelsiz (bonus/rights) multiply
+    factor; reverse_split divides. Cash dividend: factor 1.0, note placeholder.
+    Deterministic: sorted by (symbol, date).
+    """
+    notes: List[Dict[str, Any]] = []
+    action_map = _build_action_map(actions)
+    factors_list: List[Dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for bar in sorted(series, key=lambda b: (b.get(symbol_key) or "", b.get(date_key) or "")):
+        symbol = bar.get(symbol_key)
+        date_val = bar.get(date_key)
+        if symbol is None or date_val is None:
+            continue
+        key = (str(symbol), str(date_val))
+        if key in seen:
+            continue
+        seen.add(key)
+        factor, note_list = _factor_for_symbol_date(symbol, date_val, action_map)
+        if note_list:
+            notes.extend(note_list)
+        factors_list.append({
+            symbol_key: symbol,
+            date_key: date_val,
+            "factor": factor if factor is not None else 1.0,
+        })
+    return factors_list, notes
+
+
 def apply_close_adjustments(
     bars: List[Dict[str, Any]],
     actions: List[Dict[str, Any]],

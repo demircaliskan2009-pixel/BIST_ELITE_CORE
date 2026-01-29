@@ -140,12 +140,13 @@ def _read_rows(input_path: Path) -> List[Tuple[int, Dict[str, Any]]]:
 
 
 def _normalize_row(row: Dict[str, Any], idx: int) -> Tuple[Dict[str, Any], Dict[str, Any] | None]:
+    """Minimal CA schema: type (kind), ex_date (effective_date), ratio/amount (cash), symbol."""
     error_marker = None
     symbol = _normalize_symbol(row.get("symbol"))
-    effective_date = _normalize_date(row.get("effective_date"))
-    kind = _normalize_kind(row.get("kind"))
+    effective_date = _normalize_date(row.get("effective_date") or row.get("ex_date"))
+    kind = _normalize_kind(row.get("kind") or row.get("type"))
     ratio = _normalize_ratio(row.get("ratio"))
-    cash = _normalize_cash(row.get("cash"))
+    cash = _normalize_cash(row.get("cash") or row.get("amount"))
     old_symbol = _normalize_symbol(row.get("old_symbol"))
     new_symbol = _normalize_symbol(row.get("new_symbol"))
     old_isin = _normalize_optional_upper(row.get("old_isin"))

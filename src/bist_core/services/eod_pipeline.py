@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from datetime import date as Date
 import json
 import os
@@ -10,6 +11,7 @@ from typing import Iterable, Optional
 
 from bist_core import config
 from bist_core.services.advisor import build_advice_for_symbol
+from bist_core.services.adjustments import build_adjust_factors
 from bist_core.services.dossier import (
     atomic_write_json,
     build_dossiers_for_day,
@@ -514,6 +516,25 @@ def run_eod_pipeline(
                         ca_dir / "_manifest.json",
                         corporate_actions_manifest,
                     )
+                    snapshot_csv = root / day_str / "snapshot.csv"
+                    factors_path = out_path / "adjust_factors.json"
+                    if snapshot_csv.is_file():
+                        try:
+                            with snapshot_csv.open("r", encoding="utf-8", newline="") as f:
+                                reader = csv.DictReader(f)
+                                rows = list(reader)
+                            symbol_col = "symbol" if rows and "symbol" in (rows[0] or {}) else None
+                            if symbol_col:
+                                symbols = sorted({r.get(symbol_col) or "" for r in rows if r.get(symbol_col)})
+                                series = [{"symbol": s, "date": day_str} for s in symbols]
+                                factors_list, _ = build_adjust_factors(series, deduped)
+                                atomic_write_json(
+                                    factors_path,
+                                    {"schema_version": 1, "day": day_str, "factors": factors_list},
+                                )
+                                corporate_actions_manifest["factors_path"] = str(factors_path)
+                        except Exception:
+                            pass
                     stages["corporate_actions"] = {
                         "total": corporate_actions_manifest["total"],
                         "ok": corporate_actions_manifest["ok"],
