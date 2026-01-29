@@ -51,6 +51,7 @@ from bist_core.providers.corporate_actions.offline_file import (
 from bist_core.services.adjustments import apply_close_adjustments
 from bist_core.services import instrument_timeline
 from bist_core.brokers import PaperBroker
+from bist_core.services.backtest import run_backtest
 
 
 def _snapshot_root() -> Path:
@@ -466,6 +467,32 @@ def _cmd_broker_paper_run(args: argparse.Namespace) -> int:
             print(f"  {p.get('symbol')} qty={p.get('qty')} avg_price={p.get('avg_price')}")
     return 0
 
+
+def _cmd_backtest_run(args: argparse.Namespace) -> int:
+    date_from = getattr(args, "date_from", None) or ""
+    date_to = getattr(args, "date_to", None) or ""
+    outdir = getattr(args, "outdir", None)
+    snapshot_root = getattr(args, "snapshot_root", None) or os.getenv("BIST_CORE_SNAPSHOT_DIR")
+    strategy = getattr(args, "strategy", None) or "equal_weight"
+    top_n = int(getattr(args, "top_n", 10) or 10)
+    if not outdir:
+        raise SystemExit("--outdir is required")
+    root = Path(snapshot_root) if snapshot_root else _snapshot_root()
+    metrics = run_backtest(
+        snapshot_root=root,
+        date_from=date_from,
+        date_to=date_to,
+        outdir=Path(outdir),
+        strategy=strategy,
+        top_n=top_n,
+    )
+    if bool(getattr(args, "json", False)):
+        print(json.dumps(metrics, ensure_ascii=False, indent=2))
+    else:
+        print(f"Backtest: {metrics.get('num_days', 0)} days, total_return={metrics.get('total_return', 0)}, max_drawdown={metrics.get('max_drawdown', 0)}")
+        print(f"  metrics: {metrics.get('metrics_path', '')}")
+        print(f"  equity_curve: {metrics.get('equity_curve_path', '')}")
+    return 0 if metrics.get("error") is None else 2
 
 
 def _require_registry_file(reg: DatasetRegistry) -> None:
@@ -1617,6 +1644,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p_broker_paper_run.add_argument("--portfolio-value", dest="portfolio_value", type=float, default=1.0)
     p_broker_paper_run.add_argument("--json", action="store_true")
     p_broker_paper_run.set_defaults(func=_cmd_broker_paper_run)
+
+    p_backtest = sub.add_parser("backtest")
+    sub_backtest = p_backtest.add_subparsers(dest="backtest_cmd", required=True)
+    p_backtest_run = sub_backtest.add_parser("run")
+    p_backtest_run.add_argument("--from", dest="date_from", required=True)
+    p_backtest_run.add_argument("--to", dest="date_to", required=True)
+    p_backtest_run.add_argument("--outdir", required=True)
+    p_backtest_run.add_argument("--snapshot-root", dest="snapshot_root", default=None)
+    p_backtest_run.add_argument("--strategy", default="equal_weight")
+    p_backtest_run.add_argument("--top-n", dest="top_n", type=int, default=10)
+    p_backtest_run.add_argument("--json", action="store_true")
+    p_backtest_run.set_defaults(func=_cmd_backtest_run)
 
     p_rules = sub.add_parser("rules")
     sub_rules = p_rules.add_subparsers(dest="rules_cmd", required=True)
