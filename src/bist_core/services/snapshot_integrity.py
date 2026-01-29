@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -33,3 +34,39 @@ def atomic_write_json(path: Path, payload: dict) -> None:
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     tmp.replace(path)
+
+
+def build_eod_snapshot(
+    day: str,
+    snapshot_src_dir: Path | str,
+    outdir: Path | str,
+) -> Dict[str, object]:
+    """
+    Build EOD snapshot for a day: write <outdir>/<day>/snapshot.csv and
+    <outdir>/<day>/_snapshot_hash.json (sha256). Source is taken from
+    snapshot_src_dir/<day>/snapshot.csv or snapshot_src_dir/<day>.csv.
+    Does NOT create outdir/<day>/ when source is missing (no side-effect).
+    """
+    src = Path(snapshot_src_dir)
+    out = Path(outdir)
+    src_csv = src / day / "snapshot.csv"
+    src_alt = src / (day + ".csv")
+    if src_csv.is_file():
+        source_path = src_csv
+    elif src_alt.is_file():
+        source_path = src_alt
+    else:
+        raise FileNotFoundError(
+            f"No snapshot source for day {day}: expected {src_csv} or {src_alt}"
+        )
+
+    day_dir = out / day
+    day_dir.mkdir(parents=True, exist_ok=True)
+    dest_csv = day_dir / "snapshot.csv"
+
+    if source_path.resolve() != dest_csv.resolve():
+        shutil.copy2(source_path, dest_csv)
+
+    hash_manifest = build_snapshot_hash_manifest(dest_csv)
+    atomic_write_json(day_dir / "_snapshot_hash.json", hash_manifest)
+    return hash_manifest

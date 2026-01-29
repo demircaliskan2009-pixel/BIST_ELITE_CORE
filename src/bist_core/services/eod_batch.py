@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from bist_core.services.eod_pipeline import run_eod_pipeline
+from bist_core.services.eod_pipeline import locate_manifest, run_eod_pipeline
 from bist_core.services import trading_calendar
 from bist_core.services import snapshot_integrity
 
@@ -112,9 +112,10 @@ def run_eod_batch(
             break
 
         if resume:
+            manifest_path = locate_manifest(outdir, day_str) or (day_outdir / "_pipeline_manifest.json")
             resume_decision = _decide_resume_day(
                 day_str,
-                day_outdir / "_pipeline_manifest.json",
+                manifest_path,
                 prior_index,
                 rerun_failed,
             )
@@ -187,12 +188,13 @@ def run_eod_batch(
             )
             stage_errors = _pipeline_errors(manifest)
             day_error = code != 0 or stage_errors > 0
+            written_manifest_path = locate_manifest(outdir, day_str) or (day_outdir / "_pipeline_manifest.json")
             days.append(
                 DayResult(
                     day=day_str,
                     status="ok" if not day_error else "error",
                     exit_code=2 if day_error else 0,
-                    manifest_path=str(day_outdir / "_pipeline_manifest.json"),
+                    manifest_path=str(written_manifest_path),
                     reason="pipeline",
                     errors=[],
                 )
@@ -522,6 +524,8 @@ def audit_eod_batch(outdir: Path, deep: bool = False, strict: bool = False) -> t
                 errors.append(f"MissingPipelineManifest:{day}")
                 continue
             path = Path(manifest_path)
+            if not path.exists():
+                path = locate_manifest(outdir, day) or path
             if not path.exists():
                 errors.append(f"MissingPipelineManifest:{day}")
                 continue

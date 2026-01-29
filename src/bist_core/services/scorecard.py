@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from bist_core.services.dossier import atomic_write_json
+from bist_core.services.eod_pipeline import locate_manifest
 
 
 def build_scorecard(replay_outdir: Path) -> dict:
@@ -49,6 +50,8 @@ def _collect_strategy_names(days: list[dict]) -> set[str]:
         if not manifest_path:
             continue
         path = Path(manifest_path)
+        if not path.exists():
+            path = locate_manifest(path.parent.parent, path.parent.name) or path
         if not path.exists():
             continue
         manifest = _load_json(path)

@@ -8,7 +8,7 @@ import time
 from typing import Optional
 
 from bist_core.services.dossier import atomic_write_json
-from bist_core.services.eod_pipeline import run_eod_pipeline
+from bist_core.services.eod_pipeline import locate_manifest, run_eod_pipeline
 from bist_core.services.scorecard import build_scorecard
 from bist_core.services import snapshot_integrity
 from bist_core.services import trading_calendar
@@ -118,12 +118,13 @@ def run_eod_replay(
             if "no_actions" in notes:
                 orders_no_actions_days += 1
 
+        written_manifest_path = locate_manifest(out_path, day_str) or (day_outdir / "_pipeline_manifest.json")
         days.append(
             ReplayDay(
                 day=day_str,
                 status=status,
                 exit_code=int(code),
-                pipeline_manifest_path=str(day_outdir / "_pipeline_manifest.json"),
+                pipeline_manifest_path=str(written_manifest_path),
             )
         )
         current = current + timedelta(days=1)

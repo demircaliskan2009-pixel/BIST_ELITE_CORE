@@ -125,13 +125,13 @@ def run_eod_pipeline(
             stages["policy"]["ok"] = False
             stages["policy"]["errors"] = len(policy_errors)
             stages["policy"]["notes"] = policy_errors
-    if not snapshot_path.exists():
-        alt = root / (day_str + ".csv")
-        if alt.exists():
-            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-            import shutil
-            shutil.copy(alt, snapshot_path)
-    if not snapshot_path.exists():
+    try:
+        hash_manifest = snapshot_integrity.build_eod_snapshot(
+            day_str, root, root
+        )
+        snapshot_hash = {"algo": "sha256", "value": hash_manifest["sha256"]}
+        snapshot_path = root / day_str / "snapshot.csv"
+    except FileNotFoundError:
         stages["snapshot"]["ok"] = False
         stages["snapshot"]["errors"] = 1
         stages["snapshot"]["notes"] = ["snapshot_missing"]
@@ -163,17 +163,10 @@ def run_eod_pipeline(
             + stages["calendar"]["errors"]
         )
         return manifest, 2 if strict and stage_errors > 0 else 0
-
-    try:
-        hash_manifest = snapshot_integrity.build_snapshot_hash_manifest(snapshot_path)
-        snapshot_integrity.atomic_write_json(
-            snapshot_path.parent / "_snapshot_hash.json",
-            hash_manifest,
-        )
-        snapshot_hash = {"algo": "sha256", "value": hash_manifest["sha256"]}
     except Exception:
         stages["snapshot"]["errors"] += 1
         stages["snapshot"]["notes"] = stages["snapshot"]["notes"] + ["snapshot_hash_error"]
+        snapshot_path = root / day_str / "snapshot.csv"
 
     if not stages["calendar"]["ok"]:
         runtime_ms = int((time.perf_counter() - start) * 1000)
@@ -629,6 +622,23 @@ def _pipeline_manifest(
     if eod_raw_cache is not None:
         out["raw_cache"] = eod_raw_cache
     return out
+
+
+def locate_manifest(outdir: Path | str, day: str) -> Optional[Path]:
+    """
+    Find pipeline manifest file with fallback order (no hardcoded single path):
+    outdir/<day>/pipeline_manifest.json -> outdir/pipeline_manifest.json -> outdir/_pipeline_manifest.json.
+    Returns first path that exists, or None.
+    """
+    base = Path(outdir)
+    for candidate in (
+        base / day / "pipeline_manifest.json",
+        base / "pipeline_manifest.json",
+        base / "_pipeline_manifest.json",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _write_pipeline_manifest(out_path: Path, day_str: str, manifest: dict) -> None:
