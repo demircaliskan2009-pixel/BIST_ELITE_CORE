@@ -436,27 +436,41 @@ def _cmd_orders(args: argparse.Namespace) -> int:
 
 
 
+def _require_registry_file(reg: DatasetRegistry) -> None:
+    """Fail-closed: missing registry => nonzero exit; no silent defaults."""
+    if not reg.path.is_file():
+        print(
+            f"Registry not found: {reg.path}. Set BIST_CORE_REGISTRY_PATH or run 'data register' first.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+
 def _cmd_data_register(args: argparse.Namespace) -> int:
     reg = get_default_registry()
     dataset_id = args.name or args.id
-    fmt = args.format or args.kind
+    fmt = getattr(args, "format", None) or getattr(args, "kind", None) or "local_csv"
     if not dataset_id:
         raise SystemExit("--name is required")
-    if not fmt:
-        raise SystemExit("--format is required")
+    if not getattr(args, "path", None):
+        raise SystemExit("--path is required")
     if fmt in ("local_csv", "csv"):
         kind = "local_csv"
     else:
         raise SystemExit(f"Unsupported format: {fmt!r}")
-    meta = reg.register(
-        name=dataset_id,
-        kind=kind,
-        path=args.path,
-        symbol_col=getattr(args, "symbol_col", None),
-        date_col=getattr(args, "date_col", None),
-        tz=getattr(args, "tz", None),
-        overwrite=bool(getattr(args, "overwrite", False)),
-    )
+    try:
+        meta = reg.register(
+            name=dataset_id,
+            kind=kind,
+            path=args.path,
+            symbol_col=getattr(args, "symbol_col", None),
+            date_col=getattr(args, "date_col", None),
+            tz=getattr(args, "tz", None),
+            overwrite=bool(getattr(args, "overwrite", False)),
+        )
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        raise SystemExit(2)
     payload = {
         "ok": True,
         "name": meta.name,
@@ -466,9 +480,40 @@ def _cmd_data_register(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_data_resolve(args: argparse.Namespace) -> int:
+    name = getattr(args, "name", None) or getattr(args, "id", None)
+    if not name:
+        raise SystemExit("--name is required")
+    reg = get_default_registry()
+    _require_registry_file(reg)
+    try:
+        reg.load()
+        meta = reg.get(name)
+    except (ValueError, KeyError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        raise SystemExit(2)
+    if getattr(args, "json", False):
+        print(
+            json.dumps(
+                {"name": meta.name, "path": meta.path, "kind": meta.kind},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+    else:
+        print(f"name={meta.name} path={meta.path} kind={meta.kind}")
+    return 0
+
+
 def _cmd_data_list(args: argparse.Namespace) -> int:
     reg = get_default_registry()
-    payload = reg.to_payload()
+    _require_registry_file(reg)
+    try:
+        reg.load()
+        payload = reg.to_payload()
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        raise SystemExit(2)
     if getattr(args, "json", False):
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
         return 0
@@ -509,7 +554,13 @@ def _cmd_data_load(args: argparse.Namespace) -> int:
     if not dataset_id:
         raise SystemExit("--id or --name is required")
     reg = get_default_registry()
-    meta = reg.get(dataset_id)
+    _require_registry_file(reg)
+    try:
+        reg.load()
+        meta = reg.get(dataset_id)
+    except (ValueError, KeyError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        raise SystemExit(2)
     fmt = "csv" if meta.kind == "local_csv" else meta.kind
 
     # Raw dataset'i yükle
@@ -729,6 +780,14 @@ def _cmd_data_snapshot(args: argparse.Namespace) -> int:
         raise SystemExit(f"Invalid date format: {day}. Use YYYY-MM-DD")
 
     if not getattr(args, "out", None):
+        reg = get_default_registry()
+        _require_registry_file(reg)
+        try:
+            reg.load()
+            reg.get(dataset_id)
+        except (ValueError, KeyError) as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            raise SystemExit(2)
         df_raw = load_registered_dataset(dataset_id)
         required = {"symbol", "close"}
         optional = {"open", "high", "low", "volume", "turnover", "date"}
@@ -1536,7 +1595,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_reg.add_argument("--name", default=None)
     p_reg.add_argument("--format", default=None)
     p_reg.add_argument("--kind", default=None)
-    p_reg.add_argument("--path", required=True)
+    p_reg.add_argument("--path", required=True, help="Dataset root path")
     p_reg.add_argument("--symbol-col", dest="symbol_col", default=None)
     p_reg.add_argument("--date-col", dest="date_col", default=None)
     p_reg.add_argument("--tz", default=None)
@@ -1546,6 +1605,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_list = sub_data.add_parser("list")
     p_list.add_argument("--json", action="store_true")
     p_list.set_defaults(func=_cmd_data_list)
+
+    p_resolve = sub_data.add_parser("resolve")
+    p_resolve.add_argument("--name", default=None)
+    p_resolve.add_argument("--id", default=None)
+    p_resolve.add_argument("--json", action="store_true")
+    p_resolve.set_defaults(func=_cmd_data_resolve)
 
     p_load = sub_data.add_parser("load")
     p_load.add_argument("--id", default=None)
