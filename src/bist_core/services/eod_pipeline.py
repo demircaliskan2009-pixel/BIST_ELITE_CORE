@@ -84,6 +84,8 @@ def run_eod_pipeline(
     instruments_manifest = None
     corporate_actions_manifest = None
     universe_manifest = None
+    events_pull_raw_cache = None
+    pipeline_manifest_to_write = None
 
     calendar_path = Path(calendar_file) if calendar_file is not None else None
     if ignore_calendar:
@@ -124,6 +126,12 @@ def run_eod_pipeline(
             stages["policy"]["errors"] = len(policy_errors)
             stages["policy"]["notes"] = policy_errors
     if not snapshot_path.exists():
+        alt = root / (day_str + ".csv")
+        if alt.exists():
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy(alt, snapshot_path)
+    if not snapshot_path.exists():
         stages["snapshot"]["ok"] = False
         stages["snapshot"]["errors"] = 1
         stages["snapshot"]["notes"] = ["snapshot_missing"]
@@ -140,7 +148,10 @@ def run_eod_pipeline(
             policy_prov=policy_prov,
         )
         manifest["calendar"] = stages["calendar"]
-        atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
+        if events_pull_raw_cache is not None:
+            manifest.setdefault("events", {})["raw_cache"] = events_pull_raw_cache
+        pipeline_manifest_to_write = manifest
+        _write_pipeline_manifest(out_path, day_str, manifest)
         stage_errors = (
             stages["snapshot"]["errors"]
             + stages["advice"]["errors"]
@@ -178,7 +189,10 @@ def run_eod_pipeline(
             policy_prov=policy_prov,
         )
         manifest["calendar"] = stages["calendar"]
-        atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
+        if events_pull_raw_cache is not None:
+            manifest.setdefault("events", {})["raw_cache"] = events_pull_raw_cache
+        pipeline_manifest_to_write = manifest
+        _write_pipeline_manifest(out_path, day_str, manifest)
         stage_errors = (
             stages["snapshot"]["errors"]
             + stages["advice"]["errors"]
@@ -206,7 +220,10 @@ def run_eod_pipeline(
             policy_prov=policy_prov,
         )
         manifest["calendar"] = stages["calendar"]
-        atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
+        if events_pull_raw_cache is not None:
+            manifest.setdefault("events", {})["raw_cache"] = events_pull_raw_cache
+        pipeline_manifest_to_write = manifest
+        _write_pipeline_manifest(out_path, day_str, manifest)
         stage_errors = (
             stages["snapshot"]["errors"]
             + stages["advice"]["errors"]
@@ -334,13 +351,19 @@ def run_eod_pipeline(
                 provider = OfflineFileEventsProvider(Path(events_input)) if events_input else None
                 if provider is None:
                     from bist_core.providers.events.kap_html import KapHtmlEventsProvider
-                    provider = KapHtmlEventsProvider()
+                    base_url = os.getenv("BIST_KAP_BASE_URL", "https://www.kap.org.tr")
+                    url_tpl = os.getenv("BIST_KAP_URL_TEMPLATE") or os.getenv("BIST_KAP_EVENTS_URL_TEMPLATE")
+                    provider = KapHtmlEventsProvider(
+                        base_url=base_url,
+                        url_template=url_tpl or None,
+                    )
                 pull_manifest = build_events_jsonl_for_day(
                     day_str,
                     provider,
                     pull_out,
                     atomic=True,
                 )
+                events_pull_raw_cache = pull_manifest.get("raw_cache")
 
                 ingest_outdir = (
                     Path(events_outdir)
@@ -375,6 +398,7 @@ def run_eod_pipeline(
                     pull_out,
                     atomic=True,
                 )
+                events_pull_raw_cache = pull_manifest.get("raw_cache")
 
                 ingest_outdir = (
                     Path(events_outdir)
@@ -552,21 +576,26 @@ def run_eod_pipeline(
     manifest["corporate_actions_manifest"] = corporate_actions_manifest
     manifest["universe_manifest"] = universe_manifest
     manifest["calendar"] = stages["calendar"]
-    atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
-
-    stage_errors = (
-        stages["snapshot"]["errors"]
-        + stages["advice"]["errors"]
-        + stages["dossier"]["errors"]
-        + stages["events"]["errors"]
-        + stages["instruments"]["errors"]
-        + stages["corporate_actions"]["errors"]
-        + stages["universe"]["errors"]
-        + stages["calendar"]["errors"]
-        + stages["policy"]["errors"]
-        + (1 if stages.get("orders", {}).get("ok", 1) == 0 else 0)
-    )
-    return manifest, 2 if strict and stage_errors > 0 else 0
+    if events_pull_raw_cache is not None:
+        manifest.setdefault("events", {})["raw_cache"] = events_pull_raw_cache
+    pipeline_manifest_to_write = manifest
+    try:
+        stage_errors = (
+            stages["snapshot"]["errors"]
+            + stages["advice"]["errors"]
+            + stages["dossier"]["errors"]
+            + stages["events"]["errors"]
+            + stages["instruments"]["errors"]
+            + stages["corporate_actions"]["errors"]
+            + stages["universe"]["errors"]
+            + stages["calendar"]["errors"]
+            + stages["policy"]["errors"]
+            + (1 if stages.get("orders", {}).get("ok", 1) == 0 else 0)
+        )
+        return manifest, 2 if strict and stage_errors > 0 else 0
+    finally:
+        if pipeline_manifest_to_write is not None:
+            _write_pipeline_manifest(out_path, day_str, pipeline_manifest_to_write)
 
 
 def _pipeline_manifest(
@@ -600,6 +629,18 @@ def _pipeline_manifest(
     if eod_raw_cache is not None:
         out["raw_cache"] = eod_raw_cache
     return out
+
+
+def _write_pipeline_manifest(out_path: Path, day_str: str, manifest: dict) -> None:
+    """Write pipeline_manifest.json under outdir; prefer outdir/<day>/ if day-scoped dir exists.
+    Also write outdir/_pipeline_manifest.json for backward compatibility."""
+    if (out_path / "events_pull" / day_str).exists():
+        path = out_path / day_str / "pipeline_manifest.json"
+    else:
+        path = out_path / "pipeline_manifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, manifest)
+    atomic_write_json(out_path / "_pipeline_manifest.json", manifest)
 
 
 def _build_orders_intent(
