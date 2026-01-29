@@ -50,6 +50,7 @@ from bist_core.providers.corporate_actions.offline_file import (
 )
 from bist_core.services.adjustments import apply_close_adjustments
 from bist_core.services import instrument_timeline
+from bist_core.brokers import PaperBroker
 
 
 def _snapshot_root() -> Path:
@@ -435,6 +436,34 @@ def _cmd_orders(args: argparse.Namespace) -> int:
 
     # PASS → exit code 0
     print(f"Orders yazıldı: {orders_path}")
+    return 0
+
+
+def _cmd_broker_paper_run(args: argparse.Namespace) -> int:
+    day = getattr(args, "day", None) or ""
+    orders_path = getattr(args, "orders", None)
+    snapshot_root = getattr(args, "snapshot_root", None) or os.getenv("BIST_CORE_SNAPSHOT_DIR")
+    portfolio_value = float(getattr(args, "portfolio_value", 1.0) or 1.0)
+    if not orders_path:
+        raise SystemExit("--orders is required")
+    path = Path(orders_path)
+    if not path.is_file():
+        raise SystemExit(f"Orders file not found: {path}")
+    orders_intent = json.loads(path.read_text(encoding="utf-8"))
+    root = Path(snapshot_root) if snapshot_root else _snapshot_root()
+    broker = PaperBroker(snapshot_root=root, day=day, portfolio_value=portfolio_value)
+    fills = broker.place_orders(orders_intent)
+    positions = broker.get_positions()
+    if bool(getattr(args, "json", False)):
+        out = {"day": day, "fills": fills, "positions": positions}
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+    else:
+        print(f"Fills: {len(fills)}")
+        for f in fills:
+            print(f"  {f.get('symbol')} {f.get('side')} qty={f.get('qty')} @ {f.get('price')}")
+        print(f"Positions: {len(positions)}")
+        for p in positions:
+            print(f"  {p.get('symbol')} qty={p.get('qty')} avg_price={p.get('avg_price')}")
     return 0
 
 
@@ -1576,6 +1605,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p_orders.add_argument("--date", required=True)
     p_orders.add_argument("--strategy", default="equal_weight")
     p_orders.set_defaults(func=_cmd_orders)
+
+    p_broker = sub.add_parser("broker")
+    sub_broker = p_broker.add_subparsers(dest="broker_cmd", required=True)
+    p_broker_paper = sub_broker.add_parser("paper")
+    sub_broker_paper_cmd = p_broker_paper.add_subparsers(dest="broker_paper_cmd", required=True)
+    p_broker_paper_run = sub_broker_paper_cmd.add_parser("run")
+    p_broker_paper_run.add_argument("--day", required=True)
+    p_broker_paper_run.add_argument("--orders", required=True, help="Path to orders_intent.json")
+    p_broker_paper_run.add_argument("--snapshot-root", dest="snapshot_root", default=None)
+    p_broker_paper_run.add_argument("--portfolio-value", dest="portfolio_value", type=float, default=1.0)
+    p_broker_paper_run.add_argument("--json", action="store_true")
+    p_broker_paper_run.set_defaults(func=_cmd_broker_paper_run)
 
     p_rules = sub.add_parser("rules")
     sub_rules = p_rules.add_subparsers(dest="rules_cmd", required=True)
