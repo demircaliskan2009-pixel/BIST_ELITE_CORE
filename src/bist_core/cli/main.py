@@ -346,11 +346,35 @@ def _cmd_eod_batch_audit(args: argparse.Namespace) -> int:
 def _cmd_eod_execute(args: argparse.Namespace) -> int:
     day = getattr(args, "day", None) or ""
     outdir = Path(getattr(args, "outdir", None) or "")
-    provider_name = getattr(args, "provider", None) or "paper"
-    live = bool(getattr(args, "live", False))
+    execution = getattr(args, "execution", None) or ("live" if getattr(args, "live", False) else "paper")
+    broker_name = getattr(args, "broker", None) or ("paper" if execution == "paper" else "stub")
+    live = execution == "live"
     dry_run = not live
     if not day or not outdir:
         raise SystemExit("--day and --outdir are required")
+    # Live mode: require broker config (env BIST_BROKER_CONFIG or --broker-config); fail-closed if missing
+    broker_config_path = None
+    if execution == "live":
+        broker_config_path = os.environ.get("BIST_BROKER_CONFIG") or getattr(args, "broker_config", None)
+        if broker_config_path:
+            broker_config_path = Path(broker_config_path)
+        if not broker_config_path or not broker_config_path.is_file():
+            err = "live_execution_missing_broker_config"
+            note = "BIST_BROKER_CONFIG or --broker-config required for live execution"
+            print(f"blocked: {note}", file=sys.stderr)
+            exec_manifest = {
+                "ok": False,
+                "errors": [err],
+                "notes": [note],
+                "execution": execution,
+                "broker": broker_name,
+            }
+            manifest_dir = outdir / day
+            manifest_dir.mkdir(parents=True, exist_ok=True)
+            exec_path = manifest_dir / "execution_result.json"
+            with exec_path.open("w", encoding="utf-8") as f:
+                json.dump(exec_manifest, f, ensure_ascii=False, indent=2)
+            return 2
     manifest_path = locate_manifest(outdir, day)
     if manifest_path is None:
         print("blocked: no pipeline manifest found", file=sys.stderr)
@@ -373,10 +397,17 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         for n in notes:
             print(f"  {n}", file=sys.stderr)
         return 2
-    if provider_name == "paper":
-        provider = PaperExecutionProvider(outdir, day)
+    from bist_core.execution.adapters import resolve_execution_provider
+    if execution == "paper":
+        provider, err = resolve_execution_provider(
+            execution, broker_name, outdir=outdir, day=day,
+        )
     else:
-        print(f"Unknown provider: {provider_name!r}", file=sys.stderr)
+        provider, err = resolve_execution_provider(
+            execution, broker_name, broker_config_path=broker_config_path,
+        )
+    if err is not None:
+        print(f"blocked: {err}", file=sys.stderr)
         return 2
     result = provider.submit_orders(orders_intent, dry_run=dry_run)
     if not result.get("ok", True):
@@ -1705,6 +1736,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_execute = sub_eod.add_parser("execute")
     p_eod_execute.add_argument("--day", required=True)
     p_eod_execute.add_argument("--outdir", required=True)
+    p_eod_execute.add_argument("--execution", choices=("paper", "live"), default="paper", help="paper=simulation, live=real (requires broker config)")
+    p_eod_execute.add_argument("--broker", default=None, help="Broker adapter name (e.g. paper, stub); default from execution")
+    p_eod_execute.add_argument("--broker-config", dest="broker_config", default=None, help="Path to broker config JSON (or env BIST_BROKER_CONFIG) for live")
     p_eod_execute.add_argument("--provider", default="paper")
     p_eod_execute.add_argument("--dry-run", dest="dry_run", action="store_true", default=True)
     p_eod_execute.add_argument("--live", action="store_true", dest="live")
