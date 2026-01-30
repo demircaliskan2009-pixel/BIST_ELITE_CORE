@@ -31,7 +31,7 @@ from bist_core.services.dossier import (
     build_dossiers_for_day,
     build_manifest,
 )
-from bist_core.services.eod_pipeline import locate_manifest, run_eod_pipeline
+from bist_core.services.eod_pipeline import run_eod_pipeline
 from bist_core.services.eod_replay import run_eod_replay
 from bist_core.services.scorecard import build_scorecard
 from bist_core.services.eod_batch import audit_eod_batch, run_eod_batch
@@ -53,6 +53,20 @@ from bist_core.services import instrument_timeline
 from bist_core.brokers import PaperBroker
 from bist_core.execution import PaperExecutionProvider
 from bist_core.risk.gates import RiskGateEngine
+
+
+def _find_manifest_path(outdir: Path, day: str) -> Path:
+    """First existing manifest path, else default outdir/day/pipeline_manifest.json."""
+    candidates = [
+        outdir / day / "pipeline_manifest.json",
+        outdir / "pipeline_manifest.json",
+        outdir / "_pipeline_manifest.json",
+        outdir / day / "_pipeline_manifest.json",
+    ]
+    for p in candidates:
+        if p.is_file():
+            return p
+    return outdir / day / "pipeline_manifest.json"
 from bist_core.services.backtest import run_backtest, walk_forward
 
 
@@ -211,17 +225,19 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         git_sha=_env_git_sha(),
         cli_args=cli_args,
     )
-
-    stages = manifest.get("stages", {})
-    snapshot_stage = stages.get("snapshot", {})
-    advice_stage = stages.get("advice", {})
-    dossier_stage = stages.get("dossier", {})
-    print(
-        "eod run: "
-        f"snapshot errors={snapshot_stage.get('errors', 0)}; "
-        f"advice ok={advice_stage.get('ok', 0)}/{advice_stage.get('total', 0)}; "
-        f"dossier ok={dossier_stage.get('ok', 0)}/{dossier_stage.get('total', 0)}"
-    )
+    try:
+        stages = manifest.get("stages", {}) if isinstance(manifest, dict) else {}
+        snapshot_stage = stages.get("snapshot", {})
+        advice_stage = stages.get("advice", {})
+        dossier_stage = stages.get("dossier", {})
+        print(
+            "eod run: "
+            f"snapshot errors={snapshot_stage.get('errors', 0)}; "
+            f"advice ok={advice_stage.get('ok', 0)}/{advice_stage.get('total', 0)}; "
+            f"dossier ok={dossier_stage.get('ok', 0)}/{dossier_stage.get('total', 0)}"
+        )
+    except Exception:
+        pass
     return int(code)
 
 
@@ -347,14 +363,14 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
     day = getattr(args, "day", None) or ""
     outdir = Path(getattr(args, "outdir", None) or "")
     execution = getattr(args, "execution", None) or ("live" if getattr(args, "live", False) else "paper")
-    broker_name = getattr(args, "broker", None) or ("paper" if execution == "paper" else "stub")
+    broker_name = getattr(args, "broker", None) or getattr(args, "provider", None) or ("paper" if execution == "paper" else "stub")
     live = execution == "live"
     dry_run = not live
     if not day or not outdir:
         raise SystemExit("--day and --outdir are required")
-    # Live mode: require broker config (env BIST_BROKER_CONFIG or --broker-config); fail-closed if missing
+    # Live mode with non-paper broker: require broker config; fail-closed if missing
     broker_config_path = None
-    if execution == "live":
+    if execution == "live" and broker_name != "paper":
         broker_config_path = os.environ.get("BIST_BROKER_CONFIG") or getattr(args, "broker_config", None)
         if broker_config_path:
             broker_config_path = Path(broker_config_path)
@@ -362,21 +378,14 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
             err = "live_execution_missing_broker_config"
             note = "BIST_BROKER_CONFIG or --broker-config required for live execution"
             print(f"blocked: {note}", file=sys.stderr)
-            exec_manifest = {
-                "ok": False,
-                "errors": [err],
-                "notes": [note],
-                "execution": execution,
-                "broker": broker_name,
-            }
             manifest_dir = outdir / day
             manifest_dir.mkdir(parents=True, exist_ok=True)
             exec_path = manifest_dir / "execution_result.json"
             with exec_path.open("w", encoding="utf-8") as f:
-                json.dump(exec_manifest, f, ensure_ascii=False, indent=2)
+                json.dump({"ok": False, "errors": [err], "notes": [note], "execution": execution, "broker": broker_name}, f, ensure_ascii=False, indent=2)
             return 2
-    manifest_path = locate_manifest(outdir, day)
-    if manifest_path is None:
+    manifest_path = _find_manifest_path(outdir, day)
+    if not manifest_path.is_file():
         print("blocked: no pipeline manifest found", file=sys.stderr)
         return 2
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -398,9 +407,9 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
             print(f"  {n}", file=sys.stderr)
         return 2
     from bist_core.execution.adapters import resolve_execution_provider
-    if execution == "paper":
+    if execution == "paper" or broker_name == "paper":
         provider, err = resolve_execution_provider(
-            execution, broker_name, outdir=outdir, day=day,
+            "paper", "paper", outdir=outdir, day=day,
         )
     else:
         provider, err = resolve_execution_provider(
@@ -415,6 +424,10 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         for e in result.get("errors", []):
             print(f"  {e}", file=sys.stderr)
         return 2
+    if live and not dry_run:
+        sent_path = (Path(outdir).resolve() / day / "orders_sent.json")
+        sent_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(sent_path, orders_intent)
     print(f"execute: broker={result.get('broker', '')} sent={result.get('sent', 0)} dry_run={dry_run}")
     return 0
 
