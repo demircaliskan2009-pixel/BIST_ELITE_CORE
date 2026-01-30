@@ -41,6 +41,7 @@ from bist_core.services import snapshot_integrity
 from bist_core.policy import rules_engine, rules_schema
 from bist_core.strategies import resolve_strategy
 from bist_core.risk import load_risk_rules, validate_orders_intent
+from bist_core.services import instrument_master as instrument_master_mod
 
 
 def run_eod_pipeline(
@@ -69,6 +70,8 @@ def run_eod_pipeline(
     orders_strategy: str = "equal_weight",
     orders_top_n: int = 10,
     risk_rules_file: Optional[Path | str] = None,
+    instrument_master: Optional[Path | str] = None,
+    ignore_instrument_master: bool = False,
     git_sha: Optional[str] = None,
     cli_args: Optional[dict] = None,
 ) -> tuple[dict, int]:
@@ -90,6 +93,7 @@ def run_eod_pipeline(
         "features": {"total": 0, "ok": True, "errors": 0, "path": "", "notes": []},
         "calendar": {"ok": True, "errors": 0, "path": "", "notes": []},
         "policy": {"ok": True, "errors": 0, "notes": []},
+        "instrument_master": {"ok": True, "errors": 0, "notes": []},
     }
     instruments_manifest = None
     corporate_actions_manifest = None
@@ -243,6 +247,21 @@ def run_eod_pipeline(
     base_symbols, eod_raw_cache = _load_symbols(root, day_str)
     filtered = _filter_symbols(base_symbols, symbols, regex, limit)
     sorted_symbols = sorted(filtered)
+    instrument_master_prov: Optional[dict] = None
+    unknown_symbols: list[str] = []
+    if instrument_master and not ignore_instrument_master:
+        master_path = Path(instrument_master)
+        master_set, meta = instrument_master_mod.load_instrument_master(master_path)
+        instrument_master_prov = meta
+        unknown_symbols = sorted(
+            s for s in sorted_symbols if (s or "").strip().upper() not in master_set
+        )
+        if unknown_symbols:
+            stages["instrument_master"]["ok"] = False
+            stages["instrument_master"]["errors"] = len(unknown_symbols)
+            stages["instrument_master"]["notes"] = unknown_symbols
+    else:
+        stages["instrument_master"]["notes"] = ["ignored"] if ignore_instrument_master else []
     safe_mode_reason: Optional[str] = None
     if resolve_aliases:
         instruments_path = (
