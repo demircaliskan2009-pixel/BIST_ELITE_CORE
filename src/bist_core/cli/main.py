@@ -364,6 +364,23 @@ def _cmd_eod_batch_audit(args: argparse.Namespace) -> int:
     return int(code)
 
 
+def _cmd_eod_advice(args: argparse.Namespace) -> int:
+    from bist_core.advisory.generate import generate_advice
+    day = getattr(args, "day", None) or ""
+    outdir = Path(getattr(args, "outdir", None) or "")
+    if not day or not str(outdir):
+        raise SystemExit("--day and --outdir are required")
+    top_n = getattr(args, "top_n", None)
+    if top_n is not None:
+        try:
+            top_n = int(top_n)
+        except (TypeError, ValueError):
+            top_n = None
+    result = generate_advice(day, _snapshot_root(), outdir, top_n=top_n)
+    print(f"advice: path={result['path']} total={result['total']} errors={result['errors']}")
+    return 0
+
+
 def _cmd_eod_research(args: argparse.Namespace) -> int:
     from bist_core.research.cache import build_research_cache
     day = getattr(args, "day", None) or ""
@@ -1786,6 +1803,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_batch_audit.add_argument("--outdir", required=True)
     p_eod_batch_audit.add_argument("--strict", action="store_true")
     p_eod_batch_audit.set_defaults(func=_cmd_eod_batch_audit)
+
+    p_eod_advice = sub_eod.add_parser("advice")
+    p_eod_advice.add_argument("--day", required=True)
+    p_eod_advice.add_argument("--outdir", required=True)
+    p_eod_advice.add_argument("--top-n", dest="top_n", type=int, default=None)
+    p_eod_advice.set_defaults(func=_cmd_eod_advice)
 
     p_eod_research = sub_eod.add_parser("research")
     p_eod_research.add_argument("--day", required=True)

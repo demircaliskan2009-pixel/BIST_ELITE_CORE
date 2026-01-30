@@ -54,7 +54,7 @@ def test_calendar_json_and_gating(tmp_path: Path) -> None:
     manifest = json.loads((outdir / "_pipeline_manifest.json").read_text(encoding="utf-8"))
     calendar_stage = manifest.get("stages", {}).get("calendar", {})
     assert calendar_stage.get("errors", 0) > 0
-    assert not (outdir / "advice.jsonl").exists()
+    assert not (outdir / "advice" / "2099-01-01" / "advice_records.jsonl").exists()
     assert not (outdir / "dossiers").exists()
 
     outdir_ignore = tmp_path / "data" / "eod" / "runs" / "2099-01-01-ignore"
@@ -81,5 +81,5 @@ def test_calendar_json_and_gating(tmp_path: Path) -> None:
         check=False,
     )
     assert result_ignore.returncode == 0
-    assert (outdir_ignore / "advice.jsonl").exists()
+    assert (outdir_ignore / "advice" / "2099-01-01" / "advice_records.jsonl").exists()
     assert (outdir_ignore / "dossiers").exists()

@@ -47,7 +47,7 @@ def test_cli_eod_run_smoke(tmp_path: Path) -> None:
     assert manifest_path.exists()
     _ = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    advice_path = outdir / "advice.jsonl"
+    advice_path = outdir / "advice" / "2099-01-01" / "advice_records.jsonl"
     assert advice_path.exists()
     lines = advice_path.read_text(encoding="utf-8").splitlines()
     assert lines

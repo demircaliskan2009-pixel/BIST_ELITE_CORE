@@ -49,6 +49,7 @@ from bist_core.services import instrument_master as instrument_master_mod
 from bist_core.services import corporate_actions_canon
 from bist_core.services import price_adjust
 from bist_core.research.cache import build_research_cache
+from bist_core.advisory.generate import generate_advice
 
 
 def run_eod_pipeline(
@@ -344,20 +345,28 @@ def run_eod_pipeline(
                 stages["universe"]["notes"] = stages["universe"].get("notes", []) + ["alias_resolution_failed"]
                 safe_mode_reason = "Alias resolution failed (exception)."
 
-    advice_path = out_path / ("advice.jsonl" if jsonl else "advice.json")
-    advice_records, advice_errors = _build_advice_records(
-        sorted_symbols,
-        day_str,
-        root,
-        safe_mode_reason=safe_mode_reason,
+    advice_result = generate_advice(
+        day_str, root, out_path, symbols=sorted_symbols, top_n=None, safe_mode_reason=safe_mode_reason
     )
-    _write_advice(advice_path, advice_records, jsonl=jsonl)
+    advice_path = Path(advice_result["path"]) / "advice_records.jsonl"
+    advice_records_for_orders = [
+        {
+            "symbol": r["symbol"],
+            "score": r["score"],
+            "decision_raw": r["side"],
+            "text": r["reason"],
+            "signals": [],
+            "plan": None,
+        }
+        for r in advice_result["records"]
+    ]
     stages["advice"] = {
-        "total": len(advice_records),
-        "ok": len(advice_records) - advice_errors,
-        "errors": advice_errors,
+        "total": advice_result["total"],
+        "ok": advice_result["total"] - advice_result["errors"],
+        "errors": advice_result["errors"],
         "path": str(advice_path),
     }
+    advice_records = advice_records_for_orders
 
     try:
         def _context_provider(sym: str, d: str) -> dict:

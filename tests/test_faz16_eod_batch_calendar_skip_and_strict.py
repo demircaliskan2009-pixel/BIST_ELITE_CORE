@@ -66,7 +66,7 @@ def test_eod_batch_calendar_skip_and_strict(tmp_path: Path) -> None:
     assert day_map["2099-01-01"]["status"] == "skipped_calendar"
     assert (outdir / "2099-01-01").exists() is False
     assert day_map["2099-01-02"]["status"] == "ok"
-    assert (outdir / "2099-01-02" / "advice.jsonl").exists()
+    assert (outdir / "2099-01-02" / "advice" / "2099-01-02" / "advice_records.jsonl").exists()
 
     outdir_error = tmp_path / "data" / "eod" / "batch_error"
     result_error = subprocess.run(

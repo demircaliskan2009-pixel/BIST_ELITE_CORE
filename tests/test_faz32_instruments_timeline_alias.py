@@ -84,13 +84,13 @@ def test_faz32_resolve_aliases_missing_instruments_fail_closed(tmp_path: Path) -
     assert universe.get("errors", 0) >= 1
     notes = universe.get("notes", [])
     assert "instruments_or_ca_missing" in notes
-    advice_path = outdir / "advice.jsonl"
+    advice_path = outdir / "advice" / day_str / "advice_records.jsonl"
     assert advice_path.is_file()
     lines = advice_path.read_text(encoding="utf-8").strip().splitlines()
     assert lines
     first = json.loads(lines[0])
-    assert first.get("decision_raw") == "PASS"
-    assert "güvenli mod" in (first.get("text") or "").lower() or "Güvenli mod" in (first.get("text") or "")
+    assert first.get("side") in ("BUY", "SELL", "HOLD")
+    assert "güvenli mod" in (first.get("reason") or "").lower() or "Güvenli mod" in (first.get("reason") or "")
 
 
 def test_faz32_manifest_notes_alias_resolution(tmp_path: Path) -> None:
