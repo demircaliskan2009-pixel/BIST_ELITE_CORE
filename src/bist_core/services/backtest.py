@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from bist_core.brokers import PaperBroker
 from bist_core.services import snapshot_integrity
+from bist_core.services.portfolio_ledger import PortfolioLedger
 from bist_core.strategies import resolve_strategy
 
 
@@ -56,6 +57,8 @@ def run_backtest(
     strategy: str = "equal_weight",
     top_n: int = 10,
     initial_equity: float = 1.0,
+    fee_bps: float = 0.0,
+    slippage_bps: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Walk-forward backtest over [date_from, date_to]: snapshot -> strategy -> paper broker.
@@ -89,15 +92,18 @@ def run_backtest(
         }
 
     params = {"top_n": top_n}
-    cash = float(initial_equity)
-    positions: Dict[str, float] = {}  # symbol -> signed qty
+    ledger = PortfolioLedger(
+        initial_cash=float(initial_equity),
+        fee_bps=float(fee_bps),
+        slippage_bps=float(slippage_bps),
+    )
     equity_curve: List[Dict[str, str | float]] = []  # day, equity
     total_fills = 0
 
     for day in days:
         symbols, close_map = _load_snapshot_for_day(root, day)
         if not symbols:
-            equity_curve.append({"day": day, "equity": round(cash, 6)})
+            equity_curve.append({"day": day, "equity": round(ledger.equity(), 6)})
             continue
         advice_records = _build_synthetic_advice(symbols)
         orders_intent = strategy_impl.build_intent(
@@ -106,27 +112,12 @@ def run_backtest(
             advice_records=advice_records,
             params=params,
         )
-        equity_before = cash + sum(
-            positions.get(s, 0.0) * close_map.get(s, 0.0)
-            for s in positions
-        )
+        equity_before = ledger.equity(close_map)
         broker = PaperBroker(snapshot_root=root, day=day, portfolio_value=max(equity_before, 1e-9))
         fills = broker.place_orders(orders_intent)
         total_fills += len(fills)
-        for f in fills:
-            sym = f.get("symbol", "")
-            signed_qty = f.get("signed_qty", 0.0)
-            notional = f.get("notional", 0.0)
-            side = str(f.get("side", "")).upper()
-            positions[sym] = positions.get(sym, 0.0) + signed_qty
-            if side == "BUY":
-                cash -= notional
-            else:
-                cash += notional
-        equity = cash + sum(
-            positions.get(s, 0.0) * close_map.get(s, 0.0)
-            for s in positions
-        )
+        ledger.apply_fills(fills, sort_key=("day", "symbol"))
+        equity = ledger.equity(close_map)
         equity_curve.append({"day": day, "equity": round(equity, 6)})
 
     # Metrics
@@ -154,6 +145,8 @@ def run_backtest(
         "total_return": round(total_return, 6),
         "max_drawdown": round(max_dd, 6),
         "total_fills": total_fills,
+        "realized_pnl": round(ledger.realized_pnl(), 6),
+        "turnover": round(ledger.turnover(), 6),
     }
     equity_path = backtest_dir / "equity_curve.csv"
     metrics_path = backtest_dir / "metrics.json"
