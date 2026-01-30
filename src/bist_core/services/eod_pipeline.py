@@ -42,6 +42,7 @@ from bist_core.policy import rules_engine, rules_schema
 from bist_core.strategies import resolve_strategy
 from bist_core.risk import load_risk_rules, validate_orders_intent
 from bist_core.services import instrument_master as instrument_master_mod
+from bist_core.services import corporate_actions_canon
 
 
 def run_eod_pipeline(
@@ -250,6 +251,7 @@ def run_eod_pipeline(
     instrument_master_prov: Optional[dict] = None
     unknown_symbols: list[str] = []
     instrument_resolution: Optional[dict] = None
+    symbol_to_id: dict = {}
     if instrument_master and not ignore_instrument_master:
         master_path = Path(instrument_master)
         master_set, meta, symbol_to_id = instrument_master_mod.load_instrument_master(master_path)
@@ -628,6 +630,19 @@ def run_eod_pipeline(
         if ca_outdir is not None
         else config.REPO_ROOT / "data" / "eod" / "corporate_actions" / day_str
     )
+    canonical_errors = 0
+    if (ca_dir / "actions.jsonl").is_file():
+        canon_out = out_path / day_str / "corporate_actions" / "actions_canonical.jsonl"
+        _, canonical_errors = corporate_actions_canon.canonicalize_actions_file(
+            ca_dir / "actions.jsonl",
+            canon_out,
+            symbol_to_id,
+        )
+    stages["corporate_actions"]["canonical_errors"] = canonical_errors
+    if canonical_errors > 0:
+        stages["corporate_actions"]["notes"] = stages["corporate_actions"].get("notes", []) + [
+            f"canonical_errors:{canonical_errors}",
+        ]
     if instruments_dir.exists() and (instruments_dir / "instruments.jsonl").exists():
         try:
             universe_dir = out_path / "universe" / day_str
@@ -684,6 +699,7 @@ def run_eod_pipeline(
             + stages["events"]["errors"]
             + stages["instruments"]["errors"]
             + stages["corporate_actions"]["errors"]
+            + stages["corporate_actions"].get("canonical_errors", 0)
             + stages["universe"]["errors"]
             + stages["calendar"]["errors"]
             + stages["policy"]["errors"]
