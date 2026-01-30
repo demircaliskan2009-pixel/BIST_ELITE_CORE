@@ -41,8 +41,9 @@ from bist_core.services import snapshot_integrity
 from bist_core.policy import rules_engine, rules_schema
 from bist_core.strategies import resolve_strategy
 from bist_core.risk import load_risk_rules, validate_orders_intent
-from bist_core.risk.gates import gate_order_rules
+from bist_core.risk.gates import gate_order_rules, gate_restrictions
 from bist_core.risk.rulespack import get_rulespack_dir, load_rulespack
+from bist_core.risk.restrictions import get_restrictions_path, load_restrictions
 from bist_core.services import instrument_master as instrument_master_mod
 from bist_core.services import corporate_actions_canon
 from bist_core.services import price_adjust
@@ -74,6 +75,7 @@ def run_eod_pipeline(
     orders_strategy: str = "equal_weight",
     orders_top_n: int = 10,
     risk_rules_file: Optional[Path | str] = None,
+    restrictions_file: Optional[Path | str] = None,
     instrument_master: Optional[Path | str] = None,
     ignore_instrument_master: bool = False,
     git_sha: Optional[str] = None,
@@ -356,6 +358,7 @@ def run_eod_pipeline(
         stages["features"]["notes"] = ["feature_compute_error"]
 
     orders_intent_path_written: Optional[Path] = None
+    restrictions_provenance: Optional[dict] = None
     if emit_orders:
         orders_dir = out_path / "orders" / day_str
         orders_dir.mkdir(parents=True, exist_ok=True)
@@ -399,6 +402,15 @@ def run_eod_pipeline(
                 if order_rule_errors:
                     orders_ok = False
                     orders_notes = sorted(set(orders_notes + order_rule_errors))
+        restrictions_path = Path(restrictions_file) if restrictions_file else get_restrictions_path()
+        if restrictions_path and restrictions_path.is_file():
+            restrictions_state, restrictions_prov = load_restrictions(restrictions_path)
+            restrictions_provenance = {"file": restrictions_prov.get("file", str(restrictions_path)), "sha256": restrictions_prov.get("sha256", "")}
+            if restrictions_state.get("blocked_symbols") or restrictions_state.get("short_sale_ban"):
+                res_result = gate_restrictions(orders_payload, restrictions_state)
+                if not res_result.get("ok"):
+                    orders_ok = False
+                    orders_notes = sorted(set(orders_notes + res_result.get("errors", [])))
         orders_payload["notes"] = sorted(set(orders_payload.get("notes", []) + orders_notes))
         atomic_write_json(orders_path, orders_payload)
         orders_intent_path_written = orders_path
@@ -726,6 +738,7 @@ def run_eod_pipeline(
         policy_prov=policy_prov,
         eod_raw_cache=eod_raw_cache,
         orders_intent_path=orders_intent_path_written,
+        restrictions_provenance=restrictions_provenance,
     )
     manifest["instruments_manifest"] = instruments_manifest
     manifest["corporate_actions_manifest"] = corporate_actions_manifest
@@ -769,6 +782,7 @@ def _pipeline_manifest(
     policy_prov: Optional[dict],
     eod_raw_cache: Optional[dict] = None,
     orders_intent_path: Optional[Path] = None,
+    restrictions_provenance: Optional[dict] = None,
 ) -> dict:
     out = {
         "schema_version": 1,
@@ -790,6 +804,8 @@ def _pipeline_manifest(
         out["raw_cache"] = eod_raw_cache
     if orders_intent_path is not None:
         out["orders_intent_path"] = str(orders_intent_path)
+    if restrictions_provenance is not None:
+        out["restrictions_provenance"] = restrictions_provenance
     return out
 
 

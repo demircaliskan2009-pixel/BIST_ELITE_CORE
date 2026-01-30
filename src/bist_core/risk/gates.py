@@ -65,6 +65,15 @@ def gate_order_rules(
     return {"ok": len(errors_sorted) == 0, "errors": errors_sorted, "notes": notes}
 
 
+def gate_restrictions(
+    orders_intent: Dict[str, Any],
+    restrictions_state: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Restriction gate: delegate to restrictions.gate_restrictions."""
+    from bist_core.risk.restrictions import gate_restrictions as _gate_restrictions
+    return _gate_restrictions(orders_intent, restrictions_state)
+
+
 class RiskGateEngine:
     """Evaluate whether orders_intent is allowed for execution. Fail-closed: default deny if any stage errors >0 or policy invalid."""
 

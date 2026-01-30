@@ -179,6 +179,7 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         "orders_strategy": getattr(args, "orders_strategy", None),
         "orders_top_n": getattr(args, "orders_top_n", None),
         "risk_rules_file": getattr(args, "risk_rules_file", None),
+        "restrictions_file": getattr(args, "restrictions_file", None),
     }
     manifest, code = run_eod_pipeline(
         day_str,
@@ -206,6 +207,7 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         orders_strategy=getattr(args, "orders_strategy", None) or "equal_weight",
         orders_top_n=int(getattr(args, "orders_top_n", 10) or 10),
         risk_rules_file=getattr(args, "risk_rules_file", None),
+        restrictions_file=getattr(args, "restrictions_file", None) or os.environ.get("BIST_RESTRICTIONS_FILE"),
         git_sha=_env_git_sha(),
         cli_args=cli_args,
     )
@@ -1637,6 +1639,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_run.add_argument("--orders-strategy", dest="orders_strategy", default="equal_weight")
     p_eod_run.add_argument("--orders-top-n", dest="orders_top_n", type=int, default=10)
     p_eod_run.add_argument("--risk-rules-file", dest="risk_rules_file", default=None)
+    p_eod_run.add_argument("--restrictions-file", dest="restrictions_file", default=None, help="Restriction state JSON (or env BIST_RESTRICTIONS_FILE)")
     p_eod_run.set_defaults(func=_cmd_eod_run)
 
     p_eod_batch = sub_eod.add_parser("batch")
