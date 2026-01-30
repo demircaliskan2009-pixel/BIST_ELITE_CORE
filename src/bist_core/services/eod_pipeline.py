@@ -43,6 +43,7 @@ from bist_core.strategies import resolve_strategy
 from bist_core.risk import load_risk_rules, validate_orders_intent
 from bist_core.services import instrument_master as instrument_master_mod
 from bist_core.services import corporate_actions_canon
+from bist_core.services import price_adjust
 
 
 def run_eod_pipeline(
@@ -95,6 +96,7 @@ def run_eod_pipeline(
         "calendar": {"ok": True, "errors": 0, "path": "", "notes": []},
         "policy": {"ok": True, "errors": 0, "notes": []},
         "instrument_master": {"ok": True, "errors": 0, "notes": []},
+        "price_adjust": {"ok": True, "errors": 0, "path": "", "notes": []},
     }
     instruments_manifest = None
     corporate_actions_manifest = None
@@ -631,13 +633,33 @@ def run_eod_pipeline(
         else config.REPO_ROOT / "data" / "eod" / "corporate_actions" / day_str
     )
     canonical_errors = 0
+    canon_out = out_path / day_str / "corporate_actions" / "actions_canonical.jsonl"
     if (ca_dir / "actions.jsonl").is_file():
-        canon_out = out_path / day_str / "corporate_actions" / "actions_canonical.jsonl"
         _, canonical_errors = corporate_actions_canon.canonicalize_actions_file(
             ca_dir / "actions.jsonl",
             canon_out,
             symbol_to_id,
         )
+        if canon_out.is_file() and symbol_to_id:
+            price_adj_out = out_path / day_str
+            adj_errors, adj_notes = price_adjust.build_adjusted_prices(
+                snapshot_root=root,
+                days=[day_str],
+                canonical_actions_path=canon_out,
+                symbol_to_id=symbol_to_id,
+                out_dir=price_adj_out,
+                strict=strict,
+            )
+            stages["price_adjust"] = {
+                "ok": adj_errors == 0,
+                "errors": adj_errors,
+                "path": str(price_adj_out),
+                "notes": adj_notes,
+            }
+        else:
+            stages["price_adjust"]["notes"] = ["skipped"]
+    else:
+        stages["price_adjust"]["notes"] = ["skipped"]
     stages["corporate_actions"]["canonical_errors"] = canonical_errors
     if canonical_errors > 0:
         stages["corporate_actions"]["notes"] = stages["corporate_actions"].get("notes", []) + [
@@ -703,6 +725,7 @@ def run_eod_pipeline(
             + stages["universe"]["errors"]
             + stages["calendar"]["errors"]
             + stages["policy"]["errors"]
+            + stages["price_adjust"].get("errors", 0)
             + (1 if stages.get("orders", {}).get("ok", 1) == 0 else 0)
         )
         return manifest, 2 if strict and stage_errors > 0 else 0
