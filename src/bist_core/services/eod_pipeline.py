@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import csv
-from datetime import date as Date
+from datetime import date as Date, datetime
 import json
 import os
+import uuid
 from pathlib import Path
 import platform
 import time
-from typing import Iterable, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from bist_core import config
 from bist_core.services.advisor import build_advice_for_symbol
@@ -82,6 +83,8 @@ def run_eod_pipeline(
     cli_args: Optional[dict] = None,
 ) -> tuple[dict, int]:
     start = time.perf_counter()
+    run_id = str(uuid.uuid4())
+    started_at_utc = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     day_str = day.isoformat() if isinstance(day, Date) else str(day)
     root = Path(snapshot_root)
     out_path = Path(outdir)
@@ -157,6 +160,8 @@ def run_eod_pipeline(
         stages["snapshot"]["errors"] = 1
         stages["snapshot"]["notes"] = ["snapshot_missing"]
         runtime_ms = int((time.perf_counter() - start) * 1000)
+        finished_at_utc = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        stage_provenance = _build_stage_provenance(snapshot_hash=None, policy_prov=policy_prov)
         manifest = _pipeline_manifest(
             day_str,
             root,
@@ -167,6 +172,10 @@ def run_eod_pipeline(
             cli_args=cli_args or {},
             snapshot_hash=None,
             policy_prov=policy_prov,
+            run_id=run_id,
+            started_at_utc=started_at_utc,
+            finished_at_utc=finished_at_utc,
+            stage_provenance=stage_provenance,
         )
         manifest["calendar"] = stages["calendar"]
         if events_pull_raw_cache is not None:
@@ -191,6 +200,8 @@ def run_eod_pipeline(
 
     if not stages["calendar"]["ok"]:
         runtime_ms = int((time.perf_counter() - start) * 1000)
+        finished_at_utc = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        stage_provenance = _build_stage_provenance(snapshot_hash=snapshot_hash, policy_prov=policy_prov)
         manifest = _pipeline_manifest(
             day_str,
             root,
@@ -201,6 +212,10 @@ def run_eod_pipeline(
             cli_args=cli_args or {},
             snapshot_hash=snapshot_hash,
             policy_prov=policy_prov,
+            run_id=run_id,
+            started_at_utc=started_at_utc,
+            finished_at_utc=finished_at_utc,
+            stage_provenance=stage_provenance,
         )
         manifest["calendar"] = stages["calendar"]
         if events_pull_raw_cache is not None:
@@ -222,6 +237,8 @@ def run_eod_pipeline(
 
     if policy_errors and strict:
         runtime_ms = int((time.perf_counter() - start) * 1000)
+        finished_at_utc = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        stage_provenance = _build_stage_provenance(snapshot_hash=snapshot_hash, policy_prov=policy_prov)
         manifest = _pipeline_manifest(
             day_str,
             root,
@@ -232,6 +249,10 @@ def run_eod_pipeline(
             cli_args=cli_args or {},
             snapshot_hash=snapshot_hash,
             policy_prov=policy_prov,
+            run_id=run_id,
+            started_at_utc=started_at_utc,
+            finished_at_utc=finished_at_utc,
+            stage_provenance=stage_provenance,
         )
         manifest["calendar"] = stages["calendar"]
         if events_pull_raw_cache is not None:
@@ -726,6 +747,11 @@ def run_eod_pipeline(
             stages["universe"]["notes"] = ["universe_skipped"]
 
     runtime_ms = int((time.perf_counter() - start) * 1000)
+    finished_at_utc = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    stage_provenance = _build_stage_provenance(
+        snapshot_hash=snapshot_hash,
+        policy_prov=policy_prov,
+    )
     manifest = _pipeline_manifest(
         day_str,
         root,
@@ -739,6 +765,10 @@ def run_eod_pipeline(
         eod_raw_cache=eod_raw_cache,
         orders_intent_path=orders_intent_path_written,
         restrictions_provenance=restrictions_provenance,
+        run_id=run_id,
+        started_at_utc=started_at_utc,
+        finished_at_utc=finished_at_utc,
+        stage_provenance=stage_provenance,
     )
     manifest["instruments_manifest"] = instruments_manifest
     manifest["corporate_actions_manifest"] = corporate_actions_manifest
@@ -770,6 +800,38 @@ def run_eod_pipeline(
             _write_pipeline_manifest(out_path, day_str, pipeline_manifest_to_write)
 
 
+def _build_stage_provenance(
+    snapshot_hash: Optional[dict] = None,
+    policy_prov: Optional[dict] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Build per-stage provenance (inputs hashed). Deterministic keys."""
+    prov: Dict[str, Dict[str, Any]] = {}
+    prov["snapshot"] = {
+        "inputs": {"snapshot": snapshot_hash} if snapshot_hash else {},
+        "inputs_hash": (snapshot_hash.get("value") or "") if snapshot_hash else "",
+    }
+    prov["policy"] = {
+        "inputs": {"policy": policy_prov} if policy_prov else {},
+        "inputs_hash": (policy_prov.get("hash", {}).get("value") or "") if policy_prov else "",
+    }
+    for name in ("advice", "dossier", "events", "instruments", "corporate_actions", "universe", "features", "calendar", "instrument_master", "price_adjust", "orders"):
+        prov[name] = {"inputs": {}, "inputs_hash": ""}
+    return prov
+
+
+def _normalize_stage_for_manifest(stage: dict, provenance: dict) -> dict:
+    """Stage dict with sorted keys and sorted notes; add provenance block."""
+    out: Dict[str, Any] = {}
+    for k in sorted(stage.keys()):
+        v = stage[k]
+        if k == "notes" and isinstance(v, list):
+            out[k] = sorted(v) if v else []
+        else:
+            out[k] = v
+    out["provenance"] = dict(provenance) if provenance else {"inputs": {}, "inputs_hash": ""}
+    return out
+
+
 def _pipeline_manifest(
     day_str: str,
     snapshot_root: Path,
@@ -783,22 +845,38 @@ def _pipeline_manifest(
     eod_raw_cache: Optional[dict] = None,
     orders_intent_path: Optional[Path] = None,
     restrictions_provenance: Optional[dict] = None,
+    run_id: Optional[str] = None,
+    started_at_utc: Optional[str] = None,
+    finished_at_utc: Optional[str] = None,
+    stage_provenance: Optional[Dict[str, dict]] = None,
 ) -> dict:
-    out = {
-        "schema_version": 1,
+    """Schema v2: run_id, started_at_utc, finished_at_utc; per-stage provenance; deterministic ordering."""
+    stage_prov = stage_provenance or {}
+    stages_out: Dict[str, dict] = {}
+    for name in sorted(stages.keys()):
+        stages_out[name] = _normalize_stage_for_manifest(
+            stages[name],
+            stage_prov.get(name, {"inputs": {}, "inputs_hash": ""}),
+        )
+    provenance = {
+        "python": _python_version(),
+        "platform": platform.platform(),
+        "cli_args": dict(sorted((cli_args or {}).items())),
+        "git_sha": git_sha,
+        "snapshot_hash": snapshot_hash,
+        "policy": policy_prov,
+    }
+    out: Dict[str, Any] = {
+        "schema_version": 2,
+        "run_id": run_id or "",
+        "started_at_utc": started_at_utc or "",
+        "finished_at_utc": finished_at_utc or "",
         "day": day_str,
         "snapshot_root": str(snapshot_root),
         "outdir": str(outdir),
-        "stages": stages,
+        "stages": stages_out,
         "runtime_ms": int(runtime_ms),
-        "provenance": {
-            "python": _python_version(),
-            "platform": platform.platform(),
-            "cli_args": cli_args,
-            "git_sha": git_sha,
-            "snapshot_hash": snapshot_hash,
-            "policy": policy_prov,
-        },
+        "provenance": provenance,
     }
     if eod_raw_cache is not None:
         out["raw_cache"] = eod_raw_cache

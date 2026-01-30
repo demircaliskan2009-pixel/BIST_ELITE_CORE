@@ -6,27 +6,39 @@ The EOD pipeline writes a JSON manifest to three locations (same content):
 - `<outdir>/<day>/pipeline_manifest.json`
 - `<outdir>/_pipeline_manifest.json` (backward compatibility)
 
-## Top-level fields
+## Schema version 2 (audit-grade)
 
 | Field | Description |
 |-------|-------------|
-| `schema_version` | Integer; currently `1`. |
+| `schema_version` | Integer; **2** (v1 keys retained where possible). |
+| `run_id` | Unique run ID (UUID). |
+| `started_at_utc` | Run start time in UTC (ISO 8601). |
+| `finished_at_utc` | Run finish time in UTC (ISO 8601). |
 | `day` | Run day (e.g. `YYYY-MM-DD`). |
 | `snapshot_root` | Path to EOD snapshot root. |
 | `outdir` | Pipeline output directory. |
-| `stages` | Per-stage status (snapshot, advice, dossier, events, instruments, corporate_actions, universe, calendar, policy). |
+| `stages` | Per-stage status; each stage has deterministic keys and a **provenance** block (inputs, inputs_hash). |
 | `runtime_ms` | Total pipeline runtime in milliseconds. |
 
-## Provenance
+## Top-level provenance
 
-`provenance` contains:
+`provenance` contains (stable key order):
 
 - `python` — Python version string.
 - `platform` — Platform string.
-- `cli_args` — CLI arguments passed to the run.
+- `cli_args` — CLI arguments (sorted keys).
 - `git_sha` — Git commit (if provided).
 - `snapshot_hash` — EOD snapshot hash (`algo`, `value`) when available.
 - `policy` — Policy file path and hash when used.
+
+## Per-stage provenance
+
+Each entry in `stages` includes a **provenance** object:
+
+- `inputs` — Map of input names to hashes or refs (e.g. `snapshot`, `policy`).
+- `inputs_hash` — Single hash for the stage’s inputs (e.g. snapshot sha256, policy sha256).
+
+Stage keys and list fields (e.g. `notes`) are deterministically ordered for repeatability.
 
 ## Raw cache
 
