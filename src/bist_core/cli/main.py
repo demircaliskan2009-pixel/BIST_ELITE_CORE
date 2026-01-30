@@ -359,15 +359,35 @@ def _cmd_eod_batch_audit(args: argparse.Namespace) -> int:
     return int(code)
 
 
+def _write_execution_result(day_dir: Path, day: str, ok: bool, blocked: bool, reason: str, provider: str, mode: str, errors: Optional[list] = None, execution: Optional[str] = None) -> None:
+    """Write execution_result.json to day_dir (minimal schema + errors/execution for compatibility)."""
+    payload = {
+        "schema_version": 1,
+        "day": day,
+        "ok": ok,
+        "blocked": blocked,
+        "reason": reason,
+        "provider": provider,
+        "mode": mode,
+    }
+    if errors is not None:
+        payload["errors"] = errors
+    if execution is not None:
+        payload["execution"] = execution
+    atomic_write_json(day_dir / "execution_result.json", payload)
+
+
 def _cmd_eod_execute(args: argparse.Namespace) -> int:
     day = getattr(args, "day", None) or ""
     outdir = Path(getattr(args, "outdir", None) or "")
-    execution = getattr(args, "execution", None) or ("live" if getattr(args, "live", False) else "paper")
+    execution = "live" if getattr(args, "live", False) else (getattr(args, "execution", None) or "paper")
     broker_name = getattr(args, "broker", None) or getattr(args, "provider", None) or ("paper" if execution == "paper" else "stub")
     live = execution == "live"
     dry_run = not live
-    if not day or not outdir:
+    if not day or not str(outdir):
         raise SystemExit("--day and --outdir are required")
+    day_dir = outdir / day
+    day_dir.mkdir(parents=True, exist_ok=True)
     # Live mode with non-paper broker: require broker config; fail-closed if missing
     broker_config_path = None
     if execution == "live" and broker_name != "paper":
@@ -378,15 +398,12 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
             err = "live_execution_missing_broker_config"
             note = "BIST_BROKER_CONFIG or --broker-config required for live execution"
             print(f"blocked: {note}", file=sys.stderr)
-            manifest_dir = outdir / day
-            manifest_dir.mkdir(parents=True, exist_ok=True)
-            exec_path = manifest_dir / "execution_result.json"
-            with exec_path.open("w", encoding="utf-8") as f:
-                json.dump({"ok": False, "errors": [err], "notes": [note], "execution": execution, "broker": broker_name}, f, ensure_ascii=False, indent=2)
+            _write_execution_result(day_dir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode="live", errors=[err], execution=execution)
             return 2
     manifest_path = _find_manifest_path(outdir, day)
     if not manifest_path.is_file():
         print("blocked: no pipeline manifest found", file=sys.stderr)
+        _write_execution_result(day_dir, day, ok=False, blocked=True, reason="no pipeline manifest found", provider=broker_name, mode=execution, errors=["no_manifest"], execution=execution)
         return 2
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     stages = manifest.get("stages") or {}
@@ -397,6 +414,7 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         orders_intent_path = Path(orders_intent_path)
     if not orders_intent_path.is_file():
         print("blocked: orders_intent.json not found", file=sys.stderr)
+        _write_execution_result(day_dir, day, ok=False, blocked=True, reason="orders_intent.json not found", provider=broker_name, mode=execution, errors=["no_orders_intent"], execution=execution)
         return 2
     orders_intent = json.loads(orders_intent_path.read_text(encoding="utf-8"))
     gate = RiskGateEngine()
@@ -405,6 +423,7 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         print("blocked: risk gate denied", file=sys.stderr)
         for n in notes:
             print(f"  {n}", file=sys.stderr)
+        _write_execution_result(day_dir, day, ok=False, blocked=True, reason="risk gate denied", provider=broker_name, mode=execution, errors=notes, execution=execution)
         return 2
     from bist_core.execution.adapters import resolve_execution_provider
     if execution == "paper" or broker_name == "paper":
@@ -417,17 +436,18 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         )
     if err is not None:
         print(f"blocked: {err}", file=sys.stderr)
+        _write_execution_result(day_dir, day, ok=False, blocked=True, reason=str(err), provider=broker_name, mode=execution, errors=[err], execution=execution)
         return 2
     result = provider.submit_orders(orders_intent, dry_run=dry_run)
     if not result.get("ok", True):
         print("execute failed", file=sys.stderr)
         for e in result.get("errors", []):
             print(f"  {e}", file=sys.stderr)
+        _write_execution_result(day_dir, day, ok=False, blocked=False, reason="submit_orders failed", provider=result.get("broker", broker_name), mode=execution, errors=result.get("errors", []), execution=execution)
         return 2
     if live and not dry_run:
-        sent_path = (Path(outdir).resolve() / day / "orders_sent.json")
-        sent_path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(sent_path, orders_intent)
+        atomic_write_json(day_dir / "orders_sent.json", {"day": day, "actions": orders_intent.get("actions", []), **orders_intent})
+    _write_execution_result(day_dir, day, ok=True, blocked=False, reason="", provider=result.get("broker", broker_name), mode=execution, execution=execution)
     print(f"execute: broker={result.get('broker', '')} sent={result.get('sent', 0)} dry_run={dry_run}")
     return 0
 
@@ -1752,7 +1772,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_execute.add_argument("--execution", choices=("paper", "live"), default="paper", help="paper=simulation, live=real (requires broker config)")
     p_eod_execute.add_argument("--broker", default=None, help="Broker adapter name (e.g. paper, stub); default from execution")
     p_eod_execute.add_argument("--broker-config", dest="broker_config", default=None, help="Path to broker config JSON (or env BIST_BROKER_CONFIG) for live")
-    p_eod_execute.add_argument("--provider", default="paper")
+    p_eod_execute.add_argument("--provider", default=None, help="Execution provider (e.g. paper); default paper for paper execution, stub for live")
     p_eod_execute.add_argument("--dry-run", dest="dry_run", action="store_true", default=True)
     p_eod_execute.add_argument("--live", action="store_true", dest="live")
     p_eod_execute.set_defaults(func=_cmd_eod_execute)
