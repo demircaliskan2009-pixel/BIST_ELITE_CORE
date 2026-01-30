@@ -249,9 +249,10 @@ def run_eod_pipeline(
     sorted_symbols = sorted(filtered)
     instrument_master_prov: Optional[dict] = None
     unknown_symbols: list[str] = []
+    instrument_resolution: Optional[dict] = None
     if instrument_master and not ignore_instrument_master:
         master_path = Path(instrument_master)
-        master_set, meta = instrument_master_mod.load_instrument_master(master_path)
+        master_set, meta, symbol_to_id = instrument_master_mod.load_instrument_master(master_path)
         instrument_master_prov = meta
         unknown_symbols = sorted(
             s for s in sorted_symbols if (s or "").strip().upper() not in master_set
@@ -260,6 +261,10 @@ def run_eod_pipeline(
             stages["instrument_master"]["ok"] = False
             stages["instrument_master"]["errors"] = len(unknown_symbols)
             stages["instrument_master"]["notes"] = unknown_symbols
+        if symbol_to_id:
+            instrument_resolution = instrument_master_mod.resolve_symbols(
+                list(sorted_symbols), symbol_to_id
+            )
     else:
         stages["instrument_master"]["notes"] = ["ignored"] if ignore_instrument_master else []
     safe_mode_reason: Optional[str] = None
@@ -668,6 +673,8 @@ def run_eod_pipeline(
     manifest["calendar"] = stages["calendar"]
     if events_pull_raw_cache is not None:
         manifest.setdefault("events", {})["raw_cache"] = events_pull_raw_cache
+    if instrument_resolution is not None:
+        manifest["instrument_resolution"] = instrument_resolution
     pipeline_manifest_to_write = manifest
     try:
         stage_errors = (

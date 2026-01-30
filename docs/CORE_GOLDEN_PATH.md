@@ -13,6 +13,9 @@ Artifacts land under `data/eod/runs/YYYY-MM-DD/`:
 - `dossiers/` with per-symbol JSON + `_manifest.json`
 - `orders/orders_intent.json` when `--emit-orders`
 
+## Instrument master and resolution
+Use `--instrument-master PATH` (CSV with `instrument_id`, `symbol`, optional `aliases` ';' separated). Snapshot symbols are gated against the master and resolved to instrument_ids; mapping is stored in the pipeline manifest under `instrument_resolution` (`instrument_ids`, `alias_map`, `unknown`). Use `--ignore-instrument-master` to skip the gate.
+
 ## Strategy selection (orders intent)
 Use `--orders-strategy NAME` (default `equal_weight`). For top-N limiting, use `--orders-top-n N`.
 
