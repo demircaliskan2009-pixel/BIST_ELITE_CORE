@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import csv
-from datetime import date as Date, datetime
+from datetime import date as Date, datetime, timezone
 import json
 import os
 import uuid
@@ -87,7 +87,7 @@ def run_eod_pipeline(
 ) -> tuple[dict, int]:
     start = time.perf_counter()
     run_id = str(uuid.uuid4())
-    started_at_utc = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    started_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     day_str = day.isoformat() if isinstance(day, Date) else str(day)
     root = Path(snapshot_root)
     out_path = Path(outdir)
@@ -165,7 +165,7 @@ def run_eod_pipeline(
         stages["snapshot"]["errors"] = 1
         stages["snapshot"]["notes"] = ["snapshot_missing"]
         runtime_ms = int((time.perf_counter() - start) * 1000)
-        finished_at_utc = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        finished_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         stage_provenance = _build_stage_provenance(snapshot_hash=None, policy_prov=policy_prov)
         manifest = _pipeline_manifest(
             day_str,
@@ -205,7 +205,7 @@ def run_eod_pipeline(
 
     if not stages["calendar"]["ok"]:
         runtime_ms = int((time.perf_counter() - start) * 1000)
-        finished_at_utc = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        finished_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         stage_provenance = _build_stage_provenance(snapshot_hash=snapshot_hash, policy_prov=policy_prov)
         manifest = _pipeline_manifest(
             day_str,
@@ -242,7 +242,7 @@ def run_eod_pipeline(
 
     if policy_errors and strict:
         runtime_ms = int((time.perf_counter() - start) * 1000)
-        finished_at_utc = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        finished_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         stage_provenance = _build_stage_provenance(snapshot_hash=snapshot_hash, policy_prov=policy_prov)
         manifest = _pipeline_manifest(
             day_str,
@@ -771,7 +771,7 @@ def run_eod_pipeline(
             stages["research"]["notes"] = [f"research_error:{exc.__class__.__name__}"]
 
     runtime_ms = int((time.perf_counter() - start) * 1000)
-    finished_at_utc = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    finished_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     stage_provenance = _build_stage_provenance(
         snapshot_hash=snapshot_hash,
         policy_prov=policy_prov,
