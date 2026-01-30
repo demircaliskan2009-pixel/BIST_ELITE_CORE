@@ -40,7 +40,7 @@ from bist_core.services import instrument_timeline
 from bist_core.services import trading_calendar
 from bist_core.services import snapshot_integrity
 from bist_core.policy import rules_engine, rules_schema
-from bist_core.strategies import resolve_strategy
+from bist_core.orders.strategies import resolve_strategy
 from bist_core.risk import load_risk_rules, validate_orders_intent
 from bist_core.risk.gates import gate_order_rules, gate_restrictions
 from bist_core.risk.rulespack import get_rulespack_dir, load_rulespack
