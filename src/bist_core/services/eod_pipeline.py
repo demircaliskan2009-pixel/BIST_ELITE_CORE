@@ -48,6 +48,7 @@ from bist_core.risk.restrictions import get_restrictions_path, load_restrictions
 from bist_core.services import instrument_master as instrument_master_mod
 from bist_core.services import corporate_actions_canon
 from bist_core.services import price_adjust
+from bist_core.research.cache import build_research_cache
 
 
 def run_eod_pipeline(
@@ -79,6 +80,8 @@ def run_eod_pipeline(
     restrictions_file: Optional[Path | str] = None,
     instrument_master: Optional[Path | str] = None,
     ignore_instrument_master: bool = False,
+    research_source: Optional[str] = None,
+    research_offline: bool = False,
     git_sha: Optional[str] = None,
     cli_args: Optional[dict] = None,
 ) -> tuple[dict, int]:
@@ -104,11 +107,13 @@ def run_eod_pipeline(
         "policy": {"ok": True, "errors": 0, "notes": []},
         "instrument_master": {"ok": True, "errors": 0, "notes": []},
         "price_adjust": {"ok": True, "errors": 0, "path": "", "notes": []},
+        "research": {"count": 0, "errors": 0, "path": "", "notes": []},
     }
     instruments_manifest = None
     corporate_actions_manifest = None
     universe_manifest = None
     events_pull_raw_cache = None
+    research_provenance: Optional[List[str]] = None
     pipeline_manifest_to_write = None
 
     calendar_path = Path(calendar_file) if calendar_file is not None else None
@@ -746,6 +751,25 @@ def run_eod_pipeline(
         if not stages["universe"].get("notes"):
             stages["universe"]["notes"] = ["universe_skipped"]
 
+    if research_source:
+        try:
+            res = build_research_cache(
+                day_str,
+                out_path,
+                source=research_source,
+                offline=research_offline,
+            )
+            stages["research"] = {
+                "count": res["count"],
+                "errors": res["errors"],
+                "path": res["path"],
+                "notes": [],
+            }
+            research_provenance = res.get("provenance") or []
+        except Exception as exc:
+            stages["research"]["errors"] = 1
+            stages["research"]["notes"] = [f"research_error:{exc.__class__.__name__}"]
+
     runtime_ms = int((time.perf_counter() - start) * 1000)
     finished_at_utc = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     stage_provenance = _build_stage_provenance(
@@ -769,6 +793,7 @@ def run_eod_pipeline(
         started_at_utc=started_at_utc,
         finished_at_utc=finished_at_utc,
         stage_provenance=stage_provenance,
+        research_provenance=research_provenance,
     )
     manifest["instruments_manifest"] = instruments_manifest
     manifest["corporate_actions_manifest"] = corporate_actions_manifest
@@ -792,6 +817,7 @@ def run_eod_pipeline(
             + stages["calendar"]["errors"]
             + stages["policy"]["errors"]
             + stages["price_adjust"].get("errors", 0)
+            + stages["research"].get("errors", 0)
             + (1 if stages.get("orders", {}).get("ok", 1) == 0 else 0)
         )
         return manifest, 2 if strict and stage_errors > 0 else 0
@@ -814,7 +840,7 @@ def _build_stage_provenance(
         "inputs": {"policy": policy_prov} if policy_prov else {},
         "inputs_hash": (policy_prov.get("hash", {}).get("value") or "") if policy_prov else "",
     }
-    for name in ("advice", "dossier", "events", "instruments", "corporate_actions", "universe", "features", "calendar", "instrument_master", "price_adjust", "orders"):
+    for name in ("advice", "dossier", "events", "instruments", "corporate_actions", "universe", "features", "calendar", "instrument_master", "price_adjust", "research", "orders"):
         prov[name] = {"inputs": {}, "inputs_hash": ""}
     return prov
 
@@ -845,6 +871,7 @@ def _pipeline_manifest(
     eod_raw_cache: Optional[dict] = None,
     orders_intent_path: Optional[Path] = None,
     restrictions_provenance: Optional[dict] = None,
+    research_provenance: Optional[List[str]] = None,
     run_id: Optional[str] = None,
     started_at_utc: Optional[str] = None,
     finished_at_utc: Optional[str] = None,
@@ -858,7 +885,7 @@ def _pipeline_manifest(
             stages[name],
             stage_prov.get(name, {"inputs": {}, "inputs_hash": ""}),
         )
-    provenance = {
+    provenance: Dict[str, Any] = {
         "python": _python_version(),
         "platform": platform.platform(),
         "cli_args": dict(sorted((cli_args or {}).items())),
@@ -866,6 +893,8 @@ def _pipeline_manifest(
         "snapshot_hash": snapshot_hash,
         "policy": policy_prov,
     }
+    if research_provenance is not None:
+        provenance["research"] = list(research_provenance)
     out: Dict[str, Any] = {
         "schema_version": 2,
         "run_id": run_id or "",

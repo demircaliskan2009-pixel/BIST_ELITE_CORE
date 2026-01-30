@@ -194,7 +194,10 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         "orders_top_n": getattr(args, "orders_top_n", None),
         "risk_rules_file": getattr(args, "risk_rules_file", None),
         "restrictions_file": getattr(args, "restrictions_file", None),
+        "research": bool(getattr(args, "research", False)),
+        "research_source": getattr(args, "research_source", None),
     }
+    research_source = getattr(args, "research_source", None) or ("kap" if getattr(args, "research", False) else None)
     manifest, code = run_eod_pipeline(
         day_str,
         snapshot_root=base,
@@ -222,6 +225,8 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         orders_top_n=int(getattr(args, "orders_top_n", 10) or 10),
         risk_rules_file=getattr(args, "risk_rules_file", None),
         restrictions_file=getattr(args, "restrictions_file", None) or os.environ.get("BIST_RESTRICTIONS_FILE"),
+        research_source=research_source,
+        research_offline=bool(getattr(args, "research_offline", False)),
         git_sha=_env_git_sha(),
         cli_args=cli_args,
     )
@@ -357,6 +362,19 @@ def _cmd_eod_batch_audit(args: argparse.Namespace) -> int:
     manifest, code = audit_eod_batch(outdir, strict=bool(getattr(args, "strict", False)))
     _print_batch_summary(manifest, int(code))
     return int(code)
+
+
+def _cmd_eod_research(args: argparse.Namespace) -> int:
+    from bist_core.research.cache import build_research_cache
+    day = getattr(args, "day", None) or ""
+    outdir = Path(getattr(args, "outdir", None) or "")
+    if not day or not str(outdir):
+        raise SystemExit("--day and --outdir are required")
+    source = getattr(args, "source", None) or "kap"
+    offline = bool(getattr(args, "offline", False))
+    result = build_research_cache(day, outdir, source=source, offline=offline)
+    print(f"research: path={result['path']} count={result['count']} errors={result['errors']}")
+    return 0
 
 
 def _write_execution_result(day_dir: Path, day: str, ok: bool, blocked: bool, reason: str, provider: str, mode: str, errors: Optional[list] = None, execution: Optional[str] = None) -> None:
@@ -1704,6 +1722,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_run.add_argument("--orders-top-n", dest="orders_top_n", type=int, default=10)
     p_eod_run.add_argument("--risk-rules-file", dest="risk_rules_file", default=None)
     p_eod_run.add_argument("--restrictions-file", dest="restrictions_file", default=None, help="Restriction state JSON (or env BIST_RESTRICTIONS_FILE)")
+    p_eod_run.add_argument("--research", action="store_true", help="Run research cache stage")
+    p_eod_run.add_argument("--research-source", dest="research_source", default=None)
+    p_eod_run.add_argument("--research-offline", dest="research_offline", action="store_true")
     p_eod_run.set_defaults(func=_cmd_eod_run)
 
     p_eod_batch = sub_eod.add_parser("batch")
@@ -1765,6 +1786,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_batch_audit.add_argument("--outdir", required=True)
     p_eod_batch_audit.add_argument("--strict", action="store_true")
     p_eod_batch_audit.set_defaults(func=_cmd_eod_batch_audit)
+
+    p_eod_research = sub_eod.add_parser("research")
+    p_eod_research.add_argument("--day", required=True)
+    p_eod_research.add_argument("--outdir", required=True)
+    p_eod_research.add_argument("--source", default="kap", help="Source (e.g. kap); stub provider used")
+    p_eod_research.add_argument("--offline", action="store_true")
+    p_eod_research.set_defaults(func=_cmd_eod_research)
 
     p_eod_execute = sub_eod.add_parser("execute")
     p_eod_execute.add_argument("--day", required=True)
