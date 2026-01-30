@@ -4,6 +4,67 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 
+def gate_order_rules(
+    order: Dict[str, Any],
+    rulespack: Dict[str, Any],
+    ref_price: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Pre-execution order validation: tick, band, lot, notional. Fail-closed.
+    Returns {ok: bool, errors: list, notes: list}. Deterministic: errors sorted.
+    ref_price: used for band check; if None, use order.get("ref_price").
+    """
+    errors: List[str] = []
+    notes: List[str] = []
+    price = order.get("price")
+    quantity = order.get("quantity")
+    ref = ref_price if ref_price is not None else order.get("ref_price")
+
+    if price is not None:
+        try:
+            p = float(price)
+        except (TypeError, ValueError):
+            errors.append("price_invalid")
+        else:
+            from bist_core.risk.rulespack import validate_price_tick, validate_price_band
+            ok_tick, _ = validate_price_tick(rulespack, p)
+            if not ok_tick:
+                errors.append("tick_violation")
+            if ref is not None:
+                try:
+                    ref_p = float(ref)
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    market = order.get("market")
+                    ok_band, _ = validate_price_band(rulespack, ref_p, p, market)
+                    if not ok_band:
+                        errors.append("band_violation")
+
+    lot_size = rulespack.get("lot_size")
+    if lot_size is not None and quantity is not None:
+        try:
+            q = int(quantity) if isinstance(quantity, (int, float)) and quantity == int(quantity) else float(quantity)
+            lot = float(lot_size)
+            if lot <= 0 or (q / lot) != int(q / lot):
+                errors.append("lot_violation")
+        except (TypeError, ValueError, ZeroDivisionError):
+            errors.append("lot_violation")
+
+    max_notional = rulespack.get("max_notional")
+    if max_notional is not None and price is not None and quantity is not None:
+        try:
+            p = float(price)
+            q = float(quantity)
+            if p * q > float(max_notional):
+                errors.append("notional_exceeded")
+        except (TypeError, ValueError):
+            errors.append("notional_exceeded")
+
+    errors_sorted = sorted(errors)
+    return {"ok": len(errors_sorted) == 0, "errors": errors_sorted, "notes": notes}
+
+
 class RiskGateEngine:
     """Evaluate whether orders_intent is allowed for execution. Fail-closed: default deny if any stage errors >0 or policy invalid."""
 

@@ -41,6 +41,8 @@ from bist_core.services import snapshot_integrity
 from bist_core.policy import rules_engine, rules_schema
 from bist_core.strategies import resolve_strategy
 from bist_core.risk import load_risk_rules, validate_orders_intent
+from bist_core.risk.gates import gate_order_rules
+from bist_core.risk.rulespack import get_rulespack_dir, load_rulespack
 from bist_core.services import instrument_master as instrument_master_mod
 from bist_core.services import corporate_actions_canon
 from bist_core.services import price_adjust
@@ -378,12 +380,33 @@ def run_eod_pipeline(
                 orders_payload["actions"] = []
                 orders_notes = sorted(set(orders_notes + risk_notes))
                 orders_ok = False
+        rulespack_dir = get_rulespack_dir()
+        if rulespack_dir.is_dir():
+            pack, _ = load_rulespack(rulespack_dir)
+            if pack.get("tick_sizes") or pack.get("price_bands"):
+                order_rule_errors: list[str] = []
+                for action in orders_payload.get("actions") or []:
+                    if not isinstance(action, dict):
+                        continue
+                    ref_price = action.get("ref_price")
+                    try:
+                        ref_p = float(ref_price) if ref_price is not None else None
+                    except (TypeError, ValueError):
+                        ref_p = None
+                    result = gate_order_rules(action, pack, ref_price=ref_p)
+                    if not result.get("ok"):
+                        order_rule_errors.extend(result.get("errors", []))
+                if order_rule_errors:
+                    orders_ok = False
+                    orders_notes = sorted(set(orders_notes + order_rule_errors))
         orders_payload["notes"] = sorted(set(orders_payload.get("notes", []) + orders_notes))
         atomic_write_json(orders_path, orders_payload)
         orders_intent_path_written = orders_path
+        order_errors_count = 0 if orders_ok else 1
         stages["orders"] = {
             "ok": int(orders_ok),
             "total": 1,
+            "errors": order_errors_count,
             "path": str(orders_path),
             "notes": orders_notes,
         }
