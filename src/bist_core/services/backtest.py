@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from bist_core.brokers import PaperBroker
 from bist_core.services import snapshot_integrity
-from bist_core.services.portfolio_ledger import PortfolioLedger
+from bist_core.portfolio.accounting import Ledger as PortfolioLedger
 from bist_core.orders.strategies import resolve_strategy
 
 
