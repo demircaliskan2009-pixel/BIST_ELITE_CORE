@@ -18,7 +18,7 @@ from bist_core.services.dossier import (
     build_dossiers_for_day,
     build_manifest,
 )
-from bist_core.services.marketdata import MarketData
+from bist_core.market_data import resolve_provider
 from bist_core.services.events_pipeline import (
     build_events_jsonl_for_day,
     ingest_events_from_file,
@@ -83,6 +83,7 @@ def run_eod_pipeline(
     ignore_instrument_master: bool = False,
     research_source: Optional[str] = None,
     research_offline: bool = False,
+    market_data_provider: Optional[str] = None,
     git_sha: Optional[str] = None,
     cli_args: Optional[dict] = None,
 ) -> tuple[dict, int]:
@@ -278,7 +279,8 @@ def run_eod_pipeline(
         )
         return manifest, 2 if stage_errors > 0 else 0
 
-    base_symbols, eod_raw_cache = _load_symbols(root, day_str)
+    md_provider = resolve_provider(market_data_provider or "local_eod", snapshot_root=root)
+    base_symbols, eod_raw_cache = _load_symbols(md_provider, day_str)
     filtered = _filter_symbols(base_symbols, symbols, regex, limit)
     sorted_symbols = sorted(filtered)
     instrument_master_prov: Optional[dict] = None
@@ -1078,11 +1080,11 @@ def _write_advice(path: Path, records: list[dict], jsonl: bool) -> None:
     tmp_path.replace(path)
 
 
-def _load_symbols(snapshot_root: Path, day_str: str) -> tuple[list[str], Optional[dict]]:
+def _load_symbols(provider: Any, day_str: str) -> tuple[list[str], Optional[dict]]:
+    """Load symbols and optional raw_cache from market data provider. Deterministic order."""
     try:
-        md = MarketData(snapshot_root)
-        symbols = md.symbols(day_str)
-        raw_cache = _provider_raw_cache(md._prov)
+        symbols = provider.symbols(day_str)
+        raw_cache = _provider_raw_cache(provider)
         return symbols, raw_cache
     except Exception:
         return [], None

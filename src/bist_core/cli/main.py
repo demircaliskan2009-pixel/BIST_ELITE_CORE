@@ -53,6 +53,7 @@ from bist_core.services import instrument_timeline
 from bist_core.brokers import PaperBroker
 from bist_core.execution import PaperExecutionProvider
 from bist_core.risk.gates import RiskGateEngine
+from bist_core.market_data import resolve_provider
 
 
 def _find_manifest_path(outdir: Path, day: str) -> Path:
@@ -227,6 +228,7 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         restrictions_file=getattr(args, "restrictions_file", None) or os.environ.get("BIST_RESTRICTIONS_FILE"),
         research_source=research_source,
         research_offline=bool(getattr(args, "research_offline", False)),
+        market_data_provider=getattr(args, "market_data_provider", None),
         git_sha=_env_git_sha(),
         cli_args=cli_args,
     )
@@ -1598,6 +1600,28 @@ def _cmd_corporate_actions_apply_close(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_market_data_validate(args: argparse.Namespace) -> int:
+    """Validate market data for a day (provider default local_eod)."""
+    day = getattr(args, "day", None) or ""
+    if not day:
+        raise SystemExit("--day is required")
+    snapshot_root = getattr(args, "snapshot_root", None) or os.environ.get("BIST_CORE_SNAPSHOT_DIR")
+    if not snapshot_root:
+        print("ERROR: snapshot_root required (--snapshot-root or BIST_CORE_SNAPSHOT_DIR)", file=sys.stderr)
+        raise SystemExit(2)
+    try:
+        provider = resolve_provider("local_eod", snapshot_root=Path(snapshot_root))
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        raise SystemExit(2)
+    ok, message = provider.validate(day)
+    if not ok:
+        print(f"ERROR: {message}", file=sys.stderr)
+        raise SystemExit(2)
+    print(f"ok: {message}")
+    return 0
+
+
 def _read_events_input(path: Path) -> tuple[list[tuple[int, dict]], int, list[dict]]:
     text = path.read_text(encoding="utf-8")
     if path.suffix.lower() == ".jsonl":
@@ -2008,6 +2032,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_instruments_timeline.add_argument("--outdir", default=None)
     p_instruments_timeline.add_argument("--strict", action="store_true")
     p_instruments_timeline.set_defaults(func=_cmd_instruments_timeline)
+
+    p_market_data = sub.add_parser("market-data")
+    sub_market_data = p_market_data.add_subparsers(dest="market_data_cmd", required=True)
+    p_market_data_validate = sub_market_data.add_parser("validate")
+    p_market_data_validate.add_argument("--day", required=True)
+    p_market_data_validate.add_argument("--snapshot-root", dest="snapshot_root", default=None)
+    p_market_data_validate.set_defaults(func=_cmd_market_data_validate)
 
     p_ca = sub.add_parser("corporate-actions")
     sub_ca = p_ca.add_subparsers(dest="ca_cmd", required=True)
