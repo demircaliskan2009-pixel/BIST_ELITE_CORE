@@ -2,13 +2,68 @@ from __future__ import annotations
 from pathlib import Path
 import os
 import json
-from typing import Dict, Any
+from typing import Any, Dict, Optional, Tuple
 
 # ---- Proje kökleri / data yolları ----
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.getenv("BIST_DATA_DIR", REPO_ROOT / "data"))
 SAMPLES_DIR = Path(os.getenv("BIST_SAMPLES_DIR", DATA_DIR / "samples"))
 EOD_SNAPSHOT_DIR = Path(os.getenv("BIST_EOD_SNAPSHOT_DIR", DATA_DIR / "eod_snapshots"))
+
+# ---- FAZ66: Strict core config schema v1 (production-grade loader) ----
+CORE_SCHEMA_V1_REQUIRED: Dict[str, Any] = {
+    "timezone": str,
+    "default_spread_bps_max": (int, float),
+    "default_adv_tl_min": (int, float),
+    "default_auction_ratio_max": (int, float),
+    "default_price_band_pct": (int, float),
+    "risk_per_trade": (int, float),
+}
+
+
+def resolve_core_config_path(config_arg: Optional[str], repo_root: Path) -> Optional[Path]:
+    """Resolve core config path: --config > BIST_CORE_CONFIG env > repo_root/config/core.json."""
+    if config_arg:
+        return Path(config_arg)
+    env_path = os.environ.get("BIST_CORE_CONFIG")
+    if env_path:
+        return Path(env_path)
+    return repo_root / "config" / "core.json"
+
+
+def _validate_core_schema_v1(data: Dict[str, Any]) -> Optional[str]:
+    """Validate data against CORE_SCHEMA_V1. Returns None if valid, else error code string."""
+    if not isinstance(data, dict):
+        return "CONFIG_INVALID"
+    for key, allowed in CORE_SCHEMA_V1_REQUIRED.items():
+        if key not in data:
+            return "CONFIG_INVALID"
+        val = data[key]
+        if isinstance(allowed, tuple):
+            if type(val) not in allowed:
+                return "CONFIG_INVALID"
+        elif type(val) is not allowed:
+            return "CONFIG_INVALID"
+    return None
+
+
+def load_core_config_strict(path: Optional[Path]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Load and validate core config (schema v1). Missing/invalid config returns (None, error_code).
+    error_code: CONFIG_MISSING (file missing), CONFIG_INVALID (bad JSON or schema).
+    """
+    if path is None or not path.is_file():
+        return None, "CONFIG_MISSING"
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None, "CONFIG_INVALID"
+    err = _validate_core_schema_v1(data)
+    if err:
+        return None, err
+    return data, None
+
 
 def _load_json_config(rel_path: str) -> Dict[str, Any]:
     """Config JSON dosyasını yükler."""
@@ -49,4 +104,5 @@ def load_config() -> Dict[str, Any]:
 __all__ = [
     "REPO_ROOT", "DATA_DIR", "SAMPLES_DIR", "EOD_SNAPSHOT_DIR",
     "SOURCES", "CORE", "load_config",
+    "resolve_core_config_path", "load_core_config_strict", "CORE_SCHEMA_V1_REQUIRED",
 ]

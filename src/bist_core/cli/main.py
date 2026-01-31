@@ -59,6 +59,8 @@ from bist_core.cli.observability import (
     err_struct,
     ERROR_ARGS_REQUIRED,
     ERROR_ARTIFACT_HASH_MISMATCH,
+    ERROR_CONFIG_INVALID,
+    ERROR_CONFIG_MISSING,
     ERROR_REPO_ROOT_MISSING,
     ERROR_CORE_JSON_MISSING,
     ERROR_SNAPSHOT_DIR_MISSING,
@@ -424,6 +426,9 @@ def _write_execution_result(day_dir: Path, day: str, ok: bool, blocked: bool, re
     atomic_write_json(day_dir / "execution_result.json", payload)
 
 
+EXIT_CONFIG_FAIL_CLOSED = 3
+
+
 def _cmd_eod_execute(args: argparse.Namespace) -> int:
     day = getattr(args, "day", None) or ""
     outdir = Path(getattr(args, "outdir", None) or "")
@@ -433,6 +438,14 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
     dry_run = not live
     if not day or not str(outdir):
         raise SystemExit("--day and --outdir are required")
+    # FAZ66: Live mode requires valid core config; fail-closed with explicit exit code
+    if live:
+        from bist_core.config import REPO_ROOT, resolve_core_config_path, load_core_config_strict
+        config_path = resolve_core_config_path(getattr(args, "config", None), REPO_ROOT)
+        core_cfg, config_err = load_core_config_strict(config_path)
+        if config_err is not None:
+            err_struct(config_err, "live mode requires valid core config (--config or BIST_CORE_CONFIG)")
+            return EXIT_CONFIG_FAIL_CLOSED
     day_dir = outdir / day
     day_dir.mkdir(parents=True, exist_ok=True)
     # Live mode with non-paper broker: require broker config; fail-closed if missing
@@ -597,6 +610,7 @@ def _cmd_daily_run(args: argparse.Namespace) -> int:
             broker_config=None,
             provider=None,
             dry_run=not live,
+            config=getattr(args, "config", None),
         )
         return _cmd_eod_execute(exec_args)
     return 0
@@ -2039,6 +2053,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_execute = sub_eod.add_parser("execute")
     p_eod_execute.add_argument("--day", required=True)
     p_eod_execute.add_argument("--outdir", required=True)
+    p_eod_execute.add_argument("--config", default=None, help="Path to core config JSON (or BIST_CORE_CONFIG); required in live mode")
     p_eod_execute.add_argument("--execution", choices=("paper", "live"), default="paper", help="paper=simulation, live=real (requires broker config)")
     p_eod_execute.add_argument("--broker", default=None, help="Broker adapter name (e.g. paper, stub); default from execution")
     p_eod_execute.add_argument("--broker-config", dest="broker_config", default=None, help="Path to broker config JSON (or env BIST_BROKER_CONFIG) for live")
@@ -2052,6 +2067,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_daily_run = sub_daily.add_parser("run")
     p_daily_run.add_argument("--day", required=True, help="Trading day (YYYY-MM-DD)")
     p_daily_run.add_argument("--outdir", required=True, help="Output directory")
+    p_daily_run.add_argument("--config", default=None, help="Path to core config JSON (or BIST_CORE_CONFIG); required for --live")
     p_daily_run.add_argument("--live", action="store_true", help="Run pipeline then execute live")
     p_daily_run.add_argument("--paper", action="store_true", help="Run pipeline then execute paper")
     p_daily_run.set_defaults(func=_cmd_daily_run)
