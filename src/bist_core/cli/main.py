@@ -576,7 +576,7 @@ def _cmd_daily_run(args: argparse.Namespace) -> int:
             orders_top_n=10,
             risk_rules_file=None,
             restrictions_file=os.environ.get("BIST_RESTRICTIONS_FILE"),
-            research_source=None,
+            research_source=os.environ.get("BIST_RESEARCH_SOURCE") or None,
             research_offline=False,
             market_data_provider=None,
             git_sha=_env_git_sha(),
