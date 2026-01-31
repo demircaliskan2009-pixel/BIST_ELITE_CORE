@@ -482,6 +482,8 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         return 2
     if live and not dry_run:
         atomic_write_json(day_dir / "orders_sent.json", {"day": day, "actions": orders_intent.get("actions", []), **orders_intent})
+        from bist_core.audit.ledger import write_orders_jsonl
+        write_orders_jsonl(day_dir.parent, day, orders_intent.get("actions", []))
     _write_execution_result(day_dir, day, ok=True, blocked=False, reason="", provider=result.get("broker", broker_name), mode=execution, execution=execution)
     print(f"execute: broker={result.get('broker', '')} sent={result.get('sent', 0)} dry_run={dry_run}")
     return 0

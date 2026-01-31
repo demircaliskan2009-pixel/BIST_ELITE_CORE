@@ -7,6 +7,7 @@ from datetime import date as Date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from bist_core.audit.ledger import write_fills_jsonl, write_positions_jsonl
 from bist_core.brokers import PaperBroker
 from bist_core.services import snapshot_integrity
 from bist_core.portfolio.accounting import Ledger as PortfolioLedger
@@ -117,6 +118,8 @@ def run_backtest(
         fills = broker.place_orders(orders_intent)
         total_fills += len(fills)
         ledger.apply_fills(fills, sort_key=("day", "symbol"))
+        write_fills_jsonl(out_path, day, fills)
+        write_positions_jsonl(out_path, day, ledger.positions())
         equity = ledger.equity(close_map)
         equity_curve.append({"day": day, "equity": round(equity, 6)})
 
