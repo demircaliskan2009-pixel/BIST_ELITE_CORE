@@ -86,6 +86,8 @@ def run_eod_pipeline(
     ignore_instrument_master: bool = False,
     research_source: Optional[str] = None,
     research_offline: bool = False,
+    research_url: Optional[str] = None,
+    research_http_cache_dir: Optional[Path | str] = None,
     research_write_knowledge_index: bool = True,
     market_data_provider: Optional[str] = None,
     model_plugin: Optional[Any] = None,
@@ -777,11 +779,15 @@ def run_eod_pipeline(
 
     if research_source:
         try:
+            _research_url = research_url or os.environ.get("BIST_RESEARCH_URL")
+            _http_cache_dir = research_http_cache_dir if research_http_cache_dir is not None else (out_path / ".http_cache")
             res = build_research_cache(
                 day_str,
                 out_path,
                 source=research_source,
                 offline=research_offline,
+                research_url=_research_url,
+                http_cache_dir=_http_cache_dir,
             )
             stages["research"] = {
                 "count": res["count"],

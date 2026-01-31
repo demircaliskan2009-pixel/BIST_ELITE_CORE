@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 def _stub_fetch_entries(day: str, source: str, offline: bool) -> List[Dict[str, Any]]:
@@ -13,6 +13,50 @@ def _stub_fetch_entries(day: str, source: str, offline: bool) -> List[Dict[str, 
         {"id": "stub_1", "day": day, "source": source, "title": "Fake research 1", "offline": offline},
         {"id": "stub_2", "day": day, "source": source, "title": "Fake research 2", "offline": offline},
     ]
+
+
+def _fetch_entries_via_http(
+    day: str,
+    source: str,
+    research_url: str,
+    http_cache_dir: Path,
+    offline: bool,
+) -> List[Dict[str, Any]]:
+    """FAZ67: Fetch research entries via offline-first HTTP cache. offline=True -> fixture mode (no network)."""
+    from bist_core.http_cache import HttpClient
+    client = HttpClient(
+        cache_dir=http_cache_dir,
+        ttl_seconds=3600,
+        fixture_mode=offline,
+    )
+    resp, err = client.get(research_url)
+    if err is not None:
+        return [{"id": "http_error", "day": day, "source": source, "error_marker": err}]
+    if resp is None:
+        return [{"id": "http_miss", "day": day, "source": source, "error_marker": "cache_miss"}]
+    body = resp.get("body") or b""
+    try:
+        raw = json.loads(body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return [{"id": "http_parse_error", "day": day, "source": source, "error_marker": "invalid_json"}]
+    if isinstance(raw, list):
+        entries = []
+        for i, item in enumerate(raw):
+            if isinstance(item, dict):
+                row = dict(item)
+                row.setdefault("id", f"url_{i}")
+                row.setdefault("day", day)
+                row.setdefault("source", source)
+                entries.append(row)
+            else:
+                entries.append({"id": f"url_{i}", "day": day, "source": source, "raw": str(item)})
+        return entries if entries else [{"id": "url_empty", "day": day, "source": source}]
+    if isinstance(raw, dict):
+        raw.setdefault("id", "url_0")
+        raw.setdefault("day", day)
+        raw.setdefault("source", source)
+        return [raw]
+    return [{"id": "url_0", "day": day, "source": source, "raw": str(raw)}]
 
 
 def _atomic_write_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
@@ -30,17 +74,25 @@ def build_research_cache(
     *,
     source: str = "kap",
     offline: bool = False,
+    research_url: Optional[str] = None,
+    http_cache_dir: Optional[Path | str] = None,
 ) -> Dict[str, Any]:
     """
     Write research_index.json + entries.jsonl under outdir/<day>/research/.
-    Deterministic paths. Returns manifest dict: counts, errors, path, provenance (hash list).
+    When source=='url' and research_url set, fetch via HTTP cache (offline=True -> fixture mode).
+    Returns manifest dict: counts, errors, path, provenance (hash list).
     """
     out_path = Path(outdir)
     research_dir = out_path / day / "research"
     research_dir.mkdir(parents=True, exist_ok=True)
 
-    entries = _stub_fetch_entries(day, source, offline)
-    errors: List[str] = []
+    if source == "url" and research_url and http_cache_dir is not None:
+        cache_dir = Path(http_cache_dir)
+        entries = _fetch_entries_via_http(day, source, research_url, cache_dir, offline)
+        errors = [e.get("error_marker", "") for e in entries if e.get("error_marker")]
+    else:
+        entries = _stub_fetch_entries(day, source, offline)
+        errors = []
     hashes: List[str] = []
 
     for ent in entries:
