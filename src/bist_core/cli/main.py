@@ -55,6 +55,15 @@ from bist_core.brokers import PaperBroker
 from bist_core.execution import PaperExecutionProvider
 from bist_core.risk.gates import RiskGateEngine
 from bist_core.market_data import resolve_provider
+from bist_core.cli.observability import (
+    err_struct,
+    ERROR_ARGS_REQUIRED,
+    ERROR_ARTIFACT_HASH_MISMATCH,
+    ERROR_REPO_ROOT_MISSING,
+    ERROR_CORE_JSON_MISSING,
+    ERROR_SNAPSHOT_DIR_MISSING,
+    ERROR_REGISTRY_MISSING,
+)
 
 
 def _find_manifest_path(outdir: Path, day: str) -> Path:
@@ -509,7 +518,7 @@ def _cmd_daily_run(args: argparse.Namespace) -> int:
     day_str = getattr(args, "day", None) or ""
     outdir_arg = getattr(args, "outdir", None)
     if not day_str or not outdir_arg:
-        print("daily run: --day and --outdir required", file=sys.stderr)
+        err_struct(ERROR_ARGS_REQUIRED, "daily run: --day and --outdir required")
         return 2
     out_path = Path(outdir_arg)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -525,7 +534,7 @@ def _cmd_daily_run(args: argparse.Namespace) -> int:
             if stored_hash and current_path is not None:
                 current_hash = snapshot_integrity.compute_sha256(Path(current_path))
                 if current_hash != stored_hash:
-                    print("daily run: existing artifacts differ (snapshot hash changed); will not overwrite", file=sys.stderr)
+                    err_struct(ERROR_ARTIFACT_HASH_MISMATCH, "existing artifacts differ (snapshot hash changed); will not overwrite")
                     return 2
             # Reuse: skip pipeline run; run execute only if requested
             run_pipeline = False
@@ -591,6 +600,85 @@ def _cmd_daily_run(args: argparse.Namespace) -> int:
         )
         return _cmd_eod_execute(exec_args)
     return 0
+
+
+def _cmd_healthcheck(args: argparse.Namespace) -> int:
+    """FAZ64: Validate environment + config; output structured JSON only (no noisy prints)."""
+    checks: list[dict] = []
+    repo_path = Path(config.REPO_ROOT)
+
+    # REPO_ROOT exists
+    if repo_path.is_dir():
+        checks.append({"name": "repo_root", "code": "OK", "ok": True, "message": str(repo_path)})
+    else:
+        checks.append({
+            "name": "repo_root",
+            "code": ERROR_REPO_ROOT_MISSING,
+            "ok": False,
+            "message": f"REPO_ROOT not a directory: {repo_path}",
+        })
+
+    # config/core.json exists
+    core_json = repo_path / "config" / "core.json"
+    if core_json.is_file():
+        checks.append({"name": "core_json", "code": "OK", "ok": True, "message": str(core_json)})
+    else:
+        checks.append({
+            "name": "core_json",
+            "code": ERROR_CORE_JSON_MISSING,
+            "ok": False,
+            "message": f"config/core.json not found: {core_json}",
+        })
+
+    # BIST_CORE_SNAPSHOT_DIR: exists or parent writable (optional)
+    snap_dir = os.getenv("BIST_CORE_SNAPSHOT_DIR", "")
+    if snap_dir:
+        p = Path(snap_dir)
+        if p.is_dir():
+            checks.append({"name": "snapshot_dir", "code": "OK", "ok": True, "message": str(p)})
+        elif p.parent.is_dir():
+            checks.append({"name": "snapshot_dir", "code": "OK", "ok": True, "message": f"parent exists: {p.parent}"})
+        else:
+            checks.append({
+                "name": "snapshot_dir",
+                "code": ERROR_SNAPSHOT_DIR_MISSING,
+                "ok": False,
+                "message": f"BIST_CORE_SNAPSHOT_DIR not usable: {p}",
+            })
+    else:
+        checks.append({"name": "snapshot_dir", "code": "OK", "ok": True, "message": "not set (default will be used)"})
+
+    # Registry (optional)
+    try:
+        reg = get_default_registry()
+        reg_path = getattr(reg, "path", None)
+        reg_path_str = str(reg_path) if reg_path is not None else ""
+        if reg_path and Path(reg_path).exists():
+            checks.append({"name": "registry", "code": "OK", "ok": True, "message": reg_path_str})
+        else:
+            checks.append({
+                "name": "registry",
+                "code": ERROR_REGISTRY_MISSING,
+                "ok": False,
+                "message": reg_path_str or "registry path unknown",
+            })
+    except Exception as e:
+        checks.append({
+            "name": "registry",
+            "code": ERROR_REGISTRY_MISSING,
+            "ok": False,
+            "message": str(e),
+        })
+
+    required_names = {"repo_root", "core_json"}
+    ok = all(c.get("ok", False) for c in checks if c.get("name") in required_names)
+    payload = {
+        "schema_version": 1,
+        "ok": ok,
+        "checks": checks,
+    }
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+    return 0 if ok else 2
 
 
 def _print_batch_summary(manifest: dict, exit_code: int) -> None:
@@ -1834,6 +1922,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_info = sub.add_parser("info")
     p_info.add_argument("--json", action="store_true")
     p_info.set_defaults(func=_cmd_info)
+
+    p_healthcheck = sub.add_parser("healthcheck", help="Validate environment + config; output JSON only")
+    p_healthcheck.set_defaults(func=_cmd_healthcheck)
 
     p_eod = sub.add_parser("eod")
     p_eod.add_argument("--date", required=False)
