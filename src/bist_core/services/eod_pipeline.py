@@ -88,6 +88,7 @@ def run_eod_pipeline(
     research_offline: bool = False,
     research_url: Optional[str] = None,
     research_http_cache_dir: Optional[Path | str] = None,
+    research_kap_fixture_path: Optional[Path | str] = None,
     research_write_knowledge_index: bool = True,
     market_data_provider: Optional[str] = None,
     model_plugin: Optional[Any] = None,
@@ -781,6 +782,7 @@ def run_eod_pipeline(
         try:
             _research_url = research_url or os.environ.get("BIST_RESEARCH_URL")
             _http_cache_dir = research_http_cache_dir if research_http_cache_dir is not None else (out_path / ".http_cache")
+            _kap_fixture = research_kap_fixture_path or os.environ.get("BIST_KAP_FIXTURE_PATH")
             res = build_research_cache(
                 day_str,
                 out_path,
@@ -788,6 +790,7 @@ def run_eod_pipeline(
                 offline=research_offline,
                 research_url=_research_url,
                 http_cache_dir=_http_cache_dir,
+                kap_fixture_path=_kap_fixture,
             )
             stages["research"] = {
                 "count": res["count"],

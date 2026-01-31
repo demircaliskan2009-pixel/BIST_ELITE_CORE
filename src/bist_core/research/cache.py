@@ -59,6 +59,38 @@ def _fetch_entries_via_http(
     return [{"id": "url_0", "day": day, "source": source, "raw": str(raw)}]
 
 
+def _fetch_entries_via_kap_fixture(
+    day: str,
+    source: str,
+    kap_fixture_path: Path,
+) -> List[Dict[str, Any]]:
+    """FAZ68: Ingest disclosures from KAP fixture HTML/JSON via connector; no network."""
+    from bist_core.connectors.kap import ingest_from_html, ingest_from_json
+    path = Path(kap_fixture_path)
+    if not path.is_file():
+        return [{"id": "kap_fixture_missing", "day": day, "source": source, "error_marker": "fixture_not_found"}]
+    suffix = path.suffix.lower()
+    if suffix == ".html":
+        docs = ingest_from_html(path)
+    elif suffix == ".json":
+        docs = ingest_from_json(path)
+    else:
+        return [{"id": "kap_fixture_unsupported", "day": day, "source": source, "error_marker": "fixture_extension"}]
+    entries: List[Dict[str, Any]] = []
+    for doc in docs:
+        published = (doc.get("published_at_utc") or "")[:10]
+        entries.append({
+            "id": doc.get("doc_id", ""),
+            "day": published or day,
+            "source": doc.get("source", source),
+            "title": doc.get("title", ""),
+            "body": doc.get("body", ""),
+            "tickers": doc.get("tickers", []),
+            "published_at_utc": doc.get("published_at_utc", ""),
+        })
+    return entries
+
+
 def _atomic_write_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
     tmp = path.with_name(path.name + ".tmp")
     with tmp.open("w", encoding="utf-8") as f:
@@ -76,10 +108,12 @@ def build_research_cache(
     offline: bool = False,
     research_url: Optional[str] = None,
     http_cache_dir: Optional[Path | str] = None,
+    kap_fixture_path: Optional[Path | str] = None,
 ) -> Dict[str, Any]:
     """
     Write research_index.json + entries.jsonl under outdir/<day>/research/.
     When source=='url' and research_url set, fetch via HTTP cache (offline=True -> fixture mode).
+    When source=='kap' and kap_fixture_path set, ingest from fixture HTML/JSON via KAP connector (no network).
     Returns manifest dict: counts, errors, path, provenance (hash list).
     """
     out_path = Path(outdir)
@@ -89,6 +123,9 @@ def build_research_cache(
     if source == "url" and research_url and http_cache_dir is not None:
         cache_dir = Path(http_cache_dir)
         entries = _fetch_entries_via_http(day, source, research_url, cache_dir, offline)
+        errors = [e.get("error_marker", "") for e in entries if e.get("error_marker")]
+    elif source == "kap" and kap_fixture_path is not None:
+        entries = _fetch_entries_via_kap_fixture(day, source, Path(kap_fixture_path))
         errors = [e.get("error_marker", "") for e in entries if e.get("error_marker")]
     else:
         entries = _stub_fetch_entries(day, source, offline)
