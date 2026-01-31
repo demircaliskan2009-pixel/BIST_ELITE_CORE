@@ -51,6 +51,7 @@ from bist_core.services import price_adjust
 from bist_core.research.cache import build_research_cache
 from bist_core.advisory.generate import generate_advice
 from bist_core.knowledge import KnowledgeBase
+from bist_core.dossier import write_dossier
 
 
 def run_eod_pipeline(
@@ -118,6 +119,7 @@ def run_eod_pipeline(
     universe_manifest = None
     events_pull_raw_cache = None
     research_provenance: Optional[List[str]] = None
+    research_path_out: Optional[str] = None
     pipeline_manifest_to_write = None
 
     calendar_path = Path(calendar_file) if calendar_file is not None else None
@@ -492,6 +494,7 @@ def run_eod_pipeline(
         "errors": dossier_manifest["errors"],
         "path": str(dossier_dir),
     }
+    dossier_json_path: Optional[Path] = None
 
     events_manifest = None
     if events_provider and (events_provider == "kap_html" or events_input):
@@ -779,11 +782,30 @@ def run_eod_pipeline(
                 "notes": [],
             }
             research_provenance = res.get("provenance") or []
+            research_path_out = res["path"]
             if research_write_knowledge_index:
                 _write_knowledge_index_from_research(res["path"])
         except Exception as exc:
             stages["research"]["errors"] = 1
             stages["research"]["notes"] = [f"research_error:{exc.__class__.__name__}"]
+
+    try:
+        evidence: Dict[str, Any] = {
+            "advice_path": str(advice_path),
+            "dossier_path": str(dossier_dir),
+            "snapshot_hash": snapshot_hash,
+            "restrictions": restrictions_provenance,
+        }
+        if orders_intent_path_written is not None:
+            evidence["orders_intent_path"] = str(orders_intent_path_written)
+            evidence["risk_allowed"] = stages.get("orders", {}).get("ok", 1) == 1
+            evidence["risk_notes"] = stages.get("orders", {}).get("notes", [])
+        if research_path_out:
+            evidence["research_path"] = research_path_out
+        dossier_json_path = write_dossier(day_str, out_path, evidence)
+        stages["dossier"]["dossier_json_path"] = str(dossier_json_path)
+    except Exception:
+        stages["dossier"].setdefault("notes", []).append("dossier_json_write_skipped")
 
     runtime_ms = int((time.perf_counter() - start) * 1000)
     finished_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
