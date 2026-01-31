@@ -52,6 +52,7 @@ from bist_core.research.cache import build_research_cache
 from bist_core.advisory.generate import generate_advice
 from bist_core.knowledge import KnowledgeBase
 from bist_core.dossier import write_dossier
+from bist_core.models.baseline import BaselineModel
 
 
 def run_eod_pipeline(
@@ -87,6 +88,7 @@ def run_eod_pipeline(
     research_offline: bool = False,
     research_write_knowledge_index: bool = True,
     market_data_provider: Optional[str] = None,
+    model_plugin: Optional[Any] = None,
     git_sha: Optional[str] = None,
     cli_args: Optional[dict] = None,
 ) -> tuple[dict, int]:
@@ -351,8 +353,14 @@ def run_eod_pipeline(
                 stages["universe"]["notes"] = stages["universe"].get("notes", []) + ["alias_resolution_failed"]
                 safe_mode_reason = "Alias resolution failed (exception)."
 
+    _model_plugin = None
+    _model_cfg = model_plugin if model_plugin is not None else os.getenv("BIST_CORE_MODEL_PLUGIN")
+    if _model_cfg == "baseline":
+        _model_plugin = BaselineModel()
+    elif model_plugin is not None and hasattr(model_plugin, "predict"):
+        _model_plugin = model_plugin
     advice_result = generate_advice(
-        day_str, root, out_path, symbols=sorted_symbols, top_n=None, safe_mode_reason=safe_mode_reason
+        day_str, root, out_path, symbols=sorted_symbols, top_n=None, safe_mode_reason=safe_mode_reason, model_plugin=_model_plugin
     )
     advice_path = Path(advice_result["path"]) / "advice_records.jsonl"
     advice_records_for_orders = [

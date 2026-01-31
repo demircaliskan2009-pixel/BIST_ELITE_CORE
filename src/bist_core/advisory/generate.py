@@ -4,7 +4,10 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bist_core.models.base import ModelPlugin
 
 
 def _load_close_map(snapshot_root: Path, day_str: str) -> Dict[str, float]:
@@ -44,6 +47,15 @@ def _record_v1(
     }
 
 
+def _score_to_side(score: float) -> str:
+    """Map score to BUY/SELL/HOLD (deterministic)."""
+    if score > 0:
+        return "BUY"
+    if score < 0:
+        return "SELL"
+    return "HOLD"
+
+
 def generate_advice(
     day: str,
     snapshot_root: Path | str,
@@ -52,9 +64,11 @@ def generate_advice(
     symbols: Optional[List[str]] = None,
     top_n: Optional[int] = None,
     safe_mode_reason: Optional[str] = None,
+    model_plugin: Optional["ModelPlugin"] = None,
 ) -> Dict[str, Any]:
     """
     Write outdir/advice/<day>/advice_records.jsonl (schema v1); stable sort by symbol; deterministic floats.
+    If model_plugin is set, use model.predict(features) for scores; else use build_advice_for_symbol.
     Returns {path, total, errors, records} for pipeline use.
     """
     root = Path(snapshot_root)
@@ -63,30 +77,54 @@ def generate_advice(
     close_map = _load_close_map(root, day_str)
     symbols = sorted(symbols) if symbols is not None else sorted(close_map.keys())
 
-    from bist_core.services.advisor import build_advice_for_symbol
-
     records: List[Dict[str, Any]] = []
     errors = 0
-    for symbol in symbols:
-        close = close_map.get(symbol, 0.0)
+
+    if model_plugin is not None:
+        features = [
+            {"symbol": s, "close": close_map.get(s, 0.0)}
+            for s in symbols
+        ]
         try:
-            advice = build_advice_for_symbol(symbol, day_str, root=root)
-            raw = str(advice.decision_raw or "PASS").upper()
-            side = "BUY" if raw == "BUY" else ("SELL" if raw == "SELL" else "HOLD")
-            reason = advice.text or ""
+            scores = model_plugin.predict(features)
+        except Exception:
+            scores = [0.0] * len(symbols)
+            errors += len(symbols)
+        if len(scores) != len(symbols):
+            scores = (scores + [0.0] * len(symbols))[:len(symbols)]
+        for i, symbol in enumerate(symbols):
+            close = close_map.get(symbol, 0.0)
+            score = float(scores[i]) if i < len(scores) else 0.0
+            side = _score_to_side(score)
+            reason = "model"
             if safe_mode_reason:
                 reason = f"Güvenli mod: {safe_mode_reason} " + reason
-            rec = _record_v1(
-                symbol=advice.symbol,
-                score=advice.score,
-                side=side,
-                reason=reason,
-                close=close,
+            records.append(
+                _record_v1(symbol=symbol, score=score, side=side, reason=reason, close=close)
             )
-        except Exception:
-            rec = _record_v1(symbol=symbol, score=0.0, side="HOLD", reason="advice_error", close=close)
-            errors += 1
-        records.append(rec)
+    else:
+        from bist_core.services.advisor import build_advice_for_symbol
+
+        for symbol in symbols:
+            close = close_map.get(symbol, 0.0)
+            try:
+                advice = build_advice_for_symbol(symbol, day_str, root=root)
+                raw = str(advice.decision_raw or "PASS").upper()
+                side = "BUY" if raw == "BUY" else ("SELL" if raw == "SELL" else "HOLD")
+                reason = advice.text or ""
+                if safe_mode_reason:
+                    reason = f"Güvenli mod: {safe_mode_reason} " + reason
+                rec = _record_v1(
+                    symbol=advice.symbol,
+                    score=advice.score,
+                    side=side,
+                    reason=reason,
+                    close=close,
+                )
+            except Exception:
+                rec = _record_v1(symbol=symbol, score=0.0, side="HOLD", reason="advice_error", close=close)
+                errors += 1
+            records.append(rec)
 
     if top_n is not None and top_n > 0 and records:
         records = sorted(records, key=lambda r: (-float(r["score"]), r["symbol"]))[:top_n]

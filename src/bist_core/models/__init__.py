@@ -1,6 +1,12 @@
+"""Models: plugin interface (base) + dataclasses for backward compatibility."""
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Dict, List, Tuple
+
+from bist_core.models.base import ModelPlugin
+from bist_core.models.baseline import BaselineModel
 
 
 @dataclass
@@ -45,7 +51,6 @@ class EventRecord:
 def validate_events(rows: List[Dict[str, Any]]) -> Tuple[List[EventRecord], List[str]]:
     events: List[EventRecord] = []
     errors: List[str] = []
-
     for idx, row in enumerate(rows):
         if not isinstance(row, dict):
             errors.append(f"SchemaError:row={idx} not a dict")
@@ -76,17 +81,21 @@ def validate_events(rows: List[Dict[str, Any]]) -> Tuple[List[EventRecord], List
         if payload is not None and not isinstance(payload, dict):
             errors.append(f"SchemaError:row={idx} invalid payload")
             continue
-
         events.append(
             EventRecord(
-                symbol=symbol,
-                ts=ts,
-                kind=kind,
-                title=title,
-                url=url,
-                tags=tags,
-                payload=payload,
+                symbol=symbol, ts=ts, kind=kind, title=title,
+                url=url, tags=tags, payload=payload,
             )
         )
-
     return events, errors
+
+
+__all__ = [
+    "ModelPlugin",
+    "BaselineModel",
+    "EODBar",
+    "PriceBand",
+    "KapEvent",
+    "EventRecord",
+    "validate_events",
+]
