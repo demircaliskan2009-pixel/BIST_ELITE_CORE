@@ -31,7 +31,8 @@ from bist_core.services.dossier import (
     build_dossiers_for_day,
     build_manifest,
 )
-from bist_core.services.eod_pipeline import run_eod_pipeline
+from bist_core.services.eod_pipeline import locate_manifest, run_eod_pipeline
+from bist_core.services import snapshot_integrity
 from bist_core.services.eod_replay import run_eod_replay
 from bist_core.services.scorecard import build_scorecard
 from bist_core.services.eod_batch import audit_eod_batch, run_eod_batch
@@ -500,6 +501,95 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         write_orders_jsonl(day_dir.parent, day, orders_intent.get("actions", []))
     _write_execution_result(day_dir, day, ok=True, blocked=False, reason="", provider=result.get("broker", broker_name), mode=execution, execution=execution)
     print(f"execute: broker={result.get('broker', '')} sent={result.get('sent', 0)} dry_run={dry_run}")
+    return 0
+
+
+def _cmd_daily_run(args: argparse.Namespace) -> int:
+    """FAZ61: Run pipeline end-to-end idempotently. Do not overwrite differing artifacts; verify hash or reuse."""
+    day_str = getattr(args, "day", None) or ""
+    outdir_arg = getattr(args, "outdir", None)
+    if not day_str or not outdir_arg:
+        print("daily run: --day and --outdir required", file=sys.stderr)
+        return 2
+    out_path = Path(outdir_arg)
+    out_path.mkdir(parents=True, exist_ok=True)
+    base = _snapshot_root()
+    manifest_path = locate_manifest(out_path, day_str)
+    if manifest_path is not None and manifest_path.is_file():
+        try:
+            manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            stored_hash = (manifest_data.get("snapshot_hash") or {}).get("value") or ""
+            snapshot_csv = base / day_str / "snapshot.csv"
+            snapshot_alt = base / (day_str + ".csv")
+            current_path = snapshot_csv if snapshot_csv.is_file() else (snapshot_alt if snapshot_alt.is_file() else None)
+            if stored_hash and current_path is not None:
+                current_hash = snapshot_integrity.compute_sha256(Path(current_path))
+                if current_hash != stored_hash:
+                    print("daily run: existing artifacts differ (snapshot hash changed); will not overwrite", file=sys.stderr)
+                    return 2
+            # Reuse: skip pipeline run; run execute only if requested
+            run_pipeline = False
+        except (json.JSONDecodeError, OSError):
+            run_pipeline = True
+    else:
+        run_pipeline = True
+
+    if run_pipeline:
+        cli_args = {
+            "day": day_str,
+            "outdir": str(out_path),
+            "emit_orders": True,
+        }
+        manifest, code = run_eod_pipeline(
+            day_str,
+            snapshot_root=base,
+            outdir=out_path,
+            strict=False,
+            symbols=None,
+            regex=None,
+            limit=None,
+            jsonl=True,
+            events_provider=None,
+            events_input=None,
+            events_outdir=None,
+            instruments_provider=None,
+            instruments_input=None,
+            instruments_outdir=None,
+            ca_provider=None,
+            ca_input=None,
+            ca_outdir=None,
+            resolve_aliases=False,
+            calendar_file=None,
+            ignore_calendar=True,
+            policy_file=None,
+            emit_orders=True,
+            orders_strategy="equal_weight",
+            orders_top_n=10,
+            risk_rules_file=None,
+            restrictions_file=os.environ.get("BIST_RESTRICTIONS_FILE"),
+            research_source=None,
+            research_offline=False,
+            market_data_provider=None,
+            git_sha=_env_git_sha(),
+            cli_args=cli_args,
+        )
+        if code != 0:
+            return int(code)
+
+    live = bool(getattr(args, "live", False))
+    paper = bool(getattr(args, "paper", False))
+    if live or paper:
+        exec_args = argparse.Namespace(
+            day=day_str,
+            outdir=str(out_path),
+            live=live,
+            execution="live" if live else "paper",
+            broker=None,
+            broker_config=None,
+            provider=None,
+            dry_run=not live,
+        )
+        return _cmd_eod_execute(exec_args)
     return 0
 
 
@@ -1865,6 +1955,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_execute.add_argument("--dry-run", dest="dry_run", action="store_true", default=True)
     p_eod_execute.add_argument("--live", action="store_true", dest="live")
     p_eod_execute.set_defaults(func=_cmd_eod_execute)
+
+    p_daily = sub.add_parser("daily", help="Daily run: pipeline end-to-end idempotently")
+    sub_daily = p_daily.add_subparsers(dest="daily_cmd", required=True)
+    p_daily_run = sub_daily.add_parser("run")
+    p_daily_run.add_argument("--day", required=True, help="Trading day (YYYY-MM-DD)")
+    p_daily_run.add_argument("--outdir", required=True, help="Output directory")
+    p_daily_run.add_argument("--live", action="store_true", help="Run pipeline then execute live")
+    p_daily_run.add_argument("--paper", action="store_true", help="Run pipeline then execute paper")
+    p_daily_run.set_defaults(func=_cmd_daily_run)
 
     p_plan = sub.add_parser("plan")
     p_plan.add_argument("--date", required=True)
