@@ -50,6 +50,7 @@ from bist_core.services import corporate_actions_canon
 from bist_core.services import price_adjust
 from bist_core.research.cache import build_research_cache
 from bist_core.advisory.generate import generate_advice
+from bist_core.knowledge import KnowledgeBase
 
 
 def run_eod_pipeline(
@@ -83,6 +84,7 @@ def run_eod_pipeline(
     ignore_instrument_master: bool = False,
     research_source: Optional[str] = None,
     research_offline: bool = False,
+    research_write_knowledge_index: bool = True,
     market_data_provider: Optional[str] = None,
     git_sha: Optional[str] = None,
     cli_args: Optional[dict] = None,
@@ -777,6 +779,8 @@ def run_eod_pipeline(
                 "notes": [],
             }
             research_provenance = res.get("provenance") or []
+            if research_write_knowledge_index:
+                _write_knowledge_index_from_research(res["path"])
         except Exception as exc:
             stages["research"]["errors"] = 1
             stages["research"]["notes"] = [f"research_error:{exc.__class__.__name__}"]
@@ -1078,6 +1082,29 @@ def _write_advice(path: Path, records: list[dict], jsonl: bool) -> None:
         with tmp_path.open("w", encoding="utf-8") as f:
             json.dump(records, f, ensure_ascii=False, indent=2)
     tmp_path.replace(path)
+
+
+def _write_knowledge_index_from_research(research_dir: str | Path) -> None:
+    """Read research dir entries.jsonl, add to KnowledgeBase, write knowledge_index.json."""
+    research_path = Path(research_dir)
+    entries_path = research_path / "entries.jsonl"
+    if not entries_path.is_file():
+        return
+    entries: List[Dict[str, Any]] = []
+    with entries_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except (json.JSONDecodeError, TypeError):
+                continue
+    if not entries:
+        return
+    kb = KnowledgeBase()
+    kb.add_documents(entries)
+    kb.save(research_path / "knowledge_index.json")
 
 
 def _load_symbols(provider: Any, day_str: str) -> tuple[list[str], Optional[dict]]:
