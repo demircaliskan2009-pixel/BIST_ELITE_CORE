@@ -142,6 +142,14 @@ def test_faz40_case_c_live_file_written_at_deterministic_path(tmp_path: Path) ->
     outdir = tmp_path / "out"
     (outdir / day).mkdir(parents=True)
     (outdir / "orders" / day).mkdir(parents=True)
+    # FAZ57: live requires BIST rule data (rulespack + restrictions)
+    rules_dir = tmp_path / "bist_rules"
+    rules_dir.mkdir()
+    (rules_dir / "tick_sizes.csv").write_text("min_price,max_price,tick\n0,9999,0.01\n", encoding="utf-8")
+    (rules_dir / "price_bands.csv").write_text("band_pct,market\n10,\n", encoding="utf-8")
+    (tmp_path / "restrictions.json").write_text('{"blocked_symbols": [], "short_sale_ban": false}', encoding="utf-8")
+    env["BIST_RULESPACK_DIR"] = str(rules_dir)
+    env["BIST_RESTRICTIONS_FILE"] = str(tmp_path / "restrictions.json")
     orders_intent = {
         "schema_version": 1,
         "day": day,

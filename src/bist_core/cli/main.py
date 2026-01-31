@@ -435,6 +435,18 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
             print(f"blocked: {note}", file=sys.stderr)
             _write_execution_result(day_dir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode="live", errors=[err], execution=execution)
             return 2
+    if live:
+        from bist_core.risk.gates import preflight_bist_rules_for_live
+        from bist_core.risk.restrictions import get_restrictions_path
+        from bist_core.risk.rulespack import get_rulespack_dir
+        ok_pre, err_pre = preflight_bist_rules_for_live(rulespack_dir=get_rulespack_dir(), restrictions_path=get_restrictions_path())
+        if not ok_pre:
+            note = "BIST rule data missing for live (tick/bands/vbts); set BIST_RULESPACK_DIR and BIST_RESTRICTIONS_FILE"
+            print(f"blocked: {note}", file=sys.stderr)
+            for e in err_pre:
+                print(f"  {e}", file=sys.stderr)
+            _write_execution_result(day_dir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode=execution, errors=err_pre, execution=execution)
+            return 2
     manifest_path = _find_manifest_path(outdir, day)
     if not manifest_path.is_file():
         print("blocked: no pipeline manifest found", file=sys.stderr)

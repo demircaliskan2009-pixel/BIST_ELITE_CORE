@@ -1,7 +1,17 @@
 """RiskGateEngine: fail-closed gate for execution (stage errors or policy invalid => deny)."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+
+def preflight_bist_rules_for_live(
+    rulespack_dir: Optional[Path] = None,
+    restrictions_path: Optional[Path] = None,
+) -> Tuple[bool, List[str]]:
+    """Preflight BIST rule data for live execution. Fail-closed when tick/bands/vbts missing. Returns (ok, errors)."""
+    from bist_core.risk.bist_rules import preflight_for_live
+    return preflight_for_live(rulespack_dir=rulespack_dir, restrictions_path=restrictions_path)
 
 
 def gate_order_rules(
