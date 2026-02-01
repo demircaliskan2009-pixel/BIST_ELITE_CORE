@@ -74,5 +74,6 @@ secrets/
 *.jks
 
 # local test artifacts
-pytest_first_fail*.txt
+pytest_first_fail.txt
+pytest_*.txt
 
