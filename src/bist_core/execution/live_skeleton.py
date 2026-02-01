@@ -12,9 +12,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from bist_core.audit.ledger import write_fills_jsonl, write_orders_jsonl, write_positions_jsonl
-from bist_core.execution.result_writer import write_execution_result
+from bist_core.execution.result_writer import EXECUTION_RESULT_FILENAME, write_execution_result
 from bist_core.portfolio.accounting import apply_fills, create_initial_state
+from bist_core.reconciliation import write_reconciliation
 from bist_core.services import snapshot_integrity
+from bist_core.dossier.write import update_dossier_evidence
 
 PORTFOLIO_STATE_FILENAME = "state.json"
 
@@ -144,6 +146,21 @@ def run_live_execute_skeleton(
         execution=execution_mode,
         orders_intent_sha256=intent_sha,
     )
+    # FAZ77: reconciliation + link into dossier evidence
+    ledger_dir = out_path / "ledger" / day_str
+    fills_path = ledger_dir / "fills.jsonl"
+    recon_path = write_reconciliation(out_path, day_str, intent_path, fills_path)
+    exec_result_path = day_dir / EXECUTION_RESULT_FILENAME
+    orders_ledger_path = ledger_dir / "orders.jsonl"
+    positions_ledger_path = ledger_dir / "positions.jsonl"
+    extra_evidence = {
+        "reconciliation_path": str(recon_path),
+        "execution_result_path": str(exec_result_path),
+        "ledger_orders_path": str(orders_ledger_path),
+        "ledger_fills_path": str(fills_path),
+        "ledger_positions_path": str(positions_ledger_path),
+    }
+    update_dossier_evidence(out_path, day_str, extra_evidence)
     return (True, None)
 
 

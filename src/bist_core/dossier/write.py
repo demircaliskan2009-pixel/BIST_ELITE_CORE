@@ -106,6 +106,18 @@ def write_dossier(
     if evidence.get("risk_allowed") is not None:
         payload["risk_allowed"] = bool(evidence["risk_allowed"])
 
+    # FAZ77: reconciliation + execution_result + audit ledger paths
+    if evidence.get("reconciliation_path"):
+        pointers["reconciliation_path"] = str(evidence["reconciliation_path"])
+    if evidence.get("execution_result_path"):
+        pointers["execution_result_path"] = str(evidence["execution_result_path"])
+    if evidence.get("ledger_orders_path"):
+        pointers["ledger_orders_path"] = str(evidence["ledger_orders_path"])
+    if evidence.get("ledger_fills_path"):
+        pointers["ledger_fills_path"] = str(evidence["ledger_fills_path"])
+    if evidence.get("ledger_positions_path"):
+        pointers["ledger_positions_path"] = str(evidence["ledger_positions_path"])
+
     payload["evidence"] = _stable_payload(pointers)
     payload["dossier_json_path"] = str(out_file)
 
@@ -115,3 +127,26 @@ def write_dossier(
         json.dump(stable, f, ensure_ascii=False, indent=2, sort_keys=True)
     tmp.replace(out_file)
     return out_file
+
+
+def update_dossier_evidence(outdir: Path | str, day: str, extra_evidence: Dict[str, Any]) -> Optional[Path]:
+    """
+    FAZ77: Load existing dossier.json, merge extra_evidence into evidence, rewrite. Returns path or None if no dossier.
+    Use after execution to add reconciliation_path, execution_result_path, ledger paths.
+    """
+    out_path = Path(outdir)
+    day_dir = out_path / "dossier" / str(day)
+    dossier_file = day_dir / "dossier.json"
+    if not dossier_file.is_file():
+        return None
+    try:
+        existing = json.loads(dossier_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, TypeError, OSError):
+        return None
+    evidence = dict(existing.get("evidence") or {})
+    for k, v in (extra_evidence or {}).items():
+        if v is not None and v != "":
+            evidence[k] = v
+    if "risk_allowed" in existing:
+        evidence["risk_allowed"] = existing["risk_allowed"]
+    return write_dossier(day, out_path, evidence)
