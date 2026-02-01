@@ -26,6 +26,7 @@ from bist_core import config
 from bist_core.services import eventstore
 from bist_core.services.marketdata import MarketData
 from bist_core.services.advisor import build_advice_for_symbol
+from bist_core.execution.result_writer import write_execution_result
 from bist_core.services.dossier import (
     atomic_write_json,
     build_dossiers_for_day,
@@ -408,24 +409,6 @@ def _cmd_eod_research(args: argparse.Namespace) -> int:
     return 0
 
 
-def _write_execution_result(day_dir: Path, day: str, ok: bool, blocked: bool, reason: str, provider: str, mode: str, errors: Optional[list] = None, execution: Optional[str] = None) -> None:
-    """FAZ71: Write execution_result.json to day_dir deterministically (schema v1; errors sorted). Always call on exit paths."""
-    day_dir.mkdir(parents=True, exist_ok=True)
-    err_list = sorted(errors) if errors is not None else []
-    payload = {
-        "schema_version": 1,
-        "day": day,
-        "ok": ok,
-        "blocked": blocked,
-        "reason": reason,
-        "provider": provider,
-        "mode": mode,
-        "execution": execution if execution is not None else mode,
-        "errors": err_list,
-    }
-    atomic_write_json(day_dir / "execution_result.json", payload)
-
-
 EXIT_CONFIG_FAIL_CLOSED = 3
 
 
@@ -448,7 +431,7 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         core_cfg, config_err = load_core_config_strict(config_path)
         if config_err is not None:
             err_struct(config_err, "live mode requires valid core config (--config or BIST_CORE_CONFIG)")
-            _write_execution_result(day_dir, day, ok=False, blocked=True, reason="config invalid or missing", provider=broker_name, mode=execution, errors=[config_err], execution=execution)
+            write_execution_result(outdir, day, ok=False, blocked=True, reason="config invalid or missing", provider=broker_name, mode=execution, errors=[config_err], execution=execution)
             return EXIT_CONFIG_FAIL_CLOSED
     if live:
         broker_config_path = os.environ.get("BIST_BROKER_CONFIG") or getattr(args, "broker_config", None)
@@ -459,7 +442,7 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
                 err = "live_execution_missing_broker_config"
                 note = "BIST_BROKER_CONFIG or --broker-config required for live execution"
                 err_struct(err, note)
-                _write_execution_result(day_dir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode=execution, errors=[err], execution=execution)
+                write_execution_result(outdir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode=execution, errors=[err], execution=execution)
                 return 2
         from bist_core.risk.gates import preflight_bist_rules_for_live
         from bist_core.risk.restrictions import get_restrictions_path
@@ -470,14 +453,19 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
             err_struct("bist_rules_missing", note)
             for e in err_pre:
                 print(f"  {e}", file=sys.stderr)
-            _write_execution_result(day_dir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode=execution, errors=sorted(err_pre), execution=execution)
+            write_execution_result(outdir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode=execution, errors=sorted(err_pre), execution=execution)
             return 2
     manifest_path = _find_manifest_path(outdir, day)
     if not manifest_path.is_file():
         print("blocked: no pipeline manifest found", file=sys.stderr)
-        _write_execution_result(day_dir, day, ok=False, blocked=True, reason="no pipeline manifest found", provider=broker_name, mode=execution, errors=["no_manifest"], execution=execution)
+        write_execution_result(outdir, day, ok=False, blocked=True, reason="no pipeline manifest found", provider=broker_name, mode=execution, errors=["no_manifest"], execution=execution)
         return 2
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, TypeError, OSError):
+        print("blocked: invalid pipeline manifest", file=sys.stderr)
+        write_execution_result(outdir, day, ok=False, blocked=True, reason="invalid pipeline manifest", provider=broker_name, mode=execution, errors=["invalid_manifest"], execution=execution)
+        return 2
     stages = manifest.get("stages") or {}
     orders_intent_path = manifest.get("orders_intent_path")
     if not orders_intent_path:
@@ -486,7 +474,7 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         orders_intent_path = Path(orders_intent_path)
     if not orders_intent_path.is_file():
         print("blocked: orders_intent.json not found", file=sys.stderr)
-        _write_execution_result(day_dir, day, ok=False, blocked=True, reason="orders_intent.json not found", provider=broker_name, mode=execution, errors=["no_orders_intent"], execution=execution)
+        write_execution_result(outdir, day, ok=False, blocked=True, reason="orders_intent.json not found", provider=broker_name, mode=execution, errors=["no_orders_intent"], execution=execution)
         return 2
     orders_intent = json.loads(orders_intent_path.read_text(encoding="utf-8"))
     gate = RiskGateEngine()
@@ -495,7 +483,7 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         print("blocked: risk gate denied", file=sys.stderr)
         for n in notes:
             print(f"  {n}", file=sys.stderr)
-        _write_execution_result(day_dir, day, ok=False, blocked=True, reason="risk gate denied", provider=broker_name, mode=execution, errors=notes, execution=execution)
+        write_execution_result(outdir, day, ok=False, blocked=True, reason="risk gate denied", provider=broker_name, mode=execution, errors=notes, execution=execution)
         return 2
     from bist_core.execution.adapters import resolve_execution_provider
     if execution == "paper" or broker_name == "paper":
@@ -508,20 +496,20 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         )
     if err is not None:
         print(f"blocked: {err}", file=sys.stderr)
-        _write_execution_result(day_dir, day, ok=False, blocked=True, reason=str(err), provider=broker_name, mode=execution, errors=[err], execution=execution)
+        write_execution_result(outdir, day, ok=False, blocked=True, reason=str(err), provider=broker_name, mode=execution, errors=[err], execution=execution)
         return 2
     result = provider.submit_orders(orders_intent, dry_run=dry_run)
     if not result.get("ok", True):
         print("execute failed", file=sys.stderr)
         for e in result.get("errors", []):
             print(f"  {e}", file=sys.stderr)
-        _write_execution_result(day_dir, day, ok=False, blocked=False, reason="submit_orders failed", provider=result.get("broker", broker_name), mode=execution, errors=result.get("errors", []), execution=execution)
+        write_execution_result(outdir, day, ok=False, blocked=False, reason="submit_orders failed", provider=result.get("broker", broker_name), mode=execution, errors=result.get("errors", []), execution=execution)
         return 2
     if live and not dry_run:
         atomic_write_json(day_dir / "orders_sent.json", {"day": day, "actions": orders_intent.get("actions", []), **orders_intent})
         from bist_core.audit.ledger import write_orders_jsonl
         write_orders_jsonl(day_dir.parent, day, orders_intent.get("actions", []))
-    _write_execution_result(day_dir, day, ok=True, blocked=False, reason="", provider=result.get("broker", broker_name), mode=execution, execution=execution)
+    write_execution_result(outdir, day, ok=True, blocked=False, reason="", provider=result.get("broker", broker_name), mode=execution, execution=execution)
     print(f"execute: broker={result.get('broker', '')} sent={result.get('sent', 0)} dry_run={dry_run}")
     return 0
 
