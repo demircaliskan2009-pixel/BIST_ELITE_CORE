@@ -10,8 +10,8 @@ def preflight_bist_rules_for_live(
     restrictions_path: Optional[Path] = None,
 ) -> Tuple[bool, List[str]]:
     """Preflight BIST rule data for live execution. Fail-closed when tick/bands/vbts missing. Returns (ok, errors)."""
-    from bist_core.risk.bist_rules import preflight_for_live
-    return preflight_for_live(rulespack_dir=rulespack_dir, restrictions_path=restrictions_path)
+    from bist_core.rules.validator import validate_rulespack
+    return validate_rulespack(rulespack_dir=rulespack_dir, restrictions_path=restrictions_path)
 
 
 def gate_order_rules(
