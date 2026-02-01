@@ -35,6 +35,7 @@ def log_struct(
 ) -> None:
     """
     Write one JSON line: {"level": level, "code": code, "message": message, **kwargs}.
+    FAZ98: trace_id from context is injected into payload when set.
     Default stream is stderr so stdout stays clean for JSON output.
     """
     out = stream if stream is not None else sys.stderr
@@ -46,6 +47,14 @@ def log_struct(
     for k, v in kwargs.items():
         if v is not None:
             payload[k] = v
+    if "trace_id" not in payload:
+        try:
+            from bist_core.trace import get_trace_id
+            tid = get_trace_id()
+            if tid is not None:
+                payload["trace_id"] = tid
+        except Exception:
+            pass
     line = json.dumps(payload, ensure_ascii=False) + "\n"
     out.write(line)
     out.flush()
