@@ -409,7 +409,9 @@ def _cmd_eod_research(args: argparse.Namespace) -> int:
 
 
 def _write_execution_result(day_dir: Path, day: str, ok: bool, blocked: bool, reason: str, provider: str, mode: str, errors: Optional[list] = None, execution: Optional[str] = None) -> None:
-    """Write execution_result.json to day_dir (minimal schema + errors/execution for compatibility)."""
+    """FAZ71: Write execution_result.json to day_dir deterministically (schema v1; errors sorted). Always call on exit paths."""
+    day_dir.mkdir(parents=True, exist_ok=True)
+    err_list = sorted(errors) if errors is not None else []
     payload = {
         "schema_version": 1,
         "day": day,
@@ -418,11 +420,9 @@ def _write_execution_result(day_dir: Path, day: str, ok: bool, blocked: bool, re
         "reason": reason,
         "provider": provider,
         "mode": mode,
+        "execution": execution if execution is not None else mode,
+        "errors": err_list,
     }
-    if errors is not None:
-        payload["errors"] = errors
-    if execution is not None:
-        payload["execution"] = execution
     atomic_write_json(day_dir / "execution_result.json", payload)
 
 
@@ -438,39 +438,39 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
     dry_run = not live
     if not day or not str(outdir):
         raise SystemExit("--day and --outdir are required")
-    # FAZ66: Live mode requires valid core config; fail-closed with explicit exit code
+    day_dir = outdir / day
+    day_dir.mkdir(parents=True, exist_ok=True)
+    broker_config_path = None
+    # FAZ71: Live preflight v2 — config ok, broker config ok, BIST rules present, manifest + orders_intent present. Always write execution_result on failure.
     if live:
         from bist_core.config import REPO_ROOT, resolve_core_config_path, load_core_config_strict
         config_path = resolve_core_config_path(getattr(args, "config", None), REPO_ROOT)
         core_cfg, config_err = load_core_config_strict(config_path)
         if config_err is not None:
             err_struct(config_err, "live mode requires valid core config (--config or BIST_CORE_CONFIG)")
+            _write_execution_result(day_dir, day, ok=False, blocked=True, reason="config invalid or missing", provider=broker_name, mode=execution, errors=[config_err], execution=execution)
             return EXIT_CONFIG_FAIL_CLOSED
-    day_dir = outdir / day
-    day_dir.mkdir(parents=True, exist_ok=True)
-    # Live mode with non-paper broker: require broker config; fail-closed if missing
-    broker_config_path = None
-    if execution == "live" and broker_name != "paper":
-        broker_config_path = os.environ.get("BIST_BROKER_CONFIG") or getattr(args, "broker_config", None)
-        if broker_config_path:
-            broker_config_path = Path(broker_config_path)
-        if not broker_config_path or not broker_config_path.is_file():
-            err = "live_execution_missing_broker_config"
-            note = "BIST_BROKER_CONFIG or --broker-config required for live execution"
-            print(f"blocked: {note}", file=sys.stderr)
-            _write_execution_result(day_dir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode="live", errors=[err], execution=execution)
-            return 2
     if live:
+        broker_config_path = os.environ.get("BIST_BROKER_CONFIG") or getattr(args, "broker_config", None)
+        if broker_name != "paper":
+            if broker_config_path:
+                broker_config_path = Path(broker_config_path)
+            if not broker_config_path or not broker_config_path.is_file():
+                err = "live_execution_missing_broker_config"
+                note = "BIST_BROKER_CONFIG or --broker-config required for live execution"
+                err_struct(err, note)
+                _write_execution_result(day_dir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode=execution, errors=[err], execution=execution)
+                return 2
         from bist_core.risk.gates import preflight_bist_rules_for_live
         from bist_core.risk.restrictions import get_restrictions_path
         from bist_core.risk.rulespack import get_rulespack_dir
         ok_pre, err_pre = preflight_bist_rules_for_live(rulespack_dir=get_rulespack_dir(), restrictions_path=get_restrictions_path())
         if not ok_pre:
             note = "BIST rule data missing for live (tick/bands/vbts); set BIST_RULESPACK_DIR and BIST_RESTRICTIONS_FILE"
-            print(f"blocked: {note}", file=sys.stderr)
+            err_struct("bist_rules_missing", note)
             for e in err_pre:
                 print(f"  {e}", file=sys.stderr)
-            _write_execution_result(day_dir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode=execution, errors=err_pre, execution=execution)
+            _write_execution_result(day_dir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode=execution, errors=sorted(err_pre), execution=execution)
             return 2
     manifest_path = _find_manifest_path(outdir, day)
     if not manifest_path.is_file():
