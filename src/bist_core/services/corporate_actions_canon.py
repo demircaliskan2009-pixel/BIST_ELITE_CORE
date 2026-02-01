@@ -1,10 +1,22 @@
 """Corporate actions canonicalization: event_id, instrument_id, ex_date, kind, ratio, cash, raw_source. Deterministic."""
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+
+# FAZ70: Canonical corporate_actions.csv schema v1 (column order for deterministic CSV).
+CORPORATE_ACTIONS_CSV_SCHEMA_V1 = [
+    "event_id",
+    "instrument_id",
+    "ex_date",
+    "kind",
+    "ratio",
+    "cash",
+    "raw_source",
+]
 
 
 def _event_id(instrument_id: str, ex_date: str, kind: str, ratio: Any, cash: Any) -> str:
@@ -93,13 +105,39 @@ def write_canonical(out_path: Path, canonical: List[Dict[str, Any]]) -> None:
     tmp.replace(out_path)
 
 
+def write_canonical_csv(out_path: Path, canonical: List[Dict[str, Any]]) -> None:
+    """FAZ70: Write canonical records to corporate_actions.csv (schema v1). Deterministic column order."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out_path.with_name(f"{out_path.name}.tmp")
+    with tmp.open("w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=CORPORATE_ACTIONS_CSV_SCHEMA_V1, extrasaction="ignore")
+        w.writeheader()
+        for row in canonical:
+            out_row = {}
+            for k in CORPORATE_ACTIONS_CSV_SCHEMA_V1:
+                v = row.get(k)
+                if v is None or v == "":
+                    out_row[k] = ""
+                elif k in ("ratio", "cash") and not isinstance(v, (int, float)):
+                    try:
+                        out_row[k] = float(v)
+                    except (TypeError, ValueError):
+                        out_row[k] = ""
+                else:
+                    out_row[k] = v
+            w.writerow(out_row)
+    tmp.replace(out_path)
+
+
 def canonicalize_actions_file(
     actions_path: Path,
     out_path: Path,
     symbol_to_id: Dict[str, str],
+    out_csv_path: Path | None = None,
 ) -> Tuple[int, int]:
     """
-    Read actions JSONL, canonicalize, write to out_path. Returns (canonical_count, error_count).
+    Read actions JSONL, canonicalize, write to out_path (JSONL). If out_csv_path set, also write CSV (schema v1).
+    Returns (canonical_count, error_count).
     """
     if not actions_path.is_file():
         return 0, 0
@@ -115,4 +153,59 @@ def canonicalize_actions_file(
                 pass
     canonical, errors = build_canonical(records, symbol_to_id)
     write_canonical(out_path, canonical)
+    if out_csv_path is not None:
+        write_canonical_csv(out_csv_path, canonical)
+    return len(canonical), errors
+
+
+def _read_fixture_disclosures(path: Path) -> List[Dict[str, Any]]:
+    """Read fixture disclosures from JSONL or CSV (symbol, effective_date/ex_date, kind, ratio, cash, source)."""
+    if not path.is_file():
+        return []
+    suffix = path.suffix.lower()
+    rows: List[Dict[str, Any]] = []
+    if suffix == ".jsonl":
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                r = json.loads(line)
+                if isinstance(r, dict):
+                    rows.append(r)
+            except Exception:
+                continue
+        return rows
+    if suffix == ".csv":
+        with path.open(newline="", encoding="utf-8") as f:
+            rdr = csv.DictReader(f)
+            for row in rdr:
+                rows.append(dict(row))
+        return rows
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return [r for r in data if isinstance(r, dict)]
+    except Exception:
+        pass
+    return []
+
+
+def ingest_from_fixture_disclosures(
+    disclosures_path: Path | str,
+    symbol_to_id: Dict[str, str],
+    outdir: Path | str,
+    *,
+    csv_filename: str = "corporate_actions.csv",
+) -> Tuple[int, int]:
+    """
+    FAZ70: Ingest fixture disclosures -> canonical corporate_actions.csv (schema v1). Deterministic order + event_id.
+    disclosures_path: JSONL or CSV with symbol, effective_date/ex_date, kind, ratio, cash, source.
+    outdir: directory to write corporate_actions.csv. Returns (canonical_count, error_count).
+    """
+    p = Path(disclosures_path)
+    out = Path(outdir)
+    records = _read_fixture_disclosures(p)
+    canonical, errors = build_canonical(records, symbol_to_id)
+    out.mkdir(parents=True, exist_ok=True)
+    write_canonical_csv(out / csv_filename, canonical)
     return len(canonical), errors

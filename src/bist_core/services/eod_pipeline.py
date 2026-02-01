@@ -722,18 +722,21 @@ def run_eod_pipeline(
     )
     canonical_errors = 0
     canon_out = out_path / day_str / "corporate_actions" / "actions_canonical.jsonl"
+    corp_actions_csv = out_path / day_str / "corporate_actions" / "corporate_actions.csv"
     if (ca_dir / "actions.jsonl").is_file():
         _, canonical_errors = corporate_actions_canon.canonicalize_actions_file(
             ca_dir / "actions.jsonl",
             canon_out,
             symbol_to_id,
+            out_csv_path=corp_actions_csv,
         )
-        if canon_out.is_file() and symbol_to_id:
+        canonical_input = corp_actions_csv if corp_actions_csv.is_file() else canon_out
+        if canonical_input.is_file() and symbol_to_id:
             price_adj_out = out_path / day_str
             adj_errors, adj_notes = price_adjust.build_adjusted_prices(
                 snapshot_root=root,
                 days=[day_str],
-                canonical_actions_path=canon_out,
+                canonical_actions_path=canonical_input,
                 symbol_to_id=symbol_to_id,
                 out_dir=price_adj_out,
                 strict=strict,

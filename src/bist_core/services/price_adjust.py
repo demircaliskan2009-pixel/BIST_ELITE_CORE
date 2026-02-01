@@ -53,9 +53,26 @@ def _load_snapshot_rows(snapshot_root: Path, day: str) -> List[Dict[str, Any]]:
 
 
 def _load_canonical_actions(path: Path) -> List[Dict[str, Any]]:
+    """Load canonical actions from JSONL or corporate_actions.csv (schema v1)."""
     if not path.is_file():
         return []
-    out: List[Dict[str, Any]] = []
+    if path.suffix.lower() == ".csv":
+        out: List[Dict[str, Any]] = []
+        with path.open(newline="", encoding="utf-8") as f:
+            rdr = csv.DictReader(f)
+            for row in rdr:
+                r = dict(row)
+                for k in ("ratio", "cash"):
+                    if k not in r or r[k] in (None, ""):
+                        r[k] = None
+                    else:
+                        try:
+                            r[k] = float(r[k])
+                        except (TypeError, ValueError):
+                            r[k] = None
+                out.append(r)
+        return out
+    out = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
