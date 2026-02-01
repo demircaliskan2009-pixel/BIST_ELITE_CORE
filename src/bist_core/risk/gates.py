@@ -84,6 +84,33 @@ def gate_restrictions(
     return _gate_restrictions(orders_intent, restrictions_state)
 
 
+def run_all(
+    orders_intent: Dict[str, Any],
+    stages: Dict[str, Any],
+    *,
+    policy_ruleset: Optional[Dict[str, Any]] = None,
+    rulespack: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    FAZ87: Run gate evaluation; return report {ok, blocked, errors, codes}.
+    ok: allowed to execute. blocked: not allowed. errors: notes from engine. codes: sorted error codes (deterministic).
+    """
+    engine = RiskGateEngine()
+    allowed, notes = engine.evaluate(
+        orders_intent,
+        policy_ruleset=policy_ruleset,
+        stages=stages,
+        rulespack=rulespack,
+    )
+    codes = sorted(notes) if notes else []
+    return {
+        "ok": allowed,
+        "blocked": not allowed,
+        "errors": list(notes),
+        "codes": codes,
+    }
+
+
 class RiskGateEngine:
     """Evaluate whether orders_intent is allowed for execution. Fail-closed: default deny if any stage errors >0 or policy invalid."""
 

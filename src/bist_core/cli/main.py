@@ -54,7 +54,6 @@ from bist_core.services.adjustments import apply_close_adjustments
 from bist_core.services import instrument_timeline
 from bist_core.brokers import PaperBroker
 from bist_core.execution import PaperExecutionProvider
-from bist_core.risk.gates import RiskGateEngine
 from bist_core.market_data import resolve_provider
 from bist_core.cli.observability import (
     err_struct,
@@ -485,13 +484,21 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         write_execution_result(outdir, day, ok=False, blocked=True, reason="orders_intent.json not found", provider=broker_name, mode=execution, errors=["no_orders_intent"], execution=execution)
         return 2
     orders_intent = json.loads(orders_intent_path.read_text(encoding="utf-8"))
-    gate = RiskGateEngine()
-    allowed, notes = gate.evaluate(orders_intent, policy_ruleset=None, stages=stages)
-    if not allowed:
+    from bist_core.risk.gates import run_all
+    report = run_all(orders_intent, stages, policy_ruleset=None, rulespack=None)
+    if report.get("blocked"):
+        notes = report.get("errors") or []
         print("blocked: risk gate denied", file=sys.stderr)
         for n in notes:
             print(f"  {n}", file=sys.stderr)
-        write_execution_result(outdir, day, ok=False, blocked=True, reason="risk gate denied", provider=broker_name, mode=execution, errors=notes, execution=execution)
+        exec_result_path = write_execution_result(outdir, day, ok=False, blocked=True, reason="risk gate denied", provider=broker_name, mode=execution, errors=notes, execution=execution)
+        from bist_core.dossier.write import update_dossier_evidence
+        codes = report.get("codes") or []
+        update_dossier_evidence(outdir, day, {
+            "execution_result_path": str(exec_result_path),
+            "blocked_reason": "risk gate denied",
+            "blocked_code": codes[0] if codes else "risk_gate_denied",
+        })
         return 2
     from bist_core.execution.adapters import resolve_execution_provider
     if execution == "paper" or broker_name == "paper":
