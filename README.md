@@ -2,6 +2,9 @@
 **Faz-3 / Adım-1: TAMAMLANDI** — local CSV ingest + dataset registry + smoke tests
 # BIST_ELITE_CORE — Minimal Working Core
 Runs offline on CSVs; plug-in ready for vendors and brokers.
+
+**Windows / Git:** Use `git config core.autocrlf false` so line endings stay LF (see [docs/DEV_SETUP_WINDOWS.md](docs/DEV_SETUP_WINDOWS.md)).
+
 ### Faz-2: CLI akışı (eod → plan → orders)
 
 ```bash
