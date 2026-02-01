@@ -42,12 +42,13 @@ def test_faz49_live_without_config_returns_nonzero(tmp_path: Path) -> None:
         cwd=str(repo_root),
     )
     assert result.returncode != 0
-    assert "live_execution_missing_broker_config" in result.stderr or "blocked" in result.stderr
+    assert "broker_config_missing" in result.stderr or "live_execution_missing_broker_config" in result.stderr or "blocked" in result.stderr
     exec_path = outdir / day / "execution_result.json"
     assert exec_path.is_file()
     data = json.loads(exec_path.read_text(encoding="utf-8"))
     assert data.get("ok") is False
-    assert "live_execution_missing_broker_config" in data.get("errors", [])
+    errs = data.get("errors", [])
+    assert "broker_config_missing" in errs or "live_execution_missing_broker_config" in errs
     assert data.get("execution") == "live"
 
 

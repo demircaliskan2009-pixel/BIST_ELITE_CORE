@@ -101,8 +101,39 @@ def load_config() -> Dict[str, Any]:
         Path(p).mkdir(parents=True, exist_ok=True)
     return cfg
 
+
+# ---- FAZ80: Broker config loader (BIST_BROKER_CONFIG: file path OR inline JSON) ----
+def load_broker_config(raw: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Load broker config from BIST_BROKER_CONFIG value: file path (existing file) OR inline JSON.
+    Returns (config_dict, None) on success, (None, error_code) on failure.
+    error_code: broker_config_missing (empty/not set), broker_config_invalid (bad JSON or not a dict).
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, "broker_config_missing"
+    s = raw.strip()
+    path = Path(s)
+    if path.is_file():
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return None, "broker_config_invalid"
+        if not isinstance(data, dict):
+            return None, "broker_config_invalid"
+        return data, None
+    try:
+        data = json.loads(s)
+    except (json.JSONDecodeError, TypeError):
+        return None, "broker_config_invalid"
+    if not isinstance(data, dict):
+        return None, "broker_config_invalid"
+    return data, None
+
+
 __all__ = [
     "REPO_ROOT", "DATA_DIR", "SAMPLES_DIR", "EOD_SNAPSHOT_DIR",
     "SOURCES", "CORE", "load_config",
     "resolve_core_config_path", "load_core_config_strict", "CORE_SCHEMA_V1_REQUIRED",
+    "load_broker_config",
 ]

@@ -433,16 +433,16 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
             err_struct(config_err, "live mode requires valid core config (--config or BIST_CORE_CONFIG)")
             write_execution_result(outdir, day, ok=False, blocked=True, reason="config invalid or missing", provider=broker_name, mode=execution, errors=[config_err], execution=execution)
             return EXIT_CONFIG_FAIL_CLOSED
+    broker_config_dict = None
     if live:
-        broker_config_path = os.environ.get("BIST_BROKER_CONFIG") or getattr(args, "broker_config", None)
+        from bist_core.config import load_broker_config
+        broker_config_raw = os.environ.get("BIST_BROKER_CONFIG") or getattr(args, "broker_config", None)
         if broker_name != "paper":
-            if broker_config_path:
-                broker_config_path = Path(broker_config_path)
-            if not broker_config_path or not broker_config_path.is_file():
-                err = "live_execution_missing_broker_config"
-                note = "BIST_BROKER_CONFIG or --broker-config required for live execution"
-                err_struct(err, note)
-                write_execution_result(outdir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode=execution, errors=[err], execution=execution)
+            broker_config_dict, broker_config_err = load_broker_config(broker_config_raw)
+            if broker_config_err is not None:
+                note = "BIST_BROKER_CONFIG or --broker-config required (file path or inline JSON); invalid or missing fails closed"
+                err_struct(broker_config_err, note)
+                write_execution_result(outdir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode=execution, errors=[broker_config_err], execution=execution)
                 return 2
         from bist_core.risk.gates import preflight_bist_rules_for_live
         from bist_core.risk.restrictions import get_restrictions_path
@@ -492,7 +492,7 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         )
     else:
         provider, err = resolve_execution_provider(
-            execution, broker_name, broker_config_path=broker_config_path,
+            execution, broker_name, broker_config=broker_config_dict,
         )
     if err is not None:
         print(f"blocked: {err}", file=sys.stderr)
