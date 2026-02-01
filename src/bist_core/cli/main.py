@@ -498,6 +498,17 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         print(f"blocked: {err}", file=sys.stderr)
         write_execution_result(outdir, day, ok=False, blocked=True, reason=str(err), provider=broker_name, mode=execution, errors=[err], execution=execution)
         return 2
+    if live and not dry_run:
+        from bist_core.execution.live_skeleton import run_live_execute_skeleton
+        ok_skeleton, err_skeleton = run_live_execute_skeleton(
+            outdir, day, orders_intent_path, provider,
+            provider_name=broker_name, execution_mode=execution,
+        )
+        if not ok_skeleton:
+            write_execution_result(outdir, day, ok=False, blocked=False, reason=err_skeleton or "live_execute_failed", provider=broker_name, mode=execution, errors=[err_skeleton or "live_execute_failed"], execution=execution)
+            return 2
+        print(f"execute: broker={broker_name} live (skeleton) dry_run={dry_run}")
+        return 0
     result = provider.submit_orders(orders_intent, dry_run=dry_run)
     if not result.get("ok", True):
         print("execute failed", file=sys.stderr)
@@ -505,10 +516,6 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
             print(f"  {e}", file=sys.stderr)
         write_execution_result(outdir, day, ok=False, blocked=False, reason="submit_orders failed", provider=result.get("broker", broker_name), mode=execution, errors=result.get("errors", []), execution=execution)
         return 2
-    if live and not dry_run:
-        atomic_write_json(day_dir / "orders_sent.json", {"day": day, "actions": orders_intent.get("actions", []), **orders_intent})
-        from bist_core.audit.ledger import write_orders_jsonl
-        write_orders_jsonl(day_dir.parent, day, orders_intent.get("actions", []))
     write_execution_result(outdir, day, ok=True, blocked=False, reason="", provider=result.get("broker", broker_name), mode=execution, execution=execution)
     print(f"execute: broker={result.get('broker', '')} sent={result.get('sent', 0)} dry_run={dry_run}")
     return 0

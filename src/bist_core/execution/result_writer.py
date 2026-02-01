@@ -37,11 +37,12 @@ def build_execution_result_payload(
     mode: str,
     errors: Optional[List[str]] = None,
     execution: Optional[str] = None,
+    orders_intent_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Build deterministic ExecutionResult dict. Errors are sorted. All keys always present."""
+    """Build deterministic ExecutionResult dict. Errors are sorted. All keys always present. Optional orders_intent_sha256 for idempotency."""
     err_list = sorted(errors) if errors is not None else []
     exec_val = execution if execution is not None else mode
-    return {
+    out = {
         "schema_version": EXECUTION_RESULT_SCHEMA_VERSION,
         "day": str(day),
         "ok": bool(ok),
@@ -52,6 +53,9 @@ def build_execution_result_payload(
         "execution": str(exec_val),
         "errors": err_list,
     }
+    if orders_intent_sha256 is not None:
+        out["orders_intent_sha256"] = str(orders_intent_sha256)
+    return out
 
 
 def write_execution_result(
@@ -65,11 +69,12 @@ def write_execution_result(
     mode: str,
     errors: Optional[List[str]] = None,
     execution: Optional[str] = None,
+    orders_intent_sha256: Optional[str] = None,
 ) -> Path:
     """
     Write outdir/<day>/execution_result.json with deterministic payload.
     Ensures day dir exists. Call on ALL exit paths (success and every fail-closed).
-    Returns path to written file.
+    Optional orders_intent_sha256 for idempotency (FAZ76). Returns path to written file.
     """
     out_path = Path(outdir)
     day_dir = out_path / str(day)
@@ -83,6 +88,7 @@ def write_execution_result(
         mode=mode,
         errors=errors,
         execution=execution,
+        orders_intent_sha256=orders_intent_sha256,
     )
     out_file = day_dir / EXECUTION_RESULT_FILENAME
     snapshot_integrity.atomic_write_json(out_file, payload)
