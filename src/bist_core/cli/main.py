@@ -483,7 +483,16 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         print("blocked: orders_intent.json not found", file=sys.stderr)
         write_execution_result(outdir, day, ok=False, blocked=True, reason="orders_intent.json not found", provider=broker_name, mode=execution, errors=["no_orders_intent"], execution=execution)
         return 2
-    orders_intent = json.loads(orders_intent_path.read_text(encoding="utf-8"))
+    try:
+        orders_intent = json.loads(orders_intent_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, TypeError, OSError):
+        write_execution_result(outdir, day, ok=False, blocked=True, reason="invalid orders_intent JSON", provider=broker_name, mode=execution, errors=["invalid_orders_intent"], execution=execution)
+        return 2
+    from bist_core.orders.schema import validate_orders_intent_v2
+    ok_schema, schema_errors = validate_orders_intent_v2(orders_intent)
+    if not ok_schema:
+        write_execution_result(outdir, day, ok=False, blocked=True, reason="orders_intent schema v2 validation failed", provider=broker_name, mode=execution, errors=schema_errors, execution=execution)
+        return 2
     from bist_core.risk.gates import run_all
     report = run_all(orders_intent, stages, policy_ruleset=None, rulespack=None)
     if report.get("blocked"):
