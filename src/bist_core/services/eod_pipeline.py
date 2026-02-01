@@ -52,6 +52,7 @@ from bist_core.research.cache import build_research_cache
 from bist_core.advisory.generate import generate_advice
 from bist_core.knowledge import KnowledgeBase
 from bist_core.dossier import write_dossier
+from bist_core.graph import write_link_graph
 from bist_core.models.baseline import BaselineModel
 
 
@@ -826,6 +827,18 @@ def run_eod_pipeline(
         stages["dossier"]["dossier_json_path"] = str(dossier_json_path)
     except Exception:
         stages["dossier"].setdefault("notes", []).append("dossier_json_write_skipped")
+
+    try:
+        links_path = write_link_graph(
+            day_str,
+            out_path,
+            research_path=research_path_out,
+            advice_path=str(advice_path),
+            dossier_json_path=dossier_json_path,
+        )
+        stages["dossier"]["links_json_path"] = str(links_path)
+    except Exception:
+        stages["dossier"].setdefault("notes", []).append("link_graph_write_skipped")
 
     runtime_ms = int((time.perf_counter() - start) * 1000)
     finished_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
