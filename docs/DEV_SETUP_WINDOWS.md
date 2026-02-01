@@ -29,3 +29,9 @@ git add --renormalize .
 git status --porcelain
 git diff --stat
 ~~~
+
+## PowerShell vs Bash
+
+- **Chaining commands:** Use `;` (e.g. `cd repo; python -m pytest -q`). Do not use `&&` — it can cause InvalidEndOfLine in PowerShell.
+- **Redirection:** Do not use bash-style `2>&1` in suggested commands; PowerShell has different redirection.
+- **grep / ripgrep:** Exit code 1 usually means "no matches". When the goal is "ensure no matches", treat exit 1 as success (e.g. "no bad pattern found").
