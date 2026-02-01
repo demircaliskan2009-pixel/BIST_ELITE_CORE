@@ -425,6 +425,14 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
     day_dir = outdir / day
     day_dir.mkdir(parents=True, exist_ok=True)
     broker_config_path = None
+    # FAZ99: Env contract (BIST_* whitelist) at earliest point; fail -> exit 2 + execution_result.
+    if live:
+        from bist_core.security.env_contract import validate_bist_env_whitelist
+        ok_env, env_errors = validate_bist_env_whitelist()
+        if not ok_env:
+            err_struct("env_contract_violation", "BIST_* env key(s) not on whitelist")
+            write_execution_result(outdir, day, ok=False, blocked=True, reason="env contract violation", provider=broker_name, mode=execution, errors=env_errors, execution=execution)
+            return 2
     # FAZ71: Live preflight v2 — config ok, broker config ok, BIST rules present, manifest + orders_intent present. Always write execution_result on failure.
     if live:
         from bist_core.config import REPO_ROOT, resolve_core_config_path, load_core_config_strict

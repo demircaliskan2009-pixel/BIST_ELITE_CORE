@@ -66,8 +66,9 @@ def test_faz82_live_execute_missing_bist_rules_returncode_2_and_dossier(tmp_path
     assert exec_data.get("ok") is False
     assert exec_data.get("blocked") is True
     assert "errors" in exec_data
-    errs = exec_data["errors"]
-    assert "bist_rules_tick_bands_missing" in errs or "bist_rules_vbts_missing" in errs
+    errs = exec_data.get("errors", [])
+    codes = [e.get("code") for e in errs if isinstance(e, dict)]
+    assert "bist_rules_tick_bands_missing" in codes or "bist_rules_vbts_missing" in codes
 
     dossier_path = tmp_path / "dossier" / day / "dossier.json"
     assert dossier_path.is_file(), "dossier must exist"

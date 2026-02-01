@@ -1,0 +1,32 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.12.7, pytest-8.3.2, pluggy-1.5.0
+rootdir: C:\Users\demir\OneDrive\Belgeler\Projects\BIST_ELITE_CORE
+configfile: pytest.ini
+testpaths: tests
+plugins: cov-5.0.0
+collected 436 items
+
+tests\test_faz100_core_complete_sentinel.py F
+
+================================== FAILURES ===================================
+____________________ test_faz100_complete_prints_sentinel _____________________
+
+tmp_path = WindowsPath('C:/Users/demir/AppData/Local/Temp/pytest-of-demir/pytest-601/test_faz100_complete_prints_se0')
+
+    def test_faz100_complete_prints_sentinel(tmp_path: Path) -> None:
+        """When checklist is complete, script prints CORE_COMPLETE_NO_INTEGRATION and exits 0."""
+        md = tmp_path / "target_robot_alignment.md"
+        md.write_text(
+            "# Alignment\n\n## Checklist\n\n- [x] Item one\n- [x] Item two\n\n## DoD\n\nDone.\n",
+            encoding="utf-8",
+        )
+        rc, stdout, stderr = _run_verify(md)
+        assert rc == 0, stderr
+>       assert SENTINEL in stdout
+E       AssertionError: assert 'CORE_COMPLETE_NO_INTEGRATION' in ''
+
+tests\test_faz100_core_complete_sentinel.py:39: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_faz100_core_complete_sentinel.py::test_faz100_complete_prints_sentinel
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!
+============================== 1 failed in 2.52s ==============================

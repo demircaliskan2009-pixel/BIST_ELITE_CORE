@@ -113,7 +113,8 @@ def test_live_missing_broker_config_exit2_and_execution_result(tmp_path: Path) -
     assert result_path.is_file()
     data = json.loads(result_path.read_text(encoding="utf-8"))
     assert data["ok"] is False
-    assert "broker_config_missing" in data["errors"]
+    codes = [e.get("code") for e in data.get("errors", []) if isinstance(e, dict)]
+    assert "broker_config_missing" in codes
 
 
 def test_live_invalid_broker_config_exit2_and_execution_result(tmp_path: Path) -> None:
@@ -146,7 +147,8 @@ def test_live_invalid_broker_config_exit2_and_execution_result(tmp_path: Path) -
     assert result_path.is_file()
     data = json.loads(result_path.read_text(encoding="utf-8"))
     assert data["ok"] is False
-    assert "broker_config_invalid" in data["errors"]
+    codes = [e.get("code") for e in data.get("errors", []) if isinstance(e, dict)]
+    assert "broker_config_invalid" in codes
 
 
 def test_live_valid_inline_broker_config_accepts(tmp_path: Path) -> None:

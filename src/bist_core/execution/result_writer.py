@@ -6,7 +6,7 @@ No external libs.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from bist_core.services import snapshot_integrity
 
@@ -28,6 +28,18 @@ EXECUTION_RESULT_KEYS = (
 )
 
 
+def _normalize_error_item(item: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """FAZ99: Normalize error to dict with at least 'code'. str -> {code}; dict -> {code, ...}."""
+    if isinstance(item, str):
+        return {"code": item}
+    if isinstance(item, dict):
+        code = item.get("code") or item.get("error_marker") or "unknown"
+        out = dict(item)
+        out["code"] = str(code)
+        return out
+    return {"code": "unknown"}
+
+
 def build_execution_result_payload(
     day: str,
     ok: bool,
@@ -35,12 +47,14 @@ def build_execution_result_payload(
     reason: str,
     provider: str,
     mode: str,
-    errors: Optional[List[str]] = None,
+    errors: Optional[List[Union[str, Dict[str, Any]]]] = None,
     execution: Optional[str] = None,
     orders_intent_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Build deterministic ExecutionResult dict. Errors are sorted. All keys always present. Optional orders_intent_sha256 for idempotency."""
-    err_list = sorted(errors) if errors is not None else []
+    """Build deterministic ExecutionResult dict. Errors[] normalized to {code, ...}; sorted by code. Optional orders_intent_sha256 for idempotency."""
+    raw = errors if errors is not None else []
+    err_list = [_normalize_error_item(e) for e in raw]
+    err_list.sort(key=lambda x: x.get("code", ""))
     exec_val = execution if execution is not None else mode
     out = {
         "schema_version": EXECUTION_RESULT_SCHEMA_VERSION,
@@ -67,7 +81,7 @@ def write_execution_result(
     reason: str,
     provider: str,
     mode: str,
-    errors: Optional[List[str]] = None,
+    errors: Optional[List[Union[str, Dict[str, Any]]]] = None,
     execution: Optional[str] = None,
     orders_intent_sha256: Optional[str] = None,
 ) -> Path:
@@ -90,6 +104,8 @@ def write_execution_result(
         execution=execution,
         orders_intent_sha256=orders_intent_sha256,
     )
+    from bist_core.security.redact import redact_recursive
+    payload = redact_recursive(payload)
     out_file = day_dir / EXECUTION_RESULT_FILENAME
     snapshot_integrity.atomic_write_json(out_file, payload)
     return out_file

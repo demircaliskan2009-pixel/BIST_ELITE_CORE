@@ -86,4 +86,5 @@ def test_faz88_execute_invalid_orders_intent_exit_2_and_execution_result(tmp_pat
     assert exec_path.is_file()
     data = json.loads(exec_path.read_text(encoding="utf-8"))
     assert data.get("ok") is False
-    assert "orders_intent_missing_day" in data.get("errors", [])
+    codes = [e.get("code") for e in data.get("errors", []) if isinstance(e, dict)]
+    assert "orders_intent_missing_day" in codes

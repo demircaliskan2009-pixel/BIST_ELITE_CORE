@@ -87,6 +87,11 @@ def write_reconciliation(
                 except (json.JSONDecodeError, TypeError):
                     continue
     payload = build_reconciliation_payload(day_str, actions, fills_list)
+    try:
+        from bist_core.security.redact import redact_recursive
+        payload = redact_recursive(payload)
+    except Exception:
+        pass
     day_dir = out_path / day_str
     day_dir.mkdir(parents=True, exist_ok=True)
     out_file = day_dir / RECONCILIATION_FILENAME

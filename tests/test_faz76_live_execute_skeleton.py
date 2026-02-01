@@ -169,4 +169,5 @@ def test_fail_closed_no_manifest_still_exits_2(tmp_path: Path) -> None:
     assert (tmp_path / day / EXECUTION_RESULT_FILENAME).is_file()
     data = json.loads((tmp_path / day / EXECUTION_RESULT_FILENAME).read_text(encoding="utf-8"))
     assert data["ok"] is False
-    assert "no_manifest" in data["errors"]
+    err_codes = [e.get("code") for e in data.get("errors", []) if isinstance(e, dict)]
+    assert "no_manifest" in err_codes

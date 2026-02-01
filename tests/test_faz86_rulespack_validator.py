@@ -70,4 +70,5 @@ def test_faz86_live_execute_missing_rules_exit_2_and_execution_result(tmp_path: 
     data = json.loads(exec_path.read_text(encoding="utf-8"))
     assert data.get("ok") is False
     errs = data.get("errors", [])
-    assert "bist_rules_tick_bands_missing" in errs or "bist_rules_vbts_missing" in errs
+    codes = [e.get("code") for e in errs if isinstance(e, dict)]
+    assert "bist_rules_tick_bands_missing" in codes or "bist_rules_vbts_missing" in codes

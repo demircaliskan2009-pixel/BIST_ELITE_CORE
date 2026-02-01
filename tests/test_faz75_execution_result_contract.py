@@ -38,7 +38,8 @@ def test_execution_result_stable_json_fields() -> None:
     assert payload["provider"] == "stub"
     assert payload["mode"] == "live"
     assert payload["execution"] == "live"
-    assert payload["errors"] == ["a", "b"]
+    errs = payload["errors"]
+    assert len(errs) == 2 and all(isinstance(e, dict) and e.get("code") in ("a", "b") for e in errs)
 
 
 def test_execution_result_errors_sorted() -> None:
@@ -52,7 +53,8 @@ def test_execution_result_errors_sorted() -> None:
         mode="live",
         errors=["z", "a", "m"],
     )
-    assert payload["errors"] == ["a", "m", "z"]
+    codes = [e.get("code") for e in payload["errors"]]
+    assert codes == ["a", "m", "z"]
 
 
 def test_write_execution_result_path(tmp_path: Path) -> None:
@@ -90,11 +92,12 @@ def test_write_execution_result_content(tmp_path: Path) -> None:
         reason=payload["reason"],
         provider=payload["provider"],
         mode=payload["mode"],
-        errors=payload["errors"],
+        errors=["tick_missing", "bands_missing"],
     )
     data = json.loads(path.read_text(encoding="utf-8"))
     assert set(data.keys()) == set(EXECUTION_RESULT_KEYS)
-    assert data["errors"] == ["bands_missing", "tick_missing"]
+    codes = [e.get("code") for e in data["errors"]]
+    assert "bands_missing" in codes and "tick_missing" in codes
 
 
 def test_fail_closed_config_writes_execution_result(tmp_path: Path) -> None:
@@ -161,7 +164,8 @@ def test_fail_closed_no_manifest_writes_execution_result(tmp_path: Path) -> None
     assert result_path.is_file()
     data = json.loads(result_path.read_text(encoding="utf-8"))
     assert data["ok"] is False
-    assert "no_manifest" in data["errors"]
+    codes = [e.get("code") for e in data.get("errors", []) if isinstance(e, dict)]
+    assert "no_manifest" in codes
 
 
 def test_fail_closed_invalid_manifest_writes_execution_result(tmp_path: Path) -> None:
@@ -195,7 +199,8 @@ def test_fail_closed_invalid_manifest_writes_execution_result(tmp_path: Path) ->
     assert result_path.is_file()
     data = json.loads(result_path.read_text(encoding="utf-8"))
     assert data["ok"] is False
-    assert "invalid_manifest" in data["errors"]
+    codes = [e.get("code") for e in data.get("errors", []) if isinstance(e, dict)]
+    assert "invalid_manifest" in codes
 
 
 def test_success_writes_execution_result(tmp_path: Path) -> None:

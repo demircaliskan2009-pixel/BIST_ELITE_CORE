@@ -47,6 +47,7 @@ def main(args: list[str] | None = None) -> int:
         print(f"Alignment doc not found: {md_path}", file=sys.stderr)
         return 2
     if _checklist_complete(md_path):
+        print("CORE_COMPLETE_NO_INTEGRATION")
         return 0
     print("Checklist incomplete: at least one unchecked item in docs/target_robot_alignment.md", file=sys.stderr)
     return 2

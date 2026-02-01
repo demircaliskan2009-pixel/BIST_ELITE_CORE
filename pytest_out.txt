@@ -1,0 +1,157 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.12.7, pytest-8.3.2, pluggy-1.5.0
+rootdir: C:\Users\demir\OneDrive\Belgeler\Projects\BIST_ELITE_CORE
+configfile: pytest.ini
+testpaths: tests
+plugins: cov-5.0.0
+collected 436 items
+
+tests\test_faz100_core_complete_sentinel.py ...                          [  0%]
+tests\test_faz10_dossier_build_smoke.py .                                [  0%]
+tests\test_faz10_dossier_filters.py .                                    [  1%]
+tests\test_faz10_dossier_idempotent.py .                                 [  1%]
+tests\test_faz10_dossier_manifest_and_strict.py .                        [  1%]
+tests\test_faz10_manifest_provenance.py .                                [  1%]
+tests\test_faz11_eod_run_smoke.py .                                      [  2%]
+tests\test_faz11_eod_run_strict_exitcode.py .                            [  2%]
+tests\test_faz12_advisor_mentions_events.py .                            [  2%]
+tests\test_faz12_dossier_includes_events.py .                            [  2%]
+tests\test_faz12_eod_run_events_optional.py .                            [  2%]
+tests\test_faz12_eod_run_events_strict.py .                              [  3%]
+tests\test_faz12_events_ingest_dedupe.py .                               [  3%]
+tests\test_faz12_events_ingest_strict_and_manifest.py .                  [  3%]
+tests\test_faz12_events_pull_kap_html_parser.py .                        [  3%]
+tests\test_faz12_events_pull_kap_html_strict_exitcode.py .               [  4%]
+tests\test_faz12_events_pull_offline_deterministic.py .                  [  4%]
+tests\test_faz12_events_pull_strict_exitcode.py .                        [  4%]
+tests\test_faz12_eventstore_roundtrip.py .                               [  4%]
+tests\test_faz13_eod_run_instruments_optional.py .                       [  5%]
+tests\test_faz13_instruments_ingest_strict_exitcode.py .                 [  5%]
+tests\test_faz13_instruments_pull_offline_deterministic.py .             [  5%]
+tests\test_faz14_apply_close_adjustments.py .                            [  5%]
+tests\test_faz14_ca_ingest_strict_exitcode.py .                          [  5%]
+tests\test_faz14_ca_pull_offline_deterministic.py .                      [  6%]
+tests\test_faz14_eod_run_ca_optional.py .                                [  6%]
+tests\test_faz14_eod_run_universe_optional.py .                          [  6%]
+tests\test_faz14_instrument_timeline_basic.py .                          [  6%]
+tests\test_faz14_instrument_timeline_cycle_failclosed.py .               [  7%]
+tests\test_faz15_calendar_json_and_gating.py .                           [  7%]
+tests\test_faz16_batch_audit_detects_missing_pipeline_manifest.py .      [  7%]
+tests\test_faz16_batch_console_summary_utf8.py .                         [  7%]
+tests\test_faz16_batch_dry_run_plans_days.py .                           [  8%]
+tests\test_faz16_batch_max_failures_stops_early.py .                     [  8%]
+tests\test_faz16_batch_rerun_failed_then_ok.py .                         [  8%]
+tests\test_faz16_batch_resume_skips_ok_days.py .                         [  8%]
+tests\test_faz16_eod_batch_calendar_skip_and_strict.py .                 [  8%]
+tests\test_faz17_audit_detects_snapshot_hash_mismatch.py .               [  9%]
+tests\test_faz17_dossier_includes_snapshot_hash.py .                     [  9%]
+tests\test_faz17_pipeline_manifest_includes_snapshot_hash.py .           [  9%]
+tests\test_faz17_snapshot_hash_manifest_written.py .                     [  9%]
+tests\test_faz18_batch_deep_audit_hash_mismatch.py .                     [ 10%]
+tests\test_faz18_batch_deep_audit_missing_artifact.py .                  [ 10%]
+tests\test_faz19_policy_cli_precedence.py .                              [ 10%]
+tests\test_faz19_policy_provenance_written.py .                          [ 10%]
+tests\test_faz19_policy_strict_failclosed_on_invalid.py .                [ 11%]
+tests\test_faz19_rules_explain_deterministic.py .                        [ 11%]
+tests\test_faz19_rules_manifest_provenance.py .                          [ 11%]
+tests\test_faz19_rules_validate_failclosed.py .                          [ 11%]
+tests\test_faz20_eod_orders_deterministic.py .                           [ 11%]
+tests\test_faz20_eod_orders_emits_artifact_and_manifest.py .             [ 12%]
+tests\test_faz20_eod_orders_failclosed_when_blocked.py .                 [ 12%]
+tests\test_faz21_replay_deterministic.py .                               [ 12%]
+tests\test_faz21_replay_strict_failclosed_on_day_error.py .              [ 12%]
+tests\test_faz21_replay_writes_manifest_and_metrics.py .                 [ 13%]
+tests\test_faz22_orders_intent_artifact_written_no_actions.py .          [ 13%]
+tests\test_faz22_replay_scorecard_written_and_deterministic.py .         [ 13%]
+tests\test_faz22_strategy_registry_resolve.py .                          [ 13%]
+tests\test_faz22_topn_strategy_action_count.py .                         [ 13%]
+tests\test_faz24_core_golden_path_fences.py .                            [ 14%]
+tests\test_faz24_info_json_output.py .                                   [ 14%]
+tests\test_faz24_policy_example_exists_and_validates.py .                [ 14%]
+tests\test_faz25_rules_explain_exit_codes.py ..                          [ 15%]
+tests\test_faz26_repo_eol_contracts.py .                                 [ 15%]
+tests\test_faz27_cli_data_commands.py .                                  [ 15%]
+tests\test_faz27_cli_data_load.py .                                      [ 15%]
+tests\test_faz27_registry_persistence.py .                               [ 16%]
+tests\test_faz28_eod_raw_cache_manifest.py .                             [ 16%]
+tests\test_faz28_kap_raw_cache_and_manifest.py ...                       [ 16%]
+tests\test_faz29_pipeline_manifest_locations.py .                        [ 17%]
+tests\test_faz2_cli.py ..                                                [ 17%]
+tests\test_faz2_localcsv_provider.py .                                   [ 17%]
+tests\test_faz2_plan_cli.py .                                            [ 18%]
+tests\test_faz30_registry_cli.py ......                                  [ 19%]
+tests\test_faz31_eod_snapshot_builder.py .....                           [ 20%]
+tests\test_faz32_instruments_timeline_alias.py ....                      [ 21%]
+tests\test_faz33_corporate_actions_adjuster.py ......                    [ 22%]
+tests\test_faz34_feature_registry.py ......                              [ 24%]
+tests\test_faz35_strategy_orders_intent.py ..                            [ 24%]
+tests\test_faz36_risk_engine.py .....                                    [ 25%]
+tests\test_faz37_broker_paper.py ...                                     [ 26%]
+tests\test_faz38_backtest_harness.py ...                                 [ 27%]
+tests\test_faz39_walk_forward.py ....                                    [ 28%]
+tests\test_faz3_cli_ask_legacy_snapshot.py .                             [ 28%]
+tests\test_faz3_cli_data_commands.py .                                   [ 28%]
+tests\test_faz3_data_core_ingest_local_csv.py ...                        [ 29%]
+tests\test_faz3_marketdata_capabilities.py .                             [ 29%]
+tests\test_faz3_registry_persist.py ..                                   [ 30%]
+tests\test_faz3_snapshot_schema_validation.py .                          [ 30%]
+tests\test_faz40_execution_fail_closed.py ...                            [ 30%]
+tests\test_faz42_instrument_identity_aliases.py ..                       [ 31%]
+tests\test_faz43_corporate_actions_canonical.py ...                      [ 32%]
+tests\test_faz44_price_adjustments.py ..                                 [ 32%]
+tests\test_faz45_rulespack_tick_band.py .....                            [ 33%]
+tests\test_faz46_order_rules_gate.py ...                                 [ 34%]
+tests\test_faz47_restrictions_gate.py ....                               [ 35%]
+tests\test_faz48_portfolio_ledger.py .....                               [ 36%]
+tests\test_faz49_live_execution_fail_closed.py F
+
+================================== FAILURES ===================================
+_______________ test_faz49_live_without_config_returns_nonzero ________________
+
+tmp_path = WindowsPath('C:/Users/demir/AppData/Local/Temp/pytest-of-demir/pytest-599/test_faz49_live_without_config0')
+
+    def test_faz49_live_without_config_returns_nonzero(tmp_path: Path) -> None:
+        """Live execution without broker config (no BIST_BROKER_CONFIG, no --broker-config) -> exit code != 0."""
+        repo_root = Path(__file__).resolve().parents[1]
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(repo_root / "src")
+        env.pop("BIST_BROKER_CONFIG", None)
+        outdir = tmp_path / "out"
+        outdir.mkdir()
+        day = "2024-01-01"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "bist_core.cli",
+                "eod",
+                "execute",
+                "--day",
+                day,
+                "--outdir",
+                str(outdir),
+                "--execution",
+                "live",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            cwd=str(repo_root),
+        )
+        assert result.returncode != 0
+        assert "broker_config_missing" in result.stderr or "live_execution_missing_broker_config" in result.stderr or "blocked" in result.stderr
+        exec_path = outdir / day / "execution_result.json"
+        assert exec_path.is_file()
+        data = json.loads(exec_path.read_text(encoding="utf-8"))
+        assert data.get("ok") is False
+        errs = data.get("errors", [])
+>       assert "broker_config_missing" in errs or "live_execution_missing_broker_config" in errs
+E       AssertionError: assert ('broker_config_missing' in [{'code': 'broker_config_missing'}] or 'live_execution_missing_broker_config' in [{'code': 'broker_config_missing'}])
+
+tests\test_faz49_live_execution_fail_closed.py:51: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_faz49_live_execution_fail_closed.py::test_faz49_live_without_config_returns_nonzero
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!
+================== 1 failed, 159 passed in 274.22s (0:04:34) ==================

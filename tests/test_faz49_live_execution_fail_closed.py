@@ -48,7 +48,8 @@ def test_faz49_live_without_config_returns_nonzero(tmp_path: Path) -> None:
     data = json.loads(exec_path.read_text(encoding="utf-8"))
     assert data.get("ok") is False
     errs = data.get("errors", [])
-    assert "broker_config_missing" in errs or "live_execution_missing_broker_config" in errs
+    err_codes = [e.get("code") for e in errs if isinstance(e, dict)]
+    assert "broker_config_missing" in err_codes or "live_execution_missing_broker_config" in err_codes
     assert data.get("execution") == "live"
 
 

@@ -86,7 +86,7 @@ def test_faz71_execution_result_deterministic_schema(tmp_path: Path) -> None:
     expected_keys = {"schema_version", "day", "ok", "blocked", "reason", "provider", "mode", "execution", "errors"}
     assert set(data.keys()) == expected_keys
     assert isinstance(data["errors"], list)
-    assert data["errors"] == sorted(data["errors"])
+    assert data["errors"] == sorted(data["errors"], key=lambda e: (e.get("code") if isinstance(e, dict) else e, str(e)))
 
 
 def test_faz71_no_manifest_writes_execution_result(tmp_path: Path) -> None:
@@ -116,7 +116,8 @@ def test_faz71_no_manifest_writes_execution_result(tmp_path: Path) -> None:
     assert result_path.is_file()
     data = json.loads(result_path.read_text(encoding="utf-8"))
     assert data.get("ok") is False and data.get("blocked") is True
-    assert "no_manifest" in (data.get("errors") or [])
+    err_codes = [e.get("code") for e in (data.get("errors") or []) if isinstance(e, dict)]
+    assert "no_manifest" in err_codes
 
 
 def test_faz71_no_orders_intent_writes_execution_result(tmp_path: Path) -> None:
@@ -156,7 +157,8 @@ def test_faz71_no_orders_intent_writes_execution_result(tmp_path: Path) -> None:
     assert result_path.is_file()
     data = json.loads(result_path.read_text(encoding="utf-8"))
     assert data.get("ok") is False
-    assert "no_orders_intent" in (data.get("errors") or [])
+    err_codes = [e.get("code") for e in (data.get("errors") or []) if isinstance(e, dict)]
+    assert "no_orders_intent" in err_codes
 
 
 def test_faz71_broker_config_missing_writes_execution_result(tmp_path: Path) -> None:
@@ -201,4 +203,5 @@ def test_faz71_broker_config_missing_writes_execution_result(tmp_path: Path) -> 
     assert result_path.is_file()
     data = json.loads(result_path.read_text(encoding="utf-8"))
     assert data.get("ok") is False
-    assert any("broker" in (e or "").lower() for e in (data.get("errors") or []))
+    errs = data.get("errors") or []
+    assert any("broker" in ((e.get("code") if isinstance(e, dict) else e) or "").lower() for e in errs)

@@ -130,6 +130,11 @@ def write_dossier(
     payload["dossier_json_path"] = str(out_file)
 
     stable = _stable_payload(payload)
+    try:
+        from bist_core.security.redact import redact_recursive
+        stable = redact_recursive(stable)
+    except Exception:
+        pass
     tmp = out_file.with_name(out_file.name + ".tmp")
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(stable, f, ensure_ascii=False, indent=2, sort_keys=True)
