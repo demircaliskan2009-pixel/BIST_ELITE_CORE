@@ -122,6 +122,10 @@ def write_dossier(
     if evidence.get("blocked_code") is not None:
         pointers["blocked_code"] = str(evidence["blocked_code"])
 
+    # FAZ90: explainability — link explain.json
+    if evidence.get("explain_path"):
+        pointers["explain_path"] = str(evidence["explain_path"])
+
     payload["evidence"] = _stable_payload(pointers)
     payload["dossier_json_path"] = str(out_file)
 
