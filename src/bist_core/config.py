@@ -49,7 +49,7 @@ def _validate_core_schema_v1(data: Dict[str, Any]) -> Optional[str]:
 
 def load_core_config_strict(path: Optional[Path]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
-    Load and validate core config (schema v1). Missing/invalid config returns (None, error_code).
+    Load, migrate (v1->v2...), and validate core config. Missing/invalid config returns (None, error_code).
     error_code: CONFIG_MISSING (file missing), CONFIG_INVALID (bad JSON or schema).
     """
     if path is None or not path.is_file():
@@ -59,6 +59,8 @@ def load_core_config_strict(path: Optional[Path]) -> Tuple[Optional[Dict[str, An
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
         return None, "CONFIG_INVALID"
+    from bist_core.config_migrate import migrate_core_config
+    data = migrate_core_config(data)
     err = _validate_core_schema_v1(data)
     if err:
         return None, err
