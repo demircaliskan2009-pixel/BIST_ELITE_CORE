@@ -215,6 +215,9 @@ def run_eod_pipeline(
         stages["snapshot"]["notes"] = stages["snapshot"]["notes"] + ["snapshot_hash_error"]
         snapshot_path = root / day_str / "snapshot.csv"
 
+    if snapshot_hash is not None:
+        stages["snapshot"]["artifact"] = {"path": str(snapshot_path), "sha256": snapshot_hash.get("value", "")}
+
     if not stages["calendar"]["ok"]:
         runtime_ms = int((time.perf_counter() - start) * 1000)
         finished_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
