@@ -6,6 +6,8 @@ on:
     paths:
       - 'src/**'
       - 'tests/**'
+      - 'docs/**'
+      - 'scripts/verify_alignment.py'
       - '.github/workflows/ci.yml'
       - 'requirements.txt'
       - 'requirements-dev.txt'
@@ -16,6 +18,8 @@ on:
     paths:
       - 'src/**'
       - 'tests/**'
+      - 'docs/**'
+      - 'scripts/verify_alignment.py'
       - '.github/workflows/ci.yml'
       - 'requirements.txt'
       - 'requirements-dev.txt'
@@ -76,3 +80,6 @@ jobs:
         run: |
           set -euo pipefail
           pytest -q tests/test_faz3_data_core_ingest_local_csv.py
+
+      - name: Alignment gate (FAZ83)
+        run: python scripts/verify_alignment.py
