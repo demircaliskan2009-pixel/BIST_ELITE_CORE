@@ -242,6 +242,7 @@ def _cmd_eod_run(args: argparse.Namespace) -> int:
         research_source=research_source,
         research_offline=bool(getattr(args, "research_offline", False)),
         market_data_provider=getattr(args, "market_data_provider", None),
+        instrument_master=getattr(args, "instrument_master", None) or os.environ.get("BIST_INSTRUMENT_MASTER"),
         git_sha=_env_git_sha(),
         cli_args=cli_args,
     )
@@ -312,6 +313,7 @@ def _cmd_eod_batch(args: argparse.Namespace) -> int:
         "ca_outdir": getattr(args, "ca_outdir", None),
         "resolve_aliases": bool(getattr(args, "resolve_aliases", False)),
         "policy_file": getattr(args, "policy_file", None),
+        "instrument_master": getattr(args, "instrument_master", None) or os.environ.get("BIST_INSTRUMENT_MASTER"),
         "git_sha": _env_git_sha(),
         "cli_args": {"batch": True},
     }
@@ -1973,6 +1975,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_run.add_argument("--orders-top-n", dest="orders_top_n", type=int, default=10)
     p_eod_run.add_argument("--risk-rules-file", dest="risk_rules_file", default=None)
     p_eod_run.add_argument("--restrictions-file", dest="restrictions_file", default=None, help="Restriction state JSON (or env BIST_RESTRICTIONS_FILE)")
+    p_eod_run.add_argument("--instrument-master", dest="instrument_master", default=None, help="Instrument master CSV (or env BIST_INSTRUMENT_MASTER)")
     p_eod_run.add_argument("--research", action="store_true", help="Run research cache stage")
     p_eod_run.add_argument("--research-source", dest="research_source", default=None)
     p_eod_run.add_argument("--research-offline", dest="research_offline", action="store_true")
@@ -1997,6 +2000,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_batch.add_argument("--ca-provider", dest="ca_provider", default=None)
     p_eod_batch.add_argument("--ca-input", dest="ca_input", default=None)
     p_eod_batch.add_argument("--ca-outdir", dest="ca_outdir", default=None)
+    p_eod_batch.add_argument("--instrument-master", dest="instrument_master", default=None, help="Instrument master CSV (or env BIST_INSTRUMENT_MASTER)")
     p_eod_batch.add_argument("--resolve-aliases", action="store_true")
     p_eod_batch.add_argument("--calendar-file", dest="calendar_file", default=None)
     p_eod_batch.add_argument("--ignore-calendar", action="store_true")
