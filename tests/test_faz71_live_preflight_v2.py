@@ -182,7 +182,7 @@ def test_faz71_broker_config_missing_writes_execution_result(tmp_path: Path) -> 
     )
     (outdir / "orders" / day).mkdir(parents=True, exist_ok=True)
     (outdir / "orders" / day / "orders_intent.json").write_text(
-        json.dumps({"day": day, "actions": []}, encoding="utf-8"),
+        json.dumps({"day": day, "actions": []}),
         encoding="utf-8",
     )
     env = os.environ.copy()

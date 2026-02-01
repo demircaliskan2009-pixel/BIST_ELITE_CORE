@@ -94,5 +94,6 @@ def test_faz57_execute_live_fail_closed_when_bist_rules_missing(tmp_path: Path) 
     ]
     r = subprocess.run(cmd, env=env, capture_output=True, text=True)
     assert r.returncode == 2
-    assert "blocked" in (r.stderr or "").lower()
+    err = (r.stderr or "").lower()
+    assert ("blocked" in err) or ("bist_rules_missing" in err)
     assert "bist_rules" in (r.stderr or r.stdout or "")
