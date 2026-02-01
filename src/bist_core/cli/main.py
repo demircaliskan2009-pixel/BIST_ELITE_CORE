@@ -453,7 +453,13 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
             err_struct("bist_rules_missing", note)
             for e in err_pre:
                 print(f"  {e}", file=sys.stderr)
-            write_execution_result(outdir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode=execution, errors=sorted(err_pre), execution=execution)
+            exec_result_path = write_execution_result(outdir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode=execution, errors=sorted(err_pre), execution=execution)
+            from bist_core.dossier.write import update_dossier_evidence
+            update_dossier_evidence(outdir, day, {
+                "execution_result_path": str(exec_result_path),
+                "blocked_reason": note,
+                "blocked_code": "bist_rules_missing",
+            })
             return 2
     manifest_path = _find_manifest_path(outdir, day)
     if not manifest_path.is_file():

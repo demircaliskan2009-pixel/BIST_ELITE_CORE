@@ -117,6 +117,10 @@ def write_dossier(
         pointers["ledger_fills_path"] = str(evidence["ledger_fills_path"])
     if evidence.get("ledger_positions_path"):
         pointers["ledger_positions_path"] = str(evidence["ledger_positions_path"])
+    if evidence.get("blocked_reason") is not None:
+        pointers["blocked_reason"] = str(evidence["blocked_reason"])
+    if evidence.get("blocked_code") is not None:
+        pointers["blocked_code"] = str(evidence["blocked_code"])
 
     payload["evidence"] = _stable_payload(pointers)
     payload["dossier_json_path"] = str(out_file)
