@@ -22,6 +22,7 @@ __all__ = [
     "get_dataset",
     "DEFAULT_REGISTRY_ENV",
     "DEFAULT_REGISTRY_RELATIVE",
+    "DEFAULT_REGISTRY_PATH",
     "DEFAULT_HOME_ENV",
 ]
 
@@ -30,11 +31,21 @@ DEFAULT_REGISTRY_RELATIVE = ".bist_core/registry.json"
 DEFAULT_HOME_ENV = "BIST_CORE_HOME"
 
 
+def _safe_user_home() -> Path:
+    try:
+        return Path.home()
+    except RuntimeError:
+        return Path.cwd()
+
+
+DEFAULT_REGISTRY_PATH = _safe_user_home() / DEFAULT_REGISTRY_RELATIVE
+
+
 def get_bist_core_home() -> Path:
     env_home = os.getenv(DEFAULT_HOME_ENV)
     if env_home:
         return Path(env_home).expanduser()
-    return Path.home() / ".bist_core"
+    return _safe_user_home() / ".bist_core"
 
 
 def _save_json_atomic(path: Path, payload: Dict[str, Any]) -> None:

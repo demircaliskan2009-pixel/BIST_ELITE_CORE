@@ -48,6 +48,9 @@ def load_events_for_day(
         if err is not None:
             errors.append(err)
             continue
+        if event.ts[:10] > day:
+            errors.append(f"EventLeakage:future_ts:row={idx} ts={event.ts} day={day}")
+            continue
         events_by_symbol.setdefault(event.symbol, []).append(event)
 
     for symbol, events in events_by_symbol.items():
@@ -105,8 +108,8 @@ def _parse_event_row(row: Any, idx: int) -> Tuple[EventRecord | None, str | None
 
 
 def _sort_events(events: List[EventRecord]) -> List[EventRecord]:
-    def key(ev: EventRecord) -> str:
-        return ev.ts
+    def key(ev: EventRecord) -> Tuple[str, str, str]:
+        return (ev.ts, ev.kind, ev.title)
 
     return sorted(events, key=key, reverse=True)
 

@@ -1,7 +1,9 @@
 ########################################
 # Python bytecode & cache (global)
 ########################################
+__pycache__/
 **/__pycache__/
+*.pyc
 **/*.py[cod]
 *.pyo
 *.egg-info/
@@ -55,6 +57,9 @@ Thumbs.db
 # Backups
 ########################################
 src_file_backup_*/
+*.bak*
+*.broken*
+proof_*.txt
 
 ########################################
 # Security hardening

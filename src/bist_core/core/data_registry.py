@@ -4,6 +4,7 @@ from bist_core.data.registry import (
     DEFAULT_REGISTRY_PATH,
     get_default_registry,
     load_registered_dataset,
+    register_dataset,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "DEFAULT_REGISTRY_PATH",
     "get_default_registry",
     "load_registered_dataset",
+    "register_dataset",
 ]

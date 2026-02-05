@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from datetime import date as Date, timedelta
 from pathlib import Path
@@ -48,6 +49,15 @@ def _build_synthetic_advice(symbols: List[str]) -> List[Dict[str, Any]]:
         {"symbol": s, "decision_raw": "BUY", "score": 1.0}
         for s in symbols
     ]
+
+
+def _sha256_file(file_path: Path) -> str:
+    """SHA256 of file contents (binary read)."""
+    h = hashlib.sha256()
+    with file_path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def run_backtest(
@@ -100,9 +110,12 @@ def run_backtest(
     )
     equity_curve: List[Dict[str, str | float]] = []  # day, equity
     total_fills = 0
+    all_symbols: set[str] = set()
+    all_fills: List[Dict[str, Any]] = []
 
     for day in days:
         symbols, close_map = _load_snapshot_for_day(root, day)
+        all_symbols.update(symbols)
         if not symbols:
             equity_curve.append({"day": day, "equity": round(ledger.equity(), 6)})
             continue
@@ -117,6 +130,7 @@ def run_backtest(
         broker = PaperBroker(snapshot_root=root, day=day, portfolio_value=max(equity_before, 1e-9))
         fills = broker.place_orders(orders_intent)
         total_fills += len(fills)
+        all_fills.extend(fills)
         ledger.apply_fills(fills, sort_key=("day", "symbol"))
         write_fills_jsonl(out_path, day, fills)
         write_positions_jsonl(out_path, day, ledger.positions())
@@ -152,13 +166,40 @@ def run_backtest(
         "turnover": round(ledger.turnover(), 6),
     }
     equity_path = backtest_dir / "equity_curve.csv"
+    equity_json_path = backtest_dir / "equity_curve.json"
     metrics_path = backtest_dir / "metrics.json"
+    fills_path = backtest_dir / "fills.jsonl"
     with equity_path.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=["day", "equity"])
         w.writeheader()
         w.writerows(equity_curve)
+    with equity_json_path.open("w", encoding="utf-8") as f:
+        json.dump(equity_curve, f, ensure_ascii=False, indent=2)
     with metrics_path.open("w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
+    with fills_path.open("w", encoding="utf-8") as f:
+        for row in all_fills:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    policy_stable = json.dumps(
+        {"strategy": strategy, "top_n": top_n, "date_from": date_from, "date_to": date_to},
+        sort_keys=True,
+    )
+    policy_hash = hashlib.sha256(policy_stable.encode("utf-8")).hexdigest()
+    artifacts: Dict[str, str] = {}
+    for name in ["metrics.json", "equity_curve.json", "fills.jsonl"]:
+        p = backtest_dir / name
+        if p.exists():
+            artifacts[name] = _sha256_file(p)
+    manifest = {
+        "schema_version": 1,
+        "day": date_from,
+        "symbols_count": len(all_symbols),
+        "policy_hash": policy_hash,
+        "artifacts": artifacts,
+    }
+    manifest_path = backtest_dir / "manifest.json"
+    with manifest_path.open("w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
     metrics["equity_curve_path"] = str(equity_path)
     metrics["metrics_path"] = str(metrics_path)
     return metrics
