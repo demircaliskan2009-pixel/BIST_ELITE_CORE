@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 from datetime import date as Date, timedelta
 from pathlib import Path
@@ -100,6 +99,7 @@ def run_backtest(
             "num_days": 0,
             "equity_curve_path": "",
             "metrics_path": "",
+            "manifest_path": "",
         }
 
     params = {"top_n": top_n}
@@ -180,28 +180,36 @@ def run_backtest(
     with fills_path.open("w", encoding="utf-8") as f:
         for row in all_fills:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    policy_stable = json.dumps(
-        {"strategy": strategy, "top_n": top_n, "date_from": date_from, "date_to": date_to},
-        sort_keys=True,
-    )
-    policy_hash = hashlib.sha256(policy_stable.encode("utf-8")).hexdigest()
-    artifacts: Dict[str, str] = {}
-    for name in ["metrics.json", "equity_curve.json", "fills.jsonl"]:
-        p = backtest_dir / name
-        if p.exists():
-            artifacts[name] = _sha256_file(p)
-    manifest = {
+
+    evidence_manifest = {
         "schema_version": 1,
-        "day": date_from,
-        "symbols_count": len(all_symbols),
-        "policy_hash": policy_hash,
-        "artifacts": artifacts,
+        "kind": "backtest",
+        "date_from": date_from,
+        "date_to": date_to,
+        "strategy": strategy,
+        "top_n": top_n,
+        "initial_equity": initial_equity,
+        "fee_bps": fee_bps,
+        "slippage_bps": slippage_bps,
+        "outputs": {
+            "metrics": {
+                "path": "metrics.json",
+                "sha256": snapshot_integrity.compute_sha256(metrics_path),
+                "bytes": metrics_path.stat().st_size,
+            },
+            "equity_curve": {
+                "path": "equity_curve.csv",
+                "sha256": snapshot_integrity.compute_sha256(equity_path),
+                "bytes": equity_path.stat().st_size,
+            },
+        },
     }
     manifest_path = backtest_dir / "manifest.json"
-    with manifest_path.open("w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    snapshot_integrity.atomic_write_json(manifest_path, evidence_manifest)
+
     metrics["equity_curve_path"] = str(equity_path)
     metrics["metrics_path"] = str(metrics_path)
+    metrics["manifest_path"] = str(manifest_path.resolve())
     return metrics
 
 

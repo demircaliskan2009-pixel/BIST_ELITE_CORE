@@ -1,4 +1,4 @@
-"""FAZ106: Backtest manifest + artifact hashes for lineage/audit."""
+"""FAZ105: Backtest evidence manifest — manifest.json with outputs (path, sha256, bytes)."""
 from __future__ import annotations
 
 import json
@@ -8,20 +8,20 @@ from bist_core.services import snapshot_integrity
 from bist_core.services.backtest import run_backtest
 
 
-def test_faz106_backtest_manifest_exists_and_artifact_hashes_match(tmp_path: Path) -> None:
-    """Run minimal backtest; assert manifest.json exists; recompute sha256/bytes for outputs and match."""
+def test_faz105_backtest_evidence_manifest_exists_sha256_and_bytes_match(tmp_path: Path) -> None:
+    """Tiny 2-day backtest; assert manifest.json exists; recompute sha256 via snapshot_integrity and assert equals + bytes match."""
     snapshot_root = tmp_path / "snapshots"
-    for day in ["2099-07-01", "2099-07-02"]:
+    for day in ["2099-08-01", "2099-08-02"]:
         (snapshot_root / day).mkdir(parents=True)
         (snapshot_root / day / "snapshot.csv").write_text(
-            "symbol,close\nA,10.0\nB,20.0\n",
+            "symbol,close\nX,1.0\nY,2.0\n",
             encoding="utf-8",
         )
     outdir = tmp_path / "out"
     run_backtest(
         snapshot_root=snapshot_root,
-        date_from="2099-07-01",
-        date_to="2099-07-02",
+        date_from="2099-08-01",
+        date_to="2099-08-02",
         outdir=outdir,
         strategy="equal_weight",
         top_n=10,
@@ -33,10 +33,10 @@ def test_faz106_backtest_manifest_exists_and_artifact_hashes_match(tmp_path: Pat
     assert manifest.get("schema_version") == 1
     assert manifest.get("kind") == "backtest"
     outputs = manifest.get("outputs") or {}
-    for key in ("metrics", "equity_curve"):
-        out = outputs.get(key)
-        assert out is not None, f"outputs.{key} must exist"
+    assert "metrics" in outputs
+    assert "equity_curve" in outputs
+    for name, out in [("metrics", outputs["metrics"]), ("equity_curve", outputs["equity_curve"])]:
         p = backtest_dir / out["path"]
-        assert p.is_file(), f"output file {out['path']} must exist"
-        assert snapshot_integrity.compute_sha256(p) == out["sha256"], f"outputs.{key}: sha256 mismatch"
-        assert p.stat().st_size == out["bytes"], f"outputs.{key}: bytes mismatch"
+        assert p.is_file(), f"{name} file must exist"
+        assert snapshot_integrity.compute_sha256(p) == out["sha256"], f"{name}: sha256 mismatch"
+        assert p.stat().st_size == out["bytes"], f"{name}: bytes mismatch"
