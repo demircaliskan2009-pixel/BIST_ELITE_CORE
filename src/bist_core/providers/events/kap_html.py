@@ -11,6 +11,7 @@ from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 from bist_core import config as core_config
+from bist_core.env import network_allowed
 from bist_core.providers.events.base import EventsProvider
 
 
@@ -65,9 +66,19 @@ class KapHtmlEventsProvider(EventsProvider):
         raw_path = self.raw_dir / f"{day}.html"
         self.raw_path = str(raw_path)
         self.raw_sha256 = None
-        
+
+        # Network kill-switch: no urlopen; cache miss -> raise
+        if not network_allowed():
+            if not raw_path.exists():
+                raise RuntimeError("KAP_CACHE_MISS_NETWORK_DISABLED")
+            try:
+                html_bytes = raw_path.read_bytes()
+                self.raw_sha256 = _sha256_hex(html_bytes)
+                html = html_bytes.decode("utf-8", errors="strict")
+            except Exception as exc:
+                return [{"error_marker": f"ProviderError:CacheRead:{exc.__class__.__name__}"}]
         # Cache-only mode: cache miss -> fail-closed marker
-        if self.cache_only:
+        elif self.cache_only:
             if not raw_path.exists():
                 return [{"error_marker": "ProviderError:CacheMiss"}]
             try:

@@ -24,6 +24,7 @@ def test_events_pull_kap_html_parser(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo_root / "src")
+    env["BIST_CORE_ALLOW_NETWORK"] = "1"
 
     fixtures = repo_root / "tests" / "fixtures"
     httpd, port = _start_server(fixtures)

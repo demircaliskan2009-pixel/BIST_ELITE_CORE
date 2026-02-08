@@ -64,6 +64,7 @@ def test_faz28_eod_manifest_includes_events_raw_cache(tmp_path: Path) -> None:
 
         env = os.environ.copy()
         env["PYTHONPATH"] = str(repo_root / "src")
+        env["BIST_CORE_ALLOW_NETWORK"] = "1"
         env["BIST_CORE_SNAPSHOT_DIR"] = str(snapshots_dir)
         env["BIST_KAP_RAW_DIR"] = str(raw_dir)
         env["BIST_KAP_BASE_URL"] = f"http://127.0.0.1:{port}"

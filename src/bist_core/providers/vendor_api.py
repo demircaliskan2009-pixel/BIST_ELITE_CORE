@@ -4,6 +4,8 @@ from datetime import date
 from typing import Any, Dict, List, Mapping, Optional, Union
 import requests
 
+from bist_core.env import network_allowed
+
 
 @dataclass
 class VendorAPIConfig:
@@ -76,8 +78,10 @@ class VendorAPIProvider:
             JSON decode edilmiş yanıt
             
         Raises:
-            RuntimeError: İstek başarısız olursa
+            RuntimeError: İstek başarısız olursa veya network disabled
         """
+        if not network_allowed():
+            raise RuntimeError("NETWORK_DISABLED: set BIST_CORE_ALLOW_NETWORK=1")
         try:
             response = self._session.get(
                 url,

@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pytest
+
 from bist_core.providers.events.kap_html import KapHtmlEventsProvider
 from bist_core.services.events_pipeline import build_events_jsonl_for_day
 
@@ -62,10 +64,11 @@ def test_events_pipeline_manifest_includes_raw_cache(tmp_path: Path) -> None:
     assert manifest["raw_cache"]["cache_only"] is True
 
 
-def test_kap_html_cache_only_miss_failclosed(tmp_path: Path) -> None:
+def test_kap_html_cache_only_miss_failclosed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     day = "2099-01-02"
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("BIST_CORE_ALLOW_NETWORK", "1")
 
     provider = KapHtmlEventsProvider(
         base_url="https://example.invalid",

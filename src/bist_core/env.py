@@ -11,6 +11,18 @@ from typing import Any, Dict, List, Optional, Tuple
 
 REDACT_PLACEHOLDER = "***"
 
+NETWORK_ALLOW_ENV = "BIST_CORE_ALLOW_NETWORK"
+_ALLOWED_NETWORK_VALUES = frozenset({"1", "true", "yes"})
+
+
+def network_allowed() -> bool:
+    """Return True only if BIST_CORE_ALLOW_NETWORK is one of 1/true/yes (case-insensitive). Default False."""
+    v = os.environ.get(NETWORK_ALLOW_ENV)
+    if v is None:
+        return False
+    return v.strip().lower() in _ALLOWED_NETWORK_VALUES
+
+
 # Env key patterns that indicate secret values (case-insensitive)
 SECRET_KEY_PATTERN = re.compile(
     r"(key|secret|token|password|auth|credential)",
@@ -78,4 +90,4 @@ def redact_secrets(payload: Dict[str, Any], keys_to_redact: Optional[List[str]] 
     return out
 
 
-__all__ = ["validate_env_contract", "redact_env", "redact_secrets", "REDACT_PLACEHOLDER"]
+__all__ = ["validate_env_contract", "redact_env", "redact_secrets", "REDACT_PLACEHOLDER", "network_allowed", "NETWORK_ALLOW_ENV"]
