@@ -39,6 +39,15 @@ python -m bist_core.cli eod execute --day YYYY-MM-DD --outdir data/eod/runs/YYYY
 
 Factory imzası: `factory(*, broker_config_path, broker_config, outdir, day, broker_name, execution) -> ExecutionProvider`. Uygulamanız `ExecutionProvider` protokolüne uymalı (`submit_orders(orders, *, dry_run) -> ExecutionResult` dict). Kaydı uygulama başlangıcında (örn. CLI veya strateji yüklemesinde) yapın; `execution=live` ve `--broker <name>` ile çalıştırıldığında çekirdek önce registry’ye bakar, isim varsa bu factory ile provider üretir. Registry’de yoksa mevcut Stub fallback kullanılır.
 
+## Yeni market data provider ekleme
+
+Çekirdeğe dokunmadan yeni bir market data vendor’ı eklemek için market data **registry** kullanılır. `bist_core.market_data.registry` modülünde:
+
+- **register_market_data_provider(name, factory)** — Provider adı ve factory fonksiyonunu kaydeder. `name` strip+lower ile normalize edilir; boş isimde `ValueError` atar.
+- **get_market_data_provider(name)** — İsme göre kayıtlı factory’yi döner; yoksa `None`.
+
+Factory imzası: `factory(*, snapshot_root, **kwargs) -> MarketDataProvider`. Uygulamanız `MarketDataProvider` protokolüne uymalı (`symbols(day)`, `close_map(day)`, `validate(day)`). Varsayılan `local_eod` davranışı değişmez; `resolve_provider(name=..., snapshot_root=...)` çağrıldığında name `local_eod` değilse önce registry’ye bakılır, bulunursa `factory(snapshot_root=snapshot_root, **kwargs)` ile provider üretilir; yoksa `ValueError` atılır.
+
 ## Fail-closed rules
 
 - **Network disabled by default** — Outbound requests (VendorAPIProvider, KapHtmlEventsProvider fetch) are blocked unless `BIST_CORE_ALLOW_NETWORK=1` (or equivalent). Cache-only or offline flows do not require network.
