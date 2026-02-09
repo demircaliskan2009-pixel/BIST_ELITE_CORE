@@ -30,6 +30,15 @@ python -m bist_core.cli eod execute --day YYYY-MM-DD --outdir data/eod/runs/YYYY
 - **KAP cache dir** — `BIST_KAP_RAW_DIR` or `BIST_RAW_DIR` for KAP HTML cache.
 - **Vendor / base URL** — `BIST_KAP_BASE_URL`, `BIST_KAP_URL_TEMPLATE` (or equivalent) for KAP; vendor EOD URL for market data when using VendorAPIProvider.
 
+## Yeni live broker nasıl eklenir?
+
+Çekirdeğe dokunmadan yeni bir canlı broker eklemek için execution provider **registry** kullanılır. `bist_core.execution.adapters.registry` modülünde:
+
+- **register_execution_provider(name, factory)** — Broker adı ve factory fonksiyonunu kaydeder. `name` strip+lower ile normalize edilir; boş isimde `ValueError` atar.
+- **get_execution_provider(name)** — İsme göre kayıtlı factory’yi döner; yoksa `None`.
+
+Factory imzası: `factory(*, broker_config_path, broker_config, outdir, day, broker_name, execution) -> ExecutionProvider`. Uygulamanız `ExecutionProvider` protokolüne uymalı (`submit_orders(orders, *, dry_run) -> ExecutionResult` dict). Kaydı uygulama başlangıcında (örn. CLI veya strateji yüklemesinde) yapın; `execution=live` ve `--broker <name>` ile çalıştırıldığında çekirdek önce registry’ye bakar, isim varsa bu factory ile provider üretir. Registry’de yoksa mevcut Stub fallback kullanılır.
+
 ## Fail-closed rules
 
 - **Network disabled by default** — Outbound requests (VendorAPIProvider, KapHtmlEventsProvider fetch) are blocked unless `BIST_CORE_ALLOW_NETWORK=1` (or equivalent). Cache-only or offline flows do not require network.
