@@ -23,6 +23,7 @@ python -m bist_core.cli eod execute --day YYYY-MM-DD --outdir data/eod/runs/YYYY
 - **KAP events provider** — Corporate disclosure / events. Use KapHtmlEventsProvider (HTML) or vendor API; configurable via URL template and cache dir.
 - **BrokerAdapter** — Order execution. Paper broker for simulation; for live trading plug in a BrokerAdapter implementation (config via BIST_BROKER_CONFIG).
 - [faz113] **matriks_terminal_adapter.py** — Matriks Terminal Düzey 2 + VİOP verisi için adaptör sınıfı eklendi (`bist_core.connectors.matriks_terminal_adapter.MatriksTerminalAdapter`).
+- [faz114] **market_data_streamer.py** — Sürekli canlı veri toplamak için MarketDataStreamer sınıfı entegre edildi (`bist_core.connectors.market_data_streamer.MarketDataStreamer`).
 
 ## Required / common env vars
 
