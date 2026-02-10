@@ -25,6 +25,7 @@ python -m bist_core.cli eod execute --day YYYY-MM-DD --outdir data/eod/runs/YYYY
 - [faz113] **matriks_terminal_adapter.py** — Matriks Terminal Düzey 2 + VİOP verisi için adaptör sınıfı eklendi (`bist_core.connectors.matriks_terminal_adapter.MatriksTerminalAdapter`).
 - [faz114] **market_data_streamer.py** — Sürekli canlı veri toplamak için MarketDataStreamer sınıfı entegre edildi (`bist_core.connectors.market_data_streamer.MarketDataStreamer`).
 - [faz115] **order_bridge_dll.py** — İşlem terminali için yarı otomatik emir köprüsü (OrderBridge) eklendi (`bist_core.connectors.order_bridge_dll.OrderBridge`).
+- [faz116] **order_bridge_interface.py** — Kullanıcı onayı ile emir gönderimi için Flask arayüzü eklendi (`bist_core.connectors.order_bridge_interface`: `app`, `pending_orders`; Flask gerekir).
 
 ## Required / common env vars
 
