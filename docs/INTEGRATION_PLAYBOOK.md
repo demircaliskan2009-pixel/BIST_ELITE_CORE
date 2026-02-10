@@ -24,6 +24,7 @@ python -m bist_core.cli eod execute --day YYYY-MM-DD --outdir data/eod/runs/YYYY
 - **BrokerAdapter** — Order execution. Paper broker for simulation; for live trading plug in a BrokerAdapter implementation (config via BIST_BROKER_CONFIG).
 - [faz113] **matriks_terminal_adapter.py** — Matriks Terminal Düzey 2 + VİOP verisi için adaptör sınıfı eklendi (`bist_core.connectors.matriks_terminal_adapter.MatriksTerminalAdapter`).
 - [faz114] **market_data_streamer.py** — Sürekli canlı veri toplamak için MarketDataStreamer sınıfı entegre edildi (`bist_core.connectors.market_data_streamer.MarketDataStreamer`).
+- [faz115] **order_bridge_dll.py** — İşlem terminali için yarı otomatik emir köprüsü (OrderBridge) eklendi (`bist_core.connectors.order_bridge_dll.OrderBridge`).
 
 ## Required / common env vars
 
