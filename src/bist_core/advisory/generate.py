@@ -3,11 +3,33 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from bist_core.models.base import ModelPlugin
+
+
+def _resolve_model_plugin(
+    model_plugin: Optional["ModelPlugin"],
+    cache_root: Optional[Path] = None,
+) -> Optional["ModelPlugin"]:
+    """
+    If model_plugin is None and USE_OPENAI_MODEL=1 + OPENAI_API_KEY are set,
+    return OpenAIModel instance. Otherwise return model_plugin as-is.
+    cache_root: if provided, cache_dir = cache_root / "_cache" / "openai".
+    """
+    if model_plugin is not None:
+        return model_plugin
+    if os.environ.get("USE_OPENAI_MODEL") == "1" and os.environ.get("OPENAI_API_KEY", "").strip():
+        try:
+            from bist_core.models.openai_model import OpenAIModel
+            cache_dir = (cache_root / "_cache" / "openai") if cache_root else None
+            return OpenAIModel(cache_dir=cache_dir)
+        except (ImportError, ValueError):
+            return None
+    return None
 
 
 def _load_close_map(snapshot_root: Path, day_str: str) -> Dict[str, float]:
@@ -70,12 +92,15 @@ def generate_advice(
     Write outdir/advice/<day>/advice_records.jsonl (schema v1); stable sort by symbol; deterministic floats.
     If model_plugin is set, use model.predict(features) for scores; else use build_advice_for_symbol.
     Returns {path, total, errors, records} for pipeline use.
+    When USE_OPENAI_MODEL=1 and OPENAI_API_KEY are set, OpenAIModel is used automatically.
     """
     root = Path(snapshot_root)
     out_path = Path(outdir)
     day_str = str(day)
     close_map = _load_close_map(root, day_str)
     symbols = sorted(symbols) if symbols is not None else sorted(close_map.keys())
+
+    model_plugin = _resolve_model_plugin(model_plugin, cache_root=out_path)
 
     records: List[Dict[str, Any]] = []
     errors = 0
@@ -87,6 +112,8 @@ def generate_advice(
         ]
         try:
             scores = model_plugin.predict(features)
+        except RuntimeError:
+            raise
         except Exception:
             scores = [0.0] * len(symbols)
             errors += len(symbols)

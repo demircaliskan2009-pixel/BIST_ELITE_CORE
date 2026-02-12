@@ -392,7 +392,33 @@ def _cmd_eod_advice(args: argparse.Namespace) -> int:
             top_n = int(top_n)
         except (TypeError, ValueError):
             top_n = None
-    result = generate_advice(day, _snapshot_root(), outdir, top_n=top_n)
+    model_plugin = None
+    if getattr(args, "model", None) == "openai":
+        if not os.environ.get("OPENAI_API_KEY", "").strip():
+            print(
+                "blocked: OPENAI_API_KEY required. PowerShell: $env:OPENAI_API_KEY=\"sk-...\"; "
+                "CMD: setx OPENAI_API_KEY \"sk-...\"",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            from bist_core.env import network_allowed
+            if not network_allowed():
+                print("blocked: NETWORK_DISABLED: set BIST_CORE_ALLOW_NETWORK=1", file=sys.stderr)
+                return 2
+        except ImportError:
+            pass
+        cache_dir = outdir / "_cache" / "openai" if outdir else None
+        try:
+            from bist_core.models.openai_model import OpenAIModel
+            model_plugin = OpenAIModel(cache_dir=cache_dir)
+        except ValueError as e:
+            print(f"blocked: {e}", file=sys.stderr)
+            return 2
+        except ImportError:
+            print("blocked: openai package required for --model openai (pip install openai)", file=sys.stderr)
+            return 2
+    result = generate_advice(day, _snapshot_root(), outdir, top_n=top_n, model_plugin=model_plugin)
     print(f"advice: path={result['path']} total={result['total']} errors={result['errors']}")
     return 0
 
@@ -2066,10 +2092,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_eod_batch_audit.add_argument("--strict", action="store_true")
     p_eod_batch_audit.set_defaults(func=_cmd_eod_batch_audit)
 
-    p_eod_advice = sub_eod.add_parser("advice")
-    p_eod_advice.add_argument("--day", required=True)
-    p_eod_advice.add_argument("--outdir", required=True)
-    p_eod_advice.add_argument("--top-n", dest="top_n", type=int, default=None)
+    p_eod_advice = sub_eod.add_parser("advice", help="Generate advice records (advice_records.jsonl)")
+    p_eod_advice.add_argument("--day", required=True, help="Trading day (YYYY-MM-DD)")
+    p_eod_advice.add_argument("--outdir", required=True, help="Output directory")
+    p_eod_advice.add_argument("--top-n", dest="top_n", type=int, default=None, help="Limit to top N by score")
+    p_eod_advice.add_argument(
+        "--model",
+        choices=["openai"],
+        default=None,
+        help="Model for scores: 'openai' uses GPT (requires OPENAI_API_KEY). Default: built-in advisor.",
+    )
     p_eod_advice.set_defaults(func=_cmd_eod_advice)
 
     p_eod_research = sub_eod.add_parser("research")

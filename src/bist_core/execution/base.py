@@ -1,7 +1,7 @@
 """ExecutionProvider protocol and ExecutionResult schema (stdlib, deterministic)."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Protocol
+from typing import Any, Dict, List, Protocol, runtime_checkable
 
 
 def execution_result(
@@ -21,8 +21,9 @@ def execution_result(
     }
 
 
+@runtime_checkable
 class ExecutionProvider(Protocol):
-    """Interface for order execution: submit_orders(orders, *, dry_run) -> ExecutionResult dict."""
+    """Common interface for order execution: submit_orders(orders, *, dry_run) -> ExecutionResult dict."""
 
     def submit_orders(self, orders: Dict[str, Any], *, dry_run: bool = True) -> Dict[str, Any]:
         """Submit orders; returns ExecutionResult (ok, errors, broker, sent, details)."""

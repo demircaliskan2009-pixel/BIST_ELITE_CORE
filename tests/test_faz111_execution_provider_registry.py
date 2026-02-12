@@ -1,4 +1,4 @@
-"""FAZ111: Execution provider registry — register custom live brokers without touching core."""
+"""FAZ111: Execution provider registry — dynamic registration, retrieval by key, common interface."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,13 +10,17 @@ from bist_core.execution.base import ExecutionProvider, execution_result
 from bist_core.execution.adapters import resolve_execution_provider
 from bist_core.execution.adapters.registry import (
     get_execution_provider,
+    list_execution_providers,
     register_execution_provider,
     _clear_registry_for_tests,
 )
 
 
+# --- Basic provider example (must implement ExecutionProvider interface) ---
+
+
 class DummyExecutionProvider:
-    """Dummy provider for tests; implements submit_orders."""
+    """Basic provider example for testing; implements ExecutionProvider (submit_orders)."""
 
     def submit_orders(self, orders: Dict[str, Any], *, dry_run: bool = True) -> Dict[str, Any]:
         return execution_result(
@@ -100,5 +104,47 @@ def test_get_execution_provider_normalized() -> None:
         assert get_execution_provider("dummy") is _dummy_factory
         assert get_execution_provider("  DUMMY  ") is _dummy_factory
         assert get_execution_provider("unknown_xyz") is None
+    finally:
+        _clear_registry_for_tests()
+
+
+def test_retrieve_by_key_and_verify_interface() -> None:
+    """Retrieval by string key returns a factory that produces a provider implementing the common interface."""
+    register_execution_provider("dummy", _dummy_factory)
+    try:
+        factory = get_execution_provider("dummy")
+        assert factory is not None
+        provider = factory(
+            broker_config_path=None,
+            broker_config={"x": 1},
+            outdir=None,
+            day="2025-01-01",
+            broker_name="dummy",
+            execution="live",
+        )
+        assert isinstance(provider, ExecutionProvider)
+        result = provider.submit_orders({"actions": []}, dry_run=True)
+        assert result.get("ok") is True
+        assert result.get("broker") == "dummy"
+    finally:
+        _clear_registry_for_tests()
+
+
+def test_basic_provider_example_implements_interface() -> None:
+    """Basic provider example conforms to ExecutionProvider (common interface)."""
+    provider = DummyExecutionProvider()
+    assert isinstance(provider, ExecutionProvider)
+    result = provider.submit_orders({}, dry_run=True)
+    assert "ok" in result and "broker" in result and "sent" in result
+
+
+def test_list_execution_providers() -> None:
+    """Dynamic registration is visible via list of keys."""
+    _clear_registry_for_tests()
+    try:
+        assert list_execution_providers() == []
+        register_execution_provider("alpha", _dummy_factory)
+        register_execution_provider("beta", _dummy_factory)
+        assert list_execution_providers() == ["alpha", "beta"]
     finally:
         _clear_registry_for_tests()

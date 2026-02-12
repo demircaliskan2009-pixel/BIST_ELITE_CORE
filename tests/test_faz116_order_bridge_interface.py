@@ -1,9 +1,29 @@
-"""FAZ116: Order bridge Flask arayüzü — index, confirm_order, 404 ve send_order mock."""
+"""FAZ116: OrderBridgeInterface (abstract base) + OrderBridgeDLL implementation + Flask arayüzü."""
 from __future__ import annotations
 
 import pytest
 
+from bist_core.connectors.order_bridge_base import OrderBridgeInterface
+from bist_core.connectors.order_bridge_dll import OrderBridgeDLL
 from bist_core.connectors.order_bridge_interface import app, order_bridge, pending_orders
+
+
+def test_order_bridge_interface_is_abstract() -> None:
+    """OrderBridgeInterface is an abstract base; send_order is abstract."""
+    assert hasattr(OrderBridgeInterface, "send_order")
+    assert "send_order" in getattr(OrderBridgeInterface, "__abstractmethods__", set())
+
+
+def test_order_bridge_dll_implements_interface() -> None:
+    """OrderBridgeDLL implements OrderBridgeInterface (abstract base for order routing)."""
+    assert issubclass(OrderBridgeDLL, OrderBridgeInterface)
+    dll = OrderBridgeDLL()
+    result = dll.send_order("buy")
+    assert isinstance(result, dict)
+    assert "sent" in result
+    assert "confirmation" in result
+    assert "order_type" in result
+    assert result["order_type"] == "buy"
 
 
 def test_confirm_order(monkeypatch: pytest.MonkeyPatch) -> None:

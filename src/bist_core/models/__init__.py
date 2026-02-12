@@ -8,6 +8,12 @@ from typing import Any, Dict, List, Tuple
 from bist_core.models.base import ModelPlugin
 from bist_core.models.baseline import BaselineModel
 
+# OpenAIModel: optional, requires pip install openai and OPENAI_API_KEY env
+try:
+    from bist_core.models.openai_model import OpenAIModel
+except ImportError:
+    OpenAIModel = None  # type: ignore
+
 
 @dataclass
 class EODBar:

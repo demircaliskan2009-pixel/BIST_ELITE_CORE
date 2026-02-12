@@ -1,8 +1,12 @@
-"""Execution provider registry: register custom live brokers without touching core."""
+"""
+Modular execution provider registry: dynamic registration and retrieval of live brokers by string key.
+Each provider must implement the ExecutionProvider interface (submit_orders).
+Register factories with register_execution_provider; resolve by key with get_execution_provider.
+"""
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from bist_core.execution.base import ExecutionProvider
 
@@ -16,8 +20,9 @@ def _normalize_name(name: str) -> str:
 
 def register_execution_provider(name: str, factory: Callable[..., ExecutionProvider]) -> None:
     """
-    Register a live execution provider factory by name.
-    name: normalized (strip + lower); ValueError if empty or illegal.
+    Register an execution provider factory by string key (dynamic registration).
+    name: normalized (strip + lower); ValueError if empty.
+    factory must return an instance implementing ExecutionProvider.
     factory(*, broker_config_path, broker_config, outdir, day, broker_name, execution) -> ExecutionProvider
     """
     normalized = _normalize_name(name)
@@ -27,9 +32,14 @@ def register_execution_provider(name: str, factory: Callable[..., ExecutionProvi
 
 
 def get_execution_provider(name: str) -> Optional[Callable[..., ExecutionProvider]]:
-    """Return the factory for the given name (normalized), or None if not registered."""
+    """Retrieve the factory for the given string key (normalized). Returns None if not registered."""
     normalized = _normalize_name(name)
     return _REGISTRY.get(normalized)
+
+
+def list_execution_providers() -> List[str]:
+    """Return sorted list of registered provider keys (for introspection)."""
+    return sorted(_REGISTRY.keys())
 
 
 def _clear_registry_for_tests() -> None:
