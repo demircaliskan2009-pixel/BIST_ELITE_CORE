@@ -748,6 +748,160 @@ def _cmd_healthcheck(args: argparse.Namespace) -> int:
     return 0 if ok else 2
 
 
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    """FAZ118: Production readiness checks. Modes: offline, openai, live."""
+    repo_path = Path(getattr(args, "repo", None) or config.REPO_ROOT)
+    mode = getattr(args, "mode", "offline") or "offline"
+    use_json = bool(getattr(args, "json", False))
+
+    checks: list[dict] = []
+
+    # ---- Offline baseline (always) ----
+    if repo_path.is_dir():
+        checks.append({"name": "repo_root", "code": "OK", "ok": True, "message": str(repo_path)})
+    else:
+        checks.append({
+            "name": "repo_root",
+            "code": ERROR_REPO_ROOT_MISSING,
+            "ok": False,
+            "message": f"REPO_ROOT not a directory: {repo_path}",
+        })
+
+    core_json = repo_path / "config" / "core.json"
+    if core_json.is_file():
+        checks.append({"name": "core_json", "code": "OK", "ok": True, "message": str(core_json)})
+    else:
+        checks.append({
+            "name": "core_json",
+            "code": ERROR_CORE_JSON_MISSING,
+            "ok": False,
+            "message": f"config/core.json not found: {core_json}",
+        })
+
+    clean_repo = repo_path / "tools" / "clean_repo.ps1"
+    if clean_repo.is_file():
+        checks.append({"name": "script_clean_repo", "code": "OK", "ok": True, "message": str(clean_repo)})
+    else:
+        checks.append({
+            "name": "script_clean_repo",
+            "code": "SCRIPT_MISSING",
+            "ok": False,
+            "message": f"tools/clean_repo.ps1 not found: {clean_repo}",
+        })
+
+    proof_pack = repo_path / "tools" / "proof_pack.ps1"
+    if proof_pack.is_file():
+        checks.append({"name": "script_proof_pack", "code": "OK", "ok": True, "message": str(proof_pack)})
+    else:
+        checks.append({
+            "name": "script_proof_pack",
+            "code": "SCRIPT_MISSING",
+            "ok": False,
+            "message": f"tools/proof_pack.ps1 not found: {proof_pack}",
+        })
+
+    # ---- OpenAI mode ----
+    if mode == "openai":
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if api_key and api_key.strip():
+            checks.append({"name": "openai_api_key", "code": "OK", "ok": True, "message": "OPENAI_API_KEY is set"})
+        else:
+            checks.append({
+                "name": "openai_api_key",
+                "code": "OPENAI_API_KEY_MISSING",
+                "ok": False,
+                "message": "OPENAI_API_KEY not set or empty. PowerShell: $env:OPENAI_API_KEY=\"sk-...\" ; CMD (persistent): setx OPENAI_API_KEY \"sk-...\"",
+            })
+
+        from bist_core import env
+        if env.network_allowed():
+            checks.append({"name": "network_allowed", "code": "OK", "ok": True, "message": "BIST_CORE_ALLOW_NETWORK enabled"})
+        else:
+            checks.append({
+                "name": "network_allowed",
+                "code": "NETWORK_DISABLED",
+                "ok": False,
+                "message": "BIST_CORE_ALLOW_NETWORK not set. Set to 1 for OpenAI. PowerShell: $env:BIST_CORE_ALLOW_NETWORK=\"1\"",
+            })
+
+        try:
+            __import__("openai")
+            checks.append({"name": "openai_import", "code": "OK", "ok": True, "message": "openai package available"})
+        except ImportError:
+            checks.append({
+                "name": "openai_import",
+                "code": "OPENAI_IMPORT_FAILED",
+                "ok": False,
+                "message": "openai package not installed. Run: pip install openai",
+            })
+
+    # ---- Live mode ----
+    if mode == "live":
+        from bist_core.config import resolve_core_config_path, load_core_config_strict
+        config_path = resolve_core_config_path(getattr(args, "config", None), repo_path)
+        if config_path and config_path.is_file():
+            cfg, err = load_core_config_strict(config_path)
+            if err:
+                checks.append({
+                    "name": "live_config",
+                    "code": err,
+                    "ok": False,
+                    "message": f"config invalid: {config_path}",
+                })
+            else:
+                checks.append({"name": "live_config", "code": "OK", "ok": True, "message": str(config_path)})
+        else:
+            checks.append({
+                "name": "live_config",
+                "code": "CONFIG_MISSING",
+                "ok": False,
+                "message": f"config file not found: {config_path}",
+            })
+
+        from bist_core.risk.gates import preflight_bist_rules_for_live
+        from bist_core.risk.rulespack import get_rulespack_dir
+        from bist_core.risk.restrictions import get_restrictions_path
+        ok_pre, err_pre = preflight_bist_rules_for_live(
+            rulespack_dir=get_rulespack_dir(),
+            restrictions_path=get_restrictions_path(),
+        )
+        if ok_pre:
+            checks.append({"name": "live_rulespack", "code": "OK", "ok": True, "message": "rulespack and restrictions present"})
+        else:
+            checks.append({
+                "name": "live_rulespack",
+                "code": "BIST_RULES_MISSING",
+                "ok": False,
+                "message": "; ".join(err_pre) if err_pre else "rulespack/restrictions missing",
+            })
+
+    # ---- Result ----
+    ok = all(c.get("ok", False) for c in checks)
+
+    if use_json:
+        payload = {"schema_version": 1, "ok": ok, "checks": checks}
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
+        return 0 if ok else 2
+
+    # Human-friendly (PowerShell examples included)
+    failed = [c for c in checks if not c.get("ok")]
+    passed = [c for c in checks if c.get("ok")]
+    for c in passed:
+        print(f"  ok   {c.get('name', '?')}: {c.get('message', '')}")
+    for c in failed:
+        print(f"  fail {c.get('name', '?')}: {c.get('message', '')}")
+    if failed:
+        print("\nTo fix, set environment variables (PowerShell examples):")
+        if any(c.get("name") == "openai_api_key" for c in failed):
+            print("  $env:OPENAI_API_KEY=\"sk-...\"")
+        if any(c.get("name") == "network_allowed" for c in failed):
+            print("  $env:BIST_CORE_ALLOW_NETWORK=\"1\"")
+        if any(c.get("name") == "openai_import" for c in failed):
+            print("  pip install openai")
+    print(f"\ndoctor: {'PASS' if ok else 'FAIL'} ({len(passed)} ok, {len(failed)} fail)")
+    return 0 if ok else 2
+
+
 def _print_batch_summary(manifest: dict, exit_code: int) -> None:
     summary = manifest.get("summary", {}) if isinstance(manifest, dict) else {}
     ran = int(summary.get("ran", 0))
@@ -1992,6 +2146,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_healthcheck = sub.add_parser("healthcheck", help="Validate environment + config; output JSON only")
     p_healthcheck.set_defaults(func=_cmd_healthcheck)
+
+    p_doctor = sub.add_parser("doctor", help="Production readiness checks")
+    p_doctor.add_argument("--json", action="store_true", help="Machine-readable JSON output")
+    p_doctor.add_argument("--mode", choices=["offline", "openai", "live"], default="offline", help="Check mode")
+    p_doctor.add_argument("--repo", default=None, help="Repo root (default: package REPO_ROOT)")
+    p_doctor.set_defaults(func=_cmd_doctor)
 
     p_eod = sub.add_parser("eod")
     p_eod.add_argument("--date", required=False)
