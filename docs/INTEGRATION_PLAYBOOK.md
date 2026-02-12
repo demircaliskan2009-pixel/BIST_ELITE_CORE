@@ -27,6 +27,33 @@ python -m bist_core.cli eod execute --day YYYY-MM-DD --outdir data/eod/runs/YYYY
 - [faz115] **order_bridge_dll.py** — İşlem terminali için yarı otomatik emir köprüsü (OrderBridge) eklendi (`bist_core.connectors.order_bridge_dll.OrderBridge`).
 - [faz116] **order_bridge_interface.py** — Kullanıcı onayı ile emir gönderimi için Flask arayüzü eklendi (`bist_core.connectors.order_bridge_interface`: `app`, `pending_orders`; Flask gerekir).
 
+## PowerShell on Windows
+
+PowerShell requires `.\` to run scripts from the current directory (security policy). From the repo root:
+
+```powershell
+# Run proof pack
+.\tools\proof_pack.ps1
+
+# Dot-source aliases for convenience (clean_repo, proof_pack, run_proof)
+. .\tools\aliases.ps1
+run_proof
+```
+
+**Environment variables (current session):**
+```powershell
+$env:OPENAI_API_KEY="sk-..."
+$env:BIST_CORE_ALLOW_NETWORK="1"
+$env:BIST_CORE_SNAPSHOT_DIR="C:\path\to\data\eod\snapshots"
+```
+
+**Persistent (system/user):**
+```cmd
+setx OPENAI_API_KEY "sk-..."
+setx BIST_CORE_ALLOW_NETWORK "1"
+```
+New CMD/PowerShell windows will have these; current session is unchanged until you set them with `$env:VAR=...` or reopen.
+
 ## Required / common env vars
 
 - **BIST_CORE_HOME** — Optional; base directory for core data (registry, etc.).

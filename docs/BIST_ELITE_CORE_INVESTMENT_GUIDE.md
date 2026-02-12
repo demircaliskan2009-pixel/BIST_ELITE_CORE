@@ -36,6 +36,31 @@ pip install bist-elite-core[openai]
 pip install openai
 ```
 
+### PowerShell on Windows
+
+PowerShell requires `.\` to run scripts from the current directory. From the repo root:
+
+```powershell
+# Run proof pack
+.\tools\proof_pack.ps1
+
+# Load convenience aliases (clean_repo, proof_pack, run_proof)
+. .\tools\aliases.ps1
+run_proof
+```
+
+**Set env vars (current session):**
+```powershell
+$env:OPENAI_API_KEY="sk-..."
+$env:BIST_CORE_ALLOW_NETWORK="1"
+```
+
+**Persistent (new sessions):**
+```cmd
+setx OPENAI_API_KEY "sk-..."
+setx BIST_CORE_ALLOW_NETWORK "1"
+```
+
 ### Environment Variables
 
 | Variable | Required | Purpose |
@@ -125,7 +150,7 @@ Artifacts:
 python -m bist_core.cli eod advice --day 2025-01-15 --outdir data/out
 
 # OpenAI model (requires OPENAI_API_KEY)
-export OPENAI_API_KEY=sk-...
+# PowerShell: $env:OPENAI_API_KEY="sk-..."
 python -m bist_core.cli eod advice --day 2025-01-15 --outdir data/out --model openai
 ```
 
@@ -186,14 +211,11 @@ The risk gate runs before execution; any denial blocks and returns exit 2.
 
 ### Usage
 
-```bash
-# Standalone advice with OpenAI
-export OPENAI_API_KEY=sk-...
+```powershell
+# PowerShell (set env first)
+$env:OPENAI_API_KEY="sk-..."
+$env:USE_OPENAI_MODEL="1"
 python -m bist_core.cli eod advice --day 2025-01-15 --outdir data/out --model openai
-
-# Pipeline with OpenAI (via env)
-export OPENAI_API_KEY=sk-...
-export USE_OPENAI_MODEL=1
 python -m bist_core.cli eod run --day 2025-01-15 --outdir data/eod/runs/2025-01-15 --emit-orders
 ```
 
