@@ -1287,6 +1287,36 @@ def _cmd_data_load(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_tr_number(s: str):
+    """
+    Turkish number format: '.' binlik ayırıcı, ',' ondalık ayırıcı.
+    "30.000" -> 30000, "2.000" -> 2000, "30,5" -> 30.5
+    TL, ₺, TRY gibi ekleri kabul eder: "40.000Tl", "₺1.250.000,75"
+    """
+    s = (s or "").strip()
+    s = "".join(c for c in s if c in "0123456789.,-")
+    if not s:
+        return None
+    has_dot = "." in s
+    has_comma = "," in s
+
+    if has_dot and has_comma:
+        s = s.replace(".", "").replace(",", ".")
+    elif has_comma and not has_dot:
+        s = s.replace(",", ".")
+    elif has_dot and not has_comma:
+        parts = s.split(".")
+        last = parts[-1] if parts else ""
+        if len(last) == 3 and last.isdigit():
+            s = s.replace(".", "")
+        else:
+            pass
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def _is_bist_symbol(symbol: str) -> bool:
     """BIST sembol formatı: 2-6 karakter, büyük harf veya rakam."""
     if not symbol or len(symbol) < 2 or len(symbol) > 6:
@@ -1295,7 +1325,11 @@ def _is_bist_symbol(symbol: str) -> bool:
 
 
 def _cmd_ask(args: argparse.Namespace) -> int:
-    symbol = args.symbol.strip()
+    symbol_raw = getattr(args, "symbol_opt", None) or getattr(args, "symbol", None)
+    if not symbol_raw:
+        print("Sembol gerekli: ask SYMBOL veya ask --symbol SYMBOL", file=sys.stderr)
+        return 2
+    symbol = str(symbol_raw).strip()
     if not _is_bist_symbol(symbol):
         print("BIST kapsamı dışı.", file=sys.stderr)
         return 2
@@ -1321,14 +1355,14 @@ def _cmd_ask(args: argparse.Namespace) -> int:
         if capital is None:
             try:
                 c = input("Capital (TL): ").strip()
-                capital = float(c) if c else None
-            except (EOFError, KeyboardInterrupt, ValueError):
+                capital = _parse_tr_number(c)
+            except (EOFError, KeyboardInterrupt):
                 capital = None
         if max_loss_tl is None:
             try:
                 m = input("Max loss (TL): ").strip()
-                max_loss_tl = float(m) if m else None
-            except (EOFError, KeyboardInterrupt, ValueError):
+                max_loss_tl = _parse_tr_number(m)
+            except (EOFError, KeyboardInterrupt):
                 max_loss_tl = None
 
     base = _snapshot_root()
@@ -2469,7 +2503,8 @@ Tek sembol danışma (interaktif parametrelerle):
     p_snapshot.set_defaults(func=_cmd_data_snapshot)
 
     p_ask = sub.add_parser("ask")
-    p_ask.add_argument("symbol")
+    p_ask.add_argument("symbol", nargs="?", default=None, help="Sembol (örn. QNBFK)")
+    p_ask.add_argument("--symbol", dest="symbol_opt", default=None, help="Sembol (--symbol QNBFK)")
     p_ask.add_argument("--day", default=None)
     p_ask.add_argument("--json", action="store_true")
     p_ask.add_argument("--all", action="store_true")

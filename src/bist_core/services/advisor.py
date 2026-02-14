@@ -45,6 +45,16 @@ def build_advice_for_symbol(
         if not bars:
             return _safe_advice(symbol, day, "NoBars")
 
+        bars_for_symbol = [b for b in bars if b.symbol == symbol]
+        mom_slow = strat_cfg.get("mom_slow", 20)
+        vol_window = strat_cfg.get("vol_window", 20)
+        required_lookback = max(mom_slow, vol_window)
+
+        if len(bars_for_symbol) < required_lookback:
+            return _insufficient_history_advice(
+                symbol, day, len(bars_for_symbol), required_lookback
+            )
+
         cfg = config.CORE
         decisions = engine.decide(
             symbols=[symbol],
@@ -56,7 +66,9 @@ def build_advice_for_symbol(
             strat_cfg=strat_cfg,
         )
         if not decisions:
-            return _safe_advice(symbol, day, "NoDecision")
+            return _insufficient_history_advice(
+                symbol, day, len(bars_for_symbol), required_lookback
+            )
 
         result = decisions[0]
 
@@ -159,6 +171,30 @@ def _safe_date(value: Date | str) -> Date:
         return Date.fromisoformat(value)
     except Exception:
         return Date.today()
+
+
+def _insufficient_history_advice(
+    symbol: str,
+    day: Date | str,
+    bars_count: int,
+    required_lookback: int,
+) -> Advice:
+    """Fail-closed: bars var ama yetersiz; HOLD + InsufficientHistory."""
+    day_value = _safe_date(day)
+    text = (
+        f"{symbol} için karar HOLD; neden: InsufficientHistory. "
+        f"Mevcut bar sayısı: {bars_count}, gerekli lookback: {required_lookback}. "
+        "Daha fazla günlük veri ekleyin."
+    )
+    return Advice(
+        symbol=symbol,
+        date=day_value,
+        decision_raw="HOLD",
+        score=0.0,
+        signals=[],
+        plan=None,
+        text=text,
+    )
 
 
 def _safe_advice(symbol: str, day: Date | str, err: str) -> Advice:
