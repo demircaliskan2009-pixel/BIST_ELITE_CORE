@@ -60,3 +60,46 @@ python -m bist_core.cli corporate-actions pull --day 2099-01-01 --provider offli
 python -m bist_core.cli instruments timeline --day 2099-01-01 --instruments-dir data/eod/instruments/2099-01-01 --ca-dir data/eod/corporate_actions/2099-01-01 --outdir data/eod/universe/2099-01-01
 python -m bist_core.cli eod run --day 2099-01-01 --outdir data/eod/runs/2099-01-01 --instruments-provider offline_file --instruments-input sample_instruments.jsonl --ca-provider offline_file --ca-input sample_actions.jsonl
 ```
+
+### Advisory Quickstart (BIST-only)
+
+Minimal akış: snapshot → advice → ask → top N.
+
+1. **Snapshot üretimi** — `data/eod/snapshots/YYYY-MM-DD/snapshot.csv` (symbol, close, date; opsiyonel: open, high, low, volume)
+   ```bash
+   python -m bist_core.cli data snapshot --name eq_daily --day YYYY-MM-DD --out data/eod/snapshots/YYYY-MM-DD/snapshot.csv
+   ```
+   veya CSV’yi elle yerleştirin.
+
+2. **EOD run** — Snapshot + advice + dossiers
+   ```bash
+   python -m bist_core.cli eod run --day YYYY-MM-DD --outdir data/eod/runs/YYYY-MM-DD
+   ```
+
+3. **Ask (interaktif)** — Tek sembol danışma; eksik parametreler sorulur
+   ```bash
+   python -m bist_core.cli ask ASELS --day YYYY-MM-DD --interactive
+   ```
+   Parametreler: `--horizon`, `--risk`, `--capital`, `--max-loss-tl`
+
+4. **Top N (en mantıklı hisseler)** — Skor sıralı ilk N
+   ```bash
+   python -m bist_core.cli eod advice --day YYYY-MM-DD --outdir data/out --top-n 10
+   ```
+
+5. **Çıktı yapısı (outdir)**
+   ```
+   data/eod/runs/YYYY-MM-DD/
+   ├── _pipeline_manifest.json
+   ├── advice/
+   │   └── YYYY-MM-DD/
+   │       └── advice_records.jsonl
+   ├── dossier/
+   │   └── YYYY-MM-DD/
+   │       └── dossier.json
+   ├── dossiers/
+   │   └── *.json (sembol bazlı)
+   └── orders/
+       └── YYYY-MM-DD/
+           └── orders_intent.json  (--emit-orders ile)
+   ```

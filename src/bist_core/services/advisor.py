@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date as Date
+from functools import lru_cache
 from pathlib import Path
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from bist_core import config
 from bist_core.services import eventstore
 from bist_core.services.marketdata import MarketData
-from bist_core.services.eod_adapters import build_bars_for_day, build_bands_for_day
+from bist_core.services.eod_adapters import build_bars_window, build_bands_for_day
 from bist_core.strategy import engine
 
 
@@ -39,18 +40,12 @@ def build_advice_for_symbol(
         md = MarketData(base)
 
         day_str = day.isoformat()
-        bars = build_bars_for_day(day_str, md)
-        cfg = config.CORE
-        bands = build_bands_for_day(day_str, md, cfg)
-
-        kap_events = _load_kap_events(md, day_str)
-
-        gates_cfg = _load_json_config("config/gates.json")
-        strat_cfg = _load_json_config("config/strategy.json")
+        bars, bands, kap_events, gates_cfg, strat_cfg = _get_day_context(day_str, str(base))
 
         if not bars:
             return _safe_advice(symbol, day, "NoBars")
 
+        cfg = config.CORE
         decisions = engine.decide(
             symbols=[symbol],
             bars=bars,
@@ -180,6 +175,35 @@ def _safe_advice(symbol: str, day: Date | str, err: str) -> Advice:
             "Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
         ),
     )
+
+
+@lru_cache(maxsize=64)
+def _get_day_context(day_str: str, root_path_str: str) -> Tuple[
+    List[Any],
+    List[Any],
+    Dict[str, Any],
+    Dict[str, Any],
+    Dict[str, Any],
+]:
+    """
+    Aynı gün ve root için bars, bands, kap_events, gates_cfg, strat_cfg bir kez hazırlanır.
+    Cache sayesinde tekrar çağrılınca pahalı hesaplar yapılmaz.
+    """
+    root = Path(root_path_str)
+    md = MarketData(root)
+
+    strat_cfg = _load_json_config("config/strategy.json")
+    mom_slow = strat_cfg.get("mom_slow", 20)
+    vol_window = strat_cfg.get("vol_window", 20)
+    lookback = max(mom_slow, vol_window) + 1
+
+    bars = build_bars_window(day_str, md, root, lookback)
+    cfg = config.CORE
+    bands = build_bands_for_day(day_str, md, cfg)
+    kap_events = _load_kap_events(md, day_str)
+    gates_cfg = _load_json_config("config/gates.json")
+
+    return (bars, bands, kap_events, gates_cfg, strat_cfg)
 
 
 def _load_kap_events(md: MarketData, day: str):

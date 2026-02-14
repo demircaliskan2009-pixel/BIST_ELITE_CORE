@@ -1,12 +1,46 @@
 """
 FAZ60: Dossier writer linking advice + research + risk decisions.
 Writes outdir/dossier/<day>/dossier.json with stable ordering and evidence pointers (paths + hashes).
+FAZ118-STEP1A: Windows-safe atomic write with retry (PermissionError / WinError 32).
 """
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+
+def _atomic_write_with_retry(tmp_path: Path, out_path: Path, content: str) -> None:
+    """
+    Write content to tmp_path then atomically replace out_path.
+    Windows-safe: retries on PermissionError/OSError with backoff; fallback to direct write.
+    """
+    tmp_path.write_text(content, encoding="utf-8")
+
+    for attempt in range(8):
+        try:
+            tmp_path.replace(out_path)
+            return
+        except (PermissionError, OSError):
+            time.sleep(0.05 + attempt * 0.02)
+
+    try:
+        out_path.unlink(missing_ok=True)
+        tmp_path.replace(out_path)
+        return
+    except (PermissionError, OSError):
+        pass
+
+    try:
+        out_path.write_text(content, encoding="utf-8")
+    except Exception:
+        pass
+    if tmp_path.exists():
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def _file_hash(path: Path) -> Optional[str]:
@@ -135,10 +169,9 @@ def write_dossier(
         stable = redact_recursive(stable)
     except Exception:
         pass
+    content = json.dumps(stable, ensure_ascii=False, indent=2, sort_keys=True)
     tmp = out_file.with_name(out_file.name + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(stable, f, ensure_ascii=False, indent=2, sort_keys=True)
-    tmp.replace(out_file)
+    _atomic_write_with_retry(tmp, out_file, content)
     return out_file
 
 
@@ -146,6 +179,7 @@ def update_dossier_evidence(outdir: Path | str, day: str, extra_evidence: Dict[s
     """
     FAZ77: Load existing dossier.json, merge extra_evidence into evidence, rewrite. Returns path or None if no dossier.
     Use after execution to add reconciliation_path, execution_result_path, ledger paths.
+    FAZ118-STEP1A: On write_dossier exception, best-effort write so subprocess never crashes.
     """
     out_path = Path(outdir)
     day_dir = out_path / "dossier" / str(day)
@@ -162,4 +196,22 @@ def update_dossier_evidence(outdir: Path | str, day: str, extra_evidence: Dict[s
             evidence[k] = v
     if "risk_allowed" in existing:
         evidence["risk_allowed"] = existing["risk_allowed"]
-    return write_dossier(day, out_path, evidence)
+
+    try:
+        return write_dossier(day, out_path, evidence)
+    except Exception:
+        payload = {
+            "schema_version": 1,
+            "day": day,
+            "evidence": _stable_payload(evidence),
+            "dossier_json_path": str(dossier_file),
+        }
+        try:
+            from bist_core.security.redact import redact_recursive
+            payload = redact_recursive(payload)
+        except Exception:
+            pass
+        content = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+        tmp = dossier_file.with_name(dossier_file.name + ".tmp")
+        _atomic_write_with_retry(tmp, dossier_file, content)
+        return dossier_file

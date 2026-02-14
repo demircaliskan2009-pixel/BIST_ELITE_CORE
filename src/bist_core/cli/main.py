@@ -1287,7 +1287,50 @@ def _cmd_data_load(args: argparse.Namespace) -> int:
     return 0
 
 
+def _is_bist_symbol(symbol: str) -> bool:
+    """BIST sembol formatı: 2-6 karakter, büyük harf veya rakam."""
+    if not symbol or len(symbol) < 2 or len(symbol) > 6:
+        return False
+    return symbol.isalnum() and symbol.isupper()
+
+
 def _cmd_ask(args: argparse.Namespace) -> int:
+    symbol = args.symbol.strip()
+    if not _is_bist_symbol(symbol):
+        print("BIST kapsamı dışı.", file=sys.stderr)
+        return 2
+
+    horizon = getattr(args, "horizon", None)
+    risk = getattr(args, "risk", None)
+    capital = getattr(args, "capital", None)
+    max_loss_tl = getattr(args, "max_loss_tl", None)
+
+    if getattr(args, "interactive", False):
+        if horizon is None:
+            try:
+                h = input("Horizon (short/mid/long): ").strip().lower()
+                horizon = h if h in ("short", "mid", "long") else "mid"
+            except (EOFError, KeyboardInterrupt):
+                horizon = "mid"
+        if risk is None:
+            try:
+                r = input("Risk (low/med/high): ").strip().lower()
+                risk = r if r in ("low", "med", "high") else "med"
+            except (EOFError, KeyboardInterrupt):
+                risk = "med"
+        if capital is None:
+            try:
+                c = input("Capital (TL): ").strip()
+                capital = float(c) if c else None
+            except (EOFError, KeyboardInterrupt, ValueError):
+                capital = None
+        if max_loss_tl is None:
+            try:
+                m = input("Max loss (TL): ").strip()
+                max_loss_tl = float(m) if m else None
+            except (EOFError, KeyboardInterrupt, ValueError):
+                max_loss_tl = None
+
     base = _snapshot_root()
     if getattr(args, "day", None):
         day_value = args.day
@@ -1299,7 +1342,7 @@ def _cmd_ask(args: argparse.Namespace) -> int:
 
     day_str = day_value if isinstance(day_value, str) else day_value.isoformat()
 
-    symbols = [args.symbol]
+    symbols = [symbol]
     if getattr(args, "all", False):
         try:
             md = MarketData(base)
@@ -1307,9 +1350,14 @@ def _cmd_ask(args: argparse.Namespace) -> int:
         except Exception:
             symbols = []
         if not symbols:
-            symbols = [args.symbol]
+            symbols = [symbol]
+        symbols = [s for s in symbols if _is_bist_symbol(s)]
+        if not symbols:
+            symbols = [symbol]
 
     for idx, sym in enumerate(symbols):
+        if not _is_bist_symbol(sym):
+            continue
         try:
             advice = build_advice_for_symbol(sym, day_str, root=base)
             payload = _advice_payload(advice, day_str)
@@ -1318,11 +1366,29 @@ def _cmd_ask(args: argparse.Namespace) -> int:
             payload = _fallback_payload(sym, day_str, exc)
             text_out = payload["text"]
 
+        params_line = ""
+        if horizon or risk or capital is not None or max_loss_tl is not None:
+            parts = []
+            if horizon:
+                parts.append(f"horizon={horizon}")
+            if risk:
+                parts.append(f"risk={risk}")
+            if capital is not None:
+                parts.append(f"capital={capital:.0f} TL")
+            if max_loss_tl is not None:
+                parts.append(f"max_loss={max_loss_tl:.0f} TL")
+            if parts:
+                params_line = "Parametreler: " + ", ".join(parts) + ".\n\n"
+
         if getattr(args, "json", False):
+            if params_line:
+                payload["params"] = {"horizon": horizon, "risk": risk, "capital": capital, "max_loss_tl": max_loss_tl}
             print(json.dumps(payload, ensure_ascii=False))
         else:
             if idx > 0:
                 print()
+            if params_line:
+                print(params_line)
             print(text_out)
     return 0
 
@@ -2137,7 +2203,16 @@ def _fallback_payload(symbol: str, day_str: str, exc: Exception) -> dict:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="bist_core")
+    p = argparse.ArgumentParser(
+        prog="bist_core",
+        epilog="""
+En mantıklı hisseler (skor sıralı top N):
+  python -m bist_core.cli eod advice --day YYYY-MM-DD --outdir data/out --top-n 10
+
+Tek sembol danışma (interaktif parametrelerle):
+  python -m bist_core.cli ask ASELS --day YYYY-MM-DD --interactive
+""",
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
     p_info = sub.add_parser("info")
@@ -2398,6 +2473,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ask.add_argument("--day", default=None)
     p_ask.add_argument("--json", action="store_true")
     p_ask.add_argument("--all", action="store_true")
+    p_ask.add_argument("--interactive", action="store_true", help="Prompt for missing horizon, risk, capital, max_loss_tl")
+    p_ask.add_argument("--horizon", choices=["short", "mid", "long"], default=None)
+    p_ask.add_argument("--risk", choices=["low", "med", "high"], default=None)
+    p_ask.add_argument("--capital", type=float, default=None)
+    p_ask.add_argument("--max-loss-tl", dest="max_loss_tl", type=float, default=None)
     p_ask.set_defaults(func=_cmd_ask)
 
     p_dossier = sub.add_parser("dossier")
