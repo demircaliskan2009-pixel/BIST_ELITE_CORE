@@ -181,11 +181,15 @@ def _insufficient_history_advice(
 ) -> Advice:
     """Fail-closed: bars var ama yetersiz; HOLD + InsufficientHistory."""
     day_value = _safe_date(day)
+    day_str = day_value.isoformat()
+    events, events_errors = _load_events(symbol, day_str)
+    events_paragraph = _render_events_section(events, events_errors)
     text = (
         f"{symbol} için karar HOLD; neden: InsufficientHistory. "
         f"Mevcut bar sayısı: {bars_count}, gerekli lookback: {required_lookback}. "
         "Daha fazla günlük veri ekleyin."
     )
+    text = f"{text}\n\n{events_paragraph}"
     return Advice(
         symbol=symbol,
         date=day_value,
@@ -199,6 +203,17 @@ def _insufficient_history_advice(
 
 def _safe_advice(symbol: str, day: Date | str, err: str) -> Advice:
     day_value = _safe_date(day)
+    day_str = day_value.isoformat()
+    try:
+        events, events_errors = _load_events(symbol, day_str)
+        events_paragraph = _render_events_section(events, events_errors)
+    except Exception:
+        events_paragraph = "Olaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi."
+    text = (
+        f"Güvenli mod: {err}. "
+        "Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
+    )
+    text = f"{text}\n\n{events_paragraph}"
     return Advice(
         symbol=symbol,
         date=day_value,
@@ -206,10 +221,7 @@ def _safe_advice(symbol: str, day: Date | str, err: str) -> Advice:
         score=0.0,
         signals=[],
         plan=None,
-        text=(
-            f"Güvenli mod: {err}. "
-            "Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
-        ),
+        text=text,
     )
 
 
