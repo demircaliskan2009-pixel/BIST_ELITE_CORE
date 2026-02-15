@@ -1414,16 +1414,111 @@ def _cmd_ask(args: argparse.Namespace) -> int:
             if parts:
                 params_line = "Parametreler: " + ", ".join(parts) + ".\n\n"
 
+        out_arg = getattr(args, "out", None)
+        out_base = Path(out_arg) if out_arg else (config.REPO_ROOT / "data" / "out" / "ask")
+        if not out_base.is_absolute():
+            out_base = (config.REPO_ROOT / out_base).resolve()
+        artifact_dir = out_base / day_str
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        artifact_path = artifact_dir / f"{sym}.json"
+        if params_line and "params" not in payload:
+            payload["params"] = {"horizon": horizon, "risk": risk, "capital": capital, "max_loss_tl": max_loss_tl}
+        atomic_write_json(artifact_path, payload)
+
         if getattr(args, "json", False):
+            json_out = {k: payload[k] for k in ("symbol", "day", "decision_raw", "score", "signals", "plan", "text") if k in payload}
             if params_line:
-                payload["params"] = {"horizon": horizon, "risk": risk, "capital": capital, "max_loss_tl": max_loss_tl}
-            print(json.dumps(payload, ensure_ascii=False))
+                json_out["params"] = {"horizon": horizon, "risk": risk, "capital": capital, "max_loss_tl": max_loss_tl}
+            print(json.dumps(json_out, ensure_ascii=False))
         else:
             if idx > 0:
                 print()
             if params_line:
                 print(params_line)
             print(text_out)
+            print(f"Artifact: {artifact_path}")
+    return 0
+
+
+def _cmd_scan(args: argparse.Namespace) -> int:
+    """Scan symbols; ranked by score; drill-down command per symbol."""
+    base = _snapshot_root()
+    day_value = getattr(args, "day", None)
+    if day_value is None:
+        day_value = _latest_snapshot_day(base)
+    if day_value is None:
+        print("Uyarı: Snapshot bulunamadı; --day gerekli.", file=sys.stderr)
+        return 2
+    day_str = day_value if isinstance(day_value, str) else day_value.isoformat()
+
+    horizon = getattr(args, "horizon", None)
+    risk = getattr(args, "risk", None)
+    capital = getattr(args, "capital", None)
+    max_loss_tl = getattr(args, "max_loss_tl", None)
+    top_n = int(getattr(args, "top_n", 10) or 10)
+    exclusions_raw = getattr(args, "exclusions", None) or ""
+    exclusions = {s.strip().upper() for s in exclusions_raw.split(",") if s.strip()}
+
+    if getattr(args, "interactive", False):
+        if horizon is None:
+            try:
+                h = input("Horizon (short/mid/long): ").strip().lower()
+                horizon = h if h in ("short", "mid", "long") else "mid"
+            except (EOFError, KeyboardInterrupt):
+                horizon = "mid"
+        if risk is None:
+            try:
+                r = input("Risk (low/med/high): ").strip().lower()
+                risk = r if r in ("low", "med", "high") else "med"
+            except (EOFError, KeyboardInterrupt):
+                risk = "med"
+        if capital is None:
+            try:
+                c = input("Capital (TL): ").strip()
+                capital = _parse_tr_number(c)
+            except (EOFError, KeyboardInterrupt):
+                capital = None
+        if max_loss_tl is None:
+            try:
+                m = input("Max loss (TL): ").strip()
+                max_loss_tl = _parse_tr_number(m)
+            except (EOFError, KeyboardInterrupt):
+                max_loss_tl = None
+        try:
+            tn = input("Top N: ").strip()
+            top_n = int(tn) if tn.isdigit() else 10
+        except (EOFError, KeyboardInterrupt):
+            pass
+
+    try:
+        md = MarketData(base)
+        symbols = md.symbols(day_str)
+    except Exception:
+        symbols = []
+    symbols = [s for s in symbols if _is_bist_symbol(s) and s not in exclusions]
+    symbols = sorted(symbols)
+
+    if not symbols:
+        print("Sembol bulunamadı.", file=sys.stderr)
+        return 0
+
+    results: list[tuple[str, float, str]] = []
+    for sym in symbols:
+        try:
+            advice = build_advice_for_symbol(sym, day_str, root=base)
+            rationale = (advice.text or "").split("\n")[0][:80]
+            results.append((advice.symbol, advice.score, rationale))
+        except Exception:
+            results.append((sym, 0.0, "error"))
+    results.sort(key=lambda x: (-x[1], x[0]))
+    ranked = results[:top_n]
+
+    print(f"Scan {day_str} (top {len(ranked)}):")
+    for i, (sym, score, rationale) in enumerate(ranked, 1):
+        print(f"  {i}. {sym} score={score:.2f} | {rationale}")
+    print("\nDrill-down:")
+    for sym, _, _ in ranked:
+        print(f"  python -m bist_core.cli ask {sym} --day {day_str} --interactive")
     return 0
 
 
@@ -1518,6 +1613,245 @@ def _load_manifest_runtime(path: Path) -> int | None:
         return None
     runtime = data.get("runtime_ms")
     return runtime if isinstance(runtime, int) else None
+
+
+def _cmd_snapshots_doctor(args: argparse.Namespace) -> int:
+    """Debug snapshot root/day/symbol coverage. No external shell."""
+    root_arg = getattr(args, "root", None)
+    root = Path(root_arg) if root_arg else _snapshot_root()
+    if not root.is_absolute():
+        root = (config.REPO_ROOT / root).resolve()
+    if not root.exists():
+        if getattr(args, "json", False):
+            print(json.dumps({"root": str(root), "ok": False, "error": "root_missing", "days": [], "symbols_by_day": {}, "coverage_summary": {}}, ensure_ascii=False))
+        else:
+            print(f"root: {root}\nerror: root_missing (directory does not exist)")
+        return 2
+    days_found: list[str] = []
+    symbols_by_day: dict[str, list[str]] = {}
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir():
+            continue
+        day_str = entry.name
+        try:
+            _ = date.fromisoformat(day_str)
+        except ValueError:
+            continue
+        snap_path = entry / "snapshot.csv"
+        if not snap_path.is_file():
+            continue
+        days_found.append(day_str)
+        symbols: list[str] = []
+        try:
+            df = pd.read_csv(snap_path, encoding="utf-8")
+            if "symbol" in df.columns:
+                symbols = sorted(df["symbol"].dropna().astype(str).str.strip().unique().tolist())
+        except Exception:
+            symbols = []
+        symbols_by_day[day_str] = symbols
+    all_symbols = sorted(set(s for syms in symbols_by_day.values() for s in syms))
+    coverage_summary = {
+        "days_count": len(days_found),
+        "total_symbols": len(all_symbols),
+        "days": days_found,
+    }
+    if getattr(args, "json", False):
+        out = {
+            "root": str(root),
+            "ok": True,
+            "days": days_found,
+            "symbols_by_day": symbols_by_day,
+            "coverage_summary": coverage_summary,
+        }
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 0
+    print(f"root: {root}")
+    print(f"days: {len(days_found)}")
+    for d in days_found:
+        syms = symbols_by_day.get(d, [])
+        print(f"  {d}: {len(syms)} symbols")
+    print(f"total_symbols: {len(all_symbols)}")
+    return 0
+
+
+def _parse_tr_numeric(val) -> float | None:
+    """Parse numeric value, supporting TR decimals (30.000 -> 30000, 30,5 -> 30.5)."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip()
+    parsed = _parse_tr_number(s)
+    return parsed
+
+
+# Matriks/CSV column aliases: canonical -> [aliases] (case-insensitive match)
+# turnover before volume so "Hacim TL" maps to turnover, "Hacim" to volume
+_MATRIKS_COLUMN_ALIASES: dict[str, list[str]] = {
+    "date": ["tarih", "date"],
+    "symbol": ["hisse", "symbol", "kod", "sembol", "ticker"],
+    "close": ["kapanış", "kapanis", "close"],
+    "open": ["açılış", "acilis", "open"],
+    "high": ["yüksek", "yuksek", "high"],
+    "low": ["düşük", "dusuk", "low"],
+    "turnover": ["hacim tl", "hacim_tl", "turnover"],
+    "volume": ["hacim", "volume"],
+}
+
+
+def _infer_column_mapping(cols: set[str]) -> dict[str, str]:
+    """Map CSV column names to canonical names via aliases. First match wins."""
+    result: dict[str, str] = {}
+    col_lower = {c: c.strip().lower() for c in cols}
+    for canonical, aliases in _MATRIKS_COLUMN_ALIASES.items():
+        for alias in aliases:
+            alias_clean = alias.strip().lower()
+            for orig, lower in col_lower.items():
+                if lower == alias_clean or lower.replace(" ", "") == alias_clean.replace(" ", ""):
+                    result[canonical] = orig
+                    break
+            if canonical in result:
+                break
+    return result
+
+
+def _parse_date_flexible(val: str) -> str | None:
+    """Parse date from DD.MM.YYYY, YYYY-MM-DD, or DD/MM/YYYY -> YYYY-MM-DD."""
+    s = (val or "").strip()[:10]
+    if not s:
+        return None
+    # YYYY-MM-DD
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+        try:
+            _ = date.fromisoformat(s[:10])
+            return s[:10]
+        except ValueError:
+            pass
+    # DD.MM.YYYY
+    if "." in s and len(s) >= 10:
+        parts = s.split(".")
+        if len(parts) == 3 and len(parts[2]) == 4:
+            try:
+                d = date(int(parts[2]), int(parts[1]), int(parts[0]))
+                return d.isoformat()
+            except (ValueError, IndexError):
+                pass
+    # DD/MM/YYYY
+    if "/" in s and len(s) >= 10:
+        parts = s.split("/")
+        if len(parts) == 3 and len(parts[2]) == 4:
+            try:
+                d = date(int(parts[2]), int(parts[1]), int(parts[0]))
+                return d.isoformat()
+            except (ValueError, IndexError):
+                pass
+    return None
+
+
+def _normalize_symbol(s: str) -> str:
+    """Strip spaces, uppercase, remove .E suffix for BIST."""
+    t = (s or "").strip().upper()
+    if t.endswith(".E"):
+        t = t[:-2]
+    return t
+
+
+def _cmd_data_import(args: argparse.Namespace) -> int:
+    """Import CSV (Matriks-style, TR decimals) into daily snapshots."""
+    inp = Path(getattr(args, "input", None) or "")
+    if not inp.is_file():
+        print(f"ERROR: input file not found: {inp}", file=sys.stderr)
+        return 2
+    out_root = getattr(args, "out", None)
+    out = Path(out_root) if out_root else _snapshot_root()
+    if not out.is_absolute():
+        out = (config.REPO_ROOT / out).resolve()
+    day_arg = getattr(args, "day", None)
+
+    try:
+        df = pd.read_csv(inp, encoding="utf-8", dtype=str)
+    except Exception as exc:
+        print(f"ERROR: failed to read CSV: {exc}", file=sys.stderr)
+        return 2
+    cols = set(df.columns)
+    mapping = _infer_column_mapping(cols)
+    date_col = mapping.get("date") or getattr(args, "date_col", "date")
+    symbol_col = mapping.get("symbol") or getattr(args, "symbol_col", "symbol")
+    if symbol_col not in cols:
+        print(f"ERROR: required column missing (need symbol/hisse; found {sorted(cols)})", file=sys.stderr)
+        return 2
+    close_col = mapping.get("close") or "close"
+    if close_col not in cols:
+        print(f"ERROR: required column missing (need close/kapanış; found {sorted(cols)})", file=sys.stderr)
+        return 2
+    canonical_to_raw: dict[str, str] = {
+        "symbol": symbol_col,
+        "close": close_col,
+        "date": date_col if date_col in cols else "",
+    }
+    for c in ["open", "high", "low", "volume", "turnover"]:
+        if mapping.get(c) and mapping[c] in cols:
+            canonical_to_raw[c] = mapping[c]
+        elif c in cols:
+            canonical_to_raw[c] = c
+
+    numeric_canonical = [c for c in ["close", "open", "high", "low", "volume", "turnover"] if c in canonical_to_raw]
+    for c in numeric_canonical:
+        raw_col = canonical_to_raw[c]
+        df[raw_col] = df[raw_col].apply(lambda x: _parse_tr_numeric(x))
+    df["_symbol"] = df[symbol_col].astype(str).apply(_normalize_symbol)
+    df["_close"] = df[close_col]
+    df["_date"] = ""
+    if date_col in cols:
+        df["_date"] = df[date_col].astype(str).str.strip().apply(
+            lambda v: _parse_date_flexible(v) or ""
+        )
+        invalid_mask = (df["_date"] == "") & df[date_col].astype(str).str.strip().str.len().gt(0)
+        invalid_dates = df.loc[invalid_mask, date_col].dropna().unique().tolist()
+        if invalid_dates:
+            print(f"ERROR: invalid date values (use DD.MM.YYYY, YYYY-MM-DD, or DD/MM/YYYY): {invalid_dates[:5]}", file=sys.stderr)
+            return 2
+        df_out = df[df["_date"] != ""].copy()
+        df_out = df_out.drop(columns=[date_col, symbol_col, close_col], errors="ignore")
+        df_out = df_out.rename(columns={"_symbol": "symbol", "_close": "close", "_date": "date"})
+        out_cols_grp = ["symbol", "close", "date"]
+        for c in ["open", "high", "low", "volume", "turnover"]:
+            if c in canonical_to_raw:
+                raw = canonical_to_raw[c]
+                df_out[c] = df_out[raw]
+                out_cols_grp.append(c)
+        for day_val, grp in df_out.groupby("date"):
+            day_str = str(day_val)[:10]
+            day_dir = out / day_str
+            day_dir.mkdir(parents=True, exist_ok=True)
+            snap_path = day_dir / "snapshot.csv"
+            grp[out_cols_grp].to_csv(snap_path, index=False)
+            print(f"wrote {snap_path}")
+    else:
+        if not day_arg:
+            print("ERROR: --day required when CSV has no date column", file=sys.stderr)
+            return 2
+        parsed_day = _parse_date_flexible(day_arg)
+        if not parsed_day:
+            print(f"ERROR: invalid --day format (use DD.MM.YYYY, YYYY-MM-DD, or DD/MM/YYYY): {day_arg}", file=sys.stderr)
+            return 2
+        day_arg = parsed_day
+        df_out = df.copy()
+        df_out["symbol"] = df_out["_symbol"]
+        df_out["close"] = df_out["_close"]
+        df_out["date"] = day_arg
+        out_cols_grp = ["symbol", "close", "date"]
+        for c in ["open", "high", "low", "volume", "turnover"]:
+            if c in canonical_to_raw:
+                raw = canonical_to_raw[c]
+                df_out[c] = df_out[raw]
+                out_cols_grp.append(c)
+        day_dir = out / day_arg
+        day_dir.mkdir(parents=True, exist_ok=True)
+        snap_path = day_dir / "snapshot.csv"
+        df_out[out_cols_grp].to_csv(snap_path, index=False)
+        print(f"wrote {snap_path}")
+    return 0
 
 
 def _cmd_data_snapshot(args: argparse.Namespace) -> int:
@@ -2208,9 +2542,26 @@ def _latest_snapshot_day(snapshots_dir: Path) -> Optional[str]:
 
 
 def _advice_payload(advice, day_str: str) -> dict:
+    decision = {
+        "decision_raw": advice.decision_raw,
+        "score": advice.score,
+    }
+    entry_stop_targets = advice.plan if isinstance(advice.plan, dict) else None
+    evidence = {
+        "signals": advice.signals,
+    }
+    cause_effect = {
+        "why": advice.text[:200] if advice.text else "",
+        "invalidates": "Fiyat bandı dışına çıkma, ters haber akışı.",
+        "watch_next": "Hacim kırılması, KAP haberleri.",
+    }
     return {
         "symbol": advice.symbol,
         "day": day_str,
+        "Decision": decision,
+        "Entry/Stop/Targets": entry_stop_targets,
+        "Evidence": evidence,
+        "Cause-Effect": cause_effect,
         "decision_raw": advice.decision_raw,
         "score": advice.score,
         "signals": advice.signals,
@@ -2228,6 +2579,10 @@ def _fallback_payload(symbol: str, day_str: str, exc: Exception) -> dict:
     return {
         "symbol": symbol,
         "day": day_str,
+        "Decision": {"decision_raw": "PASS", "score": 0.0},
+        "Entry/Stop/Targets": None,
+        "Evidence": {"signals": []},
+        "Cause-Effect": {"why": text[:200], "invalidates": "", "watch_next": ""},
         "decision_raw": "PASS",
         "score": 0.0,
         "signals": [],
@@ -2502,6 +2857,21 @@ Tek sembol danışma (interaktif parametrelerle):
     p_snapshot.add_argument("--out", default=None)
     p_snapshot.set_defaults(func=_cmd_data_snapshot)
 
+    p_snapshots = sub_data.add_parser("snapshots")
+    sub_snapshots = p_snapshots.add_subparsers(dest="snapshots_cmd", required=True)
+    p_snapshots_doctor = sub_snapshots.add_parser("doctor")
+    p_snapshots_doctor.add_argument("--root", default=None, help="Snapshot root (default: BIST_CORE_SNAPSHOT_DIR or data/eod/snapshots)")
+    p_snapshots_doctor.add_argument("--json", action="store_true", help="Machine-readable JSON output")
+    p_snapshots_doctor.set_defaults(func=_cmd_snapshots_doctor)
+
+    p_import = sub_data.add_parser("import")
+    p_import.add_argument("--input", required=True, help="Input CSV path")
+    p_import.add_argument("--out", default=None, help="Output snapshot root (default: data/eod/snapshots)")
+    p_import.add_argument("--day", default=None, help="Required when CSV has no date column")
+    p_import.add_argument("--date-col", dest="date_col", default="date")
+    p_import.add_argument("--symbol-col", dest="symbol_col", default="symbol")
+    p_import.set_defaults(func=_cmd_data_import)
+
     p_ask = sub.add_parser("ask")
     p_ask.add_argument("symbol", nargs="?", default=None, help="Sembol (örn. QNBFK)")
     p_ask.add_argument("--symbol", dest="symbol_opt", default=None, help="Sembol (--symbol QNBFK)")
@@ -2513,7 +2883,19 @@ Tek sembol danışma (interaktif parametrelerle):
     p_ask.add_argument("--risk", choices=["low", "med", "high"], default=None)
     p_ask.add_argument("--capital", type=float, default=None)
     p_ask.add_argument("--max-loss-tl", dest="max_loss_tl", type=float, default=None)
+    p_ask.add_argument("--out", default=None, help="Output dir for JSON artifact (default: data/out/ask)")
     p_ask.set_defaults(func=_cmd_ask)
+
+    p_scan = sub.add_parser("scan", help="Ranked scan of symbols; interactive wizard or args")
+    p_scan.add_argument("--day", default=None)
+    p_scan.add_argument("--interactive", action="store_true", help="Prompt for missing params")
+    p_scan.add_argument("--horizon", choices=["short", "mid", "long"], default=None)
+    p_scan.add_argument("--risk", choices=["low", "med", "high"], default=None)
+    p_scan.add_argument("--capital", type=float, default=None)
+    p_scan.add_argument("--max-loss-tl", dest="max_loss_tl", type=float, default=None)
+    p_scan.add_argument("--top-n", dest="top_n", type=int, default=10)
+    p_scan.add_argument("--exclusions", default=None, help="Comma-separated symbols to exclude")
+    p_scan.set_defaults(func=_cmd_scan)
 
     p_dossier = sub.add_parser("dossier")
     sub_dossier = p_dossier.add_subparsers(dest="dossier_cmd", required=True)

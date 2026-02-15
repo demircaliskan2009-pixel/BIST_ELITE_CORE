@@ -81,4 +81,5 @@ secrets/
 # local test artifacts
 pytest_first_fail.txt
 pytest_*.txt
+_tmp_snap*/
 
