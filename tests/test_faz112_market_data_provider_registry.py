@@ -97,7 +97,8 @@ def test_list_market_data_providers() -> None:
         _clear_registry_for_tests()
 
 
-def test_local_eod_unchanged() -> None:
+def test_local_eod_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     """local_eod resolution is unchanged (still requires snapshot_root or env)."""
+    monkeypatch.delenv("BIST_CORE_SNAPSHOT_DIR", raising=False)
     with pytest.raises(ValueError, match="local_eod requires snapshot_root"):
         resolve_provider(name="local_eod", snapshot_root=None)

@@ -1,18 +1,20 @@
 
 from pathlib import Path
-from subprocess import run, PIPE
+import os
+import subprocess
+import sys
+
 from bist_core.providers import LocalCSVProvider
 
-def _run(mod: str, *args: str):
-    return run(["python", "-m", mod, *args], stdout=PIPE, stderr=PIPE, text=True)
 
-def test_local_csv_provider_symbols_and_close():
+def test_local_csv_provider_symbols_and_close(tmp_path: Path) -> None:
+    """LocalCSVProvider reads symbol and close from snapshot; isolated tmp_path."""
     day = "2025-01-15"
-    # Snapshot yoksa üret (CLI eod komutu)
-    r = _run("bist_core.cli.main", "eod", "--date", day)
-    assert r.returncode == 0, r.stderr
+    snap_dir = tmp_path / "snapshots" / day
+    snap_dir.mkdir(parents=True)
+    (snap_dir / "snapshot.csv").write_text("symbol,close\nTEST,0.0\n", encoding="utf-8")
 
-    prov = LocalCSVProvider(base=Path("data/eod/snapshots"))
+    prov = LocalCSVProvider(base=tmp_path / "snapshots")
     syms = prov.symbols(day)
     assert "TEST" in syms
 

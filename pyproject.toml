@@ -16,9 +16,14 @@ dependencies = [
 dev = [
     "pytest",
     "pytest-cov",
+    "fastapi>=0.100.0",
 ]
 openai = [
     "openai>=1.0.0",
+]
+api = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.22.0",
 ]
 
 [tool.setuptools]

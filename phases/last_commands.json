@@ -1,1 +1,1 @@
-{"commands":["phase_commit faz368","phase_commit faz135","phase_commit faz140"],"max_size":20}
+{"commands":["pytest faz2 faz4 faz30","proof_pack","phase_commit faz368","phase_commit faz135","phase_commit faz140"],"max_size":20}

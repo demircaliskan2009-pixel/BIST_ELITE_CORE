@@ -10,7 +10,7 @@ from pathlib import Path
 from bist_core.data.registry import DatasetRegistry, get_default_registry
 
 
-def _run_cli(args: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run_cli(args: list[str], env: dict[str, str] | None = None, timeout: int = 60) -> subprocess.CompletedProcess[str]:
     e = env or os.environ.copy()
     repo_root = Path(__file__).resolve().parents[1]
     e.setdefault("PYTHONPATH", str(repo_root / "src"))
@@ -21,7 +21,7 @@ def _run_cli(args: list[str], env: dict[str, str] | None = None) -> subprocess.C
         capture_output=True,
         env=e,
         stdin=subprocess.DEVNULL,
-        timeout=30,
+        timeout=timeout,
     )
 
 

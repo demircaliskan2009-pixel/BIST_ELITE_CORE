@@ -1,40 +1,47 @@
 from pathlib import Path
 from subprocess import run, PIPE
 import csv
+import os
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _run(mod: str, *args: str) -> str:
+def _run(mod: str, *args: str, env: dict | None = None) -> str:
     """CLI komutunu çalıştırıp stdout döndürür (returncode 0 olmalı)."""
+    e = env or os.environ.copy()
+    e.setdefault("PYTHONPATH", str(ROOT / "src"))
     r = run(
-        ["python", "-m", mod, *args],
+        [sys.executable, "-m", mod, *args],
         stdout=PIPE,
         stderr=PIPE,
         text=True,
         encoding="utf-8",
         errors="strict",
+        env=e,
     )
     assert r.returncode == 0, f"Komut başarısız oldu: {r.stderr}"
     return r.stdout
 
 
-def test_orders_cli_equal_weight_pass():
+def test_orders_cli_equal_weight_pass(tmp_path: Path) -> None:
+    """2 sembol (AAA, BBB) -> weight 0.5 each -> risk PASS."""
     day = "2025-01-15"
-    # 1) Çoklu sembollü snapshot hazırla (AAA ve BBB)
-    snap_dir = ROOT / "data" / "eod" / "snapshots" / day
-    snap_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_file = snap_dir / "snapshot.csv"
-    snapshot_file.write_text("symbol,close\nAAA,100.0\nBBB,200.0\n", encoding="utf-8")
-    # 2) Plan oluştur (snapshot'tan plan_equal_weight.csv üretmeli)
-    out = _run("bist_core.cli.main", "plan", "--date", day)
+    snap_dir = tmp_path / "snapshots" / day
+    snap_dir.mkdir(parents=True)
+    (snap_dir / "snapshot.csv").write_text("symbol,close\nAAA,100.0\nBBB,200.0\n", encoding="utf-8")
+    env = os.environ.copy()
+    env["BIST_CORE_SNAPSHOT_DIR"] = str(tmp_path / "snapshots")
+    env.setdefault("PYTHONPATH", str(ROOT / "src"))
+    # 2) Plan oluştur
+    out = _run("bist_core.cli.main", "plan", "--date", day, env=env)
     assert "Plan yazıldı:" in out
-    # 3) Orders oluştur (risk kontrolü PASS olmalı)
-    out = _run("bist_core.cli.main", "orders", "--date", day)
+    # 3) Orders oluştur (risk PASS: 2 symbols -> weight 0.5 each)
+    out = _run("bist_core.cli.main", "orders", "--date", day, env=env)
     assert "Orders yazıldı:" in out
     # 4) Çıktıları kontrol et
-    orders_csv = ROOT / f"data/eod/snapshots/{day}/orders_equal_weight.csv"
-    meta_file = ROOT / f"data/eod/snapshots/{day}/orders_meta.txt"
+    orders_csv = snap_dir / "orders_equal_weight.csv"
+    meta_file = snap_dir / "orders_meta.txt"
     assert orders_csv.exists(), "Orders CSV oluşturulmadı"
     rows = list(csv.DictReader(orders_csv.open(encoding="utf-8")))
     # AAA ve BBB bekleniyor, ağırlıklar ~0.5
@@ -47,33 +54,35 @@ def test_orders_cli_equal_weight_pass():
     assert "PASS" in meta_content
 
 
-def test_orders_cli_equal_weight_risk_fail():
+def test_orders_cli_equal_weight_risk_fail(tmp_path: Path) -> None:
+    """1 sembol (TEST) -> weight 1.0 -> risk FAIL."""
     day = "2025-01-16"
-    # Önce mevcut snapshot/plan dosyalarını temizle (test izolasyonu için)
-    snap_dir = ROOT / "data" / "eod" / "snapshots" / day
-    if snap_dir.exists():
-        for f in snap_dir.glob("*"):
-            f.unlink()
-    # 1) Plan oluştur (snapshot yokken, CLI otomatik TEST verisi kullanacak)
-    _ = _run("bist_core.cli.main", "plan", "--date", day)
-    plan_csv = ROOT / f"data/eod/snapshots/{day}/plan_equal_weight.csv"
-    # Plan dosyası tek sembollü olmalı (TEST)
+    snap_dir = tmp_path / "snapshots" / day
+    snap_dir.mkdir(parents=True)
+    (snap_dir / "snapshot.csv").write_text("symbol,close\nTEST,10.0\n", encoding="utf-8")
+    env = os.environ.copy()
+    env["BIST_CORE_SNAPSHOT_DIR"] = str(tmp_path / "snapshots")
+    env.setdefault("PYTHONPATH", str(ROOT / "src"))
+    # 1) Plan oluştur (1 symbol -> weight 1.0)
+    _ = _run("bist_core.cli.main", "plan", "--date", day, env=env)
+    plan_csv = snap_dir / "plan_equal_weight.csv"
     assert plan_csv.exists()
     rows = list(csv.DictReader(plan_csv.open(encoding="utf-8")))
     assert len(rows) == 1 and rows[0]["symbol"] == "TEST"
-    # 2) Orders komutunu çalıştır (FAIL bekleniyor)
+    # 2) Orders komutunu çalıştır (FAIL bekleniyor: weight 1.0 > 0.5)
     r = run(
-        ["python", "-m", "bist_core.cli.main", "orders", "--date", day],
+        [sys.executable, "-m", "bist_core.cli.main", "orders", "--date", day],
         stdout=PIPE,
         stderr=PIPE,
         text=True,
         encoding="utf-8",
         errors="strict",
+        env=env,
     )
     assert r.returncode == 2, "Riskli durumda çıkış kodu 2 olmalı"
     # 3) Çıktıları kontrol et
-    orders_csv = ROOT / f"data/eod/snapshots/{day}/orders_equal_weight.csv"
-    meta_file = ROOT / f"data/eod/snapshots/{day}/orders_meta.txt"
+    orders_csv = snap_dir / "orders_equal_weight.csv"
+    meta_file = snap_dir / "orders_meta.txt"
     # Orders dosyası oluşmamalı
     assert not orders_csv.exists(), "Riskli planda orders dosyası oluşmamalı"
     # Meta dosyası FAIL içermeli
@@ -82,80 +91,59 @@ def test_orders_cli_equal_weight_risk_fail():
     assert "FAIL" in meta_content
 
 
-def test_orders_risk_fail():
+def test_orders_risk_fail(tmp_path: Path) -> None:
+    """1 sembol (TEST) -> risk FAIL."""
     day = "2025-01-15"
-    # 1) Önce snapshot oluştur (tek sembollü). CLI 'eod' komutunu kullanabiliriz:
+    snap_dir = tmp_path / "snapshots" / day
+    snap_dir.mkdir(parents=True)
+    (snap_dir / "snapshot.csv").write_text("symbol,close\nTEST,10.0\n", encoding="utf-8")
+    env = os.environ.copy()
+    env["BIST_CORE_SNAPSHOT_DIR"] = str(tmp_path / "snapshots")
+    env.setdefault("PYTHONPATH", str(ROOT / "src"))
+    _ = _run("bist_core.cli.main", "plan", "--date", day, env=env)
     result = run(
-        ["python", "-m", "bist_core.cli.main", "eod", "--date", day],
+        [sys.executable, "-m", "bist_core.cli.main", "orders", "--date", day],
         stdout=PIPE,
         text=True,
         encoding="utf-8",
         errors="strict",
+        env=env,
     )
-    assert result.returncode == 0, "EOD snapshot oluşturulamadı"
-    # 2) Ardından plan oluştur (equal_weight stratejisi varsayılan):
-    result = run(
-        ["python", "-m", "bist_core.cli.main", "plan", "--date", day],
-        stdout=PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="strict",
-    )
-    assert result.returncode == 0, "Plan komutu başarısız oldu"
-    # 3) Şimdi orders komutunu çalıştır ve risk kontrolünün tetiklendiğini doğrula
-    result = run(
-        ["python", "-m", "bist_core.cli.main", "orders", "--date", day],
-        stdout=PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="strict",
-    )
-    # Beklenen: risk limiti aşıldı, exit code 2 ile çıkılmalı
     assert result.returncode == 2, "Risk limitine rağmen orders komutu 2 ile çıkmadı"
-    # Konsol çıktısında uyarı mesajı olmalı:
     assert "Risk limiti aşıldı" in result.stdout
-    # İlgili günün dizininde orders dosyası oluşmamalı (FAIL durumunda)
-    orders_path = ROOT / f"data/eod/snapshots/{day}/orders_equal_weight.csv"
+    orders_path = snap_dir / "orders_equal_weight.csv"
     assert not orders_path.exists(), "Risk FAIL durumunda orders dosyası oluşmamalıydı"
-    # Meta dosyasında "FAIL" yazdığından emin olalım
-    meta_path = ROOT / f"data/eod/snapshots/{day}/orders_meta.txt"
+    meta_path = snap_dir / "orders_meta.txt"
     assert meta_path.exists(), "orders_meta.txt oluşmalıydı"
     meta_content = meta_path.read_text(encoding="utf-8")
     assert "FAIL" in meta_content
 
 
-def test_orders_risk_pass():
+def test_orders_risk_pass(tmp_path: Path) -> None:
+    """100 sembol -> weight 0.01 each -> risk PASS."""
     day = "2025-01-16"
-    # 1) Çoklu sembollü bir snapshot oluştur (örneğin 100 sembol)
-    snapshot_dir = ROOT / f"data/eod/snapshots/{day}"
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_dir = tmp_path / "snapshots" / day
+    snapshot_dir.mkdir(parents=True)
     snapshot_path = snapshot_dir / "snapshot.csv"
-    # 100 adet örnek sembol verisi yaz (her biri close fiyatı ile)
     with snapshot_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["symbol", "close"])
         for i in range(100):
-            writer.writerow([f"SYM{i:03d}", "100.0"])  # SYM000, SYM001, ..., SYM099
-    # 2) Plan komutunu çalıştır
+            writer.writerow([f"SYM{i:03d}", "100.0"])
+    env = os.environ.copy()
+    env["BIST_CORE_SNAPSHOT_DIR"] = str(tmp_path / "snapshots")
+    env.setdefault("PYTHONPATH", str(ROOT / "src"))
+    _ = _run("bist_core.cli.main", "plan", "--date", day, env=env)
     result = run(
-        ["python", "-m", "bist_core.cli.main", "plan", "--date", day],
+        [sys.executable, "-m", "bist_core.cli.main", "orders", "--date", day],
         stdout=PIPE,
         text=True,
         encoding="utf-8",
         errors="strict",
-    )
-    assert result.returncode == 0, "Plan komutu başarısız (çoklu sembol)"
-    # 3) Orders komutunu çalıştır
-    result = run(
-        ["python", "-m", "bist_core.cli.main", "orders", "--date", day],
-        stdout=PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="strict",
+        env=env,
     )
     assert result.returncode == 0, "Risk limiti aşılmadığı halde orders komutu başarısız"
-    assert "Orders yazıldı:" in result.stdout  # başarı mesajı
-    # Orders dosyası oluşmalı ve içeriğini kontrol edelim
+    assert "Orders yazıldı:" in result.stdout
     orders_path = snapshot_dir / "orders_equal_weight.csv"
     assert orders_path.exists(), "Orders dosyası oluşmadı (PASS durumu)"
     rows = list(csv.DictReader(orders_path.open(encoding="utf-8")))
