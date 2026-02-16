@@ -59,6 +59,17 @@ def _sha256_file(file_path: Path) -> str:
     return h.hexdigest()
 
 
+def _leakage_guard(date_from: Date, date_to: Date, as_of: Date | None) -> str | None:
+    """FAZ393: Fail-closed leakage guard. Returns error message if date > as_of, else None."""
+    if as_of is None:
+        return None
+    if date_from > as_of:
+        return f"LEAKAGE: date_from {date_from.isoformat()} > as_of {as_of.isoformat()}"
+    if date_to > as_of:
+        return f"LEAKAGE: date_to {date_to.isoformat()} > as_of {as_of.isoformat()}"
+    return None
+
+
 def run_backtest(
     snapshot_root: Path | str,
     date_from: str,
@@ -69,6 +80,7 @@ def run_backtest(
     initial_equity: float = 1.0,
     fee_bps: float = 0.0,
     slippage_bps: float = 0.0,
+    as_of: str | Date | None = None,
 ) -> Dict[str, Any]:
     """
     Walk-forward backtest over [date_from, date_to]: snapshot -> strategy -> paper broker.
@@ -84,6 +96,22 @@ def run_backtest(
     end = Date.fromisoformat(date_to)
     if start > end:
         start, end = end, start
+    as_of_date: Date | None = None
+    if as_of is not None:
+        as_of_date = Date.fromisoformat(as_of) if isinstance(as_of, str) else as_of
+    leak = _leakage_guard(start, end, as_of_date)
+    if leak:
+        return {
+            "error": "leakage_guard",
+            "leakage_message": leak,
+            "date_from": date_from,
+            "date_to": date_to,
+            "as_of": as_of_date.isoformat() if as_of_date else None,
+            "num_days": 0,
+            "equity_curve_path": "",
+            "metrics_path": "",
+            "manifest_path": "",
+        }
     days: List[str] = []
     d = start
     while d <= end:
@@ -270,6 +298,7 @@ def walk_forward(run_config: Dict[str, Any]) -> Dict[str, Any]:
             outdir=window_outdir,
             strategy=strategy,
             top_n=top_n,
+            as_of=run_config.get("as_of"),
         )
         if m.get("error"):
             per_window.append({"date_from": w_from, "date_to": w_to, "error": m["error"], "total_fills": 0, "max_drawdown": 0.0})

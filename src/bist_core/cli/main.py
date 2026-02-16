@@ -11,7 +11,7 @@ import time
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 import pandas as pd
 
@@ -1061,6 +1061,7 @@ def _cmd_backtest_run(args: argparse.Namespace) -> int:
             "min_trades": getattr(args, "min_trades", None),
             "max_dd": getattr(args, "max_dd", None),
             "strict": bool(getattr(args, "strict", False)),
+            "as_of": getattr(args, "as_of", None),
         }
         result = walk_forward(run_config)
         if bool(getattr(args, "json", False)):
@@ -1079,6 +1080,7 @@ def _cmd_backtest_run(args: argparse.Namespace) -> int:
         outdir=Path(outdir),
         strategy=strategy,
         top_n=top_n,
+        as_of=getattr(args, "as_of", None),
     )
     if bool(getattr(args, "json", False)):
         print(json.dumps(metrics, ensure_ascii=False, indent=2))
@@ -1444,7 +1446,7 @@ def _cmd_ask(args: argparse.Namespace) -> int:
         payload["schema_version"] = 1
         payload["generated_at"] = datetime.utcnow().isoformat() + "Z"
         payload["content_sha256"] = _content_sha256(payload)
-        atomic_write_json(artifact_path, payload)
+        _atomic_write_json_deterministic(artifact_path, payload)
 
         if "risk_sizing" in payload and not getattr(args, "json", False):
             rs = payload["risk_sizing"]
@@ -1527,6 +1529,23 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     except Exception:
         symbols = []
     symbols = [s for s in symbols if _is_bist_symbol(s) and s not in exclusions]
+    min_volume = getattr(args, "min_volume", None)
+    min_turnover = getattr(args, "min_turnover", None)
+    if (min_volume is not None or min_turnover is not None) and md.has_ohlcv(day_str):
+        try:
+            ohlcv = md.ohlcv_map(day_str)
+            def _passes_liquidity(sym: str) -> bool:
+                row = ohlcv.get(sym, {})
+                vol = row.get("volume", 0) or 0
+                turn = row.get("turnover_tl", row.get("turnover", 0)) or 0
+                if min_volume is not None and vol < min_volume:
+                    return False
+                if min_turnover is not None and turn < min_turnover:
+                    return False
+                return True
+            symbols = [s for s in symbols if _passes_liquidity(s)]
+        except (ValueError, AttributeError):
+            pass
     symbols = sorted(symbols)
 
     if not symbols:
@@ -2695,6 +2714,42 @@ def _compute_risk_sizing(
     }
 
 
+def _atomic_write_json_deterministic(path: Path, payload: dict) -> None:
+    """FAZ387: Write JSON with sort_keys for byte-for-byte determinism."""
+    tmp = path.with_name(f"{path.name}.tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
+    tmp.replace(path)
+
+
+def _stabilize_signals(signals: Any) -> Any:
+    """FAZ387: Deterministic signals for Evidence (sorted keys/items)."""
+    if isinstance(signals, dict):
+        return {k: signals[k] for k in sorted(signals.keys())}
+    if isinstance(signals, list):
+        def _key(item: Any) -> str:
+            if isinstance(item, dict):
+                return json.dumps(item, sort_keys=True, ensure_ascii=False)
+            return str(item)
+        return sorted(signals, key=_key)
+    return signals
+
+
+def _build_evidence(
+    signals: Any,
+    snapshot_source: str | None = None,
+    snapshot_hash: str | None = None,
+) -> dict:
+    """FAZ387: Evidence with stable key order and sorted signals."""
+    stab = _stabilize_signals(signals)
+    out: dict = {"signals": stab}
+    if snapshot_source:
+        out["source"] = snapshot_source
+    if snapshot_hash:
+        out["source_sha256"] = snapshot_hash
+    return out
+
+
 def _content_sha256(payload: dict, exclude: tuple = ("generated_at", "content_sha256")) -> str:
     """FAZ143: Deterministic content hash for reproducibility; excludes volatile fields."""
     h = {k: v for k, v in payload.items() if k not in exclude}
@@ -2715,16 +2770,13 @@ def _advice_payload(
         "score": advice.score,
     }
     entry_stop_targets = advice.plan if isinstance(advice.plan, dict) else None
-    evidence: dict = {"signals": advice.signals}
-    if snapshot_source:
-        evidence["source"] = snapshot_source
-    if snapshot_hash:
-        evidence["source_sha256"] = snapshot_hash
+    evidence = _build_evidence(advice.signals, snapshot_source, snapshot_hash)
     cause_effect = {
         "why": advice.text[:200] if advice.text else "",
         "invalidates": "Fiyat bandı dışına çıkma, ters haber akışı.",
         "watch_next": "Hacim kırılması, KAP haberleri.",
     }
+    stab_signals = _stabilize_signals(advice.signals)
     out = {
         "symbol": advice.symbol,
         "day": day_str,
@@ -2734,7 +2786,7 @@ def _advice_payload(
         "Cause-Effect": cause_effect,
         "decision_raw": advice.decision_raw,
         "score": advice.score,
-        "signals": advice.signals,
+        "signals": stab_signals,
         "plan": advice.plan,
         "text": advice.text,
     }
@@ -2765,11 +2817,7 @@ def _fallback_payload(
         f"Güvenli mod: {err}. "
         "Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
     )
-    evidence: dict = {"signals": []}
-    if snapshot_source:
-        evidence["source"] = snapshot_source
-    if snapshot_hash:
-        evidence["source_sha256"] = snapshot_hash
+    evidence = _build_evidence([], snapshot_source, snapshot_hash)
     return {
         "symbol": symbol,
         "day": day_str,
@@ -2987,6 +3035,7 @@ Tek sembol danışma (interaktif parametrelerle):
     p_backtest_run.add_argument("--step", type=int, default=None)
     p_backtest_run.add_argument("--min-trades", dest="min_trades", type=int, default=None)
     p_backtest_run.add_argument("--max-dd", dest="max_dd", type=float, default=None)
+    p_backtest_run.add_argument("--as-of", dest="as_of", default=None, help="FAZ393: Leakage guard; reject if date_to > as_of")
     p_backtest_run.add_argument("--strict", action="store_true")
     p_backtest_run.add_argument("--json", action="store_true")
     p_backtest_run.set_defaults(func=_cmd_backtest_run)
@@ -3093,6 +3142,8 @@ Tek sembol danışma (interaktif parametrelerle):
     p_scan.add_argument("--max-loss-tl", dest="max_loss_tl", type=float, default=None)
     p_scan.add_argument("--top-n", dest="top_n", type=int, default=10)
     p_scan.add_argument("--exclusions", default=None, help="Comma-separated symbols to exclude")
+    p_scan.add_argument("--min-volume", dest="min_volume", type=int, default=None, help="FAZ145: Min volume filter (requires OHLCV snapshot)")
+    p_scan.add_argument("--min-turnover", dest="min_turnover", type=int, default=None, help="FAZ145: Min turnover TL filter (requires OHLCV snapshot)")
     p_scan.set_defaults(func=_cmd_scan)
 
     p_dossier = sub.add_parser("dossier")
