@@ -1865,6 +1865,14 @@ def _cmd_data_import(args: argparse.Namespace) -> int:
         elif c in cols:
             canonical_to_raw[c] = c
 
+    used_cols = {symbol_col, close_col} | set(canonical_to_raw.values())
+    if date_col in cols:
+        used_cols.add(date_col)
+    unknown_cols = sorted(cols - used_cols)
+    if unknown_cols and getattr(args, "mapping", "auto") == "strict":
+        print(f"ERROR: strict mapping rejects unknown columns: {unknown_cols}", file=sys.stderr)
+        return 2
+
     numeric_canonical = [c for c in ["close", "open", "high", "low", "volume", "turnover"] if c in canonical_to_raw]
     for c in numeric_canonical:
         raw_col = canonical_to_raw[c]
@@ -2942,6 +2950,7 @@ Tek sembol danışma (interaktif parametrelerle):
     p_import.add_argument("--day", default=None, help="Required when CSV has no date column")
     p_import.add_argument("--date-col", dest="date_col", default="date")
     p_import.add_argument("--symbol-col", dest="symbol_col", default="symbol")
+    p_import.add_argument("--mapping", choices=["auto", "strict"], default="auto", help="auto: ignore unknown cols; strict: reject unknown cols")
     p_import.set_defaults(func=_cmd_data_import)
 
     p_ask = sub.add_parser("ask")

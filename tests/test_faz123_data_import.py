@@ -245,3 +245,73 @@ def test_faz123_matriks_dd_slash_mm_yyyy_symbol_normalize(tmp_path: Path) -> Non
     assert "TUPRS" in df["symbol"].values  # spaces stripped, uppercase
     assert df[df["symbol"] == "SISE"]["close"].iloc[0] == 30000.0  # 30.000 TR
     assert df[df["symbol"] == "EREGL"]["close"].iloc[0] == 42.75  # 42,75 TR decimal
+
+
+def test_faz129_import_mapping_auto_ignores_unknown(tmp_path: Path) -> None:
+    """data import --mapping auto ignores unknown columns."""
+    csv_path = tmp_path / "input.csv"
+    csv_path.write_text(
+        "symbol,close,date,extra_col\nAAA,100,2099-01-01,ignore\n",
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "snapshots"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(_project_root() / "src")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "data",
+            "import",
+            "--input",
+            str(csv_path),
+            "--out",
+            str(out_dir),
+            "--mapping",
+            "auto",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=30,
+    )
+    assert result.returncode == 0
+    assert (out_dir / "2099-01-01" / "snapshot.csv").exists()
+
+
+def test_faz129_import_mapping_strict_rejects_unknown(tmp_path: Path) -> None:
+    """data import --mapping strict rejects unknown columns."""
+    csv_path = tmp_path / "input.csv"
+    csv_path.write_text(
+        "symbol,close,date,unknown_col\nAAA,100,2099-01-01,x\n",
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "snapshots"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(_project_root() / "src")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "data",
+            "import",
+            "--input",
+            str(csv_path),
+            "--out",
+            str(out_dir),
+            "--mapping",
+            "strict",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=30,
+    )
+    assert result.returncode == 2
+    assert "unknown" in result.stderr.lower() or "strict" in result.stderr.lower()
