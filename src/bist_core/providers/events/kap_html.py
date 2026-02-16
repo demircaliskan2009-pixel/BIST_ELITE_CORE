@@ -39,11 +39,13 @@ class KapHtmlEventsProvider(EventsProvider):
         self.source_url = ""
         
         # Raw HTML caching: store raw HTML for provenance/lineage
-        # Default: <DATA_DIR>/raw/kap_html/<day>.html
-        # Override: BIST_RAW_DIR or BIST_KAP_RAW_DIR (both treated as root)
+        # Precedence: raw_dir param > BIST_KAP_CACHE_DIR (direct) > BIST_KAP_RAW_DIR/BIST_RAW_DIR (append kap_html) > default
+        cache_dir_env = os.getenv("BIST_KAP_CACHE_DIR")
         raw_root_env = os.getenv("BIST_KAP_RAW_DIR") or os.getenv("BIST_RAW_DIR")
         if raw_dir is not None:
             self.raw_dir = raw_dir
+        elif cache_dir_env:
+            self.raw_dir = Path(cache_dir_env)
         elif raw_root_env:
             self.raw_dir = Path(raw_root_env) / "kap_html"
         else:
