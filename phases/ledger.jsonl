@@ -1,1 +1,2 @@
 {"phase":"faz126","commit":"4b61c09","summary":"Matriks/CSV ingestion hardening - aliases, dates, TR decimals, symbol normalize","tests":"test_faz123_*"}
+{"phase":"faz127","summary":"snapshots doctor --symbol bars_count lookback","commit":"4c9fa2c","tests":"pytest"}
