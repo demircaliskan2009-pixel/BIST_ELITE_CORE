@@ -315,3 +315,36 @@ def test_faz129_import_mapping_strict_rejects_unknown(tmp_path: Path) -> None:
     )
     assert result.returncode == 2
     assert "unknown" in result.stderr.lower() or "strict" in result.stderr.lower()
+
+
+def test_faz134_import_encoding_fallback(tmp_path: Path) -> None:
+    """data import falls back to latin-1 when utf-8 fails."""
+    csv_path = tmp_path / "input.csv"
+    content = "symbol,close,date\nAAÉ,100,2099-01-01\n"
+    csv_path.write_bytes(content.encode("latin-1"))
+    out_dir = tmp_path / "snapshots"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(_project_root() / "src")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "data",
+            "import",
+            "--input",
+            str(csv_path),
+            "--out",
+            str(out_dir),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=30,
+    )
+    assert result.returncode == 0
+    assert (out_dir / "2099-01-01" / "snapshot.csv").exists()
+    snap = (out_dir / "2099-01-01" / "snapshot.csv").read_text(encoding="utf-8")
+    assert "100" in snap

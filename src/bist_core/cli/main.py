@@ -1851,6 +1851,12 @@ def _cmd_data_import(args: argparse.Namespace) -> int:
 
     try:
         df = pd.read_csv(inp, encoding="utf-8", dtype=str)
+    except UnicodeDecodeError:
+        try:
+            df = pd.read_csv(inp, encoding="latin-1", dtype=str)
+        except Exception as exc:
+            print(f"ERROR: failed to read CSV (utf-8 and latin-1): {exc}", file=sys.stderr)
+            return 2
     except Exception as exc:
         print(f"ERROR: failed to read CSV: {exc}", file=sys.stderr)
         return 2
