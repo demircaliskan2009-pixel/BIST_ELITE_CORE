@@ -13,3 +13,6 @@
 {"phase":"faz142","summary":"HOLD reason and next_action in artifact","commit":"b0b7343","tests":"test_faz142_*"}
 {"phase":"faz143","summary":"content_sha256 in advice artifact for reproducibility","commit":"bd30480","tests":"test_faz143_*"}
 {"phase":"faz144","summary":"bars_count and lookback_required in advice JSON","commit":"453360d","tests":"test_faz144_*"}
+{"phase":"faz390","summary":"KAP ingestion fixture minimal parse without network","commit":"cc7279b","tests":"test_faz390_*"}
+{"phase":"faz391","summary":"KAP event dedupe by id first-wins deterministic","commit":"cc7279b","tests":"test_faz391_*"}
+{"phase":"faz405","summary":"KAP empty cache no crash","commit":"cc7279b","tests":"test_faz405_*"}
