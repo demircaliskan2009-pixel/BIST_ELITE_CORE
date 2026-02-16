@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import math
+import hashlib
 import json
+import math
 import os
 import platform
 import sys
@@ -1442,6 +1443,7 @@ def _cmd_ask(args: argparse.Namespace) -> int:
             payload["params"] = {"horizon": horizon, "risk": risk, "capital": capital, "max_loss_tl": max_loss_tl}
         payload["schema_version"] = 1
         payload["generated_at"] = datetime.utcnow().isoformat() + "Z"
+        payload["content_sha256"] = _content_sha256(payload)
         atomic_write_json(artifact_path, payload)
 
         if "risk_sizing" in payload and not getattr(args, "json", False):
@@ -2691,6 +2693,13 @@ def _compute_risk_sizing(
         "formula": "floor(max_loss_tl / stop_distance_tl)",
         "rounding": "floor",
     }
+
+
+def _content_sha256(payload: dict, exclude: tuple = ("generated_at", "content_sha256")) -> str:
+    """FAZ143: Deterministic content hash for reproducibility; excludes volatile fields."""
+    h = {k: v for k, v in payload.items() if k not in exclude}
+    canonical = json.dumps(h, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _advice_payload(
