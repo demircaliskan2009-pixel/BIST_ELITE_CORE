@@ -9,7 +9,7 @@ import platform
 import sys
 import time
 from dataclasses import asdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -1473,6 +1473,23 @@ def _cmd_ask(args: argparse.Namespace) -> int:
     return 0
 
 
+SCAN_ARTIFACT_SCHEMA_VERSION = 1
+
+
+def _build_scan_artifact(day_str: str, ranked: list[tuple[str, float, str]]) -> dict[str, Any]:
+    """FAZ388: Build scan JSON artifact with schema_version, generated_at, deterministic keys."""
+    lines = [
+        {"symbol": sym, "score": round(score, 2), "rationale": rationale}
+        for sym, score, rationale in ranked
+    ]
+    return {
+        "schema_version": SCAN_ARTIFACT_SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "day": day_str,
+        "ranked": lines,
+    }
+
+
 def _cmd_scan(args: argparse.Namespace) -> int:
     """Scan symbols; ranked by score; drill-down command per symbol."""
     base = _snapshot_root()
@@ -1549,6 +1566,10 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     symbols = sorted(symbols)
 
     if not symbols:
+        if getattr(args, "json", False):
+            artifact = _build_scan_artifact(day_str, [])
+            print(json.dumps(artifact, ensure_ascii=False))
+            return 0
         print("Sembol bulunamadı.", file=sys.stderr)
         return 0
 
@@ -1562,6 +1583,11 @@ def _cmd_scan(args: argparse.Namespace) -> int:
             results.append((sym, 0.0, "error"))
     results.sort(key=lambda x: (-x[1], x[0]))
     ranked = results[:top_n]
+
+    if getattr(args, "json", False):
+        artifact = _build_scan_artifact(day_str, ranked)
+        print(json.dumps(artifact, ensure_ascii=False))
+        return 0
 
     print(f"Scan {day_str} (top {len(ranked)}):")
     for i, (sym, score, rationale) in enumerate(ranked, 1):
@@ -3144,6 +3170,7 @@ Tek sembol danışma (interaktif parametrelerle):
     p_scan.add_argument("--exclusions", default=None, help="Comma-separated symbols to exclude")
     p_scan.add_argument("--min-volume", dest="min_volume", type=int, default=None, help="FAZ145: Min volume filter (requires OHLCV snapshot)")
     p_scan.add_argument("--min-turnover", dest="min_turnover", type=int, default=None, help="FAZ145: Min turnover TL filter (requires OHLCV snapshot)")
+    p_scan.add_argument("--json", action="store_true", help="FAZ388: Machine-readable JSON output with schema_version, generated_at")
     p_scan.set_defaults(func=_cmd_scan)
 
     p_dossier = sub.add_parser("dossier")

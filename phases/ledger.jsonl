@@ -17,3 +17,4 @@
 {"phase":"faz391","summary":"KAP event dedupe by id first-wins deterministic","commit":"cc7279b","tests":"test_faz391_*"}
 {"phase":"faz405","summary":"KAP empty cache no crash","commit":"cc7279b","tests":"test_faz405_*"}
 {"phase":"faz393","summary":"scoreboard leakage guard date less than as_of","commit":"cc0a3dc","tests":"test_faz393_*"}
+{"phase":"faz387","summary":"evidence stabilization sorted signals keys deterministic JSON","commit":"2c16dc5","tests":"pytest"}
