@@ -2729,6 +2729,11 @@ def _advice_payload(
         "plan": advice.plan,
         "text": advice.text,
     }
+    if advice.decision_raw == "HOLD":
+        if getattr(advice, "reason", None):
+            out["reason"] = advice.reason
+        if getattr(advice, "next_action", None):
+            out["next_action"] = advice.next_action
     risk_sizing = _compute_risk_sizing(capital, max_loss_tl, advice.plan)
     if risk_sizing is not None:
         out["risk_sizing"] = risk_sizing

@@ -23,6 +23,8 @@ class Advice:
     signals: Any
     plan: Any | None
     text: str
+    reason: Optional[str] = None  # HOLD: explicit reason (e.g. InsufficientHistory)
+    next_action: Optional[str] = None  # HOLD: explicit next action
 
 
 def build_advice_for_symbol(
@@ -198,6 +200,8 @@ def _insufficient_history_advice(
         signals=[],
         plan=None,
         text=text,
+        reason="InsufficientHistory",
+        next_action="Daha fazla günlük veri ekleyin.",
     )
 
 
