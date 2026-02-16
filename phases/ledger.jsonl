@@ -12,3 +12,4 @@
 {"phase":"faz140","summary":"evidence pack structure source and hash","commit":"e2c91c9","tests":"pytest"}
 {"phase":"faz142","summary":"HOLD reason and next_action in artifact","commit":"b0b7343","tests":"test_faz142_*"}
 {"phase":"faz143","summary":"content_sha256 in advice artifact for reproducibility","commit":"bd30480","tests":"test_faz143_*"}
+{"phase":"faz144","summary":"bars_count and lookback_required in advice JSON","commit":"453360d","tests":"test_faz144_*"}
