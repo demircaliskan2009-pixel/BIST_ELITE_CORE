@@ -11,3 +11,4 @@
 {"phase":"faz135","summary":"snapshot schema version proof tests","commit":"9f5d0d7","tests":"pytest"}
 {"phase":"faz140","summary":"evidence pack structure source and hash","commit":"e2c91c9","tests":"pytest"}
 {"phase":"faz142","summary":"HOLD reason and next_action in artifact","commit":"b0b7343","tests":"test_faz142_*"}
+{"phase":"faz143","summary":"content_sha256 in advice artifact for reproducibility","commit":"bd30480","tests":"test_faz143_*"}
