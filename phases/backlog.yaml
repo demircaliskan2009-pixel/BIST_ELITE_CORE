@@ -1,0 +1,1233 @@
+# Phase backlog — execute in order. Next after faz126 is faz127.
+# Themes: data_layer, advisory_core, scan_quality, offline_events, backtest, ops_tooling, local_ui
+
+phases:
+  # DATA LAYER
+  - id: faz127
+    theme: data_layer
+    title: "snapshots doctor --symbol bars_count lookback"
+    dod: "Add --symbol to doctor; compute contiguous bars up to --day; show bars_count for 20/60/120 lookback"
+    files: [src/bist_core/cli/main.py, tests/test_faz127_snapshots_doctor_symbol.py]
+  - id: faz128
+    theme: data_layer
+    title: "snapshots doctor missing days"
+    dod: "Show missing days in range when directories exist but have gaps"
+    files: [src/bist_core/cli/main.py, tests/test_faz128_snapshots_doctor_gaps.py]
+  - id: faz129
+    theme: data_layer
+    title: "data import --mapping auto|strict"
+    dod: "Add --mapping flag; strict rejects unknown columns"
+    files: [src/bist_core/cli/main.py, tests/test_faz123_data_import.py]
+  - id: faz130
+    theme: data_layer
+    title: "data import --schema-report"
+    dod: "Add --schema-report to show inferred column mapping"
+    files: [src/bist_core/cli/main.py, tests/test_faz130_import_schema_report.py]
+  - id: faz131
+    theme: data_layer
+    title: "symbol metadata normalization"
+    dod: "Deterministic symbol normalization in registry and snapshots"
+    files: [src/bist_core/, tests/]
+  - id: faz132
+    theme: data_layer
+    title: "snapshot corruption detection"
+    dod: "Detect malformed snapshot.csv; report invalid rows"
+    files: [src/bist_core/services/snapshot_integrity.py, tests/]
+  - id: faz133
+    theme: data_layer
+    title: "calendar correctness"
+    dod: "BIST trading calendar; exclude holidays in date ranges"
+    files: [src/bist_core/, tests/]
+  - id: faz134
+    theme: data_layer
+    title: "import encoding fallback"
+    dod: "Try utf-8 then latin-1 on CSV read"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz135
+    theme: data_layer
+    title: "snapshot schema version"
+    dod: "Add schema_version to snapshot metadata"
+    files: [src/bist_core/, tests/]
+
+  # ADVISORY CORE
+  - id: faz136
+    theme: advisory_core
+    title: "risk sizing suggestion"
+    dod: "Add position size and stop distance guidance from capital and max_loss"
+    files: [src/bist_core/services/advisor.py, src/bist_core/cli/main.py, tests/]
+  - id: faz137
+    theme: advisory_core
+    title: "gates outcomes section"
+    dod: "PASS/FAIL per gate with reasons in JSON and text"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz138
+    theme: advisory_core
+    title: "cause-effect fields"
+    dod: "Add why, invalidates, watch_next from deterministic evidence"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz139
+    theme: advisory_core
+    title: "advice JSON schema version"
+    dod: "Add schema_version to ask --out artifact"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz140
+    theme: advisory_core
+    title: "evidence pack structure"
+    dod: "Structured evidence in artifact with source and hash"
+    files: [src/bist_core/services/dossier.py, tests/]
+  - id: faz141
+    theme: advisory_core
+    title: "deterministic narrative format"
+    dod: "Stable text sections order and headers"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz142
+    theme: advisory_core
+    title: "HOLD reason coverage"
+    dod: "All HOLD paths include reason and next_action"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz143
+    theme: advisory_core
+    title: "advice artifact hash"
+    dod: "Content hash in artifact for reproducibility"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz144
+    theme: advisory_core
+    title: "bars_count in advice payload"
+    dod: "bars_count and lookback_required in JSON"
+    files: [src/bist_core/services/advisor.py, tests/]
+
+  # SCAN QUALITY
+  - id: faz145
+    theme: scan_quality
+    title: "scan liquidity filter"
+    dod: "Min volume/turnover filter in scan"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz146
+    theme: scan_quality
+    title: "scan exclusions support"
+    dod: "Exclude symbols from scan via --exclude"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz147
+    theme: scan_quality
+    title: "scan scoring rationale"
+    dod: "1-line rationale per ranked symbol from deterministic signals"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz148
+    theme: scan_quality
+    title: "scan --out artifact"
+    dod: "Save ranked list JSON to file"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz149
+    theme: scan_quality
+    title: "scan stable ordering"
+    dod: "Deterministic tie-break for equal scores"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz150
+    theme: scan_quality
+    title: "scan drill-down determinism"
+    dod: "Same params produce same ask command"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz151
+    theme: scan_quality
+    title: "scan top_n validation"
+    dod: "Validate top_n within bounds"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz152
+    theme: scan_quality
+    title: "scan artifact schema"
+    dod: "Stable JSON schema for scan output"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz153
+    theme: scan_quality
+    title: "scan empty snapshot handling"
+    dod: "Graceful HOLD when no symbols"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz154
+    theme: scan_quality
+    title: "scan horizon propagation"
+    dod: "Horizon passed to build_advice_for_symbol"
+    files: [src/bist_core/cli/main.py, tests/]
+
+  # OFFLINE EVENTS (KAP)
+  - id: faz155
+    theme: offline_events
+    title: "KAP cache loader"
+    dod: "BIST_KAP_CACHE_DIR or data/raw/kap_html loader"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz156
+    theme: offline_events
+    title: "KAP HTML parsing"
+    dod: "Parse cached HTML into events"
+    files: [src/bist_core/providers/events/kap_html.py, tests/]
+  - id: faz157
+    theme: offline_events
+    title: "KAP events in evidence"
+    dod: "Events attached to evidence even on HOLD"
+    files: [src/bist_core/services/dossier.py, tests/]
+  - id: faz158
+    theme: offline_events
+    title: "KAP fixture tests"
+    dod: "Tests with small fixture files, no network"
+    files: [tests/test_faz91_kap_ingest_offline.py, tests/fixtures/]
+  - id: faz159
+    theme: offline_events
+    title: "KAP JSON cache support"
+    dod: "Parse cached JSON if present"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz160
+    theme: offline_events
+    title: "event extraction determinism"
+    dod: "Same HTML produces same event IDs"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz161
+    theme: offline_events
+    title: "KAP event date filter"
+    dod: "Filter events by date range"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz162
+    theme: offline_events
+    title: "KAP symbol linkage"
+    dod: "Link events to symbols in evidence"
+    files: [src/bist_core/services/dossier.py, tests/]
+  - id: faz163
+    theme: offline_events
+    title: "KAP empty cache handling"
+    dod: "No crash when cache dir empty"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz164
+    theme: offline_events
+    title: "KAP encoding fallback"
+    dod: "Handle different encodings in HTML"
+    files: [src/bist_core/providers/events/kap_html.py, tests/]
+
+  # BACKTEST / SCOREBOARD
+  - id: faz165
+    theme: backtest
+    title: "scoreboard command"
+    dod: "CLI command for walk-forward metrics"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz166
+    theme: backtest
+    title: "scoreboard parameters in output"
+    dod: "Parameters, date range, universe in report"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz167
+    theme: backtest
+    title: "scoreboard disclaimers"
+    dod: "Anti-overfit disclaimers in output"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz168
+    theme: backtest
+    title: "scoreboard stable schema"
+    dod: "Stable JSON schema for scoreboard output"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz169
+    theme: backtest
+    title: "walk-forward gates"
+    dod: "Gates applied in walk-forward"
+    files: [src/bist_core/services/backtest.py, tests/]
+  - id: faz170
+    theme: backtest
+    title: "leakage guards"
+    dod: "No future data in backtest"
+    files: [src/bist_core/services/backtest.py, tests/]
+  - id: faz171
+    theme: backtest
+    title: "scoreboard reproducibility"
+    dod: "Same params produce same metrics"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz172
+    theme: backtest
+    title: "scoreboard artifact export"
+    dod: "Save scoreboard JSON to file"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz173
+    theme: backtest
+    title: "backtest date validation"
+    dod: "Validate date range against snapshots"
+    files: [src/bist_core/services/backtest.py, tests/]
+  - id: faz174
+    theme: backtest
+    title: "scoreboard empty universe"
+    dod: "Handle empty symbol list"
+    files: [src/bist_core/cli/main.py, tests/]
+
+  # OPS / TOOLING
+  - id: faz175
+    theme: ops_tooling
+    title: "version/info output"
+    dod: "CLI version/info with git tag if available"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz176
+    theme: ops_tooling
+    title: "config validation"
+    dod: "Validate core config on load"
+    files: [src/bist_core/config.py, tests/]
+  - id: faz177
+    theme: ops_tooling
+    title: "changelog discipline"
+    dod: "CHANGELOG.md updated per phase"
+    files: [CHANGELOG.md]
+  - id: faz178
+    theme: ops_tooling
+    title: "reproducible run logging"
+    dod: "Log params and version on run"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz179
+    theme: ops_tooling
+    title: "schema versioning"
+    dod: "Central schema version constant"
+    files: [src/bist_core/, tests/]
+  - id: faz180
+    theme: ops_tooling
+    title: "proof_pack OneTest"
+    dod: "proof_pack -OneTest for single test"
+    files: [tools/proof_pack.ps1]
+  - id: faz181
+    theme: ops_tooling
+    title: "phase_commit push"
+    dod: "Optional push after tag"
+    files: [tools/phase_commit.ps1]
+  - id: faz182
+    theme: ops_tooling
+    title: "ledger validation"
+    dod: "Validate ledger matches tags"
+    files: [tools/, tests/]
+  - id: faz183
+    theme: ops_tooling
+    title: "backlog next-phase"
+    dod: "Script to show next phase from backlog"
+    files: [tools/]
+  - id: faz184
+    theme: ops_tooling
+    title: "Windows path handling"
+    dod: "Consistent Path handling on Windows"
+    files: [src/bist_core/, tests/]
+
+  # LOCAL UI (after core green)
+  - id: faz185
+    theme: local_ui
+    title: "FastAPI server skeleton"
+    dod: "Minimal FastAPI app, no routes"
+    files: [src/bist_core/api/, tests/]
+  - id: faz186
+    theme: local_ui
+    title: "POST /ask endpoint"
+    dod: "Accepts symbol, day, horizon, risk, capital, max_loss; returns JSON"
+    files: [src/bist_core/api/, tests/]
+  - id: faz187
+    theme: local_ui
+    title: "POST /scan endpoint"
+    dod: "Accepts day, params; returns ranked JSON"
+    files: [src/bist_core/api/, tests/]
+  - id: faz188
+    theme: local_ui
+    title: "scope guard BIST-only"
+    dod: "Refuse non-BIST symbols"
+    files: [src/bist_core/api/, tests/]
+  - id: faz189
+    theme: local_ui
+    title: "network OFF default"
+    dod: "No network in API by default"
+    files: [src/bist_core/api/, tests/]
+  - id: faz190
+    theme: local_ui
+    title: "API smoke tests"
+    dod: "Import smoke tests, no network"
+    files: [tests/]
+  - id: faz191
+    theme: local_ui
+    title: "artifact path in response"
+    dod: "Return artifact path in ask/scan response"
+    files: [src/bist_core/api/, tests/]
+  - id: faz192
+    theme: local_ui
+    title: "API config"
+    dod: "Host/port from config"
+    files: [src/bist_core/api/, tests/]
+  - id: faz193
+    theme: local_ui
+    title: "API health endpoint"
+    dod: "GET /health for liveness"
+    files: [src/bist_core/api/, tests/]
+  - id: faz194
+    theme: local_ui
+    title: "API CORS disabled"
+    dod: "No CORS by default"
+    files: [src/bist_core/api/, tests/]
+
+  # Additional data layer phases
+  - id: faz195
+    theme: data_layer
+    title: "import duplicate symbol handling"
+    dod: "Last-wins or aggregate for same symbol/date"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz196
+    theme: data_layer
+    title: "snapshot date column optional"
+    dod: "Support snapshots without date column"
+    files: [src/bist_core/, tests/]
+  - id: faz197
+    theme: data_layer
+    title: "doctor --day filter"
+    dod: "Limit doctor output to single day"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz198
+    theme: data_layer
+    title: "doctor --min-days"
+    dod: "Report when days count below threshold"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz199
+    theme: data_layer
+    title: "import row count report"
+    dod: "Print rows imported per day"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz200
+    theme: data_layer
+    title: "import dry-run"
+    dod: "Validate without writing"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz201
+    theme: data_layer
+    title: "snapshot checksum"
+    dod: "Optional checksum in snapshot dir"
+    files: [src/bist_core/, tests/]
+  - id: faz202
+    theme: data_layer
+    title: "doctor symbol count per day"
+    dod: "Show symbol count in JSON"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz203
+    theme: data_layer
+    title: "import numeric validation"
+    dod: "Reject invalid numeric values"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz204
+    theme: data_layer
+    title: "doctor first/last day"
+    dod: "Report first and last day in range"
+    files: [src/bist_core/cli/main.py, tests/]
+
+  # Additional advisory phases
+  - id: faz205
+    theme: advisory_core
+    title: "advice confidence level"
+    dod: "Low/med/high from gates"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz206
+    theme: advisory_core
+    title: "entry/stop/targets validation"
+    dod: "Validate levels against OHLC"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz207
+    theme: advisory_core
+    title: "advice text sections"
+    dod: "Stable section headers"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz208
+    theme: advisory_core
+    title: "HOLD next_action"
+    dod: "Explicit next_action in HOLD"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz209
+    theme: advisory_core
+    title: "advice artifact naming"
+    dod: "Deterministic artifact filename"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz210
+    theme: advisory_core
+    title: "evidence source attribution"
+    dod: "Source path in evidence"
+    files: [src/bist_core/services/dossier.py, tests/]
+  - id: faz211
+    theme: advisory_core
+    title: "advice horizon propagation"
+    dod: "Horizon in advice payload"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz212
+    theme: advisory_core
+    title: "risk in advice payload"
+    dod: "Risk level in JSON"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz213
+    theme: advisory_core
+    title: "capital max_loss in payload"
+    dod: "Capital and max_loss in artifact"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz214
+    theme: advisory_core
+    title: "advice timestamp"
+    dod: "Generated-at timestamp in artifact"
+    files: [src/bist_core/cli/main.py, tests/]
+
+  # Additional scan phases
+  - id: faz215
+    theme: scan_quality
+    title: "scan day validation"
+    dod: "Validate --day exists in snapshots"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz216
+    theme: scan_quality
+    title: "scan capital propagation"
+    dod: "Capital passed to advice"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz217
+    theme: scan_quality
+    title: "scan max_loss propagation"
+    dod: "Max_loss passed to advice"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz218
+    theme: scan_quality
+    title: "scan risk propagation"
+    dod: "Risk level passed to advice"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz219
+    theme: scan_quality
+    title: "scan output format"
+    dod: "Stable text format for ranked list"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz220
+    theme: scan_quality
+    title: "scan JSON keys"
+    dod: "Stable keys in scan JSON"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz221
+    theme: scan_quality
+    title: "scan artifact path"
+    dod: "Print artifact path on completion"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz222
+    theme: scan_quality
+    title: "scan HOLD symbols"
+    dod: "Include HOLD symbols with reason"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz223
+    theme: scan_quality
+    title: "scan timeout"
+    dod: "Per-symbol timeout for large universes"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz224
+    theme: scan_quality
+    title: "scan parallel option"
+    dod: "Optional parallel symbol evaluation"
+    files: [src/bist_core/cli/main.py, tests/]
+
+  # Additional KAP phases
+  - id: faz225
+    theme: offline_events
+    title: "KAP event type"
+    dod: "Event type in parsed output"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz226
+    theme: offline_events
+    title: "KAP event date"
+    dod: "Event date parsing"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz227
+    theme: offline_events
+    title: "KAP event symbol"
+    dod: "Symbol extraction from event"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz228
+    theme: offline_events
+    title: "KAP cache structure"
+    dod: "Document expected cache dir structure"
+    files: [docs/, src/bist_core/]
+  - id: faz229
+    theme: offline_events
+    title: "KAP event dedup"
+    dod: "Deduplicate events by ID"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz230
+    theme: offline_events
+    title: "KAP malformed handling"
+    dod: "Skip malformed HTML gracefully"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz231
+    theme: offline_events
+    title: "KAP event limit"
+    dod: "Configurable event limit per symbol"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz232
+    theme: offline_events
+    title: "KAP event relevance"
+    dod: "Filter by relevance to advisory"
+    files: [src/bist_core/services/dossier.py, tests/]
+  - id: faz233
+    theme: offline_events
+    title: "KAP event summary"
+    dod: "Short summary in evidence"
+    files: [src/bist_core/services/dossier.py, tests/]
+  - id: faz234
+    theme: offline_events
+    title: "KAP cache refresh check"
+    dod: "Report cache staleness"
+    files: [src/bist_core/providers/events/, tests/]
+
+  # Additional backtest phases
+  - id: faz235
+    theme: backtest
+    title: "backtest universe filter"
+    dod: "Filter symbols by liquidity in backtest"
+    files: [src/bist_core/services/backtest.py, tests/]
+  - id: faz236
+    theme: backtest
+    title: "backtest transaction costs"
+    dod: "Optional transaction cost model"
+    files: [src/bist_core/services/backtest.py, tests/]
+  - id: faz237
+    theme: backtest
+    title: "scoreboard metrics"
+    dod: "Total return, Sharpe, max DD"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz238
+    theme: backtest
+    title: "scoreboard win rate"
+    dod: "Win rate and trade count"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz239
+    theme: backtest
+    title: "backtest slippage"
+    dod: "Optional slippage model"
+    files: [src/bist_core/services/backtest.py, tests/]
+  - id: faz240
+    theme: backtest
+    title: "scoreboard by symbol"
+    dod: "Per-symbol breakdown optional"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz241
+    theme: backtest
+    title: "backtest rebalance logic"
+    dod: "Rebalance frequency option"
+    files: [src/bist_core/services/backtest.py, tests/]
+  - id: faz242
+    theme: backtest
+    title: "scoreboard JSON schema"
+    dod: "JSON schema for scoreboard output"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz243
+    theme: backtest
+    title: "backtest position sizing"
+    dod: "Position size from capital"
+    files: [src/bist_core/services/backtest.py, tests/]
+  - id: faz244
+    theme: backtest
+    title: "scoreboard date range"
+    dod: "Explicit date range in output"
+    files: [src/bist_core/cli/main.py, tests/]
+
+  # Additional ops phases
+  - id: faz245
+    theme: ops_tooling
+    title: "proof_pack verbose"
+    dod: "Optional verbose pytest output"
+    files: [tools/proof_pack.ps1]
+  - id: faz246
+    theme: ops_tooling
+    title: "phase ledger append"
+    dod: "Append-only ledger format"
+    files: [tools/phase_commit.ps1]
+  - id: faz247
+    theme: ops_tooling
+    title: "AGENTS.md invariants"
+    dod: "Document all invariants"
+    files: [AGENTS.md]
+  - id: faz248
+    theme: ops_tooling
+    title: "release check schema"
+    dod: "Schema validation in release check"
+    files: [tools/release_check.py, tests/]
+  - id: faz249
+    theme: ops_tooling
+    title: "verify alignment"
+    dod: "Alignment script coverage"
+    files: [scripts/verify_alignment.py, tests/]
+  - id: faz250
+    theme: ops_tooling
+    title: "ruff config"
+    dod: "Ruff lint config if present"
+    files: [pyproject.toml, ruff.toml]
+  - id: faz251
+    theme: ops_tooling
+    title: "mypy config"
+    dod: "Mypy config if present"
+    files: [pyproject.toml, mypy.ini]
+  - id: faz252
+    theme: ops_tooling
+    title: "pytest markers"
+    dod: "Phase markers for pytest"
+    files: [pytest.ini, tests/]
+  - id: faz253
+    theme: ops_tooling
+    title: "docstring coverage"
+    dod: "Key modules documented"
+    files: [src/bist_core/]
+  - id: faz254
+    theme: ops_tooling
+    title: "README update"
+    dod: "README reflects current commands"
+    files: [README.md]
+
+  # Additional UI phases
+  - id: faz255
+    theme: local_ui
+    title: "API error responses"
+    dod: "Structured error JSON"
+    files: [src/bist_core/api/, tests/]
+  - id: faz256
+    theme: local_ui
+    title: "API request validation"
+    dod: "Validate request body"
+    files: [src/bist_core/api/, tests/]
+  - id: faz257
+    theme: local_ui
+    title: "API rate limit"
+    dod: "Optional rate limiting"
+    files: [src/bist_core/api/, tests/]
+  - id: faz258
+    theme: local_ui
+    title: "API logging"
+    dod: "Request logging"
+    files: [src/bist_core/api/, tests/]
+  - id: faz259
+    theme: local_ui
+    title: "API async"
+    dod: "Async handlers"
+    files: [src/bist_core/api/, tests/]
+  - id: faz260
+    theme: local_ui
+    title: "API startup check"
+    dod: "Verify snapshot dir on startup"
+    files: [src/bist_core/api/, tests/]
+  - id: faz261
+    theme: local_ui
+    title: "API graceful shutdown"
+    dod: "Handle SIGTERM"
+    files: [src/bist_core/api/, tests/]
+  - id: faz262
+    theme: local_ui
+    title: "API version header"
+    dod: "X-API-Version in response"
+    files: [src/bist_core/api/, tests/]
+  - id: faz263
+    theme: local_ui
+    title: "API BIST scope error"
+    dod: "403 for non-BIST symbol"
+    files: [src/bist_core/api/, tests/]
+  - id: faz264
+    theme: local_ui
+    title: "API artifact path"
+    dod: "Artifact path in response body"
+    files: [src/bist_core/api/, tests/]
+
+  # Extended phases (265-366)
+  - id: faz265
+    theme: data_layer
+    title: "snapshot column order"
+    dod: "Stable column order in snapshot.csv"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz266
+    theme: data_layer
+    title: "import empty file"
+    dod: "Handle empty CSV gracefully"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz267
+    theme: advisory_core
+    title: "advice decision enum"
+    dod: "Strict decision enum values"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz268
+    theme: scan_quality
+    title: "scan score threshold"
+    dod: "Optional min score filter"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz269
+    theme: offline_events
+    title: "KAP event priority"
+    dod: "Priority order for event display"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz270
+    theme: backtest
+    title: "backtest initial capital"
+    dod: "Configurable initial capital"
+    files: [src/bist_core/services/backtest.py, tests/]
+  - id: faz271
+    theme: ops_tooling
+    title: "phase_commit dry-run"
+    dod: "Dry-run without commit"
+    files: [tools/phase_commit.ps1]
+  - id: faz272
+    theme: local_ui
+    title: "API timeout"
+    dod: "Request timeout config"
+    files: [src/bist_core/api/, tests/]
+  - id: faz273
+    theme: data_layer
+    title: "doctor --format"
+    dod: "Output format options"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz274
+    theme: advisory_core
+    title: "advice evidence count"
+    dod: "Evidence count in payload"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz275
+    theme: scan_quality
+    title: "scan symbol limit"
+    dod: "Max symbols to evaluate"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz276
+    theme: offline_events
+    title: "KAP event truncation"
+    dod: "Truncate long event text"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz277
+    theme: backtest
+    title: "scoreboard period"
+    dod: "Period breakdown"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz278
+    theme: ops_tooling
+    title: "backlog validation"
+    dod: "Validate backlog YAML"
+    files: [tools/, tests/]
+  - id: faz279
+    theme: local_ui
+    title: "API symbol validation"
+    dod: "Validate symbol format"
+    files: [src/bist_core/api/, tests/]
+  - id: faz280
+    theme: data_layer
+    title: "import progress"
+    dod: "Progress indicator for large files"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz281
+    theme: advisory_core
+    title: "advice gates summary"
+    dod: "Gates summary in text"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz282
+    theme: scan_quality
+    title: "scan sort stability"
+    dod: "Stable sort for equal scores"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz283
+    theme: offline_events
+    title: "KAP event date parse"
+    dod: "Robust date parsing"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz284
+    theme: backtest
+    title: "backtest commission"
+    dod: "Commission model"
+    files: [src/bist_core/services/backtest.py, tests/]
+  - id: faz285
+    theme: ops_tooling
+    title: "ledger phase lookup"
+    dod: "Lookup phase by commit"
+    files: [tools/]
+  - id: faz286
+    theme: local_ui
+    title: "API day validation"
+    dod: "Validate day format"
+    files: [src/bist_core/api/, tests/]
+  - id: faz287
+    theme: data_layer
+    title: "doctor --sort"
+    dod: "Sort by day or symbol count"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz288
+    theme: advisory_core
+    title: "advice risk level"
+    dod: "Risk level in advice"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz289
+    theme: scan_quality
+    title: "scan exclude list"
+    dod: "Exclude from file"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz290
+    theme: offline_events
+    title: "KAP event link"
+    dod: "Link to source"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz291
+    theme: backtest
+    title: "scoreboard export"
+    dod: "Export to CSV"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz292
+    theme: ops_tooling
+    title: "proof_pack fail-fast"
+    dod: "Stop on first failure"
+    files: [tools/proof_pack.ps1]
+  - id: faz293
+    theme: local_ui
+    title: "API horizon validation"
+    dod: "Validate horizon enum"
+    files: [src/bist_core/api/, tests/]
+  - id: faz294
+    theme: data_layer
+    title: "import header row"
+    dod: "Header row detection"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz295
+    theme: advisory_core
+    title: "advice stop rationale"
+    dod: "Stop level rationale"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz296
+    theme: scan_quality
+    title: "scan liquidity units"
+    dod: "Volume or turnover option"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz297
+    theme: offline_events
+    title: "KAP event category"
+    dod: "Event category"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz298
+    theme: backtest
+    title: "backtest stop logic"
+    dod: "Stop loss in backtest"
+    files: [src/bist_core/services/backtest.py, tests/]
+  - id: faz299
+    theme: ops_tooling
+    title: "phase tag format"
+    dod: "Strict fazNNN tag format"
+    files: [tools/]
+  - id: faz300
+    theme: local_ui
+    title: "API risk validation"
+    dod: "Validate risk enum"
+    files: [src/bist_core/api/, tests/]
+  - id: faz301
+    theme: data_layer
+    title: "snapshot backup"
+    dod: "Optional backup before overwrite"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz302
+    theme: advisory_core
+    title: "advice target rationale"
+    dod: "Target level rationale"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz303
+    theme: scan_quality
+    title: "scan day default"
+    dod: "Default to latest snapshot day"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz304
+    theme: offline_events
+    title: "KAP cache index"
+    dod: "Index for faster lookup"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz305
+    theme: backtest
+    title: "scoreboard comparison"
+    dod: "Compare two runs"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz306
+    theme: ops_tooling
+    title: "changelog entry"
+    dod: "Auto-format changelog entry"
+    files: [tools/]
+  - id: faz307
+    theme: local_ui
+    title: "API capital validation"
+    dod: "Validate capital > 0"
+    files: [src/bist_core/api/, tests/]
+  - id: faz308
+    theme: data_layer
+    title: "doctor --json compact"
+    dod: "Compact JSON option"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz309
+    theme: advisory_core
+    title: "advice entry rationale"
+    dod: "Entry level rationale"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz310
+    theme: scan_quality
+    title: "scan horizon default"
+    dod: "Default horizon"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz311
+    theme: offline_events
+    title: "KAP event merge"
+    dod: "Merge duplicate events"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz312
+    theme: backtest
+    title: "backtest target logic"
+    dod: "Take profit in backtest"
+    files: [src/bist_core/services/backtest.py, tests/]
+  - id: faz313
+    theme: ops_tooling
+    title: "git status check"
+    dod: "Pre-commit status check"
+    files: [tools/phase_guard.ps1]
+  - id: faz314
+    theme: local_ui
+    title: "API max_loss validation"
+    dod: "Validate max_loss"
+    files: [src/bist_core/api/, tests/]
+  - id: faz315
+    theme: data_layer
+    title: "import delimiter"
+    dod: "Auto-detect delimiter"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz316
+    theme: advisory_core
+    title: "advice position size"
+    dod: "Position size in advice"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz317
+    theme: scan_quality
+    title: "scan risk default"
+    dod: "Default risk level"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz318
+    theme: offline_events
+    title: "KAP event age"
+    dod: "Event age in days"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz319
+    theme: backtest
+    title: "scoreboard chart"
+    dod: "Optional equity curve output"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz320
+    theme: ops_tooling
+    title: "phase_commit message"
+    dod: "Validate commit message format"
+    files: [tools/phase_commit.ps1]
+  - id: faz321
+    theme: local_ui
+    title: "API batch ask"
+    dod: "Batch ask endpoint"
+    files: [src/bist_core/api/, tests/]
+  - id: faz322
+    theme: data_layer
+    title: "doctor --limit"
+    dod: "Limit output rows"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz323
+    theme: advisory_core
+    title: "advice volatility"
+    dod: "Volatility in advice"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz324
+    theme: scan_quality
+    title: "scan capital default"
+    dod: "Default capital"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz325
+    theme: offline_events
+    title: "KAP event relevance"
+    dod: "Relevance score"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz326
+    theme: backtest
+    title: "scoreboard by period"
+    dod: "Period breakdown"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz327
+    theme: ops_tooling
+    title: "backlog next"
+    dod: "Print next phase ID"
+    files: [tools/]
+  - id: faz328
+    theme: local_ui
+    title: "API batch scan"
+    dod: "Batch scan endpoint"
+    files: [src/bist_core/api/, tests/]
+  - id: faz329
+    theme: data_layer
+    title: "import quote handling"
+    dod: "Handle quoted fields"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz330
+    theme: advisory_core
+    title: "advice momentum"
+    dod: "Momentum in advice"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz331
+    theme: scan_quality
+    title: "scan max_loss default"
+    dod: "Default max_loss"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz332
+    theme: offline_events
+    title: "KAP event source"
+    dod: "Source file in event"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz333
+    theme: backtest
+    title: "backtest rebalance"
+    dod: "Rebalance frequency"
+    files: [src/bist_core/services/backtest.py, tests/]
+  - id: faz334
+    theme: ops_tooling
+    title: "ledger stats"
+    dod: "Phase count stats"
+    files: [tools/]
+  - id: faz335
+    theme: local_ui
+    title: "API docs"
+    dod: "OpenAPI schema"
+    files: [src/bist_core/api/, tests/]
+  - id: faz336
+    theme: data_layer
+    title: "doctor --csv"
+    dod: "CSV output format"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz337
+    theme: advisory_core
+    title: "advice trend"
+    dod: "Trend in advice"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz338
+    theme: scan_quality
+    title: "scan top_n default"
+    dod: "Default top_n"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz339
+    theme: offline_events
+    title: "KAP event count"
+    dod: "Event count limit"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz340
+    theme: backtest
+    title: "scoreboard benchmark"
+    dod: "Benchmark comparison"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz341
+    theme: ops_tooling
+    title: "phase_guard OneTest"
+    dod: "phase_guard -OneTest"
+    files: [tools/phase_guard.ps1]
+  - id: faz342
+    theme: local_ui
+    title: "API cors config"
+    dod: "CORS config option"
+    files: [src/bist_core/api/, tests/]
+  - id: faz343
+    theme: data_layer
+    title: "import skip rows"
+    dod: "Skip malformed rows"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz344
+    theme: advisory_core
+    title: "advice support resistance"
+    dod: "Support/resistance in advice"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz345
+    theme: scan_quality
+    title: "scan liquidity default"
+    dod: "Default liquidity filter"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz346
+    theme: offline_events
+    title: "KAP event sort"
+    dod: "Sort by date"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz347
+    theme: backtest
+    title: "scoreboard drawdown"
+    dod: "Drawdown details"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz348
+    theme: ops_tooling
+    title: "backlog filter"
+    dod: "Filter by theme"
+    files: [tools/]
+  - id: faz349
+    theme: local_ui
+    title: "API auth"
+    dod: "Optional API key"
+    files: [src/bist_core/api/, tests/]
+  - id: faz350
+    theme: data_layer
+    title: "doctor --summary"
+    dod: "Summary only mode"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz351
+    theme: advisory_core
+    title: "advice volume"
+    dod: "Volume context in advice"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz352
+    theme: scan_quality
+    title: "scan exclude default"
+    dod: "Default exclusions"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz353
+    theme: offline_events
+    title: "KAP event format"
+    dod: "Event format string"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz354
+    theme: backtest
+    title: "backtest margin"
+    dod: "Margin model"
+    files: [src/bist_core/services/backtest.py, tests/]
+  - id: faz355
+    theme: ops_tooling
+    title: "phase_commit push"
+    dod: "Push after commit"
+    files: [tools/phase_commit.ps1]
+  - id: faz356
+    theme: local_ui
+    title: "API metrics"
+    dod: "Request metrics"
+    files: [src/bist_core/api/, tests/]
+  - id: faz357
+    theme: data_layer
+    title: "import validation"
+    dod: "Pre-import validation"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz358
+    theme: advisory_core
+    title: "advice timeframe"
+    dod: "Timeframe in advice"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz359
+    theme: scan_quality
+    title: "scan output format"
+    dod: "Configurable output format"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz360
+    theme: offline_events
+    title: "KAP event hash"
+    dod: "Content hash per event"
+    files: [src/bist_core/providers/events/, tests/]
+  - id: faz361
+    theme: backtest
+    title: "scoreboard risk"
+    dod: "Risk metrics"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz362
+    theme: ops_tooling
+    title: "ledger export"
+    dod: "Export ledger to CSV"
+    files: [tools/]
+  - id: faz363
+    theme: local_ui
+    title: "API health check"
+    dod: "Snapshot dir health"
+    files: [src/bist_core/api/, tests/]
+  - id: faz364
+    theme: data_layer
+    title: "doctor --verbose"
+    dod: "Verbose output"
+    files: [src/bist_core/cli/main.py, tests/]
+  - id: faz365
+    theme: advisory_core
+    title: "advice timeframe"
+    dod: "Timeframe in advice"
+    files: [src/bist_core/services/advisor.py, tests/]
+  - id: faz366
+    theme: scan_quality
+    title: "scan verbose"
+    dod: "Verbose scan output"
+    files: [src/bist_core/cli/main.py, tests/]

@@ -7,7 +7,7 @@ import platform
 import sys
 import time
 from dataclasses import asdict
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -1650,11 +1650,75 @@ def _cmd_snapshots_doctor(args: argparse.Namespace) -> int:
             symbols = []
         symbols_by_day[day_str] = symbols
     all_symbols = sorted(set(s for syms in symbols_by_day.values() for s in syms))
+    missing_days: list[str] = []
+    if len(days_found) >= 2:
+        days_set = set(days_found)
+        d_cur = date.fromisoformat(min(days_found))
+        d_end = date.fromisoformat(max(days_found))
+        while d_cur <= d_end:
+            s = d_cur.isoformat()
+            if s not in days_set:
+                missing_days.append(s)
+            d_cur += timedelta(days=1)
     coverage_summary = {
         "days_count": len(days_found),
         "total_symbols": len(all_symbols),
         "days": days_found,
+        "missing_days": missing_days,
     }
+    symbol_arg = getattr(args, "symbol", None)
+    day_arg = getattr(args, "day", None)
+    if symbol_arg and day_arg:
+        try:
+            _ = date.fromisoformat(day_arg)
+        except ValueError:
+            if getattr(args, "json", False):
+                print(json.dumps({"ok": False, "error": "invalid_day", "day": day_arg}, ensure_ascii=False))
+            else:
+                print(f"ERROR: invalid --day format: {day_arg}", file=sys.stderr)
+            return 2
+        days_sorted = sorted(days_found)
+        days_up_to = [d for d in days_sorted if d <= day_arg]
+        bars_count = 0
+        for d in reversed(days_up_to):
+            if symbol_arg in symbols_by_day.get(d, []):
+                bars_count += 1
+            else:
+                break
+        lookback_windows = [20, 60, 120]
+        lookback_ok = {w: bars_count >= w for w in lookback_windows}
+        symbol_info = {
+            "symbol": symbol_arg,
+            "day": day_arg,
+            "bars_count": bars_count,
+            "lookback_20": lookback_ok[20],
+            "lookback_60": lookback_ok[60],
+            "lookback_120": lookback_ok[120],
+        }
+        if getattr(args, "json", False):
+            out = {
+                "root": str(root),
+                "ok": True,
+                "days": days_found,
+                "symbols_by_day": symbols_by_day,
+                "coverage_summary": coverage_summary,
+                "symbol_info": symbol_info,
+            }
+            print(json.dumps(out, ensure_ascii=False, indent=2))
+            return 0
+        print(f"root: {root}")
+        print(f"symbol: {symbol_arg} day: {day_arg}")
+        print(f"bars_count: {bars_count}")
+        for w in lookback_windows:
+            ok = "OK" if lookback_ok[w] else "INSUFFICIENT"
+            print(f"  lookback_{w}: {ok}")
+        return 0
+    if symbol_arg and not day_arg:
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": False, "error": "day_required_for_symbol"}, ensure_ascii=False))
+        else:
+            print("ERROR: --day required when --symbol is set", file=sys.stderr)
+        return 2
     if getattr(args, "json", False):
         out = {
             "root": str(root),
@@ -1671,6 +1735,12 @@ def _cmd_snapshots_doctor(args: argparse.Namespace) -> int:
         syms = symbols_by_day.get(d, [])
         print(f"  {d}: {len(syms)} symbols")
     print(f"total_symbols: {len(all_symbols)}")
+    if missing_days:
+        print(f"missing_days: {len(missing_days)}")
+        for d in missing_days[:10]:
+            print(f"  {d}")
+        if len(missing_days) > 10:
+            print(f"  ... and {len(missing_days) - 10} more")
     return 0
 
 
@@ -2862,6 +2932,8 @@ Tek sembol danışma (interaktif parametrelerle):
     p_snapshots_doctor = sub_snapshots.add_parser("doctor")
     p_snapshots_doctor.add_argument("--root", default=None, help="Snapshot root (default: BIST_CORE_SNAPSHOT_DIR or data/eod/snapshots)")
     p_snapshots_doctor.add_argument("--json", action="store_true", help="Machine-readable JSON output")
+    p_snapshots_doctor.add_argument("--symbol", default=None, help="Compute bars for symbol; requires --day")
+    p_snapshots_doctor.add_argument("--day", default=None, help="Reference day (YYYY-MM-DD) for symbol bars")
     p_snapshots_doctor.set_defaults(func=_cmd_snapshots_doctor)
 
     p_import = sub_data.add_parser("import")
