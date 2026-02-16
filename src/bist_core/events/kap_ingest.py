@@ -119,6 +119,7 @@ def ingest_kap_html(
     rows = parser.parse(html_str)
 
     events: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
     for cells, href in rows:
         if len(cells) < 4:
             continue
@@ -130,6 +131,9 @@ def ingest_kap_html(
             continue
         ts = _normalize_ts(ts_raw)
         event_id = _event_id_canonical(symbol, ts, kind, title)
+        if event_id in seen_ids:
+            continue
+        seen_ids.add(event_id)
         event: Dict[str, Any] = {
             "id": event_id,
             "symbol": symbol,
