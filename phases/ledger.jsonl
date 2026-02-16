@@ -3,3 +3,4 @@
 {"phase":"faz128","commit":"4ad5e54","summary":"snapshots doctor missing days in range","tests":"test_faz128_*"}
 {"phase":"faz129","commit":"40b2c4e","summary":"data import --mapping auto|strict","tests":"test_faz123_*"}
 {"phase":"faz130","commit":"4ced91e","summary":"data import --schema-report","tests":"test_faz130_*"}
+{"phase":"faz136","commit":"33216d7","summary":"risk sizing from capital, max_loss, stop distance","tests":"test_faz136_*"}
