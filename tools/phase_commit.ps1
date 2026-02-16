@@ -1,8 +1,10 @@
 # Phase commit: runs phase_guard, then commits + tags + ledger entry.
 # Usage: .\tools\phase_commit.ps1 -Phase faz127 -Message "snapshots doctor --symbol bars_count"
+# Refactor phases: add -RefactorProof "golden_output" (or snapshot, invariant)
 param(
     [Parameter(Mandatory=$true)][string]$Phase,
-    [Parameter(Mandatory=$true)][string]$Message
+    [Parameter(Mandatory=$true)][string]$Message,
+    [Parameter(Mandatory=$false)][string]$RefactorProof
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,7 +34,9 @@ $commitHash = git rev-parse --short HEAD
 git tag $Phase
 
 $ledgerPath = Join-Path $repoRoot "phases\ledger.jsonl"
-$entry = @{phase=$Phase; commit=$commitHash; summary=$Message; tests="pytest"} | ConvertTo-Json -Compress
+$entryObj = @{phase=$Phase; commit=$commitHash; summary=$Message; tests="pytest"}
+if ($RefactorProof) { $entryObj["refactor_proof"] = $RefactorProof }
+$entry = $entryObj | ConvertTo-Json -Compress
 Add-Content -Path $ledgerPath -Value $entry
 
 Write-Host "Committed: $msg" -ForegroundColor Green

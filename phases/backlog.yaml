@@ -622,6 +622,11 @@ phases:
     files: [src/bist_core/cli/main.py, tests/]
 
   # Additional ops phases
+  - id: faz368
+    theme: ops_tooling
+    title: "CLI surface golden proof"
+    dod: "Golden tests for subcommands, info --json, healthcheck schema; refactor-safe"
+    files: [tests/test_faz_cli_surface_golden.py]
   - id: faz245
     theme: ops_tooling
     title: "proof_pack verbose"

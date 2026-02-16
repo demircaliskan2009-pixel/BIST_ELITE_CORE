@@ -6,3 +6,4 @@
 {"phase":"faz136","commit":"33216d7","summary":"risk sizing from capital, max_loss, stop distance","tests":"test_faz136_*"}
 {"phase":"faz155","commit":"fe678a3","summary":"KAP cache loader BIST_KAP_CACHE_DIR","tests":"test_faz155_*"}
 {"phase":"faz134","summary":"import encoding fallback utf-8 then latin-1","commit":"fa4e79a","tests":"pytest"}
+{"phase":"faz139","summary":"advice artifact schema golden HOLD proof tests","commit":"d4c493d","tests":"pytest"}
