@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import json
 import os
 import platform
@@ -1394,7 +1395,7 @@ def _cmd_ask(args: argparse.Namespace) -> int:
             continue
         try:
             advice = build_advice_for_symbol(sym, day_str, root=base)
-            payload = _advice_payload(advice, day_str)
+            payload = _advice_payload(advice, day_str, capital=capital, max_loss_tl=max_loss_tl)
             text_out = advice.text
         except Exception as exc:
             payload = _fallback_payload(sym, day_str, exc)
@@ -1425,10 +1426,20 @@ def _cmd_ask(args: argparse.Namespace) -> int:
             payload["params"] = {"horizon": horizon, "risk": risk, "capital": capital, "max_loss_tl": max_loss_tl}
         atomic_write_json(artifact_path, payload)
 
+        if "risk_sizing" in payload and not getattr(args, "json", False):
+            rs = payload["risk_sizing"]
+            text_out = text_out + "\n\nRisk sizing: " + (
+                f"position_size_shares={rs.get('position_size_shares')}, "
+                f"stop_distance_tl={rs.get('stop_distance_tl')}, "
+                f"position_size_tl={rs.get('position_size_tl')} TL."
+            )
+
         if getattr(args, "json", False):
             json_out = {k: payload[k] for k in ("symbol", "day", "decision_raw", "score", "signals", "plan", "text") if k in payload}
             if params_line:
                 json_out["params"] = {"horizon": horizon, "risk": risk, "capital": capital, "max_loss_tl": max_loss_tl}
+            if "risk_sizing" in payload:
+                json_out["risk_sizing"] = payload["risk_sizing"]
             print(json.dumps(json_out, ensure_ascii=False))
         else:
             if idx > 0:
@@ -2623,7 +2634,47 @@ def _latest_snapshot_day(snapshots_dir: Path) -> Optional[str]:
     return latest.isoformat() if latest else None
 
 
-def _advice_payload(advice, day_str: str) -> dict:
+def _compute_risk_sizing(
+    capital: float | None,
+    max_loss_tl: float | None,
+    plan: dict | None,
+) -> dict | None:
+    """Compute position size and stop distance guidance. Deterministic, floor rounding."""
+    if max_loss_tl is None or max_loss_tl <= 0:
+        return None
+    if not isinstance(plan, dict):
+        return None
+    entry = plan.get("entry")
+    stop = plan.get("stop")
+    if entry is None or stop is None:
+        return None
+    try:
+        entry_f = float(entry)
+        stop_f = float(stop)
+    except (TypeError, ValueError):
+        return None
+    stop_distance_tl = abs(entry_f - stop_f)
+    if stop_distance_tl <= 0:
+        return None
+    position_size_shares = math.floor(max_loss_tl / stop_distance_tl)
+    if position_size_shares <= 0:
+        return None
+    position_size_tl = round(position_size_shares * entry_f, 2)
+    return {
+        "position_size_shares": int(position_size_shares),
+        "stop_distance_tl": round(stop_distance_tl, 2),
+        "position_size_tl": position_size_tl,
+        "formula": "floor(max_loss_tl / stop_distance_tl)",
+        "rounding": "floor",
+    }
+
+
+def _advice_payload(
+    advice,
+    day_str: str,
+    capital: float | None = None,
+    max_loss_tl: float | None = None,
+) -> dict:
     decision = {
         "decision_raw": advice.decision_raw,
         "score": advice.score,
@@ -2637,7 +2688,7 @@ def _advice_payload(advice, day_str: str) -> dict:
         "invalidates": "Fiyat bandı dışına çıkma, ters haber akışı.",
         "watch_next": "Hacim kırılması, KAP haberleri.",
     }
-    return {
+    out = {
         "symbol": advice.symbol,
         "day": day_str,
         "Decision": decision,
@@ -2650,6 +2701,10 @@ def _advice_payload(advice, day_str: str) -> dict:
         "plan": advice.plan,
         "text": advice.text,
     }
+    risk_sizing = _compute_risk_sizing(capital, max_loss_tl, advice.plan)
+    if risk_sizing is not None:
+        out["risk_sizing"] = risk_sizing
+    return out
 
 
 def _fallback_payload(symbol: str, day_str: str, exc: Exception) -> dict:
