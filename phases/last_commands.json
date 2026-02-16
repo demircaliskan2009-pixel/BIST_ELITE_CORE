@@ -1,1 +1,1 @@
-{"commands":["python -m pytest tests/test_faz128_snapshots_doctor_gaps.py -v --tb=short",".\\proof_pack.ps1","phase_commit faz368"],"max_size":20}
+{"commands":["phase_commit faz368","phase_commit faz135","phase_commit faz140"],"max_size":20}
