@@ -96,6 +96,11 @@ def test_faz139_advice_artifact_schema(tmp_path: Path) -> None:
     assert "invalidates" in cause_effect
     assert "watch_next" in cause_effect
 
+    ev = data.get("Evidence", {})
+    if ev.get("source"):
+        assert "source_sha256" in ev
+        assert len(ev["source_sha256"]) == 64
+
     assert data.get("Entry/Stop/Targets") is None or isinstance(data["Entry/Stop/Targets"], dict)
     assert data.get("plan") is None or isinstance(data["plan"], dict)
     assert isinstance(data.get("text"), str)

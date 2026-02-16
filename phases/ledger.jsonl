@@ -8,3 +8,4 @@
 {"phase":"faz134","summary":"import encoding fallback utf-8 then latin-1","commit":"fa4e79a","tests":"pytest"}
 {"phase":"faz139","summary":"advice artifact schema golden HOLD proof tests","commit":"d4c493d","tests":"pytest"}
 {"phase":"faz368","refactor_proof":"golden_output","summary":"CLI surface golden proof","commit":"ac0073b","tests":"pytest"}
+{"phase":"faz135","summary":"snapshot schema version proof tests","commit":"9f5d0d7","tests":"pytest"}

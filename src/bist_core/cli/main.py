@@ -1390,15 +1390,31 @@ def _cmd_ask(args: argparse.Namespace) -> int:
         if not symbols:
             symbols = [symbol]
 
+    snapshot_path = base / day_str / "snapshot.csv"
+    snapshot_hash = None
+    if snapshot_path.is_file():
+        try:
+            snapshot_hash = snapshot_integrity.compute_sha256(snapshot_path)
+        except Exception:
+            pass
     for idx, sym in enumerate(symbols):
         if not _is_bist_symbol(sym):
             continue
         try:
             advice = build_advice_for_symbol(sym, day_str, root=base)
-            payload = _advice_payload(advice, day_str, capital=capital, max_loss_tl=max_loss_tl)
+            payload = _advice_payload(
+                advice, day_str,
+                capital=capital, max_loss_tl=max_loss_tl,
+                snapshot_source=str(snapshot_path) if snapshot_path.is_file() else None,
+                snapshot_hash=snapshot_hash,
+            )
             text_out = advice.text
         except Exception as exc:
-            payload = _fallback_payload(sym, day_str, exc)
+            payload = _fallback_payload(
+                sym, day_str, exc,
+                snapshot_source=str(snapshot_path) if snapshot_path.is_file() else None,
+                snapshot_hash=snapshot_hash,
+            )
             text_out = payload["text"]
 
         params_line = ""
@@ -2682,15 +2698,19 @@ def _advice_payload(
     day_str: str,
     capital: float | None = None,
     max_loss_tl: float | None = None,
+    snapshot_source: str | None = None,
+    snapshot_hash: str | None = None,
 ) -> dict:
     decision = {
         "decision_raw": advice.decision_raw,
         "score": advice.score,
     }
     entry_stop_targets = advice.plan if isinstance(advice.plan, dict) else None
-    evidence = {
-        "signals": advice.signals,
-    }
+    evidence: dict = {"signals": advice.signals}
+    if snapshot_source:
+        evidence["source"] = snapshot_source
+    if snapshot_hash:
+        evidence["source_sha256"] = snapshot_hash
     cause_effect = {
         "why": advice.text[:200] if advice.text else "",
         "invalidates": "Fiyat bandı dışına çıkma, ters haber akışı.",
@@ -2715,18 +2735,29 @@ def _advice_payload(
     return out
 
 
-def _fallback_payload(symbol: str, day_str: str, exc: Exception) -> dict:
+def _fallback_payload(
+    symbol: str,
+    day_str: str,
+    exc: Exception,
+    snapshot_source: str | None = None,
+    snapshot_hash: str | None = None,
+) -> dict:
     err = exc.__class__.__name__
     text = (
         f"Güvenli mod: {err}. "
         "Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
     )
+    evidence: dict = {"signals": []}
+    if snapshot_source:
+        evidence["source"] = snapshot_source
+    if snapshot_hash:
+        evidence["source_sha256"] = snapshot_hash
     return {
         "symbol": symbol,
         "day": day_str,
         "Decision": {"decision_raw": "PASS", "score": 0.0},
         "Entry/Stop/Targets": None,
-        "Evidence": {"signals": []},
+        "Evidence": evidence,
         "Cause-Effect": {"why": text[:200], "invalidates": "", "watch_next": ""},
         "decision_raw": "PASS",
         "score": 0.0,
