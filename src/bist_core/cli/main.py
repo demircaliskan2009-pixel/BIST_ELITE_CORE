@@ -1845,6 +1845,10 @@ def _cmd_data_import(args: argparse.Namespace) -> int:
         return 2
     cols = set(df.columns)
     mapping = _infer_column_mapping(cols)
+    if getattr(args, "schema_report", False):
+        schema_out = {"columns": sorted(cols), "inferred_mapping": {k: v for k, v in sorted(mapping.items())}}
+        print(json.dumps(schema_out, ensure_ascii=False, indent=2))
+        return 0
     date_col = mapping.get("date") or getattr(args, "date_col", "date")
     symbol_col = mapping.get("symbol") or getattr(args, "symbol_col", "symbol")
     if symbol_col not in cols:
@@ -2951,6 +2955,7 @@ Tek sembol danışma (interaktif parametrelerle):
     p_import.add_argument("--date-col", dest="date_col", default="date")
     p_import.add_argument("--symbol-col", dest="symbol_col", default="symbol")
     p_import.add_argument("--mapping", choices=["auto", "strict"], default="auto", help="auto: ignore unknown cols; strict: reject unknown cols")
+    p_import.add_argument("--schema-report", dest="schema_report", action="store_true", help="Print inferred column mapping and exit")
     p_import.set_defaults(func=_cmd_data_import)
 
     p_ask = sub.add_parser("ask")
