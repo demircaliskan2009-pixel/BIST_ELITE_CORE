@@ -175,105 +175,110 @@ phases:
     dod: "Parse cached JSON if present"
     files: [src/bist_core/providers/events/, tests/]
   - id: faz160
+    theme: security_hardener
+    title: "prompt injection lint"
+    dod: "Test AGENTS.md has untrusted text policy and network default OFF"
+    files: [AGENTS.md, tests/test_faz160_prompt_injection_lint.py]
+  - id: faz161
     theme: offline_events
     title: "event extraction determinism"
     dod: "Same HTML produces same event IDs"
     files: [src/bist_core/providers/events/, tests/]
-  - id: faz161
+  - id: faz162
     theme: offline_events
     title: "KAP event date filter"
     dod: "Filter events by date range"
     files: [src/bist_core/providers/events/, tests/]
-  - id: faz162
+  - id: faz163
     theme: offline_events
     title: "KAP symbol linkage"
     dod: "Link events to symbols in evidence"
     files: [src/bist_core/services/dossier.py, tests/]
-  - id: faz163
+  - id: faz164
     theme: offline_events
     title: "KAP empty cache handling"
     dod: "No crash when cache dir empty"
     files: [src/bist_core/providers/events/, tests/]
-  - id: faz164
+  - id: faz165
     theme: offline_events
     title: "KAP encoding fallback"
     dod: "Handle different encodings in HTML"
     files: [src/bist_core/providers/events/kap_html.py, tests/]
 
   # BACKTEST / SCOREBOARD
-  - id: faz165
+  - id: faz166
     theme: backtest
     title: "scoreboard command"
     dod: "CLI command for walk-forward metrics"
     files: [src/bist_core/cli/main.py, tests/]
-  - id: faz166
+  - id: faz167
     theme: backtest
     title: "scoreboard parameters in output"
     dod: "Parameters, date range, universe in report"
     files: [src/bist_core/cli/main.py, tests/]
-  - id: faz167
+  - id: faz168
     theme: backtest
     title: "scoreboard disclaimers"
     dod: "Anti-overfit disclaimers in output"
     files: [src/bist_core/cli/main.py, tests/]
-  - id: faz168
+  - id: faz169
     theme: backtest
     title: "scoreboard stable schema"
     dod: "Stable JSON schema for scoreboard output"
     files: [src/bist_core/cli/main.py, tests/]
-  - id: faz169
+  - id: faz170
     theme: backtest
     title: "walk-forward gates"
     dod: "Gates applied in walk-forward"
     files: [src/bist_core/services/backtest.py, tests/]
-  - id: faz170
+  - id: faz171
     theme: backtest
     title: "leakage guards"
     dod: "No future data in backtest"
     files: [src/bist_core/services/backtest.py, tests/]
-  - id: faz171
+  - id: faz172
     theme: backtest
     title: "scoreboard reproducibility"
     dod: "Same params produce same metrics"
     files: [src/bist_core/cli/main.py, tests/]
-  - id: faz172
+  - id: faz173
     theme: backtest
     title: "scoreboard artifact export"
     dod: "Save scoreboard JSON to file"
     files: [src/bist_core/cli/main.py, tests/]
-  - id: faz173
+  - id: faz174
     theme: backtest
     title: "backtest date validation"
     dod: "Validate date range against snapshots"
     files: [src/bist_core/services/backtest.py, tests/]
-  - id: faz174
+  - id: faz175
     theme: backtest
     title: "scoreboard empty universe"
     dod: "Handle empty symbol list"
     files: [src/bist_core/cli/main.py, tests/]
 
   # OPS / TOOLING
-  - id: faz175
+  - id: faz176
     theme: ops_tooling
     title: "version/info output"
     dod: "CLI version/info with git tag if available"
     files: [src/bist_core/cli/main.py, tests/]
-  - id: faz176
+  - id: faz177
     theme: ops_tooling
     title: "config validation"
     dod: "Validate core config on load"
     files: [src/bist_core/config.py, tests/]
-  - id: faz177
+  - id: faz178
     theme: ops_tooling
     title: "changelog discipline"
     dod: "CHANGELOG.md updated per phase"
     files: [CHANGELOG.md]
-  - id: faz178
+  - id: faz179
     theme: ops_tooling
     title: "reproducible run logging"
     dod: "Log params and version on run"
     files: [src/bist_core/cli/main.py, tests/]
-  - id: faz179
+  - id: faz180
     theme: ops_tooling
     title: "schema versioning"
     dod: "Central schema version constant"

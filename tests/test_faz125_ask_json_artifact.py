@@ -53,3 +53,7 @@ def test_faz125_ask_json_artifact(tmp_path: Path) -> None:
     assert "day" in data
     assert "decision_raw" in data
     assert "Decision" in data or "decision_raw" in data
+    assert "schema_version" in data
+    assert data["schema_version"] == 1
+    assert "generated_at" in data
+    assert "Z" in data["generated_at"] or "T" in data["generated_at"]

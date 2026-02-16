@@ -8,7 +8,7 @@ import platform
 import sys
 import time
 from dataclasses import asdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -1424,6 +1424,8 @@ def _cmd_ask(args: argparse.Namespace) -> int:
         artifact_path = artifact_dir / f"{sym}.json"
         if params_line and "params" not in payload:
             payload["params"] = {"horizon": horizon, "risk": risk, "capital": capital, "max_loss_tl": max_loss_tl}
+        payload["schema_version"] = 1
+        payload["generated_at"] = datetime.utcnow().isoformat() + "Z"
         atomic_write_json(artifact_path, payload)
 
         if "risk_sizing" in payload and not getattr(args, "json", False):
