@@ -2743,6 +2743,10 @@ def _advice_payload(
             out["reason"] = advice.reason
         if getattr(advice, "next_action", None):
             out["next_action"] = advice.next_action
+    if getattr(advice, "bars_count", None) is not None:
+        out["bars_count"] = advice.bars_count
+    if getattr(advice, "lookback_required", None) is not None:
+        out["lookback_required"] = advice.lookback_required
     risk_sizing = _compute_risk_sizing(capital, max_loss_tl, advice.plan)
     if risk_sizing is not None:
         out["risk_sizing"] = risk_sizing

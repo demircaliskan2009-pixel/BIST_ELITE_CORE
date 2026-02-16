@@ -25,6 +25,8 @@ class Advice:
     text: str
     reason: Optional[str] = None  # HOLD: explicit reason (e.g. InsufficientHistory)
     next_action: Optional[str] = None  # HOLD: explicit next action
+    bars_count: Optional[int] = None  # FAZ144: bars available for symbol
+    lookback_required: Optional[int] = None  # FAZ144: required lookback from strat_cfg
 
 
 def build_advice_for_symbol(
@@ -108,6 +110,8 @@ def build_advice_for_symbol(
             signals=signals,
             plan=plan,
             text=text,
+            bars_count=len(bars_for_symbol),
+            lookback_required=required_lookback,
         )
     except Exception as exc:
         err = exc.__class__.__name__
@@ -202,6 +206,8 @@ def _insufficient_history_advice(
         text=text,
         reason="InsufficientHistory",
         next_action="Daha fazla günlük veri ekleyin.",
+        bars_count=bars_count,
+        lookback_required=required_lookback,
     )
 
 
