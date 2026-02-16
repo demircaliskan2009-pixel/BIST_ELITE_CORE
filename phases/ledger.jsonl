@@ -9,3 +9,5 @@
 {"phase":"faz139","summary":"advice artifact schema golden HOLD proof tests","commit":"d4c493d","tests":"pytest"}
 {"phase":"faz368","refactor_proof":"golden_output","summary":"CLI surface golden proof","commit":"ac0073b","tests":"pytest"}
 {"phase":"faz135","summary":"snapshot schema version proof tests","commit":"9f5d0d7","tests":"pytest"}
+{"phase":"faz140","summary":"evidence pack structure source and hash","commit":"e2c91c9","tests":"pytest"}
+{"phase":"faz142","summary":"HOLD reason and next_action in artifact","commit":"b0b7343","tests":"test_faz142_*"}
