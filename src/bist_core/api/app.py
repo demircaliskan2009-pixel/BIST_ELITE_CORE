@@ -9,6 +9,7 @@ from typing import Any, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+API_VERSION = "1.0"
 SCAN_ARTIFACT_SCHEMA_VERSION = 1
 
 
@@ -77,6 +78,15 @@ app = FastAPI(
 def health() -> dict[str, str]:
     """FAZ193: Liveness probe."""
     return {"status": "ok"}
+
+
+@app.get("/version")
+def version() -> dict[str, str]:
+    """API version and schema. For AI/chat integration."""
+    return {
+        "api_version": API_VERSION,
+        "schema_version": str(SCAN_ARTIFACT_SCHEMA_VERSION),
+    }
 
 
 @app.post("/ask")

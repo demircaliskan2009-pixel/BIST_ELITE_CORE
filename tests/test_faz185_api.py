@@ -33,6 +33,17 @@ def test_faz193_health(client: TestClient) -> None:
     assert r.json() == {"status": "ok"}
 
 
+def test_api_version_endpoint(client: TestClient) -> None:
+    """GET /version returns api_version and schema_version (versioned interface)."""
+    r = client.get("/version")
+    assert r.status_code == 200
+    data = r.json()
+    assert "api_version" in data
+    assert "schema_version" in data
+    assert isinstance(data["api_version"], str)
+    assert isinstance(data["schema_version"], str)
+
+
 def test_faz186_ask_bist_only_rejects_invalid(client: TestClient) -> None:
     """POST /ask rejects non-BIST symbol (400) or invalid format (422)."""
     r = client.post("/ask", json={"symbol": "INVALID_SYMBOL_TOO_LONG"})
