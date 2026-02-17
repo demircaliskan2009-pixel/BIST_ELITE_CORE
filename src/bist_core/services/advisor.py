@@ -27,6 +27,28 @@ class Advice:
     next_action: Optional[str] = None  # HOLD: explicit next action
     bars_count: Optional[int] = None  # FAZ144: bars available for symbol
     lookback_required: Optional[int] = None  # FAZ144: required lookback from strat_cfg
+    gates: Optional[Dict[str, Dict[str, str]]] = None  # FAZ386: PASS/FAIL per gate with reason
+
+
+def _build_gates_from_engine_result(
+    decision_raw: str,
+    score: float,
+    engine_reason: Optional[str],
+) -> Dict[str, Dict[str, str]]:
+    """FAZ386: Build gates dict from engine result; deterministic key order."""
+    if engine_reason == "no_band":
+        return {"band": {"outcome": "FAIL", "reason": "no_band"}}
+    if engine_reason == "band_violation":
+        return {
+            "band": {"outcome": "PASS", "reason": "OK"},
+            "levels": {"outcome": "FAIL", "reason": "band_violation"},
+        }
+    score_ok = decision_raw in ("BUY", "WATCH")
+    return {
+        "band": {"outcome": "PASS", "reason": "OK"},
+        "levels": {"outcome": "PASS", "reason": "OK"},
+        "score": {"outcome": "PASS" if score_ok else "FAIL", "reason": f"score={score:.2f}"},
+    }
 
 
 def build_advice_for_symbol(
@@ -47,7 +69,7 @@ def build_advice_for_symbol(
         bars, bands, kap_events, gates_cfg, strat_cfg = _get_day_context(day_str, str(base))
 
         if not bars:
-            return _safe_advice(symbol, day, "NoBars")
+            return _safe_advice(symbol, day, "NoBars", gates={"bars_available": {"outcome": "FAIL", "reason": "NoBars"}})
 
         bars_for_symbol = [b for b in bars if b.symbol == symbol]
         mom_slow = strat_cfg.get("mom_slow", 20)
@@ -80,6 +102,9 @@ def build_advice_for_symbol(
         score = float(result.get("score", 0.0))
         signals = result.get("signals", [])
         plan = result.get("plan")
+        engine_reason = result.get("reason")
+
+        gates = _build_gates_from_engine_result(decision_raw, score, engine_reason)
 
         has_ohlcv = False
         try:
@@ -112,6 +137,7 @@ def build_advice_for_symbol(
             text=text,
             bars_count=len(bars_for_symbol),
             lookback_required=required_lookback,
+            gates=gates,
         )
     except Exception as exc:
         err = exc.__class__.__name__
@@ -196,6 +222,10 @@ def _insufficient_history_advice(
         "Daha fazla günlük veri ekleyin."
     )
     text = f"{text}\n\n{events_paragraph}"
+    gates = {
+        "bars_available": {"outcome": "PASS", "reason": "OK"},
+        "lookback": {"outcome": "FAIL", "reason": f"InsufficientHistory: {bars_count} < {required_lookback}"},
+    }
     return Advice(
         symbol=symbol,
         date=day_value,
@@ -208,10 +238,16 @@ def _insufficient_history_advice(
         next_action="Daha fazla günlük veri ekleyin.",
         bars_count=bars_count,
         lookback_required=required_lookback,
+        gates=gates,
     )
 
 
-def _safe_advice(symbol: str, day: Date | str, err: str) -> Advice:
+def _safe_advice(
+    symbol: str,
+    day: Date | str,
+    err: str,
+    gates: Optional[Dict[str, Dict[str, str]]] = None,
+) -> Advice:
     day_value = _safe_date(day)
     day_str = day_value.isoformat()
     try:
@@ -232,6 +268,7 @@ def _safe_advice(symbol: str, day: Date | str, err: str) -> Advice:
         signals=[],
         plan=None,
         text=text,
+        gates=gates,
     )
 
 

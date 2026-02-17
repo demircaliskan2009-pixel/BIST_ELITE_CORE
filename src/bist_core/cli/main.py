@@ -2816,6 +2816,8 @@ def _advice_payload(
         "plan": advice.plan,
         "text": advice.text,
     }
+    if getattr(advice, "gates", None) is not None:
+        out["gates"] = {k: dict(sorted(v.items())) for k, v in sorted(advice.gates.items())}
     if advice.decision_raw == "HOLD":
         if getattr(advice, "reason", None):
             out["reason"] = advice.reason
