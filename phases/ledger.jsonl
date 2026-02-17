@@ -40,3 +40,4 @@
 {"phase":"faz149","summary":"scan stable ordering deterministic tie-break for equal scores","commit":"10e1aa0","tests":"pytest"}
 {"phase":"faz150","summary":"scan drill-down determinism same params produce same ask command","commit":"3022d7d","tests":"pytest"}
 {"phase":"faz151","summary":"scan top_n validation within bounds reject zero","commit":"0bdae93","tests":"pytest"}
+{"phase":"faz152","summary":"scan artifact schema stable JSON","commit":"4383755","tests":"pytest"}
