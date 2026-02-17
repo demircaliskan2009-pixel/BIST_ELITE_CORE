@@ -13,6 +13,8 @@ on:
       - 'requirements-dev.txt'
       - 'pyproject.toml'
       - 'poetry.lock'
+      - 'tools/proof_pack.ps1'
+      - 'proof_pack.ps1'
   pull_request:
     branches: [ "main" ]
     paths:
@@ -25,6 +27,8 @@ on:
       - 'requirements-dev.txt'
       - 'pyproject.toml'
       - 'poetry.lock'
+      - 'tools/proof_pack.ps1'
+      - 'proof_pack.ps1'
 
 concurrency:
   group: ci-${{ github.ref }}

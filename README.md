@@ -1,9 +1,34 @@
-![CI](https://github.com/<user>/<repo>/actions/workflows/ci.yml/badge.svg)
-**Faz-3 / Adım-1: TAMAMLANDI** — local CSV ingest + dataset registry + smoke tests
 # BIST_ELITE_CORE — Minimal Working Core
-Runs offline on CSVs; plug-in ready for vendors and brokers.
+
+Runs offline on CSVs; plug-in ready for vendors and brokers. BIST-only advisory, equal-weight plan/orders, EOD pipeline.
+
+**Before merge:** Run `.\proof_pack.ps1` — must pass (alignment, hygiene, full pytest).
+
+---
+
+## Quick Start
+
+```powershell
+# 1. Clone and install
+git clone <repo>
+cd BIST_ELITE_CORE
+.\install.ps1
+
+# 2. Validate environment
+.\run.ps1 doctor
+
+# 3. Run proof pack (alignment + hygiene + all tests)
+.\proof_pack.ps1
+```
 
 **Windows / Git:** Use `git config core.autocrlf false` so line endings stay LF (see [docs/DEV_SETUP_WINDOWS.md](docs/DEV_SETUP_WINDOWS.md)).
+
+### Scripts
+| Script | Purpose |
+|--------|---------|
+| `.\install.ps1` | Editable install; `-Dev` for dev deps |
+| `.\run.ps1 <cmd>` | Run CLI (e.g. `.\run.ps1 ask ASELS --day 2025-01-15 --json`) |
+| `.\proof_pack.ps1` | Alignment gate + hygiene + full pytest |
 
 ### Faz-2: CLI akışı (eod → plan → orders)
 
@@ -103,3 +128,14 @@ Minimal akış: snapshot → advice → ask → top N.
        └── YYYY-MM-DD/
            └── orders_intent.json  (--emit-orders ile)
    ```
+
+---
+
+## Docs
+
+| Doc | Purpose |
+|-----|---------|
+| [docs/AI_SDK.md](docs/AI_SDK.md) | SDK for ChatGPT/AI integration (ask, scan, version) |
+| [docs/CHAT_AGENT_FLOW.md](docs/CHAT_AGENT_FLOW.md) | Chat agent pseudo-code and tool definitions |
+| [docs/DEV_SETUP_WINDOWS.md](docs/DEV_SETUP_WINDOWS.md) | Line endings, Git config |
+| [docs/WINDOWS_PROD_RUNBOOK.md](docs/WINDOWS_PROD_RUNBOOK.md) | Production runbook |
