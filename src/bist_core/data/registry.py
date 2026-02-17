@@ -344,21 +344,27 @@ def load_registered_dataset(dataset_id: str) -> "pd.DataFrame":
     
     Loads a registered dataset as a pandas DataFrame.
     For local_csv kind, expects the path to be a directory containing CSV files.
+    FAZ546: Symbol column (if present) is normalized via normalize_symbol (uppercase, trim).
     """
     import pandas as pd
-    
+
+    from bist_core.symbol import normalize_symbol
+
     registry = get_default_registry()
     meta = registry.get(dataset_id)
-    
+
     if meta.kind != "local_csv":
         raise ValueError(f"Unsupported dataset kind: {meta.kind!r}")
-    
+
     root = Path(meta.path)
     csv_files = sorted(root.glob("*.csv"))
     if not csv_files:
         raise FileNotFoundError(f"No CSV files found under {root}")
     frames = [pd.read_csv(p) for p in csv_files]
-    return pd.concat(frames, ignore_index=True)
+    df = pd.concat(frames, ignore_index=True)
+    if meta.symbol_col and meta.symbol_col in df.columns:
+        df[meta.symbol_col] = df[meta.symbol_col].astype(str).apply(normalize_symbol)
+    return df
 
 
 def _format_from_kind(kind: str) -> str:
