@@ -37,3 +37,4 @@
 {"phase":"faz146","summary":"scan exclusions support exclude symbols via exclusions","commit":"86c5fd0","tests":"pytest"}
 {"phase":"faz147","summary":"scan scoring rationale 1-line per ranked symbol from deterministic signals","commit":"ff46cf3","tests":"pytest"}
 {"phase":"faz148","summary":"scan --out artifact save ranked list JSON to file","commit":"e1efaf8","tests":"pytest"}
+{"phase":"faz149","summary":"scan stable ordering deterministic tie-break for equal scores","commit":"10e1aa0","tests":"pytest"}
