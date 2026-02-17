@@ -33,3 +33,4 @@
 {"phase":"faz137","summary":"gates outcomes section PASS FAIL per gate with reasons in JSON","commit":"eeeb23d","tests":"pytest"}
 {"phase":"faz137","summary":"gates outcomes section PASS FAIL per gate with reasons in JSON","commit":"64e87ac","tests":"pytest"}
 {"phase":"faz138","summary":"cause-effect fields why invalidates watch_next from deterministic evidence","commit":"6d29bb5","tests":"pytest"}
+{"phase":"faz145","summary":"scan liquidity filter min volume turnover","commit":"9a2d619","tests":"pytest"}
