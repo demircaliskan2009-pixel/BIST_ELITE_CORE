@@ -26,3 +26,4 @@ All notable changes are tracked by phase. Format: `[fazNNN] YYYY-MM-DD — summa
 - [faz395] — config validation on load (strict schema)
 - [faz397] — changelog discipline (CHANGELOG.md, append script)
 - [faz551] — packaging smoke test (python -m build sdist + wheel)
+- [faz552] — API deterministic CLI parity (schema_version, generated_at, ask/scan match CLI --json)
