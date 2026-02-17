@@ -2,12 +2,15 @@
 FAZ58: Local EOD market data provider — reads snapshots from snapshot_root.
 Paths: snapshot_root/<day>/snapshot.csv or snapshot_root/<day>.csv.
 Deterministic: symbols and close_map keys sorted by symbol.
+FAZ547: Snapshots use normalize_symbol on read.
 """
 from __future__ import annotations
 
 import csv
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from bist_core.symbol import normalize_symbol
 
 
 def _snapshot_path(base: Path, day: str) -> Optional[Path]:
@@ -42,8 +45,8 @@ class LocalEODProvider:
         self._set_raw_path(path)
         with path.open(newline="", encoding="utf-8") as f:
             rdr = csv.DictReader(f)
-            syms = [row.get("symbol", "").strip() for row in rdr if row.get("symbol")]
-        return sorted(set(syms))
+            syms = [normalize_symbol(row.get("symbol", "")) for row in rdr if row.get("symbol")]
+        return sorted(set(s for s in syms if s))
 
     def close_map(self, day: str) -> Dict[str, float]:
         path = self._path(day)
@@ -52,7 +55,7 @@ class LocalEODProvider:
         with path.open(newline="", encoding="utf-8") as f:
             rdr = csv.DictReader(f)
             for row in rdr:
-                sym = (row.get("symbol") or "").strip()
+                sym = normalize_symbol(row.get("symbol") or "")
                 if not sym:
                     continue
                 c = row.get("close")
