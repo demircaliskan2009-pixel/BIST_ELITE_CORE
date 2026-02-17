@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+
+SCAN_ARTIFACT_SCHEMA_VERSION = 1
 
 
 def _snapshot_root() -> Path:
@@ -103,7 +105,7 @@ def ask(req: AskRequest) -> dict[str, Any]:
         "symbol": advice.symbol,
         "day": day_str,
         "decision_raw": advice.decision_raw,
-        "score": advice.score,
+        "score": round(advice.score, 2),
         "text": (advice.text or "")[:200],
     }
 
@@ -129,18 +131,24 @@ def scan(req: ScanRequest) -> dict[str, Any]:
     symbols = [s for s in symbols if _is_bist_symbol(s) and s not in exclusions]
     symbols = sorted(symbols)
 
-    results: list[dict[str, Any]] = []
+    results: list[tuple[str, float, str]] = []
     for sym in symbols:
         try:
             advice = build_advice_for_symbol(sym, day_str, root=base)
-            results.append({
-                "symbol": advice.symbol,
-                "score": advice.score,
-                "rationale": (advice.text or "").split("\n")[0][:80],
-            })
+            rationale = (advice.text or "").split("\n")[0][:80]
+            results.append((advice.symbol, advice.score, rationale))
         except Exception:
-            results.append({"symbol": sym, "score": 0.0, "rationale": "error"})
-    results.sort(key=lambda x: (-x["score"], x["symbol"]))
+            results.append((sym, 0.0, "error"))
+    results.sort(key=lambda x: (-x[1], x[0]))
     ranked = results[: req.top_n]
 
-    return {"day": day_str, "ranked": ranked}
+    lines = [
+        {"symbol": sym, "score": round(score, 2), "rationale": rationale}
+        for sym, score, rationale in ranked
+    ]
+    return {
+        "schema_version": SCAN_ARTIFACT_SCHEMA_VERSION,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "day": day_str,
+        "ranked": lines,
+    }

@@ -1470,6 +1470,15 @@ phases:
     fail_closed: "Build fail -> test fail"
     rollback_plan: "Remove packaging test"
     files: [tools/pack.ps1, pyproject.toml, tests/]
+  - id: faz552
+    theme: local_ui
+    title: "API deterministic CLI parity"
+    dod: "1. API ask/scan output matches CLI --json; 2. schema_version, generated_at in scan; 3. score rounded; 4. Integration tests CLI vs API"
+    tests_hint: "test_api_ask_matches_cli_json, test_api_scan_matches_cli_json"
+    determinism: "Same inputs -> same output as CLI"
+    fail_closed: "API must not diverge from CLI"
+    rollback_plan: "Remove parity tests"
+    files: [src/bist_core/api/app.py, tests/]
 
   # EXPANSION BATCH 2: data integrity, doctor, advisory, scan, offline, ops (faz398-faz450)
 
