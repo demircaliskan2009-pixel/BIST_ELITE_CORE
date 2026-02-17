@@ -45,3 +45,5 @@
 {"phase":"faz230","summary":"KAP malformed handling skip gracefully no crash","commit":"a18eaa9","tests":"pytest"}
 {"phase":"faz554","summary":"ask interactive chat prompt symbol day params scripted dialogue tests","commit":"052b61d","tests":"pytest"}
 {"phase":"faz555","summary":"risk sizing edge cases zero capital extreme max_loss fail-closed","commit":"f81bc81","tests":"pytest"}
+{"phase":"faz556","summary":"orders export CSV JSON schema --out orders_meta format","commit":"56d2db9","tests":"pytest"}
+{"phase":"faz557","summary":"plan/orders corner cases empty symbols empty plan FAIL invalid date","commit":"8a891c5","tests":"pytest"}

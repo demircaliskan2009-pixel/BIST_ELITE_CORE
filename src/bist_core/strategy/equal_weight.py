@@ -31,15 +31,14 @@ def build_equal_weight_plan(day: str, base: Path = Path("data/eod/snapshots")) -
     """
     Eşit ağırlık planı oluşturur. engine.decide kullanarak PASS olmayan sembolleri filtreler.
     """
-    md = MarketData(base)
-    syms = md.symbols(day)
-    close_map = md.close_map(day)
-    
-    # Snapshot tarihini parse et
     try:
         day_date = date.fromisoformat(day)
     except ValueError:
         raise ValueError(f"Invalid date format: {day}. Use YYYY-MM-DD")
+
+    md = MarketData(base)
+    syms = md.symbols(day)
+    close_map = md.close_map(day)
     
     # Snapshot'tan EODBar listesi oluştur (sadece son gün, momentum için yeterli olmayacak ama çalışır)
     bars: List[EODBar] = []
@@ -143,7 +142,10 @@ def generate_equal_weight_orders(
 
     rows = list(csv.DictReader(plan_path.open(encoding="utf-8")))
     if not rows:
-        raise FileNotFoundError(f"Plan file is empty: {plan_path}")
+        orders_dir = (out_dir if out_dir is not None else base) / day
+        orders_dir.mkdir(parents=True, exist_ok=True)
+        (orders_dir / "orders_meta.txt").write_text("FAIL", encoding="utf-8")
+        return None
 
     risk_flag = False
     for row in rows:
