@@ -3,32 +3,13 @@ name: ci
 on:
   push:
     branches: [ "main" ]
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'docs/**'
-      - 'scripts/verify_alignment.py'
-      - '.github/workflows/ci.yml'
-      - 'requirements.txt'
-      - 'requirements-dev.txt'
-      - 'pyproject.toml'
-      - 'poetry.lock'
-      - 'tools/proof_pack.ps1'
-      - 'proof_pack.ps1'
   pull_request:
     branches: [ "main" ]
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'docs/**'
-      - 'scripts/verify_alignment.py'
-      - '.github/workflows/ci.yml'
-      - 'requirements.txt'
-      - 'requirements-dev.txt'
-      - 'pyproject.toml'
-      - 'poetry.lock'
-      - 'tools/proof_pack.ps1'
-      - 'proof_pack.ps1'
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
 
 concurrency:
   group: ci-${{ github.ref }}
