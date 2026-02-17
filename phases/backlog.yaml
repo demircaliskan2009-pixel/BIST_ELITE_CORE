@@ -1461,6 +1461,15 @@ phases:
     fail_closed: "N/A"
     rollback_plan: "Remove changelog check"
     files: [CHANGELOG.md, tools/, tests/]
+  - id: faz551
+    theme: ops_tooling
+    title: "packaging smoke test"
+    dod: "1. pack.ps1 / python -m build produces sdist + wheel; 2. No network required; 3. dist/ artifacts; 4. Test build succeeds"
+    tests_hint: "test_faz551_pack_builds_artifacts, test_faz551_dist_has_wheel_and_sdist"
+    determinism: "Same source -> same artifact names"
+    fail_closed: "Build fail -> test fail"
+    rollback_plan: "Remove packaging test"
+    files: [tools/pack.ps1, pyproject.toml, tests/]
 
   # EXPANSION BATCH 2: data integrity, doctor, advisory, scan, offline, ops (faz398-faz450)
 

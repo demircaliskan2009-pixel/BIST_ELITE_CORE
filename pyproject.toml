@@ -17,6 +17,7 @@ dev = [
     "pytest",
     "pytest-cov",
     "fastapi>=0.100.0",
+    "build",
 ]
 openai = [
     "openai>=1.0.0",

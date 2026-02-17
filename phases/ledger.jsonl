@@ -26,3 +26,4 @@
 {"phase":"faz548","summary":"symbol normalization shared helper uppercase trim deterministic","commit":"6946320","tests":"pytest"}
 {"phase":"faz546","summary":"registry uses normalize_symbol uppercase trim on load","commit":"7c8d713","tests":"pytest"}
 {"phase":"faz546","summary":"registry uses normalize_symbol uppercase trim on load","commit":"3e80526","tests":"pytest"}
+{"phase":"faz386","summary":"gates outcomes PASS FAIL JSON schema deterministic key order","commit":"730d0c0","tests":"pytest"}
