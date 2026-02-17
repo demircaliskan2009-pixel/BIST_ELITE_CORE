@@ -53,3 +53,4 @@ All notable changes are tracked by phase. Format: `[fazNNN] — summary`.
 - [faz558] — E2E multi-day scenario eod run plan orders golden regression tests
 - [faz559] — security sanity guards no os.system whitelisted imports ruff config
 - [faz560] — AI interface SDK docs version endpoint chat agent flow
+- [faz561] — strategy registry (logger) ask/scan append to strategies.jsonl

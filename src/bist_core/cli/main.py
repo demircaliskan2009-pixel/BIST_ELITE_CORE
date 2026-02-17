@@ -26,6 +26,7 @@ from bist_core.strategy.equal_weight import (
 )
 from bist_core import config
 from bist_core.services import eventstore
+from bist_core.services.strategy_logger import log_strategy
 from bist_core.services.marketdata import MarketData
 from bist_core.services.advisor import build_advice_for_symbol
 from bist_core.execution.result_writer import write_execution_result
@@ -1470,6 +1471,18 @@ def _cmd_ask(args: argparse.Namespace) -> int:
         payload["content_sha256"] = _content_sha256(payload)
         _atomic_write_json_deterministic(artifact_path, payload)
 
+        log_strategy(
+            symbol=sym,
+            day=day_str,
+            source="ask",
+            horizon=horizon,
+            risk=risk,
+            capital=capital,
+            max_loss_tl=max_loss_tl,
+            score=payload.get("score"),
+            decision_raw=payload.get("decision_raw"),
+        )
+
         if "risk_sizing" in payload and not getattr(args, "json", False):
             rs = payload["risk_sizing"]
             text_out = text_out + "\n\nRisk sizing: " + (
@@ -1609,6 +1622,19 @@ def _cmd_scan(args: argparse.Namespace) -> int:
             results.append((sym, 0.0, "error"))
     results.sort(key=lambda x: (-x[1], x[0]))
     ranked = results[:top_n]
+
+    for rank_idx, (sym, score, _) in enumerate(ranked, 1):
+        log_strategy(
+            symbol=sym,
+            day=day_str,
+            source="scan",
+            horizon=horizon,
+            risk=risk,
+            capital=capital,
+            max_loss_tl=max_loss_tl,
+            score=score,
+            rank=rank_idx,
+        )
 
     artifact = _build_scan_artifact(day_str, ranked)
     out_arg = getattr(args, "out", None)
