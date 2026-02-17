@@ -29,3 +29,4 @@
 {"phase":"faz386","summary":"gates outcomes PASS FAIL JSON schema deterministic key order","commit":"730d0c0","tests":"pytest"}
 {"phase":"faz551","summary":"packaging smoke test python -m build sdist wheel","commit":"280b5b1","tests":"pytest"}
 {"phase":"faz552","summary":"API deterministic CLI parity schema_version generated_at ask scan","commit":"c7921ed","tests":"pytest"}
+{"phase":"faz547","summary":"snapshots use normalize_symbol on read uppercase trim deterministic","commit":"a05d3bc","tests":"pytest"}
