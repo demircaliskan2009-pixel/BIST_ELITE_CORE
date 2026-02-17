@@ -19,7 +19,7 @@ def test_faz136_compute_risk_sizing_unit() -> None:
     from bist_core.cli.main import _compute_risk_sizing
 
     plan = {"entry": 100.0, "stop": 98.0}
-    out = _compute_risk_sizing(capital=10000.0, max_loss_tl=500.0, plan=plan)
+    out = _compute_risk_sizing(capital=30000.0, max_loss_tl=500.0, plan=plan)
     assert out is not None
     assert out["stop_distance_tl"] == 2.0
     assert out["position_size_shares"] == 250
@@ -48,6 +48,53 @@ def test_faz136_compute_risk_sizing_missing_inputs() -> None:
     assert _compute_risk_sizing(10000.0, None, {"entry": 100, "stop": 98}) is None
     assert _compute_risk_sizing(10000.0, 500.0, None) is None
     assert _compute_risk_sizing(10000.0, 500.0, {"entry": 100}) is None
+
+
+def test_faz136_zero_capital_returns_none() -> None:
+    """Zero capital -> None (fail-closed)."""
+    sys.path.insert(0, str(_project_root() / "src"))
+    from bist_core.cli.main import _compute_risk_sizing
+
+    plan = {"entry": 100.0, "stop": 98.0}
+    assert _compute_risk_sizing(capital=0.0, max_loss_tl=500.0, plan=plan) is None
+    assert _compute_risk_sizing(capital=-1.0, max_loss_tl=500.0, plan=plan) is None
+
+
+def test_faz136_extreme_max_loss_returns_none() -> None:
+    """max_loss <= 0 -> None (fail-closed)."""
+    sys.path.insert(0, str(_project_root() / "src"))
+    from bist_core.cli.main import _compute_risk_sizing
+
+    plan = {"entry": 100.0, "stop": 98.0}
+    assert _compute_risk_sizing(capital=10000.0, max_loss_tl=0.0, plan=plan) is None
+    assert _compute_risk_sizing(capital=10000.0, max_loss_tl=-100.0, plan=plan) is None
+
+
+def test_faz136_position_exceeds_capital_returns_none() -> None:
+    """When position_size_tl > capital -> None (fail-closed, no overallocation)."""
+    sys.path.insert(0, str(_project_root() / "src"))
+    from bist_core.cli.main import _compute_risk_sizing
+
+    plan = {"entry": 100.0, "stop": 98.0}
+    out = _compute_risk_sizing(capital=10000.0, max_loss_tl=500.0, plan=plan)
+    assert out is None
+    out_ok = _compute_risk_sizing(capital=30000.0, max_loss_tl=500.0, plan=plan)
+    assert out_ok is not None
+    assert out_ok["position_size_tl"] == 25000.0
+
+
+def test_faz136_typical_risk_scenario() -> None:
+    """Typical: capital 100k, max_loss 2%, entry 50, stop 48 -> valid sizing."""
+    sys.path.insert(0, str(_project_root() / "src"))
+    from bist_core.cli.main import _compute_risk_sizing
+
+    plan = {"entry": 50.0, "stop": 48.0}
+    out = _compute_risk_sizing(capital=100000.0, max_loss_tl=2000.0, plan=plan)
+    assert out is not None
+    assert out["stop_distance_tl"] == 2.0
+    assert out["position_size_shares"] == 1000
+    assert out["position_size_tl"] == 50000.0
+    assert out["position_size_tl"] <= 100000.0
 
 
 def test_faz136_risk_sizing_in_artifact(tmp_path: Path) -> None:

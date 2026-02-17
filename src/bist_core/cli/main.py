@@ -2743,8 +2743,11 @@ def _compute_risk_sizing(
     max_loss_tl: float | None,
     plan: dict | None,
 ) -> dict | None:
-    """Compute position size and stop distance guidance. Deterministic, floor rounding."""
+    """Compute position size and stop distance guidance. Deterministic, floor rounding.
+    Fail-closed: zero capital, extreme max_loss, or position > capital -> None."""
     if max_loss_tl is None or max_loss_tl <= 0:
+        return None
+    if capital is not None and capital <= 0:
         return None
     if not isinstance(plan, dict):
         return None
@@ -2764,6 +2767,8 @@ def _compute_risk_sizing(
     if position_size_shares <= 0:
         return None
     position_size_tl = round(position_size_shares * entry_f, 2)
+    if capital is not None and position_size_tl > capital:
+        return None
     return {
         "position_size_shares": int(position_size_shares),
         "stop_distance_tl": round(stop_distance_tl, 2),
