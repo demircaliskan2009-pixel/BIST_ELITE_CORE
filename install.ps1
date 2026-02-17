@@ -15,9 +15,9 @@ if (-not (Test-Path (Join-Path $root "pyproject.toml"))) {
 Push-Location $root
 try {
     Write-Host "Installing bist-elite-core..." -ForegroundColor Cyan
-    $extras = if ($Dev) { "[dev]" } else { "" }
-    $mode = if ($Editable) { "-e" } else { "" }
-    python -m pip install $mode . $extras
+    $spec = if ($Dev) { ".[dev]" } else { "." }
+    $installArgs = if ($Editable) { @("-e", $spec) } else { @($spec) }
+    python -m pip install @installArgs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Write-Host "Done. Run: .\run.ps1 doctor" -ForegroundColor Green
 } finally {
