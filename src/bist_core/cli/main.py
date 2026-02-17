@@ -981,15 +981,18 @@ def _cmd_plan(args: argparse.Namespace) -> int:
 
 
 def _cmd_orders(args: argparse.Namespace) -> int:
-    # Sadece equal_weight stratejisini destekliyoruz
     strategy = getattr(args, "strategy", None) or "equal_weight"
     if strategy != "equal_weight":
         raise SystemExit(f"Unsupported strategy: {strategy!r}")
 
     root = _snapshot_root()
+    out_dir = None
+    if getattr(args, "out", None):
+        out_dir = Path(args.out)
+        out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        orders_path = generate_equal_weight_orders(args.date, base=root)
+        orders_path = generate_equal_weight_orders(args.date, base=root, out_dir=out_dir)
     except FileNotFoundError as e:
         raise SystemExit(
             f"Bu tarih için plan bulunamadı: {args.date}. Lütfen önce 'plan' komutunu çalıştırın."
@@ -3072,6 +3075,7 @@ Tek sembol danışma (interaktif parametrelerle):
 
     p_orders = sub.add_parser("orders")
     p_orders.add_argument("--date", required=True)
+    p_orders.add_argument("--out", default=None, help="Output directory (default: snapshot root)")
     p_orders.add_argument("--strategy", default="equal_weight")
     p_orders.set_defaults(func=_cmd_orders)
 
