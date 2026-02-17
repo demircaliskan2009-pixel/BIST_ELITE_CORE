@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Tuple
 BIST_ALLOWED_ENV_KEYS = frozenset([
     "BIST_API_KEY",  # if ever used for logging redaction only
     "BIST_BROKER_CONFIG",
+    "BIST_CORE_ALLOW_NETWORK",
     "BIST_CORE_CONFIG",
     "BIST_CORE_EVENTS_DIR",
     "BIST_CORE_HOME",
