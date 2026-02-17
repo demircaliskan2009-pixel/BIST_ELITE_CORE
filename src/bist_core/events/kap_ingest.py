@@ -115,8 +115,16 @@ def ingest_kap_html(
     html_hash = hashlib.sha256(html_bytes).hexdigest()
     html_str = html_bytes.decode("utf-8", errors="replace")
 
-    parser = _KapTableParser()
-    rows = parser.parse(html_str)
+    try:
+        parser = _KapTableParser()
+        rows = parser.parse(html_str)
+    except Exception:
+        return {
+            "schema_version": EVENTS_JSON_SCHEMA_VERSION,
+            "hash": html_hash,
+            "source": source_str,
+            "events": [],
+        }
 
     events: List[Dict[str, Any]] = []
     seen_ids: set[str] = set()

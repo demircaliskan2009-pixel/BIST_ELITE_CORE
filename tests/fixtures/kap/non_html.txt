@@ -1,0 +1,4 @@
+This is plain text, not HTML.
+No table structure.
+Symbol,Date,Kind,Title
+ASELS,2099-01-01,KAP,Test

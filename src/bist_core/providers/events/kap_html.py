@@ -110,7 +110,10 @@ class KapHtmlEventsProvider(EventsProvider):
                 else:
                     return [{"error_marker": f"ProviderError:{exc.__class__.__name__}"}]
 
-        rows = _KapTableParser().parse(html)
+        try:
+            rows = _KapTableParser().parse(html)
+        except Exception as exc:
+            return [{"error_marker": f"ParseError:HTMLParse:{exc.__class__.__name__}"}]
         if not rows:
             return [{"error_marker": "ParseError:NoRows"}]
 
