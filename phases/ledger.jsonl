@@ -30,3 +30,4 @@
 {"phase":"faz551","summary":"packaging smoke test python -m build sdist wheel","commit":"280b5b1","tests":"pytest"}
 {"phase":"faz552","summary":"API deterministic CLI parity schema_version generated_at ask scan","commit":"c7921ed","tests":"pytest"}
 {"phase":"faz547","summary":"snapshots use normalize_symbol on read uppercase trim deterministic","commit":"a05d3bc","tests":"pytest"}
+{"phase":"faz137","summary":"gates outcomes section PASS FAIL per gate with reasons in JSON","commit":"eeeb23d","tests":"pytest"}
