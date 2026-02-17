@@ -1,11 +1,43 @@
 from __future__ import annotations
 
+import csv
 import shutil
 from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
+
+
+def detect_malformed_snapshot_rows(path: Path) -> List[Dict[str, object]]:
+    """
+    FAZ549: Detect malformed rows in snapshot.csv. Returns list of invalid rows with line_no, reason.
+    Deterministic: same file -> same result. Fail-closed: malformed -> skip row, continue.
+    """
+    invalid: List[Dict[str, object]] = []
+    if not path.is_file():
+        return invalid
+    try:
+        with path.open(newline="", encoding="utf-8", errors="replace") as f:
+            reader = csv.DictReader(f)
+            for i, row in enumerate(reader, start=2):
+                sym = (row.get("symbol") or "").strip()
+                if not sym:
+                    invalid.append({"line_no": i, "reason": "missing_symbol", "row": dict(row)})
+                    continue
+                c = row.get("close")
+                if c is None or (isinstance(c, str) and c.strip() == ""):
+                    invalid.append({"line_no": i, "reason": "missing_close", "row": dict(row)})
+                    continue
+                try:
+                    val = float(c)
+                    if not (val > 0 and val < 1e12):
+                        invalid.append({"line_no": i, "reason": "invalid_close_range", "row": dict(row)})
+                except (TypeError, ValueError):
+                    invalid.append({"line_no": i, "reason": "invalid_close_numeric", "row": dict(row)})
+    except (OSError, csv.Error):
+        invalid.append({"line_no": 0, "reason": "read_error", "row": {}})
+    return invalid
 
 
 def compute_sha256(path: Path) -> str:

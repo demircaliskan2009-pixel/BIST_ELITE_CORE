@@ -52,16 +52,26 @@ phases:
     fail_closed: "Invalid -> skip or reject"
     rollback_plan: "Raw symbols"
     files: [src/bist_core/market_data/local_eod.py, tests/]
-  - id: faz132
+  # faz132 SPLIT into faz549-550 (snapshot corruption detection)
+  - id: faz549
     theme: data_layer
-    title: "snapshot corruption detection"
-    dod: "Detect malformed snapshot.csv; report invalid rows"
+    title: "snapshot malformed row detection"
+    dod: "1. Detect malformed rows in snapshot.csv; 2. Invalid numeric, missing symbol; 3. Deterministic; 4. Test malformed detected"
+    tests_hint: "test_snapshot_malformed_detected, test_snapshot_valid_rows_pass"
+    determinism: "Same file -> same detection result"
+    fail_closed: "Malformed -> skip row, continue"
+    rollback_plan: "Accept all rows"
     files: [src/bist_core/services/snapshot_integrity.py, tests/]
-  - id: faz133
+  - id: faz550
     theme: data_layer
-    title: "calendar correctness"
-    dod: "BIST trading calendar; exclude holidays in date ranges"
-    files: [src/bist_core/, tests/]
+    title: "snapshot invalid rows report"
+    dod: "1. Report invalid rows (line numbers, reason); 2. JSON/text output; 3. Non-zero exit when invalid; 4. Test report format"
+    tests_hint: "test_snapshot_invalid_report_format, test_snapshot_invalid_exit_code"
+    determinism: "Same invalid file -> same report"
+    fail_closed: "Invalid rows -> report and exit non-zero"
+    rollback_plan: "Silent skip"
+    files: [src/bist_core/services/snapshot_integrity.py, tests/]
+  # faz133 superseded by faz384+faz385 (calendar load + exclude holidays)
   - id: faz134
     theme: data_layer
     title: "import encoding fallback"
