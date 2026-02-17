@@ -1330,10 +1330,17 @@ def _is_bist_symbol(symbol: str) -> bool:
 
 def _cmd_ask(args: argparse.Namespace) -> int:
     symbol_raw = getattr(args, "symbol_opt", None) or getattr(args, "symbol", None)
+    interactive = getattr(args, "interactive", False)
+    if not symbol_raw and interactive:
+        try:
+            s = input("Symbol (e.g. ASELS): ").strip().upper()
+            symbol_raw = s if s else None
+        except (EOFError, KeyboardInterrupt):
+            pass
     if not symbol_raw:
         print("Sembol gerekli: ask SYMBOL veya ask --symbol SYMBOL", file=sys.stderr)
         return 2
-    symbol = str(symbol_raw).strip()
+    symbol = str(symbol_raw).strip().upper()
     if not _is_bist_symbol(symbol):
         print("BIST kapsamı dışı.", file=sys.stderr)
         return 2
@@ -1343,7 +1350,30 @@ def _cmd_ask(args: argparse.Namespace) -> int:
     capital = getattr(args, "capital", None)
     max_loss_tl = getattr(args, "max_loss_tl", None)
 
-    if getattr(args, "interactive", False):
+    base = _snapshot_root()
+    day_value = getattr(args, "day", None)
+    if day_value is None:
+        day_value = _latest_snapshot_day(base)
+    if day_value is None and interactive:
+        try:
+            d = input("Day (YYYY-MM-DD): ").strip()
+            if d:
+                try:
+                    day_value = date.fromisoformat(d)
+                except ValueError:
+                    print("Geçersiz tarih; bugün kullanılıyor.", file=sys.stderr)
+                    day_value = date.today()
+            if day_value is None:
+                day_value = date.today()
+        except (EOFError, KeyboardInterrupt):
+            day_value = date.today()
+    if day_value is None:
+        print("Uyarı: Snapshot bulunamadı; bugünün tarihine düşülüyor.")
+        day_value = date.today()
+
+    day_str = day_value if isinstance(day_value, str) else day_value.isoformat()
+
+    if interactive:
         if horizon is None:
             try:
                 h = input("Horizon (short/mid/long): ").strip().lower()
@@ -1368,17 +1398,6 @@ def _cmd_ask(args: argparse.Namespace) -> int:
                 max_loss_tl = _parse_tr_number(m)
             except (EOFError, KeyboardInterrupt):
                 max_loss_tl = None
-
-    base = _snapshot_root()
-    if getattr(args, "day", None):
-        day_value = args.day
-    else:
-        day_value = _latest_snapshot_day(base)
-        if day_value is None:
-            print("Uyarı: Snapshot bulunamadı; bugünün tarihine düşülüyor.")
-            day_value = date.today()
-
-    day_str = day_value if isinstance(day_value, str) else day_value.isoformat()
 
     symbols = [symbol]
     if getattr(args, "all", False):
@@ -3167,7 +3186,7 @@ Tek sembol danışma (interaktif parametrelerle):
     p_ask.add_argument("--day", default=None)
     p_ask.add_argument("--json", action="store_true")
     p_ask.add_argument("--all", action="store_true")
-    p_ask.add_argument("--interactive", action="store_true", help="Prompt for missing horizon, risk, capital, max_loss_tl")
+    p_ask.add_argument("--interactive", action="store_true", help="Prompt for missing symbol, day, horizon, risk, capital, max_loss_tl")
     p_ask.add_argument("--horizon", choices=["short", "mid", "long"], default=None)
     p_ask.add_argument("--risk", choices=["low", "med", "high"], default=None)
     p_ask.add_argument("--capital", type=float, default=None)
