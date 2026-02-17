@@ -21,3 +21,4 @@
 {"phase":"faz388","summary":"scan artifact schema_version generated_at required keys empty scan valid","commit":"bc75eb1","tests":"pytest"}
 {"phase":"faz389","summary":"scan stable ordering tie break by symbol ascending deterministic","commit":"1c2f2fc","tests":"pytest"}
 {"phase":"faz392","summary":"scoreboard schema_version day params metrics keys empty run","commit":"9540b7f","tests":"pytest"}
+{"phase":"faz549","summary":"snapshot malformed row detection missing symbol invalid close deterministic","commit":"ef09014","tests":"pytest"}

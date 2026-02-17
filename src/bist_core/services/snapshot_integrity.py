@@ -40,6 +40,27 @@ def detect_malformed_snapshot_rows(path: Path) -> List[Dict[str, object]]:
     return invalid
 
 
+def build_invalid_rows_report(invalid: List[Dict[str, object]]) -> Dict[str, object]:
+    """
+    FAZ550: Build report from invalid rows. Deterministic: same invalid list -> same report.
+    """
+    return {
+        "schema_version": 1,
+        "invalid_count": len(invalid),
+        "invalid_rows": invalid,
+    }
+
+
+def validate_snapshot(path: Path) -> tuple[int, Dict[str, object]]:
+    """
+    FAZ550: Validate snapshot; return (exit_code, report). Exit 0 when valid, 1 when invalid.
+    """
+    invalid = detect_malformed_snapshot_rows(path)
+    report = build_invalid_rows_report(invalid)
+    exit_code = 1 if invalid else 0
+    return exit_code, report
+
+
 def compute_sha256(path: Path) -> str:
     hasher = hashlib.sha256()
     with path.open("rb") as f:
