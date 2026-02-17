@@ -35,3 +35,4 @@
 {"phase":"faz138","summary":"cause-effect fields why invalidates watch_next from deterministic evidence","commit":"6d29bb5","tests":"pytest"}
 {"phase":"faz145","summary":"scan liquidity filter min volume turnover","commit":"9a2d619","tests":"pytest"}
 {"phase":"faz146","summary":"scan exclusions support exclude symbols via exclusions","commit":"86c5fd0","tests":"pytest"}
+{"phase":"faz147","summary":"scan scoring rationale 1-line per ranked symbol from deterministic signals","commit":"ff46cf3","tests":"pytest"}
