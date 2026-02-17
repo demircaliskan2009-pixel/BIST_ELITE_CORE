@@ -27,6 +27,7 @@ from bist_core.strategy.equal_weight import (
 from bist_core import config
 from bist_core.services import eventstore
 from bist_core.services.strategy_logger import log_strategy
+from bist_core.advisory.outcome import evaluate_and_append_outcomes
 from bist_core.services.marketdata import MarketData
 from bist_core.services.advisor import build_advice_for_symbol
 from bist_core.execution.result_writer import write_execution_result
@@ -1481,6 +1482,7 @@ def _cmd_ask(args: argparse.Namespace) -> int:
             max_loss_tl=max_loss_tl,
             score=payload.get("score"),
             decision_raw=payload.get("decision_raw"),
+            plan=payload.get("plan"),
         )
 
         if "risk_sizing" in payload and not getattr(args, "json", False):
@@ -1657,6 +1659,26 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     print("\nDrill-down:")
     for sym, _, _ in ranked:
         print(f"  python -m bist_core.cli ask {sym} --day {day_str} --interactive")
+    return 0
+
+
+def _cmd_evaluate_outcomes(args: argparse.Namespace) -> int:
+    """Evaluate logged strategies against snapshot data; append outcomes to JSONL."""
+    strategies_path = getattr(args, "strategies", None)
+    if strategies_path is None:
+        strategies_path = os.environ.get("BIST_CORE_STRATEGY_LOG") or str(config.REPO_ROOT / "data" / "log" / "strategies.jsonl")
+    strategies_path = Path(strategies_path)
+    snapshot_root = getattr(args, "snapshot_root", None) or os.environ.get("BIST_CORE_SNAPSHOT_DIR") or "data/eod/snapshots"
+    snapshot_root = Path(snapshot_root)
+    outcomes_path = Path(args.outcomes) if getattr(args, "outcomes", None) else None
+    max_hold_days = getattr(args, "max_hold_days", 60) or 60
+    count = evaluate_and_append_outcomes(
+        strategies_path,
+        snapshot_root,
+        outcomes_path=outcomes_path,
+        max_hold_days=max_hold_days,
+    )
+    print(f"Evaluated {count} strategies.")
     return 0
 
 
@@ -3243,6 +3265,13 @@ Tek sembol danışma (interaktif parametrelerle):
     p_scan.add_argument("--json", action="store_true", help="FAZ388: Machine-readable JSON output with schema_version, generated_at")
     p_scan.add_argument("--out", default=None, help="FAZ148: Output dir for scan JSON artifact (writes day/scan.json)")
     p_scan.set_defaults(func=_cmd_scan)
+
+    p_evaluate_outcomes = sub.add_parser("evaluate-outcomes", help="Evaluate logged strategies against snapshot data; append to strategy_outcomes.jsonl")
+    p_evaluate_outcomes.add_argument("--strategies", default=None, help="Strategies JSONL path (default: data/log/strategies.jsonl or BIST_CORE_STRATEGY_LOG)")
+    p_evaluate_outcomes.add_argument("--snapshot-root", dest="snapshot_root", default=None, help="Snapshot root (default: BIST_CORE_SNAPSHOT_DIR)")
+    p_evaluate_outcomes.add_argument("--outcomes", default=None, help="Outcomes JSONL path (default: data/log/strategy_outcomes.jsonl)")
+    p_evaluate_outcomes.add_argument("--max-hold-days", dest="max_hold_days", type=int, default=60)
+    p_evaluate_outcomes.set_defaults(func=_cmd_evaluate_outcomes)
 
     p_dossier = sub.add_parser("dossier")
     sub_dossier = p_dossier.add_subparsers(dest="dossier_cmd", required=True)

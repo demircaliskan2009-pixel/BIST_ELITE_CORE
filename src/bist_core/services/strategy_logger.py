@@ -31,6 +31,7 @@ def log_strategy(
     score: Optional[float] = None,
     decision_raw: Optional[str] = None,
     rank: Optional[int] = None,
+    plan: Optional[dict[str, Any]] = None,
     log_path: Optional[Path] = None,
 ) -> None:
     """
@@ -57,6 +58,16 @@ def log_strategy(
         strategy_detail["decision_raw"] = decision_raw
     if rank is not None:
         strategy_detail["rank"] = rank
+    if plan is not None and isinstance(plan, dict):
+        entry = plan.get("entry")
+        stop = plan.get("stop")
+        t1 = plan.get("t1")
+        if entry is not None or stop is not None or t1 is not None:
+            strategy_detail["plan"] = {
+                k: round(float(v), 6) if isinstance(v, (int, float)) else v
+                for k, v in [("entry", entry), ("stop", stop), ("t1", t1)]
+                if v is not None
+            }
 
     record = {
         "schema_version": STRATEGY_LOG_SCHEMA_VERSION,
