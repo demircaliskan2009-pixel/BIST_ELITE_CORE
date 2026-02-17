@@ -1505,7 +1505,11 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     risk = getattr(args, "risk", None)
     capital = getattr(args, "capital", None)
     max_loss_tl = getattr(args, "max_loss_tl", None)
-    top_n = int(getattr(args, "top_n", 10) or 10)
+    top_n_raw = getattr(args, "top_n", 10)
+    top_n = int(top_n_raw) if top_n_raw is not None else 10
+    if top_n <= 0:
+        print("top_n must be positive.", file=sys.stderr)
+        return 2
     exclusions_raw = getattr(args, "exclusions", None) or ""
     exclusions = {s.strip().upper() for s in exclusions_raw.split(",") if s.strip()}
 
