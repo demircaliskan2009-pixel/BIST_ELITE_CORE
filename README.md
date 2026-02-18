@@ -129,6 +129,25 @@ Minimal akış: snapshot → advice → ask → top N.
            └── orders_intent.json  (--emit-orders ile)
    ```
 
+### Strategy registry and performance (faz561–faz563)
+
+Each `ask` and `scan` appends a record to the strategy log. Outcomes are evaluated against snapshot data; a performance report summarizes win-rate, avg R, and max drawdown.
+
+| Path / Env | Purpose |
+|------------|---------|
+| `data/log/strategies.jsonl` | Strategy log (symbol, day, params, plan). Override: `BIST_CORE_STRATEGY_LOG` |
+| `data/log/strategy_outcomes.jsonl` | Evaluated outcomes (win/loss/timeout, R-multiple). Override: `BIST_CORE_STRATEGY_OUTCOMES` |
+| `BIST_CORE_OUTCOME_MAX_HOLD_DAYS` | Max holding period before timeout (default: 30) |
+
+```bash
+# Evaluate logged strategies against snapshots
+python -m bist_core.cli evaluate-outcomes --strategies data/log/strategies.jsonl --snapshot-root data/eod/snapshots
+
+# Generate performance summary (win-rate, avg R, max DD, equity curve)
+python -m bist_core.cli performance-report --outcomes data/log/strategy_outcomes.jsonl --out data/log/performance.json
+python -m bist_core.cli performance-report --outcomes data/log/strategy_outcomes.jsonl --out report.csv --csv
+```
+
 ---
 
 ## Docs
