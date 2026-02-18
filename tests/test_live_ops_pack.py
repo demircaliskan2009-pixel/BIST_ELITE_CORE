@@ -1,0 +1,108 @@
+"""FAZ567: Live ops pack — validate, today, journal report. No real market data."""
+from __future__ import annotations
+
+import csv
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+_repo = Path(__file__).resolve().parents[1]
+if str(_repo) not in sys.path:
+    sys.path.insert(0, str(_repo))
+from tools.live_validate import validate_snapshot_for_day
+from tools.live_journal_report import build_report
+
+
+def test_live_validate_missing_snapshot_returns_fail(tmp_path: Path) -> None:
+    """live_validate returns ok=False and exit 2 on missing snapshot."""
+    ok, reasons, checked, _ = validate_snapshot_for_day("2025-01-15", tmp_path / "nonexistent")
+    assert ok is False
+    assert "snapshot_root_missing" in reasons or "day_dir_missing" in reasons
+
+
+def test_live_validate_empty_dir_returns_fail(tmp_path: Path) -> None:
+    """live_validate returns ok=False when day dir exists but no snapshot.csv."""
+    (tmp_path / "2025-01-15").mkdir()
+    ok, reasons, _, _ = validate_snapshot_for_day("2025-01-15", tmp_path)
+    assert ok is False
+    assert "snapshot_csv_missing" in reasons
+
+
+def test_live_validate_invalid_day_format(tmp_path: Path) -> None:
+    """live_validate returns ok=False for invalid day format."""
+    ok, reasons, _, _ = validate_snapshot_for_day("invalid", tmp_path)
+    assert ok is False
+    assert "invalid_day_format" in reasons
+
+
+def test_live_validate_ok_with_valid_snapshot(tmp_path: Path) -> None:
+    """live_validate returns ok=True when snapshot is valid."""
+    (tmp_path / "2025-01-15").mkdir()
+    (tmp_path / "2025-01-15" / "snapshot.csv").write_text(
+        "symbol,close\nAAA,100.0\nBBB,99.0\n",
+        encoding="utf-8",
+    )
+    ok, reasons, checked, details = validate_snapshot_for_day("2025-01-15", tmp_path)
+    assert ok is True
+    assert not reasons
+    assert len(checked) >= 1
+    assert details.get("symbol_count", 0) >= 1
+
+
+def test_live_validate_cli_exit_2_on_missing(tmp_path: Path) -> None:
+    """live_validate.py exits 2 when snapshot missing."""
+    env = {"PYTHONPATH": str(_repo / "src")}
+    r = subprocess.run(
+        [sys.executable, str(_repo / "tools" / "live_validate.py"), "--day", "2099-01-01", "--snapshot-root", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        cwd=str(_repo),
+    )
+    assert r.returncode == 2
+    data = json.loads(r.stdout)
+    assert data.get("ok") is False
+
+
+def test_live_today_refuses_when_validate_fails(tmp_path: Path) -> None:
+    """live_today logic: validate fails => no live run. Test via validate function."""
+    ok, _, _, _ = validate_snapshot_for_day("2099-01-01", tmp_path / "empty")
+    assert ok is False
+    # When validate returns False, live_today.ps1 would exit 2 without running live_daily
+
+
+def test_live_journal_report_parses_template(tmp_path: Path) -> None:
+    """live_journal_report parses template and produces deterministic output."""
+    journal = tmp_path / "journal.csv"
+    journal.write_text(
+        "day,symbol,side,qty,price,fees_tl,note,source_run_id\n"
+        "2025-01-15,ASELS,BUY,100,42.50,0.00,manual,2025-01-15\n"
+        "2025-01-20,ASELS,SELL,100,44.00,0.00,manual,2025-01-15\n",
+        encoding="utf-8",
+    )
+    out_root = tmp_path / "log"
+    out_root.mkdir()
+
+    report = build_report(journal, out_root, "2025-01-15", "2025-01-20")
+    assert report["schema_version"] == 1
+    assert report["date_from"] == "2025-01-15"
+    assert report["date_to"] == "2025-01-20"
+    # PnL: buy 100*42.5=4250, sell 100*44=4400 => 150
+    assert report["realized_pnl_tl"] == 150.0
+    assert len(report["trades"]) >= 1
+
+
+def test_live_journal_report_empty_journal(tmp_path: Path) -> None:
+    """Empty journal => zero PnL."""
+    journal = tmp_path / "empty.csv"
+    journal.write_text("day,symbol,side,qty,price,fees_tl,note,source_run_id\n", encoding="utf-8")
+    out_root = tmp_path / "log"
+    out_root.mkdir()
+
+    report = build_report(journal, out_root, "2025-01-01", "2025-01-31")
+    assert report["realized_pnl_tl"] == 0.0
+    assert report["trades"] == []

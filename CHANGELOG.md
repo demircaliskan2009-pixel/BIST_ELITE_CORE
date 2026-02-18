@@ -59,3 +59,4 @@ All notable changes are tracked by phase. Format: `[fazNNN] — summary`.
 - [faz564] — README: strategy registry and performance report docs
 - [faz565] — add evaluate-outcomes & performance-report CLI commands to golden
 - [faz566] — live daily runner for offline manual live test
+- [faz567] — live test ops pack (validate, today runner, journal report)

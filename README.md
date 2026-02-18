@@ -169,6 +169,8 @@ Single-command daily runner for offline manual workflow: scan → ask → evalua
 
 **Workflow:** Run the script → read TOP5 from stdout or `scan.json` → pick a symbol → open `ask/<DAY>/<SYMBOL>.json` for plan. Offline, manual execution only.
 
+**Ops pack (faz567):** Validate before run (`.\tools\live_validate.ps1`), today runner (`.\tools\live_today.ps1`), trade journal report. See [docs/LIVE_TEST_PLAYBOOK.md](docs/LIVE_TEST_PLAYBOOK.md).
+
 ---
 
 ## Docs
@@ -179,3 +181,4 @@ Single-command daily runner for offline manual workflow: scan → ask → evalua
 | [docs/CHAT_AGENT_FLOW.md](docs/CHAT_AGENT_FLOW.md) | Chat agent pseudo-code and tool definitions |
 | [docs/DEV_SETUP_WINDOWS.md](docs/DEV_SETUP_WINDOWS.md) | Line endings, Git config |
 | [docs/WINDOWS_PROD_RUNBOOK.md](docs/WINDOWS_PROD_RUNBOOK.md) | Production runbook |
+| [docs/LIVE_TEST_PLAYBOOK.md](docs/LIVE_TEST_PLAYBOOK.md) | Live test ops pack, release policy, daily routine |
