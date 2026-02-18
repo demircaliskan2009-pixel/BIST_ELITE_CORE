@@ -28,6 +28,11 @@ from bist_core import config
 from bist_core.services import eventstore
 from bist_core.services.strategy_logger import log_strategy
 from bist_core.advisory.outcome import evaluate_and_append_outcomes
+from bist_core.advisory.performance import (
+    build_performance_report,
+    write_performance_csv,
+    write_performance_json,
+)
 from bist_core.services.marketdata import MarketData
 from bist_core.services.advisor import build_advice_for_symbol
 from bist_core.execution.result_writer import write_execution_result
@@ -1682,6 +1687,27 @@ def _cmd_evaluate_outcomes(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_performance_report(args: argparse.Namespace) -> int:
+    """Generate performance summary from strategy outcomes."""
+    outcomes_path = Path(args.outcomes) if getattr(args, "outcomes", None) else None
+    out_path = Path(args.out) if getattr(args, "out", None) else None
+    want_csv = getattr(args, "csv", False)
+    want_json = getattr(args, "json", False)
+
+    report = build_performance_report(outcomes_path=outcomes_path)
+
+    if out_path:
+        if want_csv:
+            write_performance_csv(report, out_path)
+            print(f"Wrote CSV: {out_path}")
+        else:
+            write_performance_json(report, out_path)
+            print(f"Wrote JSON: {out_path}")
+    else:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _cmd_dossier_build(args: argparse.Namespace) -> int:
     base = _snapshot_root()
     if getattr(args, "day", None):
@@ -3270,8 +3296,15 @@ Tek sembol danışma (interaktif parametrelerle):
     p_evaluate_outcomes.add_argument("--strategies", default=None, help="Strategies JSONL path (default: data/log/strategies.jsonl or BIST_CORE_STRATEGY_LOG)")
     p_evaluate_outcomes.add_argument("--snapshot-root", dest="snapshot_root", default=None, help="Snapshot root (default: BIST_CORE_SNAPSHOT_DIR)")
     p_evaluate_outcomes.add_argument("--outcomes", default=None, help="Outcomes JSONL path (default: data/log/strategy_outcomes.jsonl)")
-    p_evaluate_outcomes.add_argument("--max-hold-days", dest="max_hold_days", type=int, default=60)
+    p_evaluate_outcomes.add_argument("--max-hold-days", dest="max_hold_days", type=int, default=None)
     p_evaluate_outcomes.set_defaults(func=_cmd_evaluate_outcomes)
+
+    p_performance = sub.add_parser("performance-report", help="Generate performance summary from strategy outcomes")
+    p_performance.add_argument("--outcomes", default=None, help="Outcomes JSONL path (default: data/log/strategy_outcomes.jsonl)")
+    p_performance.add_argument("--out", default=None, help="Output path for CSV/JSON (default: stdout for JSON)")
+    p_performance.add_argument("--csv", action="store_true", help="Output CSV format")
+    p_performance.add_argument("--json", action="store_true", help="Output JSON format (default when --out set)")
+    p_performance.set_defaults(func=_cmd_performance_report)
 
     p_dossier = sub.add_parser("dossier")
     sub_dossier = p_dossier.add_subparsers(dest="dossier_cmd", required=True)

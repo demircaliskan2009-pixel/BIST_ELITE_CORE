@@ -14,6 +14,20 @@ from typing import Any, Optional
 
 
 OUTCOME_SCHEMA_VERSION = 1
+DEFAULT_MAX_HOLD_DAYS = 30
+
+
+def _parse_max_hold_days(env_val: Optional[str], default: int = DEFAULT_MAX_HOLD_DAYS) -> int:
+    """Parse BIST_CORE_OUTCOME_MAX_HOLD_DAYS. Fail-closed: invalid => default."""
+    if not env_val:
+        return default
+    try:
+        n = int(env_val.strip())
+        if 1 <= n <= 365:
+            return n
+    except (TypeError, ValueError):
+        pass
+    return default
 
 
 @dataclass
@@ -99,7 +113,7 @@ def evaluate_strategy(
     log_entry: dict[str, Any],
     snapshot_root: Path,
     *,
-    max_hold_days: int = 60,
+    max_hold_days: Optional[int] = None,
 ) -> Optional[dict[str, Any]]:
     """
     Evaluate a logged strategy against actual price data.
@@ -135,7 +149,10 @@ def evaluate_strategy(
     if not (stop < entry < t1):
         return _hold_outcome(symbol, day, "invalid_plan_order")
 
-    bars = _load_bars_forward(snapshot_root, symbol, day, max_days=max_hold_days)
+    hold_days = max_hold_days if max_hold_days is not None else _parse_max_hold_days(
+        os.environ.get("BIST_CORE_OUTCOME_MAX_HOLD_DAYS"), DEFAULT_MAX_HOLD_DAYS
+    )
+    bars = _load_bars_forward(snapshot_root, symbol, day, max_days=hold_days)
     if not bars:
         return _hold_outcome(symbol, day, "no_bars")
 
@@ -175,7 +192,21 @@ def evaluate_strategy(
                 reason="target_hit",
             )
 
-    return _hold_outcome(symbol, day, "max_hold_days")
+    # Timeout: exit at last bar's close
+    last_bar = bars[-1]
+    exit_price = last_bar.close
+    r_mult = (exit_price - entry_fill) / r_distance
+    status = "win" if r_mult > 0 else "loss" if r_mult < 0 else "timeout"
+    return _build_outcome(
+        symbol=symbol,
+        day=day,
+        status=status,
+        r_multiple=round(r_mult, 4),
+        days_held=len(bars) - 1,
+        exit_price=round(exit_price, 6),
+        exit_day=last_bar.date_str,
+        reason="timeout",
+    )
 
 
 def _hold_outcome(symbol: str, day: str, reason: str) -> dict[str, Any]:
@@ -232,7 +263,7 @@ def evaluate_and_append_outcomes(
     snapshot_root: Path,
     *,
     outcomes_path: Optional[Path] = None,
-    max_hold_days: int = 60,
+    max_hold_days: Optional[int] = None,
 ) -> int:
     """
     Read strategies.jsonl, evaluate each, append outcomes to strategy_outcomes.jsonl.
@@ -251,7 +282,10 @@ def evaluate_and_append_outcomes(
             entry = json.loads(line)
         except json.JSONDecodeError:
             continue
-        outcome = evaluate_strategy(entry, snapshot_root, max_hold_days=max_hold_days)
+        hold_days = max_hold_days if max_hold_days is not None else _parse_max_hold_days(
+            os.environ.get("BIST_CORE_OUTCOME_MAX_HOLD_DAYS"), DEFAULT_MAX_HOLD_DAYS
+        )
+        outcome = evaluate_strategy(entry, snapshot_root, max_hold_days=hold_days)
         if outcome is None:
             continue
         out_line = json.dumps(outcome, ensure_ascii=False) + "\n"

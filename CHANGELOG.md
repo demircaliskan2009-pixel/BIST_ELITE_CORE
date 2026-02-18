@@ -55,3 +55,4 @@ All notable changes are tracked by phase. Format: `[fazNNN] — summary`.
 - [faz560] — AI interface SDK docs version endpoint chat agent flow
 - [faz561] — strategy registry (logger) ask/scan append to strategies.jsonl
 - [faz562] — outcome evaluation for strategies (stop/target, R-multiple, strategy_outcomes.jsonl)
+- [faz563] — trade timeout logic and performance summary (win-rate, avg R, max DD, equity curve)

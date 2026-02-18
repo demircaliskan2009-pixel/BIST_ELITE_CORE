@@ -120,6 +120,35 @@ def test_outcome_schema_required_keys(tmp_path: Path) -> None:
     assert set(outcome.keys()) >= required
 
 
+def test_outcome_timeout_exit_at_last_price(tmp_path: Path) -> None:
+    """When max_hold_days exceeded without stop/target, exit at last bar close."""
+    # 3 days: entry 100, no stop/target hit. Exit at day3 close.
+    for d in ["2025-01-15", "2025-01-16", "2025-01-17"]:
+        (tmp_path / d).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "2025-01-15" / "snapshot.csv").write_text(
+        "symbol,close,high,low\nAAA,100.0,101.0,99.0\n", encoding="utf-8"
+    )
+    (tmp_path / "2025-01-16" / "snapshot.csv").write_text(
+        "symbol,close,high,low\nAAA,102.0,103.0,101.0\n", encoding="utf-8"
+    )
+    (tmp_path / "2025-01-17" / "snapshot.csv").write_text(
+        "symbol,close,high,low\nAAA,108.0,109.0,107.0\n", encoding="utf-8"
+    )
+    log_entry = {
+        "symbol": "AAA",
+        "day": "2025-01-15",
+        "strategy_detail": {"plan": {"entry": 101.0, "stop": 96.0, "t1": 115.0}},
+    }
+    outcome = evaluate_strategy(log_entry, tmp_path, max_hold_days=2)
+    assert outcome is not None
+    assert outcome["reason"] == "timeout"
+    assert outcome["exit_price"] == 102.0
+    assert outcome["exit_day"] == "2025-01-16"
+    assert outcome["days_held"] == 1
+    assert outcome["status"] == "win"
+    assert outcome["r_multiple"] == pytest.approx(0.5, rel=1e-3)
+
+
 def test_evaluate_and_append_outcomes(tmp_path: Path) -> None:
     """evaluate_and_append_outcomes reads strategies, writes outcomes."""
     snap = tmp_path / "snapshots"
