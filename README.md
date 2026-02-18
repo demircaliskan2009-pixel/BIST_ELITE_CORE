@@ -171,6 +171,20 @@ Single-command daily runner for offline manual workflow: scan → ask → evalua
 
 **Ops pack (faz567):** Validate before run (`.\tools\live_validate.ps1`), today runner (`.\tools\live_today.ps1`), trade journal report. See [docs/LIVE_TEST_PLAYBOOK.md](docs/LIVE_TEST_PLAYBOOK.md).
 
+### Live Test Release Branch (faz568)
+
+During the 6‑month live test, use **`release/live-test-v1`** for daily runs. `main` can evolve; only cherry-pick hotfixes into the release branch.
+
+```powershell
+# Cherry-pick a hotfix from main
+git checkout release/live-test-v1
+git cherry-pick <sha>
+.\tools\proof_pack.ps1
+git push origin release/live-test-v1
+```
+
+**Pre-push gate:** Run `.\tools\pre_push_gate.ps1` before pushing. See [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md).
+
 ---
 
 ## Docs
@@ -181,4 +195,5 @@ Single-command daily runner for offline manual workflow: scan → ask → evalua
 | [docs/CHAT_AGENT_FLOW.md](docs/CHAT_AGENT_FLOW.md) | Chat agent pseudo-code and tool definitions |
 | [docs/DEV_SETUP_WINDOWS.md](docs/DEV_SETUP_WINDOWS.md) | Line endings, Git config |
 | [docs/WINDOWS_PROD_RUNBOOK.md](docs/WINDOWS_PROD_RUNBOOK.md) | Production runbook |
-| [docs/LIVE_TEST_PLAYBOOK.md](docs/LIVE_TEST_PLAYBOOK.md) | Live test ops pack, release policy, daily routine |
+| [docs/LIVE_TEST_PLAYBOOK.md](docs/LIVE_TEST_PLAYBOOK.md) | Live test ops pack, daily routine |
+| [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md) | Branch model, tags, hotfix promotion rules |
