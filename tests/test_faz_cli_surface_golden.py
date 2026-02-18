@@ -47,6 +47,8 @@ EXPECTED_SUBCOMMANDS = frozenset({
     "data",
     "ask",
     "scan",
+    "evaluate-outcomes",
+    "performance-report",
     "dossier",
     "events",
     "instruments",
