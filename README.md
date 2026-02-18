@@ -148,6 +148,27 @@ python -m bist_core.cli performance-report --outcomes data/log/strategy_outcomes
 python -m bist_core.cli performance-report --outcomes data/log/strategy_outcomes.jsonl --out report.csv --csv
 ```
 
+### Live test v1 (faz566)
+
+Single-command daily runner for offline manual workflow: scan → ask → evaluate → report.
+
+```powershell
+.\tools\live_daily.ps1 -Day 2025-01-15 -TopN 5 -OutRoot "data/log" -SnapshotRoot "data/eod/snapshots"
+```
+
+**Outputs** (under `data/log/` or `-OutRoot`):
+
+| Path | Contents |
+|------|----------|
+| `daily_scan/<DAY>/scan.json` | TOP-N ranked symbols |
+| `daily_scan/<DAY>/strategies.jsonl` | Logged strategies |
+| `ask/<DAY>/<SYMBOL>.json` | Ask artifacts per symbol |
+| `outcomes/<DAY>/strategy_outcomes.jsonl` | Evaluated outcomes |
+| `reports/<DAY>/performance.json` | Win-rate, avg R, max DD |
+| `reports/<DAY>/performance.csv` | Same metrics in CSV |
+
+**Workflow:** Run the script → read TOP5 from stdout or `scan.json` → pick a symbol → open `ask/<DAY>/<SYMBOL>.json` for plan. Offline, manual execution only.
+
 ---
 
 ## Docs

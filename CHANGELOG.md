@@ -58,3 +58,4 @@ All notable changes are tracked by phase. Format: `[fazNNN] — summary`.
 - [faz563] — trade timeout logic and performance summary (win-rate, avg R, max DD, equity curve)
 - [faz564] — README: strategy registry and performance report docs
 - [faz565] — add evaluate-outcomes & performance-report CLI commands to golden
+- [faz566] — live daily runner for offline manual live test
