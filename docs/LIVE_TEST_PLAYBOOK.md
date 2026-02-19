@@ -2,6 +2,10 @@
 
 Offline manual live-test workflow. No broker integration. No network by default.
 
+## Tag push
+
+Use `.\tools\push_tags_safe.ps1` instead of `git push --tags`. If a tag exists remotely, do not overwrite; create a new faz tag. See [docs/TAGGING.md](TAGGING.md).
+
 ## Release branch policy
 
 - **`release/live-test-2026H1`** — branch used for daily runs during H1 2026.

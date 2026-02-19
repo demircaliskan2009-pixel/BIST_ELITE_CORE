@@ -197,3 +197,4 @@ git push origin release/live-test-v1
 | [docs/WINDOWS_PROD_RUNBOOK.md](docs/WINDOWS_PROD_RUNBOOK.md) | Production runbook |
 | [docs/LIVE_TEST_PLAYBOOK.md](docs/LIVE_TEST_PLAYBOOK.md) | Live test ops pack, daily routine |
 | [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md) | Branch model, tags, hotfix promotion rules |
+| [docs/TAGGING.md](docs/TAGGING.md) | Safe tag push (no clobber) |
