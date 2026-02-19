@@ -14,6 +14,7 @@ if str(_repo) not in sys.path:
     sys.path.insert(0, str(_repo))
 from tools.live_validate import validate_snapshot_for_day
 from tools.live_journal_report import build_report
+from tools.live_snapshot_prepare import prepare_snapshot
 
 
 def test_live_validate_missing_snapshot_returns_fail(tmp_path: Path) -> None:
@@ -106,3 +107,42 @@ def test_live_journal_report_empty_journal(tmp_path: Path) -> None:
     report = build_report(journal, out_root, "2025-01-01", "2025-01-31")
     assert report["realized_pnl_tl"] == 0.0
     assert report["trades"] == []
+
+
+def test_live_snapshot_prepare_valid_fixture_exit_0(tmp_path: Path) -> None:
+    """live_snapshot_prepare returns ok=True when snapshot is valid."""
+    (tmp_path / "2025-01-15").mkdir()
+    (tmp_path / "2025-01-15" / "snapshot.csv").write_text(
+        "symbol,close\nAAA,100.0\nBBB,99.0\n",
+        encoding="utf-8",
+    )
+    ok, missing, reasons = prepare_snapshot("2025-01-15", tmp_path)
+    assert ok is True
+    assert not missing
+    assert not reasons
+
+
+def test_live_snapshot_prepare_missing_snapshot_exit_2(tmp_path: Path) -> None:
+    """live_snapshot_prepare returns ok=False when snapshot missing."""
+    ok, missing, reasons = prepare_snapshot("2099-01-01", tmp_path / "empty")
+    assert ok is False
+    assert any("snapshot" in p or "2099" in p for p in missing) or reasons
+
+
+def test_live_snapshot_prepare_cli_exit_2_on_missing(tmp_path: Path) -> None:
+    """live_snapshot_prepare.py exits 2 when snapshot missing."""
+    env = {"PYTHONPATH": str(_repo / "src")}
+    r = subprocess.run(
+        [
+            sys.executable,
+            str(_repo / "tools" / "live_snapshot_prepare.py"),
+            "--day", "2099-01-01",
+            "--snapshot-root", str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        cwd=str(_repo),
+    )
+    assert r.returncode == 2

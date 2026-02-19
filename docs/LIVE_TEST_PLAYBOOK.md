@@ -27,12 +27,12 @@ git push origin release/live-test-2026H1
 
 ## Daily routine
 
-1. **EOD snapshot update** — Ensure `data/eod/snapshots/<DAY>/snapshot.csv` exists and is valid.
-2. **Validate** — `.\tools\live_validate.ps1 -Day YYYY-MM-DD` (or `.\tools\live_today.ps1`).
-3. **Live run** — If validate passes: `.\tools\live_today.ps1` (or `.\tools\live_daily.ps1 -Day YYYY-MM-DD`).
-4. **Read outputs** — TOP5 in `data/log/daily_scan/<DAY>/scan.json`.
-5. **Manual trade** — Pick symbol, open `data/log/ask/<DAY>/<SYMBOL>.json` for plan.
-6. **Journal entry** — Record in `templates/trade_journal.csv` (or your copy).
+0. **Put EOD snapshot** — Place `data/eod/snapshots/<DAY>/snapshot.csv` (symbol, close; optional: date, open, high, low, volume).
+0.1. **Prepare / validate** — `.\tools\live_snapshot_prepare.ps1` (or `.\tools\live_validate.ps1 -Day YYYY-MM-DD`). Ensures folder exists; optionally `-TemplateSource templates/snapshot_minimal.csv` to copy minimal fixture if empty. Fails with exit 2 if snapshot missing/invalid.
+1. **Live run** — `.\tools\live_today.ps1` (or `.\tools\live_daily.ps1 -Day YYYY-MM-DD`). Runs validate first; refuses to run if validate fails.
+2. **Read outputs** — TOP5 in `data/log/daily_scan/<DAY>/scan.json`.
+3. **Manual trade** — Pick symbol, open `data/log/ask/<DAY>/<SYMBOL>.json` for plan.
+4. **Journal entry** — Record in `templates/trade_journal.csv` (or your copy).
 
 **Rule:** No trade if validate fails (exit 2).
 
