@@ -97,8 +97,6 @@ def main() -> int:
         template = Path(args.template_source)
         if not template.is_absolute():
             template = (_repo / template).resolve()
-    elif (_repo / "templates" / "snapshot_minimal.csv").is_file():
-        template = _repo / "templates" / "snapshot_minimal.csv"
 
     try:
         ok, missing_paths, reasons = prepare_snapshot(day, snapshot_root, template)
