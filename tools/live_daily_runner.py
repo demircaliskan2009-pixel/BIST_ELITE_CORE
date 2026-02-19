@@ -147,6 +147,14 @@ def run_live_daily(
         if pc != 0:
             return pc, symbols, paths
 
+    # FAZ572: Scoreboard (BUY/SELL/HOLD + horizon returns) when bars exist
+    try:
+        from tools.scoreboard_report import build_scoreboard, write_scoreboard
+        report = build_scoreboard(day, out_root, snapshot_root, [1, 5, 20])
+        write_scoreboard(report, paths["reports"])
+    except Exception:
+        pass  # Best-effort; do not fail run
+
     return 0, symbols, paths
 
 

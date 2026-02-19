@@ -36,6 +36,10 @@ git push origin release/live-test-2026H1
 
 **Rule:** No trade if validate fails (exit 2).
 
+## Scoreboard (model quality)
+
+The scoreboard measures model outputs even when no manual trade is logged. For each day, for each symbol in topN scan: records BUY/SELL/HOLD from ask artifacts; tracks forward return over +1d, +5d, +20d when bars exist. See `reports/<DAY>/scoreboard.json` and `scoreboard.csv`. Purely derived from artifacts + snapshots.
+
 ## Phone-friendly summary
 
 After `live_today.ps1`, open `data/log/reports/<DAY>/summary.html` on your phone (e.g. via file sync or local server). It links to scan.json, each ask artifact, and performance.json/csv. No server required — open the file directly.
@@ -51,6 +55,8 @@ After `live_today.ps1`, open `data/log/reports/<DAY>/summary.html` on your phone
 | `reports/<DAY>/performance.json` | Win-rate, avg R, max DD |
 | `reports/<DAY>/performance.csv` | Same metrics in CSV |
 | `reports/<DAY>/summary.html` | Phone-friendly index (links to scan, ask, performance) |
+| `reports/<DAY>/scoreboard.json` | Model quality: BUY/SELL/HOLD + forward returns (even without manual trades) |
+| `reports/<DAY>/scoreboard.csv` | Same in CSV |
 | `reports/<WEEK_OR_RANGE>/` | Journal rollup reports |
 
 ## Weekly rollup

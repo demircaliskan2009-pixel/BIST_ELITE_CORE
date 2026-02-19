@@ -16,6 +16,7 @@ from tools.live_validate import validate_snapshot_for_day
 from tools.live_journal_report import build_report
 from tools.live_snapshot_prepare import prepare_snapshot
 from tools.live_publish_summary import publish_summary
+from tools.scoreboard_report import build_scoreboard, write_scoreboard
 
 
 def test_live_validate_missing_snapshot_returns_fail(tmp_path: Path) -> None:
@@ -173,3 +174,51 @@ def test_live_publish_summary_minimal_workflow(tmp_path: Path) -> None:
     assert "performance.json" in html
     assert "performance.csv" in html
     assert day in html
+
+
+def test_scoreboard_minimal_fixture(tmp_path: Path) -> None:
+    """Scoreboard with future bars: files exist, deterministic ordering."""
+    day = "2099-01-01"
+    snap = tmp_path / "snapshots"
+    out_root = tmp_path / "log"
+
+    for d, rows in [
+        ("2099-01-01", "symbol,close\nAAA,100.0\nBBB,99.0\n"),
+        ("2099-01-02", "symbol,close\nAAA,102.0\nBBB,98.0\n"),
+        ("2099-01-06", "symbol,close\nAAA,105.0\nBBB,97.0\n"),
+        ("2099-01-21", "symbol,close\nAAA,110.0\nBBB,95.0\n"),
+    ]:
+        (snap / d).mkdir(parents=True)
+        (snap / d / "snapshot.csv").write_text(rows, encoding="utf-8")
+
+    (out_root / "daily_scan" / day).mkdir(parents=True)
+    (out_root / "daily_scan" / day / "scan.json").write_text(
+        '{"day":"2099-01-01","ranked":[{"symbol":"AAA"},{"symbol":"BBB"}]}',
+        encoding="utf-8",
+    )
+    (out_root / "ask" / day).mkdir(parents=True)
+    (out_root / "ask" / day / "AAA.json").write_text(
+        '{"symbol":"AAA","decision_raw":"BUY"}',
+        encoding="utf-8",
+    )
+    (out_root / "ask" / day / "BBB.json").write_text(
+        '{"symbol":"BBB","decision_raw":"HOLD"}',
+        encoding="utf-8",
+    )
+
+    report = build_scoreboard(day, out_root, snap, [1, 5, 20])
+    assert report["schema_version"] == 1
+    assert report["day"] == day
+    assert len(report["rows"]) == 2
+    rows = sorted(report["rows"], key=lambda r: r["symbol"])
+    assert rows[0]["symbol"] == "AAA"
+    assert rows[0]["decision_raw"] == "BUY"
+    assert rows[0]["ret_1d"] == pytest.approx(0.02)
+    assert rows[0]["ret_5d"] == pytest.approx(0.05)
+    assert rows[0]["ret_20d"] == pytest.approx(0.10)
+    assert rows[1]["symbol"] == "BBB"
+    assert rows[1]["decision_raw"] == "HOLD"
+
+    write_scoreboard(report, out_root / "reports" / day)
+    assert (out_root / "reports" / day / "scoreboard.json").is_file()
+    assert (out_root / "reports" / day / "scoreboard.csv").is_file()

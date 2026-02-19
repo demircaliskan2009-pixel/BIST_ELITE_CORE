@@ -62,6 +62,12 @@ def test_live_daily_full_workflow(tmp_path: Path) -> None:
     assert json_report.is_file(), f"Expected performance.json at {json_report}"
     assert csv_report.is_file(), f"Expected performance.csv at {csv_report}"
 
+    # FAZ572: Scoreboard written (BUY/SELL/HOLD + horizon returns)
+    scoreboard_json = reports_dir / "scoreboard.json"
+    scoreboard_csv = reports_dir / "scoreboard.csv"
+    assert scoreboard_json.is_file(), f"Expected scoreboard.json at {scoreboard_json}"
+    assert scoreboard_csv.is_file(), f"Expected scoreboard.csv at {scoreboard_csv}"
+
 
 def test_live_daily_fail_closed_empty_snapshot(tmp_path: Path) -> None:
     """Missing snapshot: scan returns empty, we continue with empty symbols (exit 0, HOLD-like)."""
