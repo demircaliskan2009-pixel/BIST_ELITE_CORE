@@ -15,6 +15,7 @@ if str(_repo) not in sys.path:
 from tools.live_validate import validate_snapshot_for_day
 from tools.live_journal_report import build_report
 from tools.live_snapshot_prepare import prepare_snapshot
+from tools.live_publish_summary import publish_summary
 
 
 def test_live_validate_missing_snapshot_returns_fail(tmp_path: Path) -> None:
@@ -146,3 +147,29 @@ def test_live_snapshot_prepare_cli_exit_2_on_missing(tmp_path: Path) -> None:
         cwd=str(_repo),
     )
     assert r.returncode == 2
+
+
+def test_live_publish_summary_minimal_workflow(tmp_path: Path) -> None:
+    """Minimal fixture => summary.html exists and contains key filenames."""
+    day = "2099-01-01"
+    out_root = tmp_path / "log"
+    (out_root / "daily_scan" / day).mkdir(parents=True)
+    (out_root / "ask" / day).mkdir(parents=True)
+    (out_root / "reports" / day).mkdir(parents=True)
+
+    (out_root / "daily_scan" / day / "scan.json").write_text(
+        '{"day":"2099-01-01","ranked":[{"symbol":"AAA"},{"symbol":"BBB"}]}',
+        encoding="utf-8",
+    )
+    (out_root / "ask" / day / "AAA.json").write_text("{}", encoding="utf-8")
+    (out_root / "ask" / day / "BBB.json").write_text("{}", encoding="utf-8")
+
+    summary_path = publish_summary(day, out_root)
+    assert summary_path is not None
+    assert summary_path.is_file()
+
+    html = summary_path.read_text(encoding="utf-8")
+    assert "scan.json" in html
+    assert "performance.json" in html
+    assert "performance.csv" in html
+    assert day in html

@@ -30,11 +30,15 @@ git push origin release/live-test-2026H1
 0. **Put EOD snapshot** — Place `data/eod/snapshots/<DAY>/snapshot.csv` (symbol, close; optional: date, open, high, low, volume).
 0.1. **Prepare / validate** — `.\tools\live_snapshot_prepare.ps1` (or `.\tools\live_validate.ps1 -Day YYYY-MM-DD`). Ensures folder exists; optionally `-TemplateSource templates/snapshot_minimal.csv` to copy minimal fixture if empty. Fails with exit 2 if snapshot missing/invalid.
 1. **Live run** — `.\tools\live_today.ps1` (or `.\tools\live_daily.ps1 -Day YYYY-MM-DD`). Runs validate first; refuses to run if validate fails.
-2. **Read outputs** — TOP5 in `data/log/daily_scan/<DAY>/scan.json`.
+2. **Read outputs** — TOP5 in `data/log/daily_scan/<DAY>/scan.json`. Open `data/log/reports/<DAY>/summary.html` on phone for a single-page index of scan, ask artifacts, and performance.
 3. **Manual trade** — Pick symbol, open `data/log/ask/<DAY>/<SYMBOL>.json` for plan.
 4. **Journal entry** — Record in `templates/trade_journal.csv` (or your copy).
 
 **Rule:** No trade if validate fails (exit 2).
+
+## Phone-friendly summary
+
+After `live_today.ps1`, open `data/log/reports/<DAY>/summary.html` on your phone (e.g. via file sync or local server). It links to scan.json, each ask artifact, and performance.json/csv. No server required — open the file directly.
 
 ## Folder map (`data/log/`)
 
@@ -46,6 +50,7 @@ git push origin release/live-test-2026H1
 | `outcomes/<DAY>/strategy_outcomes.jsonl` | Evaluated outcomes |
 | `reports/<DAY>/performance.json` | Win-rate, avg R, max DD |
 | `reports/<DAY>/performance.csv` | Same metrics in CSV |
+| `reports/<DAY>/summary.html` | Phone-friendly index (links to scan, ask, performance) |
 | `reports/<WEEK_OR_RANGE>/` | Journal rollup reports |
 
 ## Weekly rollup

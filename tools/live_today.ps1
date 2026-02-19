@@ -29,7 +29,16 @@ try {
     $dailyArgs = @("-Day", $Day, "-TopN", $TopN, "-OutRoot", $OutRoot)
     if ($SnapshotRoot) { $dailyArgs += @("-SnapshotRoot", $SnapshotRoot) }
     & $PSScriptRoot\live_daily.ps1 @dailyArgs
-    exit $LASTEXITCODE
+    $dailyExit = $LASTEXITCODE
+
+    # Publish summary (best-effort; do not fail run)
+    $env:PYTHONPATH = Join-Path $repoRoot "src"
+    & python (Join-Path $repoRoot "tools\live_publish_summary.py") --day $Day --out-root $OutRoot 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Warning: summary.html publish failed (non-fatal)"
+    }
+
+    exit $dailyExit
 } finally {
     Pop-Location
 }
