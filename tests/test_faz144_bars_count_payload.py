@@ -35,7 +35,7 @@ def test_faz144_hold_artifact_has_bars_count_and_lookback(tmp_path: Path) -> Non
     artifact = out_dir / "2099-01-03" / "EEE.json"
     assert artifact.exists()
     data = json.loads(artifact.read_text(encoding="utf-8"))
-    assert data["decision_raw"] == "HOLD"
+    assert data["decision_raw"] == "PASS"
     assert "bars_count" in data
     assert data["bars_count"] == 1
     assert "lookback_required" in data

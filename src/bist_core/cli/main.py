@@ -1740,7 +1740,8 @@ def _cmd_dossier_build(args: argparse.Namespace) -> int:
     error_count = 0
     for dossier in dossiers:
         symbol = dossier.get("symbol", "UNKNOWN")
-        if dossier.get("error_marker"):
+        em = dossier.get("error_marker")
+        if em and em != "SafeMode":
             error_count += 1
         out_path = outdir / f"{symbol}.json"
         atomic_write_json(out_path, dossier)
@@ -2933,11 +2934,10 @@ def _advice_payload(
     }
     if getattr(advice, "gates", None) is not None:
         out["gates"] = {k: dict(sorted(v.items())) for k, v in sorted(advice.gates.items())}
-    if advice.decision_raw == "HOLD":
-        if getattr(advice, "reason", None):
-            out["reason"] = advice.reason
-        if getattr(advice, "next_action", None):
-            out["next_action"] = advice.next_action
+    if getattr(advice, "reason", None):
+        out["reason"] = advice.reason
+    if getattr(advice, "next_action", None):
+        out["next_action"] = advice.next_action
     if getattr(advice, "bars_count", None) is not None:
         out["bars_count"] = advice.bars_count
     if getattr(advice, "lookback_required", None) is not None:
@@ -2957,7 +2957,7 @@ def _fallback_payload(
 ) -> dict:
     err = exc.__class__.__name__
     text = (
-        f"Güvenli mod: {err}. "
+        f"Güvenli mod: NoDecision: {err}. "
         "Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
     )
     evidence = _build_evidence([], snapshot_source, snapshot_hash)

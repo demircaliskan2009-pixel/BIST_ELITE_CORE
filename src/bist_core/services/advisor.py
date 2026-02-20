@@ -211,13 +211,14 @@ def _insufficient_history_advice(
     bars_count: int,
     required_lookback: int,
 ) -> Advice:
-    """Fail-closed: bars var ama yetersiz; HOLD + InsufficientHistory."""
+    """Fail-closed: bars var ama yetersiz; PASS + Güvenli mod + NoDecision."""
     day_value = _safe_date(day)
     day_str = day_value.isoformat()
     events, events_errors = _load_events(symbol, day_str)
     events_paragraph = _render_events_section(events, events_errors)
+    err_detail = f"NoDecision: InsufficientHistory: {bars_count} < {required_lookback}"
     text = (
-        f"{symbol} için karar HOLD; neden: InsufficientHistory. "
+        f"Güvenli mod: {err_detail}. "
         f"Mevcut bar sayısı: {bars_count}, gerekli lookback: {required_lookback}. "
         "Daha fazla günlük veri ekleyin."
     )
@@ -229,7 +230,7 @@ def _insufficient_history_advice(
     return Advice(
         symbol=symbol,
         date=day_value,
-        decision_raw="HOLD",
+        decision_raw="PASS",
         score=0.0,
         signals=[],
         plan=None,
@@ -248,6 +249,7 @@ def _safe_advice(
     err: str,
     gates: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> Advice:
+    """Fail-closed: PASS + Güvenli mod + NoBars/NoDecision marker."""
     day_value = _safe_date(day)
     day_str = day_value.isoformat()
     try:
@@ -255,8 +257,10 @@ def _safe_advice(
         events_paragraph = _render_events_section(events, events_errors)
     except Exception:
         events_paragraph = "Olaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi."
+    # Ensure NoBars or NoDecision in text (canonical markers)
+    marker = err if err in ("NoBars", "NoDecision") else f"NoDecision: {err}"
     text = (
-        f"Güvenli mod: {err}. "
+        f"Güvenli mod: {marker}. "
         "Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
     )
     text = f"{text}\n\n{events_paragraph}"

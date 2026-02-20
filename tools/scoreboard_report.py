@@ -46,7 +46,7 @@ def _close_map(snapshot_root: Path, day: str) -> dict[str, float] | None:
 
 
 def _decision_from_artifact(ask_path: Path) -> str:
-    """Extract decision_raw from ask JSON. Default HOLD."""
+    """Extract decision_raw from ask JSON. PASS (fail-closed) -> HOLD for display."""
     if not ask_path.is_file():
         return "HOLD"
     try:
@@ -56,6 +56,8 @@ def _decision_from_artifact(ask_path: Path) -> str:
             u = dec.upper()
             if u in ("BUY", "SELL", "HOLD"):
                 return u
+            if u == "PASS":
+                return "HOLD"  # canonical fail-closed; display as HOLD
     except (json.JSONDecodeError, OSError):
         pass
     return "HOLD"

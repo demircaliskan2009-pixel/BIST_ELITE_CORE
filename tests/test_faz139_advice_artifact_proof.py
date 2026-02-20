@@ -137,7 +137,7 @@ def test_faz139_advice_artifact_hold_path(tmp_path: Path) -> None:
     assert artifact_path.exists()
     data = json.loads(artifact_path.read_text(encoding="utf-8"))
 
-    assert data["decision_raw"] == "HOLD"
+    assert data["decision_raw"] == "PASS"
     assert data["score"] == 0.0
     assert data["plan"] is None
     assert "InsufficientHistory" in data["text"]

@@ -134,7 +134,8 @@ def build_manifest(
         for d in dossiers
         if d.get("error_marker")
     ]
-    errors = len(error_list)
+    # Fail-closed (SafeMode with NoBars/NoDecision) is canonical: PASS, not a pipeline error
+    errors = len([e for e in error_list if e.get("error_marker") != "SafeMode"])
     total = len(dossiers)
     return {
         "schema_version": 1,

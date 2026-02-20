@@ -54,7 +54,7 @@ def test_faz386_gate_fail_returns_fail(tmp_path: Path) -> None:
     csv = "symbol,close\nBBB,100.0\n"
     _, data = _run_ask(tmp_path, "BBB", "2099-01-16", csv)
     assert data is not None
-    assert data["decision_raw"] == "HOLD"
+    assert data["decision_raw"] == "PASS"
     assert "gates" in data
     outcomes = [g["outcome"] for g in data["gates"].values()]
     assert "FAIL" in outcomes

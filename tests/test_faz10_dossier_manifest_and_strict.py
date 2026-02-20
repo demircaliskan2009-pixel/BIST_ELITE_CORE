@@ -72,7 +72,8 @@ def test_cli_dossier_manifest_and_strict(tmp_path: Path) -> None:
 
     outdir_strict = tmp_path / "out_strict"
     result_strict = _run_build(env, outdir_strict, ["--symbols", "ZZZ", "--strict"])
-    assert result_strict.returncode == 2
     strict_manifest = json.loads((outdir_strict / "_manifest.json").read_text(encoding="utf-8"))
-    assert strict_manifest["errors"] > 0
+    # ZZZ has no bars -> fail-closed (SafeMode). Per faz574, SafeMode is canonical PASS, not an error.
+    assert result_strict.returncode == 0
+    assert strict_manifest["errors"] == 0
     assert any(item.get("symbol") == "ZZZ" for item in strict_manifest["error_list"])

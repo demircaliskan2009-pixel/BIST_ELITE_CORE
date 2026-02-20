@@ -35,7 +35,7 @@ def test_faz142_hold_artifact_has_reason_and_next_action(tmp_path: Path) -> None
     artifact = out_dir / "2099-01-01" / "BBB.json"
     assert artifact.exists()
     data = json.loads(artifact.read_text(encoding="utf-8"))
-    assert data["decision_raw"] == "HOLD"
+    assert data["decision_raw"] == "PASS"
     assert "reason" in data
     assert data["reason"] == "InsufficientHistory"
     assert "next_action" in data
