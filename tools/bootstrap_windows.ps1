@@ -29,12 +29,10 @@ try {
     $py = Join-Path $venvPath "Scripts\python.exe"
     $pip = Join-Path $venvPath "Scripts\pip.exe"
 
-    # 2) Install dependencies (pyproject + requirements)
+    # 2) Install dependencies (pyproject + requirements.txt)
     Invoke-Step "install deps" {
-        & $pip install -e ".[dev]" --quiet
-        if (Test-Path "requirements-dev.txt") {
-            & $pip install -r requirements-dev.txt --quiet
-        } elseif (Test-Path "requirements.txt") {
+        & $pip install -e . --quiet
+        if (Test-Path "requirements.txt") {
             & $pip install -r requirements.txt --quiet
         }
     }
@@ -58,6 +56,8 @@ try {
     $osInfo = [System.Environment]::OSVersion.VersionString
     $sha = git rev-parse --short HEAD 2>$null
     if (-not $sha) { $sha = "n/a" }
+    $branch = git rev-parse --abbrev-ref HEAD 2>$null
+    if (-not $branch) { $branch = "n/a" }
 
     Write-Host ""
     Write-Host "========== ENV REPORT ==========" -ForegroundColor Green
@@ -65,6 +65,7 @@ try {
     Write-Host "pip:      $pipVer"
     Write-Host "OS:       $osInfo"
     Write-Host "repo sha: $sha"
+    Write-Host "branch:   $branch"
     Write-Host "===============================" -ForegroundColor Green
     Write-Host ""
 }

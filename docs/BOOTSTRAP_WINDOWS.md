@@ -19,12 +19,12 @@ powershell -ExecutionPolicy Bypass -File .\bootstrap_windows.ps1
 ## What it does
 
 1. **Creates `.venv`** if missing
-2. **Installs dependencies**: `pip install -e ".[dev]"` + `requirements-dev.txt` (or `requirements.txt`)
+2. **Installs dependencies**: `pip install -e .` (pyproject) + `requirements.txt`
 3. **Runs sanity checks** (offline):
    - `python scripts/verify_alignment.py`
    - `python tools/release_check.py --hygiene-only`
-4. **Runs smoke tests**: short pytest subset (fast)
-5. **Prints ENV REPORT**: python, pip, OS, repo sha
+4. **Runs smoke tests**: minimal fast pytest subset
+5. **Prints ENV REPORT**: python, pip, OS, repo sha, active branch
 
 ## Copy-paste steps (manual)
 
@@ -41,8 +41,8 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
 # 4. Install deps
-pip install -e ".[dev]"
-pip install -r requirements-dev.txt
+pip install -e .
+pip install -r requirements.txt
 
 # 5. Sanity checks
 python scripts/verify_alignment.py
