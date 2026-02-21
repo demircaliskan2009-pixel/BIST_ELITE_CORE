@@ -2235,7 +2235,8 @@ def _cmd_data_snapshot(args: argparse.Namespace) -> int:
     df_out = df_day[ordered_cols]
 
     tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
-    df_out.to_csv(tmp_path, index=False, lineterminator="\n")
+    with open(tmp_path, "w", newline="\n", encoding="utf-8") as f:
+        df_out.to_csv(f, index=False, lineterminator="\n")
     tmp_path.replace(out_path)
     payload = {"ok": True, "out": str(out_path), "rows": int(len(df_out))}
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
