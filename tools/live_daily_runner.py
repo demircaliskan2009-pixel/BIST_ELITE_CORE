@@ -148,10 +148,34 @@ def run_live_daily(
             return pc, symbols, paths
 
     # FAZ572: Scoreboard (BUY/SELL/HOLD + horizon returns) when bars exist
+    horizons = [1, 5, 20]
     try:
         from tools.scoreboard_report import build_scoreboard, write_scoreboard
-        report = build_scoreboard(day, out_root, snapshot_root, [1, 5, 20])
+        report = build_scoreboard(day, out_root, snapshot_root, horizons)
         write_scoreboard(report, paths["reports"])
+    except Exception:
+        pass  # Best-effort; do not fail run
+
+    # FAZ571: Summary HTML (before manifest so it's discoverable)
+    try:
+        from tools.live_publish_summary import publish_summary
+        publish_summary(day, out_root)
+    except Exception:
+        pass  # Best-effort; do not fail run
+
+    # FAZ576: Run manifest (inputs, outputs, symbols, horizons, versions, sha)
+    try:
+        from tools.live_manifest import build_manifest, write_manifest
+        manifest = build_manifest(
+            day=day,
+            out_root=out_root,
+            snapshot_root=snapshot_root,
+            paths=paths,
+            symbols=symbols,
+            top_n=top_n,
+            horizons=horizons,
+        )
+        write_manifest(manifest, paths["reports"])
     except Exception:
         pass  # Best-effort; do not fail run
 
@@ -159,6 +183,7 @@ def run_live_daily(
 
 
 def main() -> int:
+    """Exit 0=ok, 2=validation block, 1=programmer error."""
     import argparse
     p = argparse.ArgumentParser(description="FAZ566: Live daily runner")
     p.add_argument("--day", required=True, help="YYYY-MM-DD")
@@ -167,18 +192,22 @@ def main() -> int:
     p.add_argument("--snapshot-root", default=None)
     args = p.parse_args()
     snap = args.snapshot_root if args.snapshot_root else None
-    code, symbols, paths = run_live_daily(
-        day=args.day,
-        top_n=args.top_n,
-        out_root=args.out_root,
-        snapshot_root=snap,
-    )
-    print(f"TOP{len(symbols)}: {', '.join(symbols) or '(none)'}")
-    print(f"Scan: {paths['daily_scan']}")
-    print(f"Ask: {paths['ask']}")
-    print(f"Outcomes: {paths['outcomes']}")
-    print(f"Reports: {paths['reports']}")
-    return code
+    try:
+        code, symbols, paths = run_live_daily(
+            day=args.day,
+            top_n=args.top_n,
+            out_root=args.out_root,
+            snapshot_root=snap,
+        )
+        print(f"TOP{len(symbols)}: {', '.join(symbols) or '(none)'}")
+        print(f"Scan: {paths['daily_scan']}")
+        print(f"Ask: {paths['ask']}")
+        print(f"Outcomes: {paths['outcomes']}")
+        print(f"Reports: {paths['reports']}")
+        return int(code) if code is not None else 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
