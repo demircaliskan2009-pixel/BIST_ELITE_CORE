@@ -156,23 +156,32 @@ def run_live_daily(
     except Exception:
         pass  # Best-effort; do not fail run
 
-    # FAZ583: TopN horizon ranking (topn_h1, topn_h3, topn_h5, topn_h20)
-    try:
-        from tools.topn_horizon_rank import _run_rank, _write_outputs
-        for h in (1, 3, 5, 20):
-            report = _run_rank(
-                day=day,
-                horizon=h,
-                top_n=5,
-                snapshot_root=snapshot_root,
-                scan_path=paths["daily_scan"] / "scan.json" if (paths["daily_scan"] / "scan.json").is_file() else None,
-                reports_dir=paths["reports"],
-                lookback=60,
-                cost_bps=10.0,
-            )
-            _write_outputs(paths["reports"], h, report)
-    except Exception:
-        pass  # Best-effort; do not fail run
+    # FAZ583/FAZ590: TopN horizon ranking (topn_h1, topn_h3, topn_h5, topn_h20)
+    scan_json = out_root / "daily_scan" / day / "scan.json"
+    if not scan_json.is_file():
+        print("faz590: scan.json not found, skipping topn/bundle/risk_plan", file=sys.stderr)
+    else:
+        try:
+            topn_script = _repo_root() / "tools" / "topn_horizon_rank.py"
+            for h in (1, 3, 5, 20):
+                cmd = [
+                    sys.executable, str(topn_script),
+                    "--day", day,
+                    "--horizon", str(h),
+                    "--top", str(top_n),
+                    "--scan", str(scan_json),
+                    "--out-root", str(out_root),
+                    "--snapshot-root", str(snapshot_root),
+                ]
+                r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=120)
+                if r.returncode == 2:
+                    print(f"faz590: topn_h{h} input missing (exit 2), continuing", file=sys.stderr)
+                elif r.returncode == 1:
+                    raise RuntimeError(f"topn_horizon_rank exit 1: {r.stderr or r.stdout}")
+        except RuntimeError:
+            raise
+        except Exception as e:
+            print(f"faz590: topn_horizon_rank error: {e}", file=sys.stderr)
 
     # FAZ584: TopN bundle (topn_bundle_h1, h3, h5, h20)
     try:
