@@ -183,44 +183,40 @@ def run_live_daily(
         except Exception as e:
             print(f"faz590: topn_horizon_rank error: {e}", file=sys.stderr)
 
-    # FAZ584: TopN bundle (topn_bundle_h1, h3, h5, h20)
-    try:
-        from tools.topn_bundle_report import _run_bundle, _write_outputs as _write_bundle_outputs
-        reports_root = paths["reports"].parent
+        # FAZ591: TopN bundle (topn_bundle_h1, h3, h5, h20) via subprocess
+        reports_root = out_root / "reports"
+        bundle_script = _repo_root() / "tools" / "topn_bundle_report.py"
         for h in (1, 3, 5, 20):
-            rows = _run_bundle(
-                day=day,
-                horizon=h,
-                top_n=5,
-                reports_root=reports_root,
-                snapshot_root=snapshot_root,
-                out_root=out_root,
-            )
-            if rows is not None:
-                _write_bundle_outputs(paths["reports"], h, day, rows)
-    except Exception:
-        pass  # Best-effort; do not fail run
+            cmd = [
+                sys.executable, str(bundle_script),
+                "--day", day,
+                "--horizon", str(h),
+                "--top", str(top_n),
+                "--reports-root", str(reports_root),
+                "--snapshot-root", str(snapshot_root),
+            ]
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=120)
+            if r.returncode == 2:
+                print(f"faz591: topn_bundle_h{h} input missing (exit 2), continuing", file=sys.stderr)
+            elif r.returncode == 1:
+                raise RuntimeError(f"topn_bundle_report exit 1: {r.stderr or r.stdout}")
 
-    # FAZ585: Risk plan (risk_plan_h1, h3, h5, h20)
-    try:
-        from tools.risk_sizer import _load_config as _load_risk_config
-        from tools.risk_sizer import _run_sizer, _write_outputs as _write_risk_outputs
-        reports_root = paths["reports"].parent
-        cfg, cfg_err = _load_risk_config()
-        if not cfg_err:
-            for h in (1, 3, 5, 20):
-                rows = _run_sizer(
-                    day=day,
-                    horizon=h,
-                    top_n=5,
-                    reports_root=reports_root,
-                    snapshot_root=snapshot_root,
-                    cfg=cfg,
-                )
-                if rows is not None:
-                    _write_risk_outputs(paths["reports"], h, day, rows)
-    except Exception:
-        pass  # Best-effort; do not fail run
+        # FAZ591: Risk plan (risk_plan_h1, h3, h5, h20) via subprocess
+        risk_script = _repo_root() / "tools" / "risk_sizer.py"
+        for h in (1, 3, 5, 20):
+            cmd = [
+                sys.executable, str(risk_script),
+                "--day", day,
+                "--horizon", str(h),
+                "--top", str(top_n),
+                "--reports-root", str(reports_root),
+                "--snapshot-root", str(snapshot_root),
+            ]
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=120)
+            if r.returncode == 2:
+                print(f"faz591: risk_plan_h{h} input missing (exit 2), continuing", file=sys.stderr)
+            elif r.returncode == 1:
+                raise RuntimeError(f"risk_sizer exit 1: {r.stderr or r.stdout}")
 
     # FAZ586: Pick lock (picks_h1, h3, h5, h20)
     try:
