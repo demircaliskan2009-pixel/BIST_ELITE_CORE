@@ -55,6 +55,20 @@ def test_live_validate_ok_with_valid_snapshot(tmp_path: Path) -> None:
     assert details.get("symbol_count", 0) >= 1
 
 
+def test_live_validate_ok_with_bom_prefixed_header(tmp_path: Path) -> None:
+    """FAZ593: live_validate returns ok=True when snapshot.csv has UTF-8 BOM prefix."""
+    (tmp_path / "2025-01-20").mkdir()
+    # Write with BOM (Excel-style); utf-8-sig adds BOM at file start
+    (tmp_path / "2025-01-20" / "snapshot.csv").write_text(
+        "symbol,close\nAAA,100.0\nBBB,99.0\n",
+        encoding="utf-8-sig",
+    )
+    ok, reasons, checked, details = validate_snapshot_for_day("2025-01-20", tmp_path)
+    assert ok is True, f"Expected ok=True, got reasons={reasons}"
+    assert not reasons
+    assert details.get("symbol_count", 0) >= 1
+
+
 def test_live_validate_cli_exit_2_on_missing(tmp_path: Path) -> None:
     """live_validate.py exits 2 when snapshot missing."""
     env = {"PYTHONPATH": str(_repo / "src")}

@@ -66,7 +66,7 @@ def validate_snapshot_for_day(
     checked_paths.append(str(path_used))
 
     try:
-        with path_used.open(newline="", encoding="utf-8", errors="replace") as f:
+        with path_used.open(newline="", encoding="utf-8-sig", errors="replace") as f:
             reader = csv.DictReader(f)
             rows = list(reader)
     except (OSError, csv.Error) as e:
@@ -77,9 +77,12 @@ def validate_snapshot_for_day(
         reasons.append("empty_snapshot")
         return False, reasons, checked_paths, details
 
+    def _symbol(row: dict) -> str:
+        return (row.get("symbol") or row.get("\ufeffsymbol") or "").strip()
+
     dates_seen: list[str] = []
     for i, row in enumerate(rows):
-        sym = (row.get("symbol") or "").strip()
+        sym = _symbol(row)
         if not sym:
             reasons.append(f"row_{i+2}_missing_symbol")
             continue
@@ -95,7 +98,7 @@ def validate_snapshot_for_day(
             reasons.append(f"row_{i+2}_invalid_close_numeric")
         dates_seen.append(day)
 
-    symbols = [r.get("symbol", "").strip() for r in rows if r.get("symbol", "").strip()]
+    symbols = [_symbol(r) for r in rows if _symbol(r)]
     details["symbol_count"] = len(symbols)
     details["row_count"] = len(rows)
 
