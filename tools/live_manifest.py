@@ -95,6 +95,16 @@ def build_manifest(
             if p.is_file():
                 outputs.append(str(p.resolve()))
 
+    # FAZ586: Picks and eval
+    picks_dir = out_root / "picks" / day
+    if picks_dir.is_dir():
+        for h in (1, 3, 5, 20):
+            for ext in ("json", "csv"):
+                for prefix in ("picks", "eval"):
+                    p = picks_dir / f"{prefix}_h{h}.{ext}"
+                    if p.is_file():
+                        outputs.append(str(p.resolve()))
+
     outputs = sorted(outputs)
 
     return {

@@ -213,6 +213,40 @@ def run_live_daily(
     except Exception:
         pass  # Best-effort; do not fail run
 
+    # FAZ586: Pick lock (picks_h1, h3, h5, h20)
+    try:
+        from tools.pick_lock import _run_lock, _write_outputs as _write_pick_outputs
+        reports_root = paths["reports"].parent
+        picks_root = out_root / "picks"
+        for h in (1, 3, 5, 20):
+            rows = _run_lock(
+                day=day,
+                horizon=h,
+                top_n=5,
+                reports_root=reports_root,
+                picks_root=picks_root,
+            )
+            if rows is not None:
+                _write_pick_outputs(picks_root / day, h, day, rows)
+    except Exception:
+        pass  # Best-effort; do not fail run
+
+    # FAZ586: Pick eval (eval_h1, h3, h5, h20) — when exit-day data exists
+    try:
+        from tools.pick_eval import _run_eval, _write_outputs as _write_eval_outputs
+        picks_root = out_root / "picks"
+        for h in (1, 3, 5, 20):
+            rows = _run_eval(
+                day=day,
+                horizon=h,
+                picks_root=picks_root,
+                snapshot_root=snapshot_root,
+            )
+            if rows is not None:
+                _write_eval_outputs(picks_root / day, h, day, rows)
+    except Exception:
+        pass  # Best-effort; do not fail run
+
     # FAZ571: Summary HTML (before manifest so it's discoverable)
     try:
         from tools.live_publish_summary import publish_summary
