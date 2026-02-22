@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Tuple
 # Allowed BIST_* env keys (single source of truth). Add any BIST_* used in codebase.
 BIST_ALLOWED_ENV_KEYS = frozenset([
     "BIST_API_KEY",  # if ever used for logging redaction only
+    "BIST_ATR_N",  # FAZ585: Risk sizer ATR period
+    "BIST_CAPITAL_TRY",  # FAZ585: Risk sizer capital
     "BIST_BROKER_CONFIG",
     "BIST_EXEC_PROVIDER",  # FAZ580: dry_run | real_skeleton
     "BIST_CORE_ALLOW_NETWORK",
@@ -38,6 +40,9 @@ BIST_ALLOWED_ENV_KEYS = frozenset([
     "BIST_KAP_URL_TEMPLATE",
     "BIST_RESTRICTIONS_FILE",
     "BIST_RESEARCH_SOURCE",
+    "BIST_RISK_PCT",  # FAZ585: Risk sizer risk %
+    "BIST_STOP_ATR_MULT",  # FAZ585: Risk sizer stop distance multiplier
+    "BIST_TP_R_MULT",  # FAZ585: Risk sizer take-profit R multiplier
     "BIST_RESEARCH_URL",
     "BIST_RULESPACK_DIR",
     "BIST_SAMPLES_DIR",

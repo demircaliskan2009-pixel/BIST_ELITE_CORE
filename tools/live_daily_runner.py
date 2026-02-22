@@ -192,6 +192,27 @@ def run_live_daily(
     except Exception:
         pass  # Best-effort; do not fail run
 
+    # FAZ585: Risk plan (risk_plan_h1, h3, h5, h20)
+    try:
+        from tools.risk_sizer import _load_config as _load_risk_config
+        from tools.risk_sizer import _run_sizer, _write_outputs as _write_risk_outputs
+        reports_root = paths["reports"].parent
+        cfg, cfg_err = _load_risk_config()
+        if not cfg_err:
+            for h in (1, 3, 5, 20):
+                rows = _run_sizer(
+                    day=day,
+                    horizon=h,
+                    top_n=5,
+                    reports_root=reports_root,
+                    snapshot_root=snapshot_root,
+                    cfg=cfg,
+                )
+                if rows is not None:
+                    _write_risk_outputs(paths["reports"], h, day, rows)
+    except Exception:
+        pass  # Best-effort; do not fail run
+
     # FAZ571: Summary HTML (before manifest so it's discoverable)
     try:
         from tools.live_publish_summary import publish_summary
