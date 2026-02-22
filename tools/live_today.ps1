@@ -1,5 +1,7 @@
 # FAZ567: Today runner — validate then live_daily. Istanbul/local time.
+# FAZ588: -Day override for offline runs (explicit snapshot day).
 param(
+    [string]$Day = "",
     [int]$TopN = 5,
     [string]$OutRoot = "data/log",
     [string]$SnapshotRoot = ""
@@ -7,7 +9,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$Day = (Get-Date).ToString("yyyy-MM-dd")
+if (-not $Day) { $Day = (Get-Date).ToString("yyyy-MM-dd") }
 
 Push-Location $repoRoot
 

@@ -11,9 +11,9 @@ Push-Location $repoRoot
 
 try {
     $env:PYTHONPATH = Join-Path $repoRoot "src"
-    $args = @("--day", $Day)
-    if ($SnapshotRoot) { $args += @("--snapshot-root", $SnapshotRoot) }
-    & python (Join-Path $repoRoot "tools\live_validate.py") @args
+    $pyArgs = @("--day", $Day)
+    if ($SnapshotRoot) { $pyArgs += @("--snapshot-root", $SnapshotRoot) }
+    & python (Join-Path $repoRoot "tools\live_validate.py") @pyArgs
     exit $LASTEXITCODE
 } finally {
     Pop-Location
