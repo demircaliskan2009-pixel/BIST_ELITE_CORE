@@ -218,39 +218,39 @@ def run_live_daily(
             elif r.returncode == 1:
                 raise RuntimeError(f"risk_sizer exit 1: {r.stderr or r.stdout}")
 
-    # FAZ586: Pick lock (picks_h1, h3, h5, h20)
-    try:
-        from tools.pick_lock import _run_lock, _write_outputs as _write_pick_outputs
-        reports_root = paths["reports"].parent
+        # FAZ592: Pick lock (picks_h1, h3, h5, h20) via subprocess
         picks_root = out_root / "picks"
+        lock_script = _repo_root() / "tools" / "pick_lock.py"
         for h in (1, 3, 5, 20):
-            rows = _run_lock(
-                day=day,
-                horizon=h,
-                top_n=5,
-                reports_root=reports_root,
-                picks_root=picks_root,
-            )
-            if rows is not None:
-                _write_pick_outputs(picks_root / day, h, day, rows)
-    except Exception:
-        pass  # Best-effort; do not fail run
+            cmd = [
+                sys.executable, str(lock_script),
+                "--day", day,
+                "--horizon", str(h),
+                "--top", str(top_n),
+                "--reports-root", str(reports_root),
+                "--picks-root", str(picks_root),
+            ]
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
+            if r.returncode == 2:
+                print(f"faz592: picks_h{h} input missing (exit 2), continuing", file=sys.stderr)
+            elif r.returncode == 1:
+                raise RuntimeError(f"pick_lock exit 1: {r.stderr or r.stdout}")
 
-    # FAZ586: Pick eval (eval_h1, h3, h5, h20) — when exit-day data exists
-    try:
-        from tools.pick_eval import _run_eval, _write_outputs as _write_eval_outputs
-        picks_root = out_root / "picks"
+        # FAZ592: Pick eval (eval_h1, h3, h5, h20) — PENDING when exit snapshot missing, OK when present
+        eval_script = _repo_root() / "tools" / "pick_eval.py"
         for h in (1, 3, 5, 20):
-            rows = _run_eval(
-                day=day,
-                horizon=h,
-                picks_root=picks_root,
-                snapshot_root=snapshot_root,
-            )
-            if rows is not None:
-                _write_eval_outputs(picks_root / day, h, day, rows)
-    except Exception:
-        pass  # Best-effort; do not fail run
+            cmd = [
+                sys.executable, str(eval_script),
+                "--day", day,
+                "--horizon", str(h),
+                "--picks-root", str(picks_root),
+                "--snapshot-root", str(snapshot_root),
+            ]
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
+            if r.returncode == 2:
+                print(f"faz592: eval_h{h} picks missing (exit 2), continuing", file=sys.stderr)
+            elif r.returncode == 1:
+                raise RuntimeError(f"pick_eval exit 1: {r.stderr or r.stdout}")
 
     # FAZ571: Summary HTML (before manifest so it's discoverable)
     try:
