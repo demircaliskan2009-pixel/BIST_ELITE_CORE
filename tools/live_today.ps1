@@ -9,7 +9,22 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path $PSScriptRoot -Parent
-if (-not $Day) { $Day = (Get-Date).ToString("yyyy-MM-dd") }
+if (-not $Day) {
+    if ($SnapshotRoot) {
+        $today = (Get-Date).ToString("yyyy-MM-dd")
+        $candidates = Get-ChildItem -Path $SnapshotRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^\d{4}-\d{2}-\d{2}$' } |
+            Where-Object { $_.Name -le $today } |
+            Sort-Object Name -Descending
+        if ($candidates) {
+            $Day = $candidates[0].Name
+        } else {
+            $Day = $today
+        }
+    } else {
+        $Day = (Get-Date).ToString("yyyy-MM-dd")
+    }
+}
 
 Push-Location $repoRoot
 
