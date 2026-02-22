@@ -174,6 +174,24 @@ def run_live_daily(
     except Exception:
         pass  # Best-effort; do not fail run
 
+    # FAZ584: TopN bundle (topn_bundle_h1, h3, h5, h20)
+    try:
+        from tools.topn_bundle_report import _run_bundle, _write_outputs as _write_bundle_outputs
+        reports_root = paths["reports"].parent
+        for h in (1, 3, 5, 20):
+            rows = _run_bundle(
+                day=day,
+                horizon=h,
+                top_n=5,
+                reports_root=reports_root,
+                snapshot_root=snapshot_root,
+                out_root=out_root,
+            )
+            if rows is not None:
+                _write_bundle_outputs(paths["reports"], h, day, rows)
+    except Exception:
+        pass  # Best-effort; do not fail run
+
     # FAZ571: Summary HTML (before manifest so it's discoverable)
     try:
         from tools.live_publish_summary import publish_summary
