@@ -14,10 +14,10 @@ if (-not $Day) { $Day = (Get-Date).ToString("yyyy-MM-dd") }
 Push-Location $repoRoot
 
 try {
-    # Validate first
-    $valArgs = @("-Day", $Day)
-    if ($SnapshotRoot) { $valArgs += @("-SnapshotRoot", $SnapshotRoot) }
-    & $PSScriptRoot\live_validate.ps1 @valArgs
+    # Validate first (hashtable splat for named params)
+    $valParams = @{ Day = $Day }
+    if ($SnapshotRoot) { $valParams.SnapshotRoot = $SnapshotRoot }
+    & $PSScriptRoot\live_validate.ps1 @valParams
     if ($LASTEXITCODE -eq 2) {
         Write-Host "Validate failed (exit 2). No live run."
         exit 2
@@ -27,10 +27,10 @@ try {
         exit $LASTEXITCODE
     }
 
-    # Run live daily
-    $dailyArgs = @("-Day", $Day, "-TopN", $TopN, "-OutRoot", $OutRoot)
-    if ($SnapshotRoot) { $dailyArgs += @("-SnapshotRoot", $SnapshotRoot) }
-    & $PSScriptRoot\live_daily.ps1 @dailyArgs
+    # Run live daily (hashtable splat for named params)
+    $dailyParams = @{ Day = $Day; TopN = $TopN; OutRoot = $OutRoot }
+    if ($SnapshotRoot) { $dailyParams.SnapshotRoot = $SnapshotRoot }
+    & $PSScriptRoot\live_daily.ps1 @dailyParams
     $dailyExit = $LASTEXITCODE
 
     # Publish summary (best-effort; do not fail run)
