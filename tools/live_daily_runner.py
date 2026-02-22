@@ -156,6 +156,24 @@ def run_live_daily(
     except Exception:
         pass  # Best-effort; do not fail run
 
+    # FAZ583: TopN horizon ranking (topn_h1, topn_h3, topn_h5, topn_h20)
+    try:
+        from tools.topn_horizon_rank import _run_rank, _write_outputs
+        for h in (1, 3, 5, 20):
+            report = _run_rank(
+                day=day,
+                horizon=h,
+                top_n=5,
+                snapshot_root=snapshot_root,
+                scan_path=paths["daily_scan"] / "scan.json" if (paths["daily_scan"] / "scan.json").is_file() else None,
+                reports_dir=paths["reports"],
+                lookback=60,
+                cost_bps=10.0,
+            )
+            _write_outputs(paths["reports"], h, report)
+    except Exception:
+        pass  # Best-effort; do not fail run
+
     # FAZ571: Summary HTML (before manifest so it's discoverable)
     try:
         from tools.live_publish_summary import publish_summary

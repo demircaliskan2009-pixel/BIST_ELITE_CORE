@@ -81,6 +81,11 @@ def build_manifest(
         p = reports_dir / name
         if p.is_file():
             outputs.append(str(p.resolve()))
+    for h in (1, 3, 5, 20):
+        for ext in ("json", "csv"):
+            p = reports_dir / f"topn_h{h}.{ext}"
+            if p.is_file():
+                outputs.append(str(p.resolve()))
 
     outputs = sorted(outputs)
 
