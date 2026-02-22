@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date as Date
 from pathlib import Path
 import json
+import os
 import re
 import time
 from typing import List, Optional
@@ -151,10 +152,21 @@ def build_manifest(
 
 
 def atomic_write_json(path: Path, payload: dict) -> None:
+    """Write JSON atomically. Retry replace on Windows (WinError 32)."""
     tmp_path = path.with_name(f"{path.name}.tmp")
     with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
-    tmp_path.replace(path)
+        f.flush()
+        os.fsync(f.fileno())
+    max_attempts = 10
+    for attempt in range(max_attempts):
+        try:
+            tmp_path.replace(path)
+            return
+        except (PermissionError, OSError) as e:
+            if attempt == max_attempts - 1:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def _filter_symbols(
