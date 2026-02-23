@@ -28,6 +28,20 @@ function Resolve-RepoPath($p) {
     return [System.IO.Path]::GetFullPath($joined)
 }
 
+function Pick-ByPriority($cands) {
+    $priority = @(
+        (Join-Path $RepoRoot "data\eod\snapshots"),
+        (Join-Path $RepoRoot "data\snapshots"),
+        (Join-Path $RepoRoot "data\raw\eod")
+    )
+    foreach ($p in $priority) {
+        $pNorm = [System.IO.Path]::GetFullPath($p)
+        $match = $cands | Where-Object { [System.IO.Path]::GetFullPath($_) -ieq $pNorm }
+        if ($match -and @($match).Count -eq 1) { return $match[0] }
+    }
+    return $null
+}
+
 $outRoot = "data/log"
 $reportsBase = Join-Path $RepoRoot ($outRoot -replace "/", "\") | Join-Path -ChildPath "reports"
 $picksBase = Join-Path $RepoRoot ($outRoot -replace "/", "\") | Join-Path -ChildPath "picks"
@@ -45,21 +59,52 @@ if (-not $SnapshotRoot) {
         } | Sort-Object -Unique)
         if ($roots.Count -eq 1) {
             $SnapshotRoot = $roots[0]
+        } elseif ($roots.Count -gt 1) {
+            function Write-SnapshotRootDiagnostics {
+                Write-Host "No SnapshotRoot provided and none resolved." -ForegroundColor Red
+                Write-Host "Searched for snapshot.csv under: $searchBase"
+                if ($hitPaths) {
+                    Write-Host "Found snapshot.csv examples:"
+                    $hitPaths | ForEach-Object { Write-Host "  $_" }
+                } else {
+                    Write-Host "Found snapshot.csv examples: none"
+                }
+                if ($roots) {
+                    Write-Host "Candidate snapshot roots:"
+                    $roots | ForEach-Object { Write-Host "  $_" }
+                } else {
+                    Write-Host "Candidate snapshot roots: none"
+                }
+                throw "SnapshotRoot unresolved. Provide -SnapshotRoot (absolute) or set env:BIST_SNAPSHOT_ROOT."
+            }
+            if ($Day) {
+                $hasDay = @($roots | Where-Object { Test-Path -LiteralPath (Join-Path $_ $Day "snapshot.csv") })
+                if ($hasDay.Count -eq 1) {
+                    $SnapshotRoot = $hasDay[0]
+                } elseif ($hasDay.Count -gt 1) {
+                    $pick = Pick-ByPriority $hasDay
+                    if ($pick) {
+                        $SnapshotRoot = $pick
+                    } else {
+                        Write-SnapshotRootDiagnostics
+                    }
+                } else {
+                    Write-Host "No root contains requested day $Day" -ForegroundColor Red
+                    Write-SnapshotRootDiagnostics
+                }
+            } else {
+                $pick = Pick-ByPriority $roots
+                if ($pick) {
+                    $SnapshotRoot = $pick
+                } else {
+                    Write-SnapshotRootDiagnostics
+                }
+            }
         } else {
             Write-Host "No SnapshotRoot provided and none resolved." -ForegroundColor Red
             Write-Host "Searched for snapshot.csv under: $searchBase"
-            if ($hitPaths) {
-                Write-Host "Found snapshot.csv examples:"
-                $hitPaths | ForEach-Object { Write-Host "  $_" }
-            } else {
-                Write-Host "Found snapshot.csv examples: none"
-            }
-            if ($roots) {
-                Write-Host "Candidate snapshot roots:"
-                $roots | ForEach-Object { Write-Host "  $_" }
-            } else {
-                Write-Host "Candidate snapshot roots: none"
-            }
+            Write-Host "Found snapshot.csv examples: none"
+            Write-Host "Candidate snapshot roots: none"
             throw "SnapshotRoot unresolved. Provide -SnapshotRoot (absolute) or set env:BIST_SNAPSHOT_ROOT."
         }
     } else {
