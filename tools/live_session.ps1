@@ -13,10 +13,24 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$repoRoot = Split-Path $PSScriptRoot -Parent
+try {
+    $r = git rev-parse --show-toplevel 2>$null
+    $RepoRoot = if ($r) { $r.Trim() } else { $null }
+    if (-not $RepoRoot) { throw }
+} catch {
+    $RepoRoot = Split-Path $PSScriptRoot -Parent
+}
+
+function Resolve-RepoPath($p) {
+    if ([string]::IsNullOrWhiteSpace($p)) { return $null }
+    if ([System.IO.Path]::IsPathRooted($p)) { return [System.IO.Path]::GetFullPath($p) }
+    $joined = Join-Path $RepoRoot $p
+    return [System.IO.Path]::GetFullPath($joined)
+}
+
 $outRoot = "data/log"
-$reportsBase = Join-Path $repoRoot ($outRoot -replace "/", "\") | Join-Path -ChildPath "reports"
-$picksBase = Join-Path $repoRoot ($outRoot -replace "/", "\") | Join-Path -ChildPath "picks"
+$reportsBase = Join-Path $RepoRoot ($outRoot -replace "/", "\") | Join-Path -ChildPath "reports"
+$picksBase = Join-Path $RepoRoot ($outRoot -replace "/", "\") | Join-Path -ChildPath "picks"
 
 # Set risk params from params or env; validate before live_today
 $riskVars = @{
@@ -42,19 +56,25 @@ foreach ($k in $riskVars.Keys) {
     Set-Item -Path "env:$k" -Value $riskVars[$k]
 }
 
-Push-Location $repoRoot
+Push-Location $RepoRoot
 try {
-    # 1) Run live_today
+    # 1) Resolve SnapshotRoot (repo-root absolute)
+    $SnapshotRootResolved = Resolve-RepoPath $SnapshotRoot
+    if ($SnapshotRootResolved -and -not (Test-Path -LiteralPath $SnapshotRootResolved)) {
+        throw "SnapshotRoot missing: given='$SnapshotRoot' resolved='$SnapshotRootResolved'"
+    }
+
+    # 2) Run live_today
     $todayParams = @{ TopN = 5; OutRoot = $outRoot }
     if ($Day) { $todayParams.Day = $Day }
-    if ($SnapshotRoot) { $todayParams.SnapshotRoot = $SnapshotRoot }
+    if ($SnapshotRootResolved) { $todayParams.SnapshotRoot = $SnapshotRootResolved }
     & $PSScriptRoot\live_today.ps1 @todayParams
     if ($LASTEXITCODE -ne 0) {
         Write-Host "live_today failed (exit $LASTEXITCODE)"
         exit $LASTEXITCODE
     }
 
-    # 2) Determine DAY
+    # 3) Determine DAY
     $resolvedDay = $Day
     if (-not $resolvedDay) {
         if (-not (Test-Path $reportsBase)) {
@@ -74,7 +94,7 @@ try {
     $reportDir = Join-Path $reportsBase $resolvedDay
     $picksDir = Join-Path $picksBase $resolvedDay
 
-    # 3) Validate required artifacts
+    # 4) Validate required artifacts
     $required = @(
         (Join-Path $reportDir "summary.html"),
         (Join-Path $reportDir "topn_h1.csv"),
@@ -95,7 +115,7 @@ try {
         exit 2
     }
 
-    # 4) Generate order ticket (atomic write via midas)
+    # 5) Generate order ticket (atomic write via midas)
     $riskPlanCsv = Join-Path $reportDir "risk_plan_h$TicketHorizon.csv"
     $outTicket = Join-Path $reportDir "order_ticket_h$TicketHorizon.txt"
     & $PSScriptRoot\midas_ticket_from_risk_plan.ps1 -RiskPlanPath $riskPlanCsv -OutPath $outTicket
@@ -104,7 +124,7 @@ try {
         exit $LASTEXITCODE
     }
 
-    # 5) Session summary
+    # 6) Session summary
     Write-Host ""
     Write-Host "=== live_session summary ===" -ForegroundColor Cyan
     Write-Host "Day: $resolvedDay"
