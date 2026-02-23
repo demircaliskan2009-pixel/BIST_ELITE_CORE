@@ -28,16 +28,12 @@ function Resolve-RepoPath($p) {
     return [System.IO.Path]::GetFullPath($joined)
 }
 
-function Pick-ByPriority($cands) {
-    $priority = @(
-        (Join-Path $RepoRoot "data\eod\snapshots"),
-        (Join-Path $RepoRoot "data\snapshots"),
-        (Join-Path $RepoRoot "data\raw\eod")
-    )
+function Pick-ByPriority {
+    param([string[]]$cands, [string[]]$priority)
     foreach ($p in $priority) {
         $pNorm = [System.IO.Path]::GetFullPath($p)
-        $match = $cands | Where-Object { [System.IO.Path]::GetFullPath($_) -ieq $pNorm }
-        if ($match -and @($match).Count -eq 1) { return $match[0] }
+        $m = @($cands | Where-Object { [System.IO.Path]::GetFullPath($_) -ieq $pNorm })
+        if ($m.Count -eq 1) { return $m[0] }
     }
     return $null
 }
@@ -57,8 +53,9 @@ if (-not $SnapshotRoot) {
             $dayDir = Split-Path $_.FullName -Parent
             Split-Path $dayDir -Parent
         } | Sort-Object -Unique)
+        $roots = @($roots)
         if ($roots.Count -eq 1) {
-            $SnapshotRoot = $roots[0]
+            $SnapshotRoot = [string]($roots | Select-Object -First 1)
         } elseif ($roots.Count -gt 1) {
             function Write-SnapshotRootDiagnostics {
                 Write-Host "No SnapshotRoot provided and none resolved." -ForegroundColor Red
@@ -77,18 +74,24 @@ if (-not $SnapshotRoot) {
                 }
                 throw "SnapshotRoot unresolved. Provide -SnapshotRoot (absolute) or set env:BIST_SNAPSHOT_ROOT."
             }
+            $priority = @(
+                (Join-Path $RepoRoot "data\eod\snapshots"),
+                (Join-Path $RepoRoot "data\snapshots"),
+                (Join-Path $RepoRoot "data\raw\eod")
+            )
             if ($Day) {
                 $hasDay = @($roots | Where-Object {
                     $p1 = Join-Path -Path (Join-Path -Path $_ -ChildPath $Day) -ChildPath 'snapshot.csv'
                     $p2 = Join-Path -Path (Join-Path -Path (Join-Path -Path $_ -ChildPath 'snapshots') -ChildPath $Day) -ChildPath 'snapshot.csv'
                     (Test-Path -LiteralPath $p1 -PathType Leaf) -or (Test-Path -LiteralPath $p2 -PathType Leaf)
                 })
+                $hasDay = @($hasDay)
                 if ($hasDay.Count -eq 1) {
-                    $SnapshotRoot = $hasDay[0]
+                    $SnapshotRoot = [string]($hasDay | Select-Object -First 1)
                 } elseif ($hasDay.Count -gt 1) {
-                    $pick = Pick-ByPriority $hasDay
+                    $pick = Pick-ByPriority -cands $hasDay -priority $priority
                     if ($pick) {
-                        $SnapshotRoot = $pick
+                        $SnapshotRoot = [string]$pick
                     } else {
                         Write-SnapshotRootDiagnostics
                     }
@@ -97,9 +100,9 @@ if (-not $SnapshotRoot) {
                     Write-SnapshotRootDiagnostics
                 }
             } else {
-                $pick = Pick-ByPriority $roots
+                $pick = Pick-ByPriority -cands $roots -priority $priority
                 if ($pick) {
-                    $SnapshotRoot = $pick
+                    $SnapshotRoot = [string]$pick
                 } else {
                     Write-SnapshotRootDiagnostics
                 }
@@ -182,7 +185,7 @@ try {
             Write-Host "live_session: no day folder under reports"
             exit 2
         }
-        $resolvedDay = $candidates[0].Name
+        $resolvedDay = ($candidates | Select-Object -First 1).Name
     }
 
     $reportDir = Join-Path $reportsBase $resolvedDay
