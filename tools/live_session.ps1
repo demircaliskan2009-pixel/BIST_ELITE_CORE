@@ -78,7 +78,11 @@ if (-not $SnapshotRoot) {
                 throw "SnapshotRoot unresolved. Provide -SnapshotRoot (absolute) or set env:BIST_SNAPSHOT_ROOT."
             }
             if ($Day) {
-                $hasDay = @($roots | Where-Object { Test-Path -LiteralPath (Join-Path $_ $Day "snapshot.csv") })
+                $hasDay = @($roots | Where-Object {
+                    $p1 = Join-Path -Path (Join-Path -Path $_ -ChildPath $Day) -ChildPath 'snapshot.csv'
+                    $p2 = Join-Path -Path (Join-Path -Path (Join-Path -Path $_ -ChildPath 'snapshots') -ChildPath $Day) -ChildPath 'snapshot.csv'
+                    (Test-Path -LiteralPath $p1 -PathType Leaf) -or (Test-Path -LiteralPath $p2 -PathType Leaf)
+                })
                 if ($hasDay.Count -eq 1) {
                     $SnapshotRoot = $hasDay[0]
                 } elseif ($hasDay.Count -gt 1) {
