@@ -32,6 +32,45 @@ $outRoot = "data/log"
 $reportsBase = Join-Path $RepoRoot ($outRoot -replace "/", "\") | Join-Path -ChildPath "reports"
 $picksBase = Join-Path $RepoRoot ($outRoot -replace "/", "\") | Join-Path -ChildPath "picks"
 
+# SnapshotRoot source order: param -> env(BIST_SNAPSHOT_ROOT) -> auto-discover under repo\data
+if (-not $SnapshotRoot -and $env:BIST_SNAPSHOT_ROOT) { $SnapshotRoot = $env:BIST_SNAPSHOT_ROOT }
+if (-not $SnapshotRoot) {
+    $searchBase = Join-Path $RepoRoot "data"
+    if (Test-Path -LiteralPath $searchBase) {
+        $hits = Get-ChildItem -Path $searchBase -Filter "snapshot.csv" -Recurse -File -ErrorAction SilentlyContinue
+        $hitPaths = $hits | Select-Object -First 10 -ExpandProperty FullName
+        $roots = @($hits | ForEach-Object {
+            $dayDir = Split-Path $_.FullName -Parent
+            Split-Path $dayDir -Parent
+        } | Sort-Object -Unique)
+        if ($roots.Count -eq 1) {
+            $SnapshotRoot = $roots[0]
+        } else {
+            Write-Host "No SnapshotRoot provided and none resolved." -ForegroundColor Red
+            Write-Host "Searched for snapshot.csv under: $searchBase"
+            if ($hitPaths) {
+                Write-Host "Found snapshot.csv examples:"
+                $hitPaths | ForEach-Object { Write-Host "  $_" }
+            } else {
+                Write-Host "Found snapshot.csv examples: none"
+            }
+            if ($roots) {
+                Write-Host "Candidate snapshot roots:"
+                $roots | ForEach-Object { Write-Host "  $_" }
+            } else {
+                Write-Host "Candidate snapshot roots: none"
+            }
+            throw "SnapshotRoot unresolved. Provide -SnapshotRoot (absolute) or set env:BIST_SNAPSHOT_ROOT."
+        }
+    } else {
+        Write-Host "No SnapshotRoot provided and none resolved." -ForegroundColor Red
+        Write-Host "Searched for snapshot.csv under: $searchBase"
+        Write-Host "Found snapshot.csv examples: none (search base missing)"
+        Write-Host "Candidate snapshot roots: none"
+        throw "SnapshotRoot unresolved. Provide -SnapshotRoot (absolute) or set env:BIST_SNAPSHOT_ROOT."
+    }
+}
+
 # Set risk params from params or env; validate before live_today
 $riskVars = @{
     "BIST_CAPITAL_TRY" = if ($CapitalTry) { $CapitalTry } else { $env:BIST_CAPITAL_TRY }
@@ -60,8 +99,14 @@ Push-Location $RepoRoot
 try {
     # 1) Resolve SnapshotRoot (repo-root absolute)
     $SnapshotRootResolved = Resolve-RepoPath $SnapshotRoot
-    if ($SnapshotRootResolved -and -not (Test-Path -LiteralPath $SnapshotRootResolved)) {
+    if (-not $SnapshotRootResolved) {
+        throw "SnapshotRoot unresolved (internal error)"
+    }
+    if (-not (Test-Path -LiteralPath $SnapshotRootResolved)) {
         throw "SnapshotRoot missing: given='$SnapshotRoot' resolved='$SnapshotRootResolved'"
+    }
+    if (-not (Test-Path -LiteralPath $SnapshotRootResolved -PathType Container)) {
+        throw "SnapshotRoot is not a directory: $SnapshotRootResolved"
     }
 
     # 2) Run live_today
