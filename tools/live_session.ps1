@@ -38,6 +38,26 @@ function Pick-ByPriority {
     return $null
 }
 
+function Get-LatestSnapshotDay($snapshotRoot) {
+    $days = @()
+    $dirsA = @(Get-ChildItem -LiteralPath $snapshotRoot -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^\d{4}-\d{2}-\d{2}$' } |
+        Where-Object { Test-Path -LiteralPath (Join-Path -Path $_.FullName -ChildPath 'snapshot.csv') -PathType Leaf } |
+        Select-Object -ExpandProperty Name)
+    $days += $dirsA
+    $snapDir = Join-Path -Path $snapshotRoot -ChildPath 'snapshots'
+    if (Test-Path -LiteralPath $snapDir -PathType Container) {
+        $dirsB = @(Get-ChildItem -LiteralPath $snapDir -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^\d{4}-\d{2}-\d{2}$' } |
+            Where-Object { Test-Path -LiteralPath (Join-Path -Path $_.FullName -ChildPath 'snapshot.csv') -PathType Leaf } |
+            Select-Object -ExpandProperty Name)
+        $days += $dirsB
+    }
+    $days = @($days | Sort-Object -Unique)
+    if ($days.Count -lt 1) { throw "No snapshot days found under SnapshotRoot: $snapshotRoot" }
+    return [string]($days | Select-Object -Last 1)
+}
+
 $outRoot = "data/log"
 $reportsBase = Join-Path $RepoRoot ($outRoot -replace "/", "\") | Join-Path -ChildPath "reports"
 $picksBase = Join-Path $RepoRoot ($outRoot -replace "/", "\") | Join-Path -ChildPath "picks"
@@ -161,9 +181,16 @@ try {
         throw "SnapshotRoot is not a directory: $SnapshotRootResolved"
     }
 
-    # 2) Run live_today
-    $todayParams = @{ TopN = 5; OutRoot = $outRoot }
-    if ($Day) { $todayParams.Day = $Day }
+    # 2) Determine RunDay (from -Day or latest under SnapshotRoot)
+    if ($Day) {
+        $RunDay = $Day
+    } else {
+        $RunDay = Get-LatestSnapshotDay $SnapshotRootResolved
+    }
+    Write-Host "live_session: RunDay=$RunDay SnapshotRoot=$SnapshotRootResolved"
+
+    # 3) Run live_today
+    $todayParams = @{ Day = $RunDay; TopN = 5; OutRoot = $outRoot }
     if ($SnapshotRootResolved) { $todayParams.SnapshotRoot = $SnapshotRootResolved }
     & $PSScriptRoot\live_today.ps1 @todayParams
     if ($LASTEXITCODE -ne 0) {
@@ -171,27 +198,11 @@ try {
         exit $LASTEXITCODE
     }
 
-    # 3) Determine DAY
-    $resolvedDay = $Day
-    if (-not $resolvedDay) {
-        if (-not (Test-Path $reportsBase)) {
-            Write-Host "live_session: reports dir missing: $reportsBase"
-            exit 2
-        }
-        $candidates = Get-ChildItem -Path $reportsBase -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match '^\d{4}-\d{2}-\d{2}$' } |
-            Sort-Object Name -Descending
-        if (-not $candidates) {
-            Write-Host "live_session: no day folder under reports"
-            exit 2
-        }
-        $resolvedDay = ($candidates | Select-Object -First 1).Name
-    }
+    # 4) Paths for RunDay
+    $reportDir = Join-Path $reportsBase $RunDay
+    $picksDir = Join-Path $picksBase $RunDay
 
-    $reportDir = Join-Path $reportsBase $resolvedDay
-    $picksDir = Join-Path $picksBase $resolvedDay
-
-    # 4) Validate required artifacts
+    # 5) Validate required artifacts
     $required = @(
         (Join-Path $reportDir "summary.html"),
         (Join-Path $reportDir "topn_h1.csv"),
@@ -212,7 +223,7 @@ try {
         exit 2
     }
 
-    # 5) Generate order ticket (atomic write via midas)
+    # 6) Generate order ticket (atomic write via midas)
     $riskPlanCsv = Join-Path $reportDir "risk_plan_h$TicketHorizon.csv"
     $outTicket = Join-Path $reportDir "order_ticket_h$TicketHorizon.txt"
     & $PSScriptRoot\midas_ticket_from_risk_plan.ps1 -RiskPlanPath $riskPlanCsv -OutPath $outTicket
@@ -221,10 +232,10 @@ try {
         exit $LASTEXITCODE
     }
 
-    # 6) Session summary
+    # 7) Session summary
     Write-Host ""
     Write-Host "=== live_session summary ===" -ForegroundColor Cyan
-    Write-Host "Day: $resolvedDay"
+    Write-Host "Day: $RunDay"
     Write-Host "Reports: $reportDir"
     Write-Host "Picks: $picksDir"
     Write-Host "Order ticket: $outTicket"
