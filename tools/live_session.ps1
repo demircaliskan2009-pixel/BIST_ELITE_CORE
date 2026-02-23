@@ -39,6 +39,7 @@ function Pick-ByPriority {
 }
 
 function Get-LatestSnapshotDay($snapshotRoot) {
+    $today = (Get-Date).ToString('yyyy-MM-dd')
     $days = @()
     $dirsA = @(Get-ChildItem -LiteralPath $snapshotRoot -Directory -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match '^\d{4}-\d{2}-\d{2}$' } |
@@ -54,8 +55,16 @@ function Get-LatestSnapshotDay($snapshotRoot) {
         $days += $dirsB
     }
     $days = @($days | Sort-Object -Unique)
-    if ($days.Count -lt 1) { throw "No snapshot days found under SnapshotRoot: $snapshotRoot" }
-    return [string]($days | Select-Object -Last 1)
+    $daysOk = @($days | Where-Object { $_ -le $today })
+    $daysFuture = @($days | Where-Object { $_ -gt $today })
+    if ($daysFuture.Count -gt 0) {
+        $futureList = ($daysFuture | Sort-Object) -join ', '
+        Write-Host "live_session: warning - snapshot days > today (ignored): $futureList" -ForegroundColor Yellow
+    }
+    if ($daysOk.Count -lt 1) {
+        throw "No snapshot days <= today found under SnapshotRoot=$snapshotRoot (today=$today)"
+    }
+    return [string]($daysOk | Sort-Object | Select-Object -Last 1)
 }
 
 $outRoot = "data/log"
