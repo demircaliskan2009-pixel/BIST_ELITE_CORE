@@ -1,13 +1,12 @@
-# FAZ598a: Manual broker runner — offline, secrets-free.
+# FAZ598a/FAZ600: Broker runner — manual (offline) and real (fail-closed stub).
 param(
     [Parameter(Mandatory=$true)]
-    [ValidateSet("manual")]
+    [ValidateSet("manual", "real")]
     [string]$Mode,
     [Parameter(Mandatory=$true)]
     [string]$Day,
     [string]$TicketPath = ".\data\log\reports\$Day\order_ticket_h3.txt",
-    [Parameter(Mandatory=$true)]
-    [string]$FillsPath
+    [string]$FillsPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,6 +17,18 @@ try {
     if (-not $RepoRoot) { throw }
 } catch {
     $RepoRoot = Split-Path $PSScriptRoot -Parent
+}
+
+if ($Mode -eq "real") {
+    Write-Host "broker_run: real mode is not enabled in this repo (fail-closed)." -ForegroundColor Yellow
+    Write-Host "  See docs\secrets_policy.md and config\broker.example.yaml for guidance on safe real broker setup." -ForegroundColor Yellow
+    Write-Host "  No network calls were made and no orders were sent." -ForegroundColor Green
+    exit 2
+}
+
+if (-not $FillsPath) {
+    Write-Host "broker_run: FillsPath is required in manual mode." -ForegroundColor Red
+    exit 2
 }
 
 $TicketPathResolved = if ([System.IO.Path]::IsPathRooted($TicketPath)) {

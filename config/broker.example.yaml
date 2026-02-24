@@ -1,0 +1,26 @@
+# FAZ600: Example broker config (structure only, no secrets).
+#
+# Copy this file to config/broker.yaml (which must be git-ignored)
+# and edit values there. Never commit real credentials or endpoints.
+
+broker:
+  name: example_broker
+  mode: dry_run  # or "real" in a future, explicitly-configured phase
+
+  # Optional human-readable label
+  account_label: "MY_DEMO_ACCOUNT"
+
+  # Secrets must come from environment variables, not this file.
+  # Example:
+  #   auth:
+  #     api_key_env: BIST_BROKER_API_KEY
+  auth:
+    api_key_env: "BIST_BROKER_API_KEY"
+
+risk:
+  max_notional_try: 100000
+  max_positions: 50
+
+logging:
+  level: INFO
+
