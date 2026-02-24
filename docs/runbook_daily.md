@@ -31,6 +31,27 @@ Offline daily session: validate → live run → artifact check → order ticket
    ```
    Exit 0 = OK. Nonzero = SnapshotRoot missing or invalid.
 
+## ONE COMMAND
+
+For the full offline loop (sanity check → live session → optional fills import), use:
+
+```powershell
+.\tools\daily.ps1 `
+    -Day 2025-03-15 `
+    -SnapshotRoot "C:\path\to\data\eod\snapshots" `
+    -CapitalTry "30000" `
+    -RiskPct "0.02" `
+    -AtrN "14" `
+    -StopAtrMult "2.0" `
+    -TpRMult "2.0" `
+    -TicketHorizon 3 `
+    -FillsPath "C:\path\to\fills_2025-03-15.csv"
+```
+
+- Omit `-Day` to use the latest snapshot day ≤ today (same rule as `live_session.ps1`).
+- Omit `-FillsPath` if you only want reports + order ticket (no fills import).
+- Risk parameters can come from env vars instead of flags (see `tools\env_example.ps1`).
+
 ## Daily run examples
 
 ### a) With env only (recommended)
