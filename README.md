@@ -23,6 +23,14 @@ cd BIST_ELITE_CORE
 
 **Windows / Git:** Use `git config core.autocrlf false` so line endings stay LF (see [docs/DEV_SETUP_WINDOWS.md](docs/DEV_SETUP_WINDOWS.md)).
 
+### Quickstart (Windows offline daily loop)
+
+For the offline daily workflow built in this repo (no network, no real broker), see:
+
+- `docs/install.md` — bootstrap, daily loop, optional scheduler
+- `docs/runbook_daily.md` — detailed daily runbook and artifacts
+- `docs/secrets_policy.md` + `config/broker.example.yaml` — real broker remains fail-closed; any future live integration must keep secrets and network config out of this repo
+
 ### Scripts
 | Script | Purpose |
 |--------|---------|
