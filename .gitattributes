@@ -1,13 +1,19 @@
+# FAZ602: Line endings policy (normalize at checkout/commit).
+# Keep runtime behavior unchanged; only normalize text file EOLs.
+
+# Auto-detect text files and normalize.
 * text=auto
-.gitattributes text eol=lf
-.editorconfig text eol=lf
-*.py text eol=lf
-*.json text eol=lf
-*.yml text eol=lf
+
+# Enforce LF for core text/data formats
+*.py   text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
 *.yaml text eol=lf
-*.md text eol=lf
-*.txt text eol=lf
-pyproject.toml text eol=lf
+*.json text eol=lf
+*.csv  text eol=lf
+*.txt  text eol=lf
+
+# Enforce CRLF for Windows scripts
 *.ps1 text eol=crlf
 *.bat text eol=crlf
 *.cmd text eol=crlf

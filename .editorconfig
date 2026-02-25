@@ -1,10 +1,24 @@
 root = true
 
 [*]
-end_of_line = lf
 charset = utf-8
 insert_final_newline = true
+trim_trailing_whitespace = true
 
-[*.py]
+# Default indentation (safe, minimal)
 indent_style = space
 indent_size = 4
+
+# Default EOL
+end_of_line = lf
+
+# Enforce EOLs by file type (match .gitattributes)
+[*.{py,md,yml,yaml,json,csv,txt}]
+end_of_line = lf
+
+[*.{ps1,bat,cmd}]
+end_of_line = crlf
+
+# Markdown: keep formatting clean, allow intentional trailing whitespace
+[*.md]
+trim_trailing_whitespace = false

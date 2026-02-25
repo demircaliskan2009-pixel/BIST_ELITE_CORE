@@ -22,6 +22,7 @@ cd BIST_ELITE_CORE
 ```
 
 **Windows / Git:** Use `git config core.autocrlf false` so line endings stay LF (see [docs/DEV_SETUP_WINDOWS.md](docs/DEV_SETUP_WINDOWS.md)).
+- Line endings are enforced via `.gitattributes`: **LF** for `*.py, *.md, *.yml, *.yaml, *.json, *.csv, *.txt`; **CRLF** for `*.ps1, *.bat, *.cmd`.
 
 ### Quickstart (Windows offline daily loop)
 
