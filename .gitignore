@@ -92,3 +92,10 @@ pytest_first_fail.txt
 pytest_*.txt
 _tmp_snap*/
 
+
+# runtime inbox (local only)
+data/inbox/
+
+# scheduler runtime logs (local only)
+data/log/scheduler/
+

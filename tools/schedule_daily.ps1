@@ -1,4 +1,4 @@
-# FAZ601/FAZ604: Optional Windows scheduler for tools/daily.ps1 (offline).
+﻿# FAZ601/FAZ604: Optional Windows scheduler for tools/daily.ps1 (offline).
 param(
     [switch]$Enable,
     [switch]$Disable,
@@ -28,7 +28,7 @@ if (-not $Enable -and -not $Disable) {
     exit 1
 }
 
-$scriptPath = Join-Path $RepoRoot "tools\daily.ps1"
+$scriptPath = Join-Path $RepoRoot "tools\\scheduler_entrypoint.ps1"
 if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
     Write-Host "schedule_daily: daily.ps1 not found at $scriptPath" -ForegroundColor Red
     exit 2
@@ -137,4 +137,5 @@ Write-Host "  powershell.exe $argument" -ForegroundColor Cyan
 Write-Host "schedule_daily: task runs tools/daily.ps1 under the current user context. No secrets are stored in the task definition." -ForegroundColor Yellow
 
 exit 0
+
 
