@@ -2,6 +2,7 @@
 FAZ85: Instrument master load path via env/arg.
 Resolve path from BIST_INSTRUMENT_MASTER or explicit arg; delegate to services.instrument_master.
 """
+
 from __future__ import annotations
 
 import os
@@ -26,4 +27,5 @@ def load_instrument_master_from_path(
 ) -> Tuple[Set[str], Dict[str, Any], Dict[str, str]]:
     """Load instrument master CSV; returns (symbols_set, meta, symbol_to_id). Delegates to services.instrument_master."""
     from bist_core.services import instrument_master as svc
+
     return svc.load_instrument_master(path)

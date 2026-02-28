@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """FAZ397: Append changelog entry. Usage: python tools/changelog_append.py fazNNN 'summary'."""
+
 from __future__ import annotations
 
 import argparse

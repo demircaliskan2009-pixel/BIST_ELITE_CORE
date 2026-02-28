@@ -1,9 +1,9 @@
-
 from pathlib import Path
 from subprocess import run, PIPE
 import csv
 
 ROOT = Path(__file__).resolve().parents[1]
+
 
 def _run(mod: str, *args: str) -> str:
     r = run(
@@ -16,6 +16,7 @@ def _run(mod: str, *args: str) -> str:
     )
     assert r.returncode == 0, r.stderr
     return r.stdout
+
 
 def test_plan_cli_equal_weight(tmp_path: Path):
     day = "2025-01-15"

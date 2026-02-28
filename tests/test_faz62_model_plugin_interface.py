@@ -1,14 +1,13 @@
 """
 FAZ62: Model plugin interface predict(features)->scores; baseline implementation; advisory wiring.
 """
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
 
-from bist_core.models.base import ModelPlugin
 from bist_core.models.baseline import BaselineModel
 from bist_core.advisory.generate import generate_advice, _score_to_side
 
@@ -76,9 +75,7 @@ def test_faz62_generate_advice_with_model_plugin(tmp_path: Path) -> None:
     )
     outdir = tmp_path / "out"
     model = BaselineModel()
-    result = generate_advice(
-        day, snap_dir, outdir, model_plugin=model
-    )
+    result = generate_advice(day, snap_dir, outdir, model_plugin=model)
     assert result["total"] == 2
     assert result["errors"] == 0
     records = result["records"]

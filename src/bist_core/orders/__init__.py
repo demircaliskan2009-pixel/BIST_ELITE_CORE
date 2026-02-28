@@ -1,4 +1,5 @@
 """Orders: strategy registry and orders_intent schema."""
+
 from __future__ import annotations
 
 from bist_core.orders.strategies import resolve_strategy, list_strategies

@@ -4,6 +4,7 @@ Mirrors execution adapter logic: register factories by key; resolve via get_mark
 Allows external feed integration without touching core (register_market_data_provider).
 Each provider must implement the MarketDataProvider interface (symbols, close_map, validate).
 """
+
 from __future__ import annotations
 
 from pathlib import Path

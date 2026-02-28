@@ -1,4 +1,5 @@
 """FAZ94: Strategy runner — offline bars + signals -> strategy_report.json; deterministic."""
+
 from __future__ import annotations
 
 import hashlib
@@ -6,7 +7,6 @@ import json
 from datetime import date
 from pathlib import Path
 
-import pytest
 
 from bist_core.models import EODBar, PriceBand
 from bist_core.strategy.runner import run, write_strategy_report
@@ -19,17 +19,20 @@ def _make_bars(symbol: str, day: str, count: int = 25, base_close: float = 100.0
     for i in range(count):
         # Simulate history: dates before day
         from datetime import timedelta
+
         bar_date = d - timedelta(days=count - 1 - i)
         close = base_close + (i * 0.5)  # Slight uptrend for momentum
-        bars.append(EODBar(
-            symbol=symbol,
-            date=bar_date,
-            close=close,
-            high=close * 1.02,
-            low=close * 0.98,
-            volume=1_000_000,
-            turnover_tl=int(close * 1_000_000),
-        ))
+        bars.append(
+            EODBar(
+                symbol=symbol,
+                date=bar_date,
+                close=close,
+                high=close * 1.02,
+                low=close * 0.98,
+                volume=1_000_000,
+                turnover_tl=int(close * 1_000_000),
+            )
+        )
     return bars
 
 

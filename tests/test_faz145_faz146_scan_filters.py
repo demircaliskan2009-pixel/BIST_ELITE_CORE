@@ -1,4 +1,5 @@
 """FAZ145/146: Scan liquidity filter and exclusions support."""
+
 from __future__ import annotations
 
 import json
@@ -27,8 +28,17 @@ def test_faz146_scan_exclusions(tmp_path: Path) -> None:
 
     r = subprocess.run(
         [
-            sys.executable, "-m", "bist_core.cli", "scan",
-            "--day", "2025-01-15", "--top-n", "10", "--exclusions", "GARAN,THYAO", "--json",
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "scan",
+            "--day",
+            "2025-01-15",
+            "--top-n",
+            "10",
+            "--exclusions",
+            "GARAN,THYAO",
+            "--json",
         ],
         cwd=str(_repo_root()),
         capture_output=True,
@@ -55,7 +65,12 @@ def test_faz146_scan_exclusions_empty_ok(tmp_path: Path) -> None:
     env.pop("BIST_CORE_ALLOW_NETWORK", None)
     r = subprocess.run(
         [sys.executable, "-m", "bist_core.cli", "scan", "--day", "2025-01-15", "--json"],
-        cwd=str(_repo_root()), capture_output=True, text=True, encoding="utf-8", env=env, timeout=30,
+        cwd=str(_repo_root()),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=30,
     )
     assert r.returncode == 0
     out = json.loads(r.stdout)
@@ -74,8 +89,15 @@ def test_faz145_scan_min_volume_accepts_arg(tmp_path: Path) -> None:
 
     r = subprocess.run(
         [
-            sys.executable, "-m", "bist_core.cli", "scan",
-            "--day", "2025-01-15", "--min-volume", "0", "--json",
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "scan",
+            "--day",
+            "2025-01-15",
+            "--min-volume",
+            "0",
+            "--json",
         ],
         cwd=str(_repo_root()),
         capture_output=True,

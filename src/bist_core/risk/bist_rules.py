@@ -4,6 +4,7 @@ Reads optional CSV/JSON for tick_size, price_bands, vbts/restrictions.
 When live: if any input missing -> fail-closed (preflight).
 Uses rulespack (tick_sizes, price_bands) and restrictions (vbts flags).
 """
+
 from __future__ import annotations
 
 from pathlib import Path

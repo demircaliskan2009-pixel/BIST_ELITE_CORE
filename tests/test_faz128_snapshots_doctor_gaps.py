@@ -1,4 +1,5 @@
 """FAZ128: snapshots doctor missing days in range."""
+
 from __future__ import annotations
 
 import json

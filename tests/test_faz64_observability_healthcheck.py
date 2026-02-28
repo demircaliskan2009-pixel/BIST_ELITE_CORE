@@ -2,6 +2,7 @@
 FAZ64: Structured JSON logging + error taxonomy; CLI healthcheck validates environment + config.
 No noisy prints; healthcheck outputs JSON only.
 """
+
 from __future__ import annotations
 
 import json
@@ -10,7 +11,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 from bist_core.cli.observability import (
     ERROR_ARGS_REQUIRED,
@@ -25,6 +25,7 @@ from bist_core.cli.observability import (
 def test_faz64_log_struct_produces_json_line() -> None:
     """log_struct writes one JSON line with level, code, message."""
     import io
+
     buf = io.StringIO()
     log_struct("error", "TEST_CODE", "test message", stream=buf, extra="value")
     line = buf.getvalue()
@@ -38,6 +39,7 @@ def test_faz64_log_struct_produces_json_line() -> None:
 def test_faz64_err_struct_produces_error_level() -> None:
     """err_struct writes level=error."""
     import io
+
     buf = io.StringIO()
     err_struct(ERROR_ARGS_REQUIRED, "missing args", stream=buf)
     data = json.loads(buf.getvalue().strip())
@@ -140,7 +142,7 @@ def test_faz64_daily_run_uses_error_code_on_missing_args() -> None:
     assert result.returncode == 2
     err = result.stderr.strip()
     assert "ARGS_REQUIRED" in err
-    lines = [l for l in err.split("\n") if l.strip() and l.strip().startswith("{")]
+    lines = [line for line in err.split("\n") if line.strip() and line.strip().startswith("{")]
     if lines:
         data = json.loads(lines[0])
         assert data.get("code") == "ARGS_REQUIRED"

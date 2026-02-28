@@ -2,6 +2,7 @@
 FAZ49: Broker adapter skeleton + strict dry-run vs live separation (fail-closed).
 Test: live without config returns nonzero; paper ok.
 """
+
 from __future__ import annotations
 
 import json
@@ -42,7 +43,11 @@ def test_faz49_live_without_config_returns_nonzero(tmp_path: Path) -> None:
         cwd=str(repo_root),
     )
     assert result.returncode != 0
-    assert "broker_config_missing" in result.stderr or "live_execution_missing_broker_config" in result.stderr or "blocked" in result.stderr
+    assert (
+        "broker_config_missing" in result.stderr
+        or "live_execution_missing_broker_config" in result.stderr
+        or "blocked" in result.stderr
+    )
     exec_path = outdir / day / "execution_result.json"
     assert exec_path.is_file()
     data = json.loads(exec_path.read_text(encoding="utf-8"))
@@ -73,18 +78,14 @@ def test_faz49_paper_execution_ok(tmp_path: Path) -> None:
         },
         "orders_intent_path": str(outdir / "orders" / day / "orders_intent.json"),
     }
-    (outdir / day / "pipeline_manifest.json").write_text(
-        json.dumps(manifest, indent=2), encoding="utf-8"
-    )
+    (outdir / day / "pipeline_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     orders_intent = {
         "schema_version": 1,
         "day": day,
         "actions": [],
         "notes": [],
     }
-    (outdir / "orders" / day / "orders_intent.json").write_text(
-        json.dumps(orders_intent, indent=2), encoding="utf-8"
-    )
+    (outdir / "orders" / day / "orders_intent.json").write_text(json.dumps(orders_intent, indent=2), encoding="utf-8")
     result = subprocess.run(
         [
             sys.executable,

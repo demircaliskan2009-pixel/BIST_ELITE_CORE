@@ -3,6 +3,7 @@ FAZ55: Deterministic portfolio accounting core.
 Apply fills -> positions/cash; compute realized/unrealized PnL; fee+slippage model (configurable, deterministic).
 Rounding: 6 decimals.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
@@ -95,9 +96,7 @@ def apply_fill(
         qty_sold = min(abs(signed_qty), qty_total)
         cost_of_sold = round6(cost_total * (qty_sold / qty_total)) if qty_total else 0.0
         state["cash"] = round6(state["cash"] + notional_eff - fee)
-        state["realized_pnl"] = round6(
-            state["realized_pnl"] + (notional_eff - fee) - cost_of_sold
-        )
+        state["realized_pnl"] = round6(state["realized_pnl"] + (notional_eff - fee) - cost_of_sold)
         pos["qty"] = round6(pos["qty"] - qty_sold)
         pos["cost_basis"] = round6(pos["cost_basis"] - cost_of_sold)
 

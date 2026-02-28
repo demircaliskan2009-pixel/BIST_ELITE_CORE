@@ -3,6 +3,7 @@ FAZ93: Keyword retrieval — build_index(docs) -> search(query, k).
 Deterministic scoring: same docs + same query -> same order and scores.
 Docs: list of dicts with doc_id and content (bytes). Stdlib only.
 """
+
 from __future__ import annotations
 
 import math

@@ -1,9 +1,9 @@
 """FAZ92: Doc ingest contract — same content -> same doc_id; store by sha256 key."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from bist_core.memory.doc_ingest import doc_id_from_content, ingest_doc
 from bist_core.memory.store import get_doc, put_doc

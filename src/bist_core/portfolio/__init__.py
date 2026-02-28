@@ -1,4 +1,5 @@
 """Portfolio: deterministic accounting (fills -> positions/cash, realized/unrealized PnL, fee+slippage)."""
+
 from __future__ import annotations
 
 from bist_core.portfolio.accounting import (

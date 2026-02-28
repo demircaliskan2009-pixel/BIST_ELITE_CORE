@@ -1,13 +1,12 @@
 """FAZ586: Pick lock + outcome evaluator. Synthetic fixtures, deterministic."""
+
 from __future__ import annotations
 
 import csv
-import json
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 _repo = Path(__file__).resolve().parents[1]
 if str(_repo) not in sys.path:
@@ -25,9 +24,12 @@ def _run_pick_lock(
     args = [
         sys.executable,
         str(_repo / "tools" / "pick_lock.py"),
-        "--day", day,
-        "--horizon", str(horizon),
-        "--top", str(top),
+        "--day",
+        day,
+        "--horizon",
+        str(horizon),
+        "--top",
+        str(top),
     ]
     if reports_root:
         args.extend(["--reports-root", str(reports_root)])
@@ -47,8 +49,10 @@ def _run_pick_eval(
     args = [
         sys.executable,
         str(_repo / "tools" / "pick_eval.py"),
-        "--day", day,
-        "--horizon", str(horizon),
+        "--day",
+        day,
+        "--horizon",
+        str(horizon),
     ]
     if picks_root:
         args.extend(["--picks-root", str(picks_root)])
@@ -65,25 +69,38 @@ def _write_topn_csv(reports_dir: Path, day: str, horizon: int, symbols: list[str
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(
             f,
-            fieldnames=["day", "horizon_days", "symbol", "bars_used", "lookback_used",
-                       "mu_hat", "sigma_hat", "p_up", "p_gt_cost", "score", "notes"],
+            fieldnames=[
+                "day",
+                "horizon_days",
+                "symbol",
+                "bars_used",
+                "lookback_used",
+                "mu_hat",
+                "sigma_hat",
+                "p_up",
+                "p_gt_cost",
+                "score",
+                "notes",
+            ],
             extrasaction="ignore",
         )
         w.writeheader()
         for sym in symbols:
-            w.writerow({
-                "day": day,
-                "horizon_days": horizon,
-                "symbol": sym,
-                "bars_used": 60,
-                "lookback_used": 60,
-                "mu_hat": 0.001,
-                "sigma_hat": 0.01,
-                "p_up": 0.55,
-                "p_gt_cost": 0.52,
-                "score": 0.1,
-                "notes": "",
-            })
+            w.writerow(
+                {
+                    "day": day,
+                    "horizon_days": horizon,
+                    "symbol": sym,
+                    "bars_used": 60,
+                    "lookback_used": 60,
+                    "mu_hat": 0.001,
+                    "sigma_hat": 0.01,
+                    "p_up": 0.55,
+                    "p_gt_cost": 0.52,
+                    "score": 0.1,
+                    "notes": "",
+                }
+            )
 
 
 def _build_snapshots(tmp_path: Path, day_prices: dict[str, dict[str, float]]) -> Path:
@@ -139,8 +156,18 @@ def test_pick_lock_fields(tmp_path: Path) -> None:
     with (picks_root / "2025-03-15" / "picks_h1.csv").open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     assert len(rows) >= 2
-    expected = {"day", "horizon_days", "rank", "symbol", "score", "p_up", "p_gt_cost",
-                "mu_hat", "sigma_hat", "locked_at"}
+    expected = {
+        "day",
+        "horizon_days",
+        "rank",
+        "symbol",
+        "score",
+        "p_up",
+        "p_gt_cost",
+        "mu_hat",
+        "sigma_hat",
+        "locked_at",
+    }
     assert expected <= set(rows[0].keys())
     by_sym = {r["symbol"]: r for r in rows}
     assert "AAA" in by_sym and "BBB" in by_sym
@@ -163,10 +190,13 @@ def test_pick_eval_ok_return_math(tmp_path: Path) -> None:
     """eval computes entry_close, exit_close, log_return, simple_return, hit_up, hit_gt_cost correctly."""
     # Entry 2025-03-15: AAA=100, BBB=50. Exit 2025-03-16: AAA=105, BBB=50.5
     # simple_return AAA = 0.05, BBB = 0.01. hit_up both True. hit_gt_cost (10bps=0.001): both True
-    snap = _build_snapshots(tmp_path, {
-        "2025-03-15": {"AAA": 100.0, "BBB": 50.0},
-        "2025-03-16": {"AAA": 105.0, "BBB": 50.5},
-    })
+    snap = _build_snapshots(
+        tmp_path,
+        {
+            "2025-03-15": {"AAA": 100.0, "BBB": 50.0},
+            "2025-03-16": {"AAA": 105.0, "BBB": 50.5},
+        },
+    )
     reports_root = tmp_path / "log" / "reports"
     reports_dir = reports_root / "2025-03-15"
     _write_topn_csv(reports_dir, "2025-03-15", 1, ["AAA", "BBB"])
@@ -195,9 +225,12 @@ def test_pick_eval_ok_return_math(tmp_path: Path) -> None:
 def test_pick_eval_pending_when_exit_missing(tmp_path: Path) -> None:
     """When exit-day snapshot missing -> status PENDING, do not fail."""
     # Only entry day, no exit day
-    snap = _build_snapshots(tmp_path, {
-        "2025-03-15": {"AAA": 100.0, "BBB": 50.0},
-    })
+    snap = _build_snapshots(
+        tmp_path,
+        {
+            "2025-03-15": {"AAA": 100.0, "BBB": 50.0},
+        },
+    )
     reports_root = tmp_path / "log" / "reports"
     reports_dir = reports_root / "2025-03-15"
     _write_topn_csv(reports_dir, "2025-03-15", 1, ["AAA", "BBB"])
@@ -219,10 +252,13 @@ def test_pick_eval_pending_when_exit_missing(tmp_path: Path) -> None:
 def test_pick_eval_no_data_when_entry_missing(tmp_path: Path) -> None:
     """When entry-day close missing for symbol -> status NO_DATA."""
     # Entry day has no AAA/BBB - use different symbols in snapshot
-    snap = _build_snapshots(tmp_path, {
-        "2025-03-15": {"XXX": 100.0},  # no AAA, BBB
-        "2025-03-16": {"XXX": 105.0},
-    })
+    snap = _build_snapshots(
+        tmp_path,
+        {
+            "2025-03-15": {"XXX": 100.0},  # no AAA, BBB
+            "2025-03-16": {"XXX": 105.0},
+        },
+    )
     reports_root = tmp_path / "log" / "reports"
     reports_dir = reports_root / "2025-03-15"
     _write_topn_csv(reports_dir, "2025-03-15", 1, ["AAA", "BBB"])
@@ -253,10 +289,13 @@ def test_pick_eval_missing_picks_exit_2(tmp_path: Path) -> None:
 
 def test_pick_eval_deterministic(tmp_path: Path) -> None:
     """Same input -> identical eval output."""
-    snap = _build_snapshots(tmp_path, {
-        "2025-03-15": {"AAA": 100.0},
-        "2025-03-16": {"AAA": 102.0},
-    })
+    snap = _build_snapshots(
+        tmp_path,
+        {
+            "2025-03-15": {"AAA": 100.0},
+            "2025-03-16": {"AAA": 102.0},
+        },
+    )
     reports_root = tmp_path / "log" / "reports"
     reports_dir = reports_root / "2025-03-15"
     _write_topn_csv(reports_dir, "2025-03-15", 1, ["AAA"])

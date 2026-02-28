@@ -1,4 +1,5 @@
 """FAZ135: Snapshot metadata includes schema_version."""
+
 from __future__ import annotations
 
 import json

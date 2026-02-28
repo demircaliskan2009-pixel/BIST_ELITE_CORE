@@ -1,4 +1,5 @@
 """FAZ104: Eventstore as-of guard — future-dated events dropped and reported."""
+
 from __future__ import annotations
 
 from pathlib import Path

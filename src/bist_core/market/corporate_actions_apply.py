@@ -2,6 +2,7 @@
 FAZ85: Load corporate actions from CSV (path via env/arg); apply to bars using services.adjustments.
 Deterministic: sorted actions and bars.
 """
+
 from __future__ import annotations
 
 import csv
@@ -10,7 +11,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
-def resolve_corporate_actions_path(arg_path: str | Path | None, env_key: str = "BIST_CORPORATE_ACTIONS_FILE") -> Path | None:
+def resolve_corporate_actions_path(
+    arg_path: str | Path | None, env_key: str = "BIST_CORPORATE_ACTIONS_FILE"
+) -> Path | None:
     """Return Path to corporate actions CSV from arg or env; None if neither set or file missing."""
     if arg_path is not None:
         p = Path(arg_path)
@@ -59,4 +62,5 @@ def apply_corporate_actions(
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Apply corporate actions to bars (symbol, date, close). Returns (adjusted_bars, notes). Uses services.adjustments."""
     from bist_core.services.adjustments import apply_close_adjustments
+
     return apply_close_adjustments(bars, actions, method=method)

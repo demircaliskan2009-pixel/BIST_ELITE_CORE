@@ -1,7 +1,8 @@
-"""FAZ597: FIFO lot matching — realized PnL from fills. Offline, deterministic."""
+"""FAZ597: FIFO lot matching â€” realized PnL from fills. Offline, deterministic."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -36,7 +37,6 @@ def apply_fill_fifo(
     Fail-closed if sell qty > available.
     Fees: subtract fee_try from that fill's realized pnl.
     """
-    from bist_core.execution.fills_schema import Fill as FillType
 
     realized: list[RealizedTrade] = []
     sym = fill.symbol.upper()
@@ -44,9 +44,7 @@ def apply_fill_fifo(
         lots_by_symbol[sym] = []
 
     if fill.side == "BUY":
-        lots_by_symbol[sym].append(
-            Lot(symbol=sym, qty_remaining=fill.qty, price=fill.price, ts=fill.ts)
-        )
+        lots_by_symbol[sym].append(Lot(symbol=sym, qty_remaining=fill.qty, price=fill.price, ts=fill.ts))
         return realized
 
     # SELL
@@ -77,13 +75,11 @@ def apply_fill_fifo(
         remaining -= take
 
     if remaining > 0:
-        raise ValueError(
-            f"SELL {fill.qty} {sym} exceeds available lots (short by {remaining})"
-        )
+        raise ValueError(f"SELL {fill.qty} {sym} exceeds available lots (short by {remaining})")
 
     for lot, take in consumed:
         lot.qty_remaining -= take
-    lots_by_symbol[sym] = [l for l in lots if l.qty_remaining > 0]
+    lots_by_symbol[sym] = [lot for lot in lots if lot.qty_remaining > 0]
 
     # Apply fee to this fill's realized pnl
     fee = getattr(fill, "fee_try", None) or Decimal("0")

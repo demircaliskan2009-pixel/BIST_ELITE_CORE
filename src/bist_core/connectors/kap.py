@@ -3,6 +3,7 @@ FAZ68: KAP connector v1 — ingest disclosures from fixture HTML/JSON into knowl
 Stable schema: doc_id (sha256), source, published_at_utc, title, body, tickers[].
 No network; fixture-first for tests.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -131,7 +132,7 @@ def ingest_from_html(html: Union[str, bytes, Path]) -> List[Dict[str, Any]]:
     for cells, _href in rows:
         if len(cells) < 4:
             continue
-        ts_raw, symbol, kind, title_cell = cells[0], cells[1], cells[2], cells[3]
+        ts_raw, symbol, _kind, title_cell = cells[0], cells[1], cells[2], cells[3]
         published_at_utc = _normalize_ts_to_utc(ts_raw)
         title = title_cell.strip() or ""
         tickers = [symbol.strip()] if (symbol or "").strip() else []

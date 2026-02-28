@@ -2,6 +2,7 @@
 Abstract base for order routing. Implementations: OrderBridgeDLL (stub/DLL), FIX and other backends.
 Defined in a separate module to avoid circular imports with order_bridge_dll and order_bridge_interface.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

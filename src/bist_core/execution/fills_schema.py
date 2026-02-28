@@ -1,4 +1,5 @@
 """FAZ597: Fills CSV schema — validate, normalize. Offline, deterministic."""
+
 from __future__ import annotations
 
 import csv

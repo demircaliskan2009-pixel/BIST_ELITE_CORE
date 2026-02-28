@@ -1,4 +1,5 @@
 """Atomic JSONL research store in outdir/<day>/research/ (research_index.json + entries.jsonl)."""
+
 from __future__ import annotations
 
 import hashlib
@@ -24,6 +25,7 @@ def _fetch_entries_via_http(
 ) -> List[Dict[str, Any]]:
     """FAZ67: Fetch research entries via offline-first HTTP cache. offline=True -> fixture mode (no network)."""
     from bist_core.http_cache import HttpClient
+
     client = HttpClient(
         cache_dir=http_cache_dir,
         ttl_seconds=3600,
@@ -66,6 +68,7 @@ def _fetch_entries_via_kap_fixture(
 ) -> List[Dict[str, Any]]:
     """FAZ68: Ingest disclosures from KAP fixture HTML/JSON via connector; no network."""
     from bist_core.connectors.kap import ingest_from_html, ingest_from_json
+
     path = Path(kap_fixture_path)
     if not path.is_file():
         return [{"id": "kap_fixture_missing", "day": day, "source": source, "error_marker": "fixture_not_found"}]
@@ -79,15 +82,17 @@ def _fetch_entries_via_kap_fixture(
     entries: List[Dict[str, Any]] = []
     for doc in docs:
         published = (doc.get("published_at_utc") or "")[:10]
-        entries.append({
-            "id": doc.get("doc_id", ""),
-            "day": published or day,
-            "source": doc.get("source", source),
-            "title": doc.get("title", ""),
-            "body": doc.get("body", ""),
-            "tickers": doc.get("tickers", []),
-            "published_at_utc": doc.get("published_at_utc", ""),
-        })
+        entries.append(
+            {
+                "id": doc.get("doc_id", ""),
+                "day": published or day,
+                "source": doc.get("source", source),
+                "title": doc.get("title", ""),
+                "body": doc.get("body", ""),
+                "tickers": doc.get("tickers", []),
+                "published_at_utc": doc.get("published_at_utc", ""),
+            }
+        )
     return entries
 
 

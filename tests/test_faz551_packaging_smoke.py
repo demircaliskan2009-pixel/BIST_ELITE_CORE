@@ -1,4 +1,5 @@
 """FAZ551: Packaging smoke test — pack.ps1 / python -m build produces sdist + wheel without network."""
+
 from __future__ import annotations
 
 import subprocess

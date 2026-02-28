@@ -3,6 +3,7 @@ FAZ117: OpenAIModel — ModelPlugin using OpenAI API, batch JSON, fail-closed ne
 Requires: pip install openai (optional; lazy import).
 API key: OPENAI_API_KEY env. Windows: PowerShell $env:OPENAI_API_KEY="sk-..."; CMD setx OPENAI_API_KEY "sk-..."
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -13,18 +14,18 @@ from typing import Any, Dict, List, Optional
 
 _OPENAI_API_KEY_MSG = (
     "OPENAI_API_KEY is required for OpenAIModel. Set it before use:\n"
-    "  PowerShell: $env:OPENAI_API_KEY=\"sk-...\"\n"
-    "  CMD (persistent): setx OPENAI_API_KEY \"sk-...\""
+    '  PowerShell: $env:OPENAI_API_KEY="sk-..."\n'
+    '  CMD (persistent): setx OPENAI_API_KEY "sk-..."'
 )
 
 
 def _batch_prompt(features: List[Dict[str, Any]]) -> str:
     """Build a single prompt for all symbols; instructs GPT to return strict JSON."""
-    lines = [f"- {r.get('symbol','UNK')}: close={r.get('close',0)}" for r in features]
+    lines = [f"- {r.get('symbol', 'UNK')}: close={r.get('close', 0)}" for r in features]
     items = "\n".join(lines)
     return (
         "Given these BIST symbols and closing prices, output a JSON array with one object per symbol. "
-        "Each object: {\"symbol\":\"...\", \"score\": <float>, \"reason\": \"...\"}. "
+        'Each object: {"symbol":"...", "score": <float>, "reason": "..."}. '
         "Score: positive=buy, negative=sell, 0=hold. Output ONLY the JSON array, no other text.\n\n"
         f"{items}"
     )
@@ -125,6 +126,7 @@ class OpenAIModel:
         # API call (lazy import)
         try:
             from openai import OpenAI
+
             client = OpenAI(api_key=self._api_key)
         except ImportError:
             return scores_default

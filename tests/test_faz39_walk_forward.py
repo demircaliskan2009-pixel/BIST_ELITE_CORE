@@ -1,4 +1,5 @@
 """FAZ39: Walk-forward backtest — deterministic windows, gate fail behavior, artifacts exist."""
+
 from __future__ import annotations
 
 import json

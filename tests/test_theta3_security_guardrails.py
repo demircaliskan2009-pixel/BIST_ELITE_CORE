@@ -5,6 +5,7 @@ Enforces:
 - Data validation layers reject invalid input
 - CLI commands run sandboxed (no network when BIST_CORE_ALLOW_NETWORK unset)
 """
+
 from __future__ import annotations
 
 import json
@@ -88,7 +89,7 @@ def test_theta3_cli_events_pull_kap_no_network_guard(tmp_path: Path) -> None:
         "BIST_KAP_CACHE_DIR": str(tmp_path),
         "BIST_CORE_ALLOW_NETWORK": "0",  # Explicitly disable to override inherited env
     }
-    result = _run_cli(
+    _run_cli(
         [
             "events",
             "pull",

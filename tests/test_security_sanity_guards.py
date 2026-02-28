@@ -6,6 +6,7 @@ Enforces:
 - Dynamic imports (importlib/__import__) only whitelisted modules
 - No .NET/COM/clr/pythonnet/win32com
 """
+
 from __future__ import annotations
 
 import re
@@ -17,12 +18,14 @@ def _src_root() -> Path:
 
 
 # Allowed modules for importlib.import_module() and __import__() in src/
-DYNAMIC_IMPORT_WHITELIST = frozenset({
-    "openai",
-    "pyautogui",
-    "flask",
-    "pywinauto",
-})
+DYNAMIC_IMPORT_WHITELIST = frozenset(
+    {
+        "openai",
+        "pyautogui",
+        "flask",
+        "pywinauto",
+    }
+)
 
 
 def _collect_py_files(root: Path) -> list[Path]:
@@ -104,6 +107,7 @@ def test_ruff_check_if_available() -> None:
     pytest.importorskip("ruff", reason="ruff optional for lint gate")
     import subprocess
     import sys
+
     root = Path(__file__).resolve().parents[1]
     r = subprocess.run(
         [sys.executable, "-m", "ruff", "check", "src/"],

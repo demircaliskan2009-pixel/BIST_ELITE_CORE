@@ -1,4 +1,5 @@
 """FAZ587: orders_intent draft from risk_plan. Synthetic fixtures, deterministic."""
+
 from __future__ import annotations
 
 import csv
@@ -7,15 +8,26 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 _repo = Path(__file__).resolve().parents[1]
 if str(_repo) not in sys.path:
     sys.path.insert(0, str(_repo))
 
 PLAN_FIELDS = (
-    "day", "horizon_days", "rank", "symbol", "capital_try", "risk_pct", "risk_try",
-    "atr", "stop_atr_mult", "stop_distance", "qty", "tp_r_mult", "tp_distance", "notes",
+    "day",
+    "horizon_days",
+    "rank",
+    "symbol",
+    "capital_try",
+    "risk_pct",
+    "risk_try",
+    "atr",
+    "stop_atr_mult",
+    "stop_distance",
+    "qty",
+    "tp_r_mult",
+    "tp_distance",
+    "notes",
 )
 
 
@@ -33,12 +45,18 @@ def _run_orders_intent(
     args = [
         sys.executable,
         str(_repo / "tools" / "orders_intent_from_risk_plan.py"),
-        "--day", day,
-        "--horizon", str(horizon),
-        "--top", str(top),
-        "--side", side,
-        "--order-type", order_type,
-        "--limit-price-mode", limit_price_mode,
+        "--day",
+        day,
+        "--horizon",
+        str(horizon),
+        "--top",
+        str(top),
+        "--side",
+        side,
+        "--order-type",
+        order_type,
+        "--limit-price-mode",
+        limit_price_mode,
     ]
     if reports_root:
         args.extend(["--reports-root", str(reports_root)])
@@ -63,11 +81,29 @@ def test_draft_schema(tmp_path: Path) -> None:
     """Draft has draft:true, draft_reason, day, actions."""
     reports_root = tmp_path / "reports"
     reports_dir = reports_root / "2025-03-15"
-    _write_risk_plan_csv(reports_dir, "2025-03-15", 1, [
-        {"day": "2025-03-15", "horizon_days": 1, "rank": 1, "symbol": "AAA", "qty": 10,
-         "capital_try": 30000, "risk_pct": 0.02, "risk_try": 600, "atr": 2.0,
-         "stop_atr_mult": 2.0, "stop_distance": 4.0, "tp_r_mult": 2.0, "tp_distance": 8.0, "notes": ""},
-    ])
+    _write_risk_plan_csv(
+        reports_dir,
+        "2025-03-15",
+        1,
+        [
+            {
+                "day": "2025-03-15",
+                "horizon_days": 1,
+                "rank": 1,
+                "symbol": "AAA",
+                "qty": 10,
+                "capital_try": 30000,
+                "risk_pct": 0.02,
+                "risk_try": 600,
+                "atr": 2.0,
+                "stop_atr_mult": 2.0,
+                "stop_distance": 4.0,
+                "tp_r_mult": 2.0,
+                "tp_distance": 8.0,
+                "notes": "",
+            },
+        ],
+    )
 
     code, _, _ = _run_orders_intent("2025-03-15", 1, reports_root=reports_root)
     assert code == 0
@@ -87,15 +123,45 @@ def test_qty_zero_skipped(tmp_path: Path) -> None:
     """qty==0 -> skip from actions, in skipped with notes."""
     reports_root = tmp_path / "reports"
     reports_dir = reports_root / "2025-03-15"
-    _write_risk_plan_csv(reports_dir, "2025-03-15", 1, [
-        {"day": "2025-03-15", "horizon_days": 1, "rank": 1, "symbol": "AAA", "qty": 0,
-         "capital_try": 30000, "risk_pct": 0.02, "risk_try": 600, "atr": 2.0,
-         "stop_atr_mult": 2.0, "stop_distance": 4.0, "tp_r_mult": 2.0, "tp_distance": 8.0,
-         "notes": "TooSmall"},
-        {"day": "2025-03-15", "horizon_days": 1, "rank": 2, "symbol": "BBB", "qty": 5,
-         "capital_try": 30000, "risk_pct": 0.02, "risk_try": 600, "atr": 2.0,
-         "stop_atr_mult": 2.0, "stop_distance": 4.0, "tp_r_mult": 2.0, "tp_distance": 8.0, "notes": ""},
-    ])
+    _write_risk_plan_csv(
+        reports_dir,
+        "2025-03-15",
+        1,
+        [
+            {
+                "day": "2025-03-15",
+                "horizon_days": 1,
+                "rank": 1,
+                "symbol": "AAA",
+                "qty": 0,
+                "capital_try": 30000,
+                "risk_pct": 0.02,
+                "risk_try": 600,
+                "atr": 2.0,
+                "stop_atr_mult": 2.0,
+                "stop_distance": 4.0,
+                "tp_r_mult": 2.0,
+                "tp_distance": 8.0,
+                "notes": "TooSmall",
+            },
+            {
+                "day": "2025-03-15",
+                "horizon_days": 1,
+                "rank": 2,
+                "symbol": "BBB",
+                "qty": 5,
+                "capital_try": 30000,
+                "risk_pct": 0.02,
+                "risk_try": 600,
+                "atr": 2.0,
+                "stop_atr_mult": 2.0,
+                "stop_distance": 4.0,
+                "tp_r_mult": 2.0,
+                "tp_distance": 8.0,
+                "notes": "",
+            },
+        ],
+    )
 
     code, _, _ = _run_orders_intent("2025-03-15", 1, reports_root=reports_root)
     assert code == 0
@@ -111,14 +177,45 @@ def test_deterministic_ordering(tmp_path: Path) -> None:
     """Same input -> identical output. Order: rank then symbol."""
     reports_root = tmp_path / "reports"
     reports_dir = reports_root / "2025-03-15"
-    _write_risk_plan_csv(reports_dir, "2025-03-15", 1, [
-        {"day": "2025-03-15", "horizon_days": 1, "rank": 2, "symbol": "BBB", "qty": 5,
-         "capital_try": 30000, "risk_pct": 0.02, "risk_try": 600, "atr": 2.0,
-         "stop_atr_mult": 2.0, "stop_distance": 4.0, "tp_r_mult": 2.0, "tp_distance": 8.0, "notes": ""},
-        {"day": "2025-03-15", "horizon_days": 1, "rank": 1, "symbol": "AAA", "qty": 10,
-         "capital_try": 30000, "risk_pct": 0.02, "risk_try": 600, "atr": 2.0,
-         "stop_atr_mult": 2.0, "stop_distance": 4.0, "tp_r_mult": 2.0, "tp_distance": 8.0, "notes": ""},
-    ])
+    _write_risk_plan_csv(
+        reports_dir,
+        "2025-03-15",
+        1,
+        [
+            {
+                "day": "2025-03-15",
+                "horizon_days": 1,
+                "rank": 2,
+                "symbol": "BBB",
+                "qty": 5,
+                "capital_try": 30000,
+                "risk_pct": 0.02,
+                "risk_try": 600,
+                "atr": 2.0,
+                "stop_atr_mult": 2.0,
+                "stop_distance": 4.0,
+                "tp_r_mult": 2.0,
+                "tp_distance": 8.0,
+                "notes": "",
+            },
+            {
+                "day": "2025-03-15",
+                "horizon_days": 1,
+                "rank": 1,
+                "symbol": "AAA",
+                "qty": 10,
+                "capital_try": 30000,
+                "risk_pct": 0.02,
+                "risk_try": 600,
+                "atr": 2.0,
+                "stop_atr_mult": 2.0,
+                "stop_distance": 4.0,
+                "tp_r_mult": 2.0,
+                "tp_distance": 8.0,
+                "notes": "",
+            },
+        ],
+    )
 
     _run_orders_intent("2025-03-15", 1, reports_root=reports_root)
     j1 = (reports_dir / "orders_intent_draft_h1.json").read_text(encoding="utf-8")
@@ -145,11 +242,29 @@ def test_side_and_order_type(tmp_path: Path) -> None:
     """--side SELL and --order-type LIMIT are applied."""
     reports_root = tmp_path / "reports"
     reports_dir = reports_root / "2025-03-15"
-    _write_risk_plan_csv(reports_dir, "2025-03-15", 1, [
-        {"day": "2025-03-15", "horizon_days": 1, "rank": 1, "symbol": "AAA", "qty": 10,
-         "capital_try": 30000, "risk_pct": 0.02, "risk_try": 600, "atr": 2.0,
-         "stop_atr_mult": 2.0, "stop_distance": 4.0, "tp_r_mult": 2.0, "tp_distance": 8.0, "notes": ""},
-    ])
+    _write_risk_plan_csv(
+        reports_dir,
+        "2025-03-15",
+        1,
+        [
+            {
+                "day": "2025-03-15",
+                "horizon_days": 1,
+                "rank": 1,
+                "symbol": "AAA",
+                "qty": 10,
+                "capital_try": 30000,
+                "risk_pct": 0.02,
+                "risk_try": 600,
+                "atr": 2.0,
+                "stop_atr_mult": 2.0,
+                "stop_distance": 4.0,
+                "tp_r_mult": 2.0,
+                "tp_distance": 8.0,
+                "notes": "",
+            },
+        ],
+    )
 
     code, _, _ = _run_orders_intent("2025-03-15", 1, reports_root=reports_root, side="SELL", order_type="LIMIT")
     assert code == 0
@@ -162,17 +277,36 @@ def test_draft_exportable_to_ticket(tmp_path: Path) -> None:
     """Draft can be consumed by order_ticket_export."""
     reports_root = tmp_path / "reports"
     reports_dir = reports_root / "2025-03-15"
-    _write_risk_plan_csv(reports_dir, "2025-03-15", 1, [
-        {"day": "2025-03-15", "horizon_days": 1, "rank": 1, "symbol": "AAA", "qty": 10,
-         "capital_try": 30000, "risk_pct": 0.02, "risk_try": 600, "atr": 2.0,
-         "stop_atr_mult": 2.0, "stop_distance": 4.0, "tp_r_mult": 2.0, "tp_distance": 8.0, "notes": ""},
-    ])
+    _write_risk_plan_csv(
+        reports_dir,
+        "2025-03-15",
+        1,
+        [
+            {
+                "day": "2025-03-15",
+                "horizon_days": 1,
+                "rank": 1,
+                "symbol": "AAA",
+                "qty": 10,
+                "capital_try": 30000,
+                "risk_pct": 0.02,
+                "risk_try": 600,
+                "atr": 2.0,
+                "stop_atr_mult": 2.0,
+                "stop_distance": 4.0,
+                "tp_r_mult": 2.0,
+                "tp_distance": 8.0,
+                "notes": "",
+            },
+        ],
+    )
 
     _run_orders_intent("2025-03-15", 1, reports_root=reports_root)
     draft_path = reports_dir / "orders_intent_draft_h1.json"
     out_dir = tmp_path / "out" / "order_ticket" / "2025-03-15"
 
     from tools.order_ticket_export import run
+
     code, err, written = run(draft_path, out_dir)
     assert code == 0, err
     assert (out_dir / "order_ticket.csv").is_file()

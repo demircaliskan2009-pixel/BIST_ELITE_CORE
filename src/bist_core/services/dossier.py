@@ -59,10 +59,7 @@ def build_dossier_for_symbol_day(
             "score": 0.0,
             "signals": [],
             "plan": None,
-            "text": (
-                f"Güvenli mod: {err}. "
-                "Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
-            ),
+            "text": (f"Güvenli mod: {err}. Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."),
             "capabilities": {"ohlcv": False},
             "provenance": provenance,
             "error_marker": err,
@@ -163,7 +160,7 @@ def atomic_write_json(path: Path, payload: dict) -> None:
         try:
             tmp_path.replace(path)
             return
-        except (PermissionError, OSError) as e:
+        except (PermissionError, OSError):
             if attempt == max_attempts - 1:
                 raise
             time.sleep(0.05 * (attempt + 1))

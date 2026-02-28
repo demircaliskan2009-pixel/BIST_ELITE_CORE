@@ -1,4 +1,5 @@
 """FAZ230: KAP malformed handling — skip malformed HTML gracefully, no crash."""
+
 from __future__ import annotations
 
 from pathlib import Path

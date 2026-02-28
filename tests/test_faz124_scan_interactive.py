@@ -1,4 +1,5 @@
 """FAZ124: CLI scan --interactive wizard + ranked output + drill-down."""
+
 from __future__ import annotations
 
 import os

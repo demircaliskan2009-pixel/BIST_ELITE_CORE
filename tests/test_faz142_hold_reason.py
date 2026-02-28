@@ -1,4 +1,5 @@
 """FAZ142: HOLD reason coverage — artifact has reason and next_action when HOLD."""
+
 from __future__ import annotations
 
 import json

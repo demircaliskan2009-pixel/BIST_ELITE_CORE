@@ -1,4 +1,5 @@
 """Advisory generator, plan, and explain (deterministic advice_records.jsonl, advisory_plan.json, explain.json)."""
+
 from __future__ import annotations
 
 from bist_core.advisory.generate import generate_advice

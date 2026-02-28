@@ -1,10 +1,9 @@
 """FAZ573: Dry-run broker adapter — schema validation, deterministic output, fail-closed."""
+
 from __future__ import annotations
 
 import io
-import json
 
-import pytest
 
 from bist_core.execution import DryRunExecutionProvider
 from bist_core.execution.adapters.dry_run import dry_run_validate_and_print

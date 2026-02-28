@@ -1,4 +1,5 @@
 """FAZ81: Idempotency — running live execute twice for same day/outdir must not change any artifacts (byte-identical)."""
+
 from __future__ import annotations
 
 import hashlib
@@ -7,8 +8,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 
 def _valid_core_config() -> dict:
@@ -67,13 +66,25 @@ def test_faz81_live_execute_twice_byte_identical_artifacts(tmp_path: Path) -> No
     )
     (tmp_path / "dossier" / day).mkdir(parents=True, exist_ok=True)
     (tmp_path / "dossier" / day / "dossier.json").write_text(
-        json.dumps({"schema_version": 1, "day": day, "evidence": {"advice_path": "", "orders_intent_path": str(orders_path)}}),
+        json.dumps(
+            {"schema_version": 1, "day": day, "evidence": {"advice_path": "", "orders_intent_path": str(orders_path)}}
+        ),
         encoding="utf-8",
     )
 
     cmd = [
-        sys.executable, "-m", "bist_core.cli", "eod", "execute",
-        "--day", day, "--outdir", str(tmp_path), "--live", "--broker", "paper",
+        sys.executable,
+        "-m",
+        "bist_core.cli",
+        "eod",
+        "execute",
+        "--day",
+        day,
+        "--outdir",
+        str(tmp_path),
+        "--live",
+        "--broker",
+        "paper",
     ]
 
     r1 = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=30)
@@ -88,9 +99,5 @@ def test_faz81_live_execute_twice_byte_identical_artifacts(tmp_path: Path) -> No
     hashes_after_second = _file_hashes_under(tmp_path)
     for rel_path, h1 in hashes_after_first.items():
         assert rel_path in hashes_after_second, f"file {rel_path} missing after second run"
-        assert hashes_after_second[rel_path] == h1, (
-            f"file {rel_path} changed after second run (not byte-identical)"
-        )
-    assert len(hashes_after_second) == len(hashes_after_first), (
-        "second run must not add or remove files (idempotent)"
-    )
+        assert hashes_after_second[rel_path] == h1, f"file {rel_path} changed after second run (not byte-identical)"
+    assert len(hashes_after_second) == len(hashes_after_first), "second run must not add or remove files (idempotent)"

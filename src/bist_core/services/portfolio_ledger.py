@@ -3,6 +3,7 @@ FAZ48: Deterministic portfolio ledger (fills -> positions/cash/PnL) + fees/slipp
 Supports buy/sell fills with fee_bps + slippage_bps. Metrics: realized_pnl, unrealized_pnl, equity, turnover.
 Deterministic: apply fills in stable order; round to 6 decimals.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
@@ -119,11 +120,13 @@ class PortfolioLedger:
         for sym in sorted(self._positions.keys()):
             p = self._positions[sym]
             if p["qty"] != 0:
-                out.append({
-                    "symbol": sym,
-                    "qty": p["qty"],
-                    "cost_basis": p["cost_basis"],
-                })
+                out.append(
+                    {
+                        "symbol": sym,
+                        "qty": p["qty"],
+                        "cost_basis": p["cost_basis"],
+                    }
+                )
         return out
 
     def position_map(self) -> Dict[str, float]:

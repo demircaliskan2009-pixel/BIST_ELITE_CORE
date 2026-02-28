@@ -2,6 +2,7 @@
 FAZ96: Release check — full tests, alignment gate, artifacts schema.
 Exit 0 if all pass, 2 if any fail. Run from repo root.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -89,7 +90,9 @@ def _run_hygiene_check(root: Path) -> tuple[bool, str]:
             if name.startswith("proof_") and name.endswith(".txt"):
                 offending.append(path)
     if offending:
-        return False, "tracked build/backup artifacts: " + ", ".join(sorted(offending)[:5]) + (" ..." if len(offending) > 5 else "")
+        return False, "tracked build/backup artifacts: " + ", ".join(sorted(offending)[:5]) + (
+            " ..." if len(offending) > 5 else ""
+        )
     return True, "hygiene ok"
 
 
@@ -132,7 +135,9 @@ def main(args: list[str] | None = None) -> int:
     parser.add_argument("--tests-only", action="store_true", help="Run only full tests")
     parser.add_argument("--alignment-only", action="store_true", help="Run only alignment gate")
     parser.add_argument("--schema-only", action="store_true", help="Run only artifacts schema check")
-    parser.add_argument("--hygiene-only", action="store_true", help="Run only hygiene gate (.gitignore + no tracked artifacts)")
+    parser.add_argument(
+        "--hygiene-only", action="store_true", help="Run only hygiene gate (.gitignore + no tracked artifacts)"
+    )
     parsed = parser.parse_args(args)
 
     root = _repo_root()

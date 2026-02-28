@@ -1,9 +1,10 @@
 """FAZ72: Broker adapter interface (place_orders, cancel, get_fills) with strict input/output schemas. Stub reads fixture responses. No external libs."""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, Optional, Protocol
 
 
 # --- Strict schemas (required keys + types) ---

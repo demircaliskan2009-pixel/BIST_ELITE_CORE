@@ -1,11 +1,11 @@
 """FAZ90: Explainability — reasons[], evidence_refs[]; explain.json linked from dossier evidence."""
+
 from __future__ import annotations
 
 import hashlib
 import json
 from pathlib import Path
 
-import pytest
 
 from bist_core.advisory.explain import EXPLAIN_SCHEMA_VERSION, build_explain, write_explain
 from bist_core.dossier.write import update_dossier_evidence, write_dossier

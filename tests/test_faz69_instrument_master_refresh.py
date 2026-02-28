@@ -3,6 +3,7 @@ FAZ69: Instrument master refresh — merge new symbols/aliases from fixture data
 into existing identity timeline deterministically (stable id, alias intervals).
 No network.
 """
+
 from __future__ import annotations
 
 import json
@@ -32,9 +33,7 @@ def test_faz69_load_fixture_dataset_parses_csv(tmp_path: Path) -> None:
     """Fixture CSV (instrument_id, symbol, aliases) -> list of rows."""
     csv_path = tmp_path / "fixture.csv"
     csv_path.write_text(
-        "instrument_id,symbol,aliases\n"
-        "id_A,A,A1;A2\n"
-        "id_B,B,\n",
+        "instrument_id,symbol,aliases\nid_A,A,A1;A2\nid_B,B,\n",
         encoding="utf-8",
     )
     rows = load_fixture_dataset(csv_path)

@@ -1,9 +1,9 @@
 """FAZ93: Keyword retrieval — build_index(docs) -> search(query, k); deterministic scoring."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from bist_core.memory.doc_ingest import ingest_doc
 from bist_core.memory.retrieval import build_index

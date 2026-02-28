@@ -1,14 +1,13 @@
 """FAZ585: Risk budget sizer (ATR-based). Synthetic fixtures, no real market data."""
+
 from __future__ import annotations
 
 import csv
-import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 _repo = Path(__file__).resolve().parents[1]
 if str(_repo) not in sys.path:
@@ -26,9 +25,12 @@ def _run_risk_sizer(
     args = [
         sys.executable,
         str(_repo / "tools" / "risk_sizer.py"),
-        "--day", day,
-        "--horizon", str(horizon),
-        "--top", str(top),
+        "--day",
+        day,
+        "--horizon",
+        str(horizon),
+        "--top",
+        str(top),
     ]
     if reports_root:
         args.extend(["--reports-root", str(reports_root)])
@@ -70,25 +72,38 @@ def _write_topn_csv(reports_dir: Path, day: str, horizon: int, symbols: list[str
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(
             f,
-            fieldnames=["day", "horizon_days", "symbol", "bars_used", "lookback_used",
-                       "mu_hat", "sigma_hat", "p_up", "p_gt_cost", "score", "notes"],
+            fieldnames=[
+                "day",
+                "horizon_days",
+                "symbol",
+                "bars_used",
+                "lookback_used",
+                "mu_hat",
+                "sigma_hat",
+                "p_up",
+                "p_gt_cost",
+                "score",
+                "notes",
+            ],
             extrasaction="ignore",
         )
         w.writeheader()
         for sym in symbols:
-            w.writerow({
-                "day": day,
-                "horizon_days": horizon,
-                "symbol": sym,
-                "bars_used": 60,
-                "lookback_used": 60,
-                "mu_hat": 0.001,
-                "sigma_hat": 0.01,
-                "p_up": 0.55,
-                "p_gt_cost": 0.52,
-                "score": 0.1,
-                "notes": "",
-            })
+            w.writerow(
+                {
+                    "day": day,
+                    "horizon_days": horizon,
+                    "symbol": sym,
+                    "bars_used": 60,
+                    "lookback_used": 60,
+                    "mu_hat": 0.001,
+                    "sigma_hat": 0.01,
+                    "p_up": 0.55,
+                    "p_gt_cost": 0.52,
+                    "score": 0.1,
+                    "notes": "",
+                }
+            )
 
 
 def test_risk_plan_files_created(tmp_path: Path) -> None:
@@ -172,11 +187,16 @@ def test_invalid_env_exit_1(tmp_path: Path) -> None:
     args = [
         sys.executable,
         str(_repo / "tools" / "risk_sizer.py"),
-        "--day", "2025-03-15",
-        "--horizon", "1",
-        "--top", "5",
-        "--reports-root", str(reports_root),
-        "--snapshot-root", str(snap),
+        "--day",
+        "2025-03-15",
+        "--horizon",
+        "1",
+        "--top",
+        "5",
+        "--reports-root",
+        str(reports_root),
+        "--snapshot-root",
+        str(snap),
     ]
     r = subprocess.run(args, cwd=str(_repo), capture_output=True, text=True, timeout=30, env=env)
     assert r.returncode == 1
@@ -216,11 +236,16 @@ def test_too_small_notes(tmp_path: Path) -> None:
     args = [
         sys.executable,
         str(_repo / "tools" / "risk_sizer.py"),
-        "--day", "2025-03-15",
-        "--horizon", "1",
-        "--top", "5",
-        "--reports-root", str(reports_root),
-        "--snapshot-root", str(snap),
+        "--day",
+        "2025-03-15",
+        "--horizon",
+        "1",
+        "--top",
+        "5",
+        "--reports-root",
+        str(reports_root),
+        "--snapshot-root",
+        str(snap),
     ]
     r = subprocess.run(args, cwd=str(_repo), capture_output=True, text=True, timeout=30, env=env)
     assert r.returncode == 0
@@ -256,6 +281,20 @@ def test_plan_fields_present(tmp_path: Path) -> None:
     _run_risk_sizer("2025-03-15", 1, top=5, reports_root=reports_root, snapshot_root=snap)
     with (reports_dir / "risk_plan_h1.csv").open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
-    expected = {"day", "horizon_days", "rank", "symbol", "capital_try", "risk_pct", "risk_try",
-                "atr", "stop_atr_mult", "stop_distance", "qty", "tp_r_mult", "tp_distance", "notes"}
+    expected = {
+        "day",
+        "horizon_days",
+        "rank",
+        "symbol",
+        "capital_try",
+        "risk_pct",
+        "risk_try",
+        "atr",
+        "stop_atr_mult",
+        "stop_distance",
+        "qty",
+        "tp_r_mult",
+        "tp_distance",
+        "notes",
+    }
     assert expected <= set(rows[0].keys())

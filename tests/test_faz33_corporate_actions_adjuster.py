@@ -1,4 +1,5 @@
 """FAZ33: Corporate actions adjuster core; minimal schema; build_adjust_factors; deterministic."""
+
 from __future__ import annotations
 
 import json

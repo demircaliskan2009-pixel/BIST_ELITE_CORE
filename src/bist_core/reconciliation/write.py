@@ -3,11 +3,12 @@ FAZ77: Reconciliation stage — compare intended actions vs broker acknowledgeme
 Produce deterministic outdir/<day>/reconciliation.json. Stable JSON ordering.
 No external libs.
 """
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from bist_core.services import snapshot_integrity
 
@@ -89,6 +90,7 @@ def write_reconciliation(
     payload = build_reconciliation_payload(day_str, actions, fills_list)
     try:
         from bist_core.security.redact import redact_recursive
+
         payload = redact_recursive(payload)
     except Exception:
         pass
@@ -99,4 +101,9 @@ def write_reconciliation(
     return out_file
 
 
-__all__ = ["write_reconciliation", "build_reconciliation_payload", "RECONCILIATION_SCHEMA_VERSION", "RECONCILIATION_FILENAME"]
+__all__ = [
+    "write_reconciliation",
+    "build_reconciliation_payload",
+    "RECONCILIATION_SCHEMA_VERSION",
+    "RECONCILIATION_FILENAME",
+]

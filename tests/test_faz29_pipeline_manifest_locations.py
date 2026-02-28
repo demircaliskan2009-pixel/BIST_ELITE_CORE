@@ -1,4 +1,5 @@
 """FAZ29: Assert pipeline manifest is written to all three deterministic locations."""
+
 from __future__ import annotations
 
 import json

@@ -1,4 +1,5 @@
 """FAZ392: Scoreboard (backtest metrics) schema_version, day, params, metrics keys, empty run."""
+
 from __future__ import annotations
 
 import json

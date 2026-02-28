@@ -1,4 +1,5 @@
 """FAZ556: Orders export — CSV/JSON schema, --out, orders_meta.txt format."""
+
 from __future__ import annotations
 
 import csv

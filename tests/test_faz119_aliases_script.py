@@ -1,4 +1,5 @@
 """FAZ119: PowerShell aliases script exists and contains required strings."""
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,4 +1,5 @@
 """FAZ108: Clean repo script exists and contains required logic."""
+
 from __future__ import annotations
 
 from pathlib import Path

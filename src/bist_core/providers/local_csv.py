@@ -1,13 +1,14 @@
-
 from __future__ import annotations
 from pathlib import Path
 import csv
+
 
 class LocalCSVProvider:
     """
     EOD snapshot.csv dosyasından (symbol, close) okuyan basit sağlayıcı.
     Varsayılan kök: data/eod/snapshots/YYYY-MM-DD/snapshot.csv
     """
+
     def __init__(self, base: Path | str = Path("data") / "eod" / "snapshots"):
         self.base = Path(base)
 

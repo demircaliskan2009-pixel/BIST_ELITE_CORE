@@ -2,6 +2,7 @@
 FAZ58: Market data provider interface.
 Tests: provider resolution (local_eod), deterministic reads, CLI validate --day.
 """
+
 from __future__ import annotations
 
 import os
@@ -87,7 +88,17 @@ def test_faz58_cli_validate_ok(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo_root / "src")
     r = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "market-data", "validate", "--day", day, "--snapshot-root", str(tmp_path)],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "market-data",
+            "validate",
+            "--day",
+            day,
+            "--snapshot-root",
+            str(tmp_path),
+        ],
         capture_output=True,
         text=True,
         env=env,
@@ -102,7 +113,17 @@ def test_faz58_cli_validate_missing_exit_nonzero(tmp_path: Path) -> None:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo_root / "src")
     r = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "market-data", "validate", "--day", "2099-06-99", "--snapshot-root", str(tmp_path)],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "market-data",
+            "validate",
+            "--day",
+            "2099-06-99",
+            "--snapshot-root",
+            str(tmp_path),
+        ],
         capture_output=True,
         text=True,
         env=env,

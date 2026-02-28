@@ -2,13 +2,13 @@
 FAZ44: Build adjusted prices from snapshot + canonical corporate actions.
 Tiny 2-day example verifying adj_factor and close_adj math; fail-closed for unknown kind.
 """
+
 from __future__ import annotations
 
 import csv
 import json
 from pathlib import Path
 
-import pytest
 
 from bist_core.services import price_adjust
 
@@ -74,10 +74,7 @@ def test_faz44_two_day_adj_factor_math(tmp_path: Path) -> None:
     assert adj_path.is_file()
     with adj_path.open(newline="", encoding="utf-8") as f:
         adj_rows = list(csv.DictReader(f))
-    adj_by_key = {
-        (r["instrument_id"], r["date"]): (float(r["close_adj"]), float(r["adj_factor"]))
-        for r in adj_rows
-    }
+    adj_by_key = {(r["instrument_id"], r["date"]): (float(r["close_adj"]), float(r["adj_factor"])) for r in adj_rows}
     assert adj_by_key[("id_a", day1)] == (200.0, 0.5)
     assert adj_by_key[("id_a", day2)] == (60.0, 1.0)
     assert adj_by_key[("id_b", day1)] == (49.0, 1.0)

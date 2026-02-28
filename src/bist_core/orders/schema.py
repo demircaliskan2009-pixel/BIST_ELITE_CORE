@@ -2,9 +2,10 @@
 FAZ88: Orders intent schema v2 — define + validate.
 Required: day (str), actions (list). Each action: symbol (str), side (str). Deterministic error codes.
 """
+
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, List, Tuple
 
 ORDERS_INTENT_SCHEMA_VERSION = 2
 

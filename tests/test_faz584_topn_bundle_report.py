@@ -1,4 +1,5 @@
 """FAZ584: TopN bundle report — HTML+JSON+CSV with advice. Deterministic, offline."""
+
 from __future__ import annotations
 
 import csv
@@ -7,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 _repo = Path(__file__).resolve().parents[1]
 if str(_repo) not in sys.path:
@@ -25,9 +25,12 @@ def _run_bundle(
     args = [
         sys.executable,
         str(_repo / "tools" / "topn_bundle_report.py"),
-        "--day", day,
-        "--horizon", str(horizon),
-        "--top", str(top),
+        "--day",
+        day,
+        "--horizon",
+        str(horizon),
+        "--top",
+        str(top),
     ]
     if reports_root:
         args.extend(["--reports-root", str(reports_root)])
@@ -54,33 +57,39 @@ def _setup_fixture(tmp_path: Path, day: str) -> Path:
     ask_dir = tmp_path / "ask" / day
     ask_dir.mkdir(parents=True, exist_ok=True)
     (ask_dir / "AAA.json").write_text(
-        json.dumps({
-            "symbol": "AAA",
-            "day": day,
-            "decision_raw": "BUY",
-            "score": 0.8,
-            "text": "AAA için karar BUY; skor 0.80.\nPlan: entry 100, stop 95, t1 110.",
-        }),
+        json.dumps(
+            {
+                "symbol": "AAA",
+                "day": day,
+                "decision_raw": "BUY",
+                "score": 0.8,
+                "text": "AAA için karar BUY; skor 0.80.\nPlan: entry 100, stop 95, t1 110.",
+            }
+        ),
         encoding="utf-8",
     )
     (ask_dir / "BBB.json").write_text(
-        json.dumps({
-            "symbol": "BBB",
-            "day": day,
-            "decision_raw": "PASS",
-            "score": 0.0,
-            "text": "Güvenli mod: InsufficientHistory. Mevcut bar sayısı: 10, gerekli lookback: 20.",
-        }),
+        json.dumps(
+            {
+                "symbol": "BBB",
+                "day": day,
+                "decision_raw": "PASS",
+                "score": 0.0,
+                "text": "Güvenli mod: InsufficientHistory. Mevcut bar sayısı: 10, gerekli lookback: 20.",
+            }
+        ),
         encoding="utf-8",
     )
     (ask_dir / "CCC.json").write_text(
-        json.dumps({
-            "symbol": "CCC",
-            "day": day,
-            "decision_raw": "HOLD",
-            "score": 0.3,
-            "text": "CCC için karar HOLD; skor 0.30.",
-        }),
+        json.dumps(
+            {
+                "symbol": "CCC",
+                "day": day,
+                "decision_raw": "HOLD",
+                "score": 0.3,
+                "text": "CCC için karar HOLD; skor 0.30.",
+            }
+        ),
         encoding="utf-8",
     )
     return tmp_path / "reports"
@@ -104,8 +113,19 @@ def test_csv_header_exact(tmp_path: Path) -> None:
     with (reports_root / "2025-03-15" / "topn_bundle_h1.csv").open(newline="", encoding="utf-8") as f:
         header = next(csv.reader(f))
     expected = [
-        "day", "horizon_days", "rank", "symbol", "score", "p_up", "p_gt_cost",
-        "mu_hat", "sigma_hat", "decision_raw", "has_artifact", "artifact_path", "headline",
+        "day",
+        "horizon_days",
+        "rank",
+        "symbol",
+        "score",
+        "p_up",
+        "p_gt_cost",
+        "mu_hat",
+        "sigma_hat",
+        "decision_raw",
+        "has_artifact",
+        "artifact_path",
+        "headline",
     ]
     assert header == expected
 

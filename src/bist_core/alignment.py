@@ -1,6 +1,7 @@
 """
 FAZ100: Single source-of-truth for core-complete sentinel (fail-closed).
 """
+
 from __future__ import annotations
 
 # Printed by verify_alignment.py when alignment checklist is fully complete.

@@ -1,4 +1,5 @@
 """Risk engine: validates orders_intent against position/notional/name/cap rules (fail-closed)."""
+
 from __future__ import annotations
 
 from bist_core.risk.risk_engine import validate_orders_intent

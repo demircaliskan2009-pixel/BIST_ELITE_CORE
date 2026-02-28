@@ -1,4 +1,5 @@
 """FAZ582: Order ticket export — CSV + TXT from orders_intent v2. Deterministic, offline."""
+
 from __future__ import annotations
 
 import csv
@@ -7,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 _repo = Path(__file__).resolve().parents[1]
 _fixture = _repo / "tools" / "fixtures" / "orders_intent_valid.json"
@@ -45,14 +45,16 @@ def test_stable_ordering(tmp_path: Path) -> None:
     """Actions sorted by symbol then side."""
     orders_file = tmp_path / "multi.json"
     orders_file.write_text(
-        json.dumps({
-            "day": "2025-01-15",
-            "actions": [
-                {"symbol": "BBB", "side": "SELL"},
-                {"symbol": "AAA", "side": "BUY"},
-                {"symbol": "AAA", "side": "SELL"},
-            ],
-        }),
+        json.dumps(
+            {
+                "day": "2025-01-15",
+                "actions": [
+                    {"symbol": "BBB", "side": "SELL"},
+                    {"symbol": "AAA", "side": "BUY"},
+                    {"symbol": "AAA", "side": "SELL"},
+                ],
+            }
+        ),
         encoding="utf-8",
     )
     out_dir = tmp_path / "tickets"
@@ -81,10 +83,12 @@ def test_unsupported_order_type_exit_1(tmp_path: Path) -> None:
     """Unsupported order_type => exit 1, deterministic error."""
     orders_file = tmp_path / "bad_type.json"
     orders_file.write_text(
-        json.dumps({
-            "day": "2025-01-15",
-            "actions": [{"symbol": "ASELS", "side": "BUY", "order_type": "STOP"}],
-        }),
+        json.dumps(
+            {
+                "day": "2025-01-15",
+                "actions": [{"symbol": "ASELS", "side": "BUY", "order_type": "STOP"}],
+            }
+        ),
         encoding="utf-8",
     )
     code, _, stderr = _run_export(orders_file, tmp_path / "out")

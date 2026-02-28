@@ -1,4 +1,5 @@
-"""FAZ36: Risk engine + rules schema — rules load, block on missing/invalid, allow on valid."""
+"""FAZ36: Risk engine + rules schema â€” rules load, block on missing/invalid, allow on valid."""
+
 from __future__ import annotations
 
 import json
@@ -178,7 +179,7 @@ def test_faz36_allow_on_valid(tmp_path: Path) -> None:
     assert result.returncode == 0
     orders_path = outdir / "orders" / day / "orders_intent.json"
     assert orders_path.is_file()
-    payload = json.loads(orders_path.read_text(encoding="utf-8"))
+    json.loads(orders_path.read_text(encoding="utf-8"))
 
     manifest = json.loads((outdir / "_pipeline_manifest.json").read_text(encoding="utf-8"))
     assert manifest["stages"]["orders"]["ok"] == 1

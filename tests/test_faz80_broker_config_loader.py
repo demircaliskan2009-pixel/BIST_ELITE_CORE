@@ -1,4 +1,5 @@
 """FAZ80: BrokerConfig loader from BIST_BROKER_CONFIG (file path OR inline JSON); missing/invalid -> fail-closed exit 2 + execution_result.json."""
+
 from __future__ import annotations
 
 import json
@@ -7,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 from bist_core.config import load_broker_config
 from bist_core.execution.result_writer import EXECUTION_RESULT_FILENAME
@@ -96,13 +96,35 @@ def test_live_missing_broker_config_exit2_and_execution_result(tmp_path: Path) -
     day = "2099-03-01"
     (tmp_path / day).mkdir(parents=True, exist_ok=True)
     (tmp_path / "orders" / day).mkdir(parents=True, exist_ok=True)
-    (tmp_path / "orders" / day / "orders_intent.json").write_text(json.dumps({"day": day, "actions": []}), encoding="utf-8")
+    (tmp_path / "orders" / day / "orders_intent.json").write_text(
+        json.dumps({"day": day, "actions": []}), encoding="utf-8"
+    )
     (tmp_path / day / "pipeline_manifest.json").write_text(
-        json.dumps({"schema_version": 2, "day": day, "stages": {}, "orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json")}),
+        json.dumps(
+            {
+                "schema_version": 2,
+                "day": day,
+                "stages": {},
+                "orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json"),
+            }
+        ),
         encoding="utf-8",
     )
     r = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "eod", "execute", "--day", day, "--outdir", str(tmp_path), "--live", "--broker", "stub"],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "eod",
+            "execute",
+            "--day",
+            day,
+            "--outdir",
+            str(tmp_path),
+            "--live",
+            "--broker",
+            "stub",
+        ],
         env=env,
         capture_output=True,
         text=True,
@@ -130,13 +152,35 @@ def test_live_invalid_broker_config_exit2_and_execution_result(tmp_path: Path) -
     day = "2099-03-02"
     (tmp_path / day).mkdir(parents=True, exist_ok=True)
     (tmp_path / "orders" / day).mkdir(parents=True, exist_ok=True)
-    (tmp_path / "orders" / day / "orders_intent.json").write_text(json.dumps({"day": day, "actions": []}), encoding="utf-8")
+    (tmp_path / "orders" / day / "orders_intent.json").write_text(
+        json.dumps({"day": day, "actions": []}), encoding="utf-8"
+    )
     (tmp_path / day / "pipeline_manifest.json").write_text(
-        json.dumps({"schema_version": 2, "day": day, "stages": {}, "orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json")}),
+        json.dumps(
+            {
+                "schema_version": 2,
+                "day": day,
+                "stages": {},
+                "orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json"),
+            }
+        ),
         encoding="utf-8",
     )
     r = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "eod", "execute", "--day", day, "--outdir", str(tmp_path), "--live", "--broker", "stub"],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "eod",
+            "execute",
+            "--day",
+            day,
+            "--outdir",
+            str(tmp_path),
+            "--live",
+            "--broker",
+            "stub",
+        ],
         env=env,
         capture_output=True,
         text=True,
@@ -164,18 +208,46 @@ def test_live_valid_inline_broker_config_accepts(tmp_path: Path) -> None:
     day = "2099-03-03"
     (tmp_path / day).mkdir(parents=True, exist_ok=True)
     (tmp_path / "orders" / day).mkdir(parents=True, exist_ok=True)
-    (tmp_path / "orders" / day / "orders_intent.json").write_text(json.dumps({"day": day, "actions": []}), encoding="utf-8")
+    (tmp_path / "orders" / day / "orders_intent.json").write_text(
+        json.dumps({"day": day, "actions": []}), encoding="utf-8"
+    )
     (tmp_path / day / "pipeline_manifest.json").write_text(
-        json.dumps({"schema_version": 2, "day": day, "stages": {}, "orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json")}),
+        json.dumps(
+            {
+                "schema_version": 2,
+                "day": day,
+                "stages": {},
+                "orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json"),
+            }
+        ),
         encoding="utf-8",
     )
     (tmp_path / "dossier" / day).mkdir(parents=True, exist_ok=True)
     (tmp_path / "dossier" / day / "dossier.json").write_text(
-        json.dumps({"schema_version": 1, "day": day, "evidence": {"orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json")}}),
+        json.dumps(
+            {
+                "schema_version": 1,
+                "day": day,
+                "evidence": {"orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json")},
+            }
+        ),
         encoding="utf-8",
     )
     r = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "eod", "execute", "--day", day, "--outdir", str(tmp_path), "--live", "--broker", "stub"],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "eod",
+            "execute",
+            "--day",
+            day,
+            "--outdir",
+            str(tmp_path),
+            "--live",
+            "--broker",
+            "stub",
+        ],
         env=env,
         capture_output=True,
         text=True,

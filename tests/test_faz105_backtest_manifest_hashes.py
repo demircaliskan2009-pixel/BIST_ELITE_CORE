@@ -1,4 +1,5 @@
 """FAZ105: Backtest evidence manifest — manifest.json with outputs (path, sha256, bytes)."""
+
 from __future__ import annotations
 
 import json

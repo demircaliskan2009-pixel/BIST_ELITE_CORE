@@ -1,11 +1,10 @@
 """FAZ89: Advisory plan contract — same inputs -> same output hash (deterministic)."""
+
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
-import pytest
 
 from bist_core.advisory.plan import build_advisory_plan, write_advisory_plan
 

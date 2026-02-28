@@ -1,4 +1,5 @@
 """FAZ54: Orders strategy registry (resolve_strategy, deterministic top_n + stable ordering)."""
+
 from __future__ import annotations
 
 import pytest

@@ -1,4 +1,5 @@
 """FAZ397: Changelog discipline — CHANGELOG.md exists; format [fazNNN]; entry per phase."""
+
 from __future__ import annotations
 
 import re

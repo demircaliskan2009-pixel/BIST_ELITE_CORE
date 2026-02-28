@@ -1,4 +1,5 @@
 """FAZ185: FastAPI app — /health, /ask, /scan. Offline only, BIST-only scope."""
+
 from __future__ import annotations
 
 import os
@@ -152,10 +153,7 @@ def scan(req: ScanRequest) -> dict[str, Any]:
     results.sort(key=lambda x: (-x[1], x[0]))
     ranked = results[: req.top_n]
 
-    lines = [
-        {"symbol": sym, "score": round(score, 2), "rationale": rationale}
-        for sym, score, rationale in ranked
-    ]
+    lines = [{"symbol": sym, "score": round(score, 2), "rationale": rationale} for sym, score, rationale in ranked]
     return {
         "schema_version": SCAN_ARTIFACT_SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),

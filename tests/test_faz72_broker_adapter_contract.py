@@ -1,19 +1,15 @@
 """FAZ72: Broker adapter interface (place_orders/cancel/get_fills) with strict schemas and stub that reads fixture responses."""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
 
 from bist_core.execution.broker_adapter import (
     FILL_RECORD_KEYS,
-    PLACE_ORDERS_INPUT_KEYS,
     PLACE_ORDERS_OUTPUT_KEYS,
-    CANCEL_INPUT_KEYS,
     CANCEL_OUTPUT_KEYS,
-    GET_FILLS_INPUT_KEYS,
-    GET_FILLS_OUTPUT_KEYS,
     StubBrokerAdapter,
     _validate_place_orders_input,
     _validate_place_orders_output,
@@ -183,7 +179,7 @@ def test_execution_provider_dry_run_does_not_use_adapter_place_orders() -> None:
 
 def test_execution_provider_fixture_failure_returns_errors() -> None:
     """When adapter returns ok=False, execution result reflects it."""
-    adapter = StubBrokerAdapter({})
+    StubBrokerAdapter({})
     # Return a failing fixture: we need an adapter that returns ok=False. StubBrokerAdapter
     # only returns ok=False on invalid input. So use a custom response file that has ok: false.
     failing_dir = ROOT / "fixtures" / "broker_adapter_failing"

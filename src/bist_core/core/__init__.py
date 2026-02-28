@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 from __future__ import annotations
 
 """
@@ -19,4 +20,3 @@ __all__ = [
     "load_registered_dataset",
     "get_default_registry",
 ]
-

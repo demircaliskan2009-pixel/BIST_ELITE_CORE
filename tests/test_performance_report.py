@@ -1,4 +1,5 @@
 """Performance report — win-rate, avg R, max DD, equity curve. Deterministic."""
+
 from __future__ import annotations
 
 import json

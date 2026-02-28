@@ -1,12 +1,12 @@
 """
 FAZ63: Self-improvement runner — walk-forward evaluation, model_report.json, champion selection by metrics gates.
 """
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
 
 from bist_core.services.self_improvement import (
     _select_champion,

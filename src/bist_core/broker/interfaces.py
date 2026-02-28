@@ -3,6 +3,7 @@
 FAZ598a: Defines the minimal contract used by offline broker runners.
 No network, no secrets. All implementations must be deterministic.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -39,4 +40,3 @@ class BrokerAdapter(ABC):
 
         Returns the absolute path to the fills CSV as a string.
         """
-

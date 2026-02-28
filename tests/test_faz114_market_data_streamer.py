@@ -1,11 +1,11 @@
 """FAZ114: MarketDataStreamer — provider polling, tick buffer, per-symbol subscription, downstream use."""
+
 from __future__ import annotations
 
 import asyncio
 from typing import Dict, List
 
 from bist_core.connectors.market_data_streamer import MarketDataStreamer
-from bist_core.market_data.base import MarketDataProvider
 
 
 class DummyProvider:
@@ -31,6 +31,7 @@ class DummyProvider:
 
 def test_streamer_polls_provider_and_buffers_ticks() -> None:
     """Streamer periodically polls provider and buffers new tick data."""
+
     async def run() -> None:
         provider = DummyProvider(snapshots=[{"X": 10.0}, {"X": 11.0, "Y": 20.0}])
         streamer = MarketDataStreamer(provider, day="today")
@@ -50,6 +51,7 @@ def test_streamer_polls_provider_and_buffers_ticks() -> None:
 
 def test_subscription_per_symbol() -> None:
     """Only subscribed symbols are returned by get_pending_ticks when subscriptions are set."""
+
     async def run() -> None:
         provider = DummyProvider(snapshots=[{"A": 1.0, "B": 2.0, "C": 3.0}])
         streamer = MarketDataStreamer(provider, day="today")
@@ -88,7 +90,7 @@ def test_get_pending_ticks_clears_buffer() -> None:
         await asyncio.sleep(0.02)
         streamer.stop_stream()
         await task
-        first = streamer.get_pending_ticks()
+        streamer.get_pending_ticks()
         second = streamer.get_pending_ticks()
         assert second == []
 
@@ -97,6 +99,7 @@ def test_get_pending_ticks_clears_buffer() -> None:
 
 def test_downstream_can_use_last_snapshot() -> None:
     """Downstream (strategy, execution) can read last_snapshot."""
+
     async def run() -> None:
         provider = DummyProvider(snapshots=[{"A": 1.0, "B": 2.0}])
         streamer = MarketDataStreamer(provider, day="today")
@@ -116,6 +119,7 @@ def test_downstream_can_use_last_snapshot() -> None:
 
 def test_streamer_single_cycle_backward_compat() -> None:
     """last_data still set for backward compatibility."""
+
     async def run() -> None:
         provider = DummyProvider(snapshots=[{"X": 42.0}])
         streamer = MarketDataStreamer(provider, day="today")
@@ -131,6 +135,7 @@ def test_streamer_single_cycle_backward_compat() -> None:
 
 def test_streamer_multiple_cycles() -> None:
     """Multiple poll cycles; last_snapshot reflects latest."""
+
     async def run() -> None:
         provider = DummyProvider(snapshots=[{"a": 1.0}, {"a": 2.0}, {"a": 3.0}])
         streamer = MarketDataStreamer(provider, day="today")

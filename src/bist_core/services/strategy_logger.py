@@ -1,4 +1,5 @@
 """Strategy registry — log every proposed strategy from ask/scan. JSONL append. Fail-closed."""
+
 from __future__ import annotations
 
 import json
@@ -16,6 +17,7 @@ def _default_log_path() -> Path:
     if env_path:
         return Path(env_path)
     from bist_core import config
+
     return config.REPO_ROOT / "data" / "log" / "strategies.jsonl"
 
 

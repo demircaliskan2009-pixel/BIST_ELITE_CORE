@@ -1,4 +1,5 @@
 """FAZ125: Ask output template + JSON artifact saved and path printed."""
+
 from __future__ import annotations
 
 import json

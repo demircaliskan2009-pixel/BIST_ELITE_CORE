@@ -3,12 +3,12 @@ FAZ56: Audit ledger — deterministic paths and minimal schema.
 Verify outdir/ledger/<day>/orders.jsonl, fills.jsonl, positions.jsonl.
 No new dependencies.
 """
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
 
 from bist_core.audit.ledger import (
     write_fills_jsonl,

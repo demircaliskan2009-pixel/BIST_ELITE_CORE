@@ -38,11 +38,13 @@ def build_adjust_factors(
         factor, note_list = _factor_for_symbol_date(symbol, date_val, action_map)
         if note_list:
             notes.extend(note_list)
-        factors_list.append({
-            symbol_key: symbol,
-            date_key: date_val,
-            "factor": factor if factor is not None else 1.0,
-        })
+        factors_list.append(
+            {
+                symbol_key: symbol,
+                date_key: date_val,
+                "factor": factor if factor is not None else 1.0,
+            }
+        )
     return factors_list, notes
 
 
@@ -65,9 +67,7 @@ def apply_close_adjustments(
         if symbol is None or date_val is None or close_val is None:
             adjusted.append(bar)
             continue
-        factor, note_list = _factor_for_symbol_date(
-            symbol, date_val, action_map
-        )
+        factor, note_list = _factor_for_symbol_date(symbol, date_val, action_map)
         if note_list:
             notes.extend(note_list)
         if factor is None:

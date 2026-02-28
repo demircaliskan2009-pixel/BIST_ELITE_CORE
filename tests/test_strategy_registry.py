@@ -1,4 +1,5 @@
 """Strategy registry — ask/scan append to strategies.jsonl. Deterministic keys, fail-closed."""
+
 from __future__ import annotations
 
 import json

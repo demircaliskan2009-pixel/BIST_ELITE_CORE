@@ -4,11 +4,12 @@ Paths: snapshot_root/<day>/snapshot.csv or snapshot_root/<day>.csv.
 Deterministic: symbols and close_map keys sorted by symbol.
 FAZ547: Snapshots use normalize_symbol on read.
 """
+
 from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from bist_core.symbol import normalize_symbol
 
@@ -91,6 +92,7 @@ class LocalEODProvider:
         self._raw_path = path
         try:
             from bist_core.services import snapshot_integrity
+
             self._raw_sha256 = snapshot_integrity.compute_sha256(path)
         except Exception:
             self._raw_sha256 = None

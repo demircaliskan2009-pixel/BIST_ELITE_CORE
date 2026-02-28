@@ -2,12 +2,11 @@
 FAZ45: Data-driven BIST RulesPack (tick size + price bands) with provenance.
 Test uses tmp rulespack folder and asserts validate_tick / validate_band decisions.
 """
+
 from __future__ import annotations
 
-import csv
 from pathlib import Path
 
-import pytest
 
 from bist_core.risk.rulespack import (
     load_rulespack,
@@ -46,13 +45,9 @@ def test_faz45_validate_band_decisions() -> None:
 def test_faz45_rulespack_tmp_folder_decisions(tmp_path: Path) -> None:
     """Load rulespack from tmp folder; assert tick lookup and band decisions."""
     # tick_sizes: 0-9.99 -> 0.01, 10-99.99 -> 0.02
-    (tmp_path / "tick_sizes.csv").write_text(
-        "min_price,max_price,tick\n0,9.99,0.01\n10,99.99,0.02\n", encoding="utf-8"
-    )
+    (tmp_path / "tick_sizes.csv").write_text("min_price,max_price,tick\n0,9.99,0.01\n10,99.99,0.02\n", encoding="utf-8")
     # price_bands: default 10%, market X -> 5%
-    (tmp_path / "price_bands.csv").write_text(
-        "band_pct,market\n10,\n5,X\n", encoding="utf-8"
-    )
+    (tmp_path / "price_bands.csv").write_text("band_pct,market\n10,\n5,X\n", encoding="utf-8")
     pack, prov = load_rulespack(tmp_path)
     assert "dir" in prov
     assert prov["tick_sizes"]["rows"] == 2
@@ -78,9 +73,7 @@ def test_faz45_rulespack_tmp_folder_decisions(tmp_path: Path) -> None:
 
 def test_faz45_rulespack_provenance_keys(tmp_path: Path) -> None:
     """Provenance includes dir and per-file source/rows."""
-    (tmp_path / "tick_sizes.csv").write_text(
-        "min_price,max_price,tick\n0,100,0.01\n", encoding="utf-8"
-    )
+    (tmp_path / "tick_sizes.csv").write_text("min_price,max_price,tick\n0,100,0.01\n", encoding="utf-8")
     (tmp_path / "price_bands.csv").write_text("band_pct,market\n10,\n", encoding="utf-8")
     pack, prov = load_rulespack(tmp_path)
     assert prov["dir"] == str(tmp_path)

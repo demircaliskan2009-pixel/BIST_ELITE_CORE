@@ -3,10 +3,11 @@ FAZ99: Recursive secrets redaction for artifacts (execution_result, dossier, rec
 Key match (case-insensitive): secret, token, apikey, api_key, password, passwd, bearer, authorization, cookie, session.
 Value replaced with ***REDACTED***. Raw secrets must not appear in json artifacts.
 """
+
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 REDACT_PLACEHOLDER = "***REDACTED***"
 

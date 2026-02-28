@@ -4,6 +4,7 @@ Runs snapshot -> research -> advice -> orders -> execute(paper) for one day.
 Asserts all deterministic artifacts exist and manifest schema v2 has full provenance + audit paths.
 Fast, no external deps (stub research, tmp snapshot).
 """
+
 from __future__ import annotations
 
 import json
@@ -11,8 +12,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 
 def _run_daily_run_paper(day: str, outdir: Path, snapshot_dir: Path) -> subprocess.CompletedProcess:
@@ -107,7 +106,9 @@ def test_faz65_golden_path_artifacts_and_manifest_schema_v2(tmp_path: Path) -> N
 
     # Manifest stage paths point to existing key artifacts
     assert stages.get("advice", {}).get("path")
-    assert Path(stages["advice"]["path"]).is_file() or (Path(stages["advice"]["path"]) / "advice_records.jsonl").is_file()
+    assert (
+        Path(stages["advice"]["path"]).is_file() or (Path(stages["advice"]["path"]) / "advice_records.jsonl").is_file()
+    )
     assert Path(stages["orders"]["path"]).is_file()
     assert stages.get("dossier", {}).get("path") or stages.get("dossier", {}).get("dossier_json_path")
     dossier_ref = stages["dossier"].get("dossier_json_path") or stages["dossier"].get("path")

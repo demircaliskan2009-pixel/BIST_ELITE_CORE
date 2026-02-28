@@ -1,4 +1,5 @@
 """FAZ185/186/187/188/189/193: API endpoints — health, ask, scan; BIST-only; network OFF."""
+
 from __future__ import annotations
 
 import os
@@ -64,9 +65,7 @@ def test_faz189_network_off_guard(client: TestClient) -> None:
     assert "offline" in r_ask.json().get("detail", "").lower()
 
 
-def test_faz186_ask_with_snapshot(
-    client: TestClient, snapshot_fixture: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_faz186_ask_with_snapshot(client: TestClient, snapshot_fixture: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """POST /ask returns advice when snapshot exists (offline)."""
     monkeypatch.delenv("BIST_CORE_ALLOW_NETWORK", raising=False)
     monkeypatch.setenv("BIST_CORE_SNAPSHOT_DIR", str(snapshot_fixture))
@@ -82,9 +81,7 @@ def test_faz186_ask_with_snapshot(
     assert "score" in data
 
 
-def test_faz187_scan_with_snapshot(
-    client: TestClient, snapshot_fixture: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_faz187_scan_with_snapshot(client: TestClient, snapshot_fixture: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """POST /scan returns ranked list when snapshot exists (offline)."""
     monkeypatch.delenv("BIST_CORE_ALLOW_NETWORK", raising=False)
     monkeypatch.setenv("BIST_CORE_SNAPSHOT_DIR", str(snapshot_fixture))

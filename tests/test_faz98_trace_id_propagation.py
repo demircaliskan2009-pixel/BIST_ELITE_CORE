@@ -1,10 +1,10 @@
 """FAZ98: trace_id generation in one place; propagation into log/event payloads."""
+
 from __future__ import annotations
 
 import io
 import json
 
-import pytest
 
 from bist_core.cli.observability import log_struct
 from bist_core.trace import (

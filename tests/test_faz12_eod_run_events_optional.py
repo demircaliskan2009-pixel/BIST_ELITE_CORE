@@ -56,9 +56,7 @@ def test_eod_run_events_optional(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0
-    pipeline_manifest = json.loads(
-        (outdir / "_pipeline_manifest.json").read_text(encoding="utf-8")
-    )
+    pipeline_manifest = json.loads((outdir / "_pipeline_manifest.json").read_text(encoding="utf-8"))
     assert pipeline_manifest["stages"]["events"]["errors"] == 0
     assert (events_outdir / "events.jsonl").exists()
     assert (events_outdir / "_manifest.json").exists()

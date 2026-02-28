@@ -52,9 +52,7 @@ def run_eod_replay(
     ok_days = 0
     error_days = 0
 
-    policy_effective = (
-        str(policy_file) if policy_file is not None else os.getenv("BIST_CORE_POLICY_FILE")
-    )
+    policy_effective = str(policy_file) if policy_file is not None else os.getenv("BIST_CORE_POLICY_FILE")
     policy_prov = None
     if policy_effective:
         policy_path = Path(policy_effective)

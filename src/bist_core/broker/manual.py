@@ -3,6 +3,7 @@
 FAZ598a: Offline, secrets-free adapter used when a human
 submits tickets and uploads fills CSV files manually.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -47,4 +48,3 @@ class ManualBroker(BrokerAdapter):
             raise FileNotFoundError(f"fills CSV not found: {path}")
 
         return str(path.resolve())
-

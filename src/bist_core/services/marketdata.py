@@ -1,11 +1,12 @@
-
 from pathlib import Path
 from typing import List, Dict
 from bist_core.providers import LocalCSVProvider, VendorAPIProvider, VendorAPIConfig
 from bist_core import config
 
+
 class MarketData:
     """EOD verisini provider üstünden okur."""
+
     def __init__(self, base: Path = Path("data/eod/snapshots")) -> None:
         if config.SOURCES["vendor_api"]["enabled"]:
             vendor_cfg = config.SOURCES["vendor_api"]
@@ -13,7 +14,7 @@ class MarketData:
                 eod_endpoint=vendor_cfg["eod_endpoint"],
                 kap_endpoint=vendor_cfg.get("kap_endpoint"),
                 api_key=vendor_cfg["auth"]["api_key"],
-                timeout=vendor_cfg.get("timeout", 5.0)
+                timeout=vendor_cfg.get("timeout", 5.0),
             )
             self._prov = VendorAPIProvider(cfg=cfg)
         else:

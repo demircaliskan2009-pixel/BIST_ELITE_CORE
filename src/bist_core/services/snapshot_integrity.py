@@ -109,9 +109,7 @@ def build_eod_snapshot(
     elif src_alt.is_file():
         source_path = src_alt
     else:
-        raise FileNotFoundError(
-            f"No snapshot source for day {day}: expected {src_csv} or {src_alt}"
-        )
+        raise FileNotFoundError(f"No snapshot source for day {day}: expected {src_csv} or {src_alt}")
 
     day_dir = out / day
     day_dir.mkdir(parents=True, exist_ok=True)

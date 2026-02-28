@@ -3,6 +3,7 @@ FAZ47: Restriction-state gate (VBTS/halts/circuit) data-driven + fail-closed.
 Load from --restrictions-file or env BIST_RESTRICTIONS_FILE.
 State: blocked_symbols (list), short_sale_ban (bool). Provenance: file + sha256.
 """
+
 from __future__ import annotations
 
 import json
@@ -31,6 +32,7 @@ def load_restrictions(path: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         return state, provenance
     try:
         from bist_core.services import snapshot_integrity
+
         provenance["sha256"] = snapshot_integrity.compute_sha256(path)
     except Exception:
         pass
@@ -58,10 +60,7 @@ def gate_restrictions(
     Returns {ok: bool, errors: list, notes: list}. Deterministic: errors sorted.
     """
     errors: list[str] = []
-    blocked = set(
-        (s or "").strip().upper()
-        for s in (restrictions_state.get("blocked_symbols") or [])
-    )
+    blocked = set((s or "").strip().upper() for s in (restrictions_state.get("blocked_symbols") or []))
     short_sale_ban = bool(restrictions_state.get("short_sale_ban"))
 
     for action in orders_intent.get("actions") or []:
@@ -73,11 +72,7 @@ def gate_restrictions(
         if short_sale_ban:
             side = (action.get("side") or "").strip().lower()
             qty = action.get("quantity")
-            is_short = (
-                side == "short"
-                or (qty is not None and float(qty) < 0)
-                or bool(action.get("short_sell"))
-            )
+            is_short = side == "short" or (qty is not None and float(qty) < 0) or bool(action.get("short_sell"))
             if is_short:
                 errors.append("short_sale_blocked")
 

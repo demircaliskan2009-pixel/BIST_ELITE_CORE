@@ -1,10 +1,10 @@
 """FAZ97: Config migration — v1 -> v2; CLI load uses migration."""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
 
 from bist_core.config import load_core_config_strict
 from bist_core.config_migrate import CORE_CONFIG_SCHEMA_VERSION, migrate_core_config

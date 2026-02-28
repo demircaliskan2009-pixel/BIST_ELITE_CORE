@@ -92,7 +92,5 @@ def test_events_ingest_strict_and_manifest(tmp_path: Path) -> None:
         check=False,
     )
     assert result_strict.returncode == 2
-    manifest_strict = json.loads(
-        (outdir_strict / "_manifest.json").read_text(encoding="utf-8")
-    )
+    manifest_strict = json.loads((outdir_strict / "_manifest.json").read_text(encoding="utf-8"))
     assert manifest_strict["rejected"] == 1

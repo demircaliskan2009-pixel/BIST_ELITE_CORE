@@ -3,6 +3,7 @@ FAZ95: Eval gates — metrics -> pass/fail; fail -> exit 2 + artifacts.
 Standard gates: min_trades (total_fills >= N), max_dd (max_drawdown <= M).
 Deterministic: same metrics + same gates -> same result.
 """
+
 from __future__ import annotations
 
 import json

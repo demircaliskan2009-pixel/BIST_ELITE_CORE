@@ -1,4 +1,5 @@
 """FAZ118-HOTFIX-NODECISION: 1 günlük snapshot -> HOLD + InsufficientHistory."""
+
 from __future__ import annotations
 
 from pathlib import Path

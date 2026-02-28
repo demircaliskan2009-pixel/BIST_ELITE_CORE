@@ -1,7 +1,7 @@
 """FAZ567: Live ops pack — validate, today, journal report. No real market data."""
+
 from __future__ import annotations
 
-import csv
 import json
 import subprocess
 import sys
@@ -21,6 +21,7 @@ from tools.scoreboard_report import build_scoreboard, write_scoreboard
 
 def test_live_validate_missing_snapshot_returns_fail(tmp_path: Path) -> None:
     """live_validate returns ok=False and exit 2 on missing snapshot."""
+    # ruff: noqa: E402
     ok, reasons, checked, _ = validate_snapshot_for_day("2025-01-15", tmp_path / "nonexistent")
     assert ok is False
     assert "snapshot_root_missing" in reasons or "day_dir_missing" in reasons
@@ -73,7 +74,14 @@ def test_live_validate_cli_exit_2_on_missing(tmp_path: Path) -> None:
     """live_validate.py exits 2 when snapshot missing."""
     env = {"PYTHONPATH": str(_repo / "src")}
     r = subprocess.run(
-        [sys.executable, str(_repo / "tools" / "live_validate.py"), "--day", "2099-01-01", "--snapshot-root", str(tmp_path)],
+        [
+            sys.executable,
+            str(_repo / "tools" / "live_validate.py"),
+            "--day",
+            "2099-01-01",
+            "--snapshot-root",
+            str(tmp_path),
+        ],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -152,8 +160,10 @@ def test_live_snapshot_prepare_cli_exit_2_on_missing(tmp_path: Path) -> None:
         [
             sys.executable,
             str(_repo / "tools" / "live_snapshot_prepare.py"),
-            "--day", "2099-01-01",
-            "--snapshot-root", str(tmp_path),
+            "--day",
+            "2099-01-01",
+            "--snapshot-root",
+            str(tmp_path),
         ],
         capture_output=True,
         text=True,

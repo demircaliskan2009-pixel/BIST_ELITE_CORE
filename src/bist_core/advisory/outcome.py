@@ -2,6 +2,7 @@
 Outcome evaluation for logged strategies.
 Uses daily EODBar data from snapshot CSVs. Deterministic. Offline. Fail-closed.
 """
+
 from __future__ import annotations
 
 import csv
@@ -33,6 +34,7 @@ def _parse_max_hold_days(env_val: Optional[str], default: int = DEFAULT_MAX_HOLD
 @dataclass
 class Bar:
     """Minimal bar for outcome simulation. high/low fallback to close when missing."""
+
     date_str: str
     close: float
     high: float
@@ -89,15 +91,15 @@ def _load_bars_forward(
                 high = close
                 low = close
                 h = row.get("high")
-                l = row.get("low")
+                low_val = row.get("low")
                 if h not in (None, ""):
                     try:
                         high = float(h)
                     except (TypeError, ValueError):
                         pass
-                if l not in (None, ""):
+                if low_val not in (None, ""):
                     try:
-                        low = float(l)
+                        low = float(low_val)
                     except (TypeError, ValueError):
                         pass
                 bars.append(Bar(date_str=day_str, close=close, high=high, low=low))
@@ -149,8 +151,10 @@ def evaluate_strategy(
     if not (stop < entry < t1):
         return _hold_outcome(symbol, day, "invalid_plan_order")
 
-    hold_days = max_hold_days if max_hold_days is not None else _parse_max_hold_days(
-        os.environ.get("BIST_CORE_OUTCOME_MAX_HOLD_DAYS"), DEFAULT_MAX_HOLD_DAYS
+    hold_days = (
+        max_hold_days
+        if max_hold_days is not None
+        else _parse_max_hold_days(os.environ.get("BIST_CORE_OUTCOME_MAX_HOLD_DAYS"), DEFAULT_MAX_HOLD_DAYS)
     )
     bars = _load_bars_forward(snapshot_root, symbol, day, max_days=hold_days)
     if not bars:
@@ -255,6 +259,7 @@ def _default_outcomes_path() -> Path:
     if env_path:
         return Path(env_path)
     from bist_core import config
+
     return config.REPO_ROOT / "data" / "log" / "strategy_outcomes.jsonl"
 
 
@@ -282,8 +287,10 @@ def evaluate_and_append_outcomes(
             entry = json.loads(line)
         except json.JSONDecodeError:
             continue
-        hold_days = max_hold_days if max_hold_days is not None else _parse_max_hold_days(
-            os.environ.get("BIST_CORE_OUTCOME_MAX_HOLD_DAYS"), DEFAULT_MAX_HOLD_DAYS
+        hold_days = (
+            max_hold_days
+            if max_hold_days is not None
+            else _parse_max_hold_days(os.environ.get("BIST_CORE_OUTCOME_MAX_HOLD_DAYS"), DEFAULT_MAX_HOLD_DAYS)
         )
         outcome = evaluate_strategy(entry, snapshot_root, max_hold_days=hold_days)
         if outcome is None:

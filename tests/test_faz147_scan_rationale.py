@@ -1,4 +1,5 @@
 """FAZ147: Scan scoring rationale — 1-line rationale per ranked symbol from deterministic signals."""
+
 from __future__ import annotations
 
 import json

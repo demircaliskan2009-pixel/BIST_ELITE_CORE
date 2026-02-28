@@ -7,7 +7,11 @@ import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pandas as pd
+
 
 __all__ = [
     "DatasetMetadata",
@@ -98,6 +102,7 @@ class DatasetMetadata:
     created_at : ISO8601 UTC timestamp
     updated_at : ISO8601 UTC timestamp
     """
+
     name: str
     kind: str
     path: str
@@ -164,9 +169,7 @@ class DatasetRegistry:
                 with self._path.open("r", encoding="utf-8") as f:
                     raw = json.load(f)
             except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"Registry JSON is invalid: {self._path}"
-                ) from exc
+                raise ValueError(f"Registry JSON is invalid: {self._path}") from exc
 
             if not isinstance(raw, dict):
                 raise ValueError(f"Registry JSON schema invalid: {self._path}")
@@ -229,10 +232,7 @@ class DatasetRegistry:
         now = self._now_iso()
 
         if name in self._datasets and not overwrite:
-            raise ValueError(
-                f"Dataset already exists in registry: {name!r}. "
-                f"Use overwrite=True to update."
-            )
+            raise ValueError(f"Dataset already exists in registry: {name!r}. Use overwrite=True to update.")
 
         if name in self._datasets:
             meta = self._datasets[name]
@@ -298,6 +298,7 @@ def get_dataset(name: str, path: Optional[Path] = None) -> DatasetMetadata:
 
 # ---- compatibility helper functions ----------------------------------------
 
+
 def register_dataset(
     dataset_id: str,
     path: Path | str,
@@ -308,10 +309,10 @@ def register_dataset(
 ) -> DatasetMetadata:
     """
     Compatibility function for the old API.
-    
+
     Registers a dataset using the default registry.
     Uses dataset_id as the name for backward compatibility.
-    
+
     Args:
         dataset_id: Name of the dataset in the registry
         path: Root path to the dataset directory
@@ -319,10 +320,10 @@ def register_dataset(
         overwrite: If True, allow overwriting existing dataset. Defaults to False
             for safety. Set to True explicitly to update existing entries.
         **meta: Additional metadata (currently unused, reserved for future use)
-    
+
     Returns:
         DatasetMetadata for the registered dataset
-        
+
     Raises:
         ValueError: If dataset already exists and overwrite=False
     """
@@ -341,7 +342,7 @@ def register_dataset(
 def load_registered_dataset(dataset_id: str) -> "pd.DataFrame":
     """
     Compatibility function for the old API.
-    
+
     Loads a registered dataset as a pandas DataFrame.
     For local_csv kind, expects the path to be a directory containing CSV files.
     FAZ546: Symbol column (if present) is normalized via normalize_symbol (uppercase, trim).
@@ -394,9 +395,5 @@ def _registry_payload(datasets: Dict[str, DatasetMetadata]) -> Dict[str, Any]:
     return {
         "schema_version": 1,
         "version": 1,
-        "datasets": {
-            name: _metadata_payload(meta)
-            for name, meta in sorted(datasets.items())
-        },
+        "datasets": {name: _metadata_payload(meta) for name, meta in sorted(datasets.items())},
     }
-

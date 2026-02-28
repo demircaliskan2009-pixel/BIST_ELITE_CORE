@@ -29,9 +29,7 @@ def run(cmd: list[str], cwd: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Run tests, then git commit+push if tests pass."
-    )
+    parser = argparse.ArgumentParser(description="Run tests, then git commit+push if tests pass.")
     parser.add_argument(
         "-m",
         "--message",

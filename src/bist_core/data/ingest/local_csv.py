@@ -3,6 +3,7 @@ import csv
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Mapping, Sequence
 
+
 def _num_cast(s: str) -> Any:
     if s is None:
         return None
@@ -17,12 +18,14 @@ def _num_cast(s: str) -> Any:
     except Exception:
         return s
 
+
 def _kind(t: Any) -> str | None:
     if t in (float, int, str, bool):
         return t.__name__
     if isinstance(t, str):
         return t.lower()
     return None
+
 
 def read_csv(
     path: str | Path,
@@ -70,9 +73,11 @@ def read_csv(
                     out[k] = _num_cast(str(v))
             yield out
 
+
 def register_dataset(name: str, spec: Dict[str, Any], *, base_dir: Path | str) -> None:
     """Dataset şemasını/metadata'sını base_dir altında JSON olarak kaydeder."""
     import json
+
     base = Path(base_dir)
     base.mkdir(parents=True, exist_ok=True)
 
@@ -89,11 +94,13 @@ def register_dataset(name: str, spec: Dict[str, Any], *, base_dir: Path | str) -
 
     (base / f"{name}.json").write_text(json.dumps(jspec, indent=2), encoding="utf-8")
 
+
 def load_registered_dataset(name: str, *, base_dir: Path | str) -> List[Dict[str, Any]]:
     """Kayıtlı dataset'i (şema + path) okuyup CSV'yi yükler.
     Önce base_dir altında arar; bulunamazsa base_dir'in ebeveyninde aynı relatif yolu dener.
     """
     import json
+
     base = Path(base_dir)
     spec = json.loads((base / f"{name}.json").read_text(encoding="utf-8"))
 

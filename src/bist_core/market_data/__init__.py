@@ -1,4 +1,5 @@
 """FAZ58: Market data provider interface. Default: local_eod (reads snapshots); registry for custom providers."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,6 +19,7 @@ def resolve_provider(
     if name == "local_eod":
         if snapshot_root is None:
             import os
+
             snapshot_root = os.environ.get("BIST_CORE_SNAPSHOT_DIR")
             if not snapshot_root:
                 raise ValueError("local_eod requires snapshot_root or BIST_CORE_SNAPSHOT_DIR")

@@ -2,6 +2,7 @@
 
 Ensures commands that require BIST_CORE_* env vars fail with non-zero exit when unset.
 """
+
 from __future__ import annotations
 
 import os
@@ -37,7 +38,9 @@ def test_market_data_validate_fails_when_snapshot_dir_unset() -> None:
     """market-data validate requires BIST_CORE_SNAPSHOT_DIR or --snapshot-root; fails when both missing."""
     r = _run_cli(["market-data", "validate", "--day", "2025-01-15"])
     assert r.returncode != 0, "Expected non-zero exit when BIST_CORE_SNAPSHOT_DIR unset"
-    assert "snapshot_root" in (r.stderr or r.stdout or "").lower() or "BIST_CORE_SNAPSHOT_DIR" in (r.stderr or r.stdout or "")
+    assert "snapshot_root" in (r.stderr or r.stdout or "").lower() or "BIST_CORE_SNAPSHOT_DIR" in (
+        r.stderr or r.stdout or ""
+    )
 
 
 def test_market_data_validate_succeeds_with_snapshot_root_arg(tmp_path: Path) -> None:

@@ -1,4 +1,5 @@
 """FAZ578: Broker adapter contract harness — any ExecutionProvider must pass. Dry-run is default safe path."""
+
 from __future__ import annotations
 
 import json
@@ -6,7 +7,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 _repo = Path(__file__).resolve().parents[1]
 if str(_repo) not in sys.path:
@@ -21,8 +21,10 @@ from tools.broker_harness import run_harness
 
 # --- Contract: ExecutionProvider interface ---
 
+
 def test_execution_provider_contract_result_shape() -> None:
     """ExecutionResult must have ok, errors, broker, sent, details."""
+    # ruff: noqa: E402
     result = execution_result(ok=True, errors=[], broker="test", sent=0)
     assert "ok" in result
     assert "errors" in result
@@ -53,6 +55,7 @@ def test_dry_run_provider_submit_returns_contract_shape() -> None:
 
 
 # --- Harness: load from file, run DryRun deterministically ---
+
 
 def test_harness_valid_orders(tmp_path: Path) -> None:
     """Harness with valid orders_intent => exit 0, ok=True."""
@@ -90,10 +93,12 @@ def test_harness_deterministic(tmp_path: Path) -> None:
     """Same input => same result (deterministic)."""
     orders_file = tmp_path / "orders_intent.json"
     orders_file.write_text(
-        json.dumps({
-            "day": "2025-01-15",
-            "actions": [{"symbol": "BBB", "side": "BUY"}, {"symbol": "AAA", "side": "SELL"}],
-        }),
+        json.dumps(
+            {
+                "day": "2025-01-15",
+                "actions": [{"symbol": "BBB", "side": "BUY"}, {"symbol": "AAA", "side": "SELL"}],
+            }
+        ),
         encoding="utf-8",
     )
     _, r1 = run_harness(orders_file)

@@ -1,4 +1,5 @@
 """FAZ106: Backtest manifest + artifact hashes for lineage/audit."""
+
 from __future__ import annotations
 
 import json

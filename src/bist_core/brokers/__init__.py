@@ -1,4 +1,5 @@
 """Broker adapter: interface (place_orders, cancel, get_positions) + PaperBroker."""
+
 from __future__ import annotations
 
 from bist_core.brokers.base import Broker

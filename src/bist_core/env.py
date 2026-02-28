@@ -3,6 +3,7 @@ FAZ99: Env contract validator + secrets redaction.
 validate_env_contract(required[]) -> (ok, errors[] with code).
 redact_secrets: mask secret-like env values for safe logging.
 """
+
 from __future__ import annotations
 
 import os
@@ -90,4 +91,11 @@ def redact_secrets(payload: Dict[str, Any], keys_to_redact: Optional[List[str]] 
     return out
 
 
-__all__ = ["validate_env_contract", "redact_env", "redact_secrets", "REDACT_PLACEHOLDER", "network_allowed", "NETWORK_ALLOW_ENV"]
+__all__ = [
+    "validate_env_contract",
+    "redact_env",
+    "redact_secrets",
+    "REDACT_PLACEHOLDER",
+    "network_allowed",
+    "NETWORK_ALLOW_ENV",
+]

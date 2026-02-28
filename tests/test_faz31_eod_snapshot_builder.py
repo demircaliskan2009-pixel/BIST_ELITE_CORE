@@ -1,4 +1,5 @@
 """FAZ31: EOD snapshot builder — build_eod_snapshot writes snapshot.csv + _snapshot_hash.json; pipeline uses builder."""
+
 from __future__ import annotations
 
 import json

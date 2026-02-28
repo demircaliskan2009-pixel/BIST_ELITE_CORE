@@ -1,4 +1,5 @@
 """FAZ103: Release check --hygiene-only gate."""
+
 from __future__ import annotations
 
 import subprocess

@@ -1,10 +1,10 @@
 """FAZ576: Live run manifest — schema, deterministic ordering."""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
 
 import sys
 
@@ -16,6 +16,7 @@ from tools.live_manifest import build_manifest, write_manifest
 
 def test_live_manifest_schema(tmp_path: Path) -> None:
     """Manifest has required keys: schema_version, day, inputs, outputs, symbols, horizons, versions, sha."""
+    # ruff: noqa: E402
     paths = {
         "daily_scan": tmp_path / "daily_scan" / "2025-01-15",
         "ask": tmp_path / "ask" / "2025-01-15",

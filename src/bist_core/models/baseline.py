@@ -1,6 +1,7 @@
 """
 FAZ62: Deterministic dummy baseline model. predict(features) -> scores (stable).
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List

@@ -13,6 +13,7 @@ Backward adjustment formula (for dates before ex_date):
 - Unknown kind in strict mode: fail-closed (error).
 Deterministic: sort by (instrument_id, date).
 """
+
 from __future__ import annotations
 
 import csv
@@ -139,11 +140,13 @@ def build_adjusted_prices(
             iid = symbol_to_id.get(sym)
             if not iid:
                 continue
-            all_raw.append({
-                "instrument_id": iid,
-                "date": row["date"],
-                "close": row["close"],
-            })
+            all_raw.append(
+                {
+                    "instrument_id": iid,
+                    "date": row["date"],
+                    "close": row["close"],
+                }
+            )
     all_raw.sort(key=lambda r: (r.get("instrument_id", ""), r.get("date", "")))
 
     actions = _load_canonical_actions(canonical_actions_path)
@@ -161,18 +164,18 @@ def build_adjusted_prices(
         date_val = r["date"]
         close = float(r["close"])
         raw_rows.append({"instrument_id": iid, "date": date_val, "close": close})
-        close_adj, adj_factor, err = _adj_factor_and_close(
-            iid, date_val, close, actions_by_id, strict
-        )
+        close_adj, adj_factor, err = _adj_factor_and_close(iid, date_val, close, actions_by_id, strict)
         if err:
             notes.append(err)
             errors += 1
-        adj_rows.append({
-            "instrument_id": iid,
-            "date": date_val,
-            "close_adj": round(close_adj, 6),
-            "adj_factor": round(adj_factor, 6),
-        })
+        adj_rows.append(
+            {
+                "instrument_id": iid,
+                "date": date_val,
+                "close_adj": round(close_adj, 6),
+                "adj_factor": round(adj_factor, 6),
+            }
+        )
 
     out_dir.mkdir(parents=True, exist_ok=True)
     raw_path = out_dir / "prices_raw.csv"
@@ -186,4 +189,3 @@ def build_adjusted_prices(
         w.writeheader()
         w.writerows(adj_rows)
     return errors, notes
-

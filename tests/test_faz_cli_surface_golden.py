@@ -3,6 +3,7 @@
 BEFORE any multi-module refactor: capture CLI structure and output schema.
 Refactor phases must keep these invariants. Proof type: golden_output.
 """
+
 from __future__ import annotations
 
 import json
@@ -33,28 +34,30 @@ def _run_cli(args: list[str], env: dict | None = None) -> subprocess.CompletedPr
 
 
 # Golden: top-level subcommands (order may vary in help, we check presence)
-EXPECTED_SUBCOMMANDS = frozenset({
-    "info",
-    "healthcheck",
-    "doctor",
-    "eod",
-    "daily",
-    "plan",
-    "orders",
-    "broker",
-    "backtest",
-    "rules",
-    "data",
-    "ask",
-    "scan",
-    "evaluate-outcomes",
-    "performance-report",
-    "dossier",
-    "events",
-    "instruments",
-    "market-data",
-    "corporate-actions",
-})
+EXPECTED_SUBCOMMANDS = frozenset(
+    {
+        "info",
+        "healthcheck",
+        "doctor",
+        "eod",
+        "daily",
+        "plan",
+        "orders",
+        "broker",
+        "backtest",
+        "rules",
+        "data",
+        "ask",
+        "scan",
+        "evaluate-outcomes",
+        "performance-report",
+        "dossier",
+        "events",
+        "instruments",
+        "market-data",
+        "corporate-actions",
+    }
+)
 
 
 def test_cli_surface_subcommands_preserved() -> None:

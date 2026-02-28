@@ -1,4 +1,5 @@
 """FAZ143: Advice artifact content hash — content_sha256 for reproducibility."""
+
 from __future__ import annotations
 
 import json

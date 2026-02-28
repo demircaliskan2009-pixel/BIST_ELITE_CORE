@@ -1,10 +1,8 @@
 """FAZ557: Plan/orders corner cases — empty symbols, empty plan, invalid date."""
+
 from __future__ import annotations
 
 import csv
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest

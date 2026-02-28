@@ -1,8 +1,8 @@
 """FAZ150: Scan drill-down determinism — same params produce same ask command."""
+
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path

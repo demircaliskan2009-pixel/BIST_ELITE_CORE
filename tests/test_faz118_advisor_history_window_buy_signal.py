@@ -2,12 +2,12 @@
 FAZ118-STEP1: Advisor momentum/volume sinyalleri için rolling window.
 25 gün snapshot ile yükseliş trendi + volume spike -> BUY kararı ve plan.
 """
+
 from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
 
-import pytest
 
 from bist_core.services.advisor import build_advice_for_symbol
 

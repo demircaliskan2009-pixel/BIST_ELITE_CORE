@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """FAZ567: Snapshot validity gate. Fail-closed. Exit 0=ok, 2=invalid/missing, 1=programmer error."""
+
 from __future__ import annotations
 
 import csv
@@ -84,18 +85,18 @@ def validate_snapshot_for_day(
     for i, row in enumerate(rows):
         sym = _symbol(row)
         if not sym:
-            reasons.append(f"row_{i+2}_missing_symbol")
+            reasons.append(f"row_{i + 2}_missing_symbol")
             continue
         c = row.get("close")
         if c is None or (isinstance(c, str) and c.strip() == ""):
-            reasons.append(f"row_{i+2}_missing_close")
+            reasons.append(f"row_{i + 2}_missing_close")
             continue
         try:
             val = float(c)
             if math.isnan(val) or val <= 0 or val >= 1e12:
-                reasons.append(f"row_{i+2}_invalid_close")
+                reasons.append(f"row_{i + 2}_invalid_close")
         except (TypeError, ValueError):
-            reasons.append(f"row_{i+2}_invalid_close_numeric")
+            reasons.append(f"row_{i + 2}_invalid_close_numeric")
         dates_seen.append(day)
 
     symbols = [_symbol(r) for r in rows if _symbol(r)]
@@ -111,6 +112,7 @@ def validate_snapshot_for_day(
 
 def main() -> int:
     import argparse
+
     p = argparse.ArgumentParser(description="FAZ567: Snapshot validity gate")
     p.add_argument("--day", required=True, help="YYYY-MM-DD")
     p.add_argument("--snapshot-root", default=None)

@@ -1,4 +1,5 @@
 """FAZ102: Repo hygiene — .gitignore has patterns; no tracked __pycache__/, .pyc, .pyo, .bak*, .broken*, proof_*.txt."""
+
 from __future__ import annotations
 
 import subprocess

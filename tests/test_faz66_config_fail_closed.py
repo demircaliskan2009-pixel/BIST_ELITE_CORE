@@ -4,6 +4,7 @@ Tests: missing/invalid config in live mode fail-closed with explicit exit code;
 --config and BIST_CORE_CONFIG; paper mode does not require config.
 No new deps.
 """
+
 from __future__ import annotations
 
 import json
@@ -12,7 +13,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 from bist_core.config import (
     REPO_ROOT,
@@ -24,6 +24,7 @@ from bist_core.cli.observability import ERROR_CONFIG_MISSING, ERROR_CONFIG_INVAL
 
 
 # ---- Unit: loader and resolver ----
+
 
 def test_faz66_resolve_config_prefers_arg(tmp_path: Path) -> None:
     """--config (arg) overrides BIST_CORE_CONFIG and default."""
@@ -111,14 +112,16 @@ def test_faz66_load_strict_valid_schema_returns_config(tmp_path: Path) -> None:
     """Valid schema v1 -> (dict, None)."""
     valid = tmp_path / "core.json"
     valid.write_text(
-        json.dumps({
-            "timezone": "Europe/Istanbul",
-            "default_spread_bps_max": 80,
-            "default_adv_tl_min": 30000000,
-            "default_auction_ratio_max": 0.15,
-            "default_price_band_pct": 20.0,
-            "risk_per_trade": 0.015,
-        }),
+        json.dumps(
+            {
+                "timezone": "Europe/Istanbul",
+                "default_spread_bps_max": 80,
+                "default_adv_tl_min": 30000000,
+                "default_auction_ratio_max": 0.15,
+                "default_price_band_pct": 20.0,
+                "risk_per_trade": 0.015,
+            }
+        ),
         encoding="utf-8",
     )
     cfg, err = load_core_config_strict(valid)
@@ -129,7 +132,10 @@ def test_faz66_load_strict_valid_schema_returns_config(tmp_path: Path) -> None:
 
 # ---- Integration: CLI live mode fail-closed ----
 
-def _run_eod_execute(day: str, outdir: Path, live: bool = False, config_path: str | None = None) -> subprocess.CompletedProcess:
+
+def _run_eod_execute(
+    day: str, outdir: Path, live: bool = False, config_path: str | None = None
+) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
     if config_path is not None:
@@ -137,8 +143,15 @@ def _run_eod_execute(day: str, outdir: Path, live: bool = False, config_path: st
     else:
         env.pop("BIST_CORE_CONFIG", None)
     cmd = [
-        sys.executable, "-m", "bist_core.cli", "eod", "execute",
-        "--day", day, "--outdir", str(outdir),
+        sys.executable,
+        "-m",
+        "bist_core.cli",
+        "eod",
+        "execute",
+        "--day",
+        day,
+        "--outdir",
+        str(outdir),
     ]
     if live:
         cmd.append("--live")
@@ -180,14 +193,16 @@ def test_faz66_live_valid_config_no_exit_3(tmp_path: Path) -> None:
     """Live mode with valid config via --config -> exit not 3 (may be 2 for broker/manifest)."""
     valid = tmp_path / "core.json"
     valid.write_text(
-        json.dumps({
-            "timezone": "Europe/Istanbul",
-            "default_spread_bps_max": 80,
-            "default_adv_tl_min": 30000000,
-            "default_auction_ratio_max": 0.15,
-            "default_price_band_pct": 20.0,
-            "risk_per_trade": 0.015,
-        }),
+        json.dumps(
+            {
+                "timezone": "Europe/Istanbul",
+                "default_spread_bps_max": 80,
+                "default_adv_tl_min": 30000000,
+                "default_auction_ratio_max": 0.15,
+                "default_price_band_pct": 20.0,
+                "risk_per_trade": 0.015,
+            }
+        ),
         encoding="utf-8",
     )
     r = _run_eod_execute("2099-01-01", tmp_path / "out", live=True, config_path=str(valid))

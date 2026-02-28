@@ -1,11 +1,10 @@
 """FAZ83: Alignment gate — checklist incomplete -> exit 2, complete -> exit 0."""
+
 from __future__ import annotations
 
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 
 def _run_verify(align_doc_path: Path) -> int:

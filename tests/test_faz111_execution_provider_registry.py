@@ -1,4 +1,5 @@
 """FAZ111: Execution provider registry — dynamic registration, retrieval by key, common interface."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -76,6 +77,7 @@ def test_unknown_broker_name_fallback_unchanged(tmp_path: Path) -> None:
     assert err is None
     assert provider is not None
     from bist_core.execution.adapters.stub_broker import StubExecutionProvider
+
     assert isinstance(provider, StubExecutionProvider)
 
 

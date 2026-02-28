@@ -56,9 +56,7 @@ def build_events_jsonl_for_day(
         events.append(event)
         accepted += 1
 
-    events_sorted = sorted(
-        events, key=lambda ev: (ev.symbol, ev.ts, ev.kind, ev.title)
-    )
+    events_sorted = sorted(events, key=lambda ev: (ev.symbol, ev.ts, ev.kind, ev.title))
 
     if atomic:
         _atomic_write_jsonl(out_path, events_sorted)

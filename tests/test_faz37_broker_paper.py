@@ -1,4 +1,5 @@
 """FAZ37: Broker interface + paper broker — deterministic fills; positions update."""
+
 from __future__ import annotations
 
 import json
@@ -96,12 +97,14 @@ def test_faz37_cli_broker_paper_run(tmp_path: Path) -> None:
     )
     orders_path = tmp_path / "orders_intent.json"
     orders_path.write_text(
-        json.dumps({
-            "schema_version": 1,
-            "day": day,
-            "actions": [{"symbol": "X", "side": "BUY", "weight": 1.0}],
-            "notes": [],
-        }),
+        json.dumps(
+            {
+                "schema_version": 1,
+                "day": day,
+                "actions": [{"symbol": "X", "side": "BUY", "weight": 1.0}],
+                "notes": [],
+            }
+        ),
         encoding="utf-8",
     )
     result = subprocess.run(

@@ -1,4 +1,5 @@
 """FAZ549: Snapshot malformed row detection — invalid numeric, missing symbol; deterministic."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,11 +11,7 @@ def test_faz549_snapshot_malformed_detected(tmp_path: Path) -> None:
     """Malformed rows (missing symbol, invalid close) are detected."""
     csv_path = tmp_path / "snapshot.csv"
     csv_path.write_text(
-        "symbol,close\n"
-        "AAA,100.0\n"
-        ",50.0\n"
-        "BBB,not_a_number\n"
-        "CCC,100.0\n",
+        "symbol,close\nAAA,100.0\n,50.0\nBBB,not_a_number\nCCC,100.0\n",
         encoding="utf-8",
     )
     invalid = detect_malformed_snapshot_rows(csv_path)
@@ -31,10 +28,7 @@ def test_faz549_snapshot_valid_rows_pass(tmp_path: Path) -> None:
     """Valid rows produce no invalid entries."""
     csv_path = tmp_path / "snapshot.csv"
     csv_path.write_text(
-        "symbol,close\n"
-        "AAA,100.0\n"
-        "BBB,50.5\n"
-        "CCC,0.01\n",
+        "symbol,close\nAAA,100.0\nBBB,50.5\nCCC,0.01\n",
         encoding="utf-8",
     )
     invalid = detect_malformed_snapshot_rows(csv_path)
@@ -45,9 +39,7 @@ def test_faz549_snapshot_malformed_deterministic(tmp_path: Path) -> None:
     """Same file -> same detection result (deterministic)."""
     csv_path = tmp_path / "snapshot.csv"
     csv_path.write_text(
-        "symbol,close\n"
-        "X,100\n"
-        ",99\n",
+        "symbol,close\nX,100\n,99\n",
         encoding="utf-8",
     )
     r1 = detect_malformed_snapshot_rows(csv_path)

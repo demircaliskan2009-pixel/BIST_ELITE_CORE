@@ -94,7 +94,5 @@ def test_eod_batch_calendar_skip_and_strict(tmp_path: Path) -> None:
         check=False,
     )
     assert result_error.returncode == 2
-    index_error = json.loads(
-        (outdir_error / "_index_manifest.json").read_text(encoding="utf-8")
-    )
+    index_error = json.loads((outdir_error / "_index_manifest.json").read_text(encoding="utf-8"))
     assert index_error["errors"]

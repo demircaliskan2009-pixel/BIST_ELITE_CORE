@@ -1,6 +1,7 @@
 """
 FAZ62: Model plugin interface. predict(features) -> scores.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Protocol, runtime_checkable

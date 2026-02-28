@@ -2,13 +2,12 @@
 FAZ113: Matriks Terminal adaptörü — gerçek zamanlı piyasa verisi için pencere metni okuma.
 pywinauto ile GUI metni okunur; MarketDataProvider arayüzüne uyan sarmalayıcı ile registry'de kullanılabilir.
 """
+
 from __future__ import annotations
 
 import importlib
 import re
 from typing import Any, Dict, List, Optional, Tuple
-
-from bist_core.market_data.base import MarketDataProvider
 
 
 def _parse_symbol_price_lines(raw_text: str) -> Tuple[List[str], Dict[str, float]]:
@@ -50,9 +49,7 @@ class MatriksTerminalAdapter:
     def connect(self, title: str = "Matriks") -> None:
         """Pencere başlığı ile Matriks terminal penceresini pywinauto ile bulur ve bağlanır."""
         try:
-            Application = getattr(
-                importlib.import_module("pywinauto"), "Application"
-            )
+            Application = getattr(importlib.import_module("pywinauto"), "Application")
         except (ImportError, AttributeError):
             raise ImportError("pywinauto is not available")
         backend = "uia"

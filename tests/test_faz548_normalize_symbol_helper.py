@@ -1,7 +1,7 @@
 """FAZ548: Symbol normalization shared helper — uppercase, trim; deterministic. Test-first."""
+
 from __future__ import annotations
 
-import pytest
 
 from bist_core.symbol import normalize_symbol
 

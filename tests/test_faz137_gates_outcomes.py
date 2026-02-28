@@ -1,4 +1,5 @@
 """FAZ137: Gates outcomes section — PASS/FAIL per gate with reasons in JSON."""
+
 from __future__ import annotations
 
 import json
@@ -25,8 +26,15 @@ def test_faz137_gates_in_ask_artifact(tmp_path: Path) -> None:
 
     r = subprocess.run(
         [
-            sys.executable, "-m", "bist_core.cli", "ask", "AKBNK",
-            "--day", "2025-01-15", "--out", str(out_dir),
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "ask",
+            "AKBNK",
+            "--day",
+            "2025-01-15",
+            "--out",
+            str(out_dir),
         ],
         cwd=str(_repo_root()),
         capture_output=True,

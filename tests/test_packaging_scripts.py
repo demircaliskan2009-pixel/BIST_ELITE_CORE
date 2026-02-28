@@ -1,8 +1,8 @@
 """Packaging: Scripts exist and proof_pack is runnable."""
+
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 
 
@@ -48,4 +48,5 @@ def test_bist_core_cli_importable() -> None:
     """bist_core.cli is importable (no unmet dependencies)."""
     import bist_core.cli  # noqa: F401
     from bist_core.cli.main import main
+
     assert callable(main)

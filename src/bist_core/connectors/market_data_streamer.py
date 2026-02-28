@@ -2,10 +2,11 @@
 FAZ114: MarketDataStreamer — periyodik MarketDataProvider polling, tick buffer, sembol bazlı abonelik.
 Downstream (strategy, execution) get_pending_ticks() veya last_snapshot ile kullanabilir.
 """
+
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from bist_core.market_data.base import MarketDataProvider
 

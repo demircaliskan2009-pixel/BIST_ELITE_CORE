@@ -1,4 +1,5 @@
 """FAZ580: Provider selector — default DryRun, real_skeleton fails closed without transport."""
+
 from __future__ import annotations
 
 import json

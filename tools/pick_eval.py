@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """FAZ586: Evaluate locked picks against realized returns. Offline, deterministic."""
+
 from __future__ import annotations
 
 import csv
@@ -12,8 +13,17 @@ from pathlib import Path
 HORIZONS = (1, 3, 5, 20)
 COST_BPS = 10
 EVAL_FIELDS = (
-    "day", "horizon_days", "rank", "symbol", "entry_close", "exit_close",
-    "log_return", "simple_return", "hit_up", "hit_gt_cost", "status",
+    "day",
+    "horizon_days",
+    "rank",
+    "symbol",
+    "entry_close",
+    "exit_close",
+    "log_return",
+    "simple_return",
+    "hit_up",
+    "hit_gt_cost",
+    "status",
 )
 
 
@@ -122,52 +132,58 @@ def _run_eval(
 
         entry_close = entry_closes.get(symbol.upper())
         if entry_close is None or (isinstance(entry_close, float) and (math.isnan(entry_close) or entry_close <= 0)):
-            rows.append({
-                "day": day,
-                "horizon_days": horizon,
-                "rank": rank,
-                "symbol": symbol,
-                "entry_close": None,
-                "exit_close": None,
-                "log_return": None,
-                "simple_return": None,
-                "hit_up": None,
-                "hit_gt_cost": None,
-                "status": "NO_DATA",
-            })
+            rows.append(
+                {
+                    "day": day,
+                    "horizon_days": horizon,
+                    "rank": rank,
+                    "symbol": symbol,
+                    "entry_close": None,
+                    "exit_close": None,
+                    "log_return": None,
+                    "simple_return": None,
+                    "hit_up": None,
+                    "hit_gt_cost": None,
+                    "status": "NO_DATA",
+                }
+            )
             continue
 
         if exit_day is None:
-            rows.append({
-                "day": day,
-                "horizon_days": horizon,
-                "rank": rank,
-                "symbol": symbol,
-                "entry_close": round(entry_close, 6),
-                "exit_close": None,
-                "log_return": None,
-                "simple_return": None,
-                "hit_up": None,
-                "hit_gt_cost": None,
-                "status": "PENDING",
-            })
+            rows.append(
+                {
+                    "day": day,
+                    "horizon_days": horizon,
+                    "rank": rank,
+                    "symbol": symbol,
+                    "entry_close": round(entry_close, 6),
+                    "exit_close": None,
+                    "log_return": None,
+                    "simple_return": None,
+                    "hit_up": None,
+                    "hit_gt_cost": None,
+                    "status": "PENDING",
+                }
+            )
             continue
 
         exit_close = exit_closes.get(symbol.upper())
         if exit_close is None or (isinstance(exit_close, float) and (math.isnan(exit_close) or exit_close <= 0)):
-            rows.append({
-                "day": day,
-                "horizon_days": horizon,
-                "rank": rank,
-                "symbol": symbol,
-                "entry_close": round(entry_close, 6),
-                "exit_close": None,
-                "log_return": None,
-                "simple_return": None,
-                "hit_up": None,
-                "hit_gt_cost": None,
-                "status": "PENDING",
-            })
+            rows.append(
+                {
+                    "day": day,
+                    "horizon_days": horizon,
+                    "rank": rank,
+                    "symbol": symbol,
+                    "entry_close": round(entry_close, 6),
+                    "exit_close": None,
+                    "log_return": None,
+                    "simple_return": None,
+                    "hit_up": None,
+                    "hit_gt_cost": None,
+                    "status": "PENDING",
+                }
+            )
             continue
 
         simple_return = (exit_close - entry_close) / entry_close
@@ -175,19 +191,21 @@ def _run_eval(
         hit_up = exit_close > entry_close
         hit_gt_cost = simple_return > cost_threshold
 
-        rows.append({
-            "day": day,
-            "horizon_days": horizon,
-            "rank": rank,
-            "symbol": symbol,
-            "entry_close": round(entry_close, 6),
-            "exit_close": round(exit_close, 6),
-            "log_return": round(log_return, 6) if log_return is not None else None,
-            "simple_return": round(simple_return, 6),
-            "hit_up": hit_up,
-            "hit_gt_cost": hit_gt_cost,
-            "status": "OK",
-        })
+        rows.append(
+            {
+                "day": day,
+                "horizon_days": horizon,
+                "rank": rank,
+                "symbol": symbol,
+                "entry_close": round(entry_close, 6),
+                "exit_close": round(exit_close, 6),
+                "log_return": round(log_return, 6) if log_return is not None else None,
+                "simple_return": round(simple_return, 6),
+                "hit_up": hit_up,
+                "hit_gt_cost": hit_gt_cost,
+                "status": "OK",
+            }
+        )
 
     return rows
 

@@ -85,9 +85,7 @@ def _parse_event_row(row: Any, idx: int) -> Tuple[EventRecord | None, str | None
     if url is not None and not isinstance(url, str):
         return None, f"SchemaError:row={idx} invalid url"
     tags = row.get("tags")
-    if tags is not None and (
-        not isinstance(tags, list) or not all(isinstance(t, str) for t in tags)
-    ):
+    if tags is not None and (not isinstance(tags, list) or not all(isinstance(t, str) for t in tags)):
         return None, f"SchemaError:row={idx} invalid tags"
     payload = row.get("payload")
     if payload is not None and not isinstance(payload, dict):

@@ -1,4 +1,5 @@
 """FAZ550: Snapshot invalid rows report — JSON format, non-zero exit when invalid."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,8 +11,7 @@ def test_faz550_snapshot_invalid_report_format(tmp_path: Path) -> None:
     """Report has schema_version, invalid_count, invalid_rows with line_no and reason."""
     csv_path = tmp_path / "snapshot.csv"
     csv_path.write_text(
-        "symbol,close\n"
-        ",50.0\n",
+        "symbol,close\n,50.0\n",
         encoding="utf-8",
     )
     exit_code, report = validate_snapshot(csv_path)

@@ -3,6 +3,7 @@ FAZ73: Link graph between knowledge docs <-> advice records <-> dossier evidence
 Stable ids; written under outdir/graph/<day>/links.json; deterministic ordering.
 No external libs.
 """
+
 from __future__ import annotations
 
 import hashlib

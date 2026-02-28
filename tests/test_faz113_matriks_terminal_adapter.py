@@ -1,4 +1,5 @@
 """FAZ113: Matriks Terminal adaptörü — pywinauto ile GUI metni, provider arayüzü; simüle etkileşim."""
+
 from __future__ import annotations
 
 import sys
@@ -65,6 +66,7 @@ def test_connect_window_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     class FailingApp:
         def connect(self, title_re: str = "") -> None:
             raise Exception("Matriks window not found")
+
     dummy_pywinauto = types.SimpleNamespace(Application=lambda backend: FailingApp())
     monkeypatch.setitem(sys.modules, "pywinauto", dummy_pywinauto)
 
@@ -100,6 +102,7 @@ def test_provider_conforms_to_market_data_interface(monkeypatch: pytest.MonkeyPa
 
 def test_provider_with_mock_adapter() -> None:
     """Provider works with a mock adapter returning structured data (simulated interaction)."""
+
     class MockAdapter:
         def get_data(self) -> Dict[str, Any]:
             return {
@@ -107,6 +110,7 @@ def test_provider_with_mock_adapter() -> None:
                 "symbols": ["A", "B"],
                 "close_map": {"A": 1.0, "B": 2.0},
             }
+
     provider = MatriksMarketDataProvider(adapter=MockAdapter())
     assert provider.symbols("today") == ["A", "B"]
     assert provider.close_map("today") == {"A": 1.0, "B": 2.0}
@@ -118,6 +122,7 @@ def test_provider_validate_fails_when_adapter_raises() -> None:
     class FailingAdapter:
         def get_data(self) -> Dict[str, Any]:
             raise RuntimeError("Not connected")
+
     provider = MatriksMarketDataProvider(adapter=FailingAdapter())
     ok, msg = provider.validate("today")
     assert ok is False

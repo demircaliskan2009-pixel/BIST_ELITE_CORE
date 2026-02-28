@@ -2,6 +2,7 @@
 Performance summary from strategy outcomes.
 Deterministic calculations. No network. Fail-closed: missing data => empty report.
 """
+
 from __future__ import annotations
 
 import json
@@ -18,6 +19,7 @@ def _default_outcomes_path() -> Path:
     if env_path:
         return Path(env_path)
     from bist_core import config
+
     return config.REPO_ROOT / "data" / "log" / "strategy_outcomes.jsonl"
 
 
@@ -88,11 +90,13 @@ def build_performance_report(
         peak = max(peak, cumulative)
         dd = peak - cumulative
         max_dd = max(max_dd, dd)
-        curve.append({
-            "date": o.get("exit_day") or o.get("day") or "",
-            "cumulative_r": round(cumulative, 4),
-            "trade_r": round(r, 4),
-        })
+        curve.append(
+            {
+                "date": o.get("exit_day") or o.get("day") or "",
+                "cumulative_r": round(cumulative, 4),
+                "trade_r": round(r, 4),
+            }
+        )
 
     return {
         "schema_version": PERFORMANCE_SCHEMA_VERSION,

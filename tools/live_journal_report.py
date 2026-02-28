@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """FAZ567: Trade journal report — join journal with artifacts, produce realized PnL + compliance flags."""
+
 from __future__ import annotations
 
 import csv
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -116,6 +116,7 @@ def build_report(
 
 def main() -> int:
     import argparse
+
     p = argparse.ArgumentParser(description="FAZ567: Trade journal report")
     p.add_argument("--from", dest="date_from", required=True, help="YYYY-MM-DD")
     p.add_argument("--to", dest="date_to", required=True, help="YYYY-MM-DD")

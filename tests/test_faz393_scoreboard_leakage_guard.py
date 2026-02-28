@@ -1,4 +1,5 @@
 """FAZ393: Scoreboard leakage guard — no future data; date <= as_of; fail-closed."""
+
 from __future__ import annotations
 
 from pathlib import Path

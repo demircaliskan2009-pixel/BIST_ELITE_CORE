@@ -1,4 +1,5 @@
 """FAZ387: Evidence stabilization — sorted signals, stable keys, deterministic JSON."""
+
 from __future__ import annotations
 
 import json

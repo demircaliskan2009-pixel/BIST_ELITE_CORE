@@ -5,6 +5,7 @@ tick_sizes.csv: min_price, max_price, tick. price_bands.csv: band_pct (+ optiona
 Evaluators: validate_tick(price, tick), validate_band(ref_price, price, band_pct).
 Deterministic: rows sorted by (min_price, band_pct) for stable lookup.
 """
+
 from __future__ import annotations
 
 import csv
@@ -12,12 +13,14 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+
 # Default rulespack dir: env or repo data/bist_rules (lazy to avoid import cycle at module load)
 def _default_rulespack_dir() -> Path:
     env = os.environ.get("BIST_RULESPACK_DIR")
     if env:
         return Path(env)
     from bist_core import config
+
     return config.REPO_ROOT / "data" / "bist_rules"
 
 
@@ -151,7 +154,9 @@ def validate_price_tick(pack: Dict[str, Any], price: float) -> Tuple[bool, Optio
     return validate_tick(price, tick), tick
 
 
-def validate_price_band(pack: Dict[str, Any], ref_price: float, price: float, market: Optional[str] = None) -> Tuple[bool, Optional[float]]:
+def validate_price_band(
+    pack: Dict[str, Any], ref_price: float, price: float, market: Optional[str] = None
+) -> Tuple[bool, Optional[float]]:
     """Return (valid, band_pct_used). band_pct_used is None if no band defined."""
     band_pct = band_pct_for_market(pack, market)
     if band_pct is None:

@@ -1,4 +1,5 @@
 """FAZ85: Corporate actions adjustment — split/bedelsiz (bonus_issue) deterministic via market module."""
+
 from __future__ import annotations
 
 from pathlib import Path

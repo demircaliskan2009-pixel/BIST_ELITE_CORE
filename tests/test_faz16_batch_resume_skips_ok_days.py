@@ -46,13 +46,8 @@ def test_batch_resume_skips_ok_days(tmp_path: Path) -> None:
         check=False,
     )
     assert first.returncode == 0
-    manifest_paths = {
-        day: (outdir / day / "_pipeline_manifest.json")
-        for day in ["2099-01-01", "2099-01-02"]
-    }
-    before_contents = {
-        day: path.read_text(encoding="utf-8") for day, path in manifest_paths.items()
-    }
+    manifest_paths = {day: (outdir / day / "_pipeline_manifest.json") for day in ["2099-01-01", "2099-01-02"]}
+    before_contents = {day: path.read_text(encoding="utf-8") for day, path in manifest_paths.items()}
 
     second = subprocess.run(
         [

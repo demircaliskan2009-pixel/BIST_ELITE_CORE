@@ -1,4 +1,5 @@
 """FAZ88: Orders intent schema v2 — validate; invalid -> exit 2 + execution_result."""
+
 from __future__ import annotations
 
 import json
@@ -7,9 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
-from bist_core.orders.schema import ORDERS_INTENT_SCHEMA_VERSION, validate_orders_intent_v2
+from bist_core.orders.schema import validate_orders_intent_v2
 
 
 def test_faz88_validate_v2_ok() -> None:
@@ -53,7 +53,16 @@ def test_faz88_execute_invalid_orders_intent_exit_2_and_execution_result(tmp_pat
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
     (tmp_path / "core.json").write_text(
-        json.dumps({"timezone": "Europe/Istanbul", "default_spread_bps_max": 80, "default_adv_tl_min": 30000000, "default_auction_ratio_max": 0.15, "default_price_band_pct": 20.0, "risk_per_trade": 0.015}),
+        json.dumps(
+            {
+                "timezone": "Europe/Istanbul",
+                "default_spread_bps_max": 80,
+                "default_adv_tl_min": 30000000,
+                "default_auction_ratio_max": 0.15,
+                "default_price_band_pct": 20.0,
+                "risk_per_trade": 0.015,
+            }
+        ),
         encoding="utf-8",
     )
     env["BIST_CORE_CONFIG"] = str(tmp_path / "core.json")
@@ -69,12 +78,32 @@ def test_faz88_execute_invalid_orders_intent_exit_2_and_execution_result(tmp_pat
     orders_path.parent.mkdir(parents=True, exist_ok=True)
     orders_path.write_text(json.dumps({"actions": [{"symbol": "X", "side": "BUY"}]}), encoding="utf-8")
     (tmp_path / day / "pipeline_manifest.json").write_text(
-        json.dumps({"schema_version": 2, "day": day, "stages": {"snapshot": {"errors": 0}, "advice": {"errors": 0}}, "orders_intent_path": str(orders_path)}),
+        json.dumps(
+            {
+                "schema_version": 2,
+                "day": day,
+                "stages": {"snapshot": {"errors": 0}, "advice": {"errors": 0}},
+                "orders_intent_path": str(orders_path),
+            }
+        ),
         encoding="utf-8",
     )
 
     r = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "eod", "execute", "--day", day, "--outdir", str(tmp_path), "--live", "--broker", "paper"],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "eod",
+            "execute",
+            "--day",
+            day,
+            "--outdir",
+            str(tmp_path),
+            "--live",
+            "--broker",
+            "paper",
+        ],
         env=env,
         capture_output=True,
         text=True,

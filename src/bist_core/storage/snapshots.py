@@ -3,6 +3,7 @@ FAZ84: Snapshot store contract — put/get/sha256.
 Deterministic: path and sha256 in artifact form for pipeline manifest.
 No external deps; uses Path and snapshot_integrity for hashing.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 from __future__ import annotations
 
 import argparse
@@ -20,10 +21,7 @@ from bist_core.data.registry import (
     get_default_registry,
     load_registered_dataset,
 )
-from bist_core.strategy.equal_weight import (
-    build_equal_weight_plan, 
-    generate_equal_weight_orders
-)
+from bist_core.strategy.equal_weight import build_equal_weight_plan, generate_equal_weight_orders
 from bist_core import config
 from bist_core.services import eventstore
 from bist_core.services.strategy_logger import log_strategy
@@ -48,7 +46,6 @@ from bist_core.services.scorecard import build_scorecard
 from bist_core.services.eod_batch import audit_eod_batch, run_eod_batch
 from bist_core.services.events_pipeline import (
     build_events_jsonl_for_day,
-    ingest_events_from_file,
 )
 from bist_core.providers.events.offline_file import OfflineFileEventsProvider
 from bist_core.providers.events.kap_html import KapHtmlEventsProvider
@@ -62,14 +59,11 @@ from bist_core.providers.corporate_actions.offline_file import (
 from bist_core.services.adjustments import apply_close_adjustments
 from bist_core.services import instrument_timeline
 from bist_core.brokers import PaperBroker
-from bist_core.execution import PaperExecutionProvider
 from bist_core.market_data import resolve_provider
 from bist_core.cli.observability import (
     err_struct,
     ERROR_ARGS_REQUIRED,
     ERROR_ARTIFACT_HASH_MISMATCH,
-    ERROR_CONFIG_INVALID,
-    ERROR_CONFIG_MISSING,
     ERROR_REPO_ROOT_MISSING,
     ERROR_CORE_JSON_MISSING,
     ERROR_SNAPSHOT_DIR_MISSING,
@@ -89,6 +83,8 @@ def _find_manifest_path(outdir: Path, day: str) -> Path:
         if p.is_file():
             return p
     return outdir / day / "pipeline_manifest.json"
+
+
 from bist_core.services.backtest import run_backtest, walk_forward
 
 
@@ -153,12 +149,10 @@ def _cmd_eod(args: argparse.Namespace) -> int:
 
     if config.SOURCES["vendor_api"]["enabled"]:
         data = MarketData()
-        symbols = data.symbols(args.date)        # API'den o güne ait semboller
-        close_map = data.close_map(args.date)    # her sembol için kapanış fiyatı
+        symbols = data.symbols(args.date)  # API'den o güne ait semboller
+        close_map = data.close_map(args.date)  # her sembol için kapanış fiyatı
         # Bir DataFrame oluşturup snapshot.csv'ye yazabiliriz:
-        df = pd.DataFrame([
-            {"symbol": sym, "close": close_map.get(sym, float("nan"))} for sym in symbols
-        ])
+        df = pd.DataFrame([{"symbol": sym, "close": close_map.get(sym, float("nan"))} for sym in symbols])
         df.to_csv(snapshot_path, index=False)
     else:
         # mevcut TEST verisi yazma kodu
@@ -347,11 +341,7 @@ def _cmd_eod_batch(args: argparse.Namespace) -> int:
 
 
 def _cmd_eod_replay(args: argparse.Namespace) -> int:
-    snapshot_root = (
-        Path(args.snapshot_root)
-        if getattr(args, "snapshot_root", None)
-        else _snapshot_root()
-    )
+    snapshot_root = Path(args.snapshot_root) if getattr(args, "snapshot_root", None) else _snapshot_root()
     manifest, code = run_eod_replay(
         getattr(args, "date_from"),
         getattr(args, "date_to"),
@@ -391,6 +381,7 @@ def _cmd_eod_batch_audit(args: argparse.Namespace) -> int:
 
 def _cmd_eod_advice(args: argparse.Namespace) -> int:
     from bist_core.advisory.generate import generate_advice
+
     day = getattr(args, "day", None) or ""
     outdir = Path(getattr(args, "outdir", None) or "")
     if not day or not str(outdir):
@@ -405,13 +396,14 @@ def _cmd_eod_advice(args: argparse.Namespace) -> int:
     if getattr(args, "model", None) == "openai":
         if not os.environ.get("OPENAI_API_KEY", "").strip():
             print(
-                "blocked: OPENAI_API_KEY required. PowerShell: $env:OPENAI_API_KEY=\"sk-...\"; "
-                "CMD: setx OPENAI_API_KEY \"sk-...\"",
+                'blocked: OPENAI_API_KEY required. PowerShell: $env:OPENAI_API_KEY="sk-..."; '
+                'CMD: setx OPENAI_API_KEY "sk-..."',
                 file=sys.stderr,
             )
             return 2
         try:
             from bist_core.env import network_allowed
+
             if not network_allowed():
                 print("blocked: NETWORK_DISABLED: set BIST_CORE_ALLOW_NETWORK=1", file=sys.stderr)
                 return 2
@@ -420,6 +412,7 @@ def _cmd_eod_advice(args: argparse.Namespace) -> int:
         cache_dir = outdir / "_cache" / "openai" if outdir else None
         try:
             from bist_core.models.openai_model import OpenAIModel
+
             model_plugin = OpenAIModel(cache_dir=cache_dir)
         except ValueError as e:
             print(f"blocked: {e}", file=sys.stderr)
@@ -434,6 +427,7 @@ def _cmd_eod_advice(args: argparse.Namespace) -> int:
 
 def _cmd_eod_research(args: argparse.Namespace) -> int:
     from bist_core.research.cache import build_research_cache
+
     day = getattr(args, "day", None) or ""
     outdir = Path(getattr(args, "outdir", None) or "")
     if not day or not str(outdir):
@@ -452,69 +446,145 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
     day = getattr(args, "day", None) or ""
     outdir = Path(getattr(args, "outdir", None) or "")
     execution = "live" if getattr(args, "live", False) else (getattr(args, "execution", None) or "paper")
-    broker_name = getattr(args, "broker", None) or getattr(args, "provider", None) or ("paper" if execution == "paper" else "stub")
+    broker_name = (
+        getattr(args, "broker", None)
+        or getattr(args, "provider", None)
+        or ("paper" if execution == "paper" else "stub")
+    )
     live = execution == "live"
     dry_run = not live
     if not day or not str(outdir):
         raise SystemExit("--day and --outdir are required")
     day_dir = outdir / day
     day_dir.mkdir(parents=True, exist_ok=True)
-    broker_config_path = None
     # FAZ99: Env contract (BIST_* whitelist) at earliest point; fail -> exit 2 + execution_result.
     if live:
         from bist_core.security.env_contract import validate_bist_env_whitelist
+
         ok_env, env_errors = validate_bist_env_whitelist()
         if not ok_env:
             err_struct("env_contract_violation", "BIST_* env key(s) not on whitelist")
-            write_execution_result(outdir, day, ok=False, blocked=True, reason="env contract violation", provider=broker_name, mode=execution, errors=env_errors, execution=execution)
+            write_execution_result(
+                outdir,
+                day,
+                ok=False,
+                blocked=True,
+                reason="env contract violation",
+                provider=broker_name,
+                mode=execution,
+                errors=env_errors,
+                execution=execution,
+            )
             return 2
     # FAZ71: Live preflight v2 — config ok, broker config ok, BIST rules present, manifest + orders_intent present. Always write execution_result on failure.
     if live:
         from bist_core.config import REPO_ROOT, resolve_core_config_path, load_core_config_strict
+
         config_path = resolve_core_config_path(getattr(args, "config", None), REPO_ROOT)
         core_cfg, config_err = load_core_config_strict(config_path)
         if config_err is not None:
             err_struct(config_err, "live mode requires valid core config (--config or BIST_CORE_CONFIG)")
-            write_execution_result(outdir, day, ok=False, blocked=True, reason="config invalid or missing", provider=broker_name, mode=execution, errors=[config_err], execution=execution)
+            write_execution_result(
+                outdir,
+                day,
+                ok=False,
+                blocked=True,
+                reason="config invalid or missing",
+                provider=broker_name,
+                mode=execution,
+                errors=[config_err],
+                execution=execution,
+            )
             return EXIT_CONFIG_FAIL_CLOSED
     broker_config_dict = None
     if live:
         from bist_core.config import load_broker_config
+
         broker_config_raw = os.environ.get("BIST_BROKER_CONFIG") or getattr(args, "broker_config", None)
         if broker_name != "paper":
             broker_config_dict, broker_config_err = load_broker_config(broker_config_raw)
             if broker_config_err is not None:
                 note = "BIST_BROKER_CONFIG or --broker-config required (file path or inline JSON); invalid or missing fails closed"
                 err_struct(broker_config_err, note)
-                write_execution_result(outdir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode=execution, errors=[broker_config_err], execution=execution)
+                write_execution_result(
+                    outdir,
+                    day,
+                    ok=False,
+                    blocked=True,
+                    reason=note,
+                    provider=broker_name,
+                    mode=execution,
+                    errors=[broker_config_err],
+                    execution=execution,
+                )
                 return 2
         from bist_core.risk.gates import preflight_bist_rules_for_live
         from bist_core.risk.restrictions import get_restrictions_path
         from bist_core.risk.rulespack import get_rulespack_dir
-        ok_pre, err_pre = preflight_bist_rules_for_live(rulespack_dir=get_rulespack_dir(), restrictions_path=get_restrictions_path())
+
+        ok_pre, err_pre = preflight_bist_rules_for_live(
+            rulespack_dir=get_rulespack_dir(), restrictions_path=get_restrictions_path()
+        )
         if not ok_pre:
-            note = "BIST rule data missing for live (tick/bands/vbts); set BIST_RULESPACK_DIR and BIST_RESTRICTIONS_FILE"
+            note = (
+                "BIST rule data missing for live (tick/bands/vbts); set BIST_RULESPACK_DIR and BIST_RESTRICTIONS_FILE"
+            )
             err_struct("bist_rules_missing", note)
             for e in err_pre:
                 print(f"  {e}", file=sys.stderr)
-            exec_result_path = write_execution_result(outdir, day, ok=False, blocked=True, reason=note, provider=broker_name, mode=execution, errors=sorted(err_pre), execution=execution)
+            exec_result_path = write_execution_result(
+                outdir,
+                day,
+                ok=False,
+                blocked=True,
+                reason=note,
+                provider=broker_name,
+                mode=execution,
+                errors=sorted(err_pre),
+                execution=execution,
+            )
             from bist_core.dossier.write import update_dossier_evidence
-            update_dossier_evidence(outdir, day, {
-                "execution_result_path": str(exec_result_path),
-                "blocked_reason": note,
-                "blocked_code": "bist_rules_missing",
-            })
+
+            update_dossier_evidence(
+                outdir,
+                day,
+                {
+                    "execution_result_path": str(exec_result_path),
+                    "blocked_reason": note,
+                    "blocked_code": "bist_rules_missing",
+                },
+            )
             return 2
     manifest_path = _find_manifest_path(outdir, day)
     if not manifest_path.is_file():
         print("blocked: no pipeline manifest found", file=sys.stderr)
-        write_execution_result(outdir, day, ok=False, blocked=True, reason="no pipeline manifest found", provider=broker_name, mode=execution, errors=["no_manifest"], execution=execution)
+        write_execution_result(
+            outdir,
+            day,
+            ok=False,
+            blocked=True,
+            reason="no pipeline manifest found",
+            provider=broker_name,
+            mode=execution,
+            errors=["no_manifest"],
+            execution=execution,
+        )
         return 2
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, TypeError, OSError):
         print("blocked: invalid pipeline manifest", file=sys.stderr)
-        write_execution_result(outdir, day, ok=False, blocked=True, reason="invalid pipeline manifest", provider=broker_name, mode=execution, errors=["invalid_manifest"], execution=execution)
+        write_execution_result(
+            outdir,
+            day,
+            ok=False,
+            blocked=True,
+            reason="invalid pipeline manifest",
+            provider=broker_name,
+            mode=execution,
+            errors=["invalid_manifest"],
+            execution=execution,
+        )
         return 2
     stages = manifest.get("stages") or {}
     orders_intent_path = manifest.get("orders_intent_path")
@@ -524,55 +594,133 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         orders_intent_path = Path(orders_intent_path)
     if not orders_intent_path.is_file():
         print("blocked: orders_intent.json not found", file=sys.stderr)
-        write_execution_result(outdir, day, ok=False, blocked=True, reason="orders_intent.json not found", provider=broker_name, mode=execution, errors=["no_orders_intent"], execution=execution)
+        write_execution_result(
+            outdir,
+            day,
+            ok=False,
+            blocked=True,
+            reason="orders_intent.json not found",
+            provider=broker_name,
+            mode=execution,
+            errors=["no_orders_intent"],
+            execution=execution,
+        )
         return 2
     try:
         orders_intent = json.loads(orders_intent_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, TypeError, OSError):
-        write_execution_result(outdir, day, ok=False, blocked=True, reason="invalid orders_intent JSON", provider=broker_name, mode=execution, errors=["invalid_orders_intent"], execution=execution)
+        write_execution_result(
+            outdir,
+            day,
+            ok=False,
+            blocked=True,
+            reason="invalid orders_intent JSON",
+            provider=broker_name,
+            mode=execution,
+            errors=["invalid_orders_intent"],
+            execution=execution,
+        )
         return 2
     from bist_core.orders.schema import validate_orders_intent_v2
+
     ok_schema, schema_errors = validate_orders_intent_v2(orders_intent)
     if not ok_schema:
-        write_execution_result(outdir, day, ok=False, blocked=True, reason="orders_intent schema v2 validation failed", provider=broker_name, mode=execution, errors=schema_errors, execution=execution)
+        write_execution_result(
+            outdir,
+            day,
+            ok=False,
+            blocked=True,
+            reason="orders_intent schema v2 validation failed",
+            provider=broker_name,
+            mode=execution,
+            errors=schema_errors,
+            execution=execution,
+        )
         return 2
     from bist_core.risk.gates import run_all
+
     report = run_all(orders_intent, stages, policy_ruleset=None, rulespack=None)
     if report.get("blocked"):
         notes = report.get("errors") or []
         print("blocked: risk gate denied", file=sys.stderr)
         for n in notes:
             print(f"  {n}", file=sys.stderr)
-        exec_result_path = write_execution_result(outdir, day, ok=False, blocked=True, reason="risk gate denied", provider=broker_name, mode=execution, errors=notes, execution=execution)
+        exec_result_path = write_execution_result(
+            outdir,
+            day,
+            ok=False,
+            blocked=True,
+            reason="risk gate denied",
+            provider=broker_name,
+            mode=execution,
+            errors=notes,
+            execution=execution,
+        )
         from bist_core.dossier.write import update_dossier_evidence
+
         codes = report.get("codes") or []
-        update_dossier_evidence(outdir, day, {
-            "execution_result_path": str(exec_result_path),
-            "blocked_reason": "risk gate denied",
-            "blocked_code": codes[0] if codes else "risk_gate_denied",
-        })
+        update_dossier_evidence(
+            outdir,
+            day,
+            {
+                "execution_result_path": str(exec_result_path),
+                "blocked_reason": "risk gate denied",
+                "blocked_code": codes[0] if codes else "risk_gate_denied",
+            },
+        )
         return 2
     from bist_core.execution.adapters import resolve_execution_provider
+
     if execution == "paper" or broker_name == "paper":
         provider, err = resolve_execution_provider(
-            "paper", "paper", outdir=outdir, day=day,
+            "paper",
+            "paper",
+            outdir=outdir,
+            day=day,
         )
     else:
         provider, err = resolve_execution_provider(
-            execution, broker_name, broker_config=broker_config_dict,
+            execution,
+            broker_name,
+            broker_config=broker_config_dict,
         )
     if err is not None:
         print(f"blocked: {err}", file=sys.stderr)
-        write_execution_result(outdir, day, ok=False, blocked=True, reason=str(err), provider=broker_name, mode=execution, errors=[err], execution=execution)
+        write_execution_result(
+            outdir,
+            day,
+            ok=False,
+            blocked=True,
+            reason=str(err),
+            provider=broker_name,
+            mode=execution,
+            errors=[err],
+            execution=execution,
+        )
         return 2
     if live and not dry_run:
         from bist_core.execution.live_skeleton import run_live_execute_skeleton
+
         ok_skeleton, err_skeleton = run_live_execute_skeleton(
-            outdir, day, orders_intent_path, provider,
-            provider_name=broker_name, execution_mode=execution,
+            outdir,
+            day,
+            orders_intent_path,
+            provider,
+            provider_name=broker_name,
+            execution_mode=execution,
         )
         if not ok_skeleton:
-            write_execution_result(outdir, day, ok=False, blocked=False, reason=err_skeleton or "live_execute_failed", provider=broker_name, mode=execution, errors=[err_skeleton or "live_execute_failed"], execution=execution)
+            write_execution_result(
+                outdir,
+                day,
+                ok=False,
+                blocked=False,
+                reason=err_skeleton or "live_execute_failed",
+                provider=broker_name,
+                mode=execution,
+                errors=[err_skeleton or "live_execute_failed"],
+                execution=execution,
+            )
             return 2
         print(f"execute: broker={broker_name} live (skeleton) dry_run={dry_run}")
         return 0
@@ -581,9 +729,28 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         print("execute failed", file=sys.stderr)
         for e in result.get("errors", []):
             print(f"  {e}", file=sys.stderr)
-        write_execution_result(outdir, day, ok=False, blocked=False, reason="submit_orders failed", provider=result.get("broker", broker_name), mode=execution, errors=result.get("errors", []), execution=execution)
+        write_execution_result(
+            outdir,
+            day,
+            ok=False,
+            blocked=False,
+            reason="submit_orders failed",
+            provider=result.get("broker", broker_name),
+            mode=execution,
+            errors=result.get("errors", []),
+            execution=execution,
+        )
         return 2
-    write_execution_result(outdir, day, ok=True, blocked=False, reason="", provider=result.get("broker", broker_name), mode=execution, execution=execution)
+    write_execution_result(
+        outdir,
+        day,
+        ok=True,
+        blocked=False,
+        reason="",
+        provider=result.get("broker", broker_name),
+        mode=execution,
+        execution=execution,
+    )
     print(f"execute: broker={result.get('broker', '')} sent={result.get('sent', 0)} dry_run={dry_run}")
     return 0
 
@@ -605,11 +772,16 @@ def _cmd_daily_run(args: argparse.Namespace) -> int:
             stored_hash = (manifest_data.get("snapshot_hash") or {}).get("value") or ""
             snapshot_csv = base / day_str / "snapshot.csv"
             snapshot_alt = base / (day_str + ".csv")
-            current_path = snapshot_csv if snapshot_csv.is_file() else (snapshot_alt if snapshot_alt.is_file() else None)
+            current_path = (
+                snapshot_csv if snapshot_csv.is_file() else (snapshot_alt if snapshot_alt.is_file() else None)
+            )
             if stored_hash and current_path is not None:
                 current_hash = snapshot_integrity.compute_sha256(Path(current_path))
                 if current_hash != stored_hash:
-                    err_struct(ERROR_ARTIFACT_HASH_MISMATCH, "existing artifacts differ (snapshot hash changed); will not overwrite")
+                    err_struct(
+                        ERROR_ARTIFACT_HASH_MISMATCH,
+                        "existing artifacts differ (snapshot hash changed); will not overwrite",
+                    )
                     return 2
             # Reuse: skip pipeline run; run execute only if requested
             run_pipeline = False
@@ -687,24 +859,28 @@ def _cmd_healthcheck(args: argparse.Namespace) -> int:
     if repo_path.is_dir():
         checks.append({"name": "repo_root", "code": "OK", "ok": True, "message": str(repo_path)})
     else:
-        checks.append({
-            "name": "repo_root",
-            "code": ERROR_REPO_ROOT_MISSING,
-            "ok": False,
-            "message": f"REPO_ROOT not a directory: {repo_path}",
-        })
+        checks.append(
+            {
+                "name": "repo_root",
+                "code": ERROR_REPO_ROOT_MISSING,
+                "ok": False,
+                "message": f"REPO_ROOT not a directory: {repo_path}",
+            }
+        )
 
     # config/core.json exists
     core_json = repo_path / "config" / "core.json"
     if core_json.is_file():
         checks.append({"name": "core_json", "code": "OK", "ok": True, "message": str(core_json)})
     else:
-        checks.append({
-            "name": "core_json",
-            "code": ERROR_CORE_JSON_MISSING,
-            "ok": False,
-            "message": f"config/core.json not found: {core_json}",
-        })
+        checks.append(
+            {
+                "name": "core_json",
+                "code": ERROR_CORE_JSON_MISSING,
+                "ok": False,
+                "message": f"config/core.json not found: {core_json}",
+            }
+        )
 
     # BIST_CORE_SNAPSHOT_DIR: exists or parent writable (optional)
     snap_dir = os.getenv("BIST_CORE_SNAPSHOT_DIR", "")
@@ -715,12 +891,14 @@ def _cmd_healthcheck(args: argparse.Namespace) -> int:
         elif p.parent.is_dir():
             checks.append({"name": "snapshot_dir", "code": "OK", "ok": True, "message": f"parent exists: {p.parent}"})
         else:
-            checks.append({
-                "name": "snapshot_dir",
-                "code": ERROR_SNAPSHOT_DIR_MISSING,
-                "ok": False,
-                "message": f"BIST_CORE_SNAPSHOT_DIR not usable: {p}",
-            })
+            checks.append(
+                {
+                    "name": "snapshot_dir",
+                    "code": ERROR_SNAPSHOT_DIR_MISSING,
+                    "ok": False,
+                    "message": f"BIST_CORE_SNAPSHOT_DIR not usable: {p}",
+                }
+            )
     else:
         checks.append({"name": "snapshot_dir", "code": "OK", "ok": True, "message": "not set (default will be used)"})
 
@@ -732,19 +910,23 @@ def _cmd_healthcheck(args: argparse.Namespace) -> int:
         if reg_path and Path(reg_path).exists():
             checks.append({"name": "registry", "code": "OK", "ok": True, "message": reg_path_str})
         else:
-            checks.append({
+            checks.append(
+                {
+                    "name": "registry",
+                    "code": ERROR_REGISTRY_MISSING,
+                    "ok": False,
+                    "message": reg_path_str or "registry path unknown",
+                }
+            )
+    except Exception as e:
+        checks.append(
+            {
                 "name": "registry",
                 "code": ERROR_REGISTRY_MISSING,
                 "ok": False,
-                "message": reg_path_str or "registry path unknown",
-            })
-    except Exception as e:
-        checks.append({
-            "name": "registry",
-            "code": ERROR_REGISTRY_MISSING,
-            "ok": False,
-            "message": str(e),
-        })
+                "message": str(e),
+            }
+        )
 
     required_names = {"repo_root", "core_json"}
     ok = all(c.get("ok", False) for c in checks if c.get("name") in required_names)
@@ -769,45 +951,53 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     if repo_path.is_dir():
         checks.append({"name": "repo_root", "code": "OK", "ok": True, "message": str(repo_path)})
     else:
-        checks.append({
-            "name": "repo_root",
-            "code": ERROR_REPO_ROOT_MISSING,
-            "ok": False,
-            "message": f"REPO_ROOT not a directory: {repo_path}",
-        })
+        checks.append(
+            {
+                "name": "repo_root",
+                "code": ERROR_REPO_ROOT_MISSING,
+                "ok": False,
+                "message": f"REPO_ROOT not a directory: {repo_path}",
+            }
+        )
 
     core_json = repo_path / "config" / "core.json"
     if core_json.is_file():
         checks.append({"name": "core_json", "code": "OK", "ok": True, "message": str(core_json)})
     else:
-        checks.append({
-            "name": "core_json",
-            "code": ERROR_CORE_JSON_MISSING,
-            "ok": False,
-            "message": f"config/core.json not found: {core_json}",
-        })
+        checks.append(
+            {
+                "name": "core_json",
+                "code": ERROR_CORE_JSON_MISSING,
+                "ok": False,
+                "message": f"config/core.json not found: {core_json}",
+            }
+        )
 
     clean_repo = repo_path / "tools" / "clean_repo.ps1"
     if clean_repo.is_file():
         checks.append({"name": "script_clean_repo", "code": "OK", "ok": True, "message": str(clean_repo)})
     else:
-        checks.append({
-            "name": "script_clean_repo",
-            "code": "SCRIPT_MISSING",
-            "ok": False,
-            "message": f"tools/clean_repo.ps1 not found: {clean_repo}",
-        })
+        checks.append(
+            {
+                "name": "script_clean_repo",
+                "code": "SCRIPT_MISSING",
+                "ok": False,
+                "message": f"tools/clean_repo.ps1 not found: {clean_repo}",
+            }
+        )
 
     proof_pack = repo_path / "tools" / "proof_pack.ps1"
     if proof_pack.is_file():
         checks.append({"name": "script_proof_pack", "code": "OK", "ok": True, "message": str(proof_pack)})
     else:
-        checks.append({
-            "name": "script_proof_pack",
-            "code": "SCRIPT_MISSING",
-            "ok": False,
-            "message": f"tools/proof_pack.ps1 not found: {proof_pack}",
-        })
+        checks.append(
+            {
+                "name": "script_proof_pack",
+                "code": "SCRIPT_MISSING",
+                "ok": False,
+                "message": f"tools/proof_pack.ps1 not found: {proof_pack}",
+            }
+        )
 
     # ---- OpenAI mode ----
     if mode == "openai":
@@ -815,74 +1005,93 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         if api_key and api_key.strip():
             checks.append({"name": "openai_api_key", "code": "OK", "ok": True, "message": "OPENAI_API_KEY is set"})
         else:
-            checks.append({
-                "name": "openai_api_key",
-                "code": "OPENAI_API_KEY_MISSING",
-                "ok": False,
-                "message": "OPENAI_API_KEY not set or empty. PowerShell: $env:OPENAI_API_KEY=\"sk-...\" ; CMD (persistent): setx OPENAI_API_KEY \"sk-...\"",
-            })
+            checks.append(
+                {
+                    "name": "openai_api_key",
+                    "code": "OPENAI_API_KEY_MISSING",
+                    "ok": False,
+                    "message": 'OPENAI_API_KEY not set or empty. PowerShell: $env:OPENAI_API_KEY="sk-..." ; CMD (persistent): setx OPENAI_API_KEY "sk-..."',
+                }
+            )
 
         from bist_core import env
+
         if env.network_allowed():
-            checks.append({"name": "network_allowed", "code": "OK", "ok": True, "message": "BIST_CORE_ALLOW_NETWORK enabled"})
+            checks.append(
+                {"name": "network_allowed", "code": "OK", "ok": True, "message": "BIST_CORE_ALLOW_NETWORK enabled"}
+            )
         else:
-            checks.append({
-                "name": "network_allowed",
-                "code": "NETWORK_DISABLED",
-                "ok": False,
-                "message": "BIST_CORE_ALLOW_NETWORK not set. Set to 1 for OpenAI. PowerShell: $env:BIST_CORE_ALLOW_NETWORK=\"1\"",
-            })
+            checks.append(
+                {
+                    "name": "network_allowed",
+                    "code": "NETWORK_DISABLED",
+                    "ok": False,
+                    "message": 'BIST_CORE_ALLOW_NETWORK not set. Set to 1 for OpenAI. PowerShell: $env:BIST_CORE_ALLOW_NETWORK="1"',
+                }
+            )
 
         try:
             __import__("openai")
             checks.append({"name": "openai_import", "code": "OK", "ok": True, "message": "openai package available"})
         except ImportError:
-            checks.append({
-                "name": "openai_import",
-                "code": "OPENAI_IMPORT_FAILED",
-                "ok": False,
-                "message": "openai package not installed. Run: pip install openai",
-            })
+            checks.append(
+                {
+                    "name": "openai_import",
+                    "code": "OPENAI_IMPORT_FAILED",
+                    "ok": False,
+                    "message": "openai package not installed. Run: pip install openai",
+                }
+            )
 
     # ---- Live mode ----
     if mode == "live":
         from bist_core.config import resolve_core_config_path, load_core_config_strict
+
         config_path = resolve_core_config_path(getattr(args, "config", None), repo_path)
         if config_path and config_path.is_file():
             cfg, err = load_core_config_strict(config_path)
             if err:
-                checks.append({
-                    "name": "live_config",
-                    "code": err,
-                    "ok": False,
-                    "message": f"config invalid: {config_path}",
-                })
+                checks.append(
+                    {
+                        "name": "live_config",
+                        "code": err,
+                        "ok": False,
+                        "message": f"config invalid: {config_path}",
+                    }
+                )
             else:
                 checks.append({"name": "live_config", "code": "OK", "ok": True, "message": str(config_path)})
         else:
-            checks.append({
-                "name": "live_config",
-                "code": "CONFIG_MISSING",
-                "ok": False,
-                "message": f"config file not found: {config_path}",
-            })
+            checks.append(
+                {
+                    "name": "live_config",
+                    "code": "CONFIG_MISSING",
+                    "ok": False,
+                    "message": f"config file not found: {config_path}",
+                }
+            )
 
         from bist_core.risk.gates import preflight_bist_rules_for_live
         from bist_core.risk.rulespack import get_rulespack_dir
         from bist_core.risk.restrictions import get_restrictions_path
+
         ok_pre, err_pre = preflight_bist_rules_for_live(
             rulespack_dir=get_rulespack_dir(),
             restrictions_path=get_restrictions_path(),
         )
         if ok_pre:
-            checks.append({"name": "live_rulespack", "code": "OK", "ok": True, "message": "rulespack and restrictions present"})
+            checks.append(
+                {"name": "live_rulespack", "code": "OK", "ok": True, "message": "rulespack and restrictions present"}
+            )
         else:
-            checks.append({
-                "name": "live_rulespack",
-                "code": "BIST_RULES_MISSING",
-                "ok": False,
-                "message": "; ".join(err_pre) if err_pre else "rulespack/restrictions missing",
-            })
+            checks.append(
+                {
+                    "name": "live_rulespack",
+                    "code": "BIST_RULES_MISSING",
+                    "ok": False,
+                    "message": "; ".join(err_pre) if err_pre else "rulespack/restrictions missing",
+                }
+            )
 
     # ---- Result ----
     ok = all(c.get("ok", False) for c in checks)
@@ -902,9 +1111,9 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     if failed:
         print("\nTo fix, set environment variables (PowerShell examples):")
         if any(c.get("name") == "openai_api_key" for c in failed):
-            print("  $env:OPENAI_API_KEY=\"sk-...\"")
+            print('  $env:OPENAI_API_KEY="sk-..."')
         if any(c.get("name") == "network_allowed" for c in failed):
-            print("  $env:BIST_CORE_ALLOW_NETWORK=\"1\"")
+            print('  $env:BIST_CORE_ALLOW_NETWORK="1"')
         if any(c.get("name") == "openai_import" for c in failed):
             print("  pip install openai")
     print(f"\ndoctor: {'PASS' if ok else 'FAIL'} ({len(passed)} ok, {len(failed)} fail)")
@@ -986,7 +1195,6 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
-
 def _cmd_orders(args: argparse.Namespace) -> int:
     strategy = getattr(args, "strategy", None) or "equal_weight"
     if strategy != "equal_weight":
@@ -1000,10 +1208,8 @@ def _cmd_orders(args: argparse.Namespace) -> int:
 
     try:
         orders_path = generate_equal_weight_orders(args.date, base=root, out_dir=out_dir)
-    except FileNotFoundError as e:
-        raise SystemExit(
-            f"Bu tarih için plan bulunamadı: {args.date}. Lütfen önce 'plan' komutunu çalıştırın."
-        )
+    except FileNotFoundError:
+        raise SystemExit(f"Bu tarih için plan bulunamadı: {args.date}. Lütfen önce 'plan' komutunu çalıştırın.")
 
     if orders_path is None:
         # Risk limiti FAIL → exit code 2
@@ -1078,8 +1284,12 @@ def _cmd_backtest_run(args: argparse.Namespace) -> int:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
             agg = result.get("aggregate", {})
-            print(f"Walk-forward: {result.get('num_windows', 0)} windows, gates_passed={result.get('gates_passed', False)}")
-            print(f"  total_fills={agg.get('total_fills', 0)}, worst_max_dd={agg.get('worst_max_drawdown', 0)}, mean_return={agg.get('mean_return', 0)}")
+            print(
+                f"Walk-forward: {result.get('num_windows', 0)} windows, gates_passed={result.get('gates_passed', False)}"
+            )
+            print(
+                f"  total_fills={agg.get('total_fills', 0)}, worst_max_dd={agg.get('worst_max_drawdown', 0)}, mean_return={agg.get('mean_return', 0)}"
+            )
             print(f"  manifest: {result.get('manifest_path', '')}")
         return int(result.get("exit_code", 0))
 
@@ -1095,7 +1305,9 @@ def _cmd_backtest_run(args: argparse.Namespace) -> int:
     if bool(getattr(args, "json", False)):
         print(json.dumps(metrics, ensure_ascii=False, indent=2))
     else:
-        print(f"Backtest: {metrics.get('num_days', 0)} days, total_return={metrics.get('total_return', 0)}, max_drawdown={metrics.get('max_drawdown', 0)}")
+        print(
+            f"Backtest: {metrics.get('num_days', 0)} days, total_return={metrics.get('total_return', 0)}, max_drawdown={metrics.get('max_drawdown', 0)}"
+        )
         print(f"  metrics: {metrics.get('metrics_path', '')}")
         print(f"  equity_curve: {metrics.get('equity_curve_path', '')}")
     return 0 if metrics.get("error") is None else 2
@@ -1268,15 +1480,10 @@ def _cmd_data_load(args: argparse.Namespace) -> int:
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2))
         return 0
 
-    print(
-        f"id={dataset_id} format={fmt} path={meta.path} "
-        f"created_at={meta.created_at} updated_at={meta.updated_at}"
-    )
+    print(f"id={dataset_id} format={fmt} path={meta.path} created_at={meta.created_at} updated_at={meta.updated_at}")
 
     # Testin beklediği özet satır
-    print(
-        f"loaded dataset '{dataset_id}' with {len(df_raw)} rows, {df_raw.shape[1]} columns"
-    )
+    print(f"loaded dataset '{dataset_id}' with {len(df_raw)} rows, {df_raw.shape[1]} columns")
 
     # Snapshot modu
     if getattr(args, "use_snapshot", False):
@@ -1435,15 +1642,19 @@ def _cmd_ask(args: argparse.Namespace) -> int:
         try:
             advice = build_advice_for_symbol(sym, day_str, root=base)
             payload = _advice_payload(
-                advice, day_str,
-                capital=capital, max_loss_tl=max_loss_tl,
+                advice,
+                day_str,
+                capital=capital,
+                max_loss_tl=max_loss_tl,
                 snapshot_source=str(snapshot_path) if snapshot_path.is_file() else None,
                 snapshot_hash=snapshot_hash,
             )
             text_out = advice.text
         except Exception as exc:
             payload = _fallback_payload(
-                sym, day_str, exc,
+                sym,
+                day_str,
+                exc,
                 snapshot_source=str(snapshot_path) if snapshot_path.is_file() else None,
                 snapshot_hash=snapshot_hash,
             )
@@ -1492,14 +1703,22 @@ def _cmd_ask(args: argparse.Namespace) -> int:
 
         if "risk_sizing" in payload and not getattr(args, "json", False):
             rs = payload["risk_sizing"]
-            text_out = text_out + "\n\nRisk sizing: " + (
-                f"position_size_shares={rs.get('position_size_shares')}, "
-                f"stop_distance_tl={rs.get('stop_distance_tl')}, "
-                f"position_size_tl={rs.get('position_size_tl')} TL."
+            text_out = (
+                text_out
+                + "\n\nRisk sizing: "
+                + (
+                    f"position_size_shares={rs.get('position_size_shares')}, "
+                    f"stop_distance_tl={rs.get('stop_distance_tl')}, "
+                    f"position_size_tl={rs.get('position_size_tl')} TL."
+                )
             )
 
         if getattr(args, "json", False):
-            json_out = {k: payload[k] for k in ("symbol", "day", "decision_raw", "score", "signals", "plan", "text") if k in payload}
+            json_out = {
+                k: payload[k]
+                for k in ("symbol", "day", "decision_raw", "score", "signals", "plan", "text")
+                if k in payload
+            }
             if params_line:
                 json_out["params"] = {"horizon": horizon, "risk": risk, "capital": capital, "max_loss_tl": max_loss_tl}
             if "risk_sizing" in payload:
@@ -1520,10 +1739,7 @@ SCAN_ARTIFACT_SCHEMA_VERSION = 1
 
 def _build_scan_artifact(day_str: str, ranked: list[tuple[str, float, str]]) -> dict[str, Any]:
     """FAZ388: Build scan JSON artifact with schema_version, generated_at, deterministic keys."""
-    lines = [
-        {"symbol": sym, "score": round(score, 2), "rationale": rationale}
-        for sym, score, rationale in ranked
-    ]
+    lines = [{"symbol": sym, "score": round(score, 2), "rationale": rationale} for sym, score, rationale in ranked]
     return {
         "schema_version": SCAN_ARTIFACT_SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1597,6 +1813,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     if (min_volume is not None or min_turnover is not None) and md.has_ohlcv(day_str):
         try:
             ohlcv = md.ohlcv_map(day_str)
+
             def _passes_liquidity(sym: str) -> bool:
                 row = ohlcv.get(sym, {})
                 vol = row.get("volume", 0) or 0
@@ -1606,6 +1823,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
                 if min_turnover is not None and turn < min_turnover:
                     return False
                 return True
+
             symbols = [s for s in symbols if _passes_liquidity(s)]
         except (ValueError, AttributeError):
             pass
@@ -1671,9 +1889,13 @@ def _cmd_evaluate_outcomes(args: argparse.Namespace) -> int:
     """Evaluate logged strategies against snapshot data; append outcomes to JSONL."""
     strategies_path = getattr(args, "strategies", None)
     if strategies_path is None:
-        strategies_path = os.environ.get("BIST_CORE_STRATEGY_LOG") or str(config.REPO_ROOT / "data" / "log" / "strategies.jsonl")
+        strategies_path = os.environ.get("BIST_CORE_STRATEGY_LOG") or str(
+            config.REPO_ROOT / "data" / "log" / "strategies.jsonl"
+        )
     strategies_path = Path(strategies_path)
-    snapshot_root = getattr(args, "snapshot_root", None) or os.environ.get("BIST_CORE_SNAPSHOT_DIR") or "data/eod/snapshots"
+    snapshot_root = (
+        getattr(args, "snapshot_root", None) or os.environ.get("BIST_CORE_SNAPSHOT_DIR") or "data/eod/snapshots"
+    )
     snapshot_root = Path(snapshot_root)
     outcomes_path = Path(args.outcomes) if getattr(args, "outcomes", None) else None
     max_hold_days = getattr(args, "max_hold_days", 60) or 60
@@ -1692,7 +1914,7 @@ def _cmd_performance_report(args: argparse.Namespace) -> int:
     outcomes_path = Path(args.outcomes) if getattr(args, "outcomes", None) else None
     out_path = Path(args.out) if getattr(args, "out", None) else None
     want_csv = getattr(args, "csv", False)
-    want_json = getattr(args, "json", False)
+    getattr(args, "json", False)
 
     report = build_performance_report(outcomes_path=outcomes_path)
 
@@ -1810,7 +2032,19 @@ def _cmd_snapshots_doctor(args: argparse.Namespace) -> int:
         root = (config.REPO_ROOT / root).resolve()
     if not root.exists():
         if getattr(args, "json", False):
-            print(json.dumps({"root": str(root), "ok": False, "error": "root_missing", "days": [], "symbols_by_day": {}, "coverage_summary": {}}, ensure_ascii=False))
+            print(
+                json.dumps(
+                    {
+                        "root": str(root),
+                        "ok": False,
+                        "error": "root_missing",
+                        "days": [],
+                        "symbols_by_day": {},
+                        "coverage_summary": {},
+                    },
+                    ensure_ascii=False,
+                )
+            )
         else:
             print(f"root: {root}\nerror: root_missing (directory does not exist)")
         return 2
@@ -2078,13 +2312,14 @@ def _cmd_data_import(args: argparse.Namespace) -> int:
     df["_close"] = df[close_col]
     df["_date"] = ""
     if date_col in cols:
-        df["_date"] = df[date_col].astype(str).str.strip().apply(
-            lambda v: _parse_date_flexible(v) or ""
-        )
+        df["_date"] = df[date_col].astype(str).str.strip().apply(lambda v: _parse_date_flexible(v) or "")
         invalid_mask = (df["_date"] == "") & df[date_col].astype(str).str.strip().str.len().gt(0)
         invalid_dates = df.loc[invalid_mask, date_col].dropna().unique().tolist()
         if invalid_dates:
-            print(f"ERROR: invalid date values (use DD.MM.YYYY, YYYY-MM-DD, or DD/MM/YYYY): {invalid_dates[:5]}", file=sys.stderr)
+            print(
+                f"ERROR: invalid date values (use DD.MM.YYYY, YYYY-MM-DD, or DD/MM/YYYY): {invalid_dates[:5]}",
+                file=sys.stderr,
+            )
             return 2
         df_out = df[df["_date"] != ""].copy()
         df_out = df_out.drop(columns=[date_col, symbol_col, close_col], errors="ignore")
@@ -2108,7 +2343,9 @@ def _cmd_data_import(args: argparse.Namespace) -> int:
             return 2
         parsed_day = _parse_date_flexible(day_arg)
         if not parsed_day:
-            print(f"ERROR: invalid --day format (use DD.MM.YYYY, YYYY-MM-DD, or DD/MM/YYYY): {day_arg}", file=sys.stderr)
+            print(
+                f"ERROR: invalid --day format (use DD.MM.YYYY, YYYY-MM-DD, or DD/MM/YYYY): {day_arg}", file=sys.stderr
+            )
             return 2
         day_arg = parsed_day
         df_out = df.copy()
@@ -2155,10 +2392,7 @@ def _cmd_data_snapshot(args: argparse.Namespace) -> int:
         missing = required - cols
         unexpected = cols - required - optional
         if missing or unexpected:
-            raise SystemExit(
-                f"Snapshot schema invalid: missing={sorted(missing)} "
-                f"unexpected={sorted(unexpected)}"
-            )
+            raise SystemExit(f"Snapshot schema invalid: missing={sorted(missing)} unexpected={sorted(unexpected)}")
 
         has_date = "date" in cols
         if has_date:
@@ -2169,14 +2403,10 @@ def _cmd_data_snapshot(args: argparse.Namespace) -> int:
                 except ValueError:
                     invalid.append(value)
             if invalid:
-                raise SystemExit(
-                    f"Snapshot schema invalid: unparseable date values={invalid}"
-                )
+                raise SystemExit(f"Snapshot schema invalid: unparseable date values={invalid}")
         else:
             if cols != {"symbol", "close"}:
-                raise SystemExit(
-                    "Snapshot schema invalid: legacy snapshot must contain only symbol,close"
-                )
+                raise SystemExit("Snapshot schema invalid: legacy snapshot must contain only symbol,close")
 
         if has_date:
             df_day = df_raw[df_raw["date"] == day]
@@ -2318,9 +2548,7 @@ def _cmd_events_ingest(args: argparse.Namespace) -> int:
     atomic_write_json(manifest_path, manifest)
 
     print(
-        "events ingest: "
-        f"total={total_in} accepted={len(accepted_events)} "
-        f"rejected={rejected} duplicates={duplicates}"
+        f"events ingest: total={total_in} accepted={len(accepted_events)} rejected={rejected} duplicates={duplicates}"
     )
     print(f"events path: {out_path}")
     print(f"manifest path: {manifest_path}")
@@ -2444,10 +2672,7 @@ def _cmd_instruments_pull(args: argparse.Namespace) -> int:
     )
     instrumentstore.atomic_write_json(outdir / "_manifest.json", manifest)
 
-    print(
-        "instruments pull: "
-        f"total={manifest['total']} ok={manifest['ok']} errors={manifest['errors']}"
-    )
+    print(f"instruments pull: total={manifest['total']} ok={manifest['ok']} errors={manifest['errors']}")
     print(f"instruments path: {outdir / 'instruments.jsonl'}")
     print(f"manifest path: {outdir / '_manifest.json'}")
     if getattr(args, "strict", False) and manifest["errors"] > 0:
@@ -2495,10 +2720,7 @@ def _cmd_instruments_ingest(args: argparse.Namespace) -> int:
     )
     instrumentstore.atomic_write_json(outdir / "_manifest.json", manifest)
 
-    print(
-        "instruments ingest: "
-        f"total={manifest['total']} ok={manifest['ok']} errors={manifest['errors']}"
-    )
+    print(f"instruments ingest: total={manifest['total']} ok={manifest['ok']} errors={manifest['errors']}")
     print(f"instruments path: {outdir / 'instruments.jsonl'}")
     print(f"manifest path: {outdir / '_manifest.json'}")
     if getattr(args, "strict", False) and manifest["errors"] > 0:
@@ -2563,7 +2785,7 @@ def _cmd_corporate_actions_pull(args: argparse.Namespace) -> int:
     if args.provider != "offline_file":
         raise SystemExit(f"Unsupported provider: {args.provider}")
 
-    provider = OfflineFileCorporateActionsProvider(input_path)
+    OfflineFileCorporateActionsProvider(input_path)
     records, errors = castore.parse_actions(input_path)
     deduped = castore.dedupe_actions(records)
     castore.atomic_write_jsonl(outdir / "actions.jsonl", deduped)
@@ -2586,10 +2808,7 @@ def _cmd_corporate_actions_pull(args: argparse.Namespace) -> int:
     )
     castore.atomic_write_json(outdir / "_manifest.json", manifest)
 
-    print(
-        "corporate-actions pull: "
-        f"total={manifest['total']} ok={manifest['ok']} errors={manifest['errors']}"
-    )
+    print(f"corporate-actions pull: total={manifest['total']} ok={manifest['ok']} errors={manifest['errors']}")
     print(f"actions path: {outdir / 'actions.jsonl'}")
     print(f"manifest path: {outdir / '_manifest.json'}")
     if getattr(args, "strict", False) and manifest["errors"] > 0:
@@ -2636,10 +2855,7 @@ def _cmd_corporate_actions_ingest(args: argparse.Namespace) -> int:
     )
     castore.atomic_write_json(outdir / "_manifest.json", manifest)
 
-    print(
-        "corporate-actions ingest: "
-        f"total={manifest['total']} ok={manifest['ok']} errors={manifest['errors']}"
-    )
+    print(f"corporate-actions ingest: total={manifest['total']} ok={manifest['ok']} errors={manifest['errors']}")
     print(f"actions path: {outdir / 'actions.jsonl'}")
     print(f"manifest path: {outdir / '_manifest.json'}")
     if getattr(args, "strict", False) and manifest["errors"] > 0:
@@ -2675,7 +2891,10 @@ def _cmd_corporate_actions_apply_close(args: argparse.Namespace) -> int:
             outdir,
             total=0,
             ok=0,
-            errors=[{"idx": idx, "symbol": "", "effective_date": "", "error_marker": err["error_marker"]} for idx, err in enumerate(errors)],
+            errors=[
+                {"idx": idx, "symbol": "", "effective_date": "", "error_marker": err["error_marker"]}
+                for idx, err in enumerate(errors)
+            ],
             runtime_ms=0,
             provenance={"cli_args": {}},
             args_summary={},
@@ -2870,10 +3089,12 @@ def _stabilize_signals(signals: Any) -> Any:
     if isinstance(signals, dict):
         return {k: signals[k] for k in sorted(signals.keys())}
     if isinstance(signals, list):
+
         def _key(item: Any) -> str:
             if isinstance(item, dict):
                 return json.dumps(item, sort_keys=True, ensure_ascii=False)
             return str(item)
+
         return sorted(signals, key=_key)
     return signals
 
@@ -2957,10 +3178,7 @@ def _fallback_payload(
     snapshot_hash: str | None = None,
 ) -> dict:
     err = exc.__class__.__name__
-    text = (
-        f"Güvenli mod: NoDecision: {err}. "
-        "Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
-    )
+    text = f"Güvenli mod: NoDecision: {err}. Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
     evidence = _build_evidence([], snapshot_source, snapshot_hash)
     return {
         "symbol": symbol,
@@ -3034,8 +3252,18 @@ Tek sembol danışma (interaktif parametrelerle):
     p_eod_run.add_argument("--orders-strategy", dest="orders_strategy", default="equal_weight")
     p_eod_run.add_argument("--orders-top-n", dest="orders_top_n", type=int, default=10)
     p_eod_run.add_argument("--risk-rules-file", dest="risk_rules_file", default=None)
-    p_eod_run.add_argument("--restrictions-file", dest="restrictions_file", default=None, help="Restriction state JSON (or env BIST_RESTRICTIONS_FILE)")
-    p_eod_run.add_argument("--instrument-master", dest="instrument_master", default=None, help="Instrument master CSV (or env BIST_INSTRUMENT_MASTER)")
+    p_eod_run.add_argument(
+        "--restrictions-file",
+        dest="restrictions_file",
+        default=None,
+        help="Restriction state JSON (or env BIST_RESTRICTIONS_FILE)",
+    )
+    p_eod_run.add_argument(
+        "--instrument-master",
+        dest="instrument_master",
+        default=None,
+        help="Instrument master CSV (or env BIST_INSTRUMENT_MASTER)",
+    )
     p_eod_run.add_argument("--research", action="store_true", help="Run research cache stage")
     p_eod_run.add_argument("--research-source", dest="research_source", default=None)
     p_eod_run.add_argument("--research-offline", dest="research_offline", action="store_true")
@@ -3060,7 +3288,12 @@ Tek sembol danışma (interaktif parametrelerle):
     p_eod_batch.add_argument("--ca-provider", dest="ca_provider", default=None)
     p_eod_batch.add_argument("--ca-input", dest="ca_input", default=None)
     p_eod_batch.add_argument("--ca-outdir", dest="ca_outdir", default=None)
-    p_eod_batch.add_argument("--instrument-master", dest="instrument_master", default=None, help="Instrument master CSV (or env BIST_INSTRUMENT_MASTER)")
+    p_eod_batch.add_argument(
+        "--instrument-master",
+        dest="instrument_master",
+        default=None,
+        help="Instrument master CSV (or env BIST_INSTRUMENT_MASTER)",
+    )
     p_eod_batch.add_argument("--resolve-aliases", action="store_true")
     p_eod_batch.add_argument("--calendar-file", dest="calendar_file", default=None)
     p_eod_batch.add_argument("--ignore-calendar", action="store_true")
@@ -3124,11 +3357,29 @@ Tek sembol danışma (interaktif parametrelerle):
     p_eod_execute = sub_eod.add_parser("execute")
     p_eod_execute.add_argument("--day", required=True)
     p_eod_execute.add_argument("--outdir", required=True)
-    p_eod_execute.add_argument("--config", default=None, help="Path to core config JSON (or BIST_CORE_CONFIG); required in live mode")
-    p_eod_execute.add_argument("--execution", choices=("paper", "live"), default="paper", help="paper=simulation, live=real (requires broker config)")
-    p_eod_execute.add_argument("--broker", default=None, help="Broker adapter name (e.g. paper, stub); default from execution")
-    p_eod_execute.add_argument("--broker-config", dest="broker_config", default=None, help="Path to broker config JSON (or env BIST_BROKER_CONFIG) for live")
-    p_eod_execute.add_argument("--provider", default=None, help="Execution provider (e.g. paper); default paper for paper execution, stub for live")
+    p_eod_execute.add_argument(
+        "--config", default=None, help="Path to core config JSON (or BIST_CORE_CONFIG); required in live mode"
+    )
+    p_eod_execute.add_argument(
+        "--execution",
+        choices=("paper", "live"),
+        default="paper",
+        help="paper=simulation, live=real (requires broker config)",
+    )
+    p_eod_execute.add_argument(
+        "--broker", default=None, help="Broker adapter name (e.g. paper, stub); default from execution"
+    )
+    p_eod_execute.add_argument(
+        "--broker-config",
+        dest="broker_config",
+        default=None,
+        help="Path to broker config JSON (or env BIST_BROKER_CONFIG) for live",
+    )
+    p_eod_execute.add_argument(
+        "--provider",
+        default=None,
+        help="Execution provider (e.g. paper); default paper for paper execution, stub for live",
+    )
     p_eod_execute.add_argument("--dry-run", dest="dry_run", action="store_true", default=True)
     p_eod_execute.add_argument("--live", action="store_true", dest="live")
     p_eod_execute.set_defaults(func=_cmd_eod_execute)
@@ -3138,7 +3389,9 @@ Tek sembol danışma (interaktif parametrelerle):
     p_daily_run = sub_daily.add_parser("run")
     p_daily_run.add_argument("--day", required=True, help="Trading day (YYYY-MM-DD)")
     p_daily_run.add_argument("--outdir", required=True, help="Output directory")
-    p_daily_run.add_argument("--config", default=None, help="Path to core config JSON (or BIST_CORE_CONFIG); required for --live")
+    p_daily_run.add_argument(
+        "--config", default=None, help="Path to core config JSON (or BIST_CORE_CONFIG); required for --live"
+    )
     p_daily_run.add_argument("--live", action="store_true", help="Run pipeline then execute live")
     p_daily_run.add_argument("--paper", action="store_true", help="Run pipeline then execute paper")
     p_daily_run.set_defaults(func=_cmd_daily_run)
@@ -3180,7 +3433,9 @@ Tek sembol danışma (interaktif parametrelerle):
     p_backtest_run.add_argument("--step", type=int, default=None)
     p_backtest_run.add_argument("--min-trades", dest="min_trades", type=int, default=None)
     p_backtest_run.add_argument("--max-dd", dest="max_dd", type=float, default=None)
-    p_backtest_run.add_argument("--as-of", dest="as_of", default=None, help="FAZ393: Leakage guard; reject if date_to > as_of")
+    p_backtest_run.add_argument(
+        "--as-of", dest="as_of", default=None, help="FAZ393: Leakage guard; reject if date_to > as_of"
+    )
     p_backtest_run.add_argument("--strict", action="store_true")
     p_backtest_run.add_argument("--json", action="store_true")
     p_backtest_run.set_defaults(func=_cmd_backtest_run)
@@ -3248,7 +3503,9 @@ Tek sembol danışma (interaktif parametrelerle):
     p_snapshots = sub_data.add_parser("snapshots")
     sub_snapshots = p_snapshots.add_subparsers(dest="snapshots_cmd", required=True)
     p_snapshots_doctor = sub_snapshots.add_parser("doctor")
-    p_snapshots_doctor.add_argument("--root", default=None, help="Snapshot root (default: BIST_CORE_SNAPSHOT_DIR or data/eod/snapshots)")
+    p_snapshots_doctor.add_argument(
+        "--root", default=None, help="Snapshot root (default: BIST_CORE_SNAPSHOT_DIR or data/eod/snapshots)"
+    )
     p_snapshots_doctor.add_argument("--json", action="store_true", help="Machine-readable JSON output")
     p_snapshots_doctor.add_argument("--symbol", default=None, help="Compute bars for symbol; requires --day")
     p_snapshots_doctor.add_argument("--day", default=None, help="Reference day (YYYY-MM-DD) for symbol bars")
@@ -3260,8 +3517,15 @@ Tek sembol danışma (interaktif parametrelerle):
     p_import.add_argument("--day", default=None, help="Required when CSV has no date column")
     p_import.add_argument("--date-col", dest="date_col", default="date")
     p_import.add_argument("--symbol-col", dest="symbol_col", default="symbol")
-    p_import.add_argument("--mapping", choices=["auto", "strict"], default="auto", help="auto: ignore unknown cols; strict: reject unknown cols")
-    p_import.add_argument("--schema-report", dest="schema_report", action="store_true", help="Print inferred column mapping and exit")
+    p_import.add_argument(
+        "--mapping",
+        choices=["auto", "strict"],
+        default="auto",
+        help="auto: ignore unknown cols; strict: reject unknown cols",
+    )
+    p_import.add_argument(
+        "--schema-report", dest="schema_report", action="store_true", help="Print inferred column mapping and exit"
+    )
     p_import.set_defaults(func=_cmd_data_import)
 
     p_ask = sub.add_parser("ask")
@@ -3270,7 +3534,9 @@ Tek sembol danışma (interaktif parametrelerle):
     p_ask.add_argument("--day", default=None)
     p_ask.add_argument("--json", action="store_true")
     p_ask.add_argument("--all", action="store_true")
-    p_ask.add_argument("--interactive", action="store_true", help="Prompt for missing symbol, day, horizon, risk, capital, max_loss_tl")
+    p_ask.add_argument(
+        "--interactive", action="store_true", help="Prompt for missing symbol, day, horizon, risk, capital, max_loss_tl"
+    )
     p_ask.add_argument("--horizon", choices=["short", "mid", "long"], default=None)
     p_ask.add_argument("--risk", choices=["low", "med", "high"], default=None)
     p_ask.add_argument("--capital", type=float, default=None)
@@ -3287,21 +3553,47 @@ Tek sembol danışma (interaktif parametrelerle):
     p_scan.add_argument("--max-loss-tl", dest="max_loss_tl", type=float, default=None)
     p_scan.add_argument("--top-n", dest="top_n", type=int, default=10)
     p_scan.add_argument("--exclusions", default=None, help="Comma-separated symbols to exclude")
-    p_scan.add_argument("--min-volume", dest="min_volume", type=int, default=None, help="FAZ145: Min volume filter (requires OHLCV snapshot)")
-    p_scan.add_argument("--min-turnover", dest="min_turnover", type=int, default=None, help="FAZ145: Min turnover TL filter (requires OHLCV snapshot)")
-    p_scan.add_argument("--json", action="store_true", help="FAZ388: Machine-readable JSON output with schema_version, generated_at")
+    p_scan.add_argument(
+        "--min-volume",
+        dest="min_volume",
+        type=int,
+        default=None,
+        help="FAZ145: Min volume filter (requires OHLCV snapshot)",
+    )
+    p_scan.add_argument(
+        "--min-turnover",
+        dest="min_turnover",
+        type=int,
+        default=None,
+        help="FAZ145: Min turnover TL filter (requires OHLCV snapshot)",
+    )
+    p_scan.add_argument(
+        "--json", action="store_true", help="FAZ388: Machine-readable JSON output with schema_version, generated_at"
+    )
     p_scan.add_argument("--out", default=None, help="FAZ148: Output dir for scan JSON artifact (writes day/scan.json)")
     p_scan.set_defaults(func=_cmd_scan)
 
-    p_evaluate_outcomes = sub.add_parser("evaluate-outcomes", help="Evaluate logged strategies against snapshot data; append to strategy_outcomes.jsonl")
-    p_evaluate_outcomes.add_argument("--strategies", default=None, help="Strategies JSONL path (default: data/log/strategies.jsonl or BIST_CORE_STRATEGY_LOG)")
-    p_evaluate_outcomes.add_argument("--snapshot-root", dest="snapshot_root", default=None, help="Snapshot root (default: BIST_CORE_SNAPSHOT_DIR)")
-    p_evaluate_outcomes.add_argument("--outcomes", default=None, help="Outcomes JSONL path (default: data/log/strategy_outcomes.jsonl)")
+    p_evaluate_outcomes = sub.add_parser(
+        "evaluate-outcomes", help="Evaluate logged strategies against snapshot data; append to strategy_outcomes.jsonl"
+    )
+    p_evaluate_outcomes.add_argument(
+        "--strategies",
+        default=None,
+        help="Strategies JSONL path (default: data/log/strategies.jsonl or BIST_CORE_STRATEGY_LOG)",
+    )
+    p_evaluate_outcomes.add_argument(
+        "--snapshot-root", dest="snapshot_root", default=None, help="Snapshot root (default: BIST_CORE_SNAPSHOT_DIR)"
+    )
+    p_evaluate_outcomes.add_argument(
+        "--outcomes", default=None, help="Outcomes JSONL path (default: data/log/strategy_outcomes.jsonl)"
+    )
     p_evaluate_outcomes.add_argument("--max-hold-days", dest="max_hold_days", type=int, default=None)
     p_evaluate_outcomes.set_defaults(func=_cmd_evaluate_outcomes)
 
     p_performance = sub.add_parser("performance-report", help="Generate performance summary from strategy outcomes")
-    p_performance.add_argument("--outcomes", default=None, help="Outcomes JSONL path (default: data/log/strategy_outcomes.jsonl)")
+    p_performance.add_argument(
+        "--outcomes", default=None, help="Outcomes JSONL path (default: data/log/strategy_outcomes.jsonl)"
+    )
     p_performance.add_argument("--out", default=None, help="Output path for CSV/JSON (default: stdout for JSON)")
     p_performance.add_argument("--csv", action="store_true", help="Output CSV format")
     p_performance.add_argument("--json", action="store_true", help="Output JSON format (default when --out set)")
@@ -3441,4 +3733,3 @@ for _name in ("BIST_ENV_WHITELIST", "BIST_ENV_ALLOWLIST", "ENV_WHITELIST", "ENV_
                 _merged.append(_k)
         globals()[_name] = type(_wl)(_merged)
 # === /FAZ607_ENV_ALLOWLIST_EXPAND ===
-

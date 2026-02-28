@@ -1,4 +1,5 @@
 """FAZ389: Scan stable ordering - equal score tie-break by symbol ascending, deterministic."""
+
 from __future__ import annotations
 
 import json

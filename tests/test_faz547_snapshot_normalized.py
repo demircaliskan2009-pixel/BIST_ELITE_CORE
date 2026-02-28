@@ -1,4 +1,5 @@
 """FAZ547: Snapshots use normalize_symbol on read — uppercase, trim, deterministic."""
+
 from __future__ import annotations
 
 from pathlib import Path

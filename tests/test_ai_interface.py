@@ -1,9 +1,9 @@
 """AI interface — SDK docs, version endpoint, interface consistency."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from bist_core.api.app import API_VERSION, SCAN_ARTIFACT_SCHEMA_VERSION, app

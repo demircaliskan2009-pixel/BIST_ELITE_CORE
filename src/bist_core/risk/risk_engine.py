@@ -1,4 +1,5 @@
 """Risk engine: validate orders_intent against loaded risk rules (position limits, max notional, max names, per-symbol cap)."""
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
@@ -36,6 +37,7 @@ def validate_orders_intent(
     per_symbol_cap = risk_rules.get("per_symbol_cap")
     if isinstance(per_symbol_cap, (int, float)):
         from collections import defaultdict
+
         weight_by_symbol: Dict[str, float] = defaultdict(float)
         for a in actions:
             if not isinstance(a, dict):

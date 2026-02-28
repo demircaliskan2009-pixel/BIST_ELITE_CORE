@@ -3,6 +3,7 @@
 Test Realism: schema test (keys/types), golden output (stable deterministic fields),
 missing-data test (fail-closed HOLD path). No mocks; fixture-based integration.
 """
+
 from __future__ import annotations
 
 import json
