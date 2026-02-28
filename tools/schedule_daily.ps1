@@ -1,4 +1,4 @@
-﻿# FAZ601/FAZ604: Optional Windows scheduler for tools/daily.ps1 (offline).
+﻿# FAZ601/FAZ604: Optional Windows scheduler for tools/scheduler_entrypoint.ps1 (offline).
 param(
     [switch]$Enable,
     [switch]$Disable,
@@ -30,7 +30,7 @@ if (-not $Enable -and -not $Disable) {
 
 $scriptPath = Join-Path $RepoRoot "tools\\scheduler_entrypoint.ps1"
 if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
-    Write-Host "schedule_daily: daily.ps1 not found at $scriptPath" -ForegroundColor Red
+    Write-Host "schedule_daily: scheduler_entrypoint.ps1 not found at $scriptPath" -ForegroundColor Red
     exit 2
 }
 
@@ -53,7 +53,7 @@ try {
     exit 2
 }
 
-# Determine whether any explicit daily.ps1 args were provided
+# Determine whether any explicit args were provided
 $anyExplicitArgs = $false
 foreach ($name in @("SnapshotRoot", "CapitalTry", "RiskPct", "AtrN", "StopAtrMult", "TpRMult", "TicketHorizon")) {
     if ($PSBoundParameters.ContainsKey($name)) {
@@ -129,13 +129,14 @@ if ($existingTask) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
 
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Description "BIST_ELITE_CORE daily offline run (tools/daily.ps1)" -User $user | Out-Null
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Description "BIST_ELITE_CORE scheduled offline run (tools/scheduler_entrypoint.ps1)" -User $user | Out-Null
 
 Write-Host "schedule_daily: task '$TaskName' registered for user '$user' at $Time (local time)." -ForegroundColor Green
 Write-Host "schedule_daily: command line:" -ForegroundColor Cyan
 Write-Host "  powershell.exe $argument" -ForegroundColor Cyan
-Write-Host "schedule_daily: task runs tools/daily.ps1 under the current user context. No secrets are stored in the task definition." -ForegroundColor Yellow
+Write-Host "schedule_daily: task runs tools/scheduler_entrypoint.ps1 under the current user context. No secrets are stored in the task definition." -ForegroundColor Yellow
 
 exit 0
+
 
 
