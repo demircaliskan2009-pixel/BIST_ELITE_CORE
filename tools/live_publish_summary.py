@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """FAZ571: Publish deterministic daily HTML summary. Phone-friendly. No network."""
+
 from __future__ import annotations
 
 import json
@@ -22,26 +23,17 @@ def publish_summary(day: str, out_root: Path) -> Path | None:
 
     scan_path = out_root / "daily_scan" / day / "scan.json"
     ask_dir = out_root / "ask" / day
-    perf_json = reports_dir / "performance.json"
-    perf_csv = reports_dir / "performance.csv"
-
     symbols: list[str] = []
     if scan_path.is_file():
         try:
             data = json.loads(scan_path.read_text(encoding="utf-8"))
             ranked = data.get("ranked") or []
-            symbols = sorted(
-                item["symbol"] for item in ranked
-                if isinstance(item, dict) and item.get("symbol")
-            )
+            symbols = sorted(item["symbol"] for item in ranked if isinstance(item, dict) and item.get("symbol"))
         except (json.JSONDecodeError, OSError):
             pass
 
     if not symbols and ask_dir.is_dir():
-        symbols = sorted(
-            p.stem for p in ask_dir.glob("*.json")
-            if p.stem and not p.name.startswith(".")
-        )
+        symbols = sorted(p.stem for p in ask_dir.glob("*.json") if p.stem and not p.name.startswith("."))
 
     out_path = reports_dir / "summary.html"
 
@@ -64,16 +56,18 @@ def publish_summary(day: str, out_root: Path) -> Path | None:
     for sym in symbols:
         lines.append(f"<li><a href='../../ask/{day}/{sym}.json'>{sym}.json</a></li>")
 
-    lines.extend([
-        "</ul>",
-        "<h2>Performance</h2>",
-        "<ul>",
-        f"<li><a href='performance.json'>performance.json</a></li>",
-        f"<li><a href='performance.csv'>performance.csv</a></li>",
-        "</ul>",
-        "</body>",
-        "</html>",
-    ])
+    lines.extend(
+        [
+            "</ul>",
+            "<h2>Performance</h2>",
+            "<ul>",
+            "<li><a href='performance.json'>performance.json</a></li>",
+            "<li><a href='performance.csv'>performance.csv</a></li>",
+            "</ul>",
+            "</body>",
+            "</html>",
+        ]
+    )
 
     out_path.write_text("\n".join(lines), encoding="utf-8")
     return out_path
@@ -81,7 +75,6 @@ def publish_summary(day: str, out_root: Path) -> Path | None:
 
 def main() -> int:
     import argparse
-    import os
 
     p = argparse.ArgumentParser(description="FAZ571: Publish daily HTML summary")
     p.add_argument("--day", required=True, help="YYYY-MM-DD")

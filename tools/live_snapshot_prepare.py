@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 """FAZ570: Snapshot prepare SOP. Ensure folder exists, validate. Fail-closed. Exit 0=ok, 2=invalid/missing."""
+
 from __future__ import annotations
 
 import shutil
@@ -17,6 +19,7 @@ def _valid_day_format(s: str) -> bool:
         return False
     try:
         from datetime import datetime
+
         datetime.strptime(s, "%Y-%m-%d")
         return True
     except ValueError:
@@ -81,10 +84,12 @@ def main() -> int:
         try:
             from zoneinfo import ZoneInfo
             from datetime import datetime
+
             now = datetime.now(ZoneInfo("Europe/Istanbul"))
             day = now.strftime("%Y-%m-%d")
         except ImportError:
             from datetime import datetime
+
             day = datetime.now().strftime("%Y-%m-%d")
 
     snapshot_root = args.snapshot_root or os.environ.get("BIST_CORE_SNAPSHOT_DIR", "data/eod/snapshots")
@@ -110,7 +115,13 @@ def main() -> int:
     for p in missing_paths:
         print(f"Missing: {p}", file=sys.stderr)
     for r in reasons:
-        if not r.startswith("row_") and r not in ("snapshot_root_missing", "day_dir_missing", "snapshot_csv_missing", "empty_snapshot", "no_valid_symbols"):
+        if not r.startswith("row_") and r not in (
+            "snapshot_root_missing",
+            "day_dir_missing",
+            "snapshot_csv_missing",
+            "empty_snapshot",
+            "no_valid_symbols",
+        ):
             print(f"Reason: {r}", file=sys.stderr)
     return 2
 

@@ -1,4 +1,5 @@
 """Execution adapters: paper, live (stub + registry) with strict dry-run vs live separation."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -28,6 +29,7 @@ def resolve_execution_provider(
     if execution == "paper" or broker_name == "paper":
         if outdir is not None and day is not None:
             from bist_core.execution.paper import PaperExecutionProvider
+
             return (PaperExecutionProvider(outdir, day), None)
         return (None, "execution_missing_outdir_day")
     if execution == "live":
@@ -61,7 +63,4 @@ def resolve_execution_provider(
     return (None, "unknown_execution_or_broker")
 
 
-__all__ = [
-    "StubExecutionProvider",
-    "resolve_execution_provider",
-]
+__all__ = ["ExecutionProvider", "StubExecutionProvider", "get_execution_provider"]

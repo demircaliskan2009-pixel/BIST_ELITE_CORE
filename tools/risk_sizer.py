@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """FAZ585: Risk budget sizer (ATR-based) for manual stage-1. Offline, deterministic."""
+
 from __future__ import annotations
 
 import csv
@@ -11,8 +12,20 @@ from pathlib import Path
 
 HORIZONS = (1, 3, 5, 20)
 PLAN_FIELDS = (
-    "day", "horizon_days", "rank", "symbol", "capital_try", "risk_pct", "risk_try",
-    "atr", "stop_atr_mult", "stop_distance", "qty", "tp_r_mult", "tp_distance", "notes",
+    "day",
+    "horizon_days",
+    "rank",
+    "symbol",
+    "capital_try",
+    "risk_pct",
+    "risk_try",
+    "atr",
+    "stop_atr_mult",
+    "stop_distance",
+    "qty",
+    "tp_r_mult",
+    "tp_distance",
+    "notes",
 )
 
 DEFAULTS = {
@@ -149,7 +162,7 @@ def _compute_atr(bars: list[tuple[str, float, float, float, float]], n: int) -> 
     if len(bars) < n:
         return None
     tr_list: list[float] = []
-    for i, (_, o, h, l, c) in enumerate(bars):
+    for i, (_, o, h, l, c) in enumerate(bars):  # noqa: E741
         if i == 0:
             tr = h - l
         else:
@@ -206,42 +219,46 @@ def _run_sizer(
 
         bars = _load_ohlc_bars(snapshot_root, day, symbol, atr_n + 1)
         if len(bars) < atr_n + 1:
-            rows.append({
-                "day": day,
-                "horizon_days": horizon,
-                "rank": rank,
-                "symbol": symbol,
-                "capital_try": capital,
-                "risk_pct": risk_pct,
-                "risk_try": risk_try,
-                "atr": None,
-                "stop_atr_mult": stop_mult,
-                "stop_distance": None,
-                "qty": 0,
-                "tp_r_mult": tp_mult,
-                "tp_distance": None,
-                "notes": "InsufficientHistory",
-            })
+            rows.append(
+                {
+                    "day": day,
+                    "horizon_days": horizon,
+                    "rank": rank,
+                    "symbol": symbol,
+                    "capital_try": capital,
+                    "risk_pct": risk_pct,
+                    "risk_try": risk_try,
+                    "atr": None,
+                    "stop_atr_mult": stop_mult,
+                    "stop_distance": None,
+                    "qty": 0,
+                    "tp_r_mult": tp_mult,
+                    "tp_distance": None,
+                    "notes": "InsufficientHistory",
+                }
+            )
             continue
 
         atr = _compute_atr(bars, atr_n)
         if atr is None or atr <= 0:
-            rows.append({
-                "day": day,
-                "horizon_days": horizon,
-                "rank": rank,
-                "symbol": symbol,
-                "capital_try": capital,
-                "risk_pct": risk_pct,
-                "risk_try": risk_try,
-                "atr": round(atr or 0, 6) if atr is not None else None,
-                "stop_atr_mult": stop_mult,
-                "stop_distance": None,
-                "qty": 0,
-                "tp_r_mult": tp_mult,
-                "tp_distance": None,
-                "notes": "InsufficientHistory" if atr is None else "ATRZero",
-            })
+            rows.append(
+                {
+                    "day": day,
+                    "horizon_days": horizon,
+                    "rank": rank,
+                    "symbol": symbol,
+                    "capital_try": capital,
+                    "risk_pct": risk_pct,
+                    "risk_try": risk_try,
+                    "atr": round(atr or 0, 6) if atr is not None else None,
+                    "stop_atr_mult": stop_mult,
+                    "stop_distance": None,
+                    "qty": 0,
+                    "tp_r_mult": tp_mult,
+                    "tp_distance": None,
+                    "notes": "InsufficientHistory" if atr is None else "ATRZero",
+                }
+            )
             continue
 
         stop_distance = atr * stop_mult
@@ -252,26 +269,26 @@ def _run_sizer(
             notes = "TooSmall"
         else:
             notes = ""
-
-        close = bars[-1][4]
         tp_distance = stop_distance * tp_mult
 
-        rows.append({
-            "day": day,
-            "horizon_days": horizon,
-            "rank": rank,
-            "symbol": symbol,
-            "capital_try": capital,
-            "risk_pct": risk_pct,
-            "risk_try": round(risk_try, 2),
-            "atr": round(atr, 6),
-            "stop_atr_mult": stop_mult,
-            "stop_distance": round(stop_distance, 6),
-            "qty": qty,
-            "tp_r_mult": tp_mult,
-            "tp_distance": round(tp_distance, 6),
-            "notes": notes,
-        })
+        rows.append(
+            {
+                "day": day,
+                "horizon_days": horizon,
+                "rank": rank,
+                "symbol": symbol,
+                "capital_try": capital,
+                "risk_pct": risk_pct,
+                "risk_try": round(risk_try, 2),
+                "atr": round(atr, 6),
+                "stop_atr_mult": stop_mult,
+                "stop_distance": round(stop_distance, 6),
+                "qty": qty,
+                "tp_r_mult": tp_mult,
+                "tp_distance": round(tp_distance, 6),
+                "notes": notes,
+            }
+        )
 
     return rows
 
@@ -305,8 +322,8 @@ def _write_outputs(reports_dir: Path, horizon: int, day: str, rows: list[dict]) 
     ]
     for r in rows:
         txt_lines.append(
-            f"{r['symbol']} rank={r['rank']} qty={r['qty']} atr={r.get('atr','')} "
-            f"stop_dist={r.get('stop_distance','')} notes={r.get('notes','')}"
+            f"{r['symbol']} rank={r['rank']} qty={r['qty']} atr={r.get('atr', '')} "
+            f"stop_dist={r.get('stop_distance', '')} notes={r.get('notes', '')}"
         )
     txt_path = reports_dir / f"risk_plan_h{h}.txt"
     txt_path.write_text("\n".join(txt_lines) + "\n", encoding="utf-8")
