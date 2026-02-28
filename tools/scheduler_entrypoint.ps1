@@ -8,7 +8,8 @@ param(
   [double]$TpRMult = 2.0,
   [int]$TicketHorizon = 3,
   [string]$Day = "",
-  [string]$FillsPath = ""
+  [string]$FillsPath = "",
+  [switch]$SkipSnapshotSeed
 )
 
 Set-StrictMode -Version Latest
@@ -24,6 +25,15 @@ function Write-JsonFile([string]$Path, [object]$Obj) {
 
 $RepoRoot = Resolve-RepoRoot
 Set-Location $RepoRoot
+
+# Resolve SnapshotRoot if not passed
+if ([string]::IsNullOrWhiteSpace($SnapshotRoot)) {
+  if (-not [string]::IsNullOrWhiteSpace($env:BIST_SNAPSHOT_ROOT)) {
+    $SnapshotRoot = $env:BIST_SNAPSHOT_ROOT
+  } else {
+    $SnapshotRoot = Join-Path $RepoRoot "data\eod\snapshots"
+  }
+}
 
 $logRoot  = Join-Path $RepoRoot "data\log\scheduler"
 $runsRoot = Join-Path $logRoot  "runs"
@@ -76,6 +86,7 @@ $meta = [ordered]@{
   host             = $env:COMPUTERNAME
   repo_root        = $RepoRoot
   repo_sha         = $sha
+  snapshot_root_resolved = $SnapshotRoot
   args = [ordered]@{
     SnapshotRoot  = $SnapshotRoot
     CapitalTry    = $CapitalTry
@@ -86,9 +97,28 @@ $meta = [ordered]@{
     TicketHorizon = $TicketHorizon
     Day           = $Day
     FillsPath     = $FillsPath
+    SkipSnapshotSeed = [bool]$SkipSnapshotSeed
   }
 }
 Write-JsonFile -Path $metaPath -Obj $meta
+
+# Optional: seed today's snapshot (offline fallback)
+if (-not $SkipSnapshotSeed) {
+  $seedPath = Join-Path $RepoRoot "tools\snapshot_seed_today.ps1"
+  if (Test-Path $seedPath) {
+    "scheduler_entrypoint: snapshot seed start" | Add-Content -Encoding UTF8 $runLog
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $seedPath -SnapshotRoot $SnapshotRoot -TouchTimestamp 2>&1 |
+      Tee-Object -FilePath $runLog -Append
+    $seedExit = $LASTEXITCODE
+    "scheduler_entrypoint: snapshot seed exit_code=$seedExit" | Add-Content -Encoding UTF8 $runLog
+    if ($seedExit -ne 0) {
+      "scheduler_entrypoint: snapshot seed failed -> exit 2" | Add-Content -Encoding UTF8 $runLog
+      exit 2
+    }
+  } else {
+    "scheduler_entrypoint: snapshot_seed_today.ps1 missing (skipped)" | Add-Content -Encoding UTF8 $runLog
+  }
+}
 
 $dailyPath = Join-Path $RepoRoot "tools\daily.ps1"
 if (-not (Test-Path $dailyPath)) {
