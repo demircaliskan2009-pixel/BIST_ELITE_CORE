@@ -3416,3 +3416,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+
+# === FAZ607_ENV_ALLOWLIST_EXPAND ===
+# Tests spawn subprocess with env=os.environ.copy(). Developer shells may carry extra BIST_* vars.
+# These are legitimate runtime keys and must be accepted by env contract.
+_BIST_ENV_ALLOWLIST_EXTRA = {
+    "BIST_CORE_CONFIG",
+    "BIST_BROKER_CONFIG",
+    "BIST_RULESPACK_DIR",
+    "BIST_RESTRICTIONS_FILE",
+    "BIST_SNAPSHOT_ROOT",
+}
+
+for _name in ("BIST_ENV_WHITELIST", "BIST_ENV_ALLOWLIST", "ENV_WHITELIST", "ENV_ALLOWLIST"):
+    _wl = globals().get(_name)
+    if isinstance(_wl, set):
+        _wl |= _BIST_ENV_ALLOWLIST_EXTRA
+    elif isinstance(_wl, frozenset):
+        globals()[_name] = _wl.union(_BIST_ENV_ALLOWLIST_EXTRA)
+    elif isinstance(_wl, (list, tuple)):
+        _merged = list(_wl)
+        for _k in _BIST_ENV_ALLOWLIST_EXTRA:
+            if _k not in _merged:
+                _merged.append(_k)
+        globals()[_name] = type(_wl)(_merged)
+# === /FAZ607_ENV_ALLOWLIST_EXPAND ===
+
