@@ -1,19 +1,18 @@
-# FAZ602: Line endings policy (normalize at checkout/commit).
-# Keep runtime behavior unchanged; only normalize text file EOLs.
-
-# Auto-detect text files and normalize.
+# Canonical line endings (repo-wide)
 * text=auto
 
-# Enforce LF for core text/data formats
-*.py   text eol=lf
-*.md   text eol=lf
-*.yml  text eol=lf
-*.yaml text eol=lf
-*.json text eol=lf
-*.csv  text eol=lf
-*.txt  text eol=lf
+# Python & config: always LF in repo
+*.py       text eol=lf
+*.pyi      text eol=lf
+*.toml     text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.json     text eol=lf
+*.md       text eol=lf
+*.txt      text eol=lf
+*.sh       text eol=lf
 
-# Enforce CRLF for Windows scripts
-*.ps1 text eol=crlf
-*.bat text eol=crlf
-*.cmd text eol=crlf
+# Windows scripts: keep CRLF
+*.ps1      text eol=crlf
+*.bat      text eol=crlf
+*.cmd      text eol=crlf
