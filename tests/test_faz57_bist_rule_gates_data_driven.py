@@ -3,6 +3,7 @@ FAZ57: Data-driven BIST risk gates (no hardcoded rule numbers).
 Preflight requires tick_sizes, price_bands, vbts/restrictions when live; fail-closed when missing.
 Tests: tmp fixtures; fail-closed when missing; allowed when fixtures present.
 """
+
 from __future__ import annotations
 
 import os
@@ -10,7 +11,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 from bist_core.risk.bist_rules import preflight_for_live
 from bist_core.risk.gates import preflight_bist_rules_for_live
@@ -74,7 +74,9 @@ def test_faz57_execute_live_fail_closed_when_bist_rules_missing(tmp_path: Path) 
     day = "2099-01-01"
     (outdir / day).mkdir()
     (outdir / day / "pipeline_manifest.json").write_text(
-        '{"schema_version":2,"day":"2099-01-01","stages":{},"orders_intent_path":"' + str(outdir / "orders" / day / "orders_intent.json").replace("\\", "/") + '"}',
+        '{"schema_version":2,"day":"2099-01-01","stages":{},"orders_intent_path":"'
+        + str(outdir / "orders" / day / "orders_intent.json").replace("\\", "/")
+        + '"}',
         encoding="utf-8",
     )
     (outdir / "orders" / day).mkdir(parents=True)
@@ -89,8 +91,18 @@ def test_faz57_execute_live_fail_closed_when_bist_rules_missing(tmp_path: Path) 
     env["BIST_RULESPACK_DIR"] = str(empty_rules)
     env.pop("BIST_RESTRICTIONS_FILE", None)
     cmd = [
-        sys.executable, "-m", "bist_core.cli", "eod", "execute",
-        "--day", day, "--outdir", str(outdir), "--live", "--broker", "paper",
+        sys.executable,
+        "-m",
+        "bist_core.cli",
+        "eod",
+        "execute",
+        "--day",
+        day,
+        "--outdir",
+        str(outdir),
+        "--live",
+        "--broker",
+        "paper",
     ]
     r = subprocess.run(cmd, env=env, capture_output=True, text=True)
     assert r.returncode == 2

@@ -5,7 +5,11 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import pandas as pd
+
 
 DEFAULT_HOME_ENV = "BIST_CORE_HOME"
 
@@ -94,8 +98,7 @@ class DatasetRegistry:
                 raw_datasets = raw.get("datasets", {}) if isinstance(raw, dict) else {}
 
             self._datasets = {
-                name: DatasetMetadata.from_dict(meta, name=name)
-                for name, meta in (raw_datasets or {}).items()
+                name: DatasetMetadata.from_dict(meta, name=name) for name, meta in (raw_datasets or {}).items()
             }
         else:
             self._datasets = {}
@@ -105,10 +108,7 @@ class DatasetRegistry:
     def save(self) -> None:
         payload = {
             "version": 1,
-            "datasets": {
-                name: meta.to_dict()
-                for name, meta in sorted(self._datasets.items())
-            },
+            "datasets": {name: meta.to_dict() for name, meta in sorted(self._datasets.items())},
         }
         _save_json_atomic(self._path, payload)
 

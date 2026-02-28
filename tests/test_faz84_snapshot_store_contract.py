@@ -1,4 +1,5 @@
 """FAZ84: Snapshot store contract — put/get/sha256; pipeline manifest stage artifact {path, sha256}."""
+
 from __future__ import annotations
 
 import json
@@ -8,7 +9,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 from bist_core.storage.snapshots import get_snapshot, put_snapshot, snapshot_sha256
 

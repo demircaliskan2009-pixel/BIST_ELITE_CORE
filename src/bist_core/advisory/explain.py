@@ -2,6 +2,7 @@
 FAZ90: Explainability — reasons[] and evidence_refs[] for advisory decisions.
 Output: explain.json (deterministic). Linked from dossier evidence.
 """
+
 from __future__ import annotations
 
 import json

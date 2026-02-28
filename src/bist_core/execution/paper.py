@@ -1,7 +1,7 @@
 """PaperExecutionProvider: writes orders to outdir/<day>/orders_sent.json when not dry_run (stdlib, deterministic)."""
+
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Dict
 

@@ -19,8 +19,7 @@ def test_marketdata_ohlcv_capabilities(tmp_path: Path) -> None:
     ohlcv_dir = tmp_path / day_ohlcv
     ohlcv_dir.mkdir(parents=True)
     (ohlcv_dir / "snapshot.csv").write_text(
-        "symbol,close,open,high,low,volume,turnover\n"
-        "AAA,10.0,9.5,10.5,9.0,1000,12345\n",
+        "symbol,close,open,high,low,volume,turnover\nAAA,10.0,9.5,10.5,9.0,1000,12345\n",
         encoding="utf-8",
     )
 

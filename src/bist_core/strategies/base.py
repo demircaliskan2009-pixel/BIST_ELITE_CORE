@@ -13,5 +13,4 @@ class Strategy(Protocol):
         universe: list[str],
         advice_records: list[dict],
         params: dict,
-    ) -> dict:
-        ...
+    ) -> dict: ...

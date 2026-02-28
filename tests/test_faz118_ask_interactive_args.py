@@ -1,4 +1,5 @@
 """FAZ118-STEP2: Ask command --interactive, --horizon, --risk, --capital, --max-loss-tl."""
+
 from __future__ import annotations
 
 import os

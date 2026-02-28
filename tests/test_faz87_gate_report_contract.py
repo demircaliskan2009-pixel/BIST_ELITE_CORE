@@ -1,4 +1,5 @@
 """FAZ87: Gate report contract — run_all -> {ok, blocked, errors, codes}; blocked -> execution_result + dossier evidence links."""
+
 from __future__ import annotations
 
 import json
@@ -7,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 from bist_core.risk.gates import run_all
 
@@ -36,7 +36,16 @@ def test_faz87_blocked_writes_report_and_dossier_evidence(tmp_path: Path) -> Non
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
     (tmp_path / "core.json").write_text(
-        json.dumps({"timezone": "Europe/Istanbul", "default_spread_bps_max": 80, "default_adv_tl_min": 30000000, "default_auction_ratio_max": 0.15, "default_price_band_pct": 20.0, "risk_per_trade": 0.015}),
+        json.dumps(
+            {
+                "timezone": "Europe/Istanbul",
+                "default_spread_bps_max": 80,
+                "default_adv_tl_min": 30000000,
+                "default_auction_ratio_max": 0.15,
+                "default_price_band_pct": 20.0,
+                "risk_per_trade": 0.015,
+            }
+        ),
         encoding="utf-8",
     )
     env["BIST_CORE_CONFIG"] = str(tmp_path / "core.json")
@@ -52,12 +61,14 @@ def test_faz87_blocked_writes_report_and_dossier_evidence(tmp_path: Path) -> Non
     orders_path.parent.mkdir(parents=True, exist_ok=True)
     orders_path.write_text(json.dumps({"day": day, "actions": [{"symbol": "X", "side": "BUY"}]}), encoding="utf-8")
     (tmp_path / day / "pipeline_manifest.json").write_text(
-        json.dumps({
-            "schema_version": 2,
-            "day": day,
-            "stages": {"snapshot": {"errors": 1}, "advice": {"errors": 0}},
-            "orders_intent_path": str(orders_path),
-        }),
+        json.dumps(
+            {
+                "schema_version": 2,
+                "day": day,
+                "stages": {"snapshot": {"errors": 1}, "advice": {"errors": 0}},
+                "orders_intent_path": str(orders_path),
+            }
+        ),
         encoding="utf-8",
     )
     (tmp_path / "dossier" / day).mkdir(parents=True, exist_ok=True)
@@ -67,7 +78,20 @@ def test_faz87_blocked_writes_report_and_dossier_evidence(tmp_path: Path) -> Non
     )
 
     r = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "eod", "execute", "--day", day, "--outdir", str(tmp_path), "--live", "--broker", "paper"],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "eod",
+            "execute",
+            "--day",
+            day,
+            "--outdir",
+            str(tmp_path),
+            "--live",
+            "--broker",
+            "paper",
+        ],
         env=env,
         capture_output=True,
         text=True,

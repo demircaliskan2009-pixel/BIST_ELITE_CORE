@@ -1,4 +1,5 @@
 """FAZ117: OpenAIModel — batch JSON, network fail-closed, cache, Windows-friendly key message."""
+
 from __future__ import annotations
 
 import subprocess
@@ -14,6 +15,7 @@ from bist_core.models.openai_model import OpenAIModel
 def test_openai_model_requires_api_key() -> None:
     """OpenAIModel raises ValueError when OPENAI_API_KEY is not set; message includes PowerShell/CMD."""
     import os
+
     old = os.environ.pop("OPENAI_API_KEY", None)
     try:
         with pytest.raises(ValueError) as exc:
@@ -59,10 +61,12 @@ def test_openai_model_batch_json_parse(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "openai", mock_openai)
 
     model = OpenAIModel(api_key="test-key")
-    scores = model.predict([
-        {"symbol": "THYA", "close": 100.0},
-        {"symbol": "AKBNK", "close": 50.0},
-    ])
+    scores = model.predict(
+        [
+            {"symbol": "THYA", "close": 100.0},
+            {"symbol": "AKBNK", "close": 50.0},
+        ]
+    )
     assert scores == [0.5, -0.2]
     mock_client.chat.completions.create.assert_called_once()
 
@@ -123,6 +127,7 @@ def test_openai_model_implements_model_plugin() -> None:
 def test_cli_model_openai_missing_key_exit_2(tmp_path: Path) -> None:
     """CLI --model openai with missing key: exit 2, blocked message."""
     import os
+
     snap_dir = tmp_path / "snap"
     (snap_dir / "2099-01-22").mkdir(parents=True, exist_ok=True)
     (snap_dir / "2099-01-22" / "snapshot.csv").write_text("symbol,date,close\nX,2099-01-22,10\n", encoding="utf-8")
@@ -133,7 +138,19 @@ def test_cli_model_openai_missing_key_exit_2(tmp_path: Path) -> None:
     env["BIST_CORE_ALLOW_NETWORK"] = "1"
     env.pop("OPENAI_API_KEY", None)
     result = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "eod", "advice", "--day", "2099-01-22", "--outdir", str(outdir), "--model", "openai"],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "eod",
+            "advice",
+            "--day",
+            "2099-01-22",
+            "--outdir",
+            str(outdir),
+            "--model",
+            "openai",
+        ],
         capture_output=True,
         text=True,
         cwd=str(tmp_path),
@@ -147,6 +164,7 @@ def test_cli_model_openai_missing_key_exit_2(tmp_path: Path) -> None:
 def test_cli_model_openai_network_disabled_exit_2(tmp_path: Path) -> None:
     """CLI --model openai with network disabled: exit 2, OpenAI not called."""
     import os
+
     snap_dir = tmp_path / "snap2"
     (snap_dir / "2099-01-23").mkdir(parents=True, exist_ok=True)
     (snap_dir / "2099-01-23" / "snapshot.csv").write_text("symbol,date,close\nY,2099-01-23,20\n", encoding="utf-8")
@@ -157,7 +175,19 @@ def test_cli_model_openai_network_disabled_exit_2(tmp_path: Path) -> None:
     env["OPENAI_API_KEY"] = "sk-test"
     env.pop("BIST_CORE_ALLOW_NETWORK", None)
     result = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "eod", "advice", "--day", "2099-01-23", "--outdir", str(outdir), "--model", "openai"],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "eod",
+            "advice",
+            "--day",
+            "2099-01-23",
+            "--outdir",
+            str(outdir),
+            "--model",
+            "openai",
+        ],
         capture_output=True,
         text=True,
         cwd=str(tmp_path),

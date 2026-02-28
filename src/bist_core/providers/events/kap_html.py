@@ -37,7 +37,7 @@ class KapHtmlEventsProvider(EventsProvider):
         self.url_template = url_template or env_template or "/kap/events/{day}"
         self.timeout_s = timeout_s
         self.source_url = ""
-        
+
         # Raw HTML caching: store raw HTML for provenance/lineage
         # Precedence: raw_dir param > BIST_KAP_CACHE_DIR (direct) > BIST_KAP_RAW_DIR/BIST_RAW_DIR (append kap_html) > default
         cache_dir_env = os.getenv("BIST_KAP_CACHE_DIR")
@@ -50,14 +50,14 @@ class KapHtmlEventsProvider(EventsProvider):
             self.raw_dir = Path(raw_root_env) / "kap_html"
         else:
             self.raw_dir = core_config.DATA_DIR / "raw" / "kap_html"
-        
+
         # Fail-closed cache-only mode: only use cache (no network)
         # Override: cache_only param or BIST_KAP_CACHE_ONLY=1
         if cache_only is None:
             self.cache_only = os.getenv("BIST_KAP_CACHE_ONLY", "0") == "1"
         else:
             self.cache_only = cache_only
-        
+
         # Fields for tracking last fetch provenance (can be added to events_pipeline manifest)
         self.raw_path: str | None = None
         self.raw_sha256: str | None = None

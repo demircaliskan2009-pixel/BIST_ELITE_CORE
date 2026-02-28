@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """FAZ583: Horizon probabilistic TopN ranker — offline, deterministic. No network, no secrets."""
+
 from __future__ import annotations
 
 import csv
@@ -13,8 +14,17 @@ LOOKBACK_K = 60
 COST_BPS_DEFAULT = 10
 HORIZONS = (1, 3, 5, 20)
 OUTPUT_FIELDS = (
-    "day", "horizon_days", "symbol", "bars_used", "lookback_used",
-    "mu_hat", "sigma_hat", "p_up", "p_gt_cost", "score", "notes",
+    "day",
+    "horizon_days",
+    "symbol",
+    "bars_used",
+    "lookback_used",
+    "mu_hat",
+    "sigma_hat",
+    "p_up",
+    "p_gt_cost",
+    "score",
+    "notes",
 )
 
 
@@ -80,10 +90,7 @@ def _load_symbols_from_scan(scan_path: Path | None) -> list[str]:
     try:
         data = json.loads(scan_path.read_text(encoding="utf-8"))
         ranked = data.get("ranked") or []
-        return sorted(
-            item["symbol"] for item in ranked
-            if isinstance(item, dict) and item.get("symbol")
-        )
+        return sorted(item["symbol"] for item in ranked if isinstance(item, dict) and item.get("symbol"))
     except (json.JSONDecodeError, OSError):
         return []
 

@@ -1,4 +1,5 @@
 """Risk rules schema: load and validate JSON/YAML rules (position limits, max notional, max names, per-symbol cap)."""
+
 from __future__ import annotations
 
 import json
@@ -13,6 +14,7 @@ def _load_payload(path: Path) -> Dict[str, Any]:
     if suffix in (".yaml", ".yml"):
         try:
             import yaml
+
             return yaml.safe_load(raw) or {}
         except ImportError:
             raise ValueError("YAML support requires PyYAML; use .json or install pyyaml")
@@ -27,6 +29,7 @@ def load_risk_rules(path: Path | str | None) -> Tuple[Dict[str, Any] | None, Lis
     """
     if path is None:
         import os
+
         path = os.getenv("BIST_CORE_RISK_RULES")
     if not path:
         return None, []

@@ -1,4 +1,5 @@
 """FAZ583: TopN horizon rank — deterministic, offline. Synthetic fixtures."""
+
 from __future__ import annotations
 
 import csv
@@ -7,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 _repo = Path(__file__).resolve().parents[1]
 if str(_repo) not in sys.path:
@@ -27,10 +27,14 @@ def _run_topn(
     args = [
         sys.executable,
         str(_repo / "tools" / "topn_horizon_rank.py"),
-        "--day", day,
-        "--horizon", str(horizon),
-        "--top", str(top),
-        "--lookback", str(lookback),
+        "--day",
+        day,
+        "--horizon",
+        str(horizon),
+        "--top",
+        str(top),
+        "--lookback",
+        str(lookback),
     ]
     if snapshot_root:
         args.extend(["--snapshot-root", str(snapshot_root)])
@@ -45,6 +49,7 @@ def _run_topn(
 def _build_snapshot_series(tmp_path: Path, day: str, n_days: int, symbol_series: dict[str, list[float]]) -> Path:
     """Build snapshot dir with price series. day is last day. Returns snapshot_root."""
     from datetime import datetime, timedelta
+
     base = tmp_path / "snapshots"
     base.mkdir(parents=True, exist_ok=True)
     dt = datetime.strptime(day, "%Y-%m-%d")
@@ -81,8 +86,19 @@ def test_csv_header_exact(tmp_path: Path) -> None:
     _run_topn("2025-03-15", 1, top=5, snapshot_root=snap, out_root=out)
     with (out / "reports" / "2025-03-15" / "topn_h1.csv").open(newline="", encoding="utf-8") as f:
         header = next(csv.reader(f))
-    expected = ["day", "horizon_days", "symbol", "bars_used", "lookback_used",
-                "mu_hat", "sigma_hat", "p_up", "p_gt_cost", "score", "notes"]
+    expected = [
+        "day",
+        "horizon_days",
+        "symbol",
+        "bars_used",
+        "lookback_used",
+        "mu_hat",
+        "sigma_hat",
+        "p_up",
+        "p_gt_cost",
+        "score",
+        "notes",
+    ]
     assert header == expected
 
 
@@ -90,7 +106,7 @@ def test_deterministic_ordering(tmp_path: Path) -> None:
     """Score desc, then symbol asc. Same input -> same output."""
     # AAA: strong up trend (1% per day). BBB: flat. AAA should rank higher.
     n = 65
-    aaa = [100.0 * (1.01 ** i) for i in range(n)]
+    aaa = [100.0 * (1.01**i) for i in range(n)]
     bbb = [100.0] * n
     snap = _build_snapshot_series(tmp_path, "2025-03-15", n, {"AAA": aaa, "BBB": bbb})
     out = tmp_path / "log"

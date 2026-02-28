@@ -1,11 +1,11 @@
 """FAZ100: verify_alignment.py — when all checklist items complete, prints CORE_COMPLETE_NO_INTEGRATION."""
+
 from __future__ import annotations
 
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 SENTINEL = "CORE_COMPLETE_NO_INTEGRATION"
 

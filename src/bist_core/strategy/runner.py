@@ -2,6 +2,7 @@
 FAZ94: Strategy runner — offline bars + signals -> strategy_report.json.
 Runs engine.decide(bars, bands, ...); outputs deterministic report (schema_version, day, decisions, summary).
 """
+
 from __future__ import annotations
 
 import json

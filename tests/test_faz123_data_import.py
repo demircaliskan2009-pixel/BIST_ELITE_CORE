@@ -1,4 +1,5 @@
 """FAZ123: CLI data import - CSV to daily snapshots (Matriks-style, TR decimals)."""
+
 from __future__ import annotations
 
 import os
@@ -83,6 +84,7 @@ def test_faz123_data_import_tr_decimals(tmp_path: Path) -> None:
     snap = (out_dir / "2099-01-01" / "snapshot.csv").read_text(encoding="utf-8")
     assert "X" in snap and "Y" in snap
     import pandas as pd
+
     df = pd.read_csv(out_dir / "2099-01-01" / "snapshot.csv")
     assert df[df["symbol"] == "X"]["close"].iloc[0] == 30000.0
     assert df[df["symbol"] == "Y"]["close"].iloc[0] == 2000.0
@@ -156,6 +158,7 @@ def test_faz123_matriks_turkish_columns_dd_mm_yyyy(tmp_path: Path) -> None:
     assert (out_dir / "2099-01-01" / "snapshot.csv").exists()
     assert (out_dir / "2099-01-02" / "snapshot.csv").exists()
     import pandas as pd
+
     df = pd.read_csv(out_dir / "2099-01-01" / "snapshot.csv")
     assert set(df["symbol"]) == {"QNBFK", "THYAO"}
     assert "open" in df.columns or "close" in df.columns
@@ -199,6 +202,7 @@ def test_faz123_matriks_english_iso_date(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert (out_dir / "2099-01-01" / "snapshot.csv").exists()
     import pandas as pd
+
     df = pd.read_csv(out_dir / "2099-01-01" / "snapshot.csv")
     assert df[df["symbol"] == "GARAN"]["close"].iloc[0] == 25500.0  # 25.000 TR -> 25500
 
@@ -209,10 +213,7 @@ def test_faz123_matriks_dd_slash_mm_yyyy_symbol_normalize(tmp_path: Path) -> Non
     if not fixtures.is_file():
         fixtures = tmp_path / "variant3.csv"
         fixtures.write_text(
-            'date,symbol,close\n'
-            '15/02/2099,SISE.E,30.000\n'
-            '15/02/2099,  TUPRS  ,25.500\n'
-            '15/02/2099,EREGL,"42,75"\n',
+            'date,symbol,close\n15/02/2099,SISE.E,30.000\n15/02/2099,  TUPRS  ,25.500\n15/02/2099,EREGL,"42,75"\n',
             encoding="utf-8",
         )
     out_dir = tmp_path / "snapshots"
@@ -240,6 +241,7 @@ def test_faz123_matriks_dd_slash_mm_yyyy_symbol_normalize(tmp_path: Path) -> Non
     assert result.returncode == 0
     assert (out_dir / "2099-02-15" / "snapshot.csv").exists()
     import pandas as pd
+
     df = pd.read_csv(out_dir / "2099-02-15" / "snapshot.csv")
     assert "SISE" in df["symbol"].values  # .E removed
     assert "TUPRS" in df["symbol"].values  # spaces stripped, uppercase

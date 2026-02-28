@@ -1,4 +1,5 @@
 """FAZ390: KAP ingestion fixture minimal — parse without network, deterministic event IDs."""
+
 from __future__ import annotations
 
 from pathlib import Path

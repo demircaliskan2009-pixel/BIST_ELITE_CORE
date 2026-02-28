@@ -1,4 +1,5 @@
 """FAZ597: Fills import + FIFO realized PnL. Offline, deterministic."""
+
 from __future__ import annotations
 
 import json
@@ -7,7 +8,6 @@ import sys
 from decimal import Decimal
 from pathlib import Path
 
-import pytest
 
 _repo = Path(__file__).resolve().parents[1]
 if str(_repo) not in sys.path:
@@ -15,11 +15,11 @@ if str(_repo) not in sys.path:
 
 from bist_core.execution.fills_schema import read_fills_csv
 from bist_core.execution.fifo import run_fifo
-from bist_core.execution.reporting import compute_summary_totals
 
 
 def test_fills_schema_read_fifo_basic(tmp_path: Path) -> None:
     """Read fixture, validate FIFO: 10@100 + 5@110, sell 12@120 -> realized 220, remaining 3@110."""
+    # ruff: noqa: E402
     fixture = _repo / "tests" / "fixtures" / "fills_fifo_basic.csv"
     assert fixture.is_file(), f"fixture missing: {fixture}"
 
@@ -35,9 +35,9 @@ def test_fills_schema_read_fifo_basic(tmp_path: Path) -> None:
 
     assert "AAA" in lots_by_symbol
     lots_aaa = lots_by_symbol["AAA"]
-    total_qty = sum(l.qty_remaining for l in lots_aaa)
+    total_qty = sum(lot.qty_remaining for lot in lots_aaa)
     assert total_qty == 3, f"expected remaining 3, got {total_qty}"
-    total_cost = sum(Decimal(l.qty_remaining) * l.price for l in lots_aaa)
+    total_cost = sum(Decimal(lot.qty_remaining) * lot.price for lot in lots_aaa)
     avg_cost = total_cost / total_qty
     assert avg_cost == Decimal("110"), f"expected avg_cost 110, got {avg_cost}"
 

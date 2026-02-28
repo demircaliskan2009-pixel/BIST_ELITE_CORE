@@ -3,6 +3,7 @@
 Offline-only placeholder for a future real broker adapter.
 No network, no secrets; always fails closed.
 """
+
 from __future__ import annotations
 
 from typing import Dict, Optional
@@ -37,7 +38,5 @@ class RealBrokerStub(BrokerAdapter):
 
     def fetch_fills(self, day: str, fills_path: Optional[str]) -> str:
         raise RuntimeError(
-            "RealBrokerStub does not handle fills. "
-            "Use ManualBroker and broker_run.ps1 -Mode manual instead."
+            "RealBrokerStub does not handle fills. Use ManualBroker and broker_run.ps1 -Mode manual instead."
         )
-

@@ -3,10 +3,10 @@ Modular execution provider registry: dynamic registration and retrieval of live 
 Each provider must implement the ExecutionProvider interface (submit_orders).
 Register factories with register_execution_provider; resolve by key with get_execution_provider.
 """
+
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from bist_core.execution.base import ExecutionProvider
 

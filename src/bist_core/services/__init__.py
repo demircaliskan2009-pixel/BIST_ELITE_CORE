@@ -1,2 +1,3 @@
 from .marketdata import MarketData
-__all__ = ['MarketData']
+
+__all__ = ["MarketData"]

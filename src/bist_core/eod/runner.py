@@ -4,6 +4,7 @@ from ..config import load_config
 from ..paths import EOD_SNAPSHOTS
 from ..providers.dummy import DummyProvider
 
+
 def run_eod(run_date: str | None = None, outdir: str | None = None) -> Path:
     cfg = load_config()
     dt = date.fromisoformat(run_date) if run_date else date.today()
@@ -15,7 +16,5 @@ def run_eod(run_date: str | None = None, outdir: str | None = None) -> Path:
     for sym, g in df.groupby("symbol"):
         g.to_csv(out_dir / f"{sym}.csv", index=False)
 
-    (out_dir / "_index.json").write_text(
-        df.to_json(orient="records", force_ascii=False)
-    )
+    (out_dir / "_index.json").write_text(df.to_json(orient="records", force_ascii=False))
     return out_dir

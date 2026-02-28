@@ -4,6 +4,8 @@ Run from repo root: python scripts/verify_alignment.py [path]
 Path defaults to docs/target_robot_alignment.md relative to script's repo root.
 Uses single source-of-truth sentinel from bist_core.alignment.
 """
+
+# ruff: noqa: E402
 from __future__ import annotations
 
 import re

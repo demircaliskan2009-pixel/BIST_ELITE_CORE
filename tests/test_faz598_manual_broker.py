@@ -52,4 +52,3 @@ def test_manual_broker_fetch_fills_valid(tmp_path: Path) -> None:
     resolved_path = Path(resolved)
     assert resolved_path.is_file()
     assert resolved_path.samefile(fills)
-

@@ -1,4 +1,5 @@
 """FAZ120: Windows prod runbook and release checklist docs exist and contain key strings."""
+
 from __future__ import annotations
 
 from pathlib import Path

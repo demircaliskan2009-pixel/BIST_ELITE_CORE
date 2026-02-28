@@ -60,6 +60,7 @@ def load_core_config_strict(path: Optional[Path]) -> Tuple[Optional[Dict[str, An
     except (json.JSONDecodeError, OSError):
         return None, "CONFIG_INVALID"
     from bist_core.config_migrate import migrate_core_config
+
     data = migrate_core_config(data)
     err = _validate_core_schema_v1(data)
     if err:
@@ -73,6 +74,7 @@ def _load_json_config(rel_path: str) -> Dict[str, Any]:
     with config_path.open("r", encoding="utf-8") as f:
         return json.load(f)
 
+
 # Config dosyalarını yükle
 CORE = _load_json_config("config/core.json")
 SOURCES_RAW = _load_json_config("config/sources.json")
@@ -83,6 +85,7 @@ if "local_csv" in SOURCES:
     # local_csv root_dir'i SAMPLES_DIR ile override et (tests için)
     SOURCES["local_csv"] = SOURCES["local_csv"].copy()
     SOURCES["local_csv"]["root_dir"] = str(SAMPLES_DIR)
+
 
 def load_config() -> Dict[str, Any]:
     """
@@ -134,8 +137,15 @@ def load_broker_config(raw: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Op
 
 
 __all__ = [
-    "REPO_ROOT", "DATA_DIR", "SAMPLES_DIR", "EOD_SNAPSHOT_DIR",
-    "SOURCES", "CORE", "load_config",
-    "resolve_core_config_path", "load_core_config_strict", "CORE_SCHEMA_V1_REQUIRED",
+    "REPO_ROOT",
+    "DATA_DIR",
+    "SAMPLES_DIR",
+    "EOD_SNAPSHOT_DIR",
+    "SOURCES",
+    "CORE",
+    "load_config",
+    "resolve_core_config_path",
+    "load_core_config_strict",
+    "CORE_SCHEMA_V1_REQUIRED",
     "load_broker_config",
 ]

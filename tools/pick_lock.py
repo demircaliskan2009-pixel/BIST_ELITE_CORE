@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
 """FAZ586: Lock TopN picks into immutable log. Offline, deterministic."""
+
 from __future__ import annotations
 
 import csv
 import json
-import os
 import sys
 from pathlib import Path
 
 HORIZONS = (1, 3, 5, 20)
 PICK_FIELDS = (
-    "day", "horizon_days", "rank", "symbol", "score", "p_up", "p_gt_cost",
-    "mu_hat", "sigma_hat", "locked_at",
+    "day",
+    "horizon_days",
+    "rank",
+    "symbol",
+    "score",
+    "p_up",
+    "p_gt_cost",
+    "mu_hat",
+    "sigma_hat",
+    "locked_at",
 )
 
 
@@ -55,18 +63,20 @@ def _run_lock(
         symbol = (row.get("symbol") or "").strip()
         if not symbol:
             continue
-        rows.append({
-            "day": day,
-            "horizon_days": horizon,
-            "rank": rank,
-            "symbol": symbol,
-            "score": _safe_float(row.get("score")),
-            "p_up": _safe_float(row.get("p_up")),
-            "p_gt_cost": _safe_float(row.get("p_gt_cost")),
-            "mu_hat": _safe_float(row.get("mu_hat")),
-            "sigma_hat": _safe_float(row.get("sigma_hat")),
-            "locked_at": locked_at,
-        })
+        rows.append(
+            {
+                "day": day,
+                "horizon_days": horizon,
+                "rank": rank,
+                "symbol": symbol,
+                "score": _safe_float(row.get("score")),
+                "p_up": _safe_float(row.get("p_up")),
+                "p_gt_cost": _safe_float(row.get("p_gt_cost")),
+                "mu_hat": _safe_float(row.get("mu_hat")),
+                "sigma_hat": _safe_float(row.get("sigma_hat")),
+                "locked_at": locked_at,
+            }
+        )
     return rows
 
 

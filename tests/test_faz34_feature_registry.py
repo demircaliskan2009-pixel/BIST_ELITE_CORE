@@ -1,4 +1,5 @@
 """FAZ34: Feature registry + compute; deterministic; missing data => fail-closed notes."""
+
 from __future__ import annotations
 
 import json
@@ -7,7 +8,6 @@ from pathlib import Path
 from bist_core.services.features import (
     compute_features,
     feature_registry,
-    load_history,
     write_features,
 )
 from bist_core.services.eod_pipeline import run_eod_pipeline
@@ -23,6 +23,7 @@ def test_faz34_registry_has_baseline_features() -> None:
 
 def test_faz34_compute_deterministic() -> None:
     """compute_features: same context => same outputs; sorted by symbol."""
+
     def ctx_provider(symbol: str, day: str) -> dict:
         if symbol == "A":
             closes = [(f"2099-06-{i:02d}", 100.0 + i) for i in range(1, 22)]
@@ -41,8 +42,10 @@ def test_faz34_compute_deterministic() -> None:
 
 def test_faz34_returns_1d_simple() -> None:
     """returns_1d: (close_today - close_yesterday) / close_yesterday."""
+
     def ctx(symbol: str, day: str) -> dict:
         return {"close_series": [("2099-07-01", 100.0), ("2099-07-02", 110.0)], "volume_series": None}
+
     rows, _ = compute_features(["X"], "2099-07-02", ctx)
     assert len(rows) == 1
     assert rows[0]["returns_1d"] == 0.1
@@ -50,6 +53,7 @@ def test_faz34_returns_1d_simple() -> None:
 
 def test_faz34_missing_data_fail_closed_notes() -> None:
     """Missing/insufficient data => notes contain missing_data; stage fail-closed."""
+
     def empty_ctx(symbol: str, day: str) -> dict:
         return {"close_series": [], "volume_series": None}
 

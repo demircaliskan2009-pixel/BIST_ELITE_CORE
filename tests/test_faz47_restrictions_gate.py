@@ -2,12 +2,12 @@
 FAZ47: Restriction-state gate (VBTS/halts/circuit) data-driven + fail-closed.
 Test: blocked_symbols=["AAA"] blocks order for AAA.
 """
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
 
 from bist_core.risk.gates import gate_restrictions
 from bist_core.risk.restrictions import load_restrictions

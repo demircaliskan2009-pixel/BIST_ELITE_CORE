@@ -1,4 +1,5 @@
 """FAZ388: Scan artifact schema_version, generated_at, required keys, empty scan valid."""
+
 from __future__ import annotations
 
 import json

@@ -1,4 +1,5 @@
 """Instrument master gate: load CSV (instrument_id, symbol required; aliases optional) -> symbols set + meta; resolve_symbols for identity/aliases."""
+
 from __future__ import annotations
 
 import csv

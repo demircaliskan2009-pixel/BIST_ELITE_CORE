@@ -2,13 +2,13 @@
 FAZ68: KAP connector v1 — ingest disclosures from fixture HTML/JSON into knowledge documents.
 Tests: doc_id sha256, stable fields (source, published_at_utc, title, body, tickers[]), no network.
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
 from pathlib import Path
 
-import pytest
 
 from bist_core.connectors.kap import (
     SOURCE_KAP,
@@ -116,12 +116,14 @@ def test_faz68_ingest_from_json_fixture_no_network(tmp_path: Path) -> None:
     """Ingest from JSON fixture -> knowledge docs."""
     fixture = tmp_path / "disclosures.json"
     fixture.write_text(
-        json.dumps({
-            "disclosures": [
-                {"ts": "2099-01-01 10:00", "symbol": "ASELS", "title": "Disclosure A", "body": "Content A"},
-                {"published_at_utc": "2099-01-01T09:00:00.000Z", "tickers": ["THYAO"], "title": "Disclosure B"},
-            ]
-        }),
+        json.dumps(
+            {
+                "disclosures": [
+                    {"ts": "2099-01-01 10:00", "symbol": "ASELS", "title": "Disclosure A", "body": "Content A"},
+                    {"published_at_utc": "2099-01-01T09:00:00.000Z", "tickers": ["THYAO"], "title": "Disclosure B"},
+                ]
+            }
+        ),
         encoding="utf-8",
     )
     docs = ingest_from_json(fixture)
@@ -145,9 +147,10 @@ def test_faz68_ingest_from_json_list_no_network() -> None:
     doc = docs[0]
     assert len(doc["doc_id"]) == 64 and all(c in "0123456789abcdef" for c in doc["doc_id"])
     assert doc["title"] == "One" and doc["tickers"] == ["X"]
-    assert doc["doc_id"] == hashlib.sha256(
-        "\t".join([SOURCE_KAP, doc["published_at_utc"], "One", "X"]).encode("utf-8")
-    ).hexdigest()
+    assert (
+        doc["doc_id"]
+        == hashlib.sha256("\t".join([SOURCE_KAP, doc["published_at_utc"], "One", "X"]).encode("utf-8")).hexdigest()
+    )
 
 
 def test_faz68_tickers_sorted_deduped() -> None:
@@ -168,6 +171,7 @@ def test_faz68_research_cache_wired_to_kap_fixture(tmp_path: Path) -> None:
     fixture = repo_root / "tests" / "fixtures" / "kap_sample.html"
     assert fixture.is_file()
     from bist_core.research.cache import build_research_cache
+
     result = build_research_cache(
         "2099-01-20",
         tmp_path,

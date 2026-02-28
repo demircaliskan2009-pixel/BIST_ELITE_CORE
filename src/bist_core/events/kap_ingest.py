@@ -2,6 +2,7 @@
 FAZ91: KAP HTML ingest -> events.json with hash (source HTML), source (path/label), deterministic event ids.
 No network; file/string input only.
 """
+
 from __future__ import annotations
 
 import hashlib

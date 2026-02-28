@@ -1,4 +1,5 @@
 """FAZ140: Evidence pack structure — source and hash in artifact."""
+
 from __future__ import annotations
 
 import json

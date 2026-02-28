@@ -1,10 +1,10 @@
 """FAZ73: Link graph between knowledge docs <-> advice records <-> dossier evidence. Stable ids, deterministic ordering."""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
 
 from bist_core.graph.link_graph import (
     LINK_GRAPH_SCHEMA_VERSION,
@@ -73,16 +73,25 @@ def test_link_graph_with_research_and_advice(tmp_path: Path) -> None:
     dossier_dir.mkdir(parents=True)
     dossier_path = dossier_dir / "dossier.json"
     dossier_path.write_text(
-        json.dumps({
-            "schema_version": 1,
-            "day": day,
-            "evidence": {"advice_path": str(advice_path), "research_path": str(research_dir), "orders_intent_path": ""},
-            "dossier_json_path": str(dossier_path),
-        }, sort_keys=True, indent=2),
+        json.dumps(
+            {
+                "schema_version": 1,
+                "day": day,
+                "evidence": {
+                    "advice_path": str(advice_path),
+                    "research_path": str(research_dir),
+                    "orders_intent_path": "",
+                },
+                "dossier_json_path": str(dossier_path),
+            },
+            sort_keys=True,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     out = write_link_graph(
-        day, tmp_path,
+        day,
+        tmp_path,
         research_path=research_dir,
         advice_path=advice_path,
         dossier_json_path=dossier_path,
@@ -100,15 +109,15 @@ def test_link_graph_with_research_and_advice(tmp_path: Path) -> None:
     assert data["nodes"]["evidence"] == sorted(data["nodes"]["evidence"])
     assert data["nodes"]["dossier"] == str(dossier_path)
     links = data["links"]
-    doc_to_evidence = [l for l in links if l["type"] == "doc_to_evidence"]
-    advice_to_evidence = [l for l in links if l["type"] == "advice_to_evidence"]
-    evidence_in_dossier = [l for l in links if l["type"] == "evidence_in_dossier"]
+    doc_to_evidence = [link for link in links if link["type"] == "doc_to_evidence"]
+    advice_to_evidence = [link for link in links if link["type"] == "advice_to_evidence"]
+    evidence_in_dossier = [link for link in links if link["type"] == "evidence_in_dossier"]
     assert len(doc_to_evidence) == 2
-    assert all(l["to"] == "research_path" for l in doc_to_evidence)
+    assert all(item["to"] == "research_path" for item in doc_to_evidence)
     assert len(advice_to_evidence) == 2
-    assert all(l["to"] == "advice_path" for l in advice_to_evidence)
+    assert all(item["to"] == "advice_path" for item in advice_to_evidence)
     assert len(evidence_in_dossier) == 3
-    assert all(l["to"] == NODE_DOSSIER for l in evidence_in_dossier)
+    assert all(item["to"] == NODE_DOSSIER for item in evidence_in_dossier)
     assert links == sorted(links, key=lambda x: (x["type"], x["from"], x["to"]))
 
 
@@ -124,16 +133,30 @@ def test_deterministic_ordering_same_inputs_same_output(tmp_path: Path) -> None:
     advice_dir = tmp_path / "advice" / day
     advice_dir.mkdir(parents=True)
     advice_path = advice_dir / "advice_records.jsonl"
-    advice_path.write_text('{"symbol": "X", "score": 0.0, "side": "HOLD", "reason": "r", "inputs": {"close": 1.0}}\n', encoding="utf-8")
+    advice_path.write_text(
+        '{"symbol": "X", "score": 0.0, "side": "HOLD", "reason": "r", "inputs": {"close": 1.0}}\n', encoding="utf-8"
+    )
     dossier_dir = tmp_path / "dossier" / day
     dossier_dir.mkdir(parents=True)
     dossier_path = dossier_dir / "dossier.json"
     dossier_path.write_text(
-        json.dumps({"schema_version": 1, "day": day, "evidence": {"advice_path": "x", "research_path": "y"}, "dossier_json_path": str(dossier_path)}, sort_keys=True),
+        json.dumps(
+            {
+                "schema_version": 1,
+                "day": day,
+                "evidence": {"advice_path": "x", "research_path": "y"},
+                "dossier_json_path": str(dossier_path),
+            },
+            sort_keys=True,
+        ),
         encoding="utf-8",
     )
-    out1 = write_link_graph(day, tmp_path, research_path=research_dir, advice_path=advice_path, dossier_json_path=dossier_path)
-    out2 = write_link_graph(day, tmp_path, research_path=research_dir, advice_path=advice_path, dossier_json_path=dossier_path)
+    out1 = write_link_graph(
+        day, tmp_path, research_path=research_dir, advice_path=advice_path, dossier_json_path=dossier_path
+    )
+    out2 = write_link_graph(
+        day, tmp_path, research_path=research_dir, advice_path=advice_path, dossier_json_path=dossier_path
+    )
     text1 = out1.read_text(encoding="utf-8")
     text2 = out2.read_text(encoding="utf-8")
     assert text1 == text2
@@ -144,8 +167,7 @@ def test_collect_knowledge_doc_ids_uses_id_or_doc_id(tmp_path: Path) -> None:
     """_collect_knowledge_doc_ids uses entry 'id' or 'doc_id' for stable id."""
     path = tmp_path / "entries.jsonl"
     path.write_text(
-        '{"id": "my-doc-1", "day": "2025-01-15", "source": "kap"}\n'
-        '{"doc_id": "my-doc-2", "day": "2025-01-15"}\n',
+        '{"id": "my-doc-1", "day": "2025-01-15", "source": "kap"}\n{"doc_id": "my-doc-2", "day": "2025-01-15"}\n',
         encoding="utf-8",
     )
     ids = _collect_knowledge_doc_ids(tmp_path)
@@ -172,7 +194,10 @@ def test_collect_evidence_keys_from_dossier(tmp_path: Path) -> None:
     """_collect_evidence_keys returns sorted keys from dossier.json evidence."""
     path = tmp_path / "dossier.json"
     path.write_text(
-        json.dumps({"evidence": {"advice_path": "x", "research_path": "y", "orders_intent_path": "z"}, "day": "2025-01-15"}, sort_keys=True),
+        json.dumps(
+            {"evidence": {"advice_path": "x", "research_path": "y", "orders_intent_path": "z"}, "day": "2025-01-15"},
+            sort_keys=True,
+        ),
         encoding="utf-8",
     )
     keys = _collect_evidence_keys(path)

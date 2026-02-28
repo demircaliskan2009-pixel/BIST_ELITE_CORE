@@ -1,11 +1,11 @@
 """FAZ99: Env contract validator + secrets redaction; execution_result errors[] have code."""
+
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
 
-import pytest
 
 from bist_core.env import redact_env, redact_secrets, validate_env_contract
 from bist_core.execution.result_writer import build_execution_result_payload, write_execution_result
@@ -127,7 +127,17 @@ def test_faz99_execution_result_redacted_on_disk(tmp_path: Path) -> None:
         errors=[{"code": "x", "api_key": "sk-leak"}],
     )
     day = "2025-01-01"
-    write_execution_result(tmp_path, day, ok=payload["ok"], blocked=payload["blocked"], reason=payload["reason"], provider=payload["provider"], mode=payload["mode"], errors=[{"code": "x", "api_key": "sk-leak"}], execution="live")
+    write_execution_result(
+        tmp_path,
+        day,
+        ok=payload["ok"],
+        blocked=payload["blocked"],
+        reason=payload["reason"],
+        provider=payload["provider"],
+        mode=payload["mode"],
+        errors=[{"code": "x", "api_key": "sk-leak"}],
+        execution="live",
+    )
     out_file = tmp_path / day / "execution_result.json"
     data = json.loads(out_file.read_text(encoding="utf-8"))
     errs = data.get("errors", [])

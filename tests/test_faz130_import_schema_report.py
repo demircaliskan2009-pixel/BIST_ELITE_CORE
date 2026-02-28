@@ -1,4 +1,5 @@
 """FAZ130: data import --schema-report shows inferred mapping."""
+
 from __future__ import annotations
 
 import json

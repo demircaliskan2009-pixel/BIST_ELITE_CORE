@@ -1,4 +1,5 @@
 """Models: plugin interface (base) + dataclasses for backward compatibility."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -78,9 +79,7 @@ def validate_events(rows: List[Dict[str, Any]]) -> Tuple[List[EventRecord], List
             errors.append(f"SchemaError:row={idx} invalid url")
             continue
         tags = row.get("tags")
-        if tags is not None and (
-            not isinstance(tags, list) or not all(isinstance(t, str) for t in tags)
-        ):
+        if tags is not None and (not isinstance(tags, list) or not all(isinstance(t, str) for t in tags)):
             errors.append(f"SchemaError:row={idx} invalid tags")
             continue
         payload = row.get("payload")
@@ -89,8 +88,13 @@ def validate_events(rows: List[Dict[str, Any]]) -> Tuple[List[EventRecord], List
             continue
         events.append(
             EventRecord(
-                symbol=symbol, ts=ts, kind=kind, title=title,
-                url=url, tags=tags, payload=payload,
+                symbol=symbol,
+                ts=ts,
+                kind=kind,
+                title=title,
+                url=url,
+                tags=tags,
+                payload=payload,
             )
         )
     return events, errors

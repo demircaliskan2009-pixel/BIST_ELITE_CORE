@@ -1,7 +1,7 @@
 """FAZ155: KAP cache loader — BIST_KAP_CACHE_DIR env support."""
+
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest

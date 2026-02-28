@@ -2,6 +2,7 @@
 FAZ50: Audit-grade pipeline manifest (schema v2).
 Test: run twice with same fixtures; compare manifests after removing run_id/timestamps => equal.
 """
+
 from __future__ import annotations
 
 import json
@@ -91,7 +92,9 @@ def test_faz50_run_twice_manifests_equal_after_strip(tmp_path: Path) -> None:
     # Normalize outdir paths so out1 vs out2 compare equal
     s1 = _normalize_paths(s1, str(outdir1))
     s2 = _normalize_paths(s2, str(outdir2))
-    assert s1 == s2, f"manifests differ after strip: {json.dumps({'s1_keys': list(s1.keys()), 's2_keys': list(s2.keys())}, indent=2)}"
+    assert s1 == s2, (
+        f"manifests differ after strip: {json.dumps({'s1_keys': list(s1.keys()), 's2_keys': list(s2.keys())}, indent=2)}"
+    )
 
 
 def test_faz50_manifest_has_run_id_and_timestamps(tmp_path: Path) -> None:

@@ -1,4 +1,5 @@
 """RiskGateEngine: fail-closed gate for execution (stage errors or policy invalid => deny)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,6 +12,7 @@ def preflight_bist_rules_for_live(
 ) -> Tuple[bool, List[str]]:
     """Preflight BIST rule data for live execution. Fail-closed when tick/bands/vbts missing. Returns (ok, errors)."""
     from bist_core.rules.validator import validate_rulespack
+
     return validate_rulespack(rulespack_dir=rulespack_dir, restrictions_path=restrictions_path)
 
 
@@ -37,6 +39,7 @@ def gate_order_rules(
             errors.append("price_invalid")
         else:
             from bist_core.risk.rulespack import validate_price_tick, validate_price_band
+
             ok_tick, _ = validate_price_tick(rulespack, p)
             if not ok_tick:
                 errors.append("tick_violation")
@@ -81,6 +84,7 @@ def gate_restrictions(
 ) -> Dict[str, Any]:
     """Restriction gate: delegate to restrictions.gate_restrictions."""
     from bist_core.risk.restrictions import gate_restrictions as _gate_restrictions
+
     return _gate_restrictions(orders_intent, restrictions_state)
 
 
@@ -135,6 +139,7 @@ class RiskGateEngine:
                 return False, notes
         if rulespack:
             from bist_core.risk.rulespack import validate_price_tick, validate_price_band
+
             actions = orders_intent.get("actions") or []
             for a in actions:
                 if not isinstance(a, dict):
@@ -165,6 +170,7 @@ class RiskGateEngine:
         if policy_ruleset is not None:
             try:
                 from bist_core.policy.rules_engine import evaluate as policy_evaluate
+
                 allowed, reasons = policy_evaluate(
                     policy_ruleset,
                     trading_context={"day": orders_intent.get("day", "")},

@@ -1,4 +1,5 @@
 """FAZ32: Instruments master + alias timeline; standardized schema/loader; fail-closed gating."""
+
 from __future__ import annotations
 
 import json
@@ -13,10 +14,13 @@ def test_faz32_alias_map_remap(tmp_path: Path) -> None:
     day = "2099-02-01"
     instruments_path = tmp_path / "instruments.jsonl"
     instruments_path.write_text(
-        "\n".join([
-            '{"symbol":"X","isin":"TRX","name":"X","status":"active","source":"test","ts":"2099-02-01T00:00:00Z"}',
-            '{"symbol":"Y","isin":"TRY","name":"Y","status":"active","source":"test","ts":"2099-02-01T00:00:00Z"}',
-        ]) + "\n",
+        "\n".join(
+            [
+                '{"symbol":"X","isin":"TRX","name":"X","status":"active","source":"test","ts":"2099-02-01T00:00:00Z"}',
+                '{"symbol":"Y","isin":"TRY","name":"Y","status":"active","source":"test","ts":"2099-02-01T00:00:00Z"}',
+            ]
+        )
+        + "\n",
         encoding="utf-8",
     )
     actions_path = tmp_path / "actions.jsonl"

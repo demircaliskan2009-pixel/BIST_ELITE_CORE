@@ -2,6 +2,7 @@
 FAZ92: Doc store — put/get by sha256 key (doc_id).
 Store root; key = doc_id (sha256 hex); value = raw bytes.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

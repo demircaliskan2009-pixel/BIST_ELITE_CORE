@@ -1,6 +1,7 @@
 """
 FAZ89: Advisory plan — inputs: signals + rules + portfolio snapshot. Output: advisory_plan.json (deterministic).
 """
+
 from __future__ import annotations
 
 import json
@@ -26,11 +27,15 @@ def build_advisory_plan(
         sym = (s.get("symbol") or "").strip()
         if not sym:
             continue
-        planned.append({
-            "symbol": sym,
-            "score": round(float(s.get("score", 0)), 6),
-            "side": str(s.get("side", "HOLD")).upper() if str(s.get("side", "HOLD")).upper() in ("BUY", "SELL") else "HOLD",
-        })
+        planned.append(
+            {
+                "symbol": sym,
+                "score": round(float(s.get("score", 0)), 6),
+                "side": str(s.get("side", "HOLD")).upper()
+                if str(s.get("side", "HOLD")).upper() in ("BUY", "SELL")
+                else "HOLD",
+            }
+        )
     planned.sort(key=lambda x: x["symbol"])
 
     rules_summary = dict(sorted((k, v) for k, v in (rules or {}).items() if v is not None))

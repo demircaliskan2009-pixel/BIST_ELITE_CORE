@@ -1,4 +1,5 @@
 """Outcome evaluation for strategies — deterministic, offline, fail-closed."""
+
 from __future__ import annotations
 
 import json
@@ -37,12 +38,8 @@ def test_outcome_stop_hit_first(tmp_path: Path) -> None:
     snap = tmp_path / "snapshots"
     (snap / "2025-01-15").mkdir(parents=True)
     (snap / "2025-01-16").mkdir(parents=True)
-    (snap / "2025-01-15" / "snapshot.csv").write_text(
-        "symbol,close,high,low\nAAA,100.0,101.0,99.0\n", encoding="utf-8"
-    )
-    (snap / "2025-01-16" / "snapshot.csv").write_text(
-        "symbol,close,high,low\nAAA,97.0,98.0,95.0\n", encoding="utf-8"
-    )
+    (snap / "2025-01-15" / "snapshot.csv").write_text("symbol,close,high,low\nAAA,100.0,101.0,99.0\n", encoding="utf-8")
+    (snap / "2025-01-16" / "snapshot.csv").write_text("symbol,close,high,low\nAAA,97.0,98.0,95.0\n", encoding="utf-8")
 
     log_entry = {
         "symbol": "AAA",
@@ -106,9 +103,7 @@ def test_outcome_no_bars_returns_hold(tmp_path: Path) -> None:
 def test_outcome_schema_required_keys(tmp_path: Path) -> None:
     """Outcome has required schema keys."""
     (tmp_path / "2025-01-15").mkdir(parents=True)
-    (tmp_path / "2025-01-15" / "snapshot.csv").write_text(
-        "symbol,close\nAAA,100.0\n", encoding="utf-8"
-    )
+    (tmp_path / "2025-01-15" / "snapshot.csv").write_text("symbol,close\nAAA,100.0\n", encoding="utf-8")
     log_entry = {
         "symbol": "AAA",
         "day": "2025-01-15",
@@ -154,20 +149,22 @@ def test_evaluate_and_append_outcomes(tmp_path: Path) -> None:
     snap = tmp_path / "snapshots"
     (snap / "2025-01-15").mkdir(parents=True)
     (snap / "2025-01-16").mkdir(parents=True)
-    (snap / "2025-01-15" / "snapshot.csv").write_text(
-        "symbol,close,high,low\nAAA,100.0,101.0,99.0\n", encoding="utf-8"
-    )
+    (snap / "2025-01-15" / "snapshot.csv").write_text("symbol,close,high,low\nAAA,100.0,101.0,99.0\n", encoding="utf-8")
     (snap / "2025-01-16" / "snapshot.csv").write_text(
         "symbol,close,high,low\nAAA,106.0,108.0,104.0\n", encoding="utf-8"
     )
 
     strategies_path = tmp_path / "strategies.jsonl"
     strategies_path.write_text(
-        json.dumps({
-            "symbol": "AAA",
-            "day": "2025-01-15",
-            "strategy_detail": {"plan": {"entry": 101.0, "stop": 96.0, "t1": 105.0}},
-        }, ensure_ascii=False) + "\n",
+        json.dumps(
+            {
+                "symbol": "AAA",
+                "day": "2025-01-15",
+                "strategy_detail": {"plan": {"entry": 101.0, "stop": 96.0, "t1": 105.0}},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
         encoding="utf-8",
     )
 

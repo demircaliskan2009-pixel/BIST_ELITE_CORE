@@ -3,6 +3,8 @@ FAZ115: OrderBridge and OrderBridgeDLL — İşlem terminali / DLL veya manuel o
 OrderBridge: pyautogui ile tuş basımı (buy=F1, sell=F2).
 OrderBridgeDLL: DLL veya manuel onay proxy; stub arayüz, human-approval mock ile "order sent" ve log confirmation.
 """
+
+# ruff: noqa: E402
 from __future__ import annotations
 
 import importlib

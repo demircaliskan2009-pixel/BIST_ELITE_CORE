@@ -3,6 +3,7 @@ FAZ75: Single ExecutionResult schema + writer for outdir/<day>/execution_result.
 Used by live preflight and execute paths; deterministic; written on ALL exit (success and fail-closed).
 No external libs.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -105,6 +106,7 @@ def write_execution_result(
         orders_intent_sha256=orders_intent_sha256,
     )
     from bist_core.security.redact import redact_recursive
+
     payload = redact_recursive(payload)
     out_file = day_dir / EXECUTION_RESULT_FILENAME
     snapshot_integrity.atomic_write_json(out_file, payload)

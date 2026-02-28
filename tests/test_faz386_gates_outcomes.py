@@ -1,4 +1,5 @@
 """FAZ386: Gates outcomes PASS/FAIL JSON — schema, deterministic order, gate fail -> HOLD."""
+
 from __future__ import annotations
 
 import json

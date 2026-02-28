@@ -1,4 +1,5 @@
 """Corporate actions canonicalization: event_id, instrument_id, ex_date, kind, ratio, cash, raw_source. Deterministic."""
+
 from __future__ import annotations
 
 import csv

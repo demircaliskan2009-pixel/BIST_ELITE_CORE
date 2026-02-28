@@ -4,7 +4,6 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-import time
 from typing import Any, Dict, List, Tuple
 
 
@@ -111,15 +110,17 @@ def load_instruments_jsonl(path: Path, source: str | None = None) -> List[Dict[s
         record, _ = _normalize_row(row, idx, source)
         if not (record.get("symbol") or "").strip():
             continue
-        out.append({
-            "symbol": record.get("symbol", ""),
-            "isin": record.get("isin"),
-            "name": record.get("name"),
-            "status": record.get("status", "unknown"),
-            "market": record.get("market"),
-            "source": record.get("source", source or "offline_file"),
-            "ts": record.get("ts"),
-        })
+        out.append(
+            {
+                "symbol": record.get("symbol", ""),
+                "isin": record.get("isin"),
+                "name": record.get("name"),
+                "status": record.get("status", "unknown"),
+                "market": record.get("market"),
+                "source": record.get("source", source or "offline_file"),
+                "ts": record.get("ts"),
+            }
+        )
     return out
 
 

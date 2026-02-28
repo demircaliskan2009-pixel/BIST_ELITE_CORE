@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """FAZ587: Convert risk_plan to orders_intent v2 DRAFT. Offline, deterministic."""
+
 from __future__ import annotations
 
 import csv
@@ -98,11 +99,13 @@ def _run_convert(
         notes = (row.get("notes") or "").strip()
 
         if qty == 0:
-            skipped.append({
-                "symbol": symbol,
-                "rank": rank,
-                "reason": notes or "qty=0",
-            })
+            skipped.append(
+                {
+                    "symbol": symbol,
+                    "rank": rank,
+                    "reason": notes or "qty=0",
+                }
+            )
             continue
 
         limit_price = ""

@@ -2,6 +2,7 @@
 FAZ61: CLI bist_core cli daily run --day --outdir [--live/--paper].
 Tests: idempotent run (verify hash or reuse), no overwrite of differing artifacts; tmp dirs.
 """
+
 from __future__ import annotations
 
 import json

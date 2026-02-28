@@ -1,4 +1,5 @@
 """Stub broker adapter for live execution (requires broker config; FAZ72: calls through BrokerAdapter when live)."""
+
 from __future__ import annotations
 
 import json
@@ -37,7 +38,7 @@ class StubExecutionProvider:
 
     def submit_orders(self, orders: Dict[str, Any], *, dry_run: bool = True) -> Dict[str, Any]:
         if dry_run:
-            actions = orders.get("actions") or []
+            orders.get("actions") or []
             sent = 0
             return execution_result(
                 ok=True,

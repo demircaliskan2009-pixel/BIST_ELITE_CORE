@@ -1,4 +1,5 @@
 """FAZ38: Backtest harness — walk-forward deterministic; metrics + equity_curve."""
+
 from __future__ import annotations
 
 import csv

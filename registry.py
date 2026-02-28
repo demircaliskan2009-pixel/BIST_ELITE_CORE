@@ -30,6 +30,7 @@ class DatasetMetadata:
     created_at : ISO8601 UTC timestamp
     updated_at : ISO8601 UTC timestamp
     """
+
     name: str
     kind: str
     path: str
@@ -80,10 +81,7 @@ class DatasetRegistry:
             with self._path.open("r", encoding="utf-8") as f:
                 raw = json.load(f)
             raw_datasets = raw.get("datasets", {})
-            self._datasets = {
-                name: DatasetMetadata.from_dict(meta)
-                for name, meta in raw_datasets.items()
-            }
+            self._datasets = {name: DatasetMetadata.from_dict(meta) for name, meta in raw_datasets.items()}
         else:
             self._datasets = {}
 
@@ -93,9 +91,7 @@ class DatasetRegistry:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "version": 1,
-            "datasets": {
-                name: meta.to_dict() for name, meta in sorted(self._datasets.items())
-            },
+            "datasets": {name: meta.to_dict() for name, meta in sorted(self._datasets.items())},
         }
         tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
         with tmp_path.open("w", encoding="utf-8") as f:
@@ -133,10 +129,7 @@ class DatasetRegistry:
         now = self._now_iso()
 
         if name in self._datasets and not overwrite:
-            raise ValueError(
-                f"Dataset already exists in registry: {name!r}. "
-                f"Use overwrite=True to update."
-            )
+            raise ValueError(f"Dataset already exists in registry: {name!r}. Use overwrite=True to update.")
 
         if name in self._datasets:
             meta = self._datasets[name]

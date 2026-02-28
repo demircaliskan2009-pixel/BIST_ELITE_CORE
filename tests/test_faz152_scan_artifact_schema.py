@@ -1,4 +1,5 @@
 """FAZ152: Scan artifact schema — stable JSON schema. Regression guards for backward compatibility."""
+
 from __future__ import annotations
 
 import json

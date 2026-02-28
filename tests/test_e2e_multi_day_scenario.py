@@ -3,6 +3,7 @@
 Given sample data for 3 days, validates entire pipeline produces consistent outputs.
 Golden checks: no data gaps, all expected artifacts present.
 """
+
 from __future__ import annotations
 
 import csv
@@ -117,7 +118,9 @@ def test_e2e_multi_day_all_outputs_produced(tmp_path: Path) -> None:
         assert orders_path.exists(), f"orders {day} missing"
         meta_path = snapshot_root / day / "orders_meta.txt"
         assert meta_path.exists(), f"orders_meta {day} missing"
-        assert meta_path.read_text(encoding="utf-8").strip() == "PASS", f"orders {day} should PASS (3 symbols -> 0.333 each)"
+        assert meta_path.read_text(encoding="utf-8").strip() == "PASS", (
+            f"orders {day} should PASS (3 symbols -> 0.333 each)"
+        )
 
 
 def test_e2e_final_orders_golden(tmp_path: Path) -> None:
@@ -128,7 +131,6 @@ def test_e2e_final_orders_golden(tmp_path: Path) -> None:
 
     outdir = tmp_path / "out"
     env = {"BIST_CORE_SNAPSHOT_DIR": str(snapshot_root)}
-    days = ["2099-01-01", "2099-01-02", "2099-01-03"]
 
     for day in SCENARIO_DAYS:
         _run_cli(["eod", "run", "--day", day, "--outdir", str(outdir)], env=env)

@@ -1,4 +1,5 @@
 """FAZ112: Market data provider registry — pluggable, external feed integration, static dummy for tests."""
+
 from __future__ import annotations
 
 from pathlib import Path

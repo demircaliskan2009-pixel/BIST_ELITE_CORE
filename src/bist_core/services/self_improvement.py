@@ -3,6 +3,7 @@ FAZ63: Self-improvement runner — evaluates strategies/models via walk-forward 
 writes outdir/reports/<day>/model_report.json, selects champion deterministically by metrics gates.
 No ML training; only selection + report.
 """
+
 from __future__ import annotations
 
 import json
@@ -10,7 +11,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from bist_core.services.backtest import walk_forward
-from bist_core.services import snapshot_integrity
 
 
 def _select_champion(results: List[Dict[str, Any]]) -> Optional[str]:
@@ -83,26 +83,30 @@ def run_self_improvement(
             }
             wf_result = walk_forward(run_config)
         except Exception:
-            results.append({
-                "name": name,
-                "strategy": name,
-                "gates_passed": False,
-                "mean_return": 0.0,
-                "worst_max_drawdown": 0.0,
-                "total_fills": 0,
-                "error": "run_failed",
-            })
+            results.append(
+                {
+                    "name": name,
+                    "strategy": name,
+                    "gates_passed": False,
+                    "mean_return": 0.0,
+                    "worst_max_drawdown": 0.0,
+                    "total_fills": 0,
+                    "error": "run_failed",
+                }
+            )
             continue
         agg = wf_result.get("aggregate") or {}
-        results.append({
-            "name": name,
-            "strategy": name,
-            "gates_passed": bool(agg.get("gates_passed")),
-            "mean_return": agg.get("mean_return", 0.0),
-            "worst_max_drawdown": agg.get("worst_max_drawdown", 0.0),
-            "total_fills": agg.get("total_fills", 0),
-            "num_windows": agg.get("num_windows", 0),
-        })
+        results.append(
+            {
+                "name": name,
+                "strategy": name,
+                "gates_passed": bool(agg.get("gates_passed")),
+                "mean_return": agg.get("mean_return", 0.0),
+                "worst_max_drawdown": agg.get("worst_max_drawdown", 0.0),
+                "total_fills": agg.get("total_fills", 0),
+                "num_windows": agg.get("num_windows", 0),
+            }
+        )
 
     champion = _select_champion(results)
     any_passed = any(r.get("gates_passed") for r in results)

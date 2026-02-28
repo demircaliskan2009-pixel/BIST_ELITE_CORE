@@ -1,10 +1,10 @@
 """FAZ95: Eval gates contract — metrics -> pass/fail; fail -> exit 2 + artifacts."""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
 
 from bist_core.eval.gates import evaluate, run_gates, GATE_MIN_TRADES, GATE_MAX_DD
 

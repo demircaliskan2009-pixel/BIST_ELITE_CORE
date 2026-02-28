@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """FAZ577: Weekly rollup — scoreboard + performance + journal. Deterministic. Derived from logs only."""
+
 from __future__ import annotations
 
 import csv
 import json
-import os
 import re
 import sys
 from datetime import datetime, timedelta
@@ -71,6 +71,7 @@ def _load_journal_report(out_root: Path, date_from: str, date_to: str, journal_p
         return None
     try:
         from tools.live_journal_report import build_report
+
         return build_report(journal_path, out_root, date_from, date_to)
     except Exception:
         return None
@@ -115,7 +116,9 @@ def build_weekly_report(
 
         perf = _load_performance(reports_dir, day)
         if perf:
-            performance_by_day.append({"day": day, **{k: perf.get(k) for k in ("trade_count", "win_rate", "avg_r", "total_r", "max_dd")}})
+            performance_by_day.append(
+                {"day": day, **{k: perf.get(k) for k in ("trade_count", "win_rate", "avg_r", "total_r", "max_dd")}}
+            )
             performance_aggregated["trade_count"] += int(perf.get("trade_count", 0))
             performance_aggregated["win_count"] += int(perf.get("win_count", 0))
             performance_aggregated["loss_count"] += int(perf.get("loss_count", 0))
@@ -225,9 +228,11 @@ def write_weekly_html(report: dict, out_dir: Path) -> Path:
         "<table><tr><th>day</th><th>symbol</th><th>decision</th></tr>",
     ]
     for r in rows[:50]:
-        lines.append(f"<tr><td>{r.get('day','')}</td><td>{r.get('symbol','')}</td><td>{r.get('decision_raw','')}</td></tr>")
+        lines.append(
+            f"<tr><td>{r.get('day', '')}</td><td>{r.get('symbol', '')}</td><td>{r.get('decision_raw', '')}</td></tr>"
+        )
     if len(rows) > 50:
-        lines.append(f"<tr><td colspan='3'>... and {len(rows)-50} more</td></tr>")
+        lines.append(f"<tr><td colspan='3'>... and {len(rows) - 50} more</td></tr>")
     lines.extend(["</table>", "</body>", "</html>"])
 
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -236,6 +241,7 @@ def write_weekly_html(report: dict, out_dir: Path) -> Path:
 
 def main() -> int:
     import argparse
+
     p = argparse.ArgumentParser(description="FAZ577: Weekly live review (scoreboard+perf+journal)")
     p.add_argument("--week", default=None, help="YYYY-WW (default: current week)")
     p.add_argument("--out-root", default="data/log")
@@ -246,6 +252,7 @@ def main() -> int:
         week = args.week
     else:
         from datetime import date
+
         today = date.today()
         iso = today.isocalendar()
         week = f"{iso[0]}-W{iso[1]:02d}"

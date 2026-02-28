@@ -1,4 +1,5 @@
 """FAZ405: KAP empty cache no crash — empty dir returns empty/error, no exception."""
+
 from __future__ import annotations
 
 from pathlib import Path

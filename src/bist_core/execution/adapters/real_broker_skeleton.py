@@ -1,9 +1,10 @@
 """FAZ580: Real broker execution provider skeleton — offline-first, no network, no secrets."""
+
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from bist_core.execution.base import ExecutionProvider, execution_result
+from bist_core.execution.base import execution_result
 from bist_core.execution.adapters.dry_run import DryRunExecutionProvider
 
 

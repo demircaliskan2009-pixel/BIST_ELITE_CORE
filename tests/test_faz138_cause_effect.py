@@ -1,4 +1,5 @@
 """FAZ138: Cause-effect fields — why, invalidates, watch_next from deterministic evidence."""
+
 from __future__ import annotations
 
 import json
@@ -25,8 +26,15 @@ def test_faz138_cause_effect_in_artifact(tmp_path: Path) -> None:
 
     r = subprocess.run(
         [
-            sys.executable, "-m", "bist_core.cli", "ask", "AKBNK",
-            "--day", "2025-01-15", "--out", str(out_dir),
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "ask",
+            "AKBNK",
+            "--day",
+            "2025-01-15",
+            "--out",
+            str(out_dir),
         ],
         cwd=str(_repo_root()),
         capture_output=True,

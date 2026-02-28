@@ -1,4 +1,5 @@
 """Generate advice_records.jsonl (schema v1) under outdir/advice/<day>/; stable sort by symbol; deterministic floats."""
+
 from __future__ import annotations
 
 import csv
@@ -25,6 +26,7 @@ def _resolve_model_plugin(
     if os.environ.get("USE_OPENAI_MODEL") == "1" and os.environ.get("OPENAI_API_KEY", "").strip():
         try:
             from bist_core.models.openai_model import OpenAIModel
+
             cache_dir = (cache_root / "_cache" / "openai") if cache_root else None
             return OpenAIModel(cache_dir=cache_dir)
         except (ImportError, ValueError):
@@ -106,10 +108,7 @@ def generate_advice(
     errors = 0
 
     if model_plugin is not None:
-        features = [
-            {"symbol": s, "close": close_map.get(s, 0.0)}
-            for s in symbols
-        ]
+        features = [{"symbol": s, "close": close_map.get(s, 0.0)} for s in symbols]
         try:
             scores = model_plugin.predict(features)
         except RuntimeError:
@@ -118,7 +117,7 @@ def generate_advice(
             scores = [0.0] * len(symbols)
             errors += len(symbols)
         if len(scores) != len(symbols):
-            scores = (scores + [0.0] * len(symbols))[:len(symbols)]
+            scores = (scores + [0.0] * len(symbols))[: len(symbols)]
         for i, symbol in enumerate(symbols):
             close = close_map.get(symbol, 0.0)
             score = float(scores[i]) if i < len(scores) else 0.0
@@ -126,9 +125,7 @@ def generate_advice(
             reason = "model"
             if safe_mode_reason:
                 reason = f"Güvenli mod: {safe_mode_reason} " + reason
-            records.append(
-                _record_v1(symbol=symbol, score=score, side=side, reason=reason, close=close)
-            )
+            records.append(_record_v1(symbol=symbol, score=score, side=side, reason=reason, close=close))
     else:
         from bist_core.services.advisor import build_advice_for_symbol
 

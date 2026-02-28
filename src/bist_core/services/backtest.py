@@ -1,17 +1,19 @@
 """FAZ38/FAZ39: Walk-forward backtest harness — snapshot + strategy + paper broker; metrics + equity curve; walk-forward splits + gates."""
+
 from __future__ import annotations
 
 import csv
 import json
 from datetime import date as Date, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from bist_core.audit.ledger import write_fills_jsonl, write_positions_jsonl
 from bist_core.brokers import PaperBroker
 from bist_core.services import snapshot_integrity
 from bist_core.portfolio.accounting import Ledger as PortfolioLedger
 from bist_core.orders.strategies import resolve_strategy
+import hashlib
 
 
 def _load_snapshot_for_day(snapshot_root: Path, day: str) -> tuple[List[str], Dict[str, float]]:
@@ -44,10 +46,7 @@ def _load_snapshot_for_day(snapshot_root: Path, day: str) -> tuple[List[str], Di
 
 def _build_synthetic_advice(symbols: List[str]) -> List[Dict[str, Any]]:
     """Minimal advice for backtest: one BUY per symbol, score=1.0 (deterministic ranking by symbol)."""
-    return [
-        {"symbol": s, "decision_raw": "BUY", "score": 1.0}
-        for s in symbols
-    ]
+    return [{"symbol": s, "decision_raw": "BUY", "score": 1.0} for s in symbols]
 
 
 def _sha256_file(file_path: Path) -> str:
@@ -301,19 +300,23 @@ def walk_forward(run_config: Dict[str, Any]) -> Dict[str, Any]:
             as_of=run_config.get("as_of"),
         )
         if m.get("error"):
-            per_window.append({"date_from": w_from, "date_to": w_to, "error": m["error"], "total_fills": 0, "max_drawdown": 0.0})
+            per_window.append(
+                {"date_from": w_from, "date_to": w_to, "error": m["error"], "total_fills": 0, "max_drawdown": 0.0}
+            )
         else:
-            per_window.append({
-                "date_from": w_from,
-                "date_to": w_to,
-                "metrics_path": m.get("metrics_path", ""),
-                "equity_curve_path": m.get("equity_curve_path", ""),
-                "num_days": m.get("num_days", 0),
-                "total_fills": m.get("total_fills", 0),
-                "total_return": m.get("total_return", 0.0),
-                "max_drawdown": m.get("max_drawdown", 0.0),
-                "final_equity": m.get("final_equity", 0.0),
-            })
+            per_window.append(
+                {
+                    "date_from": w_from,
+                    "date_to": w_to,
+                    "metrics_path": m.get("metrics_path", ""),
+                    "equity_curve_path": m.get("equity_curve_path", ""),
+                    "num_days": m.get("num_days", 0),
+                    "total_fills": m.get("total_fills", 0),
+                    "total_return": m.get("total_return", 0.0),
+                    "max_drawdown": m.get("max_drawdown", 0.0),
+                    "final_equity": m.get("final_equity", 0.0),
+                }
+            )
 
     total_fills = sum(w.get("total_fills", 0) for w in per_window)
     worst_max_dd = max((w.get("max_drawdown", 0.0) for w in per_window), default=0.0)

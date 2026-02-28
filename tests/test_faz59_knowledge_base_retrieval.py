@@ -2,12 +2,11 @@
 FAZ59: Knowledge base storage + retrieval.
 Tests: deterministic doc_ids, retrieval ranking stable (BM25-like), no deps.
 """
+
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-import pytest
 
 from bist_core.knowledge import KnowledgeBase, add_documents
 
@@ -28,10 +27,12 @@ def test_faz59_doc_id_deterministic() -> None:
 def test_faz59_different_doc_different_id() -> None:
     """Different documents -> different doc_ids."""
     kb = KnowledgeBase()
-    ids = kb.add_documents([
-        {"title": "A"},
-        {"title": "B"},
-    ])
+    ids = kb.add_documents(
+        [
+            {"title": "A"},
+            {"title": "B"},
+        ]
+    )
     assert len(ids) == 2
     assert ids[0] != ids[1]
 
@@ -39,11 +40,13 @@ def test_faz59_different_doc_different_id() -> None:
 def test_faz59_retrieval_ranking_stable() -> None:
     """Retrieve same query twice -> same order of (doc_id, score)."""
     kb = KnowledgeBase()
-    kb.add_documents([
-        {"title": "cat dog", "body": "feline canine"},
-        {"title": "dog only", "body": "canine"},
-        {"title": "cat only", "body": "feline"},
-    ])
+    kb.add_documents(
+        [
+            {"title": "cat dog", "body": "feline canine"},
+            {"title": "dog only", "body": "canine"},
+            {"title": "cat only", "body": "feline"},
+        ]
+    )
     r1 = kb.retrieve("cat dog", top_k=5)
     r2 = kb.retrieve("cat dog", top_k=5)
     assert r1 == r2
@@ -57,10 +60,12 @@ def test_faz59_retrieval_ranking_stable() -> None:
 def test_faz59_retrieval_relevant_higher() -> None:
     """Document with more query terms scores higher (BM25-like)."""
     kb = KnowledgeBase()
-    kb.add_documents([
-        {"title": "alpha beta gamma", "body": "a b c"},
-        {"title": "alpha", "body": "only alpha"},
-    ])
+    kb.add_documents(
+        [
+            {"title": "alpha beta gamma", "body": "a b c"},
+            {"title": "alpha", "body": "only alpha"},
+        ]
+    )
     r = kb.retrieve("alpha beta", top_k=2)
     assert len(r) == 2
     scores_by_id = {doc_id: s for doc_id, s in r}

@@ -4,11 +4,12 @@ Write JSONL: orders, fills, positions under outdir/ledger/<day>/.
 Deterministic filenames: orders.jsonl, fills.jsonl, positions.jsonl.
 Atomic writes (.tmp then replace). No new dependencies.
 """
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, List
+from typing import List
 
 
 def _audit_ledger_dir(outdir: Path | str, day: str) -> Path:

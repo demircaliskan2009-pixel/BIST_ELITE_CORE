@@ -2,6 +2,7 @@
 FAZ67: Offline-first HTTP client with deterministic disk cache (TTL, sha256 key, response metadata).
 Fixture mode for tests (no network). Research stage integration. No new deps.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -9,13 +10,13 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 from bist_core.http_cache import HttpClient, get_cached, _cache_key, _subdir_path
 from bist_core.research.cache import build_research_cache
 
 
 # ---- Unit: cache key and paths ----
+
 
 def test_faz67_cache_key_deterministic() -> None:
     """Cache key is sha256(url) hex; same URL -> same key."""
@@ -37,6 +38,7 @@ def test_faz67_subdir_path_spreads_by_key_prefix(tmp_path: Path) -> None:
 
 # ---- Unit: HttpClient ----
 
+
 def test_faz67_fixture_mode_cache_miss_returns_error(tmp_path: Path) -> None:
     """Fixture mode: no network; cache miss -> (None, 'cache_miss')."""
     client = HttpClient(cache_dir=tmp_path, ttl_seconds=3600, fixture_mode=True)
@@ -53,13 +55,15 @@ def test_faz67_fixture_mode_cache_hit_returns_cached(tmp_path: Path) -> None:
     body_path = _subdir_path(tmp_path, key, ".body")
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     meta_path.write_text(
-        json.dumps({
-            "url": url,
-            "status_code": 200,
-            "headers": {"Content-Type": "application/json"},
-            "cached_at": "2099-01-01T12:00:00.000Z",
-            "ttl_seconds": 86400,
-        }),
+        json.dumps(
+            {
+                "url": url,
+                "status_code": 200,
+                "headers": {"Content-Type": "application/json"},
+                "cached_at": "2099-01-01T12:00:00.000Z",
+                "ttl_seconds": 86400,
+            }
+        ),
         encoding="utf-8",
     )
     body_path.write_bytes(b'[{"id":"r1","title":"Cached"}]')
@@ -81,13 +85,15 @@ def test_faz67_non_fixture_cache_hit_returns_cached(tmp_path: Path) -> None:
     body_path = _subdir_path(tmp_path, key, ".body")
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     meta_path.write_text(
-        json.dumps({
-            "url": url,
-            "status_code": 200,
-            "headers": {},
-            "cached_at": "2099-01-01T12:00:00.000Z",
-            "ttl_seconds": 86400,
-        }),
+        json.dumps(
+            {
+                "url": url,
+                "status_code": 200,
+                "headers": {},
+                "cached_at": "2099-01-01T12:00:00.000Z",
+                "ttl_seconds": 86400,
+            }
+        ),
         encoding="utf-8",
     )
     body_path.write_bytes(b"cached body")
@@ -107,13 +113,15 @@ def test_faz67_ttl_expired_refetches_when_not_fixture(tmp_path: Path) -> None:
     body_path = _subdir_path(tmp_path, key, ".body")
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     meta_path.write_text(
-        json.dumps({
-            "url": url,
-            "status_code": 200,
-            "headers": {},
-            "cached_at": "1999-01-01T00:00:00.000Z",
-            "ttl_seconds": 1,
-        }),
+        json.dumps(
+            {
+                "url": url,
+                "status_code": 200,
+                "headers": {},
+                "cached_at": "1999-01-01T00:00:00.000Z",
+                "ttl_seconds": 1,
+            }
+        ),
         encoding="utf-8",
     )
     body_path.write_bytes(b"old")
@@ -132,13 +140,15 @@ def test_faz67_get_cached_convenience(tmp_path: Path) -> None:
     body_path = _subdir_path(tmp_path, key, ".body")
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     meta_path.write_text(
-        json.dumps({
-            "url": url,
-            "status_code": 200,
-            "headers": {},
-            "cached_at": "2099-06-01T00:00:00.000Z",
-            "ttl_seconds": 86400,
-        }),
+        json.dumps(
+            {
+                "url": url,
+                "status_code": 200,
+                "headers": {},
+                "cached_at": "2099-06-01T00:00:00.000Z",
+                "ttl_seconds": 86400,
+            }
+        ),
         encoding="utf-8",
     )
     body_path.write_bytes(b"ok")
@@ -148,6 +158,7 @@ def test_faz67_get_cached_convenience(tmp_path: Path) -> None:
 
 
 # ---- Research stage integration ----
+
 
 def test_faz67_research_url_fixture_mode_uses_cache_only(tmp_path: Path) -> None:
     """Research source=url with offline=True uses HTTP cache; cache miss -> error_marker in entries."""
@@ -185,13 +196,15 @@ def test_faz67_research_url_fixture_mode_hit_returns_entries(tmp_path: Path) -> 
         {"id": "e2", "title": "Entry 2"},
     ]
     meta_path.write_text(
-        json.dumps({
-            "url": url,
-            "status_code": 200,
-            "headers": {},
-            "cached_at": "2099-01-15T10:00:00.000Z",
-            "ttl_seconds": 86400,
-        }),
+        json.dumps(
+            {
+                "url": url,
+                "status_code": 200,
+                "headers": {},
+                "cached_at": "2099-01-15T10:00:00.000Z",
+                "ttl_seconds": 86400,
+            }
+        ),
         encoding="utf-8",
     )
     body_path.write_bytes(json.dumps(body_json).encode("utf-8"))

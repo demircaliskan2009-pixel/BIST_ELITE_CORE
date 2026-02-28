@@ -3,9 +3,10 @@ FAZ58: Market data provider interface.
 Protocol: symbols(day), close_map(day), validate(day).
 Optional: raw_path, raw_sha256 for pipeline provenance.
 """
+
 from __future__ import annotations
 
-from typing import Any, Dict, List, Protocol, runtime_checkable
+from typing import Dict, List, Protocol, runtime_checkable
 
 
 @runtime_checkable

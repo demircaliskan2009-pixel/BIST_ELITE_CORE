@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """FAZ584: TopN horizon bundle report — HTML+JSON+CSV with advice. Offline, deterministic."""
+
 from __future__ import annotations
 
 import csv
@@ -11,8 +12,19 @@ from pathlib import Path
 
 HORIZONS = (1, 3, 5, 20)
 CSV_COLUMNS = (
-    "day", "horizon_days", "rank", "symbol", "score", "p_up", "p_gt_cost",
-    "mu_hat", "sigma_hat", "decision_raw", "has_artifact", "artifact_path", "headline",
+    "day",
+    "horizon_days",
+    "rank",
+    "symbol",
+    "score",
+    "p_up",
+    "p_gt_cost",
+    "mu_hat",
+    "sigma_hat",
+    "decision_raw",
+    "has_artifact",
+    "artifact_path",
+    "headline",
 )
 
 
@@ -59,6 +71,7 @@ def _build_advice_fallback(symbol: str, day: str, snapshot_root: Path) -> dict:
     try:
         sys.path.insert(0, str(_repo_root() / "src"))
         from bist_core.services.advisor import build_advice_for_symbol
+
         advice = build_advice_for_symbol(symbol, day, root=snapshot_root)
         return {
             "decision_raw": advice.decision_raw or "PASS",
@@ -93,7 +106,9 @@ def _run_bundle(
     if topn_rows is None:
         return None
 
-    base = out_root if out_root is not None else (reports_root.parent if reports_root.name == "reports" else reports_root)
+    base = (
+        out_root if out_root is not None else (reports_root.parent if reports_root.name == "reports" else reports_root)
+    )
     ask_dir = base / "ask" / day
 
     rows: list[dict] = []
@@ -109,22 +124,24 @@ def _run_bundle(
 
         headline = _headline(artifact.get("text") or "")
 
-        rows.append({
-            "day": day,
-            "horizon_days": horizon,
-            "rank": rank,
-            "symbol": symbol,
-            "score": row.get("score"),
-            "p_up": row.get("p_up"),
-            "p_gt_cost": row.get("p_gt_cost"),
-            "mu_hat": row.get("mu_hat"),
-            "sigma_hat": row.get("sigma_hat"),
-            "decision_raw": artifact.get("decision_raw", "PASS"),
-            "has_artifact": ask_path.is_file(),
-            "artifact_path": str(ask_path) if ask_path.is_file() else "",
-            "headline": headline,
-            "_text": artifact.get("text") or "",
-        })
+        rows.append(
+            {
+                "day": day,
+                "horizon_days": horizon,
+                "rank": rank,
+                "symbol": symbol,
+                "score": row.get("score"),
+                "p_up": row.get("p_up"),
+                "p_gt_cost": row.get("p_gt_cost"),
+                "mu_hat": row.get("mu_hat"),
+                "sigma_hat": row.get("sigma_hat"),
+                "decision_raw": artifact.get("decision_raw", "PASS"),
+                "has_artifact": ask_path.is_file(),
+                "artifact_path": str(ask_path) if ask_path.is_file() else "",
+                "headline": headline,
+                "_text": artifact.get("text") or "",
+            }
+        )
 
     return rows
 
@@ -138,10 +155,7 @@ def _write_outputs(reports_dir: Path, horizon: int, day: str, rows: list[dict]) 
         "schema_version": 1,
         "day": day,
         "horizon_days": horizon,
-        "rows": [
-            {k: v for k, v in r.items() if not k.startswith("_")}
-            for r in rows
-        ],
+        "rows": [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows],
     }
 
     json_path = reports_dir / f"topn_bundle_h{h}.json"

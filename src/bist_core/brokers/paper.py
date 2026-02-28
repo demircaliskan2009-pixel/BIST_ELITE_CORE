@@ -1,11 +1,10 @@
 """Paper broker: fills at close price from snapshot (deterministic)."""
+
 from __future__ import annotations
 
 import csv
 from pathlib import Path
 from typing import Any, Dict, List
-
-from bist_core.brokers.base import Broker
 
 
 def _load_close_map(snapshot_root: Path, day: str) -> Dict[str, float]:
@@ -120,10 +119,12 @@ class PaperBroker:
             pos = self._positions[symbol]
             if pos["qty"] == 0:
                 continue
-            result.append({
-                "symbol": symbol,
-                "qty": pos["qty"],
-                "notional": pos["notional"],
-                "avg_price": pos["avg_price"],
-            })
+            result.append(
+                {
+                    "symbol": symbol,
+                    "qty": pos["qty"],
+                    "notional": pos["notional"],
+                    "avg_price": pos["avg_price"],
+                }
+            )
         return result

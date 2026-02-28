@@ -1,4 +1,5 @@
 """FAZ42: Instrument master instrument_id + alias resolution; deterministic; manifest instrument_resolution."""
+
 from __future__ import annotations
 
 from pathlib import Path

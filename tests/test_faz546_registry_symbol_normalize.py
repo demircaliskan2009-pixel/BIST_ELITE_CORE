@@ -1,13 +1,11 @@
 """FAZ546: Registry uses normalize_symbol; uppercase symbols; trim. Test-first."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
-import pandas as pd
-import pytest
 
 from bist_core.data.registry import (
-    get_default_registry,
     load_registered_dataset,
     register_dataset,
 )

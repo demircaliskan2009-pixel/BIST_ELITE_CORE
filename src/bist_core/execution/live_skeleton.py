@@ -4,6 +4,7 @@ Uses BrokerAdapter to place orders from orders_intent.json, records deterministi
 updates portfolio accounting from fills. Re-running same day with same orders_intent does not duplicate.
 No external libs.
 """
+
 from __future__ import annotations
 
 import hashlib

@@ -1,6 +1,7 @@
 """
 FAZ118: CLI doctor command for production readiness.
 """
+
 from __future__ import annotations
 
 import json
@@ -8,8 +9,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 
 def _project_root() -> Path:
@@ -26,7 +25,9 @@ def test_faz118_doctor_offline_ok_in_minimal_repo(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (tmp_path / "tools").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "tools" / "clean_repo.ps1").write_text("# clean_repo\nRemove-Item -Recurse __pycache__", encoding="utf-8")
+    (tmp_path / "tools" / "clean_repo.ps1").write_text(
+        "# clean_repo\nRemove-Item -Recurse __pycache__", encoding="utf-8"
+    )
     (tmp_path / "tools" / "proof_pack.ps1").write_text("# proof_pack\npytest", encoding="utf-8")
 
     env = os.environ.copy()

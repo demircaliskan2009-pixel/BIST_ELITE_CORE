@@ -2,12 +2,12 @@
 FAZ60: Dossier writer linking advice + research + risk decisions.
 Tests: deterministic output (stable ordering), evidence pointers, manifest inclusion.
 """
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
 
 from bist_core.dossier import write_dossier
 

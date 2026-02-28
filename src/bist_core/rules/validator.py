@@ -3,9 +3,9 @@ FAZ86: Rulespack validator — tick/bands/vbts/restrictions required for live.
 Returns (ok, errors[]). Errors are stable codes: bist_rules_tick_bands_missing, bist_rules_vbts_missing.
 Deterministic: errors sorted. No external deps.
 """
+
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import List, Optional, Tuple
 

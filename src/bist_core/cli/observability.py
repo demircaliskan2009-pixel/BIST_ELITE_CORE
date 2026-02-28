@@ -2,6 +2,7 @@
 FAZ64: Structured JSON logging helper + standard error taxonomy codes for CLI.
 One JSON object per log line; no noisy prints when using err_struct for exits.
 """
+
 from __future__ import annotations
 
 import json
@@ -50,6 +51,7 @@ def log_struct(
     if "trace_id" not in payload:
         try:
             from bist_core.trace import get_trace_id
+
             tid = get_trace_id()
             if tid is not None:
                 payload["trace_id"] = tid

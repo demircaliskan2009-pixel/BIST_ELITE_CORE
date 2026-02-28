@@ -1,11 +1,10 @@
 """FAZ96: Release check — minimal test: script exists, alignment-only and schema-only pass from repo."""
+
 from __future__ import annotations
 
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 
 def _repo_root() -> Path:

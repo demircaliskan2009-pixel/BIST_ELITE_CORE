@@ -2,6 +2,7 @@
 FAZ71: Live preflight v2 — config ok, broker config ok, BIST rule tables present, orders_intent present.
 Always write execution_result.json deterministically even on failure.
 """
+
 from __future__ import annotations
 
 import json
@@ -9,8 +10,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 
 def _bist_fixture_dir(tmp_path: Path) -> Path:
@@ -45,8 +44,16 @@ def _run_eod_execute_live(
     if bist_restrictions_file is not None:
         env["BIST_RESTRICTIONS_FILE"] = str(bist_restrictions_file)
     cmd = [
-        sys.executable, "-m", "bist_core.cli", "eod", "execute",
-        "--day", day, "--outdir", str(outdir), "--live",
+        sys.executable,
+        "-m",
+        "bist_core.cli",
+        "eod",
+        "execute",
+        "--day",
+        day,
+        "--outdir",
+        str(outdir),
+        "--live",
     ]
     if config_path is not None:
         cmd.extend(["--config", config_path])
@@ -79,7 +86,7 @@ def test_faz71_execution_result_deterministic_schema(tmp_path: Path) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
     bad_config = tmp_path / "bad.json"
     bad_config.write_text("{}", encoding="utf-8")
-    r = _run_eod_execute_live("2099-01-16", outdir, config_path=str(bad_config))
+    _run_eod_execute_live("2099-01-16", outdir, config_path=str(bad_config))
     result_path = outdir / "2099-01-16" / "execution_result.json"
     assert result_path.is_file()
     data = json.loads(result_path.read_text(encoding="utf-8"))
@@ -94,22 +101,27 @@ def test_faz71_no_manifest_writes_execution_result(tmp_path: Path) -> None:
     bist_dir = _bist_fixture_dir(tmp_path)
     valid_config = tmp_path / "core.json"
     valid_config.write_text(
-        json.dumps({
-            "timezone": "Europe/Istanbul",
-            "default_spread_bps_max": 80,
-            "default_adv_tl_min": 30000000,
-            "default_auction_ratio_max": 0.15,
-            "default_price_band_pct": 20.0,
-            "risk_per_trade": 0.015,
-        }),
+        json.dumps(
+            {
+                "timezone": "Europe/Istanbul",
+                "default_spread_bps_max": 80,
+                "default_adv_tl_min": 30000000,
+                "default_auction_ratio_max": 0.15,
+                "default_price_band_pct": 20.0,
+                "risk_per_trade": 0.015,
+            }
+        ),
         encoding="utf-8",
     )
     outdir = tmp_path / "out"
     outdir.mkdir(parents=True, exist_ok=True)
     r = _run_eod_execute_live(
-        "2099-01-17", outdir,
-        config_path=str(valid_config), broker="paper",
-        bist_rulespack_dir=bist_dir, bist_restrictions_file=bist_dir / "restrictions.json",
+        "2099-01-17",
+        outdir,
+        config_path=str(valid_config),
+        broker="paper",
+        bist_rulespack_dir=bist_dir,
+        bist_restrictions_file=bist_dir / "restrictions.json",
     )
     assert r.returncode == 2
     result_path = outdir / "2099-01-17" / "execution_result.json"
@@ -125,32 +137,39 @@ def test_faz71_no_orders_intent_writes_execution_result(tmp_path: Path) -> None:
     bist_dir = _bist_fixture_dir(tmp_path)
     valid_config = tmp_path / "core.json"
     valid_config.write_text(
-        json.dumps({
-            "timezone": "Europe/Istanbul",
-            "default_spread_bps_max": 80,
-            "default_adv_tl_min": 30000000,
-            "default_auction_ratio_max": 0.15,
-            "default_price_band_pct": 20.0,
-            "risk_per_trade": 0.015,
-        }),
+        json.dumps(
+            {
+                "timezone": "Europe/Istanbul",
+                "default_spread_bps_max": 80,
+                "default_adv_tl_min": 30000000,
+                "default_auction_ratio_max": 0.15,
+                "default_price_band_pct": 20.0,
+                "risk_per_trade": 0.015,
+            }
+        ),
         encoding="utf-8",
     )
     outdir = tmp_path / "out"
     day = "2099-01-18"
     (outdir / day).mkdir(parents=True, exist_ok=True)
     (outdir / "pipeline_manifest.json").write_text(
-        json.dumps({
-            "schema_version": 2,
-            "day": day,
-            "stages": {},
-            "orders_intent_path": str(outdir / "orders" / day / "orders_intent.json"),
-        }),
+        json.dumps(
+            {
+                "schema_version": 2,
+                "day": day,
+                "stages": {},
+                "orders_intent_path": str(outdir / "orders" / day / "orders_intent.json"),
+            }
+        ),
         encoding="utf-8",
     )
     r = _run_eod_execute_live(
-        day, outdir,
-        config_path=str(valid_config), broker="paper",
-        bist_rulespack_dir=bist_dir, bist_restrictions_file=bist_dir / "restrictions.json",
+        day,
+        outdir,
+        config_path=str(valid_config),
+        broker="paper",
+        bist_rulespack_dir=bist_dir,
+        bist_restrictions_file=bist_dir / "restrictions.json",
     )
     assert r.returncode == 2
     result_path = outdir / day / "execution_result.json"
@@ -165,14 +184,16 @@ def test_faz71_broker_config_missing_writes_execution_result(tmp_path: Path) -> 
     """Live + broker not paper + BIST_BROKER_CONFIG missing -> execution_result.json written, exit 2."""
     valid_config = tmp_path / "core.json"
     valid_config.write_text(
-        json.dumps({
-            "timezone": "Europe/Istanbul",
-            "default_spread_bps_max": 80,
-            "default_adv_tl_min": 30000000,
-            "default_auction_ratio_max": 0.15,
-            "default_price_band_pct": 20.0,
-            "risk_per_trade": 0.015,
-        }),
+        json.dumps(
+            {
+                "timezone": "Europe/Istanbul",
+                "default_spread_bps_max": 80,
+                "default_adv_tl_min": 30000000,
+                "default_auction_ratio_max": 0.15,
+                "default_price_band_pct": 20.0,
+                "risk_per_trade": 0.015,
+            }
+        ),
         encoding="utf-8",
     )
     outdir = tmp_path / "out"
@@ -192,7 +213,22 @@ def test_faz71_broker_config_missing_writes_execution_result(tmp_path: Path) -> 
     env["BIST_CORE_CONFIG"] = str(valid_config)
     env.pop("BIST_BROKER_CONFIG", None)
     r = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "eod", "execute", "--day", day, "--outdir", str(outdir), "--live", "--execution", "live", "--broker", "stub"],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "eod",
+            "execute",
+            "--day",
+            day,
+            "--outdir",
+            str(outdir),
+            "--live",
+            "--execution",
+            "live",
+            "--broker",
+            "stub",
+        ],
         env=env,
         capture_output=True,
         text=True,

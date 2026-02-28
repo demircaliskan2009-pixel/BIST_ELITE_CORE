@@ -1,4 +1,5 @@
 """FAZ118-HOTFIX-TRNUM+UX: ask --symbol QNBFK alias."""
+
 from __future__ import annotations
 
 import os

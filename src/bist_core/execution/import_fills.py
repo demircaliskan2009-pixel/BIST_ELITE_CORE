@@ -1,4 +1,5 @@
 """FAZ597: Import fills CSV — validate, FIFO, write reports. Offline."""
+
 from __future__ import annotations
 
 import argparse
@@ -68,10 +69,10 @@ def main() -> int:
     )
 
     print(f"import_fills: day={args.day} out={out_dir}")
-    print(f"  fills_normalized.csv")
-    print(f"  realized_trades.csv")
-    print(f"  positions.csv")
-    print(f"  execution_summary.json")
+    print("  fills_normalized.csv")
+    print("  realized_trades.csv")
+    print("  positions.csv")
+    print("  execution_summary.json")
     return 0
 
 

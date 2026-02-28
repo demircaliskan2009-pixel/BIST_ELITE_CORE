@@ -1,4 +1,5 @@
 """FAZ92/93: Document ingest (sha256 doc_id), store by sha256 key, keyword retrieval."""
+
 from __future__ import annotations
 
 from bist_core.memory.doc_ingest import doc_id_from_content, ingest_doc

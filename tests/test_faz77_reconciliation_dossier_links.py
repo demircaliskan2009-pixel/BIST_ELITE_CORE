@@ -1,4 +1,5 @@
 """FAZ77: Reconciliation stage (intended vs fills), deterministic reconciliation.json; dossier evidence includes reconciliation + execution_result + ledger paths."""
+
 from __future__ import annotations
 
 import json
@@ -7,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 from bist_core.reconciliation.write import (
     RECONCILIATION_FILENAME,
@@ -71,7 +71,16 @@ def test_write_reconciliation_path_and_content(tmp_path: Path) -> None:
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["matched"] == ["A"]
     assert data["status"] == "ok"
-    assert set(data.keys()) >= {"schema_version", "day", "intended_count", "fills_count", "matched", "unmatched_actions", "unmatched_fills", "status"}
+    assert set(data.keys()) >= {
+        "schema_version",
+        "day",
+        "intended_count",
+        "fills_count",
+        "matched",
+        "unmatched_actions",
+        "unmatched_fills",
+        "status",
+    }
 
 
 def test_dossier_includes_reconciliation_and_ledger_paths(tmp_path: Path) -> None:
@@ -152,16 +161,38 @@ def test_live_execute_writes_reconciliation_and_updates_dossier(tmp_path: Path) 
     day = "2025-01-31"
     (tmp_path / day).mkdir(parents=True)
     (tmp_path / day / "pipeline_manifest.json").write_text(
-        json.dumps({"schema_version": 2, "day": day, "stages": {}, "orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json")}),
+        json.dumps(
+            {
+                "schema_version": 2,
+                "day": day,
+                "stages": {},
+                "orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json"),
+            }
+        ),
         encoding="utf-8",
     )
     (tmp_path / "orders" / day).mkdir(parents=True)
     (tmp_path / "orders" / day / "orders_intent.json").write_text(
-        json.dumps({"day": day, "actions": [{"symbol": "THYAO", "side": "BUY", "weight": 0.5}, {"symbol": "AKBNK", "side": "BUY", "weight": 0.5}]}),
+        json.dumps(
+            {
+                "day": day,
+                "actions": [
+                    {"symbol": "THYAO", "side": "BUY", "weight": 0.5},
+                    {"symbol": "AKBNK", "side": "BUY", "weight": 0.5},
+                ],
+            }
+        ),
         encoding="utf-8",
     )
     (tmp_path / "dossier" / day).mkdir(parents=True)
-    write_dossier(day, tmp_path, {"advice_path": str(tmp_path / "advice.jsonl"), "orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json")})
+    write_dossier(
+        day,
+        tmp_path,
+        {
+            "advice_path": str(tmp_path / "advice.jsonl"),
+            "orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json"),
+        },
+    )
     r = subprocess.run(
         [sys.executable, "-m", "bist_core.cli", "eod", "execute", "--day", day, "--outdir", str(tmp_path), "--live"],
         env=env,

@@ -1,4 +1,5 @@
 """FAZ51: Research cache (atomic jsonl under outdir/<day>/research/)."""
+
 from __future__ import annotations
 
 import json

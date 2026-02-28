@@ -43,9 +43,7 @@ def test_dossier_includes_snapshot_hash(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 0
-    dossier_manifest = json.loads(
-        (outdir / "dossiers" / "_manifest.json").read_text(encoding="utf-8")
-    )
+    dossier_manifest = json.loads((outdir / "dossiers" / "_manifest.json").read_text(encoding="utf-8"))
     snapshot_hash = dossier_manifest["provenance"]["snapshot_hash"]
     assert snapshot_hash["algo"] == "sha256"
     assert re.fullmatch(r"[0-9a-f]{64}", snapshot_hash["value"])

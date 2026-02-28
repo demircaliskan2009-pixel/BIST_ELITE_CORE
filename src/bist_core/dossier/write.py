@@ -3,12 +3,13 @@ FAZ60: Dossier writer linking advice + research + risk decisions.
 Writes outdir/dossier/<day>/dossier.json with stable ordering and evidence pointers (paths + hashes).
 FAZ118-STEP1A: Windows-safe atomic write with retry (PermissionError / WinError 32).
 """
+
 from __future__ import annotations
 
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 
 def _atomic_write_with_retry(tmp_path: Path, out_path: Path, content: str) -> None:
@@ -49,6 +50,7 @@ def _file_hash(path: Path) -> Optional[str]:
         return None
     try:
         from bist_core.services import snapshot_integrity
+
         return snapshot_integrity.compute_sha256(path)
     except Exception:
         return None
@@ -166,6 +168,7 @@ def write_dossier(
     stable = _stable_payload(payload)
     try:
         from bist_core.security.redact import redact_recursive
+
         stable = redact_recursive(stable)
     except Exception:
         pass
@@ -208,6 +211,7 @@ def update_dossier_evidence(outdir: Path | str, day: str, extra_evidence: Dict[s
         }
         try:
             from bist_core.security.redact import redact_recursive
+
             payload = redact_recursive(payload)
         except Exception:
             pass

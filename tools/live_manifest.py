@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """FAZ576: Live run manifest — inputs, outputs, symbols, horizons, versions, sha. Deterministic."""
+
 from __future__ import annotations
 
 import json
@@ -138,6 +139,7 @@ def write_manifest(manifest: dict, reports_dir: Path) -> Path:
 
 def main() -> int:
     import argparse
+
     p = argparse.ArgumentParser(description="FAZ576: Build live run manifest")
     p.add_argument("--day", required=True)
     p.add_argument("--out-root", default="data/log")
@@ -165,17 +167,11 @@ def main() -> int:
         try:
             data = json.loads(scan_path.read_text(encoding="utf-8"))
             ranked = data.get("ranked") or []
-            symbols = sorted(
-                item["symbol"] for item in ranked
-                if isinstance(item, dict) and item.get("symbol")
-            )
+            symbols = sorted(item["symbol"] for item in ranked if isinstance(item, dict) and item.get("symbol"))
         except (json.JSONDecodeError, OSError):
             pass
     if not symbols and paths["ask"].is_dir():
-        symbols = sorted(
-            p.stem for p in paths["ask"].glob("*.json")
-            if p.stem and not p.name.startswith(".")
-        )
+        symbols = sorted(p.stem for p in paths["ask"].glob("*.json") if p.stem and not p.name.startswith("."))
 
     manifest = build_manifest(
         day=args.day,

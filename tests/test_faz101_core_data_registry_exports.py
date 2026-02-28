@@ -1,12 +1,12 @@
 """FAZ101: Core API import stability — bist_core.core exports and __all__."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 
 def test_faz101_import_bist_core_core_no_error() -> None:
     """import bist_core.core must work (no ImportError)."""
     import bist_core.core  # noqa: F401
+
     assert bist_core.core is not None
 
 

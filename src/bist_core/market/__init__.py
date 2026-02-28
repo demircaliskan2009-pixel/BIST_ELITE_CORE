@@ -1,4 +1,5 @@
 """Market: instrument master and corporate actions apply (load paths via env/arg)."""
+
 from __future__ import annotations
 
 from bist_core.market.instrument_master import load_instrument_master_from_path, resolve_instrument_master_path

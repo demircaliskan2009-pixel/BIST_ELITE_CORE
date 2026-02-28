@@ -7,12 +7,11 @@ import sys
 import threading
 from http.server import SimpleHTTPRequestHandler
 from pathlib import Path
+import functools
 
 
 def _start_server(directory: Path) -> tuple[socketserver.TCPServer, int]:
-    handler = lambda *args, **kwargs: SimpleHTTPRequestHandler(
-        *args, directory=str(directory), **kwargs
-    )
+    handler = functools.partial(SimpleHTTPRequestHandler, directory=str(directory))
     httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()

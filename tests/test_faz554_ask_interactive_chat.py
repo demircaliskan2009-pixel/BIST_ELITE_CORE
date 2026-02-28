@@ -1,4 +1,5 @@
 """FAZ554: Ask interactive chat — prompt for symbol, day, params; scripted dialogue tests."""
+
 from __future__ import annotations
 
 import os

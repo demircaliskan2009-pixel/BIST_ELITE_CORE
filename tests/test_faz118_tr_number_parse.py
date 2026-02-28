@@ -1,7 +1,7 @@
 """FAZ118-HOTFIX-TRNUM: Turkish number format parsing (30.000 -> 30000, 30,5 -> 30.5)."""
+
 from __future__ import annotations
 
-import pytest
 
 from bist_core.cli.main import _parse_tr_number
 

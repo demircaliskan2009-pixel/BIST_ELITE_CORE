@@ -1,4 +1,5 @@
 """FAZ552: API deterministic CLI parity — API ask/scan output matches CLI --json."""
+
 from __future__ import annotations
 
 import json

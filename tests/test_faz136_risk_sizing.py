@@ -1,4 +1,5 @@
 """FAZ136: Risk sizing from capital, max_loss, stop distance."""
+
 from __future__ import annotations
 
 import json
@@ -107,10 +108,10 @@ def test_faz136_risk_sizing_in_artifact(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     for i in range(25):
-        d = snap_root / f"2098-12-{i+1:02d}"
+        d = snap_root / f"2098-12-{i + 1:02d}"
         d.mkdir(parents=True, exist_ok=True)
         (d / "snapshot.csv").write_text(
-            f"symbol,close,open,high,low,volume\nAAA,{100-i},99,101,98,1000000\n",
+            f"symbol,close,open,high,low,volume\nAAA,{100 - i},99,101,98,1000000\n",
             encoding="utf-8",
         )
     out_dir = tmp_path / "out"
@@ -119,6 +120,7 @@ def test_faz136_risk_sizing_in_artifact(tmp_path: Path) -> None:
     env["BIST_CORE_SNAPSHOT_DIR"] = str(snap_root)
 
     import subprocess
+
     result = subprocess.run(
         [
             sys.executable,

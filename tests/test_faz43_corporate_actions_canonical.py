@@ -1,4 +1,5 @@
 """FAZ43: Corporate actions canonicalization; event_id stable and sorted; bound to instrument_id."""
+
 from __future__ import annotations
 
 import json
@@ -11,7 +12,6 @@ def test_faz43_event_id_stable_and_sorted(tmp_path: Path) -> None:
         build_canonical,
         canonicalize_row,
         _event_id,
-        write_canonical,
     )
 
     symbol_to_id = {"AAA": "ID1", "BBB": "ID2"}

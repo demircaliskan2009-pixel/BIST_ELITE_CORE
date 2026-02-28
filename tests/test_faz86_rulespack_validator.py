@@ -1,4 +1,5 @@
 """FAZ86: Rulespack validator — tick/bands/vbts/restrictions required; missing -> exit 2 + execution_result.json."""
+
 from __future__ import annotations
 
 import json
@@ -7,14 +8,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 from bist_core.rules.validator import validate_rulespack
 
 
 def test_faz86_validator_missing_rulespack_returns_errors(tmp_path: Path) -> None:
     """validate_rulespack with nonexistent rulespack dir -> errors contain bist_rules_tick_bands_missing."""
-    ok, errors = validate_rulespack(rulespack_dir=tmp_path / "nonexistent", restrictions_path=tmp_path / "nonexistent.json")
+    ok, errors = validate_rulespack(
+        rulespack_dir=tmp_path / "nonexistent", restrictions_path=tmp_path / "nonexistent.json"
+    )
     assert ok is False
     assert "bist_rules_tick_bands_missing" in errors
 
@@ -24,7 +26,9 @@ def test_faz86_validator_missing_restrictions_returns_errors(tmp_path: Path) -> 
     (tmp_path / "bist").mkdir()
     (tmp_path / "bist" / "tick_sizes.csv").write_text("min_price,max_price,tick\n0,99,0.01\n", encoding="utf-8")
     (tmp_path / "bist" / "price_bands.csv").write_text("band_pct,market\n10,\n", encoding="utf-8")
-    ok, errors = validate_rulespack(rulespack_dir=tmp_path / "bist", restrictions_path=tmp_path / "nonexistent_restrictions.json")
+    ok, errors = validate_rulespack(
+        rulespack_dir=tmp_path / "bist", restrictions_path=tmp_path / "nonexistent_restrictions.json"
+    )
     assert ok is False
     assert "bist_rules_vbts_missing" in errors
 
@@ -35,7 +39,16 @@ def test_faz86_live_execute_missing_rules_exit_2_and_execution_result(tmp_path: 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
     (tmp_path / "core.json").write_text(
-        json.dumps({"timezone": "Europe/Istanbul", "default_spread_bps_max": 80, "default_adv_tl_min": 30000000, "default_auction_ratio_max": 0.15, "default_price_band_pct": 20.0, "risk_per_trade": 0.015}),
+        json.dumps(
+            {
+                "timezone": "Europe/Istanbul",
+                "default_spread_bps_max": 80,
+                "default_adv_tl_min": 30000000,
+                "default_auction_ratio_max": 0.15,
+                "default_price_band_pct": 20.0,
+                "risk_per_trade": 0.015,
+            }
+        ),
         encoding="utf-8",
     )
     env["BIST_CORE_CONFIG"] = str(tmp_path / "core.json")
@@ -57,7 +70,20 @@ def test_faz86_live_execute_missing_rules_exit_2_and_execution_result(tmp_path: 
     )
 
     r = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "eod", "execute", "--day", day, "--outdir", str(tmp_path), "--live", "--broker", "paper"],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "eod",
+            "execute",
+            "--day",
+            day,
+            "--outdir",
+            str(tmp_path),
+            "--live",
+            "--broker",
+            "paper",
+        ],
         env=env,
         capture_output=True,
         text=True,

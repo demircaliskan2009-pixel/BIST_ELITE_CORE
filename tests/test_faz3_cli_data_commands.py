@@ -11,9 +11,7 @@ def _write_sample_csv(tmp_path: Path) -> Path:
     csv_dir.mkdir()
     csv_file = csv_dir / "sample.csv"
     csv_file.write_text(
-        "symbol,date,close\n"
-        "AAA,2025-01-01,10.0\n"
-        "AAA,2025-01-02,10.5\n",
+        "symbol,date,close\nAAA,2025-01-01,10.0\nAAA,2025-01-02,10.5\n",
         encoding="utf-8",
     )
     return csv_dir

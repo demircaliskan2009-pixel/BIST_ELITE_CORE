@@ -141,9 +141,7 @@ def run_eod_pipeline(
         }
 
     snapshot_hash = None
-    policy_effective = (
-        str(policy_file) if policy_file is not None else os.getenv("BIST_CORE_POLICY_FILE")
-    )
+    policy_effective = str(policy_file) if policy_file is not None else os.getenv("BIST_CORE_POLICY_FILE")
     policy_errors: list[str] = []
     policy_prov = None
     policy_ruleset = None
@@ -167,9 +165,7 @@ def run_eod_pipeline(
             stages["policy"]["errors"] = len(policy_errors)
             stages["policy"]["notes"] = policy_errors
     try:
-        hash_manifest = snapshot_integrity.build_eod_snapshot(
-            day_str, root, root
-        )
+        hash_manifest = snapshot_integrity.build_eod_snapshot(day_str, root, root)
         snapshot_hash = {"algo": "sha256", "value": hash_manifest["sha256"]}
         snapshot_path = root / day_str / "snapshot.csv"
     except FileNotFoundError:
@@ -296,25 +292,19 @@ def run_eod_pipeline(
     base_symbols, eod_raw_cache = _load_symbols(md_provider, day_str)
     filtered = _filter_symbols(base_symbols, symbols, regex, limit)
     sorted_symbols = sorted(filtered)
-    instrument_master_prov: Optional[dict] = None
     unknown_symbols: list[str] = []
     instrument_resolution: Optional[dict] = None
     symbol_to_id: dict = {}
     if instrument_master and not ignore_instrument_master:
         master_path = Path(instrument_master)
         master_set, meta, symbol_to_id = instrument_master_mod.load_instrument_master(master_path)
-        instrument_master_prov = meta
-        unknown_symbols = sorted(
-            s for s in sorted_symbols if (s or "").strip().upper() not in master_set
-        )
+        unknown_symbols = sorted(s for s in sorted_symbols if (s or "").strip().upper() not in master_set)
         if unknown_symbols:
             stages["instrument_master"]["ok"] = False
             stages["instrument_master"]["errors"] = len(unknown_symbols)
             stages["instrument_master"]["notes"] = unknown_symbols
         if symbol_to_id:
-            instrument_resolution = instrument_master_mod.resolve_symbols(
-                list(sorted_symbols), symbol_to_id
-            )
+            instrument_resolution = instrument_master_mod.resolve_symbols(list(sorted_symbols), symbol_to_id)
     else:
         stages["instrument_master"]["notes"] = ["ignored"] if ignore_instrument_master else []
     safe_mode_reason: Optional[str] = None
@@ -367,7 +357,13 @@ def run_eod_pipeline(
     elif model_plugin is not None and hasattr(model_plugin, "predict"):
         _model_plugin = model_plugin
     advice_result = generate_advice(
-        day_str, root, out_path, symbols=sorted_symbols, top_n=None, safe_mode_reason=safe_mode_reason, model_plugin=_model_plugin
+        day_str,
+        root,
+        out_path,
+        symbols=sorted_symbols,
+        top_n=None,
+        safe_mode_reason=safe_mode_reason,
+        model_plugin=_model_plugin,
     )
     advice_path = Path(advice_result["path"]) / "advice_records.jsonl"
     advice_records_for_orders = [
@@ -390,6 +386,7 @@ def run_eod_pipeline(
     advice_records = advice_records_for_orders
 
     try:
+
         def _context_provider(sym: str, d: str) -> dict:
             return features_load_history(root, sym, d, lookback_days=21)
 
@@ -461,7 +458,10 @@ def run_eod_pipeline(
         restrictions_path = Path(restrictions_file) if restrictions_file else get_restrictions_path()
         if restrictions_path and restrictions_path.is_file():
             restrictions_state, restrictions_prov = load_restrictions(restrictions_path)
-            restrictions_provenance = {"file": restrictions_prov.get("file", str(restrictions_path)), "sha256": restrictions_prov.get("sha256", "")}
+            restrictions_provenance = {
+                "file": restrictions_prov.get("file", str(restrictions_path)),
+                "sha256": restrictions_prov.get("sha256", ""),
+            }
             if restrictions_state.get("blocked_symbols") or restrictions_state.get("short_sale_ban"):
                 res_result = gate_restrictions(orders_payload, restrictions_state)
                 if not res_result.get("ok"):
@@ -489,9 +489,7 @@ def run_eod_pipeline(
         limit=limit,
         snapshot_hash=snapshot_hash,
     )
-    dossiers_sorted = sorted(
-        dossiers, key=lambda d: d.get("symbol", "")
-    )
+    dossiers_sorted = sorted(dossiers, key=lambda d: d.get("symbol", ""))
     for dossier in dossiers_sorted:
         symbol = dossier.get("symbol", "UNKNOWN")
         atomic_write_json(dossier_dir / f"{symbol}.json", dossier)
@@ -511,7 +509,6 @@ def run_eod_pipeline(
     }
     dossier_json_path: Optional[Path] = None
 
-    events_manifest = None
     if events_provider and (events_provider == "kap_html" or events_input):
         try:
             if events_provider == "kap_html":
@@ -521,6 +518,7 @@ def run_eod_pipeline(
                 provider = OfflineFileEventsProvider(Path(events_input)) if events_input else None
                 if provider is None:
                     from bist_core.providers.events.kap_html import KapHtmlEventsProvider
+
                     base_url = os.getenv("BIST_KAP_BASE_URL", "https://www.kap.org.tr")
                     url_tpl = os.getenv("BIST_KAP_URL_TEMPLATE") or os.getenv("BIST_KAP_EVENTS_URL_TEMPLATE")
                     provider = KapHtmlEventsProvider(
@@ -720,9 +718,7 @@ def run_eod_pipeline(
         else config.REPO_ROOT / "data" / "eod" / "instruments" / day_str
     )
     ca_dir = (
-        Path(ca_outdir)
-        if ca_outdir is not None
-        else config.REPO_ROOT / "data" / "eod" / "corporate_actions" / day_str
+        Path(ca_outdir) if ca_outdir is not None else config.REPO_ROOT / "data" / "eod" / "corporate_actions" / day_str
     )
     canonical_errors = 0
     canon_out = out_path / day_str / "corporate_actions" / "actions_canonical.jsonl"
@@ -788,7 +784,9 @@ def run_eod_pipeline(
     if research_source:
         try:
             _research_url = research_url or os.environ.get("BIST_RESEARCH_URL")
-            _http_cache_dir = research_http_cache_dir if research_http_cache_dir is not None else (out_path / ".http_cache")
+            _http_cache_dir = (
+                research_http_cache_dir if research_http_cache_dir is not None else (out_path / ".http_cache")
+            )
             _kap_fixture = research_kap_fixture_path or os.environ.get("BIST_KAP_FIXTURE_PATH")
             res = build_research_cache(
                 day_str,
@@ -913,7 +911,20 @@ def _build_stage_provenance(
         "inputs": {"policy": policy_prov} if policy_prov else {},
         "inputs_hash": (policy_prov.get("hash", {}).get("value") or "") if policy_prov else "",
     }
-    for name in ("advice", "dossier", "events", "instruments", "corporate_actions", "universe", "features", "calendar", "instrument_master", "price_adjust", "research", "orders"):
+    for name in (
+        "advice",
+        "dossier",
+        "events",
+        "instruments",
+        "corporate_actions",
+        "universe",
+        "features",
+        "calendar",
+        "instrument_master",
+        "price_adjust",
+        "research",
+        "orders",
+    ):
         prov[name] = {"inputs": {}, "inputs_hash": ""}
     return prov
 
@@ -1119,10 +1130,7 @@ def _build_advice_records(
                 "score": 0.0,
                 "signals": [],
                 "plan": None,
-                "text": (
-                    f"Güvenli mod: {err}. "
-                    "Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
-                ),
+                "text": (f"Güvenli mod: {err}. Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."),
             }
             errors += 1
         records.append(payload)

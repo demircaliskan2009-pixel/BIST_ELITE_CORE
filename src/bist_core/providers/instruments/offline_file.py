@@ -13,9 +13,7 @@ class OfflineFileInstrumentsProvider(InstrumentsProvider):
         self.input_path = input_path
 
     def pull(self, day: str, outdir: Path, **kwargs) -> Path:
-        records, _ = instrumentstore.parse_instruments(
-            self.input_path, source=self.name
-        )
+        records, _ = instrumentstore.parse_instruments(self.input_path, source=self.name)
         deduped = instrumentstore.dedupe_instruments(records)
         out_path = outdir / "instruments.jsonl"
         instrumentstore.atomic_write_jsonl(out_path, deduped)

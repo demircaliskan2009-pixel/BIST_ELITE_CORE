@@ -1,4 +1,5 @@
 """FAZ149: Scan stable ordering — deterministic tie-break for equal scores. Schema, golden, edge tests."""
+
 from __future__ import annotations
 
 import json

@@ -1,4 +1,5 @@
 """FAZ151: Scan top_n validation — validate top_n within bounds. Test-first."""
+
 from __future__ import annotations
 
 import json

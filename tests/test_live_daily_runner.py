@@ -1,22 +1,24 @@
 """FAZ566: Live daily runner — scan, ask, evaluate, report. Offline. Deterministic."""
+
 from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import pytest
 
 # Import from tools (repo root in path for tests)
 import sys
+
 _repo = Path(__file__).resolve().parents[1]
 if str(_repo) not in sys.path:
     sys.path.insert(0, str(_repo))
-from tools.live_daily_runner import run_live_daily, _ensure_dirs, _run_scan
+from tools.live_daily_runner import run_live_daily, _ensure_dirs
 
 
 def _build_snapshot_series(base: Path, day: str, n_days: int, symbol_prices: dict[str, list[float]]) -> None:
     """Build snapshot dir with price series. day is last day."""
+    # ruff: noqa: E402
     dt = datetime.strptime(day, "%Y-%m-%d")
     for i in range(n_days):
         d = (dt - timedelta(days=n_days - 1 - i)).strftime("%Y-%m-%d")

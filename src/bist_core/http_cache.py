@@ -2,11 +2,11 @@
 FAZ67: Offline-first HTTP client with deterministic disk cache (TTL, sha256 key, response metadata).
 Fixture mode: no network, cache-only for tests. Uses urllib only (no new deps).
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple

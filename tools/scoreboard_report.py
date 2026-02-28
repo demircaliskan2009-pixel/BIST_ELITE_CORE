@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """FAZ572: Live test scoreboard — BUY/SELL/HOLD + forward returns. Purely derived from artifacts + bars."""
+
 from __future__ import annotations
 
 import csv
@@ -85,18 +86,12 @@ def build_scoreboard(
         try:
             data = json.loads(scan_path.read_text(encoding="utf-8"))
             ranked = data.get("ranked") or []
-            symbols = sorted(
-                item["symbol"] for item in ranked
-                if isinstance(item, dict) and item.get("symbol")
-            )
+            symbols = sorted(item["symbol"] for item in ranked if isinstance(item, dict) and item.get("symbol"))
         except (json.JSONDecodeError, OSError):
             pass
 
     if not symbols and ask_dir.is_dir():
-        symbols = sorted(
-            p.stem for p in ask_dir.glob("*.json")
-            if p.stem and not p.name.startswith(".")
-        )
+        symbols = sorted(p.stem for p in ask_dir.glob("*.json") if p.stem and not p.name.startswith("."))
 
     close_today = _close_map(snapshot_root, day)
     if close_today is None:

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """FAZ566: Live daily runner — scan, ask, evaluate, report. Offline. Deterministic. Fail-closed."""
+
 from __future__ import annotations
 
 import json
@@ -39,10 +40,16 @@ def _run_scan(
     """Run scan, return (exit_code, symbols). Writes scan_out_base/day/scan.json."""
     scan_out_base.mkdir(parents=True, exist_ok=True)
     cmd = [
-        sys.executable, "-m", "bist_core.cli", "scan",
-        "--day", day,
-        "--top-n", str(top_n),
-        "--out", str(scan_out_base),
+        sys.executable,
+        "-m",
+        "bist_core.cli",
+        "scan",
+        "--day",
+        day,
+        "--top-n",
+        str(top_n),
+        "--out",
+        str(scan_out_base),
     ]
     r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=120)
     if r.returncode != 0:
@@ -58,9 +65,15 @@ def _run_scan(
 def _run_ask(symbol: str, day: str, ask_dir: Path, env: dict[str, str]) -> int:
     """Run ask for one symbol. Returns exit code."""
     cmd = [
-        sys.executable, "-m", "bist_core.cli", "ask", symbol,
-        "--day", day,
-        "--out", str(ask_dir.parent),
+        sys.executable,
+        "-m",
+        "bist_core.cli",
+        "ask",
+        symbol,
+        "--day",
+        day,
+        "--out",
+        str(ask_dir.parent),
     ]
     r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
     return r.returncode
@@ -74,10 +87,16 @@ def _run_evaluate_outcomes(
 ) -> int:
     """Run evaluate-outcomes. Returns exit code."""
     cmd = [
-        sys.executable, "-m", "bist_core.cli", "evaluate-outcomes",
-        "--strategies", str(strategies_path),
-        "--outcomes", str(outcomes_path),
-        "--snapshot-root", str(snapshot_root),
+        sys.executable,
+        "-m",
+        "bist_core.cli",
+        "evaluate-outcomes",
+        "--strategies",
+        str(strategies_path),
+        "--outcomes",
+        str(outcomes_path),
+        "--snapshot-root",
+        str(snapshot_root),
     ]
     r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=120)
     return r.returncode
@@ -87,9 +106,14 @@ def _run_performance_report(outcomes_path: Path, json_path: Path, csv_path: Path
     """Run performance-report for JSON and CSV. Returns exit code."""
     for out_path, extra in [(json_path, []), (csv_path, ["--csv"])]:
         cmd = [
-            sys.executable, "-m", "bist_core.cli", "performance-report",
-            "--outcomes", str(outcomes_path),
-            "--out", str(out_path),
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "performance-report",
+            "--outcomes",
+            str(outcomes_path),
+            "--out",
+            str(out_path),
             *extra,
         ]
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=30)
@@ -151,6 +175,7 @@ def run_live_daily(
     horizons = [1, 5, 20]
     try:
         from tools.scoreboard_report import build_scoreboard, write_scoreboard
+
         report = build_scoreboard(day, out_root, snapshot_root, horizons)
         write_scoreboard(report, paths["reports"])
     except Exception:
@@ -165,15 +190,24 @@ def run_live_daily(
             topn_script = _repo_root() / "tools" / "topn_horizon_rank.py"
             for h in (1, 3, 5, 20):
                 cmd = [
-                    sys.executable, str(topn_script),
-                    "--day", day,
-                    "--horizon", str(h),
-                    "--top", str(top_n),
-                    "--scan", str(scan_json),
-                    "--out-root", str(out_root),
-                    "--snapshot-root", str(snapshot_root),
+                    sys.executable,
+                    str(topn_script),
+                    "--day",
+                    day,
+                    "--horizon",
+                    str(h),
+                    "--top",
+                    str(top_n),
+                    "--scan",
+                    str(scan_json),
+                    "--out-root",
+                    str(out_root),
+                    "--snapshot-root",
+                    str(snapshot_root),
                 ]
-                r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=120)
+                r = subprocess.run(
+                    cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=120
+                )
                 if r.returncode == 2:
                     print(f"faz590: topn_h{h} input missing (exit 2), continuing", file=sys.stderr)
                 elif r.returncode == 1:
@@ -188,14 +222,22 @@ def run_live_daily(
         bundle_script = _repo_root() / "tools" / "topn_bundle_report.py"
         for h in (1, 3, 5, 20):
             cmd = [
-                sys.executable, str(bundle_script),
-                "--day", day,
-                "--horizon", str(h),
-                "--top", str(top_n),
-                "--reports-root", str(reports_root),
-                "--snapshot-root", str(snapshot_root),
+                sys.executable,
+                str(bundle_script),
+                "--day",
+                day,
+                "--horizon",
+                str(h),
+                "--top",
+                str(top_n),
+                "--reports-root",
+                str(reports_root),
+                "--snapshot-root",
+                str(snapshot_root),
             ]
-            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=120)
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=120
+            )
             if r.returncode == 2:
                 print(f"faz591: topn_bundle_h{h} input missing (exit 2), continuing", file=sys.stderr)
             elif r.returncode == 1:
@@ -205,14 +247,22 @@ def run_live_daily(
         risk_script = _repo_root() / "tools" / "risk_sizer.py"
         for h in (1, 3, 5, 20):
             cmd = [
-                sys.executable, str(risk_script),
-                "--day", day,
-                "--horizon", str(h),
-                "--top", str(top_n),
-                "--reports-root", str(reports_root),
-                "--snapshot-root", str(snapshot_root),
+                sys.executable,
+                str(risk_script),
+                "--day",
+                day,
+                "--horizon",
+                str(h),
+                "--top",
+                str(top_n),
+                "--reports-root",
+                str(reports_root),
+                "--snapshot-root",
+                str(snapshot_root),
             ]
-            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=120)
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=120
+            )
             if r.returncode == 2:
                 print(f"faz591: risk_plan_h{h} input missing (exit 2), continuing", file=sys.stderr)
             elif r.returncode == 1:
@@ -223,14 +273,22 @@ def run_live_daily(
         lock_script = _repo_root() / "tools" / "pick_lock.py"
         for h in (1, 3, 5, 20):
             cmd = [
-                sys.executable, str(lock_script),
-                "--day", day,
-                "--horizon", str(h),
-                "--top", str(top_n),
-                "--reports-root", str(reports_root),
-                "--picks-root", str(picks_root),
+                sys.executable,
+                str(lock_script),
+                "--day",
+                day,
+                "--horizon",
+                str(h),
+                "--top",
+                str(top_n),
+                "--reports-root",
+                str(reports_root),
+                "--picks-root",
+                str(picks_root),
             ]
-            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60
+            )
             if r.returncode == 2:
                 print(f"faz592: picks_h{h} input missing (exit 2), continuing", file=sys.stderr)
             elif r.returncode == 1:
@@ -240,13 +298,20 @@ def run_live_daily(
         eval_script = _repo_root() / "tools" / "pick_eval.py"
         for h in (1, 3, 5, 20):
             cmd = [
-                sys.executable, str(eval_script),
-                "--day", day,
-                "--horizon", str(h),
-                "--picks-root", str(picks_root),
-                "--snapshot-root", str(snapshot_root),
+                sys.executable,
+                str(eval_script),
+                "--day",
+                day,
+                "--horizon",
+                str(h),
+                "--picks-root",
+                str(picks_root),
+                "--snapshot-root",
+                str(snapshot_root),
             ]
-            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60
+            )
             if r.returncode == 2:
                 print(f"faz592: eval_h{h} picks missing (exit 2), continuing", file=sys.stderr)
             elif r.returncode == 1:
@@ -255,6 +320,7 @@ def run_live_daily(
     # FAZ571: Summary HTML (before manifest so it's discoverable)
     try:
         from tools.live_publish_summary import publish_summary
+
         publish_summary(day, out_root)
     except Exception:
         pass  # Best-effort; do not fail run
@@ -262,6 +328,7 @@ def run_live_daily(
     # FAZ576: Run manifest (inputs, outputs, symbols, horizons, versions, sha)
     try:
         from tools.live_manifest import build_manifest, write_manifest
+
         manifest = build_manifest(
             day=day,
             out_root=out_root,
@@ -281,6 +348,7 @@ def run_live_daily(
 def main() -> int:
     """Exit 0=ok, 2=validation block, 1=programmer error."""
     import argparse
+
     p = argparse.ArgumentParser(description="FAZ566: Live daily runner")
     p.add_argument("--day", required=True, help="YYYY-MM-DD")
     p.add_argument("--top-n", type=int, default=5)

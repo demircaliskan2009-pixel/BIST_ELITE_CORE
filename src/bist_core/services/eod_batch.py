@@ -135,9 +135,7 @@ def run_eod_batch(
             reason = "ignored"
             cal_errors: List[str] = []
         else:
-            ok, reason, cal_errors, _ = trading_calendar.is_trading_day(
-                day_str, calendar_file
-            )
+            ok, reason, cal_errors, _ = trading_calendar.is_trading_day(day_str, calendar_file)
 
         if cal_errors:
             errors.extend(cal_errors)

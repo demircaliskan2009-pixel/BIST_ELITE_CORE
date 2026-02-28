@@ -1,10 +1,10 @@
 """FAZ91: KAP ingest offline — html -> events.json (hash + source); 0 network, deterministic ids."""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
 
 from bist_core.events.kap_ingest import ingest_kap_html, write_events_json
 

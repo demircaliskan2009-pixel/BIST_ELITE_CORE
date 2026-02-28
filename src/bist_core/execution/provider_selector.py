@@ -1,8 +1,8 @@
 """FAZ580: Execution provider selector from env — default DryRun, opt-in real_skeleton."""
+
 from __future__ import annotations
 
 import os
-from typing import Any
 
 from bist_core.execution.base import ExecutionProvider
 from bist_core.execution.adapters.dry_run import DryRunExecutionProvider

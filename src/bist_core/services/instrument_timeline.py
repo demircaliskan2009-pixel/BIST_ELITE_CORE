@@ -48,7 +48,9 @@ def build_timeline(
             old_symbol = _norm_symbol(action.get("old_symbol"))
             new_symbol = _norm_symbol(action.get("new_symbol"))
             if not old_symbol or not new_symbol:
-                errors.append({"code": "invalid_symbol_change", "msg": "missing symbol", "symbol": old_symbol or "", "idx": idx})
+                errors.append(
+                    {"code": "invalid_symbol_change", "msg": "missing symbol", "symbol": old_symbol or "", "idx": idx}
+                )
                 continue
             if old_symbol in alias_map and alias_map[old_symbol] != new_symbol:
                 errors.append({"code": "alias_conflict", "msg": "conflicting alias", "symbol": old_symbol, "idx": idx})
@@ -62,7 +64,9 @@ def build_timeline(
                 if entry:
                     entry["isin"] = new_isin
             else:
-                errors.append({"code": "invalid_isin_change", "msg": "missing isin", "symbol": symbol or "", "idx": idx})
+                errors.append(
+                    {"code": "invalid_isin_change", "msg": "missing isin", "symbol": symbol or "", "idx": idx}
+                )
 
     for old_symbol in list(alias_map.keys()):
         if _detect_cycle(old_symbol, alias_map):
@@ -92,9 +96,7 @@ def build_timeline(
             "meta": {"source": row.get("source"), "ts": row.get("ts")},
         }
 
-    resolved_list = sorted(
-        resolved.values(), key=lambda r: (r["symbol"], r.get("isin") or "")
-    )
+    resolved_list = sorted(resolved.values(), key=lambda r: (r["symbol"], r.get("isin") or ""))
     alias_map_deterministic = dict(sorted(alias_map.items()))
 
     output = {
@@ -156,9 +158,7 @@ def resolve_timeline(
     start = time.perf_counter()
     timeline, errors = build_timeline(day, instruments_path, actions_path)
     write_timeline(outdir, timeline)
-    manifest = build_manifest(
-        day, outdir, errors, int((time.perf_counter() - start) * 1000), args
-    )
+    manifest = build_manifest(day, outdir, errors, int((time.perf_counter() - start) * 1000), args)
     write_manifest(outdir, manifest)
     return timeline, manifest
 

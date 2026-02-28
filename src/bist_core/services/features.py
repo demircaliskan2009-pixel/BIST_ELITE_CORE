@@ -1,4 +1,5 @@
 """FAZ34: Feature registry (name->callable) + baseline features; deterministic compute; fail-closed on missing data."""
+
 from __future__ import annotations
 
 import csv
@@ -48,7 +49,7 @@ def _vol_20d(symbol: str, day: str, context: Context) -> Optional[float]:
     n = len(returns)
     mean_r = sum(returns) / n
     var = sum((r - mean_r) ** 2 for r in returns) / n
-    return var ** 0.5 if var >= 0 else None
+    return var**0.5 if var >= 0 else None
 
 
 def _mom_20d(symbol: str, day: str, context: Context) -> Optional[float]:
@@ -75,7 +76,7 @@ def _volume_z(symbol: str, day: str, context: Context) -> Optional[float]:
     n = len(vols)
     mean_v = sum(vols) / n
     var = sum((x - mean_v) ** 2 for x in vols) / n
-    std = var ** 0.5 if var >= 0 else 0.0
+    std = var**0.5 if var >= 0 else 0.0
     if std == 0:
         return None
     return (vols[-1] - mean_v) / std

@@ -1,4 +1,5 @@
 """FAZ75: Single ExecutionResult schema + writer; stable JSON fields and path outdir/<day>/execution_result.json on ALL exit paths."""
+
 from __future__ import annotations
 
 import json
@@ -7,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 from bist_core.execution.result_writer import (
     EXECUTION_RESULT_FILENAME,
@@ -108,7 +108,20 @@ def test_fail_closed_config_writes_execution_result(tmp_path: Path) -> None:
     bad_config = tmp_path / "bad.json"
     bad_config.write_text("{}", encoding="utf-8")
     r = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "eod", "execute", "--day", "2025-01-18", "--outdir", str(tmp_path), "--live", "--config", str(bad_config)],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "eod",
+            "execute",
+            "--day",
+            "2025-01-18",
+            "--outdir",
+            str(tmp_path),
+            "--live",
+            "--config",
+            str(bad_config),
+        ],
         env=env,
         capture_output=True,
         text=True,
@@ -153,7 +166,20 @@ def test_fail_closed_no_manifest_writes_execution_result(tmp_path: Path) -> None
     env["BIST_RULESPACK_DIR"] = str(bist_dir)
     env["BIST_RESTRICTIONS_FILE"] = str(restr)
     r = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "eod", "execute", "--day", "2025-01-19", "--outdir", str(tmp_path), "--live", "--broker", "paper"],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "eod",
+            "execute",
+            "--day",
+            "2025-01-19",
+            "--outdir",
+            str(tmp_path),
+            "--live",
+            "--broker",
+            "paper",
+        ],
         env=env,
         capture_output=True,
         text=True,
@@ -188,7 +214,20 @@ def test_fail_closed_invalid_manifest_writes_execution_result(tmp_path: Path) ->
     day_dir.mkdir(parents=True)
     (day_dir / "pipeline_manifest.json").write_text("not valid json {{{", encoding="utf-8")
     r = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "eod", "execute", "--day", "2025-01-20", "--outdir", str(tmp_path), "--live", "--broker", "paper"],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "eod",
+            "execute",
+            "--day",
+            "2025-01-20",
+            "--outdir",
+            str(tmp_path),
+            "--live",
+            "--broker",
+            "paper",
+        ],
         env=env,
         capture_output=True,
         text=True,
@@ -210,14 +249,33 @@ def test_success_writes_execution_result(tmp_path: Path) -> None:
     manifest_dir.mkdir(parents=True)
     manifest_path = manifest_dir / "pipeline_manifest.json"
     manifest_path.write_text(
-        json.dumps({"schema_version": 2, "day": day, "stages": {}, "orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json")}),
+        json.dumps(
+            {
+                "schema_version": 2,
+                "day": day,
+                "stages": {},
+                "orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json"),
+            }
+        ),
         encoding="utf-8",
     )
     orders_dir = tmp_path / "orders" / day
     orders_dir.mkdir(parents=True)
     (orders_dir / "orders_intent.json").write_text(json.dumps({"day": day, "actions": []}), encoding="utf-8")
     r = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "eod", "execute", "--day", day, "--outdir", str(tmp_path), "--execution", "paper"],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "eod",
+            "execute",
+            "--day",
+            day,
+            "--outdir",
+            str(tmp_path),
+            "--execution",
+            "paper",
+        ],
         env={"PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
         capture_output=True,
         text=True,

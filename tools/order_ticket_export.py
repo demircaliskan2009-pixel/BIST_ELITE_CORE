@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """FAZ582: Midas Stage-1 order ticket export — CSV + TXT from orders_intent v2. No network, no secrets."""
+
 from __future__ import annotations
 
 import argparse
@@ -73,15 +74,17 @@ def _validate_and_normalize(data: dict) -> tuple[list[dict] | None, str | None]:
         qty_str = str(qty).strip() if qty is not None else ""
         notes = (action.get("notes") or "").strip()
 
-        rows.append({
-            "day": day,
-            "symbol": symbol,
-            "side": side,
-            "qty": qty_str,
-            "order_type": order_type,
-            "limit_price": limit_price,
-            "notes": notes,
-        })
+        rows.append(
+            {
+                "day": day,
+                "symbol": symbol,
+                "side": side,
+                "qty": qty_str,
+                "order_type": order_type,
+                "limit_price": limit_price,
+                "notes": notes,
+            }
+        )
 
     # Sort by symbol then side for stability
     rows.sort(key=lambda r: (r["symbol"], r["side"]))
@@ -108,7 +111,9 @@ def _write_output(out_dir: Path, day: str, rows: list[dict]) -> tuple[bool, str 
             "",
         ]
         for r in rows:
-            lines.append(f"{r['symbol']} {r['side']} {r['order_type']} qty={r['qty'] or '-'} limit={r['limit_price'] or '-'}")
+            lines.append(
+                f"{r['symbol']} {r['side']} {r['order_type']} qty={r['qty'] or '-'} limit={r['limit_price'] or '-'}"
+            )
         txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     except OSError as e:
         return False, f"file_io_error:{e!s}"

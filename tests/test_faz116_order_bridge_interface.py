@@ -1,4 +1,5 @@
 """FAZ116: OrderBridgeInterface (abstract base) + OrderBridgeDLL implementation + Flask arayüzü."""
+
 from __future__ import annotations
 
 import pytest
@@ -28,8 +29,10 @@ def test_order_bridge_dll_implements_interface() -> None:
 
 def test_confirm_order(monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict = {}
+
     def dummy_send(order_type: str) -> None:
         called["order_type"] = order_type
+
     monkeypatch.setattr(order_bridge, "send_order", dummy_send)
     pending_orders.clear()
     pending_orders.append({"id": 1, "type": "buy"})

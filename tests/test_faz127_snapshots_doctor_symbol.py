@@ -1,4 +1,5 @@
 """FAZ127: snapshots doctor --symbol bars_count lookback."""
+
 from __future__ import annotations
 
 import json

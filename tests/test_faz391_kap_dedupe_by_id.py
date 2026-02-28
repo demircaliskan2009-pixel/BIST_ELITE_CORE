@@ -1,4 +1,5 @@
 """FAZ391: KAP event dedupe by id — first-wins, deterministic."""
+
 from __future__ import annotations
 
 from pathlib import Path

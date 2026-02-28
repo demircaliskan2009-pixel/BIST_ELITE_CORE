@@ -1,4 +1,5 @@
 """FAZ53: Advisory generator (outdir/advice/<day>/advice_records.jsonl, schema v1, deterministic)."""
+
 from __future__ import annotations
 
 import json

@@ -1,4 +1,5 @@
 """FAZ110: Integration playbook doc exists and contains key integration strings."""
+
 from __future__ import annotations
 
 from pathlib import Path

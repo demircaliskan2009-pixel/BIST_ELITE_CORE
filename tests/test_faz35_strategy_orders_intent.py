@@ -1,4 +1,5 @@
 """FAZ35: Strategy API + orders_intent — emit-orders writes file + manifest; policy blocks (fail-closed)."""
+
 from __future__ import annotations
 
 import json

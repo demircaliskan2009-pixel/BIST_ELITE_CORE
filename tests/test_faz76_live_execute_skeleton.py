@@ -1,4 +1,5 @@
 """FAZ76: Minimal live execute skeleton — BrokerAdapter, ledger, portfolio; idempotent. Stub broker fixtures."""
+
 from __future__ import annotations
 
 import json
@@ -7,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 from bist_core.execution.live_skeleton import run_live_execute_skeleton
 from bist_core.execution.adapters.stub_broker import StubExecutionProvider
@@ -54,7 +54,9 @@ def test_skeleton_writes_ledger_and_portfolio(tmp_path: Path) -> None:
     orders_intent_path.write_text(json.dumps(orders_intent), encoding="utf-8")
     broker_config = {"fixture_dir": str(FIXTURE_DIR)}
     provider = StubExecutionProvider(broker_config)
-    ok, err = run_live_execute_skeleton(tmp_path, day, orders_intent_path, provider, provider_name="stub", execution_mode="live")
+    ok, err = run_live_execute_skeleton(
+        tmp_path, day, orders_intent_path, provider, provider_name="stub", execution_mode="live"
+    )
     assert ok, err
     assert err is None
     ledger_dir = tmp_path / "ledger" / day
@@ -85,13 +87,17 @@ def test_skeleton_idempotent_second_run_no_duplicate(tmp_path: Path) -> None:
     orders_intent = {"day": day, "actions": [{"symbol": "X", "side": "BUY", "weight": 1.0}]}
     orders_intent_path.write_text(json.dumps(orders_intent), encoding="utf-8")
     provider = StubExecutionProvider({"fixture_dir": str(FIXTURE_DIR)})
-    ok1, _ = run_live_execute_skeleton(tmp_path, day, orders_intent_path, provider, provider_name="stub", execution_mode="live")
+    ok1, _ = run_live_execute_skeleton(
+        tmp_path, day, orders_intent_path, provider, provider_name="stub", execution_mode="live"
+    )
     assert ok1
     fills_path = tmp_path / "ledger" / day / "fills.jsonl"
     first_fills = fills_path.read_text(encoding="utf-8")
     state_path = tmp_path / "portfolio" / "state.json"
     first_state = state_path.read_text(encoding="utf-8")
-    ok2, _ = run_live_execute_skeleton(tmp_path, day, orders_intent_path, provider, provider_name="stub", execution_mode="live")
+    ok2, _ = run_live_execute_skeleton(
+        tmp_path, day, orders_intent_path, provider, provider_name="stub", execution_mode="live"
+    )
     assert ok2
     assert fills_path.read_text(encoding="utf-8") == first_fills
     assert state_path.read_text(encoding="utf-8") == first_state
@@ -114,12 +120,14 @@ def test_live_cli_uses_skeleton_and_writes_ledger(tmp_path: Path) -> None:
     manifest_dir = tmp_path / day
     manifest_dir.mkdir(parents=True)
     (manifest_dir / "pipeline_manifest.json").write_text(
-        json.dumps({
-            "schema_version": 2,
-            "day": day,
-            "stages": {},
-            "orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json"),
-        }),
+        json.dumps(
+            {
+                "schema_version": 2,
+                "day": day,
+                "stages": {},
+                "orders_intent_path": str(tmp_path / "orders" / day / "orders_intent.json"),
+            }
+        ),
         encoding="utf-8",
     )
     orders_dir = tmp_path / "orders" / day

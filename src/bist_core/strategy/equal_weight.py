@@ -10,6 +10,7 @@ from bist_core.models import EODBar, PriceBand
 from bist_core import config
 from bist_core.repositories import local_csv as repo
 
+
 @dataclass
 class EqualWeightPlan:
     day: str
@@ -27,6 +28,7 @@ class EqualWeightPlan:
                 wr.writerow([s, f"{w:.6f}"])
         return path
 
+
 def build_equal_weight_plan(day: str, base: Path = Path("data/eod/snapshots")) -> Path:
     """
     Eşit ağırlık planı oluşturur. engine.decide kullanarak PASS olmayan sembolleri filtreler.
@@ -39,38 +41,34 @@ def build_equal_weight_plan(day: str, base: Path = Path("data/eod/snapshots")) -
     md = MarketData(base)
     syms = md.symbols(day)
     close_map = md.close_map(day)
-    
+
     # Snapshot'tan EODBar listesi oluştur (sadece son gün, momentum için yeterli olmayacak ama çalışır)
     bars: List[EODBar] = []
     for sym in syms:
         close = close_map.get(sym, 0.0)
         # Varsayılan değerler: high=close*1.02, low=close*0.98, volume=1000000, turnover_tl=close*1000000
-        bars.append(EODBar(
-            symbol=sym,
-            date=day_date,
-            close=close,
-            high=close * 1.02 if close > 0 else 100.0,
-            low=close * 0.98 if close > 0 else 100.0,
-            volume=1000000,
-            turnover_tl=int(close * 1000000) if close > 0 else 100000000
-        ))
-    
+        bars.append(
+            EODBar(
+                symbol=sym,
+                date=day_date,
+                close=close,
+                high=close * 1.02 if close > 0 else 100.0,
+                low=close * 0.98 if close > 0 else 100.0,
+                volume=1000000,
+                turnover_tl=int(close * 1000000) if close > 0 else 100000000,
+            )
+        )
+
     # Price bands'ı al (repository'den veya varsayılan)
     try:
         bands = repo.price_bands()
     except (FileNotFoundError, KeyError):
         # Varsayılan band: tüm fiyatlar için geniş bir band
-        bands = [PriceBand(
-            price_min=0.01,
-            price_max=1000000.0,
-            tick=0.01,
-            up_limit_pct=20.0,
-            down_limit_pct=20.0
-        )]
-    
+        bands = [PriceBand(price_min=0.01, price_max=1000000.0, tick=0.01, up_limit_pct=20.0, down_limit_pct=20.0)]
+
     # KAP events (şimdilik boş, ileride provider'dan alınabilir)
     kap_events: dict = {}
-    
+
     # Config'leri al
     cfg = config.CORE
     try:
@@ -85,7 +83,7 @@ def build_equal_weight_plan(day: str, base: Path = Path("data/eod/snapshots")) -
             strat_cfg = json.load(f)
     except Exception:
         strat_cfg = {}
-    
+
     # Yeterli bar verisi kontrolü: Her sembol için en az mom_slow gün veri var mı?
     mom_slow = strat_cfg.get("mom_slow", 20)
     bars_by_symbol = {}
@@ -93,26 +91,27 @@ def build_equal_weight_plan(day: str, base: Path = Path("data/eod/snapshots")) -
         if bar.symbol not in bars_by_symbol:
             bars_by_symbol[bar.symbol] = []
         bars_by_symbol[bar.symbol].append(bar)
-    
+
     has_sufficient_data = all(len(bars_by_symbol.get(sym, [])) >= mom_slow for sym in syms)
-    
+
     # Eğer yeterli veri yoksa, skorlama yapmadan tüm sembolleri plan'a ekle (geriye dönük uyumluluk)
     if not has_sufficient_data or not syms:
         # Yeterli veri yok, skorlama yapmadan direkt tüm sembolleri plan'a ekle
         plan = EqualWeightPlan(day=day, symbols=syms)
         return plan.write_csv(base)
-    
+
     # Yeterli veri var, engine.decide çağır ve skorlama yap
-    decisions = decide(symbols=syms, bars=bars, bands=bands, kap_events=kap_events, 
-                       cfg=cfg, gates_cfg=gates_cfg, strat_cfg=strat_cfg)
-    
+    decisions = decide(
+        symbols=syms, bars=bars, bands=bands, kap_events=kap_events, cfg=cfg, gates_cfg=gates_cfg, strat_cfg=strat_cfg
+    )
+
     # PASS olmayan sembolleri filtrele
     accepted_symbols = []
     for decision in decisions:
         decision_raw = decision.get("decision_raw", decision.get("decision", "PASS"))
         if decision_raw != "PASS":
             accepted_symbols.append(decision["symbol"])
-    
+
     # Eğer hiç sembol kabul edilmediyse, yine de tüm sembolleri plan'a ekle (geriye dönük uyumluluk)
     # Ama bu durumda Faz-6 testini bozmamak için, eğer gerçekten skorlama yapıldıysa ve tümü PASS ise boş plan yaz
     # Ancak testlerin geçmesi için, eğer yeterli veri varsa ama tümü PASS ise, yine de plan oluştur
@@ -120,7 +119,7 @@ def build_equal_weight_plan(day: str, base: Path = Path("data/eod/snapshots")) -
         # Geriye dönük uyumluluk: Tüm sembolleri plan'a ekle
         plan = EqualWeightPlan(day=day, symbols=syms)
         return plan.write_csv(base)
-    
+
     plan = EqualWeightPlan(day=day, symbols=accepted_symbols)
     return plan.write_csv(base)
 
@@ -134,8 +133,8 @@ def generate_equal_weight_orders(
     out_dir: Path | None = None,
 ) -> Path | None:
     """Verilen gün için eşit ağırlık stratejisi siparişlerini üretir.
-       Risk limitini aşarsa None döner (FAIL), aşmazsa orders dosya yolunu döner (PASS).
-       out_dir: when set, write CSV/JSON/meta to out_dir/day/ instead of base/day."""
+    Risk limitini aşarsa None döner (FAIL), aşmazsa orders dosya yolunu döner (PASS).
+    out_dir: when set, write CSV/JSON/meta to out_dir/day/ instead of base/day."""
     plan_path = base / day / "plan_equal_weight.csv"
     if not plan_path.exists():
         raise FileNotFoundError(f"Plan not found: {plan_path}")

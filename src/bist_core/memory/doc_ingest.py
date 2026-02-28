@@ -2,6 +2,7 @@
 FAZ92: Doc ingest — content -> doc with doc_id = sha256(content).
 Same content -> same doc_id (deterministic). No network.
 """
+
 from __future__ import annotations
 
 import hashlib

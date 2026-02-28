@@ -1,4 +1,5 @@
 """FAZ144: bars_count and lookback_required in advice JSON."""
+
 from __future__ import annotations
 
 import json

@@ -2,6 +2,7 @@
 FAZ98: trace_id generation in one place; inject into log/event payloads via get_trace_id().
 Single source: generate_trace_id(); context: set_trace_id / get_trace_id / with_trace_id.
 """
+
 from __future__ import annotations
 
 import uuid

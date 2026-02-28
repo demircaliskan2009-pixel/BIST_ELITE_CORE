@@ -1,4 +1,5 @@
 """FAZ109: Network kill-switch — BIST_CORE_ALLOW_NETWORK default false; vendor_api and kap_html guarded."""
+
 from __future__ import annotations
 
 import os
@@ -37,7 +38,9 @@ def test_faz109_vendor_api_raises_when_network_disabled() -> None:
             os.environ["BIST_CORE_ALLOW_NETWORK"] = env_allow
 
 
-def test_faz109_kap_html_raises_on_cache_miss_when_network_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_faz109_kap_html_raises_on_cache_miss_when_network_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """With env cleared and empty cache, fetch_events_for_day must raise; urlopen must not be called."""
     import urllib.request
 

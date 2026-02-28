@@ -21,9 +21,7 @@ def test_eventstore_roundtrip(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    events, errors = eventstore.load_events_for_symbol_day(
-        "AAA", "2099-01-01", base_dir=base
-    )
+    events, errors = eventstore.load_events_for_symbol_day("AAA", "2099-01-01", base_dir=base)
     assert not errors
     assert len(events) == 2
     assert events[0].title == "AAA-2"

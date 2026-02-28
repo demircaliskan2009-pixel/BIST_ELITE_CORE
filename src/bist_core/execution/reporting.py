@@ -1,4 +1,5 @@
-"""FAZ597: Execution reports — fills_normalized, realized_trades, positions, summary."""
+"""FAZ597: Execution reports â€” fills_normalized, realized_trades, positions, summary."""
+
 from __future__ import annotations
 
 import csv
@@ -35,10 +36,10 @@ def write_positions(lots_by_symbol: dict[str, list[Lot]], out_path: Path) -> Non
     out_path.parent.mkdir(parents=True, exist_ok=True)
     rows: list[tuple[str, int, Decimal]] = []
     for sym, lots in sorted(lots_by_symbol.items()):
-        total_qty = sum(l.qty_remaining for l in lots)
+        total_qty = sum(lot.qty_remaining for lot in lots)
         if total_qty <= 0:
             continue
-        total_cost = sum(Decimal(l.qty_remaining) * l.price for l in lots)
+        total_cost = sum(Decimal(lot.qty_remaining) * lot.price for lot in lots)
         avg_cost = total_cost / total_qty
         rows.append((sym, total_qty, avg_cost))
 

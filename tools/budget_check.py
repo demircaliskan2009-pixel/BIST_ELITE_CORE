@@ -5,6 +5,7 @@ Usage:
   python tools/budget_check.py --baseline  # record to phases/quality_baseline.json
   python tools/budget_check.py --check    # compare working tree vs baseline, exit 1 if regressed
 """
+
 from __future__ import annotations
 
 import ast
@@ -79,7 +80,7 @@ def _file_metrics(path: Path) -> dict:
         tree = ast.parse(src)
         funcs = sum(1 for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
         branching = _branching_score(tree)
-        loc = len([l for l in src.splitlines() if l.strip() and not l.strip().startswith("#")])
+        loc = len([line for line in src.splitlines() if line.strip() and not line.strip().startswith("#")])
         return {"functions": funcs, "branching": branching, "loc": loc}
     except Exception:
         return {"functions": 0, "branching": 0, "loc": 0}
@@ -123,7 +124,7 @@ def run_check() -> int:
     if not BASELINE_PATH.exists():
         print("No baseline; run --baseline first", file=sys.stderr)
         return 0
-    baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
     current = compute_current()
     failed = []
     if current["files_changed"] > THRESHOLDS.get("files_changed_max", 999):

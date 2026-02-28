@@ -69,7 +69,9 @@ def build_advice_for_symbol(
         bars, bands, kap_events, gates_cfg, strat_cfg = _get_day_context(day_str, str(base))
 
         if not bars:
-            return _safe_advice(symbol, day, "NoBars", gates={"bars_available": {"outcome": "FAIL", "reason": "NoBars"}})
+            return _safe_advice(
+                symbol, day, "NoBars", gates={"bars_available": {"outcome": "FAIL", "reason": "NoBars"}}
+            )
 
         bars_for_symbol = [b for b in bars if b.symbol == symbol]
         mom_slow = strat_cfg.get("mom_slow", 20)
@@ -77,9 +79,7 @@ def build_advice_for_symbol(
         required_lookback = max(mom_slow, vol_window)
 
         if len(bars_for_symbol) < required_lookback:
-            return _insufficient_history_advice(
-                symbol, day, len(bars_for_symbol), required_lookback
-            )
+            return _insufficient_history_advice(symbol, day, len(bars_for_symbol), required_lookback)
 
         cfg = config.CORE
         decisions = engine.decide(
@@ -92,9 +92,7 @@ def build_advice_for_symbol(
             strat_cfg=strat_cfg,
         )
         if not decisions:
-            return _insufficient_history_advice(
-                symbol, day, len(bars_for_symbol), required_lookback
-            )
+            return _insufficient_history_advice(symbol, day, len(bars_for_symbol), required_lookback)
 
         result = decisions[0]
 
@@ -161,9 +159,7 @@ def _render_advice_text(
     if summaries:
         signal_sentence = "Sinyal özeti: " + ", ".join(summaries[:4]) + "."
     else:
-        signal_sentence = (
-            "Sinyal seti boş ya da sınırlı, karar mevcut fiyat verisine dayalı."
-        )
+        signal_sentence = "Sinyal seti boş ya da sınırlı, karar mevcut fiyat verisine dayalı."
 
     plan_sentence = ""
     if isinstance(plan, dict):
@@ -171,26 +167,18 @@ def _render_advice_text(
         stop = plan.get("stop")
         t1 = plan.get("t1")
         if entry is not None or stop is not None or t1 is not None:
-            plan_sentence = (
-                f"Plan: entry {entry}, stop {stop}, t1 {t1}."
-            )
+            plan_sentence = f"Plan: entry {entry}, stop {stop}, t1 {t1}."
 
     coverage_note = ""
     if decision_raw == "PASS" and score == 0.0 and not has_ohlcv:
-        coverage_note = (
-            "Eksik veri: sadece close var; hacim/turnover olmadığı için "
-            "hacim sinyali devre dışı."
-        )
+        coverage_note = "Eksik veri: sadece close var; hacim/turnover olmadığı için hacim sinyali devre dışı."
 
     reconsider_sentence = (
-        "Fiyat bandı dışına çıkma, ters haber akışı veya güçlü hacim kırılması olursa "
-        "yeniden değerlendir."
+        "Fiyat bandı dışına çıkma, ters haber akışı veya güçlü hacim kırılması olursa yeniden değerlendir."
     )
 
     first_paragraph = f"{decision_sentence} {signal_sentence}"
-    second_paragraph = " ".join(
-        part for part in [plan_sentence, coverage_note, reconsider_sentence] if part
-    )
+    second_paragraph = " ".join(part for part in [plan_sentence, coverage_note, reconsider_sentence] if part)
     events_paragraph = _render_events_section(events, events_errors)
 
     return f"{first_paragraph}\n\n{second_paragraph}\n\n{events_paragraph}".strip()
@@ -259,10 +247,7 @@ def _safe_advice(
         events_paragraph = "Olaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi."
     # Ensure NoBars or NoDecision in text (canonical markers)
     marker = err if err in ("NoBars", "NoDecision") else f"NoDecision: {err}"
-    text = (
-        f"Güvenli mod: {marker}. "
-        "Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
-    )
+    text = f"Güvenli mod: {marker}. Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin."
     text = f"{text}\n\n{events_paragraph}"
     return Advice(
         symbol=symbol,
@@ -277,7 +262,9 @@ def _safe_advice(
 
 
 @lru_cache(maxsize=64)
-def _get_day_context(day_str: str, root_path_str: str) -> Tuple[
+def _get_day_context(
+    day_str: str, root_path_str: str
+) -> Tuple[
     List[Any],
     List[Any],
     Dict[str, Any],

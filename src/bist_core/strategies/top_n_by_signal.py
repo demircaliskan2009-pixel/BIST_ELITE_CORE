@@ -39,10 +39,7 @@ class TopNBySignalStrategy:
                 notes.append("no_actions")
             else:
                 weight = 1.0 / len(selected)
-                actions = [
-                    {"symbol": sym, "side": "BUY", "weight": round(weight, 6)}
-                    for sym in selected
-                ]
+                actions = [{"symbol": sym, "side": "BUY", "weight": round(weight, 6)} for sym in selected]
 
         actions = sorted(actions, key=lambda item: str(item.get("symbol", "")))
         notes = sorted(set(notes))

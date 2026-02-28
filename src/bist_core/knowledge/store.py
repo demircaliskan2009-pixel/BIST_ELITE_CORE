@@ -2,6 +2,7 @@
 FAZ59: Knowledge base storage + retrieval (no external vector db).
 Deterministic doc_id = sha256(canonical json). BM25-like token overlap retrieval (stdlib only).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -109,10 +110,7 @@ class KnowledgeBase:
         payload = {
             "schema_version": 1,
             "doc_ids": self._doc_ids,
-            "documents": {
-                doc_id: {"text": meta["text"], "tf": meta["tf"]}
-                for doc_id, meta in self._documents.items()
-            },
+            "documents": {doc_id: {"text": meta["text"], "tf": meta["tf"]} for doc_id, meta in self._documents.items()},
             "df": self._df,
             "N": self._N,
         }
@@ -138,7 +136,9 @@ class KnowledgeBase:
             self._documents[doc_id] = {"text": text, "tokens": tokens, "tf": tf}
 
 
-def add_documents(documents: List[Dict[str, Any]], base: Optional[KnowledgeBase] = None) -> Tuple[List[str], KnowledgeBase]:
+def add_documents(
+    documents: List[Dict[str, Any]], base: Optional[KnowledgeBase] = None
+) -> Tuple[List[str], KnowledgeBase]:
     """Convenience: add documents to base (or new), return (doc_ids, base)."""
     if base is None:
         base = KnowledgeBase()

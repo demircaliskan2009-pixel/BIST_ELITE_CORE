@@ -1,4 +1,5 @@
 """FAZ30: Persistent DatasetRegistry + CLI register/resolve/list; fail-closed when registry missing/invalid."""
+
 from __future__ import annotations
 
 import json
@@ -7,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from bist_core.data.registry import DatasetRegistry, get_default_registry
+from bist_core.data.registry import DatasetRegistry
 
 
 def _run_cli(args: list[str], env: dict[str, str] | None = None, timeout: int = 60) -> subprocess.CompletedProcess[str]:
@@ -131,7 +132,6 @@ def test_faz30_registry_persistence_and_resolve(tmp_path: Path) -> None:
 
 def test_faz30_registry_missing_fail_closed(tmp_path: Path) -> None:
     """In-process: load_registry on missing file => ValueError (fail-closed)."""
-    from bist_core.data.registry import load_registry
 
     registry_path = tmp_path / "nonexistent" / "registry.json"
     reg = DatasetRegistry(path=registry_path)

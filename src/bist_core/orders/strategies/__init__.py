@@ -1,4 +1,5 @@
 """Orders strategy registry: base protocol + resolve_strategy(name). Deterministic top_n + stable ordering."""
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Protocol
@@ -7,6 +8,7 @@ from typing import Any, Dict, List, Protocol
 class OrdersStrategy(Protocol):
     """Protocol for order-building strategies: build_intent(day, universe, advice_records, params) -> dict."""
 
+    # ruff: noqa: E402
     name: str
 
     def build_intent(
@@ -16,8 +18,7 @@ class OrdersStrategy(Protocol):
         universe: List[str],
         advice_records: List[Dict[str, Any]],
         params: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        ...
+    ) -> Dict[str, Any]: ...
 
 
 _REGISTRY: Dict[str, OrdersStrategy] = {}

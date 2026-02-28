@@ -1,4 +1,5 @@
 """ExecutionProvider protocol and ExecutionResult schema (stdlib, deterministic)."""
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Protocol, runtime_checkable

@@ -1,11 +1,11 @@
 """FAZ577: Weekly live review — scoreboard + performance + journal. Fixtures only."""
+
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
 
-import pytest
 
 _repo = Path(__file__).resolve().parents[1]
 if str(_repo) not in sys.path:
@@ -22,6 +22,7 @@ from tools.live_weekly_report import (
 
 def test_week_to_dates() -> None:
     """YYYY-WW parses to (monday, sunday)."""
+    # ruff: noqa: E402
     m, s = _week_to_dates("2025-W03")
     assert m == "2025-01-13"
     assert s == "2025-01-19"
@@ -50,29 +51,33 @@ def test_build_weekly_report_with_fixtures(tmp_path: Path) -> None:
     reports = tmp_path / "reports"
     (reports / "2025-01-15").mkdir(parents=True)
     (reports / "2025-01-15" / "scoreboard.json").write_text(
-        json.dumps({
-            "schema_version": 1,
-            "day": "2025-01-15",
-            "horizons": [1, 5, 20],
-            "rows": [
-                {"symbol": "AAA", "decision_raw": "BUY", "ret_1d": 0.01, "ret_5d": None, "ret_20d": None},
-                {"symbol": "BBB", "decision_raw": "HOLD", "ret_1d": None, "ret_5d": None, "ret_20d": None},
-            ],
-        }),
+        json.dumps(
+            {
+                "schema_version": 1,
+                "day": "2025-01-15",
+                "horizons": [1, 5, 20],
+                "rows": [
+                    {"symbol": "AAA", "decision_raw": "BUY", "ret_1d": 0.01, "ret_5d": None, "ret_20d": None},
+                    {"symbol": "BBB", "decision_raw": "HOLD", "ret_1d": None, "ret_5d": None, "ret_20d": None},
+                ],
+            }
+        ),
         encoding="utf-8",
     )
     (reports / "2025-01-15" / "performance.json").write_text(
-        json.dumps({
-            "schema_version": 1,
-            "trade_count": 2,
-            "win_count": 1,
-            "loss_count": 1,
-            "win_rate": 0.5,
-            "avg_r": 0.0,
-            "total_r": 0.0,
-            "max_dd": 0.5,
-            "equity_curve": [],
-        }),
+        json.dumps(
+            {
+                "schema_version": 1,
+                "trade_count": 2,
+                "win_count": 1,
+                "loss_count": 1,
+                "win_rate": 0.5,
+                "avg_r": 0.0,
+                "total_r": 0.0,
+                "max_dd": 0.5,
+                "equity_curve": [],
+            }
+        ),
         encoding="utf-8",
     )
 

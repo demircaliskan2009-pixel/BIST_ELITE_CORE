@@ -1,4 +1,5 @@
 """FAZ122: CLI data snapshots doctor - root/day/symbol coverage."""
+
 from __future__ import annotations
 
 import json

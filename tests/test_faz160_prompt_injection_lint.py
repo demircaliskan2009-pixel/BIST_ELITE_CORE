@@ -1,4 +1,5 @@
 """FAZ160: Prompt injection lint — agent-facing docs must state untrusted text policy."""
+
 from __future__ import annotations
 
 from pathlib import Path

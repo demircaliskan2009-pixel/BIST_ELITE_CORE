@@ -1,4 +1,5 @@
 """FAZ82: Integration test — live execute with missing BIST rulespack/restrictions -> returncode 2, stderr has error code, execution_result.json written, dossier evidence includes blocked reason/code."""
+
 from __future__ import annotations
 
 import json
@@ -6,8 +7,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 
 def _valid_core_config() -> dict:
@@ -45,12 +44,27 @@ def test_faz82_live_execute_missing_bist_rules_returncode_2_and_dossier(tmp_path
     )
     (tmp_path / "dossier" / day).mkdir(parents=True, exist_ok=True)
     (tmp_path / "dossier" / day / "dossier.json").write_text(
-        json.dumps({"schema_version": 1, "day": day, "evidence": {"advice_path": "", "orders_intent_path": str(orders_path)}}),
+        json.dumps(
+            {"schema_version": 1, "day": day, "evidence": {"advice_path": "", "orders_intent_path": str(orders_path)}}
+        ),
         encoding="utf-8",
     )
 
     r = subprocess.run(
-        [sys.executable, "-m", "bist_core.cli", "eod", "execute", "--day", day, "--outdir", str(tmp_path), "--live", "--broker", "paper"],
+        [
+            sys.executable,
+            "-m",
+            "bist_core.cli",
+            "eod",
+            "execute",
+            "--day",
+            day,
+            "--outdir",
+            str(tmp_path),
+            "--live",
+            "--broker",
+            "paper",
+        ],
         env=env,
         capture_output=True,
         text=True,

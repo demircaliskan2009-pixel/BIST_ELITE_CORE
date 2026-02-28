@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """FAZ578: Broker harness — load orders_intent from file, run DryRunExecutionProvider deterministically. No network."""
+
 from __future__ import annotations
 
 import json
@@ -28,6 +29,7 @@ def run_harness(orders_path: Path, provider=None) -> tuple[int, dict]:
     if provider is None:
         sys.path.insert(0, str(_repo_root() / "src"))
         from bist_core.execution import DryRunExecutionProvider
+
         provider = DryRunExecutionProvider()
 
     result = provider.submit_orders(orders, dry_run=True)
@@ -37,7 +39,10 @@ def run_harness(orders_path: Path, provider=None) -> tuple[int, dict]:
 
 def main() -> int:
     import argparse
-    p = argparse.ArgumentParser(description="FAZ578: Broker harness — validate orders_intent via DryRunExecutionProvider")
+
+    p = argparse.ArgumentParser(
+        description="FAZ578: Broker harness — validate orders_intent via DryRunExecutionProvider"
+    )
     p.add_argument("--orders", required=True, help="Path to orders_intent.json")
     args = p.parse_args()
 

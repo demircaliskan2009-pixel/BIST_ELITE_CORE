@@ -1,11 +1,12 @@
 """FAZ573: Dry-run broker adapter — validates orders, prints deterministic summary. No network, no secrets."""
+
 from __future__ import annotations
 
 import io
 import json
 from typing import Any, Dict
 
-from bist_core.execution.base import ExecutionProvider, execution_result
+from bist_core.execution.base import execution_result
 from bist_core.orders.schema import validate_orders_intent_v2
 
 
@@ -14,9 +15,7 @@ def _format_summary(orders: Dict[str, Any]) -> str:
     day = orders.get("day") or ""
     actions = orders.get("actions") or []
     symbols = sorted(
-        (a.get("symbol") or "").strip()
-        for a in actions
-        if isinstance(a, dict) and (a.get("symbol") or "").strip()
+        (a.get("symbol") or "").strip() for a in actions if isinstance(a, dict) and (a.get("symbol") or "").strip()
     )
     lines = [
         "dry_run_summary",

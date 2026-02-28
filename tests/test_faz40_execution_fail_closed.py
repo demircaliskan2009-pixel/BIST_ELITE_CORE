@@ -1,4 +1,5 @@
 """FAZ40: Execution fail-closed — stage errors -> denied; dry-run -> no file; live -> file written."""
+
 from __future__ import annotations
 
 import json

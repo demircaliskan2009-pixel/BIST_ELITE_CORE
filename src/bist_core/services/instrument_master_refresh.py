@@ -3,6 +3,7 @@ FAZ69: Instrument master refresh — merge new symbols/aliases from fixture data
 into existing identity timeline deterministically (stable id, alias intervals).
 No network.
 """
+
 from __future__ import annotations
 
 import csv
@@ -121,20 +122,19 @@ def merge_fixture_into_timeline(
             for a in new_aliases:
                 if a not in existing_aliases:
                     ent["aliases"].append(a)
-                    ent["alias_intervals"].append({
-                        "alias": a,
-                        "valid_from": effective_date or "",
-                        "valid_to": None,
-                    })
+                    ent["alias_intervals"].append(
+                        {
+                            "alias": a,
+                            "valid_from": effective_date or "",
+                            "valid_to": None,
+                        }
+                    )
                     existing_aliases.add(a)
             if sym not in existing_aliases and sym != ent["symbol"]:
                 existing_aliases.add(sym)
                 ent["aliases"].append(sym)
         else:
-            alias_intervals = [
-                {"alias": a, "valid_from": effective_date or "", "valid_to": None}
-                for a in new_aliases
-            ]
+            alias_intervals = [{"alias": a, "valid_from": effective_date or "", "valid_to": None} for a in new_aliases]
             identities_by_id[iid] = {
                 "id": iid,
                 "symbol": sym,

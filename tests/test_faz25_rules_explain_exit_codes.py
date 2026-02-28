@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from pathlib import Path
 
 
 def _run_rules_explain(extra_args: list[str]) -> subprocess.CompletedProcess[str]:

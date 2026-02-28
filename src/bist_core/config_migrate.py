@@ -2,6 +2,7 @@
 FAZ97: Config migration — v1 -> v2 -> ... . CLI load uses this before validation.
 Core config: v1 (no schema_version) -> v2 (schema_version: 2). Deterministic.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict
