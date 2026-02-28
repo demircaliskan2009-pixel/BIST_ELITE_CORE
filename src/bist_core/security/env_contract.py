@@ -1,11 +1,15 @@
 """
 FAZ99: Env contract — BIST_* keys must be on whitelist; else BLOCK + env_contract_violation.
 System env vars (PATH, PYTHONPATH, TEMP, etc.) are allowed; only BIST_* are checked.
+
+Windows note:
+Environment variable names are case-insensitive; subprocess/env merges may preserve a different casing
+(e.g. 'Bist_Core_Config'). Therefore whitelist matching MUST be case-insensitive.
 """
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Mapping, Tuple
 
 # Allowed BIST_* env keys (single source of truth). Add any BIST_* used in codebase.
 BIST_ALLOWED_ENV_KEYS = frozenset([
@@ -48,23 +52,41 @@ BIST_ALLOWED_ENV_KEYS = frozenset([
     "BIST_SAMPLES_DIR",
 ])
 
-def validate_bist_env_whitelist() -> Tuple[bool, List[Dict[str, Any]]]:
+
+def validate_bist_env_whitelist(environ: Mapping[str, str] | None = None) -> Tuple[bool, List[Dict[str, Any]]]:
     """
     Fail-closed: any BIST_* env key not in BIST_ALLOWED_ENV_KEYS -> violation.
-    Returns (ok, errors). Each error: {"code": "env_contract_violation", "message": "...", "key": "BIST_..."}.
+
+    Returns:
+      (ok, errors)
+      errors: [{"code":"env_contract_violation","message":"...","key":"BIST_..."}]
     """
-    errors: List[Dict[str, Any]] = []
-    for key in os.environ:
-        if not key.upper().startswith("BIST_"):
+    env = environ or os.environ
+
+    allow_upper = {k.upper() for k in BIST_ALLOWED_ENV_KEYS}
+
+    bad: List[str] = []
+    for key in env.keys():
+        ku = str(key).upper()
+        if not ku.startswith("BIST_"):
             continue
-        if key in BIST_ALLOWED_ENV_KEYS:
+        if ku in allow_upper:
             continue
-        errors.append({
+        bad.append(str(key))
+
+    if not bad:
+        return True, []
+
+    bad_sorted = sorted(set(bad), key=lambda s: s.upper())
+    errors: List[Dict[str, Any]] = [
+        {
             "code": "env_contract_violation",
-            "message": f"BIST_* env key not on whitelist: {key}",
-            "key": key,
-        })
-    return (len(errors) == 0, errors)
+            "message": "BIST_* env key(s) not on whitelist",
+            "key": k,
+        }
+        for k in bad_sorted
+    ]
+    return False, errors
 
 
 __all__ = ["validate_bist_env_whitelist", "BIST_ALLOWED_ENV_KEYS"]
