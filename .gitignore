@@ -104,3 +104,32 @@ data/log/scheduler/
 # --- local backups ---
 *.bak_*
 tools/_local/
+########################################
+# Python caches / test artifacts
+########################################
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+########################################
+# Virtualenvs
+########################################
+.venv/
+venv/
+
+########################################
+# IDE / OS
+########################################
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+########################################
+# Local-only tooling scratchpad
+########################################
+tools/_local/
