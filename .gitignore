@@ -99,3 +99,10 @@ data/inbox/
 # scheduler runtime logs (local only)
 data/log/scheduler/
 
+# --- local one-off patch/heal scripts (do not commit) ---
+tools/patch_*.py
+tools/autopatch_*.py
+tools/heal_*.py
+
+# --- local backups ---
+*.bak_*
