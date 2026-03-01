@@ -1,4 +1,4 @@
-########################################
+﻿########################################
 # Python bytecode & cache (global)
 ########################################
 __pycache__/
@@ -47,7 +47,7 @@ Thumbs.db
 *.env
 
 ########################################
-# Data: repo'da sadece örnekler takip edilsin
+# Data: repo'da sadece Ã¶rnekler takip edilsin
 ########################################
 /data/
 !/data/samples/
@@ -100,9 +100,7 @@ data/inbox/
 data/log/scheduler/
 
 # --- local one-off patch/heal scripts (do not commit) ---
-tools/patch_*.py
-tools/autopatch_*.py
-tools/heal_*.py
 
 # --- local backups ---
 *.bak_*
+tools/_local/
