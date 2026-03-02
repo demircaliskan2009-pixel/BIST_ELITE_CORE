@@ -17,7 +17,7 @@ __pycache__/
 *.bak2
 *.tmp
 
-# local data & scratch (repo iÃƒÂ§ine commit etmeyeceksen)
+# local data & scratch (repo iÃƒÆ’Ã‚Â§ine commit etmeyeceksen)
 data/
 _tmp_snap*/
 proof_pack_result.txt
@@ -57,3 +57,7 @@ ops/_local/
 /data/**
 !/data/samples/
 !/data/samples/**
+*.pyo
+*.bak*
+*.broken*
+proof_*.txt
