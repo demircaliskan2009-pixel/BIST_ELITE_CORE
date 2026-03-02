@@ -17,7 +17,7 @@ __pycache__/
 *.bak2
 *.tmp
 
-# local data & scratch (repo içine commit etmeyeceksen)
+# local data & scratch (repo iÃ§ine commit etmeyeceksen)
 data/
 _tmp_snap*/
 proof_pack_result.txt
@@ -31,3 +31,29 @@ proof_pack_result.txt
 patch-*.diff
 
 # local data (if you do NOT want to commit data/)
+
+*.py[cod]
+.coverage
+coverage.xml
+htmlcov/
+
+build/
+dist/
+
+*.swp
+*.orig
+
+# temp dirs (seen in your tree)
+tmp_snap*/
+tmp_snap/
+tmp_test_*/
+tmp_*/
+
+# local-only tool outputs
+tools/_local/
+ops/_local/
+
+# local data (keep only samples tracked)
+data/**
+!data/samples/
+!data/samples/**
