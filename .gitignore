@@ -1,4 +1,4 @@
-﻿# runtime outputs
+# runtime outputs
 out/
 logs/
 *.stderr.txt
@@ -21,3 +21,13 @@ __pycache__/
 data/
 _tmp_snap*/
 proof_pack_result.txt
+
+# packaging
+*.egg-info/
+
+*.bak_*
+
+# local scratch / patches
+patch-*.diff
+
+# local data (if you do NOT want to commit data/)
