@@ -17,7 +17,7 @@ __pycache__/
 *.bak2
 *.tmp
 
-# local data & scratch (repo iÃ§ine commit etmeyeceksen)
+# local data & scratch (repo iÃƒÂ§ine commit etmeyeceksen)
 data/
 _tmp_snap*/
 proof_pack_result.txt
@@ -54,6 +54,6 @@ tools/_local/
 ops/_local/
 
 # local data (keep only samples tracked)
-data/**
-!data/samples/
-!data/samples/**
+/data/**
+!/data/samples/
+!/data/samples/**
