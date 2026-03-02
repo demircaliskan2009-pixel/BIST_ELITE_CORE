@@ -1,4 +1,23 @@
-﻿out/
+﻿# runtime outputs
+out/
 logs/
 *.stderr.txt
 *.stdout.txt
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# editor/backup
+*.bak
+*.bak2
+*.tmp
+
+# local data & scratch (repo içine commit etmeyeceksen)
+data/
+_tmp_snap*/
+proof_pack_result.txt
