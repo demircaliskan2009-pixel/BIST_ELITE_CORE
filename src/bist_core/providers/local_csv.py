@@ -61,6 +61,17 @@ class LocalCSVProvider:
                     "close": _to_float(row.get("close")),
                     "volume": _to_int(row.get("volume")),
                 }
+                # If turnover columns are missing, approximate turnover_tl = close * volume (EOD TL value).
+                if "turnover" not in row and "turnover_tl" not in row:
+                    try:
+                        c = out[sym].get("close")
+                        v = out[sym].get("volume")
+                        # NaN check: NaN != NaN
+                        if isinstance(c, float) and c == c and v:
+                            out[sym]["turnover_tl"] = int(float(c) * int(v))
+                    except Exception:
+                        pass
+
                 if "turnover" in row:
                     out[sym]["turnover"] = _to_int(row.get("turnover"))
                 if "turnover_tl" in row:

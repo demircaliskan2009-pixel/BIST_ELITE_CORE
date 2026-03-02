@@ -170,3 +170,180 @@ def _supports_ohlcv(md: MarketData, day: str) -> bool:
         except Exception:
             return False
     return hasattr(md, "ohlcv_map")
+
+
+def resolve_snapshots_base(root: Path) -> Path:
+    """
+    Accept both:
+      - snapshots base dir (contains YYYY-MM-DD subfolders)
+      - .../eod/snapshots
+      - data root -> data/eod/snapshots
+    """
+    root = Path(root)
+
+    # If root already looks like snapshots base, keep it.
+    try:
+        if any(p.is_dir() for p in root.glob("????-??-??")):
+            return root
+    except Exception:
+        pass
+
+    # allow passing .../eod/snapshots directly
+    if root.name.lower() == "snapshots" and root.parent.name.lower() == "eod":
+        return root
+
+    return root / "eod" / "snapshots"
+
+
+def materialize_snapshots_from_inbox(
+    *,
+    data_root: Path,
+    snapshots_base: Path,
+    symbols: list[str] | None,
+    end_day: str,
+    lookback: int,
+) -> None:
+    """
+    Bootstrap snapshots_base/YYYY-MM-DD/snapshot.csv from data_root/inbox/{SYMBOL}.csv or {SYMBOL}.symbol.csv.
+
+    - Merges into existing snapshot.csv (does NOT overwrite other symbols)
+    - Ensures turnover_tl exists; approximates as close*volume when missing.
+    """
+    import csv
+    from datetime import date
+
+    data_root = Path(data_root)
+    inbox = data_root / "inbox"
+    if not inbox.exists():
+        return
+
+    snapshots_base = Path(snapshots_base)
+    snapshots_base.mkdir(parents=True, exist_ok=True)
+
+    end = date.fromisoformat(end_day)
+    keep_n = max(int(lookback) * 3, int(lookback) + 32)
+
+    def _f(x):
+        try:
+            if x is None:
+                return float("nan")
+            s = str(x).strip().replace(",", ".")
+            if s == "":
+                return float("nan")
+            return float(s)
+        except Exception:
+            return float("nan")
+
+    def _i(x):
+        try:
+            if x is None:
+                return 0
+            s = str(x).strip().replace(",", ".")
+            if s == "":
+                return 0
+            return int(float(s))
+        except Exception:
+            return 0
+
+    def _pick_date(row: dict) -> str:
+        for k in ("date", "Date", "DATE", "day", "Day", "DAY"):
+            v = row.get(k)
+            if v is not None and str(v).strip():
+                return str(v).strip()
+        return ""
+
+    def _read_existing_snapshot(fp):
+        out = {}
+        if not fp.exists():
+            return out
+        try:
+            with fp.open("r", encoding="utf-8", newline="") as f:
+                rdr = csv.DictReader(f)
+                for r in rdr:
+                    s = (r.get("symbol") or "").strip().upper()
+                    if s:
+                        out[s] = r
+        except Exception:
+            return out
+        return out
+
+    def _write_snapshot(fp, by_symbol: dict):
+        hdr = ["symbol","open","high","low","close","volume","turnover_tl"]
+        rows = []
+        for s in sorted(by_symbol.keys()):
+            r = by_symbol[s]
+            rows.append({
+                "symbol": s,
+                "open": r.get("open",""),
+                "high": r.get("high",""),
+                "low": r.get("low",""),
+                "close": r.get("close",""),
+                "volume": r.get("volume",""),
+                "turnover_tl": r.get("turnover_tl",""),
+            })
+        with fp.open("w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=hdr)
+            w.writeheader()
+            for r in rows:
+                w.writerow(r)
+    if symbols is None:
+        syms = set()
+        for fp in inbox.glob("*.csv"):
+            stem = fp.stem
+            if stem.endswith(".symbol"):
+                stem = stem[: -len(".symbol")]
+            if stem:
+                syms.add(stem.upper())
+        symbols_use = sorted(syms)
+    else:
+        symbols_use = [s.upper() for s in symbols]
+
+    for sym in symbols_use:
+        src1 = inbox / f"{sym}.symbol.csv"
+        src2 = inbox / f"{sym}.csv"
+        src = src1 if src1.exists() else src2
+        if not src.exists():
+            continue
+
+        rows = []
+        with src.open("r", encoding="utf-8", newline="") as f:
+            rdr = csv.DictReader(f)
+            for row in rdr:
+                ds = _pick_date(row)
+                if not ds:
+                    continue
+                try:
+                    dd = date.fromisoformat(ds)
+                except Exception:
+                    continue
+                if dd <= end:
+                    rows.append((dd, row))
+
+        rows.sort(key=lambda x: x[0])
+        rows = rows[-keep_n:]
+
+        for dd, row in rows:
+            o = _f(row.get("open") or row.get("Open"))
+            h = _f(row.get("high") or row.get("High"))
+            low_ = _f(row.get("low") or row.get("Low"))
+            c = _f(row.get("close") or row.get("Close"))
+            v = _i(row.get("volume") or row.get("Volume") or row.get("vol") or row.get("Vol"))
+
+            t = _i(row.get("turnover_tl") or row.get("turnover") or row.get("Turnover") or row.get("value"))
+            if t == 0 and (c == c) and v:
+                t = int(round(c * v))
+
+            day_dir = snapshots_base / dd.isoformat()
+            day_dir.mkdir(parents=True, exist_ok=True)
+            out_fp = day_dir / "snapshot.csv"
+
+            existing = _read_existing_snapshot(out_fp)
+            existing[sym] = {
+                "open": o,
+                "high": h,
+                "low": low_,
+                "close": c,
+                "volume": v,
+                "turnover_tl": t,
+            }
+            _write_snapshot(out_fp, existing)
