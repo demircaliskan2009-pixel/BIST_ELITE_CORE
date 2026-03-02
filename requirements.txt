@@ -1,1 +1,6 @@
 pytest>=8.0
+fastapi>=0.110
+httpx>=0.24
+uvicorn>=0.24
+flask>=3.0
+pandas>=2.2
