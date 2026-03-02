@@ -1,101 +1,63 @@
-########################################
-# Python bytecode & cache (global)
-########################################
-__pycache__/
-**/__pycache__/
-*.pyc
-**/*.py[cod]
-*.pyo
-*.egg-info/
-advice.jsonl
+# runtime outputs
+out/
+logs/
+*.stderr.txt
+*.stdout.txt
 
-########################################
-# Test / lint / type-check caches
-########################################
+# python
+.venv/
+__pycache__/
+*.pyc
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# editor/backup
+*.bak
+*.bak2
+*.tmp
+
+# local data & scratch (repo iÃƒÆ’Ã‚Â§ine commit etmeyeceksen)
+data/
+_tmp_snap*/
+proof_pack_result.txt
+
+# packaging
+*.egg-info/
+
+*.bak_*
+
+# local scratch / patches
+patch-*.diff
+
+# local data (if you do NOT want to commit data/)
+
+*.py[cod]
 .coverage
+coverage.xml
 htmlcov/
 
-########################################
-# Jupyter
-########################################
-.ipynb_checkpoints/
+build/
+dist/
 
-########################################
-# Virtual environments
-########################################
-.venv/
-venv/
-ENV/
-env/
+*.swp
+*.orig
 
-########################################
-# IDE / OS
-########################################
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
+# temp dirs (seen in your tree)
+tmp_snap*/
+tmp_snap/
+tmp_test_*/
+tmp_*/
 
-########################################
-# Local environment files
-########################################
-.env
-.env.*
-*.env
+# local-only tool outputs
+tools/_local/
+ops/_local/
 
-########################################
-# Data: repo'da sadece örnekler takip edilsin
-########################################
-/data/
+# local data (keep only samples tracked)
+/data/**
 !/data/samples/
 !/data/samples/**
-
-########################################
-# Runtime / release artifacts (FAZ603)
-########################################
-dist/
-data/log/
-data/tmp/
-*.zip
-
-
-########################################
-# Backups
-########################################
-src_file_backup_*/
+*.pyo
 *.bak*
 *.broken*
 proof_*.txt
-
-########################################
-# Security hardening
-# (root config + secret patterns)
-########################################
-/config/*.yml
-/config/*.yaml
-
-secrets/
-*.pem
-*.key
-*.p12
-*.cer
-*.crt
-*.der
-*.keystore
-*.jks
-
-# local test artifacts
-pytest_first_fail.txt
-pytest_*.txt
-_tmp_snap*/
-
-
-# runtime inbox (local only)
-data/inbox/
-
-# scheduler runtime logs (local only)
-data/log/scheduler/
-

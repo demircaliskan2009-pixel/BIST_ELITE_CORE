@@ -1684,7 +1684,7 @@ def _cmd_ask(args: argparse.Namespace) -> int:
         if params_line and "params" not in payload:
             payload["params"] = {"horizon": horizon, "risk": risk, "capital": capital, "max_loss_tl": max_loss_tl}
         payload["schema_version"] = 1
-        payload["generated_at"] = datetime.utcnow().isoformat() + "Z"
+        payload["generated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         payload["content_sha256"] = _content_sha256(payload)
         _atomic_write_json_deterministic(artifact_path, payload)
 
@@ -3511,7 +3511,9 @@ Tek sembol danışma (interaktif parametrelerle):
     p_snapshots_doctor.add_argument("--day", default=None, help="Reference day (YYYY-MM-DD) for symbol bars")
     p_snapshots_doctor.set_defaults(func=_cmd_snapshots_doctor)
 
+
     p_import = sub_data.add_parser("import")
+    p_import.add_argument("--symbol", default=None, help="Fallback symbol if input has no symbol/hisse column (else derive from filename stem)")
     p_import.add_argument("--input", required=True, help="Input CSV path")
     p_import.add_argument("--out", default=None, help="Output snapshot root (default: data/eod/snapshots)")
     p_import.add_argument("--day", default=None, help="Required when CSV has no date column")
@@ -3528,7 +3530,9 @@ Tek sembol danışma (interaktif parametrelerle):
     )
     p_import.set_defaults(func=_cmd_data_import)
 
+
     p_ask = sub.add_parser("ask")
+    p_ask.add_argument("--root", default=None, help="Snapshot root (overrides env BIST_CORE_SNAPSHOT_DIR)")
     p_ask.add_argument("symbol", nargs="?", default=None, help="Sembol (örn. QNBFK)")
     p_ask.add_argument("--symbol", dest="symbol_opt", default=None, help="Sembol (--symbol QNBFK)")
     p_ask.add_argument("--day", default=None)
@@ -3544,7 +3548,9 @@ Tek sembol danışma (interaktif parametrelerle):
     p_ask.add_argument("--out", default=None, help="Output dir for JSON artifact (default: data/out/ask)")
     p_ask.set_defaults(func=_cmd_ask)
 
+
     p_scan = sub.add_parser("scan", help="Ranked scan of symbols; interactive wizard or args")
+    p_scan.add_argument("--root", default=None, help="Snapshot root (overrides env BIST_CORE_SNAPSHOT_DIR)")
     p_scan.add_argument("--day", default=None)
     p_scan.add_argument("--interactive", action="store_true", help="Prompt for missing params")
     p_scan.add_argument("--horizon", choices=["short", "mid", "long"], default=None)

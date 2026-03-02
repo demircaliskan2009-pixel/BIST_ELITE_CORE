@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from bist_core import config
 from bist_core.services import eventstore
 from bist_core.services.marketdata import MarketData
-from bist_core.services.eod_adapters import build_bars_window, build_bands_for_day
+from bist_core.services.eod_adapters import build_bars_window, build_bands_for_day, resolve_snapshots_base, materialize_snapshots_from_inbox
 from bist_core.strategy import engine
 
 
@@ -283,7 +283,13 @@ def _get_day_context(
     vol_window = strat_cfg.get("vol_window", 20)
     lookback = max(mom_slow, vol_window) + 1
 
-    bars = build_bars_window(day_str, md, root, lookback)
+    data_root = Path(root) if root else Path("data")
+
+    base = resolve_snapshots_base(data_root)
+
+    materialize_snapshots_from_inbox(data_root=data_root, snapshots_base=base, symbols=None, end_day=day_str, lookback=lookback)
+
+    bars = build_bars_window(day_str, md, base, lookback)
     cfg = config.CORE
     bands = build_bands_for_day(day_str, md, cfg)
     kap_events = _load_kap_events(md, day_str)
