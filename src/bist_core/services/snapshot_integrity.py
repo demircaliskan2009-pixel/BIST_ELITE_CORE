@@ -83,11 +83,34 @@ def build_snapshot_hash_manifest(snapshot_csv_path: Path) -> Dict[str, object]:
 
 
 def atomic_write_json(path: Path, payload: dict) -> None:
-    tmp = path.with_name(f"{path.name}.tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    tmp.replace(path)
+    """Write JSON atomically. Windows-safe: retry replace to avoid WinError 32 file locks."""
+    import json
+    import os
+    import time
 
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    tmp = path.with_suffix(path.suffix + ".tmp")
+
+    data = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+
+    with tmp.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(data)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except Exception:
+            pass
+
+    for i in range(80):
+        try:
+            os.replace(tmp, path)
+            break
+        except PermissionError:
+            time.sleep(min(0.01 * (i + 1), 0.25))
+    else:
+        os.replace(tmp, path)
 
 def build_eod_snapshot(
     day: str,
