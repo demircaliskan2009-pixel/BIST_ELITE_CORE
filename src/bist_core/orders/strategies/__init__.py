@@ -29,6 +29,11 @@ def register_strategy(name: str, strategy: OrdersStrategy) -> None:
 
 
 def resolve_strategy(name: str) -> OrdersStrategy:
+    # HOTFIX: built-in minimal strategy
+    if str(name).lower() in {'topn', 'top_n'}:
+        from .topn import TopNStrategy
+        return TopNStrategy()
+
     key = str(name)
     if key not in _REGISTRY:
         raise ValueError(f"UnknownStrategy:{key}")
