@@ -114,6 +114,9 @@ def _codes_from_notes(notes: List[str]) -> List[str]:
                 other.append(n)
 
     codes: List[str] = []
+    if "blocked" in notes:
+        codes.append("blocked")
+
     if stage_codes:
         codes.append("stage_errors")
         codes.extend(sorted(set(stage_codes)))
