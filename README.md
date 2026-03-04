@@ -208,3 +208,15 @@ git push origin release/live-test-v1
 | [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md) | Branch model, tags, hotfix promotion rules |
 | [docs/TAGGING.md](docs/TAGGING.md) | Safe tag push (no clobber) |
 | [docs/INTEGRATION_READY.md](docs/INTEGRATION_READY.md) | Broker adapter contract, dry-run, integration readiness |
+
+<!-- BIST_CORE_LIVE_STUB_QUICKSTART -->
+
+## Live (stub) quickstart (safe)
+
+PowerShell:
+  $env:BIST_CORE_SNAPSHOT_DIR=(Resolve-Path "data\\eod\\snapshots").Path
+  $day=(Get-ChildItem data\\eod\\snapshots -Directory | Sort-Object Name | Select-Object -Last 1).Name
+  python -m bist_core.cli eod run --day $day --outdir data\\out --emit-orders --orders-top-n 5 --orders-strategy topn --research-offline
+  python -m bist_core.cli eod execute --day $day --outdir data\\out --execution live --broker-config configs\\broker_config.stub.example.json
+  python -m bist_core.cli eod execute --day $day --outdir data\\out --execution live --broker-config configs\\broker_config.stub.example.json --live
+
