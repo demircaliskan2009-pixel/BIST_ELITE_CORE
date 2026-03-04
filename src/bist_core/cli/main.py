@@ -571,7 +571,7 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         )
         return 2
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, TypeError, OSError):
         print("blocked: invalid pipeline manifest", file=sys.stderr)
         write_execution_result(
@@ -607,7 +607,7 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         )
         return 2
     try:
-        orders_intent = json.loads(orders_intent_path.read_text(encoding="utf-8"))
+        orders_intent = json.loads(orders_intent_path.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, TypeError, OSError):
         write_execution_result(
             outdir,
@@ -642,7 +642,11 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
     report = run_all(orders_intent, stages, policy_ruleset=None, rulespack=None)
     if report.get("blocked"):
         notes = report.get("errors") or []
+        codes = report.get("codes") or []
+        err_items = codes or notes or ["risk_gate_denied"]
         print("blocked: risk gate denied", file=sys.stderr)
+        if codes:
+            print(f"  codes={codes}", file=sys.stderr)
         for n in notes:
             print(f"  {n}", file=sys.stderr)
         exec_result_path = write_execution_result(
@@ -653,7 +657,7 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
             reason="risk gate denied",
             provider=broker_name,
             mode=execution,
-            errors=notes,
+            errors=err_items,
             execution=execution,
         )
         from bist_core.dossier.write import update_dossier_evidence
