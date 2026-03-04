@@ -452,7 +452,7 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         or ("paper" if execution == "paper" else "stub")
     )
     live = execution == "live"
-    dry_run = not live
+    dry_run = bool(getattr(args, "dry_run", False))
     if not day or not str(outdir):
         raise SystemExit("--day and --outdir are required")
     day_dir = outdir / day
@@ -3385,7 +3385,7 @@ Tek sembol danışma (interaktif parametrelerle):
         default=None,
         help="Execution provider (e.g. paper); default paper for paper execution, stub for live",
     )
-    p_eod_execute.add_argument("--dry-run", dest="dry_run", action="store_true", default=True)
+    p_eod_execute.add_argument("--dry-run", dest="dry_run", action="store_true", default=False)
     p_eod_execute.add_argument("--skip-risk-gate", action="store_true", help="Paper only: bypass risk gate (diagnostic)")
     p_eod_execute.add_argument("--live", action="store_true", dest="live")
     p_eod_execute.set_defaults(func=_cmd_eod_execute)
