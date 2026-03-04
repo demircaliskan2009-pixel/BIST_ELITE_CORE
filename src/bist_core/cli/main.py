@@ -460,7 +460,7 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         or ("paper" if execution == "paper" else "stub")
     )
     live = execution == "live"
-    dry_run = bool(getattr(args, \"dry_run\", False)) or forced_dry_run
+    dry_run = bool(getattr(args, "dry_run", False)) or forced_dry_run
     if not day or not str(outdir):
         raise SystemExit("--day and --outdir are required")
     day_dir = outdir / day
