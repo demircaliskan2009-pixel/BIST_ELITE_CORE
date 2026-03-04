@@ -15,6 +15,18 @@ def preflight_bist_rules_for_live(
     from bist_core.rules.validator import validate_rulespack
 
     return validate_rulespack(rulespack_dir=rulespack_dir, restrictions_path=restrictions_path)
+    # FAZ57_REQUIRE_RESTRICTIONS_WRAPPER_V2
+    # Resolve restrictions from env/defaults if caller didn't pass one; fail-closed if still missing.
+    from bist_core.risk.restrictions import get_restrictions_path
+    if restrictions_path is None:
+        restrictions_path = get_restrictions_path()
+    try:
+        _rp = None if restrictions_path is None else Path(restrictions_path)
+        if (_rp is None) or (not _rp.exists()):
+            return False, ['bist_rules_vbts_missing']
+    except Exception:
+        return False, ['bist_rules_vbts_missing']
+
 def gate_order_rules(
     order: Dict[str, Any],
     rulespack: Dict[str, Any],
