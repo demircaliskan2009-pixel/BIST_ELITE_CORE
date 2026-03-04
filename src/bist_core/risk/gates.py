@@ -15,12 +15,6 @@ def preflight_bist_rules_for_live(
     from bist_core.rules.validator import validate_rulespack
 
     return validate_rulespack(rulespack_dir=rulespack_dir, restrictions_path=restrictions_path)
-
-
-    # FAZ57_REQUIRE_RESTRICTIONS_WRAPPER_V1
-    if restrictions_path is None:
-        return False, ['bist_rules_vbts_missing']
-
 def gate_order_rules(
     order: Dict[str, Any],
     rulespack: Dict[str, Any],
