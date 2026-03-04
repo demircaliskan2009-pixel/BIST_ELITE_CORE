@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 def preflight_bist_rules_for_live(
+
     rulespack_dir: Optional[Path] = None,
     restrictions_path: Optional[Path] = None,
 ) -> Tuple[bool, List[str]]:
@@ -15,6 +16,10 @@ def preflight_bist_rules_for_live(
 
     return validate_rulespack(rulespack_dir=rulespack_dir, restrictions_path=restrictions_path)
 
+
+    # FAZ57_REQUIRE_RESTRICTIONS_WRAPPER_V1
+    if restrictions_path is None:
+        return False, ['bist_rules_vbts_missing']
 
 def gate_order_rules(
     order: Dict[str, Any],
