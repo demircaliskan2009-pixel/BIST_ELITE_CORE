@@ -220,3 +220,17 @@ PowerShell:
   python -m bist_core.cli eod execute --day $day --outdir data\\out --execution live --broker-config configs\\broker_config.stub.example.json
   python -m bist_core.cli eod execute --day $day --outdir data\\out --execution live --broker-config configs\\broker_config.stub.example.json --live
 
+<!-- BIST_CORE_RULESPACK_STUB -->
+
+## Rulespack stub (dev only)
+
+PowerShell:
+  $env:BIST_RULESPACK_DIR=(Resolve-Path "configs\\rulespack_stub").Path
+  $env:BIST_RESTRICTIONS_FILE=(Resolve-Path "configs\\restrictions_stub_vbts.csv").Path
+  $env:BIST_CORE_SNAPSHOT_DIR=(Resolve-Path "data\\eod\\snapshots").Path
+  $day=(Get-ChildItem data\\eod\\snapshots -Directory | Sort-Object Name | Select-Object -Last 1).Name
+  python -m bist_core.cli eod run --day $day --outdir data\\out --emit-orders --orders-top-n 5 --orders-strategy topn --research-offline
+  python -m bist_core.cli eod execute --day $day --outdir data\\out --execution live --broker-config configs\\broker_config.stub.example.json
+  # armed live (still safe):
+  python -m bist_core.cli eod execute --day $day --outdir data\\out --execution live --broker-config configs\\broker_config.stub.example.json --live
+
