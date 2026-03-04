@@ -11,27 +11,10 @@ def preflight_bist_rules_for_live(
     rulespack_dir: Optional[Path] = None,
     restrictions_path: Optional[Path] = None,
 ) -> Tuple[bool, List[str]]:
-    """Preflight BIST rule data for live execution. Fail-closed when tick/bands/vbts missing. Returns (ok, errors)."""
-    from bist_core.rules.validator import validate_rulespack
-
-    return validate_rulespack(rulespack_dir=rulespack_dir, restrictions_path=restrictions_path)
-    # FAZ57_REQUIRE_RESTRICTIONS_WRAPPER_V2
-    # Resolve restrictions from env/defaults if caller didn't pass one; fail-closed if still missing.
-    from bist_core.risk.restrictions import get_restrictions_path
-    if restrictions_path is None:
-        restrictions_path = get_restrictions_path()
-    try:
-        _rp = None if restrictions_path is None else Path(restrictions_path)
-        if (_rp is None) or (not _rp.exists()):
-            return False, ['bist_rules_vbts_missing']
-    except Exception:
-        return False, ['bist_rules_vbts_missing']
-
-    # FAZ57_GATES_PRELIGHT_WRAPPER_V3
-    # Keep gates wrapper behavior consistent with bist_rules.preflight_for_live.
-    # If caller didn't pass restrictions_path, resolve from env/defaults; fail-closed if still missing.
+    """Wrapper: resolve restrictions from env/defaults; then delegate to bist_rules.preflight_for_live."""
     from bist_core.risk.restrictions import get_restrictions_path
     from bist_core.risk.bist_rules import preflight_for_live
+
     if restrictions_path is None:
         restrictions_path = get_restrictions_path()
     return preflight_for_live(rulespack_dir=rulespack_dir, restrictions_path=restrictions_path)
