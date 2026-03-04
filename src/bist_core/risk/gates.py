@@ -197,6 +197,15 @@ class RiskGateEngine:
             except Exception:
                 e = 0
             if e > 0:
+                # NON-FATAL: features stage often emits missing_data / insufficient_history in small datasets.
+                # Treat these as warnings (do NOT block execution) when they are the ONLY notes.
+                if str(name) == "features":
+                    n = stage.get("notes") or []
+                    if isinstance(n, list) and n:
+                        nn = [str(x) for x in n]
+                        allowed = {"missing_data", "insufficient_history"}
+                        if all(x in allowed for x in nn):
+                            continue
                 stage_errs.append(f"stage_errors:{name}={e}")
 
         if stage_errs:
