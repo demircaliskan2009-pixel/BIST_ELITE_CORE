@@ -640,7 +640,8 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
     from bist_core.risk.gates import run_all
 
     report = run_all(orders_intent, stages, policy_ruleset=None, rulespack=None)
-    if report.get("blocked") and not (execution == "paper" or broker_name == "paper"):
+    skip_risk_gate = bool(getattr(args, "skip_risk_gate", False))
+    if report.get("blocked") and not (skip_risk_gate and execution == "paper"):
         notes = report.get("errors") or []
         codes = report.get("codes") or []
         err_items = codes or notes or ["risk_gate_denied"]
@@ -3385,6 +3386,7 @@ Tek sembol danışma (interaktif parametrelerle):
         help="Execution provider (e.g. paper); default paper for paper execution, stub for live",
     )
     p_eod_execute.add_argument("--dry-run", dest="dry_run", action="store_true", default=True)
+    p_eod_execute.add_argument("--skip-risk-gate", action="store_true", help="Paper only: bypass risk gate (diagnostic)")
     p_eod_execute.add_argument("--live", action="store_true", dest="live")
     p_eod_execute.set_defaults(func=_cmd_eod_execute)
 
