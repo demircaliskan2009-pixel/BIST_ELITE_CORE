@@ -641,6 +641,26 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
         return 2
     from bist_core.risk.gates import run_all
 
+    # ORDERS_INTENT_META_DRYRUN: propagate execution context to risk gates
+
+    try:
+
+        if isinstance(orders_intent, dict):
+
+            meta = orders_intent.setdefault("_meta", {})
+
+            if isinstance(meta, dict):
+
+                meta["execution"] = str(execution)
+
+                meta["dry_run"] = bool(dry_run)
+
+                meta["armed_live"] = bool(getattr(args, "live", False))
+
+    except Exception:
+
+        pass
+
     report = run_all(orders_intent, stages, policy_ruleset=None, rulespack=None)
     skip_risk_gate = bool(getattr(args, "skip_risk_gate", False))
     if live and skip_risk_gate:
