@@ -180,6 +180,7 @@ class RiskGateEngine:
         notes: List[str] = []
 
         if not isinstance(stages, dict):
+            notes.append("blocked")
             notes.append("stages_not_dict")
             return False, notes
 
@@ -197,6 +198,7 @@ class RiskGateEngine:
 
         if stage_errs:
             # fail-closed on any stage error
+            notes.append("blocked")
             notes.extend(sorted(stage_errs))
             return False, notes
 
@@ -240,11 +242,13 @@ class RiskGateEngine:
                     trading_context={"day": orders_intent.get("day", "")},
                 )
                 if not allowed:
+                    notes.append("blocked")
                     notes.append("policy_denied")
                     for r in (reasons or []):
                         notes.append(str(r))
                     return False, notes
             except Exception:
+                notes.append("blocked")
                 notes.append("policy_exception")
                 return False, notes
 
