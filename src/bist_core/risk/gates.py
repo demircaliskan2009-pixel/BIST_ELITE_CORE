@@ -142,6 +142,20 @@ def _codes_from_notes(notes: List[str]) -> List[str]:
     return out
 
 
+
+
+def _skip_live_rules_for_dry_run(orders_intent: object) -> bool:
+    """SKIP_LIVE_RULES_DRYRUN_V2: allow missing BIST rules only when execution=live AND dry_run=True (not armed)."""
+    try:
+        if not isinstance(orders_intent, dict):
+            return False
+        meta = orders_intent.get("_meta") or {}
+        if not isinstance(meta, dict):
+            return False
+        return str(meta.get("execution", "")).lower() == "live" and bool(meta.get("dry_run", False))
+    except Exception:
+        return False
+
 def run_all(
     orders_intent: Dict[str, Any],
     stages: Dict[str, Any],
