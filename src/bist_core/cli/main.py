@@ -446,21 +446,15 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
     day = getattr(args, "day", None) or ""
     outdir = Path(getattr(args, "outdir", None) or "")
     execution = "live" if getattr(args, "live", False) else (getattr(args, "execution", None) or "paper")
-    # SAFE_LIVE_OPTIN_V3: live is opt-in via --live; --execution live alone becomes paper + forced dry-run
-    live_flag = bool(getattr(args, "live", False))
-    forced_dry_run = False
-    if live_flag:
-        execution = "live"
-    elif str(execution).lower() == "live":
-        execution = "paper"
-        forced_dry_run = True
+    # SAFE_LIVE_OPTIN_V4: keep --execution live as LIVE (fail-closed on missing broker-config); --live only arms sending (dry_run=False)
+    armed_live = bool(getattr(args, "live", False))
     broker_name = (
         getattr(args, "broker", None)
         or getattr(args, "provider", None)
         or ("paper" if execution == "paper" else "stub")
     )
     live = execution == "live"
-    dry_run = bool(getattr(args, "dry_run", False)) or forced_dry_run
+    dry_run = bool(getattr(args, "dry_run", False)) or (live and not armed_live)
     if not day or not str(outdir):
         raise SystemExit("--day and --outdir are required")
     day_dir = outdir / day
