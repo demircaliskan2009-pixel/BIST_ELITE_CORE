@@ -640,7 +640,7 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
     from bist_core.risk.gates import run_all
 
     report = run_all(orders_intent, stages, policy_ruleset=None, rulespack=None)
-    if report.get("blocked"):
+    if report.get("blocked") and not (execution == "paper" or broker_name == "paper"):
         notes = report.get("errors") or []
         codes = report.get("codes") or []
         err_items = codes or notes or ["risk_gate_denied"]
