@@ -27,6 +27,15 @@ def preflight_bist_rules_for_live(
     except Exception:
         return False, ['bist_rules_vbts_missing']
 
+    # FAZ57_GATES_PRELIGHT_WRAPPER_V3
+    # Keep gates wrapper behavior consistent with bist_rules.preflight_for_live.
+    # If caller didn't pass restrictions_path, resolve from env/defaults; fail-closed if still missing.
+    from bist_core.risk.restrictions import get_restrictions_path
+    from bist_core.risk.bist_rules import preflight_for_live
+    if restrictions_path is None:
+        restrictions_path = get_restrictions_path()
+    return preflight_for_live(rulespack_dir=rulespack_dir, restrictions_path=restrictions_path)
+
 def gate_order_rules(
     order: Dict[str, Any],
     rulespack: Dict[str, Any],
