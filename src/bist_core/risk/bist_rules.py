@@ -21,6 +21,14 @@ def preflight_for_live(
     """
     errors: List[str] = []
 
+    # FAZ57_REQUIRE_RESTRICTIONS_V3
+    try:
+        _rp = None if restrictions_path is None else Path(restrictions_path)
+        if (_rp is None) or (not _rp.exists()):
+            errors.append('bist_rules_vbts_missing')
+    except Exception:
+        errors.append('bist_rules_vbts_missing')
+
     from bist_core.risk.rulespack import get_rulespack_dir, load_rulespack
     from bist_core.risk.restrictions import get_restrictions_path, load_restrictions
 
