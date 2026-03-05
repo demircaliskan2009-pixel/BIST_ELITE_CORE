@@ -11,11 +11,10 @@ def preflight_bist_rules_for_live(
     rulespack_dir: Optional[Path] = None,
     restrictions_path: Optional[Path] = None,
 ) -> Tuple[bool, List[str]]:
-    """Wrapper: resolve restrictions from env/defaults; then delegate to bist_rules.preflight_for_live."""
-    from bist_core.risk.restrictions import get_restrictions_path
+    """Gates wrapper: deterministic when rulespack_dir is provided; env-resolve only for CLI path."""
     from bist_core.risk.bist_rules import preflight_for_live
-
-    if restrictions_path is None:
+    if restrictions_path is None and rulespack_dir is None:
+        from bist_core.risk.restrictions import get_restrictions_path
         restrictions_path = get_restrictions_path()
     return preflight_for_live(rulespack_dir=rulespack_dir, restrictions_path=restrictions_path)
 
