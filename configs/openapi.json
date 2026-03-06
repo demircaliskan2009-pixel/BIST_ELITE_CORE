@@ -25,6 +25,26 @@
         "title": "CliRequest",
         "type": "object"
       },
+      "CliResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "returncode": {
+            "type": "integer"
+          },
+          "stderr": {
+            "type": "string"
+          },
+          "stdout": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "returncode",
+          "stdout",
+          "stderr"
+        ],
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -36,6 +56,26 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "service": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "service",
+          "version"
+        ],
         "type": "object"
       },
       "ValidationError": {
@@ -101,9 +141,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Health Health Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/HealthResponse"
                 }
               }
             },
@@ -131,9 +169,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Run Cli V1 Cli Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/CliResponse"
                 }
               }
             },
