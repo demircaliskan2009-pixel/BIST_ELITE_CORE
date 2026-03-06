@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 
+from bist_core.gateway.security import GatewaySecurityMiddleware, customize_openapi, cli_payload_allowlisted
 def _repo_root() -> Path:
     # .../src/bist_core/gateway/app.py -> parents[3] == repo root
     return Path(__file__).resolve().parents[3]
@@ -27,6 +28,10 @@ def _with_src_on_pythonpath(env: dict[str, str]) -> dict[str, str]:
 
 
 app = FastAPI(title="BIST_ELITE_CORE Gateway", version="0.1.0")
+# PACK6: fail-closed API-key auth + rate-limit (non-invasive)
+app.add_middleware(GatewaySecurityMiddleware)
+app.openapi = (lambda _app=app: customize_openapi(_app))
+
 
 
 @app.get("/health")

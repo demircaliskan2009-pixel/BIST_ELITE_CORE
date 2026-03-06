@@ -234,3 +234,14 @@ PowerShell:
   # armed live (still safe):
   python -m bist_core.cli eod execute --day $day --outdir data\\out --execution live --broker-config configs\\broker_config.stub.example.json --live
 
+## Gateway (FastAPI)
+
+### Security (PACK6)
+- API key required for all `/v1/*` endpoints: send header `X-API-Key` (or `Authorization: Bearer ...`).
+- Fail-closed: if `BIST_GATEWAY_API_KEY` is not set, `/v1/*` returns **503**.
+- Rate limit (per-client RPM): set `BIST_GATEWAY_RPM` (default: 60). Exceeding returns **429**.
+- CLI allowlist: `/v1/cli` only allows **`data ...`** subtree. Others return **400**.
+
+#### Env vars
+- `BIST_GATEWAY_API_KEY` (required, fail-closed)
+- `BIST_GATEWAY_RPM` (optional, integer RPM)
