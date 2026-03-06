@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 
 from bist_core.gateway.security import GatewaySecurityMiddleware, customize_openapi, cli_payload_allowlisted
+from bist_core.gateway.audit import AuditLogMiddleware, RequestIdMiddleware
 def _repo_root() -> Path:
     # .../src/bist_core/gateway/app.py -> parents[3] == repo root
     return Path(__file__).resolve().parents[3]
@@ -31,6 +32,9 @@ app = FastAPI(title="BIST_ELITE_CORE Gateway", version="0.1.0")
 # PACK6: fail-closed API-key auth + rate-limit (non-invasive)
 app.add_middleware(GatewaySecurityMiddleware)
 app.openapi = (lambda _app=app: customize_openapi(_app))
+# PACK7: audit-log + request-id
+app.add_middleware(AuditLogMiddleware)
+app.add_middleware(RequestIdMiddleware)
 
 
 
