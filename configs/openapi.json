@@ -131,7 +131,9 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CliResponse"
+                  "additionalProperties": true,
+                  "title": "Response Run Cli V1 Cli Post",
+                  "type": "object"
                 }
               }
             },
