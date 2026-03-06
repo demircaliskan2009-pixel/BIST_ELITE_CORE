@@ -3224,6 +3224,38 @@ def _fallback_payload(
     }
 
 
+def _cmd_broker_validate_config(args) -> int:
+    """
+    Fail-closed broker config validation.
+    Returns:
+      0 -> OK
+      2 -> validation / file errors
+    """
+    from pathlib import Path
+    from bist_core.broker_config_schema import validate_broker_config_file
+
+    config = Path(getattr(args, "config", ""))
+    schema = Path(getattr(args, "schema", "configs/broker_config.schema.json"))
+
+    if not config.is_file():
+        print(f"Config not found: {config}")
+        return 2
+
+    if not schema.is_file():
+        print(f"Schema not found: {schema}")
+        return 2
+
+    errs = validate_broker_config_file(config, schema)
+    if errs:
+        for e in errs:
+            print(f"{e.path}: {e.message}")
+        return 2
+
+    print("OK")
+    return 0
+
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="bist_core",
