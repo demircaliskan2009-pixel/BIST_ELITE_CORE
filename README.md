@@ -249,3 +249,9 @@ PowerShell:
 ### Observability (PACK7)
 - Gateway sets `X-Request-ID` on every response (uses client-provided header if present).
 - Audit log (JSONL) is appended to `BIST_GATEWAY_AUDIT_LOG` (default: `.bist_gateway_audit.log`).
+
+### Docker (PACK9)
+Gateway'i docker-compose ile ?al??t?rma:
+1) `BIST_GATEWAY_API_KEY` ortam de?i?kenini set et.
+2) `docker compose up --build`.
+3) Health: `http://localhost:8000/health`.
