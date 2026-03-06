@@ -245,3 +245,7 @@ PowerShell:
 #### Env vars
 - `BIST_GATEWAY_API_KEY` (required, fail-closed)
 - `BIST_GATEWAY_RPM` (optional, integer RPM)
+
+### Observability (PACK7)
+- Gateway sets `X-Request-ID` on every response (uses client-provided header if present).
+- Audit log (JSONL) is appended to `BIST_GATEWAY_AUDIT_LOG` (default: `.bist_gateway_audit.log`).
