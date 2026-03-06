@@ -3439,6 +3439,11 @@ Tek sembol danışma (interaktif parametrelerle):
 
     p_broker = sub.add_parser("broker")
     sub_broker = p_broker.add_subparsers(dest="broker_cmd", required=True)
+    p_validate = sub_broker.add_parser("validate-config", help="Validate broker config JSON against schema")
+    p_validate.add_argument("--config", "-c", required=True, help="Path to broker config JSON")
+    p_validate.add_argument("--schema", default="configs/broker_config.schema.json", help="Path to broker config JSON Schema")
+    p_validate.set_defaults(func=_cmd_broker_validate_config)
+
     p_broker_paper = sub_broker.add_parser("paper")
     sub_broker_paper_cmd = p_broker_paper.add_subparsers(dest="broker_paper_cmd", required=True)
     p_broker_paper_run = sub_broker_paper_cmd.add_parser("run")
