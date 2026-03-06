@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "broker": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "broker",
+    "notes",
+    "provider",
+    "schema_version"
+  ],
+  "title": "BIST_ELITE_CORE Broker Config",
+  "type": "object"
+}
