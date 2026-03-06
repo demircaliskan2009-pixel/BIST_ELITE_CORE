@@ -2,71 +2,92 @@
   "components": {
     "schemas": {
       "CliRequest": {
-        "additionalProperties": false,
         "properties": {
           "args": {
             "description": "Arguments after 'bist_core.cli' module. Example: ['data','snapshots','doctor','--json']",
             "items": {
               "type": "string"
             },
+            "title": "Args",
             "type": "array"
           },
           "timeout_s": {
             "default": 30,
-            "maximum": 120,
-            "minimum": 1,
+            "maximum": 120.0,
+            "minimum": 1.0,
+            "title": "Timeout S",
             "type": "integer"
           }
         },
         "required": [
           "args"
         ],
+        "title": "CliRequest",
         "type": "object"
       },
-      "CliResponse": {
-        "additionalProperties": false,
+      "HTTPValidationError": {
         "properties": {
-          "returncode": {
-            "type": "integer"
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
           },
-          "stderr": {
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
             "type": "string"
           },
-          "stdout": {
+          "type": {
+            "title": "Error Type",
             "type": "string"
           }
         },
         "required": [
-          "returncode",
-          "stdout",
-          "stderr"
+          "loc",
+          "msg",
+          "type"
         ],
+        "title": "ValidationError",
         "type": "object"
-      },
-      "HealthResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "ok": {
-            "type": "boolean"
-          },
-          "service": {
-            "type": "string"
-          },
-          "version": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "ok",
-          "service",
-          "version"
-        ],
-        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "in": "header",
+        "name": "X-API-Key",
+        "type": "apiKey"
       }
     }
   },
   "info": {
-    "description": "Contract for the optional HTTP Gateway. Auth/rate-limit will be added later.",
     "title": "BIST_ELITE_CORE Gateway",
     "version": "0.1.0"
   },
@@ -74,24 +95,27 @@
   "paths": {
     "/health": {
       "get": {
-        "operationId": "health",
+        "operationId": "health_health_get",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HealthResponse"
+                  "additionalProperties": true,
+                  "title": "Response Health Health Get",
+                  "type": "object"
                 }
               }
             },
-            "description": "Health status"
+            "description": "Successful Response"
           }
-        }
+        },
+        "summary": "Health"
       }
     },
     "/v1/cli": {
       "post": {
-        "operationId": "runCli",
+        "operationId": "run_cli_v1_cli_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -107,22 +131,40 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CliResponse"
+                  "additionalProperties": true,
+                  "title": "Response Run Cli V1 Cli Post",
+                  "type": "object"
                 }
               }
             },
-            "description": "CLI execution result"
+            "description": "Successful Response"
           },
-          "400": {
-            "description": "Bad request"
+          "401": {
+            "description": "Unauthorized"
           },
-          "403": {
-            "description": "Forbidden"
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           },
-          "500": {
-            "description": "Server error"
+          "429": {
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "description": "Service Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ],
+        "summary": "Run Cli"
       }
     }
   }
