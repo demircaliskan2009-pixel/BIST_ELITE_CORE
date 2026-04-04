@@ -1,0 +1,27 @@
+{
+    "name": "post-response-validator",
+    "trigger": "after_response",
+    "rules": [
+        {
+            "type": "require_sections",
+            "sections": [
+                "WHAT WAS ANALYZED",
+                "WHAT WAS FOUND",
+                "WHAT WAS FIXED",
+                "WHY IT WORKS",
+                "RISKS"
+            ],
+            "error": "INVALID RESPONSE STRUCTURE"
+        },
+        {
+            "type": "reject_if",
+            "condition": "contains_hallucination == true",
+            "error": "HALLUCINATION DETECTED"
+        },
+        {
+            "type": "reject_if",
+            "condition": "missing_data_used == true",
+            "error": "INVALID DATA USAGE"
+        }
+    ]
+}

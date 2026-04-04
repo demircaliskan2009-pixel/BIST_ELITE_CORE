@@ -4,7 +4,6 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-
 _SYMBOL_RE = re.compile(r"(?<![A-ZÇĞİÖŞÜ0-9])[$#]?([A-ZÇĞİÖŞÜ]{4,6})(?![A-ZÇĞİÖŞÜ0-9])")
 _TOP_N_PATTERNS = (
     re.compile(r"\btop\s*(\d{1,2})\b", re.IGNORECASE),
@@ -15,23 +14,94 @@ _TOP_N_PATTERNS = (
 )
 
 _IGNORE_TOKENS = {
-    "BIST", "BIST100", "XU100", "XU030", "KAP", "VIOP", "TRY", "TL", "USD",
-    "EUR", "TOP", "SCAN", "LONG", "SHORT", "STOP", "HEDEF", "AL", "SAT",
-    "HOLD", "WAIT", "ROBOT", "CORE", "TEST", "LIVE", "EOD",
+    "BIST",
+    "BIST100",
+    "XU100",
+    "XU030",
+    "KAP",
+    "VIOP",
+    "TRY",
+    "TL",
+    "USD",
+    "EUR",
+    "TOP",
+    "SCAN",
+    "LONG",
+    "SHORT",
+    "STOP",
+    "HEDEF",
+    "AL",
+    "SAT",
+    "HOLD",
+    "WAIT",
+    "ROBOT",
+    "CORE",
+    "TEST",
+    "LIVE",
+    "EOD",
 }
 
 _COMPARISON_HINTS = (
-    "karşılaştır", "karsilastir", "kıyasla", "kiyasla", "vs", "versus", "ile karşılaştır",
-    "ile karsilastir", "mi yoksa", "mu yoksa", "mı yoksa", "mü yoksa", "hangisi"
+    "karşılaştır",
+    "karsilastir",
+    "kıyasla",
+    "kiyasla",
+    "vs",
+    "versus",
+    "ile karşılaştır",
+    "ile karsilastir",
+    "mi yoksa",
+    "mu yoksa",
+    "mı yoksa",
+    "mü yoksa",
+    "hangisi",
 )
 
-_SCAN_HINTS = (
-    "scan", "tara", "listele", "top ", "ilk ", "en iyi ", "fırsat", "firsat"
+_DEBUG_SYMBOL_HINTS = (
+    "why this score",
+    "neden bu skor",
+    "debug symbol",
+    "debug sembol",
+    "sembol debug",
+    "score details",
+    "score detay",
+    "skor detay",
 )
 
-_MARKET_HINTS = (
-    "bist", "piyasa", "endeks", "sektör", "sektor", "hacim", "genel görünüm", "genel gorunum"
+_DEBUG_RANKING_HINTS = (
+    "why this ranking",
+    "neden bu sıralama",
+    "ranking details",
+    "ranking detay",
+    "debug ranking",
+    "debug sıralama",
+    "debug siralama",
 )
+
+_DEBUG_COMPARISON_HINTS = (
+    "compare details",
+    "comparison details",
+    "debug comparison",
+    "debug karşılaştır",
+    "debug karsilastir",
+    "karşılaştırma detay",
+    "karsilastirma detay",
+)
+
+_DEBUG_DATASET_HINTS = (
+    "debug dataset",
+    "validate dataset",
+    "dataset validation",
+    "veri seti doğrula",
+    "veri seti dogrula",
+    "dataset debug",
+    "ohlcv validate",
+    "missing candles",
+)
+
+_SCAN_HINTS = ("scan", "tara", "listele", "top ", "ilk ", "en iyi ", "fırsat", "firsat")
+
+_MARKET_HINTS = ("bist", "piyasa", "endeks", "sektör", "sektor", "hacim", "genel görünüm", "genel gorunum")
 
 
 def _normalize_text(text: str | None) -> str:
@@ -114,8 +184,20 @@ def classify_chat_intent(
 
     wants_scan = top_n is not None or _contains_any(raw, _SCAN_HINTS)
     wants_market = _contains_any(raw, _MARKET_HINTS)
+    wants_debug_symbol = len(symbols) == 1 and _contains_any(raw, _DEBUG_SYMBOL_HINTS)
+    wants_debug_ranking = _contains_any(raw, _DEBUG_RANKING_HINTS)
+    wants_debug_comparison = len(symbols) >= 2 and _contains_any(raw, _DEBUG_COMPARISON_HINTS)
+    wants_debug_dataset = len(symbols) == 1 and _contains_any(raw, _DEBUG_DATASET_HINTS)
 
-    if wants_comparison and len(symbols) >= 2:
+    if wants_debug_dataset:
+        intent = "debug_dataset"
+    elif wants_debug_comparison:
+        intent = "debug_comparison"
+    elif wants_debug_ranking:
+        intent = "debug_ranking"
+    elif wants_debug_symbol:
+        intent = "debug_symbol"
+    elif wants_comparison and len(symbols) >= 2:
         intent = "comparison"
     elif wants_scan and top_n is not None:
         intent = "scan"
@@ -135,5 +217,9 @@ def classify_chat_intent(
         "wants_comparison": bool(wants_comparison),
         "wants_single_symbol": len(symbols) == 1,
         "wants_market_overview": bool(wants_market),
+        "wants_debug_symbol": bool(wants_debug_symbol),
+        "wants_debug_ranking": bool(wants_debug_ranking),
+        "wants_debug_comparison": bool(wants_debug_comparison),
+        "wants_debug_dataset": bool(wants_debug_dataset),
         "raw_text": raw,
     }

@@ -16,59 +16,39 @@ from typing import Any, Optional, Sequence
 
 import pandas as pd
 
-from bist_core.data.registry import (
-    DatasetRegistry,
-    get_default_registry,
-    load_registered_dataset,
-)
-from bist_core.strategy.equal_weight import build_equal_weight_plan, generate_equal_weight_orders
 from bist_core import config
-from bist_core.services import eventstore
-from bist_core.services.strategy_logger import log_strategy
 from bist_core.advisory.outcome import evaluate_and_append_outcomes
-from bist_core.advisory.performance import (
-    build_performance_report,
-    write_performance_csv,
-    write_performance_json,
-)
-from bist_core.services.marketdata import MarketData
-from bist_core.services.advisor import build_advice_for_symbol
-from bist_core.execution.result_writer import write_execution_result
-from bist_core.services.dossier import (
-    atomic_write_json,
-    build_dossiers_for_day,
-    build_manifest,
-)
-from bist_core.services.eod_pipeline import locate_manifest, run_eod_pipeline
-from bist_core.services import snapshot_integrity
-from bist_core.services.eod_replay import run_eod_replay
-from bist_core.services.scorecard import build_scorecard
-from bist_core.services.eod_batch import audit_eod_batch, run_eod_batch
-from bist_core.services.events_pipeline import (
-    build_events_jsonl_for_day,
-)
-from bist_core.providers.events.offline_file import OfflineFileEventsProvider
-from bist_core.providers.events.kap_html import KapHtmlEventsProvider
-from bist_core.policy import rules_engine, rules_schema
-from bist_core.services import instrumentstore
-from bist_core.providers.instruments.offline_file import OfflineFileInstrumentsProvider
-from bist_core.services import castore
-from bist_core.providers.corporate_actions.offline_file import (
-    OfflineFileCorporateActionsProvider,
-)
-from bist_core.services.adjustments import apply_close_adjustments
-from bist_core.services import instrument_timeline
+from bist_core.advisory.performance import build_performance_report, write_performance_csv, write_performance_json
 from bist_core.brokers import PaperBroker
-from bist_core.market_data import resolve_provider
 from bist_core.cli.observability import (
-    err_struct,
     ERROR_ARGS_REQUIRED,
     ERROR_ARTIFACT_HASH_MISMATCH,
-    ERROR_REPO_ROOT_MISSING,
     ERROR_CORE_JSON_MISSING,
-    ERROR_SNAPSHOT_DIR_MISSING,
     ERROR_REGISTRY_MISSING,
+    ERROR_REPO_ROOT_MISSING,
+    ERROR_SNAPSHOT_DIR_MISSING,
+    err_struct,
 )
+from bist_core.data.registry import DatasetRegistry, get_default_registry, load_registered_dataset
+from bist_core.execution.result_writer import write_execution_result
+from bist_core.market_data import resolve_provider
+from bist_core.policy import rules_engine, rules_schema
+from bist_core.providers.corporate_actions.offline_file import OfflineFileCorporateActionsProvider
+from bist_core.providers.events.kap_html import KapHtmlEventsProvider
+from bist_core.providers.events.offline_file import OfflineFileEventsProvider
+from bist_core.providers.instruments.offline_file import OfflineFileInstrumentsProvider
+from bist_core.services import castore, eventstore, instrument_timeline, instrumentstore, snapshot_integrity
+from bist_core.services.adjustments import apply_close_adjustments
+from bist_core.services.advisor import build_advice_for_symbol
+from bist_core.services.dossier import atomic_write_json, build_dossiers_for_day, build_manifest
+from bist_core.services.eod_batch import audit_eod_batch, run_eod_batch
+from bist_core.services.eod_pipeline import locate_manifest, run_eod_pipeline
+from bist_core.services.eod_replay import run_eod_replay
+from bist_core.services.events_pipeline import build_events_jsonl_for_day
+from bist_core.services.marketdata import MarketData
+from bist_core.services.scorecard import build_scorecard
+from bist_core.services.strategy_logger import log_strategy
+from bist_core.strategy.equal_weight import build_equal_weight_plan, generate_equal_weight_orders
 
 
 def _ranked_item_view(item):
@@ -128,6 +108,7 @@ def _ranked_item_view(item):
     if entry_status is not None:
         out["entry_status"] = entry_status
     return out
+
 
 def _find_manifest_path(outdir: Path, day: str) -> Path:
     """First existing manifest path, else default outdir/day/pipeline_manifest.json."""
@@ -538,7 +519,7 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
             return 2
     # FAZ71: Live preflight v2 — config ok, broker config ok, BIST rules present, manifest + orders_intent present. Always write execution_result on failure.
     if live:
-        from bist_core.config import REPO_ROOT, resolve_core_config_path, load_core_config_strict
+        from bist_core.config import REPO_ROOT, load_core_config_strict, resolve_core_config_path
 
         config_path = resolve_core_config_path(getattr(args, "config", None), REPO_ROOT)
         core_cfg, config_err = load_core_config_strict(config_path)
@@ -702,13 +683,10 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
     # ORDERS_INTENT_META_DRYRUN: propagate execution context to risk gates
 
     try:
-
         if isinstance(orders_intent, dict):
-
             meta = orders_intent.setdefault("_meta", {})
 
             if isinstance(meta, dict):
-
                 meta["execution"] = str(execution)
 
                 meta["dry_run"] = bool(dry_run)
@@ -716,7 +694,6 @@ def _cmd_eod_execute(args: argparse.Namespace) -> int:
                 meta["armed_live"] = bool(getattr(args, "live", False))
 
     except Exception:
-
         pass
 
     report = run_all(orders_intent, stages, policy_ruleset=None, rulespack=None)
@@ -1132,7 +1109,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
     # ---- Live mode ----
     if mode == "live":
-        from bist_core.config import resolve_core_config_path, load_core_config_strict
+        from bist_core.config import load_core_config_strict, resolve_core_config_path
 
         config_path = resolve_core_config_path(getattr(args, "config", None), repo_path)
         if config_path and config_path.is_file():
@@ -1159,8 +1136,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             )
 
         from bist_core.risk.gates import preflight_bist_rules_for_live
-        from bist_core.risk.rulespack import get_rulespack_dir
         from bist_core.risk.restrictions import get_restrictions_path
+        from bist_core.risk.rulespack import get_rulespack_dir
 
         ok_pre, err_pre = preflight_bist_rules_for_live(
             rulespack_dir=get_rulespack_dir(),
@@ -1832,8 +1809,6 @@ def _build_scan_artifact(day_str: str, ranked) -> dict[str, object]:
         "day": day_str,
         "ranked": lines,
     }
-
-
 
 
 def _cmd_scan(args: argparse.Namespace) -> int:
@@ -3291,6 +3266,7 @@ def _cmd_broker_validate_config(args) -> int:
       2 -> validation / file errors
     """
     from pathlib import Path
+
     from bist_core.broker_config_schema import validate_broker_config_file
 
     config = Path(getattr(args, "config", ""))
@@ -3314,7 +3290,6 @@ def _cmd_broker_validate_config(args) -> int:
     return 0
 
 
-
 # FAZ591_FREEFORM_ASK_WRAPPER_START
 def _freeform_query_text_from_args(args):
     raw = getattr(args, "symbol_opt", None) or getattr(args, "symbol", None) or None
@@ -3322,15 +3297,19 @@ def _freeform_query_text_from_args(args):
         return None
     return str(raw).strip()
 
+
 def _resolve_snapshot_root_for_freeform(args):
     import os
     from pathlib import Path
+
     root = getattr(args, "root", None) or os.environ.get("BIST_CORE_SNAPSHOT_DIR") or "data/eod/snapshots"
     return Path(root)
+
 
 def _snapshot_symbols_for_day(snapshot_root, day):
     import csv
     from pathlib import Path
+
     p = Path(snapshot_root) / str(day) / "snapshot.csv"
     if not p.exists():
         return set()
@@ -3343,21 +3322,35 @@ def _snapshot_symbols_for_day(snapshot_root, day):
                 out.add(sym)
     return out
 
+
 def _looks_like_freeform_ask_query(text: str) -> bool:
     import re
+
     t = (text or "").strip()
     if not t:
         return False
     if re.fullmatch(r"[A-Z0-9]{3,6}", t.upper()):
         return False
     hints = (
-        "hangi", "neden", "arası", "arasında", "karşılaştır", "compare",
-        "güçlü", "tek hisse", "bugün", "olurdu", "seçil", "daha iyi",
+        "hangi",
+        "neden",
+        "arası",
+        "arasında",
+        "karşılaştır",
+        "compare",
+        "güçlü",
+        "tek hisse",
+        "bugün",
+        "olurdu",
+        "seçil",
+        "daha iyi",
     )
     return (" " in t) or any(h in t.lower() for h in hints)
 
+
 def _extract_symbols_from_freeform(text: str, allowed_symbols):
     import re
+
     toks = re.findall(r"\b[A-Z]{3,6}\b", (text or "").upper())
     out = []
     seen = set()
@@ -3367,11 +3360,14 @@ def _extract_symbols_from_freeform(text: str, allowed_symbols):
             seen.add(tok)
     return out
 
+
 def _freeform_slug(text: str) -> str:
     import re
+
     s = re.sub(r"[^A-Za-z0-9]+", "_", (text or "").strip())
     s = re.sub(r"_+", "_", s).strip("_")
     return s or "FREEFORM"
+
 
 def _emit_freeform_response(args, day: str, query_text: str, payload: dict) -> int:
     import json
@@ -3390,8 +3386,10 @@ def _emit_freeform_response(args, day: str, query_text: str, payload: dict) -> i
         print(f"\nArtifact: {art}")
     return 0
 
+
 def _handle_freeform_single_pick(args, query_text: str) -> int:
     from pathlib import Path
+
     from bist_core.advisory.generate import generate_advice
 
     day = getattr(args, "day", None)
@@ -3450,6 +3448,7 @@ def _handle_freeform_single_pick(args, query_text: str) -> int:
     }
     return _emit_freeform_response(args, str(day), query_text, payload)
 
+
 def _handle_freeform_compare(args, query_text: str, symbols: list[str]) -> int:
     from bist_core.services.advisor import build_advice_for_symbol
 
@@ -3461,10 +3460,26 @@ def _handle_freeform_compare(args, query_text: str, symbols: list[str]) -> int:
     rows = []
     for sym in symbols[:6]:
         advice = build_advice_for_symbol(sym, str(day), root=snapshot_root)
-        compact = _scan_ranked_item_view((sym, float(advice.score), advice.text), str(day))
+        compact = _scan_ranked_item_view(
+            {
+                "symbol": sym,
+                "score": float(advice.score),
+                "reason": advice.text,
+                "signals": advice.signals,
+                "plan": advice.plan,
+                "current_close": advice.plan.get("current_close") if isinstance(advice.plan, dict) else None,
+                "current_close_source": advice.plan.get("current_close_source")
+                if isinstance(advice.plan, dict)
+                else None,
+                "entry_status": advice.plan.get("entry_status") if isinstance(advice.plan, dict) else None,
+                "entry_gap_pct": advice.plan.get("entry_gap_pct") if isinstance(advice.plan, dict) else None,
+            },
+            str(day),
+        )
         row = dict(compact)
         row["decision_raw"] = advice.decision_raw
         row["plan"] = advice.plan
+        row["signals"] = advice.signals
         row["text"] = advice.text
         rows.append(row)
 
@@ -3477,9 +3492,7 @@ def _handle_freeform_compare(args, query_text: str, symbols: list[str]) -> int:
         delta = float(best["score"]) - float(second["score"])
         delta_txt = f" Skor farkı {delta:+.2f}."
 
-    compare_bits = [f"{best['symbol']} -> {best['rationale']}"]
-    if second is not None:
-        compare_bits.append(f"{second['symbol']} -> {second['rationale']}")
+    compare_bits = [f"{row['symbol']} -> {row['rationale']}" for row in rows]
 
     payload = {
         "query_type": "compare",
@@ -3488,13 +3501,10 @@ def _handle_freeform_compare(args, query_text: str, symbols: list[str]) -> int:
         "symbols": [r["symbol"] for r in rows],
         "preferred_symbol": best["symbol"],
         "ranked": rows,
-        "text": (
-            f"{best['symbol']} daha güçlü görünüyor."
-            f"{delta_txt} "
-            f"{' ; '.join(compare_bits)}"
-        ),
+        "text": (f"{best['symbol']} daha güçlü görünüyor.{delta_txt} {' ; '.join(compare_bits)}"),
     }
     return _emit_freeform_response(args, str(day), query_text, payload)
+
 
 def _cmd_ask(args):
     query_text = _freeform_query_text_from_args(args)
@@ -3531,7 +3541,10 @@ def _cmd_ask(args):
         return _cmd_ask_legacy(args)
 
     return _cmd_ask_legacy(args)
+
+
 # FAZ591_FREEFORM_ASK_WRAPPER_END
+
 
 def _scan_ranked_item_view(item, day_str: str | None = None):
     def _trim_rationale(value):
@@ -3633,6 +3646,7 @@ def _scan_ranked_item_view(item, day_str: str | None = None):
             try:
                 import os
                 from pathlib import Path
+
                 from bist_core.services.advisor import build_advice_for_symbol
 
                 root = Path(os.environ.get("BIST_CORE_SNAPSHOT_DIR") or "data/eod/snapshots")
@@ -3689,11 +3703,6 @@ def _scan_ranked_item_view(item, day_str: str | None = None):
         out["entry_gap_pct"] = entry_gap_pct
 
     return _merge_live_fields(out, plan)
-
-
-
-
-
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -3882,7 +3891,9 @@ Tek sembol danışma (interaktif parametrelerle):
         help="Execution provider (e.g. paper); default paper for paper execution, stub for live",
     )
     p_eod_execute.add_argument("--dry-run", dest="dry_run", action="store_true", default=False)
-    p_eod_execute.add_argument("--skip-risk-gate", action="store_true", help="Paper only: bypass risk gate (diagnostic)")
+    p_eod_execute.add_argument(
+        "--skip-risk-gate", action="store_true", help="Paper only: bypass risk gate (diagnostic)"
+    )
     p_eod_execute.add_argument("--live", action="store_true", dest="live")
     p_eod_execute.set_defaults(func=_cmd_eod_execute)
 
@@ -3913,7 +3924,9 @@ Tek sembol danışma (interaktif parametrelerle):
     sub_broker = p_broker.add_subparsers(dest="broker_cmd", required=True)
     p_validate = sub_broker.add_parser("validate-config", help="Validate broker config JSON against schema")
     p_validate.add_argument("--config", "-c", required=True, help="Path to broker config JSON")
-    p_validate.add_argument("--schema", default="configs/broker_config.schema.json", help="Path to broker config JSON Schema")
+    p_validate.add_argument(
+        "--schema", default="configs/broker_config.schema.json", help="Path to broker config JSON Schema"
+    )
     p_validate.set_defaults(func=_cmd_broker_validate_config)
 
     p_broker_paper = sub_broker.add_parser("paper")
@@ -4018,9 +4031,12 @@ Tek sembol danışma (interaktif parametrelerle):
     p_snapshots_doctor.add_argument("--day", default=None, help="Reference day (YYYY-MM-DD) for symbol bars")
     p_snapshots_doctor.set_defaults(func=_cmd_snapshots_doctor)
 
-
     p_import = sub_data.add_parser("import")
-    p_import.add_argument("--symbol", default=None, help="Fallback symbol if input has no symbol/hisse column (else derive from filename stem)")
+    p_import.add_argument(
+        "--symbol",
+        default=None,
+        help="Fallback symbol if input has no symbol/hisse column (else derive from filename stem)",
+    )
     p_import.add_argument("--input", required=True, help="Input CSV path")
     p_import.add_argument("--out", default=None, help="Output snapshot root (default: data/eod/snapshots)")
     p_import.add_argument("--day", default=None, help="Required when CSV has no date column")
@@ -4036,7 +4052,6 @@ Tek sembol danışma (interaktif parametrelerle):
         "--schema-report", dest="schema_report", action="store_true", help="Print inferred column mapping and exit"
     )
     p_import.set_defaults(func=_cmd_data_import)
-
 
     p_ask = sub.add_parser("ask")
     p_ask.add_argument("--root", default=None, help="Snapshot root (overrides env BIST_CORE_SNAPSHOT_DIR)")
@@ -4054,7 +4069,6 @@ Tek sembol danışma (interaktif parametrelerle):
     p_ask.add_argument("--max-loss-tl", dest="max_loss_tl", type=float, default=None)
     p_ask.add_argument("--out", default=None, help="Output dir for JSON artifact (default: data/out/ask)")
     p_ask.set_defaults(func=_cmd_ask)
-
 
     p_scan = sub.add_parser("scan", help="Ranked scan of symbols; interactive wizard or args")
     p_scan.add_argument("--root", default=None, help="Snapshot root (overrides env BIST_CORE_SNAPSHOT_DIR)")

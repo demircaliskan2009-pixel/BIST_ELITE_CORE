@@ -1,0 +1,18 @@
+{
+  "servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem"
+      ]
+    },
+    "dataframe": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-dataframe"
+      ]
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+    "name": "pre-response-guard",
+    "trigger": "before_response",
+    "rules": [
+        {
+            "type": "require_field",
+            "field": "task_type",
+            "error": "TASK CLASSIFICATION MISSING"
+        },
+        {
+            "type": "require_field",
+            "field": "selected_prompt",
+            "error": "PROMPT NOT SELECTED"
+        },
+        {
+            "type": "reject_if",
+            "condition": "context == null || context == insufficient",
+            "error": "INSUFFICIENT EVIDENCE"
+        },
+        {
+            "type": "reject_if",
+            "condition": "response_style == template",
+            "error": "TEMPLATE RESPONSE FORBIDDEN"
+        }
+    ]
+}

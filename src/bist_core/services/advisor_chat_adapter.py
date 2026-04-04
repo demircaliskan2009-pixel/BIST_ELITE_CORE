@@ -34,10 +34,22 @@ def _clean_symbol(value: Any) -> str:
     return str(value or "").upper().strip()
 
 
+def _entry_flags_from_status(status: Any) -> dict[str, bool]:
+    token = str(status or "").strip().lower()
+    return {
+        "entry_missed": token in {"missed", "missed_entry", "late_entry", "extended_above_entry"},
+        "should_wait_pullback": token in {"missed", "missed_entry", "late_entry", "extended_above_entry"},
+        "is_discount_to_entry": token in {"pullback", "below_entry_trigger", "below_entry_discount"},
+    }
+
+
 def normalize_advice_like_result(value: Any) -> dict[str, Any]:
     raw = _as_dict(value)
     if not raw:
         return {}
+
+    signals = dict(raw.get("signals") or {}) if isinstance(raw.get("signals"), Mapping) else {}
+    plan = dict(raw.get("plan") or {}) if isinstance(raw.get("plan"), Mapping) else {}
 
     symbol = _clean_symbol(raw.get("symbol") or raw.get("ticker"))
     if not symbol:
@@ -65,12 +77,7 @@ def normalize_advice_like_result(value: Any) -> dict[str, Any]:
     if target is not None:
         out["target"] = target
 
-    rationale = (
-        raw.get("compact_rationale")
-        or raw.get("rationale")
-        or raw.get("summary")
-        or raw.get("text")
-    )
+    rationale = raw.get("compact_rationale") or raw.get("rationale") or raw.get("summary") or raw.get("text")
     if rationale is not None:
         out["rationale"] = str(rationale).strip()
 
@@ -79,11 +86,47 @@ def normalize_advice_like_result(value: Any) -> dict[str, Any]:
         "should_wait_pullback",
         "is_discount_to_entry",
         "live_gap_pct",
+        "entry_gap_pct",
+        "entry_status",
         "live_entry_status",
         "live_entry_text",
+        "current_close",
+        "current_close_source",
+        "live_vs_g_close_pct",
     ):
         if key in raw and raw[key] is not None:
             out[key] = raw[key]
+
+    for source, pairs in (
+        (
+            signals,
+            (
+                ("entry_gap_pct", "entry_gap_pct"),
+                ("live_current_close_source", "current_close_source"),
+                ("live_vs_g_close_pct", "live_vs_g_close_pct"),
+            ),
+        ),
+        (
+            plan,
+            (
+                ("entry_status", "entry_status"),
+                ("entry_gap_pct", "entry_gap_pct"),
+                ("current_close", "current_close"),
+                ("live_current_close", "current_close"),
+                ("current_close_source", "current_close_source"),
+                ("live_current_close_source", "current_close_source"),
+                ("live_vs_g_close_pct", "live_vs_g_close_pct"),
+            ),
+        ),
+    ):
+        for source_key, target_key in pairs:
+            if target_key not in out and source.get(source_key) is not None:
+                out[target_key] = source.get(source_key)
+
+    entry_status = out.get("live_entry_status") or out.get("entry_status")
+    for key, flag in _entry_flags_from_status(entry_status).items():
+        if key not in out:
+            out[key] = flag
 
     live_payload = raw.get("live_payload") or raw.get("live_bridge") or raw.get("bridge_row") or raw.get("current_bar")
     if isinstance(live_payload, Mapping):
@@ -136,4 +179,3 @@ def build_chat_result_from_advice_map(
         market_overview_text=market_overview_text,
         default_scan_n=default_scan_n,
     )
-

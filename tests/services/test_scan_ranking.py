@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from bist_core.services.scan_ranking import (
-    normalize_scan_candidate,
-    rank_scan_candidates,
-    render_scan_ranking_text,
-)
+from bist_core.services.scan_ranking import normalize_scan_candidate, rank_scan_candidates, render_scan_ranking_text
 
 
 def test_normalize_scan_candidate_extracts_core_fields() -> None:
@@ -99,3 +95,20 @@ def test_render_scan_ranking_text_includes_ranking_and_reason() -> None:
 
 def test_render_scan_ranking_text_handles_empty_input() -> None:
     assert render_scan_ranking_text([]) == "Sıralanacak geçerli aday yok."
+
+
+def test_normalize_scan_candidate_derives_entry_flags_from_entry_status() -> None:
+    got = normalize_scan_candidate(
+        {
+            "symbol": "akbnk",
+            "score": 4.25,
+            "decision": "buy",
+            "entry_status": "below_entry_trigger",
+            "entry_gap_pct": -1.1,
+            "compact_rationale": "tetik altında",
+        }
+    )
+    assert got["is_discount_to_entry"] is True
+    assert got["entry_missed"] is False
+    assert got["live_gap_pct"] == -1.1
+    assert got["reason"] == "tetik altında"

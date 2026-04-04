@@ -1,10 +1,6 @@
 from __future__ import annotations
 
-from bist_core.services.symbol_comparison import (
-    compare_symbol_results,
-    normalize_symbol_result,
-    render_comparison_text,
-)
+from bist_core.services.symbol_comparison import compare_symbol_results, normalize_symbol_result, render_comparison_text
 
 
 def test_normalize_symbol_result_extracts_core_fields() -> None:
@@ -86,3 +82,18 @@ def test_render_comparison_text_includes_ranking_and_reason() -> None:
 
 def test_render_comparison_text_handles_empty_input() -> None:
     assert render_comparison_text([]) == "Karşılaştırılacak geçerli sembol sonucu yok."
+
+
+def test_compare_symbol_results_builds_dual_rationale_from_ranked_leaders() -> None:
+    got = compare_symbol_results(
+        [
+            {"symbol": "AKBNK", "score": 3.9, "decision": "buy", "ret1_pct": 0.4, "range_pos": 0.45},
+            {"symbol": "GARAN", "score": 4.2, "decision": "buy", "ret1_pct": 1.3, "range_pos": 0.72},
+            {"symbol": "ASELS", "score": 9.9, "decision": "buy", "ret1_pct": 2.1, "range_pos": 0.88},
+        ]
+    )
+
+    decision_object = got["decision_object"]
+    first_diff = decision_object["diff_table"][0]["explanation"]
+    assert "ASELS:" in first_diff
+    assert "GARAN:" in first_diff

@@ -2,29 +2,22 @@ name: ci
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
   pull_request:
-    branches: [ "main" ]
-  workflow_dispatch:
-
-defaults:
-  run:
-    shell: bash
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
   tests:
+    name: tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
-      TZ: UTC
       PYTHONPATH: ${{ github.workspace }}/src
+      PYTHONWARNINGS: error
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,39 +25,51 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
+            pyproject.toml
 
       - name: Install dependencies
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; else pip install pytest; fi
-          pytest --version
+          if [ -f requirements-dev.txt ]; then
+            python -m pip install -r requirements-dev.txt
+          elif [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt pytest
+          else
+            python -m pip install pytest
+          fi
 
-      - name: Clean compiled artifacts
-        run: |
-          find . -name "__pycache__" -type d -prune -exec rm -rf {} + || true
-          rm -rf .pytest_cache tests/.pytest_cache || true
-
-      - name: Sanity (path & import)
-        run: |
-          python - <<'PY'
-          import sys, importlib.util as iu, os
-          print("PYTHONPATH=", os.environ.get("PYTHONPATH"))
-          for m in ("bist_core","bist_core.data","bist_core.data.ingest"):
-              print(m, "FOUND" if iu.find_spec(m) else "MISSING")
-          from bist_core.data import ingest as x
-          assert all(hasattr(x,a) for a in ("read_csv","register_dataset","load_registered_dataset"))
-          PY
-
-      - name: Run Faz-3 deterministic tests
+      - name: Run pytest
         run: |
           set -euo pipefail
-          pytest -q tests/test_faz3_data_core_ingest_local_csv.py
+          python -m pytest -q -W error
 
-      - name: Alignment gate (FAZ83)
-        run: python scripts/verify_alignment.py
+  codeql:
+    name: codeql
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: python
+          build-mode: none
+          queries: security-and-quality
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:python

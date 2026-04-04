@@ -1,4 +1,4 @@
-from bist_core.brain.decision_engine import evaluate, rank_decisions, _entry_status, _build_rationale
+from bist_core.brain.decision_engine import _build_rationale, _entry_status, evaluate, rank_decisions
 
 
 def _score_result(score: float, m: float = 0.5, t: float = 0.5):
@@ -41,6 +41,15 @@ def test_evaluate_enter_on_valid():
     assert r["action"] == "enter"
     assert r["confidence"] > 0
     assert r["entry_status"] == "valid"
+
+
+def test_evaluate_uses_entry_from_score_result_for_price_awareness():
+    score_result = _score_result(0.60)
+    score_result["entry"] = 100.0
+    r = evaluate("X", score_result, 106.0, 96.0, 122.0)
+    assert r["action"] == "skip"
+    assert r["entry_status"] == "missed"
+    assert r["reason"] == "entry_missed"
 
 
 def test_evaluate_no_score_skips():

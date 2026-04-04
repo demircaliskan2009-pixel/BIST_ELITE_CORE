@@ -1,9 +1,10 @@
 from __future__ import annotations
+
 from typing import Any
 
-ENTRY_TOLERANCE_PCT = 0.02   # within 2% of score entry = valid
-ENTRY_MISSED_PCT = 0.05      # price moved >5% past entry = missed
-MIN_RR_RATIO = 1.5           # minimum reward/risk ratio
+ENTRY_TOLERANCE_PCT = 0.02  # within 2% of score entry = valid
+ENTRY_MISSED_PCT = 0.05  # price moved >5% past entry = missed
+MIN_RR_RATIO = 1.5  # minimum reward/risk ratio
 
 
 def _entry_status(current_price: float, entry: float, stop: float) -> str:
@@ -65,8 +66,9 @@ def _build_rationale(features: dict[str, float], score: float) -> str:
 def _confidence(score: float, entry_status: str, rr_ratio: float) -> float:
     """Compute confidence [0,1] from score, entry status, and risk/reward."""
     base = min(max(score, 0.0), 1.0)
-    status_adj = {"valid": 1.0, "pullback": 0.8, "missed": 0.0,
-                  "below_stop": 0.0, "invalid": 0.0}.get(entry_status, 0.0)
+    status_adj = {"valid": 1.0, "pullback": 0.8, "missed": 0.0, "below_stop": 0.0, "invalid": 0.0}.get(
+        entry_status, 0.0
+    )
     rr_adj = min(rr_ratio / 3.0, 1.0) if rr_ratio > 0 else 0.0
     return round(base * status_adj * 0.6 + rr_adj * 0.4, 4)
 
@@ -80,30 +82,59 @@ def evaluate(
 ) -> dict[str, Any]:
     """Evaluate single symbol decision. Fail-closed on invalid inputs."""
     if not score_result or score_result.get("score") is None:
-        return {"symbol": symbol, "action": "skip", "confidence": 0.0,
-                "reason": "no_score", "entry_status": "invalid", "score": 0.0}
+        return {
+            "symbol": symbol,
+            "action": "skip",
+            "confidence": 0.0,
+            "reason": "no_score",
+            "entry_status": "invalid",
+            "score": 0.0,
+        }
 
     score = float(score_result["score"])
     features = score_result.get("features", {})
+    entry = score_result.get("entry")
+    try:
+        entry = float(entry) if entry is not None else float(current_price)
+    except (TypeError, ValueError):
+        entry = float(current_price)
 
     if current_price <= 0 or stop <= 0 or target <= 0:
-        return {"symbol": symbol, "action": "skip", "confidence": 0.0,
-                "reason": "invalid_price_inputs", "entry_status": "invalid", "score": score}
+        return {
+            "symbol": symbol,
+            "action": "skip",
+            "confidence": 0.0,
+            "reason": "invalid_price_inputs",
+            "entry_status": "invalid",
+            "score": score,
+        }
 
     rps = current_price - stop
     rr_ratio = (target - current_price) / rps if rps > 0 else 0.0
 
     if rr_ratio < MIN_RR_RATIO:
-        return {"symbol": symbol, "action": "skip", "confidence": 0.0,
-                "reason": f"rr_ratio_too_low={rr_ratio:.2f}", "entry_status": "invalid", "score": score}
+        return {
+            "symbol": symbol,
+            "action": "skip",
+            "confidence": 0.0,
+            "reason": f"rr_ratio_too_low={rr_ratio:.2f}",
+            "entry_status": "invalid",
+            "score": score,
+        }
 
-    status = _entry_status(current_price, current_price, stop)
+    status = _entry_status(current_price, entry, stop)
     confidence = _confidence(score, status, rr_ratio)
     rationale = _build_rationale(features, score)
 
     if status in ("missed", "below_stop", "invalid"):
-        return {"symbol": symbol, "action": "skip", "confidence": 0.0,
-                "reason": f"entry_{status}", "entry_status": status, "score": score}
+        return {
+            "symbol": symbol,
+            "action": "skip",
+            "confidence": 0.0,
+            "reason": f"entry_{status}",
+            "entry_status": status,
+            "score": score,
+        }
 
     if score < 0.25:
         action = "skip"
@@ -128,4 +159,5 @@ def rank_decisions(decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     enters = [d for d in decisions if d.get("action") == "enter"]
     others = [d for d in decisions if d.get("action") != "enter"]
     enters.sort(key=lambda d: (d.get("confidence", 0), d.get("score", 0)), reverse=True)
+    return enters + others
     return enters + others

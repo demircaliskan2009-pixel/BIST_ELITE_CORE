@@ -144,3 +144,27 @@ def test_build_chat_result_from_advice_map_market_overview_contract() -> None:
     assert got["route"] == "market_overview"
     assert got["leader_symbol"] == "AKBNK"
     assert "Öne çıkanlar" in got["text"]
+
+
+def test_normalize_advice_like_result_preserves_plan_price_context() -> None:
+    got = normalize_advice_like_result(
+        {
+            "symbol": "ASELS",
+            "decision": "buy",
+            "score": 4.0,
+            "compact_rationale": "giriş tetiği altında",
+            "plan": {
+                "entry_status": "below_entry_trigger",
+                "entry_gap_pct": -1.25,
+                "current_close": 330.0,
+                "live_current_close_source": "01",
+                "live_vs_g_close_pct": 0.0,
+            },
+        }
+    )
+    assert got["entry_status"] == "below_entry_trigger"
+    assert got["is_discount_to_entry"] is True
+    assert got["entry_gap_pct"] == -1.25
+    assert got["current_close"] == 330.0
+    assert got["current_close_source"] == "01"
+    assert got["live_vs_g_close_pct"] == 0.0

@@ -5,7 +5,6 @@ from typing import Any
 
 from bist_core.brain.comparison_engine import build_dual_rationale_decision
 
-
 _DECISION_WEIGHT = {
     "strong_buy": 5,
     "buy": 4,
@@ -102,14 +101,39 @@ def _format_optional_pct(value: Any) -> str:
     return f"{num:+.2f}%"
 
 
+def _entry_flags_from_status(status: Any) -> dict[str, bool]:
+    token = str(status or "").strip().lower()
+    return {
+        "entry_missed": token in {"missed", "missed_entry", "late_entry", "extended_above_entry"},
+        "should_wait_pullback": token in {"missed", "missed_entry", "late_entry", "extended_above_entry"},
+        "is_discount_to_entry": token in {"pullback", "below_entry_trigger", "below_entry_discount"},
+    }
+
+
 def normalize_symbol_result(result: Mapping[str, Any] | dict[str, Any]) -> dict[str, Any]:
     symbol = str(result.get("symbol") or result.get("ticker") or "").upper().strip()
     score = _as_float(_pick_first(result, _SCORE_KEYS))
     decision = _pick_first(result, _DECISION_KEYS)
-    entry_missed = _as_bool(result.get("entry_missed"))
-    should_wait_pullback = _as_bool(result.get("should_wait_pullback"))
-    is_discount_to_entry = _as_bool(result.get("is_discount_to_entry"))
+    entry_status = result.get("live_entry_status") or result.get("entry_status")
+    derived_flags = _entry_flags_from_status(entry_status)
+    entry_missed = (
+        _as_bool(result.get("entry_missed"))
+        if result.get("entry_missed") is not None
+        else derived_flags["entry_missed"]
+    )
+    should_wait_pullback = (
+        _as_bool(result.get("should_wait_pullback"))
+        if result.get("should_wait_pullback") is not None
+        else derived_flags["should_wait_pullback"]
+    )
+    is_discount_to_entry = (
+        _as_bool(result.get("is_discount_to_entry"))
+        if result.get("is_discount_to_entry") is not None
+        else derived_flags["is_discount_to_entry"]
+    )
     live_gap_pct = _as_float(result.get("live_gap_pct"))
+    if live_gap_pct is None:
+        live_gap_pct = _as_float(result.get("entry_gap_pct"))
     reason = _pick_first(result, _REASON_KEYS)
 
     return {
@@ -121,6 +145,7 @@ def normalize_symbol_result(result: Mapping[str, Any] | dict[str, Any]) -> dict[
         "entry_missed": entry_missed,
         "should_wait_pullback": should_wait_pullback,
         "is_discount_to_entry": is_discount_to_entry,
+        "entry_status": str(entry_status).strip() if entry_status is not None else "",
         "live_gap_pct": live_gap_pct,
         "reason": str(reason).strip() if reason is not None else "",
         "source": dict(result),
@@ -214,7 +239,6 @@ def _build_pairwise_breakdown(leader: Mapping[str, Any], runner_up: Mapping[str,
 def compare_symbol_results(results: Sequence[Mapping[str, Any] | dict[str, Any]]) -> dict[str, Any]:
     normalized = [normalize_symbol_result(x) for x in results if isinstance(x, Mapping)]
     normalized = [x for x in normalized if x["symbol"]]
-    first_two = normalized[:2]
 
     ranked = sorted(normalized, key=_comparison_sort_key, reverse=True)
     if not ranked:
@@ -264,12 +288,13 @@ def compare_symbol_results(results: Sequence[Mapping[str, Any] | dict[str, Any]]
         summary = f"{leader['symbol']} önde; skor farkı {lead_gap:+.2f}. {status_text}."
         pairwise = _build_pairwise_breakdown(leader, runner_up)
 
-    if len(first_two) >= 2:
+    decision_pair = ranked[:2]
+    if len(decision_pair) >= 2:
         decision_object = build_dual_rationale_decision(
-            str(first_two[0]["symbol"]),
-            str(first_two[1]["symbol"]),
-            first_two[0].get("source"),
-            first_two[1].get("source"),
+            str(decision_pair[0]["symbol"]),
+            str(decision_pair[1]["symbol"]),
+            decision_pair[0].get("source"),
+            decision_pair[1].get("source"),
         )
     else:
         decision_object = build_dual_rationale_decision("", "", {}, {})

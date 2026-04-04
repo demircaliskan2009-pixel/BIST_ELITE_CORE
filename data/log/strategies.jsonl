@@ -14781,3 +14781,17 @@
 {"schema_version": 1, "timestamp": "2026-03-22T11:31:54.292781+00:00", "symbol": "BBB", "day": "2099-01-01", "source": "ask", "params": {}, "strategy_detail": {"score": 0.0, "decision_raw": "PASS"}}
 {"schema_version": 1, "timestamp": "2026-03-22T11:31:55.181183+00:00", "symbol": "ASELS", "day": "2099-01-01", "source": "ask", "params": {}, "strategy_detail": {"score": 0.0, "decision_raw": "PASS"}}
 {"schema_version": 1, "timestamp": "2026-03-22T11:31:56.106729+00:00", "symbol": "ASELS", "day": "2099-01-01", "source": "ask", "params": {}, "strategy_detail": {"score": 0.0, "decision_raw": "PASS"}}
+{"schema_version": 1, "timestamp": "2026-04-04T16:42:35.379940+00:00", "symbol": "ASELS", "day": "2025-02-05", "source": "scan", "params": {}, "strategy_detail": {"score": 1.2727, "rank": 1}}
+{"schema_version": 1, "timestamp": "2026-04-04T16:42:35.396023+00:00", "symbol": "AKFIS", "day": "2025-02-05", "source": "scan", "params": {}, "strategy_detail": {"score": 1.2223, "rank": 2}}
+{"schema_version": 1, "timestamp": "2026-04-04T16:42:35.397079+00:00", "symbol": "AEFES", "day": "2025-02-05", "source": "scan", "params": {}, "strategy_detail": {"score": -1.3118, "rank": 3}}
+{"schema_version": 1, "timestamp": "2026-04-04T16:42:36.407847+00:00", "symbol": "ASELS", "day": "2025-02-05", "source": "ask", "params": {}, "strategy_detail": {"score": 1.2727, "decision_raw": "WATCH", "plan": {"entry": 149.5, "stop": 145.0, "t1": 152.4}}}
+{"schema_version": 1, "timestamp": "2026-04-04T16:42:37.475759+00:00", "symbol": "ASELS", "day": "2025-02-05", "source": "scan", "params": {}, "strategy_detail": {"score": 1.2727, "rank": 1}}
+{"schema_version": 1, "timestamp": "2026-04-04T16:42:37.477862+00:00", "symbol": "AKFIS", "day": "2025-02-05", "source": "scan", "params": {}, "strategy_detail": {"score": 1.2223, "rank": 2}}
+{"schema_version": 1, "timestamp": "2026-04-04T16:42:37.478872+00:00", "symbol": "AEFES", "day": "2025-02-05", "source": "scan", "params": {}, "strategy_detail": {"score": -1.3118, "rank": 3}}
+{"schema_version": 1, "timestamp": "2026-04-04T16:42:58.586630+00:00", "symbol": "ASELS", "day": "2025-02-05", "source": "scan", "params": {}, "strategy_detail": {"score": 1.2727, "rank": 1}}
+{"schema_version": 1, "timestamp": "2026-04-04T16:42:58.601869+00:00", "symbol": "AKFIS", "day": "2025-02-05", "source": "scan", "params": {}, "strategy_detail": {"score": 1.2223, "rank": 2}}
+{"schema_version": 1, "timestamp": "2026-04-04T16:42:58.605215+00:00", "symbol": "AEFES", "day": "2025-02-05", "source": "scan", "params": {}, "strategy_detail": {"score": -1.3118, "rank": 3}}
+{"schema_version": 1, "timestamp": "2026-04-04T16:42:59.625519+00:00", "symbol": "ASELS", "day": "2025-02-05", "source": "ask", "params": {}, "strategy_detail": {"score": 1.2727, "decision_raw": "WATCH", "plan": {"entry": 149.5, "stop": 145.0, "t1": 152.4}}}
+{"schema_version": 1, "timestamp": "2026-04-04T16:43:00.605080+00:00", "symbol": "ASELS", "day": "2025-02-05", "source": "scan", "params": {}, "strategy_detail": {"score": 1.2727, "rank": 1}}
+{"schema_version": 1, "timestamp": "2026-04-04T16:43:00.621342+00:00", "symbol": "AKFIS", "day": "2025-02-05", "source": "scan", "params": {}, "strategy_detail": {"score": 1.2223, "rank": 2}}
+{"schema_version": 1, "timestamp": "2026-04-04T16:43:00.622479+00:00", "symbol": "AEFES", "day": "2025-02-05", "source": "scan", "params": {}, "strategy_detail": {"score": -1.3118, "rank": 3}}

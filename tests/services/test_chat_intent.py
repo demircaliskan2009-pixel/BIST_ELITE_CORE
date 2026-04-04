@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from bist_core.services.chat_intent import (
-    classify_chat_intent,
-    detect_top_n,
-    extract_bist_symbols,
-)
-
+from bist_core.services.chat_intent import classify_chat_intent, detect_top_n, extract_bist_symbols
 
 KNOWN = ["ASELS", "AKBNK", "GARAN", "THYAO", "TUPRS", "EREGL"]
 
@@ -59,3 +54,27 @@ def test_classify_chat_intent_handles_mi_yoksa_comparison() -> None:
     got = classify_chat_intent("thyao mu yoksa eregl mi daha iyi?", known_symbols=KNOWN)
     assert got["intent"] == "comparison"
     assert got["symbols"] == ["THYAO", "EREGL"]
+
+
+def test_classify_chat_intent_debug_symbol() -> None:
+    got = classify_chat_intent("why this score for ASELS", known_symbols=KNOWN)
+    assert got["intent"] == "debug_symbol"
+    assert got["symbols"] == ["ASELS"]
+
+
+def test_classify_chat_intent_debug_ranking() -> None:
+    got = classify_chat_intent("why this ranking for ASELS AKBNK GARAN", known_symbols=KNOWN)
+    assert got["intent"] == "debug_ranking"
+    assert got["symbols"] == ["ASELS", "AKBNK", "GARAN"]
+
+
+def test_classify_chat_intent_debug_comparison() -> None:
+    got = classify_chat_intent("compare details AKBNK ile GARAN", known_symbols=KNOWN)
+    assert got["intent"] == "debug_comparison"
+    assert got["symbols"] == ["AKBNK", "GARAN"]
+
+
+def test_classify_chat_intent_debug_dataset() -> None:
+    got = classify_chat_intent("validate dataset for ASELS", known_symbols=KNOWN)
+    assert got["intent"] == "debug_dataset"
+    assert got["symbols"] == ["ASELS"]
