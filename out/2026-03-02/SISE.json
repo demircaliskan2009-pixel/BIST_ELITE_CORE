@@ -1,0 +1,51 @@
+{
+  "Cause-Effect": {
+    "invalidates": "Fiyat bandı dışına çıkma, ters haber akışı.",
+    "watch_next": "Hacim kırılması, KAP haberleri.",
+    "why": "SISE için karar PASS; skor -1.00. Sinyal özeti: Momentum negatif, KAP haberleri nötr, Hacim artışı yok.\n\nFiyat bandı dışına çıkma, ters haber akışı veya güçlü hacim kırılması olursa yeniden değerlendi"
+  },
+  "Decision": {
+    "decision_raw": "PASS",
+    "score": -1.0
+  },
+  "Entry/Stop/Targets": null,
+  "Evidence": {
+    "signals": {
+      "mom": -1,
+      "news": 0,
+      "vol": 0
+    },
+    "source": "C:\\Users\\demir\\OneDrive\\Belgeler\\Projects\\BIST_ELITE_CORE\\tmp_live_snapshots\\2026-03-02\\snapshot.csv",
+    "source_sha256": "843774aafebb09eaa5e32e5fd67937679b323097cf8909114924820114576436"
+  },
+  "bars_count": 21,
+  "content_sha256": "ed3cbfbd3b14c26ff758ecb70547e7ee69d484146872fdad90bd0ea3d1bbb8f8",
+  "day": "2026-03-02",
+  "decision_raw": "PASS",
+  "gates": {
+    "band": {
+      "outcome": "PASS",
+      "reason": "OK"
+    },
+    "levels": {
+      "outcome": "PASS",
+      "reason": "OK"
+    },
+    "score": {
+      "outcome": "FAIL",
+      "reason": "score=-1.00"
+    }
+  },
+  "generated_at": "2026-03-03T11:04:15.793423Z",
+  "lookback_required": 20,
+  "plan": null,
+  "schema_version": 1,
+  "score": -1.0,
+  "signals": {
+    "mom": -1,
+    "news": 0,
+    "vol": 0
+  },
+  "symbol": "SISE",
+  "text": "SISE için karar PASS; skor -1.00. Sinyal özeti: Momentum negatif, KAP haberleri nötr, Hacim artışı yok.\n\nFiyat bandı dışına çıkma, ters haber akışı veya güçlü hacim kırılması olursa yeniden değerlendir.\n\nOlaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi."
+}

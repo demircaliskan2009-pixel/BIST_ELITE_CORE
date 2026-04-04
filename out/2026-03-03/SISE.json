@@ -1,0 +1,31 @@
+{
+  "Cause-Effect": {
+    "invalidates": "Fiyat bandı dışına çıkma, ters haber akışı.",
+    "watch_next": "Hacim kırılması, KAP haberleri.",
+    "why": "Güvenli mod: NoBars. Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin.\n\nOlaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi."
+  },
+  "Decision": {
+    "decision_raw": "PASS",
+    "score": 0.0
+  },
+  "Entry/Stop/Targets": null,
+  "Evidence": {
+    "signals": []
+  },
+  "content_sha256": "6ff45754285b8efbc993314f1c1fd7cfc7b7a4e563c966712c6ebed18a49d6a7",
+  "day": "2026-03-03",
+  "decision_raw": "PASS",
+  "gates": {
+    "bars_available": {
+      "outcome": "FAIL",
+      "reason": "NoBars"
+    }
+  },
+  "generated_at": "2026-03-03T11:46:23.495826Z",
+  "plan": null,
+  "schema_version": 1,
+  "score": 0.0,
+  "signals": [],
+  "symbol": "SISE",
+  "text": "Güvenli mod: NoBars. Veri veya karar üretilemedi; snapshot ve konfigürasyonu kontrol edin.\n\nOlaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi."
+}

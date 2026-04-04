@@ -1,0 +1,8 @@
+{
+  "timezone": "Europe/Istanbul",
+  "default_spread_bps_max": 80,
+  "default_adv_tl_min": 30000000,
+  "default_auction_ratio_max": 0.15,
+  "default_price_band_pct": 20.0,
+  "risk_per_trade": 0.015
+}

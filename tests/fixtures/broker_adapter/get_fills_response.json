@@ -1,0 +1,7 @@
+{
+  "ok": true,
+  "fills": [
+    {"order_id": "ord-1", "symbol": "THYAO", "side": "BUY", "qty": 100.0, "price": 42.5, "notional": 4250.0}
+  ],
+  "errors": []
+}

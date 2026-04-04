@@ -1,0 +1,51 @@
+{
+  "query_type": "compare",
+  "day": "2025-02-05",
+  "query": "ASELS ile AKFIS arasında bugün hangisi daha güçlü ve neden",
+  "symbols": [
+    "ASELS",
+    "AKFIS"
+  ],
+  "preferred_symbol": "ASELS",
+  "ranked": [
+    {
+      "symbol": "ASELS",
+      "score": 1.2727,
+      "rationale": "below_entry_trigger; gap=-1.00%; E=-0.03 R1=+0.07 Rp=+0.22 V=+0.01",
+      "current_close": 148.0,
+      "current_close_source": "snapshot",
+      "entry_status": "below_entry_trigger",
+      "entry_gap_pct": -1.0,
+      "decision_raw": "WATCH",
+      "plan": {
+        "entry": 149.5,
+        "stop": 145.0,
+        "t1": 152.4,
+        "current_close": 148.0,
+        "entry_status": "below_entry_trigger",
+        "entry_gap_pct": -1.0
+      },
+      "text": "ASELS için karar WATCH; skor 1.27. Ana sinyaller: Momentum pozitif, KAP haberleri nötr, Hacim artışı yok, Günlük değişim +1.37%. Skor bileşenleri: baz +1.00, ret1 +0.07, range +0.22, hacim +0.01, giriş -0.03.\n\nİşlem planı: entry 149.5, stop 145.0, t1 152.4. Canlı bağlam: Mevcut fiyat 148.0; entry seviyesinin altında; tetik henüz oluşmamış olabilir; entry gap -1.00%. Senaryo iptal / yeniden değerlendirme: fiyat bandı dışına taşma, ters KAP/haber akışı veya güçlü ters hacim kırılması.\n\nOlaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi."
+    },
+    {
+      "symbol": "AKFIS",
+      "score": 1.2223,
+      "rationale": "below_entry_trigger; gap=-1.02%; E=-0.03 R1=+0.03 Rp=+0.22 V=+0.00",
+      "current_close": 58.4,
+      "current_close_source": "snapshot",
+      "entry_status": "below_entry_trigger",
+      "entry_gap_pct": -1.02,
+      "decision_raw": "WATCH",
+      "plan": {
+        "entry": 59.0,
+        "stop": 57.25,
+        "t1": 60.15,
+        "current_close": 58.4,
+        "entry_status": "below_entry_trigger",
+        "entry_gap_pct": -1.02
+      },
+      "text": "AKFIS için karar WATCH; skor 1.22. Ana sinyaller: Momentum pozitif, KAP haberleri nötr, Hacim artışı yok, Günlük değişim +0.60%. Skor bileşenleri: baz +1.00, ret1 +0.03, range +0.22, hacim +0.00, giriş -0.03.\n\nİşlem planı: entry 59.0, stop 57.25, t1 60.15. Canlı bağlam: Mevcut fiyat 58.4; entry seviyesinin altında; tetik henüz oluşmamış olabilir; entry gap -1.02%. Senaryo iptal / yeniden değerlendirme: fiyat bandı dışına taşma, ters KAP/haber akışı veya güçlü ters hacim kırılması.\n\nOlaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi."
+    }
+  ],
+  "text": "ASELS daha güçlü görünüyor. Skor farkı +0.05. ASELS -> below_entry_trigger; gap=-1.00%; E=-0.03 R1=+0.07 Rp=+0.22 V=+0.01 ; AKFIS -> below_entry_trigger; gap=-1.02%; E=-0.03 R1=+0.03 Rp=+0.22 V=+0.00"
+}

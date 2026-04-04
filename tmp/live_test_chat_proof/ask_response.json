@@ -1,0 +1,11 @@
+﻿{
+  "mode": "ask",
+  "answer": "Symbol: AKBNK",
+  "payload": {
+    "symbol": "AKBNK",
+    "day": "2026-02-27",
+    "decision_raw": "WATCH",
+    "score": 1.0,
+    "text": "AKBNK için karar WATCH; skor 1.00. Sinyal özeti: Momentum pozitif. Plan: entry 91.05, stop 88.35, t1 92.85."
+  }
+}

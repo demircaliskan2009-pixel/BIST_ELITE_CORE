@@ -1,0 +1,3 @@
+{"symbol": "ASELS", "effective_date": "2099-01-15", "kind": "cash_dividend", "cash": 1.5, "source": "fixture"}
+{"symbol": "THYAO", "effective_date": "2099-01-20", "kind": "split", "ratio": 2.0, "source": "fixture"}
+{"symbol": "AKBNK", "ex_date": "2099-02-01", "kind": "cash_dividend", "amount": 0.25, "source": "fixture"}

@@ -1,0 +1,230 @@
+[
+  {
+    "iteration": 1,
+    "SYSTEM_TYPE": "UNDER_TRADING_SYSTEM",
+    "EDGE_CONFIDENCE": 0.42,
+    "failure_flags": [
+      "missing_SIMULATION_SUMMARY",
+      "missing_MARKET_REALISM",
+      "missing_EXECUTION_METRICS",
+      "missing_RISK_METRICS",
+      "missing_SYSTEM_STATUS_REPORT",
+      "short_run_cycles_0_lt_800",
+      "actions_generated_lt_20_dead"
+    ],
+    "derived_metrics": {
+      "actions_per_cycle": 0.0,
+      "fill_success_rate": -1.0,
+      "missed_trades": -1,
+      "avg_slippage_fraction": -1.0,
+      "avg_drawdown_max": 0.0,
+      "winrate_proxy": 0.0,
+      "portfolio_turnover_proxy": 0.0,
+      "action_diversity": 0,
+      "unique_actions": []
+    },
+    "state_after": {
+      "BIST_REALISM_MIN_FILL_RATIO": "0.22",
+      "BIST_REALISM_MISS_MIX_THRESHOLD": "0.48",
+      "BIST_REALISM_BORDER_FILL_MAX": "0.42",
+      "BIST_REALISM_SLIP_MULT": "1.0",
+      "BIST_EXEC_MIN_FILL_PROB": "0.34",
+      "BIST_EXEC_SLIP_SCALE": "1.0",
+      "BIST_EXEC_FILL_PROB_MULT": "1.0",
+      "BIST_PORTFOLIO_MIN_CONF_MULT": "0.92",
+      "BIST_PORTFOLIO_RISK_BUDGET": "0.05",
+      "BIST_RISK_COMBINED_MULT": "1.0",
+      "BIST_ADAPTIVE_THRESHOLD_MULT": "0.93"
+    }
+  },
+  {
+    "iteration": 2,
+    "SYSTEM_TYPE": "UNDER_TRADING_SYSTEM",
+    "EDGE_CONFIDENCE": 0.42,
+    "failure_flags": [
+      "missing_SIMULATION_SUMMARY",
+      "missing_MARKET_REALISM",
+      "missing_EXECUTION_METRICS",
+      "missing_RISK_METRICS",
+      "missing_SYSTEM_STATUS_REPORT",
+      "short_run_cycles_0_lt_800",
+      "actions_generated_lt_20_dead"
+    ],
+    "derived_metrics": {
+      "actions_per_cycle": 0.0,
+      "fill_success_rate": -1.0,
+      "missed_trades": -1,
+      "avg_slippage_fraction": -1.0,
+      "avg_drawdown_max": 0.0,
+      "winrate_proxy": 0.0,
+      "portfolio_turnover_proxy": 0.0,
+      "action_diversity": 0,
+      "unique_actions": []
+    },
+    "state_after": {
+      "BIST_REALISM_MIN_FILL_RATIO": "0.22",
+      "BIST_REALISM_MISS_MIX_THRESHOLD": "0.48",
+      "BIST_REALISM_BORDER_FILL_MAX": "0.42",
+      "BIST_REALISM_SLIP_MULT": "1.0",
+      "BIST_EXEC_MIN_FILL_PROB": "0.34",
+      "BIST_EXEC_SLIP_SCALE": "1.0",
+      "BIST_EXEC_FILL_PROB_MULT": "1.0",
+      "BIST_PORTFOLIO_MIN_CONF_MULT": "0.8464",
+      "BIST_PORTFOLIO_RISK_BUDGET": "0.05",
+      "BIST_RISK_COMBINED_MULT": "1.0",
+      "BIST_ADAPTIVE_THRESHOLD_MULT": "0.88"
+    }
+  },
+  {
+    "iteration": 3,
+    "SYSTEM_TYPE": "UNDER_TRADING_SYSTEM",
+    "EDGE_CONFIDENCE": 0.42,
+    "failure_flags": [
+      "missing_SIMULATION_SUMMARY",
+      "missing_MARKET_REALISM",
+      "missing_EXECUTION_METRICS",
+      "missing_RISK_METRICS",
+      "missing_SYSTEM_STATUS_REPORT",
+      "short_run_cycles_0_lt_800",
+      "actions_generated_lt_20_dead"
+    ],
+    "derived_metrics": {
+      "actions_per_cycle": 0.0,
+      "fill_success_rate": -1.0,
+      "missed_trades": -1,
+      "avg_slippage_fraction": -1.0,
+      "avg_drawdown_max": 0.0,
+      "winrate_proxy": 0.0,
+      "portfolio_turnover_proxy": 0.0,
+      "action_diversity": 0,
+      "unique_actions": []
+    },
+    "state_after": {
+      "BIST_REALISM_MIN_FILL_RATIO": "0.22",
+      "BIST_REALISM_MISS_MIX_THRESHOLD": "0.48",
+      "BIST_REALISM_BORDER_FILL_MAX": "0.42",
+      "BIST_REALISM_SLIP_MULT": "1.0",
+      "BIST_EXEC_MIN_FILL_PROB": "0.34",
+      "BIST_EXEC_SLIP_SCALE": "1.0",
+      "BIST_EXEC_FILL_PROB_MULT": "1.0",
+      "BIST_PORTFOLIO_MIN_CONF_MULT": "0.8",
+      "BIST_PORTFOLIO_RISK_BUDGET": "0.05",
+      "BIST_RISK_COMBINED_MULT": "1.0",
+      "BIST_ADAPTIVE_THRESHOLD_MULT": "0.88"
+    }
+  },
+  {
+    "iteration": 1,
+    "SYSTEM_TYPE": "UNDER_TRADING_SYSTEM",
+    "EDGE_CONFIDENCE": 0.42,
+    "failure_flags": [
+      "missing_SIMULATION_SUMMARY",
+      "missing_MARKET_REALISM",
+      "missing_EXECUTION_METRICS",
+      "missing_RISK_METRICS",
+      "missing_SYSTEM_STATUS_REPORT",
+      "short_run_cycles_0_lt_800",
+      "actions_generated_lt_20_dead"
+    ],
+    "derived_metrics": {
+      "actions_per_cycle": 0.0,
+      "fill_success_rate": -1.0,
+      "missed_trades": -1,
+      "avg_slippage_fraction": -1.0,
+      "avg_drawdown_max": 0.0,
+      "winrate_proxy": 0.0,
+      "portfolio_turnover_proxy": 0.0,
+      "action_diversity": 0,
+      "unique_actions": []
+    },
+    "state_after": {
+      "BIST_REALISM_MIN_FILL_RATIO": "0.22",
+      "BIST_REALISM_MISS_MIX_THRESHOLD": "0.48",
+      "BIST_REALISM_BORDER_FILL_MAX": "0.42",
+      "BIST_REALISM_SLIP_MULT": "1.0",
+      "BIST_EXEC_MIN_FILL_PROB": "0.34",
+      "BIST_EXEC_SLIP_SCALE": "1.0",
+      "BIST_EXEC_FILL_PROB_MULT": "1.0",
+      "BIST_PORTFOLIO_MIN_CONF_MULT": "0.8",
+      "BIST_PORTFOLIO_RISK_BUDGET": "0.05",
+      "BIST_RISK_COMBINED_MULT": "1.0",
+      "BIST_ADAPTIVE_THRESHOLD_MULT": "0.88"
+    }
+  },
+  {
+    "iteration": 2,
+    "SYSTEM_TYPE": "UNDER_TRADING_SYSTEM",
+    "EDGE_CONFIDENCE": 0.42,
+    "failure_flags": [
+      "missing_SIMULATION_SUMMARY",
+      "missing_MARKET_REALISM",
+      "missing_EXECUTION_METRICS",
+      "missing_RISK_METRICS",
+      "missing_SYSTEM_STATUS_REPORT",
+      "short_run_cycles_0_lt_800",
+      "actions_generated_lt_20_dead"
+    ],
+    "derived_metrics": {
+      "actions_per_cycle": 0.0,
+      "fill_success_rate": -1.0,
+      "missed_trades": -1,
+      "avg_slippage_fraction": -1.0,
+      "avg_drawdown_max": 0.0,
+      "winrate_proxy": 0.0,
+      "portfolio_turnover_proxy": 0.0,
+      "action_diversity": 0,
+      "unique_actions": []
+    },
+    "state_after": {
+      "BIST_REALISM_MIN_FILL_RATIO": "0.22",
+      "BIST_REALISM_MISS_MIX_THRESHOLD": "0.48",
+      "BIST_REALISM_BORDER_FILL_MAX": "0.42",
+      "BIST_REALISM_SLIP_MULT": "1.0",
+      "BIST_EXEC_MIN_FILL_PROB": "0.34",
+      "BIST_EXEC_SLIP_SCALE": "1.0",
+      "BIST_EXEC_FILL_PROB_MULT": "1.0",
+      "BIST_PORTFOLIO_MIN_CONF_MULT": "0.8",
+      "BIST_PORTFOLIO_RISK_BUDGET": "0.05",
+      "BIST_RISK_COMBINED_MULT": "1.0",
+      "BIST_ADAPTIVE_THRESHOLD_MULT": "0.88"
+    }
+  },
+  {
+    "iteration": 3,
+    "SYSTEM_TYPE": "UNDER_TRADING_SYSTEM",
+    "EDGE_CONFIDENCE": 0.42,
+    "failure_flags": [
+      "missing_SIMULATION_SUMMARY",
+      "missing_MARKET_REALISM",
+      "missing_EXECUTION_METRICS",
+      "missing_RISK_METRICS",
+      "missing_SYSTEM_STATUS_REPORT",
+      "short_run_cycles_0_lt_800",
+      "actions_generated_lt_20_dead"
+    ],
+    "derived_metrics": {
+      "actions_per_cycle": 0.0,
+      "fill_success_rate": -1.0,
+      "missed_trades": -1,
+      "avg_slippage_fraction": -1.0,
+      "avg_drawdown_max": 0.0,
+      "winrate_proxy": 0.0,
+      "portfolio_turnover_proxy": 0.0,
+      "action_diversity": 0,
+      "unique_actions": []
+    },
+    "state_after": {
+      "BIST_REALISM_MIN_FILL_RATIO": "0.22",
+      "BIST_REALISM_MISS_MIX_THRESHOLD": "0.48",
+      "BIST_REALISM_BORDER_FILL_MAX": "0.42",
+      "BIST_REALISM_SLIP_MULT": "1.0",
+      "BIST_EXEC_MIN_FILL_PROB": "0.34",
+      "BIST_EXEC_SLIP_SCALE": "1.0",
+      "BIST_EXEC_FILL_PROB_MULT": "1.0",
+      "BIST_PORTFOLIO_MIN_CONF_MULT": "0.8",
+      "BIST_PORTFOLIO_RISK_BUDGET": "0.05",
+      "BIST_RISK_COMBINED_MULT": "1.0",
+      "BIST_ADAPTIVE_THRESHOLD_MULT": "0.88"
+    }
+  }
+]

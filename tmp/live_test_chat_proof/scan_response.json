@@ -1,0 +1,11 @@
+﻿{
+  "mode": "scan",
+  "payload": {
+    "day": "2026-02-27",
+    "ranked": [
+      {"symbol": "AKFIS", "score": 1.5, "rationale": "Momentum pozitif"},
+      {"symbol": "AKSUE", "score": 1.5, "rationale": "Momentum pozitif"},
+      {"symbol": "ALTNY", "score": 1.5, "rationale": "Momentum pozitif"}
+    ]
+  }
+}

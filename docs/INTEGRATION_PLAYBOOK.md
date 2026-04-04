@@ -1,0 +1,86 @@
+# Integration Playbook
+
+Minimal manual workflow and integration points for BIST Elite Core.
+
+## Minimal manual workflow
+
+1. **Snapshot** — Produce EOD snapshot for a day (market data → `snapshot.csv`).
+2. **Advisory / ask** — Run advisory step; get signals/advice for the universe.
+3. **orders_intent** — Build `orders_intent.json` from advice (strategy + risk gates).
+4. **Paper / manual execute** — Run execution (paper broker or BrokerAdapter for live).
+
+Example CLI sequence:
+
+```bash
+python -m bist_core.cli eod run --day YYYY-MM-DD --outdir data/eod/runs/YYYY-MM-DD
+python -m bist_core.cli eod run --day YYYY-MM-DD --outdir data/eod/runs/YYYY-MM-DD --emit-orders --orders-strategy equal_weight
+python -m bist_core.cli eod execute --day YYYY-MM-DD --outdir data/eod/runs/YYYY-MM-DD --execution paper
+```
+
+## Integration ports
+
+- **Market data provider** — EOD snapshot source. Default/local: CSV; for live data use a vendor adapter (e.g. VendorAPIProvider or custom provider).
+- **KAP events provider** — Corporate disclosure / events. Use KapHtmlEventsProvider (HTML) or vendor API; configurable via URL template and cache dir.
+- **BrokerAdapter** — Order execution. Paper broker for simulation; for live trading plug in a BrokerAdapter implementation (config via BIST_BROKER_CONFIG).
+- [faz113] **matriks_terminal_adapter.py** — Matriks Terminal Düzey 2 + VİOP verisi için adaptör sınıfı eklendi (`bist_core.connectors.matriks_terminal_adapter.MatriksTerminalAdapter`).
+- [faz114] **market_data_streamer.py** — Sürekli canlı veri toplamak için MarketDataStreamer sınıfı entegre edildi (`bist_core.connectors.market_data_streamer.MarketDataStreamer`).
+- [faz115] **order_bridge_dll.py** — İşlem terminali için yarı otomatik emir köprüsü (OrderBridge) eklendi (`bist_core.connectors.order_bridge_dll.OrderBridge`).
+- [faz116] **order_bridge_interface.py** — Kullanıcı onayı ile emir gönderimi için Flask arayüzü eklendi (`bist_core.connectors.order_bridge_interface`: `app`, `pending_orders`; Flask gerekir).
+
+## PowerShell on Windows
+
+PowerShell requires `.\` to run scripts from the current directory (security policy). From the repo root:
+
+```powershell
+# Run proof pack
+.\tools\proof_pack.ps1
+
+# Dot-source aliases for convenience (clean_repo, proof_pack, run_proof)
+. .\tools\aliases.ps1
+run_proof
+```
+
+**Environment variables (current session):**
+```powershell
+$env:OPENAI_API_KEY="sk-..."
+$env:BIST_CORE_ALLOW_NETWORK="1"
+$env:BIST_CORE_SNAPSHOT_DIR="C:\path\to\data\eod\snapshots"
+```
+
+**Persistent (system/user):**
+```cmd
+setx OPENAI_API_KEY "sk-..."
+setx BIST_CORE_ALLOW_NETWORK "1"
+```
+New CMD/PowerShell windows will have these; current session is unchanged until you set them with `$env:VAR=...` or reopen.
+
+## Required / common env vars
+
+- **BIST_CORE_HOME** — Optional; base directory for core data (registry, etc.).
+- **BIST_CORE_ALLOW_NETWORK** — Must be `1` (or `true`/`yes`) to allow outbound HTTP. Default is off (fail-closed).
+- **KAP cache dir** — `BIST_KAP_RAW_DIR` or `BIST_RAW_DIR` for KAP HTML cache.
+- **Vendor / base URL** — `BIST_KAP_BASE_URL`, `BIST_KAP_URL_TEMPLATE` (or equivalent) for KAP; vendor EOD URL for market data when using VendorAPIProvider.
+
+## Yeni live broker nasıl eklenir?
+
+Çekirdeğe dokunmadan yeni bir canlı broker eklemek için execution provider **registry** kullanılır. `bist_core.execution.adapters.registry` modülünde:
+
+- **register_execution_provider(name, factory)** — Broker adı ve factory fonksiyonunu kaydeder. `name` strip+lower ile normalize edilir; boş isimde `ValueError` atar.
+- **get_execution_provider(name)** — İsme göre kayıtlı factory’yi döner; yoksa `None`.
+
+Factory imzası: `factory(*, broker_config_path, broker_config, outdir, day, broker_name, execution) -> ExecutionProvider`. Uygulamanız `ExecutionProvider` protokolüne uymalı (`submit_orders(orders, *, dry_run) -> ExecutionResult` dict). Kaydı uygulama başlangıcında (örn. CLI veya strateji yüklemesinde) yapın; `execution=live` ve `--broker <name>` ile çalıştırıldığında çekirdek önce registry’ye bakar, isim varsa bu factory ile provider üretir. Registry’de yoksa mevcut Stub fallback kullanılır.
+
+## Yeni market data provider ekleme
+
+Çekirdeğe dokunmadan yeni bir market data vendor’ı eklemek için market data **registry** kullanılır. `bist_core.market_data.registry` modülünde:
+
+- **register_market_data_provider(name, factory)** — Provider adı ve factory fonksiyonunu kaydeder. `name` strip+lower ile normalize edilir; boş isimde `ValueError` atar.
+- **get_market_data_provider(name)** — İsme göre kayıtlı factory’yi döner; yoksa `None`.
+
+Factory imzası: `factory(*, snapshot_root, **kwargs) -> MarketDataProvider`. Uygulamanız `MarketDataProvider` protokolüne uymalı (`symbols(day)`, `close_map(day)`, `validate(day)`). Varsayılan `local_eod` davranışı değişmez; `resolve_provider(name=..., snapshot_root=...)` çağrıldığında name `local_eod` değilse önce registry’ye bakılır, bulunursa `factory(snapshot_root=snapshot_root, **kwargs)` ile provider üretilir; yoksa `ValueError` atılır.
+
+## Fail-closed rules
+
+- **Network disabled by default** — Outbound requests (VendorAPIProvider, KapHtmlEventsProvider fetch) are blocked unless `BIST_CORE_ALLOW_NETWORK=1` (or equivalent). Cache-only or offline flows do not require network.
+- **Env contract** — Only whitelisted `BIST_*` env keys are allowed; unknown keys cause preflight failure.
+- **Execution** — Live execute requires valid config, broker config, rulespack, and manifest; otherwise exit 2 with execution_result.json.

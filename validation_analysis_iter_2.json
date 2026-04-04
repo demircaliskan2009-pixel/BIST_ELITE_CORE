@@ -1,0 +1,40 @@
+{
+  "extracted": {
+    "SIMULATION_SUMMARY": null,
+    "MARKET_REALISM": null,
+    "EXECUTION_METRICS": null,
+    "RISK_METRICS": null,
+    "SYSTEM_STATUS_REPORT": null
+  },
+  "derived_metrics": {
+    "actions_per_cycle": 0.0,
+    "fill_success_rate": -1.0,
+    "missed_trades": -1,
+    "avg_slippage_fraction": -1.0,
+    "avg_drawdown_max": 0.0,
+    "winrate_proxy": 0.0,
+    "portfolio_turnover_proxy": 0.0,
+    "action_diversity": 0,
+    "unique_actions": []
+  },
+  "failure_flags": [
+    "missing_SIMULATION_SUMMARY",
+    "missing_MARKET_REALISM",
+    "missing_EXECUTION_METRICS",
+    "missing_RISK_METRICS",
+    "missing_SYSTEM_STATUS_REPORT",
+    "short_run_cycles_0_lt_800",
+    "actions_generated_lt_20_dead"
+  ],
+  "diagnosis": {
+    "SYSTEM_TYPE": "UNDER_TRADING_SYSTEM",
+    "MAIN_WEAKNESS": "missing_SIMULATION_SUMMARY",
+    "EDGE_CONFIDENCE": 0.42,
+    "NEXT_FIX_PRIORITY": "portfolio/decision: relax BIST_PORTFOLIO_MIN_CONF / BIST_ADAPTIVE_*; BIST_DECISION_RELAX_MODE for simulation only"
+  },
+  "auto_fix_suggestions": [
+    "portfolio/decision: relax BIST_PORTFOLIO_MIN_CONF / BIST_ADAPTIVE_*; BIST_DECISION_RELAX_MODE for simulation only",
+    "run: ensure live_runner completes; capture full stdout to validation_run.txt",
+    "run: set BIST_LIVE_MAX_CYCLES>=800 and no early exit"
+  ]
+}

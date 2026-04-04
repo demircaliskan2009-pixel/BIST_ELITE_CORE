@@ -1,0 +1,32 @@
+{
+  "query_type": "single_pick",
+  "day": "2025-02-05",
+  "query": "bugün en güçlü tek hisse hangisi",
+  "best_symbol": "ASELS",
+  "ranked": [
+    {
+      "symbol": "ASELS",
+      "score": 1.2727,
+      "rationale": "below_entry_trigger; gap=-1.00%; E=-0.03 R1=+0.07 Rp=+0.22 V=+0.01",
+      "current_close": 148.0,
+      "current_close_source": "snapshot",
+      "entry_status": "below_entry_trigger",
+      "entry_gap_pct": -1.0
+    },
+    {
+      "symbol": "AKFIS",
+      "score": 1.2223,
+      "rationale": "below_entry_trigger; gap=-1.02%; E=-0.03 R1=+0.03 Rp=+0.22 V=+0.00",
+      "current_close": 58.4,
+      "current_close_source": "snapshot",
+      "entry_status": "below_entry_trigger",
+      "entry_gap_pct": -1.02
+    },
+    {
+      "symbol": "AEFES",
+      "score": -1.3118,
+      "rationale": "E=+0.00 R1=-0.08 Rp=-0.22 V=-0.02"
+    }
+  ],
+  "text": "ASELS bugün relatif olarak en güçlü aday. Skor 1.27. Kompakt gerekçe: below_entry_trigger; gap=-1.00%; E=-0.03 R1=+0.07 Rp=+0.22 V=+0.01. durum=below_entry_trigger, entry_gap=-1.00%, canlı=148.0 (snapshot)."
+}

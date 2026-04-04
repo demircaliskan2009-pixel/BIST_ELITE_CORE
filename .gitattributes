@@ -1,0 +1,18 @@
+# Canonical line endings (repo-wide)
+* text=auto
+
+# Python & config: always LF in repo
+*.py       text eol=lf
+*.pyi      text eol=lf
+*.toml     text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.json     text eol=lf
+*.md       text eol=lf
+*.txt      text eol=lf
+*.sh       text eol=lf
+
+# Windows scripts: keep CRLF
+*.ps1      text eol=crlf
+*.bat      text eol=crlf
+*.cmd      text eol=crlf

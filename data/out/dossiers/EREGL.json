@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "symbol": "EREGL",
+  "day": "2026-03-03",
+  "decision_raw": "PASS",
+  "score": -1.0,
+  "signals": {
+    "mom": -1,
+    "news": 0,
+    "vol": 0
+  },
+  "plan": null,
+  "text": "EREGL için karar PASS; skor -1.00. Sinyal özeti: Momentum negatif, KAP haberleri nötr, Hacim artışı yok.\n\nFiyat bandı dışına çıkma, ters haber akışı veya güçlü hacim kırılması olursa yeniden değerlendir.\n\nOlaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi.",
+  "capabilities": {
+    "ohlcv": true
+  },
+  "provenance": {
+    "snapshot_root": "C:\\Users\\demir\\OneDrive\\Belgeler\\Projects\\BIST_ELITE_CORE\\data\\eod\\snapshots",
+    "provider": "LocalCSVProvider",
+    "snapshot_hash": {
+      "algo": "sha256",
+      "value": "336880088f81bdf40b1686bfde28367aa68fd7c290e2a301d9fffb946a2e6d59"
+    }
+  },
+  "error_marker": null,
+  "events": [],
+  "events_errors": []
+}

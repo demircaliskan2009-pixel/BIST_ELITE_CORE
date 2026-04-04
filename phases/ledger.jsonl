@@ -1,0 +1,54 @@
+{"phase":"faz126","commit":"4b61c09","summary":"Matriks/CSV ingestion hardening - aliases, dates, TR decimals, symbol normalize","tests":"test_faz123_*"}
+{"phase":"faz127","summary":"snapshots doctor --symbol bars_count lookback","commit":"4c9fa2c","tests":"pytest"}
+{"phase":"faz128","commit":"4ad5e54","summary":"snapshots doctor missing days in range","tests":"test_faz128_*"}
+{"phase":"faz129","commit":"40b2c4e","summary":"data import --mapping auto|strict","tests":"test_faz123_*"}
+{"phase":"faz130","commit":"4ced91e","summary":"data import --schema-report","tests":"test_faz130_*"}
+{"phase":"faz136","commit":"33216d7","summary":"risk sizing from capital, max_loss, stop distance","tests":"test_faz136_*"}
+{"phase":"faz155","commit":"fe678a3","summary":"KAP cache loader BIST_KAP_CACHE_DIR","tests":"test_faz155_*"}
+{"phase":"faz134","summary":"import encoding fallback utf-8 then latin-1","commit":"fa4e79a","tests":"pytest"}
+{"phase":"faz139","summary":"advice artifact schema golden HOLD proof tests","commit":"d4c493d","tests":"pytest"}
+{"phase":"faz368","refactor_proof":"golden_output","summary":"CLI surface golden proof","commit":"ac0073b","tests":"pytest"}
+{"phase":"faz135","summary":"snapshot schema version proof tests","commit":"9f5d0d7","tests":"pytest"}
+{"phase":"faz140","summary":"evidence pack structure source and hash","commit":"e2c91c9","tests":"pytest"}
+{"phase":"faz142","summary":"HOLD reason and next_action in artifact","commit":"b0b7343","tests":"test_faz142_*"}
+{"phase":"faz143","summary":"content_sha256 in advice artifact for reproducibility","commit":"bd30480","tests":"test_faz143_*"}
+{"phase":"faz144","summary":"bars_count and lookback_required in advice JSON","commit":"453360d","tests":"test_faz144_*"}
+{"phase":"faz390","summary":"KAP ingestion fixture minimal parse without network","commit":"cc7279b","tests":"test_faz390_*"}
+{"phase":"faz391","summary":"KAP event dedupe by id first-wins deterministic","commit":"cc7279b","tests":"test_faz391_*"}
+{"phase":"faz405","summary":"KAP empty cache no crash","commit":"cc7279b","tests":"test_faz405_*"}
+{"phase":"faz393","summary":"scoreboard leakage guard date less than as_of","commit":"cc0a3dc","tests":"test_faz393_*"}
+{"phase":"faz387","summary":"evidence stabilization sorted signals keys deterministic JSON","commit":"2c16dc5","tests":"pytest"}
+{"phase":"faz388","summary":"scan artifact schema_version generated_at required keys empty scan valid","commit":"bc75eb1","tests":"pytest"}
+{"phase":"faz389","summary":"scan stable ordering tie break by symbol ascending deterministic","commit":"1c2f2fc","tests":"pytest"}
+{"phase":"faz392","summary":"scoreboard schema_version day params metrics keys empty run","commit":"9540b7f","tests":"pytest"}
+{"phase":"faz549","summary":"snapshot malformed row detection missing symbol invalid close deterministic","commit":"ef09014","tests":"pytest"}
+{"phase":"faz550","summary":"snapshot invalid rows report JSON format non-zero exit when invalid","commit":"43c1d35","tests":"pytest"}
+{"phase":"faz548","summary":"symbol normalization shared helper uppercase trim deterministic","commit":"6946320","tests":"pytest"}
+{"phase":"faz546","summary":"registry uses normalize_symbol uppercase trim on load","commit":"7c8d713","tests":"pytest"}
+{"phase":"faz546","summary":"registry uses normalize_symbol uppercase trim on load","commit":"3e80526","tests":"pytest"}
+{"phase":"faz386","summary":"gates outcomes PASS FAIL JSON schema deterministic key order","commit":"730d0c0","tests":"pytest"}
+{"phase":"faz551","summary":"packaging smoke test python -m build sdist wheel","commit":"280b5b1","tests":"pytest"}
+{"phase":"faz552","summary":"API deterministic CLI parity schema_version generated_at ask scan","commit":"c7921ed","tests":"pytest"}
+{"phase":"faz547","summary":"snapshots use normalize_symbol on read uppercase trim deterministic","commit":"a05d3bc","tests":"pytest"}
+{"phase":"faz137","summary":"gates outcomes section PASS FAIL per gate with reasons in JSON","commit":"eeeb23d","tests":"pytest"}
+{"phase":"faz137","summary":"gates outcomes section PASS FAIL per gate with reasons in JSON","commit":"64e87ac","tests":"pytest"}
+{"phase":"faz138","summary":"cause-effect fields why invalidates watch_next from deterministic evidence","commit":"6d29bb5","tests":"pytest"}
+{"phase":"faz145","summary":"scan liquidity filter min volume turnover","commit":"9a2d619","tests":"pytest"}
+{"phase":"faz146","summary":"scan exclusions support exclude symbols via exclusions","commit":"86c5fd0","tests":"pytest"}
+{"phase":"faz147","summary":"scan scoring rationale 1-line per ranked symbol from deterministic signals","commit":"ff46cf3","tests":"pytest"}
+{"phase":"faz148","summary":"scan --out artifact save ranked list JSON to file","commit":"e1efaf8","tests":"pytest"}
+{"phase":"faz149","summary":"scan stable ordering deterministic tie-break for equal scores","commit":"10e1aa0","tests":"pytest"}
+{"phase":"faz150","summary":"scan drill-down determinism same params produce same ask command","commit":"3022d7d","tests":"pytest"}
+{"phase":"faz151","summary":"scan top_n validation within bounds reject zero","commit":"0bdae93","tests":"pytest"}
+{"phase":"faz152","summary":"scan artifact schema stable JSON","commit":"4383755","tests":"pytest"}
+{"phase":"faz553","summary":"Theta3 security guardrails network validation CLI sandbox","commit":"a232964","tests":"pytest"}
+{"phase":"faz230","summary":"KAP malformed handling skip gracefully no crash","commit":"a18eaa9","tests":"pytest"}
+{"phase":"faz554","summary":"ask interactive chat prompt symbol day params scripted dialogue tests","commit":"052b61d","tests":"pytest"}
+{"phase":"faz555","summary":"risk sizing edge cases zero capital extreme max_loss fail-closed","commit":"f81bc81","tests":"pytest"}
+{"phase":"faz556","summary":"orders export CSV JSON schema --out orders_meta format","commit":"56d2db9","tests":"pytest"}
+{"phase":"faz557","summary":"plan/orders corner cases empty symbols empty plan FAIL invalid date","commit":"3b9fbac","tests":"pytest"}
+{"phase":"faz557","summary":"plan/orders corner cases: empty symbols, empty plan FAIL, invalid date","commit":"e90d5da","tests":"pytest"}
+{"phase":"faz558","summary":"E2E multi-day scenario eod run plan orders golden regression tests","commit":"edfd988","tests":"pytest"}
+{"phase":"faz559","summary":"security sanity guards no os.system whitelisted imports ruff config","commit":"4fc41fe","tests":"pytest"}
+{"phase":"faz560","summary":"AI interface SDK docs version endpoint chat agent flow","commit":"88c8839","tests":"pytest"}
+{"phase":"faz561","summary":"docs README Quick Start CHANGELOG PR proof_pack note","commit":"a7e6b28","tests":"pytest"}

@@ -1,0 +1,37 @@
+{
+  "Cause-Effect": {
+    "invalidates": "Fiyat bandı dışına çıkma, ters haber akışı.",
+    "watch_next": "Hacim kırılması, KAP haberleri.",
+    "why": "Güvenli mod: InsufficientHistory (NoBars).\nYetersiz bar sayısı (mevcut: 1, gerekli: 20).\nDaha fazla veri bekleyin.\n\nOlaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi."
+  },
+  "Decision": {
+    "decision_raw": "PASS",
+    "score": 0.0
+  },
+  "Entry/Stop/Targets": null,
+  "Evidence": {
+    "signals": [],
+    "source": "C:\\Users\\demir\\AppData\\Local\\Temp\\pytest-of-demir\\pytest-1888\\test_faz552_api_ask_matches_cl0\\2025-01-15\\snapshot.csv",
+    "source_sha256": "d0dec5254228ebffde8fd0eddce291ba17538c4e2fd30f2568ee48f0ba2c5973"
+  },
+  "bars_count": 1,
+  "content_sha256": "db4d6c92f224cbafae0828d6ee4780c875ac862121e3ee285865056738459168",
+  "day": "2025-01-15",
+  "decision_raw": "PASS",
+  "gates": {
+    "history_gate": {
+      "outcome": "FAIL",
+      "reason": "InsufficientHistory"
+    }
+  },
+  "generated_at": "2026-03-22T11:29:33.425124Z",
+  "lookback_required": 20,
+  "next_action": "Wait for more data",
+  "plan": null,
+  "reason": "InsufficientHistory",
+  "schema_version": 1,
+  "score": 0.0,
+  "signals": [],
+  "symbol": "AKBNK",
+  "text": "Güvenli mod: InsufficientHistory (NoBars).\nYetersiz bar sayısı (mevcut: 1, gerekli: 20).\nDaha fazla veri bekleyin.\n\nOlaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi."
+}

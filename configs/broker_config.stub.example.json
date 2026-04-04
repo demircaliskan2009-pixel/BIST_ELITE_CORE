@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "broker": "stub",
+  "provider": "stub",
+  "notes": "Example broker config for LIVE execution (stub provider). Replace when adding real broker adapter."
+}

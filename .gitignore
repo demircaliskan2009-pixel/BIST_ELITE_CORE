@@ -1,0 +1,12 @@
+﻿# logs & debug
+*.txt
+*.log
+*.csv
+
+# large artifacts
+real_ideal_proof.txt
+validation_run.txt
+
+# python
+.venv/
+__pycache__/

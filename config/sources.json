@@ -1,0 +1,15 @@
+{
+  "provider": "local_csv",
+  "local_csv": {
+    "root_dir": "data/samples"
+  },
+  "vendor_api": {
+    "enabled": false,
+    "eod_endpoint": "",
+    "kap_endpoint": "",
+    "timeout": 5.0,
+    "auth": {
+      "api_key": ""
+    }
+  }
+}

@@ -1,0 +1,221 @@
+"""
+FAZ60: Dossier writer linking advice + research + risk decisions.
+Writes outdir/dossier/<day>/dossier.json with stable ordering and evidence pointers (paths + hashes).
+FAZ118-STEP1A: Windows-safe atomic write with retry (PermissionError / WinError 32).
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+
+def _atomic_write_with_retry(tmp_path: Path, out_path: Path, content: str) -> None:
+    """
+    Write content to tmp_path then atomically replace out_path.
+    Windows-safe: retries on PermissionError/OSError with backoff; fallback to direct write.
+    """
+    tmp_path.write_text(content, encoding="utf-8")
+
+    for attempt in range(8):
+        try:
+            tmp_path.replace(out_path)
+            return
+        except (PermissionError, OSError):
+            time.sleep(0.05 + attempt * 0.02)
+
+    try:
+        out_path.unlink(missing_ok=True)
+        tmp_path.replace(out_path)
+        return
+    except (PermissionError, OSError):
+        pass
+
+    try:
+        out_path.write_text(content, encoding="utf-8")
+    except Exception:
+        pass
+    if tmp_path.exists():
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _file_hash(path: Path) -> Optional[str]:
+    """Return sha256 of file if exists, else None."""
+    if not path.is_file():
+        return None
+    try:
+        from bist_core.services import snapshot_integrity
+
+        return snapshot_integrity.compute_sha256(path)
+    except Exception:
+        return None
+
+
+def _stable_payload(evidence: Dict[str, Any]) -> Dict[str, Any]:
+    """Build payload with stable key order and sorted lists for deterministic JSON."""
+    out: Dict[str, Any] = {}
+    for k in sorted(evidence.keys()):
+        v = evidence[k]
+        if v is None:
+            continue
+        if isinstance(v, list):
+            v = sorted(v) if v and not isinstance(v[0], dict) else v
+        out[k] = v
+    return out
+
+
+def write_dossier(
+    day: str,
+    outdir: Path | str,
+    evidence: Dict[str, Any],
+    *,
+    dossier_path_key: str = "dossier_json_path",
+) -> Path:
+    """
+    Write outdir/dossier/<day>/dossier.json with stable ordering.
+    evidence: dict with keys such as advice_path, research_path, orders_intent_path,
+              dossier_path (per-symbol dossiers dir), snapshot_hash, risk_notes, etc.
+              Paths can be str or Path; hashes added for existing files when not provided.
+    Returns path to written dossier.json.
+    """
+    out_path = Path(outdir)
+    day_dir = out_path / "dossier" / day
+    day_dir.mkdir(parents=True, exist_ok=True)
+    out_file = day_dir / "dossier.json"
+
+    payload: Dict[str, Any] = {
+        "schema_version": 1,
+        "day": day,
+    }
+    pointers: Dict[str, Any] = {}
+
+    if evidence.get("advice_path"):
+        p = Path(evidence["advice_path"])
+        pointers["advice_path"] = str(p)
+        if p.is_file() and not evidence.get("advice_sha256"):
+            h = _file_hash(p)
+            if h:
+                pointers["advice_sha256"] = h
+        elif evidence.get("advice_sha256"):
+            pointers["advice_sha256"] = evidence["advice_sha256"]
+
+    if evidence.get("research_path"):
+        pointers["research_path"] = str(evidence["research_path"])
+
+    if evidence.get("orders_intent_path"):
+        p = Path(evidence["orders_intent_path"])
+        pointers["orders_intent_path"] = str(p)
+        if p.is_file() and not evidence.get("orders_intent_sha256"):
+            h = _file_hash(p)
+            if h:
+                pointers["orders_intent_sha256"] = h
+        elif evidence.get("orders_intent_sha256"):
+            pointers["orders_intent_sha256"] = evidence["orders_intent_sha256"]
+
+    if evidence.get("dossier_path"):
+        pointers["dossier_path"] = str(evidence["dossier_path"])
+
+    if evidence.get("snapshot_hash"):
+        h = evidence["snapshot_hash"]
+        if isinstance(h, dict):
+            pointers["snapshot_sha256"] = h.get("value") or h.get("sha256") or ""
+        else:
+            pointers["snapshot_sha256"] = str(h)
+
+    if evidence.get("restrictions"):
+        r = evidence["restrictions"]
+        if isinstance(r, dict):
+            pointers["restrictions_file"] = r.get("file", "")
+            pointers["restrictions_sha256"] = r.get("sha256", "")
+        else:
+            pointers["restrictions_file"] = str(r)
+
+    if evidence.get("risk_notes"):
+        notes = evidence["risk_notes"]
+        pointers["risk_notes"] = sorted(notes) if isinstance(notes, list) else [str(notes)]
+
+    if evidence.get("risk_allowed") is not None:
+        payload["risk_allowed"] = bool(evidence["risk_allowed"])
+
+    # FAZ77: reconciliation + execution_result + audit ledger paths
+    if evidence.get("reconciliation_path"):
+        pointers["reconciliation_path"] = str(evidence["reconciliation_path"])
+    if evidence.get("execution_result_path"):
+        pointers["execution_result_path"] = str(evidence["execution_result_path"])
+    if evidence.get("ledger_orders_path"):
+        pointers["ledger_orders_path"] = str(evidence["ledger_orders_path"])
+    if evidence.get("ledger_fills_path"):
+        pointers["ledger_fills_path"] = str(evidence["ledger_fills_path"])
+    if evidence.get("ledger_positions_path"):
+        pointers["ledger_positions_path"] = str(evidence["ledger_positions_path"])
+    if evidence.get("blocked_reason") is not None:
+        pointers["blocked_reason"] = str(evidence["blocked_reason"])
+    if evidence.get("blocked_code") is not None:
+        pointers["blocked_code"] = str(evidence["blocked_code"])
+
+    # FAZ90: explainability — link explain.json
+    if evidence.get("explain_path"):
+        pointers["explain_path"] = str(evidence["explain_path"])
+
+    payload["evidence"] = _stable_payload(pointers)
+    payload["dossier_json_path"] = str(out_file)
+
+    stable = _stable_payload(payload)
+    try:
+        from bist_core.security.redact import redact_recursive
+
+        stable = redact_recursive(stable)
+    except Exception:
+        pass
+    content = json.dumps(stable, ensure_ascii=False, indent=2, sort_keys=True)
+    tmp = out_file.with_name(out_file.name + ".tmp")
+    _atomic_write_with_retry(tmp, out_file, content)
+    return out_file
+
+
+def update_dossier_evidence(outdir: Path | str, day: str, extra_evidence: Dict[str, Any]) -> Optional[Path]:
+    """
+    FAZ77: Load existing dossier.json, merge extra_evidence into evidence, rewrite. Returns path or None if no dossier.
+    Use after execution to add reconciliation_path, execution_result_path, ledger paths.
+    FAZ118-STEP1A: On write_dossier exception, best-effort write so subprocess never crashes.
+    """
+    out_path = Path(outdir)
+    day_dir = out_path / "dossier" / str(day)
+    dossier_file = day_dir / "dossier.json"
+    if not dossier_file.is_file():
+        return None
+    try:
+        existing = json.loads(dossier_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, TypeError, OSError):
+        return None
+    evidence = dict(existing.get("evidence") or {})
+    for k, v in (extra_evidence or {}).items():
+        if v is not None and v != "":
+            evidence[k] = v
+    if "risk_allowed" in existing:
+        evidence["risk_allowed"] = existing["risk_allowed"]
+
+    try:
+        return write_dossier(day, out_path, evidence)
+    except Exception:
+        payload = {
+            "schema_version": 1,
+            "day": day,
+            "evidence": _stable_payload(evidence),
+            "dossier_json_path": str(dossier_file),
+        }
+        try:
+            from bist_core.security.redact import redact_recursive
+
+            payload = redact_recursive(payload)
+        except Exception:
+            pass
+        content = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+        tmp = dossier_file.with_name(dossier_file.name + ".tmp")
+        _atomic_write_with_retry(tmp, dossier_file, content)
+        return dossier_file

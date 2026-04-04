@@ -1,0 +1,59 @@
+{
+  "Cause-Effect": {
+    "invalidates": "Fiyat bandı dışına çıkma, ters haber akışı.",
+    "watch_next": "Hacim kırılması, KAP haberleri.",
+    "why": "AKFIS için karar WATCH; skor 1.00. Sinyal özeti: Momentum pozitif, KAP haberleri nötr, Hacim artışı yok.\n\nPlan: entry 34.5, stop 33.48, t1 35.18. Fiyat bandı dışına çıkma, ters haber akışı veya güçlü "
+  },
+  "Decision": {
+    "decision_raw": "WATCH",
+    "score": 1.0
+  },
+  "Entry/Stop/Targets": {
+    "entry": 34.5,
+    "stop": 33.48,
+    "t1": 35.18
+  },
+  "Evidence": {
+    "signals": {
+      "mom": 1,
+      "news": 0,
+      "vol": 0
+    },
+    "source": "C:\\Users\\demir\\OneDrive\\Belgeler\\Projects\\BIST_ELITE_CORE\\artifacts\\snapshot_root_tailmap\\2026-03-09\\snapshot.csv",
+    "source_sha256": "2478e8fc7437c57362d3a5f8ccdf6e6811e67e2bd68e9894b9c38466d712176c"
+  },
+  "bars_count": 21,
+  "content_sha256": "3100f37b29bfa0b7eea9629280d11c294c95afd33e95f4f22d68393d96524f4f",
+  "day": "2026-03-09",
+  "decision_raw": "WATCH",
+  "gates": {
+    "band": {
+      "outcome": "PASS",
+      "reason": "OK"
+    },
+    "levels": {
+      "outcome": "PASS",
+      "reason": "OK"
+    },
+    "score": {
+      "outcome": "PASS",
+      "reason": "score=1.00"
+    }
+  },
+  "generated_at": "2026-03-11T17:53:50.874309Z",
+  "lookback_required": 20,
+  "plan": {
+    "entry": 34.5,
+    "stop": 33.48,
+    "t1": 35.18
+  },
+  "schema_version": 1,
+  "score": 1.0,
+  "signals": {
+    "mom": 1,
+    "news": 0,
+    "vol": 0
+  },
+  "symbol": "AKFIS",
+  "text": "AKFIS için karar WATCH; skor 1.00. Sinyal özeti: Momentum pozitif, KAP haberleri nötr, Hacim artışı yok.\n\nPlan: entry 34.5, stop 33.48, t1 35.18. Fiyat bandı dışına çıkma, ters haber akışı veya güçlü hacim kırılması olursa yeniden değerlendir.\n\nOlaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi."
+}

@@ -1,0 +1,15 @@
+{
+  "FINAL_SYSTEM_TYPE": "UNDER_TRADING_SYSTEM",
+  "EDGE_CONFIDENCE": 0.42,
+  "TOTAL_ITERATIONS": 3,
+  "IMPROVEMENTS": [
+    "iter1: UNDER_TRADING_SYSTEM conf=0.42",
+    "iter2: UNDER_TRADING_SYSTEM conf=0.42",
+    "iter3: UNDER_TRADING_SYSTEM conf=0.42",
+    "iter1: UNDER_TRADING_SYSTEM conf=0.42",
+    "iter2: UNDER_TRADING_SYSTEM conf=0.42",
+    "iter3: UNDER_TRADING_SYSTEM conf=0.42"
+  ],
+  "FINAL_WEAKNESS": "['missing_SIMULATION_SUMMARY', 'missing_MARKET_REALISM', 'missing_EXECUTION_METRICS', 'missing_RISK_METRICS', 'missing_SYSTEM_STATUS_REPORT', 'short_run_cycles_0_lt_800', 'actions_generated_lt_20_dead']",
+  "stop_reason": "max_iterations"
+}

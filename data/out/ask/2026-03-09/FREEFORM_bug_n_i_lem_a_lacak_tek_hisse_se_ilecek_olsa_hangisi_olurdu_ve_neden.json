@@ -1,0 +1,24 @@
+{
+  "query_type": "single_pick",
+  "day": "2026-03-09",
+  "query": "bugün işlem açılacak tek hisse seçilecek olsa hangisi olurdu ve neden",
+  "best_symbol": "AYCES",
+  "ranked": [
+    {
+      "symbol": "AYCES",
+      "score": 2.3,
+      "rationale": "AYCES için karar BUY; skor 2.30. Sinyal özeti: Momentum pozitif, KAP haberleri nötr, Hacim artışı var, Günlük değişim +5.51%.\n\nPlan: entry 676.5, stop 656.5, t1 690.0. Mevcut fiyat 670.0, entry seviyesine yakın. Fiyat bandı dışına çıkma, ters haber akışı veya güçlü hacim kırılması olursa yeniden değerlendir.\n\nOlaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi."
+    },
+    {
+      "symbol": "GLRYH",
+      "score": 2.3,
+      "rationale": "GLRYH için karar BUY; skor 2.30. Sinyal özeti: Momentum pozitif, KAP haberleri nötr, Hacim artışı var, Günlük değişim +4.96%.\n\nPlan: entry 4.92, stop 4.77, t1 5.02. Mevcut fiyat 4.87, entry seviyesinin altında; tetik henüz tam oluşmamış olabilir. Fiyat bandı dışına çıkma, ters haber akışı veya güçlü hacim kırılması olursa yeniden değerlendir.\n\nOlaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi."
+    },
+    {
+      "symbol": "KRONT",
+      "score": 2.3,
+      "rationale": "KRONT için karar BUY; skor 2.30. Sinyal özeti: Momentum pozitif, KAP haberleri nötr, Hacim artışı var, Günlük değişim +9.98%.\n\nPlan: entry 19.48, stop 18.9, t1 19.87. Mevcut fiyat 19.29, entry seviyesine yakın. Fiyat bandı dışına çıkma, ters haber akışı veya güçlü hacim kırılması olursa yeniden değerlendir.\n\nOlaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi."
+    }
+  ],
+  "text": "AYCES bugün relatif olarak daha güçlü görünüyor. Skor 2.30. Gerekçe: AYCES için karar BUY; skor 2.30. Sinyal özeti: Momentum pozitif, KAP haberleri nötr, Hacim artışı var, Günlük değişim +5.51%.\n\nPlan: entry 676.5, stop 656.5, t1 690.0. Mevcut fiyat 670.0, entry seviyesine yakın. Fiyat bandı dışına çıkma, ters haber akışı veya güçlü hacim kırılması olursa yeniden değerlendir.\n\nOlaylar (KAP/diğer):\nKAP/olay verisi yok veya erişilemedi."
+}

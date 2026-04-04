@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "day": "2026-03-03",
+  "outdir": "data\\out\\dossiers",
+  "total": 12,
+  "ok": 12,
+  "errors": 0,
+  "error_list": [],
+  "runtime_ms": 16,
+  "provenance": {
+    "snapshot_root": "C:\\Users\\demir\\OneDrive\\Belgeler\\Projects\\BIST_ELITE_CORE\\data\\eod\\snapshots",
+    "provider": "LocalCSVProvider",
+    "snapshot_meta": {
+      "ohlcv": true,
+      "close_only": false
+    },
+    "snapshot_hash": {
+      "algo": "sha256",
+      "value": "336880088f81bdf40b1686bfde28367aa68fd7c290e2a301d9fffb946a2e6d59"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "max_positions": 20,
+  "max_notional": 1.0,
+  "max_names": 15,
+  "per_symbol_cap": 0.25
+}

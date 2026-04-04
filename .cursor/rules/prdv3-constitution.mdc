@@ -1,0 +1,24 @@
+---
+description: PRDV3 architecture constitution — top-level rules for BIST_ELITE_CORE
+alwaysApply: true
+---
+
+# BIST_ELITE_CORE — PRDV3 Constitution
+
+Follow **`docs/PRDV3_FINAL_GOD_ARCHITECTURE.md`** as the architecture constitution and acceptance authority for PRDV3 work.
+
+## Non-negotiable
+
+- Deterministic core trading and execution paths (no RNG in signals/fills).
+- Fail-closed when data is missing, insufficient, or invalid.
+- No silent fabrication of prices or masked source failures.
+- BIST-only core product scope.
+- Explainable decisions; audit-friendly structured output where implemented.
+- PRDV2 substrate invariants (determinism, fail-closed, test-sealed modules) remain in force.
+
+## Reference
+
+- Compliance mapping: `docs/PRDV3_COMPLIANCE_MATRIX.md`
+- Proof: `.\proof_pack.ps1 -Mode baseline` (full pytest); `.\proof_pack.ps1 -Mode prdv3` (PRDV3 bundle)
+
+Do not treat older PRD documents as superseding PRDV3 unless explicitly stated.

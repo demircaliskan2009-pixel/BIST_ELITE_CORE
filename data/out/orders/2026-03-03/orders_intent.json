@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "strategy": {
+    "name": "topn",
+    "params": {
+      "top_n": 5,
+      "min_score": -1e+18
+    }
+  },
+  "day": "2026-03-03",
+  "universe_size": 12,
+  "actions": [
+    {
+      "symbol": "AKBNK",
+      "side": "BUY",
+      "qty": 1
+    },
+    {
+      "symbol": "ASELS",
+      "side": "BUY",
+      "qty": 1
+    },
+    {
+      "symbol": "BIMAS",
+      "side": "BUY",
+      "qty": 1
+    },
+    {
+      "symbol": "FROTO",
+      "side": "BUY",
+      "qty": 1
+    },
+    {
+      "symbol": "SAHOL",
+      "side": "BUY",
+      "qty": 1
+    }
+  ],
+  "notes": [
+    "topn"
+  ]
+}

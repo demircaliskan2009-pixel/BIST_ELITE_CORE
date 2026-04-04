@@ -1,0 +1,241 @@
+{
+  "schema_version": 2,
+  "run_id": "fd57286f-6195-4182-bc59-35f5061d8228",
+  "started_at_utc": "2026-03-04T17:52:44.750Z",
+  "finished_at_utc": "2026-03-04T17:52:44.931Z",
+  "day": "2026-03-03",
+  "snapshot_root": "C:\\Users\\demir\\OneDrive\\Belgeler\\Projects\\BIST_ELITE_CORE\\data\\eod\\snapshots",
+  "outdir": "data\\out",
+  "stages": {
+    "advice": {
+      "errors": 0,
+      "ok": 12,
+      "path": "data\\out\\advice\\2026-03-03\\advice_records.jsonl",
+      "total": 12,
+      "provenance": {
+        "inputs": {},
+        "inputs_hash": ""
+      }
+    },
+    "calendar": {
+      "errors": 0,
+      "notes": [
+        "weekday"
+      ],
+      "ok": true,
+      "path": "",
+      "provenance": {
+        "inputs": {},
+        "inputs_hash": ""
+      }
+    },
+    "corporate_actions": {
+      "canonical_errors": 0,
+      "errors": 0,
+      "notes": [
+        "ca_skipped"
+      ],
+      "ok": 0,
+      "path": "",
+      "total": 0,
+      "provenance": {
+        "inputs": {},
+        "inputs_hash": ""
+      }
+    },
+    "dossier": {
+      "dossier_json_path": "data\\out\\dossier\\2026-03-03\\dossier.json",
+      "errors": 0,
+      "links_json_path": "data\\out\\graph\\2026-03-03\\links.json",
+      "ok": 12,
+      "path": "data\\out\\dossiers",
+      "total": 12,
+      "provenance": {
+        "inputs": {},
+        "inputs_hash": ""
+      }
+    },
+    "events": {
+      "errors": 0,
+      "notes": [
+        "events_skipped"
+      ],
+      "ok": 0,
+      "path": "",
+      "total": 0,
+      "provenance": {
+        "inputs": {},
+        "inputs_hash": ""
+      }
+    },
+    "features": {
+      "errors": 1,
+      "notes": [
+        "missing_data"
+      ],
+      "ok": false,
+      "path": "data\\out\\features\\2026-03-03\\features.jsonl",
+      "total": 12,
+      "provenance": {
+        "inputs": {},
+        "inputs_hash": ""
+      }
+    },
+    "instrument_master": {
+      "errors": 0,
+      "notes": [],
+      "ok": true,
+      "provenance": {
+        "inputs": {},
+        "inputs_hash": ""
+      }
+    },
+    "instruments": {
+      "errors": 0,
+      "notes": [],
+      "ok": 0,
+      "path": "",
+      "total": 0,
+      "provenance": {
+        "inputs": {},
+        "inputs_hash": ""
+      }
+    },
+    "orders": {
+      "errors": 0,
+      "notes": [
+        "topn"
+      ],
+      "ok": 1,
+      "path": "data\\out\\orders\\2026-03-03\\orders_intent.json",
+      "total": 1,
+      "provenance": {
+        "inputs": {},
+        "inputs_hash": ""
+      }
+    },
+    "policy": {
+      "errors": 0,
+      "notes": [],
+      "ok": true,
+      "provenance": {
+        "inputs": {},
+        "inputs_hash": ""
+      }
+    },
+    "price_adjust": {
+      "errors": 0,
+      "notes": [
+        "skipped"
+      ],
+      "ok": true,
+      "path": "",
+      "provenance": {
+        "inputs": {},
+        "inputs_hash": ""
+      }
+    },
+    "research": {
+      "count": 0,
+      "errors": 0,
+      "notes": [],
+      "path": "",
+      "provenance": {
+        "inputs": {},
+        "inputs_hash": ""
+      }
+    },
+    "snapshot": {
+      "artifact": {
+        "path": "C:\\Users\\demir\\OneDrive\\Belgeler\\Projects\\BIST_ELITE_CORE\\data\\eod\\snapshots\\2026-03-03\\snapshot.csv",
+        "sha256": "336880088f81bdf40b1686bfde28367aa68fd7c290e2a301d9fffb946a2e6d59"
+      },
+      "errors": 0,
+      "notes": [],
+      "ok": true,
+      "provenance": {
+        "inputs": {
+          "snapshot": {
+            "algo": "sha256",
+            "value": "336880088f81bdf40b1686bfde28367aa68fd7c290e2a301d9fffb946a2e6d59"
+          }
+        },
+        "inputs_hash": "336880088f81bdf40b1686bfde28367aa68fd7c290e2a301d9fffb946a2e6d59"
+      }
+    },
+    "universe": {
+      "errors": 0,
+      "notes": [
+        "universe_skipped"
+      ],
+      "ok": 0,
+      "path": "",
+      "total": 0,
+      "provenance": {
+        "inputs": {},
+        "inputs_hash": ""
+      }
+    }
+  },
+  "runtime_ms": 181,
+  "provenance": {
+    "python": "3.12.7",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "cli_args": {
+      "ca_input": null,
+      "ca_outdir": null,
+      "ca_provider": null,
+      "calendar_file": null,
+      "day": "2026-03-03",
+      "emit_orders": true,
+      "events_input": null,
+      "events_outdir": null,
+      "events_provider": null,
+      "ignore_calendar": false,
+      "instruments_input": null,
+      "instruments_outdir": null,
+      "instruments_provider": null,
+      "jsonl": true,
+      "limit": null,
+      "orders_strategy": "topn",
+      "orders_top_n": 5,
+      "outdir": "data\\out",
+      "policy_file": null,
+      "regex": null,
+      "research": false,
+      "research_source": null,
+      "resolve_aliases": false,
+      "restrictions_file": null,
+      "risk_rules_file": null,
+      "strict": false,
+      "symbols": null
+    },
+    "git_sha": null,
+    "snapshot_hash": {
+      "algo": "sha256",
+      "value": "336880088f81bdf40b1686bfde28367aa68fd7c290e2a301d9fffb946a2e6d59"
+    },
+    "policy": null
+  },
+  "raw_cache": {
+    "path": "C:\\Users\\demir\\OneDrive\\Belgeler\\Projects\\BIST_ELITE_CORE\\data\\eod\\snapshots\\2026-03-03\\snapshot.csv",
+    "sha256": "336880088f81bdf40b1686bfde28367aa68fd7c290e2a301d9fffb946a2e6d59",
+    "cache_only": null
+  },
+  "orders_intent_path": "data\\out\\orders\\2026-03-03\\orders_intent.json",
+  "restrictions_provenance": {
+    "file": "C:\\Users\\demir\\OneDrive\\Belgeler\\Projects\\BIST_ELITE_CORE\\configs\\restrictions_stub_vbts.csv",
+    "sha256": "7bcea3c7eb5da26a8a264fd2ca85f514ad978cc7f43ce3d19dab2ed5f0b85445"
+  },
+  "instruments_manifest": null,
+  "corporate_actions_manifest": null,
+  "universe_manifest": null,
+  "calendar": {
+    "ok": true,
+    "errors": 0,
+    "path": "",
+    "notes": [
+      "weekday"
+    ]
+  }
+}
