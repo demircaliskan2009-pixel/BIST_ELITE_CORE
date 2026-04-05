@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
-
 from bist_core.backtest.backtest_engine import OHLCVBar
 from bist_core.brain.context_engine import ContextEngine
-from bist_core.brain.regime_engine import RegimeEngine
+from bist_core.brain.regime_engine import RANGE, TREND_DOWN, TREND_UP
 from bist_core.brain.strategy_engine import Decision
 
 
@@ -76,13 +74,13 @@ class TestMissedEntry:
 
 
 class TestPullbackPossible:
-    def test_pullback_possible_bull_close_below_entry(self) -> None:
+    def test_pullback_possible_trend_up_close_below_entry(self) -> None:
         bars = _trending_up_bars(60)
         close = bars[-1].close
         dec = _decision(entry=close + 5.0)
         ctx = ContextEngine().evaluate_context(dec, bars)
         assert ctx is not None
-        assert ctx.regime == "bull"
+        assert ctx.regime == TREND_UP
         assert ctx.pullback_possible is True
 
     def test_no_pullback_when_close_above_entry(self) -> None:
@@ -100,7 +98,7 @@ class TestContextContainsRegime:
         dec = _decision(entry=bars[-1].close)
         ctx = ContextEngine().evaluate_context(dec, bars)
         assert ctx is not None
-        assert ctx.regime in ("bull", "bear", "sideways")
+        assert ctx.regime in (TREND_UP, TREND_DOWN, RANGE)
 
     def test_context_to_dict(self) -> None:
         bars = _trending_up_bars(60)
@@ -116,7 +114,13 @@ class TestContextContainsRegime:
         assert "regime" in d
 
     def test_context_none_insufficient_bars(self) -> None:
-        bars = [_bar("2026-01-01", 100.0)] * 10
+        bars = [_bar(1_704_067_200, 100.0)] * 10
+        dec = _decision()
+        ctx = ContextEngine().evaluate_context(dec, bars)
+        assert ctx is None
+
+    def test_context_none_when_regime_fail_closes(self) -> None:
+        bars = [_bar(i, 100.0 + ((i % 5) - 2) * 0.55 + i * 0.03) for i in range(60)]
         dec = _decision()
         ctx = ContextEngine().evaluate_context(dec, bars)
         assert ctx is None
