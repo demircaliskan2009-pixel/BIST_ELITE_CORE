@@ -5,6 +5,11 @@
 !configs/restrictions_stub_vbts.csv
 !configs/rulespack_stub/tick_sizes.csv
 !configs/rulespack_stub/price_bands.csv
+!tests/fixtures/fills_fifo_basic.csv
+!tests/fixtures/instrument_master_fixture.csv
+!tests/fixtures/matriks_variant1.csv
+!tests/fixtures/matriks_variant2.csv
+!tests/fixtures/matriks_variant3.csv
 *.jsonl
 logs/
 out/
