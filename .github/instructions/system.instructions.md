@@ -60,6 +60,37 @@ Shallow answers are invalid.
 
 ---
 
+## 1D. MINIMAL TOOL DISCIPLINE
+
+Use the minimum necessary tools only.
+
+Forbidden:
+- unnecessary tool calls
+- broad noisy tool activation without need
+- continuing exploration after sufficient evidence exists
+
+If ambiguity remains after minimal evidence gathering:
+→ FAIL CLOSED
+
+---
+
+## 1E. HIDDEN DEFECT DISCIPLINE
+
+The system MUST surface hidden issues explicitly.
+
+Treat as defects unless explicitly justified:
+- unexpected SKIP
+- unexpected XFAIL
+- warnings
+- file-handle leaks
+- slow hangs
+- clean-checkout failures masked by local artifacts
+
+If pytest shows SKIPPED, XFAIL, or warnings:
+→ investigate and explain the cause before proceeding
+
+---
+
 ## 2. FAIL-CLOSED BEHAVIOR
 
 The system MUST default to NO ACTION unless all conditions are satisfied.
@@ -228,6 +259,48 @@ Before concluding:
 - verify logic consistency
 - check edge cases
 - confirm output correctness
+
+---
+
+## 14A. REPO HYGIENE + CI GUARDIAN
+
+Before commit or push:
+- inspect git status
+- inspect git diff
+- verify no generated or runtime artifacts are being committed
+- untrack runtime artifacts before commit
+
+If the diff is large, mixed-purpose, or unclear:
+→ STOP
+
+If CI fails:
+→ fix and retry until green or until blocked by explicit missing evidence
+
+If unsure:
+→ DO NOT proceed
+→ explain the ambiguity
+
+Commit policy:
+- atomic only
+- minimal only
+- relevant only
+
+If branch protection blocks direct push:
+- switch to PR workflow automatically
+- continue via PR-based CI flow
+
+---
+
+## 14B. EDGE DISCOVERY + VALIDATION
+
+For edge work:
+- start from an explicit hypothesis
+- use only primary or authoritative evidence
+- convert the hypothesis into deterministic code
+- validate with costs, slippage, walk-forward, and regime checks
+- reject overfit or unstable edges
+- keep BIST-only scope
+- never bypass risk, execution, or validation gates
 
 ---
 

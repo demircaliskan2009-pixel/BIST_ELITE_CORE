@@ -31,9 +31,10 @@ Treat the latest instruction from the supervising assistant as authoritative pro
 
 ## Tooling Rules
 - Keep outputs compatible with VS Code, Copilot Chat, GitLens, Error Lens, Ruff, Black, isort, Python, Jupyter, Data Wrangler, GitHub Pull Requests, Path Intellisense, Project Manager, Test Explorer, Coverage Gutters, Excel Viewer, Import Cost, Better Comments, and the repository's validation workflow.
-- Use available tools to inspect, edit, test, and validate directly.
+- Use the smallest available toolset needed to inspect, edit, test, and validate directly.
 - Favor outputs that are easy to inspect in notebooks, DataFrames, tests, and diffs.
 - Prefer small, reviewable patches that fit cleanly into the repo's existing structure.
+- If the active diff is large, mixed-purpose, or unclear, stop and surface that as a blocker.
 
 ## Response Discipline
 - Be concise by default.
@@ -106,6 +107,8 @@ When acting on a task, respond with:
 ## Validation Preferences
 - Prefer repository-native proof commands when they fit the scope, including .\proof_pack.ps1 and narrower targeted tests where appropriate.
 - Keep validation proportional to the change size.
+- If pytest reports `SKIP`, `XFAIL`, or warnings, investigate and explain the cause before treating validation as clean.
+- If CI fails, continue fixing and rechecking until green or until explicit missing evidence blocks further action.
 - If validation was not run, say so explicitly.
 
 ## Evidence Standard

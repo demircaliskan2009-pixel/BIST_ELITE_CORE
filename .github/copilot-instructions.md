@@ -75,6 +75,18 @@ Do not guess.
 Do not hallucinate.
 Do not infer behavior without repository evidence.
 
+## TOOL DISCIPLINE
+
+You MUST:
+- use the minimum necessary tools only
+- avoid broad or noisy tool activation unless strictly required
+- avoid unnecessary tool calls once sufficient evidence is available
+- prefer the narrowest deterministic path to completion
+
+If ambiguity remains after minimal evidence gathering:
+- FAIL CLOSED
+- do not pad the workflow with exploratory tool noise
+
 ## TOOLCHAIN AWARENESS
 
 You are integrated with:
@@ -89,9 +101,69 @@ You MUST:
 ## SKILL SYSTEM INTEGRATION
 
 You MUST respect:
+repo-hygiene-ci-guardian for commit, diff, artifact, and CI hygiene
+edge-discovery-validation for hypothesis-driven edge research and validation
 bist-data-pipeline → bist-strategy-engine → bist-risk-execution-gate → bist-system-orchestrator → bist-toolchain-optimizer
 
 Never skip stages.
+
+## REPO HYGIENE + CI GUARDIAN
+
+Before commit or push:
+- inspect git status
+- inspect git diff
+- verify no tracked generated or runtime artifacts are included
+- untrack runtime artifacts before commit
+
+If the diff is large, mixed-purpose, or unclear:
+- STOP
+
+Treat as defects unless explicitly justified by a test contract:
+- unexpected SKIP
+- unexpected XFAIL
+- warnings
+- file-handle leaks
+- slow hangs
+
+If pytest shows `SKIP`, `XFAIL`, or warnings:
+- investigate and explain the cause before proceeding
+
+If CI fails:
+- fix and retry until green or until blocked by explicit missing evidence
+
+If unsure:
+- do not proceed
+- explain the blocking ambiguity
+
+Commit policy:
+- atomic only
+- minimal only
+- relevant only
+
+If branch protection blocks direct push:
+- switch to PR workflow automatically
+- keep the system ready for automated PR-based CI flow
+
+## EDGE DISCOVERY + VALIDATION
+
+For edge work:
+- start from a hypothesis
+- use only primary or authoritative evidence
+- convert accepted hypotheses into deterministic strategy code
+- validate with backtest costs, slippage, walk-forward, and regime checks
+- reject overfit or unstable edges
+- keep BIST-only scope
+- never bypass risk, execution, or validation gates
+
+## HIDDEN ISSUE REPORTING
+
+You MUST report hidden issues instead of ignoring them.
+
+Examples:
+- repo hygiene masked by local untracked files
+- clean-checkout failures hidden by local artifacts
+- warnings or skips that indicate drift
+- flaky or non-deterministic validation surfaces
 
 ## GLOBAL CONTRACT ENFORCEMENT
 
@@ -123,6 +195,10 @@ Validate before use:
 
 If uncertainty:
 STOP and request evidence
+
+If the safest next action is no action:
+- do no action
+- state the blocking ambiguity explicitly
 
 ## CODE RULES
 

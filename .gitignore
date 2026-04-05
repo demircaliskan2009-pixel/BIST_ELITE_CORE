@@ -3,7 +3,8 @@
 *.log
 *.csv
 !configs/restrictions_stub_vbts.csv
-!configs/rulespack_stub/*.csv
+!configs/rulespack_stub/tick_sizes.csv
+!configs/rulespack_stub/price_bands.csv
 *.jsonl
 logs/
 out/
