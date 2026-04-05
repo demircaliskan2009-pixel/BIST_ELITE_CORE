@@ -1,5 +1,8 @@
 ﻿# logs & debug
 *.txt
+!requirements.txt
+!requirements-dev.txt
+!requirements-gateway.txt
 *.log
 *.csv
 !configs/restrictions_stub_vbts.csv
