@@ -2,6 +2,8 @@
 *.txt
 *.log
 *.csv
+!configs/restrictions_stub_vbts.csv
+!configs/rulespack_stub/*.csv
 *.jsonl
 logs/
 out/
