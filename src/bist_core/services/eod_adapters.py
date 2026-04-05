@@ -155,12 +155,20 @@ def _is_valid_date(s: str) -> bool:
 def build_bands_for_day(day: str, md: MarketData, cfg) -> List[PriceBand]:
     """
     Repo içinde mevcut bant kuralı varsa onu kullanır.
-    Belirsizlikte fail-closed olarak boş liste döner.
+    Fallback olarak repository içinde zaten kullanilan genis varsayilan bandi dondurur.
     """
     try:
         return repo.price_bands()
     except Exception:
-        return []
+        return [
+            PriceBand(
+                price_min=0.01,
+                price_max=1000000.0,
+                tick=0.01,
+                up_limit_pct=20.0,
+                down_limit_pct=20.0,
+            )
+        ]
 
 
 def _supports_ohlcv(md: MarketData, day: str) -> bool:

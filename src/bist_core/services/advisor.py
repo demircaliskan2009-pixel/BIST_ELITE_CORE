@@ -464,7 +464,7 @@ def _render_advice_text(
     status_map = {
         "extended_above_entry": "entry seviyesinin üzerinde; plan kovalanmamalı, geri çekilme veya yeniden teyit beklenmeli",
         "below_entry_trigger": "entry seviyesinin altında; tetik henüz oluşmamış olabilir",
-        "near_entry": "entry seviyesine yakın",
+        "near_entry": "entry seviyesinin yakınında",
     }
 
     live_bits = []
