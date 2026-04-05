@@ -111,7 +111,8 @@ def test_e2e_multi_day_all_outputs_produced(tmp_path: Path) -> None:
     for day in days:
         plan_path = snapshot_root / day / "plan_equal_weight.csv"
         assert plan_path.exists(), f"plan {day} missing"
-        plan_rows = list(csv.DictReader(plan_path.open(encoding="utf-8")))
+        with plan_path.open(encoding="utf-8") as handle:
+            plan_rows = list(csv.DictReader(handle))
         assert len(plan_rows) == 3, f"plan {day} should have 3 symbols"
 
         orders_path = snapshot_root / day / "orders_equal_weight.csv"
@@ -139,7 +140,8 @@ def test_e2e_final_orders_golden(tmp_path: Path) -> None:
 
     last_day = SCENARIO_DAYS[-1]
     orders_path = snapshot_root / last_day / "orders_equal_weight.csv"
-    rows = list(csv.DictReader(orders_path.open(encoding="utf-8")))
+    with orders_path.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
     symbols = {r["symbol"] for r in rows}
     assert symbols == {"AAA", "BBB", "CCC"}, f"Expected AAA,BBB,CCC got {symbols}"
     for r in rows:

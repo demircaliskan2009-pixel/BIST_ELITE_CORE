@@ -7,10 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from bist_core.strategy.equal_weight import (
-    build_equal_weight_plan,
-    generate_equal_weight_orders,
-)
+from bist_core.strategy.equal_weight import build_equal_weight_plan, generate_equal_weight_orders
 
 
 def _project_root() -> Path:
@@ -24,7 +21,8 @@ def test_faz557_plan_empty_symbols_writes_headers_only(tmp_path: Path) -> None:
     (day_dir / "snapshot.csv").write_text("symbol,close\n", encoding="utf-8")
     plan_path = build_equal_weight_plan("2025-01-15", base=tmp_path)
     assert plan_path.exists()
-    rows = list(csv.DictReader(plan_path.open(encoding="utf-8")))
+    with plan_path.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
     assert len(rows) == 0
     content = plan_path.read_text(encoding="utf-8")
     assert "symbol" in content
@@ -64,7 +62,8 @@ def test_faz557_plan_single_symbol_weight_one(tmp_path: Path) -> None:
     day_dir.mkdir(parents=True)
     (day_dir / "snapshot.csv").write_text("symbol,close\nX,10.0\n", encoding="utf-8")
     plan_path = build_equal_weight_plan("2025-01-15", base=tmp_path)
-    rows = list(csv.DictReader(plan_path.open(encoding="utf-8")))
+    with plan_path.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
     assert len(rows) == 1
     assert rows[0]["symbol"] == "X"
     assert abs(float(rows[0]["weight"]) - 1.0) < 1e-9

@@ -61,7 +61,7 @@ class PaperExecutor:
             size = (_safe_float(decision, "size") or 1.0) * size_modifier
 
         position = Position(symbol=str(symbol), entry=entry, stop=stop, target=target, size=size)
-        result = {"ok": True, "position": position, "action": "BUY"}
+        result = {"ok": True, "executed": True, "position": position, "action": "BUY"}
         print({"EXECUTION_RESULT": result})
         return result
 

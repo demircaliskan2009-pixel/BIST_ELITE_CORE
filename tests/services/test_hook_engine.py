@@ -120,3 +120,28 @@ def test_detect_template_response_rejects_low_diversity_via_post_hook() -> None:
     )
     assert got.status == "rejected"
     assert got.reason == "TEMPLATE RESPONSE FORBIDDEN"
+
+
+def test_run_post_hooks_accepts_structured_scan_body_with_repeated_labels() -> None:
+    got = run_post_hooks(
+        {
+            "ok": True,
+            "route": "scan",
+            "status": "ok",
+            "body": """
+ASELS lider; skor farkı +0.31. lider görünüm.
+
+Sıralama:
+1) ASELS | score=1.48
+2) AKBNK | score=1.18
+İşlem planı: entry 43.98, stop 42.68, t1 44.86. Canlı bağlam: Mevcut fiyat 43.549; entry seviyesine yakın; entry gap -0.98%.
+İşlem planı: entry 22.76, stop 22.08, t1 23.22. Canlı bağlam: Mevcut fiyat 22.5341; entry seviyesine yakın; entry gap -0.99%.
+Olaylar (KAP/diğer):
+KAP/olay verisi yok veya erişilemedi.
+Olaylar (KAP/diğer):
+KAP/olay verisi yok veya erişilemedi.
+            """.strip(),
+        }
+    )
+    assert got.status == "accepted"
+    assert got.status == "accepted"

@@ -1,3 +1,0 @@
-{"symbol": "ASELS", "ts": "2099-01-01T07:00:00Z", "kind": "KAP", "title": "KAP Notice A", "url": "http://127.0.0.1:64198/kap/notice/1", "tags": null, "payload": null}
-{"symbol": "THYAO", "ts": "2099-01-01T06:00:00Z", "kind": "KAP", "title": "KAP Notice B", "url": "http://127.0.0.1:64198/kap/notice/2", "tags": null, "payload": null}
-{"symbol": "AKBNK", "ts": "2099-01-01T05:30:00Z", "kind": "CA", "title": "Capital Action", "url": "http://127.0.0.1:64198/kap/notice/3", "tags": null, "payload": null}

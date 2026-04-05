@@ -13,10 +13,10 @@ from typing import Any
 from bist_core.brain.edge_engine import (
     _bars_for_liquidity_sweep,
     _compute_alpha_microstructure_features,
+    _feat_liquidity_proxy,
     _feat_mean_reversion_short_term,
     _feat_momentum_burst_norm,
     _feat_vol_clustering,
-    _feat_liquidity_proxy,
     _pullback_from_prices,
     _require_closes,
     _trend_strength_from_prices,
@@ -209,9 +209,7 @@ def resolve_direction_engine(
         direction = "long" if signed_mb > 0 else "short"
 
     if direction == "neutral":
-        direction = _break_neutral_direction(
-            symbol, bar_ts, trend_strength, rp, float(f["short_trend"])
-        )
+        direction = _break_neutral_direction(symbol, bar_ts, trend_strength, rp, float(f["short_trend"]))
 
     print(
         {
@@ -323,9 +321,7 @@ def build_compute_edge_features(
         out["rsi_zscore"] = 0.0
         out["bollinger_distance"] = 0.0
         out["range_expansion"] = 0.0
-        out["volume_spike"] = (
-            float(volume_spike(vol_list)) if len(vol_list) >= 20 else 0.0
-        )
+        out["volume_spike"] = float(volume_spike(vol_list)) if len(vol_list) >= 20 else 0.0
         return out
 
     out["trend_strength"] = float(_trend_strength_from_prices(closes))
@@ -341,23 +337,15 @@ def build_compute_edge_features(
     liq = float(_feat_liquidity_proxy(vols))
     out["volume_support"] = max(0.0, min(1.0, 0.5 + 0.5 * liq))
 
-    out["ema_slope"] = max(
-        0.0, min(1.0, 0.5 + 0.5 * math.tanh(float(ema_slope(closes)) * 4.0))
-    )
+    out["ema_slope"] = max(0.0, min(1.0, 0.5 + 0.5 * math.tanh(float(ema_slope(closes)) * 4.0)))
     rz = float(compute_rsi_zscore(closes))
     out["rsi_zscore"] = max(0.0, min(1.0, 0.5 + 0.5 * math.tanh(rz / 3.0)))
     bd = float(bollinger_distance(closes))
-    out["bollinger_distance"] = max(
-        0.0, min(1.0, 0.5 + 0.5 * math.tanh(bd / 2.5))
-    )
+    out["bollinger_distance"] = max(0.0, min(1.0, 0.5 + 0.5 * math.tanh(bd / 2.5)))
     out["higher_highs"] = float(higher_highs(closes))
 
     sweep = _bars_for_liquidity_sweep(bars)
-    alpha = (
-        _compute_alpha_microstructure_features(sweep)
-        if sweep is not None and len(sweep) >= 51
-        else None
-    )
+    alpha = _compute_alpha_microstructure_features(sweep) if sweep is not None and len(sweep) >= 51 else None
     if alpha is not None:
         re = float(alpha["range_expansion"])
         mb_a = float(alpha["momentum_burst"])
@@ -561,7 +549,9 @@ def compute_institutional_decision(
         pass
     elif action in ("enter_long", "enter_short"):
         pass
-    elif action in ("enter", "enter_small"):
+    elif action == "enter_small":
+        pass
+    elif action == "enter":
         if direction == "short":
             action = "enter_short"
         elif direction == "long":
@@ -657,7 +647,7 @@ def compute_institutional_decision(
         flush=True,
     )
 
-    if result.get("edge", 0) < 0.4:
+    if result.get("edge", 0) < 0.4 and str(result.get("action") or "").startswith("enter"):
         print(
             {
                 "EDGE_TOO_LOW_BLOCKED": result.get("symbol"),

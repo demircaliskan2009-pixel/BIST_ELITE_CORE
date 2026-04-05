@@ -4,13 +4,14 @@ engine.decide'in momentum + KAP + hacim sinyallerini kullanarak
 BUY/WATCH/PASS kararları vermesini ve plan'ın PASS olmayanları filtrelemesini test eder.
 """
 
-from pathlib import Path
-from datetime import date
-from bist_core.strategy.engine import decide
-from bist_core.models import EODBar, PriceBand
-from bist_core.strategy.equal_weight import build_equal_weight_plan
 import csv
 import tempfile
+from datetime import date
+from pathlib import Path
+
+from bist_core.models import EODBar, PriceBand
+from bist_core.strategy.engine import decide
+from bist_core.strategy.equal_weight import build_equal_weight_plan
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -141,7 +142,8 @@ def test_plan_filters_pass_symbols():
             assert plan_path.exists()
 
             # Plan dosyasını oku
-            rows = list(csv.DictReader(plan_path.open(encoding="utf-8")))
+            with plan_path.open(encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
 
             # Plan'da sembol olmalı (en azından bazıları PASS olmayabilir)
             # Eğer tüm semboller PASS ise plan boş olabilir (sadece header)
@@ -154,4 +156,6 @@ def test_plan_filters_pass_symbols():
         except Exception:
             # Eğer hata varsa, en azından dosya yapısının oluşturulduğunu kontrol et
             # (Bu test minimal, gerçek skorlama için daha fazla veri gerekir)
+            pass
+            pass
             pass

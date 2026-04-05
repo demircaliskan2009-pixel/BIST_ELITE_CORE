@@ -1,14 +1,15 @@
-from dataclasses import dataclass
-from pathlib import Path
 import csv
 import json
-from typing import List
+from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
+from typing import List
+
+from bist_core import config
+from bist_core.models import EODBar, PriceBand
+from bist_core.repositories import local_csv as repo
 from bist_core.services import MarketData
 from bist_core.strategy.engine import decide
-from bist_core.models import EODBar, PriceBand
-from bist_core import config
-from bist_core.repositories import local_csv as repo
 
 
 @dataclass
@@ -139,7 +140,8 @@ def generate_equal_weight_orders(
     if not plan_path.exists():
         raise FileNotFoundError(f"Plan not found: {plan_path}")
 
-    rows = list(csv.DictReader(plan_path.open(encoding="utf-8")))
+    with plan_path.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
     if not rows:
         orders_dir = (out_dir if out_dir is not None else base) / day
         orders_dir.mkdir(parents=True, exist_ok=True)
@@ -184,4 +186,6 @@ def generate_equal_weight_orders(
     json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
     meta_path.write_text("PASS", encoding="utf-8")
+    return orders_path
+    return orders_path
     return orders_path
