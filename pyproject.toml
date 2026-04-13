@@ -19,14 +19,14 @@ bist-core = "bist_core.cli.main:main"
 dev = [
     "pytest",
     "pytest-cov",
-    "fastapi>=0.100.0",
+    "fastapi>=0.128.8",
     "build",
 ]
 openai = [
     "openai>=1.0.0",
 ]
 api = [
-    "fastapi>=0.100.0",
+    "fastapi>=0.128.8",
     "uvicorn[standard]>=0.22.0",
 ]
 
