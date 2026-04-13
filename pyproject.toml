@@ -27,7 +27,7 @@ openai = [
 ]
 api = [
     "fastapi>=0.100.0",
-    "uvicorn[standard]>=0.22.0",
+    "uvicorn[standard]>=0.39.0",
 ]
 
 [tool.ruff]
