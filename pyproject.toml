@@ -23,7 +23,7 @@ dev = [
     "build",
 ]
 openai = [
-    "openai>=1.0.0",
+    "openai>=2.31.0",
 ]
 api = [
     "fastapi>=0.100.0",
