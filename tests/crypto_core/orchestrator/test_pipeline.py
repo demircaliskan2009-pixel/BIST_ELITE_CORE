@@ -1,4 +1,4 @@
-"""Integration tests for PipelineOrchestrator v1 (PRD §2)."""
+"""Integration tests for PipelineOrchestrator v1/v2 (PRD §2)."""
 
 from __future__ import annotations
 
@@ -209,3 +209,90 @@ class TestDeterministicReplay:
         assert result.no_trade_decision is not None
         assert len(result.edge_signals) > 0
         assert len(result.risk_evaluations) > 0
+
+
+# ---------------------------------------------------------------------------
+# Risk v2 integration — evaluations now routed through evaluate_v2()
+# ---------------------------------------------------------------------------
+
+
+class TestRiskV2Integration:
+    """Verify that the pipeline now enforces all v2 risk gates end-to-end."""
+
+    def test_v2_kill_switch_level_present_in_evaluation(self) -> None:
+        """Risk evaluations carry kill_switch_level, confirming evaluate_v2 is used."""
+        orch = _orchestrator()
+        result = orch.process(_healthy_data(), _healthy_signals())
+        # evaluate_v2 populates kill_switch_level; v1 evaluate() does not
+        assert len(result.risk_evaluations) == 1
+        assert result.risk_evaluations[0].kill_switch_level == 0
+
+    def test_ks_level_2_blocks_new_entries_end_to_end(self) -> None:
+        """KS level 2 (KS_BLOCK_THRESHOLD) must block all new entries."""
+        orch = _orchestrator()
+        result = orch.process(_healthy_data(), _healthy_signals(), kill_switch_level=2)
+        assert result.approved is False
+        assert result.block_stage == "risk"
+        assert result.block_reason is not None
+        assert "ks_blocked" in (result.block_reason or "")
+        # Risk evaluations are present but all blocked
+        assert len(result.risk_evaluations) == 1
+        assert result.risk_evaluations[0].approved is False
+        assert result.risk_evaluations[0].kill_switch_level == 2
+
+    def test_ks_level_3_blocks_end_to_end(self) -> None:
+        """KS level 3 (flatten/stop) must also block new entries."""
+        orch = _orchestrator()
+        result = orch.process(_healthy_data(), _healthy_signals(), kill_switch_level=3)
+        assert result.approved is False
+        assert result.block_stage == "risk"
+        assert result.risk_evaluations[0].kill_switch_level == 3
+
+    def test_ks_level_1_does_not_block(self) -> None:
+        """KS level 1 (advisory/reduce) is below the hard block threshold — must pass."""
+        orch = _orchestrator()
+        result = orch.process(_healthy_data(), _healthy_signals(), kill_switch_level=1)
+        assert result.approved is True
+        assert result.risk_evaluations[0].kill_switch_level == 1
+
+    def test_ks_level_0_passes_through(self) -> None:
+        """Default KS level 0 (normal) must not block on healthy data."""
+        orch = _orchestrator()
+        result = orch.process(_healthy_data(), _healthy_signals(), kill_switch_level=0)
+        assert result.approved is True
+
+    def test_unavailable_optional_gates_skip_not_block(self) -> None:
+        """All optional v2 gates (dtl, kelly, cvar, portfolio) are None in the
+        orchestrator — they must skip, not block healthy trades."""
+        orch = _orchestrator()
+        result = orch.process(_healthy_data(), _healthy_signals())
+        assert result.approved is True
+        # None optional gates leave these fields as None in the evaluation
+        assert result.risk_evaluations[0].dtl_pct is None
+        assert result.risk_evaluations[0].kelly_fraction is None
+        assert result.risk_evaluations[0].portfolio_snapshot is None
+
+    def test_deterministic_replay_with_ks_level(self) -> None:
+        """Same inputs + same KS level → identical v2 evaluation outcomes."""
+        orch1 = _orchestrator()
+        orch2 = _orchestrator()
+        data = _healthy_data()
+        sigs = _healthy_signals()
+
+        r1 = orch1.process(data, sigs, kill_switch_level=1)
+        r2 = orch2.process(data, sigs, kill_switch_level=1)
+
+        assert r1.approved == r2.approved
+        assert r1.state_snapshot.state == r2.state_snapshot.state
+        for e1, e2 in zip(r1.risk_evaluations, r2.risk_evaluations):
+            assert e1.approved == e2.approved
+            assert e1.kill_switch_level == e2.kill_switch_level
+            assert str(e1.block_reason) == str(e2.block_reason)
+
+    def test_ks_block_audit_evidence_is_present(self) -> None:
+        """KS block must populate evidence with the block key."""
+        orch = _orchestrator()
+        result = orch.process(_healthy_data(), _healthy_signals(), kill_switch_level=2)
+        ev = result.risk_evaluations[0].evidence
+        assert "block" in ev
+        assert "ks_level_2" in str(ev["block"])

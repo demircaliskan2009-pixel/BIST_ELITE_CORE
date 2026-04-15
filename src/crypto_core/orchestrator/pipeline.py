@@ -17,6 +17,7 @@ from crypto_core.edge.engine import EdgeEngine, EdgeEngineConfig
 from crypto_core.guard.models import NoTradeContext, NoTradeDecision, NoTradeReason
 from crypto_core.guard.no_trade_guard import NoTradeConfig, NoTradeGuard
 from crypto_core.orchestrator.models import MarketDataInput, PipelineResult
+from crypto_core.risk.contracts import KS_LEVEL_NORMAL, RiskInput
 from crypto_core.risk.engine import RiskEngine
 from crypto_core.risk.models import RiskDecision, RiskEvaluation
 from crypto_core.state.engine import SystemStateEngine
@@ -84,6 +85,7 @@ class PipelineOrchestrator:
         self,
         data: MarketDataInput,
         signal_inputs: SignalInputs | None = None,
+        kill_switch_level: int = KS_LEVEL_NORMAL,
     ) -> PipelineResult:
         """Execute the full pipeline for one market data input.
 
@@ -91,6 +93,9 @@ class PipelineOrchestrator:
             data: validated market data snapshot.
             signal_inputs: 10-signal SHS inputs. If None, uses zero signals
                            (system stays in or near NORMAL — safe for testing).
+            kill_switch_level: discrete KS level 0-4 (PRD §1.19).  Defaults to
+                               KS_LEVEL_NORMAL (0).  Will be replaced by the
+                               KS trigger engine output in Phase 5B.
 
         Returns:
             PipelineResult with full audit trail.
@@ -98,7 +103,7 @@ class PipelineOrchestrator:
         t_start = time.time_ns()
 
         try:
-            return self._do_process(data, signal_inputs or SignalInputs(), t_start)
+            return self._do_process(data, signal_inputs or SignalInputs(), t_start, kill_switch_level)
         except Exception:
             logger.exception("PipelineOrchestrator.process raised — fail-closed block")
             ts = time.time_ns()
@@ -132,6 +137,7 @@ class PipelineOrchestrator:
         data: MarketDataInput,
         signal_inputs: SignalInputs,
         t_start: int,
+        kill_switch_level: int,
     ) -> PipelineResult:
         ts = data.timestamp_ns
 
@@ -188,28 +194,51 @@ class PipelineOrchestrator:
             {"active_edges": valid_count, "total_edges": len(edge_signals)},
         )
 
-        # ── Stage 4: Risk ───────────────────────────────────────────────
+        # ── Stage 4: Risk (v2) ──────────────────────────────────────────
+        # All optional v2 gates (dtl, kelly, cvar, portfolio) are explicitly
+        # None — data unavailable until Phase 5B (position tracker + trade
+        # history).  None causes each gate to skip (documented in contracts.py).
         stage_t0 = time.time_ns()
         risk_evals: list[RiskEvaluation] = []
         for sig in edge_signals:
-            risk_eval = self._risk_engine.evaluate(
+            risk_input = RiskInput(
                 edge_signal=sig,
                 system_state=state_snap.state,
                 no_trade=no_trade,
                 timestamp_ns=ts,
                 shs_snapshot=state_snap.shs,
+                kill_switch_level=kill_switch_level,
+                dtl=None,  # Phase 5B: position tracker required
+                kelly=None,  # Phase 5B: trade history required
+                cvar=None,  # Phase 5B: returns distribution required
+                portfolio=None,  # Phase 5B: position tracker required
             )
+            risk_eval = self._risk_engine.evaluate_v2(risk_input)
             risk_evals.append(risk_eval)
         risk_latency_ms = (time.time_ns() - stage_t0) / 1e6
 
         approved_count = sum(1 for r in risk_evals if r.approved)
+        # Derive actual KS level from evaluations; fall back to input level
+        actual_ks_level: int = risk_evals[0].kill_switch_level if risk_evals else kill_switch_level
+        # Optional v2 telemetry fields — only include if non-None (schema forbids null)
+        _tele_v2: dict[str, object] = {}
+        for _r in risk_evals:
+            if _r.kelly_fraction is not None:
+                _prev = _tele_v2.get("kelly_fraction_min")
+                _tele_v2["kelly_fraction_min"] = (
+                    min(float(_prev), _r.kelly_fraction) if _prev is not None else _r.kelly_fraction
+                )
+            if _r.dtl_pct is not None:
+                _prev = _tele_v2.get("dtl_pct_min")
+                _tele_v2["dtl_pct_min"] = min(float(_prev), _r.dtl_pct) if _prev is not None else _r.dtl_pct
         self._emit_telemetry_safe(
             "risk",
             risk_latency_ms,
             {
                 "shs_value": state_snap.shs,
-                "kill_switch_level": 0,  # placeholder until KS engine
+                "kill_switch_level": actual_ks_level,
                 "approved_count": approved_count,
+                **_tele_v2,
             },
         )
 
