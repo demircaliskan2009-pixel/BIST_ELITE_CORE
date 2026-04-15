@@ -8,9 +8,7 @@ All factory functions are pure (given the same arguments, produce the same event
 
 from __future__ import annotations
 
-from typing import List, Optional
-
-from crypto_core.data.models.events import Exchange, TradeSide, TradeEvent
+from crypto_core.data.models.events import Exchange, TradeEvent, TradeSide
 
 # Default test parameters.
 _DEFAULT_SYMBOL = "BTCUSDT"
@@ -55,13 +53,13 @@ def make_trade_sequence(
     interval_ns: int = _DEFAULT_TRADE_INTERVAL_NS,
     start_sequence: int = 1,
     side: TradeSide = TradeSide.BUY,
-) -> List[TradeEvent]:
+) -> list[TradeEvent]:
     """Generate a deterministic sequence of count TradeEvents.
 
     Each trade increments: trade_id, sequence_no, timestamp_ns, and price.
     Identical arguments always produce identical output (pure function).
     """
-    events: List[TradeEvent] = []
+    events: list[TradeEvent] = []
     for i in range(count):
         trade_id = str(start_sequence + i)
         events.append(

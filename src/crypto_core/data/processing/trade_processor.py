@@ -16,7 +16,7 @@ PRD reference: §4.3 (trade stream dedup, gap detection).
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional
+from typing import Callable
 
 from crypto_core.data.models.events import TradeEvent
 from crypto_core.data.validation.data_validator import DataValidator
@@ -42,7 +42,7 @@ class TradeStreamProcessor:
     def __init__(
         self,
         on_validated_trade: ValidatedTradeCallback,
-        validator: Optional[DataValidator] = None,
+        validator: DataValidator | None = None,
     ) -> None:
         self._on_validated_trade = on_validated_trade
         self._validator = validator or DataValidator()

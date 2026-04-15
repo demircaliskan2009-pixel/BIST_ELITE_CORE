@@ -48,8 +48,7 @@ class DeterministicClock:
         """
         if absolute_ns < self._current_ns:
             raise ValueError(
-                f"DeterministicClock.set: cannot go backward. "
-                f"current={self._current_ns}, requested={absolute_ns}"
+                f"DeterministicClock.set: cannot go backward. current={self._current_ns}, requested={absolute_ns}"
             )
         self._current_ns = absolute_ns
 

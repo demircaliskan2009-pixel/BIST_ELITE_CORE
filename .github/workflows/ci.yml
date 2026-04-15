@@ -43,11 +43,24 @@ jobs:
           else
             python -m pip install pytest
           fi
+          python -m pip install ruff
+
+      - name: Ruff lint
+        run: ruff check src/ tests/ --output-format=github
+
+      - name: Ruff format check
+        run: ruff format --check src/ tests/
 
       - name: Run pytest
         run: |
           set -euo pipefail
           python -m pytest -q -W error
+
+      - name: Coverage report
+        run: |
+          set -euo pipefail
+          python -m pip install pytest-cov
+          python -m pytest --cov=src --cov-report=term --cov-fail-under=70 -q
 
   codeql:
     name: codeql

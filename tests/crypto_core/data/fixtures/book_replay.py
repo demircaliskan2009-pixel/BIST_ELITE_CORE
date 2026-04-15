@@ -6,8 +6,6 @@ All factory functions are pure.
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
-
 from crypto_core.data.models.events import (
     Exchange,
     OrderBookEvent,
@@ -23,8 +21,8 @@ _DEFAULT_START_NS = 1_700_000_000_000_000_000
 def make_snapshot(
     symbol: str = _DEFAULT_SYMBOL,
     exchange: Exchange = _DEFAULT_EXCHANGE,
-    bids: Optional[List[Tuple[float, float]]] = None,
-    asks: Optional[List[Tuple[float, float]]] = None,
+    bids: list[tuple[float, float]] | None = None,
+    asks: list[tuple[float, float]] | None = None,
     last_update_id: int = 100,
     timestamp_ns: int = _DEFAULT_START_NS,
 ) -> OrderBookEvent:
@@ -32,16 +30,24 @@ def make_snapshot(
 
     Defaults to a simple 3-level book around 50,000.
     """
-    default_bids: List[Tuple[float, float]] = bids if bids is not None else [
-        (49_999.0, 1.0),
-        (49_998.0, 2.0),
-        (49_997.0, 3.0),
-    ]
-    default_asks: List[Tuple[float, float]] = asks if asks is not None else [
-        (50_001.0, 1.0),
-        (50_002.0, 2.0),
-        (50_003.0, 3.0),
-    ]
+    default_bids: list[tuple[float, float]] = (
+        bids
+        if bids is not None
+        else [
+            (49_999.0, 1.0),
+            (49_998.0, 2.0),
+            (49_997.0, 3.0),
+        ]
+    )
+    default_asks: list[tuple[float, float]] = (
+        asks
+        if asks is not None
+        else [
+            (50_001.0, 1.0),
+            (50_002.0, 2.0),
+            (50_003.0, 3.0),
+        ]
+    )
     return OrderBookEvent(
         symbol=symbol,
         exchange=exchange,
@@ -58,12 +64,12 @@ def make_snapshot(
 def make_delta(
     symbol: str = _DEFAULT_SYMBOL,
     exchange: Exchange = _DEFAULT_EXCHANGE,
-    bids: Optional[List[Tuple[float, float]]] = None,
-    asks: Optional[List[Tuple[float, float]]] = None,
+    bids: list[tuple[float, float]] | None = None,
+    asks: list[tuple[float, float]] | None = None,
     first_update_id: int = 101,
     last_update_id: int = 101,
     timestamp_ns: int = _DEFAULT_START_NS + 100_000_000,
-    checksum: Optional[int] = None,
+    checksum: int | None = None,
 ) -> OrderBookEvent:
     """Build a well-formed DELTA OrderBookEvent.
 
@@ -89,12 +95,12 @@ def make_delta_sequence(
     base_update_id: int = 101,
     start_ns: int = _DEFAULT_START_NS + 100_000_000,
     interval_ns: int = 100_000_000,  # 100ms
-) -> List[OrderBookEvent]:
+) -> list[OrderBookEvent]:
     """Generate a gap-free sequence of empty delta events (no level changes).
 
     Useful for testing OrderBookManager sequence tracking without altering prices.
     """
-    events: List[OrderBookEvent] = []
+    events: list[OrderBookEvent] = []
     for i in range(count):
         uid = base_update_id + i
         events.append(

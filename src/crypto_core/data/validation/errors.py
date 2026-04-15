@@ -9,7 +9,6 @@ PRD reference: §4.2 (sequence validation, CRC32), §4.3 (trade dedup), §4.4 (h
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, Optional
 
 
 class ValidationErrorCode(str, Enum):
@@ -74,10 +73,10 @@ class ValidationError(Exception):
         self,
         code: ValidationErrorCode,
         message: str,
-        context: Optional[Dict[str, object]] = None,
+        context: dict[str, object] | None = None,
     ) -> None:
         self.code = code
-        self.context: Dict[str, object] = context or {}
+        self.context: dict[str, object] = context or {}
         super().__init__(f"[{code.value}] {message}")
 
     def __repr__(self) -> str:  # pragma: no cover

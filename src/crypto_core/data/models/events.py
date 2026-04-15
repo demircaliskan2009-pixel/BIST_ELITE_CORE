@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Tuple
 
 
 class Exchange(str, Enum):
@@ -89,12 +88,12 @@ class OrderBookEvent:
     symbol: str
     exchange: Exchange
     event_type: OrderBookEventType
-    bids: Tuple[OrderBookLevel, ...]
-    asks: Tuple[OrderBookLevel, ...]
+    bids: tuple[OrderBookLevel, ...]
+    asks: tuple[OrderBookLevel, ...]
     timestamp_ns: int
     first_update_id: int  # U field (Binance), start of this delta's sequence range
     last_update_id: int  # u field (Binance), end of this delta's sequence range
-    checksum: Optional[int]  # CRC32 (None if exchange does not provide)
+    checksum: int | None  # CRC32 (None if exchange does not provide)
 
 
 @dataclass(frozen=True)

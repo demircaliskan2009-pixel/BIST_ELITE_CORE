@@ -10,8 +10,8 @@ from crypto_core.data.models.events import (
     OrderBookEventType,
     OrderBookLevel,
     StreamType,
-    TradeSide,
     TradeEvent,
+    TradeSide,
 )
 from crypto_core.data.models.feed_state import ConnectionState, FeedState, RecoveryState
 from crypto_core.data.models.ohlcv import INTERVAL_NS, VALID_INTERVALS, OHLCVBar, OHLCVSeries

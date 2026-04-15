@@ -16,8 +16,6 @@ This lets tests run fully in-process with no network or threading.
 
 from __future__ import annotations
 
-from typing import Callable, List, Optional
-
 from crypto_core.data.ingestion.websocket_client import MessageCallback, WebSocketClient, WebSocketConfig
 
 
@@ -35,11 +33,11 @@ class WebSocketSimulator(WebSocketClient):
         self,
         config: WebSocketConfig,
         on_message: MessageCallback,
-        messages: Optional[List[dict]] = None,
+        messages: list[dict] | None = None,
     ) -> None:
         super().__init__(config, on_message)
-        self._messages: List[dict] = messages if messages is not None else []
-        self._sent: List[dict] = []
+        self._messages: list[dict] = messages if messages is not None else []
+        self._sent: list[dict] = []
         self._connected: bool = False
         self._connect_call_count: int = 0
         self._disconnect_call_count: int = 0
@@ -71,7 +69,7 @@ class WebSocketSimulator(WebSocketClient):
         self._messages.append(msg)
 
     @property
-    def sent_messages(self) -> List[dict]:
+    def sent_messages(self) -> list[dict]:
         """All messages sent via send() since instantiation."""
         return list(self._sent)
 

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Callable, Optional
+from typing import Callable
 
 from crypto_core.data.models.feed_state import ConnectionState, FeedState, RecoveryState
 
@@ -63,9 +63,9 @@ class RecoveryManager:
         feed_state: FeedState,
         on_connect: ConnectCallback,
         on_snapshot_request: SnapshotRequestCallback,
-        on_recovery_success: Optional[RecoverySuccessCallback] = None,
-        on_recovery_failed: Optional[RecoveryFailedCallback] = None,
-        sleep_fn: Optional[Callable[[float], None]] = None,
+        on_recovery_success: RecoverySuccessCallback | None = None,
+        on_recovery_failed: RecoveryFailedCallback | None = None,
+        sleep_fn: Callable[[float], None] | None = None,
         max_recovery_seconds: float = _MAX_RECOVERY_SECONDS,
     ) -> None:
         self._feed_state = feed_state
@@ -147,10 +147,7 @@ class RecoveryManager:
         while True:
             elapsed = time.monotonic() - start_time
             if elapsed >= self._max_recovery_seconds:
-                reason = (
-                    f"Recovery exhausted after {elapsed:.1f}s "
-                    f"({attempt} attempts) for {fs.exchange}:{fs.symbol}"
-                )
+                reason = f"Recovery exhausted after {elapsed:.1f}s ({attempt} attempts) for {fs.exchange}:{fs.symbol}"
                 logger.error(reason)
                 fs.connection_state = ConnectionState.FAILED
                 fs.recovery_state = RecoveryState.FAILED

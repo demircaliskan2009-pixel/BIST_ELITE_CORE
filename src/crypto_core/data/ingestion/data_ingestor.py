@@ -17,7 +17,7 @@ PRD reference: §4.1, §4.5 Recovery Protocol.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable
 
 from crypto_core.data.ingestion import binance_adapter, bybit_adapter
 from crypto_core.data.ingestion.websocket_client import WebSocketClient, WebSocketConfig
@@ -52,12 +52,12 @@ class DataIngestor:
     def __init__(
         self,
         on_event: EventCallback,
-        ws_factory: Optional[Callable[[WebSocketConfig, Callable[[dict], None]], WebSocketClient]] = None,
+        ws_factory: Callable[[WebSocketConfig, Callable[[dict], None]], WebSocketClient] | None = None,
     ) -> None:
         self._on_event = on_event
         self._ws_factory = ws_factory
-        self._feeds: Dict[str, FeedState] = {}  # feed_key → FeedState
-        self._clients: Dict[str, WebSocketClient] = {}  # feed_key → WebSocketClient
+        self._feeds: dict[str, FeedState] = {}  # feed_key → FeedState
+        self._clients: dict[str, WebSocketClient] = {}  # feed_key → WebSocketClient
 
     # ──────────────────────────────────────────────────────────────
     # Lifecycle
@@ -103,7 +103,7 @@ class DataIngestor:
             self._clients[feed_key].disconnect()
             self._feeds[feed_key].connection_state = ConnectionState.DISCONNECTED
 
-    def get_feed_state(self, feed_key: str) -> Optional[FeedState]:
+    def get_feed_state(self, feed_key: str) -> FeedState | None:
         """Returns FeedState for the given feed_key, or None if unknown."""
         return self._feeds.get(feed_key)
 
@@ -114,7 +114,7 @@ class DataIngestor:
     def _make_raw_callback(self, symbol: str, exchange: Exchange) -> Callable[[dict], None]:
         """Returns a closure that routes raw WS dicts through the adapter."""
 
-        def on_raw_message(msg: Dict[str, Any]) -> None:
+        def on_raw_message(msg: dict[str, Any]) -> None:
             feed_key = self._make_feed_key(symbol, exchange)
             state = self._feeds.get(feed_key)
             if state is None:
@@ -132,7 +132,7 @@ class DataIngestor:
 
         return on_raw_message
 
-    def _parse_message(self, msg: Dict[str, Any], exchange: Exchange, symbol: str) -> list:
+    def _parse_message(self, msg: dict[str, Any], exchange: Exchange, symbol: str) -> list:
         """Dispatch raw dict to the correct exchange adapter.
 
         Returns a list of parsed typed event objects (usually 1, sometimes multiple
@@ -153,7 +153,8 @@ class DataIngestor:
 # Exchange-specific dispatch (module-level helpers, easily unit-tested)
 # ──────────────────────────────────────────────────────────────────────
 
-def _parse_binance(msg: Dict[str, Any], symbol: str) -> list:
+
+def _parse_binance(msg: dict[str, Any], symbol: str) -> list:
     """Route a Binance message to the correct adapter parser."""
     event_type = msg.get("e", "")
     if event_type == "trade":
@@ -170,7 +171,7 @@ def _parse_binance(msg: Dict[str, Any], symbol: str) -> list:
     return []
 
 
-def _parse_bybit(msg: Dict[str, Any], symbol: str) -> list:
+def _parse_bybit(msg: dict[str, Any], symbol: str) -> list:
     """Route a Bybit V5 message to the correct adapter parser."""
     topic = str(msg.get("topic", ""))
     if topic.startswith("publicTrade."):

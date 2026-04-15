@@ -10,10 +10,6 @@ Covers:
 
 from __future__ import annotations
 
-from typing import List
-
-import pytest
-
 from crypto_core.data.models.events import TradeEvent
 from crypto_core.data.processing.trade_processor import TradeStreamProcessor
 from crypto_core.data.validation.data_validator import DataValidator
@@ -21,7 +17,7 @@ from tests.crypto_core.data.fixtures.deterministic_clock import DeterministicClo
 from tests.crypto_core.data.fixtures.trade_replay import make_trade, make_trade_sequence
 
 
-def _processor(received: List[TradeEvent]) -> TradeStreamProcessor:
+def _processor(received: list[TradeEvent]) -> TradeStreamProcessor:
     clock = DeterministicClock(start_ns=1_700_000_000_000_000_000)
     validator = DataValidator(wall_clock=clock, clock_drift_threshold_ns=5_000_000_000)
     return TradeStreamProcessor(on_validated_trade=received.append, validator=validator)
@@ -29,7 +25,7 @@ def _processor(received: List[TradeEvent]) -> TradeStreamProcessor:
 
 class TestEmission:
     def test_valid_trade_emitted(self):
-        received: List[TradeEvent] = []
+        received: list[TradeEvent] = []
         proc = _processor(received)
         t = make_trade("1")
         proc.process(t)
@@ -37,7 +33,7 @@ class TestEmission:
         assert received[0].trade_id == "1"
 
     def test_sequence_of_trades_all_emitted(self):
-        received: List[TradeEvent] = []
+        received: list[TradeEvent] = []
         proc = _processor(received)
         trades = make_trade_sequence(10, start_ns=1_700_000_000_000_000_000)
         for t in trades:
@@ -45,7 +41,7 @@ class TestEmission:
         assert len(received) == 10
 
     def test_duplicate_not_emitted(self):
-        received: List[TradeEvent] = []
+        received: list[TradeEvent] = []
         proc = _processor(received)
         t = make_trade("1")
         proc.process(t)
@@ -53,7 +49,7 @@ class TestEmission:
         assert len(received) == 1
 
     def test_gap_event_not_emitted(self):
-        received: List[TradeEvent] = []
+        received: list[TradeEvent] = []
         proc = _processor(received)
         t1 = make_trade("1", sequence_no=1)
         t3 = make_trade("3", sequence_no=3, timestamp_ns=1_700_000_000_200_000_000)
@@ -85,7 +81,7 @@ class TestCounters:
 
 class TestReset:
     def test_reset_allows_new_sequence(self):
-        received: List[TradeEvent] = []
+        received: list[TradeEvent] = []
         proc = _processor(received)
         t1 = make_trade("1", sequence_no=1)
         proc.process(t1)

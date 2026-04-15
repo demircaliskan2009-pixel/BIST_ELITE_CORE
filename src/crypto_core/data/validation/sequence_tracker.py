@@ -12,7 +12,6 @@ PRD reference: §4.2 (sequence validation), §4.3 (trade gap detection).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional
 
 from crypto_core.data.validation.errors import ValidationError, ValidationErrorCode
 
@@ -33,7 +32,7 @@ class SequenceTracker:
     All violations raise ValidationError — no silent acceptance.
     """
 
-    _last: Dict[str, int] = field(default_factory=dict, init=False, repr=False)
+    _last: dict[str, int] = field(default_factory=dict, init=False, repr=False)
 
     def advance(self, stream_key: str, sequence_no: int) -> None:
         """Record the next sequence number for the stream.
@@ -87,7 +86,7 @@ class SequenceTracker:
         """
         self._last.pop(stream_key, None)
 
-    def last_seen(self, stream_key: str) -> Optional[int]:
+    def last_seen(self, stream_key: str) -> int | None:
         """Returns last accepted sequence number, or None if stream is unknown."""
         return self._last.get(stream_key)
 

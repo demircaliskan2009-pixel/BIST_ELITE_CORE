@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, List, Optional
+from typing import Callable
 
 # Callback signature: (raw_message: dict) -> None
 # Called by the WebSocketClient on every received message.
@@ -39,7 +39,7 @@ class WebSocketConfig:
 
     url: str
     symbol: str
-    stream_types: List[str] = field(default_factory=list)
+    stream_types: list[str] = field(default_factory=list)
     ping_interval_s: float = 5.0
     ping_timeout_s: float = 15.0
     max_reconnect_attempts: int = 0  # 0 = unlimited

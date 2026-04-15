@@ -9,10 +9,6 @@ Covers:
 
 from __future__ import annotations
 
-from typing import List
-
-import pytest
-
 from crypto_core.data.models.feed_state import ConnectionState, FeedState, RecoveryState
 from crypto_core.data.recovery.recovery_manager import RecoveryManager
 
@@ -32,9 +28,9 @@ class TestSuccessfulRecovery:
         state.connection_state = ConnectionState.CONNECTED
         state.recovery_state = RecoveryState.READY
 
-        connect_calls: List[None] = []
-        snapshot_calls: List[tuple] = []
-        success_calls: List[FeedState] = []
+        connect_calls: list[None] = []
+        snapshot_calls: list[tuple] = []
+        success_calls: list[FeedState] = []
 
         def on_connect():
             connect_calls.append(None)
@@ -63,7 +59,7 @@ class TestSuccessfulRecovery:
 
     def test_full_recovery_sequence(self):
         state = _make_state()
-        success_calls: List[FeedState] = []
+        success_calls: list[FeedState] = []
 
         mgr = RecoveryManager(
             feed_state=state,
@@ -91,7 +87,7 @@ class TestSuccessfulRecovery:
 class TestRecoveryFailure:
     def test_exhausted_recovery_sets_failed_state(self):
         state = _make_state()
-        failed_calls: List[tuple] = []
+        failed_calls: list[tuple] = []
 
         connect_attempts = 0
 

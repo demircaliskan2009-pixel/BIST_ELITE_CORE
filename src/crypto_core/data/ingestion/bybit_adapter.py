@@ -14,7 +14,7 @@ PRD reference: §4.1 (Bybit as secondary), §0.2 (Bybit as failover execution).
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from crypto_core.data.models.events import (
     Exchange,
@@ -23,14 +23,14 @@ from crypto_core.data.models.events import (
     OrderBookEvent,
     OrderBookEventType,
     OrderBookLevel,
-    TradeSide,
     TradeEvent,
+    TradeSide,
 )
 
 _EXCHANGE = Exchange.BYBIT
 
 
-def parse_trade(data: Dict[str, Any], topic: str) -> TradeEvent:
+def parse_trade(data: dict[str, Any], topic: str) -> TradeEvent:
     """Parse a Bybit publicTrade.<symbol> message payload entry.
 
     data: single entry from the 'data' array of the WS message.
@@ -53,7 +53,7 @@ def parse_trade(data: Dict[str, Any], topic: str) -> TradeEvent:
     )
 
 
-def parse_orderbook(msg: Dict[str, Any]) -> OrderBookEvent:
+def parse_orderbook(msg: dict[str, Any]) -> OrderBookEvent:
     """Parse a Bybit orderbook.<depth>.<symbol> message.
 
     Bybit sends 'snapshot' type for initial and 'delta' for incremental.
@@ -64,14 +64,8 @@ def parse_orderbook(msg: Dict[str, Any]) -> OrderBookEvent:
     event_type_str = str(msg.get("type", "delta")).lower()
     event_type = OrderBookEventType.SNAPSHOT if event_type_str == "snapshot" else OrderBookEventType.DELTA
 
-    bids = tuple(
-        OrderBookLevel(price=float(b[0]), qty=float(b[1]))
-        for b in data.get("b", [])
-    )
-    asks = tuple(
-        OrderBookLevel(price=float(a[0]), qty=float(a[1]))
-        for a in data.get("a", [])
-    )
+    bids = tuple(OrderBookLevel(price=float(b[0]), qty=float(b[1])) for b in data.get("b", []))
+    asks = tuple(OrderBookLevel(price=float(a[0]), qty=float(a[1])) for a in data.get("a", []))
     update_id = int(data.get("u", 0))
     seq = int(data.get("seq", update_id))
     return OrderBookEvent(
@@ -87,7 +81,7 @@ def parse_orderbook(msg: Dict[str, Any]) -> OrderBookEvent:
     )
 
 
-def parse_kline(data: Dict[str, Any], symbol: str, interval: str) -> KlineEvent:
+def parse_kline(data: dict[str, Any], symbol: str, interval: str) -> KlineEvent:
     """Parse a single Bybit kline entry from data array.
 
     data: single entry from the 'data' array of the WS message.
@@ -110,7 +104,7 @@ def parse_kline(data: Dict[str, Any], symbol: str, interval: str) -> KlineEvent:
     )
 
 
-def parse_liquidation(data: Dict[str, Any]) -> LiquidationEvent:
+def parse_liquidation(data: dict[str, Any]) -> LiquidationEvent:
     """Parse a Bybit liquidation.<symbol> message payload entry.
 
     data: single entry from the 'data' field.

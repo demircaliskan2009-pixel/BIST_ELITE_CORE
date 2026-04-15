@@ -14,7 +14,6 @@ Determinism: same sequence of events → identical book state.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional
 
 
 @dataclass
@@ -32,21 +31,21 @@ class OrderBook:
 
     symbol: str
     exchange: str
-    bids: Dict[float, float] = field(default_factory=dict)
-    asks: Dict[float, float] = field(default_factory=dict)
+    bids: dict[float, float] = field(default_factory=dict)
+    asks: dict[float, float] = field(default_factory=dict)
     last_update_id: int = 0
     last_update_ts_ns: int = 0
     snapshot_ts_ns: int = 0
 
-    def best_bid(self) -> Optional[float]:
+    def best_bid(self) -> float | None:
         """Returns the highest bid price, or None if book is empty."""
         return max(self.bids.keys()) if self.bids else None
 
-    def best_ask(self) -> Optional[float]:
+    def best_ask(self) -> float | None:
         """Returns the lowest ask price, or None if book is empty."""
         return min(self.asks.keys()) if self.asks else None
 
-    def mid_price(self) -> Optional[float]:
+    def mid_price(self) -> float | None:
         """Returns (best_bid + best_ask) / 2, or None if either side empty."""
         bb = self.best_bid()
         ba = self.best_ask()
@@ -54,7 +53,7 @@ class OrderBook:
             return None
         return (bb + ba) / 2.0
 
-    def spread(self) -> Optional[float]:
+    def spread(self) -> float | None:
         """Returns best_ask - best_bid, or None if either side empty."""
         bb = self.best_bid()
         ba = self.best_ask()
@@ -74,12 +73,12 @@ class OrderBook:
         """Returns True if either side of the book has no entries."""
         return not self.bids or not self.asks
 
-    def bid_depth(self, n_levels: int) -> Dict[float, float]:
+    def bid_depth(self, n_levels: int) -> dict[float, float]:
         """Returns top-n bid levels sorted by descending price."""
         sorted_prices = sorted(self.bids.keys(), reverse=True)[:n_levels]
         return {p: self.bids[p] for p in sorted_prices}
 
-    def ask_depth(self, n_levels: int) -> Dict[float, float]:
+    def ask_depth(self, n_levels: int) -> dict[float, float]:
         """Returns top-n ask levels sorted by ascending price."""
         sorted_prices = sorted(self.asks.keys())[:n_levels]
         return {p: self.asks[p] for p in sorted_prices}

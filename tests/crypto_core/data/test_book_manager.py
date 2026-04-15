@@ -23,10 +23,10 @@ from tests.crypto_core.data.fixtures.book_replay import (
 )
 from tests.crypto_core.data.fixtures.deterministic_clock import DeterministicClock
 
-
 # ──────────────────────────────────────────────────────────────────
 # Snapshot application
 # ──────────────────────────────────────────────────────────────────
+
 
 class TestSnapshot:
     def _mgr(self):
@@ -61,6 +61,7 @@ class TestSnapshot:
 # ──────────────────────────────────────────────────────────────────
 # Delta application
 # ──────────────────────────────────────────────────────────────────
+
 
 class TestDelta:
     def _mgr_with_snapshot(self):
@@ -108,6 +109,7 @@ class TestDelta:
 # Crossed book
 # ──────────────────────────────────────────────────────────────────
 
+
 class TestCrossedBook:
     def test_crossed_book_after_snapshot_raises(self):
         mgr = OrderBookManager("BTCUSDT", "binance")
@@ -132,6 +134,7 @@ class TestCrossedBook:
 # Reset
 # ──────────────────────────────────────────────────────────────────
 
+
 class TestReset:
     def test_reset_clears_snapshot_flag(self):
         mgr = OrderBookManager("BTCUSDT", "binance")
@@ -153,6 +156,7 @@ class TestReset:
 # ──────────────────────────────────────────────────────────────────
 # Stale detection
 # ──────────────────────────────────────────────────────────────────
+
 
 class TestStale:
     def test_stale_raises_after_threshold(self):

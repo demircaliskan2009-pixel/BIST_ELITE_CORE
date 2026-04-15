@@ -10,7 +10,6 @@ PRD reference: §4.3 (OHLCV construction), §4.6 (timeframe hierarchy).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
 
 # All intervals the system supports per PRD §4.1 and §4.6.
 VALID_INTERVALS = frozenset({"1s", "1m", "5m", "15m", "1h", "4h", "1d"})
@@ -56,17 +55,22 @@ class OHLCVSeries:
 
     Invariant: bars are strictly chronologically ordered (open_time_ns ascending).
     All mutations via append_bar() only — direct list mutation is prohibited.
+
+    max_bars: maximum number of bars retained. Oldest bars are evicted when exceeded.
+              Default 10 000 ≈ ~7 days of 1m bars. Set 0 for unlimited (testing only).
     """
 
     symbol: str
     exchange: str
     interval: str
-    bars: List[OHLCVBar] = field(default_factory=list)
+    bars: list[OHLCVBar] = field(default_factory=list)
+    max_bars: int = 10_000
 
     def append_bar(self, bar: OHLCVBar) -> None:
         """Append a bar in chronological order.
 
         Raises ValueError on out-of-order append (determinism guard).
+        Evicts oldest bars when max_bars is exceeded.
         """
         if self.bars and bar.open_time_ns <= self.bars[-1].open_time_ns:
             raise ValueError(
@@ -74,8 +78,10 @@ class OHLCVSeries:
                 f"new open_time_ns={bar.open_time_ns} <= last open_time_ns={self.bars[-1].open_time_ns}"
             )
         self.bars.append(bar)
+        if self.max_bars > 0 and len(self.bars) > self.max_bars:
+            self.bars = self.bars[-self.max_bars :]
 
-    def latest(self) -> Optional[OHLCVBar]:
+    def latest(self) -> OHLCVBar | None:
         """Returns most recent bar, or None if series is empty."""
         return self.bars[-1] if self.bars else None
 

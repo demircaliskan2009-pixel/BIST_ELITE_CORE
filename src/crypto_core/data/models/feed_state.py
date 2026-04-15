@@ -72,10 +72,7 @@ class FeedState:
 
     def is_live(self) -> bool:
         """Returns True only when feed is connected and data is validated."""
-        return (
-            self.connection_state == ConnectionState.CONNECTED
-            and self.recovery_state == RecoveryState.READY
-        )
+        return self.connection_state == ConnectionState.CONNECTED and self.recovery_state == RecoveryState.READY
 
     def is_stale(self, wall_clock_ns: int, stale_threshold_ns: int = 10_000_000_000) -> bool:
         """Returns True if no event has been received within stale_threshold_ns.

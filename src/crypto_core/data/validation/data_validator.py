@@ -17,7 +17,8 @@ PRD reference: §4.2 (order book), §4.3 (trades), §4.4 (halt conditions NT-D01
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Set
+from collections import OrderedDict
+from typing import Callable
 
 from crypto_core.data.models.events import OrderBookEvent, TradeEvent
 from crypto_core.data.validation.errors import ValidationError, ValidationErrorCode
@@ -30,6 +31,10 @@ from crypto_core.data.validation.sequence_tracker import SequenceTracker
 
 # Type alias for a wall-clock provider (injectable for deterministic tests).
 WallClockProvider = Callable[[], int]  # returns nanoseconds since epoch
+
+# Maximum number of trade IDs kept in the dedup window.
+# 100 000 entries ≈ 8 MB worst-case, covers 30-60s of high-throughput trade streams.
+_DEDUP_MAX_SIZE: int = 100_000
 
 
 class DataValidator:
@@ -48,10 +53,11 @@ class DataValidator:
 
     def __init__(
         self,
-        wall_clock: Optional[WallClockProvider] = None,
+        wall_clock: WallClockProvider | None = None,
         clock_drift_threshold_ns: int = 5_000_000_000,
         stale_threshold_ns: int = 10_000_000_000,
-        active_symbols: Optional[Set[str]] = None,
+        active_symbols: set[str] | None = None,
+        dedup_max_size: int = _DEDUP_MAX_SIZE,
     ) -> None:
         import time
 
@@ -60,7 +66,9 @@ class DataValidator:
         self._stale_threshold_ns = stale_threshold_ns
         self._active_symbols = active_symbols
         self._sequence_tracker = SequenceTracker()
-        self._seen_trade_ids: Set[str] = set()
+        self._dedup_max_size = dedup_max_size
+        # OrderedDict used as an O(1) insertion-ordered set with FIFO eviction.
+        self._seen_trade_ids: OrderedDict[str, None] = OrderedDict()
 
     # ──────────────────────────────────────────────────────────────
     # Public API
@@ -145,7 +153,10 @@ class DataValidator:
                 f"Duplicate trade_id '{event.trade_id}' for {event.symbol} on {event.exchange}",
                 {"trade_id": event.trade_id, "symbol": event.symbol, "exchange": str(event.exchange)},
             )
-        self._seen_trade_ids.add(dedup_key)
+        self._seen_trade_ids[dedup_key] = None
+        # FIFO eviction: drop oldest entries when window is exceeded.
+        while len(self._seen_trade_ids) > self._dedup_max_size:
+            self._seen_trade_ids.popitem(last=False)
 
     @staticmethod
     def _trade_stream_key(event: TradeEvent) -> str:

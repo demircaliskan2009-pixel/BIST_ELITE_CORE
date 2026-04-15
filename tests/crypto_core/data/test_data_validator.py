@@ -13,16 +13,15 @@ from __future__ import annotations
 
 import pytest
 
-from crypto_core.data.models.events import Exchange, TradeSide, TradeEvent
 from crypto_core.data.validation.data_validator import DataValidator
 from crypto_core.data.validation.errors import ValidationError, ValidationErrorCode
 from tests.crypto_core.data.fixtures.deterministic_clock import DeterministicClock
 from tests.crypto_core.data.fixtures.trade_replay import make_trade, make_trade_sequence
 
-
 # ──────────────────────────────────────────────────────────────────
 # Field validation rules
 # ──────────────────────────────────────────────────────────────────
+
 
 class TestFieldValidation:
     def _validator(self):
@@ -73,6 +72,7 @@ class TestFieldValidation:
 # Deduplication
 # ──────────────────────────────────────────────────────────────────
 
+
 class TestDeduplication:
     def _validator(self):
         clock = DeterministicClock(start_ns=1_700_000_000_000_000_000)
@@ -102,6 +102,7 @@ class TestDeduplication:
 # ──────────────────────────────────────────────────────────────────
 # Sequence tracking
 # ──────────────────────────────────────────────────────────────────
+
 
 class TestSequenceTracking:
     def _validator(self):
@@ -148,6 +149,7 @@ class TestSequenceTracking:
 # Clock drift
 # ──────────────────────────────────────────────────────────────────
 
+
 class TestClockDrift:
     def test_within_threshold_accepted(self):
         clock = DeterministicClock(start_ns=1_700_000_000_000_000_000)
@@ -169,6 +171,7 @@ class TestClockDrift:
 # ──────────────────────────────────────────────────────────────────
 # Stale data
 # ──────────────────────────────────────────────────────────────────
+
 
 class TestStaleData:
     def test_fresh_stream_not_stale(self):
@@ -194,6 +197,7 @@ class TestStaleData:
 # ──────────────────────────────────────────────────────────────────
 # Symbol whitelist
 # ──────────────────────────────────────────────────────────────────
+
 
 class TestSymbolWhitelist:
     def test_whitelisted_symbol_accepted(self):

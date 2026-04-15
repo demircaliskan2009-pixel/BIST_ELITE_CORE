@@ -23,8 +23,8 @@ PRD reference: §4.3 (OHLCV construction from trades), §4.6 (timeframe hierarch
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Set
+from dataclasses import dataclass
+from typing import Callable
 
 from crypto_core.data.models.events import TradeEvent
 from crypto_core.data.models.ohlcv import INTERVAL_NS, VALID_INTERVALS, OHLCVBar, OHLCVSeries
@@ -92,24 +92,24 @@ class OHLCVBuilder:
         self,
         symbol: str,
         exchange: str,
-        intervals: Optional[List[str]] = None,
-        on_bar_closed: Optional[BarClosedCallback] = None,
+        intervals: list[str] | None = None,
+        on_bar_closed: BarClosedCallback | None = None,
     ) -> None:
         self._symbol = symbol
         self._exchange = exchange
         self._on_bar_closed = on_bar_closed
 
         # Default to all supported intervals if not specified.
-        effective_intervals: List[str] = intervals if intervals is not None else list(VALID_INTERVALS)
+        effective_intervals: list[str] = intervals if intervals is not None else list(VALID_INTERVALS)
         invalid = set(effective_intervals) - VALID_INTERVALS
         if invalid:
             raise ValueError(f"OHLCVBuilder: unsupported intervals {invalid}. Valid: {VALID_INTERVALS}")
 
-        self._intervals: List[str] = sorted(effective_intervals)
+        self._intervals: list[str] = sorted(effective_intervals)
         # in-progress bars: interval → _InProgressBar or None
-        self._current: Dict[str, Optional[_InProgressBar]] = {iv: None for iv in self._intervals}
+        self._current: dict[str, _InProgressBar | None] = dict.fromkeys(self._intervals)
         # completed series: interval → OHLCVSeries
-        self._series: Dict[str, OHLCVSeries] = {
+        self._series: dict[str, OHLCVSeries] = {
             iv: OHLCVSeries(symbol=symbol, exchange=exchange, interval=iv) for iv in self._intervals
         }
 
@@ -131,7 +131,7 @@ class OHLCVBuilder:
             raise KeyError(f"Interval '{interval}' not tracked by this builder")
         return self._series[interval]
 
-    def current_bar(self, interval: str) -> Optional[OHLCVBar]:
+    def current_bar(self, interval: str) -> OHLCVBar | None:
         """Returns the in-progress (not yet closed) bar for the given interval, or None."""
         bar = self._current.get(interval)
         if bar is None:
@@ -177,7 +177,7 @@ class OHLCVBuilder:
             _update_bar(current, trade)
 
     @property
-    def intervals(self) -> List[str]:
+    def intervals(self) -> list[str]:
         """List of intervals this builder tracks."""
         return list(self._intervals)
 
@@ -185,6 +185,7 @@ class OHLCVBuilder:
 # ──────────────────────────────────────────────────────────────────────
 # Module-level pure helpers (easily unit-testable)
 # ──────────────────────────────────────────────────────────────────────
+
 
 def _bar_open_time(timestamp_ns: int, interval_ns: int) -> int:
     """Compute the UTC-aligned bar open time for a given timestamp.

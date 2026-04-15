@@ -12,18 +12,16 @@ Covers:
 
 from __future__ import annotations
 
-from typing import List
-
 import pytest
 
 from crypto_core.data.models.ohlcv import OHLCVBar
 from crypto_core.data.processing.ohlcv_builder import OHLCVBuilder, _bar_open_time
 from tests.crypto_core.data.fixtures.trade_replay import make_trade, make_trade_sequence
 
-
 # ──────────────────────────────────────────────────────────────────
 # Bar open time alignment
 # ──────────────────────────────────────────────────────────────────
+
 
 class TestBarOpenTime:
     def test_1m_alignment(self):
@@ -43,11 +41,12 @@ class TestBarOpenTime:
 # Single interval
 # ──────────────────────────────────────────────────────────────────
 
+
 class TestSingleInterval:
     _START_NS = 1_700_000_000_000_000_000
     _1M_NS = 60_000_000_000
 
-    def _builder(self, closed_bars: List[OHLCVBar] = None) -> OHLCVBuilder:
+    def _builder(self, closed_bars: list[OHLCVBar] = None) -> OHLCVBuilder:
         if closed_bars is None:
             closed_bars = []
         return OHLCVBuilder(
@@ -81,7 +80,7 @@ class TestSingleInterval:
         assert bar.trade_count == 3
 
     def test_bar_closes_on_new_period(self):
-        closed: List[OHLCVBar] = []
+        closed: list[OHLCVBar] = []
         builder = self._builder(closed)
         # Align to a clean minute boundary
         bar_open_ns = (self._START_NS // self._1M_NS) * self._1M_NS
@@ -114,6 +113,7 @@ class TestSingleInterval:
 # Multiple intervals
 # ──────────────────────────────────────────────────────────────────
 
+
 class TestMultipleIntervals:
     _START_NS = 1_700_000_000_000_000_000
     _1M_NS = 60_000_000_000
@@ -131,8 +131,8 @@ class TestMultipleIntervals:
         assert builder.current_bar("5m") is not None
 
     def test_1m_closes_before_5m(self):
-        closed_1m: List[OHLCVBar] = []
-        closed_5m: List[OHLCVBar] = []
+        closed_1m: list[OHLCVBar] = []
+        closed_5m: list[OHLCVBar] = []
         builder = OHLCVBuilder(
             symbol="BTCUSDT",
             exchange="binance",
@@ -157,18 +157,19 @@ class TestMultipleIntervals:
 # Determinism
 # ──────────────────────────────────────────────────────────────────
 
+
 class TestDeterminism:
     _START_NS = 1_700_000_000_000_000_000
 
     def test_same_input_produces_same_bars(self):
         trades = make_trade_sequence(100, start_ns=self._START_NS)
 
-        closed_a: List[OHLCVBar] = []
+        closed_a: list[OHLCVBar] = []
         builder_a = OHLCVBuilder("BTCUSDT", "binance", intervals=["1m"], on_bar_closed=closed_a.append)
         for t in trades:
             builder_a.on_trade(t)
 
-        closed_b: List[OHLCVBar] = []
+        closed_b: list[OHLCVBar] = []
         builder_b = OHLCVBuilder("BTCUSDT", "binance", intervals=["1m"], on_bar_closed=closed_b.append)
         for t in trades:
             builder_b.on_trade(t)
@@ -181,6 +182,7 @@ class TestDeterminism:
 # ──────────────────────────────────────────────────────────────────
 # Invalid interval rejected
 # ──────────────────────────────────────────────────────────────────
+
 
 class TestInvalidInterval:
     def test_unsupported_interval_raises(self):

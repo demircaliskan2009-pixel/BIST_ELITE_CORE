@@ -19,7 +19,7 @@ PRD reference: §4.1, §4.2, §4.3.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from crypto_core.data.models.events import (
     Exchange,
@@ -29,14 +29,14 @@ from crypto_core.data.models.events import (
     OrderBookEvent,
     OrderBookEventType,
     OrderBookLevel,
-    TradeSide,
     TradeEvent,
+    TradeSide,
 )
 
 _EXCHANGE = Exchange.BINANCE
 
 
-def parse_trade(msg: Dict[str, Any]) -> TradeEvent:
+def parse_trade(msg: dict[str, Any]) -> TradeEvent:
     """Parse a Binance @trade stream message.
 
     Expected keys: e, E, s, t, p, q, b, a, T, m, M
@@ -55,20 +55,14 @@ def parse_trade(msg: Dict[str, Any]) -> TradeEvent:
     )
 
 
-def parse_depth_delta(msg: Dict[str, Any]) -> OrderBookEvent:
+def parse_depth_delta(msg: dict[str, Any]) -> OrderBookEvent:
     """Parse a Binance @depth@100ms (incremental depth) stream message.
 
     Expected keys: e, E, s, U, u, b, a
     Raises: KeyError on missing field.
     """
-    bids = tuple(
-        OrderBookLevel(price=float(b[0]), qty=float(b[1]))
-        for b in msg["b"]
-    )
-    asks = tuple(
-        OrderBookLevel(price=float(a[0]), qty=float(a[1]))
-        for a in msg["a"]
-    )
+    bids = tuple(OrderBookLevel(price=float(b[0]), qty=float(b[1])) for b in msg["b"])
+    asks = tuple(OrderBookLevel(price=float(a[0]), qty=float(a[1])) for a in msg["a"])
     return OrderBookEvent(
         symbol=str(msg["s"]),
         exchange=_EXCHANGE,
@@ -82,21 +76,15 @@ def parse_depth_delta(msg: Dict[str, Any]) -> OrderBookEvent:
     )
 
 
-def parse_depth_snapshot(payload: Dict[str, Any], symbol: str, timestamp_ns: int) -> OrderBookEvent:
+def parse_depth_snapshot(payload: dict[str, Any], symbol: str, timestamp_ns: int) -> OrderBookEvent:
     """Parse a Binance REST depth snapshot response into an OrderBookEvent.
 
     Used during recovery (§4.5): REST GET /api/v3/depth → applied as SNAPSHOT.
 
     Expected keys: lastUpdateId, bids, asks
     """
-    bids = tuple(
-        OrderBookLevel(price=float(b[0]), qty=float(b[1]))
-        for b in payload["bids"]
-    )
-    asks = tuple(
-        OrderBookLevel(price=float(a[0]), qty=float(a[1]))
-        for a in payload["asks"]
-    )
+    bids = tuple(OrderBookLevel(price=float(b[0]), qty=float(b[1])) for b in payload["bids"])
+    asks = tuple(OrderBookLevel(price=float(a[0]), qty=float(a[1])) for a in payload["asks"])
     last_update_id = int(payload["lastUpdateId"])
     return OrderBookEvent(
         symbol=symbol,
@@ -111,7 +99,7 @@ def parse_depth_snapshot(payload: Dict[str, Any], symbol: str, timestamp_ns: int
     )
 
 
-def parse_kline(msg: Dict[str, Any]) -> KlineEvent:
+def parse_kline(msg: dict[str, Any]) -> KlineEvent:
     """Parse a Binance @kline_<interval> stream message.
 
     Expected keys: e, E, s, k (nested: t, T, i, o, h, l, c, v, n, x)
@@ -135,7 +123,7 @@ def parse_kline(msg: Dict[str, Any]) -> KlineEvent:
     )
 
 
-def parse_liquidation(msg: Dict[str, Any]) -> LiquidationEvent:
+def parse_liquidation(msg: dict[str, Any]) -> LiquidationEvent:
     """Parse a Binance @forceOrder (liquidation) stream message.
 
     Expected keys: e, E, o (nested: s, S, p, q, T)
@@ -157,7 +145,7 @@ def parse_liquidation(msg: Dict[str, Any]) -> LiquidationEvent:
     )
 
 
-def parse_mark_price(msg: Dict[str, Any]) -> MarkPriceEvent:
+def parse_mark_price(msg: dict[str, Any]) -> MarkPriceEvent:
     """Parse a Binance @markPrice@1s stream message.
 
     Expected keys: e, E, s, p, i, r, T
@@ -174,7 +162,7 @@ def parse_mark_price(msg: Dict[str, Any]) -> MarkPriceEvent:
     )
 
 
-def detect_stream_type(msg: Dict[str, Any]) -> str:
+def detect_stream_type(msg: dict[str, Any]) -> str:
     """Detect the event type from a Binance WebSocket message.
 
     Returns the 'e' field value (event type string).

@@ -15,7 +15,7 @@ PRD reference: §4 (data layer pipeline), integrated with message bus (§crypto-
 from __future__ import annotations
 
 import logging
-from typing import Callable, Dict, Optional, Type
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +38,9 @@ class EventRouter:
     """
 
     def __init__(self) -> None:
-        self._handlers: Dict[Type, EventHandler] = {}
+        self._handlers: dict[type, EventHandler] = {}
 
-    def register(self, event_type: Type, handler: EventHandler) -> None:
+    def register(self, event_type: type, handler: EventHandler) -> None:
         """Register a handler for the given event type.
 
         Raises ValueError if a handler is already registered for this type.
@@ -54,7 +54,7 @@ class EventRouter:
         self._handlers[event_type] = handler
         logger.debug("EventRouter: registered handler for %s", event_type.__name__)
 
-    def unregister(self, event_type: Type) -> None:
+    def unregister(self, event_type: type) -> None:
         """Remove the handler for the given event type.
 
         Raises KeyError if no handler is registered for this type.
@@ -78,7 +78,7 @@ class EventRouter:
             return
         handler(event)
 
-    def has_handler(self, event_type: Type) -> bool:
+    def has_handler(self, event_type: type) -> bool:
         """Returns True if a handler is registered for the given type."""
         return event_type in self._handlers
 

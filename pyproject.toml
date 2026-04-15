@@ -42,5 +42,5 @@ where = ["src"]
 include = ["bist_core*", "crypto_core*"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W"]
-ignore = ["E501"]
+select = ["E", "F", "W", "S", "B", "I", "C4", "UP"]
+ignore = ["E501", "S101"]

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import zlib
-from typing import Callable, Optional
+from typing import Callable
 
 from crypto_core.data.models.events import OrderBookEvent, OrderBookEventType
 from crypto_core.data.models.order_book import OrderBook
@@ -49,7 +49,7 @@ class OrderBookManager:
         self,
         symbol: str,
         exchange: str,
-        on_book_update: Optional[BookUpdateCallback] = None,
+        on_book_update: BookUpdateCallback | None = None,
         stale_threshold_ns: int = 10_000_000_000,
     ) -> None:
         self._symbol = symbol
@@ -195,8 +195,7 @@ class OrderBookManager:
             ba = self._book.best_ask()
             raise ValidationError(
                 ValidationErrorCode.BOOK_CROSSED,
-                f"Order book crossed after update: best_bid={bb} >= best_ask={ba} "
-                f"for {self._exchange}:{self._symbol}",
+                f"Order book crossed after update: best_bid={bb} >= best_ask={ba} for {self._exchange}:{self._symbol}",
                 {
                     "symbol": self._symbol,
                     "exchange": self._exchange,
