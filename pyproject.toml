@@ -39,7 +39,7 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["bist_core*"]
+include = ["bist_core*", "crypto_core*"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W"]

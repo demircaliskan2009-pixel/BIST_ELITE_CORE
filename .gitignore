@@ -17,11 +17,33 @@
 logs/
 out/
 tmp/
-data/
+/data/
 
 # large artifacts
 real_ideal_proof.txt
 validation_run.txt
+
+# runtime artifacts (root level)
+FOUND
+daily_report_*.json
+gw_*.json
+paper_trades.json
+req.json
+runtime_state.json
+validation_analysis_*.json
+SYSTEM_STATE.txt
+equity_curve.jsonl
+paper_trades.jsonl
+prdv3_proof.log
+live_test_1h.log
+pytest_full_run.txt
+pytest_out.txt
+tmp_main_diff.txt
+tmp_live_snapshots/
+research_intraday_edges.ipynb
+run_log.txt
+run_output.txt
+run_proof.txt
 
 # python
 .venv/
