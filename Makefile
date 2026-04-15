@@ -1,11 +1,18 @@
 SHELL := /bin/sh
 
-.PHONY: test gateway-build gateway-up gateway-down gateway-logs gateway-health
+.PHONY: test test-slow test-full gateway-build gateway-up gateway-down gateway-logs gateway-health
 
 test:
-    pytest -q
+	pytest -q
 
-gateway-build:
+# MANDATORY: run weekly and before every release
+# Executes all tests including slow end-to-end pipeline tests
+test-slow:
+	pytest -q --runslow
+
+# Alias for pre-release gate: full suite with coverage
+test-full:
+	pytest -q --runslow --cov=src --cov-report=term --cov-fail-under=70
     docker compose build
 
 gateway-up:
