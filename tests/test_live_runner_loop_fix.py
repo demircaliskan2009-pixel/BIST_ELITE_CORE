@@ -9,9 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from bist_core.live.live_runner import LiveRunner
 from bist_core.models.ohlcv import OHLCVBar
 
-from bist_core.live.live_runner import LiveRunner
+pytestmark = pytest.mark.slow
 
 
 def _dummy_bars(sym: str) -> list[OHLCVBar]:

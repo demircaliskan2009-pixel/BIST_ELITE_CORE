@@ -15,6 +15,9 @@
 !tests/fixtures/matriks_variant3.csv
 *.jsonl
 logs/
+!logs/telemetry/
+!logs/telemetry/.gitkeep
+!logs/telemetry/telemetry_schema.json
 out/
 tmp/
 /data/

@@ -25,12 +25,26 @@ def _strip_non_whitelist_bist_env() -> None:
         if ku.startswith("BIST_") and ku not in allow:
             try:
                 del os.environ[k]
-            except Exception:
+            except Exception:  # noqa: S110
                 pass
 
 
-def pytest_configure(config) -> None:  # noqa: ARG001
+def pytest_configure(config) -> None:
+    config.addinivalue_line("markers", "slow: marks tests as slow (deselected by default, run with --runslow)")
     _strip_non_whitelist_bist_env()
+
+
+def pytest_addoption(parser) -> None:
+    parser.addoption("--runslow", action="store_true", default=False, help="run slow tests")
+
+
+def pytest_collection_modifyitems(config, items) -> None:
+    if config.getoption("--runslow"):
+        return
+    skip_slow = pytest.mark.skip(reason="slow test — pass --runslow to run")
+    for item in items:
+        if "slow" in item.keywords:
+            item.add_marker(skip_slow)
 
 
 @pytest.fixture(autouse=True)

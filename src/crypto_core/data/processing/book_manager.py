@@ -31,8 +31,7 @@ from crypto_core.data.validation.errors import ValidationError, ValidationErrorC
 
 logger = logging.getLogger(__name__)
 
-# Downstream callback: receives a shallow copy of the OrderBook after each update.
-# NOTE: the callback receives the LIVE book reference — do NOT mutate it.
+# Downstream callback: receives a snapshot copy of the OrderBook after each update.
 BookUpdateCallback = Callable[[OrderBook], None]
 
 
@@ -80,11 +79,11 @@ class OrderBookManager:
             self._apply_delta(event)
 
         if self._on_book_update is not None:
-            self._on_book_update(self._book)
+            self._on_book_update(self._book.snapshot())
 
     def book(self) -> OrderBook:
-        """Returns the current book state (live reference — do NOT mutate)."""
-        return self._book
+        """Returns a snapshot copy of the current book state (safe to read, do NOT mutate)."""
+        return self._book.snapshot()
 
     def has_snapshot(self) -> bool:
         """Returns True if an initial snapshot has been applied."""

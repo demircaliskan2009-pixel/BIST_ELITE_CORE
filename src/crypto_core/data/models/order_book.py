@@ -82,3 +82,18 @@ class OrderBook:
         """Returns top-n ask levels sorted by ascending price."""
         sorted_prices = sorted(self.asks.keys())[:n_levels]
         return {p: self.asks[p] for p in sorted_prices}
+
+    def snapshot(self) -> OrderBook:
+        """Returns a shallow copy safe for read-only downstream consumers.
+
+        Copies bids/asks dicts so mutations to the original don't leak.
+        """
+        return OrderBook(
+            symbol=self.symbol,
+            exchange=self.exchange,
+            bids=dict(self.bids),
+            asks=dict(self.asks),
+            last_update_id=self.last_update_id,
+            last_update_ts_ns=self.last_update_ts_ns,
+            snapshot_ts_ns=self.snapshot_ts_ns,
+        )
