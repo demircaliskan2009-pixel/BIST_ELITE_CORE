@@ -1,0 +1,57 @@
+"""Pipeline orchestrator typed models.
+
+PRD reference: §2 System Orchestration.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from crypto_core.data.models.events import TradeEvent
+from crypto_core.edge.models import EdgeSignal
+from crypto_core.guard.models import NoTradeDecision
+from crypto_core.risk.models import RiskEvaluation
+from crypto_core.state.models import StateSnapshot
+
+
+@dataclass(frozen=True)
+class MarketDataInput:
+    """Single pipeline invocation input — validated market data snapshot.
+
+    trades: ordered tuple of recent TradeEvent objects.
+    book_last_update_ns: last order book update timestamp (ns).
+    book_has_snapshot: whether a valid OB snapshot has been applied.
+    book_bid_count / book_ask_count: current level counts.
+    feed_connection_state / feed_recovery_state: feed lifecycle state strings.
+    """
+
+    symbol: str
+    exchange: str
+    timestamp_ns: int  # pipeline invocation wall-clock
+
+    trades: tuple[TradeEvent, ...] = field(default_factory=tuple)
+    book_last_update_ns: int = 0
+    book_has_snapshot: bool = False
+    book_bid_count: int = 0
+    book_ask_count: int = 0
+    feed_connection_state: str = "connected"
+    feed_recovery_state: str = "ready"
+
+
+@dataclass(frozen=True)
+class PipelineResult:
+    """Immutable result of one full pipeline evaluation cycle.
+
+    block_stage: which stage blocked the pipeline, or None if fully approved.
+    approved: True iff all stages passed and risk evaluation approved.
+    """
+
+    input_ts_ns: int
+    output_ts_ns: int
+    state_snapshot: StateSnapshot
+    no_trade_decision: NoTradeDecision
+    edge_signals: tuple[EdgeSignal, ...]  # one per registered family
+    risk_evaluations: tuple[RiskEvaluation, ...]  # one per edge signal
+    block_stage: str | None  # "state" | "guard" | "edge" | "risk" | None
+    block_reason: str | None
+    approved: bool  # True = at least one risk evaluation is APPROVED
