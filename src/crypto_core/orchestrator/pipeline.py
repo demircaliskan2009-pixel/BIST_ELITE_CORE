@@ -14,7 +14,15 @@ import time
 from dataclasses import dataclass
 
 from crypto_core.edge.engine import EdgeEngine, EdgeEngineConfig
-from crypto_core.guard.models import MarketRegimeInput, NoTradeContext, NoTradeDecision, NoTradeReason, RiskGuardInput
+from crypto_core.edge_health.tracker import EdgeHealthTracker
+from crypto_core.guard.models import (
+    EdgeHealthInput,
+    MarketRegimeInput,
+    NoTradeContext,
+    NoTradeDecision,
+    NoTradeReason,
+    RiskGuardInput,
+)
 from crypto_core.guard.no_trade_guard import NoTradeConfig, NoTradeGuard
 from crypto_core.orchestrator.models import MarketDataInput, PipelineResult
 from crypto_core.portfolio.tracker import PositionTracker
@@ -75,6 +83,7 @@ class PipelineOrchestrator:
         telemetry_emitter: TelemetryEmitter | None = None,
         position_tracker: PositionTracker | None = None,
         regime_tracker: MarketRegimeTracker | None = None,
+        edge_health_tracker: EdgeHealthTracker | None = None,
     ) -> None:
         self._cfg = config or PipelineConfig()
         self._state_engine = state_engine or SystemStateEngine()
@@ -86,6 +95,8 @@ class PipelineOrchestrator:
         self._position_tracker: PositionTracker | None = position_tracker
         # MarketRegimeTracker is optional — None = market family disabled (NT-M skipped)
         self._regime_tracker: MarketRegimeTracker | None = regime_tracker
+        # EdgeHealthTracker is optional — None = edge family disabled (NT-E skipped)
+        self._edge_health_tracker: EdgeHealthTracker | None = edge_health_tracker
         from pathlib import Path
 
         self._telemetry = telemetry_emitter or (
@@ -207,6 +218,17 @@ class PipelineOrchestrator:
         else:
             regime_snap = None
 
+        # Build edge health input — uses PREVIOUS cycle's history (deterministic).
+        # When tracker is None, edge=None → NT-E family explicitly disabled.
+        edge_health_input: EdgeHealthInput | None = None
+        if self._edge_health_tracker is not None:
+            edge_health_input = self._edge_health_tracker.to_edge_health_input(
+                symbol=data.symbol,
+                exchange=data.exchange,
+                snapshot_ns=ts,
+            )
+            # edge_health_input may be None if no history yet — that's correct.
+
         guard_ctx = NoTradeContext(
             symbol=data.symbol,
             exchange=data.exchange,
@@ -220,6 +242,7 @@ class PipelineOrchestrator:
             system_state=str(state_snap.state),
             risk=risk_guard_input,
             market=market_regime_input,
+            edge=edge_health_input,
         )
         no_trade = self._guard.evaluate(guard_ctx)
         guard_latency_ms = (time.time_ns() - stage_t0) / 1e6
@@ -258,10 +281,35 @@ class PipelineOrchestrator:
         edge_latency_ms = (time.time_ns() - stage_t0) / 1e6
 
         valid_count = sum(1 for s in edge_signals if s.is_valid)
+
+        # ── Stage 3-post: Edge health update ───────────────────────────
+        # Record this cycle's signals into the edge health tracker so that
+        # the NEXT cycle's guard stage gets real upstream NT-E values.
+        if self._edge_health_tracker is not None:
+            self._edge_health_tracker.record_signals(edge_signals)
+            ehs_snap = self._edge_health_tracker.tracker_snapshot(snapshot_ns=ts)
+        else:
+            ehs_snap = None
+
+        # Edge telemetry — include edge health metrics when available.
+        _tele_edge: dict[str, object] = {
+            "active_edges": valid_count,
+            "total_edges": len(edge_signals),
+            "edge_health_snapshot_available": ehs_snap is not None,
+        }
+        if ehs_snap is not None:
+            _tele_edge["valid_edge_count"] = ehs_snap.valid_edge_count if ehs_snap.valid_edge_count is not None else 0
+            _tele_edge["disabled_edge_count"] = ehs_snap.disabled_edge_count
+            _tele_edge["capacity_red_count"] = ehs_snap.capacity_red_count
+            if ehs_snap.min_ehs is not None:
+                _tele_edge["minimum_ehs"] = round(ehs_snap.min_ehs, 4)
+            if ehs_snap.max_ehs is not None:
+                _tele_edge["maximum_ehs"] = round(ehs_snap.max_ehs, 4)
+
         self._emit_telemetry_safe(
             "edge",
             edge_latency_ms,
-            {"active_edges": valid_count, "total_edges": len(edge_signals)},
+            _tele_edge,
         )
 
         # ── Stage 3.5: Kill-Switch computation ─────────────────────────
