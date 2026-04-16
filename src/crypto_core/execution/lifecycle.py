@@ -45,6 +45,7 @@ from crypto_core.execution.models import (
 )
 from crypto_core.execution.paper_adapter import PaperAdapterConfig, PaperVenueAdapter
 from crypto_core.execution.state_machine import IllegalOrderTransitionError, Order, OrderState
+from crypto_core.execution.store import ExecutionStateStore, build_order_meta
 from crypto_core.state.models import SystemState, is_at_least
 
 logger = logging.getLogger(__name__)
@@ -187,6 +188,7 @@ class ExecutionLifecycleEngine:
         self,
         config: ExecutionLifecycleConfig | None = None,
         adapter: VenueAdapter | None = None,
+        store: ExecutionStateStore | None = None,
     ) -> None:
         self._cfg = config or ExecutionLifecycleConfig()
         self._adapter = adapter or self._build_default_adapter()
@@ -196,6 +198,8 @@ class ExecutionLifecycleEngine:
         # In-flight order registry (order_id → Order).  Paper mode orders
         # complete synchronously so this will usually be empty after each call.
         self._orders: dict[str, Order] = {}
+        # Phase 6E: optional durable state store.  None = no persistence.
+        self._store: ExecutionStateStore | None = store
 
     # -----------------------------------------------------------------------
     # Primary interface
@@ -450,6 +454,8 @@ class ExecutionLifecycleEngine:
                 "price_hint": req.price_hint,
             },
         )
+        # Persist CREATED event (with order_meta for restore)
+        self._maybe_persist(order._event_history[-1], order, is_created=True)
 
         # ── CREATED → VALIDATED ────────────────────────────────────────
         validated_event = OrderEvent(
@@ -467,6 +473,7 @@ class ExecutionLifecycleEngine:
             },
         )
         order.transition(OrderState.VALIDATED, validated_event)
+        self._maybe_persist(validated_event, order)
 
         # ── Submit via adapter → collect events ────────────────────────
         adapter_events = self._adapter.submit_order(order, req.book, pricing)
@@ -476,6 +483,7 @@ class ExecutionLifecycleEngine:
         for event in adapter_events:
             try:
                 self._apply_single_event(order, event, fill_events)
+                self._maybe_persist(event, order)
             except IllegalOrderTransitionError:
                 logger.exception("Illegal state transition for order %s — fail-closed", order.order_id)
                 # Treat as rejection
@@ -596,6 +604,9 @@ class ExecutionLifecycleEngine:
         order._event_history.append(reject_event)
         order.state = OrderState.REJECTED
         order.updated_at_ns = ts
+        # Persist both CREATED (with order_meta) and REJECTED events
+        self._maybe_persist(order._event_history[0], order, is_created=True)
+        self._maybe_persist(reject_event, order)
 
         evidence: dict[str, object] = {
             "mode": str(self._cfg.mode),
@@ -624,3 +635,24 @@ class ExecutionLifecycleEngine:
             allow_degraded_fill=True,
         )
         return PaperVenueAdapter(cfg)
+
+    # -----------------------------------------------------------------------
+    # Persistence helpers — Phase 6E
+    # -----------------------------------------------------------------------
+
+    def _maybe_persist(self, event: OrderEvent, order: Order, is_created: bool = False) -> None:
+        """Append event to the durable store if one is configured.
+
+        For CREATED events, passes order_meta so the Order can be restored
+        on next startup.  All other events: no order_meta.
+        """
+        if self._store is None:
+            return
+        try:
+            order_meta = build_order_meta(order) if is_created else None
+            self._store.append_event(event, order_meta=order_meta)
+        except Exception:
+            logger.exception(
+                "ExecutionStateStore.append_event failed for order %s — continuing (no data loss to in-flight state)",
+                event.order_id,
+            )

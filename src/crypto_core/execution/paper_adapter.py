@@ -314,10 +314,29 @@ class PaperVenueAdapter(VenueAdapter):
 
         return [cancel_event, *submit_events]
 
+    # -----------------------------------------------------------------------
+    # Live adapter operations — Phase 6E (paper no-ops)
+    # -----------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Event builder helpers (module-private)
-# ---------------------------------------------------------------------------
+    def poll_open_orders(self) -> list[str]:
+        """Paper: always empty — fills are synchronous, no pending queue."""
+        return []
+
+    def ingest_fill_event(
+        self,
+        fill: FillEvent,
+        timestamp_ns: int,
+    ) -> list[OrderEvent]:
+        """Paper: no async fills — always returns empty list."""
+        return []
+
+    def ingest_position_snapshot(
+        self,
+        snapshot: dict[str, object],
+        timestamp_ns: int,
+    ) -> None:
+        """Paper: no external account state — no-op."""
+        return
 
 
 def _submitted_event(order: Order, timestamp_ns: int, evidence: dict) -> OrderEvent:

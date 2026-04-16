@@ -1,10 +1,15 @@
-"""Abstract venue adapter contract — Phase 6D paper/live bridge.
+"""Abstract venue adapter contract — Phase 6D/6E paper/live bridge.
 
 VenueAdapter is the single abstraction separating the execution lifecycle
 engine from the venue-specific order submission mechanics.
 
 Paper mode uses PaperVenueAdapter (deterministic fill simulation).
 Future live adapters (Binance, Bybit) must implement this interface.
+
+Phase 6E additions (live adapter foundation):
+  - poll_open_orders():           enumerate known non-terminal order IDs
+  - ingest_fill_event():          process an async fill notification from the venue
+  - ingest_position_snapshot():   process an account/position state snapshot
 
 Invariants for all adapter implementations:
   - Never raise — return events with explicit reason codes on failure.
@@ -20,7 +25,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from crypto_core.execution.events import OrderEvent
+from crypto_core.execution.events import FillEvent, OrderEvent
 from crypto_core.execution.models import BookContext, ExecutionMode, SlippageResult
 from crypto_core.execution.state_machine import Order
 
@@ -128,4 +133,62 @@ class VenueAdapter(ABC):
             book:         current top-of-book (may be None).
             pricing:      pre-computed replacement fill pricing (may be None).
             timestamp_ns: wall-clock for all returned events.
+        """
+
+    # -----------------------------------------------------------------------
+    # Live adapter operations — Phase 6E
+    # -----------------------------------------------------------------------
+
+    @abstractmethod
+    def poll_open_orders(self) -> list[str]:
+        """Return a list of known non-terminal order IDs for this adapter.
+
+        Used during recovery bootstrap to enumerate orders that may need
+        reconciliation after a restart.
+
+        Paper adapter: always returns [] (fills are synchronous, no open queue).
+        Live adapter: returns exchange-reported open order IDs.
+
+        Returns:
+            List of order_id strings.  Empty list if none.
+        """
+
+    @abstractmethod
+    def ingest_fill_event(
+        self,
+        fill: FillEvent,
+        timestamp_ns: int,
+    ) -> list[OrderEvent]:
+        """Process an async fill notification received from the venue.
+
+        Live adapters receive fill events asynchronously via WebSocket.
+        This method converts an incoming venue fill notification into typed
+        OrderEvent objects for the lifecycle engine to apply.
+
+        Paper adapter: always returns [] (no async fills in paper mode).
+
+        Args:
+            fill:         the incoming fill notification from the venue.
+            timestamp_ns: receipt timestamp (wall clock, nanoseconds).
+
+        Returns:
+            Ordered list of OrderEvent objects (empty if not actionable).
+        """
+
+    @abstractmethod
+    def ingest_position_snapshot(
+        self,
+        snapshot: dict[str, object],
+        timestamp_ns: int,
+    ) -> None:
+        """Process an account / position state snapshot from the venue.
+
+        Used for reconciliation: compare exchange-reported positions against
+        local tracker state and emit discrepancy evidence for audit.
+
+        Paper adapter: no-op (no external account state to reconcile).
+
+        Args:
+            snapshot:     venue-specific position dict (exchange format).
+            timestamp_ns: receipt timestamp (wall clock, nanoseconds).
         """

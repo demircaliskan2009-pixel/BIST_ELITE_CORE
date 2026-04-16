@@ -19,7 +19,7 @@ class ExecutionMode(str):
 
 ExecutionMode.DRY_RUN = ExecutionMode("dry_run")  # No file writes, no state mutations
 ExecutionMode.PAPER = ExecutionMode("paper")  # Logs paper fills, no exchange calls
-# ExecutionMode.LIVE is NOT implemented yet — reserved for future adapter injection
+ExecutionMode.LIVE = ExecutionMode("live")  # Phase 6E: live adapter foundation; blocked unless real adapter injected
 
 
 class OrderIntent(str):

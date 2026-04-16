@@ -529,6 +529,123 @@ class PositionTracker:
             raise ValueError(f"current_nav_usd must be positive for CVaR sampling; got {current_nav_usd}")
         return (current_nav_usd / previous_nav_usd - 1.0) * 100.0
 
+    # -----------------------------------------------------------------------
+    # Persistence — Phase 6E
+    # -----------------------------------------------------------------------
+
+    def to_persistence_dict(self, snapshot_ns: int) -> dict:
+        """Serialize internal tracker state to a persistence-safe dict.
+
+        The returned dict is suitable for PortfolioStateStore.save().
+        CVaR engine history is NOT persisted — it will restart empty on
+        restore (conservative: no stale CVaR history carried across restarts).
+
+        Args:
+            snapshot_ns: wall-clock timestamp for this snapshot (ns).
+
+        Returns:
+            dict conforming to portfolio store schema v1.
+        """
+        positions_data = []
+        for pos in self._positions.values():
+            positions_data.append(
+                {
+                    "symbol": pos.symbol,
+                    "exchange": pos.exchange,
+                    "side": str(pos.side),
+                    "quantity": pos.quantity,
+                    "avg_entry_price": pos.avg_entry_price,
+                    "mark_price": pos.mark_price,
+                    "leverage": pos.leverage,
+                    "realized_pnl": pos.realized_pnl,
+                    "liquidation_price": pos.liquidation_price,
+                }
+            )
+        return {
+            "schema_version": "1",
+            "snapshot_ns": snapshot_ns,
+            "nav_usd": self._nav_usd,
+            "daily_realized_pnl": self._daily_realized_pnl,
+            "positions": positions_data,
+        }
+
+    @classmethod
+    def restore_from_dict(
+        cls,
+        d: dict,
+        cvar_config: CVaRConfig | None = None,
+    ) -> PositionTracker:
+        """Restore a PositionTracker from a persistence dict.
+
+        This is the inverse of to_persistence_dict().
+        Validation is fail-closed: any missing or invalid field raises
+        PortfolioRestoreError (imported lazily to avoid circular imports).
+
+        Args:
+            d:           dict produced by to_persistence_dict() and validated
+                         by PortfolioStateStore.load().
+            cvar_config: optional CVaR config; CVaR engine starts empty
+                         (no historical data carried across restarts).
+
+        Returns:
+            Fully-initialized PositionTracker with restored position state.
+
+        Raises:
+            PortfolioRestoreError: if the dict is malformed or invalid.
+        """
+        from crypto_core.portfolio.store import PortfolioRestoreError
+
+        # Top-level fields already validated by PortfolioStateStore._validate_snapshot
+        try:
+            nav_usd = float(d["nav_usd"])
+            daily_realized_pnl = float(d["daily_realized_pnl"])
+            positions_raw = d["positions"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise PortfolioRestoreError(f"Cannot read portfolio snapshot fields: {exc}") from exc
+
+        tracker = cls(initial_nav_usd=nav_usd, cvar_config=cvar_config)
+        tracker._daily_realized_pnl = daily_realized_pnl
+
+        from crypto_core.portfolio.models import PositionSide
+
+        for idx, pos_d in enumerate(positions_raw):
+            try:
+                symbol = str(pos_d["symbol"])
+                exchange = str(pos_d["exchange"])
+                side = PositionSide(str(pos_d["side"]))
+                quantity = float(pos_d["quantity"])
+                avg_entry_price = float(pos_d["avg_entry_price"])
+                mark_price = float(pos_d["mark_price"])
+                leverage = float(pos_d["leverage"])
+                realized_pnl = float(pos_d["realized_pnl"])
+                liquidation_price = pos_d.get("liquidation_price")
+                if liquidation_price is not None:
+                    liquidation_price = float(liquidation_price)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise PortfolioRestoreError(f"Cannot read position[{idx}] from snapshot: {exc}") from exc
+
+            if quantity < 0.0:
+                raise PortfolioRestoreError(f"Position[{idx}] quantity must be >= 0; got {quantity}")
+            if leverage < 1.0 or leverage > _MAX_LEVERAGE:
+                raise PortfolioRestoreError(
+                    f"Position[{idx}] leverage must be in [1.0, {_MAX_LEVERAGE}]; got {leverage}"
+                )
+
+            pos = _MutablePosition(
+                symbol=symbol,
+                exchange=exchange,
+                side=side,
+                quantity=quantity,
+                avg_entry_price=avg_entry_price,
+                mark_price=mark_price,
+                leverage=leverage,
+                realized_pnl=realized_pnl,
+                liquidation_price=liquidation_price,
+            )
+            tracker._positions[(symbol, exchange)] = pos
+
+        return tracker
+
     @staticmethod
     def _validate_fill(fill: SyntheticFill) -> None:
         """Validate fill fields. Raises FillValidationError on failure."""
