@@ -22,6 +22,7 @@ from crypto_core.guard.models import (
     NoTradeDecision,
     NoTradeReason,
     RiskGuardInput,
+    TemporalInput,
 )
 from crypto_core.guard.no_trade_guard import NoTradeConfig, NoTradeGuard
 from crypto_core.orchestrator.models import MarketDataInput, PipelineResult
@@ -35,6 +36,8 @@ from crypto_core.risk.models import RiskDecision, RiskEvaluation
 from crypto_core.state.engine import SystemStateEngine
 from crypto_core.state.models import SignalInputs, StateSnapshot, SystemState, is_at_least
 from crypto_core.telemetry.emitter import TelemetryEmitter
+from crypto_core.temporal.models import TemporalSnapshot
+from crypto_core.temporal.scheduler import TemporalScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +87,7 @@ class PipelineOrchestrator:
         position_tracker: PositionTracker | None = None,
         regime_tracker: MarketRegimeTracker | None = None,
         edge_health_tracker: EdgeHealthTracker | None = None,
+        temporal_scheduler: TemporalScheduler | None = None,
     ) -> None:
         self._cfg = config or PipelineConfig()
         self._state_engine = state_engine or SystemStateEngine()
@@ -97,6 +101,8 @@ class PipelineOrchestrator:
         self._regime_tracker: MarketRegimeTracker | None = regime_tracker
         # EdgeHealthTracker is optional — None = edge family disabled (NT-E skipped)
         self._edge_health_tracker: EdgeHealthTracker | None = edge_health_tracker
+        # TemporalScheduler is optional — None = temporal family disabled (NT-T skipped)
+        self._temporal_scheduler: TemporalScheduler | None = temporal_scheduler
         from pathlib import Path
 
         self._telemetry = telemetry_emitter or (
@@ -229,6 +235,14 @@ class PipelineOrchestrator:
             )
             # edge_health_input may be None if no history yet — that's correct.
 
+        # Build temporal input — uses current scheduler state (deterministic).
+        # When scheduler is None, temporal=None → NT-T family explicitly disabled.
+        temporal_input: TemporalInput | None = None
+        temporal_snap: TemporalSnapshot | None = None
+        if self._temporal_scheduler is not None:
+            temporal_snap = self._temporal_scheduler.snapshot(current_ns=ts)
+            temporal_input = self._temporal_scheduler.to_temporal_input(temporal_snap)
+
         guard_ctx = NoTradeContext(
             symbol=data.symbol,
             exchange=data.exchange,
@@ -243,6 +257,7 @@ class PipelineOrchestrator:
             risk=risk_guard_input,
             market=market_regime_input,
             edge=edge_health_input,
+            temporal=temporal_input,
         )
         no_trade = self._guard.evaluate(guard_ctx)
         guard_latency_ms = (time.time_ns() - stage_t0) / 1e6
@@ -262,10 +277,21 @@ class PipelineOrchestrator:
             if regime_snap.mean_pairwise_correlation is not None:
                 _tele_regime["correlation_breakdown_score"] = round(regime_snap.mean_pairwise_correlation, 4)
 
+        # Temporal telemetry — only emit fields when temporal scheduler is active.
+        _tele_temporal: dict[str, object] = {"temporal_snapshot_available": temporal_snap is not None}
+        if temporal_snap is not None:
+            _tele_temporal["startup_warmup_active"] = temporal_snap.startup_warmup_active
+            _tele_temporal["ks_cooldown_active"] = temporal_snap.ks_cooldown_active
+            _tele_temporal["active_event_count"] = len(temporal_snap.active_events)
+            if temporal_snap.active_events:
+                _tele_temporal["active_event_window"] = temporal_snap.active_events[0].event_id
+            if temporal_snap.cooldown.cooldown_until_ns > 0:
+                _tele_temporal["cooldown_until_ns"] = temporal_snap.cooldown.cooldown_until_ns
+
         self._emit_telemetry_safe(
             "guard",
             guard_latency_ms,
-            {"allowed": no_trade.allowed, "reason": str(no_trade.reason), **_tele_regime},
+            {"allowed": no_trade.allowed, "reason": str(no_trade.reason), **_tele_regime, **_tele_temporal},
         )
 
         # ── Stage 3: Edge ───────────────────────────────────────────────
@@ -330,6 +356,12 @@ class PipelineOrchestrator:
         # Backward-compat floor: if caller supplied a legacy kill_switch_level
         # that exceeds the computed level, honour it (higher always wins).
         computed_ks_level = max(ks_result.level, kill_switch_level)
+
+        # Notify temporal scheduler of this cycle's KS level (for next cycle).
+        # This allows NT-T02 (KS cooldown) to fire on the following cycle
+        # without the guard needing to know about the current KS result.
+        if self._temporal_scheduler is not None:
+            self._temporal_scheduler.notify_ks_event(level=computed_ks_level, current_ns=ts)
 
         # ── Stage 4: Risk (v2) ──────────────────────────────────────────
         # All optional v2 gates (dtl, kelly, cvar, portfolio) are explicitly
