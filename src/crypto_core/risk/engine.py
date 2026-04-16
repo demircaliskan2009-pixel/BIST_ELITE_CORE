@@ -1,4 +1,4 @@
-﻿"""Risk Engine v1 + v2 â€” fail-closed approval gate (PRD Â§1.14â€“Â§1.28).
+"""Risk Engine v1 + v2 â€” fail-closed approval gate (PRD Â§1.14â€“Â§1.28).
 
 v1 evaluate() â€” 4-gate chain (unchanged, fully backward compatible).
 v2 evaluate_v2() â€” extends v1 with 5 additional gates:
@@ -342,18 +342,12 @@ class RiskEngine:
             evidence["block"] = "dtl_invalid_price"
             return self._blocked_v2(RiskBlockReason.DTL_UNSAFE, r, evidence), None
 
-        dtl_pct = (
-            abs(dtl.current_price - dtl.liquidation_price)
-            / dtl.current_price
-            * 100.0
-        )
+        dtl_pct = abs(dtl.current_price - dtl.liquidation_price) / dtl.current_price * 100.0
         evidence["dtl_pct"] = dtl_pct
         evidence["dtl_min_safe_pct"] = dtl.min_safe_distance_pct
 
         if dtl_pct < dtl.min_safe_distance_pct:
-            evidence["block"] = (
-                f"dtl_unsafe:{dtl_pct:.2f}%<{dtl.min_safe_distance_pct:.2f}%"
-            )
+            evidence["block"] = f"dtl_unsafe:{dtl_pct:.2f}%<{dtl.min_safe_distance_pct:.2f}%"
             return self._blocked_v2(RiskBlockReason.DTL_UNSAFE, r, evidence), dtl_pct
 
         return None, dtl_pct
@@ -416,17 +410,20 @@ class RiskEngine:
         cvar = r.cvar
         assert cvar is not None  # guaranteed by caller
 
+        evidence["cvar_available"] = cvar.available
+        evidence["cvar_history_count"] = cvar.history_count
+
         if cvar.cvar99_pct is None:
             evidence["cvar_status"] = "unavailable"
             return None
 
         evidence["cvar99_pct"] = cvar.cvar99_pct
         evidence["cvar_limit_pct"] = cvar.cvar_limit_pct
+        if cvar.var99_pct is not None:
+            evidence["var99_pct"] = cvar.var99_pct
 
         if cvar.cvar99_pct > cvar.cvar_limit_pct:
-            evidence["block"] = (
-                f"cvar_exceeded:{cvar.cvar99_pct:.2f}>{cvar.cvar_limit_pct:.2f}"
-            )
+            evidence["block"] = f"cvar_exceeded:{cvar.cvar99_pct:.2f}>{cvar.cvar_limit_pct:.2f}"
             return self._blocked_v2(RiskBlockReason.CVAR_LIMIT, r, evidence)
 
         return None
@@ -450,25 +447,17 @@ class RiskEngine:
 
         # Hard cap: system-wide 3Ã— leverage invariant (PRD invariant)
         if p.max_leverage_in_use > _MAX_LEVERAGE:
-            evidence["block"] = (
-                f"portfolio_leverage:{p.max_leverage_in_use:.2f}>{_MAX_LEVERAGE:.2f}"
-            )
+            evidence["block"] = f"portfolio_leverage:{p.max_leverage_in_use:.2f}>{_MAX_LEVERAGE:.2f}"
             return self._blocked_v2(RiskBlockReason.PORTFOLIO_LIMIT, r, evidence)
 
         # Notional exposure cap
         if p.total_exposure_usd > p.max_total_exposure_usd:
-            evidence["block"] = (
-                f"portfolio_exposure:{p.total_exposure_usd:.2f}"
-                f">{p.max_total_exposure_usd:.2f}"
-            )
+            evidence["block"] = f"portfolio_exposure:{p.total_exposure_usd:.2f}>{p.max_total_exposure_usd:.2f}"
             return self._blocked_v2(RiskBlockReason.PORTFOLIO_LIMIT, r, evidence)
 
         # Concurrent position cap
         if p.active_position_count >= p.max_concurrent_positions:
-            evidence["block"] = (
-                f"portfolio_positions:"
-                f"{p.active_position_count}>={p.max_concurrent_positions}"
-            )
+            evidence["block"] = f"portfolio_positions:{p.active_position_count}>={p.max_concurrent_positions}"
             return self._blocked_v2(RiskBlockReason.PORTFOLIO_LIMIT, r, evidence)
 
         return None
@@ -493,4 +482,3 @@ class RiskEngine:
             timestamp_ns=r.timestamp_ns,
             kill_switch_level=r.kill_switch_level,
         )
-

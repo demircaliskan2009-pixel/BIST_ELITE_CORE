@@ -22,15 +22,20 @@ _T0_NS = 1_000_000_000_000
 _NS_PER_S = 1_000_000_000
 
 
-def _trade(side: TradeSide, qty: float = 1.0) -> TradeEvent:
+def _trade(
+    side: TradeSide,
+    qty: float = 1.0,
+    price: float = 50_000.0,
+    timestamp_ns: int = _T0_NS,
+) -> TradeEvent:
     return TradeEvent(
         trade_id=f"t{side}{qty}",
         symbol="BTCUSDT",
         exchange=Exchange.BINANCE,
         side=side,
-        price=50_000.0,
+        price=price,
         qty=qty,
-        timestamp_ns=_T0_NS,
+        timestamp_ns=timestamp_ns,
         sequence_no=1,
         is_maker=False,
     )
@@ -51,6 +56,29 @@ def _healthy_data(n_buys: int = 30, n_sells: int = 10) -> MarketDataInput:
         feed_recovery_state="ready",
         book_bid_price=49_900.0,
         book_ask_price=50_100.0,
+        book_bid_size=1.0,
+        book_ask_size=1.0,
+    )
+
+
+def _healthy_data_at(price: float, timestamp_ns: int) -> MarketDataInput:
+    trades = tuple(
+        [_trade(TradeSide.BUY, price=price, timestamp_ns=timestamp_ns) for _ in range(30)]
+        + [_trade(TradeSide.SELL, price=price, timestamp_ns=timestamp_ns) for _ in range(10)]
+    )
+    return MarketDataInput(
+        symbol="BTCUSDT",
+        exchange="binance",
+        timestamp_ns=timestamp_ns,
+        trades=trades,
+        book_last_update_ns=timestamp_ns - 100 * 1_000_000,
+        book_has_snapshot=True,
+        book_bid_count=5,
+        book_ask_count=5,
+        feed_connection_state="connected",
+        feed_recovery_state="ready",
+        book_bid_price=price - 100.0,
+        book_ask_price=price + 100.0,
         book_bid_size=1.0,
         book_ask_size=1.0,
     )
@@ -454,6 +482,119 @@ class TestKillSwitchEngineIntegration:
         assert r1.ks_result.level == r2.ks_result.level
         assert r1.ks_result.winning_trigger == r2.ks_result.winning_trigger
         assert set(r1.ks_result.active_triggers) == set(r2.ks_result.active_triggers)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5H — live CVaR integration
+# ---------------------------------------------------------------------------
+
+
+class TestCVaRIntegration:
+    def _tracker(self):
+        from crypto_core.cvar import CVaRConfig
+        from crypto_core.execution.models import OrderIntent
+        from crypto_core.portfolio.fills import SyntheticFill
+        from crypto_core.portfolio.tracker import PositionTracker
+
+        tracker = PositionTracker(
+            initial_nav_usd=100_000.0,
+            cvar_config=CVaRConfig(rolling_window=3, min_history=3),
+        )
+        tracker.apply_fill(
+            SyntheticFill(
+                symbol="BTCUSDT",
+                exchange="binance",
+                intent=OrderIntent.BUY,
+                quantity=3.0,
+                fill_price=50_000.0,
+                leverage=1.0,
+                mode=ExecutionMode.PAPER,
+                order_id="seed-long",
+                timestamp_ns=_T0_NS,
+            )
+        )
+        return tracker
+
+    def _run_price_path(self, orch: PipelineOrchestrator) -> list[PipelineResult]:
+        prices = (50_000.0, 48_000.0, 46_000.0, 44_000.0)
+        return [
+            orch.process(_healthy_data_at(price, _T0_NS + index * _NS_PER_S), _healthy_signals())
+            for index, price in enumerate(prices)
+        ]
+
+    def test_live_tracker_cvar_blocks_pipeline_at_guard_stage(self) -> None:
+        from crypto_core.guard.no_trade_guard import NoTradeConfig
+
+        tracker = self._tracker()
+        cfg = PipelineConfig(
+            emit_telemetry=False,
+            guard=NoTradeConfig(open_risk_cap_pct=300.0, position_concentration_cap_pct=300.0),
+            execution=ExecutionConfig(mode=ExecutionMode.DRY_RUN),
+        )
+        orch = PipelineOrchestrator(config=cfg, position_tracker=tracker)
+
+        results = self._run_price_path(orch)
+        final = results[-1]
+
+        assert final.approved is False
+        assert final.block_stage == "guard"
+        assert "NT-R05" in (final.block_reason or "")
+        assert final.no_trade_decision.allowed is False
+
+    def test_live_tracker_cvar_blocks_pipeline_at_risk_stage(self) -> None:
+        from crypto_core.guard.no_trade_guard import NoTradeConfig
+        from crypto_core.risk.models import RiskBlockReason
+
+        tracker = self._tracker()
+        cfg = PipelineConfig(
+            emit_telemetry=False,
+            guard=NoTradeConfig(
+                open_risk_cap_pct=300.0,
+                position_concentration_cap_pct=300.0,
+                cvar_budget_pct=10.0,
+            ),
+            execution=ExecutionConfig(mode=ExecutionMode.DRY_RUN),
+        )
+        orch = PipelineOrchestrator(config=cfg, position_tracker=tracker)
+
+        results = self._run_price_path(orch)
+        final = results[-1]
+
+        assert final.no_trade_decision.allowed is True
+        assert final.approved is False
+        assert final.block_stage == "risk"
+        assert len(final.risk_evaluations) == 1
+        assert final.risk_evaluations[0].block_reason == RiskBlockReason.CVAR_LIMIT
+        assert final.risk_evaluations[0].evidence["cvar_available"] is True
+
+    def test_risk_telemetry_includes_live_cvar_metrics(self, tmp_path) -> None:
+        from crypto_core.guard.no_trade_guard import NoTradeConfig
+
+        tracker = self._tracker()
+        cfg = PipelineConfig(
+            emit_telemetry=True,
+            telemetry_log_dir=str(tmp_path),
+            guard=NoTradeConfig(
+                open_risk_cap_pct=300.0,
+                position_concentration_cap_pct=300.0,
+                cvar_budget_pct=10.0,
+            ),
+            execution=ExecutionConfig(mode=ExecutionMode.DRY_RUN),
+        )
+        orch = PipelineOrchestrator(config=cfg, position_tracker=tracker)
+
+        self._run_price_path(orch)
+
+        out_files = list(tmp_path.glob("telemetry_*.jsonl"))
+        assert len(out_files) == 1
+        rows = [json.loads(line) for line in out_files[0].read_text(encoding="utf-8").splitlines() if line.strip()]
+        risk_rows = [row for row in rows if row["stage"] == "risk"]
+        assert risk_rows
+        metrics = risk_rows[-1]["metrics"]
+        assert metrics["cvar_available"] is True
+        assert metrics["cvar_history_count"] == 3
+        assert metrics["cvar99_pct"] > 5.0
+        assert metrics["var99_pct"] > 5.0
 
 
 # ---------------------------------------------------------------------------

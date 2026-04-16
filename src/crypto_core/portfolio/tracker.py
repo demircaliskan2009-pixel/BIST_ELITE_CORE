@@ -17,6 +17,7 @@ from __future__ import annotations
 import dataclasses
 import time
 
+from crypto_core.cvar import CVaRConfig, CVaREngine, CVaRSnapshot, ReturnObservation
 from crypto_core.execution.models import OrderIntent
 from crypto_core.portfolio.fills import FillValidationError, SyntheticFill
 from crypto_core.portfolio.models import PortfolioSnapshot, Position, PositionSide
@@ -117,6 +118,7 @@ class PositionTracker:
         self,
         initial_nav_usd: float = 10_000.0,
         margin_used_pct: float | None = None,
+        cvar_config: CVaRConfig | None = None,
     ) -> None:
         """Initialize the tracker.
 
@@ -134,6 +136,11 @@ class PositionTracker:
         self._daily_realized_pnl: float = 0.0
         # optional margin data from exchange (updated externally)
         self._margin_used_pct: float | None = margin_used_pct
+        # bounded historical CVaR return stream state
+        self._cvar_engine = CVaREngine(cvar_config)
+        self._last_cvar_snapshot_ns: int | None = None
+        self._last_cvar_nav_usd: float | None = None
+        self._prev_cvar_nav_usd: float | None = None
 
     # -----------------------------------------------------------------------
     # Fill application
@@ -390,11 +397,12 @@ class PositionTracker:
         self,
         kill_switch_level: int = 0,
         snapshot_ns: int | None = None,
+        cvar_snapshot: CVaRSnapshot | None = None,
     ):  # → RiskGuardInput
         """Produce a RiskGuardInput from current portfolio state.
 
-        Populates all fields that the tracker can compute.  Fields that
-        require external data (CVaR) remain None.
+        Populates all fields that the tracker can compute, including
+        portfolio CVaR when sufficient return history exists.
 
         Args:
             kill_switch_level: caller-supplied KS level (from KS engine).
@@ -403,13 +411,32 @@ class PositionTracker:
         from crypto_core.guard.models import RiskGuardInput
 
         snap = self.portfolio_snapshot(snapshot_ns)
+        cvar = cvar_snapshot if cvar_snapshot is not None else self.cvar_snapshot(snapshot_ns)
         return RiskGuardInput(
             kill_switch_level=kill_switch_level,
             daily_pnl_pct=snap.daily_realized_pnl_pct,
             open_risk_pct=snap.open_risk_pct,
             max_single_position_pct=snap.concentration_max_pct if snap.active_position_count > 0 else None,
-            portfolio_cvar99_pct=None,  # requires CVaR engine — Phase 5E+
+            portfolio_cvar99_pct=cvar.cvar99_pct if cvar.available else None,
             margin_used_pct=snap.margin_used_pct,
+        )
+
+    def to_cvar_input(
+        self,
+        snapshot_ns: int | None = None,
+        cvar_limit_pct: float = 5.0,
+        cvar_snapshot: CVaRSnapshot | None = None,
+    ):
+        """Produce a real CVaRInput from tracked portfolio return history."""
+        from crypto_core.risk.contracts import CVaRInput
+
+        snapshot = cvar_snapshot if cvar_snapshot is not None else self.cvar_snapshot(snapshot_ns)
+        return CVaRInput(
+            cvar99_pct=snapshot.cvar99_pct if snapshot.available else None,
+            cvar_limit_pct=cvar_limit_pct,
+            var99_pct=snapshot.var99_pct if snapshot.available else None,
+            history_count=snapshot.history_count,
+            available=snapshot.available,
         )
 
     def to_portfolio_risk_snapshot(self, snapshot_ns: int | None = None):  # → PortfolioRiskSnapshot
@@ -427,6 +454,20 @@ class PositionTracker:
             max_leverage_in_use=snap.max_leverage_in_use,
         )
 
+    def cvar_snapshot(self, snapshot_ns: int | None = None) -> CVaRSnapshot:
+        """Produce the current bounded historical CVaR snapshot.
+
+        Sampling rules:
+          - one observation per unique snapshot timestamp
+          - duplicate timestamps replace the latest observation baseline
+          - return_pct = (nav_t / nav_t-1 - 1) * 100
+          - zero or invalid NAV raises fail-closed
+        """
+        ts = snapshot_ns if snapshot_ns is not None else time.time_ns()
+        nav = self._effective_nav()
+        self._record_cvar_observation(snapshot_ns=ts, nav_usd=nav)
+        return self._cvar_engine.snapshot(timestamp_ns=ts)
+
     # -----------------------------------------------------------------------
     # Internal helpers
     # -----------------------------------------------------------------------
@@ -435,6 +476,58 @@ class PositionTracker:
         """Compute effective NAV: initial + realized + unrealized PnL."""
         unrealized = sum(p.unrealized_pnl() for p in self._positions.values())
         return self._nav_usd + self._daily_realized_pnl + unrealized
+
+    def _record_cvar_observation(self, snapshot_ns: int, nav_usd: float) -> None:
+        if snapshot_ns <= 0:
+            raise ValueError(f"snapshot_ns must be > 0; got {snapshot_ns}")
+        if nav_usd <= 0.0:
+            raise ValueError(f"effective NAV must be positive for CVaR sampling; got {nav_usd}")
+
+        if self._last_cvar_snapshot_ns is None:
+            self._last_cvar_snapshot_ns = snapshot_ns
+            self._last_cvar_nav_usd = nav_usd
+            return
+
+        if snapshot_ns < self._last_cvar_snapshot_ns:
+            raise ValueError(
+                "snapshot_ns must be monotonically non-decreasing for CVaR sampling; "
+                f"got {snapshot_ns} after {self._last_cvar_snapshot_ns}"
+            )
+
+        if snapshot_ns == self._last_cvar_snapshot_ns:
+            if self._prev_cvar_nav_usd is not None:
+                self._cvar_engine.observe(
+                    ReturnObservation(
+                        timestamp_ns=snapshot_ns,
+                        return_pct=self._compute_return_pct(self._prev_cvar_nav_usd, nav_usd),
+                        nav_usd=nav_usd,
+                    )
+                )
+            self._last_cvar_nav_usd = nav_usd
+            return
+
+        previous_nav = self._last_cvar_nav_usd
+        if previous_nav is None or previous_nav <= 0.0:
+            raise ValueError(f"previous NAV must be positive for CVaR sampling; got {previous_nav}")
+
+        self._cvar_engine.observe(
+            ReturnObservation(
+                timestamp_ns=snapshot_ns,
+                return_pct=self._compute_return_pct(previous_nav, nav_usd),
+                nav_usd=nav_usd,
+            )
+        )
+        self._prev_cvar_nav_usd = previous_nav
+        self._last_cvar_snapshot_ns = snapshot_ns
+        self._last_cvar_nav_usd = nav_usd
+
+    @staticmethod
+    def _compute_return_pct(previous_nav_usd: float, current_nav_usd: float) -> float:
+        if previous_nav_usd <= 0.0:
+            raise ValueError(f"previous_nav_usd must be positive for CVaR sampling; got {previous_nav_usd}")
+        if current_nav_usd <= 0.0:
+            raise ValueError(f"current_nav_usd must be positive for CVaR sampling; got {current_nav_usd}")
+        return (current_nav_usd / previous_nav_usd - 1.0) * 100.0
 
     @staticmethod
     def _validate_fill(fill: SyntheticFill) -> None:

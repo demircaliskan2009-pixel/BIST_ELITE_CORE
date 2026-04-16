@@ -200,10 +200,16 @@ class PipelineOrchestrator:
         # ── Stage 2: Guard ──────────────────────────────────────────────
         stage_t0 = time.time_ns()
         # Build risk guard input — NT-R01 always set; NT-R02–R06 from tracker if available.
+        cvar_snapshot = None
         if self._position_tracker is not None:
+            mark_price = self._resolve_portfolio_mark_price(data)
+            if mark_price is not None:
+                self._position_tracker.update_mark(data.symbol, data.exchange, mark_price)
+            cvar_snapshot = self._position_tracker.cvar_snapshot(snapshot_ns=ts)
             risk_guard_input = self._position_tracker.to_risk_guard_input(
                 kill_switch_level=kill_switch_level,
                 snapshot_ns=ts,
+                cvar_snapshot=cvar_snapshot,
             )
         else:
             # NT-R01 only — all portfolio fields remain None (explicitly unavailable).
@@ -376,12 +382,14 @@ class PipelineOrchestrator:
             self._temporal_scheduler.notify_ks_event(level=computed_ks_level, current_ns=ts)
 
         # ── Stage 4: Risk (v2) ──────────────────────────────────────────
-        # All optional v2 gates (dtl, kelly, cvar, portfolio) are explicitly
-        # None — data unavailable until Phase 5C (position tracker + trade
-        # history).  None causes each gate to skip (documented in contracts.py).
         # Build portfolio risk snapshot — real values from tracker if available.
         portfolio_risk_snap = (
             self._position_tracker.to_portfolio_risk_snapshot(snapshot_ns=ts)
+            if self._position_tracker is not None
+            else None
+        )
+        cvar_input = (
+            self._position_tracker.to_cvar_input(snapshot_ns=ts, cvar_snapshot=cvar_snapshot)
             if self._position_tracker is not None
             else None
         )
@@ -398,7 +406,7 @@ class PipelineOrchestrator:
                 kill_switch_level=computed_ks_level,
                 dtl=None,  # requires exchange-supplied liquidation price
                 kelly=None,  # requires trade history distribution
-                cvar=None,  # requires returns distribution (Phase 5E+)
+                cvar=cvar_input,
                 portfolio=portfolio_risk_snap,  # real values when tracker available
             )
             risk_eval = self._risk_engine.evaluate_v2(risk_input)
@@ -428,12 +436,17 @@ class PipelineOrchestrator:
                 "concentration_max_pct": round(_psnap.concentration_max_pct, 4),
                 "daily_realized_pnl_pct": round(_psnap.daily_realized_pnl_pct, 4),
                 "dtl_available_count": _psnap.dtl_available_count,
+                "cvar_available": cvar_snapshot.available if cvar_snapshot is not None else False,
+                "cvar_history_count": cvar_snapshot.history_count if cvar_snapshot is not None else 0,
                 **(
                     {"margin_utilization_pct": round(_psnap.margin_used_pct, 4)}
                     if _psnap.margin_used_pct is not None
                     else {}
                 ),
             }
+            if cvar_snapshot is not None and cvar_snapshot.available:
+                _tele_portfolio["cvar99_pct"] = round(float(cvar_snapshot.cvar99_pct), 4)
+                _tele_portfolio["var99_pct"] = round(float(cvar_snapshot.var99_pct), 4)
         self._emit_telemetry_safe(
             "risk",
             risk_latency_ms,
@@ -603,6 +616,15 @@ class PipelineOrchestrator:
         if data.trades:
             return float(data.trades[-1].price)
         return 0.0
+
+    @staticmethod
+    def _resolve_portfolio_mark_price(data: MarketDataInput) -> float | None:
+        """Resolve the portfolio mark price used for tracked unrealized PnL."""
+        if data.book_bid_price > 0.0 and data.book_ask_price > 0.0:
+            return (data.book_bid_price + data.book_ask_price) / 2.0
+        if data.trades:
+            return float(data.trades[-1].price)
+        return None
 
     def _emit_telemetry_safe(self, stage: str, latency_ms: float, extra: dict) -> None:
         """Emit telemetry — never raises."""

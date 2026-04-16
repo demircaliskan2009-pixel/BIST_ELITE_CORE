@@ -96,7 +96,7 @@ class KellyInput:
 
 
 # ---------------------------------------------------------------------------
-# CVaR placeholder
+# CVaR
 # ---------------------------------------------------------------------------
 
 
@@ -104,17 +104,18 @@ class KellyInput:
 class CVaRInput:
     """CVaR (Conditional Value-at-Risk) evaluation contract (PRD §1.18).
 
-    v2: structural contract only. Full CVaR requires a historical
-    returns distribution, which is not yet available in the pipeline.
-
-    cvar99_pct = None  → gate skipped, evidence notes "cvar_unavailable"
-    cvar99_pct > 0     → gate enforced against cvar_limit_pct
+    cvar99_pct / var99_pct use percentage-point units, e.g. 4.2 means 4.2%.
+    history_count captures the number of bounded return observations used.
+    available=False or cvar99_pct=None means the gate is explicitly unavailable.
 
     Gate fires when: cvar99_pct > cvar_limit_pct → CVAR_LIMIT
     """
 
     cvar99_pct: float | None = None  # 99th percentile CVaR as % of capital; None = skip
     cvar_limit_pct: float = 5.0  # hard block threshold
+    var99_pct: float | None = None
+    history_count: int = 0
+    available: bool = False
 
 
 # ---------------------------------------------------------------------------

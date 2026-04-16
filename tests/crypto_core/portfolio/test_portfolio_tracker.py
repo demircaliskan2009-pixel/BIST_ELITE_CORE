@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import pytest
 
+from crypto_core.cvar import CVaRConfig
 from crypto_core.execution.models import ExecutionMode, OrderIntent
 from crypto_core.guard.models import RiskGuardInput
 from crypto_core.portfolio.fills import FillValidationError, SyntheticFill
@@ -58,6 +59,18 @@ def _fill(
 
 def _tracker(nav: float = 100_000.0) -> PositionTracker:
     return PositionTracker(initial_nav_usd=nav)
+
+
+def _cvar_tracker(
+    nav: float = 100_000.0,
+    *,
+    rolling_window: int = 4,
+    min_history: int = 3,
+) -> PositionTracker:
+    return PositionTracker(
+        initial_nav_usd=nav,
+        cvar_config=CVaRConfig(rolling_window=rolling_window, min_history=min_history),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +466,54 @@ class TestPortfolioSnapshot:
         snap = t.portfolio_snapshot(snapshot_ns=_T0)
         assert snap.open_risk_pct is not None
         assert snap.open_risk_pct == pytest.approx(50_000.0 / snap.nav_usd * 100.0, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# CVaR sampling and conversion helpers
+# ---------------------------------------------------------------------------
+
+
+class TestCVaRTracker:
+    def test_duplicate_snapshot_timestamp_replaces_latest_return_sample(self) -> None:
+        t = _cvar_tracker(min_history=2)
+
+        t.cvar_snapshot(snapshot_ns=_T0)
+        t.update_nav(95_000.0)
+        t.cvar_snapshot(snapshot_ns=_T0 + 1)
+
+        # Same timestamp: do not add a second observation, replace the latest one.
+        t.update_nav(90_000.0)
+        dup = t.cvar_snapshot(snapshot_ns=_T0 + 1)
+        assert dup.history_count == 1
+        assert dup.available is False
+        assert dup.evidence.last_return_pct == pytest.approx(-10.0)
+
+        t.update_nav(85_000.0)
+        snap = t.cvar_snapshot(snapshot_ns=_T0 + 2)
+        assert snap.history_count == 2
+        assert snap.available is True
+        assert snap.var99_pct == pytest.approx(10.0)
+        assert snap.cvar99_pct == pytest.approx(10.0)
+
+    def test_tracker_surfaces_live_cvar_to_guard_and_risk_inputs(self) -> None:
+        t = _cvar_tracker()
+
+        t.cvar_snapshot(snapshot_ns=_T0)
+        t.update_nav(94_000.0)
+        t.cvar_snapshot(snapshot_ns=_T0 + 1)
+        t.update_nav(88_000.0)
+        t.cvar_snapshot(snapshot_ns=_T0 + 2)
+        t.update_nav(82_000.0)
+
+        guard_input = t.to_risk_guard_input(kill_switch_level=0, snapshot_ns=_T0 + 3)
+        cvar_input = t.to_cvar_input(snapshot_ns=_T0 + 3)
+
+        assert guard_input.portfolio_cvar99_pct is not None
+        assert guard_input.portfolio_cvar99_pct > 5.0
+        assert cvar_input.available is True
+        assert cvar_input.history_count == 3
+        assert cvar_input.var99_pct is not None
+        assert cvar_input.cvar99_pct == pytest.approx(guard_input.portfolio_cvar99_pct)
 
 
 # ---------------------------------------------------------------------------
