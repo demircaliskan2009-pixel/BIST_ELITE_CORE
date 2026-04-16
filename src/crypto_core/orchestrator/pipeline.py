@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict, deque
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from crypto_core.edge.activation import (
     execution_condition_from_runtime,
@@ -27,7 +27,9 @@ from crypto_core.edge.models import SignalDirection
 from crypto_core.edge_health.models import EdgeHealthSnapshot
 from crypto_core.edge_health.tracker import EdgeHealthTracker
 from crypto_core.execution.engine import ExecutionConfig, ExecutionEngine
+from crypto_core.execution.lifecycle import ExecutionLifecycleConfig, ExecutionLifecycleEngine
 from crypto_core.execution.models import BookContext, ExecutionDecision, ExecutionRequest, OrderIntent
+from crypto_core.execution.paper_adapter import PaperAdapterConfig
 from crypto_core.guard.models import (
     EdgeHealthInput,
     MarketRegimeInput,
@@ -82,6 +84,7 @@ class PipelineConfig:
     guard: NoTradeConfig = None  # type: ignore[assignment]
     edge: EdgeEngineConfig = None  # type: ignore[assignment]
     execution: ExecutionConfig = None  # type: ignore[assignment]
+    execution_lifecycle: ExecutionLifecycleConfig = None  # type: ignore[assignment]
     execution_order_size: float = 0.01
     execution_leverage: float = 1.0
     telemetry_log_dir: str = "logs/telemetry"
@@ -94,6 +97,12 @@ class PipelineConfig:
             self.edge = EdgeEngineConfig()
         if self.execution is None:
             self.execution = ExecutionConfig()
+        if self.execution_lifecycle is None:
+            self.execution_lifecycle = ExecutionLifecycleConfig(
+                mode=self.execution.mode,
+                paper_adapter=PaperAdapterConfig(fill_pricer=self.execution.fill_pricer),
+                fill_pricer=self.execution.fill_pricer,
+            )
 
 
 class PipelineOrchestrator:
@@ -128,6 +137,7 @@ class PipelineOrchestrator:
         regime_tracker: MarketRegimeTracker | None = None,
         edge_health_tracker: EdgeHealthTracker | None = None,
         temporal_scheduler: TemporalScheduler | None = None,
+        lifecycle_engine: ExecutionLifecycleEngine | None = None,
     ) -> None:
         self._cfg = config or PipelineConfig()
         self._state_engine = state_engine or SystemStateEngine()
@@ -135,6 +145,8 @@ class PipelineOrchestrator:
         self._edge_engine = EdgeEngine(self._cfg.edge)
         self._risk_engine = RiskEngine()
         self._execution_engine = execution_engine or ExecutionEngine(self._cfg.execution)
+        # Phase 6D: lifecycle engine replaces the raw execute() + SyntheticFillFactory path.
+        self._lifecycle_engine = lifecycle_engine or ExecutionLifecycleEngine(self._cfg.execution_lifecycle)
         self._ks_engine = KillSwitchEngine()
         # PositionTracker is optional — None = portfolio gates skip (Phase 5D+ wired)
         self._position_tracker: PositionTracker | None = position_tracker
@@ -535,7 +547,7 @@ class PipelineOrchestrator:
             },
         )
 
-        # ── Stage 5: Execution ─────────────────────────────────────────
+        # ── Stage 5: Execution (lifecycle-aware) ───────────────────────
         stage_t0 = time.time_ns()
         executable_risk_evals = [
             risk_eval
@@ -543,19 +555,24 @@ class PipelineOrchestrator:
             if risk_eval.approved and risk_eval.edge_signal.direction in (SignalDirection.BUY, SignalDirection.SELL)
         ]
         execution_decisions: list[ExecutionDecision] = []
+        lifecycle_results: list = []
 
         for risk_eval in executable_risk_evals:
             request = self._build_execution_request(data, risk_eval)
-            decision = self._execution_engine.execute(request)
-            if decision.allowed:
-                fill = SyntheticFillFactory.from_decision(
-                    decision,
-                    request,
+            # Phase 6D: use lifecycle engine for full order state machine.
+            lifecycle_result = self._lifecycle_engine.process(request)
+            lifecycle_results.append(lifecycle_result)
+            # Apply fills from lifecycle result to position tracker.
+            for fill_event in lifecycle_result.fill_events:
+                synthetic = SyntheticFillFactory.from_fill_event(
+                    fill_event,
+                    mode=lifecycle_result.order.mode,
                     leverage=self._cfg.execution_leverage,
                 )
                 if self._position_tracker is not None:
-                    self._position_tracker.apply_fill(fill)
-                decision = replace(decision, fill_generated=True)
+                    self._position_tracker.apply_fill(synthetic)
+            # Produce backward-compat ExecutionDecision from lifecycle result.
+            decision = lifecycle_result.to_execution_decision()
             execution_decisions.append(decision)
 
         execution_latency_ms = (time.time_ns() - stage_t0) / 1e6
@@ -568,18 +585,31 @@ class PipelineOrchestrator:
             primary_decision = execution_decisions[0]
             execution_metrics["fill_rate_pct"] = allowed_execution_count / len(execution_decisions) * 100.0
             execution_metrics["execution_fill_generated"] = primary_decision.fill_generated
-            if primary_decision.ref_mid_price is not None:
-                execution_metrics["execution_reference_mid"] = round(primary_decision.ref_mid_price, 8)
             if primary_decision.fill_price is not None:
                 execution_metrics["execution_fill_price"] = round(primary_decision.fill_price, 8)
-            if primary_decision.spread_bps is not None:
-                execution_metrics["execution_spread_bps"] = round(primary_decision.spread_bps, 4)
-            if primary_decision.slippage_bps is not None:
-                execution_metrics["execution_slippage_bps"] = round(primary_decision.slippage_bps, 4)
-            if primary_decision.participation_pct is not None:
-                execution_metrics["execution_participation_pct"] = round(primary_decision.participation_pct, 4)
             if primary_decision.rejection_reason is not None:
                 execution_metrics["execution_rejection_reason"] = str(primary_decision.rejection_reason)
+            # Reference mid-price for slippage analysis
+            if data.book_bid_price > 0.0 and data.book_ask_price > data.book_bid_price:
+                execution_metrics["execution_reference_mid"] = round(
+                    (data.book_bid_price + data.book_ask_price) / 2.0, 8
+                )
+        # Fill event realism metrics from primary lifecycle result
+        if lifecycle_results and lifecycle_results[0].fill_events:
+            primary_fill = lifecycle_results[0].fill_events[0]
+            if primary_fill.spread_bps is not None:
+                execution_metrics["execution_spread_bps"] = round(primary_fill.spread_bps, 4)
+            if primary_fill.slippage_bps is not None:
+                execution_metrics["execution_slippage_bps"] = round(primary_fill.slippage_bps, 4)
+            if primary_fill.participation_pct is not None:
+                execution_metrics["execution_participation_pct"] = round(primary_fill.participation_pct, 6)
+        if lifecycle_results:
+            primary_lc = lifecycle_results[0]
+            execution_metrics["lifecycle_final_state"] = primary_lc.final_state
+            execution_metrics["lifecycle_total_filled_qty"] = primary_lc.total_filled_quantity
+            execution_metrics["lifecycle_event_count"] = len(primary_lc.order.event_history)
+            if primary_lc.average_fill_price is not None:
+                execution_metrics["lifecycle_avg_fill_price"] = round(primary_lc.average_fill_price, 8)
 
         self._update_execution_runtime_sample(
             symbol=data.symbol,
@@ -615,6 +645,7 @@ class PipelineOrchestrator:
             approved=is_approved,
             ks_result=ks_result,
             execution_decisions=tuple(execution_decisions),
+            execution_lifecycle_results=tuple(lifecycle_results),
         )
 
     @staticmethod

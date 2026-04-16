@@ -4,8 +4,10 @@ Only PAPER and DRY_RUN modes generate SyntheticFills.  LIVE fills are not
 supported and will not be added here — they require a broker adapter layer.
 
 PRD reference: §7 Execution Engine.
-Phase 6A: SyntheticFillFactory converts an approved ExecutionDecision into a
-SyntheticFill ready for PositionTracker.apply_fill().
+Phase 6A: SyntheticFillFactory.from_decision converts an approved ExecutionDecision
+          into a SyntheticFill ready for PositionTracker.apply_fill().
+Phase 6D: SyntheticFillFactory.from_fill_event converts a lifecycle FillEvent
+          into a SyntheticFill — the preferred path for lifecycle-driven fills.
 """
 
 from __future__ import annotations
@@ -118,4 +120,50 @@ class SyntheticFillFactory:
             mode=decision.mode,
             order_id=decision.order_id,
             timestamp_ns=decision.timestamp_ns,
+        )
+
+    @staticmethod
+    def from_fill_event(
+        fill_event: object,
+        mode: ExecutionMode,
+        leverage: float = 1.0,
+    ) -> SyntheticFill:
+        """Create a SyntheticFill from a lifecycle FillEvent (Phase 6D).
+
+        This is the preferred path when using the ExecutionLifecycleEngine.
+        The fill_event carries all pricing evidence from the lifecycle.
+
+        Args:
+            fill_event: FillEvent from ExecutionLifecycleResult.fill_events.
+            mode:       ExecutionMode under which the fill was generated.
+            leverage:   leverage at fill time [1.0, 3.0]; default 1.0 for paper.
+
+        Returns:
+            SyntheticFill ready for PositionTracker.apply_fill().
+
+        Raises:
+            ValueError: if fill quantities, price, or leverage are invalid.
+        """
+        # Import here to avoid circular import (fills ← models ← fills)
+        from crypto_core.execution.events import FillEvent  # noqa: PLC0415
+
+        if not isinstance(fill_event, FillEvent):
+            raise ValueError(f"fill_event must be a FillEvent instance; got {type(fill_event)}")
+        fe: FillEvent = fill_event
+        if fe.filled_quantity <= 0.0:
+            raise ValueError(f"FillEvent.filled_quantity must be > 0; got {fe.filled_quantity}")
+        if fe.fill_price is None or fe.fill_price <= 0.0:
+            raise ValueError(f"FillEvent.fill_price must be > 0; got {fe.fill_price}")
+        if leverage <= 0.0 or leverage > 3.0:
+            raise ValueError(f"leverage must be in (0, 3]; got {leverage}")
+        return SyntheticFill(
+            symbol=fe.symbol,
+            exchange=fe.exchange,
+            intent=fe.intent,
+            quantity=fe.filled_quantity,
+            fill_price=fe.fill_price,
+            leverage=leverage,
+            mode=mode,
+            order_id=fe.order_id,
+            timestamp_ns=fe.timestamp_ns,
         )

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 from crypto_core.data.models.events import LiquidationEvent, MarkPriceEvent, TradeEvent
 from crypto_core.edge.models import EdgeSignal
+from crypto_core.execution.lifecycle import ExecutionLifecycleResult
 from crypto_core.execution.models import ExecutionDecision
 from crypto_core.guard.models import NoTradeDecision
 from crypto_core.risk.kill_switch import KillSwitchResult
@@ -82,8 +83,9 @@ class PipelineResult:
     no_trade_decision: NoTradeDecision
     edge_signals: tuple[EdgeSignal, ...]  # one per registered family
     risk_evaluations: tuple[RiskEvaluation, ...]  # one per edge signal
-    block_stage: str | None  # "state" | "guard" | "edge" | "risk" | None
+    block_stage: str | None  # "state" | "guard" | "edge" | "risk" | "execution" | None
     block_reason: str | None
     approved: bool  # True = at least one risk evaluation is APPROVED
     ks_result: KillSwitchResult | None = None  # None only in legacy / test paths
     execution_decisions: tuple[ExecutionDecision, ...] = field(default_factory=tuple)  # Phase 6A
+    execution_lifecycle_results: tuple[ExecutionLifecycleResult, ...] = field(default_factory=tuple)  # Phase 6D
