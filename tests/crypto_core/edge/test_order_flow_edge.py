@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from crypto_core.data.models.events import Exchange, TradeEvent, TradeSide
+from crypto_core.data.models.events import Exchange, MarkPriceEvent, TradeEvent, TradeSide
 from crypto_core.edge.engine import EdgeEngine
 from crypto_core.edge.families.order_flow import (
     OFIConfig,
@@ -12,6 +12,7 @@ from crypto_core.edge.families.order_flow import (
     compute_ofi,
 )
 from crypto_core.edge.models import EdgeFamily, EdgeSignal, SignalDirection
+from crypto_core.edge.registry import EdgeFamilyRegistry
 from crypto_core.guard.models import NoTradeDecision, NoTradeReason
 from crypto_core.state.models import SystemState
 
@@ -50,6 +51,22 @@ def _allow() -> NoTradeDecision:
 
 def _block() -> NoTradeDecision:
     return NoTradeDecision.block(NoTradeReason.STALE_DATA, {"reason": "test"})
+
+
+def _mark_price_event(funding_rate: float = 0.0001) -> MarkPriceEvent:
+    return MarkPriceEvent(
+        symbol="BTCUSDT",
+        exchange=Exchange.BINANCE,
+        mark_price=50_000.0,
+        index_price=50_000.0,
+        funding_rate=funding_rate,
+        next_funding_time_ns=_T0_NS + 8 * 3600 * 1_000_000_000,
+        timestamp_ns=_T0_NS,
+    )
+
+
+def _signal_map(signals: list[EdgeSignal]) -> dict[EdgeFamily, EdgeSignal]:
+    return {signal.family: signal for signal in signals}
 
 
 # ---------------------------------------------------------------------------
@@ -184,19 +201,15 @@ class TestEdgeEngine:
     def test_no_trade_block_returns_invalid_signals(self) -> None:
         engine = EdgeEngine()
         trades = _buys(30) + _sells(10)
-        signals = engine.evaluate(
-            trades, "BTCUSDT", "binance", _block(), SystemState.NORMAL, _T0_NS
-        )
-        assert len(signals) == 1
-        assert signals[0].is_valid is False
-        assert "no_trade_blocked" in (signals[0].block_reason or "")
+        signals = engine.evaluate(trades, "BTCUSDT", "binance", _block(), SystemState.NORMAL, _T0_NS)
+        assert len(signals) == 4
+        assert all(signal.is_valid is False for signal in signals)
+        assert all("no_trade_blocked" in (signal.block_reason or "") for signal in signals)
 
     def test_defensive_state_blocks_all(self) -> None:
         engine = EdgeEngine()
         trades = _buys(30) + _sells(10)
-        signals = engine.evaluate(
-            trades, "BTCUSDT", "binance", _allow(), SystemState.DEFENSIVE, _T0_NS
-        )
+        signals = engine.evaluate(trades, "BTCUSDT", "binance", _allow(), SystemState.DEFENSIVE, _T0_NS)
         assert all(not s.is_valid for s in signals)
         assert all("system_state_blocked" in (s.block_reason or "") for s in signals)
 
@@ -204,17 +217,42 @@ class TestEdgeEngine:
         engine = EdgeEngine()
         trades = _buys(40) + _sells(10)
         signals = engine.evaluate(
-            trades, "BTCUSDT", "binance", _allow(), SystemState.NORMAL, _T0_NS
+            trades,
+            "BTCUSDT",
+            "binance",
+            _allow(),
+            SystemState.NORMAL,
+            _T0_NS,
+            mark_price_event=_mark_price_event(),
         )
-        assert len(signals) == 1
-        assert signals[0].is_valid is True
+        by_family = _signal_map(signals)
+        assert len(signals) == 4
+        assert set(by_family) == set(engine.runtime_families)
+        assert by_family[EdgeFamily.ORDER_FLOW_IMBALANCE].is_valid is True
+        assert by_family[EdgeFamily.FUNDING_RATE].is_valid is True
+        assert by_family[EdgeFamily.VOLATILITY_TRANSITION].family == EdgeFamily.VOLATILITY_TRANSITION
+        assert by_family[EdgeFamily.LIQUIDATION_SIGNAL].family == EdgeFamily.LIQUIDATION_SIGNAL
+        assert "activation_reason" in by_family[EdgeFamily.ORDER_FLOW_IMBALANCE].evidence
+
+    def test_funding_activation_blocks_without_mark_price(self) -> None:
+        engine = EdgeEngine()
+        signals = engine.evaluate(
+            _buys(40) + _sells(10),
+            "BTCUSDT",
+            "binance",
+            _allow(),
+            SystemState.NORMAL,
+            _T0_NS,
+        )
+        funding = _signal_map(signals)[EdgeFamily.FUNDING_RATE]
+        assert funding.is_valid is False
+        assert funding.block_reason == "activation_blocked:funding_feed_unavailable"
+        assert funding.evidence["activation_state"] == "blocked"
 
     def test_halt_state_blocks_all(self) -> None:
         engine = EdgeEngine()
         trades = _buys(30) + _sells(10)
-        signals = engine.evaluate(
-            trades, "BTCUSDT", "binance", _allow(), SystemState.HALT, _T0_NS
-        )
+        signals = engine.evaluate(trades, "BTCUSDT", "binance", _allow(), SystemState.HALT, _T0_NS)
         assert all(not s.is_valid for s in signals)
 
     def test_degraded_state_allows_trading(self) -> None:
@@ -222,7 +260,18 @@ class TestEdgeEngine:
         engine = EdgeEngine()
         trades = _buys(40) + _sells(10)
         signals = engine.evaluate(
-            trades, "BTCUSDT", "binance", _allow(), SystemState.DEGRADED, _T0_NS
+            trades,
+            "BTCUSDT",
+            "binance",
+            _allow(),
+            SystemState.DEGRADED,
+            _T0_NS,
+            mark_price_event=_mark_price_event(),
         )
-        assert len(signals) == 1
-        assert signals[0].is_valid is True
+        assert len(signals) == 4
+        assert _signal_map(signals)[EdgeFamily.ORDER_FLOW_IMBALANCE].is_valid is True
+
+    def test_runtime_families_match_registry(self) -> None:
+        engine = EdgeEngine()
+        registry = EdgeFamilyRegistry()
+        assert engine.runtime_families == registry.runtime_families()

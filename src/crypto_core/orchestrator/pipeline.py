@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 
 from crypto_core.edge.engine import EdgeEngine, EdgeEngineConfig
 from crypto_core.edge.models import SignalDirection
+from crypto_core.edge_health.models import EdgeHealthSnapshot
 from crypto_core.edge_health.tracker import EdgeHealthTracker
 from crypto_core.execution.engine import ExecutionConfig, ExecutionEngine
 from crypto_core.execution.models import BookContext, ExecutionDecision, ExecutionRequest, OrderIntent
@@ -245,6 +246,7 @@ class PipelineOrchestrator:
         # Build edge health input — uses PREVIOUS cycle's history (deterministic).
         # When tracker is None, edge=None → NT-E family explicitly disabled.
         edge_health_input: EdgeHealthInput | None = None
+        family_edge_health: dict[object, EdgeHealthSnapshot] = {}
         if self._edge_health_tracker is not None:
             edge_health_input = self._edge_health_tracker.to_edge_health_input(
                 symbol=data.symbol,
@@ -252,6 +254,15 @@ class PipelineOrchestrator:
                 snapshot_ns=ts,
             )
             # edge_health_input may be None if no history yet — that's correct.
+            family_edge_health = {
+                family: self._edge_health_tracker.snapshot_for_key(
+                    family=str(family),
+                    symbol=data.symbol,
+                    exchange=data.exchange,
+                    snapshot_ns=ts,
+                )
+                for family in self._edge_engine.runtime_families
+            }
 
         # Build temporal input — uses current scheduler state (deterministic).
         # When scheduler is None, temporal=None → NT-T family explicitly disabled.
@@ -321,6 +332,11 @@ class PipelineOrchestrator:
             no_trade=no_trade,
             system_state=state_snap.state,
             timestamp_ns=ts,
+            mark_price_event=data.mark_price_event,
+            feed_connection_state=data.feed_connection_state,
+            feed_recovery_state=data.feed_recovery_state,
+            market_regime=regime_snap,
+            family_edge_health=family_edge_health,
         )
         edge_latency_ms = (time.time_ns() - stage_t0) / 1e6
 

@@ -16,10 +16,45 @@ class EdgeFamily(str):
     pass
 
 
-EdgeFamily.ORDER_FLOW_IMBALANCE = EdgeFamily("order_flow_imbalance")  # Family A
-EdgeFamily.FUNDING_RATE = EdgeFamily("funding_rate")                  # Family B
-EdgeFamily.VOLATILITY_TRANSITION = EdgeFamily("volatility_transition") # Family C
-EdgeFamily.LIQUIDATION_SIGNAL = EdgeFamily("liquidation_signal")       # Family D
+EdgeFamily.ORDER_FLOW_IMBALANCE = EdgeFamily("order_flow_imbalance")  # Project tag for PRD Family A
+EdgeFamily.FUNDING_RATE = EdgeFamily("funding_rate")  # Project tag for PRD Family B
+EdgeFamily.VOLATILITY_TRANSITION = EdgeFamily("volatility_transition")  # Project tag retained; maps to PRD Family D
+EdgeFamily.LIQUIDATION_SIGNAL = EdgeFamily("liquidation_signal")  # Project tag retained; maps to PRD Family C
+# Phase 6B contracts — not yet implemented; runtime blocks them (fail-closed).
+EdgeFamily.CROSS_EXCHANGE_SPREAD = EdgeFamily("cross_exchange_spread")  # Project tag for PRD Family E
+EdgeFamily.LATENCY_ARBITRAGE = EdgeFamily("latency_arbitrage")  # Project tag for PRD Family F
+EdgeFamily.VOL_SURFACE_SKEW = EdgeFamily("vol_surface_skew")  # Project tag for PRD Family G
+
+
+_PRD_FAMILY_CODES: dict[EdgeFamily, str] = {
+    EdgeFamily.ORDER_FLOW_IMBALANCE: "A",
+    EdgeFamily.FUNDING_RATE: "B",
+    EdgeFamily.LIQUIDATION_SIGNAL: "C",
+    EdgeFamily.VOLATILITY_TRANSITION: "D",
+    EdgeFamily.CROSS_EXCHANGE_SPREAD: "E",
+    EdgeFamily.LATENCY_ARBITRAGE: "F",
+    EdgeFamily.VOL_SURFACE_SKEW: "G",
+}
+
+_PRD_FAMILY_NAMES: dict[EdgeFamily, str] = {
+    EdgeFamily.ORDER_FLOW_IMBALANCE: "order_flow",
+    EdgeFamily.FUNDING_RATE: "funding",
+    EdgeFamily.LIQUIDATION_SIGNAL: "liquidation",
+    EdgeFamily.VOLATILITY_TRANSITION: "volatility",
+    EdgeFamily.CROSS_EXCHANGE_SPREAD: "cross_exchange",
+    EdgeFamily.LATENCY_ARBITRAGE: "session_handoff",
+    EdgeFamily.VOL_SURFACE_SKEW: "btc_dominance",
+}
+
+
+def edge_prd_family_code(family: EdgeFamily) -> str:
+    """Return the authoritative PRD family code for a project family tag."""
+    return _PRD_FAMILY_CODES.get(family, "UNKNOWN")
+
+
+def edge_prd_family_name(family: EdgeFamily) -> str:
+    """Return the authoritative PRD family name for a project family tag."""
+    return _PRD_FAMILY_NAMES.get(family, "unknown")
 
 
 class SignalDirection(str):
@@ -48,11 +83,11 @@ class EdgeSignal:
     symbol: str
     exchange: str
     direction: SignalDirection
-    confidence: float         # [0.0, 1.0] — signal strength
-    score: float              # raw family-specific score (signed)
+    confidence: float  # [0.0, 1.0] — signal strength
+    score: float  # raw family-specific score (signed)
     evidence: dict[str, object]
     timestamp_ns: int
-    is_valid: bool            # False = fail-closed block
+    is_valid: bool  # False = fail-closed block
     block_reason: str | None  # human-readable if is_valid=False
 
     @classmethod
