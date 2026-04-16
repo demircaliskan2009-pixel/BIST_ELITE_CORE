@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from crypto_core.edge.engine import EdgeEngine, EdgeEngineConfig
+from crypto_core.edge.models import SignalDirection
 from crypto_core.edge_health.tracker import EdgeHealthTracker
+from crypto_core.execution.engine import ExecutionConfig, ExecutionEngine
+from crypto_core.execution.models import BookContext, ExecutionDecision, ExecutionRequest, OrderIntent
 from crypto_core.guard.models import (
     EdgeHealthInput,
     MarketRegimeInput,
@@ -26,6 +29,7 @@ from crypto_core.guard.models import (
 )
 from crypto_core.guard.no_trade_guard import NoTradeConfig, NoTradeGuard
 from crypto_core.orchestrator.models import MarketDataInput, PipelineResult
+from crypto_core.portfolio.fills import SyntheticFillFactory
 from crypto_core.portfolio.tracker import PositionTracker
 from crypto_core.regime.models import LiquiditySignal, RegimeSignalInput
 from crypto_core.regime.tracker import MarketRegimeTracker
@@ -48,6 +52,9 @@ class PipelineConfig:
 
     guard: NoTradeConfig = None  # type: ignore[assignment]
     edge: EdgeEngineConfig = None  # type: ignore[assignment]
+    execution: ExecutionConfig = None  # type: ignore[assignment]
+    execution_order_size: float = 0.01
+    execution_leverage: float = 1.0
     telemetry_log_dir: str = "logs/telemetry"
     emit_telemetry: bool = True
 
@@ -56,6 +63,8 @@ class PipelineConfig:
             self.guard = NoTradeConfig()
         if self.edge is None:
             self.edge = EdgeEngineConfig()
+        if self.execution is None:
+            self.execution = ExecutionConfig()
 
 
 class PipelineOrchestrator:
@@ -66,7 +75,8 @@ class PipelineOrchestrator:
       2. Guard evaluation    — NoTradeContext → NoTradeDecision
       3. Edge evaluation     — trades + state + guard → EdgeSignals
       4. Risk evaluation     — EdgeSignal + state + guard → RiskEvaluation
-      5. Telemetry emission  — per-stage metrics → JSONL
+            5. Execution evaluation — approved risk outputs → execution decisions
+            6. Telemetry emission   — per-stage metrics → JSONL
 
     Architecture note:
       This orchestrator is in-process and synchronous.
@@ -83,6 +93,7 @@ class PipelineOrchestrator:
         self,
         config: PipelineConfig | None = None,
         state_engine: SystemStateEngine | None = None,
+        execution_engine: ExecutionEngine | None = None,
         telemetry_emitter: TelemetryEmitter | None = None,
         position_tracker: PositionTracker | None = None,
         regime_tracker: MarketRegimeTracker | None = None,
@@ -94,6 +105,7 @@ class PipelineOrchestrator:
         self._guard = NoTradeGuard(self._cfg.guard)
         self._edge_engine = EdgeEngine(self._cfg.edge)
         self._risk_engine = RiskEngine()
+        self._execution_engine = execution_engine or ExecutionEngine(self._cfg.execution)
         self._ks_engine = KillSwitchEngine()
         # PositionTracker is optional — None = portfolio gates skip (Phase 5D+ wired)
         self._position_tracker: PositionTracker | None = position_tracker
@@ -436,9 +448,65 @@ class PipelineOrchestrator:
             },
         )
 
+        # ── Stage 5: Execution ─────────────────────────────────────────
+        stage_t0 = time.time_ns()
+        executable_risk_evals = [
+            risk_eval
+            for risk_eval in risk_evals
+            if risk_eval.approved and risk_eval.edge_signal.direction in (SignalDirection.BUY, SignalDirection.SELL)
+        ]
+        execution_decisions: list[ExecutionDecision] = []
+
+        for risk_eval in executable_risk_evals:
+            request = self._build_execution_request(data, risk_eval)
+            decision = self._execution_engine.execute(request)
+            if decision.allowed:
+                fill = SyntheticFillFactory.from_decision(
+                    decision,
+                    request,
+                    leverage=self._cfg.execution_leverage,
+                )
+                if self._position_tracker is not None:
+                    self._position_tracker.apply_fill(fill)
+                decision = replace(decision, fill_generated=True)
+            execution_decisions.append(decision)
+
+        execution_latency_ms = (time.time_ns() - stage_t0) / 1e6
+        execution_metrics: dict[str, object] = {
+            "execution_decision_count": len(execution_decisions),
+            "approved_risk_count": len(executable_risk_evals),
+        }
+        if execution_decisions:
+            allowed_execution_count = sum(1 for decision in execution_decisions if decision.allowed)
+            primary_decision = execution_decisions[0]
+            execution_metrics["fill_rate_pct"] = allowed_execution_count / len(execution_decisions) * 100.0
+            execution_metrics["execution_fill_generated"] = primary_decision.fill_generated
+            if primary_decision.ref_mid_price is not None:
+                execution_metrics["execution_reference_mid"] = round(primary_decision.ref_mid_price, 8)
+            if primary_decision.fill_price is not None:
+                execution_metrics["execution_fill_price"] = round(primary_decision.fill_price, 8)
+            if primary_decision.spread_bps is not None:
+                execution_metrics["execution_spread_bps"] = round(primary_decision.spread_bps, 4)
+            if primary_decision.slippage_bps is not None:
+                execution_metrics["execution_slippage_bps"] = round(primary_decision.slippage_bps, 4)
+            if primary_decision.participation_pct is not None:
+                execution_metrics["execution_participation_pct"] = round(primary_decision.participation_pct, 4)
+            if primary_decision.rejection_reason is not None:
+                execution_metrics["execution_rejection_reason"] = str(primary_decision.rejection_reason)
+
+        self._emit_telemetry_safe("execution", execution_latency_ms, execution_metrics)
+
         # ── Determine overall result ────────────────────────────────────
         is_approved = any(r.approved for r in risk_evals)
-        block_stage, block_reason = self._find_block(state_snap, no_trade, edge_signals, risk_evals)
+        if executable_risk_evals:
+            is_approved = any(decision.allowed for decision in execution_decisions)
+        block_stage, block_reason = self._find_block(
+            state_snap,
+            no_trade,
+            edge_signals,
+            risk_evals,
+            execution_decisions,
+        )
 
         t_end = time.time_ns()
         return PipelineResult(
@@ -452,6 +520,7 @@ class PipelineOrchestrator:
             block_reason=block_reason,
             approved=is_approved,
             ks_result=ks_result,
+            execution_decisions=tuple(execution_decisions),
         )
 
     @staticmethod
@@ -460,6 +529,7 @@ class PipelineOrchestrator:
         no_trade: NoTradeDecision,
         edge_signals: list,
         risk_evals: list[RiskEvaluation],
+        execution_decisions: list[ExecutionDecision],
     ) -> tuple[str | None, str | None]:
         """Identify the first blocking stage and reason."""
         if is_at_least(state_snap.state, SystemState.HALT):
@@ -471,7 +541,68 @@ class PipelineOrchestrator:
         if risk_evals and all(r.decision == RiskDecision.BLOCKED for r in risk_evals):
             reasons = {str(r.block_reason) for r in risk_evals}
             return "risk", ",".join(sorted(reasons))
+        approved_directional = any(
+            risk_eval.approved and risk_eval.edge_signal.direction in (SignalDirection.BUY, SignalDirection.SELL)
+            for risk_eval in risk_evals
+        )
+        if (
+            approved_directional
+            and execution_decisions
+            and all(not decision.allowed for decision in execution_decisions)
+        ):
+            reasons = {
+                str(decision.rejection_reason)
+                for decision in execution_decisions
+                if decision.rejection_reason is not None
+            }
+            return "execution", ",".join(sorted(reasons))
         return None, None
+
+    def _build_execution_request(
+        self,
+        data: MarketDataInput,
+        risk_eval: RiskEvaluation,
+    ) -> ExecutionRequest:
+        """Build a deterministic execution request from one approved risk output."""
+        direction = risk_eval.edge_signal.direction
+        intent = OrderIntent.BUY if direction == SignalDirection.BUY else OrderIntent.SELL
+        book = self._build_book_context(data)
+        price_hint = self._resolve_price_hint(data, book)
+        return ExecutionRequest(
+            symbol=risk_eval.edge_signal.symbol,
+            exchange=risk_eval.edge_signal.exchange,
+            intent=intent,
+            size=self._cfg.execution_order_size,
+            price_hint=price_hint,
+            risk_evaluation=risk_eval,
+            timestamp_ns=data.timestamp_ns,
+            book=book,
+        )
+
+    @staticmethod
+    def _build_book_context(data: MarketDataInput) -> BookContext | None:
+        """Return top-of-book context when a valid snapshot is available."""
+        if not data.book_has_snapshot:
+            return None
+        if data.book_bid_price <= 0.0 or data.book_ask_price <= 0.0:
+            return None
+        return BookContext(
+            bid_price=data.book_bid_price,
+            ask_price=data.book_ask_price,
+            bid_size=data.book_bid_size,
+            ask_size=data.book_ask_size,
+            bid_level_count=data.book_bid_count,
+            ask_level_count=data.book_ask_count,
+        )
+
+    @staticmethod
+    def _resolve_price_hint(data: MarketDataInput, book: BookContext | None) -> float:
+        """Resolve a deterministic reference price for dry-run or degraded paper mode."""
+        if book is not None:
+            return book.mid_price
+        if data.trades:
+            return float(data.trades[-1].price)
+        return 0.0
 
     def _emit_telemetry_safe(self, stage: str, latency_ms: float, extra: dict) -> None:
         """Emit telemetry — never raises."""

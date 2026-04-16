@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from crypto_core.data.models.events import Exchange, TradeEvent, TradeSide
+from crypto_core.execution.engine import ExecutionConfig
+from crypto_core.execution.fill_pricer import FillPricerConfig
+from crypto_core.execution.models import ExecutionMode, RejectionReason
 from crypto_core.orchestrator.models import MarketDataInput, PipelineResult
 from crypto_core.orchestrator.pipeline import PipelineConfig, PipelineOrchestrator
 from crypto_core.state.models import SignalInputs, SystemState
@@ -44,6 +49,10 @@ def _healthy_data(n_buys: int = 30, n_sells: int = 10) -> MarketDataInput:
         book_ask_count=5,
         feed_connection_state="connected",
         feed_recovery_state="ready",
+        book_bid_price=49_900.0,
+        book_ask_price=50_100.0,
+        book_bid_size=1.0,
+        book_ask_size=1.0,
     )
 
 
@@ -59,6 +68,10 @@ def _stale_data() -> MarketDataInput:
         book_ask_count=5,
         feed_connection_state="connected",
         feed_recovery_state="ready",
+        book_bid_price=49_900.0,
+        book_ask_price=50_100.0,
+        book_bid_size=1.0,
+        book_ask_size=1.0,
     )
 
 
@@ -169,6 +182,10 @@ class TestInvalidEdgeBlock:
             book_ask_count=5,
             feed_connection_state="connected",
             feed_recovery_state="ready",
+            book_bid_price=49_900.0,
+            book_ask_price=50_100.0,
+            book_bid_size=1.0,
+            book_ask_size=1.0,
         )
         result = orch.process(data, _healthy_signals())
         assert result.approved is False
@@ -437,3 +454,105 @@ class TestKillSwitchEngineIntegration:
         assert r1.ks_result.level == r2.ks_result.level
         assert r1.ks_result.winning_trigger == r2.ks_result.winning_trigger
         assert set(r1.ks_result.active_triggers) == set(r2.ks_result.active_triggers)
+
+
+# ---------------------------------------------------------------------------
+# Phase 6A — execution realism integration
+# ---------------------------------------------------------------------------
+
+
+class TestExecutionIntegration:
+    def test_paper_execution_updates_tracker_and_result(self) -> None:
+        from crypto_core.portfolio.tracker import PositionTracker
+
+        tracker = PositionTracker(initial_nav_usd=100_000.0)
+        cfg = PipelineConfig(
+            emit_telemetry=False,
+            execution=ExecutionConfig(mode=ExecutionMode.PAPER),
+        )
+        orch = PipelineOrchestrator(config=cfg, position_tracker=tracker)
+
+        result = orch.process(_healthy_data(), _healthy_signals())
+
+        assert result.approved is True
+        assert result.block_stage is None
+        assert len(result.execution_decisions) == 1
+        decision = result.execution_decisions[0]
+        assert decision.allowed is True
+        assert decision.fill_generated is True
+        assert decision.fill_price is not None
+
+        snap = tracker.portfolio_snapshot(snapshot_ns=_T0_NS)
+        assert snap.active_position_count == 1
+        assert snap.total_notional_usd == pytest.approx(0.01 * decision.fill_price, rel=1e-6)
+
+    def test_execution_rejection_blocks_pipeline_without_mutation(self) -> None:
+        from crypto_core.portfolio.tracker import PositionTracker
+
+        tracker = PositionTracker(initial_nav_usd=100_000.0)
+        cfg = PipelineConfig(
+            emit_telemetry=False,
+            execution=ExecutionConfig(
+                mode=ExecutionMode.PAPER,
+                fill_pricer=FillPricerConfig(max_spread_bps=5.0),
+            ),
+        )
+        orch = PipelineOrchestrator(config=cfg, position_tracker=tracker)
+
+        result = orch.process(_healthy_data(), _healthy_signals())
+
+        assert result.approved is False
+        assert result.block_stage == "execution"
+        assert len(result.execution_decisions) == 1
+        decision = result.execution_decisions[0]
+        assert decision.allowed is False
+        assert decision.rejection_reason == RejectionReason.EXCESSIVE_SPREAD
+
+        snap = tracker.portfolio_snapshot(snapshot_ns=_T0_NS)
+        assert snap.active_position_count == 0
+
+    def test_execution_stage_is_deterministic_for_identical_inputs(self) -> None:
+        cfg = PipelineConfig(
+            emit_telemetry=False,
+            execution=ExecutionConfig(mode=ExecutionMode.PAPER),
+        )
+        orch1 = PipelineOrchestrator(config=cfg)
+        orch2 = PipelineOrchestrator(config=cfg)
+
+        r1 = orch1.process(_healthy_data(), _healthy_signals())
+        r2 = orch2.process(_healthy_data(), _healthy_signals())
+
+        assert len(r1.execution_decisions) == 1
+        assert len(r2.execution_decisions) == 1
+        d1 = r1.execution_decisions[0]
+        d2 = r2.execution_decisions[0]
+        assert d1.allowed == d2.allowed
+        assert d1.fill_price == d2.fill_price
+        assert d1.spread_bps == d2.spread_bps
+        assert d1.slippage_bps == d2.slippage_bps
+        assert d1.participation_pct == d2.participation_pct
+
+    def test_execution_telemetry_contains_realism_fields(self, tmp_path) -> None:
+        cfg = PipelineConfig(
+            emit_telemetry=True,
+            telemetry_log_dir=str(tmp_path),
+            execution=ExecutionConfig(mode=ExecutionMode.PAPER),
+        )
+        orch = PipelineOrchestrator(config=cfg)
+
+        result = orch.process(_healthy_data(), _healthy_signals())
+        assert result.approved is True
+
+        out_files = list(tmp_path.glob("telemetry_*.jsonl"))
+        assert len(out_files) == 1
+        lines = out_files[0].read_text(encoding="utf-8").splitlines()
+        telemetry_rows = [json.loads(line) for line in lines if line.strip()]
+        execution_rows = [row for row in telemetry_rows if row["stage"] == "execution"]
+        assert len(execution_rows) == 1
+        metrics = execution_rows[0]["metrics"]
+        assert metrics["execution_fill_generated"] is True
+        assert metrics["execution_reference_mid"] == pytest.approx(50_000.0)
+        assert metrics["execution_fill_price"] > metrics["execution_reference_mid"]
+        assert metrics["execution_spread_bps"] == pytest.approx(40.0)
+        assert metrics["execution_slippage_bps"] > 0.0
+        assert metrics["execution_participation_pct"] == pytest.approx(1.0)
