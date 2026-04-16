@@ -14,10 +14,12 @@ import time
 from dataclasses import dataclass
 
 from crypto_core.edge.engine import EdgeEngine, EdgeEngineConfig
-from crypto_core.guard.models import NoTradeContext, NoTradeDecision, NoTradeReason, RiskGuardInput
+from crypto_core.guard.models import MarketRegimeInput, NoTradeContext, NoTradeDecision, NoTradeReason, RiskGuardInput
 from crypto_core.guard.no_trade_guard import NoTradeConfig, NoTradeGuard
 from crypto_core.orchestrator.models import MarketDataInput, PipelineResult
 from crypto_core.portfolio.tracker import PositionTracker
+from crypto_core.regime.models import LiquiditySignal, RegimeSignalInput
+from crypto_core.regime.tracker import MarketRegimeTracker
 from crypto_core.risk.contracts import KS_LEVEL_NORMAL, RiskInput
 from crypto_core.risk.engine import RiskEngine
 from crypto_core.risk.kill_switch import KillSwitchEngine, KillSwitchInput, KillSwitchResult
@@ -72,6 +74,7 @@ class PipelineOrchestrator:
         state_engine: SystemStateEngine | None = None,
         telemetry_emitter: TelemetryEmitter | None = None,
         position_tracker: PositionTracker | None = None,
+        regime_tracker: MarketRegimeTracker | None = None,
     ) -> None:
         self._cfg = config or PipelineConfig()
         self._state_engine = state_engine or SystemStateEngine()
@@ -81,6 +84,8 @@ class PipelineOrchestrator:
         self._ks_engine = KillSwitchEngine()
         # PositionTracker is optional — None = portfolio gates skip (Phase 5D+ wired)
         self._position_tracker: PositionTracker | None = position_tracker
+        # MarketRegimeTracker is optional — None = market family disabled (NT-M skipped)
+        self._regime_tracker: MarketRegimeTracker | None = regime_tracker
         from pathlib import Path
 
         self._telemetry = telemetry_emitter or (
@@ -175,6 +180,33 @@ class PipelineOrchestrator:
             # NT-R01 only — all portfolio fields remain None (explicitly unavailable).
             risk_guard_input = RiskGuardInput(kill_switch_level=kill_switch_level)
 
+        # Build market regime input — real values from tracker when available.
+        # When tracker is None, market=None → NT-M family explicitly disabled.
+        market_regime_input: MarketRegimeInput | None = None
+        if self._regime_tracker is not None:
+            liq_signal = LiquiditySignal(
+                bid_level_count=data.book_bid_count,
+                ask_level_count=data.book_ask_count,
+                recent_trade_count=len(data.trades),
+                timestamp_ns=ts,
+            )
+            regime_signal = RegimeSignalInput(
+                snapshot_ns=ts,
+                liquidity=liq_signal,
+                leverage_proxy=None,  # unavailable until OI/MC feed integrated
+                correlation_score=None,  # unavailable until cross-asset feed integrated
+            )
+            regime_snap = self._regime_tracker.update(regime_signal)
+            market_regime_input = MarketRegimeInput(
+                liquidity_score=regime_snap.liquidity_score,
+                liquidity_crisis_sustained_ms=regime_snap.liquidity_crisis_sustained_ms,
+                oi_mc_ratio=regime_snap.oi_mc_ratio,
+                regime_transition_active=regime_snap.regime_transition_active,
+                mean_pairwise_correlation=regime_snap.mean_pairwise_correlation,
+            )
+        else:
+            regime_snap = None
+
         guard_ctx = NoTradeContext(
             symbol=data.symbol,
             exchange=data.exchange,
@@ -187,14 +219,30 @@ class PipelineOrchestrator:
             feed_recovery_state=data.feed_recovery_state,
             system_state=str(state_snap.state),
             risk=risk_guard_input,
+            market=market_regime_input,
         )
         no_trade = self._guard.evaluate(guard_ctx)
         guard_latency_ms = (time.time_ns() - stage_t0) / 1e6
 
+        # Regime telemetry — only emit fields that have real values.
+        _tele_regime: dict[str, object] = {"market_snapshot_available": regime_snap is not None}
+        if regime_snap is not None:
+            _tele_regime["regime_evidence_quality"] = str(regime_snap.evidence_quality)
+            _tele_regime["regime_transition_active"] = regime_snap.regime_transition_active is True
+            if regime_snap.liquidity_score is not None:
+                _tele_regime["liquidity_score"] = round(regime_snap.liquidity_score, 4)
+            if regime_snap.oi_mc_ratio is not None:
+                _tele_regime["leverage_proxy"] = round(regime_snap.oi_mc_ratio, 6)
+                _tele_regime["leverage_proxy_available"] = True
+            else:
+                _tele_regime["leverage_proxy_available"] = False
+            if regime_snap.mean_pairwise_correlation is not None:
+                _tele_regime["correlation_breakdown_score"] = round(regime_snap.mean_pairwise_correlation, 4)
+
         self._emit_telemetry_safe(
             "guard",
             guard_latency_ms,
-            {"allowed": no_trade.allowed, "reason": str(no_trade.reason)},
+            {"allowed": no_trade.allowed, "reason": str(no_trade.reason), **_tele_regime},
         )
 
         # ── Stage 3: Edge ───────────────────────────────────────────────
