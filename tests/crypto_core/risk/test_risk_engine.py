@@ -37,9 +37,7 @@ def _valid_edge(direction: str = SignalDirection.BUY, confidence: float = 0.5) -
 
 
 def _invalid_edge(reason: str = "test_block") -> EdgeSignal:
-    return EdgeSignal.invalid(
-        EdgeFamily.ORDER_FLOW_IMBALANCE, "BTCUSDT", "binance", reason, _T0_NS
-    )
+    return EdgeSignal.invalid(EdgeFamily.ORDER_FLOW_IMBALANCE, "BTCUSDT", "binance", reason, _T0_NS)
 
 
 def _allow() -> NoTradeDecision:

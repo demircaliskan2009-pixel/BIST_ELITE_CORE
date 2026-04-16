@@ -10,6 +10,12 @@ Fill model:
   - No fill (rejected): book invalid / crossed / excessive spread.
   - No book available: if config allows, fill at price_hint (degraded mode).
 
+Phase 6F additions:
+  - Internal order tracking for poll_open_orders() / ingest_fill_event().
+  - register_restored_orders() for recovery bootstrap.
+  - reconcile_order() → marks paper orphans as STALE (no exchange state).
+  - ingest_fill_event() processes fills against tracked order state.
+
 Invariants:
   - live_capable = False — will never issue real exchange orders.
   - No randomness — identical inputs → identical output.
@@ -20,6 +26,7 @@ PRD reference: §7.1–§7.8 Execution Engine.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 
@@ -34,6 +41,8 @@ from crypto_core.execution.models import (
     SlippageResult,
 )
 from crypto_core.execution.state_machine import Order, OrderState
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -75,6 +84,9 @@ class PaperVenueAdapter(VenueAdapter):
     def __init__(self, config: PaperAdapterConfig | None = None) -> None:
         self._cfg = config or PaperAdapterConfig()
         self._pricer = FillPricer(self._cfg.fill_pricer)
+        # Phase 6F: internal order tracking for reconciliation
+        self._tracked_orders: dict[str, Order] = {}
+        self._last_position_snapshot: dict[str, object] | None = None
 
     # -----------------------------------------------------------------------
     # VenueAdapter interface
@@ -97,6 +109,8 @@ class PaperVenueAdapter(VenueAdapter):
         """Simulate synchronous paper submission and fill."""
         ts = time.time_ns()
         events: list[OrderEvent] = []
+        # Phase 6F: track submitted orders
+        self._tracked_orders[order.order_id] = order
 
         # ── No book context ────────────────────────────────────────────
         if book is None:
@@ -315,28 +329,90 @@ class PaperVenueAdapter(VenueAdapter):
         return [cancel_event, *submit_events]
 
     # -----------------------------------------------------------------------
-    # Live adapter operations — Phase 6E (paper no-ops)
+    # Live adapter operations — Phase 6E/6F (paper implementations)
     # -----------------------------------------------------------------------
 
     def poll_open_orders(self) -> list[str]:
-        """Paper: always empty — fills are synchronous, no pending queue."""
-        return []
+        """Paper: return non-terminal tracked order IDs.
+
+        In paper mode, fills are synchronous so this list is usually empty
+        after process() completes.  It becomes non-empty when orders are
+        registered via register_restored_orders() before reconciliation.
+        """
+        return [oid for oid, order in self._tracked_orders.items() if not order.is_terminal]
 
     def ingest_fill_event(
         self,
         fill: FillEvent,
         timestamp_ns: int,
     ) -> list[OrderEvent]:
-        """Paper: no async fills — always returns empty list."""
-        return []
+        """Paper: process a fill against tracked order state.
+
+        Returns lifecycle events if the fill corresponds to a tracked order.
+        Returns empty list if the order is unknown or already terminal.
+        """
+        order = self._tracked_orders.get(fill.order_id)
+        if order is None:
+            logger.warning("Paper ingest_fill_event: unknown order_id %s", fill.order_id)
+            return []
+        if order.is_terminal:
+            logger.warning("Paper ingest_fill_event: order %s already terminal (%s)", fill.order_id, order.state)
+            return []
+
+        from_state = str(order.state)
+        remaining_after = order.remaining_quantity - fill.filled_quantity
+        if remaining_after <= 0.0:
+            event = _filled_event(order, fill, from_state=from_state, timestamp_ns=timestamp_ns)
+        else:
+            event = _partial_filled_event(order, fill, from_state=from_state, timestamp_ns=timestamp_ns)
+        return [event]
 
     def ingest_position_snapshot(
         self,
         snapshot: dict[str, object],
         timestamp_ns: int,
     ) -> None:
-        """Paper: no external account state — no-op."""
-        return
+        """Paper: store snapshot for audit trail — no external reconciliation."""
+        self._last_position_snapshot = dict(snapshot)
+        logger.info(
+            "Paper adapter received position snapshot at %d with %d entries",
+            timestamp_ns,
+            len(snapshot),
+        )
+
+    def register_restored_orders(self, orders: list[Order]) -> None:
+        """Register orders restored from the execution state store."""
+        for order in orders:
+            self._tracked_orders[order.order_id] = order
+        logger.info("Paper adapter registered %d restored orders", len(orders))
+
+    def reconcile_order(self, order_id: str, timestamp_ns: int) -> list[OrderEvent]:
+        """Paper: mark non-terminal restored orders as STALE.
+
+        Paper mode has no exchange state to query.  Any non-terminal
+        paper order after restart is unrecoverable → STALE (fail-closed).
+        """
+        order = self._tracked_orders.get(order_id)
+        if order is None:
+            return []
+        if order.is_terminal:
+            return []
+
+        from_state = str(order.state)
+        stale_event = OrderEvent(
+            order_id=order_id,
+            event_type=OrderEventType.STALE,
+            from_state=from_state,
+            to_state=str(OrderState.STALE),
+            timestamp_ns=timestamp_ns,
+            reason="paper_no_exchange_state",
+            evidence={
+                "adapter": "paper",
+                "original_state": from_state,
+                "reconciliation": "stale_no_exchange",
+            },
+        )
+        return [stale_event]
 
 
 def _submitted_event(order: Order, timestamp_ns: int, evidence: dict) -> OrderEvent:

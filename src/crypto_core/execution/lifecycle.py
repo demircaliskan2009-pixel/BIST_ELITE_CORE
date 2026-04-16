@@ -1,4 +1,4 @@
-"""Execution lifecycle engine — Phase 6D.
+"""Execution lifecycle engine — Phase 6D/6F.
 
 Separates validation from order lifecycle management.
 
@@ -23,6 +23,14 @@ Paper mode:
   PaperVenueAdapter simulates synchronous fill.  The full lifecycle
   (CREATED → VALIDATED → SUBMITTED → FILLED) completes in one call.
 
+Phase 6F additions:
+  - cancel() with CANCEL_PENDING intermediate state + persistence.
+  - replace() with REPLACE_PENDING intermediate state + persistence.
+  - reconcile_order() for post-recovery reconciliation.
+  - register_restored_orders() for recovery bootstrap.
+  - _apply_single_event() handles new event types (CANCEL_REQUESTED,
+    REPLACE_REQUESTED, STALE).
+
 PRD reference: §7.1–§7.8 Execution Engine.
 """
 
@@ -44,6 +52,7 @@ from crypto_core.execution.models import (
     SlippageResult,
 )
 from crypto_core.execution.paper_adapter import PaperAdapterConfig, PaperVenueAdapter
+from crypto_core.execution.state_machine import _ALLOWED_TRANSITIONS as _ALLOWED_TRANSITIONS_IMPORT
 from crypto_core.execution.state_machine import IllegalOrderTransitionError, Order, OrderState
 from crypto_core.execution.store import ExecutionStateStore, build_order_meta
 from crypto_core.state.models import SystemState, is_at_least
@@ -234,22 +243,53 @@ class ExecutionLifecycleEngine:
                 timestamp_ns=ts,
             )
 
-    def cancel(self, order_id: str, reason: str) -> OrderEvent | None:
+    def cancel(self, order_id: str, reason: str) -> list[OrderEvent]:
         """Cancel an in-flight order by ID.
 
-        Returns the cancel event, or None if the order is unknown.
+        Phase 6F: uses CANCEL_PENDING intermediate state for paper/live parity.
+        Returns the list of lifecycle events, or empty list if order unknown.
         """
         order = self._orders.get(order_id)
         if order is None:
-            return None
+            return []
+        if order.is_terminal:
+            return []
         ts = time.time_ns()
+        events: list[OrderEvent] = []
+
+        # Step 1: transition to CANCEL_PENDING (if FSM allows it)
+        from_state = str(order.state)
+        allowed = _ALLOWED_TRANSITIONS_IMPORT.get(from_state)
+        if allowed is not None and str(OrderState.CANCEL_PENDING) in allowed:
+            cancel_req_event = OrderEvent(
+                order_id=order_id,
+                event_type=OrderEventType.CANCEL_REQUESTED,
+                from_state=from_state,
+                to_state=str(OrderState.CANCEL_PENDING),
+                timestamp_ns=ts,
+                reason=reason,
+                evidence={"cancel_reason": reason},
+            )
+            try:
+                order.transition(OrderState.CANCEL_PENDING, cancel_req_event)
+                self._maybe_persist(cancel_req_event, order)
+                events.append(cancel_req_event)
+            except IllegalOrderTransitionError:
+                logger.warning("CANCEL_PENDING transition failed for order %s", order_id)
+
+        # Step 2: request cancel from adapter → CANCELLED
         cancel_event = self._adapter.request_cancel(order, reason, timestamp_ns=ts)
-        if cancel_event.event_type == OrderEventType.CANCELLED:
+        if str(cancel_event.event_type) == str(OrderEventType.CANCELLED):
             try:
                 order.transition(OrderState.CANCELLED, cancel_event)
+                self._maybe_persist(cancel_event, order)
+                events.append(cancel_event)
             except IllegalOrderTransitionError:
                 logger.warning("Cancel transition failed for order %s — already terminal?", order_id)
-        return cancel_event
+        else:
+            events.append(cancel_event)
+
+        return events
 
     def replace(
         self,
@@ -257,27 +297,55 @@ class ExecutionLifecycleEngine:
         new_quantity: float,
         book: BookContext | None = None,
     ) -> list[OrderEvent]:
-        """Cancel and replace an in-flight order with a new quantity.
+        """Cancel an in-flight order for replacement.
 
-        Returns the list of resulting events (cancel + new fill events).
-        Returns empty list if order_id is unknown.
+        Phase 6F: uses REPLACE_PENDING intermediate state.  Only cancels the
+        original order.  The caller must submit a new order separately if
+        the replacement quantity is desired.
+
+        Returns the list of lifecycle events (REPLACE_PENDING + CANCELLED),
+        or empty list if order_id is unknown.
         """
         order = self._orders.get(order_id)
         if order is None:
             return []
+        if order.is_terminal:
+            return []
         ts = time.time_ns()
-        # Pre-compute pricing for the replacement
-        pricing: SlippageResult | RejectionReason | None = None
-        if book is not None:
-            pricing_result = self._fill_pricer.price_fill(
-                intent=order.intent,
-                size=new_quantity,
-                book=book,
-            )
-            pricing = pricing_result if isinstance(pricing_result, SlippageResult) else None
+        events: list[OrderEvent] = []
 
-        events = self._adapter.request_replace(order, new_quantity, book, pricing, ts)
-        self._apply_events(order, events)
+        # Step 1: transition to REPLACE_PENDING (if FSM allows it)
+        from_state = str(order.state)
+        allowed = _ALLOWED_TRANSITIONS_IMPORT.get(from_state)
+        if allowed is not None and str(OrderState.REPLACE_PENDING) in allowed:
+            replace_req_event = OrderEvent(
+                order_id=order_id,
+                event_type=OrderEventType.REPLACE_REQUESTED,
+                from_state=from_state,
+                to_state=str(OrderState.REPLACE_PENDING),
+                timestamp_ns=ts,
+                reason="cancel_for_replace",
+                evidence={"new_quantity": new_quantity, "original_quantity": order.requested_quantity},
+            )
+            try:
+                order.transition(OrderState.REPLACE_PENDING, replace_req_event)
+                self._maybe_persist(replace_req_event, order)
+                events.append(replace_req_event)
+            except IllegalOrderTransitionError:
+                logger.warning("REPLACE_PENDING transition failed for order %s", order_id)
+
+        # Step 2: cancel original via adapter
+        cancel_event = self._adapter.request_cancel(order, "cancel_for_replace", timestamp_ns=ts)
+        if str(cancel_event.event_type) == str(OrderEventType.CANCELLED):
+            try:
+                order.transition(OrderState.CANCELLED, cancel_event)
+                self._maybe_persist(cancel_event, order)
+                events.append(cancel_event)
+            except IllegalOrderTransitionError:
+                logger.warning("Cancel-for-replace transition failed for order %s", order_id)
+        else:
+            events.append(cancel_event)
+
         return events
 
     # -----------------------------------------------------------------------
@@ -576,6 +644,16 @@ class ExecutionLifecycleEngine:
         elif etype == OrderEventType.EXPIRED:
             order.transition(OrderState.EXPIRED, event)
 
+        # Phase 6F: cancel/replace/stale event types
+        elif etype == OrderEventType.CANCEL_REQUESTED:
+            order.transition(OrderState.CANCEL_PENDING, event)
+
+        elif etype == OrderEventType.REPLACE_REQUESTED:
+            order.transition(OrderState.REPLACE_PENDING, event)
+
+        elif etype == OrderEventType.STALE:
+            order.transition(OrderState.STALE, event)
+
     def _rejected_result(
         self,
         req: ExecutionRequest,
@@ -635,6 +713,67 @@ class ExecutionLifecycleEngine:
             allow_degraded_fill=True,
         )
         return PaperVenueAdapter(cfg)
+
+    # -----------------------------------------------------------------------
+    # Recovery / reconciliation — Phase 6F
+    # -----------------------------------------------------------------------
+
+    def register_restored_orders(self, orders: list[Order]) -> None:
+        """Register orders restored from the execution state store.
+
+        Populates the in-flight order registry and passes them to the
+        adapter for reconciliation support.
+        """
+        for order in orders:
+            self._orders[order.order_id] = order
+        self._adapter.register_restored_orders(orders)
+        logger.info("Lifecycle engine registered %d restored orders", len(orders))
+
+    def reconcile_order(self, order_id: str, timestamp_ns: int) -> list[OrderEvent]:
+        """Reconcile one order through the adapter.
+
+        Returns lifecycle events produced during reconciliation.
+        Applies events to the order state machine and persists them.
+        """
+        order = self._orders.get(order_id)
+        if order is None:
+            return []
+        if order.is_terminal:
+            return []
+
+        events = self._adapter.reconcile_order(order_id, timestamp_ns)
+        for event in events:
+            try:
+                self._apply_single_event(order, event, [])
+                self._maybe_persist(event, order)
+            except IllegalOrderTransitionError:
+                logger.exception(
+                    "Illegal transition during reconciliation for order %s",
+                    order_id,
+                )
+                break
+        return events
+
+    def reconcile_all_orphans(self, orphan_ids: list[str], timestamp_ns: int) -> dict[str, list[OrderEvent]]:
+        """Reconcile all orphan orders through the adapter.
+
+        Returns a dict mapping order_id → reconciliation events.
+        """
+        results: dict[str, list[OrderEvent]] = {}
+        for oid in orphan_ids:
+            events = self.reconcile_order(oid, timestamp_ns)
+            results[oid] = events
+        return results
+
+    @property
+    def tracked_order_ids(self) -> list[str]:
+        """Return all tracked order IDs (for audit/visibility)."""
+        return list(self._orders.keys())
+
+    @property
+    def open_order_ids(self) -> list[str]:
+        """Return non-terminal order IDs (for orchestrator visibility)."""
+        return [oid for oid, order in self._orders.items() if not order.is_terminal]
 
     # -----------------------------------------------------------------------
     # Persistence helpers — Phase 6E

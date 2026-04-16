@@ -1,4 +1,4 @@
-"""Abstract venue adapter contract — Phase 6D/6E paper/live bridge.
+"""Abstract venue adapter contract — Phase 6D/6E/6F paper/live bridge.
 
 VenueAdapter is the single abstraction separating the execution lifecycle
 engine from the venue-specific order submission mechanics.
@@ -10,6 +10,10 @@ Phase 6E additions (live adapter foundation):
   - poll_open_orders():           enumerate known non-terminal order IDs
   - ingest_fill_event():          process an async fill notification from the venue
   - ingest_position_snapshot():   process an account/position state snapshot
+
+Phase 6F additions (reconciliation):
+  - register_restored_orders():   pass restored orders from recovery bootstrap
+  - reconcile_order():            produce reconciliation events for one order
 
 Invariants for all adapter implementations:
   - Never raise — return events with explicit reason codes on failure.
@@ -191,4 +195,38 @@ class VenueAdapter(ABC):
         Args:
             snapshot:     venue-specific position dict (exchange format).
             timestamp_ns: receipt timestamp (wall clock, nanoseconds).
+        """
+
+    # -----------------------------------------------------------------------
+    # Reconciliation operations — Phase 6F
+    # -----------------------------------------------------------------------
+
+    @abstractmethod
+    def register_restored_orders(self, orders: list[Order]) -> None:
+        """Register orders restored from the execution state store.
+
+        Called during recovery bootstrap so the adapter knows about
+        pre-existing orders.  The adapter must track these orders
+        for subsequent poll_open_orders() and reconcile_order() calls.
+
+        Args:
+            orders: Order objects restored from persisted state.
+        """
+
+    @abstractmethod
+    def reconcile_order(self, order_id: str, timestamp_ns: int) -> list[OrderEvent]:
+        """Produce reconciliation events for one restored order.
+
+        Called after recovery bootstrap for each orphan (non-terminal) order.
+
+        Paper adapter: returns a STALE event (paper has no exchange state to query).
+        Live adapter: queries exchange API for order status and produces
+                      the appropriate fill/cancel/stale events.
+
+        Args:
+            order_id:     the order to reconcile.
+            timestamp_ns: wall-clock for reconciliation events.
+
+        Returns:
+            Ordered list of OrderEvent objects.  Empty list if order_id is unknown.
         """

@@ -30,6 +30,7 @@ from crypto_core.execution.engine import ExecutionConfig, ExecutionEngine
 from crypto_core.execution.lifecycle import ExecutionLifecycleConfig, ExecutionLifecycleEngine
 from crypto_core.execution.models import BookContext, ExecutionDecision, ExecutionRequest, OrderIntent
 from crypto_core.execution.paper_adapter import PaperAdapterConfig
+from crypto_core.execution.recovery import RecoveryEvidence
 from crypto_core.guard.models import (
     EdgeHealthInput,
     MarketRegimeInput,
@@ -138,6 +139,7 @@ class PipelineOrchestrator:
         edge_health_tracker: EdgeHealthTracker | None = None,
         temporal_scheduler: TemporalScheduler | None = None,
         lifecycle_engine: ExecutionLifecycleEngine | None = None,
+        recovery_evidence: RecoveryEvidence | None = None,
     ) -> None:
         self._cfg = config or PipelineConfig()
         self._state_engine = state_engine or SystemStateEngine()
@@ -169,6 +171,10 @@ class PipelineOrchestrator:
             lambda: deque(maxlen=_PRICE_HISTORY_MAXLEN)
         )
         self._execution_runtime: dict[tuple[str, str], _ExecutionRuntimeSample] = {}
+        # Phase 6F: recovery evidence for orchestrator visibility
+        self._recovery_evidence: RecoveryEvidence | None = recovery_evidence
+        if recovery_evidence is not None:
+            self._emit_recovery_telemetry(recovery_evidence)
 
     def process(
         self,
@@ -928,3 +934,47 @@ class PipelineOrchestrator:
                 self._telemetry.emit_safe(env)
         except Exception:
             logger.exception("Telemetry emission failed in orchestrator")
+
+    def _emit_recovery_telemetry(self, evidence: RecoveryEvidence) -> None:
+        """Emit recovery bootstrap telemetry at initialization."""
+        self._emit_telemetry_safe(
+            "data",
+            0.0,
+            {
+                "recovery_restore_success": evidence.restore_success,
+                "recovery_restored_order_count": evidence.restored_order_count,
+                "recovery_orphan_count": len(evidence.orphan_order_ids),
+                "recovery_reconciled_count": evidence.reconciled_count,
+                "recovery_stale_count": evidence.stale_count,
+                "recovery_unresolved_count": evidence.unresolved_count,
+                "recovery_restored_position_count": evidence.restored_position_count,
+            },
+        )
+
+    def _emit_recovery_telemetry(self, evidence: RecoveryEvidence) -> None:
+        """Emit recovery bootstrap telemetry at initialization."""
+        self._emit_telemetry_safe(
+            "data",
+            0.0,
+            {
+                "recovery_restore_success": evidence.restore_success,
+                "recovery_restored_order_count": evidence.restored_order_count,
+                "recovery_orphan_count": len(evidence.orphan_order_ids),
+                "recovery_reconciled_count": evidence.reconciled_count,
+                "recovery_stale_count": evidence.stale_count,
+                "recovery_unresolved_count": evidence.unresolved_count,
+                "recovery_restored_position_count": evidence.restored_position_count,
+            },
+        )
+
+    @property
+    def recovery_evidence(self) -> RecoveryEvidence | None:
+        """Recovery evidence from the last bootstrap (None if no recovery)."""
+        return self._recovery_evidence
+
+    @property
+    def has_unresolved_orders(self) -> bool:
+        """True if recovery found unresolved orders (execution risk)."""
+        if self._recovery_evidence is None:
+            return False
+        return self._recovery_evidence.unresolved_count > 0

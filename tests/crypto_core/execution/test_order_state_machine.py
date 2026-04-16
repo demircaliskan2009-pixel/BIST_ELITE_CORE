@@ -336,6 +336,9 @@ class TestFSMCompleteness:
                 OrderState.CANCELLED,
                 OrderState.REJECTED,
                 OrderState.EXPIRED,
+                OrderState.CANCEL_PENDING,
+                OrderState.REPLACE_PENDING,
+                OrderState.STALE,
             ]
         }
         for _from, targets in _ALLOWED_TRANSITIONS.items():

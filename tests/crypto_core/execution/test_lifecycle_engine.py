@@ -391,10 +391,10 @@ class TestToExecutionDecision:
 
 
 class TestCancelReplace:
-    def test_cancel_unknown_order_id_returns_none(self) -> None:
+    def test_cancel_unknown_order_id_returns_empty(self) -> None:
         engine = _paper_engine()
         result = engine.cancel("unknown-id", reason="test")
-        assert result is None
+        assert result == []
 
     def test_replace_unknown_order_id_returns_empty_list(self) -> None:
         engine = _paper_engine()
@@ -402,13 +402,13 @@ class TestCancelReplace:
         assert events == []
 
     def test_cancel_in_flight_dry_run_order(self) -> None:
-        """After DRY_RUN, order is in _orders dict → can be cancelled."""
+        """After DRY_RUN, order is in VALIDATED state — not submitted, so cancel returns empty."""
         engine = _dry_run_engine()
         result = engine.process(_request())
         order_id = result.order_id
-        cancel_event = engine.cancel(order_id, "test_cancel")
-        # Dry run order is in VALIDATED state — cancel should be accepted
-        assert cancel_event is not None
+        cancel_events = engine.cancel(order_id, "test_cancel")
+        # VALIDATED → CANCEL_PENDING is not a valid transition (never submitted)
+        assert cancel_events == []
 
 
 # ---------------------------------------------------------------------------

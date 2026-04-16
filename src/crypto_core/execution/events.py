@@ -32,6 +32,7 @@ OrderEventType.REJECTED = OrderEventType("REJECTED")
 OrderEventType.EXPIRED = OrderEventType("EXPIRED")
 OrderEventType.CANCEL_REQUESTED = OrderEventType("CANCEL_REQUESTED")
 OrderEventType.REPLACE_REQUESTED = OrderEventType("REPLACE_REQUESTED")
+OrderEventType.STALE = OrderEventType("STALE")
 
 
 # ---------------------------------------------------------------------------

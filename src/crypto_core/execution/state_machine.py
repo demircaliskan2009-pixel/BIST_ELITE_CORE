@@ -1,4 +1,4 @@
-"""Execution order state machine — Phase 6D lifecycle.
+"""Execution order state machine — Phase 6D/6F lifecycle.
 
 Defines the canonical order lifecycle states and transition rules.
 All transitions are deterministic and fail-closed on illegal moves.
@@ -11,16 +11,26 @@ State graph:
       │     │     ├─► PARTIALLY_FILLED ──► PARTIALLY_FILLED (accumulate)
       │     │     │         ├─► FILLED
       │     │     │         ├─► CANCELLED
-      │     │     │         └─► EXPIRED
+      │     │     │         ├─► EXPIRED
+      │     │     │         ├─► CANCEL_PENDING ──► CANCELLED / FILLED / STALE
+      │     │     │         └─► REPLACE_PENDING ──► CANCELLED / STALE
       │     │     ├─► FILLED
       │     │     ├─► CANCELLED
       │     │     ├─► REJECTED
-      │     │     └─► EXPIRED
+      │     │     ├─► EXPIRED
+      │     │     ├─► CANCEL_PENDING ──► CANCELLED / FILLED / PARTIALLY_FILLED / STALE
+      │     │     └─► REPLACE_PENDING ──► CANCELLED / STALE
       │     └─► REJECTED
       └─► REJECTED
 
 Terminal states (lock all further transitions):
-    FILLED, CANCELLED, REJECTED, EXPIRED
+    FILLED, CANCELLED, REJECTED, EXPIRED, STALE
+
+Phase 6F additions:
+  - CANCEL_PENDING:  intermediate state while cancel is in-flight.
+  - REPLACE_PENDING: intermediate state while cancel-for-replace is in-flight.
+  - STALE:           fail-closed terminal state for orders that cannot be
+                     reconciled after restart (paper: no exchange state).
 
 PRD reference: §7 Execution Engine.
 """
@@ -50,6 +60,10 @@ OrderState.FILLED = OrderState("FILLED")
 OrderState.CANCELLED = OrderState("CANCELLED")
 OrderState.REJECTED = OrderState("REJECTED")
 OrderState.EXPIRED = OrderState("EXPIRED")
+# Phase 6F additions
+OrderState.CANCEL_PENDING = OrderState("CANCEL_PENDING")
+OrderState.REPLACE_PENDING = OrderState("REPLACE_PENDING")
+OrderState.STALE = OrderState("STALE")
 
 _TERMINAL_STATES: frozenset[str] = frozenset(
     {
@@ -57,6 +71,7 @@ _TERMINAL_STATES: frozenset[str] = frozenset(
         OrderState.CANCELLED,
         OrderState.REJECTED,
         OrderState.EXPIRED,
+        OrderState.STALE,
     }
 )
 
@@ -72,6 +87,9 @@ _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
             OrderState.CANCELLED,
             OrderState.REJECTED,
             OrderState.EXPIRED,
+            OrderState.CANCEL_PENDING,
+            OrderState.REPLACE_PENDING,
+            OrderState.STALE,
         }
     ),
     OrderState.PARTIALLY_FILLED: frozenset(
@@ -80,6 +98,28 @@ _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
             OrderState.FILLED,
             OrderState.CANCELLED,
             OrderState.EXPIRED,
+            OrderState.CANCEL_PENDING,
+            OrderState.REPLACE_PENDING,
+            OrderState.STALE,
+        }
+    ),
+    # Phase 6F: cancel/replace pending states
+    OrderState.CANCEL_PENDING: frozenset(
+        {
+            OrderState.CANCELLED,
+            OrderState.FILLED,  # fill arrived before cancel ack
+            OrderState.PARTIALLY_FILLED,  # partial fill arrived before cancel ack
+            OrderState.EXPIRED,
+            OrderState.STALE,  # fail-closed recovery
+        }
+    ),
+    OrderState.REPLACE_PENDING: frozenset(
+        {
+            OrderState.CANCELLED,  # original cancelled for replace
+            OrderState.FILLED,  # fill arrived before replace ack
+            OrderState.PARTIALLY_FILLED,
+            OrderState.EXPIRED,
+            OrderState.STALE,  # fail-closed recovery
         }
     ),
 }
