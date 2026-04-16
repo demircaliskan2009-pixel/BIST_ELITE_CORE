@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from crypto_core.data.models.events import TradeEvent
 from crypto_core.edge.models import EdgeSignal
 from crypto_core.guard.models import NoTradeDecision
+from crypto_core.risk.kill_switch import KillSwitchResult
 from crypto_core.risk.models import RiskEvaluation
 from crypto_core.state.models import StateSnapshot
 
@@ -44,6 +45,7 @@ class PipelineResult:
 
     block_stage: which stage blocked the pipeline, or None if fully approved.
     approved: True iff all stages passed and risk evaluation approved.
+    ks_result: kill-switch evaluation result for this cycle (always present).
     """
 
     input_ts_ns: int
@@ -55,3 +57,4 @@ class PipelineResult:
     block_stage: str | None  # "state" | "guard" | "edge" | "risk" | None
     block_reason: str | None
     approved: bool  # True = at least one risk evaluation is APPROVED
+    ks_result: KillSwitchResult | None = None  # None only in legacy / test paths

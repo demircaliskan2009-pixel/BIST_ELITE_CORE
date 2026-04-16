@@ -20,6 +20,13 @@ from crypto_core.risk.contracts import (
     RiskInput,
 )
 from crypto_core.risk.engine import RiskEngine
+from crypto_core.risk.kill_switch import (
+    TRIGGER_LEVELS,
+    ExecutionQuality,
+    KillSwitchEngine,
+    KillSwitchInput,
+    KillSwitchResult,
+)
 from crypto_core.risk.models import (
     RiskBlockReason,
     RiskDecision,
@@ -29,6 +36,12 @@ from crypto_core.risk.models import (
 __all__ = [
     # Engine
     "RiskEngine",
+    # Kill-switch engine
+    "KillSwitchEngine",
+    "KillSwitchInput",
+    "KillSwitchResult",
+    "ExecutionQuality",
+    "TRIGGER_LEVELS",
     # v1 models
     "RiskDecision",
     "RiskBlockReason",

@@ -19,6 +19,7 @@ from crypto_core.guard.no_trade_guard import NoTradeConfig, NoTradeGuard
 from crypto_core.orchestrator.models import MarketDataInput, PipelineResult
 from crypto_core.risk.contracts import KS_LEVEL_NORMAL, RiskInput
 from crypto_core.risk.engine import RiskEngine
+from crypto_core.risk.kill_switch import KillSwitchEngine, KillSwitchInput, KillSwitchResult
 from crypto_core.risk.models import RiskDecision, RiskEvaluation
 from crypto_core.state.engine import SystemStateEngine
 from crypto_core.state.models import SignalInputs, StateSnapshot, SystemState, is_at_least
@@ -75,6 +76,7 @@ class PipelineOrchestrator:
         self._guard = NoTradeGuard(self._cfg.guard)
         self._edge_engine = EdgeEngine(self._cfg.edge)
         self._risk_engine = RiskEngine()
+        self._ks_engine = KillSwitchEngine()
         from pathlib import Path
 
         self._telemetry = telemetry_emitter or (
@@ -86,6 +88,7 @@ class PipelineOrchestrator:
         data: MarketDataInput,
         signal_inputs: SignalInputs | None = None,
         kill_switch_level: int = KS_LEVEL_NORMAL,
+        ks_input: KillSwitchInput | None = None,
     ) -> PipelineResult:
         """Execute the full pipeline for one market data input.
 
@@ -93,9 +96,12 @@ class PipelineOrchestrator:
             data: validated market data snapshot.
             signal_inputs: 10-signal SHS inputs. If None, uses zero signals
                            (system stays in or near NORMAL — safe for testing).
-            kill_switch_level: discrete KS level 0-4 (PRD §1.19).  Defaults to
-                               KS_LEVEL_NORMAL (0).  Will be replaced by the
-                               KS trigger engine output in Phase 5B.
+            kill_switch_level: DEPRECATED — kept for backward compatibility only.
+                               Ignored when ks_input is provided.  When neither
+                               is provided, a KillSwitchInput is built from
+                               the state snapshot and data health signals.
+            ks_input: explicit KillSwitchInput override.  If None, the
+                      orchestrator builds one from available runtime signals.
 
         Returns:
             PipelineResult with full audit trail.
@@ -103,7 +109,7 @@ class PipelineOrchestrator:
         t_start = time.time_ns()
 
         try:
-            return self._do_process(data, signal_inputs or SignalInputs(), t_start, kill_switch_level)
+            return self._do_process(data, signal_inputs or SignalInputs(), t_start, kill_switch_level, ks_input)
         except Exception:
             logger.exception("PipelineOrchestrator.process raised — fail-closed block")
             ts = time.time_ns()
@@ -138,6 +144,7 @@ class PipelineOrchestrator:
         signal_inputs: SignalInputs,
         t_start: int,
         kill_switch_level: int,
+        ks_input_override: KillSwitchInput | None,
     ) -> PipelineResult:
         ts = data.timestamp_ns
 
@@ -194,9 +201,28 @@ class PipelineOrchestrator:
             {"active_edges": valid_count, "total_edges": len(edge_signals)},
         )
 
+        # ── Stage 3.5: Kill-Switch computation ─────────────────────────
+        # Build KillSwitchInput from available runtime signals.
+        # If caller supplies ks_input_override, use that verbatim.
+        # Otherwise derive from state snapshot + data health flags.
+        if ks_input_override is not None:
+            ks_inp = ks_input_override
+        else:
+            ks_inp = KillSwitchInput(
+                system_state=state_snap.state,
+                # Data health proxy: non-connected feed state = 1 failure
+                data_failure_count=(1 if data.feed_connection_state not in ("connected", "ready") else 0),
+                recovery_active=(data.feed_recovery_state == "recovering"),
+                # latency_ms not measured here — Phase 5C will supply it
+            )
+        ks_result: KillSwitchResult = self._ks_engine.compute(ks_inp)
+        # Backward-compat floor: if caller supplied a legacy kill_switch_level
+        # that exceeds the computed level, honour it (higher always wins).
+        computed_ks_level = max(ks_result.level, kill_switch_level)
+
         # ── Stage 4: Risk (v2) ──────────────────────────────────────────
         # All optional v2 gates (dtl, kelly, cvar, portfolio) are explicitly
-        # None — data unavailable until Phase 5B (position tracker + trade
+        # None — data unavailable until Phase 5C (position tracker + trade
         # history).  None causes each gate to skip (documented in contracts.py).
         stage_t0 = time.time_ns()
         risk_evals: list[RiskEvaluation] = []
@@ -207,19 +233,17 @@ class PipelineOrchestrator:
                 no_trade=no_trade,
                 timestamp_ns=ts,
                 shs_snapshot=state_snap.shs,
-                kill_switch_level=kill_switch_level,
-                dtl=None,  # Phase 5B: position tracker required
-                kelly=None,  # Phase 5B: trade history required
-                cvar=None,  # Phase 5B: returns distribution required
-                portfolio=None,  # Phase 5B: position tracker required
+                kill_switch_level=computed_ks_level,
+                dtl=None,  # Phase 5C: position tracker required
+                kelly=None,  # Phase 5C: trade history required
+                cvar=None,  # Phase 5C: returns distribution required
+                portfolio=None,  # Phase 5C: position tracker required
             )
             risk_eval = self._risk_engine.evaluate_v2(risk_input)
             risk_evals.append(risk_eval)
         risk_latency_ms = (time.time_ns() - stage_t0) / 1e6
 
         approved_count = sum(1 for r in risk_evals if r.approved)
-        # Derive actual KS level from evaluations; fall back to input level
-        actual_ks_level: int = risk_evals[0].kill_switch_level if risk_evals else kill_switch_level
         # Optional v2 telemetry fields — only include if non-None (schema forbids null)
         _tele_v2: dict[str, object] = {}
         for _r in risk_evals:
@@ -236,8 +260,10 @@ class PipelineOrchestrator:
             risk_latency_ms,
             {
                 "shs_value": state_snap.shs,
-                "kill_switch_level": actual_ks_level,
+                "kill_switch_level": computed_ks_level,
                 "approved_count": approved_count,
+                "active_trigger_count": ks_result.evidence.get("active_trigger_count", 0),
+                **({"winning_trigger": ks_result.winning_trigger} if ks_result.winning_trigger is not None else {}),
                 **_tele_v2,
             },
         )
@@ -257,6 +283,7 @@ class PipelineOrchestrator:
             block_stage=block_stage,
             block_reason=block_reason,
             approved=is_approved,
+            ks_result=ks_result,
         )
 
     @staticmethod

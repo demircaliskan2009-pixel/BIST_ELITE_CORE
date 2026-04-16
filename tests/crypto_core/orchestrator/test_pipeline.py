@@ -296,3 +296,128 @@ class TestRiskV2Integration:
         ev = result.risk_evaluations[0].evidence
         assert "block" in ev
         assert "ks_level_2" in str(ev["block"])
+
+
+# ---------------------------------------------------------------------------
+# Phase 5B — Kill-switch engine integration
+# ---------------------------------------------------------------------------
+
+
+def _disconnected_data() -> MarketDataInput:
+    """Data with feed_connection_state != 'connected' → data_failure_count=1 in KS engine."""
+    import dataclasses
+
+    return dataclasses.replace(_healthy_data(), feed_connection_state="disconnected")
+
+
+def _recovering_data() -> MarketDataInput:
+    """Data with feed_recovery_state == 'recovering' → recovery_active=True in KS engine."""
+    import dataclasses
+
+    return dataclasses.replace(_healthy_data(), feed_recovery_state="recovering")
+
+
+class TestKillSwitchEngineIntegration:
+    """Verify KillSwitchEngine is wired into the pipeline (Phase 5B)."""
+
+    def test_ks_result_present_on_healthy_run(self) -> None:
+        """PipelineResult must carry a non-None ks_result after Phase 5B."""
+        orch = _orchestrator()
+        result = orch.process(_healthy_data(), _healthy_signals())
+        assert result.ks_result is not None
+        assert result.ks_result.level == 0
+        assert result.ks_result.active_triggers == ()
+
+    def test_ks_result_present_on_blocked_run(self) -> None:
+        """ks_result must be populated even when pipeline is blocked."""
+        from crypto_core.risk.kill_switch import KillSwitchInput
+
+        orch = _orchestrator()
+        ks_inp = KillSwitchInput(manual_override=True)
+        result = orch.process(_healthy_data(), _healthy_signals(), ks_input=ks_inp)
+        assert result.ks_result is not None
+        assert result.ks_result.level == 4
+
+    def test_ks_computed_from_halt_state(self) -> None:
+        """HALT system state must produce ks_result.level == 4 without manual override."""
+        from crypto_core.risk.contracts import KS_LEVEL_HALT
+        from crypto_core.risk.kill_switch import TRIGGER_SYSTEM_HALT, KillSwitchInput
+
+        orch = _orchestrator()
+        ks_inp = KillSwitchInput(system_state=SystemState.HALT)
+        result = orch.process(_healthy_data(), _healthy_signals(), ks_input=ks_inp)
+        assert result.ks_result is not None
+        assert result.ks_result.level == KS_LEVEL_HALT
+        assert TRIGGER_SYSTEM_HALT in result.ks_result.active_triggers
+        # Pipeline must block at risk stage
+        assert result.approved is False
+
+    def test_ks_computed_from_feed_disconnected(self) -> None:
+        """Disconnected feed → data_failure_count=1 → KS block (level 2)."""
+        from crypto_core.risk.contracts import KS_LEVEL_BLOCK
+        from crypto_core.risk.kill_switch import TRIGGER_DATA_FAILURE_SINGLE
+
+        orch = _orchestrator()
+        result = orch.process(_disconnected_data(), _healthy_signals())
+        assert result.ks_result is not None
+        assert result.ks_result.level >= KS_LEVEL_BLOCK
+        assert TRIGGER_DATA_FAILURE_SINGLE in result.ks_result.active_triggers
+        assert result.approved is False
+
+    def test_ks_computed_from_feed_recovering(self) -> None:
+        """Recovering feed → recovery_active=True → KS reduce (level 1) minimum."""
+        from crypto_core.risk.contracts import KS_LEVEL_REDUCE
+        from crypto_core.risk.kill_switch import TRIGGER_RECOVERY_ACTIVE
+
+        orch = _orchestrator()
+        result = orch.process(_recovering_data(), _healthy_signals())
+        assert result.ks_result is not None
+        assert result.ks_result.level >= KS_LEVEL_REDUCE
+        assert TRIGGER_RECOVERY_ACTIVE in result.ks_result.active_triggers
+
+    def test_ks_input_override_respected(self) -> None:
+        """Explicit ks_input override must be used verbatim, ignoring data signals."""
+        from crypto_core.risk.kill_switch import ExecutionQuality, KillSwitchInput
+
+        orch = _orchestrator()
+        # Healthy data but we force execution quality = critical via override
+        ks_inp = KillSwitchInput(execution_quality=ExecutionQuality.CRITICAL)
+        result = orch.process(_healthy_data(), _healthy_signals(), ks_input=ks_inp)
+        assert result.ks_result is not None
+        assert result.ks_result.level == 2  # BLOCK
+        # Should have blocked new entries
+        assert result.approved is False
+
+    def test_legacy_ks_level_floor_respected(self) -> None:
+        """Legacy kill_switch_level param acts as a floor over the computed level."""
+        orch = _orchestrator()
+        # Healthy data → computed KS=0, but legacy param=2 → floor raises to 2
+        result = orch.process(_healthy_data(), _healthy_signals(), kill_switch_level=2)
+        assert result.approved is False
+        assert result.risk_evaluations[0].kill_switch_level == 2
+
+    def test_ks_result_evidence_includes_trigger_count(self) -> None:
+        """KS result evidence must include active_trigger_count field."""
+        orch = _orchestrator()
+        result = orch.process(_healthy_data(), _healthy_signals())
+        assert result.ks_result is not None
+        assert "active_trigger_count" in result.ks_result.evidence
+
+    def test_deterministic_ks_integration(self) -> None:
+        """Same inputs produce identical ks_result across two separate orchestrators."""
+        from crypto_core.risk.kill_switch import KillSwitchInput
+
+        orch1 = _orchestrator()
+        orch2 = _orchestrator()
+        ks_inp = KillSwitchInput(latency_ms=300.0)
+        data = _healthy_data()
+        sigs = _healthy_signals()
+
+        r1 = orch1.process(data, sigs, ks_input=ks_inp)
+        r2 = orch2.process(data, sigs, ks_input=ks_inp)
+
+        assert r1.ks_result is not None
+        assert r2.ks_result is not None
+        assert r1.ks_result.level == r2.ks_result.level
+        assert r1.ks_result.winning_trigger == r2.ks_result.winning_trigger
+        assert set(r1.ks_result.active_triggers) == set(r2.ks_result.active_triggers)
