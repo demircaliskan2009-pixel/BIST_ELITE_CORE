@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from crypto_core.data.models.events import TradeEvent
+from crypto_core.data.models.events import LiquidationEvent, MarkPriceEvent, TradeEvent
 from crypto_core.edge.models import EdgeSignal
 from crypto_core.execution.models import ExecutionDecision
 from crypto_core.guard.models import NoTradeDecision
@@ -29,6 +29,16 @@ class MarketDataInput:
     Phase 6A: top-of-book price/size fields for paper execution pricing.
     book_bid_price / book_ask_price: best bid/ask prices in USD (0.0 = absent).
     book_bid_size / book_ask_size: visible depth at best level (base currency).
+
+    Phase 6B: mark_price_event for funding family activation.
+    mark_price_event: latest MarkPriceEvent from the mark-price stream,
+                      or None if the stream is not yet wired.  When None,
+                      Family B (Funding) is blocked by the ActivationMatrix.
+
+    Phase 6C: liquidation_events for Family C runtime evaluation.
+    liquidation_events: None = liquidation feed not wired into the runtime path.
+                        empty tuple = feed is wired but no liquidation events
+                        were observed in this cycle window.
     """
 
     symbol: str
@@ -47,6 +57,10 @@ class MarketDataInput:
     book_ask_price: float = 0.0
     book_bid_size: float | None = None
     book_ask_size: float | None = None
+    # Phase 6B: mark-price event for funding family (None = feed not yet wired)
+    mark_price_event: MarkPriceEvent | None = None
+    # Phase 6C: liquidation event window for Family C (None = feed unavailable)
+    liquidation_events: tuple[LiquidationEvent, ...] | None = None
 
 
 @dataclass(frozen=True)

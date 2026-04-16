@@ -11,9 +11,18 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import defaultdict, deque
 from dataclasses import dataclass, replace
 
+from crypto_core.edge.activation import (
+    execution_condition_from_runtime,
+    liquidity_condition_from_score,
+    regime_state_from_trades,
+    spread_condition_from_book,
+    volatility_condition_from_trades,
+)
 from crypto_core.edge.engine import EdgeEngine, EdgeEngineConfig
+from crypto_core.edge.families.funding import FundingSafetyContext
 from crypto_core.edge.models import SignalDirection
 from crypto_core.edge_health.models import EdgeHealthSnapshot
 from crypto_core.edge_health.tracker import EdgeHealthTracker
@@ -32,7 +41,7 @@ from crypto_core.guard.no_trade_guard import NoTradeConfig, NoTradeGuard
 from crypto_core.orchestrator.models import MarketDataInput, PipelineResult
 from crypto_core.portfolio.fills import SyntheticFillFactory
 from crypto_core.portfolio.tracker import PositionTracker
-from crypto_core.regime.models import LiquiditySignal, RegimeSignalInput
+from crypto_core.regime.models import LiquiditySignal, RegimeSignalInput, RegimeSnapshot
 from crypto_core.regime.tracker import MarketRegimeTracker
 from crypto_core.risk.contracts import KS_LEVEL_NORMAL, RiskInput
 from crypto_core.risk.engine import RiskEngine
@@ -45,6 +54,25 @@ from crypto_core.temporal.models import TemporalSnapshot
 from crypto_core.temporal.scheduler import TemporalScheduler
 
 logger = logging.getLogger(__name__)
+
+_NS_PER_HOUR: int = 3600 * 1_000_000_000
+_PRICE_HISTORY_MAXLEN: int = 4096
+
+
+@dataclass(frozen=True)
+class _ExecutionRuntimeSample:
+    latency_ms: float
+    fill_rate_pct: float
+
+
+@dataclass(frozen=True)
+class _ActivationRuntimeContext:
+    regime_state: str | None
+    liquidity_condition: str | None
+    execution_condition: str | None
+    spread_condition: str | None
+    volatility_condition: str | None
+    funding_safety_context: FundingSafetyContext
 
 
 @dataclass
@@ -110,10 +138,11 @@ class PipelineOrchestrator:
         self._ks_engine = KillSwitchEngine()
         # PositionTracker is optional — None = portfolio gates skip (Phase 5D+ wired)
         self._position_tracker: PositionTracker | None = position_tracker
-        # MarketRegimeTracker is optional — None = market family disabled (NT-M skipped)
-        self._regime_tracker: MarketRegimeTracker | None = regime_tracker
-        # EdgeHealthTracker is optional — None = edge family disabled (NT-E skipped)
-        self._edge_health_tracker: EdgeHealthTracker | None = edge_health_tracker
+        # Phase 6C: activation closure depends on real liquidity/regime context,
+        # so the crypto pipeline enables the regime tracker by default.
+        self._regime_tracker: MarketRegimeTracker | None = regime_tracker or MarketRegimeTracker()
+        # Phase 6C: EHS feeds both NT-E and activation; enable tracker by default.
+        self._edge_health_tracker: EdgeHealthTracker | None = edge_health_tracker or EdgeHealthTracker()
         # TemporalScheduler is optional — None = temporal family disabled (NT-T skipped)
         self._temporal_scheduler: TemporalScheduler | None = temporal_scheduler
         from pathlib import Path
@@ -121,6 +150,13 @@ class PipelineOrchestrator:
         self._telemetry = telemetry_emitter or (
             TelemetryEmitter(log_dir=Path(self._cfg.telemetry_log_dir)) if self._cfg.emit_telemetry else None
         )
+        self._price_history: dict[tuple[str, str], deque[tuple[int, float]]] = defaultdict(
+            lambda: deque(maxlen=_PRICE_HISTORY_MAXLEN)
+        )
+        self._regime_history: dict[tuple[str, str], deque[tuple[int, str]]] = defaultdict(
+            lambda: deque(maxlen=_PRICE_HISTORY_MAXLEN)
+        )
+        self._execution_runtime: dict[tuple[str, str], _ExecutionRuntimeSample] = {}
 
     def process(
         self,
@@ -220,11 +256,16 @@ class PipelineOrchestrator:
         # When tracker is None, market=None → NT-M family explicitly disabled.
         market_regime_input: MarketRegimeInput | None = None
         if self._regime_tracker is not None:
+            spread_bps = None
+            if data.book_has_snapshot and data.book_bid_price > 0.0 and data.book_ask_price > data.book_bid_price:
+                mid_price = (data.book_bid_price + data.book_ask_price) / 2.0
+                spread_bps = (data.book_ask_price - data.book_bid_price) / mid_price * 10_000.0
             liq_signal = LiquiditySignal(
                 bid_level_count=data.book_bid_count,
                 ask_level_count=data.book_ask_count,
                 recent_trade_count=len(data.trades),
                 timestamp_ns=ts,
+                bid_ask_spread_bps=spread_bps,
             )
             regime_signal = RegimeSignalInput(
                 snapshot_ns=ts,
@@ -323,6 +364,12 @@ class PipelineOrchestrator:
             {"allowed": no_trade.allowed, "reason": str(no_trade.reason), **_tele_regime, **_tele_temporal},
         )
 
+        activation_runtime = self._build_activation_runtime_context(
+            data=data,
+            state_snap=state_snap,
+            regime_snap=regime_snap,
+        )
+
         # ── Stage 3: Edge ───────────────────────────────────────────────
         stage_t0 = time.time_ns()
         edge_signals = self._edge_engine.evaluate(
@@ -333,8 +380,15 @@ class PipelineOrchestrator:
             system_state=state_snap.state,
             timestamp_ns=ts,
             mark_price_event=data.mark_price_event,
+            liquidation_events=data.liquidation_events,
             feed_connection_state=data.feed_connection_state,
             feed_recovery_state=data.feed_recovery_state,
+            regime_state=activation_runtime.regime_state,
+            liquidity_condition=activation_runtime.liquidity_condition,
+            execution_condition=activation_runtime.execution_condition,
+            spread_condition=activation_runtime.spread_condition,
+            volatility_condition=activation_runtime.volatility_condition,
+            funding_safety_context=activation_runtime.funding_safety_context,
             market_regime=regime_snap,
             family_edge_health=family_edge_health,
         )
@@ -356,10 +410,14 @@ class PipelineOrchestrator:
             "active_edges": valid_count,
             "total_edges": len(edge_signals),
             "edge_health_snapshot_available": ehs_snap is not None,
+            "activation_regime_state": activation_runtime.regime_state or "unavailable",
+            "activation_execution_condition": activation_runtime.execution_condition or "unavailable",
         }
         if ehs_snap is not None:
             _tele_edge["valid_edge_count"] = ehs_snap.valid_edge_count if ehs_snap.valid_edge_count is not None else 0
             _tele_edge["disabled_edge_count"] = ehs_snap.disabled_edge_count
+            _tele_edge["warning_edge_count"] = ehs_snap.warning_edge_count
+            _tele_edge["quarantine_edge_count"] = ehs_snap.quarantine_edge_count
             _tele_edge["capacity_red_count"] = ehs_snap.capacity_red_count
             if ehs_snap.min_ehs is not None:
                 _tele_edge["minimum_ehs"] = round(ehs_snap.min_ehs, 4)
@@ -523,6 +581,13 @@ class PipelineOrchestrator:
             if primary_decision.rejection_reason is not None:
                 execution_metrics["execution_rejection_reason"] = str(primary_decision.rejection_reason)
 
+        self._update_execution_runtime_sample(
+            symbol=data.symbol,
+            exchange=data.exchange,
+            latency_ms=execution_latency_ms,
+            execution_decisions=execution_decisions,
+        )
+
         self._emit_telemetry_safe("execution", execution_latency_ms, execution_metrics)
 
         # ── Determine overall result ────────────────────────────────────
@@ -641,6 +706,165 @@ class PipelineOrchestrator:
         if data.trades:
             return float(data.trades[-1].price)
         return None
+
+    def _build_activation_runtime_context(
+        self,
+        data: MarketDataInput,
+        state_snap: StateSnapshot,
+        regime_snap: RegimeSnapshot | None,
+    ) -> _ActivationRuntimeContext:
+        key = (data.symbol, data.exchange)
+        trade_list = list(data.trades)
+
+        volatility_condition, _ = volatility_condition_from_trades(trade_list)
+        regime_state, _ = regime_state_from_trades(
+            trade_list,
+            str(state_snap.state),
+            volatility_condition,
+            regime_snap.regime_transition_active if regime_snap is not None else None,
+        )
+        liquidity_condition, _ = liquidity_condition_from_score(
+            regime_snap.liquidity_score if regime_snap is not None else None
+        )
+        spread_condition, _ = spread_condition_from_book(
+            data.book_has_snapshot,
+            data.book_bid_price,
+            data.book_ask_price,
+        )
+
+        prior_execution = self._execution_runtime.get(key)
+        execution_condition, _ = execution_condition_from_runtime(
+            data.feed_connection_state,
+            data.feed_recovery_state,
+            data.book_has_snapshot,
+            data.book_bid_price,
+            data.book_ask_price,
+            spread_condition,
+            prior_latency_ms=prior_execution.latency_ms if prior_execution is not None else None,
+            prior_fill_rate_pct=prior_execution.fill_rate_pct if prior_execution is not None else None,
+        )
+
+        current_price = self._resolve_activation_price(data)
+        if current_price is not None:
+            self._append_price_observation(key, data.timestamp_ns, current_price)
+        self._append_regime_observation(key, data.timestamp_ns, regime_state)
+
+        funding_safety_context = FundingSafetyContext(
+            regime_state=regime_state,
+            regime_trending_recently=self._recently_trending(key, data.timestamp_ns),
+            recent_return_4h=self._compute_recent_return(key, data.timestamp_ns, 4 * _NS_PER_HOUR),
+            trend_strength=self._compute_trend_strength(key, data.timestamp_ns),
+        )
+
+        return _ActivationRuntimeContext(
+            regime_state=regime_state,
+            liquidity_condition=liquidity_condition,
+            execution_condition=execution_condition,
+            spread_condition=spread_condition,
+            volatility_condition=volatility_condition,
+            funding_safety_context=funding_safety_context,
+        )
+
+    def _append_price_observation(self, key: tuple[str, str], timestamp_ns: int, price: float) -> None:
+        history = self._price_history[key]
+        history.append((timestamp_ns, price))
+        cutoff = timestamp_ns - 72 * _NS_PER_HOUR
+        while history and history[0][0] < cutoff:
+            history.popleft()
+
+    def _append_regime_observation(self, key: tuple[str, str], timestamp_ns: int, regime_state: str) -> None:
+        history = self._regime_history[key]
+        history.append((timestamp_ns, regime_state))
+        cutoff = timestamp_ns - 8 * _NS_PER_HOUR
+        while history and history[0][0] < cutoff:
+            history.popleft()
+
+    def _compute_recent_return(self, key: tuple[str, str], current_ns: int, lookback_ns: int) -> float | None:
+        history = self._price_history.get(key)
+        if not history:
+            return None
+        current_price = history[-1][1]
+        target_ns = current_ns - lookback_ns
+        candidates = [price for (ts, price) in history if ts <= target_ns and price > 0.0]
+        if not candidates or current_price <= 0.0:
+            return None
+        base_price = candidates[-1]
+        return current_price / base_price - 1.0
+
+    def _compute_trend_strength(self, key: tuple[str, str], current_ns: int) -> float | None:
+        history = self._price_history.get(key)
+        if not history:
+            return None
+        cutoff_48h = current_ns - 48 * _NS_PER_HOUR
+        cutoff_24h = current_ns - 24 * _NS_PER_HOUR
+        cutoff_12h = current_ns - 12 * _NS_PER_HOUR
+        prices_48h = [price for (ts, price) in history if ts >= cutoff_48h and price > 0.0]
+        prices_24h = [price for (ts, price) in history if ts >= cutoff_24h and price > 0.0]
+        prices_12h = [price for (ts, price) in history if ts >= cutoff_12h and price > 0.0]
+        if len(prices_48h) < 8 or len(prices_24h) < 4 or len(prices_12h) < 3:
+            return None
+        if history[0][0] > cutoff_48h:
+            return None
+
+        ema12 = self._ema(prices_12h)
+        ema48 = self._ema(prices_48h)
+        returns_24h = [
+            abs(prices_24h[idx] / prices_24h[idx - 1] - 1.0)
+            for idx in range(1, len(prices_24h))
+            if prices_24h[idx - 1] > 0.0
+        ]
+        if len(returns_24h) < 2:
+            return None
+        atr24 = sum(returns_24h) / len(returns_24h)
+        if atr24 <= 0.0 or ema48 <= 0.0:
+            return None
+        return ((ema12 - ema48) / ema48) / atr24
+
+    def _recently_trending(self, key: tuple[str, str], current_ns: int) -> bool | None:
+        history = self._regime_history.get(key)
+        if not history:
+            return None
+        cutoff = current_ns - 4 * _NS_PER_HOUR
+        recent = [state for (ts, state) in history if ts >= cutoff]
+        if not recent:
+            return None
+        return any(state == "TRENDING" for state in recent)
+
+    def _update_execution_runtime_sample(
+        self,
+        symbol: str,
+        exchange: str,
+        latency_ms: float,
+        execution_decisions: list[ExecutionDecision],
+    ) -> None:
+        if not execution_decisions:
+            return
+        allowed_count = sum(1 for decision in execution_decisions if decision.allowed)
+        fill_rate_pct = allowed_count / len(execution_decisions) * 100.0
+        self._execution_runtime[(symbol, exchange)] = _ExecutionRuntimeSample(
+            latency_ms=latency_ms,
+            fill_rate_pct=fill_rate_pct,
+        )
+
+    @staticmethod
+    def _resolve_activation_price(data: MarketDataInput) -> float | None:
+        if data.mark_price_event is not None and data.mark_price_event.mark_price > 0.0:
+            return float(data.mark_price_event.mark_price)
+        if data.book_bid_price > 0.0 and data.book_ask_price > data.book_bid_price:
+            return (data.book_bid_price + data.book_ask_price) / 2.0
+        if data.trades:
+            return float(data.trades[-1].price)
+        return None
+
+    @staticmethod
+    def _ema(values: list[float]) -> float:
+        if not values:
+            return 0.0
+        alpha = 2.0 / (len(values) + 1.0)
+        ema = values[0]
+        for value in values[1:]:
+            ema = alpha * value + (1.0 - alpha) * ema
+        return ema
 
     def _emit_telemetry_safe(self, stage: str, latency_ms: float, extra: dict) -> None:
         """Emit telemetry — never raises."""

@@ -4,8 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from crypto_core.data.models.events import Exchange, MarkPriceEvent, TradeEvent, TradeSide
+from crypto_core.data.models.events import Exchange, LiquidationEvent, MarkPriceEvent, TradeEvent, TradeSide
+from crypto_core.edge.activation import (
+    ExecutionCondition,
+    LiquidityCondition,
+    RegimeState,
+    SpreadCondition,
+    VolatilityCondition,
+)
 from crypto_core.edge.engine import EdgeEngine
+from crypto_core.edge.families.funding import FundingSafetyContext
 from crypto_core.edge.families.order_flow import (
     OFIConfig,
     OrderFlowImbalanceEdge,
@@ -14,6 +22,7 @@ from crypto_core.edge.families.order_flow import (
 from crypto_core.edge.models import EdgeFamily, EdgeSignal, SignalDirection
 from crypto_core.edge.registry import EdgeFamilyRegistry
 from crypto_core.guard.models import NoTradeDecision, NoTradeReason
+from crypto_core.regime.models import LiquidityLevel, RegimeEvidenceQuality, RegimeSnapshot
 from crypto_core.state.models import SystemState
 
 # ---------------------------------------------------------------------------
@@ -67,6 +76,40 @@ def _mark_price_event(funding_rate: float = 0.0001) -> MarkPriceEvent:
 
 def _signal_map(signals: list[EdgeSignal]) -> dict[EdgeFamily, EdgeSignal]:
     return {signal.family: signal for signal in signals}
+
+
+def _funding_ctx() -> FundingSafetyContext:
+    return FundingSafetyContext(
+        regime_state=RegimeState.RANGE,
+        regime_trending_recently=False,
+        recent_return_4h=0.0,
+        trend_strength=0.0,
+    )
+
+
+def _market_regime(*, transition_active: bool) -> RegimeSnapshot:
+    return RegimeSnapshot(
+        snapshot_ns=_T0_NS,
+        evidence_quality=RegimeEvidenceQuality.FULL,
+        liquidity_score=0.75,
+        liquidity_crisis_sustained_ms=None,
+        oi_mc_ratio=None,
+        regime_transition_active=transition_active,
+        mean_pairwise_correlation=None,
+        liquidity_level=LiquidityLevel.HEALTHY,
+        crisis_first_seen_ns=None,
+    )
+
+
+def _liq_event() -> LiquidationEvent:
+    return LiquidationEvent(
+        symbol="BTCUSDT",
+        exchange=Exchange.BINANCE,
+        side=TradeSide.BUY,
+        price=50_000.0,
+        qty=1.0,
+        timestamp_ns=_T0_NS,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +241,37 @@ class TestOFIEdgeEvaluate:
 
 
 class TestEdgeEngine:
+    def _range_runtime_kwargs(self) -> dict[str, object]:
+        return {
+            "mark_price_event": _mark_price_event(),
+            "liquidation_events": (),
+            "regime_state": RegimeState.RANGE,
+            "liquidity_condition": LiquidityCondition.NORMAL,
+            "execution_condition": ExecutionCondition.OPTIMAL,
+            "spread_condition": SpreadCondition.STABLE,
+            "volatility_condition": VolatilityCondition.MED,
+            "funding_safety_context": _funding_ctx(),
+            "market_regime": _market_regime(transition_active=False),
+        }
+
+    def _high_vol_runtime_kwargs(self) -> dict[str, object]:
+        return {
+            "mark_price_event": _mark_price_event(),
+            "liquidation_events": (_liq_event(),),
+            "regime_state": RegimeState.HIGH_VOL,
+            "liquidity_condition": LiquidityCondition.NORMAL,
+            "execution_condition": ExecutionCondition.OPTIMAL,
+            "spread_condition": SpreadCondition.STABLE,
+            "volatility_condition": VolatilityCondition.HIGH,
+            "funding_safety_context": FundingSafetyContext(
+                regime_state=RegimeState.HIGH_VOL,
+                regime_trending_recently=False,
+                recent_return_4h=0.0,
+                trend_strength=0.0,
+            ),
+            "market_regime": _market_regime(transition_active=True),
+        }
+
     def test_no_trade_block_returns_invalid_signals(self) -> None:
         engine = EdgeEngine()
         trades = _buys(30) + _sells(10)
@@ -213,7 +287,7 @@ class TestEdgeEngine:
         assert all(not s.is_valid for s in signals)
         assert all("system_state_blocked" in (s.block_reason or "") for s in signals)
 
-    def test_healthy_state_produces_valid_signal(self) -> None:
+    def test_range_context_allows_ofi_and_funding_only(self) -> None:
         engine = EdgeEngine()
         trades = _buys(40) + _sells(10)
         signals = engine.evaluate(
@@ -223,18 +297,44 @@ class TestEdgeEngine:
             _allow(),
             SystemState.NORMAL,
             _T0_NS,
-            mark_price_event=_mark_price_event(),
+            **self._range_runtime_kwargs(),
         )
         by_family = _signal_map(signals)
         assert len(signals) == 4
         assert set(by_family) == set(engine.runtime_families)
         assert by_family[EdgeFamily.ORDER_FLOW_IMBALANCE].is_valid is True
         assert by_family[EdgeFamily.FUNDING_RATE].is_valid is True
-        assert by_family[EdgeFamily.VOLATILITY_TRANSITION].family == EdgeFamily.VOLATILITY_TRANSITION
-        assert by_family[EdgeFamily.LIQUIDATION_SIGNAL].family == EdgeFamily.LIQUIDATION_SIGNAL
-        assert "activation_reason" in by_family[EdgeFamily.ORDER_FLOW_IMBALANCE].evidence
+        assert by_family[EdgeFamily.VOLATILITY_TRANSITION].is_valid is False
+        assert (
+            by_family[EdgeFamily.VOLATILITY_TRANSITION].block_reason == "activation_blocked:regime_transition_required"
+        )
+        assert by_family[EdgeFamily.LIQUIDATION_SIGNAL].is_valid is False
+        assert by_family[EdgeFamily.LIQUIDATION_SIGNAL].block_reason == "activation_blocked:regime_disallowed"
+        assert by_family[EdgeFamily.ORDER_FLOW_IMBALANCE].evidence["activation_reason"] == "allowed_reduced"
+        assert by_family[EdgeFamily.ORDER_FLOW_IMBALANCE].evidence["activation_allocation_scale"] == pytest.approx(0.25)
+        assert by_family[EdgeFamily.FUNDING_RATE].evidence["activation_reason"] == "allowed_reduced"
 
-    def test_funding_activation_blocks_without_mark_price(self) -> None:
+    def test_high_vol_context_allows_funding_liquidation_and_vol_transition(self) -> None:
+        engine = EdgeEngine()
+        trades = _buys(90) + _sells(30)
+        signals = engine.evaluate(
+            trades,
+            "BTCUSDT",
+            "binance",
+            _allow(),
+            SystemState.NORMAL,
+            _T0_NS,
+            **self._high_vol_runtime_kwargs(),
+        )
+        by_family = _signal_map(signals)
+        assert by_family[EdgeFamily.ORDER_FLOW_IMBALANCE].is_valid is False
+        assert by_family[EdgeFamily.ORDER_FLOW_IMBALANCE].block_reason == "activation_blocked:regime_disallowed"
+        assert by_family[EdgeFamily.FUNDING_RATE].is_valid is True
+        assert by_family[EdgeFamily.LIQUIDATION_SIGNAL].family == EdgeFamily.LIQUIDATION_SIGNAL
+        assert by_family[EdgeFamily.LIQUIDATION_SIGNAL].is_valid is True
+        assert by_family[EdgeFamily.VOLATILITY_TRANSITION].is_valid is True
+
+    def test_missing_activation_inputs_block_ofi(self) -> None:
         engine = EdgeEngine()
         signals = engine.evaluate(
             _buys(40) + _sells(10),
@@ -243,6 +343,24 @@ class TestEdgeEngine:
             _allow(),
             SystemState.NORMAL,
             _T0_NS,
+            mark_price_event=_mark_price_event(),
+        )
+        ofi = _signal_map(signals)[EdgeFamily.ORDER_FLOW_IMBALANCE]
+        assert ofi.is_valid is False
+        assert ofi.block_reason == "activation_blocked:activation_input_unavailable:regime_state"
+
+    def test_funding_activation_blocks_without_mark_price(self) -> None:
+        engine = EdgeEngine()
+        kwargs = self._range_runtime_kwargs()
+        kwargs.pop("mark_price_event")
+        signals = engine.evaluate(
+            _buys(40) + _sells(10),
+            "BTCUSDT",
+            "binance",
+            _allow(),
+            SystemState.NORMAL,
+            _T0_NS,
+            **kwargs,
         )
         funding = _signal_map(signals)[EdgeFamily.FUNDING_RATE]
         assert funding.is_valid is False
@@ -266,7 +384,7 @@ class TestEdgeEngine:
             _allow(),
             SystemState.DEGRADED,
             _T0_NS,
-            mark_price_event=_mark_price_event(),
+            **self._range_runtime_kwargs(),
         )
         assert len(signals) == 4
         assert _signal_map(signals)[EdgeFamily.ORDER_FLOW_IMBALANCE].is_valid is True

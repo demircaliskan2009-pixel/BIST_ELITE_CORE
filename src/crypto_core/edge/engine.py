@@ -4,16 +4,16 @@ activation matrix integration.
 Integrates:
   - NoTradeGuard (mandatory engine-level gate)
   - SystemStateEngine current state (engine-level gate)
-  - ActivationMatrix (per-family gate, PRD §1.5)
+    - ActivationMatrix (per-family gate, PRD §1.5)
   - EdgeFamilyRegistry (single source of truth for runtime family coverage)
 
 Evaluation order:
   1. no_trade blocked       → all families return invalid
   2. system_state DEFENSIVE → all families return invalid
   3. Per family:
-       a. ActivationMatrix  → blocked: invalid signal with activation reason
-       b. Family evaluator  → valid or invalid signal per family logic
-       c. Runtime audit     → activation + PRD mapping + evaluation state
+      a. ActivationMatrix  → blocked: invalid signal with activation reason
+      b. Family evaluator  → valid or invalid signal per family logic
+      c. Runtime audit     → activation + PRD mapping + evaluation state
 
 PRD reference: §1.1–§1.13.
 """
@@ -23,9 +23,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, replace
 
-from crypto_core.data.models.events import MarkPriceEvent, TradeEvent
+from crypto_core.data.models.events import LiquidationEvent, MarkPriceEvent, TradeEvent
 from crypto_core.edge.activation import ActivationContext, ActivationDecision, ActivationMatrix
-from crypto_core.edge.families.funding import FundingConfig
+from crypto_core.edge.families.funding import FundingConfig, FundingSafetyContext
 from crypto_core.edge.families.liquidation import LiquidationConfig
 from crypto_core.edge.families.order_flow import OFIConfig
 from crypto_core.edge.families.volatility import VolatilityConfig
@@ -74,17 +74,17 @@ class EdgeEngine:
 
     Per-family gates (ActivationMatrix, PRD §1.5):
       - Family not implemented (E/F/G) → blocked: family_not_implemented.
-      - Liquidity below family floor   → blocked: liquidity_below_family_threshold.
-      - Family edge disabled / low EHS → blocked: edge_disabled / edge_health_low.
+    - Missing activation dimensions   → blocked: activation_input_unavailable:*
+    - Family edge disabled / low EHS → blocked: edge_disabled / edge_health_low.
       - Data feed disconnected         → blocked: data_disconnected.
       - Data feed recovering           → blocked: data_recovering.
       - Funding family: no mark-price  → blocked: funding_feed_unavailable.
 
     Runtime families (Phase 6B):
       A — OrderFlowImbalanceEdge   (always evaluated when activation allows)
-      B — FundingRateEdge          (requires mark_price_event)
+    B — FundingRateEdge          (requires mark_price_event + funding safety context)
       D — VolatilityTransitionEdge (project tag retained; maps to PRD Family D)
-      C — LiquidationSignalEdge    (project tag retained; maps to PRD Family C)
+    C — LiquidationSignalEdge    (project tag retained; maps to PRD Family C, requires liquidation feed)
 
     Telemetry integration:
       Caller is responsible for wrapping calls in telemetry timing.
@@ -122,8 +122,15 @@ class EdgeEngine:
         system_state: SystemState,
         timestamp_ns: int,
         mark_price_event: MarkPriceEvent | None = None,
+        liquidation_events: list[LiquidationEvent] | tuple[LiquidationEvent, ...] | None = None,
         feed_connection_state: str = "connected",
         feed_recovery_state: str = "ready",
+        regime_state: str | None = None,
+        liquidity_condition: str | None = None,
+        execution_condition: str | None = None,
+        spread_condition: str | None = None,
+        volatility_condition: str | None = None,
+        funding_safety_context: FundingSafetyContext | None = None,
         market_regime: RegimeSnapshot | None = None,
         family_edge_health: dict[EdgeFamily, EdgeHealthSnapshot] | None = None,
     ) -> list[EdgeSignal]:
@@ -162,12 +169,15 @@ class EdgeEngine:
                 feed_connection_state=feed_connection_state,
                 feed_recovery_state=feed_recovery_state,
                 mark_price_available=mark_price_event is not None,
-                liquidity_score=market_regime.liquidity_score if market_regime is not None else None,
-                regime_transition_active=(
-                    market_regime.regime_transition_active if market_regime is not None else None
-                ),
+                regime_state=regime_state,
+                liquidity_condition=liquidity_condition,
+                execution_condition=execution_condition,
+                spread_condition=spread_condition,
+                volatility_condition=volatility_condition,
+                regime_transition_active=market_regime.regime_transition_active if market_regime is not None else None,
                 edge_health_score=family_health.ehs_score if family_health is not None else None,
                 edge_fsm_state=family_health.fsm_state.value if family_health is not None else None,
+                edge_allocation_factor=family_health.allocation_factor if family_health is not None else None,
             )
             activation = self._activation.evaluate(fam, activation_ctx)
             if not activation.allowed:
@@ -182,6 +192,8 @@ class EdgeEngine:
                         exchange,
                         timestamp_ns,
                         mark_price_event=mark_price_event,
+                        liquidation_events=liquidation_events,
+                        funding_safety_context=funding_safety_context,
                     ),
                     activation,
                 )
@@ -197,6 +209,8 @@ class EdgeEngine:
         exchange: str,
         timestamp_ns: int,
         mark_price_event: MarkPriceEvent | None = None,
+        liquidation_events: list[LiquidationEvent] | tuple[LiquidationEvent, ...] | None = None,
+        funding_safety_context: FundingSafetyContext | None = None,
     ) -> EdgeSignal:
         try:
             evaluator = self._registry.get(family)
@@ -209,6 +223,15 @@ class EdgeEngine:
                     exchange,
                     timestamp_ns,
                     mark_price_event=mark_price_event,
+                    safety_context=funding_safety_context,
+                )
+            if family == EdgeFamily.LIQUIDATION_SIGNAL:
+                return evaluator.evaluate(
+                    trades,
+                    symbol,
+                    exchange,
+                    timestamp_ns,
+                    liquidation_events=liquidation_events,
                 )
             return evaluator.evaluate(trades, symbol, exchange, timestamp_ns)
         except Exception:
@@ -261,6 +284,7 @@ class EdgeEngine:
             "evaluation_state": "blocked",
             "activation_state": "blocked",
             "activation_reason": activation.reason,
+            "activation_allocation_scale": activation.allocation_scale,
             "activation_evidence": activation.evidence,
             "missing_inputs": activation.evidence.get("missing_inputs", []),
         }
@@ -280,6 +304,7 @@ class EdgeEngine:
                 **self._runtime_metadata(signal.family),
                 "activation_state": "allowed",
                 "activation_reason": activation.reason,
+                "activation_allocation_scale": activation.allocation_scale,
                 "activation_evidence": activation.evidence,
                 "missing_inputs": activation.evidence.get("missing_inputs", []),
                 "evaluation_state": self._evaluation_state(signal),

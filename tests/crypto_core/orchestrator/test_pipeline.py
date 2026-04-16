@@ -61,7 +61,10 @@ def _signal_map(signals) -> dict[EdgeFamily, object]:
 
 
 def _healthy_data(n_buys: int = 30, n_sells: int = 10) -> MarketDataInput:
-    trades = tuple([_trade(TradeSide.BUY) for _ in range(n_buys)] + [_trade(TradeSide.SELL) for _ in range(n_sells)])
+    trades = tuple(
+        [_trade(TradeSide.BUY, price=50_250.0 if idx % 2 == 0 else 49_750.0) for idx in range(n_buys)]
+        + [_trade(TradeSide.SELL, price=49_750.0 if idx % 2 == 0 else 50_250.0) for idx in range(n_sells)]
+    )
     return MarketDataInput(
         symbol="BTCUSDT",
         exchange="binance",
@@ -69,22 +72,37 @@ def _healthy_data(n_buys: int = 30, n_sells: int = 10) -> MarketDataInput:
         trades=trades,
         book_last_update_ns=_T0_NS - 100 * 1_000_000,  # 100ms ago
         book_has_snapshot=True,
-        book_bid_count=5,
-        book_ask_count=5,
+        book_bid_count=6,
+        book_ask_count=6,
         feed_connection_state="connected",
         feed_recovery_state="ready",
         book_bid_price=49_900.0,
         book_ask_price=50_100.0,
         book_bid_size=1.0,
         book_ask_size=1.0,
+        liquidation_events=(),
         mark_price_event=_mark_price_event(),
     )
 
 
 def _healthy_data_at(price: float, timestamp_ns: int) -> MarketDataInput:
     trades = tuple(
-        [_trade(TradeSide.BUY, price=price, timestamp_ns=timestamp_ns) for _ in range(30)]
-        + [_trade(TradeSide.SELL, price=price, timestamp_ns=timestamp_ns) for _ in range(10)]
+        [
+            _trade(
+                TradeSide.BUY,
+                price=price * (1.005 if idx % 2 == 0 else 0.995),
+                timestamp_ns=timestamp_ns,
+            )
+            for idx in range(30)
+        ]
+        + [
+            _trade(
+                TradeSide.SELL,
+                price=price * (0.995 if idx % 2 == 0 else 1.005),
+                timestamp_ns=timestamp_ns,
+            )
+            for idx in range(10)
+        ]
     )
     return MarketDataInput(
         symbol="BTCUSDT",
@@ -93,14 +111,15 @@ def _healthy_data_at(price: float, timestamp_ns: int) -> MarketDataInput:
         trades=trades,
         book_last_update_ns=timestamp_ns - 100 * 1_000_000,
         book_has_snapshot=True,
-        book_bid_count=5,
-        book_ask_count=5,
+        book_bid_count=6,
+        book_ask_count=6,
         feed_connection_state="connected",
         feed_recovery_state="ready",
         book_bid_price=price - 100.0,
         book_ask_price=price + 100.0,
         book_bid_size=1.0,
         book_ask_size=1.0,
+        liquidation_events=(),
         mark_price_event=_mark_price_event(timestamp_ns=timestamp_ns),
     )
 
@@ -121,6 +140,7 @@ def _stale_data() -> MarketDataInput:
         book_ask_price=50_100.0,
         book_bid_size=1.0,
         book_ask_size=1.0,
+        liquidation_events=(),
         mark_price_event=_mark_price_event(),
     )
 
@@ -175,6 +195,12 @@ class TestHealthyFlow:
         assert by_family[EdgeFamily.ORDER_FLOW_IMBALANCE].is_valid is True
         assert by_family[EdgeFamily.FUNDING_RATE].is_valid is True
         assert by_family[EdgeFamily.FUNDING_RATE].direction == SignalDirection.NEUTRAL
+        assert by_family[EdgeFamily.VOLATILITY_TRANSITION].is_valid is False
+        assert by_family[EdgeFamily.VOLATILITY_TRANSITION].block_reason == (
+            "activation_blocked:activation_input_unavailable:regime_transition_active"
+        )
+        assert by_family[EdgeFamily.LIQUIDATION_SIGNAL].is_valid is False
+        assert by_family[EdgeFamily.LIQUIDATION_SIGNAL].block_reason == "activation_blocked:regime_disallowed"
         assert len(result.risk_evaluations) == 4
         assert result.risk_evaluations[0].approved is True  # OFI (Family A)
 
@@ -312,19 +338,13 @@ class TestActivationIntegration:
         result = orch.process(_low_liquidity_data(), _healthy_signals())
         by_family = _signal_map(result.edge_signals)
         assert by_family[EdgeFamily.ORDER_FLOW_IMBALANCE].is_valid is False
-        assert by_family[EdgeFamily.ORDER_FLOW_IMBALANCE].block_reason == (
-            "activation_blocked:liquidity_below_family_threshold"
-        )
+        assert by_family[EdgeFamily.ORDER_FLOW_IMBALANCE].block_reason == "activation_blocked:liquidity_dry_blocked"
         assert by_family[EdgeFamily.VOLATILITY_TRANSITION].is_valid is False
         assert by_family[EdgeFamily.VOLATILITY_TRANSITION].block_reason == (
-            "activation_blocked:liquidity_below_family_threshold"
+            "activation_blocked:activation_input_unavailable:regime_transition_active"
         )
-        assert by_family[EdgeFamily.FUNDING_RATE].block_reason == (
-            "activation_blocked:liquidity_below_family_threshold"
-        )
-        assert by_family[EdgeFamily.LIQUIDATION_SIGNAL].block_reason == (
-            "activation_blocked:liquidity_below_family_threshold"
-        )
+        assert by_family[EdgeFamily.FUNDING_RATE].block_reason == "activation_blocked:liquidity_dry_blocked"
+        assert by_family[EdgeFamily.LIQUIDATION_SIGNAL].block_reason == "activation_blocked:liquidity_dry_blocked"
 
     def test_pipeline_exposes_activation_audit_fields(self) -> None:
         orch = _orchestrator()

@@ -1,49 +1,47 @@
-"""Liquidation Signal edge family (Family D).
+"""Liquidation Signal edge family (Family C) — liquidation-feed driven v1.
 
-Detects liquidation-driven price dislocations by monitoring for large,
-rapid price moves accompanied by high volume — a proxy for forced
-liquidation cascades in perpetual futures markets.
-
-Signal logic (proxy — without a dedicated liquidation feed):
-  price_move = abs(price[-1] - price[-window]) / price[-window]
-  vol_spike  = current_window_volume / baseline_volume
-  If price_move > price_threshold AND vol_spike > vol_threshold:
-      signal BUY on up-move, SELL on down-move
-  Confidence = min(1.0, price_move * vol_spike)
-
-PRD reference: §1.4 Family D — Liquidation Intelligence.
-Note: Full version consumes dedicated liquidation event feed (§4.5).
-This v1 approximates from trade flow.
+This phase stops relying on trade flow alone. The family now consumes real
+LiquidationEvent inputs when available and fails closed when the liquidation
+feed is absent from the runtime path.
 """
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 
-from crypto_core.data.models.events import TradeEvent
+from crypto_core.data.models.events import LiquidationEvent, TradeEvent, TradeSide
 from crypto_core.edge.models import EdgeFamily, EdgeSignal, SignalDirection
 
-logger = logging.getLogger(__name__)
-
-DEFAULT_WINDOW: int = 20
-DEFAULT_BASELINE_WINDOW: int = 100
-DEFAULT_PRICE_THRESHOLD: float = 0.005  # 0.5% move
-DEFAULT_VOL_SPIKE_THRESHOLD: float = 2.0  # 2× baseline volume
-DEFAULT_MIN_TRADES: int = 21
+_NS_PER_MINUTE: int = 60 * 1_000_000_000
 
 
 @dataclass
 class LiquidationConfig:
-    window: int = DEFAULT_WINDOW
-    baseline_window: int = DEFAULT_BASELINE_WINDOW
-    price_threshold: float = DEFAULT_PRICE_THRESHOLD
-    vol_spike_threshold: float = DEFAULT_VOL_SPIKE_THRESHOLD
-    min_trades: int = DEFAULT_MIN_TRADES
+    """Configuration for the liquidation-feed evaluator.
+
+    Legacy trade-proxy fields are retained for backward-compatible
+    construction, but the phase-6C runtime path only treats liquidation events
+    as tradable evidence.
+    """
+
+    min_events: int = 3
+    min_total_liquidation_qty: float = 5.0
+    imbalance_threshold: float = 0.60
+    building_acceleration_threshold: float = 1.5
+    active_acceleration_threshold: float = 3.0
+    exhausting_ratio_threshold: float = 0.30
+    complete_ratio_threshold: float = 0.10
+    bucket_ns: int = _NS_PER_MINUTE
+    max_buckets: int = 8
+    window: int = 20
+    baseline_window: int = 100
+    price_threshold: float = 0.005
+    vol_spike_threshold: float = 2.0
+    min_trades: int = 21
 
 
 class LiquidationSignalEdge:
-    """Stateless liquidation-proxy signal detector."""
+    """Liquidation-family evaluator using real liquidation events."""
 
     def __init__(self, config: LiquidationConfig | None = None) -> None:
         self._cfg = config or LiquidationConfig()
@@ -54,57 +52,26 @@ class LiquidationSignalEdge:
         symbol: str,
         exchange: str,
         timestamp_ns: int,
+        liquidation_events: list[LiquidationEvent] | tuple[LiquidationEvent, ...] | None = None,
     ) -> EdgeSignal:
-        cfg = self._cfg
         family = EdgeFamily.LIQUIDATION_SIGNAL
+        cfg = self._cfg
 
-        if len(trades) < cfg.min_trades:
+        if liquidation_events is None:
             return EdgeSignal.invalid(
                 family,
                 symbol,
                 exchange,
-                f"insufficient_trades:{len(trades)}<{cfg.min_trades}",
+                "liquidation_feed_unavailable",
                 timestamp_ns,
-                {"trade_count": len(trades)},
+                {
+                    "status": "unavailable",
+                    "missing_inputs": ["liquidation_events"],
+                },
             )
 
-        recent_trades = list(trades)[-cfg.window :]
-        baseline_trades = list(trades)[-cfg.baseline_window :]
-
-        prices = [t.price for t in recent_trades]
-        price_start = prices[0] if prices else 0.0
-
-        if price_start <= 0.0:
-            return EdgeSignal.invalid(
-                family,
-                symbol,
-                exchange,
-                "zero_price",
-                timestamp_ns,
-                {"price_start": price_start},
-            )
-
-        price_end = prices[-1]
-        price_move = (price_end - price_start) / price_start
-        abs_move = abs(price_move)
-
-        recent_vol = sum(t.qty for t in recent_trades)
-        baseline_vol = sum(t.qty for t in baseline_trades) / max(1, len(baseline_trades) // cfg.window)
-
-        vol_spike = recent_vol / baseline_vol if baseline_vol > 0 else 0.0
-
-        evidence: dict[str, object] = {
-            "price_start": price_start,
-            "price_end": price_end,
-            "price_move_pct": price_move * 100,
-            "abs_move": abs_move,
-            "vol_spike": vol_spike,
-            "recent_vol": recent_vol,
-            "baseline_vol": baseline_vol,
-            "trade_count": len(trades),
-        }
-
-        if abs_move < cfg.price_threshold or vol_spike < cfg.vol_spike_threshold:
+        events = sorted(liquidation_events, key=lambda event: event.timestamp_ns)
+        if not events:
             return EdgeSignal(
                 family=family,
                 symbol=symbol,
@@ -112,14 +79,119 @@ class LiquidationSignalEdge:
                 direction=SignalDirection.NEUTRAL,
                 confidence=0.0,
                 score=0.0,
-                evidence=evidence,
+                evidence={
+                    "status": "neutral",
+                    "cascade_state": "NORMAL",
+                    "liquidation_event_count": 0,
+                    "total_liquidation_qty": 0.0,
+                },
                 timestamp_ns=timestamp_ns,
                 is_valid=True,
                 block_reason=None,
             )
 
-        direction = SignalDirection.BUY if price_move > 0 else SignalDirection.SELL
-        confidence = min(1.0, abs_move * vol_spike)
+        long_liq_qty = sum(event.qty for event in events if event.side == TradeSide.BUY)
+        short_liq_qty = sum(event.qty for event in events if event.side == TradeSide.SELL)
+        total_liq_qty = long_liq_qty + short_liq_qty
+        imbalance = 0.0 if total_liq_qty <= 0.0 else (long_liq_qty - short_liq_qty) / total_liq_qty
+        bucket_totals = _bucket_quantities(events, timestamp_ns, cfg.bucket_ns, cfg.max_buckets)
+        peak_bucket_qty = max(bucket_totals) if bucket_totals else 0.0
+        recent_bucket_qty = bucket_totals[-1] if bucket_totals else total_liq_qty
+        baseline_buckets = bucket_totals[:-1]
+        baseline_mean = (sum(baseline_buckets) / len(baseline_buckets)) if baseline_buckets else 0.0
+        acceleration_ratio = (
+            (recent_bucket_qty / baseline_mean)
+            if baseline_mean > 0.0
+            else (float("inf") if recent_bucket_qty > 0.0 else 0.0)
+        )
+        last_three = bucket_totals[-3:] if len(bucket_totals) >= 3 else []
+
+        evidence: dict[str, object] = {
+            "status": "active",
+            "liquidation_event_count": len(events),
+            "total_liquidation_qty": total_liq_qty,
+            "long_liquidation_qty": long_liq_qty,
+            "short_liquidation_qty": short_liq_qty,
+            "liquidation_imbalance": imbalance,
+            "bucket_totals": bucket_totals,
+            "recent_bucket_qty": recent_bucket_qty,
+            "peak_bucket_qty": peak_bucket_qty,
+            "acceleration_ratio": acceleration_ratio,
+        }
+
+        if len(events) < cfg.min_events or total_liq_qty < cfg.min_total_liquidation_qty:
+            return EdgeSignal(
+                family=family,
+                symbol=symbol,
+                exchange=exchange,
+                direction=SignalDirection.NEUTRAL,
+                confidence=0.0,
+                score=0.0,
+                evidence={
+                    **evidence,
+                    "status": "neutral",
+                    "cascade_state": "NORMAL",
+                    "reason": "insufficient_liquidation_pressure",
+                },
+                timestamp_ns=timestamp_ns,
+                is_valid=True,
+                block_reason=None,
+            )
+
+        cascade_state = "NORMAL"
+        if acceleration_ratio >= cfg.active_acceleration_threshold:
+            cascade_state = "ACTIVE_CASCADE"
+        elif acceleration_ratio >= cfg.building_acceleration_threshold:
+            cascade_state = "BUILDING"
+        elif (
+            peak_bucket_qty > 0.0
+            and len(last_three) == 3
+            and all(bucket_qty <= cfg.complete_ratio_threshold * peak_bucket_qty for bucket_qty in last_three)
+        ):
+            cascade_state = "CASCADE_COMPLETE"
+        elif peak_bucket_qty > 0.0 and recent_bucket_qty <= cfg.exhausting_ratio_threshold * peak_bucket_qty:
+            cascade_state = "EXHAUSTING"
+
+        evidence["cascade_state"] = cascade_state
+
+        if cascade_state == "ACTIVE_CASCADE":
+            return EdgeSignal.invalid(
+                family,
+                symbol,
+                exchange,
+                "liquidation_cascade_active",
+                timestamp_ns,
+                {**evidence, "status": "blocked"},
+            )
+        if cascade_state == "BUILDING":
+            return EdgeSignal.invalid(
+                family,
+                symbol,
+                exchange,
+                "liquidation_cascade_building",
+                timestamp_ns,
+                {**evidence, "status": "blocked"},
+            )
+        if cascade_state != "CASCADE_COMPLETE" or abs(imbalance) < cfg.imbalance_threshold:
+            return EdgeSignal(
+                family=family,
+                symbol=symbol,
+                exchange=exchange,
+                direction=SignalDirection.NEUTRAL,
+                confidence=0.0,
+                score=0.0,
+                evidence={
+                    **evidence,
+                    "status": "neutral",
+                    "dominant_side_ready": abs(imbalance) >= cfg.imbalance_threshold,
+                },
+                timestamp_ns=timestamp_ns,
+                is_valid=True,
+                block_reason=None,
+            )
+
+        direction = SignalDirection.BUY if imbalance > 0 else SignalDirection.SELL
+        confidence = min(1.0, abs(imbalance) * min(1.0, peak_bucket_qty / cfg.min_total_liquidation_qty))
 
         return EdgeSignal(
             family=family,
@@ -127,9 +199,28 @@ class LiquidationSignalEdge:
             exchange=exchange,
             direction=direction,
             confidence=confidence,
-            score=price_move * vol_spike,
+            score=imbalance,
             evidence=evidence,
             timestamp_ns=timestamp_ns,
             is_valid=True,
             block_reason=None,
         )
+
+
+def _bucket_quantities(
+    events: list[LiquidationEvent],
+    current_ns: int,
+    bucket_ns: int,
+    max_buckets: int,
+) -> list[float]:
+    if bucket_ns <= 0 or max_buckets <= 0:
+        return []
+    buckets = [0.0 for _ in range(max_buckets)]
+    window_start = current_ns - bucket_ns * max_buckets
+    for event in events:
+        if event.timestamp_ns < window_start or event.timestamp_ns > current_ns:
+            continue
+        idx = int((event.timestamp_ns - window_start) // bucket_ns)
+        idx = max(0, min(max_buckets - 1, idx))
+        buckets[idx] += float(event.qty)
+    return buckets
