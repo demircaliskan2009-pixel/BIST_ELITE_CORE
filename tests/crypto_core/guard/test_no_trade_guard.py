@@ -801,6 +801,13 @@ class TestEdgeFamilyDisabled:
         assert d.allowed is False
         assert d.reason == NoTradeReason.EDGE_DISABLED
 
+    def test_edge_quarantine_state_blocks(self) -> None:
+        guard = _guard()
+        ctx = _full_healthy_ctx(edge=_healthy_edge(edge_fsm_state="QUARANTINE"))
+        d = guard.evaluate(ctx)
+        assert d.allowed is False
+        assert d.reason == NoTradeReason.EDGE_DISABLED
+
     def test_edge_active_passes(self) -> None:
         guard = _guard()
         ctx = _full_healthy_ctx(edge=_healthy_edge(edge_fsm_state="ACTIVE"))

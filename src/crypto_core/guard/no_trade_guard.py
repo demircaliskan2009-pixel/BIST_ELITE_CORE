@@ -432,7 +432,7 @@ class NoTradeGuard:
 
             # ── NT-E02: Edge in DISABLED state ───────────────────────────
             if e.edge_fsm_state is not None:
-                if e.edge_fsm_state.upper() == "DISABLED":
+                if e.edge_fsm_state.upper() in {"DISABLED", "QUARANTINE"}:
                     return NoTradeDecision.block(
                         NoTradeReason.EDGE_DISABLED,
                         {"rule": "NT-E02", "fsm_state": e.edge_fsm_state},

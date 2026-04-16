@@ -1,47 +1,27 @@
-"""Edge health tracker engine — Phase 5F.
+"""Edge health tracker engine — partial PRDV4-aligned EHS for Phase 6C.
 
-Deterministic, bounded-memory tracker that computes edge health snapshots
-from observed edge signal history.
+The tracker replaces the old mean-confidence-only proxy with a deterministic
+partial EHS composed of four PRD-aligned slots:
 
-V1 EHS proxy formula:
-  ehs_score = mean(confidence) over the last `window_size` signal records.
-  confidence = 0.0 for invalid signals (per EdgeSignal contract).
-  Therefore:
-    - All signals blocked  → ehs ≈ 0.0 → DISABLED
-    - All signals valid with high confidence → ehs ≈ 1.0 → ACTIVE
-    - Mix → interpolated [0, 1]
+  - sharpe      → confidence proxy fallback
+  - hit-rate    → valid-signal ratio proxy fallback
+  - drawdown    → confidence drawdown proxy
+  - stability   → rolling score/confidence CV proxy
 
-  This formula is:
-    - Monotone in signal validity (more valid → higher score)
-    - Sensitivity-to-confidence (stronger signals → higher score)
-    - No fake Sharpe/hit-rate — requires only what the pipeline provides
-
-Upgrade path to full PRD EHS:
-  When realized trade outcomes are recorded, replace mean(confidence) with a
-  multi-component EHS decomposition (hit-rate × avg_return × stability).
-
-State management:
-  Buffer size  : configurable, default _DEFAULT_WINDOW_SIZE = 50
-  Min samples  : _MIN_OBSERVATIONS_REQUIRED = 5 before EHS is computed
-  DISABLED floor: ehs < _DISABLE_THRESHOLD (0.10) → DISABLED state
-  DEGRADED band : _DISABLE_THRESHOLD <= ehs < _DEGRADED_THRESHOLD (0.30)
-  ACTIVE floor  : ehs >= _DEGRADED_THRESHOLD
-
-  Explicit disable: operator can disable any family via disable_edge().
-
-Fail-closed:
-  Malformed records → raises EdgeSignalRecordError immediately.
-  All other exceptions propagate to caller (pipeline should catch).
-
-PRD reference: §1.6 EHS lifecycle, §1.21 NT-E01–NT-E04.
+Realized trade-outcome inputs are still unavailable at this phase, so the
+tracker makes the fallback explicit in per-component evidence instead of
+fabricating Sharpe, hit rate, or PnL drawdown histories.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from collections import defaultdict, deque
+from dataclasses import dataclass, field
 
 from crypto_core.edge_health.models import (
+    EdgeEHSComponent,
     EdgeFSMState,
     EdgeHealthSnapshot,
     EdgeHealthTrackerSnapshot,
@@ -52,70 +32,43 @@ from crypto_core.guard.models import EdgeHealthInput
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Module constants
-# ---------------------------------------------------------------------------
-
-#: Maximum signals retained per (family, symbol, exchange) key.
 _DEFAULT_WINDOW_SIZE: int = 50
-
-#: Minimum observations required before EHS is computed (not None).
 _MIN_OBSERVATIONS_REQUIRED: int = 5
 
-#: EHS below this → DISABLED state (NT-E02 will fire).
-_DISABLE_THRESHOLD: float = 0.10
-
-#: EHS below this → DEGRADED state (between DISABLED and ACTIVE).
-_DEGRADED_THRESHOLD: float = 0.30
-
-#: EHS at or above this → edge is counted as "valid" for NT-E04.
+_ACTIVE_THRESHOLD: float = 0.70
+_WARNING_THRESHOLD: float = 0.30
 _EHS_VALID_THRESHOLD: float = 0.50
-
-#: Utilization at or above this → WARNING band.
 _UTIL_WARNING_THRESHOLD: float = 50.0
-
-#: Utilization at or above this → RED band (NT-E03 zone).
 _UTIL_RED_THRESHOLD: float = 80.0
+_INITIALIZING_ALLOCATION_FACTOR: float = 0.25
 
+_QUARANTINE_DISABLED_TRANSITIONS: int = 2
+_QUARANTINE_LOOKBACK_NS: int = 30 * 24 * 3600 * 1_000_000_000
+_QUARANTINE_DURATION_NS: int = 14 * 24 * 3600 * 1_000_000_000
 
-# ---------------------------------------------------------------------------
-# Error type
-# ---------------------------------------------------------------------------
+_COMPONENT_WEIGHTS: tuple[tuple[str, float], ...] = (
+    ("sharpe", 0.30),
+    ("hitrate", 0.25),
+    ("drawdown", 0.25),
+    ("stability", 0.20),
+)
 
 
 class EdgeSignalRecordError(ValueError):
-    """Raised when an EdgeSignalRecord has invalid field values (fail-closed)."""
+    """Raised when an EdgeSignalRecord has invalid field values."""
 
 
-# ---------------------------------------------------------------------------
-# Tracker
-# ---------------------------------------------------------------------------
+@dataclass
+class _LifecycleState:
+    """Mutable lifecycle tracking for one edge key."""
+
+    last_base_state: EdgeFSMState | None = None
+    disabled_transition_ns: deque[int] = field(default_factory=deque)
+    quarantine_until_ns: int | None = None
 
 
 class EdgeHealthTracker:
-    """Deterministic edge health tracker.
-
-    Maintains per-(family, symbol, exchange) rolling history of signal records.
-    Produces EdgeHealthInput for NoTradeGuard and EdgeHealthTrackerSnapshot
-    for telemetry.
-
-    Thread safety: NOT thread-safe. Use one instance per pipeline thread.
-
-    Ordering invariant:
-      record_signals() must be called AFTER the edge stage, never before.
-      to_edge_health_input() must be called BEFORE the guard stage, using
-      history from the PREVIOUS cycle. This ensures:
-        - Guard uses evidence from past cycles (deterministic)
-        - Current cycle's signals are recorded for the next evaluation
-
-    Usage::
-
-        tracker = EdgeHealthTracker()
-        # Before guard:
-        edge_input = tracker.to_edge_health_input("BTCUSDT", "binance", ts)
-        # After edge stage:
-        tracker.record_signals(edge_signals)
-    """
+    """Deterministic edge health tracker with explicit EHS component evidence."""
 
     def __init__(
         self,
@@ -131,39 +84,21 @@ class EdgeHealthTracker:
 
         self._window_size = window_size
         self._min_observations = min_observations
-
-        # Per-key rolling history: key = (family, symbol, exchange)
         self._history: dict[tuple[str, str, str], deque[EdgeSignalRecord]] = defaultdict(
             lambda: deque(maxlen=self._window_size)
         )
-        # Explicitly disabled keys (operator-level override)
         self._disabled: set[tuple[str, str, str]] = set()
-
-    # -----------------------------------------------------------------------
-    # Public: record signals
-    # -----------------------------------------------------------------------
+        self._lifecycle: dict[tuple[str, str, str], _LifecycleState] = {}
 
     def record_signal(self, record: EdgeSignalRecord) -> None:
-        """Record one edge signal observation into rolling history.
-
-        Raises:
-            EdgeSignalRecordError: if any field is invalid (fail-closed).
-        """
         errors = _validate_record(record)
         if errors:
             raise EdgeSignalRecordError("; ".join(errors))
         key = (record.family, record.symbol, record.exchange)
         self._history[key].append(record)
+        self._refresh_lifecycle_state(key, record.timestamp_ns)
 
     def record_signals(self, signals: list) -> None:
-        """Record a batch of EdgeSignal objects from the edge engine.
-
-        Converts EdgeSignal objects to EdgeSignalRecord automatically.
-        Silently skips signals that lack the expected attributes (defensive).
-
-        Args:
-            signals: list of EdgeSignal dataclass instances.
-        """
         for sig in signals:
             try:
                 rec = EdgeSignalRecord(
@@ -173,8 +108,8 @@ class EdgeHealthTracker:
                     is_valid=sig.is_valid,
                     confidence=float(sig.confidence),
                     timestamp_ns=sig.timestamp_ns,
-                    # utilization_pct not yet in EdgeSignal — remains None until Phase 5G+
                     utilization_pct=None,
+                    score=float(sig.score),
                 )
                 self.record_signal(rec)
             except EdgeSignalRecordError:
@@ -182,29 +117,11 @@ class EdgeHealthTracker:
             except AttributeError:
                 logger.warning("EdgeHealthTracker: signal missing expected attribute — %s", sig)
 
-    # -----------------------------------------------------------------------
-    # Public: explicit enable/disable
-    # -----------------------------------------------------------------------
-
     def disable_edge(self, family: str, symbol: str, exchange: str) -> None:
-        """Explicitly disable an edge family for a (symbol, exchange).
-
-        Once disabled, edge_fsm_state=DISABLED and is_valid_edge=False
-        regardless of EHS score. Use for operator-driven edge shutdowns.
-        """
         self._disabled.add((family, symbol, exchange))
 
     def enable_edge(self, family: str, symbol: str, exchange: str) -> None:
-        """Re-enable an explicitly disabled edge.
-
-        Note: EHS score remains from history — the edge may still be in
-        DEGRADED or DISABLED state based on its score if EHS < _DISABLE_THRESHOLD.
-        """
         self._disabled.discard((family, symbol, exchange))
-
-    # -----------------------------------------------------------------------
-    # Public: snapshot queries
-    # -----------------------------------------------------------------------
 
     def snapshot_for_key(
         self,
@@ -213,36 +130,35 @@ class EdgeHealthTracker:
         exchange: str,
         snapshot_ns: int,
     ) -> EdgeHealthSnapshot:
-        """Compute an immutable health snapshot for a specific key.
-
-        Returns a snapshot with DISABLED state if explicitly disabled.
-        Returns a snapshot with ehs_score=None if insufficient history.
-        """
         key = (family, symbol, exchange)
-        explicitly_disabled = key in self._disabled
         records = list(self._history.get(key, []))
+        components = _compute_ehs_components(records, self._min_observations)
+        ehs = _compute_ehs(components)
+        base_fsm = _classify_fsm(ehs)
 
+        lifecycle = self._lifecycle.get(key)
+        quarantine_until_ns = lifecycle.quarantine_until_ns if lifecycle is not None else None
+        explicitly_disabled = key in self._disabled
         if explicitly_disabled:
-            ehs = _compute_ehs(records, self._min_observations)
-            last_util = records[-1].utilization_pct if records else None
-            return EdgeHealthSnapshot(
-                family=family,
-                symbol=symbol,
-                exchange=exchange,
-                ehs_score=ehs,
-                fsm_state=EdgeFSMState.DISABLED,
-                utilization_pct=last_util,
-                utilization_band=_classify_utilization(last_util),
-                observation_count=len(records),
-                is_valid_edge=False,
-                snapshot_ns=snapshot_ns,
-            )
+            fsm = EdgeFSMState.DISABLED
+        elif quarantine_until_ns is not None and snapshot_ns < quarantine_until_ns:
+            fsm = EdgeFSMState.QUARANTINE
+        else:
+            fsm = base_fsm
 
-        ehs = _compute_ehs(records, self._min_observations)
-        fsm = _classify_fsm(ehs)
         last_util = records[-1].utilization_pct if records else None
         util_band = _classify_utilization(last_util)
-        is_valid = ehs is not None and ehs >= _EHS_VALID_THRESHOLD and fsm != EdgeFSMState.DISABLED
+        allocation_factor = _allocation_factor(ehs, fsm)
+        component_availability_ratio = _component_availability_ratio(components)
+        is_valid = (
+            ehs is not None
+            and ehs >= _EHS_VALID_THRESHOLD
+            and fsm
+            not in (
+                EdgeFSMState.DISABLED,
+                EdgeFSMState.QUARANTINE,
+            )
+        )
 
         return EdgeHealthSnapshot(
             family=family,
@@ -255,6 +171,10 @@ class EdgeHealthTracker:
             observation_count=len(records),
             is_valid_edge=is_valid,
             snapshot_ns=snapshot_ns,
+            allocation_factor=allocation_factor,
+            component_availability_ratio=component_availability_ratio,
+            quarantine_until_ns=quarantine_until_ns,
+            ehs_components=components,
         )
 
     def to_edge_health_input(
@@ -263,57 +183,32 @@ class EdgeHealthTracker:
         exchange: str,
         snapshot_ns: int,
     ) -> EdgeHealthInput | None:
-        """Produce an EdgeHealthInput for the NoTradeGuard NT-E family.
-
-        Returns:
-            None — if no (family, symbol, exchange) key has been tracked yet.
-                   Guard receives edge=None → NT-E family disabled.
-            EdgeHealthInput — once history exists; fields may be None if
-                              individual metrics are unavailable.
-
-        Aggregation strategy (worst-case / most conservative):
-          NT-E01 edge_health_score : minimum EHS across families with history.
-          NT-E02 edge_fsm_state    : worst FSM state (DISABLED > DEGRADED > ACTIVE).
-          NT-E03 edge_utilization_pct: maximum utilization across families.
-          NT-E04 valid_edge_count  : count of families with ehs >= threshold;
-                                     None if no family has sufficient history.
-        """
-        # Collect all keys for this (symbol, exchange)
         history_keys = {k for k in self._history if k[1] == symbol and k[2] == exchange}
         disabled_keys = {k for k in self._disabled if k[1] == symbol and k[2] == exchange}
         all_keys = history_keys | disabled_keys
-
         if not all_keys:
             return None
 
         snapshots = [self.snapshot_for_key(f, s, e, snapshot_ns) for (f, s, e) in all_keys]
+        ehs_values = [snap.ehs_score for snap in snapshots if snap.ehs_score is not None]
+        min_ehs = min(ehs_values) if ehs_values else None
 
-        # NT-E01: minimum EHS (most conservative)
-        ehs_values = [s.ehs_score for s in snapshots if s.ehs_score is not None]
-        min_ehs: float | None = min(ehs_values) if ehs_values else None
+        fsm_priority = {
+            EdgeFSMState.QUARANTINE: 4,
+            EdgeFSMState.DISABLED: 3,
+            EdgeFSMState.WARNING: 2,
+            EdgeFSMState.ACTIVE: 1,
+        }
+        worst_fsm = max(snapshots, key=lambda snap: fsm_priority[snap.fsm_state]).fsm_state
 
-        # NT-E02: worst FSM state
-        fsm_states = [s.fsm_state for s in snapshots]
-        worst_fsm: EdgeFSMState
-        if EdgeFSMState.DISABLED in fsm_states:
-            worst_fsm = EdgeFSMState.DISABLED
-        elif EdgeFSMState.DEGRADED in fsm_states:
-            worst_fsm = EdgeFSMState.DEGRADED
-        else:
-            worst_fsm = EdgeFSMState.ACTIVE
+        util_values = [snap.utilization_pct for snap in snapshots if snap.utilization_pct is not None]
+        max_util = max(util_values) if util_values else None
 
-        # NT-E03: maximum utilization (worst-case capacity)
-        util_values = [s.utilization_pct for s in snapshots if s.utilization_pct is not None]
-        max_util: float | None = max(util_values) if util_values else None
-
-        # NT-E04: valid edge count (only count families with sufficient history)
-        families_with_history = [s for s in snapshots if s.ehs_score is not None]
-        valid_count: int | None
+        families_with_history = [snap for snap in snapshots if snap.ehs_score is not None]
         if not families_with_history:
-            # No family has reached min_observations yet — unavailable, not "0"
-            valid_count = None
+            valid_count: int | None = None
         else:
-            valid_count = sum(1 for s in families_with_history if s.is_valid_edge)
+            valid_count = sum(1 for snap in families_with_history if snap.is_valid_edge)
 
         return EdgeHealthInput(
             edge_health_score=min_ehs,
@@ -323,14 +218,8 @@ class EdgeHealthTracker:
         )
 
     def tracker_snapshot(self, snapshot_ns: int) -> EdgeHealthTrackerSnapshot:
-        """Aggregate snapshot across all currently tracked keys.
-
-        Used for orchestrator telemetry. Returns stable summaries even
-        with no history (all counts = 0, EHS values = None).
-        """
         history_keys = set(self._history.keys())
         all_keys = history_keys | self._disabled
-
         if not all_keys:
             return EdgeHealthTrackerSnapshot(
                 valid_edge_count=None,
@@ -340,18 +229,20 @@ class EdgeHealthTracker:
                 max_ehs=None,
                 capacity_red_count=0,
                 snapshot_ns=snapshot_ns,
+                warning_edge_count=0,
+                quarantine_edge_count=0,
                 family_snapshots=(),
             )
 
         snapshots = tuple(self.snapshot_for_key(f, s, e, snapshot_ns) for (f, s, e) in all_keys)
-
-        # Aggregate
-        ehs_values = [s.ehs_score for s in snapshots if s.ehs_score is not None]
-        families_with_history = [s for s in snapshots if s.ehs_score is not None]
-        valid_count = sum(1 for s in families_with_history if s.is_valid_edge) if families_with_history else None
-        disabled_count = sum(1 for s in snapshots if s.fsm_state == EdgeFSMState.DISABLED)
-        active_count = sum(1 for s in snapshots if s.fsm_state != EdgeFSMState.DISABLED)
-        red_count = sum(1 for s in snapshots if s.utilization_band == UtilizationBand.RED)
+        ehs_values = [snap.ehs_score for snap in snapshots if snap.ehs_score is not None]
+        families_with_history = [snap for snap in snapshots if snap.ehs_score is not None]
+        valid_count = sum(1 for snap in families_with_history if snap.is_valid_edge) if families_with_history else None
+        disabled_count = sum(1 for snap in snapshots if snap.fsm_state == EdgeFSMState.DISABLED)
+        warning_count = sum(1 for snap in snapshots if snap.fsm_state == EdgeFSMState.WARNING)
+        quarantine_count = sum(1 for snap in snapshots if snap.fsm_state == EdgeFSMState.QUARANTINE)
+        active_count = sum(1 for snap in snapshots if snap.fsm_state in (EdgeFSMState.ACTIVE, EdgeFSMState.WARNING))
+        red_count = sum(1 for snap in snapshots if snap.utilization_band == UtilizationBand.RED)
 
         return EdgeHealthTrackerSnapshot(
             valid_edge_count=valid_count,
@@ -361,77 +252,207 @@ class EdgeHealthTracker:
             max_ehs=max(ehs_values) if ehs_values else None,
             capacity_red_count=red_count,
             snapshot_ns=snapshot_ns,
+            warning_edge_count=warning_count,
+            quarantine_edge_count=quarantine_count,
             family_snapshots=snapshots,
         )
 
     def reset(self) -> None:
-        """Clear all history and disabled state.
-
-        Use between independent test cases to guarantee isolation.
-        """
         self._history.clear()
         self._disabled.clear()
+        self._lifecycle.clear()
 
     @property
     def window_size(self) -> int:
-        """Configured maximum history window size per key."""
         return self._window_size
 
     @property
     def min_observations(self) -> int:
-        """Minimum observations required before EHS is computed."""
         return self._min_observations
 
     @property
     def tracked_key_count(self) -> int:
-        """Number of distinct (family, symbol, exchange) keys tracked."""
         return len(set(self._history.keys()) | self._disabled)
 
+    def _refresh_lifecycle_state(self, key: tuple[str, str, str], snapshot_ns: int) -> None:
+        records = list(self._history.get(key, []))
+        components = _compute_ehs_components(records, self._min_observations)
+        ehs = _compute_ehs(components)
+        base_state = _classify_fsm(ehs)
 
-# ---------------------------------------------------------------------------
-# Module-level helpers (stateless, pure functions)
-# ---------------------------------------------------------------------------
+        state = self._lifecycle.setdefault(key, _LifecycleState())
+        _prune_disabled_transitions(state.disabled_transition_ns, snapshot_ns)
+        if state.last_base_state != EdgeFSMState.DISABLED and base_state == EdgeFSMState.DISABLED:
+            state.disabled_transition_ns.append(snapshot_ns)
+        if len(state.disabled_transition_ns) >= _QUARANTINE_DISABLED_TRANSITIONS:
+            current_until = state.quarantine_until_ns or 0
+            state.quarantine_until_ns = max(current_until, snapshot_ns + _QUARANTINE_DURATION_NS)
+        state.last_base_state = base_state
+
+
+def _compute_ehs_components(
+    records: list[EdgeSignalRecord],
+    min_observations: int,
+) -> tuple[EdgeEHSComponent, ...]:
+    if len(records) < min_observations:
+        return tuple(
+            EdgeEHSComponent(
+                name=name,
+                weight=weight,
+                score=None,
+                available=False,
+                source="unavailable",
+                evidence={
+                    "reason": "insufficient_observations",
+                    "observation_count": len(records),
+                    "required": min_observations,
+                },
+            )
+            for name, weight in _COMPONENT_WEIGHTS
+        )
+
+    observation_count = len(records)
+    confidences = [record.confidence for record in records]
+    valid_count = sum(1 for record in records if record.is_valid)
+    mean_confidence = sum(confidences) / observation_count
+    valid_ratio = valid_count / observation_count
+
+    prefix_means: list[float] = []
+    running_total = 0.0
+    for idx, confidence in enumerate(confidences, start=1):
+        running_total += confidence
+        if idx >= min_observations:
+            prefix_means.append(running_total / idx)
+    peak_mean_confidence = max(prefix_means) if prefix_means else mean_confidence
+    drawdown_score = 0.0 if peak_mean_confidence <= 0.0 else min(1.0, mean_confidence / peak_mean_confidence)
+
+    stability_values = [abs(record.score) for record in records if abs(record.score) > 1e-12]
+    stability_source = "abs_signal_score_cv_proxy"
+    if len(stability_values) < 3:
+        stability_values = [confidence for confidence in confidences if confidence > 1e-12]
+        stability_source = "confidence_cv_proxy"
+
+    if len(stability_values) >= 3:
+        stability_mean = sum(stability_values) / len(stability_values)
+        if stability_mean > 1e-12:
+            stability_cv = _stddev(stability_values) / stability_mean
+            stability_score = max(0.0, min(1.0, 1.0 - stability_cv / 2.0))
+            stability_available = True
+        else:
+            stability_cv = None
+            stability_score = None
+            stability_available = False
+    else:
+        stability_cv = None
+        stability_score = None
+        stability_available = False
+
+    return (
+        EdgeEHSComponent(
+            name="sharpe",
+            weight=0.30,
+            score=max(0.0, min(1.0, mean_confidence)),
+            available=True,
+            source="confidence_proxy",
+            evidence={
+                "realized_available": False,
+                "fallback_used": True,
+                "mean_confidence": mean_confidence,
+                "observation_count": observation_count,
+            },
+        ),
+        EdgeEHSComponent(
+            name="hitrate",
+            weight=0.25,
+            score=max(0.0, min(1.0, valid_ratio)),
+            available=True,
+            source="valid_signal_ratio_proxy",
+            evidence={
+                "realized_available": False,
+                "fallback_used": True,
+                "valid_count": valid_count,
+                "observation_count": observation_count,
+            },
+        ),
+        EdgeEHSComponent(
+            name="drawdown",
+            weight=0.25,
+            score=max(0.0, min(1.0, drawdown_score)),
+            available=True,
+            source="confidence_drawdown_proxy",
+            evidence={
+                "realized_available": False,
+                "fallback_used": True,
+                "current_mean_confidence": mean_confidence,
+                "peak_mean_confidence": peak_mean_confidence,
+            },
+        ),
+        EdgeEHSComponent(
+            name="stability",
+            weight=0.20,
+            score=stability_score,
+            available=stability_available,
+            source=stability_source,
+            evidence={
+                "realized_available": False,
+                "fallback_used": True,
+                "cv": stability_cv,
+                "sample_count": len(stability_values),
+            },
+        ),
+    )
 
 
 def _compute_ehs(
-    records: list[EdgeSignalRecord],
-    min_observations: int,
+    records_or_components: list[EdgeSignalRecord] | tuple[EdgeEHSComponent, ...],
+    min_observations: int | None = None,
 ) -> float | None:
-    """Compute V1 EHS proxy score from a list of signal records.
-
-    Formula: mean(confidence) over the window.
-    Since confidence=0.0 for invalid signals, this naturally penalises
-    blocked signals without requiring separate hit-rate tracking.
-
-    Returns None if len(records) < min_observations.
-    """
-    if len(records) < min_observations:
+    if records_or_components and isinstance(records_or_components[0], EdgeSignalRecord):  # type: ignore[index]
+        min_obs = _MIN_OBSERVATIONS_REQUIRED if min_observations is None else min_observations
+        components = _compute_ehs_components(records_or_components, min_obs)  # type: ignore[arg-type]
+    else:
+        components = records_or_components  # type: ignore[assignment]
+    available = [component for component in components if component.available and component.score is not None]
+    if not available:
         return None
-    return sum(r.confidence for r in records) / len(records)
+    weight_total = sum(component.weight for component in available)
+    if weight_total <= 0.0:
+        return None
+    weighted_score = sum(component.weight * float(component.score) for component in available) / weight_total
+    return max(0.0, min(1.0, weighted_score))
 
 
 def _classify_fsm(ehs: float | None) -> EdgeFSMState:
-    """Map a continuous EHS score to an EdgeFSMState.
-
-    None (insufficient history) → ACTIVE (cannot claim disabled without evidence).
-    ehs < _DISABLE_THRESHOLD    → DISABLED
-    ehs < _DEGRADED_THRESHOLD   → DEGRADED
-    ehs >= _DEGRADED_THRESHOLD  → ACTIVE
-    """
     if ehs is None:
-        return EdgeFSMState.ACTIVE
-    if ehs < _DISABLE_THRESHOLD:
+        return EdgeFSMState.WARNING
+    if ehs < _WARNING_THRESHOLD:
         return EdgeFSMState.DISABLED
-    if ehs < _DEGRADED_THRESHOLD:
-        return EdgeFSMState.DEGRADED
+    if ehs < _ACTIVE_THRESHOLD:
+        return EdgeFSMState.WARNING
     return EdgeFSMState.ACTIVE
 
 
-def _classify_utilization(pct: float | None) -> UtilizationBand | None:
-    """Map a utilization percentage to a UtilizationBand.
+def _allocation_factor(ehs: float | None, fsm: EdgeFSMState) -> float:
+    if fsm in (EdgeFSMState.DISABLED, EdgeFSMState.QUARANTINE):
+        return 0.0
+    if ehs is None:
+        return _INITIALIZING_ALLOCATION_FACTOR
+    if ehs >= _ACTIVE_THRESHOLD:
+        return 1.0
+    if ehs < _WARNING_THRESHOLD:
+        return 0.0
+    return 0.5 + 0.5 * ((ehs - _WARNING_THRESHOLD) / (_ACTIVE_THRESHOLD - _WARNING_THRESHOLD))
 
-    Returns None if pct is None (unavailable).
-    """
+
+def _component_availability_ratio(components: tuple[EdgeEHSComponent, ...]) -> float:
+    total_weight = sum(component.weight for component in components)
+    if total_weight <= 0.0:
+        return 0.0
+    available_weight = sum(component.weight for component in components if component.available)
+    return available_weight / total_weight
+
+
+def _classify_utilization(pct: float | None) -> UtilizationBand | None:
     if pct is None:
         return None
     if pct >= _UTIL_RED_THRESHOLD:
@@ -442,11 +463,6 @@ def _classify_utilization(pct: float | None) -> UtilizationBand | None:
 
 
 def _validate_record(record: EdgeSignalRecord) -> list[str]:
-    """Return a list of validation error messages (empty = valid).
-
-    All errors are collected before returning so the caller sees a full
-    picture in one exception.
-    """
     errors: list[str] = []
     if not record.family:
         errors.append("family must not be empty")
@@ -458,4 +474,20 @@ def _validate_record(record: EdgeSignalRecord) -> list[str]:
         errors.append(f"confidence must be in [0.0, 1.0], got {record.confidence}")
     if record.utilization_pct is not None and not (0.0 <= record.utilization_pct <= 100.0):
         errors.append(f"utilization_pct must be in [0, 100], got {record.utilization_pct}")
+    if not math.isfinite(record.score):
+        errors.append(f"score must be finite, got {record.score}")
     return errors
+
+
+def _stddev(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    return math.sqrt(variance)
+
+
+def _prune_disabled_transitions(transitions: deque[int], snapshot_ns: int) -> None:
+    cutoff = snapshot_ns - _QUARANTINE_LOOKBACK_NS
+    while transitions and transitions[0] < cutoff:
+        transitions.popleft()
