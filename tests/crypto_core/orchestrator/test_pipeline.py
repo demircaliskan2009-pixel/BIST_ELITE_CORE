@@ -228,24 +228,35 @@ class TestRiskV2Integration:
         assert result.risk_evaluations[0].kill_switch_level == 0
 
     def test_ks_level_2_blocks_new_entries_end_to_end(self) -> None:
-        """KS level 2 (KS_BLOCK_THRESHOLD) must block all new entries."""
+        """KS level 2 (KS_BLOCK_THRESHOLD) must block all new entries.
+
+        With Phase 5C NT-R01 in the guard, KS level ≥ 2 blocks at the guard
+        stage (before risk).  Risk stage still runs and propagates the KS
+        level, but the pipeline is first blocked at 'guard'.
+        """
         orch = _orchestrator()
         result = orch.process(_healthy_data(), _healthy_signals(), kill_switch_level=2)
         assert result.approved is False
-        assert result.block_stage == "risk"
+        # NT-R01 fires in the guard — block_stage is now 'guard'
+        assert result.block_stage == "guard"
         assert result.block_reason is not None
-        assert "ks_blocked" in (result.block_reason or "")
-        # Risk evaluations are present but all blocked
+        assert "NT-R01" in (result.block_reason or "")
+        # Risk evaluations are present because the pipeline always runs all stages;
+        # the edge engine emits an invalid signal when the guard blocks, and the
+        # risk engine evaluates it — KS level is preserved on the evaluation.
         assert len(result.risk_evaluations) == 1
         assert result.risk_evaluations[0].approved is False
         assert result.risk_evaluations[0].kill_switch_level == 2
 
     def test_ks_level_3_blocks_end_to_end(self) -> None:
-        """KS level 3 (flatten/stop) must also block new entries."""
+        """KS level 3 (flatten/stop) must also block new entries.
+
+        NT-R01 fires at guard stage for level >= ks_block_threshold (2).
+        """
         orch = _orchestrator()
         result = orch.process(_healthy_data(), _healthy_signals(), kill_switch_level=3)
         assert result.approved is False
-        assert result.block_stage == "risk"
+        assert result.block_stage == "guard"
         assert result.risk_evaluations[0].kill_switch_level == 3
 
     def test_ks_level_1_does_not_block(self) -> None:
@@ -290,12 +301,17 @@ class TestRiskV2Integration:
             assert str(e1.block_reason) == str(e2.block_reason)
 
     def test_ks_block_audit_evidence_is_present(self) -> None:
-        """KS block must populate evidence with the block key."""
+        """KS block (NT-R01) must populate evidence in the guard decision.
+
+        With Phase 5C NT-R01 in the guard, the KS block evidence is now on
+        result.no_trade_decision.evidence (not the risk evaluation).
+        """
         orch = _orchestrator()
         result = orch.process(_healthy_data(), _healthy_signals(), kill_switch_level=2)
-        ev = result.risk_evaluations[0].evidence
-        assert "block" in ev
-        assert "ks_level_2" in str(ev["block"])
+        # Guard decision carries NT-R01 evidence
+        ev = result.no_trade_decision.evidence
+        assert ev.get("ks_level") == 2
+        assert ev.get("rule") == "NT-R01"
 
 
 # ---------------------------------------------------------------------------

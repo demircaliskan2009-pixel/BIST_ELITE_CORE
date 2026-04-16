@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass
 
 from crypto_core.edge.engine import EdgeEngine, EdgeEngineConfig
-from crypto_core.guard.models import NoTradeContext, NoTradeDecision, NoTradeReason
+from crypto_core.guard.models import NoTradeContext, NoTradeDecision, NoTradeReason, RiskGuardInput
 from crypto_core.guard.no_trade_guard import NoTradeConfig, NoTradeGuard
 from crypto_core.orchestrator.models import MarketDataInput, PipelineResult
 from crypto_core.risk.contracts import KS_LEVEL_NORMAL, RiskInput
@@ -172,6 +172,9 @@ class PipelineOrchestrator:
             feed_connection_state=data.feed_connection_state,
             feed_recovery_state=data.feed_recovery_state,
             system_state=str(state_snap.state),
+            # NT-R01: pass caller-supplied KS level; all other risk inputs are
+            # None until position tracker is available (Phase 5D+).
+            risk=RiskGuardInput(kill_switch_level=kill_switch_level),
         )
         no_trade = self._guard.evaluate(guard_ctx)
         guard_latency_ms = (time.time_ns() - stage_t0) / 1e6
