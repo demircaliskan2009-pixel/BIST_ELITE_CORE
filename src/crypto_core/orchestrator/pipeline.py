@@ -17,6 +17,7 @@ from crypto_core.edge.engine import EdgeEngine, EdgeEngineConfig
 from crypto_core.guard.models import NoTradeContext, NoTradeDecision, NoTradeReason, RiskGuardInput
 from crypto_core.guard.no_trade_guard import NoTradeConfig, NoTradeGuard
 from crypto_core.orchestrator.models import MarketDataInput, PipelineResult
+from crypto_core.portfolio.tracker import PositionTracker
 from crypto_core.risk.contracts import KS_LEVEL_NORMAL, RiskInput
 from crypto_core.risk.engine import RiskEngine
 from crypto_core.risk.kill_switch import KillSwitchEngine, KillSwitchInput, KillSwitchResult
@@ -70,6 +71,7 @@ class PipelineOrchestrator:
         config: PipelineConfig | None = None,
         state_engine: SystemStateEngine | None = None,
         telemetry_emitter: TelemetryEmitter | None = None,
+        position_tracker: PositionTracker | None = None,
     ) -> None:
         self._cfg = config or PipelineConfig()
         self._state_engine = state_engine or SystemStateEngine()
@@ -77,6 +79,8 @@ class PipelineOrchestrator:
         self._edge_engine = EdgeEngine(self._cfg.edge)
         self._risk_engine = RiskEngine()
         self._ks_engine = KillSwitchEngine()
+        # PositionTracker is optional — None = portfolio gates skip (Phase 5D+ wired)
+        self._position_tracker: PositionTracker | None = position_tracker
         from pathlib import Path
 
         self._telemetry = telemetry_emitter or (
@@ -161,6 +165,16 @@ class PipelineOrchestrator:
 
         # ── Stage 2: Guard ──────────────────────────────────────────────
         stage_t0 = time.time_ns()
+        # Build risk guard input — NT-R01 always set; NT-R02–R06 from tracker if available.
+        if self._position_tracker is not None:
+            risk_guard_input = self._position_tracker.to_risk_guard_input(
+                kill_switch_level=kill_switch_level,
+                snapshot_ns=ts,
+            )
+        else:
+            # NT-R01 only — all portfolio fields remain None (explicitly unavailable).
+            risk_guard_input = RiskGuardInput(kill_switch_level=kill_switch_level)
+
         guard_ctx = NoTradeContext(
             symbol=data.symbol,
             exchange=data.exchange,
@@ -172,9 +186,7 @@ class PipelineOrchestrator:
             feed_connection_state=data.feed_connection_state,
             feed_recovery_state=data.feed_recovery_state,
             system_state=str(state_snap.state),
-            # NT-R01: pass caller-supplied KS level; all other risk inputs are
-            # None until position tracker is available (Phase 5D+).
-            risk=RiskGuardInput(kill_switch_level=kill_switch_level),
+            risk=risk_guard_input,
         )
         no_trade = self._guard.evaluate(guard_ctx)
         guard_latency_ms = (time.time_ns() - stage_t0) / 1e6
@@ -227,6 +239,13 @@ class PipelineOrchestrator:
         # All optional v2 gates (dtl, kelly, cvar, portfolio) are explicitly
         # None — data unavailable until Phase 5C (position tracker + trade
         # history).  None causes each gate to skip (documented in contracts.py).
+        # Build portfolio risk snapshot — real values from tracker if available.
+        portfolio_risk_snap = (
+            self._position_tracker.to_portfolio_risk_snapshot(snapshot_ns=ts)
+            if self._position_tracker is not None
+            else None
+        )
+
         stage_t0 = time.time_ns()
         risk_evals: list[RiskEvaluation] = []
         for sig in edge_signals:
@@ -237,10 +256,10 @@ class PipelineOrchestrator:
                 timestamp_ns=ts,
                 shs_snapshot=state_snap.shs,
                 kill_switch_level=computed_ks_level,
-                dtl=None,  # Phase 5C: position tracker required
-                kelly=None,  # Phase 5C: trade history required
-                cvar=None,  # Phase 5C: returns distribution required
-                portfolio=None,  # Phase 5C: position tracker required
+                dtl=None,  # requires exchange-supplied liquidation price
+                kelly=None,  # requires trade history distribution
+                cvar=None,  # requires returns distribution (Phase 5E+)
+                portfolio=portfolio_risk_snap,  # real values when tracker available
             )
             risk_eval = self._risk_engine.evaluate_v2(risk_input)
             risk_evals.append(risk_eval)
@@ -258,6 +277,23 @@ class PipelineOrchestrator:
             if _r.dtl_pct is not None:
                 _prev = _tele_v2.get("dtl_pct_min")
                 _tele_v2["dtl_pct_min"] = min(float(_prev), _r.dtl_pct) if _prev is not None else _r.dtl_pct
+        # Portfolio telemetry — only when tracker is available
+        _tele_portfolio: dict[str, object] = {}
+        if self._position_tracker is not None:
+            _psnap = self._position_tracker.portfolio_snapshot(snapshot_ns=ts)
+            _tele_portfolio = {
+                "open_positions_count": _psnap.active_position_count,
+                "gross_exposure_pct": round(_psnap.gross_exposure_pct, 4),
+                "net_exposure_pct": round(_psnap.net_exposure_pct, 4),
+                "concentration_max_pct": round(_psnap.concentration_max_pct, 4),
+                "daily_realized_pnl_pct": round(_psnap.daily_realized_pnl_pct, 4),
+                "dtl_available_count": _psnap.dtl_available_count,
+                **(
+                    {"margin_utilization_pct": round(_psnap.margin_used_pct, 4)}
+                    if _psnap.margin_used_pct is not None
+                    else {}
+                ),
+            }
         self._emit_telemetry_safe(
             "risk",
             risk_latency_ms,
@@ -268,6 +304,7 @@ class PipelineOrchestrator:
                 "active_trigger_count": ks_result.evidence.get("active_trigger_count", 0),
                 **({"winning_trigger": ks_result.winning_trigger} if ks_result.winning_trigger is not None else {}),
                 **_tele_v2,
+                **_tele_portfolio,
             },
         )
 
