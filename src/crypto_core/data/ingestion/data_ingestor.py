@@ -23,8 +23,9 @@ from typing import Any, Callable
 from crypto_core.data.ingestion import binance_adapter, bybit_adapter
 from crypto_core.data.ingestion.binance_snapshot_fetcher import BinanceSnapshotFetcher
 from crypto_core.data.ingestion.websocket_client import WebSocketClient, WebSocketConfig
-from crypto_core.data.models.events import Exchange
+from crypto_core.data.models.events import Exchange, OrderBookEventType
 from crypto_core.data.models.feed_state import ConnectionState, FeedState, RecoveryState
+from crypto_core.data.recovery.delta_buffer import DeltaBuffer, SequenceGapError
 from crypto_core.data.recovery.recovery_manager import RecoveryManager
 
 logger = logging.getLogger(__name__)
@@ -32,20 +33,6 @@ logger = logging.getLogger(__name__)
 # Callback from DataIngestor to the EventRouter (or any upstream consumer).
 # Receives a fully-parsed typed event object.
 EventCallback = Callable[[object], None]
-
-# Recovery states that must gate event emission downstream.
-# IDLE = initial startup → events pass (no recovery in flight).
-# READY = connected and validated → events pass.
-# SNAPSHOTTING/REPLAYING/VALIDATING = recovery in flight → DROP events.
-# FAILED = feed in unsafe state → DROP events.
-_BLOCKED_RECOVERY_STATES: frozenset[RecoveryState] = frozenset(
-    {
-        RecoveryState.SNAPSHOTTING,
-        RecoveryState.REPLAYING,
-        RecoveryState.VALIDATING,
-        RecoveryState.FAILED,
-    }
-)
 
 
 class DataIngestor:
@@ -82,6 +69,7 @@ class DataIngestor:
         self._feed_configs: dict[str, WebSocketConfig] = {}  # feed_key → WebSocketConfig
         self._feed_exchanges: dict[str, Exchange] = {}  # feed_key → Exchange
         self._shutdown_events: dict[str, threading.Event] = {}  # feed_key → shutdown Event
+        self._delta_buffers: dict[str, DeltaBuffer] = {}  # feed_key → DeltaBuffer (Binance only)
 
     # ──────────────────────────────────────────────────────────────
     # Lifecycle
@@ -120,11 +108,19 @@ class DataIngestor:
         raw_callback = self._make_raw_callback(config.symbol, exchange)
         self._clients[feed_key] = self._ws_factory(config, raw_callback)
 
-        # on_connect: update the client reference only — the supervision loop
-        # in start_feed_managed() handles spawning the WS connect thread.
+        # on_connect: update the client reference and open the delta buffer so
+        # any WS delta messages arriving before the REST snapshot is applied
+        # are captured in the buffer rather than dropped.
+        # The supervision loop in start_feed_managed() handles spawning the
+        # actual WS connect thread after recovery completes.
         def _recovery_on_connect() -> None:
             new_raw_cb = self._make_raw_callback(config.symbol, exchange)
             self._clients[feed_key] = self._ws_factory(config, new_raw_cb)
+            # Open the delta buffer for this recovery cycle.
+            # start_buffering() resets any leftover state from the previous cycle.
+            buf = self._delta_buffers.get(feed_key)
+            if buf is not None:
+                buf.start_buffering()
 
         # Build the on_snapshot_request callback.
         # For Binance: fetch REST snapshot, emit event, advance state machine.
@@ -139,17 +135,63 @@ class DataIngestor:
                 config.symbol,
                 _http_get=snapshot_http_get,
             )
+            # DeltaBuffer for this feed — created once, reused across recovery cycles.
+            delta_buf = DeltaBuffer()
+            self._delta_buffers[feed_key] = delta_buf
 
             def on_snapshot_request(symbol: str, exch: str) -> None:
                 rm = recovery_mgr_ref[0]
-                event = fetcher.fetch()  # raises on network/HTTP error → retry
-                self._on_event(event)  # emit snapshot to downstream (book manager)
+                # ── Step 1: fetch the REST snapshot ──────────────────────────────────
+                snapshot_event = fetcher.fetch()  # raises on HTTP error → triggers retry
+
+                # ── Step 2: drain buffered deltas for replay ─────────────────────────
+                # Buffer was opened in _make_raw_callback the moment SNAPSHOTTING began.
+                # drain_for_replay() filters stale deltas (covered by snapshot) and
+                # validates the remaining sequence is contiguous.
+                try:
+                    replay_deltas = delta_buf.drain_for_replay(snapshot_event.last_update_id)
+                except SequenceGapError as gap:
+                    # Gap between snapshot and buffered deltas → recovery fail-closed.
+                    logger.error(
+                        "DeltaBuffer sequence gap during replay for %s:%s — %s",
+                        exch,
+                        symbol,
+                        gap,
+                    )
+                    delta_buf.clear()
+                    if rm is not None:
+                        state = rm._feed_state
+                        state.recovery_state = RecoveryState.FAILED
+                    raise  # propagates to _run_recovery_loop → triggers another attempt
+
+                # ── Step 3: emit snapshot to downstream (book manager, edge layer) ───
+                self._on_event(snapshot_event)
+
+                # ── Step 4: transition → REPLAYING ───────────────────────────────────
                 if rm is not None:
                     rm.on_snapshot_received()
-                    rm.on_stream_caught_up()  # Phase 7B: no delta buffering; go direct
+
+                # ── Step 5: replay validated deltas ──────────────────────────────────
+                if replay_deltas:
+                    logger.info(
+                        "Replaying %d buffered deltas for %s:%s (snapshot_update_id=%d)",
+                        len(replay_deltas),
+                        exch,
+                        symbol,
+                        snapshot_event.last_update_id,
+                    )
+                    for delta_event in replay_deltas:
+                        self._on_event(delta_event)
+
+                # ── Step 6: clear buffer (clean slate for next cycle) ─────────────────
+                delta_buf.clear()
+
+                # ── Step 7: transition → VALIDATING → READY ──────────────────────────
+                if rm is not None:
+                    rm.on_stream_caught_up()
                     rm.on_validation_passed()
         else:
-            # Bybit REST snapshot is not part of Phase 7B scope.
+            # Bybit REST snapshot is not part of Phase 7C scope.
             def on_snapshot_request(symbol: str, exch: str) -> None:  # type: ignore[misc]
                 raise NotImplementedError(
                     f"REST snapshot not supported for exchange={exch} "
@@ -272,6 +314,10 @@ class DataIngestor:
             self._feeds[feed_key].connection_state = ConnectionState.DISCONNECTED
         if feed_key in self._clients:
             self._clients[feed_key].disconnect()
+        # Clear any open delta buffer so it does not leak state.
+        buf = self._delta_buffers.get(feed_key)
+        if buf is not None and buf.is_active():
+            buf.clear()
 
     def shutdown(self, feed_key: str) -> None:
         """Signal the supervision loop to stop and disconnect the feed.
@@ -301,10 +347,18 @@ class DataIngestor:
     def _make_raw_callback(self, symbol: str, exchange: Exchange) -> Callable[[dict], None]:
         """Returns a closure that routes raw WS dicts through the adapter.
 
-        Events are dropped (not forwarded) while recovery_state is in one of
-        the active-recovery states (SNAPSHOTTING, REPLAYING, VALIDATING, FAILED).
-        This prevents stale or out-of-sequence data from reaching the edge layer
-        during a reconnect recovery cycle (PRD §4.5).
+        Routing rules during recovery:
+          SNAPSHOTTING:
+            - OrderBookEvent(DELTA) → buffered in DeltaBuffer (for replay after snapshot)
+            - All other events     → dropped (out-of-sequence, not safe to emit)
+          REPLAYING / VALIDATING:
+            - All events           → dropped (replay is in progress synchronously)
+          FAILED:
+            - All events           → dropped
+          IDLE / READY:
+            - All events           → forwarded to on_event
+
+        This replaces the Phase 7B blanket-drop policy for SNAPSHOTTING state.
         """
 
         def on_raw_message(msg: dict[str, Any]) -> None:
@@ -313,10 +367,56 @@ class DataIngestor:
             if state is None:
                 logger.warning("Received message for unregistered feed: %s", feed_key)
                 return
-            # Gate: drop events during active recovery (data may be out of sequence).
-            if state.recovery_state in _BLOCKED_RECOVERY_STATES:
-                logger.debug("Dropping event during recovery (%s): %s", state.recovery_state, feed_key)
+
+            rs = state.recovery_state
+
+            # ── SNAPSHOTTING: buffer depth deltas; drop everything else ──────────
+            if rs == RecoveryState.SNAPSHOTTING:
+                # Only buffer order-book deltas — other stream types (trade, kline,
+                # mark-price, liquidation) are stateless ticks and can safely be
+                # dropped during recovery without affecting book state.
+                try:
+                    events = self._parse_message(msg, exchange, symbol)
+                except (KeyError, ValueError) as exc:
+                    logger.error("Parse error on %s: %s — msg=%r", feed_key, exc, msg)
+                    return
+
+                buf = self._delta_buffers.get(feed_key)
+                for event in events:
+                    if (
+                        hasattr(event, "event_type")
+                        and event.event_type == OrderBookEventType.DELTA
+                        and buf is not None
+                        and buf.is_active()
+                    ):
+                        try:
+                            buf.push(event)
+                        except OverflowError as oe:
+                            # Buffer overflow → fail-closed: mark feed FAILED.
+                            logger.error(
+                                "DeltaBuffer overflow for %s — marking FAILED: %s",
+                                feed_key,
+                                oe,
+                            )
+                            state.recovery_state = RecoveryState.FAILED
+                    else:
+                        logger.debug(
+                            "Dropping non-delta event during SNAPSHOTTING (%s): %s",
+                            feed_key,
+                            type(event).__name__,
+                        )
                 return
+
+            # ── REPLAYING / VALIDATING / FAILED: drop all events ─────────────────
+            if rs in (
+                RecoveryState.REPLAYING,
+                RecoveryState.VALIDATING,
+                RecoveryState.FAILED,
+            ):
+                logger.debug("Dropping event during recovery (%s): %s", rs, feed_key)
+                return
+
+            # ── IDLE / READY: normal forward path ────────────────────────────────
             try:
                 events = self._parse_message(msg, exchange, symbol)
                 for event in events:
@@ -324,8 +424,6 @@ class DataIngestor:
                     self._on_event(event)
             except (KeyError, ValueError) as exc:
                 logger.error("Parse error on %s: %s — msg=%r", feed_key, exc, msg)
-                # parse errors are logged but do NOT crash the callback
-                # the feed continues; validation layer will catch upstream issues
 
         return on_raw_message
 
