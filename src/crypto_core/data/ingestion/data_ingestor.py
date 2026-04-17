@@ -21,6 +21,7 @@ import threading
 from typing import Any, Callable
 
 from crypto_core.data.ingestion import binance_adapter, bybit_adapter
+from crypto_core.data.ingestion.binance_snapshot_fetcher import BinanceSnapshotFetcher
 from crypto_core.data.ingestion.websocket_client import WebSocketClient, WebSocketConfig
 from crypto_core.data.models.events import Exchange
 from crypto_core.data.models.feed_state import ConnectionState, FeedState, RecoveryState
@@ -69,23 +70,40 @@ class DataIngestor:
         self,
         on_event: EventCallback,
         ws_factory: Callable[[WebSocketConfig, Callable[[dict], None]], WebSocketClient] | None = None,
+        recovery_sleep_fn: Callable[[float], None] | None = None,
     ) -> None:
         self._on_event = on_event
         self._ws_factory = ws_factory
+        self._recovery_sleep_fn = recovery_sleep_fn  # None → time.sleep (default)
         self._feeds: dict[str, FeedState] = {}  # feed_key → FeedState
         self._clients: dict[str, WebSocketClient] = {}  # feed_key → WebSocketClient
         self._recovery_managers: dict[str, RecoveryManager] = {}  # feed_key → RecoveryManager
         self._feed_threads: dict[str, threading.Thread] = {}  # feed_key → managed Thread
+        self._feed_configs: dict[str, WebSocketConfig] = {}  # feed_key → WebSocketConfig
+        self._feed_exchanges: dict[str, Exchange] = {}  # feed_key → Exchange
+        self._shutdown_events: dict[str, threading.Event] = {}  # feed_key → shutdown Event
 
     # ──────────────────────────────────────────────────────────────
     # Lifecycle
     # ──────────────────────────────────────────────────────────────
 
-    def register_feed(self, config: WebSocketConfig, exchange: Exchange) -> str:
+    def register_feed(
+        self,
+        config: WebSocketConfig,
+        exchange: Exchange,
+        snapshot_http_get: Callable[..., Any] | None = None,
+    ) -> str:
         """Register a new feed and create its FeedState + RecoveryManager.
 
         Returns the feed_key for tracking purposes.
         Does NOT connect. Call start_feed() or start_feed_managed() to connect.
+
+        Args:
+            config:           WebSocket configuration (url, symbol, ping settings).
+            exchange:         Exchange enum (BINANCE or BYBIT).
+            snapshot_http_get: Injectable HTTP GET callable for snapshot fetcher.
+                              Used in tests to avoid real network calls.
+                              If None, BinanceSnapshotFetcher uses requests.get.
         """
         if self._ws_factory is None:
             raise RuntimeError("ws_factory must be set before registering feeds")
@@ -97,27 +115,54 @@ class DataIngestor:
             stream_type="multi",
         )
         self._feeds[feed_key] = feed_state
+        self._feed_configs[feed_key] = config
+        self._feed_exchanges[feed_key] = exchange
         raw_callback = self._make_raw_callback(config.symbol, exchange)
         self._clients[feed_key] = self._ws_factory(config, raw_callback)
 
-        # Wire RecoveryManager. on_connect is non-blocking: it creates a new
-        # client instance and starts it in a daemon thread so _run_recovery_loop()
-        # can proceed to request the snapshot without waiting for a disconnect.
+        # on_connect: update the client reference only — the supervision loop
+        # in start_feed_managed() handles spawning the WS connect thread.
         def _recovery_on_connect() -> None:
             new_raw_cb = self._make_raw_callback(config.symbol, exchange)
             self._clients[feed_key] = self._ws_factory(config, new_raw_cb)
-            t = threading.Thread(
-                target=self._clients[feed_key].connect,
-                daemon=True,
-                name=f"feed-{feed_key}-reconnect-{feed_state.reconnect_attempt}",
+
+        # Build the on_snapshot_request callback.
+        # For Binance: fetch REST snapshot, emit event, advance state machine.
+        # For Bybit: explicitly unsupported in Phase 7B (no REST depth endpoint).
+        #
+        # Forward reference: recovery_mgr_ref is filled after RecoveryManager is
+        # created (list trick avoids circular dependency).
+        recovery_mgr_ref: list[RecoveryManager | None] = [None]
+
+        if exchange == Exchange.BINANCE:
+            fetcher = BinanceSnapshotFetcher(
+                config.symbol,
+                _http_get=snapshot_http_get,
             )
-            t.start()
+
+            def on_snapshot_request(symbol: str, exch: str) -> None:
+                rm = recovery_mgr_ref[0]
+                event = fetcher.fetch()  # raises on network/HTTP error → retry
+                self._on_event(event)  # emit snapshot to downstream (book manager)
+                if rm is not None:
+                    rm.on_snapshot_received()
+                    rm.on_stream_caught_up()  # Phase 7B: no delta buffering; go direct
+                    rm.on_validation_passed()
+        else:
+            # Bybit REST snapshot is not part of Phase 7B scope.
+            def on_snapshot_request(symbol: str, exch: str) -> None:  # type: ignore[misc]
+                raise NotImplementedError(
+                    f"REST snapshot not supported for exchange={exch} "
+                    f"(symbol={symbol}). Phase 7B supports Binance Futures only."
+                )
 
         self._recovery_managers[feed_key] = RecoveryManager(
             feed_state=feed_state,
             on_connect=_recovery_on_connect,
-            on_snapshot_request=lambda _sym, _exch: None,  # Phase 7A: REST snapshot wired in 7B
+            on_snapshot_request=on_snapshot_request,
+            sleep_fn=self._recovery_sleep_fn,
         )
+        recovery_mgr_ref[0] = self._recovery_managers[feed_key]
         logger.info("Registered feed: %s", feed_key)
         return feed_key
 
@@ -145,12 +190,16 @@ class DataIngestor:
         logger.info("Feed started (sync): %s", feed_key)
 
     def start_feed_managed(self, feed_key: str) -> threading.Thread:
-        """Start the feed in a background daemon thread with automatic recovery.
+        """Start the feed under continuous supervision in a background daemon thread.
 
-        When connect() returns (connection closed), RecoveryManager.on_disconnect()
-        is triggered to run exponential-backoff reconnect + snapshot protocol.
+        The supervision loop:
+        1. Spawns a WS connect thread and waits for it to finish (disconnect).
+        2. On unexpected disconnect, runs RecoveryManager.on_disconnect() which
+           performs exponential-backoff reconnect + REST snapshot + state advance.
+        3. After recovery, loops back and spawns a new WS connect thread.
+        4. Exits only when shutdown() is called or the feed enters FAILED state.
 
-        Returns the Thread so callers can join() on shutdown if needed.
+        Returns the supervision Thread so callers can join() on shutdown if needed.
 
         Raises:
             RuntimeError: if feed_key is not registered.
@@ -160,31 +209,86 @@ class DataIngestor:
 
         state = self._feeds[feed_key]
         recovery_mgr = self._recovery_managers[feed_key]
+        shutdown_event = threading.Event()
+        self._shutdown_events[feed_key] = shutdown_event
 
-        def _run() -> None:
-            state.connection_state = ConnectionState.CONNECTED
-            state.recovery_state = RecoveryState.READY
+        def _ws_connect_guarded() -> None:
+            """Run client.connect() and absorb any exception (logged only)."""
             try:
                 self._clients[feed_key].connect()  # blocks until disconnect
             except Exception as exc:
                 logger.error("Feed connect error %s: %s", feed_key, exc)
 
-            # connect() returned → connection closed (clean or error).
-            if state.connection_state != ConnectionState.DISCONNECTED:
+        def _run() -> None:
+            """Supervision loop: connect → wait → recover → repeat."""
+            while not shutdown_event.is_set():
+                # (Re-)arm feed state so events flow through the callback gate.
+                # After recovery, on_validation_passed() has already set these;
+                # setting them here is idempotent and correct for the initial start.
+                state.connection_state = ConnectionState.CONNECTED
+                state.recovery_state = RecoveryState.READY
+
+                ws_thread = threading.Thread(
+                    target=_ws_connect_guarded,
+                    daemon=True,
+                    name=f"ws-{feed_key}-{state.reconnect_attempt}",
+                )
+                ws_thread.start()
+                ws_thread.join()  # block until WS disconnects or errors
+
+                if shutdown_event.is_set():
+                    break
+
+                # Permanent failure or clean stop → exit supervision.
+                if state.connection_state in (
+                    ConnectionState.FAILED,
+                    ConnectionState.DISCONNECTED,
+                ):
+                    break
+                if state.recovery_state == RecoveryState.FAILED:
+                    break
+
+                # Unexpected disconnect — run recovery.
+                # on_disconnect() is synchronous:
+                #   - exponential backoff
+                #   - _recovery_on_connect() updates self._clients[feed_key]
+                #   - on_snapshot_request() fetches REST snapshot, emits event,
+                #     advances state machine to READY
+                # After return, self._clients[feed_key] is the new client and
+                # state.recovery_state == READY.
                 logger.warning("Feed %s disconnected unexpectedly — triggering recovery", feed_key)
                 recovery_mgr.on_disconnect()
+                # Loop continues → re-arm states → spawn new WS thread.
 
-        t = threading.Thread(target=_run, daemon=True, name=f"feed-{feed_key}")
+        t = threading.Thread(target=_run, daemon=True, name=f"supervision-{feed_key}")
         self._feed_threads[feed_key] = t
         t.start()
         logger.info("Feed started (managed): %s", feed_key)
         return t
 
     def stop_feed(self, feed_key: str) -> None:
-        """Disconnect the WebSocketClient for the given feed."""
+        """Disconnect the WebSocketClient for the given feed (clean stop)."""
+        if feed_key in self._feeds:
+            self._feeds[feed_key].connection_state = ConnectionState.DISCONNECTED
         if feed_key in self._clients:
             self._clients[feed_key].disconnect()
-            self._feeds[feed_key].connection_state = ConnectionState.DISCONNECTED
+
+    def shutdown(self, feed_key: str) -> None:
+        """Signal the supervision loop to stop and disconnect the feed.
+
+        After this call the supervision Thread will exit its loop on the next
+        iteration.  Call Thread.join() on the value returned by start_feed_managed()
+        to wait for the supervision thread to finish.
+        """
+        event = self._shutdown_events.get(feed_key)
+        if event is not None:
+            event.set()
+        self.stop_feed(feed_key)
+
+    def shutdown_all(self) -> None:
+        """Shutdown all registered feeds."""
+        for feed_key in list(self._feeds):
+            self.shutdown(feed_key)
 
     def get_feed_state(self, feed_key: str) -> FeedState | None:
         """Returns FeedState for the given feed_key, or None if unknown."""
