@@ -176,6 +176,20 @@ class PipelineOrchestrator:
         if recovery_evidence is not None:
             self._emit_recovery_telemetry(recovery_evidence)
 
+    # ------------------------------------------------------------------
+    # Properties for session-layer access (Phase 7E)
+    # ------------------------------------------------------------------
+
+    @property
+    def position_tracker(self) -> PositionTracker | None:
+        """Current position tracker instance."""
+        return self._position_tracker
+
+    @position_tracker.setter
+    def position_tracker(self, tracker: PositionTracker | None) -> None:
+        """Replace the position tracker (used by session recovery)."""
+        self._position_tracker = tracker
+
     def process(
         self,
         data: MarketDataInput,
