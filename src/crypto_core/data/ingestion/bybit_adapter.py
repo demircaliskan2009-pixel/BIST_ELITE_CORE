@@ -30,6 +30,49 @@ from crypto_core.data.models.events import (
 _EXCHANGE = Exchange.BYBIT
 
 
+def parse_depth_snapshot(result: dict[str, Any], symbol: str, timestamp_ns: int) -> OrderBookEvent:
+    """Parse a Bybit V5 REST orderbook response result into an OrderBookEvent.
+
+    Used during recovery (§4.5): REST GET /v5/market/orderbook → applied as SNAPSHOT.
+
+    ``result`` is the 'result' sub-dict of the Bybit V5 API response:
+      {
+        "s": "BTCUSDT",
+        "b": [["price", "qty"], ...],  # bids, sorted by price descending
+        "a": [["price", "qty"], ...],  # asks, sorted by price ascending
+        "ts": 1672914493826,           # millisecond timestamp
+        "u": 18234961,                 # symbol-local update ID
+        "seq": 11486752626,            # global cross-symbol sequence number
+        "cts": 1672914493816           # create timestamp (optional)
+      }
+
+    Sequence alignment:
+      - "seq" is the canonical reference sequence for WS delta replay (used by
+        parse_orderbook and the DeltaBuffer).  "u" is a symbol-local counter and
+        is used only as a fallback when "seq" is absent.
+      - Both first_update_id and last_update_id are set to seq (single value, not
+        a range) to align with the parse_orderbook() convention for Bybit events.
+
+    Raises:
+        KeyError: if required fields ("s", "b", "a", "ts") are missing.
+    """
+    bids = tuple(OrderBookLevel(price=float(b[0]), qty=float(b[1])) for b in result["b"])
+    asks = tuple(OrderBookLevel(price=float(a[0]), qty=float(a[1])) for a in result["a"])
+    # Prefer the global cross-symbol "seq"; fall back to symbol-local "u".
+    seq = int(result.get("seq") or result.get("u") or 0)
+    return OrderBookEvent(
+        symbol=symbol,
+        exchange=_EXCHANGE,
+        event_type=OrderBookEventType.SNAPSHOT,
+        bids=bids,
+        asks=asks,
+        timestamp_ns=timestamp_ns,
+        first_update_id=seq,
+        last_update_id=seq,
+        checksum=result.get("cts"),  # create-timestamp doubles as checksum carrier
+    )
+
+
 def parse_trade(data: dict[str, Any], topic: str) -> TradeEvent:
     """Parse a Bybit publicTrade.<symbol> message payload entry.
 

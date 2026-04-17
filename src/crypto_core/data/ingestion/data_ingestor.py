@@ -22,6 +22,7 @@ from typing import Any, Callable
 
 from crypto_core.data.ingestion import binance_adapter, bybit_adapter
 from crypto_core.data.ingestion.binance_snapshot_fetcher import BinanceSnapshotFetcher
+from crypto_core.data.ingestion.bybit_snapshot_fetcher import BybitSnapshotFetcher
 from crypto_core.data.ingestion.websocket_client import WebSocketClient, WebSocketConfig
 from crypto_core.data.models.events import Exchange, OrderBookEventType
 from crypto_core.data.models.feed_state import ConnectionState, FeedState, RecoveryState
@@ -123,8 +124,8 @@ class DataIngestor:
                 buf.start_buffering()
 
         # Build the on_snapshot_request callback.
-        # For Binance: fetch REST snapshot, emit event, advance state machine.
-        # For Bybit: explicitly unsupported in Phase 7B (no REST depth endpoint).
+        # For Binance: fetch REST snapshot using Binance Futures REST API.
+        # For Bybit: fetch snapshot from Bybit V5 REST orderbook endpoint (Phase 7D).
         #
         # Forward reference: recovery_mgr_ref is filled after RecoveryManager is
         # created (list trick avoids circular dependency).
@@ -190,12 +191,73 @@ class DataIngestor:
                 if rm is not None:
                     rm.on_stream_caught_up()
                     rm.on_validation_passed()
+        elif exchange == Exchange.BYBIT:
+            bybit_fetcher = BybitSnapshotFetcher(
+                config.symbol,
+                _http_get=snapshot_http_get,
+            )
+            # DeltaBuffer for this feed — created once, reused across recovery cycles.
+            bybit_buf = DeltaBuffer()
+            self._delta_buffers[feed_key] = bybit_buf
+
+            def on_snapshot_request(symbol: str, exch: str) -> None:  # type: ignore[misc]
+                rm = recovery_mgr_ref[0]
+                # ── Step 1: fetch the Bybit V5 REST snapshot ─────────────────────────
+                snapshot_event = bybit_fetcher.fetch()  # raises on HTTP / API error
+
+                # ── Step 2: drain buffered deltas for replay ─────────────────────────
+                # Bybit uses monotonic seq ordering (not strict +1) because seq is a
+                # global cross-symbol counter — legitimate gaps exist per symbol.
+                try:
+                    replay_deltas = bybit_buf.drain_for_replay(
+                        snapshot_event.last_update_id,
+                        require_strict_contiguous=False,  # Bybit: monotonic only
+                    )
+                except SequenceGapError as gap:
+                    logger.error(
+                        "DeltaBuffer sequence gap during replay for %s:%s — %s",
+                        exch,
+                        symbol,
+                        gap,
+                    )
+                    bybit_buf.clear()
+                    if rm is not None:
+                        state = rm._feed_state
+                        state.recovery_state = RecoveryState.FAILED
+                    raise
+
+                # ── Step 3: emit snapshot to downstream ──────────────────────────────
+                self._on_event(snapshot_event)
+
+                # ── Step 4: transition → REPLAYING ───────────────────────────────────
+                if rm is not None:
+                    rm.on_snapshot_received()
+
+                # ── Step 5: replay validated deltas ──────────────────────────────────
+                if replay_deltas:
+                    logger.info(
+                        "Replaying %d buffered Bybit deltas for %s:%s (snapshot_seq=%d)",
+                        len(replay_deltas),
+                        exch,
+                        symbol,
+                        snapshot_event.last_update_id,
+                    )
+                    for delta_event in replay_deltas:
+                        self._on_event(delta_event)
+
+                # ── Step 6: clear buffer (clean slate for next cycle) ─────────────────
+                bybit_buf.clear()
+
+                # ── Step 7: transition → VALIDATING → READY ──────────────────────────
+                if rm is not None:
+                    rm.on_stream_caught_up()
+                    rm.on_validation_passed()
         else:
-            # Bybit REST snapshot is not part of Phase 7C scope.
+            # Any other exchange is not yet supported — fail closed.
             def on_snapshot_request(symbol: str, exch: str) -> None:  # type: ignore[misc]
                 raise NotImplementedError(
-                    f"REST snapshot not supported for exchange={exch} "
-                    f"(symbol={symbol}). Phase 7B supports Binance Futures only."
+                    f"REST snapshot not supported for exchange={exch!r} (symbol={symbol}). "
+                    f"Only Binance and Bybit are currently supported."
                 )
 
         self._recovery_managers[feed_key] = RecoveryManager(

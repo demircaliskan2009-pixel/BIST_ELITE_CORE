@@ -2,7 +2,7 @@
 
 Validates:
 1. BinanceSnapshotFetcher — parse, HTTP error, timeout (injectable _http_get)
-2. register_feed() — Binance wires real snapshot callback; Bybit raises NotImplementedError
+2. register_feed() — Binance wires real snapshot callback; Bybit now also supported (Phase 7D)
 3. on_snapshot_request wiring — snapshot emitted and state machine advanced
 4. Supervision loop — reconnects after unexpected disconnect, loops continuously
 5. Supervision loop — events blocked during recovery, READY after recovery
@@ -298,22 +298,60 @@ class TestRegisterFeedSnapshotWiring:
         assert state.recovery_state == RecoveryState.READY
         assert state.reconnect_attempt == 0
 
-    def test_bybit_snapshot_request_raises_not_implemented(self) -> None:
-        """on_snapshot_request for Bybit raises NotImplementedError."""
+    def test_bybit_snapshot_request_now_supported(self) -> None:
+        """on_snapshot_request for Bybit now succeeds (Phase 7D real recovery support).
+
+        Phase 7D wires BybitSnapshotFetcher into the Bybit recovery path.
+        Inject a mock HTTP to verify: snapshot event emitted + state → READY.
+        """
 
         def ws_factory(config: WebSocketConfig, on_msg: Any) -> WebSocketClient:
             return WebSocketSimulator(config, on_msg, messages=[])
 
+        emitted: list[object] = []
+
+        class _BybitMockResp:
+            """Minimal response stub for Bybit V5 REST orderbook."""
+
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict[str, Any]:
+                return {
+                    "retCode": 0,
+                    "retMsg": "OK",
+                    "result": {
+                        "s": _SYMBOL,
+                        "b": [["49999.0", "2.5"]],
+                        "a": [["50001.0", "3.0"]],
+                        "ts": _TS_MS,
+                        "u": 1000,
+                        "seq": 99000,
+                    },
+                }
+
+        def mock_http(url: str, *, params: dict, timeout: float) -> _BybitMockResp:
+            return _BybitMockResp()
+
         ingestor = DataIngestor(
-            on_event=lambda e: None,
+            on_event=emitted.append,
             ws_factory=ws_factory,
             recovery_sleep_fn=lambda s: None,
         )
-        feed_key = ingestor.register_feed(_bybit_config(), Exchange.BYBIT)
+        feed_key = ingestor.register_feed(_bybit_config(), Exchange.BYBIT, snapshot_http_get=mock_http)
+        state = ingestor.get_feed_state(feed_key)
+        assert state is not None
+        state.recovery_state = RecoveryState.SNAPSHOTTING
 
         rm = ingestor._recovery_managers[feed_key]
-        with pytest.raises(NotImplementedError, match="Phase 7B supports Binance Futures only"):
-            rm._on_snapshot_request(_SYMBOL, "bybit")
+        rm._on_snapshot_request(_SYMBOL, "bybit")
+
+        assert state.recovery_state == RecoveryState.READY
+        assert len(emitted) == 1
+        snap = emitted[0]
+        assert isinstance(snap, OrderBookEvent)
+        assert snap.event_type == OrderBookEventType.SNAPSHOT
+        assert snap.symbol == _SYMBOL
 
     def test_register_stores_config_and_exchange(self) -> None:
         """register_feed stores config and exchange for supervision loop use."""
@@ -494,10 +532,19 @@ class TestSupervisionLoop:
 
         # Invoke the raw callback directly (bypasses start_feed's state reset)
         raw_cb = ingestor._make_raw_callback(_SYMBOL, Exchange.BINANCE)
-        raw_cb({
-            "e": "trade", "E": _TS_MS, "s": _SYMBOL, "t": 1,
-            "p": "50000.0", "q": "0.01", "T": _TS_MS, "m": False, "M": True,
-        })
+        raw_cb(
+            {
+                "e": "trade",
+                "E": _TS_MS,
+                "s": _SYMBOL,
+                "t": 1,
+                "p": "50000.0",
+                "q": "0.01",
+                "T": _TS_MS,
+                "m": False,
+                "M": True,
+            }
+        )
 
         # Gate must have dropped the event
         assert len(emitted) == 0

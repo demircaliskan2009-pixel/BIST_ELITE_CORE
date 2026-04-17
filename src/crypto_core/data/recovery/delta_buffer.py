@@ -127,21 +127,41 @@ class DeltaBuffer:
     # Read / replay path
     # ──────────────────────────────────────────────────────────────
 
-    def drain_for_replay(self, snapshot_last_update_id: int) -> list[OrderBookEvent]:
+    def drain_for_replay(
+        self,
+        snapshot_last_update_id: int,
+        *,
+        require_strict_contiguous: bool = True,
+    ) -> list[OrderBookEvent]:
         """Return ordered list of deltas that must be replayed after the snapshot.
 
         Algorithm:
           1. Discard all deltas whose last_update_id <= snapshot_last_update_id
              (they are already covered by the snapshot).
-          2. Verify the remaining deltas form a contiguous sequence starting at
-             snapshot_last_update_id + 1:
-             - delta[0].first_update_id must equal snapshot_last_update_id + 1.
-             - each successive delta[i].first_update_id must equal
-               delta[i-1].last_update_id + 1.
-          3. If sequence is broken → raise SequenceGapError (fail-closed).
-          4. Return the validated contiguous list.
+          2. Verify the remaining deltas form a valid replay sequence:
+
+             require_strict_contiguous=True  (Binance — strict +1 contiguity):
+               - delta[0].first_update_id must equal snapshot_last_update_id + 1.
+               - each successive delta[i].first_update_id must equal
+                 delta[i-1].last_update_id + 1.
+
+             require_strict_contiguous=False  (Bybit — monotonic ordering):
+               - delta[0].first_update_id must be strictly greater than
+                 snapshot_last_update_id (no +1 requirement; Bybit seq is a
+                 global cross-symbol counter with legitimate gaps per symbol).
+               - each successive delta[i].first_update_id must be strictly
+                 greater than delta[i-1].last_update_id (monotonically
+                 increasing, gaps are valid).
+
+          3. If the sequence check fails → raise SequenceGapError (fail-closed).
+          4. Return the validated list.
 
         Does NOT clear the buffer.  Call clear() after successful replay.
+
+        Args:
+            snapshot_last_update_id: The last_update_id of the REST snapshot.
+            require_strict_contiguous: True (default) for Binance strict +1
+                contiguity.  False for Bybit monotonic-only ordering.
 
         Raises:
             SequenceGapError: if the replay sequence is broken or gapped.
@@ -157,39 +177,69 @@ class DeltaBuffer:
             )
             return []
 
-        # Step 2: verify gap between snapshot and first delta.
-        expected_first = snapshot_last_update_id + 1
-        if relevant[0].first_update_id != expected_first:
-            raise SequenceGapError(
-                f"Gap between snapshot and first replay delta: "
-                f"expected first_update_id={expected_first}, "
-                f"got {relevant[0].first_update_id} "
-                f"(symbol={relevant[0].symbol})",
-                expected=expected_first,
-                got=relevant[0].first_update_id,
-            )
-
-        # Step 3: verify inter-delta continuity.
-        for i in range(1, len(relevant)):
-            prev = relevant[i - 1]
-            curr = relevant[i]
-            expected = prev.last_update_id + 1
-            if curr.first_update_id != expected:
+        if require_strict_contiguous:
+            # ── Binance path: strict +1 continuity ────────────────────────
+            # Step 2a: verify first delta aligns immediately after snapshot.
+            expected_first = snapshot_last_update_id + 1
+            if relevant[0].first_update_id != expected_first:
                 raise SequenceGapError(
-                    f"Delta replay sequence gap at position {i}: "
-                    f"expected first_update_id={expected}, "
-                    f"got {curr.first_update_id} "
-                    f"(symbol={curr.symbol})",
-                    expected=expected,
-                    got=curr.first_update_id,
+                    f"Gap between snapshot and first replay delta: "
+                    f"expected first_update_id={expected_first}, "
+                    f"got {relevant[0].first_update_id} "
+                    f"(symbol={relevant[0].symbol})",
+                    expected=expected_first,
+                    got=relevant[0].first_update_id,
                 )
 
+            # Step 3a: verify inter-delta strict +1 continuity.
+            for i in range(1, len(relevant)):
+                prev = relevant[i - 1]
+                curr = relevant[i]
+                expected = prev.last_update_id + 1
+                if curr.first_update_id != expected:
+                    raise SequenceGapError(
+                        f"Delta replay sequence gap at position {i}: "
+                        f"expected first_update_id={expected}, "
+                        f"got {curr.first_update_id} "
+                        f"(symbol={curr.symbol})",
+                        expected=expected,
+                        got=curr.first_update_id,
+                    )
+        else:
+            # ── Bybit path: monotonic ordering only (no strict +1) ─────────
+            # Step 2b: first delta must be strictly after the snapshot seq.
+            if relevant[0].first_update_id <= snapshot_last_update_id:
+                raise SequenceGapError(
+                    f"First replay delta is not strictly after snapshot: "
+                    f"snapshot_last={snapshot_last_update_id}, "
+                    f"got first_update_id={relevant[0].first_update_id} "
+                    f"(symbol={relevant[0].symbol})",
+                    expected=snapshot_last_update_id + 1,
+                    got=relevant[0].first_update_id,
+                )
+
+            # Step 3b: verify inter-delta strict monotonic ordering.
+            for i in range(1, len(relevant)):
+                prev = relevant[i - 1]
+                curr = relevant[i]
+                if curr.first_update_id <= prev.last_update_id:
+                    raise SequenceGapError(
+                        f"Non-monotonic delta at position {i}: "
+                        f"prev last_update_id={prev.last_update_id}, "
+                        f"got first_update_id={curr.first_update_id} "
+                        f"(symbol={curr.symbol}) — out-of-order or duplicate",
+                        expected=prev.last_update_id + 1,
+                        got=curr.first_update_id,
+                    )
+
         logger.info(
-            "DeltaBuffer.drain_for_replay: %d deltas validated for replay (snapshot_update_id=%d, first=%d, last=%d)",
+            "DeltaBuffer.drain_for_replay: %d deltas validated for replay "
+            "(snapshot_update_id=%d, first=%d, last=%d, strict_contiguous=%s)",
             len(relevant),
             snapshot_last_update_id,
             relevant[0].first_update_id,
             relevant[-1].last_update_id,
+            require_strict_contiguous,
         )
         return relevant
 

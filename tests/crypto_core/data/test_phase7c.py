@@ -9,7 +9,7 @@ Validates:
    gaps fail recovery, state advances to READY.
 4. Buffer reset between cycles — no state leak across recovery attempts.
 5. _recovery_on_connect opens buffer — buffer is active before snapshot fetch.
-6. Bybit remains unsupported — fail-closed.
+6. Bybit recovery wiring — covered in Phase 7D (test_phase7d.py).
 7. Multi-reconnect cycle — buffer cleared and re-opened on each cycle.
 
 All tests are CI-safe: no real network, no real sleep, deterministic threading.
@@ -630,8 +630,8 @@ class TestSnapshotAlignedReplay:
         assert feed_key in ingestor._delta_buffers
         assert isinstance(ingestor._delta_buffers[feed_key], DeltaBuffer)
 
-    def test_no_buffer_for_bybit_feed(self) -> None:
-        """DeltaBuffer is NOT created for Bybit feeds (unsupported)."""
+    def test_bybit_feed_now_has_delta_buffer(self) -> None:
+        """Phase 7D: DeltaBuffer IS created for Bybit feeds (real recovery wired)."""
 
         def ws_factory(config: WebSocketConfig, on_msg: Any) -> WebSocketClient:
             return WebSocketSimulator(config, on_msg, messages=[])
@@ -642,7 +642,8 @@ class TestSnapshotAlignedReplay:
             recovery_sleep_fn=lambda s: None,
         )
         feed_key = ingestor.register_feed(_bybit_config(), Exchange.BYBIT)
-        assert feed_key not in ingestor._delta_buffers
+        # Phase 7D: Bybit has real recovery — DeltaBuffer is registered.
+        assert feed_key in ingestor._delta_buffers
 
 
 # ─────────────────────────────────────────────────────────────────────────────
