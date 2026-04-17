@@ -17,18 +17,34 @@ PRD reference: §4.1, §4.5 Recovery Protocol.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Callable
 
 from crypto_core.data.ingestion import binance_adapter, bybit_adapter
 from crypto_core.data.ingestion.websocket_client import WebSocketClient, WebSocketConfig
 from crypto_core.data.models.events import Exchange
 from crypto_core.data.models.feed_state import ConnectionState, FeedState, RecoveryState
+from crypto_core.data.recovery.recovery_manager import RecoveryManager
 
 logger = logging.getLogger(__name__)
 
 # Callback from DataIngestor to the EventRouter (or any upstream consumer).
 # Receives a fully-parsed typed event object.
 EventCallback = Callable[[object], None]
+
+# Recovery states that must gate event emission downstream.
+# IDLE = initial startup → events pass (no recovery in flight).
+# READY = connected and validated → events pass.
+# SNAPSHOTTING/REPLAYING/VALIDATING = recovery in flight → DROP events.
+# FAILED = feed in unsafe state → DROP events.
+_BLOCKED_RECOVERY_STATES: frozenset[RecoveryState] = frozenset(
+    {
+        RecoveryState.SNAPSHOTTING,
+        RecoveryState.REPLAYING,
+        RecoveryState.VALIDATING,
+        RecoveryState.FAILED,
+    }
+)
 
 
 class DataIngestor:
@@ -58,44 +74,111 @@ class DataIngestor:
         self._ws_factory = ws_factory
         self._feeds: dict[str, FeedState] = {}  # feed_key → FeedState
         self._clients: dict[str, WebSocketClient] = {}  # feed_key → WebSocketClient
+        self._recovery_managers: dict[str, RecoveryManager] = {}  # feed_key → RecoveryManager
+        self._feed_threads: dict[str, threading.Thread] = {}  # feed_key → managed Thread
 
     # ──────────────────────────────────────────────────────────────
     # Lifecycle
     # ──────────────────────────────────────────────────────────────
 
     def register_feed(self, config: WebSocketConfig, exchange: Exchange) -> str:
-        """Register a new feed and create its FeedState.
+        """Register a new feed and create its FeedState + RecoveryManager.
 
         Returns the feed_key for tracking purposes.
-        Does NOT connect. Call start_feed() to connect.
+        Does NOT connect. Call start_feed() or start_feed_managed() to connect.
         """
         if self._ws_factory is None:
             raise RuntimeError("ws_factory must be set before registering feeds")
 
         feed_key = self._make_feed_key(config.symbol, exchange)
-        self._feeds[feed_key] = FeedState(
+        feed_state = FeedState(
             symbol=config.symbol,
             exchange=exchange.value,
             stream_type="multi",
         )
+        self._feeds[feed_key] = feed_state
         raw_callback = self._make_raw_callback(config.symbol, exchange)
         self._clients[feed_key] = self._ws_factory(config, raw_callback)
+
+        # Wire RecoveryManager. on_connect is non-blocking: it creates a new
+        # client instance and starts it in a daemon thread so _run_recovery_loop()
+        # can proceed to request the snapshot without waiting for a disconnect.
+        def _recovery_on_connect() -> None:
+            new_raw_cb = self._make_raw_callback(config.symbol, exchange)
+            self._clients[feed_key] = self._ws_factory(config, new_raw_cb)
+            t = threading.Thread(
+                target=self._clients[feed_key].connect,
+                daemon=True,
+                name=f"feed-{feed_key}-reconnect-{feed_state.reconnect_attempt}",
+            )
+            t.start()
+
+        self._recovery_managers[feed_key] = RecoveryManager(
+            feed_state=feed_state,
+            on_connect=_recovery_on_connect,
+            on_snapshot_request=lambda _sym, _exch: None,  # Phase 7A: REST snapshot wired in 7B
+        )
         logger.info("Registered feed: %s", feed_key)
         return feed_key
 
     def start_feed(self, feed_key: str) -> None:
-        """Connect the WebSocketClient for the registered feed.
+        """Connect the WebSocketClient for the registered feed (synchronous).
 
-        Raises RuntimeError if feed_key not registered.
+        Sets CONNECTED + READY before calling connect() so that events emitted
+        during connect() (e.g. from WebSocketSimulator in tests) pass through
+        the recovery-state gate in _make_raw_callback.
+
+        For production use, prefer start_feed_managed() which runs connect()
+        in a daemon thread and triggers RecoveryManager on disconnect.
+
+        Raises:
+            RuntimeError: if feed_key is not registered.
         """
         if feed_key not in self._clients:
             raise RuntimeError(f"Feed '{feed_key}' is not registered")
         state = self._feeds[feed_key]
-        state.connection_state = ConnectionState.CONNECTING
-        self._clients[feed_key].connect()
+        # Set live state BEFORE connect() so events flow during message replay
+        # (relevant for WebSocketSimulator which replays synchronously inside connect()).
         state.connection_state = ConnectionState.CONNECTED
         state.recovery_state = RecoveryState.READY
-        logger.info("Feed started: %s", feed_key)
+        self._clients[feed_key].connect()
+        logger.info("Feed started (sync): %s", feed_key)
+
+    def start_feed_managed(self, feed_key: str) -> threading.Thread:
+        """Start the feed in a background daemon thread with automatic recovery.
+
+        When connect() returns (connection closed), RecoveryManager.on_disconnect()
+        is triggered to run exponential-backoff reconnect + snapshot protocol.
+
+        Returns the Thread so callers can join() on shutdown if needed.
+
+        Raises:
+            RuntimeError: if feed_key is not registered.
+        """
+        if feed_key not in self._clients:
+            raise RuntimeError(f"Feed '{feed_key}' is not registered")
+
+        state = self._feeds[feed_key]
+        recovery_mgr = self._recovery_managers[feed_key]
+
+        def _run() -> None:
+            state.connection_state = ConnectionState.CONNECTED
+            state.recovery_state = RecoveryState.READY
+            try:
+                self._clients[feed_key].connect()  # blocks until disconnect
+            except Exception as exc:
+                logger.error("Feed connect error %s: %s", feed_key, exc)
+
+            # connect() returned → connection closed (clean or error).
+            if state.connection_state != ConnectionState.DISCONNECTED:
+                logger.warning("Feed %s disconnected unexpectedly — triggering recovery", feed_key)
+                recovery_mgr.on_disconnect()
+
+        t = threading.Thread(target=_run, daemon=True, name=f"feed-{feed_key}")
+        self._feed_threads[feed_key] = t
+        t.start()
+        logger.info("Feed started (managed): %s", feed_key)
+        return t
 
     def stop_feed(self, feed_key: str) -> None:
         """Disconnect the WebSocketClient for the given feed."""
@@ -112,13 +195,23 @@ class DataIngestor:
     # ──────────────────────────────────────────────────────────────
 
     def _make_raw_callback(self, symbol: str, exchange: Exchange) -> Callable[[dict], None]:
-        """Returns a closure that routes raw WS dicts through the adapter."""
+        """Returns a closure that routes raw WS dicts through the adapter.
+
+        Events are dropped (not forwarded) while recovery_state is in one of
+        the active-recovery states (SNAPSHOTTING, REPLAYING, VALIDATING, FAILED).
+        This prevents stale or out-of-sequence data from reaching the edge layer
+        during a reconnect recovery cycle (PRD §4.5).
+        """
 
         def on_raw_message(msg: dict[str, Any]) -> None:
             feed_key = self._make_feed_key(symbol, exchange)
             state = self._feeds.get(feed_key)
             if state is None:
                 logger.warning("Received message for unregistered feed: %s", feed_key)
+                return
+            # Gate: drop events during active recovery (data may be out of sequence).
+            if state.recovery_state in _BLOCKED_RECOVERY_STATES:
+                logger.debug("Dropping event during recovery (%s): %s", state.recovery_state, feed_key)
                 return
             try:
                 events = self._parse_message(msg, exchange, symbol)
