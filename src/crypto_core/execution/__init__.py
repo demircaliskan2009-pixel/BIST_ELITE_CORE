@@ -5,6 +5,7 @@ impact gate, enriched ExecutionDecision, and SyntheticFillFactory bridge.
 Phase 9A adds TCA, venue scoring, and attribution primitives.
 Phase 9B adds markout lifecycle, TCA persistence, venue metadata,
 regime contracts, and live-readiness surface.
+Phase 9C adds route binding, metadata-gated routing, and TCA closed loop.
 PRD reference: §7 Execution Engine.
 """
 
@@ -43,10 +44,25 @@ from crypto_core.execution.regime_contracts import (
     OptionsRegimeLevel,
     OptionsRegimeState,
 )
+from crypto_core.execution.route_binding import (
+    MetadataGatedRouter,
+    MetadataGatedRouterConfig,
+    RouteDecision,
+    RouteDecisionOutcome,
+    VenueEvaluation,
+    VenueRejectReason,
+)
 from crypto_core.execution.tca import (
     TCARecord,
     TCAStatus,
     build_tca_record,
+)
+from crypto_core.execution.tca_loop import (
+    ExecutionTCALoop,
+    FillRegistrationResult,
+    PriceUpdateResult,
+    TCAEmitStatus,
+    TCALoopConfig,
 )
 from crypto_core.execution.tca_store import TCAStore, TCAStoreCorruptError
 from crypto_core.execution.venue_metadata import (
@@ -84,6 +100,12 @@ __all__ = [
     # TCA persistence
     "TCAStore",
     "TCAStoreCorruptError",
+    # TCA closed loop (Phase 9C)
+    "ExecutionTCALoop",
+    "TCALoopConfig",
+    "TCAEmitStatus",
+    "FillRegistrationResult",
+    "PriceUpdateResult",
     # Attribution
     "TradeAttribution",
     "AttributionStatus",
@@ -101,6 +123,13 @@ __all__ = [
     "RoutingEngine",
     "RoutingAction",
     "RoutingRecommendation",
+    # Route binding (Phase 9C)
+    "MetadataGatedRouter",
+    "MetadataGatedRouterConfig",
+    "RouteDecision",
+    "RouteDecisionOutcome",
+    "VenueEvaluation",
+    "VenueRejectReason",
     # Venue metadata
     "VenueMetadataSnapshot",
     "MetadataFreshness",
