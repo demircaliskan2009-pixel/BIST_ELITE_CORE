@@ -3,6 +3,8 @@
 No live order placement.  Phase 6A adds fill pricing, slippage model,
 impact gate, enriched ExecutionDecision, and SyntheticFillFactory bridge.
 Phase 9A adds TCA, venue scoring, and attribution primitives.
+Phase 9B adds markout lifecycle, TCA persistence, venue metadata,
+regime contracts, and live-readiness surface.
 PRD reference: §7 Execution Engine.
 """
 
@@ -15,6 +17,13 @@ from crypto_core.execution.attribution import (
 )
 from crypto_core.execution.engine import ExecutionConfig, ExecutionEngine
 from crypto_core.execution.fill_pricer import FillPricer, FillPricerConfig
+from crypto_core.execution.markout import (
+    MarkoutHorizonStatus,
+    MarkoutObservationSet,
+    MarkoutObserver,
+    MarkoutObserverConfig,
+    MarkoutSetStatus,
+)
 from crypto_core.execution.models import (
     BookContext,
     ExecutionDecision,
@@ -24,10 +33,28 @@ from crypto_core.execution.models import (
     RejectionReason,
     SlippageResult,
 )
+from crypto_core.execution.regime_contracts import (
+    CompositeRegimeState,
+    EventCategory,
+    EventRegimeLevel,
+    EventRegimeState,
+    OnChainRegimeLevel,
+    OnChainRegimeState,
+    OptionsRegimeLevel,
+    OptionsRegimeState,
+)
 from crypto_core.execution.tca import (
     TCARecord,
     TCAStatus,
     build_tca_record,
+)
+from crypto_core.execution.tca_store import TCAStore, TCAStoreCorruptError
+from crypto_core.execution.venue_metadata import (
+    FeeMetadata,
+    FundingMetadata,
+    MetadataFreshness,
+    VenueMetadataSnapshot,
+    VenueOperationalStatus,
 )
 from crypto_core.execution.venue_scoring import (
     RoutingAction,
@@ -54,10 +81,19 @@ __all__ = [
     "TCARecord",
     "TCAStatus",
     "build_tca_record",
+    # TCA persistence
+    "TCAStore",
+    "TCAStoreCorruptError",
     # Attribution
     "TradeAttribution",
     "AttributionStatus",
     "build_trade_attribution",
+    # Markout lifecycle
+    "MarkoutObserver",
+    "MarkoutObserverConfig",
+    "MarkoutObservationSet",
+    "MarkoutHorizonStatus",
+    "MarkoutSetStatus",
     # Venue scoring / routing
     "VenueScore",
     "VenueStatus",
@@ -65,4 +101,19 @@ __all__ = [
     "RoutingEngine",
     "RoutingAction",
     "RoutingRecommendation",
+    # Venue metadata
+    "VenueMetadataSnapshot",
+    "MetadataFreshness",
+    "FeeMetadata",
+    "FundingMetadata",
+    "VenueOperationalStatus",
+    # Regime contracts
+    "CompositeRegimeState",
+    "OptionsRegimeState",
+    "OptionsRegimeLevel",
+    "EventRegimeState",
+    "EventRegimeLevel",
+    "EventCategory",
+    "OnChainRegimeState",
+    "OnChainRegimeLevel",
 ]
