@@ -1,4 +1,4 @@
-"""Paper-live trading session engine — Phase 7E.
+"""Paper-live trading session engine — Phase 7D/7E.
 
 Continuous loop service that wires:
   data events → pipeline orchestrator → execution → portfolio → telemetry
@@ -14,6 +14,8 @@ Design rules:
   - Recovery via RecoveryBootstrap on start() if persisted state exists.
   - Portfolio persisted after every fill (configurable).
   - Strictly paper-only: LIVE execution mode is rejected.
+  - Operator control: pause/resume/restart supported.
+  - Cycle history bounded for auditability.
 
 PRD reference: §2 System Orchestration, §7 Execution Engine.
 """
@@ -22,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 
 from crypto_core.execution.models import ExecutionMode
 from crypto_core.execution.recovery import RecoveryBootstrap, RecoveryResult
@@ -110,10 +113,17 @@ class PaperLiveSession:
         self._current_cycle_ns: int = 0
         self._cycle_count: int = 0
         self._total_fills: int = 0
+        self._approved_cycles: int = 0
+        self._blocked_cycles: int = 0
+        self._failed_cycles: int = 0
         self._last_result: PipelineResult | None = None
+        self._last_error: str | None = None
         self._block_reasons: list[str] = []
         self._recovery_status: str = "none"
         self._recovery_evidence: object | None = None
+        self._cycle_history: deque[CycleResult] = deque(
+            maxlen=max(1, config.cycle_history_size),
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -183,7 +193,8 @@ class PaperLiveSession:
         """
         # Guard: reject if not running.
         if self._mode != SessionMode.RUNNING:
-            return CycleResult(
+            self._blocked_cycles += 1
+            result = CycleResult(
                 cycle_number=self._cycle_count,
                 timestamp_ns=data.timestamp_ns,
                 pipeline_result=None,
@@ -191,12 +202,15 @@ class PaperLiveSession:
                 portfolio_persisted=False,
                 error=f"session_not_running:{self._mode.value}",
             )
+            self._cycle_history.append(result)
+            return result
 
         # Guard: max cycles.
         if self._config.max_cycles > 0 and self._cycle_count >= self._config.max_cycles:
             self._mode = SessionMode.STOPPED
             self._block_reasons.append("max_cycles_reached")
-            return CycleResult(
+            self._blocked_cycles += 1
+            result = CycleResult(
                 cycle_number=self._cycle_count,
                 timestamp_ns=data.timestamp_ns,
                 pipeline_result=None,
@@ -204,24 +218,33 @@ class PaperLiveSession:
                 portfolio_persisted=False,
                 error="max_cycles_reached",
             )
+            self._cycle_history.append(result)
+            return result
 
         self._cycle_count += 1
         self._current_cycle_ns = data.timestamp_ns
 
         try:
-            return self._do_cycle(data, signal_inputs)
+            result = self._do_cycle(data, signal_inputs)
+            self._cycle_history.append(result)
+            return result
         except Exception as exc:
             logger.exception("PaperLiveSession.process_event raised — fail-closed")
             self._mode = SessionMode.FAILED
+            self._failed_cycles += 1
+            error_str = str(exc)
+            self._last_error = error_str
             self._block_reasons.append(f"exception:{exc}")
-            return CycleResult(
+            result = CycleResult(
                 cycle_number=self._cycle_count,
                 timestamp_ns=data.timestamp_ns,
                 pipeline_result=None,
                 fills_applied=0,
                 portfolio_persisted=False,
-                error=str(exc),
+                error=error_str,
             )
+            self._cycle_history.append(result)
+            return result
 
     def status(self) -> PaperSessionStatus:
         """Produce an operator-facing session status snapshot."""
@@ -255,6 +278,9 @@ class PaperLiveSession:
             current_cycle_time_ns=self._current_cycle_ns,
             total_cycles=self._cycle_count,
             total_fills=self._total_fills,
+            approved_cycles=self._approved_cycles,
+            blocked_cycles=self._blocked_cycles,
+            failed_cycles=self._failed_cycles,
             recovery_status=self._recovery_status,
             unresolved_order_count=unresolved_orders,
             open_positions_count=open_positions,
@@ -262,8 +288,10 @@ class PaperLiveSession:
             gross_exposure_pct=gross_exposure_pct,
             net_exposure_pct=net_exposure_pct,
             last_cycle_approved=last_approved,
-            trading_blocked=self._mode != SessionMode.RUNNING,
+            last_error=self._last_error,
+            trading_blocked=self._mode not in (SessionMode.RUNNING, SessionMode.PAUSED),
             block_reasons=tuple(self._block_reasons),
+            cycle_history=tuple(self._cycle_history),
         )
 
     def stop(self) -> PaperSessionStatus:
@@ -272,11 +300,89 @@ class PaperLiveSession:
         Returns:
             Final PaperSessionStatus snapshot.
         """
-        if self._mode == SessionMode.RUNNING and self._config.persist_on_stop:
+        if self._mode in (SessionMode.RUNNING, SessionMode.PAUSED) and self._config.persist_on_stop:
             self._persist_portfolio()
 
         self._mode = SessionMode.STOPPED
         return self.status()
+
+    def pause(self) -> PaperSessionStatus:
+        """Pause the session — reject new cycles until resume().
+
+        Only valid from RUNNING state. Other states are no-ops (logged).
+
+        Returns:
+            PaperSessionStatus snapshot after pause.
+        """
+        if self._mode != SessionMode.RUNNING:
+            logger.warning(
+                "PaperLiveSession.pause() called in %s state — ignored",
+                self._mode.value,
+            )
+            return self.status()
+
+        self._mode = SessionMode.PAUSED
+        self._block_reasons.append("operator_paused")
+        return self.status()
+
+    def resume(self) -> PaperSessionStatus:
+        """Resume a paused session — allow cycles again.
+
+        Only valid from PAUSED state. Other states are no-ops (logged).
+
+        Returns:
+            PaperSessionStatus snapshot after resume.
+        """
+        if self._mode != SessionMode.PAUSED:
+            logger.warning(
+                "PaperLiveSession.resume() called in %s state — ignored",
+                self._mode.value,
+            )
+            return self.status()
+
+        self._mode = SessionMode.RUNNING
+        # Remove operator_paused from block_reasons.
+        self._block_reasons = [r for r in self._block_reasons if r != "operator_paused"]
+        return self.status()
+
+    def restart(self) -> PaperSessionStatus:
+        """Restart the session from FAILED or BLOCKED state.
+
+        Resets internal counters and re-runs start() logic. Only valid from
+        FAILED or BLOCKED states — other states raise ValueError to prevent
+        accidental restarts of healthy sessions.
+
+        Returns:
+            PaperSessionStatus snapshot after restart attempt.
+
+        Raises:
+            ValueError: if called from a non-restartable state.
+        """
+        if self._mode not in (SessionMode.FAILED, SessionMode.BLOCKED):
+            msg = f"restart() only valid from FAILED/BLOCKED, current={self._mode.value}"
+            raise ValueError(msg)
+
+        logger.info(
+            "PaperLiveSession restarting from %s — resetting counters",
+            self._mode.value,
+        )
+
+        # Reset session state for a fresh start.
+        self._mode = SessionMode.INITIALIZING
+        self._cycle_count = 0
+        self._total_fills = 0
+        self._approved_cycles = 0
+        self._blocked_cycles = 0
+        self._failed_cycles = 0
+        self._last_result = None
+        self._last_error = None
+        self._block_reasons = []
+        self._recovery_status = "none"
+        self._recovery_evidence = None
+        self._current_cycle_ns = 0
+        self._cycle_history.clear()
+
+        return self.start()
 
     # ------------------------------------------------------------------
     # Properties
@@ -309,6 +415,10 @@ class PaperLiveSession:
         """Execute one pipeline cycle — called inside try/except."""
         result = self._orchestrator.process(data, signal_inputs)
         self._last_result = result
+
+        # Track approved vs non-approved cycles.
+        if result.approved:
+            self._approved_cycles += 1
 
         # Count fills from lifecycle results.
         fills_count = sum(len(lr.fill_events) for lr in result.execution_lifecycle_results)

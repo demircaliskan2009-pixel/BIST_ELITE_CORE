@@ -28,13 +28,17 @@ class SessionMode(str, Enum):
     INITIALIZING → start() → RECOVERING | RUNNING
     RECOVERING   → success → RUNNING | BLOCKED
     RUNNING      → stop()  → STOPPED
+    RUNNING      → pause() → PAUSED
     RUNNING      → error   → FAILED
-    BLOCKED      → operator intervention required
+    PAUSED       → resume() → RUNNING
+    BLOCKED      → restart() → INITIALIZING
+    FAILED       → restart() → INITIALIZING
     """
 
     INITIALIZING = "initializing"
     RECOVERING = "recovering"
     RUNNING = "running"
+    PAUSED = "paused"
     BLOCKED = "blocked"
     STOPPED = "stopped"
     FAILED = "failed"
@@ -61,6 +65,7 @@ class PaperSessionConfig:
     persist_every_fill: bool = True
     persist_on_stop: bool = True
     max_cycles: int = 0
+    cycle_history_size: int = 100
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +112,9 @@ class PaperSessionStatus:
       current_cycle_time_ns:  timestamp of the most recent cycle; 0 if none.
       total_cycles:           cycles processed so far.
       total_fills:            total fill events applied across all cycles.
+      approved_cycles:        cycles where the pipeline approved a trade.
+      blocked_cycles:         cycles rejected because session not RUNNING.
+      failed_cycles:          cycles that raised an internal exception.
       recovery_status:        "none" | "clean_start" | "recovered" | "failed:<reason>".
       unresolved_order_count: orders from recovery that could not be reconciled.
       open_positions_count:   number of open positions in the portfolio.
@@ -114,8 +122,10 @@ class PaperSessionStatus:
       gross_exposure_pct:     gross exposure as % of NAV; None if unavailable.
       net_exposure_pct:       net directional exposure as % of NAV; None if unavailable.
       last_cycle_approved:    whether the last pipeline cycle approved a trade; None if no cycles.
+      last_error:             most recent error string; None if no errors.
       trading_blocked:        True when session is not in RUNNING mode.
       block_reasons:          tuple of reasons why session is blocked (empty when running).
+      cycle_history:          bounded tuple of recent CycleResult records for auditability.
     """
 
     session_id: str
@@ -124,6 +134,9 @@ class PaperSessionStatus:
     current_cycle_time_ns: int
     total_cycles: int
     total_fills: int
+    approved_cycles: int
+    blocked_cycles: int
+    failed_cycles: int
     recovery_status: str
     unresolved_order_count: int
     open_positions_count: int
@@ -131,5 +144,7 @@ class PaperSessionStatus:
     gross_exposure_pct: float | None
     net_exposure_pct: float | None
     last_cycle_approved: bool | None
+    last_error: str | None
     trading_blocked: bool
     block_reasons: tuple[str, ...] = field(default_factory=tuple)
+    cycle_history: tuple[CycleResult, ...] = field(default_factory=tuple)
