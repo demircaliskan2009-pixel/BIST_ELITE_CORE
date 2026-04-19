@@ -41,7 +41,9 @@ from crypto_core.service.campaign_controller import (
 from crypto_core.service.evidence_store import EvidenceStore
 from crypto_core.service.external_regime import (
     ExternalRegimeDataPlane,
+    ExternalRegimeManager,
     ExternalRegimeSnapshot,
+    ExternalRegimeUpdateRecord,
 )
 from crypto_core.service.models import ServiceStatus
 from crypto_core.service.paper_live_service import PaperLiveService
@@ -205,13 +207,32 @@ class ServiceOrchestrator:
         readiness_level: str = "not_assessed",
         promotion_thresholds: PromotionThresholds | None = None,
         external_regime_plane: ExternalRegimeDataPlane | None = None,
+        external_regime_manager: ExternalRegimeManager | None = None,
     ) -> None:
         self._service = service
         self._evidence_store = evidence_store
         self._readiness_level = readiness_level
         self._promotion_thresholds = promotion_thresholds
         self._campaign_config = campaign_config
-        self._external_regime_plane = external_regime_plane
+
+        if external_regime_manager is not None and external_regime_plane is not None:
+            if external_regime_manager.plane is not external_regime_plane:
+                raise ValueError(
+                    "external_regime_manager.plane must match external_regime_plane when both are provided"
+                )
+
+        if external_regime_manager is not None:
+            self._external_regime_manager = external_regime_manager
+            self._external_regime_plane = external_regime_manager.plane
+        elif external_regime_plane is not None:
+            self._external_regime_manager = ExternalRegimeManager(
+                plane=external_regime_plane,
+                evidence_store=evidence_store,
+            )
+            self._external_regime_plane = self._external_regime_manager.plane
+        else:
+            self._external_regime_manager = None
+            self._external_regime_plane = None
 
         self._campaign: CampaignController | None = None
         self._last_campaign_report: CampaignReport | None = None
@@ -241,6 +262,11 @@ class ServiceOrchestrator:
     def external_regime_plane(self) -> ExternalRegimeDataPlane | None:
         """Active ExternalRegimeDataPlane, or None."""
         return self._external_regime_plane
+
+    @property
+    def external_regime_manager(self) -> ExternalRegimeManager | None:
+        """Managed external regime lifecycle surface, or None."""
+        return self._external_regime_manager
 
     @property
     def readiness_level(self) -> str:
@@ -377,10 +403,7 @@ class ServiceOrchestrator:
         ss = self._service.status()
 
         # Phase 11B: thread external regime evidence into campaign finalization.
-        ext_regime = None
-        if self._external_regime_plane is not None:
-            last_ns = ss.watchdog.last_event_time_ns if ss.watchdog else 0
-            ext_regime = self._external_regime_plane.snapshot(last_ns)
+        ext_regime = self._external_regime_snapshot_from_status(ss)
 
         report = self._campaign.finalize(ss, ext_regime=ext_regime)
         self._last_campaign_report = report
@@ -397,10 +420,7 @@ class ServiceOrchestrator:
             return None
         ss = self._service.status()
         # Phase 11B: thread external regime evidence into campaign snapshot.
-        ext_regime = None
-        if self._external_regime_plane is not None:
-            last_ns = ss.watchdog.last_event_time_ns if ss.watchdog else 0
-            ext_regime = self._external_regime_plane.snapshot(last_ns)
+        ext_regime = self._external_regime_snapshot_from_status(ss)
         return self._campaign.snapshot(ss, ext_regime=ext_regime)
 
     @property
@@ -559,9 +579,7 @@ class ServiceOrchestrator:
         review_state = self._build_review_workflow_state()
 
         # External regime snapshot
-        ext_regime: ExternalRegimeSnapshot | None = None
-        if self._external_regime_plane is not None:
-            ext_regime = self._external_regime_plane.snapshot(ss.watchdog.last_event_time_ns)
+        ext_regime = self._external_regime_snapshot_from_status(ss)
 
         # Evidence sufficiency
         evidence = self._build_evidence_sufficiency(campaign_state, review_state, ext_regime)
@@ -694,10 +712,10 @@ class ServiceOrchestrator:
 
         Uses the last event timestamp from the service watchdog as ``now_ns``.
         """
-        if self._external_regime_plane is None:
+        if self._external_regime_manager is None:
             return None
         ss = self._service.status()
-        return self._external_regime_plane.snapshot(ss.watchdog.last_event_time_ns)
+        return self._external_regime_manager.snapshot(self._external_regime_now_ns(ss))
 
     def external_regime_dict(self) -> dict | None:
         """Serialize the external regime snapshot to a dict.
@@ -712,6 +730,101 @@ class ServiceOrchestrator:
         )
 
         return external_regime_snapshot_to_dict(snap)
+
+    def update_options_regime(
+        self,
+        state,
+        *,
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimeUpdateRecord:
+        """Apply one options-regime update via the managed service seam."""
+        manager = self._require_external_regime_manager("update options regime")
+        return manager.update_options(
+            state,
+            received_at_ns=self._resolved_external_regime_time(received_at_ns),
+        )
+
+    def update_event_regime(
+        self,
+        state,
+        *,
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimeUpdateRecord:
+        """Apply one event-regime update via the managed service seam."""
+        manager = self._require_external_regime_manager("update event regime")
+        return manager.update_event(
+            state,
+            received_at_ns=self._resolved_external_regime_time(received_at_ns),
+        )
+
+    def update_on_chain_regime(
+        self,
+        state,
+        *,
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimeUpdateRecord:
+        """Apply one on-chain-regime update via the managed service seam."""
+        manager = self._require_external_regime_manager("update on-chain regime")
+        return manager.update_on_chain(
+            state,
+            received_at_ns=self._resolved_external_regime_time(received_at_ns),
+        )
+
+    def update_external_regime(
+        self,
+        *,
+        options=None,
+        event=None,
+        on_chain=None,
+        received_at_ns: int | None = None,
+    ) -> tuple[ExternalRegimeUpdateRecord, ...]:
+        """Apply a deterministic multi-dimension regime update batch."""
+        manager = self._require_external_regime_manager("update external regime")
+        return manager.update_composite(
+            options=options,
+            event=event,
+            on_chain=on_chain,
+            received_at_ns=self._resolved_external_regime_time(received_at_ns),
+        )
+
+    def external_regime_latest_update(self) -> ExternalRegimeUpdateRecord | None:
+        """Most recent external regime update attempt."""
+        if self._external_regime_manager is None:
+            return None
+        return self._external_regime_manager.latest_update
+
+    def external_regime_update_history(self) -> tuple[ExternalRegimeUpdateRecord, ...]:
+        """Bounded external regime update history, or empty tuple."""
+        if self._external_regime_manager is None:
+            return ()
+        return self._external_regime_manager.recent_update_history()
+
+    def external_regime_lifecycle_dict(self) -> dict | None:
+        """Full external regime lifecycle view for operators/reporting."""
+        if self._external_regime_manager is None:
+            return None
+        ss = self._service.status()
+        return self._external_regime_manager.status_dict(self._external_regime_now_ns(ss))
+
+    def restore_external_regime(self) -> bool:
+        """Restore external regime state from persistence, if present."""
+        manager = self._require_external_regime_manager("restore external regime")
+        return manager.restore_state()
+
+    def reset_external_regime(
+        self,
+        *,
+        reason: str = "operator_reset",
+        source_label: str = "operator_reset",
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimeUpdateRecord:
+        """Explicitly clear all external regime state."""
+        manager = self._require_external_regime_manager("reset external regime")
+        return manager.reset(
+            received_at_ns=self._resolved_external_regime_time(received_at_ns),
+            reason=reason,
+            source_label=source_label,
+        )
 
     # ------------------------------------------------------------------
     # Persistence / restore linkage
@@ -790,6 +903,31 @@ class ServiceOrchestrator:
             controller.campaign_count,
         )
         return True
+
+    def _external_regime_snapshot_from_status(
+        self,
+        ss: ServiceStatus,
+    ) -> ExternalRegimeSnapshot | None:
+        if self._external_regime_manager is None:
+            return None
+        return self._external_regime_manager.snapshot(self._external_regime_now_ns(ss))
+
+    @staticmethod
+    def _external_regime_now_ns(ss: ServiceStatus) -> int:
+        if ss.watchdog is None:
+            return 0
+        return ss.watchdog.last_event_time_ns
+
+    def _resolved_external_regime_time(self, received_at_ns: int | None) -> int:
+        if received_at_ns is not None:
+            return received_at_ns
+        ss = self._service.status()
+        return self._external_regime_now_ns(ss)
+
+    def _require_external_regime_manager(self, action: str) -> ExternalRegimeManager:
+        if self._external_regime_manager is None:
+            raise RuntimeError(f"No external regime manager configured to {action}")
+        return self._external_regime_manager
 
     # ------------------------------------------------------------------
     # Internal

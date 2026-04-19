@@ -25,7 +25,9 @@ PRD reference: §1.4 Edge Family D, §1.29 System State, §4 Data Pipeline.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from dataclasses import dataclass
+from enum import Enum
 
 from crypto_core.execution.regime_contracts import (
     CompositeRegimeState,
@@ -37,10 +39,12 @@ from crypto_core.execution.regime_contracts import (
     OptionsRegimeLevel,
     OptionsRegimeState,
 )
+from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreCorruptError, WriteResult
 
 logger = logging.getLogger(__name__)
 
 _NS_PER_S: int = 1_000_000_000
+_EXTERNAL_REGIME_SNAPSHOT_NAME = "external_regime_state"
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +105,46 @@ class ExternalRegimeSnapshot:
     stale_dimensions: tuple[str, ...]
 
     regime_summary: str
+
+
+class ExternalRegimeUpdateStatus(str, Enum):
+    """Outcome classification for a regime update attempt."""
+
+    ACCEPTED = "accepted"
+    REJECTED_INVALID = "rejected_invalid"
+    REJECTED_STALE = "rejected_stale"
+    RESET = "reset"
+
+
+@dataclass(frozen=True)
+class ExternalRegimeUpdateRecord:
+    """Deterministic record of one external regime update attempt."""
+
+    dimension: str
+    status: ExternalRegimeUpdateStatus
+    accepted: bool
+    received_at_ns: int
+    state_snapshot_ns: int | None
+    source_label: str | None
+    level: str | None
+    freshness: DataFreshness
+    replaced_existing: bool
+    reason: str
+
+
+@dataclass(frozen=True)
+class ExternalRegimePersistenceState:
+    """Persistence / restore status for the managed external regime state."""
+
+    evidence_store_configured: bool
+    snapshot_name: str
+    snapshot_present: bool
+    restored_from_snapshot: bool
+    history_limit: int
+
+
+class ExternalRegimeStateCorruptError(RuntimeError):
+    """Raised when persisted external regime state is malformed."""
 
 
 # ---------------------------------------------------------------------------
@@ -498,3 +542,513 @@ def external_regime_snapshot_from_dict(d: dict) -> ExternalRegimeSnapshot:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"Malformed ExternalRegimeSnapshot: {exc}") from exc
+
+
+def external_regime_plane_to_dict(plane: ExternalRegimeDataPlane) -> dict:
+    """Serialize the current data plane state for persistence."""
+    from crypto_core.execution.regime_contracts import (
+        _event_to_dict,
+        _onchain_to_dict,
+        _options_to_dict,
+    )
+
+    return {
+        "staleness_threshold_s": plane.staleness_threshold_s,
+        "options": _options_to_dict(plane.options_state) if plane.options_state else None,
+        "event": _event_to_dict(plane.event_state) if plane.event_state else None,
+        "on_chain": _onchain_to_dict(plane.on_chain_state) if plane.on_chain_state else None,
+    }
+
+
+def external_regime_plane_from_dict(d: dict) -> ExternalRegimeDataPlane:
+    """Deserialize the data plane state from persistence."""
+    from crypto_core.execution.regime_contracts import (
+        _event_from_dict,
+        _onchain_from_dict,
+        _options_from_dict,
+    )
+
+    try:
+        threshold = float(d["staleness_threshold_s"])
+        plane = ExternalRegimeDataPlane(staleness_threshold_s=threshold)
+        if d.get("options") is not None:
+            plane.update_options(_options_from_dict(d["options"]))
+        if d.get("event") is not None:
+            plane.update_event(_event_from_dict(d["event"]))
+        if d.get("on_chain") is not None:
+            plane.update_on_chain(_onchain_from_dict(d["on_chain"]))
+        return plane
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Malformed ExternalRegimeDataPlane: {exc}") from exc
+
+
+def external_regime_update_record_to_dict(record: ExternalRegimeUpdateRecord) -> dict:
+    """Serialize an update record to a plain dict."""
+    return {
+        "dimension": record.dimension,
+        "status": record.status.value,
+        "accepted": record.accepted,
+        "received_at_ns": record.received_at_ns,
+        "state_snapshot_ns": record.state_snapshot_ns,
+        "source_label": record.source_label,
+        "level": record.level,
+        "freshness": record.freshness.value,
+        "replaced_existing": record.replaced_existing,
+        "reason": record.reason,
+    }
+
+
+def external_regime_update_record_from_dict(d: dict) -> ExternalRegimeUpdateRecord:
+    """Deserialize an update record from a plain dict."""
+    try:
+        return ExternalRegimeUpdateRecord(
+            dimension=str(d["dimension"]),
+            status=ExternalRegimeUpdateStatus(d["status"]),
+            accepted=bool(d["accepted"]),
+            received_at_ns=int(d["received_at_ns"]),
+            state_snapshot_ns=(int(d["state_snapshot_ns"]) if d.get("state_snapshot_ns") is not None else None),
+            source_label=d.get("source_label"),
+            level=d.get("level"),
+            freshness=DataFreshness(d["freshness"]),
+            replaced_existing=bool(d["replaced_existing"]),
+            reason=str(d.get("reason", "")),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Malformed ExternalRegimeUpdateRecord: {exc}") from exc
+
+
+def external_regime_persistence_state_to_dict(state: ExternalRegimePersistenceState) -> dict:
+    """Serialize persistence state to a plain dict."""
+    return {
+        "evidence_store_configured": state.evidence_store_configured,
+        "snapshot_name": state.snapshot_name,
+        "snapshot_present": state.snapshot_present,
+        "restored_from_snapshot": state.restored_from_snapshot,
+        "history_limit": state.history_limit,
+    }
+
+
+class ExternalRegimeManager:
+    """Managed update / persistence lifecycle for external regime state.
+
+    Reuses ExternalRegimeDataPlane as the underlying truth engine while adding:
+      - deterministic update acceptance / rejection records,
+      - bounded recent update history,
+      - persistent current-state snapshots,
+      - safe restore semantics,
+      - operator-facing reporting helpers.
+    """
+
+    def __init__(
+        self,
+        *,
+        plane: ExternalRegimeDataPlane | None = None,
+        evidence_store: EvidenceStore | None = None,
+        history_limit: int = 50,
+    ) -> None:
+        if history_limit <= 0:
+            raise ValueError(f"history_limit must be > 0, got {history_limit}")
+        self._plane = plane or ExternalRegimeDataPlane()
+        self._evidence_store = evidence_store
+        self._history_limit = history_limit
+        self._history: deque[ExternalRegimeUpdateRecord] = deque(maxlen=history_limit)
+        self._latest_update: ExternalRegimeUpdateRecord | None = None
+        self._restored_from_snapshot = False
+
+    @property
+    def plane(self) -> ExternalRegimeDataPlane:
+        """Underlying external regime data plane."""
+        return self._plane
+
+    @property
+    def latest_update(self) -> ExternalRegimeUpdateRecord | None:
+        """Most recent update attempt, accepted or rejected."""
+        return self._latest_update
+
+    @property
+    def history_limit(self) -> int:
+        """Maximum number of update records retained in memory."""
+        return self._history_limit
+
+    def recent_update_history(self) -> tuple[ExternalRegimeUpdateRecord, ...]:
+        """Bounded recent update history, oldest first."""
+        return tuple(self._history)
+
+    def has_current_state(self) -> bool:
+        """True when at least one regime dimension is currently populated."""
+        return any(
+            state is not None
+            for state in (
+                self._plane.options_state,
+                self._plane.event_state,
+                self._plane.on_chain_state,
+            )
+        )
+
+    def snapshot(self, now_ns: int) -> ExternalRegimeSnapshot:
+        """Current truthful external regime snapshot."""
+        return self._plane.snapshot(now_ns)
+
+    def update_options(
+        self,
+        state: OptionsRegimeState,
+        *,
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimeUpdateRecord:
+        """Apply one options regime update with explicit acceptance semantics."""
+        return self._apply_update(
+            dimension="options",
+            state=state,
+            expected_type=OptionsRegimeState,
+            current_state=self._plane.options_state,
+            apply_update=self._plane.update_options,
+            received_at_ns=received_at_ns,
+        )
+
+    def update_event(
+        self,
+        state: EventRegimeState,
+        *,
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimeUpdateRecord:
+        """Apply one event regime update with explicit acceptance semantics."""
+        return self._apply_update(
+            dimension="event",
+            state=state,
+            expected_type=EventRegimeState,
+            current_state=self._plane.event_state,
+            apply_update=self._plane.update_event,
+            received_at_ns=received_at_ns,
+        )
+
+    def update_on_chain(
+        self,
+        state: OnChainRegimeState,
+        *,
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimeUpdateRecord:
+        """Apply one on-chain regime update with explicit acceptance semantics."""
+        return self._apply_update(
+            dimension="on_chain",
+            state=state,
+            expected_type=OnChainRegimeState,
+            current_state=self._plane.on_chain_state,
+            apply_update=self._plane.update_on_chain,
+            received_at_ns=received_at_ns,
+        )
+
+    def update_composite(
+        self,
+        *,
+        options: OptionsRegimeState | None = None,
+        event: EventRegimeState | None = None,
+        on_chain: OnChainRegimeState | None = None,
+        received_at_ns: int | None = None,
+    ) -> tuple[ExternalRegimeUpdateRecord, ...]:
+        """Apply multiple dimension updates in one deterministic batch order."""
+        results: list[ExternalRegimeUpdateRecord] = []
+        if options is not None:
+            results.append(self.update_options(options, received_at_ns=received_at_ns))
+        if event is not None:
+            results.append(self.update_event(event, received_at_ns=received_at_ns))
+        if on_chain is not None:
+            results.append(self.update_on_chain(on_chain, received_at_ns=received_at_ns))
+        return tuple(results)
+
+    def reset(
+        self,
+        *,
+        received_at_ns: int,
+        reason: str = "operator_reset",
+        source_label: str = "operator_reset",
+    ) -> ExternalRegimeUpdateRecord:
+        """Explicitly clear all regime dimensions and persist the cleared state."""
+        if not isinstance(received_at_ns, int) or received_at_ns < 0:
+            raise ValueError(f"received_at_ns must be >= 0, got {received_at_ns!r}")
+        replaced_existing = self.has_current_state()
+        self._plane.reset()
+        self._restored_from_snapshot = False
+        record = ExternalRegimeUpdateRecord(
+            dimension="all",
+            status=ExternalRegimeUpdateStatus.RESET,
+            accepted=True,
+            received_at_ns=received_at_ns,
+            state_snapshot_ns=None,
+            source_label=source_label,
+            level=None,
+            freshness=DataFreshness.UNAVAILABLE,
+            replaced_existing=replaced_existing,
+            reason=reason,
+        )
+        self._record(record)
+        return record
+
+    def persist_state(self) -> WriteResult | None:
+        """Persist the managed external regime state snapshot."""
+        if self._evidence_store is None:
+            return None
+        return self._evidence_store.save_snapshot(
+            _EXTERNAL_REGIME_SNAPSHOT_NAME,
+            self._state_to_dict(),
+        )
+
+    def restore_state(self) -> bool:
+        """Restore the last persisted external regime state, if present."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for external regime restore")
+        if self.has_current_state():
+            raise RuntimeError("Cannot restore external regime over existing in-memory state")
+        if not self._evidence_store.snapshot_exists(_EXTERNAL_REGIME_SNAPSHOT_NAME):
+            return False
+
+        try:
+            envelope = self._evidence_store.load_snapshot(_EXTERNAL_REGIME_SNAPSHOT_NAME)
+        except EvidenceStoreCorruptError as exc:
+            raise ExternalRegimeStateCorruptError(str(exc)) from exc
+
+        data = envelope.get("data")
+        if not isinstance(data, dict):
+            raise ExternalRegimeStateCorruptError(
+                f"External regime state 'data' must be a dict, got {type(data).__name__!r}"
+            )
+
+        required = {"plane", "history_limit", "recent_history", "persistence"}
+        missing = required - set(data)
+        if missing:
+            raise ExternalRegimeStateCorruptError(f"External regime state missing required fields: {sorted(missing)!r}")
+
+        try:
+            plane = external_regime_plane_from_dict(data["plane"])
+            history_limit = int(data["history_limit"])
+            if history_limit <= 0:
+                raise ValueError(f"history_limit must be > 0, got {history_limit}")
+            history = [external_regime_update_record_from_dict(item) for item in data.get("recent_history", [])]
+            latest_raw = data.get("latest_update")
+            latest = (
+                external_regime_update_record_from_dict(latest_raw)
+                if latest_raw is not None
+                else (history[-1] if history else None)
+            )
+        except ValueError as exc:
+            raise ExternalRegimeStateCorruptError(str(exc)) from exc
+
+        self._plane = plane
+        self._history_limit = history_limit
+        self._history = deque(history, maxlen=history_limit)
+        self._latest_update = latest
+        self._restored_from_snapshot = True
+        self._append_audit_record(
+            event_name="external_regime_restore",
+            data={
+                "snapshot_name": _EXTERNAL_REGIME_SNAPSHOT_NAME,
+                "restored": True,
+                "history_count": len(history),
+                "has_current_state": self.has_current_state(),
+            },
+        )
+        return True
+
+    def persistence_state(self) -> ExternalRegimePersistenceState:
+        """Current persistence / restore status."""
+        snapshot_present = False
+        if self._evidence_store is not None:
+            snapshot_present = self._evidence_store.snapshot_exists(_EXTERNAL_REGIME_SNAPSHOT_NAME)
+        return ExternalRegimePersistenceState(
+            evidence_store_configured=self._evidence_store is not None,
+            snapshot_name=_EXTERNAL_REGIME_SNAPSHOT_NAME,
+            snapshot_present=snapshot_present,
+            restored_from_snapshot=self._restored_from_snapshot,
+            history_limit=self._history_limit,
+        )
+
+    def status_dict(self, now_ns: int) -> dict:
+        """Operator-facing lifecycle view of current regime state."""
+        snap = self.snapshot(now_ns)
+        return {
+            "current_snapshot": external_regime_snapshot_to_dict(snap),
+            "latest_update": (
+                external_regime_update_record_to_dict(self._latest_update) if self._latest_update is not None else None
+            ),
+            "recent_history": [external_regime_update_record_to_dict(record) for record in self._history],
+            "persistence": external_regime_persistence_state_to_dict(self.persistence_state()),
+        }
+
+    def _apply_update(
+        self,
+        *,
+        dimension: str,
+        state: OptionsRegimeState | EventRegimeState | OnChainRegimeState,
+        expected_type: type,
+        current_state: OptionsRegimeState | EventRegimeState | OnChainRegimeState | None,
+        apply_update,
+        received_at_ns: int | None,
+    ) -> ExternalRegimeUpdateRecord:
+        received = state.snapshot_ns if received_at_ns is None else received_at_ns
+        rejected = self._validate_update(
+            dimension=dimension,
+            state=state,
+            expected_type=expected_type,
+            current_state=current_state,
+            received_at_ns=received,
+        )
+        if rejected is not None:
+            self._record(rejected)
+            return rejected
+
+        replaced_existing = current_state is not None and state.snapshot_ns > current_state.snapshot_ns
+        apply_update(state)
+        snap = self._plane.snapshot(received)
+        record = ExternalRegimeUpdateRecord(
+            dimension=dimension,
+            status=ExternalRegimeUpdateStatus.ACCEPTED,
+            accepted=True,
+            received_at_ns=received,
+            state_snapshot_ns=state.snapshot_ns,
+            source_label=state.source,
+            level=state.level.value,
+            freshness=self._dimension_freshness(snap, dimension),
+            replaced_existing=replaced_existing,
+            reason="accepted",
+        )
+        self._restored_from_snapshot = False
+        self._record(record)
+        return record
+
+    def _validate_update(
+        self,
+        *,
+        dimension: str,
+        state: object,
+        expected_type: type,
+        current_state: OptionsRegimeState | EventRegimeState | OnChainRegimeState | None,
+        received_at_ns: int,
+    ) -> ExternalRegimeUpdateRecord | None:
+        if not isinstance(received_at_ns, int) or received_at_ns < 0:
+            return self._rejected_record(
+                dimension=dimension,
+                status=ExternalRegimeUpdateStatus.REJECTED_INVALID,
+                received_at_ns=0 if not isinstance(received_at_ns, int) else received_at_ns,
+                source_label=None,
+                reason=f"invalid_received_at_ns:{received_at_ns!r}",
+            )
+
+        if not isinstance(state, expected_type):
+            return self._rejected_record(
+                dimension=dimension,
+                status=ExternalRegimeUpdateStatus.REJECTED_INVALID,
+                received_at_ns=received_at_ns,
+                source_label=None,
+                reason=f"invalid_type:{type(state).__name__}",
+            )
+
+        if not isinstance(state.snapshot_ns, int) or state.snapshot_ns < 0:
+            return self._rejected_record(
+                dimension=dimension,
+                status=ExternalRegimeUpdateStatus.REJECTED_INVALID,
+                received_at_ns=received_at_ns,
+                source_label=state.source if isinstance(state.source, str) else None,
+                reason=f"invalid_snapshot_ns:{state.snapshot_ns!r}",
+            )
+
+        if not isinstance(state.source, str) or not state.source.strip():
+            return self._rejected_record(
+                dimension=dimension,
+                status=ExternalRegimeUpdateStatus.REJECTED_INVALID,
+                received_at_ns=received_at_ns,
+                source_label=None,
+                reason="missing_source_label",
+            )
+
+        symbol = getattr(state, "symbol", None)
+        if dimension in {"options", "on_chain"} and (not isinstance(symbol, str) or not symbol.strip()):
+            return self._rejected_record(
+                dimension=dimension,
+                status=ExternalRegimeUpdateStatus.REJECTED_INVALID,
+                received_at_ns=received_at_ns,
+                source_label=state.source,
+                reason="missing_symbol",
+            )
+
+        if current_state is not None and state.snapshot_ns < current_state.snapshot_ns:
+            return self._rejected_record(
+                dimension=dimension,
+                status=ExternalRegimeUpdateStatus.REJECTED_STALE,
+                received_at_ns=received_at_ns,
+                source_label=state.source,
+                reason=f"stale_update:{state.snapshot_ns}<{current_state.snapshot_ns}",
+                state_snapshot_ns=state.snapshot_ns,
+                level=state.level.value,
+            )
+
+        if current_state is not None and state.snapshot_ns == current_state.snapshot_ns and state != current_state:
+            return self._rejected_record(
+                dimension=dimension,
+                status=ExternalRegimeUpdateStatus.REJECTED_INVALID,
+                received_at_ns=received_at_ns,
+                source_label=state.source,
+                reason="contradictory_same_timestamp",
+                state_snapshot_ns=state.snapshot_ns,
+                level=state.level.value,
+            )
+
+        return None
+
+    def _record(self, record: ExternalRegimeUpdateRecord) -> None:
+        self._latest_update = record
+        self._history.append(record)
+        self._append_audit_record(
+            event_name="external_regime_update",
+            data=external_regime_update_record_to_dict(record),
+        )
+        self.persist_state()
+
+    def _append_audit_record(self, *, event_name: str, data: dict) -> None:
+        if self._evidence_store is None:
+            return
+        payload = {"record_type": event_name, **data}
+        self._evidence_store.append_evidence("audit_record", payload)
+
+    @staticmethod
+    def _dimension_freshness(snap: ExternalRegimeSnapshot, dimension: str) -> DataFreshness:
+        if dimension == "options":
+            return snap.options_freshness.freshness
+        if dimension == "event":
+            return snap.event_freshness.freshness
+        if dimension == "on_chain":
+            return snap.on_chain_freshness.freshness
+        return DataFreshness.UNAVAILABLE
+
+    @staticmethod
+    def _rejected_record(
+        *,
+        dimension: str,
+        status: ExternalRegimeUpdateStatus,
+        received_at_ns: int,
+        source_label: str | None,
+        reason: str,
+        state_snapshot_ns: int | None = None,
+        level: str | None = None,
+    ) -> ExternalRegimeUpdateRecord:
+        return ExternalRegimeUpdateRecord(
+            dimension=dimension,
+            status=status,
+            accepted=False,
+            received_at_ns=received_at_ns,
+            state_snapshot_ns=state_snapshot_ns,
+            source_label=source_label,
+            level=level,
+            freshness=DataFreshness.UNAVAILABLE,
+            replaced_existing=False,
+            reason=reason,
+        )
+
+    def _state_to_dict(self) -> dict:
+        return {
+            "plane": external_regime_plane_to_dict(self._plane),
+            "history_limit": self._history_limit,
+            "latest_update": (
+                external_regime_update_record_to_dict(self._latest_update) if self._latest_update is not None else None
+            ),
+            "recent_history": [external_regime_update_record_to_dict(record) for record in self._history],
+            "persistence": external_regime_persistence_state_to_dict(self.persistence_state()),
+        }
