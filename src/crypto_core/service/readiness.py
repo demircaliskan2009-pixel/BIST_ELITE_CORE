@@ -162,6 +162,7 @@ PAPER_LIVE_CRITERIA = (
     "fill_pricer_configured",
     "system_state_engine_running",
     "evidence_store_writable",
+    "execution_intelligence_active",
 )
 
 CALIBRATED_PAPER_CRITERIA = (
@@ -331,6 +332,7 @@ _CRITERION_DESCRIPTIONS: dict[str, str] = {
     "fill_pricer_configured": "Fill pricer is configured with realistic parameters",
     "system_state_engine_running": "System state engine is running and producing health signals",
     "evidence_store_writable": "Evidence store directory is writable and functional",
+    "execution_intelligence_active": "Execution intelligence (route binding + TCA loop) is active or explicitly disabled",
     "paper_campaign_completed": "At least one paper campaign has run to completion",
     "paper_fill_calibration_available": "Paper fill accuracy has been measured against reference",
     "tca_records_sufficient": "Sufficient TCA records exist for statistical analysis",

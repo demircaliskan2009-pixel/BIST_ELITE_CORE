@@ -36,7 +36,13 @@ from crypto_core.data.models.feed_state import (
     RecoveryState,
 )
 from crypto_core.runtime.runner import PaperLiveRunner
+from crypto_core.service.execution_intelligence import (
+    BootstrapResult,
+    ExecutionIntelligenceBootstrap,
+)
 from crypto_core.service.models import (
+    ExecutionIntelligenceConfig,
+    ExecutionIntelligenceStatus,
     QueuePressure,
     ServiceConfig,
     ServiceMode,
@@ -80,11 +86,17 @@ class PaperLiveService:
         runner: PaperLiveRunner,
         ingestor: DataIngestor,
         config: ServiceConfig | None = None,
+        execution_intelligence_config: ExecutionIntelligenceConfig | None = None,
     ) -> None:
         self._runner = runner
         self._ingestor = ingestor
         self._config = config or ServiceConfig()
+        self._ei_config = execution_intelligence_config
         self._queue_bridge = EventQueueBridge(self._config)
+
+        # Execution intelligence state (set during start via bootstrap).
+        self._ei_status: ExecutionIntelligenceStatus | None = None
+        self._ei_bootstrap_result: BootstrapResult | None = None
 
         # Lifecycle state (protected by _lock for reads from status()).
         self._lock = threading.Lock()
@@ -128,6 +140,19 @@ class PaperLiveService:
             self._mode = ServiceMode.STARTING
             self._service_start_time_ns = time.time_ns()
 
+        # Phase 9E: bootstrap execution intelligence before runner.start().
+        self._bootstrap_execution_intelligence()
+
+        # Fail-closed: if STRICT mode bootstrap failed, do not start.
+        if self._ei_bootstrap_result is not None and self._ei_bootstrap_result.error is not None:
+            with self._lock:
+                self._mode = ServiceMode.FAILED
+                self._last_error = self._ei_bootstrap_result.error
+            logger.error(
+                "PaperLiveService: execution intelligence bootstrap failed: %s", self._ei_bootstrap_result.error
+            )
+            return
+
         # Start the runner (which starts the session).
         try:
             self._runner.start()
@@ -137,6 +162,9 @@ class PaperLiveService:
                 self._last_error = f"Runner start failed: {exc}"
             logger.error("PaperLiveService runner start failed: %s", exc)
             return
+
+        # Phase 9E: update dedup status after session bootstrap.
+        self._update_ei_dedup_status()
 
         # Start consumer thread.
         self._consumer_stop.clear()
@@ -360,6 +388,7 @@ class PaperLiveService:
             blocked_reason=blocked_reason,
             last_error=last_error,
             total_service_restarts=total_restarts,
+            execution_intelligence=self._ei_status,
         )
 
     # ------------------------------------------------------------------
@@ -386,6 +415,92 @@ class PaperLiveService:
     def ingestor(self) -> DataIngestor:
         """Underlying DataIngestor."""
         return self._ingestor
+
+    @property
+    def execution_intelligence_status(self) -> ExecutionIntelligenceStatus | None:
+        """Current execution intelligence status snapshot."""
+        return self._ei_status
+
+    # ------------------------------------------------------------------
+    # Execution intelligence bootstrap (Phase 9E)
+    # ------------------------------------------------------------------
+
+    def _bootstrap_execution_intelligence(self) -> None:
+        """Build and wire execution intelligence components.
+
+        Called during start() BEFORE runner.start().  Components are injected
+        into the session's orchestrator so they participate in every pipeline cycle.
+
+        DISABLED: no-op.
+        OPTIONAL: builds what it can, reports degraded reasons.
+        STRICT: builds all; sets error on BootstrapResult if any dependency missing.
+        """
+        if self._ei_config is None:
+            # No config → execution intelligence not requested.
+            self._ei_status = None
+            self._ei_bootstrap_result = None
+            return
+
+        bootstrap = ExecutionIntelligenceBootstrap()
+        result = bootstrap.build(self._ei_config)
+        self._ei_bootstrap_result = result
+
+        if result.error is not None:
+            # STRICT mode failure — caller will transition to FAILED.
+            self._ei_status = result.status
+            return
+
+        # Wire components into the orchestrator.
+        orchestrator = self._runner.session._orchestrator
+
+        if result.router is not None:
+            orchestrator._metadata_gated_router = result.router
+            logger.info("Execution intelligence: router injected")
+
+        if result.tca_loop is not None:
+            orchestrator._tca_loop = result.tca_loop
+            logger.info("Execution intelligence: TCA loop injected")
+
+        # Wire TCA store into session for dedup bootstrap.
+        if result.tca_store is not None:
+            self._runner.session._tca_store = result.tca_store
+            logger.info("Execution intelligence: TCA store injected")
+
+        # Update status with final state.
+        self._ei_status = ExecutionIntelligenceStatus(
+            mode=result.status.mode,
+            route_binding_enabled=result.status.route_binding_enabled,
+            tca_loop_enabled=result.status.tca_loop_enabled,
+            tca_store_available=result.status.tca_store_available,
+            replay_dedup_bootstrapped=False,
+            degraded=result.status.degraded,
+            degraded_reasons=result.status.degraded_reasons,
+        )
+
+    def _update_ei_dedup_status(self) -> None:
+        """Update execution intelligence status after session start bootstraps dedup.
+
+        Called after runner.start() completes (session._bootstrap_tca_dedup runs
+        inside session.start()).
+        """
+        if self._ei_status is None:
+            return
+        # Check if dedup was bootstrapped by examining the TCA loop state.
+        tca_loop = self._runner.session._orchestrator.tca_loop
+        bootstrapped = False
+        if tca_loop is not None:
+            persisted_ids = tca_loop.get_persisted_tca_ids()
+            bootstrapped = len(persisted_ids) > 0 or self._runner.session._tca_store is not None
+
+        self._ei_status = ExecutionIntelligenceStatus(
+            mode=self._ei_status.mode,
+            route_binding_enabled=self._ei_status.route_binding_enabled,
+            tca_loop_enabled=self._ei_status.tca_loop_enabled,
+            tca_store_available=self._ei_status.tca_store_available,
+            replay_dedup_bootstrapped=bootstrapped,
+            degraded=self._ei_status.degraded,
+            degraded_reasons=self._ei_status.degraded_reasons,
+        )
 
     # ------------------------------------------------------------------
     # Consumer loop (runs in daemon thread)

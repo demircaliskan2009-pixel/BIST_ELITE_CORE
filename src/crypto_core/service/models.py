@@ -192,3 +192,54 @@ class ServiceStatus:
     blocked_reason: str | None
     last_error: str | None
     total_service_restarts: int = 0
+    execution_intelligence: ExecutionIntelligenceStatus | None = None
+
+
+# ---------------------------------------------------------------------------
+# Execution intelligence policy — Phase 9E
+# ---------------------------------------------------------------------------
+
+
+class ExecutionIntelligenceMode(str, Enum):
+    """Policy for whether execution intelligence is required at startup.
+
+    STRICT:   router + TCA loop MUST be present; startup fails if missing.
+    OPTIONAL: bootstrap attempts to build them; degrades gracefully if missing.
+    DISABLED: execution intelligence is intentionally off; no degradation.
+    """
+
+    STRICT = "strict"
+    OPTIONAL = "optional"
+    DISABLED = "disabled"
+
+
+@dataclass(frozen=True)
+class ExecutionIntelligenceConfig:
+    """Configuration for execution intelligence bootstrap.
+
+    mode:              policy for enforcement (STRICT / OPTIONAL / DISABLED).
+    tca_store_path:    filesystem path for TCA persistence; None = no persistence.
+    tca_horizons:      markout observation horizons in seconds.
+    auto_persist_tca:  persist TCA records when markout completes.
+    """
+
+    mode: ExecutionIntelligenceMode = ExecutionIntelligenceMode.OPTIONAL
+    tca_store_path: str | None = None
+    tca_horizons: tuple[int, ...] = (1, 5, 15)
+    auto_persist_tca: bool = True
+
+
+@dataclass(frozen=True)
+class ExecutionIntelligenceStatus:
+    """Operator-facing snapshot of execution intelligence subsystem.
+
+    Frozen — rebuilt on every status() call.
+    """
+
+    mode: str
+    route_binding_enabled: bool
+    tca_loop_enabled: bool
+    tca_store_available: bool
+    replay_dedup_bootstrapped: bool
+    degraded: bool
+    degraded_reasons: tuple[str, ...] = ()

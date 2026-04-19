@@ -162,6 +162,7 @@ class TestReadinessEvaluator:
             "fill_pricer_configured": True,
             "system_state_engine_running": True,
             "evidence_store_writable": True,
+            "execution_intelligence_active": True,
         }
         status = evaluator.evaluate(flags=flags, assessed_at_ns=1_000_000)
         assert status.level == ReadinessLevel.PAPER_LIVE
@@ -210,6 +211,7 @@ class TestReadinessEvaluator:
             "fill_pricer_configured": True,
             "system_state_engine_running": True,
             "evidence_store_writable": True,
+            "execution_intelligence_active": True,
             "paper_campaign_completed": True,
             "paper_fill_calibration_available": True,
             "tca_records_sufficient": True,
