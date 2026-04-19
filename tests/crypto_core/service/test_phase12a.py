@@ -35,9 +35,12 @@ from crypto_core.service.external_regime import (
     ExternalRegimeProviderProfile,
     ExternalRegimeProviderRole,
     ExternalRegimeProviderTrust,
+    ExternalRegimeScenario,
+    ExternalRegimeScenarioStep,
     ExternalRegimeUpdateStatus,
     external_regime_bundle_replay_artifact_from_dict,
     external_regime_bundle_replay_artifact_to_dict,
+    external_regime_scenario_result_to_dict,
 )
 from crypto_core.service.models import (
     ExecutionIntelligenceStatus,
@@ -745,3 +748,198 @@ class TestServiceOrchestratorExternalRegimeAdapters:
         assert lifecycle is not None
         assert lifecycle["latest_bundle_result"]["bundle_id"] == "svc-bundle"
         assert lifecycle["latest_bundle_replay_artifact"]["result"]["bundle_id"] == "svc-bundle"
+
+
+class TestExternalRegimeScenarioRunner:
+    def test_multi_step_bundle_scenario_is_deterministic(self):
+        scenario = ExternalRegimeScenario(
+            scenario_id="scenario-deterministic",
+            steps=(
+                ExternalRegimeScenarioStep(
+                    step_id="step-1",
+                    received_at_ns=_T0_NS,
+                    provider="manual",
+                    bundle_payload={
+                        "bundle_id": "scenario-bundle-1",
+                        "options": {
+                            "symbol": "BTCUSDT",
+                            "level": OptionsRegimeLevel.NORMAL.value,
+                            "snapshot_ns": _T0_NS,
+                            "source": "manual.options",
+                        },
+                        "event": {
+                            "level": EventRegimeLevel.QUIET.value,
+                            "snapshot_ns": _T0_NS,
+                            "source": "calendar.event",
+                            "event_category": EventCategory.MACRO.value,
+                        },
+                        "on_chain": {
+                            "symbol": "BTC",
+                            "level": OnChainRegimeLevel.NORMAL.value,
+                            "snapshot_ns": _T0_NS,
+                            "source": "glassnode.flow",
+                        },
+                    },
+                ),
+                ExternalRegimeScenarioStep(
+                    step_id="step-2",
+                    received_at_ns=_T0_NS + _NS_PER_S,
+                    provider="manual",
+                    bundle_payload={
+                        "bundle_id": "scenario-bundle-2",
+                        "options": {
+                            "symbol": "BTCUSDT",
+                            "level": OptionsRegimeLevel.ELEVATED.value,
+                            "snapshot_ns": _T0_NS + _NS_PER_S,
+                            "source": "manual.options",
+                        },
+                        "on_chain": {
+                            "symbol": "BTC",
+                            "level": OnChainRegimeLevel.WHALE_ACTIVE.value,
+                            "snapshot_ns": _T0_NS + _NS_PER_S,
+                            "source": "glassnode.flow",
+                        },
+                    },
+                    apply_mode=ExternalRegimeBundleApplyMode.PARTIAL.value,
+                ),
+            ),
+        )
+
+        first = ExternalRegimeManager().run_scenario(scenario)
+        second = ExternalRegimeManager().run_scenario(scenario)
+
+        assert external_regime_scenario_result_to_dict(first) == external_regime_scenario_result_to_dict(second)
+        assert first.step_count == 2
+        assert first.accepted_steps == 2
+        assert first.activation_reduced_steps == 1
+
+    def test_time_progression_can_make_regime_state_stale(self):
+        manager = ExternalRegimeManager(
+            plane=ExternalRegimeDataPlane(
+                freshness_policy=ExternalRegimeFreshnessPolicy.uniform(60.0),
+            )
+        )
+        scenario = ExternalRegimeScenario(
+            scenario_id="scenario-stale",
+            steps=(
+                ExternalRegimeScenarioStep(
+                    step_id="seed",
+                    received_at_ns=_T0_NS,
+                    provider="manual",
+                    bundle_payload={
+                        "options": {
+                            "symbol": "BTCUSDT",
+                            "level": OptionsRegimeLevel.NORMAL.value,
+                            "snapshot_ns": _T0_NS,
+                            "source": "manual.options",
+                        },
+                        "event": {
+                            "level": EventRegimeLevel.QUIET.value,
+                            "snapshot_ns": _T0_NS,
+                            "source": "calendar.event",
+                            "event_category": EventCategory.MACRO.value,
+                        },
+                        "on_chain": {
+                            "symbol": "BTC",
+                            "level": OnChainRegimeLevel.NORMAL.value,
+                            "snapshot_ns": _T0_NS,
+                            "source": "glassnode.flow",
+                        },
+                    },
+                ),
+                ExternalRegimeScenarioStep(
+                    step_id="advance",
+                    received_at_ns=_T0_NS + 120 * _NS_PER_S,
+                    provider="calendar",
+                    dimension_payloads={
+                        "event": {
+                            "level": EventRegimeLevel.QUIET.value,
+                            "snapshot_ns": _T0_NS + 120 * _NS_PER_S,
+                            "source": "calendar.event",
+                            "event_category": EventCategory.MACRO.value,
+                        }
+                    },
+                ),
+            ),
+        )
+
+        result = manager.run_scenario(scenario)
+
+        assert result.stale_steps == 1
+        assert result.step_records[-1].stale_dimensions == ("options", "on_chain")
+        assert result.execution_blocked_steps == 1
+
+    def test_rejected_dimension_step_is_counted(self):
+        result = ExternalRegimeManager().run_scenario(
+            ExternalRegimeScenario(
+                scenario_id="scenario-rejected",
+                steps=(
+                    ExternalRegimeScenarioStep(
+                        step_id="bad-event",
+                        received_at_ns=_T0_NS,
+                        provider="calendar",
+                        dimension_payloads={
+                            "event": {
+                                "level": EventRegimeLevel.PENDING.value,
+                                "snapshot_ns": _T0_NS,
+                            }
+                        },
+                    ),
+                ),
+            )
+        )
+
+        assert result.rejected_steps == 1
+        assert result.accepted_steps == 0
+        assert result.step_records[0].failed_dimensions == ("event",)
+
+    def test_service_orchestrator_runs_scenario_and_tracks_replayed_steps(self):
+        orchestrator = ServiceOrchestrator(
+            service=_make_service(),
+            external_regime_plane=ExternalRegimeDataPlane(),
+        )
+        orchestrator.ingest_external_regime_bundle(
+            {
+                "bundle_id": "seed-artifact",
+                "options": {
+                    "symbol": "BTCUSDT",
+                    "level": OptionsRegimeLevel.NORMAL.value,
+                    "snapshot_ns": _T0_NS,
+                    "source": "manual.options",
+                },
+                "event": {
+                    "level": EventRegimeLevel.QUIET.value,
+                    "snapshot_ns": _T0_NS,
+                    "source": "calendar.event",
+                    "event_category": EventCategory.MACRO.value,
+                },
+                "on_chain": {
+                    "symbol": "BTC",
+                    "level": OnChainRegimeLevel.NORMAL.value,
+                    "snapshot_ns": _T0_NS,
+                    "source": "glassnode.flow",
+                },
+            },
+            provider="manual",
+        )
+        artifact = orchestrator.external_regime_latest_bundle_replay_artifact()
+        result = orchestrator.run_external_regime_scenario(
+            ExternalRegimeScenario(
+                scenario_id="svc-scenario",
+                steps=(
+                    ExternalRegimeScenarioStep(
+                        step_id="replay-seed",
+                        received_at_ns=_T0_NS + 5 * _NS_PER_S,
+                        provider="manual",
+                        replay_artifact=artifact,
+                    ),
+                ),
+            )
+        )
+        lifecycle = orchestrator.external_regime_lifecycle_dict()
+
+        assert artifact is not None
+        assert result.replayed_steps == 1
+        assert lifecycle is not None
+        assert lifecycle["scenario_status"] == "completed"
+        assert lifecycle["latest_scenario_result"]["replayed_steps"] == 1

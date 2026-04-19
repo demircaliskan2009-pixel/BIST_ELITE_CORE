@@ -50,6 +50,7 @@ from crypto_core.service.campaign_controller import (
     campaign_readiness_flags,
 )
 from crypto_core.service.evidence_store import EvidenceStore
+from crypto_core.service.external_regime import ExternalRegimeScenarioResult
 from crypto_core.service.models import (
     ExecutionIntelligenceStatus,
     QueuePressure,
@@ -761,3 +762,77 @@ class TestCampaignReportStability:
         )
         assert report.stability is not None
         assert report.stability.degraded_intervals == 3
+
+
+class TestCampaignControllerExternalRegimeScenarioEvidence:
+    def test_snapshot_carries_external_regime_scenario_counts(self, tmp_path: Path):
+        ctrl = CampaignController(
+            config=CampaignConfig(max_duration_s=600),
+            evidence_store=EvidenceStore(evidence_dir=tmp_path / "evidence"),
+        )
+        ss = _make_service_status()
+        ctrl.start(ss, run_id="r-scenario")
+        scenario = ExternalRegimeScenarioResult(
+            scenario_id="campaign-scenario",
+            status="completed",
+            step_count=6,
+            accepted_steps=4,
+            rejected_steps=1,
+            replayed_steps=1,
+            partially_accepted_steps=1,
+            execution_blocked_steps=2,
+            activation_blocked_steps=1,
+            activation_reduced_steps=2,
+            stale_steps=1,
+            unavailable_steps=0,
+            high_risk_steps=3,
+            safe_steps=2,
+            last_step_ns=_T0_NS + 10 * _NS_PER_S,
+            summary="steps=6; execution_blocked=2; activation_blocked=1; activation_reduced=2",
+            step_records=(),
+            final_snapshot=None,
+        )
+
+        snap = ctrl.snapshot(ss, ext_regime_scenario=scenario)
+
+        assert snap.ext_regime_scenario_available is True
+        assert snap.ext_regime_scenario_step_count == 6
+        assert snap.ext_regime_execution_blocked_steps == 2
+        assert snap.ext_regime_activation_reduced_steps == 2
+
+    def test_finalize_and_report_dict_include_external_regime_scenario_counts(self, tmp_path: Path):
+        ctrl = CampaignController(
+            config=CampaignConfig(max_duration_s=600),
+            evidence_store=EvidenceStore(evidence_dir=tmp_path / "evidence-report"),
+        )
+        ss = _make_service_status()
+        ctrl.start(ss, run_id="r-scenario-report")
+        scenario = ExternalRegimeScenarioResult(
+            scenario_id="campaign-scenario-report",
+            status="completed",
+            step_count=5,
+            accepted_steps=3,
+            rejected_steps=1,
+            replayed_steps=1,
+            partially_accepted_steps=1,
+            execution_blocked_steps=1,
+            activation_blocked_steps=1,
+            activation_reduced_steps=1,
+            stale_steps=1,
+            unavailable_steps=1,
+            high_risk_steps=2,
+            safe_steps=1,
+            last_step_ns=_T0_NS + 5 * _NS_PER_S,
+            summary="steps=5; execution_blocked=1; activation_blocked=1; activation_reduced=1",
+            step_records=(),
+            final_snapshot=None,
+        )
+
+        report = ctrl.finalize(ss, ext_regime_scenario=scenario)
+        serialized = _report_to_dict(report)
+
+        assert report.ext_regime_scenario_available is True
+        assert report.ext_regime_execution_blocked_steps == 1
+        assert serialized["snapshot"]["ext_regime_scenario_step_count"] == 5
+        assert serialized["ext_regime_activation_blocked_steps"] == 1
+        assert serialized["ext_regime_scenario_summary"].startswith("steps=5")

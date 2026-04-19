@@ -11,7 +11,11 @@ from crypto_core.execution.regime_contracts import (
     OptionsRegimeState,
 )
 from crypto_core.runtime.models import RuntimeStatus
-from crypto_core.service.external_regime import ExternalRegimeDataPlane
+from crypto_core.service.external_regime import (
+    ExternalRegimeDataPlane,
+    ExternalRegimeScenario,
+    ExternalRegimeScenarioStep,
+)
 from crypto_core.service.models import (
     ExecutionIntelligenceStatus,
     QueuePressure,
@@ -221,3 +225,60 @@ class TestOperatorExternalRegimeSafety:
         assert status["external_regime_safety"] is not None
         assert status["external_regime_safety"]["activation_blocked"] is False
         assert status["external_regime_safety"]["activation_allocation_scale"] == 0.5
+
+    def test_operator_snapshot_surfaces_latest_scenario_result_and_counts(self) -> None:
+        plane = ExternalRegimeDataPlane(staleness_threshold_s=60.0)
+        orch = ServiceOrchestrator(service=_service(), external_regime_plane=plane)
+
+        result = orch.run_external_regime_scenario(
+            ExternalRegimeScenario(
+                scenario_id="operator-scenario",
+                steps=(
+                    ExternalRegimeScenarioStep(
+                        step_id="seed",
+                        received_at_ns=_T0_NS,
+                        provider="manual",
+                        bundle_payload={
+                            "options": {
+                                "symbol": "BTCUSDT",
+                                "level": OptionsRegimeLevel.NORMAL.value,
+                                "snapshot_ns": _T0_NS,
+                                "source": "manual.options",
+                            },
+                            "event": {
+                                "level": EventRegimeLevel.QUIET.value,
+                                "snapshot_ns": _T0_NS,
+                                "source": "test",
+                            },
+                            "on_chain": {
+                                "symbol": "BTC",
+                                "level": OnChainRegimeLevel.NORMAL.value,
+                                "snapshot_ns": _T0_NS,
+                                "source": "test",
+                            },
+                        },
+                    ),
+                    ExternalRegimeScenarioStep(
+                        step_id="risk-on",
+                        received_at_ns=_T0_NS + _NS_PER_S,
+                        provider="calendar",
+                        dimension_payloads={
+                            "event": {
+                                "level": EventRegimeLevel.PENDING.value,
+                                "snapshot_ns": _T0_NS + _NS_PER_S,
+                                "source": "test",
+                            }
+                        },
+                    ),
+                ),
+            )
+        )
+        snap = orch.operator_snapshot()
+        status = orch.combined_status_dict()
+
+        assert result.activation_blocked_steps == 1
+        assert snap.external_regime_scenario is not None
+        assert snap.evidence.external_regime_scenario_available is True
+        assert snap.evidence.external_regime_activation_blocked_steps == 1
+        assert status["external_regime_scenario"] is not None
+        assert status["external_regime_scenario"]["activation_blocked_steps"] == 1
