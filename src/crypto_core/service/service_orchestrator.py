@@ -99,9 +99,16 @@ from crypto_core.service.promotion_review_controller import (
 from crypto_core.service.readiness import ReadinessEvaluator, readiness_to_dict
 from crypto_core.service.sleeve_portfolio import (
     CryptoSleeveState,
+    SleeveAllocationPolicy,
     SleevePortfolioSnapshot,
     build_sleeve_portfolio_snapshot,
+    sleeve_allocation_policy_to_dict,
+    sleeve_effective_allocation_summary_to_dict,
     sleeve_portfolio_snapshot_to_dict,
+)
+from crypto_core.service.sleeve_portfolio_controller import (
+    SleeveOperatorOverride,
+    SleevePortfolioController,
 )
 
 logger = logging.getLogger(__name__)
@@ -296,6 +303,7 @@ class ServiceOrchestrator:
         external_regime_manager: ExternalRegimeManager | None = None,
         external_regime_policy: ExternalRegimeSafetyPolicy | None = None,
         sleeves: tuple[CryptoSleeveState, ...] = (),
+        sleeve_allocation_policy: SleeveAllocationPolicy | None = None,
     ) -> None:
         self._service = service
         self._evidence_store = evidence_store
@@ -329,6 +337,10 @@ class ServiceOrchestrator:
         self._review: PromotionReviewController | None = None
         self._escalation_review: EscalationReviewController | None = None
         self._configured_sleeves = tuple(sleeves)
+        self._sleeve_allocation_policy = (
+            SleeveAllocationPolicy() if sleeve_allocation_policy is None else sleeve_allocation_policy
+        )
+        self._sleeve_portfolio_controller: SleevePortfolioController | None = None
 
     # ------------------------------------------------------------------
     # Properties
@@ -383,7 +395,52 @@ class ServiceOrchestrator:
     ) -> SleevePortfolioSnapshot:
         """Replace the configured crypto sleeve portfolio surface."""
         self._configured_sleeves = tuple(sleeves)
+        if self._sleeve_portfolio_controller is not None:
+            self._sleeve_portfolio_controller.configure_sleeves(self._configured_sleeves)
         return self.sleeve_portfolio_snapshot()
+
+    def set_sleeve_allocation_policy(self, policy: SleeveAllocationPolicy) -> SleevePortfolioSnapshot:
+        """Replace the explicit sleeve effective-allocation recompute policy."""
+        self._sleeve_allocation_policy = policy
+        if self._sleeve_portfolio_controller is not None:
+            self._sleeve_portfolio_controller.configure_allocation_policy(policy)
+        return self.sleeve_portfolio_snapshot()
+
+    def enable_sleeve(self, sleeve_id: str) -> SleeveOperatorOverride:
+        """Explicitly enable or unblock a sleeve at the operator layer."""
+        return self._ensure_sleeve_portfolio_controller().enable_sleeve(sleeve_id)
+
+    def disable_sleeve(
+        self,
+        sleeve_id: str,
+        *,
+        reason_summary: str = "Explicitly disabled by operator.",
+        required_change: str = "Use enable_sleeve after operator review.",
+    ) -> SleeveOperatorOverride:
+        """Explicitly disable a sleeve at the operator layer."""
+        return self._ensure_sleeve_portfolio_controller().disable_sleeve(
+            sleeve_id,
+            reason_summary=reason_summary,
+            required_change=required_change,
+        )
+
+    def block_sleeve(
+        self,
+        sleeve_id: str,
+        *,
+        reason_summary: str,
+        required_change: str = "Clear the operator block before enabling.",
+    ) -> SleeveOperatorOverride:
+        """Explicitly block a sleeve at the operator layer."""
+        return self._ensure_sleeve_portfolio_controller().block_sleeve(
+            sleeve_id,
+            reason_summary=reason_summary,
+            required_change=required_change,
+        )
+
+    def unblock_sleeve(self, sleeve_id: str) -> SleeveOperatorOverride:
+        """Explicitly remove operator/configuration block pressure for a sleeve."""
+        return self._ensure_sleeve_portfolio_controller().unblock_sleeve(sleeve_id)
 
     def sleeve_portfolio_snapshot(self) -> SleevePortfolioSnapshot:
         """Build the current crypto sleeve portfolio snapshot."""
@@ -395,6 +452,14 @@ class ServiceOrchestrator:
     def sleeve_portfolio_dict(self) -> dict:
         """Serialize the current crypto sleeve portfolio snapshot to a dict."""
         return sleeve_portfolio_snapshot_to_dict(self.sleeve_portfolio_snapshot())
+
+    def sleeve_allocation_policy_dict(self) -> dict:
+        """Serialize the current sleeve allocation policy to a plain dict."""
+        return sleeve_allocation_policy_to_dict(self.sleeve_portfolio_snapshot().allocation_policy)
+
+    def sleeve_allocation_result_dict(self) -> dict:
+        """Serialize the current effective sleeve allocation result to a plain dict."""
+        return sleeve_effective_allocation_summary_to_dict(self.sleeve_portfolio_snapshot().effective_allocation)
 
     def export_sleeve_portfolio(self):
         """Persist the current crypto sleeve portfolio snapshot via EvidenceStore."""
@@ -411,7 +476,21 @@ class ServiceOrchestrator:
             raise RuntimeError("No evidence store configured for sleeve portfolio load")
         snapshot = load_sleeve_portfolio_snapshot(evidence_store=self._evidence_store)
         self._configured_sleeves = snapshot.sleeves
+        self._sleeve_allocation_policy = snapshot.allocation_policy
+        if self._sleeve_portfolio_controller is not None:
+            self._sleeve_portfolio_controller.configure_sleeves(snapshot.sleeves)
+            self._sleeve_portfolio_controller.configure_allocation_policy(snapshot.allocation_policy)
         return snapshot
+
+    def restore_sleeve_portfolio_workflow(self) -> SleevePortfolioSnapshot:
+        """Restore the managed sleeve workflow state if a persisted controller snapshot exists."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for sleeve portfolio workflow restore")
+        controller = SleevePortfolioController.restore(self._evidence_store)
+        self._sleeve_portfolio_controller = controller
+        self._configured_sleeves = controller.defined_sleeves
+        self._sleeve_allocation_policy = controller.allocation_policy
+        return self.sleeve_portfolio_snapshot()
 
     # ------------------------------------------------------------------
     # Campaign lifecycle
@@ -1662,6 +1741,16 @@ class ServiceOrchestrator:
             "shadow_live",
             "tiny_cap_live",
         )
+        if self._sleeve_portfolio_controller is not None:
+            return self._sleeve_portfolio_controller.current_snapshot(
+                as_of_ns=as_of_ns,
+                readiness_level=self._readiness_level,
+                readiness_is_supportive=readiness_is_supportive,
+                escalation_allowed_next_step=self._current_escalation_allowed_next_step(),
+                external_regime_execution_blocked=(
+                    None if ext_regime_safety is None else ext_regime_safety.execution_blocked
+                ),
+            )
         return build_sleeve_portfolio_snapshot(
             sleeves=self._configured_sleeves,
             as_of_ns=as_of_ns,
@@ -1671,7 +1760,17 @@ class ServiceOrchestrator:
             external_regime_execution_blocked=(
                 None if ext_regime_safety is None else ext_regime_safety.execution_blocked
             ),
+            allocation_policy=self._sleeve_allocation_policy,
         )
+
+    def _ensure_sleeve_portfolio_controller(self) -> SleevePortfolioController:
+        if self._sleeve_portfolio_controller is None:
+            self._sleeve_portfolio_controller = SleevePortfolioController(
+                defined_sleeves=self._configured_sleeves,
+                allocation_policy=self._sleeve_allocation_policy,
+                evidence_store=self._evidence_store,
+            )
+        return self._sleeve_portfolio_controller
 
     def _current_escalation_allowed_next_step(self) -> str | None:
         """Best current escalation hook for sleeve governance surfaces."""

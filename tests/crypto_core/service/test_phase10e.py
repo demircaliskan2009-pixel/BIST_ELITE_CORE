@@ -75,6 +75,8 @@ from crypto_core.service.sleeve_portfolio import (
     CryptoSleeveState,
     CryptoSleeveStatus,
     CryptoSleeveType,
+    SleeveAllocationPolicy,
+    SleeveInactiveCapitalMode,
 )
 from crypto_core.session.models import PaperSessionStatus
 
@@ -895,6 +897,104 @@ class TestOperatorSnapshot:
         assert snap.sleeve_portfolio.blocked_sleeve_ids == ("carry-1",)
         assert snap.sleeve_portfolio.allocation.unallocated_share == pytest.approx(0.35)
 
+    def test_snapshot_with_managed_sleeve_operator_transition(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(service=svc, readiness_level="paper_live")
+        orch.set_sleeve_portfolio(
+            (
+                CryptoSleeveState(
+                    sleeve_id="trend-2",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.DEFINED,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            )
+        )
+
+        orch.enable_sleeve("trend-2")
+        snap = orch.operator_snapshot()
+        sleeve = snap.sleeve_portfolio.sleeves[0]
+        assert sleeve.status == CryptoSleeveStatus.ENABLED
+        assert snap.sleeve_portfolio.workflow_status == "active"
+        assert snap.sleeve_portfolio.comparison_to_previous["changed"] is False
+
+        orch.disable_sleeve("trend-2")
+        snap2 = orch.operator_snapshot()
+        sleeve2 = snap2.sleeve_portfolio.sleeves[0]
+        assert sleeve2.status == CryptoSleeveStatus.DISABLED
+        assert snap2.sleeve_portfolio.workflow_status == "active"
+        assert snap2.sleeve_portfolio.comparison_to_previous["changed"] is True
+        assert snap2.sleeve_portfolio.history_summary["last_changed_sleeves"] == ["trend-2"]
+
+    def test_snapshot_with_managed_sleeve_governance_block(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(service=svc, readiness_level="paper_live")
+        orch.set_sleeve_portfolio(
+            (
+                CryptoSleeveState(
+                    sleeve_id="micro-2",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.30,
+                    active_allocation=0.30,
+                    readiness_level="calibrated_paper",
+                    escalation_stage="shadow_live_review_eligible",
+                ),
+            )
+        )
+
+        orch.enable_sleeve("micro-2")
+        snap = orch.operator_snapshot()
+        sleeve = snap.sleeve_portfolio.sleeves[0]
+        assert sleeve.status == CryptoSleeveStatus.BLOCKED
+        assert sleeve.blocked_allocation == pytest.approx(0.30)
+        assert any("Raise readiness" in item for item in sleeve.required_changes)
+        assert any("Produce escalation evidence" in item for item in sleeve.required_changes)
+
+    def test_snapshot_with_explicit_allocation_policy_recomputes_effective_share(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(service=svc, readiness_level="paper_live")
+        orch.set_sleeve_portfolio(
+            (
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.45,
+                    active_allocation=0.45,
+                ),
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.15,
+                    active_allocation=0.15,
+                ),
+                CryptoSleeveState(
+                    sleeve_id="carry-1",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.20,
+                    blocked_allocation=0.20,
+                    blocked_reasons=("readiness_pending",),
+                    reason_summary="readiness_pending",
+                ),
+            )
+        )
+        orch.set_sleeve_allocation_policy(
+            SleeveAllocationPolicy(
+                blocked_allocation_mode=SleeveInactiveCapitalMode.REDISTRIBUTE_PRO_RATA,
+            )
+        )
+
+        snap = orch.operator_snapshot()
+        by_id = {sleeve.sleeve_id: sleeve for sleeve in snap.sleeve_portfolio.sleeves}
+        assert by_id["micro-1"].effective_allocation == pytest.approx(0.60)
+        assert by_id["trend-1"].effective_allocation == pytest.approx(0.20)
+        assert snap.sleeve_portfolio.effective_allocation.redistributed_blocked_share == pytest.approx(0.20)
+        assert snap.sleeve_portfolio.effective_allocation.recipient_sleeve_ids == ("micro-1", "trend-1")
+
 
 # ---------------------------------------------------------------------------
 # Tests: Evidence sufficiency truthfulness
@@ -1009,6 +1109,49 @@ class TestReportingAPI:
         portfolio = orch.sleeve_portfolio_dict()
         assert portfolio["enabled_sleeve_ids"] == ["micro-1", "trend-1"]
         assert portfolio["allocation"]["unallocated_share"] == pytest.approx(0.35)
+
+    def test_sleeve_allocation_policy_and_result_dict(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(service=svc)
+        orch.set_sleeve_portfolio(
+            (
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.45,
+                    active_allocation=0.45,
+                ),
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.15,
+                    active_allocation=0.15,
+                ),
+                CryptoSleeveState(
+                    sleeve_id="carry-1",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.20,
+                    blocked_allocation=0.20,
+                    blocked_reasons=("readiness_pending",),
+                    reason_summary="readiness_pending",
+                ),
+            )
+        )
+        orch.set_sleeve_allocation_policy(
+            SleeveAllocationPolicy(
+                blocked_allocation_mode=SleeveInactiveCapitalMode.REDISTRIBUTE_PRO_RATA,
+            )
+        )
+
+        policy = orch.sleeve_allocation_policy_dict()
+        result = orch.sleeve_allocation_result_dict()
+        assert policy["blocked_allocation_mode"] == "redistribute_pro_rata"
+        assert result["effective_allocated_share"] == pytest.approx(0.80)
+        assert result["redistributed_blocked_share"] == pytest.approx(0.20)
+        assert result["recipient_sleeve_ids"] == ["micro-1", "trend-1"]
 
     def test_campaign_report_dict_none(self):
         svc = _make_mock_service()
@@ -1566,6 +1709,41 @@ class TestPersistenceRestore:
         loaded = orch2.load_sleeve_portfolio()
         assert loaded.enabled_sleeve_ids == ("micro-1", "trend-1")
         assert orch2.sleeve_portfolio_snapshot().blocked_sleeve_ids == ("carry-1",)
+
+    def test_sleeve_portfolio_workflow_restore_roundtrip(self, tmp_path: Path):
+        svc = _make_mock_service()
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        orch = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store,
+            readiness_level="paper_live",
+        )
+        orch.set_sleeve_portfolio(
+            (
+                CryptoSleeveState(
+                    sleeve_id="trend-restore",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.DEFINED,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            )
+        )
+        orch.enable_sleeve("trend-restore")
+        first = orch.sleeve_portfolio_snapshot()
+        assert first.sleeves[0].status == CryptoSleeveStatus.ENABLED
+
+        orch2 = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store,
+            readiness_level="paper_live",
+        )
+        restored = orch2.restore_sleeve_portfolio_workflow()
+        assert restored.sleeves[0].status == CryptoSleeveStatus.ENABLED
+        assert restored.history_summary["total_recorded_changes"] >= 0
 
     def test_escalation_review_persist_restore_roundtrip(self, tmp_path: Path):
         svc = _make_mock_service()

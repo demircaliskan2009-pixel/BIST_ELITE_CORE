@@ -87,13 +87,20 @@ from crypto_core.service.sleeve_portfolio import (
     CryptoSleeveState,
     CryptoSleeveStatus,
     CryptoSleeveType,
+    SleeveAllocationPolicy,
+    SleeveInactiveCapitalMode,
     SleevePortfolioCorruptError,
     SleevePortfolioValidationError,
+    SleeveReasonSource,
     build_sleeve_portfolio_snapshot,
     crypto_sleeve_state_from_dict,
     crypto_sleeve_state_to_dict,
     sleeve_portfolio_snapshot_from_dict,
     sleeve_portfolio_snapshot_to_dict,
+)
+from crypto_core.service.sleeve_portfolio_controller import (
+    SleevePortfolioController,
+    SleevePortfolioWorkflowCorruptError,
 )
 
 # ---------------------------------------------------------------------------
@@ -1685,7 +1692,81 @@ class TestSleevePortfolioContracts:
         assert snapshot.sleeves == ()
         assert snapshot.allocation.total_sleeves == 0
         assert snapshot.allocation.unallocated_share == pytest.approx(1.0)
+        assert snapshot.allocation_policy.blocked_allocation_mode == SleeveInactiveCapitalMode.CONSERVE
+        assert snapshot.effective_allocation.effective_allocated_share == pytest.approx(0.0)
         assert "No explicit sleeves configured" in snapshot.summary
+
+    def test_allocation_policy_defaults_to_conservative_effective_allocation(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.40,
+                    active_allocation=0.40,
+                ),
+                CryptoSleeveState(
+                    sleeve_id="carry-1",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.25,
+                    blocked_allocation=0.25,
+                    blocked_reasons=("readiness_pending",),
+                    reason_summary="readiness_pending",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+        )
+
+        by_id = {sleeve.sleeve_id: sleeve for sleeve in snapshot.sleeves}
+        assert snapshot.allocation_policy.blocked_allocation_mode == SleeveInactiveCapitalMode.CONSERVE
+        assert by_id["micro-1"].effective_allocation == pytest.approx(0.40)
+        assert by_id["carry-1"].effective_allocation == pytest.approx(0.0)
+        assert snapshot.effective_allocation.effective_allocated_share == pytest.approx(0.40)
+        assert snapshot.effective_allocation.redistributed_blocked_share == pytest.approx(0.0)
+        assert snapshot.effective_allocation.conserved_blocked_share == pytest.approx(0.25)
+
+    def test_allocation_policy_can_redistribute_blocked_share_pro_rata(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.45,
+                    active_allocation=0.45,
+                ),
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.15,
+                    active_allocation=0.15,
+                ),
+                CryptoSleeveState(
+                    sleeve_id="carry-1",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.20,
+                    blocked_allocation=0.20,
+                    blocked_reasons=("readiness_pending",),
+                    reason_summary="readiness_pending",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            allocation_policy=SleeveAllocationPolicy(
+                blocked_allocation_mode=SleeveInactiveCapitalMode.REDISTRIBUTE_PRO_RATA,
+            ),
+        )
+
+        by_id = {sleeve.sleeve_id: sleeve for sleeve in snapshot.sleeves}
+        assert by_id["micro-1"].effective_allocation == pytest.approx(0.60)
+        assert by_id["trend-1"].effective_allocation == pytest.approx(0.20)
+        assert by_id["carry-1"].effective_allocation == pytest.approx(0.0)
+        assert snapshot.effective_allocation.effective_allocated_share == pytest.approx(0.80)
+        assert snapshot.effective_allocation.redistributed_blocked_share == pytest.approx(0.20)
+        assert snapshot.effective_allocation.recipient_sleeve_ids == ("micro-1", "trend-1")
 
     def test_artifact_export_roundtrip(self, tmp_path: Path):
         snapshot = build_sleeve_portfolio_snapshot(
@@ -1701,6 +1782,9 @@ class TestSleevePortfolioContracts:
             as_of_ns=_T0_NS,
             readiness_level="paper_live",
             readiness_is_supportive=True,
+            allocation_policy=SleeveAllocationPolicy(
+                blocked_allocation_mode=SleeveInactiveCapitalMode.REDISTRIBUTE_PRO_RATA,
+            ),
         )
         store = EvidenceStore(
             evidence_dir=tmp_path / "evidence",
@@ -1773,3 +1857,234 @@ class TestSleevePortfolioContracts:
         first = sleeve_portfolio_snapshot_to_dict(build_sleeve_portfolio_snapshot(sleeves=sleeves, as_of_ns=_T0_NS))
         second = sleeve_portfolio_snapshot_to_dict(build_sleeve_portfolio_snapshot(sleeves=sleeves, as_of_ns=_T0_NS))
         assert first == second
+
+
+class TestSleevePortfolioController:
+    def test_controller_enable_disable_block_unblock_transitions(self):
+        controller = SleevePortfolioController(
+            defined_sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.DEFINED,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            )
+        )
+
+        initial = controller.current_snapshot(
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        assert initial.sleeves[0].status == CryptoSleeveStatus.DEFINED
+        assert initial.workflow_status == "active"
+
+        controller.enable_sleeve("trend-1")
+        enabled = controller.current_snapshot(
+            as_of_ns=_T0_NS + 1,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        assert enabled.sleeves[0].status == CryptoSleeveStatus.ENABLED
+        assert enabled.comparison_to_previous["changed"] is True
+
+        controller.disable_sleeve("trend-1")
+        disabled = controller.current_snapshot(
+            as_of_ns=_T0_NS + 2,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        assert disabled.sleeves[0].status == CryptoSleeveStatus.DISABLED
+        assert "Use enable_sleeve after operator review." in disabled.sleeves[0].required_changes
+
+        controller.block_sleeve("trend-1", reason_summary="manual_freeze")
+        blocked = controller.current_snapshot(
+            as_of_ns=_T0_NS + 3,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        assert blocked.sleeves[0].status == CryptoSleeveStatus.BLOCKED
+        assert blocked.sleeves[0].blocked_reasons == ("manual_freeze",)
+        assert any(reason.source == SleeveReasonSource.OPERATOR for reason in blocked.sleeves[0].reasons)
+
+        controller.unblock_sleeve("trend-1")
+        restored = controller.current_snapshot(
+            as_of_ns=_T0_NS + 4,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        assert restored.sleeves[0].status == CryptoSleeveStatus.ENABLED
+        assert len(controller.history) >= 3
+
+    def test_controller_governance_and_evidence_imposed_block_is_fail_closed(self):
+        controller = SleevePortfolioController(
+            defined_sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.35,
+                    active_allocation=0.35,
+                    readiness_level="calibrated_paper",
+                    escalation_stage="shadow_live_review_eligible",
+                ),
+            )
+        )
+
+        snapshot = controller.current_snapshot(
+            as_of_ns=_T0_NS,
+            readiness_level="not_assessed",
+            readiness_is_supportive=False,
+            escalation_allowed_next_step=None,
+            external_regime_execution_blocked=True,
+        )
+        sleeve = snapshot.sleeves[0]
+        assert sleeve.status == CryptoSleeveStatus.BLOCKED
+        assert sleeve.blocked_allocation == pytest.approx(0.35)
+        assert any(reason.source == SleeveReasonSource.EVIDENCE for reason in sleeve.reasons)
+        assert any(reason.code == "external_regime_execution_blocked" for reason in sleeve.reasons)
+        assert any("Assess readiness" in item for item in sleeve.required_changes)
+
+    def test_controller_restore_fail_closed_on_malformed_payload(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        store.save_snapshot(
+            "sleeve_portfolio_workflow",
+            {
+                "status": "active",
+                "created_at_ns": _T0_NS,
+                "updated_at_ns": _T0_NS,
+                "defined_sleeves": [],
+            },
+        )
+
+        with pytest.raises(SleevePortfolioWorkflowCorruptError, match="missing required fields"):
+            SleevePortfolioController.restore(store)
+
+    def test_controller_restore_replay_is_deterministic(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        controller = SleevePortfolioController(
+            defined_sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="carry-1",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.DEFINED,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            evidence_store=store,
+        )
+        controller.enable_sleeve("carry-1")
+        controller.current_snapshot(
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        first = sleeve_portfolio_snapshot_to_dict(
+            controller.current_snapshot(
+                as_of_ns=_T0_NS,
+                readiness_level="paper_live",
+                readiness_is_supportive=True,
+                escalation_allowed_next_step="paper_only",
+                external_regime_execution_blocked=False,
+            )
+        )
+
+        restored = SleevePortfolioController.restore(store)
+        second = sleeve_portfolio_snapshot_to_dict(
+            restored.current_snapshot(
+                as_of_ns=_T0_NS,
+                readiness_level="paper_live",
+                readiness_is_supportive=True,
+                escalation_allowed_next_step="paper_only",
+                external_regime_execution_blocked=False,
+            )
+        )
+        assert first == second
+
+    def test_controller_persists_allocation_policy_for_recompute(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        controller = SleevePortfolioController(
+            defined_sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.45,
+                    active_allocation=0.45,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.15,
+                    active_allocation=0.15,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+                CryptoSleeveState(
+                    sleeve_id="carry-1",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.20,
+                    blocked_allocation=0.20,
+                    blocked_reasons=("manual_hold",),
+                    reason_summary="manual_hold",
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            allocation_policy=SleeveAllocationPolicy(
+                blocked_allocation_mode=SleeveInactiveCapitalMode.REDISTRIBUTE_PRO_RATA,
+            ),
+            evidence_store=store,
+        )
+
+        first = controller.current_snapshot(
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        restored = SleevePortfolioController.restore(store)
+        second = restored.current_snapshot(
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        assert restored.allocation_policy.blocked_allocation_mode == SleeveInactiveCapitalMode.REDISTRIBUTE_PRO_RATA
+        assert first.effective_allocation == second.effective_allocation
+        assert {s.sleeve_id: s.effective_allocation for s in second.sleeves} == {
+            "micro-1": pytest.approx(0.60),
+            "trend-1": pytest.approx(0.20),
+            "carry-1": pytest.approx(0.0),
+        }
