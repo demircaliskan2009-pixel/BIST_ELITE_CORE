@@ -396,6 +396,12 @@ class CampaignController:
             ei_route_abstains=meta.ei_route_abstains,
             recovery_incidents=meta.recovery_incidents,
             stability=self._build_stability_rollup(meta),
+            # Phase 10D: execution evidence
+            pending_markout_count=meta.pending_markout_count,
+            completed_markout_count=meta.completed_markout_count,
+            persisted_tca_count=meta.persisted_tca_count,
+            persisted_attribution_count=meta.persisted_attribution_count,
+            registered_fill_count=meta.registered_fill_count,
         )
 
     def symbol_participation_view(self, service_status: ServiceStatus) -> tuple[SymbolParticipation, ...]:
@@ -479,6 +485,15 @@ class CampaignController:
             sess = ss.runtime_status.session_status
             self._meta.ei_route_blocks = getattr(sess, "route_block_count", 0)
             self._meta.ei_route_abstains = getattr(sess, "route_abstain_count", 0)
+            # Phase 10D: execution evidence propagation
+            self._meta.pending_markout_count = getattr(sess, "pending_markout_count", 0)
+            self._meta.persisted_tca_count = getattr(sess, "persisted_tca_count", 0)
+            self._meta.persisted_attribution_count = getattr(sess, "persisted_attribution_count", 0)
+            self._meta.registered_fill_count = getattr(sess, "registered_fill_count", 0)
+            self._meta.completed_markout_count = max(
+                0,
+                self._meta.registered_fill_count - self._meta.pending_markout_count,
+            )
 
         # Queue pressure warnings
         utilization = (ss.queue.current_depth / ss.queue.max_size * 100.0) if ss.queue.max_size > 0 else 0.0
@@ -638,6 +653,11 @@ def _report_to_dict(report: CampaignReport) -> dict:
         "ei_route_blocks": report.snapshot.ei_route_blocks,
         "ei_route_abstains": report.snapshot.ei_route_abstains,
         "recovery_incidents": report.snapshot.recovery_incidents,
+        "pending_markout_count": report.snapshot.pending_markout_count,
+        "completed_markout_count": report.snapshot.completed_markout_count,
+        "persisted_tca_count": report.snapshot.persisted_tca_count,
+        "persisted_attribution_count": report.snapshot.persisted_attribution_count,
+        "registered_fill_count": report.snapshot.registered_fill_count,
     }
     stability_dict = None
     if report.stability is not None:
@@ -697,4 +717,5 @@ def campaign_readiness_flags(report: CampaignReport) -> dict[str, bool]:
     return {
         "paper_campaign_completed": campaign_passed,
         "paper_fill_calibration_available": snap.total_fills > 0,
+        "tca_records_sufficient": getattr(snap, "persisted_tca_count", 0) > 0,
     }

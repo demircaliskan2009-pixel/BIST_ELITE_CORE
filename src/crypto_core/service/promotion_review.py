@@ -143,20 +143,30 @@ def build_execution_calibration(
     route_block_ratio = snap.ei_route_blocks / total_cycles if total_cycles > 0 else -1.0
     route_abstain_ratio = snap.ei_route_abstains / total_cycles if total_cycles > 0 else -1.0
 
-    # Markout: pending_markout_count is on PaperSessionStatus but not on
-    # CampaignSnapshot directly.  We use the snapshot's stability rollup
-    # and the available counters.  Since the snapshot doesn't carry
-    # pending_markout_count, we mark it 0 (conservative) and compute
-    # completion from fills.
-    pending_markout_count = 0  # not available on snapshot; conservative
-    completed_markout_count = total_fills  # proxy: all fills completed
-    markout_completion_ratio = 1.0 if total_fills > 0 else -1.0
+    # Phase 10D: execution evidence propagated from campaign snapshot.
+    pending_markout_count = getattr(snap, "pending_markout_count", 0)
+    completed_markout_count = getattr(snap, "completed_markout_count", 0)
+    registered_fill_count = getattr(snap, "registered_fill_count", 0)
+    persisted_tca_count = getattr(snap, "persisted_tca_count", 0)
+    persisted_attribution_count = getattr(snap, "persisted_attribution_count", 0)
 
-    # TCA: persisted_tca_count is not on CampaignSnapshot; derive from
-    # stability rollup or mark as unavailable.
-    persisted_tca_count = 0
-    persisted_attribution_count = 0
-    persisted_tca_ratio = -1.0  # unavailable unless explicitly provided
+    # Markout completion ratio: prefer EI-registered fill denominator.
+    if registered_fill_count > 0:
+        markout_completion_ratio = completed_markout_count / registered_fill_count
+    elif total_fills > 0:
+        # No EI-registered fills — fall back to fill-based proxy.
+        completed_markout_count = total_fills
+        markout_completion_ratio = 1.0
+    else:
+        markout_completion_ratio = -1.0
+
+    # TCA persistence ratio: based on registered fills (EI denominator).
+    if registered_fill_count > 0:
+        persisted_tca_ratio = persisted_tca_count / registered_fill_count
+    elif total_fills > 0 and persisted_tca_count > 0:
+        persisted_tca_ratio = persisted_tca_count / total_fills
+    else:
+        persisted_tca_ratio = -1.0
 
     # Blocked / failed cycle ratios
     blocked_cycle_ratio = snap.blocked_cycles / total_cycles if total_cycles > 0 else -1.0
@@ -953,9 +963,7 @@ class PromotionReviewStore:
         envelope = self._store.load_snapshot(_REVIEW_SNAPSHOT_NAME)
         data = envelope.get("data")
         if not isinstance(data, dict):
-            raise PromotionReviewCorruptError(
-                f"Promotion review 'data' must be a dict, got {type(data).__name__!r}"
-            )
+            raise PromotionReviewCorruptError(f"Promotion review 'data' must be a dict, got {type(data).__name__!r}")
         missing = _REVIEW_REQUIRED_FIELDS - set(data)
         if missing:
             raise PromotionReviewCorruptError(f"Promotion review missing required fields: {sorted(missing)!r}")

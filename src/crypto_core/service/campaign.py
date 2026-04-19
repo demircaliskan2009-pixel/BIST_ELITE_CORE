@@ -296,6 +296,12 @@ class CampaignSnapshot:
     ei_route_abstains: int = 0
     recovery_incidents: int = 0
     stability: StabilityRollup | None = None
+    # Phase 10D: execution evidence propagation
+    pending_markout_count: int = 0
+    completed_markout_count: int = 0
+    persisted_tca_count: int = 0
+    persisted_attribution_count: int = 0
+    registered_fill_count: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -633,6 +639,12 @@ class CampaignMetadata:
     degraded_intervals: int = 0
     blocked_intervals: int = 0
     queue_pressure_warnings: int = 0
+    # Phase 10D: execution evidence counters
+    pending_markout_count: int = 0
+    completed_markout_count: int = 0
+    persisted_tca_count: int = 0
+    persisted_attribution_count: int = 0
+    registered_fill_count: int = 0
 
     def elapsed_seconds(self) -> float:
         """Wall-clock elapsed seconds excluding paused time."""
@@ -667,6 +679,11 @@ class CampaignMetadata:
             "degraded_intervals": self.degraded_intervals,
             "blocked_intervals": self.blocked_intervals,
             "queue_pressure_warnings": self.queue_pressure_warnings,
+            "pending_markout_count": self.pending_markout_count,
+            "completed_markout_count": self.completed_markout_count,
+            "persisted_tca_count": self.persisted_tca_count,
+            "persisted_attribution_count": self.persisted_attribution_count,
+            "registered_fill_count": self.registered_fill_count,
             "config": {
                 "campaign_id": self.config.campaign_id,
                 "max_duration_s": self.config.max_duration_s,
@@ -737,4 +754,9 @@ def campaign_metadata_from_dict(d: dict, config: CampaignConfig | None = None) -
         degraded_intervals=d.get("degraded_intervals", 0),
         blocked_intervals=d.get("blocked_intervals", 0),
         queue_pressure_warnings=d.get("queue_pressure_warnings", 0),
+        pending_markout_count=d.get("pending_markout_count", 0),
+        completed_markout_count=d.get("completed_markout_count", 0),
+        persisted_tca_count=d.get("persisted_tca_count", 0),
+        persisted_attribution_count=d.get("persisted_attribution_count", 0),
+        registered_fill_count=d.get("registered_fill_count", 0),
     )
