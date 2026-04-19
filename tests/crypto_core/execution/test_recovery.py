@@ -254,12 +254,12 @@ class TestLifecycleWithStore:
     """Smoke test: lifecycle engine persists events; bootstrap restores them."""
 
     def test_paper_fill_persisted_and_restored(self, tmp_path: Path) -> None:
+        from crypto_core.edge.models import EdgeFamily, EdgeSignal
         from crypto_core.execution.lifecycle import (
             ExecutionLifecycleConfig,
             ExecutionLifecycleEngine,
         )
         from crypto_core.execution.models import BookContext, ExecutionRequest
-        from crypto_core.edge.models import EdgeFamily, EdgeSignal
         from crypto_core.risk.models import (
             NoTradeDecision,
             RiskDecision,
