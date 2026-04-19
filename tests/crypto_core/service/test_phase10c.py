@@ -93,6 +93,7 @@ from crypto_core.service.sleeve_portfolio import (
     SleevePortfolioValidationError,
     SleeveQualificationStatus,
     SleeveReasonSource,
+    SleeveRecommendationStatus,
     build_sleeve_portfolio_snapshot,
     crypto_sleeve_state_from_dict,
     crypto_sleeve_state_to_dict,
@@ -1686,11 +1687,21 @@ class TestSleevePortfolioContracts:
         assert snapshot.qualification.paper_qualified_sleeves == 1
         assert snapshot.qualification.weak_evidence_sleeves == 1
         assert snapshot.qualification.blocked_sleeves == 1
+        assert snapshot.decision.recommended_active_sleeves == 1
+        assert snapshot.decision.eligible_but_not_selected_sleeves == 1
+        assert snapshot.decision.blocked_sleeves == 1
+        assert snapshot.decision.insufficient_evidence_sleeves == 1
         assert {sleeve.sleeve_id: sleeve.qualification.status for sleeve in snapshot.sleeves} == {
             "micro-1": SleeveQualificationStatus.PAPER_QUALIFIED,
             "carry-1": SleeveQualificationStatus.BLOCKED,
             "trend-1": SleeveQualificationStatus.WEAK_EVIDENCE,
             "event-1": SleeveQualificationStatus.DEFINED_ONLY,
+        }
+        assert {sleeve.sleeve_id: sleeve.recommendation.status for sleeve in snapshot.sleeves} == {
+            "micro-1": SleeveRecommendationStatus.RECOMMENDED_ACTIVE,
+            "carry-1": SleeveRecommendationStatus.BLOCKED,
+            "trend-1": SleeveRecommendationStatus.ELIGIBLE_BUT_NOT_SELECTED,
+            "event-1": SleeveRecommendationStatus.INSUFFICIENT_EVIDENCE,
         }
 
         restored = sleeve_portfolio_snapshot_from_dict(sleeve_portfolio_snapshot_to_dict(snapshot))
@@ -1705,6 +1716,8 @@ class TestSleevePortfolioContracts:
         assert snapshot.allocation_policy.blocked_allocation_mode == SleeveInactiveCapitalMode.CONSERVE
         assert snapshot.effective_allocation.effective_allocated_share == pytest.approx(0.0)
         assert snapshot.qualification.total_sleeves == 0
+        assert snapshot.decision.total_sleeves == 0
+        assert snapshot.decision.recommended_active_sleeves == 0
         assert "No explicit sleeves configured" in snapshot.summary
 
     def test_qualification_marks_enabled_sleeve_as_weak_evidence(self):
@@ -1729,6 +1742,9 @@ class TestSleevePortfolioContracts:
         assert sleeve.qualification.status == SleeveQualificationStatus.WEAK_EVIDENCE
         assert sleeve.qualification.evidence.allocation_eligibility.value == "marginal"
         assert sleeve.qualification.next_step == "Assign explicit paper allocation after operator review."
+        assert sleeve.recommendation.status == SleeveRecommendationStatus.ELIGIBLE_BUT_NOT_SELECTED
+        assert sleeve.recommendation.currently_eligible is True
+        assert sleeve.recommendation.exclusion_reason == "not_selected_for_active_allocation"
 
     def test_qualification_marks_missing_governance_as_insufficient(self):
         snapshot = build_sleeve_portfolio_snapshot(
@@ -1755,6 +1771,8 @@ class TestSleevePortfolioContracts:
         assert "readiness_unavailable" in sleeve.qualification.missing_evidence
         assert "escalation_unavailable" in sleeve.qualification.missing_evidence
         assert "external_regime_unavailable" in sleeve.qualification.missing_evidence
+        assert sleeve.recommendation.status == SleeveRecommendationStatus.INSUFFICIENT_EVIDENCE
+        assert "readiness_unavailable" in sleeve.recommendation.missing_evidence
 
     def test_qualification_marks_blocked_sleeve_and_surfaces_next_step(self):
         snapshot = build_sleeve_portfolio_snapshot(
@@ -1780,6 +1798,58 @@ class TestSleevePortfolioContracts:
         assert sleeve.qualification.status == SleeveQualificationStatus.BLOCKED
         assert "manual_hold" in sleeve.qualification.blocking_reasons
         assert sleeve.qualification.next_step == "Use enable_sleeve or unblock_sleeve after review."
+        assert sleeve.recommendation.status == SleeveRecommendationStatus.BLOCKED
+        assert sleeve.recommendation.recommended_active is False
+
+    def test_recommendation_marks_allocated_qualified_sleeve_as_recommended_active(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-active",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.35,
+                    active_allocation=0.35,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        sleeve = snapshot.sleeves[0]
+        assert sleeve.qualification.status == SleeveQualificationStatus.PAPER_QUALIFIED
+        assert sleeve.recommendation.status == SleeveRecommendationStatus.RECOMMENDED_ACTIVE
+        assert sleeve.recommendation.effective_allocation == pytest.approx(0.35)
+        assert snapshot.decision.recommended_sleeve_ids == ("micro-active",)
+
+    def test_recommendation_marks_disabled_sleeve_as_operator_off(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="trend-off",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.DISABLED,
+                    target_allocation=0.15,
+                    disabled_allocation=0.15,
+                    reason_summary="disabled_by_operator",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        sleeve = snapshot.sleeves[0]
+        assert sleeve.recommendation.status == SleeveRecommendationStatus.DISABLED_OPERATOR_OFF
+        assert sleeve.recommendation.exclusion_reason == "disabled_operator_off"
+        assert snapshot.decision.disabled_operator_off_sleeves == 1
 
     def test_allocation_policy_defaults_to_conservative_effective_allocation(self):
         snapshot = build_sleeve_portfolio_snapshot(

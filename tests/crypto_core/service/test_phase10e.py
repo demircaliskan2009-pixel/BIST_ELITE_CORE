@@ -62,6 +62,7 @@ from crypto_core.service.service_orchestrator import (
     CampaignWorkflowState,
     EscalationWorkflowState,
     EvidenceSufficiencyState,
+    ExternalRegimeSafetyState,
     OperatorSnapshot,
     ReviewWorkflowState,
     ServiceOrchestrator,
@@ -77,6 +78,7 @@ from crypto_core.service.sleeve_portfolio import (
     CryptoSleeveType,
     SleeveAllocationPolicy,
     SleeveInactiveCapitalMode,
+    SleeveRecommendationStatus,
 )
 from crypto_core.session.models import PaperSessionStatus
 
@@ -1173,6 +1175,61 @@ class TestReportingAPI:
         assert results["trend-1"]["status"] == "insufficient_evidence"
         assert results["carry-1"]["status"] == "blocked"
 
+    def test_sleeve_portfolio_decision_and_recommendation_dict(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(service=svc, readiness_level="paper_live")
+        orch._build_external_regime_safety_state = MagicMock(  # type: ignore[method-assign]
+            return_value=ExternalRegimeSafetyState(
+                activation_blocked=False,
+                activation_reason=None,
+                activation_allocation_scale=1.0,
+                execution_blocked=False,
+                execution_reason=None,
+                evidence={},
+            )
+        )
+        orch.set_sleeve_portfolio(
+            (
+                CryptoSleeveState(
+                    sleeve_id="micro-live",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.35,
+                    active_allocation=0.35,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+                CryptoSleeveState(
+                    sleeve_id="trend-eligible",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ENABLED,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+                CryptoSleeveState(
+                    sleeve_id="carry-blocked",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.15,
+                    blocked_allocation=0.15,
+                    blocked_reasons=("manual_hold",),
+                    reason_summary="manual_hold",
+                ),
+            )
+        )
+
+        decision = orch.sleeve_portfolio_decision_dict()
+        results = orch.sleeve_recommendation_result_dict()
+
+        assert decision["recommended_active_sleeves"] == 1
+        assert decision["eligible_but_not_selected_sleeves"] == 1
+        assert decision["blocked_sleeves"] == 1
+        assert decision["recommended_sleeve_ids"] == ["micro-live"]
+        assert decision["eligible_sleeve_ids"] == ["trend-eligible"]
+        assert results["micro-live"]["status"] == "recommended_active"
+        assert results["trend-eligible"]["status"] == "eligible_but_not_selected"
+        assert results["carry-blocked"]["status"] == "blocked"
+
     def test_sleeve_qualification_surfaces_insufficient_evidence_under_missing_governance(self):
         svc = _make_mock_service()
         orch = ServiceOrchestrator(service=svc, readiness_level="not_assessed")
@@ -1750,6 +1807,7 @@ class TestPersistenceRestore:
         loaded = orch2.load_sleeve_portfolio()
         assert loaded.enabled_sleeve_ids == ("micro-1", "trend-1")
         assert orch2.sleeve_portfolio_snapshot().blocked_sleeve_ids == ("carry-1",)
+        assert loaded.decision.insufficient_evidence_sleeves == 2
 
     def test_sleeve_portfolio_workflow_restore_roundtrip(self, tmp_path: Path):
         svc = _make_mock_service()
@@ -1945,8 +2003,52 @@ class TestSerialization:
         assert d["campaign"] is None
         assert d["review"] is None
         assert d["sleeve_portfolio"] is not None
+        assert d["sleeve_portfolio"]["decision"]["insufficient_evidence_sleeves"] == 2
         assert d["escalation_review"] is None
         assert isinstance(d["evidence"], dict)
+
+    def test_operator_snapshot_surfaces_active_and_possible_recommendations(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(service=svc, readiness_level="paper_live")
+        orch._build_external_regime_safety_state = MagicMock(  # type: ignore[method-assign]
+            return_value=ExternalRegimeSafetyState(
+                activation_blocked=False,
+                activation_reason=None,
+                activation_allocation_scale=1.0,
+                execution_blocked=False,
+                execution_reason=None,
+                evidence={},
+            )
+        )
+        orch.set_sleeve_portfolio(
+            (
+                CryptoSleeveState(
+                    sleeve_id="micro-live",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.40,
+                    active_allocation=0.40,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+                CryptoSleeveState(
+                    sleeve_id="trend-possible",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ENABLED,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            )
+        )
+
+        snap = orch.operator_snapshot()
+        by_id = {sleeve.sleeve_id: sleeve.recommendation.status for sleeve in snap.sleeve_portfolio.sleeves}
+        assert by_id == {
+            "micro-live": SleeveRecommendationStatus.RECOMMENDED_ACTIVE,
+            "trend-possible": SleeveRecommendationStatus.ELIGIBLE_BUT_NOT_SELECTED,
+        }
+        assert snap.sleeve_portfolio.decision.recommended_sleeve_ids == ("micro-live",)
+        assert snap.sleeve_portfolio.decision.eligible_sleeve_ids == ("trend-possible",)
 
     def test_operator_snapshot_to_dict_with_campaign_and_review(self):
         campaign = CampaignWorkflowState(

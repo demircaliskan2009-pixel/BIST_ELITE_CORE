@@ -104,9 +104,11 @@ from crypto_core.service.sleeve_portfolio import (
     build_sleeve_portfolio_snapshot,
     sleeve_allocation_policy_to_dict,
     sleeve_effective_allocation_summary_to_dict,
+    sleeve_portfolio_decision_summary_to_dict,
     sleeve_portfolio_snapshot_to_dict,
     sleeve_qualification_result_to_dict,
     sleeve_qualification_summary_to_dict,
+    sleeve_recommendation_result_to_dict,
 )
 from crypto_core.service.sleeve_portfolio_controller import (
     SleeveOperatorOverride,
@@ -472,6 +474,17 @@ class ServiceOrchestrator:
         snapshot = self.sleeve_portfolio_snapshot()
         return {
             sleeve.sleeve_id: sleeve_qualification_result_to_dict(sleeve.qualification) for sleeve in snapshot.sleeves
+        }
+
+    def sleeve_portfolio_decision_dict(self) -> dict:
+        """Serialize the current sleeve portfolio decision summary to a plain dict."""
+        return sleeve_portfolio_decision_summary_to_dict(self.sleeve_portfolio_snapshot().decision)
+
+    def sleeve_recommendation_result_dict(self) -> dict:
+        """Serialize per-sleeve recommendation results keyed by sleeve id."""
+        snapshot = self.sleeve_portfolio_snapshot()
+        return {
+            sleeve.sleeve_id: sleeve_recommendation_result_to_dict(sleeve.recommendation) for sleeve in snapshot.sleeves
         }
 
     def export_sleeve_portfolio(self):

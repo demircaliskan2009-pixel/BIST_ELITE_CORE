@@ -73,6 +73,16 @@ class SleeveQualificationStatus(str, Enum):
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
+class SleeveRecommendationStatus(str, Enum):
+    """Operator-facing sleeve recommendation state."""
+
+    RECOMMENDED_ACTIVE = "recommended_active"
+    ELIGIBLE_BUT_NOT_SELECTED = "eligible_but_not_selected"
+    BLOCKED = "blocked"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    DISABLED_OPERATOR_OFF = "disabled_operator_off"
+
+
 class SleevePortfolioValidationError(ValueError):
     """Raised when sleeve portfolio state is invalid."""
 
@@ -120,6 +130,23 @@ class SleeveQualificationResult:
 
 
 @dataclass(frozen=True)
+class SleeveRecommendationResult:
+    """Sleeve-level recommendation result for current portfolio selection."""
+
+    status: SleeveRecommendationStatus = SleeveRecommendationStatus.INSUFFICIENT_EVIDENCE
+    recommended_active: bool = False
+    currently_eligible: bool = False
+    qualification_status: SleeveQualificationStatus = SleeveQualificationStatus.INSUFFICIENT_EVIDENCE
+    effective_allocation: float = 0.0
+    target_allocation: float = 0.0
+    missing_evidence: tuple[str, ...] = field(default_factory=tuple)
+    blocking_reasons: tuple[str, ...] = field(default_factory=tuple)
+    reason_summary: str = ""
+    exclusion_reason: str = ""
+    next_step: str = "Provide missing governance evidence before portfolio selection."
+
+
+@dataclass(frozen=True)
 class CryptoSleeveState:
     """Single crypto sleeve identity and allocation state.
 
@@ -145,6 +172,7 @@ class CryptoSleeveState:
     required_changes: tuple[str, ...] = field(default_factory=tuple)
     effective_allocation: float = 0.0
     qualification: SleeveQualificationResult = field(default_factory=SleeveQualificationResult)
+    recommendation: SleeveRecommendationResult = field(default_factory=SleeveRecommendationResult)
 
 
 @dataclass(frozen=True)
@@ -203,6 +231,28 @@ class SleeveQualificationSummary:
 
 
 @dataclass(frozen=True)
+class SleevePortfolioDecisionSummary:
+    """Portfolio-level current recommendation and exclusion surface."""
+
+    total_sleeves: int
+    recommended_active_sleeves: int
+    eligible_but_not_selected_sleeves: int
+    blocked_sleeves: int
+    insufficient_evidence_sleeves: int
+    disabled_operator_off_sleeves: int
+    recommended_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    eligible_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    excluded_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    missing_evidence: tuple[str, ...] = field(default_factory=tuple)
+    blocking_reasons: tuple[str, ...] = field(default_factory=tuple)
+    effective_allocated_share: float = 0.0
+    effective_unallocated_share: float = 1.0
+    conserved_blocked_share: float = 0.0
+    conserved_disabled_share: float = 0.0
+    summary: str = ""
+
+
+@dataclass(frozen=True)
 class SleevePortfolioSnapshot:
     """Operator-facing sleeve portfolio snapshot."""
 
@@ -248,6 +298,26 @@ class SleevePortfolioSnapshot:
             blocked_sleeve_ids=(),
             insufficient_evidence_sleeve_ids=(),
             summary="No sleeve qualification available.",
+        )
+    )
+    decision: SleevePortfolioDecisionSummary = field(
+        default_factory=lambda: SleevePortfolioDecisionSummary(
+            total_sleeves=0,
+            recommended_active_sleeves=0,
+            eligible_but_not_selected_sleeves=0,
+            blocked_sleeves=0,
+            insufficient_evidence_sleeves=0,
+            disabled_operator_off_sleeves=0,
+            recommended_sleeve_ids=(),
+            eligible_sleeve_ids=(),
+            excluded_sleeve_ids=(),
+            missing_evidence=(),
+            blocking_reasons=(),
+            effective_allocated_share=0.0,
+            effective_unallocated_share=1.0,
+            conserved_blocked_share=0.0,
+            conserved_disabled_share=0.0,
+            summary="No sleeve recommendation available.",
         )
     )
     enabled_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
@@ -407,6 +477,11 @@ def _validate_sleeve_state(state: CryptoSleeveState) -> CryptoSleeveState:
         if isinstance(state.qualification, SleeveQualificationResult)
         else SleeveQualificationResult()
     )
+    recommendation = (
+        state.recommendation
+        if isinstance(state.recommendation, SleeveRecommendationResult)
+        else SleeveRecommendationResult()
+    )
     if reasons:
         for item in reasons:
             if not item.code:
@@ -432,6 +507,7 @@ def _validate_sleeve_state(state: CryptoSleeveState) -> CryptoSleeveState:
         required_changes=required_changes,
         effective_allocation=effective_allocation,
         qualification=qualification,
+        recommendation=recommendation,
     )
 
 
@@ -700,6 +776,162 @@ def _apply_sleeve_qualification(
     return resolved, summary
 
 
+def _build_sleeve_recommendation_result(sleeve: CryptoSleeveState) -> SleeveRecommendationResult:
+    qualification = sleeve.qualification
+    blocking_reasons = tuple(dict.fromkeys(qualification.blocking_reasons))
+    missing_evidence = tuple(dict.fromkeys(qualification.missing_evidence))
+    governance_supportive = qualification.evidence.supportive
+
+    if sleeve.status == CryptoSleeveStatus.DISABLED:
+        status = SleeveRecommendationStatus.DISABLED_OPERATOR_OFF
+        reason_summary = sleeve.reason_summary or "Sleeve is explicitly disabled at the operator/configuration layer."
+        exclusion_reason = "disabled_operator_off"
+        next_step = (
+            sleeve.required_changes[0] if sleeve.required_changes else "Use enable_sleeve after operator review."
+        )
+    elif sleeve.status == CryptoSleeveStatus.BLOCKED or qualification.status == SleeveQualificationStatus.BLOCKED:
+        status = SleeveRecommendationStatus.BLOCKED
+        if not blocking_reasons:
+            blocking_reasons = tuple(sleeve.blocked_reasons) or ("configured_blocked",)
+        reason_summary = qualification.reason_summary or sleeve.reason_summary or "Sleeve is currently blocked."
+        exclusion_reason = blocking_reasons[0]
+        next_step = qualification.next_step
+    elif (
+        qualification.status == SleeveQualificationStatus.PAPER_QUALIFIED
+        and sleeve.effective_allocation > _ALLOCATION_EPSILON
+    ):
+        status = SleeveRecommendationStatus.RECOMMENDED_ACTIVE
+        reason_summary = (
+            qualification.reason_summary
+            or f"Sleeve is qualified and carries effective allocation {sleeve.effective_allocation:.3f}."
+        )
+        exclusion_reason = ""
+        next_step = "Continue paper monitoring and revalidate before any higher promotion step."
+    elif qualification.status == SleeveQualificationStatus.PAPER_QUALIFIED or (
+        sleeve.status == CryptoSleeveStatus.ENABLED and governance_supportive and not blocking_reasons
+    ):
+        status = SleeveRecommendationStatus.ELIGIBLE_BUT_NOT_SELECTED
+        reason_summary = (
+            qualification.reason_summary
+            or "Sleeve is governance-supportive but currently carries no active paper allocation."
+        )
+        exclusion_reason = "not_selected_for_active_allocation"
+        next_step = "Assign explicit paper allocation if the operator wants this sleeve active."
+    else:
+        status = SleeveRecommendationStatus.INSUFFICIENT_EVIDENCE
+        reason_summary = qualification.reason_summary or sleeve.reason_summary or qualification.evidence.summary
+        exclusion_reason = missing_evidence[0] if missing_evidence else qualification.status.value
+        next_step = qualification.next_step
+
+    return SleeveRecommendationResult(
+        status=status,
+        recommended_active=status == SleeveRecommendationStatus.RECOMMENDED_ACTIVE,
+        currently_eligible=status
+        in {
+            SleeveRecommendationStatus.RECOMMENDED_ACTIVE,
+            SleeveRecommendationStatus.ELIGIBLE_BUT_NOT_SELECTED,
+        },
+        qualification_status=qualification.status,
+        effective_allocation=sleeve.effective_allocation,
+        target_allocation=sleeve.target_allocation,
+        missing_evidence=missing_evidence,
+        blocking_reasons=blocking_reasons,
+        reason_summary=reason_summary,
+        exclusion_reason=exclusion_reason,
+        next_step=next_step,
+    )
+
+
+def _apply_sleeve_recommendations(
+    sleeves: tuple[CryptoSleeveState, ...],
+    effective_allocation: SleeveEffectiveAllocationSummary,
+) -> tuple[tuple[CryptoSleeveState, ...], SleevePortfolioDecisionSummary]:
+    recommended_sleeves: list[CryptoSleeveState] = []
+    for sleeve in sleeves:
+        recommendation = _build_sleeve_recommendation_result(sleeve)
+        recommended_sleeves.append(replace(sleeve, recommendation=recommendation))
+
+    resolved = tuple(recommended_sleeves)
+    recommended_ids = tuple(
+        sleeve.sleeve_id
+        for sleeve in resolved
+        if sleeve.recommendation.status == SleeveRecommendationStatus.RECOMMENDED_ACTIVE
+    )
+    eligible_ids = tuple(
+        sleeve.sleeve_id
+        for sleeve in resolved
+        if sleeve.recommendation.status == SleeveRecommendationStatus.ELIGIBLE_BUT_NOT_SELECTED
+    )
+    excluded_ids = tuple(
+        sleeve.sleeve_id
+        for sleeve in resolved
+        if sleeve.recommendation.status != SleeveRecommendationStatus.RECOMMENDED_ACTIVE
+    )
+    missing_evidence = tuple(
+        dict.fromkeys(
+            code
+            for sleeve in resolved
+            for code in sleeve.recommendation.missing_evidence
+            if sleeve.recommendation.status != SleeveRecommendationStatus.RECOMMENDED_ACTIVE
+        )
+    )
+    blocking_reasons = tuple(
+        dict.fromkeys(
+            code
+            for sleeve in resolved
+            for code in sleeve.recommendation.blocking_reasons
+            if sleeve.recommendation.status
+            in {
+                SleeveRecommendationStatus.BLOCKED,
+                SleeveRecommendationStatus.DISABLED_OPERATOR_OFF,
+            }
+        )
+    )
+    summary = (
+        f"recommended={len(recommended_ids)}; eligible={len(eligible_ids)}; "
+        f"blocked={sum(1 for sleeve in resolved if sleeve.recommendation.status == SleeveRecommendationStatus.BLOCKED)}; "
+        f"insufficient={sum(1 for sleeve in resolved if sleeve.recommendation.status == SleeveRecommendationStatus.INSUFFICIENT_EVIDENCE)}; "
+        f"disabled={sum(1 for sleeve in resolved if sleeve.recommendation.status == SleeveRecommendationStatus.DISABLED_OPERATOR_OFF)}"
+    )
+    if recommended_ids:
+        summary += f"; active={','.join(recommended_ids)}"
+    elif eligible_ids:
+        summary += f"; possible={','.join(eligible_ids)}"
+    else:
+        summary += "; active=none"
+
+    return resolved, SleevePortfolioDecisionSummary(
+        total_sleeves=len(resolved),
+        recommended_active_sleeves=sum(
+            1 for sleeve in resolved if sleeve.recommendation.status == SleeveRecommendationStatus.RECOMMENDED_ACTIVE
+        ),
+        eligible_but_not_selected_sleeves=sum(
+            1
+            for sleeve in resolved
+            if sleeve.recommendation.status == SleeveRecommendationStatus.ELIGIBLE_BUT_NOT_SELECTED
+        ),
+        blocked_sleeves=sum(
+            1 for sleeve in resolved if sleeve.recommendation.status == SleeveRecommendationStatus.BLOCKED
+        ),
+        insufficient_evidence_sleeves=sum(
+            1 for sleeve in resolved if sleeve.recommendation.status == SleeveRecommendationStatus.INSUFFICIENT_EVIDENCE
+        ),
+        disabled_operator_off_sleeves=sum(
+            1 for sleeve in resolved if sleeve.recommendation.status == SleeveRecommendationStatus.DISABLED_OPERATOR_OFF
+        ),
+        recommended_sleeve_ids=recommended_ids,
+        eligible_sleeve_ids=eligible_ids,
+        excluded_sleeve_ids=excluded_ids,
+        missing_evidence=missing_evidence,
+        blocking_reasons=blocking_reasons,
+        effective_allocated_share=effective_allocation.effective_allocated_share,
+        effective_unallocated_share=effective_allocation.effective_unallocated_share,
+        conserved_blocked_share=effective_allocation.conserved_blocked_share,
+        conserved_disabled_share=effective_allocation.conserved_disabled_share,
+        summary=summary if resolved else "No sleeve recommendation available.",
+    )
+
+
 def _compute_effective_allocation(
     sleeves: tuple[CryptoSleeveState, ...],
     allocation: SleeveAllocationSummary,
@@ -826,8 +1058,9 @@ def build_sleeve_portfolio_snapshot(
         escalation_allowed_next_step=escalation_allowed_next_step,
         external_regime_execution_blocked=external_regime_execution_blocked,
     )
+    recommended_sleeves, decision = _apply_sleeve_recommendations(qualified_sleeves, effective_allocation)
 
-    if not qualified_sleeves:
+    if not recommended_sleeves:
         summary = "No explicit sleeves configured; sleeve-level capital remains fully unallocated."
     else:
         summary = (
@@ -838,14 +1071,16 @@ def build_sleeve_portfolio_snapshot(
         if not _nearly_equal(allocation.active_allocated_share, effective_allocation.effective_allocated_share):
             summary += f"; effective_allocated_share={effective_allocation.effective_allocated_share:.3f}"
         summary += f"; qualified={qualification.paper_qualified_sleeves}; insufficient={qualification.insufficient_evidence_sleeves}"
+        summary += f"; recommended={decision.recommended_active_sleeves}; eligible={decision.eligible_but_not_selected_sleeves}"
 
     return SleevePortfolioSnapshot(
         as_of_ns=as_of_ns,
-        sleeves=qualified_sleeves,
+        sleeves=recommended_sleeves,
         allocation=allocation,
         allocation_policy=resolved_policy,
         effective_allocation=effective_allocation,
         qualification=qualification,
+        decision=decision,
         enabled_sleeve_ids=enabled_ids,
         blocked_sleeve_ids=blocked_ids,
         allocated_sleeve_ids=allocated_ids,
@@ -905,6 +1140,7 @@ def crypto_sleeve_state_to_dict(state: CryptoSleeveState) -> dict:
         "required_changes": list(state.required_changes),
         "effective_allocation": state.effective_allocation,
         "qualification": sleeve_qualification_result_to_dict(state.qualification),
+        "recommendation": sleeve_recommendation_result_to_dict(state.recommendation),
     }
 
 
@@ -933,6 +1169,11 @@ def crypto_sleeve_state_from_dict(data: dict) -> CryptoSleeveState:
                 SleeveQualificationResult()
                 if data.get("qualification") is None
                 else sleeve_qualification_result_from_dict(dict(data.get("qualification")))
+            ),
+            recommendation=(
+                SleeveRecommendationResult()
+                if data.get("recommendation") is None
+                else sleeve_recommendation_result_from_dict(dict(data.get("recommendation")))
             ),
         )
     except SleevePortfolioValidationError as exc:
@@ -1151,6 +1392,108 @@ def sleeve_qualification_summary_from_dict(data: dict) -> SleeveQualificationSum
     )
 
 
+def sleeve_recommendation_result_to_dict(result: SleeveRecommendationResult) -> dict:
+    """Serialize SleeveRecommendationResult to a plain dict."""
+    return {
+        "status": result.status.value,
+        "recommended_active": result.recommended_active,
+        "currently_eligible": result.currently_eligible,
+        "qualification_status": result.qualification_status.value,
+        "effective_allocation": result.effective_allocation,
+        "target_allocation": result.target_allocation,
+        "missing_evidence": list(result.missing_evidence),
+        "blocking_reasons": list(result.blocking_reasons),
+        "reason_summary": result.reason_summary,
+        "exclusion_reason": result.exclusion_reason,
+        "next_step": result.next_step,
+    }
+
+
+def sleeve_recommendation_result_from_dict(data: dict) -> SleeveRecommendationResult:
+    """Deserialize SleeveRecommendationResult from a plain dict."""
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Sleeve recommendation result payload must be a dict, got {type(data).__name__!r}"
+        )
+    return SleeveRecommendationResult(
+        status=SleeveRecommendationStatus(_require_non_empty_str(data.get("status"), "status")),
+        recommended_active=_require_bool(data.get("recommended_active", False), "recommended_active"),
+        currently_eligible=_require_bool(data.get("currently_eligible", False), "currently_eligible"),
+        qualification_status=SleeveQualificationStatus(
+            _require_non_empty_str(data.get("qualification_status"), "qualification_status")
+        ),
+        effective_allocation=_require_float_like(data.get("effective_allocation", 0.0), "effective_allocation"),
+        target_allocation=_require_float_like(data.get("target_allocation", 0.0), "target_allocation"),
+        missing_evidence=_tuple_of_strings(data.get("missing_evidence", ()), "missing_evidence"),
+        blocking_reasons=_tuple_of_strings(data.get("blocking_reasons", ()), "blocking_reasons"),
+        reason_summary="" if data.get("reason_summary", "") is None else str(data.get("reason_summary", "")),
+        exclusion_reason=("" if data.get("exclusion_reason", "") is None else str(data.get("exclusion_reason", ""))),
+        next_step=_require_non_empty_str(data.get("next_step"), "next_step"),
+    )
+
+
+def sleeve_portfolio_decision_summary_to_dict(summary: SleevePortfolioDecisionSummary) -> dict:
+    """Serialize SleevePortfolioDecisionSummary to a plain dict."""
+    return {
+        "total_sleeves": summary.total_sleeves,
+        "recommended_active_sleeves": summary.recommended_active_sleeves,
+        "eligible_but_not_selected_sleeves": summary.eligible_but_not_selected_sleeves,
+        "blocked_sleeves": summary.blocked_sleeves,
+        "insufficient_evidence_sleeves": summary.insufficient_evidence_sleeves,
+        "disabled_operator_off_sleeves": summary.disabled_operator_off_sleeves,
+        "recommended_sleeve_ids": list(summary.recommended_sleeve_ids),
+        "eligible_sleeve_ids": list(summary.eligible_sleeve_ids),
+        "excluded_sleeve_ids": list(summary.excluded_sleeve_ids),
+        "missing_evidence": list(summary.missing_evidence),
+        "blocking_reasons": list(summary.blocking_reasons),
+        "effective_allocated_share": summary.effective_allocated_share,
+        "effective_unallocated_share": summary.effective_unallocated_share,
+        "conserved_blocked_share": summary.conserved_blocked_share,
+        "conserved_disabled_share": summary.conserved_disabled_share,
+        "summary": summary.summary,
+    }
+
+
+def sleeve_portfolio_decision_summary_from_dict(data: dict) -> SleevePortfolioDecisionSummary:
+    """Deserialize SleevePortfolioDecisionSummary from a plain dict."""
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Sleeve portfolio decision payload must be a dict, got {type(data).__name__!r}"
+        )
+    return SleevePortfolioDecisionSummary(
+        total_sleeves=_require_int(data.get("total_sleeves"), "total_sleeves"),
+        recommended_active_sleeves=_require_int(data.get("recommended_active_sleeves"), "recommended_active_sleeves"),
+        eligible_but_not_selected_sleeves=_require_int(
+            data.get("eligible_but_not_selected_sleeves"), "eligible_but_not_selected_sleeves"
+        ),
+        blocked_sleeves=_require_int(data.get("blocked_sleeves"), "blocked_sleeves"),
+        insufficient_evidence_sleeves=_require_int(
+            data.get("insufficient_evidence_sleeves"), "insufficient_evidence_sleeves"
+        ),
+        disabled_operator_off_sleeves=_require_int(
+            data.get("disabled_operator_off_sleeves"), "disabled_operator_off_sleeves"
+        ),
+        recommended_sleeve_ids=_tuple_of_strings(data.get("recommended_sleeve_ids", ()), "recommended_sleeve_ids"),
+        eligible_sleeve_ids=_tuple_of_strings(data.get("eligible_sleeve_ids", ()), "eligible_sleeve_ids"),
+        excluded_sleeve_ids=_tuple_of_strings(data.get("excluded_sleeve_ids", ()), "excluded_sleeve_ids"),
+        missing_evidence=_tuple_of_strings(data.get("missing_evidence", ()), "missing_evidence"),
+        blocking_reasons=_tuple_of_strings(data.get("blocking_reasons", ()), "blocking_reasons"),
+        effective_allocated_share=_require_float_like(
+            data.get("effective_allocated_share", 0.0), "effective_allocated_share"
+        ),
+        effective_unallocated_share=_require_float_like(
+            data.get("effective_unallocated_share", 0.0), "effective_unallocated_share"
+        ),
+        conserved_blocked_share=_require_float_like(
+            data.get("conserved_blocked_share", 0.0), "conserved_blocked_share"
+        ),
+        conserved_disabled_share=_require_float_like(
+            data.get("conserved_disabled_share", 0.0), "conserved_disabled_share"
+        ),
+        summary="" if data.get("summary", "") is None else str(data.get("summary", "")),
+    )
+
+
 def sleeve_allocation_summary_from_dict(data: dict) -> SleeveAllocationSummary:
     """Deserialize SleeveAllocationSummary from a plain dict."""
     if not isinstance(data, dict):
@@ -1192,6 +1535,7 @@ def sleeve_portfolio_snapshot_to_dict(snapshot: SleevePortfolioSnapshot) -> dict
         "allocation_policy": sleeve_allocation_policy_to_dict(snapshot.allocation_policy),
         "effective_allocation": sleeve_effective_allocation_summary_to_dict(snapshot.effective_allocation),
         "qualification": sleeve_qualification_summary_to_dict(snapshot.qualification),
+        "decision": sleeve_portfolio_decision_summary_to_dict(snapshot.decision),
         "enabled_sleeve_ids": list(snapshot.enabled_sleeve_ids),
         "blocked_sleeve_ids": list(snapshot.blocked_sleeve_ids),
         "allocated_sleeve_ids": list(snapshot.allocated_sleeve_ids),
@@ -1263,6 +1607,14 @@ def sleeve_portfolio_snapshot_from_dict(data: dict) -> SleevePortfolioSnapshot:
         restored_qualification = sleeve_qualification_summary_from_dict(qualification_value)
         if restored_qualification != snapshot.qualification:
             raise SleevePortfolioCorruptError("Sleeve qualification summary does not match qualification recompute")
+
+    decision_value = data.get("decision")
+    if decision_value is not None:
+        restored_decision = sleeve_portfolio_decision_summary_from_dict(decision_value)
+        if restored_decision != snapshot.decision:
+            raise SleevePortfolioCorruptError(
+                "Sleeve portfolio decision summary does not match recommendation recompute"
+            )
 
     enabled_ids = _tuple_of_strings(data.get("enabled_sleeve_ids", ()), "enabled_sleeve_ids")
     blocked_ids = _tuple_of_strings(data.get("blocked_sleeve_ids", ()), "blocked_sleeve_ids")

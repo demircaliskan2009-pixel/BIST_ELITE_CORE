@@ -662,6 +662,10 @@ class SleevePortfolioController:
             state.qualification.status.value,
             tuple(state.qualification.missing_evidence),
             tuple(state.qualification.blocking_reasons),
+            state.recommendation.status.value,
+            tuple(state.recommendation.missing_evidence),
+            tuple(state.recommendation.blocking_reasons),
+            state.recommendation.effective_allocation,
         )
 
 
