@@ -34,6 +34,7 @@ from crypto_core.service.campaign import (
     CampaignReport,
     CampaignSnapshot,
     CampaignStatus,
+    StabilityRollup,
     SymbolParticipation,
     campaign_metadata_from_dict,
     new_campaign_id,
@@ -310,6 +311,7 @@ class CampaignController:
             acceptance=result,
             symbol_participation=participation,
             config=self._meta.to_dict().get("config", {}),
+            stability=snap.stability,
         )
 
         self._persist_metadata()
@@ -388,6 +390,12 @@ class CampaignController:
             persistence_status=ph.status.value,
             nav_usd=nav_usd,
             last_error=ss.last_error,
+            # Phase 10A: EI + stability
+            ei_degraded=meta.ei_degraded,
+            ei_route_blocks=meta.ei_route_blocks,
+            ei_route_abstains=meta.ei_route_abstains,
+            recovery_incidents=meta.recovery_incidents,
+            stability=self._build_stability_rollup(meta),
         )
 
     def symbol_participation_view(self, service_status: ServiceStatus) -> tuple[SymbolParticipation, ...]:
@@ -454,6 +462,34 @@ class CampaignController:
         ph = self._persistence_health.snapshot()
         self._meta.persistence_failures = ph.total_failures
 
+        # Phase 10A: track EI degradation + route blocks/abstains
+        ei = ss.execution_intelligence
+        if ei is not None:
+            was_degraded = self._meta.ei_degraded
+            self._meta.ei_degraded = ei.degraded
+            self._meta.ei_degraded_reasons = tuple(ei.degraded_reasons) if ei.degraded_reasons else ()
+            if ei.degraded:
+                self._meta.degraded_intervals += 1
+            # Recovery = transition from degraded → healthy
+            if was_degraded and not ei.degraded:
+                self._meta.recovery_incidents += 1
+
+        # EI route blocks / abstains from session status
+        if ss.runtime_status is not None:
+            sess = ss.runtime_status.session_status
+            self._meta.ei_route_blocks = getattr(sess, "route_block_count", 0)
+            self._meta.ei_route_abstains = getattr(sess, "route_abstain_count", 0)
+
+        # Queue pressure warnings
+        utilization = (ss.queue.current_depth / ss.queue.max_size * 100.0) if ss.queue.max_size > 0 else 0.0
+        if ss.queue.total_dropped > 0 and utilization > 80.0:
+            self._meta.queue_pressure_warnings += 1
+
+        # Blocked intervals (readiness blocked)
+        current_readiness = self._health_tracker.readiness(ss)
+        if current_readiness.level.value == "blocked":
+            self._meta.blocked_intervals += 1
+
     def _init_symbol_tracking(self, ss: ServiceStatus) -> None:
         """Initialize symbol tracking from current service status."""
         for sh in ss.symbol_health:
@@ -489,6 +525,22 @@ class CampaignController:
                 )
             )
         return tuple(result)
+
+    @staticmethod
+    def _build_stability_rollup(meta: CampaignMetadata) -> StabilityRollup:
+        """Build a stability rollup from campaign metadata counters."""
+        return StabilityRollup(
+            degraded_intervals=meta.degraded_intervals,
+            blocked_intervals=meta.blocked_intervals,
+            recovery_incidents=meta.recovery_incidents,
+            queue_overflow_incidents=meta.queue_overflows,
+            queue_pressure_warnings=meta.queue_pressure_warnings,
+            persistence_failure_count=meta.persistence_failures,
+            ei_degraded=meta.ei_degraded,
+            ei_degraded_reasons=meta.ei_degraded_reasons,
+            ei_route_blocks=meta.ei_route_blocks,
+            ei_route_abstains=meta.ei_route_abstains,
+        )
 
     def _persist_metadata(self) -> WriteResult | None:
         """Persist campaign metadata snapshot."""
@@ -582,7 +634,25 @@ def _report_to_dict(report: CampaignReport) -> dict:
         "persistence_status": report.snapshot.persistence_status,
         "nav_usd": report.snapshot.nav_usd,
         "last_error": report.snapshot.last_error,
+        "ei_degraded": report.snapshot.ei_degraded,
+        "ei_route_blocks": report.snapshot.ei_route_blocks,
+        "ei_route_abstains": report.snapshot.ei_route_abstains,
+        "recovery_incidents": report.snapshot.recovery_incidents,
     }
+    stability_dict = None
+    if report.stability is not None:
+        stability_dict = {
+            "degraded_intervals": report.stability.degraded_intervals,
+            "blocked_intervals": report.stability.blocked_intervals,
+            "recovery_incidents": report.stability.recovery_incidents,
+            "queue_overflow_incidents": report.stability.queue_overflow_incidents,
+            "queue_pressure_warnings": report.stability.queue_pressure_warnings,
+            "persistence_failure_count": report.stability.persistence_failure_count,
+            "ei_degraded": report.stability.ei_degraded,
+            "ei_degraded_reasons": list(report.stability.ei_degraded_reasons),
+            "ei_route_blocks": report.stability.ei_route_blocks,
+            "ei_route_abstains": report.stability.ei_route_abstains,
+        }
     return {
         "campaign_id": report.campaign_id,
         "status": report.status,
@@ -595,4 +665,36 @@ def _report_to_dict(report: CampaignReport) -> dict:
         "acceptance": acceptance_dict,
         "symbol_participation": participation_list,
         "config": report.config,
+        "stability": stability_dict,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Readiness bridge (Phase 10A)
+# ---------------------------------------------------------------------------
+
+
+def campaign_readiness_flags(report: CampaignReport) -> dict[str, bool]:
+    """Derive readiness flags from a finalized campaign report.
+
+    Returns a dict suitable for merging into ReadinessEvaluator.evaluate(flags=...).
+
+    Rules:
+      - paper_campaign_completed: True only if verdict is PASS or PASS_WITH_WARNINGS.
+      - tca_records_sufficient: True if snapshot has persisted TCA records.
+      - paper_fill_calibration_available: True if fills were observed.
+
+    Conservative: FAIL or INCONCLUSIVE → paper_campaign_completed = False.
+    """
+    verdict = report.acceptance.verdict
+    snap = report.snapshot
+
+    campaign_passed = verdict in (
+        AcceptanceVerdict.PASS,
+        AcceptanceVerdict.PASS_WITH_WARNINGS,
+    )
+
+    return {
+        "paper_campaign_completed": campaign_passed,
+        "paper_fill_calibration_available": snap.total_fills > 0,
     }

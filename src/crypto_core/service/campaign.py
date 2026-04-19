@@ -108,6 +108,17 @@ class AcceptanceThresholds:
     warn_blocked_cycle_ratio: float = 0.2
     warn_queue_overflows: int = 3
     warn_persistence_failures: int = 5
+    warn_ei_route_blocks: int = 10
+    warn_ei_route_abstains: int = 20
+
+    # --- Execution intelligence hard thresholds (Phase 10A) ---
+    max_ei_route_blocks: int = 100
+    max_ei_route_abstains: int = 200
+    ei_degraded_is_hard_fail: bool = False
+
+    # --- Stability hard thresholds (Phase 10A) ---
+    max_recovery_incidents: int = 5
+    max_degraded_intervals: int = 50
 
     # --- Minimum coverage (insufficient → INCONCLUSIVE) ---
     min_events_processed: int = 100
@@ -214,6 +225,31 @@ class AcceptanceResult:
 
 
 # ---------------------------------------------------------------------------
+# Stability rollup (Phase 10A)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StabilityRollup:
+    """Compact campaign-grade stability evidence.
+
+    Separates raw operator metrics from campaign-grade acceptance evidence.
+    All counters are campaign-scoped (not session-lifetime).
+    """
+
+    degraded_intervals: int
+    blocked_intervals: int
+    recovery_incidents: int
+    queue_overflow_incidents: int
+    queue_pressure_warnings: int
+    persistence_failure_count: int
+    ei_degraded: bool
+    ei_degraded_reasons: tuple[str, ...] = ()
+    ei_route_blocks: int = 0
+    ei_route_abstains: int = 0
+
+
+# ---------------------------------------------------------------------------
 # Campaign snapshot
 # ---------------------------------------------------------------------------
 
@@ -254,6 +290,12 @@ class CampaignSnapshot:
     persistence_status: str
     nav_usd: float | None
     last_error: str | None
+    # Phase 10A: execution intelligence + stability
+    ei_degraded: bool = False
+    ei_route_blocks: int = 0
+    ei_route_abstains: int = 0
+    recovery_incidents: int = 0
+    stability: StabilityRollup | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +321,7 @@ class CampaignReport:
     acceptance: AcceptanceResult
     symbol_participation: tuple[SymbolParticipation, ...]
     config: dict
+    stability: StabilityRollup | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +464,64 @@ class AcceptancePolicy:
                 t.warn_persistence_failures,
             )
         )
+        criteria.append(
+            self._check_soft(
+                "warn_ei_route_blocks",
+                snapshot.ei_route_blocks,
+                t.warn_ei_route_blocks,
+            )
+        )
+        criteria.append(
+            self._check_soft(
+                "warn_ei_route_abstains",
+                snapshot.ei_route_abstains,
+                t.warn_ei_route_abstains,
+            )
+        )
+
+        # --- Phase 10A: Execution intelligence hard checks ---
+        criteria.append(
+            self._check_hard(
+                "max_ei_route_blocks",
+                snapshot.ei_route_blocks,
+                t.max_ei_route_blocks,
+            )
+        )
+        criteria.append(
+            self._check_hard(
+                "max_ei_route_abstains",
+                snapshot.ei_route_abstains,
+                t.max_ei_route_abstains,
+            )
+        )
+        if t.ei_degraded_is_hard_fail:
+            criteria.append(
+                CriterionResult(
+                    name="ei_degraded",
+                    passed=not snapshot.ei_degraded,
+                    severity="hard",
+                    actual=1.0 if snapshot.ei_degraded else 0.0,
+                    threshold=0.0,
+                    message=f"ei_degraded: {'degraded' if snapshot.ei_degraded else 'healthy'}",
+                )
+            )
+
+        # --- Phase 10A: Stability hard checks ---
+        criteria.append(
+            self._check_hard(
+                "max_recovery_incidents",
+                snapshot.recovery_incidents,
+                t.max_recovery_incidents,
+            )
+        )
+        if snapshot.stability is not None:
+            criteria.append(
+                self._check_hard(
+                    "max_degraded_intervals",
+                    snapshot.stability.degraded_intervals,
+                    t.max_degraded_intervals,
+                )
+            )
 
         # --- Classify ---
         failed = tuple(c for c in criteria if not c.passed and c.severity == "hard")
@@ -523,6 +624,15 @@ class CampaignMetadata:
     persistence_failures: int = 0
     verdict: AcceptanceVerdict | None = None
     verdict_reason: str = ""
+    # Phase 10A: EI + stability tracking
+    ei_degraded: bool = False
+    ei_degraded_reasons: tuple[str, ...] = ()
+    ei_route_blocks: int = 0
+    ei_route_abstains: int = 0
+    recovery_incidents: int = 0
+    degraded_intervals: int = 0
+    blocked_intervals: int = 0
+    queue_pressure_warnings: int = 0
 
     def elapsed_seconds(self) -> float:
         """Wall-clock elapsed seconds excluding paused time."""
@@ -549,6 +659,14 @@ class CampaignMetadata:
             "persistence_failures": self.persistence_failures,
             "verdict": self.verdict.value if self.verdict else None,
             "verdict_reason": self.verdict_reason,
+            "ei_degraded": self.ei_degraded,
+            "ei_degraded_reasons": list(self.ei_degraded_reasons),
+            "ei_route_blocks": self.ei_route_blocks,
+            "ei_route_abstains": self.ei_route_abstains,
+            "recovery_incidents": self.recovery_incidents,
+            "degraded_intervals": self.degraded_intervals,
+            "blocked_intervals": self.blocked_intervals,
+            "queue_pressure_warnings": self.queue_pressure_warnings,
             "config": {
                 "campaign_id": self.config.campaign_id,
                 "max_duration_s": self.config.max_duration_s,
@@ -611,4 +729,12 @@ def campaign_metadata_from_dict(d: dict, config: CampaignConfig | None = None) -
         persistence_failures=d.get("persistence_failures", 0),
         verdict=verdict,
         verdict_reason=d.get("verdict_reason", ""),
+        ei_degraded=d.get("ei_degraded", False),
+        ei_degraded_reasons=tuple(d.get("ei_degraded_reasons", ())),
+        ei_route_blocks=d.get("ei_route_blocks", 0),
+        ei_route_abstains=d.get("ei_route_abstains", 0),
+        recovery_incidents=d.get("recovery_incidents", 0),
+        degraded_intervals=d.get("degraded_intervals", 0),
+        blocked_intervals=d.get("blocked_intervals", 0),
+        queue_pressure_warnings=d.get("queue_pressure_warnings", 0),
     )
