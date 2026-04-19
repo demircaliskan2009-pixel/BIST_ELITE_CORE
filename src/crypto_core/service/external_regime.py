@@ -122,6 +122,160 @@ class DimensionFreshness:
     last_update_ns: int | None
     staleness_seconds: float | None
     source: str | None
+    staleness_threshold_s: float | None = None
+
+
+@dataclass(frozen=True)
+class ExternalRegimeFreshnessPolicy:
+    """Explicit per-dimension freshness thresholds for external regime truth."""
+
+    options_staleness_threshold_s: float = 3600.0
+    event_staleness_threshold_s: float = 3600.0
+    on_chain_staleness_threshold_s: float = 3600.0
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("options_staleness_threshold_s", self.options_staleness_threshold_s),
+            ("event_staleness_threshold_s", self.event_staleness_threshold_s),
+            ("on_chain_staleness_threshold_s", self.on_chain_staleness_threshold_s),
+        ):
+            if value <= 0:
+                raise ValueError(f"{name} must be > 0, got {value}")
+
+    @classmethod
+    def uniform(cls, threshold_s: float) -> ExternalRegimeFreshnessPolicy:
+        return cls(
+            options_staleness_threshold_s=threshold_s,
+            event_staleness_threshold_s=threshold_s,
+            on_chain_staleness_threshold_s=threshold_s,
+        )
+
+    def threshold_for_dimension(self, dimension: str) -> float:
+        if dimension == "options":
+            return self.options_staleness_threshold_s
+        if dimension == "event":
+            return self.event_staleness_threshold_s
+        if dimension == "on_chain":
+            return self.on_chain_staleness_threshold_s
+        raise ValueError(f"unsupported_dimension:{dimension!r}")
+
+    @property
+    def max_staleness_threshold_s(self) -> float:
+        return max(
+            self.options_staleness_threshold_s,
+            self.event_staleness_threshold_s,
+            self.on_chain_staleness_threshold_s,
+        )
+
+
+class ExternalRegimeProviderTrust(str, Enum):
+    """Trust class for raw external regime providers."""
+
+    TRUSTED = "trusted"
+    PROVISIONAL = "provisional"
+    UNSUPPORTED = "unsupported"
+
+
+class ExternalRegimeProviderRole(str, Enum):
+    """Per-dimension provider role used by overwrite policy."""
+
+    PREFERRED = "preferred"
+    FALLBACK = "fallback"
+    DISALLOWED = "disallowed"
+
+
+@dataclass(frozen=True)
+class ExternalRegimeProviderProfile:
+    """Provider/source profile for one logical raw payload source."""
+
+    provider: str
+    trust: ExternalRegimeProviderTrust
+    options_role: ExternalRegimeProviderRole = ExternalRegimeProviderRole.DISALLOWED
+    event_role: ExternalRegimeProviderRole = ExternalRegimeProviderRole.DISALLOWED
+    on_chain_role: ExternalRegimeProviderRole = ExternalRegimeProviderRole.DISALLOWED
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.provider, str) or not self.provider.strip():
+            raise ValueError("provider must be a non-empty string")
+        if self.trust is ExternalRegimeProviderTrust.UNSUPPORTED and any(
+            role is not ExternalRegimeProviderRole.DISALLOWED
+            for role in (self.options_role, self.event_role, self.on_chain_role)
+        ):
+            raise ValueError("unsupported providers must be disallowed for every dimension")
+
+    def role_for_dimension(self, dimension: str) -> ExternalRegimeProviderRole:
+        if dimension == "options":
+            return self.options_role
+        if dimension == "event":
+            return self.event_role
+        if dimension == "on_chain":
+            return self.on_chain_role
+        raise ValueError(f"unsupported_dimension:{dimension!r}")
+
+
+_DEFAULT_EXTERNAL_REGIME_PROVIDER_PROFILES = (
+    ExternalRegimeProviderProfile(
+        provider="manual",
+        trust=ExternalRegimeProviderTrust.TRUSTED,
+        options_role=ExternalRegimeProviderRole.PREFERRED,
+        event_role=ExternalRegimeProviderRole.PREFERRED,
+        on_chain_role=ExternalRegimeProviderRole.PREFERRED,
+    ),
+    ExternalRegimeProviderProfile(
+        provider="calendar",
+        trust=ExternalRegimeProviderTrust.TRUSTED,
+        event_role=ExternalRegimeProviderRole.PREFERRED,
+    ),
+    ExternalRegimeProviderProfile(
+        provider="glassnode",
+        trust=ExternalRegimeProviderTrust.TRUSTED,
+        on_chain_role=ExternalRegimeProviderRole.PREFERRED,
+    ),
+)
+
+
+@dataclass(frozen=True)
+class ExternalRegimeProviderPolicy:
+    """Deterministic payload-source policy for raw adapter ingestion."""
+
+    profiles: tuple[ExternalRegimeProviderProfile, ...] = _DEFAULT_EXTERNAL_REGIME_PROVIDER_PROFILES
+    allow_trusted_overwrite_provisional: bool = True
+    allow_provisional_overwrite_trusted: bool = False
+    allow_fallback_overwrite_preferred: bool = False
+    require_trusted_when_current_owner_unknown: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.profiles:
+            raise ValueError("profiles must not be empty")
+        seen: set[str] = set()
+        for profile in self.profiles:
+            if profile.provider in seen:
+                raise ValueError(f"duplicate_provider_profile:{profile.provider}")
+            seen.add(profile.provider)
+
+    def profile_for_provider(self, provider: str) -> ExternalRegimeProviderProfile:
+        if isinstance(provider, str):
+            for profile in self.profiles:
+                if profile.provider == provider:
+                    return profile
+        return ExternalRegimeProviderProfile(
+            provider=provider if isinstance(provider, str) and provider else "unsupported",
+            trust=ExternalRegimeProviderTrust.UNSUPPORTED,
+        )
+
+
+@dataclass(frozen=True)
+class ExternalRegimeDimensionSourceState:
+    """Current owner metadata for one regime dimension."""
+
+    dimension: str
+    ownership_mode: str
+    provider: str | None
+    source_label: str | None
+    trust: str | None
+    role: str | None
+    state_snapshot_ns: int | None
+    received_at_ns: int
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +416,9 @@ class ExternalRegimePayloadIngestionRecord:
     source_label: str | None
     state_snapshot_ns: int | None
     level: str | None
+    provider_trust: str | None
+    provider_role: str | None
+    freshness_threshold_s: float | None
     update_status: str | None
     reason: str
     rejection_stage: str | None
@@ -306,10 +463,16 @@ class ExternalRegimeDataPlane:
         snap = plane.snapshot(now_ns)
     """
 
-    def __init__(self, *, staleness_threshold_s: float = 3600.0) -> None:
-        if staleness_threshold_s <= 0:
-            raise ValueError(f"staleness_threshold_s must be > 0, got {staleness_threshold_s}")
-        self._staleness_threshold_s = staleness_threshold_s
+    def __init__(
+        self,
+        *,
+        staleness_threshold_s: float = 3600.0,
+        freshness_policy: ExternalRegimeFreshnessPolicy | None = None,
+    ) -> None:
+        if freshness_policy is not None and staleness_threshold_s != 3600.0:
+            raise ValueError("provide either staleness_threshold_s or freshness_policy, not both")
+        self._freshness_policy = freshness_policy or ExternalRegimeFreshnessPolicy.uniform(staleness_threshold_s)
+        self._staleness_threshold_s = self._freshness_policy.max_staleness_threshold_s
 
         self._options: OptionsRegimeState | None = None
         self._options_update_ns: int | None = None
@@ -326,8 +489,13 @@ class ExternalRegimeDataPlane:
 
     @property
     def staleness_threshold_s(self) -> float:
-        """Configured staleness threshold in seconds."""
+        """Legacy global staleness accessor for backward compatibility."""
         return self._staleness_threshold_s
+
+    @property
+    def freshness_policy(self) -> ExternalRegimeFreshnessPolicy:
+        """Configured per-dimension freshness policy."""
+        return self._freshness_policy
 
     @property
     def options_state(self) -> OptionsRegimeState | None:
@@ -382,9 +550,9 @@ class ExternalRegimeDataPlane:
         Returns:
             Frozen ExternalRegimeSnapshot.
         """
-        opt_fresh = self._build_dimension_freshness(self._options, self._options_update_ns, now_ns)
-        evt_fresh = self._build_dimension_freshness(self._event, self._event_update_ns, now_ns)
-        oc_fresh = self._build_dimension_freshness(self._on_chain, self._on_chain_update_ns, now_ns)
+        opt_fresh = self._build_dimension_freshness("options", self._options, self._options_update_ns, now_ns)
+        evt_fresh = self._build_dimension_freshness("event", self._event, self._event_update_ns, now_ns)
+        oc_fresh = self._build_dimension_freshness("on_chain", self._on_chain, self._on_chain_update_ns, now_ns)
 
         # Classify dimensions
         available: list[str] = []
@@ -466,17 +634,20 @@ class ExternalRegimeDataPlane:
 
     def _build_dimension_freshness(
         self,
+        dimension: str,
         state: OptionsRegimeState | EventRegimeState | OnChainRegimeState | None,
         update_ns: int | None,
         now_ns: int,
     ) -> DimensionFreshness:
         """Assess freshness for a single regime dimension."""
+        threshold_s = self._freshness_policy.threshold_for_dimension(dimension)
         # Never received
         if state is None or update_ns is None:
             return DimensionFreshness(
                 freshness=DataFreshness.UNAVAILABLE,
                 last_update_ns=None,
                 staleness_seconds=None,
+                staleness_threshold_s=threshold_s,
                 source=None,
             )
 
@@ -486,6 +657,7 @@ class ExternalRegimeDataPlane:
                 freshness=DataFreshness.UNAVAILABLE,
                 last_update_ns=update_ns,
                 staleness_seconds=None,
+                staleness_threshold_s=threshold_s,
                 source=state.source,
             )
 
@@ -493,11 +665,12 @@ class ExternalRegimeDataPlane:
         staleness_s = max(0.0, (now_ns - update_ns) / _NS_PER_S)
 
         # Stale check
-        if staleness_s > self._staleness_threshold_s:
+        if staleness_s > threshold_s:
             return DimensionFreshness(
                 freshness=DataFreshness.STALE,
                 last_update_ns=update_ns,
                 staleness_seconds=staleness_s,
+                staleness_threshold_s=threshold_s,
                 source=state.source,
             )
 
@@ -507,6 +680,7 @@ class ExternalRegimeDataPlane:
                 freshness=DataFreshness.DEGRADED,
                 last_update_ns=update_ns,
                 staleness_seconds=staleness_s,
+                staleness_threshold_s=threshold_s,
                 source=state.source,
             )
 
@@ -515,6 +689,7 @@ class ExternalRegimeDataPlane:
             freshness=DataFreshness.FRESH,
             last_update_ns=update_ns,
             staleness_seconds=staleness_s,
+            staleness_threshold_s=threshold_s,
             source=state.source,
         )
 
@@ -974,6 +1149,9 @@ def external_regime_payload_ingestion_record_to_dict(record: ExternalRegimePaylo
         "source_label": record.source_label,
         "state_snapshot_ns": record.state_snapshot_ns,
         "level": record.level,
+        "provider_trust": record.provider_trust,
+        "provider_role": record.provider_role,
+        "freshness_threshold_s": record.freshness_threshold_s,
         "update_status": record.update_status,
         "reason": record.reason,
         "rejection_stage": record.rejection_stage,
@@ -997,6 +1175,11 @@ def external_regime_payload_ingestion_record_from_dict(d: dict) -> ExternalRegim
             source_label=d.get("source_label"),
             state_snapshot_ns=(int(d["state_snapshot_ns"]) if d.get("state_snapshot_ns") is not None else None),
             level=d.get("level"),
+            provider_trust=d.get("provider_trust"),
+            provider_role=d.get("provider_role"),
+            freshness_threshold_s=(
+                float(d["freshness_threshold_s"]) if d.get("freshness_threshold_s") is not None else None
+            ),
             update_status=d.get("update_status"),
             reason=str(d["reason"]),
             rejection_stage=d.get("rejection_stage"),
@@ -1132,6 +1315,7 @@ def dimension_freshness_to_dict(f: DimensionFreshness) -> dict:
         "freshness": f.freshness.value,
         "last_update_ns": f.last_update_ns,
         "staleness_seconds": f.staleness_seconds,
+        "staleness_threshold_s": f.staleness_threshold_s,
         "source": f.source,
     }
 
@@ -1146,10 +1330,116 @@ def dimension_freshness_from_dict(d: dict) -> DimensionFreshness:
             freshness=DataFreshness(d["freshness"]),
             last_update_ns=d.get("last_update_ns"),
             staleness_seconds=d.get("staleness_seconds"),
+            staleness_threshold_s=d.get("staleness_threshold_s"),
             source=d.get("source"),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"Malformed DimensionFreshness: {exc}") from exc
+
+
+def external_regime_freshness_policy_to_dict(policy: ExternalRegimeFreshnessPolicy) -> dict:
+    """Serialize per-dimension freshness policy."""
+    return {
+        "options_staleness_threshold_s": policy.options_staleness_threshold_s,
+        "event_staleness_threshold_s": policy.event_staleness_threshold_s,
+        "on_chain_staleness_threshold_s": policy.on_chain_staleness_threshold_s,
+    }
+
+
+def external_regime_freshness_policy_from_dict(d: dict) -> ExternalRegimeFreshnessPolicy:
+    """Deserialize per-dimension freshness policy."""
+    try:
+        return ExternalRegimeFreshnessPolicy(
+            options_staleness_threshold_s=float(d["options_staleness_threshold_s"]),
+            event_staleness_threshold_s=float(d["event_staleness_threshold_s"]),
+            on_chain_staleness_threshold_s=float(d["on_chain_staleness_threshold_s"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Malformed ExternalRegimeFreshnessPolicy: {exc}") from exc
+
+
+def external_regime_provider_profile_to_dict(profile: ExternalRegimeProviderProfile) -> dict:
+    """Serialize provider profile."""
+    return {
+        "provider": profile.provider,
+        "trust": profile.trust.value,
+        "options_role": profile.options_role.value,
+        "event_role": profile.event_role.value,
+        "on_chain_role": profile.on_chain_role.value,
+    }
+
+
+def external_regime_provider_profile_from_dict(d: dict) -> ExternalRegimeProviderProfile:
+    """Deserialize provider profile."""
+    try:
+        return ExternalRegimeProviderProfile(
+            provider=str(d["provider"]),
+            trust=ExternalRegimeProviderTrust(d["trust"]),
+            options_role=ExternalRegimeProviderRole(d.get("options_role", ExternalRegimeProviderRole.DISALLOWED.value)),
+            event_role=ExternalRegimeProviderRole(d.get("event_role", ExternalRegimeProviderRole.DISALLOWED.value)),
+            on_chain_role=ExternalRegimeProviderRole(
+                d.get("on_chain_role", ExternalRegimeProviderRole.DISALLOWED.value)
+            ),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Malformed ExternalRegimeProviderProfile: {exc}") from exc
+
+
+def external_regime_provider_policy_to_dict(policy: ExternalRegimeProviderPolicy) -> dict:
+    """Serialize provider policy."""
+    return {
+        "profiles": [external_regime_provider_profile_to_dict(profile) for profile in policy.profiles],
+        "allow_trusted_overwrite_provisional": policy.allow_trusted_overwrite_provisional,
+        "allow_provisional_overwrite_trusted": policy.allow_provisional_overwrite_trusted,
+        "allow_fallback_overwrite_preferred": policy.allow_fallback_overwrite_preferred,
+        "require_trusted_when_current_owner_unknown": policy.require_trusted_when_current_owner_unknown,
+    }
+
+
+def external_regime_provider_policy_from_dict(d: dict) -> ExternalRegimeProviderPolicy:
+    """Deserialize provider policy."""
+    try:
+        return ExternalRegimeProviderPolicy(
+            profiles=tuple(external_regime_provider_profile_from_dict(item) for item in d.get("profiles", ()))
+            or _DEFAULT_EXTERNAL_REGIME_PROVIDER_PROFILES,
+            allow_trusted_overwrite_provisional=bool(d.get("allow_trusted_overwrite_provisional", True)),
+            allow_provisional_overwrite_trusted=bool(d.get("allow_provisional_overwrite_trusted", False)),
+            allow_fallback_overwrite_preferred=bool(d.get("allow_fallback_overwrite_preferred", False)),
+            require_trusted_when_current_owner_unknown=bool(d.get("require_trusted_when_current_owner_unknown", True)),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Malformed ExternalRegimeProviderPolicy: {exc}") from exc
+
+
+def external_regime_dimension_source_state_to_dict(owner: ExternalRegimeDimensionSourceState) -> dict:
+    """Serialize current dimension owner metadata."""
+    return {
+        "dimension": owner.dimension,
+        "ownership_mode": owner.ownership_mode,
+        "provider": owner.provider,
+        "source_label": owner.source_label,
+        "trust": owner.trust,
+        "role": owner.role,
+        "state_snapshot_ns": owner.state_snapshot_ns,
+        "received_at_ns": owner.received_at_ns,
+    }
+
+
+def external_regime_dimension_source_state_from_dict(d: dict) -> ExternalRegimeDimensionSourceState:
+    """Deserialize current dimension owner metadata."""
+    try:
+        return ExternalRegimeDimensionSourceState(
+            dimension=str(d["dimension"]),
+            ownership_mode=str(d["ownership_mode"]),
+            provider=d.get("provider"),
+            source_label=d.get("source_label"),
+            trust=d.get("trust"),
+            role=d.get("role"),
+            state_snapshot_ns=(int(d["state_snapshot_ns"]) if d.get("state_snapshot_ns") is not None else None),
+            received_at_ns=int(d["received_at_ns"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Malformed ExternalRegimeDimensionSourceState: {exc}") from exc
 
 
 def external_regime_snapshot_to_dict(snap: ExternalRegimeSnapshot) -> dict:
@@ -1222,6 +1512,7 @@ def external_regime_plane_to_dict(plane: ExternalRegimeDataPlane) -> dict:
 
     return {
         "staleness_threshold_s": plane.staleness_threshold_s,
+        "freshness_policy": external_regime_freshness_policy_to_dict(plane.freshness_policy),
         "options": _options_to_dict(plane.options_state) if plane.options_state else None,
         "event": _event_to_dict(plane.event_state) if plane.event_state else None,
         "on_chain": _onchain_to_dict(plane.on_chain_state) if plane.on_chain_state else None,
@@ -1237,8 +1528,13 @@ def external_regime_plane_from_dict(d: dict) -> ExternalRegimeDataPlane:
     )
 
     try:
-        threshold = float(d["staleness_threshold_s"])
-        plane = ExternalRegimeDataPlane(staleness_threshold_s=threshold)
+        if d.get("freshness_policy") is not None:
+            plane = ExternalRegimeDataPlane(
+                freshness_policy=external_regime_freshness_policy_from_dict(d["freshness_policy"])
+            )
+        else:
+            threshold = float(d["staleness_threshold_s"])
+            plane = ExternalRegimeDataPlane(staleness_threshold_s=threshold)
         if d.get("options") is not None:
             plane.update_options(_options_from_dict(d["options"]))
         if d.get("event") is not None:
@@ -1312,17 +1608,22 @@ class ExternalRegimeManager:
         *,
         plane: ExternalRegimeDataPlane | None = None,
         evidence_store: EvidenceStore | None = None,
+        provider_policy: ExternalRegimeProviderPolicy | None = None,
         history_limit: int = 50,
     ) -> None:
         if history_limit <= 0:
             raise ValueError(f"history_limit must be > 0, got {history_limit}")
         self._plane = plane or ExternalRegimeDataPlane()
         self._evidence_store = evidence_store
+        self._provider_policy = provider_policy or ExternalRegimeProviderPolicy()
         self._history_limit = history_limit
         self._history: deque[ExternalRegimeUpdateRecord] = deque(maxlen=history_limit)
         self._latest_update: ExternalRegimeUpdateRecord | None = None
         self._latest_accepted_payload: ExternalRegimePayloadIngestionRecord | None = None
         self._latest_rejected_payload: ExternalRegimePayloadIngestionRecord | None = None
+        self._options_source_owner: ExternalRegimeDimensionSourceState | None = None
+        self._event_source_owner: ExternalRegimeDimensionSourceState | None = None
+        self._on_chain_source_owner: ExternalRegimeDimensionSourceState | None = None
         self._restored_from_snapshot = False
 
     @property
@@ -1350,6 +1651,11 @@ class ExternalRegimeManager:
         """Most recent raw payload rejected through the adapter seam."""
         return self._latest_rejected_payload
 
+    @property
+    def provider_policy(self) -> ExternalRegimeProviderPolicy:
+        """Configured provider/source policy for payload ingestion."""
+        return self._provider_policy
+
     def recent_update_history(self) -> tuple[ExternalRegimeUpdateRecord, ...]:
         """Bounded recent update history, oldest first."""
         return tuple(self._history)
@@ -1374,6 +1680,7 @@ class ExternalRegimeManager:
         state: OptionsRegimeState,
         *,
         received_at_ns: int | None = None,
+        source_owner: ExternalRegimeDimensionSourceState | None = None,
     ) -> ExternalRegimeUpdateRecord:
         """Apply one options regime update with explicit acceptance semantics."""
         return self._apply_update(
@@ -1383,6 +1690,7 @@ class ExternalRegimeManager:
             current_state=self._plane.options_state,
             apply_update=self._plane.update_options,
             received_at_ns=received_at_ns,
+            source_owner=(source_owner or self._build_direct_source_owner("options", state, received_at_ns)),
         )
 
     def update_event(
@@ -1390,6 +1698,7 @@ class ExternalRegimeManager:
         state: EventRegimeState,
         *,
         received_at_ns: int | None = None,
+        source_owner: ExternalRegimeDimensionSourceState | None = None,
     ) -> ExternalRegimeUpdateRecord:
         """Apply one event regime update with explicit acceptance semantics."""
         return self._apply_update(
@@ -1399,6 +1708,7 @@ class ExternalRegimeManager:
             current_state=self._plane.event_state,
             apply_update=self._plane.update_event,
             received_at_ns=received_at_ns,
+            source_owner=(source_owner or self._build_direct_source_owner("event", state, received_at_ns)),
         )
 
     def update_on_chain(
@@ -1406,6 +1716,7 @@ class ExternalRegimeManager:
         state: OnChainRegimeState,
         *,
         received_at_ns: int | None = None,
+        source_owner: ExternalRegimeDimensionSourceState | None = None,
     ) -> ExternalRegimeUpdateRecord:
         """Apply one on-chain regime update with explicit acceptance semantics."""
         return self._apply_update(
@@ -1415,6 +1726,7 @@ class ExternalRegimeManager:
             current_state=self._plane.on_chain_state,
             apply_update=self._plane.update_on_chain,
             received_at_ns=received_at_ns,
+            source_owner=(source_owner or self._build_direct_source_owner("on_chain", state, received_at_ns)),
         )
 
     def update_composite(
@@ -1475,6 +1787,9 @@ class ExternalRegimeManager:
             source_label=None,
             state_snapshot_ns=None,
             level=None,
+            provider_trust=None,
+            provider_role=None,
+            freshness_threshold_s=None,
             update_status=None,
             reason=f"invalid_dimension:{dimension!r}",
             rejection_stage="adapter_validation",
@@ -1636,6 +1951,29 @@ class ExternalRegimeManager:
         self._latest_update = latest
         self._latest_accepted_payload = latest_accepted_payload
         self._latest_rejected_payload = latest_rejected_payload
+        self._provider_policy = (
+            external_regime_provider_policy_from_dict(data["provider_policy"])
+            if data.get("provider_policy") is not None
+            else ExternalRegimeProviderPolicy()
+        )
+        source_owners = data.get("current_dimension_sources", {})
+        if source_owners is not None and not isinstance(source_owners, dict):
+            raise ExternalRegimeStateCorruptError("current_dimension_sources must be a dict")
+        self._options_source_owner = (
+            external_regime_dimension_source_state_from_dict(source_owners["options"])
+            if isinstance(source_owners, dict) and source_owners.get("options") is not None
+            else None
+        )
+        self._event_source_owner = (
+            external_regime_dimension_source_state_from_dict(source_owners["event"])
+            if isinstance(source_owners, dict) and source_owners.get("event") is not None
+            else None
+        )
+        self._on_chain_source_owner = (
+            external_regime_dimension_source_state_from_dict(source_owners["on_chain"])
+            if isinstance(source_owners, dict) and source_owners.get("on_chain") is not None
+            else None
+        )
         self._restored_from_snapshot = True
         self._append_audit_record(
             event_name="external_regime_restore",
@@ -1666,6 +2004,13 @@ class ExternalRegimeManager:
         snap = self.snapshot(now_ns)
         return {
             "current_snapshot": external_regime_snapshot_to_dict(snap),
+            "freshness_policy": external_regime_freshness_policy_to_dict(self._plane.freshness_policy),
+            "provider_policy": external_regime_provider_policy_to_dict(self._provider_policy),
+            "current_dimension_sources": {
+                "options": self._dimension_source_owner_to_dict(self._options_source_owner),
+                "event": self._dimension_source_owner_to_dict(self._event_source_owner),
+                "on_chain": self._dimension_source_owner_to_dict(self._on_chain_source_owner),
+            },
             "latest_update": (
                 external_regime_update_record_to_dict(self._latest_update) if self._latest_update is not None else None
             ),
@@ -1694,10 +2039,15 @@ class ExternalRegimeManager:
         build_state,
         apply_update,
     ) -> ExternalRegimePayloadIngestionRecord:
+        threshold_s = self._plane.freshness_policy.threshold_for_dimension(dimension)
+        profile, role = self._resolve_provider_context(provider=provider, dimension=dimension)
         payload_origin: str | None = None
         payload_summary: dict[str, object] = {
             "provider": provider,
             "input_format": input_format,
+            "provider_trust": None if profile is None else profile.trust.value,
+            "provider_role": None if role is None else role.value,
+            "freshness_threshold_s": threshold_s,
         }
         resolved_received_at_ns = received_at_ns
         if received_at_ns is not None and (not isinstance(received_at_ns, int) or received_at_ns < 0):
@@ -1710,6 +2060,9 @@ class ExternalRegimeManager:
                 source_label=None,
                 state_snapshot_ns=None,
                 level=None,
+                provider_trust=None if profile is None else profile.trust.value,
+                provider_role=None if role is None else role.value,
+                freshness_threshold_s=threshold_s,
                 update_status=None,
                 reason=f"invalid_received_at_ns:{received_at_ns!r}",
                 rejection_stage="adapter_validation",
@@ -1741,6 +2094,9 @@ class ExternalRegimeManager:
                 source_label=None,
                 state_snapshot_ns=None,
                 level=None,
+                provider_trust=None if profile is None else profile.trust.value,
+                provider_role=None if role is None else role.value,
+                freshness_threshold_s=threshold_s,
                 update_status=None,
                 reason=str(exc),
                 rejection_stage="adapter_validation",
@@ -1758,7 +2114,56 @@ class ExternalRegimeManager:
             payload_origin=payload_origin,
             state=state,
         )
-        update_record = apply_update(state, received_at_ns=resolved_received_at_ns)
+        payload_summary["provider_trust"] = None if profile is None else profile.trust.value
+        payload_summary["provider_role"] = None if role is None else role.value
+        payload_summary["freshness_threshold_s"] = threshold_s
+        current_owner = self._dimension_source_owner(dimension)
+        if current_owner is not None:
+            payload_summary["current_owner_provider"] = current_owner.provider
+            payload_summary["current_owner_trust"] = current_owner.trust
+            payload_summary["current_owner_role"] = current_owner.role
+
+        source_policy_reason = self._validate_payload_source_policy(
+            dimension=dimension,
+            state=state,
+            provider=provider,
+            profile=profile,
+            role=role,
+        )
+        if source_policy_reason is not None:
+            result = ExternalRegimePayloadIngestionRecord(
+                dimension=dimension,
+                provider=provider,
+                input_format=input_format,
+                accepted=False,
+                received_at_ns=resolved_received_at_ns,
+                source_label=state.source,
+                state_snapshot_ns=state.snapshot_ns,
+                level=state.level.value,
+                provider_trust=None if profile is None else profile.trust.value,
+                provider_role=None if role is None else role.value,
+                freshness_threshold_s=threshold_s,
+                update_status=None,
+                reason=source_policy_reason,
+                rejection_stage="source_policy",
+                payload_origin=payload_origin,
+                payload_summary=payload_summary,
+            )
+            self._record_payload_ingestion(result)
+            return result
+
+        update_record = apply_update(
+            state,
+            received_at_ns=resolved_received_at_ns,
+            source_owner=self._build_payload_source_owner(
+                dimension=dimension,
+                provider=provider,
+                state=state,
+                trust=None if profile is None else profile.trust.value,
+                role=None if role is None else role.value,
+                received_at_ns=resolved_received_at_ns,
+            ),
+        )
         result = ExternalRegimePayloadIngestionRecord(
             dimension=dimension,
             provider=provider,
@@ -1768,6 +2173,9 @@ class ExternalRegimeManager:
             source_label=update_record.source_label,
             state_snapshot_ns=update_record.state_snapshot_ns,
             level=update_record.level,
+            provider_trust=None if profile is None else profile.trust.value,
+            provider_role=None if role is None else role.value,
+            freshness_threshold_s=threshold_s,
             update_status=update_record.status.value,
             reason=update_record.reason,
             rejection_stage=None if update_record.accepted else "update_validation",
@@ -1786,6 +2194,7 @@ class ExternalRegimeManager:
         current_state: OptionsRegimeState | EventRegimeState | OnChainRegimeState | None,
         apply_update,
         received_at_ns: int | None,
+        source_owner: ExternalRegimeDimensionSourceState | None,
     ) -> ExternalRegimeUpdateRecord:
         received = state.snapshot_ns if received_at_ns is None else received_at_ns
         rejected = self._validate_update(
@@ -1801,6 +2210,8 @@ class ExternalRegimeManager:
 
         replaced_existing = current_state is not None and state.snapshot_ns > current_state.snapshot_ns
         apply_update(state)
+        if source_owner is not None:
+            self._set_dimension_source_owner(dimension, source_owner)
         snap = self._plane.snapshot(received)
         record = ExternalRegimeUpdateRecord(
             dimension=dimension,
@@ -1917,6 +2328,153 @@ class ExternalRegimeManager:
         )
         self.persist_state()
 
+    def _resolve_provider_context(
+        self,
+        *,
+        provider: str,
+        dimension: str,
+    ) -> tuple[ExternalRegimeProviderProfile | None, ExternalRegimeProviderRole | None]:
+        if not isinstance(provider, str) or not provider.strip():
+            return None, None
+        profile = self._provider_policy.profile_for_provider(provider)
+        return profile, profile.role_for_dimension(dimension)
+
+    def _validate_payload_source_policy(
+        self,
+        *,
+        dimension: str,
+        state: OptionsRegimeState | EventRegimeState | OnChainRegimeState,
+        provider: str,
+        profile: ExternalRegimeProviderProfile | None,
+        role: ExternalRegimeProviderRole | None,
+    ) -> str | None:
+        if profile is None or role is None:
+            return "invalid_provider_context"
+        if profile.trust is ExternalRegimeProviderTrust.UNSUPPORTED:
+            return f"unsupported_provider:{provider}"
+        if role is ExternalRegimeProviderRole.DISALLOWED:
+            return f"provider_not_allowed_for_dimension:{provider}:{dimension}"
+
+        current_state = self._current_state_for_dimension(dimension)
+        current_owner = self._dimension_source_owner(dimension)
+        if current_state is None:
+            return None
+
+        if state.snapshot_ns == current_state.snapshot_ns:
+            if current_owner is None:
+                return "equal_timestamp_owner_unknown"
+            if (
+                provider != current_owner.provider
+                or profile.trust.value != current_owner.trust
+                or role.value != current_owner.role
+            ):
+                return f"equal_timestamp_source_conflict:{provider}:{current_owner.provider or 'unknown'}"
+            return None
+
+        if current_owner is None or current_owner.trust is None:
+            if (
+                self._provider_policy.require_trusted_when_current_owner_unknown
+                and profile.trust is not ExternalRegimeProviderTrust.TRUSTED
+            ):
+                return f"owner_metadata_missing_requires_trusted:{provider}:{dimension}"
+            return None
+
+        incoming_rank = _provider_trust_rank(profile.trust.value)
+        current_rank = _provider_trust_rank(current_owner.trust)
+        if incoming_rank < current_rank and not self._provider_policy.allow_provisional_overwrite_trusted:
+            return f"lower_trust_overwrite_blocked:{profile.trust.value}<{current_owner.trust}"
+        if (
+            incoming_rank > current_rank
+            and not self._provider_policy.allow_trusted_overwrite_provisional
+            and current_owner.trust == ExternalRegimeProviderTrust.PROVISIONAL.value
+        ):
+            return f"higher_trust_overwrite_blocked:{profile.trust.value}>{current_owner.trust}"
+        if (
+            incoming_rank == current_rank
+            and current_owner.role == ExternalRegimeProviderRole.PREFERRED.value
+            and role is ExternalRegimeProviderRole.FALLBACK
+            and not self._provider_policy.allow_fallback_overwrite_preferred
+        ):
+            return f"fallback_overwrite_blocked:{provider}:{dimension}"
+        return None
+
+    def _build_direct_source_owner(
+        self,
+        dimension: str,
+        state: OptionsRegimeState | EventRegimeState | OnChainRegimeState,
+        received_at_ns: int | None,
+    ) -> ExternalRegimeDimensionSourceState:
+        return ExternalRegimeDimensionSourceState(
+            dimension=dimension,
+            ownership_mode="direct_update",
+            provider=None,
+            source_label=state.source,
+            trust=None,
+            role=None,
+            state_snapshot_ns=state.snapshot_ns,
+            received_at_ns=state.snapshot_ns if received_at_ns is None else received_at_ns,
+        )
+
+    @staticmethod
+    def _build_payload_source_owner(
+        *,
+        dimension: str,
+        provider: str,
+        state: OptionsRegimeState | EventRegimeState | OnChainRegimeState,
+        trust: str | None,
+        role: str | None,
+        received_at_ns: int,
+    ) -> ExternalRegimeDimensionSourceState:
+        return ExternalRegimeDimensionSourceState(
+            dimension=dimension,
+            ownership_mode="payload_ingestion",
+            provider=provider,
+            source_label=state.source,
+            trust=trust,
+            role=role,
+            state_snapshot_ns=state.snapshot_ns,
+            received_at_ns=received_at_ns,
+        )
+
+    def _current_state_for_dimension(
+        self,
+        dimension: str,
+    ) -> OptionsRegimeState | EventRegimeState | OnChainRegimeState | None:
+        if dimension == "options":
+            return self._plane.options_state
+        if dimension == "event":
+            return self._plane.event_state
+        if dimension == "on_chain":
+            return self._plane.on_chain_state
+        raise ValueError(f"unsupported_dimension:{dimension!r}")
+
+    def _dimension_source_owner(self, dimension: str) -> ExternalRegimeDimensionSourceState | None:
+        if dimension == "options":
+            return self._options_source_owner
+        if dimension == "event":
+            return self._event_source_owner
+        if dimension == "on_chain":
+            return self._on_chain_source_owner
+        raise ValueError(f"unsupported_dimension:{dimension!r}")
+
+    def _set_dimension_source_owner(self, dimension: str, owner: ExternalRegimeDimensionSourceState) -> None:
+        if dimension == "options":
+            self._options_source_owner = owner
+            return
+        if dimension == "event":
+            self._event_source_owner = owner
+            return
+        if dimension == "on_chain":
+            self._on_chain_source_owner = owner
+            return
+        raise ValueError(f"unsupported_dimension:{dimension!r}")
+
+    @staticmethod
+    def _dimension_source_owner_to_dict(owner: ExternalRegimeDimensionSourceState | None) -> dict | None:
+        if owner is None:
+            return None
+        return external_regime_dimension_source_state_to_dict(owner)
+
     def _append_audit_record(self, *, event_name: str, data: dict) -> None:
         if self._evidence_store is None:
             return
@@ -1960,6 +2518,12 @@ class ExternalRegimeManager:
     def _state_to_dict(self) -> dict:
         return {
             "plane": external_regime_plane_to_dict(self._plane),
+            "provider_policy": external_regime_provider_policy_to_dict(self._provider_policy),
+            "current_dimension_sources": {
+                "options": self._dimension_source_owner_to_dict(self._options_source_owner),
+                "event": self._dimension_source_owner_to_dict(self._event_source_owner),
+                "on_chain": self._dimension_source_owner_to_dict(self._on_chain_source_owner),
+            },
             "history_limit": self._history_limit,
             "latest_update": (
                 external_regime_update_record_to_dict(self._latest_update) if self._latest_update is not None else None
@@ -2004,3 +2568,11 @@ def _payload_summary_for_state(
     if payload_origin is not None:
         summary["payload_origin"] = payload_origin
     return summary
+
+
+def _provider_trust_rank(trust: str | None) -> int:
+    if trust == ExternalRegimeProviderTrust.TRUSTED.value:
+        return 2
+    if trust == ExternalRegimeProviderTrust.PROVISIONAL.value:
+        return 1
+    return 0
