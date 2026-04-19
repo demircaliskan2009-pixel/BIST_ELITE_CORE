@@ -23,13 +23,14 @@ PRD reference: §2 System Orchestration, §7 Execution Engine.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from crypto_core.runtime.models import RuntimeStatus
-from crypto_core.service.artifact_export import OperatorDecisionPack
+from crypto_core.service.artifact_export import EscalationStage, OperatorDecisionPack
 from crypto_core.service.campaign import (
     AcceptanceResult,
     AcceptanceVerdict,
@@ -229,6 +230,20 @@ def _make_campaign_snapshot(
     elapsed_seconds: float = 600.0,
     persisted_tca_count: int = 0,
     registered_fill_count: int = 0,
+    ext_regime_available: bool = True,
+    ext_regime_fresh: bool = True,
+    ext_regime_high_risk: bool = False,
+    ext_regime_evidence_sufficient: bool = True,
+    ext_regime_scenario_available: bool = True,
+    ext_regime_scenario_step_count: int = 6,
+    ext_regime_activation_blocked_steps: int = 0,
+    ext_regime_execution_blocked_steps: int = 0,
+    ext_regime_activation_reduced_steps: int = 0,
+    ext_regime_stale_steps: int = 1,
+    ext_regime_unavailable_steps: int = 0,
+    ext_regime_high_risk_steps: int = 1,
+    ext_regime_safe_steps: int = 4,
+    ext_regime_scenario_summary: str = "steps=6; safe=4; stale=1; high_risk=1; reduced=0",
 ) -> CampaignSnapshot:
     return CampaignSnapshot(
         campaign_id=campaign_id,
@@ -262,6 +277,21 @@ def _make_campaign_snapshot(
         last_error=None,
         persisted_tca_count=persisted_tca_count,
         registered_fill_count=registered_fill_count,
+        ext_regime_available=ext_regime_available,
+        ext_regime_fresh=ext_regime_fresh,
+        ext_regime_high_risk=ext_regime_high_risk,
+        ext_regime_evidence_sufficient=ext_regime_evidence_sufficient,
+        ext_regime_summary=ext_regime_scenario_summary,
+        ext_regime_scenario_available=ext_regime_scenario_available,
+        ext_regime_scenario_step_count=ext_regime_scenario_step_count,
+        ext_regime_activation_blocked_steps=ext_regime_activation_blocked_steps,
+        ext_regime_execution_blocked_steps=ext_regime_execution_blocked_steps,
+        ext_regime_activation_reduced_steps=ext_regime_activation_reduced_steps,
+        ext_regime_stale_steps=ext_regime_stale_steps,
+        ext_regime_unavailable_steps=ext_regime_unavailable_steps,
+        ext_regime_high_risk_steps=ext_regime_high_risk_steps,
+        ext_regime_safe_steps=ext_regime_safe_steps,
+        ext_regime_scenario_summary=ext_regime_scenario_summary,
     )
 
 
@@ -275,6 +305,20 @@ def _make_campaign_report(
     elapsed_seconds: float = 600.0,
     persisted_tca_count: int = 0,
     registered_fill_count: int = 0,
+    ext_regime_available: bool = True,
+    ext_regime_fresh: bool = True,
+    ext_regime_high_risk: bool = False,
+    ext_regime_evidence_sufficient: bool = True,
+    ext_regime_scenario_available: bool = True,
+    ext_regime_scenario_step_count: int = 6,
+    ext_regime_activation_blocked_steps: int = 0,
+    ext_regime_execution_blocked_steps: int = 0,
+    ext_regime_activation_reduced_steps: int = 0,
+    ext_regime_stale_steps: int = 1,
+    ext_regime_unavailable_steps: int = 0,
+    ext_regime_high_risk_steps: int = 1,
+    ext_regime_safe_steps: int = 4,
+    ext_regime_scenario_summary: str = "steps=6; safe=4; stale=1; high_risk=1; reduced=0",
 ) -> CampaignReport:
     snap = _make_campaign_snapshot(
         campaign_id=campaign_id,
@@ -283,6 +327,20 @@ def _make_campaign_report(
         elapsed_seconds=elapsed_seconds,
         persisted_tca_count=persisted_tca_count,
         registered_fill_count=registered_fill_count,
+        ext_regime_available=ext_regime_available,
+        ext_regime_fresh=ext_regime_fresh,
+        ext_regime_high_risk=ext_regime_high_risk,
+        ext_regime_evidence_sufficient=ext_regime_evidence_sufficient,
+        ext_regime_scenario_available=ext_regime_scenario_available,
+        ext_regime_scenario_step_count=ext_regime_scenario_step_count,
+        ext_regime_activation_blocked_steps=ext_regime_activation_blocked_steps,
+        ext_regime_execution_blocked_steps=ext_regime_execution_blocked_steps,
+        ext_regime_activation_reduced_steps=ext_regime_activation_reduced_steps,
+        ext_regime_stale_steps=ext_regime_stale_steps,
+        ext_regime_unavailable_steps=ext_regime_unavailable_steps,
+        ext_regime_high_risk_steps=ext_regime_high_risk_steps,
+        ext_regime_safe_steps=ext_regime_safe_steps,
+        ext_regime_scenario_summary=ext_regime_scenario_summary,
     )
     criterion = CriterionResult(
         name="min_cycles",
@@ -319,6 +377,22 @@ def _make_campaign_report(
                 events_observed=True,
                 cycles_observed=True,
             ),
+            SymbolParticipation(
+                symbol="ETHUSDT",
+                exchange="binance",
+                feed_ready=True,
+                blocked=False,
+                events_observed=True,
+                cycles_observed=True,
+            ),
+            SymbolParticipation(
+                symbol="SOLUSDT",
+                exchange="binance",
+                feed_ready=True,
+                blocked=False,
+                events_observed=True,
+                cycles_observed=True,
+            ),
         ),
         config={"max_duration_s": 3600},
         stability=StabilityRollup(
@@ -330,6 +404,21 @@ def _make_campaign_report(
             persistence_failure_count=0,
             ei_degraded=False,
         ),
+        ext_regime_available=ext_regime_available,
+        ext_regime_fresh=ext_regime_fresh,
+        ext_regime_high_risk=ext_regime_high_risk,
+        ext_regime_evidence_sufficient=ext_regime_evidence_sufficient,
+        ext_regime_summary=ext_regime_scenario_summary,
+        ext_regime_scenario_available=ext_regime_scenario_available,
+        ext_regime_scenario_step_count=ext_regime_scenario_step_count,
+        ext_regime_activation_blocked_steps=ext_regime_activation_blocked_steps,
+        ext_regime_execution_blocked_steps=ext_regime_execution_blocked_steps,
+        ext_regime_activation_reduced_steps=ext_regime_activation_reduced_steps,
+        ext_regime_stale_steps=ext_regime_stale_steps,
+        ext_regime_unavailable_steps=ext_regime_unavailable_steps,
+        ext_regime_high_risk_steps=ext_regime_high_risk_steps,
+        ext_regime_safe_steps=ext_regime_safe_steps,
+        ext_regime_scenario_summary=ext_regime_scenario_summary,
     )
 
 
@@ -1038,6 +1127,106 @@ class TestReportingAPI:
         assert why_not["reasons"]
         assert missing["summary"]
         assert "warning_criteria" in inspect_next["items"]
+
+    def test_escalation_decision_inconclusive_with_insufficient_evidence(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(
+            service=svc,
+            readiness_level="paper_live",
+        )
+        orch._last_campaign_report = _make_campaign_report(campaign_id="last-report")
+        orch.start_review(review_id="rev-escalation-inconclusive")
+        orch.intake_campaign_report(
+            _make_campaign_report(
+                campaign_id="camp-weak",
+                total_cycles=10,
+                total_fills=0,
+                elapsed_seconds=30.0,
+            )
+        )
+
+        decision = orch.escalation_decision()
+        assert decision.escalation_stage == EscalationStage.INCONCLUSIVE
+        assert "min_completed_campaigns" in decision.missing_evidence
+
+    def test_escalation_decision_reject_for_failed_review(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(
+            service=svc,
+            readiness_level="paper_live",
+        )
+        orch._last_campaign_report = _make_campaign_report(campaign_id="last-report")
+        orch.start_review(review_id="rev-escalation-reject")
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-a", verdict="pass"))
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-b", verdict="fail"))
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-c", verdict="fail"))
+
+        decision = orch.escalation_decision()
+        assert decision.escalation_stage == EscalationStage.REJECT
+        assert "max_failed_campaigns" in decision.blocking_reasons
+
+    def test_escalation_decision_hold_for_warning_heavy_review(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(
+            service=svc,
+            readiness_level="paper_live",
+        )
+        orch._last_campaign_report = _make_campaign_report(campaign_id="last-report")
+        orch.start_review(review_id="rev-escalation-hold")
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-a", verdict="pass"))
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-b", verdict="fail"))
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-c", verdict="pass"))
+
+        decision = orch.escalation_decision()
+        assert decision.escalation_stage == EscalationStage.HOLD
+        assert "warn_failed_campaigns" in decision.why_not_higher
+
+    def test_escalation_decision_promotable_readiness_advances_to_shadow_review(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(
+            service=svc,
+            readiness_level="shadow_live",
+        )
+        orch._last_campaign_report = _make_campaign_report(
+            campaign_id="last-report",
+            persisted_tca_count=18,
+            registered_fill_count=20,
+        )
+        orch.start_review(review_id="rev-escalation-shadow")
+        for i in range(3):
+            orch.intake_campaign_report(_make_campaign_report(campaign_id=f"camp-{i}", verdict="pass"))
+
+        decision = orch.escalation_decision()
+        assert decision.escalation_stage == EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE
+        assert "operator_review_signoff" in decision.revalidation_required
+        assert orch.escalation_summary()["allowed_next_step"] == "shadow_live_review_eligible"
+        assert orch.escalation_decision_dict() == orch.escalation_decision_dict()
+
+    def test_escalation_decision_ext_regime_weakness_lowers_stage(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(
+            service=svc,
+            readiness_level="shadow_live",
+        )
+        orch._last_campaign_report = _make_campaign_report(
+            campaign_id="last-report",
+            persisted_tca_count=18,
+            registered_fill_count=20,
+        )
+        orch.start_review(review_id="rev-escalation-downgrade")
+        for i in range(3):
+            orch.intake_campaign_report(_make_campaign_report(campaign_id=f"camp-{i}", verdict="pass"))
+
+        pack = replace(
+            orch.decision_pack(),
+            external_regime_quality="cautionary",
+            external_regime_evidence_sufficient=False,
+            external_regime_concerns=("stale_dominance",),
+        )
+        decision = orch._build_escalation_decision(pack)
+        assert decision.escalation_stage == EscalationStage.CALIBRATED_PAPER
+        assert any(reason.startswith("external_regime:") for reason in decision.why_not_higher)
+
 
 
 # ---------------------------------------------------------------------------
