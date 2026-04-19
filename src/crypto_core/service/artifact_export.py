@@ -31,6 +31,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from crypto_core.service.evidence_store import EvidenceStore, WriteResult
+from crypto_core.service.sleeve_portfolio import (
+    SleevePortfolioCorruptError,
+    SleevePortfolioSnapshot,
+    sleeve_portfolio_snapshot_from_dict,
+    sleeve_portfolio_snapshot_to_dict,
+)
 
 # ---------------------------------------------------------------------------
 # Artifact model
@@ -480,6 +486,7 @@ def build_run_artifact(
 _ARTIFACT_SNAPSHOT_NAME = "run_artifact"
 _DECISION_PACK_SNAPSHOT_NAME = "operator_decision_pack"
 _ESCALATION_DECISION_SNAPSHOT_NAME = "live_readiness_escalation"
+_SLEEVE_PORTFOLIO_SNAPSHOT_NAME = "crypto_sleeve_portfolio"
 
 
 def export_run_artifact(
@@ -567,3 +574,28 @@ def load_escalation_decision(*, evidence_store: EvidenceStore) -> EscalationDeci
             f"Escalation decision 'data' must be a dict, got {type(data).__name__!r}"
         )
     return escalation_decision_from_dict(data)
+
+
+def export_sleeve_portfolio_snapshot(
+    *,
+    snapshot: SleevePortfolioSnapshot,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist the latest crypto sleeve portfolio snapshot."""
+    data = sleeve_portfolio_snapshot_to_dict(snapshot)
+    result = evidence_store.save_snapshot(_SLEEVE_PORTFOLIO_SNAPSHOT_NAME, data)
+    if not result.success:
+        return result
+    evidence_store.append_evidence(_SLEEVE_PORTFOLIO_SNAPSHOT_NAME, data)
+    return result
+
+
+def load_sleeve_portfolio_snapshot(*, evidence_store: EvidenceStore) -> SleevePortfolioSnapshot:
+    """Load the latest persisted crypto sleeve portfolio snapshot."""
+    envelope = evidence_store.load_snapshot(_SLEEVE_PORTFOLIO_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Sleeve portfolio snapshot 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return sleeve_portfolio_snapshot_from_dict(data)

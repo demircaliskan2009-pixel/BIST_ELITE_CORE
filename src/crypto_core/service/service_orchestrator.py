@@ -46,8 +46,10 @@ from crypto_core.service.artifact_export import (
     escalation_decision_why_not_higher,
     export_escalation_decision,
     export_operator_decision_pack,
+    export_sleeve_portfolio_snapshot,
     load_escalation_decision,
     load_operator_decision_pack,
+    load_sleeve_portfolio_snapshot,
     operator_disposition_from_verdict,
 )
 from crypto_core.service.campaign import (
@@ -95,6 +97,12 @@ from crypto_core.service.promotion_review_controller import (
     ReviewWorkflowCorruptError,
 )
 from crypto_core.service.readiness import ReadinessEvaluator, readiness_to_dict
+from crypto_core.service.sleeve_portfolio import (
+    CryptoSleeveState,
+    SleevePortfolioSnapshot,
+    build_sleeve_portfolio_snapshot,
+    sleeve_portfolio_snapshot_to_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +245,7 @@ class OperatorSnapshot:
     external_regime: ExternalRegimeSnapshot | None = None
     external_regime_safety: ExternalRegimeSafetyState | None = None
     external_regime_scenario: ExternalRegimeScenarioResult | None = None
+    sleeve_portfolio: SleevePortfolioSnapshot | None = None
 
     # Escalation review workflow (Phase 13B)
     escalation_review: EscalationWorkflowState | None = None
@@ -286,6 +295,7 @@ class ServiceOrchestrator:
         external_regime_plane: ExternalRegimeDataPlane | None = None,
         external_regime_manager: ExternalRegimeManager | None = None,
         external_regime_policy: ExternalRegimeSafetyPolicy | None = None,
+        sleeves: tuple[CryptoSleeveState, ...] = (),
     ) -> None:
         self._service = service
         self._evidence_store = evidence_store
@@ -318,6 +328,7 @@ class ServiceOrchestrator:
 
         self._review: PromotionReviewController | None = None
         self._escalation_review: EscalationReviewController | None = None
+        self._configured_sleeves = tuple(sleeves)
 
     # ------------------------------------------------------------------
     # Properties
@@ -361,6 +372,46 @@ class ServiceOrchestrator:
     @readiness_level.setter
     def readiness_level(self, value: str) -> None:
         self._readiness_level = value
+
+    # ------------------------------------------------------------------
+    # Sleeve portfolio surface
+    # ------------------------------------------------------------------
+
+    def set_sleeve_portfolio(
+        self,
+        sleeves: tuple[CryptoSleeveState, ...],
+    ) -> SleevePortfolioSnapshot:
+        """Replace the configured crypto sleeve portfolio surface."""
+        self._configured_sleeves = tuple(sleeves)
+        return self.sleeve_portfolio_snapshot()
+
+    def sleeve_portfolio_snapshot(self) -> SleevePortfolioSnapshot:
+        """Build the current crypto sleeve portfolio snapshot."""
+        service_status = self._service.status()
+        ext_regime = self._external_regime_snapshot_from_status(service_status)
+        ext_regime_safety = self._build_external_regime_safety_state(ext_regime)
+        return self._build_sleeve_portfolio_snapshot(service_status, ext_regime_safety)
+
+    def sleeve_portfolio_dict(self) -> dict:
+        """Serialize the current crypto sleeve portfolio snapshot to a dict."""
+        return sleeve_portfolio_snapshot_to_dict(self.sleeve_portfolio_snapshot())
+
+    def export_sleeve_portfolio(self):
+        """Persist the current crypto sleeve portfolio snapshot via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for sleeve portfolio export")
+        return export_sleeve_portfolio_snapshot(
+            snapshot=self.sleeve_portfolio_snapshot(),
+            evidence_store=self._evidence_store,
+        )
+
+    def load_sleeve_portfolio(self) -> SleevePortfolioSnapshot:
+        """Load and activate the latest persisted crypto sleeve portfolio snapshot."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for sleeve portfolio load")
+        snapshot = load_sleeve_portfolio_snapshot(evidence_store=self._evidence_store)
+        self._configured_sleeves = snapshot.sleeves
+        return snapshot
 
     # ------------------------------------------------------------------
     # Campaign lifecycle
@@ -769,6 +820,7 @@ class ServiceOrchestrator:
         ext_regime = self._external_regime_snapshot_from_status(ss)
         ext_regime_safety = self._build_external_regime_safety_state(ext_regime)
         ext_regime_scenario = self.external_regime_latest_scenario_result()
+        sleeve_portfolio = self._build_sleeve_portfolio_snapshot(ss, ext_regime_safety)
 
         # Evidence sufficiency
         evidence = self._build_evidence_sufficiency(campaign_state, review_state, ext_regime)
@@ -803,6 +855,7 @@ class ServiceOrchestrator:
             campaign=campaign_state,
             review=review_state,
             escalation_review=escalation_review_state,
+            sleeve_portfolio=sleeve_portfolio,
             readiness_level=self._readiness_level,
             readiness_is_supportive=readiness_is_supportive,
             evidence=evidence,
@@ -1582,6 +1635,57 @@ class ServiceOrchestrator:
             finalized=self._escalation_review.is_finalized,
         )
 
+    def _build_sleeve_portfolio_snapshot(
+        self,
+        ss: ServiceStatus,
+        ext_regime_safety: ExternalRegimeSafetyState | None,
+    ) -> SleevePortfolioSnapshot:
+        """Build the additive crypto sleeve portfolio surface."""
+
+        def _safe_int(value: object) -> int:
+            return value if isinstance(value, int) and value >= 0 else 0
+
+        runtime_status = ss.runtime_status
+        session_status = getattr(runtime_status, "session_status", None)
+        if session_status is None:
+            session_status = getattr(runtime_status, "session", None)
+
+        current_cycle_time_ns = _safe_int(getattr(session_status, "current_cycle_time_ns", 0)) if session_status else 0
+        start_time_ns = _safe_int(getattr(session_status, "start_time_ns", 0)) if session_status else 0
+        if start_time_ns == 0 and session_status is not None:
+            start_time_ns = _safe_int(getattr(session_status, "started_at_ns", 0))
+
+        as_of_ns = current_cycle_time_ns or start_time_ns or 0
+        readiness_is_supportive = self._readiness_level in (
+            "paper_live",
+            "calibrated_paper",
+            "shadow_live",
+            "tiny_cap_live",
+        )
+        return build_sleeve_portfolio_snapshot(
+            sleeves=self._configured_sleeves,
+            as_of_ns=as_of_ns,
+            readiness_level=self._readiness_level,
+            readiness_is_supportive=readiness_is_supportive,
+            escalation_allowed_next_step=self._current_escalation_allowed_next_step(),
+            external_regime_execution_blocked=(
+                None if ext_regime_safety is None else ext_regime_safety.execution_blocked
+            ),
+        )
+
+    def _current_escalation_allowed_next_step(self) -> str | None:
+        """Best current escalation hook for sleeve governance surfaces."""
+        if self._escalation_review is not None:
+            latest = self._escalation_review.latest_decision()
+            if latest is not None:
+                return latest.escalation_stage.value
+        if self._review is None or self._review.campaign_count == 0:
+            return None
+        try:
+            return self._build_escalation_decision(self.decision_pack()).escalation_stage.value
+        except RuntimeError:
+            return None
+
     def _current_escalation_decision_surface(self) -> EscalationDecision:
         """Current escalation decision surface, favoring workflow state when present."""
         if self._escalation_review is not None:
@@ -2130,6 +2234,9 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         "ei_degraded_reasons": list(snap.ei_degraded_reasons),
         "campaign": (campaign_workflow_state_to_dict(snap.campaign) if snap.campaign is not None else None),
         "review": (review_workflow_state_to_dict(snap.review) if snap.review is not None else None),
+        "sleeve_portfolio": (
+            sleeve_portfolio_snapshot_to_dict(snap.sleeve_portfolio) if snap.sleeve_portfolio is not None else None
+        ),
         "escalation_review": (
             escalation_workflow_state_to_dict(snap.escalation_review) if snap.escalation_review is not None else None
         ),
