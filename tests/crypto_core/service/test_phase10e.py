@@ -71,6 +71,11 @@ from crypto_core.service.service_orchestrator import (
     operator_snapshot_to_dict,
     review_workflow_state_to_dict,
 )
+from crypto_core.service.sleeve_portfolio import (
+    CryptoSleeveState,
+    CryptoSleeveStatus,
+    CryptoSleeveType,
+)
 from crypto_core.session.models import PaperSessionStatus
 
 # ---------------------------------------------------------------------------
@@ -425,6 +430,32 @@ def _make_campaign_report(
     )
 
 
+def _make_sleeve_states() -> tuple[CryptoSleeveState, ...]:
+    return (
+        CryptoSleeveState(
+            sleeve_id="micro-1",
+            sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+            status=CryptoSleeveStatus.ALLOCATED,
+            target_allocation=0.45,
+            active_allocation=0.45,
+        ),
+        CryptoSleeveState(
+            sleeve_id="carry-1",
+            sleeve_type=CryptoSleeveType.CARRY,
+            status=CryptoSleeveStatus.BLOCKED,
+            target_allocation=0.20,
+            blocked_allocation=0.20,
+            blocked_reasons=("readiness_pending",),
+            reason_summary="readiness_pending",
+        ),
+        CryptoSleeveState(
+            sleeve_id="trend-1",
+            sleeve_type=CryptoSleeveType.TREND,
+            status=CryptoSleeveStatus.ENABLED,
+        ),
+    )
+
+
 def _make_mock_service(
     service_status: ServiceStatus | None = None,
 ) -> MagicMock:
@@ -754,6 +785,8 @@ class TestOperatorSnapshot:
         assert snap.trading_enabled is True
         assert snap.campaign is None
         assert snap.review is None
+        assert snap.sleeve_portfolio is not None
+        assert snap.sleeve_portfolio.allocation.unallocated_share == pytest.approx(1.0)
         assert snap.provisional_recommendation is None
 
     def test_snapshot_with_active_campaign(self):
@@ -850,6 +883,17 @@ class TestOperatorSnapshot:
         final = orch.finalize_review()
         snap = orch.operator_snapshot()
         assert snap.provisional_recommendation == final.verdict
+
+    def test_snapshot_with_configured_sleeves(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(service=svc)
+        orch.set_sleeve_portfolio(_make_sleeve_states())
+
+        snap = orch.operator_snapshot()
+        assert snap.sleeve_portfolio is not None
+        assert snap.sleeve_portfolio.enabled_sleeve_ids == ("micro-1", "trend-1")
+        assert snap.sleeve_portfolio.blocked_sleeve_ids == ("carry-1",)
+        assert snap.sleeve_portfolio.allocation.unallocated_share == pytest.approx(0.35)
 
 
 # ---------------------------------------------------------------------------
@@ -953,8 +997,18 @@ class TestReportingAPI:
         assert "service_mode" in d
         assert "campaign" in d
         assert "review" in d
+        assert "sleeve_portfolio" in d
         assert "evidence" in d
         assert "readiness_level" in d
+
+    def test_sleeve_portfolio_dict(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(service=svc)
+        orch.set_sleeve_portfolio(_make_sleeve_states())
+
+        portfolio = orch.sleeve_portfolio_dict()
+        assert portfolio["enabled_sleeve_ids"] == ["micro-1", "trend-1"]
+        assert portfolio["allocation"]["unallocated_share"] == pytest.approx(0.35)
 
     def test_campaign_report_dict_none(self):
         svc = _make_mock_service()
@@ -1488,6 +1542,31 @@ class TestPersistenceRestore:
         with pytest.raises(ReviewWorkflowCorruptError, match="Missing campaign"):
             orch2.restore_review({})
 
+    def test_sleeve_portfolio_export_load_roundtrip(self, tmp_path: Path):
+        svc = _make_mock_service()
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        orch = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store,
+            readiness_level="paper_live",
+        )
+        orch.set_sleeve_portfolio(_make_sleeve_states())
+
+        result = orch.export_sleeve_portfolio()
+        assert result.success is True
+
+        orch2 = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store,
+            readiness_level="paper_live",
+        )
+        loaded = orch2.load_sleeve_portfolio()
+        assert loaded.enabled_sleeve_ids == ("micro-1", "trend-1")
+        assert orch2.sleeve_portfolio_snapshot().blocked_sleeve_ids == ("carry-1",)
+
     def test_escalation_review_persist_restore_roundtrip(self, tmp_path: Path):
         svc = _make_mock_service()
         store = EvidenceStore(
@@ -1618,6 +1697,7 @@ class TestSerialization:
         assert d["insufficient_reasons"] == ["min_campaigns"]
 
     def test_operator_snapshot_to_dict(self):
+        sleeve_portfolio = ServiceOrchestrator(service=_make_mock_service()).set_sleeve_portfolio(_make_sleeve_states())
         snap = OperatorSnapshot(
             service_mode="running",
             trading_enabled=True,
@@ -1639,11 +1719,13 @@ class TestSerialization:
             ),
             provisional_recommendation=None,
             recommendation_summary="No review.",
+            sleeve_portfolio=sleeve_portfolio,
         )
         d = operator_snapshot_to_dict(snap)
         assert d["service_mode"] == "running"
         assert d["campaign"] is None
         assert d["review"] is None
+        assert d["sleeve_portfolio"] is not None
         assert d["escalation_review"] is None
         assert isinstance(d["evidence"], dict)
 

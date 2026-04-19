@@ -44,8 +44,10 @@ from crypto_core.service.artifact_export import (
     escalation_decision_why_not_higher,
     export_escalation_decision,
     export_operator_decision_pack,
+    export_sleeve_portfolio_snapshot,
     load_escalation_decision,
     load_operator_decision_pack,
+    load_sleeve_portfolio_snapshot,
 )
 from crypto_core.service.campaign import (
     AcceptanceResult,
@@ -80,6 +82,18 @@ from crypto_core.service.promotion_review_controller import (
     ReviewWorkflowCorruptError,
     current_review_snapshot_to_dict,
     final_review_report_to_dict,
+)
+from crypto_core.service.sleeve_portfolio import (
+    CryptoSleeveState,
+    CryptoSleeveStatus,
+    CryptoSleeveType,
+    SleevePortfolioCorruptError,
+    SleevePortfolioValidationError,
+    build_sleeve_portfolio_snapshot,
+    crypto_sleeve_state_from_dict,
+    crypto_sleeve_state_to_dict,
+    sleeve_portfolio_snapshot_from_dict,
+    sleeve_portfolio_snapshot_to_dict,
 )
 
 # ---------------------------------------------------------------------------
@@ -1569,4 +1583,193 @@ class TestEscalationReviewController:
 
         first = current_escalation_review_snapshot_to_dict(controller.current_snapshot())
         second = current_escalation_review_snapshot_to_dict(controller.current_snapshot())
+        assert first == second
+
+
+class TestSleevePortfolioContracts:
+    def test_sleeve_model_construction_and_roundtrip(self):
+        sleeve = CryptoSleeveState(
+            sleeve_id="micro-1",
+            sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+            status=CryptoSleeveStatus.ALLOCATED,
+            target_allocation=0.40,
+            active_allocation=0.40,
+            readiness_level="paper_live",
+            escalation_stage="paper_only",
+        )
+
+        restored = crypto_sleeve_state_from_dict(crypto_sleeve_state_to_dict(sleeve))
+        assert restored == sleeve
+
+    def test_allocation_validation_fail_closed(self):
+        with pytest.raises(SleevePortfolioValidationError, match="cannot be negative"):
+            build_sleeve_portfolio_snapshot(
+                sleeves=(
+                    CryptoSleeveState(
+                        sleeve_id="bad",
+                        sleeve_type=CryptoSleeveType.TREND,
+                        status=CryptoSleeveStatus.ALLOCATED,
+                        target_allocation=-0.1,
+                        active_allocation=-0.1,
+                    ),
+                ),
+                as_of_ns=_T0_NS,
+            )
+
+        with pytest.raises(SleevePortfolioValidationError, match=r"must equal active \+ blocked \+ disabled"):
+            build_sleeve_portfolio_snapshot(
+                sleeves=(
+                    CryptoSleeveState(
+                        sleeve_id="bad-split",
+                        sleeve_type=CryptoSleeveType.CARRY,
+                        status=CryptoSleeveStatus.BLOCKED,
+                        target_allocation=0.20,
+                        blocked_allocation=0.10,
+                        blocked_reasons=("readiness_pending",),
+                        reason_summary="readiness_pending",
+                    ),
+                ),
+                as_of_ns=_T0_NS,
+            )
+
+    def test_portfolio_snapshot_serialization_enabled_blocked_and_unallocated(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.40,
+                    active_allocation=0.40,
+                ),
+                CryptoSleeveState(
+                    sleeve_id="carry-1",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.25,
+                    blocked_allocation=0.25,
+                    blocked_reasons=("readiness_pending",),
+                    reason_summary="readiness_pending",
+                ),
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ENABLED,
+                ),
+                CryptoSleeveState(
+                    sleeve_id="event-1",
+                    sleeve_type=CryptoSleeveType.EVENT_VOL,
+                    status=CryptoSleeveStatus.DEFINED,
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        assert snapshot.enabled_sleeve_ids == ("micro-1", "trend-1")
+        assert snapshot.blocked_sleeve_ids == ("carry-1",)
+        assert snapshot.allocated_sleeve_ids == ("micro-1",)
+        assert snapshot.allocation.target_allocated_share == pytest.approx(0.65)
+        assert snapshot.allocation.blocked_allocated_share == pytest.approx(0.25)
+        assert snapshot.allocation.unallocated_share == pytest.approx(0.35)
+
+        restored = sleeve_portfolio_snapshot_from_dict(sleeve_portfolio_snapshot_to_dict(snapshot))
+        assert restored == snapshot
+
+    def test_backward_compatibility_empty_portfolio_is_conservative(self):
+        snapshot = build_sleeve_portfolio_snapshot(as_of_ns=_T0_NS)
+
+        assert snapshot.sleeves == ()
+        assert snapshot.allocation.total_sleeves == 0
+        assert snapshot.allocation.unallocated_share == pytest.approx(1.0)
+        assert "No explicit sleeves configured" in snapshot.summary
+
+    def test_artifact_export_roundtrip(self, tmp_path: Path):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.60,
+                    active_allocation=0.60,
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+        )
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+
+        result = export_sleeve_portfolio_snapshot(snapshot=snapshot, evidence_store=store)
+        assert result.success is True
+
+        loaded = load_sleeve_portfolio_snapshot(evidence_store=store)
+        assert loaded == snapshot
+
+    def test_sleeve_portfolio_from_dict_fail_closed(self):
+        payload = {
+            "as_of_ns": _T0_NS,
+            "sleeves": [
+                {
+                    "sleeve_id": "carry-1",
+                    "sleeve_type": "carry",
+                    "status": "blocked",
+                    "target_allocation": 0.25,
+                    "active_allocation": 0.0,
+                    "blocked_allocation": 0.25,
+                    "disabled_allocation": 0.0,
+                    "blocked_reasons": ["readiness_pending"],
+                    "reason_summary": "readiness_pending",
+                    "readiness_level": None,
+                    "escalation_stage": None,
+                }
+            ],
+            "allocation": {
+                "target_allocated_share": 0.10,
+                "active_allocated_share": 0.0,
+                "blocked_allocated_share": 0.10,
+                "disabled_allocated_share": 0.0,
+                "unallocated_share": 0.90,
+                "total_sleeves": 1,
+                "defined_sleeves": 0,
+                "enabled_sleeves": 0,
+                "allocated_sleeves": 0,
+                "blocked_sleeves": 1,
+                "disabled_sleeves": 0,
+            },
+            "enabled_sleeve_ids": [],
+            "blocked_sleeve_ids": ["carry-1"],
+            "allocated_sleeve_ids": [],
+            "blocked_reason_summaries": ["carry-1:readiness_pending"],
+            "summary": "bad",
+            "readiness_level": "paper_live",
+            "readiness_is_supportive": True,
+            "escalation_allowed_next_step": None,
+            "external_regime_execution_blocked": False,
+        }
+
+        with pytest.raises(SleevePortfolioCorruptError, match="allocation summary"):
+            sleeve_portfolio_snapshot_from_dict(payload)
+
+    def test_sleeve_portfolio_deterministic_replay_same_input(self):
+        sleeves = (
+            CryptoSleeveState(
+                sleeve_id="trend-1",
+                sleeve_type=CryptoSleeveType.TREND,
+                status=CryptoSleeveStatus.DISABLED,
+                target_allocation=0.15,
+                disabled_allocation=0.15,
+                reason_summary="disabled_by_policy",
+            ),
+        )
+
+        first = sleeve_portfolio_snapshot_to_dict(build_sleeve_portfolio_snapshot(sleeves=sleeves, as_of_ns=_T0_NS))
+        second = sleeve_portfolio_snapshot_to_dict(build_sleeve_portfolio_snapshot(sleeves=sleeves, as_of_ns=_T0_NS))
         assert first == second
