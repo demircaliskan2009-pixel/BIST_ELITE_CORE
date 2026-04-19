@@ -105,6 +105,8 @@ from crypto_core.service.sleeve_portfolio import (
     sleeve_allocation_policy_to_dict,
     sleeve_effective_allocation_summary_to_dict,
     sleeve_portfolio_snapshot_to_dict,
+    sleeve_qualification_result_to_dict,
+    sleeve_qualification_summary_to_dict,
 )
 from crypto_core.service.sleeve_portfolio_controller import (
     SleeveOperatorOverride,
@@ -460,6 +462,17 @@ class ServiceOrchestrator:
     def sleeve_allocation_result_dict(self) -> dict:
         """Serialize the current effective sleeve allocation result to a plain dict."""
         return sleeve_effective_allocation_summary_to_dict(self.sleeve_portfolio_snapshot().effective_allocation)
+
+    def sleeve_qualification_summary_dict(self) -> dict:
+        """Serialize the current sleeve qualification summary to a plain dict."""
+        return sleeve_qualification_summary_to_dict(self.sleeve_portfolio_snapshot().qualification)
+
+    def sleeve_qualification_result_dict(self) -> dict:
+        """Serialize per-sleeve qualification results keyed by sleeve id."""
+        snapshot = self.sleeve_portfolio_snapshot()
+        return {
+            sleeve.sleeve_id: sleeve_qualification_result_to_dict(sleeve.qualification) for sleeve in snapshot.sleeves
+        }
 
     def export_sleeve_portfolio(self):
         """Persist the current crypto sleeve portfolio snapshot via EvidenceStore."""

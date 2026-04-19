@@ -659,6 +659,9 @@ class SleevePortfolioController:
             state.disabled_allocation,
             state.reason_summary,
             tuple(state.required_changes),
+            state.qualification.status.value,
+            tuple(state.qualification.missing_evidence),
+            tuple(state.qualification.blocking_reasons),
         )
 
 

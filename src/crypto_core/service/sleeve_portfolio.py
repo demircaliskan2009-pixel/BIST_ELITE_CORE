@@ -22,6 +22,9 @@ import math
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
+from crypto_core.service.promotion_review import EvidenceSufficiency
+from crypto_core.service.readiness import ReadinessLevel, level_at_least
+
 _ALLOCATION_EPSILON = 1e-9
 
 
@@ -60,6 +63,16 @@ class SleeveInactiveCapitalMode(str, Enum):
     REDISTRIBUTE_PRO_RATA = "redistribute_pro_rata"
 
 
+class SleeveQualificationStatus(str, Enum):
+    """Operator-facing sleeve qualification state."""
+
+    DEFINED_ONLY = "defined_only"
+    WEAK_EVIDENCE = "weak_evidence"
+    PAPER_QUALIFIED = "paper_qualified"
+    BLOCKED = "blocked"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+
+
 class SleevePortfolioValidationError(ValueError):
     """Raised when sleeve portfolio state is invalid."""
 
@@ -76,6 +89,34 @@ class SleeveReason:
     code: str
     summary: str
     required_change: str = ""
+
+
+@dataclass(frozen=True)
+class SleeveEvidenceState:
+    """Compact deterministic sleeve evidence posture."""
+
+    readiness_support: EvidenceSufficiency = EvidenceSufficiency.UNAVAILABLE
+    escalation_support: EvidenceSufficiency = EvidenceSufficiency.UNAVAILABLE
+    external_regime_support: EvidenceSufficiency = EvidenceSufficiency.UNAVAILABLE
+    allocation_eligibility: EvidenceSufficiency = EvidenceSufficiency.UNAVAILABLE
+    missing_evidence: tuple[str, ...] = field(default_factory=tuple)
+    blocking_reasons: tuple[str, ...] = field(default_factory=tuple)
+    supportive: bool = False
+    summary: str = ""
+
+
+@dataclass(frozen=True)
+class SleeveQualificationResult:
+    """Sleeve-level qualification result for operator surfaces."""
+
+    status: SleeveQualificationStatus = SleeveQualificationStatus.INSUFFICIENT_EVIDENCE
+    qualified_for_paper_allocation: bool = False
+    governance_blocked: bool = False
+    missing_evidence: tuple[str, ...] = field(default_factory=tuple)
+    blocking_reasons: tuple[str, ...] = field(default_factory=tuple)
+    reason_summary: str = ""
+    next_step: str = "Provide missing governance evidence before paper qualification."
+    evidence: SleeveEvidenceState = field(default_factory=SleeveEvidenceState)
 
 
 @dataclass(frozen=True)
@@ -103,6 +144,7 @@ class CryptoSleeveState:
     reasons: tuple[SleeveReason, ...] = field(default_factory=tuple)
     required_changes: tuple[str, ...] = field(default_factory=tuple)
     effective_allocation: float = 0.0
+    qualification: SleeveQualificationResult = field(default_factory=SleeveQualificationResult)
 
 
 @dataclass(frozen=True)
@@ -144,6 +186,23 @@ class SleeveEffectiveAllocationSummary:
 
 
 @dataclass(frozen=True)
+class SleeveQualificationSummary:
+    """Portfolio-wide sleeve qualification summary."""
+
+    total_sleeves: int
+    defined_only_sleeves: int
+    weak_evidence_sleeves: int
+    paper_qualified_sleeves: int
+    blocked_sleeves: int
+    insufficient_evidence_sleeves: int
+    qualified_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    weak_evidence_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    blocked_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    insufficient_evidence_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    summary: str = ""
+
+
+@dataclass(frozen=True)
 class SleevePortfolioSnapshot:
     """Operator-facing sleeve portfolio snapshot."""
 
@@ -176,6 +235,21 @@ class SleevePortfolioSnapshot:
             recipient_sleeve_ids=(),
         )
     )
+    qualification: SleeveQualificationSummary = field(
+        default_factory=lambda: SleeveQualificationSummary(
+            total_sleeves=0,
+            defined_only_sleeves=0,
+            weak_evidence_sleeves=0,
+            paper_qualified_sleeves=0,
+            blocked_sleeves=0,
+            insufficient_evidence_sleeves=0,
+            qualified_sleeve_ids=(),
+            weak_evidence_sleeve_ids=(),
+            blocked_sleeve_ids=(),
+            insufficient_evidence_sleeve_ids=(),
+            summary="No sleeve qualification available.",
+        )
+    )
     enabled_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
     blocked_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
     allocated_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
@@ -188,6 +262,17 @@ class SleevePortfolioSnapshot:
     workflow_status: str = "static"
     comparison_to_previous: dict = field(default_factory=dict)
     history_summary: dict = field(default_factory=dict)
+
+
+_ESCALATION_STAGE_RANK = {
+    "hold": 0,
+    "inconclusive": 1,
+    "reject": 2,
+    "paper_only": 3,
+    "calibrated_paper": 4,
+    "shadow_live_review_eligible": 5,
+    "tiny_cap_live_review_eligible": 6,
+}
 
 
 def _require_non_empty_str(value: object, field_name: str) -> str:
@@ -226,6 +311,17 @@ def _tuple_of_reasons(value: object, field_name: str) -> tuple[SleeveReason, ...
     if not isinstance(value, (list, tuple)):
         raise SleevePortfolioCorruptError(f"Sleeve portfolio field {field_name!r} must be a list/tuple")
     return tuple(item if isinstance(item, SleeveReason) else sleeve_reason_from_dict(item) for item in value)
+
+
+def _tuple_of_evidence_sufficiency(value: object, field_name: str) -> EvidenceSufficiency:
+    if isinstance(value, EvidenceSufficiency):
+        return value
+    if not isinstance(value, str) or not value:
+        raise SleevePortfolioCorruptError(f"Sleeve portfolio field {field_name!r} must be a non-empty str")
+    try:
+        return EvidenceSufficiency(value)
+    except ValueError as exc:
+        raise SleevePortfolioCorruptError(f"Sleeve portfolio field {field_name!r} is invalid") from exc
 
 
 def _require_float_like(value: object, field_name: str) -> float:
@@ -306,6 +402,11 @@ def _validate_sleeve_state(state: CryptoSleeveState) -> CryptoSleeveState:
 
     required_changes = tuple(item for item in state.required_changes if item)
     reasons = tuple(state.reasons)
+    qualification = (
+        state.qualification
+        if isinstance(state.qualification, SleeveQualificationResult)
+        else SleeveQualificationResult()
+    )
     if reasons:
         for item in reasons:
             if not item.code:
@@ -330,7 +431,273 @@ def _validate_sleeve_state(state: CryptoSleeveState) -> CryptoSleeveState:
         reasons=reasons,
         required_changes=required_changes,
         effective_allocation=effective_allocation,
+        qualification=qualification,
     )
+
+
+def _readiness_sufficiency(
+    required_level: str | None, readiness_level: str | None, readiness_is_supportive: bool
+) -> EvidenceSufficiency:
+    if not required_level:
+        return EvidenceSufficiency.SUFFICIENT
+    if readiness_level is None:
+        return EvidenceSufficiency.UNAVAILABLE
+    try:
+        current_level = ReadinessLevel(readiness_level)
+    except ValueError:
+        current_level = ReadinessLevel.NOT_ASSESSED
+    if current_level == ReadinessLevel.NOT_ASSESSED:
+        return EvidenceSufficiency.UNAVAILABLE
+    try:
+        minimum_level = ReadinessLevel(required_level)
+    except ValueError:
+        return EvidenceSufficiency.INSUFFICIENT
+    if readiness_is_supportive and level_at_least(current_level, minimum_level):
+        return EvidenceSufficiency.SUFFICIENT
+    return EvidenceSufficiency.INSUFFICIENT
+
+
+def _escalation_sufficiency(
+    required_stage: str | None, escalation_allowed_next_step: str | None
+) -> EvidenceSufficiency:
+    if not required_stage:
+        return EvidenceSufficiency.SUFFICIENT
+    required_rank = _ESCALATION_STAGE_RANK.get(required_stage, -1)
+    paper_only_rank = _ESCALATION_STAGE_RANK["paper_only"]
+    if escalation_allowed_next_step is None:
+        if required_rank > paper_only_rank:
+            return EvidenceSufficiency.UNAVAILABLE
+        return EvidenceSufficiency.SUFFICIENT
+    current_rank = _ESCALATION_STAGE_RANK.get(escalation_allowed_next_step, -1)
+    if required_rank >= 0 and current_rank >= required_rank:
+        return EvidenceSufficiency.SUFFICIENT
+    return EvidenceSufficiency.INSUFFICIENT
+
+
+def _external_regime_sufficiency(external_regime_execution_blocked: bool | None) -> EvidenceSufficiency:
+    if external_regime_execution_blocked is None:
+        return EvidenceSufficiency.UNAVAILABLE
+    if external_regime_execution_blocked:
+        return EvidenceSufficiency.INSUFFICIENT
+    return EvidenceSufficiency.SUFFICIENT
+
+
+def _allocation_eligibility_sufficiency(status: CryptoSleeveStatus) -> EvidenceSufficiency:
+    if status == CryptoSleeveStatus.ALLOCATED:
+        return EvidenceSufficiency.SUFFICIENT
+    if status == CryptoSleeveStatus.ENABLED:
+        return EvidenceSufficiency.MARGINAL
+    if status == CryptoSleeveStatus.DEFINED:
+        return EvidenceSufficiency.UNAVAILABLE
+    return EvidenceSufficiency.INSUFFICIENT
+
+
+def _build_sleeve_evidence_state(
+    sleeve: CryptoSleeveState,
+    *,
+    readiness_level: str | None,
+    readiness_is_supportive: bool,
+    escalation_allowed_next_step: str | None,
+    external_regime_execution_blocked: bool | None,
+) -> SleeveEvidenceState:
+    readiness_support = _readiness_sufficiency(sleeve.readiness_level, readiness_level, readiness_is_supportive)
+    escalation_support = _escalation_sufficiency(sleeve.escalation_stage, escalation_allowed_next_step)
+    external_regime_support = _external_regime_sufficiency(external_regime_execution_blocked)
+    allocation_eligibility = _allocation_eligibility_sufficiency(sleeve.status)
+
+    missing_evidence = [item.code for item in sleeve.reasons if item.source == SleeveReasonSource.EVIDENCE]
+    if readiness_support == EvidenceSufficiency.UNAVAILABLE:
+        missing_evidence.append("readiness_unavailable")
+    elif readiness_support == EvidenceSufficiency.INSUFFICIENT:
+        missing_evidence.append("readiness_not_supportive")
+    if escalation_support == EvidenceSufficiency.UNAVAILABLE:
+        missing_evidence.append("escalation_unavailable")
+    elif escalation_support == EvidenceSufficiency.INSUFFICIENT:
+        missing_evidence.append("escalation_not_supportive")
+    if external_regime_support == EvidenceSufficiency.UNAVAILABLE:
+        missing_evidence.append("external_regime_unavailable")
+    elif external_regime_support == EvidenceSufficiency.INSUFFICIENT:
+        missing_evidence.append("external_regime_not_supportive")
+    if allocation_eligibility == EvidenceSufficiency.UNAVAILABLE:
+        missing_evidence.append("allocation_not_requested")
+
+    blocking_reasons = tuple(
+        dict.fromkeys(
+            item.code
+            for item in sleeve.reasons
+            if item.source
+            in {
+                SleeveReasonSource.CONFIGURATION,
+                SleeveReasonSource.OPERATOR,
+                SleeveReasonSource.GOVERNANCE,
+            }
+        )
+    )
+    if not blocking_reasons and sleeve.status == CryptoSleeveStatus.BLOCKED:
+        blocking_reasons = tuple(sleeve.blocked_reasons) or ("configured_blocked",)
+    if not blocking_reasons and sleeve.status == CryptoSleeveStatus.DISABLED:
+        blocking_reasons = ("configured_disabled",)
+    supportive = (
+        readiness_support == EvidenceSufficiency.SUFFICIENT
+        and escalation_support == EvidenceSufficiency.SUFFICIENT
+        and external_regime_support == EvidenceSufficiency.SUFFICIENT
+        and not blocking_reasons
+    )
+    parts = [
+        f"readiness={readiness_support.value}",
+        f"escalation={escalation_support.value}",
+        f"external_regime={external_regime_support.value}",
+        f"allocation={allocation_eligibility.value}",
+    ]
+    if blocking_reasons:
+        parts.append(f"blocking={','.join(blocking_reasons)}")
+    if missing_evidence:
+        parts.append(f"missing={','.join(dict.fromkeys(missing_evidence))}")
+    return SleeveEvidenceState(
+        readiness_support=readiness_support,
+        escalation_support=escalation_support,
+        external_regime_support=external_regime_support,
+        allocation_eligibility=allocation_eligibility,
+        missing_evidence=tuple(dict.fromkeys(missing_evidence)),
+        blocking_reasons=blocking_reasons,
+        supportive=supportive,
+        summary="; ".join(parts),
+    )
+
+
+def _build_sleeve_qualification_result(
+    sleeve: CryptoSleeveState,
+    *,
+    readiness_level: str | None,
+    readiness_is_supportive: bool,
+    escalation_allowed_next_step: str | None,
+    external_regime_execution_blocked: bool | None,
+) -> SleeveQualificationResult:
+    evidence = _build_sleeve_evidence_state(
+        sleeve,
+        readiness_level=readiness_level,
+        readiness_is_supportive=readiness_is_supportive,
+        escalation_allowed_next_step=escalation_allowed_next_step,
+        external_regime_execution_blocked=external_regime_execution_blocked,
+    )
+    blocking_reasons = evidence.blocking_reasons
+    missing_evidence = evidence.missing_evidence
+    governance_blocked = sleeve.status == CryptoSleeveStatus.BLOCKED and any(
+        item.source == SleeveReasonSource.GOVERNANCE for item in sleeve.reasons
+    )
+
+    if sleeve.status == CryptoSleeveStatus.DEFINED:
+        status = SleeveQualificationStatus.DEFINED_ONLY
+    elif sleeve.status in {CryptoSleeveStatus.BLOCKED, CryptoSleeveStatus.DISABLED}:
+        status = SleeveQualificationStatus.BLOCKED
+    elif any(
+        item in {EvidenceSufficiency.UNAVAILABLE, EvidenceSufficiency.INSUFFICIENT}
+        for item in (evidence.readiness_support, evidence.escalation_support, evidence.external_regime_support)
+    ):
+        status = SleeveQualificationStatus.INSUFFICIENT_EVIDENCE
+    elif evidence.allocation_eligibility == EvidenceSufficiency.MARGINAL:
+        status = SleeveQualificationStatus.WEAK_EVIDENCE
+    else:
+        status = SleeveQualificationStatus.PAPER_QUALIFIED
+
+    if sleeve.required_changes:
+        next_step = sleeve.required_changes[0]
+    elif status == SleeveQualificationStatus.DEFINED_ONLY:
+        next_step = "Enable sleeve after operator review."
+    elif status == SleeveQualificationStatus.WEAK_EVIDENCE:
+        next_step = "Assign explicit paper allocation after operator review."
+    elif status == SleeveQualificationStatus.PAPER_QUALIFIED:
+        next_step = "Continue paper monitoring and governance revalidation."
+    elif status == SleeveQualificationStatus.BLOCKED:
+        next_step = (
+            "Use enable_sleeve or unblock_sleeve after review."
+            if sleeve.status == CryptoSleeveStatus.BLOCKED
+            else "Clear the blocking condition before paper qualification."
+        )
+    else:
+        next_step = "Provide missing governance evidence before paper qualification."
+
+    reason_parts = [sleeve.reason_summary or evidence.summary]
+    if missing_evidence and not sleeve.reason_summary:
+        reason_parts.append(f"missing={','.join(missing_evidence)}")
+    reason_summary = "; ".join(part for part in reason_parts if part)
+    return SleeveQualificationResult(
+        status=status,
+        qualified_for_paper_allocation=status == SleeveQualificationStatus.PAPER_QUALIFIED,
+        governance_blocked=governance_blocked,
+        missing_evidence=missing_evidence,
+        blocking_reasons=blocking_reasons,
+        reason_summary=reason_summary,
+        next_step=next_step,
+        evidence=evidence,
+    )
+
+
+def _apply_sleeve_qualification(
+    sleeves: tuple[CryptoSleeveState, ...],
+    *,
+    readiness_level: str | None,
+    readiness_is_supportive: bool,
+    escalation_allowed_next_step: str | None,
+    external_regime_execution_blocked: bool | None,
+) -> tuple[tuple[CryptoSleeveState, ...], SleeveQualificationSummary]:
+    qualified_sleeves: list[CryptoSleeveState] = []
+    for sleeve in sleeves:
+        qualification = _build_sleeve_qualification_result(
+            sleeve,
+            readiness_level=readiness_level,
+            readiness_is_supportive=readiness_is_supportive,
+            escalation_allowed_next_step=escalation_allowed_next_step,
+            external_regime_execution_blocked=external_regime_execution_blocked,
+        )
+        qualified_sleeves.append(replace(sleeve, qualification=qualification))
+
+    resolved = tuple(qualified_sleeves)
+    summary = SleeveQualificationSummary(
+        total_sleeves=len(resolved),
+        defined_only_sleeves=sum(
+            1 for sleeve in resolved if sleeve.qualification.status == SleeveQualificationStatus.DEFINED_ONLY
+        ),
+        weak_evidence_sleeves=sum(
+            1 for sleeve in resolved if sleeve.qualification.status == SleeveQualificationStatus.WEAK_EVIDENCE
+        ),
+        paper_qualified_sleeves=sum(
+            1 for sleeve in resolved if sleeve.qualification.status == SleeveQualificationStatus.PAPER_QUALIFIED
+        ),
+        blocked_sleeves=sum(
+            1 for sleeve in resolved if sleeve.qualification.status == SleeveQualificationStatus.BLOCKED
+        ),
+        insufficient_evidence_sleeves=sum(
+            1 for sleeve in resolved if sleeve.qualification.status == SleeveQualificationStatus.INSUFFICIENT_EVIDENCE
+        ),
+        qualified_sleeve_ids=tuple(
+            sleeve.sleeve_id
+            for sleeve in resolved
+            if sleeve.qualification.status == SleeveQualificationStatus.PAPER_QUALIFIED
+        ),
+        weak_evidence_sleeve_ids=tuple(
+            sleeve.sleeve_id
+            for sleeve in resolved
+            if sleeve.qualification.status == SleeveQualificationStatus.WEAK_EVIDENCE
+        ),
+        blocked_sleeve_ids=tuple(
+            sleeve.sleeve_id for sleeve in resolved if sleeve.qualification.status == SleeveQualificationStatus.BLOCKED
+        ),
+        insufficient_evidence_sleeve_ids=tuple(
+            sleeve.sleeve_id
+            for sleeve in resolved
+            if sleeve.qualification.status == SleeveQualificationStatus.INSUFFICIENT_EVIDENCE
+        ),
+        summary=(
+            f"qualified={sum(1 for sleeve in resolved if sleeve.qualification.status == SleeveQualificationStatus.PAPER_QUALIFIED)}; "
+            f"weak={sum(1 for sleeve in resolved if sleeve.qualification.status == SleeveQualificationStatus.WEAK_EVIDENCE)}; "
+            f"blocked={sum(1 for sleeve in resolved if sleeve.qualification.status == SleeveQualificationStatus.BLOCKED)}; "
+            f"insufficient={sum(1 for sleeve in resolved if sleeve.qualification.status == SleeveQualificationStatus.INSUFFICIENT_EVIDENCE)}"
+        )
+        if resolved
+        else "No sleeve qualification available.",
+    )
+    return resolved, summary
 
 
 def _compute_effective_allocation(
@@ -452,8 +819,15 @@ def build_sleeve_portfolio_snapshot(
         allocation,
         resolved_policy,
     )
+    qualified_sleeves, qualification = _apply_sleeve_qualification(
+        effective_sleeves,
+        readiness_level=readiness_level,
+        readiness_is_supportive=readiness_is_supportive,
+        escalation_allowed_next_step=escalation_allowed_next_step,
+        external_regime_execution_blocked=external_regime_execution_blocked,
+    )
 
-    if not effective_sleeves:
+    if not qualified_sleeves:
         summary = "No explicit sleeves configured; sleeve-level capital remains fully unallocated."
     else:
         summary = (
@@ -463,13 +837,15 @@ def build_sleeve_portfolio_snapshot(
         )
         if not _nearly_equal(allocation.active_allocated_share, effective_allocation.effective_allocated_share):
             summary += f"; effective_allocated_share={effective_allocation.effective_allocated_share:.3f}"
+        summary += f"; qualified={qualification.paper_qualified_sleeves}; insufficient={qualification.insufficient_evidence_sleeves}"
 
     return SleevePortfolioSnapshot(
         as_of_ns=as_of_ns,
-        sleeves=effective_sleeves,
+        sleeves=qualified_sleeves,
         allocation=allocation,
         allocation_policy=resolved_policy,
         effective_allocation=effective_allocation,
+        qualification=qualification,
         enabled_sleeve_ids=enabled_ids,
         blocked_sleeve_ids=blocked_ids,
         allocated_sleeve_ids=allocated_ids,
@@ -528,6 +904,7 @@ def crypto_sleeve_state_to_dict(state: CryptoSleeveState) -> dict:
         "reasons": [sleeve_reason_to_dict(item) for item in state.reasons],
         "required_changes": list(state.required_changes),
         "effective_allocation": state.effective_allocation,
+        "qualification": sleeve_qualification_result_to_dict(state.qualification),
     }
 
 
@@ -552,6 +929,11 @@ def crypto_sleeve_state_from_dict(data: dict) -> CryptoSleeveState:
             reasons=_tuple_of_reasons(data.get("reasons", ()), "reasons"),
             required_changes=_tuple_of_strings(data.get("required_changes", ()), "required_changes"),
             effective_allocation=_require_float_like(data.get("effective_allocation", 0.0), "effective_allocation"),
+            qualification=(
+                SleeveQualificationResult()
+                if data.get("qualification") is None
+                else sleeve_qualification_result_from_dict(dict(data.get("qualification")))
+            ),
         )
     except SleevePortfolioValidationError as exc:
         raise SleevePortfolioCorruptError(str(exc)) from exc
@@ -653,6 +1035,122 @@ def sleeve_effective_allocation_summary_from_dict(data: dict) -> SleeveEffective
         raise SleevePortfolioCorruptError(str(exc)) from exc
 
 
+def sleeve_evidence_state_to_dict(state: SleeveEvidenceState) -> dict:
+    """Serialize SleeveEvidenceState to a plain dict."""
+    return {
+        "readiness_support": state.readiness_support.value,
+        "escalation_support": state.escalation_support.value,
+        "external_regime_support": state.external_regime_support.value,
+        "allocation_eligibility": state.allocation_eligibility.value,
+        "missing_evidence": list(state.missing_evidence),
+        "blocking_reasons": list(state.blocking_reasons),
+        "supportive": state.supportive,
+        "summary": state.summary,
+    }
+
+
+def sleeve_evidence_state_from_dict(data: dict) -> SleeveEvidenceState:
+    """Deserialize SleeveEvidenceState from a plain dict."""
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(f"Sleeve evidence state payload must be a dict, got {type(data).__name__!r}")
+    return SleeveEvidenceState(
+        readiness_support=_tuple_of_evidence_sufficiency(data.get("readiness_support"), "readiness_support"),
+        escalation_support=_tuple_of_evidence_sufficiency(data.get("escalation_support"), "escalation_support"),
+        external_regime_support=_tuple_of_evidence_sufficiency(
+            data.get("external_regime_support"), "external_regime_support"
+        ),
+        allocation_eligibility=_tuple_of_evidence_sufficiency(
+            data.get("allocation_eligibility"), "allocation_eligibility"
+        ),
+        missing_evidence=_tuple_of_strings(data.get("missing_evidence", ()), "missing_evidence"),
+        blocking_reasons=_tuple_of_strings(data.get("blocking_reasons", ()), "blocking_reasons"),
+        supportive=_require_bool(data.get("supportive", False), "supportive"),
+        summary="" if data.get("summary", "") is None else str(data.get("summary", "")),
+    )
+
+
+def sleeve_qualification_result_to_dict(result: SleeveQualificationResult) -> dict:
+    """Serialize SleeveQualificationResult to a plain dict."""
+    return {
+        "status": result.status.value,
+        "qualified_for_paper_allocation": result.qualified_for_paper_allocation,
+        "governance_blocked": result.governance_blocked,
+        "missing_evidence": list(result.missing_evidence),
+        "blocking_reasons": list(result.blocking_reasons),
+        "reason_summary": result.reason_summary,
+        "next_step": result.next_step,
+        "evidence": sleeve_evidence_state_to_dict(result.evidence),
+    }
+
+
+def sleeve_qualification_result_from_dict(data: dict) -> SleeveQualificationResult:
+    """Deserialize SleeveQualificationResult from a plain dict."""
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Sleeve qualification result payload must be a dict, got {type(data).__name__!r}"
+        )
+    return SleeveQualificationResult(
+        status=SleeveQualificationStatus(_require_non_empty_str(data.get("status"), "status")),
+        qualified_for_paper_allocation=_require_bool(
+            data.get("qualified_for_paper_allocation", False), "qualified_for_paper_allocation"
+        ),
+        governance_blocked=_require_bool(data.get("governance_blocked", False), "governance_blocked"),
+        missing_evidence=_tuple_of_strings(data.get("missing_evidence", ()), "missing_evidence"),
+        blocking_reasons=_tuple_of_strings(data.get("blocking_reasons", ()), "blocking_reasons"),
+        reason_summary="" if data.get("reason_summary", "") is None else str(data.get("reason_summary", "")),
+        next_step=_require_non_empty_str(data.get("next_step"), "next_step"),
+        evidence=(
+            SleeveEvidenceState()
+            if data.get("evidence") is None
+            else sleeve_evidence_state_from_dict(dict(data.get("evidence")))
+        ),
+    )
+
+
+def sleeve_qualification_summary_to_dict(summary: SleeveQualificationSummary) -> dict:
+    """Serialize SleeveQualificationSummary to a plain dict."""
+    return {
+        "total_sleeves": summary.total_sleeves,
+        "defined_only_sleeves": summary.defined_only_sleeves,
+        "weak_evidence_sleeves": summary.weak_evidence_sleeves,
+        "paper_qualified_sleeves": summary.paper_qualified_sleeves,
+        "blocked_sleeves": summary.blocked_sleeves,
+        "insufficient_evidence_sleeves": summary.insufficient_evidence_sleeves,
+        "qualified_sleeve_ids": list(summary.qualified_sleeve_ids),
+        "weak_evidence_sleeve_ids": list(summary.weak_evidence_sleeve_ids),
+        "blocked_sleeve_ids": list(summary.blocked_sleeve_ids),
+        "insufficient_evidence_sleeve_ids": list(summary.insufficient_evidence_sleeve_ids),
+        "summary": summary.summary,
+    }
+
+
+def sleeve_qualification_summary_from_dict(data: dict) -> SleeveQualificationSummary:
+    """Deserialize SleeveQualificationSummary from a plain dict."""
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Sleeve qualification summary payload must be a dict, got {type(data).__name__!r}"
+        )
+    return SleeveQualificationSummary(
+        total_sleeves=_require_int(data.get("total_sleeves"), "total_sleeves"),
+        defined_only_sleeves=_require_int(data.get("defined_only_sleeves"), "defined_only_sleeves"),
+        weak_evidence_sleeves=_require_int(data.get("weak_evidence_sleeves"), "weak_evidence_sleeves"),
+        paper_qualified_sleeves=_require_int(data.get("paper_qualified_sleeves"), "paper_qualified_sleeves"),
+        blocked_sleeves=_require_int(data.get("blocked_sleeves"), "blocked_sleeves"),
+        insufficient_evidence_sleeves=_require_int(
+            data.get("insufficient_evidence_sleeves"), "insufficient_evidence_sleeves"
+        ),
+        qualified_sleeve_ids=_tuple_of_strings(data.get("qualified_sleeve_ids", ()), "qualified_sleeve_ids"),
+        weak_evidence_sleeve_ids=_tuple_of_strings(
+            data.get("weak_evidence_sleeve_ids", ()), "weak_evidence_sleeve_ids"
+        ),
+        blocked_sleeve_ids=_tuple_of_strings(data.get("blocked_sleeve_ids", ()), "blocked_sleeve_ids"),
+        insufficient_evidence_sleeve_ids=_tuple_of_strings(
+            data.get("insufficient_evidence_sleeve_ids", ()), "insufficient_evidence_sleeve_ids"
+        ),
+        summary="" if data.get("summary", "") is None else str(data.get("summary", "")),
+    )
+
+
 def sleeve_allocation_summary_from_dict(data: dict) -> SleeveAllocationSummary:
     """Deserialize SleeveAllocationSummary from a plain dict."""
     if not isinstance(data, dict):
@@ -693,6 +1191,7 @@ def sleeve_portfolio_snapshot_to_dict(snapshot: SleevePortfolioSnapshot) -> dict
         "allocation": sleeve_allocation_summary_to_dict(snapshot.allocation),
         "allocation_policy": sleeve_allocation_policy_to_dict(snapshot.allocation_policy),
         "effective_allocation": sleeve_effective_allocation_summary_to_dict(snapshot.effective_allocation),
+        "qualification": sleeve_qualification_summary_to_dict(snapshot.qualification),
         "enabled_sleeve_ids": list(snapshot.enabled_sleeve_ids),
         "blocked_sleeve_ids": list(snapshot.blocked_sleeve_ids),
         "allocated_sleeve_ids": list(snapshot.allocated_sleeve_ids),
@@ -758,6 +1257,12 @@ def sleeve_portfolio_snapshot_from_dict(data: dict) -> SleevePortfolioSnapshot:
         restored_effective = sleeve_effective_allocation_summary_from_dict(effective_allocation_value)
         if restored_effective != snapshot.effective_allocation:
             raise SleevePortfolioCorruptError("Sleeve effective allocation summary does not match policy recompute")
+
+    qualification_value = data.get("qualification")
+    if qualification_value is not None:
+        restored_qualification = sleeve_qualification_summary_from_dict(qualification_value)
+        if restored_qualification != snapshot.qualification:
+            raise SleevePortfolioCorruptError("Sleeve qualification summary does not match qualification recompute")
 
     enabled_ids = _tuple_of_strings(data.get("enabled_sleeve_ids", ()), "enabled_sleeve_ids")
     blocked_ids = _tuple_of_strings(data.get("blocked_sleeve_ids", ()), "blocked_sleeve_ids")
