@@ -24,6 +24,18 @@ from pathlib import Path
 
 import pytest
 
+from crypto_core.service.artifact_export import (
+    OperatorDecisionPack,
+    OperatorDecisionPackCorruptError,
+    decision_pack_decision_summary,
+    decision_pack_from_dict,
+    decision_pack_missing_evidence,
+    decision_pack_next_inspection,
+    decision_pack_to_dict,
+    decision_pack_why_not_promotable,
+    export_operator_decision_pack,
+    load_operator_decision_pack,
+)
 from crypto_core.service.campaign import (
     AcceptanceResult,
     AcceptanceVerdict,
@@ -1057,3 +1069,149 @@ class TestSerialization:
         assert isinstance(d["pass_criteria"], list)
         assert isinstance(d["reason_codes"], dict)
         assert isinstance(d["ext_regime_governance"], dict)
+
+
+class TestDecisionPackArtifact:
+    def test_decision_pack_to_dict_roundtrip(self):
+        pack = OperatorDecisionPack(
+            artifact_time_ns=_T0_NS,
+            review_id="rev-pack",
+            review_timestamp_ns=_T0_NS,
+            review_status="finalized",
+            promotion_verdict="promote",
+            operator_disposition="promotable",
+            decision_summary="All promotion criteria met. Evidence supports advancement.",
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            criteria_summary={
+                "promotion": {
+                    "pass_count": 3,
+                    "warning_count": 0,
+                    "fail_count": 0,
+                    "insufficient_count": 0,
+                },
+                "readiness": {
+                    "available": True,
+                    "level": "paper_live",
+                    "met": 5,
+                    "not_met": 0,
+                    "unknown": 0,
+                    "total": 5,
+                    "blocker_count": 0,
+                },
+            },
+            pass_criteria=("min_completed_campaigns",),
+            external_regime_quality="supportive",
+            external_regime_evidence_available=True,
+            external_regime_evidence_sufficient=True,
+            external_regime_governance={"campaigns_with_ext_regime": 3},
+            external_regime_summary="quality=supportive; meaningful_scenarios=3/3",
+            campaign_coverage={"campaign_count": 3},
+            reason_codes={"pass_count": 1},
+            operator_next_inspection=("promotion_ready_review",),
+            campaign_ids=("camp-1", "camp-2", "camp-3"),
+        )
+
+        d = decision_pack_to_dict(pack)
+        restored = decision_pack_from_dict(d)
+        assert restored.review_id == pack.review_id
+        assert restored.operator_disposition == "promotable"
+        assert restored.campaign_ids == pack.campaign_ids
+
+    def test_decision_pack_export_load_roundtrip(self, tmp_path: Path):
+        pack = OperatorDecisionPack(
+            artifact_time_ns=_T0_NS,
+            review_id="rev-pack",
+            review_timestamp_ns=_T0_NS,
+            review_status="collecting",
+            promotion_verdict="hold",
+            operator_disposition="hold_only",
+            decision_summary="HOLD: 1 warnings. Evidence trending but not clean.",
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            criteria_summary={"promotion": {"warning_count": 1}, "readiness": {"available": False}},
+            warning_criteria=("warn_failed_campaigns",),
+            insufficient_evidence_summary={"summary": "Need cleaner evidence."},
+            external_regime_quality="cautionary",
+            external_regime_evidence_available=True,
+            external_regime_evidence_sufficient=False,
+            external_regime_concerns=("stale_dominance",),
+            external_regime_governance={"campaigns_ext_regime_stale_dominated": 1},
+            external_regime_summary="quality=cautionary; meaningful_scenarios=2/3; stale_dominated=1",
+            campaign_coverage={"campaign_count": 3},
+            reason_codes={"warning_count": 1},
+            why_not_promotable=("warn_failed_campaigns",),
+            operator_next_inspection=("warning_criteria", "external_regime_governance"),
+            campaign_ids=("camp-1", "camp-2", "camp-3"),
+        )
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+
+        result = export_operator_decision_pack(pack=pack, evidence_store=store)
+        assert result.success is True
+
+        loaded = load_operator_decision_pack(evidence_store=store)
+        assert loaded.warning_criteria == ("warn_failed_campaigns",)
+        assert decision_pack_next_inspection(loaded)["items"] == [
+            "warning_criteria",
+            "external_regime_governance",
+        ]
+
+    def test_decision_pack_summary_helpers(self):
+        pack = OperatorDecisionPack(
+            artifact_time_ns=_T0_NS,
+            review_id="rev-pack",
+            review_timestamp_ns=_T0_NS,
+            review_status="finalized",
+            promotion_verdict="inconclusive",
+            operator_disposition="inconclusive",
+            decision_summary="Insufficient evidence: 2 coverage criteria below minimum.",
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            criteria_summary={"promotion": {"insufficient_count": 2}, "readiness": {"available": False}},
+            insufficient_evidence=("min_completed_campaigns", "min_total_fills"),
+            insufficient_evidence_summary={"summary": "Need more campaigns and fills."},
+            readiness_blockers=("operator_approval_recorded",),
+            external_regime_quality="unavailable",
+            external_regime_evidence_available=False,
+            external_regime_evidence_sufficient=False,
+            external_regime_governance={},
+            external_regime_summary="No external regime governance evidence available.",
+            campaign_coverage={"campaign_count": 1},
+            reason_codes={"insufficient_count": 2},
+            why_not_promotable=("min_completed_campaigns",),
+            operator_next_inspection=("insufficient_evidence",),
+        )
+
+        assert decision_pack_decision_summary(pack)["operator_disposition"] == "inconclusive"
+        assert decision_pack_missing_evidence(pack)["insufficient_evidence"] == [
+            "min_completed_campaigns",
+            "min_total_fills",
+        ]
+        assert decision_pack_why_not_promotable(pack)["reasons"] == ["min_completed_campaigns"]
+
+    def test_decision_pack_from_dict_fail_closed(self):
+        with pytest.raises(OperatorDecisionPackCorruptError, match="review_id"):
+            decision_pack_from_dict(
+                {
+                    "artifact_time_ns": _T0_NS,
+                    "review_timestamp_ns": _T0_NS,
+                    "review_status": "collecting",
+                    "promotion_verdict": "inconclusive",
+                    "operator_disposition": "inconclusive",
+                    "decision_summary": "missing review id",
+                    "readiness_level": "paper_live",
+                    "readiness_is_supportive": True,
+                    "criteria_summary": {},
+                    "insufficient_evidence_summary": {},
+                    "external_regime_quality": "unavailable",
+                    "external_regime_evidence_available": False,
+                    "external_regime_evidence_sufficient": False,
+                    "external_regime_governance": {},
+                    "external_regime_summary": "none",
+                    "campaign_coverage": {},
+                    "reason_codes": {},
+                }
+            )

@@ -29,6 +29,17 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from crypto_core.service.artifact_export import (
+    OperatorDecisionPack,
+    decision_pack_decision_summary,
+    decision_pack_missing_evidence,
+    decision_pack_next_inspection,
+    decision_pack_to_dict,
+    decision_pack_why_not_promotable,
+    export_operator_decision_pack,
+    load_operator_decision_pack,
+    operator_disposition_from_verdict,
+)
 from crypto_core.service.campaign import (
     CampaignConfig,
     CampaignReport,
@@ -65,6 +76,7 @@ from crypto_core.service.promotion_review_controller import (
     ReviewStatus,
     ReviewWorkflowCorruptError,
 )
+from crypto_core.service.readiness import ReadinessEvaluator, readiness_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -704,6 +716,142 @@ class ServiceOrchestrator:
 
         return final_review_report_to_dict(self._review.final_report)
 
+    def decision_pack(self) -> OperatorDecisionPack:
+        """Build a compact operator decision artifact from current review state."""
+        if self._review is None or self._review.campaign_count == 0:
+            raise RuntimeError("No promotion review evidence available for decision pack")
+
+        operator_snapshot = self.operator_snapshot()
+        review_snapshot = self._review.current_snapshot()
+        final_report = self._review.final_report
+        reason_codes = (
+            final_report.reason_codes if final_report is not None else self._review.get_promotion_reason_summary()
+        )
+        missing_evidence = self._review.get_missing_evidence()
+
+        review_timestamp_ns = (
+            final_report.finalized_at_ns if final_report is not None else review_snapshot.updated_at_ns
+        )
+        promotion_verdict = final_report.verdict if final_report is not None else review_snapshot.provisional_verdict
+        if promotion_verdict is None:
+            raise RuntimeError("Promotion verdict unavailable for decision pack")
+
+        readiness_status = self._decision_pack_readiness_status(review_timestamp_ns)
+        readiness_dict = readiness_to_dict(readiness_status) if readiness_status is not None else None
+        pass_criteria = tuple(reason_codes.get("pass_reasons", ()))
+        warning_criteria = tuple(reason_codes.get("warning_reasons", ()))
+        fail_criteria = tuple(reason_codes.get("fail_reasons", ()))
+        insufficient_evidence = tuple(reason_codes.get("insufficient_reasons", ()))
+
+        ext_regime_quality = (
+            final_report.ext_regime_quality if final_report is not None else review_snapshot.ext_regime_quality
+        )
+        ext_regime_governance = (
+            final_report.ext_regime_governance if final_report is not None else review_snapshot.ext_regime_governance
+        ) or {}
+        ext_regime_evidence_available = bool(
+            ext_regime_governance.get("campaigns_with_ext_regime", 0) > 0
+            or operator_snapshot.evidence.external_regime_available
+        )
+        ext_regime_evidence_sufficient = ext_regime_quality in {"supportive", "sufficient"}
+        ext_regime_concerns = self._decision_pack_ext_regime_concerns(
+            ext_regime_quality,
+            ext_regime_governance,
+            operator_snapshot,
+        )
+        disposition = operator_disposition_from_verdict(promotion_verdict)
+
+        return OperatorDecisionPack(
+            artifact_time_ns=review_timestamp_ns,
+            review_id=self._review.review_id,
+            review_timestamp_ns=review_timestamp_ns,
+            review_status=self._review.status.value,
+            promotion_verdict=promotion_verdict,
+            operator_disposition=disposition,
+            decision_summary=(
+                final_report.summary if final_report is not None else review_snapshot.provisional_summary
+            ),
+            readiness_level=operator_snapshot.readiness_level,
+            readiness_is_supportive=operator_snapshot.readiness_is_supportive,
+            criteria_summary=self._decision_pack_criteria_summary(reason_codes, readiness_dict),
+            pass_criteria=pass_criteria,
+            warning_criteria=warning_criteria,
+            fail_criteria=fail_criteria,
+            insufficient_evidence=insufficient_evidence,
+            insufficient_evidence_summary=self._decision_pack_missing_evidence_summary(
+                operator_snapshot,
+                missing_evidence,
+                readiness_dict,
+            ),
+            readiness_criteria=(tuple(readiness_dict.get("criteria", ())) if readiness_dict is not None else ()),
+            readiness_blockers=(tuple(readiness_dict.get("blockers", ())) if readiness_dict is not None else ()),
+            external_regime_quality=ext_regime_quality,
+            external_regime_evidence_available=ext_regime_evidence_available,
+            external_regime_evidence_sufficient=ext_regime_evidence_sufficient,
+            external_regime_concerns=ext_regime_concerns,
+            external_regime_governance=ext_regime_governance,
+            external_regime_summary=self._decision_pack_ext_regime_summary(
+                ext_regime_quality,
+                ext_regime_governance,
+                ext_regime_concerns,
+            ),
+            campaign_coverage=self._decision_pack_campaign_coverage(review_snapshot, final_report),
+            reason_codes=reason_codes,
+            why_not_promotable=self._decision_pack_why_not_promotable(
+                disposition,
+                fail_criteria,
+                warning_criteria,
+                insufficient_evidence,
+                tuple(readiness_dict.get("blockers", ())) if readiness_dict is not None else (),
+                ext_regime_concerns,
+            ),
+            operator_next_inspection=self._decision_pack_operator_next_inspection(
+                fail_criteria,
+                warning_criteria,
+                insufficient_evidence,
+                tuple(readiness_dict.get("blockers", ())) if readiness_dict is not None else (),
+                ext_regime_concerns,
+                operator_snapshot,
+                promotion_verdict,
+            ),
+            campaign_ids=(final_report.campaign_ids if final_report is not None else review_snapshot.campaign_ids),
+        )
+
+    def decision_pack_dict(self) -> dict:
+        """Serialize the current operator decision pack to a plain dict."""
+        return decision_pack_to_dict(self.decision_pack())
+
+    def export_decision_pack(self):
+        """Persist the current operator decision pack via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for decision pack export")
+        return export_operator_decision_pack(
+            pack=self.decision_pack(),
+            evidence_store=self._evidence_store,
+        )
+
+    def load_decision_pack(self) -> OperatorDecisionPack:
+        """Load the latest persisted operator decision pack."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for decision pack load")
+        return load_operator_decision_pack(evidence_store=self._evidence_store)
+
+    def decision_summary(self) -> dict:
+        """Operator-facing summary of the current decision surface."""
+        return decision_pack_decision_summary(self.decision_pack())
+
+    def why_not_promotable_yet(self) -> dict:
+        """Operator-facing explanation of what still blocks clean promotion."""
+        return decision_pack_why_not_promotable(self.decision_pack())
+
+    def decision_pack_missing_evidence(self) -> dict:
+        """Operator-facing summary of evidence gaps in the current decision pack."""
+        return decision_pack_missing_evidence(self.decision_pack())
+
+    def decision_pack_next_inspection(self) -> dict:
+        """Operator-facing ordered checklist of what to inspect next."""
+        return decision_pack_next_inspection(self.decision_pack())
+
     def insufficient_evidence_summary(self) -> dict:
         """Top-level insufficient evidence summary.
 
@@ -1317,6 +1465,188 @@ class ServiceOrchestrator:
                 "execution": execution.evidence,
             },
         )
+
+    def _decision_pack_readiness_status(self, assessed_at_ns: int):
+        source_report = self._last_campaign_report
+        if source_report is None:
+            return None
+        evaluator = ReadinessEvaluator()
+        return evaluator.evaluate(
+            campaign_readiness_flags(source_report),
+            assessed_at_ns=assessed_at_ns,
+        )
+
+    @staticmethod
+    def _decision_pack_criteria_summary(reason_codes: dict, readiness_dict: dict | None) -> dict:
+        promotion_summary = {
+            "pass_count": int(reason_codes.get("pass_count", 0)),
+            "warning_count": int(reason_codes.get("warning_count", 0)),
+            "fail_count": int(reason_codes.get("fail_count", 0)),
+            "insufficient_count": int(reason_codes.get("insufficient_count", 0)),
+        }
+        if readiness_dict is None:
+            readiness_summary = {
+                "available": False,
+                "level": "not_assessed",
+                "met": 0,
+                "not_met": 0,
+                "unknown": 0,
+                "total": 0,
+                "blocker_count": 0,
+            }
+        else:
+            readiness_summary = {
+                "available": True,
+                "level": readiness_dict.get("level", "not_assessed"),
+                **readiness_dict.get("summary", {}),
+                "blocker_count": len(readiness_dict.get("blockers", ())),
+            }
+        return {
+            "promotion": promotion_summary,
+            "readiness": readiness_summary,
+        }
+
+    @staticmethod
+    def _decision_pack_missing_evidence_summary(
+        operator_snapshot: OperatorSnapshot,
+        missing_evidence: dict,
+        readiness_dict: dict | None,
+    ) -> dict:
+        return {
+            "campaign_evidence_available": operator_snapshot.evidence.campaign_evidence_available,
+            "review_evidence_available": operator_snapshot.evidence.review_evidence_available,
+            "execution_calibration_available": operator_snapshot.evidence.execution_calibration_available,
+            "promotion_evidence_sufficient": operator_snapshot.evidence.promotion_evidence_sufficient,
+            "review_insufficient_criteria": list(missing_evidence.get("insufficient_criteria", ())),
+            "review_warning_criteria": list(missing_evidence.get("warning_criteria", ())),
+            "review_fail_criteria": list(missing_evidence.get("fail_criteria", ())),
+            "readiness_blockers": ([] if readiness_dict is None else list(readiness_dict.get("blockers", ()))),
+            "summary": operator_snapshot.evidence.summary or missing_evidence.get("message", ""),
+        }
+
+    @staticmethod
+    def _decision_pack_campaign_coverage(
+        review_snapshot: CurrentReviewSnapshot,
+        final_report: FinalReviewReport | None,
+    ) -> dict:
+        if final_report is not None:
+            return {
+                "campaign_count": final_report.campaign_count,
+                "campaign_ids": list(final_report.campaign_ids),
+                "execution_calibration_quality": final_report.execution_calibration_quality,
+                **final_report.coverage_stability_breadth,
+            }
+        return {
+            "campaign_count": review_snapshot.campaign_count,
+            "campaign_ids": list(review_snapshot.campaign_ids),
+            "verdict_distribution": review_snapshot.verdict_distribution,
+            "execution_sufficiency": review_snapshot.execution_sufficiency,
+            "symbol_breadth": review_snapshot.symbol_breadth,
+        }
+
+    @staticmethod
+    def _decision_pack_ext_regime_concerns(
+        ext_regime_quality: str,
+        ext_regime_governance: dict,
+        operator_snapshot: OperatorSnapshot,
+    ) -> tuple[str, ...]:
+        concerns: list[str] = []
+        if not operator_snapshot.evidence.external_regime_available:
+            concerns.append("evidence_unavailable")
+        elif not operator_snapshot.evidence.external_regime_fresh:
+            concerns.append("evidence_insufficient")
+        if ext_regime_governance.get("campaigns_ext_regime_stale_dominated", 0) > 0:
+            concerns.append("stale_dominance")
+        if ext_regime_governance.get("campaigns_ext_regime_unavailable_dominated", 0) > 0:
+            concerns.append("unavailable_dominance")
+        if ext_regime_governance.get("campaigns_ext_regime_high_risk_dominated", 0) > 0:
+            concerns.append("high_risk_dominance")
+        if ext_regime_governance.get("campaigns_ext_regime_gating_impacted", 0) > 0:
+            concerns.append("gating_impact")
+        if ext_regime_quality in {"blocking", "insufficient", "unavailable", "marginal", "cautionary"}:
+            concerns.append(f"quality:{ext_regime_quality}")
+
+        ordered: list[str] = []
+        for concern in concerns:
+            if concern not in ordered:
+                ordered.append(concern)
+        return tuple(ordered)
+
+    @staticmethod
+    def _decision_pack_ext_regime_summary(
+        ext_regime_quality: str,
+        ext_regime_governance: dict,
+        concerns: tuple[str, ...],
+    ) -> str:
+        if not ext_regime_governance:
+            return "No external regime governance evidence available."
+
+        parts = [f"quality={ext_regime_quality}"]
+        meaningful = ext_regime_governance.get("campaigns_with_meaningful_ext_regime_scenario", 0)
+        campaigns = ext_regime_governance.get("campaigns_with_ext_regime_scenario", 0)
+        parts.append(f"meaningful_scenarios={meaningful}/{campaigns}")
+        if ext_regime_governance.get("campaigns_ext_regime_stale_dominated", 0) > 0:
+            parts.append(f"stale_dominated={ext_regime_governance['campaigns_ext_regime_stale_dominated']}")
+        if ext_regime_governance.get("campaigns_ext_regime_unavailable_dominated", 0) > 0:
+            parts.append(f"unavailable_dominated={ext_regime_governance['campaigns_ext_regime_unavailable_dominated']}")
+        if ext_regime_governance.get("campaigns_ext_regime_high_risk_dominated", 0) > 0:
+            parts.append(f"high_risk_dominated={ext_regime_governance['campaigns_ext_regime_high_risk_dominated']}")
+        if ext_regime_governance.get("campaigns_ext_regime_gating_impacted", 0) > 0:
+            parts.append(f"gating_impacted={ext_regime_governance['campaigns_ext_regime_gating_impacted']}")
+        if concerns:
+            parts.append(f"concerns={','.join(concerns)}")
+        return "; ".join(parts)
+
+    @staticmethod
+    def _decision_pack_why_not_promotable(
+        disposition: str,
+        fail_criteria: tuple[str, ...],
+        warning_criteria: tuple[str, ...],
+        insufficient_evidence: tuple[str, ...],
+        readiness_blockers: tuple[str, ...],
+        ext_regime_concerns: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if disposition == "promotable":
+            return ()
+        reasons: list[str] = []
+        reasons.extend(fail_criteria)
+        reasons.extend(insufficient_evidence)
+        reasons.extend(warning_criteria)
+        reasons.extend(f"readiness:{name}" for name in readiness_blockers)
+        reasons.extend(f"external_regime:{name}" for name in ext_regime_concerns)
+
+        ordered: list[str] = []
+        for reason in reasons:
+            if reason not in ordered:
+                ordered.append(reason)
+        return tuple(ordered)
+
+    @staticmethod
+    def _decision_pack_operator_next_inspection(
+        fail_criteria: tuple[str, ...],
+        warning_criteria: tuple[str, ...],
+        insufficient_evidence: tuple[str, ...],
+        readiness_blockers: tuple[str, ...],
+        ext_regime_concerns: tuple[str, ...],
+        operator_snapshot: OperatorSnapshot,
+        promotion_verdict: str,
+    ) -> tuple[str, ...]:
+        items: list[str] = []
+        if fail_criteria:
+            items.append("failed_criteria")
+        if insufficient_evidence:
+            items.append("insufficient_evidence")
+        if warning_criteria:
+            items.append("warning_criteria")
+        if readiness_blockers:
+            items.append("readiness_blockers")
+        if ext_regime_concerns:
+            items.append("external_regime_governance")
+        if not operator_snapshot.evidence.execution_calibration_available:
+            items.append("execution_calibration")
+        if promotion_verdict == "promote" and not items:
+            items.append("promotion_ready_review")
+        return tuple(items)
 
 
 # ---------------------------------------------------------------------------

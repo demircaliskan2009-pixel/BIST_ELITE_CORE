@@ -29,6 +29,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from crypto_core.runtime.models import RuntimeStatus
+from crypto_core.service.artifact_export import OperatorDecisionPack
 from crypto_core.service.campaign import (
     AcceptanceResult,
     AcceptanceVerdict,
@@ -942,6 +943,101 @@ class TestReportingAPI:
         flags = orch.campaign_readiness_flags()
         assert flags is not None
         assert "paper_campaign_completed" in flags
+
+    def test_decision_pack_requires_review(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(service=svc)
+        with pytest.raises(RuntimeError, match="No promotion review evidence"):
+            orch.decision_pack()
+
+    def test_decision_pack_inconclusive_with_insufficient_evidence(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(
+            service=svc,
+            readiness_level="paper_live",
+        )
+        orch._last_campaign_report = _make_campaign_report(campaign_id="last-report")
+        orch.start_review(review_id="rev-inconclusive")
+        orch.intake_campaign_report(
+            _make_campaign_report(
+                campaign_id="camp-weak",
+                total_cycles=10,
+                total_fills=0,
+                elapsed_seconds=30.0,
+            )
+        )
+
+        pack = orch.decision_pack()
+        assert isinstance(pack, OperatorDecisionPack)
+        assert pack.operator_disposition == "inconclusive"
+        assert "min_completed_campaigns" in pack.insufficient_evidence
+        assert "insufficient_evidence" in pack.operator_next_inspection
+
+    def test_decision_pack_surfaces_failed_criteria(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(
+            service=svc,
+            readiness_level="paper_live",
+        )
+        orch._last_campaign_report = _make_campaign_report(campaign_id="last-report")
+        orch.start_review(review_id="rev-reject")
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-a", verdict="pass"))
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-b", verdict="fail"))
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-c", verdict="fail"))
+
+        pack = orch.decision_pack()
+        assert "max_failed_campaigns" in pack.fail_criteria
+        assert "failed_criteria" in pack.operator_next_inspection
+
+    def test_decision_pack_export_and_load_roundtrip(self, tmp_path: Path):
+        svc = _make_mock_service()
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        orch = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store,
+            readiness_level="paper_live",
+        )
+        orch._last_campaign_report = _make_campaign_report(
+            campaign_id="last-report",
+            persisted_tca_count=18,
+            registered_fill_count=20,
+        )
+        orch.start_review(review_id="rev-export")
+        for i in range(3):
+            orch.intake_campaign_report(_make_campaign_report(campaign_id=f"camp-{i}"))
+
+        expected = orch.decision_pack()
+        result = orch.export_decision_pack()
+        assert result.success is True
+        loaded = orch.load_decision_pack()
+        assert loaded.review_id == "rev-export"
+        assert loaded.operator_disposition == expected.operator_disposition
+
+    def test_decision_pack_operator_surfaces(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(
+            service=svc,
+            readiness_level="paper_live",
+        )
+        orch._last_campaign_report = _make_campaign_report(campaign_id="last-report")
+        orch.start_review(review_id="rev-surfaces")
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-a", verdict="pass"))
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-b", verdict="pass"))
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-c", verdict="fail"))
+
+        pack = orch.decision_pack()
+        decision = orch.decision_summary()
+        why_not = orch.why_not_promotable_yet()
+        missing = orch.decision_pack_missing_evidence()
+        inspect_next = orch.decision_pack_next_inspection()
+
+        assert decision["operator_disposition"] == pack.operator_disposition
+        assert why_not["reasons"]
+        assert missing["summary"]
+        assert "warning_criteria" in inspect_next["items"]
 
 
 # ---------------------------------------------------------------------------

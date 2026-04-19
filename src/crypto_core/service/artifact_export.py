@@ -69,6 +69,40 @@ class RunArtifact:
     persistence_health: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class OperatorDecisionPack:
+    """Frozen operator-facing promotion/readiness decision artifact."""
+
+    artifact_time_ns: int
+    review_id: str
+    review_timestamp_ns: int
+    review_status: str
+    promotion_verdict: str
+    operator_disposition: str
+    decision_summary: str
+    readiness_level: str
+    readiness_is_supportive: bool
+    criteria_summary: dict = field(default_factory=dict)
+    pass_criteria: tuple[str, ...] = field(default_factory=tuple)
+    warning_criteria: tuple[str, ...] = field(default_factory=tuple)
+    fail_criteria: tuple[str, ...] = field(default_factory=tuple)
+    insufficient_evidence: tuple[str, ...] = field(default_factory=tuple)
+    insufficient_evidence_summary: dict = field(default_factory=dict)
+    readiness_criteria: tuple[dict, ...] = field(default_factory=tuple)
+    readiness_blockers: tuple[str, ...] = field(default_factory=tuple)
+    external_regime_quality: str = "unavailable"
+    external_regime_evidence_available: bool = False
+    external_regime_evidence_sufficient: bool = False
+    external_regime_concerns: tuple[str, ...] = field(default_factory=tuple)
+    external_regime_governance: dict = field(default_factory=dict)
+    external_regime_summary: str = ""
+    campaign_coverage: dict = field(default_factory=dict)
+    reason_codes: dict = field(default_factory=dict)
+    why_not_promotable: tuple[str, ...] = field(default_factory=tuple)
+    operator_next_inspection: tuple[str, ...] = field(default_factory=tuple)
+    campaign_ids: tuple[str, ...] = field(default_factory=tuple)
+
+
 # ---------------------------------------------------------------------------
 # Serialization helpers
 # ---------------------------------------------------------------------------
@@ -93,6 +127,147 @@ def _dataclass_to_dict(obj: object) -> dict:
         else:
             result[f.name] = val
     return result
+
+
+def operator_disposition_from_verdict(verdict: str) -> str:
+    """Map a promotion verdict to a compact operator disposition."""
+    return {
+        "promote": "promotable",
+        "hold": "hold_only",
+        "reject": "reject_worthy",
+        "inconclusive": "inconclusive",
+    }.get(verdict, "inconclusive")
+
+
+def decision_pack_to_dict(pack: OperatorDecisionPack) -> dict:
+    """Serialize OperatorDecisionPack to a plain dict."""
+    return _dataclass_to_dict(pack)
+
+
+def decision_pack_decision_summary(pack: OperatorDecisionPack) -> dict:
+    """Compact decision summary for operator/reporting surfaces."""
+    return {
+        "review_id": pack.review_id,
+        "review_status": pack.review_status,
+        "promotion_verdict": pack.promotion_verdict,
+        "operator_disposition": pack.operator_disposition,
+        "summary": pack.decision_summary,
+        "readiness_level": pack.readiness_level,
+        "readiness_is_supportive": pack.readiness_is_supportive,
+        "external_regime_quality": pack.external_regime_quality,
+    }
+
+
+def decision_pack_missing_evidence(pack: OperatorDecisionPack) -> dict:
+    """Current evidence-gap summary from the decision pack."""
+    return {
+        "review_id": pack.review_id,
+        "insufficient_evidence": list(pack.insufficient_evidence),
+        "readiness_blockers": list(pack.readiness_blockers),
+        "summary": pack.insufficient_evidence_summary.get("summary", ""),
+        "details": pack.insufficient_evidence_summary,
+    }
+
+
+def decision_pack_why_not_promotable(pack: OperatorDecisionPack) -> dict:
+    """Why promotion is not yet cleanly supported, if applicable."""
+    return {
+        "review_id": pack.review_id,
+        "promotion_verdict": pack.promotion_verdict,
+        "operator_disposition": pack.operator_disposition,
+        "reasons": list(pack.why_not_promotable),
+    }
+
+
+def decision_pack_next_inspection(pack: OperatorDecisionPack) -> dict:
+    """Ordered operator inspection checklist derived from current evidence."""
+    return {
+        "review_id": pack.review_id,
+        "items": list(pack.operator_next_inspection),
+    }
+
+
+class OperatorDecisionPackCorruptError(RuntimeError):
+    """Raised when persisted operator decision pack data is malformed."""
+
+
+def _require_str(d: dict, field_name: str) -> str:
+    value = d.get(field_name)
+    if not isinstance(value, str) or not value:
+        raise OperatorDecisionPackCorruptError(f"Decision pack field {field_name!r} must be a non-empty str")
+    return value
+
+
+def _require_int(d: dict, field_name: str) -> int:
+    value = d.get(field_name)
+    if not isinstance(value, int):
+        raise OperatorDecisionPackCorruptError(f"Decision pack field {field_name!r} must be an int")
+    return value
+
+
+def _require_bool(d: dict, field_name: str) -> bool:
+    value = d.get(field_name)
+    if not isinstance(value, bool):
+        raise OperatorDecisionPackCorruptError(f"Decision pack field {field_name!r} must be a bool")
+    return value
+
+
+def _require_dict(d: dict, field_name: str) -> dict:
+    value = d.get(field_name)
+    if not isinstance(value, dict):
+        raise OperatorDecisionPackCorruptError(f"Decision pack field {field_name!r} must be a dict")
+    return value
+
+
+def _optional_tuple_of_strings(d: dict, field_name: str) -> tuple[str, ...]:
+    value = d.get(field_name, ())
+    if not isinstance(value, (list, tuple)) or any(not isinstance(item, str) for item in value):
+        raise OperatorDecisionPackCorruptError(f"Decision pack field {field_name!r} must be a list/tuple of str")
+    return tuple(value)
+
+
+def _optional_tuple_of_dicts(d: dict, field_name: str) -> tuple[dict, ...]:
+    value = d.get(field_name, ())
+    if not isinstance(value, (list, tuple)) or any(not isinstance(item, dict) for item in value):
+        raise OperatorDecisionPackCorruptError(f"Decision pack field {field_name!r} must be a list/tuple of dict")
+    return tuple(value)
+
+
+def decision_pack_from_dict(d: dict) -> OperatorDecisionPack:
+    """Deserialize OperatorDecisionPack from a plain dict."""
+    if not isinstance(d, dict):
+        raise OperatorDecisionPackCorruptError(f"Decision pack payload must be a dict, got {type(d).__name__!r}")
+
+    return OperatorDecisionPack(
+        artifact_time_ns=_require_int(d, "artifact_time_ns"),
+        review_id=_require_str(d, "review_id"),
+        review_timestamp_ns=_require_int(d, "review_timestamp_ns"),
+        review_status=_require_str(d, "review_status"),
+        promotion_verdict=_require_str(d, "promotion_verdict"),
+        operator_disposition=_require_str(d, "operator_disposition"),
+        decision_summary=_require_str(d, "decision_summary"),
+        readiness_level=_require_str(d, "readiness_level"),
+        readiness_is_supportive=_require_bool(d, "readiness_is_supportive"),
+        criteria_summary=_require_dict(d, "criteria_summary"),
+        pass_criteria=_optional_tuple_of_strings(d, "pass_criteria"),
+        warning_criteria=_optional_tuple_of_strings(d, "warning_criteria"),
+        fail_criteria=_optional_tuple_of_strings(d, "fail_criteria"),
+        insufficient_evidence=_optional_tuple_of_strings(d, "insufficient_evidence"),
+        insufficient_evidence_summary=_require_dict(d, "insufficient_evidence_summary"),
+        readiness_criteria=_optional_tuple_of_dicts(d, "readiness_criteria"),
+        readiness_blockers=_optional_tuple_of_strings(d, "readiness_blockers"),
+        external_regime_quality=_require_str(d, "external_regime_quality"),
+        external_regime_evidence_available=_require_bool(d, "external_regime_evidence_available"),
+        external_regime_evidence_sufficient=_require_bool(d, "external_regime_evidence_sufficient"),
+        external_regime_concerns=_optional_tuple_of_strings(d, "external_regime_concerns"),
+        external_regime_governance=_require_dict(d, "external_regime_governance"),
+        external_regime_summary=_require_str(d, "external_regime_summary"),
+        campaign_coverage=_require_dict(d, "campaign_coverage"),
+        reason_codes=_require_dict(d, "reason_codes"),
+        why_not_promotable=_optional_tuple_of_strings(d, "why_not_promotable"),
+        operator_next_inspection=_optional_tuple_of_strings(d, "operator_next_inspection"),
+        campaign_ids=_optional_tuple_of_strings(d, "campaign_ids"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +360,7 @@ def build_run_artifact(
 # ---------------------------------------------------------------------------
 
 _ARTIFACT_SNAPSHOT_NAME = "run_artifact"
+_DECISION_PACK_SNAPSHOT_NAME = "operator_decision_pack"
 
 
 def export_run_artifact(
@@ -224,3 +400,26 @@ def load_run_artifact(
 
         raise EvidenceStoreCorruptError(f"Run artifact snapshot 'data' must be a dict, got {type(data).__name__!r}")
     return data
+
+
+def export_operator_decision_pack(
+    *,
+    pack: OperatorDecisionPack,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist the latest operator decision pack via EvidenceStore."""
+    data = decision_pack_to_dict(pack)
+    result = evidence_store.save_snapshot(_DECISION_PACK_SNAPSHOT_NAME, data)
+    if not result.success:
+        return result
+    evidence_store.append_evidence(_DECISION_PACK_SNAPSHOT_NAME, data)
+    return result
+
+
+def load_operator_decision_pack(*, evidence_store: EvidenceStore) -> OperatorDecisionPack:
+    """Load the latest persisted operator decision pack."""
+    envelope = evidence_store.load_snapshot(_DECISION_PACK_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise OperatorDecisionPackCorruptError(f"Decision pack 'data' must be a dict, got {type(data).__name__!r}")
+    return decision_pack_from_dict(data)
