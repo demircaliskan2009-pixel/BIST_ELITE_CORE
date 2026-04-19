@@ -12,9 +12,18 @@ from crypto_core.edge.models import EdgeFamily, SignalDirection
 from crypto_core.execution.engine import ExecutionConfig
 from crypto_core.execution.fill_pricer import FillPricerConfig
 from crypto_core.execution.models import ExecutionMode, RejectionReason
+from crypto_core.execution.regime_contracts import (
+    EventRegimeLevel,
+    EventRegimeState,
+    OnChainRegimeLevel,
+    OnChainRegimeState,
+    OptionsRegimeLevel,
+    OptionsRegimeState,
+)
 from crypto_core.orchestrator.models import MarketDataInput, PipelineResult
 from crypto_core.orchestrator.pipeline import PipelineConfig, PipelineOrchestrator
 from crypto_core.regime.tracker import MarketRegimeTracker
+from crypto_core.service.external_regime import ExternalRegimeDataPlane
 from crypto_core.state.models import SignalInputs, SystemState
 
 # ---------------------------------------------------------------------------
@@ -371,6 +380,84 @@ class TestActivationIntegration:
             assert s1.direction == s2.direction
             assert s1.is_valid == s2.is_valid
             assert s1.evidence["activation_reason"] == s2.evidence["activation_reason"]
+
+
+class TestExternalRegimeIntegration:
+    def test_pipeline_guard_blocks_on_stale_external_regime(self) -> None:
+        plane = ExternalRegimeDataPlane(staleness_threshold_s=60.0)
+        plane.update_options(
+            OptionsRegimeState(
+                symbol="BTCUSDT",
+                level=OptionsRegimeLevel.NORMAL,
+                snapshot_ns=_T0_NS,
+                source="test",
+            )
+        )
+        plane.update_event(
+            EventRegimeState(
+                level=EventRegimeLevel.QUIET,
+                snapshot_ns=_T0_NS,
+                source="test",
+            )
+        )
+        plane.update_on_chain(
+            OnChainRegimeState(
+                symbol="BTC",
+                level=OnChainRegimeLevel.NORMAL,
+                snapshot_ns=_T0_NS,
+                source="test",
+            )
+        )
+        orch = PipelineOrchestrator(config=PipelineConfig(emit_telemetry=False), external_regime_plane=plane)
+
+        stale_ts = _T0_NS + 120 * _NS_PER_S
+        stale_data = dataclasses.replace(
+            _healthy_data(),
+            timestamp_ns=stale_ts,
+            book_last_update_ns=stale_ts - 100 * 1_000_000,
+            mark_price_event=_mark_price_event(timestamp_ns=stale_ts),
+        )
+        result = orch.process(stale_data, _healthy_signals())
+
+        assert result.approved is False
+        assert result.block_stage == "guard"
+        assert result.block_reason == "NT-X05_external_regime_stale"
+
+    def test_pipeline_activation_blocks_on_extreme_external_regime(self) -> None:
+        plane = ExternalRegimeDataPlane(staleness_threshold_s=60.0)
+        plane.update_options(
+            OptionsRegimeState(
+                symbol="BTCUSDT",
+                level=OptionsRegimeLevel.EXTREME,
+                snapshot_ns=_T0_NS,
+                source="test",
+            )
+        )
+        plane.update_event(
+            EventRegimeState(
+                level=EventRegimeLevel.QUIET,
+                snapshot_ns=_T0_NS,
+                source="test",
+            )
+        )
+        plane.update_on_chain(
+            OnChainRegimeState(
+                symbol="BTC",
+                level=OnChainRegimeLevel.NORMAL,
+                snapshot_ns=_T0_NS,
+                source="test",
+            )
+        )
+        cfg = PipelineConfig(emit_telemetry=False)
+        cfg.guard.external_regime_policy.block_execution_on_high_risk = False
+        orch = PipelineOrchestrator(config=cfg, external_regime_plane=plane)
+
+        result = orch.process(_healthy_data(), _healthy_signals())
+        by_family = _signal_map(result.edge_signals)
+        assert by_family[EdgeFamily.ORDER_FLOW_IMBALANCE].is_valid is False
+        assert by_family[EdgeFamily.ORDER_FLOW_IMBALANCE].block_reason == (
+            "activation_blocked:external_regime_options_extreme_blocked"
+        )
 
 
 # ---------------------------------------------------------------------------

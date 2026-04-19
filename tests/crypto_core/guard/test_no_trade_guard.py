@@ -4,6 +4,15 @@ from __future__ import annotations
 
 import pytest
 
+from crypto_core.execution.regime_contracts import (
+    DataFreshness,
+    EventRegimeLevel,
+    EventRegimeState,
+    OnChainRegimeLevel,
+    OnChainRegimeState,
+    OptionsRegimeLevel,
+    OptionsRegimeState,
+)
 from crypto_core.guard.models import (
     BlockSeverity,
     EdgeHealthInput,
@@ -15,6 +24,7 @@ from crypto_core.guard.models import (
     TemporalInput,
 )
 from crypto_core.guard.no_trade_guard import NoTradeConfig, NoTradeGuard
+from crypto_core.service.external_regime import DimensionFreshness, ExternalRegimeSnapshot
 from crypto_core.state.models import SystemState
 
 # ---------------------------------------------------------------------------
@@ -49,6 +59,81 @@ def _good_ctx(**overrides: object) -> NoTradeContext:
 
 def _guard(**cfg_overrides: object) -> NoTradeGuard:
     return NoTradeGuard(NoTradeConfig(**cfg_overrides))  # type: ignore[arg-type]
+
+
+def _external_regime_snapshot(
+    *,
+    options_freshness: DataFreshness = DataFreshness.FRESH,
+    event_freshness: DataFreshness = DataFreshness.FRESH,
+    on_chain_freshness: DataFreshness = DataFreshness.FRESH,
+    options_level: OptionsRegimeLevel = OptionsRegimeLevel.NORMAL,
+    event_level: EventRegimeLevel = EventRegimeLevel.QUIET,
+    on_chain_level: OnChainRegimeLevel = OnChainRegimeLevel.NORMAL,
+) -> ExternalRegimeSnapshot:
+    unavailable_dimensions = tuple(
+        name
+        for name, freshness in (
+            ("options", options_freshness),
+            ("event", event_freshness),
+            ("on_chain", on_chain_freshness),
+        )
+        if freshness == DataFreshness.UNAVAILABLE
+    )
+    stale_dimensions = tuple(
+        name
+        for name, freshness in (
+            ("options", options_freshness),
+            ("event", event_freshness),
+            ("on_chain", on_chain_freshness),
+        )
+        if freshness == DataFreshness.STALE
+    )
+    available_dimensions = tuple(
+        name
+        for name, freshness in (
+            ("options", options_freshness),
+            ("event", event_freshness),
+            ("on_chain", on_chain_freshness),
+        )
+        if freshness in (DataFreshness.FRESH, DataFreshness.DEGRADED, DataFreshness.STALE)
+    )
+    return ExternalRegimeSnapshot(
+        snapshot_ns=_T0_NS,
+        options=(
+            OptionsRegimeState(symbol="BTCUSDT", level=options_level, snapshot_ns=_T0_NS, source="test")
+            if options_freshness != DataFreshness.UNAVAILABLE
+            else None
+        ),
+        event=(
+            EventRegimeState(level=event_level, snapshot_ns=_T0_NS, source="test")
+            if event_freshness != DataFreshness.UNAVAILABLE
+            else None
+        ),
+        on_chain=(
+            OnChainRegimeState(symbol="BTC", level=on_chain_level, snapshot_ns=_T0_NS, source="test")
+            if on_chain_freshness != DataFreshness.UNAVAILABLE
+            else None
+        ),
+        options_freshness=DimensionFreshness(options_freshness, _T0_NS, 0.0, "test"),
+        event_freshness=DimensionFreshness(event_freshness, _T0_NS, 0.0, "test"),
+        on_chain_freshness=DimensionFreshness(on_chain_freshness, _T0_NS, 0.0, "test"),
+        any_extreme=(
+            options_level == OptionsRegimeLevel.EXTREME
+            or event_level in (EventRegimeLevel.PENDING, EventRegimeLevel.ACTIVE)
+            or on_chain_level == OnChainRegimeLevel.STRESS
+        ),
+        any_unavailable_critical=bool(unavailable_dimensions),
+        high_risk_regime_present=(
+            options_level in (OptionsRegimeLevel.ELEVATED, OptionsRegimeLevel.EXTREME)
+            or event_level in (EventRegimeLevel.PENDING, EventRegimeLevel.ACTIVE)
+            or on_chain_level in (OnChainRegimeLevel.STRESS, OnChainRegimeLevel.WHALE_ACTIVE)
+        ),
+        evidence_sufficient=options_freshness == DataFreshness.FRESH and event_freshness == DataFreshness.FRESH,
+        available_dimensions=available_dimensions,
+        unavailable_dimensions=unavailable_dimensions,
+        stale_dimensions=stale_dimensions,
+        regime_summary="test",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +389,35 @@ class TestTelemetryUnavailable:
         ctx = _good_ctx(telemetry_last_emit_ns=0)
         d = guard.evaluate(ctx)
         assert d.allowed is True
+
+
+class TestExternalRegimeExecutionSafety:
+    def test_unavailable_external_regime_blocks(self) -> None:
+        guard = _guard()
+        ctx = _good_ctx(
+            external_regime=_external_regime_snapshot(
+                event_freshness=DataFreshness.UNAVAILABLE,
+                on_chain_freshness=DataFreshness.UNAVAILABLE,
+            )
+        )
+        d = guard.evaluate(ctx)
+        assert d.allowed is False
+        assert d.reason == NoTradeReason.EXTERNAL_REGIME_UNAVAILABLE
+
+    def test_stale_external_regime_blocks(self) -> None:
+        guard = _guard()
+        ctx = _good_ctx(external_regime=_external_regime_snapshot(options_freshness=DataFreshness.STALE))
+        d = guard.evaluate(ctx)
+        assert d.allowed is False
+        assert d.reason == NoTradeReason.EXTERNAL_REGIME_STALE
+        assert d.severity == BlockSeverity.SOFT
+
+    def test_high_risk_external_regime_blocks(self) -> None:
+        guard = _guard()
+        ctx = _good_ctx(external_regime=_external_regime_snapshot(event_level=EventRegimeLevel.ACTIVE))
+        d = guard.evaluate(ctx)
+        assert d.allowed is False
+        assert d.reason == NoTradeReason.EXTERNAL_REGIME_HIGH_RISK
 
 
 # ---------------------------------------------------------------------------

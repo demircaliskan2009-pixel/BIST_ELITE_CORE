@@ -14,8 +14,65 @@ from crypto_core.edge.activation import (
     VolatilityCondition,
 )
 from crypto_core.edge.models import EdgeFamily
+from crypto_core.execution.regime_contracts import (
+    DataFreshness,
+    EventRegimeLevel,
+    EventRegimeState,
+    OnChainRegimeLevel,
+    OnChainRegimeState,
+    OptionsRegimeLevel,
+    OptionsRegimeState,
+)
+from crypto_core.service.external_regime import DimensionFreshness, ExternalRegimeSnapshot
 
 _MATRIX = ActivationMatrix()
+
+
+def _external_regime(
+    *,
+    options_level: OptionsRegimeLevel = OptionsRegimeLevel.NORMAL,
+    event_level: EventRegimeLevel = EventRegimeLevel.QUIET,
+    on_chain_level: OnChainRegimeLevel = OnChainRegimeLevel.NORMAL,
+) -> ExternalRegimeSnapshot:
+    return ExternalRegimeSnapshot(
+        snapshot_ns=1,
+        options=OptionsRegimeState(
+            symbol="BTCUSDT",
+            level=options_level,
+            snapshot_ns=1,
+            source="test",
+        ),
+        event=EventRegimeState(
+            level=event_level,
+            snapshot_ns=1,
+            source="test",
+        ),
+        on_chain=OnChainRegimeState(
+            symbol="BTC",
+            level=on_chain_level,
+            snapshot_ns=1,
+            source="test",
+        ),
+        options_freshness=DimensionFreshness(DataFreshness.FRESH, 1, 0.0, "test"),
+        event_freshness=DimensionFreshness(DataFreshness.FRESH, 1, 0.0, "test"),
+        on_chain_freshness=DimensionFreshness(DataFreshness.FRESH, 1, 0.0, "test"),
+        any_extreme=(
+            options_level == OptionsRegimeLevel.EXTREME
+            or event_level in (EventRegimeLevel.PENDING, EventRegimeLevel.ACTIVE)
+            or on_chain_level == OnChainRegimeLevel.STRESS
+        ),
+        any_unavailable_critical=False,
+        high_risk_regime_present=(
+            options_level in (OptionsRegimeLevel.ELEVATED, OptionsRegimeLevel.EXTREME)
+            or event_level in (EventRegimeLevel.PENDING, EventRegimeLevel.ACTIVE)
+            or on_chain_level in (OnChainRegimeLevel.STRESS, OnChainRegimeLevel.WHALE_ACTIVE)
+        ),
+        evidence_sufficient=True,
+        available_dimensions=("options", "event", "on_chain"),
+        unavailable_dimensions=(),
+        stale_dimensions=(),
+        regime_summary="test",
+    )
 
 
 def _ctx(
@@ -33,6 +90,7 @@ def _ctx(
     edge_health_score: float | None = 0.8,
     edge_fsm_state: str | None = "ACTIVE",
     edge_allocation_factor: float | None = 1.0,
+    external_regime: ExternalRegimeSnapshot | None = None,
 ) -> ActivationContext:
     return ActivationContext(
         system_state=system_state,
@@ -48,6 +106,7 @@ def _ctx(
         edge_health_score=edge_health_score,
         edge_fsm_state=edge_fsm_state,
         edge_allocation_factor=edge_allocation_factor,
+        external_regime=external_regime,
     )
 
 
@@ -239,6 +298,33 @@ class TestHealthIntegration:
         )
         assert decision.allowed is False
         assert decision.reason == "edge_health_low"
+
+
+class TestExternalRegimeIntegration:
+    def test_pending_event_blocks_activation(self) -> None:
+        decision = _MATRIX.evaluate(
+            EdgeFamily.ORDER_FLOW_IMBALANCE,
+            _ctx(external_regime=_external_regime(event_level=EventRegimeLevel.PENDING)),
+        )
+        assert decision.allowed is False
+        assert decision.reason == "external_regime_event_risk_blocked"
+
+    def test_extreme_options_blocks_activation(self) -> None:
+        decision = _MATRIX.evaluate(
+            EdgeFamily.FUNDING_RATE,
+            _ctx(mark_price_available=True, external_regime=_external_regime(options_level=OptionsRegimeLevel.EXTREME)),
+        )
+        assert decision.allowed is False
+        assert decision.reason == "external_regime_options_extreme_blocked"
+
+    def test_elevated_options_reduce_activation_scale(self) -> None:
+        decision = _MATRIX.evaluate(
+            EdgeFamily.ORDER_FLOW_IMBALANCE,
+            _ctx(external_regime=_external_regime(options_level=OptionsRegimeLevel.ELEVATED)),
+        )
+        assert decision.allowed is True
+        assert decision.reason == "allowed_reduced"
+        assert decision.allocation_scale == pytest.approx(0.5)
 
 
 class TestDeterminism:
