@@ -101,6 +101,17 @@ _ON_CHAIN_PAYLOAD_ALLOWED_FIELDS = frozenset(
         "evidence",
     }
 )
+_BUNDLE_PAYLOAD_ALLOWED_FIELDS = frozenset(
+    {
+        "bundle_id",
+        "source",
+        "observed_at_ns",
+        "received_at_ns",
+        "options",
+        "event",
+        "on_chain",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +435,90 @@ class ExternalRegimePayloadIngestionRecord:
     rejection_stage: str | None
     payload_origin: str | None
     payload_summary: dict[str, object]
+
+
+class ExternalRegimeBundleApplyMode(str, Enum):
+    """Bundle application policy for multi-dimension ingestion."""
+
+    ATOMIC = "atomic"
+    PARTIAL = "partial"
+
+
+class ExternalRegimeBundleIngestionOutcome(str, Enum):
+    """Top-level outcome for one bundle ingestion attempt."""
+
+    FULLY_ACCEPTED = "fully_accepted"
+    PARTIALLY_ACCEPTED = "partially_accepted"
+    FULLY_REJECTED = "fully_rejected"
+
+
+@dataclass(frozen=True)
+class ExternalRegimePayloadBundle:
+    """Normalized external-regime bundle carrying one or more dimensions."""
+
+    bundle_id: str | None
+    source: str | None
+    observed_at_ns: int | None
+    received_at_ns: int | None
+    options: dict[str, object] | None
+    event: dict[str, object] | None
+    on_chain: dict[str, object] | None
+
+
+@dataclass(frozen=True)
+class ExternalRegimeBundleIngestionRecord:
+    """Deterministic outcome for one bundle ingestion attempt."""
+
+    bundle_id: str | None
+    provider: str
+    input_format: str
+    apply_mode: str
+    outcome: str
+    accepted: bool
+    partially_accepted: bool
+    replayable: bool
+    received_at_ns: int
+    observed_at_ns: int | None
+    source: str | None
+    payload_origin: str | None
+    dimensions_present: tuple[str, ...]
+    changed_dimensions: tuple[str, ...]
+    failed_dimensions: tuple[str, ...]
+    reason: str
+    dimension_results: tuple[ExternalRegimePayloadIngestionRecord, ...]
+
+
+@dataclass(frozen=True)
+class ExternalRegimeBundleReplayArtifact:
+    """Replayable audit artifact for deterministic bundle reruns."""
+
+    bundle_id: str | None
+    provider: str
+    input_format: str
+    apply_mode: str
+    received_at_ns: int
+    observed_at_ns: int | None
+    source: str | None
+    payload_origin: str | None
+    raw_bundle_payload: dict[str, object]
+    normalized_bundle: ExternalRegimePayloadBundle
+    result: ExternalRegimeBundleIngestionRecord
+
+
+@dataclass(frozen=True)
+class _PreparedExternalRegimePayloadIngestion:
+    """Internal prepared payload candidate used by bundle and single ingestion."""
+
+    dimension: str
+    provider: str
+    input_format: str
+    received_at_ns: int
+    payload_origin: str | None
+    payload_summary: dict[str, object]
+    state: OptionsRegimeState | EventRegimeState | OnChainRegimeState
+    provider_trust: str | None
+    provider_role: str | None
+    freshness_threshold_s: float | None
 
 
 @dataclass(frozen=True)
@@ -1190,6 +1285,171 @@ def external_regime_payload_ingestion_record_from_dict(d: dict) -> ExternalRegim
         raise ValueError(f"Malformed ExternalRegimePayloadIngestionRecord: {exc}") from exc
 
 
+def external_regime_payload_bundle_to_dict(bundle: ExternalRegimePayloadBundle) -> dict:
+    """Serialize a normalized external-regime bundle."""
+    return {
+        "bundle_id": bundle.bundle_id,
+        "source": bundle.source,
+        "observed_at_ns": bundle.observed_at_ns,
+        "received_at_ns": bundle.received_at_ns,
+        "options": None if bundle.options is None else dict(bundle.options),
+        "event": None if bundle.event is None else dict(bundle.event),
+        "on_chain": None if bundle.on_chain is None else dict(bundle.on_chain),
+    }
+
+
+def external_regime_payload_bundle_from_dict(d: dict) -> ExternalRegimePayloadBundle:
+    """Deserialize a normalized external-regime bundle."""
+    try:
+        return ExternalRegimePayloadBundle(
+            bundle_id=d.get("bundle_id"),
+            source=d.get("source"),
+            observed_at_ns=(int(d["observed_at_ns"]) if d.get("observed_at_ns") is not None else None),
+            received_at_ns=(int(d["received_at_ns"]) if d.get("received_at_ns") is not None else None),
+            options=_optional_bundle_dimension_payload(d, "options"),
+            event=_optional_bundle_dimension_payload(d, "event"),
+            on_chain=_optional_bundle_dimension_payload(d, "on_chain"),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Malformed ExternalRegimePayloadBundle: {exc}") from exc
+
+
+def external_regime_bundle_ingestion_record_to_dict(record: ExternalRegimeBundleIngestionRecord) -> dict:
+    """Serialize a bundle ingestion result."""
+    return {
+        "bundle_id": record.bundle_id,
+        "provider": record.provider,
+        "input_format": record.input_format,
+        "apply_mode": record.apply_mode,
+        "outcome": record.outcome,
+        "accepted": record.accepted,
+        "partially_accepted": record.partially_accepted,
+        "replayable": record.replayable,
+        "received_at_ns": record.received_at_ns,
+        "observed_at_ns": record.observed_at_ns,
+        "source": record.source,
+        "payload_origin": record.payload_origin,
+        "dimensions_present": list(record.dimensions_present),
+        "changed_dimensions": list(record.changed_dimensions),
+        "failed_dimensions": list(record.failed_dimensions),
+        "reason": record.reason,
+        "dimension_results": [
+            external_regime_payload_ingestion_record_to_dict(item) for item in record.dimension_results
+        ],
+    }
+
+
+def external_regime_bundle_ingestion_record_from_dict(d: dict) -> ExternalRegimeBundleIngestionRecord:
+    """Deserialize a bundle ingestion result."""
+    try:
+        return ExternalRegimeBundleIngestionRecord(
+            bundle_id=d.get("bundle_id"),
+            provider=str(d["provider"]),
+            input_format=str(d["input_format"]),
+            apply_mode=str(d["apply_mode"]),
+            outcome=str(d["outcome"]),
+            accepted=bool(d["accepted"]),
+            partially_accepted=bool(d["partially_accepted"]),
+            replayable=bool(d["replayable"]),
+            received_at_ns=int(d["received_at_ns"]),
+            observed_at_ns=(int(d["observed_at_ns"]) if d.get("observed_at_ns") is not None else None),
+            source=d.get("source"),
+            payload_origin=d.get("payload_origin"),
+            dimensions_present=tuple(d.get("dimensions_present", ())),
+            changed_dimensions=tuple(d.get("changed_dimensions", ())),
+            failed_dimensions=tuple(d.get("failed_dimensions", ())),
+            reason=str(d["reason"]),
+            dimension_results=tuple(
+                external_regime_payload_ingestion_record_from_dict(item) for item in d.get("dimension_results", ())
+            ),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Malformed ExternalRegimeBundleIngestionRecord: {exc}") from exc
+
+
+def external_regime_bundle_replay_artifact_to_dict(artifact: ExternalRegimeBundleReplayArtifact) -> dict:
+    """Serialize a replayable bundle artifact."""
+    return {
+        "bundle_id": artifact.bundle_id,
+        "provider": artifact.provider,
+        "input_format": artifact.input_format,
+        "apply_mode": artifact.apply_mode,
+        "received_at_ns": artifact.received_at_ns,
+        "observed_at_ns": artifact.observed_at_ns,
+        "source": artifact.source,
+        "payload_origin": artifact.payload_origin,
+        "raw_bundle_payload": dict(artifact.raw_bundle_payload),
+        "normalized_bundle": external_regime_payload_bundle_to_dict(artifact.normalized_bundle),
+        "result": external_regime_bundle_ingestion_record_to_dict(artifact.result),
+    }
+
+
+def external_regime_bundle_replay_artifact_from_dict(d: dict) -> ExternalRegimeBundleReplayArtifact:
+    """Deserialize a replayable bundle artifact."""
+    try:
+        raw_bundle_payload = d.get("raw_bundle_payload", {})
+        if not isinstance(raw_bundle_payload, dict):
+            raise ValueError("raw_bundle_payload must be dict")
+        return ExternalRegimeBundleReplayArtifact(
+            bundle_id=d.get("bundle_id"),
+            provider=str(d["provider"]),
+            input_format=str(d["input_format"]),
+            apply_mode=str(d["apply_mode"]),
+            received_at_ns=int(d["received_at_ns"]),
+            observed_at_ns=(int(d["observed_at_ns"]) if d.get("observed_at_ns") is not None else None),
+            source=d.get("source"),
+            payload_origin=d.get("payload_origin"),
+            raw_bundle_payload=dict(raw_bundle_payload),
+            normalized_bundle=external_regime_payload_bundle_from_dict(d["normalized_bundle"]),
+            result=external_regime_bundle_ingestion_record_from_dict(d["result"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Malformed ExternalRegimeBundleReplayArtifact: {exc}") from exc
+
+
+def load_external_regime_bundle_payload(
+    payload: object,
+    *,
+    input_format: str,
+) -> tuple[dict[str, object], ExternalRegimePayloadBundle, str | None]:
+    """Load and normalize one multi-dimension external-regime bundle."""
+    payload_dict, payload_origin = load_external_regime_payload(payload, input_format=input_format)
+    data = _require_payload_dict(
+        payload_dict,
+        dimension="bundle",
+        required_fields=frozenset(),
+        allowed_fields=_BUNDLE_PAYLOAD_ALLOWED_FIELDS,
+    )
+    if not any(data.get(name) is not None for name in ("options", "event", "on_chain")):
+        raise ValueError("bundle.missing_dimensions")
+    observed_at_ns = _optional_non_negative_int(data, "observed_at_ns")
+    bundle_received_at_ns = _optional_non_negative_int(data, "received_at_ns")
+    bundle_id = _optional_string(data, "bundle_id")
+    source = _optional_string(data, "source")
+    for field_name, value in (("bundle_id", bundle_id), ("source", source)):
+        if value is not None and not value.strip():
+            raise ValueError(f"bundle.{field_name}.must_be_non_empty_string")
+    bundle = ExternalRegimePayloadBundle(
+        bundle_id=bundle_id,
+        source=source,
+        observed_at_ns=observed_at_ns,
+        received_at_ns=bundle_received_at_ns,
+        options=_optional_bundle_dimension_payload(data, "options"),
+        event=_optional_bundle_dimension_payload(data, "event"),
+        on_chain=_optional_bundle_dimension_payload(data, "on_chain"),
+    )
+    return data, bundle, payload_origin
+
+
+def _optional_bundle_dimension_payload(payload: dict[str, object], field_name: str) -> dict[str, object] | None:
+    value = payload.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"bundle.{field_name}.must_be_object")
+    return dict(value)
+
+
 def _require_payload_dict(
     payload: object,
     *,
@@ -1621,6 +1881,8 @@ class ExternalRegimeManager:
         self._latest_update: ExternalRegimeUpdateRecord | None = None
         self._latest_accepted_payload: ExternalRegimePayloadIngestionRecord | None = None
         self._latest_rejected_payload: ExternalRegimePayloadIngestionRecord | None = None
+        self._latest_bundle_result: ExternalRegimeBundleIngestionRecord | None = None
+        self._latest_bundle_replay_artifact: ExternalRegimeBundleReplayArtifact | None = None
         self._options_source_owner: ExternalRegimeDimensionSourceState | None = None
         self._event_source_owner: ExternalRegimeDimensionSourceState | None = None
         self._on_chain_source_owner: ExternalRegimeDimensionSourceState | None = None
@@ -1655,6 +1917,16 @@ class ExternalRegimeManager:
     def provider_policy(self) -> ExternalRegimeProviderPolicy:
         """Configured provider/source policy for payload ingestion."""
         return self._provider_policy
+
+    @property
+    def latest_bundle_result(self) -> ExternalRegimeBundleIngestionRecord | None:
+        """Most recent bundle ingestion result."""
+        return self._latest_bundle_result
+
+    @property
+    def latest_bundle_replay_artifact(self) -> ExternalRegimeBundleReplayArtifact | None:
+        """Most recent replayable bundle artifact."""
+        return self._latest_bundle_replay_artifact
 
     def recent_update_history(self) -> tuple[ExternalRegimeUpdateRecord, ...]:
         """Bounded recent update history, oldest first."""
@@ -1856,6 +2128,181 @@ class ExternalRegimeManager:
             apply_update=self.update_on_chain,
         )
 
+    def ingest_bundle_payload(
+        self,
+        payload: object,
+        *,
+        provider: str,
+        input_format: str = "dict",
+        apply_mode: ExternalRegimeBundleApplyMode | str = ExternalRegimeBundleApplyMode.ATOMIC,
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimeBundleIngestionRecord:
+        """Validate and ingest a multi-dimension external-regime bundle."""
+        try:
+            resolved_apply_mode = ExternalRegimeBundleApplyMode(apply_mode)
+        except ValueError:
+            result = ExternalRegimeBundleIngestionRecord(
+                bundle_id=None,
+                provider=provider,
+                input_format=input_format,
+                apply_mode=str(apply_mode),
+                outcome=ExternalRegimeBundleIngestionOutcome.FULLY_REJECTED.value,
+                accepted=False,
+                partially_accepted=False,
+                replayable=False,
+                received_at_ns=0 if received_at_ns is None else received_at_ns,
+                observed_at_ns=None,
+                source=None,
+                payload_origin=None,
+                dimensions_present=(),
+                changed_dimensions=(),
+                failed_dimensions=(),
+                reason=f"invalid_bundle_apply_mode:{apply_mode!r}",
+                dimension_results=(),
+            )
+            self._record_bundle_ingestion(result, artifact=None)
+            return result
+
+        try:
+            raw_bundle_payload, bundle, payload_origin = load_external_regime_bundle_payload(
+                payload,
+                input_format=input_format,
+            )
+        except ValueError as exc:
+            result = ExternalRegimeBundleIngestionRecord(
+                bundle_id=None,
+                provider=provider,
+                input_format=input_format,
+                apply_mode=resolved_apply_mode.value,
+                outcome=ExternalRegimeBundleIngestionOutcome.FULLY_REJECTED.value,
+                accepted=False,
+                partially_accepted=False,
+                replayable=False,
+                received_at_ns=0 if received_at_ns is None else received_at_ns,
+                observed_at_ns=None,
+                source=None,
+                payload_origin=(
+                    str(payload) if input_format == "json_file" and isinstance(payload, (str, Path)) else None
+                ),
+                dimensions_present=(),
+                changed_dimensions=(),
+                failed_dimensions=(),
+                reason=str(exc),
+                dimension_results=(),
+            )
+            self._record_bundle_ingestion(result, artifact=None)
+            return result
+
+        bundle_received_at_ns = (
+            received_at_ns
+            if received_at_ns is not None
+            else (bundle.received_at_ns if bundle.received_at_ns is not None else bundle.observed_at_ns)
+        )
+        dimensions_present = tuple(
+            dimension
+            for dimension, dimension_payload in (
+                ("options", bundle.options),
+                ("event", bundle.event),
+                ("on_chain", bundle.on_chain),
+            )
+            if dimension_payload is not None
+        )
+        prepared_candidates: list[_PreparedExternalRegimePayloadIngestion] = []
+        failed_records: list[ExternalRegimePayloadIngestionRecord] = []
+        for dimension in dimensions_present:
+            prepare_result = self._prepare_payload_ingestion(
+                dimension=dimension,
+                payload=getattr(bundle, dimension),
+                provider=provider,
+                input_format="dict",
+                received_at_ns=bundle_received_at_ns,
+                build_state=self._build_state_for_dimension(dimension),
+            )
+            if isinstance(prepare_result, ExternalRegimePayloadIngestionRecord):
+                failed_records.append(prepare_result)
+            else:
+                prepared_candidates.append(prepare_result)
+
+        applied_records: list[ExternalRegimePayloadIngestionRecord] = []
+        if resolved_apply_mode is ExternalRegimeBundleApplyMode.ATOMIC and failed_records:
+            failure_reason = failed_records[0].reason
+            dimension_results = list(failed_records)
+            for prepared in prepared_candidates:
+                dimension_results.append(
+                    self._bundle_policy_rejected_record(
+                        prepared,
+                        reason=f"bundle_atomic_rejected:{failure_reason}",
+                    )
+                )
+            outcome = ExternalRegimeBundleIngestionOutcome.FULLY_REJECTED
+        else:
+            for prepared in prepared_candidates:
+                applied_records.append(self._apply_prepared_payload_ingestion(prepared))
+            dimension_results = [*applied_records, *failed_records]
+            accepted_records = [record for record in dimension_results if record.accepted]
+            rejected_records = [record for record in dimension_results if not record.accepted]
+            if rejected_records and accepted_records:
+                outcome = ExternalRegimeBundleIngestionOutcome.PARTIALLY_ACCEPTED
+            elif rejected_records:
+                outcome = ExternalRegimeBundleIngestionOutcome.FULLY_REJECTED
+            else:
+                outcome = ExternalRegimeBundleIngestionOutcome.FULLY_ACCEPTED
+
+        ordered_dimension_results = tuple(
+            sorted(dimension_results, key=lambda item: dimensions_present.index(item.dimension))
+        )
+        changed_dimensions = tuple(record.dimension for record in ordered_dimension_results if record.accepted)
+        failed_dimensions = tuple(record.dimension for record in ordered_dimension_results if not record.accepted)
+        result = ExternalRegimeBundleIngestionRecord(
+            bundle_id=bundle.bundle_id,
+            provider=provider,
+            input_format=input_format,
+            apply_mode=resolved_apply_mode.value,
+            outcome=outcome.value,
+            accepted=outcome is ExternalRegimeBundleIngestionOutcome.FULLY_ACCEPTED,
+            partially_accepted=outcome is ExternalRegimeBundleIngestionOutcome.PARTIALLY_ACCEPTED,
+            replayable=True,
+            received_at_ns=0 if bundle_received_at_ns is None else bundle_received_at_ns,
+            observed_at_ns=bundle.observed_at_ns,
+            source=bundle.source,
+            payload_origin=payload_origin,
+            dimensions_present=dimensions_present,
+            changed_dimensions=changed_dimensions,
+            failed_dimensions=failed_dimensions,
+            reason=self._bundle_reason_from_outcome(outcome, dimension_results),
+            dimension_results=ordered_dimension_results,
+        )
+        artifact = ExternalRegimeBundleReplayArtifact(
+            bundle_id=bundle.bundle_id,
+            provider=provider,
+            input_format=input_format,
+            apply_mode=resolved_apply_mode.value,
+            received_at_ns=0 if bundle_received_at_ns is None else bundle_received_at_ns,
+            observed_at_ns=bundle.observed_at_ns,
+            source=bundle.source,
+            payload_origin=payload_origin,
+            raw_bundle_payload=raw_bundle_payload,
+            normalized_bundle=bundle,
+            result=result,
+        )
+        self._record_bundle_ingestion(result, artifact=artifact)
+        return result
+
+    def replay_bundle_artifact(
+        self,
+        artifact: ExternalRegimeBundleReplayArtifact,
+    ) -> ExternalRegimeBundleIngestionRecord:
+        """Replay a previously captured bundle artifact through the same ingestion path."""
+        if not isinstance(artifact, ExternalRegimeBundleReplayArtifact):
+            raise ValueError(f"artifact must be ExternalRegimeBundleReplayArtifact, got {type(artifact).__name__}")
+        return self.ingest_bundle_payload(
+            dict(artifact.raw_bundle_payload),
+            provider=artifact.provider,
+            input_format="dict",
+            apply_mode=artifact.apply_mode,
+            received_at_ns=artifact.received_at_ns,
+        )
+
     def reset(
         self,
         *,
@@ -1942,6 +2389,18 @@ class ExternalRegimeManager:
                 if latest_rejected_payload_raw is not None
                 else None
             )
+            latest_bundle_result_raw = data.get("latest_bundle_result")
+            latest_bundle_artifact_raw = data.get("latest_bundle_replay_artifact")
+            latest_bundle_result = (
+                external_regime_bundle_ingestion_record_from_dict(latest_bundle_result_raw)
+                if latest_bundle_result_raw is not None
+                else None
+            )
+            latest_bundle_artifact = (
+                external_regime_bundle_replay_artifact_from_dict(latest_bundle_artifact_raw)
+                if latest_bundle_artifact_raw is not None
+                else None
+            )
         except ValueError as exc:
             raise ExternalRegimeStateCorruptError(str(exc)) from exc
 
@@ -1951,6 +2410,8 @@ class ExternalRegimeManager:
         self._latest_update = latest
         self._latest_accepted_payload = latest_accepted_payload
         self._latest_rejected_payload = latest_rejected_payload
+        self._latest_bundle_result = latest_bundle_result
+        self._latest_bundle_replay_artifact = latest_bundle_artifact
         self._provider_policy = (
             external_regime_provider_policy_from_dict(data["provider_policy"])
             if data.get("provider_policy") is not None
@@ -2024,6 +2485,16 @@ class ExternalRegimeManager:
                 if self._latest_rejected_payload is not None
                 else None
             ),
+            "latest_bundle_result": (
+                external_regime_bundle_ingestion_record_to_dict(self._latest_bundle_result)
+                if self._latest_bundle_result is not None
+                else None
+            ),
+            "latest_bundle_replay_artifact": (
+                external_regime_bundle_replay_artifact_to_dict(self._latest_bundle_replay_artifact)
+                if self._latest_bundle_replay_artifact is not None
+                else None
+            ),
             "recent_history": [external_regime_update_record_to_dict(record) for record in self._history],
             "persistence": external_regime_persistence_state_to_dict(self.persistence_state()),
         }
@@ -2039,6 +2510,31 @@ class ExternalRegimeManager:
         build_state,
         apply_update,
     ) -> ExternalRegimePayloadIngestionRecord:
+        prepared = self._prepare_payload_ingestion(
+            dimension=dimension,
+            payload=payload,
+            provider=provider,
+            input_format=input_format,
+            received_at_ns=received_at_ns,
+            build_state=build_state,
+        )
+        if isinstance(prepared, ExternalRegimePayloadIngestionRecord):
+            self._record_payload_ingestion(prepared)
+            return prepared
+        result = self._apply_prepared_payload_ingestion(prepared, apply_update=apply_update)
+        self._record_payload_ingestion(result)
+        return result
+
+    def _prepare_payload_ingestion(
+        self,
+        *,
+        dimension: str,
+        payload: object,
+        provider: str,
+        input_format: str,
+        received_at_ns: int | None,
+        build_state,
+    ) -> _PreparedExternalRegimePayloadIngestion | ExternalRegimePayloadIngestionRecord:
         threshold_s = self._plane.freshness_policy.threshold_for_dimension(dimension)
         profile, role = self._resolve_provider_context(provider=provider, dimension=dimension)
         payload_origin: str | None = None
@@ -2051,7 +2547,7 @@ class ExternalRegimeManager:
         }
         resolved_received_at_ns = received_at_ns
         if received_at_ns is not None and (not isinstance(received_at_ns, int) or received_at_ns < 0):
-            result = ExternalRegimePayloadIngestionRecord(
+            return ExternalRegimePayloadIngestionRecord(
                 dimension=dimension,
                 provider=provider,
                 input_format=input_format,
@@ -2069,8 +2565,6 @@ class ExternalRegimeManager:
                 payload_origin=None,
                 payload_summary=payload_summary,
             )
-            self._record_payload_ingestion(result)
-            return result
 
         try:
             payload_dict, payload_origin = load_external_regime_payload(payload, input_format=input_format)
@@ -2085,7 +2579,7 @@ class ExternalRegimeManager:
                 payload_origin = str(payload)
             if payload_origin is not None:
                 payload_summary["payload_origin"] = payload_origin
-            result = ExternalRegimePayloadIngestionRecord(
+            return ExternalRegimePayloadIngestionRecord(
                 dimension=dimension,
                 provider=provider,
                 input_format=input_format,
@@ -2103,8 +2597,6 @@ class ExternalRegimeManager:
                 payload_origin=payload_origin,
                 payload_summary=payload_summary,
             )
-            self._record_payload_ingestion(result)
-            return result
 
         resolved_received_at_ns = state.snapshot_ns if resolved_received_at_ns is None else resolved_received_at_ns
         payload_summary = _payload_summary_for_state(
@@ -2131,7 +2623,7 @@ class ExternalRegimeManager:
             role=role,
         )
         if source_policy_reason is not None:
-            result = ExternalRegimePayloadIngestionRecord(
+            return ExternalRegimePayloadIngestionRecord(
                 dimension=dimension,
                 provider=provider,
                 input_format=input_format,
@@ -2149,41 +2641,109 @@ class ExternalRegimeManager:
                 payload_origin=payload_origin,
                 payload_summary=payload_summary,
             )
-            self._record_payload_ingestion(result)
-            return result
 
-        update_record = apply_update(
-            state,
+        update_validation_rejection = self._validate_update(
+            dimension=dimension,
+            state=state,
+            expected_type=self._expected_type_for_dimension(dimension),
+            current_state=self._current_state_for_dimension(dimension),
             received_at_ns=resolved_received_at_ns,
-            source_owner=self._build_payload_source_owner(
+        )
+        if update_validation_rejection is not None:
+            return ExternalRegimePayloadIngestionRecord(
                 dimension=dimension,
                 provider=provider,
-                state=state,
-                trust=None if profile is None else profile.trust.value,
-                role=None if role is None else role.value,
+                input_format=input_format,
+                accepted=False,
                 received_at_ns=resolved_received_at_ns,
-            ),
-        )
-        result = ExternalRegimePayloadIngestionRecord(
+                source_label=update_validation_rejection.source_label,
+                state_snapshot_ns=update_validation_rejection.state_snapshot_ns,
+                level=update_validation_rejection.level,
+                provider_trust=None if profile is None else profile.trust.value,
+                provider_role=None if role is None else role.value,
+                freshness_threshold_s=threshold_s,
+                update_status=update_validation_rejection.status.value,
+                reason=update_validation_rejection.reason,
+                rejection_stage="update_validation",
+                payload_origin=payload_origin,
+                payload_summary=payload_summary,
+            )
+
+        return _PreparedExternalRegimePayloadIngestion(
             dimension=dimension,
             provider=provider,
             input_format=input_format,
-            accepted=update_record.accepted,
             received_at_ns=resolved_received_at_ns,
-            source_label=update_record.source_label,
-            state_snapshot_ns=update_record.state_snapshot_ns,
-            level=update_record.level,
+            payload_origin=payload_origin,
+            payload_summary=payload_summary,
+            state=state,
             provider_trust=None if profile is None else profile.trust.value,
             provider_role=None if role is None else role.value,
             freshness_threshold_s=threshold_s,
+        )
+
+    def _apply_prepared_payload_ingestion(
+        self,
+        prepared: _PreparedExternalRegimePayloadIngestion,
+        *,
+        apply_update=None,
+    ) -> ExternalRegimePayloadIngestionRecord:
+        update_func = apply_update or self._apply_update_for_dimension(prepared.dimension)
+        update_record = update_func(
+            prepared.state,
+            received_at_ns=prepared.received_at_ns,
+            source_owner=self._build_payload_source_owner(
+                dimension=prepared.dimension,
+                provider=prepared.provider,
+                state=prepared.state,
+                trust=prepared.provider_trust,
+                role=prepared.provider_role,
+                received_at_ns=prepared.received_at_ns,
+            ),
+        )
+        return ExternalRegimePayloadIngestionRecord(
+            dimension=prepared.dimension,
+            provider=prepared.provider,
+            input_format=prepared.input_format,
+            accepted=update_record.accepted,
+            received_at_ns=prepared.received_at_ns,
+            source_label=update_record.source_label,
+            state_snapshot_ns=update_record.state_snapshot_ns,
+            level=update_record.level,
+            provider_trust=prepared.provider_trust,
+            provider_role=prepared.provider_role,
+            freshness_threshold_s=prepared.freshness_threshold_s,
             update_status=update_record.status.value,
             reason=update_record.reason,
             rejection_stage=None if update_record.accepted else "update_validation",
-            payload_origin=payload_origin,
-            payload_summary=payload_summary,
+            payload_origin=prepared.payload_origin,
+            payload_summary=dict(prepared.payload_summary),
         )
-        self._record_payload_ingestion(result)
-        return result
+
+    @staticmethod
+    def _bundle_policy_rejected_record(
+        prepared: _PreparedExternalRegimePayloadIngestion,
+        *,
+        reason: str,
+    ) -> ExternalRegimePayloadIngestionRecord:
+        return ExternalRegimePayloadIngestionRecord(
+            dimension=prepared.dimension,
+            provider=prepared.provider,
+            input_format=prepared.input_format,
+            accepted=False,
+            received_at_ns=prepared.received_at_ns,
+            source_label=prepared.state.source,
+            state_snapshot_ns=prepared.state.snapshot_ns,
+            level=prepared.state.level.value,
+            provider_trust=prepared.provider_trust,
+            provider_role=prepared.provider_role,
+            freshness_threshold_s=prepared.freshness_threshold_s,
+            update_status=None,
+            reason=reason,
+            rejection_stage="bundle_policy",
+            payload_origin=prepared.payload_origin,
+            payload_summary=dict(prepared.payload_summary),
+        )
 
     def _apply_update(
         self,
@@ -2327,6 +2887,62 @@ class ExternalRegimeManager:
             data=external_regime_payload_ingestion_record_to_dict(record),
         )
         self.persist_state()
+
+    def _record_bundle_ingestion(
+        self,
+        record: ExternalRegimeBundleIngestionRecord,
+        *,
+        artifact: ExternalRegimeBundleReplayArtifact | None,
+    ) -> None:
+        self._latest_bundle_result = record
+        self._latest_bundle_replay_artifact = artifact
+        self._append_audit_record(
+            event_name="external_regime_bundle_ingestion",
+            data=external_regime_bundle_ingestion_record_to_dict(record),
+        )
+        self.persist_state()
+
+    @staticmethod
+    def _bundle_reason_from_outcome(
+        outcome: ExternalRegimeBundleIngestionOutcome,
+        dimension_results: list[ExternalRegimePayloadIngestionRecord],
+    ) -> str:
+        if outcome is ExternalRegimeBundleIngestionOutcome.FULLY_ACCEPTED:
+            return "accepted"
+        if not dimension_results:
+            return "bundle_rejected"
+        first_failure = next((record.reason for record in dimension_results if not record.accepted), "bundle_rejected")
+        if outcome is ExternalRegimeBundleIngestionOutcome.PARTIALLY_ACCEPTED:
+            return f"partial:{first_failure}"
+        return first_failure
+
+    def _build_state_for_dimension(self, dimension: str):
+        if dimension == "options":
+            return build_options_regime_state_from_payload
+        if dimension == "event":
+            return build_event_regime_state_from_payload
+        if dimension == "on_chain":
+            return build_on_chain_regime_state_from_payload
+        raise ValueError(f"unsupported_dimension:{dimension!r}")
+
+    def _apply_update_for_dimension(self, dimension: str):
+        if dimension == "options":
+            return self.update_options
+        if dimension == "event":
+            return self.update_event
+        if dimension == "on_chain":
+            return self.update_on_chain
+        raise ValueError(f"unsupported_dimension:{dimension!r}")
+
+    @staticmethod
+    def _expected_type_for_dimension(dimension: str) -> type:
+        if dimension == "options":
+            return OptionsRegimeState
+        if dimension == "event":
+            return EventRegimeState
+        if dimension == "on_chain":
+            return OnChainRegimeState
+        raise ValueError(f"unsupported_dimension:{dimension!r}")
 
     def _resolve_provider_context(
         self,
@@ -2536,6 +3152,16 @@ class ExternalRegimeManager:
             "latest_rejected_payload": (
                 external_regime_payload_ingestion_record_to_dict(self._latest_rejected_payload)
                 if self._latest_rejected_payload is not None
+                else None
+            ),
+            "latest_bundle_result": (
+                external_regime_bundle_ingestion_record_to_dict(self._latest_bundle_result)
+                if self._latest_bundle_result is not None
+                else None
+            ),
+            "latest_bundle_replay_artifact": (
+                external_regime_bundle_replay_artifact_to_dict(self._latest_bundle_replay_artifact)
+                if self._latest_bundle_replay_artifact is not None
                 else None
             ),
             "recent_history": [external_regime_update_record_to_dict(record) for record in self._history],

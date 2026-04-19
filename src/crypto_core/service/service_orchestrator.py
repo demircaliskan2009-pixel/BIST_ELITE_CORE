@@ -40,6 +40,9 @@ from crypto_core.service.campaign_controller import (
 )
 from crypto_core.service.evidence_store import EvidenceStore
 from crypto_core.service.external_regime import (
+    ExternalRegimeBundleApplyMode,
+    ExternalRegimeBundleIngestionRecord,
+    ExternalRegimeBundleReplayArtifact,
     ExternalRegimeDataPlane,
     ExternalRegimeManager,
     ExternalRegimePayloadIngestionRecord,
@@ -878,6 +881,59 @@ class ServiceOrchestrator:
             received_at_ns=self._resolved_external_regime_time(received_at_ns),
         )
 
+    def ingest_external_regime_bundle(
+        self,
+        payload: object,
+        *,
+        provider: str,
+        input_format: str = "dict",
+        apply_mode: ExternalRegimeBundleApplyMode | str = ExternalRegimeBundleApplyMode.ATOMIC,
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimeBundleIngestionRecord:
+        """Validate and ingest one multi-dimension external-regime bundle."""
+        manager = self._require_external_regime_manager("ingest external regime bundle")
+        return manager.ingest_bundle_payload(
+            payload,
+            provider=provider,
+            input_format=input_format,
+            apply_mode=apply_mode,
+            received_at_ns=self._resolved_external_regime_time(received_at_ns),
+        )
+
+    def ingest_external_regime_bundle_json(
+        self,
+        payload: str,
+        *,
+        provider: str,
+        apply_mode: ExternalRegimeBundleApplyMode | str = ExternalRegimeBundleApplyMode.ATOMIC,
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimeBundleIngestionRecord:
+        """Validate and ingest one JSON external-regime bundle."""
+        return self.ingest_external_regime_bundle(
+            payload,
+            provider=provider,
+            input_format="json",
+            apply_mode=apply_mode,
+            received_at_ns=received_at_ns,
+        )
+
+    def ingest_external_regime_bundle_json_file(
+        self,
+        payload: object,
+        *,
+        provider: str,
+        apply_mode: ExternalRegimeBundleApplyMode | str = ExternalRegimeBundleApplyMode.ATOMIC,
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimeBundleIngestionRecord:
+        """Validate and ingest one JSON-file external-regime bundle."""
+        return self.ingest_external_regime_bundle(
+            payload,
+            provider=provider,
+            input_format="json_file",
+            apply_mode=apply_mode,
+            received_at_ns=received_at_ns,
+        )
+
     def external_regime_latest_update(self) -> ExternalRegimeUpdateRecord | None:
         """Most recent external regime update attempt."""
         if self._external_regime_manager is None:
@@ -890,6 +946,18 @@ class ServiceOrchestrator:
             return ()
         return self._external_regime_manager.recent_update_history()
 
+    def external_regime_latest_bundle_result(self) -> ExternalRegimeBundleIngestionRecord | None:
+        """Most recent external-regime bundle ingestion result."""
+        if self._external_regime_manager is None:
+            return None
+        return self._external_regime_manager.latest_bundle_result
+
+    def external_regime_latest_bundle_replay_artifact(self) -> ExternalRegimeBundleReplayArtifact | None:
+        """Most recent replayable external-regime bundle artifact."""
+        if self._external_regime_manager is None:
+            return None
+        return self._external_regime_manager.latest_bundle_replay_artifact
+
     def external_regime_lifecycle_dict(self) -> dict | None:
         """Full external regime lifecycle view for operators/reporting."""
         if self._external_regime_manager is None:
@@ -901,6 +969,14 @@ class ServiceOrchestrator:
         """Restore external regime state from persistence, if present."""
         manager = self._require_external_regime_manager("restore external regime")
         return manager.restore_state()
+
+    def replay_external_regime_bundle_artifact(
+        self,
+        artifact: ExternalRegimeBundleReplayArtifact,
+    ) -> ExternalRegimeBundleIngestionRecord:
+        """Replay a previously captured external-regime bundle artifact."""
+        manager = self._require_external_regime_manager("replay external regime bundle artifact")
+        return manager.replay_bundle_artifact(artifact)
 
     def reset_external_regime(
         self,
