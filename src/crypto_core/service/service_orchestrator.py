@@ -42,6 +42,7 @@ from crypto_core.service.evidence_store import EvidenceStore
 from crypto_core.service.external_regime import (
     ExternalRegimeDataPlane,
     ExternalRegimeManager,
+    ExternalRegimePayloadIngestionRecord,
     ExternalRegimeSafetyPolicy,
     ExternalRegimeSnapshot,
     ExternalRegimeUpdateRecord,
@@ -804,6 +805,76 @@ class ServiceOrchestrator:
             options=options,
             event=event,
             on_chain=on_chain,
+            received_at_ns=self._resolved_external_regime_time(received_at_ns),
+        )
+
+    def ingest_options_regime_payload(
+        self,
+        payload: object,
+        *,
+        provider: str,
+        input_format: str = "dict",
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimePayloadIngestionRecord:
+        """Validate and ingest one raw options-regime payload."""
+        manager = self._require_external_regime_manager("ingest options regime payload")
+        return manager.ingest_options_payload(
+            payload,
+            provider=provider,
+            input_format=input_format,
+            received_at_ns=self._resolved_external_regime_time(received_at_ns),
+        )
+
+    def ingest_event_regime_payload(
+        self,
+        payload: object,
+        *,
+        provider: str,
+        input_format: str = "dict",
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimePayloadIngestionRecord:
+        """Validate and ingest one raw event-regime payload."""
+        manager = self._require_external_regime_manager("ingest event regime payload")
+        return manager.ingest_event_payload(
+            payload,
+            provider=provider,
+            input_format=input_format,
+            received_at_ns=self._resolved_external_regime_time(received_at_ns),
+        )
+
+    def ingest_on_chain_regime_payload(
+        self,
+        payload: object,
+        *,
+        provider: str,
+        input_format: str = "dict",
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimePayloadIngestionRecord:
+        """Validate and ingest one raw on-chain-regime payload."""
+        manager = self._require_external_regime_manager("ingest on-chain regime payload")
+        return manager.ingest_on_chain_payload(
+            payload,
+            provider=provider,
+            input_format=input_format,
+            received_at_ns=self._resolved_external_regime_time(received_at_ns),
+        )
+
+    def ingest_external_regime_payload(
+        self,
+        *,
+        dimension: str,
+        payload: object,
+        provider: str,
+        input_format: str = "dict",
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimePayloadIngestionRecord:
+        """Validate and ingest one raw external-regime payload by dimension."""
+        manager = self._require_external_regime_manager("ingest external regime payload")
+        return manager.ingest_payload(
+            dimension=dimension,
+            payload=payload,
+            provider=provider,
+            input_format=input_format,
             received_at_ns=self._resolved_external_regime_time(received_at_ns),
         )
 

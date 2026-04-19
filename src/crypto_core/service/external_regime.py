@@ -24,10 +24,12 @@ PRD reference: §1.4 Edge Family D, §1.29 System State, §4 Data Pipeline.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 from crypto_core.execution.regime_contracts import (
     CompositeRegimeState,
@@ -45,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 _NS_PER_S: int = 1_000_000_000
 _EXTERNAL_REGIME_SNAPSHOT_NAME = "external_regime_state"
+_SUPPORTED_EXTERNAL_REGIME_INPUT_FORMATS = frozenset({"dict", "json", "json_file"})
 
 EXT_REGIME_EXECUTION_UNAVAILABLE = "external_regime_unavailable"
 EXT_REGIME_EXECUTION_STALE = "external_regime_stale"
@@ -54,6 +57,50 @@ EXT_REGIME_ACTIVATION_EVENT_RISK_BLOCKED = "external_regime_event_risk_blocked"
 EXT_REGIME_ACTIVATION_OPTIONS_EXTREME_BLOCKED = "external_regime_options_extreme_blocked"
 EXT_REGIME_ACTIVATION_ON_CHAIN_STRESS_BLOCKED = "external_regime_on_chain_stress_blocked"
 EXT_REGIME_ACTIVATION_REDUCED = "external_regime_high_risk_reduced"
+
+_OPTIONS_PAYLOAD_REQUIRED_FIELDS = frozenset({"symbol", "level", "snapshot_ns", "source"})
+_OPTIONS_PAYLOAD_ALLOWED_FIELDS = frozenset(
+    {
+        "symbol",
+        "level",
+        "snapshot_ns",
+        "source",
+        "implied_vol_30d",
+        "implied_vol_7d",
+        "put_call_ratio",
+        "skew_25d",
+        "term_structure_slope",
+        "evidence",
+    }
+)
+_EVENT_PAYLOAD_REQUIRED_FIELDS = frozenset({"level", "snapshot_ns", "source"})
+_EVENT_PAYLOAD_ALLOWED_FIELDS = frozenset(
+    {
+        "level",
+        "snapshot_ns",
+        "source",
+        "event_category",
+        "event_label",
+        "hours_until_event",
+        "hours_since_event",
+        "impact_estimate",
+        "evidence",
+    }
+)
+_ON_CHAIN_PAYLOAD_REQUIRED_FIELDS = frozenset({"symbol", "level", "snapshot_ns", "source"})
+_ON_CHAIN_PAYLOAD_ALLOWED_FIELDS = frozenset(
+    {
+        "symbol",
+        "level",
+        "snapshot_ns",
+        "source",
+        "exchange_net_flow_24h_usd",
+        "whale_transfer_count_24h",
+        "active_addresses_7d_change_pct",
+        "staking_ratio_change_7d_pct",
+        "evidence",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +248,25 @@ class ExternalRegimeUpdateRecord:
     freshness: DataFreshness
     replaced_existing: bool
     reason: str
+
+
+@dataclass(frozen=True)
+class ExternalRegimePayloadIngestionRecord:
+    """Deterministic record of one raw external regime payload ingestion attempt."""
+
+    dimension: str
+    provider: str
+    input_format: str
+    accepted: bool
+    received_at_ns: int
+    source_label: str | None
+    state_snapshot_ns: int | None
+    level: str | None
+    update_status: str | None
+    reason: str
+    rejection_stage: str | None
+    payload_origin: str | None
+    payload_summary: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -747,6 +813,315 @@ def evaluate_external_regime_activation_safety(
 
 
 # ---------------------------------------------------------------------------
+# Provider adapter layer
+# ---------------------------------------------------------------------------
+
+
+def build_options_regime_state_from_payload(
+    payload: object,
+    *,
+    provider: str,
+    input_format: str,
+    payload_origin: str | None = None,
+) -> OptionsRegimeState:
+    """Build OptionsRegimeState from a validated provider payload."""
+    data = _require_payload_dict(
+        payload,
+        dimension="options",
+        required_fields=_OPTIONS_PAYLOAD_REQUIRED_FIELDS,
+        allowed_fields=_OPTIONS_PAYLOAD_ALLOWED_FIELDS,
+    )
+    evidence = _build_adapter_evidence(
+        data.get("evidence"),
+        provider=provider,
+        input_format=input_format,
+        payload_origin=payload_origin,
+    )
+    return OptionsRegimeState(
+        symbol=_required_non_empty_string(data, "symbol"),
+        level=_enum_field(OptionsRegimeLevel, data, "level"),
+        snapshot_ns=_required_non_negative_int(data, "snapshot_ns"),
+        source=_required_non_empty_string(data, "source"),
+        implied_vol_30d=_optional_float(data, "implied_vol_30d"),
+        implied_vol_7d=_optional_float(data, "implied_vol_7d"),
+        put_call_ratio=_optional_float(data, "put_call_ratio"),
+        skew_25d=_optional_float(data, "skew_25d"),
+        term_structure_slope=_optional_float(data, "term_structure_slope"),
+        evidence=evidence,
+    )
+
+
+def build_event_regime_state_from_payload(
+    payload: object,
+    *,
+    provider: str,
+    input_format: str,
+    payload_origin: str | None = None,
+) -> EventRegimeState:
+    """Build EventRegimeState from a validated provider payload."""
+    from crypto_core.execution.regime_contracts import EventCategory
+
+    data = _require_payload_dict(
+        payload,
+        dimension="event",
+        required_fields=_EVENT_PAYLOAD_REQUIRED_FIELDS,
+        allowed_fields=_EVENT_PAYLOAD_ALLOWED_FIELDS,
+    )
+    impact_estimate = _optional_float(data, "impact_estimate")
+    if impact_estimate is not None and not 0.0 <= impact_estimate <= 1.0:
+        raise ValueError(f"event.impact_estimate_out_of_range:{impact_estimate!r}")
+    evidence = _build_adapter_evidence(
+        data.get("evidence"),
+        provider=provider,
+        input_format=input_format,
+        payload_origin=payload_origin,
+    )
+    return EventRegimeState(
+        level=_enum_field(EventRegimeLevel, data, "level"),
+        snapshot_ns=_required_non_negative_int(data, "snapshot_ns"),
+        source=_required_non_empty_string(data, "source"),
+        event_category=_optional_enum_field(EventCategory, data, "event_category", default=EventCategory.UNKNOWN),
+        event_label=_optional_string(data, "event_label"),
+        hours_until_event=_optional_non_negative_float(data, "hours_until_event"),
+        hours_since_event=_optional_non_negative_float(data, "hours_since_event"),
+        impact_estimate=impact_estimate,
+        evidence=evidence,
+    )
+
+
+def build_on_chain_regime_state_from_payload(
+    payload: object,
+    *,
+    provider: str,
+    input_format: str,
+    payload_origin: str | None = None,
+) -> OnChainRegimeState:
+    """Build OnChainRegimeState from a validated provider payload."""
+    data = _require_payload_dict(
+        payload,
+        dimension="on_chain",
+        required_fields=_ON_CHAIN_PAYLOAD_REQUIRED_FIELDS,
+        allowed_fields=_ON_CHAIN_PAYLOAD_ALLOWED_FIELDS,
+    )
+    evidence = _build_adapter_evidence(
+        data.get("evidence"),
+        provider=provider,
+        input_format=input_format,
+        payload_origin=payload_origin,
+    )
+    return OnChainRegimeState(
+        symbol=_required_non_empty_string(data, "symbol"),
+        level=_enum_field(OnChainRegimeLevel, data, "level"),
+        snapshot_ns=_required_non_negative_int(data, "snapshot_ns"),
+        source=_required_non_empty_string(data, "source"),
+        exchange_net_flow_24h_usd=_optional_float(data, "exchange_net_flow_24h_usd"),
+        whale_transfer_count_24h=_optional_non_negative_int(data, "whale_transfer_count_24h"),
+        active_addresses_7d_change_pct=_optional_float(data, "active_addresses_7d_change_pct"),
+        staking_ratio_change_7d_pct=_optional_float(data, "staking_ratio_change_7d_pct"),
+        evidence=evidence,
+    )
+
+
+def load_external_regime_payload(
+    payload: object,
+    *,
+    input_format: str,
+) -> tuple[dict[str, object], str | None]:
+    """Normalize a raw external-regime payload into a dict plus origin label."""
+    if input_format not in _SUPPORTED_EXTERNAL_REGIME_INPUT_FORMATS:
+        raise ValueError(f"invalid_input_format:{input_format!r}")
+
+    if input_format == "dict":
+        if not isinstance(payload, dict):
+            raise ValueError(f"payload_root_must_be_object:{type(payload).__name__}")
+        return dict(payload), None
+
+    if input_format == "json":
+        if not isinstance(payload, str):
+            raise ValueError(f"json_payload_must_be_string:{type(payload).__name__}")
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid_json_payload:{exc.msg}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(f"payload_root_must_be_object:{type(parsed).__name__}")
+        return parsed, None
+
+    path = payload if isinstance(payload, Path) else Path(payload) if isinstance(payload, str) else None
+    if path is None:
+        raise ValueError(f"json_file_payload_must_be_path:{type(payload).__name__}")
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"json_file_unreadable:{path}:{exc.strerror or exc.__class__.__name__}") from exc
+    try:
+        parsed = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid_json_file:{path}:{exc.msg}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"payload_root_must_be_object:{type(parsed).__name__}")
+    return parsed, str(path)
+
+
+def external_regime_payload_ingestion_record_to_dict(record: ExternalRegimePayloadIngestionRecord) -> dict:
+    """Serialize an ingestion record to a plain dict."""
+    return {
+        "dimension": record.dimension,
+        "provider": record.provider,
+        "input_format": record.input_format,
+        "accepted": record.accepted,
+        "received_at_ns": record.received_at_ns,
+        "source_label": record.source_label,
+        "state_snapshot_ns": record.state_snapshot_ns,
+        "level": record.level,
+        "update_status": record.update_status,
+        "reason": record.reason,
+        "rejection_stage": record.rejection_stage,
+        "payload_origin": record.payload_origin,
+        "payload_summary": dict(record.payload_summary),
+    }
+
+
+def external_regime_payload_ingestion_record_from_dict(d: dict) -> ExternalRegimePayloadIngestionRecord:
+    """Deserialize an ingestion record from a plain dict."""
+    try:
+        payload_summary = d.get("payload_summary", {})
+        if not isinstance(payload_summary, dict):
+            raise ValueError("payload_summary must be dict")
+        return ExternalRegimePayloadIngestionRecord(
+            dimension=str(d["dimension"]),
+            provider=str(d["provider"]),
+            input_format=str(d["input_format"]),
+            accepted=bool(d["accepted"]),
+            received_at_ns=int(d["received_at_ns"]),
+            source_label=d.get("source_label"),
+            state_snapshot_ns=(int(d["state_snapshot_ns"]) if d.get("state_snapshot_ns") is not None else None),
+            level=d.get("level"),
+            update_status=d.get("update_status"),
+            reason=str(d["reason"]),
+            rejection_stage=d.get("rejection_stage"),
+            payload_origin=d.get("payload_origin"),
+            payload_summary=dict(payload_summary),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Malformed ExternalRegimePayloadIngestionRecord: {exc}") from exc
+
+
+def _require_payload_dict(
+    payload: object,
+    *,
+    dimension: str,
+    required_fields: frozenset[str],
+    allowed_fields: frozenset[str],
+) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        raise ValueError(f"{dimension}.payload_root_must_be_object:{type(payload).__name__}")
+    fields = set(payload)
+    missing = sorted(required_fields - fields)
+    if missing:
+        raise ValueError(f"{dimension}.missing_fields:{','.join(missing)}")
+    unknown = sorted(fields - allowed_fields)
+    if unknown:
+        raise ValueError(f"{dimension}.unknown_fields:{','.join(unknown)}")
+    return dict(payload)
+
+
+def _required_non_empty_string(payload: dict[str, object], field_name: str) -> str:
+    value = payload.get(field_name)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name}.must_be_non_empty_string")
+    return value
+
+
+def _optional_string(payload: dict[str, object], field_name: str) -> str | None:
+    value = payload.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name}.must_be_string")
+    return value
+
+
+def _required_non_negative_int(payload: dict[str, object], field_name: str) -> int:
+    value = payload.get(field_name)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field_name}.must_be_non_negative_int")
+    return value
+
+
+def _optional_non_negative_int(payload: dict[str, object], field_name: str) -> int | None:
+    value = payload.get(field_name)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field_name}.must_be_non_negative_int")
+    return value
+
+
+def _optional_float(payload: dict[str, object], field_name: str) -> float | None:
+    value = payload.get(field_name)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name}.must_be_number")
+    return float(value)
+
+
+def _optional_non_negative_float(payload: dict[str, object], field_name: str) -> float | None:
+    value = _optional_float(payload, field_name)
+    if value is not None and value < 0.0:
+        raise ValueError(f"{field_name}.must_be_non_negative_number")
+    return value
+
+
+def _enum_field(enum_type: type[Enum], payload: dict[str, object], field_name: str):
+    value = payload.get(field_name)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name}.must_be_non_empty_string")
+    try:
+        return enum_type(value)
+    except ValueError as exc:
+        raise ValueError(f"{field_name}.invalid_enum:{value!r}") from exc
+
+
+def _optional_enum_field(enum_type: type[Enum], payload: dict[str, object], field_name: str, *, default):
+    value = payload.get(field_name)
+    if value is None:
+        return default
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name}.must_be_non_empty_string")
+    try:
+        return enum_type(value)
+    except ValueError as exc:
+        raise ValueError(f"{field_name}.invalid_enum:{value!r}") from exc
+
+
+def _build_adapter_evidence(
+    evidence: object,
+    *,
+    provider: str,
+    input_format: str,
+    payload_origin: str | None,
+) -> dict:
+    if not isinstance(provider, str) or not provider.strip():
+        raise ValueError("provider.must_be_non_empty_string")
+    if evidence is None:
+        base: dict = {}
+    elif isinstance(evidence, dict):
+        base = dict(evidence)
+    else:
+        raise ValueError("evidence.must_be_dict")
+    adapter_evidence = {
+        "provider": provider,
+        "input_format": input_format,
+    }
+    if payload_origin is not None:
+        adapter_evidence["payload_origin"] = payload_origin
+    base["adapter"] = adapter_evidence
+    return base
+
+
+# ---------------------------------------------------------------------------
 # Serialization
 # ---------------------------------------------------------------------------
 
@@ -946,6 +1321,8 @@ class ExternalRegimeManager:
         self._history_limit = history_limit
         self._history: deque[ExternalRegimeUpdateRecord] = deque(maxlen=history_limit)
         self._latest_update: ExternalRegimeUpdateRecord | None = None
+        self._latest_accepted_payload: ExternalRegimePayloadIngestionRecord | None = None
+        self._latest_rejected_payload: ExternalRegimePayloadIngestionRecord | None = None
         self._restored_from_snapshot = False
 
     @property
@@ -962,6 +1339,16 @@ class ExternalRegimeManager:
     def history_limit(self) -> int:
         """Maximum number of update records retained in memory."""
         return self._history_limit
+
+    @property
+    def latest_accepted_payload(self) -> ExternalRegimePayloadIngestionRecord | None:
+        """Most recent raw payload accepted through the adapter seam."""
+        return self._latest_accepted_payload
+
+    @property
+    def latest_rejected_payload(self) -> ExternalRegimePayloadIngestionRecord | None:
+        """Most recent raw payload rejected through the adapter seam."""
+        return self._latest_rejected_payload
 
     def recent_update_history(self) -> tuple[ExternalRegimeUpdateRecord, ...]:
         """Bounded recent update history, oldest first."""
@@ -1048,6 +1435,112 @@ class ExternalRegimeManager:
             results.append(self.update_on_chain(on_chain, received_at_ns=received_at_ns))
         return tuple(results)
 
+    def ingest_payload(
+        self,
+        *,
+        dimension: str,
+        payload: object,
+        provider: str,
+        input_format: str = "dict",
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimePayloadIngestionRecord:
+        """Validate and ingest one raw external-regime payload."""
+        if dimension == "options":
+            return self.ingest_options_payload(
+                payload,
+                provider=provider,
+                input_format=input_format,
+                received_at_ns=received_at_ns,
+            )
+        if dimension == "event":
+            return self.ingest_event_payload(
+                payload,
+                provider=provider,
+                input_format=input_format,
+                received_at_ns=received_at_ns,
+            )
+        if dimension == "on_chain":
+            return self.ingest_on_chain_payload(
+                payload,
+                provider=provider,
+                input_format=input_format,
+                received_at_ns=received_at_ns,
+            )
+        result = ExternalRegimePayloadIngestionRecord(
+            dimension=dimension,
+            provider=provider,
+            input_format=input_format,
+            accepted=False,
+            received_at_ns=0 if received_at_ns is None else received_at_ns,
+            source_label=None,
+            state_snapshot_ns=None,
+            level=None,
+            update_status=None,
+            reason=f"invalid_dimension:{dimension!r}",
+            rejection_stage="adapter_validation",
+            payload_origin=None,
+            payload_summary={"provider": provider, "input_format": input_format},
+        )
+        self._record_payload_ingestion(result)
+        return result
+
+    def ingest_options_payload(
+        self,
+        payload: object,
+        *,
+        provider: str,
+        input_format: str = "dict",
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimePayloadIngestionRecord:
+        """Validate and ingest one raw options payload."""
+        return self._ingest_payload(
+            dimension="options",
+            payload=payload,
+            provider=provider,
+            input_format=input_format,
+            received_at_ns=received_at_ns,
+            build_state=build_options_regime_state_from_payload,
+            apply_update=self.update_options,
+        )
+
+    def ingest_event_payload(
+        self,
+        payload: object,
+        *,
+        provider: str,
+        input_format: str = "dict",
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimePayloadIngestionRecord:
+        """Validate and ingest one raw event payload."""
+        return self._ingest_payload(
+            dimension="event",
+            payload=payload,
+            provider=provider,
+            input_format=input_format,
+            received_at_ns=received_at_ns,
+            build_state=build_event_regime_state_from_payload,
+            apply_update=self.update_event,
+        )
+
+    def ingest_on_chain_payload(
+        self,
+        payload: object,
+        *,
+        provider: str,
+        input_format: str = "dict",
+        received_at_ns: int | None = None,
+    ) -> ExternalRegimePayloadIngestionRecord:
+        """Validate and ingest one raw on-chain payload."""
+        return self._ingest_payload(
+            dimension="on_chain",
+            payload=payload,
+            provider=provider,
+            input_format=input_format,
+            received_at_ns=received_at_ns,
+            build_state=build_on_chain_regime_state_from_payload,
+            apply_update=self.update_on_chain,
+        )
+
     def reset(
         self,
         *,
@@ -1116,11 +1609,23 @@ class ExternalRegimeManager:
             if history_limit <= 0:
                 raise ValueError(f"history_limit must be > 0, got {history_limit}")
             history = [external_regime_update_record_from_dict(item) for item in data.get("recent_history", [])]
+            latest_accepted_payload_raw = data.get("latest_accepted_payload")
+            latest_rejected_payload_raw = data.get("latest_rejected_payload")
             latest_raw = data.get("latest_update")
             latest = (
                 external_regime_update_record_from_dict(latest_raw)
                 if latest_raw is not None
                 else (history[-1] if history else None)
+            )
+            latest_accepted_payload = (
+                external_regime_payload_ingestion_record_from_dict(latest_accepted_payload_raw)
+                if latest_accepted_payload_raw is not None
+                else None
+            )
+            latest_rejected_payload = (
+                external_regime_payload_ingestion_record_from_dict(latest_rejected_payload_raw)
+                if latest_rejected_payload_raw is not None
+                else None
             )
         except ValueError as exc:
             raise ExternalRegimeStateCorruptError(str(exc)) from exc
@@ -1129,6 +1634,8 @@ class ExternalRegimeManager:
         self._history_limit = history_limit
         self._history = deque(history, maxlen=history_limit)
         self._latest_update = latest
+        self._latest_accepted_payload = latest_accepted_payload
+        self._latest_rejected_payload = latest_rejected_payload
         self._restored_from_snapshot = True
         self._append_audit_record(
             event_name="external_regime_restore",
@@ -1162,9 +1669,113 @@ class ExternalRegimeManager:
             "latest_update": (
                 external_regime_update_record_to_dict(self._latest_update) if self._latest_update is not None else None
             ),
+            "latest_accepted_payload": (
+                external_regime_payload_ingestion_record_to_dict(self._latest_accepted_payload)
+                if self._latest_accepted_payload is not None
+                else None
+            ),
+            "latest_rejected_payload": (
+                external_regime_payload_ingestion_record_to_dict(self._latest_rejected_payload)
+                if self._latest_rejected_payload is not None
+                else None
+            ),
             "recent_history": [external_regime_update_record_to_dict(record) for record in self._history],
             "persistence": external_regime_persistence_state_to_dict(self.persistence_state()),
         }
+
+    def _ingest_payload(
+        self,
+        *,
+        dimension: str,
+        payload: object,
+        provider: str,
+        input_format: str,
+        received_at_ns: int | None,
+        build_state,
+        apply_update,
+    ) -> ExternalRegimePayloadIngestionRecord:
+        payload_origin: str | None = None
+        payload_summary: dict[str, object] = {
+            "provider": provider,
+            "input_format": input_format,
+        }
+        resolved_received_at_ns = received_at_ns
+        if received_at_ns is not None and (not isinstance(received_at_ns, int) or received_at_ns < 0):
+            result = ExternalRegimePayloadIngestionRecord(
+                dimension=dimension,
+                provider=provider,
+                input_format=input_format,
+                accepted=False,
+                received_at_ns=0 if not isinstance(received_at_ns, int) else received_at_ns,
+                source_label=None,
+                state_snapshot_ns=None,
+                level=None,
+                update_status=None,
+                reason=f"invalid_received_at_ns:{received_at_ns!r}",
+                rejection_stage="adapter_validation",
+                payload_origin=None,
+                payload_summary=payload_summary,
+            )
+            self._record_payload_ingestion(result)
+            return result
+
+        try:
+            payload_dict, payload_origin = load_external_regime_payload(payload, input_format=input_format)
+            state = build_state(
+                payload_dict,
+                provider=provider,
+                input_format=input_format,
+                payload_origin=payload_origin,
+            )
+        except ValueError as exc:
+            if input_format == "json_file" and isinstance(payload, (str, Path)):
+                payload_origin = str(payload)
+            if payload_origin is not None:
+                payload_summary["payload_origin"] = payload_origin
+            result = ExternalRegimePayloadIngestionRecord(
+                dimension=dimension,
+                provider=provider,
+                input_format=input_format,
+                accepted=False,
+                received_at_ns=0 if resolved_received_at_ns is None else resolved_received_at_ns,
+                source_label=None,
+                state_snapshot_ns=None,
+                level=None,
+                update_status=None,
+                reason=str(exc),
+                rejection_stage="adapter_validation",
+                payload_origin=payload_origin,
+                payload_summary=payload_summary,
+            )
+            self._record_payload_ingestion(result)
+            return result
+
+        resolved_received_at_ns = state.snapshot_ns if resolved_received_at_ns is None else resolved_received_at_ns
+        payload_summary = _payload_summary_for_state(
+            dimension=dimension,
+            provider=provider,
+            input_format=input_format,
+            payload_origin=payload_origin,
+            state=state,
+        )
+        update_record = apply_update(state, received_at_ns=resolved_received_at_ns)
+        result = ExternalRegimePayloadIngestionRecord(
+            dimension=dimension,
+            provider=provider,
+            input_format=input_format,
+            accepted=update_record.accepted,
+            received_at_ns=resolved_received_at_ns,
+            source_label=update_record.source_label,
+            state_snapshot_ns=update_record.state_snapshot_ns,
+            level=update_record.level,
+            update_status=update_record.status.value,
+            reason=update_record.reason,
+            rejection_stage=None if update_record.accepted else "update_validation",
+            payload_origin=payload_origin,
+            payload_summary=payload_summary,
+        )
+        self._record_payload_ingestion(result)
+        return result
 
     def _apply_update(
         self,
@@ -1295,6 +1906,17 @@ class ExternalRegimeManager:
         )
         self.persist_state()
 
+    def _record_payload_ingestion(self, record: ExternalRegimePayloadIngestionRecord) -> None:
+        if record.accepted:
+            self._latest_accepted_payload = record
+        else:
+            self._latest_rejected_payload = record
+        self._append_audit_record(
+            event_name="external_regime_payload_ingestion",
+            data=external_regime_payload_ingestion_record_to_dict(record),
+        )
+        self.persist_state()
+
     def _append_audit_record(self, *, event_name: str, data: dict) -> None:
         if self._evidence_store is None:
             return
@@ -1342,6 +1964,43 @@ class ExternalRegimeManager:
             "latest_update": (
                 external_regime_update_record_to_dict(self._latest_update) if self._latest_update is not None else None
             ),
+            "latest_accepted_payload": (
+                external_regime_payload_ingestion_record_to_dict(self._latest_accepted_payload)
+                if self._latest_accepted_payload is not None
+                else None
+            ),
+            "latest_rejected_payload": (
+                external_regime_payload_ingestion_record_to_dict(self._latest_rejected_payload)
+                if self._latest_rejected_payload is not None
+                else None
+            ),
             "recent_history": [external_regime_update_record_to_dict(record) for record in self._history],
             "persistence": external_regime_persistence_state_to_dict(self.persistence_state()),
         }
+
+
+def _payload_summary_for_state(
+    *,
+    dimension: str,
+    provider: str,
+    input_format: str,
+    payload_origin: str | None,
+    state: OptionsRegimeState | EventRegimeState | OnChainRegimeState,
+) -> dict[str, object]:
+    summary: dict[str, object] = {
+        "dimension": dimension,
+        "provider": provider,
+        "input_format": input_format,
+        "source": state.source,
+        "snapshot_ns": state.snapshot_ns,
+        "level": state.level.value,
+    }
+    symbol = getattr(state, "symbol", None)
+    if symbol is not None:
+        summary["symbol"] = symbol
+    event_label = getattr(state, "event_label", None)
+    if event_label is not None:
+        summary["event_label"] = event_label
+    if payload_origin is not None:
+        summary["payload_origin"] = payload_origin
+    return summary
