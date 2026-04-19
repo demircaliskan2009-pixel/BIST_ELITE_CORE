@@ -58,6 +58,11 @@ from crypto_core.risk.contracts import KS_LEVEL_NORMAL, RiskInput
 from crypto_core.risk.engine import RiskEngine
 from crypto_core.risk.kill_switch import KillSwitchEngine, KillSwitchInput, KillSwitchResult
 from crypto_core.risk.models import RiskDecision, RiskEvaluation
+from crypto_core.service.external_regime import (
+    ExternalRegimeDataPlane,
+    ExternalRegimeManager,
+    ExternalRegimeSnapshot,
+)
 from crypto_core.state.engine import SystemStateEngine
 from crypto_core.state.models import SignalInputs, StateSnapshot, SystemState, is_at_least
 from crypto_core.telemetry.emitter import TelemetryEmitter
@@ -150,6 +155,8 @@ class PipelineOrchestrator:
         recovery_evidence: RecoveryEvidence | None = None,
         metadata_gated_router: MetadataGatedRouter | None = None,
         tca_loop: ExecutionTCALoop | None = None,
+        external_regime_plane: ExternalRegimeDataPlane | None = None,
+        external_regime_manager: ExternalRegimeManager | None = None,
     ) -> None:
         self._cfg = config or PipelineConfig()
         self._state_engine = state_engine or SystemStateEngine()
@@ -193,6 +200,15 @@ class PipelineOrchestrator:
         self._venue_components: dict[str, VenueScoreComponents] = {}
         self._route_block_count: int = 0
         self._route_abstain_count: int = 0
+        if external_regime_manager is not None and external_regime_plane is not None:
+            if external_regime_manager.plane is not external_regime_plane:
+                raise ValueError(
+                    "external_regime_manager.plane must match external_regime_plane when both are provided"
+                )
+        self._external_regime_manager = external_regime_manager
+        self._external_regime_plane = (
+            external_regime_manager.plane if external_regime_manager is not None else external_regime_plane
+        )
 
     # ------------------------------------------------------------------
     # Properties for session-layer access (Phase 7E)
@@ -272,6 +288,7 @@ class PipelineOrchestrator:
         ks_input_override: KillSwitchInput | None,
     ) -> PipelineResult:
         ts = data.timestamp_ns
+        external_regime = self._external_regime_snapshot(ts)
 
         # ── Stage 1: State ──────────────────────────────────────────────
         stage_t0 = time.time_ns()
@@ -374,6 +391,7 @@ class PipelineOrchestrator:
             feed_connection_state=data.feed_connection_state,
             feed_recovery_state=data.feed_recovery_state,
             system_state=str(state_snap.state),
+            external_regime=external_regime,
             risk=risk_guard_input,
             market=market_regime_input,
             edge=edge_health_input,
@@ -408,10 +426,24 @@ class PipelineOrchestrator:
             if temporal_snap.cooldown.cooldown_until_ns > 0:
                 _tele_temporal["cooldown_until_ns"] = temporal_snap.cooldown.cooldown_until_ns
 
+        _tele_ext_regime: dict[str, object] = {
+            "external_regime_available": external_regime is not None,
+        }
+        if external_regime is not None:
+            _tele_ext_regime["external_regime_evidence_sufficient"] = external_regime.evidence_sufficient
+            _tele_ext_regime["external_regime_high_risk"] = external_regime.high_risk_regime_present
+            _tele_ext_regime["external_regime_any_unavailable"] = external_regime.any_unavailable_critical
+
         self._emit_telemetry_safe(
             "guard",
             guard_latency_ms,
-            {"allowed": no_trade.allowed, "reason": str(no_trade.reason), **_tele_regime, **_tele_temporal},
+            {
+                "allowed": no_trade.allowed,
+                "reason": str(no_trade.reason),
+                **_tele_regime,
+                **_tele_temporal,
+                **_tele_ext_regime,
+            },
         )
 
         activation_runtime = self._build_activation_runtime_context(
@@ -441,6 +473,7 @@ class PipelineOrchestrator:
             funding_safety_context=activation_runtime.funding_safety_context,
             market_regime=regime_snap,
             family_edge_health=family_edge_health,
+            external_regime=external_regime,
         )
         edge_latency_ms = (time.time_ns() - stage_t0) / 1e6
 
@@ -462,6 +495,7 @@ class PipelineOrchestrator:
             "edge_health_snapshot_available": ehs_snap is not None,
             "activation_regime_state": activation_runtime.regime_state or "unavailable",
             "activation_execution_condition": activation_runtime.execution_condition or "unavailable",
+            "activation_external_regime_available": external_regime is not None,
         }
         if ehs_snap is not None:
             _tele_edge["valid_edge_count"] = ehs_snap.valid_edge_count if ehs_snap.valid_edge_count is not None else 0
@@ -771,6 +805,14 @@ class PipelineOrchestrator:
             }
             return "execution", ",".join(sorted(reasons))
         return None, None
+
+    def _external_regime_snapshot(self, current_ns: int) -> ExternalRegimeSnapshot | None:
+        """Return the current external regime snapshot for this cycle, if configured."""
+        if self._external_regime_manager is not None:
+            return self._external_regime_manager.snapshot(current_ns)
+        if self._external_regime_plane is not None:
+            return self._external_regime_plane.snapshot(current_ns)
+        return None
 
     def _build_execution_request(
         self,

@@ -46,6 +46,15 @@ logger = logging.getLogger(__name__)
 _NS_PER_S: int = 1_000_000_000
 _EXTERNAL_REGIME_SNAPSHOT_NAME = "external_regime_state"
 
+EXT_REGIME_EXECUTION_UNAVAILABLE = "external_regime_unavailable"
+EXT_REGIME_EXECUTION_STALE = "external_regime_stale"
+EXT_REGIME_EXECUTION_HIGH_RISK = "external_regime_high_risk"
+
+EXT_REGIME_ACTIVATION_EVENT_RISK_BLOCKED = "external_regime_event_risk_blocked"
+EXT_REGIME_ACTIVATION_OPTIONS_EXTREME_BLOCKED = "external_regime_options_extreme_blocked"
+EXT_REGIME_ACTIVATION_ON_CHAIN_STRESS_BLOCKED = "external_regime_on_chain_stress_blocked"
+EXT_REGIME_ACTIVATION_REDUCED = "external_regime_high_risk_reduced"
+
 
 # ---------------------------------------------------------------------------
 # Freshness model
@@ -105,6 +114,68 @@ class ExternalRegimeSnapshot:
     stale_dimensions: tuple[str, ...]
 
     regime_summary: str
+
+
+@dataclass
+class ExternalRegimeSafetyPolicy:
+    """Conservative external regime safety policy shared across runtime gates."""
+
+    block_execution_on_unavailable: bool = True
+    block_execution_on_stale: bool = True
+    block_execution_on_high_risk: bool = True
+    block_activation_on_event_risk: bool = True
+    block_activation_on_options_extreme: bool = True
+    block_activation_on_on_chain_stress: bool = True
+    reduce_activation_on_elevated_options: bool = True
+    reduce_activation_on_whale_activity: bool = True
+    activation_reduced_scale: float = 0.50
+
+    def __post_init__(self) -> None:
+        if self.activation_reduced_scale <= 0.0 or self.activation_reduced_scale > 1.0:
+            raise ValueError(f"activation_reduced_scale must be in (0, 1], got {self.activation_reduced_scale}")
+
+
+@dataclass(frozen=True)
+class ExternalRegimeSafetyFacts:
+    """Deterministic classification of external regime safety facts."""
+
+    snapshot_configured: bool
+    evidence_available: bool
+    evidence_sufficient: bool
+    any_unavailable_critical: bool
+    high_risk_regime_present: bool
+    any_extreme: bool
+    unavailable_dimensions: tuple[str, ...]
+    stale_dimensions: tuple[str, ...]
+    available_dimensions: tuple[str, ...]
+    options_level: str | None
+    event_level: str | None
+    on_chain_level: str | None
+    options_extreme: bool
+    options_elevated: bool
+    event_risk_active: bool
+    on_chain_stress: bool
+    on_chain_whale_active: bool
+    regime_summary: str
+
+
+@dataclass(frozen=True)
+class ExternalRegimeExecutionSafetyDecision:
+    """Execution/routing safety decision derived from external regime truth."""
+
+    blocked: bool
+    reason: str | None
+    evidence: dict[str, object]
+
+
+@dataclass(frozen=True)
+class ExternalRegimeActivationSafetyDecision:
+    """Activation safety decision derived from external regime truth."""
+
+    blocked: bool
+    reason: str | None
+    allocation_scale: float
+    evidence: dict[str, object]
 
 
 class ExternalRegimeUpdateStatus(str, Enum):
@@ -451,6 +522,228 @@ def _build_summary(
         parts.append("Elevated external risk conditions present.")
 
     return " ".join(parts)
+
+
+def build_external_regime_safety_facts(
+    snap: ExternalRegimeSnapshot | None,
+) -> ExternalRegimeSafetyFacts:
+    """Build the shared external regime safety facts used by runtime gates."""
+    if snap is None:
+        return ExternalRegimeSafetyFacts(
+            snapshot_configured=False,
+            evidence_available=False,
+            evidence_sufficient=False,
+            any_unavailable_critical=False,
+            high_risk_regime_present=False,
+            any_extreme=False,
+            unavailable_dimensions=(),
+            stale_dimensions=(),
+            available_dimensions=(),
+            options_level=None,
+            event_level=None,
+            on_chain_level=None,
+            options_extreme=False,
+            options_elevated=False,
+            event_risk_active=False,
+            on_chain_stress=False,
+            on_chain_whale_active=False,
+            regime_summary="external_regime_not_configured",
+        )
+
+    return ExternalRegimeSafetyFacts(
+        snapshot_configured=True,
+        evidence_available=len(snap.available_dimensions) > 0,
+        evidence_sufficient=snap.evidence_sufficient,
+        any_unavailable_critical=snap.any_unavailable_critical,
+        high_risk_regime_present=snap.high_risk_regime_present,
+        any_extreme=snap.any_extreme,
+        unavailable_dimensions=snap.unavailable_dimensions,
+        stale_dimensions=snap.stale_dimensions,
+        available_dimensions=snap.available_dimensions,
+        options_level=snap.options.level.value if snap.options is not None else None,
+        event_level=snap.event.level.value if snap.event is not None else None,
+        on_chain_level=snap.on_chain.level.value if snap.on_chain is not None else None,
+        options_extreme=(snap.options is not None and snap.options.level == OptionsRegimeLevel.EXTREME),
+        options_elevated=(snap.options is not None and snap.options.level == OptionsRegimeLevel.ELEVATED),
+        event_risk_active=(snap.event is not None and snap.event.is_active_or_pending),
+        on_chain_stress=(snap.on_chain is not None and snap.on_chain.level == OnChainRegimeLevel.STRESS),
+        on_chain_whale_active=(snap.on_chain is not None and snap.on_chain.level == OnChainRegimeLevel.WHALE_ACTIVE),
+        regime_summary=snap.regime_summary,
+    )
+
+
+def external_regime_safety_facts_to_dict(facts: ExternalRegimeSafetyFacts) -> dict[str, object]:
+    """Serialize external regime safety facts to a plain dict."""
+    return {
+        "snapshot_configured": facts.snapshot_configured,
+        "evidence_available": facts.evidence_available,
+        "evidence_sufficient": facts.evidence_sufficient,
+        "any_unavailable_critical": facts.any_unavailable_critical,
+        "high_risk_regime_present": facts.high_risk_regime_present,
+        "any_extreme": facts.any_extreme,
+        "unavailable_dimensions": list(facts.unavailable_dimensions),
+        "stale_dimensions": list(facts.stale_dimensions),
+        "available_dimensions": list(facts.available_dimensions),
+        "options_level": facts.options_level,
+        "event_level": facts.event_level,
+        "on_chain_level": facts.on_chain_level,
+        "options_extreme": facts.options_extreme,
+        "options_elevated": facts.options_elevated,
+        "event_risk_active": facts.event_risk_active,
+        "on_chain_stress": facts.on_chain_stress,
+        "on_chain_whale_active": facts.on_chain_whale_active,
+        "regime_summary": facts.regime_summary,
+    }
+
+
+def evaluate_external_regime_execution_safety(
+    snap: ExternalRegimeSnapshot | None,
+    policy: ExternalRegimeSafetyPolicy | None,
+) -> ExternalRegimeExecutionSafetyDecision:
+    """Evaluate external regime execution/routing safety in one deterministic place."""
+    facts = build_external_regime_safety_facts(snap)
+    if policy is None:
+        return ExternalRegimeExecutionSafetyDecision(
+            blocked=False,
+            reason=None,
+            evidence={"policy_enabled": False, "facts": external_regime_safety_facts_to_dict(facts)},
+        )
+
+    evidence: dict[str, object] = {
+        "policy_enabled": True,
+        "policy": {
+            "block_execution_on_unavailable": policy.block_execution_on_unavailable,
+            "block_execution_on_stale": policy.block_execution_on_stale,
+            "block_execution_on_high_risk": policy.block_execution_on_high_risk,
+        },
+        "facts": external_regime_safety_facts_to_dict(facts),
+    }
+    if not facts.snapshot_configured:
+        evidence["reason"] = "external_regime_not_configured"
+        return ExternalRegimeExecutionSafetyDecision(blocked=False, reason=None, evidence=evidence)
+
+    if policy.block_execution_on_unavailable and facts.any_unavailable_critical:
+        evidence["blocked_dimensions"] = list(facts.unavailable_dimensions)
+        return ExternalRegimeExecutionSafetyDecision(
+            blocked=True,
+            reason=EXT_REGIME_EXECUTION_UNAVAILABLE,
+            evidence=evidence,
+        )
+
+    if policy.block_execution_on_stale and facts.stale_dimensions:
+        evidence["blocked_dimensions"] = list(facts.stale_dimensions)
+        return ExternalRegimeExecutionSafetyDecision(
+            blocked=True,
+            reason=EXT_REGIME_EXECUTION_STALE,
+            evidence=evidence,
+        )
+
+    risk_triggers: list[str] = []
+    if facts.event_risk_active:
+        risk_triggers.append("event_risk_active")
+    if facts.options_extreme:
+        risk_triggers.append("options_extreme")
+    if facts.on_chain_stress:
+        risk_triggers.append("on_chain_stress")
+    if policy.block_execution_on_high_risk and risk_triggers:
+        evidence["risk_triggers"] = risk_triggers
+        return ExternalRegimeExecutionSafetyDecision(
+            blocked=True,
+            reason=EXT_REGIME_EXECUTION_HIGH_RISK,
+            evidence=evidence,
+        )
+
+    if facts.high_risk_regime_present:
+        evidence["high_risk_observed"] = True
+    return ExternalRegimeExecutionSafetyDecision(blocked=False, reason=None, evidence=evidence)
+
+
+def evaluate_external_regime_activation_safety(
+    snap: ExternalRegimeSnapshot | None,
+    policy: ExternalRegimeSafetyPolicy | None,
+) -> ExternalRegimeActivationSafetyDecision:
+    """Evaluate activation tightening / blocking from external regime truth."""
+    facts = build_external_regime_safety_facts(snap)
+    if policy is None:
+        return ExternalRegimeActivationSafetyDecision(
+            blocked=False,
+            reason=None,
+            allocation_scale=1.0,
+            evidence={"policy_enabled": False, "facts": external_regime_safety_facts_to_dict(facts)},
+        )
+
+    evidence: dict[str, object] = {
+        "policy_enabled": True,
+        "policy": {
+            "block_activation_on_event_risk": policy.block_activation_on_event_risk,
+            "block_activation_on_options_extreme": policy.block_activation_on_options_extreme,
+            "block_activation_on_on_chain_stress": policy.block_activation_on_on_chain_stress,
+            "reduce_activation_on_elevated_options": policy.reduce_activation_on_elevated_options,
+            "reduce_activation_on_whale_activity": policy.reduce_activation_on_whale_activity,
+            "activation_reduced_scale": policy.activation_reduced_scale,
+        },
+        "facts": external_regime_safety_facts_to_dict(facts),
+    }
+    if not facts.snapshot_configured:
+        evidence["reason"] = "external_regime_not_configured"
+        return ExternalRegimeActivationSafetyDecision(
+            blocked=False,
+            reason=None,
+            allocation_scale=1.0,
+            evidence=evidence,
+        )
+
+    if policy.block_activation_on_event_risk and facts.event_risk_active:
+        evidence["risk_trigger"] = "event_risk_active"
+        return ExternalRegimeActivationSafetyDecision(
+            blocked=True,
+            reason=EXT_REGIME_ACTIVATION_EVENT_RISK_BLOCKED,
+            allocation_scale=0.0,
+            evidence=evidence,
+        )
+
+    if policy.block_activation_on_options_extreme and facts.options_extreme:
+        evidence["risk_trigger"] = "options_extreme"
+        return ExternalRegimeActivationSafetyDecision(
+            blocked=True,
+            reason=EXT_REGIME_ACTIVATION_OPTIONS_EXTREME_BLOCKED,
+            allocation_scale=0.0,
+            evidence=evidence,
+        )
+
+    if policy.block_activation_on_on_chain_stress and facts.on_chain_stress:
+        evidence["risk_trigger"] = "on_chain_stress"
+        return ExternalRegimeActivationSafetyDecision(
+            blocked=True,
+            reason=EXT_REGIME_ACTIVATION_ON_CHAIN_STRESS_BLOCKED,
+            allocation_scale=0.0,
+            evidence=evidence,
+        )
+
+    allow_tags: list[str] = []
+    allocation_scale = 1.0
+    if policy.reduce_activation_on_elevated_options and facts.options_elevated:
+        allocation_scale = min(allocation_scale, policy.activation_reduced_scale)
+        allow_tags.append("options_elevated")
+    if policy.reduce_activation_on_whale_activity and facts.on_chain_whale_active:
+        allocation_scale = min(allocation_scale, policy.activation_reduced_scale)
+        allow_tags.append("on_chain_whale_activity")
+
+    if allow_tags:
+        evidence["allow_tags"] = allow_tags
+        return ExternalRegimeActivationSafetyDecision(
+            blocked=False,
+            reason=EXT_REGIME_ACTIVATION_REDUCED,
+            allocation_scale=allocation_scale,
+            evidence=evidence,
+        )
+
+    return ExternalRegimeActivationSafetyDecision(
+        blocked=False,
+        reason=None,
+        allocation_scale=1.0,
+        evidence=evidence,
+    )
 
 
 # ---------------------------------------------------------------------------

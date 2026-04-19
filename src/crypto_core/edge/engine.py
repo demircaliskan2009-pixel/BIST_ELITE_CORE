@@ -40,6 +40,7 @@ from crypto_core.edge.registry import EdgeFamilyRegistry, RegistryConfig
 from crypto_core.edge_health.models import EdgeHealthSnapshot
 from crypto_core.guard.models import NoTradeDecision
 from crypto_core.regime.models import RegimeSnapshot
+from crypto_core.service.external_regime import ExternalRegimeSafetyPolicy, ExternalRegimeSnapshot
 from crypto_core.state.models import SystemState, is_at_least
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ class EdgeEngineConfig:
     funding: FundingConfig = None  # type: ignore[assignment]
     volatility: VolatilityConfig = None  # type: ignore[assignment]
     liquidation: LiquidationConfig = None  # type: ignore[assignment]
+    external_regime_policy: ExternalRegimeSafetyPolicy | None = None
 
     def __post_init__(self) -> None:
         if self.ofi is None:
@@ -63,6 +65,8 @@ class EdgeEngineConfig:
             self.volatility = VolatilityConfig()
         if self.liquidation is None:
             self.liquidation = LiquidationConfig()
+        if self.external_regime_policy is None:
+            self.external_regime_policy = ExternalRegimeSafetyPolicy()
 
 
 class EdgeEngine:
@@ -105,7 +109,7 @@ class EdgeEngine:
                 liquidation=cfg.liquidation,
             )
         )
-        self._activation = ActivationMatrix()
+        self._activation = ActivationMatrix(external_regime_policy=cfg.external_regime_policy)
         self._runtime_families: tuple[EdgeFamily, ...] = self._registry.runtime_families()
 
     @property
@@ -133,6 +137,7 @@ class EdgeEngine:
         funding_safety_context: FundingSafetyContext | None = None,
         market_regime: RegimeSnapshot | None = None,
         family_edge_health: dict[EdgeFamily, EdgeHealthSnapshot] | None = None,
+        external_regime: ExternalRegimeSnapshot | None = None,
     ) -> list[EdgeSignal]:
         """Evaluate all runtime edge families."""
         if not no_trade.allowed:
@@ -178,6 +183,7 @@ class EdgeEngine:
                 edge_health_score=family_health.ehs_score if family_health is not None else None,
                 edge_fsm_state=family_health.fsm_state.value if family_health is not None else None,
                 edge_allocation_factor=family_health.allocation_factor if family_health is not None else None,
+                external_regime=external_regime,
             )
             activation = self._activation.evaluate(fam, activation_ctx)
             if not activation.allowed:

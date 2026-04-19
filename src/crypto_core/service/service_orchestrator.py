@@ -42,8 +42,11 @@ from crypto_core.service.evidence_store import EvidenceStore
 from crypto_core.service.external_regime import (
     ExternalRegimeDataPlane,
     ExternalRegimeManager,
+    ExternalRegimeSafetyPolicy,
     ExternalRegimeSnapshot,
     ExternalRegimeUpdateRecord,
+    evaluate_external_regime_activation_safety,
+    evaluate_external_regime_execution_safety,
 )
 from crypto_core.service.models import ServiceStatus
 from crypto_core.service.paper_live_service import PaperLiveService
@@ -123,6 +126,18 @@ class EvidenceSufficiencyState:
 
 
 @dataclass(frozen=True)
+class ExternalRegimeSafetyState:
+    """Current external regime safety posture for activation and execution."""
+
+    activation_blocked: bool
+    activation_reason: str | None
+    activation_allocation_scale: float
+    execution_blocked: bool
+    execution_reason: str | None
+    evidence: dict[str, object]
+
+
+@dataclass(frozen=True)
 class OperatorSnapshot:
     """Unified top-level operator status combining all workflow states.
 
@@ -163,6 +178,7 @@ class OperatorSnapshot:
 
     # External regime (Phase 11A)
     external_regime: ExternalRegimeSnapshot | None = None
+    external_regime_safety: ExternalRegimeSafetyState | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -208,12 +224,14 @@ class ServiceOrchestrator:
         promotion_thresholds: PromotionThresholds | None = None,
         external_regime_plane: ExternalRegimeDataPlane | None = None,
         external_regime_manager: ExternalRegimeManager | None = None,
+        external_regime_policy: ExternalRegimeSafetyPolicy | None = None,
     ) -> None:
         self._service = service
         self._evidence_store = evidence_store
         self._readiness_level = readiness_level
         self._promotion_thresholds = promotion_thresholds
         self._campaign_config = campaign_config
+        self._external_regime_policy = external_regime_policy or ExternalRegimeSafetyPolicy()
 
         if external_regime_manager is not None and external_regime_plane is not None:
             if external_regime_manager.plane is not external_regime_plane:
@@ -580,6 +598,7 @@ class ServiceOrchestrator:
 
         # External regime snapshot
         ext_regime = self._external_regime_snapshot_from_status(ss)
+        ext_regime_safety = self._build_external_regime_safety_state(ext_regime)
 
         # Evidence sufficiency
         evidence = self._build_evidence_sufficiency(campaign_state, review_state, ext_regime)
@@ -619,6 +638,7 @@ class ServiceOrchestrator:
             provisional_recommendation=prov_verdict,
             recommendation_summary=prov_summary,
             external_regime=ext_regime,
+            external_regime_safety=ext_regime_safety,
         )
 
     # ------------------------------------------------------------------
@@ -1063,6 +1083,34 @@ class ServiceOrchestrator:
             external_regime_has_high_risk=ext_high_risk,
         )
 
+    def _build_external_regime_safety_state(
+        self,
+        ext_regime: ExternalRegimeSnapshot | None,
+    ) -> ExternalRegimeSafetyState | None:
+        """Build current external regime safety posture for operator surfacing."""
+        if ext_regime is None:
+            return None
+
+        activation = evaluate_external_regime_activation_safety(
+            ext_regime,
+            self._external_regime_policy,
+        )
+        execution = evaluate_external_regime_execution_safety(
+            ext_regime,
+            self._external_regime_policy,
+        )
+        return ExternalRegimeSafetyState(
+            activation_blocked=activation.blocked,
+            activation_reason=activation.reason,
+            activation_allocation_scale=activation.allocation_scale,
+            execution_blocked=execution.blocked,
+            execution_reason=execution.reason,
+            evidence={
+                "activation": activation.evidence,
+                "execution": execution.evidence,
+            },
+        )
+
 
 # ---------------------------------------------------------------------------
 # Serialization helpers
@@ -1114,6 +1162,18 @@ def evidence_sufficiency_state_to_dict(state: EvidenceSufficiencyState) -> dict:
     }
 
 
+def external_regime_safety_state_to_dict(state: ExternalRegimeSafetyState) -> dict:
+    """Serialize ExternalRegimeSafetyState to a plain dict."""
+    return {
+        "activation_blocked": state.activation_blocked,
+        "activation_reason": state.activation_reason,
+        "activation_allocation_scale": state.activation_allocation_scale,
+        "execution_blocked": state.execution_blocked,
+        "execution_reason": state.execution_reason,
+        "evidence": state.evidence,
+    }
+
+
 def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
     """Serialize OperatorSnapshot to a plain dict."""
     return {
@@ -1132,6 +1192,11 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         "recommendation_summary": snap.recommendation_summary,
         "external_regime": (
             _external_regime_snap_to_dict(snap.external_regime) if snap.external_regime is not None else None
+        ),
+        "external_regime_safety": (
+            external_regime_safety_state_to_dict(snap.external_regime_safety)
+            if snap.external_regime_safety is not None
+            else None
         ),
     }
 

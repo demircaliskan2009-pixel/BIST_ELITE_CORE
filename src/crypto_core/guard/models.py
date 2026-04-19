@@ -9,9 +9,9 @@ Rule families:
   NT-R  — Risk limits     (6 rules)
   NT-M  — Market/regime   (4 rules)
   NT-E  — Edge health     (4 rules)
-  NT-X  — Execution       (3 rules)
+    NT-X  — Execution       (6 rules)
   NT-T  — Temporal        (3 rules)
-  Total: 25 rules (23 PRD + 2 guard-internal)
+    Total: 28 rules (23 PRD + 5 additive safety guards)
 
 Unavailable inputs:
   Optional fields on input dataclasses default to None.
@@ -23,6 +23,10 @@ Unavailable inputs:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from crypto_core.service.external_regime import ExternalRegimeSnapshot
 
 
 class NoTradeReason(str):
@@ -32,7 +36,7 @@ class NoTradeReason(str):
     NT-R = risk limits (kill-switch, P&L, exposure, CVaR, margin).
     NT-M = market/regime conditions (liquidity, leverage, regime, correlation).
     NT-E = edge health (EHS score, FSM state, capacity, valid count).
-    NT-X = execution quality (latency, system state, telemetry).
+    NT-X = execution quality (latency, system state, telemetry, external regime).
     NT-T = temporal restrictions (startup, KS cooldown, macro events).
     """
 
@@ -70,6 +74,9 @@ NoTradeReason.NO_VALID_EDGE = NoTradeReason("NT-E04_no_valid_edge")
 NoTradeReason.SYSTEM_STATE_DEFENSIVE = NoTradeReason("NT-X01_system_state_defensive")
 NoTradeReason.LATENCY_BUDGET_BREACH = NoTradeReason("NT-X02_latency_budget_breach")
 NoTradeReason.TELEMETRY_UNAVAILABLE = NoTradeReason("NT-X03_telemetry_unavailable")
+NoTradeReason.EXTERNAL_REGIME_UNAVAILABLE = NoTradeReason("NT-X04_external_regime_unavailable")
+NoTradeReason.EXTERNAL_REGIME_STALE = NoTradeReason("NT-X05_external_regime_stale")
+NoTradeReason.EXTERNAL_REGIME_HIGH_RISK = NoTradeReason("NT-X06_external_regime_high_risk")
 
 # ── NT-T codes (temporal) ─────────────────────────────────────────────────
 NoTradeReason.STARTUP_WARMUP = NoTradeReason("NT-T01_startup_warmup")
@@ -116,6 +123,9 @@ REASON_SEVERITY: dict[str, BlockSeverity] = {
     NoTradeReason.SYSTEM_STATE_DEFENSIVE: BlockSeverity.CRITICAL,
     NoTradeReason.LATENCY_BUDGET_BREACH: BlockSeverity.SOFT,
     NoTradeReason.TELEMETRY_UNAVAILABLE: BlockSeverity.HARD,
+    NoTradeReason.EXTERNAL_REGIME_UNAVAILABLE: BlockSeverity.HARD,
+    NoTradeReason.EXTERNAL_REGIME_STALE: BlockSeverity.SOFT,
+    NoTradeReason.EXTERNAL_REGIME_HIGH_RISK: BlockSeverity.HARD,
     # NT-T
     NoTradeReason.STARTUP_WARMUP: BlockSeverity.SOFT,
     NoTradeReason.KS_COOLDOWN: BlockSeverity.SOFT,
@@ -318,6 +328,7 @@ class NoTradeContext:
     system_state: str = "NORMAL"  # SystemState value
     latency_ms: float = 0.0
     telemetry_last_emit_ns: int = 0  # 0 = never emitted
+    external_regime: ExternalRegimeSnapshot | None = None
 
     # ── New family inputs (None = family checks disabled) ────────────────
     risk: RiskGuardInput | None = None

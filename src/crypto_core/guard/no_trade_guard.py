@@ -31,6 +31,12 @@ from crypto_core.guard.models import (
     NoTradeDecision,
     NoTradeReason,
 )
+from crypto_core.service.external_regime import (
+    EXT_REGIME_EXECUTION_STALE,
+    EXT_REGIME_EXECUTION_UNAVAILABLE,
+    ExternalRegimeSafetyPolicy,
+    evaluate_external_regime_execution_safety,
+)
 from crypto_core.state.models import SystemState, is_at_least, state_severity
 
 logger = logging.getLogger(__name__)
@@ -76,6 +82,8 @@ class NoTradeConfig:
     supported_symbols: frozenset[str] = field(default_factory=frozenset)
     #: States at which or above trading is blocked.
     block_at_state: str = SystemState.DEFENSIVE  # type: ignore[assignment]
+    #: External regime safety policy for execution / routing fail-closed gating.
+    external_regime_policy: ExternalRegimeSafetyPolicy = field(default_factory=ExternalRegimeSafetyPolicy)
 
     # ── Risk family thresholds (NT-R) ──────────────────────────────────
     #: NT-R01: KS level at or above this blocks new entries (PRD §1.19).
@@ -486,6 +494,27 @@ class NoTradeGuard:
                     "system_state": ctx.system_state,
                     "block_at": str(cfg.block_at_state),
                     "severity": state_severity(current_state),
+                },
+            )
+
+        ext_decision = evaluate_external_regime_execution_safety(
+            ctx.external_regime,
+            cfg.external_regime_policy,
+        )
+        if ext_decision.blocked:
+            mapped_reason = NoTradeReason.EXTERNAL_REGIME_HIGH_RISK
+            rule_code = "NT-X06"
+            if ext_decision.reason == EXT_REGIME_EXECUTION_UNAVAILABLE:
+                mapped_reason = NoTradeReason.EXTERNAL_REGIME_UNAVAILABLE
+                rule_code = "NT-X04"
+            elif ext_decision.reason == EXT_REGIME_EXECUTION_STALE:
+                mapped_reason = NoTradeReason.EXTERNAL_REGIME_STALE
+                rule_code = "NT-X05"
+            return NoTradeDecision.block(
+                mapped_reason,
+                {
+                    "rule": rule_code,
+                    **ext_decision.evidence,
                 },
             )
 

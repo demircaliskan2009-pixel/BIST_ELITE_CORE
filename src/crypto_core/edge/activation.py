@@ -25,6 +25,11 @@ from dataclasses import dataclass, field
 
 from crypto_core.data.models.events import TradeEvent
 from crypto_core.edge.models import EdgeFamily
+from crypto_core.service.external_regime import (
+    ExternalRegimeSafetyPolicy,
+    ExternalRegimeSnapshot,
+    evaluate_external_regime_activation_safety,
+)
 
 
 class RegimeState(str):
@@ -419,10 +424,14 @@ class ActivationContext:
     edge_health_score: float | None = None
     edge_fsm_state: str | None = None
     edge_allocation_factor: float | None = None
+    external_regime: ExternalRegimeSnapshot | None = None
 
 
 class ActivationMatrix:
     """Deterministic per-family activation matrix."""
+
+    def __init__(self, external_regime_policy: ExternalRegimeSafetyPolicy | None = None) -> None:
+        self._external_regime_policy = external_regime_policy or ExternalRegimeSafetyPolicy()
 
     def evaluate(self, family: EdgeFamily, ctx: ActivationContext) -> ActivationDecision:
         base_evidence: dict[str, object] = {
@@ -440,6 +449,9 @@ class ActivationMatrix:
             "edge_health_score": ctx.edge_health_score,
             "edge_fsm_state": ctx.edge_fsm_state,
             "edge_allocation_factor": ctx.edge_allocation_factor,
+            "external_regime_summary": (
+                ctx.external_regime.regime_summary if ctx.external_regime is not None else None
+            ),
         }
 
         missing_inputs = [
@@ -553,6 +565,26 @@ class ActivationMatrix:
                     "missing_inputs": missing_inputs,
                 },
             )
+
+        ext_activation = evaluate_external_regime_activation_safety(
+            ctx.external_regime,
+            self._external_regime_policy,
+        )
+        if ext_activation.blocked:
+            return ActivationDecision(
+                family=family,
+                allowed=False,
+                reason=ext_activation.reason or "external_regime_blocked",
+                evidence={
+                    **base_evidence,
+                    "missing_inputs": missing_inputs,
+                    "external_regime_evidence": ext_activation.evidence,
+                },
+            )
+        if ext_activation.allocation_scale < 1.0:
+            allocation_scale = min(allocation_scale, ext_activation.allocation_scale)
+            if ext_activation.reason is not None:
+                allow_tags.append(ext_activation.reason)
 
         if ctx.regime_state == RegimeState.CRISIS:
             return ActivationDecision(
@@ -705,5 +737,6 @@ class ActivationMatrix:
                 "allow_tags": allow_tags,
                 "missing_inputs": missing_inputs,
                 "allocation_scale": allocation_scale,
+                "external_regime_evidence": ext_activation.evidence,
             },
         )
