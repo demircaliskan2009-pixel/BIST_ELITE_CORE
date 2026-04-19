@@ -896,6 +896,10 @@ class TestOperatorSnapshot:
         assert snap.sleeve_portfolio.enabled_sleeve_ids == ("micro-1", "trend-1")
         assert snap.sleeve_portfolio.blocked_sleeve_ids == ("carry-1",)
         assert snap.sleeve_portfolio.allocation.unallocated_share == pytest.approx(0.35)
+        assert snap.sleeve_portfolio.qualification.paper_qualified_sleeves == 0
+        assert snap.sleeve_portfolio.qualification.weak_evidence_sleeves == 0
+        assert snap.sleeve_portfolio.qualification.blocked_sleeves == 1
+        assert snap.sleeve_portfolio.qualification.insufficient_evidence_sleeves == 2
 
     def test_snapshot_with_managed_sleeve_operator_transition(self):
         svc = _make_mock_service()
@@ -1152,6 +1156,43 @@ class TestReportingAPI:
         assert result["effective_allocated_share"] == pytest.approx(0.80)
         assert result["redistributed_blocked_share"] == pytest.approx(0.20)
         assert result["recipient_sleeve_ids"] == ["micro-1", "trend-1"]
+
+    def test_sleeve_qualification_summary_and_result_dict(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(service=svc, readiness_level="paper_live")
+        orch.set_sleeve_portfolio(_make_sleeve_states())
+
+        summary = orch.sleeve_qualification_summary_dict()
+        results = orch.sleeve_qualification_result_dict()
+
+        assert summary["paper_qualified_sleeves"] == 0
+        assert summary["weak_evidence_sleeves"] == 0
+        assert summary["blocked_sleeves"] == 1
+        assert summary["insufficient_evidence_sleeves"] == 2
+        assert results["micro-1"]["status"] == "insufficient_evidence"
+        assert results["trend-1"]["status"] == "insufficient_evidence"
+        assert results["carry-1"]["status"] == "blocked"
+
+    def test_sleeve_qualification_surfaces_insufficient_evidence_under_missing_governance(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(service=svc, readiness_level="not_assessed")
+        orch.set_sleeve_portfolio(
+            (
+                CryptoSleeveState(
+                    sleeve_id="micro-qual",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.30,
+                    active_allocation=0.30,
+                    readiness_level="calibrated_paper",
+                    escalation_stage="shadow_live_review_eligible",
+                ),
+            )
+        )
+
+        result = orch.sleeve_qualification_result_dict()
+        assert result["micro-qual"]["status"] == "insufficient_evidence"
+        assert "readiness_unavailable" in result["micro-qual"]["missing_evidence"]
 
     def test_campaign_report_dict_none(self):
         svc = _make_mock_service()

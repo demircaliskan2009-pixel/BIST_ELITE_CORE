@@ -91,6 +91,7 @@ from crypto_core.service.sleeve_portfolio import (
     SleeveInactiveCapitalMode,
     SleevePortfolioCorruptError,
     SleevePortfolioValidationError,
+    SleeveQualificationStatus,
     SleeveReasonSource,
     build_sleeve_portfolio_snapshot,
     crypto_sleeve_state_from_dict,
@@ -1682,6 +1683,15 @@ class TestSleevePortfolioContracts:
         assert snapshot.allocation.target_allocated_share == pytest.approx(0.65)
         assert snapshot.allocation.blocked_allocated_share == pytest.approx(0.25)
         assert snapshot.allocation.unallocated_share == pytest.approx(0.35)
+        assert snapshot.qualification.paper_qualified_sleeves == 1
+        assert snapshot.qualification.weak_evidence_sleeves == 1
+        assert snapshot.qualification.blocked_sleeves == 1
+        assert {sleeve.sleeve_id: sleeve.qualification.status for sleeve in snapshot.sleeves} == {
+            "micro-1": SleeveQualificationStatus.PAPER_QUALIFIED,
+            "carry-1": SleeveQualificationStatus.BLOCKED,
+            "trend-1": SleeveQualificationStatus.WEAK_EVIDENCE,
+            "event-1": SleeveQualificationStatus.DEFINED_ONLY,
+        }
 
         restored = sleeve_portfolio_snapshot_from_dict(sleeve_portfolio_snapshot_to_dict(snapshot))
         assert restored == snapshot
@@ -1694,7 +1704,82 @@ class TestSleevePortfolioContracts:
         assert snapshot.allocation.unallocated_share == pytest.approx(1.0)
         assert snapshot.allocation_policy.blocked_allocation_mode == SleeveInactiveCapitalMode.CONSERVE
         assert snapshot.effective_allocation.effective_allocated_share == pytest.approx(0.0)
+        assert snapshot.qualification.total_sleeves == 0
         assert "No explicit sleeves configured" in snapshot.summary
+
+    def test_qualification_marks_enabled_sleeve_as_weak_evidence(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="trend-weak",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ENABLED,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        sleeve = snapshot.sleeves[0]
+        assert sleeve.qualification.status == SleeveQualificationStatus.WEAK_EVIDENCE
+        assert sleeve.qualification.evidence.allocation_eligibility.value == "marginal"
+        assert sleeve.qualification.next_step == "Assign explicit paper allocation after operator review."
+
+    def test_qualification_marks_missing_governance_as_insufficient(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-insufficient",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.30,
+                    active_allocation=0.30,
+                    readiness_level="calibrated_paper",
+                    escalation_stage="shadow_live_review_eligible",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="not_assessed",
+            readiness_is_supportive=False,
+            escalation_allowed_next_step=None,
+            external_regime_execution_blocked=None,
+        )
+
+        sleeve = snapshot.sleeves[0]
+        assert sleeve.qualification.status == SleeveQualificationStatus.INSUFFICIENT_EVIDENCE
+        assert "readiness_unavailable" in sleeve.qualification.missing_evidence
+        assert "escalation_unavailable" in sleeve.qualification.missing_evidence
+        assert "external_regime_unavailable" in sleeve.qualification.missing_evidence
+
+    def test_qualification_marks_blocked_sleeve_and_surfaces_next_step(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="carry-blocked",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.20,
+                    blocked_allocation=0.20,
+                    blocked_reasons=("manual_hold",),
+                    reason_summary="manual_hold",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        sleeve = snapshot.sleeves[0]
+        assert sleeve.qualification.status == SleeveQualificationStatus.BLOCKED
+        assert "manual_hold" in sleeve.qualification.blocking_reasons
+        assert sleeve.qualification.next_step == "Use enable_sleeve or unblock_sleeve after review."
 
     def test_allocation_policy_defaults_to_conservative_effective_allocation(self):
         snapshot = build_sleeve_portfolio_snapshot(
@@ -1956,6 +2041,8 @@ class TestSleevePortfolioController:
         assert any(reason.source == SleeveReasonSource.EVIDENCE for reason in sleeve.reasons)
         assert any(reason.code == "external_regime_execution_blocked" for reason in sleeve.reasons)
         assert any("Assess readiness" in item for item in sleeve.required_changes)
+        assert sleeve.qualification.status == SleeveQualificationStatus.BLOCKED
+        assert sleeve.qualification.governance_blocked is True
 
     def test_controller_restore_fail_closed_on_malformed_payload(self, tmp_path: Path):
         store = EvidenceStore(
