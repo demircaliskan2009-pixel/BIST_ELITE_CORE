@@ -39,6 +39,10 @@ from crypto_core.service.campaign_controller import (
     campaign_readiness_flags,
 )
 from crypto_core.service.evidence_store import EvidenceStore
+from crypto_core.service.external_regime import (
+    ExternalRegimeDataPlane,
+    ExternalRegimeSnapshot,
+)
 from crypto_core.service.models import ServiceStatus
 from crypto_core.service.paper_live_service import PaperLiveService
 from crypto_core.service.promotion_review import PromotionThresholds
@@ -110,6 +114,11 @@ class EvidenceSufficiencyState:
     insufficient_reasons: tuple[str, ...]
     summary: str
 
+    # External regime evidence (Phase 11A)
+    external_regime_available: bool = False
+    external_regime_fresh: bool = False
+    external_regime_has_high_risk: bool = False
+
 
 @dataclass(frozen=True)
 class OperatorSnapshot:
@@ -149,6 +158,9 @@ class OperatorSnapshot:
     # Provisional recommendation
     provisional_recommendation: str | None  # PromotionVerdict.value
     recommendation_summary: str
+
+    # External regime (Phase 11A)
+    external_regime: ExternalRegimeSnapshot | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -192,12 +204,14 @@ class ServiceOrchestrator:
         evidence_store: EvidenceStore | None = None,
         readiness_level: str = "not_assessed",
         promotion_thresholds: PromotionThresholds | None = None,
+        external_regime_plane: ExternalRegimeDataPlane | None = None,
     ) -> None:
         self._service = service
         self._evidence_store = evidence_store
         self._readiness_level = readiness_level
         self._promotion_thresholds = promotion_thresholds
         self._campaign_config = campaign_config
+        self._external_regime_plane = external_regime_plane
 
         self._campaign: CampaignController | None = None
         self._last_campaign_report: CampaignReport | None = None
@@ -222,6 +236,11 @@ class ServiceOrchestrator:
     def review_controller(self) -> PromotionReviewController | None:
         """Active PromotionReviewController, or None."""
         return self._review
+
+    @property
+    def external_regime_plane(self) -> ExternalRegimeDataPlane | None:
+        """Active ExternalRegimeDataPlane, or None."""
+        return self._external_regime_plane
 
     @property
     def readiness_level(self) -> str:
@@ -527,8 +546,13 @@ class ServiceOrchestrator:
         # Review workflow state
         review_state = self._build_review_workflow_state()
 
+        # External regime snapshot
+        ext_regime: ExternalRegimeSnapshot | None = None
+        if self._external_regime_plane is not None:
+            ext_regime = self._external_regime_plane.snapshot(ss.watchdog.last_event_time_ns)
+
         # Evidence sufficiency
-        evidence = self._build_evidence_sufficiency(campaign_state, review_state)
+        evidence = self._build_evidence_sufficiency(campaign_state, review_state, ext_regime)
 
         # Readiness
         readiness_is_supportive = self._readiness_level in (
@@ -564,6 +588,7 @@ class ServiceOrchestrator:
             evidence=evidence,
             provisional_recommendation=prov_verdict,
             recommendation_summary=prov_summary,
+            external_regime=ext_regime,
         )
 
     # ------------------------------------------------------------------
@@ -651,6 +676,30 @@ class ServiceOrchestrator:
         if self._last_campaign_report is None:
             return None
         return campaign_readiness_flags(self._last_campaign_report)
+
+    def external_regime_snapshot(self) -> ExternalRegimeSnapshot | None:
+        """Current external regime snapshot, or None if no data plane configured.
+
+        Uses the last event timestamp from the service watchdog as ``now_ns``.
+        """
+        if self._external_regime_plane is None:
+            return None
+        ss = self._service.status()
+        return self._external_regime_plane.snapshot(ss.watchdog.last_event_time_ns)
+
+    def external_regime_dict(self) -> dict | None:
+        """Serialize the external regime snapshot to a dict.
+
+        Returns None if no data plane configured.
+        """
+        snap = self.external_regime_snapshot()
+        if snap is None:
+            return None
+        from crypto_core.service.external_regime import (
+            external_regime_snapshot_to_dict,
+        )
+
+        return external_regime_snapshot_to_dict(snap)
 
     # ------------------------------------------------------------------
     # Persistence / restore linkage
@@ -799,6 +848,7 @@ class ServiceOrchestrator:
         self,
         campaign_state: CampaignWorkflowState | None,
         review_state: ReviewWorkflowState | None,
+        ext_regime: ExternalRegimeSnapshot | None = None,
     ) -> EvidenceSufficiencyState:
         """Build evidence sufficiency summary.
 
@@ -827,6 +877,11 @@ class ServiceOrchestrator:
                 and snap_rev.provisional_verdict != "reject"
             )
 
+        # External regime evidence (Phase 11A)
+        ext_available = ext_regime is not None and len(ext_regime.available_dimensions) > 0
+        ext_fresh = ext_regime is not None and ext_regime.evidence_sufficient
+        ext_high_risk = ext_regime is not None and ext_regime.high_risk_regime_present
+
         # Build summary
         parts: list[str] = []
         if not campaign_available:
@@ -837,6 +892,12 @@ class ServiceOrchestrator:
             parts.append("No TCA calibration evidence in campaign.")
         if insufficient_reasons:
             parts.append(f"Insufficient review criteria: {', '.join(insufficient_reasons)}.")
+        if not ext_available:
+            parts.append("No external regime evidence available.")
+        elif not ext_fresh:
+            parts.append("External regime evidence stale or insufficient.")
+        if ext_high_risk:
+            parts.append("High-risk external regime conditions present.")
         if not parts:
             parts.append("Evidence appears sufficient for promotion consideration.")
 
@@ -847,6 +908,9 @@ class ServiceOrchestrator:
             promotion_evidence_sufficient=promotion_sufficient,
             insufficient_reasons=insufficient_reasons,
             summary=" ".join(parts),
+            external_regime_available=ext_available,
+            external_regime_fresh=ext_fresh,
+            external_regime_has_high_risk=ext_high_risk,
         )
 
 
@@ -894,6 +958,9 @@ def evidence_sufficiency_state_to_dict(state: EvidenceSufficiencyState) -> dict:
         "promotion_evidence_sufficient": state.promotion_evidence_sufficient,
         "insufficient_reasons": list(state.insufficient_reasons),
         "summary": state.summary,
+        "external_regime_available": state.external_regime_available,
+        "external_regime_fresh": state.external_regime_fresh,
+        "external_regime_has_high_risk": state.external_regime_has_high_risk,
     }
 
 
@@ -913,4 +980,14 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         "evidence": evidence_sufficiency_state_to_dict(snap.evidence),
         "provisional_recommendation": snap.provisional_recommendation,
         "recommendation_summary": snap.recommendation_summary,
+        "external_regime": (
+            _external_regime_snap_to_dict(snap.external_regime) if snap.external_regime is not None else None
+        ),
     }
+
+
+def _external_regime_snap_to_dict(snap: ExternalRegimeSnapshot) -> dict:
+    """Serialize ExternalRegimeSnapshot via the external_regime module."""
+    from crypto_core.service.external_regime import external_regime_snapshot_to_dict
+
+    return external_regime_snapshot_to_dict(snap)

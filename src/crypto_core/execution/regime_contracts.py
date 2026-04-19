@@ -19,6 +19,43 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 # ===================================================================
+# Cross-cutting enums — Phase 11A
+# ===================================================================
+
+
+class DataFreshness(str, Enum):
+    """Freshness assessment for an external data dimension.
+
+    FRESH:       data within acceptable staleness window.
+    STALE:       data past staleness threshold.
+    DEGRADED:    data partially available or has quality gaps.
+    UNAVAILABLE: no data ever received or source reports unavailable.
+    """
+
+    FRESH = "fresh"
+    STALE = "stale"
+    DEGRADED = "degraded"
+    UNAVAILABLE = "unavailable"
+
+
+class EventSeverity(str, Enum):
+    """Severity / importance of a scheduled or breaking event.
+
+    LOW:      minor event, minimal expected market impact.
+    MEDIUM:   moderate event, some positioning expected.
+    HIGH:     major event, significant market impact likely.
+    CRITICAL: extreme event, trading halt / regime shift likely.
+    UNKNOWN:  severity not assessed or not available.
+    """
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+    UNKNOWN = "unknown"
+
+
+# ===================================================================
 # Options regime state
 # ===================================================================
 
@@ -106,6 +143,9 @@ class EventCategory(str, Enum):
     PROTOCOL = "protocol"  # hard forks, upgrades, halvings
     LISTING = "listing"  # new exchange listings / delistings
     EARNINGS = "earnings"  # relevant company earnings (crypto-adjacent)
+    UNLOCK = "unlock"  # token unlock / vesting cliff
+    GOVERNANCE = "governance"  # DAO votes, protocol governance
+    ETF = "etf"  # ETF approval / rejection / flow events
     OTHER = "other"
     UNKNOWN = "unknown"
 
