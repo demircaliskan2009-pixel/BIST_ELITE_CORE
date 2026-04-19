@@ -59,6 +59,14 @@ from crypto_core.service.campaign_controller import (
     CampaignController,
     campaign_readiness_flags,
 )
+from crypto_core.service.escalation_review_controller import (
+    CurrentEscalationReviewSnapshot,
+    EscalationAttemptSummary,
+    EscalationReviewController,
+    EscalationReviewStatus,
+    EscalationWorkflowCorruptError,
+    FinalEscalationReviewReport,
+)
 from crypto_core.service.evidence_store import EvidenceStore
 from crypto_core.service.external_regime import (
     ExternalRegimeBundleApplyMode,
@@ -129,6 +137,21 @@ class ReviewWorkflowState:
     provisional_summary: str
     insufficient_evidence: tuple[str, ...]
     is_ready_to_finalize: bool
+    finalized: bool
+
+
+@dataclass(frozen=True)
+class EscalationWorkflowState:
+    """Escalation review workflow state summary for operator surfaces."""
+
+    active: bool
+    review_id: str | None
+    status: str
+    allowed_next_step: str | None
+    progression_state: str
+    previous_allowed_next_step: str | None
+    history_length: int
+    repeatedly_stuck: bool
     finalized: bool
 
 
@@ -215,6 +238,9 @@ class OperatorSnapshot:
     external_regime_safety: ExternalRegimeSafetyState | None = None
     external_regime_scenario: ExternalRegimeScenarioResult | None = None
 
+    # Escalation review workflow (Phase 13B)
+    escalation_review: EscalationWorkflowState | None = None
+
 
 # ---------------------------------------------------------------------------
 # Service orchestrator
@@ -291,6 +317,7 @@ class ServiceOrchestrator:
         self._last_campaign_report: CampaignReport | None = None
 
         self._review: PromotionReviewController | None = None
+        self._escalation_review: EscalationReviewController | None = None
 
     # ------------------------------------------------------------------
     # Properties
@@ -310,6 +337,11 @@ class ServiceOrchestrator:
     def review_controller(self) -> PromotionReviewController | None:
         """Active PromotionReviewController, or None."""
         return self._review
+
+    @property
+    def escalation_review_controller(self) -> EscalationReviewController | None:
+        """Active EscalationReviewController, or None."""
+        return self._escalation_review
 
     @property
     def external_regime_plane(self) -> ExternalRegimeDataPlane | None:
@@ -507,6 +539,16 @@ class ServiceOrchestrator:
             ReviewStatus.REJECTED,
         )
 
+    def escalation_review_active(self) -> bool:
+        """Whether an escalation review is currently active (non-terminal)."""
+        if self._escalation_review is None:
+            return False
+        return self._escalation_review.status not in (
+            EscalationReviewStatus.FINALIZED,
+            EscalationReviewStatus.FAILED,
+            EscalationReviewStatus.REJECTED,
+        )
+
     def start_review(self, *, review_id: str | None = None) -> str:
         """Start a new promotion review workflow.
 
@@ -577,6 +619,83 @@ class ServiceOrchestrator:
             return None
         return self._review.current_snapshot()
 
+    def start_escalation_review(self, *, review_id: str | None = None) -> str:
+        """Start a new escalation review workflow and evaluate current state."""
+        if self.escalation_review_active():
+            raise RuntimeError(
+                f"Cannot start a new escalation review: active review "
+                f"{self._escalation_review.review_id!r} in status "
+                f"{self._escalation_review.status.value!r}"
+            )
+
+        history = () if self._escalation_review is None else self._escalation_review.history
+
+        controller = EscalationReviewController(
+            review_id=review_id,
+            decision_builder=lambda: self._build_escalation_decision(self.decision_pack()),
+            evidence_store=self._evidence_store,
+            history=history,
+        )
+        controller.evaluate_current()
+        self._escalation_review = controller
+        logger.info("Escalation review %s started via orchestrator", self._escalation_review.review_id)
+        return self._escalation_review.review_id
+
+    def escalation_review_snapshot(self) -> CurrentEscalationReviewSnapshot | None:
+        """Current escalation review snapshot, or None if no workflow exists."""
+        if self._escalation_review is None:
+            return None
+        return self._escalation_review.current_snapshot()
+
+    def finalize_escalation_review(self) -> FinalEscalationReviewReport:
+        """Finalize the active escalation review and append bounded history."""
+        self._require_escalation_review("finalize escalation review")
+        report = self._escalation_review.finalize_review()
+        logger.info(
+            "Escalation review %s finalized via orchestrator (allowed_next_step=%s)",
+            report.review_id,
+            report.decision.escalation_stage.value,
+        )
+        return report
+
+    def reset_escalation_review(self) -> None:
+        """Reset the active escalation review while preserving finalized history."""
+        if self._escalation_review is None:
+            raise RuntimeError("No escalation review to reset")
+        self._escalation_review.reset()
+
+    def escalation_history(self) -> tuple[EscalationAttemptSummary, ...]:
+        """Bounded finalized escalation review history."""
+        if self._escalation_review is None:
+            return ()
+        return self._escalation_review.history
+
+    def escalation_history_summary(self) -> dict:
+        """Compact bounded escalation history summary."""
+        if self._escalation_review is None:
+            return {
+                "total_finalized_reviews": 0,
+                "latest_review_id": None,
+                "latest_allowed_next_step": None,
+                "current_allowed_next_step": None,
+                "repeated_stuck_count": 0,
+                "repeatedly_stuck": False,
+            }
+        return self._escalation_review.history_summary(self._current_escalation_decision_surface())
+
+    def escalation_change_summary(self) -> dict:
+        """Current-vs-previous escalation comparison summary."""
+        if self._escalation_review is None:
+            return {
+                "available": False,
+                "direction": "not_assessed",
+                "changed": False,
+                "previous_review_id": None,
+                "previous_allowed_next_step": None,
+                "current_allowed_next_step": None,
+            }
+        return self._escalation_review.compare_to_previous(self._current_escalation_decision_surface())
+
     def finalize_review(self) -> FinalReviewReport:
         """Finalize the active review and produce the final report.
 
@@ -643,6 +762,9 @@ class ServiceOrchestrator:
         # Review workflow state
         review_state = self._build_review_workflow_state()
 
+        # Escalation review workflow state
+        escalation_review_state = self._build_escalation_workflow_state()
+
         # External regime snapshot
         ext_regime = self._external_regime_snapshot_from_status(ss)
         ext_regime_safety = self._build_external_regime_safety_state(ext_regime)
@@ -680,6 +802,7 @@ class ServiceOrchestrator:
             ei_degraded_reasons=ei_degraded_reasons,
             campaign=campaign_state,
             review=review_state,
+            escalation_review=escalation_review_state,
             readiness_level=self._readiness_level,
             readiness_is_supportive=readiness_is_supportive,
             evidence=evidence,
@@ -872,23 +995,23 @@ class ServiceOrchestrator:
 
     def escalation_summary(self) -> dict:
         """Operator-facing escalation go/no-go summary."""
-        return escalation_decision_summary(self.escalation_decision())
+        return escalation_decision_summary(self._current_escalation_decision_surface())
 
     def escalation_blockers(self) -> dict:
         """Operator-facing blockers for escalation beyond the current gate."""
-        return escalation_decision_blockers(self.escalation_decision())
+        return escalation_decision_blockers(self._current_escalation_decision_surface())
 
     def escalation_missing_evidence(self) -> dict:
         """Operator-facing escalation missing-evidence summary."""
-        return escalation_decision_missing_evidence(self.escalation_decision())
+        return escalation_decision_missing_evidence(self._current_escalation_decision_surface())
 
     def escalation_why_not_higher(self) -> dict:
         """Operator-facing explanation for why a higher gate is not allowed."""
-        return escalation_decision_why_not_higher(self.escalation_decision())
+        return escalation_decision_why_not_higher(self._current_escalation_decision_surface())
 
     def escalation_revalidation_required(self) -> dict:
         """Operator-facing checklist of what must be revalidated next."""
-        return escalation_decision_revalidation(self.escalation_decision())
+        return escalation_decision_revalidation(self._current_escalation_decision_surface())
 
     def decision_summary(self) -> dict:
         """Operator-facing summary of the current decision surface."""
@@ -1310,6 +1433,33 @@ class ServiceOrchestrator:
         )
         return True
 
+    def restore_escalation_review(self) -> bool:
+        """Attempt to restore escalation workflow from evidence store."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for restore")
+
+        if self._escalation_review is not None and self.escalation_review_active():
+            raise RuntimeError("Cannot restore: active escalation review in progress")
+
+        try:
+            controller = EscalationReviewController.restore(
+                self._evidence_store,
+                decision_builder=lambda: self._build_escalation_decision(self.decision_pack()),
+            )
+        except (EscalationWorkflowCorruptError, RuntimeError):
+            raise
+        except Exception:
+            return False
+
+        self._escalation_review = controller
+        logger.info(
+            "Escalation review %s restored via orchestrator (status=%s, history=%d)",
+            controller.review_id,
+            controller.status.value,
+            len(controller.history),
+        )
+        return True
+
     def _external_regime_snapshot_from_status(
         self,
         ss: ServiceStatus,
@@ -1359,6 +1509,16 @@ class ServiceOrchestrator:
                 f"in terminal status {self._review.status.value!r}"
             )
 
+    def _require_escalation_review(self, operation: str) -> None:
+        """Validate that an active escalation review exists."""
+        if self._escalation_review is None:
+            raise RuntimeError(f"No escalation review to {operation}")
+        if not self.escalation_review_active():
+            raise RuntimeError(
+                f"Cannot {operation}: escalation review {self._escalation_review.review_id!r} "
+                f"in terminal status {self._escalation_review.status.value!r}"
+            )
+
     def _build_campaign_workflow_state(
         self,
         ss: ServiceStatus,
@@ -1399,6 +1559,36 @@ class ServiceOrchestrator:
             is_ready_to_finalize=snap.is_ready_to_finalize,
             finalized=self._review.is_finalized,
         )
+
+    def _build_escalation_workflow_state(self) -> EscalationWorkflowState | None:
+        """Build escalation review workflow state summary."""
+        if self._escalation_review is None:
+            return None
+
+        snap = self._escalation_review.current_snapshot()
+        comparison = snap.comparison_to_previous or {}
+        allowed_next_step = None
+        if snap.latest_decision is not None:
+            allowed_next_step = snap.latest_decision.escalation_stage.value
+        return EscalationWorkflowState(
+            active=self.escalation_review_active(),
+            review_id=self._escalation_review.review_id,
+            status=self._escalation_review.status.value,
+            allowed_next_step=allowed_next_step,
+            progression_state=snap.progression_state,
+            previous_allowed_next_step=comparison.get("previous_allowed_next_step"),
+            history_length=len(self._escalation_review.history),
+            repeatedly_stuck=bool(snap.history_summary.get("repeatedly_stuck", False)),
+            finalized=self._escalation_review.is_finalized,
+        )
+
+    def _current_escalation_decision_surface(self) -> EscalationDecision:
+        """Current escalation decision surface, favoring workflow state when present."""
+        if self._escalation_review is not None:
+            latest = self._escalation_review.latest_decision()
+            if latest is not None:
+                return latest
+        return self._build_escalation_decision(self.decision_pack())
 
     def _build_evidence_sufficiency(
         self,
@@ -1882,6 +2072,21 @@ def review_workflow_state_to_dict(state: ReviewWorkflowState) -> dict:
     }
 
 
+def escalation_workflow_state_to_dict(state: EscalationWorkflowState) -> dict:
+    """Serialize EscalationWorkflowState to a plain dict."""
+    return {
+        "active": state.active,
+        "review_id": state.review_id,
+        "status": state.status,
+        "allowed_next_step": state.allowed_next_step,
+        "progression_state": state.progression_state,
+        "previous_allowed_next_step": state.previous_allowed_next_step,
+        "history_length": state.history_length,
+        "repeatedly_stuck": state.repeatedly_stuck,
+        "finalized": state.finalized,
+    }
+
+
 def evidence_sufficiency_state_to_dict(state: EvidenceSufficiencyState) -> dict:
     """Serialize EvidenceSufficiencyState to a plain dict."""
     return {
@@ -1925,6 +2130,9 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         "ei_degraded_reasons": list(snap.ei_degraded_reasons),
         "campaign": (campaign_workflow_state_to_dict(snap.campaign) if snap.campaign is not None else None),
         "review": (review_workflow_state_to_dict(snap.review) if snap.review is not None else None),
+        "escalation_review": (
+            escalation_workflow_state_to_dict(snap.escalation_review) if snap.escalation_review is not None else None
+        ),
         "readiness_level": snap.readiness_level,
         "readiness_is_supportive": snap.readiness_is_supportive,
         "evidence": evidence_sufficiency_state_to_dict(snap.evidence),
