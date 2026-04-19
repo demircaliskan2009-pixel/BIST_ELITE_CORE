@@ -375,7 +375,14 @@ class ServiceOrchestrator:
         if self._campaign is None:
             raise RuntimeError("No campaign to finalize")
         ss = self._service.status()
-        report = self._campaign.finalize(ss)
+
+        # Phase 11B: thread external regime evidence into campaign finalization.
+        ext_regime = None
+        if self._external_regime_plane is not None:
+            last_ns = ss.watchdog.last_event_time_ns if ss.watchdog else 0
+            ext_regime = self._external_regime_plane.snapshot(last_ns)
+
+        report = self._campaign.finalize(ss, ext_regime=ext_regime)
         self._last_campaign_report = report
         logger.info(
             "Campaign %s finalized via orchestrator (verdict=%s)",
@@ -389,7 +396,12 @@ class ServiceOrchestrator:
         if self._campaign is None:
             return None
         ss = self._service.status()
-        return self._campaign.snapshot(ss)
+        # Phase 11B: thread external regime evidence into campaign snapshot.
+        ext_regime = None
+        if self._external_regime_plane is not None:
+            last_ns = ss.watchdog.last_event_time_ns if ss.watchdog else 0
+            ext_regime = self._external_regime_plane.snapshot(last_ns)
+        return self._campaign.snapshot(ss, ext_regime=ext_regime)
 
     @property
     def last_campaign_report(self) -> CampaignReport | None:

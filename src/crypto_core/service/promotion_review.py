@@ -310,6 +310,12 @@ class CampaignAggregation:
     # Per-campaign calibration summaries
     calibrations: tuple[ExecutionCalibrationSummary, ...]
 
+    # Phase 11B: aggregate external regime evidence
+    campaigns_with_ext_regime: int = 0
+    campaigns_ext_regime_fresh: int = 0
+    campaigns_ext_regime_high_risk: int = 0
+    ext_regime_coverage_ratio: float = 0.0
+
 
 def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignAggregation:
     """Aggregate multiple campaign reports into a summary.
@@ -362,6 +368,10 @@ def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignA
     total_blocks = 0
     total_abstains = 0
     calibrations: list[ExecutionCalibrationSummary] = []
+    # Phase 11B: external regime evidence aggregation
+    ext_regime_count = 0
+    ext_regime_fresh_count = 0
+    ext_regime_high_risk_count = 0
 
     for r in reports:
         verdict = AcceptanceVerdict(r.verdict)
@@ -382,6 +392,14 @@ def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignA
         max_symbols_with_events = max(max_symbols_with_events, snap.symbols_with_events)
         total_blocks += snap.ei_route_blocks
         total_abstains += snap.ei_route_abstains
+
+        # Phase 11B: external regime evidence tracking
+        if getattr(r, "ext_regime_available", False):
+            ext_regime_count += 1
+        if getattr(r, "ext_regime_fresh", False):
+            ext_regime_fresh_count += 1
+        if getattr(r, "ext_regime_high_risk", False):
+            ext_regime_high_risk_count += 1
         total_recovery += snap.recovery_incidents
         if snap.stability:
             total_degraded += snap.stability.degraded_intervals
@@ -427,6 +445,11 @@ def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignA
         total_route_abstains=total_abstains,
         verdict_consistency=consistency,
         calibrations=tuple(calibrations),
+        # Phase 11B: external regime evidence aggregation
+        campaigns_with_ext_regime=ext_regime_count,
+        campaigns_ext_regime_fresh=ext_regime_fresh_count,
+        campaigns_ext_regime_high_risk=ext_regime_high_risk_count,
+        ext_regime_coverage_ratio=(ext_regime_count / n if n > 0 else 0.0),
     )
 
 
@@ -545,6 +568,9 @@ class PromotionThresholds:
     # --- Execution evidence quality ---
     min_markout_completion_ratio: float = 0.5  # coverage
     min_persisted_tca_ratio: float = -1.0  # -1 = not enforced (unavailable)
+
+    # --- Phase 11B: external regime evidence coverage ---
+    min_ext_regime_coverage_ratio: float = -1.0  # -1 = not enforced (unavailable)t enforced (unavailable)
 
 
 # ---------------------------------------------------------------------------
@@ -794,6 +820,16 @@ class PromotionPolicy:
                     "min_persisted_tca_ratio",
                     avg_tca_ratio,
                     t.min_persisted_tca_ratio,
+                )
+            )
+
+        # Phase 11B: external regime evidence coverage
+        if t.min_ext_regime_coverage_ratio >= 0:
+            criteria.append(
+                self._check_coverage(
+                    "min_ext_regime_coverage_ratio",
+                    agg.ext_regime_coverage_ratio,
+                    t.min_ext_regime_coverage_ratio,
                 )
             )
 

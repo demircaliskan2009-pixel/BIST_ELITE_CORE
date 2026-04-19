@@ -43,6 +43,7 @@ from crypto_core.service.evidence_store import (
     EvidenceStore,
     WriteResult,
 )
+from crypto_core.service.external_regime import ExternalRegimeSnapshot
 from crypto_core.service.health import (
     HealthConfig,
     HealthTracker,
@@ -260,7 +261,12 @@ class CampaignController:
     # Finalize — produce verdict
     # ------------------------------------------------------------------
 
-    def finalize(self, service_status: ServiceStatus) -> CampaignReport:
+    def finalize(
+        self,
+        service_status: ServiceStatus,
+        *,
+        ext_regime: ExternalRegimeSnapshot | None = None,
+    ) -> CampaignReport:
         """Finalize the campaign and produce the verdict report.
 
         If the campaign is still RUNNING, it is completed first.
@@ -268,6 +274,7 @@ class CampaignController:
 
         Args:
             service_status: current ServiceStatus snapshot.
+            ext_regime: optional external regime snapshot for truthful evidence.
 
         Returns:
             CampaignReport with verdict evidence.
@@ -284,11 +291,20 @@ class CampaignController:
             if self._meta.status == CampaignStatus.RUNNING:
                 self._complete("finalize_requested")
 
-        snap = self.snapshot(service_status)
+        snap = self.snapshot(service_status, ext_regime=ext_regime)
         result = self._policy.evaluate(snap)
 
         self._meta.verdict = result.verdict
         self._meta.verdict_reason = result.summary
+
+        # Persist ext_regime evidence into metadata for restore.
+        if ext_regime is not None:
+            self._meta.ext_regime_available = snap.ext_regime_available
+            self._meta.ext_regime_fresh = snap.ext_regime_fresh
+            self._meta.ext_regime_high_risk = snap.ext_regime_high_risk
+            self._meta.ext_regime_any_unavailable = snap.ext_regime_any_unavailable
+            self._meta.ext_regime_evidence_sufficient = snap.ext_regime_evidence_sufficient
+            self._meta.ext_regime_summary = snap.ext_regime_summary
 
         # REJECTED status if verdict is FAIL.
         if result.verdict == AcceptanceVerdict.FAIL:
@@ -312,6 +328,12 @@ class CampaignController:
             symbol_participation=participation,
             config=self._meta.to_dict().get("config", {}),
             stability=snap.stability,
+            ext_regime_available=snap.ext_regime_available,
+            ext_regime_fresh=snap.ext_regime_fresh,
+            ext_regime_high_risk=snap.ext_regime_high_risk,
+            ext_regime_any_unavailable=snap.ext_regime_any_unavailable,
+            ext_regime_evidence_sufficient=snap.ext_regime_evidence_sufficient,
+            ext_regime_summary=snap.ext_regime_summary,
         )
 
         self._persist_metadata()
@@ -322,13 +344,19 @@ class CampaignController:
     # Inspection
     # ------------------------------------------------------------------
 
-    def snapshot(self, service_status: ServiceStatus) -> CampaignSnapshot:
+    def snapshot(
+        self,
+        service_status: ServiceStatus,
+        *,
+        ext_regime: ExternalRegimeSnapshot | None = None,
+    ) -> CampaignSnapshot:
         """Produce a point-in-time campaign snapshot.
 
         Read-only — does NOT mutate campaign state.
 
         Args:
             service_status: current ServiceStatus.
+            ext_regime: optional external regime snapshot for truthful evidence.
 
         Returns:
             Frozen CampaignSnapshot.
@@ -402,6 +430,13 @@ class CampaignController:
             persisted_tca_count=meta.persisted_tca_count,
             persisted_attribution_count=meta.persisted_attribution_count,
             registered_fill_count=meta.registered_fill_count,
+            # Phase 11B: external regime evidence
+            ext_regime_available=(ext_regime is not None and len(ext_regime.available_dimensions) > 0),
+            ext_regime_fresh=(ext_regime is not None and ext_regime.evidence_sufficient),
+            ext_regime_high_risk=(ext_regime is not None and ext_regime.high_risk_regime_present),
+            ext_regime_any_unavailable=(ext_regime is not None and ext_regime.any_unavailable_critical),
+            ext_regime_evidence_sufficient=(ext_regime is not None and ext_regime.evidence_sufficient),
+            ext_regime_summary=(ext_regime.regime_summary if ext_regime is not None else ""),
         )
 
     def symbol_participation_view(self, service_status: ServiceStatus) -> tuple[SymbolParticipation, ...]:
@@ -658,6 +693,13 @@ def _report_to_dict(report: CampaignReport) -> dict:
         "persisted_tca_count": report.snapshot.persisted_tca_count,
         "persisted_attribution_count": report.snapshot.persisted_attribution_count,
         "registered_fill_count": report.snapshot.registered_fill_count,
+        # Phase 11B: external regime evidence
+        "ext_regime_available": report.snapshot.ext_regime_available,
+        "ext_regime_fresh": report.snapshot.ext_regime_fresh,
+        "ext_regime_high_risk": report.snapshot.ext_regime_high_risk,
+        "ext_regime_any_unavailable": report.snapshot.ext_regime_any_unavailable,
+        "ext_regime_evidence_sufficient": report.snapshot.ext_regime_evidence_sufficient,
+        "ext_regime_summary": report.snapshot.ext_regime_summary,
     }
     stability_dict = None
     if report.stability is not None:
@@ -686,6 +728,12 @@ def _report_to_dict(report: CampaignReport) -> dict:
         "symbol_participation": participation_list,
         "config": report.config,
         "stability": stability_dict,
+        "ext_regime_available": report.ext_regime_available,
+        "ext_regime_fresh": report.ext_regime_fresh,
+        "ext_regime_high_risk": report.ext_regime_high_risk,
+        "ext_regime_any_unavailable": report.ext_regime_any_unavailable,
+        "ext_regime_evidence_sufficient": report.ext_regime_evidence_sufficient,
+        "ext_regime_summary": report.ext_regime_summary,
     }
 
 
@@ -718,4 +766,5 @@ def campaign_readiness_flags(report: CampaignReport) -> dict[str, bool]:
         "paper_campaign_completed": campaign_passed,
         "paper_fill_calibration_available": snap.total_fills > 0,
         "tca_records_sufficient": getattr(snap, "persisted_tca_count", 0) > 0,
+        "external_regime_evidence_available": getattr(snap, "ext_regime_evidence_sufficient", False),
     }

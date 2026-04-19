@@ -302,6 +302,13 @@ class CampaignSnapshot:
     persisted_tca_count: int = 0
     persisted_attribution_count: int = 0
     registered_fill_count: int = 0
+    # Phase 11B: external regime evidence at snapshot time
+    ext_regime_available: bool = False
+    ext_regime_fresh: bool = False
+    ext_regime_high_risk: bool = False
+    ext_regime_any_unavailable: bool = False
+    ext_regime_evidence_sufficient: bool = False
+    ext_regime_summary: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +335,13 @@ class CampaignReport:
     symbol_participation: tuple[SymbolParticipation, ...]
     config: dict
     stability: StabilityRollup | None = None
+    # Phase 11B: external regime evidence at finalization
+    ext_regime_available: bool = False
+    ext_regime_fresh: bool = False
+    ext_regime_high_risk: bool = False
+    ext_regime_any_unavailable: bool = False
+    ext_regime_evidence_sufficient: bool = False
+    ext_regime_summary: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -645,6 +659,20 @@ class CampaignMetadata:
     persisted_tca_count: int = 0
     persisted_attribution_count: int = 0
     registered_fill_count: int = 0
+    # Phase 11B: last external regime evidence observed
+    ext_regime_available: bool = False
+    ext_regime_fresh: bool = False
+    ext_regime_high_risk: bool = False
+    ext_regime_any_unavailable: bool = False
+    ext_regime_evidence_sufficient: bool = False
+    ext_regime_summary: str = ""
+    # Phase 11B: last external regime evidence observed
+    ext_regime_available: bool = False
+    ext_regime_fresh: bool = False
+    ext_regime_high_risk: bool = False
+    ext_regime_any_unavailable: bool = False
+    ext_regime_evidence_sufficient: bool = False
+    ext_regime_summary: str = ""
 
     def elapsed_seconds(self) -> float:
         """Wall-clock elapsed seconds excluding paused time."""
@@ -684,6 +712,12 @@ class CampaignMetadata:
             "persisted_tca_count": self.persisted_tca_count,
             "persisted_attribution_count": self.persisted_attribution_count,
             "registered_fill_count": self.registered_fill_count,
+            "ext_regime_available": self.ext_regime_available,
+            "ext_regime_fresh": self.ext_regime_fresh,
+            "ext_regime_high_risk": self.ext_regime_high_risk,
+            "ext_regime_any_unavailable": self.ext_regime_any_unavailable,
+            "ext_regime_evidence_sufficient": self.ext_regime_evidence_sufficient,
+            "ext_regime_summary": self.ext_regime_summary,
             "config": {
                 "campaign_id": self.config.campaign_id,
                 "max_duration_s": self.config.max_duration_s,
@@ -759,4 +793,10 @@ def campaign_metadata_from_dict(d: dict, config: CampaignConfig | None = None) -
         persisted_tca_count=d.get("persisted_tca_count", 0),
         persisted_attribution_count=d.get("persisted_attribution_count", 0),
         registered_fill_count=d.get("registered_fill_count", 0),
+        ext_regime_available=d.get("ext_regime_available", False),
+        ext_regime_fresh=d.get("ext_regime_fresh", False),
+        ext_regime_high_risk=d.get("ext_regime_high_risk", False),
+        ext_regime_any_unavailable=d.get("ext_regime_any_unavailable", False),
+        ext_regime_evidence_sufficient=d.get("ext_regime_evidence_sufficient", False),
+        ext_regime_summary=d.get("ext_regime_summary", ""),
     )
