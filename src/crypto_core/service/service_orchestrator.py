@@ -30,13 +30,23 @@ import logging
 from dataclasses import dataclass
 
 from crypto_core.service.artifact_export import (
+    EscalationDecision,
+    EscalationStage,
     OperatorDecisionPack,
     decision_pack_decision_summary,
     decision_pack_missing_evidence,
     decision_pack_next_inspection,
     decision_pack_to_dict,
     decision_pack_why_not_promotable,
+    escalation_decision_blockers,
+    escalation_decision_missing_evidence,
+    escalation_decision_revalidation,
+    escalation_decision_summary,
+    escalation_decision_to_dict,
+    escalation_decision_why_not_higher,
+    export_escalation_decision,
     export_operator_decision_pack,
+    load_escalation_decision,
     load_operator_decision_pack,
     operator_disposition_from_verdict,
 )
@@ -835,6 +845,50 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for decision pack load")
         return load_operator_decision_pack(evidence_store=self._evidence_store)
+
+    def escalation_decision(self) -> EscalationDecision:
+        """Build a deterministic crypto paper-live escalation decision."""
+        pack = self.decision_pack()
+        return self._build_escalation_decision(pack)
+
+    def escalation_decision_dict(self) -> dict:
+        """Serialize the current escalation decision to a plain dict."""
+        return escalation_decision_to_dict(self.escalation_decision())
+
+    def export_escalation_decision(self):
+        """Persist the current escalation decision via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for escalation decision export")
+        return export_escalation_decision(
+            decision=self.escalation_decision(),
+            evidence_store=self._evidence_store,
+        )
+
+    def load_escalation_decision(self) -> EscalationDecision:
+        """Load the latest persisted escalation decision."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for escalation decision load")
+        return load_escalation_decision(evidence_store=self._evidence_store)
+
+    def escalation_summary(self) -> dict:
+        """Operator-facing escalation go/no-go summary."""
+        return escalation_decision_summary(self.escalation_decision())
+
+    def escalation_blockers(self) -> dict:
+        """Operator-facing blockers for escalation beyond the current gate."""
+        return escalation_decision_blockers(self.escalation_decision())
+
+    def escalation_missing_evidence(self) -> dict:
+        """Operator-facing escalation missing-evidence summary."""
+        return escalation_decision_missing_evidence(self.escalation_decision())
+
+    def escalation_why_not_higher(self) -> dict:
+        """Operator-facing explanation for why a higher gate is not allowed."""
+        return escalation_decision_why_not_higher(self.escalation_decision())
+
+    def escalation_revalidation_required(self) -> dict:
+        """Operator-facing checklist of what must be revalidated next."""
+        return escalation_decision_revalidation(self.escalation_decision())
 
     def decision_summary(self) -> dict:
         """Operator-facing summary of the current decision surface."""
@@ -1647,6 +1701,150 @@ class ServiceOrchestrator:
         if promotion_verdict == "promote" and not items:
             items.append("promotion_ready_review")
         return tuple(items)
+
+    def _build_escalation_decision(self, pack: OperatorDecisionPack) -> EscalationDecision:
+        stage = self._escalation_stage_for_pack(pack)
+        blocking_reasons = self._escalation_blocking_reasons(pack, stage)
+        why_not_higher = self._escalation_why_not_higher(pack, stage)
+        revalidation_required = self._escalation_revalidation_required(pack, stage)
+        return EscalationDecision(
+            artifact_time_ns=pack.artifact_time_ns,
+            review_id=pack.review_id,
+            review_timestamp_ns=pack.review_timestamp_ns,
+            review_status=pack.review_status,
+            promotion_verdict=pack.promotion_verdict,
+            operator_disposition=pack.operator_disposition,
+            escalation_stage=stage,
+            decision_summary=self._escalation_summary_text(pack, stage),
+            readiness_level=pack.readiness_level,
+            readiness_is_supportive=pack.readiness_is_supportive,
+            external_regime_quality=pack.external_regime_quality,
+            blocking_reasons=blocking_reasons,
+            missing_evidence=pack.insufficient_evidence,
+            why_not_higher=why_not_higher,
+            revalidation_required=revalidation_required,
+            campaign_ids=pack.campaign_ids,
+            reason_codes=pack.reason_codes,
+        )
+
+    def _escalation_stage_for_pack(self, pack: OperatorDecisionPack) -> EscalationStage:
+        if pack.promotion_verdict == "reject" or (pack.fail_criteria and not pack.insufficient_evidence):
+            return EscalationStage.REJECT
+        if pack.promotion_verdict == "inconclusive" or pack.insufficient_evidence:
+            return EscalationStage.INCONCLUSIVE
+        if pack.promotion_verdict == "hold" or pack.warning_criteria:
+            return EscalationStage.HOLD
+        if pack.promotion_verdict != "promote":
+            return EscalationStage.INCONCLUSIVE
+
+        stage = self._target_escalation_stage(pack.readiness_level, pack.readiness_is_supportive)
+        if pack.external_regime_quality in {"blocking", "insufficient", "unavailable", "marginal", "cautionary"}:
+            stage = self._downgrade_escalation_stage(stage)
+        return stage
+
+    @staticmethod
+    def _target_escalation_stage(readiness_level: str, readiness_is_supportive: bool) -> EscalationStage:
+        if not readiness_is_supportive:
+            return EscalationStage.PAPER_ONLY
+        if readiness_level == "tiny_cap_live":
+            return EscalationStage.TINY_CAP_LIVE_REVIEW_ELIGIBLE
+        if readiness_level == "shadow_live":
+            return EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE
+        if readiness_level == "calibrated_paper":
+            return EscalationStage.CALIBRATED_PAPER
+        return EscalationStage.PAPER_ONLY
+
+    @staticmethod
+    def _downgrade_escalation_stage(stage: EscalationStage) -> EscalationStage:
+        return {
+            EscalationStage.TINY_CAP_LIVE_REVIEW_ELIGIBLE: EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE,
+            EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE: EscalationStage.CALIBRATED_PAPER,
+            EscalationStage.CALIBRATED_PAPER: EscalationStage.PAPER_ONLY,
+            EscalationStage.PAPER_ONLY: EscalationStage.PAPER_ONLY,
+            EscalationStage.HOLD: EscalationStage.HOLD,
+            EscalationStage.REJECT: EscalationStage.REJECT,
+            EscalationStage.INCONCLUSIVE: EscalationStage.INCONCLUSIVE,
+        }[stage]
+
+    @staticmethod
+    def _escalation_summary_text(pack: OperatorDecisionPack, stage: EscalationStage) -> str:
+        return f"allowed_next_step={stage.value}; promotion_verdict={pack.promotion_verdict}; summary={pack.decision_summary}"
+
+    @staticmethod
+    def _escalation_blocking_reasons(
+        pack: OperatorDecisionPack,
+        stage: EscalationStage,
+    ) -> tuple[str, ...]:
+        reasons: list[str] = []
+        if stage in {EscalationStage.REJECT, EscalationStage.HOLD, EscalationStage.INCONCLUSIVE}:
+            reasons.extend(pack.why_not_promotable)
+        if stage in {EscalationStage.PAPER_ONLY, EscalationStage.CALIBRATED_PAPER}:
+            reasons.extend(pack.readiness_blockers)
+            reasons.extend(pack.external_regime_concerns)
+        return ServiceOrchestrator._ordered_unique(reasons)
+
+    def _escalation_why_not_higher(
+        self,
+        pack: OperatorDecisionPack,
+        stage: EscalationStage,
+    ) -> tuple[str, ...]:
+        reasons: list[str] = []
+        if stage == EscalationStage.REJECT:
+            reasons.extend(pack.fail_criteria)
+        elif stage == EscalationStage.INCONCLUSIVE:
+            reasons.extend(pack.insufficient_evidence)
+        elif stage == EscalationStage.HOLD:
+            reasons.extend(pack.warning_criteria)
+        elif stage == EscalationStage.PAPER_ONLY:
+            if pack.readiness_level != "calibrated_paper":
+                reasons.append(f"readiness_level:{pack.readiness_level}")
+            reasons.extend(pack.readiness_blockers)
+            reasons.extend(f"external_regime:{item}" for item in pack.external_regime_concerns)
+        elif stage == EscalationStage.CALIBRATED_PAPER:
+            if pack.readiness_level != "shadow_live":
+                reasons.append(f"readiness_level:{pack.readiness_level}")
+            reasons.extend(f"external_regime:{item}" for item in pack.external_regime_concerns)
+        elif stage == EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE:
+            if pack.readiness_level != "tiny_cap_live":
+                reasons.append(f"readiness_level:{pack.readiness_level}")
+            reasons.extend(f"external_regime:{item}" for item in pack.external_regime_concerns)
+        return self._ordered_unique(reasons)
+
+    @staticmethod
+    def _escalation_revalidation_required(
+        pack: OperatorDecisionPack,
+        stage: EscalationStage,
+    ) -> tuple[str, ...]:
+        items: list[str] = []
+        if stage == EscalationStage.INCONCLUSIVE:
+            items.append("insufficient_evidence")
+        if stage == EscalationStage.HOLD:
+            items.append("warning_criteria")
+        if pack.readiness_blockers:
+            items.append("readiness_blockers")
+        if pack.external_regime_concerns:
+            items.append("external_regime_governance")
+        if not pack.external_regime_evidence_sufficient:
+            items.append("external_regime_evidence")
+        if not pack.criteria_summary.get("readiness", {}).get("available", False):
+            items.append("readiness_assessment")
+        if pack.reason_codes.get("fail_count", 0) > 0:
+            items.append("failed_criteria")
+        if stage in {
+            EscalationStage.CALIBRATED_PAPER,
+            EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE,
+            EscalationStage.TINY_CAP_LIVE_REVIEW_ELIGIBLE,
+        }:
+            items.append("operator_review_signoff")
+        return ServiceOrchestrator._ordered_unique(items)
+
+    @staticmethod
+    def _ordered_unique(items: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+        ordered: list[str] = []
+        for item in items:
+            if item and item not in ordered:
+                ordered.append(item)
+        return tuple(ordered)
 
 
 # ---------------------------------------------------------------------------
