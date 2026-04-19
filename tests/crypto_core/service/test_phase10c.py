@@ -25,6 +25,8 @@ from pathlib import Path
 import pytest
 
 from crypto_core.service.artifact_export import (
+    EscalationDecision,
+    EscalationStage,
     OperatorDecisionPack,
     OperatorDecisionPackCorruptError,
     decision_pack_decision_summary,
@@ -33,7 +35,16 @@ from crypto_core.service.artifact_export import (
     decision_pack_next_inspection,
     decision_pack_to_dict,
     decision_pack_why_not_promotable,
+    escalation_decision_blockers,
+    escalation_decision_from_dict,
+    escalation_decision_missing_evidence,
+    escalation_decision_revalidation,
+    escalation_decision_summary,
+    escalation_decision_to_dict,
+    escalation_decision_why_not_higher,
+    export_escalation_decision,
     export_operator_decision_pack,
+    load_escalation_decision,
     load_operator_decision_pack,
 )
 from crypto_core.service.campaign import (
@@ -1212,6 +1223,115 @@ class TestDecisionPackArtifact:
                     "external_regime_governance": {},
                     "external_regime_summary": "none",
                     "campaign_coverage": {},
+                    "reason_codes": {},
+                }
+            )
+
+
+class TestEscalationDecisionArtifact:
+    def test_escalation_decision_to_dict_roundtrip(self):
+        decision = EscalationDecision(
+            artifact_time_ns=_T0_NS,
+            review_id="rev-escalate",
+            review_timestamp_ns=_T0_NS,
+            review_status="finalized",
+            promotion_verdict="promote",
+            operator_disposition="promotable",
+            escalation_stage=EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE,
+            decision_summary="allowed_next_step=shadow_live_review_eligible",
+            readiness_level="shadow_live",
+            readiness_is_supportive=True,
+            external_regime_quality="supportive",
+            blocking_reasons=(),
+            missing_evidence=(),
+            why_not_higher=("readiness_level:shadow_live",),
+            revalidation_required=("operator_review_signoff",),
+            campaign_ids=("camp-1", "camp-2", "camp-3"),
+            reason_codes={"pass_count": 3},
+        )
+
+        restored = escalation_decision_from_dict(escalation_decision_to_dict(decision))
+        assert restored.review_id == decision.review_id
+        assert restored.escalation_stage == EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE
+        assert restored.revalidation_required == ("operator_review_signoff",)
+
+    def test_escalation_decision_export_load_roundtrip(self, tmp_path: Path):
+        decision = EscalationDecision(
+            artifact_time_ns=_T0_NS,
+            review_id="rev-escalate",
+            review_timestamp_ns=_T0_NS,
+            review_status="finalized",
+            promotion_verdict="hold",
+            operator_disposition="hold_only",
+            escalation_stage=EscalationStage.HOLD,
+            decision_summary="allowed_next_step=hold",
+            readiness_level="calibrated_paper",
+            readiness_is_supportive=True,
+            external_regime_quality="cautionary",
+            blocking_reasons=("warn_failed_campaigns",),
+            missing_evidence=(),
+            why_not_higher=("warn_failed_campaigns",),
+            revalidation_required=("warning_criteria", "external_regime_governance"),
+            campaign_ids=("camp-1", "camp-2", "camp-3"),
+            reason_codes={"warning_count": 1},
+        )
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+
+        result = export_escalation_decision(decision=decision, evidence_store=store)
+        assert result.success is True
+
+        loaded = load_escalation_decision(evidence_store=store)
+        assert loaded.escalation_stage == EscalationStage.HOLD
+        assert escalation_decision_revalidation(loaded)["items"] == [
+            "warning_criteria",
+            "external_regime_governance",
+        ]
+
+    def test_escalation_decision_summary_helpers(self):
+        decision = EscalationDecision(
+            artifact_time_ns=_T0_NS,
+            review_id="rev-escalate",
+            review_timestamp_ns=_T0_NS,
+            review_status="finalized",
+            promotion_verdict="inconclusive",
+            operator_disposition="inconclusive",
+            escalation_stage=EscalationStage.INCONCLUSIVE,
+            decision_summary="allowed_next_step=inconclusive",
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            external_regime_quality="unavailable",
+            blocking_reasons=("min_completed_campaigns",),
+            missing_evidence=("min_completed_campaigns", "min_total_fills"),
+            why_not_higher=("min_completed_campaigns",),
+            revalidation_required=("insufficient_evidence",),
+            reason_codes={"insufficient_count": 2},
+        )
+
+        assert escalation_decision_summary(decision)["allowed_next_step"] == "inconclusive"
+        assert escalation_decision_blockers(decision)["blocking_reasons"] == ["min_completed_campaigns"]
+        assert escalation_decision_missing_evidence(decision)["missing_evidence"] == [
+            "min_completed_campaigns",
+            "min_total_fills",
+        ]
+        assert escalation_decision_why_not_higher(decision)["reasons"] == ["min_completed_campaigns"]
+
+    def test_escalation_decision_from_dict_fail_closed(self):
+        with pytest.raises(OperatorDecisionPackCorruptError, match="review_id"):
+            escalation_decision_from_dict(
+                {
+                    "artifact_time_ns": _T0_NS,
+                    "review_timestamp_ns": _T0_NS,
+                    "review_status": "finalized",
+                    "promotion_verdict": "promote",
+                    "operator_disposition": "promotable",
+                    "escalation_stage": "paper_only",
+                    "decision_summary": "missing review id",
+                    "readiness_level": "paper_live",
+                    "readiness_is_supportive": True,
+                    "external_regime_quality": "supportive",
                     "reason_codes": {},
                 }
             )
