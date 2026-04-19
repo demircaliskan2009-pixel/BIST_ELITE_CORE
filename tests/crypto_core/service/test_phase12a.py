@@ -27,6 +27,7 @@ from crypto_core.execution.regime_contracts import (
 from crypto_core.runtime.models import RuntimeStatus
 from crypto_core.service.evidence_store import EvidenceStore
 from crypto_core.service.external_regime import (
+    ExternalRegimeBundleApplyMode,
     ExternalRegimeDataPlane,
     ExternalRegimeFreshnessPolicy,
     ExternalRegimeManager,
@@ -35,6 +36,8 @@ from crypto_core.service.external_regime import (
     ExternalRegimeProviderRole,
     ExternalRegimeProviderTrust,
     ExternalRegimeUpdateStatus,
+    external_regime_bundle_replay_artifact_from_dict,
+    external_regime_bundle_replay_artifact_to_dict,
 )
 from crypto_core.service.models import (
     ExecutionIntelligenceStatus,
@@ -463,6 +466,207 @@ class TestExternalRegimePayloadAdapters:
         assert lifecycle["provider_policy"]["profiles"][0]["provider"] == "manual"
 
 
+class TestExternalRegimeBundleAdapters:
+    def test_valid_multi_dimension_bundle_is_accepted(self):
+        manager = ExternalRegimeManager()
+
+        result = manager.ingest_bundle_payload(
+            {
+                "bundle_id": "bundle-001",
+                "observed_at_ns": _T0_NS,
+                "source": "operator.bundle",
+                "options": {
+                    "symbol": "BTCUSDT",
+                    "level": OptionsRegimeLevel.ELEVATED.value,
+                    "snapshot_ns": _T0_NS,
+                    "source": "manual.options",
+                },
+                "event": {
+                    "level": EventRegimeLevel.PENDING.value,
+                    "snapshot_ns": _T0_NS,
+                    "source": "calendar.event",
+                    "event_category": EventCategory.MACRO.value,
+                },
+            },
+            provider="manual",
+        )
+
+        lifecycle = manager.status_dict(_T0_NS)
+
+        assert result.accepted is True
+        assert result.outcome == "fully_accepted"
+        assert result.changed_dimensions == ("options", "event")
+        assert lifecycle["latest_bundle_result"]["bundle_id"] == "bundle-001"
+        assert lifecycle["latest_bundle_replay_artifact"]["normalized_bundle"]["source"] == "operator.bundle"
+
+    def test_single_dimension_bundle_is_accepted(self):
+        manager = ExternalRegimeManager()
+
+        result = manager.ingest_bundle_payload(
+            {
+                "on_chain": {
+                    "symbol": "BTC",
+                    "level": OnChainRegimeLevel.NORMAL.value,
+                    "snapshot_ns": _T0_NS,
+                    "source": "glassnode.flow",
+                }
+            },
+            provider="glassnode",
+        )
+
+        assert result.accepted is True
+        assert result.dimensions_present == ("on_chain",)
+        assert result.changed_dimensions == ("on_chain",)
+
+    def test_malformed_bundle_is_rejected(self):
+        manager = ExternalRegimeManager()
+
+        result = manager.ingest_bundle_payload(
+            {
+                "bundle_id": "bad-bundle",
+                "unexpected": True,
+            },
+            provider="manual",
+        )
+
+        assert result.accepted is False
+        assert result.outcome == "fully_rejected"
+        assert result.reason == "bundle.unknown_fields:unexpected"
+
+    def test_atomic_bundle_with_one_bad_dimension_rejects_without_mutation(self):
+        manager = ExternalRegimeManager()
+
+        result = manager.ingest_bundle_payload(
+            {
+                "options": {
+                    "symbol": "BTCUSDT",
+                    "level": OptionsRegimeLevel.NORMAL.value,
+                    "snapshot_ns": _T0_NS,
+                    "source": "manual.options",
+                },
+                "event": {
+                    "level": EventRegimeLevel.PENDING.value,
+                    "snapshot_ns": _T0_NS,
+                },
+            },
+            provider="manual",
+            apply_mode=ExternalRegimeBundleApplyMode.ATOMIC,
+        )
+
+        snapshot = manager.snapshot(_T0_NS)
+
+        assert result.accepted is False
+        assert result.outcome == "fully_rejected"
+        assert result.changed_dimensions == ()
+        assert result.failed_dimensions == ("options", "event")
+        assert snapshot.options is None
+        assert snapshot.event is None
+        assert any(item.reason.startswith("bundle_atomic_rejected:") for item in result.dimension_results)
+
+    def test_partial_bundle_applies_valid_dimensions_and_reports_failures(self):
+        manager = ExternalRegimeManager()
+
+        result = manager.ingest_bundle_payload(
+            {
+                "options": {
+                    "symbol": "BTCUSDT",
+                    "level": OptionsRegimeLevel.NORMAL.value,
+                    "snapshot_ns": _T0_NS,
+                    "source": "manual.options",
+                },
+                "event": {
+                    "level": EventRegimeLevel.PENDING.value,
+                    "snapshot_ns": _T0_NS,
+                },
+            },
+            provider="manual",
+            apply_mode=ExternalRegimeBundleApplyMode.PARTIAL,
+        )
+
+        snapshot = manager.snapshot(_T0_NS)
+
+        assert result.accepted is False
+        assert result.partially_accepted is True
+        assert result.outcome == "partially_accepted"
+        assert result.changed_dimensions == ("options",)
+        assert result.failed_dimensions == ("event",)
+        assert snapshot.options is not None
+        assert snapshot.event is None
+
+    def test_source_policy_is_enforced_inside_bundle(self):
+        manager = ExternalRegimeManager()
+
+        result = manager.ingest_bundle_payload(
+            {
+                "options": {
+                    "symbol": "BTCUSDT",
+                    "level": OptionsRegimeLevel.NORMAL.value,
+                    "snapshot_ns": _T0_NS,
+                    "source": "calendar.options",
+                }
+            },
+            provider="calendar",
+        )
+
+        assert result.accepted is False
+        assert result.failed_dimensions == ("options",)
+        assert result.dimension_results[0].reason == "provider_not_allowed_for_dimension:calendar:options"
+
+    def test_stale_policy_is_enforced_inside_bundle(self):
+        manager = ExternalRegimeManager()
+        manager.ingest_options_payload(
+            {
+                "symbol": "BTCUSDT",
+                "level": OptionsRegimeLevel.NORMAL.value,
+                "snapshot_ns": _T0_NS + 5 * _NS_PER_S,
+                "source": "manual.options",
+            },
+            provider="manual",
+        )
+
+        result = manager.ingest_bundle_payload(
+            {
+                "options": {
+                    "symbol": "BTCUSDT",
+                    "level": OptionsRegimeLevel.EXTREME.value,
+                    "snapshot_ns": _T0_NS,
+                    "source": "manual.options",
+                }
+            },
+            provider="manual",
+        )
+
+        assert result.accepted is False
+        assert result.dimension_results[0].update_status == ExternalRegimeUpdateStatus.REJECTED_STALE.value
+
+    def test_bundle_replay_artifact_roundtrip(self):
+        manager = ExternalRegimeManager()
+        initial = manager.ingest_bundle_payload(
+            {
+                "bundle_id": "bundle-replay",
+                "options": {
+                    "symbol": "BTCUSDT",
+                    "level": OptionsRegimeLevel.ELEVATED.value,
+                    "snapshot_ns": _T0_NS,
+                    "source": "manual.options",
+                },
+            },
+            provider="manual",
+        )
+        assert initial.accepted is True
+
+        artifact = manager.latest_bundle_replay_artifact
+        assert artifact is not None
+        artifact_dict = external_regime_bundle_replay_artifact_to_dict(artifact)
+        restored_artifact = external_regime_bundle_replay_artifact_from_dict(artifact_dict)
+        replayed = ExternalRegimeManager().replay_bundle_artifact(restored_artifact)
+
+        assert artifact_dict is not None
+        assert replayed.accepted is True
+        assert replayed.bundle_id == "bundle-replay"
+        assert replayed.changed_dimensions == ("options",)
+
+
 class TestServiceOrchestratorExternalRegimeAdapters:
     def test_service_orchestrator_exposes_payload_ingestion_and_lifecycle(self):
         orchestrator = ServiceOrchestrator(
@@ -504,3 +708,40 @@ class TestServiceOrchestratorExternalRegimeAdapters:
         assert lifecycle["latest_rejected_payload"]["reason"] == "options.unknown_fields:unexpected"
         assert lifecycle["current_dimension_sources"]["event"]["provider"] == "calendar"
         assert lifecycle["freshness_policy"]["event_staleness_threshold_s"] == pytest.approx(3600.0)
+
+    def test_service_orchestrator_exposes_bundle_ingestion_and_replay(self):
+        orchestrator = ServiceOrchestrator(
+            service=_make_service(),
+            external_regime_plane=ExternalRegimeDataPlane(),
+        )
+
+        accepted = orchestrator.ingest_external_regime_bundle_json(
+            json.dumps(
+                {
+                    "bundle_id": "svc-bundle",
+                    "options": {
+                        "symbol": "BTCUSDT",
+                        "level": OptionsRegimeLevel.ELEVATED.value,
+                        "snapshot_ns": _T0_NS,
+                        "source": "manual.options",
+                    },
+                    "event": {
+                        "level": EventRegimeLevel.PENDING.value,
+                        "snapshot_ns": _T0_NS,
+                        "source": "manual.event",
+                        "event_category": EventCategory.MACRO.value,
+                    },
+                }
+            ),
+            provider="manual",
+        )
+        artifact = orchestrator.external_regime_latest_bundle_replay_artifact()
+        replayed = orchestrator.replay_external_regime_bundle_artifact(artifact)
+        lifecycle = orchestrator.external_regime_lifecycle_dict()
+
+        assert accepted.accepted is True
+        assert artifact is not None
+        assert replayed.accepted is True
+        assert lifecycle is not None
+        assert lifecycle["latest_bundle_result"]["bundle_id"] == "svc-bundle"
+        assert lifecycle["latest_bundle_replay_artifact"]["result"]["bundle_id"] == "svc-bundle"
