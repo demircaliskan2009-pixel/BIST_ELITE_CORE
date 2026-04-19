@@ -14,16 +14,26 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from crypto_core.execution.regime_contracts import (
+    DataFreshness,
     EventCategory,
     EventRegimeLevel,
     OnChainRegimeLevel,
     OptionsRegimeLevel,
+    OptionsRegimeState,
 )
 from crypto_core.runtime.models import RuntimeStatus
+from crypto_core.service.evidence_store import EvidenceStore
 from crypto_core.service.external_regime import (
     ExternalRegimeDataPlane,
+    ExternalRegimeFreshnessPolicy,
     ExternalRegimeManager,
+    ExternalRegimeProviderPolicy,
+    ExternalRegimeProviderProfile,
+    ExternalRegimeProviderRole,
+    ExternalRegimeProviderTrust,
     ExternalRegimeUpdateStatus,
 )
 from crypto_core.service.models import (
@@ -266,6 +276,192 @@ class TestExternalRegimePayloadAdapters:
         assert snap.options is not None
         assert snap.options.snapshot_ns == _T0_NS + 10 * _NS_PER_S
 
+    def test_unknown_provider_is_rejected_by_source_policy(self):
+        manager = ExternalRegimeManager()
+
+        record = manager.ingest_options_payload(
+            {
+                "symbol": "BTCUSDT",
+                "level": OptionsRegimeLevel.NORMAL.value,
+                "snapshot_ns": _T0_NS,
+                "source": "mystery.options",
+            },
+            provider="mystery",
+        )
+
+        assert record.accepted is False
+        assert record.rejection_stage == "source_policy"
+        assert record.reason == "unsupported_provider:mystery"
+        assert record.provider_trust == ExternalRegimeProviderTrust.UNSUPPORTED.value
+
+    def test_wrong_dimension_provider_is_rejected_by_source_policy(self):
+        manager = ExternalRegimeManager()
+
+        record = manager.ingest_options_payload(
+            {
+                "symbol": "BTCUSDT",
+                "level": OptionsRegimeLevel.NORMAL.value,
+                "snapshot_ns": _T0_NS,
+                "source": "calendar.options",
+            },
+            provider="calendar",
+        )
+
+        assert record.accepted is False
+        assert record.rejection_stage == "source_policy"
+        assert record.reason == "provider_not_allowed_for_dimension:calendar:options"
+        assert record.provider_role == ExternalRegimeProviderRole.DISALLOWED.value
+
+    def test_trusted_owner_is_reported_and_direct_updates_stay_supported(self):
+        manager = ExternalRegimeManager()
+        accepted = manager.ingest_event_payload(
+            {
+                "level": EventRegimeLevel.PENDING.value,
+                "snapshot_ns": _T0_NS,
+                "source": "calendar.event",
+                "event_category": EventCategory.MACRO.value,
+            },
+            provider="calendar",
+        )
+
+        direct = manager.update_options(
+            OptionsRegimeState(
+                symbol="BTCUSDT",
+                level=OptionsRegimeLevel.NORMAL,
+                snapshot_ns=_T0_NS + _NS_PER_S,
+                source="operator.manual.options",
+            ),
+            received_at_ns=_T0_NS + _NS_PER_S,
+        )
+        lifecycle = manager.status_dict(_T0_NS + _NS_PER_S)
+
+        assert accepted.accepted is True
+        assert direct.accepted is True
+        assert lifecycle["current_dimension_sources"]["event"]["provider"] == "calendar"
+        assert lifecycle["current_dimension_sources"]["event"]["trust"] == ExternalRegimeProviderTrust.TRUSTED.value
+        assert lifecycle["current_dimension_sources"]["options"]["ownership_mode"] == "direct_update"
+
+    def test_lower_trust_overwrite_is_blocked(self):
+        policy = ExternalRegimeProviderPolicy(
+            profiles=(
+                ExternalRegimeProviderProfile(
+                    provider="manual",
+                    trust=ExternalRegimeProviderTrust.TRUSTED,
+                    options_role=ExternalRegimeProviderRole.PREFERRED,
+                ),
+                ExternalRegimeProviderProfile(
+                    provider="backup",
+                    trust=ExternalRegimeProviderTrust.PROVISIONAL,
+                    options_role=ExternalRegimeProviderRole.FALLBACK,
+                ),
+            )
+        )
+        manager = ExternalRegimeManager(provider_policy=policy)
+
+        first = manager.ingest_options_payload(
+            {
+                "symbol": "BTCUSDT",
+                "level": OptionsRegimeLevel.NORMAL.value,
+                "snapshot_ns": _T0_NS,
+                "source": "manual.options",
+            },
+            provider="manual",
+        )
+        second = manager.ingest_options_payload(
+            {
+                "symbol": "BTCUSDT",
+                "level": OptionsRegimeLevel.ELEVATED.value,
+                "snapshot_ns": _T0_NS + _NS_PER_S,
+                "source": "backup.options",
+            },
+            provider="backup",
+        )
+
+        snapshot = manager.snapshot(_T0_NS + _NS_PER_S)
+
+        assert first.accepted is True
+        assert second.accepted is False
+        assert second.rejection_stage == "source_policy"
+        assert second.reason == "lower_trust_overwrite_blocked:provisional<trusted"
+        assert snapshot.options is not None
+        assert snapshot.options.source == "manual.options"
+
+    def test_per_dimension_freshness_policy_is_applied(self):
+        plane = ExternalRegimeDataPlane(
+            freshness_policy=ExternalRegimeFreshnessPolicy(
+                options_staleness_threshold_s=60.0,
+                event_staleness_threshold_s=300.0,
+                on_chain_staleness_threshold_s=600.0,
+            )
+        )
+        manager = ExternalRegimeManager(plane=plane)
+        manager.ingest_options_payload(
+            {
+                "symbol": "BTCUSDT",
+                "level": OptionsRegimeLevel.NORMAL.value,
+                "snapshot_ns": _T0_NS,
+                "source": "manual.options",
+            },
+            provider="manual",
+        )
+        manager.ingest_event_payload(
+            {
+                "level": EventRegimeLevel.PENDING.value,
+                "snapshot_ns": _T0_NS,
+                "source": "calendar.event",
+                "event_category": EventCategory.MACRO.value,
+            },
+            provider="calendar",
+        )
+
+        snapshot = manager.snapshot(_T0_NS + 120 * _NS_PER_S)
+
+        assert snapshot.options_freshness.freshness == DataFreshness.STALE
+        assert snapshot.options_freshness.staleness_threshold_s == 60.0
+        assert snapshot.event_freshness.freshness == DataFreshness.FRESH
+        assert snapshot.event_freshness.staleness_threshold_s == 300.0
+
+    def test_persistence_roundtrip_restores_source_owner_and_policy(self, tmp_path: Path):
+        store = EvidenceStore(evidence_dir=tmp_path / "evidence")
+        policy = ExternalRegimeProviderPolicy(
+            profiles=(
+                ExternalRegimeProviderProfile(
+                    provider="manual",
+                    trust=ExternalRegimeProviderTrust.TRUSTED,
+                    options_role=ExternalRegimeProviderRole.PREFERRED,
+                ),
+            )
+        )
+        manager = ExternalRegimeManager(
+            plane=ExternalRegimeDataPlane(
+                freshness_policy=ExternalRegimeFreshnessPolicy(
+                    options_staleness_threshold_s=45.0,
+                    event_staleness_threshold_s=300.0,
+                    on_chain_staleness_threshold_s=600.0,
+                )
+            ),
+            evidence_store=store,
+            provider_policy=policy,
+        )
+        accepted = manager.ingest_options_payload(
+            {
+                "symbol": "BTCUSDT",
+                "level": OptionsRegimeLevel.NORMAL.value,
+                "snapshot_ns": _T0_NS,
+                "source": "manual.options",
+            },
+            provider="manual",
+        )
+        assert accepted.accepted is True
+
+        restored = ExternalRegimeManager(evidence_store=store)
+        assert restored.restore_state() is True
+
+        lifecycle = restored.status_dict(_T0_NS)
+        assert lifecycle["current_dimension_sources"]["options"]["provider"] == "manual"
+        assert lifecycle["freshness_policy"]["options_staleness_threshold_s"] == pytest.approx(45.0)
+        assert lifecycle["provider_policy"]["profiles"][0]["provider"] == "manual"
+
 
 class TestServiceOrchestratorExternalRegimeAdapters:
     def test_service_orchestrator_exposes_payload_ingestion_and_lifecycle(self):
@@ -306,3 +502,5 @@ class TestServiceOrchestratorExternalRegimeAdapters:
         assert lifecycle["latest_accepted_payload"]["dimension"] == "event"
         assert lifecycle["latest_rejected_payload"]["dimension"] == "options"
         assert lifecycle["latest_rejected_payload"]["reason"] == "options.unknown_fields:unexpected"
+        assert lifecycle["current_dimension_sources"]["event"]["provider"] == "calendar"
+        assert lifecycle["freshness_policy"]["event_staleness_threshold_s"] == pytest.approx(3600.0)
