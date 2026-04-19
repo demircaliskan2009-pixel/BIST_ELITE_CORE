@@ -29,6 +29,7 @@ from collections import deque
 from crypto_core.execution.models import ExecutionMode
 from crypto_core.execution.recovery import RecoveryBootstrap, RecoveryResult
 from crypto_core.execution.store import ExecutionStateStore
+from crypto_core.execution.tca_store import TCAStore
 from crypto_core.orchestrator.models import MarketDataInput, PipelineResult
 from crypto_core.orchestrator.pipeline import PipelineOrchestrator
 from crypto_core.portfolio.store import PortfolioStateStore
@@ -93,6 +94,7 @@ class PaperLiveSession:
         portfolio_store: PortfolioStateStore | None = None,
         exec_store: ExecutionStateStore | None = None,
         lifecycle_engine: object | None = None,
+        tca_store: TCAStore | None = None,
     ) -> None:
         # Enforce paper-only mode.
         exec_mode = orchestrator._execution_engine._cfg.mode
@@ -106,6 +108,7 @@ class PaperLiveSession:
         self._portfolio_store = portfolio_store
         self._exec_store = exec_store
         self._lifecycle_engine = lifecycle_engine
+        self._tca_store = tca_store
 
         # Session state
         self._mode: SessionMode = SessionMode.INITIALIZING
@@ -171,6 +174,9 @@ class PaperLiveSession:
         else:
             self._recovery_status = "clean_start"
             self._mode = SessionMode.RUNNING
+
+        # Phase 9D: bootstrap TCA dedup sets from persisted store.
+        self._bootstrap_tca_dedup()
 
         return self.status()
 
@@ -271,6 +277,18 @@ class PaperLiveSession:
         if self._last_result is not None:
             last_approved = self._last_result.approved
 
+        # Phase 9D: execution intelligence rollups from orchestrator.
+        tca_loop = self._orchestrator.tca_loop
+        pending_markout = 0
+        persisted_tca = 0
+        persisted_attr = 0
+        registered_fills = 0
+        if tca_loop is not None:
+            pending_markout = len(tca_loop.get_pending_order_ids())
+            persisted_tca = tca_loop.persisted_tca_count
+            persisted_attr = tca_loop.persisted_attribution_count
+            registered_fills = tca_loop.registered_count
+
         return PaperSessionStatus(
             session_id=self._config.session_id,
             mode=self._mode.value,
@@ -292,6 +310,12 @@ class PaperLiveSession:
             trading_blocked=self._mode not in (SessionMode.RUNNING, SessionMode.PAUSED),
             block_reasons=tuple(self._block_reasons),
             cycle_history=tuple(self._cycle_history),
+            pending_markout_count=pending_markout,
+            persisted_tca_count=persisted_tca,
+            persisted_attribution_count=persisted_attr,
+            registered_fill_count=registered_fills,
+            route_block_count=self._orchestrator.route_block_count,
+            route_abstain_count=self._orchestrator.route_abstain_count,
         )
 
     def stop(self) -> PaperSessionStatus:
@@ -466,3 +490,27 @@ class PaperLiveSession:
         except Exception:
             logger.exception("Failed to persist portfolio state")
             return False
+
+    def _bootstrap_tca_dedup(self) -> None:
+        """Bootstrap TCA loop dedup sets from persisted TCA store.
+
+        Prevents duplicate TCA/attribution persistence on replay/restart.
+        No-op if TCA loop or store is not configured.
+        """
+        tca_loop = self._orchestrator.tca_loop
+        if tca_loop is None or self._tca_store is None:
+            return
+
+        try:
+            restored = self._tca_store.load()
+            tca_ids = {r.order_id for r in restored.tca_records}
+            attr_ids = {r.order_id for r in restored.attribution_records}
+            if tca_ids or attr_ids:
+                tca_loop.load_persisted_ids(tca_ids, attr_ids)
+                logger.info(
+                    "TCA dedup bootstrap: %d TCA ids, %d attribution ids loaded",
+                    len(tca_ids),
+                    len(attr_ids),
+                )
+        except Exception:
+            logger.exception("TCA dedup bootstrap failed — continuing without dedup history")

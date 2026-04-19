@@ -31,6 +31,14 @@ from crypto_core.execution.lifecycle import ExecutionLifecycleConfig, ExecutionL
 from crypto_core.execution.models import BookContext, ExecutionDecision, ExecutionRequest, OrderIntent
 from crypto_core.execution.paper_adapter import PaperAdapterConfig
 from crypto_core.execution.recovery import RecoveryEvidence
+from crypto_core.execution.route_binding import (
+    MetadataGatedRouter,
+    RouteDecision,
+    RouteDecisionOutcome,
+)
+from crypto_core.execution.tca_loop import ExecutionTCALoop, PriceUpdateResult
+from crypto_core.execution.venue_metadata import VenueMetadataSnapshot
+from crypto_core.execution.venue_scoring import VenueScoreComponents
 from crypto_core.guard.models import (
     EdgeHealthInput,
     MarketRegimeInput,
@@ -140,6 +148,8 @@ class PipelineOrchestrator:
         temporal_scheduler: TemporalScheduler | None = None,
         lifecycle_engine: ExecutionLifecycleEngine | None = None,
         recovery_evidence: RecoveryEvidence | None = None,
+        metadata_gated_router: MetadataGatedRouter | None = None,
+        tca_loop: ExecutionTCALoop | None = None,
     ) -> None:
         self._cfg = config or PipelineConfig()
         self._state_engine = state_engine or SystemStateEngine()
@@ -175,6 +185,14 @@ class PipelineOrchestrator:
         self._recovery_evidence: RecoveryEvidence | None = recovery_evidence
         if recovery_evidence is not None:
             self._emit_recovery_telemetry(recovery_evidence)
+
+        # Phase 9D: execution intelligence integration
+        self._metadata_gated_router: MetadataGatedRouter | None = metadata_gated_router
+        self._tca_loop: ExecutionTCALoop | None = tca_loop
+        self._venue_metadata: dict[str, VenueMetadataSnapshot] = {}
+        self._venue_components: dict[str, VenueScoreComponents] = {}
+        self._route_block_count: int = 0
+        self._route_abstain_count: int = 0
 
     # ------------------------------------------------------------------
     # Properties for session-layer access (Phase 7E)
@@ -567,7 +585,7 @@ class PipelineOrchestrator:
             },
         )
 
-        # ── Stage 5: Execution (lifecycle-aware) ───────────────────────
+        # ── Stage 5: Execution (lifecycle-aware + route binding + TCA) ───
         stage_t0 = time.time_ns()
         executable_risk_evals = [
             risk_eval
@@ -576,8 +594,26 @@ class PipelineOrchestrator:
         ]
         execution_decisions: list[ExecutionDecision] = []
         lifecycle_results: list = []
+        route_decisions: list[RouteDecision] = []
+        tca_price_update: PriceUpdateResult | None = None
+
+        # Reference mid-price for TCA arrival/decision and markout advancement.
+        # Policy: best-bid/ask mid (primary), last trade (fallback), None (absent).
+        ref_mid = self._resolve_portfolio_mark_price(data)
 
         for risk_eval in executable_risk_evals:
+            # Phase 9D: route binding check before execution
+            route_decision: RouteDecision | None = None
+            if self._metadata_gated_router is not None:
+                route_decision = self._evaluate_route(data, risk_eval)
+                route_decisions.append(route_decision)
+                if not route_decision.is_routable:
+                    if route_decision.outcome == RouteDecisionOutcome.BLOCK:
+                        self._route_block_count += 1
+                    elif route_decision.outcome == RouteDecisionOutcome.ABSTAIN:
+                        self._route_abstain_count += 1
+                    continue
+
             request = self._build_execution_request(data, risk_eval)
             # Phase 6D: use lifecycle engine for full order state machine.
             lifecycle_result = self._lifecycle_engine.process(request)
@@ -591,9 +627,31 @@ class PipelineOrchestrator:
                 )
                 if self._position_tracker is not None:
                     self._position_tracker.apply_fill(synthetic)
+
+                # Phase 9D: register fill in TCA loop for markout tracking.
+                if self._tca_loop is not None:
+                    self._register_fill_in_tca_loop(
+                        fill_event=fill_event,
+                        request=request,
+                        route_decision=route_decision,
+                        ref_mid=ref_mid,
+                        regime_state=activation_runtime.regime_state,
+                    )
+
             # Produce backward-compat ExecutionDecision from lifecycle result.
             decision = lifecycle_result.to_execution_decision()
             execution_decisions.append(decision)
+
+        # Phase 9D: advance markout from current price observation.
+        # Called every cycle: matures previously registered fills whose
+        # horizons have elapsed, and auto-persists completed TCA records.
+        if self._tca_loop is not None and ref_mid is not None:
+            tca_price_update = self._tca_loop.on_price_update(
+                data.symbol,
+                data.exchange,
+                ref_mid,
+                data.timestamp_ns,
+            )
 
         execution_latency_ms = (time.time_ns() - stage_t0) / 1e6
         execution_metrics: dict[str, object] = {
@@ -650,6 +708,7 @@ class PipelineOrchestrator:
             edge_signals,
             risk_evals,
             execution_decisions,
+            route_decisions=tuple(route_decisions),
         )
 
         t_end = time.time_ns()
@@ -666,6 +725,8 @@ class PipelineOrchestrator:
             ks_result=ks_result,
             execution_decisions=tuple(execution_decisions),
             execution_lifecycle_results=tuple(lifecycle_results),
+            route_decisions=tuple(route_decisions),
+            tca_price_update=tca_price_update,
         )
 
     @staticmethod
@@ -675,6 +736,7 @@ class PipelineOrchestrator:
         edge_signals: list,
         risk_evals: list[RiskEvaluation],
         execution_decisions: list[ExecutionDecision],
+        route_decisions: tuple = (),
     ) -> tuple[str | None, str | None]:
         """Identify the first blocking stage and reason."""
         if is_at_least(state_snap.state, SystemState.HALT):
@@ -690,6 +752,13 @@ class PipelineOrchestrator:
             risk_eval.approved and risk_eval.edge_signal.direction in (SignalDirection.BUY, SignalDirection.SELL)
             for risk_eval in risk_evals
         )
+        # Phase 9D: route binding blocks
+        if approved_directional and route_decisions and all(not rd.is_routable for rd in route_decisions):
+            reasons = set()
+            for rd in route_decisions:
+                if rd.reason:
+                    reasons.add(rd.reason)
+            return "routing", ",".join(sorted(reasons)) if reasons else "all_routes_blocked"
         if (
             approved_directional
             and execution_decisions
@@ -992,3 +1061,129 @@ class PipelineOrchestrator:
         if self._recovery_evidence is None:
             return False
         return self._recovery_evidence.unresolved_count > 0
+
+    # ------------------------------------------------------------------
+    # Phase 9D: execution intelligence integration
+    # ------------------------------------------------------------------
+
+    @property
+    def tca_loop(self) -> ExecutionTCALoop | None:
+        """Injected TCA loop (None if not configured)."""
+        return self._tca_loop
+
+    @property
+    def metadata_gated_router(self) -> MetadataGatedRouter | None:
+        """Injected metadata-gated router (None if not configured)."""
+        return self._metadata_gated_router
+
+    @property
+    def route_block_count(self) -> int:
+        """Cumulative count of route-blocked execution candidates."""
+        return self._route_block_count
+
+    @property
+    def route_abstain_count(self) -> int:
+        """Cumulative count of route-abstained execution candidates."""
+        return self._route_abstain_count
+
+    def update_venue_metadata(self, venue: str, snapshot: VenueMetadataSnapshot) -> None:
+        """Set or update venue metadata for routing decisions."""
+        self._venue_metadata[venue] = snapshot
+
+    def update_venue_components(self, venue: str, components: VenueScoreComponents) -> None:
+        """Set or update venue score components for routing decisions."""
+        self._venue_components[venue] = components
+
+    def _evaluate_route(
+        self,
+        data: MarketDataInput,
+        risk_eval: RiskEvaluation,
+    ) -> RouteDecision:
+        """Evaluate routing via metadata-gated router. Fail-closed on missing metadata."""
+        venue = data.exchange
+        venue_meta = self._venue_metadata.get(venue)
+        venue_comps = self._venue_components.get(venue)
+
+        # Fail-closed: no metadata snapshot → BLOCK
+        if venue_meta is None:
+            return RouteDecision(
+                symbol=data.symbol,
+                outcome=RouteDecisionOutcome.BLOCK,
+                reason="venue_metadata_unavailable",
+                decided_at_ns=data.timestamp_ns,
+                evidence={"venue": venue, "cause": "no_metadata_snapshot"},
+            )
+
+        # Fail-closed: no score components → BLOCK
+        if venue_comps is None:
+            return RouteDecision(
+                symbol=data.symbol,
+                outcome=RouteDecisionOutcome.BLOCK,
+                reason="venue_components_unavailable",
+                decided_at_ns=data.timestamp_ns,
+                evidence={"venue": venue, "cause": "no_score_components"},
+            )
+
+        # Compute half-spread from book data
+        half_spread_bps = 0.0
+        if data.book_bid_price > 0 and data.book_ask_price > data.book_bid_price:
+            mid = (data.book_bid_price + data.book_ask_price) / 2.0
+            half_spread_bps = (data.book_ask_price - data.book_bid_price) / mid * 5_000.0
+
+        return self._metadata_gated_router.decide(
+            symbol=data.symbol,
+            venue_metadata={venue: venue_meta},
+            venue_components={venue: venue_comps},
+            half_spread_by_venue={venue: half_spread_bps},
+            expected_impact_bps=1.0,
+            is_maker=False,
+        )
+
+    def _register_fill_in_tca_loop(
+        self,
+        *,
+        fill_event: object,
+        request: ExecutionRequest,
+        route_decision: RouteDecision | None,
+        ref_mid: float | None,
+        regime_state: str | None,
+    ) -> None:
+        """Register a fill in the TCA loop with available context."""
+        if self._tca_loop is None:
+            return
+
+        # Extract fee cost from venue metadata if available
+        fee_bps: float | None = None
+        venue_meta = self._venue_metadata.get(getattr(fill_event, "exchange", ""))
+        if venue_meta is not None and venue_meta.fees is not None:
+            fee_bps = venue_meta.fees.taker_fee_bps
+
+        # Extract funding cost from venue metadata if available
+        funding_bps: float | None = None
+        if venue_meta is not None and venue_meta.funding is not None:
+            funding_bps = venue_meta.funding.funding_rate_bps
+
+        self._tca_loop.on_fill(
+            order_id=getattr(fill_event, "order_id", ""),
+            fill_price=getattr(fill_event, "fill_price", 0.0),
+            fill_timestamp_ns=getattr(fill_event, "timestamp_ns", 0),
+            is_buy=(getattr(fill_event, "intent", None) == OrderIntent.BUY),
+            symbol=getattr(fill_event, "symbol", ""),
+            exchange=getattr(fill_event, "exchange", ""),
+            size=getattr(fill_event, "filled_quantity", 0.0),
+            requested_size=request.size,
+            decision_price=ref_mid,
+            arrival_price=ref_mid,
+            expected_slippage_bps=getattr(fill_event, "slippage_bps", None),
+            spread_cost_bps=getattr(fill_event, "spread_bps", None),
+            fee_cost_bps=fee_bps,
+            funding_cost_bps=funding_bps,
+            fill_role="taker",
+            regime_tag=regime_state or "unknown",
+            route_venue=(
+                route_decision.selected_venue
+                if route_decision is not None and route_decision.selected_venue
+                else getattr(fill_event, "exchange", "")
+            ),
+            route_cost_bps=(route_decision.selected_cost_bps if route_decision is not None else None),
+        )

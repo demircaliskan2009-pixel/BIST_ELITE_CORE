@@ -148,3 +148,10 @@ class PaperSessionStatus:
     trading_blocked: bool
     block_reasons: tuple[str, ...] = field(default_factory=tuple)
     cycle_history: tuple[CycleResult, ...] = field(default_factory=tuple)
+    # Phase 9D: execution intelligence rollups
+    pending_markout_count: int = 0
+    persisted_tca_count: int = 0
+    persisted_attribution_count: int = 0
+    registered_fill_count: int = 0
+    route_block_count: int = 0
+    route_abstain_count: int = 0

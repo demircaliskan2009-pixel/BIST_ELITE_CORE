@@ -11,6 +11,8 @@ from crypto_core.data.models.events import LiquidationEvent, MarkPriceEvent, Tra
 from crypto_core.edge.models import EdgeSignal
 from crypto_core.execution.lifecycle import ExecutionLifecycleResult
 from crypto_core.execution.models import ExecutionDecision
+from crypto_core.execution.route_binding import RouteDecision
+from crypto_core.execution.tca_loop import PriceUpdateResult
 from crypto_core.guard.models import NoTradeDecision
 from crypto_core.risk.kill_switch import KillSwitchResult
 from crypto_core.risk.models import RiskEvaluation
@@ -89,3 +91,5 @@ class PipelineResult:
     ks_result: KillSwitchResult | None = None  # None only in legacy / test paths
     execution_decisions: tuple[ExecutionDecision, ...] = field(default_factory=tuple)  # Phase 6A
     execution_lifecycle_results: tuple[ExecutionLifecycleResult, ...] = field(default_factory=tuple)  # Phase 6D
+    route_decisions: tuple[RouteDecision, ...] = field(default_factory=tuple)  # Phase 9D
+    tca_price_update: PriceUpdateResult | None = None  # Phase 9D
