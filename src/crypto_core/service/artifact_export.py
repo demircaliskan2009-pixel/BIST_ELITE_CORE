@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 
 from crypto_core.service.evidence_store import EvidenceStore, WriteResult
 
@@ -101,6 +102,41 @@ class OperatorDecisionPack:
     why_not_promotable: tuple[str, ...] = field(default_factory=tuple)
     operator_next_inspection: tuple[str, ...] = field(default_factory=tuple)
     campaign_ids: tuple[str, ...] = field(default_factory=tuple)
+
+
+class EscalationStage(str, Enum):
+    """Deterministic crypto paper-live escalation gate outcomes."""
+
+    PAPER_ONLY = "paper_only"
+    CALIBRATED_PAPER = "calibrated_paper"
+    SHADOW_LIVE_REVIEW_ELIGIBLE = "shadow_live_review_eligible"
+    TINY_CAP_LIVE_REVIEW_ELIGIBLE = "tiny_cap_live_review_eligible"
+    HOLD = "hold"
+    REJECT = "reject"
+    INCONCLUSIVE = "inconclusive"
+
+
+@dataclass(frozen=True)
+class EscalationDecision:
+    """Frozen operator-facing crypto live-readiness escalation artifact."""
+
+    artifact_time_ns: int
+    review_id: str
+    review_timestamp_ns: int
+    review_status: str
+    promotion_verdict: str
+    operator_disposition: str
+    escalation_stage: EscalationStage
+    decision_summary: str
+    readiness_level: str
+    readiness_is_supportive: bool
+    external_regime_quality: str = "unavailable"
+    blocking_reasons: tuple[str, ...] = field(default_factory=tuple)
+    missing_evidence: tuple[str, ...] = field(default_factory=tuple)
+    why_not_higher: tuple[str, ...] = field(default_factory=tuple)
+    revalidation_required: tuple[str, ...] = field(default_factory=tuple)
+    campaign_ids: tuple[str, ...] = field(default_factory=tuple)
+    reason_codes: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +306,88 @@ def decision_pack_from_dict(d: dict) -> OperatorDecisionPack:
     )
 
 
+def escalation_decision_to_dict(decision: EscalationDecision) -> dict:
+    """Serialize EscalationDecision to a plain dict."""
+    return _dataclass_to_dict(decision)
+
+
+def escalation_decision_summary(decision: EscalationDecision) -> dict:
+    """Compact escalation-go/no-go summary for operator surfaces."""
+    return {
+        "review_id": decision.review_id,
+        "review_status": decision.review_status,
+        "promotion_verdict": decision.promotion_verdict,
+        "operator_disposition": decision.operator_disposition,
+        "allowed_next_step": decision.escalation_stage.value,
+        "summary": decision.decision_summary,
+        "readiness_level": decision.readiness_level,
+        "readiness_is_supportive": decision.readiness_is_supportive,
+        "external_regime_quality": decision.external_regime_quality,
+    }
+
+
+def escalation_decision_blockers(decision: EscalationDecision) -> dict:
+    """Current blocking reasons for escalation beyond the current gate."""
+    return {
+        "review_id": decision.review_id,
+        "allowed_next_step": decision.escalation_stage.value,
+        "blocking_reasons": list(decision.blocking_reasons),
+    }
+
+
+def escalation_decision_missing_evidence(decision: EscalationDecision) -> dict:
+    """Current missing-evidence surface for escalation decisions."""
+    return {
+        "review_id": decision.review_id,
+        "allowed_next_step": decision.escalation_stage.value,
+        "missing_evidence": list(decision.missing_evidence),
+    }
+
+
+def escalation_decision_why_not_higher(decision: EscalationDecision) -> dict:
+    """Why the current governance state is not eligible for a higher gate."""
+    return {
+        "review_id": decision.review_id,
+        "allowed_next_step": decision.escalation_stage.value,
+        "reasons": list(decision.why_not_higher),
+    }
+
+
+def escalation_decision_revalidation(decision: EscalationDecision) -> dict:
+    """What must be revalidated before the next higher gate is considered."""
+    return {
+        "review_id": decision.review_id,
+        "allowed_next_step": decision.escalation_stage.value,
+        "items": list(decision.revalidation_required),
+    }
+
+
+def escalation_decision_from_dict(d: dict) -> EscalationDecision:
+    """Deserialize EscalationDecision from a plain dict."""
+    if not isinstance(d, dict):
+        raise OperatorDecisionPackCorruptError(f"Escalation decision payload must be a dict, got {type(d).__name__!r}")
+
+    return EscalationDecision(
+        artifact_time_ns=_require_int(d, "artifact_time_ns"),
+        review_id=_require_str(d, "review_id"),
+        review_timestamp_ns=_require_int(d, "review_timestamp_ns"),
+        review_status=_require_str(d, "review_status"),
+        promotion_verdict=_require_str(d, "promotion_verdict"),
+        operator_disposition=_require_str(d, "operator_disposition"),
+        escalation_stage=EscalationStage(_require_str(d, "escalation_stage")),
+        decision_summary=_require_str(d, "decision_summary"),
+        readiness_level=_require_str(d, "readiness_level"),
+        readiness_is_supportive=_require_bool(d, "readiness_is_supportive"),
+        external_regime_quality=_require_str(d, "external_regime_quality"),
+        blocking_reasons=_optional_tuple_of_strings(d, "blocking_reasons"),
+        missing_evidence=_optional_tuple_of_strings(d, "missing_evidence"),
+        why_not_higher=_optional_tuple_of_strings(d, "why_not_higher"),
+        revalidation_required=_optional_tuple_of_strings(d, "revalidation_required"),
+        campaign_ids=_optional_tuple_of_strings(d, "campaign_ids"),
+        reason_codes=_require_dict(d, "reason_codes"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Builder
 # ---------------------------------------------------------------------------
@@ -361,6 +479,7 @@ def build_run_artifact(
 
 _ARTIFACT_SNAPSHOT_NAME = "run_artifact"
 _DECISION_PACK_SNAPSHOT_NAME = "operator_decision_pack"
+_ESCALATION_DECISION_SNAPSHOT_NAME = "live_readiness_escalation"
 
 
 def export_run_artifact(
@@ -423,3 +542,28 @@ def load_operator_decision_pack(*, evidence_store: EvidenceStore) -> OperatorDec
     if not isinstance(data, dict):
         raise OperatorDecisionPackCorruptError(f"Decision pack 'data' must be a dict, got {type(data).__name__!r}")
     return decision_pack_from_dict(data)
+
+
+def export_escalation_decision(
+    *,
+    decision: EscalationDecision,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist the latest live-readiness escalation decision."""
+    data = escalation_decision_to_dict(decision)
+    result = evidence_store.save_snapshot(_ESCALATION_DECISION_SNAPSHOT_NAME, data)
+    if not result.success:
+        return result
+    evidence_store.append_evidence(_ESCALATION_DECISION_SNAPSHOT_NAME, data)
+    return result
+
+
+def load_escalation_decision(*, evidence_store: EvidenceStore) -> EscalationDecision:
+    """Load the latest persisted live-readiness escalation decision."""
+    envelope = evidence_store.load_snapshot(_ESCALATION_DECISION_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise OperatorDecisionPackCorruptError(
+            f"Escalation decision 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return escalation_decision_from_dict(data)
