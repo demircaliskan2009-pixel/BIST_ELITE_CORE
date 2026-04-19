@@ -188,6 +188,18 @@ TINY_CAP_LIVE_CRITERIA = (
     "operator_approval_recorded",
 )
 
+OPTIONAL_READINESS_CRITERIA = frozenset(
+    {
+        "external_regime_evidence_available",
+        "external_regime_evidence_sufficient",
+        "external_regime_scenario_nontrivial_coverage",
+        "external_regime_not_stale_dominated",
+        "external_regime_not_unavailable_dominated",
+        "external_regime_not_high_risk_dominated",
+        "external_regime_gating_not_dominant",
+    }
+)
+
 
 @dataclass(frozen=True)
 class ReadinessEvaluatorConfig:
@@ -253,7 +265,8 @@ class ReadinessEvaluator:
         flags: dict[str, bool | None],
     ) -> list[ReadinessCriterion]:
         """Build criterion objects from flags."""
-        all_names = set(TINY_CAP_LIVE_CRITERIA)  # superset of all criteria
+        all_names = set(TINY_CAP_LIVE_CRITERIA)
+        all_names.update(name for name in flags if name in OPTIONAL_READINESS_CRITERIA)
         criteria = []
 
         for name in sorted(all_names):
@@ -344,6 +357,13 @@ _CRITERION_DESCRIPTIONS: dict[str, str] = {
     "margin_requirements_verified": "Margin requirements have been verified with the exchange",
     "canary_allocation_set": "Canary allocation size has been set (max $500 notional)",
     "operator_approval_recorded": "Operator has explicitly approved live trading",
+    "external_regime_evidence_available": "External regime evidence is available on the campaign surface",
+    "external_regime_evidence_sufficient": "External regime evidence is sufficient to support governance decisions",
+    "external_regime_scenario_nontrivial_coverage": "Campaign completed with non-trivial external regime scenario coverage",
+    "external_regime_not_stale_dominated": "External regime scenario was not dominated by stale conditions",
+    "external_regime_not_unavailable_dominated": "External regime scenario was not dominated by unavailable conditions",
+    "external_regime_not_high_risk_dominated": "External regime scenario was not dominated by high-risk conditions",
+    "external_regime_gating_not_dominant": "External regime gating did not dominate campaign operation",
 }
 
 

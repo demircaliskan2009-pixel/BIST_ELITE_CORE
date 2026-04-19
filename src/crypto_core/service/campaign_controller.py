@@ -842,9 +842,41 @@ def campaign_readiness_flags(report: CampaignReport) -> dict[str, bool]:
         AcceptanceVerdict.PASS_WITH_WARNINGS,
     )
 
+    scenario_available = bool(getattr(report, "ext_regime_scenario_available", False))
+    scenario_step_count = int(getattr(report, "ext_regime_scenario_step_count", 0) or 0)
+    stale_steps = int(getattr(report, "ext_regime_stale_steps", 0) or 0)
+    unavailable_steps = int(getattr(report, "ext_regime_unavailable_steps", 0) or 0)
+    high_risk_steps = int(getattr(report, "ext_regime_high_risk_steps", 0) or 0)
+    safe_steps = int(getattr(report, "ext_regime_safe_steps", 0) or 0)
+    gating_steps = (
+        int(getattr(report, "ext_regime_activation_blocked_steps", 0) or 0)
+        + int(getattr(report, "ext_regime_execution_blocked_steps", 0) or 0)
+        + int(getattr(report, "ext_regime_activation_reduced_steps", 0) or 0)
+    )
+    nontrivial_coverage = scenario_available and scenario_step_count > 0
+    stale_dominated = nontrivial_coverage and stale_steps * 2 >= scenario_step_count
+    unavailable_dominated = nontrivial_coverage and unavailable_steps * 2 >= scenario_step_count
+    high_risk_dominated = nontrivial_coverage and high_risk_steps * 2 >= scenario_step_count
+    gating_dominant = nontrivial_coverage and gating_steps * 2 >= scenario_step_count
+    ext_regime_evidence_sufficient = bool(getattr(report, "ext_regime_evidence_sufficient", False)) or (
+        nontrivial_coverage
+        and safe_steps > 0
+        and not stale_dominated
+        and not unavailable_dominated
+        and not high_risk_dominated
+    )
+
     return {
         "paper_campaign_completed": campaign_passed,
         "paper_fill_calibration_available": snap.total_fills > 0,
         "tca_records_sufficient": getattr(snap, "persisted_tca_count", 0) > 0,
-        "external_regime_evidence_available": getattr(snap, "ext_regime_evidence_sufficient", False),
+        "external_regime_evidence_available": bool(getattr(report, "ext_regime_available", False))
+        or scenario_available
+        or bool(getattr(report, "ext_regime_evidence_sufficient", False)),
+        "external_regime_evidence_sufficient": ext_regime_evidence_sufficient,
+        "external_regime_scenario_nontrivial_coverage": nontrivial_coverage,
+        "external_regime_not_stale_dominated": nontrivial_coverage and not stale_dominated,
+        "external_regime_not_unavailable_dominated": nontrivial_coverage and not unavailable_dominated,
+        "external_regime_not_high_risk_dominated": nontrivial_coverage and not high_risk_dominated,
+        "external_regime_gating_not_dominant": nontrivial_coverage and not gating_dominant,
     }

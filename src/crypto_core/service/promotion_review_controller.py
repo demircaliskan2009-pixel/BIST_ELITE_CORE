@@ -47,7 +47,9 @@ from crypto_core.service.promotion_review import (
     PromotionVerdict,
     build_campaign_aggregation,
     build_promotion_review,
+    classify_ext_regime_governance,
     execution_sufficiency_summary,
+    ext_regime_governance_summary,
     promotion_reason_summary,
     symbol_participation_summary,
     verdict_distribution,
@@ -97,20 +99,28 @@ _WORKFLOW_REQUIRED_FIELDS = frozenset({"review_id", "status", "created_at_ns", "
 # ---------------------------------------------------------------------------
 
 
-def _classify_ext_regime_quality(agg: CampaignAggregation) -> str:
+def _classify_ext_regime_quality(
+    agg: CampaignAggregation,
+    thresholds: PromotionThresholds | None = None,
+) -> str:
     """Classify external regime evidence quality from campaign aggregation.
 
-    Returns one of: 'sufficient', 'marginal', 'insufficient', 'unavailable'.
-    Uses the fresh-coverage ratio (campaigns_ext_regime_fresh / total).
+    Returns one of: supportive, cautionary, insufficient, blocking, unavailable.
     """
-    if agg.total_campaigns == 0 or agg.campaigns_with_ext_regime == 0:
+    if agg.total_campaigns == 0:
         return "unavailable"
-    fresh_ratio = agg.campaigns_ext_regime_fresh / agg.total_campaigns
-    if fresh_ratio >= 2.0 / 3.0:
-        return "sufficient"
-    if fresh_ratio >= 1.0 / 3.0:
-        return "marginal"
-    return "insufficient"
+
+    if agg.campaigns_with_ext_regime_scenario == 0:
+        if agg.campaigns_with_ext_regime == 0:
+            return "unavailable"
+        fresh_ratio = agg.campaigns_ext_regime_fresh / agg.total_campaigns
+        if fresh_ratio >= 2.0 / 3.0:
+            return "sufficient"
+        if fresh_ratio >= 1.0 / 3.0:
+            return "marginal"
+        return "insufficient"
+
+    return classify_ext_regime_governance(agg, thresholds)
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +165,7 @@ class CurrentReviewSnapshot:
     is_ready_to_finalize: bool
     # Phase 11B: external regime evidence quality
     ext_regime_quality: str = "unavailable"
+    ext_regime_governance: dict = None
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +198,7 @@ class FinalReviewReport:
     reason_codes: dict
     # Phase 11B: external regime evidence quality
     ext_regime_quality: str = "unavailable"
+    ext_regime_governance: dict = None
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +419,7 @@ class PromotionReviewController:
                 readiness_level=self._readiness_level,
                 readiness_is_supportive=self.readiness_is_supportive,
                 is_ready_to_finalize=False,
+                ext_regime_governance={},
             )
 
         reports_tuple = tuple(self._reports.values())
@@ -430,7 +443,8 @@ class PromotionReviewController:
             readiness_level=self._readiness_level,
             readiness_is_supportive=self.readiness_is_supportive,
             is_ready_to_finalize=len(self._reports) > 0,
-            ext_regime_quality=_classify_ext_regime_quality(aggregation),
+            ext_regime_quality=_classify_ext_regime_quality(aggregation, self._thresholds),
+            ext_regime_governance=ext_regime_governance_summary(aggregation),
         )
 
     # ------------------------------------------------------------------
@@ -503,7 +517,8 @@ class PromotionReviewController:
             readiness_level=self._readiness_level,
             readiness_is_supportive=self.readiness_is_supportive,
             reason_codes=promotion_reason_summary(result),
-            ext_regime_quality=_classify_ext_regime_quality(aggregation),
+            ext_regime_quality=_classify_ext_regime_quality(aggregation, self._thresholds),
+            ext_regime_governance=ext_regime_governance_summary(aggregation),
         )
 
         self._final_report = final
@@ -579,6 +594,9 @@ class PromotionReviewController:
             "warning_criteria": [c.name for c in result.warning_reasons],
             "fail_criteria": [c.name for c in result.fail_reasons],
             "provisional_verdict": result.verdict.value,
+            "ext_regime_quality": _classify_ext_regime_quality(
+                build_campaign_aggregation(tuple(self._reports.values())), self._thresholds
+            ),
             "message": result.summary,
         }
 
@@ -597,6 +615,9 @@ class PromotionReviewController:
             "campaign_count": len(self._reports),
             "readiness_level": self._readiness_level,
             "readiness_is_supportive": self.readiness_is_supportive,
+            "ext_regime_quality": _classify_ext_regime_quality(
+                build_campaign_aggregation(tuple(self._reports.values())), self._thresholds
+            ),
         }
 
     def get_promotion_reason_summary(self) -> dict:
@@ -748,6 +769,7 @@ def current_review_snapshot_to_dict(snapshot: CurrentReviewSnapshot) -> dict:
         "readiness_is_supportive": snapshot.readiness_is_supportive,
         "is_ready_to_finalize": snapshot.is_ready_to_finalize,
         "ext_regime_quality": snapshot.ext_regime_quality,
+        "ext_regime_governance": snapshot.ext_regime_governance or {},
     }
 
 
@@ -770,4 +792,5 @@ def final_review_report_to_dict(report: FinalReviewReport) -> dict:
         "readiness_is_supportive": report.readiness_is_supportive,
         "reason_codes": report.reason_codes,
         "ext_regime_quality": report.ext_regime_quality,
+        "ext_regime_governance": report.ext_regime_governance or {},
     }

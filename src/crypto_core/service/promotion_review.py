@@ -315,6 +315,24 @@ class CampaignAggregation:
     campaigns_ext_regime_fresh: int = 0
     campaigns_ext_regime_high_risk: int = 0
     ext_regime_coverage_ratio: float = 0.0
+    campaigns_with_ext_regime_scenario: int = 0
+    campaigns_with_meaningful_ext_regime_scenario: int = 0
+    campaigns_ext_regime_stale_dominated: int = 0
+    campaigns_ext_regime_unavailable_dominated: int = 0
+    campaigns_ext_regime_high_risk_dominated: int = 0
+    campaigns_ext_regime_gating_impacted: int = 0
+    campaigns_ext_regime_supportive: int = 0
+    ext_regime_meaningful_coverage_ratio: float = 0.0
+    ext_regime_stale_dominated_ratio: float = 0.0
+    ext_regime_unavailable_dominated_ratio: float = 0.0
+    ext_regime_high_risk_dominated_ratio: float = 0.0
+    ext_regime_gating_impacted_ratio: float = 0.0
+    ext_regime_supportive_ratio: float = 0.0
+
+
+def _is_scenario_dominated(step_count: int, dominated_steps: int) -> bool:
+    """True when a scenario condition dominates at least half of all steps."""
+    return step_count > 0 and dominated_steps > 0 and dominated_steps * 2 >= step_count
 
 
 def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignAggregation:
@@ -372,6 +390,13 @@ def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignA
     ext_regime_count = 0
     ext_regime_fresh_count = 0
     ext_regime_high_risk_count = 0
+    ext_regime_scenario_count = 0
+    ext_regime_meaningful_count = 0
+    ext_regime_stale_dominated_count = 0
+    ext_regime_unavailable_dominated_count = 0
+    ext_regime_high_risk_dominated_count = 0
+    ext_regime_gating_impacted_count = 0
+    ext_regime_supportive_count = 0
 
     for r in reports:
         verdict = AcceptanceVerdict(r.verdict)
@@ -400,6 +425,45 @@ def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignA
             ext_regime_fresh_count += 1
         if getattr(r, "ext_regime_high_risk", False):
             ext_regime_high_risk_count += 1
+
+        scenario_available = bool(getattr(r, "ext_regime_scenario_available", False))
+        scenario_step_count = int(getattr(r, "ext_regime_scenario_step_count", 0) or 0)
+        scenario_stale_steps = int(getattr(r, "ext_regime_stale_steps", 0) or 0)
+        scenario_unavailable_steps = int(getattr(r, "ext_regime_unavailable_steps", 0) or 0)
+        scenario_high_risk_steps = int(getattr(r, "ext_regime_high_risk_steps", 0) or 0)
+        scenario_safe_steps = int(getattr(r, "ext_regime_safe_steps", 0) or 0)
+        scenario_gating_steps = (
+            int(getattr(r, "ext_regime_activation_blocked_steps", 0) or 0)
+            + int(getattr(r, "ext_regime_execution_blocked_steps", 0) or 0)
+            + int(getattr(r, "ext_regime_activation_reduced_steps", 0) or 0)
+        )
+        scenario_meaningful = scenario_available and scenario_step_count > 0
+        scenario_stale_dominated = _is_scenario_dominated(scenario_step_count, scenario_stale_steps)
+        scenario_unavailable_dominated = _is_scenario_dominated(scenario_step_count, scenario_unavailable_steps)
+        scenario_high_risk_dominated = _is_scenario_dominated(scenario_step_count, scenario_high_risk_steps)
+        scenario_supportive = (
+            scenario_meaningful
+            and scenario_safe_steps > 0
+            and not scenario_stale_dominated
+            and not scenario_unavailable_dominated
+            and not scenario_high_risk_dominated
+        )
+
+        if scenario_available:
+            ext_regime_scenario_count += 1
+        if scenario_meaningful:
+            ext_regime_meaningful_count += 1
+        if scenario_stale_dominated:
+            ext_regime_stale_dominated_count += 1
+        if scenario_unavailable_dominated:
+            ext_regime_unavailable_dominated_count += 1
+        if scenario_high_risk_dominated:
+            ext_regime_high_risk_dominated_count += 1
+        if scenario_meaningful and scenario_gating_steps > 0:
+            ext_regime_gating_impacted_count += 1
+        if scenario_supportive:
+            ext_regime_supportive_count += 1
+
         total_recovery += snap.recovery_incidents
         if snap.stability:
             total_degraded += snap.stability.degraded_intervals
@@ -450,6 +514,19 @@ def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignA
         campaigns_ext_regime_fresh=ext_regime_fresh_count,
         campaigns_ext_regime_high_risk=ext_regime_high_risk_count,
         ext_regime_coverage_ratio=(ext_regime_count / n if n > 0 else 0.0),
+        campaigns_with_ext_regime_scenario=ext_regime_scenario_count,
+        campaigns_with_meaningful_ext_regime_scenario=ext_regime_meaningful_count,
+        campaigns_ext_regime_stale_dominated=ext_regime_stale_dominated_count,
+        campaigns_ext_regime_unavailable_dominated=ext_regime_unavailable_dominated_count,
+        campaigns_ext_regime_high_risk_dominated=ext_regime_high_risk_dominated_count,
+        campaigns_ext_regime_gating_impacted=ext_regime_gating_impacted_count,
+        campaigns_ext_regime_supportive=ext_regime_supportive_count,
+        ext_regime_meaningful_coverage_ratio=(ext_regime_meaningful_count / n if n > 0 else 0.0),
+        ext_regime_stale_dominated_ratio=(ext_regime_stale_dominated_count / n if n > 0 else 0.0),
+        ext_regime_unavailable_dominated_ratio=(ext_regime_unavailable_dominated_count / n if n > 0 else 0.0),
+        ext_regime_high_risk_dominated_ratio=(ext_regime_high_risk_dominated_count / n if n > 0 else 0.0),
+        ext_regime_gating_impacted_ratio=(ext_regime_gating_impacted_count / n if n > 0 else 0.0),
+        ext_regime_supportive_ratio=(ext_regime_supportive_count / n if n > 0 else 0.0),
     )
 
 
@@ -571,6 +648,12 @@ class PromotionThresholds:
 
     # --- Phase 11B: external regime evidence coverage ---
     min_ext_regime_coverage_ratio: float = -1.0  # -1 = not enforced (unavailable)t enforced (unavailable)
+    min_ext_regime_meaningful_campaigns: int = 1
+    min_ext_regime_meaningful_coverage_ratio: float = 1.0 / 3.0
+    max_ext_regime_high_risk_dominated_ratio: float = 0.5
+    warn_ext_regime_stale_dominated_ratio: float = 0.25
+    warn_ext_regime_unavailable_dominated_ratio: float = 0.25
+    warn_ext_regime_gating_impacted_ratio: float = 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -832,6 +915,54 @@ class PromotionPolicy:
                     t.min_ext_regime_coverage_ratio,
                 )
             )
+        if t.min_ext_regime_meaningful_campaigns >= 0:
+            criteria.append(
+                self._check_coverage(
+                    "min_ext_regime_meaningful_campaigns",
+                    agg.campaigns_with_meaningful_ext_regime_scenario,
+                    t.min_ext_regime_meaningful_campaigns,
+                )
+            )
+        if t.min_ext_regime_meaningful_coverage_ratio >= 0:
+            criteria.append(
+                self._check_coverage(
+                    "min_ext_regime_meaningful_coverage_ratio",
+                    agg.ext_regime_meaningful_coverage_ratio,
+                    t.min_ext_regime_meaningful_coverage_ratio,
+                )
+            )
+        if t.max_ext_regime_high_risk_dominated_ratio >= 0:
+            criteria.append(
+                self._check_hard(
+                    "max_ext_regime_high_risk_dominated_ratio",
+                    agg.ext_regime_high_risk_dominated_ratio,
+                    t.max_ext_regime_high_risk_dominated_ratio,
+                )
+            )
+        if t.warn_ext_regime_stale_dominated_ratio >= 0:
+            criteria.append(
+                self._check_soft(
+                    "warn_ext_regime_stale_dominated_ratio",
+                    agg.ext_regime_stale_dominated_ratio,
+                    t.warn_ext_regime_stale_dominated_ratio,
+                )
+            )
+        if t.warn_ext_regime_unavailable_dominated_ratio >= 0:
+            criteria.append(
+                self._check_soft(
+                    "warn_ext_regime_unavailable_dominated_ratio",
+                    agg.ext_regime_unavailable_dominated_ratio,
+                    t.warn_ext_regime_unavailable_dominated_ratio,
+                )
+            )
+        if t.warn_ext_regime_gating_impacted_ratio >= 0:
+            criteria.append(
+                self._check_soft(
+                    "warn_ext_regime_gating_impacted_ratio",
+                    agg.ext_regime_gating_impacted_ratio,
+                    t.warn_ext_regime_gating_impacted_ratio,
+                )
+            )
 
         # --- Classify ---
         failed = tuple(c for c in criteria if not c.passed and c.severity == "hard")
@@ -1066,6 +1197,23 @@ def _aggregation_to_dict(agg: CampaignAggregation) -> dict:
         "total_route_blocks": agg.total_route_blocks,
         "total_route_abstains": agg.total_route_abstains,
         "verdict_consistency": agg.verdict_consistency.value,
+        "campaigns_with_ext_regime": agg.campaigns_with_ext_regime,
+        "campaigns_ext_regime_fresh": agg.campaigns_ext_regime_fresh,
+        "campaigns_ext_regime_high_risk": agg.campaigns_ext_regime_high_risk,
+        "ext_regime_coverage_ratio": agg.ext_regime_coverage_ratio,
+        "campaigns_with_ext_regime_scenario": agg.campaigns_with_ext_regime_scenario,
+        "campaigns_with_meaningful_ext_regime_scenario": agg.campaigns_with_meaningful_ext_regime_scenario,
+        "campaigns_ext_regime_stale_dominated": agg.campaigns_ext_regime_stale_dominated,
+        "campaigns_ext_regime_unavailable_dominated": agg.campaigns_ext_regime_unavailable_dominated,
+        "campaigns_ext_regime_high_risk_dominated": agg.campaigns_ext_regime_high_risk_dominated,
+        "campaigns_ext_regime_gating_impacted": agg.campaigns_ext_regime_gating_impacted,
+        "campaigns_ext_regime_supportive": agg.campaigns_ext_regime_supportive,
+        "ext_regime_meaningful_coverage_ratio": agg.ext_regime_meaningful_coverage_ratio,
+        "ext_regime_stale_dominated_ratio": agg.ext_regime_stale_dominated_ratio,
+        "ext_regime_unavailable_dominated_ratio": agg.ext_regime_unavailable_dominated_ratio,
+        "ext_regime_high_risk_dominated_ratio": agg.ext_regime_high_risk_dominated_ratio,
+        "ext_regime_gating_impacted_ratio": agg.ext_regime_gating_impacted_ratio,
+        "ext_regime_supportive_ratio": agg.ext_regime_supportive_ratio,
         "calibrations": [_calibration_to_dict(c) for c in agg.calibrations],
     }
 
@@ -1171,3 +1319,68 @@ def promotion_reason_summary(result: PromotionResult) -> dict:
         "insufficient_reasons": [c.name for c in result.insufficient_reasons],
         "summary": result.summary,
     }
+
+
+def ext_regime_governance_summary(agg: CampaignAggregation) -> dict:
+    """Compact external-regime governance summary for review/reporting surfaces."""
+    return {
+        "campaigns_with_ext_regime": agg.campaigns_with_ext_regime,
+        "campaigns_ext_regime_fresh": agg.campaigns_ext_regime_fresh,
+        "campaigns_ext_regime_high_risk": agg.campaigns_ext_regime_high_risk,
+        "ext_regime_coverage_ratio": agg.ext_regime_coverage_ratio,
+        "campaigns_with_ext_regime_scenario": agg.campaigns_with_ext_regime_scenario,
+        "campaigns_with_meaningful_ext_regime_scenario": agg.campaigns_with_meaningful_ext_regime_scenario,
+        "campaigns_ext_regime_stale_dominated": agg.campaigns_ext_regime_stale_dominated,
+        "campaigns_ext_regime_unavailable_dominated": agg.campaigns_ext_regime_unavailable_dominated,
+        "campaigns_ext_regime_high_risk_dominated": agg.campaigns_ext_regime_high_risk_dominated,
+        "campaigns_ext_regime_gating_impacted": agg.campaigns_ext_regime_gating_impacted,
+        "campaigns_ext_regime_supportive": agg.campaigns_ext_regime_supportive,
+        "ext_regime_meaningful_coverage_ratio": agg.ext_regime_meaningful_coverage_ratio,
+        "ext_regime_stale_dominated_ratio": agg.ext_regime_stale_dominated_ratio,
+        "ext_regime_unavailable_dominated_ratio": agg.ext_regime_unavailable_dominated_ratio,
+        "ext_regime_high_risk_dominated_ratio": agg.ext_regime_high_risk_dominated_ratio,
+        "ext_regime_gating_impacted_ratio": agg.ext_regime_gating_impacted_ratio,
+        "ext_regime_supportive_ratio": agg.ext_regime_supportive_ratio,
+    }
+
+
+def classify_ext_regime_governance(
+    agg: CampaignAggregation,
+    thresholds: PromotionThresholds | None = None,
+) -> str:
+    """Classify ext-regime governance support for promotion/readiness surfaces."""
+    t = thresholds or PromotionThresholds()
+
+    if agg.total_campaigns == 0 or agg.campaigns_with_ext_regime_scenario == 0:
+        return "unavailable"
+    if (
+        t.min_ext_regime_meaningful_campaigns >= 0
+        and agg.campaigns_with_meaningful_ext_regime_scenario < t.min_ext_regime_meaningful_campaigns
+    ):
+        return "insufficient"
+    if (
+        t.min_ext_regime_meaningful_coverage_ratio >= 0
+        and agg.ext_regime_meaningful_coverage_ratio < t.min_ext_regime_meaningful_coverage_ratio
+    ):
+        return "insufficient"
+    if (
+        t.max_ext_regime_high_risk_dominated_ratio >= 0
+        and agg.ext_regime_high_risk_dominated_ratio > t.max_ext_regime_high_risk_dominated_ratio
+    ):
+        return "blocking"
+    if (
+        (
+            t.warn_ext_regime_stale_dominated_ratio >= 0
+            and agg.ext_regime_stale_dominated_ratio > t.warn_ext_regime_stale_dominated_ratio
+        )
+        or (
+            t.warn_ext_regime_unavailable_dominated_ratio >= 0
+            and agg.ext_regime_unavailable_dominated_ratio > t.warn_ext_regime_unavailable_dominated_ratio
+        )
+        or (
+            t.warn_ext_regime_gating_impacted_ratio >= 0
+            and agg.ext_regime_gating_impacted_ratio > t.warn_ext_regime_gating_impacted_ratio
+        )
+    ):
+        return "cautionary"
+    return "supportive"

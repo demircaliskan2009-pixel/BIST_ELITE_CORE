@@ -59,6 +59,7 @@ from crypto_core.service.models import (
     SymbolHealth,
     WatchdogStatus,
 )
+from crypto_core.service.readiness import CriterionStatus, ReadinessEvaluator
 from crypto_core.session.models import PaperSessionStatus
 
 # ---------------------------------------------------------------------------
@@ -690,6 +691,65 @@ class TestCampaignReadinessFlags:
         report = self._make_report(AcceptanceVerdict.PASS, total_fills=0)
         flags = campaign_readiness_flags(report)
         assert flags["paper_fill_calibration_available"] is False
+
+    def test_ext_regime_scenario_flags_truthful(self):
+        report = self._make_report(AcceptanceVerdict.PASS, total_fills=10)
+        report = CampaignReport(
+            campaign_id=report.campaign_id,
+            status=report.status,
+            verdict=report.verdict,
+            started_at_ns=report.started_at_ns,
+            completed_at_ns=report.completed_at_ns,
+            elapsed_seconds=report.elapsed_seconds,
+            run_id=report.run_id,
+            snapshot=report.snapshot,
+            acceptance=report.acceptance,
+            symbol_participation=report.symbol_participation,
+            config=report.config,
+            ext_regime_available=True,
+            ext_regime_evidence_sufficient=True,
+            ext_regime_scenario_available=True,
+            ext_regime_scenario_step_count=6,
+            ext_regime_activation_blocked_steps=1,
+            ext_regime_execution_blocked_steps=1,
+            ext_regime_activation_reduced_steps=1,
+            ext_regime_stale_steps=1,
+            ext_regime_unavailable_steps=0,
+            ext_regime_high_risk_steps=1,
+            ext_regime_safe_steps=4,
+            ext_regime_scenario_summary="steps=6; safe=4; blocked=2",
+        )
+        flags = campaign_readiness_flags(report)
+        assert flags["external_regime_evidence_available"] is True
+        assert flags["external_regime_evidence_sufficient"] is True
+        assert flags["external_regime_scenario_nontrivial_coverage"] is True
+        assert flags["external_regime_not_stale_dominated"] is True
+        assert flags["external_regime_not_high_risk_dominated"] is True
+
+    def test_readiness_evaluator_surfaces_ext_regime_criteria(self):
+        report = self._make_report(AcceptanceVerdict.PASS, total_fills=10)
+        report = CampaignReport(
+            campaign_id=report.campaign_id,
+            status=report.status,
+            verdict=report.verdict,
+            started_at_ns=report.started_at_ns,
+            completed_at_ns=report.completed_at_ns,
+            elapsed_seconds=report.elapsed_seconds,
+            run_id=report.run_id,
+            snapshot=report.snapshot,
+            acceptance=report.acceptance,
+            symbol_participation=report.symbol_participation,
+            config=report.config,
+            ext_regime_available=False,
+            ext_regime_evidence_sufficient=False,
+            ext_regime_scenario_available=False,
+            ext_regime_scenario_step_count=0,
+        )
+        evaluator = ReadinessEvaluator()
+        status = evaluator.evaluate(campaign_readiness_flags(report), assessed_at_ns=_T0_NS)
+        criteria = {criterion.name: criterion for criterion in status.criteria}
+        assert criteria["external_regime_evidence_available"].status == CriterionStatus.NOT_MET
+        assert criteria["external_regime_scenario_nontrivial_coverage"].status == CriterionStatus.NOT_MET
 
 
 # ===========================================================================

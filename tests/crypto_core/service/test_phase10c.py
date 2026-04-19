@@ -175,6 +175,20 @@ def _make_report(
     ei_route_abstains: int = 0,
     recovery_incidents: int = 0,
     stability: StabilityRollup | None = None,
+    ext_regime_available: bool = True,
+    ext_regime_fresh: bool = True,
+    ext_regime_high_risk: bool = False,
+    ext_regime_evidence_sufficient: bool = True,
+    ext_regime_scenario_available: bool = True,
+    ext_regime_scenario_step_count: int = 6,
+    ext_regime_activation_blocked_steps: int = 0,
+    ext_regime_execution_blocked_steps: int = 0,
+    ext_regime_activation_reduced_steps: int = 0,
+    ext_regime_stale_steps: int = 1,
+    ext_regime_unavailable_steps: int = 0,
+    ext_regime_high_risk_steps: int = 1,
+    ext_regime_safe_steps: int = 4,
+    ext_regime_scenario_summary: str = "steps=6; safe=4; stale=1; high_risk=1; reduced=0",
 ) -> CampaignReport:
     snap = _make_snapshot(
         campaign_id=campaign_id,
@@ -204,6 +218,21 @@ def _make_report(
         symbol_participation=_make_participation(symbols, exchange),
         config={},
         stability=stability,
+        ext_regime_available=ext_regime_available,
+        ext_regime_fresh=ext_regime_fresh,
+        ext_regime_high_risk=ext_regime_high_risk,
+        ext_regime_evidence_sufficient=ext_regime_evidence_sufficient,
+        ext_regime_summary=ext_regime_scenario_summary,
+        ext_regime_scenario_available=ext_regime_scenario_available,
+        ext_regime_scenario_step_count=ext_regime_scenario_step_count,
+        ext_regime_activation_blocked_steps=ext_regime_activation_blocked_steps,
+        ext_regime_execution_blocked_steps=ext_regime_execution_blocked_steps,
+        ext_regime_activation_reduced_steps=ext_regime_activation_reduced_steps,
+        ext_regime_stale_steps=ext_regime_stale_steps,
+        ext_regime_unavailable_steps=ext_regime_unavailable_steps,
+        ext_regime_high_risk_steps=ext_regime_high_risk_steps,
+        ext_regime_safe_steps=ext_regime_safe_steps,
+        ext_regime_scenario_summary=ext_regime_scenario_summary,
     )
 
 
@@ -493,6 +522,42 @@ class TestProvisionalSnapshot:
         with pytest.raises(AttributeError):
             snap.review_id = "x"  # type: ignore[misc]
 
+    def test_snapshot_includes_ext_regime_governance(self):
+        ctrl = PromotionReviewController(
+            review_id="rev-ext-regime",
+            readiness_level="paper_live",
+            created_at_ns=_T0_NS,
+        )
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        snap = ctrl.current_snapshot()
+        assert snap.ext_regime_quality == "supportive"
+        assert snap.ext_regime_governance["campaigns_with_meaningful_ext_regime_scenario"] == 3
+
+    def test_snapshot_preserves_legacy_ext_regime_quality_without_scenarios(self):
+        ctrl = PromotionReviewController(
+            review_id="rev-ext-regime-legacy",
+            readiness_level="paper_live",
+            created_at_ns=_T0_NS,
+        )
+        ctrl.add_campaign_report(
+            _make_report(
+                campaign_id="legacy-1",
+                ext_regime_available=True,
+                ext_regime_fresh=True,
+                ext_regime_evidence_sufficient=True,
+                ext_regime_scenario_available=False,
+                ext_regime_scenario_step_count=0,
+                ext_regime_stale_steps=0,
+                ext_regime_unavailable_steps=0,
+                ext_regime_high_risk_steps=0,
+                ext_regime_safe_steps=0,
+                ext_regime_scenario_summary="",
+            )
+        )
+        snap = ctrl.current_snapshot()
+        assert snap.ext_regime_quality == "sufficient"
+
 
 # ===========================================================================
 # 7. Final review report correctness
@@ -557,6 +622,34 @@ class TestFinalReport:
         final = ctrl.finalize_review(finalized_at_ns=_T0_NS)
         with pytest.raises(AttributeError):
             final.verdict = "x"  # type: ignore[misc]
+
+    def test_final_report_marks_missing_ext_regime_evidence_insufficient(self):
+        ctrl = PromotionReviewController(
+            review_id="rev-ext-missing",
+            readiness_level="paper_live",
+            created_at_ns=_T0_NS,
+        )
+        for idx in range(3):
+            ctrl.add_campaign_report(
+                _make_report(
+                    campaign_id=f"c{idx}",
+                    ext_regime_available=False,
+                    ext_regime_fresh=False,
+                    ext_regime_evidence_sufficient=False,
+                    ext_regime_scenario_available=False,
+                    ext_regime_scenario_step_count=0,
+                    ext_regime_activation_reduced_steps=0,
+                    ext_regime_stale_steps=0,
+                    ext_regime_high_risk_steps=0,
+                    ext_regime_safe_steps=0,
+                    ext_regime_scenario_summary="",
+                )
+            )
+        final = ctrl.finalize_review(finalized_at_ns=_T0_NS)
+        assert final.verdict == PromotionVerdict.INCONCLUSIVE.value
+        assert final.ext_regime_quality == "unavailable"
+        assert "min_ext_regime_meaningful_campaigns" in final.insufficient_evidence
+        assert final.ext_regime_governance["campaigns_with_meaningful_ext_regime_scenario"] == 0
 
 
 # ===========================================================================
@@ -834,6 +927,26 @@ class TestReportingAPI:
         assert missing["campaign_count"] == 1
         assert missing["provisional_verdict"] is not None
 
+    def test_missing_evidence_reports_ext_regime_quality(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        ctrl.add_campaign_report(
+            _make_report(
+                campaign_id="c1",
+                ext_regime_available=False,
+                ext_regime_fresh=False,
+                ext_regime_evidence_sufficient=False,
+                ext_regime_scenario_available=False,
+                ext_regime_scenario_step_count=0,
+                ext_regime_activation_reduced_steps=0,
+                ext_regime_stale_steps=0,
+                ext_regime_high_risk_steps=0,
+                ext_regime_safe_steps=0,
+                ext_regime_scenario_summary="",
+            )
+        )
+        missing = ctrl.get_missing_evidence()
+        assert missing["ext_regime_quality"] == "unavailable"
+
     def test_provisional_recommendation_empty(self):
         ctrl = PromotionReviewController(created_at_ns=_T0_NS)
         rec = ctrl.get_provisional_recommendation()
@@ -926,6 +1039,7 @@ class TestSerialization:
         assert d["campaign_count"] == 3
         assert d["readiness_is_supportive"] is True
         assert isinstance(d["verdict_distribution"], dict)
+        assert isinstance(d["ext_regime_governance"], dict)
 
     def test_final_review_report_to_dict(self):
         ctrl = PromotionReviewController(
@@ -942,3 +1056,4 @@ class TestSerialization:
         assert d["campaign_count"] == 3
         assert isinstance(d["pass_criteria"], list)
         assert isinstance(d["reason_codes"], dict)
+        assert isinstance(d["ext_regime_governance"], dict)

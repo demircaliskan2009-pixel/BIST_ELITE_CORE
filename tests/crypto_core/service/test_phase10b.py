@@ -63,6 +63,7 @@ from crypto_core.service.promotion_review import (
     build_execution_calibration,
     build_promotion_review,
     execution_sufficiency_summary,
+    ext_regime_governance_summary,
     promotion_reason_summary,
     promotion_review_to_dict,
     symbol_participation_summary,
@@ -191,6 +192,20 @@ def _make_report(
     ei_route_abstains: int = 0,
     recovery_incidents: int = 0,
     stability: StabilityRollup | None = None,
+    ext_regime_available: bool = True,
+    ext_regime_fresh: bool = True,
+    ext_regime_high_risk: bool = False,
+    ext_regime_evidence_sufficient: bool = True,
+    ext_regime_scenario_available: bool = True,
+    ext_regime_scenario_step_count: int = 6,
+    ext_regime_activation_blocked_steps: int = 0,
+    ext_regime_execution_blocked_steps: int = 0,
+    ext_regime_activation_reduced_steps: int = 0,
+    ext_regime_stale_steps: int = 1,
+    ext_regime_unavailable_steps: int = 0,
+    ext_regime_high_risk_steps: int = 1,
+    ext_regime_safe_steps: int = 4,
+    ext_regime_scenario_summary: str = "steps=6; safe=4; stale=1; high_risk=1; reduced=0",
 ) -> CampaignReport:
     snap = _make_snapshot(
         campaign_id=campaign_id,
@@ -220,6 +235,21 @@ def _make_report(
         symbol_participation=_make_participation(symbols),
         config={},
         stability=stability,
+        ext_regime_available=ext_regime_available,
+        ext_regime_fresh=ext_regime_fresh,
+        ext_regime_high_risk=ext_regime_high_risk,
+        ext_regime_evidence_sufficient=ext_regime_evidence_sufficient,
+        ext_regime_summary=ext_regime_scenario_summary,
+        ext_regime_scenario_available=ext_regime_scenario_available,
+        ext_regime_scenario_step_count=ext_regime_scenario_step_count,
+        ext_regime_activation_blocked_steps=ext_regime_activation_blocked_steps,
+        ext_regime_execution_blocked_steps=ext_regime_execution_blocked_steps,
+        ext_regime_activation_reduced_steps=ext_regime_activation_reduced_steps,
+        ext_regime_stale_steps=ext_regime_stale_steps,
+        ext_regime_unavailable_steps=ext_regime_unavailable_steps,
+        ext_regime_high_risk_steps=ext_regime_high_risk_steps,
+        ext_regime_safe_steps=ext_regime_safe_steps,
+        ext_regime_scenario_summary=ext_regime_scenario_summary,
     )
 
 
@@ -529,6 +559,83 @@ class TestPromotionPolicy:
         assert result.verdict == PromotionVerdict.REJECT
         assert any(c.name == "require_stable_consistency" for c in result.fail_reasons)
 
+    def test_ext_regime_insufficient_without_scenario_evidence(self):
+        reports = tuple(
+            _make_report(
+                campaign_id=f"c{i}",
+                ext_regime_available=False,
+                ext_regime_fresh=False,
+                ext_regime_evidence_sufficient=False,
+                ext_regime_scenario_available=False,
+                ext_regime_scenario_step_count=0,
+                ext_regime_activation_reduced_steps=0,
+                ext_regime_stale_steps=0,
+                ext_regime_high_risk_steps=0,
+                ext_regime_safe_steps=0,
+                ext_regime_scenario_summary="",
+            )
+            for i in range(3)
+        )
+        agg = build_campaign_aggregation(reports)
+        result = PromotionPolicy().evaluate(agg)
+        assert result.verdict == PromotionVerdict.INCONCLUSIVE
+        assert any(c.name == "min_ext_regime_meaningful_campaigns" for c in result.insufficient_reasons)
+
+    def test_stale_dominated_campaigns_trigger_hold(self):
+        reports = tuple(
+            _make_report(
+                campaign_id=f"c{i}",
+                ext_regime_scenario_step_count=4,
+                ext_regime_stale_steps=3,
+                ext_regime_safe_steps=1,
+                ext_regime_high_risk_steps=0,
+                ext_regime_activation_reduced_steps=0,
+                ext_regime_scenario_summary="steps=4; stale=3; safe=1",
+            )
+            for i in range(3)
+        )
+        agg = build_campaign_aggregation(reports)
+        result = PromotionPolicy().evaluate(agg)
+        assert result.verdict == PromotionVerdict.HOLD
+        assert any(c.name == "warn_ext_regime_stale_dominated_ratio" for c in result.warning_reasons)
+
+    def test_unavailable_dominated_campaigns_trigger_hold(self):
+        reports = tuple(
+            _make_report(
+                campaign_id=f"c{i}",
+                ext_regime_fresh=False,
+                ext_regime_scenario_step_count=4,
+                ext_regime_unavailable_steps=3,
+                ext_regime_safe_steps=1,
+                ext_regime_high_risk_steps=0,
+                ext_regime_activation_reduced_steps=0,
+                ext_regime_scenario_summary="steps=4; unavailable=3; safe=1",
+            )
+            for i in range(3)
+        )
+        agg = build_campaign_aggregation(reports)
+        result = PromotionPolicy().evaluate(agg)
+        assert result.verdict == PromotionVerdict.HOLD
+        assert any(c.name == "warn_ext_regime_unavailable_dominated_ratio" for c in result.warning_reasons)
+
+    def test_high_risk_dominated_campaigns_reject(self):
+        reports = tuple(
+            _make_report(
+                campaign_id=f"c{i}",
+                ext_regime_high_risk=True,
+                ext_regime_scenario_step_count=4,
+                ext_regime_high_risk_steps=3,
+                ext_regime_safe_steps=1,
+                ext_regime_activation_reduced_steps=0,
+                ext_regime_scenario_summary="steps=4; high_risk=3; safe=1",
+            )
+            for i in range(3)
+        )
+        agg = build_campaign_aggregation(reports)
+        result = PromotionPolicy().evaluate(agg)
+        assert result.verdict == PromotionVerdict.REJECT
+        assert any(c.name == "max_ext_regime_high_risk_dominated_ratio" for c in result.fail_reasons)
+
 
 # ===========================================================================
 # 16. build_promotion_review — full pipeline
@@ -669,6 +776,29 @@ class TestReportingAPI:
         prs = promotion_reason_summary(result)
         assert prs["verdict"] == result.verdict.value
         assert isinstance(prs["pass_reasons"], list)
+
+    def test_ext_regime_governance_summary(self):
+        agg = build_campaign_aggregation(
+            (
+                _make_report(campaign_id="c1"),
+                _make_report(
+                    campaign_id="c2",
+                    ext_regime_scenario_step_count=4,
+                    ext_regime_stale_steps=3,
+                    ext_regime_safe_steps=1,
+                ),
+                _make_report(
+                    campaign_id="c3",
+                    ext_regime_scenario_step_count=4,
+                    ext_regime_high_risk_steps=3,
+                    ext_regime_safe_steps=1,
+                ),
+            )
+        )
+        summary = ext_regime_governance_summary(agg)
+        assert summary["campaigns_with_meaningful_ext_regime_scenario"] == 3
+        assert summary["campaigns_ext_regime_stale_dominated"] == 1
+        assert summary["campaigns_ext_regime_high_risk_dominated"] == 1
 
 
 # ===========================================================================
