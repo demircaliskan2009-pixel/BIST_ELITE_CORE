@@ -43,7 +43,7 @@ from crypto_core.service.evidence_store import (
     EvidenceStore,
     WriteResult,
 )
-from crypto_core.service.external_regime import ExternalRegimeSnapshot
+from crypto_core.service.external_regime import ExternalRegimeScenarioResult, ExternalRegimeSnapshot
 from crypto_core.service.health import (
     HealthConfig,
     HealthTracker,
@@ -266,6 +266,7 @@ class CampaignController:
         service_status: ServiceStatus,
         *,
         ext_regime: ExternalRegimeSnapshot | None = None,
+        ext_regime_scenario: ExternalRegimeScenarioResult | None = None,
     ) -> CampaignReport:
         """Finalize the campaign and produce the verdict report.
 
@@ -291,7 +292,7 @@ class CampaignController:
             if self._meta.status == CampaignStatus.RUNNING:
                 self._complete("finalize_requested")
 
-        snap = self.snapshot(service_status, ext_regime=ext_regime)
+        snap = self.snapshot(service_status, ext_regime=ext_regime, ext_regime_scenario=ext_regime_scenario)
         result = self._policy.evaluate(snap)
 
         self._meta.verdict = result.verdict
@@ -305,6 +306,20 @@ class CampaignController:
             self._meta.ext_regime_any_unavailable = snap.ext_regime_any_unavailable
             self._meta.ext_regime_evidence_sufficient = snap.ext_regime_evidence_sufficient
             self._meta.ext_regime_summary = snap.ext_regime_summary
+        if ext_regime_scenario is not None:
+            self._meta.ext_regime_scenario_available = snap.ext_regime_scenario_available
+            self._meta.ext_regime_scenario_step_count = snap.ext_regime_scenario_step_count
+            self._meta.ext_regime_scenario_accepted_steps = snap.ext_regime_scenario_accepted_steps
+            self._meta.ext_regime_scenario_rejected_steps = snap.ext_regime_scenario_rejected_steps
+            self._meta.ext_regime_scenario_replayed_steps = snap.ext_regime_scenario_replayed_steps
+            self._meta.ext_regime_activation_blocked_steps = snap.ext_regime_activation_blocked_steps
+            self._meta.ext_regime_execution_blocked_steps = snap.ext_regime_execution_blocked_steps
+            self._meta.ext_regime_activation_reduced_steps = snap.ext_regime_activation_reduced_steps
+            self._meta.ext_regime_stale_steps = snap.ext_regime_stale_steps
+            self._meta.ext_regime_unavailable_steps = snap.ext_regime_unavailable_steps
+            self._meta.ext_regime_high_risk_steps = snap.ext_regime_high_risk_steps
+            self._meta.ext_regime_safe_steps = snap.ext_regime_safe_steps
+            self._meta.ext_regime_scenario_summary = snap.ext_regime_scenario_summary
 
         # REJECTED status if verdict is FAIL.
         if result.verdict == AcceptanceVerdict.FAIL:
@@ -334,6 +349,19 @@ class CampaignController:
             ext_regime_any_unavailable=snap.ext_regime_any_unavailable,
             ext_regime_evidence_sufficient=snap.ext_regime_evidence_sufficient,
             ext_regime_summary=snap.ext_regime_summary,
+            ext_regime_scenario_available=snap.ext_regime_scenario_available,
+            ext_regime_scenario_step_count=snap.ext_regime_scenario_step_count,
+            ext_regime_scenario_accepted_steps=snap.ext_regime_scenario_accepted_steps,
+            ext_regime_scenario_rejected_steps=snap.ext_regime_scenario_rejected_steps,
+            ext_regime_scenario_replayed_steps=snap.ext_regime_scenario_replayed_steps,
+            ext_regime_activation_blocked_steps=snap.ext_regime_activation_blocked_steps,
+            ext_regime_execution_blocked_steps=snap.ext_regime_execution_blocked_steps,
+            ext_regime_activation_reduced_steps=snap.ext_regime_activation_reduced_steps,
+            ext_regime_stale_steps=snap.ext_regime_stale_steps,
+            ext_regime_unavailable_steps=snap.ext_regime_unavailable_steps,
+            ext_regime_high_risk_steps=snap.ext_regime_high_risk_steps,
+            ext_regime_safe_steps=snap.ext_regime_safe_steps,
+            ext_regime_scenario_summary=snap.ext_regime_scenario_summary,
         )
 
         self._persist_metadata()
@@ -349,6 +377,7 @@ class CampaignController:
         service_status: ServiceStatus,
         *,
         ext_regime: ExternalRegimeSnapshot | None = None,
+        ext_regime_scenario: ExternalRegimeScenarioResult | None = None,
     ) -> CampaignSnapshot:
         """Produce a point-in-time campaign snapshot.
 
@@ -437,6 +466,31 @@ class CampaignController:
             ext_regime_any_unavailable=(ext_regime is not None and ext_regime.any_unavailable_critical),
             ext_regime_evidence_sufficient=(ext_regime is not None and ext_regime.evidence_sufficient),
             ext_regime_summary=(ext_regime.regime_summary if ext_regime is not None else ""),
+            ext_regime_scenario_available=(ext_regime_scenario is not None),
+            ext_regime_scenario_step_count=(0 if ext_regime_scenario is None else ext_regime_scenario.step_count),
+            ext_regime_scenario_accepted_steps=(
+                0 if ext_regime_scenario is None else ext_regime_scenario.accepted_steps
+            ),
+            ext_regime_scenario_rejected_steps=(
+                0 if ext_regime_scenario is None else ext_regime_scenario.rejected_steps
+            ),
+            ext_regime_scenario_replayed_steps=(
+                0 if ext_regime_scenario is None else ext_regime_scenario.replayed_steps
+            ),
+            ext_regime_activation_blocked_steps=(
+                0 if ext_regime_scenario is None else ext_regime_scenario.activation_blocked_steps
+            ),
+            ext_regime_execution_blocked_steps=(
+                0 if ext_regime_scenario is None else ext_regime_scenario.execution_blocked_steps
+            ),
+            ext_regime_activation_reduced_steps=(
+                0 if ext_regime_scenario is None else ext_regime_scenario.activation_reduced_steps
+            ),
+            ext_regime_stale_steps=(0 if ext_regime_scenario is None else ext_regime_scenario.stale_steps),
+            ext_regime_unavailable_steps=(0 if ext_regime_scenario is None else ext_regime_scenario.unavailable_steps),
+            ext_regime_high_risk_steps=(0 if ext_regime_scenario is None else ext_regime_scenario.high_risk_steps),
+            ext_regime_safe_steps=(0 if ext_regime_scenario is None else ext_regime_scenario.safe_steps),
+            ext_regime_scenario_summary=("" if ext_regime_scenario is None else ext_regime_scenario.summary),
         )
 
     def symbol_participation_view(self, service_status: ServiceStatus) -> tuple[SymbolParticipation, ...]:
@@ -700,6 +754,19 @@ def _report_to_dict(report: CampaignReport) -> dict:
         "ext_regime_any_unavailable": report.snapshot.ext_regime_any_unavailable,
         "ext_regime_evidence_sufficient": report.snapshot.ext_regime_evidence_sufficient,
         "ext_regime_summary": report.snapshot.ext_regime_summary,
+        "ext_regime_scenario_available": report.snapshot.ext_regime_scenario_available,
+        "ext_regime_scenario_step_count": report.snapshot.ext_regime_scenario_step_count,
+        "ext_regime_scenario_accepted_steps": report.snapshot.ext_regime_scenario_accepted_steps,
+        "ext_regime_scenario_rejected_steps": report.snapshot.ext_regime_scenario_rejected_steps,
+        "ext_regime_scenario_replayed_steps": report.snapshot.ext_regime_scenario_replayed_steps,
+        "ext_regime_activation_blocked_steps": report.snapshot.ext_regime_activation_blocked_steps,
+        "ext_regime_execution_blocked_steps": report.snapshot.ext_regime_execution_blocked_steps,
+        "ext_regime_activation_reduced_steps": report.snapshot.ext_regime_activation_reduced_steps,
+        "ext_regime_stale_steps": report.snapshot.ext_regime_stale_steps,
+        "ext_regime_unavailable_steps": report.snapshot.ext_regime_unavailable_steps,
+        "ext_regime_high_risk_steps": report.snapshot.ext_regime_high_risk_steps,
+        "ext_regime_safe_steps": report.snapshot.ext_regime_safe_steps,
+        "ext_regime_scenario_summary": report.snapshot.ext_regime_scenario_summary,
     }
     stability_dict = None
     if report.stability is not None:
@@ -734,6 +801,19 @@ def _report_to_dict(report: CampaignReport) -> dict:
         "ext_regime_any_unavailable": report.ext_regime_any_unavailable,
         "ext_regime_evidence_sufficient": report.ext_regime_evidence_sufficient,
         "ext_regime_summary": report.ext_regime_summary,
+        "ext_regime_scenario_available": report.ext_regime_scenario_available,
+        "ext_regime_scenario_step_count": report.ext_regime_scenario_step_count,
+        "ext_regime_scenario_accepted_steps": report.ext_regime_scenario_accepted_steps,
+        "ext_regime_scenario_rejected_steps": report.ext_regime_scenario_rejected_steps,
+        "ext_regime_scenario_replayed_steps": report.ext_regime_scenario_replayed_steps,
+        "ext_regime_activation_blocked_steps": report.ext_regime_activation_blocked_steps,
+        "ext_regime_execution_blocked_steps": report.ext_regime_execution_blocked_steps,
+        "ext_regime_activation_reduced_steps": report.ext_regime_activation_reduced_steps,
+        "ext_regime_stale_steps": report.ext_regime_stale_steps,
+        "ext_regime_unavailable_steps": report.ext_regime_unavailable_steps,
+        "ext_regime_high_risk_steps": report.ext_regime_high_risk_steps,
+        "ext_regime_safe_steps": report.ext_regime_safe_steps,
+        "ext_regime_scenario_summary": report.ext_regime_scenario_summary,
     }
 
 

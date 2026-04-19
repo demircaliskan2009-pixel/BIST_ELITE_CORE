@@ -309,6 +309,19 @@ class CampaignSnapshot:
     ext_regime_any_unavailable: bool = False
     ext_regime_evidence_sufficient: bool = False
     ext_regime_summary: str = ""
+    ext_regime_scenario_available: bool = False
+    ext_regime_scenario_step_count: int = 0
+    ext_regime_scenario_accepted_steps: int = 0
+    ext_regime_scenario_rejected_steps: int = 0
+    ext_regime_scenario_replayed_steps: int = 0
+    ext_regime_activation_blocked_steps: int = 0
+    ext_regime_execution_blocked_steps: int = 0
+    ext_regime_activation_reduced_steps: int = 0
+    ext_regime_stale_steps: int = 0
+    ext_regime_unavailable_steps: int = 0
+    ext_regime_high_risk_steps: int = 0
+    ext_regime_safe_steps: int = 0
+    ext_regime_scenario_summary: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +355,19 @@ class CampaignReport:
     ext_regime_any_unavailable: bool = False
     ext_regime_evidence_sufficient: bool = False
     ext_regime_summary: str = ""
+    ext_regime_scenario_available: bool = False
+    ext_regime_scenario_step_count: int = 0
+    ext_regime_scenario_accepted_steps: int = 0
+    ext_regime_scenario_rejected_steps: int = 0
+    ext_regime_scenario_replayed_steps: int = 0
+    ext_regime_activation_blocked_steps: int = 0
+    ext_regime_execution_blocked_steps: int = 0
+    ext_regime_activation_reduced_steps: int = 0
+    ext_regime_stale_steps: int = 0
+    ext_regime_unavailable_steps: int = 0
+    ext_regime_high_risk_steps: int = 0
+    ext_regime_safe_steps: int = 0
+    ext_regime_scenario_summary: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -666,13 +692,19 @@ class CampaignMetadata:
     ext_regime_any_unavailable: bool = False
     ext_regime_evidence_sufficient: bool = False
     ext_regime_summary: str = ""
-    # Phase 11B: last external regime evidence observed
-    ext_regime_available: bool = False
-    ext_regime_fresh: bool = False
-    ext_regime_high_risk: bool = False
-    ext_regime_any_unavailable: bool = False
-    ext_regime_evidence_sufficient: bool = False
-    ext_regime_summary: str = ""
+    ext_regime_scenario_available: bool = False
+    ext_regime_scenario_step_count: int = 0
+    ext_regime_scenario_accepted_steps: int = 0
+    ext_regime_scenario_rejected_steps: int = 0
+    ext_regime_scenario_replayed_steps: int = 0
+    ext_regime_activation_blocked_steps: int = 0
+    ext_regime_execution_blocked_steps: int = 0
+    ext_regime_activation_reduced_steps: int = 0
+    ext_regime_stale_steps: int = 0
+    ext_regime_unavailable_steps: int = 0
+    ext_regime_high_risk_steps: int = 0
+    ext_regime_safe_steps: int = 0
+    ext_regime_scenario_summary: str = ""
 
     def elapsed_seconds(self) -> float:
         """Wall-clock elapsed seconds excluding paused time."""
@@ -718,6 +750,19 @@ class CampaignMetadata:
             "ext_regime_any_unavailable": self.ext_regime_any_unavailable,
             "ext_regime_evidence_sufficient": self.ext_regime_evidence_sufficient,
             "ext_regime_summary": self.ext_regime_summary,
+            "ext_regime_scenario_available": self.ext_regime_scenario_available,
+            "ext_regime_scenario_step_count": self.ext_regime_scenario_step_count,
+            "ext_regime_scenario_accepted_steps": self.ext_regime_scenario_accepted_steps,
+            "ext_regime_scenario_rejected_steps": self.ext_regime_scenario_rejected_steps,
+            "ext_regime_scenario_replayed_steps": self.ext_regime_scenario_replayed_steps,
+            "ext_regime_activation_blocked_steps": self.ext_regime_activation_blocked_steps,
+            "ext_regime_execution_blocked_steps": self.ext_regime_execution_blocked_steps,
+            "ext_regime_activation_reduced_steps": self.ext_regime_activation_reduced_steps,
+            "ext_regime_stale_steps": self.ext_regime_stale_steps,
+            "ext_regime_unavailable_steps": self.ext_regime_unavailable_steps,
+            "ext_regime_high_risk_steps": self.ext_regime_high_risk_steps,
+            "ext_regime_safe_steps": self.ext_regime_safe_steps,
+            "ext_regime_scenario_summary": self.ext_regime_scenario_summary,
             "config": {
                 "campaign_id": self.config.campaign_id,
                 "max_duration_s": self.config.max_duration_s,
@@ -799,4 +844,17 @@ def campaign_metadata_from_dict(d: dict, config: CampaignConfig | None = None) -
         ext_regime_any_unavailable=d.get("ext_regime_any_unavailable", False),
         ext_regime_evidence_sufficient=d.get("ext_regime_evidence_sufficient", False),
         ext_regime_summary=d.get("ext_regime_summary", ""),
+        ext_regime_scenario_available=d.get("ext_regime_scenario_available", False),
+        ext_regime_scenario_step_count=d.get("ext_regime_scenario_step_count", 0),
+        ext_regime_scenario_accepted_steps=d.get("ext_regime_scenario_accepted_steps", 0),
+        ext_regime_scenario_rejected_steps=d.get("ext_regime_scenario_rejected_steps", 0),
+        ext_regime_scenario_replayed_steps=d.get("ext_regime_scenario_replayed_steps", 0),
+        ext_regime_activation_blocked_steps=d.get("ext_regime_activation_blocked_steps", 0),
+        ext_regime_execution_blocked_steps=d.get("ext_regime_execution_blocked_steps", 0),
+        ext_regime_activation_reduced_steps=d.get("ext_regime_activation_reduced_steps", 0),
+        ext_regime_stale_steps=d.get("ext_regime_stale_steps", 0),
+        ext_regime_unavailable_steps=d.get("ext_regime_unavailable_steps", 0),
+        ext_regime_high_risk_steps=d.get("ext_regime_high_risk_steps", 0),
+        ext_regime_safe_steps=d.get("ext_regime_safe_steps", 0),
+        ext_regime_scenario_summary=d.get("ext_regime_scenario_summary", ""),
     )

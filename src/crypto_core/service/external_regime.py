@@ -506,6 +506,121 @@ class ExternalRegimeBundleReplayArtifact:
 
 
 @dataclass(frozen=True)
+class ExternalRegimeScenarioStep:
+    """One deterministic external-regime scenario step."""
+
+    step_id: str
+    received_at_ns: int
+    provider: str
+    input_format: str = "dict"
+    apply_mode: str = ExternalRegimeBundleApplyMode.ATOMIC.value
+    bundle_payload: dict[str, object] | None = None
+    dimension_payloads: dict[str, dict[str, object]] | None = None
+    replay_artifact: ExternalRegimeBundleReplayArtifact | None = None
+    note: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.step_id, str) or not self.step_id.strip():
+            raise ValueError("step_id must be a non-empty string")
+        if not isinstance(self.provider, str) or not self.provider.strip():
+            raise ValueError("provider must be a non-empty string")
+        if not isinstance(self.received_at_ns, int) or self.received_at_ns < 0:
+            raise ValueError(f"received_at_ns must be >= 0, got {self.received_at_ns!r}")
+        payload_modes = sum(
+            1
+            for candidate in (self.bundle_payload, self.dimension_payloads, self.replay_artifact)
+            if candidate is not None
+        )
+        if payload_modes != 1:
+            raise ValueError("exactly one of bundle_payload, dimension_payloads, or replay_artifact must be provided")
+        if self.bundle_payload is not None and not isinstance(self.bundle_payload, dict):
+            raise ValueError("bundle_payload must be a dict when provided")
+        if self.dimension_payloads is not None:
+            if not isinstance(self.dimension_payloads, dict) or not self.dimension_payloads:
+                raise ValueError("dimension_payloads must be a non-empty dict when provided")
+            for dimension, payload in self.dimension_payloads.items():
+                if dimension not in {"options", "event", "on_chain"}:
+                    raise ValueError(f"unsupported_dimension:{dimension!r}")
+                if not isinstance(payload, dict):
+                    raise ValueError(f"dimension payload for {dimension!r} must be a dict")
+
+
+@dataclass(frozen=True)
+class ExternalRegimeScenario:
+    """Ordered deterministic external-regime scenario."""
+
+    scenario_id: str
+    steps: tuple[ExternalRegimeScenarioStep, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.scenario_id, str) or not self.scenario_id.strip():
+            raise ValueError("scenario_id must be a non-empty string")
+        if not self.steps:
+            raise ValueError("steps must not be empty")
+        previous_ns = -1
+        seen_ids: set[str] = set()
+        for step in self.steps:
+            if step.step_id in seen_ids:
+                raise ValueError(f"duplicate_scenario_step_id:{step.step_id}")
+            seen_ids.add(step.step_id)
+            if step.received_at_ns < previous_ns:
+                raise ValueError("scenario steps must be ordered by non-decreasing received_at_ns")
+            previous_ns = step.received_at_ns
+
+
+@dataclass(frozen=True)
+class ExternalRegimeScenarioStepRecord:
+    """Deterministic outcome for one scenario step."""
+
+    step_id: str
+    received_at_ns: int
+    provider: str
+    operation: str
+    accepted: bool
+    partially_accepted: bool
+    replayed: bool
+    accepted_count: int
+    rejected_count: int
+    changed_dimensions: tuple[str, ...]
+    failed_dimensions: tuple[str, ...]
+    activation_blocked: bool
+    activation_reason: str | None
+    activation_allocation_scale: float
+    execution_blocked: bool
+    execution_reason: str | None
+    stale_dimensions: tuple[str, ...]
+    unavailable_dimensions: tuple[str, ...]
+    high_risk: bool
+    bundle_result: ExternalRegimeBundleIngestionRecord | None
+    dimension_results: tuple[ExternalRegimePayloadIngestionRecord, ...]
+    snapshot: ExternalRegimeSnapshot
+
+
+@dataclass(frozen=True)
+class ExternalRegimeScenarioResult:
+    """Aggregate deterministic result for a completed scenario replay."""
+
+    scenario_id: str
+    status: str
+    step_count: int
+    accepted_steps: int
+    rejected_steps: int
+    replayed_steps: int
+    partially_accepted_steps: int
+    execution_blocked_steps: int
+    activation_blocked_steps: int
+    activation_reduced_steps: int
+    stale_steps: int
+    unavailable_steps: int
+    high_risk_steps: int
+    safe_steps: int
+    last_step_ns: int
+    summary: str
+    step_records: tuple[ExternalRegimeScenarioStepRecord, ...]
+    final_snapshot: ExternalRegimeSnapshot | None
+
+
+@dataclass(frozen=True)
 class _PreparedExternalRegimePayloadIngestion:
     """Internal prepared payload candidate used by bundle and single ingestion."""
 
@@ -1407,6 +1522,212 @@ def external_regime_bundle_replay_artifact_from_dict(d: dict) -> ExternalRegimeB
         raise ValueError(f"Malformed ExternalRegimeBundleReplayArtifact: {exc}") from exc
 
 
+def external_regime_scenario_step_to_dict(step: ExternalRegimeScenarioStep) -> dict:
+    """Serialize one scenario step."""
+    return {
+        "step_id": step.step_id,
+        "received_at_ns": step.received_at_ns,
+        "provider": step.provider,
+        "input_format": step.input_format,
+        "apply_mode": step.apply_mode,
+        "bundle_payload": (dict(step.bundle_payload) if step.bundle_payload is not None else None),
+        "dimension_payloads": (
+            {dimension: dict(payload) for dimension, payload in step.dimension_payloads.items()}
+            if step.dimension_payloads is not None
+            else None
+        ),
+        "replay_artifact": (
+            external_regime_bundle_replay_artifact_to_dict(step.replay_artifact)
+            if step.replay_artifact is not None
+            else None
+        ),
+        "note": step.note,
+    }
+
+
+def external_regime_scenario_step_from_dict(d: dict) -> ExternalRegimeScenarioStep:
+    """Deserialize one scenario step."""
+    try:
+        dimension_payloads_raw = d.get("dimension_payloads")
+        if dimension_payloads_raw is not None and not isinstance(dimension_payloads_raw, dict):
+            raise ValueError("dimension_payloads must be a dict")
+        dimension_payloads = None
+        if isinstance(dimension_payloads_raw, dict):
+            dimension_payloads = {
+                str(dimension): dict(payload)
+                for dimension, payload in dimension_payloads_raw.items()
+                if isinstance(payload, dict)
+            }
+        bundle_payload_raw = d.get("bundle_payload")
+        if bundle_payload_raw is not None and not isinstance(bundle_payload_raw, dict):
+            raise ValueError("bundle_payload must be a dict")
+        replay_artifact_raw = d.get("replay_artifact")
+        return ExternalRegimeScenarioStep(
+            step_id=str(d["step_id"]),
+            received_at_ns=int(d["received_at_ns"]),
+            provider=str(d["provider"]),
+            input_format=str(d.get("input_format", "dict")),
+            apply_mode=str(d.get("apply_mode", ExternalRegimeBundleApplyMode.ATOMIC.value)),
+            bundle_payload=(dict(bundle_payload_raw) if isinstance(bundle_payload_raw, dict) else None),
+            dimension_payloads=dimension_payloads,
+            replay_artifact=(
+                external_regime_bundle_replay_artifact_from_dict(replay_artifact_raw)
+                if isinstance(replay_artifact_raw, dict)
+                else None
+            ),
+            note=d.get("note"),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Malformed ExternalRegimeScenarioStep: {exc}") from exc
+
+
+def external_regime_scenario_to_dict(scenario: ExternalRegimeScenario) -> dict:
+    """Serialize one scenario definition."""
+    return {
+        "scenario_id": scenario.scenario_id,
+        "steps": [external_regime_scenario_step_to_dict(step) for step in scenario.steps],
+    }
+
+
+def external_regime_scenario_from_dict(d: dict) -> ExternalRegimeScenario:
+    """Deserialize one scenario definition."""
+    try:
+        return ExternalRegimeScenario(
+            scenario_id=str(d["scenario_id"]),
+            steps=tuple(external_regime_scenario_step_from_dict(item) for item in d.get("steps", ())),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Malformed ExternalRegimeScenario: {exc}") from exc
+
+
+def external_regime_scenario_step_record_to_dict(record: ExternalRegimeScenarioStepRecord) -> dict:
+    """Serialize one scenario step result."""
+    return {
+        "step_id": record.step_id,
+        "received_at_ns": record.received_at_ns,
+        "provider": record.provider,
+        "operation": record.operation,
+        "accepted": record.accepted,
+        "partially_accepted": record.partially_accepted,
+        "replayed": record.replayed,
+        "accepted_count": record.accepted_count,
+        "rejected_count": record.rejected_count,
+        "changed_dimensions": list(record.changed_dimensions),
+        "failed_dimensions": list(record.failed_dimensions),
+        "activation_blocked": record.activation_blocked,
+        "activation_reason": record.activation_reason,
+        "activation_allocation_scale": record.activation_allocation_scale,
+        "execution_blocked": record.execution_blocked,
+        "execution_reason": record.execution_reason,
+        "stale_dimensions": list(record.stale_dimensions),
+        "unavailable_dimensions": list(record.unavailable_dimensions),
+        "high_risk": record.high_risk,
+        "bundle_result": (
+            external_regime_bundle_ingestion_record_to_dict(record.bundle_result)
+            if record.bundle_result is not None
+            else None
+        ),
+        "dimension_results": [
+            external_regime_payload_ingestion_record_to_dict(item) for item in record.dimension_results
+        ],
+        "snapshot": external_regime_snapshot_to_dict(record.snapshot),
+    }
+
+
+def external_regime_scenario_step_record_from_dict(d: dict) -> ExternalRegimeScenarioStepRecord:
+    """Deserialize one scenario step result."""
+    try:
+        return ExternalRegimeScenarioStepRecord(
+            step_id=str(d["step_id"]),
+            received_at_ns=int(d["received_at_ns"]),
+            provider=str(d["provider"]),
+            operation=str(d["operation"]),
+            accepted=bool(d["accepted"]),
+            partially_accepted=bool(d["partially_accepted"]),
+            replayed=bool(d["replayed"]),
+            accepted_count=int(d["accepted_count"]),
+            rejected_count=int(d["rejected_count"]),
+            changed_dimensions=tuple(d.get("changed_dimensions", ())),
+            failed_dimensions=tuple(d.get("failed_dimensions", ())),
+            activation_blocked=bool(d["activation_blocked"]),
+            activation_reason=d.get("activation_reason"),
+            activation_allocation_scale=float(d["activation_allocation_scale"]),
+            execution_blocked=bool(d["execution_blocked"]),
+            execution_reason=d.get("execution_reason"),
+            stale_dimensions=tuple(d.get("stale_dimensions", ())),
+            unavailable_dimensions=tuple(d.get("unavailable_dimensions", ())),
+            high_risk=bool(d["high_risk"]),
+            bundle_result=(
+                external_regime_bundle_ingestion_record_from_dict(d["bundle_result"])
+                if d.get("bundle_result") is not None
+                else None
+            ),
+            dimension_results=tuple(
+                external_regime_payload_ingestion_record_from_dict(item) for item in d.get("dimension_results", ())
+            ),
+            snapshot=external_regime_snapshot_from_dict(d["snapshot"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Malformed ExternalRegimeScenarioStepRecord: {exc}") from exc
+
+
+def external_regime_scenario_result_to_dict(result: ExternalRegimeScenarioResult) -> dict:
+    """Serialize one completed scenario result."""
+    return {
+        "scenario_id": result.scenario_id,
+        "status": result.status,
+        "step_count": result.step_count,
+        "accepted_steps": result.accepted_steps,
+        "rejected_steps": result.rejected_steps,
+        "replayed_steps": result.replayed_steps,
+        "partially_accepted_steps": result.partially_accepted_steps,
+        "execution_blocked_steps": result.execution_blocked_steps,
+        "activation_blocked_steps": result.activation_blocked_steps,
+        "activation_reduced_steps": result.activation_reduced_steps,
+        "stale_steps": result.stale_steps,
+        "unavailable_steps": result.unavailable_steps,
+        "high_risk_steps": result.high_risk_steps,
+        "safe_steps": result.safe_steps,
+        "last_step_ns": result.last_step_ns,
+        "summary": result.summary,
+        "step_records": [external_regime_scenario_step_record_to_dict(item) for item in result.step_records],
+        "final_snapshot": (
+            external_regime_snapshot_to_dict(result.final_snapshot) if result.final_snapshot is not None else None
+        ),
+    }
+
+
+def external_regime_scenario_result_from_dict(d: dict) -> ExternalRegimeScenarioResult:
+    """Deserialize one completed scenario result."""
+    try:
+        return ExternalRegimeScenarioResult(
+            scenario_id=str(d["scenario_id"]),
+            status=str(d["status"]),
+            step_count=int(d["step_count"]),
+            accepted_steps=int(d["accepted_steps"]),
+            rejected_steps=int(d["rejected_steps"]),
+            replayed_steps=int(d["replayed_steps"]),
+            partially_accepted_steps=int(d["partially_accepted_steps"]),
+            execution_blocked_steps=int(d["execution_blocked_steps"]),
+            activation_blocked_steps=int(d["activation_blocked_steps"]),
+            activation_reduced_steps=int(d["activation_reduced_steps"]),
+            stale_steps=int(d["stale_steps"]),
+            unavailable_steps=int(d["unavailable_steps"]),
+            high_risk_steps=int(d["high_risk_steps"]),
+            safe_steps=int(d["safe_steps"]),
+            last_step_ns=int(d["last_step_ns"]),
+            summary=str(d["summary"]),
+            step_records=tuple(
+                external_regime_scenario_step_record_from_dict(item) for item in d.get("step_records", ())
+            ),
+            final_snapshot=(
+                external_regime_snapshot_from_dict(d["final_snapshot"]) if d.get("final_snapshot") is not None else None
+            ),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Malformed ExternalRegimeScenarioResult: {exc}") from exc
+
+
 def load_external_regime_bundle_payload(
     payload: object,
     *,
@@ -1883,6 +2204,8 @@ class ExternalRegimeManager:
         self._latest_rejected_payload: ExternalRegimePayloadIngestionRecord | None = None
         self._latest_bundle_result: ExternalRegimeBundleIngestionRecord | None = None
         self._latest_bundle_replay_artifact: ExternalRegimeBundleReplayArtifact | None = None
+        self._scenario_status = "idle"
+        self._latest_scenario_result: ExternalRegimeScenarioResult | None = None
         self._options_source_owner: ExternalRegimeDimensionSourceState | None = None
         self._event_source_owner: ExternalRegimeDimensionSourceState | None = None
         self._on_chain_source_owner: ExternalRegimeDimensionSourceState | None = None
@@ -1927,6 +2250,16 @@ class ExternalRegimeManager:
     def latest_bundle_replay_artifact(self) -> ExternalRegimeBundleReplayArtifact | None:
         """Most recent replayable bundle artifact."""
         return self._latest_bundle_replay_artifact
+
+    @property
+    def scenario_status(self) -> str:
+        """Most recent scenario runner status."""
+        return self._scenario_status
+
+    @property
+    def latest_scenario_result(self) -> ExternalRegimeScenarioResult | None:
+        """Most recent completed scenario result."""
+        return self._latest_scenario_result
 
     def recent_update_history(self) -> tuple[ExternalRegimeUpdateRecord, ...]:
         """Bounded recent update history, oldest first."""
@@ -2291,6 +2624,8 @@ class ExternalRegimeManager:
     def replay_bundle_artifact(
         self,
         artifact: ExternalRegimeBundleReplayArtifact,
+        *,
+        received_at_ns: int | None = None,
     ) -> ExternalRegimeBundleIngestionRecord:
         """Replay a previously captured bundle artifact through the same ingestion path."""
         if not isinstance(artifact, ExternalRegimeBundleReplayArtifact):
@@ -2300,8 +2635,36 @@ class ExternalRegimeManager:
             provider=artifact.provider,
             input_format="dict",
             apply_mode=artifact.apply_mode,
-            received_at_ns=artifact.received_at_ns,
+            received_at_ns=(artifact.received_at_ns if received_at_ns is None else received_at_ns),
         )
+
+    def run_scenario(
+        self,
+        scenario: ExternalRegimeScenario,
+        *,
+        policy: ExternalRegimeSafetyPolicy | None = None,
+    ) -> ExternalRegimeScenarioResult:
+        """Replay a deterministic sequence of external-regime steps."""
+        if not isinstance(scenario, ExternalRegimeScenario):
+            raise ValueError(f"scenario must be ExternalRegimeScenario, got {type(scenario).__name__}")
+        resolved_policy = policy or ExternalRegimeSafetyPolicy()
+        self._scenario_status = "running"
+        step_records: list[ExternalRegimeScenarioStepRecord] = []
+        try:
+            for step in scenario.steps:
+                step_records.append(self._run_scenario_step(step, resolved_policy))
+            result = self._build_scenario_result(scenario.scenario_id, step_records)
+            self._latest_scenario_result = result
+            self._scenario_status = result.status
+            self._append_audit_record(
+                event_name="external_regime_scenario_run",
+                data=external_regime_scenario_result_to_dict(result),
+            )
+            self.persist_state()
+            return result
+        except Exception:
+            self._scenario_status = "failed"
+            raise
 
     def reset(
         self,
@@ -2401,6 +2764,12 @@ class ExternalRegimeManager:
                 if latest_bundle_artifact_raw is not None
                 else None
             )
+            latest_scenario_result_raw = data.get("latest_scenario_result")
+            latest_scenario_result = (
+                external_regime_scenario_result_from_dict(latest_scenario_result_raw)
+                if latest_scenario_result_raw is not None
+                else None
+            )
         except ValueError as exc:
             raise ExternalRegimeStateCorruptError(str(exc)) from exc
 
@@ -2412,6 +2781,8 @@ class ExternalRegimeManager:
         self._latest_rejected_payload = latest_rejected_payload
         self._latest_bundle_result = latest_bundle_result
         self._latest_bundle_replay_artifact = latest_bundle_artifact
+        self._scenario_status = str(data.get("scenario_status", "idle"))
+        self._latest_scenario_result = latest_scenario_result
         self._provider_policy = (
             external_regime_provider_policy_from_dict(data["provider_policy"])
             if data.get("provider_policy") is not None
@@ -2493,6 +2864,12 @@ class ExternalRegimeManager:
             "latest_bundle_replay_artifact": (
                 external_regime_bundle_replay_artifact_to_dict(self._latest_bundle_replay_artifact)
                 if self._latest_bundle_replay_artifact is not None
+                else None
+            ),
+            "scenario_status": self._scenario_status,
+            "latest_scenario_result": (
+                external_regime_scenario_result_to_dict(self._latest_scenario_result)
+                if self._latest_scenario_result is not None
                 else None
             ),
             "recent_history": [external_regime_update_record_to_dict(record) for record in self._history],
@@ -3164,9 +3541,164 @@ class ExternalRegimeManager:
                 if self._latest_bundle_replay_artifact is not None
                 else None
             ),
+            "scenario_status": self._scenario_status,
+            "latest_scenario_result": (
+                external_regime_scenario_result_to_dict(self._latest_scenario_result)
+                if self._latest_scenario_result is not None
+                else None
+            ),
             "recent_history": [external_regime_update_record_to_dict(record) for record in self._history],
             "persistence": external_regime_persistence_state_to_dict(self.persistence_state()),
         }
+
+    def _run_scenario_step(
+        self,
+        step: ExternalRegimeScenarioStep,
+        policy: ExternalRegimeSafetyPolicy,
+    ) -> ExternalRegimeScenarioStepRecord:
+        bundle_result: ExternalRegimeBundleIngestionRecord | None = None
+        dimension_results: tuple[ExternalRegimePayloadIngestionRecord, ...] = ()
+        operation = "bundle"
+        replayed = False
+        if step.replay_artifact is not None:
+            operation = "bundle_replay"
+            replayed = True
+            bundle_result = self.replay_bundle_artifact(step.replay_artifact, received_at_ns=step.received_at_ns)
+            accepted_count = len(bundle_result.changed_dimensions)
+            rejected_count = len(bundle_result.failed_dimensions)
+            changed_dimensions = bundle_result.changed_dimensions
+            failed_dimensions = bundle_result.failed_dimensions
+            accepted = bundle_result.accepted
+            partially_accepted = bundle_result.partially_accepted
+        elif step.bundle_payload is not None:
+            bundle_result = self.ingest_bundle_payload(
+                dict(step.bundle_payload),
+                provider=step.provider,
+                input_format=step.input_format,
+                apply_mode=step.apply_mode,
+                received_at_ns=step.received_at_ns,
+            )
+            accepted_count = len(bundle_result.changed_dimensions)
+            rejected_count = len(bundle_result.failed_dimensions)
+            changed_dimensions = bundle_result.changed_dimensions
+            failed_dimensions = bundle_result.failed_dimensions
+            accepted = bundle_result.accepted
+            partially_accepted = bundle_result.partially_accepted
+        else:
+            operation = "dimension_batch"
+            results: list[ExternalRegimePayloadIngestionRecord] = []
+            for dimension in ("options", "event", "on_chain"):
+                payload = None if step.dimension_payloads is None else step.dimension_payloads.get(dimension)
+                if payload is None:
+                    continue
+                results.append(
+                    self.ingest_payload(
+                        dimension=dimension,
+                        payload=dict(payload),
+                        provider=step.provider,
+                        input_format=step.input_format,
+                        received_at_ns=step.received_at_ns,
+                    )
+                )
+            dimension_results = tuple(results)
+            accepted_count = sum(1 for item in dimension_results if item.accepted)
+            rejected_count = sum(1 for item in dimension_results if not item.accepted)
+            changed_dimensions = tuple(item.dimension for item in dimension_results if item.accepted)
+            failed_dimensions = tuple(item.dimension for item in dimension_results if not item.accepted)
+            accepted = rejected_count == 0 and accepted_count > 0
+            partially_accepted = accepted_count > 0 and rejected_count > 0
+
+        snap = self.snapshot(step.received_at_ns)
+        activation = evaluate_external_regime_activation_safety(snap, policy)
+        execution = evaluate_external_regime_execution_safety(snap, policy)
+        return ExternalRegimeScenarioStepRecord(
+            step_id=step.step_id,
+            received_at_ns=step.received_at_ns,
+            provider=step.provider,
+            operation=operation,
+            accepted=accepted,
+            partially_accepted=partially_accepted,
+            replayed=replayed,
+            accepted_count=accepted_count,
+            rejected_count=rejected_count,
+            changed_dimensions=changed_dimensions,
+            failed_dimensions=failed_dimensions,
+            activation_blocked=activation.blocked,
+            activation_reason=activation.reason,
+            activation_allocation_scale=activation.allocation_scale,
+            execution_blocked=execution.blocked,
+            execution_reason=execution.reason,
+            stale_dimensions=snap.stale_dimensions,
+            unavailable_dimensions=snap.unavailable_dimensions,
+            high_risk=snap.high_risk_regime_present,
+            bundle_result=bundle_result,
+            dimension_results=dimension_results,
+            snapshot=snap,
+        )
+
+    @staticmethod
+    def _build_scenario_result(
+        scenario_id: str,
+        step_records: list[ExternalRegimeScenarioStepRecord],
+    ) -> ExternalRegimeScenarioResult:
+        step_count = len(step_records)
+        accepted_steps = sum(1 for item in step_records if item.accepted)
+        partially_accepted_steps = sum(1 for item in step_records if item.partially_accepted)
+        rejected_steps = sum(1 for item in step_records if not item.accepted and not item.partially_accepted)
+        replayed_steps = sum(1 for item in step_records if item.replayed)
+        execution_blocked_steps = sum(1 for item in step_records if item.execution_blocked)
+        activation_blocked_steps = sum(1 for item in step_records if item.activation_blocked)
+        activation_reduced_steps = sum(
+            1 for item in step_records if not item.activation_blocked and item.activation_allocation_scale < 1.0
+        )
+        stale_steps = sum(1 for item in step_records if item.stale_dimensions)
+        unavailable_steps = sum(1 for item in step_records if item.unavailable_dimensions)
+        high_risk_steps = sum(1 for item in step_records if item.high_risk)
+        safe_steps = sum(
+            1
+            for item in step_records
+            if not item.execution_blocked
+            and not item.activation_blocked
+            and item.activation_allocation_scale >= 1.0
+            and not item.stale_dimensions
+            and not item.unavailable_dimensions
+            and not item.high_risk
+        )
+        summary_parts = [f"steps={step_count}"]
+        if execution_blocked_steps:
+            summary_parts.append(f"execution_blocked={execution_blocked_steps}")
+        if activation_blocked_steps:
+            summary_parts.append(f"activation_blocked={activation_blocked_steps}")
+        if activation_reduced_steps:
+            summary_parts.append(f"activation_reduced={activation_reduced_steps}")
+        if stale_steps:
+            summary_parts.append(f"stale={stale_steps}")
+        if unavailable_steps:
+            summary_parts.append(f"unavailable={unavailable_steps}")
+        if high_risk_steps:
+            summary_parts.append(f"high_risk={high_risk_steps}")
+        if safe_steps:
+            summary_parts.append(f"safe={safe_steps}")
+        return ExternalRegimeScenarioResult(
+            scenario_id=scenario_id,
+            status="completed",
+            step_count=step_count,
+            accepted_steps=accepted_steps,
+            rejected_steps=rejected_steps,
+            replayed_steps=replayed_steps,
+            partially_accepted_steps=partially_accepted_steps,
+            execution_blocked_steps=execution_blocked_steps,
+            activation_blocked_steps=activation_blocked_steps,
+            activation_reduced_steps=activation_reduced_steps,
+            stale_steps=stale_steps,
+            unavailable_steps=unavailable_steps,
+            high_risk_steps=high_risk_steps,
+            safe_steps=safe_steps,
+            last_step_ns=(step_records[-1].received_at_ns if step_records else 0),
+            summary="; ".join(summary_parts),
+            step_records=tuple(step_records),
+            final_snapshot=(step_records[-1].snapshot if step_records else None),
+        )
 
 
 def _payload_summary_for_state(

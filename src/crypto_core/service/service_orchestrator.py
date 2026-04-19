@@ -47,10 +47,13 @@ from crypto_core.service.external_regime import (
     ExternalRegimeManager,
     ExternalRegimePayloadIngestionRecord,
     ExternalRegimeSafetyPolicy,
+    ExternalRegimeScenario,
+    ExternalRegimeScenarioResult,
     ExternalRegimeSnapshot,
     ExternalRegimeUpdateRecord,
     evaluate_external_regime_activation_safety,
     evaluate_external_regime_execution_safety,
+    external_regime_scenario_result_to_dict,
 )
 from crypto_core.service.models import ServiceStatus
 from crypto_core.service.paper_live_service import PaperLiveService
@@ -127,6 +130,11 @@ class EvidenceSufficiencyState:
     external_regime_available: bool = False
     external_regime_fresh: bool = False
     external_regime_has_high_risk: bool = False
+    external_regime_scenario_available: bool = False
+    external_regime_execution_blocked_steps: int = 0
+    external_regime_activation_blocked_steps: int = 0
+    external_regime_activation_reduced_steps: int = 0
+    external_regime_scenario_summary: str = ""
 
 
 @dataclass(frozen=True)
@@ -183,6 +191,7 @@ class OperatorSnapshot:
     # External regime (Phase 11A)
     external_regime: ExternalRegimeSnapshot | None = None
     external_regime_safety: ExternalRegimeSafetyState | None = None
+    external_regime_scenario: ExternalRegimeScenarioResult | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -427,7 +436,13 @@ class ServiceOrchestrator:
         # Phase 11B: thread external regime evidence into campaign finalization.
         ext_regime = self._external_regime_snapshot_from_status(ss)
 
-        report = self._campaign.finalize(ss, ext_regime=ext_regime)
+        report = self._campaign.finalize(
+            ss,
+            ext_regime=ext_regime,
+            ext_regime_scenario=(
+                None if self._external_regime_manager is None else self._external_regime_manager.latest_scenario_result
+            ),
+        )
         self._last_campaign_report = report
         logger.info(
             "Campaign %s finalized via orchestrator (verdict=%s)",
@@ -443,7 +458,13 @@ class ServiceOrchestrator:
         ss = self._service.status()
         # Phase 11B: thread external regime evidence into campaign snapshot.
         ext_regime = self._external_regime_snapshot_from_status(ss)
-        return self._campaign.snapshot(ss, ext_regime=ext_regime)
+        return self._campaign.snapshot(
+            ss,
+            ext_regime=ext_regime,
+            ext_regime_scenario=(
+                None if self._external_regime_manager is None else self._external_regime_manager.latest_scenario_result
+            ),
+        )
 
     @property
     def last_campaign_report(self) -> CampaignReport | None:
@@ -603,6 +624,7 @@ class ServiceOrchestrator:
         # External regime snapshot
         ext_regime = self._external_regime_snapshot_from_status(ss)
         ext_regime_safety = self._build_external_regime_safety_state(ext_regime)
+        ext_regime_scenario = self.external_regime_latest_scenario_result()
 
         # Evidence sufficiency
         evidence = self._build_evidence_sufficiency(campaign_state, review_state, ext_regime)
@@ -643,6 +665,7 @@ class ServiceOrchestrator:
             recommendation_summary=prov_summary,
             external_regime=ext_regime,
             external_regime_safety=ext_regime_safety,
+            external_regime_scenario=ext_regime_scenario,
         )
 
     # ------------------------------------------------------------------
@@ -958,6 +981,12 @@ class ServiceOrchestrator:
             return None
         return self._external_regime_manager.latest_bundle_replay_artifact
 
+    def external_regime_latest_scenario_result(self) -> ExternalRegimeScenarioResult | None:
+        """Most recent completed external-regime scenario result."""
+        if self._external_regime_manager is None:
+            return None
+        return self._external_regime_manager.latest_scenario_result
+
     def external_regime_lifecycle_dict(self) -> dict | None:
         """Full external regime lifecycle view for operators/reporting."""
         if self._external_regime_manager is None:
@@ -977,6 +1006,14 @@ class ServiceOrchestrator:
         """Replay a previously captured external-regime bundle artifact."""
         manager = self._require_external_regime_manager("replay external regime bundle artifact")
         return manager.replay_bundle_artifact(artifact)
+
+    def run_external_regime_scenario(
+        self,
+        scenario: ExternalRegimeScenario,
+    ) -> ExternalRegimeScenarioResult:
+        """Replay a deterministic external-regime scenario through the service seam."""
+        manager = self._require_external_regime_manager("run external regime scenario")
+        return manager.run_scenario(scenario, policy=self._external_regime_policy)
 
     def reset_external_regime(
         self,
@@ -1198,6 +1235,7 @@ class ServiceOrchestrator:
         ext_available = ext_regime is not None and len(ext_regime.available_dimensions) > 0
         ext_fresh = ext_regime is not None and ext_regime.evidence_sufficient
         ext_high_risk = ext_regime is not None and ext_regime.high_risk_regime_present
+        latest_scenario = self.external_regime_latest_scenario_result()
 
         # Build summary
         parts: list[str] = []
@@ -1215,6 +1253,17 @@ class ServiceOrchestrator:
             parts.append("External regime evidence stale or insufficient.")
         if ext_high_risk:
             parts.append("High-risk external regime conditions present.")
+        if latest_scenario is not None:
+            if latest_scenario.execution_blocked_steps or latest_scenario.activation_blocked_steps:
+                parts.append(
+                    "External regime scenario gating observed: "
+                    f"execution_blocked={latest_scenario.execution_blocked_steps}, "
+                    f"activation_blocked={latest_scenario.activation_blocked_steps}."
+                )
+            if latest_scenario.activation_reduced_steps:
+                parts.append(
+                    f"External regime scenario reduced activation on {latest_scenario.activation_reduced_steps} step(s)."
+                )
         if not parts:
             parts.append("Evidence appears sufficient for promotion consideration.")
 
@@ -1228,6 +1277,17 @@ class ServiceOrchestrator:
             external_regime_available=ext_available,
             external_regime_fresh=ext_fresh,
             external_regime_has_high_risk=ext_high_risk,
+            external_regime_scenario_available=latest_scenario is not None,
+            external_regime_execution_blocked_steps=(
+                0 if latest_scenario is None else latest_scenario.execution_blocked_steps
+            ),
+            external_regime_activation_blocked_steps=(
+                0 if latest_scenario is None else latest_scenario.activation_blocked_steps
+            ),
+            external_regime_activation_reduced_steps=(
+                0 if latest_scenario is None else latest_scenario.activation_reduced_steps
+            ),
+            external_regime_scenario_summary=("" if latest_scenario is None else latest_scenario.summary),
         )
 
     def _build_external_regime_safety_state(
@@ -1306,6 +1366,11 @@ def evidence_sufficiency_state_to_dict(state: EvidenceSufficiencyState) -> dict:
         "external_regime_available": state.external_regime_available,
         "external_regime_fresh": state.external_regime_fresh,
         "external_regime_has_high_risk": state.external_regime_has_high_risk,
+        "external_regime_scenario_available": state.external_regime_scenario_available,
+        "external_regime_execution_blocked_steps": state.external_regime_execution_blocked_steps,
+        "external_regime_activation_blocked_steps": state.external_regime_activation_blocked_steps,
+        "external_regime_activation_reduced_steps": state.external_regime_activation_reduced_steps,
+        "external_regime_scenario_summary": state.external_regime_scenario_summary,
     }
 
 
@@ -1343,6 +1408,11 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         "external_regime_safety": (
             external_regime_safety_state_to_dict(snap.external_regime_safety)
             if snap.external_regime_safety is not None
+            else None
+        ),
+        "external_regime_scenario": (
+            external_regime_scenario_result_to_dict(snap.external_regime_scenario)
+            if snap.external_regime_scenario is not None
             else None
         ),
     }
