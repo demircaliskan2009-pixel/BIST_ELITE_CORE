@@ -40,6 +40,7 @@ from crypto_core.service.campaign import (
     StabilityRollup,
     SymbolParticipation,
 )
+from crypto_core.service.escalation_review_controller import EscalationWorkflowCorruptError
 from crypto_core.service.evidence_store import (
     EvidenceStore,
     EvidenceStoreConfig,
@@ -59,11 +60,13 @@ from crypto_core.service.promotion_review_controller import (
 )
 from crypto_core.service.service_orchestrator import (
     CampaignWorkflowState,
+    EscalationWorkflowState,
     EvidenceSufficiencyState,
     OperatorSnapshot,
     ReviewWorkflowState,
     ServiceOrchestrator,
     campaign_workflow_state_to_dict,
+    escalation_workflow_state_to_dict,
     evidence_sufficiency_state_to_dict,
     operator_snapshot_to_dict,
     review_workflow_state_to_dict,
@@ -1227,6 +1230,96 @@ class TestReportingAPI:
         assert decision.escalation_stage == EscalationStage.CALIBRATED_PAPER
         assert any(reason.startswith("external_regime:") for reason in decision.why_not_higher)
 
+    def test_escalation_review_lifecycle_and_operator_surfaces(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(
+            service=svc,
+            readiness_level="shadow_live",
+        )
+        orch._last_campaign_report = _make_campaign_report(
+            campaign_id="last-report",
+            persisted_tca_count=18,
+            registered_fill_count=20,
+        )
+        orch.start_review(review_id="rev-escalation-lifecycle")
+        for i in range(3):
+            orch.intake_campaign_report(_make_campaign_report(campaign_id=f"camp-{i}", verdict="pass"))
+        orch.finalize_review()
+
+        review_id = orch.start_escalation_review(review_id="esc-lifecycle")
+        assert review_id == "esc-lifecycle"
+
+        snap = orch.escalation_review_snapshot()
+        assert snap is not None
+        assert snap.status == "evaluating"
+        assert snap.latest_decision is not None
+        assert snap.latest_decision.escalation_stage == EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE
+
+        final = orch.finalize_escalation_review()
+        assert final.status == "finalized"
+        assert final.decision.escalation_stage == EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE
+        assert orch.escalation_summary()["allowed_next_step"] == "shadow_live_review_eligible"
+
+        operator = orch.operator_snapshot()
+        assert operator.escalation_review is not None
+        assert operator.escalation_review.allowed_next_step == "shadow_live_review_eligible"
+
+    def test_escalation_review_progression_history_current_vs_previous(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(
+            service=svc,
+            readiness_level="paper_live",
+        )
+        orch._last_campaign_report = _make_campaign_report(
+            campaign_id="last-report",
+            persisted_tca_count=18,
+            registered_fill_count=20,
+        )
+        orch.start_review(review_id="rev-escalation-history")
+        for i in range(3):
+            orch.intake_campaign_report(_make_campaign_report(campaign_id=f"camp-{i}", verdict="pass"))
+        orch.finalize_review()
+
+        orch.start_escalation_review(review_id="esc-history-1")
+        first = orch.finalize_escalation_review()
+        assert first.history_summary["total_finalized_reviews"] == 1
+
+        orch.readiness_level = "shadow_live"
+        orch.start_escalation_review(review_id="esc-history-2")
+        second = orch.finalize_escalation_review()
+
+        comparison = orch.escalation_change_summary()
+        history = orch.escalation_history_summary()
+        assert second.comparison_to_previous["direction"] == "progressed"
+        assert comparison["previous_allowed_next_step"] == "paper_only"
+        assert comparison["current_allowed_next_step"] == "shadow_live_review_eligible"
+        assert history["total_finalized_reviews"] == 2
+
+    def test_escalation_review_repeated_stuck_summary(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(
+            service=svc,
+            readiness_level="paper_live",
+        )
+        orch._last_campaign_report = _make_campaign_report(campaign_id="last-report")
+        orch.start_review(review_id="rev-escalation-stuck")
+        orch.intake_campaign_report(
+            _make_campaign_report(
+                campaign_id="camp-weak",
+                total_cycles=10,
+                total_fills=0,
+                elapsed_seconds=30.0,
+            )
+        )
+
+        orch.start_escalation_review(review_id="esc-stuck-1")
+        orch.finalize_escalation_review()
+        orch.start_escalation_review(review_id="esc-stuck-2")
+        orch.finalize_escalation_review()
+
+        history = orch.escalation_history_summary()
+        assert history["repeatedly_stuck"] is True
+        assert history["repeated_stuck_count"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1289,6 +1382,37 @@ class TestPersistenceRestore:
         orch.start_review()
         with pytest.raises(RuntimeError, match="active review"):
             orch.restore_review({})
+
+    def test_restore_escalation_review_no_store_raises(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(service=svc)
+        with pytest.raises(RuntimeError, match="No evidence store"):
+            orch.restore_escalation_review()
+
+    def test_restore_escalation_review_while_active_raises(self, tmp_path: Path):
+        svc = _make_mock_service()
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        orch = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store,
+            readiness_level="shadow_live",
+        )
+        orch._last_campaign_report = _make_campaign_report(
+            campaign_id="last-report",
+            persisted_tca_count=18,
+            registered_fill_count=20,
+        )
+        orch.start_review(review_id="rev-esc-active")
+        for i in range(3):
+            orch.intake_campaign_report(_make_campaign_report(campaign_id=f"camp-{i}", verdict="pass"))
+        orch.finalize_review()
+        orch.start_escalation_review(review_id="esc-active")
+
+        with pytest.raises(RuntimeError, match="active escalation review"):
+            orch.restore_escalation_review()
 
     def test_campaign_persist_restore_roundtrip(self, tmp_path: Path):
         svc = _make_mock_service()
@@ -1364,6 +1488,64 @@ class TestPersistenceRestore:
         with pytest.raises(ReviewWorkflowCorruptError, match="Missing campaign"):
             orch2.restore_review({})
 
+    def test_escalation_review_persist_restore_roundtrip(self, tmp_path: Path):
+        svc = _make_mock_service()
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        orch = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store,
+            readiness_level="shadow_live",
+        )
+        orch._last_campaign_report = _make_campaign_report(
+            campaign_id="last-report",
+            persisted_tca_count=18,
+            registered_fill_count=20,
+        )
+        orch.start_review(review_id="rev-esc-persist")
+        for i in range(3):
+            orch.intake_campaign_report(_make_campaign_report(campaign_id=f"camp-{i}", verdict="pass"))
+        orch.finalize_review()
+        orch.start_escalation_review(review_id="esc-persist")
+        orch.finalize_escalation_review()
+
+        orch2 = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store,
+            readiness_level="shadow_live",
+        )
+        restored = orch2.restore_escalation_review()
+        assert restored is True
+        assert orch2.escalation_review_controller is not None
+        assert orch2.escalation_review_controller.review_id == "esc-persist"
+        assert orch2.escalation_history_summary()["total_finalized_reviews"] == 1
+
+    def test_escalation_review_restore_fail_closed(self, tmp_path: Path):
+        svc = _make_mock_service()
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        store.save_snapshot(
+            "escalation_review_workflow",
+            {
+                "review_id": "esc-bad",
+                "status": "rejected",
+                "created_at_ns": _T0_NS,
+                "updated_at_ns": _T0_NS,
+            },
+        )
+        orch = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store,
+            readiness_level="shadow_live",
+        )
+
+        with pytest.raises(EscalationWorkflowCorruptError, match="final_report"):
+            orch.restore_escalation_review()
+
 
 # ---------------------------------------------------------------------------
 # Tests: Serialization
@@ -1406,6 +1588,22 @@ class TestSerialization:
         assert d["review_id"] == "rev-1"
         assert d["campaign_count"] == 2
 
+    def test_escalation_workflow_state_to_dict(self):
+        state = EscalationWorkflowState(
+            active=True,
+            review_id="esc-1",
+            status="evaluating",
+            allowed_next_step="paper_only",
+            progression_state="first_attempt",
+            previous_allowed_next_step=None,
+            history_length=1,
+            repeatedly_stuck=False,
+            finalized=False,
+        )
+        d = escalation_workflow_state_to_dict(state)
+        assert d["review_id"] == "esc-1"
+        assert d["allowed_next_step"] == "paper_only"
+
     def test_evidence_sufficiency_to_dict(self):
         state = EvidenceSufficiencyState(
             campaign_evidence_available=True,
@@ -1446,6 +1644,7 @@ class TestSerialization:
         assert d["service_mode"] == "running"
         assert d["campaign"] is None
         assert d["review"] is None
+        assert d["escalation_review"] is None
         assert isinstance(d["evidence"], dict)
 
     def test_operator_snapshot_to_dict_with_campaign_and_review(self):
@@ -1479,6 +1678,17 @@ class TestSerialization:
             insufficient_reasons=(),
             summary="All good.",
         )
+        escalation_review = EscalationWorkflowState(
+            active=False,
+            review_id="esc-1",
+            status="finalized",
+            allowed_next_step="paper_only",
+            progression_state="unchanged",
+            previous_allowed_next_step="paper_only",
+            history_length=2,
+            repeatedly_stuck=False,
+            finalized=True,
+        )
         snap = OperatorSnapshot(
             service_mode="running",
             trading_enabled=True,
@@ -1493,10 +1703,12 @@ class TestSerialization:
             evidence=evidence,
             provisional_recommendation="promote",
             recommendation_summary="Looks good.",
+            escalation_review=escalation_review,
         )
         d = operator_snapshot_to_dict(snap)
         assert d["campaign"]["campaign_id"] == "c1"
         assert d["review"]["review_id"] == "r1"
+        assert d["escalation_review"]["review_id"] == "esc-1"
         assert d["evidence"]["promotion_evidence_sufficient"] is True
 
 

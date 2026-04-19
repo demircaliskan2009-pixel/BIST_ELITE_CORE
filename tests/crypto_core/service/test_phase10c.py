@@ -56,6 +56,14 @@ from crypto_core.service.campaign import (
     StabilityRollup,
     SymbolParticipation,
 )
+from crypto_core.service.escalation_review_controller import (
+    EscalationReviewController,
+    EscalationReviewStatus,
+    EscalationWorkflowCorruptError,
+    current_escalation_review_snapshot_to_dict,
+    final_escalation_review_report_from_dict,
+    final_escalation_review_report_to_dict,
+)
 from crypto_core.service.evidence_store import (
     EvidenceStore,
     EvidenceStoreConfig,
@@ -80,6 +88,45 @@ from crypto_core.service.promotion_review_controller import (
 
 _T0_NS = 1_000_000_000_000
 _NS_PER_S = 1_000_000_000
+
+
+def _make_escalation_decision(
+    *,
+    review_id: str = "rev-escalate",
+    review_timestamp_ns: int = _T0_NS,
+    promotion_verdict: str = "promote",
+    operator_disposition: str = "promotable",
+    escalation_stage: EscalationStage = EscalationStage.PAPER_ONLY,
+    decision_summary: str | None = None,
+    readiness_level: str = "paper_live",
+    readiness_is_supportive: bool = True,
+    external_regime_quality: str = "supportive",
+    blocking_reasons: tuple[str, ...] = (),
+    missing_evidence: tuple[str, ...] = (),
+    why_not_higher: tuple[str, ...] = (),
+    revalidation_required: tuple[str, ...] = (),
+    campaign_ids: tuple[str, ...] = ("camp-1", "camp-2", "camp-3"),
+    reason_codes: dict | None = None,
+) -> EscalationDecision:
+    return EscalationDecision(
+        artifact_time_ns=review_timestamp_ns,
+        review_id=review_id,
+        review_timestamp_ns=review_timestamp_ns,
+        review_status="finalized",
+        promotion_verdict=promotion_verdict,
+        operator_disposition=operator_disposition,
+        escalation_stage=escalation_stage,
+        decision_summary=decision_summary or f"allowed_next_step={escalation_stage.value}",
+        readiness_level=readiness_level,
+        readiness_is_supportive=readiness_is_supportive,
+        external_regime_quality=external_regime_quality,
+        blocking_reasons=blocking_reasons,
+        missing_evidence=missing_evidence,
+        why_not_higher=why_not_higher,
+        revalidation_required=revalidation_required,
+        campaign_ids=campaign_ids,
+        reason_codes=reason_codes or {},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1335,3 +1382,191 @@ class TestEscalationDecisionArtifact:
                     "reason_codes": {},
                 }
             )
+
+
+class TestEscalationReviewController:
+    def test_escalation_review_lifecycle_and_snapshot(self):
+        current = _make_escalation_decision(
+            escalation_stage=EscalationStage.CALIBRATED_PAPER,
+            revalidation_required=("operator_review_signoff",),
+        )
+        controller = EscalationReviewController(
+            review_id="esc-001",
+            decision_builder=lambda: current,
+        )
+
+        assert controller.status == EscalationReviewStatus.CREATED
+        decision = controller.evaluate_current()
+        assert decision.escalation_stage == EscalationStage.CALIBRATED_PAPER
+        assert controller.status == EscalationReviewStatus.EVALUATING
+
+        snapshot = controller.current_snapshot()
+        assert snapshot.latest_decision is not None
+        assert snapshot.latest_decision.escalation_stage == EscalationStage.CALIBRATED_PAPER
+        assert snapshot.progression_state == "first_attempt"
+        assert snapshot.is_ready_to_finalize is True
+
+        final = controller.finalize_review()
+        assert final.status == "finalized"
+        assert controller.status == EscalationReviewStatus.FINALIZED
+        assert final.history_summary["total_finalized_reviews"] == 1
+
+    def test_escalation_review_finalize_reject_marks_rejected(self):
+        controller = EscalationReviewController(
+            review_id="esc-reject",
+            decision_builder=lambda: _make_escalation_decision(
+                review_id="esc-reject",
+                promotion_verdict="reject",
+                operator_disposition="reject_worthy",
+                escalation_stage=EscalationStage.REJECT,
+                blocking_reasons=("max_failed_campaigns",),
+            ),
+        )
+
+        report = controller.finalize_review()
+        assert report.status == "rejected"
+        assert controller.status == EscalationReviewStatus.REJECTED
+        assert report.decision.blocking_reasons == ("max_failed_campaigns",)
+
+    def test_escalation_review_bounded_history_and_progression(self):
+        current = {"decision": _make_escalation_decision(review_id="esc-1", escalation_stage=EscalationStage.HOLD)}
+        controller = EscalationReviewController(
+            review_id="esc-1",
+            decision_builder=lambda: current["decision"],
+            history_limit=3,
+        )
+
+        controller.finalize_review()
+        current["decision"] = _make_escalation_decision(
+            review_id="esc-2",
+            review_timestamp_ns=_T0_NS + 1,
+            escalation_stage=EscalationStage.CALIBRATED_PAPER,
+        )
+        controller.reset()
+        controller.finalize_review(finalized_at_ns=_T0_NS + 1)
+        current["decision"] = _make_escalation_decision(
+            review_id="esc-3",
+            review_timestamp_ns=_T0_NS + 2,
+            escalation_stage=EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE,
+        )
+        controller.reset()
+        controller.finalize_review(finalized_at_ns=_T0_NS + 2)
+        current["decision"] = _make_escalation_decision(
+            review_id="esc-4",
+            review_timestamp_ns=_T0_NS + 3,
+            escalation_stage=EscalationStage.INCONCLUSIVE,
+            missing_evidence=("min_completed_campaigns",),
+        )
+        controller.reset()
+        report = controller.finalize_review(finalized_at_ns=_T0_NS + 3)
+
+        assert len(controller.history) == 3
+        assert [item.allowed_next_step for item in controller.history] == [
+            "calibrated_paper",
+            "shadow_live_review_eligible",
+            "inconclusive",
+        ]
+        assert report.comparison_to_previous["direction"] == "regressed"
+        assert report.history_summary["repeatedly_stuck"] is False
+
+    def test_escalation_review_restore_roundtrip(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        current = {
+            "decision": _make_escalation_decision(review_id="esc-persist", escalation_stage=EscalationStage.HOLD)
+        }
+        controller = EscalationReviewController(
+            review_id="esc-persist",
+            decision_builder=lambda: current["decision"],
+            evidence_store=store,
+        )
+        controller.finalize_review()
+
+        restored = EscalationReviewController.restore(
+            store,
+            decision_builder=lambda: current["decision"],
+        )
+        assert restored.review_id == "esc-persist"
+        assert restored.final_report is not None
+        assert restored.final_report.decision.escalation_stage == EscalationStage.HOLD
+        assert restored.history_summary()["total_finalized_reviews"] == 1
+
+    def test_escalation_review_restore_backward_compatibility_defaults_safe(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        store.save_snapshot(
+            "escalation_review_workflow",
+            {
+                "review_id": "esc-legacy",
+                "status": "created",
+                "created_at_ns": _T0_NS,
+                "updated_at_ns": _T0_NS,
+            },
+        )
+
+        restored = EscalationReviewController.restore(
+            store,
+            decision_builder=lambda: _make_escalation_decision(
+                review_id="esc-legacy", escalation_stage=EscalationStage.INCONCLUSIVE
+            ),
+        )
+        snapshot = restored.current_snapshot()
+        assert snapshot.latest_decision is None
+        assert snapshot.progression_state == "not_assessed"
+        assert snapshot.history_summary["total_finalized_reviews"] == 0
+
+    def test_escalation_review_restore_fail_closed_on_malformed_state(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        store.save_snapshot(
+            "escalation_review_workflow",
+            {
+                "review_id": "esc-bad",
+                "status": "rejected",
+                "created_at_ns": _T0_NS,
+                "updated_at_ns": _T0_NS,
+            },
+        )
+
+        with pytest.raises(EscalationWorkflowCorruptError, match="final_report"):
+            EscalationReviewController.restore(
+                store,
+                decision_builder=lambda: _make_escalation_decision(
+                    review_id="esc-bad", escalation_stage=EscalationStage.REJECT
+                ),
+            )
+
+    def test_escalation_review_serialization_helpers(self):
+        controller = EscalationReviewController(
+            review_id="esc-ser",
+            decision_builder=lambda: _make_escalation_decision(
+                review_id="esc-ser", escalation_stage=EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE
+            ),
+        )
+        snapshot = controller.current_snapshot()
+        d = current_escalation_review_snapshot_to_dict(snapshot)
+        assert d["review_id"] == "esc-ser"
+        assert d["latest_decision"] is None
+
+        final = controller.finalize_review()
+        fd = final_escalation_review_report_to_dict(final)
+        restored = final_escalation_review_report_from_dict(fd)
+        assert restored.review_id == final.review_id
+        assert restored.decision.escalation_stage == EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE
+
+    def test_escalation_review_deterministic_replay_same_input(self):
+        decision = _make_escalation_decision(review_id="esc-replay", escalation_stage=EscalationStage.PAPER_ONLY)
+        controller = EscalationReviewController(
+            review_id="esc-replay",
+            decision_builder=lambda: decision,
+        )
+
+        first = current_escalation_review_snapshot_to_dict(controller.current_snapshot())
+        second = current_escalation_review_snapshot_to_dict(controller.current_snapshot())
+        assert first == second
