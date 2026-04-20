@@ -32,6 +32,7 @@ from crypto_core.service.campaign import (
     CampaignMetadata,
     CampaignMetadataCorruptError,
     CampaignReport,
+    CampaignSleeveLinkSummary,
     CampaignSnapshot,
     CampaignStatus,
     StabilityRollup,
@@ -267,6 +268,7 @@ class CampaignController:
         *,
         ext_regime: ExternalRegimeSnapshot | None = None,
         ext_regime_scenario: ExternalRegimeScenarioResult | None = None,
+        sleeve_link: CampaignSleeveLinkSummary | None = None,
     ) -> CampaignReport:
         """Finalize the campaign and produce the verdict report.
 
@@ -292,7 +294,12 @@ class CampaignController:
             if self._meta.status == CampaignStatus.RUNNING:
                 self._complete("finalize_requested")
 
-        snap = self.snapshot(service_status, ext_regime=ext_regime, ext_regime_scenario=ext_regime_scenario)
+        snap = self.snapshot(
+            service_status,
+            ext_regime=ext_regime,
+            ext_regime_scenario=ext_regime_scenario,
+            sleeve_link=sleeve_link,
+        )
         result = self._policy.evaluate(snap)
 
         self._meta.verdict = result.verdict
@@ -362,6 +369,7 @@ class CampaignController:
             ext_regime_high_risk_steps=snap.ext_regime_high_risk_steps,
             ext_regime_safe_steps=snap.ext_regime_safe_steps,
             ext_regime_scenario_summary=snap.ext_regime_scenario_summary,
+            sleeve_link=snap.sleeve_link,
         )
 
         self._persist_metadata()
@@ -378,6 +386,7 @@ class CampaignController:
         *,
         ext_regime: ExternalRegimeSnapshot | None = None,
         ext_regime_scenario: ExternalRegimeScenarioResult | None = None,
+        sleeve_link: CampaignSleeveLinkSummary | None = None,
     ) -> CampaignSnapshot:
         """Produce a point-in-time campaign snapshot.
 
@@ -416,6 +425,7 @@ class CampaignController:
         readiness = self._health_tracker.readiness(ss)
         trend = self._health_tracker.trend_snapshot()
         ph = self._persistence_health.snapshot()
+        resolved_sleeve_link = CampaignSleeveLinkSummary() if sleeve_link is None else sleeve_link
 
         return CampaignSnapshot(
             campaign_id=meta.campaign_id,
@@ -491,6 +501,7 @@ class CampaignController:
             ext_regime_high_risk_steps=(0 if ext_regime_scenario is None else ext_regime_scenario.high_risk_steps),
             ext_regime_safe_steps=(0 if ext_regime_scenario is None else ext_regime_scenario.safe_steps),
             ext_regime_scenario_summary=("" if ext_regime_scenario is None else ext_regime_scenario.summary),
+            sleeve_link=resolved_sleeve_link,
         )
 
     def symbol_participation_view(self, service_status: ServiceStatus) -> tuple[SymbolParticipation, ...]:
@@ -767,6 +778,7 @@ def _report_to_dict(report: CampaignReport) -> dict:
         "ext_regime_high_risk_steps": report.snapshot.ext_regime_high_risk_steps,
         "ext_regime_safe_steps": report.snapshot.ext_regime_safe_steps,
         "ext_regime_scenario_summary": report.snapshot.ext_regime_scenario_summary,
+        "sleeve_link": _campaign_sleeve_link_to_dict(report.snapshot.sleeve_link),
     }
     stability_dict = None
     if report.stability is not None:
@@ -814,6 +826,19 @@ def _report_to_dict(report: CampaignReport) -> dict:
         "ext_regime_high_risk_steps": report.ext_regime_high_risk_steps,
         "ext_regime_safe_steps": report.ext_regime_safe_steps,
         "ext_regime_scenario_summary": report.ext_regime_scenario_summary,
+        "sleeve_link": _campaign_sleeve_link_to_dict(report.sleeve_link),
+    }
+
+
+def _campaign_sleeve_link_to_dict(link: CampaignSleeveLinkSummary) -> dict:
+    """Serialize CampaignSleeveLinkSummary to a plain dict."""
+    return {
+        "linkage_available": link.linkage_available,
+        "configured_sleeve_ids": list(link.configured_sleeve_ids),
+        "qualified_sleeve_ids": list(link.qualified_sleeve_ids),
+        "recommended_sleeve_ids": list(link.recommended_sleeve_ids),
+        "blocked_sleeve_ids": list(link.blocked_sleeve_ids),
+        "summary": link.summary,
     }
 
 

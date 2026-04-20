@@ -174,6 +174,23 @@ class SymbolParticipation:
     cycles_observed: bool
 
 
+@dataclass(frozen=True)
+class CampaignSleeveLinkSummary:
+    """Compact sleeve linkage captured alongside campaign evidence.
+
+    Carries only explicit sleeve IDs already present in the operator-facing
+    sleeve portfolio surface. It does not fabricate sleeve attribution,
+    performance, or maturity claims.
+    """
+
+    linkage_available: bool = False
+    configured_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    qualified_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    recommended_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    blocked_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    summary: str = "No sleeve campaign linkage available."
+
+
 # ---------------------------------------------------------------------------
 # Acceptance criterion result
 # ---------------------------------------------------------------------------
@@ -322,6 +339,7 @@ class CampaignSnapshot:
     ext_regime_high_risk_steps: int = 0
     ext_regime_safe_steps: int = 0
     ext_regime_scenario_summary: str = ""
+    sleeve_link: CampaignSleeveLinkSummary = field(default_factory=CampaignSleeveLinkSummary)
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +386,7 @@ class CampaignReport:
     ext_regime_high_risk_steps: int = 0
     ext_regime_safe_steps: int = 0
     ext_regime_scenario_summary: str = ""
+    sleeve_link: CampaignSleeveLinkSummary = field(default_factory=CampaignSleeveLinkSummary)
 
 
 # ---------------------------------------------------------------------------

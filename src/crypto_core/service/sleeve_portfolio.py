@@ -22,6 +22,7 @@ import math
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
+from crypto_core.service.campaign import CampaignReport, CampaignSleeveLinkSummary
 from crypto_core.service.promotion_review import EvidenceSufficiency
 from crypto_core.service.readiness import ReadinessLevel, level_at_least
 
@@ -81,6 +82,45 @@ class SleeveRecommendationStatus(str, Enum):
     BLOCKED = "blocked"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
     DISABLED_OPERATOR_OFF = "disabled_operator_off"
+
+
+class SleeveCampaignEvidenceStatus(str, Enum):
+    """Operator-facing sleeve campaign evidence state."""
+
+    NO_CAMPAIGN_EVIDENCE = "no_campaign_evidence"
+    WEAK_CAMPAIGN_EVIDENCE = "weak_campaign_evidence"
+    CAMPAIGN_SUPPORTED = "campaign_supported"
+    BLOCKED_BY_GOVERNANCE = "blocked_by_governance"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+
+
+class SleevePromotionSupportStatus(str, Enum):
+    """Compact sleeve-level promotion-support posture."""
+
+    SUPPORTIVE = "supportive"
+    WEAK_SUPPORT = "weak_support"
+    BLOCKED = "blocked"
+    INCONCLUSIVE = "inconclusive"
+
+
+class SleevePromotionCandidateStatus(str, Enum):
+    """Explicit sleeve promotion-candidate posture derived from existing truth."""
+
+    SUPPORTED = "supported"
+    WATCHLIST = "watchlist"
+    BLOCKED = "blocked"
+    NOT_A_CANDIDATE = "not_a_candidate"
+
+
+class SleeveDecisionPackStatus(str, Enum):
+    """Compact operator-facing sleeve decision-pack classification."""
+
+    RECOMMENDED_ACTIVE = "recommended_active"
+    ELIGIBLE_BUT_NOT_SELECTED = "eligible_but_not_selected"
+    SUPPORTED_CANDIDATE = "supported_candidate"
+    WATCHLIST_CANDIDATE = "watchlist_candidate"
+    BLOCKED = "blocked"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
 class SleevePortfolioValidationError(ValueError):
@@ -147,6 +187,73 @@ class SleeveRecommendationResult:
 
 
 @dataclass(frozen=True)
+class SleeveCampaignEvidenceResult:
+    """Sleeve-level campaign evidence posture derived from real campaign truth."""
+
+    status: SleeveCampaignEvidenceStatus = SleeveCampaignEvidenceStatus.INSUFFICIENT_EVIDENCE
+    campaign_evidence_available: bool = False
+    explicit_link_available: bool = False
+    linked_in_campaign: bool = False
+    supporting_campaign_ids: tuple[str, ...] = field(default_factory=tuple)
+    missing_evidence: tuple[str, ...] = field(default_factory=tuple)
+    blocking_reasons: tuple[str, ...] = field(default_factory=tuple)
+    reason_summary: str = ""
+    next_step: str = "Carry sleeve linkage into a paper campaign before using it as sleeve evidence."
+
+
+@dataclass(frozen=True)
+class SleevePromotionSupportResult:
+    """Sleeve-level support for future promotion consideration."""
+
+    status: SleevePromotionSupportStatus = SleevePromotionSupportStatus.INCONCLUSIVE
+    can_be_considered_later: bool = False
+    campaign_evidence_status: SleeveCampaignEvidenceStatus = SleeveCampaignEvidenceStatus.INSUFFICIENT_EVIDENCE
+    qualification_status: SleeveQualificationStatus = SleeveQualificationStatus.INSUFFICIENT_EVIDENCE
+    recommendation_status: SleeveRecommendationStatus = SleeveRecommendationStatus.INSUFFICIENT_EVIDENCE
+    missing_evidence: tuple[str, ...] = field(default_factory=tuple)
+    blocking_reasons: tuple[str, ...] = field(default_factory=tuple)
+    reason_summary: str = ""
+    next_step: str = "Provide stronger sleeve evidence before any future promotion consideration."
+
+
+@dataclass(frozen=True)
+class SleevePromotionCandidateResult:
+    """Explicit sleeve promotion-candidate surface for later review only."""
+
+    status: SleevePromotionCandidateStatus = SleevePromotionCandidateStatus.NOT_A_CANDIDATE
+    candidate_for_future_review: bool = False
+    strongly_supported: bool = False
+    campaign_evidence_status: SleeveCampaignEvidenceStatus = SleeveCampaignEvidenceStatus.INSUFFICIENT_EVIDENCE
+    promotion_support_status: SleevePromotionSupportStatus = SleevePromotionSupportStatus.INCONCLUSIVE
+    qualification_status: SleeveQualificationStatus = SleeveQualificationStatus.INSUFFICIENT_EVIDENCE
+    recommendation_status: SleeveRecommendationStatus = SleeveRecommendationStatus.INSUFFICIENT_EVIDENCE
+    missing_evidence: tuple[str, ...] = field(default_factory=tuple)
+    blocking_reasons: tuple[str, ...] = field(default_factory=tuple)
+    reason_summary: str = ""
+    next_step: str = "Strengthen sleeve evidence before considering it a later promotion candidate."
+
+
+@dataclass(frozen=True)
+class SleeveDecisionPackResult:
+    """Compact per-sleeve decision pack derived from current decision and future evidence."""
+
+    status: SleeveDecisionPackStatus = SleeveDecisionPackStatus.INSUFFICIENT_EVIDENCE
+    recommended_active: bool = False
+    currently_eligible: bool = False
+    promotion_candidate: bool = False
+    strongly_supported_candidate: bool = False
+    recommendation_status: SleeveRecommendationStatus = SleeveRecommendationStatus.INSUFFICIENT_EVIDENCE
+    qualification_status: SleeveQualificationStatus = SleeveQualificationStatus.INSUFFICIENT_EVIDENCE
+    campaign_evidence_status: SleeveCampaignEvidenceStatus = SleeveCampaignEvidenceStatus.INSUFFICIENT_EVIDENCE
+    promotion_support_status: SleevePromotionSupportStatus = SleevePromotionSupportStatus.INCONCLUSIVE
+    promotion_candidate_status: SleevePromotionCandidateStatus = SleevePromotionCandidateStatus.NOT_A_CANDIDATE
+    missing_evidence: tuple[str, ...] = field(default_factory=tuple)
+    blocking_reasons: tuple[str, ...] = field(default_factory=tuple)
+    reason_summary: str = ""
+    next_step: str = "Collect stronger sleeve evidence before any operator decision changes."
+
+
+@dataclass(frozen=True)
 class CryptoSleeveState:
     """Single crypto sleeve identity and allocation state.
 
@@ -173,6 +280,10 @@ class CryptoSleeveState:
     effective_allocation: float = 0.0
     qualification: SleeveQualificationResult = field(default_factory=SleeveQualificationResult)
     recommendation: SleeveRecommendationResult = field(default_factory=SleeveRecommendationResult)
+    campaign_evidence: SleeveCampaignEvidenceResult = field(default_factory=SleeveCampaignEvidenceResult)
+    promotion_support: SleevePromotionSupportResult = field(default_factory=SleevePromotionSupportResult)
+    promotion_candidate: SleevePromotionCandidateResult = field(default_factory=SleevePromotionCandidateResult)
+    decision_pack: SleeveDecisionPackResult = field(default_factory=SleeveDecisionPackResult)
 
 
 @dataclass(frozen=True)
@@ -253,6 +364,52 @@ class SleevePortfolioDecisionSummary:
 
 
 @dataclass(frozen=True)
+class SleevePortfolioEvidenceSummary:
+    """Portfolio-wide sleeve campaign evidence and promotion-support surface."""
+
+    total_sleeves: int
+    no_campaign_evidence_sleeves: int
+    weak_campaign_evidence_sleeves: int
+    campaign_supported_sleeves: int
+    blocked_evidence_sleeves: int
+    inconclusive_sleeves: int
+    supportive_promotion_sleeves: int
+    weak_support_sleeves: int
+    no_campaign_evidence_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    weak_campaign_evidence_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    campaign_supported_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    blocked_evidence_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    inconclusive_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    supportive_promotion_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    weak_support_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    missing_evidence: tuple[str, ...] = field(default_factory=tuple)
+    blocking_reasons: tuple[str, ...] = field(default_factory=tuple)
+    summary: str = ""
+
+
+@dataclass(frozen=True)
+class SleevePortfolioDecisionPackSummary:
+    """Portfolio-wide sleeve decision-pack and candidate surface."""
+
+    total_sleeves: int
+    recommended_active_sleeves: int
+    eligible_but_not_selected_sleeves: int
+    supported_candidate_sleeves: int
+    watchlist_candidate_sleeves: int
+    blocked_sleeves: int
+    insufficient_evidence_sleeves: int
+    recommended_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    eligible_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    supported_candidate_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    watchlist_candidate_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    blocked_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    insufficient_evidence_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    missing_evidence: tuple[str, ...] = field(default_factory=tuple)
+    blocking_reasons: tuple[str, ...] = field(default_factory=tuple)
+    summary: str = ""
+
+
+@dataclass(frozen=True)
 class SleevePortfolioSnapshot:
     """Operator-facing sleeve portfolio snapshot."""
 
@@ -318,6 +475,48 @@ class SleevePortfolioSnapshot:
             conserved_blocked_share=0.0,
             conserved_disabled_share=0.0,
             summary="No sleeve recommendation available.",
+        )
+    )
+    evidence: SleevePortfolioEvidenceSummary = field(
+        default_factory=lambda: SleevePortfolioEvidenceSummary(
+            total_sleeves=0,
+            no_campaign_evidence_sleeves=0,
+            weak_campaign_evidence_sleeves=0,
+            campaign_supported_sleeves=0,
+            blocked_evidence_sleeves=0,
+            inconclusive_sleeves=0,
+            supportive_promotion_sleeves=0,
+            weak_support_sleeves=0,
+            no_campaign_evidence_sleeve_ids=(),
+            weak_campaign_evidence_sleeve_ids=(),
+            campaign_supported_sleeve_ids=(),
+            blocked_evidence_sleeve_ids=(),
+            inconclusive_sleeve_ids=(),
+            supportive_promotion_sleeve_ids=(),
+            weak_support_sleeve_ids=(),
+            missing_evidence=(),
+            blocking_reasons=(),
+            summary="No sleeve campaign evidence available.",
+        )
+    )
+    decision_pack: SleevePortfolioDecisionPackSummary = field(
+        default_factory=lambda: SleevePortfolioDecisionPackSummary(
+            total_sleeves=0,
+            recommended_active_sleeves=0,
+            eligible_but_not_selected_sleeves=0,
+            supported_candidate_sleeves=0,
+            watchlist_candidate_sleeves=0,
+            blocked_sleeves=0,
+            insufficient_evidence_sleeves=0,
+            recommended_sleeve_ids=(),
+            eligible_sleeve_ids=(),
+            supported_candidate_sleeve_ids=(),
+            watchlist_candidate_sleeve_ids=(),
+            blocked_sleeve_ids=(),
+            insufficient_evidence_sleeve_ids=(),
+            missing_evidence=(),
+            blocking_reasons=(),
+            summary="No sleeve decision pack available.",
         )
     )
     enabled_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
@@ -482,6 +681,24 @@ def _validate_sleeve_state(state: CryptoSleeveState) -> CryptoSleeveState:
         if isinstance(state.recommendation, SleeveRecommendationResult)
         else SleeveRecommendationResult()
     )
+    campaign_evidence = (
+        state.campaign_evidence
+        if isinstance(state.campaign_evidence, SleeveCampaignEvidenceResult)
+        else SleeveCampaignEvidenceResult()
+    )
+    promotion_support = (
+        state.promotion_support
+        if isinstance(state.promotion_support, SleevePromotionSupportResult)
+        else SleevePromotionSupportResult()
+    )
+    promotion_candidate = (
+        state.promotion_candidate
+        if isinstance(state.promotion_candidate, SleevePromotionCandidateResult)
+        else SleevePromotionCandidateResult()
+    )
+    decision_pack = (
+        state.decision_pack if isinstance(state.decision_pack, SleeveDecisionPackResult) else SleeveDecisionPackResult()
+    )
     if reasons:
         for item in reasons:
             if not item.code:
@@ -508,6 +725,10 @@ def _validate_sleeve_state(state: CryptoSleeveState) -> CryptoSleeveState:
         effective_allocation=effective_allocation,
         qualification=qualification,
         recommendation=recommendation,
+        campaign_evidence=campaign_evidence,
+        promotion_support=promotion_support,
+        promotion_candidate=promotion_candidate,
+        decision_pack=decision_pack,
     )
 
 
@@ -932,6 +1153,571 @@ def _apply_sleeve_recommendations(
     )
 
 
+def _campaign_report_supportive(report: CampaignReport | None) -> bool:
+    if report is None:
+        return False
+    return report.verdict in {"pass", "pass_with_warnings"}
+
+
+def _campaign_report_inconclusive(report: CampaignReport | None) -> bool:
+    return bool(report is not None and report.verdict == "inconclusive")
+
+
+def _campaign_sleeve_link(report: CampaignReport | None) -> CampaignSleeveLinkSummary:
+    link = None if report is None else getattr(report, "sleeve_link", None)
+    return link if isinstance(link, CampaignSleeveLinkSummary) else CampaignSleeveLinkSummary()
+
+
+def _build_sleeve_campaign_evidence_result(
+    sleeve: CryptoSleeveState,
+    campaign_report: CampaignReport | None,
+) -> SleeveCampaignEvidenceResult:
+    qualification = sleeve.qualification
+    recommendation = sleeve.recommendation
+    link = _campaign_sleeve_link(campaign_report)
+    campaign_available = campaign_report is not None
+    campaign_supportive = _campaign_report_supportive(campaign_report)
+    campaign_inconclusive = _campaign_report_inconclusive(campaign_report)
+    linked_in_campaign = sleeve.sleeve_id in link.configured_sleeve_ids
+    qualified_link = sleeve.sleeve_id in link.qualified_sleeve_ids
+    recommended_link = sleeve.sleeve_id in link.recommended_sleeve_ids
+    blocked_link = sleeve.sleeve_id in link.blocked_sleeve_ids
+    missing_evidence: tuple[str, ...] = ()
+    blocking_reasons = tuple(
+        dict.fromkeys(
+            (
+                *qualification.blocking_reasons,
+                *recommendation.blocking_reasons,
+                *(("blocked_in_campaign_link",) if blocked_link else ()),
+            )
+        )
+    )
+
+    if not campaign_available:
+        status = SleeveCampaignEvidenceStatus.NO_CAMPAIGN_EVIDENCE
+        missing_evidence = ("campaign_report_unavailable", "sleeve_campaign_link_unavailable")
+        reason_summary = "No finalized campaign report is available for sleeve-level evidence."
+        next_step = "Finalize a paper campaign before using this sleeve as evidence."
+    elif (
+        sleeve.status in {CryptoSleeveStatus.BLOCKED, CryptoSleeveStatus.DISABLED}
+        or qualification.status == SleeveQualificationStatus.BLOCKED
+        or recommendation.status == SleeveRecommendationStatus.BLOCKED
+        or blocked_link
+    ):
+        status = SleeveCampaignEvidenceStatus.BLOCKED_BY_GOVERNANCE
+        if not blocking_reasons:
+            blocking_reasons = ("sleeve_governance_blocked",)
+        reason_summary = (
+            qualification.reason_summary
+            or recommendation.reason_summary
+            or "Campaign evidence exists but the sleeve is blocked by current governance."
+        )
+        next_step = qualification.next_step or recommendation.next_step
+    elif not link.linkage_available:
+        status = (
+            SleeveCampaignEvidenceStatus.WEAK_CAMPAIGN_EVIDENCE
+            if campaign_supportive
+            else SleeveCampaignEvidenceStatus.INSUFFICIENT_EVIDENCE
+        )
+        missing_evidence = ("sleeve_campaign_link_unavailable",)
+        reason_summary = "Campaign evidence exists, but it does not carry explicit sleeve linkage."
+        next_step = "Carry the sleeve portfolio surface into finalized campaign artifacts."
+    elif not linked_in_campaign:
+        status = SleeveCampaignEvidenceStatus.NO_CAMPAIGN_EVIDENCE
+        missing_evidence = ("sleeve_absent_from_campaign_surface",)
+        reason_summary = "Sleeve is configured now but absent from the captured campaign sleeve surface."
+        next_step = "Run a new campaign while this sleeve is configured if operator wants sleeve evidence."
+    elif campaign_supportive and (qualified_link or recommended_link):
+        status = SleeveCampaignEvidenceStatus.CAMPAIGN_SUPPORTED
+        reason_summary = "Campaign carried this sleeve as qualified or recommended under supportive evidence."
+        next_step = "Continue paper evidence collection before any later sleeve competition review."
+    elif campaign_inconclusive:
+        status = SleeveCampaignEvidenceStatus.INSUFFICIENT_EVIDENCE
+        missing_evidence = ("campaign_verdict_inconclusive",)
+        reason_summary = "Campaign carried the sleeve, but the campaign verdict remained inconclusive."
+        next_step = "Accumulate more campaign coverage before using this sleeve as promotion support."
+    else:
+        status = SleeveCampaignEvidenceStatus.WEAK_CAMPAIGN_EVIDENCE
+        missing_evidence = ("sleeve_not_yet_supported_by_campaign",)
+        reason_summary = (
+            "Sleeve was present in campaign evidence but only as configured, not as qualified or recommended."
+            if campaign_supportive
+            else "Campaign carried the sleeve, but the campaign verdict was not supportive."
+        )
+        next_step = "Strengthen sleeve-linked campaign evidence before relying on this sleeve for promotion support."
+
+    supporting_campaign_ids = (
+        ()
+        if campaign_report is None or not (linked_in_campaign or qualified_link or recommended_link or blocked_link)
+        else (campaign_report.campaign_id,)
+    )
+    return SleeveCampaignEvidenceResult(
+        status=status,
+        campaign_evidence_available=campaign_available,
+        explicit_link_available=link.linkage_available,
+        linked_in_campaign=linked_in_campaign,
+        supporting_campaign_ids=supporting_campaign_ids,
+        missing_evidence=missing_evidence,
+        blocking_reasons=blocking_reasons,
+        reason_summary=reason_summary,
+        next_step=next_step,
+    )
+
+
+def _apply_sleeve_campaign_evidence(
+    sleeves: tuple[CryptoSleeveState, ...],
+    campaign_report: CampaignReport | None,
+) -> tuple[tuple[CryptoSleeveState, ...], tuple[CryptoSleeveState, ...]]:
+    resolved: list[CryptoSleeveState] = []
+    for sleeve in sleeves:
+        campaign_evidence = _build_sleeve_campaign_evidence_result(sleeve, campaign_report)
+        resolved.append(replace(sleeve, campaign_evidence=campaign_evidence))
+    result = tuple(resolved)
+    return result, result
+
+
+def _build_sleeve_promotion_support_result(sleeve: CryptoSleeveState) -> SleevePromotionSupportResult:
+    campaign_evidence = sleeve.campaign_evidence
+    qualification = sleeve.qualification
+    recommendation = sleeve.recommendation
+    missing_evidence = tuple(
+        dict.fromkeys(
+            (
+                *campaign_evidence.missing_evidence,
+                *qualification.missing_evidence,
+                *recommendation.missing_evidence,
+            )
+        )
+    )
+    blocking_reasons = tuple(
+        dict.fromkeys(
+            (
+                *campaign_evidence.blocking_reasons,
+                *qualification.blocking_reasons,
+                *recommendation.blocking_reasons,
+            )
+        )
+    )
+
+    if (
+        campaign_evidence.status == SleeveCampaignEvidenceStatus.BLOCKED_BY_GOVERNANCE
+        or recommendation.status
+        in {
+            SleeveRecommendationStatus.BLOCKED,
+            SleeveRecommendationStatus.DISABLED_OPERATOR_OFF,
+        }
+        or qualification.status == SleeveQualificationStatus.BLOCKED
+    ):
+        status = SleevePromotionSupportStatus.BLOCKED
+        can_be_considered_later = False
+        reason_summary = (
+            campaign_evidence.reason_summary
+            or recommendation.reason_summary
+            or qualification.reason_summary
+            or "Sleeve is blocked and cannot be considered for later promotion review."
+        )
+        next_step = qualification.next_step or recommendation.next_step or campaign_evidence.next_step
+    elif (
+        campaign_evidence.status == SleeveCampaignEvidenceStatus.CAMPAIGN_SUPPORTED
+        and qualification.status == SleeveQualificationStatus.PAPER_QUALIFIED
+        and recommendation.currently_eligible
+    ):
+        status = SleevePromotionSupportStatus.SUPPORTIVE
+        can_be_considered_later = True
+        reason_summary = "Sleeve has campaign support and remains qualified for later promotion consideration."
+        next_step = "Continue paper monitoring and keep sleeve-linked campaign evidence current."
+    elif campaign_evidence.status in {
+        SleeveCampaignEvidenceStatus.CAMPAIGN_SUPPORTED,
+        SleeveCampaignEvidenceStatus.WEAK_CAMPAIGN_EVIDENCE,
+    } and qualification.status in {
+        SleeveQualificationStatus.DEFINED_ONLY,
+        SleeveQualificationStatus.WEAK_EVIDENCE,
+        SleeveQualificationStatus.PAPER_QUALIFIED,
+    }:
+        status = SleevePromotionSupportStatus.WEAK_SUPPORT
+        can_be_considered_later = True
+        reason_summary = (
+            campaign_evidence.reason_summary or "Sleeve has some campaign support, but evidence remains thin."
+        )
+        next_step = (
+            "Strengthen sleeve-linked campaign evidence before treating this sleeve as a strong promotion candidate."
+        )
+    else:
+        status = SleevePromotionSupportStatus.INCONCLUSIVE
+        can_be_considered_later = False
+        reason_summary = (
+            campaign_evidence.reason_summary
+            or qualification.reason_summary
+            or recommendation.reason_summary
+            or "Sleeve evidence remains too thin for truthful promotion support."
+        )
+        next_step = campaign_evidence.next_step or qualification.next_step or recommendation.next_step
+
+    return SleevePromotionSupportResult(
+        status=status,
+        can_be_considered_later=can_be_considered_later,
+        campaign_evidence_status=campaign_evidence.status,
+        qualification_status=qualification.status,
+        recommendation_status=recommendation.status,
+        missing_evidence=missing_evidence,
+        blocking_reasons=blocking_reasons,
+        reason_summary=reason_summary,
+        next_step=next_step,
+    )
+
+
+def _apply_sleeve_promotion_support(
+    sleeves: tuple[CryptoSleeveState, ...],
+) -> tuple[tuple[CryptoSleeveState, ...], SleevePortfolioEvidenceSummary]:
+    resolved_sleeves: list[CryptoSleeveState] = []
+    for sleeve in sleeves:
+        promotion_support = _build_sleeve_promotion_support_result(sleeve)
+        resolved_sleeves.append(replace(sleeve, promotion_support=promotion_support))
+
+    resolved = tuple(resolved_sleeves)
+    missing_evidence = tuple(
+        dict.fromkeys(code for sleeve in resolved for code in sleeve.promotion_support.missing_evidence)
+    )
+    blocking_reasons = tuple(
+        dict.fromkeys(code for sleeve in resolved for code in sleeve.promotion_support.blocking_reasons)
+    )
+    summary = (
+        f"supported={sum(1 for sleeve in resolved if sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.CAMPAIGN_SUPPORTED)}; "
+        f"weak={sum(1 for sleeve in resolved if sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.WEAK_CAMPAIGN_EVIDENCE)}; "
+        f"no_campaign={sum(1 for sleeve in resolved if sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.NO_CAMPAIGN_EVIDENCE)}; "
+        f"blocked={sum(1 for sleeve in resolved if sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.BLOCKED_BY_GOVERNANCE)}; "
+        f"inconclusive={sum(1 for sleeve in resolved if sleeve.promotion_support.status == SleevePromotionSupportStatus.INCONCLUSIVE)}"
+    )
+    return resolved, SleevePortfolioEvidenceSummary(
+        total_sleeves=len(resolved),
+        no_campaign_evidence_sleeves=sum(
+            1
+            for sleeve in resolved
+            if sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.NO_CAMPAIGN_EVIDENCE
+        ),
+        weak_campaign_evidence_sleeves=sum(
+            1
+            for sleeve in resolved
+            if sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.WEAK_CAMPAIGN_EVIDENCE
+        ),
+        campaign_supported_sleeves=sum(
+            1
+            for sleeve in resolved
+            if sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.CAMPAIGN_SUPPORTED
+        ),
+        blocked_evidence_sleeves=sum(
+            1
+            for sleeve in resolved
+            if sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.BLOCKED_BY_GOVERNANCE
+        ),
+        inconclusive_sleeves=sum(
+            1 for sleeve in resolved if sleeve.promotion_support.status == SleevePromotionSupportStatus.INCONCLUSIVE
+        ),
+        supportive_promotion_sleeves=sum(
+            1 for sleeve in resolved if sleeve.promotion_support.status == SleevePromotionSupportStatus.SUPPORTIVE
+        ),
+        weak_support_sleeves=sum(
+            1 for sleeve in resolved if sleeve.promotion_support.status == SleevePromotionSupportStatus.WEAK_SUPPORT
+        ),
+        no_campaign_evidence_sleeve_ids=tuple(
+            sleeve.sleeve_id
+            for sleeve in resolved
+            if sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.NO_CAMPAIGN_EVIDENCE
+        ),
+        weak_campaign_evidence_sleeve_ids=tuple(
+            sleeve.sleeve_id
+            for sleeve in resolved
+            if sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.WEAK_CAMPAIGN_EVIDENCE
+        ),
+        campaign_supported_sleeve_ids=tuple(
+            sleeve.sleeve_id
+            for sleeve in resolved
+            if sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.CAMPAIGN_SUPPORTED
+        ),
+        blocked_evidence_sleeve_ids=tuple(
+            sleeve.sleeve_id
+            for sleeve in resolved
+            if sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.BLOCKED_BY_GOVERNANCE
+        ),
+        inconclusive_sleeve_ids=tuple(
+            sleeve.sleeve_id
+            for sleeve in resolved
+            if sleeve.promotion_support.status == SleevePromotionSupportStatus.INCONCLUSIVE
+        ),
+        supportive_promotion_sleeve_ids=tuple(
+            sleeve.sleeve_id
+            for sleeve in resolved
+            if sleeve.promotion_support.status == SleevePromotionSupportStatus.SUPPORTIVE
+        ),
+        weak_support_sleeve_ids=tuple(
+            sleeve.sleeve_id
+            for sleeve in resolved
+            if sleeve.promotion_support.status == SleevePromotionSupportStatus.WEAK_SUPPORT
+        ),
+        missing_evidence=missing_evidence,
+        blocking_reasons=blocking_reasons,
+        summary=summary if resolved else "No sleeve campaign evidence available.",
+    )
+
+
+def _build_sleeve_promotion_candidate_result(sleeve: CryptoSleeveState) -> SleevePromotionCandidateResult:
+    campaign_evidence = sleeve.campaign_evidence
+    qualification = sleeve.qualification
+    recommendation = sleeve.recommendation
+    promotion_support = sleeve.promotion_support
+    missing_evidence = tuple(
+        dict.fromkeys(
+            (
+                *promotion_support.missing_evidence,
+                *campaign_evidence.missing_evidence,
+                *qualification.missing_evidence,
+                *recommendation.missing_evidence,
+            )
+        )
+    )
+    blocking_reasons = tuple(
+        dict.fromkeys(
+            (
+                *promotion_support.blocking_reasons,
+                *campaign_evidence.blocking_reasons,
+                *qualification.blocking_reasons,
+                *recommendation.blocking_reasons,
+            )
+        )
+    )
+
+    if (
+        promotion_support.status == SleevePromotionSupportStatus.BLOCKED
+        or campaign_evidence.status == SleeveCampaignEvidenceStatus.BLOCKED_BY_GOVERNANCE
+        or qualification.status == SleeveQualificationStatus.BLOCKED
+        or recommendation.status
+        in {
+            SleeveRecommendationStatus.BLOCKED,
+            SleeveRecommendationStatus.DISABLED_OPERATOR_OFF,
+        }
+    ):
+        status = SleevePromotionCandidateStatus.BLOCKED
+        candidate_for_future_review = False
+        strongly_supported = False
+        reason_summary = (
+            promotion_support.reason_summary
+            or campaign_evidence.reason_summary
+            or recommendation.reason_summary
+            or qualification.reason_summary
+            or "Sleeve is blocked and cannot enter the promotion-candidate surface."
+        )
+        next_step = promotion_support.next_step or recommendation.next_step or qualification.next_step
+    elif (
+        promotion_support.status == SleevePromotionSupportStatus.SUPPORTIVE
+        and campaign_evidence.status == SleeveCampaignEvidenceStatus.CAMPAIGN_SUPPORTED
+        and qualification.status == SleeveQualificationStatus.PAPER_QUALIFIED
+        and recommendation.currently_eligible
+    ):
+        status = SleevePromotionCandidateStatus.SUPPORTED
+        candidate_for_future_review = True
+        strongly_supported = True
+        reason_summary = (
+            "Sleeve has supportive campaign evidence and remains eligible for later promotion competition review."
+        )
+        next_step = "Keep sleeve-linked campaign evidence current and continue paper monitoring."
+    elif (
+        promotion_support.can_be_considered_later
+        or promotion_support.status == SleevePromotionSupportStatus.WEAK_SUPPORT
+    ):
+        status = SleevePromotionCandidateStatus.WATCHLIST
+        candidate_for_future_review = True
+        strongly_supported = False
+        reason_summary = (
+            promotion_support.reason_summary
+            or "Sleeve can be watched as a future candidate, but current evidence remains thin."
+        )
+        next_step = (
+            "Strengthen sleeve-linked campaign evidence before treating this sleeve as a strong promotion candidate."
+        )
+    else:
+        status = SleevePromotionCandidateStatus.NOT_A_CANDIDATE
+        candidate_for_future_review = False
+        strongly_supported = False
+        reason_summary = (
+            promotion_support.reason_summary
+            or campaign_evidence.reason_summary
+            or recommendation.reason_summary
+            or "Sleeve does not yet have enough truthful evidence to appear as a promotion candidate."
+        )
+        next_step = promotion_support.next_step or campaign_evidence.next_step or recommendation.next_step
+
+    return SleevePromotionCandidateResult(
+        status=status,
+        candidate_for_future_review=candidate_for_future_review,
+        strongly_supported=strongly_supported,
+        campaign_evidence_status=campaign_evidence.status,
+        promotion_support_status=promotion_support.status,
+        qualification_status=qualification.status,
+        recommendation_status=recommendation.status,
+        missing_evidence=missing_evidence,
+        blocking_reasons=blocking_reasons,
+        reason_summary=reason_summary,
+        next_step=next_step,
+    )
+
+
+def _build_sleeve_decision_pack_result(sleeve: CryptoSleeveState) -> SleeveDecisionPackResult:
+    recommendation = sleeve.recommendation
+    qualification = sleeve.qualification
+    campaign_evidence = sleeve.campaign_evidence
+    promotion_support = sleeve.promotion_support
+    promotion_candidate = sleeve.promotion_candidate
+    missing_evidence = tuple(
+        dict.fromkeys(
+            (
+                *recommendation.missing_evidence,
+                *promotion_candidate.missing_evidence,
+            )
+        )
+    )
+    blocking_reasons = tuple(
+        dict.fromkeys(
+            (
+                *recommendation.blocking_reasons,
+                *promotion_candidate.blocking_reasons,
+            )
+        )
+    )
+
+    if recommendation.status == SleeveRecommendationStatus.RECOMMENDED_ACTIVE:
+        status = SleeveDecisionPackStatus.RECOMMENDED_ACTIVE
+        reason_summary = recommendation.reason_summary
+        next_step = recommendation.next_step
+    elif recommendation.status == SleeveRecommendationStatus.ELIGIBLE_BUT_NOT_SELECTED:
+        status = SleeveDecisionPackStatus.ELIGIBLE_BUT_NOT_SELECTED
+        reason_summary = recommendation.reason_summary
+        next_step = recommendation.next_step
+    elif promotion_candidate.status == SleevePromotionCandidateStatus.SUPPORTED:
+        status = SleeveDecisionPackStatus.SUPPORTED_CANDIDATE
+        reason_summary = promotion_candidate.reason_summary
+        next_step = promotion_candidate.next_step
+    elif promotion_candidate.status == SleevePromotionCandidateStatus.WATCHLIST:
+        status = SleeveDecisionPackStatus.WATCHLIST_CANDIDATE
+        reason_summary = promotion_candidate.reason_summary
+        next_step = promotion_candidate.next_step
+    elif promotion_candidate.status == SleevePromotionCandidateStatus.BLOCKED:
+        status = SleeveDecisionPackStatus.BLOCKED
+        reason_summary = promotion_candidate.reason_summary or recommendation.reason_summary
+        next_step = promotion_candidate.next_step or recommendation.next_step
+    else:
+        status = SleeveDecisionPackStatus.INSUFFICIENT_EVIDENCE
+        reason_summary = (
+            recommendation.reason_summary
+            or promotion_candidate.reason_summary
+            or campaign_evidence.reason_summary
+            or promotion_support.reason_summary
+        )
+        next_step = (
+            recommendation.next_step
+            or promotion_candidate.next_step
+            or campaign_evidence.next_step
+            or promotion_support.next_step
+        )
+
+    return SleeveDecisionPackResult(
+        status=status,
+        recommended_active=recommendation.recommended_active,
+        currently_eligible=recommendation.currently_eligible,
+        promotion_candidate=promotion_candidate.candidate_for_future_review,
+        strongly_supported_candidate=promotion_candidate.strongly_supported,
+        recommendation_status=recommendation.status,
+        qualification_status=qualification.status,
+        campaign_evidence_status=campaign_evidence.status,
+        promotion_support_status=promotion_support.status,
+        promotion_candidate_status=promotion_candidate.status,
+        missing_evidence=missing_evidence,
+        blocking_reasons=blocking_reasons,
+        reason_summary=reason_summary,
+        next_step=next_step,
+    )
+
+
+def _apply_sleeve_decision_pack(
+    sleeves: tuple[CryptoSleeveState, ...],
+) -> tuple[tuple[CryptoSleeveState, ...], SleevePortfolioDecisionPackSummary]:
+    resolved_sleeves: list[CryptoSleeveState] = []
+    for sleeve in sleeves:
+        promotion_candidate = _build_sleeve_promotion_candidate_result(sleeve)
+        enriched = replace(sleeve, promotion_candidate=promotion_candidate)
+        decision_pack = _build_sleeve_decision_pack_result(enriched)
+        resolved_sleeves.append(replace(enriched, decision_pack=decision_pack))
+
+    resolved = tuple(resolved_sleeves)
+    missing_evidence = tuple(
+        dict.fromkeys(code for sleeve in resolved for code in sleeve.decision_pack.missing_evidence)
+    )
+    blocking_reasons = tuple(
+        dict.fromkeys(code for sleeve in resolved for code in sleeve.decision_pack.blocking_reasons)
+    )
+    summary = (
+        f"recommended={sum(1 for sleeve in resolved if sleeve.decision_pack.status == SleeveDecisionPackStatus.RECOMMENDED_ACTIVE)}; "
+        f"eligible={sum(1 for sleeve in resolved if sleeve.decision_pack.status == SleeveDecisionPackStatus.ELIGIBLE_BUT_NOT_SELECTED)}; "
+        f"supported_candidates={sum(1 for sleeve in resolved if sleeve.promotion_candidate.status == SleevePromotionCandidateStatus.SUPPORTED)}; "
+        f"watchlist={sum(1 for sleeve in resolved if sleeve.promotion_candidate.status == SleevePromotionCandidateStatus.WATCHLIST)}; "
+        f"blocked={sum(1 for sleeve in resolved if sleeve.decision_pack.status == SleeveDecisionPackStatus.BLOCKED)}; "
+        f"insufficient={sum(1 for sleeve in resolved if sleeve.decision_pack.status == SleeveDecisionPackStatus.INSUFFICIENT_EVIDENCE)}"
+    )
+    return resolved, SleevePortfolioDecisionPackSummary(
+        total_sleeves=len(resolved),
+        recommended_active_sleeves=sum(
+            1 for sleeve in resolved if sleeve.decision_pack.status == SleeveDecisionPackStatus.RECOMMENDED_ACTIVE
+        ),
+        eligible_but_not_selected_sleeves=sum(
+            1
+            for sleeve in resolved
+            if sleeve.decision_pack.status == SleeveDecisionPackStatus.ELIGIBLE_BUT_NOT_SELECTED
+        ),
+        supported_candidate_sleeves=sum(
+            1 for sleeve in resolved if sleeve.promotion_candidate.status == SleevePromotionCandidateStatus.SUPPORTED
+        ),
+        watchlist_candidate_sleeves=sum(
+            1 for sleeve in resolved if sleeve.promotion_candidate.status == SleevePromotionCandidateStatus.WATCHLIST
+        ),
+        blocked_sleeves=sum(
+            1 for sleeve in resolved if sleeve.decision_pack.status == SleeveDecisionPackStatus.BLOCKED
+        ),
+        insufficient_evidence_sleeves=sum(
+            1 for sleeve in resolved if sleeve.decision_pack.status == SleeveDecisionPackStatus.INSUFFICIENT_EVIDENCE
+        ),
+        recommended_sleeve_ids=tuple(
+            sleeve.sleeve_id
+            for sleeve in resolved
+            if sleeve.decision_pack.status == SleeveDecisionPackStatus.RECOMMENDED_ACTIVE
+        ),
+        eligible_sleeve_ids=tuple(
+            sleeve.sleeve_id
+            for sleeve in resolved
+            if sleeve.decision_pack.status == SleeveDecisionPackStatus.ELIGIBLE_BUT_NOT_SELECTED
+        ),
+        supported_candidate_sleeve_ids=tuple(
+            sleeve.sleeve_id
+            for sleeve in resolved
+            if sleeve.promotion_candidate.status == SleevePromotionCandidateStatus.SUPPORTED
+        ),
+        watchlist_candidate_sleeve_ids=tuple(
+            sleeve.sleeve_id
+            for sleeve in resolved
+            if sleeve.promotion_candidate.status == SleevePromotionCandidateStatus.WATCHLIST
+        ),
+        blocked_sleeve_ids=tuple(
+            sleeve.sleeve_id for sleeve in resolved if sleeve.decision_pack.status == SleeveDecisionPackStatus.BLOCKED
+        ),
+        insufficient_evidence_sleeve_ids=tuple(
+            sleeve.sleeve_id
+            for sleeve in resolved
+            if sleeve.decision_pack.status == SleeveDecisionPackStatus.INSUFFICIENT_EVIDENCE
+        ),
+        missing_evidence=missing_evidence,
+        blocking_reasons=blocking_reasons,
+        summary=summary if resolved else "No sleeve decision pack available.",
+    )
+
+
 def _compute_effective_allocation(
     sleeves: tuple[CryptoSleeveState, ...],
     allocation: SleeveAllocationSummary,
@@ -979,6 +1765,7 @@ def build_sleeve_portfolio_snapshot(
     *,
     sleeves: tuple[CryptoSleeveState, ...] = (),
     as_of_ns: int,
+    campaign_report: CampaignReport | None = None,
     readiness_level: str | None = None,
     readiness_is_supportive: bool = False,
     escalation_allowed_next_step: str | None = None,
@@ -1059,8 +1846,16 @@ def build_sleeve_portfolio_snapshot(
         external_regime_execution_blocked=external_regime_execution_blocked,
     )
     recommended_sleeves, decision = _apply_sleeve_recommendations(qualified_sleeves, effective_allocation)
+    if campaign_report is None and any(
+        sleeve.campaign_evidence != SleeveCampaignEvidenceResult() for sleeve in recommended_sleeves
+    ):
+        campaign_evidenced_sleeves = recommended_sleeves
+    else:
+        campaign_evidenced_sleeves, _ = _apply_sleeve_campaign_evidence(recommended_sleeves, campaign_report)
+    supported_sleeves, evidence = _apply_sleeve_promotion_support(campaign_evidenced_sleeves)
+    decision_packed_sleeves, decision_pack = _apply_sleeve_decision_pack(supported_sleeves)
 
-    if not recommended_sleeves:
+    if not decision_packed_sleeves:
         summary = "No explicit sleeves configured; sleeve-level capital remains fully unallocated."
     else:
         summary = (
@@ -1072,15 +1867,24 @@ def build_sleeve_portfolio_snapshot(
             summary += f"; effective_allocated_share={effective_allocation.effective_allocated_share:.3f}"
         summary += f"; qualified={qualification.paper_qualified_sleeves}; insufficient={qualification.insufficient_evidence_sleeves}"
         summary += f"; recommended={decision.recommended_active_sleeves}; eligible={decision.eligible_but_not_selected_sleeves}"
+        summary += (
+            f"; campaign_supported={evidence.campaign_supported_sleeves}; weak_support={evidence.weak_support_sleeves}"
+        )
+        summary += (
+            f"; supported_candidates={decision_pack.supported_candidate_sleeves}; "
+            f"watchlist={decision_pack.watchlist_candidate_sleeves}"
+        )
 
     return SleevePortfolioSnapshot(
         as_of_ns=as_of_ns,
-        sleeves=recommended_sleeves,
+        sleeves=decision_packed_sleeves,
         allocation=allocation,
         allocation_policy=resolved_policy,
         effective_allocation=effective_allocation,
         qualification=qualification,
         decision=decision,
+        evidence=evidence,
+        decision_pack=decision_pack,
         enabled_sleeve_ids=enabled_ids,
         blocked_sleeve_ids=blocked_ids,
         allocated_sleeve_ids=allocated_ids,
@@ -1141,6 +1945,10 @@ def crypto_sleeve_state_to_dict(state: CryptoSleeveState) -> dict:
         "effective_allocation": state.effective_allocation,
         "qualification": sleeve_qualification_result_to_dict(state.qualification),
         "recommendation": sleeve_recommendation_result_to_dict(state.recommendation),
+        "campaign_evidence": sleeve_campaign_evidence_result_to_dict(state.campaign_evidence),
+        "promotion_support": sleeve_promotion_support_result_to_dict(state.promotion_support),
+        "promotion_candidate": sleeve_promotion_candidate_result_to_dict(state.promotion_candidate),
+        "decision_pack": sleeve_decision_pack_result_to_dict(state.decision_pack),
     }
 
 
@@ -1174,6 +1982,26 @@ def crypto_sleeve_state_from_dict(data: dict) -> CryptoSleeveState:
                 SleeveRecommendationResult()
                 if data.get("recommendation") is None
                 else sleeve_recommendation_result_from_dict(dict(data.get("recommendation")))
+            ),
+            campaign_evidence=(
+                SleeveCampaignEvidenceResult()
+                if data.get("campaign_evidence") is None
+                else sleeve_campaign_evidence_result_from_dict(dict(data.get("campaign_evidence")))
+            ),
+            promotion_support=(
+                SleevePromotionSupportResult()
+                if data.get("promotion_support") is None
+                else sleeve_promotion_support_result_from_dict(dict(data.get("promotion_support")))
+            ),
+            promotion_candidate=(
+                SleevePromotionCandidateResult()
+                if data.get("promotion_candidate") is None
+                else sleeve_promotion_candidate_result_from_dict(dict(data.get("promotion_candidate")))
+            ),
+            decision_pack=(
+                SleeveDecisionPackResult()
+                if data.get("decision_pack") is None
+                else sleeve_decision_pack_result_from_dict(dict(data.get("decision_pack")))
             ),
         )
     except SleevePortfolioValidationError as exc:
@@ -1432,6 +2260,252 @@ def sleeve_recommendation_result_from_dict(data: dict) -> SleeveRecommendationRe
     )
 
 
+def sleeve_campaign_evidence_result_to_dict(result: SleeveCampaignEvidenceResult) -> dict:
+    """Serialize SleeveCampaignEvidenceResult to a plain dict."""
+    return {
+        "status": result.status.value,
+        "campaign_evidence_available": result.campaign_evidence_available,
+        "explicit_link_available": result.explicit_link_available,
+        "linked_in_campaign": result.linked_in_campaign,
+        "supporting_campaign_ids": list(result.supporting_campaign_ids),
+        "missing_evidence": list(result.missing_evidence),
+        "blocking_reasons": list(result.blocking_reasons),
+        "reason_summary": result.reason_summary,
+        "next_step": result.next_step,
+    }
+
+
+def sleeve_campaign_evidence_result_from_dict(data: dict) -> SleeveCampaignEvidenceResult:
+    """Deserialize SleeveCampaignEvidenceResult from a plain dict."""
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Sleeve campaign evidence payload must be a dict, got {type(data).__name__!r}"
+        )
+    return SleeveCampaignEvidenceResult(
+        status=SleeveCampaignEvidenceStatus(_require_non_empty_str(data.get("status"), "status")),
+        campaign_evidence_available=_require_bool(
+            data.get("campaign_evidence_available", False), "campaign_evidence_available"
+        ),
+        explicit_link_available=_require_bool(data.get("explicit_link_available", False), "explicit_link_available"),
+        linked_in_campaign=_require_bool(data.get("linked_in_campaign", False), "linked_in_campaign"),
+        supporting_campaign_ids=_tuple_of_strings(data.get("supporting_campaign_ids", ()), "supporting_campaign_ids"),
+        missing_evidence=_tuple_of_strings(data.get("missing_evidence", ()), "missing_evidence"),
+        blocking_reasons=_tuple_of_strings(data.get("blocking_reasons", ()), "blocking_reasons"),
+        reason_summary="" if data.get("reason_summary", "") is None else str(data.get("reason_summary", "")),
+        next_step=_require_non_empty_str(data.get("next_step"), "next_step"),
+    )
+
+
+def sleeve_promotion_support_result_to_dict(result: SleevePromotionSupportResult) -> dict:
+    """Serialize SleevePromotionSupportResult to a plain dict."""
+    return {
+        "status": result.status.value,
+        "can_be_considered_later": result.can_be_considered_later,
+        "campaign_evidence_status": result.campaign_evidence_status.value,
+        "qualification_status": result.qualification_status.value,
+        "recommendation_status": result.recommendation_status.value,
+        "missing_evidence": list(result.missing_evidence),
+        "blocking_reasons": list(result.blocking_reasons),
+        "reason_summary": result.reason_summary,
+        "next_step": result.next_step,
+    }
+
+
+def sleeve_promotion_support_result_from_dict(data: dict) -> SleevePromotionSupportResult:
+    """Deserialize SleevePromotionSupportResult from a plain dict."""
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Sleeve promotion support payload must be a dict, got {type(data).__name__!r}"
+        )
+    return SleevePromotionSupportResult(
+        status=SleevePromotionSupportStatus(_require_non_empty_str(data.get("status"), "status")),
+        can_be_considered_later=_require_bool(data.get("can_be_considered_later", False), "can_be_considered_later"),
+        campaign_evidence_status=SleeveCampaignEvidenceStatus(
+            _require_non_empty_str(data.get("campaign_evidence_status"), "campaign_evidence_status")
+        ),
+        qualification_status=SleeveQualificationStatus(
+            _require_non_empty_str(data.get("qualification_status"), "qualification_status")
+        ),
+        recommendation_status=SleeveRecommendationStatus(
+            _require_non_empty_str(data.get("recommendation_status"), "recommendation_status")
+        ),
+        missing_evidence=_tuple_of_strings(data.get("missing_evidence", ()), "missing_evidence"),
+        blocking_reasons=_tuple_of_strings(data.get("blocking_reasons", ()), "blocking_reasons"),
+        reason_summary="" if data.get("reason_summary", "") is None else str(data.get("reason_summary", "")),
+        next_step=_require_non_empty_str(data.get("next_step"), "next_step"),
+    )
+
+
+def sleeve_promotion_candidate_result_to_dict(result: SleevePromotionCandidateResult) -> dict:
+    """Serialize SleevePromotionCandidateResult to a plain dict."""
+    return {
+        "status": result.status.value,
+        "candidate_for_future_review": result.candidate_for_future_review,
+        "strongly_supported": result.strongly_supported,
+        "campaign_evidence_status": result.campaign_evidence_status.value,
+        "promotion_support_status": result.promotion_support_status.value,
+        "qualification_status": result.qualification_status.value,
+        "recommendation_status": result.recommendation_status.value,
+        "missing_evidence": list(result.missing_evidence),
+        "blocking_reasons": list(result.blocking_reasons),
+        "reason_summary": result.reason_summary,
+        "next_step": result.next_step,
+    }
+
+
+def sleeve_promotion_candidate_result_from_dict(data: dict) -> SleevePromotionCandidateResult:
+    """Deserialize SleevePromotionCandidateResult from a plain dict."""
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Sleeve promotion candidate payload must be a dict, got {type(data).__name__!r}"
+        )
+    return SleevePromotionCandidateResult(
+        status=SleevePromotionCandidateStatus(_require_non_empty_str(data.get("status"), "status")),
+        candidate_for_future_review=_require_bool(
+            data.get("candidate_for_future_review", False), "candidate_for_future_review"
+        ),
+        strongly_supported=_require_bool(data.get("strongly_supported", False), "strongly_supported"),
+        campaign_evidence_status=SleeveCampaignEvidenceStatus(
+            _require_non_empty_str(data.get("campaign_evidence_status"), "campaign_evidence_status")
+        ),
+        promotion_support_status=SleevePromotionSupportStatus(
+            _require_non_empty_str(data.get("promotion_support_status"), "promotion_support_status")
+        ),
+        qualification_status=SleeveQualificationStatus(
+            _require_non_empty_str(data.get("qualification_status"), "qualification_status")
+        ),
+        recommendation_status=SleeveRecommendationStatus(
+            _require_non_empty_str(data.get("recommendation_status"), "recommendation_status")
+        ),
+        missing_evidence=_tuple_of_strings(data.get("missing_evidence", ()), "missing_evidence"),
+        blocking_reasons=_tuple_of_strings(data.get("blocking_reasons", ()), "blocking_reasons"),
+        reason_summary="" if data.get("reason_summary", "") is None else str(data.get("reason_summary", "")),
+        next_step=_require_non_empty_str(data.get("next_step"), "next_step"),
+    )
+
+
+def sleeve_decision_pack_result_to_dict(result: SleeveDecisionPackResult) -> dict:
+    """Serialize SleeveDecisionPackResult to a plain dict."""
+    return {
+        "status": result.status.value,
+        "recommended_active": result.recommended_active,
+        "currently_eligible": result.currently_eligible,
+        "promotion_candidate": result.promotion_candidate,
+        "strongly_supported_candidate": result.strongly_supported_candidate,
+        "recommendation_status": result.recommendation_status.value,
+        "qualification_status": result.qualification_status.value,
+        "campaign_evidence_status": result.campaign_evidence_status.value,
+        "promotion_support_status": result.promotion_support_status.value,
+        "promotion_candidate_status": result.promotion_candidate_status.value,
+        "missing_evidence": list(result.missing_evidence),
+        "blocking_reasons": list(result.blocking_reasons),
+        "reason_summary": result.reason_summary,
+        "next_step": result.next_step,
+    }
+
+
+def sleeve_decision_pack_result_from_dict(data: dict) -> SleeveDecisionPackResult:
+    """Deserialize SleeveDecisionPackResult from a plain dict."""
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(f"Sleeve decision pack payload must be a dict, got {type(data).__name__!r}")
+    return SleeveDecisionPackResult(
+        status=SleeveDecisionPackStatus(_require_non_empty_str(data.get("status"), "status")),
+        recommended_active=_require_bool(data.get("recommended_active", False), "recommended_active"),
+        currently_eligible=_require_bool(data.get("currently_eligible", False), "currently_eligible"),
+        promotion_candidate=_require_bool(data.get("promotion_candidate", False), "promotion_candidate"),
+        strongly_supported_candidate=_require_bool(
+            data.get("strongly_supported_candidate", False), "strongly_supported_candidate"
+        ),
+        recommendation_status=SleeveRecommendationStatus(
+            _require_non_empty_str(data.get("recommendation_status"), "recommendation_status")
+        ),
+        qualification_status=SleeveQualificationStatus(
+            _require_non_empty_str(data.get("qualification_status"), "qualification_status")
+        ),
+        campaign_evidence_status=SleeveCampaignEvidenceStatus(
+            _require_non_empty_str(data.get("campaign_evidence_status"), "campaign_evidence_status")
+        ),
+        promotion_support_status=SleevePromotionSupportStatus(
+            _require_non_empty_str(data.get("promotion_support_status"), "promotion_support_status")
+        ),
+        promotion_candidate_status=SleevePromotionCandidateStatus(
+            _require_non_empty_str(data.get("promotion_candidate_status"), "promotion_candidate_status")
+        ),
+        missing_evidence=_tuple_of_strings(data.get("missing_evidence", ()), "missing_evidence"),
+        blocking_reasons=_tuple_of_strings(data.get("blocking_reasons", ()), "blocking_reasons"),
+        reason_summary="" if data.get("reason_summary", "") is None else str(data.get("reason_summary", "")),
+        next_step=_require_non_empty_str(data.get("next_step"), "next_step"),
+    )
+
+
+def sleeve_portfolio_evidence_summary_to_dict(summary: SleevePortfolioEvidenceSummary) -> dict:
+    """Serialize SleevePortfolioEvidenceSummary to a plain dict."""
+    return {
+        "total_sleeves": summary.total_sleeves,
+        "no_campaign_evidence_sleeves": summary.no_campaign_evidence_sleeves,
+        "weak_campaign_evidence_sleeves": summary.weak_campaign_evidence_sleeves,
+        "campaign_supported_sleeves": summary.campaign_supported_sleeves,
+        "blocked_evidence_sleeves": summary.blocked_evidence_sleeves,
+        "inconclusive_sleeves": summary.inconclusive_sleeves,
+        "supportive_promotion_sleeves": summary.supportive_promotion_sleeves,
+        "weak_support_sleeves": summary.weak_support_sleeves,
+        "no_campaign_evidence_sleeve_ids": list(summary.no_campaign_evidence_sleeve_ids),
+        "weak_campaign_evidence_sleeve_ids": list(summary.weak_campaign_evidence_sleeve_ids),
+        "campaign_supported_sleeve_ids": list(summary.campaign_supported_sleeve_ids),
+        "blocked_evidence_sleeve_ids": list(summary.blocked_evidence_sleeve_ids),
+        "inconclusive_sleeve_ids": list(summary.inconclusive_sleeve_ids),
+        "supportive_promotion_sleeve_ids": list(summary.supportive_promotion_sleeve_ids),
+        "weak_support_sleeve_ids": list(summary.weak_support_sleeve_ids),
+        "missing_evidence": list(summary.missing_evidence),
+        "blocking_reasons": list(summary.blocking_reasons),
+        "summary": summary.summary,
+    }
+
+
+def sleeve_portfolio_evidence_summary_from_dict(data: dict) -> SleevePortfolioEvidenceSummary:
+    """Deserialize SleevePortfolioEvidenceSummary from a plain dict."""
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Sleeve portfolio evidence payload must be a dict, got {type(data).__name__!r}"
+        )
+    return SleevePortfolioEvidenceSummary(
+        total_sleeves=_require_int(data.get("total_sleeves"), "total_sleeves"),
+        no_campaign_evidence_sleeves=_require_int(
+            data.get("no_campaign_evidence_sleeves"), "no_campaign_evidence_sleeves"
+        ),
+        weak_campaign_evidence_sleeves=_require_int(
+            data.get("weak_campaign_evidence_sleeves"), "weak_campaign_evidence_sleeves"
+        ),
+        campaign_supported_sleeves=_require_int(data.get("campaign_supported_sleeves"), "campaign_supported_sleeves"),
+        blocked_evidence_sleeves=_require_int(data.get("blocked_evidence_sleeves"), "blocked_evidence_sleeves"),
+        inconclusive_sleeves=_require_int(data.get("inconclusive_sleeves"), "inconclusive_sleeves"),
+        supportive_promotion_sleeves=_require_int(
+            data.get("supportive_promotion_sleeves"), "supportive_promotion_sleeves"
+        ),
+        weak_support_sleeves=_require_int(data.get("weak_support_sleeves"), "weak_support_sleeves"),
+        no_campaign_evidence_sleeve_ids=_tuple_of_strings(
+            data.get("no_campaign_evidence_sleeve_ids", ()), "no_campaign_evidence_sleeve_ids"
+        ),
+        weak_campaign_evidence_sleeve_ids=_tuple_of_strings(
+            data.get("weak_campaign_evidence_sleeve_ids", ()), "weak_campaign_evidence_sleeve_ids"
+        ),
+        campaign_supported_sleeve_ids=_tuple_of_strings(
+            data.get("campaign_supported_sleeve_ids", ()), "campaign_supported_sleeve_ids"
+        ),
+        blocked_evidence_sleeve_ids=_tuple_of_strings(
+            data.get("blocked_evidence_sleeve_ids", ()), "blocked_evidence_sleeve_ids"
+        ),
+        inconclusive_sleeve_ids=_tuple_of_strings(data.get("inconclusive_sleeve_ids", ()), "inconclusive_sleeve_ids"),
+        supportive_promotion_sleeve_ids=_tuple_of_strings(
+            data.get("supportive_promotion_sleeve_ids", ()), "supportive_promotion_sleeve_ids"
+        ),
+        weak_support_sleeve_ids=_tuple_of_strings(data.get("weak_support_sleeve_ids", ()), "weak_support_sleeve_ids"),
+        missing_evidence=_tuple_of_strings(data.get("missing_evidence", ()), "missing_evidence"),
+        blocking_reasons=_tuple_of_strings(data.get("blocking_reasons", ()), "blocking_reasons"),
+        summary="" if data.get("summary", "") is None else str(data.get("summary", "")),
+    )
+
+
 def sleeve_portfolio_decision_summary_to_dict(summary: SleevePortfolioDecisionSummary) -> dict:
     """Serialize SleevePortfolioDecisionSummary to a plain dict."""
     return {
@@ -1494,6 +2568,68 @@ def sleeve_portfolio_decision_summary_from_dict(data: dict) -> SleevePortfolioDe
     )
 
 
+def sleeve_portfolio_decision_pack_summary_to_dict(summary: SleevePortfolioDecisionPackSummary) -> dict:
+    """Serialize SleevePortfolioDecisionPackSummary to a plain dict."""
+    return {
+        "total_sleeves": summary.total_sleeves,
+        "recommended_active_sleeves": summary.recommended_active_sleeves,
+        "eligible_but_not_selected_sleeves": summary.eligible_but_not_selected_sleeves,
+        "supported_candidate_sleeves": summary.supported_candidate_sleeves,
+        "watchlist_candidate_sleeves": summary.watchlist_candidate_sleeves,
+        "blocked_sleeves": summary.blocked_sleeves,
+        "insufficient_evidence_sleeves": summary.insufficient_evidence_sleeves,
+        "recommended_sleeve_ids": list(summary.recommended_sleeve_ids),
+        "eligible_sleeve_ids": list(summary.eligible_sleeve_ids),
+        "supported_candidate_sleeve_ids": list(summary.supported_candidate_sleeve_ids),
+        "watchlist_candidate_sleeve_ids": list(summary.watchlist_candidate_sleeve_ids),
+        "blocked_sleeve_ids": list(summary.blocked_sleeve_ids),
+        "insufficient_evidence_sleeve_ids": list(summary.insufficient_evidence_sleeve_ids),
+        "missing_evidence": list(summary.missing_evidence),
+        "blocking_reasons": list(summary.blocking_reasons),
+        "summary": summary.summary,
+    }
+
+
+def sleeve_portfolio_decision_pack_summary_from_dict(data: dict) -> SleevePortfolioDecisionPackSummary:
+    """Deserialize SleevePortfolioDecisionPackSummary from a plain dict."""
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Sleeve portfolio decision pack payload must be a dict, got {type(data).__name__!r}"
+        )
+    return SleevePortfolioDecisionPackSummary(
+        total_sleeves=_require_int(data.get("total_sleeves"), "total_sleeves"),
+        recommended_active_sleeves=_require_int(data.get("recommended_active_sleeves"), "recommended_active_sleeves"),
+        eligible_but_not_selected_sleeves=_require_int(
+            data.get("eligible_but_not_selected_sleeves"), "eligible_but_not_selected_sleeves"
+        ),
+        supported_candidate_sleeves=_require_int(
+            data.get("supported_candidate_sleeves"), "supported_candidate_sleeves"
+        ),
+        watchlist_candidate_sleeves=_require_int(
+            data.get("watchlist_candidate_sleeves"), "watchlist_candidate_sleeves"
+        ),
+        blocked_sleeves=_require_int(data.get("blocked_sleeves"), "blocked_sleeves"),
+        insufficient_evidence_sleeves=_require_int(
+            data.get("insufficient_evidence_sleeves"), "insufficient_evidence_sleeves"
+        ),
+        recommended_sleeve_ids=_tuple_of_strings(data.get("recommended_sleeve_ids", ()), "recommended_sleeve_ids"),
+        eligible_sleeve_ids=_tuple_of_strings(data.get("eligible_sleeve_ids", ()), "eligible_sleeve_ids"),
+        supported_candidate_sleeve_ids=_tuple_of_strings(
+            data.get("supported_candidate_sleeve_ids", ()), "supported_candidate_sleeve_ids"
+        ),
+        watchlist_candidate_sleeve_ids=_tuple_of_strings(
+            data.get("watchlist_candidate_sleeve_ids", ()), "watchlist_candidate_sleeve_ids"
+        ),
+        blocked_sleeve_ids=_tuple_of_strings(data.get("blocked_sleeve_ids", ()), "blocked_sleeve_ids"),
+        insufficient_evidence_sleeve_ids=_tuple_of_strings(
+            data.get("insufficient_evidence_sleeve_ids", ()), "insufficient_evidence_sleeve_ids"
+        ),
+        missing_evidence=_tuple_of_strings(data.get("missing_evidence", ()), "missing_evidence"),
+        blocking_reasons=_tuple_of_strings(data.get("blocking_reasons", ()), "blocking_reasons"),
+        summary="" if data.get("summary", "") is None else str(data.get("summary", "")),
+    )
+
+
 def sleeve_allocation_summary_from_dict(data: dict) -> SleeveAllocationSummary:
     """Deserialize SleeveAllocationSummary from a plain dict."""
     if not isinstance(data, dict):
@@ -1536,6 +2672,8 @@ def sleeve_portfolio_snapshot_to_dict(snapshot: SleevePortfolioSnapshot) -> dict
         "effective_allocation": sleeve_effective_allocation_summary_to_dict(snapshot.effective_allocation),
         "qualification": sleeve_qualification_summary_to_dict(snapshot.qualification),
         "decision": sleeve_portfolio_decision_summary_to_dict(snapshot.decision),
+        "evidence": sleeve_portfolio_evidence_summary_to_dict(snapshot.evidence),
+        "decision_pack": sleeve_portfolio_decision_pack_summary_to_dict(snapshot.decision_pack),
         "enabled_sleeve_ids": list(snapshot.enabled_sleeve_ids),
         "blocked_sleeve_ids": list(snapshot.blocked_sleeve_ids),
         "allocated_sleeve_ids": list(snapshot.allocated_sleeve_ids),
@@ -1615,6 +2753,20 @@ def sleeve_portfolio_snapshot_from_dict(data: dict) -> SleevePortfolioSnapshot:
             raise SleevePortfolioCorruptError(
                 "Sleeve portfolio decision summary does not match recommendation recompute"
             )
+
+    evidence_value = data.get("evidence")
+    if evidence_value is not None:
+        restored_evidence = sleeve_portfolio_evidence_summary_from_dict(evidence_value)
+        if restored_evidence != snapshot.evidence:
+            raise SleevePortfolioCorruptError(
+                "Sleeve portfolio evidence summary does not match campaign evidence recompute"
+            )
+
+    decision_pack_value = data.get("decision_pack")
+    if decision_pack_value is not None:
+        restored_decision_pack = sleeve_portfolio_decision_pack_summary_from_dict(decision_pack_value)
+        if restored_decision_pack != snapshot.decision_pack:
+            raise SleevePortfolioCorruptError("Sleeve portfolio decision pack does not match candidate recompute")
 
     enabled_ids = _tuple_of_strings(data.get("enabled_sleeve_ids", ()), "enabled_sleeve_ids")
     blocked_ids = _tuple_of_strings(data.get("blocked_sleeve_ids", ()), "blocked_sleeve_ids")
