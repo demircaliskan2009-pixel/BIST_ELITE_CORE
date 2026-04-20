@@ -55,6 +55,7 @@ from crypto_core.service.artifact_export import (
 from crypto_core.service.campaign import (
     CampaignConfig,
     CampaignReport,
+    CampaignSleeveLinkSummary,
     CampaignSnapshot,
 )
 from crypto_core.service.campaign_controller import (
@@ -97,15 +98,28 @@ from crypto_core.service.promotion_review_controller import (
     ReviewWorkflowCorruptError,
 )
 from crypto_core.service.readiness import ReadinessEvaluator, readiness_to_dict
+from crypto_core.service.sleeve_candidate_workflow import (
+    SleeveCandidateWorkflowController,
+    SleeveCandidateWorkflowCorruptError,
+    SleeveCandidateWorkflowSnapshot,
+    SleeveCandidateWorkflowStatus,
+    sleeve_candidate_workflow_snapshot_to_dict,
+)
 from crypto_core.service.sleeve_portfolio import (
     CryptoSleeveState,
     SleeveAllocationPolicy,
     SleevePortfolioSnapshot,
     build_sleeve_portfolio_snapshot,
     sleeve_allocation_policy_to_dict,
+    sleeve_campaign_evidence_result_to_dict,
+    sleeve_decision_pack_result_to_dict,
     sleeve_effective_allocation_summary_to_dict,
+    sleeve_portfolio_decision_pack_summary_to_dict,
     sleeve_portfolio_decision_summary_to_dict,
+    sleeve_portfolio_evidence_summary_to_dict,
     sleeve_portfolio_snapshot_to_dict,
+    sleeve_promotion_candidate_result_to_dict,
+    sleeve_promotion_support_result_to_dict,
     sleeve_qualification_result_to_dict,
     sleeve_qualification_summary_to_dict,
     sleeve_recommendation_result_to_dict,
@@ -171,6 +185,27 @@ class EscalationWorkflowState:
     previous_allowed_next_step: str | None
     history_length: int
     repeatedly_stuck: bool
+    finalized: bool
+
+
+@dataclass(frozen=True)
+class SleeveCandidateWorkflowState:
+    """Sleeve candidate workflow state summary for operator surfaces."""
+
+    active: bool
+    workflow_id: str | None
+    status: str
+    candidate_sleeves: int
+    supported_candidate_sleeves: int
+    weak_candidate_sleeves: int
+    blocked_candidate_sleeves: int
+    inconclusive_candidate_sleeves: int
+    progression_state: str
+    previous_as_of_ns: int | None
+    history_length: int
+    repeatedly_weak: bool
+    repeatedly_blocked: bool
+    repeatedly_inconclusive: bool
     finalized: bool
 
 
@@ -257,6 +292,7 @@ class OperatorSnapshot:
     external_regime_safety: ExternalRegimeSafetyState | None = None
     external_regime_scenario: ExternalRegimeScenarioResult | None = None
     sleeve_portfolio: SleevePortfolioSnapshot | None = None
+    sleeve_candidate_workflow: SleeveCandidateWorkflowState | None = None
 
     # Escalation review workflow (Phase 13B)
     escalation_review: EscalationWorkflowState | None = None
@@ -345,6 +381,7 @@ class ServiceOrchestrator:
             SleeveAllocationPolicy() if sleeve_allocation_policy is None else sleeve_allocation_policy
         )
         self._sleeve_portfolio_controller: SleevePortfolioController | None = None
+        self._sleeve_candidate_workflow_controller: SleeveCandidateWorkflowController | None = None
 
     # ------------------------------------------------------------------
     # Properties
@@ -369,6 +406,11 @@ class ServiceOrchestrator:
     def escalation_review_controller(self) -> EscalationReviewController | None:
         """Active EscalationReviewController, or None."""
         return self._escalation_review
+
+    @property
+    def sleeve_candidate_workflow_controller(self) -> SleeveCandidateWorkflowController | None:
+        """Active sleeve candidate workflow controller, or None."""
+        return self._sleeve_candidate_workflow_controller
 
     @property
     def external_regime_plane(self) -> ExternalRegimeDataPlane | None:
@@ -487,6 +529,45 @@ class ServiceOrchestrator:
             sleeve.sleeve_id: sleeve_recommendation_result_to_dict(sleeve.recommendation) for sleeve in snapshot.sleeves
         }
 
+    def sleeve_campaign_evidence_result_dict(self) -> dict:
+        """Serialize per-sleeve campaign evidence results keyed by sleeve id."""
+        snapshot = self.sleeve_portfolio_snapshot()
+        return {
+            sleeve.sleeve_id: sleeve_campaign_evidence_result_to_dict(sleeve.campaign_evidence)
+            for sleeve in snapshot.sleeves
+        }
+
+    def sleeve_promotion_support_result_dict(self) -> dict:
+        """Serialize per-sleeve promotion-support results keyed by sleeve id."""
+        snapshot = self.sleeve_portfolio_snapshot()
+        return {
+            sleeve.sleeve_id: sleeve_promotion_support_result_to_dict(sleeve.promotion_support)
+            for sleeve in snapshot.sleeves
+        }
+
+    def sleeve_portfolio_evidence_dict(self) -> dict:
+        """Serialize the portfolio-wide sleeve evidence summary to a plain dict."""
+        return sleeve_portfolio_evidence_summary_to_dict(self.sleeve_portfolio_snapshot().evidence)
+
+    def sleeve_decision_pack_result_dict(self) -> dict:
+        """Serialize per-sleeve decision-pack results keyed by sleeve id."""
+        snapshot = self.sleeve_portfolio_snapshot()
+        return {
+            sleeve.sleeve_id: sleeve_decision_pack_result_to_dict(sleeve.decision_pack) for sleeve in snapshot.sleeves
+        }
+
+    def sleeve_promotion_candidate_result_dict(self) -> dict:
+        """Serialize per-sleeve promotion-candidate results keyed by sleeve id."""
+        snapshot = self.sleeve_portfolio_snapshot()
+        return {
+            sleeve.sleeve_id: sleeve_promotion_candidate_result_to_dict(sleeve.promotion_candidate)
+            for sleeve in snapshot.sleeves
+        }
+
+    def sleeve_portfolio_decision_pack_dict(self) -> dict:
+        """Serialize the portfolio-wide sleeve decision pack to a plain dict."""
+        return sleeve_portfolio_decision_pack_summary_to_dict(self.sleeve_portfolio_snapshot().decision_pack)
+
     def export_sleeve_portfolio(self):
         """Persist the current crypto sleeve portfolio snapshot via EvidenceStore."""
         if self._evidence_store is None:
@@ -517,6 +598,94 @@ class ServiceOrchestrator:
         self._configured_sleeves = controller.defined_sleeves
         self._sleeve_allocation_policy = controller.allocation_policy
         return self.sleeve_portfolio_snapshot()
+
+    def start_sleeve_candidate_workflow(self, *, workflow_id: str | None = None) -> str:
+        """Start an explicit sleeve candidate workflow inspection cycle."""
+        return self._ensure_sleeve_candidate_workflow_controller().start(workflow_id=workflow_id)
+
+    def inspect_sleeve_candidate_workflow(self) -> SleeveCandidateWorkflowSnapshot:
+        """Inspect the current sleeve candidate truth without finalizing history."""
+        snapshot = self.sleeve_portfolio_snapshot()
+        return self._ensure_sleeve_candidate_workflow_controller().inspect(snapshot)
+
+    def finalize_sleeve_candidate_workflow(self) -> SleeveCandidateWorkflowSnapshot:
+        """Finalize the current sleeve candidate workflow inspection."""
+        snapshot = self.sleeve_portfolio_snapshot()
+        return self._ensure_sleeve_candidate_workflow_controller().finalize(snapshot)
+
+    def reset_sleeve_candidate_workflow(self) -> None:
+        """Reset the active sleeve candidate workflow while preserving history."""
+        if self._sleeve_candidate_workflow_controller is None:
+            raise RuntimeError("No sleeve candidate workflow to reset")
+        self._sleeve_candidate_workflow_controller.reset()
+
+    def sleeve_candidate_workflow_snapshot(self) -> SleeveCandidateWorkflowSnapshot | None:
+        """Return the latest inspected sleeve candidate workflow snapshot, if present."""
+        if self._sleeve_candidate_workflow_controller is None:
+            return None
+        return self._sleeve_candidate_workflow_controller.current_snapshot
+
+    def sleeve_candidate_workflow_dict(self) -> dict | None:
+        """Serialize the latest inspected sleeve candidate workflow snapshot to a dict."""
+        snapshot = self.sleeve_candidate_workflow_snapshot()
+        if snapshot is None:
+            return None
+        return sleeve_candidate_workflow_snapshot_to_dict(snapshot)
+
+    def sleeve_candidate_change_summary(self) -> dict:
+        """Current-vs-previous sleeve candidate comparison summary."""
+        snapshot = self.sleeve_candidate_workflow_snapshot()
+        if snapshot is None:
+            return {
+                "available": False,
+                "changed": False,
+                "progression_state": "not_assessed",
+                "previous_as_of_ns": None,
+                "current_as_of_ns": None,
+                "changed_sleeves": [],
+            }
+        return dict(snapshot.comparison_to_previous)
+
+    def sleeve_candidate_history_summary(self) -> dict:
+        """Bounded sleeve candidate workflow history summary."""
+        if self._sleeve_candidate_workflow_controller is None:
+            return {
+                "total_finalized_workflows": 0,
+                "latest_finalized_as_of_ns": None,
+                "latest_summary": None,
+                "repeated_weak_sleeve_ids": [],
+                "repeated_blocked_sleeve_ids": [],
+                "repeated_inconclusive_sleeve_ids": [],
+            }
+        snapshot = self._sleeve_candidate_workflow_controller.current_snapshot
+        return self._sleeve_candidate_workflow_controller.history_summary(snapshot)
+
+    def restore_sleeve_candidate_workflow(self) -> bool:
+        """Attempt to restore sleeve candidate workflow state from evidence store."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for restore")
+
+        if (
+            self._sleeve_candidate_workflow_controller is not None
+            and self._sleeve_candidate_workflow_controller.status == SleeveCandidateWorkflowStatus.ACTIVE
+        ):
+            raise RuntimeError("Cannot restore: active sleeve candidate workflow in progress")
+
+        try:
+            controller = SleeveCandidateWorkflowController.restore(self._evidence_store)
+        except (SleeveCandidateWorkflowCorruptError, RuntimeError):
+            raise
+        except Exception:
+            return False
+
+        self._sleeve_candidate_workflow_controller = controller
+        logger.info(
+            "Sleeve candidate workflow %s restored via orchestrator (status=%s, history=%d)",
+            controller.workflow_id,
+            controller.status.value,
+            len(controller.history),
+        )
+        return True
 
     # ------------------------------------------------------------------
     # Campaign lifecycle
@@ -645,6 +814,8 @@ class ServiceOrchestrator:
 
         # Phase 11B: thread external regime evidence into campaign finalization.
         ext_regime = self._external_regime_snapshot_from_status(ss)
+        ext_regime_safety = self._build_external_regime_safety_state(ext_regime)
+        sleeve_snapshot = self._build_sleeve_portfolio_snapshot(ss, ext_regime_safety)
 
         report = self._campaign.finalize(
             ss,
@@ -652,6 +823,7 @@ class ServiceOrchestrator:
             ext_regime_scenario=(
                 None if self._external_regime_manager is None else self._external_regime_manager.latest_scenario_result
             ),
+            sleeve_link=self._campaign_sleeve_link_summary(sleeve_snapshot),
         )
         self._last_campaign_report = report
         logger.info(
@@ -668,12 +840,15 @@ class ServiceOrchestrator:
         ss = self._service.status()
         # Phase 11B: thread external regime evidence into campaign snapshot.
         ext_regime = self._external_regime_snapshot_from_status(ss)
+        ext_regime_safety = self._build_external_regime_safety_state(ext_regime)
+        sleeve_snapshot = self._build_sleeve_portfolio_snapshot(ss, ext_regime_safety)
         return self._campaign.snapshot(
             ss,
             ext_regime=ext_regime,
             ext_regime_scenario=(
                 None if self._external_regime_manager is None else self._external_regime_manager.latest_scenario_result
             ),
+            sleeve_link=self._campaign_sleeve_link_summary(sleeve_snapshot),
         )
 
     @property
@@ -926,6 +1101,7 @@ class ServiceOrchestrator:
         ext_regime_safety = self._build_external_regime_safety_state(ext_regime)
         ext_regime_scenario = self.external_regime_latest_scenario_result()
         sleeve_portfolio = self._build_sleeve_portfolio_snapshot(ss, ext_regime_safety)
+        sleeve_candidate_workflow = self._build_sleeve_candidate_workflow_state()
 
         # Evidence sufficiency
         evidence = self._build_evidence_sufficiency(campaign_state, review_state, ext_regime)
@@ -961,6 +1137,7 @@ class ServiceOrchestrator:
             review=review_state,
             escalation_review=escalation_review_state,
             sleeve_portfolio=sleeve_portfolio,
+            sleeve_candidate_workflow=sleeve_candidate_workflow,
             readiness_level=self._readiness_level,
             readiness_is_supportive=readiness_is_supportive,
             evidence=evidence,
@@ -1740,6 +1917,33 @@ class ServiceOrchestrator:
             finalized=self._escalation_review.is_finalized,
         )
 
+    def _build_sleeve_candidate_workflow_state(self) -> SleeveCandidateWorkflowState | None:
+        """Build sleeve candidate workflow state summary."""
+        controller = self._sleeve_candidate_workflow_controller
+        if controller is None:
+            return None
+
+        snapshot = controller.current_snapshot
+        comparison = {} if snapshot is None else snapshot.comparison_to_previous
+        history_summary = controller.history_summary(snapshot)
+        return SleeveCandidateWorkflowState(
+            active=controller.status == SleeveCandidateWorkflowStatus.ACTIVE,
+            workflow_id=controller.workflow_id,
+            status=controller.status.value,
+            candidate_sleeves=0 if snapshot is None else len(snapshot.candidate_sleeve_ids),
+            supported_candidate_sleeves=0 if snapshot is None else len(snapshot.supported_candidate_sleeve_ids),
+            weak_candidate_sleeves=0 if snapshot is None else len(snapshot.weak_candidate_sleeve_ids),
+            blocked_candidate_sleeves=0 if snapshot is None else len(snapshot.blocked_candidate_sleeve_ids),
+            inconclusive_candidate_sleeves=0 if snapshot is None else len(snapshot.inconclusive_candidate_sleeve_ids),
+            progression_state=comparison.get("progression_state", "not_assessed"),
+            previous_as_of_ns=comparison.get("previous_as_of_ns"),
+            history_length=len(controller.history),
+            repeatedly_weak=bool(history_summary.get("repeated_weak_sleeve_ids")),
+            repeatedly_blocked=bool(history_summary.get("repeated_blocked_sleeve_ids")),
+            repeatedly_inconclusive=bool(history_summary.get("repeated_inconclusive_sleeve_ids")),
+            finalized=controller.status == SleeveCandidateWorkflowStatus.FINALIZED,
+        )
+
     def _build_sleeve_portfolio_snapshot(
         self,
         ss: ServiceStatus,
@@ -1770,6 +1974,7 @@ class ServiceOrchestrator:
         if self._sleeve_portfolio_controller is not None:
             return self._sleeve_portfolio_controller.current_snapshot(
                 as_of_ns=as_of_ns,
+                campaign_report=self._last_campaign_report,
                 readiness_level=self._readiness_level,
                 readiness_is_supportive=readiness_is_supportive,
                 escalation_allowed_next_step=self._current_escalation_allowed_next_step(),
@@ -1780,6 +1985,7 @@ class ServiceOrchestrator:
         return build_sleeve_portfolio_snapshot(
             sleeves=self._configured_sleeves,
             as_of_ns=as_of_ns,
+            campaign_report=self._last_campaign_report,
             readiness_level=self._readiness_level,
             readiness_is_supportive=readiness_is_supportive,
             escalation_allowed_next_step=self._current_escalation_allowed_next_step(),
@@ -1787,6 +1993,21 @@ class ServiceOrchestrator:
                 None if ext_regime_safety is None else ext_regime_safety.execution_blocked
             ),
             allocation_policy=self._sleeve_allocation_policy,
+        )
+
+    @staticmethod
+    def _campaign_sleeve_link_summary(snapshot: SleevePortfolioSnapshot) -> CampaignSleeveLinkSummary:
+        configured_ids = tuple(sleeve.sleeve_id for sleeve in snapshot.sleeves)
+        qualified_ids = snapshot.qualification.qualified_sleeve_ids
+        recommended_ids = snapshot.decision.recommended_sleeve_ids
+        blocked_ids = snapshot.blocked_sleeve_ids
+        return CampaignSleeveLinkSummary(
+            linkage_available=bool(snapshot.sleeves),
+            configured_sleeve_ids=configured_ids,
+            qualified_sleeve_ids=qualified_ids,
+            recommended_sleeve_ids=recommended_ids,
+            blocked_sleeve_ids=blocked_ids,
+            summary=snapshot.summary,
         )
 
     def _ensure_sleeve_portfolio_controller(self) -> SleevePortfolioController:
@@ -1797,6 +2018,13 @@ class ServiceOrchestrator:
                 evidence_store=self._evidence_store,
             )
         return self._sleeve_portfolio_controller
+
+    def _ensure_sleeve_candidate_workflow_controller(self) -> SleeveCandidateWorkflowController:
+        if self._sleeve_candidate_workflow_controller is None:
+            self._sleeve_candidate_workflow_controller = SleeveCandidateWorkflowController(
+                evidence_store=self._evidence_store,
+            )
+        return self._sleeve_candidate_workflow_controller
 
     def _current_escalation_allowed_next_step(self) -> str | None:
         """Best current escalation hook for sleeve governance surfaces."""
@@ -2316,6 +2544,27 @@ def escalation_workflow_state_to_dict(state: EscalationWorkflowState) -> dict:
     }
 
 
+def sleeve_candidate_workflow_state_to_dict(state: SleeveCandidateWorkflowState) -> dict:
+    """Serialize SleeveCandidateWorkflowState to a plain dict."""
+    return {
+        "active": state.active,
+        "workflow_id": state.workflow_id,
+        "status": state.status,
+        "candidate_sleeves": state.candidate_sleeves,
+        "supported_candidate_sleeves": state.supported_candidate_sleeves,
+        "weak_candidate_sleeves": state.weak_candidate_sleeves,
+        "blocked_candidate_sleeves": state.blocked_candidate_sleeves,
+        "inconclusive_candidate_sleeves": state.inconclusive_candidate_sleeves,
+        "progression_state": state.progression_state,
+        "previous_as_of_ns": state.previous_as_of_ns,
+        "history_length": state.history_length,
+        "repeatedly_weak": state.repeatedly_weak,
+        "repeatedly_blocked": state.repeatedly_blocked,
+        "repeatedly_inconclusive": state.repeatedly_inconclusive,
+        "finalized": state.finalized,
+    }
+
+
 def evidence_sufficiency_state_to_dict(state: EvidenceSufficiencyState) -> dict:
     """Serialize EvidenceSufficiencyState to a plain dict."""
     return {
@@ -2361,6 +2610,11 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         "review": (review_workflow_state_to_dict(snap.review) if snap.review is not None else None),
         "sleeve_portfolio": (
             sleeve_portfolio_snapshot_to_dict(snap.sleeve_portfolio) if snap.sleeve_portfolio is not None else None
+        ),
+        "sleeve_candidate_workflow": (
+            sleeve_candidate_workflow_state_to_dict(snap.sleeve_candidate_workflow)
+            if snap.sleeve_candidate_workflow is not None
+            else None
         ),
         "escalation_review": (
             escalation_workflow_state_to_dict(snap.escalation_review) if snap.escalation_review is not None else None

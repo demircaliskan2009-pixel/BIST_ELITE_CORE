@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from crypto_core.service.artifact_export import EscalationStage
+from crypto_core.service.campaign import CampaignReport
 from crypto_core.service.evidence_store import EvidenceStore, WriteResult
 from crypto_core.service.readiness import ReadinessLevel, level_at_least
 from crypto_core.service.sleeve_portfolio import (
@@ -218,6 +219,7 @@ class SleevePortfolioController:
         self,
         *,
         as_of_ns: int,
+        campaign_report: CampaignReport | None = None,
         readiness_level: str | None,
         readiness_is_supportive: bool,
         escalation_allowed_next_step: str | None,
@@ -238,6 +240,7 @@ class SleevePortfolioController:
         draft_snapshot = build_sleeve_portfolio_snapshot(
             sleeves=effective_sleeves,
             as_of_ns=as_of_ns,
+            campaign_report=campaign_report,
             readiness_level=readiness_level,
             readiness_is_supportive=readiness_is_supportive,
             escalation_allowed_next_step=escalation_allowed_next_step,
@@ -250,6 +253,7 @@ class SleevePortfolioController:
         snapshot = build_sleeve_portfolio_snapshot(
             sleeves=draft_snapshot.sleeves,
             as_of_ns=draft_snapshot.as_of_ns,
+            campaign_report=campaign_report,
             readiness_level=draft_snapshot.readiness_level,
             readiness_is_supportive=draft_snapshot.readiness_is_supportive,
             escalation_allowed_next_step=draft_snapshot.escalation_allowed_next_step,
@@ -666,6 +670,27 @@ class SleevePortfolioController:
             tuple(state.recommendation.missing_evidence),
             tuple(state.recommendation.blocking_reasons),
             state.recommendation.effective_allocation,
+            state.campaign_evidence.status.value,
+            state.campaign_evidence.campaign_evidence_available,
+            state.campaign_evidence.explicit_link_available,
+            state.campaign_evidence.linked_in_campaign,
+            tuple(state.campaign_evidence.supporting_campaign_ids),
+            tuple(state.campaign_evidence.missing_evidence),
+            tuple(state.campaign_evidence.blocking_reasons),
+            state.promotion_support.status.value,
+            state.promotion_support.can_be_considered_later,
+            tuple(state.promotion_support.missing_evidence),
+            tuple(state.promotion_support.blocking_reasons),
+            state.promotion_candidate.status.value,
+            state.promotion_candidate.candidate_for_future_review,
+            state.promotion_candidate.strongly_supported,
+            tuple(state.promotion_candidate.missing_evidence),
+            tuple(state.promotion_candidate.blocking_reasons),
+            state.decision_pack.status.value,
+            state.decision_pack.promotion_candidate,
+            state.decision_pack.strongly_supported_candidate,
+            tuple(state.decision_pack.missing_evidence),
+            tuple(state.decision_pack.blocking_reasons),
         )
 
 
