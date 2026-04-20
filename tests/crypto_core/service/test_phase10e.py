@@ -35,6 +35,7 @@ from crypto_core.service.campaign import (
     AcceptanceResult,
     AcceptanceVerdict,
     CampaignReport,
+    CampaignSleeveLinkSummary,
     CampaignSnapshot,
     CriterionResult,
     StabilityRollup,
@@ -66,18 +67,22 @@ from crypto_core.service.service_orchestrator import (
     OperatorSnapshot,
     ReviewWorkflowState,
     ServiceOrchestrator,
+    SleeveCandidateWorkflowState,
     campaign_workflow_state_to_dict,
     escalation_workflow_state_to_dict,
     evidence_sufficiency_state_to_dict,
     operator_snapshot_to_dict,
     review_workflow_state_to_dict,
+    sleeve_candidate_workflow_state_to_dict,
 )
 from crypto_core.service.sleeve_portfolio import (
     CryptoSleeveState,
     CryptoSleeveStatus,
     CryptoSleeveType,
     SleeveAllocationPolicy,
+    SleeveDecisionPackStatus,
     SleeveInactiveCapitalMode,
+    SleevePromotionCandidateStatus,
     SleeveRecommendationStatus,
 )
 from crypto_core.session.models import PaperSessionStatus
@@ -1960,6 +1965,28 @@ class TestSerialization:
         assert d["review_id"] == "esc-1"
         assert d["allowed_next_step"] == "paper_only"
 
+    def test_sleeve_candidate_workflow_state_to_dict(self):
+        state = SleeveCandidateWorkflowState(
+            active=True,
+            workflow_id="cand-1",
+            status="active",
+            candidate_sleeves=2,
+            supported_candidate_sleeves=1,
+            weak_candidate_sleeves=1,
+            blocked_candidate_sleeves=0,
+            inconclusive_candidate_sleeves=0,
+            progression_state="improved",
+            previous_as_of_ns=_T0_NS,
+            history_length=1,
+            repeatedly_weak=False,
+            repeatedly_blocked=False,
+            repeatedly_inconclusive=False,
+            finalized=False,
+        )
+        d = sleeve_candidate_workflow_state_to_dict(state)
+        assert d["workflow_id"] == "cand-1"
+        assert d["candidate_sleeves"] == 2
+
     def test_evidence_sufficiency_to_dict(self):
         state = EvidenceSufficiencyState(
             campaign_evidence_available=True,
@@ -2004,6 +2031,7 @@ class TestSerialization:
         assert d["review"] is None
         assert d["sleeve_portfolio"] is not None
         assert d["sleeve_portfolio"]["decision"]["insufficient_evidence_sleeves"] == 2
+        assert d["sleeve_candidate_workflow"] is None
         assert d["escalation_review"] is None
         assert isinstance(d["evidence"], dict)
 
@@ -2274,3 +2302,199 @@ class TestEdgeCases:
         assert not snap2.review.active
         assert snap2.review.finalized is True
         assert snap2.provisional_recommendation == final.verdict
+
+
+class TestSleeveCampaignEvidenceIntegration:
+    def test_finalize_campaign_carries_sleeve_link_summary(self):
+        orch = ServiceOrchestrator(service=_make_mock_service(), readiness_level="paper_live")
+        orch.set_sleeve_portfolio(_make_sleeve_states())
+        orch.start_campaign()
+
+        report = orch.finalize_campaign()
+
+        assert isinstance(report.sleeve_link, CampaignSleeveLinkSummary)
+        assert report.sleeve_link.linkage_available is True
+        assert report.sleeve_link.configured_sleeve_ids == ("micro-1", "carry-1", "trend-1")
+        assert report.sleeve_link.blocked_sleeve_ids == ("carry-1",)
+
+    def test_sleeve_campaign_evidence_and_support_dicts_surface_last_campaign_truth(self):
+        orch = ServiceOrchestrator(service=_make_mock_service(), readiness_level="paper_live")
+        orch.set_sleeve_portfolio(_make_sleeve_states())
+        orch.start_campaign()
+        orch.finalize_campaign()
+
+        evidence_results = orch.sleeve_campaign_evidence_result_dict()
+        support_results = orch.sleeve_promotion_support_result_dict()
+        evidence_summary = orch.sleeve_portfolio_evidence_dict()
+
+        assert evidence_results["micro-1"]["campaign_evidence_available"] is True
+        assert evidence_results["micro-1"]["linked_in_campaign"] is True
+        assert evidence_results["carry-1"]["status"] == "blocked_by_governance"
+        assert support_results["carry-1"]["status"] == "blocked"
+        assert evidence_summary["total_sleeves"] == 3
+        assert evidence_summary["blocked_evidence_sleeves"] >= 1
+
+    def test_sleeve_decision_pack_and_candidate_dicts_surface_compact_truth(self):
+        orch = ServiceOrchestrator(service=_make_mock_service(), readiness_level="paper_live")
+        orch._build_external_regime_safety_state = MagicMock(  # type: ignore[method-assign]
+            return_value=ExternalRegimeSafetyState(
+                activation_blocked=False,
+                activation_reason=None,
+                activation_allocation_scale=1.0,
+                execution_blocked=False,
+                execution_reason=None,
+                evidence={},
+            )
+        )
+        orch.set_sleeve_portfolio(
+            (
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.35,
+                    active_allocation=0.35,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ENABLED,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+                CryptoSleeveState(
+                    sleeve_id="carry-1",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.20,
+                    blocked_allocation=0.20,
+                    blocked_reasons=("manual_hold",),
+                    reason_summary="manual_hold",
+                ),
+            )
+        )
+        orch._last_campaign_report = replace(  # type: ignore[attr-defined]
+            _make_campaign_report(campaign_id="camp-sleeve-pack"),
+            sleeve_link=CampaignSleeveLinkSummary(
+                linkage_available=True,
+                configured_sleeve_ids=("micro-1", "trend-1", "carry-1"),
+                qualified_sleeve_ids=("micro-1",),
+                recommended_sleeve_ids=("micro-1",),
+                blocked_sleeve_ids=("carry-1",),
+                summary="micro supported, trend configured, carry blocked",
+            ),
+        )
+
+        decision_pack_results = orch.sleeve_decision_pack_result_dict()
+        candidate_results = orch.sleeve_promotion_candidate_result_dict()
+        decision_pack_summary = orch.sleeve_portfolio_decision_pack_dict()
+
+        assert decision_pack_results["micro-1"]["status"] == "recommended_active"
+        assert decision_pack_results["trend-1"]["status"] == "eligible_but_not_selected"
+        assert decision_pack_results["carry-1"]["status"] == "blocked"
+        assert candidate_results["micro-1"]["status"] == "supported"
+        assert candidate_results["trend-1"]["status"] == "watchlist"
+        assert candidate_results["carry-1"]["status"] == "blocked"
+        assert decision_pack_summary["recommended_active_sleeves"] == 1
+        assert decision_pack_summary["supported_candidate_sleeves"] == 1
+        assert decision_pack_summary["watchlist_candidate_sleeves"] == 1
+
+        snap = orch.operator_snapshot()
+        by_id = {sleeve.sleeve_id: sleeve for sleeve in snap.sleeve_portfolio.sleeves}
+        assert by_id["micro-1"].decision_pack.status == SleeveDecisionPackStatus.RECOMMENDED_ACTIVE
+        assert by_id["trend-1"].promotion_candidate.status == SleevePromotionCandidateStatus.WATCHLIST
+        assert snap.sleeve_portfolio.decision_pack.supported_candidate_sleeve_ids == ("micro-1",)
+
+    def test_sleeve_candidate_workflow_integration_and_restore(self, tmp_path: Path):
+        svc = _make_mock_service()
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        orch = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store,
+            readiness_level="paper_live",
+        )
+        orch._build_external_regime_safety_state = MagicMock(  # type: ignore[method-assign]
+            return_value=ExternalRegimeSafetyState(
+                activation_blocked=False,
+                activation_reason=None,
+                activation_allocation_scale=1.0,
+                execution_blocked=False,
+                execution_reason=None,
+                evidence={},
+            )
+        )
+        orch.set_sleeve_portfolio(
+            (
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.20,
+                    active_allocation=0.20,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            )
+        )
+        orch._last_campaign_report = replace(  # type: ignore[attr-defined]
+            _make_campaign_report(campaign_id="camp-candidate-1"),
+            sleeve_link=CampaignSleeveLinkSummary(
+                linkage_available=True,
+                configured_sleeve_ids=("trend-1",),
+                qualified_sleeve_ids=("trend-1",),
+                recommended_sleeve_ids=("trend-1",),
+                blocked_sleeve_ids=(),
+                summary="trend-1 qualified and recommended",
+            ),
+        )
+
+        workflow_id = orch.start_sleeve_candidate_workflow(workflow_id="cand-orch-1")
+        assert workflow_id == "cand-orch-1"
+
+        inspected = orch.inspect_sleeve_candidate_workflow()
+        assert inspected.supported_candidate_sleeve_ids == ("trend-1",)
+        assert inspected.comparison_to_previous["progression_state"] == "first_inspection"
+        assert inspected.sleeves[0].progression_state.value == "new_candidate"
+
+        finalized = orch.finalize_sleeve_candidate_workflow()
+        assert finalized.history_summary["total_finalized_workflows"] == 1
+        assert orch.sleeve_candidate_history_summary()["total_finalized_workflows"] == 1
+        assert orch.sleeve_candidate_change_summary()["progression_state"] == "unchanged"
+
+        operator = orch.operator_snapshot()
+        assert operator.sleeve_candidate_workflow is not None
+        assert operator.sleeve_candidate_workflow.supported_candidate_sleeves == 1
+        assert operator.sleeve_candidate_workflow.finalized is True
+
+        operator_dict = operator_snapshot_to_dict(operator)
+        assert operator_dict["sleeve_candidate_workflow"]["workflow_id"] == "cand-orch-1"
+
+        orch2 = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store,
+            readiness_level="paper_live",
+        )
+        orch2._build_external_regime_safety_state = MagicMock(  # type: ignore[method-assign]
+            return_value=ExternalRegimeSafetyState(
+                activation_blocked=False,
+                activation_reason=None,
+                activation_allocation_scale=1.0,
+                execution_blocked=False,
+                execution_reason=None,
+                evidence={},
+            )
+        )
+        assert orch2.restore_sleeve_candidate_workflow() is True
+        restored = orch2.sleeve_candidate_workflow_snapshot()
+        assert restored is not None
+        assert restored.supported_candidate_sleeve_ids == ("trend-1",)
+
+        orch2.reset_sleeve_candidate_workflow()
+        reset_operator = orch2.operator_snapshot()
+        assert reset_operator.sleeve_candidate_workflow is not None
+        assert reset_operator.sleeve_candidate_workflow.status == "created"

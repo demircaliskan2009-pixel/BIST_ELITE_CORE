@@ -53,6 +53,7 @@ from crypto_core.service.campaign import (
     AcceptanceResult,
     AcceptanceVerdict,
     CampaignReport,
+    CampaignSleeveLinkSummary,
     CampaignSnapshot,
     CriterionResult,
     StabilityRollup,
@@ -83,14 +84,24 @@ from crypto_core.service.promotion_review_controller import (
     current_review_snapshot_to_dict,
     final_review_report_to_dict,
 )
+from crypto_core.service.sleeve_candidate_workflow import (
+    SleeveCandidateProgression,
+    SleeveCandidateWorkflowController,
+    SleeveCandidateWorkflowCorruptError,
+    sleeve_candidate_workflow_snapshot_to_dict,
+)
 from crypto_core.service.sleeve_portfolio import (
     CryptoSleeveState,
     CryptoSleeveStatus,
     CryptoSleeveType,
     SleeveAllocationPolicy,
+    SleeveCampaignEvidenceStatus,
+    SleeveDecisionPackStatus,
     SleeveInactiveCapitalMode,
     SleevePortfolioCorruptError,
     SleevePortfolioValidationError,
+    SleevePromotionCandidateStatus,
+    SleevePromotionSupportStatus,
     SleeveQualificationStatus,
     SleeveReasonSource,
     SleeveRecommendationStatus,
@@ -282,6 +293,7 @@ def _make_report(
     ext_regime_high_risk_steps: int = 1,
     ext_regime_safe_steps: int = 4,
     ext_regime_scenario_summary: str = "steps=6; safe=4; stale=1; high_risk=1; reduced=0",
+    sleeve_link: CampaignSleeveLinkSummary | None = None,
 ) -> CampaignReport:
     snap = _make_snapshot(
         campaign_id=campaign_id,
@@ -326,6 +338,7 @@ def _make_report(
         ext_regime_high_risk_steps=ext_regime_high_risk_steps,
         ext_regime_safe_steps=ext_regime_safe_steps,
         ext_regime_scenario_summary=ext_regime_scenario_summary,
+        sleeve_link=CampaignSleeveLinkSummary() if sleeve_link is None else sleeve_link,
     )
 
 
@@ -2245,3 +2258,250 @@ class TestSleevePortfolioController:
             "trend-1": pytest.approx(0.20),
             "carry-1": pytest.approx(0.0),
         }
+
+
+class TestSleeveCampaignEvidenceAndPromotionSupport:
+    def test_campaign_supported_sleeve_roundtrips_through_snapshot_payload(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.40,
+                    active_allocation=0.40,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            campaign_report=_make_report(
+                campaign_id="camp-sleeve-1",
+                sleeve_link=CampaignSleeveLinkSummary(
+                    linkage_available=True,
+                    configured_sleeve_ids=("micro-1",),
+                    qualified_sleeve_ids=("micro-1",),
+                    recommended_sleeve_ids=("micro-1",),
+                    blocked_sleeve_ids=(),
+                    summary="micro-1 qualified and recommended",
+                ),
+            ),
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        sleeve = snapshot.sleeves[0]
+        restored = sleeve_portfolio_snapshot_from_dict(sleeve_portfolio_snapshot_to_dict(snapshot))
+
+        assert sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.CAMPAIGN_SUPPORTED
+        assert sleeve.promotion_support.status == SleevePromotionSupportStatus.SUPPORTIVE
+        assert sleeve.promotion_candidate.status == SleevePromotionCandidateStatus.SUPPORTED
+        assert sleeve.decision_pack.status == SleeveDecisionPackStatus.RECOMMENDED_ACTIVE
+        assert snapshot.evidence.campaign_supported_sleeves == 1
+        assert snapshot.decision_pack.supported_candidate_sleeves == 1
+        assert restored == snapshot
+
+    def test_missing_direct_campaign_link_degrades_conservatively(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.25,
+                    active_allocation=0.25,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            campaign_report=_make_report(campaign_id="camp-sleeve-2"),
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        sleeve = snapshot.sleeves[0]
+
+        assert sleeve.campaign_evidence.explicit_link_available is False
+        assert sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.WEAK_CAMPAIGN_EVIDENCE
+        assert sleeve.promotion_candidate.status == SleevePromotionCandidateStatus.WATCHLIST
+        assert sleeve.decision_pack.promotion_candidate is True
+        assert snapshot.evidence.weak_campaign_evidence_sleeves == 1
+        assert snapshot.decision_pack.watchlist_candidate_sleeves == 1
+
+
+class TestSleeveCandidateWorkflowController:
+    def test_candidate_workflow_progression_and_repeated_flags_are_deterministic(self):
+        controller = SleeveCandidateWorkflowController(history_limit=2)
+
+        weak_snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.25,
+                    active_allocation=0.25,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            campaign_report=_make_report(campaign_id="camp-weak-1"),
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        supported_snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.25,
+                    active_allocation=0.25,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS + 10,
+            campaign_report=_make_report(
+                campaign_id="camp-strong-1",
+                sleeve_link=CampaignSleeveLinkSummary(
+                    linkage_available=True,
+                    configured_sleeve_ids=("trend-1",),
+                    qualified_sleeve_ids=("trend-1",),
+                    recommended_sleeve_ids=("trend-1",),
+                    blocked_sleeve_ids=(),
+                    summary="trend-1 qualified and recommended",
+                ),
+            ),
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        controller.start(workflow_id="cand-1", started_at_ns=_T0_NS)
+        first = controller.inspect(weak_snapshot)
+        assert first.sleeves[0].progression_state == SleeveCandidateProgression.NEW_CANDIDATE
+        finalized = controller.finalize(weak_snapshot)
+        assert finalized.history_summary["total_finalized_workflows"] == 1
+
+        controller.reset(reset_at_ns=_T0_NS + 1)
+        controller.start(workflow_id="cand-2", started_at_ns=_T0_NS + 2)
+        repeated = controller.inspect(weak_snapshot)
+        assert repeated.sleeves[0].repeated_weak is True
+        assert repeated.history_summary["repeated_weak_sleeve_ids"] == ["trend-1"]
+
+        improved = controller.inspect(supported_snapshot)
+        assert improved.sleeves[0].progression_state == SleeveCandidateProgression.IMPROVED
+        assert improved.comparison_to_previous["progression_state"] == SleeveCandidateProgression.IMPROVED.value
+
+    def test_candidate_workflow_repeated_blocked_and_inconclusive_detection(self):
+        blocked_controller = SleeveCandidateWorkflowController(history_limit=2)
+        blocked_snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="carry-1",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.20,
+                    blocked_allocation=0.20,
+                    blocked_reasons=("manual_hold",),
+                    reason_summary="manual_hold",
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        blocked_controller.start(workflow_id="blocked-1", started_at_ns=_T0_NS)
+        blocked_controller.finalize(blocked_snapshot)
+        blocked_controller.reset(reset_at_ns=_T0_NS + 1)
+        blocked_controller.start(workflow_id="blocked-2", started_at_ns=_T0_NS + 2)
+        blocked_repeat = blocked_controller.inspect(blocked_snapshot)
+        assert blocked_repeat.sleeves[0].repeated_blocked is True
+        assert blocked_repeat.history_summary["repeated_blocked_sleeve_ids"] == ["carry-1"]
+
+        inconclusive_controller = SleeveCandidateWorkflowController(history_limit=2)
+        inconclusive_snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ENABLED,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        inconclusive_controller.start(workflow_id="inconclusive-1", started_at_ns=_T0_NS)
+        inconclusive_controller.finalize(inconclusive_snapshot)
+        inconclusive_controller.reset(reset_at_ns=_T0_NS + 1)
+        inconclusive_controller.start(workflow_id="inconclusive-2", started_at_ns=_T0_NS + 2)
+        inconclusive_repeat = inconclusive_controller.inspect(inconclusive_snapshot)
+        assert inconclusive_repeat.sleeves[0].repeated_inconclusive is True
+        assert inconclusive_repeat.history_summary["repeated_inconclusive_sleeve_ids"] == ["micro-1"]
+
+    def test_candidate_workflow_restore_fail_closed_and_replay_is_deterministic(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        controller = SleeveCandidateWorkflowController(
+            evidence_store=store,
+            history_limit=2,
+        )
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="trend-restore",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.20,
+                    active_allocation=0.20,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            campaign_report=_make_report(campaign_id="camp-restore"),
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        controller.start(workflow_id="cand-restore", started_at_ns=_T0_NS)
+        expected = controller.finalize(snapshot)
+
+        restored = SleeveCandidateWorkflowController.restore(store)
+        assert sleeve_candidate_workflow_snapshot_to_dict(
+            restored.current_snapshot
+        ) == sleeve_candidate_workflow_snapshot_to_dict(expected)
+
+        store.save_snapshot(
+            "sleeve_candidate_workflow",
+            {
+                "workflow_id": "cand-bad",
+                "status": "active",
+                "created_at_ns": _T0_NS,
+                "updated_at_ns": _T0_NS,
+            },
+        )
+        with pytest.raises(SleeveCandidateWorkflowCorruptError, match="missing required fields"):
+            SleeveCandidateWorkflowController.restore(store)

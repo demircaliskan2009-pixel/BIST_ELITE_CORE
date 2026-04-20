@@ -40,6 +40,7 @@ from crypto_core.service.campaign import (
     CampaignConfig,
     CampaignMetadata,
     CampaignReport,
+    CampaignSleeveLinkSummary,
     CampaignSnapshot,
     StabilityRollup,
     campaign_metadata_from_dict,
@@ -896,3 +897,43 @@ class TestCampaignControllerExternalRegimeScenarioEvidence:
         assert serialized["snapshot"]["ext_regime_scenario_step_count"] == 5
         assert serialized["ext_regime_activation_blocked_steps"] == 1
         assert serialized["ext_regime_scenario_summary"].startswith("steps=5")
+
+
+class TestCampaignControllerSleeveLinkEvidence:
+    def test_snapshot_defaults_sleeve_link_unavailable(self, tmp_path: Path):
+        ctrl = CampaignController(
+            config=CampaignConfig(max_duration_s=600),
+            evidence_store=EvidenceStore(evidence_dir=tmp_path / "evidence-sleeve-default"),
+        )
+        ss = _make_service_status()
+
+        ctrl.start(ss, run_id="r-sleeve-default")
+        snap = ctrl.snapshot(ss)
+
+        assert snap.sleeve_link.linkage_available is False
+        assert snap.sleeve_link.configured_sleeve_ids == ()
+
+    def test_finalize_and_report_dict_include_sleeve_link(self, tmp_path: Path):
+        ctrl = CampaignController(
+            config=CampaignConfig(max_duration_s=600),
+            evidence_store=EvidenceStore(evidence_dir=tmp_path / "evidence-sleeve-report"),
+        )
+        ss = _make_service_status()
+        ctrl.start(ss, run_id="r-sleeve-report")
+
+        link = CampaignSleeveLinkSummary(
+            linkage_available=True,
+            configured_sleeve_ids=("micro-1", "carry-1"),
+            qualified_sleeve_ids=("micro-1",),
+            recommended_sleeve_ids=("micro-1",),
+            blocked_sleeve_ids=("carry-1",),
+            summary="sleeves=2; recommended=micro-1",
+        )
+
+        report = ctrl.finalize(ss, sleeve_link=link)
+        serialized = _report_to_dict(report)
+
+        assert report.sleeve_link == link
+        assert report.snapshot.sleeve_link == link
+        assert serialized["snapshot"]["sleeve_link"]["configured_sleeve_ids"] == ["micro-1", "carry-1"]
+        assert serialized["sleeve_link"]["recommended_sleeve_ids"] == ["micro-1"]
