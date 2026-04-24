@@ -75,6 +75,10 @@ from crypto_core.service.service_orchestrator import (
     review_workflow_state_to_dict,
     sleeve_candidate_workflow_state_to_dict,
 )
+from crypto_core.service.sleeve_candidate_workflow import (
+    SleeveCandidateWorkflowEntry,
+    SleeveCandidateWorkflowSnapshot,
+)
 from crypto_core.service.sleeve_portfolio import (
     CryptoSleeveState,
     CryptoSleeveStatus,
@@ -83,6 +87,7 @@ from crypto_core.service.sleeve_portfolio import (
     SleeveDecisionPackStatus,
     SleeveInactiveCapitalMode,
     SleevePromotionCandidateStatus,
+    SleevePromotionSupportStatus,
     SleeveRecommendationStatus,
 )
 from crypto_core.session.models import PaperSessionStatus
@@ -2163,6 +2168,51 @@ class TestDeterministicReplay:
         assert snap1.service_mode == snap2.service_mode
         assert snap1.trading_enabled == snap2.trading_enabled
         assert snap1.readiness_level == snap2.readiness_level
+
+    def test_sleeve_workflow_clock_injection_reaches_owned_controllers(self):
+        """Injected sleeve workflow clock controls orchestrator-owned workflow timestamps."""
+        fixed_ns = _T0_NS + 777
+        orch = ServiceOrchestrator(
+            service=_make_mock_service(),
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="clock-sleeve",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ENABLED,
+                ),
+            ),
+            sleeve_workflow_clock_ns=lambda: fixed_ns,
+        )
+
+        workflow_id = orch.start_sleeve_candidate_workflow()
+        override = orch.disable_sleeve("clock-sleeve")
+        workflow_snapshot = SleeveCandidateWorkflowSnapshot(
+            workflow_id="wf-clock",
+            status="active",
+            as_of_ns=_T0_NS,
+            sleeves=(
+                SleeveCandidateWorkflowEntry(
+                    sleeve_id="clock-sleeve",
+                    candidate_status=SleevePromotionCandidateStatus.SUPPORTED,
+                    promotion_support_status=SleevePromotionSupportStatus.SUPPORTIVE,
+                    decision_pack_status=SleeveDecisionPackStatus.SUPPORTED_CANDIDATE,
+                    candidate_for_future_review=True,
+                    strongly_supported=True,
+                    reason_summary="supported",
+                    next_step="review",
+                ),
+            ),
+        )
+
+        orch.start_sleeve_promotion_review(workflow_snapshot=workflow_snapshot)
+        review = orch.finalize_sleeve_promotion_review()
+
+        assert workflow_id == f"sleeve-candidate-{fixed_ns}"
+        assert override.updated_at_ns == fixed_ns
+        assert review is not None
+        assert review.as_of_ns == fixed_ns
+        assert review.portfolio_summary.as_of_ns == fixed_ns
+        assert review.history[0].as_of_ns == fixed_ns
 
     def test_readiness_not_flattened_into_verdict(self):
         """Readiness supportiveness must remain distinct from promotion verdict."""

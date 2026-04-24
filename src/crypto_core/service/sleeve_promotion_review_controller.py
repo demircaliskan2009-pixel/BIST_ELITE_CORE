@@ -14,9 +14,9 @@ PRD reference: §2 System Orchestration, §7 Execution Engine, Phase 15E.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Tuple
 
 from crypto_core.service.sleeve_candidate_workflow import (
     SleeveCandidateWorkflowEntry,
@@ -45,24 +45,24 @@ class SleevePromotionReviewResult:
     repeated_weak: bool = False
     repeated_blocked: bool = False
     repeated_inconclusive: bool = False
-    missing_evidence: Tuple[str, ...] = ()
-    governance_blockers: Tuple[str, ...] = ()
-    last_verdict: Optional[SleevePromotionReviewVerdict] = None
+    missing_evidence: tuple[str, ...] = ()
+    governance_blockers: tuple[str, ...] = ()
+    last_verdict: SleevePromotionReviewVerdict | None = None
 
 
 @dataclass(frozen=True)
 class SleevePromotionReviewPortfolioSummary:
     as_of_ns: int
-    review_results: Tuple[SleevePromotionReviewResult, ...]
-    supported: Tuple[str, ...]
-    hold: Tuple[str, ...]
-    reject: Tuple[str, ...]
-    inconclusive: Tuple[str, ...]
-    repeated_weak: Tuple[str, ...]
-    repeated_blocked: Tuple[str, ...]
-    repeated_inconclusive: Tuple[str, ...]
-    missing_evidence: Tuple[str, ...]
-    governance_blockers: Tuple[str, ...]
+    review_results: tuple[SleevePromotionReviewResult, ...]
+    supported: tuple[str, ...]
+    hold: tuple[str, ...]
+    reject: tuple[str, ...]
+    inconclusive: tuple[str, ...]
+    repeated_weak: tuple[str, ...]
+    repeated_blocked: tuple[str, ...]
+    repeated_inconclusive: tuple[str, ...]
+    missing_evidence: tuple[str, ...]
+    governance_blockers: tuple[str, ...]
     operator_summary: str
 
 
@@ -77,9 +77,9 @@ class SleevePromotionReviewHistoryEntry:
 class SleevePromotionReviewSnapshot:
     as_of_ns: int
     status: str
-    review_results: Tuple[SleevePromotionReviewResult, ...]
+    review_results: tuple[SleevePromotionReviewResult, ...]
     portfolio_summary: SleevePromotionReviewPortfolioSummary
-    history: Tuple[SleevePromotionReviewHistoryEntry, ...] = ()
+    history: tuple[SleevePromotionReviewHistoryEntry, ...] = ()
 
 
 class SleevePromotionReviewCorruptError(RuntimeError):
@@ -89,17 +89,29 @@ class SleevePromotionReviewCorruptError(RuntimeError):
 class SleevePromotionReviewController:
     """Managed controller for crypto sleeve promotion review."""
 
-    def __init__(self, workflow_snapshot: SleeveCandidateWorkflowSnapshot, history_limit: int = 5):
+    def __init__(
+        self,
+        workflow_snapshot: SleeveCandidateWorkflowSnapshot,
+        history_limit: int = 5,
+        clock_ns: Callable[[], int] | None = None,
+    ):
         self.workflow_snapshot = workflow_snapshot
         self.history_limit = history_limit
         self.history = []
+        self._clock_ns = time.time_ns if clock_ns is None else clock_ns
         self._validate()
 
     def _validate(self):
         if not self.workflow_snapshot or not hasattr(self.workflow_snapshot, "sleeves"):
             raise SleevePromotionReviewCorruptError("Malformed workflow snapshot.")
 
-    def build_review_results(self) -> Tuple[SleevePromotionReviewResult, ...]:
+    def _now_ns(self) -> int:
+        now = self._clock_ns()
+        if not isinstance(now, int) or now < 0:
+            raise SleevePromotionReviewCorruptError("clock_ns must return a non-negative int")
+        return now
+
+    def build_review_results(self) -> tuple[SleevePromotionReviewResult, ...]:
         results = []
         for entry in getattr(self.workflow_snapshot, "sleeves", []):
             verdict, reason, next_step = self._derive_verdict(entry)
@@ -119,7 +131,7 @@ class SleevePromotionReviewController:
             )
         return tuple(results)
 
-    def _derive_verdict(self, entry: SleeveCandidateWorkflowEntry) -> Tuple[SleevePromotionReviewVerdict, str, str]:
+    def _derive_verdict(self, entry: SleeveCandidateWorkflowEntry) -> tuple[SleevePromotionReviewVerdict, str, str]:
         # Deterministic mapping from candidate workflow entry to review verdict
         if (
             entry.candidate_status == SleevePromotionCandidateStatus.SUPPORTED
@@ -139,11 +151,14 @@ class SleevePromotionReviewController:
         return (SleevePromotionReviewVerdict.INCONCLUSIVE, entry.reason_summary, entry.next_step)
 
     def build_portfolio_summary(
-        self, review_results: Tuple[SleevePromotionReviewResult, ...]
+        self,
+        review_results: tuple[SleevePromotionReviewResult, ...],
+        *,
+        as_of_ns: int | None = None,
     ) -> SleevePromotionReviewPortfolioSummary:
         supported, hold, reject, inconclusive = [], [], [], []
         repeated_weak, repeated_blocked, repeated_inconclusive = [], [], []
-        missing_evidence, governance_blockers = set(), set()
+        missing_evidence, governance_blockers = [], []
         for r in review_results:
             if r.verdict == SleevePromotionReviewVerdict.REVIEW_SUPPORTED:
                 supported.append(r.sleeve_id)
@@ -159,8 +174,8 @@ class SleevePromotionReviewController:
                 repeated_blocked.append(r.sleeve_id)
             if r.repeated_inconclusive:
                 repeated_inconclusive.append(r.sleeve_id)
-            missing_evidence.update(r.missing_evidence)
-            governance_blockers.update(r.governance_blockers)
+            _append_unique(missing_evidence, r.missing_evidence)
+            _append_unique(governance_blockers, r.governance_blockers)
         operator_summary = self._build_operator_summary(
             supported,
             hold,
@@ -173,7 +188,7 @@ class SleevePromotionReviewController:
             governance_blockers,
         )
         return SleevePromotionReviewPortfolioSummary(
-            as_of_ns=int(time.time_ns()),
+            as_of_ns=self._now_ns() if as_of_ns is None else as_of_ns,
             review_results=review_results,
             supported=tuple(supported),
             hold=tuple(hold),
@@ -206,10 +221,11 @@ class SleevePromotionReviewController:
         )
 
     def snapshot(self) -> SleevePromotionReviewSnapshot:
+        now = self._now_ns()
         review_results = self.build_review_results()
-        portfolio_summary = self.build_portfolio_summary(review_results)
+        portfolio_summary = self.build_portfolio_summary(review_results, as_of_ns=now)
         return SleevePromotionReviewSnapshot(
-            as_of_ns=int(time.time_ns()),
+            as_of_ns=now,
             status="active",
             review_results=review_results,
             portfolio_summary=portfolio_summary,
@@ -218,10 +234,11 @@ class SleevePromotionReviewController:
 
     def finalize(self):
         # Build the new history entry
+        now = self._now_ns()
         review_results = self.build_review_results()
-        portfolio_summary = self.build_portfolio_summary(review_results)
+        portfolio_summary = self.build_portfolio_summary(review_results, as_of_ns=now)
         entry = SleevePromotionReviewHistoryEntry(
-            as_of_ns=int(time.time_ns()),
+            as_of_ns=now,
             summary=portfolio_summary.operator_summary,
             portfolio_summary=portfolio_summary,
         )
@@ -238,8 +255,12 @@ class SleevePromotionReviewController:
         )
 
     def restore(self, snapshot: SleevePromotionReviewSnapshot):
+        if not isinstance(snapshot, SleevePromotionReviewSnapshot):
+            raise SleevePromotionReviewCorruptError("restore snapshot must be a SleevePromotionReviewSnapshot")
         self.workflow_snapshot = self.workflow_snapshot  # No-op for now; extend as needed
         self.history = list(snapshot.history)
+        if any(not isinstance(item, SleevePromotionReviewHistoryEntry) for item in self.history):
+            raise SleevePromotionReviewCorruptError("restore history must contain SleevePromotionReviewHistoryEntry")
         self._validate()
 
     def reset(self):
@@ -261,3 +282,9 @@ class SleevePromotionReviewController:
                 for h in snap.history
             ],
         }
+
+
+def _append_unique(target: list[str], values: tuple[str, ...]) -> None:
+    for value in values:
+        if value not in target:
+            target.append(value)

@@ -452,7 +452,8 @@ def test_restore_fail_closed_on_malformed_payload() -> None:
 
 
 def test_service_orchestrator_integration() -> None:
-    orch = ServiceOrchestrator(service=_mock_service())
+    fixed_review_ns = _T0_NS + 42
+    orch = ServiceOrchestrator(service=_mock_service(), sleeve_workflow_clock_ns=lambda: fixed_review_ns)
     orch.start_sleeve_promotion_review(workflow_snapshot=_supported_workflow("svc-sleeve"))
 
     snapshot = orch.get_sleeve_admission_snapshot(
@@ -460,6 +461,7 @@ def test_service_orchestrator_integration() -> None:
     )
     rendered = sleeve_admission_snapshot_to_dict(snapshot)
 
+    assert snapshot.as_of_ns == fixed_review_ns
     assert snapshot.portfolio_summary.admitted_active == ("svc-sleeve",)
     assert rendered["portfolio_summary"]["admitted_active_count"] == 1
 

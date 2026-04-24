@@ -34,6 +34,8 @@ from crypto_core.service.sleeve_promotion_review_controller import (
     SleevePromotionReviewVerdict,
 )
 
+_FIXED_REVIEW_NS = 9_876_543_210
+
 
 def make_entry(
     sleeve_id,
@@ -75,6 +77,10 @@ def make_snapshot(entries):
         as_of_ns=1,
         sleeves=tuple(entries),
     )
+
+
+def fixed_clock():
+    return _FIXED_REVIEW_NS
 
 
 def test_review_model_construction():
@@ -203,6 +209,28 @@ def test_bounded_finalized_history_behavior():
     assert len(ctrl.history) == 2
 
 
+def test_fixed_clock_finalize_is_deterministic():
+    entry = make_entry(
+        "s8-clock",
+        SleevePromotionCandidateStatus.SUPPORTED,
+        SleevePromotionSupportStatus.SUPPORTIVE,
+        SleeveDecisionPackStatus.SUPPORTED_CANDIDATE,
+        missing_evidence=("campaign_link_missing", "qualification_missing"),
+        blocking_reasons=("readiness_pending", "operator_hold"),
+    )
+    snap = make_snapshot([entry])
+
+    first = SleevePromotionReviewController(snap, clock_ns=fixed_clock).finalize()
+    second = SleevePromotionReviewController(snap, clock_ns=fixed_clock).finalize()
+
+    assert first == second
+    assert first.as_of_ns == _FIXED_REVIEW_NS
+    assert first.portfolio_summary.as_of_ns == _FIXED_REVIEW_NS
+    assert first.history[0].as_of_ns == _FIXED_REVIEW_NS
+    assert first.portfolio_summary.missing_evidence == ("campaign_link_missing", "qualification_missing")
+    assert first.portfolio_summary.governance_blockers == ("readiness_pending", "operator_hold")
+
+
 def test_persistence_restore_roundtrip():
     entry = make_entry(
         "s9",
@@ -218,9 +246,49 @@ def test_persistence_restore_roundtrip():
     assert len(ctrl2.history) == 1
 
 
+def test_restore_replay_with_fixed_clock_is_stable():
+    entry = make_entry(
+        "s9-clock",
+        SleevePromotionCandidateStatus.SUPPORTED,
+        SleevePromotionSupportStatus.SUPPORTIVE,
+        SleeveDecisionPackStatus.SUPPORTED_CANDIDATE,
+    )
+    snap = make_snapshot([entry])
+    finalized = SleevePromotionReviewController(snap, clock_ns=fixed_clock).finalize()
+    ctrl1 = SleevePromotionReviewController(snap, clock_ns=fixed_clock)
+    ctrl2 = SleevePromotionReviewController(snap, clock_ns=fixed_clock)
+
+    ctrl1.restore(finalized)
+    ctrl2.restore(finalized)
+
+    assert ctrl1.snapshot() == ctrl2.snapshot()
+    assert ctrl1.snapshot().as_of_ns == _FIXED_REVIEW_NS
+
+
 def test_malformed_state_fail_closed():
     with pytest.raises(SleevePromotionReviewCorruptError):
         SleevePromotionReviewController(None)
+
+
+def test_malformed_restore_fails_closed():
+    ctrl = SleevePromotionReviewController(make_snapshot([]), clock_ns=fixed_clock)
+
+    with pytest.raises(SleevePromotionReviewCorruptError):
+        ctrl.restore(None)
+
+
+def test_default_constructor_remains_backward_compatible():
+    entry = make_entry(
+        "s-default",
+        SleevePromotionCandidateStatus.SUPPORTED,
+        SleevePromotionSupportStatus.SUPPORTIVE,
+        SleeveDecisionPackStatus.SUPPORTED_CANDIDATE,
+    )
+    ctrl = SleevePromotionReviewController(make_snapshot([entry]))
+    snapshot = ctrl.snapshot()
+
+    assert snapshot.review_results[0].verdict == SleevePromotionReviewVerdict.REVIEW_SUPPORTED
+    assert isinstance(snapshot.as_of_ns, int)
 
 
 def test_deterministic_replay_on_same_inputs():

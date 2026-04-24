@@ -27,6 +27,7 @@ PRD reference: §2 System Orchestration, §7 Execution Engine.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from crypto_core.service.artifact_export import (
@@ -360,6 +361,7 @@ class ServiceOrchestrator:
         external_regime_policy: ExternalRegimeSafetyPolicy | None = None,
         sleeves: tuple[CryptoSleeveState, ...] = (),
         sleeve_allocation_policy: SleeveAllocationPolicy | None = None,
+        sleeve_workflow_clock_ns: Callable[[], int] | None = None,
     ) -> None:
         self._service = service
         self._evidence_store = evidence_store
@@ -367,6 +369,7 @@ class ServiceOrchestrator:
         self._promotion_thresholds = promotion_thresholds
         self._campaign_config = campaign_config
         self._external_regime_policy = external_regime_policy or ExternalRegimeSafetyPolicy()
+        self._sleeve_workflow_clock_ns = sleeve_workflow_clock_ns
 
         if external_regime_manager is not None and external_regime_plane is not None:
             if external_regime_manager.plane is not external_regime_plane:
@@ -461,7 +464,9 @@ class ServiceOrchestrator:
         from crypto_core.service.sleeve_promotion_review_controller import SleevePromotionReviewController
 
         self._sleeve_promotion_review_controller = SleevePromotionReviewController(
-            workflow_snapshot, history_limit=history_limit
+            workflow_snapshot,
+            history_limit=history_limit,
+            clock_ns=self._sleeve_workflow_clock_ns,
         )
 
     def inspect_sleeve_promotion_review(self) -> SleevePromotionReviewSnapshot | None:
@@ -711,7 +716,10 @@ class ServiceOrchestrator:
         """Restore the managed sleeve workflow state if a persisted controller snapshot exists."""
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for sleeve portfolio workflow restore")
-        controller = SleevePortfolioController.restore(self._evidence_store)
+        controller = SleevePortfolioController.restore(
+            self._evidence_store,
+            clock_ns=self._sleeve_workflow_clock_ns,
+        )
         self._sleeve_portfolio_controller = controller
         self._configured_sleeves = controller.defined_sleeves
         self._sleeve_allocation_policy = controller.allocation_policy
@@ -790,7 +798,10 @@ class ServiceOrchestrator:
             raise RuntimeError("Cannot restore: active sleeve candidate workflow in progress")
 
         try:
-            controller = SleeveCandidateWorkflowController.restore(self._evidence_store)
+            controller = SleeveCandidateWorkflowController.restore(
+                self._evidence_store,
+                clock_ns=self._sleeve_workflow_clock_ns,
+            )
         except (SleeveCandidateWorkflowCorruptError, RuntimeError):
             raise
         except Exception:
@@ -2142,6 +2153,7 @@ class ServiceOrchestrator:
                 defined_sleeves=self._configured_sleeves,
                 allocation_policy=self._sleeve_allocation_policy,
                 evidence_store=self._evidence_store,
+                clock_ns=self._sleeve_workflow_clock_ns,
             )
         return self._sleeve_portfolio_controller
 
@@ -2149,6 +2161,7 @@ class ServiceOrchestrator:
         if self._sleeve_candidate_workflow_controller is None:
             self._sleeve_candidate_workflow_controller = SleeveCandidateWorkflowController(
                 evidence_store=self._evidence_store,
+                clock_ns=self._sleeve_workflow_clock_ns,
             )
         return self._sleeve_candidate_workflow_controller
 
