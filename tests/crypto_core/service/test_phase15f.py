@@ -8,8 +8,10 @@ import pytest
 
 from crypto_core.service.artifact_export import (
     export_managed_sleeve_set_manifest,
+    export_paper_shadow_activation_plan,
     export_sleeve_admission_release_pack,
     load_managed_sleeve_set_manifest,
+    load_paper_shadow_activation_plan,
     load_sleeve_admission_release_pack,
 )
 from crypto_core.service.campaign import (
@@ -26,15 +28,19 @@ from crypto_core.service.models import QueuePressure, QueueSnapshot, ServiceStat
 from crypto_core.service.service_orchestrator import ServiceOrchestrator, operator_snapshot_to_dict
 from crypto_core.service.sleeve_admission_controller import (
     ManagedSleeveSetDryRunStatus,
+    PaperShadowActivationStatus,
     SleeveAdmissionController,
     SleeveAdmissionCorruptError,
     SleeveAdmissionReleaseEvidenceStatus,
     SleeveAdmissionReleaseStatus,
     SleeveAdmissionVerdict,
     build_managed_sleeve_set_manifest,
+    build_paper_shadow_activation_plan,
     build_sleeve_admission_release_pack,
     managed_sleeve_set_manifest_from_dict,
     managed_sleeve_set_manifest_to_dict,
+    paper_shadow_activation_plan_from_dict,
+    paper_shadow_activation_plan_to_dict,
     sleeve_admission_release_pack_from_dict,
     sleeve_admission_release_pack_to_dict,
     sleeve_admission_snapshot_from_dict,
@@ -1275,3 +1281,187 @@ def test_managed_manifest_deterministic_replay() -> None:
 
     assert first == second
     assert first["source_release_pack_hash"] == second["source_release_pack_hash"]
+
+
+def test_paper_shadow_activation_plan_model_construction_and_ready_status() -> None:
+    active = _sleeve("active", effective_allocation=0.25, target_allocation=0.25)
+    pack, _ = _ready_release_pack(active)
+    manifest = build_managed_sleeve_set_manifest(pack)
+
+    plan = build_paper_shadow_activation_plan(manifest)
+    rendered = paper_shadow_activation_plan_to_dict(plan)
+
+    assert plan.activation_status == PaperShadowActivationStatus.READY_FOR_PAPER_SHADOW
+    assert plan.source_manifest_status == ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN
+    assert plan.paper_only is True
+    assert plan.real_orders_enabled is False
+    assert plan.real_money_enabled is False
+    assert plan.active_sleeves == ("active",)
+    assert plan.inactive_sleeves == ()
+    assert rendered["effective_allocations"] == [{"sleeve_id": "active", "effective_allocation": 0.25}]
+    assert "paper_only_mode_confirmed" in plan.preflight_gates
+    assert "record_paper_shadow_artifacts" in plan.runtime_monitoring_requirements
+    assert "operator_can_disable_sleeve" in plan.kill_switch_requirements
+    assert plan.source_manifest_hash
+    assert plan.plan_id.startswith("paper-shadow-activation-plan-")
+
+
+def test_paper_shadow_activation_plan_empty_manifest_is_empty_safe() -> None:
+    manifest = build_managed_sleeve_set_manifest(
+        build_sleeve_admission_release_pack(SleeveAdmissionController().snapshot())
+    )
+
+    plan = build_paper_shadow_activation_plan(manifest)
+
+    assert plan.activation_status == PaperShadowActivationStatus.EMPTY
+    assert plan.active_sleeves == ()
+    assert plan.effective_allocations == ()
+    assert "source_manifest_empty" in plan.activation_blockers
+    assert plan.paper_only is True
+    assert plan.real_orders_enabled is False
+    assert plan.real_money_enabled is False
+
+
+def test_paper_shadow_activation_plan_partial_manifest_is_not_ready() -> None:
+    portfolio = _portfolio(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    review_summary = _review_summary(_review_result("active"))
+    admission = SleeveAdmissionController(review_summary, portfolio_snapshot=portfolio).snapshot()
+    pack = build_sleeve_admission_release_pack(
+        admission,
+        promotion_review_snapshot=_promotion_snapshot(review_summary),
+        portfolio_snapshot=portfolio,
+    )
+    manifest = build_managed_sleeve_set_manifest(pack)
+
+    plan = build_paper_shadow_activation_plan(manifest)
+
+    assert manifest.dry_run_status == ManagedSleeveSetDryRunStatus.PARTIAL_PAPER_DRY_RUN
+    assert plan.activation_status == PaperShadowActivationStatus.PARTIAL_READY
+    assert "source_manifest_not_ready_for_paper_shadow" in plan.activation_blockers
+    assert "release_pack_evidence_not_ready" in plan.activation_blockers
+
+
+def test_paper_shadow_activation_plan_blocked_manifest_is_blocked() -> None:
+    blocked = _sleeve(
+        "blocked",
+        status=CryptoSleeveStatus.BLOCKED,
+        recommendation_status=SleeveRecommendationStatus.BLOCKED,
+        qualification_status=SleeveQualificationStatus.BLOCKED,
+        campaign_status=SleeveCampaignEvidenceStatus.BLOCKED_BY_GOVERNANCE,
+        support_status=SleevePromotionSupportStatus.BLOCKED,
+        candidate_status=SleevePromotionCandidateStatus.BLOCKED,
+        decision_status=SleeveDecisionPackStatus.BLOCKED,
+        effective_allocation=0.0,
+        target_allocation=0.0,
+        blockers=("governance_block",),
+    )
+    review_summary = _review_summary(_review_result("blocked", SleevePromotionReviewVerdict.REJECT))
+    report = _campaign_report(sleeve_ids=("blocked",))
+    admission = SleeveAdmissionController(review_summary, portfolio_snapshot=_portfolio(blocked)).snapshot()
+    pack = build_sleeve_admission_release_pack(
+        admission,
+        promotion_review_snapshot=_promotion_snapshot(review_summary),
+        portfolio_snapshot=_portfolio(blocked),
+        campaign_report=report,
+        readiness_flags=campaign_readiness_flags(report),
+    )
+    manifest = build_managed_sleeve_set_manifest(pack)
+
+    plan = build_paper_shadow_activation_plan(manifest)
+
+    assert plan.activation_status == PaperShadowActivationStatus.BLOCKED
+    assert plan.active_sleeves == ()
+    assert "blocked" in plan.inactive_sleeves
+    assert "governance_blockers_present" in plan.activation_blockers
+
+
+def test_paper_shadow_activation_plan_tracks_unallocated_and_allocations() -> None:
+    active = _sleeve("z-active", effective_allocation=0.10, target_allocation=0.10)
+    reserve = _sleeve(
+        "a-reserve",
+        status=CryptoSleeveStatus.ENABLED,
+        recommendation_status=SleeveRecommendationStatus.ELIGIBLE_BUT_NOT_SELECTED,
+        decision_status=SleeveDecisionPackStatus.ELIGIBLE_BUT_NOT_SELECTED,
+        effective_allocation=0.0,
+        target_allocation=0.0,
+    )
+    pack, _ = _ready_release_pack(active, reserve)
+    manifest = build_managed_sleeve_set_manifest(pack)
+
+    plan = build_paper_shadow_activation_plan(manifest)
+
+    assert plan.activation_status == PaperShadowActivationStatus.READY_FOR_PAPER_SHADOW
+    assert plan.active_sleeves == ("z-active",)
+    assert plan.inactive_sleeves == ("a-reserve",)
+    assert plan.admitted_unallocated_sleeves == ("a-reserve",)
+    assert plan.effective_allocations[0].sleeve_id == "z-active"
+    assert plan.effective_allocations[0].effective_allocation == 0.10
+    assert [action.sleeve_id for action in plan.next_actions] == ["a-reserve", "z-active"]
+
+
+def test_paper_shadow_activation_plan_serialization_roundtrip_and_malformed_load(tmp_path) -> None:
+    pack, _ = _ready_release_pack(_sleeve("active", effective_allocation=0.25, target_allocation=0.25))
+    manifest = build_managed_sleeve_set_manifest(pack)
+    plan = build_paper_shadow_activation_plan(manifest)
+    payload = paper_shadow_activation_plan_to_dict(plan)
+
+    restored = paper_shadow_activation_plan_from_dict(payload)
+    assert restored == plan
+
+    malformed = dict(payload)
+    malformed["real_orders_enabled"] = True
+    with pytest.raises(SleeveAdmissionCorruptError):
+        paper_shadow_activation_plan_from_dict(malformed)
+
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    export_paper_shadow_activation_plan(plan=plan, evidence_store=store)
+    assert load_paper_shadow_activation_plan(evidence_store=store) == plan
+
+    store.save_snapshot("crypto_paper_shadow_activation_plan", ["bad"])
+    with pytest.raises(SleeveAdmissionCorruptError):
+        load_paper_shadow_activation_plan(evidence_store=store)
+
+
+def test_service_orchestrator_paper_shadow_activation_plan_helpers_and_operator_status(tmp_path) -> None:
+    fixed_review_ns = _T0_NS + 654
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    sleeve = _sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20)
+    pack, _ = _ready_release_pack(sleeve)
+    manifest = build_managed_sleeve_set_manifest(pack)
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        sleeves=(sleeve,),
+        evidence_store=store,
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: fixed_review_ns,
+    )
+    orch._last_campaign_report = _campaign_report(sleeve_ids=("svc-active",))  # type: ignore[attr-defined]
+    orch.start_sleeve_promotion_review(workflow_snapshot=_supported_workflow("svc-active"))
+
+    plan = orch.paper_shadow_activation_plan(manifest=manifest)
+    rendered = paper_shadow_activation_plan_to_dict(plan)
+    helper_rendered = orch.paper_shadow_activation_plan_dict()
+    operator = operator_snapshot_to_dict(orch.operator_snapshot())
+
+    assert plan.activation_status == PaperShadowActivationStatus.READY_FOR_PAPER_SHADOW
+    assert rendered["paper_only"] is True
+    assert rendered["real_orders_enabled"] is False
+    assert rendered["real_money_enabled"] is False
+    assert "activation_status" in helper_rendered
+    assert operator["paper_shadow_activation_plan"]["available"] is True
+    assert operator["paper_shadow_activation_plan"]["real_orders_enabled"] is False
+    assert operator["paper_shadow_activation_plan"]["real_money_enabled"] is False
+
+    orch.export_paper_shadow_activation_plan()
+    assert orch.load_paper_shadow_activation_plan() == orch.paper_shadow_activation_plan()
+
+
+def test_paper_shadow_activation_plan_deterministic_replay() -> None:
+    pack, _ = _ready_release_pack(_sleeve("stable", effective_allocation=0.15, target_allocation=0.15))
+    manifest = build_managed_sleeve_set_manifest(pack)
+
+    first = paper_shadow_activation_plan_to_dict(build_paper_shadow_activation_plan(manifest))
+    second = paper_shadow_activation_plan_to_dict(build_paper_shadow_activation_plan(manifest))
+
+    assert first == second
+    assert first["source_manifest_hash"] == second["source_manifest_hash"]

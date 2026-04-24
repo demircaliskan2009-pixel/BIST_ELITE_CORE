@@ -76,6 +76,14 @@ class ManagedSleeveSetDryRunStatus(str, Enum):
     EMPTY = "empty"
 
 
+class PaperShadowActivationStatus(str, Enum):
+    READY_FOR_PAPER_SHADOW = "ready_for_paper_shadow"
+    PARTIAL_READY = "partial_ready"
+    BLOCKED = "blocked"
+    INCONCLUSIVE = "inconclusive"
+    EMPTY = "empty"
+
+
 @dataclass(frozen=True)
 class SleeveAdmissionResult:
     sleeve_id: str
@@ -233,6 +241,32 @@ class ManagedSleeveSetManifest:
     governance_blockers: tuple[str, ...]
     dry_run_status: ManagedSleeveSetDryRunStatus
     next_actions: tuple[SleeveAdmissionReleaseAction, ...]
+    operator_summary: str = ""
+
+
+@dataclass(frozen=True)
+class PaperShadowActivationPlan:
+    plan_id: str
+    as_of_ns: int
+    source_manifest_status: ManagedSleeveSetDryRunStatus
+    source_manifest_id: str
+    source_manifest_as_of_ns: int
+    source_manifest_hash: str
+    paper_only: bool
+    real_orders_enabled: bool
+    real_money_enabled: bool
+    active_sleeves: tuple[str, ...]
+    inactive_sleeves: tuple[str, ...]
+    admitted_unallocated_sleeves: tuple[str, ...]
+    effective_allocations: tuple[ManagedSleeveAllocation, ...]
+    preflight_gates: tuple[str, ...]
+    activation_blockers: tuple[str, ...]
+    evidence_blockers: tuple[str, ...]
+    governance_blockers: tuple[str, ...]
+    runtime_monitoring_requirements: tuple[str, ...]
+    kill_switch_requirements: tuple[str, ...]
+    next_actions: tuple[SleeveAdmissionReleaseAction, ...]
+    activation_status: PaperShadowActivationStatus
     operator_summary: str = ""
 
 
@@ -1311,6 +1345,156 @@ def managed_sleeve_set_manifest_from_dict(data: dict) -> ManagedSleeveSetManifes
     return manifest
 
 
+def build_paper_shadow_activation_plan(
+    manifest: ManagedSleeveSetManifest,
+    *,
+    plan_id: str | None = None,
+) -> PaperShadowActivationPlan:
+    """Build a deterministic paper/shadow-only activation contract from a manifest."""
+    if not isinstance(manifest, ManagedSleeveSetManifest):
+        raise SleeveAdmissionCorruptError("paper/shadow activation plan requires a ManagedSleeveSetManifest")
+    _validate_managed_sleeve_set_manifest(manifest)
+
+    source_manifest_hash = _managed_sleeve_manifest_hash(manifest)
+    inactive_sleeves = _sorted_unique(
+        (
+            *manifest.admitted_unallocated_sleeves,
+            *manifest.blocked_sleeves,
+            *manifest.inconclusive_sleeves,
+        )
+    )
+    activation_blockers = _paper_shadow_activation_blockers(manifest)
+    activation_status = _derive_paper_shadow_activation_status(
+        source_manifest_status=manifest.dry_run_status,
+        active_sleeves=manifest.active_sleeves,
+        activation_blockers=activation_blockers,
+    )
+    plan = PaperShadowActivationPlan(
+        plan_id=plan_id or _paper_shadow_activation_plan_id(manifest.as_of_ns, source_manifest_hash),
+        as_of_ns=manifest.as_of_ns,
+        source_manifest_status=manifest.dry_run_status,
+        source_manifest_id=manifest.manifest_id,
+        source_manifest_as_of_ns=manifest.as_of_ns,
+        source_manifest_hash=source_manifest_hash,
+        paper_only=True,
+        real_orders_enabled=False,
+        real_money_enabled=False,
+        active_sleeves=manifest.active_sleeves,
+        inactive_sleeves=inactive_sleeves,
+        admitted_unallocated_sleeves=manifest.admitted_unallocated_sleeves,
+        effective_allocations=manifest.effective_allocations,
+        preflight_gates=_paper_shadow_preflight_gates(manifest),
+        activation_blockers=activation_blockers,
+        evidence_blockers=manifest.evidence_blockers,
+        governance_blockers=manifest.governance_blockers,
+        runtime_monitoring_requirements=_paper_shadow_runtime_monitoring_requirements(),
+        kill_switch_requirements=_paper_shadow_kill_switch_requirements(),
+        next_actions=manifest.next_actions,
+        activation_status=activation_status,
+        operator_summary=_paper_shadow_operator_summary(activation_status, manifest.active_sleeves, inactive_sleeves),
+    )
+    _validate_paper_shadow_activation_plan(plan)
+    return plan
+
+
+def paper_shadow_activation_plan_to_dict(plan: PaperShadowActivationPlan) -> dict:
+    _validate_paper_shadow_activation_plan(plan)
+    return {
+        "plan_id": plan.plan_id,
+        "as_of_ns": plan.as_of_ns,
+        "source_manifest_status": plan.source_manifest_status.value,
+        "source_manifest_id": plan.source_manifest_id,
+        "source_manifest_as_of_ns": plan.source_manifest_as_of_ns,
+        "source_manifest_hash": plan.source_manifest_hash,
+        "paper_only": plan.paper_only,
+        "real_orders_enabled": plan.real_orders_enabled,
+        "real_money_enabled": plan.real_money_enabled,
+        "active_sleeves": list(plan.active_sleeves),
+        "inactive_sleeves": list(plan.inactive_sleeves),
+        "admitted_unallocated_sleeves": list(plan.admitted_unallocated_sleeves),
+        "effective_allocations": [
+            managed_sleeve_allocation_to_dict(allocation) for allocation in plan.effective_allocations
+        ],
+        "preflight_gates": list(plan.preflight_gates),
+        "activation_blockers": list(plan.activation_blockers),
+        "evidence_blockers": list(plan.evidence_blockers),
+        "governance_blockers": list(plan.governance_blockers),
+        "runtime_monitoring_requirements": list(plan.runtime_monitoring_requirements),
+        "kill_switch_requirements": list(plan.kill_switch_requirements),
+        "next_actions": [sleeve_admission_release_action_to_dict(action) for action in plan.next_actions],
+        "activation_status": plan.activation_status.value,
+        "operator_summary": plan.operator_summary,
+    }
+
+
+def paper_shadow_activation_plan_from_dict(data: dict) -> PaperShadowActivationPlan:
+    if not isinstance(data, dict):
+        raise SleeveAdmissionCorruptError(f"Paper/shadow activation plan must be a dict, got {type(data).__name__!r}")
+    source_manifest_status = _manifest_dry_run_status_or_default(
+        data.get("source_manifest_status"),
+        ManagedSleeveSetDryRunStatus.INCONCLUSIVE,
+    )
+    active_sleeves = _sorted_unique(data.get("active_sleeves", ()))
+    allocations = _manifest_allocations_from_data(data)
+    inactive_sleeves = _sorted_unique(data.get("inactive_sleeves", ()))
+    admitted_unallocated = _sorted_unique(data.get("admitted_unallocated_sleeves", ()))
+    activation_blockers = _sorted_unique(
+        data.get(
+            "activation_blockers",
+            _paper_shadow_activation_blockers_from_fields(
+                source_manifest_status=source_manifest_status,
+                active_sleeves=active_sleeves,
+                evidence_blockers=_sorted_unique(data.get("evidence_blockers", ())),
+                governance_blockers=_sorted_unique(data.get("governance_blockers", ())),
+            ),
+        )
+    )
+    activation_status = _paper_shadow_activation_status_or_default(
+        data.get("activation_status"),
+        _derive_paper_shadow_activation_status(
+            source_manifest_status=source_manifest_status,
+            active_sleeves=active_sleeves,
+            activation_blockers=activation_blockers,
+        ),
+    )
+    plan = PaperShadowActivationPlan(
+        plan_id=_string_or_default(data.get("plan_id"), _paper_shadow_activation_plan_id(0, "unknown")),
+        as_of_ns=_require_int(data.get("as_of_ns", data.get("source_manifest_as_of_ns", 0)), "as_of_ns"),
+        source_manifest_status=source_manifest_status,
+        source_manifest_id=_string_or_default(data.get("source_manifest_id"), "unknown"),
+        source_manifest_as_of_ns=_require_int(
+            data.get("source_manifest_as_of_ns", data.get("as_of_ns", 0)),
+            "source_manifest_as_of_ns",
+        ),
+        source_manifest_hash=_string_or_default(data.get("source_manifest_hash"), "unknown"),
+        paper_only=_bool_or_default(data, "paper_only", True),
+        real_orders_enabled=_bool_or_default(data, "real_orders_enabled", False),
+        real_money_enabled=_bool_or_default(data, "real_money_enabled", False),
+        active_sleeves=active_sleeves,
+        inactive_sleeves=inactive_sleeves,
+        admitted_unallocated_sleeves=admitted_unallocated,
+        effective_allocations=allocations,
+        preflight_gates=_sorted_unique(data.get("preflight_gates", _paper_shadow_preflight_gates_from_fields())),
+        activation_blockers=activation_blockers,
+        evidence_blockers=_sorted_unique(data.get("evidence_blockers", ())),
+        governance_blockers=_sorted_unique(data.get("governance_blockers", ())),
+        runtime_monitoring_requirements=_sorted_unique(
+            data.get("runtime_monitoring_requirements", _paper_shadow_runtime_monitoring_requirements())
+        ),
+        kill_switch_requirements=_sorted_unique(
+            data.get("kill_switch_requirements", _paper_shadow_kill_switch_requirements())
+        ),
+        next_actions=tuple(sorted(_release_actions_or_default(data, ()), key=lambda item: item.sleeve_id)),
+        activation_status=activation_status,
+        operator_summary=_string_or_default(
+            data.get("operator_summary"),
+            _paper_shadow_operator_summary(activation_status, active_sleeves, inactive_sleeves),
+        ),
+    )
+    _validate_paper_shadow_activation_plan(plan)
+    return plan
+
+
 _ADMITTED_VERDICTS = {
     SleeveAdmissionVerdict.ADMITTED_ACTIVE,
     SleeveAdmissionVerdict.ADMITTED_UNALLOCATED,
@@ -2292,6 +2476,231 @@ def _sorted_unique(values) -> tuple[str, ...]:
     else:
         raw_values = tuple(values)
     return tuple(sorted(dict.fromkeys(str(value) for value in raw_values if value)))
+
+
+def _managed_sleeve_manifest_hash(manifest: ManagedSleeveSetManifest) -> str:
+    parts = [
+        f"manifest_id={manifest.manifest_id}",
+        f"as_of_ns={manifest.as_of_ns}",
+        f"dry_run_status={manifest.dry_run_status.value}",
+        f"source_release_pack_hash={manifest.source_release_pack_hash}",
+        f"source_evidence_gate_status={manifest.source_evidence_gate_status.value}",
+        f"active_sleeves={','.join(manifest.active_sleeves)}",
+        f"admitted_unallocated_sleeves={','.join(manifest.admitted_unallocated_sleeves)}",
+        f"blocked_sleeves={','.join(manifest.blocked_sleeves)}",
+        f"inconclusive_sleeves={','.join(manifest.inconclusive_sleeves)}",
+        _manifest_allocations_signature(manifest.effective_allocations),
+        f"activation_blockers={','.join(manifest.activation_blockers)}",
+        f"evidence_blockers={','.join(manifest.evidence_blockers)}",
+        f"governance_blockers={','.join(manifest.governance_blockers)}",
+    ]
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _manifest_allocations_signature(allocations: tuple[ManagedSleeveAllocation, ...]) -> str:
+    return "|".join(f"{item.sleeve_id}:{item.effective_allocation:.12g}" for item in allocations)
+
+
+def _paper_shadow_activation_plan_id(as_of_ns: int, source_manifest_hash: str) -> str:
+    digest = hashlib.sha256(source_manifest_hash.encode("utf-8")).hexdigest()[:12]
+    return f"paper-shadow-activation-plan-{as_of_ns}-{digest}"
+
+
+def _paper_shadow_preflight_gates(manifest: ManagedSleeveSetManifest) -> tuple[str, ...]:
+    gates = list(_paper_shadow_preflight_gates_from_fields())
+    if manifest.dry_run_status == ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN:
+        gates.append("source_manifest_ready")
+    else:
+        gates.append("source_manifest_not_ready")
+    return _sorted_unique(gates)
+
+
+def _paper_shadow_preflight_gates_from_fields() -> tuple[str, ...]:
+    return _sorted_unique(
+        (
+            "effective_allocations_valid",
+            "kill_switch_controls_confirmed",
+            "managed_sleeve_manifest_present",
+            "paper_only_mode_confirmed",
+            "real_money_disabled",
+            "real_orders_disabled",
+            "release_evidence_ready",
+            "runtime_monitoring_configured",
+        )
+    )
+
+
+def _paper_shadow_runtime_monitoring_requirements() -> tuple[str, ...]:
+    return _sorted_unique(
+        (
+            "monitor_admission_status_drift",
+            "monitor_external_regime_governance",
+            "monitor_manifest_hash_drift",
+            "monitor_paper_fill_and_markout_evidence",
+            "monitor_readiness_state",
+            "record_paper_shadow_artifacts",
+        )
+    )
+
+
+def _paper_shadow_kill_switch_requirements() -> tuple[str, ...]:
+    return _sorted_unique(
+        (
+            "disable_on_evidence_regression",
+            "disable_on_governance_blocker",
+            "disable_on_manifest_hash_mismatch",
+            "disable_on_readiness_regression",
+            "operator_can_disable_sleeve",
+        )
+    )
+
+
+def _paper_shadow_activation_blockers(manifest: ManagedSleeveSetManifest) -> tuple[str, ...]:
+    return _paper_shadow_activation_blockers_from_fields(
+        source_manifest_status=manifest.dry_run_status,
+        active_sleeves=manifest.active_sleeves,
+        evidence_blockers=manifest.evidence_blockers,
+        governance_blockers=manifest.governance_blockers,
+        explicit_blockers=manifest.activation_blockers,
+    )
+
+
+def _paper_shadow_activation_blockers_from_fields(
+    *,
+    source_manifest_status: ManagedSleeveSetDryRunStatus,
+    active_sleeves: tuple[str, ...],
+    evidence_blockers: tuple[str, ...],
+    governance_blockers: tuple[str, ...],
+    explicit_blockers: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    blockers = list(explicit_blockers)
+    if source_manifest_status == ManagedSleeveSetDryRunStatus.EMPTY:
+        blockers.append("source_manifest_empty")
+    elif source_manifest_status != ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN:
+        blockers.append("source_manifest_not_ready_for_paper_shadow")
+    if source_manifest_status != ManagedSleeveSetDryRunStatus.EMPTY and not active_sleeves:
+        blockers.append("no_active_sleeves_for_paper_shadow")
+    if evidence_blockers:
+        blockers.append("evidence_blockers_present")
+    if governance_blockers:
+        blockers.append("governance_blockers_present")
+    return _sorted_unique(blockers)
+
+
+def _derive_paper_shadow_activation_status(
+    *,
+    source_manifest_status: ManagedSleeveSetDryRunStatus,
+    active_sleeves: tuple[str, ...],
+    activation_blockers: tuple[str, ...],
+) -> PaperShadowActivationStatus:
+    if source_manifest_status == ManagedSleeveSetDryRunStatus.EMPTY:
+        return PaperShadowActivationStatus.EMPTY
+    if source_manifest_status == ManagedSleeveSetDryRunStatus.BLOCKED:
+        return PaperShadowActivationStatus.BLOCKED
+    if (
+        source_manifest_status == ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN
+        and active_sleeves
+        and not activation_blockers
+    ):
+        return PaperShadowActivationStatus.READY_FOR_PAPER_SHADOW
+    if (
+        source_manifest_status
+        in {
+            ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN,
+            ManagedSleeveSetDryRunStatus.PARTIAL_PAPER_DRY_RUN,
+        }
+        and active_sleeves
+    ):
+        return PaperShadowActivationStatus.PARTIAL_READY
+    if source_manifest_status == ManagedSleeveSetDryRunStatus.INCONCLUSIVE:
+        return PaperShadowActivationStatus.INCONCLUSIVE
+    if activation_blockers:
+        return PaperShadowActivationStatus.BLOCKED
+    return PaperShadowActivationStatus.INCONCLUSIVE
+
+
+def _paper_shadow_operator_summary(
+    status: PaperShadowActivationStatus,
+    active_sleeves: tuple[str, ...],
+    inactive_sleeves: tuple[str, ...],
+) -> str:
+    return f"activation_status={status.value}; active={len(active_sleeves)}; inactive={len(inactive_sleeves)}"
+
+
+def _validate_paper_shadow_activation_plan(plan: PaperShadowActivationPlan) -> None:
+    if not isinstance(plan, PaperShadowActivationPlan):
+        raise SleeveAdmissionCorruptError("paper/shadow activation plan must be a PaperShadowActivationPlan")
+    if plan.as_of_ns < plan.source_manifest_as_of_ns:
+        raise SleeveAdmissionCorruptError("Paper/shadow activation plan as_of_ns is older than manifest")
+    if not plan.paper_only:
+        raise SleeveAdmissionCorruptError("Paper/shadow activation plan must remain paper_only")
+    if plan.real_orders_enabled:
+        raise SleeveAdmissionCorruptError("Paper/shadow activation plan cannot enable real orders")
+    if plan.real_money_enabled:
+        raise SleeveAdmissionCorruptError("Paper/shadow activation plan cannot enable real money")
+    for field_name in (
+        "active_sleeves",
+        "inactive_sleeves",
+        "admitted_unallocated_sleeves",
+        "preflight_gates",
+        "activation_blockers",
+        "evidence_blockers",
+        "governance_blockers",
+        "runtime_monitoring_requirements",
+        "kill_switch_requirements",
+    ):
+        value = getattr(plan, field_name)
+        if value != _sorted_unique(value):
+            raise SleeveAdmissionCorruptError(f"Paper/shadow activation plan {field_name} are not sorted unique")
+    allocation_ids = tuple(item.sleeve_id for item in plan.effective_allocations)
+    if allocation_ids != tuple(sorted(allocation_ids)) or len(allocation_ids) != len(set(allocation_ids)):
+        raise SleeveAdmissionCorruptError("Paper/shadow activation plan allocations are not sorted unique")
+    if allocation_ids != plan.active_sleeves:
+        raise SleeveAdmissionCorruptError("Paper/shadow activation plan active sleeves must match allocations")
+    if set(plan.active_sleeves) & set(plan.inactive_sleeves):
+        raise SleeveAdmissionCorruptError("Paper/shadow activation plan active and inactive sleeves overlap")
+    if not set(plan.admitted_unallocated_sleeves).issubset(set(plan.inactive_sleeves)):
+        raise SleeveAdmissionCorruptError("Admitted unallocated sleeves must be inactive in activation plan")
+    for allocation in plan.effective_allocations:
+        _validate_manifest_allocation(allocation)
+    if not plan.preflight_gates:
+        raise SleeveAdmissionCorruptError("Paper/shadow activation plan requires preflight gates")
+    if not plan.runtime_monitoring_requirements:
+        raise SleeveAdmissionCorruptError("Paper/shadow activation plan requires runtime monitoring")
+    if not plan.kill_switch_requirements:
+        raise SleeveAdmissionCorruptError("Paper/shadow activation plan requires kill-switch requirements")
+    expected_status = _derive_paper_shadow_activation_status(
+        source_manifest_status=plan.source_manifest_status,
+        active_sleeves=plan.active_sleeves,
+        activation_blockers=plan.activation_blockers,
+    )
+    if plan.activation_status != expected_status:
+        raise SleeveAdmissionCorruptError("Paper/shadow activation plan status does not match manifest state")
+    if plan.activation_status == PaperShadowActivationStatus.READY_FOR_PAPER_SHADOW:
+        if plan.source_manifest_status != ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN:
+            raise SleeveAdmissionCorruptError("Paper/shadow activation plan cannot be ready from non-ready manifest")
+        if not plan.active_sleeves or plan.activation_blockers:
+            raise SleeveAdmissionCorruptError(
+                "Paper/shadow activation plan ready state requires active sleeves and no blockers"
+            )
+    if tuple(action.sleeve_id for action in plan.next_actions) != tuple(
+        sorted(action.sleeve_id for action in plan.next_actions)
+    ):
+        raise SleeveAdmissionCorruptError("Paper/shadow activation plan next actions are not sorted")
+
+
+def _paper_shadow_activation_status_or_default(
+    value: object,
+    default: PaperShadowActivationStatus,
+) -> PaperShadowActivationStatus:
+    if value is None:
+        return default
+    if isinstance(value, PaperShadowActivationStatus):
+        return value
+    try:
+        return PaperShadowActivationStatus(_require_non_empty_str(value, "activation_status"))
+    except ValueError as exc:
+        raise SleeveAdmissionCorruptError(f"Invalid activation_status: {value!r}") from exc
 
 
 def _dict_value(value: object, field_name: str) -> dict:

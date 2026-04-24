@@ -57,10 +57,16 @@ from crypto_core.service.artifact_export import (
     export_managed_sleeve_set_manifest as export_managed_sleeve_manifest,
 )
 from crypto_core.service.artifact_export import (
+    export_paper_shadow_activation_plan as export_paper_shadow_plan,
+)
+from crypto_core.service.artifact_export import (
     export_sleeve_admission_release_pack as export_admission_release_pack,
 )
 from crypto_core.service.artifact_export import (
     load_managed_sleeve_set_manifest as load_managed_sleeve_manifest,
+)
+from crypto_core.service.artifact_export import (
+    load_paper_shadow_activation_plan as load_paper_shadow_plan,
 )
 from crypto_core.service.artifact_export import (
     load_sleeve_admission_release_pack as load_admission_release_pack,
@@ -113,11 +119,14 @@ from crypto_core.service.promotion_review_controller import (
 from crypto_core.service.readiness import ReadinessEvaluator, readiness_to_dict
 from crypto_core.service.sleeve_admission_controller import (
     ManagedSleeveSetManifest,
+    PaperShadowActivationPlan,
     SleeveAdmissionController,
     SleeveAdmissionReleasePack,
     SleeveAdmissionSnapshot,
     build_managed_sleeve_set_manifest,
+    build_paper_shadow_activation_plan,
     managed_sleeve_set_manifest_to_dict,
+    paper_shadow_activation_plan_to_dict,
     sleeve_admission_portfolio_summary_to_dict,
     sleeve_admission_release_pack_to_dict,
     sleeve_admission_snapshot_to_dict,
@@ -290,6 +299,25 @@ class ManagedSleeveSetManifestState:
 
 
 @dataclass(frozen=True)
+class PaperShadowActivationPlanState:
+    """Compact paper/shadow activation plan status for operator snapshots."""
+
+    available: bool
+    plan_id: str | None
+    as_of_ns: int | None
+    activation_status: str
+    source_manifest_status: str
+    paper_only: bool
+    real_orders_enabled: bool
+    real_money_enabled: bool
+    active_sleeves: int
+    inactive_sleeves: int
+    activation_blockers: tuple[str, ...]
+    evidence_blockers: tuple[str, ...]
+    governance_blockers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class EvidenceSufficiencyState:
     """Evidence sufficiency summary for operator truthfulness.
 
@@ -385,6 +413,9 @@ class OperatorSnapshot:
 
     # Phase 15K: Paper-only managed sleeve set manifest compact status
     managed_sleeve_manifest: ManagedSleeveSetManifestState | None = None
+
+    # Phase 15L: Paper/shadow activation plan compact status
+    paper_shadow_activation_plan: PaperShadowActivationPlanState | None = None
 
     # Escalation review workflow (Phase 13B)
     escalation_review: EscalationWorkflowState | None = None
@@ -677,6 +708,43 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for managed sleeve set manifest load")
         return load_managed_sleeve_manifest(evidence_store=self._evidence_store)
+
+    def paper_shadow_activation_plan(
+        self,
+        *,
+        manifest: ManagedSleeveSetManifest | None = None,
+        release_pack: SleeveAdmissionReleasePack | None = None,
+        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
+    ) -> PaperShadowActivationPlan:
+        """Build the deterministic paper/shadow-only activation plan."""
+        source_manifest = (
+            manifest
+            if manifest is not None
+            else self.managed_sleeve_set_manifest(
+                release_pack=release_pack,
+                portfolio_snapshot=portfolio_snapshot,
+            )
+        )
+        return build_paper_shadow_activation_plan(source_manifest)
+
+    def paper_shadow_activation_plan_dict(self) -> dict:
+        """Serialize the current paper/shadow activation plan to a plain dict."""
+        return paper_shadow_activation_plan_to_dict(self.paper_shadow_activation_plan())
+
+    def export_paper_shadow_activation_plan(self):
+        """Persist the current paper/shadow activation plan via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper/shadow activation plan export")
+        return export_paper_shadow_plan(
+            plan=self.paper_shadow_activation_plan(),
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_shadow_activation_plan(self) -> PaperShadowActivationPlan:
+        """Load the latest persisted paper/shadow activation plan."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper/shadow activation plan load")
+        return load_paper_shadow_plan(evidence_store=self._evidence_store)
 
     # ------------------------------------------------------------------
     # Properties
@@ -1451,8 +1519,13 @@ class ServiceOrchestrator:
             ),
         )
         sleeve_admission_release = sleeve_admission_release_state_from_pack(sleeve_admission_release_pack)
-        managed_sleeve_manifest = managed_sleeve_manifest_state_from_manifest(
-            build_managed_sleeve_set_manifest(sleeve_admission_release_pack, portfolio_snapshot=sleeve_portfolio)
+        managed_sleeve_manifest_artifact = build_managed_sleeve_set_manifest(
+            sleeve_admission_release_pack,
+            portfolio_snapshot=sleeve_portfolio,
+        )
+        managed_sleeve_manifest = managed_sleeve_manifest_state_from_manifest(managed_sleeve_manifest_artifact)
+        paper_shadow_activation_plan = paper_shadow_activation_plan_state_from_plan(
+            build_paper_shadow_activation_plan(managed_sleeve_manifest_artifact)
         )
         return OperatorSnapshot(
             service_mode=ss.service_mode,
@@ -1470,6 +1543,7 @@ class ServiceOrchestrator:
             sleeve_admission=sleeve_admission,
             sleeve_admission_release=sleeve_admission_release,
             managed_sleeve_manifest=managed_sleeve_manifest,
+            paper_shadow_activation_plan=paper_shadow_activation_plan,
             readiness_level=self._readiness_level,
             readiness_is_supportive=readiness_is_supportive,
             evidence=evidence,
@@ -2993,6 +3067,44 @@ def managed_sleeve_manifest_state_to_dict(state: ManagedSleeveSetManifestState) 
     }
 
 
+def paper_shadow_activation_plan_state_from_plan(plan: PaperShadowActivationPlan) -> PaperShadowActivationPlanState:
+    """Build compact operator snapshot state from a paper/shadow activation plan."""
+    return PaperShadowActivationPlanState(
+        available=True,
+        plan_id=plan.plan_id,
+        as_of_ns=plan.as_of_ns,
+        activation_status=plan.activation_status.value,
+        source_manifest_status=plan.source_manifest_status.value,
+        paper_only=plan.paper_only,
+        real_orders_enabled=plan.real_orders_enabled,
+        real_money_enabled=plan.real_money_enabled,
+        active_sleeves=len(plan.active_sleeves),
+        inactive_sleeves=len(plan.inactive_sleeves),
+        activation_blockers=plan.activation_blockers,
+        evidence_blockers=plan.evidence_blockers,
+        governance_blockers=plan.governance_blockers,
+    )
+
+
+def paper_shadow_activation_plan_state_to_dict(state: PaperShadowActivationPlanState) -> dict:
+    """Serialize compact paper/shadow activation plan state to a plain dict."""
+    return {
+        "available": state.available,
+        "plan_id": state.plan_id,
+        "as_of_ns": state.as_of_ns,
+        "activation_status": state.activation_status,
+        "source_manifest_status": state.source_manifest_status,
+        "paper_only": state.paper_only,
+        "real_orders_enabled": state.real_orders_enabled,
+        "real_money_enabled": state.real_money_enabled,
+        "active_sleeves": state.active_sleeves,
+        "inactive_sleeves": state.inactive_sleeves,
+        "activation_blockers": list(state.activation_blockers),
+        "evidence_blockers": list(state.evidence_blockers),
+        "governance_blockers": list(state.governance_blockers),
+    }
+
+
 def evidence_sufficiency_state_to_dict(state: EvidenceSufficiencyState) -> dict:
     """Serialize EvidenceSufficiencyState to a plain dict."""
     return {
@@ -3067,6 +3179,12 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         "managed_sleeve_manifest": (
             managed_sleeve_manifest_state_to_dict(snap.managed_sleeve_manifest)
             if snap.managed_sleeve_manifest is not None
+            else None
+        ),
+        # Phase 15L
+        "paper_shadow_activation_plan": (
+            paper_shadow_activation_plan_state_to_dict(snap.paper_shadow_activation_plan)
+            if snap.paper_shadow_activation_plan is not None
             else None
         ),
         "readiness_level": snap.readiness_level,

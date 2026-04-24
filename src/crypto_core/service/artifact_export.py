@@ -33,10 +33,13 @@ from enum import Enum
 from crypto_core.service.evidence_store import EvidenceStore, WriteResult
 from crypto_core.service.sleeve_admission_controller import (
     ManagedSleeveSetManifest,
+    PaperShadowActivationPlan,
     SleeveAdmissionCorruptError,
     SleeveAdmissionReleasePack,
     managed_sleeve_set_manifest_from_dict,
     managed_sleeve_set_manifest_to_dict,
+    paper_shadow_activation_plan_from_dict,
+    paper_shadow_activation_plan_to_dict,
     sleeve_admission_release_pack_from_dict,
     sleeve_admission_release_pack_to_dict,
 )
@@ -498,6 +501,7 @@ _ESCALATION_DECISION_SNAPSHOT_NAME = "live_readiness_escalation"
 _SLEEVE_PORTFOLIO_SNAPSHOT_NAME = "crypto_sleeve_portfolio"
 _SLEEVE_ADMISSION_RELEASE_PACK_SNAPSHOT_NAME = "crypto_sleeve_admission_release_pack"
 _MANAGED_SLEEVE_SET_MANIFEST_SNAPSHOT_NAME = "crypto_managed_sleeve_set_manifest"
+_PAPER_SHADOW_ACTIVATION_PLAN_SNAPSHOT_NAME = "crypto_paper_shadow_activation_plan"
 
 
 def export_run_artifact(
@@ -660,3 +664,28 @@ def load_managed_sleeve_set_manifest(*, evidence_store: EvidenceStore) -> Manage
             f"Managed sleeve set manifest 'data' must be a dict, got {type(data).__name__!r}"
         )
     return managed_sleeve_set_manifest_from_dict(data)
+
+
+def export_paper_shadow_activation_plan(
+    *,
+    plan: PaperShadowActivationPlan,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist the latest paper/shadow-only activation plan."""
+    data = paper_shadow_activation_plan_to_dict(plan)
+    result = evidence_store.save_snapshot(_PAPER_SHADOW_ACTIVATION_PLAN_SNAPSHOT_NAME, data)
+    if not result.success:
+        return result
+    evidence_store.append_evidence(_PAPER_SHADOW_ACTIVATION_PLAN_SNAPSHOT_NAME, data)
+    return result
+
+
+def load_paper_shadow_activation_plan(*, evidence_store: EvidenceStore) -> PaperShadowActivationPlan:
+    """Load the latest persisted paper/shadow-only activation plan."""
+    envelope = evidence_store.load_snapshot(_PAPER_SHADOW_ACTIVATION_PLAN_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise SleeveAdmissionCorruptError(
+            f"Paper/shadow activation plan 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return paper_shadow_activation_plan_from_dict(data)
