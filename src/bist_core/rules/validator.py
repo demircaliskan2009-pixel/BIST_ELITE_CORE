@@ -22,8 +22,8 @@ def validate_rulespack(
     """
     errors: List[str] = []
 
-    from bist_core.risk.rulespack import get_rulespack_dir, load_rulespack
     from bist_core.risk.restrictions import get_restrictions_path, load_restrictions
+    from bist_core.risk.rulespack import get_rulespack_dir, load_rulespack
 
     rp_dir = Path(rulespack_dir) if rulespack_dir is not None else get_rulespack_dir()
     pack, _ = load_rulespack(rp_dir)

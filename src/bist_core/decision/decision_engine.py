@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from bist_core.regime import HIGH_VOLATILITY, RANGE, TRENDING_DOWN, TRENDING_UP, UNKNOWN
 
 from .schemas import build_decision

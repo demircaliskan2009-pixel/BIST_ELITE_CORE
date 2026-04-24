@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from bist_core.edge.registry import (
+    IMKBH_UNIVERSE,
     EdgeCondition,
     EdgeDefinition,
     EdgeLogic,
     EdgeRegistry,
     EdgeRequiredData,
     EdgeRiskProfile,
-    IMKBH_UNIVERSE,
     build_builtin_edge_registry,
 )
 
@@ -28,9 +28,7 @@ def _valid_edge(edge_id: str = "test_edge") -> EdgeDefinition:
         ),
         exit_logic=EdgeLogic(
             match="any",
-            conditions=(
-                EdgeCondition("close", "<", "sma_20", "Exit when price loses SMA20 support."),
-            ),
+            conditions=(EdgeCondition("close", "<", "sma_20", "Exit when price loses SMA20 support."),),
         ),
         invalidation_conditions=EdgeLogic(
             match="any",
@@ -56,11 +54,24 @@ def _valid_edge(edge_id: str = "test_edge") -> EdgeDefinition:
 def test_builtin_edge_registry_loads_examples() -> None:
     registry = build_builtin_edge_registry()
     active = registry.list_active_edges()
-    assert len(active) == 2
+    assert len(active) == 3
     assert tuple(edge.edge_id for edge in active) == (
+        "bist_bear_oversold_snap",
         "bist_bull_pullback_sma20",
         "bist_sideways_rsi_reversion",
     )
+
+
+def test_builtin_bear_oversold_snap_is_strictly_valid() -> None:
+    registry = build_builtin_edge_registry()
+    edge = next(edge for edge in registry.list_active_edges() if edge.edge_id == "bist_bear_oversold_snap")
+
+    result = registry.validate_edge_structure(edge)
+
+    assert result.valid is True
+    assert edge.feature_set == ("close", "rsi_14", "sma_20", "sma_50", "atr_14", "momentum_20")
+    assert edge.regime_applicability == ("bear",)
+    assert edge.required_data.min_history_bars == 60
 
 
 def test_add_edge_rejects_duplicate_edge_id() -> None:
@@ -81,9 +92,7 @@ def test_validate_edge_rejects_undefined_feature() -> None:
         regime_applicability=("bull",),
         entry_logic=EdgeLogic(
             match="all",
-            conditions=(
-                EdgeCondition("undefined_feature", ">", 0.0, "Undefined feature should fail validation."),
-            ),
+            conditions=(EdgeCondition("undefined_feature", ">", 0.0, "Undefined feature should fail validation."),),
         ),
         exit_logic=EdgeLogic(
             match="any",
@@ -94,7 +103,9 @@ def test_validate_edge_rejects_undefined_feature() -> None:
             conditions=(EdgeCondition("regime", "not_in", ("bull",), "Fail outside bull."),),
         ),
         risk_profile=EdgeRiskProfile("low", 0.03, 5),
-        required_data=EdgeRequiredData(IMKBH_UNIVERSE, "1d", ("open", "high", "low", "close", "volume", "timestamp"), 50),
+        required_data=EdgeRequiredData(
+            IMKBH_UNIVERSE, "1d", ("open", "high", "low", "close", "volume", "timestamp"), 50
+        ),
     )
     result = registry.validate_edge_structure(invalid)
     assert result.valid is False
@@ -111,9 +122,7 @@ def test_validate_edge_rejects_ambiguous_operator() -> None:
         regime_applicability=invalid.regime_applicability,
         entry_logic=EdgeLogic(
             match="all",
-            conditions=(
-                EdgeCondition("sma_20", "approx", "sma_50", "Approximate comparisons are not allowed."),
-            ),
+            conditions=(EdgeCondition("sma_20", "approx", "sma_50", "Approximate comparisons are not allowed."),),
         ),
         exit_logic=invalid.exit_logic,
         invalidation_conditions=invalid.invalidation_conditions,
@@ -135,9 +144,7 @@ def test_validate_edge_rejects_non_deterministic_description() -> None:
         regime_applicability=invalid.regime_applicability,
         entry_logic=EdgeLogic(
             match="all",
-            conditions=(
-                EdgeCondition("momentum_20", ">", 0.0, "Use random discretion when momentum looks good."),
-            ),
+            conditions=(EdgeCondition("momentum_20", ">", 0.0, "Use random discretion when momentum looks good."),),
         ),
         exit_logic=invalid.exit_logic,
         invalidation_conditions=invalid.invalidation_conditions,
@@ -224,9 +231,7 @@ def test_validate_edge_rejects_missing_feature_dependencies() -> None:
         exit_logic=invalid.exit_logic,
         invalidation_conditions=EdgeLogic(
             match="any",
-            conditions=(
-                EdgeCondition("regime", "not_in", ("bull",), "Fail closed outside bull regime."),
-            ),
+            conditions=(EdgeCondition("regime", "not_in", ("bull",), "Fail closed outside bull regime."),),
         ),
         risk_profile=invalid.risk_profile,
         required_data=EdgeRequiredData(
@@ -262,9 +267,7 @@ def test_validate_edge_rejects_invalid_regime_transition_guard() -> None:
         exit_logic=invalid.exit_logic,
         invalidation_conditions=EdgeLogic(
             match="any",
-            conditions=(
-                EdgeCondition("regime", "in", ("bull",), "This does not guard transitions correctly."),
-            ),
+            conditions=(EdgeCondition("regime", "in", ("bull",), "This does not guard transitions correctly."),),
         ),
         risk_profile=invalid.risk_profile,
         required_data=invalid.required_data,

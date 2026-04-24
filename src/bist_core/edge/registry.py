@@ -1,12 +1,11 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from functools import lru_cache
-import re
 from typing import Any, Iterable, Sequence
 
 from bist_core.features.feature_registry import list_features
-
 
 IMKBH_UNIVERSE = "IMKBH"
 ALLOWED_REGIMES = ("bull", "bear", "sideways", "trend", "range")
@@ -291,7 +290,9 @@ def _validate_feature_dependencies(feature_set: Sequence[str], bar_fields: Seque
             continue
         missing = [field for field in required_fields if field not in available]
         if missing:
-            errors.append(f"feature_set feature {name!r} requires bar_fields {tuple(required_fields)!r}; missing {tuple(missing)!r}")
+            errors.append(
+                f"feature_set feature {name!r} requires bar_fields {tuple(required_fields)!r}; missing {tuple(missing)!r}"
+            )
     return errors
 
 
@@ -477,6 +478,53 @@ class EdgeRegistry:
 
 
 def builtin_bist_edges() -> tuple[EdgeDefinition, ...]:
+    bear_oversold_snap = EdgeDefinition(
+        edge_id="bist_bear_oversold_snap",
+        hypothesis=(
+            "IMKBH symbols in bear regime can produce an oversold snap setup while price remains below SMA20, "
+            "SMA20 remains below SMA50, RSI14 stays oversold, and momentum_20 remains negative."
+        ),
+        feature_set=("close", "rsi_14", "sma_20", "sma_50", "atr_14", "momentum_20"),
+        regime_applicability=("bear",),
+        entry_logic=EdgeLogic(
+            match="all",
+            conditions=(
+                EdgeCondition("regime", "in", ("bear",), "Only trade when bear regime is active."),
+                EdgeCondition("close", "<", "sma_20", "Price must remain below SMA20 during the snap setup."),
+                EdgeCondition("sma_20", "<", "sma_50", "Short trend must remain below structural trend."),
+                EdgeCondition("rsi_14", "<=", 30.0, "RSI14 must remain in an oversold state."),
+                EdgeCondition("momentum_20", "<", 0.0, "Twenty-bar momentum must remain negative."),
+            ),
+        ),
+        exit_logic=EdgeLogic(
+            match="any",
+            conditions=(
+                EdgeCondition("close", ">=", "sma_20", "Exit when price mean reverts back to SMA20."),
+                EdgeCondition("rsi_14", ">=", 45.0, "Exit when RSI14 normalizes out of the oversold band."),
+                EdgeCondition("momentum_20", ">=", 0.0, "Exit when twenty-bar momentum is no longer negative."),
+            ),
+        ),
+        invalidation_conditions=EdgeLogic(
+            match="any",
+            conditions=(
+                EdgeCondition("regime", "not_in", ("bear",), "Fail closed when bear regime is no longer active."),
+                EdgeCondition("close", ">=", "sma_50", "Reject if price recovers above SMA50 structural resistance."),
+                EdgeCondition("atr_14", "<=", 0.0, "Reject if ATR14 cannot be computed from valid bars."),
+            ),
+        ),
+        risk_profile=EdgeRiskProfile(
+            volatility_bucket="high",
+            max_expected_drawdown_pct=0.08,
+            max_holding_bars=5,
+        ),
+        required_data=EdgeRequiredData(
+            universe=IMKBH_UNIVERSE,
+            timeframe="1d",
+            bar_fields=("open", "high", "low", "close", "volume", "timestamp"),
+            min_history_bars=60,
+        ),
+    )
+
     trend_pullback = EdgeDefinition(
         edge_id="bist_bull_pullback_sma20",
         hypothesis=(
@@ -565,7 +613,7 @@ def builtin_bist_edges() -> tuple[EdgeDefinition, ...]:
             min_history_bars=60,
         ),
     )
-    return (trend_pullback, sideways_reversion)
+    return (bear_oversold_snap, trend_pullback, sideways_reversion)
 
 
 def build_builtin_edge_registry() -> EdgeRegistry:

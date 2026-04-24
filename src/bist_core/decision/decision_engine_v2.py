@@ -7,12 +7,9 @@ import os
 from typing import Any, Dict, Optional
 
 from bist_core.analytics.expectancy import tracker
-from bist_core.decision.edge_signal import (attach_edge_signal_to_decision,
-                                            compute_edge_signal)
-from bist_core.decision.institutional_brain import \
-    compute_institutional_decision
-from bist_core.decision.price_intelligence import \
-    apply_realtime_price_intelligence
+from bist_core.decision.edge_signal import attach_edge_signal_to_decision, compute_edge_signal
+from bist_core.decision.institutional_brain import compute_institutional_decision
+from bist_core.decision.price_intelligence import apply_realtime_price_intelligence
 from bist_core.edge.bucket_key import edge_bucket_key, regime_from_feat
 from bist_core.edge.edge_store import EdgeStore
 from bist_core.exit_engine import compute_exit_decision

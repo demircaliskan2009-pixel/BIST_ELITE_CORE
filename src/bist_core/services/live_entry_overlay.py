@@ -5,7 +5,6 @@ from typing import Any
 
 from bist_core.services.live_entry_text import build_live_entry_context
 
-
 _ENTRY_KEYS = (
     "entry",
     "entry_price",

@@ -3,9 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from bist_core.vendors.ideal_01_layout import audit_ideal_01_file
 from bist_core.services.live_bridge_payload import normalize_live_bridge_payload
-
+from bist_core.vendors.ideal_01_layout import audit_ideal_01_file
 
 
 def _ideal_round_price(value: float | int | None, digits: int = 2) -> float | None:

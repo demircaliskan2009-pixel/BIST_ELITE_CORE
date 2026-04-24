@@ -8,8 +8,8 @@ from typing import Any, Optional
 from bist_core.execution.market_realism_metrics import MarketRealismMetrics
 from bist_core.execution.realistic_execution_engine import RealisticExecutionEngine
 from bist_core.execution.tick_size import round_to_tick
-from bist_core.live.stop_target_risk import compute_atr_stop_target
 from bist_core.live.state_store import LiveState
+from bist_core.live.stop_target_risk import compute_atr_stop_target
 from bist_core.models.ohlcv import OHLCVBar
 
 

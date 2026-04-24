@@ -31,9 +31,18 @@ def _trend_up_bars(n: int = 60) -> list[OHLCVBar]:
     return [_bar(1_704_067_200 + i * 86400, 100.0 + i * 0.45, 0.55, 1_000_000.0) for i in range(n)]
 
 
+def _trend_down_bars(n: int = 60) -> list[OHLCVBar]:
+    return [_bar(1_704_067_200 + i * 86400, 120.0 - i * 0.7, 0.8, 1_200_000.0) for i in range(n)]
+
+
 def _range_bars(n: int = 60) -> list[OHLCVBar]:
     closes = [100.0 + ((i % 4) - 1.5) * 0.18 for i in range(n)]
     return [_bar(1_704_067_200 + i * 86400, close, 0.28, 900_000.0) for i, close in enumerate(closes)]
+
+
+def _edge_by_id(edge_id: str):
+    registry = build_builtin_edge_registry()
+    return next(edge for edge in registry.list_active_edges() if edge.edge_id == edge_id)
 
 
 def test_momentum_none_returns_none():
@@ -89,8 +98,7 @@ def test_no_data_returns_none():
 
 
 def test_score_edge_returns_positive_score_for_compatible_builtin_trend_edge() -> None:
-    registry = build_builtin_edge_registry()
-    edge = registry.list_active_edges()[0]
+    edge = _edge_by_id("bist_bull_pullback_sma20")
     bars = _trend_up_bars()
     regime = RegimeEngine().detect_regime(bars)
 
@@ -104,8 +112,7 @@ def test_score_edge_returns_positive_score_for_compatible_builtin_trend_edge() -
 
 
 def test_score_edge_fail_closes_on_regime_mismatch() -> None:
-    registry = build_builtin_edge_registry()
-    edge = registry.list_active_edges()[0]
+    edge = _edge_by_id("bist_bull_pullback_sma20")
     bars = _range_bars()
     regime = RegimeEngine().detect_regime(bars)
 
@@ -116,8 +123,7 @@ def test_score_edge_fail_closes_on_regime_mismatch() -> None:
 
 
 def test_score_edge_fail_closes_on_unclear_signal() -> None:
-    registry = build_builtin_edge_registry()
-    edge = registry.list_active_edges()[0]
+    edge = _edge_by_id("bist_bull_pullback_sma20")
     bars = _trend_up_bars()
     regime = RegimeEngine().detect_regime(bars)
     last = bars[-1]
@@ -138,8 +144,7 @@ def test_score_edge_fail_closes_on_unclear_signal() -> None:
 
 
 def test_score_edge_fail_closes_on_insufficient_history() -> None:
-    registry = build_builtin_edge_registry()
-    edge = registry.list_active_edges()[0]
+    edge = _edge_by_id("bist_bull_pullback_sma20")
     bars = _trend_up_bars(30)
     regime = RegimeEngine().detect_regime(_trend_up_bars())
 
@@ -149,6 +154,42 @@ def test_score_edge_fail_closes_on_insufficient_history() -> None:
     assert "insufficient_history" in result.explanation
 
 
+def test_score_edge_returns_positive_score_for_builtin_bear_oversold_snap() -> None:
+    edge = _edge_by_id("bist_bear_oversold_snap")
+    bars = _trend_down_bars()
+    regime = RegimeEngine().detect_regime(bars)
+
+    result = score_edge(edge, regime, bars)
+
+    assert result.edge_id == edge.edge_id
+    assert result.total_score > 0
+    assert result.components.regime_score > 0
+    assert result.components.signal_score > 0
+    assert "regime=TREND_DOWN" in result.explanation
+
+
+def test_score_edge_bear_oversold_snap_fail_closes_on_insufficient_history() -> None:
+    edge = _edge_by_id("bist_bear_oversold_snap")
+    bars = _trend_down_bars(40)
+    regime = RegimeEngine().detect_regime(_trend_down_bars())
+
+    result = score_edge(edge, regime, bars)
+
+    assert result.total_score == 0.0
+    assert "insufficient_history" in result.explanation
+
+
+def test_score_edge_bear_oversold_snap_fail_closes_on_regime_mismatch() -> None:
+    edge = _edge_by_id("bist_bear_oversold_snap")
+    bars = _range_bars()
+    regime = RegimeEngine().detect_regime(bars)
+
+    result = score_edge(edge, regime, bars)
+
+    assert result.total_score == 0.0
+    assert "regime_mismatch" in result.explanation
+
+
 def test_score_edges_returns_all_active_edges_without_ranking() -> None:
     registry = build_builtin_edge_registry()
     bars = _trend_up_bars()
@@ -156,10 +197,12 @@ def test_score_edges_returns_all_active_edges_without_ranking() -> None:
 
     results = score_edges(registry, regime, bars)
 
-    assert len(results) == 2
+    assert len(results) == 3
     assert tuple(result.edge_id for result in results) == (
+        "bist_bear_oversold_snap",
         "bist_bull_pullback_sma20",
         "bist_sideways_rsi_reversion",
     )
-    assert results[0].total_score > 0
-    assert results[1].total_score == 0.0
+    assert results[0].total_score == 0.0
+    assert results[1].total_score > 0
+    assert results[2].total_score == 0.0

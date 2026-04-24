@@ -11,8 +11,8 @@ from pathlib import Path
 import numpy as np
 
 from bist_core.data.ideal_binary_parser import (
-    OHLCVRecord,
     RECORD_SIZE,
+    OHLCVRecord,
     decode_ideal_binary_bytes,
 )
 from bist_core.models.ohlcv import OHLCVBar
@@ -253,7 +253,7 @@ def _parse_ideal_01_struct_bytes(
     best_score = -1
     best_offset = 0
     best_layout = "none"
-    file_size = os.path.getsize(path) if path and os.path.exists(path) else len(data)
+    os.path.getsize(path) if path and os.path.exists(path) else len(data)
 
     def _parse_with_layout(
         header: int,

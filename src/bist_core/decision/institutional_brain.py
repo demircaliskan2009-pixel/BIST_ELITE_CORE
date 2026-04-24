@@ -349,7 +349,7 @@ def build_compute_edge_features(
     if alpha is not None:
         re = float(alpha["range_expansion"])
         mb_a = float(alpha["momentum_burst"])
-        vs = float(alpha["relative_volume"])
+        float(alpha["relative_volume"])
         out["range_expansion"] = max(
             float(out["range_expansion"]),
             max(0.0, min(1.0, math.tanh(max(0.0, re - 1.0)))),

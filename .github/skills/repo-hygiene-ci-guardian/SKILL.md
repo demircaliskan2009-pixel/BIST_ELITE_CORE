@@ -1,55 +1,174 @@
----
+﻿---
 name: repo-hygiene-ci-guardian
-description: 'Use when repository hygiene, commit readiness, generated artifact cleanup, CI triage, warning or skip investigation, PR-based delivery, or atomic commit discipline is required. Covers git status and diff inspection before commit, untracking runtime artifacts, treating unexpected skips or warnings as defects, and switching to PR workflow automatically when branch protection blocks direct push.'
-argument-hint: 'Describe the repo hygiene or CI issue, target files, current git state, validation output, and whether commit or PR flow is involved.'
+description: 'Git automation, CI feedback loop, commit gating, PR workflow, artifact cleanup, warning/skip investigation. Autonomous code→test→validate→commit→CI→feedback→fix loop.'
+argument-hint: 'Describe the repo hygiene, git, CI, or commit task. Include current git state and validation output.'
 user-invocable: true
 ---
 
-# Repo Hygiene + CI Guardian
+# Repo Hygiene + CI Guardian + Git Automation
 
-This skill hardens repository state before commit or push and keeps CI behavior deterministic, auditable, and clean.
+Autonomous loop: code → test → validate → commit → CI → feedback → fix → repeat.
 
-## Use This Skill When
-- Preparing a commit or push.
-- Investigating CI failures, warnings, skips, xfails, leaks, or hangs.
-- Cleaning generated or runtime artifacts from the working tree.
-- Converting a direct-push path into a PR workflow because of branch protection.
-- Verifying that a change is atomic, minimal, and relevant.
+## GIT AUTOMATION PROTOCOL
 
-## Non-Negotiable Rules
-- Never commit tracked generated, runtime, log, cache, or temporary artifacts.
-- Before commit, inspect both git status and git diff.
-- Treat unexpected `SKIP`, `XFAIL`, warnings, file-handle leaks, and slow hangs as defects unless a test contract explicitly justifies them.
-- If pytest shows `SKIP`, `XFAIL`, or warnings, investigate and explain the cause before proceeding.
-- Untrack runtime artifacts before commit instead of hiding the problem.
-- If the diff is large, mixed-purpose, or unclear, stop instead of committing.
-- If branch protection blocks direct push, switch to PR workflow automatically.
-- If CI fails, keep fixing and retrying until green or until explicit missing evidence blocks further action.
-- Commit only atomic, minimal, relevant changes.
-- If validation is noisy or ambiguous, fail closed, explain why, and keep investigating.
+### Commit Message Standard
 
-## Standard Procedure
-1. Inspect git status.
-2. Inspect the exact diff to be committed.
-3. Remove or untrack generated and runtime artifacts.
-4. Reproduce the first CI or test failure locally.
-5. Investigate warnings, skips, leaks, and hangs as first-class defects.
-6. Validate with the smallest command that proves the fix, then run broader proof if commit readiness requires it.
-7. Recheck CI until status is green or a concrete blocker is identified.
-8. Stage only the minimal relevant files.
-9. If direct push is blocked, continue through a PR branch and recheck status checks.
+Format: `<type>(<scope>): <description>`
 
-## Required Output
-1. Current hygiene or CI problem.
-2. Exact files involved.
-3. Why the state is unsafe or not commit-ready.
-4. Minimal corrective action.
-5. Validation run.
-6. Remaining risk, if any.
+Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `perf`, `ci`
+Scopes: `data`, `edge`, `risk`, `execution`, `state`, `backtest`, `infra`, `deps`
 
-## Completion Criteria
-- No generated or runtime artifacts are being committed.
-- The staged diff is atomic and relevant.
-- Validation output is clean or explicitly justified.
-- CI is green or blocked by explicit evidence that has been reported.
-- The branch is ready for automated PR-based CI flow.
+Rules:
+- Imperative mood ("add" not "added")
+- Max 72 chars subject line
+- No period at end
+- Body optional, separated by blank line
+
+Examples:
+- `feat(edge): add funding rate mean-reversion family B`
+- `fix(risk): enforce CVaR99 check before position sizing`
+- `test(data): add CRC32 mismatch recovery scenario`
+
+### Auto-Commit Gate
+
+Before ANY commit, ALL gates must pass:
+
+```
+GATE 1: LINT        → ruff check --fix + ruff format (zero diagnostics)
+GATE 2: TYPE        → pylanceSyntaxErrors (zero errors in changed files)
+GATE 3: TEST        → python -m pytest -x -q (zero failures, zero unexpected SKIP/XFAIL)
+GATE 4: DIFF REVIEW → git diff --stat (atomic, single-purpose, <200 lines)
+GATE 5: ARTIFACTS   → no generated/runtime/log/cache files staged
+```
+
+If ANY gate fails → FIX before commit. Never skip. Never `--no-verify`.
+
+### Auto-Commit Execution
+
+```powershell
+# 1. Stage only relevant files
+git add <specific_files>
+
+# 2. Verify staged content
+git diff --cached --stat
+
+# 3. Commit with standardized message
+git commit -m "<type>(<scope>): <description>"
+```
+
+### Auto-PR Protocol
+
+When branch protection blocks direct push:
+
+1. Verify current branch is not `main`
+2. Push feature branch: `git push origin <branch>`
+3. Create PR with:
+   - Title: same as commit message
+   - Body: compliance evidence (test results, lint status)
+   - Labels: auto-generated from type prefix
+4. If PR checks fail → parse failure → route to fix → push again
+5. Loop until PR checks green
+
+### Atomic Commit Rules
+
+- ONE logical change per commit
+- If a task produces multiple changes → split into sequential commits
+- Order: infrastructure → logic → tests → docs
+- Never mix formatting-only changes with logic changes
+
+## CI FEEDBACK LOOP
+
+### CI Result Parsing
+
+After push or PR creation, parse CI results:
+
+```
+STEP 1: Check CI status (green/red/pending)
+STEP 2: If RED → download failure log
+STEP 3: Classify failure:
+         - lint failure   → auto-fix with ruff, re-commit
+         - test failure   → route to forensic-debugger agent
+         - type error     → fix with pylance evidence, re-commit
+         - import error   → fix dependency, re-commit
+         - timeout        → investigate test isolation
+         - CodeQL finding → review and fix security issue
+STEP 4: Apply fix
+STEP 5: Re-push
+STEP 6: Re-check CI
+STEP 7: Loop until GREEN or BLOCKED by missing evidence
+```
+
+### Failure Routing
+
+| CI Failure Type | Route To | Action |
+|----------------|----------|--------|
+| Lint/format | Self-fix | `ruff check --fix` + `ruff format` |
+| Test failure | forensic-debugger | Root cause → minimal fix |
+| Import error | Self-fix | Fix import path or install dep |
+| Type error | Self-fix | Fix with pylance evidence |
+| Security (CodeQL) | safe-patch prompt | Minimal security fix |
+| Timeout | forensic-debugger | Investigate hang or slow test |
+| Flaky test | forensic-debugger | Stabilize or quarantine |
+
+### Loop Limits
+
+- Maximum 5 fix-push cycles per CI run
+- If not green after 5 cycles → STOP → report blocking issues
+- If same failure repeats 3 times → STOP → escalate as structural issue
+
+## ARTIFACT MANAGEMENT
+
+### Generated/Runtime Files (NEVER commit)
+
+```
+*.pyc, __pycache__/, .pytest_cache/, .ruff_cache/
+*.log, *.jsonl (runtime), *.tmp
+runtime_state.json, equity_curve.jsonl, paper_trades.jsonl
+data/raw/, data/log/, logs/, outputs/, tmp/
+.env, *.secret, *.key
+```
+
+### Pre-Commit Artifact Check
+
+```powershell
+# Check for runtime artifacts in staging
+git diff --cached --name-only | Where-Object {
+    $_ -match '\.(pyc|log|tmp)$' -or
+    $_ -match '(__pycache__|\.pytest_cache|\.ruff_cache)' -or
+    $_ -match '^(logs|outputs|tmp|data/raw|data/log)/'
+}
+# If any match → unstage and untrack
+```
+
+## STANDARD PROCEDURE
+
+1. Edit code (implementation or fix)
+2. Run lint gate: `ruff check --fix <files>` + `ruff format <files>`
+3. Run type gate: `pylanceSyntaxErrors` on changed files
+4. Run test gate: `python -m pytest -x -q`
+5. Review diff: `git diff --stat` — verify atomic and single-purpose
+6. Check artifacts: no runtime files staged
+7. Stage: `git add <specific_files>`
+8. Commit: `git commit -m "<type>(<scope>): <description>"`
+9. Push: `git push origin <branch>`
+10. Parse CI results
+11. If CI red → classify → fix → goto step 2
+12. If CI green → DONE
+
+## DEFECT CLASSIFICATION
+
+Treat ALL as defects unless explicitly justified:
+- Unexpected SKIP in pytest
+- Unexpected XFAIL in pytest
+- Deprecation warnings
+- ResourceWarning (file handle leaks)
+- Slow tests (>10s without justification)
+- Clean-checkout failures masked by local artifacts
+
+## COMPLETION CRITERIA
+
+- All 5 commit gates pass
+- Diff is atomic and relevant
+- CI is green
+- No runtime artifacts committed
+- Commit message follows standard

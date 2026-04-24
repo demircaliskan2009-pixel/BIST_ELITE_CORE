@@ -10,7 +10,6 @@ from typing import Callable, Dict, List, Optional
 
 from bist_core.execution.base import ExecutionProvider
 
-
 _REGISTRY: Dict[str, Callable[..., ExecutionProvider]] = {}
 
 

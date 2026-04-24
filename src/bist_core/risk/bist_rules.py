@@ -20,8 +20,8 @@ def preflight_for_live(
     Returns (ok, errors). When ok is False, errors list reasons (e.g. bist_rules_tick_bands_missing, bist_rules_vbts_missing).
     """
     errors: List[str] = []
-    from bist_core.risk.rulespack import get_rulespack_dir, load_rulespack
     from bist_core.risk.restrictions import get_restrictions_path, load_restrictions
+    from bist_core.risk.rulespack import get_rulespack_dir, load_rulespack
     # FAZ57_REQUIRE_RESTRICTIONS_V4
     try:
         _rp = None if restrictions_path is None else Path(restrictions_path)
@@ -54,8 +54,8 @@ def load_bist_rules(
     Load rulespack + restrictions. Returns (rulespack, restrictions_state, provenance, errors).
     When files missing, returns empty state and non-empty errors (for fail-closed reporting).
     """
-    from bist_core.risk.rulespack import get_rulespack_dir, load_rulespack
     from bist_core.risk.restrictions import get_restrictions_path, load_restrictions
+    from bist_core.risk.rulespack import get_rulespack_dir, load_rulespack
 
     errors: List[str] = []
     provenance: Dict[str, Any] = {"rulespack_dir": "", "restrictions_path": ""}

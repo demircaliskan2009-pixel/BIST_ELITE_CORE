@@ -8,10 +8,9 @@ Pure stdlib, no network.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, Sequence
 
 from bist_core.backtest.backtest_engine import OHLCVBar
-
 
 # ---------------------------------------------------------------------------
 # Symbol normalization

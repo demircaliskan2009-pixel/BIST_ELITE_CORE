@@ -1,8 +1,9 @@
 import csv
 import pathlib
 from datetime import datetime
-from ..models import EODBar, PriceBand, KapEvent
+
 from ..config import SOURCES
+from ..models import EODBar, KapEvent, PriceBand
 
 ROOT = pathlib.Path(SOURCES["local_csv"]["root_dir"]).resolve()
 

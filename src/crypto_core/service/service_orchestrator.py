@@ -98,6 +98,11 @@ from crypto_core.service.promotion_review_controller import (
     ReviewWorkflowCorruptError,
 )
 from crypto_core.service.readiness import ReadinessEvaluator, readiness_to_dict
+from crypto_core.service.sleeve_admission_controller import (
+    SleeveAdmissionController,
+    SleeveAdmissionCorruptError,
+    SleeveAdmissionSnapshot,
+)
 from crypto_core.service.sleeve_candidate_workflow import (
     SleeveCandidateWorkflowController,
     SleeveCandidateWorkflowCorruptError,
@@ -297,6 +302,9 @@ class OperatorSnapshot:
     # Phase 15E: Sleeve promotion review
     sleeve_promotion_review: SleevePromotionReviewSnapshot | None = None
 
+    # Phase 15F: Sleeve admission gate
+    sleeve_admission: SleeveAdmissionSnapshot | None = None
+
     # Escalation review workflow (Phase 13B)
     escalation_review: EscalationWorkflowState | None = None
 
@@ -369,12 +377,40 @@ class ServiceOrchestrator:
                 plane=external_regime_plane,
                 evidence_store=evidence_store,
             )
-            self._external_regime_plane = self._external_regime_manager.plane
+            self._external_regime_plane = external_regime_plane
         else:
             self._external_regime_manager = None
             self._external_regime_plane = None
 
-        self._campaign: CampaignController | None = None
+        self._sleeve_promotion_review_controller = None
+        self._campaign = None
+        self._review = None
+        self._last_campaign_report = None
+        self._sleeve_portfolio_controller = None
+        self._configured_sleeves = tuple(sleeves)
+        self._escalation_review = None
+        self._sleeve_allocation_policy = (
+            SleeveAllocationPolicy() if sleeve_allocation_policy is None else sleeve_allocation_policy
+        )
+        self._sleeve_admission_controller = None
+
+    def build_sleeve_admission_controller(self):
+        """Build and cache the sleeve admission controller from current review portfolio summary."""
+        review_portfolio_summary = self.get_review_portfolio_summary()
+        if not review_portfolio_summary:
+            raise SleeveAdmissionCorruptError("No review portfolio summary for admission.")
+        self._sleeve_admission_controller = SleeveAdmissionController(review_portfolio_summary)
+        return self._sleeve_admission_controller
+
+    def get_sleeve_admission_snapshot(self):
+        if not self._sleeve_admission_controller:
+            self.build_sleeve_admission_controller()
+        return self._sleeve_admission_controller.snapshot()
+
+    def get_sleeve_admission_portfolio_summary(self):
+        if not self._sleeve_admission_controller:
+            self.build_sleeve_admission_controller()
+        return self._sleeve_admission_controller.build_portfolio_summary()
         self._last_campaign_report: CampaignReport | None = None
 
         self._review: PromotionReviewController | None = None
@@ -1174,6 +1210,11 @@ class ServiceOrchestrator:
         if self._sleeve_promotion_review_controller is not None:
             sleeve_promotion_review = self._sleeve_promotion_review_controller.snapshot()
 
+        sleeve_admission = None
+        try:
+            sleeve_admission = self.get_sleeve_admission_snapshot()
+        except Exception:
+            sleeve_admission = None
         return OperatorSnapshot(
             service_mode=ss.service_mode,
             trading_enabled=ss.trading_enabled,
@@ -1187,6 +1228,7 @@ class ServiceOrchestrator:
             sleeve_portfolio=sleeve_portfolio,
             sleeve_candidate_workflow=sleeve_candidate_workflow,
             sleeve_promotion_review=sleeve_promotion_review,
+            sleeve_admission=sleeve_admission,
             readiness_level=self._readiness_level,
             readiness_is_supportive=readiness_is_supportive,
             evidence=evidence,
@@ -2672,6 +2714,8 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         "sleeve_promotion_review": (
             snap.sleeve_promotion_review.__dict__ if snap.sleeve_promotion_review is not None else None
         ),
+        # Phase 15F
+        "sleeve_admission": (snap.sleeve_admission.__dict__ if snap.sleeve_admission is not None else None),
         "readiness_level": snap.readiness_level,
         "readiness_is_supportive": snap.readiness_is_supportive,
         "evidence": evidence_sufficiency_state_to_dict(snap.evidence),

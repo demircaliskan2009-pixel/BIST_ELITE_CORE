@@ -5,7 +5,7 @@ BASE = pathlib.Path(__file__).resolve().parents[1]
 
 
 def load_json(rel):
-    with open(BASE / rel, "r", encoding="utf-8") as f:
+    with open(BASE / rel, encoding="utf-8") as f:
         return json.load(f)
 
 

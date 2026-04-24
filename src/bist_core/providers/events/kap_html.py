@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import hashlib
 from html.parser import HTMLParser
-import os
 from pathlib import Path
 from typing import List
 from urllib.parse import urljoin

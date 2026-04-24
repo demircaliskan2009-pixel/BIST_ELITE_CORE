@@ -11,11 +11,11 @@ from bist_core.services.advisor_chat_adapter import (
     build_scan_results_from_advice_map,
 )
 from bist_core.services.chat_intent import classify_chat_intent
-from bist_core.services.scan_ranking import rank_scan_candidates
 from bist_core.services.live_price_sanity import (
     sanitize_advice_payload_for_chat,
     sanitize_chat_result_live_text,
 )
+from bist_core.services.scan_ranking import rank_scan_candidates
 
 
 def _normalize_symbol_list(values: Sequence[str] | None) -> list[str]:

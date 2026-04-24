@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional, Union
 
 from bist_core.services import snapshot_integrity
 
-
 EXECUTION_RESULT_SCHEMA_VERSION = 1
 EXECUTION_RESULT_FILENAME = "execution_result.json"
 

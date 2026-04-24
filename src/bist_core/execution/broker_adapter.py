@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Protocol
+
+from bist_core.execution.order_state_machine import Order, OrderState
+from bist_core.providers.base import FailClosedError
 
 if TYPE_CHECKING:
     from bist_core.execution.execution_engine import ExecutionEngine
@@ -151,25 +156,122 @@ class BrokerPlacementProtocol(Protocol):
 OrderSide = Literal["buy", "sell"]
 
 
+class OrderStatus(str, Enum):
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+    FILLED = "FILLED"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    CANCELLED = "CANCELLED"
+
+
+@dataclass(frozen=True)
+class BrokerResponse:
+    order_id: str
+    status: OrderStatus
+    filled_quantity: int
+    avg_price: float
+    timestamp: int
+    reason: str | None = None
+
+
+def _fail_closed(message: str) -> None:
+    raise FailClosedError(message)
+
+
+def _validate_order_id(order_id: Any) -> str:
+    if not isinstance(order_id, str):
+        _fail_closed("invalid_order_id:type")
+    normalized = order_id.strip()
+    if not normalized:
+        _fail_closed("invalid_order_id:empty")
+    return normalized
+
+
+def _validate_order_for_broker(order: Any) -> Order:
+    if not isinstance(order, Order):
+        _fail_closed("invalid_order:type")
+    if not str(order.symbol or "").strip():
+        _fail_closed("invalid_symbol")
+    _validate_order_id(order.order_id)
+    if isinstance(order.quantity, bool) or not isinstance(order.quantity, int) or order.quantity <= 0:
+        _fail_closed("invalid_quantity")
+    if isinstance(order.filled_quantity, bool) or not isinstance(order.filled_quantity, int) or order.filled_quantity < 0:
+        _fail_closed("invalid_filled_quantity")
+    if order.filled_quantity > order.quantity:
+        _fail_closed("filled_quantity_exceeds_quantity")
+    if float(order.price) <= 0.0:
+        _fail_closed("invalid_price")
+    if order.state not in {OrderState.VALIDATED, OrderState.SENT}:
+        _fail_closed("invalid_state")
+    if order.filled_quantity != 0:
+        _fail_closed("invalid_filled_quantity")
+    return order
+
+
 class BrokerAdapter(ABC):
     """Low-level execution bridge (paper / live). No network in base class."""
 
     @abstractmethod
-    def send_order(
-        self,
-        symbol: str,
-        side: OrderSide,
-        price: float,
-        size: int,
-        *,
-        market_price: float | None = None,
-    ) -> str: ...
+    def send_order(self, order: Order) -> BrokerResponse: ...
 
     @abstractmethod
-    def cancel_order(self, order_id: str) -> bool: ...
+    def cancel_order(self, order_id: str) -> BrokerResponse: ...
 
     @abstractmethod
-    def get_order_status(self, order_id: str) -> Optional[str]: ...
+    def get_order_status(self, order_id: str) -> BrokerResponse: ...
+
+
+class DummyBrokerAdapter(BrokerAdapter):
+    """Strict in-memory adapter: accepts validated orders, never guesses fills."""
+
+    def __init__(self) -> None:
+        self._responses: dict[str, BrokerResponse] = {}
+        self._clock = 0
+
+    def _next_timestamp(self) -> int:
+        self._clock += 1
+        return self._clock
+
+    def send_order(self, order: Order) -> BrokerResponse:
+        validated_order = _validate_order_for_broker(order)
+        order_id = _validate_order_id(validated_order.order_id)
+        if order_id in self._responses:
+            _fail_closed("duplicate_order_id")
+        response = BrokerResponse(
+            order_id=order_id,
+            status=OrderStatus.ACCEPTED,
+            filled_quantity=0,
+            avg_price=0.0,
+            timestamp=self._next_timestamp(),
+            reason=None,
+        )
+        self._responses[order_id] = response
+        return response
+
+    def cancel_order(self, order_id: str) -> BrokerResponse:
+        normalized_order_id = _validate_order_id(order_id)
+        previous = self._responses.get(normalized_order_id)
+        if previous is None:
+            _fail_closed("unknown_order_id")
+        if previous.status is not OrderStatus.ACCEPTED:
+            _fail_closed("invalid_state")
+        response = BrokerResponse(
+            order_id=normalized_order_id,
+            status=OrderStatus.CANCELLED,
+            filled_quantity=previous.filled_quantity,
+            avg_price=previous.avg_price,
+            timestamp=self._next_timestamp(),
+            reason=None,
+        )
+        self._responses[normalized_order_id] = response
+        return response
+
+    def get_order_status(self, order_id: str) -> BrokerResponse:
+        normalized_order_id = _validate_order_id(order_id)
+        response = self._responses.get(normalized_order_id)
+        if response is None:
+            _fail_closed("unknown_order_id")
+        return response
 
 
 class StubBrokerAdapter:
@@ -273,8 +375,11 @@ class PaperBrokerAdapter(BrokerAdapter):
 
 
 __all__ = [
+    "BrokerResponse",
     "BrokerAdapter",
     "BrokerPlacementProtocol",
+    "DummyBrokerAdapter",
+    "OrderStatus",
     "PaperBrokerAdapter",
     "StubBrokerAdapter",
     "PLACE_ORDERS_INPUT_KEYS",

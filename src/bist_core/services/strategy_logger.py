@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-
 STRATEGY_LOG_SCHEMA_VERSION = 1
 
 

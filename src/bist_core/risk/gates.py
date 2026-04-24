@@ -41,7 +41,7 @@ def gate_order_rules(
         except (TypeError, ValueError):
             errors.append("price_invalid")
         else:
-            from bist_core.risk.rulespack import validate_price_tick, validate_price_band
+            from bist_core.risk.rulespack import validate_price_band, validate_price_tick
 
             ok_tick, _ = validate_price_tick(rulespack, p)
             if not ok_tick:
@@ -232,7 +232,7 @@ class RiskGateEngine:
             return False, notes
 
         if rulespack:
-            from bist_core.risk.rulespack import validate_price_tick, validate_price_band
+            from bist_core.risk.rulespack import validate_price_band, validate_price_tick
 
             actions = orders_intent.get("actions") or []
             for a in actions:

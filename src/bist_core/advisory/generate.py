@@ -6,7 +6,7 @@ import csv
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from bist_core.models.base import ModelPlugin

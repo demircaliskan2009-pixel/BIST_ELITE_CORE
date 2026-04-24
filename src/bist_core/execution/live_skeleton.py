@@ -13,11 +13,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from bist_core.audit.ledger import write_fills_jsonl, write_orders_jsonl, write_positions_jsonl
+from bist_core.dossier.write import update_dossier_evidence
 from bist_core.execution.result_writer import EXECUTION_RESULT_FILENAME, write_execution_result
 from bist_core.portfolio.accounting import apply_fills, create_initial_state
 from bist_core.reconciliation import write_reconciliation
 from bist_core.services import snapshot_integrity
-from bist_core.dossier.write import update_dossier_evidence
 
 PORTFOLIO_STATE_FILENAME = "state.json"
 

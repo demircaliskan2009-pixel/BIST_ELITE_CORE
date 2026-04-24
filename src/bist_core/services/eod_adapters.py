@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import date as Date
 import math
+from datetime import date as Date
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -276,24 +276,27 @@ def materialize_snapshots_from_inbox(
         return out
 
     def _write_snapshot(fp, by_symbol: dict):
-        hdr = ["symbol","open","high","low","close","volume","turnover_tl"]
+        hdr = ["symbol", "open", "high", "low", "close", "volume", "turnover_tl"]
         rows = []
         for s in sorted(by_symbol.keys()):
             r = by_symbol[s]
-            rows.append({
-                "symbol": s,
-                "open": r.get("open",""),
-                "high": r.get("high",""),
-                "low": r.get("low",""),
-                "close": r.get("close",""),
-                "volume": r.get("volume",""),
-                "turnover_tl": r.get("turnover_tl",""),
-            })
+            rows.append(
+                {
+                    "symbol": s,
+                    "open": r.get("open", ""),
+                    "high": r.get("high", ""),
+                    "low": r.get("low", ""),
+                    "close": r.get("close", ""),
+                    "volume": r.get("volume", ""),
+                    "turnover_tl": r.get("turnover_tl", ""),
+                }
+            )
         with fp.open("w", encoding="utf-8", newline="") as f:
             w = csv.DictWriter(f, fieldnames=hdr)
             w.writeheader()
             for r in rows:
                 w.writerow(r)
+
     if symbols is None:
         syms = set()
         for fp in inbox.glob("*.csv"):

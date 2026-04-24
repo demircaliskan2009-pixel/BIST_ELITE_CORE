@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from bist_core.execution.base import execution_result
 from bist_core.execution.adapters.dry_run import DryRunExecutionProvider
+from bist_core.execution.base import execution_result
 
 
 class RealBrokerExecutionProvider:

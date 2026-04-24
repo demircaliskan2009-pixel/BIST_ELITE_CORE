@@ -8,10 +8,11 @@ entry/stop/target levels.  Pure stdlib, no network.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Sequence
 
 from bist_core.backtest.backtest_engine import OHLCVBar
-from bist_core.features.indicator_library import atr as compute_atr, sma as compute_sma
+from bist_core.features.indicator_library import atr as compute_atr
+from bist_core.features.indicator_library import sma as compute_sma
 
 
 @dataclass

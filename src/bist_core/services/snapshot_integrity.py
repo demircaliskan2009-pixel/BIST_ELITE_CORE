@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import csv
-import shutil
-from datetime import datetime, timezone
 import hashlib
 import json
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 
@@ -84,7 +84,6 @@ def build_snapshot_hash_manifest(snapshot_csv_path: Path) -> Dict[str, object]:
 
 def atomic_write_json(path: Path, payload: dict) -> None:
     """Write JSON atomically. Windows-safe: retry replace to avoid WinError 32 file locks."""
-    import json
     import os
     import time
 

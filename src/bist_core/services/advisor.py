@@ -1,19 +1,23 @@
 from __future__ import annotations
 
-from datetime import date as _dt_date, datetime as _dt_datetime
-
+import json
 from dataclasses import dataclass
 from datetime import date as Date
+from datetime import date as _dt_date
+from datetime import datetime as _dt_datetime
 from functools import lru_cache
 from pathlib import Path
-import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from bist_core import config
 from bist_core.services import eventstore
+from bist_core.services.eod_adapters import (build_bands_for_day,
+                                             build_bars_window,
+                                             materialize_snapshots_from_inbox,
+                                             resolve_snapshots_base)
 from bist_core.services.marketdata import MarketData
-from bist_core.services.eod_adapters import build_bars_window, build_bands_for_day, resolve_snapshots_base, materialize_snapshots_from_inbox
 from bist_core.strategy import engine
+
 
 @dataclass
 class Advice:
@@ -764,7 +768,8 @@ def build_chat_response_for_text(
     default_scan_n: int = 5,
     **advisor_kwargs,
 ):
-    from bist_core.services.advisor_chat_service import build_advisor_chat_service_result
+    from bist_core.services.advisor_chat_service import \
+        build_advisor_chat_service_result
 
     return build_advisor_chat_service_result(
         text=text,
@@ -787,7 +792,8 @@ def render_chat_response_text(
     default_scan_n: int = 5,
     **advisor_kwargs,
 ) -> str:
-    from bist_core.services.advisor_chat_service import render_advisor_chat_text
+    from bist_core.services.advisor_chat_service import \
+        render_advisor_chat_text
 
     return render_advisor_chat_text(
         text=text,
@@ -810,7 +816,8 @@ def render_chat_response_markdown(
     default_scan_n: int = 5,
     **advisor_kwargs,
 ) -> str:
-    from bist_core.services.advisor_chat_service import render_advisor_chat_markdown
+    from bist_core.services.advisor_chat_service import \
+        render_advisor_chat_markdown
 
     return render_advisor_chat_markdown(
         text=text,

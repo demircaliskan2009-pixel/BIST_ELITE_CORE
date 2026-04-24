@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import csv
 import datetime as dt
+import math
 import struct
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
-import csv
-import math
 
 from .probe import probe_file, write_probe_report
 

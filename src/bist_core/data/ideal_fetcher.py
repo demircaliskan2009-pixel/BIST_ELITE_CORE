@@ -5,9 +5,8 @@ from __future__ import annotations
 import os
 from typing import Callable
 
-from bist_core.models.ohlcv import OHLCVBar
-
 from bist_core.data.loader import load_ideal_dataset
+from bist_core.models.ohlcv import OHLCVBar
 
 MIN_BARS_PER_SYMBOL = 50
 _DEFAULT_BASE_PATH = r"C:/iDeal/ChartData/IMKBH/G"

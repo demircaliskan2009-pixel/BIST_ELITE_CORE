@@ -12,7 +12,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 from bist_core.market_data.base import MarketDataProvider
 
-
 _REGISTRY: Dict[str, Callable[..., MarketDataProvider]] = {}
 
 # Static dummy data for test / demo provider (deterministic)

@@ -11,7 +11,6 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-
 IDENTITY_TIMELINE_SCHEMA_VERSION = 1
 
 

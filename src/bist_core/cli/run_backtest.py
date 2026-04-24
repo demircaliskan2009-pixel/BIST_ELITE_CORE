@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 import sys
 
-from bist_core.data.loader import load_ideal_dataset
 from bist_core.backtest.backtest import BacktestEngine
-
+from bist_core.data.loader import load_ideal_dataset
 
 SYMBOLS = ["ASELS", "THYAO", "GARAN", "AKBNK", "BIMAS"]
 BASE_PATH = r"C:/iDeal/ChartData/IMKBH/G"

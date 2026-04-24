@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-
 PERFORMANCE_SCHEMA_VERSION = 1
 
 

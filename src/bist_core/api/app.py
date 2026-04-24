@@ -130,8 +130,8 @@ def scan(req: ScanRequest) -> dict[str, Any]:
     if not day_str:
         raise HTTPException(status_code=400, detail="No snapshots; provide day or run eod pipeline")
 
-    from bist_core.services.marketdata import MarketData
     from bist_core.services.advisor import build_advice_for_symbol
+    from bist_core.services.marketdata import MarketData
 
     try:
         md = MarketData(base)

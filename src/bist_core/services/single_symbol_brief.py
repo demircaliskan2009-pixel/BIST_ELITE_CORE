@@ -5,7 +5,6 @@ from typing import Any
 
 from bist_core.services.live_entry_overlay import augment_result_with_live_entry_context
 
-
 _DECISION_KEYS = ("decision", "action", "signal", "verdict")
 _SCORE_KEYS = ("score", "rank_score", "composite_score", "normalized_score", "final_score")
 _ENTRY_KEYS = ("entry", "entry_price", "suggested_entry", "entry_level", "buy_below", "plan_entry")

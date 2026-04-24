@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-import time
 import shlex
+import time
 from collections import deque
 from typing import Any, Deque, Dict, Optional, Sequence
 

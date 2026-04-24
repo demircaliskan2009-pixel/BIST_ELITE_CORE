@@ -1641,9 +1641,8 @@ class LiveRunner:
                                     if current_price <= 0:
                                         continue
 
-                                    bar_work = bar
 
-                                    wall_ts = time.time()
+                                    time.time()
                                     self.state.last_prices[sym] = current_price
 
                                     buffer = self.state.bar_buffers.get(sym, [])
@@ -2504,8 +2503,8 @@ class LiveRunner:
                                 flush=True,
                             )
 
-                            open_symbols = self.execution.get_open_positions()
-                            max_positions = int(getattr(self.execution, "_max_total_positions", 0) or 0)
+                            self.execution.get_open_positions()
+                            int(getattr(self.execution, "_max_total_positions", 0) or 0)
                             is_replacement_exec = False
                             print(
                                 {

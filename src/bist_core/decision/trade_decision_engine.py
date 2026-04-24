@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-from typing import Any
 
 TOP_N = 5
 RANK_WEIGHT = 0.5
@@ -140,7 +139,7 @@ class TradeDecisionEngine:
 
                 c0 = float(last.close)
                 c1 = float(prev.close)
-                c2 = float(prev2.close)
+                float(prev2.close)
 
                 h1 = float(prev.high)
                 l1 = float(prev.low)

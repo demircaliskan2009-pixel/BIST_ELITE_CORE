@@ -1,6 +1,7 @@
 """CSV loader for sample BIST data."""
 
 import os
+
 from bist_core.models.ohlcv import OHLCVBar
 
 BASE_PATH = os.path.join("data", "sample_bist")

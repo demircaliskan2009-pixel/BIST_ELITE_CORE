@@ -13,7 +13,6 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
-
 OUTCOME_SCHEMA_VERSION = 1
 DEFAULT_MAX_HOLD_DAYS = 30
 

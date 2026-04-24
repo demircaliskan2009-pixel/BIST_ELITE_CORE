@@ -6,7 +6,6 @@ import statistics
 
 from bist_core.models.ohlcv import OHLCVBar
 
-
 TRENDING_UP = "TRENDING_UP"
 TRENDING_DOWN = "TRENDING_DOWN"
 RANGE = "RANGE"

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import math
+import os as _os
 import statistics
 from typing import Literal
 
 from bist_core.data.quality import InvalidDataError, basic_checks
 from bist_core.models.ohlcv import OHLCVBar
 
-import os as _os
 MIN_BARS = int(_os.environ.get("DEBUG_MIN_BARS", "50"))
 MOMENTUM_LOOKBACK = 20
 

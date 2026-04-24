@@ -11,7 +11,6 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-
 LINK_GRAPH_SCHEMA_VERSION = 1
 NODE_DOSSIER = "dossier"
 

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, Literal, Optional, Dict, Any, List
+from typing import Any, Dict, List, Literal, Optional, Protocol
 
 Side = Literal["BUY", "SELL"]
 OrderType = Literal["MARKET", "LIMIT"]
