@@ -251,6 +251,13 @@ class SleeveAdmissionReleaseState:
     disabled_operator_off_sleeves: int
     evidence_blockers: tuple[str, ...]
     governance_blockers: tuple[str, ...]
+    evidence_gate_status: str = "evidence_missing"
+    paper_campaign_evidence_available: bool = False
+    sleeve_campaign_link_available: bool = False
+    promotion_review_evidence_available: bool = False
+    readiness_evidence_supportive: bool = False
+    tca_or_markout_evidence_supportive: bool = False
+    external_regime_evidence_supportive: bool = False
 
 
 @dataclass(frozen=True)
@@ -551,9 +558,17 @@ class ServiceOrchestrator:
         admission_snapshot: SleeveAdmissionSnapshot | None = None,
         promotion_review_snapshot: SleevePromotionReviewSnapshot | None = None,
         candidate_workflow_snapshot: SleeveCandidateWorkflowSnapshot | None = None,
+        campaign_report: CampaignReport | None = None,
+        readiness_flags: dict[str, bool] | None = None,
     ) -> SleeveAdmissionReleasePack:
         """Build the deterministic operator-facing sleeve admission release pack."""
         portfolio = self.sleeve_portfolio_snapshot() if portfolio_snapshot is None else portfolio_snapshot
+        source_campaign_report = self._last_campaign_report if campaign_report is None else campaign_report
+        source_readiness_flags = (
+            None if source_campaign_report is None else campaign_readiness_flags(source_campaign_report)
+        )
+        if readiness_flags is not None:
+            source_readiness_flags = readiness_flags
         promotion_review = promotion_review_snapshot
         if promotion_review is None and self._sleeve_promotion_review_controller is not None:
             promotion_review = self._sleeve_promotion_review_controller.snapshot()
@@ -574,6 +589,8 @@ class ServiceOrchestrator:
             promotion_review_snapshot=promotion_review,
             candidate_workflow_snapshot=candidate_workflow,
             portfolio_snapshot=portfolio,
+            campaign_report=source_campaign_report,
+            readiness_flags=source_readiness_flags,
         )
 
     def sleeve_admission_release_pack_dict(self) -> dict:
@@ -1362,6 +1379,10 @@ class ServiceOrchestrator:
                 promotion_review_snapshot=sleeve_promotion_review,
                 candidate_workflow_snapshot=self.sleeve_candidate_workflow_snapshot(),
                 portfolio_snapshot=sleeve_portfolio,
+                campaign_report=self._last_campaign_report,
+                readiness_flags=(
+                    None if self._last_campaign_report is None else campaign_readiness_flags(self._last_campaign_report)
+                ),
             )
         )
         return OperatorSnapshot(
@@ -2825,6 +2846,13 @@ def sleeve_admission_release_state_from_pack(pack: SleeveAdmissionReleasePack) -
         disabled_operator_off_sleeves=len(pack.disabled_operator_off_sleeves),
         evidence_blockers=pack.evidence_blockers,
         governance_blockers=pack.governance_blockers,
+        evidence_gate_status=pack.evidence_gate_status.value,
+        paper_campaign_evidence_available=pack.paper_campaign_evidence_available,
+        sleeve_campaign_link_available=pack.sleeve_campaign_link_available,
+        promotion_review_evidence_available=pack.promotion_review_evidence_available,
+        readiness_evidence_supportive=pack.readiness_evidence_supportive,
+        tca_or_markout_evidence_supportive=pack.tca_or_markout_evidence_supportive,
+        external_regime_evidence_supportive=pack.external_regime_evidence_supportive,
     )
 
 
@@ -2845,6 +2873,13 @@ def sleeve_admission_release_state_to_dict(state: SleeveAdmissionReleaseState) -
         "disabled_operator_off_sleeves": state.disabled_operator_off_sleeves,
         "evidence_blockers": list(state.evidence_blockers),
         "governance_blockers": list(state.governance_blockers),
+        "evidence_gate_status": state.evidence_gate_status,
+        "paper_campaign_evidence_available": state.paper_campaign_evidence_available,
+        "sleeve_campaign_link_available": state.sleeve_campaign_link_available,
+        "promotion_review_evidence_available": state.promotion_review_evidence_available,
+        "readiness_evidence_supportive": state.readiness_evidence_supportive,
+        "tca_or_markout_evidence_supportive": state.tca_or_markout_evidence_supportive,
+        "external_regime_evidence_supportive": state.external_regime_evidence_supportive,
     }
 
 

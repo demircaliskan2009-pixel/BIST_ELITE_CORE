@@ -16,6 +16,7 @@ import hashlib
 from dataclasses import dataclass
 from enum import Enum
 
+from crypto_core.service.campaign import AcceptanceVerdict, CampaignReport
 from crypto_core.service.sleeve_candidate_workflow import SleeveCandidateWorkflowSnapshot
 from crypto_core.service.sleeve_portfolio import (
     CryptoSleeveState,
@@ -57,6 +58,13 @@ class SleeveAdmissionReleaseStatus(str, Enum):
     BLOCKED = "blocked"
     INCONCLUSIVE = "inconclusive"
     NO_CANDIDATES = "no_candidates"
+
+
+class SleeveAdmissionReleaseEvidenceStatus(str, Enum):
+    EVIDENCE_READY = "evidence_ready"
+    EVIDENCE_PARTIAL = "evidence_partial"
+    EVIDENCE_BLOCKED = "evidence_blocked"
+    EVIDENCE_MISSING = "evidence_missing"
 
 
 @dataclass(frozen=True)
@@ -130,6 +138,12 @@ class SleeveAdmissionReleaseAction:
 
 
 @dataclass(frozen=True)
+class SleeveAdmissionReleaseSleeveEvidence:
+    sleeve_id: str
+    evidence_blockers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class SleeveAdmissionReleasePack:
     pack_id: str
     as_of_ns: int
@@ -157,6 +171,30 @@ class SleeveAdmissionReleasePack:
     operator_summary: str = ""
     insufficient_evidence_sleeves: tuple[str, ...] = ()
     disabled_operator_off_sleeves: tuple[str, ...] = ()
+    paper_campaign_evidence_available: bool = False
+    sleeve_campaign_link_available: bool = False
+    promotion_review_evidence_available: bool = False
+    readiness_evidence_supportive: bool = False
+    tca_or_markout_evidence_supportive: bool = False
+    external_regime_evidence_supportive: bool = False
+    evidence_gate_status: SleeveAdmissionReleaseEvidenceStatus = SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_MISSING
+    evidence_gate_summary: str = "Paper evidence gate not evaluated."
+    paper_evidence_blockers: tuple[str, ...] = ()
+    per_sleeve_evidence_blockers: tuple[SleeveAdmissionReleaseSleeveEvidence, ...] = ()
+
+
+@dataclass(frozen=True)
+class _ReleaseEvidenceGate:
+    paper_campaign_evidence_available: bool
+    sleeve_campaign_link_available: bool
+    promotion_review_evidence_available: bool
+    readiness_evidence_supportive: bool
+    tca_or_markout_evidence_supportive: bool
+    external_regime_evidence_supportive: bool
+    status: SleeveAdmissionReleaseEvidenceStatus
+    blockers: tuple[str, ...]
+    per_sleeve_blockers: tuple[SleeveAdmissionReleaseSleeveEvidence, ...]
+    summary: str
 
 
 class SleeveAdmissionCorruptError(RuntimeError):
@@ -662,6 +700,8 @@ def build_sleeve_admission_release_pack(
     promotion_review_snapshot: SleevePromotionReviewSnapshot | None = None,
     candidate_workflow_snapshot: SleeveCandidateWorkflowSnapshot | None = None,
     portfolio_snapshot: SleevePortfolioSnapshot | None = None,
+    campaign_report: CampaignReport | None = None,
+    readiness_flags: dict[str, bool] | None = None,
     pack_id: str | None = None,
 ) -> SleeveAdmissionReleasePack:
     """Build one deterministic operator-facing sleeve admission release artifact."""
@@ -676,6 +716,10 @@ def build_sleeve_admission_release_pack(
         raise SleeveAdmissionCorruptError("candidate_workflow_snapshot must be a SleeveCandidateWorkflowSnapshot")
     if portfolio_snapshot is not None and not isinstance(portfolio_snapshot, SleevePortfolioSnapshot):
         raise SleeveAdmissionCorruptError("portfolio_snapshot must be a SleevePortfolioSnapshot")
+    if campaign_report is not None and not isinstance(campaign_report, CampaignReport):
+        raise SleeveAdmissionCorruptError("campaign_report must be a CampaignReport")
+    if readiness_flags is not None and not isinstance(readiness_flags, dict):
+        raise SleeveAdmissionCorruptError("readiness_flags must be a dict")
 
     summary = admission_snapshot.portfolio_summary
     source_promotion_review_as_of_ns = None if promotion_review_snapshot is None else promotion_review_snapshot.as_of_ns
@@ -694,11 +738,28 @@ def build_sleeve_admission_release_pack(
         )
         if item is not None
     )
-    status = _derive_release_status(summary)
+    evidence_gate = _build_release_evidence_gate(
+        summary,
+        promotion_review_snapshot=promotion_review_snapshot,
+        portfolio_snapshot=portfolio_snapshot,
+        campaign_report=campaign_report,
+        readiness_flags=readiness_flags,
+    )
+    status = _evidence_gated_release_status(_derive_release_status(summary), evidence_gate.status, summary)
+    evidence_blockers = _combined_release_evidence_blockers(summary.evidence_blockers, evidence_gate.blockers)
     deterministic_replay_key = _release_replay_key(
         as_of_ns=as_of_ns,
         overall_release_status=status,
         portfolio_summary=summary,
+        evidence_gate_status=evidence_gate.status,
+        paper_campaign_evidence_available=evidence_gate.paper_campaign_evidence_available,
+        sleeve_campaign_link_available=evidence_gate.sleeve_campaign_link_available,
+        promotion_review_evidence_available=evidence_gate.promotion_review_evidence_available,
+        readiness_evidence_supportive=evidence_gate.readiness_evidence_supportive,
+        tca_or_markout_evidence_supportive=evidence_gate.tca_or_markout_evidence_supportive,
+        external_regime_evidence_supportive=evidence_gate.external_regime_evidence_supportive,
+        paper_evidence_blockers=evidence_gate.blockers,
+        per_sleeve_evidence_blockers=evidence_gate.per_sleeve_blockers,
         source_admission_as_of_ns=admission_snapshot.as_of_ns,
         source_promotion_review_as_of_ns=source_promotion_review_as_of_ns,
         source_candidate_workflow_as_of_ns=source_candidate_workflow_as_of_ns,
@@ -719,7 +780,7 @@ def build_sleeve_admission_release_pack(
         review_supported_not_admitted_sleeves=summary.review_supported_not_admitted,
         blocked_sleeves=summary.blocked,
         inconclusive_sleeves=summary.inconclusive,
-        evidence_blockers=summary.evidence_blockers,
+        evidence_blockers=evidence_blockers,
         governance_blockers=summary.governance_blockers,
         next_actions=_release_next_actions(summary.admission_results),
         deterministic_replay_key=deterministic_replay_key,
@@ -731,9 +792,19 @@ def build_sleeve_admission_release_pack(
         promotion_review_status=None if promotion_review_snapshot is None else promotion_review_snapshot.status,
         candidate_workflow_status=None if candidate_workflow_snapshot is None else candidate_workflow_snapshot.status,
         portfolio_sleeve_count=None if portfolio_snapshot is None else len(portfolio_snapshot.sleeves),
-        operator_summary=_release_operator_summary(status, summary),
+        operator_summary=_release_operator_summary(status, summary, evidence_gate.status),
         insufficient_evidence_sleeves=summary.insufficient_evidence,
         disabled_operator_off_sleeves=summary.disabled_operator_off,
+        paper_campaign_evidence_available=evidence_gate.paper_campaign_evidence_available,
+        sleeve_campaign_link_available=evidence_gate.sleeve_campaign_link_available,
+        promotion_review_evidence_available=evidence_gate.promotion_review_evidence_available,
+        readiness_evidence_supportive=evidence_gate.readiness_evidence_supportive,
+        tca_or_markout_evidence_supportive=evidence_gate.tca_or_markout_evidence_supportive,
+        external_regime_evidence_supportive=evidence_gate.external_regime_evidence_supportive,
+        evidence_gate_status=evidence_gate.status,
+        evidence_gate_summary=evidence_gate.summary,
+        paper_evidence_blockers=evidence_gate.blockers,
+        per_sleeve_evidence_blockers=evidence_gate.per_sleeve_blockers,
     )
     _validate_release_pack(release_pack)
     return release_pack
@@ -763,6 +834,24 @@ def sleeve_admission_release_action_from_dict(data: dict) -> SleeveAdmissionRele
     )
 
 
+def sleeve_admission_release_sleeve_evidence_to_dict(evidence: SleeveAdmissionReleaseSleeveEvidence) -> dict:
+    return {
+        "sleeve_id": evidence.sleeve_id,
+        "evidence_blockers": list(evidence.evidence_blockers),
+    }
+
+
+def sleeve_admission_release_sleeve_evidence_from_dict(data: dict) -> SleeveAdmissionReleaseSleeveEvidence:
+    if not isinstance(data, dict):
+        raise SleeveAdmissionCorruptError(
+            f"Sleeve admission release sleeve evidence must be a dict, got {type(data).__name__!r}"
+        )
+    return SleeveAdmissionReleaseSleeveEvidence(
+        sleeve_id=_require_non_empty_str(data.get("sleeve_id"), "sleeve_id"),
+        evidence_blockers=_tuple_of_strings(data.get("evidence_blockers", ()), "evidence_blockers"),
+    )
+
+
 def sleeve_admission_release_pack_to_dict(pack: SleeveAdmissionReleasePack) -> dict:
     return {
         "pack_id": pack.pack_id,
@@ -783,6 +872,18 @@ def sleeve_admission_release_pack_to_dict(pack: SleeveAdmissionReleasePack) -> d
         "evidence_blockers": list(pack.evidence_blockers),
         "governance_blockers": list(pack.governance_blockers),
         "next_actions": [sleeve_admission_release_action_to_dict(action) for action in pack.next_actions],
+        "paper_campaign_evidence_available": pack.paper_campaign_evidence_available,
+        "sleeve_campaign_link_available": pack.sleeve_campaign_link_available,
+        "promotion_review_evidence_available": pack.promotion_review_evidence_available,
+        "readiness_evidence_supportive": pack.readiness_evidence_supportive,
+        "tca_or_markout_evidence_supportive": pack.tca_or_markout_evidence_supportive,
+        "external_regime_evidence_supportive": pack.external_regime_evidence_supportive,
+        "evidence_gate_status": pack.evidence_gate_status.value,
+        "evidence_gate_summary": pack.evidence_gate_summary,
+        "paper_evidence_blockers": list(pack.paper_evidence_blockers),
+        "per_sleeve_evidence_blockers": [
+            sleeve_admission_release_sleeve_evidence_to_dict(evidence) for evidence in pack.per_sleeve_evidence_blockers
+        ],
         "overall_release_summary": pack.operator_summary,
         "operator_summary": pack.operator_summary,
         "deterministic_replay_key": pack.deterministic_replay_key,
@@ -844,19 +945,58 @@ def sleeve_admission_release_pack_from_dict(data: dict) -> SleeveAdmissionReleas
         ),
         "as_of_ns",
     )
-    status = _release_status_or_default(data.get("overall_release_status"), summary)
     admission_snapshot_status = _string_or_default(data.get("admission_snapshot_status"), "unknown")
     promotion_review_status = _optional_string_value(data.get("promotion_review_status"), "promotion_review_status")
     candidate_workflow_status = _optional_string_value(
         data.get("candidate_workflow_status"), "candidate_workflow_status"
     )
     portfolio_sleeve_count = _optional_int(data.get("portfolio_sleeve_count"), "portfolio_sleeve_count")
+    explicit_evidence_fields = _has_release_evidence_fields(data)
+    paper_campaign_evidence_available = _bool_or_default(data, "paper_campaign_evidence_available", False)
+    sleeve_campaign_link_available = _bool_or_default(data, "sleeve_campaign_link_available", False)
+    promotion_review_evidence_available = _bool_or_default(data, "promotion_review_evidence_available", False)
+    readiness_evidence_supportive = _bool_or_default(data, "readiness_evidence_supportive", False)
+    tca_or_markout_evidence_supportive = _bool_or_default(data, "tca_or_markout_evidence_supportive", False)
+    external_regime_evidence_supportive = _bool_or_default(data, "external_regime_evidence_supportive", False)
+    paper_evidence_blockers = _tuple_or_default(
+        data,
+        "paper_evidence_blockers",
+        _legacy_missing_release_evidence_blockers(summary),
+    )
+    per_sleeve_evidence_blockers = _release_sleeve_evidence_or_default(data, results, paper_evidence_blockers)
+    evidence_gate_status = _release_evidence_status_or_default(
+        data.get("evidence_gate_status"),
+        _infer_release_evidence_status(
+            summary,
+            paper_evidence_blockers,
+            paper_campaign_evidence_available=paper_campaign_evidence_available,
+            sleeve_campaign_link_available=sleeve_campaign_link_available,
+            promotion_review_evidence_available=promotion_review_evidence_available,
+            readiness_evidence_supportive=readiness_evidence_supportive,
+            tca_or_markout_evidence_supportive=tca_or_markout_evidence_supportive,
+            external_regime_evidence_supportive=external_regime_evidence_supportive,
+        ),
+    )
+    base_status = _release_status_or_default(data.get("overall_release_status"), summary)
+    status = _evidence_gated_release_status(base_status, evidence_gate_status, summary)
+    if explicit_evidence_fields and base_status != status:
+        raise SleeveAdmissionCorruptError("Sleeve admission release status does not match evidence gate")
+    evidence_blockers = _combined_release_evidence_blockers(summary.evidence_blockers, paper_evidence_blockers)
     deterministic_replay_key = _string_or_default(
-        data.get("deterministic_replay_key"),
+        data.get("deterministic_replay_key") if explicit_evidence_fields else None,
         _release_replay_key(
             as_of_ns=as_of_ns,
             overall_release_status=status,
             portfolio_summary=summary,
+            evidence_gate_status=evidence_gate_status,
+            paper_campaign_evidence_available=paper_campaign_evidence_available,
+            sleeve_campaign_link_available=sleeve_campaign_link_available,
+            promotion_review_evidence_available=promotion_review_evidence_available,
+            readiness_evidence_supportive=readiness_evidence_supportive,
+            tca_or_markout_evidence_supportive=tca_or_markout_evidence_supportive,
+            external_regime_evidence_supportive=external_regime_evidence_supportive,
+            paper_evidence_blockers=paper_evidence_blockers,
+            per_sleeve_evidence_blockers=per_sleeve_evidence_blockers,
             source_admission_as_of_ns=source_admission_as_of_ns,
             source_promotion_review_as_of_ns=source_promotion_review_as_of_ns,
             source_candidate_workflow_as_of_ns=source_candidate_workflow_as_of_ns,
@@ -886,7 +1026,11 @@ def sleeve_admission_release_pack_from_dict(data: dict) -> SleeveAdmissionReleas
         ),
         blocked_sleeves=_tuple_or_default(data, "blocked_sleeves", summary.blocked),
         inconclusive_sleeves=_tuple_or_default(data, "inconclusive_sleeves", summary.inconclusive),
-        evidence_blockers=_tuple_or_default(data, "evidence_blockers", summary.evidence_blockers),
+        evidence_blockers=(
+            _tuple_or_default(data, "evidence_blockers", evidence_blockers)
+            if explicit_evidence_fields
+            else evidence_blockers
+        ),
         governance_blockers=_tuple_or_default(data, "governance_blockers", summary.governance_blockers),
         next_actions=_release_actions_or_default(data, results),
         deterministic_replay_key=deterministic_replay_key,
@@ -899,8 +1043,8 @@ def sleeve_admission_release_pack_from_dict(data: dict) -> SleeveAdmissionReleas
         candidate_workflow_status=candidate_workflow_status,
         portfolio_sleeve_count=portfolio_sleeve_count,
         operator_summary=_string_or_default(
-            data.get("operator_summary", data.get("overall_release_summary")),
-            _release_operator_summary(status, summary),
+            data.get("operator_summary", data.get("overall_release_summary")) if explicit_evidence_fields else None,
+            _release_operator_summary(status, summary, evidence_gate_status),
         ),
         insufficient_evidence_sleeves=_tuple_or_default(
             data,
@@ -912,6 +1056,19 @@ def sleeve_admission_release_pack_from_dict(data: dict) -> SleeveAdmissionReleas
             "disabled_operator_off_sleeves",
             summary.disabled_operator_off,
         ),
+        paper_campaign_evidence_available=paper_campaign_evidence_available,
+        sleeve_campaign_link_available=sleeve_campaign_link_available,
+        promotion_review_evidence_available=promotion_review_evidence_available,
+        readiness_evidence_supportive=readiness_evidence_supportive,
+        tca_or_markout_evidence_supportive=tca_or_markout_evidence_supportive,
+        external_regime_evidence_supportive=external_regime_evidence_supportive,
+        evidence_gate_status=evidence_gate_status,
+        evidence_gate_summary=_string_or_default(
+            data.get("evidence_gate_summary") if explicit_evidence_fields else None,
+            _release_evidence_summary(evidence_gate_status, paper_evidence_blockers),
+        ),
+        paper_evidence_blockers=paper_evidence_blockers,
+        per_sleeve_evidence_blockers=per_sleeve_evidence_blockers,
     )
     _validate_release_pack(release_pack)
     return release_pack
@@ -962,6 +1119,327 @@ def _derive_release_status(summary: SleeveAdmissionPortfolioSummary) -> SleeveAd
     return SleeveAdmissionReleaseStatus.INCONCLUSIVE
 
 
+def _build_release_evidence_gate(
+    summary: SleeveAdmissionPortfolioSummary,
+    *,
+    promotion_review_snapshot: SleevePromotionReviewSnapshot | None,
+    portfolio_snapshot: SleevePortfolioSnapshot | None,
+    campaign_report: CampaignReport | None,
+    readiness_flags: dict[str, bool] | None,
+) -> _ReleaseEvidenceGate:
+    blockers: list[str] = []
+    admitted = _admitted_sleeves(summary)
+    paper_campaign_available, paper_campaign_blocker = _paper_campaign_evidence_state(campaign_report)
+    if paper_campaign_blocker:
+        blockers.append(paper_campaign_blocker)
+
+    sleeve_link_available, missing_link_sleeves = _sleeve_campaign_link_state(
+        admitted,
+        portfolio_snapshot=portfolio_snapshot,
+        campaign_report=campaign_report,
+    )
+    if admitted and not sleeve_link_available:
+        blockers.append("sleeve_campaign_link_unavailable")
+
+    promotion_review_available = _promotion_review_evidence_available(summary, promotion_review_snapshot)
+    if len(summary.admission_results) > 0 and not promotion_review_available:
+        blockers.append("promotion_review_evidence_unavailable")
+
+    readiness_supportive = _readiness_evidence_supportive(portfolio_snapshot)
+    if len(summary.admission_results) > 0 and not readiness_supportive:
+        blockers.append("readiness_evidence_not_supportive")
+
+    tca_or_markout_supportive = _tca_or_markout_evidence_supportive(campaign_report, readiness_flags)
+    if paper_campaign_available and not tca_or_markout_supportive:
+        blockers.append("tca_or_markout_evidence_unavailable")
+
+    external_supportive, external_blockers = _external_regime_evidence_state(campaign_report, readiness_flags)
+    blockers.extend(external_blockers)
+
+    paper_blockers = tuple(sorted(dict.fromkeys(blockers)))
+    status = _infer_release_evidence_status(
+        summary,
+        paper_blockers,
+        paper_campaign_evidence_available=paper_campaign_available,
+        sleeve_campaign_link_available=sleeve_link_available,
+        promotion_review_evidence_available=promotion_review_available,
+        readiness_evidence_supportive=readiness_supportive,
+        tca_or_markout_evidence_supportive=tca_or_markout_supportive,
+        external_regime_evidence_supportive=external_supportive,
+    )
+    per_sleeve = _release_per_sleeve_evidence_blockers(
+        summary.admission_results,
+        paper_blockers,
+        missing_link_sleeves=missing_link_sleeves,
+    )
+    return _ReleaseEvidenceGate(
+        paper_campaign_evidence_available=paper_campaign_available,
+        sleeve_campaign_link_available=sleeve_link_available,
+        promotion_review_evidence_available=promotion_review_available,
+        readiness_evidence_supportive=readiness_supportive,
+        tca_or_markout_evidence_supportive=tca_or_markout_supportive,
+        external_regime_evidence_supportive=external_supportive,
+        status=status,
+        blockers=paper_blockers,
+        per_sleeve_blockers=per_sleeve,
+        summary=_release_evidence_summary(status, paper_blockers),
+    )
+
+
+def _paper_campaign_evidence_state(campaign_report: CampaignReport | None) -> tuple[bool, str | None]:
+    if campaign_report is None:
+        return False, "paper_campaign_evidence_unavailable"
+    if campaign_report.status not in {"completed", "finalized"}:
+        return False, "paper_campaign_evidence_unavailable"
+    verdict = campaign_report.acceptance.verdict
+    if verdict == AcceptanceVerdict.FAIL:
+        return False, "paper_campaign_evidence_failed"
+    if verdict == AcceptanceVerdict.INCONCLUSIVE:
+        return False, "paper_campaign_evidence_inconclusive"
+    if verdict not in {AcceptanceVerdict.PASS, AcceptanceVerdict.PASS_WITH_WARNINGS}:
+        return False, "paper_campaign_evidence_unavailable"
+    snap = campaign_report.snapshot
+    if snap.total_cycles <= 0 and snap.total_events_enqueued <= 0:
+        return False, "paper_campaign_evidence_unavailable"
+    return True, None
+
+
+def _sleeve_campaign_link_state(
+    admitted_sleeves: tuple[str, ...],
+    *,
+    portfolio_snapshot: SleevePortfolioSnapshot | None,
+    campaign_report: CampaignReport | None,
+) -> tuple[bool, tuple[str, ...]]:
+    if not admitted_sleeves:
+        return False, ()
+    if campaign_report is None or not campaign_report.sleeve_link.linkage_available:
+        return False, admitted_sleeves
+    linked_ids: set[str] = set(campaign_report.sleeve_link.qualified_sleeve_ids)
+    linked_ids.update(campaign_report.sleeve_link.recommended_sleeve_ids)
+    missing: list[str] = [sleeve_id for sleeve_id in admitted_sleeves if sleeve_id not in linked_ids]
+    if portfolio_snapshot is not None:
+        by_id = {sleeve.sleeve_id: sleeve for sleeve in portfolio_snapshot.sleeves}
+        missing.extend(
+            sleeve_id
+            for sleeve_id in admitted_sleeves
+            if sleeve_id in by_id
+            and not (
+                by_id[sleeve_id].campaign_evidence.explicit_link_available
+                and by_id[sleeve_id].campaign_evidence.linked_in_campaign
+            )
+        )
+    missing_tuple = tuple(sorted(dict.fromkeys(missing)))
+    return len(missing_tuple) == 0, missing_tuple
+
+
+def _promotion_review_evidence_available(
+    summary: SleeveAdmissionPortfolioSummary,
+    promotion_review_snapshot: SleevePromotionReviewSnapshot | None,
+) -> bool:
+    if promotion_review_snapshot is None or not promotion_review_snapshot.review_results:
+        return False
+    reviewed_ids = {result.sleeve_id for result in promotion_review_snapshot.review_results}
+    return all(result.sleeve_id in reviewed_ids for result in summary.admission_results)
+
+
+def _readiness_evidence_supportive(portfolio_snapshot: SleevePortfolioSnapshot | None) -> bool:
+    return bool(portfolio_snapshot is not None and portfolio_snapshot.readiness_is_supportive)
+
+
+def _tca_or_markout_evidence_supportive(
+    campaign_report: CampaignReport | None,
+    readiness_flags: dict[str, bool] | None,
+) -> bool:
+    if readiness_flags is not None and bool(readiness_flags.get("tca_records_sufficient", False)):
+        return True
+    if campaign_report is None:
+        return False
+    snap = campaign_report.snapshot
+    return bool(getattr(snap, "persisted_tca_count", 0) > 0 or getattr(snap, "completed_markout_count", 0) > 0)
+
+
+def _external_regime_evidence_state(
+    campaign_report: CampaignReport | None,
+    readiness_flags: dict[str, bool] | None,
+) -> tuple[bool, tuple[str, ...]]:
+    if campaign_report is None:
+        return False, ("external_regime_evidence_unavailable",)
+    if readiness_flags is None:
+        readiness_flags = {}
+    scenario_step_count = int(getattr(campaign_report, "ext_regime_scenario_step_count", 0) or 0)
+    external_available = bool(
+        readiness_flags.get("external_regime_evidence_available", False)
+        or getattr(campaign_report, "ext_regime_available", False)
+        or getattr(campaign_report, "ext_regime_scenario_available", False)
+    )
+    nontrivial = bool(
+        readiness_flags.get("external_regime_scenario_nontrivial_coverage", False)
+        or (getattr(campaign_report, "ext_regime_scenario_available", False) and scenario_step_count > 0)
+    )
+    stale_ok = bool(
+        readiness_flags.get("external_regime_not_stale_dominated", _not_dominated(campaign_report, "stale"))
+    )
+    unavailable_ok = bool(
+        readiness_flags.get(
+            "external_regime_not_unavailable_dominated",
+            _not_dominated(campaign_report, "unavailable"),
+        )
+    )
+    high_risk_ok = bool(
+        readiness_flags.get("external_regime_not_high_risk_dominated", _not_dominated(campaign_report, "high_risk"))
+    )
+    gating_ok = bool(
+        readiness_flags.get(
+            "external_regime_gating_not_dominant", _external_regime_gating_not_dominant(campaign_report)
+        )
+    )
+    evidence_sufficient = bool(
+        readiness_flags.get("external_regime_evidence_sufficient", False)
+        or getattr(campaign_report, "ext_regime_evidence_sufficient", False)
+    )
+    blocked = bool(
+        getattr(campaign_report, "ext_regime_high_risk", False)
+        or not high_risk_ok
+        or not unavailable_ok
+        or not stale_ok
+        or not gating_ok
+        or int(getattr(campaign_report, "ext_regime_execution_blocked_steps", 0) or 0) > 0
+    )
+    if blocked:
+        return False, ("external_regime_governance_blocked",)
+    supportive = (
+        external_available and nontrivial and evidence_sufficient and high_risk_ok and stale_ok and unavailable_ok
+    )
+    if supportive:
+        return True, ()
+    return False, ("external_regime_evidence_unavailable",)
+
+
+def _not_dominated(campaign_report: CampaignReport, field_name: str) -> bool:
+    scenario_step_count = int(getattr(campaign_report, "ext_regime_scenario_step_count", 0) or 0)
+    if scenario_step_count <= 0:
+        return False
+    steps = int(getattr(campaign_report, f"ext_regime_{field_name}_steps", 0) or 0)
+    return steps * 2 < scenario_step_count
+
+
+def _external_regime_gating_not_dominant(campaign_report: CampaignReport) -> bool:
+    scenario_step_count = int(getattr(campaign_report, "ext_regime_scenario_step_count", 0) or 0)
+    if scenario_step_count <= 0:
+        return False
+    gating_steps = (
+        int(getattr(campaign_report, "ext_regime_activation_blocked_steps", 0) or 0)
+        + int(getattr(campaign_report, "ext_regime_execution_blocked_steps", 0) or 0)
+        + int(getattr(campaign_report, "ext_regime_activation_reduced_steps", 0) or 0)
+    )
+    return gating_steps * 2 < scenario_step_count
+
+
+def _infer_release_evidence_status(
+    summary: SleeveAdmissionPortfolioSummary,
+    blockers: tuple[str, ...],
+    *,
+    paper_campaign_evidence_available: bool,
+    sleeve_campaign_link_available: bool,
+    promotion_review_evidence_available: bool,
+    readiness_evidence_supportive: bool,
+    tca_or_markout_evidence_supportive: bool,
+    external_regime_evidence_supportive: bool,
+) -> SleeveAdmissionReleaseEvidenceStatus:
+    if len(summary.admission_results) == 0:
+        return SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_MISSING
+    if any(blocker in blockers for blocker in ("paper_campaign_evidence_failed", "external_regime_governance_blocked")):
+        return SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_BLOCKED
+    required = (
+        paper_campaign_evidence_available,
+        sleeve_campaign_link_available,
+        promotion_review_evidence_available,
+        readiness_evidence_supportive,
+        tca_or_markout_evidence_supportive,
+        external_regime_evidence_supportive,
+    )
+    if all(required):
+        return SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_READY
+    if (
+        not paper_campaign_evidence_available
+        or not sleeve_campaign_link_available
+        or not promotion_review_evidence_available
+    ):
+        return SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_MISSING
+    return SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_PARTIAL
+
+
+def _evidence_gated_release_status(
+    base_status: SleeveAdmissionReleaseStatus,
+    evidence_status: SleeveAdmissionReleaseEvidenceStatus,
+    summary: SleeveAdmissionPortfolioSummary,
+) -> SleeveAdmissionReleaseStatus:
+    if base_status == SleeveAdmissionReleaseStatus.NO_CANDIDATES:
+        return base_status
+    if evidence_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_READY:
+        return base_status
+    if evidence_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_BLOCKED:
+        return SleeveAdmissionReleaseStatus.BLOCKED
+    if base_status == SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET:
+        if summary.admitted_active_count + summary.admitted_unallocated_count > 0:
+            return SleeveAdmissionReleaseStatus.PARTIAL_READY
+        return SleeveAdmissionReleaseStatus.INCONCLUSIVE
+    return base_status
+
+
+def _combined_release_evidence_blockers(
+    admission_blockers: tuple[str, ...],
+    paper_blockers: tuple[str, ...],
+) -> tuple[str, ...]:
+    return tuple(sorted(dict.fromkeys((*admission_blockers, *paper_blockers))))
+
+
+def _legacy_missing_release_evidence_blockers(summary: SleeveAdmissionPortfolioSummary) -> tuple[str, ...]:
+    if len(summary.admission_results) == 0:
+        return ()
+    return (
+        "external_regime_evidence_unavailable",
+        "paper_campaign_evidence_unavailable",
+        "promotion_review_evidence_unavailable",
+        "readiness_evidence_not_supportive",
+        "sleeve_campaign_link_unavailable",
+        "tca_or_markout_evidence_unavailable",
+    )
+
+
+def _release_per_sleeve_evidence_blockers(
+    results: tuple[SleeveAdmissionResult, ...],
+    paper_blockers: tuple[str, ...],
+    *,
+    missing_link_sleeves: tuple[str, ...],
+) -> tuple[SleeveAdmissionReleaseSleeveEvidence, ...]:
+    missing_link = set(missing_link_sleeves)
+    entries: list[SleeveAdmissionReleaseSleeveEvidence] = []
+    for result in results:
+        blockers = list(result.evidence_blockers)
+        blockers.extend(blocker for blocker in paper_blockers if blocker != "sleeve_campaign_link_unavailable")
+        if result.sleeve_id in missing_link:
+            blockers.append("sleeve_campaign_link_unavailable")
+        entries.append(
+            SleeveAdmissionReleaseSleeveEvidence(
+                sleeve_id=result.sleeve_id,
+                evidence_blockers=tuple(sorted(dict.fromkeys(blockers))),
+            )
+        )
+    return tuple(entries)
+
+
+def _release_evidence_summary(
+    evidence_status: SleeveAdmissionReleaseEvidenceStatus,
+    blockers: tuple[str, ...],
+) -> str:
+    if evidence_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_READY:
+        return "Release pack evidence gate is ready."
+    if blockers:
+        return f"Release pack evidence gate is {evidence_status.value}: {', '.join(blockers)}."
+    return f"Release pack evidence gate is {evidence_status.value}."
+
+
 def _admitted_sleeves(summary: SleeveAdmissionPortfolioSummary) -> tuple[str, ...]:
     return tuple(dict.fromkeys((*summary.admitted_active, *summary.admitted_unallocated)))
 
@@ -984,7 +1462,9 @@ def _release_next_actions(
 def _release_operator_summary(
     status: SleeveAdmissionReleaseStatus,
     summary: SleeveAdmissionPortfolioSummary,
+    evidence_status: SleeveAdmissionReleaseEvidenceStatus | None = None,
 ) -> str:
+    evidence_part = "" if evidence_status is None else f"; evidence_status={evidence_status.value}"
     return (
         f"status={status.value}; "
         f"admitted={summary.admitted_active_count + summary.admitted_unallocated_count}; "
@@ -995,6 +1475,7 @@ def _release_operator_summary(
         f"inconclusive={summary.inconclusive_count}; "
         f"insufficient_evidence={summary.insufficient_evidence_count}; "
         f"disabled_operator_off={summary.disabled_operator_off_count}"
+        f"{evidence_part}"
     )
 
 
@@ -1008,6 +1489,15 @@ def _release_replay_key(
     as_of_ns: int,
     overall_release_status: SleeveAdmissionReleaseStatus,
     portfolio_summary: SleeveAdmissionPortfolioSummary,
+    evidence_gate_status: SleeveAdmissionReleaseEvidenceStatus,
+    paper_campaign_evidence_available: bool,
+    sleeve_campaign_link_available: bool,
+    promotion_review_evidence_available: bool,
+    readiness_evidence_supportive: bool,
+    tca_or_markout_evidence_supportive: bool,
+    external_regime_evidence_supportive: bool,
+    paper_evidence_blockers: tuple[str, ...],
+    per_sleeve_evidence_blockers: tuple[SleeveAdmissionReleaseSleeveEvidence, ...],
     source_admission_as_of_ns: int,
     source_promotion_review_as_of_ns: int | None,
     source_candidate_workflow_as_of_ns: int | None,
@@ -1019,6 +1509,15 @@ def _release_replay_key(
     parts = [
         f"as_of_ns={as_of_ns}",
         f"overall_release_status={overall_release_status.value}",
+        f"evidence_gate_status={evidence_gate_status.value}",
+        f"paper_campaign_evidence_available={paper_campaign_evidence_available}",
+        f"sleeve_campaign_link_available={sleeve_campaign_link_available}",
+        f"promotion_review_evidence_available={promotion_review_evidence_available}",
+        f"readiness_evidence_supportive={readiness_evidence_supportive}",
+        f"tca_or_markout_evidence_supportive={tca_or_markout_evidence_supportive}",
+        f"external_regime_evidence_supportive={external_regime_evidence_supportive}",
+        f"paper_evidence_blockers={','.join(paper_evidence_blockers)}",
+        _release_sleeve_evidence_signature(per_sleeve_evidence_blockers),
         f"source_admission_as_of_ns={source_admission_as_of_ns}",
         f"source_promotion_review_as_of_ns={source_promotion_review_as_of_ns}",
         f"source_candidate_workflow_as_of_ns={source_candidate_workflow_as_of_ns}",
@@ -1056,6 +1555,12 @@ def _release_results_signature(results: tuple[SleeveAdmissionResult, ...]) -> st
     )
 
 
+def _release_sleeve_evidence_signature(
+    evidence: tuple[SleeveAdmissionReleaseSleeveEvidence, ...],
+) -> str:
+    return "|".join(":".join((item.sleeve_id, ",".join(item.evidence_blockers))) for item in evidence)
+
+
 def _validate_release_pack(pack: SleeveAdmissionReleasePack) -> None:
     summary = pack.portfolio_summary
     _validate_summary_counts(summary)
@@ -1064,10 +1569,17 @@ def _validate_release_pack(pack: SleeveAdmissionReleasePack) -> None:
         raise SleeveAdmissionCorruptError("Sleeve admission release results do not match portfolio summary")
     if pack.source_admission_as_of_ns != summary.as_of_ns:
         raise SleeveAdmissionCorruptError("Sleeve admission release source timestamp does not match summary")
-    if pack.overall_release_status != _derive_release_status(summary):
+    expected_status = _evidence_gated_release_status(
+        _derive_release_status(summary), pack.evidence_gate_status, summary
+    )
+    if pack.overall_release_status != expected_status:
         raise SleeveAdmissionCorruptError("Sleeve admission release status does not match admission summary")
     if pack.admitted_sleeves != _admitted_sleeves(summary):
         raise SleeveAdmissionCorruptError("Sleeve admission release admitted sleeves do not match summary")
+    expected_evidence_blockers = _combined_release_evidence_blockers(
+        summary.evidence_blockers,
+        pack.paper_evidence_blockers,
+    )
     expected_groups = {
         "admitted_active_sleeves": summary.admitted_active,
         "admitted_unallocated_sleeves": summary.admitted_unallocated,
@@ -1076,7 +1588,7 @@ def _validate_release_pack(pack: SleeveAdmissionReleasePack) -> None:
         "inconclusive_sleeves": summary.inconclusive,
         "insufficient_evidence_sleeves": summary.insufficient_evidence,
         "disabled_operator_off_sleeves": summary.disabled_operator_off,
-        "evidence_blockers": summary.evidence_blockers,
+        "evidence_blockers": expected_evidence_blockers,
         "governance_blockers": summary.governance_blockers,
     }
     for field_name, expected in expected_groups.items():
@@ -1084,11 +1596,21 @@ def _validate_release_pack(pack: SleeveAdmissionReleasePack) -> None:
             raise SleeveAdmissionCorruptError(f"Sleeve admission release {field_name} does not match summary")
     if pack.next_actions != _release_next_actions(summary.admission_results):
         raise SleeveAdmissionCorruptError("Sleeve admission release next actions do not match admission results")
+    _validate_release_evidence_fields(pack)
     _validate_release_timestamps(pack)
     expected_key = _release_replay_key(
         as_of_ns=pack.as_of_ns,
         overall_release_status=pack.overall_release_status,
         portfolio_summary=pack.portfolio_summary,
+        evidence_gate_status=pack.evidence_gate_status,
+        paper_campaign_evidence_available=pack.paper_campaign_evidence_available,
+        sleeve_campaign_link_available=pack.sleeve_campaign_link_available,
+        promotion_review_evidence_available=pack.promotion_review_evidence_available,
+        readiness_evidence_supportive=pack.readiness_evidence_supportive,
+        tca_or_markout_evidence_supportive=pack.tca_or_markout_evidence_supportive,
+        external_regime_evidence_supportive=pack.external_regime_evidence_supportive,
+        paper_evidence_blockers=pack.paper_evidence_blockers,
+        per_sleeve_evidence_blockers=pack.per_sleeve_evidence_blockers,
         source_admission_as_of_ns=pack.source_admission_as_of_ns,
         source_promotion_review_as_of_ns=pack.source_promotion_review_as_of_ns,
         source_candidate_workflow_as_of_ns=pack.source_candidate_workflow_as_of_ns,
@@ -1111,6 +1633,29 @@ def _validate_release_timestamps(pack: SleeveAdmissionReleasePack) -> None:
         value = getattr(pack, field_name)
         if value is not None and pack.as_of_ns < value:
             raise SleeveAdmissionCorruptError(f"Sleeve admission release as_of_ns is older than {field_name}")
+
+
+def _validate_release_evidence_fields(pack: SleeveAdmissionReleasePack) -> None:
+    if pack.paper_evidence_blockers != tuple(sorted(dict.fromkeys(pack.paper_evidence_blockers))):
+        raise SleeveAdmissionCorruptError("Sleeve admission release paper evidence blockers are not ordered")
+    expected_evidence_status = _infer_release_evidence_status(
+        pack.portfolio_summary,
+        pack.paper_evidence_blockers,
+        paper_campaign_evidence_available=pack.paper_campaign_evidence_available,
+        sleeve_campaign_link_available=pack.sleeve_campaign_link_available,
+        promotion_review_evidence_available=pack.promotion_review_evidence_available,
+        readiness_evidence_supportive=pack.readiness_evidence_supportive,
+        tca_or_markout_evidence_supportive=pack.tca_or_markout_evidence_supportive,
+        external_regime_evidence_supportive=pack.external_regime_evidence_supportive,
+    )
+    if pack.evidence_gate_status != expected_evidence_status:
+        raise SleeveAdmissionCorruptError("Sleeve admission release evidence status does not match evidence fields")
+    expected_sleeve_ids = tuple(result.sleeve_id for result in pack.portfolio_summary.admission_results)
+    if tuple(item.sleeve_id for item in pack.per_sleeve_evidence_blockers) != expected_sleeve_ids:
+        raise SleeveAdmissionCorruptError("Sleeve admission release per-sleeve evidence ids do not match results")
+    for item in pack.per_sleeve_evidence_blockers:
+        if item.evidence_blockers != tuple(sorted(dict.fromkeys(item.evidence_blockers))):
+            raise SleeveAdmissionCorruptError("Sleeve admission release per-sleeve blockers are not ordered")
 
 
 def _validate_release_blocker_order(summary: SleeveAdmissionPortfolioSummary) -> None:
@@ -1152,6 +1697,61 @@ def _tuple_or_default(data: dict, field_name: str, default: tuple[str, ...]) -> 
     if field_name not in data:
         return default
     return _tuple_of_strings(data.get(field_name), field_name)
+
+
+def _bool_or_default(data: dict, field_name: str, default: bool) -> bool:
+    if field_name not in data:
+        return default
+    return _require_bool(data.get(field_name), field_name)
+
+
+def _release_evidence_status_or_default(
+    value: object,
+    default: SleeveAdmissionReleaseEvidenceStatus,
+) -> SleeveAdmissionReleaseEvidenceStatus:
+    if value is None:
+        return default
+    if isinstance(value, SleeveAdmissionReleaseEvidenceStatus):
+        return value
+    try:
+        return SleeveAdmissionReleaseEvidenceStatus(_require_non_empty_str(value, "evidence_gate_status"))
+    except ValueError as exc:
+        raise SleeveAdmissionCorruptError(f"Invalid evidence_gate_status: {value!r}") from exc
+
+
+def _release_sleeve_evidence_or_default(
+    data: dict,
+    results: tuple[SleeveAdmissionResult, ...],
+    paper_blockers: tuple[str, ...],
+) -> tuple[SleeveAdmissionReleaseSleeveEvidence, ...]:
+    if "per_sleeve_evidence_blockers" not in data:
+        return _release_per_sleeve_evidence_blockers(results, paper_blockers, missing_link_sleeves=())
+    value = data.get("per_sleeve_evidence_blockers")
+    if not isinstance(value, (list, tuple)):
+        raise SleeveAdmissionCorruptError(
+            "Sleeve admission release field 'per_sleeve_evidence_blockers' must be a list/tuple"
+        )
+    return tuple(
+        sleeve_admission_release_sleeve_evidence_from_dict(_dict_value(item, "per_sleeve_evidence_blockers"))
+        for item in value
+    )
+
+
+def _has_release_evidence_fields(data: dict) -> bool:
+    return any(
+        field_name in data
+        for field_name in (
+            "paper_campaign_evidence_available",
+            "sleeve_campaign_link_available",
+            "promotion_review_evidence_available",
+            "readiness_evidence_supportive",
+            "tca_or_markout_evidence_supportive",
+            "external_regime_evidence_supportive",
+            "evidence_gate_status",
+            "paper_evidence_blockers",
+            "per_sleeve_evidence_blockers",
+        )
+    )
 
 
 def _dict_value(value: object, field_name: str) -> dict:

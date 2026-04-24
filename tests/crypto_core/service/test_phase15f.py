@@ -10,12 +10,22 @@ from crypto_core.service.artifact_export import (
     export_sleeve_admission_release_pack,
     load_sleeve_admission_release_pack,
 )
+from crypto_core.service.campaign import (
+    AcceptanceResult,
+    AcceptanceVerdict,
+    CampaignReport,
+    CampaignSleeveLinkSummary,
+    CampaignSnapshot,
+    CriterionResult,
+)
+from crypto_core.service.campaign_controller import campaign_readiness_flags
 from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreConfig
 from crypto_core.service.models import QueuePressure, QueueSnapshot, ServiceStatus, WatchdogStatus
 from crypto_core.service.service_orchestrator import ServiceOrchestrator, operator_snapshot_to_dict
 from crypto_core.service.sleeve_admission_controller import (
     SleeveAdmissionController,
     SleeveAdmissionCorruptError,
+    SleeveAdmissionReleaseEvidenceStatus,
     SleeveAdmissionReleaseStatus,
     SleeveAdmissionVerdict,
     build_sleeve_admission_release_pack,
@@ -50,6 +60,7 @@ from crypto_core.service.sleeve_portfolio import (
 from crypto_core.service.sleeve_promotion_review_controller import (
     SleevePromotionReviewPortfolioSummary,
     SleevePromotionReviewResult,
+    SleevePromotionReviewSnapshot,
     SleevePromotionReviewVerdict,
 )
 
@@ -88,6 +99,138 @@ def _review_summary(*results: SleevePromotionReviewResult) -> SleevePromotionRev
         missing_evidence=tuple(dict.fromkeys(code for r in results for code in r.missing_evidence)),
         governance_blockers=tuple(dict.fromkeys(code for r in results for code in r.governance_blockers)),
         operator_summary="review summary",
+    )
+
+
+def _promotion_snapshot(summary: SleevePromotionReviewPortfolioSummary) -> SleevePromotionReviewSnapshot:
+    return SleevePromotionReviewSnapshot(
+        as_of_ns=summary.as_of_ns,
+        status="active",
+        review_results=summary.review_results,
+        portfolio_summary=summary,
+    )
+
+
+def _campaign_report(
+    *,
+    sleeve_ids: tuple[str, ...] = ("s1",),
+    verdict: AcceptanceVerdict = AcceptanceVerdict.PASS,
+    sleeve_link_available: bool = True,
+    persisted_tca_count: int = 8,
+    completed_markout_count: int = 8,
+    ext_regime_available: bool = True,
+    ext_regime_evidence_sufficient: bool = True,
+    ext_regime_scenario_available: bool = True,
+    ext_regime_scenario_step_count: int = 6,
+    ext_regime_execution_blocked_steps: int = 0,
+    ext_regime_activation_blocked_steps: int = 0,
+    ext_regime_activation_reduced_steps: int = 0,
+    ext_regime_stale_steps: int = 1,
+    ext_regime_unavailable_steps: int = 0,
+    ext_regime_high_risk_steps: int = 1,
+    ext_regime_safe_steps: int = 4,
+    ext_regime_high_risk: bool = False,
+) -> CampaignReport:
+    snapshot = CampaignSnapshot(
+        campaign_id="camp-release",
+        status="completed",
+        started_at_ns=_T0_NS - 100,
+        updated_at_ns=_T0_NS,
+        elapsed_seconds=100.0,
+        run_id="run-release",
+        service_mode="running",
+        session_mode="running",
+        total_events_enqueued=1_000,
+        total_events_dropped=0,
+        total_cycles=200,
+        approved_cycles=190,
+        blocked_cycles=5,
+        failed_cycles=5,
+        total_fills=30,
+        queue_overflows=0,
+        watchdog_stalls=0,
+        service_restarts=0,
+        persistence_failures=0,
+        symbol_count=2,
+        symbols_ready=2,
+        symbols_blocked=0,
+        symbols_with_events=2,
+        symbols_with_cycles=2,
+        readiness_level="paper_live",
+        health_trend="stable",
+        persistence_status="healthy",
+        nav_usd=10_000.0,
+        last_error=None,
+        completed_markout_count=completed_markout_count,
+        persisted_tca_count=persisted_tca_count,
+        registered_fill_count=max(completed_markout_count, 30),
+        ext_regime_available=ext_regime_available,
+        ext_regime_fresh=True,
+        ext_regime_high_risk=ext_regime_high_risk,
+        ext_regime_evidence_sufficient=ext_regime_evidence_sufficient,
+        ext_regime_scenario_available=ext_regime_scenario_available,
+        ext_regime_scenario_step_count=ext_regime_scenario_step_count,
+        ext_regime_execution_blocked_steps=ext_regime_execution_blocked_steps,
+        ext_regime_activation_blocked_steps=ext_regime_activation_blocked_steps,
+        ext_regime_activation_reduced_steps=ext_regime_activation_reduced_steps,
+        ext_regime_stale_steps=ext_regime_stale_steps,
+        ext_regime_unavailable_steps=ext_regime_unavailable_steps,
+        ext_regime_high_risk_steps=ext_regime_high_risk_steps,
+        ext_regime_safe_steps=ext_regime_safe_steps,
+        ext_regime_scenario_summary="steps=6; safe=4; stale=1; high_risk=1; reduced=0",
+        sleeve_link=CampaignSleeveLinkSummary(
+            linkage_available=sleeve_link_available,
+            configured_sleeve_ids=sleeve_ids if sleeve_link_available else (),
+            qualified_sleeve_ids=sleeve_ids if sleeve_link_available else (),
+            recommended_sleeve_ids=sleeve_ids if sleeve_link_available else (),
+            blocked_sleeve_ids=(),
+            summary="release pack sleeve link",
+        ),
+    )
+    acceptance = AcceptanceResult(
+        verdict=verdict,
+        criteria=(
+            CriterionResult(
+                name="release_pack_campaign",
+                passed=verdict in {AcceptanceVerdict.PASS, AcceptanceVerdict.PASS_WITH_WARNINGS},
+                severity="hard",
+                actual=1.0,
+                threshold=1.0,
+                message="release pack campaign evidence",
+            ),
+        ),
+        failed_criteria=(),
+        warning_criteria=(),
+        insufficient_criteria=(),
+        summary="release pack campaign evidence",
+    )
+    return CampaignReport(
+        campaign_id="camp-release",
+        status="completed",
+        verdict=verdict.value,
+        started_at_ns=_T0_NS - 100,
+        completed_at_ns=_T0_NS,
+        elapsed_seconds=100.0,
+        run_id="run-release",
+        snapshot=snapshot,
+        acceptance=acceptance,
+        symbol_participation=(),
+        config={},
+        ext_regime_available=ext_regime_available,
+        ext_regime_fresh=True,
+        ext_regime_high_risk=ext_regime_high_risk,
+        ext_regime_evidence_sufficient=ext_regime_evidence_sufficient,
+        ext_regime_scenario_available=ext_regime_scenario_available,
+        ext_regime_scenario_step_count=ext_regime_scenario_step_count,
+        ext_regime_execution_blocked_steps=ext_regime_execution_blocked_steps,
+        ext_regime_activation_blocked_steps=ext_regime_activation_blocked_steps,
+        ext_regime_activation_reduced_steps=ext_regime_activation_reduced_steps,
+        ext_regime_stale_steps=ext_regime_stale_steps,
+        ext_regime_unavailable_steps=ext_regime_unavailable_steps,
+        ext_regime_high_risk_steps=ext_regime_high_risk_steps,
+        ext_regime_safe_steps=ext_regime_safe_steps,
+        ext_regime_scenario_summary="steps=6; safe=4; stale=1; high_risk=1; reduced=0",
+        sleeve_link=snapshot.sleeve_link,
     )
 
 
@@ -200,8 +343,13 @@ def _sleeve(
     )
 
 
-def _portfolio(*sleeves: CryptoSleeveState) -> SleevePortfolioSnapshot:
-    return SleevePortfolioSnapshot(as_of_ns=_T0_NS, sleeves=tuple(sleeves))
+def _portfolio(*sleeves: CryptoSleeveState, readiness_is_supportive: bool = True) -> SleevePortfolioSnapshot:
+    return SleevePortfolioSnapshot(
+        as_of_ns=_T0_NS,
+        sleeves=tuple(sleeves),
+        readiness_level="paper_live" if readiness_is_supportive else "not_assessed",
+        readiness_is_supportive=readiness_is_supportive,
+    )
 
 
 def _mock_service() -> MagicMock:
@@ -545,6 +693,7 @@ def test_backward_compatibility_with_older_snapshot_state() -> None:
 
 
 def test_release_pack_model_construction_and_ready_full_admission() -> None:
+    review_summary = _review_summary(_review_result("active"), _review_result("idle"))
     portfolio = _portfolio(
         _sleeve("active"),
         _sleeve(
@@ -556,17 +705,134 @@ def test_release_pack_model_construction_and_ready_full_admission() -> None:
         ),
     )
     admission = SleeveAdmissionController(
-        _review_summary(_review_result("active"), _review_result("idle")),
+        review_summary,
         portfolio_snapshot=portfolio,
     ).snapshot()
 
-    pack = build_sleeve_admission_release_pack(admission, portfolio_snapshot=portfolio)
+    pack = build_sleeve_admission_release_pack(
+        admission,
+        promotion_review_snapshot=_promotion_snapshot(review_summary),
+        portfolio_snapshot=portfolio,
+        campaign_report=_campaign_report(sleeve_ids=("active", "idle")),
+    )
 
     assert pack.overall_release_status == SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET
+    assert pack.evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_READY
+    assert pack.paper_campaign_evidence_available is True
+    assert pack.sleeve_campaign_link_available is True
+    assert pack.promotion_review_evidence_available is True
+    assert pack.readiness_evidence_supportive is True
+    assert pack.tca_or_markout_evidence_supportive is True
+    assert pack.external_regime_evidence_supportive is True
     assert pack.admitted_sleeves == ("active", "idle")
     assert pack.admitted_active_sleeves == ("active",)
     assert pack.admitted_unallocated_sleeves == ("idle",)
     assert pack.pack_id.startswith("sleeve-admission-release-")
+
+
+def test_release_pack_missing_campaign_evidence_is_not_ready() -> None:
+    review_summary = _review_summary(_review_result("s1"))
+    portfolio = _portfolio(_sleeve("s1"))
+    admission = SleeveAdmissionController(review_summary, portfolio_snapshot=portfolio).snapshot()
+
+    pack = build_sleeve_admission_release_pack(
+        admission,
+        promotion_review_snapshot=_promotion_snapshot(review_summary),
+        portfolio_snapshot=portfolio,
+    )
+
+    assert pack.overall_release_status == SleeveAdmissionReleaseStatus.PARTIAL_READY
+    assert pack.evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_MISSING
+    assert "paper_campaign_evidence_unavailable" in pack.paper_evidence_blockers
+
+
+def test_release_pack_missing_sleeve_campaign_link_is_not_ready() -> None:
+    review_summary = _review_summary(_review_result("s1"))
+    portfolio = _portfolio(_sleeve("s1", campaign_status=SleeveCampaignEvidenceStatus.INSUFFICIENT_EVIDENCE))
+    admission = SleeveAdmissionController(review_summary, portfolio_snapshot=portfolio).snapshot()
+
+    pack = build_sleeve_admission_release_pack(
+        admission,
+        promotion_review_snapshot=_promotion_snapshot(review_summary),
+        portfolio_snapshot=portfolio,
+        campaign_report=_campaign_report(sleeve_ids=("other",)),
+    )
+
+    assert pack.overall_release_status == SleeveAdmissionReleaseStatus.PARTIAL_READY
+    assert pack.sleeve_campaign_link_available is False
+    assert "sleeve_campaign_link_unavailable" in pack.paper_evidence_blockers
+    assert pack.per_sleeve_evidence_blockers[0].evidence_blockers == ("sleeve_campaign_link_unavailable",)
+
+
+def test_release_pack_missing_promotion_review_evidence_is_not_ready() -> None:
+    review_summary = _review_summary(_review_result("s1"))
+    portfolio = _portfolio(_sleeve("s1"))
+    admission = SleeveAdmissionController(review_summary, portfolio_snapshot=portfolio).snapshot()
+
+    pack = build_sleeve_admission_release_pack(
+        admission,
+        portfolio_snapshot=portfolio,
+        campaign_report=_campaign_report(sleeve_ids=("s1",)),
+    )
+
+    assert pack.overall_release_status == SleeveAdmissionReleaseStatus.PARTIAL_READY
+    assert pack.promotion_review_evidence_available is False
+    assert "promotion_review_evidence_unavailable" in pack.paper_evidence_blockers
+
+
+def test_release_pack_missing_readiness_support_is_not_ready() -> None:
+    review_summary = _review_summary(_review_result("s1"))
+    portfolio = _portfolio(_sleeve("s1"), readiness_is_supportive=False)
+    admission = SleeveAdmissionController(review_summary, portfolio_snapshot=portfolio).snapshot()
+
+    pack = build_sleeve_admission_release_pack(
+        admission,
+        promotion_review_snapshot=_promotion_snapshot(review_summary),
+        portfolio_snapshot=portfolio,
+        campaign_report=_campaign_report(sleeve_ids=("s1",)),
+    )
+
+    assert pack.overall_release_status == SleeveAdmissionReleaseStatus.PARTIAL_READY
+    assert pack.evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_PARTIAL
+    assert "readiness_evidence_not_supportive" in pack.paper_evidence_blockers
+
+
+def test_release_pack_partial_without_tca_or_markout_evidence() -> None:
+    review_summary = _review_summary(_review_result("s1"))
+    portfolio = _portfolio(_sleeve("s1"))
+    admission = SleeveAdmissionController(review_summary, portfolio_snapshot=portfolio).snapshot()
+
+    pack = build_sleeve_admission_release_pack(
+        admission,
+        promotion_review_snapshot=_promotion_snapshot(review_summary),
+        portfolio_snapshot=portfolio,
+        campaign_report=_campaign_report(sleeve_ids=("s1",), persisted_tca_count=0, completed_markout_count=0),
+    )
+
+    assert pack.overall_release_status == SleeveAdmissionReleaseStatus.PARTIAL_READY
+    assert pack.evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_PARTIAL
+    assert "tca_or_markout_evidence_unavailable" in pack.paper_evidence_blockers
+
+
+def test_release_pack_external_regime_blocker_blocks_portfolio() -> None:
+    review_summary = _review_summary(_review_result("s1"))
+    portfolio = _portfolio(_sleeve("s1"))
+    admission = SleeveAdmissionController(review_summary, portfolio_snapshot=portfolio).snapshot()
+
+    pack = build_sleeve_admission_release_pack(
+        admission,
+        promotion_review_snapshot=_promotion_snapshot(review_summary),
+        portfolio_snapshot=portfolio,
+        campaign_report=_campaign_report(
+            sleeve_ids=("s1",),
+            ext_regime_high_risk=True,
+            ext_regime_high_risk_steps=4,
+        ),
+    )
+
+    assert pack.overall_release_status == SleeveAdmissionReleaseStatus.BLOCKED
+    assert pack.evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_BLOCKED
+    assert "external_regime_governance_blocked" in pack.paper_evidence_blockers
 
 
 def test_release_pack_no_candidates_and_inconclusive_states() -> None:
@@ -641,10 +907,13 @@ def test_release_pack_next_actions_and_blocker_aggregation_are_stable() -> None:
     rendered = sleeve_admission_release_pack_to_dict(pack)
 
     assert pack.overall_release_status == SleeveAdmissionReleaseStatus.INCONCLUSIVE
-    assert pack.evidence_blockers == ("a_evidence", "z_evidence")
+    assert "a_evidence" in pack.evidence_blockers
+    assert "z_evidence" in pack.evidence_blockers
+    assert "paper_campaign_evidence_unavailable" in pack.evidence_blockers
     assert pack.governance_blockers == ("a_governance", "z_governance")
     assert pack.next_actions[0].next_action == "continue_paper_review"
     assert rendered["next_actions"][0]["admission_verdict"] == "review_supported_not_admitted"
+    assert rendered["evidence_gate_status"] == "evidence_missing"
     assert rendered == sleeve_admission_release_pack_to_dict(pack)
 
 
@@ -660,7 +929,8 @@ def test_release_pack_serialization_roundtrip_and_backward_defaults() -> None:
     legacy = sleeve_admission_release_pack_from_dict({"portfolio_summary": payload["portfolio_summary"]})
 
     assert restored == pack
-    assert legacy.overall_release_status == SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET
+    assert legacy.overall_release_status == SleeveAdmissionReleaseStatus.PARTIAL_READY
+    assert legacy.evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_MISSING
     assert legacy.admitted_sleeves == ("s1",)
     assert legacy.admission_snapshot_status == "unknown"
 
@@ -697,22 +967,36 @@ def test_release_pack_artifact_export_load_roundtrip_and_bad_load_fail_closed(tm
 
 def test_service_orchestrator_release_pack_helper_and_operator_compact_status() -> None:
     fixed_review_ns = _T0_NS + 42
-    orch = ServiceOrchestrator(service=_mock_service(), sleeve_workflow_clock_ns=lambda: fixed_review_ns)
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        sleeves=(_sleeve("svc-sleeve", effective_allocation=0.20, target_allocation=0.20),),
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: fixed_review_ns,
+    )
+    campaign_report = _campaign_report(sleeve_ids=("svc-sleeve",))
+    orch._last_campaign_report = campaign_report  # type: ignore[attr-defined]
     orch.start_sleeve_promotion_review(workflow_snapshot=_supported_workflow("svc-sleeve"))
 
     pack = orch.sleeve_admission_release_pack(
-        portfolio_snapshot=_portfolio(_sleeve("svc-sleeve", effective_allocation=0.20))
+        portfolio_snapshot=_portfolio(_sleeve("svc-sleeve", effective_allocation=0.20, target_allocation=0.20)),
+        campaign_report=campaign_report,
+        readiness_flags=campaign_readiness_flags(campaign_report),
     )
     rendered = sleeve_admission_release_pack_to_dict(pack)
     helper_rendered = orch.sleeve_admission_release_pack_dict()
 
     assert pack.as_of_ns == fixed_review_ns
     assert pack.overall_release_status == SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET
+    assert pack.evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_READY
     assert rendered["overall_release_status"] == "ready_for_paper_managed_set"
+    assert rendered["evidence_gate_status"] == "evidence_ready"
     assert helper_rendered["overall_release_status"] == "inconclusive"
+    assert helper_rendered["evidence_gate_status"] == "evidence_missing"
 
     operator = operator_snapshot_to_dict(orch.operator_snapshot())
     assert operator["sleeve_admission_release"]["overall_release_status"] == "inconclusive"
+    assert operator["sleeve_admission_release"]["evidence_gate_status"] == "evidence_missing"
+    assert operator["sleeve_admission_release"]["paper_campaign_evidence_available"] is True
     assert operator["sleeve_admission_release"]["available"] is True
 
 
