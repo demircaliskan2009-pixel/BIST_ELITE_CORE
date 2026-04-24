@@ -451,6 +451,18 @@ def test_restore_fail_closed_on_malformed_payload() -> None:
         sleeve_admission_snapshot_from_dict(payload)
 
 
+def test_restore_fail_closed_on_timestamp_drift() -> None:
+    controller = SleeveAdmissionController(
+        _review_summary(_review_result("s1")),
+        portfolio_snapshot=_portfolio(_sleeve("s1")),
+    )
+    payload = sleeve_admission_snapshot_to_dict(controller.finalize())
+    payload["as_of_ns"] += 1
+
+    with pytest.raises(SleeveAdmissionCorruptError):
+        sleeve_admission_snapshot_from_dict(payload)
+
+
 def test_service_orchestrator_integration() -> None:
     fixed_review_ns = _T0_NS + 42
     orch = ServiceOrchestrator(service=_mock_service(), sleeve_workflow_clock_ns=lambda: fixed_review_ns)

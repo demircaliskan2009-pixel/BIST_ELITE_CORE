@@ -2214,6 +2214,47 @@ class TestDeterministicReplay:
         assert review.portfolio_summary.as_of_ns == fixed_ns
         assert review.history[0].as_of_ns == fixed_ns
 
+    def test_operator_snapshot_uses_single_promotion_review_for_admission(self):
+        """A single operator snapshot must not expose drift between review and admission."""
+        import json
+
+        counter = {"now": _T0_NS}
+
+        def next_ns():
+            counter["now"] += 1
+            return counter["now"]
+
+        orch = ServiceOrchestrator(
+            service=_make_mock_service(),
+            sleeve_workflow_clock_ns=next_ns,
+        )
+        workflow_snapshot = SleeveCandidateWorkflowSnapshot(
+            workflow_id="wf-operator-clock",
+            status="active",
+            as_of_ns=_T0_NS,
+            sleeves=(
+                SleeveCandidateWorkflowEntry(
+                    sleeve_id="operator-sleeve",
+                    candidate_status=SleevePromotionCandidateStatus.SUPPORTED,
+                    promotion_support_status=SleevePromotionSupportStatus.SUPPORTIVE,
+                    decision_pack_status=SleeveDecisionPackStatus.SUPPORTED_CANDIDATE,
+                    candidate_for_future_review=True,
+                    strongly_supported=True,
+                    reason_summary="supported",
+                    next_step="review",
+                ),
+            ),
+        )
+
+        orch.start_sleeve_promotion_review(workflow_snapshot=workflow_snapshot)
+        rendered = operator_snapshot_to_dict(orch.operator_snapshot())
+
+        assert counter["now"] == _T0_NS + 1
+        assert rendered["sleeve_promotion_review"]["as_of_ns"] == _T0_NS + 1
+        assert rendered["sleeve_promotion_review"]["review_results"][0]["verdict"] == "review_supported"
+        assert rendered["sleeve_admission"]["admission_results"][0]["last_review_verdict"] == "review_supported"
+        json.dumps(rendered)
+
     def test_readiness_not_flattened_into_verdict(self):
         """Readiness supportiveness must remain distinct from promotion verdict."""
         svc = _make_mock_service()

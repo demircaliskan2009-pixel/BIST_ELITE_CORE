@@ -137,7 +137,9 @@ from crypto_core.service.sleeve_portfolio_controller import (
 )
 from crypto_core.service.sleeve_promotion_review_controller import (
     SleevePromotionReviewController,
+    SleevePromotionReviewPortfolioSummary,
     SleevePromotionReviewSnapshot,
+    sleeve_promotion_review_snapshot_to_dict,
 )
 
 logger = logging.getLogger(__name__)
@@ -407,11 +409,13 @@ class ServiceOrchestrator:
         self,
         *,
         portfolio_snapshot: SleevePortfolioSnapshot | None = None,
+        review_portfolio_summary: SleevePromotionReviewPortfolioSummary | None = None,
         history_limit: int = 5,
     ) -> SleeveAdmissionController:
         """Build or refresh the sleeve admission controller from current review and portfolio truth."""
-        review_snapshot = self.sleeve_promotion_review_snapshot()
-        review_portfolio_summary = None if review_snapshot is None else review_snapshot.portfolio_summary
+        if review_portfolio_summary is None:
+            review_snapshot = self.sleeve_promotion_review_snapshot()
+            review_portfolio_summary = None if review_snapshot is None else review_snapshot.portfolio_summary
         portfolio = self.sleeve_portfolio_snapshot() if portfolio_snapshot is None else portfolio_snapshot
         if self._sleeve_admission_controller is None:
             self._sleeve_admission_controller = SleeveAdmissionController(
@@ -492,7 +496,7 @@ class ServiceOrchestrator:
         snap = self.sleeve_promotion_review_snapshot()
         if snap is None:
             return None
-        return snap.__dict__
+        return sleeve_promotion_review_snapshot_to_dict(snap)
 
     def sleeve_admission_snapshot(self) -> SleeveAdmissionSnapshot:
         """Return the current sleeve admission gate snapshot."""
@@ -1260,7 +1264,13 @@ class ServiceOrchestrator:
         if self._sleeve_promotion_review_controller is not None:
             sleeve_promotion_review = self._sleeve_promotion_review_controller.snapshot()
 
-        sleeve_admission = self.get_sleeve_admission_snapshot(portfolio_snapshot=sleeve_portfolio)
+        review_portfolio_summary = (
+            None if sleeve_promotion_review is None else sleeve_promotion_review.portfolio_summary
+        )
+        sleeve_admission = self.build_sleeve_admission_controller(
+            portfolio_snapshot=sleeve_portfolio,
+            review_portfolio_summary=review_portfolio_summary,
+        ).snapshot()
         return OperatorSnapshot(
             service_mode=ss.service_mode,
             trading_enabled=ss.trading_enabled,
@@ -2760,7 +2770,9 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         ),
         # Phase 15E
         "sleeve_promotion_review": (
-            snap.sleeve_promotion_review.__dict__ if snap.sleeve_promotion_review is not None else None
+            sleeve_promotion_review_snapshot_to_dict(snap.sleeve_promotion_review)
+            if snap.sleeve_promotion_review is not None
+            else None
         ),
         # Phase 15F
         "sleeve_admission": (

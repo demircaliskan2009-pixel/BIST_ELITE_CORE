@@ -19,6 +19,8 @@ Covers:
 PRD reference: §2 System Orchestration, §7 Execution Engine, Phase 15E.
 """
 
+import json
+
 import pytest
 
 from crypto_core.service.sleeve_candidate_workflow import (
@@ -32,6 +34,8 @@ from crypto_core.service.sleeve_promotion_review_controller import (
     SleevePromotionReviewController,
     SleevePromotionReviewCorruptError,
     SleevePromotionReviewVerdict,
+    sleeve_promotion_review_snapshot_from_dict,
+    sleeve_promotion_review_snapshot_to_dict,
 )
 
 _FIXED_REVIEW_NS = 9_876_543_210
@@ -246,6 +250,70 @@ def test_persistence_restore_roundtrip():
     assert len(ctrl2.history) == 1
 
 
+def test_serialization_roundtrip_is_json_safe():
+    entry = make_entry(
+        "s9-json",
+        SleevePromotionCandidateStatus.SUPPORTED,
+        SleevePromotionSupportStatus.SUPPORTIVE,
+        SleeveDecisionPackStatus.SUPPORTED_CANDIDATE,
+        missing_evidence=("campaign_link_missing",),
+        blocking_reasons=("readiness_pending",),
+    )
+    snapshot = SleevePromotionReviewController(make_snapshot([entry]), clock_ns=fixed_clock).finalize()
+
+    payload = sleeve_promotion_review_snapshot_to_dict(snapshot)
+    restored = sleeve_promotion_review_snapshot_from_dict(payload)
+
+    assert restored == snapshot
+    assert json.loads(json.dumps(payload))["review_results"][0]["verdict"] == "review_supported"
+
+
+def test_backward_compatible_legacy_dict_payload_restores():
+    entry = make_entry(
+        "s9-legacy",
+        SleevePromotionCandidateStatus.SUPPORTED,
+        SleevePromotionSupportStatus.SUPPORTIVE,
+        SleeveDecisionPackStatus.SUPPORTED_CANDIDATE,
+    )
+    snapshot = SleevePromotionReviewController(make_snapshot([entry]), clock_ns=fixed_clock).finalize()
+    legacy_payload = {
+        "as_of_ns": snapshot.as_of_ns,
+        "status": snapshot.status,
+        "review_results": [snapshot.review_results[0].__dict__],
+        "portfolio_summary": snapshot.portfolio_summary.__dict__,
+        "history": [
+            {
+                "as_of_ns": snapshot.history[0].as_of_ns,
+                "summary": snapshot.history[0].summary,
+                "portfolio_summary": snapshot.history[0].portfolio_summary.__dict__,
+            }
+        ],
+    }
+
+    restored = sleeve_promotion_review_snapshot_from_dict(legacy_payload)
+
+    assert restored == snapshot
+
+
+def test_restore_bounds_imported_history():
+    entry = make_entry(
+        "s9-history",
+        SleevePromotionCandidateStatus.SUPPORTED,
+        SleevePromotionSupportStatus.SUPPORTIVE,
+        SleeveDecisionPackStatus.SUPPORTED_CANDIDATE,
+    )
+    snap = make_snapshot([entry])
+    source = SleevePromotionReviewController(snap, history_limit=5, clock_ns=fixed_clock)
+    source.finalize()
+    source.finalize()
+    full_snapshot = source.finalize()
+    restored = SleevePromotionReviewController(snap, history_limit=2, clock_ns=fixed_clock)
+
+    restored.restore(full_snapshot)
+
+    assert len(restored.history) == 2
+
+
 def test_restore_replay_with_fixed_clock_is_stable():
     entry = make_entry(
         "s9-clock",
@@ -275,6 +343,21 @@ def test_malformed_restore_fails_closed():
 
     with pytest.raises(SleevePromotionReviewCorruptError):
         ctrl.restore(None)
+
+
+def test_malformed_snapshot_payload_fails_closed():
+    entry = make_entry(
+        "s-bad",
+        SleevePromotionCandidateStatus.SUPPORTED,
+        SleevePromotionSupportStatus.SUPPORTIVE,
+        SleeveDecisionPackStatus.SUPPORTED_CANDIDATE,
+    )
+    snapshot = SleevePromotionReviewController(make_snapshot([entry]), clock_ns=fixed_clock).finalize()
+    payload = sleeve_promotion_review_snapshot_to_dict(snapshot)
+    payload["as_of_ns"] += 1
+
+    with pytest.raises(SleevePromotionReviewCorruptError):
+        sleeve_promotion_review_snapshot_from_dict(payload)
 
 
 def test_default_constructor_remains_backward_compatible():

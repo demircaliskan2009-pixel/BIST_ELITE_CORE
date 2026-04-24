@@ -96,7 +96,7 @@ class SleevePromotionReviewController:
         clock_ns: Callable[[], int] | None = None,
     ):
         self.workflow_snapshot = workflow_snapshot
-        self.history_limit = history_limit
+        self.history_limit = max(1, history_limit)
         self.history = []
         self._clock_ns = time.time_ns if clock_ns is None else clock_ns
         self._validate()
@@ -258,7 +258,7 @@ class SleevePromotionReviewController:
         if not isinstance(snapshot, SleevePromotionReviewSnapshot):
             raise SleevePromotionReviewCorruptError("restore snapshot must be a SleevePromotionReviewSnapshot")
         self.workflow_snapshot = self.workflow_snapshot  # No-op for now; extend as needed
-        self.history = list(snapshot.history)
+        self.history = list(snapshot.history[-self.history_limit :])
         if any(not isinstance(item, SleevePromotionReviewHistoryEntry) for item in self.history):
             raise SleevePromotionReviewCorruptError("restore history must contain SleevePromotionReviewHistoryEntry")
         self._validate()
@@ -267,24 +267,277 @@ class SleevePromotionReviewController:
         self.history = []
 
     def to_dict(self) -> dict:
-        snap = self.snapshot()
-        return {
-            "as_of_ns": snap.as_of_ns,
-            "status": snap.status,
-            "review_results": [r.__dict__ for r in snap.review_results],
-            "portfolio_summary": snap.portfolio_summary.__dict__,
-            "history": [
-                {
-                    "as_of_ns": h.as_of_ns,
-                    "summary": h.summary,
-                    "portfolio_summary": h.portfolio_summary.__dict__,
-                }
-                for h in snap.history
-            ],
-        }
+        return sleeve_promotion_review_snapshot_to_dict(self.snapshot())
+
+
+def sleeve_promotion_review_result_to_dict(result: SleevePromotionReviewResult) -> dict:
+    return {
+        "sleeve_id": result.sleeve_id,
+        "verdict": result.verdict.value,
+        "reason": result.reason,
+        "next_step": result.next_step,
+        "repeated_weak": result.repeated_weak,
+        "repeated_blocked": result.repeated_blocked,
+        "repeated_inconclusive": result.repeated_inconclusive,
+        "missing_evidence": list(result.missing_evidence),
+        "governance_blockers": list(result.governance_blockers),
+        "last_verdict": None if result.last_verdict is None else result.last_verdict.value,
+    }
+
+
+def sleeve_promotion_review_result_from_dict(data: dict) -> SleevePromotionReviewResult:
+    if not isinstance(data, dict):
+        raise SleevePromotionReviewCorruptError(
+            f"Sleeve promotion review result must be a dict, got {type(data).__name__!r}"
+        )
+    return SleevePromotionReviewResult(
+        sleeve_id=_require_non_empty_str(data.get("sleeve_id"), "sleeve_id"),
+        verdict=_enum_value(SleevePromotionReviewVerdict, data.get("verdict"), "verdict"),
+        reason="" if data.get("reason", "") is None else str(data.get("reason", "")),
+        next_step="" if data.get("next_step", "") is None else str(data.get("next_step", "")),
+        repeated_weak=_require_bool(data.get("repeated_weak", False), "repeated_weak"),
+        repeated_blocked=_require_bool(data.get("repeated_blocked", False), "repeated_blocked"),
+        repeated_inconclusive=_require_bool(data.get("repeated_inconclusive", False), "repeated_inconclusive"),
+        missing_evidence=_tuple_of_strings(data.get("missing_evidence", ()), "missing_evidence"),
+        governance_blockers=_tuple_of_strings(data.get("governance_blockers", ()), "governance_blockers"),
+        last_verdict=_optional_enum(SleevePromotionReviewVerdict, data.get("last_verdict"), "last_verdict"),
+    )
+
+
+def sleeve_promotion_review_portfolio_summary_to_dict(summary: SleevePromotionReviewPortfolioSummary) -> dict:
+    return {
+        "as_of_ns": summary.as_of_ns,
+        "review_results": [sleeve_promotion_review_result_to_dict(result) for result in summary.review_results],
+        "supported": list(summary.supported),
+        "hold": list(summary.hold),
+        "reject": list(summary.reject),
+        "inconclusive": list(summary.inconclusive),
+        "repeated_weak": list(summary.repeated_weak),
+        "repeated_blocked": list(summary.repeated_blocked),
+        "repeated_inconclusive": list(summary.repeated_inconclusive),
+        "missing_evidence": list(summary.missing_evidence),
+        "governance_blockers": list(summary.governance_blockers),
+        "operator_summary": summary.operator_summary,
+    }
+
+
+def sleeve_promotion_review_portfolio_summary_from_dict(data: dict) -> SleevePromotionReviewPortfolioSummary:
+    if not isinstance(data, dict):
+        raise SleevePromotionReviewCorruptError(
+            f"Sleeve promotion review portfolio summary must be a dict, got {type(data).__name__!r}"
+        )
+    results_value = data.get("review_results", ())
+    if not isinstance(results_value, (list, tuple)):
+        raise SleevePromotionReviewCorruptError("Sleeve promotion review field 'review_results' must be a list/tuple")
+    results = tuple(_review_result_from_value(item) for item in results_value)
+    summary = SleevePromotionReviewPortfolioSummary(
+        as_of_ns=_require_non_negative_int(data.get("as_of_ns"), "as_of_ns"),
+        review_results=results,
+        supported=_tuple_or_derive(data, "supported", results, {SleevePromotionReviewVerdict.REVIEW_SUPPORTED}),
+        hold=_tuple_or_derive(data, "hold", results, {SleevePromotionReviewVerdict.HOLD}),
+        reject=_tuple_or_derive(data, "reject", results, {SleevePromotionReviewVerdict.REJECT}),
+        inconclusive=_tuple_or_derive(data, "inconclusive", results, {SleevePromotionReviewVerdict.INCONCLUSIVE}),
+        repeated_weak=_tuple_or_repeated(data, "repeated_weak", results, "repeated_weak"),
+        repeated_blocked=_tuple_or_repeated(data, "repeated_blocked", results, "repeated_blocked"),
+        repeated_inconclusive=_tuple_or_repeated(data, "repeated_inconclusive", results, "repeated_inconclusive"),
+        missing_evidence=_tuple_or_derive_values(data, "missing_evidence", results, "missing_evidence"),
+        governance_blockers=_tuple_or_derive_values(data, "governance_blockers", results, "governance_blockers"),
+        operator_summary="" if data.get("operator_summary", "") is None else str(data.get("operator_summary", "")),
+    )
+    _validate_portfolio_summary(summary)
+    return summary
+
+
+def sleeve_promotion_review_history_entry_to_dict(entry: SleevePromotionReviewHistoryEntry) -> dict:
+    return {
+        "as_of_ns": entry.as_of_ns,
+        "summary": entry.summary,
+        "portfolio_summary": sleeve_promotion_review_portfolio_summary_to_dict(entry.portfolio_summary),
+    }
+
+
+def sleeve_promotion_review_history_entry_from_dict(data: dict) -> SleevePromotionReviewHistoryEntry:
+    if not isinstance(data, dict):
+        raise SleevePromotionReviewCorruptError(
+            f"Sleeve promotion review history entry must be a dict, got {type(data).__name__!r}"
+        )
+    summary = sleeve_promotion_review_portfolio_summary_from_dict(
+        _dict_value(data.get("portfolio_summary"), "portfolio_summary")
+    )
+    as_of_ns = _require_non_negative_int(data.get("as_of_ns"), "as_of_ns")
+    if as_of_ns != summary.as_of_ns:
+        raise SleevePromotionReviewCorruptError("Sleeve promotion review history timestamp does not match summary")
+    return SleevePromotionReviewHistoryEntry(
+        as_of_ns=as_of_ns,
+        summary="" if data.get("summary", "") is None else str(data.get("summary", "")),
+        portfolio_summary=summary,
+    )
+
+
+def sleeve_promotion_review_snapshot_to_dict(snapshot: SleevePromotionReviewSnapshot) -> dict:
+    return {
+        "as_of_ns": snapshot.as_of_ns,
+        "status": snapshot.status,
+        "review_results": [sleeve_promotion_review_result_to_dict(result) for result in snapshot.review_results],
+        "portfolio_summary": sleeve_promotion_review_portfolio_summary_to_dict(snapshot.portfolio_summary),
+        "history": [sleeve_promotion_review_history_entry_to_dict(entry) for entry in snapshot.history],
+    }
+
+
+def sleeve_promotion_review_snapshot_from_dict(data: dict) -> SleevePromotionReviewSnapshot:
+    if not isinstance(data, dict):
+        raise SleevePromotionReviewCorruptError(
+            f"Sleeve promotion review snapshot must be a dict, got {type(data).__name__!r}"
+        )
+    summary = sleeve_promotion_review_portfolio_summary_from_dict(
+        _dict_value(data.get("portfolio_summary"), "portfolio_summary")
+    )
+    results_value = data.get("review_results")
+    if results_value is None:
+        results = summary.review_results
+    elif isinstance(results_value, (list, tuple)):
+        results = tuple(_review_result_from_value(item) for item in results_value)
+    else:
+        raise SleevePromotionReviewCorruptError("Sleeve promotion review field 'review_results' must be a list/tuple")
+    if results != summary.review_results:
+        raise SleevePromotionReviewCorruptError("Sleeve promotion review results do not match portfolio summary")
+    as_of_ns = _require_non_negative_int(data.get("as_of_ns"), "as_of_ns")
+    if as_of_ns != summary.as_of_ns:
+        raise SleevePromotionReviewCorruptError("Sleeve promotion review timestamp does not match portfolio summary")
+    history_value = data.get("history", ())
+    if not isinstance(history_value, (list, tuple)):
+        raise SleevePromotionReviewCorruptError("Sleeve promotion review field 'history' must be a list/tuple")
+    return SleevePromotionReviewSnapshot(
+        as_of_ns=as_of_ns,
+        status=_require_non_empty_str(data.get("status"), "status"),
+        review_results=results,
+        portfolio_summary=summary,
+        history=tuple(_history_entry_from_value(item) for item in history_value),
+    )
 
 
 def _append_unique(target: list[str], values: tuple[str, ...]) -> None:
     for value in values:
         if value not in target:
             target.append(value)
+
+
+def _review_result_from_value(value: object) -> SleevePromotionReviewResult:
+    if isinstance(value, SleevePromotionReviewResult):
+        return value
+    return sleeve_promotion_review_result_from_dict(_dict_value(value, "review_results"))
+
+
+def _history_entry_from_value(value: object) -> SleevePromotionReviewHistoryEntry:
+    if isinstance(value, SleevePromotionReviewHistoryEntry):
+        return value
+    return sleeve_promotion_review_history_entry_from_dict(_dict_value(value, "history"))
+
+
+def _dict_value(value: object, field_name: str) -> dict:
+    if not isinstance(value, dict):
+        raise SleevePromotionReviewCorruptError(f"{field_name} must be a dict")
+    return dict(value)
+
+
+def _tuple_or_derive(
+    data: dict,
+    field_name: str,
+    results: tuple[SleevePromotionReviewResult, ...],
+    verdicts: set[SleevePromotionReviewVerdict],
+) -> tuple[str, ...]:
+    if field_name in data:
+        return _tuple_of_strings(data.get(field_name, ()), field_name)
+    return tuple(result.sleeve_id for result in results if result.verdict in verdicts)
+
+
+def _tuple_or_repeated(
+    data: dict,
+    field_name: str,
+    results: tuple[SleevePromotionReviewResult, ...],
+    attr_name: str,
+) -> tuple[str, ...]:
+    if field_name in data:
+        return _tuple_of_strings(data.get(field_name, ()), field_name)
+    return tuple(result.sleeve_id for result in results if getattr(result, attr_name))
+
+
+def _tuple_or_derive_values(
+    data: dict,
+    field_name: str,
+    results: tuple[SleevePromotionReviewResult, ...],
+    attr_name: str,
+) -> tuple[str, ...]:
+    if field_name in data:
+        return _tuple_of_strings(data.get(field_name, ()), field_name)
+    ordered: list[str] = []
+    for result in results:
+        _append_unique(ordered, getattr(result, attr_name))
+    return tuple(ordered)
+
+
+def _validate_portfolio_summary(summary: SleevePromotionReviewPortfolioSummary) -> None:
+    expected = {
+        "supported": tuple(
+            result.sleeve_id
+            for result in summary.review_results
+            if result.verdict == SleevePromotionReviewVerdict.REVIEW_SUPPORTED
+        ),
+        "hold": tuple(
+            result.sleeve_id for result in summary.review_results if result.verdict == SleevePromotionReviewVerdict.HOLD
+        ),
+        "reject": tuple(
+            result.sleeve_id
+            for result in summary.review_results
+            if result.verdict == SleevePromotionReviewVerdict.REJECT
+        ),
+        "inconclusive": tuple(
+            result.sleeve_id
+            for result in summary.review_results
+            if result.verdict == SleevePromotionReviewVerdict.INCONCLUSIVE
+        ),
+    }
+    for field_name, sleeve_ids in expected.items():
+        if getattr(summary, field_name) != sleeve_ids:
+            raise SleevePromotionReviewCorruptError(f"Sleeve promotion review {field_name} ids do not match results")
+
+
+def _enum_value(enum_type, value: object, field_name: str):
+    if isinstance(value, enum_type):
+        return value
+    try:
+        return enum_type(_require_non_empty_str(value, field_name))
+    except ValueError as exc:
+        raise SleevePromotionReviewCorruptError(f"Invalid {field_name}: {value!r}") from exc
+
+
+def _optional_enum(enum_type, value: object, field_name: str):
+    if value is None:
+        return None
+    return _enum_value(enum_type, value, field_name)
+
+
+def _tuple_of_strings(value: object, field_name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise SleevePromotionReviewCorruptError(f"{field_name} must be a list/tuple")
+    return tuple(str(item) for item in value)
+
+
+def _require_non_empty_str(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise SleevePromotionReviewCorruptError(f"{field_name} must be a non-empty string")
+    return value
+
+
+def _require_non_negative_int(value: object, field_name: str) -> int:
+    if not isinstance(value, int) or value < 0:
+        raise SleevePromotionReviewCorruptError(f"{field_name} must be a non-negative int")
+    return value
+
+
+def _require_bool(value: object, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise SleevePromotionReviewCorruptError(f"{field_name} must be a bool")
+    return value

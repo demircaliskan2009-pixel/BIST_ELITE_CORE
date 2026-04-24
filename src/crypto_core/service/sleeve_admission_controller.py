@@ -125,7 +125,7 @@ class SleeveAdmissionController:
     ):
         self.review_portfolio_summary = review_portfolio_summary
         self.portfolio_snapshot = portfolio_snapshot
-        self.history_limit = history_limit
+        self.history_limit = max(1, history_limit)
         self.history: list[SleeveAdmissionHistoryEntry] = []
         self._validate()
 
@@ -557,10 +557,14 @@ def sleeve_admission_history_entry_to_dict(entry: SleeveAdmissionHistoryEntry) -
 def sleeve_admission_history_entry_from_dict(data: dict) -> SleeveAdmissionHistoryEntry:
     if not isinstance(data, dict):
         raise SleeveAdmissionCorruptError(f"Sleeve admission history entry must be a dict, got {type(data).__name__!r}")
+    summary = sleeve_admission_portfolio_summary_from_dict(dict(data.get("portfolio_summary")))
+    as_of_ns = _require_int(data.get("as_of_ns"), "as_of_ns")
+    if as_of_ns != summary.as_of_ns:
+        raise SleeveAdmissionCorruptError("Sleeve admission history timestamp does not match portfolio summary")
     return SleeveAdmissionHistoryEntry(
-        as_of_ns=_require_int(data.get("as_of_ns"), "as_of_ns"),
+        as_of_ns=as_of_ns,
         summary="" if data.get("summary", "") is None else str(data.get("summary", "")),
-        portfolio_summary=sleeve_admission_portfolio_summary_from_dict(dict(data.get("portfolio_summary"))),
+        portfolio_summary=summary,
     )
 
 
@@ -578,6 +582,9 @@ def sleeve_admission_snapshot_from_dict(data: dict) -> SleeveAdmissionSnapshot:
     if not isinstance(data, dict):
         raise SleeveAdmissionCorruptError(f"Sleeve admission snapshot must be a dict, got {type(data).__name__!r}")
     summary = sleeve_admission_portfolio_summary_from_dict(dict(data.get("portfolio_summary")))
+    as_of_ns = _require_int(data.get("as_of_ns"), "as_of_ns")
+    if as_of_ns != summary.as_of_ns:
+        raise SleeveAdmissionCorruptError("Sleeve admission timestamp does not match portfolio summary")
     results_value = data.get("admission_results")
     if results_value is None:
         results = summary.admission_results
@@ -591,7 +598,7 @@ def sleeve_admission_snapshot_from_dict(data: dict) -> SleeveAdmissionSnapshot:
     if not isinstance(history_value, (list, tuple)):
         raise SleeveAdmissionCorruptError("Sleeve admission field 'history' must be a list/tuple")
     return SleeveAdmissionSnapshot(
-        as_of_ns=_require_int(data.get("as_of_ns"), "as_of_ns"),
+        as_of_ns=as_of_ns,
         status=_require_non_empty_str(data.get("status"), "status"),
         admission_results=results,
         portfolio_summary=summary,
