@@ -1,5 +1,31 @@
 ﻿# Crypto Quant Engine — Agent Invariants
 
+## Codex Crypto-Core Operating Rules
+
+- Active implementation scope is **CRYPTO-ONLY**: `src/crypto_core/**` and `tests/crypto_core/**`, unless the user explicitly expands scope.
+- Never touch legacy BIST implementation code during crypto tasks.
+- Read-only tasks are immutable: do not edit, stage, commit, or push.
+- Patch tasks must use minimal reads first: read named seams, trace only required symbols, then apply the smallest additive change.
+- For crypto patch tasks, validate in order:
+  1. `ruff check --fix <changed crypto files>`
+  2. `ruff format <changed crypto files>`
+  3. `python -m pytest -x -q <targeted tests>`
+  4. `python -m pytest -x -q tests/crypto_core`
+  5. inspect `git status --short` and the intended diff
+- Never run broad staging such as `git add .`; always stage explicit intended paths only.
+- Commit only intended crypto/setup files, and push only after the required checks pass.
+- Fail closed on ambiguity: missing evidence, unclear scope, or unsafe repo state blocks changes.
+- Do not add fake provider data, live trading enablement, API keys, secrets, network clients, cloud infra, or credential plumbing unless explicitly requested.
+- Use `docs/PRDV4_MULTI_MARKET_CRYPTO.md` as the crypto architecture constitution and preserve deterministic replay, auditability, evidence-before-promotion, and paper-only operation until readiness proves promotion.
+- Treat the crypto system as multi-strategy, multi-sleeve, and governance-first; do not invent alpha, PnL, or allocator logic outside the requested phase.
+- Future task summaries should use:
+  1. What was analyzed
+  2. What was changed
+  3. Why it works now
+  4. Validation results
+  5. Commit hash
+  6. Remaining risks
+
 ## Architecture Constitution
 
 - **`docs/PRDV4_MULTI_MARKET_CRYPTO.md`** — PRDV4 architecture constitution (authoritative).
