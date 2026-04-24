@@ -13,6 +13,7 @@ Design rules:
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass
 from enum import Enum
 
@@ -65,6 +66,14 @@ class SleeveAdmissionReleaseEvidenceStatus(str, Enum):
     EVIDENCE_PARTIAL = "evidence_partial"
     EVIDENCE_BLOCKED = "evidence_blocked"
     EVIDENCE_MISSING = "evidence_missing"
+
+
+class ManagedSleeveSetDryRunStatus(str, Enum):
+    READY_FOR_PAPER_DRY_RUN = "ready_for_paper_dry_run"
+    PARTIAL_PAPER_DRY_RUN = "partial_paper_dry_run"
+    BLOCKED = "blocked"
+    INCONCLUSIVE = "inconclusive"
+    EMPTY = "empty"
 
 
 @dataclass(frozen=True)
@@ -195,6 +204,36 @@ class _ReleaseEvidenceGate:
     blockers: tuple[str, ...]
     per_sleeve_blockers: tuple[SleeveAdmissionReleaseSleeveEvidence, ...]
     summary: str
+
+
+@dataclass(frozen=True)
+class ManagedSleeveAllocation:
+    sleeve_id: str
+    effective_allocation: float
+
+
+@dataclass(frozen=True)
+class ManagedSleeveSetManifest:
+    manifest_id: str
+    as_of_ns: int
+    source_release_pack_status: SleeveAdmissionReleaseStatus
+    source_release_pack_id: str
+    source_release_pack_as_of_ns: int
+    source_release_pack_replay_key: str
+    source_release_pack_hash: str
+    source_evidence_gate_status: SleeveAdmissionReleaseEvidenceStatus
+    active_sleeves: tuple[str, ...]
+    admitted_unallocated_sleeves: tuple[str, ...]
+    blocked_sleeves: tuple[str, ...]
+    inconclusive_sleeves: tuple[str, ...]
+    effective_allocations: tuple[ManagedSleeveAllocation, ...]
+    unallocated_share: float
+    activation_blockers: tuple[str, ...]
+    evidence_blockers: tuple[str, ...]
+    governance_blockers: tuple[str, ...]
+    dry_run_status: ManagedSleeveSetDryRunStatus
+    next_actions: tuple[SleeveAdmissionReleaseAction, ...]
+    operator_summary: str = ""
 
 
 class SleeveAdmissionCorruptError(RuntimeError):
@@ -1074,6 +1113,204 @@ def sleeve_admission_release_pack_from_dict(data: dict) -> SleeveAdmissionReleas
     return release_pack
 
 
+def build_managed_sleeve_set_manifest(
+    release_pack: SleeveAdmissionReleasePack,
+    *,
+    portfolio_snapshot: SleevePortfolioSnapshot | None = None,
+    manifest_id: str | None = None,
+) -> ManagedSleeveSetManifest:
+    """Build a deterministic paper-only activation manifest from release truth."""
+    if not isinstance(release_pack, SleeveAdmissionReleasePack):
+        raise SleeveAdmissionCorruptError("managed sleeve manifest requires a SleeveAdmissionReleasePack")
+    _validate_release_pack(release_pack)
+    if portfolio_snapshot is not None and not isinstance(portfolio_snapshot, SleevePortfolioSnapshot):
+        raise SleeveAdmissionCorruptError("portfolio_snapshot must be a SleevePortfolioSnapshot")
+
+    allocations = _manifest_effective_allocations(release_pack)
+    active_sleeves = tuple(item.sleeve_id for item in allocations)
+    admitted_unallocated = _sorted_unique(release_pack.admitted_unallocated_sleeves)
+    blocked_sleeves = _sorted_unique((*release_pack.blocked_sleeves, *release_pack.disabled_operator_off_sleeves))
+    inconclusive_sleeves = _sorted_unique(
+        (
+            *release_pack.inconclusive_sleeves,
+            *release_pack.review_supported_not_admitted_sleeves,
+            *release_pack.insufficient_evidence_sleeves,
+        )
+    )
+    unallocated_share = _manifest_unallocated_share(portfolio_snapshot, allocations)
+    activation_blockers = _manifest_activation_blockers(
+        release_pack,
+        allocations=allocations,
+        unallocated_share=unallocated_share,
+    )
+    dry_run_status = _derive_manifest_dry_run_status(
+        source_release_pack_status=release_pack.overall_release_status,
+        source_evidence_gate_status=release_pack.evidence_gate_status,
+        active_sleeves=active_sleeves,
+        activation_blockers=activation_blockers,
+        candidate_count=len(release_pack.per_sleeve_admission_results),
+    )
+    source_hash = _release_pack_hash(release_pack)
+    manifest = ManagedSleeveSetManifest(
+        manifest_id=manifest_id or _managed_sleeve_manifest_id(release_pack.as_of_ns, source_hash),
+        as_of_ns=release_pack.as_of_ns,
+        source_release_pack_status=release_pack.overall_release_status,
+        source_release_pack_id=release_pack.pack_id,
+        source_release_pack_as_of_ns=release_pack.as_of_ns,
+        source_release_pack_replay_key=release_pack.deterministic_replay_key,
+        source_release_pack_hash=source_hash,
+        source_evidence_gate_status=release_pack.evidence_gate_status,
+        active_sleeves=active_sleeves,
+        admitted_unallocated_sleeves=admitted_unallocated,
+        blocked_sleeves=blocked_sleeves,
+        inconclusive_sleeves=inconclusive_sleeves,
+        effective_allocations=allocations,
+        unallocated_share=unallocated_share,
+        activation_blockers=activation_blockers,
+        evidence_blockers=_sorted_unique((*release_pack.evidence_blockers, *release_pack.paper_evidence_blockers)),
+        governance_blockers=_sorted_unique(release_pack.governance_blockers),
+        dry_run_status=dry_run_status,
+        next_actions=tuple(sorted(release_pack.next_actions, key=lambda item: item.sleeve_id)),
+        operator_summary=_manifest_operator_summary(
+            dry_run_status, active_sleeves, admitted_unallocated, blocked_sleeves
+        ),
+    )
+    _validate_managed_sleeve_set_manifest(manifest)
+    return manifest
+
+
+def managed_sleeve_allocation_to_dict(allocation: ManagedSleeveAllocation) -> dict:
+    return {
+        "sleeve_id": allocation.sleeve_id,
+        "effective_allocation": allocation.effective_allocation,
+    }
+
+
+def managed_sleeve_allocation_from_dict(data: dict) -> ManagedSleeveAllocation:
+    if not isinstance(data, dict):
+        raise SleeveAdmissionCorruptError(f"Managed sleeve allocation must be a dict, got {type(data).__name__!r}")
+    allocation = ManagedSleeveAllocation(
+        sleeve_id=_require_non_empty_str(data.get("sleeve_id"), "sleeve_id"),
+        effective_allocation=_require_float(data.get("effective_allocation"), "effective_allocation"),
+    )
+    _validate_manifest_allocation(allocation)
+    return allocation
+
+
+def managed_sleeve_set_manifest_to_dict(manifest: ManagedSleeveSetManifest) -> dict:
+    _validate_managed_sleeve_set_manifest(manifest)
+    return {
+        "manifest_id": manifest.manifest_id,
+        "as_of_ns": manifest.as_of_ns,
+        "source_release_pack_status": manifest.source_release_pack_status.value,
+        "source_release_pack_id": manifest.source_release_pack_id,
+        "source_release_pack_as_of_ns": manifest.source_release_pack_as_of_ns,
+        "source_release_pack_replay_key": manifest.source_release_pack_replay_key,
+        "source_release_pack_hash": manifest.source_release_pack_hash,
+        "source_evidence_gate_status": manifest.source_evidence_gate_status.value,
+        "active_sleeves": list(manifest.active_sleeves),
+        "admitted_unallocated_sleeves": list(manifest.admitted_unallocated_sleeves),
+        "blocked_sleeves": list(manifest.blocked_sleeves),
+        "inconclusive_sleeves": list(manifest.inconclusive_sleeves),
+        "effective_allocations": [
+            managed_sleeve_allocation_to_dict(allocation) for allocation in manifest.effective_allocations
+        ],
+        "unallocated_share": manifest.unallocated_share,
+        "activation_blockers": list(manifest.activation_blockers),
+        "evidence_blockers": list(manifest.evidence_blockers),
+        "governance_blockers": list(manifest.governance_blockers),
+        "dry_run_status": manifest.dry_run_status.value,
+        "next_actions": [sleeve_admission_release_action_to_dict(action) for action in manifest.next_actions],
+        "operator_summary": manifest.operator_summary,
+    }
+
+
+def managed_sleeve_set_manifest_from_dict(data: dict) -> ManagedSleeveSetManifest:
+    if not isinstance(data, dict):
+        raise SleeveAdmissionCorruptError(f"Managed sleeve set manifest must be a dict, got {type(data).__name__!r}")
+
+    source_release_pack_status = _manifest_release_status_or_default(
+        data.get("source_release_pack_status"),
+        SleeveAdmissionReleaseStatus.INCONCLUSIVE,
+    )
+    source_evidence_gate_status = _release_evidence_status_or_default(
+        data.get("source_evidence_gate_status"),
+        SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_MISSING,
+    )
+    source_release_pack_as_of_ns = _require_int(
+        data.get("source_release_pack_as_of_ns", data.get("as_of_ns", 0)),
+        "source_release_pack_as_of_ns",
+    )
+    as_of_ns = _require_int(data.get("as_of_ns", source_release_pack_as_of_ns), "as_of_ns")
+    source_release_pack_replay_key = _string_or_default(data.get("source_release_pack_replay_key"), "unknown")
+    source_release_pack_hash = _string_or_default(
+        data.get("source_release_pack_hash"),
+        hashlib.sha256(source_release_pack_replay_key.encode("utf-8")).hexdigest(),
+    )
+    allocations = _manifest_allocations_from_data(data)
+    has_explicit_allocations = "effective_allocations" in data
+    if not has_explicit_allocations:
+        active_sleeves = ()
+    elif "active_sleeves" in data:
+        active_sleeves = _sorted_unique(data.get("active_sleeves", ()))
+    else:
+        active_sleeves = tuple(item.sleeve_id for item in allocations)
+    admitted_unallocated = _sorted_unique(data.get("admitted_unallocated_sleeves", ()))
+    blocked_sleeves = _sorted_unique(data.get("blocked_sleeves", ()))
+    inconclusive_sleeves = _sorted_unique(data.get("inconclusive_sleeves", ()))
+    unallocated_share = _require_float(data.get("unallocated_share", 1.0), "unallocated_share")
+    candidate_count = len(active_sleeves) + len(admitted_unallocated) + len(blocked_sleeves) + len(inconclusive_sleeves)
+    activation_blockers = _manifest_activation_blockers_from_fields(
+        source_release_pack_status=source_release_pack_status,
+        source_evidence_gate_status=source_evidence_gate_status,
+        active_sleeves=active_sleeves,
+        allocations=allocations,
+        unallocated_share=unallocated_share,
+        candidate_count=candidate_count,
+        explicit_blockers=_sorted_unique(data.get("activation_blockers", ())),
+    )
+    dry_run_status = _manifest_dry_run_status_or_default(
+        data.get("dry_run_status"),
+        _derive_manifest_dry_run_status(
+            source_release_pack_status=source_release_pack_status,
+            source_evidence_gate_status=source_evidence_gate_status,
+            active_sleeves=active_sleeves,
+            activation_blockers=activation_blockers,
+            candidate_count=candidate_count,
+        ),
+    )
+    manifest = ManagedSleeveSetManifest(
+        manifest_id=_string_or_default(
+            data.get("manifest_id"),
+            _managed_sleeve_manifest_id(as_of_ns, source_release_pack_hash),
+        ),
+        as_of_ns=as_of_ns,
+        source_release_pack_status=source_release_pack_status,
+        source_release_pack_id=_string_or_default(data.get("source_release_pack_id"), "unknown"),
+        source_release_pack_as_of_ns=source_release_pack_as_of_ns,
+        source_release_pack_replay_key=source_release_pack_replay_key,
+        source_release_pack_hash=source_release_pack_hash,
+        source_evidence_gate_status=source_evidence_gate_status,
+        active_sleeves=active_sleeves,
+        admitted_unallocated_sleeves=admitted_unallocated,
+        blocked_sleeves=blocked_sleeves,
+        inconclusive_sleeves=inconclusive_sleeves,
+        effective_allocations=allocations,
+        unallocated_share=unallocated_share,
+        activation_blockers=activation_blockers,
+        evidence_blockers=_sorted_unique(data.get("evidence_blockers", ())),
+        governance_blockers=_sorted_unique(data.get("governance_blockers", ())),
+        dry_run_status=dry_run_status,
+        next_actions=tuple(sorted(_release_actions_or_default(data, ()), key=lambda item: item.sleeve_id)),
+        operator_summary=_string_or_default(
+            data.get("operator_summary"),
+            _manifest_operator_summary(dry_run_status, active_sleeves, admitted_unallocated, blocked_sleeves),
+        ),
+    )
+    _validate_managed_sleeve_set_manifest(manifest)
+    return manifest
+
+
 _ADMITTED_VERDICTS = {
     SleeveAdmissionVerdict.ADMITTED_ACTIVE,
     SleeveAdmissionVerdict.ADMITTED_UNALLOCATED,
@@ -1752,6 +1989,309 @@ def _has_release_evidence_fields(data: dict) -> bool:
             "per_sleeve_evidence_blockers",
         )
     )
+
+
+def _manifest_effective_allocations(release_pack: SleeveAdmissionReleasePack) -> tuple[ManagedSleeveAllocation, ...]:
+    return tuple(
+        ManagedSleeveAllocation(
+            sleeve_id=result.sleeve_id,
+            effective_allocation=result.effective_allocation,
+        )
+        for result in sorted(release_pack.per_sleeve_admission_results, key=lambda item: item.sleeve_id)
+        if result.verdict == SleeveAdmissionVerdict.ADMITTED_ACTIVE
+        and result.active
+        and _valid_manifest_allocation_value(result.effective_allocation)
+    )
+
+
+def _manifest_invalid_active_allocation_ids(release_pack: SleeveAdmissionReleasePack) -> tuple[str, ...]:
+    return _sorted_unique(
+        result.sleeve_id
+        for result in release_pack.per_sleeve_admission_results
+        if result.verdict == SleeveAdmissionVerdict.ADMITTED_ACTIVE
+        and (not result.active or not _valid_manifest_allocation_value(result.effective_allocation))
+    )
+
+
+def _manifest_unallocated_share(
+    portfolio_snapshot: SleevePortfolioSnapshot | None,
+    allocations: tuple[ManagedSleeveAllocation, ...],
+) -> float:
+    if portfolio_snapshot is not None:
+        return float(portfolio_snapshot.effective_allocation.effective_unallocated_share)
+    allocated = sum(item.effective_allocation for item in allocations)
+    return max(0.0, 1.0 - allocated)
+
+
+def _manifest_activation_blockers(
+    release_pack: SleeveAdmissionReleasePack,
+    *,
+    allocations: tuple[ManagedSleeveAllocation, ...],
+    unallocated_share: float,
+) -> tuple[str, ...]:
+    invalid_active_allocations = tuple(
+        f"invalid_effective_allocation:{sleeve_id}"
+        for sleeve_id in _manifest_invalid_active_allocation_ids(release_pack)
+    )
+    return _manifest_activation_blockers_from_fields(
+        source_release_pack_status=release_pack.overall_release_status,
+        source_evidence_gate_status=release_pack.evidence_gate_status,
+        active_sleeves=tuple(item.sleeve_id for item in allocations),
+        allocations=allocations,
+        unallocated_share=unallocated_share,
+        candidate_count=len(release_pack.per_sleeve_admission_results),
+        explicit_blockers=_sorted_unique(
+            (
+                *invalid_active_allocations,
+                *release_pack.evidence_blockers,
+                *release_pack.governance_blockers,
+            )
+        ),
+    )
+
+
+def _manifest_activation_blockers_from_fields(
+    *,
+    source_release_pack_status: SleeveAdmissionReleaseStatus,
+    source_evidence_gate_status: SleeveAdmissionReleaseEvidenceStatus,
+    active_sleeves: tuple[str, ...],
+    allocations: tuple[ManagedSleeveAllocation, ...],
+    unallocated_share: float,
+    candidate_count: int,
+    explicit_blockers: tuple[str, ...],
+) -> tuple[str, ...]:
+    blockers = list(explicit_blockers)
+    if candidate_count == 0 or source_release_pack_status == SleeveAdmissionReleaseStatus.NO_CANDIDATES:
+        blockers.append("no_admission_candidates")
+    elif source_release_pack_status != SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET:
+        blockers.append("release_pack_not_ready_for_managed_set")
+    if source_evidence_gate_status != SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_READY:
+        blockers.append("release_pack_evidence_not_ready")
+    if candidate_count > 0 and not active_sleeves:
+        blockers.append("no_active_sleeves_for_paper_dry_run")
+    invalid_allocations = tuple(
+        allocation.sleeve_id
+        for allocation in allocations
+        if not _valid_manifest_allocation_value(allocation.effective_allocation)
+    )
+    for sleeve_id in invalid_allocations:
+        blockers.append(f"invalid_effective_allocation:{sleeve_id}")
+    allocation_total = sum(item.effective_allocation for item in allocations)
+    if allocation_total > 1.0 + _ALLOCATION_EPSILON:
+        blockers.append("effective_allocation_exceeds_one")
+    if allocation_total + unallocated_share > 1.0 + _ALLOCATION_EPSILON:
+        blockers.append("effective_allocation_plus_unallocated_exceeds_one")
+    if not _valid_unallocated_share(unallocated_share):
+        blockers.append("invalid_unallocated_share")
+    return _sorted_unique(blockers)
+
+
+def _derive_manifest_dry_run_status(
+    *,
+    source_release_pack_status: SleeveAdmissionReleaseStatus,
+    source_evidence_gate_status: SleeveAdmissionReleaseEvidenceStatus,
+    active_sleeves: tuple[str, ...],
+    activation_blockers: tuple[str, ...],
+    candidate_count: int,
+) -> ManagedSleeveSetDryRunStatus:
+    if candidate_count == 0 or source_release_pack_status == SleeveAdmissionReleaseStatus.NO_CANDIDATES:
+        return ManagedSleeveSetDryRunStatus.EMPTY
+    if (
+        source_release_pack_status == SleeveAdmissionReleaseStatus.BLOCKED
+        or source_evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_BLOCKED
+        or _manifest_has_hard_blockers(activation_blockers)
+    ):
+        return ManagedSleeveSetDryRunStatus.BLOCKED
+    if (
+        source_release_pack_status == SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET
+        and source_evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_READY
+        and active_sleeves
+        and not activation_blockers
+    ):
+        return ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN
+    if active_sleeves and source_release_pack_status in {
+        SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET,
+        SleeveAdmissionReleaseStatus.PARTIAL_READY,
+    }:
+        return ManagedSleeveSetDryRunStatus.PARTIAL_PAPER_DRY_RUN
+    return ManagedSleeveSetDryRunStatus.INCONCLUSIVE
+
+
+def _release_pack_hash(pack: SleeveAdmissionReleasePack) -> str:
+    parts = (
+        pack.pack_id,
+        str(pack.as_of_ns),
+        pack.overall_release_status.value,
+        pack.evidence_gate_status.value,
+        pack.deterministic_replay_key,
+    )
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _managed_sleeve_manifest_id(as_of_ns: int, source_release_pack_hash: str) -> str:
+    return f"managed-sleeve-set-manifest-{as_of_ns}-{source_release_pack_hash[:12]}"
+
+
+def _manifest_operator_summary(
+    status: ManagedSleeveSetDryRunStatus,
+    active_sleeves: tuple[str, ...],
+    admitted_unallocated: tuple[str, ...],
+    blocked_sleeves: tuple[str, ...],
+) -> str:
+    return (
+        f"dry_run_status={status.value}; "
+        f"active={len(active_sleeves)}; "
+        f"admitted_unallocated={len(admitted_unallocated)}; "
+        f"blocked={len(blocked_sleeves)}"
+    )
+
+
+def _manifest_allocations_from_data(data: dict) -> tuple[ManagedSleeveAllocation, ...]:
+    if "effective_allocations" not in data:
+        return ()
+    value = data.get("effective_allocations")
+    if not isinstance(value, (list, tuple)):
+        raise SleeveAdmissionCorruptError("Managed sleeve manifest field 'effective_allocations' must be a list/tuple")
+    return tuple(
+        sorted(
+            (managed_sleeve_allocation_from_dict(_dict_value(item, "effective_allocations")) for item in value),
+            key=lambda item: item.sleeve_id,
+        )
+    )
+
+
+def _validate_managed_sleeve_set_manifest(manifest: ManagedSleeveSetManifest) -> None:
+    if not isinstance(manifest, ManagedSleeveSetManifest):
+        raise SleeveAdmissionCorruptError("managed sleeve set manifest must be a ManagedSleeveSetManifest")
+    if manifest.as_of_ns < manifest.source_release_pack_as_of_ns:
+        raise SleeveAdmissionCorruptError("Managed sleeve manifest as_of_ns is older than release pack")
+    for field_name in (
+        "active_sleeves",
+        "admitted_unallocated_sleeves",
+        "blocked_sleeves",
+        "inconclusive_sleeves",
+        "activation_blockers",
+        "evidence_blockers",
+        "governance_blockers",
+    ):
+        value = getattr(manifest, field_name)
+        if value != _sorted_unique(value):
+            raise SleeveAdmissionCorruptError(f"Managed sleeve manifest {field_name} are not sorted unique")
+    allocation_ids = tuple(item.sleeve_id for item in manifest.effective_allocations)
+    if allocation_ids != tuple(sorted(allocation_ids)) or len(allocation_ids) != len(set(allocation_ids)):
+        raise SleeveAdmissionCorruptError("Managed sleeve manifest allocations are not sorted unique")
+    if allocation_ids != manifest.active_sleeves:
+        raise SleeveAdmissionCorruptError("Managed sleeve manifest active sleeves must match effective allocations")
+    for allocation in manifest.effective_allocations:
+        _validate_manifest_allocation(allocation)
+    if not _valid_unallocated_share(manifest.unallocated_share):
+        raise SleeveAdmissionCorruptError("Managed sleeve manifest unallocated_share must be between 0 and 1")
+    if set(manifest.active_sleeves) & set(manifest.blocked_sleeves):
+        raise SleeveAdmissionCorruptError("Managed sleeve manifest active sleeves overlap blocked sleeves")
+    if set(manifest.active_sleeves) & set(manifest.inconclusive_sleeves):
+        raise SleeveAdmissionCorruptError("Managed sleeve manifest active sleeves overlap inconclusive sleeves")
+    candidate_count = (
+        len(manifest.active_sleeves)
+        + len(manifest.admitted_unallocated_sleeves)
+        + len(manifest.blocked_sleeves)
+        + len(manifest.inconclusive_sleeves)
+    )
+    expected_status = _derive_manifest_dry_run_status(
+        source_release_pack_status=manifest.source_release_pack_status,
+        source_evidence_gate_status=manifest.source_evidence_gate_status,
+        active_sleeves=manifest.active_sleeves,
+        activation_blockers=manifest.activation_blockers,
+        candidate_count=candidate_count,
+    )
+    if manifest.dry_run_status != expected_status:
+        raise SleeveAdmissionCorruptError("Managed sleeve manifest dry-run status does not match activation state")
+    if manifest.dry_run_status == ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN:
+        if manifest.source_release_pack_status != SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET:
+            raise SleeveAdmissionCorruptError("Managed sleeve manifest cannot be ready from non-ready release pack")
+        if manifest.source_evidence_gate_status != SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_READY:
+            raise SleeveAdmissionCorruptError("Managed sleeve manifest cannot be ready without evidence-ready pack")
+        if not manifest.active_sleeves or manifest.activation_blockers:
+            raise SleeveAdmissionCorruptError(
+                "Managed sleeve manifest ready state requires active sleeves and no blockers"
+            )
+    if tuple(action.sleeve_id for action in manifest.next_actions) != tuple(
+        sorted(action.sleeve_id for action in manifest.next_actions)
+    ):
+        raise SleeveAdmissionCorruptError("Managed sleeve manifest next actions are not sorted")
+
+
+def _validate_manifest_allocation(allocation: ManagedSleeveAllocation) -> None:
+    if not allocation.sleeve_id:
+        raise SleeveAdmissionCorruptError("Managed sleeve allocation sleeve_id must be non-empty")
+    if not _valid_manifest_allocation_value(allocation.effective_allocation):
+        raise SleeveAdmissionCorruptError("Managed sleeve allocation must be finite and greater than zero")
+
+
+def _valid_manifest_allocation_value(value: float) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(float(value))
+        and 0.0 < float(value) <= 1.0
+    )
+
+
+def _valid_unallocated_share(value: float) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(float(value))
+        and 0.0 <= float(value) <= 1.0
+    )
+
+
+def _manifest_has_hard_blockers(blockers: tuple[str, ...]) -> bool:
+    hard_codes = {
+        "effective_allocation_exceeds_one",
+        "effective_allocation_plus_unallocated_exceeds_one",
+        "invalid_unallocated_share",
+    }
+    return any(code in hard_codes or code.startswith("invalid_effective_allocation:") for code in blockers)
+
+
+def _manifest_release_status_or_default(
+    value: object,
+    default: SleeveAdmissionReleaseStatus,
+) -> SleeveAdmissionReleaseStatus:
+    if value is None:
+        return default
+    if isinstance(value, SleeveAdmissionReleaseStatus):
+        return value
+    try:
+        return SleeveAdmissionReleaseStatus(_require_non_empty_str(value, "source_release_pack_status"))
+    except ValueError as exc:
+        raise SleeveAdmissionCorruptError(f"Invalid source_release_pack_status: {value!r}") from exc
+
+
+def _manifest_dry_run_status_or_default(
+    value: object,
+    default: ManagedSleeveSetDryRunStatus,
+) -> ManagedSleeveSetDryRunStatus:
+    if value is None:
+        return default
+    if isinstance(value, ManagedSleeveSetDryRunStatus):
+        return value
+    try:
+        return ManagedSleeveSetDryRunStatus(_require_non_empty_str(value, "dry_run_status"))
+    except ValueError as exc:
+        raise SleeveAdmissionCorruptError(f"Invalid dry_run_status: {value!r}") from exc
+
+
+def _sorted_unique(values) -> tuple[str, ...]:
+    if values is None:
+        return ()
+    if isinstance(values, str):
+        raw_values = (values,)
+    elif isinstance(values, (list, tuple, set)):
+        raw_values = values
+    else:
+        raw_values = tuple(values)
+    return tuple(sorted(dict.fromkeys(str(value) for value in raw_values if value)))
 
 
 def _dict_value(value: object, field_name: str) -> dict:

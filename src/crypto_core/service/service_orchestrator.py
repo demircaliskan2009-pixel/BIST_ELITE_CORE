@@ -54,7 +54,13 @@ from crypto_core.service.artifact_export import (
     operator_disposition_from_verdict,
 )
 from crypto_core.service.artifact_export import (
+    export_managed_sleeve_set_manifest as export_managed_sleeve_manifest,
+)
+from crypto_core.service.artifact_export import (
     export_sleeve_admission_release_pack as export_admission_release_pack,
+)
+from crypto_core.service.artifact_export import (
+    load_managed_sleeve_set_manifest as load_managed_sleeve_manifest,
 )
 from crypto_core.service.artifact_export import (
     load_sleeve_admission_release_pack as load_admission_release_pack,
@@ -106,9 +112,12 @@ from crypto_core.service.promotion_review_controller import (
 )
 from crypto_core.service.readiness import ReadinessEvaluator, readiness_to_dict
 from crypto_core.service.sleeve_admission_controller import (
+    ManagedSleeveSetManifest,
     SleeveAdmissionController,
     SleeveAdmissionReleasePack,
     SleeveAdmissionSnapshot,
+    build_managed_sleeve_set_manifest,
+    managed_sleeve_set_manifest_to_dict,
     sleeve_admission_portfolio_summary_to_dict,
     sleeve_admission_release_pack_to_dict,
     sleeve_admission_snapshot_to_dict,
@@ -261,6 +270,26 @@ class SleeveAdmissionReleaseState:
 
 
 @dataclass(frozen=True)
+class ManagedSleeveSetManifestState:
+    """Compact managed sleeve set manifest status for operator snapshots."""
+
+    available: bool
+    manifest_id: str | None
+    as_of_ns: int | None
+    dry_run_status: str
+    source_release_pack_status: str
+    source_evidence_gate_status: str
+    active_sleeves: int
+    admitted_unallocated_sleeves: int
+    blocked_sleeves: int
+    inconclusive_sleeves: int
+    unallocated_share: float
+    activation_blockers: tuple[str, ...]
+    evidence_blockers: tuple[str, ...]
+    governance_blockers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class EvidenceSufficiencyState:
     """Evidence sufficiency summary for operator truthfulness.
 
@@ -353,6 +382,9 @@ class OperatorSnapshot:
 
     # Phase 15I: Sleeve admission release-pack compact status
     sleeve_admission_release: SleeveAdmissionReleaseState | None = None
+
+    # Phase 15K: Paper-only managed sleeve set manifest compact status
+    managed_sleeve_manifest: ManagedSleeveSetManifestState | None = None
 
     # Escalation review workflow (Phase 13B)
     escalation_review: EscalationWorkflowState | None = None
@@ -611,6 +643,40 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for sleeve admission release pack load")
         return load_admission_release_pack(evidence_store=self._evidence_store)
+
+    def managed_sleeve_set_manifest(
+        self,
+        *,
+        release_pack: SleeveAdmissionReleasePack | None = None,
+        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
+    ) -> ManagedSleeveSetManifest:
+        """Build the deterministic paper-only managed sleeve set manifest."""
+        portfolio = self.sleeve_portfolio_snapshot() if portfolio_snapshot is None else portfolio_snapshot
+        pack = (
+            release_pack
+            if release_pack is not None
+            else self.sleeve_admission_release_pack(portfolio_snapshot=portfolio)
+        )
+        return build_managed_sleeve_set_manifest(pack, portfolio_snapshot=portfolio)
+
+    def managed_sleeve_set_manifest_dict(self) -> dict:
+        """Serialize the current managed sleeve set manifest to a plain dict."""
+        return managed_sleeve_set_manifest_to_dict(self.managed_sleeve_set_manifest())
+
+    def export_managed_sleeve_set_manifest(self):
+        """Persist the current managed sleeve set manifest via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for managed sleeve set manifest export")
+        return export_managed_sleeve_manifest(
+            manifest=self.managed_sleeve_set_manifest(),
+            evidence_store=self._evidence_store,
+        )
+
+    def load_managed_sleeve_set_manifest(self) -> ManagedSleeveSetManifest:
+        """Load the latest persisted managed sleeve set manifest."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for managed sleeve set manifest load")
+        return load_managed_sleeve_manifest(evidence_store=self._evidence_store)
 
     # ------------------------------------------------------------------
     # Properties
@@ -1373,17 +1439,20 @@ class ServiceOrchestrator:
             portfolio_snapshot=sleeve_portfolio,
             review_portfolio_summary=review_portfolio_summary,
         ).snapshot()
-        sleeve_admission_release = sleeve_admission_release_state_from_pack(
-            build_admission_release_pack(
-                sleeve_admission,
-                promotion_review_snapshot=sleeve_promotion_review,
-                candidate_workflow_snapshot=self.sleeve_candidate_workflow_snapshot(),
-                portfolio_snapshot=sleeve_portfolio,
-                campaign_report=self._last_campaign_report,
-                readiness_flags=(
-                    None if self._last_campaign_report is None else campaign_readiness_flags(self._last_campaign_report)
-                ),
-            )
+        candidate_workflow_snapshot = self.sleeve_candidate_workflow_snapshot()
+        sleeve_admission_release_pack = build_admission_release_pack(
+            sleeve_admission,
+            promotion_review_snapshot=sleeve_promotion_review,
+            candidate_workflow_snapshot=candidate_workflow_snapshot,
+            portfolio_snapshot=sleeve_portfolio,
+            campaign_report=self._last_campaign_report,
+            readiness_flags=(
+                None if self._last_campaign_report is None else campaign_readiness_flags(self._last_campaign_report)
+            ),
+        )
+        sleeve_admission_release = sleeve_admission_release_state_from_pack(sleeve_admission_release_pack)
+        managed_sleeve_manifest = managed_sleeve_manifest_state_from_manifest(
+            build_managed_sleeve_set_manifest(sleeve_admission_release_pack, portfolio_snapshot=sleeve_portfolio)
         )
         return OperatorSnapshot(
             service_mode=ss.service_mode,
@@ -1400,6 +1469,7 @@ class ServiceOrchestrator:
             sleeve_promotion_review=sleeve_promotion_review,
             sleeve_admission=sleeve_admission,
             sleeve_admission_release=sleeve_admission_release,
+            managed_sleeve_manifest=managed_sleeve_manifest,
             readiness_level=self._readiness_level,
             readiness_is_supportive=readiness_is_supportive,
             evidence=evidence,
@@ -2883,6 +2953,46 @@ def sleeve_admission_release_state_to_dict(state: SleeveAdmissionReleaseState) -
     }
 
 
+def managed_sleeve_manifest_state_from_manifest(manifest: ManagedSleeveSetManifest) -> ManagedSleeveSetManifestState:
+    """Build compact operator snapshot state from a managed sleeve set manifest."""
+    return ManagedSleeveSetManifestState(
+        available=True,
+        manifest_id=manifest.manifest_id,
+        as_of_ns=manifest.as_of_ns,
+        dry_run_status=manifest.dry_run_status.value,
+        source_release_pack_status=manifest.source_release_pack_status.value,
+        source_evidence_gate_status=manifest.source_evidence_gate_status.value,
+        active_sleeves=len(manifest.active_sleeves),
+        admitted_unallocated_sleeves=len(manifest.admitted_unallocated_sleeves),
+        blocked_sleeves=len(manifest.blocked_sleeves),
+        inconclusive_sleeves=len(manifest.inconclusive_sleeves),
+        unallocated_share=manifest.unallocated_share,
+        activation_blockers=manifest.activation_blockers,
+        evidence_blockers=manifest.evidence_blockers,
+        governance_blockers=manifest.governance_blockers,
+    )
+
+
+def managed_sleeve_manifest_state_to_dict(state: ManagedSleeveSetManifestState) -> dict:
+    """Serialize compact managed sleeve set manifest state to a plain dict."""
+    return {
+        "available": state.available,
+        "manifest_id": state.manifest_id,
+        "as_of_ns": state.as_of_ns,
+        "dry_run_status": state.dry_run_status,
+        "source_release_pack_status": state.source_release_pack_status,
+        "source_evidence_gate_status": state.source_evidence_gate_status,
+        "active_sleeves": state.active_sleeves,
+        "admitted_unallocated_sleeves": state.admitted_unallocated_sleeves,
+        "blocked_sleeves": state.blocked_sleeves,
+        "inconclusive_sleeves": state.inconclusive_sleeves,
+        "unallocated_share": state.unallocated_share,
+        "activation_blockers": list(state.activation_blockers),
+        "evidence_blockers": list(state.evidence_blockers),
+        "governance_blockers": list(state.governance_blockers),
+    }
+
+
 def evidence_sufficiency_state_to_dict(state: EvidenceSufficiencyState) -> dict:
     """Serialize EvidenceSufficiencyState to a plain dict."""
     return {
@@ -2951,6 +3061,12 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         "sleeve_admission_release": (
             sleeve_admission_release_state_to_dict(snap.sleeve_admission_release)
             if snap.sleeve_admission_release is not None
+            else None
+        ),
+        # Phase 15K
+        "managed_sleeve_manifest": (
+            managed_sleeve_manifest_state_to_dict(snap.managed_sleeve_manifest)
+            if snap.managed_sleeve_manifest is not None
             else None
         ),
         "readiness_level": snap.readiness_level,

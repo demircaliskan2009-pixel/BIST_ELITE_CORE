@@ -7,7 +7,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from crypto_core.service.artifact_export import (
+    export_managed_sleeve_set_manifest,
     export_sleeve_admission_release_pack,
+    load_managed_sleeve_set_manifest,
     load_sleeve_admission_release_pack,
 )
 from crypto_core.service.campaign import (
@@ -23,12 +25,16 @@ from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreConfi
 from crypto_core.service.models import QueuePressure, QueueSnapshot, ServiceStatus, WatchdogStatus
 from crypto_core.service.service_orchestrator import ServiceOrchestrator, operator_snapshot_to_dict
 from crypto_core.service.sleeve_admission_controller import (
+    ManagedSleeveSetDryRunStatus,
     SleeveAdmissionController,
     SleeveAdmissionCorruptError,
     SleeveAdmissionReleaseEvidenceStatus,
     SleeveAdmissionReleaseStatus,
     SleeveAdmissionVerdict,
+    build_managed_sleeve_set_manifest,
     build_sleeve_admission_release_pack,
+    managed_sleeve_set_manifest_from_dict,
+    managed_sleeve_set_manifest_to_dict,
     sleeve_admission_release_pack_from_dict,
     sleeve_admission_release_pack_to_dict,
     sleeve_admission_snapshot_from_dict,
@@ -56,6 +62,7 @@ from crypto_core.service.sleeve_portfolio import (
     SleeveQualificationStatus,
     SleeveRecommendationResult,
     SleeveRecommendationStatus,
+    build_sleeve_portfolio_snapshot,
 )
 from crypto_core.service.sleeve_promotion_review_controller import (
     SleevePromotionReviewPortfolioSummary,
@@ -350,6 +357,34 @@ def _portfolio(*sleeves: CryptoSleeveState, readiness_is_supportive: bool = True
         readiness_level="paper_live" if readiness_is_supportive else "not_assessed",
         readiness_is_supportive=readiness_is_supportive,
     )
+
+
+def _built_portfolio(*sleeves: CryptoSleeveState, readiness_is_supportive: bool = True) -> SleevePortfolioSnapshot:
+    return build_sleeve_portfolio_snapshot(
+        sleeves=tuple(sleeves),
+        as_of_ns=_T0_NS,
+        readiness_level="paper_live" if readiness_is_supportive else "not_assessed",
+        readiness_is_supportive=readiness_is_supportive,
+    )
+
+
+def _ready_release_pack(
+    *sleeves: CryptoSleeveState,
+    campaign_report: CampaignReport | None = None,
+):
+    portfolio = _portfolio(*sleeves)
+    review_summary = _review_summary(*(_review_result(sleeve.sleeve_id) for sleeve in sleeves))
+    promotion_snapshot = _promotion_snapshot(review_summary)
+    admission = SleeveAdmissionController(review_summary, portfolio_snapshot=portfolio).snapshot()
+    report = campaign_report or _campaign_report(sleeve_ids=tuple(sleeve.sleeve_id for sleeve in sleeves))
+    pack = build_sleeve_admission_release_pack(
+        admission,
+        promotion_review_snapshot=promotion_snapshot,
+        portfolio_snapshot=portfolio,
+        campaign_report=report,
+        readiness_flags=campaign_readiness_flags(report),
+    )
+    return pack, portfolio
 
 
 def _mock_service() -> MagicMock:
@@ -1028,3 +1063,215 @@ def test_release_pack_deterministic_replay_with_fixed_clock() -> None:
 
     assert first == second
     assert first["source_promotion_review_as_of_ns"] == fixed_review_ns
+
+
+def test_managed_manifest_model_construction_and_ready_dry_run() -> None:
+    sleeve = _sleeve("active", effective_allocation=0.25, target_allocation=0.25)
+    pack, _ = _ready_release_pack(sleeve)
+
+    manifest = build_managed_sleeve_set_manifest(pack)
+    portfolio_manifest = build_managed_sleeve_set_manifest(pack, portfolio_snapshot=_built_portfolio(sleeve))
+    rendered = managed_sleeve_set_manifest_to_dict(manifest)
+
+    assert manifest.dry_run_status == ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN
+    assert portfolio_manifest.dry_run_status == ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN
+    assert manifest.source_release_pack_status == SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET
+    assert manifest.source_evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_READY
+    assert manifest.active_sleeves == ("active",)
+    assert rendered["effective_allocations"] == [{"sleeve_id": "active", "effective_allocation": 0.25}]
+    assert rendered["unallocated_share"] == 0.75
+    assert portfolio_manifest.unallocated_share == 0.75
+    assert rendered["activation_blockers"] == []
+    assert manifest.source_release_pack_hash
+    assert manifest.manifest_id.startswith("managed-sleeve-set-manifest-")
+
+
+def test_managed_manifest_empty_release_pack_is_empty_and_blocked_safe() -> None:
+    pack = build_sleeve_admission_release_pack(SleeveAdmissionController().snapshot())
+
+    manifest = build_managed_sleeve_set_manifest(pack)
+
+    assert manifest.dry_run_status == ManagedSleeveSetDryRunStatus.EMPTY
+    assert manifest.active_sleeves == ()
+    assert manifest.effective_allocations == ()
+    assert "no_admission_candidates" in manifest.activation_blockers
+
+
+def test_managed_manifest_partial_release_pack_is_not_ready() -> None:
+    portfolio = _portfolio(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    review_summary = _review_summary(_review_result("active"))
+    admission = SleeveAdmissionController(review_summary, portfolio_snapshot=portfolio).snapshot()
+    pack = build_sleeve_admission_release_pack(
+        admission,
+        promotion_review_snapshot=_promotion_snapshot(review_summary),
+        portfolio_snapshot=portfolio,
+    )
+
+    manifest = build_managed_sleeve_set_manifest(pack)
+
+    assert pack.overall_release_status == SleeveAdmissionReleaseStatus.PARTIAL_READY
+    assert manifest.dry_run_status == ManagedSleeveSetDryRunStatus.PARTIAL_PAPER_DRY_RUN
+    assert "release_pack_evidence_not_ready" in manifest.activation_blockers
+
+
+def test_managed_manifest_tracks_unallocated_and_excludes_blocked_sleeves() -> None:
+    active = _sleeve("active", effective_allocation=0.30, target_allocation=0.30)
+    reserve = _sleeve(
+        "reserve",
+        status=CryptoSleeveStatus.ENABLED,
+        recommendation_status=SleeveRecommendationStatus.ELIGIBLE_BUT_NOT_SELECTED,
+        decision_status=SleeveDecisionPackStatus.ELIGIBLE_BUT_NOT_SELECTED,
+        effective_allocation=0.0,
+        target_allocation=0.0,
+    )
+    blocked = _sleeve(
+        "blocked",
+        status=CryptoSleeveStatus.BLOCKED,
+        recommendation_status=SleeveRecommendationStatus.BLOCKED,
+        qualification_status=SleeveQualificationStatus.BLOCKED,
+        campaign_status=SleeveCampaignEvidenceStatus.BLOCKED_BY_GOVERNANCE,
+        support_status=SleevePromotionSupportStatus.BLOCKED,
+        candidate_status=SleevePromotionCandidateStatus.BLOCKED,
+        decision_status=SleeveDecisionPackStatus.BLOCKED,
+        effective_allocation=0.0,
+        target_allocation=0.0,
+        blockers=("governance_block",),
+    )
+    portfolio = _portfolio(active, reserve, blocked)
+    review_summary = _review_summary(
+        _review_result("active"),
+        _review_result("reserve"),
+        _review_result("blocked", SleevePromotionReviewVerdict.REJECT, governance_blockers=("review_block",)),
+    )
+    report = _campaign_report(sleeve_ids=("active", "reserve", "blocked"))
+    admission = SleeveAdmissionController(review_summary, portfolio_snapshot=portfolio).snapshot()
+    pack = build_sleeve_admission_release_pack(
+        admission,
+        promotion_review_snapshot=_promotion_snapshot(review_summary),
+        portfolio_snapshot=portfolio,
+        campaign_report=report,
+        readiness_flags=campaign_readiness_flags(report),
+    )
+
+    manifest = build_managed_sleeve_set_manifest(pack)
+
+    assert manifest.dry_run_status == ManagedSleeveSetDryRunStatus.PARTIAL_PAPER_DRY_RUN
+    assert manifest.active_sleeves == ("active",)
+    assert manifest.admitted_unallocated_sleeves == ("reserve",)
+    assert manifest.blocked_sleeves == ("blocked",)
+    assert "blocked" not in manifest.active_sleeves
+    assert "governance_block" in manifest.activation_blockers
+    assert "review_block" in manifest.governance_blockers
+
+    blocked_review_summary = _review_summary(_review_result("blocked", SleevePromotionReviewVerdict.REJECT))
+    blocked_report = _campaign_report(sleeve_ids=("blocked",))
+    blocked_admission = SleeveAdmissionController(
+        blocked_review_summary,
+        portfolio_snapshot=_portfolio(blocked),
+    ).snapshot()
+    blocked_pack = build_sleeve_admission_release_pack(
+        blocked_admission,
+        promotion_review_snapshot=_promotion_snapshot(blocked_review_summary),
+        portfolio_snapshot=_portfolio(blocked),
+        campaign_report=blocked_report,
+        readiness_flags=campaign_readiness_flags(blocked_report),
+    )
+    blocked_manifest = build_managed_sleeve_set_manifest(blocked_pack)
+    assert blocked_manifest.dry_run_status == ManagedSleeveSetDryRunStatus.BLOCKED
+
+
+def test_managed_manifest_next_actions_and_serialization_roundtrip() -> None:
+    active = _sleeve("z-active", effective_allocation=0.10, target_allocation=0.10)
+    reserve = _sleeve(
+        "a-reserve",
+        status=CryptoSleeveStatus.ENABLED,
+        recommendation_status=SleeveRecommendationStatus.ELIGIBLE_BUT_NOT_SELECTED,
+        decision_status=SleeveDecisionPackStatus.ELIGIBLE_BUT_NOT_SELECTED,
+        effective_allocation=0.0,
+        target_allocation=0.0,
+    )
+    pack, _ = _ready_release_pack(active, reserve)
+
+    manifest = build_managed_sleeve_set_manifest(pack)
+    rendered = managed_sleeve_set_manifest_to_dict(manifest)
+    restored = managed_sleeve_set_manifest_from_dict(rendered)
+
+    assert restored == manifest
+    assert manifest.active_sleeves == ("z-active",)
+    assert manifest.admitted_unallocated_sleeves == ("a-reserve",)
+    assert [item["sleeve_id"] for item in rendered["next_actions"]] == ["a-reserve", "z-active"]
+    assert (
+        manifest.operator_summary
+        == "dry_run_status=ready_for_paper_dry_run; active=1; admitted_unallocated=1; blocked=0"
+    )
+
+
+def test_managed_manifest_old_payload_degrades_without_effective_allocations() -> None:
+    manifest = managed_sleeve_set_manifest_from_dict(
+        {
+            "source_release_pack_status": "ready_for_paper_managed_set",
+            "active_sleeves": ["legacy-active"],
+        }
+    )
+
+    assert manifest.dry_run_status == ManagedSleeveSetDryRunStatus.EMPTY
+    assert manifest.active_sleeves == ()
+    assert manifest.source_evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_MISSING
+    assert "no_admission_candidates" in manifest.activation_blockers
+
+
+def test_managed_manifest_malformed_load_fails_closed(tmp_path) -> None:
+    pack, _ = _ready_release_pack(_sleeve("active", effective_allocation=0.25, target_allocation=0.25))
+    manifest = build_managed_sleeve_set_manifest(pack)
+    payload = managed_sleeve_set_manifest_to_dict(manifest)
+    payload["dry_run_status"] = "blocked"
+
+    with pytest.raises(SleeveAdmissionCorruptError):
+        managed_sleeve_set_manifest_from_dict(payload)
+
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    export_managed_sleeve_set_manifest(manifest=manifest, evidence_store=store)
+    assert load_managed_sleeve_set_manifest(evidence_store=store) == manifest
+
+    store.save_snapshot("crypto_managed_sleeve_set_manifest", ["bad"])
+    with pytest.raises(SleeveAdmissionCorruptError):
+        load_managed_sleeve_set_manifest(evidence_store=store)
+
+
+def test_service_orchestrator_managed_manifest_helpers_and_operator_status(tmp_path) -> None:
+    fixed_review_ns = _T0_NS + 321
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    sleeve = _sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20)
+    portfolio = _built_portfolio(sleeve)
+    pack, _ = _ready_release_pack(sleeve)
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        sleeves=(sleeve,),
+        evidence_store=store,
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: fixed_review_ns,
+    )
+    orch._last_campaign_report = _campaign_report(sleeve_ids=("svc-active",))  # type: ignore[attr-defined]
+    orch.start_sleeve_promotion_review(workflow_snapshot=_supported_workflow("svc-active"))
+
+    manifest = orch.managed_sleeve_set_manifest(release_pack=pack, portfolio_snapshot=portfolio)
+    rendered = orch.managed_sleeve_set_manifest_dict()
+    operator = operator_snapshot_to_dict(orch.operator_snapshot())
+
+    assert manifest.dry_run_status == ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN
+    assert rendered["dry_run_status"] in {"ready_for_paper_dry_run", "partial_paper_dry_run", "inconclusive"}
+    assert operator["managed_sleeve_manifest"]["available"] is True
+    assert "dry_run_status" in operator["managed_sleeve_manifest"]
+
+    orch.export_managed_sleeve_set_manifest()
+    assert orch.load_managed_sleeve_set_manifest() == orch.managed_sleeve_set_manifest()
+
+
+def test_managed_manifest_deterministic_replay() -> None:
+    pack, _ = _ready_release_pack(_sleeve("stable", effective_allocation=0.15, target_allocation=0.15))
+
+    first = managed_sleeve_set_manifest_to_dict(build_managed_sleeve_set_manifest(pack))
+    second = managed_sleeve_set_manifest_to_dict(build_managed_sleeve_set_manifest(pack))
+
+    assert first == second
+    assert first["source_release_pack_hash"] == second["source_release_pack_hash"]
