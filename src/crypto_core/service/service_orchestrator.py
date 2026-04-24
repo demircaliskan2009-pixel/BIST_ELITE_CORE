@@ -100,8 +100,9 @@ from crypto_core.service.promotion_review_controller import (
 from crypto_core.service.readiness import ReadinessEvaluator, readiness_to_dict
 from crypto_core.service.sleeve_admission_controller import (
     SleeveAdmissionController,
-    SleeveAdmissionCorruptError,
     SleeveAdmissionSnapshot,
+    sleeve_admission_portfolio_summary_to_dict,
+    sleeve_admission_snapshot_to_dict,
 )
 from crypto_core.service.sleeve_candidate_workflow import (
     SleeveCandidateWorkflowController,
@@ -132,6 +133,10 @@ from crypto_core.service.sleeve_portfolio import (
 from crypto_core.service.sleeve_portfolio_controller import (
     SleeveOperatorOverride,
     SleevePortfolioController,
+)
+from crypto_core.service.sleeve_promotion_review_controller import (
+    SleevePromotionReviewController,
+    SleevePromotionReviewSnapshot,
 )
 
 logger = logging.getLogger(__name__)
@@ -382,47 +387,69 @@ class ServiceOrchestrator:
             self._external_regime_manager = None
             self._external_regime_plane = None
 
-        self._sleeve_promotion_review_controller = None
-        self._campaign = None
-        self._review = None
-        self._last_campaign_report = None
-        self._sleeve_portfolio_controller = None
-        self._configured_sleeves = tuple(sleeves)
-        self._escalation_review = None
-        self._sleeve_allocation_policy = (
-            SleeveAllocationPolicy() if sleeve_allocation_policy is None else sleeve_allocation_policy
-        )
-        self._sleeve_admission_controller = None
-
-    def build_sleeve_admission_controller(self):
-        """Build and cache the sleeve admission controller from current review portfolio summary."""
-        review_portfolio_summary = self.get_review_portfolio_summary()
-        if not review_portfolio_summary:
-            raise SleeveAdmissionCorruptError("No review portfolio summary for admission.")
-        self._sleeve_admission_controller = SleeveAdmissionController(review_portfolio_summary)
-        return self._sleeve_admission_controller
-
-    def get_sleeve_admission_snapshot(self):
-        if not self._sleeve_admission_controller:
-            self.build_sleeve_admission_controller()
-        return self._sleeve_admission_controller.snapshot()
-
-    def get_sleeve_admission_portfolio_summary(self):
-        if not self._sleeve_admission_controller:
-            self.build_sleeve_admission_controller()
-        return self._sleeve_admission_controller.build_portfolio_summary()
-        self._last_campaign_report: CampaignReport | None = None
-
+        self._campaign: CampaignController | None = None
         self._review: PromotionReviewController | None = None
-        self._escalation_review: EscalationReviewController | None = None
-        self._configured_sleeves = tuple(sleeves)
-        self._sleeve_allocation_policy = (
-            SleeveAllocationPolicy() if sleeve_allocation_policy is None else sleeve_allocation_policy
-        )
+        self._last_campaign_report: CampaignReport | None = None
         self._sleeve_portfolio_controller: SleevePortfolioController | None = None
         self._sleeve_candidate_workflow_controller: SleeveCandidateWorkflowController | None = None
-        # Phase 15E: Sleeve Promotion Review Controller
         self._sleeve_promotion_review_controller: SleevePromotionReviewController | None = None
+        self._sleeve_admission_controller: SleeveAdmissionController | None = None
+        self._configured_sleeves = tuple(sleeves)
+        self._escalation_review: EscalationReviewController | None = None
+        self._sleeve_allocation_policy = (
+            SleeveAllocationPolicy() if sleeve_allocation_policy is None else sleeve_allocation_policy
+        )
+
+    def build_sleeve_admission_controller(
+        self,
+        *,
+        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
+        history_limit: int = 5,
+    ) -> SleeveAdmissionController:
+        """Build or refresh the sleeve admission controller from current review and portfolio truth."""
+        review_snapshot = self.sleeve_promotion_review_snapshot()
+        review_portfolio_summary = None if review_snapshot is None else review_snapshot.portfolio_summary
+        portfolio = self.sleeve_portfolio_snapshot() if portfolio_snapshot is None else portfolio_snapshot
+        if self._sleeve_admission_controller is None:
+            self._sleeve_admission_controller = SleeveAdmissionController(
+                review_portfolio_summary,
+                portfolio_snapshot=portfolio,
+                history_limit=history_limit,
+            )
+        else:
+            self._sleeve_admission_controller.configure(
+                review_portfolio_summary,
+                portfolio_snapshot=portfolio,
+            )
+        return self._sleeve_admission_controller
+
+    def get_sleeve_admission_snapshot(
+        self,
+        *,
+        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
+    ) -> SleeveAdmissionSnapshot:
+        controller = self.build_sleeve_admission_controller(portfolio_snapshot=portfolio_snapshot)
+        return controller.snapshot()
+
+    def get_sleeve_admission_portfolio_summary(
+        self,
+        *,
+        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
+    ):
+        controller = self.build_sleeve_admission_controller(portfolio_snapshot=portfolio_snapshot)
+        return controller.build_portfolio_summary()
+
+    def finalize_sleeve_admission(
+        self,
+        *,
+        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
+    ) -> SleeveAdmissionSnapshot:
+        controller = self.build_sleeve_admission_controller(portfolio_snapshot=portfolio_snapshot)
+        return controller.finalize()
+
+    def reset_sleeve_admission(self) -> None:
+        if self._sleeve_admission_controller is not None:
+            self._sleeve_admission_controller.reset()
 
     # ------------------------------------------------------------------
     # Sleeve promotion review surface (Phase 15E)
@@ -461,6 +488,18 @@ class ServiceOrchestrator:
         if snap is None:
             return None
         return snap.__dict__
+
+    def sleeve_admission_snapshot(self) -> SleeveAdmissionSnapshot:
+        """Return the current sleeve admission gate snapshot."""
+        return self.get_sleeve_admission_snapshot()
+
+    def sleeve_admission_dict(self) -> dict:
+        """Serialize the current sleeve admission gate snapshot."""
+        return sleeve_admission_snapshot_to_dict(self.sleeve_admission_snapshot())
+
+    def sleeve_admission_summary_dict(self) -> dict:
+        """Serialize the portfolio-level sleeve admission summary."""
+        return sleeve_admission_portfolio_summary_to_dict(self.get_sleeve_admission_portfolio_summary())
 
     # ------------------------------------------------------------------
     # Properties
@@ -1210,11 +1249,7 @@ class ServiceOrchestrator:
         if self._sleeve_promotion_review_controller is not None:
             sleeve_promotion_review = self._sleeve_promotion_review_controller.snapshot()
 
-        sleeve_admission = None
-        try:
-            sleeve_admission = self.get_sleeve_admission_snapshot()
-        except Exception:
-            sleeve_admission = None
+        sleeve_admission = self.get_sleeve_admission_snapshot(portfolio_snapshot=sleeve_portfolio)
         return OperatorSnapshot(
             service_mode=ss.service_mode,
             trading_enabled=ss.trading_enabled,
@@ -2715,7 +2750,9 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
             snap.sleeve_promotion_review.__dict__ if snap.sleeve_promotion_review is not None else None
         ),
         # Phase 15F
-        "sleeve_admission": (snap.sleeve_admission.__dict__ if snap.sleeve_admission is not None else None),
+        "sleeve_admission": (
+            sleeve_admission_snapshot_to_dict(snap.sleeve_admission) if snap.sleeve_admission is not None else None
+        ),
         "readiness_level": snap.readiness_level,
         "readiness_is_supportive": snap.readiness_is_supportive,
         "evidence": evidence_sufficiency_state_to_dict(snap.evidence),
