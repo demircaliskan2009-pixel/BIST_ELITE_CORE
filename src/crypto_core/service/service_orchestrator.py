@@ -294,6 +294,9 @@ class OperatorSnapshot:
     sleeve_portfolio: SleevePortfolioSnapshot | None = None
     sleeve_candidate_workflow: SleeveCandidateWorkflowState | None = None
 
+    # Phase 15E: Sleeve promotion review
+    sleeve_promotion_review: SleevePromotionReviewSnapshot | None = None
+
     # Escalation review workflow (Phase 13B)
     escalation_review: EscalationWorkflowState | None = None
 
@@ -382,6 +385,46 @@ class ServiceOrchestrator:
         )
         self._sleeve_portfolio_controller: SleevePortfolioController | None = None
         self._sleeve_candidate_workflow_controller: SleeveCandidateWorkflowController | None = None
+        # Phase 15E: Sleeve Promotion Review Controller
+        self._sleeve_promotion_review_controller: SleevePromotionReviewController | None = None
+
+    # ------------------------------------------------------------------
+    # Sleeve promotion review surface (Phase 15E)
+    # ------------------------------------------------------------------
+
+    def start_sleeve_promotion_review(
+        self, *, workflow_snapshot: SleeveCandidateWorkflowSnapshot, history_limit: int = 5
+    ) -> None:
+        from crypto_core.service.sleeve_promotion_review_controller import SleevePromotionReviewController
+
+        self._sleeve_promotion_review_controller = SleevePromotionReviewController(
+            workflow_snapshot, history_limit=history_limit
+        )
+
+    def inspect_sleeve_promotion_review(self) -> SleevePromotionReviewSnapshot | None:
+        if self._sleeve_promotion_review_controller is None:
+            return None
+        return self._sleeve_promotion_review_controller.snapshot()
+
+    def finalize_sleeve_promotion_review(self) -> SleevePromotionReviewSnapshot | None:
+        if self._sleeve_promotion_review_controller is None:
+            return None
+        return self._sleeve_promotion_review_controller.finalize()
+
+    def reset_sleeve_promotion_review(self) -> None:
+        if self._sleeve_promotion_review_controller is not None:
+            self._sleeve_promotion_review_controller.reset()
+
+    def sleeve_promotion_review_snapshot(self) -> SleevePromotionReviewSnapshot | None:
+        if self._sleeve_promotion_review_controller is None:
+            return None
+        return self._sleeve_promotion_review_controller.snapshot()
+
+    def sleeve_promotion_review_dict(self) -> dict | None:
+        snap = self.sleeve_promotion_review_snapshot()
+        if snap is None:
+            return None
+        return snap.__dict__
 
     # ------------------------------------------------------------------
     # Properties
@@ -1126,6 +1169,11 @@ class ServiceOrchestrator:
                 prov_verdict = self._review.final_report.verdict
                 prov_summary = self._review.final_report.summary
 
+        # Phase 15E: Add sleeve promotion review snapshot to operator surface
+        sleeve_promotion_review = None
+        if self._sleeve_promotion_review_controller is not None:
+            sleeve_promotion_review = self._sleeve_promotion_review_controller.snapshot()
+
         return OperatorSnapshot(
             service_mode=ss.service_mode,
             trading_enabled=ss.trading_enabled,
@@ -1138,6 +1186,7 @@ class ServiceOrchestrator:
             escalation_review=escalation_review_state,
             sleeve_portfolio=sleeve_portfolio,
             sleeve_candidate_workflow=sleeve_candidate_workflow,
+            sleeve_promotion_review=sleeve_promotion_review,
             readiness_level=self._readiness_level,
             readiness_is_supportive=readiness_is_supportive,
             evidence=evidence,
@@ -2618,6 +2667,10 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         ),
         "escalation_review": (
             escalation_workflow_state_to_dict(snap.escalation_review) if snap.escalation_review is not None else None
+        ),
+        # Phase 15E
+        "sleeve_promotion_review": (
+            snap.sleeve_promotion_review.__dict__ if snap.sleeve_promotion_review is not None else None
         ),
         "readiness_level": snap.readiness_level,
         "readiness_is_supportive": snap.readiness_is_supportive,
