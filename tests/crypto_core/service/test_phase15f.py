@@ -6,12 +6,21 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from crypto_core.service.artifact_export import (
+    export_sleeve_admission_release_pack,
+    load_sleeve_admission_release_pack,
+)
+from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreConfig
 from crypto_core.service.models import QueuePressure, QueueSnapshot, ServiceStatus, WatchdogStatus
 from crypto_core.service.service_orchestrator import ServiceOrchestrator, operator_snapshot_to_dict
 from crypto_core.service.sleeve_admission_controller import (
     SleeveAdmissionController,
     SleeveAdmissionCorruptError,
+    SleeveAdmissionReleaseStatus,
     SleeveAdmissionVerdict,
+    build_sleeve_admission_release_pack,
+    sleeve_admission_release_pack_from_dict,
+    sleeve_admission_release_pack_to_dict,
     sleeve_admission_snapshot_from_dict,
     sleeve_admission_snapshot_to_dict,
 )
@@ -533,3 +542,205 @@ def test_backward_compatibility_with_older_snapshot_state() -> None:
 
     assert restored.portfolio_summary.blocked_count == 1
     assert restored.admission_results[0].verdict == SleeveAdmissionVerdict.NOT_ADMITTED_BLOCKED
+
+
+def test_release_pack_model_construction_and_ready_full_admission() -> None:
+    portfolio = _portfolio(
+        _sleeve("active"),
+        _sleeve(
+            "idle",
+            status=CryptoSleeveStatus.ENABLED,
+            recommendation_status=SleeveRecommendationStatus.ELIGIBLE_BUT_NOT_SELECTED,
+            decision_status=SleeveDecisionPackStatus.ELIGIBLE_BUT_NOT_SELECTED,
+            effective_allocation=0.0,
+        ),
+    )
+    admission = SleeveAdmissionController(
+        _review_summary(_review_result("active"), _review_result("idle")),
+        portfolio_snapshot=portfolio,
+    ).snapshot()
+
+    pack = build_sleeve_admission_release_pack(admission, portfolio_snapshot=portfolio)
+
+    assert pack.overall_release_status == SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET
+    assert pack.admitted_sleeves == ("active", "idle")
+    assert pack.admitted_active_sleeves == ("active",)
+    assert pack.admitted_unallocated_sleeves == ("idle",)
+    assert pack.pack_id.startswith("sleeve-admission-release-")
+
+
+def test_release_pack_no_candidates_and_inconclusive_states() -> None:
+    empty = build_sleeve_admission_release_pack(SleeveAdmissionController().snapshot())
+    review_only = build_sleeve_admission_release_pack(
+        SleeveAdmissionController(_review_summary(_review_result("review-only"))).snapshot()
+    )
+    hold = build_sleeve_admission_release_pack(
+        SleeveAdmissionController(
+            _review_summary(_review_result("hold", SleevePromotionReviewVerdict.HOLD)),
+            portfolio_snapshot=_portfolio(_sleeve("hold", effective_allocation=0.0)),
+        ).snapshot()
+    )
+
+    assert empty.overall_release_status == SleeveAdmissionReleaseStatus.NO_CANDIDATES
+    assert empty.next_actions == ()
+    assert review_only.overall_release_status == SleeveAdmissionReleaseStatus.INCONCLUSIVE
+    assert review_only.review_supported_not_admitted_sleeves == ("review-only",)
+    assert hold.overall_release_status == SleeveAdmissionReleaseStatus.INCONCLUSIVE
+    assert hold.inconclusive_sleeves == ("hold",)
+
+
+def test_release_pack_partial_and_blocked_portfolio_states() -> None:
+    partial = build_sleeve_admission_release_pack(
+        SleeveAdmissionController(
+            _review_summary(
+                _review_result("active"),
+                _review_result("blocked", SleevePromotionReviewVerdict.REJECT),
+            ),
+            portfolio_snapshot=_portfolio(
+                _sleeve("active"),
+                _sleeve(
+                    "blocked",
+                    status=CryptoSleeveStatus.BLOCKED,
+                    recommendation_status=SleeveRecommendationStatus.BLOCKED,
+                    qualification_status=SleeveQualificationStatus.BLOCKED,
+                    campaign_status=SleeveCampaignEvidenceStatus.BLOCKED_BY_GOVERNANCE,
+                    support_status=SleevePromotionSupportStatus.BLOCKED,
+                    candidate_status=SleevePromotionCandidateStatus.BLOCKED,
+                    decision_status=SleeveDecisionPackStatus.BLOCKED,
+                    blockers=("gov_hold",),
+                ),
+            ),
+        ).snapshot()
+    )
+    blocked = build_sleeve_admission_release_pack(
+        SleeveAdmissionController(
+            _review_summary(_review_result("blocked", SleevePromotionReviewVerdict.REJECT)),
+            portfolio_snapshot=_portfolio(_sleeve("blocked", status=CryptoSleeveStatus.BLOCKED, blockers=("gov",))),
+        ).snapshot()
+    )
+
+    assert partial.overall_release_status == SleeveAdmissionReleaseStatus.PARTIAL_READY
+    assert partial.admitted_sleeves == ("active",)
+    assert partial.blocked_sleeves == ("blocked",)
+    assert blocked.overall_release_status == SleeveAdmissionReleaseStatus.BLOCKED
+
+
+def test_release_pack_next_actions_and_blocker_aggregation_are_stable() -> None:
+    admission = SleeveAdmissionController(
+        _review_summary(
+            _review_result(
+                "s1",
+                governance_blockers=("z_governance",),
+                missing_evidence=("z_evidence",),
+            )
+        ),
+        portfolio_snapshot=_portfolio(_sleeve("s1", missing_evidence=("a_evidence",), blockers=("a_governance",))),
+    ).snapshot()
+
+    pack = build_sleeve_admission_release_pack(admission)
+    rendered = sleeve_admission_release_pack_to_dict(pack)
+
+    assert pack.overall_release_status == SleeveAdmissionReleaseStatus.INCONCLUSIVE
+    assert pack.evidence_blockers == ("a_evidence", "z_evidence")
+    assert pack.governance_blockers == ("a_governance", "z_governance")
+    assert pack.next_actions[0].next_action == "continue_paper_review"
+    assert rendered["next_actions"][0]["admission_verdict"] == "review_supported_not_admitted"
+    assert rendered == sleeve_admission_release_pack_to_dict(pack)
+
+
+def test_release_pack_serialization_roundtrip_and_backward_defaults() -> None:
+    admission = SleeveAdmissionController(
+        _review_summary(_review_result("s1")),
+        portfolio_snapshot=_portfolio(_sleeve("s1")),
+    ).snapshot()
+    pack = build_sleeve_admission_release_pack(admission)
+    payload = sleeve_admission_release_pack_to_dict(pack)
+
+    restored = sleeve_admission_release_pack_from_dict(payload)
+    legacy = sleeve_admission_release_pack_from_dict({"portfolio_summary": payload["portfolio_summary"]})
+
+    assert restored == pack
+    assert legacy.overall_release_status == SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET
+    assert legacy.admitted_sleeves == ("s1",)
+    assert legacy.admission_snapshot_status == "unknown"
+
+
+def test_release_pack_malformed_payload_fails_closed() -> None:
+    admission = SleeveAdmissionController(
+        _review_summary(_review_result("s1")),
+        portfolio_snapshot=_portfolio(_sleeve("s1")),
+    ).snapshot()
+    payload = sleeve_admission_release_pack_to_dict(build_sleeve_admission_release_pack(admission))
+    payload["overall_release_status"] = "blocked"
+
+    with pytest.raises(SleeveAdmissionCorruptError):
+        sleeve_admission_release_pack_from_dict(payload)
+
+
+def test_release_pack_artifact_export_load_roundtrip_and_bad_load_fail_closed(tmp_path) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    admission = SleeveAdmissionController(
+        _review_summary(_review_result("s1")),
+        portfolio_snapshot=_portfolio(_sleeve("s1")),
+    ).snapshot()
+    pack = build_sleeve_admission_release_pack(admission)
+
+    export_sleeve_admission_release_pack(pack=pack, evidence_store=store)
+    restored = load_sleeve_admission_release_pack(evidence_store=store)
+
+    assert restored == pack
+
+    store.save_snapshot("crypto_sleeve_admission_release_pack", ["bad"])
+    with pytest.raises(SleeveAdmissionCorruptError):
+        load_sleeve_admission_release_pack(evidence_store=store)
+
+
+def test_service_orchestrator_release_pack_helper_and_operator_compact_status() -> None:
+    fixed_review_ns = _T0_NS + 42
+    orch = ServiceOrchestrator(service=_mock_service(), sleeve_workflow_clock_ns=lambda: fixed_review_ns)
+    orch.start_sleeve_promotion_review(workflow_snapshot=_supported_workflow("svc-sleeve"))
+
+    pack = orch.sleeve_admission_release_pack(
+        portfolio_snapshot=_portfolio(_sleeve("svc-sleeve", effective_allocation=0.20))
+    )
+    rendered = sleeve_admission_release_pack_to_dict(pack)
+    helper_rendered = orch.sleeve_admission_release_pack_dict()
+
+    assert pack.as_of_ns == fixed_review_ns
+    assert pack.overall_release_status == SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET
+    assert rendered["overall_release_status"] == "ready_for_paper_managed_set"
+    assert helper_rendered["overall_release_status"] == "inconclusive"
+
+    operator = operator_snapshot_to_dict(orch.operator_snapshot())
+    assert operator["sleeve_admission_release"]["overall_release_status"] == "inconclusive"
+    assert operator["sleeve_admission_release"]["available"] is True
+
+
+def test_service_orchestrator_release_pack_export_load_helper(tmp_path) -> None:
+    fixed_review_ns = _T0_NS + 77
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        evidence_store=store,
+        sleeve_workflow_clock_ns=lambda: fixed_review_ns,
+    )
+    orch.start_sleeve_promotion_review(workflow_snapshot=_supported_workflow("export-sleeve"))
+
+    orch.export_sleeve_admission_release_pack()
+    loaded = orch.load_sleeve_admission_release_pack()
+
+    assert loaded == orch.sleeve_admission_release_pack()
+    assert loaded.source_promotion_review_as_of_ns == fixed_review_ns
+
+
+def test_release_pack_deterministic_replay_with_fixed_clock() -> None:
+    fixed_review_ns = _T0_NS + 123
+    portfolio = _portfolio(_sleeve("stable", effective_allocation=0.10))
+    orch = ServiceOrchestrator(service=_mock_service(), sleeve_workflow_clock_ns=lambda: fixed_review_ns)
+    orch.start_sleeve_promotion_review(workflow_snapshot=_supported_workflow("stable"))
+
+    first = sleeve_admission_release_pack_to_dict(orch.sleeve_admission_release_pack(portfolio_snapshot=portfolio))
+    second = sleeve_admission_release_pack_to_dict(orch.sleeve_admission_release_pack(portfolio_snapshot=portfolio))
+
+    assert first == second
+    assert first["source_promotion_review_as_of_ns"] == fixed_review_ns

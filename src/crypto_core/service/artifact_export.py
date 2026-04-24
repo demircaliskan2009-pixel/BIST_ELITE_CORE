@@ -31,6 +31,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from crypto_core.service.evidence_store import EvidenceStore, WriteResult
+from crypto_core.service.sleeve_admission_controller import (
+    SleeveAdmissionCorruptError,
+    SleeveAdmissionReleasePack,
+    sleeve_admission_release_pack_from_dict,
+    sleeve_admission_release_pack_to_dict,
+)
 from crypto_core.service.sleeve_portfolio import (
     SleevePortfolioCorruptError,
     SleevePortfolioSnapshot,
@@ -487,6 +493,7 @@ _ARTIFACT_SNAPSHOT_NAME = "run_artifact"
 _DECISION_PACK_SNAPSHOT_NAME = "operator_decision_pack"
 _ESCALATION_DECISION_SNAPSHOT_NAME = "live_readiness_escalation"
 _SLEEVE_PORTFOLIO_SNAPSHOT_NAME = "crypto_sleeve_portfolio"
+_SLEEVE_ADMISSION_RELEASE_PACK_SNAPSHOT_NAME = "crypto_sleeve_admission_release_pack"
 
 
 def export_run_artifact(
@@ -599,3 +606,28 @@ def load_sleeve_portfolio_snapshot(*, evidence_store: EvidenceStore) -> SleevePo
             f"Sleeve portfolio snapshot 'data' must be a dict, got {type(data).__name__!r}"
         )
     return sleeve_portfolio_snapshot_from_dict(data)
+
+
+def export_sleeve_admission_release_pack(
+    *,
+    pack: SleeveAdmissionReleasePack,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist the latest operator-facing sleeve admission release pack."""
+    data = sleeve_admission_release_pack_to_dict(pack)
+    result = evidence_store.save_snapshot(_SLEEVE_ADMISSION_RELEASE_PACK_SNAPSHOT_NAME, data)
+    if not result.success:
+        return result
+    evidence_store.append_evidence(_SLEEVE_ADMISSION_RELEASE_PACK_SNAPSHOT_NAME, data)
+    return result
+
+
+def load_sleeve_admission_release_pack(*, evidence_store: EvidenceStore) -> SleeveAdmissionReleasePack:
+    """Load the latest persisted operator-facing sleeve admission release pack."""
+    envelope = evidence_store.load_snapshot(_SLEEVE_ADMISSION_RELEASE_PACK_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise SleeveAdmissionCorruptError(
+            f"Sleeve admission release pack 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return sleeve_admission_release_pack_from_dict(data)

@@ -12,9 +12,11 @@ Design rules:
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from enum import Enum
 
+from crypto_core.service.sleeve_candidate_workflow import SleeveCandidateWorkflowSnapshot
 from crypto_core.service.sleeve_portfolio import (
     CryptoSleeveState,
     CryptoSleeveStatus,
@@ -29,6 +31,7 @@ from crypto_core.service.sleeve_portfolio import (
 from crypto_core.service.sleeve_promotion_review_controller import (
     SleevePromotionReviewPortfolioSummary,
     SleevePromotionReviewResult,
+    SleevePromotionReviewSnapshot,
     SleevePromotionReviewVerdict,
 )
 
@@ -46,6 +49,14 @@ class SleeveAdmissionVerdict(str, Enum):
     # Backward-compatible aliases for older Phase 15F snapshot payloads.
     NOT_ADMITTED_BLOCKED = "not_admitted_blocked"
     NOT_ADMITTED_INCONCLUSIVE = "not_admitted_inconclusive"
+
+
+class SleeveAdmissionReleaseStatus(str, Enum):
+    READY_FOR_PAPER_MANAGED_SET = "ready_for_paper_managed_set"
+    PARTIAL_READY = "partial_ready"
+    BLOCKED = "blocked"
+    INCONCLUSIVE = "inconclusive"
+    NO_CANDIDATES = "no_candidates"
 
 
 @dataclass(frozen=True)
@@ -107,6 +118,45 @@ class SleeveAdmissionSnapshot:
     admission_results: tuple[SleeveAdmissionResult, ...]
     portfolio_summary: SleeveAdmissionPortfolioSummary
     history: tuple[SleeveAdmissionHistoryEntry, ...] = ()
+
+
+@dataclass(frozen=True)
+class SleeveAdmissionReleaseAction:
+    sleeve_id: str
+    admission_verdict: SleeveAdmissionVerdict
+    next_action: str
+    evidence_blockers: tuple[str, ...] = ()
+    governance_blockers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SleeveAdmissionReleasePack:
+    pack_id: str
+    as_of_ns: int
+    overall_release_status: SleeveAdmissionReleaseStatus
+    portfolio_summary: SleeveAdmissionPortfolioSummary
+    per_sleeve_admission_results: tuple[SleeveAdmissionResult, ...]
+    admitted_sleeves: tuple[str, ...]
+    admitted_active_sleeves: tuple[str, ...]
+    admitted_unallocated_sleeves: tuple[str, ...]
+    review_supported_not_admitted_sleeves: tuple[str, ...]
+    blocked_sleeves: tuple[str, ...]
+    inconclusive_sleeves: tuple[str, ...]
+    evidence_blockers: tuple[str, ...]
+    governance_blockers: tuple[str, ...]
+    next_actions: tuple[SleeveAdmissionReleaseAction, ...]
+    deterministic_replay_key: str
+    source_admission_as_of_ns: int = 0
+    source_promotion_review_as_of_ns: int | None = None
+    source_candidate_workflow_as_of_ns: int | None = None
+    source_portfolio_as_of_ns: int | None = None
+    admission_snapshot_status: str = ""
+    promotion_review_status: str | None = None
+    candidate_workflow_status: str | None = None
+    portfolio_sleeve_count: int | None = None
+    operator_summary: str = ""
+    insufficient_evidence_sleeves: tuple[str, ...] = ()
+    disabled_operator_off_sleeves: tuple[str, ...] = ()
 
 
 class SleeveAdmissionCorruptError(RuntimeError):
@@ -606,6 +656,267 @@ def sleeve_admission_snapshot_from_dict(data: dict) -> SleeveAdmissionSnapshot:
     )
 
 
+def build_sleeve_admission_release_pack(
+    admission_snapshot: SleeveAdmissionSnapshot,
+    *,
+    promotion_review_snapshot: SleevePromotionReviewSnapshot | None = None,
+    candidate_workflow_snapshot: SleeveCandidateWorkflowSnapshot | None = None,
+    portfolio_snapshot: SleevePortfolioSnapshot | None = None,
+    pack_id: str | None = None,
+) -> SleeveAdmissionReleasePack:
+    """Build one deterministic operator-facing sleeve admission release artifact."""
+    _validate_admission_snapshot(admission_snapshot)
+    if promotion_review_snapshot is not None and not isinstance(
+        promotion_review_snapshot, SleevePromotionReviewSnapshot
+    ):
+        raise SleeveAdmissionCorruptError("promotion_review_snapshot must be a SleevePromotionReviewSnapshot")
+    if candidate_workflow_snapshot is not None and not isinstance(
+        candidate_workflow_snapshot, SleeveCandidateWorkflowSnapshot
+    ):
+        raise SleeveAdmissionCorruptError("candidate_workflow_snapshot must be a SleeveCandidateWorkflowSnapshot")
+    if portfolio_snapshot is not None and not isinstance(portfolio_snapshot, SleevePortfolioSnapshot):
+        raise SleeveAdmissionCorruptError("portfolio_snapshot must be a SleevePortfolioSnapshot")
+
+    summary = admission_snapshot.portfolio_summary
+    source_promotion_review_as_of_ns = None if promotion_review_snapshot is None else promotion_review_snapshot.as_of_ns
+    source_candidate_workflow_as_of_ns = (
+        None if candidate_workflow_snapshot is None else candidate_workflow_snapshot.as_of_ns
+    )
+    source_portfolio_as_of_ns = None if portfolio_snapshot is None else portfolio_snapshot.as_of_ns
+    as_of_ns = max(
+        item
+        for item in (
+            admission_snapshot.as_of_ns,
+            summary.as_of_ns,
+            source_promotion_review_as_of_ns,
+            source_candidate_workflow_as_of_ns,
+            source_portfolio_as_of_ns,
+        )
+        if item is not None
+    )
+    status = _derive_release_status(summary)
+    deterministic_replay_key = _release_replay_key(
+        as_of_ns=as_of_ns,
+        overall_release_status=status,
+        portfolio_summary=summary,
+        source_admission_as_of_ns=admission_snapshot.as_of_ns,
+        source_promotion_review_as_of_ns=source_promotion_review_as_of_ns,
+        source_candidate_workflow_as_of_ns=source_candidate_workflow_as_of_ns,
+        source_portfolio_as_of_ns=source_portfolio_as_of_ns,
+        admission_snapshot_status=admission_snapshot.status,
+        promotion_review_status=None if promotion_review_snapshot is None else promotion_review_snapshot.status,
+        candidate_workflow_status=None if candidate_workflow_snapshot is None else candidate_workflow_snapshot.status,
+    )
+    release_pack = SleeveAdmissionReleasePack(
+        pack_id=pack_id or _release_pack_id(as_of_ns, summary.admission_results),
+        as_of_ns=as_of_ns,
+        overall_release_status=status,
+        portfolio_summary=summary,
+        per_sleeve_admission_results=admission_snapshot.admission_results,
+        admitted_sleeves=_admitted_sleeves(summary),
+        admitted_active_sleeves=summary.admitted_active,
+        admitted_unallocated_sleeves=summary.admitted_unallocated,
+        review_supported_not_admitted_sleeves=summary.review_supported_not_admitted,
+        blocked_sleeves=summary.blocked,
+        inconclusive_sleeves=summary.inconclusive,
+        evidence_blockers=summary.evidence_blockers,
+        governance_blockers=summary.governance_blockers,
+        next_actions=_release_next_actions(summary.admission_results),
+        deterministic_replay_key=deterministic_replay_key,
+        source_admission_as_of_ns=admission_snapshot.as_of_ns,
+        source_promotion_review_as_of_ns=source_promotion_review_as_of_ns,
+        source_candidate_workflow_as_of_ns=source_candidate_workflow_as_of_ns,
+        source_portfolio_as_of_ns=source_portfolio_as_of_ns,
+        admission_snapshot_status=admission_snapshot.status,
+        promotion_review_status=None if promotion_review_snapshot is None else promotion_review_snapshot.status,
+        candidate_workflow_status=None if candidate_workflow_snapshot is None else candidate_workflow_snapshot.status,
+        portfolio_sleeve_count=None if portfolio_snapshot is None else len(portfolio_snapshot.sleeves),
+        operator_summary=_release_operator_summary(status, summary),
+        insufficient_evidence_sleeves=summary.insufficient_evidence,
+        disabled_operator_off_sleeves=summary.disabled_operator_off,
+    )
+    _validate_release_pack(release_pack)
+    return release_pack
+
+
+def sleeve_admission_release_action_to_dict(action: SleeveAdmissionReleaseAction) -> dict:
+    return {
+        "sleeve_id": action.sleeve_id,
+        "admission_verdict": action.admission_verdict.value,
+        "next_action": action.next_action,
+        "evidence_blockers": list(action.evidence_blockers),
+        "governance_blockers": list(action.governance_blockers),
+    }
+
+
+def sleeve_admission_release_action_from_dict(data: dict) -> SleeveAdmissionReleaseAction:
+    if not isinstance(data, dict):
+        raise SleeveAdmissionCorruptError(
+            f"Sleeve admission release action must be a dict, got {type(data).__name__!r}"
+        )
+    return SleeveAdmissionReleaseAction(
+        sleeve_id=_require_non_empty_str(data.get("sleeve_id"), "sleeve_id"),
+        admission_verdict=_admission_verdict(data.get("admission_verdict"), "admission_verdict"),
+        next_action="" if data.get("next_action", "") is None else str(data.get("next_action", "")),
+        evidence_blockers=_tuple_of_strings(data.get("evidence_blockers", ()), "evidence_blockers"),
+        governance_blockers=_tuple_of_strings(data.get("governance_blockers", ()), "governance_blockers"),
+    )
+
+
+def sleeve_admission_release_pack_to_dict(pack: SleeveAdmissionReleasePack) -> dict:
+    return {
+        "pack_id": pack.pack_id,
+        "as_of_ns": pack.as_of_ns,
+        "overall_release_status": pack.overall_release_status.value,
+        "portfolio_summary": sleeve_admission_portfolio_summary_to_dict(pack.portfolio_summary),
+        "per_sleeve_admission_results": [
+            sleeve_admission_result_to_dict(result) for result in pack.per_sleeve_admission_results
+        ],
+        "admitted_sleeves": list(pack.admitted_sleeves),
+        "admitted_active_sleeves": list(pack.admitted_active_sleeves),
+        "admitted_unallocated_sleeves": list(pack.admitted_unallocated_sleeves),
+        "review_supported_not_admitted_sleeves": list(pack.review_supported_not_admitted_sleeves),
+        "blocked_sleeves": list(pack.blocked_sleeves),
+        "inconclusive_sleeves": list(pack.inconclusive_sleeves),
+        "insufficient_evidence_sleeves": list(pack.insufficient_evidence_sleeves),
+        "disabled_operator_off_sleeves": list(pack.disabled_operator_off_sleeves),
+        "evidence_blockers": list(pack.evidence_blockers),
+        "governance_blockers": list(pack.governance_blockers),
+        "next_actions": [sleeve_admission_release_action_to_dict(action) for action in pack.next_actions],
+        "overall_release_summary": pack.operator_summary,
+        "operator_summary": pack.operator_summary,
+        "deterministic_replay_key": pack.deterministic_replay_key,
+        "source_admission_as_of_ns": pack.source_admission_as_of_ns,
+        "source_promotion_review_as_of_ns": pack.source_promotion_review_as_of_ns,
+        "source_candidate_workflow_as_of_ns": pack.source_candidate_workflow_as_of_ns,
+        "source_portfolio_as_of_ns": pack.source_portfolio_as_of_ns,
+        "admission_snapshot_status": pack.admission_snapshot_status,
+        "promotion_review_status": pack.promotion_review_status,
+        "candidate_workflow_status": pack.candidate_workflow_status,
+        "portfolio_sleeve_count": pack.portfolio_sleeve_count,
+    }
+
+
+def sleeve_admission_release_pack_from_dict(data: dict) -> SleeveAdmissionReleasePack:
+    if not isinstance(data, dict):
+        raise SleeveAdmissionCorruptError(f"Sleeve admission release pack must be a dict, got {type(data).__name__!r}")
+    summary = sleeve_admission_portfolio_summary_from_dict(
+        _dict_value(data.get("portfolio_summary"), "portfolio_summary")
+    )
+    results_value = data.get("per_sleeve_admission_results")
+    if results_value is None:
+        results = summary.admission_results
+    elif isinstance(results_value, (list, tuple)):
+        results = tuple(_admission_result_from_value(item) for item in results_value)
+    else:
+        raise SleeveAdmissionCorruptError(
+            "Sleeve admission release field 'per_sleeve_admission_results' must be a list/tuple"
+        )
+    if results != summary.admission_results:
+        raise SleeveAdmissionCorruptError("Sleeve admission release results do not match portfolio summary")
+
+    source_admission_as_of_ns = _require_int(
+        data.get("source_admission_as_of_ns", summary.as_of_ns),
+        "source_admission_as_of_ns",
+    )
+    source_promotion_review_as_of_ns = _optional_int(
+        data.get("source_promotion_review_as_of_ns"),
+        "source_promotion_review_as_of_ns",
+    )
+    source_candidate_workflow_as_of_ns = _optional_int(
+        data.get("source_candidate_workflow_as_of_ns"),
+        "source_candidate_workflow_as_of_ns",
+    )
+    source_portfolio_as_of_ns = _optional_int(data.get("source_portfolio_as_of_ns"), "source_portfolio_as_of_ns")
+    as_of_ns = _require_int(
+        data.get(
+            "as_of_ns",
+            max(
+                item
+                for item in (
+                    source_admission_as_of_ns,
+                    source_promotion_review_as_of_ns,
+                    source_candidate_workflow_as_of_ns,
+                    source_portfolio_as_of_ns,
+                )
+                if item is not None
+            ),
+        ),
+        "as_of_ns",
+    )
+    status = _release_status_or_default(data.get("overall_release_status"), summary)
+    admission_snapshot_status = _string_or_default(data.get("admission_snapshot_status"), "unknown")
+    promotion_review_status = _optional_string_value(data.get("promotion_review_status"), "promotion_review_status")
+    candidate_workflow_status = _optional_string_value(
+        data.get("candidate_workflow_status"), "candidate_workflow_status"
+    )
+    portfolio_sleeve_count = _optional_int(data.get("portfolio_sleeve_count"), "portfolio_sleeve_count")
+    deterministic_replay_key = _string_or_default(
+        data.get("deterministic_replay_key"),
+        _release_replay_key(
+            as_of_ns=as_of_ns,
+            overall_release_status=status,
+            portfolio_summary=summary,
+            source_admission_as_of_ns=source_admission_as_of_ns,
+            source_promotion_review_as_of_ns=source_promotion_review_as_of_ns,
+            source_candidate_workflow_as_of_ns=source_candidate_workflow_as_of_ns,
+            source_portfolio_as_of_ns=source_portfolio_as_of_ns,
+            admission_snapshot_status=admission_snapshot_status,
+            promotion_review_status=promotion_review_status,
+            candidate_workflow_status=candidate_workflow_status,
+        ),
+    )
+    release_pack = SleeveAdmissionReleasePack(
+        pack_id=_string_or_default(data.get("pack_id"), _release_pack_id(as_of_ns, results)),
+        as_of_ns=as_of_ns,
+        overall_release_status=status,
+        portfolio_summary=summary,
+        per_sleeve_admission_results=results,
+        admitted_sleeves=_tuple_or_default(data, "admitted_sleeves", _admitted_sleeves(summary)),
+        admitted_active_sleeves=_tuple_or_default(data, "admitted_active_sleeves", summary.admitted_active),
+        admitted_unallocated_sleeves=_tuple_or_default(
+            data,
+            "admitted_unallocated_sleeves",
+            summary.admitted_unallocated,
+        ),
+        review_supported_not_admitted_sleeves=_tuple_or_default(
+            data,
+            "review_supported_not_admitted_sleeves",
+            summary.review_supported_not_admitted,
+        ),
+        blocked_sleeves=_tuple_or_default(data, "blocked_sleeves", summary.blocked),
+        inconclusive_sleeves=_tuple_or_default(data, "inconclusive_sleeves", summary.inconclusive),
+        evidence_blockers=_tuple_or_default(data, "evidence_blockers", summary.evidence_blockers),
+        governance_blockers=_tuple_or_default(data, "governance_blockers", summary.governance_blockers),
+        next_actions=_release_actions_or_default(data, results),
+        deterministic_replay_key=deterministic_replay_key,
+        source_admission_as_of_ns=source_admission_as_of_ns,
+        source_promotion_review_as_of_ns=source_promotion_review_as_of_ns,
+        source_candidate_workflow_as_of_ns=source_candidate_workflow_as_of_ns,
+        source_portfolio_as_of_ns=source_portfolio_as_of_ns,
+        admission_snapshot_status=admission_snapshot_status,
+        promotion_review_status=promotion_review_status,
+        candidate_workflow_status=candidate_workflow_status,
+        portfolio_sleeve_count=portfolio_sleeve_count,
+        operator_summary=_string_or_default(
+            data.get("operator_summary", data.get("overall_release_summary")),
+            _release_operator_summary(status, summary),
+        ),
+        insufficient_evidence_sleeves=_tuple_or_default(
+            data,
+            "insufficient_evidence_sleeves",
+            summary.insufficient_evidence,
+        ),
+        disabled_operator_off_sleeves=_tuple_or_default(
+            data,
+            "disabled_operator_off_sleeves",
+            summary.disabled_operator_off,
+        ),
+    )
+    _validate_release_pack(release_pack)
+    return release_pack
+
+
 _ADMITTED_VERDICTS = {
     SleeveAdmissionVerdict.ADMITTED_ACTIVE,
     SleeveAdmissionVerdict.ADMITTED_UNALLOCATED,
@@ -618,6 +929,272 @@ _INCONCLUSIVE_VERDICTS = {
     SleeveAdmissionVerdict.INCONCLUSIVE,
     SleeveAdmissionVerdict.NOT_ADMITTED_INCONCLUSIVE,
 }
+
+
+def _validate_admission_snapshot(snapshot: SleeveAdmissionSnapshot) -> None:
+    if not isinstance(snapshot, SleeveAdmissionSnapshot):
+        raise SleeveAdmissionCorruptError("Sleeve admission release requires a SleeveAdmissionSnapshot")
+    if snapshot.as_of_ns != snapshot.portfolio_summary.as_of_ns:
+        raise SleeveAdmissionCorruptError("Sleeve admission snapshot timestamp does not match portfolio summary")
+    if snapshot.admission_results != snapshot.portfolio_summary.admission_results:
+        raise SleeveAdmissionCorruptError("Sleeve admission snapshot results do not match portfolio summary")
+    _validate_summary_counts(snapshot.portfolio_summary)
+
+
+def _derive_release_status(summary: SleeveAdmissionPortfolioSummary) -> SleeveAdmissionReleaseStatus:
+    result_count = len(summary.admission_results)
+    admitted_count = summary.admitted_active_count + summary.admitted_unallocated_count
+    hard_blocked_count = summary.blocked_count + summary.disabled_operator_off_count
+    unresolved_count = (
+        hard_blocked_count
+        + summary.review_supported_not_admitted_count
+        + summary.inconclusive_count
+        + summary.insufficient_evidence_count
+    )
+    if result_count == 0:
+        return SleeveAdmissionReleaseStatus.NO_CANDIDATES
+    if admitted_count > 0 and unresolved_count == 0:
+        return SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET
+    if admitted_count > 0:
+        return SleeveAdmissionReleaseStatus.PARTIAL_READY
+    if hard_blocked_count > 0:
+        return SleeveAdmissionReleaseStatus.BLOCKED
+    return SleeveAdmissionReleaseStatus.INCONCLUSIVE
+
+
+def _admitted_sleeves(summary: SleeveAdmissionPortfolioSummary) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((*summary.admitted_active, *summary.admitted_unallocated)))
+
+
+def _release_next_actions(
+    results: tuple[SleeveAdmissionResult, ...],
+) -> tuple[SleeveAdmissionReleaseAction, ...]:
+    return tuple(
+        SleeveAdmissionReleaseAction(
+            sleeve_id=result.sleeve_id,
+            admission_verdict=result.verdict,
+            next_action=result.next_step,
+            evidence_blockers=result.evidence_blockers,
+            governance_blockers=result.governance_blockers,
+        )
+        for result in results
+    )
+
+
+def _release_operator_summary(
+    status: SleeveAdmissionReleaseStatus,
+    summary: SleeveAdmissionPortfolioSummary,
+) -> str:
+    return (
+        f"status={status.value}; "
+        f"admitted={summary.admitted_active_count + summary.admitted_unallocated_count}; "
+        f"admitted_active={summary.admitted_active_count}; "
+        f"admitted_unallocated={summary.admitted_unallocated_count}; "
+        f"review_supported_not_admitted={summary.review_supported_not_admitted_count}; "
+        f"blocked={summary.blocked_count}; "
+        f"inconclusive={summary.inconclusive_count}; "
+        f"insufficient_evidence={summary.insufficient_evidence_count}; "
+        f"disabled_operator_off={summary.disabled_operator_off_count}"
+    )
+
+
+def _release_pack_id(as_of_ns: int, results: tuple[SleeveAdmissionResult, ...]) -> str:
+    digest = hashlib.sha256(_release_results_signature(results).encode("utf-8")).hexdigest()[:12]
+    return f"sleeve-admission-release-{as_of_ns}-{digest}"
+
+
+def _release_replay_key(
+    *,
+    as_of_ns: int,
+    overall_release_status: SleeveAdmissionReleaseStatus,
+    portfolio_summary: SleeveAdmissionPortfolioSummary,
+    source_admission_as_of_ns: int,
+    source_promotion_review_as_of_ns: int | None,
+    source_candidate_workflow_as_of_ns: int | None,
+    source_portfolio_as_of_ns: int | None,
+    admission_snapshot_status: str,
+    promotion_review_status: str | None,
+    candidate_workflow_status: str | None,
+) -> str:
+    parts = [
+        f"as_of_ns={as_of_ns}",
+        f"overall_release_status={overall_release_status.value}",
+        f"source_admission_as_of_ns={source_admission_as_of_ns}",
+        f"source_promotion_review_as_of_ns={source_promotion_review_as_of_ns}",
+        f"source_candidate_workflow_as_of_ns={source_candidate_workflow_as_of_ns}",
+        f"source_portfolio_as_of_ns={source_portfolio_as_of_ns}",
+        f"admission_snapshot_status={admission_snapshot_status}",
+        f"promotion_review_status={promotion_review_status}",
+        f"candidate_workflow_status={candidate_workflow_status}",
+        f"admitted_active={','.join(portfolio_summary.admitted_active)}",
+        f"admitted_unallocated={','.join(portfolio_summary.admitted_unallocated)}",
+        f"review_supported_not_admitted={','.join(portfolio_summary.review_supported_not_admitted)}",
+        f"blocked={','.join(portfolio_summary.blocked)}",
+        f"inconclusive={','.join(portfolio_summary.inconclusive)}",
+        f"insufficient_evidence={','.join(portfolio_summary.insufficient_evidence)}",
+        f"disabled_operator_off={','.join(portfolio_summary.disabled_operator_off)}",
+        f"governance_blockers={','.join(portfolio_summary.governance_blockers)}",
+        f"evidence_blockers={','.join(portfolio_summary.evidence_blockers)}",
+        _release_results_signature(portfolio_summary.admission_results),
+    ]
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _release_results_signature(results: tuple[SleeveAdmissionResult, ...]) -> str:
+    return "|".join(
+        ":".join(
+            (
+                result.sleeve_id,
+                result.verdict.value,
+                result.reason,
+                result.next_step,
+                ",".join(result.evidence_blockers),
+                ",".join(result.governance_blockers),
+            )
+        )
+        for result in results
+    )
+
+
+def _validate_release_pack(pack: SleeveAdmissionReleasePack) -> None:
+    summary = pack.portfolio_summary
+    _validate_summary_counts(summary)
+    _validate_release_blocker_order(summary)
+    if pack.per_sleeve_admission_results != summary.admission_results:
+        raise SleeveAdmissionCorruptError("Sleeve admission release results do not match portfolio summary")
+    if pack.source_admission_as_of_ns != summary.as_of_ns:
+        raise SleeveAdmissionCorruptError("Sleeve admission release source timestamp does not match summary")
+    if pack.overall_release_status != _derive_release_status(summary):
+        raise SleeveAdmissionCorruptError("Sleeve admission release status does not match admission summary")
+    if pack.admitted_sleeves != _admitted_sleeves(summary):
+        raise SleeveAdmissionCorruptError("Sleeve admission release admitted sleeves do not match summary")
+    expected_groups = {
+        "admitted_active_sleeves": summary.admitted_active,
+        "admitted_unallocated_sleeves": summary.admitted_unallocated,
+        "review_supported_not_admitted_sleeves": summary.review_supported_not_admitted,
+        "blocked_sleeves": summary.blocked,
+        "inconclusive_sleeves": summary.inconclusive,
+        "insufficient_evidence_sleeves": summary.insufficient_evidence,
+        "disabled_operator_off_sleeves": summary.disabled_operator_off,
+        "evidence_blockers": summary.evidence_blockers,
+        "governance_blockers": summary.governance_blockers,
+    }
+    for field_name, expected in expected_groups.items():
+        if getattr(pack, field_name) != expected:
+            raise SleeveAdmissionCorruptError(f"Sleeve admission release {field_name} does not match summary")
+    if pack.next_actions != _release_next_actions(summary.admission_results):
+        raise SleeveAdmissionCorruptError("Sleeve admission release next actions do not match admission results")
+    _validate_release_timestamps(pack)
+    expected_key = _release_replay_key(
+        as_of_ns=pack.as_of_ns,
+        overall_release_status=pack.overall_release_status,
+        portfolio_summary=pack.portfolio_summary,
+        source_admission_as_of_ns=pack.source_admission_as_of_ns,
+        source_promotion_review_as_of_ns=pack.source_promotion_review_as_of_ns,
+        source_candidate_workflow_as_of_ns=pack.source_candidate_workflow_as_of_ns,
+        source_portfolio_as_of_ns=pack.source_portfolio_as_of_ns,
+        admission_snapshot_status=pack.admission_snapshot_status,
+        promotion_review_status=pack.promotion_review_status,
+        candidate_workflow_status=pack.candidate_workflow_status,
+    )
+    if pack.deterministic_replay_key != expected_key:
+        raise SleeveAdmissionCorruptError("Sleeve admission release replay key does not match pack contents")
+
+
+def _validate_release_timestamps(pack: SleeveAdmissionReleasePack) -> None:
+    for field_name in (
+        "source_admission_as_of_ns",
+        "source_promotion_review_as_of_ns",
+        "source_candidate_workflow_as_of_ns",
+        "source_portfolio_as_of_ns",
+    ):
+        value = getattr(pack, field_name)
+        if value is not None and pack.as_of_ns < value:
+            raise SleeveAdmissionCorruptError(f"Sleeve admission release as_of_ns is older than {field_name}")
+
+
+def _validate_release_blocker_order(summary: SleeveAdmissionPortfolioSummary) -> None:
+    for field_name in ("evidence_blockers", "governance_blockers"):
+        values = getattr(summary, field_name)
+        if values != tuple(sorted(dict.fromkeys(values))):
+            raise SleeveAdmissionCorruptError(
+                f"Sleeve admission release {field_name} are not deterministically ordered"
+            )
+
+
+def _release_status_or_default(
+    value: object,
+    summary: SleeveAdmissionPortfolioSummary,
+) -> SleeveAdmissionReleaseStatus:
+    if value is None:
+        return _derive_release_status(summary)
+    if isinstance(value, SleeveAdmissionReleaseStatus):
+        return value
+    try:
+        return SleeveAdmissionReleaseStatus(_require_non_empty_str(value, "overall_release_status"))
+    except ValueError as exc:
+        raise SleeveAdmissionCorruptError(f"Invalid overall_release_status: {value!r}") from exc
+
+
+def _release_actions_or_default(
+    data: dict,
+    results: tuple[SleeveAdmissionResult, ...],
+) -> tuple[SleeveAdmissionReleaseAction, ...]:
+    if "next_actions" not in data:
+        return _release_next_actions(results)
+    value = data.get("next_actions")
+    if not isinstance(value, (list, tuple)):
+        raise SleeveAdmissionCorruptError("Sleeve admission release field 'next_actions' must be a list/tuple")
+    return tuple(sleeve_admission_release_action_from_dict(_dict_value(item, "next_actions")) for item in value)
+
+
+def _tuple_or_default(data: dict, field_name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    if field_name not in data:
+        return default
+    return _tuple_of_strings(data.get(field_name), field_name)
+
+
+def _dict_value(value: object, field_name: str) -> dict:
+    if not isinstance(value, dict):
+        raise SleeveAdmissionCorruptError(f"{field_name} must be a dict")
+    return dict(value)
+
+
+def _admission_result_from_value(value: object) -> SleeveAdmissionResult:
+    if isinstance(value, SleeveAdmissionResult):
+        return value
+    return sleeve_admission_result_from_dict(_dict_value(value, "per_sleeve_admission_results"))
+
+
+def _admission_verdict(value: object, field_name: str) -> SleeveAdmissionVerdict:
+    if isinstance(value, SleeveAdmissionVerdict):
+        return value
+    try:
+        return SleeveAdmissionVerdict(_require_non_empty_str(value, field_name))
+    except ValueError as exc:
+        raise SleeveAdmissionCorruptError(f"Invalid {field_name}: {value!r}") from exc
+
+
+def _string_or_default(value: object, default: str) -> str:
+    if value is None:
+        return default
+    if not isinstance(value, str) or not value:
+        raise SleeveAdmissionCorruptError("string field must be a non-empty string")
+    return value
+
+
+def _optional_string_value(value: object, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise SleeveAdmissionCorruptError(f"{field_name} must be a str or None")
+    return value
+
+
+def _optional_int(value: object, field_name: str) -> int | None:
+    if value is None:
+        return None
+    return _require_int(value, field_name)
 
 
 def _result(
@@ -772,6 +1349,43 @@ def _count_or_default(data: dict, field_name: str, sleeve_ids: tuple[str, ...]) 
 
 
 def _validate_summary_counts(summary: SleeveAdmissionPortfolioSummary) -> None:
+    expected_membership = {
+        "admitted_active": tuple(
+            result.sleeve_id
+            for result in summary.admission_results
+            if result.verdict == SleeveAdmissionVerdict.ADMITTED_ACTIVE
+        ),
+        "admitted_unallocated": tuple(
+            result.sleeve_id
+            for result in summary.admission_results
+            if result.verdict == SleeveAdmissionVerdict.ADMITTED_UNALLOCATED
+        ),
+        "review_supported_not_admitted": tuple(
+            result.sleeve_id
+            for result in summary.admission_results
+            if result.verdict == SleeveAdmissionVerdict.REVIEW_SUPPORTED_NOT_ADMITTED
+        ),
+        "blocked": tuple(
+            result.sleeve_id for result in summary.admission_results if result.verdict in _BLOCKED_VERDICTS
+        ),
+        "inconclusive": tuple(
+            result.sleeve_id for result in summary.admission_results if result.verdict in _INCONCLUSIVE_VERDICTS
+        ),
+        "insufficient_evidence": tuple(
+            result.sleeve_id
+            for result in summary.admission_results
+            if result.verdict == SleeveAdmissionVerdict.INSUFFICIENT_EVIDENCE
+        ),
+        "disabled_operator_off": tuple(
+            result.sleeve_id
+            for result in summary.admission_results
+            if result.verdict == SleeveAdmissionVerdict.DISABLED_OPERATOR_OFF
+        ),
+    }
+    for field_name, sleeve_ids in expected_membership.items():
+        if getattr(summary, field_name) != sleeve_ids:
+            raise SleeveAdmissionCorruptError(f"Sleeve admission {field_name} ids do not match results")
+
     expected = {
         "admitted_active_count": len(summary.admitted_active),
         "admitted_unallocated_count": len(summary.admitted_unallocated),

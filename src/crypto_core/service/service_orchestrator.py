@@ -53,6 +53,12 @@ from crypto_core.service.artifact_export import (
     load_sleeve_portfolio_snapshot,
     operator_disposition_from_verdict,
 )
+from crypto_core.service.artifact_export import (
+    export_sleeve_admission_release_pack as export_admission_release_pack,
+)
+from crypto_core.service.artifact_export import (
+    load_sleeve_admission_release_pack as load_admission_release_pack,
+)
 from crypto_core.service.campaign import (
     CampaignConfig,
     CampaignReport,
@@ -101,9 +107,14 @@ from crypto_core.service.promotion_review_controller import (
 from crypto_core.service.readiness import ReadinessEvaluator, readiness_to_dict
 from crypto_core.service.sleeve_admission_controller import (
     SleeveAdmissionController,
+    SleeveAdmissionReleasePack,
     SleeveAdmissionSnapshot,
     sleeve_admission_portfolio_summary_to_dict,
+    sleeve_admission_release_pack_to_dict,
     sleeve_admission_snapshot_to_dict,
+)
+from crypto_core.service.sleeve_admission_controller import (
+    build_sleeve_admission_release_pack as build_admission_release_pack,
 )
 from crypto_core.service.sleeve_candidate_workflow import (
     SleeveCandidateWorkflowController,
@@ -223,6 +234,26 @@ class SleeveCandidateWorkflowState:
 
 
 @dataclass(frozen=True)
+class SleeveAdmissionReleaseState:
+    """Compact sleeve admission release-pack status for operator snapshots."""
+
+    available: bool
+    pack_id: str | None
+    as_of_ns: int | None
+    overall_release_status: str
+    admitted_sleeves: int
+    admitted_active_sleeves: int
+    admitted_unallocated_sleeves: int
+    review_supported_not_admitted_sleeves: int
+    blocked_sleeves: int
+    inconclusive_sleeves: int
+    insufficient_evidence_sleeves: int
+    disabled_operator_off_sleeves: int
+    evidence_blockers: tuple[str, ...]
+    governance_blockers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class EvidenceSufficiencyState:
     """Evidence sufficiency summary for operator truthfulness.
 
@@ -312,6 +343,9 @@ class OperatorSnapshot:
 
     # Phase 15F: Sleeve admission gate
     sleeve_admission: SleeveAdmissionSnapshot | None = None
+
+    # Phase 15I: Sleeve admission release-pack compact status
+    sleeve_admission_release: SleeveAdmissionReleaseState | None = None
 
     # Escalation review workflow (Phase 13B)
     escalation_review: EscalationWorkflowState | None = None
@@ -509,6 +543,57 @@ class ServiceOrchestrator:
     def sleeve_admission_summary_dict(self) -> dict:
         """Serialize the portfolio-level sleeve admission summary."""
         return sleeve_admission_portfolio_summary_to_dict(self.get_sleeve_admission_portfolio_summary())
+
+    def sleeve_admission_release_pack(
+        self,
+        *,
+        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
+        admission_snapshot: SleeveAdmissionSnapshot | None = None,
+        promotion_review_snapshot: SleevePromotionReviewSnapshot | None = None,
+        candidate_workflow_snapshot: SleeveCandidateWorkflowSnapshot | None = None,
+    ) -> SleeveAdmissionReleasePack:
+        """Build the deterministic operator-facing sleeve admission release pack."""
+        portfolio = self.sleeve_portfolio_snapshot() if portfolio_snapshot is None else portfolio_snapshot
+        promotion_review = promotion_review_snapshot
+        if promotion_review is None and self._sleeve_promotion_review_controller is not None:
+            promotion_review = self._sleeve_promotion_review_controller.snapshot()
+        review_portfolio_summary = None if promotion_review is None else promotion_review.portfolio_summary
+        admission = admission_snapshot
+        if admission is None:
+            admission = self.build_sleeve_admission_controller(
+                portfolio_snapshot=portfolio,
+                review_portfolio_summary=review_portfolio_summary,
+            ).snapshot()
+        candidate_workflow = (
+            self.sleeve_candidate_workflow_snapshot()
+            if candidate_workflow_snapshot is None
+            else candidate_workflow_snapshot
+        )
+        return build_admission_release_pack(
+            admission,
+            promotion_review_snapshot=promotion_review,
+            candidate_workflow_snapshot=candidate_workflow,
+            portfolio_snapshot=portfolio,
+        )
+
+    def sleeve_admission_release_pack_dict(self) -> dict:
+        """Serialize the current sleeve admission release pack to a plain dict."""
+        return sleeve_admission_release_pack_to_dict(self.sleeve_admission_release_pack())
+
+    def export_sleeve_admission_release_pack(self):
+        """Persist the current sleeve admission release pack via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for sleeve admission release pack export")
+        return export_admission_release_pack(
+            pack=self.sleeve_admission_release_pack(),
+            evidence_store=self._evidence_store,
+        )
+
+    def load_sleeve_admission_release_pack(self) -> SleeveAdmissionReleasePack:
+        """Load the latest persisted sleeve admission release pack."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for sleeve admission release pack load")
+        return load_admission_release_pack(evidence_store=self._evidence_store)
 
     # ------------------------------------------------------------------
     # Properties
@@ -1271,6 +1356,14 @@ class ServiceOrchestrator:
             portfolio_snapshot=sleeve_portfolio,
             review_portfolio_summary=review_portfolio_summary,
         ).snapshot()
+        sleeve_admission_release = sleeve_admission_release_state_from_pack(
+            build_admission_release_pack(
+                sleeve_admission,
+                promotion_review_snapshot=sleeve_promotion_review,
+                candidate_workflow_snapshot=self.sleeve_candidate_workflow_snapshot(),
+                portfolio_snapshot=sleeve_portfolio,
+            )
+        )
         return OperatorSnapshot(
             service_mode=ss.service_mode,
             trading_enabled=ss.trading_enabled,
@@ -1285,6 +1378,7 @@ class ServiceOrchestrator:
             sleeve_candidate_workflow=sleeve_candidate_workflow,
             sleeve_promotion_review=sleeve_promotion_review,
             sleeve_admission=sleeve_admission,
+            sleeve_admission_release=sleeve_admission_release,
             readiness_level=self._readiness_level,
             readiness_is_supportive=readiness_is_supportive,
             evidence=evidence,
@@ -2714,6 +2808,46 @@ def sleeve_candidate_workflow_state_to_dict(state: SleeveCandidateWorkflowState)
     }
 
 
+def sleeve_admission_release_state_from_pack(pack: SleeveAdmissionReleasePack) -> SleeveAdmissionReleaseState:
+    """Build compact operator snapshot state from a sleeve admission release pack."""
+    return SleeveAdmissionReleaseState(
+        available=True,
+        pack_id=pack.pack_id,
+        as_of_ns=pack.as_of_ns,
+        overall_release_status=pack.overall_release_status.value,
+        admitted_sleeves=len(pack.admitted_sleeves),
+        admitted_active_sleeves=len(pack.admitted_active_sleeves),
+        admitted_unallocated_sleeves=len(pack.admitted_unallocated_sleeves),
+        review_supported_not_admitted_sleeves=len(pack.review_supported_not_admitted_sleeves),
+        blocked_sleeves=len(pack.blocked_sleeves),
+        inconclusive_sleeves=len(pack.inconclusive_sleeves),
+        insufficient_evidence_sleeves=len(pack.insufficient_evidence_sleeves),
+        disabled_operator_off_sleeves=len(pack.disabled_operator_off_sleeves),
+        evidence_blockers=pack.evidence_blockers,
+        governance_blockers=pack.governance_blockers,
+    )
+
+
+def sleeve_admission_release_state_to_dict(state: SleeveAdmissionReleaseState) -> dict:
+    """Serialize compact sleeve admission release-pack state to a plain dict."""
+    return {
+        "available": state.available,
+        "pack_id": state.pack_id,
+        "as_of_ns": state.as_of_ns,
+        "overall_release_status": state.overall_release_status,
+        "admitted_sleeves": state.admitted_sleeves,
+        "admitted_active_sleeves": state.admitted_active_sleeves,
+        "admitted_unallocated_sleeves": state.admitted_unallocated_sleeves,
+        "review_supported_not_admitted_sleeves": state.review_supported_not_admitted_sleeves,
+        "blocked_sleeves": state.blocked_sleeves,
+        "inconclusive_sleeves": state.inconclusive_sleeves,
+        "insufficient_evidence_sleeves": state.insufficient_evidence_sleeves,
+        "disabled_operator_off_sleeves": state.disabled_operator_off_sleeves,
+        "evidence_blockers": list(state.evidence_blockers),
+        "governance_blockers": list(state.governance_blockers),
+    }
+
+
 def evidence_sufficiency_state_to_dict(state: EvidenceSufficiencyState) -> dict:
     """Serialize EvidenceSufficiencyState to a plain dict."""
     return {
@@ -2777,6 +2911,12 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         # Phase 15F
         "sleeve_admission": (
             sleeve_admission_snapshot_to_dict(snap.sleeve_admission) if snap.sleeve_admission is not None else None
+        ),
+        # Phase 15I
+        "sleeve_admission_release": (
+            sleeve_admission_release_state_to_dict(snap.sleeve_admission_release)
+            if snap.sleeve_admission_release is not None
+            else None
         ),
         "readiness_level": snap.readiness_level,
         "readiness_is_supportive": snap.readiness_is_supportive,
