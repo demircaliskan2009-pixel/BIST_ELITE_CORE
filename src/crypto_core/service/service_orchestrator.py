@@ -126,6 +126,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     PaperShadowSessionSnapshot,
     market_event_batch_to_dict,
     paper_shadow_session_snapshot_to_dict,
+    runtime_monitor_snapshot_to_dict,
 )
 from crypto_core.service.promotion_review import PromotionThresholds
 from crypto_core.service.promotion_review_controller import (
@@ -357,6 +358,12 @@ class PaperShadowSessionState:
     first_event_ns: int | None
     last_event_ns: int | None
     rejected_event_count: int
+    runtime_monitor_status: str
+    stale_feed_detected: bool
+    symbol_coverage_ok: bool
+    venue_coverage_ok: bool
+    price_validity_ok: bool
+    event_gap_count: int
     started_at_ns: int | None
     stopped_at_ns: int | None
     finalized_at_ns: int | None
@@ -883,6 +890,10 @@ class ServiceOrchestrator:
     def paper_shadow_session_report_dict(self) -> dict:
         """Serialize the current paper/shadow session lifecycle report."""
         return paper_shadow_session_snapshot_to_dict(self.paper_shadow_session_report())
+
+    def paper_shadow_runtime_monitor_dict(self) -> dict:
+        """Serialize the current paper/shadow runtime monitor surface."""
+        return runtime_monitor_snapshot_to_dict(self.paper_shadow_session_snapshot().runtime_monitor)
 
     def paper_shadow_market_event_batch_dict(self, batch: MarketEventBatch) -> dict:
         """Serialize a deterministic read-only paper/shadow market event batch."""
@@ -3312,6 +3323,12 @@ def paper_shadow_session_state_from_snapshot(snapshot: PaperShadowSessionSnapsho
         first_event_ns=snapshot.first_event_ns,
         last_event_ns=snapshot.last_event_ns,
         rejected_event_count=snapshot.rejected_event_count,
+        runtime_monitor_status=snapshot.runtime_monitor.status.value,
+        stale_feed_detected=snapshot.runtime_monitor.stale_feed_detected,
+        symbol_coverage_ok=snapshot.runtime_monitor.symbol_coverage_ok,
+        venue_coverage_ok=snapshot.runtime_monitor.venue_coverage_ok,
+        price_validity_ok=snapshot.runtime_monitor.price_validity_ok,
+        event_gap_count=snapshot.runtime_monitor.event_gap_count,
         started_at_ns=snapshot.started_at_ns,
         stopped_at_ns=snapshot.stopped_at_ns,
         finalized_at_ns=snapshot.finalized_at_ns,
@@ -3338,6 +3355,12 @@ def paper_shadow_session_state_to_dict(state: PaperShadowSessionState) -> dict:
         "first_event_ns": state.first_event_ns,
         "last_event_ns": state.last_event_ns,
         "rejected_event_count": state.rejected_event_count,
+        "runtime_monitor_status": state.runtime_monitor_status,
+        "stale_feed_detected": state.stale_feed_detected,
+        "symbol_coverage_ok": state.symbol_coverage_ok,
+        "venue_coverage_ok": state.venue_coverage_ok,
+        "price_validity_ok": state.price_validity_ok,
+        "event_gap_count": state.event_gap_count,
         "started_at_ns": state.started_at_ns,
         "stopped_at_ns": state.stopped_at_ns,
         "finalized_at_ns": state.finalized_at_ns,

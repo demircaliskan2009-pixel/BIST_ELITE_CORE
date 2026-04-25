@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 
 from crypto_core.service.sleeve_admission_controller import (
@@ -37,6 +37,12 @@ class PaperShadowSessionStatus(str, Enum):
 
 class PaperShadowSessionCorruptError(RuntimeError):
     pass
+
+
+class RuntimeMonitorStatus(str, Enum):
+    NOT_READY = "not_ready"
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
 
 
 class MarketEventType(str, Enum):
@@ -75,6 +81,23 @@ class MarketEventCursor:
 
 
 @dataclass(frozen=True)
+class RuntimeMonitorSnapshot:
+    status: RuntimeMonitorStatus = RuntimeMonitorStatus.NOT_READY
+    event_count: int = 0
+    stale_feed_detected: bool = False
+    symbol_coverage_ok: bool = False
+    venue_coverage_ok: bool = False
+    price_validity_ok: bool = False
+    event_gap_count: int = 0
+    last_event_ns: int | None = None
+    monitored_symbols: tuple[str, ...] = ()
+    monitored_venues: tuple[str, ...] = ()
+    required_symbols: tuple[str, ...] = ()
+    required_venues: tuple[str, ...] = ()
+    reason_codes: tuple[str, ...] = ("no_market_events",)
+
+
+@dataclass(frozen=True)
 class PaperShadowSessionSnapshot:
     session_id: str
     status: PaperShadowSessionStatus
@@ -97,6 +120,7 @@ class PaperShadowSessionSnapshot:
     last_event_ns: int | None = None
     rejected_event_count: int = 0
     market_event_cursors: tuple[MarketEventCursor, ...] = ()
+    runtime_monitor: RuntimeMonitorSnapshot = field(default_factory=RuntimeMonitorSnapshot)
     paper_only: bool = True
     real_orders_enabled: bool = False
     real_money_enabled: bool = False
@@ -117,9 +141,18 @@ class PaperShadowSessionController:
         *,
         session_id: str = "paper-shadow-session-unprepared",
         clock_ns: Callable[[], int] | None = None,
+        required_market_symbols: tuple[str, ...] = (),
+        required_market_venues: tuple[str, ...] = (),
+        max_market_event_gap_ns: int | None = None,
         snapshot: PaperShadowSessionSnapshot | None = None,
     ) -> None:
         self._clock_ns = time.time_ns if clock_ns is None else clock_ns
+        self._required_market_symbols = _sorted_unique(required_market_symbols)
+        self._required_market_venues = _sorted_unique(required_market_venues)
+        self._max_market_event_gap_ns = _optional_non_negative_int(
+            max_market_event_gap_ns,
+            "max_market_event_gap_ns",
+        )
         self._snapshot = (
             paper_shadow_session_snapshot_from_dict(paper_shadow_session_snapshot_to_dict(snapshot))
             if snapshot is not None
@@ -168,6 +201,13 @@ class PaperShadowSessionController:
                 tick_count=0,
                 active_sleeves_seen=(),
                 blockers_seen=blockers,
+                runtime_monitor=build_runtime_monitor_snapshot(
+                    event_count=0,
+                    monitored_symbols=(),
+                    monitored_venues=(),
+                    required_symbols=self._required_market_symbols,
+                    required_venues=self._required_market_venues,
+                ),
                 paper_only=True,
                 real_orders_enabled=False,
                 real_money_enabled=False,
@@ -250,27 +290,45 @@ class PaperShadowSessionController:
         venues = _sorted_unique((*self._snapshot.venues_seen, *(event.venue for event in events)))
         first_event_ns = min(event.ts_ns for event in events)
         last_event_ns = max(event.ts_ns for event in events)
+        event_gap_count = _market_event_gap_count(
+            self._snapshot.market_event_cursors,
+            events,
+            self._max_market_event_gap_ns,
+        )
         cursors = _merge_market_event_cursors(self._snapshot.market_event_cursors, events)
+        total_event_count = self._snapshot.event_count + event_count
+        total_event_gap_count = self._snapshot.runtime_monitor.event_gap_count + event_gap_count
+        session_first_event_ns = (
+            first_event_ns
+            if self._snapshot.first_event_ns is None
+            else min(self._snapshot.first_event_ns, first_event_ns)
+        )
+        session_last_event_ns = (
+            last_event_ns if self._snapshot.last_event_ns is None else max(self._snapshot.last_event_ns, last_event_ns)
+        )
+        monitor = build_runtime_monitor_snapshot(
+            event_count=total_event_count,
+            monitored_symbols=symbols,
+            monitored_venues=venues,
+            required_symbols=self._required_market_symbols,
+            required_venues=self._required_market_venues,
+            price_validity_ok=True,
+            event_gap_count=total_event_gap_count,
+            last_event_ns=session_last_event_ns,
+        )
         return self._apply_snapshot(
             replace(
                 self._snapshot,
                 as_of_ns=now,
                 last_tick_at_ns=now,
                 tick_count=self._snapshot.tick_count + 1,
-                event_count=self._snapshot.event_count + event_count,
+                event_count=total_event_count,
                 symbols_seen=symbols,
                 venues_seen=venues,
-                first_event_ns=(
-                    first_event_ns
-                    if self._snapshot.first_event_ns is None
-                    else min(self._snapshot.first_event_ns, first_event_ns)
-                ),
-                last_event_ns=(
-                    last_event_ns
-                    if self._snapshot.last_event_ns is None
-                    else max(self._snapshot.last_event_ns, last_event_ns)
-                ),
+                first_event_ns=session_first_event_ns,
+                last_event_ns=session_last_event_ns,
                 market_event_cursors=cursors,
+                runtime_monitor=monitor,
                 paper_only=True,
                 real_orders_enabled=False,
                 real_money_enabled=False,
@@ -402,6 +460,7 @@ def paper_shadow_session_snapshot_to_dict(snapshot: PaperShadowSessionSnapshot) 
         "last_event_ns": snapshot.last_event_ns,
         "rejected_event_count": snapshot.rejected_event_count,
         "market_event_cursors": [market_event_cursor_to_dict(cursor) for cursor in snapshot.market_event_cursors],
+        "runtime_monitor": runtime_monitor_snapshot_to_dict(snapshot.runtime_monitor),
         "paper_only": snapshot.paper_only,
         "real_orders_enabled": snapshot.real_orders_enabled,
         "real_money_enabled": snapshot.real_money_enabled,
@@ -421,6 +480,21 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
             f"Paper/shadow session snapshot must be a dict, got {type(data).__name__!r}"
         )
     status = _session_status_or_default(data.get("status"), PaperShadowSessionStatus.CREATED)
+    event_count = _require_non_negative_int(data.get("event_count", 0), "event_count")
+    symbols_seen = _sorted_unique(data.get("symbols_seen", ()))
+    venues_seen = _sorted_unique(data.get("venues_seen", ()))
+    last_event_ns = _optional_non_negative_int(data.get("last_event_ns"), "last_event_ns")
+    monitor_value = data.get("runtime_monitor")
+    runtime_monitor = (
+        runtime_monitor_snapshot_from_dict(_dict_value(monitor_value, "runtime_monitor"))
+        if monitor_value is not None
+        else build_runtime_monitor_snapshot(
+            event_count=event_count,
+            monitored_symbols=symbols_seen,
+            monitored_venues=venues_seen,
+            last_event_ns=last_event_ns,
+        )
+    )
     snapshot = PaperShadowSessionSnapshot(
         session_id=_string_or_default(data.get("session_id"), "paper-shadow-session-legacy"),
         status=status,
@@ -436,13 +510,14 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
         tick_count=_require_non_negative_int(data.get("tick_count", 0), "tick_count"),
         active_sleeves_seen=_sorted_unique(data.get("active_sleeves_seen", ())),
         blockers_seen=_sorted_unique(data.get("blockers_seen", ())),
-        event_count=_require_non_negative_int(data.get("event_count", 0), "event_count"),
-        symbols_seen=_sorted_unique(data.get("symbols_seen", ())),
-        venues_seen=_sorted_unique(data.get("venues_seen", ())),
+        event_count=event_count,
+        symbols_seen=symbols_seen,
+        venues_seen=venues_seen,
         first_event_ns=_optional_non_negative_int(data.get("first_event_ns"), "first_event_ns"),
-        last_event_ns=_optional_non_negative_int(data.get("last_event_ns"), "last_event_ns"),
+        last_event_ns=last_event_ns,
         rejected_event_count=_require_non_negative_int(data.get("rejected_event_count", 0), "rejected_event_count"),
         market_event_cursors=_market_event_cursors_from_data(data.get("market_event_cursors", ())),
+        runtime_monitor=runtime_monitor,
         paper_only=_bool_or_default(data, "paper_only", True),
         real_orders_enabled=_bool_or_default(data, "real_orders_enabled", False),
         real_money_enabled=_bool_or_default(data, "real_money_enabled", False),
@@ -548,6 +623,113 @@ def market_event_cursor_from_dict(data: dict) -> MarketEventCursor:
     return cursor
 
 
+def build_runtime_monitor_snapshot(
+    *,
+    event_count: int,
+    monitored_symbols: tuple[str, ...],
+    monitored_venues: tuple[str, ...],
+    required_symbols: tuple[str, ...] = (),
+    required_venues: tuple[str, ...] = (),
+    price_validity_ok: bool | None = None,
+    event_gap_count: int = 0,
+    last_event_ns: int | None = None,
+) -> RuntimeMonitorSnapshot:
+    event_count = _require_non_negative_int(event_count, "event_count")
+    monitored_symbols = _sorted_unique(monitored_symbols)
+    monitored_venues = _sorted_unique(monitored_venues)
+    required_symbols = _sorted_unique(required_symbols)
+    required_venues = _sorted_unique(required_venues)
+    event_gap_count = _require_non_negative_int(event_gap_count, "event_gap_count")
+    last_event_ns = _optional_non_negative_int(last_event_ns, "last_event_ns")
+    has_events = event_count > 0
+    resolved_price_validity_ok = (
+        has_events
+        if price_validity_ok is None
+        else _require_bool(
+            price_validity_ok,
+            "price_validity_ok",
+        )
+    )
+    symbol_coverage_ok = has_events and (
+        bool(monitored_symbols) if not required_symbols else set(required_symbols).issubset(set(monitored_symbols))
+    )
+    venue_coverage_ok = has_events and (
+        bool(monitored_venues) if not required_venues else set(required_venues).issubset(set(monitored_venues))
+    )
+    stale_feed_detected = event_gap_count > 0
+    reason_codes = _runtime_monitor_reason_codes(
+        has_events=has_events,
+        stale_feed_detected=stale_feed_detected,
+        symbol_coverage_ok=symbol_coverage_ok,
+        venue_coverage_ok=venue_coverage_ok,
+        price_validity_ok=resolved_price_validity_ok,
+    )
+    if not has_events:
+        status = RuntimeMonitorStatus.NOT_READY
+    elif reason_codes:
+        status = RuntimeMonitorStatus.DEGRADED
+    else:
+        status = RuntimeMonitorStatus.HEALTHY
+    monitor = RuntimeMonitorSnapshot(
+        status=status,
+        event_count=event_count,
+        stale_feed_detected=stale_feed_detected,
+        symbol_coverage_ok=symbol_coverage_ok,
+        venue_coverage_ok=venue_coverage_ok,
+        price_validity_ok=resolved_price_validity_ok,
+        event_gap_count=event_gap_count,
+        last_event_ns=last_event_ns,
+        monitored_symbols=monitored_symbols,
+        monitored_venues=monitored_venues,
+        required_symbols=required_symbols,
+        required_venues=required_venues,
+        reason_codes=reason_codes,
+    )
+    _validate_runtime_monitor_snapshot(monitor)
+    return monitor
+
+
+def runtime_monitor_snapshot_to_dict(monitor: RuntimeMonitorSnapshot) -> dict:
+    _validate_runtime_monitor_snapshot(monitor)
+    return {
+        "status": monitor.status.value,
+        "event_count": monitor.event_count,
+        "stale_feed_detected": monitor.stale_feed_detected,
+        "symbol_coverage_ok": monitor.symbol_coverage_ok,
+        "venue_coverage_ok": monitor.venue_coverage_ok,
+        "price_validity_ok": monitor.price_validity_ok,
+        "event_gap_count": monitor.event_gap_count,
+        "last_event_ns": monitor.last_event_ns,
+        "monitored_symbols": list(monitor.monitored_symbols),
+        "monitored_venues": list(monitor.monitored_venues),
+        "required_symbols": list(monitor.required_symbols),
+        "required_venues": list(monitor.required_venues),
+        "reason_codes": list(monitor.reason_codes),
+    }
+
+
+def runtime_monitor_snapshot_from_dict(data: dict) -> RuntimeMonitorSnapshot:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Runtime monitor must be a dict, got {type(data).__name__!r}")
+    monitor = RuntimeMonitorSnapshot(
+        status=_runtime_monitor_status_from_value(data.get("status")),
+        event_count=_require_non_negative_int(data.get("event_count", 0), "event_count"),
+        stale_feed_detected=_bool_or_default(data, "stale_feed_detected", False),
+        symbol_coverage_ok=_bool_or_default(data, "symbol_coverage_ok", False),
+        venue_coverage_ok=_bool_or_default(data, "venue_coverage_ok", False),
+        price_validity_ok=_bool_or_default(data, "price_validity_ok", False),
+        event_gap_count=_require_non_negative_int(data.get("event_gap_count", 0), "event_gap_count"),
+        last_event_ns=_optional_non_negative_int(data.get("last_event_ns"), "last_event_ns"),
+        monitored_symbols=_sorted_unique(data.get("monitored_symbols", ())),
+        monitored_venues=_sorted_unique(data.get("monitored_venues", ())),
+        required_symbols=_sorted_unique(data.get("required_symbols", ())),
+        required_venues=_sorted_unique(data.get("required_venues", ())),
+        reason_codes=_sorted_unique(data.get("reason_codes", ())),
+    )
+    _validate_runtime_monitor_snapshot(monitor)
+    return monitor
+
+
 def _validate_activation_plan_for_session(plan: PaperShadowActivationPlan) -> None:
     try:
         paper_shadow_activation_plan_to_dict(plan)
@@ -613,6 +795,15 @@ def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
     cursor_pairs = tuple((cursor.symbol, cursor.venue) for cursor in snapshot.market_event_cursors)
     if cursor_pairs != tuple(sorted(cursor_pairs)) or len(cursor_pairs) != len(set(cursor_pairs)):
         raise PaperShadowSessionCorruptError("paper/shadow session market event cursors must be sorted unique")
+    _validate_runtime_monitor_snapshot(snapshot.runtime_monitor)
+    if snapshot.runtime_monitor.event_count != snapshot.event_count:
+        raise PaperShadowSessionCorruptError("paper/shadow runtime monitor event_count must match session")
+    if snapshot.runtime_monitor.monitored_symbols != snapshot.symbols_seen:
+        raise PaperShadowSessionCorruptError("paper/shadow runtime monitor symbols must match session")
+    if snapshot.runtime_monitor.monitored_venues != snapshot.venues_seen:
+        raise PaperShadowSessionCorruptError("paper/shadow runtime monitor venues must match session")
+    if snapshot.runtime_monitor.last_event_ns != snapshot.last_event_ns:
+        raise PaperShadowSessionCorruptError("paper/shadow runtime monitor last_event_ns must match session")
     if set(snapshot.active_sleeves) & set(snapshot.inactive_sleeves):
         raise PaperShadowSessionCorruptError("paper/shadow session active and inactive sleeves overlap")
     if not set(snapshot.active_sleeves_seen).issubset(set(snapshot.active_sleeves)):
@@ -753,6 +944,28 @@ def _merge_market_event_cursors(
     )
 
 
+def _market_event_gap_count(
+    cursors: tuple[MarketEventCursor, ...],
+    events: tuple[MarketEvent, ...],
+    max_gap_ns: int | None,
+) -> int:
+    if max_gap_ns is None:
+        return 0
+    max_gap_ns = _require_non_negative_int(max_gap_ns, "max_market_event_gap_ns")
+    grouped: dict[tuple[str, str], list[int]] = {}
+    for cursor in cursors:
+        grouped.setdefault((cursor.symbol, cursor.venue), []).append(cursor.last_event_ns)
+    for event in events:
+        grouped.setdefault((event.symbol, event.venue), []).append(event.ts_ns)
+    gap_count = 0
+    for timestamps in grouped.values():
+        ordered = sorted(timestamps)
+        for previous, current in zip(ordered, ordered[1:]):
+            if current - previous > max_gap_ns:
+                gap_count += 1
+    return gap_count
+
+
 def _market_event_cursors_from_data(value: object) -> tuple[MarketEventCursor, ...]:
     if not isinstance(value, (list, tuple)):
         raise PaperShadowSessionCorruptError("market event cursors must be a list/tuple")
@@ -771,6 +984,92 @@ def _validate_market_event_cursor(cursor: MarketEventCursor) -> None:
     _require_non_empty_str(cursor.symbol, "symbol")
     _require_non_empty_str(cursor.venue, "venue")
     _require_non_negative_int(cursor.last_event_ns, "last_event_ns")
+
+
+def _validate_runtime_monitor_snapshot(monitor: RuntimeMonitorSnapshot) -> None:
+    if not isinstance(monitor, RuntimeMonitorSnapshot):
+        raise PaperShadowSessionCorruptError("runtime monitor must be a RuntimeMonitorSnapshot")
+    if not isinstance(monitor.status, RuntimeMonitorStatus):
+        raise PaperShadowSessionCorruptError("runtime monitor status must be a RuntimeMonitorStatus")
+    _require_non_negative_int(monitor.event_count, "event_count")
+    _require_bool(monitor.stale_feed_detected, "stale_feed_detected")
+    _require_bool(monitor.symbol_coverage_ok, "symbol_coverage_ok")
+    _require_bool(monitor.venue_coverage_ok, "venue_coverage_ok")
+    _require_bool(monitor.price_validity_ok, "price_validity_ok")
+    _require_non_negative_int(monitor.event_gap_count, "event_gap_count")
+    _optional_non_negative_int(monitor.last_event_ns, "last_event_ns")
+    if monitor.monitored_symbols != _sorted_unique(monitor.monitored_symbols):
+        raise PaperShadowSessionCorruptError("runtime monitor symbols must be sorted unique")
+    if monitor.monitored_venues != _sorted_unique(monitor.monitored_venues):
+        raise PaperShadowSessionCorruptError("runtime monitor venues must be sorted unique")
+    if monitor.required_symbols != _sorted_unique(monitor.required_symbols):
+        raise PaperShadowSessionCorruptError("runtime monitor required symbols must be sorted unique")
+    if monitor.required_venues != _sorted_unique(monitor.required_venues):
+        raise PaperShadowSessionCorruptError("runtime monitor required venues must be sorted unique")
+    if monitor.reason_codes != _sorted_unique(monitor.reason_codes):
+        raise PaperShadowSessionCorruptError("runtime monitor reason codes must be sorted unique")
+    if monitor.event_count == 0:
+        if monitor.status == RuntimeMonitorStatus.HEALTHY:
+            raise PaperShadowSessionCorruptError("runtime monitor cannot be healthy without events")
+        if monitor.last_event_ns is not None:
+            raise PaperShadowSessionCorruptError("runtime monitor without events cannot carry last_event_ns")
+        if monitor.symbol_coverage_ok or monitor.venue_coverage_ok or monitor.price_validity_ok:
+            raise PaperShadowSessionCorruptError("runtime monitor without events cannot report healthy checks")
+    if monitor.event_count > 0 and monitor.last_event_ns is None:
+        raise PaperShadowSessionCorruptError("runtime monitor with events requires last_event_ns")
+    if monitor.stale_feed_detected != (monitor.event_gap_count > 0):
+        raise PaperShadowSessionCorruptError("runtime monitor stale flag must match event gaps")
+    if monitor.status == RuntimeMonitorStatus.HEALTHY and monitor.reason_codes:
+        raise PaperShadowSessionCorruptError("runtime monitor healthy state cannot carry reason codes")
+    if monitor.status == RuntimeMonitorStatus.HEALTHY and (
+        monitor.stale_feed_detected
+        or not monitor.symbol_coverage_ok
+        or not monitor.venue_coverage_ok
+        or not monitor.price_validity_ok
+    ):
+        raise PaperShadowSessionCorruptError("runtime monitor healthy state requires all checks ok")
+    expected_status = (
+        RuntimeMonitorStatus.NOT_READY
+        if monitor.event_count == 0
+        else RuntimeMonitorStatus.DEGRADED
+        if monitor.reason_codes
+        else RuntimeMonitorStatus.HEALTHY
+    )
+    if monitor.status != expected_status:
+        raise PaperShadowSessionCorruptError("runtime monitor status does not match checks")
+
+
+def _runtime_monitor_reason_codes(
+    *,
+    has_events: bool,
+    stale_feed_detected: bool,
+    symbol_coverage_ok: bool,
+    venue_coverage_ok: bool,
+    price_validity_ok: bool,
+) -> tuple[str, ...]:
+    reasons: list[str] = []
+    if not has_events:
+        reasons.append("no_market_events")
+    if stale_feed_detected:
+        reasons.append("stale_feed_detected")
+    if not symbol_coverage_ok:
+        reasons.append("missing_symbol_coverage")
+    if not venue_coverage_ok:
+        reasons.append("missing_venue_coverage")
+    if not price_validity_ok:
+        reasons.append("price_validity_failed")
+    return _sorted_unique(reasons)
+
+
+def _runtime_monitor_status_from_value(value: object) -> RuntimeMonitorStatus:
+    if isinstance(value, RuntimeMonitorStatus):
+        return value
+    if value is None:
+        return RuntimeMonitorStatus.NOT_READY
+    try:
+        return RuntimeMonitorStatus(_require_non_empty_str(value, "status"))
+    except ValueError as exc:
+        raise PaperShadowSessionCorruptError(f"Invalid runtime monitor status: {value!r}") from exc
 
 
 def _market_event_batch_id(events: tuple[MarketEvent, ...]) -> str:
@@ -862,6 +1161,10 @@ def _optional_non_negative_int(value: object, field_name: str) -> int | None:
 
 def _bool_or_default(data: dict, field_name: str, default: bool) -> bool:
     value = data.get(field_name, default)
+    return _require_bool(value, field_name)
+
+
+def _require_bool(value: object, field_name: str) -> bool:
     if not isinstance(value, bool):
         raise PaperShadowSessionCorruptError(f"paper/shadow session field {field_name!r} must be bool")
     return value

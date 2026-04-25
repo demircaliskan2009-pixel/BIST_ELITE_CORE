@@ -36,11 +36,14 @@ from crypto_core.service.paper_shadow_session_controller import (
     PaperShadowSessionController,
     PaperShadowSessionCorruptError,
     PaperShadowSessionStatus,
+    RuntimeMonitorStatus,
     build_market_event_batch,
     market_event_batch_from_dict,
     market_event_batch_to_dict,
     paper_shadow_session_snapshot_from_dict,
     paper_shadow_session_snapshot_to_dict,
+    runtime_monitor_snapshot_from_dict,
+    runtime_monitor_snapshot_to_dict,
 )
 from crypto_core.service.service_orchestrator import ServiceOrchestrator, operator_snapshot_to_dict
 from crypto_core.service.sleeve_admission_controller import (
@@ -1646,10 +1649,78 @@ def test_paper_shadow_market_event_batch_valid_updates_session_counters() -> Non
     assert snapshot.first_event_ns == _T0_NS + 101
     assert snapshot.last_event_ns == _T0_NS + 102
     assert snapshot.rejected_event_count == 0
+    assert snapshot.runtime_monitor.status == RuntimeMonitorStatus.HEALTHY
+    assert snapshot.runtime_monitor.stale_feed_detected is False
+    assert snapshot.runtime_monitor.symbol_coverage_ok is True
+    assert snapshot.runtime_monitor.venue_coverage_ok is True
+    assert snapshot.runtime_monitor.price_validity_ok is True
+    assert rendered["runtime_monitor"]["status"] == "healthy"
     assert rendered["market_event_cursors"] == [
         {"symbol": "BTCUSDT", "venue": "binance", "last_event_ns": _T0_NS + 101},
         {"symbol": "ETHUSDT", "venue": "bybit", "last_event_ns": _T0_NS + 102},
     ]
+
+
+def test_paper_shadow_runtime_monitor_zero_events_not_healthy() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    controller = PaperShadowSessionController(clock_ns=lambda: _T0_NS + 1)
+
+    snapshot = controller.prepare(plan)
+    rendered = paper_shadow_session_snapshot_to_dict(snapshot)
+
+    assert snapshot.runtime_monitor.status == RuntimeMonitorStatus.NOT_READY
+    assert snapshot.runtime_monitor.event_count == 0
+    assert snapshot.runtime_monitor.symbol_coverage_ok is False
+    assert snapshot.runtime_monitor.venue_coverage_ok is False
+    assert snapshot.runtime_monitor.price_validity_ok is False
+    assert "no_market_events" in snapshot.runtime_monitor.reason_codes
+    assert rendered["runtime_monitor"]["status"] == "not_ready"
+
+
+def test_paper_shadow_runtime_monitor_missing_coverage_degraded() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3))
+    controller = PaperShadowSessionController(
+        clock_ns=lambda: next(times),
+        required_market_symbols=("BTCUSDT", "ETHUSDT"),
+        required_market_venues=("binance", "bybit"),
+    )
+    controller.prepare(plan)
+    controller.start()
+    batch = build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),))
+
+    snapshot = controller.record_market_event_batch(batch)
+
+    assert snapshot.runtime_monitor.status == RuntimeMonitorStatus.DEGRADED
+    assert snapshot.runtime_monitor.symbol_coverage_ok is False
+    assert snapshot.runtime_monitor.venue_coverage_ok is False
+    assert "missing_symbol_coverage" in snapshot.runtime_monitor.reason_codes
+    assert "missing_venue_coverage" in snapshot.runtime_monitor.reason_codes
+
+
+def test_paper_shadow_runtime_monitor_stale_event_gap_degraded() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3))
+    controller = PaperShadowSessionController(
+        clock_ns=lambda: next(times),
+        max_market_event_gap_ns=5,
+    )
+    controller.prepare(plan)
+    controller.start()
+    batch = build_market_event_batch(
+        (
+            _market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),
+            _market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 110, price=101.0),
+        ),
+        batch_id="stale-gap",
+    )
+
+    snapshot = controller.record_market_event_batch(batch)
+
+    assert snapshot.runtime_monitor.status == RuntimeMonitorStatus.DEGRADED
+    assert snapshot.runtime_monitor.stale_feed_detected is True
+    assert snapshot.runtime_monitor.event_gap_count == 1
+    assert "stale_feed_detected" in snapshot.runtime_monitor.reason_codes
 
 
 def test_paper_shadow_market_event_malformed_price_rejected_fail_closed() -> None:
@@ -1670,6 +1741,8 @@ def test_paper_shadow_market_event_malformed_price_rejected_fail_closed() -> Non
     assert snapshot.event_count == 0
     assert snapshot.tick_count == 0
     assert snapshot.rejected_event_count == 1
+    assert snapshot.runtime_monitor.status == RuntimeMonitorStatus.NOT_READY
+    assert snapshot.runtime_monitor.event_count == 0
     assert snapshot.real_orders_enabled is False
     assert snapshot.real_money_enabled is False
 
@@ -1716,6 +1789,24 @@ def test_paper_shadow_market_event_batch_ordering_and_serialization_roundtrip(tm
     store.save_snapshot("crypto_paper_shadow_market_event_batch", ["bad"])
     with pytest.raises(PaperShadowSessionCorruptError):
         load_paper_shadow_market_event_batch(evidence_store=store)
+
+
+def test_paper_shadow_runtime_monitor_serialization_roundtrip() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    snapshot = controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),))
+    )
+    payload = runtime_monitor_snapshot_to_dict(snapshot.runtime_monitor)
+
+    restored_monitor = runtime_monitor_snapshot_from_dict(payload)
+    restored_session = paper_shadow_session_snapshot_from_dict(paper_shadow_session_snapshot_to_dict(snapshot))
+
+    assert restored_monitor == snapshot.runtime_monitor
+    assert restored_session.runtime_monitor == snapshot.runtime_monitor
 
 
 def test_paper_shadow_market_event_tick_before_start_fails_closed() -> None:
@@ -1802,13 +1893,19 @@ def test_service_orchestrator_market_event_batch_helper(tmp_path) -> None:
     orch.start_paper_shadow_session()
     snapshot = orch.record_paper_shadow_market_event_batch(batch)
     rendered = orch.paper_shadow_session_snapshot_dict()
+    monitor = orch.paper_shadow_runtime_monitor_dict()
     operator = operator_snapshot_to_dict(orch.operator_snapshot())
 
     assert snapshot.event_count == 1
     assert rendered["event_count"] == 1
     assert rendered["symbols_seen"] == ["BTCUSDT"]
+    assert rendered["runtime_monitor"]["status"] == "healthy"
+    assert monitor["status"] == "healthy"
+    assert monitor["last_event_ns"] == _T0_NS + 120
     assert operator["paper_shadow_session"]["event_count"] == 1
     assert operator["paper_shadow_session"]["symbols_seen"] == 1
+    assert operator["paper_shadow_session"]["runtime_monitor_status"] == "healthy"
+    assert operator["paper_shadow_session"]["price_validity_ok"] is True
     assert orch.paper_shadow_market_event_batch_dict(batch)["events"][0]["symbol"] == "BTCUSDT"
 
     orch.export_paper_shadow_market_event_batch(batch)
