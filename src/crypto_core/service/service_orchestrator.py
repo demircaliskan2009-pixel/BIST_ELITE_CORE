@@ -124,6 +124,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     MarketEventBatch,
     PaperShadowSessionController,
     PaperShadowSessionSnapshot,
+    guardrail_snapshot_to_dict,
     market_event_batch_to_dict,
     paper_shadow_session_snapshot_to_dict,
     runtime_monitor_snapshot_to_dict,
@@ -364,6 +365,10 @@ class PaperShadowSessionState:
     venue_coverage_ok: bool
     price_validity_ok: bool
     event_gap_count: int
+    guardrail_primary_action: str
+    guardrail_actions: tuple[str, ...]
+    guardrail_block_finalize: bool
+    guardrail_reason_codes: tuple[str, ...]
     started_at_ns: int | None
     stopped_at_ns: int | None
     finalized_at_ns: int | None
@@ -894,6 +899,14 @@ class ServiceOrchestrator:
     def paper_shadow_runtime_monitor_dict(self) -> dict:
         """Serialize the current paper/shadow runtime monitor surface."""
         return runtime_monitor_snapshot_to_dict(self.paper_shadow_session_snapshot().runtime_monitor)
+
+    def paper_shadow_guardrail_dict(self) -> dict:
+        """Serialize the current paper/shadow guardrail action surface."""
+        return guardrail_snapshot_to_dict(self.paper_shadow_session_snapshot().guardrail)
+
+    def apply_paper_shadow_guardrails(self) -> PaperShadowSessionSnapshot:
+        """Apply guardrails to paper/shadow session lifecycle state only."""
+        return self._ensure_paper_shadow_session_controller().apply_guardrails()
 
     def paper_shadow_market_event_batch_dict(self, batch: MarketEventBatch) -> dict:
         """Serialize a deterministic read-only paper/shadow market event batch."""
@@ -3329,6 +3342,10 @@ def paper_shadow_session_state_from_snapshot(snapshot: PaperShadowSessionSnapsho
         venue_coverage_ok=snapshot.runtime_monitor.venue_coverage_ok,
         price_validity_ok=snapshot.runtime_monitor.price_validity_ok,
         event_gap_count=snapshot.runtime_monitor.event_gap_count,
+        guardrail_primary_action=snapshot.guardrail.primary_action.value,
+        guardrail_actions=tuple(action.value for action in snapshot.guardrail.actions),
+        guardrail_block_finalize=snapshot.guardrail.block_finalize,
+        guardrail_reason_codes=snapshot.guardrail.reason_codes,
         started_at_ns=snapshot.started_at_ns,
         stopped_at_ns=snapshot.stopped_at_ns,
         finalized_at_ns=snapshot.finalized_at_ns,
@@ -3361,6 +3378,10 @@ def paper_shadow_session_state_to_dict(state: PaperShadowSessionState) -> dict:
         "venue_coverage_ok": state.venue_coverage_ok,
         "price_validity_ok": state.price_validity_ok,
         "event_gap_count": state.event_gap_count,
+        "guardrail_primary_action": state.guardrail_primary_action,
+        "guardrail_actions": list(state.guardrail_actions),
+        "guardrail_block_finalize": state.guardrail_block_finalize,
+        "guardrail_reason_codes": list(state.guardrail_reason_codes),
         "started_at_ns": state.started_at_ns,
         "stopped_at_ns": state.stopped_at_ns,
         "finalized_at_ns": state.finalized_at_ns,

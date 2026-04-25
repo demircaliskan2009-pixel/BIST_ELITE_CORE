@@ -30,6 +30,7 @@ from crypto_core.service.campaign_controller import campaign_readiness_flags
 from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreConfig
 from crypto_core.service.models import QueuePressure, QueueSnapshot, ServiceStatus, WatchdogStatus
 from crypto_core.service.paper_shadow_session_controller import (
+    GuardrailAction,
     MarketEvent,
     MarketEventBatch,
     MarketEventType,
@@ -37,7 +38,10 @@ from crypto_core.service.paper_shadow_session_controller import (
     PaperShadowSessionCorruptError,
     PaperShadowSessionStatus,
     RuntimeMonitorStatus,
+    build_guardrail_snapshot,
     build_market_event_batch,
+    guardrail_snapshot_from_dict,
+    guardrail_snapshot_to_dict,
     market_event_batch_from_dict,
     market_event_batch_to_dict,
     paper_shadow_session_snapshot_from_dict,
@@ -1525,7 +1529,7 @@ def test_paper_shadow_session_controller_lifecycle_happy_path() -> None:
 
     prepared = controller.prepare(plan)
     running = controller.start()
-    ticked = controller.record_tick(active_sleeves_seen=("active",))
+    ticked = controller.record_market_event_batch(build_market_event_batch((_market_event(),)))
     stopped = controller.stop()
     finalized = controller.finalize()
     rendered = paper_shadow_session_snapshot_to_dict(finalized)
@@ -1533,7 +1537,7 @@ def test_paper_shadow_session_controller_lifecycle_happy_path() -> None:
     assert prepared.status == PaperShadowSessionStatus.READY
     assert running.status == PaperShadowSessionStatus.RUNNING
     assert ticked.tick_count == 1
-    assert ticked.active_sleeves_seen == ("active",)
+    assert ticked.guardrail.primary_action == GuardrailAction.NONE
     assert stopped.status == PaperShadowSessionStatus.STOPPED
     assert finalized.status == PaperShadowSessionStatus.FINALIZED
     assert finalized.started_at_ns == _T0_NS + 2
@@ -1584,7 +1588,7 @@ def test_paper_shadow_session_deterministic_fixed_clock_replay() -> None:
         controller = PaperShadowSessionController(clock_ns=lambda: next(times))
         controller.prepare(plan)
         controller.start()
-        controller.record_tick(active_sleeves_seen=("stable",))
+        controller.record_market_event_batch(build_market_event_batch((_market_event("BTCUSDT", ts_ns=_T0_NS + 101),)))
         controller.stop()
         return paper_shadow_session_snapshot_to_dict(controller.finalize())
 
@@ -1597,7 +1601,7 @@ def test_paper_shadow_session_restore_roundtrip_and_malformed_fail_closed(tmp_pa
     controller = PaperShadowSessionController(clock_ns=lambda: next(times))
     controller.prepare(plan)
     controller.start()
-    controller.record_tick(active_sleeves_seen=("active",))
+    controller.record_market_event_batch(build_market_event_batch((_market_event(),)))
     controller.stop()
     snapshot = controller.finalize()
     payload = paper_shadow_session_snapshot_to_dict(snapshot)
@@ -1616,6 +1620,17 @@ def test_paper_shadow_session_restore_roundtrip_and_malformed_fail_closed(tmp_pa
     with pytest.raises(PaperShadowSessionCorruptError):
         paper_shadow_session_snapshot_from_dict(malformed)
 
+    malformed_guardrail = dict(payload)
+    malformed_guardrail["guardrail"] = {
+        **payload["guardrail"],
+        "primary_action": "warn",
+        "actions": ["warn"],
+        "reason_codes": ["no_market_events"],
+        "block_finalize": False,
+    }
+    with pytest.raises(PaperShadowSessionCorruptError):
+        paper_shadow_session_snapshot_from_dict(malformed_guardrail)
+
     store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
     export_paper_shadow_session_snapshot(snapshot=snapshot, evidence_store=store)
     assert load_paper_shadow_session_snapshot(evidence_store=store) == snapshot
@@ -1627,7 +1642,7 @@ def test_paper_shadow_session_restore_roundtrip_and_malformed_fail_closed(tmp_pa
 
 def test_paper_shadow_market_event_batch_valid_updates_session_counters() -> None:
     plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
-    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3, _T0_NS + 4))
     controller = PaperShadowSessionController(clock_ns=lambda: next(times))
     controller.prepare(plan)
     controller.start()
@@ -1675,6 +1690,12 @@ def test_paper_shadow_runtime_monitor_zero_events_not_healthy() -> None:
     assert snapshot.runtime_monitor.price_validity_ok is False
     assert "no_market_events" in snapshot.runtime_monitor.reason_codes
     assert rendered["runtime_monitor"]["status"] == "not_ready"
+    assert snapshot.guardrail.primary_action == GuardrailAction.BLOCK_FINALIZE
+    assert GuardrailAction.WARN in snapshot.guardrail.actions
+    assert snapshot.guardrail.block_finalize is True
+    assert "no_market_events" in snapshot.guardrail.reason_codes
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.finalize()
 
 
 def test_paper_shadow_runtime_monitor_missing_coverage_degraded() -> None:
@@ -1696,11 +1717,14 @@ def test_paper_shadow_runtime_monitor_missing_coverage_degraded() -> None:
     assert snapshot.runtime_monitor.venue_coverage_ok is False
     assert "missing_symbol_coverage" in snapshot.runtime_monitor.reason_codes
     assert "missing_venue_coverage" in snapshot.runtime_monitor.reason_codes
+    assert snapshot.guardrail.primary_action == GuardrailAction.PAUSE_SESSION
+    assert GuardrailAction.BLOCK_FINALIZE in snapshot.guardrail.actions
+    assert "missing_symbol_coverage" in snapshot.guardrail.reason_codes
 
 
 def test_paper_shadow_runtime_monitor_stale_event_gap_degraded() -> None:
     plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
-    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3, _T0_NS + 4))
     controller = PaperShadowSessionController(
         clock_ns=lambda: next(times),
         max_market_event_gap_ns=5,
@@ -1721,6 +1745,12 @@ def test_paper_shadow_runtime_monitor_stale_event_gap_degraded() -> None:
     assert snapshot.runtime_monitor.stale_feed_detected is True
     assert snapshot.runtime_monitor.event_gap_count == 1
     assert "stale_feed_detected" in snapshot.runtime_monitor.reason_codes
+    assert snapshot.guardrail.primary_action == GuardrailAction.PAUSE_SESSION
+    assert snapshot.guardrail.should_pause_session is True
+
+    applied = controller.apply_guardrails()
+    assert applied.status == PaperShadowSessionStatus.BLOCKED
+    assert "stale_feed_detected" in applied.blockers_seen
 
 
 def test_paper_shadow_market_event_malformed_price_rejected_fail_closed() -> None:
@@ -1743,8 +1773,58 @@ def test_paper_shadow_market_event_malformed_price_rejected_fail_closed() -> Non
     assert snapshot.rejected_event_count == 1
     assert snapshot.runtime_monitor.status == RuntimeMonitorStatus.NOT_READY
     assert snapshot.runtime_monitor.event_count == 0
+    assert snapshot.guardrail.primary_action == GuardrailAction.PAUSE_SESSION
+    assert "rejected_market_events" in snapshot.guardrail.reason_codes
     assert snapshot.real_orders_enabled is False
     assert snapshot.real_money_enabled is False
+
+
+def test_paper_shadow_guardrail_healthy_monitor_none_action() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+
+    snapshot = controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),))
+    )
+
+    assert snapshot.runtime_monitor.status == RuntimeMonitorStatus.HEALTHY
+    assert snapshot.guardrail.primary_action == GuardrailAction.NONE
+    assert snapshot.guardrail.actions == (GuardrailAction.NONE,)
+    assert snapshot.guardrail.block_finalize is False
+
+
+def test_paper_shadow_guardrail_unsafe_flags_hard_stop_block() -> None:
+    monitor = runtime_monitor_snapshot_from_dict(
+        {
+            "status": "healthy",
+            "event_count": 1,
+            "stale_feed_detected": False,
+            "symbol_coverage_ok": True,
+            "venue_coverage_ok": True,
+            "price_validity_ok": True,
+            "event_gap_count": 0,
+            "last_event_ns": _T0_NS + 101,
+            "monitored_symbols": ["BTCUSDT"],
+            "monitored_venues": ["binance"],
+            "reason_codes": [],
+        }
+    )
+
+    guardrail = build_guardrail_snapshot(
+        monitor,
+        session_status=PaperShadowSessionStatus.RUNNING,
+        paper_only=False,
+        real_orders_enabled=True,
+        real_money_enabled=True,
+    )
+
+    assert guardrail.primary_action == GuardrailAction.STOP_SESSION
+    assert guardrail.should_stop_session is True
+    assert guardrail.block_finalize is True
+    assert "unsafe_real_trading_flags" in guardrail.reason_codes
 
 
 def test_paper_shadow_market_event_non_monotonic_batch_rejected() -> None:
@@ -1801,12 +1881,16 @@ def test_paper_shadow_runtime_monitor_serialization_roundtrip() -> None:
         build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),))
     )
     payload = runtime_monitor_snapshot_to_dict(snapshot.runtime_monitor)
+    guardrail_payload = guardrail_snapshot_to_dict(snapshot.guardrail)
 
     restored_monitor = runtime_monitor_snapshot_from_dict(payload)
+    restored_guardrail = guardrail_snapshot_from_dict(guardrail_payload)
     restored_session = paper_shadow_session_snapshot_from_dict(paper_shadow_session_snapshot_to_dict(snapshot))
 
     assert restored_monitor == snapshot.runtime_monitor
+    assert restored_guardrail == snapshot.guardrail
     assert restored_session.runtime_monitor == snapshot.runtime_monitor
+    assert restored_session.guardrail == snapshot.guardrail
 
 
 def test_paper_shadow_market_event_tick_before_start_fails_closed() -> None:
@@ -1857,7 +1941,9 @@ def test_service_orchestrator_paper_shadow_session_helpers_and_operator_status(t
 
     prepared = orch.prepare_paper_shadow_session(plan=plan)
     orch.start_paper_shadow_session()
-    orch.record_paper_shadow_session_tick(active_sleeves_seen=("svc-active",))
+    orch.record_paper_shadow_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", ts_ns=_T0_NS + 120),))
+    )
     orch.stop_paper_shadow_session()
     finalized = orch.finalize_paper_shadow_session()
     rendered = orch.paper_shadow_session_snapshot_dict()
@@ -1894,17 +1980,22 @@ def test_service_orchestrator_market_event_batch_helper(tmp_path) -> None:
     snapshot = orch.record_paper_shadow_market_event_batch(batch)
     rendered = orch.paper_shadow_session_snapshot_dict()
     monitor = orch.paper_shadow_runtime_monitor_dict()
+    guardrail = orch.paper_shadow_guardrail_dict()
     operator = operator_snapshot_to_dict(orch.operator_snapshot())
 
     assert snapshot.event_count == 1
     assert rendered["event_count"] == 1
     assert rendered["symbols_seen"] == ["BTCUSDT"]
     assert rendered["runtime_monitor"]["status"] == "healthy"
+    assert rendered["guardrail"]["primary_action"] == "none"
     assert monitor["status"] == "healthy"
     assert monitor["last_event_ns"] == _T0_NS + 120
+    assert guardrail["primary_action"] == "none"
     assert operator["paper_shadow_session"]["event_count"] == 1
     assert operator["paper_shadow_session"]["symbols_seen"] == 1
     assert operator["paper_shadow_session"]["runtime_monitor_status"] == "healthy"
+    assert operator["paper_shadow_session"]["guardrail_primary_action"] == "none"
+    assert operator["paper_shadow_session"]["guardrail_block_finalize"] is False
     assert operator["paper_shadow_session"]["price_validity_ok"] is True
     assert orch.paper_shadow_market_event_batch_dict(batch)["events"][0]["symbol"] == "BTCUSDT"
 

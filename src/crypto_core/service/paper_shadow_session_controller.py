@@ -45,6 +45,14 @@ class RuntimeMonitorStatus(str, Enum):
     DEGRADED = "degraded"
 
 
+class GuardrailAction(str, Enum):
+    NONE = "none"
+    WARN = "warn"
+    PAUSE_SESSION = "pause_session"
+    STOP_SESSION = "stop_session"
+    BLOCK_FINALIZE = "block_finalize"
+
+
 class MarketEventType(str, Enum):
     TRADE = "trade"
     MARK_PRICE = "mark_price"
@@ -98,6 +106,20 @@ class RuntimeMonitorSnapshot:
 
 
 @dataclass(frozen=True)
+class GuardrailSnapshot:
+    primary_action: GuardrailAction = GuardrailAction.BLOCK_FINALIZE
+    actions: tuple[GuardrailAction, ...] = (GuardrailAction.BLOCK_FINALIZE, GuardrailAction.WARN)
+    reason_codes: tuple[str, ...] = ("no_market_events",)
+    monitor_status: RuntimeMonitorStatus = RuntimeMonitorStatus.NOT_READY
+    block_finalize: bool = True
+    should_pause_session: bool = False
+    should_stop_session: bool = False
+    real_orders_enabled: bool = False
+    real_money_enabled: bool = False
+    paper_only: bool = True
+
+
+@dataclass(frozen=True)
 class PaperShadowSessionSnapshot:
     session_id: str
     status: PaperShadowSessionStatus
@@ -121,6 +143,7 @@ class PaperShadowSessionSnapshot:
     rejected_event_count: int = 0
     market_event_cursors: tuple[MarketEventCursor, ...] = ()
     runtime_monitor: RuntimeMonitorSnapshot = field(default_factory=RuntimeMonitorSnapshot)
+    guardrail: GuardrailSnapshot = field(default_factory=GuardrailSnapshot)
     paper_only: bool = True
     real_orders_enabled: bool = False
     real_money_enabled: bool = False
@@ -174,6 +197,9 @@ class PaperShadowSessionController:
     def report(self) -> PaperShadowSessionSnapshot:
         return self._snapshot
 
+    def guardrail_snapshot(self) -> GuardrailSnapshot:
+        return self._snapshot.guardrail
+
     def prepare(self, plan: PaperShadowActivationPlan) -> PaperShadowSessionSnapshot:
         _validate_activation_plan_for_session(plan)
         now = self._now_ns()
@@ -189,6 +215,13 @@ class PaperShadowSessionController:
                 *plan.governance_blockers,
             )
         )
+        monitor = build_runtime_monitor_snapshot(
+            event_count=0,
+            monitored_symbols=(),
+            monitored_venues=(),
+            required_symbols=self._required_market_symbols,
+            required_venues=self._required_market_venues,
+        )
         return self._apply_snapshot(
             PaperShadowSessionSnapshot(
                 session_id=_session_id_for_plan(plan),
@@ -201,12 +234,14 @@ class PaperShadowSessionController:
                 tick_count=0,
                 active_sleeves_seen=(),
                 blockers_seen=blockers,
-                runtime_monitor=build_runtime_monitor_snapshot(
-                    event_count=0,
-                    monitored_symbols=(),
-                    monitored_venues=(),
-                    required_symbols=self._required_market_symbols,
-                    required_venues=self._required_market_venues,
+                runtime_monitor=monitor,
+                guardrail=build_guardrail_snapshot(
+                    monitor,
+                    session_status=status,
+                    rejected_event_count=0,
+                    paper_only=True,
+                    real_orders_enabled=False,
+                    real_money_enabled=False,
                 ),
                 paper_only=True,
                 real_orders_enabled=False,
@@ -316,6 +351,14 @@ class PaperShadowSessionController:
             event_gap_count=total_event_gap_count,
             last_event_ns=session_last_event_ns,
         )
+        guardrail = build_guardrail_snapshot(
+            monitor,
+            session_status=self._snapshot.status,
+            rejected_event_count=self._snapshot.rejected_event_count,
+            paper_only=True,
+            real_orders_enabled=False,
+            real_money_enabled=False,
+        )
         return self._apply_snapshot(
             replace(
                 self._snapshot,
@@ -329,6 +372,7 @@ class PaperShadowSessionController:
                 last_event_ns=session_last_event_ns,
                 market_event_cursors=cursors,
                 runtime_monitor=monitor,
+                guardrail=guardrail,
                 paper_only=True,
                 real_orders_enabled=False,
                 real_money_enabled=False,
@@ -343,6 +387,51 @@ class PaperShadowSessionController:
 
     def tick_from_market_events(self, batch: MarketEventBatch | dict) -> PaperShadowSessionSnapshot:
         return self.record_market_event_batch(batch)
+
+    def apply_guardrails(self) -> PaperShadowSessionSnapshot:
+        guardrail = self._snapshot.guardrail
+        if guardrail.should_stop_session and self._snapshot.status == PaperShadowSessionStatus.RUNNING:
+            now = self._now_ns()
+            blockers = _sorted_unique((*self._snapshot.blockers_seen, *guardrail.reason_codes))
+            return self._apply_snapshot(
+                replace(
+                    self._snapshot,
+                    status=PaperShadowSessionStatus.STOPPED,
+                    as_of_ns=now,
+                    stopped_at_ns=now,
+                    blockers_seen=blockers,
+                    paper_only=True,
+                    real_orders_enabled=False,
+                    real_money_enabled=False,
+                    operator_summary=_operator_summary(
+                        PaperShadowSessionStatus.STOPPED,
+                        self._snapshot.tick_count,
+                        self._snapshot.active_sleeves,
+                        blockers,
+                    ),
+                )
+            )
+        if guardrail.should_pause_session and self._snapshot.status == PaperShadowSessionStatus.RUNNING:
+            now = self._now_ns()
+            blockers = _sorted_unique((*self._snapshot.blockers_seen, *guardrail.reason_codes))
+            return self._apply_snapshot(
+                replace(
+                    self._snapshot,
+                    status=PaperShadowSessionStatus.BLOCKED,
+                    as_of_ns=now,
+                    blockers_seen=blockers,
+                    paper_only=True,
+                    real_orders_enabled=False,
+                    real_money_enabled=False,
+                    operator_summary=_operator_summary(
+                        PaperShadowSessionStatus.BLOCKED,
+                        self._snapshot.tick_count,
+                        self._snapshot.active_sleeves,
+                        blockers,
+                    ),
+                )
+            )
+        return self._snapshot
 
     def stop(self, *, blockers_seen: tuple[str, ...] = ()) -> PaperShadowSessionSnapshot:
         if self._snapshot.status != PaperShadowSessionStatus.RUNNING:
@@ -371,6 +460,8 @@ class PaperShadowSessionController:
     def finalize(self) -> PaperShadowSessionSnapshot:
         if self._snapshot.status != PaperShadowSessionStatus.STOPPED:
             raise PaperShadowSessionCorruptError("paper/shadow session can only finalize from STOPPED state")
+        if self._snapshot.guardrail.block_finalize:
+            raise PaperShadowSessionCorruptError("paper/shadow session guardrails block finalize")
         now = self._now_ns()
         return self._apply_snapshot(
             replace(
@@ -426,9 +517,19 @@ class PaperShadowSessionController:
     def _record_rejected_events(self, count: int) -> None:
         if count <= 0:
             count = 1
+        rejected_count = self._snapshot.rejected_event_count + count
+        guardrail = build_guardrail_snapshot(
+            self._snapshot.runtime_monitor,
+            session_status=self._snapshot.status,
+            rejected_event_count=rejected_count,
+            paper_only=True,
+            real_orders_enabled=False,
+            real_money_enabled=False,
+        )
         self._snapshot = replace(
             self._snapshot,
-            rejected_event_count=self._snapshot.rejected_event_count + count,
+            rejected_event_count=rejected_count,
+            guardrail=guardrail,
             paper_only=True,
             real_orders_enabled=False,
             real_money_enabled=False,
@@ -461,6 +562,7 @@ def paper_shadow_session_snapshot_to_dict(snapshot: PaperShadowSessionSnapshot) 
         "rejected_event_count": snapshot.rejected_event_count,
         "market_event_cursors": [market_event_cursor_to_dict(cursor) for cursor in snapshot.market_event_cursors],
         "runtime_monitor": runtime_monitor_snapshot_to_dict(snapshot.runtime_monitor),
+        "guardrail": guardrail_snapshot_to_dict(snapshot.guardrail),
         "paper_only": snapshot.paper_only,
         "real_orders_enabled": snapshot.real_orders_enabled,
         "real_money_enabled": snapshot.real_money_enabled,
@@ -495,6 +597,23 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
             last_event_ns=last_event_ns,
         )
     )
+    rejected_event_count = _require_non_negative_int(data.get("rejected_event_count", 0), "rejected_event_count")
+    paper_only = _bool_or_default(data, "paper_only", True)
+    real_orders_enabled = _bool_or_default(data, "real_orders_enabled", False)
+    real_money_enabled = _bool_or_default(data, "real_money_enabled", False)
+    guardrail_value = data.get("guardrail")
+    guardrail = (
+        guardrail_snapshot_from_dict(_dict_value(guardrail_value, "guardrail"))
+        if guardrail_value is not None
+        else build_guardrail_snapshot(
+            runtime_monitor,
+            session_status=status,
+            rejected_event_count=rejected_event_count,
+            paper_only=paper_only,
+            real_orders_enabled=real_orders_enabled,
+            real_money_enabled=real_money_enabled,
+        )
+    )
     snapshot = PaperShadowSessionSnapshot(
         session_id=_string_or_default(data.get("session_id"), "paper-shadow-session-legacy"),
         status=status,
@@ -515,12 +634,13 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
         venues_seen=venues_seen,
         first_event_ns=_optional_non_negative_int(data.get("first_event_ns"), "first_event_ns"),
         last_event_ns=last_event_ns,
-        rejected_event_count=_require_non_negative_int(data.get("rejected_event_count", 0), "rejected_event_count"),
+        rejected_event_count=rejected_event_count,
         market_event_cursors=_market_event_cursors_from_data(data.get("market_event_cursors", ())),
         runtime_monitor=runtime_monitor,
-        paper_only=_bool_or_default(data, "paper_only", True),
-        real_orders_enabled=_bool_or_default(data, "real_orders_enabled", False),
-        real_money_enabled=_bool_or_default(data, "real_money_enabled", False),
+        guardrail=guardrail,
+        paper_only=paper_only,
+        real_orders_enabled=real_orders_enabled,
+        real_money_enabled=real_money_enabled,
         active_sleeves=_sorted_unique(data.get("active_sleeves", ())),
         inactive_sleeves=_sorted_unique(data.get("inactive_sleeves", ())),
         admitted_unallocated_sleeves=_sorted_unique(data.get("admitted_unallocated_sleeves", ())),
@@ -730,6 +850,103 @@ def runtime_monitor_snapshot_from_dict(data: dict) -> RuntimeMonitorSnapshot:
     return monitor
 
 
+def build_guardrail_snapshot(
+    monitor: RuntimeMonitorSnapshot,
+    *,
+    session_status: PaperShadowSessionStatus,
+    rejected_event_count: int = 0,
+    paper_only: bool = True,
+    real_orders_enabled: bool = False,
+    real_money_enabled: bool = False,
+) -> GuardrailSnapshot:
+    _validate_runtime_monitor_snapshot(monitor)
+    if not isinstance(session_status, PaperShadowSessionStatus):
+        raise PaperShadowSessionCorruptError("guardrail session_status must be a PaperShadowSessionStatus")
+    rejected_event_count = _require_non_negative_int(rejected_event_count, "rejected_event_count")
+    paper_only = _require_bool(paper_only, "paper_only")
+    real_orders_enabled = _require_bool(real_orders_enabled, "real_orders_enabled")
+    real_money_enabled = _require_bool(real_money_enabled, "real_money_enabled")
+    reasons: list[str] = []
+    actions: list[GuardrailAction] = []
+    if not paper_only or real_orders_enabled or real_money_enabled:
+        reasons.append("unsafe_real_trading_flags")
+        actions.extend((GuardrailAction.STOP_SESSION, GuardrailAction.BLOCK_FINALIZE))
+    has_events = monitor.event_count > 0
+    if not has_events:
+        reasons.append("no_market_events")
+        actions.extend((GuardrailAction.WARN, GuardrailAction.BLOCK_FINALIZE))
+    if has_events and monitor.stale_feed_detected:
+        reasons.append("stale_feed_detected")
+        actions.extend((GuardrailAction.PAUSE_SESSION, GuardrailAction.BLOCK_FINALIZE))
+    if has_events and not monitor.symbol_coverage_ok:
+        reasons.append("missing_symbol_coverage")
+        actions.extend((GuardrailAction.WARN, GuardrailAction.PAUSE_SESSION, GuardrailAction.BLOCK_FINALIZE))
+    if has_events and not monitor.venue_coverage_ok:
+        reasons.append("missing_venue_coverage")
+        actions.extend((GuardrailAction.WARN, GuardrailAction.PAUSE_SESSION, GuardrailAction.BLOCK_FINALIZE))
+    if has_events and not monitor.price_validity_ok:
+        reasons.append("price_validity_failed")
+        actions.extend((GuardrailAction.WARN, GuardrailAction.PAUSE_SESSION, GuardrailAction.BLOCK_FINALIZE))
+    if rejected_event_count > 0:
+        reasons.append("rejected_market_events")
+        actions.extend((GuardrailAction.WARN, GuardrailAction.PAUSE_SESSION, GuardrailAction.BLOCK_FINALIZE))
+    if not actions:
+        actions.append(GuardrailAction.NONE)
+    resolved_actions = _sorted_unique_actions(actions)
+    primary_action = _primary_guardrail_action(resolved_actions)
+    guardrail = GuardrailSnapshot(
+        primary_action=primary_action,
+        actions=resolved_actions,
+        reason_codes=_sorted_unique(reasons),
+        monitor_status=monitor.status,
+        block_finalize=GuardrailAction.BLOCK_FINALIZE in resolved_actions,
+        should_pause_session=GuardrailAction.PAUSE_SESSION in resolved_actions,
+        should_stop_session=GuardrailAction.STOP_SESSION in resolved_actions,
+        real_orders_enabled=real_orders_enabled,
+        real_money_enabled=real_money_enabled,
+        paper_only=paper_only,
+    )
+    _validate_guardrail_snapshot(guardrail)
+    return guardrail
+
+
+def guardrail_snapshot_to_dict(guardrail: GuardrailSnapshot) -> dict:
+    _validate_guardrail_snapshot(guardrail)
+    return {
+        "primary_action": guardrail.primary_action.value,
+        "actions": [action.value for action in guardrail.actions],
+        "reason_codes": list(guardrail.reason_codes),
+        "monitor_status": guardrail.monitor_status.value,
+        "block_finalize": guardrail.block_finalize,
+        "should_pause_session": guardrail.should_pause_session,
+        "should_stop_session": guardrail.should_stop_session,
+        "real_orders_enabled": guardrail.real_orders_enabled,
+        "real_money_enabled": guardrail.real_money_enabled,
+        "paper_only": guardrail.paper_only,
+    }
+
+
+def guardrail_snapshot_from_dict(data: dict) -> GuardrailSnapshot:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Guardrail snapshot must be a dict, got {type(data).__name__!r}")
+    actions = _guardrail_actions_from_data(data.get("actions", ()))
+    primary_action = _guardrail_action_from_value(data.get("primary_action", _primary_guardrail_action(actions).value))
+    guardrail = GuardrailSnapshot(
+        primary_action=primary_action,
+        actions=actions,
+        reason_codes=_sorted_unique(data.get("reason_codes", ())),
+        monitor_status=_runtime_monitor_status_from_value(data.get("monitor_status")),
+        block_finalize=_bool_or_default(data, "block_finalize", GuardrailAction.BLOCK_FINALIZE in actions),
+        should_pause_session=_bool_or_default(data, "should_pause_session", GuardrailAction.PAUSE_SESSION in actions),
+        should_stop_session=_bool_or_default(data, "should_stop_session", GuardrailAction.STOP_SESSION in actions),
+        real_orders_enabled=_bool_or_default(data, "real_orders_enabled", False),
+        real_money_enabled=_bool_or_default(data, "real_money_enabled", False),
+        paper_only=_bool_or_default(data, "paper_only", True),
+    )
+    _validate_guardrail_snapshot(guardrail)
+    return guardrail
+
+
 def _validate_activation_plan_for_session(plan: PaperShadowActivationPlan) -> None:
     try:
         paper_shadow_activation_plan_to_dict(plan)
@@ -804,6 +1021,17 @@ def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
         raise PaperShadowSessionCorruptError("paper/shadow runtime monitor venues must match session")
     if snapshot.runtime_monitor.last_event_ns != snapshot.last_event_ns:
         raise PaperShadowSessionCorruptError("paper/shadow runtime monitor last_event_ns must match session")
+    _validate_guardrail_snapshot(snapshot.guardrail)
+    expected_guardrail = build_guardrail_snapshot(
+        snapshot.runtime_monitor,
+        session_status=snapshot.status,
+        rejected_event_count=snapshot.rejected_event_count,
+        paper_only=snapshot.paper_only,
+        real_orders_enabled=snapshot.real_orders_enabled,
+        real_money_enabled=snapshot.real_money_enabled,
+    )
+    if snapshot.guardrail != expected_guardrail:
+        raise PaperShadowSessionCorruptError("paper/shadow guardrail snapshot does not match session truth")
     if set(snapshot.active_sleeves) & set(snapshot.inactive_sleeves):
         raise PaperShadowSessionCorruptError("paper/shadow session active and inactive sleeves overlap")
     if not set(snapshot.active_sleeves_seen).issubset(set(snapshot.active_sleeves)):
@@ -1039,6 +1267,42 @@ def _validate_runtime_monitor_snapshot(monitor: RuntimeMonitorSnapshot) -> None:
         raise PaperShadowSessionCorruptError("runtime monitor status does not match checks")
 
 
+def _validate_guardrail_snapshot(guardrail: GuardrailSnapshot) -> None:
+    if not isinstance(guardrail, GuardrailSnapshot):
+        raise PaperShadowSessionCorruptError("guardrail snapshot must be a GuardrailSnapshot")
+    if not isinstance(guardrail.primary_action, GuardrailAction):
+        raise PaperShadowSessionCorruptError("guardrail primary_action must be a GuardrailAction")
+    if not guardrail.actions:
+        raise PaperShadowSessionCorruptError("guardrail actions cannot be empty")
+    if guardrail.actions != _sorted_unique_actions(guardrail.actions):
+        raise PaperShadowSessionCorruptError("guardrail actions must be sorted unique")
+    if guardrail.primary_action != _primary_guardrail_action(guardrail.actions):
+        raise PaperShadowSessionCorruptError("guardrail primary_action does not match actions")
+    if guardrail.reason_codes != _sorted_unique(guardrail.reason_codes):
+        raise PaperShadowSessionCorruptError("guardrail reason codes must be sorted unique")
+    if not isinstance(guardrail.monitor_status, RuntimeMonitorStatus):
+        raise PaperShadowSessionCorruptError("guardrail monitor_status must be a RuntimeMonitorStatus")
+    if guardrail.block_finalize != (GuardrailAction.BLOCK_FINALIZE in guardrail.actions):
+        raise PaperShadowSessionCorruptError("guardrail block_finalize flag does not match actions")
+    if guardrail.should_pause_session != (GuardrailAction.PAUSE_SESSION in guardrail.actions):
+        raise PaperShadowSessionCorruptError("guardrail pause flag does not match actions")
+    if guardrail.should_stop_session != (GuardrailAction.STOP_SESSION in guardrail.actions):
+        raise PaperShadowSessionCorruptError("guardrail stop flag does not match actions")
+    _require_bool(guardrail.paper_only, "paper_only")
+    _require_bool(guardrail.real_orders_enabled, "real_orders_enabled")
+    _require_bool(guardrail.real_money_enabled, "real_money_enabled")
+    if GuardrailAction.NONE in guardrail.actions and guardrail.actions != (GuardrailAction.NONE,):
+        raise PaperShadowSessionCorruptError("guardrail NONE action cannot be combined with other actions")
+    if guardrail.actions == (GuardrailAction.NONE,) and guardrail.reason_codes:
+        raise PaperShadowSessionCorruptError("guardrail NONE action cannot carry reason codes")
+    if (not guardrail.paper_only or guardrail.real_orders_enabled or guardrail.real_money_enabled) and (
+        GuardrailAction.STOP_SESSION not in guardrail.actions or GuardrailAction.BLOCK_FINALIZE not in guardrail.actions
+    ):
+        raise PaperShadowSessionCorruptError("guardrail unsafe real-trading flags require stop and block actions")
+    if guardrail.monitor_status != RuntimeMonitorStatus.HEALTHY and GuardrailAction.NONE in guardrail.actions:
+        raise PaperShadowSessionCorruptError("guardrail cannot be NONE with unhealthy monitor")
+
+
 def _runtime_monitor_reason_codes(
     *,
     has_events: bool,
@@ -1070,6 +1334,47 @@ def _runtime_monitor_status_from_value(value: object) -> RuntimeMonitorStatus:
         return RuntimeMonitorStatus(_require_non_empty_str(value, "status"))
     except ValueError as exc:
         raise PaperShadowSessionCorruptError(f"Invalid runtime monitor status: {value!r}") from exc
+
+
+def _guardrail_action_from_value(value: object) -> GuardrailAction:
+    if isinstance(value, GuardrailAction):
+        return value
+    try:
+        return GuardrailAction(_require_non_empty_str(value, "guardrail_action"))
+    except ValueError as exc:
+        raise PaperShadowSessionCorruptError(f"Invalid guardrail action: {value!r}") from exc
+
+
+def _guardrail_actions_from_data(value: object) -> tuple[GuardrailAction, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("guardrail actions must be a list/tuple")
+    return _sorted_unique_actions(tuple(_guardrail_action_from_value(item) for item in value))
+
+
+def _sorted_unique_actions(actions: tuple[GuardrailAction, ...] | list[GuardrailAction]) -> tuple[GuardrailAction, ...]:
+    if not isinstance(actions, (list, tuple)):
+        raise PaperShadowSessionCorruptError("guardrail actions must be a list/tuple")
+    seen: list[GuardrailAction] = []
+    for action in actions:
+        if not isinstance(action, GuardrailAction):
+            raise PaperShadowSessionCorruptError("guardrail actions must be GuardrailAction values")
+        if action not in seen:
+            seen.append(action)
+    order = {
+        GuardrailAction.STOP_SESSION: 0,
+        GuardrailAction.PAUSE_SESSION: 1,
+        GuardrailAction.BLOCK_FINALIZE: 2,
+        GuardrailAction.WARN: 3,
+        GuardrailAction.NONE: 4,
+    }
+    return tuple(sorted(seen, key=lambda item: order[item]))
+
+
+def _primary_guardrail_action(actions: tuple[GuardrailAction, ...]) -> GuardrailAction:
+    ordered = _sorted_unique_actions(actions)
+    if not ordered:
+        raise PaperShadowSessionCorruptError("guardrail actions cannot be empty")
+    return ordered[0]
 
 
 def _market_event_batch_id(events: tuple[MarketEvent, ...]) -> str:
