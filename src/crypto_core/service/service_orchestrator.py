@@ -60,6 +60,9 @@ from crypto_core.service.artifact_export import (
     export_paper_shadow_activation_plan as export_paper_shadow_plan,
 )
 from crypto_core.service.artifact_export import (
+    export_paper_shadow_session_snapshot as export_paper_shadow_session,
+)
+from crypto_core.service.artifact_export import (
     export_sleeve_admission_release_pack as export_admission_release_pack,
 )
 from crypto_core.service.artifact_export import (
@@ -67,6 +70,9 @@ from crypto_core.service.artifact_export import (
 )
 from crypto_core.service.artifact_export import (
     load_paper_shadow_activation_plan as load_paper_shadow_plan,
+)
+from crypto_core.service.artifact_export import (
+    load_paper_shadow_session_snapshot as load_paper_shadow_session,
 )
 from crypto_core.service.artifact_export import (
     load_sleeve_admission_release_pack as load_admission_release_pack,
@@ -108,6 +114,11 @@ from crypto_core.service.external_regime import (
 )
 from crypto_core.service.models import ServiceStatus
 from crypto_core.service.paper_live_service import PaperLiveService
+from crypto_core.service.paper_shadow_session_controller import (
+    PaperShadowSessionController,
+    PaperShadowSessionSnapshot,
+    paper_shadow_session_snapshot_to_dict,
+)
 from crypto_core.service.promotion_review import PromotionThresholds
 from crypto_core.service.promotion_review_controller import (
     CurrentReviewSnapshot,
@@ -318,6 +329,26 @@ class PaperShadowActivationPlanState:
 
 
 @dataclass(frozen=True)
+class PaperShadowSessionState:
+    """Compact paper/shadow session lifecycle status for operator snapshots."""
+
+    available: bool
+    session_id: str | None
+    status: str
+    plan_id: str | None
+    plan_status: str
+    tick_count: int
+    paper_only: bool
+    real_orders_enabled: bool
+    real_money_enabled: bool
+    active_sleeves_seen: int
+    blockers_seen: int
+    started_at_ns: int | None
+    stopped_at_ns: int | None
+    finalized_at_ns: int | None
+
+
+@dataclass(frozen=True)
 class EvidenceSufficiencyState:
     """Evidence sufficiency summary for operator truthfulness.
 
@@ -417,6 +448,9 @@ class OperatorSnapshot:
     # Phase 15L: Paper/shadow activation plan compact status
     paper_shadow_activation_plan: PaperShadowActivationPlanState | None = None
 
+    # Phase 15M: Paper/shadow session lifecycle compact status
+    paper_shadow_session: PaperShadowSessionState | None = None
+
     # Escalation review workflow (Phase 13B)
     escalation_review: EscalationWorkflowState | None = None
 
@@ -503,6 +537,7 @@ class ServiceOrchestrator:
         self._sleeve_candidate_workflow_controller: SleeveCandidateWorkflowController | None = None
         self._sleeve_promotion_review_controller: SleevePromotionReviewController | None = None
         self._sleeve_admission_controller: SleeveAdmissionController | None = None
+        self._paper_shadow_session_controller: PaperShadowSessionController | None = None
         self._configured_sleeves = tuple(sleeves)
         self._escalation_review: EscalationReviewController | None = None
         self._sleeve_allocation_policy = (
@@ -745,6 +780,98 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for paper/shadow activation plan load")
         return load_paper_shadow_plan(evidence_store=self._evidence_store)
+
+    def prepare_paper_shadow_session(
+        self,
+        *,
+        plan: PaperShadowActivationPlan | None = None,
+        manifest: ManagedSleeveSetManifest | None = None,
+        release_pack: SleeveAdmissionReleasePack | None = None,
+        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
+    ) -> PaperShadowSessionSnapshot:
+        """Prepare a paper/shadow session from the activation plan contract."""
+        source_plan = (
+            plan
+            if plan is not None
+            else self.paper_shadow_activation_plan(
+                manifest=manifest,
+                release_pack=release_pack,
+                portfolio_snapshot=portfolio_snapshot,
+            )
+        )
+        return self._ensure_paper_shadow_session_controller().prepare(source_plan)
+
+    def start_paper_shadow_session(self) -> PaperShadowSessionSnapshot:
+        """Start the prepared paper/shadow session lifecycle."""
+        return self._ensure_paper_shadow_session_controller().start()
+
+    def record_paper_shadow_session_tick(
+        self,
+        *,
+        active_sleeves_seen: tuple[str, ...] = (),
+        blockers_seen: tuple[str, ...] = (),
+    ) -> PaperShadowSessionSnapshot:
+        """Record deterministic paper/shadow tick evidence without execution wiring."""
+        return self._ensure_paper_shadow_session_controller().record_tick(
+            active_sleeves_seen=active_sleeves_seen,
+            blockers_seen=blockers_seen,
+        )
+
+    def stop_paper_shadow_session(
+        self,
+        *,
+        blockers_seen: tuple[str, ...] = (),
+    ) -> PaperShadowSessionSnapshot:
+        """Stop the running paper/shadow session lifecycle."""
+        return self._ensure_paper_shadow_session_controller().stop(blockers_seen=blockers_seen)
+
+    def finalize_paper_shadow_session(self) -> PaperShadowSessionSnapshot:
+        """Finalize the stopped paper/shadow session lifecycle report."""
+        return self._ensure_paper_shadow_session_controller().finalize()
+
+    def reset_paper_shadow_session(self) -> PaperShadowSessionSnapshot:
+        """Reset the paper/shadow session lifecycle to an unprepared safe state."""
+        return self._ensure_paper_shadow_session_controller().reset()
+
+    def restore_paper_shadow_session(
+        self,
+        snapshot: PaperShadowSessionSnapshot | dict,
+    ) -> PaperShadowSessionSnapshot:
+        """Restore paper/shadow session lifecycle state from an explicit snapshot."""
+        return self._ensure_paper_shadow_session_controller().restore(snapshot)
+
+    def paper_shadow_session_snapshot(self) -> PaperShadowSessionSnapshot:
+        """Return the current paper/shadow session lifecycle snapshot."""
+        return self._ensure_paper_shadow_session_controller().snapshot()
+
+    def paper_shadow_session_report(self) -> PaperShadowSessionSnapshot:
+        """Return the current paper/shadow session lifecycle report."""
+        return self._ensure_paper_shadow_session_controller().report()
+
+    def paper_shadow_session_snapshot_dict(self) -> dict:
+        """Serialize the current paper/shadow session lifecycle snapshot."""
+        return paper_shadow_session_snapshot_to_dict(self.paper_shadow_session_snapshot())
+
+    def paper_shadow_session_report_dict(self) -> dict:
+        """Serialize the current paper/shadow session lifecycle report."""
+        return paper_shadow_session_snapshot_to_dict(self.paper_shadow_session_report())
+
+    def export_paper_shadow_session_snapshot(self):
+        """Persist the current paper/shadow session snapshot via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper/shadow session export")
+        return export_paper_shadow_session(
+            snapshot=self.paper_shadow_session_snapshot(),
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_shadow_session_snapshot(self) -> PaperShadowSessionSnapshot:
+        """Load and restore the latest persisted paper/shadow session snapshot."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper/shadow session load")
+        snapshot = load_paper_shadow_session(evidence_store=self._evidence_store)
+        self.restore_paper_shadow_session(snapshot)
+        return snapshot
 
     # ------------------------------------------------------------------
     # Properties
@@ -1527,6 +1654,11 @@ class ServiceOrchestrator:
         paper_shadow_activation_plan = paper_shadow_activation_plan_state_from_plan(
             build_paper_shadow_activation_plan(managed_sleeve_manifest_artifact)
         )
+        paper_shadow_session = (
+            paper_shadow_session_state_from_snapshot(self._paper_shadow_session_controller.snapshot())
+            if self._paper_shadow_session_controller is not None
+            else None
+        )
         return OperatorSnapshot(
             service_mode=ss.service_mode,
             trading_enabled=ss.trading_enabled,
@@ -1544,6 +1676,7 @@ class ServiceOrchestrator:
             sleeve_admission_release=sleeve_admission_release,
             managed_sleeve_manifest=managed_sleeve_manifest,
             paper_shadow_activation_plan=paper_shadow_activation_plan,
+            paper_shadow_session=paper_shadow_session,
             readiness_level=self._readiness_level,
             readiness_is_supportive=readiness_is_supportive,
             evidence=evidence,
@@ -2434,6 +2567,13 @@ class ServiceOrchestrator:
             )
         return self._sleeve_candidate_workflow_controller
 
+    def _ensure_paper_shadow_session_controller(self) -> PaperShadowSessionController:
+        if self._paper_shadow_session_controller is None:
+            self._paper_shadow_session_controller = PaperShadowSessionController(
+                clock_ns=self._sleeve_workflow_clock_ns,
+            )
+        return self._paper_shadow_session_controller
+
     def _current_escalation_allowed_next_step(self) -> str | None:
         """Best current escalation hook for sleeve governance surfaces."""
         if self._escalation_review is not None:
@@ -3105,6 +3245,46 @@ def paper_shadow_activation_plan_state_to_dict(state: PaperShadowActivationPlanS
     }
 
 
+def paper_shadow_session_state_from_snapshot(snapshot: PaperShadowSessionSnapshot) -> PaperShadowSessionState:
+    """Build compact operator snapshot state from a paper/shadow session snapshot."""
+    return PaperShadowSessionState(
+        available=True,
+        session_id=snapshot.session_id,
+        status=snapshot.status.value,
+        plan_id=snapshot.plan_id,
+        plan_status=snapshot.plan_status,
+        tick_count=snapshot.tick_count,
+        paper_only=snapshot.paper_only,
+        real_orders_enabled=snapshot.real_orders_enabled,
+        real_money_enabled=snapshot.real_money_enabled,
+        active_sleeves_seen=len(snapshot.active_sleeves_seen),
+        blockers_seen=len(snapshot.blockers_seen),
+        started_at_ns=snapshot.started_at_ns,
+        stopped_at_ns=snapshot.stopped_at_ns,
+        finalized_at_ns=snapshot.finalized_at_ns,
+    )
+
+
+def paper_shadow_session_state_to_dict(state: PaperShadowSessionState) -> dict:
+    """Serialize compact paper/shadow session state to a plain dict."""
+    return {
+        "available": state.available,
+        "session_id": state.session_id,
+        "status": state.status,
+        "plan_id": state.plan_id,
+        "plan_status": state.plan_status,
+        "tick_count": state.tick_count,
+        "paper_only": state.paper_only,
+        "real_orders_enabled": state.real_orders_enabled,
+        "real_money_enabled": state.real_money_enabled,
+        "active_sleeves_seen": state.active_sleeves_seen,
+        "blockers_seen": state.blockers_seen,
+        "started_at_ns": state.started_at_ns,
+        "stopped_at_ns": state.stopped_at_ns,
+        "finalized_at_ns": state.finalized_at_ns,
+    }
+
+
 def evidence_sufficiency_state_to_dict(state: EvidenceSufficiencyState) -> dict:
     """Serialize EvidenceSufficiencyState to a plain dict."""
     return {
@@ -3185,6 +3365,12 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         "paper_shadow_activation_plan": (
             paper_shadow_activation_plan_state_to_dict(snap.paper_shadow_activation_plan)
             if snap.paper_shadow_activation_plan is not None
+            else None
+        ),
+        # Phase 15M
+        "paper_shadow_session": (
+            paper_shadow_session_state_to_dict(snap.paper_shadow_session)
+            if snap.paper_shadow_session is not None
             else None
         ),
         "readiness_level": snap.readiness_level,

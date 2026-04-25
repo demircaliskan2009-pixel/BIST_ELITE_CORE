@@ -31,6 +31,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from crypto_core.service.evidence_store import EvidenceStore, WriteResult
+from crypto_core.service.paper_shadow_session_controller import (
+    PaperShadowSessionCorruptError,
+    PaperShadowSessionSnapshot,
+    paper_shadow_session_snapshot_from_dict,
+    paper_shadow_session_snapshot_to_dict,
+)
 from crypto_core.service.sleeve_admission_controller import (
     ManagedSleeveSetManifest,
     PaperShadowActivationPlan,
@@ -502,6 +508,7 @@ _SLEEVE_PORTFOLIO_SNAPSHOT_NAME = "crypto_sleeve_portfolio"
 _SLEEVE_ADMISSION_RELEASE_PACK_SNAPSHOT_NAME = "crypto_sleeve_admission_release_pack"
 _MANAGED_SLEEVE_SET_MANIFEST_SNAPSHOT_NAME = "crypto_managed_sleeve_set_manifest"
 _PAPER_SHADOW_ACTIVATION_PLAN_SNAPSHOT_NAME = "crypto_paper_shadow_activation_plan"
+_PAPER_SHADOW_SESSION_SNAPSHOT_NAME = "crypto_paper_shadow_session"
 
 
 def export_run_artifact(
@@ -689,3 +696,28 @@ def load_paper_shadow_activation_plan(*, evidence_store: EvidenceStore) -> Paper
             f"Paper/shadow activation plan 'data' must be a dict, got {type(data).__name__!r}"
         )
     return paper_shadow_activation_plan_from_dict(data)
+
+
+def export_paper_shadow_session_snapshot(
+    *,
+    snapshot: PaperShadowSessionSnapshot,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist the latest paper/shadow session lifecycle snapshot."""
+    data = paper_shadow_session_snapshot_to_dict(snapshot)
+    result = evidence_store.save_snapshot(_PAPER_SHADOW_SESSION_SNAPSHOT_NAME, data)
+    if not result.success:
+        return result
+    evidence_store.append_evidence(_PAPER_SHADOW_SESSION_SNAPSHOT_NAME, data)
+    return result
+
+
+def load_paper_shadow_session_snapshot(*, evidence_store: EvidenceStore) -> PaperShadowSessionSnapshot:
+    """Load the latest persisted paper/shadow session lifecycle snapshot."""
+    envelope = evidence_store.load_snapshot(_PAPER_SHADOW_SESSION_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper/shadow session snapshot 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return paper_shadow_session_snapshot_from_dict(data)

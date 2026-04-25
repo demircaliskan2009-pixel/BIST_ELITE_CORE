@@ -9,9 +9,11 @@ import pytest
 from crypto_core.service.artifact_export import (
     export_managed_sleeve_set_manifest,
     export_paper_shadow_activation_plan,
+    export_paper_shadow_session_snapshot,
     export_sleeve_admission_release_pack,
     load_managed_sleeve_set_manifest,
     load_paper_shadow_activation_plan,
+    load_paper_shadow_session_snapshot,
     load_sleeve_admission_release_pack,
 )
 from crypto_core.service.campaign import (
@@ -25,6 +27,13 @@ from crypto_core.service.campaign import (
 from crypto_core.service.campaign_controller import campaign_readiness_flags
 from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreConfig
 from crypto_core.service.models import QueuePressure, QueueSnapshot, ServiceStatus, WatchdogStatus
+from crypto_core.service.paper_shadow_session_controller import (
+    PaperShadowSessionController,
+    PaperShadowSessionCorruptError,
+    PaperShadowSessionStatus,
+    paper_shadow_session_snapshot_from_dict,
+    paper_shadow_session_snapshot_to_dict,
+)
 from crypto_core.service.service_orchestrator import ServiceOrchestrator, operator_snapshot_to_dict
 from crypto_core.service.sleeve_admission_controller import (
     ManagedSleeveSetDryRunStatus,
@@ -391,6 +400,12 @@ def _ready_release_pack(
         readiness_flags=campaign_readiness_flags(report),
     )
     return pack, portfolio
+
+
+def _ready_activation_plan(*sleeves: CryptoSleeveState):
+    pack, _ = _ready_release_pack(*sleeves)
+    manifest = build_managed_sleeve_set_manifest(pack)
+    return build_paper_shadow_activation_plan(manifest)
 
 
 def _mock_service() -> MagicMock:
@@ -1465,3 +1480,143 @@ def test_paper_shadow_activation_plan_deterministic_replay() -> None:
 
     assert first == second
     assert first["source_manifest_hash"] == second["source_manifest_hash"]
+
+
+def test_paper_shadow_session_controller_lifecycle_happy_path() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3, _T0_NS + 4, _T0_NS + 5))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    prepared = controller.prepare(plan)
+    running = controller.start()
+    ticked = controller.record_tick(active_sleeves_seen=("active",))
+    stopped = controller.stop()
+    finalized = controller.finalize()
+    rendered = paper_shadow_session_snapshot_to_dict(finalized)
+
+    assert prepared.status == PaperShadowSessionStatus.READY
+    assert running.status == PaperShadowSessionStatus.RUNNING
+    assert ticked.tick_count == 1
+    assert ticked.active_sleeves_seen == ("active",)
+    assert stopped.status == PaperShadowSessionStatus.STOPPED
+    assert finalized.status == PaperShadowSessionStatus.FINALIZED
+    assert finalized.started_at_ns == _T0_NS + 2
+    assert finalized.stopped_at_ns == _T0_NS + 4
+    assert finalized.finalized_at_ns == _T0_NS + 5
+    assert rendered["paper_only"] is True
+    assert rendered["real_orders_enabled"] is False
+    assert rendered["real_money_enabled"] is False
+
+
+def test_paper_shadow_session_blocked_plan_cannot_start() -> None:
+    manifest = build_managed_sleeve_set_manifest(
+        build_sleeve_admission_release_pack(SleeveAdmissionController().snapshot())
+    )
+    plan = build_paper_shadow_activation_plan(manifest)
+    controller = PaperShadowSessionController(clock_ns=lambda: _T0_NS + 10)
+
+    prepared = controller.prepare(plan)
+
+    assert prepared.status == PaperShadowSessionStatus.BLOCKED
+    assert "source_manifest_empty" in prepared.blockers_seen
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.start()
+
+
+def test_paper_shadow_session_tick_and_finalize_fail_closed_before_valid_state() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    controller = PaperShadowSessionController(clock_ns=lambda: _T0_NS + 20)
+
+    controller.prepare(plan)
+
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.record_tick(active_sleeves_seen=("active",))
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.finalize()
+
+    running = controller.start()
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.record_tick(active_sleeves_seen=("not-admitted",))
+    assert controller.snapshot() == running
+
+
+def test_paper_shadow_session_deterministic_fixed_clock_replay() -> None:
+    plan = _ready_activation_plan(_sleeve("stable", effective_allocation=0.15, target_allocation=0.15))
+
+    def run_once() -> dict:
+        times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3, _T0_NS + 4, _T0_NS + 5))
+        controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+        controller.prepare(plan)
+        controller.start()
+        controller.record_tick(active_sleeves_seen=("stable",))
+        controller.stop()
+        return paper_shadow_session_snapshot_to_dict(controller.finalize())
+
+    assert run_once() == run_once()
+
+
+def test_paper_shadow_session_restore_roundtrip_and_malformed_fail_closed(tmp_path) -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3, _T0_NS + 4, _T0_NS + 5))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    controller.record_tick(active_sleeves_seen=("active",))
+    controller.stop()
+    snapshot = controller.finalize()
+    payload = paper_shadow_session_snapshot_to_dict(snapshot)
+
+    restored = paper_shadow_session_snapshot_from_dict(payload)
+    assert restored == snapshot
+
+    legacy = paper_shadow_session_snapshot_from_dict({"session_id": "legacy-session", "status": "created"})
+    assert legacy.status == PaperShadowSessionStatus.CREATED
+    assert legacy.paper_only is True
+    assert legacy.real_orders_enabled is False
+    assert legacy.real_money_enabled is False
+
+    malformed = dict(payload)
+    malformed["real_money_enabled"] = True
+    with pytest.raises(PaperShadowSessionCorruptError):
+        paper_shadow_session_snapshot_from_dict(malformed)
+
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    export_paper_shadow_session_snapshot(snapshot=snapshot, evidence_store=store)
+    assert load_paper_shadow_session_snapshot(evidence_store=store) == snapshot
+
+    store.save_snapshot("crypto_paper_shadow_session", ["bad"])
+    with pytest.raises(PaperShadowSessionCorruptError):
+        load_paper_shadow_session_snapshot(evidence_store=store)
+
+
+def test_service_orchestrator_paper_shadow_session_helpers_and_operator_status(tmp_path) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 10, _T0_NS + 11, _T0_NS + 12, _T0_NS + 13, _T0_NS + 14))
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        evidence_store=store,
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: next(times),
+    )
+
+    prepared = orch.prepare_paper_shadow_session(plan=plan)
+    orch.start_paper_shadow_session()
+    orch.record_paper_shadow_session_tick(active_sleeves_seen=("svc-active",))
+    orch.stop_paper_shadow_session()
+    finalized = orch.finalize_paper_shadow_session()
+    rendered = orch.paper_shadow_session_snapshot_dict()
+    operator = operator_snapshot_to_dict(orch.operator_snapshot())
+
+    assert prepared.status == PaperShadowSessionStatus.READY
+    assert finalized.status == PaperShadowSessionStatus.FINALIZED
+    assert rendered["tick_count"] == 1
+    assert rendered["real_orders_enabled"] is False
+    assert rendered["real_money_enabled"] is False
+    assert operator["paper_shadow_session"]["available"] is True
+    assert operator["paper_shadow_session"]["status"] == "finalized"
+    assert operator["paper_shadow_session"]["real_orders_enabled"] is False
+    assert operator["paper_shadow_session"]["real_money_enabled"] is False
+
+    orch.export_paper_shadow_session_snapshot()
+    assert orch.load_paper_shadow_session_snapshot() == finalized
