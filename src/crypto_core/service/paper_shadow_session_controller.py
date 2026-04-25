@@ -68,6 +68,11 @@ class PaperDataSourceType(str, Enum):
     IN_MEMORY = "in_memory"
 
 
+class PaperIntentSide(str, Enum):
+    BUY = "buy"
+    SELL = "sell"
+
+
 class PaperShadowRunEvidenceStatus(str, Enum):
     PASS = "pass"  # noqa: S105 - run evidence outcome, not a credential.
     WARN = "warn"
@@ -140,6 +145,51 @@ class PaperDataSourceBatchResult:
     batch: MarketEventBatch
     rejected_record_ids: tuple[str, ...] = ()
     operator_summary: str = "Paper data source batch has not been built."
+
+
+@dataclass(frozen=True)
+class PaperIntent:
+    sleeve_id: str
+    symbol: str
+    venue: str
+    side: PaperIntentSide
+    intent_ts_ns: int
+    reason: str
+    source: str
+    qty: float | None = None
+    notional: float | None = None
+
+
+@dataclass(frozen=True)
+class PaperIntentBatch:
+    batch_id: str
+    intents: tuple[PaperIntent, ...]
+
+
+@dataclass(frozen=True)
+class PaperIntentValidationResult:
+    intent: PaperIntent
+    accepted: bool
+    rejection_reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PaperIntentBatchResult:
+    batch_id: str
+    session_id: str
+    as_of_ns: int
+    results: tuple[PaperIntentValidationResult, ...]
+    intents_seen: int
+    accepted_count: int
+    rejected_count: int
+    sleeves_seen: tuple[str, ...] = ()
+    symbols_seen: tuple[str, ...] = ()
+    venues_seen: tuple[str, ...] = ()
+    rejection_reasons: tuple[str, ...] = ()
+    paper_only: bool = True
+    real_orders_enabled: bool = False
+    real_money_enabled: bool = False
+    operator_summary: str = "Paper intent batch has not been validated."
 
 
 @dataclass(frozen=True)
@@ -276,6 +326,13 @@ class PaperShadowSessionSnapshot:
     market_event_cursors: tuple[MarketEventCursor, ...] = ()
     runtime_monitor: RuntimeMonitorSnapshot = field(default_factory=RuntimeMonitorSnapshot)
     guardrail: GuardrailSnapshot = field(default_factory=GuardrailSnapshot)
+    intents_seen: int = 0
+    accepted_intent_count: int = 0
+    rejected_intent_count: int = 0
+    intent_sleeves_seen: tuple[str, ...] = ()
+    intent_symbols_seen: tuple[str, ...] = ()
+    intent_venues_seen: tuple[str, ...] = ()
+    intent_rejection_reasons: tuple[str, ...] = ()
     paper_only: bool = True
     real_orders_enabled: bool = False
     real_money_enabled: bool = False
@@ -519,6 +576,57 @@ class PaperShadowSessionController:
 
     def tick_from_market_events(self, batch: MarketEventBatch | dict) -> PaperShadowSessionSnapshot:
         return self.record_market_event_batch(batch)
+
+    def record_paper_intent_batch(
+        self,
+        batch: PaperIntentBatch | dict | tuple[PaperIntent, ...],
+    ) -> PaperIntentBatchResult:
+        normalized = _coerce_paper_intent_batch(batch)
+        now = self._now_ns()
+        results = tuple(
+            PaperIntentValidationResult(
+                intent=intent,
+                accepted=not (reasons := _paper_intent_rejection_reasons(self._snapshot, intent)),
+                rejection_reasons=reasons,
+            )
+            for intent in normalized.intents
+        )
+        result = PaperIntentBatchResult(
+            batch_id=normalized.batch_id,
+            session_id=self._snapshot.session_id,
+            as_of_ns=now,
+            results=results,
+            intents_seen=len(results),
+            accepted_count=sum(1 for item in results if item.accepted),
+            rejected_count=sum(1 for item in results if not item.accepted),
+            sleeves_seen=_sorted_unique(tuple(item.intent.sleeve_id for item in results)),
+            symbols_seen=_sorted_unique(tuple(item.intent.symbol for item in results)),
+            venues_seen=_sorted_unique(tuple(item.intent.venue for item in results)),
+            rejection_reasons=_sorted_unique(tuple(reason for item in results for reason in item.rejection_reasons)),
+            paper_only=True,
+            real_orders_enabled=False,
+            real_money_enabled=False,
+            operator_summary=_paper_intent_batch_summary(normalized.batch_id, results),
+        )
+        _validate_paper_intent_batch_result(result)
+        snapshot = replace(
+            self._snapshot,
+            as_of_ns=now,
+            intents_seen=self._snapshot.intents_seen + result.intents_seen,
+            accepted_intent_count=self._snapshot.accepted_intent_count + result.accepted_count,
+            rejected_intent_count=self._snapshot.rejected_intent_count + result.rejected_count,
+            intent_sleeves_seen=_sorted_unique((*self._snapshot.intent_sleeves_seen, *result.sleeves_seen)),
+            intent_symbols_seen=_sorted_unique((*self._snapshot.intent_symbols_seen, *result.symbols_seen)),
+            intent_venues_seen=_sorted_unique((*self._snapshot.intent_venues_seen, *result.venues_seen)),
+            intent_rejection_reasons=_sorted_unique(
+                (*self._snapshot.intent_rejection_reasons, *result.rejection_reasons)
+            ),
+            paper_only=True,
+            real_orders_enabled=False,
+            real_money_enabled=False,
+        )
+        self._apply_snapshot(snapshot)
+        return result
 
     def replay_feed(self, plan: FeedReplayPlan | dict | tuple[MarketEventBatch, ...]) -> FeedReplayResult:
         if self._snapshot.status != PaperShadowSessionStatus.RUNNING:
@@ -771,6 +879,13 @@ def paper_shadow_session_snapshot_to_dict(snapshot: PaperShadowSessionSnapshot) 
         "market_event_cursors": [market_event_cursor_to_dict(cursor) for cursor in snapshot.market_event_cursors],
         "runtime_monitor": runtime_monitor_snapshot_to_dict(snapshot.runtime_monitor),
         "guardrail": guardrail_snapshot_to_dict(snapshot.guardrail),
+        "intents_seen": snapshot.intents_seen,
+        "accepted_intent_count": snapshot.accepted_intent_count,
+        "rejected_intent_count": snapshot.rejected_intent_count,
+        "intent_sleeves_seen": list(snapshot.intent_sleeves_seen),
+        "intent_symbols_seen": list(snapshot.intent_symbols_seen),
+        "intent_venues_seen": list(snapshot.intent_venues_seen),
+        "intent_rejection_reasons": list(snapshot.intent_rejection_reasons),
         "paper_only": snapshot.paper_only,
         "real_orders_enabled": snapshot.real_orders_enabled,
         "real_money_enabled": snapshot.real_money_enabled,
@@ -846,6 +961,19 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
         market_event_cursors=_market_event_cursors_from_data(data.get("market_event_cursors", ())),
         runtime_monitor=runtime_monitor,
         guardrail=guardrail,
+        intents_seen=_require_non_negative_int(data.get("intents_seen", 0), "intents_seen"),
+        accepted_intent_count=_require_non_negative_int(
+            data.get("accepted_intent_count", 0),
+            "accepted_intent_count",
+        ),
+        rejected_intent_count=_require_non_negative_int(
+            data.get("rejected_intent_count", 0),
+            "rejected_intent_count",
+        ),
+        intent_sleeves_seen=_sorted_unique(data.get("intent_sleeves_seen", ())),
+        intent_symbols_seen=_sorted_unique(data.get("intent_symbols_seen", ())),
+        intent_venues_seen=_sorted_unique(data.get("intent_venues_seen", ())),
+        intent_rejection_reasons=_sorted_unique(data.get("intent_rejection_reasons", ())),
         paper_only=paper_only,
         real_orders_enabled=real_orders_enabled,
         real_money_enabled=real_money_enabled,
@@ -1145,6 +1273,147 @@ def paper_data_source_batch_result_from_dict(data: dict) -> PaperDataSourceBatch
         operator_summary=_require_non_empty_str(data.get("operator_summary"), "operator_summary"),
     )
     _validate_paper_data_source_batch_result(result)
+    return result
+
+
+def build_paper_intent_batch(
+    intents: tuple[PaperIntent | dict, ...],
+    *,
+    batch_id: str | None = None,
+) -> PaperIntentBatch:
+    if not isinstance(intents, tuple):
+        raise PaperShadowSessionCorruptError("paper intent batch intents must be a tuple")
+    resolved = tuple(paper_intent_from_dict(item) if isinstance(item, dict) else item for item in intents)
+    batch = PaperIntentBatch(
+        batch_id=_string_or_default(batch_id, _paper_intent_batch_id(resolved)),
+        intents=tuple(sorted(resolved, key=_paper_intent_sort_key)),
+    )
+    _validate_paper_intent_batch(batch)
+    return batch
+
+
+def paper_intent_to_dict(intent: PaperIntent) -> dict:
+    _validate_paper_intent_shape(intent)
+    return {
+        "sleeve_id": intent.sleeve_id,
+        "symbol": intent.symbol,
+        "venue": intent.venue,
+        "side": intent.side.value,
+        "qty": intent.qty,
+        "notional": intent.notional,
+        "intent_ts_ns": intent.intent_ts_ns,
+        "reason": intent.reason,
+        "source": intent.source,
+    }
+
+
+def paper_intent_from_dict(data: dict) -> PaperIntent:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper intent must be a dict, got {type(data).__name__!r}")
+    intent = PaperIntent(
+        sleeve_id=_require_non_empty_str(data.get("sleeve_id"), "sleeve_id"),
+        symbol=_require_non_empty_str(data.get("symbol"), "symbol"),
+        venue=_require_non_empty_str(data.get("venue"), "venue"),
+        side=_paper_intent_side_from_value(data.get("side")),
+        qty=_optional_float(data.get("qty"), "qty"),
+        notional=_optional_float(data.get("notional"), "notional"),
+        intent_ts_ns=_require_non_negative_int(data.get("intent_ts_ns"), "intent_ts_ns"),
+        reason=_require_non_empty_str(data.get("reason"), "reason"),
+        source=_require_non_empty_str(data.get("source"), "source"),
+    )
+    _validate_paper_intent_shape(intent)
+    return intent
+
+
+def paper_intent_batch_to_dict(batch: PaperIntentBatch) -> dict:
+    normalized = build_paper_intent_batch(batch.intents, batch_id=batch.batch_id)
+    return {
+        "batch_id": normalized.batch_id,
+        "intents": [paper_intent_to_dict(intent) for intent in normalized.intents],
+    }
+
+
+def paper_intent_batch_from_dict(data: dict) -> PaperIntentBatch:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper intent batch must be a dict, got {type(data).__name__!r}")
+    intents_value = data.get("intents")
+    if not isinstance(intents_value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("paper intent batch field 'intents' must be a list/tuple")
+    batch_id_value = data.get("batch_id")
+    return build_paper_intent_batch(
+        tuple(_dict_value(item, "intents") for item in intents_value),
+        batch_id=None if batch_id_value is None else _require_non_empty_str(batch_id_value, "batch_id"),
+    )
+
+
+def paper_intent_validation_result_to_dict(result: PaperIntentValidationResult) -> dict:
+    _validate_paper_intent_validation_result(result)
+    return {
+        "intent": paper_intent_to_dict(result.intent),
+        "accepted": result.accepted,
+        "rejection_reasons": list(result.rejection_reasons),
+    }
+
+
+def paper_intent_validation_result_from_dict(data: dict) -> PaperIntentValidationResult:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper intent validation result must be a dict, got {type(data).__name__!r}"
+        )
+    result = PaperIntentValidationResult(
+        intent=paper_intent_from_dict(_dict_value(data.get("intent"), "intent")),
+        accepted=_bool_or_default(data, "accepted", False),
+        rejection_reasons=_sorted_unique(data.get("rejection_reasons", ())),
+    )
+    _validate_paper_intent_validation_result(result)
+    return result
+
+
+def paper_intent_batch_result_to_dict(result: PaperIntentBatchResult) -> dict:
+    _validate_paper_intent_batch_result(result)
+    return {
+        "batch_id": result.batch_id,
+        "session_id": result.session_id,
+        "as_of_ns": result.as_of_ns,
+        "results": [paper_intent_validation_result_to_dict(item) for item in result.results],
+        "intents_seen": result.intents_seen,
+        "accepted_count": result.accepted_count,
+        "rejected_count": result.rejected_count,
+        "sleeves_seen": list(result.sleeves_seen),
+        "symbols_seen": list(result.symbols_seen),
+        "venues_seen": list(result.venues_seen),
+        "rejection_reasons": list(result.rejection_reasons),
+        "paper_only": result.paper_only,
+        "real_orders_enabled": result.real_orders_enabled,
+        "real_money_enabled": result.real_money_enabled,
+        "operator_summary": result.operator_summary,
+    }
+
+
+def paper_intent_batch_result_from_dict(data: dict) -> PaperIntentBatchResult:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper intent batch result must be a dict, got {type(data).__name__!r}")
+    results_value = data.get("results")
+    if not isinstance(results_value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("paper intent batch result field 'results' must be a list/tuple")
+    result = PaperIntentBatchResult(
+        batch_id=_require_non_empty_str(data.get("batch_id"), "batch_id"),
+        session_id=_require_non_empty_str(data.get("session_id"), "session_id"),
+        as_of_ns=_require_non_negative_int(data.get("as_of_ns"), "as_of_ns"),
+        results=tuple(paper_intent_validation_result_from_dict(_dict_value(item, "results")) for item in results_value),
+        intents_seen=_require_non_negative_int(data.get("intents_seen"), "intents_seen"),
+        accepted_count=_require_non_negative_int(data.get("accepted_count"), "accepted_count"),
+        rejected_count=_require_non_negative_int(data.get("rejected_count"), "rejected_count"),
+        sleeves_seen=_sorted_unique(data.get("sleeves_seen", ())),
+        symbols_seen=_sorted_unique(data.get("symbols_seen", ())),
+        venues_seen=_sorted_unique(data.get("venues_seen", ())),
+        rejection_reasons=_sorted_unique(data.get("rejection_reasons", ())),
+        paper_only=_bool_or_default(data, "paper_only", True),
+        real_orders_enabled=_bool_or_default(data, "real_orders_enabled", False),
+        real_money_enabled=_bool_or_default(data, "real_money_enabled", False),
+        operator_summary=_require_non_empty_str(data.get("operator_summary"), "operator_summary"),
+    )
+    _validate_paper_intent_batch_result(result)
     return result
 
 
@@ -1830,6 +2099,40 @@ def _validate_activation_plan_for_session(plan: PaperShadowActivationPlan) -> No
         raise PaperShadowSessionCorruptError("paper/shadow session plan contains unsafe real-trading flags")
 
 
+def _coerce_paper_intent_batch(batch: PaperIntentBatch | dict | tuple[PaperIntent, ...]) -> PaperIntentBatch:
+    if isinstance(batch, PaperIntentBatch):
+        _validate_paper_intent_batch(batch)
+        return build_paper_intent_batch(batch.intents, batch_id=batch.batch_id)
+    if isinstance(batch, dict):
+        return paper_intent_batch_from_dict(batch)
+    if isinstance(batch, tuple):
+        return build_paper_intent_batch(batch)
+    raise PaperShadowSessionCorruptError("paper intent batch must be a PaperIntentBatch, dict, or tuple of intents")
+
+
+def _paper_intent_rejection_reasons(
+    snapshot: PaperShadowSessionSnapshot,
+    intent: PaperIntent,
+) -> tuple[str, ...]:
+    _validate_paper_intent_shape(intent)
+    reasons: list[str] = []
+    if snapshot.status != PaperShadowSessionStatus.RUNNING:
+        reasons.append("session_not_running")
+    if snapshot.guardrail.should_stop_session:
+        reasons.append("guardrail_stop_session")
+    if snapshot.guardrail.block_finalize:
+        reasons.append("guardrail_block_finalize")
+    if intent.sleeve_id not in snapshot.active_sleeves:
+        reasons.append("inactive_sleeve")
+    if not _paper_intent_has_valid_size(intent):
+        reasons.append("invalid_intent_size")
+    if snapshot.symbols_seen and intent.symbol not in snapshot.symbols_seen:
+        reasons.append("unknown_symbol")
+    if snapshot.venues_seen and intent.venue not in snapshot.venues_seen:
+        reasons.append("unknown_venue")
+    return _sorted_unique(tuple(reasons))
+
+
 def _coerce_feed_replay_plan(plan: FeedReplayPlan | dict | tuple[MarketEventBatch, ...]) -> FeedReplayPlan:
     if isinstance(plan, FeedReplayPlan):
         _validate_feed_replay_plan_shape(plan)
@@ -1856,6 +2159,89 @@ def _validate_feed_replay_plan_shape(plan: FeedReplayPlan) -> None:
         raise PaperShadowSessionCorruptError("feed replay plan must contain at least one batch")
     if any(not isinstance(batch, MarketEventBatch) for batch in plan.batches):
         raise PaperShadowSessionCorruptError("feed replay batches must contain MarketEventBatch values")
+
+
+def _validate_paper_intent_shape(intent: PaperIntent) -> None:
+    if not isinstance(intent, PaperIntent):
+        raise PaperShadowSessionCorruptError("paper intent must be a PaperIntent")
+    _require_non_empty_str(intent.sleeve_id, "sleeve_id")
+    _require_non_empty_str(intent.symbol, "symbol")
+    _require_non_empty_str(intent.venue, "venue")
+    if not isinstance(intent.side, PaperIntentSide):
+        raise PaperShadowSessionCorruptError("paper intent side must be a PaperIntentSide")
+    _optional_float(intent.qty, "qty")
+    _optional_float(intent.notional, "notional")
+    _require_non_negative_int(intent.intent_ts_ns, "intent_ts_ns")
+    _require_non_empty_str(intent.reason, "reason")
+    _require_non_empty_str(intent.source, "source")
+
+
+def _validate_paper_intent_batch(batch: PaperIntentBatch) -> None:
+    if not isinstance(batch, PaperIntentBatch):
+        raise PaperShadowSessionCorruptError("paper intent batch must be a PaperIntentBatch")
+    _require_non_empty_str(batch.batch_id, "batch_id")
+    if not isinstance(batch.intents, tuple):
+        raise PaperShadowSessionCorruptError("paper intent batch intents must be a tuple")
+    if not batch.intents:
+        raise PaperShadowSessionCorruptError("paper intent batch must contain at least one intent")
+    for intent in batch.intents:
+        _validate_paper_intent_shape(intent)
+    if batch.intents != tuple(sorted(batch.intents, key=_paper_intent_sort_key)):
+        raise PaperShadowSessionCorruptError("paper intent batch intents must be sorted")
+
+
+def _validate_paper_intent_validation_result(result: PaperIntentValidationResult) -> None:
+    if not isinstance(result, PaperIntentValidationResult):
+        raise PaperShadowSessionCorruptError("paper intent validation result must be a PaperIntentValidationResult")
+    _validate_paper_intent_shape(result.intent)
+    _require_bool(result.accepted, "accepted")
+    if result.rejection_reasons != _sorted_unique(result.rejection_reasons):
+        raise PaperShadowSessionCorruptError("paper intent rejection reasons must be sorted unique")
+    if result.accepted and result.rejection_reasons:
+        raise PaperShadowSessionCorruptError("accepted paper intent cannot carry rejection reasons")
+    if not result.accepted and not result.rejection_reasons:
+        raise PaperShadowSessionCorruptError("rejected paper intent requires rejection reasons")
+
+
+def _validate_paper_intent_batch_result(result: PaperIntentBatchResult) -> None:
+    if not isinstance(result, PaperIntentBatchResult):
+        raise PaperShadowSessionCorruptError("paper intent batch result must be a PaperIntentBatchResult")
+    _require_non_empty_str(result.batch_id, "batch_id")
+    _require_non_empty_str(result.session_id, "session_id")
+    _require_non_negative_int(result.as_of_ns, "as_of_ns")
+    if not isinstance(result.results, tuple):
+        raise PaperShadowSessionCorruptError("paper intent batch result results must be a tuple")
+    for item in result.results:
+        _validate_paper_intent_validation_result(item)
+    _require_non_negative_int(result.intents_seen, "intents_seen")
+    _require_non_negative_int(result.accepted_count, "accepted_count")
+    _require_non_negative_int(result.rejected_count, "rejected_count")
+    if result.intents_seen != len(result.results):
+        raise PaperShadowSessionCorruptError("paper intent intents_seen must match result count")
+    if result.accepted_count != sum(1 for item in result.results if item.accepted):
+        raise PaperShadowSessionCorruptError("paper intent accepted_count does not match results")
+    if result.rejected_count != sum(1 for item in result.results if not item.accepted):
+        raise PaperShadowSessionCorruptError("paper intent rejected_count does not match results")
+    if result.accepted_count + result.rejected_count != result.intents_seen:
+        raise PaperShadowSessionCorruptError("paper intent result counts must sum to intents_seen")
+    expected_sleeves = _sorted_unique(tuple(item.intent.sleeve_id for item in result.results))
+    expected_symbols = _sorted_unique(tuple(item.intent.symbol for item in result.results))
+    expected_venues = _sorted_unique(tuple(item.intent.venue for item in result.results))
+    expected_reasons = _sorted_unique(tuple(reason for item in result.results for reason in item.rejection_reasons))
+    if result.sleeves_seen != expected_sleeves:
+        raise PaperShadowSessionCorruptError("paper intent sleeves_seen do not match results")
+    if result.symbols_seen != expected_symbols:
+        raise PaperShadowSessionCorruptError("paper intent symbols_seen do not match results")
+    if result.venues_seen != expected_venues:
+        raise PaperShadowSessionCorruptError("paper intent venues_seen do not match results")
+    if result.rejection_reasons != expected_reasons:
+        raise PaperShadowSessionCorruptError("paper intent rejection reasons do not match results")
+    _require_bool(result.paper_only, "paper_only")
+    _require_bool(result.real_orders_enabled, "real_orders_enabled")
+    _require_bool(result.real_money_enabled, "real_money_enabled")
+    if not result.paper_only or result.real_orders_enabled or result.real_money_enabled:
+        raise PaperShadowSessionCorruptError("paper intent result cannot carry unsafe real-trading flags")
+    _require_non_empty_str(result.operator_summary, "operator_summary")
 
 
 def _validate_feed_replay_plan(plan: FeedReplayPlan) -> None:
@@ -2182,6 +2568,10 @@ def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
         "activation_blockers",
         "evidence_blockers",
         "governance_blockers",
+        "intent_sleeves_seen",
+        "intent_symbols_seen",
+        "intent_venues_seen",
+        "intent_rejection_reasons",
     ):
         value = getattr(snapshot, field_name)
         if value != _sorted_unique(value):
@@ -2200,6 +2590,20 @@ def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
         raise PaperShadowSessionCorruptError("paper/shadow session event_count cannot be negative")
     if snapshot.rejected_event_count < 0:
         raise PaperShadowSessionCorruptError("paper/shadow session rejected_event_count cannot be negative")
+    _require_non_negative_int(snapshot.intents_seen, "intents_seen")
+    _require_non_negative_int(snapshot.accepted_intent_count, "accepted_intent_count")
+    _require_non_negative_int(snapshot.rejected_intent_count, "rejected_intent_count")
+    if snapshot.accepted_intent_count + snapshot.rejected_intent_count != snapshot.intents_seen:
+        raise PaperShadowSessionCorruptError("paper/shadow intent counts must sum to intents_seen")
+    if snapshot.intents_seen == 0 and (
+        snapshot.intent_sleeves_seen
+        or snapshot.intent_symbols_seen
+        or snapshot.intent_venues_seen
+        or snapshot.intent_rejection_reasons
+    ):
+        raise PaperShadowSessionCorruptError("paper/shadow session without intents cannot carry intent counters")
+    if snapshot.rejected_intent_count == 0 and snapshot.intent_rejection_reasons:
+        raise PaperShadowSessionCorruptError("paper/shadow session without rejected intents cannot carry reasons")
     if snapshot.event_count > 0:
         if snapshot.first_event_ns is None or snapshot.last_event_ns is None:
             raise PaperShadowSessionCorruptError("paper/shadow session events require first/last event timestamps")
@@ -2792,6 +3196,19 @@ def _paper_data_source_batch_id(source_id: str, venue: str, events: tuple[Market
     return f"paper-data-source-{source_id}-{venue}-{ordered[0].ts_ns}-{ordered[-1].ts_ns}-{len(ordered)}"
 
 
+def _paper_intent_batch_id(intents: tuple[PaperIntent, ...]) -> str:
+    if not intents:
+        return "paper-intent-batch-empty"
+    ordered = tuple(sorted(intents, key=_paper_intent_sort_key))
+    return f"paper-intent-batch-{ordered[0].intent_ts_ns}-{ordered[-1].intent_ts_ns}-{len(ordered)}"
+
+
+def _paper_intent_batch_summary(batch_id: str, results: tuple[PaperIntentValidationResult, ...]) -> str:
+    accepted = sum(1 for item in results if item.accepted)
+    rejected = len(results) - accepted
+    return f"paper_intent_batch={batch_id}; intents={len(results)}; accepted={accepted}; rejected={rejected}"
+
+
 def _feed_replay_plan_id(batches: tuple[MarketEventBatch, ...]) -> str:
     if not batches:
         return "feed-replay-empty"
@@ -3110,6 +3527,10 @@ def _market_event_sort_key(event: MarketEvent) -> tuple[int, str, str, str]:
     return (event.ts_ns, event.symbol, event.venue, event.event_type.value)
 
 
+def _paper_intent_sort_key(intent: PaperIntent) -> tuple[int, str, str, str, str]:
+    return (intent.intent_ts_ns, intent.sleeve_id, intent.symbol, intent.venue, intent.side.value)
+
+
 def _market_event_type_from_value(value: object) -> MarketEventType:
     if isinstance(value, MarketEventType):
         return value
@@ -3126,6 +3547,20 @@ def _paper_data_source_type_from_value(value: object) -> PaperDataSourceType:
         return PaperDataSourceType(_require_non_empty_str(value, "source_type"))
     except ValueError as exc:
         raise PaperShadowSessionCorruptError(f"Invalid paper data source_type: {value!r}") from exc
+
+
+def _paper_intent_side_from_value(value: object) -> PaperIntentSide:
+    if isinstance(value, PaperIntentSide):
+        return value
+    try:
+        return PaperIntentSide(_require_non_empty_str(value, "side"))
+    except ValueError as exc:
+        raise PaperShadowSessionCorruptError(f"Invalid paper intent side: {value!r}") from exc
+
+
+def _paper_intent_has_valid_size(intent: PaperIntent) -> bool:
+    sizes = tuple(value for value in (intent.qty, intent.notional) if value is not None)
+    return bool(sizes) and all(value >= 0.0 for value in sizes) and any(value > 0.0 for value in sizes)
 
 
 def _paper_data_source_record_to_event(record: dict, *, venue: str, as_of_ns: int) -> MarketEvent:

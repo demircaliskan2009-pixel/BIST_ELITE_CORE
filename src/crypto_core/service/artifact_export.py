@@ -37,6 +37,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     MarketEventBatch,
     MultiSourceRunEvidenceReport,
     PaperDataSourceBatchResult,
+    PaperIntentBatch,
+    PaperIntentBatchResult,
     PaperShadowEvidenceBundle,
     PaperShadowRunEvidenceReport,
     PaperShadowSessionCorruptError,
@@ -51,6 +53,10 @@ from crypto_core.service.paper_shadow_session_controller import (
     multi_source_run_evidence_report_to_dict,
     paper_data_source_batch_result_from_dict,
     paper_data_source_batch_result_to_dict,
+    paper_intent_batch_from_dict,
+    paper_intent_batch_result_from_dict,
+    paper_intent_batch_result_to_dict,
+    paper_intent_batch_to_dict,
     paper_shadow_evidence_bundle_from_dict,
     paper_shadow_evidence_bundle_to_dict,
     paper_shadow_run_evidence_report_from_dict,
@@ -534,6 +540,8 @@ _PAPER_SHADOW_MARKET_EVENT_BATCH_SNAPSHOT_NAME = "crypto_paper_shadow_market_eve
 _PAPER_SHADOW_FEED_REPLAY_PLAN_SNAPSHOT_NAME = "crypto_paper_shadow_feed_replay_plan"
 _PAPER_SHADOW_FEED_REPLAY_RESULT_SNAPSHOT_NAME = "crypto_paper_shadow_feed_replay_result"
 _PAPER_DATA_SOURCE_BATCH_RESULT_SNAPSHOT_NAME = "crypto_paper_data_source_batch_result"
+_PAPER_INTENT_BATCH_SNAPSHOT_NAME = "crypto_paper_intent_batch"
+_PAPER_INTENT_BATCH_RESULT_SNAPSHOT_NAME = "crypto_paper_intent_batch_result"
 _PAPER_SHADOW_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_paper_shadow_run_evidence_report"
 _MULTI_SOURCE_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_multi_source_run_evidence_report"
 _PAPER_SHADOW_EVIDENCE_BUNDLE_SNAPSHOT_NAME = "crypto_paper_shadow_evidence_bundle"
@@ -849,6 +857,54 @@ def load_paper_data_source_batch_result(*, evidence_store: EvidenceStore) -> Pap
             f"Paper data source batch result 'data' must be a dict, got {type(data).__name__!r}"
         )
     return paper_data_source_batch_result_from_dict(data)
+
+
+def export_paper_intent_batch(
+    *,
+    batch: PaperIntentBatch,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist a deterministic paper-only intent batch."""
+    data = paper_intent_batch_to_dict(batch)
+    write_result = evidence_store.save_snapshot(_PAPER_INTENT_BATCH_SNAPSHOT_NAME, data)
+    if not write_result.success:
+        return write_result
+    evidence_store.append_evidence(_PAPER_INTENT_BATCH_SNAPSHOT_NAME, data)
+    return write_result
+
+
+def load_paper_intent_batch(*, evidence_store: EvidenceStore) -> PaperIntentBatch:
+    """Load the latest deterministic paper-only intent batch."""
+    envelope = evidence_store.load_snapshot(_PAPER_INTENT_BATCH_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper intent batch 'data' must be a dict, got {type(data).__name__!r}")
+    return paper_intent_batch_from_dict(data)
+
+
+def export_paper_intent_batch_result(
+    *,
+    result: PaperIntentBatchResult,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist a deterministic paper-only intent validation result."""
+    data = paper_intent_batch_result_to_dict(result)
+    write_result = evidence_store.save_snapshot(_PAPER_INTENT_BATCH_RESULT_SNAPSHOT_NAME, data)
+    if not write_result.success:
+        return write_result
+    evidence_store.append_evidence(_PAPER_INTENT_BATCH_RESULT_SNAPSHOT_NAME, data)
+    return write_result
+
+
+def load_paper_intent_batch_result(*, evidence_store: EvidenceStore) -> PaperIntentBatchResult:
+    """Load the latest deterministic paper-only intent validation result."""
+    envelope = evidence_store.load_snapshot(_PAPER_INTENT_BATCH_RESULT_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper intent batch result 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return paper_intent_batch_result_from_dict(data)
 
 
 def export_paper_shadow_run_evidence_report(

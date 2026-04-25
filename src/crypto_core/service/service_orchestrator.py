@@ -48,10 +48,14 @@ from crypto_core.service.artifact_export import (
     export_escalation_decision,
     export_operator_decision_pack,
     export_paper_data_source_batch_result,
+    export_paper_intent_batch,
+    export_paper_intent_batch_result,
     export_sleeve_portfolio_snapshot,
     load_escalation_decision,
     load_operator_decision_pack,
     load_paper_data_source_batch_result,
+    load_paper_intent_batch,
+    load_paper_intent_batch_result,
     load_sleeve_portfolio_snapshot,
     operator_disposition_from_verdict,
 )
@@ -158,6 +162,9 @@ from crypto_core.service.paper_shadow_session_controller import (
     MarketEventBatch,
     MultiSourceRunEvidenceReport,
     PaperDataSourceBatchResult,
+    PaperIntent,
+    PaperIntentBatch,
+    PaperIntentBatchResult,
     PaperShadowEvidenceBundle,
     PaperShadowRunEvidenceReport,
     PaperShadowSessionController,
@@ -174,6 +181,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     multi_source_run_evidence_report_to_dict,
     paper_data_source_batch_result_to_dict,
     paper_data_source_payload_to_market_event_batch,
+    paper_intent_batch_result_to_dict,
+    paper_intent_batch_to_dict,
     paper_shadow_evidence_bundle_to_dict,
     paper_shadow_run_evidence_report_to_dict,
     paper_shadow_session_snapshot_to_dict,
@@ -414,6 +423,13 @@ class PaperShadowSessionState:
     first_event_ns: int | None
     last_event_ns: int | None
     rejected_event_count: int
+    intents_seen: int
+    accepted_intent_count: int
+    rejected_intent_count: int
+    intent_sleeves_seen: int
+    intent_symbols_seen: int
+    intent_venues_seen: int
+    intent_rejection_reasons: tuple[str, ...]
     runtime_monitor_status: str
     stale_feed_detected: bool
     symbol_coverage_ok: bool
@@ -1048,6 +1064,21 @@ class ServiceOrchestrator:
         """Serialize a deterministic read-only paper/shadow market event batch."""
         return market_event_batch_to_dict(batch)
 
+    def record_paper_intent_batch(
+        self,
+        batch: PaperIntentBatch | dict | tuple[PaperIntent, ...],
+    ) -> PaperIntentBatchResult:
+        """Validate paper-only intents against the current paper/shadow session as audit events."""
+        return self._ensure_paper_shadow_session_controller().record_paper_intent_batch(batch)
+
+    def paper_intent_batch_dict(self, batch: PaperIntentBatch) -> dict:
+        """Serialize a deterministic paper-only intent batch."""
+        return paper_intent_batch_to_dict(batch)
+
+    def paper_intent_batch_result_dict(self, result: PaperIntentBatchResult) -> dict:
+        """Serialize a deterministic paper-only intent validation result."""
+        return paper_intent_batch_result_to_dict(result)
+
     def export_paper_shadow_session_snapshot(self):
         """Persist the current paper/shadow session snapshot via EvidenceStore."""
         if self._evidence_store is None:
@@ -1124,6 +1155,36 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for paper data-source result load")
         return load_paper_data_source_batch_result(evidence_store=self._evidence_store)
+
+    def export_paper_intent_batch(self, batch: PaperIntentBatch):
+        """Persist a paper-only intent batch via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper intent batch export")
+        return export_paper_intent_batch(
+            batch=batch,
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_intent_batch(self) -> PaperIntentBatch:
+        """Load the latest persisted paper-only intent batch."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper intent batch load")
+        return load_paper_intent_batch(evidence_store=self._evidence_store)
+
+    def export_paper_intent_batch_result(self, result: PaperIntentBatchResult):
+        """Persist a paper-only intent validation result via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper intent result export")
+        return export_paper_intent_batch_result(
+            result=result,
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_intent_batch_result(self) -> PaperIntentBatchResult:
+        """Load the latest persisted paper-only intent validation result."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper intent result load")
+        return load_paper_intent_batch_result(evidence_store=self._evidence_store)
 
     def paper_shadow_run_evidence_report(
         self,
@@ -3759,6 +3820,13 @@ def paper_shadow_session_state_from_snapshot(snapshot: PaperShadowSessionSnapsho
         first_event_ns=snapshot.first_event_ns,
         last_event_ns=snapshot.last_event_ns,
         rejected_event_count=snapshot.rejected_event_count,
+        intents_seen=snapshot.intents_seen,
+        accepted_intent_count=snapshot.accepted_intent_count,
+        rejected_intent_count=snapshot.rejected_intent_count,
+        intent_sleeves_seen=len(snapshot.intent_sleeves_seen),
+        intent_symbols_seen=len(snapshot.intent_symbols_seen),
+        intent_venues_seen=len(snapshot.intent_venues_seen),
+        intent_rejection_reasons=snapshot.intent_rejection_reasons,
         runtime_monitor_status=snapshot.runtime_monitor.status.value,
         stale_feed_detected=snapshot.runtime_monitor.stale_feed_detected,
         symbol_coverage_ok=snapshot.runtime_monitor.symbol_coverage_ok,
@@ -3795,6 +3863,13 @@ def paper_shadow_session_state_to_dict(state: PaperShadowSessionState) -> dict:
         "first_event_ns": state.first_event_ns,
         "last_event_ns": state.last_event_ns,
         "rejected_event_count": state.rejected_event_count,
+        "intents_seen": state.intents_seen,
+        "accepted_intent_count": state.accepted_intent_count,
+        "rejected_intent_count": state.rejected_intent_count,
+        "intent_sleeves_seen": state.intent_sleeves_seen,
+        "intent_symbols_seen": state.intent_symbols_seen,
+        "intent_venues_seen": state.intent_venues_seen,
+        "intent_rejection_reasons": list(state.intent_rejection_reasons),
         "runtime_monitor_status": state.runtime_monitor_status,
         "stale_feed_detected": state.stale_feed_detected,
         "symbol_coverage_ok": state.symbol_coverage_ok,

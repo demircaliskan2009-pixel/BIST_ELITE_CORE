@@ -11,6 +11,8 @@ from crypto_core.service.artifact_export import (
     export_managed_sleeve_set_manifest,
     export_multi_source_run_evidence_report,
     export_paper_data_source_batch_result,
+    export_paper_intent_batch,
+    export_paper_intent_batch_result,
     export_paper_shadow_activation_plan,
     export_paper_shadow_evidence_bundle,
     export_paper_shadow_feed_replay_plan,
@@ -22,6 +24,8 @@ from crypto_core.service.artifact_export import (
     load_managed_sleeve_set_manifest,
     load_multi_source_run_evidence_report,
     load_paper_data_source_batch_result,
+    load_paper_intent_batch,
+    load_paper_intent_batch_result,
     load_paper_shadow_activation_plan,
     load_paper_shadow_evidence_bundle,
     load_paper_shadow_feed_replay_plan,
@@ -50,6 +54,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     MarketEventType,
     MultiSourceRunEvidenceReport,
     PaperDataSourceType,
+    PaperIntent,
+    PaperIntentSide,
     PaperShadowEvidenceBundle,
     PaperShadowRunEvidenceStatus,
     PaperShadowSessionController,
@@ -61,6 +67,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     build_market_event_batch,
     build_multi_source_run_evidence_report,
     build_paper_data_source_batch_result,
+    build_paper_intent_batch,
     build_paper_shadow_evidence_bundle,
     build_paper_shadow_run_evidence_report,
     feed_replay_plan_from_dict,
@@ -76,6 +83,10 @@ from crypto_core.service.paper_shadow_session_controller import (
     paper_data_source_batch_result_from_dict,
     paper_data_source_batch_result_to_dict,
     paper_data_source_payload_to_market_event_batch,
+    paper_intent_batch_from_dict,
+    paper_intent_batch_result_from_dict,
+    paper_intent_batch_result_to_dict,
+    paper_intent_batch_to_dict,
     paper_shadow_evidence_bundle_from_dict,
     paper_shadow_evidence_bundle_to_dict,
     paper_shadow_run_evidence_report_from_dict,
@@ -482,6 +493,31 @@ def _market_event(
         index_price=index_price,
         funding_rate=funding_rate,
         open_interest=open_interest,
+    )
+
+
+def _paper_intent(
+    sleeve_id: str = "active",
+    symbol: str = "BTCUSDT",
+    *,
+    venue: str = "binance",
+    side: PaperIntentSide = PaperIntentSide.BUY,
+    qty: float | None = 0.10,
+    notional: float | None = None,
+    intent_ts_ns: int = _T0_NS + 150,
+    reason: str = "paper_shadow_contract_test",
+    source: str = "unit_test",
+) -> PaperIntent:
+    return PaperIntent(
+        sleeve_id=sleeve_id,
+        symbol=symbol,
+        venue=venue,
+        side=side,
+        qty=qty,
+        notional=notional,
+        intent_ts_ns=intent_ts_ns,
+        reason=reason,
+        source=source,
     )
 
 
@@ -3240,6 +3276,225 @@ def test_service_orchestrator_market_event_batch_helper(tmp_path) -> None:
 
     orch.export_paper_shadow_market_event_batch(batch)
     assert orch.load_paper_shadow_market_event_batch() == batch
+
+
+def test_paper_intent_valid_intent_accepted_as_audit_only() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 40, _T0_NS + 41, _T0_NS + 42, _T0_NS + 43))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),))
+    )
+    batch = build_paper_intent_batch((_paper_intent("active", "BTCUSDT", venue="binance"),), batch_id="intent-valid")
+
+    result = controller.record_paper_intent_batch(batch)
+    snapshot = controller.snapshot()
+    rendered = paper_shadow_session_snapshot_to_dict(snapshot)
+
+    assert result.intents_seen == 1
+    assert result.accepted_count == 1
+    assert result.rejected_count == 0
+    assert result.results[0].accepted is True
+    assert result.rejection_reasons == ()
+    assert snapshot.intents_seen == 1
+    assert snapshot.accepted_intent_count == 1
+    assert snapshot.rejected_intent_count == 0
+    assert snapshot.intent_sleeves_seen == ("active",)
+    assert snapshot.intent_symbols_seen == ("BTCUSDT",)
+    assert snapshot.intent_venues_seen == ("binance",)
+    assert snapshot.event_count == 1
+    assert snapshot.real_orders_enabled is False
+    assert snapshot.real_money_enabled is False
+    assert rendered["accepted_intent_count"] == 1
+    assert paper_intent_batch_from_dict(paper_intent_batch_to_dict(batch)) == batch
+    assert paper_intent_batch_result_from_dict(paper_intent_batch_result_to_dict(result)) == result
+
+
+def test_paper_intent_before_start_rejected_fail_closed() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 50, _T0_NS + 51))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+
+    result = controller.record_paper_intent_batch(
+        build_paper_intent_batch((_paper_intent("active", "BTCUSDT"),), batch_id="intent-before-start")
+    )
+
+    assert result.accepted_count == 0
+    assert result.rejected_count == 1
+    assert result.results[0].rejection_reasons == ("guardrail_block_finalize", "session_not_running")
+    assert controller.snapshot().intents_seen == 1
+    assert controller.snapshot().accepted_intent_count == 0
+    assert controller.snapshot().rejected_intent_count == 1
+    assert controller.snapshot().real_orders_enabled is False
+    assert controller.snapshot().real_money_enabled is False
+
+
+def test_paper_intent_stopped_and_blocked_guardrail_rejected() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    stopped_times = iter((_T0_NS + 60, _T0_NS + 61, _T0_NS + 62, _T0_NS + 63, _T0_NS + 64))
+    stopped_controller = PaperShadowSessionController(clock_ns=lambda: next(stopped_times))
+    stopped_controller.prepare(plan)
+    stopped_controller.start()
+    stopped_controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),))
+    )
+    stopped_controller.stop()
+
+    stopped_result = stopped_controller.record_paper_intent_batch(
+        build_paper_intent_batch((_paper_intent("active", "BTCUSDT"),), batch_id="intent-stopped")
+    )
+
+    blocked_times = iter((_T0_NS + 70, _T0_NS + 71, _T0_NS + 72, _T0_NS + 73, _T0_NS + 74))
+    blocked_controller = PaperShadowSessionController(
+        clock_ns=lambda: next(blocked_times),
+        required_market_symbols=("BTCUSDT", "ETHUSDT"),
+    )
+    blocked_controller.prepare(plan)
+    blocked_controller.start()
+    blocked_controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),))
+    )
+    blocked_controller.apply_guardrails()
+    blocked_result = blocked_controller.record_paper_intent_batch(
+        build_paper_intent_batch((_paper_intent("active", "BTCUSDT"),), batch_id="intent-blocked")
+    )
+
+    assert stopped_result.accepted_count == 0
+    assert stopped_result.results[0].rejection_reasons == ("session_not_running",)
+    assert stopped_controller.snapshot().status == PaperShadowSessionStatus.STOPPED
+    assert blocked_controller.snapshot().status == PaperShadowSessionStatus.BLOCKED
+    assert blocked_result.accepted_count == 0
+    assert "guardrail_block_finalize" in blocked_result.results[0].rejection_reasons
+    assert "session_not_running" in blocked_result.results[0].rejection_reasons
+
+
+def test_paper_intent_inactive_sleeve_rejected() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 80, _T0_NS + 81, _T0_NS + 82, _T0_NS + 83))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),))
+    )
+
+    result = controller.record_paper_intent_batch(
+        build_paper_intent_batch((_paper_intent("inactive", "BTCUSDT"),), batch_id="intent-inactive")
+    )
+
+    assert result.accepted_count == 0
+    assert result.rejected_count == 1
+    assert result.results[0].rejection_reasons == ("inactive_sleeve",)
+    assert controller.snapshot().accepted_intent_count == 0
+    assert controller.snapshot().intent_sleeves_seen == ("inactive",)
+
+
+def test_paper_intent_malformed_qty_and_unknown_market_rejected() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 90, _T0_NS + 91, _T0_NS + 92, _T0_NS + 93))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),))
+    )
+    batch = build_paper_intent_batch(
+        (
+            _paper_intent("active", "BTCUSDT", qty=-1.0, intent_ts_ns=_T0_NS + 151),
+            _paper_intent("active", "ETHUSDT", venue="bybit", intent_ts_ns=_T0_NS + 152),
+        ),
+        batch_id="intent-malformed",
+    )
+
+    result = controller.record_paper_intent_batch(batch)
+
+    assert result.accepted_count == 0
+    assert result.rejected_count == 2
+    assert result.rejection_reasons == ("invalid_intent_size", "unknown_symbol", "unknown_venue")
+    assert result.results[0].rejection_reasons == ("invalid_intent_size",)
+    assert result.results[1].rejection_reasons == ("unknown_symbol", "unknown_venue")
+    assert controller.snapshot().rejected_intent_count == 2
+    assert controller.snapshot().intent_rejection_reasons == (
+        "invalid_intent_size",
+        "unknown_symbol",
+        "unknown_venue",
+    )
+
+
+def test_paper_intent_deterministic_replay() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    market_batch = build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),))
+    intent_batch = build_paper_intent_batch(
+        (
+            _paper_intent("active", "BTCUSDT", intent_ts_ns=_T0_NS + 151),
+            _paper_intent("inactive", "BTCUSDT", intent_ts_ns=_T0_NS + 152),
+        ),
+        batch_id="intent-deterministic",
+    )
+
+    def run_once() -> tuple[dict, dict]:
+        times = iter((_T0_NS + 100, _T0_NS + 101, _T0_NS + 102, _T0_NS + 103))
+        controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+        controller.prepare(plan)
+        controller.start()
+        controller.record_market_event_batch(market_batch)
+        result = controller.record_paper_intent_batch(intent_batch)
+        return paper_intent_batch_result_to_dict(result), paper_shadow_session_snapshot_to_dict(controller.snapshot())
+
+    assert run_once() == run_once()
+
+
+def test_service_orchestrator_paper_intent_helpers_and_artifacts(tmp_path) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 110, _T0_NS + 111, _T0_NS + 112, _T0_NS + 113))
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        evidence_store=store,
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: next(times),
+    )
+    intent_batch = build_paper_intent_batch(
+        (_paper_intent("svc-active", "BTCUSDT", venue="binance"),),
+        batch_id="svc-intents",
+    )
+
+    orch.prepare_paper_shadow_session(plan=plan)
+    orch.start_paper_shadow_session()
+    orch.record_paper_shadow_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),))
+    )
+    result = orch.record_paper_intent_batch(intent_batch)
+    rendered_batch = orch.paper_intent_batch_dict(intent_batch)
+    rendered_result = orch.paper_intent_batch_result_dict(result)
+    session = orch.paper_shadow_session_snapshot_dict()
+    operator = operator_snapshot_to_dict(orch.operator_snapshot())["paper_shadow_session"]
+
+    assert result.accepted_count == 1
+    assert rendered_batch["batch_id"] == "svc-intents"
+    assert rendered_result["accepted_count"] == 1
+    assert session["intents_seen"] == 1
+    assert session["accepted_intent_count"] == 1
+    assert operator["intents_seen"] == 1
+    assert operator["accepted_intent_count"] == 1
+    assert operator["rejected_intent_count"] == 0
+    assert operator["intent_symbols_seen"] == 1
+
+    orch.export_paper_intent_batch(intent_batch)
+    orch.export_paper_intent_batch_result(result)
+    assert orch.load_paper_intent_batch() == intent_batch
+    assert orch.load_paper_intent_batch_result() == result
+    export_paper_intent_batch(batch=intent_batch, evidence_store=store)
+    export_paper_intent_batch_result(result=result, evidence_store=store)
+    assert load_paper_intent_batch(evidence_store=store) == intent_batch
+    assert load_paper_intent_batch_result(evidence_store=store) == result
+
+    store.save_snapshot("crypto_paper_intent_batch_result", ["bad"])
+    with pytest.raises(PaperShadowSessionCorruptError):
+        load_paper_intent_batch_result(evidence_store=store)
 
 
 def test_service_orchestrator_feed_replay_helper_and_artifacts(tmp_path) -> None:
