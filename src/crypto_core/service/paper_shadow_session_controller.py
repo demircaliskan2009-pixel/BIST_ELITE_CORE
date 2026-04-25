@@ -196,6 +196,24 @@ class MultiSourceRunEvidenceReport:
 
 
 @dataclass(frozen=True)
+class PaperShadowEvidenceBundle:
+    bundle_id: str
+    as_of_ns: int
+    aggregate_report: MultiSourceRunEvidenceReport
+    run_reports: tuple[PaperShadowRunEvidenceReport, ...]
+    report_ids: tuple[str, ...]
+    evidence_status: PaperShadowRunEvidenceStatus
+    missing_report_ids: tuple[str, ...] = ()
+    blockers: tuple[str, ...] = ()
+    reason_codes: tuple[str, ...] = ()
+    next_actions: tuple[str, ...] = ()
+    paper_only: bool = True
+    real_orders_enabled: bool = False
+    real_money_enabled: bool = False
+    operator_summary: str = "Paper/shadow evidence bundle has not been assessed."
+
+
+@dataclass(frozen=True)
 class MarketEventCursor:
     symbol: str
     venue: str
@@ -1462,6 +1480,122 @@ def multi_source_run_evidence_report_from_dict(data: dict) -> MultiSourceRunEvid
     return report
 
 
+def build_paper_shadow_evidence_bundle(
+    *,
+    aggregate_report: MultiSourceRunEvidenceReport | dict,
+    run_reports: tuple[PaperShadowRunEvidenceReport | dict, ...],
+    bundle_id: str | None = None,
+    as_of_ns: int | None = None,
+) -> PaperShadowEvidenceBundle:
+    """Bundle a multi-source aggregate with its exact run-report drilldowns."""
+    resolved_aggregate = (
+        multi_source_run_evidence_report_from_dict(aggregate_report)
+        if isinstance(aggregate_report, dict)
+        else aggregate_report
+    )
+    _validate_multi_source_run_evidence_report(resolved_aggregate)
+    if not isinstance(run_reports, tuple):
+        raise PaperShadowSessionCorruptError("paper/shadow evidence bundle run_reports must be a tuple")
+    resolved_reports = tuple(
+        paper_shadow_run_evidence_report_from_dict(report) if isinstance(report, dict) else report
+        for report in run_reports
+    )
+    for report in resolved_reports:
+        _validate_paper_shadow_run_evidence_report(report)
+    ordered_reports = tuple(sorted(resolved_reports, key=lambda report: report.report_id))
+    _validate_unique_report_ids(ordered_reports)
+    nested_report_ids = tuple(report.report_id for report in ordered_reports)
+    missing_report_ids = _evidence_bundle_missing_report_ids(resolved_aggregate, nested_report_ids)
+    _ensure_no_unexpected_evidence_bundle_reports(resolved_aggregate, nested_report_ids)
+    if not missing_report_ids:
+        _assert_evidence_bundle_aggregate_matches_reports(resolved_aggregate, ordered_reports)
+
+    status = _evidence_bundle_status(resolved_aggregate, missing_report_ids)
+    reason_codes = _evidence_bundle_reason_codes(resolved_aggregate, missing_report_ids)
+    blockers = _evidence_bundle_blockers(resolved_aggregate, missing_report_ids, reason_codes)
+    next_actions = _evidence_bundle_next_actions(status, resolved_aggregate, missing_report_ids)
+    bundle = PaperShadowEvidenceBundle(
+        bundle_id=_string_or_default(bundle_id, _paper_shadow_evidence_bundle_id(resolved_aggregate)),
+        as_of_ns=(
+            _optional_non_negative_int(as_of_ns, "as_of_ns") if as_of_ns is not None else resolved_aggregate.as_of_ns
+        ),
+        aggregate_report=resolved_aggregate,
+        run_reports=ordered_reports,
+        report_ids=resolved_aggregate.report_ids,
+        evidence_status=status,
+        missing_report_ids=missing_report_ids,
+        blockers=blockers,
+        reason_codes=reason_codes,
+        next_actions=next_actions,
+        paper_only=resolved_aggregate.paper_only and all(report.paper_only for report in ordered_reports),
+        real_orders_enabled=resolved_aggregate.real_orders_enabled
+        or any(report.real_orders_enabled for report in ordered_reports),
+        real_money_enabled=resolved_aggregate.real_money_enabled
+        or any(report.real_money_enabled for report in ordered_reports),
+        operator_summary=_paper_shadow_evidence_bundle_summary(
+            status,
+            aggregate_id=resolved_aggregate.aggregate_id,
+            report_count=resolved_aggregate.report_count,
+            missing_report_count=len(missing_report_ids),
+            blocker_count=len(blockers),
+        ),
+    )
+    _validate_paper_shadow_evidence_bundle(bundle)
+    return bundle
+
+
+def paper_shadow_evidence_bundle_to_dict(bundle: PaperShadowEvidenceBundle) -> dict:
+    _validate_paper_shadow_evidence_bundle(bundle)
+    return {
+        "bundle_id": bundle.bundle_id,
+        "as_of_ns": bundle.as_of_ns,
+        "aggregate_report": multi_source_run_evidence_report_to_dict(bundle.aggregate_report),
+        "run_reports": [paper_shadow_run_evidence_report_to_dict(report) for report in bundle.run_reports],
+        "report_ids": list(bundle.report_ids),
+        "evidence_status": bundle.evidence_status.value,
+        "missing_report_ids": list(bundle.missing_report_ids),
+        "blockers": list(bundle.blockers),
+        "reason_codes": list(bundle.reason_codes),
+        "next_actions": list(bundle.next_actions),
+        "paper_only": bundle.paper_only,
+        "real_orders_enabled": bundle.real_orders_enabled,
+        "real_money_enabled": bundle.real_money_enabled,
+        "operator_summary": bundle.operator_summary,
+    }
+
+
+def paper_shadow_evidence_bundle_from_dict(data: dict) -> PaperShadowEvidenceBundle:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper/shadow evidence bundle must be a dict, got {type(data).__name__!r}"
+        )
+    raw_reports = data.get("run_reports")
+    if not isinstance(raw_reports, (list, tuple)):
+        raise PaperShadowSessionCorruptError("paper/shadow evidence bundle run_reports must be a list/tuple")
+    bundle = PaperShadowEvidenceBundle(
+        bundle_id=_require_non_empty_str(data.get("bundle_id"), "bundle_id"),
+        as_of_ns=_require_non_negative_int(data.get("as_of_ns"), "as_of_ns"),
+        aggregate_report=multi_source_run_evidence_report_from_dict(
+            _dict_value(data.get("aggregate_report"), "aggregate_report")
+        ),
+        run_reports=tuple(
+            paper_shadow_run_evidence_report_from_dict(_dict_value(report, "run_reports")) for report in raw_reports
+        ),
+        report_ids=_report_ids_from_data(data.get("report_ids", ())),
+        evidence_status=_run_evidence_status_from_value(data.get("evidence_status")),
+        missing_report_ids=_report_ids_from_data(data.get("missing_report_ids", ())),
+        blockers=_sorted_unique(data.get("blockers", ())),
+        reason_codes=_sorted_unique(data.get("reason_codes", ())),
+        next_actions=_sorted_unique(data.get("next_actions", ())),
+        paper_only=_bool_or_default(data, "paper_only", True),
+        real_orders_enabled=_bool_or_default(data, "real_orders_enabled", False),
+        real_money_enabled=_bool_or_default(data, "real_money_enabled", False),
+        operator_summary=_require_non_empty_str(data.get("operator_summary"), "operator_summary"),
+    )
+    _validate_paper_shadow_evidence_bundle(bundle)
+    return bundle
+
+
 def market_event_cursor_to_dict(cursor: MarketEventCursor) -> dict:
     _validate_market_event_cursor(cursor)
     return {
@@ -1952,6 +2086,80 @@ def _validate_multi_source_run_evidence_report(report: MultiSourceRunEvidenceRep
         raise PaperShadowSessionCorruptError("EMPTY multi-source run evidence is reserved for zero reports")
 
 
+def _validate_paper_shadow_evidence_bundle(bundle: PaperShadowEvidenceBundle) -> None:
+    if not isinstance(bundle, PaperShadowEvidenceBundle):
+        raise PaperShadowSessionCorruptError("paper/shadow evidence bundle must be a PaperShadowEvidenceBundle")
+    _require_non_empty_str(bundle.bundle_id, "bundle_id")
+    _require_non_negative_int(bundle.as_of_ns, "as_of_ns")
+    _validate_multi_source_run_evidence_report(bundle.aggregate_report)
+    if not isinstance(bundle.run_reports, tuple):
+        raise PaperShadowSessionCorruptError("paper/shadow evidence bundle run_reports must be a tuple")
+    for report in bundle.run_reports:
+        _validate_paper_shadow_run_evidence_report(report)
+    if bundle.run_reports != tuple(sorted(bundle.run_reports, key=lambda report: report.report_id)):
+        raise PaperShadowSessionCorruptError("paper/shadow evidence bundle run_reports must be sorted by report_id")
+    _validate_unique_report_ids(bundle.run_reports)
+    for field_name in ("report_ids", "missing_report_ids", "blockers", "reason_codes", "next_actions"):
+        value = getattr(bundle, field_name)
+        if value != _sorted_unique(value):
+            raise PaperShadowSessionCorruptError(f"paper/shadow evidence bundle {field_name} must be sorted unique")
+    if not isinstance(bundle.evidence_status, PaperShadowRunEvidenceStatus):
+        raise PaperShadowSessionCorruptError("paper/shadow evidence bundle evidence_status must be a run status")
+    _require_bool(bundle.paper_only, "paper_only")
+    _require_bool(bundle.real_orders_enabled, "real_orders_enabled")
+    _require_bool(bundle.real_money_enabled, "real_money_enabled")
+    _require_non_empty_str(bundle.operator_summary, "operator_summary")
+    if bundle.report_ids != bundle.aggregate_report.report_ids:
+        raise PaperShadowSessionCorruptError("paper/shadow evidence bundle report_ids must match aggregate report_ids")
+    nested_report_ids = tuple(report.report_id for report in bundle.run_reports)
+    missing_report_ids = _evidence_bundle_missing_report_ids(bundle.aggregate_report, nested_report_ids)
+    if bundle.missing_report_ids != missing_report_ids:
+        raise PaperShadowSessionCorruptError("paper/shadow evidence bundle missing_report_ids are stale")
+    _ensure_no_unexpected_evidence_bundle_reports(bundle.aggregate_report, nested_report_ids)
+    if not missing_report_ids:
+        _assert_evidence_bundle_aggregate_matches_reports(bundle.aggregate_report, bundle.run_reports)
+    expected_status = _evidence_bundle_status(bundle.aggregate_report, missing_report_ids)
+    if bundle.evidence_status != expected_status:
+        raise PaperShadowSessionCorruptError("paper/shadow evidence bundle status does not match aggregate/drilldowns")
+    expected_reason_codes = _evidence_bundle_reason_codes(bundle.aggregate_report, missing_report_ids)
+    if bundle.reason_codes != expected_reason_codes:
+        raise PaperShadowSessionCorruptError("paper/shadow evidence bundle reason_codes do not match truth")
+    expected_blockers = _evidence_bundle_blockers(bundle.aggregate_report, missing_report_ids, expected_reason_codes)
+    if bundle.blockers != expected_blockers:
+        raise PaperShadowSessionCorruptError("paper/shadow evidence bundle blockers do not match truth")
+    expected_next_actions = _evidence_bundle_next_actions(expected_status, bundle.aggregate_report, missing_report_ids)
+    if bundle.next_actions != expected_next_actions:
+        raise PaperShadowSessionCorruptError("paper/shadow evidence bundle next_actions do not match truth")
+    expected_paper_only = bundle.aggregate_report.paper_only and all(report.paper_only for report in bundle.run_reports)
+    expected_real_orders_enabled = bundle.aggregate_report.real_orders_enabled or any(
+        report.real_orders_enabled for report in bundle.run_reports
+    )
+    expected_real_money_enabled = bundle.aggregate_report.real_money_enabled or any(
+        report.real_money_enabled for report in bundle.run_reports
+    )
+    if bundle.paper_only != expected_paper_only:
+        raise PaperShadowSessionCorruptError("paper/shadow evidence bundle paper_only flag does not match reports")
+    if bundle.real_orders_enabled != expected_real_orders_enabled:
+        raise PaperShadowSessionCorruptError(
+            "paper/shadow evidence bundle real_orders_enabled flag does not match reports"
+        )
+    if bundle.real_money_enabled != expected_real_money_enabled:
+        raise PaperShadowSessionCorruptError(
+            "paper/shadow evidence bundle real_money_enabled flag does not match reports"
+        )
+    if missing_report_ids and bundle.evidence_status == PaperShadowRunEvidenceStatus.PASS:
+        raise PaperShadowSessionCorruptError("paper/shadow evidence bundle cannot PASS with missing drilldowns")
+    if bundle.evidence_status == PaperShadowRunEvidenceStatus.PASS:
+        if bundle.aggregate_report.evidence_status != PaperShadowRunEvidenceStatus.PASS:
+            raise PaperShadowSessionCorruptError("paper/shadow evidence bundle PASS requires PASS aggregate")
+        if not bundle.run_reports:
+            raise PaperShadowSessionCorruptError("paper/shadow evidence bundle cannot PASS without run drilldowns")
+        if bundle.blockers or bundle.reason_codes:
+            raise PaperShadowSessionCorruptError("paper/shadow evidence bundle cannot PASS with blockers or reasons")
+        if not bundle.paper_only or bundle.real_orders_enabled or bundle.real_money_enabled:
+            raise PaperShadowSessionCorruptError("paper/shadow evidence bundle cannot PASS with unsafe flags")
+
+
 def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
     if not isinstance(snapshot, PaperShadowSessionSnapshot):
         raise PaperShadowSessionCorruptError("paper/shadow session snapshot must be a PaperShadowSessionSnapshot")
@@ -2435,6 +2643,141 @@ def _multi_source_run_evidence_summary(
     return (
         f"multi_source_run_evidence={status.value}; reports={report_count}; pass={pass_count}; "
         f"warn={warn_count}; blocked={blocked_count}; inconclusive={inconclusive_count}; empty={empty_count}"
+    )
+
+
+def _paper_shadow_evidence_bundle_id(aggregate: MultiSourceRunEvidenceReport) -> str:
+    return f"paper-shadow-evidence-bundle-{aggregate.aggregate_id}"
+
+
+def _evidence_bundle_missing_report_ids(
+    aggregate: MultiSourceRunEvidenceReport,
+    nested_report_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    return tuple(report_id for report_id in aggregate.report_ids if report_id not in set(nested_report_ids))
+
+
+def _ensure_no_unexpected_evidence_bundle_reports(
+    aggregate: MultiSourceRunEvidenceReport,
+    nested_report_ids: tuple[str, ...],
+) -> None:
+    unexpected = tuple(report_id for report_id in nested_report_ids if report_id not in set(aggregate.report_ids))
+    if unexpected:
+        raise PaperShadowSessionCorruptError(
+            f"paper/shadow evidence bundle has unexpected run report drilldowns: {unexpected!r}"
+        )
+
+
+def _assert_evidence_bundle_aggregate_matches_reports(
+    aggregate: MultiSourceRunEvidenceReport,
+    run_reports: tuple[PaperShadowRunEvidenceReport, ...],
+) -> None:
+    recomputed = build_multi_source_run_evidence_report(
+        run_reports,
+        aggregate_id=aggregate.aggregate_id,
+        as_of_ns=aggregate.as_of_ns,
+    )
+    expected = multi_source_run_evidence_report_to_dict(recomputed)
+    observed = multi_source_run_evidence_report_to_dict(aggregate)
+    checked_fields = (
+        "aggregate_id",
+        "as_of_ns",
+        "report_ids",
+        "report_count",
+        "pass_count",
+        "warn_count",
+        "blocked_count",
+        "inconclusive_count",
+        "empty_count",
+        "accepted_event_count",
+        "rejected_event_count",
+        "accepted_batch_count",
+        "rejected_batch_count",
+        "symbols",
+        "venues",
+        "blockers",
+        "reason_codes",
+        "guardrail_actions",
+        "evidence_status",
+        "next_actions",
+        "paper_only",
+        "real_orders_enabled",
+        "real_money_enabled",
+    )
+    for field_name in checked_fields:
+        if observed[field_name] != expected[field_name]:
+            raise PaperShadowSessionCorruptError(
+                f"paper/shadow evidence bundle aggregate drift detected for {field_name!r}"
+            )
+
+
+def _evidence_bundle_status(
+    aggregate: MultiSourceRunEvidenceReport,
+    missing_report_ids: tuple[str, ...],
+) -> PaperShadowRunEvidenceStatus:
+    if missing_report_ids:
+        return PaperShadowRunEvidenceStatus.BLOCKED
+    if not aggregate.paper_only or aggregate.real_orders_enabled or aggregate.real_money_enabled:
+        return PaperShadowRunEvidenceStatus.BLOCKED
+    return aggregate.evidence_status
+
+
+def _evidence_bundle_reason_codes(
+    aggregate: MultiSourceRunEvidenceReport,
+    missing_report_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    reasons = list(aggregate.reason_codes)
+    if missing_report_ids:
+        reasons.append("missing_run_report_drilldown")
+    if not aggregate.paper_only or aggregate.real_orders_enabled or aggregate.real_money_enabled:
+        reasons.append("unsafe_real_trading_flags")
+    return _sorted_unique(tuple(reasons))
+
+
+def _evidence_bundle_blockers(
+    aggregate: MultiSourceRunEvidenceReport,
+    missing_report_ids: tuple[str, ...],
+    reason_codes: tuple[str, ...],
+) -> tuple[str, ...]:
+    blockers = list(aggregate.blockers)
+    if missing_report_ids:
+        blockers.append("missing_run_report_drilldown")
+    blockers.extend(
+        reason for reason in reason_codes if reason in {"missing_run_report_drilldown", "unsafe_real_trading_flags"}
+    )
+    return _sorted_unique(tuple(blockers))
+
+
+def _evidence_bundle_next_actions(
+    status: PaperShadowRunEvidenceStatus,
+    aggregate: MultiSourceRunEvidenceReport,
+    missing_report_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    if missing_report_ids:
+        return ("attach_missing_run_reports",)
+    if status == PaperShadowRunEvidenceStatus.PASS:
+        return aggregate.next_actions
+    actions = list(aggregate.next_actions)
+    if status == PaperShadowRunEvidenceStatus.BLOCKED:
+        actions.append("resolve_evidence_bundle_blockers")
+    if status == PaperShadowRunEvidenceStatus.INCONCLUSIVE:
+        actions.append("restore_missing_run_evidence")
+    if status == PaperShadowRunEvidenceStatus.EMPTY:
+        actions.append("provide_run_evidence_reports")
+    return _sorted_unique(tuple(actions))
+
+
+def _paper_shadow_evidence_bundle_summary(
+    status: PaperShadowRunEvidenceStatus,
+    *,
+    aggregate_id: str,
+    report_count: int,
+    missing_report_count: int,
+    blocker_count: int,
+) -> str:
+    return (
+        f"paper_shadow_evidence_bundle={status.value}; aggregate={aggregate_id}; reports={report_count}; "
+        f"missing_drilldowns={missing_report_count}; blockers={blocker_count}"
     )
 
 

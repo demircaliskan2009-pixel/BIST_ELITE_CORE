@@ -37,6 +37,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     MarketEventBatch,
     MultiSourceRunEvidenceReport,
     PaperDataSourceBatchResult,
+    PaperShadowEvidenceBundle,
     PaperShadowRunEvidenceReport,
     PaperShadowSessionCorruptError,
     PaperShadowSessionSnapshot,
@@ -50,6 +51,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     multi_source_run_evidence_report_to_dict,
     paper_data_source_batch_result_from_dict,
     paper_data_source_batch_result_to_dict,
+    paper_shadow_evidence_bundle_from_dict,
+    paper_shadow_evidence_bundle_to_dict,
     paper_shadow_run_evidence_report_from_dict,
     paper_shadow_run_evidence_report_to_dict,
     paper_shadow_session_snapshot_from_dict,
@@ -533,6 +536,7 @@ _PAPER_SHADOW_FEED_REPLAY_RESULT_SNAPSHOT_NAME = "crypto_paper_shadow_feed_repla
 _PAPER_DATA_SOURCE_BATCH_RESULT_SNAPSHOT_NAME = "crypto_paper_data_source_batch_result"
 _PAPER_SHADOW_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_paper_shadow_run_evidence_report"
 _MULTI_SOURCE_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_multi_source_run_evidence_report"
+_PAPER_SHADOW_EVIDENCE_BUNDLE_SNAPSHOT_NAME = "crypto_paper_shadow_evidence_bundle"
 
 
 def export_run_artifact(
@@ -895,3 +899,28 @@ def load_multi_source_run_evidence_report(*, evidence_store: EvidenceStore) -> M
             f"Multi-source run evidence report 'data' must be a dict, got {type(data).__name__!r}"
         )
     return multi_source_run_evidence_report_from_dict(data)
+
+
+def export_paper_shadow_evidence_bundle(
+    *,
+    bundle: PaperShadowEvidenceBundle,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist a deterministic paper/shadow evidence bundle with run drilldowns."""
+    data = paper_shadow_evidence_bundle_to_dict(bundle)
+    write_result = evidence_store.save_snapshot(_PAPER_SHADOW_EVIDENCE_BUNDLE_SNAPSHOT_NAME, data)
+    if not write_result.success:
+        return write_result
+    evidence_store.append_evidence(_PAPER_SHADOW_EVIDENCE_BUNDLE_SNAPSHOT_NAME, data)
+    return write_result
+
+
+def load_paper_shadow_evidence_bundle(*, evidence_store: EvidenceStore) -> PaperShadowEvidenceBundle:
+    """Load the latest deterministic paper/shadow evidence bundle with run drilldowns."""
+    envelope = evidence_store.load_snapshot(_PAPER_SHADOW_EVIDENCE_BUNDLE_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper/shadow evidence bundle 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return paper_shadow_evidence_bundle_from_dict(data)

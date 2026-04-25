@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,6 +12,7 @@ from crypto_core.service.artifact_export import (
     export_multi_source_run_evidence_report,
     export_paper_data_source_batch_result,
     export_paper_shadow_activation_plan,
+    export_paper_shadow_evidence_bundle,
     export_paper_shadow_feed_replay_plan,
     export_paper_shadow_feed_replay_result,
     export_paper_shadow_market_event_batch,
@@ -21,6 +23,7 @@ from crypto_core.service.artifact_export import (
     load_multi_source_run_evidence_report,
     load_paper_data_source_batch_result,
     load_paper_shadow_activation_plan,
+    load_paper_shadow_evidence_bundle,
     load_paper_shadow_feed_replay_plan,
     load_paper_shadow_feed_replay_result,
     load_paper_shadow_market_event_batch,
@@ -47,6 +50,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     MarketEventType,
     MultiSourceRunEvidenceReport,
     PaperDataSourceType,
+    PaperShadowEvidenceBundle,
     PaperShadowRunEvidenceStatus,
     PaperShadowSessionController,
     PaperShadowSessionCorruptError,
@@ -57,6 +61,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     build_market_event_batch,
     build_multi_source_run_evidence_report,
     build_paper_data_source_batch_result,
+    build_paper_shadow_evidence_bundle,
     build_paper_shadow_run_evidence_report,
     feed_replay_plan_from_dict,
     feed_replay_plan_to_dict,
@@ -71,6 +76,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     paper_data_source_batch_result_from_dict,
     paper_data_source_batch_result_to_dict,
     paper_data_source_payload_to_market_event_batch,
+    paper_shadow_evidence_bundle_from_dict,
+    paper_shadow_evidence_bundle_to_dict,
     paper_shadow_run_evidence_report_from_dict,
     paper_shadow_run_evidence_report_to_dict,
     paper_shadow_session_snapshot_from_dict,
@@ -2567,6 +2574,163 @@ def test_multi_source_run_evidence_deterministic_replay() -> None:
     assert run_once() == run_once()
 
 
+def test_paper_shadow_evidence_bundle_valid_drilldown_package() -> None:
+    _, _, _, first = _paper_shadow_full_local_run(
+        source_id="local-feed-a",
+        report_id="run-a",
+        replay_id="replay-a",
+        symbols=("BTCUSDT",),
+        records=({"symbol": "BTCUSDT", "ts_ns": _T0_NS + 101, "event_type": "mark_price", "price": 100.0},),
+    )
+    _, _, _, second = _paper_shadow_full_local_run(
+        source_id="local-feed-b",
+        report_id="run-b",
+        replay_id="replay-b",
+        symbols=("ETHUSDT",),
+        records=({"symbol": "ETHUSDT", "ts_ns": _T0_NS + 102, "event_type": "mark_price", "price": 2100.0},),
+    )
+    aggregate = build_multi_source_run_evidence_report((second, first), aggregate_id="multi-bundle")
+
+    bundle = build_paper_shadow_evidence_bundle(
+        aggregate_report=aggregate,
+        run_reports=(second, first),
+        bundle_id="bundle-1",
+    )
+    rendered = paper_shadow_evidence_bundle_to_dict(bundle)
+
+    assert isinstance(bundle, PaperShadowEvidenceBundle)
+    assert bundle.evidence_status == PaperShadowRunEvidenceStatus.PASS
+    assert bundle.report_ids == ("run-a", "run-b")
+    assert tuple(report.report_id for report in bundle.run_reports) == ("run-a", "run-b")
+    assert bundle.missing_report_ids == ()
+    assert bundle.blockers == ()
+    assert rendered["aggregate_report"]["aggregate_id"] == "multi-bundle"
+    assert [report["report_id"] for report in rendered["run_reports"]] == ["run-a", "run-b"]
+
+
+def test_paper_shadow_evidence_bundle_missing_nested_report_blocks_pass() -> None:
+    _, _, _, first = _paper_shadow_full_local_run(source_id="local-feed-a", report_id="run-a", replay_id="replay-a")
+    _, _, _, second = _paper_shadow_full_local_run(source_id="local-feed-b", report_id="run-b", replay_id="replay-b")
+    aggregate = build_multi_source_run_evidence_report((first, second), aggregate_id="multi-missing-drilldown")
+
+    bundle = build_paper_shadow_evidence_bundle(
+        aggregate_report=aggregate,
+        run_reports=(first,),
+        bundle_id="bundle-missing",
+    )
+
+    assert aggregate.evidence_status == PaperShadowRunEvidenceStatus.PASS
+    assert bundle.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED
+    assert bundle.missing_report_ids == ("run-b",)
+    assert "missing_run_report_drilldown" in bundle.blockers
+    assert bundle.next_actions == ("attach_missing_run_reports",)
+
+
+def test_paper_shadow_evidence_bundle_duplicate_nested_report_rejected() -> None:
+    _, _, _, report = _paper_shadow_full_local_run(report_id="duplicate-run")
+    aggregate = build_multi_source_run_evidence_report((report,), aggregate_id="multi-duplicate-drilldown")
+
+    with pytest.raises(PaperShadowSessionCorruptError):
+        build_paper_shadow_evidence_bundle(
+            aggregate_report=aggregate,
+            run_reports=(report, report),
+            bundle_id="bundle-duplicate",
+        )
+
+
+def test_paper_shadow_evidence_bundle_mismatched_aggregate_counts_fail_closed() -> None:
+    _, _, _, first = _paper_shadow_full_local_run(source_id="local-feed-a", report_id="run-a", replay_id="replay-a")
+    _, _, _, second = _paper_shadow_full_local_run(source_id="local-feed-b", report_id="run-b", replay_id="replay-b")
+    aggregate = build_multi_source_run_evidence_report((first, second), aggregate_id="multi-drift")
+    drifted = replace(aggregate, accepted_event_count=aggregate.accepted_event_count + 1)
+
+    with pytest.raises(PaperShadowSessionCorruptError):
+        build_paper_shadow_evidence_bundle(
+            aggregate_report=drifted,
+            run_reports=(first, second),
+            bundle_id="bundle-drift",
+        )
+
+
+def test_paper_shadow_evidence_bundle_blocked_nested_report_stays_blocked() -> None:
+    _, _, _, pass_report = _paper_shadow_full_local_run(report_id="run-pass")
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    replay = controller.replay_feed(
+        FeedReplayPlan(
+            replay_id="bad-replay-bundle",
+            batches=(MarketEventBatch(batch_id="bad-price-bundle", events=(_market_event(price=-1.0),)),),
+        )
+    )
+    blocked_report = build_paper_shadow_run_evidence_report(
+        session_snapshot=controller.snapshot(),
+        replay_result=replay,
+        report_id="run-blocked",
+    )
+    aggregate = build_multi_source_run_evidence_report((pass_report, blocked_report), aggregate_id="multi-blocked")
+
+    bundle = build_paper_shadow_evidence_bundle(
+        aggregate_report=aggregate,
+        run_reports=(blocked_report, pass_report),
+        bundle_id="bundle-blocked",
+    )
+
+    assert bundle.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED
+    assert bundle.missing_report_ids == ()
+    assert "rejected_run_evidence" in bundle.blockers
+    assert "resolve_multi_source_run_blockers" in bundle.next_actions
+
+
+def test_paper_shadow_evidence_bundle_serialization_export_and_fail_closed(tmp_path) -> None:
+    _, _, _, first = _paper_shadow_full_local_run(source_id="local-feed-a", report_id="run-a", replay_id="replay-a")
+    _, _, _, second = _paper_shadow_full_local_run(source_id="local-feed-b", report_id="run-b", replay_id="replay-b")
+    aggregate = build_multi_source_run_evidence_report((first, second), aggregate_id="multi-bundle-roundtrip")
+    bundle = build_paper_shadow_evidence_bundle(
+        aggregate_report=aggregate,
+        run_reports=(second, first),
+        bundle_id="bundle-roundtrip",
+    )
+    payload = paper_shadow_evidence_bundle_to_dict(bundle)
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+
+    assert paper_shadow_evidence_bundle_from_dict(payload) == bundle
+
+    payload["run_reports"] = payload["run_reports"][:1]
+    payload["evidence_status"] = "pass"
+    with pytest.raises(PaperShadowSessionCorruptError):
+        paper_shadow_evidence_bundle_from_dict(payload)
+
+    export_paper_shadow_evidence_bundle(bundle=bundle, evidence_store=store)
+    assert load_paper_shadow_evidence_bundle(evidence_store=store) == bundle
+
+    store.save_snapshot("crypto_paper_shadow_evidence_bundle", ["bad"])
+    with pytest.raises(PaperShadowSessionCorruptError):
+        load_paper_shadow_evidence_bundle(evidence_store=store)
+
+
+def test_paper_shadow_evidence_bundle_deterministic_replay() -> None:
+    def run_once() -> dict:
+        _, _, _, first = _paper_shadow_full_local_run(source_id="local-feed-a", report_id="run-a", replay_id="replay-a")
+        _, _, _, second = _paper_shadow_full_local_run(
+            source_id="local-feed-b",
+            report_id="run-b",
+            replay_id="replay-b",
+        )
+        aggregate = build_multi_source_run_evidence_report((second, first), aggregate_id="multi-bundle-deterministic")
+        return paper_shadow_evidence_bundle_to_dict(
+            build_paper_shadow_evidence_bundle(
+                aggregate_report=aggregate,
+                run_reports=(second, first),
+                bundle_id="bundle-deterministic",
+            )
+        )
+
+    assert run_once() == run_once()
+
+
 def test_service_orchestrator_paper_shadow_session_helpers_and_operator_status(tmp_path) -> None:
     store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
     plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
@@ -2783,3 +2947,31 @@ def test_service_orchestrator_multi_source_run_evidence_helper_and_artifact(tmp_
 
     orch.export_multi_source_run_evidence_report(aggregate)
     assert orch.load_multi_source_run_evidence_report() == aggregate
+
+
+def test_service_orchestrator_paper_shadow_evidence_bundle_helper_and_artifact(tmp_path) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    _, _, _, first = _paper_shadow_full_local_run(source_id="local-feed-a", report_id="run-a", replay_id="replay-a")
+    _, _, _, second = _paper_shadow_full_local_run(source_id="local-feed-b", report_id="run-b", replay_id="replay-b")
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        evidence_store=store,
+        readiness_level="paper_live",
+    )
+
+    aggregate = orch.multi_source_run_evidence_report((second, first), aggregate_id="orch-bundle-aggregate")
+    bundle = orch.paper_shadow_evidence_bundle(
+        aggregate_report=aggregate,
+        run_reports=(second, first),
+        bundle_id="orch-evidence-bundle",
+    )
+    rendered = orch.paper_shadow_evidence_bundle_dict(bundle)
+
+    assert bundle.evidence_status == PaperShadowRunEvidenceStatus.PASS
+    assert bundle.report_ids == ("run-a", "run-b")
+    assert rendered["bundle_id"] == "orch-evidence-bundle"
+    assert rendered["aggregate_report"]["aggregate_id"] == "orch-bundle-aggregate"
+    assert [report["report_id"] for report in rendered["run_reports"]] == ["run-a", "run-b"]
+
+    orch.export_paper_shadow_evidence_bundle(bundle)
+    assert orch.load_paper_shadow_evidence_bundle() == bundle

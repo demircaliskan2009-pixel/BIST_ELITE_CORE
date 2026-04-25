@@ -65,6 +65,9 @@ from crypto_core.service.artifact_export import (
     export_paper_shadow_activation_plan as export_paper_shadow_plan,
 )
 from crypto_core.service.artifact_export import (
+    export_paper_shadow_evidence_bundle as export_evidence_bundle,
+)
+from crypto_core.service.artifact_export import (
     export_paper_shadow_feed_replay_plan as export_feed_replay_plan,
 )
 from crypto_core.service.artifact_export import (
@@ -90,6 +93,9 @@ from crypto_core.service.artifact_export import (
 )
 from crypto_core.service.artifact_export import (
     load_paper_shadow_activation_plan as load_paper_shadow_plan,
+)
+from crypto_core.service.artifact_export import (
+    load_paper_shadow_evidence_bundle as load_evidence_bundle,
 )
 from crypto_core.service.artifact_export import (
     load_paper_shadow_feed_replay_plan as load_feed_replay_plan,
@@ -152,12 +158,14 @@ from crypto_core.service.paper_shadow_session_controller import (
     MarketEventBatch,
     MultiSourceRunEvidenceReport,
     PaperDataSourceBatchResult,
+    PaperShadowEvidenceBundle,
     PaperShadowRunEvidenceReport,
     PaperShadowSessionController,
     PaperShadowSessionSnapshot,
     build_feed_replay_plan,
     build_multi_source_run_evidence_report,
     build_paper_data_source_batch_result,
+    build_paper_shadow_evidence_bundle,
     build_paper_shadow_run_evidence_report,
     feed_replay_plan_to_dict,
     feed_replay_result_to_dict,
@@ -166,6 +174,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     multi_source_run_evidence_report_to_dict,
     paper_data_source_batch_result_to_dict,
     paper_data_source_payload_to_market_event_batch,
+    paper_shadow_evidence_bundle_to_dict,
     paper_shadow_run_evidence_report_to_dict,
     paper_shadow_session_snapshot_to_dict,
     runtime_monitor_snapshot_to_dict,
@@ -1239,6 +1248,77 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for multi-source run evidence report load")
         return load_multi_source_evidence_report(evidence_store=self._evidence_store)
+
+    def paper_shadow_evidence_bundle(
+        self,
+        *,
+        aggregate_report: MultiSourceRunEvidenceReport | dict,
+        run_reports: tuple[PaperShadowRunEvidenceReport | dict, ...],
+        bundle_id: str | None = None,
+        as_of_ns: int | None = None,
+    ) -> PaperShadowEvidenceBundle:
+        """Package a multi-source aggregate with its exact run-report drilldowns."""
+        return build_paper_shadow_evidence_bundle(
+            aggregate_report=aggregate_report,
+            run_reports=run_reports,
+            bundle_id=bundle_id,
+            as_of_ns=as_of_ns,
+        )
+
+    def paper_shadow_evidence_bundle_dict(
+        self,
+        bundle: PaperShadowEvidenceBundle | None = None,
+        *,
+        aggregate_report: MultiSourceRunEvidenceReport | dict | None = None,
+        run_reports: tuple[PaperShadowRunEvidenceReport | dict, ...] = (),
+        bundle_id: str | None = None,
+        as_of_ns: int | None = None,
+    ) -> dict:
+        """Serialize a paper/shadow evidence bundle with run-report drilldowns."""
+        source_bundle = (
+            bundle
+            if bundle is not None
+            else self.paper_shadow_evidence_bundle(
+                aggregate_report=_require_orchestrator_bundle_aggregate(aggregate_report),
+                run_reports=run_reports,
+                bundle_id=bundle_id,
+                as_of_ns=as_of_ns,
+            )
+        )
+        return paper_shadow_evidence_bundle_to_dict(source_bundle)
+
+    def export_paper_shadow_evidence_bundle(
+        self,
+        bundle: PaperShadowEvidenceBundle | None = None,
+        *,
+        aggregate_report: MultiSourceRunEvidenceReport | dict | None = None,
+        run_reports: tuple[PaperShadowRunEvidenceReport | dict, ...] = (),
+        bundle_id: str | None = None,
+        as_of_ns: int | None = None,
+    ):
+        """Persist a paper/shadow evidence bundle with run-report drilldowns."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper/shadow evidence bundle export")
+        source_bundle = (
+            bundle
+            if bundle is not None
+            else self.paper_shadow_evidence_bundle(
+                aggregate_report=_require_orchestrator_bundle_aggregate(aggregate_report),
+                run_reports=run_reports,
+                bundle_id=bundle_id,
+                as_of_ns=as_of_ns,
+            )
+        )
+        return export_evidence_bundle(
+            bundle=source_bundle,
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_shadow_evidence_bundle(self) -> PaperShadowEvidenceBundle:
+        """Load the latest persisted paper/shadow evidence bundle with drilldowns."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper/shadow evidence bundle load")
+        return load_evidence_bundle(evidence_store=self._evidence_store)
 
     # ------------------------------------------------------------------
     # Properties
@@ -3407,6 +3487,14 @@ class ServiceOrchestrator:
             if item and item not in ordered:
                 ordered.append(item)
         return tuple(ordered)
+
+
+def _require_orchestrator_bundle_aggregate(
+    aggregate_report: MultiSourceRunEvidenceReport | dict | None,
+) -> MultiSourceRunEvidenceReport | dict:
+    if aggregate_report is None:
+        raise RuntimeError("aggregate_report is required for paper/shadow evidence bundle construction")
+    return aggregate_report
 
 
 # ---------------------------------------------------------------------------
