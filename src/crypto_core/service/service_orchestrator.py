@@ -187,7 +187,12 @@ from crypto_core.service.promotion_review_controller import (
     ReviewStatus,
     ReviewWorkflowCorruptError,
 )
-from crypto_core.service.readiness import ReadinessEvaluator, readiness_to_dict
+from crypto_core.service.readiness import (
+    ReadinessEvaluator,
+    paper_shadow_evidence_readiness_bridge,
+    paper_shadow_evidence_readiness_flags,
+    readiness_to_dict,
+)
 from crypto_core.service.sleeve_admission_controller import (
     ManagedSleeveSetManifest,
     PaperShadowActivationPlan,
@@ -449,6 +454,11 @@ class EvidenceSufficiencyState:
     external_regime_activation_blocked_steps: int = 0
     external_regime_activation_reduced_steps: int = 0
     external_regime_scenario_summary: str = ""
+    paper_shadow_evidence_available: bool = False
+    paper_shadow_evidence_passed: bool = False
+    paper_shadow_evidence_blocked: bool = False
+    paper_shadow_evidence_bundle_complete: bool = False
+    paper_shadow_evidence_status: str = "missing"
 
 
 @dataclass(frozen=True)
@@ -614,6 +624,7 @@ class ServiceOrchestrator:
         self._sleeve_promotion_review_controller: SleevePromotionReviewController | None = None
         self._sleeve_admission_controller: SleeveAdmissionController | None = None
         self._paper_shadow_session_controller: PaperShadowSessionController | None = None
+        self._paper_shadow_evidence_bundle: PaperShadowEvidenceBundle | None = None
         self._configured_sleeves = tuple(sleeves)
         self._escalation_review: EscalationReviewController | None = None
         self._sleeve_allocation_policy = (
@@ -743,6 +754,8 @@ class ServiceOrchestrator:
         )
         if readiness_flags is not None:
             source_readiness_flags = readiness_flags
+        if readiness_flags is None:
+            source_readiness_flags = self._with_paper_shadow_evidence_flags(source_readiness_flags)
         promotion_review = promotion_review_snapshot
         if promotion_review is None and self._sleeve_promotion_review_controller is not None:
             promotion_review = self._sleeve_promotion_review_controller.snapshot()
@@ -1258,12 +1271,14 @@ class ServiceOrchestrator:
         as_of_ns: int | None = None,
     ) -> PaperShadowEvidenceBundle:
         """Package a multi-source aggregate with its exact run-report drilldowns."""
-        return build_paper_shadow_evidence_bundle(
+        bundle = build_paper_shadow_evidence_bundle(
             aggregate_report=aggregate_report,
             run_reports=run_reports,
             bundle_id=bundle_id,
             as_of_ns=as_of_ns,
         )
+        self._paper_shadow_evidence_bundle = bundle
+        return bundle
 
     def paper_shadow_evidence_bundle_dict(
         self,
@@ -1309,6 +1324,7 @@ class ServiceOrchestrator:
                 as_of_ns=as_of_ns,
             )
         )
+        self._paper_shadow_evidence_bundle = source_bundle
         return export_evidence_bundle(
             bundle=source_bundle,
             evidence_store=self._evidence_store,
@@ -1318,7 +1334,9 @@ class ServiceOrchestrator:
         """Load the latest persisted paper/shadow evidence bundle with drilldowns."""
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for paper/shadow evidence bundle load")
-        return load_evidence_bundle(evidence_store=self._evidence_store)
+        bundle = load_evidence_bundle(evidence_store=self._evidence_store)
+        self._paper_shadow_evidence_bundle = bundle
+        return bundle
 
     # ------------------------------------------------------------------
     # Properties
@@ -2398,7 +2416,15 @@ class ServiceOrchestrator:
         """
         if self._last_campaign_report is None:
             return None
-        return campaign_readiness_flags(self._last_campaign_report)
+        return self._with_paper_shadow_evidence_flags(campaign_readiness_flags(self._last_campaign_report))
+
+    def paper_shadow_evidence_readiness_bridge_dict(
+        self,
+        bundle: PaperShadowEvidenceBundle | dict | None = None,
+    ) -> dict:
+        """Return compact bundle-derived readiness/governance flags."""
+        source_bundle = self._paper_shadow_evidence_bundle if bundle is None else bundle
+        return paper_shadow_evidence_readiness_bridge(source_bundle)
 
     def external_regime_snapshot(self) -> ExternalRegimeSnapshot | None:
         """Current external regime snapshot, or None if no data plane configured.
@@ -3108,6 +3134,9 @@ class ServiceOrchestrator:
                 parts.append(
                     f"External regime scenario reduced activation on {latest_scenario.activation_reduced_steps} step(s)."
                 )
+        paper_shadow_bridge = paper_shadow_evidence_readiness_bridge(self._paper_shadow_evidence_bundle)
+        if not bool(paper_shadow_bridge["supportive"]):
+            parts.append("Paper/shadow evidence bundle is not supportive.")
         if not parts:
             parts.append("Evidence appears sufficient for promotion consideration.")
 
@@ -3132,6 +3161,11 @@ class ServiceOrchestrator:
                 0 if latest_scenario is None else latest_scenario.activation_reduced_steps
             ),
             external_regime_scenario_summary=("" if latest_scenario is None else latest_scenario.summary),
+            paper_shadow_evidence_available=bool(paper_shadow_bridge["paper_shadow_evidence_available"]),
+            paper_shadow_evidence_passed=bool(paper_shadow_bridge["paper_shadow_evidence_passed"]),
+            paper_shadow_evidence_blocked=bool(paper_shadow_bridge["paper_shadow_evidence_blocked"]),
+            paper_shadow_evidence_bundle_complete=bool(paper_shadow_bridge["paper_shadow_evidence_bundle_complete"]),
+            paper_shadow_evidence_status=str(paper_shadow_bridge["paper_shadow_evidence_status"]),
         )
 
     def _build_external_regime_safety_state(
@@ -3168,9 +3202,14 @@ class ServiceOrchestrator:
             return None
         evaluator = ReadinessEvaluator()
         return evaluator.evaluate(
-            campaign_readiness_flags(source_report),
+            self._with_paper_shadow_evidence_flags(campaign_readiness_flags(source_report)),
             assessed_at_ns=assessed_at_ns,
         )
+
+    def _with_paper_shadow_evidence_flags(self, flags: dict[str, bool] | None) -> dict[str, bool]:
+        merged: dict[str, bool] = {} if flags is None else dict(flags)
+        merged.update(paper_shadow_evidence_readiness_flags(self._paper_shadow_evidence_bundle))
+        return merged
 
     @staticmethod
     def _decision_pack_criteria_summary(reason_codes: dict, readiness_dict: dict | None) -> dict:
@@ -3789,6 +3828,11 @@ def evidence_sufficiency_state_to_dict(state: EvidenceSufficiencyState) -> dict:
         "external_regime_activation_blocked_steps": state.external_regime_activation_blocked_steps,
         "external_regime_activation_reduced_steps": state.external_regime_activation_reduced_steps,
         "external_regime_scenario_summary": state.external_regime_scenario_summary,
+        "paper_shadow_evidence_available": state.paper_shadow_evidence_available,
+        "paper_shadow_evidence_passed": state.paper_shadow_evidence_passed,
+        "paper_shadow_evidence_blocked": state.paper_shadow_evidence_blocked,
+        "paper_shadow_evidence_bundle_complete": state.paper_shadow_evidence_bundle_complete,
+        "paper_shadow_evidence_status": state.paper_shadow_evidence_status,
     }
 
 

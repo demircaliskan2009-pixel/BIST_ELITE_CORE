@@ -197,8 +197,14 @@ OPTIONAL_READINESS_CRITERIA = frozenset(
         "external_regime_not_unavailable_dominated",
         "external_regime_not_high_risk_dominated",
         "external_regime_gating_not_dominant",
+        "paper_shadow_evidence_available",
+        "paper_shadow_evidence_passed",
+        "paper_shadow_evidence_blocked",
+        "paper_shadow_evidence_bundle_complete",
     }
 )
+
+NEGATED_READINESS_CRITERIA = frozenset({"paper_shadow_evidence_blocked"})
 
 
 @dataclass(frozen=True)
@@ -276,7 +282,13 @@ class ReadinessEvaluator:
                 reason = "overridden" if override == CriterionStatus.NOT_MET else None
             elif name in flags:
                 val = flags[name]
-                if val is True:
+                if name in NEGATED_READINESS_CRITERIA and val is False:
+                    status = CriterionStatus.MET
+                    reason = None
+                elif name in NEGATED_READINESS_CRITERIA and val is True:
+                    status = CriterionStatus.NOT_MET
+                    reason = f"{name} is blocking readiness"
+                elif val is True:
                     status = CriterionStatus.MET
                     reason = None
                 elif val is False:
@@ -364,7 +376,89 @@ _CRITERION_DESCRIPTIONS: dict[str, str] = {
     "external_regime_not_unavailable_dominated": "External regime scenario was not dominated by unavailable conditions",
     "external_regime_not_high_risk_dominated": "External regime scenario was not dominated by high-risk conditions",
     "external_regime_gating_not_dominant": "External regime gating did not dominate campaign operation",
+    "paper_shadow_evidence_available": "Paper/shadow evidence bundle is available",
+    "paper_shadow_evidence_passed": "Paper/shadow evidence bundle passed",
+    "paper_shadow_evidence_blocked": "Paper/shadow evidence bundle is not blocked",
+    "paper_shadow_evidence_bundle_complete": "Paper/shadow evidence bundle includes all run-report drilldowns",
 }
+
+
+def paper_shadow_evidence_readiness_flags(bundle: object | None) -> dict[str, bool]:
+    """Return conservative readiness flags from a PaperShadowEvidenceBundle."""
+    bridge = paper_shadow_evidence_readiness_bridge(bundle)
+    return {
+        "paper_shadow_evidence_available": bool(bridge["paper_shadow_evidence_available"]),
+        "paper_shadow_evidence_passed": bool(bridge["paper_shadow_evidence_passed"]),
+        "paper_shadow_evidence_blocked": bool(bridge["paper_shadow_evidence_blocked"]),
+        "paper_shadow_evidence_bundle_complete": bool(bridge["paper_shadow_evidence_bundle_complete"]),
+    }
+
+
+def paper_shadow_evidence_readiness_bridge(bundle: object | None) -> dict:
+    """Build a compact readiness bridge from the bundle artifact only.
+
+    Missing bundle is explicit and not supportive. Malformed bundle payloads
+    fail through the bundle loader/serializer instead of being recomputed here.
+    """
+    if bundle is None:
+        return {
+            "paper_shadow_evidence_available": False,
+            "paper_shadow_evidence_passed": False,
+            "paper_shadow_evidence_blocked": False,
+            "paper_shadow_evidence_bundle_complete": False,
+            "paper_shadow_evidence_status": "missing",
+            "bundle_id": None,
+            "aggregate_id": None,
+            "report_ids": [],
+            "missing_report_ids": [],
+            "blockers": ["paper_shadow_evidence_unavailable"],
+            "reason_codes": ["paper_shadow_evidence_bundle_missing"],
+            "next_actions": ["build_paper_shadow_evidence_bundle"],
+            "supportive": False,
+        }
+
+    from crypto_core.service.paper_shadow_session_controller import (
+        PaperShadowEvidenceBundle,
+        PaperShadowRunEvidenceStatus,
+        paper_shadow_evidence_bundle_from_dict,
+        paper_shadow_evidence_bundle_to_dict,
+    )
+
+    resolved = paper_shadow_evidence_bundle_from_dict(bundle) if isinstance(bundle, dict) else bundle
+    if not isinstance(resolved, PaperShadowEvidenceBundle):
+        raise ValueError("paper_shadow_evidence_readiness_bridge requires a PaperShadowEvidenceBundle")
+    paper_shadow_evidence_bundle_to_dict(resolved)
+
+    nested_report_ids = tuple(report.report_id for report in resolved.run_reports)
+    complete = not resolved.missing_report_ids and nested_report_ids == resolved.report_ids
+    unsafe = not resolved.paper_only or resolved.real_orders_enabled or resolved.real_money_enabled
+    blocked = resolved.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED or bool(resolved.blockers) or unsafe
+    if not complete:
+        blocked = True
+    passed = resolved.evidence_status == PaperShadowRunEvidenceStatus.PASS and complete and not blocked
+    blockers = list(resolved.blockers)
+    if not complete:
+        blockers.append("paper_shadow_evidence_incomplete")
+    if unsafe:
+        blockers.append("unsafe_real_trading_flags")
+    if blocked and not blockers:
+        blockers.append("paper_shadow_evidence_blocked")
+
+    return {
+        "paper_shadow_evidence_available": True,
+        "paper_shadow_evidence_passed": passed,
+        "paper_shadow_evidence_blocked": blocked,
+        "paper_shadow_evidence_bundle_complete": complete,
+        "paper_shadow_evidence_status": resolved.evidence_status.value,
+        "bundle_id": resolved.bundle_id,
+        "aggregate_id": resolved.aggregate_report.aggregate_id,
+        "report_ids": list(resolved.report_ids),
+        "missing_report_ids": list(resolved.missing_report_ids),
+        "blockers": sorted(dict.fromkeys(blockers)),
+        "reason_codes": list(resolved.reason_codes),
+        "next_actions": list(resolved.next_actions),
+        "supportive": passed,
+    }
 
 
 # ---------------------------------------------------------------------------

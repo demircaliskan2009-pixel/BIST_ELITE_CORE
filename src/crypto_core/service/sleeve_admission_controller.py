@@ -1576,6 +1576,9 @@ def _build_release_evidence_gate(
 
     external_supportive, external_blockers = _external_regime_evidence_state(campaign_report, readiness_flags)
     blockers.extend(external_blockers)
+    paper_shadow_blocker = _paper_shadow_evidence_blocker(readiness_flags)
+    if paper_shadow_blocker:
+        blockers.append(paper_shadow_blocker)
 
     paper_blockers = tuple(sorted(dict.fromkeys(blockers)))
     status = _infer_release_evidence_status(
@@ -1736,6 +1739,20 @@ def _external_regime_evidence_state(
     return False, ("external_regime_evidence_unavailable",)
 
 
+def _paper_shadow_evidence_blocker(readiness_flags: dict[str, bool] | None) -> str | None:
+    if readiness_flags is None or not any(key.startswith("paper_shadow_evidence_") for key in readiness_flags):
+        return None
+    if bool(readiness_flags.get("paper_shadow_evidence_blocked", False)):
+        return "paper_shadow_evidence_blocked"
+    if not bool(readiness_flags.get("paper_shadow_evidence_available", False)):
+        return "paper_shadow_evidence_unavailable"
+    if not bool(readiness_flags.get("paper_shadow_evidence_bundle_complete", False)):
+        return "paper_shadow_evidence_incomplete"
+    if not bool(readiness_flags.get("paper_shadow_evidence_passed", False)):
+        return "paper_shadow_evidence_not_passed"
+    return None
+
+
 def _not_dominated(campaign_report: CampaignReport, field_name: str) -> bool:
     scenario_step_count = int(getattr(campaign_report, "ext_regime_scenario_step_count", 0) or 0)
     if scenario_step_count <= 0:
@@ -1769,8 +1786,18 @@ def _infer_release_evidence_status(
 ) -> SleeveAdmissionReleaseEvidenceStatus:
     if len(summary.admission_results) == 0:
         return SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_MISSING
-    if any(blocker in blockers for blocker in ("paper_campaign_evidence_failed", "external_regime_governance_blocked")):
+    if any(
+        blocker in blockers
+        for blocker in (
+            "paper_campaign_evidence_failed",
+            "external_regime_governance_blocked",
+            "paper_shadow_evidence_blocked",
+            "paper_shadow_evidence_incomplete",
+        )
+    ):
         return SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_BLOCKED
+    if "paper_shadow_evidence_unavailable" in blockers:
+        return SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_MISSING
     required = (
         paper_campaign_evidence_available,
         sleeve_campaign_link_available,
@@ -1779,7 +1806,7 @@ def _infer_release_evidence_status(
         tca_or_markout_evidence_supportive,
         external_regime_evidence_supportive,
     )
-    if all(required):
+    if all(required) and not blockers:
         return SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_READY
     if (
         not paper_campaign_evidence_available

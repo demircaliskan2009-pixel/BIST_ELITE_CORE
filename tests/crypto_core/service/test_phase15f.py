@@ -85,6 +85,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     runtime_monitor_snapshot_from_dict,
     runtime_monitor_snapshot_to_dict,
 )
+from crypto_core.service.readiness import CriterionStatus, ReadinessEvaluator, paper_shadow_evidence_readiness_flags
 from crypto_core.service.service_orchestrator import ServiceOrchestrator, operator_snapshot_to_dict
 from crypto_core.service.sleeve_admission_controller import (
     ManagedSleeveSetDryRunStatus,
@@ -2682,6 +2683,9 @@ def test_paper_shadow_evidence_bundle_blocked_nested_report_stays_blocked() -> N
     assert bundle.missing_report_ids == ()
     assert "rejected_run_evidence" in bundle.blockers
     assert "resolve_multi_source_run_blockers" in bundle.next_actions
+    flags = paper_shadow_evidence_readiness_flags(bundle)
+    assert flags["paper_shadow_evidence_passed"] is False
+    assert flags["paper_shadow_evidence_blocked"] is True
 
 
 def test_paper_shadow_evidence_bundle_serialization_export_and_fail_closed(tmp_path) -> None:
@@ -2729,6 +2733,124 @@ def test_paper_shadow_evidence_bundle_deterministic_replay() -> None:
         )
 
     assert run_once() == run_once()
+
+
+def test_paper_shadow_evidence_bundle_pass_supports_readiness_flags() -> None:
+    _, _, _, first = _paper_shadow_full_local_run(source_id="local-feed-a", report_id="run-a", replay_id="replay-a")
+    _, _, _, second = _paper_shadow_full_local_run(source_id="local-feed-b", report_id="run-b", replay_id="replay-b")
+    aggregate = build_multi_source_run_evidence_report((second, first), aggregate_id="multi-readiness")
+    bundle = build_paper_shadow_evidence_bundle(
+        aggregate_report=aggregate,
+        run_reports=(second, first),
+        bundle_id="bundle-readiness",
+    )
+
+    flags = paper_shadow_evidence_readiness_flags(bundle)
+    status = ReadinessEvaluator().evaluate(flags, assessed_at_ns=_T0_NS)
+    criteria = {criterion.name: criterion for criterion in status.criteria}
+
+    assert flags == {
+        "paper_shadow_evidence_available": True,
+        "paper_shadow_evidence_passed": True,
+        "paper_shadow_evidence_blocked": False,
+        "paper_shadow_evidence_bundle_complete": True,
+    }
+    assert criteria["paper_shadow_evidence_available"].status == CriterionStatus.MET
+    assert criteria["paper_shadow_evidence_passed"].status == CriterionStatus.MET
+    assert criteria["paper_shadow_evidence_blocked"].status == CriterionStatus.MET
+    assert criteria["paper_shadow_evidence_bundle_complete"].status == CriterionStatus.MET
+
+
+def test_paper_shadow_evidence_bundle_incomplete_bridge_not_supportive() -> None:
+    _, _, _, first = _paper_shadow_full_local_run(source_id="local-feed-a", report_id="run-a", replay_id="replay-a")
+    _, _, _, second = _paper_shadow_full_local_run(source_id="local-feed-b", report_id="run-b", replay_id="replay-b")
+    aggregate = build_multi_source_run_evidence_report((first, second), aggregate_id="multi-incomplete-bridge")
+    bundle = build_paper_shadow_evidence_bundle(
+        aggregate_report=aggregate,
+        run_reports=(first,),
+        bundle_id="bundle-incomplete-bridge",
+    )
+    orch = ServiceOrchestrator(service=_mock_service(), readiness_level="paper_live")
+
+    bridge = orch.paper_shadow_evidence_readiness_bridge_dict(bundle)
+
+    assert bridge["paper_shadow_evidence_available"] is True
+    assert bridge["paper_shadow_evidence_passed"] is False
+    assert bridge["paper_shadow_evidence_blocked"] is True
+    assert bridge["paper_shadow_evidence_bundle_complete"] is False
+    assert bridge["supportive"] is False
+    assert bridge["missing_report_ids"] == ["run-b"]
+    assert bridge["blockers"] == ["missing_run_report_drilldown", "paper_shadow_evidence_incomplete"]
+
+
+def test_service_orchestrator_missing_evidence_bundle_gates_release_manifest_and_activation() -> None:
+    fixed_review_ns = _T0_NS + 250
+    sleeve = _sleeve("bridge-sleeve", effective_allocation=0.20, target_allocation=0.20)
+    portfolio = _portfolio(sleeve)
+    campaign_report = _campaign_report(sleeve_ids=("bridge-sleeve",))
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        sleeves=(sleeve,),
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: fixed_review_ns,
+    )
+    orch.start_sleeve_promotion_review(workflow_snapshot=_supported_workflow("bridge-sleeve"))
+
+    pack = orch.sleeve_admission_release_pack(portfolio_snapshot=portfolio, campaign_report=campaign_report)
+    manifest = orch.managed_sleeve_set_manifest(release_pack=pack, portfolio_snapshot=portfolio)
+    plan = orch.paper_shadow_activation_plan(manifest=manifest)
+    bridge = orch.paper_shadow_evidence_readiness_bridge_dict()
+
+    assert bridge["paper_shadow_evidence_available"] is False
+    assert bridge["supportive"] is False
+    assert pack.evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_MISSING
+    assert pack.overall_release_status == SleeveAdmissionReleaseStatus.PARTIAL_READY
+    assert "paper_shadow_evidence_unavailable" in pack.paper_evidence_blockers
+    assert manifest.dry_run_status != ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN
+    assert plan.activation_status != PaperShadowActivationStatus.READY_FOR_PAPER_SHADOW
+
+
+def test_service_orchestrator_passed_evidence_bundle_allows_existing_release_readiness() -> None:
+    fixed_review_ns = _T0_NS + 260
+    sleeve = _sleeve("bridge-ready", effective_allocation=0.20, target_allocation=0.20)
+    base_portfolio = _portfolio(sleeve)
+    portfolio = replace(
+        base_portfolio,
+        effective_allocation=replace(
+            base_portfolio.effective_allocation,
+            effective_allocated_share=0.20,
+            effective_unallocated_share=0.80,
+            recipient_sleeve_ids=("bridge-ready",),
+        ),
+    )
+    campaign_report = _campaign_report(sleeve_ids=("bridge-ready",))
+    _, _, _, first = _paper_shadow_full_local_run(source_id="local-feed-a", report_id="run-a", replay_id="replay-a")
+    _, _, _, second = _paper_shadow_full_local_run(source_id="local-feed-b", report_id="run-b", replay_id="replay-b")
+    aggregate = build_multi_source_run_evidence_report((second, first), aggregate_id="multi-release-bridge")
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        sleeves=(sleeve,),
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: fixed_review_ns,
+    )
+    orch.paper_shadow_evidence_bundle(
+        aggregate_report=aggregate,
+        run_reports=(first, second),
+        bundle_id="bundle-release-bridge",
+    )
+    orch.start_sleeve_promotion_review(workflow_snapshot=_supported_workflow("bridge-ready"))
+
+    pack = orch.sleeve_admission_release_pack(portfolio_snapshot=portfolio, campaign_report=campaign_report)
+    manifest = orch.managed_sleeve_set_manifest(release_pack=pack, portfolio_snapshot=portfolio)
+    plan = orch.paper_shadow_activation_plan(manifest=manifest)
+    evidence = operator_snapshot_to_dict(orch.operator_snapshot())["evidence"]
+
+    assert pack.evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_READY
+    assert pack.overall_release_status == SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET
+    assert manifest.dry_run_status == ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN
+    assert plan.activation_status == PaperShadowActivationStatus.READY_FOR_PAPER_SHADOW
+    assert evidence["paper_shadow_evidence_passed"] is True
+    assert evidence["paper_shadow_evidence_bundle_complete"] is True
 
 
 def test_service_orchestrator_paper_shadow_session_helpers_and_operator_status(tmp_path) -> None:
