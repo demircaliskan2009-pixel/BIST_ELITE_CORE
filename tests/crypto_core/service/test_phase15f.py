@@ -8,6 +8,7 @@ import pytest
 
 from crypto_core.service.artifact_export import (
     export_managed_sleeve_set_manifest,
+    export_paper_data_source_batch_result,
     export_paper_shadow_activation_plan,
     export_paper_shadow_feed_replay_plan,
     export_paper_shadow_feed_replay_result,
@@ -15,6 +16,7 @@ from crypto_core.service.artifact_export import (
     export_paper_shadow_session_snapshot,
     export_sleeve_admission_release_pack,
     load_managed_sleeve_set_manifest,
+    load_paper_data_source_batch_result,
     load_paper_shadow_activation_plan,
     load_paper_shadow_feed_replay_plan,
     load_paper_shadow_feed_replay_result,
@@ -39,6 +41,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     MarketEvent,
     MarketEventBatch,
     MarketEventType,
+    PaperDataSourceType,
     PaperShadowSessionController,
     PaperShadowSessionCorruptError,
     PaperShadowSessionStatus,
@@ -46,6 +49,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     build_feed_replay_plan,
     build_guardrail_snapshot,
     build_market_event_batch,
+    build_paper_data_source_batch_result,
     feed_replay_plan_from_dict,
     feed_replay_plan_to_dict,
     feed_replay_result_from_dict,
@@ -54,6 +58,9 @@ from crypto_core.service.paper_shadow_session_controller import (
     guardrail_snapshot_to_dict,
     market_event_batch_from_dict,
     market_event_batch_to_dict,
+    paper_data_source_batch_result_from_dict,
+    paper_data_source_batch_result_to_dict,
+    paper_data_source_payload_to_market_event_batch,
     paper_shadow_session_snapshot_from_dict,
     paper_shadow_session_snapshot_to_dict,
     runtime_monitor_snapshot_from_dict,
@@ -456,6 +463,41 @@ def _market_event(
         funding_rate=funding_rate,
         open_interest=open_interest,
     )
+
+
+def _paper_data_source_payload(
+    *,
+    source_id: str = "local-feed",
+    source_type: str = "local_payload",
+    venue: str = "binance",
+    as_of_ns: int = _T0_NS + 200,
+    records: tuple[dict, ...] | None = None,
+    symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT"),
+) -> dict:
+    return {
+        "source_id": source_id,
+        "source_type": source_type,
+        "venue": venue,
+        "as_of_ns": as_of_ns,
+        "symbols": list(symbols),
+        "records": list(
+            records
+            or (
+                {
+                    "symbol": "ETHUSDT",
+                    "ts_ns": _T0_NS + 102,
+                    "event_type": "mark_price",
+                    "price": 2100.0,
+                },
+                {
+                    "symbol": "BTCUSDT",
+                    "ts_ns": _T0_NS + 101,
+                    "event_type": "mark_price",
+                    "price": 100.0,
+                },
+            )
+        ),
+    }
 
 
 def _mock_service() -> MagicMock:
@@ -2102,6 +2144,129 @@ def test_paper_shadow_feed_replay_serialization_and_export_roundtrip(tmp_path) -
         load_paper_shadow_feed_replay_result(evidence_store=store)
 
 
+def test_paper_data_source_valid_local_payload_to_market_event_batch() -> None:
+    result = build_paper_data_source_batch_result(
+        _paper_data_source_payload(),
+        allowed_source_ids=("local-feed",),
+    )
+    batch = paper_data_source_payload_to_market_event_batch(
+        _paper_data_source_payload(),
+        allowed_source_ids=("local-feed",),
+    )
+    rendered = paper_data_source_batch_result_to_dict(result)
+
+    assert result.source.source_id == "local-feed"
+    assert result.source.source_type == PaperDataSourceType.LOCAL_PAYLOAD
+    assert result.source.symbols == ("BTCUSDT", "ETHUSDT")
+    assert result.source.venue == "binance"
+    assert result.source.events_produced == 2
+    assert result.source.batches_produced == 1
+    assert result.source.rejected_records == 0
+    assert [event.symbol for event in result.batch.events] == ["BTCUSDT", "ETHUSDT"]
+    assert batch == result.batch
+    assert rendered["source"]["events_produced"] == 2
+    assert rendered["batch"]["events"][0]["symbol"] == "BTCUSDT"
+
+
+def test_paper_data_source_unknown_source_rejected_unless_explicitly_allowed() -> None:
+    payload = _paper_data_source_payload(source_id="unregistered-local")
+
+    with pytest.raises(PaperShadowSessionCorruptError):
+        build_paper_data_source_batch_result(payload)
+
+    result = build_paper_data_source_batch_result(payload, allow_unknown_source=True)
+    assert result.source.source_id == "unregistered-local"
+
+
+def test_paper_data_source_malformed_payload_rejected_fail_closed() -> None:
+    bad_price = _paper_data_source_payload(
+        records=(
+            {
+                "symbol": "BTCUSDT",
+                "ts_ns": _T0_NS + 101,
+                "event_type": "mark_price",
+                "price": -1.0,
+            },
+        ),
+        symbols=("BTCUSDT",),
+    )
+    with pytest.raises(PaperShadowSessionCorruptError):
+        build_paper_data_source_batch_result(bad_price, allowed_source_ids=("local-feed",))
+
+    future_record = _paper_data_source_payload(
+        records=(
+            {
+                "symbol": "BTCUSDT",
+                "ts_ns": _T0_NS + 301,
+                "event_type": "mark_price",
+                "price": 100.0,
+            },
+        ),
+        symbols=("BTCUSDT",),
+        as_of_ns=_T0_NS + 200,
+    )
+    with pytest.raises(PaperShadowSessionCorruptError):
+        build_paper_data_source_batch_result(future_record, allowed_source_ids=("local-feed",))
+
+    client_payload = {
+        **_paper_data_source_payload(
+            symbols=("BTCUSDT",),
+            records=({"symbol": "BTCUSDT", "ts_ns": _T0_NS + 101, "event_type": "mark_price", "price": 100.0},),
+        ),
+        "client": object(),
+    }
+    with pytest.raises(PaperShadowSessionCorruptError):
+        build_paper_data_source_batch_result(client_payload, allowed_source_ids=("local-feed",))
+
+    network_type = _paper_data_source_payload(source_type="network_client")
+    with pytest.raises(PaperShadowSessionCorruptError):
+        build_paper_data_source_batch_result(network_type, allowed_source_ids=("local-feed",))
+
+
+def test_paper_data_source_stable_ordering_serialization_and_export(tmp_path) -> None:
+    result = build_paper_data_source_batch_result(
+        _paper_data_source_payload(),
+        allowed_source_ids=("local-feed",),
+        batch_id="paper-source-roundtrip",
+    )
+    payload = paper_data_source_batch_result_to_dict(result)
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+
+    restored = paper_data_source_batch_result_from_dict(payload)
+    assert restored == result
+    assert [event["symbol"] for event in payload["batch"]["events"]] == ["BTCUSDT", "ETHUSDT"]
+
+    export_paper_data_source_batch_result(result=result, evidence_store=store)
+    assert load_paper_data_source_batch_result(evidence_store=store) == result
+
+    store.save_snapshot("crypto_paper_data_source_batch_result", ["bad"])
+    with pytest.raises(PaperShadowSessionCorruptError):
+        load_paper_data_source_batch_result(evidence_store=store)
+
+
+def test_paper_data_source_replay_integration_updates_session() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    result = build_paper_data_source_batch_result(
+        _paper_data_source_payload(
+            symbols=("BTCUSDT",),
+            records=({"symbol": "BTCUSDT", "ts_ns": _T0_NS + 101, "event_type": "mark_price", "price": 100.0},),
+        ),
+        allowed_source_ids=("local-feed",),
+    )
+
+    replay = controller.replay_feed(build_feed_replay_plan((result.batch,), replay_id="data-source-replay"))
+    snapshot = controller.snapshot()
+
+    assert replay.events_replayed == 1
+    assert replay.guardrail_actions_seen == (GuardrailAction.NONE,)
+    assert snapshot.event_count == 1
+    assert snapshot.runtime_monitor.status == RuntimeMonitorStatus.HEALTHY
+
+
 def test_service_orchestrator_paper_shadow_session_helpers_and_operator_status(tmp_path) -> None:
     store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
     plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
@@ -2208,3 +2373,46 @@ def test_service_orchestrator_feed_replay_helper_and_artifacts(tmp_path) -> None
     orch.export_paper_shadow_feed_replay_result(result)
     assert orch.load_paper_shadow_feed_replay_plan() == replay
     assert orch.load_paper_shadow_feed_replay_result() == result
+
+
+def test_service_orchestrator_paper_data_source_helper_replays_and_exports(tmp_path) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 40, _T0_NS + 41, _T0_NS + 42))
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        evidence_store=store,
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: next(times),
+    )
+    payload = _paper_data_source_payload(
+        symbols=("BTCUSDT",),
+        records=(
+            {
+                "symbol": "BTCUSDT",
+                "ts_ns": _T0_NS + 140,
+                "event_type": "mark_price",
+                "price": 101.0,
+            },
+        ),
+    )
+
+    batch_result = orch.paper_data_source_payload_to_batch_result(payload, allowed_source_ids=("local-feed",))
+    rendered = orch.paper_data_source_batch_result_dict(batch_result)
+    batch = orch.paper_data_source_payload_to_market_event_batch(payload, allowed_source_ids=("local-feed",))
+
+    orch.prepare_paper_shadow_session(plan=plan)
+    orch.start_paper_shadow_session()
+    replay = orch.replay_paper_data_source_payload(
+        payload,
+        allowed_source_ids=("local-feed",),
+        replay_id="orch-data-source-replay",
+    )
+
+    assert rendered["source"]["source_id"] == "local-feed"
+    assert batch == batch_result.batch
+    assert replay.events_replayed == 1
+    assert orch.paper_shadow_session_snapshot().event_count == 1
+
+    orch.export_paper_data_source_batch_result(batch_result)
+    assert orch.load_paper_data_source_batch_result() == batch_result

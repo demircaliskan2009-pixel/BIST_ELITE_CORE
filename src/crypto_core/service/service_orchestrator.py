@@ -47,9 +47,11 @@ from crypto_core.service.artifact_export import (
     escalation_decision_why_not_higher,
     export_escalation_decision,
     export_operator_decision_pack,
+    export_paper_data_source_batch_result,
     export_sleeve_portfolio_snapshot,
     load_escalation_decision,
     load_operator_decision_pack,
+    load_paper_data_source_batch_result,
     load_sleeve_portfolio_snapshot,
     operator_disposition_from_verdict,
 )
@@ -136,12 +138,17 @@ from crypto_core.service.paper_shadow_session_controller import (
     FeedReplayPlan,
     FeedReplayResult,
     MarketEventBatch,
+    PaperDataSourceBatchResult,
     PaperShadowSessionController,
     PaperShadowSessionSnapshot,
+    build_feed_replay_plan,
+    build_paper_data_source_batch_result,
     feed_replay_plan_to_dict,
     feed_replay_result_to_dict,
     guardrail_snapshot_to_dict,
     market_event_batch_to_dict,
+    paper_data_source_batch_result_to_dict,
+    paper_data_source_payload_to_market_event_batch,
     paper_shadow_session_snapshot_to_dict,
     runtime_monitor_snapshot_to_dict,
 )
@@ -939,6 +946,64 @@ class ServiceOrchestrator:
         """Serialize a deterministic local paper/shadow feed replay result."""
         return feed_replay_result_to_dict(result)
 
+    def paper_data_source_payload_to_batch_result(
+        self,
+        payload: dict,
+        *,
+        allowed_source_ids: tuple[str, ...] = (),
+        allow_unknown_source: bool = False,
+        batch_id: str | None = None,
+    ) -> PaperDataSourceBatchResult:
+        """Convert a provider-neutral local paper data-source payload into a market event batch result."""
+        return build_paper_data_source_batch_result(
+            payload,
+            allowed_source_ids=allowed_source_ids,
+            allow_unknown_source=allow_unknown_source,
+            batch_id=batch_id,
+        )
+
+    def paper_data_source_payload_to_market_event_batch(
+        self,
+        payload: dict,
+        *,
+        allowed_source_ids: tuple[str, ...] = (),
+        allow_unknown_source: bool = False,
+        batch_id: str | None = None,
+    ) -> MarketEventBatch:
+        """Convert a provider-neutral local paper data-source payload into a market event batch."""
+        return paper_data_source_payload_to_market_event_batch(
+            payload,
+            allowed_source_ids=allowed_source_ids,
+            allow_unknown_source=allow_unknown_source,
+            batch_id=batch_id,
+        )
+
+    def replay_paper_data_source_payload(
+        self,
+        payload: dict,
+        *,
+        allowed_source_ids: tuple[str, ...] = (),
+        allow_unknown_source: bool = False,
+        batch_id: str | None = None,
+        replay_id: str | None = None,
+    ) -> FeedReplayResult:
+        """Convert a local paper data-source payload and replay it into the running paper/shadow session."""
+        result = self.paper_data_source_payload_to_batch_result(
+            payload,
+            allowed_source_ids=allowed_source_ids,
+            allow_unknown_source=allow_unknown_source,
+            batch_id=batch_id,
+        )
+        replay_plan = build_feed_replay_plan(
+            (result.batch,),
+            replay_id=replay_id or f"feed-replay-{result.batch.batch_id}",
+        )
+        return self.replay_paper_shadow_feed(replay_plan)
+
+    def paper_data_source_batch_result_dict(self, result: PaperDataSourceBatchResult) -> dict:
+        """Serialize a deterministic local paper data-source conversion result."""
+        return paper_data_source_batch_result_to_dict(result)
+
     def paper_shadow_market_event_batch_dict(self, batch: MarketEventBatch) -> dict:
         """Serialize a deterministic read-only paper/shadow market event batch."""
         return market_event_batch_to_dict(batch)
@@ -1004,6 +1069,21 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for paper/shadow feed replay result load")
         return load_feed_replay_result(evidence_store=self._evidence_store)
+
+    def export_paper_data_source_batch_result(self, result: PaperDataSourceBatchResult):
+        """Persist a local paper data-source conversion result via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper data-source result export")
+        return export_paper_data_source_batch_result(
+            result=result,
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_data_source_batch_result(self) -> PaperDataSourceBatchResult:
+        """Load the latest persisted local paper data-source conversion result."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper data-source result load")
+        return load_paper_data_source_batch_result(evidence_store=self._evidence_store)
 
     # ------------------------------------------------------------------
     # Properties

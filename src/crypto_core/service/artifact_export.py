@@ -35,6 +35,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     FeedReplayPlan,
     FeedReplayResult,
     MarketEventBatch,
+    PaperDataSourceBatchResult,
     PaperShadowSessionCorruptError,
     PaperShadowSessionSnapshot,
     feed_replay_plan_from_dict,
@@ -43,6 +44,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     feed_replay_result_to_dict,
     market_event_batch_from_dict,
     market_event_batch_to_dict,
+    paper_data_source_batch_result_from_dict,
+    paper_data_source_batch_result_to_dict,
     paper_shadow_session_snapshot_from_dict,
     paper_shadow_session_snapshot_to_dict,
 )
@@ -521,6 +524,7 @@ _PAPER_SHADOW_SESSION_SNAPSHOT_NAME = "crypto_paper_shadow_session"
 _PAPER_SHADOW_MARKET_EVENT_BATCH_SNAPSHOT_NAME = "crypto_paper_shadow_market_event_batch"
 _PAPER_SHADOW_FEED_REPLAY_PLAN_SNAPSHOT_NAME = "crypto_paper_shadow_feed_replay_plan"
 _PAPER_SHADOW_FEED_REPLAY_RESULT_SNAPSHOT_NAME = "crypto_paper_shadow_feed_replay_result"
+_PAPER_DATA_SOURCE_BATCH_RESULT_SNAPSHOT_NAME = "crypto_paper_data_source_batch_result"
 
 
 def export_run_artifact(
@@ -808,3 +812,28 @@ def load_paper_shadow_feed_replay_result(*, evidence_store: EvidenceStore) -> Fe
             f"Paper/shadow feed replay result 'data' must be a dict, got {type(data).__name__!r}"
         )
     return feed_replay_result_from_dict(data)
+
+
+def export_paper_data_source_batch_result(
+    *,
+    result: PaperDataSourceBatchResult,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist a deterministic local paper data-source conversion result."""
+    data = paper_data_source_batch_result_to_dict(result)
+    write_result = evidence_store.save_snapshot(_PAPER_DATA_SOURCE_BATCH_RESULT_SNAPSHOT_NAME, data)
+    if not write_result.success:
+        return write_result
+    evidence_store.append_evidence(_PAPER_DATA_SOURCE_BATCH_RESULT_SNAPSHOT_NAME, data)
+    return write_result
+
+
+def load_paper_data_source_batch_result(*, evidence_store: EvidenceStore) -> PaperDataSourceBatchResult:
+    """Load the latest deterministic local paper data-source conversion result."""
+    envelope = evidence_store.load_snapshot(_PAPER_DATA_SOURCE_BATCH_RESULT_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper data source batch result 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return paper_data_source_batch_result_from_dict(data)

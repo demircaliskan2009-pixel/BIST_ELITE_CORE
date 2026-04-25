@@ -62,6 +62,12 @@ class MarketEventType(str, Enum):
     BOOK_TICK = "book_tick"
 
 
+class PaperDataSourceType(str, Enum):
+    LOCAL_PAYLOAD = "local_payload"
+    LOCAL_JSON = "local_json"
+    IN_MEMORY = "in_memory"
+
+
 @dataclass(frozen=True)
 class MarketEvent:
     symbol: str
@@ -103,6 +109,29 @@ class FeedReplayResult:
     halt_reason: str | None = None
     rejected_batch_ids: tuple[str, ...] = ()
     operator_summary: str = "Feed replay has not run."
+
+
+@dataclass(frozen=True)
+class PaperDataSourceSnapshot:
+    source_id: str
+    source_type: PaperDataSourceType
+    symbols: tuple[str, ...]
+    venue: str
+    as_of_ns: int
+    batches_produced: int = 0
+    events_produced: int = 0
+    rejected_records: int = 0
+    batch_ids: tuple[str, ...] = ()
+    first_event_ns: int | None = None
+    last_event_ns: int | None = None
+
+
+@dataclass(frozen=True)
+class PaperDataSourceBatchResult:
+    source: PaperDataSourceSnapshot
+    batch: MarketEventBatch
+    rejected_record_ids: tuple[str, ...] = ()
+    operator_summary: str = "Paper data source batch has not been built."
 
 
 @dataclass(frozen=True)
@@ -903,6 +932,143 @@ def feed_replay_result_from_dict(data: dict) -> FeedReplayResult:
     return result
 
 
+def build_paper_data_source_batch_result(
+    payload: dict,
+    *,
+    allowed_source_ids: tuple[str, ...] = (),
+    allow_unknown_source: bool = False,
+    batch_id: str | None = None,
+) -> PaperDataSourceBatchResult:
+    if not isinstance(payload, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper data source payload must be a dict, got {type(payload).__name__!r}"
+        )
+    _reject_forbidden_data_source_keys(payload)
+    source_id = _require_non_empty_str(payload.get("source_id"), "source_id")
+    allowed = _sorted_unique(allowed_source_ids)
+    if not allow_unknown_source and source_id not in allowed:
+        raise PaperShadowSessionCorruptError("paper data source source_id is not explicitly allowed")
+    source_type = _paper_data_source_type_from_value(payload.get("source_type"))
+    venue = _require_non_empty_str(payload.get("venue"), "venue")
+    as_of_ns = _require_non_negative_int(payload.get("as_of_ns"), "as_of_ns")
+    records_value = payload.get("records", payload.get("events"))
+    if not isinstance(records_value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("paper data source records must be a list/tuple")
+    if not records_value:
+        raise PaperShadowSessionCorruptError("paper data source records cannot be empty")
+    symbols = _sorted_unique(payload.get("symbols", ()))
+    events = tuple(
+        _paper_data_source_record_to_event(_dict_value(record, "records"), venue=venue, as_of_ns=as_of_ns)
+        for record in records_value
+    )
+    event_symbols = _sorted_unique(tuple(event.symbol for event in events))
+    if symbols and symbols != event_symbols:
+        raise PaperShadowSessionCorruptError("paper data source declared symbols must match record symbols")
+    resolved_symbols = event_symbols
+    batch = build_market_event_batch(
+        events,
+        batch_id=batch_id or _paper_data_source_batch_id(source_id, venue, events),
+    )
+    snapshot = PaperDataSourceSnapshot(
+        source_id=source_id,
+        source_type=source_type,
+        symbols=resolved_symbols,
+        venue=venue,
+        as_of_ns=as_of_ns,
+        batches_produced=1,
+        events_produced=len(batch.events),
+        rejected_records=0,
+        batch_ids=(batch.batch_id,),
+        first_event_ns=min(event.ts_ns for event in batch.events),
+        last_event_ns=max(event.ts_ns for event in batch.events),
+    )
+    result = PaperDataSourceBatchResult(
+        source=snapshot,
+        batch=batch,
+        rejected_record_ids=(),
+        operator_summary=_paper_data_source_summary(snapshot),
+    )
+    _validate_paper_data_source_batch_result(result)
+    return result
+
+
+def paper_data_source_payload_to_market_event_batch(
+    payload: dict,
+    *,
+    allowed_source_ids: tuple[str, ...] = (),
+    allow_unknown_source: bool = False,
+    batch_id: str | None = None,
+) -> MarketEventBatch:
+    return build_paper_data_source_batch_result(
+        payload,
+        allowed_source_ids=allowed_source_ids,
+        allow_unknown_source=allow_unknown_source,
+        batch_id=batch_id,
+    ).batch
+
+
+def paper_data_source_snapshot_to_dict(snapshot: PaperDataSourceSnapshot) -> dict:
+    _validate_paper_data_source_snapshot(snapshot)
+    return {
+        "source_id": snapshot.source_id,
+        "source_type": snapshot.source_type.value,
+        "symbols": list(snapshot.symbols),
+        "venue": snapshot.venue,
+        "as_of_ns": snapshot.as_of_ns,
+        "batches_produced": snapshot.batches_produced,
+        "events_produced": snapshot.events_produced,
+        "rejected_records": snapshot.rejected_records,
+        "batch_ids": list(snapshot.batch_ids),
+        "first_event_ns": snapshot.first_event_ns,
+        "last_event_ns": snapshot.last_event_ns,
+    }
+
+
+def paper_data_source_snapshot_from_dict(data: dict) -> PaperDataSourceSnapshot:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper data source snapshot must be a dict, got {type(data).__name__!r}")
+    snapshot = PaperDataSourceSnapshot(
+        source_id=_require_non_empty_str(data.get("source_id"), "source_id"),
+        source_type=_paper_data_source_type_from_value(data.get("source_type")),
+        symbols=_sorted_unique(data.get("symbols", ())),
+        venue=_require_non_empty_str(data.get("venue"), "venue"),
+        as_of_ns=_require_non_negative_int(data.get("as_of_ns"), "as_of_ns"),
+        batches_produced=_require_non_negative_int(data.get("batches_produced", 0), "batches_produced"),
+        events_produced=_require_non_negative_int(data.get("events_produced", 0), "events_produced"),
+        rejected_records=_require_non_negative_int(data.get("rejected_records", 0), "rejected_records"),
+        batch_ids=_sorted_unique(data.get("batch_ids", ())),
+        first_event_ns=_optional_non_negative_int(data.get("first_event_ns"), "first_event_ns"),
+        last_event_ns=_optional_non_negative_int(data.get("last_event_ns"), "last_event_ns"),
+    )
+    _validate_paper_data_source_snapshot(snapshot)
+    return snapshot
+
+
+def paper_data_source_batch_result_to_dict(result: PaperDataSourceBatchResult) -> dict:
+    _validate_paper_data_source_batch_result(result)
+    return {
+        "source": paper_data_source_snapshot_to_dict(result.source),
+        "batch": market_event_batch_to_dict(result.batch),
+        "rejected_record_ids": list(result.rejected_record_ids),
+        "operator_summary": result.operator_summary,
+    }
+
+
+def paper_data_source_batch_result_from_dict(data: dict) -> PaperDataSourceBatchResult:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper data source batch result must be a dict, got {type(data).__name__!r}"
+        )
+    result = PaperDataSourceBatchResult(
+        source=paper_data_source_snapshot_from_dict(_dict_value(data.get("source"), "source")),
+        batch=market_event_batch_from_dict(_dict_value(data.get("batch"), "batch")),
+        rejected_record_ids=_sorted_unique(data.get("rejected_record_ids", ())),
+        operator_summary=_require_non_empty_str(data.get("operator_summary"), "operator_summary"),
+    )
+    _validate_paper_data_source_batch_result(result)
+    return result
+
+
 def market_event_cursor_to_dict(cursor: MarketEventCursor) -> dict:
     _validate_market_event_cursor(cursor)
     return {
@@ -1210,6 +1376,64 @@ def _validate_feed_replay_result(result: FeedReplayResult) -> None:
     _require_non_empty_str(result.operator_summary, "operator_summary")
 
 
+def _validate_paper_data_source_snapshot(snapshot: PaperDataSourceSnapshot) -> None:
+    if not isinstance(snapshot, PaperDataSourceSnapshot):
+        raise PaperShadowSessionCorruptError("paper data source snapshot must be a PaperDataSourceSnapshot")
+    _require_non_empty_str(snapshot.source_id, "source_id")
+    if not isinstance(snapshot.source_type, PaperDataSourceType):
+        raise PaperShadowSessionCorruptError("paper data source source_type must be a PaperDataSourceType")
+    if snapshot.symbols != _sorted_unique(snapshot.symbols):
+        raise PaperShadowSessionCorruptError("paper data source symbols must be sorted unique")
+    _require_non_empty_str(snapshot.venue, "venue")
+    _require_non_negative_int(snapshot.as_of_ns, "as_of_ns")
+    _require_non_negative_int(snapshot.batches_produced, "batches_produced")
+    _require_non_negative_int(snapshot.events_produced, "events_produced")
+    _require_non_negative_int(snapshot.rejected_records, "rejected_records")
+    if snapshot.batch_ids != _sorted_unique(snapshot.batch_ids):
+        raise PaperShadowSessionCorruptError("paper data source batch ids must be sorted unique")
+    _optional_non_negative_int(snapshot.first_event_ns, "first_event_ns")
+    _optional_non_negative_int(snapshot.last_event_ns, "last_event_ns")
+    if snapshot.events_produced == 0 and (snapshot.first_event_ns is not None or snapshot.last_event_ns is not None):
+        raise PaperShadowSessionCorruptError("paper data source without events cannot carry event timestamps")
+    if snapshot.events_produced > 0:
+        if snapshot.first_event_ns is None or snapshot.last_event_ns is None:
+            raise PaperShadowSessionCorruptError("paper data source events require first/last timestamps")
+        if snapshot.last_event_ns < snapshot.first_event_ns:
+            raise PaperShadowSessionCorruptError("paper data source last_event_ns cannot predate first_event_ns")
+        if snapshot.last_event_ns > snapshot.as_of_ns:
+            raise PaperShadowSessionCorruptError("paper data source events cannot be newer than as_of_ns")
+    if snapshot.batches_produced != len(snapshot.batch_ids):
+        raise PaperShadowSessionCorruptError("paper data source batch count must match batch ids")
+
+
+def _validate_paper_data_source_batch_result(result: PaperDataSourceBatchResult) -> None:
+    if not isinstance(result, PaperDataSourceBatchResult):
+        raise PaperShadowSessionCorruptError("paper data source batch result must be a PaperDataSourceBatchResult")
+    _validate_paper_data_source_snapshot(result.source)
+    _validate_market_event_batch(result.batch)
+    if result.rejected_record_ids != _sorted_unique(result.rejected_record_ids):
+        raise PaperShadowSessionCorruptError("paper data source rejected record ids must be sorted unique")
+    if len(result.rejected_record_ids) > result.source.rejected_records:
+        raise PaperShadowSessionCorruptError("paper data source rejected record ids exceed rejected count")
+    if result.source.batches_produced != 1:
+        raise PaperShadowSessionCorruptError("paper data source batch result must produce exactly one batch")
+    if result.source.events_produced != len(result.batch.events):
+        raise PaperShadowSessionCorruptError("paper data source event count must match batch events")
+    if result.source.batch_ids != (result.batch.batch_id,):
+        raise PaperShadowSessionCorruptError("paper data source batch ids must match result batch")
+    event_symbols = _sorted_unique(tuple(event.symbol for event in result.batch.events))
+    if event_symbols != result.source.symbols:
+        raise PaperShadowSessionCorruptError("paper data source symbols must match result batch")
+    event_venues = _sorted_unique(tuple(event.venue for event in result.batch.events))
+    if event_venues != (result.source.venue,):
+        raise PaperShadowSessionCorruptError("paper data source batch must contain one source venue")
+    if result.source.first_event_ns != min(event.ts_ns for event in result.batch.events):
+        raise PaperShadowSessionCorruptError("paper data source first_event_ns must match result batch")
+    if result.source.last_event_ns != max(event.ts_ns for event in result.batch.events):
+        raise PaperShadowSessionCorruptError("paper data source last_event_ns must match result batch")
+    _require_non_empty_str(result.operator_summary, "operator_summary")
+
+
 def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
     if not isinstance(snapshot, PaperShadowSessionSnapshot):
         raise PaperShadowSessionCorruptError("paper/shadow session snapshot must be a PaperShadowSessionSnapshot")
@@ -1362,8 +1586,22 @@ def _feed_replay_summary(
     )
 
 
+def _paper_data_source_summary(snapshot: PaperDataSourceSnapshot) -> str:
+    return (
+        f"source={snapshot.source_id}; type={snapshot.source_type.value}; venue={snapshot.venue}; "
+        f"symbols={len(snapshot.symbols)}; events={snapshot.events_produced}; rejected={snapshot.rejected_records}"
+    )
+
+
 def _session_id_for_plan(plan: PaperShadowActivationPlan) -> str:
     return f"paper-shadow-session-{plan.plan_id}"
+
+
+def _paper_data_source_batch_id(source_id: str, venue: str, events: tuple[MarketEvent, ...]) -> str:
+    if not events:
+        return f"paper-data-source-{source_id}-{venue}-empty"
+    ordered = tuple(sorted(events, key=_market_event_sort_key))
+    return f"paper-data-source-{source_id}-{venue}-{ordered[0].ts_ns}-{ordered[-1].ts_ns}-{len(ordered)}"
 
 
 def _feed_replay_plan_id(batches: tuple[MarketEventBatch, ...]) -> str:
@@ -1682,6 +1920,59 @@ def _market_event_type_from_value(value: object) -> MarketEventType:
         return MarketEventType(_require_non_empty_str(value, "event_type"))
     except ValueError as exc:
         raise PaperShadowSessionCorruptError(f"Invalid market event_type: {value!r}") from exc
+
+
+def _paper_data_source_type_from_value(value: object) -> PaperDataSourceType:
+    if isinstance(value, PaperDataSourceType):
+        return value
+    try:
+        return PaperDataSourceType(_require_non_empty_str(value, "source_type"))
+    except ValueError as exc:
+        raise PaperShadowSessionCorruptError(f"Invalid paper data source_type: {value!r}") from exc
+
+
+def _paper_data_source_record_to_event(record: dict, *, venue: str, as_of_ns: int) -> MarketEvent:
+    _reject_forbidden_data_source_keys(record)
+    record_venue = _string_or_default(record.get("venue"), venue)
+    if record_venue != venue:
+        raise PaperShadowSessionCorruptError("paper data source record venue must match source venue")
+    ts_ns = _require_non_negative_int(record.get("ts_ns"), "ts_ns")
+    if ts_ns > as_of_ns:
+        raise PaperShadowSessionCorruptError("paper data source record timestamp cannot be newer than as_of_ns")
+    event = MarketEvent(
+        symbol=_require_non_empty_str(record.get("symbol"), "symbol"),
+        venue=record_venue,
+        ts_ns=ts_ns,
+        event_type=_market_event_type_from_value(record.get("event_type")),
+        price=_optional_non_negative_float(record.get("price"), "price"),
+        mark_price=_optional_non_negative_float(record.get("mark_price"), "mark_price"),
+        index_price=_optional_non_negative_float(record.get("index_price"), "index_price"),
+        funding_rate=_optional_float(record.get("funding_rate"), "funding_rate"),
+        open_interest=_optional_non_negative_float(record.get("open_interest"), "open_interest"),
+    )
+    _validate_market_event(event)
+    return event
+
+
+def _reject_forbidden_data_source_keys(value: object) -> None:
+    forbidden = {
+        "api_key",
+        "client",
+        "credentials",
+        "network_client",
+        "password",
+        "private_key",
+        "secret",
+        "token",
+    }
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(key, str) and key.lower() in forbidden:
+                raise PaperShadowSessionCorruptError("paper data source payload cannot carry client or credential keys")
+            _reject_forbidden_data_source_keys(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _reject_forbidden_data_source_keys(item)
 
 
 def _rejected_event_increment(batch: object) -> int:
