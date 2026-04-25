@@ -9,11 +9,15 @@ import pytest
 from crypto_core.service.artifact_export import (
     export_managed_sleeve_set_manifest,
     export_paper_shadow_activation_plan,
+    export_paper_shadow_feed_replay_plan,
+    export_paper_shadow_feed_replay_result,
     export_paper_shadow_market_event_batch,
     export_paper_shadow_session_snapshot,
     export_sleeve_admission_release_pack,
     load_managed_sleeve_set_manifest,
     load_paper_shadow_activation_plan,
+    load_paper_shadow_feed_replay_plan,
+    load_paper_shadow_feed_replay_result,
     load_paper_shadow_market_event_batch,
     load_paper_shadow_session_snapshot,
     load_sleeve_admission_release_pack,
@@ -30,6 +34,7 @@ from crypto_core.service.campaign_controller import campaign_readiness_flags
 from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreConfig
 from crypto_core.service.models import QueuePressure, QueueSnapshot, ServiceStatus, WatchdogStatus
 from crypto_core.service.paper_shadow_session_controller import (
+    FeedReplayPlan,
     GuardrailAction,
     MarketEvent,
     MarketEventBatch,
@@ -38,8 +43,13 @@ from crypto_core.service.paper_shadow_session_controller import (
     PaperShadowSessionCorruptError,
     PaperShadowSessionStatus,
     RuntimeMonitorStatus,
+    build_feed_replay_plan,
     build_guardrail_snapshot,
     build_market_event_batch,
+    feed_replay_plan_from_dict,
+    feed_replay_plan_to_dict,
+    feed_replay_result_from_dict,
+    feed_replay_result_to_dict,
     guardrail_snapshot_from_dict,
     guardrail_snapshot_to_dict,
     market_event_batch_from_dict,
@@ -1928,6 +1938,170 @@ def test_paper_shadow_market_event_deterministic_replay() -> None:
     assert run_once() == run_once()
 
 
+def test_paper_shadow_feed_replay_valid_batches_update_session_monitor_and_guardrail() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3, _T0_NS + 4))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    replay = build_feed_replay_plan(
+        (
+            build_market_event_batch(
+                (_market_event("ETHUSDT", venue="bybit", ts_ns=_T0_NS + 102, price=2100.0),),
+                batch_id="replay-2",
+            ),
+            build_market_event_batch(
+                (_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),),
+                batch_id="replay-1",
+            ),
+        ),
+        replay_id="feed-replay-valid",
+    )
+
+    result = controller.replay_feed(replay)
+    snapshot = controller.snapshot()
+
+    assert result.batches_planned == 2
+    assert result.batches_replayed == 2
+    assert result.events_replayed == 2
+    assert result.batches_rejected == 0
+    assert result.first_event_ns == _T0_NS + 101
+    assert result.last_event_ns == _T0_NS + 102
+    assert result.guardrail_actions_seen == (GuardrailAction.NONE,)
+    assert result.session_status == PaperShadowSessionStatus.RUNNING
+    assert snapshot.event_count == 2
+    assert snapshot.runtime_monitor.status == RuntimeMonitorStatus.HEALTHY
+    assert snapshot.guardrail.primary_action == GuardrailAction.NONE
+
+
+def test_paper_shadow_feed_replay_before_start_fails_closed() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    controller = PaperShadowSessionController(clock_ns=lambda: _T0_NS + 1)
+    controller.prepare(plan)
+    replay = build_feed_replay_plan((build_market_event_batch((_market_event(),)),), replay_id="too-early")
+
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.replay_feed(replay)
+
+    assert controller.snapshot().event_count == 0
+    assert controller.snapshot().tick_count == 0
+
+
+def test_paper_shadow_feed_replay_malformed_batch_rejected_and_halted() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    replay = FeedReplayPlan(
+        replay_id="feed-replay-bad",
+        batches=(
+            MarketEventBatch(
+                batch_id="bad-price",
+                events=(_market_event(price=-1.0),),
+            ),
+        ),
+    )
+
+    result = controller.replay_feed(replay)
+    snapshot = controller.snapshot()
+
+    assert result.batches_replayed == 0
+    assert result.events_replayed == 0
+    assert result.batches_rejected == 1
+    assert result.rejected_batch_ids == ("bad-price",)
+    assert result.halted_by_guardrail is True
+    assert result.halt_reason == GuardrailAction.PAUSE_SESSION.value
+    assert result.session_status == PaperShadowSessionStatus.BLOCKED
+    assert GuardrailAction.PAUSE_SESSION in result.guardrail_actions_seen
+    assert snapshot.rejected_event_count == 1
+    assert snapshot.event_count == 0
+
+
+def test_paper_shadow_feed_replay_guardrail_pause_halts_later_batches() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3, _T0_NS + 4))
+    controller = PaperShadowSessionController(
+        clock_ns=lambda: next(times),
+        required_market_symbols=("BTCUSDT", "ETHUSDT"),
+    )
+    controller.prepare(plan)
+    controller.start()
+    replay = build_feed_replay_plan(
+        (
+            build_market_event_batch(
+                (_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),),
+                batch_id="coverage-missing",
+            ),
+            build_market_event_batch(
+                (_market_event("ETHUSDT", venue="binance", ts_ns=_T0_NS + 102),),
+                batch_id="not-replayed",
+            ),
+        ),
+        replay_id="feed-replay-pause",
+    )
+
+    result = controller.replay_feed(replay)
+    snapshot = controller.snapshot()
+
+    assert result.batches_planned == 2
+    assert result.batches_replayed == 1
+    assert result.events_replayed == 1
+    assert result.halted_by_guardrail is True
+    assert result.halt_reason == GuardrailAction.PAUSE_SESSION.value
+    assert result.session_status == PaperShadowSessionStatus.BLOCKED
+    assert GuardrailAction.PAUSE_SESSION in result.guardrail_actions_seen
+    assert snapshot.event_count == 1
+    assert "missing_symbol_coverage" in snapshot.blockers_seen
+
+
+def test_paper_shadow_feed_replay_deterministic_fixed_input() -> None:
+    plan = _ready_activation_plan(_sleeve("stable", effective_allocation=0.15, target_allocation=0.15))
+    replay = build_feed_replay_plan(
+        (
+            build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),)),
+            build_market_event_batch((_market_event("ETHUSDT", venue="bybit", ts_ns=_T0_NS + 102),)),
+        ),
+        replay_id="feed-replay-deterministic",
+    )
+
+    def run_once() -> tuple[dict, dict]:
+        times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3, _T0_NS + 4))
+        controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+        controller.prepare(plan)
+        controller.start()
+        result = controller.replay_feed(replay)
+        return feed_replay_result_to_dict(result), paper_shadow_session_snapshot_to_dict(controller.snapshot())
+
+    assert run_once() == run_once()
+
+
+def test_paper_shadow_feed_replay_serialization_and_export_roundtrip(tmp_path) -> None:
+    replay = build_feed_replay_plan(
+        (build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),)),),
+        replay_id="feed-replay-roundtrip",
+    )
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    result = controller.replay_feed(replay)
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+
+    assert feed_replay_plan_from_dict(feed_replay_plan_to_dict(replay)) == replay
+    assert feed_replay_result_from_dict(feed_replay_result_to_dict(result)) == result
+
+    export_paper_shadow_feed_replay_plan(plan=replay, evidence_store=store)
+    export_paper_shadow_feed_replay_result(result=result, evidence_store=store)
+    assert load_paper_shadow_feed_replay_plan(evidence_store=store) == replay
+    assert load_paper_shadow_feed_replay_result(evidence_store=store) == result
+
+    store.save_snapshot("crypto_paper_shadow_feed_replay_result", ["bad"])
+    with pytest.raises(PaperShadowSessionCorruptError):
+        load_paper_shadow_feed_replay_result(evidence_store=store)
+
+
 def test_service_orchestrator_paper_shadow_session_helpers_and_operator_status(tmp_path) -> None:
     store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
     plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
@@ -2001,3 +2175,36 @@ def test_service_orchestrator_market_event_batch_helper(tmp_path) -> None:
 
     orch.export_paper_shadow_market_event_batch(batch)
     assert orch.load_paper_shadow_market_event_batch() == batch
+
+
+def test_service_orchestrator_feed_replay_helper_and_artifacts(tmp_path) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 30, _T0_NS + 31, _T0_NS + 32))
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        evidence_store=store,
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: next(times),
+    )
+    replay = build_feed_replay_plan(
+        (build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 130),)),),
+        replay_id="orch-feed-replay",
+    )
+
+    orch.prepare_paper_shadow_session(plan=plan)
+    orch.start_paper_shadow_session()
+    result = orch.replay_paper_shadow_feed(replay)
+    rendered_plan = orch.paper_shadow_feed_replay_plan_dict(replay)
+    rendered_result = orch.paper_shadow_feed_replay_result_dict(result)
+
+    assert result.batches_replayed == 1
+    assert result.events_replayed == 1
+    assert rendered_plan["replay_id"] == "orch-feed-replay"
+    assert rendered_result["guardrail_actions_seen"] == ["none"]
+    assert orch.paper_shadow_session_snapshot().event_count == 1
+
+    orch.export_paper_shadow_feed_replay_plan(replay)
+    orch.export_paper_shadow_feed_replay_result(result)
+    assert orch.load_paper_shadow_feed_replay_plan() == replay
+    assert orch.load_paper_shadow_feed_replay_result() == result

@@ -60,6 +60,12 @@ from crypto_core.service.artifact_export import (
     export_paper_shadow_activation_plan as export_paper_shadow_plan,
 )
 from crypto_core.service.artifact_export import (
+    export_paper_shadow_feed_replay_plan as export_feed_replay_plan,
+)
+from crypto_core.service.artifact_export import (
+    export_paper_shadow_feed_replay_result as export_feed_replay_result,
+)
+from crypto_core.service.artifact_export import (
     export_paper_shadow_market_event_batch as export_market_event_batch,
 )
 from crypto_core.service.artifact_export import (
@@ -73,6 +79,12 @@ from crypto_core.service.artifact_export import (
 )
 from crypto_core.service.artifact_export import (
     load_paper_shadow_activation_plan as load_paper_shadow_plan,
+)
+from crypto_core.service.artifact_export import (
+    load_paper_shadow_feed_replay_plan as load_feed_replay_plan,
+)
+from crypto_core.service.artifact_export import (
+    load_paper_shadow_feed_replay_result as load_feed_replay_result,
 )
 from crypto_core.service.artifact_export import (
     load_paper_shadow_market_event_batch as load_market_event_batch,
@@ -121,9 +133,13 @@ from crypto_core.service.external_regime import (
 from crypto_core.service.models import ServiceStatus
 from crypto_core.service.paper_live_service import PaperLiveService
 from crypto_core.service.paper_shadow_session_controller import (
+    FeedReplayPlan,
+    FeedReplayResult,
     MarketEventBatch,
     PaperShadowSessionController,
     PaperShadowSessionSnapshot,
+    feed_replay_plan_to_dict,
+    feed_replay_result_to_dict,
     guardrail_snapshot_to_dict,
     market_event_batch_to_dict,
     paper_shadow_session_snapshot_to_dict,
@@ -908,6 +924,21 @@ class ServiceOrchestrator:
         """Apply guardrails to paper/shadow session lifecycle state only."""
         return self._ensure_paper_shadow_session_controller().apply_guardrails()
 
+    def replay_paper_shadow_feed(
+        self,
+        plan: FeedReplayPlan | dict | tuple[MarketEventBatch, ...],
+    ) -> FeedReplayResult:
+        """Replay local in-memory market event batches into the running paper/shadow session."""
+        return self._ensure_paper_shadow_session_controller().replay_feed(plan)
+
+    def paper_shadow_feed_replay_plan_dict(self, plan: FeedReplayPlan) -> dict:
+        """Serialize a deterministic local paper/shadow feed replay plan."""
+        return feed_replay_plan_to_dict(plan)
+
+    def paper_shadow_feed_replay_result_dict(self, result: FeedReplayResult) -> dict:
+        """Serialize a deterministic local paper/shadow feed replay result."""
+        return feed_replay_result_to_dict(result)
+
     def paper_shadow_market_event_batch_dict(self, batch: MarketEventBatch) -> dict:
         """Serialize a deterministic read-only paper/shadow market event batch."""
         return market_event_batch_to_dict(batch)
@@ -943,6 +974,36 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for paper/shadow market event batch load")
         return load_market_event_batch(evidence_store=self._evidence_store)
+
+    def export_paper_shadow_feed_replay_plan(self, plan: FeedReplayPlan):
+        """Persist a local paper/shadow feed replay plan via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper/shadow feed replay plan export")
+        return export_feed_replay_plan(
+            plan=plan,
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_shadow_feed_replay_plan(self) -> FeedReplayPlan:
+        """Load the latest persisted local paper/shadow feed replay plan."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper/shadow feed replay plan load")
+        return load_feed_replay_plan(evidence_store=self._evidence_store)
+
+    def export_paper_shadow_feed_replay_result(self, result: FeedReplayResult):
+        """Persist a local paper/shadow feed replay result via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper/shadow feed replay result export")
+        return export_feed_replay_result(
+            result=result,
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_shadow_feed_replay_result(self) -> FeedReplayResult:
+        """Load the latest persisted local paper/shadow feed replay result."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper/shadow feed replay result load")
+        return load_feed_replay_result(evidence_store=self._evidence_store)
 
     # ------------------------------------------------------------------
     # Properties

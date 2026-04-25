@@ -32,9 +32,15 @@ from enum import Enum
 
 from crypto_core.service.evidence_store import EvidenceStore, WriteResult
 from crypto_core.service.paper_shadow_session_controller import (
+    FeedReplayPlan,
+    FeedReplayResult,
     MarketEventBatch,
     PaperShadowSessionCorruptError,
     PaperShadowSessionSnapshot,
+    feed_replay_plan_from_dict,
+    feed_replay_plan_to_dict,
+    feed_replay_result_from_dict,
+    feed_replay_result_to_dict,
     market_event_batch_from_dict,
     market_event_batch_to_dict,
     paper_shadow_session_snapshot_from_dict,
@@ -513,6 +519,8 @@ _MANAGED_SLEEVE_SET_MANIFEST_SNAPSHOT_NAME = "crypto_managed_sleeve_set_manifest
 _PAPER_SHADOW_ACTIVATION_PLAN_SNAPSHOT_NAME = "crypto_paper_shadow_activation_plan"
 _PAPER_SHADOW_SESSION_SNAPSHOT_NAME = "crypto_paper_shadow_session"
 _PAPER_SHADOW_MARKET_EVENT_BATCH_SNAPSHOT_NAME = "crypto_paper_shadow_market_event_batch"
+_PAPER_SHADOW_FEED_REPLAY_PLAN_SNAPSHOT_NAME = "crypto_paper_shadow_feed_replay_plan"
+_PAPER_SHADOW_FEED_REPLAY_RESULT_SNAPSHOT_NAME = "crypto_paper_shadow_feed_replay_result"
 
 
 def export_run_artifact(
@@ -750,3 +758,53 @@ def load_paper_shadow_market_event_batch(*, evidence_store: EvidenceStore) -> Ma
             f"Paper/shadow market event batch 'data' must be a dict, got {type(data).__name__!r}"
         )
     return market_event_batch_from_dict(data)
+
+
+def export_paper_shadow_feed_replay_plan(
+    *,
+    plan: FeedReplayPlan,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist a deterministic local paper/shadow feed replay plan."""
+    data = feed_replay_plan_to_dict(plan)
+    result = evidence_store.save_snapshot(_PAPER_SHADOW_FEED_REPLAY_PLAN_SNAPSHOT_NAME, data)
+    if not result.success:
+        return result
+    evidence_store.append_evidence(_PAPER_SHADOW_FEED_REPLAY_PLAN_SNAPSHOT_NAME, data)
+    return result
+
+
+def load_paper_shadow_feed_replay_plan(*, evidence_store: EvidenceStore) -> FeedReplayPlan:
+    """Load the latest deterministic local paper/shadow feed replay plan."""
+    envelope = evidence_store.load_snapshot(_PAPER_SHADOW_FEED_REPLAY_PLAN_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper/shadow feed replay plan 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return feed_replay_plan_from_dict(data)
+
+
+def export_paper_shadow_feed_replay_result(
+    *,
+    result: FeedReplayResult,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist a deterministic local paper/shadow feed replay result."""
+    data = feed_replay_result_to_dict(result)
+    write_result = evidence_store.save_snapshot(_PAPER_SHADOW_FEED_REPLAY_RESULT_SNAPSHOT_NAME, data)
+    if not write_result.success:
+        return write_result
+    evidence_store.append_evidence(_PAPER_SHADOW_FEED_REPLAY_RESULT_SNAPSHOT_NAME, data)
+    return write_result
+
+
+def load_paper_shadow_feed_replay_result(*, evidence_store: EvidenceStore) -> FeedReplayResult:
+    """Load the latest deterministic local paper/shadow feed replay result."""
+    envelope = evidence_store.load_snapshot(_PAPER_SHADOW_FEED_REPLAY_RESULT_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper/shadow feed replay result 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return feed_replay_result_from_dict(data)

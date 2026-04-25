@@ -82,6 +82,30 @@ class MarketEventBatch:
 
 
 @dataclass(frozen=True)
+class FeedReplayPlan:
+    replay_id: str
+    batches: tuple[MarketEventBatch, ...]
+
+
+@dataclass(frozen=True)
+class FeedReplayResult:
+    replay_id: str
+    session_id: str
+    session_status: PaperShadowSessionStatus
+    batches_planned: int
+    batches_replayed: int
+    events_replayed: int
+    batches_rejected: int
+    first_event_ns: int | None = None
+    last_event_ns: int | None = None
+    guardrail_actions_seen: tuple[GuardrailAction, ...] = ()
+    halted_by_guardrail: bool = False
+    halt_reason: str | None = None
+    rejected_batch_ids: tuple[str, ...] = ()
+    operator_summary: str = "Feed replay has not run."
+
+
+@dataclass(frozen=True)
 class MarketEventCursor:
     symbol: str
     venue: str
@@ -387,6 +411,82 @@ class PaperShadowSessionController:
 
     def tick_from_market_events(self, batch: MarketEventBatch | dict) -> PaperShadowSessionSnapshot:
         return self.record_market_event_batch(batch)
+
+    def replay_feed(self, plan: FeedReplayPlan | dict | tuple[MarketEventBatch, ...]) -> FeedReplayResult:
+        if self._snapshot.status != PaperShadowSessionStatus.RUNNING:
+            raise PaperShadowSessionCorruptError("paper/shadow feed replay can only run while session is RUNNING")
+        replay_plan = _coerce_feed_replay_plan(plan)
+        batches_replayed = 0
+        events_replayed = 0
+        batches_rejected = 0
+        first_event_ns: int | None = None
+        last_event_ns: int | None = None
+        rejected_batch_ids: list[str] = []
+        actions_seen: list[GuardrailAction] = []
+        halted = False
+        halt_reason: str | None = None
+
+        for batch in replay_plan.batches:
+            if self._snapshot.status != PaperShadowSessionStatus.RUNNING:
+                halted = True
+                halt_reason = self._snapshot.status.value
+                break
+            try:
+                snapshot = self.record_market_event_batch(batch)
+                normalized = _normalize_batch(batch)
+            except PaperShadowSessionCorruptError:
+                batches_rejected += 1
+                rejected_batch_ids.append(_batch_id_or_unknown(batch))
+                actions_seen.extend(self._snapshot.guardrail.actions)
+                if self._snapshot.guardrail.should_stop_session or self._snapshot.guardrail.should_pause_session:
+                    applied = self.apply_guardrails()
+                    actions_seen.extend(applied.guardrail.actions)
+                    halted = True
+                    halt_reason = applied.guardrail.primary_action.value
+                    break
+                continue
+
+            batches_replayed += 1
+            events_replayed += len(normalized.events)
+            batch_first_event_ns = min(event.ts_ns for event in normalized.events)
+            batch_last_event_ns = max(event.ts_ns for event in normalized.events)
+            first_event_ns = (
+                batch_first_event_ns if first_event_ns is None else min(first_event_ns, batch_first_event_ns)
+            )
+            last_event_ns = batch_last_event_ns if last_event_ns is None else max(last_event_ns, batch_last_event_ns)
+            actions_seen.extend(snapshot.guardrail.actions)
+            if snapshot.guardrail.should_stop_session or snapshot.guardrail.should_pause_session:
+                applied = self.apply_guardrails()
+                actions_seen.extend(applied.guardrail.actions)
+                halted = True
+                halt_reason = applied.guardrail.primary_action.value
+                break
+
+        result = FeedReplayResult(
+            replay_id=replay_plan.replay_id,
+            session_id=self._snapshot.session_id,
+            session_status=self._snapshot.status,
+            batches_planned=len(replay_plan.batches),
+            batches_replayed=batches_replayed,
+            events_replayed=events_replayed,
+            batches_rejected=batches_rejected,
+            first_event_ns=first_event_ns,
+            last_event_ns=last_event_ns,
+            guardrail_actions_seen=_sorted_unique_actions(actions_seen),
+            halted_by_guardrail=halted,
+            halt_reason=halt_reason,
+            rejected_batch_ids=_sorted_unique(rejected_batch_ids),
+            operator_summary=_feed_replay_summary(
+                replay_plan.replay_id,
+                batches_replayed,
+                events_replayed,
+                batches_rejected,
+                halted,
+                halt_reason,
+            ),
+        )
+        _validate_feed_replay_result(result)
+        return result
 
     def apply_guardrails(self) -> PaperShadowSessionSnapshot:
         guardrail = self._snapshot.guardrail
@@ -722,6 +822,87 @@ def market_event_batch_from_dict(data: dict) -> MarketEventBatch:
     )
 
 
+def build_feed_replay_plan(
+    batches: tuple[MarketEventBatch | dict, ...],
+    *,
+    replay_id: str | None = None,
+) -> FeedReplayPlan:
+    if not isinstance(batches, tuple):
+        raise PaperShadowSessionCorruptError("feed replay batches must be a tuple")
+    normalized_batches = tuple(
+        market_event_batch_from_dict(batch) if isinstance(batch, dict) else _normalize_batch(batch) for batch in batches
+    )
+    plan = FeedReplayPlan(
+        replay_id=_string_or_default(replay_id, _feed_replay_plan_id(normalized_batches)),
+        batches=normalized_batches,
+    )
+    _validate_feed_replay_plan(plan)
+    return plan
+
+
+def feed_replay_plan_to_dict(plan: FeedReplayPlan) -> dict:
+    _validate_feed_replay_plan(plan)
+    return {
+        "replay_id": plan.replay_id,
+        "batches": [market_event_batch_to_dict(batch) for batch in plan.batches],
+    }
+
+
+def feed_replay_plan_from_dict(data: dict) -> FeedReplayPlan:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Feed replay plan must be a dict, got {type(data).__name__!r}")
+    batches_value = data.get("batches")
+    if not isinstance(batches_value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("feed replay plan batches must be a list/tuple")
+    return build_feed_replay_plan(
+        tuple(_dict_value(batch, "batches") for batch in batches_value),
+        replay_id=_require_non_empty_str(data.get("replay_id"), "replay_id"),
+    )
+
+
+def feed_replay_result_to_dict(result: FeedReplayResult) -> dict:
+    _validate_feed_replay_result(result)
+    return {
+        "replay_id": result.replay_id,
+        "session_id": result.session_id,
+        "session_status": result.session_status.value,
+        "batches_planned": result.batches_planned,
+        "batches_replayed": result.batches_replayed,
+        "events_replayed": result.events_replayed,
+        "batches_rejected": result.batches_rejected,
+        "first_event_ns": result.first_event_ns,
+        "last_event_ns": result.last_event_ns,
+        "guardrail_actions_seen": [action.value for action in result.guardrail_actions_seen],
+        "halted_by_guardrail": result.halted_by_guardrail,
+        "halt_reason": result.halt_reason,
+        "rejected_batch_ids": list(result.rejected_batch_ids),
+        "operator_summary": result.operator_summary,
+    }
+
+
+def feed_replay_result_from_dict(data: dict) -> FeedReplayResult:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Feed replay result must be a dict, got {type(data).__name__!r}")
+    result = FeedReplayResult(
+        replay_id=_require_non_empty_str(data.get("replay_id"), "replay_id"),
+        session_id=_require_non_empty_str(data.get("session_id"), "session_id"),
+        session_status=_session_status_or_default(data.get("session_status"), PaperShadowSessionStatus.FAILED),
+        batches_planned=_require_non_negative_int(data.get("batches_planned"), "batches_planned"),
+        batches_replayed=_require_non_negative_int(data.get("batches_replayed"), "batches_replayed"),
+        events_replayed=_require_non_negative_int(data.get("events_replayed"), "events_replayed"),
+        batches_rejected=_require_non_negative_int(data.get("batches_rejected"), "batches_rejected"),
+        first_event_ns=_optional_non_negative_int(data.get("first_event_ns"), "first_event_ns"),
+        last_event_ns=_optional_non_negative_int(data.get("last_event_ns"), "last_event_ns"),
+        guardrail_actions_seen=_guardrail_actions_from_data(data.get("guardrail_actions_seen", ())),
+        halted_by_guardrail=_bool_or_default(data, "halted_by_guardrail", False),
+        halt_reason=_optional_str(data.get("halt_reason"), "halt_reason"),
+        rejected_batch_ids=_sorted_unique(data.get("rejected_batch_ids", ())),
+        operator_summary=_require_non_empty_str(data.get("operator_summary"), "operator_summary"),
+    )
+    _validate_feed_replay_result(result)
+    return result
+
+
 def market_event_cursor_to_dict(cursor: MarketEventCursor) -> dict:
     _validate_market_event_cursor(cursor)
     return {
@@ -956,6 +1137,79 @@ def _validate_activation_plan_for_session(plan: PaperShadowActivationPlan) -> No
         raise PaperShadowSessionCorruptError("paper/shadow session plan contains unsafe real-trading flags")
 
 
+def _coerce_feed_replay_plan(plan: FeedReplayPlan | dict | tuple[MarketEventBatch, ...]) -> FeedReplayPlan:
+    if isinstance(plan, FeedReplayPlan):
+        _validate_feed_replay_plan_shape(plan)
+        return plan
+    if isinstance(plan, dict):
+        return feed_replay_plan_from_dict(plan)
+    if isinstance(plan, tuple):
+        coerced = FeedReplayPlan(
+            replay_id=_feed_replay_plan_id(plan),
+            batches=plan,
+        )
+        _validate_feed_replay_plan_shape(coerced)
+        return coerced
+    raise PaperShadowSessionCorruptError("feed replay plan must be a FeedReplayPlan, dict, or tuple of batches")
+
+
+def _validate_feed_replay_plan_shape(plan: FeedReplayPlan) -> None:
+    if not isinstance(plan, FeedReplayPlan):
+        raise PaperShadowSessionCorruptError("feed replay plan must be a FeedReplayPlan")
+    _require_non_empty_str(plan.replay_id, "replay_id")
+    if not isinstance(plan.batches, tuple):
+        raise PaperShadowSessionCorruptError("feed replay batches must be a tuple")
+    if not plan.batches:
+        raise PaperShadowSessionCorruptError("feed replay plan must contain at least one batch")
+    if any(not isinstance(batch, MarketEventBatch) for batch in plan.batches):
+        raise PaperShadowSessionCorruptError("feed replay batches must contain MarketEventBatch values")
+
+
+def _validate_feed_replay_plan(plan: FeedReplayPlan) -> None:
+    _validate_feed_replay_plan_shape(plan)
+    for batch in plan.batches:
+        _validate_market_event_batch(batch)
+
+
+def _validate_feed_replay_result(result: FeedReplayResult) -> None:
+    if not isinstance(result, FeedReplayResult):
+        raise PaperShadowSessionCorruptError("feed replay result must be a FeedReplayResult")
+    _require_non_empty_str(result.replay_id, "replay_id")
+    _require_non_empty_str(result.session_id, "session_id")
+    if not isinstance(result.session_status, PaperShadowSessionStatus):
+        raise PaperShadowSessionCorruptError("feed replay session_status must be a PaperShadowSessionStatus")
+    _require_non_negative_int(result.batches_planned, "batches_planned")
+    _require_non_negative_int(result.batches_replayed, "batches_replayed")
+    _require_non_negative_int(result.events_replayed, "events_replayed")
+    _require_non_negative_int(result.batches_rejected, "batches_rejected")
+    if result.batches_planned <= 0:
+        raise PaperShadowSessionCorruptError("feed replay result must have at least one planned batch")
+    if result.batches_replayed + result.batches_rejected > result.batches_planned:
+        raise PaperShadowSessionCorruptError("feed replay result counts exceed planned batches")
+    _optional_non_negative_int(result.first_event_ns, "first_event_ns")
+    _optional_non_negative_int(result.last_event_ns, "last_event_ns")
+    if result.events_replayed == 0 and (result.first_event_ns is not None or result.last_event_ns is not None):
+        raise PaperShadowSessionCorruptError("feed replay without events cannot carry event timestamps")
+    if result.events_replayed > 0:
+        if result.first_event_ns is None or result.last_event_ns is None:
+            raise PaperShadowSessionCorruptError("feed replay with events requires first/last timestamps")
+        if result.last_event_ns < result.first_event_ns:
+            raise PaperShadowSessionCorruptError("feed replay last_event_ns cannot predate first_event_ns")
+    if result.guardrail_actions_seen != _sorted_unique_actions(result.guardrail_actions_seen):
+        raise PaperShadowSessionCorruptError("feed replay guardrail actions must be sorted unique")
+    _require_bool(result.halted_by_guardrail, "halted_by_guardrail")
+    if result.halted_by_guardrail and not result.halt_reason:
+        raise PaperShadowSessionCorruptError("halted feed replay requires halt_reason")
+    if not result.halted_by_guardrail and result.halt_reason is not None:
+        raise PaperShadowSessionCorruptError("non-halted feed replay cannot carry halt_reason")
+    _optional_str(result.halt_reason, "halt_reason")
+    if result.rejected_batch_ids != _sorted_unique(result.rejected_batch_ids):
+        raise PaperShadowSessionCorruptError("feed replay rejected batch ids must be sorted unique")
+    if len(result.rejected_batch_ids) > result.batches_rejected:
+        raise PaperShadowSessionCorruptError("feed replay rejected batch ids exceed rejected count")
+    _require_non_empty_str(result.operator_summary, "operator_summary")
+
+
 def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
     if not isinstance(snapshot, PaperShadowSessionSnapshot):
         raise PaperShadowSessionCorruptError("paper/shadow session snapshot must be a PaperShadowSessionSnapshot")
@@ -1093,8 +1347,39 @@ def _operator_summary(
     return f"session_status={status.value}; ticks={tick_count}; active={len(active_sleeves)}; blockers={len(blockers)}"
 
 
+def _feed_replay_summary(
+    replay_id: str,
+    batches_replayed: int,
+    events_replayed: int,
+    batches_rejected: int,
+    halted: bool,
+    halt_reason: str | None,
+) -> str:
+    reason = halt_reason or "none"
+    return (
+        f"feed_replay={replay_id}; batches={batches_replayed}; events={events_replayed}; "
+        f"rejected={batches_rejected}; halted={halted}; halt_reason={reason}"
+    )
+
+
 def _session_id_for_plan(plan: PaperShadowActivationPlan) -> str:
     return f"paper-shadow-session-{plan.plan_id}"
+
+
+def _feed_replay_plan_id(batches: tuple[MarketEventBatch, ...]) -> str:
+    if not batches:
+        return "feed-replay-empty"
+    return f"feed-replay-{len(batches)}-{_batch_id_or_unknown(batches[0])}-{_batch_id_or_unknown(batches[-1])}"
+
+
+def _batch_id_or_unknown(batch: object) -> str:
+    if isinstance(batch, MarketEventBatch) and isinstance(batch.batch_id, str) and batch.batch_id:
+        return batch.batch_id
+    if isinstance(batch, dict):
+        batch_id = batch.get("batch_id")
+        if isinstance(batch_id, str) and batch_id:
+            return batch_id
+    return "unknown_batch"
 
 
 def _normalize_batch(batch: MarketEventBatch) -> MarketEventBatch:
@@ -1450,6 +1735,12 @@ def _string_or_default(value: object, default: str) -> str:
     if not isinstance(value, str):
         raise PaperShadowSessionCorruptError("paper/shadow session string fields must be strings")
     return value or default
+
+
+def _optional_str(value: object, field_name: str) -> str | None:
+    if value is None:
+        return None
+    return _require_non_empty_str(value, field_name)
 
 
 def _require_non_negative_int(value: object, field_name: str) -> int:
