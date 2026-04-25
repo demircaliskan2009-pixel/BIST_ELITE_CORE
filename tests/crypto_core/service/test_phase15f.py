@@ -602,6 +602,65 @@ def _supported_workflow(sleeve_id: str) -> SleeveCandidateWorkflowSnapshot:
     )
 
 
+def _paper_shadow_e2e_seed(
+    *,
+    sleeve_id: str = "e2e-active",
+    allocation: float = 0.20,
+):
+    sleeve = _sleeve(sleeve_id, effective_allocation=allocation, target_allocation=allocation)
+    base_portfolio = _portfolio(sleeve)
+    portfolio = replace(
+        base_portfolio,
+        effective_allocation=replace(
+            base_portfolio.effective_allocation,
+            effective_allocated_share=allocation,
+            effective_unallocated_share=1.0 - allocation,
+            recipient_sleeve_ids=(sleeve_id,),
+        ),
+    )
+    campaign_report = _campaign_report(sleeve_ids=(sleeve_id,))
+    times = iter(range(_T0_NS + 300, _T0_NS + 420))
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        sleeves=(sleeve,),
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: next(times),
+    )
+    orch.start_sleeve_promotion_review(workflow_snapshot=_supported_workflow(sleeve_id))
+    seed_pack = orch.sleeve_admission_release_pack(
+        portfolio_snapshot=portfolio,
+        campaign_report=campaign_report,
+        readiness_flags=campaign_readiness_flags(campaign_report),
+    )
+    manifest = orch.managed_sleeve_set_manifest(release_pack=seed_pack, portfolio_snapshot=portfolio)
+    plan = orch.paper_shadow_activation_plan(manifest=manifest)
+    return orch, portfolio, campaign_report, seed_pack, manifest, plan
+
+
+def _paper_shadow_e2e_pass_report(
+    *,
+    sleeve_id: str = "e2e-active",
+    source_id: str = "local-e2e-feed",
+    report_id: str = "run-e2e-pass",
+    replay_id: str = "replay-e2e-pass",
+):
+    orch, portfolio, campaign_report, seed_pack, manifest, plan = _paper_shadow_e2e_seed(sleeve_id=sleeve_id)
+    source_result = orch.paper_data_source_payload_to_batch_result(
+        _paper_data_source_payload(source_id=source_id),
+        allowed_source_ids=(source_id,),
+        batch_id=f"{source_id}-batch",
+    )
+    orch.prepare_paper_shadow_session(plan=plan)
+    orch.start_paper_shadow_session()
+    replay_result = orch.replay_paper_shadow_feed(build_feed_replay_plan((source_result.batch,), replay_id=replay_id))
+    report = orch.paper_shadow_run_evidence_report(
+        source_result=source_result,
+        replay_result=replay_result,
+        report_id=report_id,
+    )
+    return orch, portfolio, campaign_report, seed_pack, manifest, plan, source_result, replay_result, report
+
+
 def test_admission_model_construction() -> None:
     controller = SleeveAdmissionController(
         _review_summary(_review_result("s1")),
@@ -2851,6 +2910,261 @@ def test_service_orchestrator_passed_evidence_bundle_allows_existing_release_rea
     assert plan.activation_status == PaperShadowActivationStatus.READY_FOR_PAPER_SHADOW
     assert evidence["paper_shadow_evidence_passed"] is True
     assert evidence["paper_shadow_evidence_bundle_complete"] is True
+
+
+def test_paper_shadow_evidence_circuit_e2e_pass_path() -> None:
+    (
+        orch,
+        portfolio,
+        campaign_report,
+        seed_pack,
+        manifest,
+        plan,
+        source_result,
+        replay_result,
+        run_report,
+    ) = _paper_shadow_e2e_pass_report(
+        sleeve_id="e2e-pass-sleeve",
+        source_id="local-e2e-pass",
+        report_id="run-e2e-pass",
+        replay_id="replay-e2e-pass",
+    )
+    snapshot = orch.paper_shadow_session_snapshot()
+    monitor = orch.paper_shadow_runtime_monitor_dict()
+    guardrail = orch.paper_shadow_guardrail_dict()
+    aggregate = orch.multi_source_run_evidence_report((run_report,), aggregate_id="multi-e2e-pass")
+    bundle = orch.paper_shadow_evidence_bundle(
+        aggregate_report=aggregate,
+        run_reports=(run_report,),
+        bundle_id="bundle-e2e-pass",
+    )
+    bridge = orch.paper_shadow_evidence_readiness_bridge_dict()
+    release_pack = orch.sleeve_admission_release_pack(
+        portfolio_snapshot=portfolio,
+        campaign_report=campaign_report,
+    )
+    ready_manifest = orch.managed_sleeve_set_manifest(release_pack=release_pack, portfolio_snapshot=portfolio)
+    ready_plan = orch.paper_shadow_activation_plan(manifest=ready_manifest)
+
+    assert seed_pack.evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_READY
+    assert manifest.dry_run_status == ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN
+    assert plan.activation_status == PaperShadowActivationStatus.READY_FOR_PAPER_SHADOW
+    assert plan.paper_only is True
+    assert plan.real_orders_enabled is False
+    assert plan.real_money_enabled is False
+    assert source_result.source.events_produced == 2
+    assert replay_result.events_replayed == 2
+    assert replay_result.batches_rejected == 0
+    assert snapshot.runtime_monitor.status == RuntimeMonitorStatus.HEALTHY
+    assert snapshot.guardrail.primary_action == GuardrailAction.NONE
+    assert monitor["status"] == "healthy"
+    assert guardrail["primary_action"] == "none"
+    assert run_report.evidence_status == PaperShadowRunEvidenceStatus.PASS
+    assert aggregate.evidence_status == PaperShadowRunEvidenceStatus.PASS
+    assert bundle.evidence_status == PaperShadowRunEvidenceStatus.PASS
+    assert bundle.paper_only is True
+    assert bundle.real_orders_enabled is False
+    assert bundle.real_money_enabled is False
+    assert bridge["paper_shadow_evidence_passed"] is True
+    assert bridge["paper_shadow_evidence_blocked"] is False
+    assert bridge["paper_shadow_evidence_bundle_complete"] is True
+    assert bridge["supportive"] is True
+    assert release_pack.evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_READY
+    assert release_pack.overall_release_status == SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET
+    assert ready_manifest.dry_run_status == ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN
+    assert ready_plan.activation_status == PaperShadowActivationStatus.READY_FOR_PAPER_SHADOW
+
+
+def test_paper_shadow_evidence_circuit_missing_bundle_fails_closed() -> None:
+    (
+        orch,
+        portfolio,
+        campaign_report,
+        _seed_pack,
+        _manifest,
+        _plan,
+        _source_result,
+        _replay_result,
+        run_report,
+    ) = _paper_shadow_e2e_pass_report(
+        sleeve_id="e2e-missing-bundle",
+        source_id="local-e2e-missing",
+        report_id="run-e2e-missing",
+        replay_id="replay-e2e-missing",
+    )
+    aggregate = orch.multi_source_run_evidence_report((run_report,), aggregate_id="multi-e2e-missing-bundle")
+    bridge = orch.paper_shadow_evidence_readiness_bridge_dict()
+    release_pack = orch.sleeve_admission_release_pack(
+        portfolio_snapshot=portfolio,
+        campaign_report=campaign_report,
+    )
+    manifest = orch.managed_sleeve_set_manifest(release_pack=release_pack, portfolio_snapshot=portfolio)
+    plan = orch.paper_shadow_activation_plan(manifest=manifest)
+
+    assert aggregate.evidence_status == PaperShadowRunEvidenceStatus.PASS
+    assert bridge["paper_shadow_evidence_available"] is False
+    assert bridge["paper_shadow_evidence_passed"] is False
+    assert bridge["supportive"] is False
+    assert "paper_shadow_evidence_unavailable" in bridge["blockers"]
+    assert release_pack.evidence_gate_status == SleeveAdmissionReleaseEvidenceStatus.EVIDENCE_MISSING
+    assert release_pack.overall_release_status != SleeveAdmissionReleaseStatus.READY_FOR_PAPER_MANAGED_SET
+    assert "paper_shadow_evidence_unavailable" in release_pack.paper_evidence_blockers
+    assert manifest.dry_run_status != ManagedSleeveSetDryRunStatus.READY_FOR_PAPER_DRY_RUN
+    assert plan.activation_status != PaperShadowActivationStatus.READY_FOR_PAPER_SHADOW
+
+
+def test_paper_shadow_evidence_circuit_blocked_guardrail_fails_closed() -> None:
+    orch, _portfolio, _campaign_report, _seed_pack, _manifest, plan = _paper_shadow_e2e_seed(
+        sleeve_id="e2e-guardrail-sleeve"
+    )
+    source_result = build_paper_data_source_batch_result(
+        _paper_data_source_payload(
+            source_id="local-e2e-guardrail",
+            symbols=("BTCUSDT",),
+            records=(
+                {
+                    "symbol": "BTCUSDT",
+                    "ts_ns": _T0_NS + 101,
+                    "event_type": "mark_price",
+                    "price": 100.0,
+                },
+            ),
+        ),
+        allowed_source_ids=("local-e2e-guardrail",),
+        batch_id="local-e2e-guardrail-batch",
+    )
+    times = iter((_T0_NS + 501, _T0_NS + 502, _T0_NS + 503, _T0_NS + 504))
+    controller = PaperShadowSessionController(
+        clock_ns=lambda: next(times),
+        required_market_symbols=("BTCUSDT", "ETHUSDT"),
+    )
+    controller.prepare(plan)
+    controller.start()
+    replay_result = controller.replay_feed(
+        build_feed_replay_plan(
+            (
+                source_result.batch,
+                build_market_event_batch(
+                    (_market_event("ETHUSDT", venue="binance", ts_ns=_T0_NS + 102, price=2100.0),),
+                    batch_id="local-e2e-guardrail-not-replayed",
+                ),
+            ),
+            replay_id="replay-e2e-guardrail",
+        )
+    )
+    run_report = build_paper_shadow_run_evidence_report(
+        session_snapshot=controller.snapshot(),
+        source_result=source_result,
+        replay_result=replay_result,
+        report_id="run-e2e-guardrail",
+    )
+    aggregate = orch.multi_source_run_evidence_report((run_report,), aggregate_id="multi-e2e-guardrail")
+    bundle = orch.paper_shadow_evidence_bundle(
+        aggregate_report=aggregate,
+        run_reports=(run_report,),
+        bundle_id="bundle-e2e-guardrail",
+    )
+    bridge = orch.paper_shadow_evidence_readiness_bridge_dict()
+
+    assert replay_result.halted_by_guardrail is True
+    assert replay_result.halt_reason == GuardrailAction.PAUSE_SESSION.value
+    assert controller.snapshot().status == PaperShadowSessionStatus.BLOCKED
+    assert run_report.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED
+    assert aggregate.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED
+    assert bundle.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED
+    assert bridge["paper_shadow_evidence_passed"] is False
+    assert bridge["paper_shadow_evidence_blocked"] is True
+    assert bridge["supportive"] is False
+
+
+def test_paper_shadow_evidence_circuit_rejected_batch_fails_closed() -> None:
+    orch, _portfolio, _campaign_report, _seed_pack, _manifest, plan = _paper_shadow_e2e_seed(
+        sleeve_id="e2e-rejected-sleeve"
+    )
+    with pytest.raises(PaperShadowSessionCorruptError):
+        orch.paper_data_source_payload_to_batch_result(
+            _paper_data_source_payload(
+                source_id="local-e2e-rejected",
+                symbols=("BTCUSDT",),
+                records=(
+                    {
+                        "symbol": "BTCUSDT",
+                        "ts_ns": _T0_NS + 101,
+                        "event_type": "mark_price",
+                        "price": -1.0,
+                    },
+                ),
+            ),
+            allowed_source_ids=("local-e2e-rejected",),
+        )
+    orch.prepare_paper_shadow_session(plan=plan)
+    orch.start_paper_shadow_session()
+    replay_result = orch.replay_paper_shadow_feed(
+        FeedReplayPlan(
+            replay_id="replay-e2e-rejected",
+            batches=(MarketEventBatch(batch_id="bad-e2e-price", events=(_market_event(price=-1.0),)),),
+        )
+    )
+    run_report = orch.paper_shadow_run_evidence_report(
+        replay_result=replay_result,
+        report_id="run-e2e-rejected",
+    )
+    aggregate = orch.multi_source_run_evidence_report((run_report,), aggregate_id="multi-e2e-rejected")
+    bundle = orch.paper_shadow_evidence_bundle(
+        aggregate_report=aggregate,
+        run_reports=(run_report,),
+        bundle_id="bundle-e2e-rejected",
+    )
+    bridge = orch.paper_shadow_evidence_readiness_bridge_dict()
+
+    assert replay_result.batches_rejected == 1
+    assert replay_result.rejected_batch_ids == ("bad-e2e-price",)
+    assert run_report.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED
+    assert run_report.rejected_batch_count == 1
+    assert aggregate.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED
+    assert bundle.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED
+    assert bridge["paper_shadow_evidence_passed"] is False
+    assert bridge["paper_shadow_evidence_blocked"] is True
+    assert bridge["supportive"] is False
+
+
+def test_paper_shadow_evidence_circuit_incomplete_aggregate_fails_closed() -> None:
+    first = _paper_shadow_e2e_pass_report(
+        sleeve_id="e2e-incomplete-a",
+        source_id="local-e2e-incomplete-a",
+        report_id="run-e2e-incomplete-a",
+        replay_id="replay-e2e-incomplete-a",
+    )
+    second = _paper_shadow_e2e_pass_report(
+        sleeve_id="e2e-incomplete-b",
+        source_id="local-e2e-incomplete-b",
+        report_id="run-e2e-incomplete-b",
+        replay_id="replay-e2e-incomplete-b",
+    )
+    orch = first[0]
+    first_report = first[-1]
+    second_report = second[-1]
+
+    aggregate = orch.multi_source_run_evidence_report(
+        (second_report, first_report),
+        aggregate_id="multi-e2e-incomplete",
+    )
+    bundle = orch.paper_shadow_evidence_bundle(
+        aggregate_report=aggregate,
+        run_reports=(first_report,),
+        bundle_id="bundle-e2e-incomplete",
+    )
+    bridge = orch.paper_shadow_evidence_readiness_bridge_dict()
+
+    assert aggregate.evidence_status == PaperShadowRunEvidenceStatus.PASS
+    assert aggregate.report_ids == ("run-e2e-incomplete-a", "run-e2e-incomplete-b")
+    assert bundle.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED
+    assert bundle.missing_report_ids == ("run-e2e-incomplete-b",)
+    assert "missing_run_report_drilldown" in bundle.blockers
+    assert bridge["paper_shadow_evidence_passed"] is False
+    assert bridge["paper_shadow_evidence_blocked"] is True
+    assert bridge["paper_shadow_evidence_bundle_complete"] is False
+    assert bridge["supportive"] is False
 
 
 def test_service_orchestrator_paper_shadow_session_helpers_and_operator_status(tmp_path) -> None:
