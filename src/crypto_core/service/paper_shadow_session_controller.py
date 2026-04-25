@@ -11,6 +11,7 @@ Design rules:
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -38,6 +39,41 @@ class PaperShadowSessionCorruptError(RuntimeError):
     pass
 
 
+class MarketEventType(str, Enum):
+    TRADE = "trade"
+    MARK_PRICE = "mark_price"
+    INDEX_PRICE = "index_price"
+    FUNDING = "funding"
+    OPEN_INTEREST = "open_interest"
+    BOOK_TICK = "book_tick"
+
+
+@dataclass(frozen=True)
+class MarketEvent:
+    symbol: str
+    venue: str
+    ts_ns: int
+    event_type: MarketEventType
+    price: float | None = None
+    mark_price: float | None = None
+    index_price: float | None = None
+    funding_rate: float | None = None
+    open_interest: float | None = None
+
+
+@dataclass(frozen=True)
+class MarketEventBatch:
+    batch_id: str
+    events: tuple[MarketEvent, ...]
+
+
+@dataclass(frozen=True)
+class MarketEventCursor:
+    symbol: str
+    venue: str
+    last_event_ns: int
+
+
 @dataclass(frozen=True)
 class PaperShadowSessionSnapshot:
     session_id: str
@@ -54,6 +90,13 @@ class PaperShadowSessionSnapshot:
     tick_count: int = 0
     active_sleeves_seen: tuple[str, ...] = ()
     blockers_seen: tuple[str, ...] = ()
+    event_count: int = 0
+    symbols_seen: tuple[str, ...] = ()
+    venues_seen: tuple[str, ...] = ()
+    first_event_ns: int | None = None
+    last_event_ns: int | None = None
+    rejected_event_count: int = 0
+    market_event_cursors: tuple[MarketEventCursor, ...] = ()
     paper_only: bool = True
     real_orders_enabled: bool = False
     real_money_enabled: bool = False
@@ -191,6 +234,58 @@ class PaperShadowSessionController:
             ),
         )
 
+    def record_market_event_batch(self, batch: MarketEventBatch | dict) -> PaperShadowSessionSnapshot:
+        if self._snapshot.status != PaperShadowSessionStatus.RUNNING:
+            raise PaperShadowSessionCorruptError("paper/shadow session cannot record market events before start")
+        try:
+            normalized = market_event_batch_from_dict(batch) if isinstance(batch, dict) else _normalize_batch(batch)
+            _validate_batch_against_session(self._snapshot, normalized)
+        except PaperShadowSessionCorruptError:
+            self._record_rejected_events(_rejected_event_increment(batch))
+            raise
+        now = self._now_ns()
+        events = normalized.events
+        event_count = len(events)
+        symbols = _sorted_unique((*self._snapshot.symbols_seen, *(event.symbol for event in events)))
+        venues = _sorted_unique((*self._snapshot.venues_seen, *(event.venue for event in events)))
+        first_event_ns = min(event.ts_ns for event in events)
+        last_event_ns = max(event.ts_ns for event in events)
+        cursors = _merge_market_event_cursors(self._snapshot.market_event_cursors, events)
+        return self._apply_snapshot(
+            replace(
+                self._snapshot,
+                as_of_ns=now,
+                last_tick_at_ns=now,
+                tick_count=self._snapshot.tick_count + 1,
+                event_count=self._snapshot.event_count + event_count,
+                symbols_seen=symbols,
+                venues_seen=venues,
+                first_event_ns=(
+                    first_event_ns
+                    if self._snapshot.first_event_ns is None
+                    else min(self._snapshot.first_event_ns, first_event_ns)
+                ),
+                last_event_ns=(
+                    last_event_ns
+                    if self._snapshot.last_event_ns is None
+                    else max(self._snapshot.last_event_ns, last_event_ns)
+                ),
+                market_event_cursors=cursors,
+                paper_only=True,
+                real_orders_enabled=False,
+                real_money_enabled=False,
+                operator_summary=_operator_summary(
+                    PaperShadowSessionStatus.RUNNING,
+                    self._snapshot.tick_count + 1,
+                    self._snapshot.active_sleeves,
+                    self._snapshot.blockers_seen,
+                ),
+            )
+        )
+
+    def tick_from_market_events(self, batch: MarketEventBatch | dict) -> PaperShadowSessionSnapshot:
+        return self.record_market_event_batch(batch)
+
     def stop(self, *, blockers_seen: tuple[str, ...] = ()) -> PaperShadowSessionSnapshot:
         if self._snapshot.status != PaperShadowSessionStatus.RUNNING:
             raise PaperShadowSessionCorruptError("paper/shadow session can only stop from RUNNING state")
@@ -270,6 +365,18 @@ class PaperShadowSessionController:
         self._snapshot = snapshot
         return self._snapshot
 
+    def _record_rejected_events(self, count: int) -> None:
+        if count <= 0:
+            count = 1
+        self._snapshot = replace(
+            self._snapshot,
+            rejected_event_count=self._snapshot.rejected_event_count + count,
+            paper_only=True,
+            real_orders_enabled=False,
+            real_money_enabled=False,
+        )
+        _validate_session_snapshot(self._snapshot)
+
 
 def paper_shadow_session_snapshot_to_dict(snapshot: PaperShadowSessionSnapshot) -> dict:
     _validate_session_snapshot(snapshot)
@@ -288,6 +395,13 @@ def paper_shadow_session_snapshot_to_dict(snapshot: PaperShadowSessionSnapshot) 
         "tick_count": snapshot.tick_count,
         "active_sleeves_seen": list(snapshot.active_sleeves_seen),
         "blockers_seen": list(snapshot.blockers_seen),
+        "event_count": snapshot.event_count,
+        "symbols_seen": list(snapshot.symbols_seen),
+        "venues_seen": list(snapshot.venues_seen),
+        "first_event_ns": snapshot.first_event_ns,
+        "last_event_ns": snapshot.last_event_ns,
+        "rejected_event_count": snapshot.rejected_event_count,
+        "market_event_cursors": [market_event_cursor_to_dict(cursor) for cursor in snapshot.market_event_cursors],
         "paper_only": snapshot.paper_only,
         "real_orders_enabled": snapshot.real_orders_enabled,
         "real_money_enabled": snapshot.real_money_enabled,
@@ -322,6 +436,13 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
         tick_count=_require_non_negative_int(data.get("tick_count", 0), "tick_count"),
         active_sleeves_seen=_sorted_unique(data.get("active_sleeves_seen", ())),
         blockers_seen=_sorted_unique(data.get("blockers_seen", ())),
+        event_count=_require_non_negative_int(data.get("event_count", 0), "event_count"),
+        symbols_seen=_sorted_unique(data.get("symbols_seen", ())),
+        venues_seen=_sorted_unique(data.get("venues_seen", ())),
+        first_event_ns=_optional_non_negative_int(data.get("first_event_ns"), "first_event_ns"),
+        last_event_ns=_optional_non_negative_int(data.get("last_event_ns"), "last_event_ns"),
+        rejected_event_count=_require_non_negative_int(data.get("rejected_event_count", 0), "rejected_event_count"),
+        market_event_cursors=_market_event_cursors_from_data(data.get("market_event_cursors", ())),
         paper_only=_bool_or_default(data, "paper_only", True),
         real_orders_enabled=_bool_or_default(data, "real_orders_enabled", False),
         real_money_enabled=_bool_or_default(data, "real_money_enabled", False),
@@ -338,6 +459,93 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
     )
     _validate_session_snapshot(snapshot)
     return snapshot
+
+
+def build_market_event_batch(
+    events: tuple[MarketEvent, ...],
+    *,
+    batch_id: str | None = None,
+) -> MarketEventBatch:
+    original = MarketEventBatch(
+        batch_id=batch_id or _market_event_batch_id(events),
+        events=tuple(events),
+    )
+    return _normalize_batch(original)
+
+
+def market_event_to_dict(event: MarketEvent) -> dict:
+    _validate_market_event(event)
+    return {
+        "symbol": event.symbol,
+        "venue": event.venue,
+        "ts_ns": event.ts_ns,
+        "event_type": event.event_type.value,
+        "price": event.price,
+        "mark_price": event.mark_price,
+        "index_price": event.index_price,
+        "funding_rate": event.funding_rate,
+        "open_interest": event.open_interest,
+    }
+
+
+def market_event_from_dict(data: dict) -> MarketEvent:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Market event must be a dict, got {type(data).__name__!r}")
+    event = MarketEvent(
+        symbol=_require_non_empty_str(data.get("symbol"), "symbol"),
+        venue=_require_non_empty_str(data.get("venue"), "venue"),
+        ts_ns=_require_non_negative_int(data.get("ts_ns"), "ts_ns"),
+        event_type=_market_event_type_from_value(data.get("event_type")),
+        price=_optional_non_negative_float(data.get("price"), "price"),
+        mark_price=_optional_non_negative_float(data.get("mark_price"), "mark_price"),
+        index_price=_optional_non_negative_float(data.get("index_price"), "index_price"),
+        funding_rate=_optional_float(data.get("funding_rate"), "funding_rate"),
+        open_interest=_optional_non_negative_float(data.get("open_interest"), "open_interest"),
+    )
+    _validate_market_event(event)
+    return event
+
+
+def market_event_batch_to_dict(batch: MarketEventBatch) -> dict:
+    normalized = _normalize_batch(batch)
+    return {
+        "batch_id": normalized.batch_id,
+        "events": [market_event_to_dict(event) for event in normalized.events],
+    }
+
+
+def market_event_batch_from_dict(data: dict) -> MarketEventBatch:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Market event batch must be a dict, got {type(data).__name__!r}")
+    events_value = data.get("events")
+    if not isinstance(events_value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("Market event batch field 'events' must be a list/tuple")
+    events = tuple(market_event_from_dict(_dict_value(item, "events")) for item in events_value)
+    return build_market_event_batch(
+        events,
+        batch_id=_string_or_default(data.get("batch_id"), _market_event_batch_id(events)),
+    )
+
+
+def market_event_cursor_to_dict(cursor: MarketEventCursor) -> dict:
+    _validate_market_event_cursor(cursor)
+    return {
+        "symbol": cursor.symbol,
+        "venue": cursor.venue,
+        "last_event_ns": cursor.last_event_ns,
+    }
+
+
+def market_event_cursor_from_dict(data: dict) -> MarketEventCursor:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Market event cursor must be a dict, got {type(data).__name__!r}")
+    cursor = MarketEventCursor(
+        symbol=_require_non_empty_str(data.get("symbol"), "symbol"),
+        venue=_require_non_empty_str(data.get("venue"), "venue"),
+        last_event_ns=_require_non_negative_int(data.get("last_event_ns"), "last_event_ns"),
+    )
+    _validate_market_event_cursor(cursor)
+    return cursor
 
 
 def _validate_activation_plan_for_session(plan: PaperShadowActivationPlan) -> None:
@@ -363,6 +571,8 @@ def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
     for field_name in (
         "active_sleeves_seen",
         "blockers_seen",
+        "symbols_seen",
+        "venues_seen",
         "active_sleeves",
         "inactive_sleeves",
         "admitted_unallocated_sleeves",
@@ -383,6 +593,26 @@ def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
         raise PaperShadowSessionCorruptError("paper/shadow session tick_count cannot be negative")
     if snapshot.tick_count > 0 and snapshot.last_tick_at_ns is None:
         raise PaperShadowSessionCorruptError("paper/shadow session ticks require last_tick_at_ns")
+    if snapshot.event_count < 0:
+        raise PaperShadowSessionCorruptError("paper/shadow session event_count cannot be negative")
+    if snapshot.rejected_event_count < 0:
+        raise PaperShadowSessionCorruptError("paper/shadow session rejected_event_count cannot be negative")
+    if snapshot.event_count > 0:
+        if snapshot.first_event_ns is None or snapshot.last_event_ns is None:
+            raise PaperShadowSessionCorruptError("paper/shadow session events require first/last event timestamps")
+        if snapshot.first_event_ns > snapshot.last_event_ns:
+            raise PaperShadowSessionCorruptError(
+                "paper/shadow first event timestamp cannot exceed last event timestamp"
+            )
+        if not snapshot.symbols_seen or not snapshot.venues_seen:
+            raise PaperShadowSessionCorruptError("paper/shadow session events require symbol and venue counters")
+    if snapshot.event_count == 0 and (snapshot.first_event_ns is not None or snapshot.last_event_ns is not None):
+        raise PaperShadowSessionCorruptError("paper/shadow session without events cannot carry event timestamps")
+    for cursor in snapshot.market_event_cursors:
+        _validate_market_event_cursor(cursor)
+    cursor_pairs = tuple((cursor.symbol, cursor.venue) for cursor in snapshot.market_event_cursors)
+    if cursor_pairs != tuple(sorted(cursor_pairs)) or len(cursor_pairs) != len(set(cursor_pairs)):
+        raise PaperShadowSessionCorruptError("paper/shadow session market event cursors must be sorted unique")
     if set(snapshot.active_sleeves) & set(snapshot.inactive_sleeves):
         raise PaperShadowSessionCorruptError("paper/shadow session active and inactive sleeves overlap")
     if not set(snapshot.active_sleeves_seen).issubset(set(snapshot.active_sleeves)):
@@ -448,6 +678,151 @@ def _session_id_for_plan(plan: PaperShadowActivationPlan) -> str:
     return f"paper-shadow-session-{plan.plan_id}"
 
 
+def _normalize_batch(batch: MarketEventBatch) -> MarketEventBatch:
+    _validate_market_event_batch(batch)
+    return MarketEventBatch(
+        batch_id=batch.batch_id,
+        events=tuple(sorted(batch.events, key=_market_event_sort_key)),
+    )
+
+
+def _validate_market_event_batch(batch: MarketEventBatch) -> None:
+    if not isinstance(batch, MarketEventBatch):
+        raise PaperShadowSessionCorruptError("market event batch must be a MarketEventBatch")
+    if not isinstance(batch.batch_id, str) or not batch.batch_id:
+        raise PaperShadowSessionCorruptError("market event batch_id must be a non-empty string")
+    if not isinstance(batch.events, tuple):
+        raise PaperShadowSessionCorruptError("market event batch events must be a tuple")
+    if not batch.events:
+        raise PaperShadowSessionCorruptError("market event batch must contain at least one event")
+    last_by_pair: dict[tuple[str, str], int] = {}
+    for event in batch.events:
+        _validate_market_event(event)
+        pair = (event.symbol, event.venue)
+        previous = last_by_pair.get(pair)
+        if previous is not None and event.ts_ns < previous:
+            raise PaperShadowSessionCorruptError("market event batch timestamps must be monotonic per symbol/venue")
+        last_by_pair[pair] = event.ts_ns
+
+
+def _validate_market_event(event: MarketEvent) -> None:
+    if not isinstance(event, MarketEvent):
+        raise PaperShadowSessionCorruptError("market event must be a MarketEvent")
+    _require_non_empty_str(event.symbol, "symbol")
+    _require_non_empty_str(event.venue, "venue")
+    _require_non_negative_int(event.ts_ns, "ts_ns")
+    if not isinstance(event.event_type, MarketEventType):
+        raise PaperShadowSessionCorruptError("market event_type must be a MarketEventType")
+    _optional_non_negative_float(event.price, "price")
+    _optional_non_negative_float(event.mark_price, "mark_price")
+    _optional_non_negative_float(event.index_price, "index_price")
+    _optional_float(event.funding_rate, "funding_rate")
+    _optional_non_negative_float(event.open_interest, "open_interest")
+    if all(
+        value is None
+        for value in (
+            event.price,
+            event.mark_price,
+            event.index_price,
+            event.funding_rate,
+            event.open_interest,
+        )
+    ):
+        raise PaperShadowSessionCorruptError("market event must carry at least one market field")
+
+
+def _validate_batch_against_session(snapshot: PaperShadowSessionSnapshot, batch: MarketEventBatch) -> None:
+    cursor_lookup = {(cursor.symbol, cursor.venue): cursor.last_event_ns for cursor in snapshot.market_event_cursors}
+    for event in batch.events:
+        previous = cursor_lookup.get((event.symbol, event.venue))
+        if previous is not None and event.ts_ns < previous:
+            raise PaperShadowSessionCorruptError("market event timestamp regressed from session cursor")
+
+
+def _merge_market_event_cursors(
+    cursors: tuple[MarketEventCursor, ...],
+    events: tuple[MarketEvent, ...],
+) -> tuple[MarketEventCursor, ...]:
+    latest = {(cursor.symbol, cursor.venue): cursor.last_event_ns for cursor in cursors}
+    for event in events:
+        pair = (event.symbol, event.venue)
+        latest[pair] = max(latest.get(pair, event.ts_ns), event.ts_ns)
+    return tuple(
+        MarketEventCursor(symbol=symbol, venue=venue, last_event_ns=ts_ns)
+        for (symbol, venue), ts_ns in sorted(latest.items())
+    )
+
+
+def _market_event_cursors_from_data(value: object) -> tuple[MarketEventCursor, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("market event cursors must be a list/tuple")
+    cursors = tuple(market_event_cursor_from_dict(_dict_value(item, "market_event_cursors")) for item in value)
+    for cursor in cursors:
+        _validate_market_event_cursor(cursor)
+    pairs = tuple((cursor.symbol, cursor.venue) for cursor in cursors)
+    if pairs != tuple(sorted(pairs)) or len(pairs) != len(set(pairs)):
+        raise PaperShadowSessionCorruptError("market event cursors must be sorted unique")
+    return cursors
+
+
+def _validate_market_event_cursor(cursor: MarketEventCursor) -> None:
+    if not isinstance(cursor, MarketEventCursor):
+        raise PaperShadowSessionCorruptError("market event cursor must be a MarketEventCursor")
+    _require_non_empty_str(cursor.symbol, "symbol")
+    _require_non_empty_str(cursor.venue, "venue")
+    _require_non_negative_int(cursor.last_event_ns, "last_event_ns")
+
+
+def _market_event_batch_id(events: tuple[MarketEvent, ...]) -> str:
+    if not events:
+        return "market-event-batch-empty"
+    ordered = tuple(sorted(events, key=_market_event_sort_key))
+    first_ts = ordered[0].ts_ns
+    last_ts = ordered[-1].ts_ns
+    return f"market-event-batch-{first_ts}-{last_ts}-{len(ordered)}"
+
+
+def _market_event_sort_key(event: MarketEvent) -> tuple[int, str, str, str]:
+    return (event.ts_ns, event.symbol, event.venue, event.event_type.value)
+
+
+def _market_event_type_from_value(value: object) -> MarketEventType:
+    if isinstance(value, MarketEventType):
+        return value
+    try:
+        return MarketEventType(_require_non_empty_str(value, "event_type"))
+    except ValueError as exc:
+        raise PaperShadowSessionCorruptError(f"Invalid market event_type: {value!r}") from exc
+
+
+def _rejected_event_increment(batch: object) -> int:
+    if isinstance(batch, MarketEventBatch):
+        return max(1, len(batch.events))
+    if isinstance(batch, dict):
+        events = batch.get("events")
+        if isinstance(events, (list, tuple)):
+            return max(1, len(events))
+    return 1
+
+
+def _optional_non_negative_float(value: object, field_name: str) -> float | None:
+    parsed = _optional_float(value, field_name)
+    if parsed is not None and parsed < 0.0:
+        raise PaperShadowSessionCorruptError(f"market event field {field_name!r} cannot be negative")
+    return parsed
+
+
+def _optional_float(value: object, field_name: str) -> float | None:
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise PaperShadowSessionCorruptError(f"market event field {field_name!r} must be numeric or None")
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise PaperShadowSessionCorruptError(f"market event field {field_name!r} must be finite")
+    return parsed
+
+
 def _session_status_or_default(value: object, default: PaperShadowSessionStatus) -> PaperShadowSessionStatus:
     if value is None:
         return default
@@ -490,6 +865,12 @@ def _bool_or_default(data: dict, field_name: str, default: bool) -> bool:
     if not isinstance(value, bool):
         raise PaperShadowSessionCorruptError(f"paper/shadow session field {field_name!r} must be bool")
     return value
+
+
+def _dict_value(value: object, field_name: str) -> dict:
+    if not isinstance(value, dict):
+        raise PaperShadowSessionCorruptError(f"{field_name} must contain dict entries")
+    return dict(value)
 
 
 def _sorted_unique(values: object) -> tuple[str, ...]:

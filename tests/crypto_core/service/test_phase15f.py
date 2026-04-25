@@ -9,10 +9,12 @@ import pytest
 from crypto_core.service.artifact_export import (
     export_managed_sleeve_set_manifest,
     export_paper_shadow_activation_plan,
+    export_paper_shadow_market_event_batch,
     export_paper_shadow_session_snapshot,
     export_sleeve_admission_release_pack,
     load_managed_sleeve_set_manifest,
     load_paper_shadow_activation_plan,
+    load_paper_shadow_market_event_batch,
     load_paper_shadow_session_snapshot,
     load_sleeve_admission_release_pack,
 )
@@ -28,9 +30,15 @@ from crypto_core.service.campaign_controller import campaign_readiness_flags
 from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreConfig
 from crypto_core.service.models import QueuePressure, QueueSnapshot, ServiceStatus, WatchdogStatus
 from crypto_core.service.paper_shadow_session_controller import (
+    MarketEvent,
+    MarketEventBatch,
+    MarketEventType,
     PaperShadowSessionController,
     PaperShadowSessionCorruptError,
     PaperShadowSessionStatus,
+    build_market_event_batch,
+    market_event_batch_from_dict,
+    market_event_batch_to_dict,
     paper_shadow_session_snapshot_from_dict,
     paper_shadow_session_snapshot_to_dict,
 )
@@ -406,6 +414,31 @@ def _ready_activation_plan(*sleeves: CryptoSleeveState):
     pack, _ = _ready_release_pack(*sleeves)
     manifest = build_managed_sleeve_set_manifest(pack)
     return build_paper_shadow_activation_plan(manifest)
+
+
+def _market_event(
+    symbol: str = "BTCUSDT",
+    *,
+    venue: str = "binance",
+    ts_ns: int = _T0_NS + 100,
+    event_type: MarketEventType = MarketEventType.MARK_PRICE,
+    price: float | None = 100.0,
+    mark_price: float | None = None,
+    index_price: float | None = None,
+    funding_rate: float | None = None,
+    open_interest: float | None = None,
+) -> MarketEvent:
+    return MarketEvent(
+        symbol=symbol,
+        venue=venue,
+        ts_ns=ts_ns,
+        event_type=event_type,
+        price=price,
+        mark_price=mark_price,
+        index_price=index_price,
+        funding_rate=funding_rate,
+        open_interest=open_interest,
+    )
 
 
 def _mock_service() -> MagicMock:
@@ -1589,6 +1622,137 @@ def test_paper_shadow_session_restore_roundtrip_and_malformed_fail_closed(tmp_pa
         load_paper_shadow_session_snapshot(evidence_store=store)
 
 
+def test_paper_shadow_market_event_batch_valid_updates_session_counters() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    batch = build_market_event_batch(
+        (
+            _market_event("ETHUSDT", venue="bybit", ts_ns=_T0_NS + 102, price=2100.0),
+            _market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, mark_price=100.0, price=None),
+        ),
+        batch_id="batch-valid",
+    )
+
+    snapshot = controller.record_market_event_batch(batch)
+    rendered = paper_shadow_session_snapshot_to_dict(snapshot)
+
+    assert snapshot.tick_count == 1
+    assert snapshot.event_count == 2
+    assert snapshot.symbols_seen == ("BTCUSDT", "ETHUSDT")
+    assert snapshot.venues_seen == ("binance", "bybit")
+    assert snapshot.first_event_ns == _T0_NS + 101
+    assert snapshot.last_event_ns == _T0_NS + 102
+    assert snapshot.rejected_event_count == 0
+    assert rendered["market_event_cursors"] == [
+        {"symbol": "BTCUSDT", "venue": "binance", "last_event_ns": _T0_NS + 101},
+        {"symbol": "ETHUSDT", "venue": "bybit", "last_event_ns": _T0_NS + 102},
+    ]
+
+
+def test_paper_shadow_market_event_malformed_price_rejected_fail_closed() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    batch = MarketEventBatch(
+        batch_id="bad-price",
+        events=(_market_event(price=-1.0),),
+    )
+
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.record_market_event_batch(batch)
+
+    snapshot = controller.snapshot()
+    assert snapshot.event_count == 0
+    assert snapshot.tick_count == 0
+    assert snapshot.rejected_event_count == 1
+    assert snapshot.real_orders_enabled is False
+    assert snapshot.real_money_enabled is False
+
+
+def test_paper_shadow_market_event_non_monotonic_batch_rejected() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    batch = MarketEventBatch(
+        batch_id="non-monotonic",
+        events=(
+            _market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 102),
+            _market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),
+        ),
+    )
+
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.tick_from_market_events(batch)
+
+    assert controller.snapshot().event_count == 0
+    assert controller.snapshot().rejected_event_count == 2
+
+
+def test_paper_shadow_market_event_batch_ordering_and_serialization_roundtrip(tmp_path) -> None:
+    batch = build_market_event_batch(
+        (
+            _market_event("ETHUSDT", venue="bybit", ts_ns=_T0_NS + 102, price=2100.0),
+            _market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),
+        ),
+        batch_id="stable-order",
+    )
+    payload = market_event_batch_to_dict(batch)
+
+    assert [event["symbol"] for event in payload["events"]] == ["BTCUSDT", "ETHUSDT"]
+    assert market_event_batch_from_dict(payload) == batch
+    assert market_event_batch_to_dict(market_event_batch_from_dict(payload)) == payload
+
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    export_paper_shadow_market_event_batch(batch=batch, evidence_store=store)
+    assert load_paper_shadow_market_event_batch(evidence_store=store) == batch
+
+    store.save_snapshot("crypto_paper_shadow_market_event_batch", ["bad"])
+    with pytest.raises(PaperShadowSessionCorruptError):
+        load_paper_shadow_market_event_batch(evidence_store=store)
+
+
+def test_paper_shadow_market_event_tick_before_start_fails_closed() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    controller = PaperShadowSessionController(clock_ns=lambda: _T0_NS + 1)
+    controller.prepare(plan)
+    batch = build_market_event_batch((_market_event(),), batch_id="too-early")
+
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.record_market_event_batch(batch)
+
+    snapshot = controller.snapshot()
+    assert snapshot.tick_count == 0
+    assert snapshot.event_count == 0
+    assert snapshot.rejected_event_count == 0
+
+
+def test_paper_shadow_market_event_deterministic_replay() -> None:
+    plan = _ready_activation_plan(_sleeve("stable", effective_allocation=0.15, target_allocation=0.15))
+    batch = build_market_event_batch(
+        (
+            _market_event("ETHUSDT", venue="bybit", ts_ns=_T0_NS + 102, price=2100.0),
+            _market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),
+        ),
+        batch_id="deterministic",
+    )
+
+    def run_once() -> dict:
+        times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3))
+        controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+        controller.prepare(plan)
+        controller.start()
+        return paper_shadow_session_snapshot_to_dict(controller.record_market_event_batch(batch))
+
+    assert run_once() == run_once()
+
+
 def test_service_orchestrator_paper_shadow_session_helpers_and_operator_status(tmp_path) -> None:
     store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
     plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
@@ -1620,3 +1784,32 @@ def test_service_orchestrator_paper_shadow_session_helpers_and_operator_status(t
 
     orch.export_paper_shadow_session_snapshot()
     assert orch.load_paper_shadow_session_snapshot() == finalized
+
+
+def test_service_orchestrator_market_event_batch_helper(tmp_path) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 20, _T0_NS + 21, _T0_NS + 22))
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        evidence_store=store,
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: next(times),
+    )
+    batch = build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 120),))
+
+    orch.prepare_paper_shadow_session(plan=plan)
+    orch.start_paper_shadow_session()
+    snapshot = orch.record_paper_shadow_market_event_batch(batch)
+    rendered = orch.paper_shadow_session_snapshot_dict()
+    operator = operator_snapshot_to_dict(orch.operator_snapshot())
+
+    assert snapshot.event_count == 1
+    assert rendered["event_count"] == 1
+    assert rendered["symbols_seen"] == ["BTCUSDT"]
+    assert operator["paper_shadow_session"]["event_count"] == 1
+    assert operator["paper_shadow_session"]["symbols_seen"] == 1
+    assert orch.paper_shadow_market_event_batch_dict(batch)["events"][0]["symbol"] == "BTCUSDT"
+
+    orch.export_paper_shadow_market_event_batch(batch)
+    assert orch.load_paper_shadow_market_event_batch() == batch

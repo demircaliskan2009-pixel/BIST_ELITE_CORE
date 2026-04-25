@@ -32,8 +32,11 @@ from enum import Enum
 
 from crypto_core.service.evidence_store import EvidenceStore, WriteResult
 from crypto_core.service.paper_shadow_session_controller import (
+    MarketEventBatch,
     PaperShadowSessionCorruptError,
     PaperShadowSessionSnapshot,
+    market_event_batch_from_dict,
+    market_event_batch_to_dict,
     paper_shadow_session_snapshot_from_dict,
     paper_shadow_session_snapshot_to_dict,
 )
@@ -509,6 +512,7 @@ _SLEEVE_ADMISSION_RELEASE_PACK_SNAPSHOT_NAME = "crypto_sleeve_admission_release_
 _MANAGED_SLEEVE_SET_MANIFEST_SNAPSHOT_NAME = "crypto_managed_sleeve_set_manifest"
 _PAPER_SHADOW_ACTIVATION_PLAN_SNAPSHOT_NAME = "crypto_paper_shadow_activation_plan"
 _PAPER_SHADOW_SESSION_SNAPSHOT_NAME = "crypto_paper_shadow_session"
+_PAPER_SHADOW_MARKET_EVENT_BATCH_SNAPSHOT_NAME = "crypto_paper_shadow_market_event_batch"
 
 
 def export_run_artifact(
@@ -721,3 +725,28 @@ def load_paper_shadow_session_snapshot(*, evidence_store: EvidenceStore) -> Pape
             f"Paper/shadow session snapshot 'data' must be a dict, got {type(data).__name__!r}"
         )
     return paper_shadow_session_snapshot_from_dict(data)
+
+
+def export_paper_shadow_market_event_batch(
+    *,
+    batch: MarketEventBatch,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist a deterministic read-only paper/shadow market event batch."""
+    data = market_event_batch_to_dict(batch)
+    result = evidence_store.save_snapshot(_PAPER_SHADOW_MARKET_EVENT_BATCH_SNAPSHOT_NAME, data)
+    if not result.success:
+        return result
+    evidence_store.append_evidence(_PAPER_SHADOW_MARKET_EVENT_BATCH_SNAPSHOT_NAME, data)
+    return result
+
+
+def load_paper_shadow_market_event_batch(*, evidence_store: EvidenceStore) -> MarketEventBatch:
+    """Load the latest deterministic read-only paper/shadow market event batch."""
+    envelope = evidence_store.load_snapshot(_PAPER_SHADOW_MARKET_EVENT_BATCH_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper/shadow market event batch 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return market_event_batch_from_dict(data)

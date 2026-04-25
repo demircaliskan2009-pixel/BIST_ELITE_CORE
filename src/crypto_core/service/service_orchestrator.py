@@ -60,6 +60,9 @@ from crypto_core.service.artifact_export import (
     export_paper_shadow_activation_plan as export_paper_shadow_plan,
 )
 from crypto_core.service.artifact_export import (
+    export_paper_shadow_market_event_batch as export_market_event_batch,
+)
+from crypto_core.service.artifact_export import (
     export_paper_shadow_session_snapshot as export_paper_shadow_session,
 )
 from crypto_core.service.artifact_export import (
@@ -70,6 +73,9 @@ from crypto_core.service.artifact_export import (
 )
 from crypto_core.service.artifact_export import (
     load_paper_shadow_activation_plan as load_paper_shadow_plan,
+)
+from crypto_core.service.artifact_export import (
+    load_paper_shadow_market_event_batch as load_market_event_batch,
 )
 from crypto_core.service.artifact_export import (
     load_paper_shadow_session_snapshot as load_paper_shadow_session,
@@ -115,8 +121,10 @@ from crypto_core.service.external_regime import (
 from crypto_core.service.models import ServiceStatus
 from crypto_core.service.paper_live_service import PaperLiveService
 from crypto_core.service.paper_shadow_session_controller import (
+    MarketEventBatch,
     PaperShadowSessionController,
     PaperShadowSessionSnapshot,
+    market_event_batch_to_dict,
     paper_shadow_session_snapshot_to_dict,
 )
 from crypto_core.service.promotion_review import PromotionThresholds
@@ -343,6 +351,12 @@ class PaperShadowSessionState:
     real_money_enabled: bool
     active_sleeves_seen: int
     blockers_seen: int
+    event_count: int
+    symbols_seen: int
+    venues_seen: int
+    first_event_ns: int | None
+    last_event_ns: int | None
+    rejected_event_count: int
     started_at_ns: int | None
     stopped_at_ns: int | None
     finalized_at_ns: int | None
@@ -817,6 +831,20 @@ class ServiceOrchestrator:
             blockers_seen=blockers_seen,
         )
 
+    def record_paper_shadow_market_event_batch(
+        self,
+        batch: MarketEventBatch | dict,
+    ) -> PaperShadowSessionSnapshot:
+        """Record a read-only market event batch as paper/shadow tick evidence."""
+        return self._ensure_paper_shadow_session_controller().record_market_event_batch(batch)
+
+    def tick_paper_shadow_session_from_market_events(
+        self,
+        batch: MarketEventBatch | dict,
+    ) -> PaperShadowSessionSnapshot:
+        """Alias for recording market events as deterministic session tick evidence."""
+        return self.record_paper_shadow_market_event_batch(batch)
+
     def stop_paper_shadow_session(
         self,
         *,
@@ -856,6 +884,10 @@ class ServiceOrchestrator:
         """Serialize the current paper/shadow session lifecycle report."""
         return paper_shadow_session_snapshot_to_dict(self.paper_shadow_session_report())
 
+    def paper_shadow_market_event_batch_dict(self, batch: MarketEventBatch) -> dict:
+        """Serialize a deterministic read-only paper/shadow market event batch."""
+        return market_event_batch_to_dict(batch)
+
     def export_paper_shadow_session_snapshot(self):
         """Persist the current paper/shadow session snapshot via EvidenceStore."""
         if self._evidence_store is None:
@@ -872,6 +904,21 @@ class ServiceOrchestrator:
         snapshot = load_paper_shadow_session(evidence_store=self._evidence_store)
         self.restore_paper_shadow_session(snapshot)
         return snapshot
+
+    def export_paper_shadow_market_event_batch(self, batch: MarketEventBatch):
+        """Persist a read-only paper/shadow market event batch via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper/shadow market event batch export")
+        return export_market_event_batch(
+            batch=batch,
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_shadow_market_event_batch(self) -> MarketEventBatch:
+        """Load the latest persisted read-only paper/shadow market event batch."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper/shadow market event batch load")
+        return load_market_event_batch(evidence_store=self._evidence_store)
 
     # ------------------------------------------------------------------
     # Properties
@@ -3259,6 +3306,12 @@ def paper_shadow_session_state_from_snapshot(snapshot: PaperShadowSessionSnapsho
         real_money_enabled=snapshot.real_money_enabled,
         active_sleeves_seen=len(snapshot.active_sleeves_seen),
         blockers_seen=len(snapshot.blockers_seen),
+        event_count=snapshot.event_count,
+        symbols_seen=len(snapshot.symbols_seen),
+        venues_seen=len(snapshot.venues_seen),
+        first_event_ns=snapshot.first_event_ns,
+        last_event_ns=snapshot.last_event_ns,
+        rejected_event_count=snapshot.rejected_event_count,
         started_at_ns=snapshot.started_at_ns,
         stopped_at_ns=snapshot.stopped_at_ns,
         finalized_at_ns=snapshot.finalized_at_ns,
@@ -3279,6 +3332,12 @@ def paper_shadow_session_state_to_dict(state: PaperShadowSessionState) -> dict:
         "real_money_enabled": state.real_money_enabled,
         "active_sleeves_seen": state.active_sleeves_seen,
         "blockers_seen": state.blockers_seen,
+        "event_count": state.event_count,
+        "symbols_seen": state.symbols_seen,
+        "venues_seen": state.venues_seen,
+        "first_event_ns": state.first_event_ns,
+        "last_event_ns": state.last_event_ns,
+        "rejected_event_count": state.rejected_event_count,
         "started_at_ns": state.started_at_ns,
         "stopped_at_ns": state.stopped_at_ns,
         "finalized_at_ns": state.finalized_at_ns,
