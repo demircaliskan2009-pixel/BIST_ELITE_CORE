@@ -73,6 +73,14 @@ class PaperIntentSide(str, Enum):
     SELL = "sell"
 
 
+class PaperFillStatus(str, Enum):
+    FILLED = "filled"
+    REJECTED_NO_MARKET = "rejected_no_market"
+    REJECTED_GUARDRAIL = "rejected_guardrail"
+    REJECTED_INVALID_INTENT = "rejected_invalid_intent"
+    SKIPPED = "skipped"
+
+
 class PaperShadowRunEvidenceStatus(str, Enum):
     PASS = "pass"  # noqa: S105 - run evidence outcome, not a credential.
     WARN = "warn"
@@ -193,6 +201,41 @@ class PaperIntentBatchResult:
 
 
 @dataclass(frozen=True)
+class PaperFill:
+    fill_id: str
+    intent_id: str
+    sleeve_id: str
+    symbol: str
+    venue: str
+    side: PaperIntentSide
+    qty: float | None
+    notional: float | None
+    fill_price: float | None
+    fill_ts_ns: int
+    status: PaperFillStatus
+    reason: str
+
+
+@dataclass(frozen=True)
+class PaperFillSimulationResult:
+    simulation_id: str
+    session_id: str
+    as_of_ns: int
+    intent_batch_id: str
+    fills: tuple[PaperFill, ...]
+    fill_attempts: int
+    simulated_fills: int
+    rejected_fills: int
+    symbols_filled: tuple[str, ...] = ()
+    sleeves_filled: tuple[str, ...] = ()
+    rejection_reasons: tuple[str, ...] = ()
+    paper_only: bool = True
+    real_orders_enabled: bool = False
+    real_money_enabled: bool = False
+    operator_summary: str = "Paper fill simulation has not run."
+
+
+@dataclass(frozen=True)
 class PaperShadowRunEvidenceReport:
     report_id: str
     as_of_ns: int
@@ -271,6 +314,14 @@ class MarketEventCursor:
 
 
 @dataclass(frozen=True)
+class MarketEventPrice:
+    symbol: str
+    venue: str
+    last_event_ns: int
+    price: float
+
+
+@dataclass(frozen=True)
 class RuntimeMonitorSnapshot:
     status: RuntimeMonitorStatus = RuntimeMonitorStatus.NOT_READY
     event_count: int = 0
@@ -324,6 +375,7 @@ class PaperShadowSessionSnapshot:
     last_event_ns: int | None = None
     rejected_event_count: int = 0
     market_event_cursors: tuple[MarketEventCursor, ...] = ()
+    market_event_prices: tuple[MarketEventPrice, ...] = ()
     runtime_monitor: RuntimeMonitorSnapshot = field(default_factory=RuntimeMonitorSnapshot)
     guardrail: GuardrailSnapshot = field(default_factory=GuardrailSnapshot)
     intents_seen: int = 0
@@ -333,6 +385,11 @@ class PaperShadowSessionSnapshot:
     intent_symbols_seen: tuple[str, ...] = ()
     intent_venues_seen: tuple[str, ...] = ()
     intent_rejection_reasons: tuple[str, ...] = ()
+    fill_attempts: int = 0
+    simulated_fills: int = 0
+    rejected_fills: int = 0
+    symbols_filled: tuple[str, ...] = ()
+    sleeves_filled: tuple[str, ...] = ()
     paper_only: bool = True
     real_orders_enabled: bool = False
     real_money_enabled: bool = False
@@ -520,6 +577,7 @@ class PaperShadowSessionController:
             self._max_market_event_gap_ns,
         )
         cursors = _merge_market_event_cursors(self._snapshot.market_event_cursors, events)
+        prices = _merge_market_event_prices(self._snapshot.market_event_prices, events)
         total_event_count = self._snapshot.event_count + event_count
         total_event_gap_count = self._snapshot.runtime_monitor.event_gap_count + event_gap_count
         session_first_event_ns = (
@@ -560,6 +618,7 @@ class PaperShadowSessionController:
                 first_event_ns=session_first_event_ns,
                 last_event_ns=session_last_event_ns,
                 market_event_cursors=cursors,
+                market_event_prices=prices,
                 runtime_monitor=monitor,
                 guardrail=guardrail,
                 paper_only=True,
@@ -627,6 +686,82 @@ class PaperShadowSessionController:
         )
         self._apply_snapshot(snapshot)
         return result
+
+    def simulate_paper_fills(
+        self,
+        result: PaperIntentBatchResult | dict,
+    ) -> PaperFillSimulationResult:
+        """Simulate deterministic paper-only fills from accepted intent audit results."""
+        normalized = paper_intent_batch_result_from_dict(result) if isinstance(result, dict) else result
+        _validate_paper_intent_batch_result(normalized)
+        now = self._now_ns()
+        fills = tuple(
+            _paper_fill_for_intent_result(
+                self._snapshot,
+                normalized,
+                item,
+                index=index,
+                fill_ts_ns=now,
+            )
+            for index, item in enumerate(normalized.results)
+        )
+        fills = tuple(sorted(fills, key=_paper_fill_sort_key))
+        fill_attempts = sum(1 for fill in fills if fill.status != PaperFillStatus.SKIPPED)
+        simulated_fills = sum(1 for fill in fills if fill.status == PaperFillStatus.FILLED)
+        rejected_fills = sum(
+            1
+            for fill in fills
+            if fill.status
+            in {
+                PaperFillStatus.REJECTED_NO_MARKET,
+                PaperFillStatus.REJECTED_GUARDRAIL,
+                PaperFillStatus.REJECTED_INVALID_INTENT,
+            }
+        )
+        simulation = PaperFillSimulationResult(
+            simulation_id=_paper_fill_simulation_id(self._snapshot.session_id, normalized.batch_id, fills),
+            session_id=self._snapshot.session_id,
+            as_of_ns=now,
+            intent_batch_id=normalized.batch_id,
+            fills=fills,
+            fill_attempts=fill_attempts,
+            simulated_fills=simulated_fills,
+            rejected_fills=rejected_fills,
+            symbols_filled=_sorted_unique(
+                tuple(fill.symbol for fill in fills if fill.status == PaperFillStatus.FILLED)
+            ),
+            sleeves_filled=_sorted_unique(
+                tuple(fill.sleeve_id for fill in fills if fill.status == PaperFillStatus.FILLED)
+            ),
+            rejection_reasons=_sorted_unique(
+                tuple(fill.reason for fill in fills if fill.status != PaperFillStatus.FILLED)
+            ),
+            paper_only=True,
+            real_orders_enabled=False,
+            real_money_enabled=False,
+            operator_summary=_paper_fill_simulation_summary(
+                self._snapshot.session_id,
+                fill_attempts,
+                simulated_fills,
+                rejected_fills,
+            ),
+        )
+        _validate_paper_fill_simulation_result(simulation)
+        self._apply_snapshot(
+            replace(
+                self._snapshot,
+                as_of_ns=now,
+                fill_attempts=self._snapshot.fill_attempts + simulation.fill_attempts,
+                simulated_fills=self._snapshot.simulated_fills + simulation.simulated_fills,
+                rejected_fills=self._snapshot.rejected_fills + simulation.rejected_fills,
+                symbols_filled=_sorted_unique((*self._snapshot.symbols_filled, *simulation.symbols_filled)),
+                sleeves_filled=_sorted_unique((*self._snapshot.sleeves_filled, *simulation.sleeves_filled)),
+                paper_only=True,
+                real_orders_enabled=False,
+                real_money_enabled=False,
+            )
+        )
+        return simulation
 
     def replay_feed(self, plan: FeedReplayPlan | dict | tuple[MarketEventBatch, ...]) -> FeedReplayResult:
         if self._snapshot.status != PaperShadowSessionStatus.RUNNING:
@@ -877,6 +1012,7 @@ def paper_shadow_session_snapshot_to_dict(snapshot: PaperShadowSessionSnapshot) 
         "last_event_ns": snapshot.last_event_ns,
         "rejected_event_count": snapshot.rejected_event_count,
         "market_event_cursors": [market_event_cursor_to_dict(cursor) for cursor in snapshot.market_event_cursors],
+        "market_event_prices": [market_event_price_to_dict(price) for price in snapshot.market_event_prices],
         "runtime_monitor": runtime_monitor_snapshot_to_dict(snapshot.runtime_monitor),
         "guardrail": guardrail_snapshot_to_dict(snapshot.guardrail),
         "intents_seen": snapshot.intents_seen,
@@ -886,6 +1022,11 @@ def paper_shadow_session_snapshot_to_dict(snapshot: PaperShadowSessionSnapshot) 
         "intent_symbols_seen": list(snapshot.intent_symbols_seen),
         "intent_venues_seen": list(snapshot.intent_venues_seen),
         "intent_rejection_reasons": list(snapshot.intent_rejection_reasons),
+        "fill_attempts": snapshot.fill_attempts,
+        "simulated_fills": snapshot.simulated_fills,
+        "rejected_fills": snapshot.rejected_fills,
+        "symbols_filled": list(snapshot.symbols_filled),
+        "sleeves_filled": list(snapshot.sleeves_filled),
         "paper_only": snapshot.paper_only,
         "real_orders_enabled": snapshot.real_orders_enabled,
         "real_money_enabled": snapshot.real_money_enabled,
@@ -959,6 +1100,7 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
         last_event_ns=last_event_ns,
         rejected_event_count=rejected_event_count,
         market_event_cursors=_market_event_cursors_from_data(data.get("market_event_cursors", ())),
+        market_event_prices=_market_event_prices_from_data(data.get("market_event_prices", ())),
         runtime_monitor=runtime_monitor,
         guardrail=guardrail,
         intents_seen=_require_non_negative_int(data.get("intents_seen", 0), "intents_seen"),
@@ -974,6 +1116,11 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
         intent_symbols_seen=_sorted_unique(data.get("intent_symbols_seen", ())),
         intent_venues_seen=_sorted_unique(data.get("intent_venues_seen", ())),
         intent_rejection_reasons=_sorted_unique(data.get("intent_rejection_reasons", ())),
+        fill_attempts=_require_non_negative_int(data.get("fill_attempts", 0), "fill_attempts"),
+        simulated_fills=_require_non_negative_int(data.get("simulated_fills", 0), "simulated_fills"),
+        rejected_fills=_require_non_negative_int(data.get("rejected_fills", 0), "rejected_fills"),
+        symbols_filled=_sorted_unique(data.get("symbols_filled", ())),
+        sleeves_filled=_sorted_unique(data.get("sleeves_filled", ())),
         paper_only=paper_only,
         real_orders_enabled=real_orders_enabled,
         real_money_enabled=real_money_enabled,
@@ -1414,6 +1561,95 @@ def paper_intent_batch_result_from_dict(data: dict) -> PaperIntentBatchResult:
         operator_summary=_require_non_empty_str(data.get("operator_summary"), "operator_summary"),
     )
     _validate_paper_intent_batch_result(result)
+    return result
+
+
+def paper_fill_to_dict(fill: PaperFill) -> dict:
+    _validate_paper_fill(fill)
+    return {
+        "fill_id": fill.fill_id,
+        "intent_id": fill.intent_id,
+        "sleeve_id": fill.sleeve_id,
+        "symbol": fill.symbol,
+        "venue": fill.venue,
+        "side": fill.side.value,
+        "qty": fill.qty,
+        "notional": fill.notional,
+        "fill_price": fill.fill_price,
+        "fill_ts_ns": fill.fill_ts_ns,
+        "status": fill.status.value,
+        "reason": fill.reason,
+    }
+
+
+def paper_fill_from_dict(data: dict) -> PaperFill:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper fill must be a dict, got {type(data).__name__!r}")
+    fill = PaperFill(
+        fill_id=_require_non_empty_str(data.get("fill_id"), "fill_id"),
+        intent_id=_require_non_empty_str(data.get("intent_id"), "intent_id"),
+        sleeve_id=_require_non_empty_str(data.get("sleeve_id"), "sleeve_id"),
+        symbol=_require_non_empty_str(data.get("symbol"), "symbol"),
+        venue=_require_non_empty_str(data.get("venue"), "venue"),
+        side=_paper_intent_side_from_value(data.get("side")),
+        qty=_optional_float(data.get("qty"), "qty"),
+        notional=_optional_float(data.get("notional"), "notional"),
+        fill_price=_optional_non_negative_float(data.get("fill_price"), "fill_price"),
+        fill_ts_ns=_require_non_negative_int(data.get("fill_ts_ns"), "fill_ts_ns"),
+        status=_paper_fill_status_from_value(data.get("status")),
+        reason=_require_non_empty_str(data.get("reason"), "reason"),
+    )
+    _validate_paper_fill(fill)
+    return fill
+
+
+def paper_fill_simulation_result_to_dict(result: PaperFillSimulationResult) -> dict:
+    _validate_paper_fill_simulation_result(result)
+    return {
+        "simulation_id": result.simulation_id,
+        "session_id": result.session_id,
+        "as_of_ns": result.as_of_ns,
+        "intent_batch_id": result.intent_batch_id,
+        "fills": [paper_fill_to_dict(fill) for fill in result.fills],
+        "fill_attempts": result.fill_attempts,
+        "simulated_fills": result.simulated_fills,
+        "rejected_fills": result.rejected_fills,
+        "symbols_filled": list(result.symbols_filled),
+        "sleeves_filled": list(result.sleeves_filled),
+        "rejection_reasons": list(result.rejection_reasons),
+        "paper_only": result.paper_only,
+        "real_orders_enabled": result.real_orders_enabled,
+        "real_money_enabled": result.real_money_enabled,
+        "operator_summary": result.operator_summary,
+    }
+
+
+def paper_fill_simulation_result_from_dict(data: dict) -> PaperFillSimulationResult:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper fill simulation result must be a dict, got {type(data).__name__!r}"
+        )
+    fills_value = data.get("fills")
+    if not isinstance(fills_value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("paper fill simulation result field 'fills' must be a list/tuple")
+    result = PaperFillSimulationResult(
+        simulation_id=_require_non_empty_str(data.get("simulation_id"), "simulation_id"),
+        session_id=_require_non_empty_str(data.get("session_id"), "session_id"),
+        as_of_ns=_require_non_negative_int(data.get("as_of_ns"), "as_of_ns"),
+        intent_batch_id=_require_non_empty_str(data.get("intent_batch_id"), "intent_batch_id"),
+        fills=tuple(paper_fill_from_dict(_dict_value(item, "fills")) for item in fills_value),
+        fill_attempts=_require_non_negative_int(data.get("fill_attempts"), "fill_attempts"),
+        simulated_fills=_require_non_negative_int(data.get("simulated_fills"), "simulated_fills"),
+        rejected_fills=_require_non_negative_int(data.get("rejected_fills"), "rejected_fills"),
+        symbols_filled=_sorted_unique(data.get("symbols_filled", ())),
+        sleeves_filled=_sorted_unique(data.get("sleeves_filled", ())),
+        rejection_reasons=_sorted_unique(data.get("rejection_reasons", ())),
+        paper_only=_bool_or_default(data, "paper_only", True),
+        real_orders_enabled=_bool_or_default(data, "real_orders_enabled", False),
+        real_money_enabled=_bool_or_default(data, "real_money_enabled", False),
+        operator_summary=_require_non_empty_str(data.get("operator_summary"), "operator_summary"),
+    )
+    _validate_paper_fill_simulation_result(result)
     return result
 
 
@@ -1886,6 +2122,29 @@ def market_event_cursor_from_dict(data: dict) -> MarketEventCursor:
     return cursor
 
 
+def market_event_price_to_dict(price: MarketEventPrice) -> dict:
+    _validate_market_event_price(price)
+    return {
+        "symbol": price.symbol,
+        "venue": price.venue,
+        "last_event_ns": price.last_event_ns,
+        "price": price.price,
+    }
+
+
+def market_event_price_from_dict(data: dict) -> MarketEventPrice:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Market event price must be a dict, got {type(data).__name__!r}")
+    price = MarketEventPrice(
+        symbol=_require_non_empty_str(data.get("symbol"), "symbol"),
+        venue=_require_non_empty_str(data.get("venue"), "venue"),
+        last_event_ns=_require_non_negative_int(data.get("last_event_ns"), "last_event_ns"),
+        price=_require_non_negative_float(data.get("price"), "price"),
+    )
+    _validate_market_event_price(price)
+    return price
+
+
 def build_runtime_monitor_snapshot(
     *,
     event_count: int,
@@ -2244,6 +2503,105 @@ def _validate_paper_intent_batch_result(result: PaperIntentBatchResult) -> None:
     _require_non_empty_str(result.operator_summary, "operator_summary")
 
 
+def _validate_paper_fill(fill: PaperFill) -> None:
+    if not isinstance(fill, PaperFill):
+        raise PaperShadowSessionCorruptError("paper fill must be a PaperFill")
+    _require_non_empty_str(fill.fill_id, "fill_id")
+    _require_non_empty_str(fill.intent_id, "intent_id")
+    _require_non_empty_str(fill.sleeve_id, "sleeve_id")
+    _require_non_empty_str(fill.symbol, "symbol")
+    _require_non_empty_str(fill.venue, "venue")
+    if not isinstance(fill.side, PaperIntentSide):
+        raise PaperShadowSessionCorruptError("paper fill side must be a PaperIntentSide")
+    _optional_float(fill.qty, "qty")
+    _optional_float(fill.notional, "notional")
+    _optional_non_negative_float(fill.fill_price, "fill_price")
+    _require_non_negative_int(fill.fill_ts_ns, "fill_ts_ns")
+    if not isinstance(fill.status, PaperFillStatus):
+        raise PaperShadowSessionCorruptError("paper fill status must be a PaperFillStatus")
+    _require_non_empty_str(fill.reason, "reason")
+    if fill.status == PaperFillStatus.FILLED:
+        if fill.fill_price is None:
+            raise PaperShadowSessionCorruptError("FILLED paper fill requires fill_price")
+        if not _paper_fill_has_valid_size(fill):
+            raise PaperShadowSessionCorruptError("FILLED paper fill requires positive qty or notional")
+        if fill.reason != "filled_from_latest_market_event":
+            raise PaperShadowSessionCorruptError("FILLED paper fill requires deterministic fill reason")
+    else:
+        if fill.fill_price is not None:
+            raise PaperShadowSessionCorruptError("non-filled paper fill cannot carry fill_price")
+        expected_reason = {
+            PaperFillStatus.REJECTED_NO_MARKET: "missing_latest_market_price",
+            PaperFillStatus.REJECTED_GUARDRAIL: "guardrail_blocks_paper_fill",
+            PaperFillStatus.REJECTED_INVALID_INTENT: ("invalid_intent_size", "intent_session_mismatch"),
+            PaperFillStatus.SKIPPED: "intent_rejected",
+        }[fill.status]
+        if isinstance(expected_reason, tuple):
+            if fill.reason not in expected_reason:
+                raise PaperShadowSessionCorruptError("paper fill reason does not match rejected status")
+        elif fill.reason != expected_reason:
+            raise PaperShadowSessionCorruptError("paper fill reason does not match rejected status")
+
+
+def _validate_paper_fill_simulation_result(result: PaperFillSimulationResult) -> None:
+    if not isinstance(result, PaperFillSimulationResult):
+        raise PaperShadowSessionCorruptError("paper fill simulation result must be a PaperFillSimulationResult")
+    _require_non_empty_str(result.simulation_id, "simulation_id")
+    _require_non_empty_str(result.session_id, "session_id")
+    _require_non_negative_int(result.as_of_ns, "as_of_ns")
+    _require_non_empty_str(result.intent_batch_id, "intent_batch_id")
+    if not isinstance(result.fills, tuple):
+        raise PaperShadowSessionCorruptError("paper fill simulation fills must be a tuple")
+    for fill in result.fills:
+        _validate_paper_fill(fill)
+    if result.fills != tuple(sorted(result.fills, key=_paper_fill_sort_key)):
+        raise PaperShadowSessionCorruptError("paper fill simulation fills must be sorted")
+    _require_non_negative_int(result.fill_attempts, "fill_attempts")
+    _require_non_negative_int(result.simulated_fills, "simulated_fills")
+    _require_non_negative_int(result.rejected_fills, "rejected_fills")
+    expected_attempts = sum(1 for fill in result.fills if fill.status != PaperFillStatus.SKIPPED)
+    expected_simulated = sum(1 for fill in result.fills if fill.status == PaperFillStatus.FILLED)
+    expected_rejected = sum(
+        1
+        for fill in result.fills
+        if fill.status
+        in {
+            PaperFillStatus.REJECTED_NO_MARKET,
+            PaperFillStatus.REJECTED_GUARDRAIL,
+            PaperFillStatus.REJECTED_INVALID_INTENT,
+        }
+    )
+    if result.fill_attempts != expected_attempts:
+        raise PaperShadowSessionCorruptError("paper fill attempts do not match fills")
+    if result.simulated_fills != expected_simulated:
+        raise PaperShadowSessionCorruptError("paper simulated fill count does not match fills")
+    if result.rejected_fills != expected_rejected:
+        raise PaperShadowSessionCorruptError("paper rejected fill count does not match fills")
+    if result.simulated_fills + result.rejected_fills != result.fill_attempts:
+        raise PaperShadowSessionCorruptError("paper fill attempts must equal simulated plus rejected fills")
+    expected_symbols = _sorted_unique(
+        tuple(fill.symbol for fill in result.fills if fill.status == PaperFillStatus.FILLED)
+    )
+    expected_sleeves = _sorted_unique(
+        tuple(fill.sleeve_id for fill in result.fills if fill.status == PaperFillStatus.FILLED)
+    )
+    expected_reasons = _sorted_unique(
+        tuple(fill.reason for fill in result.fills if fill.status != PaperFillStatus.FILLED)
+    )
+    if result.symbols_filled != expected_symbols:
+        raise PaperShadowSessionCorruptError("paper fill symbols_filled do not match FILLED fills")
+    if result.sleeves_filled != expected_sleeves:
+        raise PaperShadowSessionCorruptError("paper fill sleeves_filled do not match FILLED fills")
+    if result.rejection_reasons != expected_reasons:
+        raise PaperShadowSessionCorruptError("paper fill rejection reasons do not match non-filled fills")
+    _require_bool(result.paper_only, "paper_only")
+    _require_bool(result.real_orders_enabled, "real_orders_enabled")
+    _require_bool(result.real_money_enabled, "real_money_enabled")
+    if not result.paper_only or result.real_orders_enabled or result.real_money_enabled:
+        raise PaperShadowSessionCorruptError("paper fill simulation cannot carry unsafe real-trading flags")
+    _require_non_empty_str(result.operator_summary, "operator_summary")
+
+
 def _validate_feed_replay_plan(plan: FeedReplayPlan) -> None:
     _validate_feed_replay_plan_shape(plan)
     for batch in plan.batches:
@@ -2572,6 +2930,8 @@ def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
         "intent_symbols_seen",
         "intent_venues_seen",
         "intent_rejection_reasons",
+        "symbols_filled",
+        "sleeves_filled",
     ):
         value = getattr(snapshot, field_name)
         if value != _sorted_unique(value):
@@ -2604,6 +2964,17 @@ def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
         raise PaperShadowSessionCorruptError("paper/shadow session without intents cannot carry intent counters")
     if snapshot.rejected_intent_count == 0 and snapshot.intent_rejection_reasons:
         raise PaperShadowSessionCorruptError("paper/shadow session without rejected intents cannot carry reasons")
+    _require_non_negative_int(snapshot.fill_attempts, "fill_attempts")
+    _require_non_negative_int(snapshot.simulated_fills, "simulated_fills")
+    _require_non_negative_int(snapshot.rejected_fills, "rejected_fills")
+    if snapshot.simulated_fills + snapshot.rejected_fills != snapshot.fill_attempts:
+        raise PaperShadowSessionCorruptError("paper/shadow fill attempts must equal simulated plus rejected fills")
+    if snapshot.fill_attempts == 0 and (
+        snapshot.simulated_fills or snapshot.rejected_fills or snapshot.symbols_filled or snapshot.sleeves_filled
+    ):
+        raise PaperShadowSessionCorruptError("paper/shadow session without fill attempts cannot carry fill counters")
+    if snapshot.simulated_fills == 0 and (snapshot.symbols_filled or snapshot.sleeves_filled):
+        raise PaperShadowSessionCorruptError("paper/shadow session without simulated fills cannot carry filled sets")
     if snapshot.event_count > 0:
         if snapshot.first_event_ns is None or snapshot.last_event_ns is None:
             raise PaperShadowSessionCorruptError("paper/shadow session events require first/last event timestamps")
@@ -2620,6 +2991,18 @@ def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
     cursor_pairs = tuple((cursor.symbol, cursor.venue) for cursor in snapshot.market_event_cursors)
     if cursor_pairs != tuple(sorted(cursor_pairs)) or len(cursor_pairs) != len(set(cursor_pairs)):
         raise PaperShadowSessionCorruptError("paper/shadow session market event cursors must be sorted unique")
+    for price in snapshot.market_event_prices:
+        _validate_market_event_price(price)
+    price_pairs = tuple((price.symbol, price.venue) for price in snapshot.market_event_prices)
+    if price_pairs != tuple(sorted(price_pairs)) or len(price_pairs) != len(set(price_pairs)):
+        raise PaperShadowSessionCorruptError("paper/shadow session market event prices must be sorted unique")
+    if snapshot.event_count == 0 and snapshot.market_event_prices:
+        raise PaperShadowSessionCorruptError("paper/shadow session without events cannot carry market prices")
+    for price in snapshot.market_event_prices:
+        if price.symbol not in snapshot.symbols_seen or price.venue not in snapshot.venues_seen:
+            raise PaperShadowSessionCorruptError("paper/shadow market prices must match seen symbols and venues")
+        if snapshot.last_event_ns is not None and price.last_event_ns > snapshot.last_event_ns:
+            raise PaperShadowSessionCorruptError("paper/shadow market price timestamp cannot exceed last event")
     _validate_runtime_monitor_snapshot(snapshot.runtime_monitor)
     if snapshot.runtime_monitor.event_count != snapshot.event_count:
         raise PaperShadowSessionCorruptError("paper/shadow runtime monitor event_count must match session")
@@ -3209,6 +3592,103 @@ def _paper_intent_batch_summary(batch_id: str, results: tuple[PaperIntentValidat
     return f"paper_intent_batch={batch_id}; intents={len(results)}; accepted={accepted}; rejected={rejected}"
 
 
+def _paper_fill_simulation_summary(
+    session_id: str,
+    fill_attempts: int,
+    simulated_fills: int,
+    rejected_fills: int,
+) -> str:
+    return (
+        f"paper_fill_simulation={session_id}; attempts={fill_attempts}; "
+        f"filled={simulated_fills}; rejected={rejected_fills}"
+    )
+
+
+def _paper_intent_id(intent: PaperIntent) -> str:
+    return f"paper-intent-{intent.intent_ts_ns}-{intent.sleeve_id}-{intent.symbol}-{intent.venue}-{intent.side.value}"
+
+
+def _paper_fill_id(session_id: str, batch_id: str, index: int, intent: PaperIntent) -> str:
+    return f"paper-fill-{session_id}-{batch_id}-{index}-{_paper_intent_id(intent)}"
+
+
+def _paper_fill_simulation_id(
+    session_id: str,
+    batch_id: str,
+    fills: tuple[PaperFill, ...],
+) -> str:
+    return f"paper-fill-simulation-{session_id}-{batch_id}-{len(fills)}"
+
+
+def _paper_fill_for_intent_result(
+    snapshot: PaperShadowSessionSnapshot,
+    batch_result: PaperIntentBatchResult,
+    result: PaperIntentValidationResult,
+    *,
+    index: int,
+    fill_ts_ns: int,
+) -> PaperFill:
+    intent = result.intent
+    intent_id = _paper_intent_id(intent)
+    fill_id = _paper_fill_id(snapshot.session_id, batch_result.batch_id, index, intent)
+    status = PaperFillStatus.FILLED
+    reason = "filled_from_latest_market_event"
+    fill_price: float | None = None
+    if not result.accepted:
+        status = PaperFillStatus.SKIPPED
+        reason = "intent_rejected"
+    elif batch_result.session_id != snapshot.session_id:
+        status = PaperFillStatus.REJECTED_INVALID_INTENT
+        reason = "intent_session_mismatch"
+    elif not _paper_intent_has_valid_size(intent):
+        status = PaperFillStatus.REJECTED_INVALID_INTENT
+        reason = "invalid_intent_size"
+    elif (
+        snapshot.status != PaperShadowSessionStatus.RUNNING
+        or snapshot.guardrail.should_stop_session
+        or snapshot.guardrail.should_pause_session
+        or snapshot.guardrail.block_finalize
+    ):
+        status = PaperFillStatus.REJECTED_GUARDRAIL
+        reason = "guardrail_blocks_paper_fill"
+    else:
+        latest_price = _latest_market_event_price(snapshot, intent.symbol, intent.venue)
+        if latest_price is None:
+            status = PaperFillStatus.REJECTED_NO_MARKET
+            reason = "missing_latest_market_price"
+        else:
+            fill_price = latest_price.price
+    fill = PaperFill(
+        fill_id=fill_id,
+        intent_id=intent_id,
+        sleeve_id=intent.sleeve_id,
+        symbol=intent.symbol,
+        venue=intent.venue,
+        side=intent.side,
+        qty=intent.qty,
+        notional=intent.notional,
+        fill_price=fill_price,
+        fill_ts_ns=fill_ts_ns,
+        status=status,
+        reason=reason,
+    )
+    _validate_paper_fill(fill)
+    return fill
+
+
+def _latest_market_event_price(
+    snapshot: PaperShadowSessionSnapshot,
+    symbol: str,
+    venue: str,
+) -> MarketEventPrice | None:
+    _require_non_empty_str(symbol, "symbol")
+    _require_non_empty_str(venue, "venue")
+    for price in snapshot.market_event_prices:
+        if price.symbol == symbol and price.venue == venue:
+            return price
+    return None
+
+
 def _feed_replay_plan_id(batches: tuple[MarketEventBatch, ...]) -> str:
     if not batches:
         return "feed-replay-empty"
@@ -3300,6 +3780,30 @@ def _merge_market_event_cursors(
     )
 
 
+def _merge_market_event_prices(
+    prices: tuple[MarketEventPrice, ...],
+    events: tuple[MarketEvent, ...],
+) -> tuple[MarketEventPrice, ...]:
+    latest = {(price.symbol, price.venue): price for price in prices}
+    for event in sorted(events, key=_market_event_sort_key):
+        fill_price = _market_event_fill_price(event)
+        if fill_price is None:
+            continue
+        pair = (event.symbol, event.venue)
+        previous = latest.get(pair)
+        if previous is None or event.ts_ns >= previous.last_event_ns:
+            latest[pair] = MarketEventPrice(
+                symbol=event.symbol,
+                venue=event.venue,
+                last_event_ns=event.ts_ns,
+                price=fill_price,
+            )
+    resolved = tuple(latest[pair] for pair in sorted(latest))
+    for price in resolved:
+        _validate_market_event_price(price)
+    return resolved
+
+
 def _market_event_gap_count(
     cursors: tuple[MarketEventCursor, ...],
     events: tuple[MarketEvent, ...],
@@ -3334,12 +3838,33 @@ def _market_event_cursors_from_data(value: object) -> tuple[MarketEventCursor, .
     return cursors
 
 
+def _market_event_prices_from_data(value: object) -> tuple[MarketEventPrice, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("market event prices must be a list/tuple")
+    prices = tuple(market_event_price_from_dict(_dict_value(item, "market_event_prices")) for item in value)
+    for price in prices:
+        _validate_market_event_price(price)
+    pairs = tuple((price.symbol, price.venue) for price in prices)
+    if pairs != tuple(sorted(pairs)) or len(pairs) != len(set(pairs)):
+        raise PaperShadowSessionCorruptError("market event prices must be sorted unique")
+    return prices
+
+
 def _validate_market_event_cursor(cursor: MarketEventCursor) -> None:
     if not isinstance(cursor, MarketEventCursor):
         raise PaperShadowSessionCorruptError("market event cursor must be a MarketEventCursor")
     _require_non_empty_str(cursor.symbol, "symbol")
     _require_non_empty_str(cursor.venue, "venue")
     _require_non_negative_int(cursor.last_event_ns, "last_event_ns")
+
+
+def _validate_market_event_price(price: MarketEventPrice) -> None:
+    if not isinstance(price, MarketEventPrice):
+        raise PaperShadowSessionCorruptError("market event price must be a MarketEventPrice")
+    _require_non_empty_str(price.symbol, "symbol")
+    _require_non_empty_str(price.venue, "venue")
+    _require_non_negative_int(price.last_event_ns, "last_event_ns")
+    _require_non_negative_float(price.price, "price")
 
 
 def _validate_runtime_monitor_snapshot(monitor: RuntimeMonitorSnapshot) -> None:
@@ -3527,8 +4052,19 @@ def _market_event_sort_key(event: MarketEvent) -> tuple[int, str, str, str]:
     return (event.ts_ns, event.symbol, event.venue, event.event_type.value)
 
 
+def _market_event_fill_price(event: MarketEvent) -> float | None:
+    for value in (event.price, event.mark_price, event.index_price):
+        if value is not None:
+            return _require_non_negative_float(value, "price")
+    return None
+
+
 def _paper_intent_sort_key(intent: PaperIntent) -> tuple[int, str, str, str, str]:
     return (intent.intent_ts_ns, intent.sleeve_id, intent.symbol, intent.venue, intent.side.value)
+
+
+def _paper_fill_sort_key(fill: PaperFill) -> tuple[int, str, str, str, str, str]:
+    return (fill.fill_ts_ns, fill.sleeve_id, fill.symbol, fill.venue, fill.side.value, fill.fill_id)
 
 
 def _market_event_type_from_value(value: object) -> MarketEventType:
@@ -3558,8 +4094,22 @@ def _paper_intent_side_from_value(value: object) -> PaperIntentSide:
         raise PaperShadowSessionCorruptError(f"Invalid paper intent side: {value!r}") from exc
 
 
+def _paper_fill_status_from_value(value: object) -> PaperFillStatus:
+    if isinstance(value, PaperFillStatus):
+        return value
+    try:
+        return PaperFillStatus(_require_non_empty_str(value, "status"))
+    except ValueError as exc:
+        raise PaperShadowSessionCorruptError(f"Invalid paper fill status: {value!r}") from exc
+
+
 def _paper_intent_has_valid_size(intent: PaperIntent) -> bool:
     sizes = tuple(value for value in (intent.qty, intent.notional) if value is not None)
+    return bool(sizes) and all(value >= 0.0 for value in sizes) and any(value > 0.0 for value in sizes)
+
+
+def _paper_fill_has_valid_size(fill: PaperFill) -> bool:
+    sizes = tuple(value for value in (fill.qty, fill.notional) if value is not None)
     return bool(sizes) and all(value >= 0.0 for value in sizes) and any(value > 0.0 for value in sizes)
 
 
@@ -3615,6 +4165,13 @@ def _rejected_event_increment(batch: object) -> int:
         if isinstance(events, (list, tuple)):
             return max(1, len(events))
     return 1
+
+
+def _require_non_negative_float(value: object, field_name: str) -> float:
+    parsed = _optional_non_negative_float(value, field_name)
+    if parsed is None:
+        raise PaperShadowSessionCorruptError(f"market event field {field_name!r} must be numeric")
+    return parsed
 
 
 def _optional_non_negative_float(value: object, field_name: str) -> float | None:

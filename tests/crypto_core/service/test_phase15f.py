@@ -11,6 +11,7 @@ from crypto_core.service.artifact_export import (
     export_managed_sleeve_set_manifest,
     export_multi_source_run_evidence_report,
     export_paper_data_source_batch_result,
+    export_paper_fill_simulation_result,
     export_paper_intent_batch,
     export_paper_intent_batch_result,
     export_paper_shadow_activation_plan,
@@ -24,6 +25,7 @@ from crypto_core.service.artifact_export import (
     load_managed_sleeve_set_manifest,
     load_multi_source_run_evidence_report,
     load_paper_data_source_batch_result,
+    load_paper_fill_simulation_result,
     load_paper_intent_batch,
     load_paper_intent_batch_result,
     load_paper_shadow_activation_plan,
@@ -54,8 +56,12 @@ from crypto_core.service.paper_shadow_session_controller import (
     MarketEventType,
     MultiSourceRunEvidenceReport,
     PaperDataSourceType,
+    PaperFillSimulationResult,
+    PaperFillStatus,
     PaperIntent,
+    PaperIntentBatchResult,
     PaperIntentSide,
+    PaperIntentValidationResult,
     PaperShadowEvidenceBundle,
     PaperShadowRunEvidenceStatus,
     PaperShadowSessionController,
@@ -83,6 +89,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     paper_data_source_batch_result_from_dict,
     paper_data_source_batch_result_to_dict,
     paper_data_source_payload_to_market_event_batch,
+    paper_fill_simulation_result_from_dict,
+    paper_fill_simulation_result_to_dict,
     paper_intent_batch_from_dict,
     paper_intent_batch_result_from_dict,
     paper_intent_batch_result_to_dict,
@@ -3495,6 +3503,286 @@ def test_service_orchestrator_paper_intent_helpers_and_artifacts(tmp_path) -> No
     store.save_snapshot("crypto_paper_intent_batch_result", ["bad"])
     with pytest.raises(PaperShadowSessionCorruptError):
         load_paper_intent_batch_result(evidence_store=store)
+
+
+def test_paper_fill_valid_accepted_intent_fills_from_latest_market_price() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in (1, 2, 3, 4, 5)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    controller.record_market_event_batch(
+        build_market_event_batch(
+            (
+                _market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),
+                _market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 102, price=None, mark_price=101.25),
+            )
+        )
+    )
+    intent_result = controller.record_paper_intent_batch(
+        build_paper_intent_batch((_paper_intent("active", "BTCUSDT", venue="binance"),), batch_id="fill-valid")
+    )
+
+    result = controller.simulate_paper_fills(intent_result)
+    snapshot = controller.snapshot()
+    rendered = paper_fill_simulation_result_to_dict(result)
+    restored = paper_fill_simulation_result_from_dict(rendered)
+
+    assert restored == result
+    assert result.fill_attempts == 1
+    assert result.simulated_fills == 1
+    assert result.rejected_fills == 0
+    assert result.symbols_filled == ("BTCUSDT",)
+    assert result.sleeves_filled == ("active",)
+    assert result.fills[0].status == PaperFillStatus.FILLED
+    assert result.fills[0].fill_price == 101.25
+    assert result.fills[0].reason == "filled_from_latest_market_event"
+    assert result.paper_only is True
+    assert result.real_orders_enabled is False
+    assert result.real_money_enabled is False
+    assert snapshot.fill_attempts == 1
+    assert snapshot.simulated_fills == 1
+    assert snapshot.rejected_fills == 0
+    assert snapshot.symbols_filled == ("BTCUSDT",)
+    assert snapshot.sleeves_filled == ("active",)
+    assert paper_shadow_session_snapshot_from_dict(paper_shadow_session_snapshot_to_dict(snapshot)) == snapshot
+
+
+def test_paper_fill_rejected_intent_is_skipped_without_fill_attempt() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in (1, 2, 3, 4, 5)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),))
+    )
+    intent_result = controller.record_paper_intent_batch(
+        build_paper_intent_batch((_paper_intent("inactive", "BTCUSDT", venue="binance"),), batch_id="fill-skipped")
+    )
+
+    result = controller.simulate_paper_fills(intent_result)
+
+    assert intent_result.accepted_count == 0
+    assert result.fill_attempts == 0
+    assert result.simulated_fills == 0
+    assert result.rejected_fills == 0
+    assert result.fills[0].status == PaperFillStatus.SKIPPED
+    assert result.fills[0].fill_price is None
+    assert result.rejection_reasons == ("intent_rejected",)
+    assert controller.snapshot().fill_attempts == 0
+
+
+def test_paper_fill_without_latest_market_price_rejects_fail_closed() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in (1, 2, 3, 4, 5)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    controller.record_market_event_batch(
+        build_market_event_batch(
+            (
+                _market_event(
+                    "BTCUSDT",
+                    venue="binance",
+                    ts_ns=_T0_NS + 101,
+                    event_type=MarketEventType.FUNDING,
+                    price=None,
+                    funding_rate=0.0001,
+                ),
+            )
+        )
+    )
+    intent_result = controller.record_paper_intent_batch(
+        build_paper_intent_batch((_paper_intent("active", "BTCUSDT", venue="binance"),), batch_id="fill-no-market")
+    )
+
+    result = controller.simulate_paper_fills(intent_result)
+
+    assert intent_result.accepted_count == 1
+    assert result.fill_attempts == 1
+    assert result.simulated_fills == 0
+    assert result.rejected_fills == 1
+    assert result.fills[0].status == PaperFillStatus.REJECTED_NO_MARKET
+    assert result.fills[0].fill_price is None
+    assert result.rejection_reasons == ("missing_latest_market_price",)
+    assert controller.snapshot().rejected_fills == 1
+
+
+def test_paper_fill_guardrail_block_rejects_accepted_intent() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in (1, 2, 3, 4, 5, 6)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times), max_market_event_gap_ns=5)
+
+    controller.prepare(plan)
+    controller.start()
+    controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),))
+    )
+    intent_result = controller.record_paper_intent_batch(
+        build_paper_intent_batch((_paper_intent("active", "BTCUSDT", venue="binance"),), batch_id="fill-guardrail")
+    )
+    controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 110, price=101.0),))
+    )
+
+    result = controller.simulate_paper_fills(intent_result)
+
+    assert intent_result.accepted_count == 1
+    assert controller.snapshot().guardrail.block_finalize is True
+    assert result.fill_attempts == 1
+    assert result.simulated_fills == 0
+    assert result.rejected_fills == 1
+    assert result.fills[0].status == PaperFillStatus.REJECTED_GUARDRAIL
+    assert result.rejection_reasons == ("guardrail_blocks_paper_fill",)
+
+
+def test_paper_fill_invalid_intent_size_and_malformed_price_reject() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in (1, 2, 3, 4)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),))
+    )
+    invalid_intent = _paper_intent("active", "BTCUSDT", venue="binance", qty=-1.0)
+    forged_result = PaperIntentBatchResult(
+        batch_id="fill-invalid-intent",
+        session_id=controller.snapshot().session_id,
+        as_of_ns=_T0_NS + 150,
+        results=(PaperIntentValidationResult(intent=invalid_intent, accepted=True),),
+        intents_seen=1,
+        accepted_count=1,
+        rejected_count=0,
+        sleeves_seen=("active",),
+        symbols_seen=("BTCUSDT",),
+        venues_seen=("binance",),
+        rejection_reasons=(),
+        operator_summary="forged accepted invalid intent",
+    )
+
+    result = controller.simulate_paper_fills(forged_result)
+
+    assert result.fill_attempts == 1
+    assert result.simulated_fills == 0
+    assert result.rejected_fills == 1
+    assert result.fills[0].status == PaperFillStatus.REJECTED_INVALID_INTENT
+    assert result.rejection_reasons == ("invalid_intent_size",)
+    with pytest.raises(PaperShadowSessionCorruptError):
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", price=float("inf")),))
+
+
+def test_paper_fill_before_start_rejects_without_execution_side_effects() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in (1, 2)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    intent = _paper_intent("active", "BTCUSDT", venue="binance")
+    forged_result = PaperIntentBatchResult(
+        batch_id="fill-before-start",
+        session_id=controller.snapshot().session_id,
+        as_of_ns=_T0_NS + 150,
+        results=(PaperIntentValidationResult(intent=intent, accepted=True),),
+        intents_seen=1,
+        accepted_count=1,
+        rejected_count=0,
+        sleeves_seen=("active",),
+        symbols_seen=("BTCUSDT",),
+        venues_seen=("binance",),
+        rejection_reasons=(),
+        operator_summary="forged accepted before start",
+    )
+
+    result = controller.simulate_paper_fills(forged_result)
+
+    assert controller.snapshot().status == PaperShadowSessionStatus.READY
+    assert result.fills[0].status == PaperFillStatus.REJECTED_GUARDRAIL
+    assert result.real_orders_enabled is False
+    assert result.real_money_enabled is False
+    assert controller.snapshot().simulated_fills == 0
+
+
+def test_paper_fill_deterministic_replay() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    market_batch = build_market_event_batch(
+        (
+            _market_event("ETHUSDT", venue="bybit", ts_ns=_T0_NS + 102, price=2100.0),
+            _market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),
+        )
+    )
+    intent_batch = build_paper_intent_batch(
+        (
+            _paper_intent("active", "BTCUSDT", venue="binance", intent_ts_ns=_T0_NS + 151),
+            _paper_intent("active", "ETHUSDT", venue="bybit", intent_ts_ns=_T0_NS + 152),
+        ),
+        batch_id="fill-deterministic",
+    )
+
+    def run_once() -> tuple[dict, dict]:
+        times = iter((_T0_NS + value for value in (1, 2, 3, 4, 5)))
+        controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+        controller.prepare(plan)
+        controller.start()
+        controller.record_market_event_batch(market_batch)
+        intent_result = controller.record_paper_intent_batch(intent_batch)
+        fill_result = controller.simulate_paper_fills(intent_result)
+        return paper_fill_simulation_result_to_dict(fill_result), paper_shadow_session_snapshot_to_dict(
+            controller.snapshot()
+        )
+
+    assert run_once() == run_once()
+
+
+def test_service_orchestrator_paper_fill_helpers_and_artifacts(tmp_path) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in (110, 111, 112, 113, 114)))
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        evidence_store=store,
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: next(times),
+    )
+    intent_batch = build_paper_intent_batch(
+        (_paper_intent("svc-active", "BTCUSDT", venue="binance"),),
+        batch_id="svc-fill-intents",
+    )
+
+    orch.prepare_paper_shadow_session(plan=plan)
+    orch.start_paper_shadow_session()
+    orch.record_paper_shadow_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),))
+    )
+    intent_result = orch.record_paper_intent_batch(intent_batch)
+    fill_result = orch.simulate_paper_fills(intent_result)
+    rendered = orch.paper_fill_simulation_result_dict(fill_result)
+    session = orch.paper_shadow_session_snapshot_dict()
+    operator = operator_snapshot_to_dict(orch.operator_snapshot())["paper_shadow_session"]
+
+    assert isinstance(fill_result, PaperFillSimulationResult)
+    assert rendered["simulated_fills"] == 1
+    assert session["fill_attempts"] == 1
+    assert session["simulated_fills"] == 1
+    assert session["rejected_fills"] == 0
+    assert operator["fill_attempts"] == 1
+    assert operator["simulated_fills"] == 1
+    assert operator["rejected_fills"] == 0
+    assert operator["symbols_filled"] == 1
+    assert operator["sleeves_filled"] == 1
+
+    orch.export_paper_fill_simulation_result(fill_result)
+    assert orch.load_paper_fill_simulation_result() == fill_result
+    export_paper_fill_simulation_result(result=fill_result, evidence_store=store)
+    assert load_paper_fill_simulation_result(evidence_store=store) == fill_result
+
+    store.save_snapshot("crypto_paper_fill_simulation_result", ["bad"])
+    with pytest.raises(PaperShadowSessionCorruptError):
+        load_paper_fill_simulation_result(evidence_store=store)
 
 
 def test_service_orchestrator_feed_replay_helper_and_artifacts(tmp_path) -> None:

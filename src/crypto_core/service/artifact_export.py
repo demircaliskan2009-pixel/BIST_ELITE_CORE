@@ -37,6 +37,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     MarketEventBatch,
     MultiSourceRunEvidenceReport,
     PaperDataSourceBatchResult,
+    PaperFillSimulationResult,
     PaperIntentBatch,
     PaperIntentBatchResult,
     PaperShadowEvidenceBundle,
@@ -53,6 +54,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     multi_source_run_evidence_report_to_dict,
     paper_data_source_batch_result_from_dict,
     paper_data_source_batch_result_to_dict,
+    paper_fill_simulation_result_from_dict,
+    paper_fill_simulation_result_to_dict,
     paper_intent_batch_from_dict,
     paper_intent_batch_result_from_dict,
     paper_intent_batch_result_to_dict,
@@ -542,6 +545,7 @@ _PAPER_SHADOW_FEED_REPLAY_RESULT_SNAPSHOT_NAME = "crypto_paper_shadow_feed_repla
 _PAPER_DATA_SOURCE_BATCH_RESULT_SNAPSHOT_NAME = "crypto_paper_data_source_batch_result"
 _PAPER_INTENT_BATCH_SNAPSHOT_NAME = "crypto_paper_intent_batch"
 _PAPER_INTENT_BATCH_RESULT_SNAPSHOT_NAME = "crypto_paper_intent_batch_result"
+_PAPER_FILL_SIMULATION_RESULT_SNAPSHOT_NAME = "crypto_paper_fill_simulation_result"
 _PAPER_SHADOW_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_paper_shadow_run_evidence_report"
 _MULTI_SOURCE_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_multi_source_run_evidence_report"
 _PAPER_SHADOW_EVIDENCE_BUNDLE_SNAPSHOT_NAME = "crypto_paper_shadow_evidence_bundle"
@@ -905,6 +909,31 @@ def load_paper_intent_batch_result(*, evidence_store: EvidenceStore) -> PaperInt
             f"Paper intent batch result 'data' must be a dict, got {type(data).__name__!r}"
         )
     return paper_intent_batch_result_from_dict(data)
+
+
+def export_paper_fill_simulation_result(
+    *,
+    result: PaperFillSimulationResult,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist a deterministic paper-only fill simulation result."""
+    data = paper_fill_simulation_result_to_dict(result)
+    write_result = evidence_store.save_snapshot(_PAPER_FILL_SIMULATION_RESULT_SNAPSHOT_NAME, data)
+    if not write_result.success:
+        return write_result
+    evidence_store.append_evidence(_PAPER_FILL_SIMULATION_RESULT_SNAPSHOT_NAME, data)
+    return write_result
+
+
+def load_paper_fill_simulation_result(*, evidence_store: EvidenceStore) -> PaperFillSimulationResult:
+    """Load the latest deterministic paper-only fill simulation result."""
+    envelope = evidence_store.load_snapshot(_PAPER_FILL_SIMULATION_RESULT_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper fill simulation result 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return paper_fill_simulation_result_from_dict(data)
 
 
 def export_paper_shadow_run_evidence_report(

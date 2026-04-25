@@ -48,12 +48,14 @@ from crypto_core.service.artifact_export import (
     export_escalation_decision,
     export_operator_decision_pack,
     export_paper_data_source_batch_result,
+    export_paper_fill_simulation_result,
     export_paper_intent_batch,
     export_paper_intent_batch_result,
     export_sleeve_portfolio_snapshot,
     load_escalation_decision,
     load_operator_decision_pack,
     load_paper_data_source_batch_result,
+    load_paper_fill_simulation_result,
     load_paper_intent_batch,
     load_paper_intent_batch_result,
     load_sleeve_portfolio_snapshot,
@@ -162,6 +164,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     MarketEventBatch,
     MultiSourceRunEvidenceReport,
     PaperDataSourceBatchResult,
+    PaperFillSimulationResult,
     PaperIntent,
     PaperIntentBatch,
     PaperIntentBatchResult,
@@ -181,6 +184,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     multi_source_run_evidence_report_to_dict,
     paper_data_source_batch_result_to_dict,
     paper_data_source_payload_to_market_event_batch,
+    paper_fill_simulation_result_to_dict,
     paper_intent_batch_result_to_dict,
     paper_intent_batch_to_dict,
     paper_shadow_evidence_bundle_to_dict,
@@ -430,6 +434,11 @@ class PaperShadowSessionState:
     intent_symbols_seen: int
     intent_venues_seen: int
     intent_rejection_reasons: tuple[str, ...]
+    fill_attempts: int
+    simulated_fills: int
+    rejected_fills: int
+    symbols_filled: int
+    sleeves_filled: int
     runtime_monitor_status: str
     stale_feed_detected: bool
     symbol_coverage_ok: bool
@@ -1079,6 +1088,17 @@ class ServiceOrchestrator:
         """Serialize a deterministic paper-only intent validation result."""
         return paper_intent_batch_result_to_dict(result)
 
+    def simulate_paper_fills(
+        self,
+        result: PaperIntentBatchResult | dict,
+    ) -> PaperFillSimulationResult:
+        """Simulate paper-only fills from accepted paper intent audit results."""
+        return self._ensure_paper_shadow_session_controller().simulate_paper_fills(result)
+
+    def paper_fill_simulation_result_dict(self, result: PaperFillSimulationResult) -> dict:
+        """Serialize a deterministic paper-only fill simulation result."""
+        return paper_fill_simulation_result_to_dict(result)
+
     def export_paper_shadow_session_snapshot(self):
         """Persist the current paper/shadow session snapshot via EvidenceStore."""
         if self._evidence_store is None:
@@ -1185,6 +1205,21 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for paper intent result load")
         return load_paper_intent_batch_result(evidence_store=self._evidence_store)
+
+    def export_paper_fill_simulation_result(self, result: PaperFillSimulationResult):
+        """Persist a paper-only fill simulation result via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper fill simulation export")
+        return export_paper_fill_simulation_result(
+            result=result,
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_fill_simulation_result(self) -> PaperFillSimulationResult:
+        """Load the latest persisted paper-only fill simulation result."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper fill simulation load")
+        return load_paper_fill_simulation_result(evidence_store=self._evidence_store)
 
     def paper_shadow_run_evidence_report(
         self,
@@ -3827,6 +3862,11 @@ def paper_shadow_session_state_from_snapshot(snapshot: PaperShadowSessionSnapsho
         intent_symbols_seen=len(snapshot.intent_symbols_seen),
         intent_venues_seen=len(snapshot.intent_venues_seen),
         intent_rejection_reasons=snapshot.intent_rejection_reasons,
+        fill_attempts=snapshot.fill_attempts,
+        simulated_fills=snapshot.simulated_fills,
+        rejected_fills=snapshot.rejected_fills,
+        symbols_filled=len(snapshot.symbols_filled),
+        sleeves_filled=len(snapshot.sleeves_filled),
         runtime_monitor_status=snapshot.runtime_monitor.status.value,
         stale_feed_detected=snapshot.runtime_monitor.stale_feed_detected,
         symbol_coverage_ok=snapshot.runtime_monitor.symbol_coverage_ok,
@@ -3870,6 +3910,11 @@ def paper_shadow_session_state_to_dict(state: PaperShadowSessionState) -> dict:
         "intent_symbols_seen": state.intent_symbols_seen,
         "intent_venues_seen": state.intent_venues_seen,
         "intent_rejection_reasons": list(state.intent_rejection_reasons),
+        "fill_attempts": state.fill_attempts,
+        "simulated_fills": state.simulated_fills,
+        "rejected_fills": state.rejected_fills,
+        "symbols_filled": state.symbols_filled,
+        "sleeves_filled": state.sleeves_filled,
         "runtime_monitor_status": state.runtime_monitor_status,
         "stale_feed_detected": state.stale_feed_detected,
         "symbol_coverage_ok": state.symbol_coverage_ok,
