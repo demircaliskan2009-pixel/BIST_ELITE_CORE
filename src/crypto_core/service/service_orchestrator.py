@@ -59,6 +59,9 @@ from crypto_core.service.artifact_export import (
     export_managed_sleeve_set_manifest as export_managed_sleeve_manifest,
 )
 from crypto_core.service.artifact_export import (
+    export_multi_source_run_evidence_report as export_multi_source_evidence_report,
+)
+from crypto_core.service.artifact_export import (
     export_paper_shadow_activation_plan as export_paper_shadow_plan,
 )
 from crypto_core.service.artifact_export import (
@@ -81,6 +84,9 @@ from crypto_core.service.artifact_export import (
 )
 from crypto_core.service.artifact_export import (
     load_managed_sleeve_set_manifest as load_managed_sleeve_manifest,
+)
+from crypto_core.service.artifact_export import (
+    load_multi_source_run_evidence_report as load_multi_source_evidence_report,
 )
 from crypto_core.service.artifact_export import (
     load_paper_shadow_activation_plan as load_paper_shadow_plan,
@@ -144,17 +150,20 @@ from crypto_core.service.paper_shadow_session_controller import (
     FeedReplayPlan,
     FeedReplayResult,
     MarketEventBatch,
+    MultiSourceRunEvidenceReport,
     PaperDataSourceBatchResult,
     PaperShadowRunEvidenceReport,
     PaperShadowSessionController,
     PaperShadowSessionSnapshot,
     build_feed_replay_plan,
+    build_multi_source_run_evidence_report,
     build_paper_data_source_batch_result,
     build_paper_shadow_run_evidence_report,
     feed_replay_plan_to_dict,
     feed_replay_result_to_dict,
     guardrail_snapshot_to_dict,
     market_event_batch_to_dict,
+    multi_source_run_evidence_report_to_dict,
     paper_data_source_batch_result_to_dict,
     paper_data_source_payload_to_market_event_batch,
     paper_shadow_run_evidence_report_to_dict,
@@ -1165,6 +1174,71 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for paper/shadow run evidence report load")
         return load_run_evidence_report(evidence_store=self._evidence_store)
+
+    def multi_source_run_evidence_report(
+        self,
+        reports: tuple[PaperShadowRunEvidenceReport | dict, ...],
+        *,
+        aggregate_id: str | None = None,
+        as_of_ns: int | None = None,
+    ) -> MultiSourceRunEvidenceReport:
+        """Aggregate multiple paper/shadow run evidence reports into one deterministic summary."""
+        return build_multi_source_run_evidence_report(
+            reports,
+            aggregate_id=aggregate_id,
+            as_of_ns=as_of_ns,
+        )
+
+    def multi_source_run_evidence_report_dict(
+        self,
+        report: MultiSourceRunEvidenceReport | None = None,
+        *,
+        reports: tuple[PaperShadowRunEvidenceReport | dict, ...] = (),
+        aggregate_id: str | None = None,
+        as_of_ns: int | None = None,
+    ) -> dict:
+        """Serialize a multi-source paper/shadow run evidence summary."""
+        source_report = (
+            report
+            if report is not None
+            else self.multi_source_run_evidence_report(
+                reports,
+                aggregate_id=aggregate_id,
+                as_of_ns=as_of_ns,
+            )
+        )
+        return multi_source_run_evidence_report_to_dict(source_report)
+
+    def export_multi_source_run_evidence_report(
+        self,
+        report: MultiSourceRunEvidenceReport | None = None,
+        *,
+        reports: tuple[PaperShadowRunEvidenceReport | dict, ...] = (),
+        aggregate_id: str | None = None,
+        as_of_ns: int | None = None,
+    ):
+        """Persist a multi-source paper/shadow run evidence summary via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for multi-source run evidence report export")
+        source_report = (
+            report
+            if report is not None
+            else self.multi_source_run_evidence_report(
+                reports,
+                aggregate_id=aggregate_id,
+                as_of_ns=as_of_ns,
+            )
+        )
+        return export_multi_source_evidence_report(
+            report=source_report,
+            evidence_store=self._evidence_store,
+        )
+
+    def load_multi_source_run_evidence_report(self) -> MultiSourceRunEvidenceReport:
+        """Load the latest persisted multi-source paper/shadow run evidence summary."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for multi-source run evidence report load")
+        return load_multi_source_evidence_report(evidence_store=self._evidence_store)
 
     # ------------------------------------------------------------------
     # Properties

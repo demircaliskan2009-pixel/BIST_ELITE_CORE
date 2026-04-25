@@ -35,6 +35,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     FeedReplayPlan,
     FeedReplayResult,
     MarketEventBatch,
+    MultiSourceRunEvidenceReport,
     PaperDataSourceBatchResult,
     PaperShadowRunEvidenceReport,
     PaperShadowSessionCorruptError,
@@ -45,6 +46,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     feed_replay_result_to_dict,
     market_event_batch_from_dict,
     market_event_batch_to_dict,
+    multi_source_run_evidence_report_from_dict,
+    multi_source_run_evidence_report_to_dict,
     paper_data_source_batch_result_from_dict,
     paper_data_source_batch_result_to_dict,
     paper_shadow_run_evidence_report_from_dict,
@@ -529,6 +532,7 @@ _PAPER_SHADOW_FEED_REPLAY_PLAN_SNAPSHOT_NAME = "crypto_paper_shadow_feed_replay_
 _PAPER_SHADOW_FEED_REPLAY_RESULT_SNAPSHOT_NAME = "crypto_paper_shadow_feed_replay_result"
 _PAPER_DATA_SOURCE_BATCH_RESULT_SNAPSHOT_NAME = "crypto_paper_data_source_batch_result"
 _PAPER_SHADOW_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_paper_shadow_run_evidence_report"
+_MULTI_SOURCE_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_multi_source_run_evidence_report"
 
 
 def export_run_artifact(
@@ -866,3 +870,28 @@ def load_paper_shadow_run_evidence_report(*, evidence_store: EvidenceStore) -> P
             f"Paper/shadow run evidence report 'data' must be a dict, got {type(data).__name__!r}"
         )
     return paper_shadow_run_evidence_report_from_dict(data)
+
+
+def export_multi_source_run_evidence_report(
+    *,
+    report: MultiSourceRunEvidenceReport,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist a deterministic multi-source paper/shadow run evidence report."""
+    data = multi_source_run_evidence_report_to_dict(report)
+    write_result = evidence_store.save_snapshot(_MULTI_SOURCE_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME, data)
+    if not write_result.success:
+        return write_result
+    evidence_store.append_evidence(_MULTI_SOURCE_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME, data)
+    return write_result
+
+
+def load_multi_source_run_evidence_report(*, evidence_store: EvidenceStore) -> MultiSourceRunEvidenceReport:
+    """Load the latest deterministic multi-source paper/shadow run evidence report."""
+    envelope = evidence_store.load_snapshot(_MULTI_SOURCE_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Multi-source run evidence report 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return multi_source_run_evidence_report_from_dict(data)

@@ -168,6 +168,34 @@ class PaperShadowRunEvidenceReport:
 
 
 @dataclass(frozen=True)
+class MultiSourceRunEvidenceReport:
+    aggregate_id: str
+    as_of_ns: int
+    report_ids: tuple[str, ...]
+    report_count: int
+    pass_count: int
+    warn_count: int
+    blocked_count: int
+    inconclusive_count: int
+    empty_count: int
+    accepted_event_count: int = 0
+    rejected_event_count: int = 0
+    accepted_batch_count: int = 0
+    rejected_batch_count: int = 0
+    symbols: tuple[str, ...] = ()
+    venues: tuple[str, ...] = ()
+    blockers: tuple[str, ...] = ()
+    reason_codes: tuple[str, ...] = ()
+    guardrail_actions: tuple[GuardrailAction, ...] = ()
+    evidence_status: PaperShadowRunEvidenceStatus = PaperShadowRunEvidenceStatus.EMPTY
+    next_actions: tuple[str, ...] = ()
+    paper_only: bool = True
+    real_orders_enabled: bool = False
+    real_money_enabled: bool = False
+    operator_summary: str = "Multi-source paper/shadow run evidence has not been assessed."
+
+
+@dataclass(frozen=True)
 class MarketEventCursor:
     symbol: str
     venue: str
@@ -1288,6 +1316,152 @@ def paper_shadow_run_evidence_report_from_dict(data: dict) -> PaperShadowRunEvid
     return report
 
 
+def build_multi_source_run_evidence_report(
+    reports: tuple[PaperShadowRunEvidenceReport | dict, ...],
+    *,
+    aggregate_id: str | None = None,
+    as_of_ns: int | None = None,
+) -> MultiSourceRunEvidenceReport:
+    """Aggregate multiple run-level evidence reports into one deterministic summary."""
+    if not isinstance(reports, tuple):
+        raise PaperShadowSessionCorruptError("multi-source run evidence reports must be a tuple")
+    resolved_reports = tuple(
+        paper_shadow_run_evidence_report_from_dict(report) if isinstance(report, dict) else report for report in reports
+    )
+    for report in resolved_reports:
+        _validate_paper_shadow_run_evidence_report(report)
+    _validate_unique_report_ids(resolved_reports)
+    ordered_reports = tuple(sorted(resolved_reports, key=lambda report: report.report_id))
+    report_ids = tuple(report.report_id for report in ordered_reports)
+    status = _multi_source_run_evidence_status(ordered_reports)
+    reason_codes = _multi_source_reason_codes(ordered_reports)
+    blockers = _multi_source_blockers(ordered_reports, reason_codes)
+    next_actions = _multi_source_next_actions(status, ordered_reports, reason_codes)
+    guardrail_actions = _sorted_unique_actions(tuple(report.guardrail_status for report in ordered_reports))
+    resolved_as_of_ns = (
+        _optional_non_negative_int(as_of_ns, "as_of_ns")
+        if as_of_ns is not None
+        else max((report.as_of_ns for report in ordered_reports), default=0)
+    )
+    aggregate = MultiSourceRunEvidenceReport(
+        aggregate_id=_string_or_default(aggregate_id, _multi_source_run_evidence_id(report_ids)),
+        as_of_ns=resolved_as_of_ns,
+        report_ids=report_ids,
+        report_count=len(ordered_reports),
+        pass_count=sum(1 for report in ordered_reports if report.evidence_status == PaperShadowRunEvidenceStatus.PASS),
+        warn_count=sum(1 for report in ordered_reports if report.evidence_status == PaperShadowRunEvidenceStatus.WARN),
+        blocked_count=sum(
+            1 for report in ordered_reports if report.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED
+        ),
+        inconclusive_count=sum(
+            1 for report in ordered_reports if report.evidence_status == PaperShadowRunEvidenceStatus.INCONCLUSIVE
+        ),
+        empty_count=sum(
+            1 for report in ordered_reports if report.evidence_status == PaperShadowRunEvidenceStatus.EMPTY
+        ),
+        accepted_event_count=sum(report.accepted_event_count for report in ordered_reports),
+        rejected_event_count=sum(report.rejected_event_count for report in ordered_reports),
+        accepted_batch_count=sum(report.accepted_batch_count for report in ordered_reports),
+        rejected_batch_count=sum(report.rejected_batch_count for report in ordered_reports),
+        symbols=_sorted_unique(tuple(symbol for report in ordered_reports for symbol in report.symbols)),
+        venues=_sorted_unique(tuple(venue for report in ordered_reports for venue in report.venues)),
+        blockers=blockers,
+        reason_codes=reason_codes,
+        guardrail_actions=guardrail_actions,
+        evidence_status=status,
+        next_actions=next_actions,
+        paper_only=all(report.paper_only for report in ordered_reports) if ordered_reports else True,
+        real_orders_enabled=any(report.real_orders_enabled for report in ordered_reports),
+        real_money_enabled=any(report.real_money_enabled for report in ordered_reports),
+        operator_summary=_multi_source_run_evidence_summary(
+            status,
+            report_count=len(ordered_reports),
+            pass_count=sum(
+                1 for report in ordered_reports if report.evidence_status == PaperShadowRunEvidenceStatus.PASS
+            ),
+            warn_count=sum(
+                1 for report in ordered_reports if report.evidence_status == PaperShadowRunEvidenceStatus.WARN
+            ),
+            blocked_count=sum(
+                1 for report in ordered_reports if report.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED
+            ),
+            inconclusive_count=sum(
+                1 for report in ordered_reports if report.evidence_status == PaperShadowRunEvidenceStatus.INCONCLUSIVE
+            ),
+            empty_count=sum(
+                1 for report in ordered_reports if report.evidence_status == PaperShadowRunEvidenceStatus.EMPTY
+            ),
+        ),
+    )
+    _validate_multi_source_run_evidence_report(aggregate)
+    return aggregate
+
+
+def multi_source_run_evidence_report_to_dict(report: MultiSourceRunEvidenceReport) -> dict:
+    _validate_multi_source_run_evidence_report(report)
+    return {
+        "aggregate_id": report.aggregate_id,
+        "as_of_ns": report.as_of_ns,
+        "report_ids": list(report.report_ids),
+        "report_count": report.report_count,
+        "pass_count": report.pass_count,
+        "warn_count": report.warn_count,
+        "blocked_count": report.blocked_count,
+        "inconclusive_count": report.inconclusive_count,
+        "empty_count": report.empty_count,
+        "accepted_event_count": report.accepted_event_count,
+        "rejected_event_count": report.rejected_event_count,
+        "accepted_batch_count": report.accepted_batch_count,
+        "rejected_batch_count": report.rejected_batch_count,
+        "symbols": list(report.symbols),
+        "venues": list(report.venues),
+        "blockers": list(report.blockers),
+        "reason_codes": list(report.reason_codes),
+        "guardrail_actions": [action.value for action in report.guardrail_actions],
+        "evidence_status": report.evidence_status.value,
+        "next_actions": list(report.next_actions),
+        "paper_only": report.paper_only,
+        "real_orders_enabled": report.real_orders_enabled,
+        "real_money_enabled": report.real_money_enabled,
+        "operator_summary": report.operator_summary,
+    }
+
+
+def multi_source_run_evidence_report_from_dict(data: dict) -> MultiSourceRunEvidenceReport:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Multi-source run evidence report must be a dict, got {type(data).__name__!r}"
+        )
+    report = MultiSourceRunEvidenceReport(
+        aggregate_id=_require_non_empty_str(data.get("aggregate_id"), "aggregate_id"),
+        as_of_ns=_require_non_negative_int(data.get("as_of_ns"), "as_of_ns"),
+        report_ids=_report_ids_from_data(data.get("report_ids", ())),
+        report_count=_require_non_negative_int(data.get("report_count"), "report_count"),
+        pass_count=_require_non_negative_int(data.get("pass_count"), "pass_count"),
+        warn_count=_require_non_negative_int(data.get("warn_count"), "warn_count"),
+        blocked_count=_require_non_negative_int(data.get("blocked_count"), "blocked_count"),
+        inconclusive_count=_require_non_negative_int(data.get("inconclusive_count"), "inconclusive_count"),
+        empty_count=_require_non_negative_int(data.get("empty_count"), "empty_count"),
+        accepted_event_count=_require_non_negative_int(data.get("accepted_event_count"), "accepted_event_count"),
+        rejected_event_count=_require_non_negative_int(data.get("rejected_event_count"), "rejected_event_count"),
+        accepted_batch_count=_require_non_negative_int(data.get("accepted_batch_count"), "accepted_batch_count"),
+        rejected_batch_count=_require_non_negative_int(data.get("rejected_batch_count"), "rejected_batch_count"),
+        symbols=_sorted_unique(data.get("symbols", ())),
+        venues=_sorted_unique(data.get("venues", ())),
+        blockers=_sorted_unique(data.get("blockers", ())),
+        reason_codes=_sorted_unique(data.get("reason_codes", ())),
+        guardrail_actions=_guardrail_actions_from_data(data.get("guardrail_actions", ())),
+        evidence_status=_run_evidence_status_from_value(data.get("evidence_status")),
+        next_actions=_sorted_unique(data.get("next_actions", ())),
+        paper_only=_bool_or_default(data, "paper_only", True),
+        real_orders_enabled=_bool_or_default(data, "real_orders_enabled", False),
+        real_money_enabled=_bool_or_default(data, "real_money_enabled", False),
+        operator_summary=_require_non_empty_str(data.get("operator_summary"), "operator_summary"),
+    )
+    _validate_multi_source_run_evidence_report(report)
+    return report
+
+
 def market_event_cursor_to_dict(cursor: MarketEventCursor) -> dict:
     _validate_market_event_cursor(cursor)
     return {
@@ -1711,6 +1885,73 @@ def _validate_paper_shadow_run_evidence_report(report: PaperShadowRunEvidenceRep
         raise PaperShadowSessionCorruptError("EMPTY run evidence cannot carry accepted events")
 
 
+def _validate_multi_source_run_evidence_report(report: MultiSourceRunEvidenceReport) -> None:
+    if not isinstance(report, MultiSourceRunEvidenceReport):
+        raise PaperShadowSessionCorruptError("multi-source run evidence report must be a MultiSourceRunEvidenceReport")
+    _require_non_empty_str(report.aggregate_id, "aggregate_id")
+    _require_non_negative_int(report.as_of_ns, "as_of_ns")
+    for field_name in ("report_ids", "symbols", "venues", "blockers", "reason_codes", "next_actions"):
+        value = getattr(report, field_name)
+        if value != _sorted_unique(value):
+            raise PaperShadowSessionCorruptError(f"multi-source run evidence {field_name} must be sorted unique")
+    _require_non_negative_int(report.report_count, "report_count")
+    _require_non_negative_int(report.pass_count, "pass_count")
+    _require_non_negative_int(report.warn_count, "warn_count")
+    _require_non_negative_int(report.blocked_count, "blocked_count")
+    _require_non_negative_int(report.inconclusive_count, "inconclusive_count")
+    _require_non_negative_int(report.empty_count, "empty_count")
+    _require_non_negative_int(report.accepted_event_count, "accepted_event_count")
+    _require_non_negative_int(report.rejected_event_count, "rejected_event_count")
+    _require_non_negative_int(report.accepted_batch_count, "accepted_batch_count")
+    _require_non_negative_int(report.rejected_batch_count, "rejected_batch_count")
+    if report.report_count != len(report.report_ids):
+        raise PaperShadowSessionCorruptError("multi-source report_count must match report_ids")
+    status_count = (
+        report.pass_count + report.warn_count + report.blocked_count + report.inconclusive_count + report.empty_count
+    )
+    if status_count != report.report_count:
+        raise PaperShadowSessionCorruptError("multi-source evidence status counts must sum to report_count")
+    if report.guardrail_actions != _sorted_unique_actions(report.guardrail_actions):
+        raise PaperShadowSessionCorruptError("multi-source guardrail actions must be sorted unique")
+    if not report.guardrail_actions and report.report_count > 0:
+        raise PaperShadowSessionCorruptError("multi-source run evidence requires guardrail actions when reports exist")
+    if report.guardrail_actions and report.report_count == 0:
+        raise PaperShadowSessionCorruptError("empty multi-source run evidence cannot carry guardrail actions")
+    if not isinstance(report.evidence_status, PaperShadowRunEvidenceStatus):
+        raise PaperShadowSessionCorruptError("multi-source evidence_status must be a run evidence status")
+    _require_bool(report.paper_only, "paper_only")
+    _require_bool(report.real_orders_enabled, "real_orders_enabled")
+    _require_bool(report.real_money_enabled, "real_money_enabled")
+    _require_non_empty_str(report.operator_summary, "operator_summary")
+    if report.report_count == 0 and report.evidence_status == PaperShadowRunEvidenceStatus.PASS:
+        raise PaperShadowSessionCorruptError("multi-source run evidence cannot PASS with zero reports")
+    if report.evidence_status == PaperShadowRunEvidenceStatus.PASS:
+        if report.pass_count != report.report_count:
+            raise PaperShadowSessionCorruptError("multi-source PASS requires every report to PASS")
+        if report.accepted_event_count <= 0 or report.accepted_batch_count <= 0:
+            raise PaperShadowSessionCorruptError("multi-source run evidence cannot PASS without accepted evidence")
+        if report.rejected_event_count > 0 or report.rejected_batch_count > 0:
+            raise PaperShadowSessionCorruptError("multi-source run evidence cannot PASS with rejected evidence")
+        if report.guardrail_actions != (GuardrailAction.NONE,):
+            raise PaperShadowSessionCorruptError("multi-source run evidence cannot PASS with guardrail actions")
+        if report.blockers or report.reason_codes:
+            raise PaperShadowSessionCorruptError("multi-source run evidence cannot PASS with blockers or reasons")
+        if not report.paper_only or report.real_orders_enabled or report.real_money_enabled:
+            raise PaperShadowSessionCorruptError("multi-source run evidence cannot PASS with unsafe flags")
+    if report.blocked_count > 0 and report.evidence_status != PaperShadowRunEvidenceStatus.BLOCKED:
+        raise PaperShadowSessionCorruptError("any blocked run evidence report must force BLOCKED aggregate status")
+    if (report.rejected_event_count > 0 or report.rejected_batch_count > 0) and (
+        report.evidence_status != PaperShadowRunEvidenceStatus.BLOCKED
+    ):
+        raise PaperShadowSessionCorruptError("rejected multi-source evidence must force BLOCKED status")
+    if (not report.paper_only or report.real_orders_enabled or report.real_money_enabled) and (
+        report.evidence_status != PaperShadowRunEvidenceStatus.BLOCKED
+    ):
+        raise PaperShadowSessionCorruptError("unsafe multi-source evidence flags must force BLOCKED status")
+    if report.evidence_status == PaperShadowRunEvidenceStatus.EMPTY and report.report_count > 0:
+        raise PaperShadowSessionCorruptError("EMPTY multi-source run evidence is reserved for zero reports")
+
+
 def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
     if not isinstance(snapshot, PaperShadowSessionSnapshot):
         raise PaperShadowSessionCorruptError("paper/shadow session snapshot must be a PaperShadowSessionSnapshot")
@@ -2056,6 +2297,144 @@ def _run_evidence_summary(
     return (
         f"run_evidence={status.value}; accepted_events={accepted_event_count}; "
         f"rejected_events={rejected_event_count}; blockers={len(blockers)}"
+    )
+
+
+def _validate_unique_report_ids(reports: tuple[PaperShadowRunEvidenceReport, ...]) -> None:
+    report_ids = tuple(report.report_id for report in reports)
+    if len(report_ids) != len(set(report_ids)):
+        raise PaperShadowSessionCorruptError("multi-source run evidence report_ids must be unique")
+
+
+def _report_ids_from_data(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("multi-source report_ids must be a list/tuple")
+    report_ids = tuple(_require_non_empty_str(item, "report_id") for item in value)
+    if len(report_ids) != len(set(report_ids)):
+        raise PaperShadowSessionCorruptError("multi-source run evidence report_ids must be unique")
+    ordered = tuple(sorted(report_ids))
+    if report_ids != ordered:
+        raise PaperShadowSessionCorruptError("multi-source report_ids must be sorted")
+    return report_ids
+
+
+def _multi_source_run_evidence_status(
+    reports: tuple[PaperShadowRunEvidenceReport, ...],
+) -> PaperShadowRunEvidenceStatus:
+    if not reports:
+        return PaperShadowRunEvidenceStatus.EMPTY
+    if any(not report.paper_only or report.real_orders_enabled or report.real_money_enabled for report in reports):
+        return PaperShadowRunEvidenceStatus.BLOCKED
+    if any(report.rejected_event_count > 0 or report.rejected_batch_count > 0 for report in reports):
+        return PaperShadowRunEvidenceStatus.BLOCKED
+    statuses = tuple(report.evidence_status for report in reports)
+    if PaperShadowRunEvidenceStatus.BLOCKED in statuses:
+        return PaperShadowRunEvidenceStatus.BLOCKED
+    if PaperShadowRunEvidenceStatus.INCONCLUSIVE in statuses:
+        return PaperShadowRunEvidenceStatus.INCONCLUSIVE
+    if PaperShadowRunEvidenceStatus.EMPTY in statuses:
+        return PaperShadowRunEvidenceStatus.INCONCLUSIVE
+    if all(status == PaperShadowRunEvidenceStatus.PASS for status in statuses):
+        return PaperShadowRunEvidenceStatus.PASS
+    return PaperShadowRunEvidenceStatus.WARN
+
+
+def _multi_source_reason_codes(reports: tuple[PaperShadowRunEvidenceReport, ...]) -> tuple[str, ...]:
+    if not reports:
+        return ("no_run_evidence_reports",)
+    reasons: list[str] = []
+    for report in reports:
+        reasons.extend(report.reason_codes)
+        if report.evidence_status == PaperShadowRunEvidenceStatus.WARN:
+            reasons.append("warn_run_evidence_report")
+        if report.evidence_status == PaperShadowRunEvidenceStatus.INCONCLUSIVE:
+            reasons.append("inconclusive_run_evidence_report")
+        if report.evidence_status == PaperShadowRunEvidenceStatus.EMPTY:
+            reasons.append("empty_run_evidence_report")
+        if report.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED:
+            reasons.append("blocked_run_evidence_report")
+        if report.rejected_event_count > 0:
+            reasons.append("rejected_market_events")
+        if report.rejected_batch_count > 0:
+            reasons.append("rejected_replay_batches")
+        if not report.paper_only or report.real_orders_enabled or report.real_money_enabled:
+            reasons.append("unsafe_real_trading_flags")
+        if report.guardrail_status != GuardrailAction.NONE:
+            reasons.append("guardrail_action_required")
+    return _sorted_unique(tuple(reasons))
+
+
+def _multi_source_blockers(
+    reports: tuple[PaperShadowRunEvidenceReport, ...],
+    reason_codes: tuple[str, ...],
+) -> tuple[str, ...]:
+    blockers: list[str] = []
+    if not reports:
+        blockers.append("no_run_evidence_reports")
+    for report in reports:
+        blockers.extend(report.blockers)
+    blockers.extend(
+        reason
+        for reason in reason_codes
+        if reason
+        in {
+            "blocked_run_evidence_report",
+            "empty_run_evidence_report",
+            "guardrail_action_required",
+            "inconclusive_run_evidence_report",
+            "no_run_evidence_reports",
+            "rejected_market_events",
+            "rejected_replay_batches",
+            "unsafe_real_trading_flags",
+        }
+    )
+    return _sorted_unique(tuple(blockers))
+
+
+def _multi_source_next_actions(
+    status: PaperShadowRunEvidenceStatus,
+    reports: tuple[PaperShadowRunEvidenceReport, ...],
+    reason_codes: tuple[str, ...],
+) -> tuple[str, ...]:
+    if status == PaperShadowRunEvidenceStatus.PASS:
+        return ("continue_paper_shadow_observation",)
+    if not reports:
+        return ("provide_run_evidence_reports",)
+    actions: list[str] = []
+    for report in reports:
+        actions.extend(report.next_actions)
+    if "blocked_run_evidence_report" in reason_codes:
+        actions.append("resolve_blocked_run_evidence")
+    if "inconclusive_run_evidence_report" in reason_codes:
+        actions.append("restore_missing_run_evidence")
+    if "empty_run_evidence_report" in reason_codes or "no_run_evidence_reports" in reason_codes:
+        actions.append("provide_run_evidence_reports")
+    if status == PaperShadowRunEvidenceStatus.WARN:
+        actions.append("review_multi_source_run_warnings")
+    if status == PaperShadowRunEvidenceStatus.BLOCKED:
+        actions.append("resolve_multi_source_run_blockers")
+    return _sorted_unique(tuple(actions))
+
+
+def _multi_source_run_evidence_id(report_ids: tuple[str, ...]) -> str:
+    if not report_ids:
+        return "multi-source-run-evidence-empty"
+    return f"multi-source-run-evidence-{len(report_ids)}-{report_ids[0]}-{report_ids[-1]}"
+
+
+def _multi_source_run_evidence_summary(
+    status: PaperShadowRunEvidenceStatus,
+    *,
+    report_count: int,
+    pass_count: int,
+    warn_count: int,
+    blocked_count: int,
+    inconclusive_count: int,
+    empty_count: int,
+) -> str:
+    return (
+        f"multi_source_run_evidence={status.value}; reports={report_count}; pass={pass_count}; "
+        f"warn={warn_count}; blocked={blocked_count}; inconclusive={inconclusive_count}; empty={empty_count}"
     )
 
 
