@@ -13,6 +13,7 @@ from crypto_core.service.artifact_export import (
     export_paper_shadow_feed_replay_plan,
     export_paper_shadow_feed_replay_result,
     export_paper_shadow_market_event_batch,
+    export_paper_shadow_run_evidence_report,
     export_paper_shadow_session_snapshot,
     export_sleeve_admission_release_pack,
     load_managed_sleeve_set_manifest,
@@ -21,6 +22,7 @@ from crypto_core.service.artifact_export import (
     load_paper_shadow_feed_replay_plan,
     load_paper_shadow_feed_replay_result,
     load_paper_shadow_market_event_batch,
+    load_paper_shadow_run_evidence_report,
     load_paper_shadow_session_snapshot,
     load_sleeve_admission_release_pack,
 )
@@ -42,6 +44,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     MarketEventBatch,
     MarketEventType,
     PaperDataSourceType,
+    PaperShadowRunEvidenceStatus,
     PaperShadowSessionController,
     PaperShadowSessionCorruptError,
     PaperShadowSessionStatus,
@@ -50,6 +53,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     build_guardrail_snapshot,
     build_market_event_batch,
     build_paper_data_source_batch_result,
+    build_paper_shadow_run_evidence_report,
     feed_replay_plan_from_dict,
     feed_replay_plan_to_dict,
     feed_replay_result_from_dict,
@@ -61,6 +65,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     paper_data_source_batch_result_from_dict,
     paper_data_source_batch_result_to_dict,
     paper_data_source_payload_to_market_event_batch,
+    paper_shadow_run_evidence_report_from_dict,
+    paper_shadow_run_evidence_report_to_dict,
     paper_shadow_session_snapshot_from_dict,
     paper_shadow_session_snapshot_to_dict,
     runtime_monitor_snapshot_from_dict,
@@ -498,6 +504,31 @@ def _paper_data_source_payload(
             )
         ),
     }
+
+
+def _paper_shadow_full_local_run(
+    *,
+    records: tuple[dict, ...] | None = None,
+    symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT"),
+):
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    source_result = build_paper_data_source_batch_result(
+        _paper_data_source_payload(records=records, symbols=symbols),
+        allowed_source_ids=("local-feed",),
+    )
+
+    controller.prepare(plan)
+    controller.start()
+    replay = controller.replay_feed(build_feed_replay_plan((source_result.batch,), replay_id="run-evidence-replay"))
+    report = build_paper_shadow_run_evidence_report(
+        session_snapshot=controller.snapshot(),
+        source_result=source_result,
+        replay_result=replay,
+        report_id="run-evidence-report",
+    )
+    return source_result, replay, controller.snapshot(), report
 
 
 def _mock_service() -> MagicMock:
@@ -2267,6 +2298,114 @@ def test_paper_data_source_replay_integration_updates_session() -> None:
     assert snapshot.runtime_monitor.status == RuntimeMonitorStatus.HEALTHY
 
 
+def test_paper_shadow_run_evidence_report_valid_full_local_run_passes() -> None:
+    source_result, replay, snapshot, report = _paper_shadow_full_local_run()
+    rendered = paper_shadow_run_evidence_report_to_dict(report)
+
+    assert source_result.source.events_produced == 2
+    assert replay.events_replayed == 2
+    assert snapshot.runtime_monitor.status == RuntimeMonitorStatus.HEALTHY
+    assert report.evidence_status == PaperShadowRunEvidenceStatus.PASS
+    assert report.monitor_status == RuntimeMonitorStatus.HEALTHY
+    assert report.guardrail_status == GuardrailAction.NONE
+    assert report.accepted_event_count == 2
+    assert report.rejected_event_count == 0
+    assert report.accepted_batch_count == 1
+    assert report.rejected_batch_count == 0
+    assert report.symbols == ("BTCUSDT", "ETHUSDT")
+    assert report.venues == ("binance",)
+    assert report.blockers == ()
+    assert rendered["source_summary"]["available"] is True
+    assert rendered["replay_summary"]["available"] is True
+    assert rendered["evidence_status"] == "pass"
+
+
+def test_paper_shadow_run_evidence_zero_events_not_pass() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    controller = PaperShadowSessionController(clock_ns=lambda: _T0_NS + 1)
+    snapshot = controller.prepare(plan)
+
+    report = build_paper_shadow_run_evidence_report(session_snapshot=snapshot, report_id="empty-run")
+
+    assert report.evidence_status == PaperShadowRunEvidenceStatus.EMPTY
+    assert report.accepted_event_count == 0
+    assert "no_market_events" in report.reason_codes
+    assert "provide_market_events" in report.next_actions
+
+
+def test_paper_shadow_run_evidence_rejected_batch_blocks() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 1, _T0_NS + 2, _T0_NS + 3))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    bad_replay = FeedReplayPlan(
+        replay_id="run-evidence-bad-replay",
+        batches=(MarketEventBatch(batch_id="bad-price", events=(_market_event(price=-1.0),)),),
+    )
+
+    replay = controller.replay_feed(bad_replay)
+    report = build_paper_shadow_run_evidence_report(
+        session_snapshot=controller.snapshot(),
+        replay_result=replay,
+        report_id="blocked-run",
+    )
+
+    assert replay.batches_rejected == 1
+    assert report.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED
+    assert report.rejected_batch_count == 1
+    assert report.rejected_event_count == 1
+    assert "rejected_replay_batches" in report.reason_codes
+    assert "resolve_run_evidence_blockers" in report.next_actions
+
+
+def test_paper_shadow_run_evidence_guardrail_stop_or_block_cannot_pass() -> None:
+    _, _, _, report = _paper_shadow_full_local_run()
+    payload = paper_shadow_run_evidence_report_to_dict(report)
+    payload["guardrail_status"] = "stop_session"
+    payload["evidence_status"] = "pass"
+
+    with pytest.raises(PaperShadowSessionCorruptError):
+        paper_shadow_run_evidence_report_from_dict(payload)
+
+
+def test_paper_shadow_run_evidence_missing_monitor_inconclusive() -> None:
+    report = build_paper_shadow_run_evidence_report(
+        session_snapshot=None,
+        report_id="missing-monitor-run",
+        as_of_ns=_T0_NS,
+    )
+
+    assert report.evidence_status == PaperShadowRunEvidenceStatus.INCONCLUSIVE
+    assert report.monitor_status == RuntimeMonitorStatus.NOT_READY
+    assert report.guardrail_status == GuardrailAction.BLOCK_FINALIZE
+    assert "missing_session_snapshot" in report.reason_codes
+    assert report.next_actions == ("restore_session_snapshot",)
+
+
+def test_paper_shadow_run_evidence_serialization_export_and_fail_closed(tmp_path) -> None:
+    _, _, _, report = _paper_shadow_full_local_run()
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    payload = paper_shadow_run_evidence_report_to_dict(report)
+
+    assert paper_shadow_run_evidence_report_from_dict(payload) == report
+
+    export_paper_shadow_run_evidence_report(report=report, evidence_store=store)
+    assert load_paper_shadow_run_evidence_report(evidence_store=store) == report
+
+    store.save_snapshot("crypto_paper_shadow_run_evidence_report", ["bad"])
+    with pytest.raises(PaperShadowSessionCorruptError):
+        load_paper_shadow_run_evidence_report(evidence_store=store)
+
+
+def test_paper_shadow_run_evidence_deterministic_replay() -> None:
+    def run_once() -> dict:
+        _, _, _, report = _paper_shadow_full_local_run()
+        return paper_shadow_run_evidence_report_to_dict(report)
+
+    assert run_once() == run_once()
+
+
 def test_service_orchestrator_paper_shadow_session_helpers_and_operator_status(tmp_path) -> None:
     store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
     plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
@@ -2416,3 +2555,48 @@ def test_service_orchestrator_paper_data_source_helper_replays_and_exports(tmp_p
 
     orch.export_paper_data_source_batch_result(batch_result)
     assert orch.load_paper_data_source_batch_result() == batch_result
+
+
+def test_service_orchestrator_paper_shadow_run_evidence_helper_and_artifact(tmp_path) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + 50, _T0_NS + 51, _T0_NS + 52))
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        evidence_store=store,
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: next(times),
+    )
+    payload = _paper_data_source_payload(
+        symbols=("BTCUSDT",),
+        records=(
+            {
+                "symbol": "BTCUSDT",
+                "ts_ns": _T0_NS + 150,
+                "event_type": "mark_price",
+                "price": 102.0,
+            },
+        ),
+    )
+
+    source_result = orch.paper_data_source_payload_to_batch_result(payload, allowed_source_ids=("local-feed",))
+    orch.prepare_paper_shadow_session(plan=plan)
+    orch.start_paper_shadow_session()
+    replay = orch.replay_paper_shadow_feed(
+        build_feed_replay_plan((source_result.batch,), replay_id="orch-run-evidence-replay")
+    )
+    report = orch.paper_shadow_run_evidence_report(
+        source_result=source_result,
+        replay_result=replay,
+        report_id="orch-run-evidence-report",
+    )
+    rendered = orch.paper_shadow_run_evidence_report_dict(report)
+
+    assert report.evidence_status == PaperShadowRunEvidenceStatus.PASS
+    assert rendered["evidence_status"] == "pass"
+    assert rendered["accepted_event_count"] == 1
+    assert rendered["source_summary"]["source_id"] == "local-feed"
+    assert rendered["replay_summary"]["replay_id"] == "orch-run-evidence-replay"
+
+    orch.export_paper_shadow_run_evidence_report(report)
+    assert orch.load_paper_shadow_run_evidence_report() == report

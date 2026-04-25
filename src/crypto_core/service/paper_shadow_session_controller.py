@@ -68,6 +68,14 @@ class PaperDataSourceType(str, Enum):
     IN_MEMORY = "in_memory"
 
 
+class PaperShadowRunEvidenceStatus(str, Enum):
+    PASS = "pass"  # noqa: S105 - run evidence outcome, not a credential.
+    WARN = "warn"
+    BLOCKED = "blocked"
+    INCONCLUSIVE = "inconclusive"
+    EMPTY = "empty"
+
+
 @dataclass(frozen=True)
 class MarketEvent:
     symbol: str
@@ -132,6 +140,31 @@ class PaperDataSourceBatchResult:
     batch: MarketEventBatch
     rejected_record_ids: tuple[str, ...] = ()
     operator_summary: str = "Paper data source batch has not been built."
+
+
+@dataclass(frozen=True)
+class PaperShadowRunEvidenceReport:
+    report_id: str
+    as_of_ns: int
+    source_summary: dict
+    replay_summary: dict
+    session_status: PaperShadowSessionStatus
+    monitor_status: RuntimeMonitorStatus
+    guardrail_status: GuardrailAction
+    accepted_event_count: int = 0
+    rejected_event_count: int = 0
+    accepted_batch_count: int = 0
+    rejected_batch_count: int = 0
+    symbols: tuple[str, ...] = ()
+    venues: tuple[str, ...] = ()
+    blockers: tuple[str, ...] = ()
+    reason_codes: tuple[str, ...] = ()
+    evidence_status: PaperShadowRunEvidenceStatus = PaperShadowRunEvidenceStatus.EMPTY
+    next_actions: tuple[str, ...] = ()
+    paper_only: bool = True
+    real_orders_enabled: bool = False
+    real_money_enabled: bool = False
+    operator_summary: str = "Paper/shadow run evidence has not been assessed."
 
 
 @dataclass(frozen=True)
@@ -1069,6 +1102,192 @@ def paper_data_source_batch_result_from_dict(data: dict) -> PaperDataSourceBatch
     return result
 
 
+def build_paper_shadow_run_evidence_report(
+    *,
+    session_snapshot: PaperShadowSessionSnapshot | dict | None,
+    source_result: PaperDataSourceBatchResult | dict | None = None,
+    replay_result: FeedReplayResult | dict | None = None,
+    report_id: str | None = None,
+    as_of_ns: int | None = None,
+) -> PaperShadowRunEvidenceReport:
+    """Build one deterministic run-level evidence report from existing surfaces."""
+    resolved_source = (
+        paper_data_source_batch_result_from_dict(source_result) if isinstance(source_result, dict) else source_result
+    )
+    resolved_replay = feed_replay_result_from_dict(replay_result) if isinstance(replay_result, dict) else replay_result
+    if resolved_source is not None:
+        _validate_paper_data_source_batch_result(resolved_source)
+    if resolved_replay is not None:
+        _validate_feed_replay_result(resolved_replay)
+
+    if session_snapshot is None:
+        resolved_as_of_ns = _optional_non_negative_int(as_of_ns, "as_of_ns") or 0
+        report = PaperShadowRunEvidenceReport(
+            report_id=_string_or_default(report_id, _run_evidence_report_id(None, resolved_source, resolved_replay)),
+            as_of_ns=resolved_as_of_ns,
+            source_summary=_paper_data_source_run_summary(resolved_source),
+            replay_summary=_feed_replay_run_summary(resolved_replay),
+            session_status=PaperShadowSessionStatus.FAILED,
+            monitor_status=RuntimeMonitorStatus.NOT_READY,
+            guardrail_status=GuardrailAction.BLOCK_FINALIZE,
+            blockers=("missing_session_snapshot",),
+            reason_codes=("missing_session_snapshot",),
+            evidence_status=PaperShadowRunEvidenceStatus.INCONCLUSIVE,
+            next_actions=("restore_session_snapshot",),
+            operator_summary=_run_evidence_summary(
+                PaperShadowRunEvidenceStatus.INCONCLUSIVE,
+                accepted_event_count=0,
+                rejected_event_count=0,
+                blockers=("missing_session_snapshot",),
+            ),
+        )
+        _validate_paper_shadow_run_evidence_report(report)
+        return report
+
+    resolved_session = (
+        paper_shadow_session_snapshot_from_dict(session_snapshot)
+        if isinstance(session_snapshot, dict)
+        else session_snapshot
+    )
+    _validate_session_snapshot(resolved_session)
+    accepted_event_count = (
+        resolved_replay.events_replayed if resolved_replay is not None else resolved_session.event_count
+    )
+    accepted_batch_count = (
+        resolved_replay.batches_replayed
+        if resolved_replay is not None
+        else resolved_source.source.batches_produced
+        if resolved_source is not None
+        else 0
+    )
+    rejected_batch_count = resolved_replay.batches_rejected if resolved_replay is not None else 0
+    rejected_event_count = resolved_session.rejected_event_count + (
+        resolved_source.source.rejected_records if resolved_source is not None else 0
+    )
+    source_summary = _paper_data_source_run_summary(resolved_source)
+    replay_summary = _feed_replay_run_summary(resolved_replay)
+    reason_codes = _run_evidence_reason_codes(
+        resolved_session,
+        source_available=resolved_source is not None,
+        replay_available=resolved_replay is not None,
+        accepted_event_count=accepted_event_count,
+        rejected_event_count=rejected_event_count,
+        rejected_batch_count=rejected_batch_count,
+        source_rejected_record_ids=resolved_source.rejected_record_ids if resolved_source is not None else (),
+        replay_rejected_batch_ids=resolved_replay.rejected_batch_ids if resolved_replay is not None else (),
+    )
+    blockers = _run_evidence_blockers(
+        reason_codes,
+        resolved_session,
+        rejected_batch_count=rejected_batch_count,
+        rejected_event_count=rejected_event_count,
+    )
+    evidence_status = _run_evidence_status(
+        resolved_session,
+        source_available=resolved_source is not None,
+        replay_available=resolved_replay is not None,
+        accepted_event_count=accepted_event_count,
+        rejected_event_count=rejected_event_count,
+        rejected_batch_count=rejected_batch_count,
+    )
+    next_actions = _run_evidence_next_actions(evidence_status, reason_codes)
+    resolved_as_of_ns = (
+        _optional_non_negative_int(as_of_ns, "as_of_ns") if as_of_ns is not None else resolved_session.as_of_ns
+    )
+    report = PaperShadowRunEvidenceReport(
+        report_id=_string_or_default(
+            report_id,
+            _run_evidence_report_id(resolved_session, resolved_source, resolved_replay),
+        ),
+        as_of_ns=resolved_as_of_ns,
+        source_summary=source_summary,
+        replay_summary=replay_summary,
+        session_status=resolved_session.status,
+        monitor_status=resolved_session.runtime_monitor.status,
+        guardrail_status=resolved_session.guardrail.primary_action,
+        accepted_event_count=accepted_event_count,
+        rejected_event_count=rejected_event_count,
+        accepted_batch_count=accepted_batch_count,
+        rejected_batch_count=rejected_batch_count,
+        symbols=resolved_session.symbols_seen,
+        venues=resolved_session.venues_seen,
+        blockers=blockers,
+        reason_codes=reason_codes,
+        evidence_status=evidence_status,
+        next_actions=next_actions,
+        paper_only=resolved_session.paper_only,
+        real_orders_enabled=resolved_session.real_orders_enabled,
+        real_money_enabled=resolved_session.real_money_enabled,
+        operator_summary=_run_evidence_summary(
+            evidence_status,
+            accepted_event_count=accepted_event_count,
+            rejected_event_count=rejected_event_count,
+            blockers=blockers,
+        ),
+    )
+    _validate_paper_shadow_run_evidence_report(report)
+    return report
+
+
+def paper_shadow_run_evidence_report_to_dict(report: PaperShadowRunEvidenceReport) -> dict:
+    _validate_paper_shadow_run_evidence_report(report)
+    return {
+        "report_id": report.report_id,
+        "as_of_ns": report.as_of_ns,
+        "source_summary": dict(report.source_summary),
+        "replay_summary": dict(report.replay_summary),
+        "session_status": report.session_status.value,
+        "monitor_status": report.monitor_status.value,
+        "guardrail_status": report.guardrail_status.value,
+        "accepted_event_count": report.accepted_event_count,
+        "rejected_event_count": report.rejected_event_count,
+        "accepted_batch_count": report.accepted_batch_count,
+        "rejected_batch_count": report.rejected_batch_count,
+        "symbols": list(report.symbols),
+        "venues": list(report.venues),
+        "blockers": list(report.blockers),
+        "reason_codes": list(report.reason_codes),
+        "evidence_status": report.evidence_status.value,
+        "next_actions": list(report.next_actions),
+        "paper_only": report.paper_only,
+        "real_orders_enabled": report.real_orders_enabled,
+        "real_money_enabled": report.real_money_enabled,
+        "operator_summary": report.operator_summary,
+    }
+
+
+def paper_shadow_run_evidence_report_from_dict(data: dict) -> PaperShadowRunEvidenceReport:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper/shadow run evidence report must be a dict, got {type(data).__name__!r}"
+        )
+    report = PaperShadowRunEvidenceReport(
+        report_id=_require_non_empty_str(data.get("report_id"), "report_id"),
+        as_of_ns=_require_non_negative_int(data.get("as_of_ns"), "as_of_ns"),
+        source_summary=_report_summary_from_data(data.get("source_summary"), "source_summary"),
+        replay_summary=_report_summary_from_data(data.get("replay_summary"), "replay_summary"),
+        session_status=_session_status_or_default(data.get("session_status"), PaperShadowSessionStatus.FAILED),
+        monitor_status=_runtime_monitor_status_from_value(data.get("monitor_status")),
+        guardrail_status=_guardrail_action_from_value(data.get("guardrail_status")),
+        accepted_event_count=_require_non_negative_int(data.get("accepted_event_count"), "accepted_event_count"),
+        rejected_event_count=_require_non_negative_int(data.get("rejected_event_count"), "rejected_event_count"),
+        accepted_batch_count=_require_non_negative_int(data.get("accepted_batch_count"), "accepted_batch_count"),
+        rejected_batch_count=_require_non_negative_int(data.get("rejected_batch_count"), "rejected_batch_count"),
+        symbols=_sorted_unique(data.get("symbols", ())),
+        venues=_sorted_unique(data.get("venues", ())),
+        blockers=_sorted_unique(data.get("blockers", ())),
+        reason_codes=_sorted_unique(data.get("reason_codes", ())),
+        evidence_status=_run_evidence_status_from_value(data.get("evidence_status")),
+        next_actions=_sorted_unique(data.get("next_actions", ())),
+        paper_only=_bool_or_default(data, "paper_only", True),
+        real_orders_enabled=_bool_or_default(data, "real_orders_enabled", False),
+        real_money_enabled=_bool_or_default(data, "real_money_enabled", False),
+        operator_summary=_require_non_empty_str(data.get("operator_summary"), "operator_summary"),
+    )
+    _validate_paper_shadow_run_evidence_report(report)
+    return report
+
+
 def market_event_cursor_to_dict(cursor: MarketEventCursor) -> dict:
     _validate_market_event_cursor(cursor)
     return {
@@ -1434,6 +1653,64 @@ def _validate_paper_data_source_batch_result(result: PaperDataSourceBatchResult)
     _require_non_empty_str(result.operator_summary, "operator_summary")
 
 
+def _validate_paper_shadow_run_evidence_report(report: PaperShadowRunEvidenceReport) -> None:
+    if not isinstance(report, PaperShadowRunEvidenceReport):
+        raise PaperShadowSessionCorruptError("paper/shadow run evidence report must be a PaperShadowRunEvidenceReport")
+    _require_non_empty_str(report.report_id, "report_id")
+    _require_non_negative_int(report.as_of_ns, "as_of_ns")
+    _validate_report_summary(report.source_summary, "source_summary")
+    _validate_report_summary(report.replay_summary, "replay_summary")
+    if not isinstance(report.session_status, PaperShadowSessionStatus):
+        raise PaperShadowSessionCorruptError("paper/shadow run evidence session_status must be a session status")
+    if not isinstance(report.monitor_status, RuntimeMonitorStatus):
+        raise PaperShadowSessionCorruptError("paper/shadow run evidence monitor_status must be a monitor status")
+    if not isinstance(report.guardrail_status, GuardrailAction):
+        raise PaperShadowSessionCorruptError("paper/shadow run evidence guardrail_status must be a guardrail action")
+    if not isinstance(report.evidence_status, PaperShadowRunEvidenceStatus):
+        raise PaperShadowSessionCorruptError("paper/shadow run evidence status must be a run evidence status")
+    _require_non_negative_int(report.accepted_event_count, "accepted_event_count")
+    _require_non_negative_int(report.rejected_event_count, "rejected_event_count")
+    _require_non_negative_int(report.accepted_batch_count, "accepted_batch_count")
+    _require_non_negative_int(report.rejected_batch_count, "rejected_batch_count")
+    for field_name in ("symbols", "venues", "blockers", "reason_codes", "next_actions"):
+        value = getattr(report, field_name)
+        if value != _sorted_unique(value):
+            raise PaperShadowSessionCorruptError(f"paper/shadow run evidence {field_name} must be sorted unique")
+    _require_bool(report.paper_only, "paper_only")
+    _require_bool(report.real_orders_enabled, "real_orders_enabled")
+    _require_bool(report.real_money_enabled, "real_money_enabled")
+    _require_non_empty_str(report.operator_summary, "operator_summary")
+    if not report.paper_only or report.real_orders_enabled or report.real_money_enabled:
+        if report.evidence_status != PaperShadowRunEvidenceStatus.BLOCKED:
+            raise PaperShadowSessionCorruptError("unsafe run evidence flags must force BLOCKED status")
+    if report.evidence_status == PaperShadowRunEvidenceStatus.PASS:
+        if report.accepted_event_count <= 0:
+            raise PaperShadowSessionCorruptError("paper/shadow run evidence cannot PASS with zero events")
+        if report.accepted_batch_count <= 0:
+            raise PaperShadowSessionCorruptError("paper/shadow run evidence cannot PASS with zero accepted batches")
+        if report.rejected_event_count > 0 or report.rejected_batch_count > 0:
+            raise PaperShadowSessionCorruptError("paper/shadow run evidence cannot PASS with rejected evidence")
+        if report.monitor_status != RuntimeMonitorStatus.HEALTHY:
+            raise PaperShadowSessionCorruptError("paper/shadow run evidence cannot PASS without a healthy monitor")
+        if report.guardrail_status != GuardrailAction.NONE:
+            raise PaperShadowSessionCorruptError("paper/shadow run evidence cannot PASS with guardrail actions")
+        if not _report_summary_available(report.source_summary):
+            raise PaperShadowSessionCorruptError("paper/shadow run evidence cannot PASS without source evidence")
+        if not _report_summary_available(report.replay_summary):
+            raise PaperShadowSessionCorruptError("paper/shadow run evidence cannot PASS without replay evidence")
+        if report.blockers or report.reason_codes:
+            raise PaperShadowSessionCorruptError("paper/shadow run evidence cannot PASS with blockers or reasons")
+    if report.rejected_event_count > 0 and report.evidence_status != PaperShadowRunEvidenceStatus.BLOCKED:
+        raise PaperShadowSessionCorruptError("rejected events must force BLOCKED run evidence status")
+    if report.rejected_batch_count > 0 and report.evidence_status != PaperShadowRunEvidenceStatus.BLOCKED:
+        raise PaperShadowSessionCorruptError("rejected batches must force BLOCKED run evidence status")
+    if report.guardrail_status in {GuardrailAction.STOP_SESSION, GuardrailAction.PAUSE_SESSION}:
+        if report.evidence_status == PaperShadowRunEvidenceStatus.PASS:
+            raise PaperShadowSessionCorruptError("stop/pause guardrails cannot produce PASS run evidence")
+    if report.evidence_status == PaperShadowRunEvidenceStatus.EMPTY and report.accepted_event_count > 0:
+        raise PaperShadowSessionCorruptError("EMPTY run evidence cannot carry accepted events")
+
+
 def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
     if not isinstance(snapshot, PaperShadowSessionSnapshot):
         raise PaperShadowSessionCorruptError("paper/shadow session snapshot must be a PaperShadowSessionSnapshot")
@@ -1590,6 +1867,195 @@ def _paper_data_source_summary(snapshot: PaperDataSourceSnapshot) -> str:
     return (
         f"source={snapshot.source_id}; type={snapshot.source_type.value}; venue={snapshot.venue}; "
         f"symbols={len(snapshot.symbols)}; events={snapshot.events_produced}; rejected={snapshot.rejected_records}"
+    )
+
+
+def _paper_data_source_run_summary(result: PaperDataSourceBatchResult | None) -> dict:
+    if result is None:
+        return {"available": False}
+    _validate_paper_data_source_batch_result(result)
+    return {
+        "available": True,
+        "source_id": result.source.source_id,
+        "source_type": result.source.source_type.value,
+        "venue": result.source.venue,
+        "symbols": list(result.source.symbols),
+        "as_of_ns": result.source.as_of_ns,
+        "batches_produced": result.source.batches_produced,
+        "events_produced": result.source.events_produced,
+        "rejected_records": result.source.rejected_records,
+        "batch_ids": list(result.source.batch_ids),
+        "first_event_ns": result.source.first_event_ns,
+        "last_event_ns": result.source.last_event_ns,
+        "rejected_record_ids": list(result.rejected_record_ids),
+    }
+
+
+def _feed_replay_run_summary(result: FeedReplayResult | None) -> dict:
+    if result is None:
+        return {"available": False}
+    _validate_feed_replay_result(result)
+    return {
+        "available": True,
+        "replay_id": result.replay_id,
+        "session_id": result.session_id,
+        "session_status": result.session_status.value,
+        "batches_planned": result.batches_planned,
+        "batches_replayed": result.batches_replayed,
+        "events_replayed": result.events_replayed,
+        "batches_rejected": result.batches_rejected,
+        "first_event_ns": result.first_event_ns,
+        "last_event_ns": result.last_event_ns,
+        "guardrail_actions_seen": [action.value for action in result.guardrail_actions_seen],
+        "halted_by_guardrail": result.halted_by_guardrail,
+        "halt_reason": result.halt_reason,
+        "rejected_batch_ids": list(result.rejected_batch_ids),
+    }
+
+
+def _run_evidence_report_id(
+    session: PaperShadowSessionSnapshot | None,
+    source: PaperDataSourceBatchResult | None,
+    replay: FeedReplayResult | None,
+) -> str:
+    session_id = session.session_id if session is not None else "missing-session"
+    as_of_ns = session.as_of_ns if session is not None else 0
+    source_id = source.source.source_id if source is not None else "missing-source"
+    replay_id = replay.replay_id if replay is not None else "missing-replay"
+    return f"paper-shadow-run-evidence-{session_id}-{source_id}-{replay_id}-{as_of_ns}"
+
+
+def _run_evidence_reason_codes(
+    session: PaperShadowSessionSnapshot,
+    *,
+    source_available: bool,
+    replay_available: bool,
+    accepted_event_count: int,
+    rejected_event_count: int,
+    rejected_batch_count: int,
+    source_rejected_record_ids: tuple[str, ...],
+    replay_rejected_batch_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    reasons: list[str] = []
+    if not source_available:
+        reasons.append("missing_data_source_evidence")
+    if not replay_available:
+        reasons.append("missing_replay_evidence")
+    if accepted_event_count == 0:
+        reasons.append("no_market_events")
+    if rejected_event_count > 0:
+        reasons.append("rejected_market_events")
+    if rejected_batch_count > 0:
+        reasons.append("rejected_replay_batches")
+    if not session.paper_only or session.real_orders_enabled or session.real_money_enabled:
+        reasons.append("unsafe_real_trading_flags")
+    reasons.extend(session.runtime_monitor.reason_codes)
+    reasons.extend(session.guardrail.reason_codes)
+    reasons.extend(f"rejected_record:{record_id}" for record_id in source_rejected_record_ids)
+    reasons.extend(f"rejected_batch:{batch_id}" for batch_id in replay_rejected_batch_ids)
+    return _sorted_unique(reasons)
+
+
+def _run_evidence_blockers(
+    reason_codes: tuple[str, ...],
+    session: PaperShadowSessionSnapshot,
+    *,
+    rejected_batch_count: int,
+    rejected_event_count: int,
+) -> tuple[str, ...]:
+    blockers: list[str] = []
+    if rejected_batch_count > 0 or rejected_event_count > 0:
+        blockers.append("rejected_run_evidence")
+    if session.guardrail.primary_action != GuardrailAction.NONE or session.guardrail.block_finalize:
+        blockers.append("guardrail_action_required")
+    if not session.paper_only or session.real_orders_enabled or session.real_money_enabled:
+        blockers.append("unsafe_real_trading_flags")
+    if session.runtime_monitor.status != RuntimeMonitorStatus.HEALTHY and session.event_count > 0:
+        blockers.append("runtime_monitor_not_healthy")
+    blockers.extend(session.blockers_seen)
+    blockers.extend(
+        reason
+        for reason in reason_codes
+        if reason
+        in {
+            "rejected_market_events",
+            "rejected_replay_batches",
+            "stale_feed_detected",
+            "missing_symbol_coverage",
+            "missing_venue_coverage",
+            "price_validity_failed",
+            "unsafe_real_trading_flags",
+        }
+    )
+    return _sorted_unique(blockers)
+
+
+def _run_evidence_status(
+    session: PaperShadowSessionSnapshot,
+    *,
+    source_available: bool,
+    replay_available: bool,
+    accepted_event_count: int,
+    rejected_event_count: int,
+    rejected_batch_count: int,
+) -> PaperShadowRunEvidenceStatus:
+    if not session.paper_only or session.real_orders_enabled or session.real_money_enabled:
+        return PaperShadowRunEvidenceStatus.BLOCKED
+    if rejected_event_count > 0 or rejected_batch_count > 0:
+        return PaperShadowRunEvidenceStatus.BLOCKED
+    if accepted_event_count == 0:
+        return PaperShadowRunEvidenceStatus.EMPTY
+    if (
+        session.guardrail.should_stop_session
+        or session.guardrail.should_pause_session
+        or session.guardrail.block_finalize
+    ):
+        return PaperShadowRunEvidenceStatus.BLOCKED
+    if session.guardrail.primary_action != GuardrailAction.NONE:
+        return PaperShadowRunEvidenceStatus.BLOCKED
+    if session.runtime_monitor.status != RuntimeMonitorStatus.HEALTHY:
+        return PaperShadowRunEvidenceStatus.WARN
+    if not source_available or not replay_available:
+        return PaperShadowRunEvidenceStatus.WARN
+    return PaperShadowRunEvidenceStatus.PASS
+
+
+def _run_evidence_next_actions(
+    status: PaperShadowRunEvidenceStatus,
+    reason_codes: tuple[str, ...],
+) -> tuple[str, ...]:
+    if status == PaperShadowRunEvidenceStatus.PASS:
+        return ("continue_paper_shadow_observation",)
+    if status == PaperShadowRunEvidenceStatus.EMPTY:
+        return ("provide_market_events",)
+    if status == PaperShadowRunEvidenceStatus.INCONCLUSIVE:
+        return ("restore_session_snapshot",)
+    actions: list[str] = []
+    if "missing_data_source_evidence" in reason_codes:
+        actions.append("attach_data_source_evidence")
+    if "missing_replay_evidence" in reason_codes:
+        actions.append("attach_feed_replay_evidence")
+    if "no_market_events" in reason_codes:
+        actions.append("provide_market_events")
+    if any(reason.startswith("rejected_") for reason in reason_codes):
+        actions.append("replay_with_valid_paper_data")
+    if status == PaperShadowRunEvidenceStatus.BLOCKED:
+        actions.append("resolve_run_evidence_blockers")
+    if status == PaperShadowRunEvidenceStatus.WARN:
+        actions.append("review_run_evidence_warnings")
+    return _sorted_unique(tuple(actions))
+
+
+def _run_evidence_summary(
+    status: PaperShadowRunEvidenceStatus,
+    *,
+    accepted_event_count: int,
+    rejected_event_count: int,
+    blockers: tuple[str, ...],
+) -> str:
+    return (
+        f"run_evidence={status.value}; accepted_events={accepted_event_count}; "
+        f"rejected_events={rejected_event_count}; blockers={len(blockers)}"
     )
 
 
@@ -1859,6 +2325,15 @@ def _runtime_monitor_status_from_value(value: object) -> RuntimeMonitorStatus:
         raise PaperShadowSessionCorruptError(f"Invalid runtime monitor status: {value!r}") from exc
 
 
+def _run_evidence_status_from_value(value: object) -> PaperShadowRunEvidenceStatus:
+    if isinstance(value, PaperShadowRunEvidenceStatus):
+        return value
+    try:
+        return PaperShadowRunEvidenceStatus(_require_non_empty_str(value, "evidence_status"))
+    except ValueError as exc:
+        raise PaperShadowSessionCorruptError(f"Invalid paper/shadow run evidence status: {value!r}") from exc
+
+
 def _guardrail_action_from_value(value: object) -> GuardrailAction:
     if isinstance(value, GuardrailAction):
         return value
@@ -2061,6 +2536,48 @@ def _dict_value(value: object, field_name: str) -> dict:
     if not isinstance(value, dict):
         raise PaperShadowSessionCorruptError(f"{field_name} must contain dict entries")
     return dict(value)
+
+
+def _report_summary_from_data(value: object, field_name: str) -> dict:
+    summary = _dict_value(value, field_name)
+    _validate_report_summary(summary, field_name)
+    return summary
+
+
+def _validate_report_summary(value: object, field_name: str) -> None:
+    if not isinstance(value, dict):
+        raise PaperShadowSessionCorruptError(f"paper/shadow run evidence {field_name} must be a dict")
+    if "available" in value:
+        _require_bool(value["available"], f"{field_name}.available")
+    _validate_jsonish(value, field_name)
+
+
+def _report_summary_available(value: dict) -> bool:
+    return value.get("available") is True
+
+
+def _validate_jsonish(value: object, field_name: str) -> None:
+    if value is None or isinstance(value, (str, bool, int)):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise PaperShadowSessionCorruptError(f"paper/shadow run evidence {field_name} must be finite")
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _validate_jsonish(item, f"{field_name}[{index}]")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str) or not key:
+                raise PaperShadowSessionCorruptError(
+                    f"paper/shadow run evidence {field_name} requires non-empty string keys"
+                )
+            _validate_jsonish(item, f"{field_name}.{key}")
+        return
+    raise PaperShadowSessionCorruptError(
+        f"paper/shadow run evidence {field_name} contains non-serializable {type(value).__name__!r}"
+    )
 
 
 def _sorted_unique(values: object) -> tuple[str, ...]:

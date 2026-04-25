@@ -71,6 +71,9 @@ from crypto_core.service.artifact_export import (
     export_paper_shadow_market_event_batch as export_market_event_batch,
 )
 from crypto_core.service.artifact_export import (
+    export_paper_shadow_run_evidence_report as export_run_evidence_report,
+)
+from crypto_core.service.artifact_export import (
     export_paper_shadow_session_snapshot as export_paper_shadow_session,
 )
 from crypto_core.service.artifact_export import (
@@ -90,6 +93,9 @@ from crypto_core.service.artifact_export import (
 )
 from crypto_core.service.artifact_export import (
     load_paper_shadow_market_event_batch as load_market_event_batch,
+)
+from crypto_core.service.artifact_export import (
+    load_paper_shadow_run_evidence_report as load_run_evidence_report,
 )
 from crypto_core.service.artifact_export import (
     load_paper_shadow_session_snapshot as load_paper_shadow_session,
@@ -139,16 +145,19 @@ from crypto_core.service.paper_shadow_session_controller import (
     FeedReplayResult,
     MarketEventBatch,
     PaperDataSourceBatchResult,
+    PaperShadowRunEvidenceReport,
     PaperShadowSessionController,
     PaperShadowSessionSnapshot,
     build_feed_replay_plan,
     build_paper_data_source_batch_result,
+    build_paper_shadow_run_evidence_report,
     feed_replay_plan_to_dict,
     feed_replay_result_to_dict,
     guardrail_snapshot_to_dict,
     market_event_batch_to_dict,
     paper_data_source_batch_result_to_dict,
     paper_data_source_payload_to_market_event_batch,
+    paper_shadow_run_evidence_report_to_dict,
     paper_shadow_session_snapshot_to_dict,
     runtime_monitor_snapshot_to_dict,
 )
@@ -1084,6 +1093,78 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for paper data-source result load")
         return load_paper_data_source_batch_result(evidence_store=self._evidence_store)
+
+    def paper_shadow_run_evidence_report(
+        self,
+        *,
+        source_result: PaperDataSourceBatchResult | dict | None = None,
+        replay_result: FeedReplayResult | dict | None = None,
+        report_id: str | None = None,
+        as_of_ns: int | None = None,
+    ) -> PaperShadowRunEvidenceReport:
+        """Build the deterministic run-level evidence report for the current paper/shadow session."""
+        return build_paper_shadow_run_evidence_report(
+            session_snapshot=self.paper_shadow_session_snapshot(),
+            source_result=source_result,
+            replay_result=replay_result,
+            report_id=report_id,
+            as_of_ns=as_of_ns,
+        )
+
+    def paper_shadow_run_evidence_report_dict(
+        self,
+        report: PaperShadowRunEvidenceReport | None = None,
+        *,
+        source_result: PaperDataSourceBatchResult | dict | None = None,
+        replay_result: FeedReplayResult | dict | None = None,
+        report_id: str | None = None,
+        as_of_ns: int | None = None,
+    ) -> dict:
+        """Serialize a paper/shadow run-level evidence report."""
+        source_report = (
+            report
+            if report is not None
+            else self.paper_shadow_run_evidence_report(
+                source_result=source_result,
+                replay_result=replay_result,
+                report_id=report_id,
+                as_of_ns=as_of_ns,
+            )
+        )
+        return paper_shadow_run_evidence_report_to_dict(source_report)
+
+    def export_paper_shadow_run_evidence_report(
+        self,
+        report: PaperShadowRunEvidenceReport | None = None,
+        *,
+        source_result: PaperDataSourceBatchResult | dict | None = None,
+        replay_result: FeedReplayResult | dict | None = None,
+        report_id: str | None = None,
+        as_of_ns: int | None = None,
+    ):
+        """Persist a paper/shadow run-level evidence report via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper/shadow run evidence report export")
+        source_report = (
+            report
+            if report is not None
+            else self.paper_shadow_run_evidence_report(
+                source_result=source_result,
+                replay_result=replay_result,
+                report_id=report_id,
+                as_of_ns=as_of_ns,
+            )
+        )
+        return export_run_evidence_report(
+            report=source_report,
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_shadow_run_evidence_report(self) -> PaperShadowRunEvidenceReport:
+        """Load the latest persisted paper/shadow run-level evidence report."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper/shadow run evidence report load")
+        return load_run_evidence_report(evidence_store=self._evidence_store)
 
     # ------------------------------------------------------------------
     # Properties
