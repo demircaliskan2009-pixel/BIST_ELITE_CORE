@@ -6,12 +6,7 @@ All factory functions are pure.
 
 from __future__ import annotations
 
-from crypto_core.data.models.events import (
-    Exchange,
-    OrderBookEvent,
-    OrderBookEventType,
-    OrderBookLevel,
-)
+from crypto_core.data.models.events import Exchange, OrderBookEvent, OrderBookEventType, OrderBookLevel
 
 _DEFAULT_SYMBOL = "BTCUSDT"
 _DEFAULT_EXCHANGE = Exchange.BINANCE

@@ -27,11 +27,7 @@ from crypto_core.risk.kill_switch import (
     KillSwitchInput,
     KillSwitchResult,
 )
-from crypto_core.risk.models import (
-    RiskBlockReason,
-    RiskDecision,
-    RiskEvaluation,
-)
+from crypto_core.risk.models import RiskBlockReason, RiskDecision, RiskEvaluation
 
 __all__ = [
     # Engine

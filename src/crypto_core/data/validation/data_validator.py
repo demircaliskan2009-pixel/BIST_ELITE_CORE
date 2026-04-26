@@ -22,11 +22,7 @@ from typing import Callable
 
 from crypto_core.data.models.events import OrderBookEvent, TradeEvent
 from crypto_core.data.validation.errors import ValidationError, ValidationErrorCode
-from crypto_core.data.validation.rules import (
-    validate_order_book_fields,
-    validate_trade_clock,
-    validate_trade_fields,
-)
+from crypto_core.data.validation.rules import validate_order_book_fields, validate_trade_clock, validate_trade_fields
 from crypto_core.data.validation.sequence_tracker import SequenceTracker
 
 # Type alias for a wall-clock provider (injectable for deterministic tests).

@@ -41,11 +41,7 @@ from pathlib import Path
 
 from crypto_core.execution.events import FillEvent, OrderEvent, OrderEventType
 from crypto_core.execution.models import ExecutionMode, OrderIntent
-from crypto_core.execution.state_machine import (
-    IllegalOrderTransitionError,
-    Order,
-    OrderState,
-)
+from crypto_core.execution.state_machine import IllegalOrderTransitionError, Order, OrderState
 
 logger = logging.getLogger(__name__)
 

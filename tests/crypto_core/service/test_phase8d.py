@@ -72,20 +72,9 @@ from crypto_core.service.campaign import (
     new_campaign_id,
     validate_campaign_metadata_dict,
 )
-from crypto_core.service.campaign_controller import (
-    CampaignController,
-    _report_to_dict,
-)
-from crypto_core.service.evidence_store import (
-    EvidenceStore,
-)
-from crypto_core.service.models import (
-    QueuePressure,
-    QueueSnapshot,
-    ServiceStatus,
-    SymbolHealth,
-    WatchdogStatus,
-)
+from crypto_core.service.campaign_controller import CampaignController, _report_to_dict
+from crypto_core.service.evidence_store import EvidenceStore
+from crypto_core.service.models import QueuePressure, QueueSnapshot, ServiceStatus, SymbolHealth, WatchdogStatus
 from crypto_core.session.models import PaperSessionStatus
 
 # ---------------------------------------------------------------------------

@@ -63,13 +63,7 @@ from crypto_core.runtime.assembler import MarketStateAssembler
 from crypto_core.runtime.bridge import FeedSessionBridge
 from crypto_core.runtime.models import RuntimeBridgeConfig, TriggerPolicy
 from crypto_core.runtime.runner import PaperLiveRunner
-from crypto_core.service.audit import (
-    AuditCategory,
-    AuditConfig,
-    AuditRecord,
-    AuditTrail,
-    PressureTransition,
-)
+from crypto_core.service.audit import AuditCategory, AuditConfig, AuditRecord, AuditTrail, PressureTransition
 from crypto_core.service.health import (
     HealthConfig,
     HealthTracker,
@@ -78,11 +72,7 @@ from crypto_core.service.health import (
     ReadinessLevel,
     ReadinessSnapshot,
 )
-from crypto_core.service.metrics import (
-    PerformanceSnapshot,
-    build_operational_metrics,
-    build_trading_metrics,
-)
+from crypto_core.service.metrics import PerformanceSnapshot, build_operational_metrics, build_trading_metrics
 from crypto_core.service.models import (
     QueuePressure,
     QueueSnapshot,

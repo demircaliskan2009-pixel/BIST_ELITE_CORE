@@ -26,11 +26,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from crypto_core.guard.models import (
-    NoTradeContext,
-    NoTradeDecision,
-    NoTradeReason,
-)
+from crypto_core.guard.models import NoTradeContext, NoTradeDecision, NoTradeReason
 from crypto_core.service.external_regime import (
     EXT_REGIME_EXECUTION_STALE,
     EXT_REGIME_EXECUTION_UNAVAILABLE,

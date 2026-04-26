@@ -27,11 +27,7 @@ from crypto_core.execution.markout import MarkoutObserver, MarkoutObserverConfig
 from crypto_core.execution.route_binding import MetadataGatedRouter
 from crypto_core.execution.tca_loop import ExecutionTCALoop, TCALoopConfig
 from crypto_core.execution.tca_store import TCAStore
-from crypto_core.execution.venue_scoring import (
-    ExpectedCostCalculator,
-    RoutingEngine,
-    VenueScoringEngine,
-)
+from crypto_core.execution.venue_scoring import ExpectedCostCalculator, RoutingEngine, VenueScoringEngine
 from crypto_core.service.models import (
     ExecutionIntelligenceConfig,
     ExecutionIntelligenceMode,

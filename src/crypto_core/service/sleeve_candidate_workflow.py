@@ -12,7 +12,6 @@ Design rules:
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import Enum
 
@@ -153,10 +152,8 @@ class SleeveCandidateWorkflowController:
         history: tuple[SleeveCandidateWorkflowHistoryEntry, ...] = (),
         current_snapshot: SleeveCandidateWorkflowSnapshot | None = None,
         status: SleeveCandidateWorkflowStatus = SleeveCandidateWorkflowStatus.CREATED,
-        clock_ns: Callable[[], int] | None = None,
     ) -> None:
-        self._clock_ns = time.time_ns if clock_ns is None else clock_ns
-        now = self._now_ns() if created_at_ns is None else created_at_ns
+        now = time.time_ns() if created_at_ns is None else created_at_ns
         self._created_at_ns = now
         self._updated_at_ns = now if updated_at_ns is None else updated_at_ns
         self._workflow_id = workflow_id or f"sleeve-candidate-{now}"
@@ -191,7 +188,7 @@ class SleeveCandidateWorkflowController:
         """Start a new candidate workflow inspection cycle."""
         if self._status == SleeveCandidateWorkflowStatus.ACTIVE:
             raise RuntimeError(f"Cannot start sleeve candidate workflow {self._workflow_id!r}: already active")
-        now = self._now_ns() if started_at_ns is None else started_at_ns
+        now = time.time_ns() if started_at_ns is None else started_at_ns
         self._workflow_id = workflow_id or f"sleeve-candidate-{now}"
         self._created_at_ns = now
         self._updated_at_ns = now
@@ -237,7 +234,7 @@ class SleeveCandidateWorkflowController:
 
     def reset(self, *, reset_at_ns: int | None = None) -> None:
         """Reset the active/finalized workflow while preserving bounded history."""
-        now = self._now_ns() if reset_at_ns is None else reset_at_ns
+        now = time.time_ns() if reset_at_ns is None else reset_at_ns
         self._status = SleeveCandidateWorkflowStatus.CREATED
         self._current_snapshot = None
         self._updated_at_ns = now
@@ -332,7 +329,6 @@ class SleeveCandidateWorkflowController:
         evidence_store: EvidenceStore,
         *,
         history_limit: int = _DEFAULT_HISTORY_LIMIT,
-        clock_ns: Callable[[], int] | None = None,
     ) -> SleeveCandidateWorkflowController:
         """Restore controller state from persisted workflow snapshot."""
         envelope = evidence_store.load_snapshot(_WORKFLOW_SNAPSHOT_NAME)
@@ -367,7 +363,6 @@ class SleeveCandidateWorkflowController:
                 else sleeve_candidate_workflow_snapshot_from_dict(dict(data.get("current_snapshot")))
             ),
             status=status,
-            clock_ns=clock_ns,
         )
         return controller
 
@@ -468,9 +463,6 @@ class SleeveCandidateWorkflowController:
             raise RuntimeError(
                 f"Cannot {operation} sleeve candidate workflow {self._workflow_id!r}: status={self._status.value!r}"
             )
-
-    def _now_ns(self) -> int:
-        return _require_non_negative_int(self._clock_ns(), "clock_ns")
 
     def _persist_workflow(self) -> None:
         if self._evidence_store is not None:

@@ -67,13 +67,8 @@ from crypto_core.service.escalation_review_controller import (
     final_escalation_review_report_from_dict,
     final_escalation_review_report_to_dict,
 )
-from crypto_core.service.evidence_store import (
-    EvidenceStore,
-    EvidenceStoreConfig,
-)
-from crypto_core.service.promotion_review import (
-    PromotionVerdict,
-)
+from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreConfig
+from crypto_core.service.promotion_review import PromotionVerdict
 from crypto_core.service.promotion_review_controller import (
     CampaignIntakeError,
     CurrentReviewSnapshot,
@@ -821,9 +816,7 @@ class TestPersistence:
         ctrl.finalize_review(finalized_at_ns=_T0_NS)
 
         # Verify final review was persisted via PromotionReviewStore
-        from crypto_core.service.promotion_review import (
-            PromotionReviewStore,
-        )
+        from crypto_core.service.promotion_review import PromotionReviewStore
 
         review_store = PromotionReviewStore(store)
         loaded = review_store.load_review()

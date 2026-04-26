@@ -25,14 +25,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from crypto_core.execution.attribution import TradeAttribution
-from crypto_core.execution.markout import (
-    MarkoutObservationSet,
-    MarkoutObserver,
-)
-from crypto_core.execution.tca import (
-    TCARecord,
-    build_tca_record,
-)
+from crypto_core.execution.markout import MarkoutObservationSet, MarkoutObserver
+from crypto_core.execution.tca import TCARecord, build_tca_record
 from crypto_core.execution.tca_store import TCAStore
 
 logger = logging.getLogger(__name__)

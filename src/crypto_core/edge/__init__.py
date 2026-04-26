@@ -7,11 +7,7 @@ PRD reference: §1.1–§1.13 Edge Engine.
 from __future__ import annotations
 
 from crypto_core.edge.engine import EdgeEngine
-from crypto_core.edge.models import (
-    EdgeFamily,
-    EdgeSignal,
-    SignalDirection,
-)
+from crypto_core.edge.models import EdgeFamily, EdgeSignal, SignalDirection
 
 __all__ = [
     "EdgeEngine",

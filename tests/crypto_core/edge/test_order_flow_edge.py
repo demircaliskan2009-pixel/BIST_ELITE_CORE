@@ -14,11 +14,7 @@ from crypto_core.edge.activation import (
 )
 from crypto_core.edge.engine import EdgeEngine
 from crypto_core.edge.families.funding import FundingSafetyContext
-from crypto_core.edge.families.order_flow import (
-    OFIConfig,
-    OrderFlowImbalanceEdge,
-    compute_ofi,
-)
+from crypto_core.edge.families.order_flow import OFIConfig, OrderFlowImbalanceEdge, compute_ofi
 from crypto_core.edge.models import EdgeFamily, EdgeSignal, SignalDirection
 from crypto_core.edge.registry import EdgeFamilyRegistry
 from crypto_core.guard.models import NoTradeDecision, NoTradeReason

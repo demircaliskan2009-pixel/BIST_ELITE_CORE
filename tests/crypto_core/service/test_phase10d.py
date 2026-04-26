@@ -36,15 +36,8 @@ from crypto_core.service.campaign import (
     SymbolParticipation,
     campaign_metadata_from_dict,
 )
-from crypto_core.service.campaign_controller import (
-    CampaignController,
-    _report_to_dict,
-    campaign_readiness_flags,
-)
-from crypto_core.service.evidence_store import (
-    EvidenceStore,
-    EvidenceStoreConfig,
-)
+from crypto_core.service.campaign_controller import CampaignController, _report_to_dict, campaign_readiness_flags
+from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreConfig
 from crypto_core.service.models import (
     ExecutionIntelligenceStatus,
     QueuePressure,
@@ -1025,9 +1018,7 @@ class TestPromotionReviewControllerEvidence:
     """PromotionReviewController consumes richer campaign evidence."""
 
     def test_controller_snapshot_reflects_tca(self):
-        from crypto_core.service.promotion_review_controller import (
-            PromotionReviewController,
-        )
+        from crypto_core.service.promotion_review_controller import PromotionReviewController
 
         ctrl = PromotionReviewController(
             readiness_level="paper_live",
@@ -1054,9 +1045,7 @@ class TestPromotionReviewControllerEvidence:
         assert tca_dist.get("unavailable", 0) == 0
 
     def test_controller_finalize_with_real_evidence(self):
-        from crypto_core.service.promotion_review_controller import (
-            PromotionReviewController,
-        )
+        from crypto_core.service.promotion_review_controller import PromotionReviewController
 
         ctrl = PromotionReviewController(
             readiness_level="paper_live",

@@ -26,11 +26,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from crypto_core.service.evidence_store import (
-    EvidenceStore,
-    EvidenceStoreConfig,
-    WriteResult,
-)
+from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreConfig, WriteResult
 
 logger = logging.getLogger(__name__)
 
@@ -558,12 +554,7 @@ class RunStateManager:
         Returns:
             Frozen InspectionSnapshot.
         """
-        from crypto_core.service.health import (
-            HealthTrend,
-            HealthTrendSnapshot,
-            ReadinessLevel,
-            ReadinessSnapshot,
-        )
+        from crypto_core.service.health import HealthTrend, HealthTrendSnapshot, ReadinessLevel, ReadinessSnapshot
         from crypto_core.service.models import ServiceStatus
 
         ss: ServiceStatus = service_status  # type: ignore[assignment]

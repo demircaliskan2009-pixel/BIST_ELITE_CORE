@@ -20,13 +20,7 @@ import pytest
 from crypto_core.edge.models import EdgeFamily, EdgeSignal, SignalDirection
 from crypto_core.execution.fill_pricer import FillPricerConfig
 from crypto_core.execution.lifecycle import ExecutionLifecycleConfig, ExecutionLifecycleEngine
-from crypto_core.execution.models import (
-    BookContext,
-    ExecutionMode,
-    ExecutionRequest,
-    OrderIntent,
-    RejectionReason,
-)
+from crypto_core.execution.models import BookContext, ExecutionMode, ExecutionRequest, OrderIntent, RejectionReason
 from crypto_core.execution.paper_adapter import PaperAdapterConfig
 from crypto_core.execution.state_machine import OrderState
 from crypto_core.guard.models import NoTradeDecision

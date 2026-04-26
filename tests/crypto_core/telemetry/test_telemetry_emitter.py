@@ -9,11 +9,7 @@ from pathlib import Path
 import pytest
 
 from crypto_core.telemetry.emitter import TelemetryEmitter, TelemetryValidationError
-from crypto_core.telemetry.models import (
-    TelemetryAlert,
-    TelemetryEnvelope,
-    TelemetryStage,
-)
+from crypto_core.telemetry.models import TelemetryAlert, TelemetryEnvelope, TelemetryStage
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -212,17 +208,13 @@ class TestStageBuilders:
 
     def test_build_risk_envelope(self, tmp_path: Path) -> None:
         emitter = _emitter(tmp_path)
-        env = emitter.build_risk_envelope(
-            _TS_MS, 8.0, shs_value=0.90, kill_switch_level=0, cvar99_pct=0.02
-        )
+        env = emitter.build_risk_envelope(_TS_MS, 8.0, shs_value=0.90, kill_switch_level=0, cvar99_pct=0.02)
         assert env.stage == TelemetryStage.RISK
         assert env.validate() == []
 
     def test_build_execution_envelope(self, tmp_path: Path) -> None:
         emitter = _emitter(tmp_path)
-        env = emitter.build_execution_envelope(
-            _TS_MS, 5.0, execution_slippage_bps=3.0, fill_rate_pct=99.5
-        )
+        env = emitter.build_execution_envelope(_TS_MS, 5.0, execution_slippage_bps=3.0, fill_rate_pct=99.5)
         assert env.stage == TelemetryStage.EXECUTION
         assert env.validate() == []
 

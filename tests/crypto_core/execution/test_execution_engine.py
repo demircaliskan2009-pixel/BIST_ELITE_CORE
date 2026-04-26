@@ -6,12 +6,7 @@ import pytest
 
 from crypto_core.edge.models import EdgeFamily, EdgeSignal, SignalDirection
 from crypto_core.execution.engine import ExecutionConfig, ExecutionEngine
-from crypto_core.execution.models import (
-    ExecutionMode,
-    ExecutionRequest,
-    OrderIntent,
-    RejectionReason,
-)
+from crypto_core.execution.models import ExecutionMode, ExecutionRequest, OrderIntent, RejectionReason
 from crypto_core.guard.models import NoTradeDecision
 from crypto_core.risk.models import RiskDecision, RiskEvaluation
 from crypto_core.state.models import SystemState

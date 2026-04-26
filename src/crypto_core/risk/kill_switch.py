@@ -35,13 +35,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from crypto_core.risk.contracts import (
-    KS_LEVEL_BLOCK,
-    KS_LEVEL_FLATTEN,
-    KS_LEVEL_HALT,
-    KS_LEVEL_NORMAL,
-    KS_LEVEL_REDUCE,
-)
+from crypto_core.risk.contracts import KS_LEVEL_BLOCK, KS_LEVEL_FLATTEN, KS_LEVEL_HALT, KS_LEVEL_NORMAL, KS_LEVEL_REDUCE
 from crypto_core.state.models import SystemState, is_at_least
 
 logger = logging.getLogger(__name__)

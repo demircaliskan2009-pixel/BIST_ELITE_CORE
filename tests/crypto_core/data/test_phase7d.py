@@ -29,12 +29,7 @@ from crypto_core.data.ingestion import bybit_adapter
 from crypto_core.data.ingestion.bybit_snapshot_fetcher import BybitSnapshotFetcher
 from crypto_core.data.ingestion.data_ingestor import DataIngestor
 from crypto_core.data.ingestion.websocket_client import WebSocketClient, WebSocketConfig
-from crypto_core.data.models.events import (
-    Exchange,
-    OrderBookEvent,
-    OrderBookEventType,
-    OrderBookLevel,
-)
+from crypto_core.data.models.events import Exchange, OrderBookEvent, OrderBookEventType, OrderBookLevel
 from crypto_core.data.models.feed_state import RecoveryState
 from crypto_core.data.recovery.delta_buffer import DeltaBuffer, SequenceGapError
 from tests.crypto_core.data.fixtures.ws_simulator import WebSocketSimulator

@@ -31,15 +31,9 @@ import threading
 import time
 
 from crypto_core.data.ingestion.data_ingestor import DataIngestor
-from crypto_core.data.models.feed_state import (
-    ConnectionState,
-    RecoveryState,
-)
+from crypto_core.data.models.feed_state import ConnectionState, RecoveryState
 from crypto_core.runtime.runner import PaperLiveRunner
-from crypto_core.service.execution_intelligence import (
-    BootstrapResult,
-    ExecutionIntelligenceBootstrap,
-)
+from crypto_core.service.execution_intelligence import BootstrapResult, ExecutionIntelligenceBootstrap
 from crypto_core.service.models import (
     ExecutionIntelligenceConfig,
     ExecutionIntelligenceStatus,

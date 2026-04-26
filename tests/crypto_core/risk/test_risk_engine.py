@@ -7,11 +7,7 @@ import pytest
 from crypto_core.edge.models import EdgeFamily, EdgeSignal, SignalDirection
 from crypto_core.guard.models import NoTradeDecision, NoTradeReason
 from crypto_core.risk.engine import RiskEngine
-from crypto_core.risk.models import (
-    RiskBlockReason,
-    RiskDecision,
-    RiskEvaluation,
-)
+from crypto_core.risk.models import RiskBlockReason, RiskDecision, RiskEvaluation
 from crypto_core.state.models import SystemState
 
 # ---------------------------------------------------------------------------

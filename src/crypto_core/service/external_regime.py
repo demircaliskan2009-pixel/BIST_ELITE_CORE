@@ -2025,11 +2025,7 @@ def external_regime_dimension_source_state_from_dict(d: dict) -> ExternalRegimeD
 
 def external_regime_snapshot_to_dict(snap: ExternalRegimeSnapshot) -> dict:
     """Serialize ExternalRegimeSnapshot to a plain dict."""
-    from crypto_core.execution.regime_contracts import (
-        _event_to_dict,
-        _onchain_to_dict,
-        _options_to_dict,
-    )
+    from crypto_core.execution.regime_contracts import _event_to_dict, _onchain_to_dict, _options_to_dict
 
     return {
         "snapshot_ns": snap.snapshot_ns,
@@ -2055,11 +2051,7 @@ def external_regime_snapshot_from_dict(d: dict) -> ExternalRegimeSnapshot:
 
     Raises ValueError on malformed data (fail-closed).
     """
-    from crypto_core.execution.regime_contracts import (
-        _event_from_dict,
-        _onchain_from_dict,
-        _options_from_dict,
-    )
+    from crypto_core.execution.regime_contracts import _event_from_dict, _onchain_from_dict, _options_from_dict
 
     try:
         return ExternalRegimeSnapshot(
@@ -2085,11 +2077,7 @@ def external_regime_snapshot_from_dict(d: dict) -> ExternalRegimeSnapshot:
 
 def external_regime_plane_to_dict(plane: ExternalRegimeDataPlane) -> dict:
     """Serialize the current data plane state for persistence."""
-    from crypto_core.execution.regime_contracts import (
-        _event_to_dict,
-        _onchain_to_dict,
-        _options_to_dict,
-    )
+    from crypto_core.execution.regime_contracts import _event_to_dict, _onchain_to_dict, _options_to_dict
 
     return {
         "staleness_threshold_s": plane.staleness_threshold_s,
@@ -2102,11 +2090,7 @@ def external_regime_plane_to_dict(plane: ExternalRegimeDataPlane) -> dict:
 
 def external_regime_plane_from_dict(d: dict) -> ExternalRegimeDataPlane:
     """Deserialize the data plane state from persistence."""
-    from crypto_core.execution.regime_contracts import (
-        _event_from_dict,
-        _onchain_from_dict,
-        _options_from_dict,
-    )
+    from crypto_core.execution.regime_contracts import _event_from_dict, _onchain_from_dict, _options_from_dict
 
     try:
         if d.get("freshness_policy") is not None:

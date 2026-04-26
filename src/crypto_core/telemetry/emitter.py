@@ -81,9 +81,7 @@ class TelemetryEmitter:
         errors = envelope.validate()
         if errors:
             error_str = "; ".join(errors)
-            raise TelemetryValidationError(
-                f"Telemetry payload invalid ({len(errors)} error(s)): {error_str}"
-            )
+            raise TelemetryValidationError(f"Telemetry payload invalid ({len(errors)} error(s)): {error_str}")
 
         path = self._file_path()
         line = self._serialize(envelope)

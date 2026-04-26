@@ -29,13 +29,7 @@ from crypto_core.edge.families.funding import FundingConfig, FundingSafetyContex
 from crypto_core.edge.families.liquidation import LiquidationConfig
 from crypto_core.edge.families.order_flow import OFIConfig
 from crypto_core.edge.families.volatility import VolatilityConfig
-from crypto_core.edge.models import (
-    EdgeFamily,
-    EdgeSignal,
-    SignalDirection,
-    edge_prd_family_code,
-    edge_prd_family_name,
-)
+from crypto_core.edge.models import EdgeFamily, EdgeSignal, SignalDirection, edge_prd_family_code, edge_prd_family_name
 from crypto_core.edge.registry import EdgeFamilyRegistry, RegistryConfig
 from crypto_core.edge_health.models import EdgeHealthSnapshot
 from crypto_core.guard.models import NoTradeDecision

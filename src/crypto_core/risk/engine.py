@@ -18,15 +18,8 @@ import logging
 
 from crypto_core.edge.models import EdgeSignal
 from crypto_core.guard.models import NoTradeDecision
-from crypto_core.risk.contracts import (
-    KS_BLOCK_THRESHOLD,
-    RiskInput,
-)
-from crypto_core.risk.models import (
-    RiskBlockReason,
-    RiskDecision,
-    RiskEvaluation,
-)
+from crypto_core.risk.contracts import KS_BLOCK_THRESHOLD, RiskInput
+from crypto_core.risk.models import RiskBlockReason, RiskDecision, RiskEvaluation
 from crypto_core.state.models import SystemState, is_at_least
 
 logger = logging.getLogger(__name__)

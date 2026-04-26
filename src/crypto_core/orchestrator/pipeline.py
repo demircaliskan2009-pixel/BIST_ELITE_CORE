@@ -31,11 +31,7 @@ from crypto_core.execution.lifecycle import ExecutionLifecycleConfig, ExecutionL
 from crypto_core.execution.models import BookContext, ExecutionDecision, ExecutionRequest, OrderIntent
 from crypto_core.execution.paper_adapter import PaperAdapterConfig
 from crypto_core.execution.recovery import RecoveryEvidence
-from crypto_core.execution.route_binding import (
-    MetadataGatedRouter,
-    RouteDecision,
-    RouteDecisionOutcome,
-)
+from crypto_core.execution.route_binding import MetadataGatedRouter, RouteDecision, RouteDecisionOutcome
 from crypto_core.execution.tca_loop import ExecutionTCALoop, PriceUpdateResult
 from crypto_core.execution.venue_metadata import VenueMetadataSnapshot
 from crypto_core.execution.venue_scoring import VenueScoreComponents
@@ -58,11 +54,7 @@ from crypto_core.risk.contracts import KS_LEVEL_NORMAL, RiskInput
 from crypto_core.risk.engine import RiskEngine
 from crypto_core.risk.kill_switch import KillSwitchEngine, KillSwitchInput, KillSwitchResult
 from crypto_core.risk.models import RiskDecision, RiskEvaluation
-from crypto_core.service.external_regime import (
-    ExternalRegimeDataPlane,
-    ExternalRegimeManager,
-    ExternalRegimeSnapshot,
-)
+from crypto_core.service.external_regime import ExternalRegimeDataPlane, ExternalRegimeManager, ExternalRegimeSnapshot
 from crypto_core.state.engine import SystemStateEngine
 from crypto_core.state.models import SignalInputs, StateSnapshot, SystemState, is_at_least
 from crypto_core.telemetry.emitter import TelemetryEmitter

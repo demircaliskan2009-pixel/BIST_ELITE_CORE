@@ -21,7 +21,6 @@ Design rules:
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -120,10 +119,8 @@ class SleevePortfolioController:
         history: tuple[SleevePortfolioHistoryEntry, ...] = (),
         current_snapshot: SleevePortfolioSnapshot | None = None,
         allocation_policy: SleeveAllocationPolicy | None = None,
-        clock_ns: Callable[[], int] | None = None,
     ) -> None:
-        self._clock_ns = time.time_ns if clock_ns is None else clock_ns
-        now = created_at_ns if created_at_ns is not None else self._now_ns()
+        now = created_at_ns if created_at_ns is not None else time.time_ns()
         self._created_at_ns = now
         self._updated_at_ns = now
         self._status = SleevePortfolioWorkflowStatus.CREATED
@@ -157,14 +154,14 @@ class SleevePortfolioController:
         self._operator_overrides = self._validated_overrides(
             tuple(self._operator_overrides.values()), self._defined_sleeves
         )
-        self._updated_at_ns = self._now_ns()
+        self._updated_at_ns = time.time_ns()
         self._persist_workflow()
         return self._defined_sleeves
 
     def configure_allocation_policy(self, policy: SleeveAllocationPolicy) -> SleeveAllocationPolicy:
         """Replace the explicit effective-allocation recompute policy."""
         self._allocation_policy = policy
-        self._updated_at_ns = self._now_ns()
+        self._updated_at_ns = time.time_ns()
         self._persist_workflow()
         return self._allocation_policy
 
@@ -341,7 +338,6 @@ class SleevePortfolioController:
         evidence_store: EvidenceStore,
         *,
         history_limit: int = _DEFAULT_HISTORY_LIMIT,
-        clock_ns: Callable[[], int] | None = None,
     ) -> SleevePortfolioController:
         """Restore controller state from persisted workflow snapshot."""
         envelope = evidence_store.load_snapshot(_WORKFLOW_SNAPSHOT_NAME)
@@ -377,7 +373,6 @@ class SleevePortfolioController:
                 if data.get("allocation_policy") is None
                 else sleeve_allocation_policy_from_dict(dict(data.get("allocation_policy")))
             ),
-            clock_ns=clock_ns,
         )
         controller._status = status
         controller._updated_at_ns = _require_non_negative_int(data["updated_at_ns"], "updated_at_ns")
@@ -398,7 +393,7 @@ class SleevePortfolioController:
             mode=mode,
             reason_summary=reason_summary,
             required_change=required_change,
-            updated_at_ns=self._now_ns() if updated_at_ns is None else updated_at_ns,
+            updated_at_ns=time.time_ns() if updated_at_ns is None else updated_at_ns,
         )
         self._operator_overrides = dict(self._operator_overrides)
         self._operator_overrides[sleeve_id] = override
@@ -627,9 +622,6 @@ class SleevePortfolioController:
     def _require_known_sleeve(self, sleeve_id: str) -> None:
         if sleeve_id not in {item.sleeve_id for item in self._defined_sleeves}:
             raise KeyError(f"Unknown sleeve_id {sleeve_id!r}")
-
-    def _now_ns(self) -> int:
-        return _require_non_negative_int(self._clock_ns(), "clock_ns")
 
     def _validated_sleeves(self, sleeves: tuple[CryptoSleeveState, ...]) -> tuple[CryptoSleeveState, ...]:
         validated = build_sleeve_portfolio_snapshot(sleeves=sleeves, as_of_ns=0)

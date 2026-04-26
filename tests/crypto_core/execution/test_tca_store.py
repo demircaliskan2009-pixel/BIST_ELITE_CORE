@@ -18,12 +18,7 @@ import pytest
 
 from crypto_core.execution.attribution import AttributionStatus, TradeAttribution
 from crypto_core.execution.tca import TCARecord, TCAStatus
-from crypto_core.execution.tca_store import (
-    RestoredTCAState,
-    TCAStore,
-    TCAStoreCorruptError,
-    TCAStoreStats,
-)
+from crypto_core.execution.tca_store import RestoredTCAState, TCAStore, TCAStoreCorruptError, TCAStoreStats
 
 
 @pytest.fixture()

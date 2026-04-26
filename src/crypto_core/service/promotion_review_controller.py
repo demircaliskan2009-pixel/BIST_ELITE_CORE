@@ -31,13 +31,8 @@ import uuid
 from dataclasses import dataclass
 from enum import Enum
 
-from crypto_core.service.campaign import (
-    CampaignReport,
-)
-from crypto_core.service.evidence_store import (
-    EvidenceStore,
-    WriteResult,
-)
+from crypto_core.service.campaign import CampaignReport
+from crypto_core.service.evidence_store import EvidenceStore, WriteResult
 from crypto_core.service.promotion_review import (
     CampaignAggregation,
     PromotionPolicy,

@@ -26,11 +26,7 @@ from crypto_core.execution.lifecycle import ExecutionLifecycleConfig, ExecutionL
 from crypto_core.execution.markout import MarkoutObserver, MarkoutObserverConfig
 from crypto_core.execution.models import ExecutionMode
 from crypto_core.execution.paper_adapter import PaperAdapterConfig
-from crypto_core.execution.route_binding import (
-    MetadataGatedRouter,
-    MetadataGatedRouterConfig,
-    RouteDecisionOutcome,
-)
+from crypto_core.execution.route_binding import MetadataGatedRouter, MetadataGatedRouterConfig, RouteDecisionOutcome
 from crypto_core.execution.tca_loop import ExecutionTCALoop, TCALoopConfig
 from crypto_core.execution.tca_store import TCAStore
 from crypto_core.execution.venue_metadata import (

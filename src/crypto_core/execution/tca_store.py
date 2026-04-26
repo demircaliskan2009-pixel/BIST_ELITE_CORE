@@ -21,16 +21,8 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from crypto_core.execution.attribution import (
-    TradeAttribution,
-    attribution_from_dict,
-    attribution_to_dict,
-)
-from crypto_core.execution.tca import (
-    TCARecord,
-    tca_record_from_dict,
-    tca_record_to_dict,
-)
+from crypto_core.execution.attribution import TradeAttribution, attribution_from_dict, attribution_to_dict
+from crypto_core.execution.tca import TCARecord, tca_record_from_dict, tca_record_to_dict
 
 logger = logging.getLogger(__name__)
 

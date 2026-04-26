@@ -18,26 +18,10 @@ from crypto_core.execution.regime_contracts import (
     OptionsRegimeLevel,
     OptionsRegimeState,
 )
-from crypto_core.service.campaign import (
-    AcceptanceResult,
-    AcceptanceVerdict,
-    CampaignReport,
-    CampaignSnapshot,
-)
-from crypto_core.service.campaign_controller import (
-    CampaignController,
-    _report_to_dict,
-    campaign_readiness_flags,
-)
-from crypto_core.service.external_regime import (
-    DimensionFreshness,
-    ExternalRegimeSnapshot,
-)
-from crypto_core.service.promotion_review import (
-    PromotionPolicy,
-    PromotionThresholds,
-    build_campaign_aggregation,
-)
+from crypto_core.service.campaign import AcceptanceResult, AcceptanceVerdict, CampaignReport, CampaignSnapshot
+from crypto_core.service.campaign_controller import CampaignController, _report_to_dict, campaign_readiness_flags
+from crypto_core.service.external_regime import DimensionFreshness, ExternalRegimeSnapshot
+from crypto_core.service.promotion_review import PromotionPolicy, PromotionThresholds, build_campaign_aggregation
 from crypto_core.service.promotion_review_controller import (
     CurrentReviewSnapshot,
     FinalReviewReport,
@@ -191,12 +175,7 @@ def _high_risk_regime_snapshot(*, now_ns: int = 0) -> ExternalRegimeSnapshot:
 
 def _make_service_status():
     """Minimal ServiceStatus for campaign controller."""
-    from crypto_core.service.models import (
-        QueuePressure,
-        QueueSnapshot,
-        ServiceStatus,
-        WatchdogStatus,
-    )
+    from crypto_core.service.models import QueuePressure, QueueSnapshot, ServiceStatus, WatchdogStatus
 
     now_ns = time.time_ns()
     return ServiceStatus(
@@ -706,11 +685,7 @@ class TestCampaignMetadataExtRegimePersistence:
     """CampaignMetadata ext_regime fields round-trip through to_dict/from_dict."""
 
     def test_round_trip(self):
-        from crypto_core.service.campaign import (
-            CampaignConfig,
-            CampaignMetadata,
-            campaign_metadata_from_dict,
-        )
+        from crypto_core.service.campaign import CampaignConfig, CampaignMetadata, campaign_metadata_from_dict
 
         meta = CampaignMetadata(campaign_id="c-1", config=CampaignConfig())
         meta.ext_regime_available = True

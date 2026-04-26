@@ -2,13 +2,7 @@
 
 from __future__ import annotations
 
-from crypto_core.risk.contracts import (
-    KS_LEVEL_BLOCK,
-    KS_LEVEL_FLATTEN,
-    KS_LEVEL_HALT,
-    KS_LEVEL_NORMAL,
-    KS_LEVEL_REDUCE,
-)
+from crypto_core.risk.contracts import KS_LEVEL_BLOCK, KS_LEVEL_FLATTEN, KS_LEVEL_HALT, KS_LEVEL_NORMAL, KS_LEVEL_REDUCE
 from crypto_core.risk.kill_switch import (
     TRIGGER_CRITICAL_EXCEPTION,
     TRIGGER_DATA_FAILURE_REPEATED,

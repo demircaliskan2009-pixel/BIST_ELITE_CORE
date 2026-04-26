@@ -3,7 +3,11 @@
   "title": "Telemetry Envelope",
   "description": "Per-stage telemetry event emitted by each pipeline stage. One JSONL file per day: telemetry_YYYY-MM-DD.jsonl",
   "type": "object",
-  "required": ["timestamp_ms", "stage", "metrics"],
+  "required": [
+    "timestamp_ms",
+    "stage",
+    "metrics"
+  ],
   "properties": {
     "timestamp_ms": {
       "type": "integer",
@@ -11,7 +15,12 @@
     },
     "stage": {
       "type": "string",
-      "enum": ["data", "edge", "risk", "execution"],
+      "enum": [
+        "data",
+        "edge",
+        "risk",
+        "execution"
+      ],
       "description": "Pipeline stage that emitted this event."
     },
     "metrics": {
@@ -78,14 +87,28 @@
       "description": "Threshold breach alerts emitted with this event.",
       "items": {
         "type": "object",
-        "required": ["metric", "value", "threshold", "severity"],
+        "required": [
+          "metric",
+          "value",
+          "threshold",
+          "severity"
+        ],
         "properties": {
-          "metric": { "type": "string" },
-          "value": { "type": "number" },
-          "threshold": { "type": "number" },
+          "metric": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number"
+          },
+          "threshold": {
+            "type": "number"
+          },
           "severity": {
             "type": "string",
-            "enum": ["warning", "critical"]
+            "enum": [
+              "warning",
+              "critical"
+            ]
           }
         }
       }

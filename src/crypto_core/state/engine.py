@@ -66,9 +66,7 @@ def _target_state_from_shs(shs: float) -> SystemState:
     return SystemState.HALT
 
 
-def _apply_overrides(
-    signals: SignalInputs, shs_target: SystemState
-) -> tuple[SystemState, str]:
+def _apply_overrides(signals: SignalInputs, shs_target: SystemState) -> tuple[SystemState, str]:
     """Apply critical override rules per §1.29.
 
     Returns (final_state, override_reason).
@@ -313,13 +311,9 @@ class SystemStateEngine:
         if len(self._transitions) > self._MAX_HISTORY:
             self._transitions = self._transitions[-self._MAX_HISTORY :]
 
-        logger.warning(
-            "SystemState %s → %s (SHS=%.4f) %s", old, new_state, shs, reason
-        )
+        logger.warning("SystemState %s → %s (SHS=%.4f) %s", old, new_state, shs, reason)
 
-    def _force_halt(
-        self, ts: int, reason: str, signals: SignalInputs
-    ) -> None:
+    def _force_halt(self, ts: int, reason: str, signals: SignalInputs) -> None:
         """Force-transition to HALT without any checks."""
         if self._current_state != SystemState.HALT:
             self._do_transition(ts, SystemState.HALT, reason, signals, 0.0)

@@ -34,9 +34,7 @@ from crypto_core.runtime.assembler import MarketStateAssembler
 from crypto_core.runtime.bridge import FeedSessionBridge
 from crypto_core.runtime.models import RuntimeBridgeConfig, TriggerPolicy
 from crypto_core.runtime.runner import PaperLiveRunner
-from crypto_core.service.execution_intelligence import (
-    ExecutionIntelligenceBootstrap,
-)
+from crypto_core.service.execution_intelligence import ExecutionIntelligenceBootstrap
 from crypto_core.service.models import (
     ExecutionIntelligenceConfig,
     ExecutionIntelligenceMode,

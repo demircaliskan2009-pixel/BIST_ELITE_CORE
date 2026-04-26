@@ -34,12 +34,7 @@ from crypto_core.orchestrator.models import MarketDataInput, PipelineResult
 from crypto_core.orchestrator.pipeline import PipelineOrchestrator
 from crypto_core.portfolio.store import PortfolioStateStore
 from crypto_core.portfolio.tracker import PositionTracker
-from crypto_core.session.models import (
-    CycleResult,
-    PaperSessionConfig,
-    PaperSessionStatus,
-    SessionMode,
-)
+from crypto_core.session.models import CycleResult, PaperSessionConfig, PaperSessionStatus, SessionMode
 from crypto_core.state.models import SignalInputs
 
 logger = logging.getLogger(__name__)

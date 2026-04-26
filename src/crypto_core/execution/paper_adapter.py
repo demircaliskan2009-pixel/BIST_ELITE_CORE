@@ -33,13 +33,7 @@ from dataclasses import dataclass
 from crypto_core.execution.adapter import VenueAdapter
 from crypto_core.execution.events import FillEvent, OrderEvent, OrderEventType
 from crypto_core.execution.fill_pricer import FillPricer, FillPricerConfig
-from crypto_core.execution.models import (
-    BookContext,
-    ExecutionMode,
-    OrderIntent,
-    RejectionReason,
-    SlippageResult,
-)
+from crypto_core.execution.models import BookContext, ExecutionMode, OrderIntent, RejectionReason, SlippageResult
 from crypto_core.execution.state_machine import Order, OrderState
 
 logger = logging.getLogger(__name__)

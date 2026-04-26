@@ -22,11 +22,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 
-from crypto_core.execution.venue_metadata import (
-    MetadataFreshness,
-    VenueMetadataSnapshot,
-    VenueOperationalStatus,
-)
+from crypto_core.execution.venue_metadata import MetadataFreshness, VenueMetadataSnapshot, VenueOperationalStatus
 from crypto_core.execution.venue_scoring import (
     ExpectedCostEstimate,
     RoutingAction,

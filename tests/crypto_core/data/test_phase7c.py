@@ -26,12 +26,7 @@ import pytest
 
 from crypto_core.data.ingestion.data_ingestor import DataIngestor
 from crypto_core.data.ingestion.websocket_client import WebSocketClient, WebSocketConfig
-from crypto_core.data.models.events import (
-    Exchange,
-    OrderBookEvent,
-    OrderBookEventType,
-    OrderBookLevel,
-)
+from crypto_core.data.models.events import Exchange, OrderBookEvent, OrderBookEventType, OrderBookLevel
 from crypto_core.data.models.feed_state import ConnectionState, RecoveryState
 from crypto_core.data.recovery.delta_buffer import DeltaBuffer, SequenceGapError
 from tests.crypto_core.data.fixtures.ws_simulator import WebSocketSimulator

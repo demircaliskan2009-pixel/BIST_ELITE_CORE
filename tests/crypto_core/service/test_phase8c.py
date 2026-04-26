@@ -51,10 +51,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from crypto_core.data.models.events import (
-    Exchange,
-    MarkPriceEvent,
-)
+from crypto_core.data.models.events import Exchange, MarkPriceEvent
 from crypto_core.data.models.feed_state import ConnectionState, FeedState, RecoveryState
 from crypto_core.execution.engine import ExecutionConfig
 from crypto_core.execution.fill_pricer import FillPricerConfig
@@ -67,11 +64,7 @@ from crypto_core.runtime.assembler import MarketStateAssembler
 from crypto_core.runtime.bridge import FeedSessionBridge
 from crypto_core.runtime.models import RuntimeBridgeConfig, RuntimeStatus, TriggerPolicy
 from crypto_core.runtime.runner import PaperLiveRunner
-from crypto_core.service.artifact_export import (
-    build_run_artifact,
-    export_run_artifact,
-    load_run_artifact,
-)
+from crypto_core.service.artifact_export import build_run_artifact, export_run_artifact, load_run_artifact
 from crypto_core.service.audit import AuditConfig, AuditTrail
 from crypto_core.service.evidence_store import (
     EvidenceStore,
@@ -79,14 +72,8 @@ from crypto_core.service.evidence_store import (
     EvidenceStoreCorruptError,
     WriteResult,
 )
-from crypto_core.service.health import (
-    HealthConfig,
-    HealthTracker,
-)
-from crypto_core.service.metrics import (
-    build_operational_metrics,
-    build_trading_metrics,
-)
+from crypto_core.service.health import HealthConfig, HealthTracker
+from crypto_core.service.metrics import build_operational_metrics, build_trading_metrics
 from crypto_core.service.models import (
     QueuePressure,
     QueueSnapshot,

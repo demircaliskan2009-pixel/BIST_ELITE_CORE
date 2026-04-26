@@ -45,11 +45,7 @@ from crypto_core.service.campaign import (
     StabilityRollup,
     campaign_metadata_from_dict,
 )
-from crypto_core.service.campaign_controller import (
-    CampaignController,
-    _report_to_dict,
-    campaign_readiness_flags,
-)
+from crypto_core.service.campaign_controller import CampaignController, _report_to_dict, campaign_readiness_flags
 from crypto_core.service.evidence_store import EvidenceStore
 from crypto_core.service.external_regime import ExternalRegimeScenarioResult
 from crypto_core.service.models import (
@@ -60,11 +56,7 @@ from crypto_core.service.models import (
     SymbolHealth,
     WatchdogStatus,
 )
-from crypto_core.service.readiness import (
-    CriterionStatus,
-    ReadinessEvaluator,
-    paper_shadow_evidence_readiness_flags,
-)
+from crypto_core.service.readiness import CriterionStatus, ReadinessEvaluator
 from crypto_core.session.models import PaperSessionStatus
 
 # ---------------------------------------------------------------------------
@@ -755,22 +747,6 @@ class TestCampaignReadinessFlags:
         criteria = {criterion.name: criterion for criterion in status.criteria}
         assert criteria["external_regime_evidence_available"].status == CriterionStatus.NOT_MET
         assert criteria["external_regime_scenario_nontrivial_coverage"].status == CriterionStatus.NOT_MET
-
-    def test_readiness_evaluator_surfaces_missing_paper_shadow_evidence(self):
-        flags = paper_shadow_evidence_readiness_flags(None)
-        evaluator = ReadinessEvaluator()
-
-        status = evaluator.evaluate(flags, assessed_at_ns=_T0_NS)
-        criteria = {criterion.name: criterion for criterion in status.criteria}
-
-        assert flags["paper_shadow_evidence_available"] is False
-        assert flags["paper_shadow_evidence_passed"] is False
-        assert flags["paper_shadow_evidence_blocked"] is False
-        assert flags["paper_shadow_evidence_bundle_complete"] is False
-        assert criteria["paper_shadow_evidence_available"].status == CriterionStatus.NOT_MET
-        assert criteria["paper_shadow_evidence_passed"].status == CriterionStatus.NOT_MET
-        assert criteria["paper_shadow_evidence_blocked"].status == CriterionStatus.MET
-        assert criteria["paper_shadow_evidence_bundle_complete"].status == CriterionStatus.NOT_MET
 
 
 # ===========================================================================

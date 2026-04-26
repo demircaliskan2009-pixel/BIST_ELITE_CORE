@@ -46,10 +46,7 @@ from crypto_core.service.campaign import (
     StabilityRollup,
     SymbolParticipation,
 )
-from crypto_core.service.evidence_store import (
-    EvidenceStore,
-    EvidenceStoreConfig,
-)
+from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreConfig
 from crypto_core.service.promotion_review import (
     AggregateConsistency,
     CampaignAggregation,

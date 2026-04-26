@@ -27,7 +27,6 @@ PRD reference: §2 System Orchestration, §7 Execution Engine.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
 
 from crypto_core.service.artifact_export import (
@@ -47,100 +46,14 @@ from crypto_core.service.artifact_export import (
     escalation_decision_why_not_higher,
     export_escalation_decision,
     export_operator_decision_pack,
-    export_paper_cost_result,
-    export_paper_data_source_batch_result,
-    export_paper_fill_simulation_result,
-    export_paper_intent_batch,
-    export_paper_intent_batch_result,
-    export_paper_pnl_ledger,
-    export_paper_portfolio_risk_snapshot,
-    export_paper_risk_limit_decision,
-    export_paper_trading_run_summary,
     export_sleeve_portfolio_snapshot,
     load_escalation_decision,
     load_operator_decision_pack,
-    load_paper_cost_result,
-    load_paper_data_source_batch_result,
-    load_paper_fill_simulation_result,
-    load_paper_intent_batch,
-    load_paper_intent_batch_result,
-    load_paper_pnl_ledger,
-    load_paper_portfolio_risk_snapshot,
-    load_paper_risk_limit_decision,
-    load_paper_trading_run_summary,
     load_sleeve_portfolio_snapshot,
     operator_disposition_from_verdict,
 )
-from crypto_core.service.artifact_export import (
-    export_managed_sleeve_set_manifest as export_managed_sleeve_manifest,
-)
-from crypto_core.service.artifact_export import (
-    export_multi_source_run_evidence_report as export_multi_source_evidence_report,
-)
-from crypto_core.service.artifact_export import (
-    export_paper_shadow_activation_plan as export_paper_shadow_plan,
-)
-from crypto_core.service.artifact_export import (
-    export_paper_shadow_evidence_bundle as export_evidence_bundle,
-)
-from crypto_core.service.artifact_export import (
-    export_paper_shadow_feed_replay_plan as export_feed_replay_plan,
-)
-from crypto_core.service.artifact_export import (
-    export_paper_shadow_feed_replay_result as export_feed_replay_result,
-)
-from crypto_core.service.artifact_export import (
-    export_paper_shadow_market_event_batch as export_market_event_batch,
-)
-from crypto_core.service.artifact_export import (
-    export_paper_shadow_run_evidence_report as export_run_evidence_report,
-)
-from crypto_core.service.artifact_export import (
-    export_paper_shadow_session_snapshot as export_paper_shadow_session,
-)
-from crypto_core.service.artifact_export import (
-    export_sleeve_admission_release_pack as export_admission_release_pack,
-)
-from crypto_core.service.artifact_export import (
-    load_managed_sleeve_set_manifest as load_managed_sleeve_manifest,
-)
-from crypto_core.service.artifact_export import (
-    load_multi_source_run_evidence_report as load_multi_source_evidence_report,
-)
-from crypto_core.service.artifact_export import (
-    load_paper_shadow_activation_plan as load_paper_shadow_plan,
-)
-from crypto_core.service.artifact_export import (
-    load_paper_shadow_evidence_bundle as load_evidence_bundle,
-)
-from crypto_core.service.artifact_export import (
-    load_paper_shadow_feed_replay_plan as load_feed_replay_plan,
-)
-from crypto_core.service.artifact_export import (
-    load_paper_shadow_feed_replay_result as load_feed_replay_result,
-)
-from crypto_core.service.artifact_export import (
-    load_paper_shadow_market_event_batch as load_market_event_batch,
-)
-from crypto_core.service.artifact_export import (
-    load_paper_shadow_run_evidence_report as load_run_evidence_report,
-)
-from crypto_core.service.artifact_export import (
-    load_paper_shadow_session_snapshot as load_paper_shadow_session,
-)
-from crypto_core.service.artifact_export import (
-    load_sleeve_admission_release_pack as load_admission_release_pack,
-)
-from crypto_core.service.campaign import (
-    CampaignConfig,
-    CampaignReport,
-    CampaignSleeveLinkSummary,
-    CampaignSnapshot,
-)
-from crypto_core.service.campaign_controller import (
-    CampaignController,
-    campaign_readiness_flags,
-)
+from crypto_core.service.campaign import CampaignConfig, CampaignReport, CampaignSleeveLinkSummary, CampaignSnapshot
+from crypto_core.service.campaign_controller import CampaignController, campaign_readiness_flags
 from crypto_core.service.escalation_review_controller import (
     CurrentEscalationReviewSnapshot,
     EscalationAttemptSummary,
@@ -168,53 +81,6 @@ from crypto_core.service.external_regime import (
 )
 from crypto_core.service.models import ServiceStatus
 from crypto_core.service.paper_live_service import PaperLiveService
-from crypto_core.service.paper_shadow_session_controller import (
-    FeedReplayPlan,
-    FeedReplayResult,
-    MarketEventBatch,
-    MultiSourceRunEvidenceReport,
-    PaperCostModel,
-    PaperCostResult,
-    PaperDataSourceBatchResult,
-    PaperFillSimulationResult,
-    PaperIntent,
-    PaperIntentBatch,
-    PaperIntentBatchResult,
-    PaperPnLLedger,
-    PaperPortfolioRiskSnapshot,
-    PaperRiskLimitDecision,
-    PaperRiskLimitPolicy,
-    PaperShadowEvidenceBundle,
-    PaperShadowRunEvidenceReport,
-    PaperShadowSessionController,
-    PaperShadowSessionSnapshot,
-    PaperTradingRunSummary,
-    build_feed_replay_plan,
-    build_multi_source_run_evidence_report,
-    build_paper_data_source_batch_result,
-    build_paper_shadow_evidence_bundle,
-    build_paper_shadow_run_evidence_report,
-    build_paper_trading_run_summary,
-    feed_replay_plan_to_dict,
-    feed_replay_result_to_dict,
-    guardrail_snapshot_to_dict,
-    market_event_batch_to_dict,
-    multi_source_run_evidence_report_to_dict,
-    paper_cost_result_to_dict,
-    paper_data_source_batch_result_to_dict,
-    paper_data_source_payload_to_market_event_batch,
-    paper_fill_simulation_result_to_dict,
-    paper_intent_batch_result_to_dict,
-    paper_intent_batch_to_dict,
-    paper_pnl_ledger_to_dict,
-    paper_portfolio_risk_snapshot_to_dict,
-    paper_risk_limit_decision_to_dict,
-    paper_shadow_evidence_bundle_to_dict,
-    paper_shadow_run_evidence_report_to_dict,
-    paper_shadow_session_snapshot_to_dict,
-    paper_trading_run_summary_to_dict,
-    runtime_monitor_snapshot_to_dict,
-)
 from crypto_core.service.promotion_review import PromotionThresholds
 from crypto_core.service.promotion_review_controller import (
     CurrentReviewSnapshot,
@@ -223,28 +89,11 @@ from crypto_core.service.promotion_review_controller import (
     ReviewStatus,
     ReviewWorkflowCorruptError,
 )
-from crypto_core.service.readiness import (
-    ReadinessEvaluator,
-    paper_shadow_evidence_readiness_bridge,
-    paper_shadow_evidence_readiness_flags,
-    readiness_to_dict,
-)
+from crypto_core.service.readiness import ReadinessEvaluator, readiness_to_dict
 from crypto_core.service.sleeve_admission_controller import (
-    ManagedSleeveSetManifest,
-    PaperShadowActivationPlan,
     SleeveAdmissionController,
-    SleeveAdmissionReleasePack,
+    SleeveAdmissionCorruptError,
     SleeveAdmissionSnapshot,
-    build_managed_sleeve_set_manifest,
-    build_paper_shadow_activation_plan,
-    managed_sleeve_set_manifest_to_dict,
-    paper_shadow_activation_plan_to_dict,
-    sleeve_admission_portfolio_summary_to_dict,
-    sleeve_admission_release_pack_to_dict,
-    sleeve_admission_snapshot_to_dict,
-)
-from crypto_core.service.sleeve_admission_controller import (
-    build_sleeve_admission_release_pack as build_admission_release_pack,
 )
 from crypto_core.service.sleeve_candidate_workflow import (
     SleeveCandidateWorkflowController,
@@ -272,16 +121,7 @@ from crypto_core.service.sleeve_portfolio import (
     sleeve_qualification_summary_to_dict,
     sleeve_recommendation_result_to_dict,
 )
-from crypto_core.service.sleeve_portfolio_controller import (
-    SleeveOperatorOverride,
-    SleevePortfolioController,
-)
-from crypto_core.service.sleeve_promotion_review_controller import (
-    SleevePromotionReviewController,
-    SleevePromotionReviewPortfolioSummary,
-    SleevePromotionReviewSnapshot,
-    sleeve_promotion_review_snapshot_to_dict,
-)
+from crypto_core.service.sleeve_portfolio_controller import SleeveOperatorOverride, SleevePortfolioController
 
 logger = logging.getLogger(__name__)
 
@@ -364,136 +204,6 @@ class SleeveCandidateWorkflowState:
 
 
 @dataclass(frozen=True)
-class SleeveAdmissionReleaseState:
-    """Compact sleeve admission release-pack status for operator snapshots."""
-
-    available: bool
-    pack_id: str | None
-    as_of_ns: int | None
-    overall_release_status: str
-    admitted_sleeves: int
-    admitted_active_sleeves: int
-    admitted_unallocated_sleeves: int
-    review_supported_not_admitted_sleeves: int
-    blocked_sleeves: int
-    inconclusive_sleeves: int
-    insufficient_evidence_sleeves: int
-    disabled_operator_off_sleeves: int
-    evidence_blockers: tuple[str, ...]
-    governance_blockers: tuple[str, ...]
-    evidence_gate_status: str = "evidence_missing"
-    paper_campaign_evidence_available: bool = False
-    sleeve_campaign_link_available: bool = False
-    promotion_review_evidence_available: bool = False
-    readiness_evidence_supportive: bool = False
-    tca_or_markout_evidence_supportive: bool = False
-    external_regime_evidence_supportive: bool = False
-
-
-@dataclass(frozen=True)
-class ManagedSleeveSetManifestState:
-    """Compact managed sleeve set manifest status for operator snapshots."""
-
-    available: bool
-    manifest_id: str | None
-    as_of_ns: int | None
-    dry_run_status: str
-    source_release_pack_status: str
-    source_evidence_gate_status: str
-    active_sleeves: int
-    admitted_unallocated_sleeves: int
-    blocked_sleeves: int
-    inconclusive_sleeves: int
-    unallocated_share: float
-    activation_blockers: tuple[str, ...]
-    evidence_blockers: tuple[str, ...]
-    governance_blockers: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class PaperShadowActivationPlanState:
-    """Compact paper/shadow activation plan status for operator snapshots."""
-
-    available: bool
-    plan_id: str | None
-    as_of_ns: int | None
-    activation_status: str
-    source_manifest_status: str
-    paper_only: bool
-    real_orders_enabled: bool
-    real_money_enabled: bool
-    active_sleeves: int
-    inactive_sleeves: int
-    activation_blockers: tuple[str, ...]
-    evidence_blockers: tuple[str, ...]
-    governance_blockers: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class PaperShadowSessionState:
-    """Compact paper/shadow session lifecycle status for operator snapshots."""
-
-    available: bool
-    session_id: str | None
-    status: str
-    plan_id: str | None
-    plan_status: str
-    tick_count: int
-    paper_only: bool
-    real_orders_enabled: bool
-    real_money_enabled: bool
-    active_sleeves_seen: int
-    blockers_seen: int
-    event_count: int
-    symbols_seen: int
-    venues_seen: int
-    first_event_ns: int | None
-    last_event_ns: int | None
-    rejected_event_count: int
-    intents_seen: int
-    accepted_intent_count: int
-    rejected_intent_count: int
-    intent_sleeves_seen: int
-    intent_symbols_seen: int
-    intent_venues_seen: int
-    intent_rejection_reasons: tuple[str, ...]
-    fill_attempts: int
-    simulated_fills: int
-    rejected_fills: int
-    symbols_filled: int
-    sleeves_filled: int
-    cost_evaluations: int
-    accepted_costs: int
-    rejected_costs: int
-    total_fee: float
-    total_slippage_cost: float
-    pnl_events: int
-    open_positions: int
-    closed_positions: int
-    total_fees: float
-    total_slippage: float
-    realized_pnl: float
-    risk_limit_decision_status: str
-    risk_block_new_intents: bool
-    intents_blocked_by_risk: int
-    session_stop_requested_by_risk: bool
-    risk_reasons: tuple[str, ...]
-    runtime_monitor_status: str
-    stale_feed_detected: bool
-    symbol_coverage_ok: bool
-    venue_coverage_ok: bool
-    price_validity_ok: bool
-    event_gap_count: int
-    guardrail_primary_action: str
-    guardrail_actions: tuple[str, ...]
-    guardrail_block_finalize: bool
-    guardrail_reason_codes: tuple[str, ...]
-    started_at_ns: int | None
-    stopped_at_ns: int | None
-    finalized_at_ns: int | None
-
-
-@dataclass(frozen=True)
 class EvidenceSufficiencyState:
     """Evidence sufficiency summary for operator truthfulness.
 
@@ -518,11 +228,6 @@ class EvidenceSufficiencyState:
     external_regime_activation_blocked_steps: int = 0
     external_regime_activation_reduced_steps: int = 0
     external_regime_scenario_summary: str = ""
-    paper_shadow_evidence_available: bool = False
-    paper_shadow_evidence_passed: bool = False
-    paper_shadow_evidence_blocked: bool = False
-    paper_shadow_evidence_bundle_complete: bool = False
-    paper_shadow_evidence_status: str = "missing"
 
 
 @dataclass(frozen=True)
@@ -589,18 +294,6 @@ class OperatorSnapshot:
     # Phase 15F: Sleeve admission gate
     sleeve_admission: SleeveAdmissionSnapshot | None = None
 
-    # Phase 15I: Sleeve admission release-pack compact status
-    sleeve_admission_release: SleeveAdmissionReleaseState | None = None
-
-    # Phase 15K: Paper-only managed sleeve set manifest compact status
-    managed_sleeve_manifest: ManagedSleeveSetManifestState | None = None
-
-    # Phase 15L: Paper/shadow activation plan compact status
-    paper_shadow_activation_plan: PaperShadowActivationPlanState | None = None
-
-    # Phase 15M: Paper/shadow session lifecycle compact status
-    paper_shadow_session: PaperShadowSessionState | None = None
-
     # Escalation review workflow (Phase 13B)
     escalation_review: EscalationWorkflowState | None = None
 
@@ -651,7 +344,6 @@ class ServiceOrchestrator:
         external_regime_policy: ExternalRegimeSafetyPolicy | None = None,
         sleeves: tuple[CryptoSleeveState, ...] = (),
         sleeve_allocation_policy: SleeveAllocationPolicy | None = None,
-        sleeve_workflow_clock_ns: Callable[[], int] | None = None,
     ) -> None:
         self._service = service
         self._evidence_store = evidence_store
@@ -659,7 +351,6 @@ class ServiceOrchestrator:
         self._promotion_thresholds = promotion_thresholds
         self._campaign_config = campaign_config
         self._external_regime_policy = external_regime_policy or ExternalRegimeSafetyPolicy()
-        self._sleeve_workflow_clock_ns = sleeve_workflow_clock_ns
 
         if external_regime_manager is not None and external_regime_plane is not None:
             if external_regime_manager.plane is not external_regime_plane:
@@ -680,73 +371,47 @@ class ServiceOrchestrator:
             self._external_regime_manager = None
             self._external_regime_plane = None
 
-        self._campaign: CampaignController | None = None
-        self._review: PromotionReviewController | None = None
-        self._last_campaign_report: CampaignReport | None = None
-        self._sleeve_portfolio_controller: SleevePortfolioController | None = None
-        self._sleeve_candidate_workflow_controller: SleeveCandidateWorkflowController | None = None
-        self._sleeve_promotion_review_controller: SleevePromotionReviewController | None = None
-        self._sleeve_admission_controller: SleeveAdmissionController | None = None
-        self._paper_shadow_session_controller: PaperShadowSessionController | None = None
-        self._paper_shadow_evidence_bundle: PaperShadowEvidenceBundle | None = None
+        self._sleeve_promotion_review_controller = None
+        self._campaign = None
+        self._review = None
+        self._last_campaign_report = None
+        self._sleeve_portfolio_controller = None
         self._configured_sleeves = tuple(sleeves)
-        self._escalation_review: EscalationReviewController | None = None
+        self._escalation_review = None
         self._sleeve_allocation_policy = (
             SleeveAllocationPolicy() if sleeve_allocation_policy is None else sleeve_allocation_policy
         )
+        self._sleeve_admission_controller = None
 
-    def build_sleeve_admission_controller(
-        self,
-        *,
-        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
-        review_portfolio_summary: SleevePromotionReviewPortfolioSummary | None = None,
-        history_limit: int = 5,
-    ) -> SleeveAdmissionController:
-        """Build or refresh the sleeve admission controller from current review and portfolio truth."""
-        if review_portfolio_summary is None:
-            review_snapshot = self.sleeve_promotion_review_snapshot()
-            review_portfolio_summary = None if review_snapshot is None else review_snapshot.portfolio_summary
-        portfolio = self.sleeve_portfolio_snapshot() if portfolio_snapshot is None else portfolio_snapshot
-        if self._sleeve_admission_controller is None:
-            self._sleeve_admission_controller = SleeveAdmissionController(
-                review_portfolio_summary,
-                portfolio_snapshot=portfolio,
-                history_limit=history_limit,
-            )
-        else:
-            self._sleeve_admission_controller.configure(
-                review_portfolio_summary,
-                portfolio_snapshot=portfolio,
-            )
+    def build_sleeve_admission_controller(self):
+        """Build and cache the sleeve admission controller from current review portfolio summary."""
+        review_portfolio_summary = self.get_review_portfolio_summary()
+        if not review_portfolio_summary:
+            raise SleeveAdmissionCorruptError("No review portfolio summary for admission.")
+        self._sleeve_admission_controller = SleeveAdmissionController(review_portfolio_summary)
         return self._sleeve_admission_controller
 
-    def get_sleeve_admission_snapshot(
-        self,
-        *,
-        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
-    ) -> SleeveAdmissionSnapshot:
-        controller = self.build_sleeve_admission_controller(portfolio_snapshot=portfolio_snapshot)
-        return controller.snapshot()
+    def get_sleeve_admission_snapshot(self):
+        if not self._sleeve_admission_controller:
+            self.build_sleeve_admission_controller()
+        return self._sleeve_admission_controller.snapshot()
 
-    def get_sleeve_admission_portfolio_summary(
-        self,
-        *,
-        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
-    ):
-        controller = self.build_sleeve_admission_controller(portfolio_snapshot=portfolio_snapshot)
-        return controller.build_portfolio_summary()
+    def get_sleeve_admission_portfolio_summary(self):
+        if not self._sleeve_admission_controller:
+            self.build_sleeve_admission_controller()
+        return self._sleeve_admission_controller.build_portfolio_summary()
+        self._last_campaign_report: CampaignReport | None = None
 
-    def finalize_sleeve_admission(
-        self,
-        *,
-        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
-    ) -> SleeveAdmissionSnapshot:
-        controller = self.build_sleeve_admission_controller(portfolio_snapshot=portfolio_snapshot)
-        return controller.finalize()
-
-    def reset_sleeve_admission(self) -> None:
-        if self._sleeve_admission_controller is not None:
-            self._sleeve_admission_controller.reset()
+        self._review: PromotionReviewController | None = None
+        self._escalation_review: EscalationReviewController | None = None
+        self._configured_sleeves = tuple(sleeves)
+        self._sleeve_allocation_policy = (
+            SleeveAllocationPolicy() if sleeve_allocation_policy is None else sleeve_allocation_policy
+        )
+        self._sleeve_portfolio_controller: SleevePortfolioController | None = None
+        self._sleeve_candidate_workflow_controller: SleeveCandidateWorkflowController | None = None
+        # Phase 15E: Sleeve Promotion Review Controller
+        self._sleeve_promotion_review_controller: SleevePromotionReviewController | None = None
 
     # ------------------------------------------------------------------
     # Sleeve promotion review surface (Phase 15E)
@@ -758,9 +423,7 @@ class ServiceOrchestrator:
         from crypto_core.service.sleeve_promotion_review_controller import SleevePromotionReviewController
 
         self._sleeve_promotion_review_controller = SleevePromotionReviewController(
-            workflow_snapshot,
-            history_limit=history_limit,
-            clock_ns=self._sleeve_workflow_clock_ns,
+            workflow_snapshot, history_limit=history_limit
         )
 
     def inspect_sleeve_promotion_review(self) -> SleevePromotionReviewSnapshot | None:
@@ -786,939 +449,7 @@ class ServiceOrchestrator:
         snap = self.sleeve_promotion_review_snapshot()
         if snap is None:
             return None
-        return sleeve_promotion_review_snapshot_to_dict(snap)
-
-    def sleeve_admission_snapshot(self) -> SleeveAdmissionSnapshot:
-        """Return the current sleeve admission gate snapshot."""
-        return self.get_sleeve_admission_snapshot()
-
-    def sleeve_admission_dict(self) -> dict:
-        """Serialize the current sleeve admission gate snapshot."""
-        return sleeve_admission_snapshot_to_dict(self.sleeve_admission_snapshot())
-
-    def sleeve_admission_summary_dict(self) -> dict:
-        """Serialize the portfolio-level sleeve admission summary."""
-        return sleeve_admission_portfolio_summary_to_dict(self.get_sleeve_admission_portfolio_summary())
-
-    def sleeve_admission_release_pack(
-        self,
-        *,
-        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
-        admission_snapshot: SleeveAdmissionSnapshot | None = None,
-        promotion_review_snapshot: SleevePromotionReviewSnapshot | None = None,
-        candidate_workflow_snapshot: SleeveCandidateWorkflowSnapshot | None = None,
-        campaign_report: CampaignReport | None = None,
-        readiness_flags: dict[str, bool] | None = None,
-    ) -> SleeveAdmissionReleasePack:
-        """Build the deterministic operator-facing sleeve admission release pack."""
-        portfolio = self.sleeve_portfolio_snapshot() if portfolio_snapshot is None else portfolio_snapshot
-        source_campaign_report = self._last_campaign_report if campaign_report is None else campaign_report
-        source_readiness_flags = (
-            None if source_campaign_report is None else campaign_readiness_flags(source_campaign_report)
-        )
-        if readiness_flags is not None:
-            source_readiness_flags = readiness_flags
-        if readiness_flags is None:
-            source_readiness_flags = self._with_paper_shadow_evidence_flags(source_readiness_flags)
-        promotion_review = promotion_review_snapshot
-        if promotion_review is None and self._sleeve_promotion_review_controller is not None:
-            promotion_review = self._sleeve_promotion_review_controller.snapshot()
-        review_portfolio_summary = None if promotion_review is None else promotion_review.portfolio_summary
-        admission = admission_snapshot
-        if admission is None:
-            admission = self.build_sleeve_admission_controller(
-                portfolio_snapshot=portfolio,
-                review_portfolio_summary=review_portfolio_summary,
-            ).snapshot()
-        candidate_workflow = (
-            self.sleeve_candidate_workflow_snapshot()
-            if candidate_workflow_snapshot is None
-            else candidate_workflow_snapshot
-        )
-        return build_admission_release_pack(
-            admission,
-            promotion_review_snapshot=promotion_review,
-            candidate_workflow_snapshot=candidate_workflow,
-            portfolio_snapshot=portfolio,
-            campaign_report=source_campaign_report,
-            readiness_flags=source_readiness_flags,
-        )
-
-    def sleeve_admission_release_pack_dict(self) -> dict:
-        """Serialize the current sleeve admission release pack to a plain dict."""
-        return sleeve_admission_release_pack_to_dict(self.sleeve_admission_release_pack())
-
-    def export_sleeve_admission_release_pack(self):
-        """Persist the current sleeve admission release pack via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for sleeve admission release pack export")
-        return export_admission_release_pack(
-            pack=self.sleeve_admission_release_pack(),
-            evidence_store=self._evidence_store,
-        )
-
-    def load_sleeve_admission_release_pack(self) -> SleeveAdmissionReleasePack:
-        """Load the latest persisted sleeve admission release pack."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for sleeve admission release pack load")
-        return load_admission_release_pack(evidence_store=self._evidence_store)
-
-    def managed_sleeve_set_manifest(
-        self,
-        *,
-        release_pack: SleeveAdmissionReleasePack | None = None,
-        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
-    ) -> ManagedSleeveSetManifest:
-        """Build the deterministic paper-only managed sleeve set manifest."""
-        portfolio = self.sleeve_portfolio_snapshot() if portfolio_snapshot is None else portfolio_snapshot
-        pack = (
-            release_pack
-            if release_pack is not None
-            else self.sleeve_admission_release_pack(portfolio_snapshot=portfolio)
-        )
-        return build_managed_sleeve_set_manifest(pack, portfolio_snapshot=portfolio)
-
-    def managed_sleeve_set_manifest_dict(self) -> dict:
-        """Serialize the current managed sleeve set manifest to a plain dict."""
-        return managed_sleeve_set_manifest_to_dict(self.managed_sleeve_set_manifest())
-
-    def export_managed_sleeve_set_manifest(self):
-        """Persist the current managed sleeve set manifest via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for managed sleeve set manifest export")
-        return export_managed_sleeve_manifest(
-            manifest=self.managed_sleeve_set_manifest(),
-            evidence_store=self._evidence_store,
-        )
-
-    def load_managed_sleeve_set_manifest(self) -> ManagedSleeveSetManifest:
-        """Load the latest persisted managed sleeve set manifest."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for managed sleeve set manifest load")
-        return load_managed_sleeve_manifest(evidence_store=self._evidence_store)
-
-    def paper_shadow_activation_plan(
-        self,
-        *,
-        manifest: ManagedSleeveSetManifest | None = None,
-        release_pack: SleeveAdmissionReleasePack | None = None,
-        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
-    ) -> PaperShadowActivationPlan:
-        """Build the deterministic paper/shadow-only activation plan."""
-        source_manifest = (
-            manifest
-            if manifest is not None
-            else self.managed_sleeve_set_manifest(
-                release_pack=release_pack,
-                portfolio_snapshot=portfolio_snapshot,
-            )
-        )
-        return build_paper_shadow_activation_plan(source_manifest)
-
-    def paper_shadow_activation_plan_dict(self) -> dict:
-        """Serialize the current paper/shadow activation plan to a plain dict."""
-        return paper_shadow_activation_plan_to_dict(self.paper_shadow_activation_plan())
-
-    def export_paper_shadow_activation_plan(self):
-        """Persist the current paper/shadow activation plan via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper/shadow activation plan export")
-        return export_paper_shadow_plan(
-            plan=self.paper_shadow_activation_plan(),
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_shadow_activation_plan(self) -> PaperShadowActivationPlan:
-        """Load the latest persisted paper/shadow activation plan."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper/shadow activation plan load")
-        return load_paper_shadow_plan(evidence_store=self._evidence_store)
-
-    def prepare_paper_shadow_session(
-        self,
-        *,
-        plan: PaperShadowActivationPlan | None = None,
-        manifest: ManagedSleeveSetManifest | None = None,
-        release_pack: SleeveAdmissionReleasePack | None = None,
-        portfolio_snapshot: SleevePortfolioSnapshot | None = None,
-    ) -> PaperShadowSessionSnapshot:
-        """Prepare a paper/shadow session from the activation plan contract."""
-        source_plan = (
-            plan
-            if plan is not None
-            else self.paper_shadow_activation_plan(
-                manifest=manifest,
-                release_pack=release_pack,
-                portfolio_snapshot=portfolio_snapshot,
-            )
-        )
-        return self._ensure_paper_shadow_session_controller().prepare(source_plan)
-
-    def start_paper_shadow_session(self) -> PaperShadowSessionSnapshot:
-        """Start the prepared paper/shadow session lifecycle."""
-        return self._ensure_paper_shadow_session_controller().start()
-
-    def record_paper_shadow_session_tick(
-        self,
-        *,
-        active_sleeves_seen: tuple[str, ...] = (),
-        blockers_seen: tuple[str, ...] = (),
-    ) -> PaperShadowSessionSnapshot:
-        """Record deterministic paper/shadow tick evidence without execution wiring."""
-        return self._ensure_paper_shadow_session_controller().record_tick(
-            active_sleeves_seen=active_sleeves_seen,
-            blockers_seen=blockers_seen,
-        )
-
-    def record_paper_shadow_market_event_batch(
-        self,
-        batch: MarketEventBatch | dict,
-    ) -> PaperShadowSessionSnapshot:
-        """Record a read-only market event batch as paper/shadow tick evidence."""
-        return self._ensure_paper_shadow_session_controller().record_market_event_batch(batch)
-
-    def tick_paper_shadow_session_from_market_events(
-        self,
-        batch: MarketEventBatch | dict,
-    ) -> PaperShadowSessionSnapshot:
-        """Alias for recording market events as deterministic session tick evidence."""
-        return self.record_paper_shadow_market_event_batch(batch)
-
-    def stop_paper_shadow_session(
-        self,
-        *,
-        blockers_seen: tuple[str, ...] = (),
-    ) -> PaperShadowSessionSnapshot:
-        """Stop the running paper/shadow session lifecycle."""
-        return self._ensure_paper_shadow_session_controller().stop(blockers_seen=blockers_seen)
-
-    def finalize_paper_shadow_session(self) -> PaperShadowSessionSnapshot:
-        """Finalize the stopped paper/shadow session lifecycle report."""
-        return self._ensure_paper_shadow_session_controller().finalize()
-
-    def reset_paper_shadow_session(self) -> PaperShadowSessionSnapshot:
-        """Reset the paper/shadow session lifecycle to an unprepared safe state."""
-        return self._ensure_paper_shadow_session_controller().reset()
-
-    def restore_paper_shadow_session(
-        self,
-        snapshot: PaperShadowSessionSnapshot | dict,
-    ) -> PaperShadowSessionSnapshot:
-        """Restore paper/shadow session lifecycle state from an explicit snapshot."""
-        return self._ensure_paper_shadow_session_controller().restore(snapshot)
-
-    def paper_shadow_session_snapshot(self) -> PaperShadowSessionSnapshot:
-        """Return the current paper/shadow session lifecycle snapshot."""
-        return self._ensure_paper_shadow_session_controller().snapshot()
-
-    def paper_shadow_session_report(self) -> PaperShadowSessionSnapshot:
-        """Return the current paper/shadow session lifecycle report."""
-        return self._ensure_paper_shadow_session_controller().report()
-
-    def paper_shadow_session_snapshot_dict(self) -> dict:
-        """Serialize the current paper/shadow session lifecycle snapshot."""
-        return paper_shadow_session_snapshot_to_dict(self.paper_shadow_session_snapshot())
-
-    def paper_shadow_session_report_dict(self) -> dict:
-        """Serialize the current paper/shadow session lifecycle report."""
-        return paper_shadow_session_snapshot_to_dict(self.paper_shadow_session_report())
-
-    def paper_shadow_runtime_monitor_dict(self) -> dict:
-        """Serialize the current paper/shadow runtime monitor surface."""
-        return runtime_monitor_snapshot_to_dict(self.paper_shadow_session_snapshot().runtime_monitor)
-
-    def paper_shadow_guardrail_dict(self) -> dict:
-        """Serialize the current paper/shadow guardrail action surface."""
-        return guardrail_snapshot_to_dict(self.paper_shadow_session_snapshot().guardrail)
-
-    def apply_paper_shadow_guardrails(self) -> PaperShadowSessionSnapshot:
-        """Apply guardrails to paper/shadow session lifecycle state only."""
-        return self._ensure_paper_shadow_session_controller().apply_guardrails()
-
-    def replay_paper_shadow_feed(
-        self,
-        plan: FeedReplayPlan | dict | tuple[MarketEventBatch, ...],
-    ) -> FeedReplayResult:
-        """Replay local in-memory market event batches into the running paper/shadow session."""
-        return self._ensure_paper_shadow_session_controller().replay_feed(plan)
-
-    def paper_shadow_feed_replay_plan_dict(self, plan: FeedReplayPlan) -> dict:
-        """Serialize a deterministic local paper/shadow feed replay plan."""
-        return feed_replay_plan_to_dict(plan)
-
-    def paper_shadow_feed_replay_result_dict(self, result: FeedReplayResult) -> dict:
-        """Serialize a deterministic local paper/shadow feed replay result."""
-        return feed_replay_result_to_dict(result)
-
-    def paper_data_source_payload_to_batch_result(
-        self,
-        payload: dict,
-        *,
-        allowed_source_ids: tuple[str, ...] = (),
-        allow_unknown_source: bool = False,
-        batch_id: str | None = None,
-    ) -> PaperDataSourceBatchResult:
-        """Convert a provider-neutral local paper data-source payload into a market event batch result."""
-        return build_paper_data_source_batch_result(
-            payload,
-            allowed_source_ids=allowed_source_ids,
-            allow_unknown_source=allow_unknown_source,
-            batch_id=batch_id,
-        )
-
-    def paper_data_source_payload_to_market_event_batch(
-        self,
-        payload: dict,
-        *,
-        allowed_source_ids: tuple[str, ...] = (),
-        allow_unknown_source: bool = False,
-        batch_id: str | None = None,
-    ) -> MarketEventBatch:
-        """Convert a provider-neutral local paper data-source payload into a market event batch."""
-        return paper_data_source_payload_to_market_event_batch(
-            payload,
-            allowed_source_ids=allowed_source_ids,
-            allow_unknown_source=allow_unknown_source,
-            batch_id=batch_id,
-        )
-
-    def replay_paper_data_source_payload(
-        self,
-        payload: dict,
-        *,
-        allowed_source_ids: tuple[str, ...] = (),
-        allow_unknown_source: bool = False,
-        batch_id: str | None = None,
-        replay_id: str | None = None,
-    ) -> FeedReplayResult:
-        """Convert a local paper data-source payload and replay it into the running paper/shadow session."""
-        result = self.paper_data_source_payload_to_batch_result(
-            payload,
-            allowed_source_ids=allowed_source_ids,
-            allow_unknown_source=allow_unknown_source,
-            batch_id=batch_id,
-        )
-        replay_plan = build_feed_replay_plan(
-            (result.batch,),
-            replay_id=replay_id or f"feed-replay-{result.batch.batch_id}",
-        )
-        return self.replay_paper_shadow_feed(replay_plan)
-
-    def paper_data_source_batch_result_dict(self, result: PaperDataSourceBatchResult) -> dict:
-        """Serialize a deterministic local paper data-source conversion result."""
-        return paper_data_source_batch_result_to_dict(result)
-
-    def paper_shadow_market_event_batch_dict(self, batch: MarketEventBatch) -> dict:
-        """Serialize a deterministic read-only paper/shadow market event batch."""
-        return market_event_batch_to_dict(batch)
-
-    def record_paper_intent_batch(
-        self,
-        batch: PaperIntentBatch | dict | tuple[PaperIntent, ...],
-        *,
-        risk_decision: PaperRiskLimitDecision | dict | None = None,
-    ) -> PaperIntentBatchResult:
-        """Validate paper-only intents against the current paper/shadow session as audit events."""
-        return self._ensure_paper_shadow_session_controller().record_paper_intent_batch(
-            batch,
-            risk_decision=risk_decision,
-        )
-
-    def paper_intent_batch_dict(self, batch: PaperIntentBatch) -> dict:
-        """Serialize a deterministic paper-only intent batch."""
-        return paper_intent_batch_to_dict(batch)
-
-    def paper_intent_batch_result_dict(self, result: PaperIntentBatchResult) -> dict:
-        """Serialize a deterministic paper-only intent validation result."""
-        return paper_intent_batch_result_to_dict(result)
-
-    def simulate_paper_fills(
-        self,
-        result: PaperIntentBatchResult | dict,
-    ) -> PaperFillSimulationResult:
-        """Simulate paper-only fills from accepted paper intent audit results."""
-        return self._ensure_paper_shadow_session_controller().simulate_paper_fills(result)
-
-    def paper_fill_simulation_result_dict(self, result: PaperFillSimulationResult) -> dict:
-        """Serialize a deterministic paper-only fill simulation result."""
-        return paper_fill_simulation_result_to_dict(result)
-
-    def evaluate_paper_costs(
-        self,
-        result: PaperFillSimulationResult | dict,
-        *,
-        cost_model: PaperCostModel | dict | None = None,
-    ) -> PaperCostResult:
-        """Evaluate deterministic paper-only fees/slippage for simulated paper fills."""
-        return self._ensure_paper_shadow_session_controller().evaluate_paper_costs(result, cost_model=cost_model)
-
-    def paper_cost_result_dict(self, result: PaperCostResult) -> dict:
-        """Serialize a deterministic paper-only cost result."""
-        return paper_cost_result_to_dict(result)
-
-    def apply_paper_pnl_ledger(
-        self,
-        result: PaperCostResult | dict,
-        *,
-        prior_ledger: PaperPnLLedger | dict | None = None,
-    ) -> PaperPnLLedger:
-        """Apply accepted paper costs to the deterministic paper position/PnL ledger."""
-        return self._ensure_paper_shadow_session_controller().apply_paper_pnl_ledger(
-            result,
-            prior_ledger=prior_ledger,
-        )
-
-    def paper_pnl_ledger_dict(self, ledger: PaperPnLLedger) -> dict:
-        """Serialize a deterministic paper-only position/PnL ledger."""
-        return paper_pnl_ledger_to_dict(ledger)
-
-    def paper_portfolio_risk_snapshot(
-        self,
-        ledger: PaperPnLLedger | dict,
-        *,
-        equity_start: float | None = None,
-        equity_history: tuple[float, ...] = (),
-        snapshot_id: str | None = None,
-    ) -> PaperPortfolioRiskSnapshot:
-        """Build a deterministic paper-only portfolio risk/equity snapshot."""
-        return self._ensure_paper_shadow_session_controller().paper_portfolio_risk_snapshot(
-            ledger,
-            equity_start=equity_start,
-            equity_history=equity_history,
-            snapshot_id=snapshot_id,
-        )
-
-    def paper_portfolio_risk_snapshot_dict(self, snapshot: PaperPortfolioRiskSnapshot) -> dict:
-        """Serialize a deterministic paper-only portfolio risk/equity snapshot."""
-        return paper_portfolio_risk_snapshot_to_dict(snapshot)
-
-    def paper_risk_limit_decision(
-        self,
-        snapshot: PaperPortfolioRiskSnapshot | dict,
-        *,
-        policy: PaperRiskLimitPolicy | dict | None = None,
-        decision_id: str | None = None,
-    ) -> PaperRiskLimitDecision:
-        """Evaluate deterministic paper risk-limit / kill-switch decision."""
-        return self._ensure_paper_shadow_session_controller().paper_risk_limit_decision(
-            snapshot,
-            policy=policy,
-            decision_id=decision_id,
-        )
-
-    def paper_risk_limit_decision_dict(self, decision: PaperRiskLimitDecision) -> dict:
-        """Serialize a deterministic paper risk-limit / kill-switch decision."""
-        return paper_risk_limit_decision_to_dict(decision)
-
-    def apply_paper_risk_limit_decision(
-        self,
-        decision: PaperRiskLimitDecision | dict,
-    ) -> PaperShadowSessionSnapshot:
-        """Apply a paper risk-limit decision to paper-only intent/session guardrails."""
-        return self._ensure_paper_shadow_session_controller().apply_paper_risk_limit_decision(decision)
-
-    def export_paper_shadow_session_snapshot(self):
-        """Persist the current paper/shadow session snapshot via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper/shadow session export")
-        return export_paper_shadow_session(
-            snapshot=self.paper_shadow_session_snapshot(),
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_shadow_session_snapshot(self) -> PaperShadowSessionSnapshot:
-        """Load and restore the latest persisted paper/shadow session snapshot."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper/shadow session load")
-        snapshot = load_paper_shadow_session(evidence_store=self._evidence_store)
-        self.restore_paper_shadow_session(snapshot)
-        return snapshot
-
-    def export_paper_shadow_market_event_batch(self, batch: MarketEventBatch):
-        """Persist a read-only paper/shadow market event batch via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper/shadow market event batch export")
-        return export_market_event_batch(
-            batch=batch,
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_shadow_market_event_batch(self) -> MarketEventBatch:
-        """Load the latest persisted read-only paper/shadow market event batch."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper/shadow market event batch load")
-        return load_market_event_batch(evidence_store=self._evidence_store)
-
-    def export_paper_shadow_feed_replay_plan(self, plan: FeedReplayPlan):
-        """Persist a local paper/shadow feed replay plan via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper/shadow feed replay plan export")
-        return export_feed_replay_plan(
-            plan=plan,
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_shadow_feed_replay_plan(self) -> FeedReplayPlan:
-        """Load the latest persisted local paper/shadow feed replay plan."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper/shadow feed replay plan load")
-        return load_feed_replay_plan(evidence_store=self._evidence_store)
-
-    def export_paper_shadow_feed_replay_result(self, result: FeedReplayResult):
-        """Persist a local paper/shadow feed replay result via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper/shadow feed replay result export")
-        return export_feed_replay_result(
-            result=result,
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_shadow_feed_replay_result(self) -> FeedReplayResult:
-        """Load the latest persisted local paper/shadow feed replay result."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper/shadow feed replay result load")
-        return load_feed_replay_result(evidence_store=self._evidence_store)
-
-    def export_paper_data_source_batch_result(self, result: PaperDataSourceBatchResult):
-        """Persist a local paper data-source conversion result via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper data-source result export")
-        return export_paper_data_source_batch_result(
-            result=result,
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_data_source_batch_result(self) -> PaperDataSourceBatchResult:
-        """Load the latest persisted local paper data-source conversion result."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper data-source result load")
-        return load_paper_data_source_batch_result(evidence_store=self._evidence_store)
-
-    def export_paper_intent_batch(self, batch: PaperIntentBatch):
-        """Persist a paper-only intent batch via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper intent batch export")
-        return export_paper_intent_batch(
-            batch=batch,
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_intent_batch(self) -> PaperIntentBatch:
-        """Load the latest persisted paper-only intent batch."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper intent batch load")
-        return load_paper_intent_batch(evidence_store=self._evidence_store)
-
-    def export_paper_intent_batch_result(self, result: PaperIntentBatchResult):
-        """Persist a paper-only intent validation result via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper intent result export")
-        return export_paper_intent_batch_result(
-            result=result,
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_intent_batch_result(self) -> PaperIntentBatchResult:
-        """Load the latest persisted paper-only intent validation result."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper intent result load")
-        return load_paper_intent_batch_result(evidence_store=self._evidence_store)
-
-    def export_paper_fill_simulation_result(self, result: PaperFillSimulationResult):
-        """Persist a paper-only fill simulation result via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper fill simulation export")
-        return export_paper_fill_simulation_result(
-            result=result,
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_fill_simulation_result(self) -> PaperFillSimulationResult:
-        """Load the latest persisted paper-only fill simulation result."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper fill simulation load")
-        return load_paper_fill_simulation_result(evidence_store=self._evidence_store)
-
-    def export_paper_cost_result(self, result: PaperCostResult):
-        """Persist a paper-only cost result via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper cost result export")
-        return export_paper_cost_result(
-            result=result,
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_cost_result(self) -> PaperCostResult:
-        """Load the latest persisted paper-only cost result."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper cost result load")
-        return load_paper_cost_result(evidence_store=self._evidence_store)
-
-    def export_paper_pnl_ledger(self, ledger: PaperPnLLedger):
-        """Persist a paper-only position/PnL ledger via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper PnL ledger export")
-        return export_paper_pnl_ledger(
-            ledger=ledger,
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_pnl_ledger(self) -> PaperPnLLedger:
-        """Load the latest persisted paper-only position/PnL ledger."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper PnL ledger load")
-        return load_paper_pnl_ledger(evidence_store=self._evidence_store)
-
-    def export_paper_portfolio_risk_snapshot(self, snapshot: PaperPortfolioRiskSnapshot):
-        """Persist a paper-only portfolio risk/equity snapshot via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper portfolio risk snapshot export")
-        return export_paper_portfolio_risk_snapshot(
-            snapshot=snapshot,
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_portfolio_risk_snapshot(self) -> PaperPortfolioRiskSnapshot:
-        """Load the latest persisted paper-only portfolio risk/equity snapshot."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper portfolio risk snapshot load")
-        return load_paper_portfolio_risk_snapshot(evidence_store=self._evidence_store)
-
-    def export_paper_risk_limit_decision(self, decision: PaperRiskLimitDecision):
-        """Persist a paper-only risk-limit / kill-switch decision via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper risk limit decision export")
-        return export_paper_risk_limit_decision(
-            decision=decision,
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_risk_limit_decision(self) -> PaperRiskLimitDecision:
-        """Load the latest persisted paper-only risk-limit / kill-switch decision."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper risk limit decision load")
-        return load_paper_risk_limit_decision(evidence_store=self._evidence_store)
-
-    def paper_shadow_run_evidence_report(
-        self,
-        *,
-        source_result: PaperDataSourceBatchResult | dict | None = None,
-        replay_result: FeedReplayResult | dict | None = None,
-        report_id: str | None = None,
-        as_of_ns: int | None = None,
-    ) -> PaperShadowRunEvidenceReport:
-        """Build the deterministic run-level evidence report for the current paper/shadow session."""
-        return build_paper_shadow_run_evidence_report(
-            session_snapshot=self.paper_shadow_session_snapshot(),
-            source_result=source_result,
-            replay_result=replay_result,
-            report_id=report_id,
-            as_of_ns=as_of_ns,
-        )
-
-    def paper_shadow_run_evidence_report_dict(
-        self,
-        report: PaperShadowRunEvidenceReport | None = None,
-        *,
-        source_result: PaperDataSourceBatchResult | dict | None = None,
-        replay_result: FeedReplayResult | dict | None = None,
-        report_id: str | None = None,
-        as_of_ns: int | None = None,
-    ) -> dict:
-        """Serialize a paper/shadow run-level evidence report."""
-        source_report = (
-            report
-            if report is not None
-            else self.paper_shadow_run_evidence_report(
-                source_result=source_result,
-                replay_result=replay_result,
-                report_id=report_id,
-                as_of_ns=as_of_ns,
-            )
-        )
-        return paper_shadow_run_evidence_report_to_dict(source_report)
-
-    def export_paper_shadow_run_evidence_report(
-        self,
-        report: PaperShadowRunEvidenceReport | None = None,
-        *,
-        source_result: PaperDataSourceBatchResult | dict | None = None,
-        replay_result: FeedReplayResult | dict | None = None,
-        report_id: str | None = None,
-        as_of_ns: int | None = None,
-    ):
-        """Persist a paper/shadow run-level evidence report via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper/shadow run evidence report export")
-        source_report = (
-            report
-            if report is not None
-            else self.paper_shadow_run_evidence_report(
-                source_result=source_result,
-                replay_result=replay_result,
-                report_id=report_id,
-                as_of_ns=as_of_ns,
-            )
-        )
-        return export_run_evidence_report(
-            report=source_report,
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_shadow_run_evidence_report(self) -> PaperShadowRunEvidenceReport:
-        """Load the latest persisted paper/shadow run-level evidence report."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper/shadow run evidence report load")
-        return load_run_evidence_report(evidence_store=self._evidence_store)
-
-    def paper_trading_run_summary(
-        self,
-        *,
-        replay_result: FeedReplayResult | dict | None = None,
-        intent_result: PaperIntentBatchResult | dict | None = None,
-        fill_result: PaperFillSimulationResult | dict | None = None,
-        cost_result: PaperCostResult | dict | None = None,
-        ledger: PaperPnLLedger | dict | None = None,
-        risk_snapshot: PaperPortfolioRiskSnapshot | dict | None = None,
-        risk_decision: PaperRiskLimitDecision | dict | None = None,
-        run_evidence_report: PaperShadowRunEvidenceReport | dict | None = None,
-        summary_id: str | None = None,
-        as_of_ns: int | None = None,
-    ) -> PaperTradingRunSummary:
-        """Build the deterministic final paper trading run summary for the current session."""
-        return build_paper_trading_run_summary(
-            session_snapshot=self.paper_shadow_session_snapshot(),
-            replay_result=replay_result,
-            intent_result=intent_result,
-            fill_result=fill_result,
-            cost_result=cost_result,
-            ledger=ledger,
-            risk_snapshot=risk_snapshot,
-            risk_decision=risk_decision,
-            run_evidence_report=run_evidence_report,
-            summary_id=summary_id,
-            as_of_ns=as_of_ns,
-        )
-
-    def paper_trading_run_summary_dict(
-        self,
-        summary: PaperTradingRunSummary | None = None,
-        *,
-        replay_result: FeedReplayResult | dict | None = None,
-        intent_result: PaperIntentBatchResult | dict | None = None,
-        fill_result: PaperFillSimulationResult | dict | None = None,
-        cost_result: PaperCostResult | dict | None = None,
-        ledger: PaperPnLLedger | dict | None = None,
-        risk_snapshot: PaperPortfolioRiskSnapshot | dict | None = None,
-        risk_decision: PaperRiskLimitDecision | dict | None = None,
-        run_evidence_report: PaperShadowRunEvidenceReport | dict | None = None,
-        summary_id: str | None = None,
-        as_of_ns: int | None = None,
-    ) -> dict:
-        """Serialize a final paper trading run summary."""
-        source_summary = (
-            summary
-            if summary is not None
-            else self.paper_trading_run_summary(
-                replay_result=replay_result,
-                intent_result=intent_result,
-                fill_result=fill_result,
-                cost_result=cost_result,
-                ledger=ledger,
-                risk_snapshot=risk_snapshot,
-                risk_decision=risk_decision,
-                run_evidence_report=run_evidence_report,
-                summary_id=summary_id,
-                as_of_ns=as_of_ns,
-            )
-        )
-        return paper_trading_run_summary_to_dict(source_summary)
-
-    def export_paper_trading_run_summary(
-        self,
-        summary: PaperTradingRunSummary | None = None,
-        *,
-        replay_result: FeedReplayResult | dict | None = None,
-        intent_result: PaperIntentBatchResult | dict | None = None,
-        fill_result: PaperFillSimulationResult | dict | None = None,
-        cost_result: PaperCostResult | dict | None = None,
-        ledger: PaperPnLLedger | dict | None = None,
-        risk_snapshot: PaperPortfolioRiskSnapshot | dict | None = None,
-        risk_decision: PaperRiskLimitDecision | dict | None = None,
-        run_evidence_report: PaperShadowRunEvidenceReport | dict | None = None,
-        summary_id: str | None = None,
-        as_of_ns: int | None = None,
-    ):
-        """Persist a final paper trading run summary via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper trading run summary export")
-        source_summary = (
-            summary
-            if summary is not None
-            else self.paper_trading_run_summary(
-                replay_result=replay_result,
-                intent_result=intent_result,
-                fill_result=fill_result,
-                cost_result=cost_result,
-                ledger=ledger,
-                risk_snapshot=risk_snapshot,
-                risk_decision=risk_decision,
-                run_evidence_report=run_evidence_report,
-                summary_id=summary_id,
-                as_of_ns=as_of_ns,
-            )
-        )
-        return export_paper_trading_run_summary(
-            summary=source_summary,
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_trading_run_summary(self) -> PaperTradingRunSummary:
-        """Load the latest persisted final paper trading run summary."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper trading run summary load")
-        return load_paper_trading_run_summary(evidence_store=self._evidence_store)
-
-    def multi_source_run_evidence_report(
-        self,
-        reports: tuple[PaperShadowRunEvidenceReport | dict, ...],
-        *,
-        aggregate_id: str | None = None,
-        as_of_ns: int | None = None,
-    ) -> MultiSourceRunEvidenceReport:
-        """Aggregate multiple paper/shadow run evidence reports into one deterministic summary."""
-        return build_multi_source_run_evidence_report(
-            reports,
-            aggregate_id=aggregate_id,
-            as_of_ns=as_of_ns,
-        )
-
-    def multi_source_run_evidence_report_dict(
-        self,
-        report: MultiSourceRunEvidenceReport | None = None,
-        *,
-        reports: tuple[PaperShadowRunEvidenceReport | dict, ...] = (),
-        aggregate_id: str | None = None,
-        as_of_ns: int | None = None,
-    ) -> dict:
-        """Serialize a multi-source paper/shadow run evidence summary."""
-        source_report = (
-            report
-            if report is not None
-            else self.multi_source_run_evidence_report(
-                reports,
-                aggregate_id=aggregate_id,
-                as_of_ns=as_of_ns,
-            )
-        )
-        return multi_source_run_evidence_report_to_dict(source_report)
-
-    def export_multi_source_run_evidence_report(
-        self,
-        report: MultiSourceRunEvidenceReport | None = None,
-        *,
-        reports: tuple[PaperShadowRunEvidenceReport | dict, ...] = (),
-        aggregate_id: str | None = None,
-        as_of_ns: int | None = None,
-    ):
-        """Persist a multi-source paper/shadow run evidence summary via EvidenceStore."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for multi-source run evidence report export")
-        source_report = (
-            report
-            if report is not None
-            else self.multi_source_run_evidence_report(
-                reports,
-                aggregate_id=aggregate_id,
-                as_of_ns=as_of_ns,
-            )
-        )
-        return export_multi_source_evidence_report(
-            report=source_report,
-            evidence_store=self._evidence_store,
-        )
-
-    def load_multi_source_run_evidence_report(self) -> MultiSourceRunEvidenceReport:
-        """Load the latest persisted multi-source paper/shadow run evidence summary."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for multi-source run evidence report load")
-        return load_multi_source_evidence_report(evidence_store=self._evidence_store)
-
-    def paper_shadow_evidence_bundle(
-        self,
-        *,
-        aggregate_report: MultiSourceRunEvidenceReport | dict,
-        run_reports: tuple[PaperShadowRunEvidenceReport | dict, ...],
-        bundle_id: str | None = None,
-        as_of_ns: int | None = None,
-    ) -> PaperShadowEvidenceBundle:
-        """Package a multi-source aggregate with its exact run-report drilldowns."""
-        bundle = build_paper_shadow_evidence_bundle(
-            aggregate_report=aggregate_report,
-            run_reports=run_reports,
-            bundle_id=bundle_id,
-            as_of_ns=as_of_ns,
-        )
-        self._paper_shadow_evidence_bundle = bundle
-        return bundle
-
-    def paper_shadow_evidence_bundle_dict(
-        self,
-        bundle: PaperShadowEvidenceBundle | None = None,
-        *,
-        aggregate_report: MultiSourceRunEvidenceReport | dict | None = None,
-        run_reports: tuple[PaperShadowRunEvidenceReport | dict, ...] = (),
-        bundle_id: str | None = None,
-        as_of_ns: int | None = None,
-    ) -> dict:
-        """Serialize a paper/shadow evidence bundle with run-report drilldowns."""
-        source_bundle = (
-            bundle
-            if bundle is not None
-            else self.paper_shadow_evidence_bundle(
-                aggregate_report=_require_orchestrator_bundle_aggregate(aggregate_report),
-                run_reports=run_reports,
-                bundle_id=bundle_id,
-                as_of_ns=as_of_ns,
-            )
-        )
-        return paper_shadow_evidence_bundle_to_dict(source_bundle)
-
-    def export_paper_shadow_evidence_bundle(
-        self,
-        bundle: PaperShadowEvidenceBundle | None = None,
-        *,
-        aggregate_report: MultiSourceRunEvidenceReport | dict | None = None,
-        run_reports: tuple[PaperShadowRunEvidenceReport | dict, ...] = (),
-        bundle_id: str | None = None,
-        as_of_ns: int | None = None,
-    ):
-        """Persist a paper/shadow evidence bundle with run-report drilldowns."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper/shadow evidence bundle export")
-        source_bundle = (
-            bundle
-            if bundle is not None
-            else self.paper_shadow_evidence_bundle(
-                aggregate_report=_require_orchestrator_bundle_aggregate(aggregate_report),
-                run_reports=run_reports,
-                bundle_id=bundle_id,
-                as_of_ns=as_of_ns,
-            )
-        )
-        self._paper_shadow_evidence_bundle = source_bundle
-        return export_evidence_bundle(
-            bundle=source_bundle,
-            evidence_store=self._evidence_store,
-        )
-
-    def load_paper_shadow_evidence_bundle(self) -> PaperShadowEvidenceBundle:
-        """Load the latest persisted paper/shadow evidence bundle with drilldowns."""
-        if self._evidence_store is None:
-            raise RuntimeError("No evidence store configured for paper/shadow evidence bundle load")
-        bundle = load_evidence_bundle(evidence_store=self._evidence_store)
-        self._paper_shadow_evidence_bundle = bundle
-        return bundle
+        return snap.__dict__
 
     # ------------------------------------------------------------------
     # Properties
@@ -1930,10 +661,7 @@ class ServiceOrchestrator:
         """Restore the managed sleeve workflow state if a persisted controller snapshot exists."""
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for sleeve portfolio workflow restore")
-        controller = SleevePortfolioController.restore(
-            self._evidence_store,
-            clock_ns=self._sleeve_workflow_clock_ns,
-        )
+        controller = SleevePortfolioController.restore(self._evidence_store)
         self._sleeve_portfolio_controller = controller
         self._configured_sleeves = controller.defined_sleeves
         self._sleeve_allocation_policy = controller.allocation_policy
@@ -2012,10 +740,7 @@ class ServiceOrchestrator:
             raise RuntimeError("Cannot restore: active sleeve candidate workflow in progress")
 
         try:
-            controller = SleeveCandidateWorkflowController.restore(
-                self._evidence_store,
-                clock_ns=self._sleeve_workflow_clock_ns,
-            )
+            controller = SleeveCandidateWorkflowController.restore(self._evidence_store)
         except (SleeveCandidateWorkflowCorruptError, RuntimeError):
             raise
         except Exception:
@@ -2474,38 +1199,11 @@ class ServiceOrchestrator:
         if self._sleeve_promotion_review_controller is not None:
             sleeve_promotion_review = self._sleeve_promotion_review_controller.snapshot()
 
-        review_portfolio_summary = (
-            None if sleeve_promotion_review is None else sleeve_promotion_review.portfolio_summary
-        )
-        sleeve_admission = self.build_sleeve_admission_controller(
-            portfolio_snapshot=sleeve_portfolio,
-            review_portfolio_summary=review_portfolio_summary,
-        ).snapshot()
-        candidate_workflow_snapshot = self.sleeve_candidate_workflow_snapshot()
-        sleeve_admission_release_pack = build_admission_release_pack(
-            sleeve_admission,
-            promotion_review_snapshot=sleeve_promotion_review,
-            candidate_workflow_snapshot=candidate_workflow_snapshot,
-            portfolio_snapshot=sleeve_portfolio,
-            campaign_report=self._last_campaign_report,
-            readiness_flags=(
-                None if self._last_campaign_report is None else campaign_readiness_flags(self._last_campaign_report)
-            ),
-        )
-        sleeve_admission_release = sleeve_admission_release_state_from_pack(sleeve_admission_release_pack)
-        managed_sleeve_manifest_artifact = build_managed_sleeve_set_manifest(
-            sleeve_admission_release_pack,
-            portfolio_snapshot=sleeve_portfolio,
-        )
-        managed_sleeve_manifest = managed_sleeve_manifest_state_from_manifest(managed_sleeve_manifest_artifact)
-        paper_shadow_activation_plan = paper_shadow_activation_plan_state_from_plan(
-            build_paper_shadow_activation_plan(managed_sleeve_manifest_artifact)
-        )
-        paper_shadow_session = (
-            paper_shadow_session_state_from_snapshot(self._paper_shadow_session_controller.snapshot())
-            if self._paper_shadow_session_controller is not None
-            else None
-        )
+        sleeve_admission = None
+        try:
+            sleeve_admission = self.get_sleeve_admission_snapshot()
+        except Exception:
+            sleeve_admission = None
         return OperatorSnapshot(
             service_mode=ss.service_mode,
             trading_enabled=ss.trading_enabled,
@@ -2520,10 +1218,6 @@ class ServiceOrchestrator:
             sleeve_candidate_workflow=sleeve_candidate_workflow,
             sleeve_promotion_review=sleeve_promotion_review,
             sleeve_admission=sleeve_admission,
-            sleeve_admission_release=sleeve_admission_release,
-            managed_sleeve_manifest=managed_sleeve_manifest,
-            paper_shadow_activation_plan=paper_shadow_activation_plan,
-            paper_shadow_session=paper_shadow_session,
             readiness_level=self._readiness_level,
             readiness_is_supportive=readiness_is_supportive,
             evidence=evidence,
@@ -2564,9 +1258,7 @@ class ServiceOrchestrator:
         """
         if self._review is None or self._review.final_report is None:
             return None
-        from crypto_core.service.promotion_review_controller import (
-            final_review_report_to_dict,
-        )
+        from crypto_core.service.promotion_review_controller import final_review_report_to_dict
 
         return final_review_report_to_dict(self._review.final_report)
 
@@ -2798,15 +1490,7 @@ class ServiceOrchestrator:
         """
         if self._last_campaign_report is None:
             return None
-        return self._with_paper_shadow_evidence_flags(campaign_readiness_flags(self._last_campaign_report))
-
-    def paper_shadow_evidence_readiness_bridge_dict(
-        self,
-        bundle: PaperShadowEvidenceBundle | dict | None = None,
-    ) -> dict:
-        """Return compact bundle-derived readiness/governance flags."""
-        source_bundle = self._paper_shadow_evidence_bundle if bundle is None else bundle
-        return paper_shadow_evidence_readiness_bridge(source_bundle)
+        return campaign_readiness_flags(self._last_campaign_report)
 
     def external_regime_snapshot(self) -> ExternalRegimeSnapshot | None:
         """Current external regime snapshot, or None if no data plane configured.
@@ -2826,9 +1510,7 @@ class ServiceOrchestrator:
         snap = self.external_regime_snapshot()
         if snap is None:
             return None
-        from crypto_core.service.external_regime import (
-            external_regime_snapshot_to_dict,
-        )
+        from crypto_core.service.external_regime import external_regime_snapshot_to_dict
 
         return external_regime_snapshot_to_dict(snap)
 
@@ -3410,7 +2092,6 @@ class ServiceOrchestrator:
                 defined_sleeves=self._configured_sleeves,
                 allocation_policy=self._sleeve_allocation_policy,
                 evidence_store=self._evidence_store,
-                clock_ns=self._sleeve_workflow_clock_ns,
             )
         return self._sleeve_portfolio_controller
 
@@ -3418,16 +2099,8 @@ class ServiceOrchestrator:
         if self._sleeve_candidate_workflow_controller is None:
             self._sleeve_candidate_workflow_controller = SleeveCandidateWorkflowController(
                 evidence_store=self._evidence_store,
-                clock_ns=self._sleeve_workflow_clock_ns,
             )
         return self._sleeve_candidate_workflow_controller
-
-    def _ensure_paper_shadow_session_controller(self) -> PaperShadowSessionController:
-        if self._paper_shadow_session_controller is None:
-            self._paper_shadow_session_controller = PaperShadowSessionController(
-                clock_ns=self._sleeve_workflow_clock_ns,
-            )
-        return self._paper_shadow_session_controller
 
     def _current_escalation_allowed_next_step(self) -> str | None:
         """Best current escalation hook for sleeve governance surfaces."""
@@ -3516,9 +2189,6 @@ class ServiceOrchestrator:
                 parts.append(
                     f"External regime scenario reduced activation on {latest_scenario.activation_reduced_steps} step(s)."
                 )
-        paper_shadow_bridge = paper_shadow_evidence_readiness_bridge(self._paper_shadow_evidence_bundle)
-        if not bool(paper_shadow_bridge["supportive"]):
-            parts.append("Paper/shadow evidence bundle is not supportive.")
         if not parts:
             parts.append("Evidence appears sufficient for promotion consideration.")
 
@@ -3543,11 +2213,6 @@ class ServiceOrchestrator:
                 0 if latest_scenario is None else latest_scenario.activation_reduced_steps
             ),
             external_regime_scenario_summary=("" if latest_scenario is None else latest_scenario.summary),
-            paper_shadow_evidence_available=bool(paper_shadow_bridge["paper_shadow_evidence_available"]),
-            paper_shadow_evidence_passed=bool(paper_shadow_bridge["paper_shadow_evidence_passed"]),
-            paper_shadow_evidence_blocked=bool(paper_shadow_bridge["paper_shadow_evidence_blocked"]),
-            paper_shadow_evidence_bundle_complete=bool(paper_shadow_bridge["paper_shadow_evidence_bundle_complete"]),
-            paper_shadow_evidence_status=str(paper_shadow_bridge["paper_shadow_evidence_status"]),
         )
 
     def _build_external_regime_safety_state(
@@ -3584,14 +2249,9 @@ class ServiceOrchestrator:
             return None
         evaluator = ReadinessEvaluator()
         return evaluator.evaluate(
-            self._with_paper_shadow_evidence_flags(campaign_readiness_flags(source_report)),
+            campaign_readiness_flags(source_report),
             assessed_at_ns=assessed_at_ns,
         )
-
-    def _with_paper_shadow_evidence_flags(self, flags: dict[str, bool] | None) -> dict[str, bool]:
-        merged: dict[str, bool] = {} if flags is None else dict(flags)
-        merged.update(paper_shadow_evidence_readiness_flags(self._paper_shadow_evidence_bundle))
-        return merged
 
     @staticmethod
     def _decision_pack_criteria_summary(reason_codes: dict, readiness_dict: dict | None) -> dict:
@@ -3910,14 +2570,6 @@ class ServiceOrchestrator:
         return tuple(ordered)
 
 
-def _require_orchestrator_bundle_aggregate(
-    aggregate_report: MultiSourceRunEvidenceReport | dict | None,
-) -> MultiSourceRunEvidenceReport | dict:
-    if aggregate_report is None:
-        raise RuntimeError("aggregate_report is required for paper/shadow evidence bundle construction")
-    return aggregate_report
-
-
 # ---------------------------------------------------------------------------
 # Serialization helpers
 # ---------------------------------------------------------------------------
@@ -3989,266 +2641,6 @@ def sleeve_candidate_workflow_state_to_dict(state: SleeveCandidateWorkflowState)
     }
 
 
-def sleeve_admission_release_state_from_pack(pack: SleeveAdmissionReleasePack) -> SleeveAdmissionReleaseState:
-    """Build compact operator snapshot state from a sleeve admission release pack."""
-    return SleeveAdmissionReleaseState(
-        available=True,
-        pack_id=pack.pack_id,
-        as_of_ns=pack.as_of_ns,
-        overall_release_status=pack.overall_release_status.value,
-        admitted_sleeves=len(pack.admitted_sleeves),
-        admitted_active_sleeves=len(pack.admitted_active_sleeves),
-        admitted_unallocated_sleeves=len(pack.admitted_unallocated_sleeves),
-        review_supported_not_admitted_sleeves=len(pack.review_supported_not_admitted_sleeves),
-        blocked_sleeves=len(pack.blocked_sleeves),
-        inconclusive_sleeves=len(pack.inconclusive_sleeves),
-        insufficient_evidence_sleeves=len(pack.insufficient_evidence_sleeves),
-        disabled_operator_off_sleeves=len(pack.disabled_operator_off_sleeves),
-        evidence_blockers=pack.evidence_blockers,
-        governance_blockers=pack.governance_blockers,
-        evidence_gate_status=pack.evidence_gate_status.value,
-        paper_campaign_evidence_available=pack.paper_campaign_evidence_available,
-        sleeve_campaign_link_available=pack.sleeve_campaign_link_available,
-        promotion_review_evidence_available=pack.promotion_review_evidence_available,
-        readiness_evidence_supportive=pack.readiness_evidence_supportive,
-        tca_or_markout_evidence_supportive=pack.tca_or_markout_evidence_supportive,
-        external_regime_evidence_supportive=pack.external_regime_evidence_supportive,
-    )
-
-
-def sleeve_admission_release_state_to_dict(state: SleeveAdmissionReleaseState) -> dict:
-    """Serialize compact sleeve admission release-pack state to a plain dict."""
-    return {
-        "available": state.available,
-        "pack_id": state.pack_id,
-        "as_of_ns": state.as_of_ns,
-        "overall_release_status": state.overall_release_status,
-        "admitted_sleeves": state.admitted_sleeves,
-        "admitted_active_sleeves": state.admitted_active_sleeves,
-        "admitted_unallocated_sleeves": state.admitted_unallocated_sleeves,
-        "review_supported_not_admitted_sleeves": state.review_supported_not_admitted_sleeves,
-        "blocked_sleeves": state.blocked_sleeves,
-        "inconclusive_sleeves": state.inconclusive_sleeves,
-        "insufficient_evidence_sleeves": state.insufficient_evidence_sleeves,
-        "disabled_operator_off_sleeves": state.disabled_operator_off_sleeves,
-        "evidence_blockers": list(state.evidence_blockers),
-        "governance_blockers": list(state.governance_blockers),
-        "evidence_gate_status": state.evidence_gate_status,
-        "paper_campaign_evidence_available": state.paper_campaign_evidence_available,
-        "sleeve_campaign_link_available": state.sleeve_campaign_link_available,
-        "promotion_review_evidence_available": state.promotion_review_evidence_available,
-        "readiness_evidence_supportive": state.readiness_evidence_supportive,
-        "tca_or_markout_evidence_supportive": state.tca_or_markout_evidence_supportive,
-        "external_regime_evidence_supportive": state.external_regime_evidence_supportive,
-    }
-
-
-def managed_sleeve_manifest_state_from_manifest(manifest: ManagedSleeveSetManifest) -> ManagedSleeveSetManifestState:
-    """Build compact operator snapshot state from a managed sleeve set manifest."""
-    return ManagedSleeveSetManifestState(
-        available=True,
-        manifest_id=manifest.manifest_id,
-        as_of_ns=manifest.as_of_ns,
-        dry_run_status=manifest.dry_run_status.value,
-        source_release_pack_status=manifest.source_release_pack_status.value,
-        source_evidence_gate_status=manifest.source_evidence_gate_status.value,
-        active_sleeves=len(manifest.active_sleeves),
-        admitted_unallocated_sleeves=len(manifest.admitted_unallocated_sleeves),
-        blocked_sleeves=len(manifest.blocked_sleeves),
-        inconclusive_sleeves=len(manifest.inconclusive_sleeves),
-        unallocated_share=manifest.unallocated_share,
-        activation_blockers=manifest.activation_blockers,
-        evidence_blockers=manifest.evidence_blockers,
-        governance_blockers=manifest.governance_blockers,
-    )
-
-
-def managed_sleeve_manifest_state_to_dict(state: ManagedSleeveSetManifestState) -> dict:
-    """Serialize compact managed sleeve set manifest state to a plain dict."""
-    return {
-        "available": state.available,
-        "manifest_id": state.manifest_id,
-        "as_of_ns": state.as_of_ns,
-        "dry_run_status": state.dry_run_status,
-        "source_release_pack_status": state.source_release_pack_status,
-        "source_evidence_gate_status": state.source_evidence_gate_status,
-        "active_sleeves": state.active_sleeves,
-        "admitted_unallocated_sleeves": state.admitted_unallocated_sleeves,
-        "blocked_sleeves": state.blocked_sleeves,
-        "inconclusive_sleeves": state.inconclusive_sleeves,
-        "unallocated_share": state.unallocated_share,
-        "activation_blockers": list(state.activation_blockers),
-        "evidence_blockers": list(state.evidence_blockers),
-        "governance_blockers": list(state.governance_blockers),
-    }
-
-
-def paper_shadow_activation_plan_state_from_plan(plan: PaperShadowActivationPlan) -> PaperShadowActivationPlanState:
-    """Build compact operator snapshot state from a paper/shadow activation plan."""
-    return PaperShadowActivationPlanState(
-        available=True,
-        plan_id=plan.plan_id,
-        as_of_ns=plan.as_of_ns,
-        activation_status=plan.activation_status.value,
-        source_manifest_status=plan.source_manifest_status.value,
-        paper_only=plan.paper_only,
-        real_orders_enabled=plan.real_orders_enabled,
-        real_money_enabled=plan.real_money_enabled,
-        active_sleeves=len(plan.active_sleeves),
-        inactive_sleeves=len(plan.inactive_sleeves),
-        activation_blockers=plan.activation_blockers,
-        evidence_blockers=plan.evidence_blockers,
-        governance_blockers=plan.governance_blockers,
-    )
-
-
-def paper_shadow_activation_plan_state_to_dict(state: PaperShadowActivationPlanState) -> dict:
-    """Serialize compact paper/shadow activation plan state to a plain dict."""
-    return {
-        "available": state.available,
-        "plan_id": state.plan_id,
-        "as_of_ns": state.as_of_ns,
-        "activation_status": state.activation_status,
-        "source_manifest_status": state.source_manifest_status,
-        "paper_only": state.paper_only,
-        "real_orders_enabled": state.real_orders_enabled,
-        "real_money_enabled": state.real_money_enabled,
-        "active_sleeves": state.active_sleeves,
-        "inactive_sleeves": state.inactive_sleeves,
-        "activation_blockers": list(state.activation_blockers),
-        "evidence_blockers": list(state.evidence_blockers),
-        "governance_blockers": list(state.governance_blockers),
-    }
-
-
-def paper_shadow_session_state_from_snapshot(snapshot: PaperShadowSessionSnapshot) -> PaperShadowSessionState:
-    """Build compact operator snapshot state from a paper/shadow session snapshot."""
-    return PaperShadowSessionState(
-        available=True,
-        session_id=snapshot.session_id,
-        status=snapshot.status.value,
-        plan_id=snapshot.plan_id,
-        plan_status=snapshot.plan_status,
-        tick_count=snapshot.tick_count,
-        paper_only=snapshot.paper_only,
-        real_orders_enabled=snapshot.real_orders_enabled,
-        real_money_enabled=snapshot.real_money_enabled,
-        active_sleeves_seen=len(snapshot.active_sleeves_seen),
-        blockers_seen=len(snapshot.blockers_seen),
-        event_count=snapshot.event_count,
-        symbols_seen=len(snapshot.symbols_seen),
-        venues_seen=len(snapshot.venues_seen),
-        first_event_ns=snapshot.first_event_ns,
-        last_event_ns=snapshot.last_event_ns,
-        rejected_event_count=snapshot.rejected_event_count,
-        intents_seen=snapshot.intents_seen,
-        accepted_intent_count=snapshot.accepted_intent_count,
-        rejected_intent_count=snapshot.rejected_intent_count,
-        intent_sleeves_seen=len(snapshot.intent_sleeves_seen),
-        intent_symbols_seen=len(snapshot.intent_symbols_seen),
-        intent_venues_seen=len(snapshot.intent_venues_seen),
-        intent_rejection_reasons=snapshot.intent_rejection_reasons,
-        fill_attempts=snapshot.fill_attempts,
-        simulated_fills=snapshot.simulated_fills,
-        rejected_fills=snapshot.rejected_fills,
-        symbols_filled=len(snapshot.symbols_filled),
-        sleeves_filled=len(snapshot.sleeves_filled),
-        cost_evaluations=snapshot.cost_evaluations,
-        accepted_costs=snapshot.accepted_costs,
-        rejected_costs=snapshot.rejected_costs,
-        total_fee=snapshot.total_fee,
-        total_slippage_cost=snapshot.total_slippage_cost,
-        pnl_events=snapshot.pnl_events,
-        open_positions=snapshot.open_positions,
-        closed_positions=snapshot.closed_positions,
-        total_fees=snapshot.total_fees,
-        total_slippage=snapshot.total_slippage,
-        realized_pnl=snapshot.realized_pnl,
-        risk_limit_decision_status=snapshot.risk_limit_decision_status,
-        risk_block_new_intents=snapshot.risk_block_new_intents,
-        intents_blocked_by_risk=snapshot.intents_blocked_by_risk,
-        session_stop_requested_by_risk=snapshot.session_stop_requested_by_risk,
-        risk_reasons=snapshot.risk_reasons,
-        runtime_monitor_status=snapshot.runtime_monitor.status.value,
-        stale_feed_detected=snapshot.runtime_monitor.stale_feed_detected,
-        symbol_coverage_ok=snapshot.runtime_monitor.symbol_coverage_ok,
-        venue_coverage_ok=snapshot.runtime_monitor.venue_coverage_ok,
-        price_validity_ok=snapshot.runtime_monitor.price_validity_ok,
-        event_gap_count=snapshot.runtime_monitor.event_gap_count,
-        guardrail_primary_action=snapshot.guardrail.primary_action.value,
-        guardrail_actions=tuple(action.value for action in snapshot.guardrail.actions),
-        guardrail_block_finalize=snapshot.guardrail.block_finalize,
-        guardrail_reason_codes=snapshot.guardrail.reason_codes,
-        started_at_ns=snapshot.started_at_ns,
-        stopped_at_ns=snapshot.stopped_at_ns,
-        finalized_at_ns=snapshot.finalized_at_ns,
-    )
-
-
-def paper_shadow_session_state_to_dict(state: PaperShadowSessionState) -> dict:
-    """Serialize compact paper/shadow session state to a plain dict."""
-    return {
-        "available": state.available,
-        "session_id": state.session_id,
-        "status": state.status,
-        "plan_id": state.plan_id,
-        "plan_status": state.plan_status,
-        "tick_count": state.tick_count,
-        "paper_only": state.paper_only,
-        "real_orders_enabled": state.real_orders_enabled,
-        "real_money_enabled": state.real_money_enabled,
-        "active_sleeves_seen": state.active_sleeves_seen,
-        "blockers_seen": state.blockers_seen,
-        "event_count": state.event_count,
-        "symbols_seen": state.symbols_seen,
-        "venues_seen": state.venues_seen,
-        "first_event_ns": state.first_event_ns,
-        "last_event_ns": state.last_event_ns,
-        "rejected_event_count": state.rejected_event_count,
-        "intents_seen": state.intents_seen,
-        "accepted_intent_count": state.accepted_intent_count,
-        "rejected_intent_count": state.rejected_intent_count,
-        "intent_sleeves_seen": state.intent_sleeves_seen,
-        "intent_symbols_seen": state.intent_symbols_seen,
-        "intent_venues_seen": state.intent_venues_seen,
-        "intent_rejection_reasons": list(state.intent_rejection_reasons),
-        "fill_attempts": state.fill_attempts,
-        "simulated_fills": state.simulated_fills,
-        "rejected_fills": state.rejected_fills,
-        "symbols_filled": state.symbols_filled,
-        "sleeves_filled": state.sleeves_filled,
-        "cost_evaluations": state.cost_evaluations,
-        "accepted_costs": state.accepted_costs,
-        "rejected_costs": state.rejected_costs,
-        "total_fee": state.total_fee,
-        "total_slippage_cost": state.total_slippage_cost,
-        "pnl_events": state.pnl_events,
-        "open_positions": state.open_positions,
-        "closed_positions": state.closed_positions,
-        "total_fees": state.total_fees,
-        "total_slippage": state.total_slippage,
-        "realized_pnl": state.realized_pnl,
-        "risk_limit_decision_status": state.risk_limit_decision_status,
-        "risk_block_new_intents": state.risk_block_new_intents,
-        "intents_blocked_by_risk": state.intents_blocked_by_risk,
-        "session_stop_requested_by_risk": state.session_stop_requested_by_risk,
-        "risk_reasons": list(state.risk_reasons),
-        "runtime_monitor_status": state.runtime_monitor_status,
-        "stale_feed_detected": state.stale_feed_detected,
-        "symbol_coverage_ok": state.symbol_coverage_ok,
-        "venue_coverage_ok": state.venue_coverage_ok,
-        "price_validity_ok": state.price_validity_ok,
-        "event_gap_count": state.event_gap_count,
-        "guardrail_primary_action": state.guardrail_primary_action,
-        "guardrail_actions": list(state.guardrail_actions),
-        "guardrail_block_finalize": state.guardrail_block_finalize,
-        "guardrail_reason_codes": list(state.guardrail_reason_codes),
-        "started_at_ns": state.started_at_ns,
-        "stopped_at_ns": state.stopped_at_ns,
-        "finalized_at_ns": state.finalized_at_ns,
-    }
-
-
 def evidence_sufficiency_state_to_dict(state: EvidenceSufficiencyState) -> dict:
     """Serialize EvidenceSufficiencyState to a plain dict."""
     return {
@@ -4266,11 +2658,6 @@ def evidence_sufficiency_state_to_dict(state: EvidenceSufficiencyState) -> dict:
         "external_regime_activation_blocked_steps": state.external_regime_activation_blocked_steps,
         "external_regime_activation_reduced_steps": state.external_regime_activation_reduced_steps,
         "external_regime_scenario_summary": state.external_regime_scenario_summary,
-        "paper_shadow_evidence_available": state.paper_shadow_evidence_available,
-        "paper_shadow_evidence_passed": state.paper_shadow_evidence_passed,
-        "paper_shadow_evidence_blocked": state.paper_shadow_evidence_blocked,
-        "paper_shadow_evidence_bundle_complete": state.paper_shadow_evidence_bundle_complete,
-        "paper_shadow_evidence_status": state.paper_shadow_evidence_status,
     }
 
 
@@ -4310,38 +2697,10 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         ),
         # Phase 15E
         "sleeve_promotion_review": (
-            sleeve_promotion_review_snapshot_to_dict(snap.sleeve_promotion_review)
-            if snap.sleeve_promotion_review is not None
-            else None
+            snap.sleeve_promotion_review.__dict__ if snap.sleeve_promotion_review is not None else None
         ),
         # Phase 15F
-        "sleeve_admission": (
-            sleeve_admission_snapshot_to_dict(snap.sleeve_admission) if snap.sleeve_admission is not None else None
-        ),
-        # Phase 15I
-        "sleeve_admission_release": (
-            sleeve_admission_release_state_to_dict(snap.sleeve_admission_release)
-            if snap.sleeve_admission_release is not None
-            else None
-        ),
-        # Phase 15K
-        "managed_sleeve_manifest": (
-            managed_sleeve_manifest_state_to_dict(snap.managed_sleeve_manifest)
-            if snap.managed_sleeve_manifest is not None
-            else None
-        ),
-        # Phase 15L
-        "paper_shadow_activation_plan": (
-            paper_shadow_activation_plan_state_to_dict(snap.paper_shadow_activation_plan)
-            if snap.paper_shadow_activation_plan is not None
-            else None
-        ),
-        # Phase 15M
-        "paper_shadow_session": (
-            paper_shadow_session_state_to_dict(snap.paper_shadow_session)
-            if snap.paper_shadow_session is not None
-            else None
-        ),
+        "sleeve_admission": (snap.sleeve_admission.__dict__ if snap.sleeve_admission is not None else None),
         "readiness_level": snap.readiness_level,
         "readiness_is_supportive": snap.readiness_is_supportive,
         "evidence": evidence_sufficiency_state_to_dict(snap.evidence),

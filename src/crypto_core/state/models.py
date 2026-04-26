@@ -109,19 +109,19 @@ DEESC_EXIT_SHS: dict[str, float] = {
 #: Minimum time already spent IN the current state before de-escalation is eligible (seconds).
 DEESC_MIN_IN_STATE_S: dict[str, float] = {
     SystemState.NORMAL: 0.0,
-    SystemState.DEGRADED: 10 * 60.0,   # 10 min
+    SystemState.DEGRADED: 10 * 60.0,  # 10 min
     SystemState.DEFENSIVE: 30 * 60.0,  # 30 min
-    SystemState.CRISIS: 2 * 3600.0,    # 2 h
-    SystemState.HALT: float("inf"),    # manual only
+    SystemState.CRISIS: 2 * 3600.0,  # 2 h
+    SystemState.HALT: float("inf"),  # manual only
 }
 
 #: SHS exit threshold must be sustained for this long before de-escalation fires (seconds).
 DEESC_SUSTAINED_S: dict[str, float] = {
     SystemState.NORMAL: 0.0,
-    SystemState.DEGRADED: 30 * 60.0,   # 30 min
-    SystemState.DEFENSIVE: 2 * 3600.0, # 2 h
-    SystemState.CRISIS: 6 * 3600.0,    # 6 h
-    SystemState.HALT: float("inf"),    # manual only
+    SystemState.DEGRADED: 30 * 60.0,  # 30 min
+    SystemState.DEFENSIVE: 2 * 3600.0,  # 2 h
+    SystemState.CRISIS: 6 * 3600.0,  # 6 h
+    SystemState.HALT: float("inf"),  # manual only
 }
 
 #: Maximum leverage per state (fractional, e.g. 3.0 = 3x).

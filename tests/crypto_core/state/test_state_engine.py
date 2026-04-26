@@ -4,20 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from crypto_core.state.engine import (
-    SystemStateEngine,
-    _apply_overrides,
-    _target_state_from_shs,
-    compute_shs,
-)
-from crypto_core.state.models import (
-    SHS_WEIGHTS,
-    SignalInputs,
-    StateSnapshot,
-    SystemState,
-    is_at_least,
-    state_severity,
-)
+from crypto_core.state.engine import SystemStateEngine, _apply_overrides, _target_state_from_shs, compute_shs
+from crypto_core.state.models import SHS_WEIGHTS, SignalInputs, StateSnapshot, SystemState, is_at_least, state_severity
 
 # ---------------------------------------------------------------------------
 # Helpers

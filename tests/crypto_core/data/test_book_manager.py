@@ -16,11 +16,7 @@ import pytest
 
 from crypto_core.data.processing.book_manager import OrderBookManager
 from crypto_core.data.validation.errors import ValidationError, ValidationErrorCode
-from tests.crypto_core.data.fixtures.book_replay import (
-    make_delta,
-    make_delta_sequence,
-    make_snapshot,
-)
+from tests.crypto_core.data.fixtures.book_replay import make_delta, make_delta_sequence, make_snapshot
 from tests.crypto_core.data.fixtures.deterministic_clock import DeterministicClock
 
 # ──────────────────────────────────────────────────────────────────

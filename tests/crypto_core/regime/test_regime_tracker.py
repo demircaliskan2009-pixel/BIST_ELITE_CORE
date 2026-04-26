@@ -23,10 +23,7 @@ from crypto_core.regime.models import (
     RegimeSignalInput,
     RegimeSnapshot,
 )
-from crypto_core.regime.tracker import (
-    _NS_PER_MS,
-    MarketRegimeTracker,
-)
+from crypto_core.regime.tracker import _NS_PER_MS, MarketRegimeTracker
 
 # ---------------------------------------------------------------------------
 # Shared test fixtures / helpers
