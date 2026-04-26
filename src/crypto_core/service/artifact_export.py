@@ -48,6 +48,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     PaperShadowRunEvidenceReport,
     PaperShadowSessionCorruptError,
     PaperShadowSessionSnapshot,
+    PaperTradingRunSummary,
     feed_replay_plan_from_dict,
     feed_replay_plan_to_dict,
     feed_replay_result_from_dict,
@@ -78,6 +79,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     paper_shadow_run_evidence_report_to_dict,
     paper_shadow_session_snapshot_from_dict,
     paper_shadow_session_snapshot_to_dict,
+    paper_trading_run_summary_from_dict,
+    paper_trading_run_summary_to_dict,
 )
 from crypto_core.service.sleeve_admission_controller import (
     ManagedSleeveSetManifest,
@@ -563,6 +566,7 @@ _PAPER_PNL_LEDGER_SNAPSHOT_NAME = "crypto_paper_pnl_ledger"
 _PAPER_PORTFOLIO_RISK_SNAPSHOT_NAME = "crypto_paper_portfolio_risk_snapshot"
 _PAPER_RISK_LIMIT_DECISION_SNAPSHOT_NAME = "crypto_paper_risk_limit_decision"
 _PAPER_SHADOW_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_paper_shadow_run_evidence_report"
+_PAPER_TRADING_RUN_SUMMARY_SNAPSHOT_NAME = "crypto_paper_trading_run_summary"
 _MULTI_SOURCE_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_multi_source_run_evidence_report"
 _PAPER_SHADOW_EVIDENCE_BUNDLE_SNAPSHOT_NAME = "crypto_paper_shadow_evidence_bundle"
 
@@ -1071,6 +1075,31 @@ def load_paper_shadow_run_evidence_report(*, evidence_store: EvidenceStore) -> P
             f"Paper/shadow run evidence report 'data' must be a dict, got {type(data).__name__!r}"
         )
     return paper_shadow_run_evidence_report_from_dict(data)
+
+
+def export_paper_trading_run_summary(
+    *,
+    summary: PaperTradingRunSummary,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist a deterministic final paper trading run summary."""
+    data = paper_trading_run_summary_to_dict(summary)
+    write_result = evidence_store.save_snapshot(_PAPER_TRADING_RUN_SUMMARY_SNAPSHOT_NAME, data)
+    if not write_result.success:
+        return write_result
+    evidence_store.append_evidence(_PAPER_TRADING_RUN_SUMMARY_SNAPSHOT_NAME, data)
+    return write_result
+
+
+def load_paper_trading_run_summary(*, evidence_store: EvidenceStore) -> PaperTradingRunSummary:
+    """Load the latest deterministic final paper trading run summary."""
+    envelope = evidence_store.load_snapshot(_PAPER_TRADING_RUN_SUMMARY_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper trading run summary 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return paper_trading_run_summary_from_dict(data)
 
 
 def export_multi_source_run_evidence_report(

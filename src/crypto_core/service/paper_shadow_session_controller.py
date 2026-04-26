@@ -474,6 +474,53 @@ class PaperShadowRunEvidenceReport:
 
 
 @dataclass(frozen=True)
+class PaperTradingRunSummary:
+    summary_id: str
+    as_of_ns: int
+    session_id: str
+    session_status: PaperShadowSessionStatus
+    monitor_status: RuntimeMonitorStatus
+    guardrail_actions: tuple[GuardrailAction, ...]
+    guardrail_reason_codes: tuple[str, ...] = ()
+    source_replay_id: str | None = None
+    source_intent_batch_id: str | None = None
+    source_fill_simulation_id: str | None = None
+    source_cost_result_id: str | None = None
+    source_ledger_id: str | None = None
+    source_risk_snapshot_id: str | None = None
+    source_risk_decision_id: str | None = None
+    source_run_evidence_report_id: str | None = None
+    event_count: int = 0
+    events_replayed: int = 0
+    batches_replayed: int = 0
+    batches_rejected: int = 0
+    rejected_event_count: int = 0
+    accepted_intent_count: int = 0
+    rejected_intent_count: int = 0
+    fill_attempts: int = 0
+    simulated_fills: int = 0
+    rejected_fills: int = 0
+    cost_evaluations: int = 0
+    accepted_costs: int = 0
+    rejected_costs: int = 0
+    realized_pnl: float = 0.0
+    unrealized_pnl: float | None = None
+    total_fees: float = 0.0
+    total_slippage: float = 0.0
+    risk_status: str = "missing"
+    risk_block_new_intents: bool = False
+    risk_stop_session: bool = False
+    evidence_status: PaperShadowRunEvidenceStatus = PaperShadowRunEvidenceStatus.EMPTY
+    blockers: tuple[str, ...] = ()
+    reason_codes: tuple[str, ...] = ()
+    next_actions: tuple[str, ...] = ()
+    paper_only: bool = True
+    real_orders_enabled: bool = False
+    real_money_enabled: bool = False
+    operator_summary: str = "Paper trading run summary has not been assessed."
+
+
+@dataclass(frozen=True)
 class MultiSourceRunEvidenceReport:
     aggregate_id: str
     as_of_ns: int
@@ -3005,6 +3052,270 @@ def paper_shadow_run_evidence_report_from_dict(data: dict) -> PaperShadowRunEvid
     return report
 
 
+def build_paper_trading_run_summary(
+    *,
+    session_snapshot: PaperShadowSessionSnapshot | dict,
+    replay_result: FeedReplayResult | dict | None = None,
+    intent_result: PaperIntentBatchResult | dict | None = None,
+    fill_result: PaperFillSimulationResult | dict | None = None,
+    cost_result: PaperCostResult | dict | None = None,
+    ledger: PaperPnLLedger | dict | None = None,
+    risk_snapshot: PaperPortfolioRiskSnapshot | dict | None = None,
+    risk_decision: PaperRiskLimitDecision | dict | None = None,
+    run_evidence_report: PaperShadowRunEvidenceReport | dict | None = None,
+    summary_id: str | None = None,
+    as_of_ns: int | None = None,
+) -> PaperTradingRunSummary:
+    """Build a deterministic final paper trading run summary from existing audit artifacts."""
+    session = (
+        paper_shadow_session_snapshot_from_dict(session_snapshot)
+        if isinstance(session_snapshot, dict)
+        else session_snapshot
+    )
+    _validate_session_snapshot(session)
+    replay = feed_replay_result_from_dict(replay_result) if isinstance(replay_result, dict) else replay_result
+    intent = paper_intent_batch_result_from_dict(intent_result) if isinstance(intent_result, dict) else intent_result
+    fills = paper_fill_simulation_result_from_dict(fill_result) if isinstance(fill_result, dict) else fill_result
+    costs = paper_cost_result_from_dict(cost_result) if isinstance(cost_result, dict) else cost_result
+    pnl = paper_pnl_ledger_from_dict(ledger) if isinstance(ledger, dict) else ledger
+    risk = paper_portfolio_risk_snapshot_from_dict(risk_snapshot) if isinstance(risk_snapshot, dict) else risk_snapshot
+    decision = paper_risk_limit_decision_from_dict(risk_decision) if isinstance(risk_decision, dict) else risk_decision
+    run_evidence = (
+        paper_shadow_run_evidence_report_from_dict(run_evidence_report)
+        if isinstance(run_evidence_report, dict)
+        else run_evidence_report
+    )
+    _validate_paper_trading_run_summary_inputs(
+        session=session,
+        replay=replay,
+        intent=intent,
+        fills=fills,
+        costs=costs,
+        pnl=pnl,
+        risk=risk,
+        decision=decision,
+        run_evidence=run_evidence,
+    )
+    risk_status = decision.status.value if decision is not None else session.risk_limit_decision_status
+    risk_block_new_intents = decision.block_new_intents if decision is not None else session.risk_block_new_intents
+    risk_stop_session = decision.stop_session if decision is not None else session.session_stop_requested_by_risk
+    reason_codes = _paper_trading_run_summary_reason_codes(
+        session=session,
+        replay=replay,
+        intent=intent,
+        fills=fills,
+        costs=costs,
+        pnl=pnl,
+        risk=risk,
+        decision=decision,
+        run_evidence=run_evidence,
+        risk_status=risk_status,
+    )
+    status = _paper_trading_run_summary_status(
+        session=session,
+        replay=replay,
+        reason_codes=reason_codes,
+        risk_status=risk_status,
+    )
+    blockers = _paper_trading_run_summary_blockers(status, reason_codes, session)
+    next_actions = _paper_trading_run_summary_next_actions(status, reason_codes)
+    resolved_as_of_ns = _paper_trading_run_summary_as_of_ns(
+        session,
+        intent=intent,
+        fills=fills,
+        costs=costs,
+        pnl=pnl,
+        risk=risk,
+        decision=decision,
+        run_evidence=run_evidence,
+        override=as_of_ns,
+    )
+    total_fees = risk.total_fees if risk is not None else pnl.total_fees if pnl is not None else session.total_fees
+    total_slippage = (
+        risk.total_slippage if risk is not None else pnl.total_slippage if pnl is not None else session.total_slippage
+    )
+    summary = PaperTradingRunSummary(
+        summary_id=_string_or_default(summary_id, _paper_trading_run_summary_id(session, replay, decision)),
+        as_of_ns=resolved_as_of_ns,
+        session_id=session.session_id,
+        session_status=session.status,
+        monitor_status=session.runtime_monitor.status,
+        guardrail_actions=session.guardrail.actions,
+        guardrail_reason_codes=session.guardrail.reason_codes,
+        source_replay_id=replay.replay_id if replay is not None else None,
+        source_intent_batch_id=intent.batch_id if intent is not None else None,
+        source_fill_simulation_id=fills.simulation_id if fills is not None else None,
+        source_cost_result_id=costs.cost_result_id if costs is not None else None,
+        source_ledger_id=pnl.ledger_id if pnl is not None else None,
+        source_risk_snapshot_id=risk.snapshot_id if risk is not None else None,
+        source_risk_decision_id=decision.decision_id if decision is not None else None,
+        source_run_evidence_report_id=run_evidence.report_id if run_evidence is not None else None,
+        event_count=session.event_count,
+        events_replayed=replay.events_replayed if replay is not None else 0,
+        batches_replayed=replay.batches_replayed if replay is not None else 0,
+        batches_rejected=replay.batches_rejected if replay is not None else 0,
+        rejected_event_count=session.rejected_event_count,
+        accepted_intent_count=session.accepted_intent_count,
+        rejected_intent_count=session.rejected_intent_count,
+        fill_attempts=session.fill_attempts,
+        simulated_fills=session.simulated_fills,
+        rejected_fills=session.rejected_fills,
+        cost_evaluations=session.cost_evaluations,
+        accepted_costs=session.accepted_costs,
+        rejected_costs=session.rejected_costs,
+        realized_pnl=risk.realized_pnl
+        if risk is not None
+        else pnl.realized_pnl
+        if pnl is not None
+        else session.realized_pnl,
+        unrealized_pnl=risk.unrealized_pnl if risk is not None else pnl.unrealized_pnl if pnl is not None else None,
+        total_fees=total_fees,
+        total_slippage=total_slippage,
+        risk_status=risk_status,
+        risk_block_new_intents=risk_block_new_intents,
+        risk_stop_session=risk_stop_session,
+        evidence_status=status,
+        blockers=blockers,
+        reason_codes=reason_codes,
+        next_actions=next_actions,
+        paper_only=_paper_trading_run_summary_paper_only(session, replay, intent, fills, costs, pnl, risk, decision),
+        real_orders_enabled=_paper_trading_run_summary_real_orders_enabled(
+            session,
+            replay,
+            intent,
+            fills,
+            costs,
+            pnl,
+            risk,
+            decision,
+        ),
+        real_money_enabled=_paper_trading_run_summary_real_money_enabled(
+            session,
+            replay,
+            intent,
+            fills,
+            costs,
+            pnl,
+            risk,
+            decision,
+        ),
+        operator_summary=_paper_trading_run_summary_text(
+            status,
+            session_id=session.session_id,
+            events=session.event_count,
+            intents=session.intents_seen,
+            fills=session.simulated_fills,
+            blockers=blockers,
+        ),
+    )
+    _validate_paper_trading_run_summary(summary)
+    return summary
+
+
+def paper_trading_run_summary_to_dict(summary: PaperTradingRunSummary) -> dict:
+    _validate_paper_trading_run_summary(summary)
+    return {
+        "summary_id": summary.summary_id,
+        "as_of_ns": summary.as_of_ns,
+        "session_id": summary.session_id,
+        "session_status": summary.session_status.value,
+        "monitor_status": summary.monitor_status.value,
+        "guardrail_actions": [action.value for action in summary.guardrail_actions],
+        "guardrail_reason_codes": list(summary.guardrail_reason_codes),
+        "source_replay_id": summary.source_replay_id,
+        "source_intent_batch_id": summary.source_intent_batch_id,
+        "source_fill_simulation_id": summary.source_fill_simulation_id,
+        "source_cost_result_id": summary.source_cost_result_id,
+        "source_ledger_id": summary.source_ledger_id,
+        "source_risk_snapshot_id": summary.source_risk_snapshot_id,
+        "source_risk_decision_id": summary.source_risk_decision_id,
+        "source_run_evidence_report_id": summary.source_run_evidence_report_id,
+        "event_count": summary.event_count,
+        "events_replayed": summary.events_replayed,
+        "batches_replayed": summary.batches_replayed,
+        "batches_rejected": summary.batches_rejected,
+        "rejected_event_count": summary.rejected_event_count,
+        "accepted_intent_count": summary.accepted_intent_count,
+        "rejected_intent_count": summary.rejected_intent_count,
+        "fill_attempts": summary.fill_attempts,
+        "simulated_fills": summary.simulated_fills,
+        "rejected_fills": summary.rejected_fills,
+        "cost_evaluations": summary.cost_evaluations,
+        "accepted_costs": summary.accepted_costs,
+        "rejected_costs": summary.rejected_costs,
+        "realized_pnl": summary.realized_pnl,
+        "unrealized_pnl": summary.unrealized_pnl,
+        "total_fees": summary.total_fees,
+        "total_slippage": summary.total_slippage,
+        "risk_status": summary.risk_status,
+        "risk_block_new_intents": summary.risk_block_new_intents,
+        "risk_stop_session": summary.risk_stop_session,
+        "evidence_status": summary.evidence_status.value,
+        "blockers": list(summary.blockers),
+        "reason_codes": list(summary.reason_codes),
+        "next_actions": list(summary.next_actions),
+        "paper_only": summary.paper_only,
+        "real_orders_enabled": summary.real_orders_enabled,
+        "real_money_enabled": summary.real_money_enabled,
+        "operator_summary": summary.operator_summary,
+    }
+
+
+def paper_trading_run_summary_from_dict(data: dict) -> PaperTradingRunSummary:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper trading run summary must be a dict, got {type(data).__name__!r}")
+    summary = PaperTradingRunSummary(
+        summary_id=_require_non_empty_str(data.get("summary_id"), "summary_id"),
+        as_of_ns=_require_non_negative_int(data.get("as_of_ns"), "as_of_ns"),
+        session_id=_require_non_empty_str(data.get("session_id"), "session_id"),
+        session_status=_session_status_or_default(data.get("session_status"), PaperShadowSessionStatus.FAILED),
+        monitor_status=_runtime_monitor_status_from_value(data.get("monitor_status")),
+        guardrail_actions=_guardrail_actions_from_data(data.get("guardrail_actions")),
+        guardrail_reason_codes=_sorted_unique(data.get("guardrail_reason_codes", ())),
+        source_replay_id=_optional_str(data.get("source_replay_id"), "source_replay_id"),
+        source_intent_batch_id=_optional_str(data.get("source_intent_batch_id"), "source_intent_batch_id"),
+        source_fill_simulation_id=_optional_str(data.get("source_fill_simulation_id"), "source_fill_simulation_id"),
+        source_cost_result_id=_optional_str(data.get("source_cost_result_id"), "source_cost_result_id"),
+        source_ledger_id=_optional_str(data.get("source_ledger_id"), "source_ledger_id"),
+        source_risk_snapshot_id=_optional_str(data.get("source_risk_snapshot_id"), "source_risk_snapshot_id"),
+        source_risk_decision_id=_optional_str(data.get("source_risk_decision_id"), "source_risk_decision_id"),
+        source_run_evidence_report_id=_optional_str(
+            data.get("source_run_evidence_report_id"),
+            "source_run_evidence_report_id",
+        ),
+        event_count=_require_non_negative_int(data.get("event_count"), "event_count"),
+        events_replayed=_require_non_negative_int(data.get("events_replayed"), "events_replayed"),
+        batches_replayed=_require_non_negative_int(data.get("batches_replayed"), "batches_replayed"),
+        batches_rejected=_require_non_negative_int(data.get("batches_rejected"), "batches_rejected"),
+        rejected_event_count=_require_non_negative_int(data.get("rejected_event_count"), "rejected_event_count"),
+        accepted_intent_count=_require_non_negative_int(data.get("accepted_intent_count"), "accepted_intent_count"),
+        rejected_intent_count=_require_non_negative_int(data.get("rejected_intent_count"), "rejected_intent_count"),
+        fill_attempts=_require_non_negative_int(data.get("fill_attempts"), "fill_attempts"),
+        simulated_fills=_require_non_negative_int(data.get("simulated_fills"), "simulated_fills"),
+        rejected_fills=_require_non_negative_int(data.get("rejected_fills"), "rejected_fills"),
+        cost_evaluations=_require_non_negative_int(data.get("cost_evaluations"), "cost_evaluations"),
+        accepted_costs=_require_non_negative_int(data.get("accepted_costs"), "accepted_costs"),
+        rejected_costs=_require_non_negative_int(data.get("rejected_costs"), "rejected_costs"),
+        realized_pnl=_require_float(data.get("realized_pnl"), "realized_pnl"),
+        unrealized_pnl=_optional_float(data.get("unrealized_pnl"), "unrealized_pnl"),
+        total_fees=_require_non_negative_float(data.get("total_fees"), "total_fees"),
+        total_slippage=_require_non_negative_float(data.get("total_slippage"), "total_slippage"),
+        risk_status=_require_non_empty_str(data.get("risk_status", "missing"), "risk_status"),
+        risk_block_new_intents=_bool_or_default(data, "risk_block_new_intents", False),
+        risk_stop_session=_bool_or_default(data, "risk_stop_session", False),
+        evidence_status=_run_evidence_status_from_value(data.get("evidence_status")),
+        blockers=_sorted_unique(data.get("blockers", ())),
+        reason_codes=_sorted_unique(data.get("reason_codes", ())),
+        next_actions=_sorted_unique(data.get("next_actions", ())),
+        paper_only=_bool_or_default(data, "paper_only", True),
+        real_orders_enabled=_bool_or_default(data, "real_orders_enabled", False),
+        real_money_enabled=_bool_or_default(data, "real_money_enabled", False),
+        operator_summary=_require_non_empty_str(data.get("operator_summary"), "operator_summary"),
+    )
+    _validate_paper_trading_run_summary(summary)
+    return summary
+
+
 def build_multi_source_run_evidence_report(
     reports: tuple[PaperShadowRunEvidenceReport | dict, ...],
     *,
@@ -4352,6 +4663,111 @@ def _validate_paper_shadow_run_evidence_report(report: PaperShadowRunEvidenceRep
         raise PaperShadowSessionCorruptError("EMPTY run evidence cannot carry accepted events")
 
 
+def _validate_paper_trading_run_summary(summary: PaperTradingRunSummary) -> None:
+    if not isinstance(summary, PaperTradingRunSummary):
+        raise PaperShadowSessionCorruptError("paper trading run summary must be a PaperTradingRunSummary")
+    _require_non_empty_str(summary.summary_id, "summary_id")
+    _require_non_negative_int(summary.as_of_ns, "as_of_ns")
+    _require_non_empty_str(summary.session_id, "session_id")
+    if not isinstance(summary.session_status, PaperShadowSessionStatus):
+        raise PaperShadowSessionCorruptError("paper trading run summary session_status must be a session status")
+    if not isinstance(summary.monitor_status, RuntimeMonitorStatus):
+        raise PaperShadowSessionCorruptError("paper trading run summary monitor_status must be a monitor status")
+    if summary.guardrail_actions != _sorted_unique_actions(summary.guardrail_actions):
+        raise PaperShadowSessionCorruptError("paper trading run summary guardrail actions must be sorted unique")
+    for field_name in ("guardrail_reason_codes", "blockers", "reason_codes", "next_actions"):
+        value = getattr(summary, field_name)
+        if value != _sorted_unique(value):
+            raise PaperShadowSessionCorruptError(f"paper trading run summary {field_name} must be sorted unique")
+    for field_name in (
+        "source_replay_id",
+        "source_intent_batch_id",
+        "source_fill_simulation_id",
+        "source_cost_result_id",
+        "source_ledger_id",
+        "source_risk_snapshot_id",
+        "source_risk_decision_id",
+        "source_run_evidence_report_id",
+    ):
+        _optional_str(getattr(summary, field_name), field_name)
+    for field_name in (
+        "event_count",
+        "events_replayed",
+        "batches_replayed",
+        "batches_rejected",
+        "rejected_event_count",
+        "accepted_intent_count",
+        "rejected_intent_count",
+        "fill_attempts",
+        "simulated_fills",
+        "rejected_fills",
+        "cost_evaluations",
+        "accepted_costs",
+        "rejected_costs",
+    ):
+        _require_non_negative_int(getattr(summary, field_name), field_name)
+    if summary.simulated_fills + summary.rejected_fills != summary.fill_attempts:
+        raise PaperShadowSessionCorruptError("paper trading run summary fill counts must balance")
+    if summary.accepted_costs + summary.rejected_costs != summary.cost_evaluations:
+        raise PaperShadowSessionCorruptError("paper trading run summary cost counts must balance")
+    _require_float(summary.realized_pnl, "realized_pnl")
+    _optional_float(summary.unrealized_pnl, "unrealized_pnl")
+    _require_non_negative_float(summary.total_fees, "total_fees")
+    _require_non_negative_float(summary.total_slippage, "total_slippage")
+    if summary.risk_status != "missing":
+        _paper_risk_limit_decision_status_from_value(summary.risk_status)
+    elif summary.risk_block_new_intents or summary.risk_stop_session:
+        raise PaperShadowSessionCorruptError("missing paper risk status cannot carry enforcement flags")
+    if summary.risk_stop_session and not summary.risk_block_new_intents:
+        raise PaperShadowSessionCorruptError("paper trading run risk stop must also block intents")
+    if summary.risk_status == PaperRiskLimitDecisionStatus.PASS.value and (
+        summary.risk_block_new_intents or summary.risk_stop_session
+    ):
+        raise PaperShadowSessionCorruptError("passing paper trading run risk status cannot block or stop")
+    if not isinstance(summary.evidence_status, PaperShadowRunEvidenceStatus):
+        raise PaperShadowSessionCorruptError("paper trading run summary status must be a run evidence status")
+    _require_bool(summary.paper_only, "paper_only")
+    _require_bool(summary.real_orders_enabled, "real_orders_enabled")
+    _require_bool(summary.real_money_enabled, "real_money_enabled")
+    _require_non_empty_str(summary.operator_summary, "operator_summary")
+    if not summary.paper_only or summary.real_orders_enabled or summary.real_money_enabled:
+        if summary.evidence_status != PaperShadowRunEvidenceStatus.BLOCKED:
+            raise PaperShadowSessionCorruptError("unsafe paper trading summary flags must force BLOCKED status")
+    if summary.evidence_status == PaperShadowRunEvidenceStatus.PASS:
+        if summary.session_status != PaperShadowSessionStatus.FINALIZED:
+            raise PaperShadowSessionCorruptError("paper trading summary cannot PASS before session finalization")
+        if summary.event_count <= 0 or summary.events_replayed <= 0 or summary.batches_replayed <= 0:
+            raise PaperShadowSessionCorruptError("paper trading summary cannot PASS without replayed market evidence")
+        if summary.rejected_event_count or summary.batches_rejected or summary.rejected_fills or summary.rejected_costs:
+            raise PaperShadowSessionCorruptError("paper trading summary cannot PASS with rejected critical artifacts")
+        if summary.rejected_intent_count > 0:
+            raise PaperShadowSessionCorruptError("paper trading summary cannot PASS with rejected intents")
+        if summary.monitor_status != RuntimeMonitorStatus.HEALTHY:
+            raise PaperShadowSessionCorruptError("paper trading summary cannot PASS without healthy monitor")
+        if summary.guardrail_actions != (GuardrailAction.NONE,):
+            raise PaperShadowSessionCorruptError("paper trading summary cannot PASS with guardrail actions")
+        if summary.risk_status != PaperRiskLimitDecisionStatus.PASS.value:
+            raise PaperShadowSessionCorruptError("paper trading summary cannot PASS without passing risk decision")
+        if summary.blockers or summary.reason_codes:
+            raise PaperShadowSessionCorruptError("paper trading summary cannot PASS with blockers or reasons")
+    if summary.evidence_status == PaperShadowRunEvidenceStatus.EMPTY and summary.event_count > 0:
+        raise PaperShadowSessionCorruptError("EMPTY paper trading summary cannot carry events")
+    if (
+        summary.risk_status
+        in {
+            PaperRiskLimitDecisionStatus.BLOCK_NEW_INTENTS.value,
+            PaperRiskLimitDecisionStatus.STOP_SESSION.value,
+        }
+        and summary.evidence_status != PaperShadowRunEvidenceStatus.BLOCKED
+    ):
+        raise PaperShadowSessionCorruptError("blocking paper risk decision must block trading summary")
+    if (
+        GuardrailAction.STOP_SESSION in summary.guardrail_actions
+        or GuardrailAction.PAUSE_SESSION in summary.guardrail_actions
+    ) and summary.evidence_status == PaperShadowRunEvidenceStatus.PASS:
+        raise PaperShadowSessionCorruptError("stop/pause guardrail cannot produce PASS trading summary")
+
+
 def _validate_multi_source_run_evidence_report(report: MultiSourceRunEvidenceReport) -> None:
     if not isinstance(report, MultiSourceRunEvidenceReport):
         raise PaperShadowSessionCorruptError("multi-source run evidence report must be a MultiSourceRunEvidenceReport")
@@ -4943,6 +5359,318 @@ def _run_evidence_summary(
     return (
         f"run_evidence={status.value}; accepted_events={accepted_event_count}; "
         f"rejected_events={rejected_event_count}; blockers={len(blockers)}"
+    )
+
+
+def _validate_paper_trading_run_summary_inputs(
+    *,
+    session: PaperShadowSessionSnapshot,
+    replay: FeedReplayResult | None,
+    intent: PaperIntentBatchResult | None,
+    fills: PaperFillSimulationResult | None,
+    costs: PaperCostResult | None,
+    pnl: PaperPnLLedger | None,
+    risk: PaperPortfolioRiskSnapshot | None,
+    decision: PaperRiskLimitDecision | None,
+    run_evidence: PaperShadowRunEvidenceReport | None,
+) -> None:
+    _validate_session_snapshot(session)
+    if replay is not None:
+        _validate_feed_replay_result(replay)
+        _require_matching_session_id(session.session_id, replay.session_id, "feed replay result")
+    if intent is not None:
+        _validate_paper_intent_batch_result(intent)
+        _require_matching_session_id(session.session_id, intent.session_id, "paper intent result")
+    if fills is not None:
+        _validate_paper_fill_simulation_result(fills)
+        _require_matching_session_id(session.session_id, fills.session_id, "paper fill simulation")
+        if intent is not None and fills.intent_batch_id != intent.batch_id:
+            raise PaperShadowSessionCorruptError("paper trading summary fill simulation must reference intent batch")
+    if costs is not None:
+        _validate_paper_cost_result(costs)
+        _require_matching_session_id(session.session_id, costs.session_id, "paper cost result")
+        if fills is not None and costs.source_fill_simulation_id != fills.simulation_id:
+            raise PaperShadowSessionCorruptError("paper trading summary cost result must reference fill simulation")
+    if pnl is not None:
+        _validate_paper_pnl_ledger(pnl)
+        _require_matching_session_id(session.session_id, pnl.session_id, "paper PnL ledger")
+        if costs is not None and pnl.source_cost_result_id != costs.cost_result_id:
+            raise PaperShadowSessionCorruptError("paper trading summary PnL ledger must reference cost result")
+    if risk is not None:
+        _validate_paper_portfolio_risk_snapshot(risk)
+        _require_matching_session_id(session.session_id, risk.session_id, "paper portfolio risk snapshot")
+        if pnl is not None and risk.source_ledger_id != pnl.ledger_id:
+            raise PaperShadowSessionCorruptError("paper trading summary risk snapshot must reference PnL ledger")
+    if decision is not None:
+        _validate_paper_risk_limit_decision(decision)
+        _require_matching_session_id(session.session_id, decision.session_id, "paper risk decision")
+        if risk is not None and decision.source_risk_snapshot_id != risk.snapshot_id:
+            raise PaperShadowSessionCorruptError("paper trading summary risk decision must reference risk snapshot")
+    if run_evidence is not None:
+        _validate_paper_shadow_run_evidence_report(run_evidence)
+        if replay is not None and run_evidence.accepted_event_count != replay.events_replayed:
+            raise PaperShadowSessionCorruptError("paper trading summary run evidence must match replayed events")
+
+
+def _require_matching_session_id(expected: str, observed: str, artifact_name: str) -> None:
+    if observed != expected:
+        raise PaperShadowSessionCorruptError(f"{artifact_name} session_id must match paper trading summary session")
+
+
+def _paper_trading_run_summary_id(
+    session: PaperShadowSessionSnapshot,
+    replay: FeedReplayResult | None,
+    decision: PaperRiskLimitDecision | None,
+) -> str:
+    replay_id = replay.replay_id if replay is not None else "missing-replay"
+    decision_id = decision.decision_id if decision is not None else session.risk_limit_decision_id or "missing-risk"
+    return f"paper-trading-run-summary-{session.session_id}-{replay_id}-{decision_id}-{session.as_of_ns}"
+
+
+def _paper_trading_run_summary_as_of_ns(
+    session: PaperShadowSessionSnapshot,
+    *,
+    intent: PaperIntentBatchResult | None,
+    fills: PaperFillSimulationResult | None,
+    costs: PaperCostResult | None,
+    pnl: PaperPnLLedger | None,
+    risk: PaperPortfolioRiskSnapshot | None,
+    decision: PaperRiskLimitDecision | None,
+    run_evidence: PaperShadowRunEvidenceReport | None,
+    override: int | None,
+) -> int:
+    if override is not None:
+        return _optional_non_negative_int(override, "as_of_ns") or 0
+    return max(
+        (
+            session.as_of_ns,
+            intent.as_of_ns if intent is not None else 0,
+            fills.as_of_ns if fills is not None else 0,
+            costs.as_of_ns if costs is not None else 0,
+            pnl.as_of_ns if pnl is not None else 0,
+            risk.as_of_ns if risk is not None else 0,
+            decision.as_of_ns if decision is not None else 0,
+            run_evidence.as_of_ns if run_evidence is not None else 0,
+        )
+    )
+
+
+def _paper_trading_run_summary_reason_codes(
+    *,
+    session: PaperShadowSessionSnapshot,
+    replay: FeedReplayResult | None,
+    intent: PaperIntentBatchResult | None,
+    fills: PaperFillSimulationResult | None,
+    costs: PaperCostResult | None,
+    pnl: PaperPnLLedger | None,
+    risk: PaperPortfolioRiskSnapshot | None,
+    decision: PaperRiskLimitDecision | None,
+    run_evidence: PaperShadowRunEvidenceReport | None,
+    risk_status: str,
+) -> tuple[str, ...]:
+    reasons: list[str] = []
+    if session.status != PaperShadowSessionStatus.FINALIZED:
+        reasons.append("session_not_finalized")
+    if session.event_count == 0:
+        reasons.append("no_market_events")
+    if replay is None:
+        reasons.append("missing_replay_result")
+    if intent is None:
+        reasons.append("missing_intent_result")
+    if fills is None:
+        reasons.append("missing_fill_simulation_result")
+    if costs is None:
+        reasons.append("missing_cost_result")
+    if pnl is None:
+        reasons.append("missing_pnl_ledger")
+    if risk is None:
+        reasons.append("missing_portfolio_risk_snapshot")
+    if decision is None:
+        reasons.append("missing_risk_limit_decision")
+    if session.rejected_event_count > 0:
+        reasons.append("rejected_market_events")
+    if replay is not None and replay.batches_rejected > 0:
+        reasons.append("rejected_replay_batches")
+    if session.rejected_intent_count > 0:
+        reasons.append("rejected_paper_intents")
+    if session.rejected_fills > 0:
+        reasons.append("rejected_paper_fills")
+    if session.rejected_costs > 0:
+        reasons.append("rejected_paper_costs")
+    if session.runtime_monitor.status != RuntimeMonitorStatus.HEALTHY:
+        reasons.append("runtime_monitor_not_healthy")
+    if session.guardrail.primary_action != GuardrailAction.NONE or session.guardrail.block_finalize:
+        reasons.append("guardrail_action_required")
+    if not session.paper_only or session.real_orders_enabled or session.real_money_enabled:
+        reasons.append("unsafe_real_trading_flags")
+    reasons.extend(session.runtime_monitor.reason_codes)
+    reasons.extend(session.guardrail.reason_codes)
+    reasons.extend(session.risk_reasons)
+    if risk_status == "missing":
+        reasons.append("missing_risk_limit_decision")
+    elif risk_status == PaperRiskLimitDecisionStatus.WARN.value:
+        reasons.append("risk_limit_warning")
+    elif risk_status == PaperRiskLimitDecisionStatus.BLOCK_NEW_INTENTS.value:
+        reasons.append("risk_limit_blocks_new_intents")
+    elif risk_status == PaperRiskLimitDecisionStatus.STOP_SESSION.value:
+        reasons.append("risk_limit_stop_session")
+    if decision is not None:
+        reasons.extend(decision.reasons)
+    if risk is not None:
+        reasons.extend(risk.reasons)
+    if run_evidence is not None:
+        reasons.extend(run_evidence.reason_codes)
+        if run_evidence.evidence_status != PaperShadowRunEvidenceStatus.PASS:
+            reasons.append(f"run_evidence_{run_evidence.evidence_status.value}")
+    return _sorted_unique(tuple(reasons))
+
+
+def _paper_trading_run_summary_status(
+    *,
+    session: PaperShadowSessionSnapshot,
+    replay: FeedReplayResult | None,
+    reason_codes: tuple[str, ...],
+    risk_status: str,
+) -> PaperShadowRunEvidenceStatus:
+    if "unsafe_real_trading_flags" in reason_codes:
+        return PaperShadowRunEvidenceStatus.BLOCKED
+    if session.rejected_event_count > 0 or (replay is not None and replay.batches_rejected > 0):
+        return PaperShadowRunEvidenceStatus.BLOCKED
+    if session.rejected_fills > 0 or session.rejected_costs > 0:
+        return PaperShadowRunEvidenceStatus.BLOCKED
+    if risk_status in {
+        PaperRiskLimitDecisionStatus.BLOCK_NEW_INTENTS.value,
+        PaperRiskLimitDecisionStatus.STOP_SESSION.value,
+    }:
+        return PaperShadowRunEvidenceStatus.BLOCKED
+    if session.event_count == 0:
+        return PaperShadowRunEvidenceStatus.EMPTY
+    if (
+        session.guardrail.should_stop_session
+        or session.guardrail.should_pause_session
+        or session.guardrail.block_finalize
+        or session.guardrail.primary_action != GuardrailAction.NONE
+    ):
+        return PaperShadowRunEvidenceStatus.BLOCKED
+    if any(reason == "run_evidence_blocked" for reason in reason_codes):
+        return PaperShadowRunEvidenceStatus.BLOCKED
+    if (
+        any(reason.startswith("missing_") for reason in reason_codes)
+        or session.status != PaperShadowSessionStatus.FINALIZED
+    ):
+        return PaperShadowRunEvidenceStatus.INCONCLUSIVE
+    if session.runtime_monitor.status != RuntimeMonitorStatus.HEALTHY:
+        return PaperShadowRunEvidenceStatus.WARN
+    if (
+        session.rejected_intent_count > 0
+        or risk_status == PaperRiskLimitDecisionStatus.WARN.value
+        or "run_evidence_warn" in reason_codes
+    ):
+        return PaperShadowRunEvidenceStatus.WARN
+    return PaperShadowRunEvidenceStatus.PASS
+
+
+def _paper_trading_run_summary_blockers(
+    status: PaperShadowRunEvidenceStatus,
+    reason_codes: tuple[str, ...],
+    session: PaperShadowSessionSnapshot,
+) -> tuple[str, ...]:
+    blockers: list[str] = list(session.blockers_seen)
+    blocker_reasons = {
+        "guardrail_action_required",
+        "missing_cost_result",
+        "missing_fill_simulation_result",
+        "missing_intent_result",
+        "missing_pnl_ledger",
+        "missing_portfolio_risk_snapshot",
+        "missing_replay_result",
+        "missing_risk_limit_decision",
+        "rejected_market_events",
+        "rejected_paper_costs",
+        "rejected_paper_fills",
+        "rejected_replay_batches",
+        "risk_limit_blocks_new_intents",
+        "risk_limit_stop_session",
+        "run_evidence_blocked",
+        "session_not_finalized",
+        "unsafe_real_trading_flags",
+    }
+    blockers.extend(reason for reason in reason_codes if reason in blocker_reasons)
+    if status == PaperShadowRunEvidenceStatus.EMPTY:
+        blockers.append("no_market_events")
+    return _sorted_unique(tuple(blockers))
+
+
+def _paper_trading_run_summary_next_actions(
+    status: PaperShadowRunEvidenceStatus,
+    reason_codes: tuple[str, ...],
+) -> tuple[str, ...]:
+    if status == PaperShadowRunEvidenceStatus.PASS:
+        return ("archive_paper_trading_run_summary",)
+    actions: list[str] = []
+    if "session_not_finalized" in reason_codes:
+        actions.append("finalize_paper_shadow_session")
+    if "missing_replay_result" in reason_codes:
+        actions.append("attach_feed_replay_result")
+    if "missing_intent_result" in reason_codes:
+        actions.append("attach_paper_intent_result")
+    if "missing_fill_simulation_result" in reason_codes:
+        actions.append("attach_paper_fill_simulation_result")
+    if "missing_cost_result" in reason_codes:
+        actions.append("attach_paper_cost_result")
+    if "missing_pnl_ledger" in reason_codes:
+        actions.append("attach_paper_pnl_ledger")
+    if "missing_portfolio_risk_snapshot" in reason_codes:
+        actions.append("attach_paper_portfolio_risk_snapshot")
+    if "missing_risk_limit_decision" in reason_codes:
+        actions.append("attach_paper_risk_limit_decision")
+    if "no_market_events" in reason_codes:
+        actions.append("provide_market_events")
+    if any(reason.startswith("rejected_") for reason in reason_codes):
+        actions.append("review_rejected_paper_artifacts")
+    if any(reason.startswith("risk_limit_") for reason in reason_codes):
+        actions.append("resolve_paper_risk_limit_state")
+    if status == PaperShadowRunEvidenceStatus.BLOCKED:
+        actions.append("resolve_paper_trading_run_blockers")
+    if status == PaperShadowRunEvidenceStatus.WARN:
+        actions.append("review_paper_trading_run_warnings")
+    if status == PaperShadowRunEvidenceStatus.INCONCLUSIVE:
+        actions.append("restore_missing_paper_trading_evidence")
+    if status == PaperShadowRunEvidenceStatus.EMPTY:
+        actions.append("run_paper_shadow_session")
+    return _sorted_unique(tuple(actions))
+
+
+def _paper_trading_run_summary_paper_only(
+    *artifacts: object | None,
+) -> bool:
+    return all(bool(getattr(artifact, "paper_only", True)) for artifact in artifacts if artifact is not None)
+
+
+def _paper_trading_run_summary_real_orders_enabled(
+    *artifacts: object | None,
+) -> bool:
+    return any(bool(getattr(artifact, "real_orders_enabled", False)) for artifact in artifacts if artifact is not None)
+
+
+def _paper_trading_run_summary_real_money_enabled(
+    *artifacts: object | None,
+) -> bool:
+    return any(bool(getattr(artifact, "real_money_enabled", False)) for artifact in artifacts if artifact is not None)
+
+
+def _paper_trading_run_summary_text(
+    status: PaperShadowRunEvidenceStatus,
+    *,
+    session_id: str,
+    events: int,
+    intents: int,
+    fills: int,
+    blockers: tuple[str, ...],
+) -> str:
+    return (
+        f"paper_trading_run_summary={status.value}; session={session_id}; events={events}; "
+        f"intents={intents}; fills={fills}; blockers={len(blockers)}"
     )
 
 

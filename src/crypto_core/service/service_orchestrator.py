@@ -55,6 +55,7 @@ from crypto_core.service.artifact_export import (
     export_paper_pnl_ledger,
     export_paper_portfolio_risk_snapshot,
     export_paper_risk_limit_decision,
+    export_paper_trading_run_summary,
     export_sleeve_portfolio_snapshot,
     load_escalation_decision,
     load_operator_decision_pack,
@@ -66,6 +67,7 @@ from crypto_core.service.artifact_export import (
     load_paper_pnl_ledger,
     load_paper_portfolio_risk_snapshot,
     load_paper_risk_limit_decision,
+    load_paper_trading_run_summary,
     load_sleeve_portfolio_snapshot,
     operator_disposition_from_verdict,
 )
@@ -186,11 +188,13 @@ from crypto_core.service.paper_shadow_session_controller import (
     PaperShadowRunEvidenceReport,
     PaperShadowSessionController,
     PaperShadowSessionSnapshot,
+    PaperTradingRunSummary,
     build_feed_replay_plan,
     build_multi_source_run_evidence_report,
     build_paper_data_source_batch_result,
     build_paper_shadow_evidence_bundle,
     build_paper_shadow_run_evidence_report,
+    build_paper_trading_run_summary,
     feed_replay_plan_to_dict,
     feed_replay_result_to_dict,
     guardrail_snapshot_to_dict,
@@ -208,6 +212,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     paper_shadow_evidence_bundle_to_dict,
     paper_shadow_run_evidence_report_to_dict,
     paper_shadow_session_snapshot_to_dict,
+    paper_trading_run_summary_to_dict,
     runtime_monitor_snapshot_to_dict,
 )
 from crypto_core.service.promotion_review import PromotionThresholds
@@ -1465,6 +1470,114 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for paper/shadow run evidence report load")
         return load_run_evidence_report(evidence_store=self._evidence_store)
+
+    def paper_trading_run_summary(
+        self,
+        *,
+        replay_result: FeedReplayResult | dict | None = None,
+        intent_result: PaperIntentBatchResult | dict | None = None,
+        fill_result: PaperFillSimulationResult | dict | None = None,
+        cost_result: PaperCostResult | dict | None = None,
+        ledger: PaperPnLLedger | dict | None = None,
+        risk_snapshot: PaperPortfolioRiskSnapshot | dict | None = None,
+        risk_decision: PaperRiskLimitDecision | dict | None = None,
+        run_evidence_report: PaperShadowRunEvidenceReport | dict | None = None,
+        summary_id: str | None = None,
+        as_of_ns: int | None = None,
+    ) -> PaperTradingRunSummary:
+        """Build the deterministic final paper trading run summary for the current session."""
+        return build_paper_trading_run_summary(
+            session_snapshot=self.paper_shadow_session_snapshot(),
+            replay_result=replay_result,
+            intent_result=intent_result,
+            fill_result=fill_result,
+            cost_result=cost_result,
+            ledger=ledger,
+            risk_snapshot=risk_snapshot,
+            risk_decision=risk_decision,
+            run_evidence_report=run_evidence_report,
+            summary_id=summary_id,
+            as_of_ns=as_of_ns,
+        )
+
+    def paper_trading_run_summary_dict(
+        self,
+        summary: PaperTradingRunSummary | None = None,
+        *,
+        replay_result: FeedReplayResult | dict | None = None,
+        intent_result: PaperIntentBatchResult | dict | None = None,
+        fill_result: PaperFillSimulationResult | dict | None = None,
+        cost_result: PaperCostResult | dict | None = None,
+        ledger: PaperPnLLedger | dict | None = None,
+        risk_snapshot: PaperPortfolioRiskSnapshot | dict | None = None,
+        risk_decision: PaperRiskLimitDecision | dict | None = None,
+        run_evidence_report: PaperShadowRunEvidenceReport | dict | None = None,
+        summary_id: str | None = None,
+        as_of_ns: int | None = None,
+    ) -> dict:
+        """Serialize a final paper trading run summary."""
+        source_summary = (
+            summary
+            if summary is not None
+            else self.paper_trading_run_summary(
+                replay_result=replay_result,
+                intent_result=intent_result,
+                fill_result=fill_result,
+                cost_result=cost_result,
+                ledger=ledger,
+                risk_snapshot=risk_snapshot,
+                risk_decision=risk_decision,
+                run_evidence_report=run_evidence_report,
+                summary_id=summary_id,
+                as_of_ns=as_of_ns,
+            )
+        )
+        return paper_trading_run_summary_to_dict(source_summary)
+
+    def export_paper_trading_run_summary(
+        self,
+        summary: PaperTradingRunSummary | None = None,
+        *,
+        replay_result: FeedReplayResult | dict | None = None,
+        intent_result: PaperIntentBatchResult | dict | None = None,
+        fill_result: PaperFillSimulationResult | dict | None = None,
+        cost_result: PaperCostResult | dict | None = None,
+        ledger: PaperPnLLedger | dict | None = None,
+        risk_snapshot: PaperPortfolioRiskSnapshot | dict | None = None,
+        risk_decision: PaperRiskLimitDecision | dict | None = None,
+        run_evidence_report: PaperShadowRunEvidenceReport | dict | None = None,
+        summary_id: str | None = None,
+        as_of_ns: int | None = None,
+    ):
+        """Persist a final paper trading run summary via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper trading run summary export")
+        source_summary = (
+            summary
+            if summary is not None
+            else self.paper_trading_run_summary(
+                replay_result=replay_result,
+                intent_result=intent_result,
+                fill_result=fill_result,
+                cost_result=cost_result,
+                ledger=ledger,
+                risk_snapshot=risk_snapshot,
+                risk_decision=risk_decision,
+                run_evidence_report=run_evidence_report,
+                summary_id=summary_id,
+                as_of_ns=as_of_ns,
+            )
+        )
+        return export_paper_trading_run_summary(
+            summary=source_summary,
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_trading_run_summary(self) -> PaperTradingRunSummary:
+        """Load the latest persisted final paper trading run summary."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper trading run summary load")
+        return load_paper_trading_run_summary(evidence_store=self._evidence_store)
 
     def multi_source_run_evidence_report(
         self,

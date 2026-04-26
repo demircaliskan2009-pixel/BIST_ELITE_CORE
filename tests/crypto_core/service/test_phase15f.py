@@ -25,6 +25,7 @@ from crypto_core.service.artifact_export import (
     export_paper_shadow_market_event_batch,
     export_paper_shadow_run_evidence_report,
     export_paper_shadow_session_snapshot,
+    export_paper_trading_run_summary,
     export_sleeve_admission_release_pack,
     load_managed_sleeve_set_manifest,
     load_multi_source_run_evidence_report,
@@ -43,6 +44,7 @@ from crypto_core.service.artifact_export import (
     load_paper_shadow_market_event_batch,
     load_paper_shadow_run_evidence_report,
     load_paper_shadow_session_snapshot,
+    load_paper_trading_run_summary,
     load_sleeve_admission_release_pack,
 )
 from crypto_core.service.campaign import (
@@ -91,6 +93,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     build_paper_portfolio_risk_snapshot,
     build_paper_shadow_evidence_bundle,
     build_paper_shadow_run_evidence_report,
+    build_paper_trading_run_summary,
     feed_replay_plan_from_dict,
     feed_replay_plan_to_dict,
     feed_replay_result_from_dict,
@@ -124,6 +127,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     paper_shadow_run_evidence_report_to_dict,
     paper_shadow_session_snapshot_from_dict,
     paper_shadow_session_snapshot_to_dict,
+    paper_trading_run_summary_from_dict,
+    paper_trading_run_summary_to_dict,
     runtime_monitor_snapshot_from_dict,
     runtime_monitor_snapshot_to_dict,
 )
@@ -682,6 +687,111 @@ def _paper_shadow_full_local_run(
         report_id=report_id,
     )
     return source_result, replay, controller.snapshot(), report
+
+
+def _paper_trading_run_summary_artifacts(
+    *,
+    source_id: str = "trading-summary-source",
+    replay_id: str = "trading-summary-replay",
+    report_id: str = "trading-summary-run-report",
+    price: float = 100.0,
+    latest_price: float | None = None,
+    include_rejected_intent: bool = False,
+    reject_cost: bool = False,
+    risk_policy: PaperRiskLimitPolicy | None = None,
+    finalize: bool = True,
+):
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(700, 780)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    source_result = build_paper_data_source_batch_result(
+        _paper_data_source_payload(
+            source_id=source_id,
+            as_of_ns=_T0_NS + 705,
+            symbols=("BTCUSDT",),
+            records=(
+                {
+                    "symbol": "BTCUSDT",
+                    "ts_ns": _T0_NS + 701,
+                    "event_type": "mark_price",
+                    "price": price,
+                },
+            ),
+        ),
+        allowed_source_ids=(source_id,),
+    )
+
+    controller.prepare(plan)
+    controller.start()
+    replay = controller.replay_feed(build_feed_replay_plan((source_result.batch,), replay_id=replay_id))
+    intents = [
+        _paper_intent("active", "BTCUSDT", venue="binance", intent_ts_ns=_T0_NS + 710),
+    ]
+    if include_rejected_intent:
+        intents.append(_paper_intent("inactive", "BTCUSDT", venue="binance", intent_ts_ns=_T0_NS + 711))
+    intent_result = controller.record_paper_intent_batch(
+        build_paper_intent_batch(tuple(intents), batch_id=f"{replay_id}-intent")
+    )
+    fill_result = controller.simulate_paper_fills(intent_result)
+    cost_model = (
+        PaperCostModel(fee_bps=20.0, slippage_bps=10.0, reject_if_cost_exceeds_bps=5.0)
+        if reject_cost
+        else PaperCostModel(fee_bps=10.0, slippage_bps=5.0)
+    )
+    cost_result = controller.evaluate_paper_costs(fill_result, cost_model=cost_model)
+    ledger = controller.apply_paper_pnl_ledger(cost_result)
+    if latest_price is not None and latest_price != price:
+        controller.record_market_event_batch(
+            build_market_event_batch(
+                (
+                    _market_event(
+                        "BTCUSDT",
+                        venue="binance",
+                        ts_ns=_T0_NS + 720,
+                        price=latest_price,
+                    ),
+                )
+            )
+        )
+    risk = controller.paper_portfolio_risk_snapshot(ledger, equity_start=1_000.0, equity_history=(1_000.0,))
+    decision = controller.paper_risk_limit_decision(
+        risk,
+        policy=risk_policy or PaperRiskLimitPolicy(max_gross_exposure=20.0, max_open_positions=1),
+    )
+    controller.apply_paper_risk_limit_decision(decision)
+    if finalize and controller.snapshot().status == PaperShadowSessionStatus.RUNNING:
+        controller.stop()
+        controller.finalize()
+    run_report = build_paper_shadow_run_evidence_report(
+        session_snapshot=controller.snapshot(),
+        source_result=source_result,
+        replay_result=replay,
+        report_id=report_id,
+    )
+    summary = build_paper_trading_run_summary(
+        session_snapshot=controller.snapshot(),
+        replay_result=replay,
+        intent_result=intent_result,
+        fill_result=fill_result,
+        cost_result=cost_result,
+        ledger=ledger,
+        risk_snapshot=risk,
+        risk_decision=decision,
+        run_evidence_report=run_report,
+    )
+    return {
+        "controller": controller,
+        "source_result": source_result,
+        "replay": replay,
+        "intent_result": intent_result,
+        "fill_result": fill_result,
+        "cost_result": cost_result,
+        "ledger": ledger,
+        "risk": risk,
+        "decision": decision,
+        "run_report": run_report,
+        "summary": summary,
+    }
 
 
 def _mock_service() -> MagicMock:
@@ -4996,6 +5106,214 @@ def test_service_orchestrator_paper_risk_enforcement_surface() -> None:
     assert operator["intents_blocked_by_risk"] == 1
     assert operator["session_stop_requested_by_risk"] is False
     assert "max_gross_exposure" in operator["risk_reasons"]
+
+
+def test_paper_trading_run_summary_empty_and_not_finalized_are_not_pass() -> None:
+    empty = build_paper_trading_run_summary(session_snapshot=PaperShadowSessionController().snapshot())
+
+    not_finalized_artifacts = _paper_trading_run_summary_artifacts(
+        replay_id="trading-summary-not-finalized",
+        finalize=False,
+    )
+    not_finalized = not_finalized_artifacts["summary"]
+
+    assert empty.evidence_status == PaperShadowRunEvidenceStatus.EMPTY
+    assert "no_market_events" in empty.reason_codes
+    assert "run_paper_shadow_session" in empty.next_actions
+    assert not_finalized.evidence_status == PaperShadowRunEvidenceStatus.INCONCLUSIVE
+    assert "session_not_finalized" in not_finalized.reason_codes
+    assert "finalize_paper_shadow_session" in not_finalized.next_actions
+
+
+def test_paper_trading_run_summary_finalized_run_passes_with_full_artifacts() -> None:
+    artifacts = _paper_trading_run_summary_artifacts(replay_id="trading-summary-pass")
+    summary = artifacts["summary"]
+    rendered = paper_trading_run_summary_to_dict(summary)
+
+    assert summary.evidence_status == PaperShadowRunEvidenceStatus.PASS
+    assert summary.session_status == PaperShadowSessionStatus.FINALIZED
+    assert summary.monitor_status == RuntimeMonitorStatus.HEALTHY
+    assert summary.guardrail_actions == (GuardrailAction.NONE,)
+    assert summary.event_count == 1
+    assert summary.events_replayed == 1
+    assert summary.accepted_intent_count == 1
+    assert summary.rejected_intent_count == 0
+    assert summary.simulated_fills == 1
+    assert summary.accepted_costs == 1
+    assert summary.risk_status == "pass"
+    assert summary.total_fees > 0.0
+    assert summary.total_slippage > 0.0
+    assert summary.unrealized_pnl == pytest.approx(-0.005)
+    assert summary.reason_codes == ()
+    assert rendered["evidence_status"] == "pass"
+    assert paper_trading_run_summary_from_dict(rendered) == summary
+
+
+def test_paper_trading_run_summary_guardrail_block_is_blocked() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(800, 830)))
+    controller = PaperShadowSessionController(
+        clock_ns=lambda: next(times),
+        required_market_symbols=("BTCUSDT", "ETHUSDT"),
+    )
+    source_result = build_paper_data_source_batch_result(
+        _paper_data_source_payload(
+            source_id="trading-summary-guardrail",
+            as_of_ns=_T0_NS + 805,
+            symbols=("BTCUSDT",),
+            records=(
+                {
+                    "symbol": "BTCUSDT",
+                    "ts_ns": _T0_NS + 801,
+                    "event_type": "mark_price",
+                    "price": 100.0,
+                },
+            ),
+        ),
+        allowed_source_ids=("trading-summary-guardrail",),
+    )
+
+    controller.prepare(plan)
+    controller.start()
+    replay = controller.replay_feed(build_feed_replay_plan((source_result.batch,), replay_id="summary-guardrail"))
+    summary = build_paper_trading_run_summary(
+        session_snapshot=controller.snapshot(),
+        replay_result=replay,
+    )
+
+    assert summary.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED
+    assert "guardrail_action_required" in summary.reason_codes
+    assert "missing_symbol_coverage" in summary.reason_codes
+    assert "resolve_paper_trading_run_blockers" in summary.next_actions
+
+
+def test_paper_trading_run_summary_risk_stop_blocks() -> None:
+    artifacts = _paper_trading_run_summary_artifacts(
+        replay_id="trading-summary-risk-stop",
+        latest_price=90.0,
+        risk_policy=PaperRiskLimitPolicy(max_unrealized_loss=0.50, max_total_loss=0.50),
+        finalize=False,
+    )
+    summary = artifacts["summary"]
+
+    assert summary.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED
+    assert summary.risk_status == "stop_session"
+    assert summary.risk_block_new_intents is True
+    assert summary.risk_stop_session is True
+    assert "risk_limit_stop_session" in summary.reason_codes
+    assert "resolve_paper_risk_limit_state" in summary.next_actions
+
+
+def test_paper_trading_run_summary_rejections_are_reflected() -> None:
+    rejected_intent = _paper_trading_run_summary_artifacts(
+        replay_id="trading-summary-rejected-intent",
+        include_rejected_intent=True,
+    )["summary"]
+    rejected_cost = _paper_trading_run_summary_artifacts(
+        replay_id="trading-summary-rejected-cost",
+        reject_cost=True,
+    )["summary"]
+
+    assert rejected_intent.evidence_status == PaperShadowRunEvidenceStatus.WARN
+    assert rejected_intent.accepted_intent_count == 1
+    assert rejected_intent.rejected_intent_count == 1
+    assert "rejected_paper_intents" in rejected_intent.reason_codes
+    assert "review_paper_trading_run_warnings" in rejected_intent.next_actions
+    assert rejected_cost.evidence_status == PaperShadowRunEvidenceStatus.BLOCKED
+    assert rejected_cost.rejected_costs == 1
+    assert "rejected_paper_costs" in rejected_cost.reason_codes
+    assert "review_rejected_paper_artifacts" in rejected_cost.next_actions
+
+
+def test_paper_trading_run_summary_export_load_and_malformed_fail_closed(tmp_path) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    summary = _paper_trading_run_summary_artifacts(replay_id="trading-summary-export")["summary"]
+
+    export_paper_trading_run_summary(summary=summary, evidence_store=store)
+    assert load_paper_trading_run_summary(evidence_store=store) == summary
+
+    store.save_snapshot("crypto_paper_trading_run_summary", ["bad"])
+    with pytest.raises(PaperShadowSessionCorruptError):
+        load_paper_trading_run_summary(evidence_store=store)
+
+
+def test_service_orchestrator_paper_trading_run_summary_helper_and_artifact(tmp_path) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(830, 890)))
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        evidence_store=store,
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: next(times),
+    )
+    source_result = orch.paper_data_source_payload_to_batch_result(
+        _paper_data_source_payload(
+            source_id="svc-trading-summary-source",
+            as_of_ns=_T0_NS + 835,
+            symbols=("BTCUSDT",),
+            records=(
+                {
+                    "symbol": "BTCUSDT",
+                    "ts_ns": _T0_NS + 831,
+                    "event_type": "mark_price",
+                    "price": 100.0,
+                },
+            ),
+        ),
+        allowed_source_ids=("svc-trading-summary-source",),
+    )
+
+    orch.prepare_paper_shadow_session(plan=plan)
+    orch.start_paper_shadow_session()
+    replay = orch.replay_paper_shadow_feed(build_feed_replay_plan((source_result.batch,), replay_id="svc-summary"))
+    intent_result = orch.record_paper_intent_batch(
+        build_paper_intent_batch(
+            (_paper_intent("svc-active", "BTCUSDT", venue="binance"),),
+            batch_id="svc-summary-intents",
+        )
+    )
+    fill_result = orch.simulate_paper_fills(intent_result)
+    cost_result = orch.evaluate_paper_costs(fill_result, cost_model=PaperCostModel(fee_bps=10.0, slippage_bps=5.0))
+    ledger = orch.apply_paper_pnl_ledger(cost_result)
+    risk = orch.paper_portfolio_risk_snapshot(ledger, equity_start=1_000.0, equity_history=(1_000.0,))
+    decision = orch.paper_risk_limit_decision(risk, policy=PaperRiskLimitPolicy(max_gross_exposure=20.0))
+    orch.apply_paper_risk_limit_decision(decision)
+    orch.stop_paper_shadow_session()
+    orch.finalize_paper_shadow_session()
+    report = orch.paper_shadow_run_evidence_report(
+        source_result=source_result,
+        replay_result=replay,
+        report_id="svc-summary-run-report",
+    )
+    summary = orch.paper_trading_run_summary(
+        replay_result=replay,
+        intent_result=intent_result,
+        fill_result=fill_result,
+        cost_result=cost_result,
+        ledger=ledger,
+        risk_snapshot=risk,
+        risk_decision=decision,
+        run_evidence_report=report,
+        summary_id="svc-summary-final",
+    )
+    rendered = orch.paper_trading_run_summary_dict(summary)
+
+    assert summary.evidence_status == PaperShadowRunEvidenceStatus.PASS
+    assert rendered["summary_id"] == "svc-summary-final"
+    assert rendered["risk_status"] == "pass"
+    assert rendered["event_count"] == 1
+    orch.export_paper_trading_run_summary(summary)
+    assert orch.load_paper_trading_run_summary() == summary
+
+
+def test_paper_trading_run_summary_deterministic_replay() -> None:
+    def run_once() -> dict:
+        return paper_trading_run_summary_to_dict(
+            _paper_trading_run_summary_artifacts(replay_id="trading-summary-deterministic")["summary"]
+        )
+
+    assert run_once() == run_once()
 
 
 def test_service_orchestrator_feed_replay_helper_and_artifacts(tmp_path) -> None:
