@@ -614,6 +614,12 @@ class PaperShadowSessionSnapshot:
     total_fees: float = 0.0
     total_slippage: float = 0.0
     realized_pnl: float = 0.0
+    risk_limit_decision_id: str | None = None
+    risk_limit_decision_status: str = "missing"
+    risk_block_new_intents: bool = False
+    intents_blocked_by_risk: int = 0
+    session_stop_requested_by_risk: bool = False
+    risk_reasons: tuple[str, ...] = ()
     paper_only: bool = True
     real_orders_enabled: bool = False
     real_money_enabled: bool = False
@@ -829,6 +835,8 @@ class PaperShadowSessionController:
             paper_only=True,
             real_orders_enabled=False,
             real_money_enabled=False,
+            risk_stop_requested=self._snapshot.session_stop_requested_by_risk,
+            risk_reasons=self._snapshot.risk_reasons,
         )
         return self._apply_snapshot(
             replace(
@@ -863,7 +871,11 @@ class PaperShadowSessionController:
     def record_paper_intent_batch(
         self,
         batch: PaperIntentBatch | dict | tuple[PaperIntent, ...],
+        *,
+        risk_decision: PaperRiskLimitDecision | dict | None = None,
     ) -> PaperIntentBatchResult:
+        if risk_decision is not None:
+            self.apply_paper_risk_limit_decision(risk_decision)
         normalized = _coerce_paper_intent_batch(batch)
         now = self._now_ns()
         results = tuple(
@@ -892,12 +904,14 @@ class PaperShadowSessionController:
             operator_summary=_paper_intent_batch_summary(normalized.batch_id, results),
         )
         _validate_paper_intent_batch_result(result)
+        risk_blocked = _paper_intents_blocked_by_risk(results)
         snapshot = replace(
             self._snapshot,
             as_of_ns=now,
             intents_seen=self._snapshot.intents_seen + result.intents_seen,
             accepted_intent_count=self._snapshot.accepted_intent_count + result.accepted_count,
             rejected_intent_count=self._snapshot.rejected_intent_count + result.rejected_count,
+            intents_blocked_by_risk=self._snapshot.intents_blocked_by_risk + risk_blocked,
             intent_sleeves_seen=_sorted_unique((*self._snapshot.intent_sleeves_seen, *result.sleeves_seen)),
             intent_symbols_seen=_sorted_unique((*self._snapshot.intent_symbols_seen, *result.symbols_seen)),
             intent_venues_seen=_sorted_unique((*self._snapshot.intent_venues_seen, *result.venues_seen)),
@@ -1152,6 +1166,42 @@ class PaperShadowSessionController:
         _validate_paper_risk_limit_decision(decision)
         return decision
 
+    def apply_paper_risk_limit_decision(
+        self,
+        decision: PaperRiskLimitDecision | dict,
+    ) -> PaperShadowSessionSnapshot:
+        """Apply a paper risk decision to intent gating and session guardrails."""
+        normalized = paper_risk_limit_decision_from_dict(decision) if isinstance(decision, dict) else decision
+        _validate_paper_risk_limit_decision(normalized)
+        if normalized.session_id != self._snapshot.session_id:
+            raise PaperShadowSessionCorruptError("paper risk limit enforcement decision session mismatch")
+        risk_reasons = _paper_risk_enforcement_reasons(normalized)
+        guardrail = build_guardrail_snapshot(
+            self._snapshot.runtime_monitor,
+            session_status=self._snapshot.status,
+            rejected_event_count=self._snapshot.rejected_event_count,
+            paper_only=True,
+            real_orders_enabled=False,
+            real_money_enabled=False,
+            risk_stop_requested=normalized.stop_session,
+            risk_reasons=risk_reasons,
+        )
+        return self._apply_snapshot(
+            replace(
+                self._snapshot,
+                as_of_ns=self._now_ns(),
+                risk_limit_decision_id=normalized.decision_id,
+                risk_limit_decision_status=normalized.status.value,
+                risk_block_new_intents=normalized.block_new_intents,
+                session_stop_requested_by_risk=normalized.stop_session,
+                risk_reasons=risk_reasons,
+                guardrail=guardrail,
+                paper_only=True,
+                real_orders_enabled=False,
+                real_money_enabled=False,
+            )
+        )
+
     def replay_feed(self, plan: FeedReplayPlan | dict | tuple[MarketEventBatch, ...]) -> FeedReplayResult:
         if self._snapshot.status != PaperShadowSessionStatus.RUNNING:
             raise PaperShadowSessionCorruptError("paper/shadow feed replay can only run while session is RUNNING")
@@ -1365,6 +1415,8 @@ class PaperShadowSessionController:
             paper_only=True,
             real_orders_enabled=False,
             real_money_enabled=False,
+            risk_stop_requested=self._snapshot.session_stop_requested_by_risk,
+            risk_reasons=self._snapshot.risk_reasons,
         )
         self._snapshot = replace(
             self._snapshot,
@@ -1427,6 +1479,12 @@ def paper_shadow_session_snapshot_to_dict(snapshot: PaperShadowSessionSnapshot) 
         "total_fees": snapshot.total_fees,
         "total_slippage": snapshot.total_slippage,
         "realized_pnl": snapshot.realized_pnl,
+        "risk_limit_decision_id": snapshot.risk_limit_decision_id,
+        "risk_limit_decision_status": snapshot.risk_limit_decision_status,
+        "risk_block_new_intents": snapshot.risk_block_new_intents,
+        "intents_blocked_by_risk": snapshot.intents_blocked_by_risk,
+        "session_stop_requested_by_risk": snapshot.session_stop_requested_by_risk,
+        "risk_reasons": list(snapshot.risk_reasons),
         "paper_only": snapshot.paper_only,
         "real_orders_enabled": snapshot.real_orders_enabled,
         "real_money_enabled": snapshot.real_money_enabled,
@@ -1465,6 +1523,18 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
     paper_only = _bool_or_default(data, "paper_only", True)
     real_orders_enabled = _bool_or_default(data, "real_orders_enabled", False)
     real_money_enabled = _bool_or_default(data, "real_money_enabled", False)
+    risk_limit_decision_id = _optional_str(data.get("risk_limit_decision_id"), "risk_limit_decision_id")
+    risk_limit_decision_status = _require_non_empty_str(
+        data.get("risk_limit_decision_status", "missing"),
+        "risk_limit_decision_status",
+    )
+    risk_block_new_intents = _bool_or_default(data, "risk_block_new_intents", False)
+    intents_blocked_by_risk = _require_non_negative_int(
+        data.get("intents_blocked_by_risk", 0),
+        "intents_blocked_by_risk",
+    )
+    session_stop_requested_by_risk = _bool_or_default(data, "session_stop_requested_by_risk", False)
+    risk_reasons = _sorted_unique(data.get("risk_reasons", ()))
     guardrail_value = data.get("guardrail")
     guardrail = (
         guardrail_snapshot_from_dict(_dict_value(guardrail_value, "guardrail"))
@@ -1476,6 +1546,8 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
             paper_only=paper_only,
             real_orders_enabled=real_orders_enabled,
             real_money_enabled=real_money_enabled,
+            risk_stop_requested=session_stop_requested_by_risk,
+            risk_reasons=risk_reasons,
         )
     )
     snapshot = PaperShadowSessionSnapshot(
@@ -1535,6 +1607,12 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
         total_fees=_require_non_negative_float(data.get("total_fees", 0.0), "total_fees"),
         total_slippage=_require_non_negative_float(data.get("total_slippage", 0.0), "total_slippage"),
         realized_pnl=_require_float(data.get("realized_pnl", 0.0), "realized_pnl"),
+        risk_limit_decision_id=risk_limit_decision_id,
+        risk_limit_decision_status=risk_limit_decision_status,
+        risk_block_new_intents=risk_block_new_intents,
+        intents_blocked_by_risk=intents_blocked_by_risk,
+        session_stop_requested_by_risk=session_stop_requested_by_risk,
+        risk_reasons=risk_reasons,
         paper_only=paper_only,
         real_orders_enabled=real_orders_enabled,
         real_money_enabled=real_money_enabled,
@@ -3348,6 +3426,8 @@ def build_guardrail_snapshot(
     paper_only: bool = True,
     real_orders_enabled: bool = False,
     real_money_enabled: bool = False,
+    risk_stop_requested: bool = False,
+    risk_reasons: tuple[str, ...] = (),
 ) -> GuardrailSnapshot:
     _validate_runtime_monitor_snapshot(monitor)
     if not isinstance(session_status, PaperShadowSessionStatus):
@@ -3356,10 +3436,15 @@ def build_guardrail_snapshot(
     paper_only = _require_bool(paper_only, "paper_only")
     real_orders_enabled = _require_bool(real_orders_enabled, "real_orders_enabled")
     real_money_enabled = _require_bool(real_money_enabled, "real_money_enabled")
+    risk_stop_requested = _require_bool(risk_stop_requested, "risk_stop_requested")
+    risk_reasons = _sorted_unique(risk_reasons)
     reasons: list[str] = []
     actions: list[GuardrailAction] = []
     if not paper_only or real_orders_enabled or real_money_enabled:
         reasons.append("unsafe_real_trading_flags")
+        actions.extend((GuardrailAction.STOP_SESSION, GuardrailAction.BLOCK_FINALIZE))
+    if risk_stop_requested:
+        reasons.extend(risk_reasons or ("paper_risk_limit_stop_session",))
         actions.extend((GuardrailAction.STOP_SESSION, GuardrailAction.BLOCK_FINALIZE))
     has_events = monitor.event_count > 0
     if not has_events:
@@ -3469,6 +3554,11 @@ def _paper_intent_rejection_reasons(
         reasons.append("guardrail_stop_session")
     if snapshot.guardrail.block_finalize:
         reasons.append("guardrail_block_finalize")
+    if snapshot.risk_block_new_intents:
+        reasons.append("risk_limit_blocks_new_intents")
+    if snapshot.session_stop_requested_by_risk:
+        reasons.append("risk_limit_stop_session")
+    reasons.extend(snapshot.risk_reasons)
     if intent.sleeve_id not in snapshot.active_sleeves:
         reasons.append("inactive_sleeve")
     if not _paper_intent_has_valid_size(intent):
@@ -4431,6 +4521,7 @@ def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
         "intent_rejection_reasons",
         "symbols_filled",
         "sleeves_filled",
+        "risk_reasons",
     ):
         value = getattr(snapshot, field_name)
         if value != _sorted_unique(value):
@@ -4494,6 +4585,37 @@ def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
     _require_non_negative_float(snapshot.total_fees, "total_fees")
     _require_non_negative_float(snapshot.total_slippage, "total_slippage")
     _require_float(snapshot.realized_pnl, "realized_pnl")
+    if snapshot.risk_limit_decision_id is not None:
+        _require_non_empty_str(snapshot.risk_limit_decision_id, "risk_limit_decision_id")
+    risk_status = snapshot.risk_limit_decision_status
+    if risk_status == "missing":
+        if (
+            snapshot.risk_limit_decision_id is not None
+            or snapshot.risk_block_new_intents
+            or snapshot.session_stop_requested_by_risk
+            or snapshot.risk_reasons
+            or snapshot.intents_blocked_by_risk
+        ):
+            raise PaperShadowSessionCorruptError("missing paper risk decision cannot carry enforcement state")
+    else:
+        resolved_risk_status = _paper_risk_limit_decision_status_from_value(risk_status)
+        if (
+            snapshot.session_stop_requested_by_risk
+            and resolved_risk_status != PaperRiskLimitDecisionStatus.STOP_SESSION
+        ):
+            raise PaperShadowSessionCorruptError("paper risk stop request must come from STOP_SESSION decision")
+        if snapshot.session_stop_requested_by_risk and not snapshot.risk_block_new_intents:
+            raise PaperShadowSessionCorruptError("paper risk stop request must also block new intents")
+        if snapshot.risk_block_new_intents and resolved_risk_status not in {
+            PaperRiskLimitDecisionStatus.BLOCK_NEW_INTENTS,
+            PaperRiskLimitDecisionStatus.STOP_SESSION,
+        }:
+            raise PaperShadowSessionCorruptError("paper risk intent block must come from blocking decision")
+        if (snapshot.risk_block_new_intents or snapshot.session_stop_requested_by_risk) and not snapshot.risk_reasons:
+            raise PaperShadowSessionCorruptError("paper risk enforcement requires explicit reasons")
+    _require_non_negative_int(snapshot.intents_blocked_by_risk, "intents_blocked_by_risk")
+    if snapshot.intents_blocked_by_risk > snapshot.rejected_intent_count:
+        raise PaperShadowSessionCorruptError("paper risk blocked intent count cannot exceed rejected intents")
     if snapshot.pnl_events == 0 and (
         snapshot.open_positions
         or snapshot.closed_positions
@@ -4547,6 +4669,8 @@ def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
         paper_only=snapshot.paper_only,
         real_orders_enabled=snapshot.real_orders_enabled,
         real_money_enabled=snapshot.real_money_enabled,
+        risk_stop_requested=snapshot.session_stop_requested_by_risk,
+        risk_reasons=snapshot.risk_reasons,
     )
     if snapshot.guardrail != expected_guardrail:
         raise PaperShadowSessionCorruptError("paper/shadow guardrail snapshot does not match session truth")
@@ -5745,6 +5869,23 @@ def _paper_risk_limit_decision_summary(
     reasons: tuple[str, ...],
 ) -> str:
     return f"paper_risk_limit={status.value}; breaches={len(breaches)}; reasons={','.join(reasons)}"
+
+
+def _paper_risk_enforcement_reasons(decision: PaperRiskLimitDecision) -> tuple[str, ...]:
+    _validate_paper_risk_limit_decision(decision)
+    if decision.status == PaperRiskLimitDecisionStatus.PASS:
+        return ()
+    reasons = list(decision.reasons or decision.breached_limits)
+    if decision.block_new_intents:
+        reasons.append("risk_limit_blocks_new_intents")
+    if decision.stop_session:
+        reasons.append("risk_limit_stop_session")
+    return _sorted_unique(tuple(reasons or ("risk_limit_not_passed",)))
+
+
+def _paper_intents_blocked_by_risk(results: tuple[PaperIntentValidationResult, ...]) -> int:
+    risk_reasons = {"risk_limit_blocks_new_intents", "risk_limit_stop_session"}
+    return sum(1 for result in results if any(reason in risk_reasons for reason in result.rejection_reasons))
 
 
 def _equity_history_from_data(value: object) -> tuple[float, ...]:

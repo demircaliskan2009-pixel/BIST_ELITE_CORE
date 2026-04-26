@@ -468,6 +468,11 @@ class PaperShadowSessionState:
     total_fees: float
     total_slippage: float
     realized_pnl: float
+    risk_limit_decision_status: str
+    risk_block_new_intents: bool
+    intents_blocked_by_risk: int
+    session_stop_requested_by_risk: bool
+    risk_reasons: tuple[str, ...]
     runtime_monitor_status: str
     stale_feed_detected: bool
     symbol_coverage_ok: bool
@@ -1105,9 +1110,14 @@ class ServiceOrchestrator:
     def record_paper_intent_batch(
         self,
         batch: PaperIntentBatch | dict | tuple[PaperIntent, ...],
+        *,
+        risk_decision: PaperRiskLimitDecision | dict | None = None,
     ) -> PaperIntentBatchResult:
         """Validate paper-only intents against the current paper/shadow session as audit events."""
-        return self._ensure_paper_shadow_session_controller().record_paper_intent_batch(batch)
+        return self._ensure_paper_shadow_session_controller().record_paper_intent_batch(
+            batch,
+            risk_decision=risk_decision,
+        )
 
     def paper_intent_batch_dict(self, batch: PaperIntentBatch) -> dict:
         """Serialize a deterministic paper-only intent batch."""
@@ -1194,6 +1204,13 @@ class ServiceOrchestrator:
     def paper_risk_limit_decision_dict(self, decision: PaperRiskLimitDecision) -> dict:
         """Serialize a deterministic paper risk-limit / kill-switch decision."""
         return paper_risk_limit_decision_to_dict(decision)
+
+    def apply_paper_risk_limit_decision(
+        self,
+        decision: PaperRiskLimitDecision | dict,
+    ) -> PaperShadowSessionSnapshot:
+        """Apply a paper risk-limit decision to paper-only intent/session guardrails."""
+        return self._ensure_paper_shadow_session_controller().apply_paper_risk_limit_decision(decision)
 
     def export_paper_shadow_session_snapshot(self):
         """Persist the current paper/shadow session snapshot via EvidenceStore."""
@@ -4034,6 +4051,11 @@ def paper_shadow_session_state_from_snapshot(snapshot: PaperShadowSessionSnapsho
         total_fees=snapshot.total_fees,
         total_slippage=snapshot.total_slippage,
         realized_pnl=snapshot.realized_pnl,
+        risk_limit_decision_status=snapshot.risk_limit_decision_status,
+        risk_block_new_intents=snapshot.risk_block_new_intents,
+        intents_blocked_by_risk=snapshot.intents_blocked_by_risk,
+        session_stop_requested_by_risk=snapshot.session_stop_requested_by_risk,
+        risk_reasons=snapshot.risk_reasons,
         runtime_monitor_status=snapshot.runtime_monitor.status.value,
         stale_feed_detected=snapshot.runtime_monitor.stale_feed_detected,
         symbol_coverage_ok=snapshot.runtime_monitor.symbol_coverage_ok,
@@ -4093,6 +4115,11 @@ def paper_shadow_session_state_to_dict(state: PaperShadowSessionState) -> dict:
         "total_fees": state.total_fees,
         "total_slippage": state.total_slippage,
         "realized_pnl": state.realized_pnl,
+        "risk_limit_decision_status": state.risk_limit_decision_status,
+        "risk_block_new_intents": state.risk_block_new_intents,
+        "intents_blocked_by_risk": state.intents_blocked_by_risk,
+        "session_stop_requested_by_risk": state.session_stop_requested_by_risk,
+        "risk_reasons": list(state.risk_reasons),
         "runtime_monitor_status": state.runtime_monitor_status,
         "stale_feed_detected": state.stale_feed_detected,
         "symbol_coverage_ok": state.symbol_coverage_ok,

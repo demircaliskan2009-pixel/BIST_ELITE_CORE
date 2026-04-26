@@ -4755,6 +4755,132 @@ def test_paper_risk_limit_incomplete_prices_block_fail_closed() -> None:
     )
 
 
+def test_paper_risk_enforcement_pass_allows_valid_intent() -> None:
+    controller, risk = _paper_risk_snapshot_for_price(latest_price=105.0)
+    decision = controller.paper_risk_limit_decision(
+        risk,
+        policy=PaperRiskLimitPolicy(max_gross_exposure=20.0, max_open_positions=1),
+    )
+
+    result = controller.record_paper_intent_batch(
+        build_paper_intent_batch(
+            (_paper_intent("active", "BTCUSDT", venue="binance", intent_ts_ns=_T0_NS + 160),),
+            batch_id="risk-enforcement-pass",
+        ),
+        risk_decision=decision,
+    )
+    snapshot = controller.snapshot()
+
+    assert result.accepted_count == 1
+    assert result.rejected_count == 0
+    assert snapshot.risk_limit_decision_status == "pass"
+    assert snapshot.risk_block_new_intents is False
+    assert snapshot.session_stop_requested_by_risk is False
+    assert snapshot.intents_blocked_by_risk == 0
+    assert snapshot.risk_reasons == ()
+
+
+def test_paper_risk_enforcement_blocks_new_intents() -> None:
+    controller, risk = _paper_risk_snapshot_for_price(latest_price=105.0)
+    decision = controller.paper_risk_limit_decision(
+        risk,
+        policy=PaperRiskLimitPolicy(max_gross_exposure=5.0),
+    )
+
+    result = controller.record_paper_intent_batch(
+        build_paper_intent_batch(
+            (_paper_intent("active", "BTCUSDT", venue="binance", intent_ts_ns=_T0_NS + 160),),
+            batch_id="risk-enforcement-block",
+        ),
+        risk_decision=decision,
+    )
+    snapshot = controller.snapshot()
+
+    assert result.accepted_count == 0
+    assert result.rejected_count == 1
+    assert "risk_limit_blocks_new_intents" in result.results[0].rejection_reasons
+    assert "max_gross_exposure" in result.results[0].rejection_reasons
+    assert snapshot.risk_limit_decision_status == "block_new_intents"
+    assert snapshot.risk_block_new_intents is True
+    assert snapshot.session_stop_requested_by_risk is False
+    assert snapshot.intents_blocked_by_risk == 1
+    assert "max_gross_exposure" in snapshot.risk_reasons
+    assert paper_shadow_session_snapshot_from_dict(paper_shadow_session_snapshot_to_dict(snapshot)) == snapshot
+
+
+def test_paper_risk_enforcement_stop_session_requests_guardrail_stop() -> None:
+    controller, risk = _paper_risk_snapshot_for_price(latest_price=90.0)
+    decision = controller.paper_risk_limit_decision(
+        risk,
+        policy=PaperRiskLimitPolicy(max_unrealized_loss=0.50, max_total_loss=0.50),
+    )
+
+    result = controller.record_paper_intent_batch(
+        build_paper_intent_batch(
+            (_paper_intent("active", "BTCUSDT", venue="binance", intent_ts_ns=_T0_NS + 160),),
+            batch_id="risk-enforcement-stop",
+        ),
+        risk_decision=decision,
+    )
+    snapshot = controller.snapshot()
+    stopped = controller.apply_guardrails()
+
+    assert result.accepted_count == 0
+    assert "risk_limit_stop_session" in result.results[0].rejection_reasons
+    assert snapshot.risk_limit_decision_status == "stop_session"
+    assert snapshot.risk_block_new_intents is True
+    assert snapshot.session_stop_requested_by_risk is True
+    assert snapshot.guardrail.should_stop_session is True
+    assert snapshot.intents_blocked_by_risk == 1
+    assert stopped.status == PaperShadowSessionStatus.STOPPED
+    assert stopped.session_stop_requested_by_risk is True
+    assert "risk_limit_stop_session" in stopped.blockers_seen
+
+
+def test_paper_risk_enforcement_incomplete_decision_blocks_fail_closed() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(1, 30)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    cost_result = _paper_cost_result_for_intent(controller, batch_id="risk-enforcement-incomplete")
+    ledger = controller.apply_paper_pnl_ledger(cost_result)
+    risk = build_paper_portfolio_risk_snapshot(ledger=ledger, latest_prices=(), equity_start=1_000.0)
+    decision = controller.paper_risk_limit_decision(risk)
+
+    result = controller.record_paper_intent_batch(
+        build_paper_intent_batch(
+            (_paper_intent("active", "BTCUSDT", venue="binance", intent_ts_ns=_T0_NS + 160),),
+            batch_id="risk-enforcement-incomplete-intents",
+        ),
+        risk_decision=decision,
+    )
+
+    assert result.accepted_count == 0
+    assert "complete_prices_required" in result.results[0].rejection_reasons
+    assert "risk_limit_blocks_new_intents" in result.results[0].rejection_reasons
+    assert controller.snapshot().intents_blocked_by_risk == 1
+
+
+def test_paper_risk_enforcement_deterministic_replay() -> None:
+    def run_once() -> tuple[dict, dict]:
+        controller, risk = _paper_risk_snapshot_for_price(latest_price=105.0)
+        decision = controller.paper_risk_limit_decision(
+            risk,
+            policy=PaperRiskLimitPolicy(max_gross_exposure=5.0),
+        )
+        result = controller.record_paper_intent_batch(
+            build_paper_intent_batch(
+                (_paper_intent("active", "BTCUSDT", venue="binance", intent_ts_ns=_T0_NS + 160),),
+                batch_id="risk-enforcement-deterministic",
+            ),
+            risk_decision=decision,
+        )
+        return paper_intent_batch_result_to_dict(result), paper_shadow_session_snapshot_to_dict(controller.snapshot())
+
+    assert run_once() == run_once()
+
+
 def test_paper_risk_limit_invalid_policy_fails_closed() -> None:
     controller, risk = _paper_risk_snapshot_for_price(latest_price=105.0)
 
@@ -4824,6 +4950,52 @@ def test_service_orchestrator_paper_risk_limit_helpers_and_artifacts(tmp_path) -
     store.save_snapshot("crypto_paper_risk_limit_decision", ["bad"])
     with pytest.raises(PaperShadowSessionCorruptError):
         load_paper_risk_limit_decision(evidence_store=store)
+
+
+def test_service_orchestrator_paper_risk_enforcement_surface() -> None:
+    plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(450, 500)))
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: next(times),
+    )
+
+    orch.prepare_paper_shadow_session(plan=plan)
+    orch.start_paper_shadow_session()
+    orch.record_paper_shadow_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),))
+    )
+    intent_result = orch.record_paper_intent_batch(
+        build_paper_intent_batch(
+            (_paper_intent("svc-active", "BTCUSDT", venue="binance"),),
+            batch_id="svc-risk-enforcement-source",
+        )
+    )
+    fill_result = orch.simulate_paper_fills(intent_result)
+    cost_result = orch.evaluate_paper_costs(fill_result, cost_model=PaperCostModel(fee_bps=10.0, slippage_bps=5.0))
+    ledger = orch.apply_paper_pnl_ledger(cost_result)
+    orch.record_paper_shadow_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 102, price=105.0),))
+    )
+    risk = orch.paper_portfolio_risk_snapshot(ledger, equity_start=1_000.0, equity_history=(1_000.0,))
+    decision = orch.paper_risk_limit_decision(risk, policy=PaperRiskLimitPolicy(max_gross_exposure=5.0))
+    blocked_result = orch.record_paper_intent_batch(
+        build_paper_intent_batch(
+            (_paper_intent("svc-active", "BTCUSDT", venue="binance", intent_ts_ns=_T0_NS + 160),),
+            batch_id="svc-risk-enforcement-blocked",
+        ),
+        risk_decision=decision,
+    )
+    operator = operator_snapshot_to_dict(orch.operator_snapshot())["paper_shadow_session"]
+
+    assert blocked_result.accepted_count == 0
+    assert orch.paper_shadow_session_snapshot().intents_blocked_by_risk == 1
+    assert operator["risk_limit_decision_status"] == "block_new_intents"
+    assert operator["risk_block_new_intents"] is True
+    assert operator["intents_blocked_by_risk"] == 1
+    assert operator["session_stop_requested_by_risk"] is False
+    assert "max_gross_exposure" in operator["risk_reasons"]
 
 
 def test_service_orchestrator_feed_replay_helper_and_artifacts(tmp_path) -> None:
