@@ -10,6 +10,7 @@ import pytest
 from crypto_core.service.artifact_export import (
     export_managed_sleeve_set_manifest,
     export_multi_source_run_evidence_report,
+    export_paper_cost_result,
     export_paper_data_source_batch_result,
     export_paper_fill_simulation_result,
     export_paper_intent_batch,
@@ -24,6 +25,7 @@ from crypto_core.service.artifact_export import (
     export_sleeve_admission_release_pack,
     load_managed_sleeve_set_manifest,
     load_multi_source_run_evidence_report,
+    load_paper_cost_result,
     load_paper_data_source_batch_result,
     load_paper_fill_simulation_result,
     load_paper_intent_batch,
@@ -55,6 +57,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     MarketEventBatch,
     MarketEventType,
     MultiSourceRunEvidenceReport,
+    PaperCostModel,
+    PaperCostStatus,
     PaperDataSourceType,
     PaperFillSimulationResult,
     PaperFillStatus,
@@ -86,6 +90,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     market_event_batch_to_dict,
     multi_source_run_evidence_report_from_dict,
     multi_source_run_evidence_report_to_dict,
+    paper_cost_result_from_dict,
+    paper_cost_result_to_dict,
     paper_data_source_batch_result_from_dict,
     paper_data_source_batch_result_to_dict,
     paper_data_source_payload_to_market_event_batch,
@@ -3783,6 +3789,248 @@ def test_service_orchestrator_paper_fill_helpers_and_artifacts(tmp_path) -> None
     store.save_snapshot("crypto_paper_fill_simulation_result", ["bad"])
     with pytest.raises(PaperShadowSessionCorruptError):
         load_paper_fill_simulation_result(evidence_store=store)
+
+
+def test_paper_cost_valid_fill_fee_slippage_computed_deterministically() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in (1, 2, 3, 4, 5, 6)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),))
+    )
+    intent_result = controller.record_paper_intent_batch(
+        build_paper_intent_batch((_paper_intent("active", "BTCUSDT", venue="binance"),), batch_id="cost-valid")
+    )
+    fill_result = controller.simulate_paper_fills(intent_result)
+
+    result = controller.evaluate_paper_costs(
+        fill_result,
+        cost_model=PaperCostModel(fee_bps=10.0, slippage_bps=5.0),
+    )
+    line = result.costs[0]
+    snapshot = controller.snapshot()
+
+    assert result.status == PaperCostStatus.ACCEPTED
+    assert result.cost_evaluations == 1
+    assert result.accepted_costs == 1
+    assert result.rejected_costs == 0
+    assert result.gross_notional == pytest.approx(10.0)
+    assert result.fee == pytest.approx(0.01)
+    assert result.slippage_cost == pytest.approx(0.005)
+    assert result.net_notional == pytest.approx(10.015)
+    assert result.cost_bps == pytest.approx(15.0)
+    assert result.effective_price == pytest.approx(100.05)
+    assert line.status == PaperCostStatus.ACCEPTED
+    assert line.gross_notional == pytest.approx(10.0)
+    assert line.fee == pytest.approx(0.01)
+    assert line.slippage_cost == pytest.approx(0.005)
+    assert line.effective_price == pytest.approx(100.05)
+    assert snapshot.cost_evaluations == 1
+    assert snapshot.accepted_costs == 1
+    assert snapshot.rejected_costs == 0
+    assert snapshot.total_fee == pytest.approx(0.01)
+    assert snapshot.total_slippage_cost == pytest.approx(0.005)
+    assert paper_cost_result_from_dict(paper_cost_result_to_dict(result)) == result
+    assert paper_shadow_session_snapshot_from_dict(paper_shadow_session_snapshot_to_dict(snapshot)) == snapshot
+
+
+def test_paper_cost_rejected_fill_is_skipped_without_cost_evaluation() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in (1, 2, 3, 4, 5, 6)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    controller.record_market_event_batch(
+        build_market_event_batch(
+            (
+                _market_event(
+                    "BTCUSDT",
+                    venue="binance",
+                    ts_ns=_T0_NS + 101,
+                    event_type=MarketEventType.FUNDING,
+                    price=None,
+                    funding_rate=0.0001,
+                ),
+            )
+        )
+    )
+    intent_result = controller.record_paper_intent_batch(
+        build_paper_intent_batch((_paper_intent("active", "BTCUSDT", venue="binance"),), batch_id="cost-skipped")
+    )
+    fill_result = controller.simulate_paper_fills(intent_result)
+
+    result = controller.evaluate_paper_costs(fill_result, cost_model=PaperCostModel(fee_bps=10.0, slippage_bps=5.0))
+
+    assert fill_result.simulated_fills == 0
+    assert result.status == PaperCostStatus.SKIPPED
+    assert result.cost_evaluations == 0
+    assert result.accepted_costs == 0
+    assert result.rejected_costs == 0
+    assert result.skipped_costs == 1
+    assert result.gross_notional == 0.0
+    assert result.total_fee == 0.0
+    assert result.total_slippage_cost == 0.0
+    assert result.costs[0].status == PaperCostStatus.SKIPPED
+    assert result.reasons == ("fill_not_filled",)
+    assert controller.snapshot().cost_evaluations == 0
+
+
+def test_paper_cost_invalid_config_fails_closed() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in (1, 2, 3, 4, 5, 6)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),))
+    )
+    intent_result = controller.record_paper_intent_batch(
+        build_paper_intent_batch((_paper_intent("active", "BTCUSDT", venue="binance"),), batch_id="cost-invalid")
+    )
+    fill_result = controller.simulate_paper_fills(intent_result)
+
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.evaluate_paper_costs(fill_result, cost_model=PaperCostModel(fee_bps=-1.0))
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.evaluate_paper_costs(fill_result, cost_model=PaperCostModel(partial_fill_ratio=0.0))
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.evaluate_paper_costs(fill_result, cost_model={"fee_bps": float("nan")})
+
+
+def test_paper_cost_excessive_cost_rejected_by_threshold() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in (1, 2, 3, 4, 5, 6)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),))
+    )
+    intent_result = controller.record_paper_intent_batch(
+        build_paper_intent_batch((_paper_intent("active", "BTCUSDT", venue="binance"),), batch_id="cost-threshold")
+    )
+    fill_result = controller.simulate_paper_fills(intent_result)
+
+    result = controller.evaluate_paper_costs(
+        fill_result,
+        cost_model=PaperCostModel(fee_bps=20.0, slippage_bps=10.0, reject_if_cost_exceeds_bps=5.0),
+    )
+
+    assert result.status == PaperCostStatus.REJECTED_EXCESSIVE_COST
+    assert result.cost_evaluations == 1
+    assert result.accepted_costs == 0
+    assert result.rejected_costs == 1
+    assert result.costs[0].cost_bps == pytest.approx(30.0)
+    assert result.costs[0].status == PaperCostStatus.REJECTED_EXCESSIVE_COST
+    assert result.reasons == ("cost_exceeds_threshold",)
+    assert controller.snapshot().rejected_costs == 1
+
+
+def test_paper_cost_partial_fill_ratio_scales_costs() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in (1, 2, 3, 4, 5, 6)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),))
+    )
+    intent_result = controller.record_paper_intent_batch(
+        build_paper_intent_batch((_paper_intent("active", "BTCUSDT", venue="binance"),), batch_id="cost-partial")
+    )
+    fill_result = controller.simulate_paper_fills(intent_result)
+
+    result = controller.evaluate_paper_costs(
+        fill_result,
+        cost_model=PaperCostModel(fee_bps=10.0, slippage_bps=5.0, partial_fill_ratio=0.5),
+    )
+
+    assert result.status == PaperCostStatus.ACCEPTED
+    assert result.gross_notional == pytest.approx(5.0)
+    assert result.fee == pytest.approx(0.005)
+    assert result.slippage_cost == pytest.approx(0.0025)
+    assert result.net_notional == pytest.approx(5.0075)
+    assert result.cost_bps == pytest.approx(15.0)
+
+
+def test_paper_cost_deterministic_replay() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    market_batch = build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101),))
+    intent_batch = build_paper_intent_batch(
+        (_paper_intent("active", "BTCUSDT", venue="binance", intent_ts_ns=_T0_NS + 151),),
+        batch_id="cost-deterministic",
+    )
+    model = PaperCostModel(fee_bps=10.0, slippage_bps=5.0, min_fee=0.001)
+
+    def run_once() -> tuple[dict, dict]:
+        times = iter((_T0_NS + value for value in (1, 2, 3, 4, 5, 6)))
+        controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+        controller.prepare(plan)
+        controller.start()
+        controller.record_market_event_batch(market_batch)
+        intent_result = controller.record_paper_intent_batch(intent_batch)
+        fill_result = controller.simulate_paper_fills(intent_result)
+        cost_result = controller.evaluate_paper_costs(fill_result, cost_model=model)
+        return paper_cost_result_to_dict(cost_result), paper_shadow_session_snapshot_to_dict(controller.snapshot())
+
+    assert run_once() == run_once()
+
+
+def test_service_orchestrator_paper_cost_helpers_and_artifacts(tmp_path) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in (210, 211, 212, 213, 214, 215)))
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        evidence_store=store,
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: next(times),
+    )
+    intent_batch = build_paper_intent_batch(
+        (_paper_intent("svc-active", "BTCUSDT", venue="binance"),),
+        batch_id="svc-cost-intents",
+    )
+
+    orch.prepare_paper_shadow_session(plan=plan)
+    orch.start_paper_shadow_session()
+    orch.record_paper_shadow_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),))
+    )
+    intent_result = orch.record_paper_intent_batch(intent_batch)
+    fill_result = orch.simulate_paper_fills(intent_result)
+    cost_result = orch.evaluate_paper_costs(fill_result, cost_model=PaperCostModel(fee_bps=10.0, slippage_bps=5.0))
+    rendered = orch.paper_cost_result_dict(cost_result)
+    session = orch.paper_shadow_session_snapshot_dict()
+    operator = operator_snapshot_to_dict(orch.operator_snapshot())["paper_shadow_session"]
+
+    assert rendered["accepted_costs"] == 1
+    assert rendered["fee"] == pytest.approx(0.01)
+    assert session["cost_evaluations"] == 1
+    assert session["accepted_costs"] == 1
+    assert session["rejected_costs"] == 0
+    assert session["total_fee"] == pytest.approx(0.01)
+    assert session["total_slippage_cost"] == pytest.approx(0.005)
+    assert operator["cost_evaluations"] == 1
+    assert operator["accepted_costs"] == 1
+    assert operator["rejected_costs"] == 0
+    assert operator["total_fee"] == pytest.approx(0.01)
+    assert operator["total_slippage_cost"] == pytest.approx(0.005)
+
+    orch.export_paper_cost_result(cost_result)
+    assert orch.load_paper_cost_result() == cost_result
+    export_paper_cost_result(result=cost_result, evidence_store=store)
+    assert load_paper_cost_result(evidence_store=store) == cost_result
+
+    store.save_snapshot("crypto_paper_cost_result", ["bad"])
+    with pytest.raises(PaperShadowSessionCorruptError):
+        load_paper_cost_result(evidence_store=store)
 
 
 def test_service_orchestrator_feed_replay_helper_and_artifacts(tmp_path) -> None:

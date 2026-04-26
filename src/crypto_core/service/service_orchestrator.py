@@ -47,6 +47,7 @@ from crypto_core.service.artifact_export import (
     escalation_decision_why_not_higher,
     export_escalation_decision,
     export_operator_decision_pack,
+    export_paper_cost_result,
     export_paper_data_source_batch_result,
     export_paper_fill_simulation_result,
     export_paper_intent_batch,
@@ -54,6 +55,7 @@ from crypto_core.service.artifact_export import (
     export_sleeve_portfolio_snapshot,
     load_escalation_decision,
     load_operator_decision_pack,
+    load_paper_cost_result,
     load_paper_data_source_batch_result,
     load_paper_fill_simulation_result,
     load_paper_intent_batch,
@@ -163,6 +165,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     FeedReplayResult,
     MarketEventBatch,
     MultiSourceRunEvidenceReport,
+    PaperCostModel,
+    PaperCostResult,
     PaperDataSourceBatchResult,
     PaperFillSimulationResult,
     PaperIntent,
@@ -182,6 +186,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     guardrail_snapshot_to_dict,
     market_event_batch_to_dict,
     multi_source_run_evidence_report_to_dict,
+    paper_cost_result_to_dict,
     paper_data_source_batch_result_to_dict,
     paper_data_source_payload_to_market_event_batch,
     paper_fill_simulation_result_to_dict,
@@ -439,6 +444,11 @@ class PaperShadowSessionState:
     rejected_fills: int
     symbols_filled: int
     sleeves_filled: int
+    cost_evaluations: int
+    accepted_costs: int
+    rejected_costs: int
+    total_fee: float
+    total_slippage_cost: float
     runtime_monitor_status: str
     stale_feed_detected: bool
     symbol_coverage_ok: bool
@@ -1099,6 +1109,19 @@ class ServiceOrchestrator:
         """Serialize a deterministic paper-only fill simulation result."""
         return paper_fill_simulation_result_to_dict(result)
 
+    def evaluate_paper_costs(
+        self,
+        result: PaperFillSimulationResult | dict,
+        *,
+        cost_model: PaperCostModel | dict | None = None,
+    ) -> PaperCostResult:
+        """Evaluate deterministic paper-only fees/slippage for simulated paper fills."""
+        return self._ensure_paper_shadow_session_controller().evaluate_paper_costs(result, cost_model=cost_model)
+
+    def paper_cost_result_dict(self, result: PaperCostResult) -> dict:
+        """Serialize a deterministic paper-only cost result."""
+        return paper_cost_result_to_dict(result)
+
     def export_paper_shadow_session_snapshot(self):
         """Persist the current paper/shadow session snapshot via EvidenceStore."""
         if self._evidence_store is None:
@@ -1220,6 +1243,21 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for paper fill simulation load")
         return load_paper_fill_simulation_result(evidence_store=self._evidence_store)
+
+    def export_paper_cost_result(self, result: PaperCostResult):
+        """Persist a paper-only cost result via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper cost result export")
+        return export_paper_cost_result(
+            result=result,
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_cost_result(self) -> PaperCostResult:
+        """Load the latest persisted paper-only cost result."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper cost result load")
+        return load_paper_cost_result(evidence_store=self._evidence_store)
 
     def paper_shadow_run_evidence_report(
         self,
@@ -3867,6 +3905,11 @@ def paper_shadow_session_state_from_snapshot(snapshot: PaperShadowSessionSnapsho
         rejected_fills=snapshot.rejected_fills,
         symbols_filled=len(snapshot.symbols_filled),
         sleeves_filled=len(snapshot.sleeves_filled),
+        cost_evaluations=snapshot.cost_evaluations,
+        accepted_costs=snapshot.accepted_costs,
+        rejected_costs=snapshot.rejected_costs,
+        total_fee=snapshot.total_fee,
+        total_slippage_cost=snapshot.total_slippage_cost,
         runtime_monitor_status=snapshot.runtime_monitor.status.value,
         stale_feed_detected=snapshot.runtime_monitor.stale_feed_detected,
         symbol_coverage_ok=snapshot.runtime_monitor.symbol_coverage_ok,
@@ -3915,6 +3958,11 @@ def paper_shadow_session_state_to_dict(state: PaperShadowSessionState) -> dict:
         "rejected_fills": state.rejected_fills,
         "symbols_filled": state.symbols_filled,
         "sleeves_filled": state.sleeves_filled,
+        "cost_evaluations": state.cost_evaluations,
+        "accepted_costs": state.accepted_costs,
+        "rejected_costs": state.rejected_costs,
+        "total_fee": state.total_fee,
+        "total_slippage_cost": state.total_slippage_cost,
         "runtime_monitor_status": state.runtime_monitor_status,
         "stale_feed_detected": state.stale_feed_detected,
         "symbol_coverage_ok": state.symbol_coverage_ok,

@@ -36,6 +36,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     FeedReplayResult,
     MarketEventBatch,
     MultiSourceRunEvidenceReport,
+    PaperCostResult,
     PaperDataSourceBatchResult,
     PaperFillSimulationResult,
     PaperIntentBatch,
@@ -52,6 +53,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     market_event_batch_to_dict,
     multi_source_run_evidence_report_from_dict,
     multi_source_run_evidence_report_to_dict,
+    paper_cost_result_from_dict,
+    paper_cost_result_to_dict,
     paper_data_source_batch_result_from_dict,
     paper_data_source_batch_result_to_dict,
     paper_fill_simulation_result_from_dict,
@@ -546,6 +549,7 @@ _PAPER_DATA_SOURCE_BATCH_RESULT_SNAPSHOT_NAME = "crypto_paper_data_source_batch_
 _PAPER_INTENT_BATCH_SNAPSHOT_NAME = "crypto_paper_intent_batch"
 _PAPER_INTENT_BATCH_RESULT_SNAPSHOT_NAME = "crypto_paper_intent_batch_result"
 _PAPER_FILL_SIMULATION_RESULT_SNAPSHOT_NAME = "crypto_paper_fill_simulation_result"
+_PAPER_COST_RESULT_SNAPSHOT_NAME = "crypto_paper_cost_result"
 _PAPER_SHADOW_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_paper_shadow_run_evidence_report"
 _MULTI_SOURCE_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_multi_source_run_evidence_report"
 _PAPER_SHADOW_EVIDENCE_BUNDLE_SNAPSHOT_NAME = "crypto_paper_shadow_evidence_bundle"
@@ -934,6 +938,29 @@ def load_paper_fill_simulation_result(*, evidence_store: EvidenceStore) -> Paper
             f"Paper fill simulation result 'data' must be a dict, got {type(data).__name__!r}"
         )
     return paper_fill_simulation_result_from_dict(data)
+
+
+def export_paper_cost_result(
+    *,
+    result: PaperCostResult,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist a deterministic paper-only cost model result."""
+    data = paper_cost_result_to_dict(result)
+    write_result = evidence_store.save_snapshot(_PAPER_COST_RESULT_SNAPSHOT_NAME, data)
+    if not write_result.success:
+        return write_result
+    evidence_store.append_evidence(_PAPER_COST_RESULT_SNAPSHOT_NAME, data)
+    return write_result
+
+
+def load_paper_cost_result(*, evidence_store: EvidenceStore) -> PaperCostResult:
+    """Load the latest deterministic paper-only cost model result."""
+    envelope = evidence_store.load_snapshot(_PAPER_COST_RESULT_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper cost result 'data' must be a dict, got {type(data).__name__!r}")
+    return paper_cost_result_from_dict(data)
 
 
 def export_paper_shadow_run_evidence_report(

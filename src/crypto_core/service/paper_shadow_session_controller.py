@@ -81,6 +81,13 @@ class PaperFillStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class PaperCostStatus(str, Enum):
+    ACCEPTED = "accepted"
+    REJECTED_EXCESSIVE_COST = "rejected_excessive_cost"
+    REJECTED_INVALID_FILL = "rejected_invalid_fill"
+    SKIPPED = "skipped"
+
+
 class PaperShadowRunEvidenceStatus(str, Enum):
     PASS = "pass"  # noqa: S105 - run evidence outcome, not a credential.
     WARN = "warn"
@@ -233,6 +240,61 @@ class PaperFillSimulationResult:
     real_orders_enabled: bool = False
     real_money_enabled: bool = False
     operator_summary: str = "Paper fill simulation has not run."
+
+
+@dataclass(frozen=True)
+class PaperCostModel:
+    fee_bps: float = 0.0
+    slippage_bps: float = 0.0
+    min_fee: float = 0.0
+    reject_if_cost_exceeds_bps: float | None = None
+    partial_fill_ratio: float = 1.0
+
+
+@dataclass(frozen=True)
+class PaperCostLine:
+    fill_id: str
+    intent_id: str
+    sleeve_id: str
+    symbol: str
+    venue: str
+    side: PaperIntentSide
+    gross_notional: float
+    fee: float
+    slippage_cost: float
+    net_notional: float
+    effective_price: float | None
+    cost_bps: float
+    status: PaperCostStatus
+    reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PaperCostResult:
+    cost_result_id: str
+    session_id: str
+    as_of_ns: int
+    source_fill_simulation_id: str
+    cost_model: PaperCostModel
+    costs: tuple[PaperCostLine, ...]
+    cost_evaluations: int
+    accepted_costs: int
+    rejected_costs: int
+    skipped_costs: int
+    gross_notional: float
+    fee: float
+    slippage_cost: float
+    net_notional: float
+    effective_price: float | None
+    cost_bps: float
+    status: PaperCostStatus
+    reasons: tuple[str, ...] = ()
+    total_fee: float = 0.0
+    total_slippage_cost: float = 0.0
+    paper_only: bool = True
+    real_orders_enabled: bool = False
+    real_money_enabled: bool = False
+    operator_summary: str = "Paper cost model has not run."
 
 
 @dataclass(frozen=True)
@@ -390,6 +452,11 @@ class PaperShadowSessionSnapshot:
     rejected_fills: int = 0
     symbols_filled: tuple[str, ...] = ()
     sleeves_filled: tuple[str, ...] = ()
+    cost_evaluations: int = 0
+    accepted_costs: int = 0
+    rejected_costs: int = 0
+    total_fee: float = 0.0
+    total_slippage_cost: float = 0.0
     paper_only: bool = True
     real_orders_enabled: bool = False
     real_money_enabled: bool = False
@@ -763,6 +830,85 @@ class PaperShadowSessionController:
         )
         return simulation
 
+    def evaluate_paper_costs(
+        self,
+        result: PaperFillSimulationResult | dict,
+        *,
+        cost_model: PaperCostModel | dict | None = None,
+    ) -> PaperCostResult:
+        """Evaluate deterministic paper-only fees/slippage for simulated paper fills."""
+        normalized = paper_fill_simulation_result_from_dict(result) if isinstance(result, dict) else result
+        _validate_paper_fill_simulation_result(normalized)
+        if normalized.session_id != self._snapshot.session_id:
+            raise PaperShadowSessionCorruptError("paper cost result source fill simulation session mismatch")
+        model = paper_cost_model_from_dict(cost_model) if isinstance(cost_model, dict) else cost_model
+        resolved_model = PaperCostModel() if model is None else model
+        _validate_paper_cost_model(resolved_model)
+        now = self._now_ns()
+        costs = tuple(_paper_cost_line_for_fill(fill, resolved_model) for fill in normalized.fills)
+        costs = tuple(sorted(costs, key=_paper_cost_line_sort_key))
+        cost_evaluations = sum(1 for line in costs if line.status != PaperCostStatus.SKIPPED)
+        accepted_costs = sum(1 for line in costs if line.status == PaperCostStatus.ACCEPTED)
+        rejected_costs = sum(
+            1
+            for line in costs
+            if line.status
+            in {
+                PaperCostStatus.REJECTED_EXCESSIVE_COST,
+                PaperCostStatus.REJECTED_INVALID_FILL,
+            }
+        )
+        gross_notional = sum(line.gross_notional for line in costs if line.status != PaperCostStatus.SKIPPED)
+        fee = sum(line.fee for line in costs if line.status != PaperCostStatus.SKIPPED)
+        slippage_cost = sum(line.slippage_cost for line in costs if line.status != PaperCostStatus.SKIPPED)
+        net_notional = sum(line.net_notional for line in costs if line.status != PaperCostStatus.SKIPPED)
+        effective_price = _aggregate_effective_price(costs)
+        cost_bps = _cost_bps(fee + slippage_cost, gross_notional)
+        status = _paper_cost_result_status(costs)
+        reasons = _paper_cost_result_reasons(costs, status)
+        cost_result = PaperCostResult(
+            cost_result_id=_paper_cost_result_id(normalized.simulation_id, resolved_model, costs),
+            session_id=self._snapshot.session_id,
+            as_of_ns=now,
+            source_fill_simulation_id=normalized.simulation_id,
+            cost_model=resolved_model,
+            costs=costs,
+            cost_evaluations=cost_evaluations,
+            accepted_costs=accepted_costs,
+            rejected_costs=rejected_costs,
+            skipped_costs=sum(1 for line in costs if line.status == PaperCostStatus.SKIPPED),
+            gross_notional=gross_notional,
+            fee=fee,
+            slippage_cost=slippage_cost,
+            net_notional=net_notional,
+            effective_price=effective_price,
+            cost_bps=cost_bps,
+            status=status,
+            reasons=reasons,
+            total_fee=fee,
+            total_slippage_cost=slippage_cost,
+            paper_only=True,
+            real_orders_enabled=False,
+            real_money_enabled=False,
+            operator_summary=_paper_cost_summary(status, cost_evaluations, accepted_costs, rejected_costs),
+        )
+        _validate_paper_cost_result(cost_result)
+        self._apply_snapshot(
+            replace(
+                self._snapshot,
+                as_of_ns=now,
+                cost_evaluations=self._snapshot.cost_evaluations + cost_result.cost_evaluations,
+                accepted_costs=self._snapshot.accepted_costs + cost_result.accepted_costs,
+                rejected_costs=self._snapshot.rejected_costs + cost_result.rejected_costs,
+                total_fee=self._snapshot.total_fee + cost_result.total_fee,
+                total_slippage_cost=self._snapshot.total_slippage_cost + cost_result.total_slippage_cost,
+                paper_only=True,
+                real_orders_enabled=False,
+                real_money_enabled=False,
+            )
+        )
+        return cost_result
+
     def replay_feed(self, plan: FeedReplayPlan | dict | tuple[MarketEventBatch, ...]) -> FeedReplayResult:
         if self._snapshot.status != PaperShadowSessionStatus.RUNNING:
             raise PaperShadowSessionCorruptError("paper/shadow feed replay can only run while session is RUNNING")
@@ -1027,6 +1173,11 @@ def paper_shadow_session_snapshot_to_dict(snapshot: PaperShadowSessionSnapshot) 
         "rejected_fills": snapshot.rejected_fills,
         "symbols_filled": list(snapshot.symbols_filled),
         "sleeves_filled": list(snapshot.sleeves_filled),
+        "cost_evaluations": snapshot.cost_evaluations,
+        "accepted_costs": snapshot.accepted_costs,
+        "rejected_costs": snapshot.rejected_costs,
+        "total_fee": snapshot.total_fee,
+        "total_slippage_cost": snapshot.total_slippage_cost,
         "paper_only": snapshot.paper_only,
         "real_orders_enabled": snapshot.real_orders_enabled,
         "real_money_enabled": snapshot.real_money_enabled,
@@ -1121,6 +1272,14 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
         rejected_fills=_require_non_negative_int(data.get("rejected_fills", 0), "rejected_fills"),
         symbols_filled=_sorted_unique(data.get("symbols_filled", ())),
         sleeves_filled=_sorted_unique(data.get("sleeves_filled", ())),
+        cost_evaluations=_require_non_negative_int(data.get("cost_evaluations", 0), "cost_evaluations"),
+        accepted_costs=_require_non_negative_int(data.get("accepted_costs", 0), "accepted_costs"),
+        rejected_costs=_require_non_negative_int(data.get("rejected_costs", 0), "rejected_costs"),
+        total_fee=_require_non_negative_float(data.get("total_fee", 0.0), "total_fee"),
+        total_slippage_cost=_require_non_negative_float(
+            data.get("total_slippage_cost", 0.0),
+            "total_slippage_cost",
+        ),
         paper_only=paper_only,
         real_orders_enabled=real_orders_enabled,
         real_money_enabled=real_money_enabled,
@@ -1650,6 +1809,151 @@ def paper_fill_simulation_result_from_dict(data: dict) -> PaperFillSimulationRes
         operator_summary=_require_non_empty_str(data.get("operator_summary"), "operator_summary"),
     )
     _validate_paper_fill_simulation_result(result)
+    return result
+
+
+def paper_cost_model_to_dict(model: PaperCostModel) -> dict:
+    _validate_paper_cost_model(model)
+    return {
+        "fee_bps": model.fee_bps,
+        "slippage_bps": model.slippage_bps,
+        "min_fee": model.min_fee,
+        "reject_if_cost_exceeds_bps": model.reject_if_cost_exceeds_bps,
+        "partial_fill_ratio": model.partial_fill_ratio,
+    }
+
+
+def paper_cost_model_from_dict(data: dict | None) -> PaperCostModel:
+    if data is None:
+        return PaperCostModel()
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper cost model must be a dict, got {type(data).__name__!r}")
+    model = PaperCostModel(
+        fee_bps=_require_non_negative_float(data.get("fee_bps", 0.0), "fee_bps"),
+        slippage_bps=_require_non_negative_float(data.get("slippage_bps", 0.0), "slippage_bps"),
+        min_fee=_require_non_negative_float(data.get("min_fee", 0.0), "min_fee"),
+        reject_if_cost_exceeds_bps=_optional_non_negative_float(
+            data.get("reject_if_cost_exceeds_bps"),
+            "reject_if_cost_exceeds_bps",
+        ),
+        partial_fill_ratio=_require_non_negative_float(data.get("partial_fill_ratio", 1.0), "partial_fill_ratio"),
+    )
+    _validate_paper_cost_model(model)
+    return model
+
+
+def paper_cost_line_to_dict(line: PaperCostLine) -> dict:
+    _validate_paper_cost_line(line)
+    return {
+        "fill_id": line.fill_id,
+        "intent_id": line.intent_id,
+        "sleeve_id": line.sleeve_id,
+        "symbol": line.symbol,
+        "venue": line.venue,
+        "side": line.side.value,
+        "gross_notional": line.gross_notional,
+        "fee": line.fee,
+        "slippage_cost": line.slippage_cost,
+        "net_notional": line.net_notional,
+        "effective_price": line.effective_price,
+        "cost_bps": line.cost_bps,
+        "status": line.status.value,
+        "reasons": list(line.reasons),
+    }
+
+
+def paper_cost_line_from_dict(data: dict) -> PaperCostLine:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper cost line must be a dict, got {type(data).__name__!r}")
+    line = PaperCostLine(
+        fill_id=_require_non_empty_str(data.get("fill_id"), "fill_id"),
+        intent_id=_require_non_empty_str(data.get("intent_id"), "intent_id"),
+        sleeve_id=_require_non_empty_str(data.get("sleeve_id"), "sleeve_id"),
+        symbol=_require_non_empty_str(data.get("symbol"), "symbol"),
+        venue=_require_non_empty_str(data.get("venue"), "venue"),
+        side=_paper_intent_side_from_value(data.get("side")),
+        gross_notional=_require_non_negative_float(data.get("gross_notional"), "gross_notional"),
+        fee=_require_non_negative_float(data.get("fee"), "fee"),
+        slippage_cost=_require_non_negative_float(data.get("slippage_cost"), "slippage_cost"),
+        net_notional=_require_non_negative_float(data.get("net_notional"), "net_notional"),
+        effective_price=_optional_non_negative_float(data.get("effective_price"), "effective_price"),
+        cost_bps=_require_non_negative_float(data.get("cost_bps"), "cost_bps"),
+        status=_paper_cost_status_from_value(data.get("status")),
+        reasons=_sorted_unique(data.get("reasons", ())),
+    )
+    _validate_paper_cost_line(line)
+    return line
+
+
+def paper_cost_result_to_dict(result: PaperCostResult) -> dict:
+    _validate_paper_cost_result(result)
+    return {
+        "cost_result_id": result.cost_result_id,
+        "session_id": result.session_id,
+        "as_of_ns": result.as_of_ns,
+        "source_fill_simulation_id": result.source_fill_simulation_id,
+        "cost_model": paper_cost_model_to_dict(result.cost_model),
+        "costs": [paper_cost_line_to_dict(line) for line in result.costs],
+        "cost_evaluations": result.cost_evaluations,
+        "accepted_costs": result.accepted_costs,
+        "rejected_costs": result.rejected_costs,
+        "skipped_costs": result.skipped_costs,
+        "gross_notional": result.gross_notional,
+        "fee": result.fee,
+        "slippage_cost": result.slippage_cost,
+        "net_notional": result.net_notional,
+        "effective_price": result.effective_price,
+        "cost_bps": result.cost_bps,
+        "status": result.status.value,
+        "reasons": list(result.reasons),
+        "total_fee": result.total_fee,
+        "total_slippage_cost": result.total_slippage_cost,
+        "paper_only": result.paper_only,
+        "real_orders_enabled": result.real_orders_enabled,
+        "real_money_enabled": result.real_money_enabled,
+        "operator_summary": result.operator_summary,
+    }
+
+
+def paper_cost_result_from_dict(data: dict) -> PaperCostResult:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper cost result must be a dict, got {type(data).__name__!r}")
+    costs_value = data.get("costs")
+    if not isinstance(costs_value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("paper cost result field 'costs' must be a list/tuple")
+    result = PaperCostResult(
+        cost_result_id=_require_non_empty_str(data.get("cost_result_id"), "cost_result_id"),
+        session_id=_require_non_empty_str(data.get("session_id"), "session_id"),
+        as_of_ns=_require_non_negative_int(data.get("as_of_ns"), "as_of_ns"),
+        source_fill_simulation_id=_require_non_empty_str(
+            data.get("source_fill_simulation_id"),
+            "source_fill_simulation_id",
+        ),
+        cost_model=paper_cost_model_from_dict(_dict_value(data.get("cost_model"), "cost_model")),
+        costs=tuple(paper_cost_line_from_dict(_dict_value(item, "costs")) for item in costs_value),
+        cost_evaluations=_require_non_negative_int(data.get("cost_evaluations"), "cost_evaluations"),
+        accepted_costs=_require_non_negative_int(data.get("accepted_costs"), "accepted_costs"),
+        rejected_costs=_require_non_negative_int(data.get("rejected_costs"), "rejected_costs"),
+        skipped_costs=_require_non_negative_int(data.get("skipped_costs"), "skipped_costs"),
+        gross_notional=_require_non_negative_float(data.get("gross_notional"), "gross_notional"),
+        fee=_require_non_negative_float(data.get("fee"), "fee"),
+        slippage_cost=_require_non_negative_float(data.get("slippage_cost"), "slippage_cost"),
+        net_notional=_require_non_negative_float(data.get("net_notional"), "net_notional"),
+        effective_price=_optional_non_negative_float(data.get("effective_price"), "effective_price"),
+        cost_bps=_require_non_negative_float(data.get("cost_bps"), "cost_bps"),
+        status=_paper_cost_status_from_value(data.get("status")),
+        reasons=_sorted_unique(data.get("reasons", ())),
+        total_fee=_require_non_negative_float(data.get("total_fee", data.get("fee")), "total_fee"),
+        total_slippage_cost=_require_non_negative_float(
+            data.get("total_slippage_cost", data.get("slippage_cost")),
+            "total_slippage_cost",
+        ),
+        paper_only=_bool_or_default(data, "paper_only", True),
+        real_orders_enabled=_bool_or_default(data, "real_orders_enabled", False),
+        real_money_enabled=_bool_or_default(data, "real_money_enabled", False),
+        operator_summary=_require_non_empty_str(data.get("operator_summary"), "operator_summary"),
+    )
+    _validate_paper_cost_result(result)
     return result
 
 
@@ -2602,6 +2906,126 @@ def _validate_paper_fill_simulation_result(result: PaperFillSimulationResult) ->
     _require_non_empty_str(result.operator_summary, "operator_summary")
 
 
+def _validate_paper_cost_model(model: PaperCostModel) -> None:
+    if not isinstance(model, PaperCostModel):
+        raise PaperShadowSessionCorruptError("paper cost model must be a PaperCostModel")
+    _require_non_negative_float(model.fee_bps, "fee_bps")
+    _require_non_negative_float(model.slippage_bps, "slippage_bps")
+    _require_non_negative_float(model.min_fee, "min_fee")
+    _optional_non_negative_float(model.reject_if_cost_exceeds_bps, "reject_if_cost_exceeds_bps")
+    partial_fill_ratio = _require_non_negative_float(model.partial_fill_ratio, "partial_fill_ratio")
+    if partial_fill_ratio <= 0.0 or partial_fill_ratio > 1.0:
+        raise PaperShadowSessionCorruptError("paper cost partial_fill_ratio must be in (0, 1]")
+
+
+def _validate_paper_cost_line(line: PaperCostLine) -> None:
+    if not isinstance(line, PaperCostLine):
+        raise PaperShadowSessionCorruptError("paper cost line must be a PaperCostLine")
+    _require_non_empty_str(line.fill_id, "fill_id")
+    _require_non_empty_str(line.intent_id, "intent_id")
+    _require_non_empty_str(line.sleeve_id, "sleeve_id")
+    _require_non_empty_str(line.symbol, "symbol")
+    _require_non_empty_str(line.venue, "venue")
+    if not isinstance(line.side, PaperIntentSide):
+        raise PaperShadowSessionCorruptError("paper cost line side must be a PaperIntentSide")
+    _require_non_negative_float(line.gross_notional, "gross_notional")
+    _require_non_negative_float(line.fee, "fee")
+    _require_non_negative_float(line.slippage_cost, "slippage_cost")
+    _require_non_negative_float(line.net_notional, "net_notional")
+    _optional_non_negative_float(line.effective_price, "effective_price")
+    _require_non_negative_float(line.cost_bps, "cost_bps")
+    if not isinstance(line.status, PaperCostStatus):
+        raise PaperShadowSessionCorruptError("paper cost line status must be a PaperCostStatus")
+    if line.reasons != _sorted_unique(line.reasons):
+        raise PaperShadowSessionCorruptError("paper cost line reasons must be sorted unique")
+    if line.status == PaperCostStatus.ACCEPTED:
+        if line.reasons:
+            raise PaperShadowSessionCorruptError("accepted paper cost cannot carry reasons")
+        if line.gross_notional <= 0.0 or line.effective_price is None:
+            raise PaperShadowSessionCorruptError("accepted paper cost requires positive notional and effective price")
+    else:
+        if not line.reasons:
+            raise PaperShadowSessionCorruptError("non-accepted paper cost requires reasons")
+    if line.status == PaperCostStatus.SKIPPED:
+        if any(value != 0.0 for value in (line.gross_notional, line.fee, line.slippage_cost, line.net_notional)):
+            raise PaperShadowSessionCorruptError("skipped paper cost cannot carry cost amounts")
+        if line.effective_price is not None or line.cost_bps != 0.0:
+            raise PaperShadowSessionCorruptError("skipped paper cost cannot carry effective price or cost bps")
+    if line.status == PaperCostStatus.REJECTED_INVALID_FILL and "invalid_paper_fill" not in line.reasons:
+        raise PaperShadowSessionCorruptError("invalid fill paper cost requires invalid_paper_fill reason")
+    if line.status == PaperCostStatus.REJECTED_EXCESSIVE_COST and "cost_exceeds_threshold" not in line.reasons:
+        raise PaperShadowSessionCorruptError("excessive paper cost requires cost_exceeds_threshold reason")
+
+
+def _validate_paper_cost_result(result: PaperCostResult) -> None:
+    if not isinstance(result, PaperCostResult):
+        raise PaperShadowSessionCorruptError("paper cost result must be a PaperCostResult")
+    _require_non_empty_str(result.cost_result_id, "cost_result_id")
+    _require_non_empty_str(result.session_id, "session_id")
+    _require_non_negative_int(result.as_of_ns, "as_of_ns")
+    _require_non_empty_str(result.source_fill_simulation_id, "source_fill_simulation_id")
+    _validate_paper_cost_model(result.cost_model)
+    if not isinstance(result.costs, tuple):
+        raise PaperShadowSessionCorruptError("paper cost result costs must be a tuple")
+    for line in result.costs:
+        _validate_paper_cost_line(line)
+    if result.costs != tuple(sorted(result.costs, key=_paper_cost_line_sort_key)):
+        raise PaperShadowSessionCorruptError("paper cost lines must be sorted")
+    _require_non_negative_int(result.cost_evaluations, "cost_evaluations")
+    _require_non_negative_int(result.accepted_costs, "accepted_costs")
+    _require_non_negative_int(result.rejected_costs, "rejected_costs")
+    _require_non_negative_int(result.skipped_costs, "skipped_costs")
+    expected_evaluations = sum(1 for line in result.costs if line.status != PaperCostStatus.SKIPPED)
+    expected_accepted = sum(1 for line in result.costs if line.status == PaperCostStatus.ACCEPTED)
+    expected_rejected = sum(
+        1
+        for line in result.costs
+        if line.status
+        in {
+            PaperCostStatus.REJECTED_EXCESSIVE_COST,
+            PaperCostStatus.REJECTED_INVALID_FILL,
+        }
+    )
+    expected_skipped = sum(1 for line in result.costs if line.status == PaperCostStatus.SKIPPED)
+    if result.cost_evaluations != expected_evaluations:
+        raise PaperShadowSessionCorruptError("paper cost evaluations do not match cost lines")
+    if result.accepted_costs != expected_accepted:
+        raise PaperShadowSessionCorruptError("paper accepted cost count does not match cost lines")
+    if result.rejected_costs != expected_rejected:
+        raise PaperShadowSessionCorruptError("paper rejected cost count does not match cost lines")
+    if result.skipped_costs != expected_skipped:
+        raise PaperShadowSessionCorruptError("paper skipped cost count does not match cost lines")
+    if result.cost_evaluations + result.skipped_costs != len(result.costs):
+        raise PaperShadowSessionCorruptError("paper cost counts must cover every cost line")
+    expected_gross = sum(line.gross_notional for line in result.costs if line.status != PaperCostStatus.SKIPPED)
+    expected_fee = sum(line.fee for line in result.costs if line.status != PaperCostStatus.SKIPPED)
+    expected_slippage = sum(line.slippage_cost for line in result.costs if line.status != PaperCostStatus.SKIPPED)
+    expected_net = sum(line.net_notional for line in result.costs if line.status != PaperCostStatus.SKIPPED)
+    if result.gross_notional != expected_gross:
+        raise PaperShadowSessionCorruptError("paper cost gross_notional does not match cost lines")
+    if result.fee != expected_fee or result.total_fee != expected_fee:
+        raise PaperShadowSessionCorruptError("paper cost fee totals do not match cost lines")
+    if result.slippage_cost != expected_slippage or result.total_slippage_cost != expected_slippage:
+        raise PaperShadowSessionCorruptError("paper cost slippage totals do not match cost lines")
+    if result.net_notional != expected_net:
+        raise PaperShadowSessionCorruptError("paper cost net_notional does not match cost lines")
+    expected_cost_bps = _cost_bps(expected_fee + expected_slippage, expected_gross)
+    if result.cost_bps != expected_cost_bps:
+        raise PaperShadowSessionCorruptError("paper cost_bps does not match cost totals")
+    if result.effective_price != _aggregate_effective_price(result.costs):
+        raise PaperShadowSessionCorruptError("paper cost effective_price does not match cost lines")
+    if result.status != _paper_cost_result_status(result.costs):
+        raise PaperShadowSessionCorruptError("paper cost result status does not match cost lines")
+    if result.reasons != _paper_cost_result_reasons(result.costs, result.status):
+        raise PaperShadowSessionCorruptError("paper cost result reasons do not match cost lines")
+    _require_bool(result.paper_only, "paper_only")
+    _require_bool(result.real_orders_enabled, "real_orders_enabled")
+    _require_bool(result.real_money_enabled, "real_money_enabled")
+    if not result.paper_only or result.real_orders_enabled or result.real_money_enabled:
+        raise PaperShadowSessionCorruptError("paper cost result cannot carry unsafe real-trading flags")
+    _require_non_empty_str(result.operator_summary, "operator_summary")
+
+
 def _validate_feed_replay_plan(plan: FeedReplayPlan) -> None:
     _validate_feed_replay_plan_shape(plan)
     for batch in plan.batches:
@@ -2975,6 +3399,20 @@ def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
         raise PaperShadowSessionCorruptError("paper/shadow session without fill attempts cannot carry fill counters")
     if snapshot.simulated_fills == 0 and (snapshot.symbols_filled or snapshot.sleeves_filled):
         raise PaperShadowSessionCorruptError("paper/shadow session without simulated fills cannot carry filled sets")
+    _require_non_negative_int(snapshot.cost_evaluations, "cost_evaluations")
+    _require_non_negative_int(snapshot.accepted_costs, "accepted_costs")
+    _require_non_negative_int(snapshot.rejected_costs, "rejected_costs")
+    _require_non_negative_float(snapshot.total_fee, "total_fee")
+    _require_non_negative_float(snapshot.total_slippage_cost, "total_slippage_cost")
+    if snapshot.accepted_costs + snapshot.rejected_costs != snapshot.cost_evaluations:
+        raise PaperShadowSessionCorruptError("paper/shadow cost evaluations must equal accepted plus rejected costs")
+    if snapshot.cost_evaluations == 0 and (
+        snapshot.accepted_costs
+        or snapshot.rejected_costs
+        or snapshot.total_fee != 0.0
+        or snapshot.total_slippage_cost != 0.0
+    ):
+        raise PaperShadowSessionCorruptError("paper/shadow session without cost evaluations cannot carry cost counters")
     if snapshot.event_count > 0:
         if snapshot.first_event_ns is None or snapshot.last_event_ns is None:
             raise PaperShadowSessionCorruptError("paper/shadow session events require first/last event timestamps")
@@ -3620,6 +4058,179 @@ def _paper_fill_simulation_id(
     return f"paper-fill-simulation-{session_id}-{batch_id}-{len(fills)}"
 
 
+def _paper_cost_summary(
+    status: PaperCostStatus,
+    cost_evaluations: int,
+    accepted_costs: int,
+    rejected_costs: int,
+) -> str:
+    return (
+        f"paper_cost={status.value}; evaluations={cost_evaluations}; "
+        f"accepted={accepted_costs}; rejected={rejected_costs}"
+    )
+
+
+def _paper_cost_result_id(
+    simulation_id: str,
+    model: PaperCostModel,
+    costs: tuple[PaperCostLine, ...],
+) -> str:
+    return (
+        f"paper-cost-{simulation_id}-fee-{model.fee_bps}-slip-{model.slippage_bps}-"
+        f"partial-{model.partial_fill_ratio}-{len(costs)}"
+    )
+
+
+def _paper_cost_line_for_fill(fill: PaperFill, model: PaperCostModel) -> PaperCostLine:
+    try:
+        _validate_paper_fill(fill)
+    except PaperShadowSessionCorruptError:
+        return PaperCostLine(
+            fill_id=_string_or_default(getattr(fill, "fill_id", None), "invalid-fill"),
+            intent_id=_string_or_default(getattr(fill, "intent_id", None), "invalid-intent"),
+            sleeve_id=_string_or_default(getattr(fill, "sleeve_id", None), "invalid-sleeve"),
+            symbol=_string_or_default(getattr(fill, "symbol", None), "invalid-symbol"),
+            venue=_string_or_default(getattr(fill, "venue", None), "invalid-venue"),
+            side=getattr(fill, "side", PaperIntentSide.BUY)
+            if isinstance(getattr(fill, "side", PaperIntentSide.BUY), PaperIntentSide)
+            else PaperIntentSide.BUY,
+            gross_notional=0.0,
+            fee=0.0,
+            slippage_cost=0.0,
+            net_notional=0.0,
+            effective_price=None,
+            cost_bps=0.0,
+            status=PaperCostStatus.REJECTED_INVALID_FILL,
+            reasons=("invalid_paper_fill",),
+        )
+    if fill.status != PaperFillStatus.FILLED:
+        line = PaperCostLine(
+            fill_id=fill.fill_id,
+            intent_id=fill.intent_id,
+            sleeve_id=fill.sleeve_id,
+            symbol=fill.symbol,
+            venue=fill.venue,
+            side=fill.side,
+            gross_notional=0.0,
+            fee=0.0,
+            slippage_cost=0.0,
+            net_notional=0.0,
+            effective_price=None,
+            cost_bps=0.0,
+            status=PaperCostStatus.SKIPPED,
+            reasons=("fill_not_filled",),
+        )
+        _validate_paper_cost_line(line)
+        return line
+    if fill.fill_price is None or not _paper_fill_has_valid_size(fill):
+        line = PaperCostLine(
+            fill_id=fill.fill_id,
+            intent_id=fill.intent_id,
+            sleeve_id=fill.sleeve_id,
+            symbol=fill.symbol,
+            venue=fill.venue,
+            side=fill.side,
+            gross_notional=0.0,
+            fee=0.0,
+            slippage_cost=0.0,
+            net_notional=0.0,
+            effective_price=None,
+            cost_bps=0.0,
+            status=PaperCostStatus.REJECTED_INVALID_FILL,
+            reasons=("invalid_paper_fill",),
+        )
+        _validate_paper_cost_line(line)
+        return line
+    base_notional = _paper_fill_base_notional(fill)
+    gross_notional = base_notional * model.partial_fill_ratio
+    fee = max(gross_notional * model.fee_bps / 10_000.0, model.min_fee if gross_notional > 0.0 else 0.0)
+    slippage_cost = gross_notional * model.slippage_bps / 10_000.0
+    net_notional = gross_notional + fee + slippage_cost
+    effective_price = _paper_cost_effective_price(fill, model)
+    cost_bps = _cost_bps(fee + slippage_cost, gross_notional)
+    status = PaperCostStatus.ACCEPTED
+    reasons: tuple[str, ...] = ()
+    if model.reject_if_cost_exceeds_bps is not None and cost_bps > model.reject_if_cost_exceeds_bps:
+        status = PaperCostStatus.REJECTED_EXCESSIVE_COST
+        reasons = ("cost_exceeds_threshold",)
+    line = PaperCostLine(
+        fill_id=fill.fill_id,
+        intent_id=fill.intent_id,
+        sleeve_id=fill.sleeve_id,
+        symbol=fill.symbol,
+        venue=fill.venue,
+        side=fill.side,
+        gross_notional=gross_notional,
+        fee=fee,
+        slippage_cost=slippage_cost,
+        net_notional=net_notional,
+        effective_price=effective_price,
+        cost_bps=cost_bps,
+        status=status,
+        reasons=reasons,
+    )
+    _validate_paper_cost_line(line)
+    return line
+
+
+def _paper_fill_base_notional(fill: PaperFill) -> float:
+    if fill.notional is not None and fill.notional > 0.0:
+        return _require_non_negative_float(fill.notional, "notional")
+    if fill.qty is None or fill.fill_price is None:
+        raise PaperShadowSessionCorruptError("paper fill requires qty or notional for cost evaluation")
+    return _require_non_negative_float(fill.qty, "qty") * _require_non_negative_float(fill.fill_price, "fill_price")
+
+
+def _paper_cost_effective_price(fill: PaperFill, model: PaperCostModel) -> float | None:
+    if fill.fill_price is None:
+        return None
+    fill_price = _require_non_negative_float(fill.fill_price, "fill_price")
+    adjustment = fill_price * model.slippage_bps / 10_000.0
+    if fill.side == PaperIntentSide.SELL:
+        return max(0.0, fill_price - adjustment)
+    return fill_price + adjustment
+
+
+def _cost_bps(cost: float, gross_notional: float) -> float:
+    cost = _require_non_negative_float(cost, "cost")
+    gross_notional = _require_non_negative_float(gross_notional, "gross_notional")
+    if gross_notional == 0.0:
+        return 0.0
+    return cost / gross_notional * 10_000.0
+
+
+def _aggregate_effective_price(costs: tuple[PaperCostLine, ...]) -> float | None:
+    accepted = tuple(line for line in costs if line.status == PaperCostStatus.ACCEPTED)
+    if not accepted:
+        return None
+    denominator = sum(line.gross_notional for line in accepted)
+    if denominator == 0.0:
+        return None
+    return sum((line.effective_price or 0.0) * line.gross_notional for line in accepted) / denominator
+
+
+def _paper_cost_result_status(costs: tuple[PaperCostLine, ...]) -> PaperCostStatus:
+    if any(line.status == PaperCostStatus.REJECTED_INVALID_FILL for line in costs):
+        return PaperCostStatus.REJECTED_INVALID_FILL
+    if any(line.status == PaperCostStatus.REJECTED_EXCESSIVE_COST for line in costs):
+        return PaperCostStatus.REJECTED_EXCESSIVE_COST
+    if any(line.status == PaperCostStatus.ACCEPTED for line in costs):
+        return PaperCostStatus.ACCEPTED
+    return PaperCostStatus.SKIPPED
+
+
+def _paper_cost_result_reasons(
+    costs: tuple[PaperCostLine, ...],
+    status: PaperCostStatus,
+) -> tuple[str, ...]:
+    if status == PaperCostStatus.ACCEPTED:
+        return ()
+    reasons = tuple(reason for line in costs for reason in line.reasons)
+    if not reasons:
+        reasons = ("no_filled_paper_fills",)
+    return _sorted_unique(reasons)
+
+
 def _paper_fill_for_intent_result(
     snapshot: PaperShadowSessionSnapshot,
     batch_result: PaperIntentBatchResult,
@@ -4067,6 +4678,10 @@ def _paper_fill_sort_key(fill: PaperFill) -> tuple[int, str, str, str, str, str]
     return (fill.fill_ts_ns, fill.sleeve_id, fill.symbol, fill.venue, fill.side.value, fill.fill_id)
 
 
+def _paper_cost_line_sort_key(line: PaperCostLine) -> tuple[str, str, str, str, str, str]:
+    return (line.sleeve_id, line.symbol, line.venue, line.side.value, line.fill_id, line.status.value)
+
+
 def _market_event_type_from_value(value: object) -> MarketEventType:
     if isinstance(value, MarketEventType):
         return value
@@ -4101,6 +4716,15 @@ def _paper_fill_status_from_value(value: object) -> PaperFillStatus:
         return PaperFillStatus(_require_non_empty_str(value, "status"))
     except ValueError as exc:
         raise PaperShadowSessionCorruptError(f"Invalid paper fill status: {value!r}") from exc
+
+
+def _paper_cost_status_from_value(value: object) -> PaperCostStatus:
+    if isinstance(value, PaperCostStatus):
+        return value
+    try:
+        return PaperCostStatus(_require_non_empty_str(value, "status"))
+    except ValueError as exc:
+        raise PaperShadowSessionCorruptError(f"Invalid paper cost status: {value!r}") from exc
 
 
 def _paper_intent_has_valid_size(intent: PaperIntent) -> bool:
