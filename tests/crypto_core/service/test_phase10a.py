@@ -111,35 +111,37 @@ def test_paper_run_aggregation_pass():
         make_report(AcceptanceVerdict.PASS),
         make_report(AcceptanceVerdict.PASS_WITH_WARNINGS),
         make_report(AcceptanceVerdict.PASS),
+        make_report(AcceptanceVerdict.PASS),
+        make_report(AcceptanceVerdict.PASS),
     )
     agg = build_campaign_aggregation(reports)
     vdist = verdict_distribution(agg)
     psum = paper_run_summary(agg)
-    assert agg.total_paper_runs == 3
-    assert agg.passed_runs == 2
+    assert agg.total_paper_runs == 5
+    assert agg.passed_runs == 4
     assert agg.warned_runs == 1
     assert agg.blocked_runs == 0
     assert agg.inconclusive_runs == 0
-    assert agg.complete_runs == 3
+    assert agg.complete_runs == 5
     assert agg.paper_run_pass_ratio == 1.0
     assert agg.paper_run_complete_ratio == 1.0
     assert agg.paper_run_evidence_supportive is True
     # Check reporting surfaces
-    assert vdist["total_paper_runs"] == 3
-    assert vdist["passed_runs"] == 2
+    assert vdist["total_paper_runs"] == 5
+    assert vdist["passed_runs"] == 4
     assert vdist["warned_runs"] == 1
     assert vdist["blocked_runs"] == 0
     assert vdist["inconclusive_runs"] == 0
-    assert vdist["complete_runs"] == 3
+    assert vdist["complete_runs"] == 5
     assert vdist["paper_run_pass_ratio"] == 1.0
     assert vdist["paper_run_complete_ratio"] == 1.0
     assert vdist["paper_run_evidence_supportive"] is True
-    assert psum["total_paper_runs"] == 3
-    assert psum["passed_runs"] == 2
+    assert psum["total_paper_runs"] == 5
+    assert psum["passed_runs"] == 4
     assert psum["warned_runs"] == 1
     assert psum["blocked_runs"] == 0
     assert psum["inconclusive_runs"] == 0
-    assert psum["complete_runs"] == 3
+    assert psum["complete_runs"] == 5
     assert psum["paper_run_pass_ratio"] == 1.0
     assert psum["paper_run_complete_ratio"] == 1.0
     assert psum["paper_run_evidence_supportive"] is True

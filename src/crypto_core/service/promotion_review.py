@@ -546,8 +546,14 @@ def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignA
 
     paper_run_pass_ratio = (passed_runs + warned_runs) / total_paper_runs if total_paper_runs > 0 else 0.0
     paper_run_complete_ratio = complete_runs / total_paper_runs if total_paper_runs > 0 else 0.0
+    # Phase 16K: use PromotionThresholds for sufficiency
+    default_thresholds = PromotionThresholds()
     paper_run_evidence_supportive = (
-        total_paper_runs > 0 and paper_run_pass_ratio >= 0.8 and paper_run_complete_ratio >= 0.8
+        total_paper_runs >= default_thresholds.min_paper_runs
+        and paper_run_pass_ratio >= default_thresholds.min_paper_pass_ratio
+        and paper_run_complete_ratio >= default_thresholds.min_paper_complete_ratio
+        and (blocked_runs / total_paper_runs if total_paper_runs > 0 else 0.0)
+        <= default_thresholds.max_paper_blocked_ratio
     )
     return CampaignAggregation(
         total_campaigns=n,
@@ -680,6 +686,11 @@ class PromotionResult:
 
 @dataclass(frozen=True)
 class PromotionThresholds:
+    # --- Paper run evidence sufficiency thresholds (Phase 16K) ---
+    min_paper_runs: int = 5
+    min_paper_pass_ratio: float = 0.8
+    min_paper_complete_ratio: float = 0.8
+    max_paper_blocked_ratio: float = 0.2
     """Configurable thresholds for the promotion policy.
 
     Coverage → insufficient evidence if not met.
@@ -754,6 +765,55 @@ class PromotionReview:
 
 
 class PromotionPolicy:
+    def evaluate(
+        self,
+        aggregation: CampaignAggregation,
+        *,
+        readiness_level: str = "not_assessed",
+    ) -> PromotionResult:
+        """Evaluate promotion readiness from campaign aggregation.
+
+        Returns:
+            PromotionResult with deterministic verdict and reason codes.
+        """
+        criteria: list[PromotionCriterion] = []
+        t = self._t
+        agg = aggregation
+
+        # --- Paper run evidence sufficiency (Phase 16K) ---
+        # Coverage: min_paper_runs, min_paper_pass_ratio, min_paper_complete_ratio
+        if agg.total_paper_runs >= 0:
+            criteria.append(
+                self._check_coverage(
+                    "min_paper_runs",
+                    agg.total_paper_runs,
+                    t.min_paper_runs,
+                )
+            )
+            criteria.append(
+                self._check_coverage(
+                    "min_paper_pass_ratio",
+                    agg.paper_run_pass_ratio,
+                    t.min_paper_pass_ratio,
+                )
+            )
+            criteria.append(
+                self._check_coverage(
+                    "min_paper_complete_ratio",
+                    agg.paper_run_complete_ratio,
+                    t.min_paper_complete_ratio,
+                )
+            )
+            # Hard: max_paper_blocked_ratio
+            blocked_ratio = (agg.blocked_runs / agg.total_paper_runs) if agg.total_paper_runs > 0 else 0.0
+            criteria.append(
+                self._check_hard(
+                    "max_paper_blocked_ratio",
+                    blocked_ratio,
+                    t.max_paper_blocked_ratio,
+                )
+            )
+
     """Deterministic promotion evaluator.
 
     Evaluates a CampaignAggregation against PromotionThresholds.
