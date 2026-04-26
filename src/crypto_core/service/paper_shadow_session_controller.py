@@ -88,6 +88,12 @@ class PaperCostStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class PaperPnLStatus(str, Enum):
+    APPLIED = "applied"
+    SKIPPED = "skipped"
+    REJECTED_INVALID_POSITION = "rejected_invalid_position"
+
+
 class PaperShadowRunEvidenceStatus(str, Enum):
     PASS = "pass"  # noqa: S105 - run evidence outcome, not a credential.
     WARN = "warn"
@@ -267,6 +273,9 @@ class PaperCostLine:
     cost_bps: float
     status: PaperCostStatus
     reasons: tuple[str, ...] = ()
+    qty: float = 0.0
+    fill_price: float | None = None
+    fill_ts_ns: int = 0
 
 
 @dataclass(frozen=True)
@@ -295,6 +304,66 @@ class PaperCostResult:
     real_orders_enabled: bool = False
     real_money_enabled: bool = False
     operator_summary: str = "Paper cost model has not run."
+
+
+@dataclass(frozen=True)
+class PaperPosition:
+    position_id: str
+    sleeve_id: str
+    symbol: str
+    venue: str
+    qty: float
+    avg_price: float | None
+    gross_notional: float
+    fees: float
+    slippage_cost: float
+    realized_pnl: float
+    unrealized_pnl: float | None = None
+    last_price: float | None = None
+    is_open: bool = False
+
+
+@dataclass(frozen=True)
+class PaperPnLLine:
+    line_id: str
+    cost_result_id: str
+    fill_id: str
+    sleeve_id: str
+    symbol: str
+    venue: str
+    side: PaperIntentSide
+    qty: float
+    price: float | None
+    fee: float
+    slippage_cost: float
+    realized_pnl: float
+    position_qty_after: float
+    avg_price_after: float | None
+    status: PaperPnLStatus
+    reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PaperPnLLedger:
+    ledger_id: str
+    session_id: str
+    as_of_ns: int
+    source_cost_result_id: str
+    positions: tuple[PaperPosition, ...]
+    pnl_lines: tuple[PaperPnLLine, ...]
+    pnl_events: int
+    open_positions: int
+    closed_positions: int
+    total_fees: float
+    total_slippage: float
+    realized_pnl: float
+    unrealized_pnl: float | None = None
+    status: PaperPnLStatus = PaperPnLStatus.SKIPPED
+    reasons: tuple[str, ...] = ()
+    paper_only: bool = True
+    real_orders_enabled: bool = False
+    real_money_enabled: bool = False
+    operator_summary: str = "Paper PnL ledger has not run."
 
 
 @dataclass(frozen=True)
@@ -457,6 +526,12 @@ class PaperShadowSessionSnapshot:
     rejected_costs: int = 0
     total_fee: float = 0.0
     total_slippage_cost: float = 0.0
+    pnl_events: int = 0
+    open_positions: int = 0
+    closed_positions: int = 0
+    total_fees: float = 0.0
+    total_slippage: float = 0.0
+    realized_pnl: float = 0.0
     paper_only: bool = True
     real_orders_enabled: bool = False
     real_money_enabled: bool = False
@@ -909,6 +984,47 @@ class PaperShadowSessionController:
         )
         return cost_result
 
+    def apply_paper_pnl_ledger(
+        self,
+        result: PaperCostResult | dict,
+        *,
+        prior_ledger: PaperPnLLedger | dict | None = None,
+    ) -> PaperPnLLedger:
+        """Apply accepted paper cost lines to a deterministic long-only position/PnL ledger."""
+        normalized = paper_cost_result_from_dict(result) if isinstance(result, dict) else result
+        _validate_paper_cost_result(normalized)
+        if normalized.session_id != self._snapshot.session_id:
+            raise PaperShadowSessionCorruptError("paper PnL ledger source cost result session mismatch")
+        resolved_prior = paper_pnl_ledger_from_dict(prior_ledger) if isinstance(prior_ledger, dict) else prior_ledger
+        if resolved_prior is not None:
+            _validate_paper_pnl_ledger(resolved_prior)
+            if resolved_prior.session_id != self._snapshot.session_id:
+                raise PaperShadowSessionCorruptError("paper PnL prior ledger session mismatch")
+        now = self._now_ns()
+        ledger = build_paper_pnl_ledger(
+            cost_result=normalized,
+            latest_prices=self._snapshot.market_event_prices,
+            prior_ledger=resolved_prior,
+            as_of_ns=now,
+        )
+        _validate_paper_pnl_ledger(ledger)
+        self._apply_snapshot(
+            replace(
+                self._snapshot,
+                as_of_ns=now,
+                pnl_events=ledger.pnl_events,
+                open_positions=ledger.open_positions,
+                closed_positions=ledger.closed_positions,
+                total_fees=ledger.total_fees,
+                total_slippage=ledger.total_slippage,
+                realized_pnl=ledger.realized_pnl,
+                paper_only=True,
+                real_orders_enabled=False,
+                real_money_enabled=False,
+            )
+        )
+        return ledger
+
     def replay_feed(self, plan: FeedReplayPlan | dict | tuple[MarketEventBatch, ...]) -> FeedReplayResult:
         if self._snapshot.status != PaperShadowSessionStatus.RUNNING:
             raise PaperShadowSessionCorruptError("paper/shadow feed replay can only run while session is RUNNING")
@@ -1178,6 +1294,12 @@ def paper_shadow_session_snapshot_to_dict(snapshot: PaperShadowSessionSnapshot) 
         "rejected_costs": snapshot.rejected_costs,
         "total_fee": snapshot.total_fee,
         "total_slippage_cost": snapshot.total_slippage_cost,
+        "pnl_events": snapshot.pnl_events,
+        "open_positions": snapshot.open_positions,
+        "closed_positions": snapshot.closed_positions,
+        "total_fees": snapshot.total_fees,
+        "total_slippage": snapshot.total_slippage,
+        "realized_pnl": snapshot.realized_pnl,
         "paper_only": snapshot.paper_only,
         "real_orders_enabled": snapshot.real_orders_enabled,
         "real_money_enabled": snapshot.real_money_enabled,
@@ -1280,6 +1402,12 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
             data.get("total_slippage_cost", 0.0),
             "total_slippage_cost",
         ),
+        pnl_events=_require_non_negative_int(data.get("pnl_events", 0), "pnl_events"),
+        open_positions=_require_non_negative_int(data.get("open_positions", 0), "open_positions"),
+        closed_positions=_require_non_negative_int(data.get("closed_positions", 0), "closed_positions"),
+        total_fees=_require_non_negative_float(data.get("total_fees", 0.0), "total_fees"),
+        total_slippage=_require_non_negative_float(data.get("total_slippage", 0.0), "total_slippage"),
+        realized_pnl=_require_float(data.get("realized_pnl", 0.0), "realized_pnl"),
         paper_only=paper_only,
         real_orders_enabled=real_orders_enabled,
         real_money_enabled=real_money_enabled,
@@ -1859,6 +1987,9 @@ def paper_cost_line_to_dict(line: PaperCostLine) -> dict:
         "cost_bps": line.cost_bps,
         "status": line.status.value,
         "reasons": list(line.reasons),
+        "qty": line.qty,
+        "fill_price": line.fill_price,
+        "fill_ts_ns": line.fill_ts_ns,
     }
 
 
@@ -1880,6 +2011,9 @@ def paper_cost_line_from_dict(data: dict) -> PaperCostLine:
         cost_bps=_require_non_negative_float(data.get("cost_bps"), "cost_bps"),
         status=_paper_cost_status_from_value(data.get("status")),
         reasons=_sorted_unique(data.get("reasons", ())),
+        qty=_require_non_negative_float(data.get("qty", 0.0), "qty"),
+        fill_price=_optional_non_negative_float(data.get("fill_price"), "fill_price"),
+        fill_ts_ns=_require_non_negative_int(data.get("fill_ts_ns", 0), "fill_ts_ns"),
     )
     _validate_paper_cost_line(line)
     return line
@@ -1955,6 +2089,222 @@ def paper_cost_result_from_dict(data: dict) -> PaperCostResult:
     )
     _validate_paper_cost_result(result)
     return result
+
+
+def paper_position_to_dict(position: PaperPosition) -> dict:
+    _validate_paper_position(position)
+    return {
+        "position_id": position.position_id,
+        "sleeve_id": position.sleeve_id,
+        "symbol": position.symbol,
+        "venue": position.venue,
+        "qty": position.qty,
+        "avg_price": position.avg_price,
+        "gross_notional": position.gross_notional,
+        "fees": position.fees,
+        "slippage_cost": position.slippage_cost,
+        "realized_pnl": position.realized_pnl,
+        "unrealized_pnl": position.unrealized_pnl,
+        "last_price": position.last_price,
+        "is_open": position.is_open,
+    }
+
+
+def paper_position_from_dict(data: dict) -> PaperPosition:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper position must be a dict, got {type(data).__name__!r}")
+    position = PaperPosition(
+        position_id=_require_non_empty_str(data.get("position_id"), "position_id"),
+        sleeve_id=_require_non_empty_str(data.get("sleeve_id"), "sleeve_id"),
+        symbol=_require_non_empty_str(data.get("symbol"), "symbol"),
+        venue=_require_non_empty_str(data.get("venue"), "venue"),
+        qty=_require_non_negative_float(data.get("qty"), "qty"),
+        avg_price=_optional_non_negative_float(data.get("avg_price"), "avg_price"),
+        gross_notional=_require_non_negative_float(data.get("gross_notional"), "gross_notional"),
+        fees=_require_non_negative_float(data.get("fees"), "fees"),
+        slippage_cost=_require_non_negative_float(data.get("slippage_cost"), "slippage_cost"),
+        realized_pnl=_require_float(data.get("realized_pnl"), "realized_pnl"),
+        unrealized_pnl=_optional_float(data.get("unrealized_pnl"), "unrealized_pnl"),
+        last_price=_optional_non_negative_float(data.get("last_price"), "last_price"),
+        is_open=_bool_or_default(data, "is_open", False),
+    )
+    _validate_paper_position(position)
+    return position
+
+
+def paper_pnl_line_to_dict(line: PaperPnLLine) -> dict:
+    _validate_paper_pnl_line(line)
+    return {
+        "line_id": line.line_id,
+        "cost_result_id": line.cost_result_id,
+        "fill_id": line.fill_id,
+        "sleeve_id": line.sleeve_id,
+        "symbol": line.symbol,
+        "venue": line.venue,
+        "side": line.side.value,
+        "qty": line.qty,
+        "price": line.price,
+        "fee": line.fee,
+        "slippage_cost": line.slippage_cost,
+        "realized_pnl": line.realized_pnl,
+        "position_qty_after": line.position_qty_after,
+        "avg_price_after": line.avg_price_after,
+        "status": line.status.value,
+        "reasons": list(line.reasons),
+    }
+
+
+def paper_pnl_line_from_dict(data: dict) -> PaperPnLLine:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper PnL line must be a dict, got {type(data).__name__!r}")
+    line = PaperPnLLine(
+        line_id=_require_non_empty_str(data.get("line_id"), "line_id"),
+        cost_result_id=_require_non_empty_str(data.get("cost_result_id"), "cost_result_id"),
+        fill_id=_require_non_empty_str(data.get("fill_id"), "fill_id"),
+        sleeve_id=_require_non_empty_str(data.get("sleeve_id"), "sleeve_id"),
+        symbol=_require_non_empty_str(data.get("symbol"), "symbol"),
+        venue=_require_non_empty_str(data.get("venue"), "venue"),
+        side=_paper_intent_side_from_value(data.get("side")),
+        qty=_require_non_negative_float(data.get("qty"), "qty"),
+        price=_optional_non_negative_float(data.get("price"), "price"),
+        fee=_require_non_negative_float(data.get("fee"), "fee"),
+        slippage_cost=_require_non_negative_float(data.get("slippage_cost"), "slippage_cost"),
+        realized_pnl=_require_float(data.get("realized_pnl"), "realized_pnl"),
+        position_qty_after=_require_non_negative_float(data.get("position_qty_after"), "position_qty_after"),
+        avg_price_after=_optional_non_negative_float(data.get("avg_price_after"), "avg_price_after"),
+        status=_paper_pnl_status_from_value(data.get("status")),
+        reasons=_sorted_unique(data.get("reasons", ())),
+    )
+    _validate_paper_pnl_line(line)
+    return line
+
+
+def paper_pnl_ledger_to_dict(ledger: PaperPnLLedger) -> dict:
+    _validate_paper_pnl_ledger(ledger)
+    return {
+        "ledger_id": ledger.ledger_id,
+        "session_id": ledger.session_id,
+        "as_of_ns": ledger.as_of_ns,
+        "source_cost_result_id": ledger.source_cost_result_id,
+        "positions": [paper_position_to_dict(position) for position in ledger.positions],
+        "pnl_lines": [paper_pnl_line_to_dict(line) for line in ledger.pnl_lines],
+        "pnl_events": ledger.pnl_events,
+        "open_positions": ledger.open_positions,
+        "closed_positions": ledger.closed_positions,
+        "total_fees": ledger.total_fees,
+        "total_slippage": ledger.total_slippage,
+        "realized_pnl": ledger.realized_pnl,
+        "unrealized_pnl": ledger.unrealized_pnl,
+        "status": ledger.status.value,
+        "reasons": list(ledger.reasons),
+        "paper_only": ledger.paper_only,
+        "real_orders_enabled": ledger.real_orders_enabled,
+        "real_money_enabled": ledger.real_money_enabled,
+        "operator_summary": ledger.operator_summary,
+    }
+
+
+def paper_pnl_ledger_from_dict(data: dict) -> PaperPnLLedger:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper PnL ledger must be a dict, got {type(data).__name__!r}")
+    positions_value = data.get("positions")
+    pnl_lines_value = data.get("pnl_lines")
+    if not isinstance(positions_value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("paper PnL ledger field 'positions' must be a list/tuple")
+    if not isinstance(pnl_lines_value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("paper PnL ledger field 'pnl_lines' must be a list/tuple")
+    ledger = PaperPnLLedger(
+        ledger_id=_require_non_empty_str(data.get("ledger_id"), "ledger_id"),
+        session_id=_require_non_empty_str(data.get("session_id"), "session_id"),
+        as_of_ns=_require_non_negative_int(data.get("as_of_ns"), "as_of_ns"),
+        source_cost_result_id=_require_non_empty_str(data.get("source_cost_result_id"), "source_cost_result_id"),
+        positions=tuple(paper_position_from_dict(_dict_value(item, "positions")) for item in positions_value),
+        pnl_lines=tuple(paper_pnl_line_from_dict(_dict_value(item, "pnl_lines")) for item in pnl_lines_value),
+        pnl_events=_require_non_negative_int(data.get("pnl_events"), "pnl_events"),
+        open_positions=_require_non_negative_int(data.get("open_positions"), "open_positions"),
+        closed_positions=_require_non_negative_int(data.get("closed_positions"), "closed_positions"),
+        total_fees=_require_non_negative_float(data.get("total_fees"), "total_fees"),
+        total_slippage=_require_non_negative_float(data.get("total_slippage"), "total_slippage"),
+        realized_pnl=_require_float(data.get("realized_pnl"), "realized_pnl"),
+        unrealized_pnl=_optional_float(data.get("unrealized_pnl"), "unrealized_pnl"),
+        status=_paper_pnl_status_from_value(data.get("status")),
+        reasons=_sorted_unique(data.get("reasons", ())),
+        paper_only=_bool_or_default(data, "paper_only", True),
+        real_orders_enabled=_bool_or_default(data, "real_orders_enabled", False),
+        real_money_enabled=_bool_or_default(data, "real_money_enabled", False),
+        operator_summary=_require_non_empty_str(data.get("operator_summary"), "operator_summary"),
+    )
+    _validate_paper_pnl_ledger(ledger)
+    return ledger
+
+
+def build_paper_pnl_ledger(
+    *,
+    cost_result: PaperCostResult | dict,
+    latest_prices: tuple[MarketEventPrice, ...] = (),
+    prior_ledger: PaperPnLLedger | dict | None = None,
+    ledger_id: str | None = None,
+    as_of_ns: int | None = None,
+) -> PaperPnLLedger:
+    """Build a deterministic long-only paper position/PnL ledger from paper costs."""
+    resolved_cost = paper_cost_result_from_dict(cost_result) if isinstance(cost_result, dict) else cost_result
+    _validate_paper_cost_result(resolved_cost)
+    resolved_prior = paper_pnl_ledger_from_dict(prior_ledger) if isinstance(prior_ledger, dict) else prior_ledger
+    if resolved_prior is not None:
+        _validate_paper_pnl_ledger(resolved_prior)
+        if resolved_prior.session_id != resolved_cost.session_id:
+            raise PaperShadowSessionCorruptError("paper PnL prior ledger session must match cost result")
+    prices = _market_event_prices_from_data(tuple(market_event_price_to_dict(price) for price in latest_prices))
+    positions_by_key = {
+        _paper_position_key(position.sleeve_id, position.symbol, position.venue): position
+        for position in (resolved_prior.positions if resolved_prior is not None else ())
+    }
+    pnl_lines: list[PaperPnLLine] = list(resolved_prior.pnl_lines if resolved_prior is not None else ())
+    for line in resolved_cost.costs:
+        pnl_line, updated_position = _paper_pnl_line_for_cost(resolved_cost, line, positions_by_key)
+        pnl_lines.append(pnl_line)
+        if updated_position is not None:
+            positions_by_key[_paper_position_key(line.sleeve_id, line.symbol, line.venue)] = updated_position
+    priced_positions = tuple(
+        _paper_position_with_unrealized(position, prices)
+        for position in sorted(positions_by_key.values(), key=_paper_position_sort_key)
+    )
+    resolved_lines = tuple(sorted(pnl_lines, key=_paper_pnl_line_sort_key))
+    pnl_events = sum(1 for line in resolved_lines if line.status == PaperPnLStatus.APPLIED)
+    open_positions = sum(1 for position in priced_positions if position.is_open)
+    closed_positions = sum(1 for position in priced_positions if not position.is_open)
+    total_fees = sum(position.fees for position in priced_positions)
+    total_slippage = sum(position.slippage_cost for position in priced_positions)
+    realized_pnl = sum(position.realized_pnl for position in priced_positions)
+    unrealized_values = tuple(
+        position.unrealized_pnl for position in priced_positions if position.unrealized_pnl is not None
+    )
+    unrealized_pnl = sum(unrealized_values) if unrealized_values else None
+    status = _paper_pnl_ledger_status(resolved_lines)
+    reasons = _paper_pnl_ledger_reasons(resolved_lines, status)
+    ledger = PaperPnLLedger(
+        ledger_id=_string_or_default(ledger_id, _paper_pnl_ledger_id(resolved_cost.cost_result_id, resolved_lines)),
+        session_id=resolved_cost.session_id,
+        as_of_ns=_optional_non_negative_int(as_of_ns, "as_of_ns") if as_of_ns is not None else resolved_cost.as_of_ns,
+        source_cost_result_id=resolved_cost.cost_result_id,
+        positions=priced_positions,
+        pnl_lines=resolved_lines,
+        pnl_events=pnl_events,
+        open_positions=open_positions,
+        closed_positions=closed_positions,
+        total_fees=total_fees,
+        total_slippage=total_slippage,
+        realized_pnl=realized_pnl,
+        unrealized_pnl=unrealized_pnl,
+        status=status,
+        reasons=reasons,
+        paper_only=resolved_cost.paper_only,
+        real_orders_enabled=resolved_cost.real_orders_enabled,
+        real_money_enabled=resolved_cost.real_money_enabled,
+        operator_summary=_paper_pnl_summary(status, pnl_events, open_positions, closed_positions, realized_pnl),
+    )
+    _validate_paper_pnl_ledger(ledger)
+    return ledger
 
 
 def build_paper_shadow_run_evidence_report(
@@ -2938,6 +3288,9 @@ def _validate_paper_cost_line(line: PaperCostLine) -> None:
         raise PaperShadowSessionCorruptError("paper cost line status must be a PaperCostStatus")
     if line.reasons != _sorted_unique(line.reasons):
         raise PaperShadowSessionCorruptError("paper cost line reasons must be sorted unique")
+    _require_non_negative_float(line.qty, "qty")
+    _optional_non_negative_float(line.fill_price, "fill_price")
+    _require_non_negative_int(line.fill_ts_ns, "fill_ts_ns")
     if line.status == PaperCostStatus.ACCEPTED:
         if line.reasons:
             raise PaperShadowSessionCorruptError("accepted paper cost cannot carry reasons")
@@ -3024,6 +3377,135 @@ def _validate_paper_cost_result(result: PaperCostResult) -> None:
     if not result.paper_only or result.real_orders_enabled or result.real_money_enabled:
         raise PaperShadowSessionCorruptError("paper cost result cannot carry unsafe real-trading flags")
     _require_non_empty_str(result.operator_summary, "operator_summary")
+
+
+def _validate_paper_position(position: PaperPosition) -> None:
+    if not isinstance(position, PaperPosition):
+        raise PaperShadowSessionCorruptError("paper position must be a PaperPosition")
+    if position.position_id != _paper_position_id(position.sleeve_id, position.symbol, position.venue):
+        raise PaperShadowSessionCorruptError("paper position_id does not match sleeve/symbol/venue")
+    _require_non_empty_str(position.sleeve_id, "sleeve_id")
+    _require_non_empty_str(position.symbol, "symbol")
+    _require_non_empty_str(position.venue, "venue")
+    _require_non_negative_float(position.qty, "qty")
+    _optional_non_negative_float(position.avg_price, "avg_price")
+    _require_non_negative_float(position.gross_notional, "gross_notional")
+    _require_non_negative_float(position.fees, "fees")
+    _require_non_negative_float(position.slippage_cost, "slippage_cost")
+    _require_float(position.realized_pnl, "realized_pnl")
+    _optional_float(position.unrealized_pnl, "unrealized_pnl")
+    _optional_non_negative_float(position.last_price, "last_price")
+    _require_bool(position.is_open, "is_open")
+    if position.is_open != (position.qty > 0.0):
+        raise PaperShadowSessionCorruptError("paper position is_open must match positive qty")
+    if position.qty == 0.0 and position.avg_price is not None:
+        raise PaperShadowSessionCorruptError("closed paper position cannot carry avg_price")
+    if position.qty > 0.0 and position.avg_price is None:
+        raise PaperShadowSessionCorruptError("open paper position requires avg_price")
+    if position.unrealized_pnl is not None and position.last_price is None:
+        raise PaperShadowSessionCorruptError("paper position cannot carry unrealized PnL without latest price")
+
+
+def _validate_paper_pnl_line(line: PaperPnLLine) -> None:
+    if not isinstance(line, PaperPnLLine):
+        raise PaperShadowSessionCorruptError("paper PnL line must be a PaperPnLLine")
+    _require_non_empty_str(line.line_id, "line_id")
+    _require_non_empty_str(line.cost_result_id, "cost_result_id")
+    _require_non_empty_str(line.fill_id, "fill_id")
+    _require_non_empty_str(line.sleeve_id, "sleeve_id")
+    _require_non_empty_str(line.symbol, "symbol")
+    _require_non_empty_str(line.venue, "venue")
+    if not isinstance(line.side, PaperIntentSide):
+        raise PaperShadowSessionCorruptError("paper PnL line side must be a PaperIntentSide")
+    _require_non_negative_float(line.qty, "qty")
+    _optional_non_negative_float(line.price, "price")
+    _require_non_negative_float(line.fee, "fee")
+    _require_non_negative_float(line.slippage_cost, "slippage_cost")
+    _require_float(line.realized_pnl, "realized_pnl")
+    _require_non_negative_float(line.position_qty_after, "position_qty_after")
+    _optional_non_negative_float(line.avg_price_after, "avg_price_after")
+    if not isinstance(line.status, PaperPnLStatus):
+        raise PaperShadowSessionCorruptError("paper PnL line status must be a PaperPnLStatus")
+    if line.reasons != _sorted_unique(line.reasons):
+        raise PaperShadowSessionCorruptError("paper PnL line reasons must be sorted unique")
+    if line.status == PaperPnLStatus.APPLIED:
+        if line.reasons:
+            raise PaperShadowSessionCorruptError("applied paper PnL line cannot carry reasons")
+        if line.qty <= 0.0 or line.price is None:
+            raise PaperShadowSessionCorruptError("applied paper PnL line requires positive qty and price")
+    else:
+        if not line.reasons:
+            raise PaperShadowSessionCorruptError("non-applied paper PnL line requires reasons")
+    if line.position_qty_after == 0.0 and line.avg_price_after is not None:
+        raise PaperShadowSessionCorruptError("closed paper PnL line cannot carry avg_price_after")
+
+
+def _validate_paper_pnl_ledger(ledger: PaperPnLLedger) -> None:
+    if not isinstance(ledger, PaperPnLLedger):
+        raise PaperShadowSessionCorruptError("paper PnL ledger must be a PaperPnLLedger")
+    _require_non_empty_str(ledger.ledger_id, "ledger_id")
+    _require_non_empty_str(ledger.session_id, "session_id")
+    _require_non_negative_int(ledger.as_of_ns, "as_of_ns")
+    _require_non_empty_str(ledger.source_cost_result_id, "source_cost_result_id")
+    if not isinstance(ledger.positions, tuple):
+        raise PaperShadowSessionCorruptError("paper PnL ledger positions must be a tuple")
+    if not isinstance(ledger.pnl_lines, tuple):
+        raise PaperShadowSessionCorruptError("paper PnL ledger lines must be a tuple")
+    for position in ledger.positions:
+        _validate_paper_position(position)
+    for line in ledger.pnl_lines:
+        _validate_paper_pnl_line(line)
+    if ledger.positions != tuple(sorted(ledger.positions, key=_paper_position_sort_key)):
+        raise PaperShadowSessionCorruptError("paper PnL ledger positions must be sorted")
+    if ledger.pnl_lines != tuple(sorted(ledger.pnl_lines, key=_paper_pnl_line_sort_key)):
+        raise PaperShadowSessionCorruptError("paper PnL ledger lines must be sorted")
+    line_ids = tuple(line.line_id for line in ledger.pnl_lines)
+    if len(line_ids) != len(set(line_ids)):
+        raise PaperShadowSessionCorruptError("paper PnL ledger lines must be unique")
+    position_keys = tuple(
+        _paper_position_key(position.sleeve_id, position.symbol, position.venue) for position in ledger.positions
+    )
+    if len(position_keys) != len(set(position_keys)):
+        raise PaperShadowSessionCorruptError("paper PnL ledger positions must be unique")
+    _require_non_negative_int(ledger.pnl_events, "pnl_events")
+    _require_non_negative_int(ledger.open_positions, "open_positions")
+    _require_non_negative_int(ledger.closed_positions, "closed_positions")
+    _require_non_negative_float(ledger.total_fees, "total_fees")
+    _require_non_negative_float(ledger.total_slippage, "total_slippage")
+    _require_float(ledger.realized_pnl, "realized_pnl")
+    _optional_float(ledger.unrealized_pnl, "unrealized_pnl")
+    if not isinstance(ledger.status, PaperPnLStatus):
+        raise PaperShadowSessionCorruptError("paper PnL ledger status must be a PaperPnLStatus")
+    if ledger.reasons != _sorted_unique(ledger.reasons):
+        raise PaperShadowSessionCorruptError("paper PnL ledger reasons must be sorted unique")
+    if ledger.pnl_events != sum(1 for line in ledger.pnl_lines if line.status == PaperPnLStatus.APPLIED):
+        raise PaperShadowSessionCorruptError("paper PnL ledger pnl_events do not match applied lines")
+    if ledger.open_positions != sum(1 for position in ledger.positions if position.is_open):
+        raise PaperShadowSessionCorruptError("paper PnL ledger open position count does not match positions")
+    if ledger.closed_positions != sum(1 for position in ledger.positions if not position.is_open):
+        raise PaperShadowSessionCorruptError("paper PnL ledger closed position count does not match positions")
+    if ledger.total_fees != sum(position.fees for position in ledger.positions):
+        raise PaperShadowSessionCorruptError("paper PnL ledger total_fees do not match positions")
+    if ledger.total_slippage != sum(position.slippage_cost for position in ledger.positions):
+        raise PaperShadowSessionCorruptError("paper PnL ledger total_slippage does not match positions")
+    if ledger.realized_pnl != sum(position.realized_pnl for position in ledger.positions):
+        raise PaperShadowSessionCorruptError("paper PnL ledger realized_pnl does not match positions")
+    unrealized_values = tuple(
+        position.unrealized_pnl for position in ledger.positions if position.unrealized_pnl is not None
+    )
+    expected_unrealized = sum(unrealized_values) if unrealized_values else None
+    if ledger.unrealized_pnl != expected_unrealized:
+        raise PaperShadowSessionCorruptError("paper PnL ledger unrealized_pnl does not match positions")
+    if ledger.status != _paper_pnl_ledger_status(ledger.pnl_lines):
+        raise PaperShadowSessionCorruptError("paper PnL ledger status does not match lines")
+    if ledger.reasons != _paper_pnl_ledger_reasons(ledger.pnl_lines, ledger.status):
+        raise PaperShadowSessionCorruptError("paper PnL ledger reasons do not match lines")
+    _require_bool(ledger.paper_only, "paper_only")
+    _require_bool(ledger.real_orders_enabled, "real_orders_enabled")
+    _require_bool(ledger.real_money_enabled, "real_money_enabled")
+    if not ledger.paper_only or ledger.real_orders_enabled or ledger.real_money_enabled:
+        raise PaperShadowSessionCorruptError("paper PnL ledger cannot carry unsafe real-trading flags")
+    _require_non_empty_str(ledger.operator_summary, "operator_summary")
 
 
 def _validate_feed_replay_plan(plan: FeedReplayPlan) -> None:
@@ -3413,6 +3895,20 @@ def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
         or snapshot.total_slippage_cost != 0.0
     ):
         raise PaperShadowSessionCorruptError("paper/shadow session without cost evaluations cannot carry cost counters")
+    _require_non_negative_int(snapshot.pnl_events, "pnl_events")
+    _require_non_negative_int(snapshot.open_positions, "open_positions")
+    _require_non_negative_int(snapshot.closed_positions, "closed_positions")
+    _require_non_negative_float(snapshot.total_fees, "total_fees")
+    _require_non_negative_float(snapshot.total_slippage, "total_slippage")
+    _require_float(snapshot.realized_pnl, "realized_pnl")
+    if snapshot.pnl_events == 0 and (
+        snapshot.open_positions
+        or snapshot.closed_positions
+        or snapshot.total_fees != 0.0
+        or snapshot.total_slippage != 0.0
+        or snapshot.realized_pnl != 0.0
+    ):
+        raise PaperShadowSessionCorruptError("paper/shadow session without PnL events cannot carry PnL counters")
     if snapshot.event_count > 0:
         if snapshot.first_event_ns is None or snapshot.last_event_ns is None:
             raise PaperShadowSessionCorruptError("paper/shadow session events require first/last event timestamps")
@@ -4102,6 +4598,9 @@ def _paper_cost_line_for_fill(fill: PaperFill, model: PaperCostModel) -> PaperCo
             cost_bps=0.0,
             status=PaperCostStatus.REJECTED_INVALID_FILL,
             reasons=("invalid_paper_fill",),
+            qty=0.0,
+            fill_price=None,
+            fill_ts_ns=0,
         )
     if fill.status != PaperFillStatus.FILLED:
         line = PaperCostLine(
@@ -4119,6 +4618,9 @@ def _paper_cost_line_for_fill(fill: PaperFill, model: PaperCostModel) -> PaperCo
             cost_bps=0.0,
             status=PaperCostStatus.SKIPPED,
             reasons=("fill_not_filled",),
+            qty=0.0,
+            fill_price=None,
+            fill_ts_ns=fill.fill_ts_ns,
         )
         _validate_paper_cost_line(line)
         return line
@@ -4138,6 +4640,9 @@ def _paper_cost_line_for_fill(fill: PaperFill, model: PaperCostModel) -> PaperCo
             cost_bps=0.0,
             status=PaperCostStatus.REJECTED_INVALID_FILL,
             reasons=("invalid_paper_fill",),
+            qty=0.0,
+            fill_price=None,
+            fill_ts_ns=fill.fill_ts_ns,
         )
         _validate_paper_cost_line(line)
         return line
@@ -4153,6 +4658,7 @@ def _paper_cost_line_for_fill(fill: PaperFill, model: PaperCostModel) -> PaperCo
     if model.reject_if_cost_exceeds_bps is not None and cost_bps > model.reject_if_cost_exceeds_bps:
         status = PaperCostStatus.REJECTED_EXCESSIVE_COST
         reasons = ("cost_exceeds_threshold",)
+    base_qty = fill.qty if fill.qty is not None and fill.qty > 0.0 else base_notional / (fill.fill_price or 1.0)
     line = PaperCostLine(
         fill_id=fill.fill_id,
         intent_id=fill.intent_id,
@@ -4168,6 +4674,9 @@ def _paper_cost_line_for_fill(fill: PaperFill, model: PaperCostModel) -> PaperCo
         cost_bps=cost_bps,
         status=status,
         reasons=reasons,
+        qty=base_qty * model.partial_fill_ratio,
+        fill_price=fill.fill_price,
+        fill_ts_ns=fill.fill_ts_ns,
     )
     _validate_paper_cost_line(line)
     return line
@@ -4228,6 +4737,260 @@ def _paper_cost_result_reasons(
     reasons = tuple(reason for line in costs for reason in line.reasons)
     if not reasons:
         reasons = ("no_filled_paper_fills",)
+    return _sorted_unique(reasons)
+
+
+def _paper_pnl_summary(
+    status: PaperPnLStatus,
+    pnl_events: int,
+    open_positions: int,
+    closed_positions: int,
+    realized_pnl: float,
+) -> str:
+    return (
+        f"paper_pnl={status.value}; events={pnl_events}; open={open_positions}; "
+        f"closed={closed_positions}; realized={realized_pnl}"
+    )
+
+
+def _paper_pnl_ledger_id(cost_result_id: str, lines: tuple[PaperPnLLine, ...]) -> str:
+    return f"paper-pnl-ledger-{cost_result_id}-{len(lines)}"
+
+
+def _paper_position_key(sleeve_id: str, symbol: str, venue: str) -> tuple[str, str, str]:
+    return (
+        _require_non_empty_str(sleeve_id, "sleeve_id"),
+        _require_non_empty_str(symbol, "symbol"),
+        _require_non_empty_str(venue, "venue"),
+    )
+
+
+def _paper_position_id(sleeve_id: str, symbol: str, venue: str) -> str:
+    return f"paper-position-{sleeve_id}-{symbol}-{venue}"
+
+
+def _paper_pnl_line_id(cost_result_id: str, fill_id: str) -> str:
+    return f"paper-pnl-line-{cost_result_id}-{fill_id}"
+
+
+def _paper_pnl_line_for_cost(
+    cost_result: PaperCostResult,
+    line: PaperCostLine,
+    positions: dict[tuple[str, str, str], PaperPosition],
+) -> tuple[PaperPnLLine, PaperPosition | None]:
+    _validate_paper_cost_line(line)
+    if line.status != PaperCostStatus.ACCEPTED:
+        key = _paper_position_key(line.sleeve_id, line.symbol, line.venue)
+        current = positions.get(key, _empty_position(line))
+        return (
+            _paper_pnl_line(
+                cost_result.cost_result_id,
+                line,
+                status=PaperPnLStatus.SKIPPED,
+                reasons=("cost_not_accepted",),
+                realized_pnl=0.0,
+                position_qty_after=current.qty,
+                avg_price_after=current.avg_price,
+            ),
+            None,
+        )
+    if line.qty <= 0.0 or line.effective_price is None or line.fill_price is None:
+        return (
+            _paper_pnl_line(
+                cost_result.cost_result_id,
+                line,
+                status=PaperPnLStatus.REJECTED_INVALID_POSITION,
+                reasons=("invalid_cost_line_for_position",),
+                realized_pnl=0.0,
+                position_qty_after=0.0,
+                avg_price_after=None,
+            ),
+            None,
+        )
+    key = _paper_position_key(line.sleeve_id, line.symbol, line.venue)
+    current = positions.get(key, _empty_position(line))
+    if line.side == PaperIntentSide.BUY:
+        updated = _apply_buy_to_position(current, line)
+        return (
+            _paper_pnl_line(
+                cost_result.cost_result_id,
+                line,
+                status=PaperPnLStatus.APPLIED,
+                reasons=(),
+                realized_pnl=0.0,
+                position_qty_after=updated.qty,
+                avg_price_after=updated.avg_price,
+            ),
+            updated,
+        )
+    if current.qty <= 0.0 or line.qty > current.qty:
+        return (
+            _paper_pnl_line(
+                cost_result.cost_result_id,
+                line,
+                status=PaperPnLStatus.REJECTED_INVALID_POSITION,
+                reasons=("short_or_crossing_sell_rejected",),
+                realized_pnl=0.0,
+                position_qty_after=current.qty,
+                avg_price_after=current.avg_price,
+            ),
+            None,
+        )
+    updated, realized = _apply_sell_to_position(current, line)
+    return (
+        _paper_pnl_line(
+            cost_result.cost_result_id,
+            line,
+            status=PaperPnLStatus.APPLIED,
+            reasons=(),
+            realized_pnl=realized,
+            position_qty_after=updated.qty,
+            avg_price_after=updated.avg_price,
+        ),
+        updated,
+    )
+
+
+def _paper_pnl_line(
+    cost_result_id: str,
+    line: PaperCostLine,
+    *,
+    status: PaperPnLStatus,
+    reasons: tuple[str, ...],
+    realized_pnl: float,
+    position_qty_after: float,
+    avg_price_after: float | None,
+) -> PaperPnLLine:
+    pnl_line = PaperPnLLine(
+        line_id=_paper_pnl_line_id(cost_result_id, line.fill_id),
+        cost_result_id=cost_result_id,
+        fill_id=line.fill_id,
+        sleeve_id=line.sleeve_id,
+        symbol=line.symbol,
+        venue=line.venue,
+        side=line.side,
+        qty=line.qty if status == PaperPnLStatus.APPLIED else 0.0,
+        price=line.effective_price if status == PaperPnLStatus.APPLIED else None,
+        fee=line.fee if status == PaperPnLStatus.APPLIED else 0.0,
+        slippage_cost=line.slippage_cost if status == PaperPnLStatus.APPLIED else 0.0,
+        realized_pnl=realized_pnl,
+        position_qty_after=position_qty_after,
+        avg_price_after=avg_price_after,
+        status=status,
+        reasons=_sorted_unique(reasons),
+    )
+    _validate_paper_pnl_line(pnl_line)
+    return pnl_line
+
+
+def _empty_position(line: PaperCostLine) -> PaperPosition:
+    return PaperPosition(
+        position_id=_paper_position_id(line.sleeve_id, line.symbol, line.venue),
+        sleeve_id=line.sleeve_id,
+        symbol=line.symbol,
+        venue=line.venue,
+        qty=0.0,
+        avg_price=None,
+        gross_notional=0.0,
+        fees=0.0,
+        slippage_cost=0.0,
+        realized_pnl=0.0,
+        is_open=False,
+    )
+
+
+def _apply_buy_to_position(position: PaperPosition, line: PaperCostLine) -> PaperPosition:
+    _validate_paper_position(position)
+    new_qty = position.qty + line.qty
+    weighted_cost = (position.avg_price or 0.0) * position.qty + (line.effective_price or 0.0) * line.qty
+    avg_price = weighted_cost / new_qty if new_qty > 0.0 else None
+    updated = PaperPosition(
+        position_id=position.position_id,
+        sleeve_id=position.sleeve_id,
+        symbol=position.symbol,
+        venue=position.venue,
+        qty=new_qty,
+        avg_price=avg_price,
+        gross_notional=position.gross_notional + line.gross_notional,
+        fees=position.fees + line.fee,
+        slippage_cost=position.slippage_cost + line.slippage_cost,
+        realized_pnl=position.realized_pnl,
+        is_open=new_qty > 0.0,
+    )
+    _validate_paper_position(updated)
+    return updated
+
+
+def _apply_sell_to_position(position: PaperPosition, line: PaperCostLine) -> tuple[PaperPosition, float]:
+    _validate_paper_position(position)
+    if position.avg_price is None or line.effective_price is None:
+        raise PaperShadowSessionCorruptError("paper PnL sell requires position avg price and cost effective price")
+    close_ratio = line.qty / position.qty
+    allocated_open_fee = position.fees * close_ratio
+    realized = (line.effective_price - position.avg_price) * line.qty - allocated_open_fee - line.fee
+    remaining_qty = position.qty - line.qty
+    updated = PaperPosition(
+        position_id=position.position_id,
+        sleeve_id=position.sleeve_id,
+        symbol=position.symbol,
+        venue=position.venue,
+        qty=remaining_qty,
+        avg_price=position.avg_price if remaining_qty > 0.0 else None,
+        gross_notional=position.gross_notional + line.gross_notional,
+        fees=position.fees + line.fee,
+        slippage_cost=position.slippage_cost + line.slippage_cost,
+        realized_pnl=position.realized_pnl + realized,
+        is_open=remaining_qty > 0.0,
+    )
+    _validate_paper_position(updated)
+    return updated, realized
+
+
+def _paper_position_with_unrealized(
+    position: PaperPosition,
+    prices: tuple[MarketEventPrice, ...],
+) -> PaperPosition:
+    _validate_paper_position(position)
+    latest = _latest_market_price_from_prices(prices, position.symbol, position.venue)
+    if latest is None or not position.is_open or position.avg_price is None:
+        return replace(position, unrealized_pnl=None, last_price=None)
+    marked = replace(
+        position,
+        last_price=latest.price,
+        unrealized_pnl=(latest.price - position.avg_price) * position.qty,
+    )
+    _validate_paper_position(marked)
+    return marked
+
+
+def _latest_market_price_from_prices(
+    prices: tuple[MarketEventPrice, ...],
+    symbol: str,
+    venue: str,
+) -> MarketEventPrice | None:
+    for price in prices:
+        if price.symbol == symbol and price.venue == venue:
+            return price
+    return None
+
+
+def _paper_pnl_ledger_status(lines: tuple[PaperPnLLine, ...]) -> PaperPnLStatus:
+    if any(line.status == PaperPnLStatus.REJECTED_INVALID_POSITION for line in lines):
+        return PaperPnLStatus.REJECTED_INVALID_POSITION
+    if any(line.status == PaperPnLStatus.APPLIED for line in lines):
+        return PaperPnLStatus.APPLIED
+    return PaperPnLStatus.SKIPPED
+
+
+def _paper_pnl_ledger_reasons(
+    lines: tuple[PaperPnLLine, ...],
+    status: PaperPnLStatus,
+) -> tuple[str, ...]:
+    if status == PaperPnLStatus.APPLIED:
+        return ()
+    reasons = tuple(reason for line in lines for reason in line.reasons)
+    if not reasons:
+        reasons = ("no_accepted_cost_lines",)
     return _sorted_unique(reasons)
 
 
@@ -4682,6 +5445,14 @@ def _paper_cost_line_sort_key(line: PaperCostLine) -> tuple[str, str, str, str, 
     return (line.sleeve_id, line.symbol, line.venue, line.side.value, line.fill_id, line.status.value)
 
 
+def _paper_position_sort_key(position: PaperPosition) -> tuple[str, str, str]:
+    return (position.sleeve_id, position.symbol, position.venue)
+
+
+def _paper_pnl_line_sort_key(line: PaperPnLLine) -> tuple[str, str, str]:
+    return (line.cost_result_id, line.fill_id, line.status.value)
+
+
 def _market_event_type_from_value(value: object) -> MarketEventType:
     if isinstance(value, MarketEventType):
         return value
@@ -4725,6 +5496,15 @@ def _paper_cost_status_from_value(value: object) -> PaperCostStatus:
         return PaperCostStatus(_require_non_empty_str(value, "status"))
     except ValueError as exc:
         raise PaperShadowSessionCorruptError(f"Invalid paper cost status: {value!r}") from exc
+
+
+def _paper_pnl_status_from_value(value: object) -> PaperPnLStatus:
+    if isinstance(value, PaperPnLStatus):
+        return value
+    try:
+        return PaperPnLStatus(_require_non_empty_str(value, "status"))
+    except ValueError as exc:
+        raise PaperShadowSessionCorruptError(f"Invalid paper PnL status: {value!r}") from exc
 
 
 def _paper_intent_has_valid_size(intent: PaperIntent) -> bool:
@@ -4795,6 +5575,13 @@ def _require_non_negative_float(value: object, field_name: str) -> float:
     parsed = _optional_non_negative_float(value, field_name)
     if parsed is None:
         raise PaperShadowSessionCorruptError(f"market event field {field_name!r} must be numeric")
+    return parsed
+
+
+def _require_float(value: object, field_name: str) -> float:
+    parsed = _optional_float(value, field_name)
+    if parsed is None:
+        raise PaperShadowSessionCorruptError(f"field {field_name!r} must be numeric")
     return parsed
 
 

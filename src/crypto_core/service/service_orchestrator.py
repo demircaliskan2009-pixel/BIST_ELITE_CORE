@@ -52,6 +52,7 @@ from crypto_core.service.artifact_export import (
     export_paper_fill_simulation_result,
     export_paper_intent_batch,
     export_paper_intent_batch_result,
+    export_paper_pnl_ledger,
     export_sleeve_portfolio_snapshot,
     load_escalation_decision,
     load_operator_decision_pack,
@@ -60,6 +61,7 @@ from crypto_core.service.artifact_export import (
     load_paper_fill_simulation_result,
     load_paper_intent_batch,
     load_paper_intent_batch_result,
+    load_paper_pnl_ledger,
     load_sleeve_portfolio_snapshot,
     operator_disposition_from_verdict,
 )
@@ -172,6 +174,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     PaperIntent,
     PaperIntentBatch,
     PaperIntentBatchResult,
+    PaperPnLLedger,
     PaperShadowEvidenceBundle,
     PaperShadowRunEvidenceReport,
     PaperShadowSessionController,
@@ -192,6 +195,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     paper_fill_simulation_result_to_dict,
     paper_intent_batch_result_to_dict,
     paper_intent_batch_to_dict,
+    paper_pnl_ledger_to_dict,
     paper_shadow_evidence_bundle_to_dict,
     paper_shadow_run_evidence_report_to_dict,
     paper_shadow_session_snapshot_to_dict,
@@ -449,6 +453,12 @@ class PaperShadowSessionState:
     rejected_costs: int
     total_fee: float
     total_slippage_cost: float
+    pnl_events: int
+    open_positions: int
+    closed_positions: int
+    total_fees: float
+    total_slippage: float
+    realized_pnl: float
     runtime_monitor_status: str
     stale_feed_detected: bool
     symbol_coverage_ok: bool
@@ -1122,6 +1132,22 @@ class ServiceOrchestrator:
         """Serialize a deterministic paper-only cost result."""
         return paper_cost_result_to_dict(result)
 
+    def apply_paper_pnl_ledger(
+        self,
+        result: PaperCostResult | dict,
+        *,
+        prior_ledger: PaperPnLLedger | dict | None = None,
+    ) -> PaperPnLLedger:
+        """Apply accepted paper costs to the deterministic paper position/PnL ledger."""
+        return self._ensure_paper_shadow_session_controller().apply_paper_pnl_ledger(
+            result,
+            prior_ledger=prior_ledger,
+        )
+
+    def paper_pnl_ledger_dict(self, ledger: PaperPnLLedger) -> dict:
+        """Serialize a deterministic paper-only position/PnL ledger."""
+        return paper_pnl_ledger_to_dict(ledger)
+
     def export_paper_shadow_session_snapshot(self):
         """Persist the current paper/shadow session snapshot via EvidenceStore."""
         if self._evidence_store is None:
@@ -1258,6 +1284,21 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for paper cost result load")
         return load_paper_cost_result(evidence_store=self._evidence_store)
+
+    def export_paper_pnl_ledger(self, ledger: PaperPnLLedger):
+        """Persist a paper-only position/PnL ledger via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper PnL ledger export")
+        return export_paper_pnl_ledger(
+            ledger=ledger,
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_pnl_ledger(self) -> PaperPnLLedger:
+        """Load the latest persisted paper-only position/PnL ledger."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper PnL ledger load")
+        return load_paper_pnl_ledger(evidence_store=self._evidence_store)
 
     def paper_shadow_run_evidence_report(
         self,
@@ -3910,6 +3951,12 @@ def paper_shadow_session_state_from_snapshot(snapshot: PaperShadowSessionSnapsho
         rejected_costs=snapshot.rejected_costs,
         total_fee=snapshot.total_fee,
         total_slippage_cost=snapshot.total_slippage_cost,
+        pnl_events=snapshot.pnl_events,
+        open_positions=snapshot.open_positions,
+        closed_positions=snapshot.closed_positions,
+        total_fees=snapshot.total_fees,
+        total_slippage=snapshot.total_slippage,
+        realized_pnl=snapshot.realized_pnl,
         runtime_monitor_status=snapshot.runtime_monitor.status.value,
         stale_feed_detected=snapshot.runtime_monitor.stale_feed_detected,
         symbol_coverage_ok=snapshot.runtime_monitor.symbol_coverage_ok,
@@ -3963,6 +4010,12 @@ def paper_shadow_session_state_to_dict(state: PaperShadowSessionState) -> dict:
         "rejected_costs": state.rejected_costs,
         "total_fee": state.total_fee,
         "total_slippage_cost": state.total_slippage_cost,
+        "pnl_events": state.pnl_events,
+        "open_positions": state.open_positions,
+        "closed_positions": state.closed_positions,
+        "total_fees": state.total_fees,
+        "total_slippage": state.total_slippage,
+        "realized_pnl": state.realized_pnl,
         "runtime_monitor_status": state.runtime_monitor_status,
         "stale_feed_detected": state.stale_feed_detected,
         "symbol_coverage_ok": state.symbol_coverage_ok,

@@ -15,6 +15,7 @@ from crypto_core.service.artifact_export import (
     export_paper_fill_simulation_result,
     export_paper_intent_batch,
     export_paper_intent_batch_result,
+    export_paper_pnl_ledger,
     export_paper_shadow_activation_plan,
     export_paper_shadow_evidence_bundle,
     export_paper_shadow_feed_replay_plan,
@@ -30,6 +31,7 @@ from crypto_core.service.artifact_export import (
     load_paper_fill_simulation_result,
     load_paper_intent_batch,
     load_paper_intent_batch_result,
+    load_paper_pnl_ledger,
     load_paper_shadow_activation_plan,
     load_paper_shadow_evidence_bundle,
     load_paper_shadow_feed_replay_plan,
@@ -66,6 +68,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     PaperIntentBatchResult,
     PaperIntentSide,
     PaperIntentValidationResult,
+    PaperPnLStatus,
     PaperShadowEvidenceBundle,
     PaperShadowRunEvidenceStatus,
     PaperShadowSessionController,
@@ -101,6 +104,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     paper_intent_batch_result_from_dict,
     paper_intent_batch_result_to_dict,
     paper_intent_batch_to_dict,
+    paper_pnl_ledger_from_dict,
+    paper_pnl_ledger_to_dict,
     paper_shadow_evidence_bundle_from_dict,
     paper_shadow_evidence_bundle_to_dict,
     paper_shadow_run_evidence_report_from_dict,
@@ -532,6 +537,45 @@ def _paper_intent(
         intent_ts_ns=intent_ts_ns,
         reason=reason,
         source=source,
+    )
+
+
+def _paper_cost_result_for_intent(
+    controller: PaperShadowSessionController,
+    *,
+    sleeve_id: str = "active",
+    symbol: str = "BTCUSDT",
+    venue: str = "binance",
+    side: PaperIntentSide = PaperIntentSide.BUY,
+    qty: float | None = 0.10,
+    price: float = 100.0,
+    event_ts_ns: int = _T0_NS + 101,
+    intent_ts_ns: int = _T0_NS + 150,
+    batch_id: str = "paper-cost-intent",
+    cost_model: PaperCostModel | None = None,
+):
+    controller.record_market_event_batch(
+        build_market_event_batch((_market_event(symbol, venue=venue, ts_ns=event_ts_ns, price=price),))
+    )
+    intent_result = controller.record_paper_intent_batch(
+        build_paper_intent_batch(
+            (
+                _paper_intent(
+                    sleeve_id,
+                    symbol,
+                    venue=venue,
+                    side=side,
+                    qty=qty,
+                    intent_ts_ns=intent_ts_ns,
+                ),
+            ),
+            batch_id=batch_id,
+        )
+    )
+    fill_result = controller.simulate_paper_fills(intent_result)
+    return controller.evaluate_paper_costs(
+        fill_result,
+        cost_model=cost_model or PaperCostModel(fee_bps=10.0, slippage_bps=5.0),
     )
 
 
@@ -4031,6 +4075,271 @@ def test_service_orchestrator_paper_cost_helpers_and_artifacts(tmp_path) -> None
     store.save_snapshot("crypto_paper_cost_result", ["bad"])
     with pytest.raises(PaperShadowSessionCorruptError):
         load_paper_cost_result(evidence_store=store)
+
+
+def test_paper_pnl_buy_opens_position_with_unrealized_mark() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(1, 20)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    cost_result = _paper_cost_result_for_intent(
+        controller,
+        batch_id="pnl-buy",
+        event_ts_ns=_T0_NS + 101,
+        price=100.0,
+    )
+    ledger = controller.apply_paper_pnl_ledger(cost_result)
+    position = ledger.positions[0]
+    line = ledger.pnl_lines[0]
+    rendered = paper_pnl_ledger_to_dict(ledger)
+
+    assert paper_pnl_ledger_from_dict(rendered) == ledger
+    assert ledger.status == PaperPnLStatus.APPLIED
+    assert ledger.pnl_events == 1
+    assert ledger.open_positions == 1
+    assert ledger.closed_positions == 0
+    assert ledger.total_fees == pytest.approx(0.01)
+    assert ledger.total_slippage == pytest.approx(0.005)
+    assert position.qty == pytest.approx(0.10)
+    assert position.avg_price == pytest.approx(100.05)
+    assert position.gross_notional == pytest.approx(10.0)
+    assert position.fees == pytest.approx(0.01)
+    assert position.slippage_cost == pytest.approx(0.005)
+    assert position.unrealized_pnl == pytest.approx(-0.005)
+    assert line.status == PaperPnLStatus.APPLIED
+    assert controller.snapshot().pnl_events == 1
+    assert controller.snapshot().open_positions == 1
+
+
+def test_paper_pnl_second_buy_updates_average_price() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(1, 30)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    first_cost = _paper_cost_result_for_intent(
+        controller,
+        batch_id="pnl-buy-first",
+        event_ts_ns=_T0_NS + 101,
+        intent_ts_ns=_T0_NS + 151,
+        price=100.0,
+    )
+    first_ledger = controller.apply_paper_pnl_ledger(first_cost)
+    second_cost = _paper_cost_result_for_intent(
+        controller,
+        batch_id="pnl-buy-second",
+        event_ts_ns=_T0_NS + 102,
+        intent_ts_ns=_T0_NS + 152,
+        price=110.0,
+    )
+
+    ledger = controller.apply_paper_pnl_ledger(second_cost, prior_ledger=first_ledger)
+    position = ledger.positions[0]
+
+    assert ledger.status == PaperPnLStatus.APPLIED
+    assert ledger.pnl_events == 2
+    assert position.qty == pytest.approx(0.20)
+    assert position.avg_price == pytest.approx(105.0525)
+    assert position.gross_notional == pytest.approx(21.0)
+    assert position.fees == pytest.approx(0.021)
+    assert position.slippage_cost == pytest.approx(0.0105)
+    assert position.last_price == pytest.approx(110.0)
+    assert position.unrealized_pnl == pytest.approx(0.9895)
+
+
+def test_paper_pnl_sell_realizes_pnl_and_closes_long_only_position() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(1, 30)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    buy_cost = _paper_cost_result_for_intent(
+        controller,
+        batch_id="pnl-sell-buy",
+        event_ts_ns=_T0_NS + 101,
+        intent_ts_ns=_T0_NS + 151,
+        price=100.0,
+    )
+    buy_ledger = controller.apply_paper_pnl_ledger(buy_cost)
+    sell_cost = _paper_cost_result_for_intent(
+        controller,
+        side=PaperIntentSide.SELL,
+        batch_id="pnl-sell-close",
+        event_ts_ns=_T0_NS + 102,
+        intent_ts_ns=_T0_NS + 152,
+        price=110.0,
+    )
+
+    ledger = controller.apply_paper_pnl_ledger(sell_cost, prior_ledger=buy_ledger)
+    position = ledger.positions[0]
+
+    assert ledger.status == PaperPnLStatus.APPLIED
+    assert ledger.pnl_events == 2
+    assert ledger.open_positions == 0
+    assert ledger.closed_positions == 1
+    assert ledger.realized_pnl == pytest.approx(0.9685)
+    assert ledger.unrealized_pnl is None
+    assert position.qty == 0.0
+    assert position.avg_price is None
+    assert position.realized_pnl == pytest.approx(0.9685)
+    assert position.fees == pytest.approx(0.021)
+    assert position.slippage_cost == pytest.approx(0.0105)
+
+
+def test_paper_pnl_rejected_cost_is_skipped_fail_closed() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(1, 20)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    cost_result = _paper_cost_result_for_intent(
+        controller,
+        batch_id="pnl-cost-rejected",
+        event_ts_ns=_T0_NS + 101,
+        price=100.0,
+        cost_model=PaperCostModel(fee_bps=20.0, slippage_bps=10.0, reject_if_cost_exceeds_bps=5.0),
+    )
+
+    ledger = controller.apply_paper_pnl_ledger(cost_result)
+
+    assert cost_result.status == PaperCostStatus.REJECTED_EXCESSIVE_COST
+    assert ledger.status == PaperPnLStatus.SKIPPED
+    assert ledger.reasons == ("cost_not_accepted",)
+    assert ledger.pnl_events == 0
+    assert ledger.positions == ()
+    assert controller.snapshot().pnl_events == 0
+
+
+def test_paper_pnl_old_cost_payload_missing_position_fields_fails_closed() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(1, 20)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    cost_result = _paper_cost_result_for_intent(
+        controller,
+        batch_id="pnl-old-cost-payload",
+        event_ts_ns=_T0_NS + 101,
+        price=100.0,
+    )
+    old_payload = paper_cost_result_to_dict(cost_result)
+    old_payload["costs"][0].pop("qty")
+    old_payload["costs"][0].pop("fill_price")
+    old_payload["costs"][0].pop("fill_ts_ns")
+    restored_old_cost = paper_cost_result_from_dict(old_payload)
+
+    ledger = controller.apply_paper_pnl_ledger(restored_old_cost)
+
+    assert restored_old_cost.status == PaperCostStatus.ACCEPTED
+    assert ledger.status == PaperPnLStatus.REJECTED_INVALID_POSITION
+    assert ledger.reasons == ("invalid_cost_line_for_position",)
+    assert ledger.pnl_events == 0
+    assert ledger.positions == ()
+
+
+def test_paper_pnl_invalid_crossing_short_rejected_fail_closed() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(1, 20)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    cost_result = _paper_cost_result_for_intent(
+        controller,
+        side=PaperIntentSide.SELL,
+        batch_id="pnl-short-rejected",
+        event_ts_ns=_T0_NS + 101,
+        price=100.0,
+    )
+
+    ledger = controller.apply_paper_pnl_ledger(cost_result)
+
+    assert ledger.status == PaperPnLStatus.REJECTED_INVALID_POSITION
+    assert ledger.reasons == ("short_or_crossing_sell_rejected",)
+    assert ledger.pnl_events == 0
+    assert ledger.positions == ()
+    assert ledger.pnl_lines[0].position_qty_after == 0.0
+    assert ledger.paper_only is True
+    assert ledger.real_orders_enabled is False
+    assert ledger.real_money_enabled is False
+
+
+def test_paper_pnl_deterministic_replay() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+
+    def run_once() -> tuple[dict, dict]:
+        times = iter((_T0_NS + value for value in range(1, 20)))
+        controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+        controller.prepare(plan)
+        controller.start()
+        cost_result = _paper_cost_result_for_intent(
+            controller,
+            batch_id="pnl-deterministic",
+            event_ts_ns=_T0_NS + 101,
+            intent_ts_ns=_T0_NS + 151,
+            price=100.0,
+        )
+        ledger = controller.apply_paper_pnl_ledger(cost_result)
+        return paper_pnl_ledger_to_dict(ledger), paper_shadow_session_snapshot_to_dict(controller.snapshot())
+
+    assert run_once() == run_once()
+
+
+def test_service_orchestrator_paper_pnl_helpers_and_artifacts(tmp_path) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(210, 230)))
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        evidence_store=store,
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: next(times),
+    )
+
+    orch.prepare_paper_shadow_session(plan=plan)
+    orch.start_paper_shadow_session()
+    orch.record_paper_shadow_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),))
+    )
+    intent_result = orch.record_paper_intent_batch(
+        build_paper_intent_batch(
+            (_paper_intent("svc-active", "BTCUSDT", venue="binance"),),
+            batch_id="svc-pnl-intents",
+        )
+    )
+    fill_result = orch.simulate_paper_fills(intent_result)
+    cost_result = orch.evaluate_paper_costs(fill_result, cost_model=PaperCostModel(fee_bps=10.0, slippage_bps=5.0))
+    ledger = orch.apply_paper_pnl_ledger(cost_result)
+    rendered = orch.paper_pnl_ledger_dict(ledger)
+    session = orch.paper_shadow_session_snapshot_dict()
+    operator = operator_snapshot_to_dict(orch.operator_snapshot())["paper_shadow_session"]
+
+    assert rendered["pnl_events"] == 1
+    assert rendered["positions"][0]["avg_price"] == pytest.approx(100.05)
+    assert session["pnl_events"] == 1
+    assert session["open_positions"] == 1
+    assert session["total_fees"] == pytest.approx(0.01)
+    assert session["total_slippage"] == pytest.approx(0.005)
+    assert operator["pnl_events"] == 1
+    assert operator["open_positions"] == 1
+    assert operator["closed_positions"] == 0
+    assert operator["total_fees"] == pytest.approx(0.01)
+    assert operator["total_slippage"] == pytest.approx(0.005)
+
+    orch.export_paper_pnl_ledger(ledger)
+    assert orch.load_paper_pnl_ledger() == ledger
+    export_paper_pnl_ledger(ledger=ledger, evidence_store=store)
+    assert load_paper_pnl_ledger(evidence_store=store) == ledger
+
+    store.save_snapshot("crypto_paper_pnl_ledger", ["bad"])
+    with pytest.raises(PaperShadowSessionCorruptError):
+        load_paper_pnl_ledger(evidence_store=store)
 
 
 def test_service_orchestrator_feed_replay_helper_and_artifacts(tmp_path) -> None:
