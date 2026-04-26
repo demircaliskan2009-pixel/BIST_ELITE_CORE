@@ -94,6 +94,12 @@ class PaperPnLStatus(str, Enum):
     REJECTED_INVALID_POSITION = "rejected_invalid_position"
 
 
+class PaperPortfolioRiskStatus(str, Enum):
+    COMPLETE = "complete"
+    INCOMPLETE = "incomplete"
+    EMPTY = "empty"
+
+
 class PaperShadowRunEvidenceStatus(str, Enum):
     PASS = "pass"  # noqa: S105 - run evidence outcome, not a credential.
     WARN = "warn"
@@ -364,6 +370,45 @@ class PaperPnLLedger:
     real_orders_enabled: bool = False
     real_money_enabled: bool = False
     operator_summary: str = "Paper PnL ledger has not run."
+
+
+@dataclass(frozen=True)
+class PaperPortfolioExposure:
+    exposure_id: str
+    dimension: str
+    key: str
+    gross_exposure: float
+    net_exposure: float
+    open_position_count: int
+
+
+@dataclass(frozen=True)
+class PaperPortfolioRiskSnapshot:
+    snapshot_id: str
+    session_id: str
+    as_of_ns: int
+    source_ledger_id: str
+    equity_start: float | None
+    equity_current: float | None
+    realized_pnl: float
+    unrealized_pnl: float | None
+    total_fees: float
+    total_slippage: float
+    gross_exposure: float
+    net_exposure: float
+    open_position_count: int
+    sleeve_exposures: tuple[PaperPortfolioExposure, ...]
+    symbol_exposures: tuple[PaperPortfolioExposure, ...]
+    missing_price_positions: tuple[str, ...] = ()
+    drawdown_available: bool = False
+    current_drawdown: float | None = None
+    max_drawdown: float | None = None
+    status: PaperPortfolioRiskStatus = PaperPortfolioRiskStatus.EMPTY
+    reasons: tuple[str, ...] = ()
+    paper_only: bool = True
+    real_orders_enabled: bool = False
+    real_money_enabled: bool = False
+    operator_summary: str = "Paper portfolio risk has not been assessed."
 
 
 @dataclass(frozen=True)
@@ -1024,6 +1069,30 @@ class PaperShadowSessionController:
             )
         )
         return ledger
+
+    def paper_portfolio_risk_snapshot(
+        self,
+        ledger: PaperPnLLedger | dict,
+        *,
+        equity_start: float | None = None,
+        equity_history: tuple[float, ...] = (),
+        snapshot_id: str | None = None,
+    ) -> PaperPortfolioRiskSnapshot:
+        """Build a deterministic paper-only risk/equity snapshot from the PnL ledger."""
+        normalized = paper_pnl_ledger_from_dict(ledger) if isinstance(ledger, dict) else ledger
+        _validate_paper_pnl_ledger(normalized)
+        if normalized.session_id != self._snapshot.session_id:
+            raise PaperShadowSessionCorruptError("paper portfolio risk source ledger session mismatch")
+        risk = build_paper_portfolio_risk_snapshot(
+            ledger=normalized,
+            latest_prices=self._snapshot.market_event_prices,
+            equity_start=equity_start,
+            equity_history=equity_history,
+            snapshot_id=snapshot_id,
+            as_of_ns=self._now_ns(),
+        )
+        _validate_paper_portfolio_risk_snapshot(risk)
+        return risk
 
     def replay_feed(self, plan: FeedReplayPlan | dict | tuple[MarketEventBatch, ...]) -> FeedReplayResult:
         if self._snapshot.status != PaperShadowSessionStatus.RUNNING:
@@ -2238,6 +2307,110 @@ def paper_pnl_ledger_from_dict(data: dict) -> PaperPnLLedger:
     return ledger
 
 
+def paper_portfolio_exposure_to_dict(exposure: PaperPortfolioExposure) -> dict:
+    _validate_paper_portfolio_exposure(exposure)
+    return {
+        "exposure_id": exposure.exposure_id,
+        "dimension": exposure.dimension,
+        "key": exposure.key,
+        "gross_exposure": exposure.gross_exposure,
+        "net_exposure": exposure.net_exposure,
+        "open_position_count": exposure.open_position_count,
+    }
+
+
+def paper_portfolio_exposure_from_dict(data: dict) -> PaperPortfolioExposure:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper portfolio exposure must be a dict, got {type(data).__name__!r}")
+    exposure = PaperPortfolioExposure(
+        exposure_id=_require_non_empty_str(data.get("exposure_id"), "exposure_id"),
+        dimension=_require_non_empty_str(data.get("dimension"), "dimension"),
+        key=_require_non_empty_str(data.get("key"), "key"),
+        gross_exposure=_require_non_negative_float(data.get("gross_exposure"), "gross_exposure"),
+        net_exposure=_require_non_negative_float(data.get("net_exposure"), "net_exposure"),
+        open_position_count=_require_non_negative_int(data.get("open_position_count"), "open_position_count"),
+    )
+    _validate_paper_portfolio_exposure(exposure)
+    return exposure
+
+
+def paper_portfolio_risk_snapshot_to_dict(snapshot: PaperPortfolioRiskSnapshot) -> dict:
+    _validate_paper_portfolio_risk_snapshot(snapshot)
+    return {
+        "snapshot_id": snapshot.snapshot_id,
+        "session_id": snapshot.session_id,
+        "as_of_ns": snapshot.as_of_ns,
+        "source_ledger_id": snapshot.source_ledger_id,
+        "equity_start": snapshot.equity_start,
+        "equity_current": snapshot.equity_current,
+        "realized_pnl": snapshot.realized_pnl,
+        "unrealized_pnl": snapshot.unrealized_pnl,
+        "total_fees": snapshot.total_fees,
+        "total_slippage": snapshot.total_slippage,
+        "gross_exposure": snapshot.gross_exposure,
+        "net_exposure": snapshot.net_exposure,
+        "open_position_count": snapshot.open_position_count,
+        "sleeve_exposures": [paper_portfolio_exposure_to_dict(item) for item in snapshot.sleeve_exposures],
+        "symbol_exposures": [paper_portfolio_exposure_to_dict(item) for item in snapshot.symbol_exposures],
+        "missing_price_positions": list(snapshot.missing_price_positions),
+        "drawdown_available": snapshot.drawdown_available,
+        "current_drawdown": snapshot.current_drawdown,
+        "max_drawdown": snapshot.max_drawdown,
+        "status": snapshot.status.value,
+        "reasons": list(snapshot.reasons),
+        "paper_only": snapshot.paper_only,
+        "real_orders_enabled": snapshot.real_orders_enabled,
+        "real_money_enabled": snapshot.real_money_enabled,
+        "operator_summary": snapshot.operator_summary,
+    }
+
+
+def paper_portfolio_risk_snapshot_from_dict(data: dict) -> PaperPortfolioRiskSnapshot:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper portfolio risk snapshot must be a dict, got {type(data).__name__!r}"
+        )
+    sleeve_exposures_value = data.get("sleeve_exposures")
+    symbol_exposures_value = data.get("symbol_exposures")
+    if not isinstance(sleeve_exposures_value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("paper portfolio risk sleeve_exposures must be a list/tuple")
+    if not isinstance(symbol_exposures_value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("paper portfolio risk symbol_exposures must be a list/tuple")
+    snapshot = PaperPortfolioRiskSnapshot(
+        snapshot_id=_require_non_empty_str(data.get("snapshot_id"), "snapshot_id"),
+        session_id=_require_non_empty_str(data.get("session_id"), "session_id"),
+        as_of_ns=_require_non_negative_int(data.get("as_of_ns"), "as_of_ns"),
+        source_ledger_id=_require_non_empty_str(data.get("source_ledger_id"), "source_ledger_id"),
+        equity_start=_optional_non_negative_float(data.get("equity_start"), "equity_start"),
+        equity_current=_optional_non_negative_float(data.get("equity_current"), "equity_current"),
+        realized_pnl=_require_float(data.get("realized_pnl"), "realized_pnl"),
+        unrealized_pnl=_optional_float(data.get("unrealized_pnl"), "unrealized_pnl"),
+        total_fees=_require_non_negative_float(data.get("total_fees"), "total_fees"),
+        total_slippage=_require_non_negative_float(data.get("total_slippage"), "total_slippage"),
+        gross_exposure=_require_non_negative_float(data.get("gross_exposure"), "gross_exposure"),
+        net_exposure=_require_non_negative_float(data.get("net_exposure"), "net_exposure"),
+        open_position_count=_require_non_negative_int(data.get("open_position_count"), "open_position_count"),
+        sleeve_exposures=tuple(
+            paper_portfolio_exposure_from_dict(_dict_value(item, "sleeve_exposures")) for item in sleeve_exposures_value
+        ),
+        symbol_exposures=tuple(
+            paper_portfolio_exposure_from_dict(_dict_value(item, "symbol_exposures")) for item in symbol_exposures_value
+        ),
+        missing_price_positions=_sorted_unique(data.get("missing_price_positions", ())),
+        drawdown_available=_bool_or_default(data, "drawdown_available", False),
+        current_drawdown=_optional_non_negative_float(data.get("current_drawdown"), "current_drawdown"),
+        max_drawdown=_optional_non_negative_float(data.get("max_drawdown"), "max_drawdown"),
+        status=_paper_portfolio_risk_status_from_value(data.get("status")),
+        reasons=_sorted_unique(data.get("reasons", ())),
+        paper_only=_bool_or_default(data, "paper_only", True),
+        real_orders_enabled=_bool_or_default(data, "real_orders_enabled", False),
+        real_money_enabled=_bool_or_default(data, "real_money_enabled", False),
+        operator_summary=_require_non_empty_str(data.get("operator_summary"), "operator_summary"),
+    )
+    _validate_paper_portfolio_risk_snapshot(snapshot)
+    return snapshot
+
+
 def build_paper_pnl_ledger(
     *,
     cost_result: PaperCostResult | dict,
@@ -2305,6 +2478,88 @@ def build_paper_pnl_ledger(
     )
     _validate_paper_pnl_ledger(ledger)
     return ledger
+
+
+def build_paper_portfolio_risk_snapshot(
+    *,
+    ledger: PaperPnLLedger | dict,
+    latest_prices: tuple[MarketEventPrice, ...] = (),
+    equity_start: float | None = None,
+    equity_history: tuple[float, ...] = (),
+    snapshot_id: str | None = None,
+    as_of_ns: int | None = None,
+) -> PaperPortfolioRiskSnapshot:
+    """Build a deterministic paper portfolio risk/equity snapshot from the PnL ledger."""
+    resolved_ledger = paper_pnl_ledger_from_dict(ledger) if isinstance(ledger, dict) else ledger
+    _validate_paper_pnl_ledger(resolved_ledger)
+    prices = _market_event_prices_from_data(tuple(market_event_price_to_dict(price) for price in latest_prices))
+    resolved_equity_start = _optional_non_negative_float(equity_start, "equity_start")
+    resolved_equity_history = _equity_history_from_data(equity_history)
+    open_positions = tuple(position for position in resolved_ledger.positions if position.is_open)
+    priced_values: list[tuple[PaperPosition, MarketEventPrice, float, float]] = []
+    missing_price_positions: list[str] = []
+    unrealized_parts: list[float] = []
+    for position in open_positions:
+        latest = _latest_market_price_from_prices(prices, position.symbol, position.venue)
+        if latest is None:
+            missing_price_positions.append(position.position_id)
+            continue
+        exposure = position.qty * latest.price
+        unrealized = 0.0 if position.avg_price is None else (latest.price - position.avg_price) * position.qty
+        priced_values.append((position, latest, exposure, unrealized))
+        unrealized_parts.append(unrealized)
+    missing_positions = _sorted_unique(tuple(missing_price_positions))
+    gross_exposure = sum(exposure for _, _, exposure, _ in priced_values)
+    net_exposure = gross_exposure
+    unrealized_pnl = None if missing_positions else sum(unrealized_parts)
+    equity_current = (
+        None
+        if resolved_equity_start is None or unrealized_pnl is None
+        else resolved_equity_start + resolved_ledger.realized_pnl + unrealized_pnl
+    )
+    drawdown_available, current_drawdown, max_drawdown = _paper_drawdown_from_equity_history(
+        resolved_equity_history,
+        equity_current,
+    )
+    sleeve_exposures = _paper_portfolio_exposures("sleeve", priced_values)
+    symbol_exposures = _paper_portfolio_exposures("symbol", priced_values)
+    status = _paper_portfolio_risk_status(resolved_ledger, missing_positions)
+    reasons = _paper_portfolio_risk_reasons(resolved_ledger, missing_positions, resolved_equity_history)
+    snapshot = PaperPortfolioRiskSnapshot(
+        snapshot_id=_string_or_default(snapshot_id, _paper_portfolio_risk_snapshot_id(resolved_ledger.ledger_id)),
+        session_id=resolved_ledger.session_id,
+        as_of_ns=_optional_non_negative_int(as_of_ns, "as_of_ns") if as_of_ns is not None else resolved_ledger.as_of_ns,
+        source_ledger_id=resolved_ledger.ledger_id,
+        equity_start=resolved_equity_start,
+        equity_current=equity_current,
+        realized_pnl=resolved_ledger.realized_pnl,
+        unrealized_pnl=unrealized_pnl,
+        total_fees=resolved_ledger.total_fees,
+        total_slippage=resolved_ledger.total_slippage,
+        gross_exposure=gross_exposure,
+        net_exposure=net_exposure,
+        open_position_count=len(open_positions),
+        sleeve_exposures=sleeve_exposures,
+        symbol_exposures=symbol_exposures,
+        missing_price_positions=missing_positions,
+        drawdown_available=drawdown_available,
+        current_drawdown=current_drawdown,
+        max_drawdown=max_drawdown,
+        status=status,
+        reasons=reasons,
+        paper_only=resolved_ledger.paper_only,
+        real_orders_enabled=resolved_ledger.real_orders_enabled,
+        real_money_enabled=resolved_ledger.real_money_enabled,
+        operator_summary=_paper_portfolio_risk_summary(
+            status,
+            len(open_positions),
+            gross_exposure,
+            resolved_ledger.realized_pnl,
+            unrealized_pnl,
+        ),
+    )
+    _validate_paper_portfolio_risk_snapshot(snapshot)
+    return snapshot
 
 
 def build_paper_shadow_run_evidence_report(
@@ -3506,6 +3761,104 @@ def _validate_paper_pnl_ledger(ledger: PaperPnLLedger) -> None:
     if not ledger.paper_only or ledger.real_orders_enabled or ledger.real_money_enabled:
         raise PaperShadowSessionCorruptError("paper PnL ledger cannot carry unsafe real-trading flags")
     _require_non_empty_str(ledger.operator_summary, "operator_summary")
+
+
+def _validate_paper_portfolio_exposure(exposure: PaperPortfolioExposure) -> None:
+    if not isinstance(exposure, PaperPortfolioExposure):
+        raise PaperShadowSessionCorruptError("paper portfolio exposure must be a PaperPortfolioExposure")
+    _require_non_empty_str(exposure.exposure_id, "exposure_id")
+    if exposure.dimension not in {"sleeve", "symbol"}:
+        raise PaperShadowSessionCorruptError("paper portfolio exposure dimension must be sleeve or symbol")
+    _require_non_empty_str(exposure.key, "key")
+    if exposure.exposure_id != _paper_portfolio_exposure_id(exposure.dimension, exposure.key):
+        raise PaperShadowSessionCorruptError("paper portfolio exposure_id does not match dimension/key")
+    _require_non_negative_float(exposure.gross_exposure, "gross_exposure")
+    _require_non_negative_float(exposure.net_exposure, "net_exposure")
+    _require_non_negative_int(exposure.open_position_count, "open_position_count")
+
+
+def _validate_paper_portfolio_risk_snapshot(snapshot: PaperPortfolioRiskSnapshot) -> None:
+    if not isinstance(snapshot, PaperPortfolioRiskSnapshot):
+        raise PaperShadowSessionCorruptError("paper portfolio risk snapshot must be a PaperPortfolioRiskSnapshot")
+    _require_non_empty_str(snapshot.snapshot_id, "snapshot_id")
+    _require_non_empty_str(snapshot.session_id, "session_id")
+    _require_non_negative_int(snapshot.as_of_ns, "as_of_ns")
+    _require_non_empty_str(snapshot.source_ledger_id, "source_ledger_id")
+    _optional_non_negative_float(snapshot.equity_start, "equity_start")
+    _optional_non_negative_float(snapshot.equity_current, "equity_current")
+    _require_float(snapshot.realized_pnl, "realized_pnl")
+    _optional_float(snapshot.unrealized_pnl, "unrealized_pnl")
+    _require_non_negative_float(snapshot.total_fees, "total_fees")
+    _require_non_negative_float(snapshot.total_slippage, "total_slippage")
+    _require_non_negative_float(snapshot.gross_exposure, "gross_exposure")
+    _require_non_negative_float(snapshot.net_exposure, "net_exposure")
+    _require_non_negative_int(snapshot.open_position_count, "open_position_count")
+    if not isinstance(snapshot.sleeve_exposures, tuple):
+        raise PaperShadowSessionCorruptError("paper portfolio sleeve exposures must be a tuple")
+    if not isinstance(snapshot.symbol_exposures, tuple):
+        raise PaperShadowSessionCorruptError("paper portfolio symbol exposures must be a tuple")
+    for exposure in snapshot.sleeve_exposures:
+        _validate_paper_portfolio_exposure(exposure)
+        if exposure.dimension != "sleeve":
+            raise PaperShadowSessionCorruptError("paper portfolio sleeve exposure has wrong dimension")
+    for exposure in snapshot.symbol_exposures:
+        _validate_paper_portfolio_exposure(exposure)
+        if exposure.dimension != "symbol":
+            raise PaperShadowSessionCorruptError("paper portfolio symbol exposure has wrong dimension")
+    if snapshot.sleeve_exposures != tuple(sorted(snapshot.sleeve_exposures, key=_paper_portfolio_exposure_sort_key)):
+        raise PaperShadowSessionCorruptError("paper portfolio sleeve exposures must be sorted")
+    if snapshot.symbol_exposures != tuple(sorted(snapshot.symbol_exposures, key=_paper_portfolio_exposure_sort_key)):
+        raise PaperShadowSessionCorruptError("paper portfolio symbol exposures must be sorted")
+    exposure_keys = tuple((item.dimension, item.key) for item in snapshot.sleeve_exposures + snapshot.symbol_exposures)
+    if len(exposure_keys) != len(set(exposure_keys)):
+        raise PaperShadowSessionCorruptError("paper portfolio exposures must be unique")
+    if snapshot.missing_price_positions != _sorted_unique(snapshot.missing_price_positions):
+        raise PaperShadowSessionCorruptError("paper portfolio missing price positions must be sorted unique")
+    _require_bool(snapshot.drawdown_available, "drawdown_available")
+    _optional_non_negative_float(snapshot.current_drawdown, "current_drawdown")
+    _optional_non_negative_float(snapshot.max_drawdown, "max_drawdown")
+    if snapshot.drawdown_available:
+        if snapshot.current_drawdown is None or snapshot.max_drawdown is None:
+            raise PaperShadowSessionCorruptError("available paper drawdown requires current and max drawdown")
+    elif snapshot.current_drawdown is not None or snapshot.max_drawdown is not None:
+        raise PaperShadowSessionCorruptError("unavailable paper drawdown cannot carry drawdown values")
+    if snapshot.equity_current is not None and snapshot.equity_start is None:
+        raise PaperShadowSessionCorruptError("paper portfolio risk equity_current requires equity_start")
+    if snapshot.unrealized_pnl is None and snapshot.equity_current is not None:
+        raise PaperShadowSessionCorruptError("paper portfolio risk cannot carry equity_current without unrealized PnL")
+    if not isinstance(snapshot.status, PaperPortfolioRiskStatus):
+        raise PaperShadowSessionCorruptError("paper portfolio risk status must be a PaperPortfolioRiskStatus")
+    if snapshot.reasons != _sorted_unique(snapshot.reasons):
+        raise PaperShadowSessionCorruptError("paper portfolio risk reasons must be sorted unique")
+    if snapshot.status == PaperPortfolioRiskStatus.COMPLETE and snapshot.reasons:
+        raise PaperShadowSessionCorruptError("complete paper portfolio risk cannot carry reasons")
+    if snapshot.status != PaperPortfolioRiskStatus.COMPLETE and not snapshot.reasons:
+        raise PaperShadowSessionCorruptError("non-complete paper portfolio risk requires reasons")
+    if snapshot.status == PaperPortfolioRiskStatus.INCOMPLETE and not snapshot.missing_price_positions:
+        raise PaperShadowSessionCorruptError("incomplete paper portfolio risk requires missing prices")
+    if snapshot.missing_price_positions and (
+        snapshot.status != PaperPortfolioRiskStatus.INCOMPLETE
+        or snapshot.unrealized_pnl is not None
+        or snapshot.equity_current is not None
+    ):
+        raise PaperShadowSessionCorruptError("missing prices must force incomplete paper portfolio risk")
+    sleeve_exposure_count = sum(item.open_position_count for item in snapshot.sleeve_exposures)
+    symbol_exposure_count = sum(item.open_position_count for item in snapshot.symbol_exposures)
+    if snapshot.missing_price_positions:
+        if sleeve_exposure_count > snapshot.open_position_count or symbol_exposure_count > snapshot.open_position_count:
+            raise PaperShadowSessionCorruptError("paper portfolio exposure count cannot exceed open positions")
+    elif snapshot.open_position_count != sleeve_exposure_count or snapshot.open_position_count != symbol_exposure_count:
+        raise PaperShadowSessionCorruptError("paper portfolio exposure count does not match open positions")
+    if snapshot.gross_exposure != sum(item.gross_exposure for item in snapshot.sleeve_exposures):
+        raise PaperShadowSessionCorruptError("paper portfolio gross exposure does not match sleeve exposures")
+    if snapshot.net_exposure != sum(item.net_exposure for item in snapshot.sleeve_exposures):
+        raise PaperShadowSessionCorruptError("paper portfolio net exposure does not match sleeve exposures")
+    _require_bool(snapshot.paper_only, "paper_only")
+    _require_bool(snapshot.real_orders_enabled, "real_orders_enabled")
+    _require_bool(snapshot.real_money_enabled, "real_money_enabled")
+    if not snapshot.paper_only or snapshot.real_orders_enabled or snapshot.real_money_enabled:
+        raise PaperShadowSessionCorruptError("paper portfolio risk cannot carry unsafe real-trading flags")
+    _require_non_empty_str(snapshot.operator_summary, "operator_summary")
 
 
 def _validate_feed_replay_plan(plan: FeedReplayPlan) -> None:
@@ -4994,6 +5347,103 @@ def _paper_pnl_ledger_reasons(
     return _sorted_unique(reasons)
 
 
+def _paper_portfolio_risk_snapshot_id(ledger_id: str) -> str:
+    return f"paper-portfolio-risk-{ledger_id}"
+
+
+def _paper_portfolio_exposure_id(dimension: str, key: str) -> str:
+    return f"paper-risk-exposure-{dimension}-{key}"
+
+
+def _paper_portfolio_exposures(
+    dimension: str,
+    priced_values: list[tuple[PaperPosition, MarketEventPrice, float, float]],
+) -> tuple[PaperPortfolioExposure, ...]:
+    grouped: dict[str, tuple[float, float, int]] = {}
+    for position, _, exposure, _ in priced_values:
+        key = position.sleeve_id if dimension == "sleeve" else position.symbol
+        gross, net, count = grouped.get(key, (0.0, 0.0, 0))
+        grouped[key] = (gross + exposure, net + exposure, count + 1)
+    exposures = tuple(
+        PaperPortfolioExposure(
+            exposure_id=_paper_portfolio_exposure_id(dimension, key),
+            dimension=dimension,
+            key=key,
+            gross_exposure=gross,
+            net_exposure=net,
+            open_position_count=count,
+        )
+        for key, (gross, net, count) in sorted(grouped.items())
+    )
+    for exposure in exposures:
+        _validate_paper_portfolio_exposure(exposure)
+    return exposures
+
+
+def _paper_portfolio_risk_status(
+    ledger: PaperPnLLedger,
+    missing_price_positions: tuple[str, ...],
+) -> PaperPortfolioRiskStatus:
+    if missing_price_positions:
+        return PaperPortfolioRiskStatus.INCOMPLETE
+    if not ledger.positions and ledger.pnl_events == 0:
+        return PaperPortfolioRiskStatus.EMPTY
+    return PaperPortfolioRiskStatus.COMPLETE
+
+
+def _paper_portfolio_risk_reasons(
+    ledger: PaperPnLLedger,
+    missing_price_positions: tuple[str, ...],
+    equity_history: tuple[float, ...],
+) -> tuple[str, ...]:
+    reasons: list[str] = []
+    if missing_price_positions:
+        reasons.append("missing_latest_market_price")
+    if not ledger.positions and ledger.pnl_events == 0:
+        reasons.append("empty_paper_pnl_ledger")
+    if not equity_history:
+        reasons.append("drawdown_history_unavailable")
+    status = _paper_portfolio_risk_status(ledger, missing_price_positions)
+    if status == PaperPortfolioRiskStatus.COMPLETE:
+        return ()
+    return _sorted_unique(tuple(reasons))
+
+
+def _paper_portfolio_risk_summary(
+    status: PaperPortfolioRiskStatus,
+    open_position_count: int,
+    gross_exposure: float,
+    realized_pnl: float,
+    unrealized_pnl: float | None,
+) -> str:
+    return (
+        f"paper_portfolio_risk={status.value}; open={open_position_count}; gross={gross_exposure}; "
+        f"realized={realized_pnl}; unrealized={unrealized_pnl}"
+    )
+
+
+def _equity_history_from_data(value: object) -> tuple[float, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("paper equity_history must be a list/tuple")
+    return tuple(_require_non_negative_float(item, "equity_history") for item in value)
+
+
+def _paper_drawdown_from_equity_history(
+    equity_history: tuple[float, ...],
+    equity_current: float | None,
+) -> tuple[bool, float | None, float | None]:
+    if not equity_history or equity_current is None:
+        return False, None, None
+    values = equity_history + (equity_current,)
+    peak = max(values)
+    if peak <= 0.0:
+        return False, None, None
+    drawdowns = tuple(
+        max(0.0, (max(values[: index + 1]) - value) / max(values[: index + 1])) for index, value in enumerate(values)
+    )
+    return True, drawdowns[-1], max(drawdowns)
+
+
 def _paper_fill_for_intent_result(
     snapshot: PaperShadowSessionSnapshot,
     batch_result: PaperIntentBatchResult,
@@ -5453,6 +5903,10 @@ def _paper_pnl_line_sort_key(line: PaperPnLLine) -> tuple[str, str, str]:
     return (line.cost_result_id, line.fill_id, line.status.value)
 
 
+def _paper_portfolio_exposure_sort_key(exposure: PaperPortfolioExposure) -> tuple[str, str]:
+    return (exposure.dimension, exposure.key)
+
+
 def _market_event_type_from_value(value: object) -> MarketEventType:
     if isinstance(value, MarketEventType):
         return value
@@ -5505,6 +5959,15 @@ def _paper_pnl_status_from_value(value: object) -> PaperPnLStatus:
         return PaperPnLStatus(_require_non_empty_str(value, "status"))
     except ValueError as exc:
         raise PaperShadowSessionCorruptError(f"Invalid paper PnL status: {value!r}") from exc
+
+
+def _paper_portfolio_risk_status_from_value(value: object) -> PaperPortfolioRiskStatus:
+    if isinstance(value, PaperPortfolioRiskStatus):
+        return value
+    try:
+        return PaperPortfolioRiskStatus(_require_non_empty_str(value, "status"))
+    except ValueError as exc:
+        raise PaperShadowSessionCorruptError(f"Invalid paper portfolio risk status: {value!r}") from exc
 
 
 def _paper_intent_has_valid_size(intent: PaperIntent) -> bool:

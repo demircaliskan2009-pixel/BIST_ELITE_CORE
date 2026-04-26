@@ -16,6 +16,7 @@ from crypto_core.service.artifact_export import (
     export_paper_intent_batch,
     export_paper_intent_batch_result,
     export_paper_pnl_ledger,
+    export_paper_portfolio_risk_snapshot,
     export_paper_shadow_activation_plan,
     export_paper_shadow_evidence_bundle,
     export_paper_shadow_feed_replay_plan,
@@ -32,6 +33,7 @@ from crypto_core.service.artifact_export import (
     load_paper_intent_batch,
     load_paper_intent_batch_result,
     load_paper_pnl_ledger,
+    load_paper_portfolio_risk_snapshot,
     load_paper_shadow_activation_plan,
     load_paper_shadow_evidence_bundle,
     load_paper_shadow_feed_replay_plan,
@@ -69,6 +71,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     PaperIntentSide,
     PaperIntentValidationResult,
     PaperPnLStatus,
+    PaperPortfolioRiskStatus,
     PaperShadowEvidenceBundle,
     PaperShadowRunEvidenceStatus,
     PaperShadowSessionController,
@@ -81,6 +84,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     build_multi_source_run_evidence_report,
     build_paper_data_source_batch_result,
     build_paper_intent_batch,
+    build_paper_portfolio_risk_snapshot,
     build_paper_shadow_evidence_bundle,
     build_paper_shadow_run_evidence_report,
     feed_replay_plan_from_dict,
@@ -106,6 +110,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     paper_intent_batch_to_dict,
     paper_pnl_ledger_from_dict,
     paper_pnl_ledger_to_dict,
+    paper_portfolio_risk_snapshot_from_dict,
+    paper_portfolio_risk_snapshot_to_dict,
     paper_shadow_evidence_bundle_from_dict,
     paper_shadow_evidence_bundle_to_dict,
     paper_shadow_run_evidence_report_from_dict,
@@ -4340,6 +4346,276 @@ def test_service_orchestrator_paper_pnl_helpers_and_artifacts(tmp_path) -> None:
     store.save_snapshot("crypto_paper_pnl_ledger", ["bad"])
     with pytest.raises(PaperShadowSessionCorruptError):
         load_paper_pnl_ledger(evidence_store=store)
+
+
+def test_paper_portfolio_risk_empty_ledger_safe_snapshot() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(1, 20)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    controller.record_market_event_batch(
+        build_market_event_batch(
+            (
+                _market_event(
+                    "BTCUSDT",
+                    venue="binance",
+                    ts_ns=_T0_NS + 101,
+                    event_type=MarketEventType.FUNDING,
+                    price=None,
+                    funding_rate=0.0001,
+                ),
+            )
+        )
+    )
+    intent_result = controller.record_paper_intent_batch(
+        build_paper_intent_batch((_paper_intent("active", "BTCUSDT", venue="binance"),), batch_id="risk-empty")
+    )
+    fill_result = controller.simulate_paper_fills(intent_result)
+    cost_result = controller.evaluate_paper_costs(fill_result, cost_model=PaperCostModel(fee_bps=10.0))
+    ledger = controller.apply_paper_pnl_ledger(cost_result)
+
+    risk = controller.paper_portfolio_risk_snapshot(ledger, equity_start=1_000.0)
+
+    assert risk.status == PaperPortfolioRiskStatus.EMPTY
+    assert risk.open_position_count == 0
+    assert risk.gross_exposure == 0.0
+    assert risk.net_exposure == 0.0
+    assert risk.unrealized_pnl == 0.0
+    assert risk.equity_current == pytest.approx(1_000.0)
+    assert risk.reasons == ("drawdown_history_unavailable", "empty_paper_pnl_ledger")
+    assert paper_portfolio_risk_snapshot_from_dict(paper_portfolio_risk_snapshot_to_dict(risk)) == risk
+
+
+def test_paper_portfolio_risk_open_position_uses_latest_market_price() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(1, 30)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    cost_result = _paper_cost_result_for_intent(
+        controller,
+        batch_id="risk-open",
+        event_ts_ns=_T0_NS + 101,
+        price=100.0,
+    )
+    ledger = controller.apply_paper_pnl_ledger(cost_result)
+    controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 102, price=105.0),))
+    )
+
+    risk = controller.paper_portfolio_risk_snapshot(
+        ledger,
+        equity_start=1_000.0,
+        equity_history=(1_000.0, 1_001.0),
+    )
+
+    assert risk.status == PaperPortfolioRiskStatus.COMPLETE
+    assert risk.reasons == ()
+    assert risk.open_position_count == 1
+    assert risk.gross_exposure == pytest.approx(10.5)
+    assert risk.net_exposure == pytest.approx(10.5)
+    assert risk.unrealized_pnl == pytest.approx(0.495)
+    assert risk.equity_current == pytest.approx(1_000.495)
+    assert risk.drawdown_available is True
+    assert risk.max_drawdown == pytest.approx((1_001.0 - 1_000.495) / 1_001.0)
+
+
+def test_paper_portfolio_risk_missing_price_marks_incomplete() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(1, 20)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    cost_result = _paper_cost_result_for_intent(
+        controller,
+        batch_id="risk-missing-price",
+        event_ts_ns=_T0_NS + 101,
+        price=100.0,
+    )
+    ledger = controller.apply_paper_pnl_ledger(cost_result)
+
+    risk = build_paper_portfolio_risk_snapshot(ledger=ledger, latest_prices=(), equity_start=1_000.0)
+
+    assert risk.status == PaperPortfolioRiskStatus.INCOMPLETE
+    assert risk.reasons == ("drawdown_history_unavailable", "missing_latest_market_price")
+    assert risk.missing_price_positions == ("paper-position-active-BTCUSDT-binance",)
+    assert risk.unrealized_pnl is None
+    assert risk.equity_current is None
+    assert risk.gross_exposure == 0.0
+
+
+def test_paper_portfolio_risk_realized_pnl_carried_without_open_exposure() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(1, 30)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    buy_cost = _paper_cost_result_for_intent(
+        controller,
+        batch_id="risk-realized-buy",
+        event_ts_ns=_T0_NS + 101,
+        intent_ts_ns=_T0_NS + 151,
+        price=100.0,
+    )
+    buy_ledger = controller.apply_paper_pnl_ledger(buy_cost)
+    sell_cost = _paper_cost_result_for_intent(
+        controller,
+        side=PaperIntentSide.SELL,
+        batch_id="risk-realized-sell",
+        event_ts_ns=_T0_NS + 102,
+        intent_ts_ns=_T0_NS + 152,
+        price=110.0,
+    )
+    ledger = controller.apply_paper_pnl_ledger(sell_cost, prior_ledger=buy_ledger)
+
+    risk = controller.paper_portfolio_risk_snapshot(ledger, equity_start=1_000.0)
+
+    assert risk.status == PaperPortfolioRiskStatus.COMPLETE
+    assert risk.realized_pnl == pytest.approx(0.9685)
+    assert risk.unrealized_pnl == 0.0
+    assert risk.equity_current == pytest.approx(1_000.9685)
+    assert risk.gross_exposure == 0.0
+    assert risk.open_position_count == 0
+
+
+def test_paper_portfolio_risk_exposure_aggregation_is_stable() -> None:
+    plan = _ready_activation_plan(
+        _sleeve("sleeve-a", effective_allocation=0.20, target_allocation=0.20),
+        _sleeve("sleeve-b", effective_allocation=0.20, target_allocation=0.20),
+    )
+    times = iter((_T0_NS + value for value in range(1, 30)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    controller.record_market_event_batch(
+        build_market_event_batch(
+            (
+                _market_event("ETHUSDT", venue="binance", ts_ns=_T0_NS + 102, price=200.0),
+                _market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),
+            )
+        )
+    )
+    intent_result = controller.record_paper_intent_batch(
+        build_paper_intent_batch(
+            (
+                _paper_intent("sleeve-b", "ETHUSDT", venue="binance", intent_ts_ns=_T0_NS + 152),
+                _paper_intent("sleeve-a", "BTCUSDT", venue="binance", intent_ts_ns=_T0_NS + 151),
+            ),
+            batch_id="risk-aggregate",
+        )
+    )
+    fill_result = controller.simulate_paper_fills(intent_result)
+    cost_result = controller.evaluate_paper_costs(fill_result, cost_model=PaperCostModel(fee_bps=10.0))
+    ledger = controller.apply_paper_pnl_ledger(cost_result)
+
+    risk = controller.paper_portfolio_risk_snapshot(ledger)
+    rendered = paper_portfolio_risk_snapshot_to_dict(risk)
+
+    assert risk.status == PaperPortfolioRiskStatus.COMPLETE
+    assert risk.gross_exposure == pytest.approx(30.0)
+    assert [item["key"] for item in rendered["sleeve_exposures"]] == ["sleeve-a", "sleeve-b"]
+    assert [item["gross_exposure"] for item in rendered["sleeve_exposures"]] == pytest.approx([10.0, 20.0])
+    assert [item["key"] for item in rendered["symbol_exposures"]] == ["BTCUSDT", "ETHUSDT"]
+    assert [item["gross_exposure"] for item in rendered["symbol_exposures"]] == pytest.approx([10.0, 20.0])
+
+
+def test_paper_portfolio_risk_invalid_equity_inputs_fail_closed() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(1, 20)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    cost_result = _paper_cost_result_for_intent(controller, batch_id="risk-invalid-equity")
+    ledger = controller.apply_paper_pnl_ledger(cost_result)
+
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.paper_portfolio_risk_snapshot(ledger, equity_start=-1.0)
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.paper_portfolio_risk_snapshot(ledger, equity_history=(1_000.0, float("nan")))
+
+
+def test_paper_portfolio_risk_deterministic_replay() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+
+    def run_once() -> tuple[dict, dict]:
+        times = iter((_T0_NS + value for value in range(1, 30)))
+        controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+        controller.prepare(plan)
+        controller.start()
+        cost_result = _paper_cost_result_for_intent(
+            controller,
+            batch_id="risk-deterministic",
+            event_ts_ns=_T0_NS + 101,
+            intent_ts_ns=_T0_NS + 151,
+            price=100.0,
+        )
+        ledger = controller.apply_paper_pnl_ledger(cost_result)
+        controller.record_market_event_batch(
+            build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 102, price=105.0),))
+        )
+        risk = controller.paper_portfolio_risk_snapshot(
+            ledger,
+            equity_start=1_000.0,
+            equity_history=(1_000.0, 1_001.0),
+        )
+        return paper_portfolio_risk_snapshot_to_dict(risk), paper_shadow_session_snapshot_to_dict(controller.snapshot())
+
+    assert run_once() == run_once()
+
+
+def test_service_orchestrator_paper_portfolio_risk_helpers_and_artifacts(tmp_path) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(310, 340)))
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        evidence_store=store,
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: next(times),
+    )
+
+    orch.prepare_paper_shadow_session(plan=plan)
+    orch.start_paper_shadow_session()
+    orch.record_paper_shadow_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),))
+    )
+    intent_result = orch.record_paper_intent_batch(
+        build_paper_intent_batch(
+            (_paper_intent("svc-active", "BTCUSDT", venue="binance"),),
+            batch_id="svc-risk-intents",
+        )
+    )
+    fill_result = orch.simulate_paper_fills(intent_result)
+    cost_result = orch.evaluate_paper_costs(fill_result, cost_model=PaperCostModel(fee_bps=10.0, slippage_bps=5.0))
+    ledger = orch.apply_paper_pnl_ledger(cost_result)
+    orch.record_paper_shadow_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 102, price=105.0),))
+    )
+    risk = orch.paper_portfolio_risk_snapshot(ledger, equity_start=1_000.0, equity_history=(1_000.0,))
+    rendered = orch.paper_portfolio_risk_snapshot_dict(risk)
+
+    assert rendered["status"] == "complete"
+    assert rendered["gross_exposure"] == pytest.approx(10.5)
+    assert rendered["equity_current"] == pytest.approx(1_000.495)
+    assert rendered["paper_only"] is True
+    assert rendered["real_orders_enabled"] is False
+    assert rendered["real_money_enabled"] is False
+
+    orch.export_paper_portfolio_risk_snapshot(risk)
+    assert orch.load_paper_portfolio_risk_snapshot() == risk
+    export_paper_portfolio_risk_snapshot(snapshot=risk, evidence_store=store)
+    assert load_paper_portfolio_risk_snapshot(evidence_store=store) == risk
+
+    store.save_snapshot("crypto_paper_portfolio_risk_snapshot", ["bad"])
+    with pytest.raises(PaperShadowSessionCorruptError):
+        load_paper_portfolio_risk_snapshot(evidence_store=store)
 
 
 def test_service_orchestrator_feed_replay_helper_and_artifacts(tmp_path) -> None:

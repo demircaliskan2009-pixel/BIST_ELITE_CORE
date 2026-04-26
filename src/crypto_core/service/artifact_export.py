@@ -42,6 +42,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     PaperIntentBatch,
     PaperIntentBatchResult,
     PaperPnLLedger,
+    PaperPortfolioRiskSnapshot,
     PaperShadowEvidenceBundle,
     PaperShadowRunEvidenceReport,
     PaperShadowSessionCorruptError,
@@ -66,6 +67,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     paper_intent_batch_to_dict,
     paper_pnl_ledger_from_dict,
     paper_pnl_ledger_to_dict,
+    paper_portfolio_risk_snapshot_from_dict,
+    paper_portfolio_risk_snapshot_to_dict,
     paper_shadow_evidence_bundle_from_dict,
     paper_shadow_evidence_bundle_to_dict,
     paper_shadow_run_evidence_report_from_dict,
@@ -554,6 +557,7 @@ _PAPER_INTENT_BATCH_RESULT_SNAPSHOT_NAME = "crypto_paper_intent_batch_result"
 _PAPER_FILL_SIMULATION_RESULT_SNAPSHOT_NAME = "crypto_paper_fill_simulation_result"
 _PAPER_COST_RESULT_SNAPSHOT_NAME = "crypto_paper_cost_result"
 _PAPER_PNL_LEDGER_SNAPSHOT_NAME = "crypto_paper_pnl_ledger"
+_PAPER_PORTFOLIO_RISK_SNAPSHOT_NAME = "crypto_paper_portfolio_risk_snapshot"
 _PAPER_SHADOW_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_paper_shadow_run_evidence_report"
 _MULTI_SOURCE_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_multi_source_run_evidence_report"
 _PAPER_SHADOW_EVIDENCE_BUNDLE_SNAPSHOT_NAME = "crypto_paper_shadow_evidence_bundle"
@@ -988,6 +992,31 @@ def load_paper_pnl_ledger(*, evidence_store: EvidenceStore) -> PaperPnLLedger:
     if not isinstance(data, dict):
         raise PaperShadowSessionCorruptError(f"Paper PnL ledger 'data' must be a dict, got {type(data).__name__!r}")
     return paper_pnl_ledger_from_dict(data)
+
+
+def export_paper_portfolio_risk_snapshot(
+    *,
+    snapshot: PaperPortfolioRiskSnapshot,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist a deterministic paper-only portfolio risk/equity snapshot."""
+    data = paper_portfolio_risk_snapshot_to_dict(snapshot)
+    write_result = evidence_store.save_snapshot(_PAPER_PORTFOLIO_RISK_SNAPSHOT_NAME, data)
+    if not write_result.success:
+        return write_result
+    evidence_store.append_evidence(_PAPER_PORTFOLIO_RISK_SNAPSHOT_NAME, data)
+    return write_result
+
+
+def load_paper_portfolio_risk_snapshot(*, evidence_store: EvidenceStore) -> PaperPortfolioRiskSnapshot:
+    """Load the latest deterministic paper-only portfolio risk/equity snapshot."""
+    envelope = evidence_store.load_snapshot(_PAPER_PORTFOLIO_RISK_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper portfolio risk snapshot 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return paper_portfolio_risk_snapshot_from_dict(data)
 
 
 def export_paper_shadow_run_evidence_report(

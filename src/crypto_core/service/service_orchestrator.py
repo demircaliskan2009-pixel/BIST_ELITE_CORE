@@ -53,6 +53,7 @@ from crypto_core.service.artifact_export import (
     export_paper_intent_batch,
     export_paper_intent_batch_result,
     export_paper_pnl_ledger,
+    export_paper_portfolio_risk_snapshot,
     export_sleeve_portfolio_snapshot,
     load_escalation_decision,
     load_operator_decision_pack,
@@ -62,6 +63,7 @@ from crypto_core.service.artifact_export import (
     load_paper_intent_batch,
     load_paper_intent_batch_result,
     load_paper_pnl_ledger,
+    load_paper_portfolio_risk_snapshot,
     load_sleeve_portfolio_snapshot,
     operator_disposition_from_verdict,
 )
@@ -175,6 +177,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     PaperIntentBatch,
     PaperIntentBatchResult,
     PaperPnLLedger,
+    PaperPortfolioRiskSnapshot,
     PaperShadowEvidenceBundle,
     PaperShadowRunEvidenceReport,
     PaperShadowSessionController,
@@ -196,6 +199,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     paper_intent_batch_result_to_dict,
     paper_intent_batch_to_dict,
     paper_pnl_ledger_to_dict,
+    paper_portfolio_risk_snapshot_to_dict,
     paper_shadow_evidence_bundle_to_dict,
     paper_shadow_run_evidence_report_to_dict,
     paper_shadow_session_snapshot_to_dict,
@@ -1148,6 +1152,26 @@ class ServiceOrchestrator:
         """Serialize a deterministic paper-only position/PnL ledger."""
         return paper_pnl_ledger_to_dict(ledger)
 
+    def paper_portfolio_risk_snapshot(
+        self,
+        ledger: PaperPnLLedger | dict,
+        *,
+        equity_start: float | None = None,
+        equity_history: tuple[float, ...] = (),
+        snapshot_id: str | None = None,
+    ) -> PaperPortfolioRiskSnapshot:
+        """Build a deterministic paper-only portfolio risk/equity snapshot."""
+        return self._ensure_paper_shadow_session_controller().paper_portfolio_risk_snapshot(
+            ledger,
+            equity_start=equity_start,
+            equity_history=equity_history,
+            snapshot_id=snapshot_id,
+        )
+
+    def paper_portfolio_risk_snapshot_dict(self, snapshot: PaperPortfolioRiskSnapshot) -> dict:
+        """Serialize a deterministic paper-only portfolio risk/equity snapshot."""
+        return paper_portfolio_risk_snapshot_to_dict(snapshot)
+
     def export_paper_shadow_session_snapshot(self):
         """Persist the current paper/shadow session snapshot via EvidenceStore."""
         if self._evidence_store is None:
@@ -1299,6 +1323,21 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for paper PnL ledger load")
         return load_paper_pnl_ledger(evidence_store=self._evidence_store)
+
+    def export_paper_portfolio_risk_snapshot(self, snapshot: PaperPortfolioRiskSnapshot):
+        """Persist a paper-only portfolio risk/equity snapshot via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper portfolio risk snapshot export")
+        return export_paper_portfolio_risk_snapshot(
+            snapshot=snapshot,
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_portfolio_risk_snapshot(self) -> PaperPortfolioRiskSnapshot:
+        """Load the latest persisted paper-only portfolio risk/equity snapshot."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper portfolio risk snapshot load")
+        return load_paper_portfolio_risk_snapshot(evidence_store=self._evidence_store)
 
     def paper_shadow_run_evidence_report(
         self,
