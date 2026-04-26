@@ -323,6 +323,17 @@ class CampaignAggregation:
     ext_regime_gating_impacted_ratio: float = 0.0
     ext_regime_supportive_ratio: float = 0.0
 
+    # Phase 16J: paper run evidence aggregation
+    total_paper_runs: int = 0
+    passed_runs: int = 0
+    warned_runs: int = 0
+    blocked_runs: int = 0
+    inconclusive_runs: int = 0
+    complete_runs: int = 0
+    paper_run_pass_ratio: float = 0.0
+    paper_run_complete_ratio: float = 0.0
+    paper_run_evidence_supportive: bool = False
+
 
 def _is_scenario_dominated(step_count: int, dominated_steps: int) -> bool:
     """True when a scenario condition dominates at least half of all steps."""
@@ -361,7 +372,57 @@ def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignA
             total_route_abstains=0,
             verdict_consistency=AggregateConsistency.INSUFFICIENT,
             calibrations=(),
+            # ext regime fields
+            campaigns_with_ext_regime=0,
+            campaigns_ext_regime_fresh=0,
+            campaigns_ext_regime_high_risk=0,
+            ext_regime_coverage_ratio=0.0,
+            campaigns_with_ext_regime_scenario=0,
+            campaigns_with_meaningful_ext_regime_scenario=0,
+            campaigns_ext_regime_stale_dominated=0,
+            campaigns_ext_regime_unavailable_dominated=0,
+            campaigns_ext_regime_high_risk_dominated=0,
+            campaigns_ext_regime_gating_impacted=0,
+            campaigns_ext_regime_supportive=0,
+            ext_regime_meaningful_coverage_ratio=0.0,
+            ext_regime_stale_dominated_ratio=0.0,
+            ext_regime_unavailable_dominated_ratio=0.0,
+            ext_regime_high_risk_dominated_ratio=0.0,
+            ext_regime_gating_impacted_ratio=0.0,
+            ext_regime_supportive_ratio=0.0,
+            # paper run fields
+            total_paper_runs=0,
+            passed_runs=0,
+            warned_runs=0,
+            blocked_runs=0,
+            inconclusive_runs=0,
+            complete_runs=0,
+            paper_run_pass_ratio=0.0,
+            paper_run_complete_ratio=0.0,
+            paper_run_evidence_supportive=False,
         )
+    # Phase 16J: paper run evidence aggregation
+    total_paper_runs = 0
+    passed_runs = 0
+    warned_runs = 0
+    blocked_runs = 0
+    inconclusive_runs = 0
+    complete_runs = 0
+    # Paper run evidence aggregation (Phase 16J)
+    # A paper run is a campaign with a verdict (any status)
+    for r in reports:
+        total_paper_runs += 1
+        v = AcceptanceVerdict(r.verdict)
+        if v == AcceptanceVerdict.PASS:
+            passed_runs += 1
+            complete_runs += 1
+        elif v == AcceptanceVerdict.PASS_WITH_WARNINGS:
+            warned_runs += 1
+            complete_runs += 1
+        elif v == AcceptanceVerdict.FAIL:
+            blocked_runs += 1
+        elif v == AcceptanceVerdict.INCONCLUSIVE:
+            inconclusive_runs += 1
 
     passed = 0
     warned = 0
@@ -483,6 +544,11 @@ def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignA
     else:
         consistency = AggregateConsistency.MIXED
 
+    paper_run_pass_ratio = (passed_runs + warned_runs) / total_paper_runs if total_paper_runs > 0 else 0.0
+    paper_run_complete_ratio = complete_runs / total_paper_runs if total_paper_runs > 0 else 0.0
+    paper_run_evidence_supportive = (
+        total_paper_runs > 0 and paper_run_pass_ratio >= 0.8 and paper_run_complete_ratio >= 0.8
+    )
     return CampaignAggregation(
         total_campaigns=n,
         passed_count=passed,
@@ -521,6 +587,16 @@ def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignA
         ext_regime_high_risk_dominated_ratio=(ext_regime_high_risk_dominated_count / n if n > 0 else 0.0),
         ext_regime_gating_impacted_ratio=(ext_regime_gating_impacted_count / n if n > 0 else 0.0),
         ext_regime_supportive_ratio=(ext_regime_supportive_count / n if n > 0 else 0.0),
+        # Phase 16J: paper run evidence aggregation
+        total_paper_runs=total_paper_runs,
+        passed_runs=passed_runs,
+        warned_runs=warned_runs,
+        blocked_runs=blocked_runs,
+        inconclusive_runs=inconclusive_runs,
+        complete_runs=complete_runs,
+        paper_run_pass_ratio=paper_run_pass_ratio,
+        paper_run_complete_ratio=paper_run_complete_ratio,
+        paper_run_evidence_supportive=paper_run_evidence_supportive,
     )
 
 
@@ -1209,6 +1285,16 @@ def _aggregation_to_dict(agg: CampaignAggregation) -> dict:
         "ext_regime_gating_impacted_ratio": agg.ext_regime_gating_impacted_ratio,
         "ext_regime_supportive_ratio": agg.ext_regime_supportive_ratio,
         "calibrations": [_calibration_to_dict(c) for c in agg.calibrations],
+        # Phase 16J: paper run evidence aggregation
+        "total_paper_runs": agg.total_paper_runs,
+        "passed_runs": agg.passed_runs,
+        "warned_runs": agg.warned_runs,
+        "blocked_runs": agg.blocked_runs,
+        "inconclusive_runs": agg.inconclusive_runs,
+        "complete_runs": agg.complete_runs,
+        "paper_run_pass_ratio": agg.paper_run_pass_ratio,
+        "paper_run_complete_ratio": agg.paper_run_complete_ratio,
+        "paper_run_evidence_supportive": agg.paper_run_evidence_supportive,
     }
 
 
@@ -1278,7 +1364,7 @@ def execution_sufficiency_summary(agg: CampaignAggregation) -> dict:
 
 
 def verdict_distribution(agg: CampaignAggregation) -> dict:
-    """Campaign verdict distribution summary."""
+    """Campaign verdict distribution summary, including paper run evidence (Phase 16J)."""
     return {
         "total": agg.total_campaigns,
         "passed": agg.passed_count,
@@ -1286,6 +1372,31 @@ def verdict_distribution(agg: CampaignAggregation) -> dict:
         "failed": agg.failed_count,
         "inconclusive": agg.inconclusive_count,
         "consistency": agg.verdict_consistency.value,
+        # Phase 16J: paper run evidence
+        "total_paper_runs": agg.total_paper_runs,
+        "passed_runs": agg.passed_runs,
+        "warned_runs": agg.warned_runs,
+        "blocked_runs": agg.blocked_runs,
+        "inconclusive_runs": agg.inconclusive_runs,
+        "complete_runs": agg.complete_runs,
+        "paper_run_pass_ratio": agg.paper_run_pass_ratio,
+        "paper_run_complete_ratio": agg.paper_run_complete_ratio,
+        "paper_run_evidence_supportive": agg.paper_run_evidence_supportive,
+    }
+
+
+def paper_run_summary(agg: CampaignAggregation) -> dict:
+    """Deterministic summary of paper run evidence (Phase 16J)."""
+    return {
+        "total_paper_runs": agg.total_paper_runs,
+        "passed_runs": agg.passed_runs,
+        "warned_runs": agg.warned_runs,
+        "blocked_runs": agg.blocked_runs,
+        "inconclusive_runs": agg.inconclusive_runs,
+        "complete_runs": agg.complete_runs,
+        "paper_run_pass_ratio": agg.paper_run_pass_ratio,
+        "paper_run_complete_ratio": agg.paper_run_complete_ratio,
+        "paper_run_evidence_supportive": agg.paper_run_evidence_supportive,
     }
 
 

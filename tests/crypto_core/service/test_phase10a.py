@@ -1,47 +1,236 @@
-"""Tests for Phase 10A — EI-aware campaign gates + stability rollup.
-
-Covers:
-  1.  StabilityRollup — frozen dataclass, defaults.
-  2.  CampaignSnapshot — new EI + stability fields.
-  3.  AcceptanceThresholds — EI threshold defaults present.
-  4.  AcceptancePolicy — PASS when EI healthy.
-  5.  AcceptancePolicy — FAIL when max_ei_route_blocks breached.
-  6.  AcceptancePolicy — FAIL when max_ei_route_abstains breached.
-  7.  AcceptancePolicy — FAIL when ei_degraded_is_hard_fail and degraded.
-  8.  AcceptancePolicy — PASS_WITH_WARNINGS when soft EI thresholds breached.
-  9.  AcceptancePolicy — FAIL when max_recovery_incidents breached.
-  10. AcceptancePolicy — FAIL when max_degraded_intervals breached (via stability).
-  11. CampaignMetadata — EI fields round-trip serialization.
-  12. CampaignMetadata — EI fields default to zero.
-  13. CampaignController — _update_counters tracks EI degradation.
-  14. CampaignController — _update_counters tracks recovery incidents.
-  15. CampaignController — _update_counters tracks route blocks from session.
-  16. CampaignController — snapshot populates EI fields.
-  17. CampaignController — snapshot includes StabilityRollup.
-  18. CampaignController — finalize report includes stability.
-  19. _report_to_dict — serializes EI + stability fields.
-  20. campaign_readiness_flags — PASS verdict → paper_campaign_completed.
-  21. campaign_readiness_flags — FAIL verdict → paper_campaign_completed=False.
-  22. campaign_readiness_flags — fills observed → paper_fill_calibration_available.
-  23. CampaignReport — stability field present.
-"""
-
+# from __future__ import annotations must be the first line, no BOM or whitespace before
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
+
+from crypto_core.service.campaign import (
+    AcceptanceResult,
+    AcceptanceVerdict,
+    CampaignReport,
+    CampaignSnapshot,
+    SymbolParticipation,
+)
+from crypto_core.service.promotion_review import build_campaign_aggregation, paper_run_summary, verdict_distribution
+
+
+def make_report(verdict, fills=1):
+    snap = CampaignSnapshot(
+        campaign_id="c1",
+        status="completed",
+        started_at_ns=1,
+        updated_at_ns=2,
+        elapsed_seconds=10.0,
+        run_id="r1",
+        service_mode="paper",
+        session_mode="test",
+        total_events_enqueued=100,
+        total_events_dropped=0,
+        total_cycles=10,
+        approved_cycles=10,
+        blocked_cycles=0,
+        failed_cycles=0,
+        total_fills=fills,
+        queue_overflows=0,
+        watchdog_stalls=0,
+        service_restarts=0,
+        persistence_failures=0,
+        symbol_count=1,
+        symbols_ready=1,
+        symbols_blocked=0,
+        symbols_with_events=1,
+        symbols_with_cycles=1,
+        readiness_level="paper_live",
+        health_trend="good",
+        persistence_status="ok",
+        nav_usd=None,
+        last_error=None,
+        ei_degraded=False,
+        ei_route_blocks=0,
+        ei_route_abstains=0,
+        recovery_incidents=0,
+        stability=None,
+        pending_markout_count=0,
+        completed_markout_count=0,
+        persisted_tca_count=0,
+        persisted_attribution_count=0,
+        registered_fill_count=0,
+        ext_regime_available=False,
+        ext_regime_fresh=False,
+        ext_regime_high_risk=False,
+        ext_regime_any_unavailable=False,
+        ext_regime_evidence_sufficient=False,
+        ext_regime_summary="",
+        ext_regime_scenario_available=False,
+        ext_regime_scenario_step_count=0,
+        ext_regime_scenario_accepted_steps=0,
+        ext_regime_scenario_rejected_steps=0,
+        ext_regime_scenario_replayed_steps=0,
+        ext_regime_activation_blocked_steps=0,
+        ext_regime_execution_blocked_steps=0,
+        ext_regime_activation_reduced_steps=0,
+        ext_regime_stale_steps=0,
+        ext_regime_unavailable_steps=0,
+        ext_regime_high_risk_steps=0,
+        ext_regime_safe_steps=0,
+        ext_regime_scenario_summary="",
+    )
+    acc = AcceptanceResult(
+        verdict=verdict,
+        criteria=(),
+        failed_criteria=(),
+        warning_criteria=(),
+        insufficient_criteria=(),
+        summary="",
+    )
+    return CampaignReport(
+        campaign_id="c1",
+        status="completed",
+        verdict=verdict.value,
+        started_at_ns=1,
+        completed_at_ns=2,
+        elapsed_seconds=10.0,
+        run_id="r1",
+        snapshot=snap,
+        acceptance=acc,
+        symbol_participation=(
+            SymbolParticipation(
+                symbol="BTCUSDT",
+                exchange="binance",
+                feed_ready=True,
+                blocked=False,
+                events_observed=True,
+                cycles_observed=True,
+            ),
+        ),
+        config={},
+    )
+
+
+def test_paper_run_aggregation_pass():
+    reports = (
+        make_report(AcceptanceVerdict.PASS),
+        make_report(AcceptanceVerdict.PASS_WITH_WARNINGS),
+        make_report(AcceptanceVerdict.PASS),
+    )
+    agg = build_campaign_aggregation(reports)
+    vdist = verdict_distribution(agg)
+    psum = paper_run_summary(agg)
+    assert agg.total_paper_runs == 3
+    assert agg.passed_runs == 2
+    assert agg.warned_runs == 1
+    assert agg.blocked_runs == 0
+    assert agg.inconclusive_runs == 0
+    assert agg.complete_runs == 3
+    assert agg.paper_run_pass_ratio == 1.0
+    assert agg.paper_run_complete_ratio == 1.0
+    assert agg.paper_run_evidence_supportive is True
+    # Check reporting surfaces
+    assert vdist["total_paper_runs"] == 3
+    assert vdist["passed_runs"] == 2
+    assert vdist["warned_runs"] == 1
+    assert vdist["blocked_runs"] == 0
+    assert vdist["inconclusive_runs"] == 0
+    assert vdist["complete_runs"] == 3
+    assert vdist["paper_run_pass_ratio"] == 1.0
+    assert vdist["paper_run_complete_ratio"] == 1.0
+    assert vdist["paper_run_evidence_supportive"] is True
+    assert psum["total_paper_runs"] == 3
+    assert psum["passed_runs"] == 2
+    assert psum["warned_runs"] == 1
+    assert psum["blocked_runs"] == 0
+    assert psum["inconclusive_runs"] == 0
+    assert psum["complete_runs"] == 3
+    assert psum["paper_run_pass_ratio"] == 1.0
+    assert psum["paper_run_complete_ratio"] == 1.0
+    assert psum["paper_run_evidence_supportive"] is True
+
+
+def test_paper_run_aggregation_mixed():
+    reports = (
+        make_report(AcceptanceVerdict.PASS),
+        make_report(AcceptanceVerdict.FAIL),
+        make_report(AcceptanceVerdict.PASS_WITH_WARNINGS),
+        make_report(AcceptanceVerdict.INCONCLUSIVE),
+    )
+    agg = build_campaign_aggregation(reports)
+    vdist = verdict_distribution(agg)
+    psum = paper_run_summary(agg)
+    assert agg.total_paper_runs == 4
+    assert agg.passed_runs == 1
+    assert agg.warned_runs == 1
+    assert agg.blocked_runs == 1
+    assert agg.inconclusive_runs == 1
+    assert agg.complete_runs == 2
+    assert agg.paper_run_pass_ratio == 0.5
+    assert agg.paper_run_complete_ratio == 0.5
+    assert agg.paper_run_evidence_supportive is False
+    # Check reporting surfaces
+    assert vdist["total_paper_runs"] == 4
+    assert vdist["passed_runs"] == 1
+    assert vdist["warned_runs"] == 1
+    assert vdist["blocked_runs"] == 1
+    assert vdist["inconclusive_runs"] == 1
+    assert vdist["complete_runs"] == 2
+    assert vdist["paper_run_pass_ratio"] == 0.5
+    assert vdist["paper_run_complete_ratio"] == 0.5
+    assert vdist["paper_run_evidence_supportive"] is False
+    assert psum["total_paper_runs"] == 4
+    assert psum["passed_runs"] == 1
+    assert psum["warned_runs"] == 1
+    assert psum["blocked_runs"] == 1
+    assert psum["inconclusive_runs"] == 1
+    assert psum["complete_runs"] == 2
+    assert psum["paper_run_pass_ratio"] == 0.5
+    assert psum["paper_run_complete_ratio"] == 0.5
+    assert psum["paper_run_evidence_supportive"] is False
+
+
+def test_paper_run_aggregation_empty():
+    agg = build_campaign_aggregation(())
+    vdist = verdict_distribution(agg)
+    psum = paper_run_summary(agg)
+    assert agg.total_paper_runs == 0
+    assert agg.passed_runs == 0
+    assert agg.warned_runs == 0
+    assert agg.blocked_runs == 0
+    assert agg.inconclusive_runs == 0
+    assert agg.complete_runs == 0
+    assert agg.paper_run_pass_ratio == 0.0
+    assert agg.paper_run_complete_ratio == 0.0
+    assert agg.paper_run_evidence_supportive is False
+    # Check reporting surfaces
+    assert vdist["total_paper_runs"] == 0
+    assert vdist["passed_runs"] == 0
+    assert vdist["warned_runs"] == 0
+    assert vdist["blocked_runs"] == 0
+    assert vdist["inconclusive_runs"] == 0
+    assert vdist["complete_runs"] == 0
+    assert vdist["paper_run_pass_ratio"] == 0.0
+    assert vdist["paper_run_complete_ratio"] == 0.0
+    assert vdist["paper_run_evidence_supportive"] is False
+    assert psum["total_paper_runs"] == 0
+    assert psum["passed_runs"] == 0
+    assert psum["warned_runs"] == 0
+    assert psum["blocked_runs"] == 0
+    assert psum["inconclusive_runs"] == 0
+    assert psum["complete_runs"] == 0
+    assert psum["paper_run_pass_ratio"] == 0.0
+    assert psum["paper_run_complete_ratio"] == 0.0
+    assert psum["paper_run_evidence_supportive"] is False
+
+
+# Tests for Phase 10A — EI-aware campaign gates + stability rollup.
+# (see original docstring for details)
+
+from pathlib import Path
 
 from crypto_core.runtime.models import RuntimeStatus
 from crypto_core.service.campaign import (
     AcceptancePolicy,
     AcceptanceThresholds,
-    AcceptanceVerdict,
     CampaignConfig,
     CampaignMetadata,
-    CampaignReport,
     CampaignSleeveLinkSummary,
-    CampaignSnapshot,
     StabilityRollup,
     campaign_metadata_from_dict,
 )
