@@ -54,6 +54,7 @@ from crypto_core.service.artifact_export import (
     export_paper_intent_batch_result,
     export_paper_pnl_ledger,
     export_paper_portfolio_risk_snapshot,
+    export_paper_risk_limit_decision,
     export_sleeve_portfolio_snapshot,
     load_escalation_decision,
     load_operator_decision_pack,
@@ -64,6 +65,7 @@ from crypto_core.service.artifact_export import (
     load_paper_intent_batch_result,
     load_paper_pnl_ledger,
     load_paper_portfolio_risk_snapshot,
+    load_paper_risk_limit_decision,
     load_sleeve_portfolio_snapshot,
     operator_disposition_from_verdict,
 )
@@ -178,6 +180,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     PaperIntentBatchResult,
     PaperPnLLedger,
     PaperPortfolioRiskSnapshot,
+    PaperRiskLimitDecision,
+    PaperRiskLimitPolicy,
     PaperShadowEvidenceBundle,
     PaperShadowRunEvidenceReport,
     PaperShadowSessionController,
@@ -200,6 +204,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     paper_intent_batch_to_dict,
     paper_pnl_ledger_to_dict,
     paper_portfolio_risk_snapshot_to_dict,
+    paper_risk_limit_decision_to_dict,
     paper_shadow_evidence_bundle_to_dict,
     paper_shadow_run_evidence_report_to_dict,
     paper_shadow_session_snapshot_to_dict,
@@ -1172,6 +1177,24 @@ class ServiceOrchestrator:
         """Serialize a deterministic paper-only portfolio risk/equity snapshot."""
         return paper_portfolio_risk_snapshot_to_dict(snapshot)
 
+    def paper_risk_limit_decision(
+        self,
+        snapshot: PaperPortfolioRiskSnapshot | dict,
+        *,
+        policy: PaperRiskLimitPolicy | dict | None = None,
+        decision_id: str | None = None,
+    ) -> PaperRiskLimitDecision:
+        """Evaluate deterministic paper risk-limit / kill-switch decision."""
+        return self._ensure_paper_shadow_session_controller().paper_risk_limit_decision(
+            snapshot,
+            policy=policy,
+            decision_id=decision_id,
+        )
+
+    def paper_risk_limit_decision_dict(self, decision: PaperRiskLimitDecision) -> dict:
+        """Serialize a deterministic paper risk-limit / kill-switch decision."""
+        return paper_risk_limit_decision_to_dict(decision)
+
     def export_paper_shadow_session_snapshot(self):
         """Persist the current paper/shadow session snapshot via EvidenceStore."""
         if self._evidence_store is None:
@@ -1338,6 +1361,21 @@ class ServiceOrchestrator:
         if self._evidence_store is None:
             raise RuntimeError("No evidence store configured for paper portfolio risk snapshot load")
         return load_paper_portfolio_risk_snapshot(evidence_store=self._evidence_store)
+
+    def export_paper_risk_limit_decision(self, decision: PaperRiskLimitDecision):
+        """Persist a paper-only risk-limit / kill-switch decision via EvidenceStore."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper risk limit decision export")
+        return export_paper_risk_limit_decision(
+            decision=decision,
+            evidence_store=self._evidence_store,
+        )
+
+    def load_paper_risk_limit_decision(self) -> PaperRiskLimitDecision:
+        """Load the latest persisted paper-only risk-limit / kill-switch decision."""
+        if self._evidence_store is None:
+            raise RuntimeError("No evidence store configured for paper risk limit decision load")
+        return load_paper_risk_limit_decision(evidence_store=self._evidence_store)
 
     def paper_shadow_run_evidence_report(
         self,

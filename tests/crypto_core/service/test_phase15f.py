@@ -17,6 +17,7 @@ from crypto_core.service.artifact_export import (
     export_paper_intent_batch_result,
     export_paper_pnl_ledger,
     export_paper_portfolio_risk_snapshot,
+    export_paper_risk_limit_decision,
     export_paper_shadow_activation_plan,
     export_paper_shadow_evidence_bundle,
     export_paper_shadow_feed_replay_plan,
@@ -34,6 +35,7 @@ from crypto_core.service.artifact_export import (
     load_paper_intent_batch_result,
     load_paper_pnl_ledger,
     load_paper_portfolio_risk_snapshot,
+    load_paper_risk_limit_decision,
     load_paper_shadow_activation_plan,
     load_paper_shadow_evidence_bundle,
     load_paper_shadow_feed_replay_plan,
@@ -72,6 +74,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     PaperIntentValidationResult,
     PaperPnLStatus,
     PaperPortfolioRiskStatus,
+    PaperRiskLimitDecisionStatus,
+    PaperRiskLimitPolicy,
     PaperShadowEvidenceBundle,
     PaperShadowRunEvidenceStatus,
     PaperShadowSessionController,
@@ -112,6 +116,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     paper_pnl_ledger_to_dict,
     paper_portfolio_risk_snapshot_from_dict,
     paper_portfolio_risk_snapshot_to_dict,
+    paper_risk_limit_decision_from_dict,
+    paper_risk_limit_decision_to_dict,
     paper_shadow_evidence_bundle_from_dict,
     paper_shadow_evidence_bundle_to_dict,
     paper_shadow_run_evidence_report_from_dict,
@@ -583,6 +589,36 @@ def _paper_cost_result_for_intent(
         fill_result,
         cost_model=cost_model or PaperCostModel(fee_bps=10.0, slippage_bps=5.0),
     )
+
+
+def _paper_risk_snapshot_for_price(
+    *,
+    latest_price: float = 105.0,
+    entry_price: float = 100.0,
+    equity_start: float = 1_000.0,
+):
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(1, 40)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+    controller.prepare(plan)
+    controller.start()
+    cost_result = _paper_cost_result_for_intent(
+        controller,
+        batch_id="risk-limit-source",
+        event_ts_ns=_T0_NS + 101,
+        intent_ts_ns=_T0_NS + 151,
+        price=entry_price,
+    )
+    ledger = controller.apply_paper_pnl_ledger(cost_result)
+    controller.record_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 102, price=latest_price),))
+    )
+    risk = controller.paper_portfolio_risk_snapshot(
+        ledger,
+        equity_start=equity_start,
+        equity_history=(equity_start,),
+    )
+    return controller, risk
 
 
 def _paper_data_source_payload(
@@ -4616,6 +4652,178 @@ def test_service_orchestrator_paper_portfolio_risk_helpers_and_artifacts(tmp_pat
     store.save_snapshot("crypto_paper_portfolio_risk_snapshot", ["bad"])
     with pytest.raises(PaperShadowSessionCorruptError):
         load_paper_portfolio_risk_snapshot(evidence_store=store)
+
+
+def test_paper_risk_limit_passes_within_limits() -> None:
+    controller, risk = _paper_risk_snapshot_for_price(latest_price=105.0)
+
+    decision = controller.paper_risk_limit_decision(
+        risk,
+        policy=PaperRiskLimitPolicy(
+            max_gross_exposure=20.0,
+            max_net_exposure=20.0,
+            max_open_positions=1,
+            max_unrealized_loss=2.0,
+            max_total_loss=2.0,
+        ),
+    )
+
+    assert decision.status == PaperRiskLimitDecisionStatus.PASS
+    assert decision.passed is True
+    assert decision.block_new_intents is False
+    assert decision.stop_session is False
+    assert decision.breached_limits == ()
+    assert decision.reasons == ()
+    assert paper_risk_limit_decision_from_dict(paper_risk_limit_decision_to_dict(decision)) == decision
+
+
+def test_paper_risk_limit_gross_exposure_breach_blocks_new_intents() -> None:
+    controller, risk = _paper_risk_snapshot_for_price(latest_price=105.0)
+
+    decision = controller.paper_risk_limit_decision(
+        risk,
+        policy=PaperRiskLimitPolicy(max_gross_exposure=5.0),
+    )
+
+    assert decision.status == PaperRiskLimitDecisionStatus.BLOCK_NEW_INTENTS
+    assert decision.passed is False
+    assert decision.block_new_intents is True
+    assert decision.stop_session is False
+    assert decision.breached_limits == ("max_gross_exposure",)
+
+
+def test_paper_risk_limit_net_exposure_breach_blocks_new_intents() -> None:
+    controller, risk = _paper_risk_snapshot_for_price(latest_price=105.0)
+
+    decision = controller.paper_risk_limit_decision(
+        risk,
+        policy=PaperRiskLimitPolicy(max_net_exposure=5.0),
+    )
+
+    assert decision.status == PaperRiskLimitDecisionStatus.BLOCK_NEW_INTENTS
+    assert decision.breached_limits == ("max_net_exposure",)
+    assert decision.block_new_intents is True
+
+
+def test_paper_risk_limit_open_position_breach_blocks_new_intents() -> None:
+    controller, risk = _paper_risk_snapshot_for_price(latest_price=105.0)
+
+    decision = controller.paper_risk_limit_decision(
+        risk,
+        policy=PaperRiskLimitPolicy(max_open_positions=0),
+    )
+
+    assert decision.status == PaperRiskLimitDecisionStatus.BLOCK_NEW_INTENTS
+    assert decision.breached_limits == ("max_open_positions",)
+
+
+def test_paper_risk_limit_unrealized_and_total_loss_breach_stops_session() -> None:
+    controller, risk = _paper_risk_snapshot_for_price(latest_price=90.0)
+
+    decision = controller.paper_risk_limit_decision(
+        risk,
+        policy=PaperRiskLimitPolicy(max_unrealized_loss=0.50, max_total_loss=0.50),
+    )
+
+    assert risk.unrealized_pnl == pytest.approx(-1.005)
+    assert decision.status == PaperRiskLimitDecisionStatus.STOP_SESSION
+    assert decision.block_new_intents is True
+    assert decision.stop_session is True
+    assert decision.breached_limits == ("max_total_loss", "max_unrealized_loss")
+
+
+def test_paper_risk_limit_incomplete_prices_block_fail_closed() -> None:
+    plan = _ready_activation_plan(_sleeve("active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(1, 20)))
+    controller = PaperShadowSessionController(clock_ns=lambda: next(times))
+
+    controller.prepare(plan)
+    controller.start()
+    cost_result = _paper_cost_result_for_intent(controller, batch_id="risk-limit-incomplete")
+    ledger = controller.apply_paper_pnl_ledger(cost_result)
+    risk = build_paper_portfolio_risk_snapshot(ledger=ledger, latest_prices=(), equity_start=1_000.0)
+
+    decision = controller.paper_risk_limit_decision(risk)
+
+    assert risk.status == PaperPortfolioRiskStatus.INCOMPLETE
+    assert decision.status == PaperRiskLimitDecisionStatus.BLOCK_NEW_INTENTS
+    assert decision.breached_limits == ("complete_prices_required", "risk_snapshot_incomplete")
+    assert decision.reasons == (
+        "complete_prices_required",
+        "missing_latest_market_price",
+        "risk_snapshot_incomplete",
+    )
+
+
+def test_paper_risk_limit_invalid_policy_fails_closed() -> None:
+    controller, risk = _paper_risk_snapshot_for_price(latest_price=105.0)
+
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.paper_risk_limit_decision(risk, policy=PaperRiskLimitPolicy(max_gross_exposure=-1.0))
+    with pytest.raises(PaperShadowSessionCorruptError):
+        controller.paper_risk_limit_decision(risk, policy={"max_total_loss": float("nan")})
+
+
+def test_paper_risk_limit_deterministic_replay() -> None:
+    def run_once() -> tuple[dict, dict]:
+        controller, risk = _paper_risk_snapshot_for_price(latest_price=105.0)
+        decision = controller.paper_risk_limit_decision(
+            risk,
+            policy=PaperRiskLimitPolicy(max_gross_exposure=20.0, max_open_positions=1),
+        )
+        return paper_risk_limit_decision_to_dict(decision), paper_portfolio_risk_snapshot_to_dict(risk)
+
+    assert run_once() == run_once()
+
+
+def test_service_orchestrator_paper_risk_limit_helpers_and_artifacts(tmp_path) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    plan = _ready_activation_plan(_sleeve("svc-active", effective_allocation=0.20, target_allocation=0.20))
+    times = iter((_T0_NS + value for value in range(410, 450)))
+    orch = ServiceOrchestrator(
+        service=_mock_service(),
+        evidence_store=store,
+        readiness_level="paper_live",
+        sleeve_workflow_clock_ns=lambda: next(times),
+    )
+
+    orch.prepare_paper_shadow_session(plan=plan)
+    orch.start_paper_shadow_session()
+    orch.record_paper_shadow_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 101, price=100.0),))
+    )
+    intent_result = orch.record_paper_intent_batch(
+        build_paper_intent_batch(
+            (_paper_intent("svc-active", "BTCUSDT", venue="binance"),),
+            batch_id="svc-risk-limit-intents",
+        )
+    )
+    fill_result = orch.simulate_paper_fills(intent_result)
+    cost_result = orch.evaluate_paper_costs(fill_result, cost_model=PaperCostModel(fee_bps=10.0, slippage_bps=5.0))
+    ledger = orch.apply_paper_pnl_ledger(cost_result)
+    orch.record_paper_shadow_market_event_batch(
+        build_market_event_batch((_market_event("BTCUSDT", venue="binance", ts_ns=_T0_NS + 102, price=105.0),))
+    )
+    risk = orch.paper_portfolio_risk_snapshot(ledger, equity_start=1_000.0, equity_history=(1_000.0,))
+    decision = orch.paper_risk_limit_decision(risk, policy=PaperRiskLimitPolicy(max_gross_exposure=20.0))
+    rendered = orch.paper_risk_limit_decision_dict(decision)
+
+    assert rendered["status"] == "pass"
+    assert rendered["passed"] is True
+    assert rendered["block_new_intents"] is False
+    assert rendered["stop_session"] is False
+    assert rendered["paper_only"] is True
+    assert rendered["real_orders_enabled"] is False
+    assert rendered["real_money_enabled"] is False
+
+    orch.export_paper_risk_limit_decision(decision)
+    assert orch.load_paper_risk_limit_decision() == decision
+    export_paper_risk_limit_decision(decision=decision, evidence_store=store)
+    assert load_paper_risk_limit_decision(evidence_store=store) == decision
+
+    store.save_snapshot("crypto_paper_risk_limit_decision", ["bad"])
+    with pytest.raises(PaperShadowSessionCorruptError):
+        load_paper_risk_limit_decision(evidence_store=store)
 
 
 def test_service_orchestrator_feed_replay_helper_and_artifacts(tmp_path) -> None:

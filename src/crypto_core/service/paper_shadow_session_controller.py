@@ -100,6 +100,13 @@ class PaperPortfolioRiskStatus(str, Enum):
     EMPTY = "empty"
 
 
+class PaperRiskLimitDecisionStatus(str, Enum):
+    PASS = "pass"  # noqa: S105 - risk decision outcome, not a credential.
+    WARN = "warn"
+    BLOCK_NEW_INTENTS = "block_new_intents"
+    STOP_SESSION = "stop_session"
+
+
 class PaperShadowRunEvidenceStatus(str, Enum):
     PASS = "pass"  # noqa: S105 - run evidence outcome, not a credential.
     WARN = "warn"
@@ -409,6 +416,36 @@ class PaperPortfolioRiskSnapshot:
     real_orders_enabled: bool = False
     real_money_enabled: bool = False
     operator_summary: str = "Paper portfolio risk has not been assessed."
+
+
+@dataclass(frozen=True)
+class PaperRiskLimitPolicy:
+    policy_id: str = "default-paper-risk-limit-policy"
+    max_gross_exposure: float | None = None
+    max_net_exposure: float | None = None
+    max_open_positions: int | None = None
+    max_unrealized_loss: float | None = None
+    max_total_loss: float | None = None
+    require_complete_prices: bool = True
+
+
+@dataclass(frozen=True)
+class PaperRiskLimitDecision:
+    decision_id: str
+    session_id: str
+    as_of_ns: int
+    source_risk_snapshot_id: str
+    policy: PaperRiskLimitPolicy
+    status: PaperRiskLimitDecisionStatus
+    passed: bool
+    block_new_intents: bool
+    stop_session: bool
+    breached_limits: tuple[str, ...] = ()
+    reasons: tuple[str, ...] = ()
+    paper_only: bool = True
+    real_orders_enabled: bool = False
+    real_money_enabled: bool = False
+    operator_summary: str = "Paper risk limits have not been assessed."
 
 
 @dataclass(frozen=True)
@@ -1093,6 +1130,27 @@ class PaperShadowSessionController:
         )
         _validate_paper_portfolio_risk_snapshot(risk)
         return risk
+
+    def paper_risk_limit_decision(
+        self,
+        snapshot: PaperPortfolioRiskSnapshot | dict,
+        *,
+        policy: PaperRiskLimitPolicy | dict | None = None,
+        decision_id: str | None = None,
+    ) -> PaperRiskLimitDecision:
+        """Evaluate deterministic paper risk-limit and kill-switch decisions."""
+        normalized = paper_portfolio_risk_snapshot_from_dict(snapshot) if isinstance(snapshot, dict) else snapshot
+        _validate_paper_portfolio_risk_snapshot(normalized)
+        if normalized.session_id != self._snapshot.session_id:
+            raise PaperShadowSessionCorruptError("paper risk limit source snapshot session mismatch")
+        decision = build_paper_risk_limit_decision(
+            risk_snapshot=normalized,
+            policy=policy,
+            decision_id=decision_id,
+            as_of_ns=self._now_ns(),
+        )
+        _validate_paper_risk_limit_decision(decision)
+        return decision
 
     def replay_feed(self, plan: FeedReplayPlan | dict | tuple[MarketEventBatch, ...]) -> FeedReplayResult:
         if self._snapshot.status != PaperShadowSessionStatus.RUNNING:
@@ -2411,6 +2469,83 @@ def paper_portfolio_risk_snapshot_from_dict(data: dict) -> PaperPortfolioRiskSna
     return snapshot
 
 
+def paper_risk_limit_policy_to_dict(policy: PaperRiskLimitPolicy) -> dict:
+    _validate_paper_risk_limit_policy(policy)
+    return {
+        "policy_id": policy.policy_id,
+        "max_gross_exposure": policy.max_gross_exposure,
+        "max_net_exposure": policy.max_net_exposure,
+        "max_open_positions": policy.max_open_positions,
+        "max_unrealized_loss": policy.max_unrealized_loss,
+        "max_total_loss": policy.max_total_loss,
+        "require_complete_prices": policy.require_complete_prices,
+    }
+
+
+def paper_risk_limit_policy_from_dict(data: dict) -> PaperRiskLimitPolicy:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper risk limit policy must be a dict, got {type(data).__name__!r}")
+    policy = PaperRiskLimitPolicy(
+        policy_id=_require_non_empty_str(data.get("policy_id", "default-paper-risk-limit-policy"), "policy_id"),
+        max_gross_exposure=_optional_non_negative_float(data.get("max_gross_exposure"), "max_gross_exposure"),
+        max_net_exposure=_optional_non_negative_float(data.get("max_net_exposure"), "max_net_exposure"),
+        max_open_positions=_optional_non_negative_int(data.get("max_open_positions"), "max_open_positions"),
+        max_unrealized_loss=_optional_non_negative_float(data.get("max_unrealized_loss"), "max_unrealized_loss"),
+        max_total_loss=_optional_non_negative_float(data.get("max_total_loss"), "max_total_loss"),
+        require_complete_prices=_bool_or_default(data, "require_complete_prices", True),
+    )
+    _validate_paper_risk_limit_policy(policy)
+    return policy
+
+
+def paper_risk_limit_decision_to_dict(decision: PaperRiskLimitDecision) -> dict:
+    _validate_paper_risk_limit_decision(decision)
+    return {
+        "decision_id": decision.decision_id,
+        "session_id": decision.session_id,
+        "as_of_ns": decision.as_of_ns,
+        "source_risk_snapshot_id": decision.source_risk_snapshot_id,
+        "policy": paper_risk_limit_policy_to_dict(decision.policy),
+        "status": decision.status.value,
+        "passed": decision.passed,
+        "block_new_intents": decision.block_new_intents,
+        "stop_session": decision.stop_session,
+        "breached_limits": list(decision.breached_limits),
+        "reasons": list(decision.reasons),
+        "paper_only": decision.paper_only,
+        "real_orders_enabled": decision.real_orders_enabled,
+        "real_money_enabled": decision.real_money_enabled,
+        "operator_summary": decision.operator_summary,
+    }
+
+
+def paper_risk_limit_decision_from_dict(data: dict) -> PaperRiskLimitDecision:
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(f"Paper risk limit decision must be a dict, got {type(data).__name__!r}")
+    decision = PaperRiskLimitDecision(
+        decision_id=_require_non_empty_str(data.get("decision_id"), "decision_id"),
+        session_id=_require_non_empty_str(data.get("session_id"), "session_id"),
+        as_of_ns=_require_non_negative_int(data.get("as_of_ns"), "as_of_ns"),
+        source_risk_snapshot_id=_require_non_empty_str(
+            data.get("source_risk_snapshot_id"),
+            "source_risk_snapshot_id",
+        ),
+        policy=paper_risk_limit_policy_from_dict(_dict_value(data.get("policy"), "policy")),
+        status=_paper_risk_limit_decision_status_from_value(data.get("status")),
+        passed=_bool_or_default(data, "passed", False),
+        block_new_intents=_bool_or_default(data, "block_new_intents", True),
+        stop_session=_bool_or_default(data, "stop_session", False),
+        breached_limits=_sorted_unique(data.get("breached_limits", ())),
+        reasons=_sorted_unique(data.get("reasons", ())),
+        paper_only=_bool_or_default(data, "paper_only", True),
+        real_orders_enabled=_bool_or_default(data, "real_orders_enabled", False),
+        real_money_enabled=_bool_or_default(data, "real_money_enabled", False),
+        operator_summary=_require_non_empty_str(data.get("operator_summary"), "operator_summary"),
+    )
+    _validate_paper_risk_limit_decision(decision)
+    return decision
+
+
 def build_paper_pnl_ledger(
     *,
     cost_result: PaperCostResult | dict,
@@ -2560,6 +2695,50 @@ def build_paper_portfolio_risk_snapshot(
     )
     _validate_paper_portfolio_risk_snapshot(snapshot)
     return snapshot
+
+
+def build_paper_risk_limit_decision(
+    *,
+    risk_snapshot: PaperPortfolioRiskSnapshot | dict,
+    policy: PaperRiskLimitPolicy | dict | None = None,
+    decision_id: str | None = None,
+    as_of_ns: int | None = None,
+) -> PaperRiskLimitDecision:
+    """Build deterministic paper risk-limit and kill-switch decision from a risk snapshot."""
+    resolved_risk = (
+        paper_portfolio_risk_snapshot_from_dict(risk_snapshot) if isinstance(risk_snapshot, dict) else risk_snapshot
+    )
+    _validate_paper_portfolio_risk_snapshot(resolved_risk)
+    resolved_policy = _paper_risk_limit_policy_from_value(policy)
+    breaches = _paper_risk_limit_breaches(resolved_risk, resolved_policy)
+    reasons = _paper_risk_limit_reasons(resolved_risk, breaches)
+    status = _paper_risk_limit_decision_status(breaches, reasons)
+    decision = PaperRiskLimitDecision(
+        decision_id=_string_or_default(
+            decision_id,
+            _paper_risk_limit_decision_id(resolved_risk.snapshot_id, resolved_policy.policy_id),
+        ),
+        session_id=resolved_risk.session_id,
+        as_of_ns=_optional_non_negative_int(as_of_ns, "as_of_ns") if as_of_ns is not None else resolved_risk.as_of_ns,
+        source_risk_snapshot_id=resolved_risk.snapshot_id,
+        policy=resolved_policy,
+        status=status,
+        passed=status == PaperRiskLimitDecisionStatus.PASS,
+        block_new_intents=status
+        in {
+            PaperRiskLimitDecisionStatus.BLOCK_NEW_INTENTS,
+            PaperRiskLimitDecisionStatus.STOP_SESSION,
+        },
+        stop_session=status == PaperRiskLimitDecisionStatus.STOP_SESSION,
+        breached_limits=breaches,
+        reasons=reasons,
+        paper_only=resolved_risk.paper_only,
+        real_orders_enabled=resolved_risk.real_orders_enabled,
+        real_money_enabled=resolved_risk.real_money_enabled,
+        operator_summary=_paper_risk_limit_decision_summary(status, breaches, reasons),
+    )
+    _validate_paper_risk_limit_decision(decision)
+    return decision
 
 
 def build_paper_shadow_run_evidence_report(
@@ -3859,6 +4038,67 @@ def _validate_paper_portfolio_risk_snapshot(snapshot: PaperPortfolioRiskSnapshot
     if not snapshot.paper_only or snapshot.real_orders_enabled or snapshot.real_money_enabled:
         raise PaperShadowSessionCorruptError("paper portfolio risk cannot carry unsafe real-trading flags")
     _require_non_empty_str(snapshot.operator_summary, "operator_summary")
+
+
+def _validate_paper_risk_limit_policy(policy: PaperRiskLimitPolicy) -> None:
+    if not isinstance(policy, PaperRiskLimitPolicy):
+        raise PaperShadowSessionCorruptError("paper risk limit policy must be a PaperRiskLimitPolicy")
+    _require_non_empty_str(policy.policy_id, "policy_id")
+    _optional_non_negative_float(policy.max_gross_exposure, "max_gross_exposure")
+    _optional_non_negative_float(policy.max_net_exposure, "max_net_exposure")
+    _optional_non_negative_int(policy.max_open_positions, "max_open_positions")
+    _optional_non_negative_float(policy.max_unrealized_loss, "max_unrealized_loss")
+    _optional_non_negative_float(policy.max_total_loss, "max_total_loss")
+    _require_bool(policy.require_complete_prices, "require_complete_prices")
+
+
+def _validate_paper_risk_limit_decision(decision: PaperRiskLimitDecision) -> None:
+    if not isinstance(decision, PaperRiskLimitDecision):
+        raise PaperShadowSessionCorruptError("paper risk limit decision must be a PaperRiskLimitDecision")
+    _require_non_empty_str(decision.decision_id, "decision_id")
+    _require_non_empty_str(decision.session_id, "session_id")
+    _require_non_negative_int(decision.as_of_ns, "as_of_ns")
+    _require_non_empty_str(decision.source_risk_snapshot_id, "source_risk_snapshot_id")
+    _validate_paper_risk_limit_policy(decision.policy)
+    if not isinstance(decision.status, PaperRiskLimitDecisionStatus):
+        raise PaperShadowSessionCorruptError("paper risk limit decision status must be a PaperRiskLimitDecisionStatus")
+    _require_bool(decision.passed, "passed")
+    _require_bool(decision.block_new_intents, "block_new_intents")
+    _require_bool(decision.stop_session, "stop_session")
+    if decision.breached_limits != _sorted_unique(decision.breached_limits):
+        raise PaperShadowSessionCorruptError("paper risk limit decision breached limits must be sorted unique")
+    if decision.reasons != _sorted_unique(decision.reasons):
+        raise PaperShadowSessionCorruptError("paper risk limit decision reasons must be sorted unique")
+    if decision.status == PaperRiskLimitDecisionStatus.PASS:
+        if (
+            not decision.passed
+            or decision.block_new_intents
+            or decision.stop_session
+            or decision.breached_limits
+            or decision.reasons
+        ):
+            raise PaperShadowSessionCorruptError("passing paper risk decision cannot carry blockers")
+    else:
+        if decision.passed:
+            raise PaperShadowSessionCorruptError("non-passing paper risk decision cannot be passed")
+        if not decision.reasons:
+            raise PaperShadowSessionCorruptError("non-passing paper risk decision requires reasons")
+    if decision.status == PaperRiskLimitDecisionStatus.STOP_SESSION and (
+        not decision.stop_session or not decision.block_new_intents
+    ):
+        raise PaperShadowSessionCorruptError("STOP_SESSION paper risk decision must stop and block")
+    if decision.status == PaperRiskLimitDecisionStatus.BLOCK_NEW_INTENTS and (
+        not decision.block_new_intents or decision.stop_session
+    ):
+        raise PaperShadowSessionCorruptError("BLOCK_NEW_INTENTS paper risk decision must only block new intents")
+    if decision.status == PaperRiskLimitDecisionStatus.WARN and (decision.block_new_intents or decision.stop_session):
+        raise PaperShadowSessionCorruptError("WARN paper risk decision cannot block or stop")
+    _require_bool(decision.paper_only, "paper_only")
+    _require_bool(decision.real_orders_enabled, "real_orders_enabled")
+    _require_bool(decision.real_money_enabled, "real_money_enabled")
+    if not decision.paper_only or decision.real_orders_enabled or decision.real_money_enabled:
+        raise PaperShadowSessionCorruptError("paper risk limit decision cannot carry unsafe real-trading flags")
+    _require_non_empty_str(decision.operator_summary, "operator_summary")
 
 
 def _validate_feed_replay_plan(plan: FeedReplayPlan) -> None:
@@ -5422,6 +5662,91 @@ def _paper_portfolio_risk_summary(
     )
 
 
+def _paper_risk_limit_decision_id(snapshot_id: str, policy_id: str) -> str:
+    return f"paper-risk-limit-{snapshot_id}-{policy_id}"
+
+
+def _paper_risk_limit_policy_from_value(policy: PaperRiskLimitPolicy | dict | None) -> PaperRiskLimitPolicy:
+    if policy is None:
+        resolved = PaperRiskLimitPolicy()
+    elif isinstance(policy, dict):
+        resolved = paper_risk_limit_policy_from_dict(policy)
+    else:
+        resolved = policy
+    _validate_paper_risk_limit_policy(resolved)
+    return resolved
+
+
+def _paper_risk_limit_breaches(
+    risk: PaperPortfolioRiskSnapshot,
+    policy: PaperRiskLimitPolicy,
+) -> tuple[str, ...]:
+    breaches: list[str] = []
+    if risk.status == PaperPortfolioRiskStatus.INCOMPLETE:
+        breaches.append("risk_snapshot_incomplete")
+        if policy.require_complete_prices:
+            breaches.append("complete_prices_required")
+    if risk.status == PaperPortfolioRiskStatus.EMPTY:
+        breaches.append("risk_snapshot_empty")
+    if policy.max_gross_exposure is not None and risk.gross_exposure > policy.max_gross_exposure:
+        breaches.append("max_gross_exposure")
+    if policy.max_net_exposure is not None and risk.net_exposure > policy.max_net_exposure:
+        breaches.append("max_net_exposure")
+    if policy.max_open_positions is not None and risk.open_position_count > policy.max_open_positions:
+        breaches.append("max_open_positions")
+    if policy.max_unrealized_loss is not None and risk.unrealized_pnl is not None:
+        unrealized_loss = max(0.0, -risk.unrealized_pnl)
+        if unrealized_loss > policy.max_unrealized_loss:
+            breaches.append("max_unrealized_loss")
+    if policy.max_total_loss is not None and risk.unrealized_pnl is not None:
+        total_loss = max(0.0, -(risk.realized_pnl + risk.unrealized_pnl))
+        if total_loss > policy.max_total_loss:
+            breaches.append("max_total_loss")
+    return _sorted_unique(tuple(breaches))
+
+
+def _paper_risk_limit_reasons(
+    risk: PaperPortfolioRiskSnapshot,
+    breaches: tuple[str, ...],
+) -> tuple[str, ...]:
+    if not breaches:
+        return ()
+    reasons = list(breaches)
+    if risk.missing_price_positions:
+        reasons.append("missing_latest_market_price")
+    return _sorted_unique(tuple(reasons))
+
+
+def _paper_risk_limit_decision_status(
+    breaches: tuple[str, ...],
+    reasons: tuple[str, ...],
+) -> PaperRiskLimitDecisionStatus:
+    if not breaches and not reasons:
+        return PaperRiskLimitDecisionStatus.PASS
+    if any(item in breaches for item in ("max_unrealized_loss", "max_total_loss")):
+        return PaperRiskLimitDecisionStatus.STOP_SESSION
+    if any(
+        item in breaches
+        for item in (
+            "complete_prices_required",
+            "max_gross_exposure",
+            "max_net_exposure",
+            "max_open_positions",
+            "risk_snapshot_incomplete",
+        )
+    ):
+        return PaperRiskLimitDecisionStatus.BLOCK_NEW_INTENTS
+    return PaperRiskLimitDecisionStatus.WARN
+
+
+def _paper_risk_limit_decision_summary(
+    status: PaperRiskLimitDecisionStatus,
+    breaches: tuple[str, ...],
+    reasons: tuple[str, ...],
+) -> str:
+    return f"paper_risk_limit={status.value}; breaches={len(breaches)}; reasons={','.join(reasons)}"
+
+
 def _equity_history_from_data(value: object) -> tuple[float, ...]:
     if not isinstance(value, (list, tuple)):
         raise PaperShadowSessionCorruptError("paper equity_history must be a list/tuple")
@@ -5968,6 +6293,15 @@ def _paper_portfolio_risk_status_from_value(value: object) -> PaperPortfolioRisk
         return PaperPortfolioRiskStatus(_require_non_empty_str(value, "status"))
     except ValueError as exc:
         raise PaperShadowSessionCorruptError(f"Invalid paper portfolio risk status: {value!r}") from exc
+
+
+def _paper_risk_limit_decision_status_from_value(value: object) -> PaperRiskLimitDecisionStatus:
+    if isinstance(value, PaperRiskLimitDecisionStatus):
+        return value
+    try:
+        return PaperRiskLimitDecisionStatus(_require_non_empty_str(value, "status"))
+    except ValueError as exc:
+        raise PaperShadowSessionCorruptError(f"Invalid paper risk limit decision status: {value!r}") from exc
 
 
 def _paper_intent_has_valid_size(intent: PaperIntent) -> bool:

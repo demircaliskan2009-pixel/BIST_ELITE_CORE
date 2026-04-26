@@ -43,6 +43,7 @@ from crypto_core.service.paper_shadow_session_controller import (
     PaperIntentBatchResult,
     PaperPnLLedger,
     PaperPortfolioRiskSnapshot,
+    PaperRiskLimitDecision,
     PaperShadowEvidenceBundle,
     PaperShadowRunEvidenceReport,
     PaperShadowSessionCorruptError,
@@ -69,6 +70,8 @@ from crypto_core.service.paper_shadow_session_controller import (
     paper_pnl_ledger_to_dict,
     paper_portfolio_risk_snapshot_from_dict,
     paper_portfolio_risk_snapshot_to_dict,
+    paper_risk_limit_decision_from_dict,
+    paper_risk_limit_decision_to_dict,
     paper_shadow_evidence_bundle_from_dict,
     paper_shadow_evidence_bundle_to_dict,
     paper_shadow_run_evidence_report_from_dict,
@@ -558,6 +561,7 @@ _PAPER_FILL_SIMULATION_RESULT_SNAPSHOT_NAME = "crypto_paper_fill_simulation_resu
 _PAPER_COST_RESULT_SNAPSHOT_NAME = "crypto_paper_cost_result"
 _PAPER_PNL_LEDGER_SNAPSHOT_NAME = "crypto_paper_pnl_ledger"
 _PAPER_PORTFOLIO_RISK_SNAPSHOT_NAME = "crypto_paper_portfolio_risk_snapshot"
+_PAPER_RISK_LIMIT_DECISION_SNAPSHOT_NAME = "crypto_paper_risk_limit_decision"
 _PAPER_SHADOW_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_paper_shadow_run_evidence_report"
 _MULTI_SOURCE_RUN_EVIDENCE_REPORT_SNAPSHOT_NAME = "crypto_multi_source_run_evidence_report"
 _PAPER_SHADOW_EVIDENCE_BUNDLE_SNAPSHOT_NAME = "crypto_paper_shadow_evidence_bundle"
@@ -1017,6 +1021,31 @@ def load_paper_portfolio_risk_snapshot(*, evidence_store: EvidenceStore) -> Pape
             f"Paper portfolio risk snapshot 'data' must be a dict, got {type(data).__name__!r}"
         )
     return paper_portfolio_risk_snapshot_from_dict(data)
+
+
+def export_paper_risk_limit_decision(
+    *,
+    decision: PaperRiskLimitDecision,
+    evidence_store: EvidenceStore,
+) -> WriteResult:
+    """Persist a deterministic paper-only risk-limit / kill-switch decision."""
+    data = paper_risk_limit_decision_to_dict(decision)
+    write_result = evidence_store.save_snapshot(_PAPER_RISK_LIMIT_DECISION_SNAPSHOT_NAME, data)
+    if not write_result.success:
+        return write_result
+    evidence_store.append_evidence(_PAPER_RISK_LIMIT_DECISION_SNAPSHOT_NAME, data)
+    return write_result
+
+
+def load_paper_risk_limit_decision(*, evidence_store: EvidenceStore) -> PaperRiskLimitDecision:
+    """Load the latest deterministic paper-only risk-limit / kill-switch decision."""
+    envelope = evidence_store.load_snapshot(_PAPER_RISK_LIMIT_DECISION_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise PaperShadowSessionCorruptError(
+            f"Paper risk limit decision 'data' must be a dict, got {type(data).__name__!r}"
+        )
+    return paper_risk_limit_decision_from_dict(data)
 
 
 def export_paper_shadow_run_evidence_report(
