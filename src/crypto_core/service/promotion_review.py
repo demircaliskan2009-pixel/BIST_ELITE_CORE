@@ -765,55 +765,6 @@ class PromotionReview:
 
 
 class PromotionPolicy:
-    def evaluate(
-        self,
-        aggregation: CampaignAggregation,
-        *,
-        readiness_level: str = "not_assessed",
-    ) -> PromotionResult:
-        """Evaluate promotion readiness from campaign aggregation.
-
-        Returns:
-            PromotionResult with deterministic verdict and reason codes.
-        """
-        criteria: list[PromotionCriterion] = []
-        t = self._t
-        agg = aggregation
-
-        # --- Paper run evidence sufficiency (Phase 16K) ---
-        # Coverage: min_paper_runs, min_paper_pass_ratio, min_paper_complete_ratio
-        if agg.total_paper_runs >= 0:
-            criteria.append(
-                self._check_coverage(
-                    "min_paper_runs",
-                    agg.total_paper_runs,
-                    t.min_paper_runs,
-                )
-            )
-            criteria.append(
-                self._check_coverage(
-                    "min_paper_pass_ratio",
-                    agg.paper_run_pass_ratio,
-                    t.min_paper_pass_ratio,
-                )
-            )
-            criteria.append(
-                self._check_coverage(
-                    "min_paper_complete_ratio",
-                    agg.paper_run_complete_ratio,
-                    t.min_paper_complete_ratio,
-                )
-            )
-            # Hard: max_paper_blocked_ratio
-            blocked_ratio = (agg.blocked_runs / agg.total_paper_runs) if agg.total_paper_runs > 0 else 0.0
-            criteria.append(
-                self._check_hard(
-                    "max_paper_blocked_ratio",
-                    blocked_ratio,
-                    t.max_paper_blocked_ratio,
-                )
-            )
-
     """Deterministic promotion evaluator.
 
     Evaluates a CampaignAggregation against PromotionThresholds.
