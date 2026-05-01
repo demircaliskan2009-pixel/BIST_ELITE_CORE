@@ -183,6 +183,7 @@ def _make_report(
     total_fills: int = 30,
     total_events: int = 1000,
     elapsed_seconds: float = 600.0,
+    completed_at_ns: int | None = None,
     symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT", "SOLUSDT"),
     ei_degraded: bool = False,
     ei_route_blocks: int = 0,
@@ -224,7 +225,7 @@ def _make_report(
         status="completed",
         verdict=verdict.value,
         started_at_ns=_T0_NS,
-        completed_at_ns=_T0_NS + int(elapsed_seconds * _NS_PER_S),
+        completed_at_ns=(_T0_NS + int(elapsed_seconds * _NS_PER_S) if completed_at_ns is None else completed_at_ns),
         elapsed_seconds=elapsed_seconds,
         run_id="run-1",
         snapshot=snap,
@@ -664,6 +665,96 @@ class TestBuildPromotionReview:
         assert review.readiness_is_supportive is True
         assert review.campaign_ids == ("c0", "c1", "c2")
         assert review.aggregation.total_campaigns == 3
+
+    def test_stale_only_paper_runs_remain_non_supportive_in_review(self):
+        reports = tuple(
+            _make_report(
+                campaign_id=f"c{i}",
+                verdict=AcceptanceVerdict.PASS,
+                total_cycles=200,
+                total_fills=30,
+                elapsed_seconds=600.0,
+                completed_at_ns=0,
+                symbols=("BTC", "ETH", "SOL"),
+            )
+            for i in range(2)
+        )
+        thresholds = PromotionThresholds(
+            min_paper_runs=2,
+            min_paper_pass_ratio=1.0,
+            min_paper_complete_ratio=1.0,
+            max_paper_blocked_ratio=0.0,
+            max_paper_run_age_ns=-1,
+        )
+
+        review = build_promotion_review(
+            reports,
+            review_id="rev-stale-paper",
+            readiness_level="paper_live",
+            thresholds=thresholds,
+            reviewed_at_ns=_T0_NS,
+        )
+
+        assert review.aggregation.total_paper_runs == 2
+        assert review.aggregation.fresh_paper_runs == 0
+        assert review.aggregation.stale_paper_runs == 2
+        assert review.aggregation.latest_paper_run_ns == 0
+        assert review.aggregation.paper_run_evidence_supportive is False
+        assert review.result.verdict == PromotionVerdict.INCONCLUSIVE
+
+    def test_fresh_paper_run_thresholds_flow_through_review_and_promote(self):
+        reports = (
+            _make_report(
+                campaign_id="c0",
+                verdict=AcceptanceVerdict.PASS,
+                total_cycles=200,
+                total_fills=30,
+                elapsed_seconds=600.0,
+                completed_at_ns=100,
+                symbols=("BTC", "ETH", "SOL"),
+            ),
+            _make_report(
+                campaign_id="c1",
+                verdict=AcceptanceVerdict.PASS_WITH_WARNINGS,
+                total_cycles=200,
+                total_fills=30,
+                elapsed_seconds=600.0,
+                completed_at_ns=120,
+                symbols=("BTC", "ETH", "SOL"),
+            ),
+            _make_report(
+                campaign_id="c2",
+                verdict=AcceptanceVerdict.PASS,
+                total_cycles=200,
+                total_fills=30,
+                elapsed_seconds=600.0,
+                completed_at_ns=140,
+                symbols=("BTC", "ETH", "SOL"),
+            ),
+        )
+        thresholds = PromotionThresholds(
+            min_paper_runs=3,
+            min_paper_pass_ratio=1.0,
+            min_paper_complete_ratio=1.0,
+            max_paper_blocked_ratio=0.0,
+            max_paper_run_age_ns=50,
+        )
+
+        review = build_promotion_review(
+            reports,
+            review_id="rev-fresh-paper",
+            readiness_level="paper_live",
+            thresholds=thresholds,
+            reviewed_at_ns=_T0_NS,
+        )
+
+        assert review.aggregation.total_paper_runs == 3
+        assert review.aggregation.fresh_paper_runs == 3
+        assert review.aggregation.stale_paper_runs == 0
+        assert review.aggregation.latest_paper_run_ns == 140
+        assert review.aggregation.oldest_paper_run_ns == 100
+        assert review.aggregation.paper_run_evidence_supportive is True
+        assert review.result.verdict == PromotionVerdict.PROMOTE
 
 
 # ===========================================================================
