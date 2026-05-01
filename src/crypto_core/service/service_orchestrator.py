@@ -382,6 +382,7 @@ class ServiceOrchestrator:
             SleeveAllocationPolicy() if sleeve_allocation_policy is None else sleeve_allocation_policy
         )
         self._sleeve_admission_controller = None
+        self._sleeve_candidate_workflow_controller: SleeveCandidateWorkflowController | None = None
 
     def build_sleeve_admission_controller(self):
         """Build and cache the sleeve admission controller from current review portfolio summary."""
@@ -400,18 +401,6 @@ class ServiceOrchestrator:
         if not self._sleeve_admission_controller:
             self.build_sleeve_admission_controller()
         return self._sleeve_admission_controller.build_portfolio_summary()
-        self._last_campaign_report: CampaignReport | None = None
-
-        self._review: PromotionReviewController | None = None
-        self._escalation_review: EscalationReviewController | None = None
-        self._configured_sleeves = tuple(sleeves)
-        self._sleeve_allocation_policy = (
-            SleeveAllocationPolicy() if sleeve_allocation_policy is None else sleeve_allocation_policy
-        )
-        self._sleeve_portfolio_controller: SleevePortfolioController | None = None
-        self._sleeve_candidate_workflow_controller: SleeveCandidateWorkflowController | None = None
-        # Phase 15E: Sleeve Promotion Review Controller
-        self._sleeve_promotion_review_controller: SleevePromotionReviewController | None = None
 
     # ------------------------------------------------------------------
     # Sleeve promotion review surface (Phase 15E)
