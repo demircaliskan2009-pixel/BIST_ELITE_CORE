@@ -45,6 +45,20 @@ Treat the latest instruction from the supervising assistant as authoritative pro
 - No commits without validation. No force pushes. No `--no-verify`.
 - Execute commands directly — never delegate terminal work to user.
 
+### PATCH SAFETY GUARDRAILS (non-negotiable)
+
+- **No `insert_edit_into_file` for surgical patches.** Use `replace_string_in_file` with ≥3 lines of unchanged context before and after the target string. `insert_edit_into_file` with `...existing code...` markers appends/inserts only — it does NOT safely replace scoped function-body logic.
+- **No exact-context replacement on more than 5 sites per commit.** Multi-site function-body surgery → use Codex (GPT-5.5) or split into atomic commits.
+- **No regex-based patch scripts.** No creating or running patch scripts under `tools/` or `tmp/` that use Python regex/string substitution to modify source files.
+- **No generated patch scripts anywhere in the repo.** If a patch cannot be expressed as `replace_string_in_file` with exact context, STOP and escalate.
+- **No `ruff check --fix .` or `ruff format .` on repo root.** Always scope to the specific changed file: `ruff check --fix <file>` and `ruff format <file>`.
+- **No `pyright` during scoped patches** unless the task explicitly requests type-checking. Use `pylanceSyntaxErrors` MCP tool on changed files only.
+- **No `pip install` or `installPythonPackage` during implementation** unless the task explicitly introduces a new dependency and names it.
+- **No commit unless `git diff --name-only` shows exactly the allowed files for this task.** Extra dirty files → STOP, `git restore -- <unexpected_file>`, then re-validate.
+- **After push, verify HEAD equals remote.** Run `git rev-parse HEAD` and `git ls-remote origin refs/heads/<branch>` and confirm they match. Mismatch → STOP and report.
+- **Dirty tree blocks implementation.** Before any PATCH, confirm `git status --short` shows no dirty `src/crypto_core` or `tests/crypto_core` files. If dirty → STOP and report.
+- **Dead code after `return` is a P0 structural defect.** If any attribute is initialized in a code block that follows a `return` statement (including in `__init__` or controller initialization paths), surface it immediately before patching anything else in that file.
+
 ## MANDATORY SKILL ROUTING
 
 | Task Domain | Skill |

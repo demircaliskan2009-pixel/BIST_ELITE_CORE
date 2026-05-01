@@ -87,6 +87,37 @@ Treat as defects unless explicitly justified:
 
 ---
 
+## 1F. PATCH SAFETY GLOBAL RULES
+
+These rules apply to ALL agents and ALL task types.
+
+### Dirty Tree Rule
+- A dirty working tree under `src/` or `tests/` **blocks all implementation** unless the task is explicitly classified as ABORT/RESTORE/CLEANUP.
+- Before any PATCH, run `git status --short`. If `src/crypto_core/` or `tests/crypto_core/` files are dirty → STOP and report. Do not proceed.
+
+### Dead Code After Return — P0 Structural Defect
+- Any Python attribute initialized in a code block that follows a `return` statement (in `__init__`, a controller method, or any initialization path) is a **P0 structural defect**.
+- This attribute will never be set. Any downstream access causes `AttributeError`.
+- When discovered during forensic analysis or patching, surface it immediately before patching anything else in that file.
+- The fix: move the initialization above the `return`, or remove the dead block entirely.
+
+### Pre-Patch Import Sanity
+- Before patching any Python source file, when cheap (i.e., no network required), run:
+  `python -c "import <module_path>"` or `python -m pytest --collect-only <test_file>` to confirm the module is currently importable.
+- If it fails before the patch → classify as pre-existing blocker, fix it first.
+
+### Forensic Agent Scope
+- A forensic/analysis task is READ-ONLY. The forensic agent does not edit source files, test files, or config files.
+- If a forensic agent proposes a fix, the fix must be returned to the engineer agent for execution.
+- "Read-only" means no `insert_edit_into_file`, no `replace_string_in_file`, no `git add/commit`.
+
+### Edit Tool Discipline
+- `replace_string_in_file` with ≥3 lines of exact context is the mandatory edit tool for all surgical patches.
+- `insert_edit_into_file` with `...existing code...` markers is **FORBIDDEN for scoped function-body patches**. It can only append/insert — it cannot safely replace middle-of-function logic.
+- Regex-based patch scripts under `tools/` or `tmp/` are **FORBIDDEN**. No patch may be expressed as a Python string-substitution script.
+
+---
+
 ## 2. FAIL-CLOSED BEHAVIOR
 
 The system MUST default to NO ACTION unless all conditions are satisfied.
