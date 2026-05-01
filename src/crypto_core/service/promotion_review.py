@@ -461,8 +461,8 @@ def build_campaign_aggregation(
     else:
         paper_run_cutoff_ns = latest_paper_run_ns - thresholds.max_paper_run_age_ns if latest_paper_run_ns > 0 else 0
 
-    for verdict, completed_at_ns in paper_run_verdicts:
-        is_fresh = completed_at_ns > 0 and (paper_run_cutoff_ns is None or completed_at_ns >= paper_run_cutoff_ns)
+    for verdict, norm_ts in paper_run_verdicts:
+        is_fresh = norm_ts > 0 and (paper_run_cutoff_ns is None or norm_ts >= paper_run_cutoff_ns)
         if not is_fresh:
             stale_paper_runs += 1
             continue
@@ -597,6 +597,7 @@ def build_campaign_aggregation(
     else:
         consistency = AggregateConsistency.MIXED
 
+    # Phase 16L: pass/complete/blocked ratios use fresh-run denominator, not total_paper_runs.
     paper_run_pass_ratio = (fresh_passed_runs + fresh_warned_runs) / fresh_paper_runs if fresh_paper_runs > 0 else 0.0
     paper_run_complete_ratio = fresh_complete_runs / fresh_paper_runs if fresh_paper_runs > 0 else 0.0
     paper_run_blocked_ratio = fresh_blocked_runs / fresh_paper_runs if fresh_paper_runs > 0 else 0.0

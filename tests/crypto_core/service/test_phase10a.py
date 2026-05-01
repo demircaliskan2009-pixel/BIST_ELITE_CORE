@@ -12,6 +12,7 @@ from crypto_core.service.campaign import (
 )
 from crypto_core.service.promotion_review import (
     PromotionThresholds,
+    _aggregation_to_dict,
     build_campaign_aggregation,
     paper_run_summary,
     verdict_distribution,
@@ -323,6 +324,37 @@ def test_paper_run_recency_surfaces_include_new_fields():
         assert data["stale_paper_runs"] == 0
         assert data["latest_paper_run_ns"] == 140
         assert data["oldest_paper_run_ns"] == 100
+
+
+def test_aggregation_to_dict_includes_recency_fields():
+    agg = build_campaign_aggregation(
+        _make_reports(
+            (AcceptanceVerdict.PASS, 100),
+            (AcceptanceVerdict.PASS, 200),
+        ),
+        thresholds=_recency_thresholds(max_paper_run_age_ns=120, min_paper_runs=2),
+    )
+    d = _aggregation_to_dict(agg)
+    assert d["fresh_paper_runs"] == 2
+    assert d["stale_paper_runs"] == 0
+    assert d["latest_paper_run_ns"] == 200
+    assert d["oldest_paper_run_ns"] == 100
+
+
+def test_paper_run_recency_age_zero_only_latest_is_fresh():
+    # max_paper_run_age_ns=0: cutoff == latest_paper_run_ns, only runs AT latest are fresh.
+    agg = build_campaign_aggregation(
+        _make_reports(
+            (AcceptanceVerdict.PASS, 100),
+            (AcceptanceVerdict.PASS, 200),
+            (AcceptanceVerdict.PASS, 200),
+        ),
+        thresholds=_recency_thresholds(max_paper_run_age_ns=0, min_paper_runs=2),
+    )
+    assert agg.fresh_paper_runs == 2  # only the two runs at ts=200
+    assert agg.stale_paper_runs == 1  # ts=100 < cutoff=200
+    assert agg.latest_paper_run_ns == 200
+    assert agg.paper_run_evidence_supportive is True
 
 
 # Tests for Phase 10A — EI-aware campaign gates + stability rollup.
