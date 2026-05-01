@@ -68,7 +68,7 @@ from crypto_core.service.escalation_review_controller import (
     final_escalation_review_report_to_dict,
 )
 from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreConfig
-from crypto_core.service.promotion_review import PromotionVerdict
+from crypto_core.service.promotion_review import PromotionThresholds, PromotionVerdict
 from crypto_core.service.promotion_review_controller import (
     CampaignIntakeError,
     CurrentReviewSnapshot,
@@ -412,7 +412,12 @@ class TestReviewLifecycle:
         assert ctrl.is_finalized is True
 
     def test_finalize_sets_rejected_on_reject_verdict(self):
-        ctrl = PromotionReviewController(review_id="rev-rej", created_at_ns=_T0_NS)
+        ctrl = PromotionReviewController(
+            review_id="rev-rej",
+            # Phase 16M: min_paper_runs=0 disables paper gate; test focuses on REJECT status.
+            thresholds=PromotionThresholds(min_paper_runs=0),
+            created_at_ns=_T0_NS,
+        )
         # Two failed + one pass → REJECT due to max_failed_campaigns
         ctrl.add_campaign_report(_make_report(campaign_id="c1", verdict=AcceptanceVerdict.FAIL))
         ctrl.add_campaign_report(_make_report(campaign_id="c2", verdict=AcceptanceVerdict.FAIL))
@@ -670,6 +675,7 @@ class TestFinalReport:
         ctrl = PromotionReviewController(
             review_id="rev-final",
             readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
             created_at_ns=_T0_NS,
         )
         for r in _good_reports(3):
@@ -694,6 +700,8 @@ class TestFinalReport:
     def test_final_report_with_failures(self):
         ctrl = PromotionReviewController(
             review_id="rev-fail",
+            # Phase 16M: min_paper_runs=0 disables paper gate; test focuses on hard criteria.
+            thresholds=PromotionThresholds(min_paper_runs=0),
             created_at_ns=_T0_NS,
         )
         ctrl.add_campaign_report(_make_report(campaign_id="c1", verdict=AcceptanceVerdict.FAIL))
@@ -808,6 +816,7 @@ class TestPersistence:
         ctrl = PromotionReviewController(
             review_id="rev-fp",
             readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
             evidence_store=store,
             created_at_ns=_T0_NS,
         )
@@ -977,7 +986,12 @@ class TestReadinessInteraction:
 
     def test_mixed_campaigns_despite_good_readiness(self):
         """Good readiness but mixed campaign results → REJECT."""
-        ctrl = PromotionReviewController(readiness_level="shadow_live", created_at_ns=_T0_NS)
+        ctrl = PromotionReviewController(
+            readiness_level="shadow_live",
+            # Phase 16M: min_paper_runs=0 disables paper gate; test focuses on hard REJECT path.
+            thresholds=PromotionThresholds(min_paper_runs=0),
+            created_at_ns=_T0_NS,
+        )
         ctrl.add_campaign_report(_make_report(campaign_id="c1", verdict=AcceptanceVerdict.FAIL))
         ctrl.add_campaign_report(_make_report(campaign_id="c2", verdict=AcceptanceVerdict.FAIL))
         ctrl.add_campaign_report(_make_report(campaign_id="c3", verdict=AcceptanceVerdict.PASS))
@@ -1052,7 +1066,9 @@ class TestReportingAPI:
         assert rec["verdict"] is None
 
     def test_provisional_recommendation_with_campaigns(self):
-        ctrl = PromotionReviewController(readiness_level="paper_live", created_at_ns=_T0_NS)
+        ctrl = PromotionReviewController(
+            readiness_level="paper_live", thresholds=PromotionThresholds(min_paper_runs=3), created_at_ns=_T0_NS
+        )
         for r in _good_reports(3):
             ctrl.add_campaign_report(r)
         rec = ctrl.get_provisional_recommendation()
@@ -1065,7 +1081,7 @@ class TestReportingAPI:
         assert prs["verdict"] is None
 
     def test_promotion_reason_summary_with_campaigns(self):
-        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        ctrl = PromotionReviewController(thresholds=PromotionThresholds(min_paper_runs=3), created_at_ns=_T0_NS)
         for r in _good_reports(3):
             ctrl.add_campaign_report(r)
         prs = ctrl.get_promotion_reason_summary()
@@ -1144,6 +1160,7 @@ class TestSerialization:
         ctrl = PromotionReviewController(
             review_id="rev-ser2",
             readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
             created_at_ns=_T0_NS,
         )
         for r in _good_reports(3):

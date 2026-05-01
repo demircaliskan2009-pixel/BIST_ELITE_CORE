@@ -745,7 +745,7 @@ class PromotionResult:
 @dataclass(frozen=True)
 class PromotionThresholds:
     # --- Paper run evidence sufficiency thresholds (Phase 16K) ---
-    min_paper_runs: int = 5
+    min_paper_runs: int = 0
     min_paper_pass_ratio: float = 0.8
     min_paper_complete_ratio: float = 0.8
     max_paper_blocked_ratio: float = 0.2
@@ -1043,6 +1043,23 @@ class PromotionPolicy:
                     "min_persisted_tca_ratio",
                     avg_tca_ratio,
                     t.min_persisted_tca_ratio,
+                )
+            )
+
+        # Phase 16M: paper-run evidence coverage gate.
+        # Active when min_paper_runs > 0; disabled with min_paper_runs=0 for backward compatibility.
+        if t.min_paper_runs > 0:
+            criteria.append(
+                PromotionCriterion(
+                    name="paper_run_evidence_supportive",
+                    passed=agg.paper_run_evidence_supportive,
+                    severity="coverage",
+                    actual=float(agg.fresh_paper_runs),
+                    threshold=float(t.min_paper_runs),
+                    message=(
+                        f"paper_run_evidence_supportive: {agg.paper_run_evidence_supportive} "
+                        f"(fresh={agg.fresh_paper_runs}, required\u2265{t.min_paper_runs})"
+                    ),
                 )
             )
 

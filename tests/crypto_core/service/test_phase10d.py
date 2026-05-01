@@ -904,6 +904,7 @@ class TestPromotionVerdictEvidence:
             thresholds=PromotionThresholds(
                 min_persisted_tca_ratio=0.5,
                 min_markout_completion_ratio=0.5,
+                min_paper_runs=0,  # Phase 16M: test focuses on TCA/markout, not paper evidence
             ),
         )
         assert review.result.verdict == PromotionVerdict.PROMOTE
@@ -1052,6 +1053,7 @@ class TestPromotionReviewControllerEvidence:
             thresholds=PromotionThresholds(
                 min_persisted_tca_ratio=0.5,
                 min_markout_completion_ratio=0.5,
+                min_paper_runs=0,  # Phase 16M: test focuses on TCA/markout, not paper evidence
             ),
         )
         for i in range(3):

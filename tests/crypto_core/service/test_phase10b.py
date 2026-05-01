@@ -451,9 +451,11 @@ class TestPromotionPolicy:
         )
 
     def test_promote_all_criteria_met(self):
+        # Phase 16M: pass min_paper_runs=3 to cover the new paper-run gate.
+        thresholds = PromotionThresholds(min_paper_runs=3)
         reports = self._good_reports(3)
-        agg = build_campaign_aggregation(reports)
-        policy = PromotionPolicy()
+        agg = build_campaign_aggregation(reports, thresholds=thresholds)
+        policy = PromotionPolicy(thresholds)
         result = policy.evaluate(agg)
         assert result.verdict == PromotionVerdict.PROMOTE
         assert len(result.fail_reasons) == 0
@@ -466,7 +468,8 @@ class TestPromotionPolicy:
             _make_report(campaign_id="c3", verdict=AcceptanceVerdict.PASS),
         )
         agg = build_campaign_aggregation(reports)
-        policy = PromotionPolicy()
+        # Phase 16M: min_paper_runs=0 disables paper gate; test focuses on hard criteria.
+        policy = PromotionPolicy(PromotionThresholds(min_paper_runs=0))
         result = policy.evaluate(agg)
         assert result.verdict == PromotionVerdict.REJECT
         assert any(c.name == "max_failed_campaigns" for c in result.fail_reasons)
@@ -488,8 +491,8 @@ class TestPromotionPolicy:
         )
         agg = build_campaign_aggregation(reports)
         # Total recovery = 3, warn threshold = 3 → passes at boundary
-        # Use custom thresholds where warn is tight
-        thresholds = PromotionThresholds(warn_recovery_incidents=2)
+        # Use custom thresholds where warn is tight; min_paper_runs=0 disables paper gate.
+        thresholds = PromotionThresholds(warn_recovery_incidents=2, min_paper_runs=0)
         policy = PromotionPolicy(thresholds)
         result = policy.evaluate(agg)
         assert result.verdict == PromotionVerdict.HOLD
@@ -548,9 +551,11 @@ class TestPromotionPolicy:
             _make_report(campaign_id="c3", verdict=AcceptanceVerdict.PASS),
         )
         agg = build_campaign_aggregation(reports)
+        # Phase 16M: min_paper_runs=0 disables paper gate; test focuses on consistency.
         thresholds = PromotionThresholds(
             require_stable_consistency=True,
             max_failed_campaigns=2,  # relax so it doesn't hit hard fail first
+            min_paper_runs=0,
         )
         policy = PromotionPolicy(thresholds)
         result = policy.evaluate(agg)
@@ -593,7 +598,8 @@ class TestPromotionPolicy:
             for i in range(3)
         )
         agg = build_campaign_aggregation(reports)
-        result = PromotionPolicy().evaluate(agg)
+        # Phase 16M: min_paper_runs=0 disables paper gate; test focuses on ext_regime soft warn.
+        result = PromotionPolicy(PromotionThresholds(min_paper_runs=0)).evaluate(agg)
         assert result.verdict == PromotionVerdict.HOLD
         assert any(c.name == "warn_ext_regime_stale_dominated_ratio" for c in result.warning_reasons)
 
@@ -612,7 +618,8 @@ class TestPromotionPolicy:
             for i in range(3)
         )
         agg = build_campaign_aggregation(reports)
-        result = PromotionPolicy().evaluate(agg)
+        # Phase 16M: min_paper_runs=0 disables paper gate; test focuses on ext_regime soft warn.
+        result = PromotionPolicy(PromotionThresholds(min_paper_runs=0)).evaluate(agg)
         assert result.verdict == PromotionVerdict.HOLD
         assert any(c.name == "warn_ext_regime_unavailable_dominated_ratio" for c in result.warning_reasons)
 
@@ -630,9 +637,63 @@ class TestPromotionPolicy:
             for i in range(3)
         )
         agg = build_campaign_aggregation(reports)
-        result = PromotionPolicy().evaluate(agg)
+        # Phase 16M: min_paper_runs=0 disables paper gate; test focuses on ext_regime hard fail.
+        result = PromotionPolicy(PromotionThresholds(min_paper_runs=0)).evaluate(agg)
         assert result.verdict == PromotionVerdict.REJECT
         assert any(c.name == "max_ext_regime_high_risk_dominated_ratio" for c in result.fail_reasons)
+
+    # Phase 16M: focused tests for the paper-run evidence coverage gate.
+
+    def test_non_supportive_paper_evidence_blocks_promote(self):
+        """Phase 16M: stale paper runs block PROMOTE even when all other metrics are strong."""
+        thresholds = PromotionThresholds(min_paper_runs=3)
+        reports = tuple(
+            _make_report(
+                campaign_id=f"c{i}",
+                verdict=AcceptanceVerdict.PASS,
+                total_cycles=200,
+                total_fills=30,
+                total_events=1000,
+                elapsed_seconds=600.0,
+                symbols=("BTC", "ETH", "SOL"),
+                completed_at_ns=0,  # stale: paper gate will fail
+            )
+            for i in range(3)
+        )
+        agg = build_campaign_aggregation(reports, thresholds=thresholds)
+        result = PromotionPolicy(thresholds).evaluate(agg)
+        assert result.verdict == PromotionVerdict.INCONCLUSIVE
+        assert any(c.name == "paper_run_evidence_supportive" for c in result.insufficient_reasons)
+
+    def test_supportive_paper_evidence_allows_promote(self):
+        """Phase 16M: fresh paper runs with valid timestamps allow PROMOTE."""
+        thresholds = PromotionThresholds(min_paper_runs=3)
+        reports = self._good_reports(3)  # default completed_at_ns is valid positive timestamp
+        agg = build_campaign_aggregation(reports, thresholds=thresholds)
+        result = PromotionPolicy(thresholds).evaluate(agg)
+        assert result.verdict == PromotionVerdict.PROMOTE
+        assert any(c.name == "paper_run_evidence_supportive" and c.passed for c in result.criteria)
+
+    def test_min_paper_runs_zero_disables_paper_gate(self):
+        """Phase 16M: min_paper_runs=0 disables gate (backward compat opt-out)."""
+        thresholds = PromotionThresholds(min_paper_runs=0)
+        reports = tuple(
+            _make_report(
+                campaign_id=f"c{i}",
+                verdict=AcceptanceVerdict.PASS,
+                total_cycles=200,
+                total_fills=30,
+                total_events=1000,
+                elapsed_seconds=600.0,
+                symbols=("BTC", "ETH", "SOL"),
+                completed_at_ns=0,  # stale — would block if min_paper_runs > 0
+            )
+            for i in range(3)
+        )
+        agg = build_campaign_aggregation(reports, thresholds=thresholds)
+        result = PromotionPolicy(thresholds).evaluate(agg)
+        assert not any(c.name == "paper_run_evidence_supportive" for c in result.criteria)
+        assert result.verdict == PromotionVerdict.PROMOTE
 
 
 # ===========================================================================
@@ -657,6 +718,7 @@ class TestBuildPromotionReview:
             reports,
             review_id="rev-1",
             readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
             reviewed_at_ns=_T0_NS,
         )
         assert review.review_id == "rev-1"
@@ -950,6 +1012,7 @@ class TestSerialization:
             reports,
             review_id="rev-ser",
             readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
             reviewed_at_ns=_T0_NS,
         )
         d = promotion_review_to_dict(review)

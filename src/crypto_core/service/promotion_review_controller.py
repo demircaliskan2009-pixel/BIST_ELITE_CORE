@@ -381,7 +381,7 @@ class PromotionReviewController:
         if not self._reports:
             raise RuntimeError("Cannot evaluate empty review set")
         reports_tuple = tuple(self._reports.values())
-        aggregation = build_campaign_aggregation(reports_tuple)
+        aggregation = build_campaign_aggregation(reports_tuple, thresholds=self._thresholds)
         policy = PromotionPolicy(self._thresholds)
         return policy.evaluate(aggregation, readiness_level=self._readiness_level)
 
@@ -418,7 +418,7 @@ class PromotionReviewController:
             )
 
         reports_tuple = tuple(self._reports.values())
-        aggregation = build_campaign_aggregation(reports_tuple)
+        aggregation = build_campaign_aggregation(reports_tuple, thresholds=self._thresholds)
         policy = PromotionPolicy(self._thresholds)
         result = policy.evaluate(aggregation, readiness_level=self._readiness_level)
 
