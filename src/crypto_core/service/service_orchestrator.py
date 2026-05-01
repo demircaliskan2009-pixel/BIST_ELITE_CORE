@@ -122,6 +122,7 @@ from crypto_core.service.sleeve_portfolio import (
     sleeve_recommendation_result_to_dict,
 )
 from crypto_core.service.sleeve_portfolio_controller import SleeveOperatorOverride, SleevePortfolioController
+from crypto_core.service.sleeve_promotion_review_controller import SleevePromotionReviewSnapshot
 
 logger = logging.getLogger(__name__)
 
