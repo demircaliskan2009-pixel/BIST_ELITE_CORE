@@ -51,6 +51,7 @@ from crypto_core.service.models import (
     SymbolHealth,
     WatchdogStatus,
 )
+from crypto_core.service.promotion_review import PromotionThresholds
 from crypto_core.service.promotion_review_controller import (
     CampaignIntakeError,
     ReviewStatus,
@@ -682,8 +683,43 @@ class TestReviewLifecycle:
         final = orch.finalize_review()
         assert final is not None
         assert final.review_id == orch.review_controller.review_id
+        assert final.verdict == "promote"
+        assert "paper_run_evidence_supportive" not in final.insufficient_evidence
         assert not orch.review_active()
         assert orch.final_review_report is final
+
+    def test_finalize_review_stale_paper_evidence_fails_closed_by_default(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(
+            service=svc,
+            readiness_level="paper_live",
+        )
+        orch.start_review()
+        for i in range(3):
+            report = replace(_make_campaign_report(campaign_id=f"camp-stale-{i}"), completed_at_ns=0)
+            orch.intake_campaign_report(report)
+
+        final = orch.finalize_review()
+
+        assert final.verdict == "inconclusive"
+        assert "paper_run_evidence_supportive" in final.insufficient_evidence
+
+    def test_finalize_review_explicit_min_paper_runs_zero_opts_out(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(
+            service=svc,
+            readiness_level="paper_live",
+            promotion_thresholds=PromotionThresholds(min_paper_runs=0),
+        )
+        orch.start_review()
+        for i in range(3):
+            report = replace(_make_campaign_report(campaign_id=f"camp-optout-{i}"), completed_at_ns=0)
+            orch.intake_campaign_report(report)
+
+        final = orch.finalize_review()
+
+        assert final.verdict == "promote"
+        assert "paper_run_evidence_supportive" not in final.insufficient_evidence
 
     def test_reset_review(self):
         svc = _make_mock_service()
@@ -1449,6 +1485,24 @@ class TestReportingAPI:
         assert decision.escalation_stage == EscalationStage.INCONCLUSIVE
         assert "min_completed_campaigns" in decision.missing_evidence
 
+    def test_escalation_decision_inconclusive_for_stale_paper_evidence_by_default(self):
+        svc = _make_mock_service()
+        orch = ServiceOrchestrator(
+            service=svc,
+            readiness_level="paper_live",
+        )
+        orch._last_campaign_report = _make_campaign_report(campaign_id="last-report")
+        orch.start_review(review_id="rev-escalation-stale-paper")
+        for i in range(3):
+            orch.intake_campaign_report(
+                replace(_make_campaign_report(campaign_id=f"camp-stale-{i}", verdict="pass"), completed_at_ns=0)
+            )
+
+        decision = orch.escalation_decision()
+
+        assert decision.escalation_stage == EscalationStage.INCONCLUSIVE
+        assert "paper_run_evidence_supportive" in decision.missing_evidence
+
     def test_escalation_decision_reject_for_failed_review(self):
         svc = _make_mock_service()
         orch = ServiceOrchestrator(
@@ -1457,9 +1511,11 @@ class TestReportingAPI:
         )
         orch._last_campaign_report = _make_campaign_report(campaign_id="last-report")
         orch.start_review(review_id="rev-escalation-reject")
-        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-a", verdict="pass"))
-        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-b", verdict="fail"))
-        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-c", verdict="fail"))
+        # Keep paper evidence supportive while still exceeding max_failed_campaigns.
+        for i in range(8):
+            orch.intake_campaign_report(_make_campaign_report(campaign_id=f"camp-pass-{i}", verdict="pass"))
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-fail-a", verdict="fail"))
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-fail-b", verdict="fail"))
 
         decision = orch.escalation_decision()
         assert decision.escalation_stage == EscalationStage.REJECT
@@ -1473,9 +1529,10 @@ class TestReportingAPI:
         )
         orch._last_campaign_report = _make_campaign_report(campaign_id="last-report")
         orch.start_review(review_id="rev-escalation-hold")
-        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-a", verdict="pass"))
-        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-b", verdict="fail"))
-        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-c", verdict="pass"))
+        # Keep paper evidence supportive while still surfacing warn_failed_campaigns.
+        for i in range(4):
+            orch.intake_campaign_report(_make_campaign_report(campaign_id=f"camp-pass-{i}", verdict="pass"))
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-fail", verdict="fail"))
 
         decision = orch.escalation_decision()
         assert decision.escalation_stage == EscalationStage.HOLD

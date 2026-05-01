@@ -938,6 +938,13 @@ class ServiceOrchestrator:
             EscalationReviewStatus.REJECTED,
         )
 
+    @staticmethod
+    def _default_runtime_review_thresholds(readiness_level: str) -> PromotionThresholds | None:
+        """Default runtime promotion thresholds for paper/shadow review paths."""
+        if readiness_level not in ("paper_live", "calibrated_paper", "shadow_live", "tiny_cap_live"):
+            return None
+        return PromotionThresholds(min_paper_runs=3)
+
     def start_review(self, *, review_id: str | None = None) -> str:
         """Start a new promotion review workflow.
 
@@ -960,10 +967,14 @@ class ServiceOrchestrator:
                 f"{self._review.status.value!r}"
             )
 
+        thresholds = self._promotion_thresholds
+        if thresholds is None:
+            thresholds = self._default_runtime_review_thresholds(self._readiness_level)
+
         self._review = PromotionReviewController(
             review_id=review_id,
             readiness_level=self._readiness_level,
-            thresholds=self._promotion_thresholds,
+            thresholds=thresholds,
             evidence_store=self._evidence_store,
         )
         logger.info("Review %s started via orchestrator", self._review.review_id)
