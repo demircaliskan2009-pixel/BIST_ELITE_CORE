@@ -10,10 +10,15 @@ from crypto_core.service.campaign import (
     CampaignSnapshot,
     SymbolParticipation,
 )
-from crypto_core.service.promotion_review import build_campaign_aggregation, paper_run_summary, verdict_distribution
+from crypto_core.service.promotion_review import (
+    PromotionThresholds,
+    build_campaign_aggregation,
+    paper_run_summary,
+    verdict_distribution,
+)
 
 
-def make_report(verdict, fills=1):
+def make_report(verdict, fills=1, completed_at_ns=2):
     snap = CampaignSnapshot(
         campaign_id="c1",
         status="completed",
@@ -87,7 +92,7 @@ def make_report(verdict, fills=1):
         status="completed",
         verdict=verdict.value,
         started_at_ns=1,
-        completed_at_ns=2,
+        completed_at_ns=completed_at_ns,
         elapsed_seconds=10.0,
         run_id="r1",
         snapshot=snap,
@@ -219,6 +224,105 @@ def test_paper_run_aggregation_empty():
     assert psum["paper_run_pass_ratio"] == 0.0
     assert psum["paper_run_complete_ratio"] == 0.0
     assert psum["paper_run_evidence_supportive"] is False
+
+
+def _recency_thresholds(*, max_paper_run_age_ns, min_paper_runs=1):
+    return PromotionThresholds(
+        min_paper_runs=min_paper_runs,
+        min_paper_pass_ratio=1.0,
+        min_paper_complete_ratio=1.0,
+        max_paper_blocked_ratio=0.0,
+        max_paper_run_age_ns=max_paper_run_age_ns,
+    )
+
+
+def _make_reports(*report_specs):
+    return tuple(make_report(verdict, completed_at_ns=completed_at_ns) for verdict, completed_at_ns in report_specs)
+
+
+def _assert_paper_run_recency(agg, expected):
+    total, fresh, stale, latest, oldest, pass_ratio, complete_ratio, supportive = expected
+    assert agg.total_paper_runs == total
+    assert agg.fresh_paper_runs == fresh
+    assert agg.stale_paper_runs == stale
+    assert agg.latest_paper_run_ns == latest
+    assert agg.oldest_paper_run_ns == oldest
+    assert agg.paper_run_pass_ratio == pass_ratio
+    assert agg.paper_run_complete_ratio == complete_ratio
+    assert agg.paper_run_evidence_supportive is supportive
+
+
+def test_paper_run_recency_cases():
+    cases = (
+        (
+            _make_reports(
+                (AcceptanceVerdict.PASS, 100),
+                (AcceptanceVerdict.PASS_WITH_WARNINGS, 120),
+                (AcceptanceVerdict.PASS, 140),
+            ),
+            _recency_thresholds(max_paper_run_age_ns=50, min_paper_runs=3),
+            (3, 3, 0, 140, 100, 1.0, 1.0, True),
+        ),
+        (
+            _make_reports(
+                (AcceptanceVerdict.PASS, 0),
+                (AcceptanceVerdict.PASS_WITH_WARNINGS, 0),
+            ),
+            _recency_thresholds(max_paper_run_age_ns=-1),
+            (2, 0, 2, 0, 0, 0.0, 0.0, False),
+        ),
+        (
+            _make_reports(
+                (AcceptanceVerdict.PASS, 100),
+                (AcceptanceVerdict.PASS, 110),
+                (AcceptanceVerdict.PASS_WITH_WARNINGS, 120),
+                (AcceptanceVerdict.PASS, 190),
+                (AcceptanceVerdict.PASS, 200),
+            ),
+            _recency_thresholds(max_paper_run_age_ns=15, min_paper_runs=3),
+            (5, 2, 3, 200, 100, 1.0, 1.0, False),
+        ),
+        (
+            _make_reports(
+                (AcceptanceVerdict.PASS, None),
+                (AcceptanceVerdict.PASS, None),
+            ),
+            _recency_thresholds(max_paper_run_age_ns=-1),
+            (2, 0, 2, 0, 0, 0.0, 0.0, False),
+        ),
+        (
+            _make_reports(
+                (AcceptanceVerdict.PASS, 300),
+                (AcceptanceVerdict.PASS_WITH_WARNINGS, 100),
+                (AcceptanceVerdict.PASS, 200),
+                (AcceptanceVerdict.PASS, 0),
+                (AcceptanceVerdict.PASS, None),
+            ),
+            _recency_thresholds(max_paper_run_age_ns=75, min_paper_runs=2),
+            (5, 1, 4, 300, 100, 1.0, 1.0, False),
+        ),
+    )
+
+    for reports, thresholds, expected in cases:
+        agg = build_campaign_aggregation(reports, thresholds=thresholds)
+        _assert_paper_run_recency(agg, expected)
+
+
+def test_paper_run_recency_surfaces_include_new_fields():
+    agg = build_campaign_aggregation(
+        _make_reports(
+            (AcceptanceVerdict.PASS, 100),
+            (AcceptanceVerdict.PASS_WITH_WARNINGS, 120),
+            (AcceptanceVerdict.PASS, 140),
+        ),
+        thresholds=_recency_thresholds(max_paper_run_age_ns=50, min_paper_runs=3),
+    )
+
+    for data in (paper_run_summary(agg), verdict_distribution(agg)):
+        assert data["fresh_paper_runs"] == 3
+        assert data["stale_paper_runs"] == 0
+        assert data["latest_paper_run_ns"] == 140
+        assert data["oldest_paper_run_ns"] == 100
 
 
 # Tests for Phase 10A — EI-aware campaign gates + stability rollup.

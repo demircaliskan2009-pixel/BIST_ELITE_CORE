@@ -330,6 +330,10 @@ class CampaignAggregation:
     blocked_runs: int = 0
     inconclusive_runs: int = 0
     complete_runs: int = 0
+    fresh_paper_runs: int = 0
+    stale_paper_runs: int = 0
+    latest_paper_run_ns: int = 0
+    oldest_paper_run_ns: int = 0
     paper_run_pass_ratio: float = 0.0
     paper_run_complete_ratio: float = 0.0
     paper_run_evidence_supportive: bool = False
@@ -340,13 +344,16 @@ def _is_scenario_dominated(step_count: int, dominated_steps: int) -> bool:
     return step_count > 0 and dominated_steps > 0 and dominated_steps * 2 >= step_count
 
 
-def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignAggregation:
+def build_campaign_aggregation(
+    reports: tuple[CampaignReport, ...], *, thresholds: PromotionThresholds | None = None
+) -> CampaignAggregation:
     """Aggregate multiple campaign reports into a summary.
 
     Pure function. No I/O. Deterministic.
 
     Args:
         reports: completed campaign reports (order preserved).
+        thresholds: promotion policy thresholds for paper-run recency gating.
 
     Returns:
         CampaignAggregation with cross-campaign evidence.
@@ -397,22 +404,43 @@ def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignA
             blocked_runs=0,
             inconclusive_runs=0,
             complete_runs=0,
+            fresh_paper_runs=0,
+            stale_paper_runs=0,
+            latest_paper_run_ns=0,
+            oldest_paper_run_ns=0,
             paper_run_pass_ratio=0.0,
             paper_run_complete_ratio=0.0,
             paper_run_evidence_supportive=False,
         )
-    # Phase 16J: paper run evidence aggregation
+    thresholds = thresholds or PromotionThresholds()
+
+    # Phase 16L: paper run evidence aggregation + recency gating
     total_paper_runs = 0
     passed_runs = 0
     warned_runs = 0
     blocked_runs = 0
     inconclusive_runs = 0
     complete_runs = 0
-    # Paper run evidence aggregation (Phase 16J)
-    # A paper run is a campaign with a verdict (any status)
+    fresh_paper_runs = 0
+    stale_paper_runs = 0
+    latest_paper_run_ns = 0
+    oldest_paper_run_ns = 0
+    fresh_passed_runs = 0
+    fresh_warned_runs = 0
+    fresh_blocked_runs = 0
+    fresh_complete_runs = 0
+    paper_run_verdicts: list[tuple[AcceptanceVerdict, int]] = []
+    valid_paper_run_timestamps: list[int] = []
+
     for r in reports:
         total_paper_runs += 1
         v = AcceptanceVerdict(r.verdict)
+        completed_at_ns = getattr(r, "completed_at_ns", 0)
+        normalized_completed_at_ns = completed_at_ns if type(completed_at_ns) is int and completed_at_ns > 0 else 0
+        paper_run_verdicts.append((v, normalized_completed_at_ns))
+        if normalized_completed_at_ns > 0:
+            valid_paper_run_timestamps.append(normalized_completed_at_ns)
+
         if v == AcceptanceVerdict.PASS:
             passed_runs += 1
             complete_runs += 1
@@ -423,6 +451,31 @@ def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignA
             blocked_runs += 1
         elif v == AcceptanceVerdict.INCONCLUSIVE:
             inconclusive_runs += 1
+
+    if valid_paper_run_timestamps:
+        latest_paper_run_ns = max(valid_paper_run_timestamps)
+        oldest_paper_run_ns = min(valid_paper_run_timestamps)
+
+    if thresholds.max_paper_run_age_ns < 0:
+        paper_run_cutoff_ns: int | None = None
+    else:
+        paper_run_cutoff_ns = latest_paper_run_ns - thresholds.max_paper_run_age_ns if latest_paper_run_ns > 0 else 0
+
+    for verdict, completed_at_ns in paper_run_verdicts:
+        is_fresh = completed_at_ns > 0 and (paper_run_cutoff_ns is None or completed_at_ns >= paper_run_cutoff_ns)
+        if not is_fresh:
+            stale_paper_runs += 1
+            continue
+
+        fresh_paper_runs += 1
+        if verdict == AcceptanceVerdict.PASS:
+            fresh_passed_runs += 1
+            fresh_complete_runs += 1
+        elif verdict == AcceptanceVerdict.PASS_WITH_WARNINGS:
+            fresh_warned_runs += 1
+            fresh_complete_runs += 1
+        elif verdict == AcceptanceVerdict.FAIL:
+            fresh_blocked_runs += 1
 
     passed = 0
     warned = 0
@@ -544,16 +597,16 @@ def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignA
     else:
         consistency = AggregateConsistency.MIXED
 
-    paper_run_pass_ratio = (passed_runs + warned_runs) / total_paper_runs if total_paper_runs > 0 else 0.0
-    paper_run_complete_ratio = complete_runs / total_paper_runs if total_paper_runs > 0 else 0.0
-    # Phase 16K: use PromotionThresholds for sufficiency
-    default_thresholds = PromotionThresholds()
+    paper_run_pass_ratio = (fresh_passed_runs + fresh_warned_runs) / fresh_paper_runs if fresh_paper_runs > 0 else 0.0
+    paper_run_complete_ratio = fresh_complete_runs / fresh_paper_runs if fresh_paper_runs > 0 else 0.0
+    paper_run_blocked_ratio = fresh_blocked_runs / fresh_paper_runs if fresh_paper_runs > 0 else 0.0
+
+    # Phase 16L: sufficiency thresholds use fresh paper-run evidence only.
     paper_run_evidence_supportive = (
-        total_paper_runs >= default_thresholds.min_paper_runs
-        and paper_run_pass_ratio >= default_thresholds.min_paper_pass_ratio
-        and paper_run_complete_ratio >= default_thresholds.min_paper_complete_ratio
-        and (blocked_runs / total_paper_runs if total_paper_runs > 0 else 0.0)
-        <= default_thresholds.max_paper_blocked_ratio
+        fresh_paper_runs >= thresholds.min_paper_runs
+        and paper_run_pass_ratio >= thresholds.min_paper_pass_ratio
+        and paper_run_complete_ratio >= thresholds.min_paper_complete_ratio
+        and paper_run_blocked_ratio <= thresholds.max_paper_blocked_ratio
     )
     return CampaignAggregation(
         total_campaigns=n,
@@ -600,6 +653,10 @@ def build_campaign_aggregation(reports: tuple[CampaignReport, ...]) -> CampaignA
         blocked_runs=blocked_runs,
         inconclusive_runs=inconclusive_runs,
         complete_runs=complete_runs,
+        fresh_paper_runs=fresh_paper_runs,
+        stale_paper_runs=stale_paper_runs,
+        latest_paper_run_ns=latest_paper_run_ns,
+        oldest_paper_run_ns=oldest_paper_run_ns,
         paper_run_pass_ratio=paper_run_pass_ratio,
         paper_run_complete_ratio=paper_run_complete_ratio,
         paper_run_evidence_supportive=paper_run_evidence_supportive,
@@ -691,6 +748,7 @@ class PromotionThresholds:
     min_paper_pass_ratio: float = 0.8
     min_paper_complete_ratio: float = 0.8
     max_paper_blocked_ratio: float = 0.2
+    max_paper_run_age_ns: int = -1
     """Configurable thresholds for the promotion policy.
 
     Coverage → insufficient evidence if not met.
@@ -1144,7 +1202,7 @@ def build_promotion_review(
         reviewed_at_ns: review timestamp; defaults to time.time_ns().
     """
     ts = reviewed_at_ns if reviewed_at_ns is not None else time.time_ns()
-    aggregation = build_campaign_aggregation(reports)
+    aggregation = build_campaign_aggregation(reports, thresholds=thresholds)
     policy = PromotionPolicy(thresholds)
     result = policy.evaluate(aggregation, readiness_level=readiness_level)
 
@@ -1303,6 +1361,10 @@ def _aggregation_to_dict(agg: CampaignAggregation) -> dict:
         "blocked_runs": agg.blocked_runs,
         "inconclusive_runs": agg.inconclusive_runs,
         "complete_runs": agg.complete_runs,
+        "fresh_paper_runs": agg.fresh_paper_runs,
+        "stale_paper_runs": agg.stale_paper_runs,
+        "latest_paper_run_ns": agg.latest_paper_run_ns,
+        "oldest_paper_run_ns": agg.oldest_paper_run_ns,
         "paper_run_pass_ratio": agg.paper_run_pass_ratio,
         "paper_run_complete_ratio": agg.paper_run_complete_ratio,
         "paper_run_evidence_supportive": agg.paper_run_evidence_supportive,
@@ -1390,6 +1452,10 @@ def verdict_distribution(agg: CampaignAggregation) -> dict:
         "blocked_runs": agg.blocked_runs,
         "inconclusive_runs": agg.inconclusive_runs,
         "complete_runs": agg.complete_runs,
+        "fresh_paper_runs": agg.fresh_paper_runs,
+        "stale_paper_runs": agg.stale_paper_runs,
+        "latest_paper_run_ns": agg.latest_paper_run_ns,
+        "oldest_paper_run_ns": agg.oldest_paper_run_ns,
         "paper_run_pass_ratio": agg.paper_run_pass_ratio,
         "paper_run_complete_ratio": agg.paper_run_complete_ratio,
         "paper_run_evidence_supportive": agg.paper_run_evidence_supportive,
@@ -1405,6 +1471,10 @@ def paper_run_summary(agg: CampaignAggregation) -> dict:
         "blocked_runs": agg.blocked_runs,
         "inconclusive_runs": agg.inconclusive_runs,
         "complete_runs": agg.complete_runs,
+        "fresh_paper_runs": agg.fresh_paper_runs,
+        "stale_paper_runs": agg.stale_paper_runs,
+        "latest_paper_run_ns": agg.latest_paper_run_ns,
+        "oldest_paper_run_ns": agg.oldest_paper_run_ns,
         "paper_run_pass_ratio": agg.paper_run_pass_ratio,
         "paper_run_complete_ratio": agg.paper_run_complete_ratio,
         "paper_run_evidence_supportive": agg.paper_run_evidence_supportive,
