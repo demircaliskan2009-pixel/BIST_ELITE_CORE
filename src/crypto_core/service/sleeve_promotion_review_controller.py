@@ -16,7 +16,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Tuple
 
 from crypto_core.service.sleeve_candidate_workflow import SleeveCandidateWorkflowEntry, SleeveCandidateWorkflowSnapshot
 from crypto_core.service.sleeve_portfolio import SleevePromotionCandidateStatus, SleevePromotionSupportStatus
@@ -39,24 +38,24 @@ class SleevePromotionReviewResult:
     repeated_weak: bool = False
     repeated_blocked: bool = False
     repeated_inconclusive: bool = False
-    missing_evidence: Tuple[str, ...] = ()
-    governance_blockers: Tuple[str, ...] = ()
-    last_verdict: Optional[SleevePromotionReviewVerdict] = None
+    missing_evidence: tuple[str, ...] = ()
+    governance_blockers: tuple[str, ...] = ()
+    last_verdict: SleevePromotionReviewVerdict | None = None
 
 
 @dataclass(frozen=True)
 class SleevePromotionReviewPortfolioSummary:
     as_of_ns: int
-    review_results: Tuple[SleevePromotionReviewResult, ...]
-    supported: Tuple[str, ...]
-    hold: Tuple[str, ...]
-    reject: Tuple[str, ...]
-    inconclusive: Tuple[str, ...]
-    repeated_weak: Tuple[str, ...]
-    repeated_blocked: Tuple[str, ...]
-    repeated_inconclusive: Tuple[str, ...]
-    missing_evidence: Tuple[str, ...]
-    governance_blockers: Tuple[str, ...]
+    review_results: tuple[SleevePromotionReviewResult, ...]
+    supported: tuple[str, ...]
+    hold: tuple[str, ...]
+    reject: tuple[str, ...]
+    inconclusive: tuple[str, ...]
+    repeated_weak: tuple[str, ...]
+    repeated_blocked: tuple[str, ...]
+    repeated_inconclusive: tuple[str, ...]
+    missing_evidence: tuple[str, ...]
+    governance_blockers: tuple[str, ...]
     operator_summary: str
 
 
@@ -71,9 +70,9 @@ class SleevePromotionReviewHistoryEntry:
 class SleevePromotionReviewSnapshot:
     as_of_ns: int
     status: str
-    review_results: Tuple[SleevePromotionReviewResult, ...]
+    review_results: tuple[SleevePromotionReviewResult, ...]
     portfolio_summary: SleevePromotionReviewPortfolioSummary
-    history: Tuple[SleevePromotionReviewHistoryEntry, ...] = ()
+    history: tuple[SleevePromotionReviewHistoryEntry, ...] = ()
 
 
 class SleevePromotionReviewCorruptError(RuntimeError):
@@ -93,7 +92,7 @@ class SleevePromotionReviewController:
         if not self.workflow_snapshot or not hasattr(self.workflow_snapshot, "sleeves"):
             raise SleevePromotionReviewCorruptError("Malformed workflow snapshot.")
 
-    def build_review_results(self) -> Tuple[SleevePromotionReviewResult, ...]:
+    def build_review_results(self) -> tuple[SleevePromotionReviewResult, ...]:
         results = []
         for entry in getattr(self.workflow_snapshot, "sleeves", []):
             verdict, reason, next_step = self._derive_verdict(entry)
@@ -113,7 +112,7 @@ class SleevePromotionReviewController:
             )
         return tuple(results)
 
-    def _derive_verdict(self, entry: SleeveCandidateWorkflowEntry) -> Tuple[SleevePromotionReviewVerdict, str, str]:
+    def _derive_verdict(self, entry: SleeveCandidateWorkflowEntry) -> tuple[SleevePromotionReviewVerdict, str, str]:
         # Deterministic mapping from candidate workflow entry to review verdict
         if (
             entry.candidate_status == SleevePromotionCandidateStatus.SUPPORTED
@@ -133,7 +132,7 @@ class SleevePromotionReviewController:
         return (SleevePromotionReviewVerdict.INCONCLUSIVE, entry.reason_summary, entry.next_step)
 
     def build_portfolio_summary(
-        self, review_results: Tuple[SleevePromotionReviewResult, ...]
+        self, review_results: tuple[SleevePromotionReviewResult, ...]
     ) -> SleevePromotionReviewPortfolioSummary:
         supported, hold, reject, inconclusive = [], [], [], []
         repeated_weak, repeated_blocked, repeated_inconclusive = [], [], []

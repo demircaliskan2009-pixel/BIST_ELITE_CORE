@@ -16,7 +16,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Tuple
 
 from crypto_core.service.sleeve_promotion_review_controller import (
     SleevePromotionReviewPortfolioSummary,
@@ -39,22 +38,22 @@ class SleeveAdmissionResult:
     verdict: SleeveAdmissionVerdict
     reason: str
     next_step: str
-    governance_blockers: Tuple[str, ...] = ()
-    evidence_blockers: Tuple[str, ...] = ()
-    last_review_verdict: Optional[SleevePromotionReviewVerdict] = None
+    governance_blockers: tuple[str, ...] = ()
+    evidence_blockers: tuple[str, ...] = ()
+    last_review_verdict: SleevePromotionReviewVerdict | None = None
 
 
 @dataclass(frozen=True)
 class SleeveAdmissionPortfolioSummary:
     as_of_ns: int
-    admission_results: Tuple[SleeveAdmissionResult, ...]
-    admitted_active: Tuple[str, ...]
-    admitted_unallocated: Tuple[str, ...]
-    review_supported_not_admitted: Tuple[str, ...]
-    blocked: Tuple[str, ...]
-    inconclusive: Tuple[str, ...]
-    governance_blockers: Tuple[str, ...]
-    evidence_blockers: Tuple[str, ...]
+    admission_results: tuple[SleeveAdmissionResult, ...]
+    admitted_active: tuple[str, ...]
+    admitted_unallocated: tuple[str, ...]
+    review_supported_not_admitted: tuple[str, ...]
+    blocked: tuple[str, ...]
+    inconclusive: tuple[str, ...]
+    governance_blockers: tuple[str, ...]
+    evidence_blockers: tuple[str, ...]
     operator_summary: str
 
 
@@ -69,9 +68,9 @@ class SleeveAdmissionHistoryEntry:
 class SleeveAdmissionSnapshot:
     as_of_ns: int
     status: str
-    admission_results: Tuple[SleeveAdmissionResult, ...]
+    admission_results: tuple[SleeveAdmissionResult, ...]
     portfolio_summary: SleeveAdmissionPortfolioSummary
-    history: Tuple[SleeveAdmissionHistoryEntry, ...] = ()
+    history: tuple[SleeveAdmissionHistoryEntry, ...] = ()
 
 
 class SleeveAdmissionCorruptError(RuntimeError):
@@ -91,7 +90,7 @@ class SleeveAdmissionController:
         if not self.review_portfolio_summary or not hasattr(self.review_portfolio_summary, "review_results"):
             raise SleeveAdmissionCorruptError("Malformed review portfolio summary.")
 
-    def build_admission_results(self) -> Tuple[SleeveAdmissionResult, ...]:
+    def build_admission_results(self) -> tuple[SleeveAdmissionResult, ...]:
         results = []
         for review in getattr(self.review_portfolio_summary, "review_results", []):
             verdict, reason, next_step = self._derive_verdict(review)
