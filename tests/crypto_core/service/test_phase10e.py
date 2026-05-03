@@ -1961,10 +1961,113 @@ class TestPersistenceRestore:
         with pytest.raises(EscalationWorkflowCorruptError, match="final_report"):
             orch.restore_escalation_review()
 
+    def test_restore_review_default_thresholds_when_promotion_thresholds_none(self, tmp_path: Path):
+        """restore_review() with no explicit promotion_thresholds must apply
+        _default_runtime_review_thresholds, NOT silently pass None.
+        Regression test for Phase 16O gap: crash-restore path must enforce
+        the same paper_run evidence gate as start_review().
+        """
+        svc = _make_mock_service()
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        # First orchestrator: start + persist with paper_live readiness.
+        orch = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store,
+            readiness_level="paper_live",
+            # promotion_thresholds intentionally omitted → None
+        )
+        orch.start_review(review_id="rev-16o-default")
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-16o-1"))
 
-# ---------------------------------------------------------------------------
-# Tests: Serialization
-# ---------------------------------------------------------------------------
+        # Restore into a fresh orchestrator with same readiness, no explicit thresholds.
+        orch2 = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store,
+            readiness_level="paper_live",
+            # promotion_thresholds intentionally omitted → None
+        )
+        restored = orch2.restore_review({"camp-16o-1": _make_campaign_report(campaign_id="camp-16o-1")})
+        assert restored is True
+
+        # Runtime default: _default_runtime_review_thresholds("paper_live") → min_paper_runs=3.
+        # Verify via private attribute — this is the authoritative threshold holder.
+        assert orch2.review_controller._thresholds.min_paper_runs == 3
+
+    def test_restore_review_explicit_thresholds_preserved(self, tmp_path: Path):
+        """restore_review() with explicit promotion_thresholds must preserve
+        the override unchanged — not replaced by runtime defaults.
+        """
+        svc = _make_mock_service()
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        explicit = PromotionThresholds(min_paper_runs=7)
+        orch = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store,
+            readiness_level="paper_live",
+            promotion_thresholds=explicit,
+        )
+        orch.start_review(review_id="rev-16o-explicit")
+        orch.intake_campaign_report(_make_campaign_report(campaign_id="camp-16o-2"))
+
+        orch2 = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store,
+            readiness_level="paper_live",
+            promotion_thresholds=explicit,
+        )
+        restored = orch2.restore_review({"camp-16o-2": _make_campaign_report(campaign_id="camp-16o-2")})
+        assert restored is True
+        # Explicit override (min_paper_runs=7) must survive restore.
+        assert orch2.review_controller._thresholds.min_paper_runs == 7
+
+    def test_restore_review_thresholds_match_start_review_for_paper_live(self, tmp_path: Path):
+        """Restored controller thresholds must equal fresh start_review() thresholds
+        for the same paper_live readiness level (behavioral parity guarantee).
+        """
+        svc = _make_mock_service()
+        store_a = EvidenceStore(
+            evidence_dir=tmp_path / "evidence_a",
+            config=EvidenceStoreConfig(),
+        )
+        store_b = EvidenceStore(
+            evidence_dir=tmp_path / "evidence_b",
+            config=EvidenceStoreConfig(),
+        )
+
+        # Fresh start_review — captures the live threshold applied.
+        orch_fresh = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store_a,
+            readiness_level="paper_live",
+        )
+        orch_fresh.start_review(review_id="fresh-rev")
+        fresh_min_paper_runs = orch_fresh.review_controller._thresholds.min_paper_runs
+
+        # Persist then restore — must produce identical threshold.
+        orch_persist = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store_b,
+            readiness_level="paper_live",
+        )
+        orch_persist.start_review(review_id="persist-rev")
+        report = _make_campaign_report(campaign_id="camp-parity")
+        orch_persist.intake_campaign_report(report)
+
+        orch_restored = ServiceOrchestrator(
+            service=svc,
+            evidence_store=store_b,
+            readiness_level="paper_live",
+        )
+        orch_restored.restore_review({"camp-parity": report})
+        restored_min_paper_runs = orch_restored.review_controller._thresholds.min_paper_runs
+
+        assert fresh_min_paper_runs == restored_min_paper_runs == 3
 
 
 class TestSerialization:

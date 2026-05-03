@@ -1825,11 +1825,15 @@ class ServiceOrchestrator:
         if self._review is not None and self.review_active():
             raise RuntimeError("Cannot restore: active review in progress")
 
+        resolved_thresholds = self._promotion_thresholds
+        if resolved_thresholds is None:
+            resolved_thresholds = self._default_runtime_review_thresholds(self._readiness_level)
+
         try:
             controller = PromotionReviewController.restore(
                 self._evidence_store,
                 reports_by_id,
-                thresholds=self._promotion_thresholds,
+                thresholds=resolved_thresholds,
             )
         except (ReviewWorkflowCorruptError, RuntimeError):
             raise
