@@ -45,6 +45,30 @@ When applicable, use the mapped prompt workflow:
 
 If the mapped prompt applies, do not bypass it with ad-hoc reasoning.
 
+### PATCH Chain — Mandatory Inline (no skill read required)
+
+Every PATCH task MUST execute this exact chain without skipping any step:
+
+```
+1.  git status --short          ← dirty tree check (block if src/tests dirty)
+2.  python -c "import <module>" ← pre-patch import sanity
+3.  [EDIT FILES]                ← replace_string_in_file with ≥3 lines context
+4.  ruff check --fix <files>    ← lint fix
+5.  ruff format <files>         ← format
+6.  ruff check <files>          ← verify clean
+7.  pytest -x -q <targeted>     ← targeted test run
+8.  pytest -x -q <full scope>   ← full scope test run
+9.  git diff --check            ← whitespace check
+10. git diff --stat             ← scope review (block if >200 lines or mixed)
+11. git diff                    ← content review
+12. git add <scoped files only> ← NEVER git add .
+13. git commit -m "<conventional message>"
+14. git push origin <branch>
+15. [wait for CI] → if red: fix → restart from step 4
+```
+
+ANY failure at ANY step → fix and restart from step 4. No skipping. No --no-verify. No --force.
+
 ---
 
 ## 1C. FULL-CONTEXT REQUIREMENT
