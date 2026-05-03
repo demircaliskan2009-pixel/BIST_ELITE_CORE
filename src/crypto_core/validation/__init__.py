@@ -1,5 +1,15 @@
 """Validation foundations for deterministic pre-promotion checks."""
 
+from crypto_core.validation.pbo import (
+    CSCVMatrix,
+    DSRInputs,
+    MCPermutationInputs,
+    PBOSplit,
+    PBOValidationResult,
+    RegimePBOResult,
+    SensitivityInputs,
+    validate_pbo,
+)
 from crypto_core.validation.stress_testing import (
     RegimeGateEvidence,
     StressScenario,
@@ -17,7 +27,14 @@ from crypto_core.validation.walk_forward import (
 )
 
 __all__ = [
+    "CSCVMatrix",
+    "DSRInputs",
+    "MCPermutationInputs",
+    "PBOSplit",
+    "PBOValidationResult",
     "RegimeGateEvidence",
+    "RegimePBOResult",
+    "SensitivityInputs",
     "StressScenario",
     "StressScenarioResult",
     "StressTrade",
@@ -26,6 +43,7 @@ __all__ = [
     "WalkForwardWindow",
     "WalkForwardWindowResult",
     "default_stress_scenarios",
+    "validate_pbo",
     "validate_stress_testing",
     "validate_walk_forward",
 ]
