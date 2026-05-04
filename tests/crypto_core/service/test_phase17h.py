@@ -28,6 +28,32 @@ from crypto_core.service.sleeve_portfolio import (
     sleeve_promotion_candidate_result_to_dict,
 )
 from crypto_core.validation.pipeline import ValidationPipelineResult, ValidationPipelineStageStatus, validate_pipeline
+from crypto_core.validation.stage4_comparator import Stage4ComparisonResult
+
+
+def _passing_stage4() -> Stage4ComparisonResult:
+    """Minimal passing Stage4 result for tests that require validation_ready=True."""
+    return Stage4ComparisonResult(
+        evaluated=True,
+        passed=True,
+        status="PASS",
+        baseline_id="baseline-1",
+        paper_id="paper-1",
+        edge_id="edge-1",
+        session_duration_days=30.0,
+        required_duration_days=2.0,
+        backtest_sharpe=1.0,
+        paper_sharpe=1.2,
+        required_min_paper_sharpe=0.6,
+        sharpe_retention_ratio=1.2,
+        paper_hit_rate=0.60,
+        backtest_hit_rate=0.55,
+        paper_slippage_bps=4.0,
+        backtest_slippage_bps=5.0,
+        paper_fill_rate=0.98,
+        backtest_fill_rate=0.95,
+        rejection_reasons=(),
+    )
 
 
 def _stage_status(stage: str, *, passed: bool = True) -> ValidationPipelineStageStatus:
@@ -64,6 +90,7 @@ def _sleeve(
     qualification_missing: tuple[str, ...] = (),
     recommendation_missing: tuple[str, ...] = (),
     promotion_candidate: SleevePromotionCandidateResult | None = None,
+    stage4_comparison_result=None,
 ) -> CryptoSleeveState:
     return CryptoSleeveState(
         sleeve_id="sleeve-microstructure",
@@ -99,6 +126,7 @@ def _sleeve(
         ),
         promotion_candidate=promotion_candidate or SleevePromotionCandidateResult(),
         validation_pipeline_result=validation_pipeline_result,
+        stage4_comparison_result=stage4_comparison_result,
     )
 
 
@@ -151,6 +179,7 @@ def test_validation_ready_true_injects_no_validation_reasons_into_missing_eviden
         _sleeve(
             validation_pipeline_result=_pipeline_result(validation_ready=True, pbo_allocation_cap=0.5),
             promotion_missing=("support_missing",),
+            stage4_comparison_result=_passing_stage4(),
         )
     )
     assert result.missing_evidence == ("support_missing",)

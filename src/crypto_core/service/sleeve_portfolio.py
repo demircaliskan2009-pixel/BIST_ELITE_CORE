@@ -1516,9 +1516,13 @@ def _build_sleeve_promotion_candidate_result(sleeve: CryptoSleeveState) -> Sleev
     recommendation = sleeve.recommendation
     promotion_support = sleeve.promotion_support
     validation_missing_evidence = _validation_pipeline_missing_evidence(sleeve.validation_pipeline_result)
+    _stage4_required = bool(sleeve.stage4_comparison_required) or (
+        isinstance(sleeve.validation_pipeline_result, ValidationPipelineResult)
+        and sleeve.validation_pipeline_result.validation_ready is True
+    )
     stage4_missing_evidence = _stage4_missing_evidence(
         sleeve.stage4_comparison_result,
-        required=sleeve.stage4_comparison_required,
+        required=_stage4_required,
     )
     pbo_allocation_cap = _validation_pipeline_pbo_allocation_cap(sleeve.validation_pipeline_result)
     missing_evidence = tuple(

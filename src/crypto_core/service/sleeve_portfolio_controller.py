@@ -463,6 +463,9 @@ class SleevePortfolioController:
             escalation_stage=sleeve.escalation_stage,
             reasons=tuple(reasons),
             required_changes=required_changes,
+            validation_pipeline_result=sleeve.validation_pipeline_result,
+            stage4_comparison_result=sleeve.stage4_comparison_result,
+            stage4_comparison_required=sleeve.stage4_comparison_required,
         )
 
     def _configuration_reasons(self, sleeve: CryptoSleeveState) -> tuple[SleeveReason, ...]:
