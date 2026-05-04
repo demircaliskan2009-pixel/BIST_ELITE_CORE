@@ -94,6 +94,7 @@ from crypto_core.service.sleeve_admission_controller import (
     SleeveAdmissionController,
     SleeveAdmissionCorruptError,
     SleeveAdmissionSnapshot,
+    sleeve_admission_snapshot_to_dict,
 )
 from crypto_core.service.sleeve_candidate_workflow import (
     SleeveCandidateWorkflowController,
@@ -122,7 +123,10 @@ from crypto_core.service.sleeve_portfolio import (
     sleeve_recommendation_result_to_dict,
 )
 from crypto_core.service.sleeve_portfolio_controller import SleeveOperatorOverride, SleevePortfolioController
-from crypto_core.service.sleeve_promotion_review_controller import SleevePromotionReviewSnapshot
+from crypto_core.service.sleeve_promotion_review_controller import (
+    SleevePromotionReviewSnapshot,
+    sleeve_promotion_review_snapshot_to_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2702,10 +2706,14 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         ),
         # Phase 15E
         "sleeve_promotion_review": (
-            snap.sleeve_promotion_review.__dict__ if snap.sleeve_promotion_review is not None else None
+            sleeve_promotion_review_snapshot_to_dict(snap.sleeve_promotion_review)
+            if snap.sleeve_promotion_review is not None
+            else None
         ),
         # Phase 15F
-        "sleeve_admission": (snap.sleeve_admission.__dict__ if snap.sleeve_admission is not None else None),
+        "sleeve_admission": (
+            sleeve_admission_snapshot_to_dict(snap.sleeve_admission) if snap.sleeve_admission is not None else None
+        ),
         "readiness_level": snap.readiness_level,
         "readiness_is_supportive": snap.readiness_is_supportive,
         "evidence": evidence_sufficiency_state_to_dict(snap.evidence),

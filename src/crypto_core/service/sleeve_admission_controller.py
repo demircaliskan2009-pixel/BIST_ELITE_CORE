@@ -74,6 +74,60 @@ class SleeveAdmissionSnapshot:
     history: tuple[SleeveAdmissionHistoryEntry, ...] = ()
 
 
+def sleeve_admission_result_to_dict(result: SleeveAdmissionResult) -> dict:
+    """Serialize SleeveAdmissionResult to a JSON-safe dict."""
+    return {
+        "sleeve_id": result.sleeve_id,
+        "verdict": result.verdict.value if isinstance(result.verdict, Enum) else str(result.verdict),
+        "reason": result.reason,
+        "next_step": result.next_step,
+        "governance_blockers": list(result.governance_blockers),
+        "evidence_blockers": list(result.evidence_blockers),
+        "last_review_verdict": (
+            result.last_review_verdict.value
+            if isinstance(result.last_review_verdict, Enum)
+            else result.last_review_verdict
+        ),
+        "pbo_allocation_cap": result.pbo_allocation_cap,
+    }
+
+
+def sleeve_admission_portfolio_summary_to_dict(summary: SleeveAdmissionPortfolioSummary) -> dict:
+    """Serialize SleeveAdmissionPortfolioSummary to a JSON-safe dict."""
+    return {
+        "as_of_ns": summary.as_of_ns,
+        "admission_results": [sleeve_admission_result_to_dict(result) for result in summary.admission_results],
+        "admitted_active": list(summary.admitted_active),
+        "admitted_unallocated": list(summary.admitted_unallocated),
+        "review_supported_not_admitted": list(summary.review_supported_not_admitted),
+        "blocked": list(summary.blocked),
+        "inconclusive": list(summary.inconclusive),
+        "governance_blockers": list(summary.governance_blockers),
+        "evidence_blockers": list(summary.evidence_blockers),
+        "operator_summary": summary.operator_summary,
+    }
+
+
+def sleeve_admission_history_entry_to_dict(entry: SleeveAdmissionHistoryEntry) -> dict:
+    """Serialize SleeveAdmissionHistoryEntry to a JSON-safe dict."""
+    return {
+        "as_of_ns": entry.as_of_ns,
+        "summary": entry.summary,
+        "portfolio_summary": sleeve_admission_portfolio_summary_to_dict(entry.portfolio_summary),
+    }
+
+
+def sleeve_admission_snapshot_to_dict(snapshot: SleeveAdmissionSnapshot) -> dict:
+    """Serialize SleeveAdmissionSnapshot to a JSON-safe dict."""
+    return {
+        "as_of_ns": snapshot.as_of_ns,
+        "status": snapshot.status,
+        "admission_results": [sleeve_admission_result_to_dict(result) for result in snapshot.admission_results],
+        "portfolio_summary": sleeve_admission_portfolio_summary_to_dict(snapshot.portfolio_summary),
+        "history": [sleeve_admission_history_entry_to_dict(entry) for entry in snapshot.history],
+    }
+
+
 class SleeveAdmissionCorruptError(RuntimeError):
     pass
 

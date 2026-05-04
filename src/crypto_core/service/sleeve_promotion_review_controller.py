@@ -76,6 +76,61 @@ class SleevePromotionReviewSnapshot:
     history: tuple[SleevePromotionReviewHistoryEntry, ...] = ()
 
 
+def sleeve_promotion_review_result_to_dict(result: SleevePromotionReviewResult) -> dict:
+    """Serialize SleevePromotionReviewResult to a JSON-safe dict."""
+    return {
+        "sleeve_id": result.sleeve_id,
+        "verdict": result.verdict.value if isinstance(result.verdict, Enum) else str(result.verdict),
+        "reason": result.reason,
+        "next_step": result.next_step,
+        "repeated_weak": result.repeated_weak,
+        "repeated_blocked": result.repeated_blocked,
+        "repeated_inconclusive": result.repeated_inconclusive,
+        "missing_evidence": list(result.missing_evidence),
+        "governance_blockers": list(result.governance_blockers),
+        "last_verdict": result.last_verdict.value if isinstance(result.last_verdict, Enum) else result.last_verdict,
+        "pbo_allocation_cap": result.pbo_allocation_cap,
+    }
+
+
+def sleeve_promotion_review_portfolio_summary_to_dict(summary: SleevePromotionReviewPortfolioSummary) -> dict:
+    """Serialize SleevePromotionReviewPortfolioSummary to a JSON-safe dict."""
+    return {
+        "as_of_ns": summary.as_of_ns,
+        "review_results": [sleeve_promotion_review_result_to_dict(result) for result in summary.review_results],
+        "supported": list(summary.supported),
+        "hold": list(summary.hold),
+        "reject": list(summary.reject),
+        "inconclusive": list(summary.inconclusive),
+        "repeated_weak": list(summary.repeated_weak),
+        "repeated_blocked": list(summary.repeated_blocked),
+        "repeated_inconclusive": list(summary.repeated_inconclusive),
+        "missing_evidence": list(summary.missing_evidence),
+        "governance_blockers": list(summary.governance_blockers),
+        "operator_summary": summary.operator_summary,
+    }
+
+
+def sleeve_promotion_review_history_entry_to_dict(entry: SleevePromotionReviewHistoryEntry) -> dict:
+    """Serialize SleevePromotionReviewHistoryEntry to a JSON-safe dict."""
+    return {
+        "as_of_ns": entry.as_of_ns,
+        "summary": entry.summary,
+        "portfolio_summary": sleeve_promotion_review_portfolio_summary_to_dict(entry.portfolio_summary),
+    }
+
+
+def sleeve_promotion_review_snapshot_to_dict(snapshot: SleevePromotionReviewSnapshot) -> dict:
+    """Serialize SleevePromotionReviewSnapshot to a JSON-safe dict."""
+    return {
+        "as_of_ns": snapshot.as_of_ns,
+        "status": snapshot.status,
+        "review_results": [sleeve_promotion_review_result_to_dict(result) for result in snapshot.review_results],
+        "portfolio_summary": sleeve_promotion_review_portfolio_summary_to_dict(snapshot.portfolio_summary),
+        "history": [sleeve_promotion_review_history_entry_to_dict(entry) for entry in snapshot.history],
+    }
+
+
 class SleevePromotionReviewCorruptError(RuntimeError):
     pass
 
