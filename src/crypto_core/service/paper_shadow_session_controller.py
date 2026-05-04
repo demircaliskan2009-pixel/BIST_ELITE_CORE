@@ -23,6 +23,7 @@ from crypto_core.service.sleeve_admission_controller import (
     SleeveAdmissionCorruptError,
     paper_shadow_activation_plan_to_dict,
 )
+from crypto_core.validation.stage4_comparator import Stage4PaperSummary
 
 
 class PaperShadowSessionStatus(str, Enum):
@@ -677,6 +678,29 @@ class PaperShadowSessionSnapshot:
     evidence_blockers: tuple[str, ...] = ()
     governance_blockers: tuple[str, ...] = ()
     operator_summary: str = "Paper/shadow session has not been prepared."
+
+
+def build_stage4_paper_summary_from_session_snapshot(
+    snapshot: PaperShadowSessionSnapshot,
+    *,
+    edge_id: str,
+    paper_id: str | None = None,
+) -> Stage4PaperSummary:
+    _validate_session_snapshot(snapshot)
+    started_at_ns = snapshot.started_at_ns if snapshot.started_at_ns is not None else 0
+    stopped_at_ns = snapshot.stopped_at_ns if snapshot.stopped_at_ns is not None else snapshot.as_of_ns
+    paper_fill_rate = snapshot.simulated_fills / snapshot.fill_attempts if snapshot.fill_attempts > 0 else None
+    return Stage4PaperSummary(
+        paper_id=paper_id or snapshot.session_id,
+        edge_id=edge_id,
+        started_at_ns=started_at_ns,
+        stopped_at_ns=stopped_at_ns,
+        paper_sharpe=None,
+        paper_hit_rate=None,
+        paper_slippage_bps=None,
+        paper_fill_rate=paper_fill_rate,
+        paper_trade_count=snapshot.simulated_fills,
+    )
 
 
 class PaperShadowSessionController:

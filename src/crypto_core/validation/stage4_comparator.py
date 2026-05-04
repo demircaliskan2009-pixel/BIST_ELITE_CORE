@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from crypto_core.validation.walk_forward import WalkForwardWindow
+
 _DAY_NS = 86400 * 1_000_000_000
 _STATUS_PASS = "PASS"  # noqa: S105 - status label, not a credential.
 _STATUS_REJECT = "REJECT"  # noqa: S105 - status label, not a credential.
@@ -223,6 +225,39 @@ def build_stage4_backtest_baseline(
     )
 
 
+def build_stage4_backtest_baseline_from_windows(
+    windows: tuple[WalkForwardWindow, ...] | list[WalkForwardWindow],
+    *,
+    baseline_id: str,
+    edge_id: str,
+    as_of_ns: int,
+    backtest_slippage_bps: float | None = None,
+    backtest_fill_rate: float | None = None,
+) -> Stage4BacktestBaseline:
+    ordered_windows = tuple(windows)
+    valid_windows = tuple(
+        window
+        for window in ordered_windows
+        if isinstance(window, WalkForwardWindow)
+        and _is_finite_number(window.out_of_sample_sharpe)
+        and _is_rate(window.out_of_sample_hit_rate)
+    )
+    if not valid_windows:
+        raise ValueError("stage4: no valid OOS windows for baseline")
+    backtest_sharpe = sum(float(window.out_of_sample_sharpe) for window in valid_windows) / len(valid_windows)
+    backtest_hit_rate = sum(float(window.out_of_sample_hit_rate) for window in valid_windows) / len(valid_windows)
+    return build_stage4_backtest_baseline(
+        baseline_id=baseline_id,
+        edge_id=edge_id,
+        as_of_ns=as_of_ns,
+        backtest_sharpe=backtest_sharpe,
+        backtest_hit_rate=backtest_hit_rate,
+        backtest_slippage_bps=backtest_slippage_bps,
+        backtest_fill_rate=backtest_fill_rate,
+        source_window_ids=tuple(window.window_id for window in valid_windows),
+    )
+
+
 def compare_stage4(
     baseline: Stage4BacktestBaseline | None,
     paper: Stage4PaperSummary | None,
@@ -419,6 +454,7 @@ __all__ = [
     "Stage4PaperSummary",
     "Stage4ComparisonResult",
     "build_stage4_backtest_baseline",
+    "build_stage4_backtest_baseline_from_windows",
     "compare_stage4",
     "stage4_backtest_baseline_to_dict",
     "stage4_paper_summary_to_dict",
