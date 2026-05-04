@@ -703,6 +703,43 @@ def build_stage4_paper_summary_from_session_snapshot(
     )
 
 
+def build_stage4_paper_summary_from_pnl_ledger(
+    ledger: PaperPnLLedger,
+    snapshot: PaperShadowSessionSnapshot,
+    *,
+    edge_id: str,
+    paper_id: str | None = None,
+) -> Stage4PaperSummary:
+    _validate_paper_pnl_ledger(ledger)
+    _validate_session_snapshot(snapshot)
+    if ledger.session_id != snapshot.session_id:
+        raise PaperShadowSessionCorruptError("paper stage4 summary ledger session must match session snapshot")
+    started_at_ns = snapshot.started_at_ns if snapshot.started_at_ns is not None else 0
+    stopped_at_ns = snapshot.stopped_at_ns if snapshot.stopped_at_ns is not None else snapshot.as_of_ns
+    paper_fill_rate = snapshot.simulated_fills / snapshot.fill_attempts if snapshot.fill_attempts > 0 else None
+    eligible_lines = tuple(
+        line for line in ledger.pnl_lines if line.status == PaperPnLStatus.APPLIED and line.side == PaperIntentSide.SELL
+    )
+    paper_hit_rate = (
+        sum(1 for line in eligible_lines if line.realized_pnl > 0.0) / len(eligible_lines) if eligible_lines else None
+    )
+    total_gross_notional = sum(position.gross_notional for position in ledger.positions)
+    paper_slippage_bps = (
+        (ledger.total_slippage / total_gross_notional) * 10_000.0 if total_gross_notional > 0.0 else None
+    )
+    return Stage4PaperSummary(
+        paper_id=paper_id or snapshot.session_id,
+        edge_id=edge_id,
+        started_at_ns=started_at_ns,
+        stopped_at_ns=stopped_at_ns,
+        paper_sharpe=None,
+        paper_hit_rate=paper_hit_rate,
+        paper_slippage_bps=paper_slippage_bps,
+        paper_fill_rate=paper_fill_rate,
+        paper_trade_count=snapshot.simulated_fills,
+    )
+
+
 class PaperShadowSessionController:
     """Manage deterministic paper/shadow session lifecycle evidence."""
 
