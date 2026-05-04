@@ -25,6 +25,7 @@ from enum import Enum
 from crypto_core.service.campaign import CampaignReport, CampaignSleeveLinkSummary
 from crypto_core.service.promotion_review import EvidenceSufficiency
 from crypto_core.service.readiness import ReadinessLevel, level_at_least
+from crypto_core.validation.pipeline import ValidationPipelineResult
 
 _ALLOCATION_EPSILON = 1e-9
 
@@ -231,6 +232,7 @@ class SleevePromotionCandidateResult:
     blocking_reasons: tuple[str, ...] = field(default_factory=tuple)
     reason_summary: str = ""
     next_step: str = "Strengthen sleeve evidence before considering it a later promotion candidate."
+    pbo_allocation_cap: float | None = None
 
 
 @dataclass(frozen=True)
@@ -284,6 +286,7 @@ class CryptoSleeveState:
     promotion_support: SleevePromotionSupportResult = field(default_factory=SleevePromotionSupportResult)
     promotion_candidate: SleevePromotionCandidateResult = field(default_factory=SleevePromotionCandidateResult)
     decision_pack: SleeveDecisionPackResult = field(default_factory=SleeveDecisionPackResult)
+    validation_pipeline_result: ValidationPipelineResult | None = None
 
 
 @dataclass(frozen=True)
@@ -729,6 +732,7 @@ def _validate_sleeve_state(state: CryptoSleeveState) -> CryptoSleeveState:
         promotion_support=promotion_support,
         promotion_candidate=promotion_candidate,
         decision_pack=decision_pack,
+        validation_pipeline_result=state.validation_pipeline_result,
     )
 
 
@@ -1460,11 +1464,41 @@ def _apply_sleeve_promotion_support(
     )
 
 
+def _validation_pipeline_missing_evidence(
+    validation_pipeline_result: ValidationPipelineResult | None,
+) -> tuple[str, ...]:
+    if validation_pipeline_result is None:
+        return ()
+    if not isinstance(validation_pipeline_result, ValidationPipelineResult):
+        return ("validation_pipeline_malformed",)
+    if validation_pipeline_result.validation_ready is True:
+        return ()
+    if validation_pipeline_result.validation_ready is not False:
+        return ("validation_pipeline_malformed",)
+    if not isinstance(validation_pipeline_result.rejection_reasons, tuple):
+        return ("validation_pipeline_rejection_reasons_malformed",)
+    if any(not isinstance(reason, str) or not reason for reason in validation_pipeline_result.rejection_reasons):
+        return ("validation_pipeline_rejection_reasons_malformed",)
+    if not validation_pipeline_result.rejection_reasons:
+        return ("validation_pipeline_not_ready",)
+    return validation_pipeline_result.rejection_reasons
+
+
+def _validation_pipeline_pbo_allocation_cap(
+    validation_pipeline_result: ValidationPipelineResult | None,
+) -> float | None:
+    if not isinstance(validation_pipeline_result, ValidationPipelineResult):
+        return None
+    return validation_pipeline_result.pbo_allocation_cap
+
+
 def _build_sleeve_promotion_candidate_result(sleeve: CryptoSleeveState) -> SleevePromotionCandidateResult:
     campaign_evidence = sleeve.campaign_evidence
     qualification = sleeve.qualification
     recommendation = sleeve.recommendation
     promotion_support = sleeve.promotion_support
+    validation_missing_evidence = _validation_pipeline_missing_evidence(sleeve.validation_pipeline_result)
+    pbo_allocation_cap = _validation_pipeline_pbo_allocation_cap(sleeve.validation_pipeline_result)
     missing_evidence = tuple(
         dict.fromkeys(
             (
@@ -1472,6 +1506,7 @@ def _build_sleeve_promotion_candidate_result(sleeve: CryptoSleeveState) -> Sleev
                 *campaign_evidence.missing_evidence,
                 *qualification.missing_evidence,
                 *recommendation.missing_evidence,
+                *validation_missing_evidence,
             )
         )
     )
@@ -1558,6 +1593,7 @@ def _build_sleeve_promotion_candidate_result(sleeve: CryptoSleeveState) -> Sleev
         blocking_reasons=blocking_reasons,
         reason_summary=reason_summary,
         next_step=next_step,
+        pbo_allocation_cap=pbo_allocation_cap,
     )
 
 
@@ -2350,6 +2386,7 @@ def sleeve_promotion_candidate_result_to_dict(result: SleevePromotionCandidateRe
         "blocking_reasons": list(result.blocking_reasons),
         "reason_summary": result.reason_summary,
         "next_step": result.next_step,
+        "pbo_allocation_cap": result.pbo_allocation_cap,
     }
 
 
@@ -2381,6 +2418,7 @@ def sleeve_promotion_candidate_result_from_dict(data: dict) -> SleevePromotionCa
         blocking_reasons=_tuple_of_strings(data.get("blocking_reasons", ()), "blocking_reasons"),
         reason_summary="" if data.get("reason_summary", "") is None else str(data.get("reason_summary", "")),
         next_step=_require_non_empty_str(data.get("next_step"), "next_step"),
+        pbo_allocation_cap=data.get("pbo_allocation_cap"),
     )
 
 

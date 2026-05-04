@@ -96,6 +96,7 @@ class SleeveCandidateWorkflowEntry:
     blocking_reasons: tuple[str, ...] = ()
     reason_summary: str = ""
     next_step: str = ""
+    pbo_allocation_cap: float | None = None
 
 
 @dataclass(frozen=True)
@@ -401,6 +402,7 @@ class SleeveCandidateWorkflowController:
                     blocking_reasons=tuple(sleeve.promotion_candidate.blocking_reasons),
                     reason_summary=sleeve.promotion_candidate.reason_summary,
                     next_step=sleeve.promotion_candidate.next_step,
+                    pbo_allocation_cap=sleeve.promotion_candidate.pbo_allocation_cap,
                 )
             )
 
@@ -510,6 +512,7 @@ def sleeve_candidate_workflow_entry_to_dict(entry: SleeveCandidateWorkflowEntry)
         "blocking_reasons": list(entry.blocking_reasons),
         "reason_summary": entry.reason_summary,
         "next_step": entry.next_step,
+        "pbo_allocation_cap": entry.pbo_allocation_cap,
     }
 
 
@@ -547,6 +550,7 @@ def sleeve_candidate_workflow_entry_from_dict(data: dict) -> SleeveCandidateWork
         blocking_reasons=_tuple_of_strings(data.get("blocking_reasons", ()), "blocking_reasons"),
         reason_summary="" if data.get("reason_summary", "") is None else str(data.get("reason_summary", "")),
         next_step=_require_non_empty_string(data.get("next_step"), "next_step"),
+        pbo_allocation_cap=data.get("pbo_allocation_cap"),
     )
 
 
