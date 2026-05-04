@@ -41,6 +41,7 @@ class SleeveAdmissionResult:
     governance_blockers: tuple[str, ...] = ()
     evidence_blockers: tuple[str, ...] = ()
     last_review_verdict: SleevePromotionReviewVerdict | None = None
+    pbo_allocation_cap: float | None = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,7 @@ class SleeveAdmissionController:
                     governance_blockers=review.governance_blockers,
                     evidence_blockers=review.missing_evidence,
                     last_review_verdict=review.verdict,
+                    pbo_allocation_cap=review.pbo_allocation_cap,
                 )
             )
         return tuple(results)
