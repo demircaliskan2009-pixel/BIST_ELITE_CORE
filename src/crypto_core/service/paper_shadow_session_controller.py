@@ -662,6 +662,8 @@ class PaperShadowSessionSnapshot:
     total_fees: float = 0.0
     total_slippage: float = 0.0
     realized_pnl: float = 0.0
+    equity_start: float | None = None
+    equity_observations: tuple[float, ...] = ()
     risk_limit_decision_id: str | None = None
     risk_limit_decision_status: str = "missing"
     risk_block_new_intents: bool = False
@@ -727,17 +729,61 @@ def build_stage4_paper_summary_from_pnl_ledger(
     paper_slippage_bps = (
         (ledger.total_slippage / total_gross_notional) * 10_000.0 if total_gross_notional > 0.0 else None
     )
+    paper_sharpe = _paper_sharpe_from_equity_observations(snapshot.equity_start, snapshot.equity_observations)
     return Stage4PaperSummary(
         paper_id=paper_id or snapshot.session_id,
         edge_id=edge_id,
         started_at_ns=started_at_ns,
         stopped_at_ns=stopped_at_ns,
-        paper_sharpe=None,
+        paper_sharpe=paper_sharpe,
         paper_hit_rate=paper_hit_rate,
         paper_slippage_bps=paper_slippage_bps,
         paper_fill_rate=paper_fill_rate,
         paper_trade_count=snapshot.simulated_fills,
     )
+
+
+def _paper_sharpe_from_equity_observations(
+    equity_start: float | None,
+    equity_observations: tuple[float, ...],
+) -> float | None:
+    if equity_start is None:
+        return None
+    if not math.isfinite(equity_start) or equity_start <= 0.0:
+        return None
+    if len(equity_observations) < 2:
+        return None
+    previous_equity = equity_start
+    returns: list[float] = []
+    for observation in equity_observations:
+        if not math.isfinite(observation) or observation <= 0.0:
+            return None
+        returns.append((observation - previous_equity) / equity_start)
+        previous_equity = observation
+    if len(returns) < 2:
+        return None
+    mean_return = sum(returns) / len(returns)
+    variance = sum((value - mean_return) ** 2 for value in returns) / (len(returns) - 1)
+    stdev = math.sqrt(variance)
+    if stdev == 0.0 or not math.isfinite(stdev):
+        return None
+    sharpe = mean_return / stdev
+    return sharpe if math.isfinite(sharpe) else None
+
+
+def _snapshot_with_equity_observation(
+    snapshot: PaperShadowSessionSnapshot,
+    ledger: PaperPnLLedger,
+) -> PaperShadowSessionSnapshot:
+    if snapshot.equity_start is None:
+        return snapshot
+    unrealized_pnl = ledger.unrealized_pnl if ledger.unrealized_pnl is not None else 0.0
+    if not math.isfinite(unrealized_pnl):
+        unrealized_pnl = 0.0
+    equity = snapshot.equity_start + snapshot.realized_pnl + unrealized_pnl
+    if not math.isfinite(equity) or equity <= 0.0:
+        return snapshot
+    return replace(snapshot, equity_observations=(*snapshot.equity_observations, equity))
 
 
 class PaperShadowSessionController:
@@ -1212,19 +1258,23 @@ class PaperShadowSessionController:
             as_of_ns=now,
         )
         _validate_paper_pnl_ledger(ledger)
+        updated_snapshot = replace(
+            self._snapshot,
+            as_of_ns=now,
+            pnl_events=ledger.pnl_events,
+            open_positions=ledger.open_positions,
+            closed_positions=ledger.closed_positions,
+            total_fees=ledger.total_fees,
+            total_slippage=ledger.total_slippage,
+            realized_pnl=ledger.realized_pnl,
+            paper_only=True,
+            real_orders_enabled=False,
+            real_money_enabled=False,
+        )
         self._apply_snapshot(
-            replace(
-                self._snapshot,
-                as_of_ns=now,
-                pnl_events=ledger.pnl_events,
-                open_positions=ledger.open_positions,
-                closed_positions=ledger.closed_positions,
-                total_fees=ledger.total_fees,
-                total_slippage=ledger.total_slippage,
-                realized_pnl=ledger.realized_pnl,
-                paper_only=True,
-                real_orders_enabled=False,
-                real_money_enabled=False,
+            _snapshot_with_equity_observation(
+                updated_snapshot,
+                ledger,
             )
         )
         return ledger
@@ -1587,6 +1637,8 @@ def paper_shadow_session_snapshot_to_dict(snapshot: PaperShadowSessionSnapshot) 
         "total_fees": snapshot.total_fees,
         "total_slippage": snapshot.total_slippage,
         "realized_pnl": snapshot.realized_pnl,
+        "equity_start": snapshot.equity_start,
+        "equity_observations": list(snapshot.equity_observations),
         "risk_limit_decision_id": snapshot.risk_limit_decision_id,
         "risk_limit_decision_status": snapshot.risk_limit_decision_status,
         "risk_block_new_intents": snapshot.risk_block_new_intents,
@@ -1643,6 +1695,8 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
     )
     session_stop_requested_by_risk = _bool_or_default(data, "session_stop_requested_by_risk", False)
     risk_reasons = _sorted_unique(data.get("risk_reasons", ()))
+    equity_start = _optional_positive_float(data.get("equity_start"), "equity_start")
+    equity_observations = _equity_observations_from_data(data.get("equity_observations", ()))
     guardrail_value = data.get("guardrail")
     guardrail = (
         guardrail_snapshot_from_dict(_dict_value(guardrail_value, "guardrail"))
@@ -1715,6 +1769,8 @@ def paper_shadow_session_snapshot_from_dict(data: dict) -> PaperShadowSessionSna
         total_fees=_require_non_negative_float(data.get("total_fees", 0.0), "total_fees"),
         total_slippage=_require_non_negative_float(data.get("total_slippage", 0.0), "total_slippage"),
         realized_pnl=_require_float(data.get("realized_pnl", 0.0), "realized_pnl"),
+        equity_start=equity_start,
+        equity_observations=equity_observations,
         risk_limit_decision_id=risk_limit_decision_id,
         risk_limit_decision_status=risk_limit_decision_status,
         risk_block_new_intents=risk_block_new_intents,
@@ -5062,6 +5118,13 @@ def _validate_session_snapshot(snapshot: PaperShadowSessionSnapshot) -> None:
     _require_non_negative_float(snapshot.total_fees, "total_fees")
     _require_non_negative_float(snapshot.total_slippage, "total_slippage")
     _require_float(snapshot.realized_pnl, "realized_pnl")
+    _optional_positive_float(snapshot.equity_start, "equity_start")
+    if not isinstance(snapshot.equity_observations, tuple):
+        raise PaperShadowSessionCorruptError("paper/shadow equity_observations must be a tuple")
+    if snapshot.equity_observations and snapshot.equity_start is None:
+        raise PaperShadowSessionCorruptError("paper/shadow equity observations require equity_start")
+    for observation in snapshot.equity_observations:
+        _require_positive_float(observation, "equity_observation")
     if snapshot.risk_limit_decision_id is not None:
         _require_non_empty_str(snapshot.risk_limit_decision_id, "risk_limit_decision_id")
     risk_status = snapshot.risk_limit_decision_status
@@ -7310,6 +7373,26 @@ def _require_float(value: object, field_name: str) -> float:
     if parsed is None:
         raise PaperShadowSessionCorruptError(f"field {field_name!r} must be numeric")
     return parsed
+
+
+def _require_positive_float(value: object, field_name: str) -> float:
+    parsed = _require_float(value, field_name)
+    if parsed <= 0.0:
+        raise PaperShadowSessionCorruptError(f"field {field_name!r} must be positive")
+    return parsed
+
+
+def _optional_positive_float(value: object, field_name: str) -> float | None:
+    parsed = _optional_float(value, field_name)
+    if parsed is not None and parsed <= 0.0:
+        raise PaperShadowSessionCorruptError(f"field {field_name!r} must be positive")
+    return parsed
+
+
+def _equity_observations_from_data(value: object) -> tuple[float, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise PaperShadowSessionCorruptError("field 'equity_observations' must be a list/tuple")
+    return tuple(_require_positive_float(item, "equity_observations") for item in value)
 
 
 def _optional_non_negative_float(value: object, field_name: str) -> float | None:
