@@ -397,6 +397,22 @@ def compare_stage4(
     )
 
 
+def stage4_admission_blockers(
+    result: Stage4ComparisonResult | None,
+    *,
+    required: bool = False,
+) -> tuple[str, ...]:
+    """Map Stage4 comparison state into sleeve admission evidence blockers."""
+
+    if result is None:
+        return ("stage4:comparison_missing",) if required else ()
+    if result.passed:
+        return ()
+    if result.rejection_reasons:
+        return result.rejection_reasons
+    return ("stage4:comparison_failed",)
+
+
 def stage4_backtest_baseline_to_dict(baseline: Stage4BacktestBaseline) -> dict:
     return {
         "baseline_id": baseline.baseline_id,

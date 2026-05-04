@@ -21,11 +21,15 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from crypto_core.service.campaign import CampaignReport, CampaignSleeveLinkSummary
 from crypto_core.service.promotion_review import EvidenceSufficiency
 from crypto_core.service.readiness import ReadinessLevel, level_at_least
 from crypto_core.validation.pipeline import ValidationPipelineResult
+
+if TYPE_CHECKING:
+    from crypto_core.validation.stage4_comparator import Stage4ComparisonResult
 
 _ALLOCATION_EPSILON = 1e-9
 
@@ -287,6 +291,8 @@ class CryptoSleeveState:
     promotion_candidate: SleevePromotionCandidateResult = field(default_factory=SleevePromotionCandidateResult)
     decision_pack: SleeveDecisionPackResult = field(default_factory=SleeveDecisionPackResult)
     validation_pipeline_result: ValidationPipelineResult | None = None
+    stage4_comparison_result: Stage4ComparisonResult | None = None
+    stage4_comparison_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -733,6 +739,8 @@ def _validate_sleeve_state(state: CryptoSleeveState) -> CryptoSleeveState:
         promotion_candidate=promotion_candidate,
         decision_pack=decision_pack,
         validation_pipeline_result=state.validation_pipeline_result,
+        stage4_comparison_result=state.stage4_comparison_result,
+        stage4_comparison_required=bool(state.stage4_comparison_required),
     )
 
 
@@ -1492,12 +1500,26 @@ def _validation_pipeline_pbo_allocation_cap(
     return validation_pipeline_result.pbo_allocation_cap
 
 
+def _stage4_missing_evidence(
+    result: Stage4ComparisonResult | None,
+    *,
+    required: bool,
+) -> tuple[str, ...]:
+    from crypto_core.validation.stage4_comparator import stage4_admission_blockers
+
+    return stage4_admission_blockers(result, required=required)
+
+
 def _build_sleeve_promotion_candidate_result(sleeve: CryptoSleeveState) -> SleevePromotionCandidateResult:
     campaign_evidence = sleeve.campaign_evidence
     qualification = sleeve.qualification
     recommendation = sleeve.recommendation
     promotion_support = sleeve.promotion_support
     validation_missing_evidence = _validation_pipeline_missing_evidence(sleeve.validation_pipeline_result)
+    stage4_missing_evidence = _stage4_missing_evidence(
+        sleeve.stage4_comparison_result,
+        required=sleeve.stage4_comparison_required,
+    )
     pbo_allocation_cap = _validation_pipeline_pbo_allocation_cap(sleeve.validation_pipeline_result)
     missing_evidence = tuple(
         dict.fromkeys(
@@ -1507,6 +1529,7 @@ def _build_sleeve_promotion_candidate_result(sleeve: CryptoSleeveState) -> Sleev
                 *qualification.missing_evidence,
                 *recommendation.missing_evidence,
                 *validation_missing_evidence,
+                *stage4_missing_evidence,
             )
         )
     )
