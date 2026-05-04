@@ -10,6 +10,7 @@ from crypto_core.validation.pbo import (
     SensitivityInputs,
     validate_pbo,
 )
+from crypto_core.validation.pipeline import ValidationPipelineResult, ValidationPipelineStageStatus, validate_pipeline
 from crypto_core.validation.stress_testing import (
     RegimeGateEvidence,
     StressScenario,
@@ -39,10 +40,13 @@ __all__ = [
     "StressScenarioResult",
     "StressTrade",
     "StressValidationResult",
+    "ValidationPipelineResult",
+    "ValidationPipelineStageStatus",
     "WalkForwardValidationResult",
     "WalkForwardWindow",
     "WalkForwardWindowResult",
     "default_stress_scenarios",
+    "validate_pipeline",
     "validate_pbo",
     "validate_stress_testing",
     "validate_walk_forward",
