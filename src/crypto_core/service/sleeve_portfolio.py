@@ -21,15 +21,19 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import TYPE_CHECKING
 
 from crypto_core.service.campaign import CampaignReport, CampaignSleeveLinkSummary
 from crypto_core.service.promotion_review import EvidenceSufficiency
 from crypto_core.service.readiness import ReadinessLevel, level_at_least
 from crypto_core.validation.pipeline import ValidationPipelineResult
-
-if TYPE_CHECKING:
-    from crypto_core.validation.stage4_comparator import Stage4ComparisonResult
+from crypto_core.validation.stage4_comparator import (
+    Stage4BacktestBaseline,
+    Stage4ComparisonResult,
+    Stage4PaperSummary,
+    compare_stage4,
+    stage4_comparison_result_from_dict,
+    stage4_comparison_result_to_dict,
+)
 
 _ALLOCATION_EPSILON = 1e-9
 
@@ -1510,19 +1514,39 @@ def _stage4_missing_evidence(
     return stage4_admission_blockers(result, required=required)
 
 
+def _stage4_effectively_required(state: CryptoSleeveState) -> bool:
+    return bool(state.stage4_comparison_required) or (
+        isinstance(state.validation_pipeline_result, ValidationPipelineResult)
+        and state.validation_pipeline_result.validation_ready is True
+    )
+
+
+def build_sleeve_with_stage4_comparison(
+    sleeve: CryptoSleeveState,
+    baseline: Stage4BacktestBaseline | None,
+    paper_summary: Stage4PaperSummary | None,
+    *,
+    min_duration_days: float = 30.0,
+    min_sharpe_retention_ratio: float = 0.5,
+) -> CryptoSleeveState:
+    result = compare_stage4(
+        baseline,
+        paper_summary,
+        min_duration_days=min_duration_days,
+        min_sharpe_retention_ratio=min_sharpe_retention_ratio,
+    )
+    return replace(sleeve, stage4_comparison_result=result)
+
+
 def _build_sleeve_promotion_candidate_result(sleeve: CryptoSleeveState) -> SleevePromotionCandidateResult:
     campaign_evidence = sleeve.campaign_evidence
     qualification = sleeve.qualification
     recommendation = sleeve.recommendation
     promotion_support = sleeve.promotion_support
     validation_missing_evidence = _validation_pipeline_missing_evidence(sleeve.validation_pipeline_result)
-    _stage4_required = bool(sleeve.stage4_comparison_required) or (
-        isinstance(sleeve.validation_pipeline_result, ValidationPipelineResult)
-        and sleeve.validation_pipeline_result.validation_ready is True
-    )
     stage4_missing_evidence = _stage4_missing_evidence(
         sleeve.stage4_comparison_result,
-        required=_stage4_required,
+        required=_stage4_effectively_required(sleeve),
     )
     pbo_allocation_cap = _validation_pipeline_pbo_allocation_cap(sleeve.validation_pipeline_result)
     missing_evidence = tuple(
@@ -1991,6 +2015,7 @@ def sleeve_reason_from_dict(data: dict) -> SleeveReason:
 
 def crypto_sleeve_state_to_dict(state: CryptoSleeveState) -> dict:
     """Serialize CryptoSleeveState to a plain dict."""
+    effective_stage4_required = _stage4_effectively_required(state)
     return {
         "sleeve_id": state.sleeve_id,
         "sleeve_type": state.sleeve_type.value,
@@ -2012,6 +2037,12 @@ def crypto_sleeve_state_to_dict(state: CryptoSleeveState) -> dict:
         "promotion_support": sleeve_promotion_support_result_to_dict(state.promotion_support),
         "promotion_candidate": sleeve_promotion_candidate_result_to_dict(state.promotion_candidate),
         "decision_pack": sleeve_decision_pack_result_to_dict(state.decision_pack),
+        "stage4_comparison_result": (
+            None
+            if state.stage4_comparison_result is None
+            else stage4_comparison_result_to_dict(state.stage4_comparison_result)
+        ),
+        "stage4_comparison_required": effective_stage4_required,
     }
 
 
@@ -2066,8 +2097,14 @@ def crypto_sleeve_state_from_dict(data: dict) -> CryptoSleeveState:
                 if data.get("decision_pack") is None
                 else sleeve_decision_pack_result_from_dict(dict(data.get("decision_pack")))
             ),
+            stage4_comparison_result=(
+                None
+                if data.get("stage4_comparison_result") is None
+                else stage4_comparison_result_from_dict(data.get("stage4_comparison_result"))
+            ),
+            stage4_comparison_required=bool(data.get("stage4_comparison_required", False)),
         )
-    except SleevePortfolioValidationError as exc:
+    except (SleevePortfolioValidationError, ValueError) as exc:
         raise SleevePortfolioCorruptError(str(exc)) from exc
 
     try:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from enum import Enum
 
 from crypto_core.validation.walk_forward import WalkForwardWindow
 
@@ -11,6 +12,12 @@ _DAY_NS = 86400 * 1_000_000_000
 _STATUS_PASS = "PASS"  # noqa: S105 - status label, not a credential.
 _STATUS_REJECT = "REJECT"  # noqa: S105 - status label, not a credential.
 _STATUS_INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"  # noqa: S105 - status label, not a credential.
+
+
+class Stage4ComparisonStatus(str, Enum):
+    PASS = _STATUS_PASS  # noqa: S105 - status label, not a credential.
+    REJECT = _STATUS_REJECT  # noqa: S105 - status label, not a credential.
+    INSUFFICIENT_EVIDENCE = _STATUS_INSUFFICIENT_EVIDENCE  # noqa: S105 - status label, not a credential.
 
 
 @dataclass(frozen=True)
@@ -465,8 +472,94 @@ def stage4_comparison_result_to_dict(result: Stage4ComparisonResult) -> dict:
     }
 
 
+def stage4_comparison_result_from_dict(data: object) -> Stage4ComparisonResult:
+    if not isinstance(data, dict):
+        raise ValueError("stage4: comparison result payload must be a mapping")
+    status = _comparison_status_from_value(data.get("status"))
+    return Stage4ComparisonResult(
+        evaluated=_required_bool_from_mapping(data.get("evaluated"), "evaluated"),
+        passed=_required_bool_from_mapping(data.get("passed"), "passed"),
+        status=status.value,
+        baseline_id=_optional_str_from_mapping(data.get("baseline_id"), "baseline_id"),
+        paper_id=_optional_str_from_mapping(data.get("paper_id"), "paper_id"),
+        edge_id=_optional_str_from_mapping(data.get("edge_id"), "edge_id"),
+        session_duration_days=_optional_float_from_mapping(
+            data.get("session_duration_days"),
+            "session_duration_days",
+        ),
+        required_duration_days=_required_float_from_mapping(
+            data.get("required_duration_days", data.get("min_duration_days")),
+            "required_duration_days",
+        ),
+        backtest_sharpe=_optional_float_from_mapping(data.get("backtest_sharpe"), "backtest_sharpe"),
+        paper_sharpe=_optional_float_from_mapping(data.get("paper_sharpe"), "paper_sharpe"),
+        required_min_paper_sharpe=_optional_float_from_mapping(
+            data.get("required_min_paper_sharpe", data.get("min_required_sharpe")),
+            "required_min_paper_sharpe",
+        ),
+        sharpe_retention_ratio=_optional_float_from_mapping(
+            data.get("sharpe_retention_ratio"),
+            "sharpe_retention_ratio",
+        ),
+        paper_hit_rate=_optional_float_from_mapping(data.get("paper_hit_rate"), "paper_hit_rate"),
+        backtest_hit_rate=_optional_float_from_mapping(data.get("backtest_hit_rate"), "backtest_hit_rate"),
+        paper_slippage_bps=_optional_float_from_mapping(data.get("paper_slippage_bps"), "paper_slippage_bps"),
+        backtest_slippage_bps=_optional_float_from_mapping(
+            data.get("backtest_slippage_bps"),
+            "backtest_slippage_bps",
+        ),
+        paper_fill_rate=_optional_float_from_mapping(data.get("paper_fill_rate"), "paper_fill_rate"),
+        backtest_fill_rate=_optional_float_from_mapping(data.get("backtest_fill_rate"), "backtest_fill_rate"),
+        rejection_reasons=_string_tuple_from_mapping(data.get("rejection_reasons", ()), "rejection_reasons"),
+    )
+
+
+def _comparison_status_from_value(value: object) -> Stage4ComparisonStatus:
+    if isinstance(value, Stage4ComparisonStatus):
+        return value
+    if not isinstance(value, str):
+        raise ValueError("stage4: comparison status must be a string")
+    return Stage4ComparisonStatus(value)
+
+
+def _required_bool_from_mapping(value: object, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"stage4: comparison field {field_name!r} must be bool")
+    return value
+
+
+def _optional_str_from_mapping(value: object, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"stage4: comparison field {field_name!r} must be string or None")
+    return value
+
+
+def _required_float_from_mapping(value: object, field_name: str) -> float:
+    parsed = _optional_float_from_mapping(value, field_name)
+    if parsed is None:
+        raise ValueError(f"stage4: comparison field {field_name!r} must be finite number")
+    return parsed
+
+
+def _optional_float_from_mapping(value: object, field_name: str) -> float | None:
+    if value is None:
+        return None
+    if not _is_finite_number(value):
+        raise ValueError(f"stage4: comparison field {field_name!r} must be finite number or None")
+    return float(value)
+
+
+def _string_tuple_from_mapping(value: object, field_name: str) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"stage4: comparison field {field_name!r} must be list/tuple")
+    return tuple(str(item) for item in value)
+
+
 __all__ = [
     "Stage4BacktestBaseline",
+    "Stage4ComparisonStatus",
     "Stage4PaperSummary",
     "Stage4ComparisonResult",
     "build_stage4_backtest_baseline",
@@ -474,5 +567,6 @@ __all__ = [
     "compare_stage4",
     "stage4_backtest_baseline_to_dict",
     "stage4_paper_summary_to_dict",
+    "stage4_comparison_result_from_dict",
     "stage4_comparison_result_to_dict",
 ]
