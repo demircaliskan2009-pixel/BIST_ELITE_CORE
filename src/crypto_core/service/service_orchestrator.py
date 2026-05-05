@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from crypto_core.service.artifact_export import (
     EscalationDecision,
@@ -127,6 +128,14 @@ from crypto_core.service.sleeve_promotion_review_controller import (
     SleevePromotionReviewSnapshot,
     sleeve_promotion_review_snapshot_to_dict,
 )
+from crypto_core.validation.stage4_comparator import Stage4BacktestBaseline, Stage4PaperSummary
+from crypto_core.validation.walk_forward import WalkForwardWindow
+
+if TYPE_CHECKING:
+    from crypto_core.service.paper_shadow_session_controller import (
+        PaperPnLLedger,
+        PaperShadowSessionSnapshot,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -513,6 +522,44 @@ class ServiceOrchestrator:
         if self._sleeve_portfolio_controller is not None:
             self._sleeve_portfolio_controller.configure_allocation_policy(policy)
         return self.sleeve_portfolio_snapshot()
+
+    def apply_stage4_artifacts_to_sleeve(
+        self,
+        sleeve_id: str,
+        *,
+        windows: tuple[WalkForwardWindow, ...] | None = None,
+        baseline: Stage4BacktestBaseline | None = None,
+        paper_summary: Stage4PaperSummary | None = None,
+        paper_ledger: PaperPnLLedger | None = None,
+        paper_snapshot: PaperShadowSessionSnapshot | None = None,
+        baseline_id: str | None = None,
+        edge_id: str | None = None,
+        as_of_ns: int | None = None,
+        paper_id: str | None = None,
+        min_duration_days: float = 30.0,
+        min_sharpe_retention_ratio: float = 0.5,
+    ) -> OperatorSnapshot:
+        """Apply finalized Stage4 artifacts through the sleeve controller."""
+        if self._sleeve_portfolio_controller is None and not self._configured_sleeves:
+            raise RuntimeError("Sleeve portfolio controller is not configured for Stage4 artifact handoff")
+
+        controller = self._ensure_sleeve_portfolio_controller()
+        controller.apply_stage4_artifacts(
+            sleeve_id,
+            windows=windows,
+            baseline=baseline,
+            paper_summary=paper_summary,
+            paper_ledger=paper_ledger,
+            paper_snapshot=paper_snapshot,
+            baseline_id=baseline_id,
+            edge_id=edge_id,
+            as_of_ns=as_of_ns,
+            paper_id=paper_id,
+            min_duration_days=min_duration_days,
+            min_sharpe_retention_ratio=min_sharpe_retention_ratio,
+        )
+        self._configured_sleeves = controller.defined_sleeves
+        return self.operator_snapshot()
 
     def enable_sleeve(self, sleeve_id: str) -> SleeveOperatorOverride:
         """Explicitly enable or unblock a sleeve at the operator layer."""
