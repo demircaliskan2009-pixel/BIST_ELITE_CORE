@@ -21,6 +21,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from crypto_core.service.campaign import CampaignReport, CampaignSleeveLinkSummary
 from crypto_core.service.promotion_review import EvidenceSufficiency
@@ -38,6 +39,12 @@ from crypto_core.validation.stage4_comparator import (
     stage4_comparison_result_to_dict,
 )
 from crypto_core.validation.walk_forward import WalkForwardWindow
+
+if TYPE_CHECKING:
+    from crypto_core.service.paper_shadow_session_controller import (
+        PaperPnLLedger,
+        PaperShadowSessionSnapshot,
+    )
 
 _ALLOCATION_EPSILON = 1e-9
 
@@ -1564,6 +1571,59 @@ def build_sleeve_with_stage4_baseline(
         backtest_fill_rate=backtest_fill_rate,
     )
     return replace(sleeve, stage4_backtest_baseline=baseline)
+
+
+def build_sleeve_with_stage4_artifacts(
+    sleeve: CryptoSleeveState,
+    *,
+    windows: tuple[WalkForwardWindow, ...] | list[WalkForwardWindow] | None = None,
+    baseline: Stage4BacktestBaseline | None = None,
+    ledger: PaperPnLLedger | None = None,
+    snapshot: PaperShadowSessionSnapshot | None = None,
+    paper_summary: Stage4PaperSummary | None = None,
+    baseline_id: str,
+    edge_id: str,
+    as_of_ns: int,
+    paper_id: str | None = None,
+    min_duration_days: float = 30.0,
+    min_sharpe_retention_ratio: float = 0.5,
+) -> CryptoSleeveState:
+    """Attach Stage4 baseline/comparison evidence from explicit production artifacts."""
+
+    resolved_sleeve = sleeve
+    effective_baseline = baseline
+    if effective_baseline is not None:
+        resolved_sleeve = replace(resolved_sleeve, stage4_backtest_baseline=effective_baseline)
+    elif windows is not None:
+        resolved_sleeve = build_sleeve_with_stage4_baseline(
+            resolved_sleeve,
+            windows,
+            baseline_id=baseline_id,
+            edge_id=edge_id,
+            as_of_ns=as_of_ns,
+        )
+        effective_baseline = resolved_sleeve.stage4_backtest_baseline
+    else:
+        effective_baseline = resolved_sleeve.stage4_backtest_baseline
+
+    effective_paper_summary = paper_summary
+    if effective_paper_summary is None and ledger is not None and snapshot is not None:
+        from crypto_core.service.paper_shadow_session_controller import build_stage4_paper_summary_from_pnl_ledger
+
+        effective_paper_summary = build_stage4_paper_summary_from_pnl_ledger(
+            ledger,
+            snapshot,
+            edge_id=edge_id,
+            paper_id=paper_id,
+        )
+
+    return build_sleeve_with_stage4_comparison(
+        resolved_sleeve,
+        effective_baseline,
+        effective_paper_summary,
+        min_duration_days=min_duration_days,
+        min_sharpe_retention_ratio=min_sharpe_retention_ratio,
+    )
 
 
 def _build_sleeve_promotion_candidate_result(sleeve: CryptoSleeveState) -> SleevePromotionCandidateResult:
