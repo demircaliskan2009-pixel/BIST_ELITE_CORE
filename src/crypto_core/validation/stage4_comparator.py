@@ -433,6 +433,48 @@ def stage4_backtest_baseline_to_dict(baseline: Stage4BacktestBaseline) -> dict:
     }
 
 
+def stage4_backtest_baseline_from_dict(data: object) -> Stage4BacktestBaseline:
+    if not isinstance(data, dict):
+        raise ValueError("stage4: baseline payload must be a mapping")
+    baseline_id = data.get("baseline_id")
+    if not _is_non_empty_str(baseline_id):
+        raise ValueError("stage4: baseline field 'baseline_id' must be non-empty string")
+    edge_id = data.get("edge_id")
+    if not _is_non_empty_str(edge_id):
+        raise ValueError("stage4: baseline field 'edge_id' must be non-empty string")
+    as_of_ns = data.get("as_of_ns")
+    if not _is_positive_int(as_of_ns):
+        raise ValueError("stage4: baseline field 'as_of_ns' must be positive integer")
+    backtest_sharpe = data.get("backtest_sharpe")
+    if not _is_finite_number(backtest_sharpe):
+        raise ValueError("stage4: baseline field 'backtest_sharpe' must be finite number")
+    backtest_hit_rate = data.get("backtest_hit_rate")
+    if not _is_finite_number(backtest_hit_rate):
+        raise ValueError("stage4: baseline field 'backtest_hit_rate' must be finite number")
+    backtest_slippage_bps_raw = data.get("backtest_slippage_bps")
+    if not _is_non_negative_optional_number(backtest_slippage_bps_raw):
+        raise ValueError("stage4: baseline field 'backtest_slippage_bps' must be non-negative number or None")
+    backtest_fill_rate_raw = data.get("backtest_fill_rate")
+    if backtest_fill_rate_raw is not None and not _is_rate(backtest_fill_rate_raw):
+        raise ValueError("stage4: baseline field 'backtest_fill_rate' must be rate [0,1] or None")
+    source_window_ids_raw = data.get("source_window_ids", [])
+    if not isinstance(source_window_ids_raw, (list, tuple)):
+        raise ValueError("stage4: baseline field 'source_window_ids' must be list or tuple")
+    source_window_ids = tuple(source_window_ids_raw)
+    if not all(_is_non_empty_str(wid) for wid in source_window_ids):
+        raise ValueError("stage4: baseline field 'source_window_ids' entries must be non-empty strings")
+    return Stage4BacktestBaseline(
+        baseline_id=str(baseline_id),
+        edge_id=str(edge_id),
+        as_of_ns=int(as_of_ns),
+        backtest_sharpe=float(backtest_sharpe),
+        backtest_hit_rate=float(backtest_hit_rate),
+        backtest_slippage_bps=float(backtest_slippage_bps_raw) if backtest_slippage_bps_raw is not None else None,
+        backtest_fill_rate=float(backtest_fill_rate_raw) if backtest_fill_rate_raw is not None else None,
+        source_window_ids=source_window_ids,
+    )
+
+
 def stage4_paper_summary_to_dict(paper: Stage4PaperSummary) -> dict:
     return {
         "paper_id": paper.paper_id,
@@ -566,6 +608,7 @@ __all__ = [
     "build_stage4_backtest_baseline_from_windows",
     "compare_stage4",
     "stage4_backtest_baseline_to_dict",
+    "stage4_backtest_baseline_from_dict",
     "stage4_paper_summary_to_dict",
     "stage4_comparison_result_from_dict",
     "stage4_comparison_result_to_dict",

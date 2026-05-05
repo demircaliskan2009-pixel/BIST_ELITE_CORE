@@ -30,10 +30,14 @@ from crypto_core.validation.stage4_comparator import (
     Stage4BacktestBaseline,
     Stage4ComparisonResult,
     Stage4PaperSummary,
+    build_stage4_backtest_baseline_from_windows,
     compare_stage4,
+    stage4_backtest_baseline_from_dict,
+    stage4_backtest_baseline_to_dict,
     stage4_comparison_result_from_dict,
     stage4_comparison_result_to_dict,
 )
+from crypto_core.validation.walk_forward import WalkForwardWindow
 
 _ALLOCATION_EPSILON = 1e-9
 
@@ -297,6 +301,7 @@ class CryptoSleeveState:
     validation_pipeline_result: ValidationPipelineResult | None = None
     stage4_comparison_result: Stage4ComparisonResult | None = None
     stage4_comparison_required: bool = False
+    stage4_backtest_baseline: Stage4BacktestBaseline | None = None
 
 
 @dataclass(frozen=True)
@@ -745,6 +750,7 @@ def _validate_sleeve_state(state: CryptoSleeveState) -> CryptoSleeveState:
         validation_pipeline_result=state.validation_pipeline_result,
         stage4_comparison_result=state.stage4_comparison_result,
         stage4_comparison_required=bool(state.stage4_comparison_required),
+        stage4_backtest_baseline=state.stage4_backtest_baseline,
     )
 
 
@@ -1529,13 +1535,35 @@ def build_sleeve_with_stage4_comparison(
     min_duration_days: float = 30.0,
     min_sharpe_retention_ratio: float = 0.5,
 ) -> CryptoSleeveState:
+    effective_baseline = baseline if baseline is not None else sleeve.stage4_backtest_baseline
     result = compare_stage4(
-        baseline,
+        effective_baseline,
         paper_summary,
         min_duration_days=min_duration_days,
         min_sharpe_retention_ratio=min_sharpe_retention_ratio,
     )
     return replace(sleeve, stage4_comparison_result=result)
+
+
+def build_sleeve_with_stage4_baseline(
+    sleeve: CryptoSleeveState,
+    windows: tuple[WalkForwardWindow, ...] | list[WalkForwardWindow],
+    *,
+    baseline_id: str,
+    edge_id: str,
+    as_of_ns: int,
+    backtest_slippage_bps: float | None = None,
+    backtest_fill_rate: float | None = None,
+) -> CryptoSleeveState:
+    baseline = build_stage4_backtest_baseline_from_windows(
+        windows,
+        baseline_id=baseline_id,
+        edge_id=edge_id,
+        as_of_ns=as_of_ns,
+        backtest_slippage_bps=backtest_slippage_bps,
+        backtest_fill_rate=backtest_fill_rate,
+    )
+    return replace(sleeve, stage4_backtest_baseline=baseline)
 
 
 def _build_sleeve_promotion_candidate_result(sleeve: CryptoSleeveState) -> SleevePromotionCandidateResult:
@@ -2043,6 +2071,11 @@ def crypto_sleeve_state_to_dict(state: CryptoSleeveState) -> dict:
             else stage4_comparison_result_to_dict(state.stage4_comparison_result)
         ),
         "stage4_comparison_required": effective_stage4_required,
+        "stage4_backtest_baseline": (
+            None
+            if state.stage4_backtest_baseline is None
+            else stage4_backtest_baseline_to_dict(state.stage4_backtest_baseline)
+        ),
     }
 
 
@@ -2103,6 +2136,11 @@ def crypto_sleeve_state_from_dict(data: dict) -> CryptoSleeveState:
                 else stage4_comparison_result_from_dict(data.get("stage4_comparison_result"))
             ),
             stage4_comparison_required=bool(data.get("stage4_comparison_required", False)),
+            stage4_backtest_baseline=(
+                None
+                if data.get("stage4_backtest_baseline") is None
+                else stage4_backtest_baseline_from_dict(data.get("stage4_backtest_baseline"))
+            ),
         )
     except (SleevePortfolioValidationError, ValueError) as exc:
         raise SleevePortfolioCorruptError(str(exc)) from exc
