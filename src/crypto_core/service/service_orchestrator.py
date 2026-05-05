@@ -452,7 +452,7 @@ class ServiceOrchestrator:
         snap = self.sleeve_promotion_review_snapshot()
         if snap is None:
             return None
-        return snap.__dict__
+        return sleeve_promotion_review_snapshot_to_dict(snap)
 
     # ------------------------------------------------------------------
     # Properties

@@ -297,17 +297,4 @@ class SleevePromotionReviewController:
 
     def to_dict(self) -> dict:
         snap = self.snapshot()
-        return {
-            "as_of_ns": snap.as_of_ns,
-            "status": snap.status,
-            "review_results": [r.__dict__ for r in snap.review_results],
-            "portfolio_summary": snap.portfolio_summary.__dict__,
-            "history": [
-                {
-                    "as_of_ns": h.as_of_ns,
-                    "summary": h.summary,
-                    "portfolio_summary": h.portfolio_summary.__dict__,
-                }
-                for h in snap.history
-            ],
-        }
+        return sleeve_promotion_review_snapshot_to_dict(snap)
