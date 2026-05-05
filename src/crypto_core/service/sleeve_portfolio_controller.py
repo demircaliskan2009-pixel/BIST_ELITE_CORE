@@ -23,6 +23,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from crypto_core.service.artifact_export import EscalationStage
 from crypto_core.service.campaign import CampaignReport
@@ -37,6 +38,7 @@ from crypto_core.service.sleeve_portfolio import (
     SleeveReason,
     SleeveReasonSource,
     build_sleeve_portfolio_snapshot,
+    build_sleeve_with_stage4_artifacts,
     crypto_sleeve_state_from_dict,
     crypto_sleeve_state_to_dict,
     sleeve_allocation_policy_from_dict,
@@ -44,6 +46,14 @@ from crypto_core.service.sleeve_portfolio import (
     sleeve_portfolio_snapshot_from_dict,
     sleeve_portfolio_snapshot_to_dict,
 )
+from crypto_core.validation.stage4_comparator import Stage4BacktestBaseline, Stage4PaperSummary
+from crypto_core.validation.walk_forward import WalkForwardWindow
+
+if TYPE_CHECKING:
+    from crypto_core.service.paper_shadow_session_controller import (
+        PaperPnLLedger,
+        PaperShadowSessionSnapshot,
+    )
 
 _DEFAULT_HISTORY_LIMIT = 5
 _WORKFLOW_SNAPSHOT_NAME = "sleeve_portfolio_workflow"
@@ -164,6 +174,62 @@ class SleevePortfolioController:
         self._updated_at_ns = time.time_ns()
         self._persist_workflow()
         return self._allocation_policy
+
+    def apply_stage4_artifacts(
+        self,
+        sleeve_id: str,
+        *,
+        windows: tuple[WalkForwardWindow, ...] | None = None,
+        baseline: Stage4BacktestBaseline | None = None,
+        paper_summary: Stage4PaperSummary | None = None,
+        paper_ledger: PaperPnLLedger | None = None,
+        paper_snapshot: PaperShadowSessionSnapshot | None = None,
+        baseline_id: str | None = None,
+        edge_id: str | None = None,
+        as_of_ns: int | None = None,
+        paper_id: str | None = None,
+        min_duration_days: float = 30.0,
+        min_sharpe_retention_ratio: float = 0.5,
+    ) -> SleevePortfolioSnapshot:
+        """Apply finalized Stage4 artifacts to one configured sleeve."""
+
+        self._require_known_sleeve(sleeve_id)
+        if windows is not None and (not baseline_id or not edge_id or as_of_ns is None):
+            raise ValueError("stage4 windows require baseline_id, edge_id, and as_of_ns")
+        if paper_summary is None and paper_ledger is not None and paper_snapshot is not None and not edge_id:
+            raise ValueError("stage4 paper ledger/snapshot require edge_id")
+
+        snapshot_as_of_ns = self._stage4_artifact_as_of_ns(as_of_ns)
+        updated_sleeves = tuple(
+            build_sleeve_with_stage4_artifacts(
+                sleeve,
+                windows=windows,
+                baseline=baseline,
+                ledger=paper_ledger,
+                snapshot=paper_snapshot,
+                paper_summary=paper_summary,
+                baseline_id=baseline_id or "",
+                edge_id=edge_id or "",
+                as_of_ns=snapshot_as_of_ns,
+                paper_id=paper_id,
+                min_duration_days=min_duration_days,
+                min_sharpe_retention_ratio=min_sharpe_retention_ratio,
+            )
+            if sleeve.sleeve_id == sleeve_id
+            else sleeve
+            for sleeve in self._defined_sleeves
+        )
+        self._defined_sleeves = self._validated_sleeves(updated_sleeves)
+        previous = self._current_snapshot
+        return self.current_snapshot(
+            as_of_ns=snapshot_as_of_ns,
+            readiness_level=None if previous is None else previous.readiness_level,
+            readiness_is_supportive=False if previous is None else previous.readiness_is_supportive,
+            escalation_allowed_next_step=None if previous is None else previous.escalation_allowed_next_step,
+            external_regime_execution_blocked=(
+                None if previous is None else previous.external_regime_execution_blocked
+            ),
+        )
 
     def enable_sleeve(self, sleeve_id: str, *, updated_at_ns: int | None = None) -> SleeveOperatorOverride:
         """Explicitly enable or unblock a sleeve at the operator layer."""
@@ -622,6 +688,13 @@ class SleevePortfolioController:
             ),
             "history_limit": self._history_limit,
         }
+
+    def _stage4_artifact_as_of_ns(self, as_of_ns: int | None) -> int:
+        if as_of_ns is not None:
+            return _require_non_negative_int(as_of_ns, "as_of_ns")
+        if self._current_snapshot is not None:
+            return self._current_snapshot.as_of_ns
+        return 0
 
     def _require_known_sleeve(self, sleeve_id: str) -> None:
         if sleeve_id not in {item.sleeve_id for item in self._defined_sleeves}:
