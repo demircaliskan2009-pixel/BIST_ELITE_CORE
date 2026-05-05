@@ -1357,6 +1357,8 @@ class ServiceOrchestrator:
             ext_regime_governance,
             operator_snapshot,
         )
+        sleeve_admission_evidence_blockers = self._decision_pack_sleeve_admission_evidence_blockers(operator_snapshot)
+        sleeve_pbo_allocation_caps = self._decision_pack_sleeve_pbo_allocation_caps(operator_snapshot)
         disposition = operator_disposition_from_verdict(promotion_verdict)
 
         return OperatorDecisionPack(
@@ -1381,6 +1383,8 @@ class ServiceOrchestrator:
                 missing_evidence,
                 readiness_dict,
             ),
+            sleeve_admission_evidence_blockers=sleeve_admission_evidence_blockers,
+            sleeve_pbo_allocation_caps=sleeve_pbo_allocation_caps,
             readiness_criteria=(tuple(readiness_dict.get("criteria", ())) if readiness_dict is not None else ()),
             readiness_blockers=(tuple(readiness_dict.get("blockers", ())) if readiness_dict is not None else ()),
             external_regime_quality=ext_regime_quality,
@@ -2345,6 +2349,7 @@ class ServiceOrchestrator:
         missing_evidence: dict,
         readiness_dict: dict | None,
     ) -> dict:
+        sleeve_pbo_allocation_caps = ServiceOrchestrator._decision_pack_sleeve_pbo_allocation_caps(operator_snapshot)
         return {
             "campaign_evidence_available": operator_snapshot.evidence.campaign_evidence_available,
             "review_evidence_available": operator_snapshot.evidence.review_evidence_available,
@@ -2353,9 +2358,31 @@ class ServiceOrchestrator:
             "review_insufficient_criteria": list(missing_evidence.get("insufficient_criteria", ())),
             "review_warning_criteria": list(missing_evidence.get("warning_criteria", ())),
             "review_fail_criteria": list(missing_evidence.get("fail_criteria", ())),
+            "sleeve_admission_evidence_blockers": list(
+                ServiceOrchestrator._decision_pack_sleeve_admission_evidence_blockers(operator_snapshot)
+            ),
+            "sleeve_pbo_allocation_caps": [
+                [sleeve_id, allocation_cap] for sleeve_id, allocation_cap in sleeve_pbo_allocation_caps
+            ],
             "readiness_blockers": ([] if readiness_dict is None else list(readiness_dict.get("blockers", ()))),
             "summary": operator_snapshot.evidence.summary or missing_evidence.get("message", ""),
         }
+
+    @staticmethod
+    def _decision_pack_sleeve_admission_evidence_blockers(operator_snapshot: OperatorSnapshot) -> tuple[str, ...]:
+        if operator_snapshot.sleeve_admission is None:
+            return ()
+        return tuple(operator_snapshot.sleeve_admission.portfolio_summary.evidence_blockers)
+
+    @staticmethod
+    def _decision_pack_sleeve_pbo_allocation_caps(operator_snapshot: OperatorSnapshot) -> tuple[tuple[str, float], ...]:
+        if operator_snapshot.sleeve_admission is None:
+            return ()
+        return tuple(
+            (result.sleeve_id, float(result.pbo_allocation_cap))
+            for result in operator_snapshot.sleeve_admission.admission_results
+            if result.pbo_allocation_cap is not None
+        )
 
     @staticmethod
     def _decision_pack_campaign_coverage(

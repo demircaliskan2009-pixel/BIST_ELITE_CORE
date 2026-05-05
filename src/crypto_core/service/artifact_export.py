@@ -26,6 +26,7 @@ PRD reference: §2 System Orchestration, §7 Execution Engine.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -95,6 +96,8 @@ class OperatorDecisionPack:
     fail_criteria: tuple[str, ...] = field(default_factory=tuple)
     insufficient_evidence: tuple[str, ...] = field(default_factory=tuple)
     insufficient_evidence_summary: dict = field(default_factory=dict)
+    sleeve_admission_evidence_blockers: tuple[str, ...] = field(default_factory=tuple)
+    sleeve_pbo_allocation_caps: tuple[tuple[str, float], ...] = field(default_factory=tuple)
     readiness_criteria: tuple[dict, ...] = field(default_factory=tuple)
     readiness_blockers: tuple[str, ...] = field(default_factory=tuple)
     external_regime_quality: str = "unavailable"
@@ -183,7 +186,11 @@ def operator_disposition_from_verdict(verdict: str) -> str:
 
 def decision_pack_to_dict(pack: OperatorDecisionPack) -> dict:
     """Serialize OperatorDecisionPack to a plain dict."""
-    return _dataclass_to_dict(pack)
+    data = _dataclass_to_dict(pack)
+    data["sleeve_pbo_allocation_caps"] = [
+        [sleeve_id, allocation_cap] for sleeve_id, allocation_cap in pack.sleeve_pbo_allocation_caps
+    ]
+    return data
 
 
 def decision_pack_decision_summary(pack: OperatorDecisionPack) -> dict:
@@ -206,6 +213,10 @@ def decision_pack_missing_evidence(pack: OperatorDecisionPack) -> dict:
         "review_id": pack.review_id,
         "insufficient_evidence": list(pack.insufficient_evidence),
         "readiness_blockers": list(pack.readiness_blockers),
+        "sleeve_admission_evidence_blockers": list(pack.sleeve_admission_evidence_blockers),
+        "sleeve_pbo_allocation_caps": [
+            [sleeve_id, allocation_cap] for sleeve_id, allocation_cap in pack.sleeve_pbo_allocation_caps
+        ],
         "summary": pack.insufficient_evidence_summary.get("summary", ""),
         "details": pack.insufficient_evidence_summary,
     }
@@ -275,6 +286,37 @@ def _optional_tuple_of_dicts(d: dict, field_name: str) -> tuple[dict, ...]:
     return tuple(value)
 
 
+def _optional_tuple_of_string_float_pairs(d: dict, field_name: str) -> tuple[tuple[str, float], ...]:
+    value = d.get(field_name, ())
+    if not isinstance(value, (list, tuple)):
+        raise OperatorDecisionPackCorruptError(
+            f"Decision pack field {field_name!r} must be a list/tuple of [str, float]"
+        )
+
+    pairs: list[tuple[str, float]] = []
+    for item in value:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise OperatorDecisionPackCorruptError(
+                f"Decision pack field {field_name!r} must be a list/tuple of [str, float]"
+            )
+        sleeve_id, allocation_cap = item
+        if not isinstance(sleeve_id, str) or not sleeve_id:
+            raise OperatorDecisionPackCorruptError(
+                f"Decision pack field {field_name!r} must contain non-empty sleeve ids"
+            )
+        if isinstance(allocation_cap, bool) or not isinstance(allocation_cap, (int, float)):
+            raise OperatorDecisionPackCorruptError(
+                f"Decision pack field {field_name!r} must contain numeric allocation caps"
+            )
+        cap = float(allocation_cap)
+        if not math.isfinite(cap):
+            raise OperatorDecisionPackCorruptError(
+                f"Decision pack field {field_name!r} must contain finite allocation caps"
+            )
+        pairs.append((sleeve_id, cap))
+    return tuple(pairs)
+
+
 def decision_pack_from_dict(d: dict) -> OperatorDecisionPack:
     """Deserialize OperatorDecisionPack from a plain dict."""
     if not isinstance(d, dict):
@@ -296,6 +338,8 @@ def decision_pack_from_dict(d: dict) -> OperatorDecisionPack:
         fail_criteria=_optional_tuple_of_strings(d, "fail_criteria"),
         insufficient_evidence=_optional_tuple_of_strings(d, "insufficient_evidence"),
         insufficient_evidence_summary=_require_dict(d, "insufficient_evidence_summary"),
+        sleeve_admission_evidence_blockers=_optional_tuple_of_strings(d, "sleeve_admission_evidence_blockers"),
+        sleeve_pbo_allocation_caps=_optional_tuple_of_string_float_pairs(d, "sleeve_pbo_allocation_caps"),
         readiness_criteria=_optional_tuple_of_dicts(d, "readiness_criteria"),
         readiness_blockers=_optional_tuple_of_strings(d, "readiness_blockers"),
         external_regime_quality=_require_str(d, "external_regime_quality"),
