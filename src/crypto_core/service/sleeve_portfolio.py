@@ -832,6 +832,19 @@ def _validate_sleeve_state(state: CryptoSleeveState) -> CryptoSleeveState:
         if not required_changes:
             required_changes = tuple(item.required_change for item in reasons if item.required_change)
 
+    stage5_entry_gate = (
+        state.stage5_entry_gate if isinstance(state.stage5_entry_gate, Stage5LiveReadinessGate) else None
+    )
+    if stage5_entry_gate is not None:
+        try:
+            stage5_entry_gate = _normalize_stage5_gate_against_stage4_evidence(
+                stage4_backtest_baseline=state.stage4_backtest_baseline,
+                stage4_comparison_result=state.stage4_comparison_result,
+                gate=stage5_entry_gate,
+            )
+        except ValueError as exc:
+            raise SleevePortfolioValidationError(str(exc)) from exc
+
     return CryptoSleeveState(
         sleeve_id=state.sleeve_id,
         sleeve_type=state.sleeve_type,
@@ -857,9 +870,7 @@ def _validate_sleeve_state(state: CryptoSleeveState) -> CryptoSleeveState:
         stage4_comparison_result=state.stage4_comparison_result,
         stage4_comparison_required=bool(state.stage4_comparison_required),
         stage4_backtest_baseline=state.stage4_backtest_baseline,
-        stage5_entry_gate=state.stage5_entry_gate
-        if isinstance(state.stage5_entry_gate, Stage5LiveReadinessGate)
-        else None,
+        stage5_entry_gate=stage5_entry_gate,
     )
 
 
@@ -1964,17 +1975,18 @@ def stage5_live_ready(gate: Stage5LiveReadinessGate | None) -> bool:
     )
 
 
-def build_sleeve_with_stage5_live_readiness_gate(
-    sleeve: CryptoSleeveState,
+def _normalize_stage5_gate_against_stage4_evidence(
+    *,
+    stage4_backtest_baseline: Stage4BacktestBaseline | None,
+    stage4_comparison_result: Stage4ComparisonResult | None,
     gate: Stage5LiveReadinessGate | None,
-) -> CryptoSleeveState:
-    """Attach Stage5 live-readiness metadata without enabling live execution."""
+) -> Stage5LiveReadinessGate | None:
+    """Bind Stage5 gate metadata to the current sleeve Stage4 comparison."""
 
     if gate is None:
-        return replace(sleeve, stage5_entry_gate=None)
+        return None
 
-    stage4_result = sleeve.stage4_comparison_result
-    if stage4_result is None:
+    if stage4_comparison_result is None:
         reasons = tuple(
             dict.fromkeys(
                 (
@@ -1984,28 +1996,25 @@ def build_sleeve_with_stage5_live_readiness_gate(
             )
         )
         return replace(
-            sleeve,
-            stage5_entry_gate=replace(
-                gate,
-                stage4_passed=False,
-                rejection_reasons=reasons,
-                passed=False,
-            ),
+            gate,
+            stage4_passed=False,
+            rejection_reasons=reasons,
+            passed=False,
         )
 
     reference_edge_ids = tuple(
         dict.fromkeys(
             edge_id
             for edge_id in (
-                None if sleeve.stage4_backtest_baseline is None else sleeve.stage4_backtest_baseline.edge_id,
-                stage4_result.edge_id,
+                None if stage4_backtest_baseline is None else stage4_backtest_baseline.edge_id,
+                stage4_comparison_result.edge_id,
             )
             if isinstance(edge_id, str) and edge_id
         )
     )
     if reference_edge_ids and gate.edge_id not in reference_edge_ids:
         raise ValueError("stage5 gate edge_id does not match sleeve Stage4 evidence")
-    if not stage4_result.passed:
+    if not stage4_comparison_result.passed:
         reasons = tuple(
             dict.fromkeys(
                 (
@@ -2020,6 +2029,23 @@ def build_sleeve_with_stage5_live_readiness_gate(
             rejection_reasons=reasons,
             passed=False,
         )
+    return gate
+
+
+def build_sleeve_with_stage5_live_readiness_gate(
+    sleeve: CryptoSleeveState,
+    gate: Stage5LiveReadinessGate | None,
+) -> CryptoSleeveState:
+    """Attach Stage5 live-readiness metadata without enabling live execution."""
+
+    if gate is None:
+        return replace(sleeve, stage5_entry_gate=None)
+
+    gate = _normalize_stage5_gate_against_stage4_evidence(
+        stage4_backtest_baseline=sleeve.stage4_backtest_baseline,
+        stage4_comparison_result=sleeve.stage4_comparison_result,
+        gate=gate,
+    )
     return replace(sleeve, stage5_entry_gate=gate)
 
 
