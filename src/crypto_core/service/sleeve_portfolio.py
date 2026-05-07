@@ -1943,6 +1943,11 @@ def stage5_live_readiness_blockers(gate: Stage5LiveReadinessGate | None) -> tupl
         kill_switch_clear=gate.kill_switch_clear,
         risk_governance_clear=gate.risk_governance_clear,
     )
+    # When Stage4 comparison was never recorded, suppress the generic "stage4_not_passed"
+    # from computed reasons.  "stage4_comparison_missing" stored in gate.rejection_reasons
+    # is the precise signal and must not be obscured by the redundant "not_passed" code.
+    if "stage5:stage4_comparison_missing" in gate.rejection_reasons:
+        computed_reasons = tuple(r for r in computed_reasons if r != "stage5:stage4_not_passed")
     reasons = tuple(dict.fromkeys((*computed_reasons, *gate.rejection_reasons)))
     if reasons:
         return reasons

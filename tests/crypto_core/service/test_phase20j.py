@@ -672,3 +672,62 @@ def test_stage4_missing_code_is_distinct_from_not_passed_code():
 
     assert "stage5:stage4_not_passed" in gate_failed.rejection_reasons
     assert "stage5:stage4_comparison_missing" not in gate_failed.rejection_reasons
+
+
+# ---------------------------------------------------------------------------
+# Phase 20K — stage5_live_readiness_blockers blocker-function signal tests
+# ---------------------------------------------------------------------------
+
+
+def test_stage4_missing_blockers_do_not_emit_stage4_not_passed():
+    """stage5_live_readiness_blockers must only emit 'stage4_comparison_missing', never 'stage4_not_passed', when Stage4 was never recorded."""
+    rec = _record()
+    gate = portfolio.build_stage5_gate_from_runtime_evidence_record(
+        rec,
+        allocation_tier_pct=10.0,
+        weeks_at_tier=0,
+        stage4_comparison_result=None,
+    )
+    blockers = portfolio.stage5_live_readiness_blockers(gate)
+    assert "stage5:stage4_comparison_missing" in blockers
+    assert "stage5:stage4_not_passed" not in blockers
+
+
+def test_stage4_failed_blockers_emit_not_passed_not_missing():
+    """stage5_live_readiness_blockers must only emit 'stage4_not_passed', never 'stage4_comparison_missing', when Stage4 comparison failed."""
+    rec = _record()
+    gate = portfolio.build_stage5_gate_from_runtime_evidence_record(
+        rec,
+        allocation_tier_pct=10.0,
+        weeks_at_tier=0,
+        stage4_comparison_result=_stage4_fail(),
+    )
+    blockers = portfolio.stage5_live_readiness_blockers(gate)
+    assert "stage5:stage4_not_passed" in blockers
+    assert "stage5:stage4_comparison_missing" not in blockers
+
+
+def test_no_stage4_sleeve_wrong_edge_id_gate_attached_but_blocked():
+    """A sleeve with no Stage4 baseline/comparison accepts a mismatched edge_id gate (reference_edge_ids=()).
+
+    The gate must still be failed and not live-ready due to Stage4 missing evidence.
+    This documents the intended behavior: edge_id enforcement is inactive when no Stage4
+    reference exists, but Stage4 missing always blocks live-readiness independently.
+    """
+    # Build a gate for a different edge_id from what the sleeve uses
+    wrong_record = _record(edge_id=_OTHER_EDGE_ID)
+    gate = portfolio.build_stage5_gate_from_runtime_evidence_record(
+        wrong_record,
+        allocation_tier_pct=10.0,
+        weeks_at_tier=0,
+        stage4_comparison_result=None,  # Stage4 missing → gate.passed=False
+    )
+    # Sleeve has no Stage4 baseline or comparison — reference_edge_ids=() so no ValueError
+    sleeve = _sleeve(stage4_result=None, include_baseline=False)
+    attached_sleeve = portfolio.build_sleeve_with_stage5_live_readiness_gate(sleeve, gate)
+    assert attached_sleeve.stage5_entry_gate is not None
+    assert attached_sleeve.stage5_entry_gate.passed is False
+    assert portfolio.stage5_live_ready(attached_sleeve.stage5_entry_gate) is False
+    blockers = portfolio.stage5_live_readiness_blockers(attached_sleeve.stage5_entry_gate)
+    assert "stage5:stage4_comparison_missing" in blockers
+    assert "stage5:stage4_not_passed" not in blockers
