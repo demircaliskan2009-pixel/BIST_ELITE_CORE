@@ -26,8 +26,6 @@ import pytest
 
 import crypto_core.service.sleeve_portfolio as portfolio
 import crypto_core.validation as validation
-from crypto_core.execution.engine import ExecutionConfig, ExecutionEngine
-from crypto_core.execution.models import ExecutionMode
 from crypto_core.service.models import (
     ExecutionIntelligenceStatus,
     QueuePressure,
@@ -536,10 +534,9 @@ def test_orchestrator_valid_record_updates_decision_pack_stage5_fields():
         weeks_at_tier=0,
     )
     dp = orch.decision_pack()
-    # Valid gate with no blockers → stage5_live_ready should reflect gate state
-    # (decision_pack stage5_live_ready requires sleeve_ids AND no blockers)
-    assert isinstance(dp.stage5_live_ready, bool)
-    assert isinstance(dp.stage5_live_readiness_blockers, tuple)
+    # Valid gate + passing Stage4 + all evidence clear → live-ready, no blockers
+    assert dp.stage5_live_ready is True
+    assert dp.stage5_live_readiness_blockers == ()
 
 
 # ---------------------------------------------------------------------------
@@ -575,7 +572,7 @@ def test_record_edge_id_mismatch_with_stage4_does_not_silently_pass():
     # Sleeve has Stage4 baseline/result for _EDGE_ID; record has mismatched id
     mismatched_record = _record(edge_id="wrong-edge-id")
     ctrl = _controller(_sleeve())
-    with pytest.raises((ValueError, Exception)):
+    with pytest.raises(ValueError, match="edge_id"):
         ctrl.apply_stage5_runtime_evidence_record(
             sleeve_id=_SLEEVE_ID,
             record=mismatched_record,
