@@ -1973,18 +1973,53 @@ def build_sleeve_with_stage5_live_readiness_gate(
     if gate is None:
         return replace(sleeve, stage5_entry_gate=None)
 
+    stage4_result = sleeve.stage4_comparison_result
+    if stage4_result is None:
+        reasons = tuple(
+            dict.fromkeys(
+                (
+                    *(reason for reason in gate.rejection_reasons if reason != "stage5:stage4_not_passed"),
+                    "stage5:stage4_comparison_missing",
+                )
+            )
+        )
+        return replace(
+            sleeve,
+            stage5_entry_gate=replace(
+                gate,
+                stage4_passed=False,
+                rejection_reasons=reasons,
+                passed=False,
+            ),
+        )
+
     reference_edge_ids = tuple(
         dict.fromkeys(
             edge_id
             for edge_id in (
                 None if sleeve.stage4_backtest_baseline is None else sleeve.stage4_backtest_baseline.edge_id,
-                None if sleeve.stage4_comparison_result is None else sleeve.stage4_comparison_result.edge_id,
+                stage4_result.edge_id,
             )
             if isinstance(edge_id, str) and edge_id
         )
     )
     if reference_edge_ids and gate.edge_id not in reference_edge_ids:
         raise ValueError("stage5 gate edge_id does not match sleeve Stage4 evidence")
+    if not stage4_result.passed:
+        reasons = tuple(
+            dict.fromkeys(
+                (
+                    *(reason for reason in gate.rejection_reasons if reason != "stage5:stage4_comparison_missing"),
+                    "stage5:stage4_not_passed",
+                )
+            )
+        )
+        gate = replace(
+            gate,
+            stage4_passed=False,
+            rejection_reasons=reasons,
+            passed=False,
+        )
     return replace(sleeve, stage5_entry_gate=gate)
 
 
