@@ -2926,10 +2926,19 @@ def build_stage5_gate_from_runtime_evidence_record(
 
     gate = build_stage5_live_readiness_gate_from_evidence(bundle)
 
-    # Apply Stage4 check: if comparison supplied and did not pass, force stage4_passed=False
-    if stage4_comparison_result is not None and not stage4_comparison_result.passed:
-        from dataclasses import replace as _replace
+    # Apply Stage4 check — Stage5 must not pass without a matched, passing Stage4 comparison.
+    from dataclasses import replace as _replace
 
+    if stage4_comparison_result is None:
+        # No Stage4 comparison recorded: evidence is incomplete — block with stable code.
+        gate = _replace(
+            gate,
+            stage4_passed=False,
+            passed=False,
+            rejection_reasons=(*gate.rejection_reasons, "stage5:stage4_comparison_missing"),
+        )
+    elif not stage4_comparison_result.passed:
+        # Stage4 comparison exists but did not pass.
         gate = _replace(
             gate,
             stage4_passed=False,

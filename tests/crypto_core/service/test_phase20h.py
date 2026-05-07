@@ -316,11 +316,13 @@ def test_record_from_dict_rejects_incomplete_evidence_bundle():
 
 
 def test_build_gate_from_valid_record_returns_passing_gate():
+    """Valid record with passing Stage4 result must produce a passing gate (Phase 20J: Stage4 required)."""
     rec = _record()
     gate = portfolio.build_stage5_gate_from_runtime_evidence_record(
         rec,
         allocation_tier_pct=10.0,
         weeks_at_tier=0,
+        stage4_comparison_result=_stage4_pass(),
     )
     assert gate.passed is True
     assert gate.edge_id == _EDGE_ID
@@ -416,8 +418,13 @@ def test_build_gate_with_passed_stage4_does_not_add_stage4_rejection():
     assert "stage5:stage4_not_passed" not in gate.rejection_reasons
 
 
-def test_build_gate_no_stage4_result_does_not_force_failure():
-    """stage4_comparison_result=None → gate outcome comes from evidence only."""
+def test_build_gate_no_stage4_result_forces_failure():
+    """stage4_comparison_result=None → gate must fail with stable 'stage5:stage4_comparison_missing' reason.
+
+    Phase 20J invariant: Stage5 runtime evidence cannot become live-ready without a
+    matched, passing Stage4 comparison.  A missing Stage4 result is treated as a
+    blocker, not a neutral condition.
+    """
     rec = _record()
     gate = portfolio.build_stage5_gate_from_runtime_evidence_record(
         rec,
@@ -425,7 +432,9 @@ def test_build_gate_no_stage4_result_does_not_force_failure():
         weeks_at_tier=0,
         stage4_comparison_result=None,
     )
-    assert gate.passed is True
+    assert gate.passed is False
+    assert gate.stage4_passed is False
+    assert "stage5:stage4_comparison_missing" in gate.rejection_reasons
 
 
 # ---------------------------------------------------------------------------
