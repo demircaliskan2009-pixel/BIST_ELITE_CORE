@@ -2798,6 +2798,148 @@ def stage5_runtime_evidence_bundle_from_dict(data: object) -> Stage5RuntimeEvide
     )
 
 
+# ---------------------------------------------------------------------------
+# Phase 20H — Stage5 Runtime Evidence Attestation Record
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Stage5RuntimeEvidenceRecord:
+    """Durable operator attestation record wrapping a Stage5RuntimeEvidenceBundle.
+
+    Persisted before conversion to Stage5LiveReadinessGate so that the
+    original attestation payload is audit-traceable independently of gate
+    computation.  No network, credentials, or execution semantics live here.
+    """
+
+    record_id: str
+    sleeve_id: str
+    edge_id: str
+    evidence_bundle: Stage5RuntimeEvidenceBundle
+    created_at_ns: int
+    source: str = "operator_attestation"
+    schema_version: int = 1
+    notes: tuple[str, ...] = field(default_factory=tuple)
+
+
+def stage5_runtime_evidence_record_to_dict(record: Stage5RuntimeEvidenceRecord) -> dict[str, object]:
+    """Serialize Stage5RuntimeEvidenceRecord to a JSON-safe dict."""
+
+    return {
+        "record_id": record.record_id,
+        "sleeve_id": record.sleeve_id,
+        "edge_id": record.edge_id,
+        "evidence_bundle": stage5_runtime_evidence_bundle_to_dict(record.evidence_bundle),
+        "created_at_ns": record.created_at_ns,
+        "source": record.source,
+        "schema_version": record.schema_version,
+        "notes": list(record.notes),
+    }
+
+
+def stage5_runtime_evidence_record_from_dict(data: object) -> Stage5RuntimeEvidenceRecord:
+    """Deserialize Stage5RuntimeEvidenceRecord from a JSON-safe dict.
+
+    Fail-closed: raises SleevePortfolioCorruptError on any structural violation.
+    """
+
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Stage5 runtime evidence record payload must be a dict, got {type(data).__name__!r}"
+        )
+
+    record_id = _require_non_empty_str(data.get("record_id"), "record_id")
+    sleeve_id = _require_non_empty_str(data.get("sleeve_id"), "sleeve_id")
+    edge_id = _require_non_empty_str(data.get("edge_id"), "edge_id")
+    source = _require_non_empty_str(data.get("source", "operator_attestation"), "source")
+
+    raw_created = data.get("created_at_ns")
+    if not isinstance(raw_created, int) or raw_created <= 0:
+        raise SleevePortfolioCorruptError(
+            f"Stage5 runtime evidence record field 'created_at_ns' must be a positive int, got {raw_created!r}"
+        )
+
+    raw_schema = data.get("schema_version", 1)
+    if not isinstance(raw_schema, int) or raw_schema <= 0:
+        raise SleevePortfolioCorruptError(
+            f"Stage5 runtime evidence record field 'schema_version' must be a positive int, got {raw_schema!r}"
+        )
+
+    notes = _tuple_of_strings(data.get("notes", ()), "notes")
+
+    evidence_bundle = stage5_runtime_evidence_bundle_from_dict(data.get("evidence_bundle"))
+
+    return Stage5RuntimeEvidenceRecord(
+        record_id=record_id,
+        sleeve_id=sleeve_id,
+        edge_id=edge_id,
+        evidence_bundle=evidence_bundle,
+        created_at_ns=raw_created,
+        source=source,
+        schema_version=raw_schema,
+        notes=notes,
+    )
+
+
+def build_stage5_gate_from_runtime_evidence_record(
+    record: Stage5RuntimeEvidenceRecord,
+    *,
+    allocation_tier_pct: float,
+    weeks_at_tier: int,
+    as_of_ns: int | None = None,
+    stage4_comparison_result: Stage4ComparisonResult | None = None,
+) -> Stage5LiveReadinessGate:
+    """Build a Stage5LiveReadinessGate from a persisted attestation record.
+
+    Delegates entirely to build_stage5_live_readiness_gate_from_evidence.
+    No env reads, no network, no execution, no allocation mutation.
+
+    - edge_id comes from record.edge_id (the bundle edge_id is overridden to
+      match so the caller does not need to keep them in sync externally).
+    - as_of_ns defaults to record.created_at_ns when not supplied.
+    - stage4_comparison_result, if supplied and not passed, will produce a gate
+      with stage4_passed=False via the existing validation path.
+    """
+
+    effective_as_of_ns = record.created_at_ns if as_of_ns is None else as_of_ns
+
+    # Re-bind bundle fields that must reflect record identity
+    bundle = Stage5RuntimeEvidenceBundle(
+        edge_id=record.edge_id,
+        as_of_ns=effective_as_of_ns,
+        operator_approval=record.evidence_bundle.operator_approval,
+        credential_attestation=record.evidence_bundle.credential_attestation,
+        risk_governance=record.evidence_bundle.risk_governance,
+        canary_tier=Stage5CanaryTierEvidence(
+            allocation_tier_pct=allocation_tier_pct,
+            weeks_at_tier=weeks_at_tier,
+            canary_observation_count=record.evidence_bundle.canary_tier.canary_observation_count,
+            canary_pnl_non_negative=record.evidence_bundle.canary_tier.canary_pnl_non_negative,
+            canary_drawdown_within_limit=record.evidence_bundle.canary_tier.canary_drawdown_within_limit,
+            canary_slippage_within_limit=record.evidence_bundle.canary_tier.canary_slippage_within_limit,
+            canary_incidents=record.evidence_bundle.canary_tier.canary_incidents,
+            as_of_ns=record.evidence_bundle.canary_tier.as_of_ns,
+            rejection_reasons=record.evidence_bundle.canary_tier.rejection_reasons,
+        ),
+        rejection_reasons=record.evidence_bundle.rejection_reasons,
+    )
+
+    gate = build_stage5_live_readiness_gate_from_evidence(bundle)
+
+    # Apply Stage4 check: if comparison supplied and did not pass, force stage4_passed=False
+    if stage4_comparison_result is not None and not stage4_comparison_result.passed:
+        from dataclasses import replace as _replace
+
+        gate = _replace(
+            gate,
+            stage4_passed=False,
+            passed=False,
+            rejection_reasons=(*gate.rejection_reasons, "stage5:stage4_not_passed"),
+        )
+
+    return gate
+
+
 def crypto_sleeve_state_to_dict(state: CryptoSleeveState) -> dict:
     """Serialize CryptoSleeveState to a plain dict."""
     effective_stage4_required = _stage4_effectively_required(state)
