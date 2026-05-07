@@ -38,9 +38,11 @@ from crypto_core.service.sleeve_portfolio import (
     SleeveReason,
     SleeveReasonSource,
     Stage5LiveReadinessGate,
+    Stage5RuntimeEvidenceRecord,
     build_sleeve_portfolio_snapshot,
     build_sleeve_with_stage4_artifacts,
     build_sleeve_with_stage5_live_readiness_gate,
+    build_stage5_gate_from_runtime_evidence_record,
     crypto_sleeve_state_from_dict,
     crypto_sleeve_state_to_dict,
     sleeve_allocation_policy_from_dict,
@@ -256,6 +258,34 @@ class SleevePortfolioController:
                 None if previous is None else previous.external_regime_execution_blocked
             ),
         )
+
+    def apply_stage5_runtime_evidence_record(
+        self,
+        *,
+        sleeve_id: str,
+        record: Stage5RuntimeEvidenceRecord,
+        allocation_tier_pct: float,
+        weeks_at_tier: int,
+        as_of_ns: int | None = None,
+    ) -> SleevePortfolioSnapshot:
+        """Build a Stage5 gate from a persisted attestation record and apply to one sleeve.
+
+        Reads the target sleeve's current stage4_comparison_result so Stage4
+        pass/fail is reflected in the resulting gate without any semantic change
+        to Stage4 comparator logic.  Delegates gate attachment to the existing
+        apply_stage5_live_readiness_gate path; all other sleeve fields are
+        preserved unchanged.
+        """
+        self._require_known_sleeve(sleeve_id)
+        target = next(s for s in self._defined_sleeves if s.sleeve_id == sleeve_id)
+        gate = build_stage5_gate_from_runtime_evidence_record(
+            record,
+            allocation_tier_pct=allocation_tier_pct,
+            weeks_at_tier=weeks_at_tier,
+            as_of_ns=as_of_ns,
+            stage4_comparison_result=target.stage4_comparison_result,
+        )
+        return self.apply_stage5_live_readiness_gate(sleeve_id, gate)
 
     def enable_sleeve(self, sleeve_id: str, *, updated_at_ns: int | None = None) -> SleeveOperatorOverride:
         """Explicitly enable or unblock a sleeve at the operator layer."""

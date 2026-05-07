@@ -109,6 +109,7 @@ from crypto_core.service.sleeve_portfolio import (
     SleeveAllocationPolicy,
     SleevePortfolioSnapshot,
     Stage5LiveReadinessGate,
+    Stage5RuntimeEvidenceRecord,
     build_sleeve_portfolio_snapshot,
     sleeve_allocation_policy_to_dict,
     sleeve_campaign_evidence_result_to_dict,
@@ -574,6 +575,31 @@ class ServiceOrchestrator:
 
         controller = self._ensure_sleeve_portfolio_controller()
         controller.apply_stage5_live_readiness_gate(sleeve_id, gate)
+        self._configured_sleeves = controller.defined_sleeves
+        return self.operator_snapshot()
+
+    def apply_stage5_runtime_evidence_record_to_sleeve(
+        self,
+        *,
+        sleeve_id: str,
+        record: Stage5RuntimeEvidenceRecord,
+        allocation_tier_pct: float,
+        weeks_at_tier: int,
+        as_of_ns: int | None = None,
+    ) -> OperatorSnapshot:
+        """Apply a Stage5 runtime evidence record through the sleeve controller."""
+
+        if self._sleeve_portfolio_controller is None and not self._configured_sleeves:
+            raise RuntimeError("Sleeve portfolio controller is not configured for Stage5 live-readiness handoff")
+
+        controller = self._ensure_sleeve_portfolio_controller()
+        controller.apply_stage5_runtime_evidence_record(
+            sleeve_id=sleeve_id,
+            record=record,
+            allocation_tier_pct=allocation_tier_pct,
+            weeks_at_tier=weeks_at_tier,
+            as_of_ns=as_of_ns,
+        )
         self._configured_sleeves = controller.defined_sleeves
         return self.operator_snapshot()
 
