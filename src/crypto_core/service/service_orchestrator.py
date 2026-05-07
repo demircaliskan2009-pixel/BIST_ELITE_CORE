@@ -1359,6 +1359,8 @@ class ServiceOrchestrator:
         )
         sleeve_admission_evidence_blockers = self._decision_pack_sleeve_admission_evidence_blockers(operator_snapshot)
         sleeve_pbo_allocation_caps = self._decision_pack_sleeve_pbo_allocation_caps(operator_snapshot)
+        stage5_live_readiness_blockers = self._decision_pack_stage5_live_readiness_blockers(operator_snapshot)
+        stage5_live_ready_sleeve_ids = self._decision_pack_stage5_live_ready_sleeve_ids(operator_snapshot)
         disposition = operator_disposition_from_verdict(promotion_verdict)
 
         return OperatorDecisionPack(
@@ -1385,6 +1387,9 @@ class ServiceOrchestrator:
             ),
             sleeve_admission_evidence_blockers=sleeve_admission_evidence_blockers,
             sleeve_pbo_allocation_caps=sleeve_pbo_allocation_caps,
+            stage5_live_ready=bool(stage5_live_ready_sleeve_ids) and not stage5_live_readiness_blockers,
+            stage5_live_ready_sleeve_ids=stage5_live_ready_sleeve_ids,
+            stage5_live_readiness_blockers=stage5_live_readiness_blockers,
             readiness_criteria=(tuple(readiness_dict.get("criteria", ())) if readiness_dict is not None else ()),
             readiness_blockers=(tuple(readiness_dict.get("blockers", ())) if readiness_dict is not None else ()),
             external_regime_quality=ext_regime_quality,
@@ -2350,6 +2355,12 @@ class ServiceOrchestrator:
         readiness_dict: dict | None,
     ) -> dict:
         sleeve_pbo_allocation_caps = ServiceOrchestrator._decision_pack_sleeve_pbo_allocation_caps(operator_snapshot)
+        stage5_live_ready_sleeve_ids = ServiceOrchestrator._decision_pack_stage5_live_ready_sleeve_ids(
+            operator_snapshot
+        )
+        stage5_live_readiness_blockers = ServiceOrchestrator._decision_pack_stage5_live_readiness_blockers(
+            operator_snapshot
+        )
         return {
             "campaign_evidence_available": operator_snapshot.evidence.campaign_evidence_available,
             "review_evidence_available": operator_snapshot.evidence.review_evidence_available,
@@ -2364,6 +2375,9 @@ class ServiceOrchestrator:
             "sleeve_pbo_allocation_caps": [
                 [sleeve_id, allocation_cap] for sleeve_id, allocation_cap in sleeve_pbo_allocation_caps
             ],
+            "stage5_live_ready": bool(stage5_live_ready_sleeve_ids) and not stage5_live_readiness_blockers,
+            "stage5_live_ready_sleeve_ids": list(stage5_live_ready_sleeve_ids),
+            "stage5_live_readiness_blockers": list(stage5_live_readiness_blockers),
             "readiness_blockers": ([] if readiness_dict is None else list(readiness_dict.get("blockers", ()))),
             "summary": operator_snapshot.evidence.summary or missing_evidence.get("message", ""),
         }
@@ -2382,6 +2396,28 @@ class ServiceOrchestrator:
             (result.sleeve_id, float(result.pbo_allocation_cap))
             for result in operator_snapshot.sleeve_admission.admission_results
             if result.pbo_allocation_cap is not None
+        )
+
+    @staticmethod
+    def _decision_pack_stage5_live_readiness_blockers(operator_snapshot: OperatorSnapshot) -> tuple[str, ...]:
+        if operator_snapshot.sleeve_portfolio is None:
+            return ()
+        return ServiceOrchestrator._ordered_unique(
+            tuple(
+                blocker
+                for sleeve in operator_snapshot.sleeve_portfolio.sleeves
+                for blocker in sleeve.promotion_candidate.stage5_live_readiness_blockers
+            )
+        )
+
+    @staticmethod
+    def _decision_pack_stage5_live_ready_sleeve_ids(operator_snapshot: OperatorSnapshot) -> tuple[str, ...]:
+        if operator_snapshot.sleeve_portfolio is None:
+            return ()
+        return tuple(
+            sleeve.sleeve_id
+            for sleeve in operator_snapshot.sleeve_portfolio.sleeves
+            if sleeve.promotion_candidate.stage5_live_ready
         )
 
     @staticmethod

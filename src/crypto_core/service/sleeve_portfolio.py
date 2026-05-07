@@ -47,6 +47,14 @@ if TYPE_CHECKING:
     )
 
 _ALLOCATION_EPSILON = 1e-9
+STAGE5_ALLOWED_ALLOCATION_TIERS_PCT: tuple[float, ...] = (10.0, 25.0, 50.0, 100.0)
+STAGE5_REQUIRED_WEEKS_BY_TIER_PCT: dict[float, int] = {
+    10.0: 0,
+    25.0: 2,
+    50.0: 4,
+    100.0: 8,
+}
+STAGE5_LIVE_READINESS_GATE_MISSING = "stage5:live_readiness_gate_missing"
 
 
 class CryptoSleeveType(str, Enum):
@@ -252,6 +260,8 @@ class SleevePromotionCandidateResult:
     reason_summary: str = ""
     next_step: str = "Strengthen sleeve evidence before considering it a later promotion candidate."
     pbo_allocation_cap: float | None = None
+    stage5_live_ready: bool = False
+    stage5_live_readiness_blockers: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -270,8 +280,31 @@ class SleeveDecisionPackResult:
     promotion_candidate_status: SleevePromotionCandidateStatus = SleevePromotionCandidateStatus.NOT_A_CANDIDATE
     missing_evidence: tuple[str, ...] = field(default_factory=tuple)
     blocking_reasons: tuple[str, ...] = field(default_factory=tuple)
+    stage5_live_ready: bool = False
+    stage5_live_readiness_blockers: tuple[str, ...] = field(default_factory=tuple)
     reason_summary: str = ""
     next_step: str = "Collect stronger sleeve evidence before any operator decision changes."
+
+
+@dataclass(frozen=True)
+class Stage5LiveReadinessGate:
+    """Explicit Stage5 live-readiness evidence metadata.
+
+    This gate is evidence only. It never enables live orders, creates exchange
+    clients, reads credentials, or changes allocation.
+    """
+
+    edge_id: str
+    allocation_tier_pct: float
+    weeks_at_tier: int
+    as_of_ns: int
+    stage4_passed: bool
+    operator_approval_recorded: bool
+    live_api_credentials_valid: bool
+    kill_switch_clear: bool
+    risk_governance_clear: bool
+    rejection_reasons: tuple[str, ...] = field(default_factory=tuple)
+    passed: bool = False
 
 
 @dataclass(frozen=True)
@@ -309,6 +342,7 @@ class CryptoSleeveState:
     stage4_comparison_result: Stage4ComparisonResult | None = None
     stage4_comparison_required: bool = False
     stage4_backtest_baseline: Stage4BacktestBaseline | None = None
+    stage5_entry_gate: Stage5LiveReadinessGate | None = None
 
 
 @dataclass(frozen=True)
@@ -758,6 +792,9 @@ def _validate_sleeve_state(state: CryptoSleeveState) -> CryptoSleeveState:
         stage4_comparison_result=state.stage4_comparison_result,
         stage4_comparison_required=bool(state.stage4_comparison_required),
         stage4_backtest_baseline=state.stage4_backtest_baseline,
+        stage5_entry_gate=state.stage5_entry_gate
+        if isinstance(state.stage5_entry_gate, Stage5LiveReadinessGate)
+        else None,
     )
 
 
@@ -1534,6 +1571,143 @@ def _stage4_effectively_required(state: CryptoSleeveState) -> bool:
     )
 
 
+def _stage5_expected_rejection_reasons(
+    *,
+    edge_id: str,
+    allocation_tier_pct: float,
+    weeks_at_tier: int,
+    as_of_ns: int,
+    stage4_passed: bool,
+    operator_approval_recorded: bool,
+    live_api_credentials_valid: bool,
+    kill_switch_clear: bool,
+    risk_governance_clear: bool,
+) -> tuple[str, ...]:
+    reasons: list[str] = []
+    if not isinstance(edge_id, str) or not edge_id:
+        reasons.append("stage5:edge_id_missing")
+    if (
+        isinstance(allocation_tier_pct, bool)
+        or not isinstance(allocation_tier_pct, (int, float))
+        or not math.isfinite(float(allocation_tier_pct))
+        or float(allocation_tier_pct) not in STAGE5_ALLOWED_ALLOCATION_TIERS_PCT
+    ):
+        reasons.append("stage5:allocation_tier_invalid")
+    if isinstance(weeks_at_tier, bool) or not isinstance(weeks_at_tier, int) or weeks_at_tier < 0:
+        reasons.append("stage5:weeks_at_tier_invalid")
+    if isinstance(as_of_ns, bool) or not isinstance(as_of_ns, int) or as_of_ns <= 0:
+        reasons.append("stage5:as_of_ns_invalid")
+    if stage4_passed is not True:
+        reasons.append("stage5:stage4_not_passed")
+    if operator_approval_recorded is not True:
+        reasons.append("stage5:operator_approval_missing")
+    if live_api_credentials_valid is not True:
+        reasons.append("stage5:live_api_credentials_not_verified")
+    if kill_switch_clear is not True:
+        reasons.append("stage5:kill_switch_not_clear")
+    if risk_governance_clear is not True:
+        reasons.append("stage5:risk_governance_not_clear")
+
+    tier = float(allocation_tier_pct) if isinstance(allocation_tier_pct, (int, float)) else allocation_tier_pct
+    if tier in STAGE5_REQUIRED_WEEKS_BY_TIER_PCT and isinstance(weeks_at_tier, int):
+        required_weeks = STAGE5_REQUIRED_WEEKS_BY_TIER_PCT[tier]
+        if weeks_at_tier < required_weeks:
+            reasons.append("stage5:weeks_at_tier_below_minimum")
+    return tuple(dict.fromkeys(reasons))
+
+
+def build_stage5_live_readiness_gate(
+    *,
+    edge_id: str,
+    allocation_tier_pct: float,
+    weeks_at_tier: int,
+    as_of_ns: int,
+    stage4_passed: bool,
+    operator_approval_recorded: bool,
+    live_api_credentials_valid: bool,
+    kill_switch_clear: bool,
+    risk_governance_clear: bool,
+    rejection_reasons: tuple[str, ...] = (),
+) -> Stage5LiveReadinessGate:
+    """Build deterministic Stage5 metadata without enabling live execution."""
+
+    computed_reasons = _stage5_expected_rejection_reasons(
+        edge_id=edge_id,
+        allocation_tier_pct=allocation_tier_pct,
+        weeks_at_tier=weeks_at_tier,
+        as_of_ns=as_of_ns,
+        stage4_passed=stage4_passed,
+        operator_approval_recorded=operator_approval_recorded,
+        live_api_credentials_valid=live_api_credentials_valid,
+        kill_switch_clear=kill_switch_clear,
+        risk_governance_clear=risk_governance_clear,
+    )
+    if not isinstance(rejection_reasons, tuple) or any(
+        not isinstance(reason, str) or not reason for reason in rejection_reasons
+    ):
+        explicit_reasons = ("stage5:rejection_reasons_malformed",)
+    else:
+        explicit_reasons = rejection_reasons
+    reasons = tuple(dict.fromkeys((*computed_reasons, *explicit_reasons)))
+    resolved_tier = (
+        float(allocation_tier_pct)
+        if not isinstance(allocation_tier_pct, bool) and isinstance(allocation_tier_pct, (int, float))
+        else 0.0
+    )
+    return Stage5LiveReadinessGate(
+        edge_id=edge_id,
+        allocation_tier_pct=resolved_tier,
+        weeks_at_tier=weeks_at_tier,
+        as_of_ns=as_of_ns,
+        stage4_passed=stage4_passed,
+        operator_approval_recorded=operator_approval_recorded,
+        live_api_credentials_valid=live_api_credentials_valid,
+        kill_switch_clear=kill_switch_clear,
+        risk_governance_clear=risk_governance_clear,
+        rejection_reasons=reasons,
+        passed=not reasons,
+    )
+
+
+def stage5_live_readiness_blockers(gate: Stage5LiveReadinessGate | None) -> tuple[str, ...]:
+    """Return fail-closed Stage5 blockers in stable order."""
+
+    if gate is None:
+        return (STAGE5_LIVE_READINESS_GATE_MISSING,)
+    if not isinstance(gate, Stage5LiveReadinessGate):
+        return ("stage5:live_readiness_gate_malformed",)
+    if not isinstance(gate.rejection_reasons, tuple) or any(
+        not isinstance(reason, str) or not reason for reason in gate.rejection_reasons
+    ):
+        return ("stage5:rejection_reasons_malformed",)
+
+    computed_reasons = _stage5_expected_rejection_reasons(
+        edge_id=gate.edge_id,
+        allocation_tier_pct=gate.allocation_tier_pct,
+        weeks_at_tier=gate.weeks_at_tier,
+        as_of_ns=gate.as_of_ns,
+        stage4_passed=gate.stage4_passed,
+        operator_approval_recorded=gate.operator_approval_recorded,
+        live_api_credentials_valid=gate.live_api_credentials_valid,
+        kill_switch_clear=gate.kill_switch_clear,
+        risk_governance_clear=gate.risk_governance_clear,
+    )
+    reasons = tuple(dict.fromkeys((*computed_reasons, *gate.rejection_reasons)))
+    if reasons:
+        return reasons
+    if gate.passed is not True:
+        return ("stage5:gate_not_passed",)
+    return ()
+
+
+def stage5_live_ready(gate: Stage5LiveReadinessGate | None) -> bool:
+    """True only when explicit Stage5 evidence is present and passes."""
+
+    return (
+        isinstance(gate, Stage5LiveReadinessGate) and gate.passed is True and not stage5_live_readiness_blockers(gate)
+    )
+
+
 def build_sleeve_with_stage4_comparison(
     sleeve: CryptoSleeveState,
     baseline: Stage4BacktestBaseline | None,
@@ -1637,6 +1811,8 @@ def _build_sleeve_promotion_candidate_result(sleeve: CryptoSleeveState) -> Sleev
         required=_stage4_effectively_required(sleeve),
     )
     pbo_allocation_cap = _validation_pipeline_pbo_allocation_cap(sleeve.validation_pipeline_result)
+    stage5_blockers = stage5_live_readiness_blockers(sleeve.stage5_entry_gate)
+    stage5_ready = stage5_live_ready(sleeve.stage5_entry_gate)
     missing_evidence = tuple(
         dict.fromkeys(
             (
@@ -1733,6 +1909,8 @@ def _build_sleeve_promotion_candidate_result(sleeve: CryptoSleeveState) -> Sleev
         reason_summary=reason_summary,
         next_step=next_step,
         pbo_allocation_cap=pbo_allocation_cap,
+        stage5_live_ready=stage5_ready,
+        stage5_live_readiness_blockers=stage5_blockers,
     )
 
 
@@ -1742,6 +1920,7 @@ def _build_sleeve_decision_pack_result(sleeve: CryptoSleeveState) -> SleeveDecis
     campaign_evidence = sleeve.campaign_evidence
     promotion_support = sleeve.promotion_support
     promotion_candidate = sleeve.promotion_candidate
+    stage5_blockers = promotion_candidate.stage5_live_readiness_blockers
     missing_evidence = tuple(
         dict.fromkeys(
             (
@@ -1807,6 +1986,8 @@ def _build_sleeve_decision_pack_result(sleeve: CryptoSleeveState) -> SleeveDecis
         promotion_candidate_status=promotion_candidate.status,
         missing_evidence=missing_evidence,
         blocking_reasons=blocking_reasons,
+        stage5_live_ready=promotion_candidate.stage5_live_ready,
+        stage5_live_readiness_blockers=stage5_blockers,
         reason_summary=reason_summary,
         next_step=next_step,
     )
@@ -2101,6 +2282,61 @@ def sleeve_reason_from_dict(data: dict) -> SleeveReason:
     )
 
 
+def stage5_live_readiness_gate_to_dict(gate: Stage5LiveReadinessGate) -> dict:
+    """Serialize Stage5LiveReadinessGate to a JSON-safe dict."""
+
+    return {
+        "edge_id": gate.edge_id,
+        "allocation_tier_pct": gate.allocation_tier_pct,
+        "weeks_at_tier": gate.weeks_at_tier,
+        "as_of_ns": gate.as_of_ns,
+        "stage4_passed": gate.stage4_passed,
+        "operator_approval_recorded": gate.operator_approval_recorded,
+        "live_api_credentials_valid": gate.live_api_credentials_valid,
+        "kill_switch_clear": gate.kill_switch_clear,
+        "risk_governance_clear": gate.risk_governance_clear,
+        "rejection_reasons": list(gate.rejection_reasons),
+        "passed": gate.passed,
+    }
+
+
+def _require_stage5_float(value: object, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SleevePortfolioValidationError(f"Stage5 field {field_name!r} must be numeric")
+    result = float(value)
+    if not math.isfinite(result):
+        raise SleevePortfolioValidationError(f"Stage5 field {field_name!r} must be finite")
+    return result
+
+
+def stage5_live_readiness_gate_from_dict(data: object) -> Stage5LiveReadinessGate:
+    """Deserialize Stage5LiveReadinessGate from a JSON-safe dict."""
+
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Stage5 live readiness gate payload must be a dict, got {type(data).__name__!r}"
+        )
+    return Stage5LiveReadinessGate(
+        edge_id=_require_non_empty_str(data.get("edge_id"), "edge_id"),
+        allocation_tier_pct=_require_stage5_float(data.get("allocation_tier_pct"), "allocation_tier_pct"),
+        weeks_at_tier=_require_int(data.get("weeks_at_tier"), "weeks_at_tier"),
+        as_of_ns=_require_int(data.get("as_of_ns"), "as_of_ns"),
+        stage4_passed=_require_bool(data.get("stage4_passed", False), "stage4_passed"),
+        operator_approval_recorded=_require_bool(
+            data.get("operator_approval_recorded", False),
+            "operator_approval_recorded",
+        ),
+        live_api_credentials_valid=_require_bool(
+            data.get("live_api_credentials_valid", False),
+            "live_api_credentials_valid",
+        ),
+        kill_switch_clear=_require_bool(data.get("kill_switch_clear", False), "kill_switch_clear"),
+        risk_governance_clear=_require_bool(data.get("risk_governance_clear", False), "risk_governance_clear"),
+        rejection_reasons=_tuple_of_strings(data.get("rejection_reasons", ()), "rejection_reasons"),
+        passed=_require_bool(data.get("passed", False), "passed"),
+    )
+
+
 def crypto_sleeve_state_to_dict(state: CryptoSleeveState) -> dict:
     """Serialize CryptoSleeveState to a plain dict."""
     effective_stage4_required = _stage4_effectively_required(state)
@@ -2135,6 +2371,9 @@ def crypto_sleeve_state_to_dict(state: CryptoSleeveState) -> dict:
             None
             if state.stage4_backtest_baseline is None
             else stage4_backtest_baseline_to_dict(state.stage4_backtest_baseline)
+        ),
+        "stage5_entry_gate": (
+            None if state.stage5_entry_gate is None else stage5_live_readiness_gate_to_dict(state.stage5_entry_gate)
         ),
     }
 
@@ -2200,6 +2439,11 @@ def crypto_sleeve_state_from_dict(data: dict) -> CryptoSleeveState:
                 None
                 if data.get("stage4_backtest_baseline") is None
                 else stage4_backtest_baseline_from_dict(data.get("stage4_backtest_baseline"))
+            ),
+            stage5_entry_gate=(
+                None
+                if data.get("stage5_entry_gate") is None
+                else stage5_live_readiness_gate_from_dict(data.get("stage5_entry_gate"))
             ),
         )
     except (SleevePortfolioValidationError, ValueError) as exc:
@@ -2549,6 +2793,8 @@ def sleeve_promotion_candidate_result_to_dict(result: SleevePromotionCandidateRe
         "reason_summary": result.reason_summary,
         "next_step": result.next_step,
         "pbo_allocation_cap": result.pbo_allocation_cap,
+        "stage5_live_ready": result.stage5_live_ready,
+        "stage5_live_readiness_blockers": list(result.stage5_live_readiness_blockers),
     }
 
 
@@ -2581,6 +2827,11 @@ def sleeve_promotion_candidate_result_from_dict(data: dict) -> SleevePromotionCa
         reason_summary="" if data.get("reason_summary", "") is None else str(data.get("reason_summary", "")),
         next_step=_require_non_empty_str(data.get("next_step"), "next_step"),
         pbo_allocation_cap=data.get("pbo_allocation_cap"),
+        stage5_live_ready=_require_bool(data.get("stage5_live_ready", False), "stage5_live_ready"),
+        stage5_live_readiness_blockers=_tuple_of_strings(
+            data.get("stage5_live_readiness_blockers", ()),
+            "stage5_live_readiness_blockers",
+        ),
     )
 
 
@@ -2599,6 +2850,8 @@ def sleeve_decision_pack_result_to_dict(result: SleeveDecisionPackResult) -> dic
         "promotion_candidate_status": result.promotion_candidate_status.value,
         "missing_evidence": list(result.missing_evidence),
         "blocking_reasons": list(result.blocking_reasons),
+        "stage5_live_ready": result.stage5_live_ready,
+        "stage5_live_readiness_blockers": list(result.stage5_live_readiness_blockers),
         "reason_summary": result.reason_summary,
         "next_step": result.next_step,
     }
@@ -2633,6 +2886,11 @@ def sleeve_decision_pack_result_from_dict(data: dict) -> SleeveDecisionPackResul
         ),
         missing_evidence=_tuple_of_strings(data.get("missing_evidence", ()), "missing_evidence"),
         blocking_reasons=_tuple_of_strings(data.get("blocking_reasons", ()), "blocking_reasons"),
+        stage5_live_ready=_require_bool(data.get("stage5_live_ready", False), "stage5_live_ready"),
+        stage5_live_readiness_blockers=_tuple_of_strings(
+            data.get("stage5_live_readiness_blockers", ()),
+            "stage5_live_readiness_blockers",
+        ),
         reason_summary="" if data.get("reason_summary", "") is None else str(data.get("reason_summary", "")),
         next_step=_require_non_empty_str(data.get("next_step"), "next_step"),
     )

@@ -98,6 +98,9 @@ class OperatorDecisionPack:
     insufficient_evidence_summary: dict = field(default_factory=dict)
     sleeve_admission_evidence_blockers: tuple[str, ...] = field(default_factory=tuple)
     sleeve_pbo_allocation_caps: tuple[tuple[str, float], ...] = field(default_factory=tuple)
+    stage5_live_ready: bool = False
+    stage5_live_ready_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
+    stage5_live_readiness_blockers: tuple[str, ...] = field(default_factory=tuple)
     readiness_criteria: tuple[dict, ...] = field(default_factory=tuple)
     readiness_blockers: tuple[str, ...] = field(default_factory=tuple)
     external_regime_quality: str = "unavailable"
@@ -217,6 +220,9 @@ def decision_pack_missing_evidence(pack: OperatorDecisionPack) -> dict:
         "sleeve_pbo_allocation_caps": [
             [sleeve_id, allocation_cap] for sleeve_id, allocation_cap in pack.sleeve_pbo_allocation_caps
         ],
+        "stage5_live_ready": pack.stage5_live_ready,
+        "stage5_live_ready_sleeve_ids": list(pack.stage5_live_ready_sleeve_ids),
+        "stage5_live_readiness_blockers": list(pack.stage5_live_readiness_blockers),
         "summary": pack.insufficient_evidence_summary.get("summary", ""),
         "details": pack.insufficient_evidence_summary,
     }
@@ -260,6 +266,13 @@ def _require_int(d: dict, field_name: str) -> int:
 
 def _require_bool(d: dict, field_name: str) -> bool:
     value = d.get(field_name)
+    if not isinstance(value, bool):
+        raise OperatorDecisionPackCorruptError(f"Decision pack field {field_name!r} must be a bool")
+    return value
+
+
+def _optional_bool(d: dict, field_name: str, default: bool) -> bool:
+    value = d.get(field_name, default)
     if not isinstance(value, bool):
         raise OperatorDecisionPackCorruptError(f"Decision pack field {field_name!r} must be a bool")
     return value
@@ -340,6 +353,9 @@ def decision_pack_from_dict(d: dict) -> OperatorDecisionPack:
         insufficient_evidence_summary=_require_dict(d, "insufficient_evidence_summary"),
         sleeve_admission_evidence_blockers=_optional_tuple_of_strings(d, "sleeve_admission_evidence_blockers"),
         sleeve_pbo_allocation_caps=_optional_tuple_of_string_float_pairs(d, "sleeve_pbo_allocation_caps"),
+        stage5_live_ready=_optional_bool(d, "stage5_live_ready", False),
+        stage5_live_ready_sleeve_ids=_optional_tuple_of_strings(d, "stage5_live_ready_sleeve_ids"),
+        stage5_live_readiness_blockers=_optional_tuple_of_strings(d, "stage5_live_readiness_blockers"),
         readiness_criteria=_optional_tuple_of_dicts(d, "readiness_criteria"),
         readiness_blockers=_optional_tuple_of_strings(d, "readiness_blockers"),
         external_regime_quality=_require_str(d, "external_regime_quality"),
