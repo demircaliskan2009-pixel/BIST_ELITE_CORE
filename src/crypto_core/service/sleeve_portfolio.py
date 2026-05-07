@@ -1708,6 +1708,30 @@ def stage5_live_ready(gate: Stage5LiveReadinessGate | None) -> bool:
     )
 
 
+def build_sleeve_with_stage5_live_readiness_gate(
+    sleeve: CryptoSleeveState,
+    gate: Stage5LiveReadinessGate | None,
+) -> CryptoSleeveState:
+    """Attach Stage5 live-readiness metadata without enabling live execution."""
+
+    if gate is None:
+        return replace(sleeve, stage5_entry_gate=None)
+
+    reference_edge_ids = tuple(
+        dict.fromkeys(
+            edge_id
+            for edge_id in (
+                None if sleeve.stage4_backtest_baseline is None else sleeve.stage4_backtest_baseline.edge_id,
+                None if sleeve.stage4_comparison_result is None else sleeve.stage4_comparison_result.edge_id,
+            )
+            if isinstance(edge_id, str) and edge_id
+        )
+    )
+    if reference_edge_ids and gate.edge_id not in reference_edge_ids:
+        raise ValueError("stage5 gate edge_id does not match sleeve Stage4 evidence")
+    return replace(sleeve, stage5_entry_gate=gate)
+
+
 def build_sleeve_with_stage4_comparison(
     sleeve: CryptoSleeveState,
     baseline: Stage4BacktestBaseline | None,

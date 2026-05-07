@@ -108,6 +108,7 @@ from crypto_core.service.sleeve_portfolio import (
     CryptoSleeveState,
     SleeveAllocationPolicy,
     SleevePortfolioSnapshot,
+    Stage5LiveReadinessGate,
     build_sleeve_portfolio_snapshot,
     sleeve_allocation_policy_to_dict,
     sleeve_campaign_evidence_result_to_dict,
@@ -558,6 +559,21 @@ class ServiceOrchestrator:
             min_duration_days=min_duration_days,
             min_sharpe_retention_ratio=min_sharpe_retention_ratio,
         )
+        self._configured_sleeves = controller.defined_sleeves
+        return self.operator_snapshot()
+
+    def apply_stage5_live_readiness_gate_to_sleeve(
+        self,
+        sleeve_id: str,
+        gate: Stage5LiveReadinessGate | None,
+    ) -> OperatorSnapshot:
+        """Apply Stage5 live-readiness metadata through the sleeve controller."""
+
+        if self._sleeve_portfolio_controller is None and not self._configured_sleeves:
+            raise RuntimeError("Sleeve portfolio controller is not configured for Stage5 live-readiness handoff")
+
+        controller = self._ensure_sleeve_portfolio_controller()
+        controller.apply_stage5_live_readiness_gate(sleeve_id, gate)
         self._configured_sleeves = controller.defined_sleeves
         return self.operator_snapshot()
 

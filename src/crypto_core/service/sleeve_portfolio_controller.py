@@ -37,8 +37,10 @@ from crypto_core.service.sleeve_portfolio import (
     SleevePortfolioSnapshot,
     SleeveReason,
     SleeveReasonSource,
+    Stage5LiveReadinessGate,
     build_sleeve_portfolio_snapshot,
     build_sleeve_with_stage4_artifacts,
+    build_sleeve_with_stage5_live_readiness_gate,
     crypto_sleeve_state_from_dict,
     crypto_sleeve_state_to_dict,
     sleeve_allocation_policy_from_dict,
@@ -223,6 +225,30 @@ class SleevePortfolioController:
         previous = self._current_snapshot
         return self.current_snapshot(
             as_of_ns=snapshot_as_of_ns,
+            readiness_level=None if previous is None else previous.readiness_level,
+            readiness_is_supportive=False if previous is None else previous.readiness_is_supportive,
+            escalation_allowed_next_step=None if previous is None else previous.escalation_allowed_next_step,
+            external_regime_execution_blocked=(
+                None if previous is None else previous.external_regime_execution_blocked
+            ),
+        )
+
+    def apply_stage5_live_readiness_gate(
+        self,
+        sleeve_id: str,
+        gate: Stage5LiveReadinessGate | None,
+    ) -> SleevePortfolioSnapshot:
+        """Apply Stage5 live-readiness metadata to one configured sleeve."""
+
+        self._require_known_sleeve(sleeve_id)
+        updated_sleeves = tuple(
+            build_sleeve_with_stage5_live_readiness_gate(sleeve, gate) if sleeve.sleeve_id == sleeve_id else sleeve
+            for sleeve in self._defined_sleeves
+        )
+        self._defined_sleeves = self._validated_sleeves(updated_sleeves)
+        previous = self._current_snapshot
+        return self.current_snapshot(
+            as_of_ns=0 if previous is None else previous.as_of_ns,
             readiness_level=None if previous is None else previous.readiness_level,
             readiness_is_supportive=False if previous is None else previous.readiness_is_supportive,
             escalation_allowed_next_step=None if previous is None else previous.escalation_allowed_next_step,
