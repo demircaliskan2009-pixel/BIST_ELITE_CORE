@@ -308,6 +308,71 @@ class Stage5LiveReadinessGate:
 
 
 @dataclass(frozen=True)
+class Stage5OperatorApprovalEvidence:
+    """Operator approval attestation for Stage5 readiness."""
+
+    approved: bool
+    approver_id: str
+    approved_at_ns: int
+    approval_reference: str
+    rejection_reasons: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class Stage5CredentialAttestationEvidence:
+    """Credential-valid attestation metadata.
+
+    This is supplied evidence only. It does not read env vars, API keys, or secrets.
+    """
+
+    live_api_credentials_valid: bool
+    attested_by: str
+    attested_at_ns: int
+    attestation_reference: str
+    rejection_reasons: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class Stage5RiskGovernanceEvidence:
+    """Risk, kill-switch, and edge-health attestation for Stage5."""
+
+    risk_governance_clear: bool
+    kill_switch_clear: bool
+    ehs_at_entry: float
+    max_drawdown_bps: float | None
+    attested_at_ns: int
+    rejection_reasons: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class Stage5CanaryTierEvidence:
+    """Canary/tier observation metadata for Stage5 scaled entry."""
+
+    allocation_tier_pct: float
+    weeks_at_tier: int
+    canary_observation_count: int
+    canary_pnl_non_negative: bool
+    canary_drawdown_within_limit: bool
+    canary_slippage_within_limit: bool
+    canary_incidents: int
+    as_of_ns: int
+    rejection_reasons: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class Stage5RuntimeEvidenceBundle:
+    """Complete supplied Stage5 runtime evidence bundle."""
+
+    edge_id: str
+    as_of_ns: int
+    operator_approval: Stage5OperatorApprovalEvidence
+    credential_attestation: Stage5CredentialAttestationEvidence
+    risk_governance: Stage5RiskGovernanceEvidence
+    canary_tier: Stage5CanaryTierEvidence
+    rejection_reasons: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
 class CryptoSleeveState:
     """Single crypto sleeve identity and allocation state.
 
@@ -1616,6 +1681,192 @@ def _stage5_expected_rejection_reasons(
     return tuple(dict.fromkeys(reasons))
 
 
+def _stage5_is_positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _stage5_is_non_negative_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _stage5_is_finite_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+
+
+def _stage5_runtime_explicit_reasons(value: object, malformed_reason: str) -> tuple[str, ...]:
+    if not isinstance(value, tuple) or any(not isinstance(reason, str) or not reason for reason in value):
+        return (malformed_reason,)
+    return value
+
+
+def _stage5_runtime_rejection_reasons(evidence: object) -> tuple[str, ...]:
+    reasons: list[str] = []
+    if not isinstance(evidence, Stage5RuntimeEvidenceBundle):
+        return ("stage5:runtime_evidence_bundle_malformed",)
+
+    if not isinstance(evidence.edge_id, str) or not evidence.edge_id:
+        reasons.append("stage5:edge_id_missing")
+    if not _stage5_is_positive_int(evidence.as_of_ns):
+        reasons.append("stage5:as_of_ns_invalid")
+
+    operator = evidence.operator_approval
+    if not isinstance(operator, Stage5OperatorApprovalEvidence):
+        reasons.append("stage5:operator_approval_evidence_malformed")
+    else:
+        if operator.approved is not True:
+            reasons.append("stage5:operator_approval_missing")
+        if not isinstance(operator.approver_id, str) or not operator.approver_id:
+            reasons.append("stage5:operator_approver_missing")
+        if not _stage5_is_positive_int(operator.approved_at_ns):
+            reasons.append("stage5:operator_approved_at_invalid")
+        if not isinstance(operator.approval_reference, str) or not operator.approval_reference:
+            reasons.append("stage5:operator_approval_reference_missing")
+        reasons.extend(
+            _stage5_runtime_explicit_reasons(
+                operator.rejection_reasons,
+                "stage5:operator_rejection_reasons_malformed",
+            )
+        )
+
+    credentials = evidence.credential_attestation
+    if not isinstance(credentials, Stage5CredentialAttestationEvidence):
+        reasons.append("stage5:credential_attestation_evidence_malformed")
+    else:
+        if credentials.live_api_credentials_valid is not True:
+            reasons.append("stage5:live_api_credentials_not_verified")
+        if not isinstance(credentials.attested_by, str) or not credentials.attested_by:
+            reasons.append("stage5:credential_attester_missing")
+        if not _stage5_is_positive_int(credentials.attested_at_ns):
+            reasons.append("stage5:credential_attested_at_invalid")
+        if not isinstance(credentials.attestation_reference, str) or not credentials.attestation_reference:
+            reasons.append("stage5:credential_attestation_reference_missing")
+        reasons.extend(
+            _stage5_runtime_explicit_reasons(
+                credentials.rejection_reasons,
+                "stage5:credential_rejection_reasons_malformed",
+            )
+        )
+
+    risk = evidence.risk_governance
+    if not isinstance(risk, Stage5RiskGovernanceEvidence):
+        reasons.append("stage5:risk_governance_evidence_malformed")
+    else:
+        if risk.kill_switch_clear is not True:
+            reasons.append("stage5:kill_switch_not_clear")
+        if risk.risk_governance_clear is not True:
+            reasons.append("stage5:risk_governance_not_clear")
+        if not _stage5_is_finite_number(risk.ehs_at_entry) or float(risk.ehs_at_entry) < 0.0:
+            reasons.append("stage5:ehs_at_entry_invalid")
+        elif float(risk.ehs_at_entry) < 0.50:
+            reasons.append("stage5:ehs_below_live_entry_minimum")
+        if risk.max_drawdown_bps is not None and (
+            not _stage5_is_finite_number(risk.max_drawdown_bps) or float(risk.max_drawdown_bps) < 0.0
+        ):
+            reasons.append("stage5:max_drawdown_bps_invalid")
+        if not _stage5_is_positive_int(risk.attested_at_ns):
+            reasons.append("stage5:risk_attested_at_invalid")
+        reasons.extend(
+            _stage5_runtime_explicit_reasons(
+                risk.rejection_reasons,
+                "stage5:risk_rejection_reasons_malformed",
+            )
+        )
+
+    canary = evidence.canary_tier
+    if not isinstance(canary, Stage5CanaryTierEvidence):
+        reasons.append("stage5:canary_tier_evidence_malformed")
+    else:
+        if (
+            not _stage5_is_finite_number(canary.allocation_tier_pct)
+            or float(canary.allocation_tier_pct) not in STAGE5_ALLOWED_ALLOCATION_TIERS_PCT
+        ):
+            reasons.append("stage5:allocation_tier_invalid")
+        if not _stage5_is_non_negative_int(canary.weeks_at_tier):
+            reasons.append("stage5:weeks_at_tier_invalid")
+        if _stage5_is_finite_number(canary.allocation_tier_pct) and _stage5_is_non_negative_int(canary.weeks_at_tier):
+            tier = float(canary.allocation_tier_pct)
+            required_weeks = STAGE5_REQUIRED_WEEKS_BY_TIER_PCT.get(tier)
+            if required_weeks is not None and canary.weeks_at_tier < required_weeks:
+                reasons.append("stage5:weeks_at_tier_below_minimum")
+        if not _stage5_is_positive_int(canary.canary_observation_count):
+            reasons.append("stage5:canary_observation_count_invalid")
+        if canary.canary_pnl_non_negative is not True:
+            reasons.append("stage5:canary_pnl_negative")
+        if canary.canary_drawdown_within_limit is not True:
+            reasons.append("stage5:canary_drawdown_out_of_limit")
+        if canary.canary_slippage_within_limit is not True:
+            reasons.append("stage5:canary_slippage_out_of_limit")
+        if not _stage5_is_non_negative_int(canary.canary_incidents):
+            reasons.append("stage5:canary_incidents_invalid")
+        elif canary.canary_incidents > 0:
+            reasons.append("stage5:canary_incidents_present")
+        if not _stage5_is_positive_int(canary.as_of_ns):
+            reasons.append("stage5:canary_as_of_ns_invalid")
+        reasons.extend(
+            _stage5_runtime_explicit_reasons(
+                canary.rejection_reasons,
+                "stage5:canary_rejection_reasons_malformed",
+            )
+        )
+
+    reasons.extend(
+        _stage5_runtime_explicit_reasons(
+            evidence.rejection_reasons,
+            "stage5:runtime_evidence_rejection_reasons_malformed",
+        )
+    )
+    return tuple(dict.fromkeys(reasons))
+
+
+def build_stage5_live_readiness_gate_from_evidence(
+    evidence: Stage5RuntimeEvidenceBundle,
+) -> Stage5LiveReadinessGate:
+    """Build Stage5 gate metadata from supplied runtime attestations only."""
+
+    if not isinstance(evidence, Stage5RuntimeEvidenceBundle):
+        return Stage5LiveReadinessGate(
+            edge_id="",
+            allocation_tier_pct=0.0,
+            weeks_at_tier=-1,
+            as_of_ns=0,
+            stage4_passed=False,
+            operator_approval_recorded=False,
+            live_api_credentials_valid=False,
+            kill_switch_clear=False,
+            risk_governance_clear=False,
+            rejection_reasons=("stage5:runtime_evidence_bundle_malformed",),
+            passed=False,
+        )
+
+    operator = evidence.operator_approval
+    credentials = evidence.credential_attestation
+    risk = evidence.risk_governance
+    canary = evidence.canary_tier
+    reasons = _stage5_runtime_rejection_reasons(evidence)
+
+    allocation_tier_pct = (
+        float(canary.allocation_tier_pct) if _stage5_is_finite_number(canary.allocation_tier_pct) else 0.0
+    )
+    weeks_at_tier = canary.weeks_at_tier if _stage5_is_non_negative_int(canary.weeks_at_tier) else -1
+    as_of_ns = evidence.as_of_ns if _stage5_is_positive_int(evidence.as_of_ns) else 0
+    return Stage5LiveReadinessGate(
+        edge_id=evidence.edge_id if isinstance(evidence.edge_id, str) else "",
+        allocation_tier_pct=allocation_tier_pct,
+        weeks_at_tier=weeks_at_tier,
+        as_of_ns=as_of_ns,
+        stage4_passed=True,
+        operator_approval_recorded=isinstance(operator, Stage5OperatorApprovalEvidence) and operator.approved is True,
+        live_api_credentials_valid=(
+            isinstance(credentials, Stage5CredentialAttestationEvidence)
+            and credentials.live_api_credentials_valid is True
+        ),
+        kill_switch_clear=isinstance(risk, Stage5RiskGovernanceEvidence) and risk.kill_switch_clear is True,
+        risk_governance_clear=isinstance(risk, Stage5RiskGovernanceEvidence) and risk.risk_governance_clear is True,
+        rejection_reasons=reasons,
+        passed=not reasons,
+    )
+
+
 def build_stage5_live_readiness_gate(
     *,
     edge_id: str,
@@ -2333,6 +2584,18 @@ def _require_stage5_float(value: object, field_name: str) -> float:
     return result
 
 
+def _require_stage5_int(value: object, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SleevePortfolioValidationError(f"Stage5 field {field_name!r} must be an int")
+    return value
+
+
+def _require_stage5_optional_float(value: object, field_name: str) -> float | None:
+    if value is None:
+        return None
+    return _require_stage5_float(value, field_name)
+
+
 def stage5_live_readiness_gate_from_dict(data: object) -> Stage5LiveReadinessGate:
     """Deserialize Stage5LiveReadinessGate from a JSON-safe dict."""
 
@@ -2358,6 +2621,159 @@ def stage5_live_readiness_gate_from_dict(data: object) -> Stage5LiveReadinessGat
         risk_governance_clear=_require_bool(data.get("risk_governance_clear", False), "risk_governance_clear"),
         rejection_reasons=_tuple_of_strings(data.get("rejection_reasons", ()), "rejection_reasons"),
         passed=_require_bool(data.get("passed", False), "passed"),
+    )
+
+
+def stage5_operator_approval_evidence_to_dict(evidence: Stage5OperatorApprovalEvidence) -> dict:
+    return {
+        "approved": evidence.approved,
+        "approver_id": evidence.approver_id,
+        "approved_at_ns": evidence.approved_at_ns,
+        "approval_reference": evidence.approval_reference,
+        "rejection_reasons": list(evidence.rejection_reasons),
+    }
+
+
+def stage5_operator_approval_evidence_from_dict(data: object) -> Stage5OperatorApprovalEvidence:
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Stage5 operator approval evidence payload must be a dict, got {type(data).__name__!r}"
+        )
+    return Stage5OperatorApprovalEvidence(
+        approved=_require_bool(data.get("approved", False), "approved"),
+        approver_id=_require_non_empty_str(data.get("approver_id"), "approver_id"),
+        approved_at_ns=_require_stage5_int(data.get("approved_at_ns"), "approved_at_ns"),
+        approval_reference=_require_non_empty_str(data.get("approval_reference"), "approval_reference"),
+        rejection_reasons=_tuple_of_strings(data.get("rejection_reasons", ()), "rejection_reasons"),
+    )
+
+
+def stage5_credential_attestation_evidence_to_dict(evidence: Stage5CredentialAttestationEvidence) -> dict:
+    return {
+        "live_api_credentials_valid": evidence.live_api_credentials_valid,
+        "attested_by": evidence.attested_by,
+        "attested_at_ns": evidence.attested_at_ns,
+        "attestation_reference": evidence.attestation_reference,
+        "rejection_reasons": list(evidence.rejection_reasons),
+    }
+
+
+def stage5_credential_attestation_evidence_from_dict(data: object) -> Stage5CredentialAttestationEvidence:
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Stage5 credential attestation evidence payload must be a dict, got {type(data).__name__!r}"
+        )
+    return Stage5CredentialAttestationEvidence(
+        live_api_credentials_valid=_require_bool(
+            data.get("live_api_credentials_valid", False),
+            "live_api_credentials_valid",
+        ),
+        attested_by=_require_non_empty_str(data.get("attested_by"), "attested_by"),
+        attested_at_ns=_require_stage5_int(data.get("attested_at_ns"), "attested_at_ns"),
+        attestation_reference=_require_non_empty_str(data.get("attestation_reference"), "attestation_reference"),
+        rejection_reasons=_tuple_of_strings(data.get("rejection_reasons", ()), "rejection_reasons"),
+    )
+
+
+def stage5_risk_governance_evidence_to_dict(evidence: Stage5RiskGovernanceEvidence) -> dict:
+    return {
+        "risk_governance_clear": evidence.risk_governance_clear,
+        "kill_switch_clear": evidence.kill_switch_clear,
+        "ehs_at_entry": evidence.ehs_at_entry,
+        "max_drawdown_bps": evidence.max_drawdown_bps,
+        "attested_at_ns": evidence.attested_at_ns,
+        "rejection_reasons": list(evidence.rejection_reasons),
+    }
+
+
+def stage5_risk_governance_evidence_from_dict(data: object) -> Stage5RiskGovernanceEvidence:
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Stage5 risk governance evidence payload must be a dict, got {type(data).__name__!r}"
+        )
+    return Stage5RiskGovernanceEvidence(
+        risk_governance_clear=_require_bool(data.get("risk_governance_clear", False), "risk_governance_clear"),
+        kill_switch_clear=_require_bool(data.get("kill_switch_clear", False), "kill_switch_clear"),
+        ehs_at_entry=_require_stage5_float(data.get("ehs_at_entry"), "ehs_at_entry"),
+        max_drawdown_bps=_require_stage5_optional_float(data.get("max_drawdown_bps"), "max_drawdown_bps"),
+        attested_at_ns=_require_stage5_int(data.get("attested_at_ns"), "attested_at_ns"),
+        rejection_reasons=_tuple_of_strings(data.get("rejection_reasons", ()), "rejection_reasons"),
+    )
+
+
+def stage5_canary_tier_evidence_to_dict(evidence: Stage5CanaryTierEvidence) -> dict:
+    return {
+        "allocation_tier_pct": evidence.allocation_tier_pct,
+        "weeks_at_tier": evidence.weeks_at_tier,
+        "canary_observation_count": evidence.canary_observation_count,
+        "canary_pnl_non_negative": evidence.canary_pnl_non_negative,
+        "canary_drawdown_within_limit": evidence.canary_drawdown_within_limit,
+        "canary_slippage_within_limit": evidence.canary_slippage_within_limit,
+        "canary_incidents": evidence.canary_incidents,
+        "as_of_ns": evidence.as_of_ns,
+        "rejection_reasons": list(evidence.rejection_reasons),
+    }
+
+
+def stage5_canary_tier_evidence_from_dict(data: object) -> Stage5CanaryTierEvidence:
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Stage5 canary tier evidence payload must be a dict, got {type(data).__name__!r}"
+        )
+    return Stage5CanaryTierEvidence(
+        allocation_tier_pct=_require_stage5_float(data.get("allocation_tier_pct"), "allocation_tier_pct"),
+        weeks_at_tier=_require_stage5_int(data.get("weeks_at_tier"), "weeks_at_tier"),
+        canary_observation_count=_require_stage5_int(
+            data.get("canary_observation_count"),
+            "canary_observation_count",
+        ),
+        canary_pnl_non_negative=_require_bool(
+            data.get("canary_pnl_non_negative", False),
+            "canary_pnl_non_negative",
+        ),
+        canary_drawdown_within_limit=_require_bool(
+            data.get("canary_drawdown_within_limit", False),
+            "canary_drawdown_within_limit",
+        ),
+        canary_slippage_within_limit=_require_bool(
+            data.get("canary_slippage_within_limit", False),
+            "canary_slippage_within_limit",
+        ),
+        canary_incidents=_require_stage5_int(data.get("canary_incidents"), "canary_incidents"),
+        as_of_ns=_require_stage5_int(data.get("as_of_ns"), "as_of_ns"),
+        rejection_reasons=_tuple_of_strings(data.get("rejection_reasons", ()), "rejection_reasons"),
+    )
+
+
+def stage5_runtime_evidence_bundle_to_dict(evidence: Stage5RuntimeEvidenceBundle) -> dict:
+    """Serialize Stage5RuntimeEvidenceBundle to a JSON-safe dict."""
+
+    return {
+        "edge_id": evidence.edge_id,
+        "as_of_ns": evidence.as_of_ns,
+        "operator_approval": stage5_operator_approval_evidence_to_dict(evidence.operator_approval),
+        "credential_attestation": stage5_credential_attestation_evidence_to_dict(evidence.credential_attestation),
+        "risk_governance": stage5_risk_governance_evidence_to_dict(evidence.risk_governance),
+        "canary_tier": stage5_canary_tier_evidence_to_dict(evidence.canary_tier),
+        "rejection_reasons": list(evidence.rejection_reasons),
+    }
+
+
+def stage5_runtime_evidence_bundle_from_dict(data: object) -> Stage5RuntimeEvidenceBundle:
+    """Deserialize Stage5RuntimeEvidenceBundle from a JSON-safe dict."""
+
+    if not isinstance(data, dict):
+        raise SleevePortfolioCorruptError(
+            f"Stage5 runtime evidence bundle payload must be a dict, got {type(data).__name__!r}"
+        )
+    return Stage5RuntimeEvidenceBundle(
+        edge_id=_require_non_empty_str(data.get("edge_id"), "edge_id"),
+        as_of_ns=_require_stage5_int(data.get("as_of_ns"), "as_of_ns"),
+        operator_approval=stage5_operator_approval_evidence_from_dict(data.get("operator_approval")),
+        credential_attestation=stage5_credential_attestation_evidence_from_dict(data.get("credential_attestation")),
+        risk_governance=stage5_risk_governance_evidence_from_dict(data.get("risk_governance")),
+        canary_tier=stage5_canary_tier_evidence_from_dict(data.get("canary_tier")),
+        rejection_reasons=_tuple_of_strings(data.get("rejection_reasons", ()), "rejection_reasons"),
     )
 
 
