@@ -2622,6 +2622,10 @@ class ServiceOrchestrator:
             return EscalationStage.INCONCLUSIVE
 
         stage = self._target_escalation_stage(pack.readiness_level, pack.readiness_is_supportive)
+        if stage == EscalationStage.TINY_CAP_LIVE_REVIEW_ELIGIBLE and not (
+            pack.stage5_live_ready is True and pack.stage5_live_readiness_blockers == ()
+        ):
+            stage = EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE
         if pack.external_regime_quality in {"blocking", "insufficient", "unavailable", "marginal", "cautionary"}:
             stage = self._downgrade_escalation_stage(stage)
         return stage
