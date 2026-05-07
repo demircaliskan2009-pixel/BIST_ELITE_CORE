@@ -2263,6 +2263,12 @@ def _build_sleeve_decision_pack_result(sleeve: CryptoSleeveState) -> SleeveDecis
             or promotion_support.next_step
         )
 
+    # Invariant: RECOMMENDED_ACTIVE must not be emitted when blocking evidence exists.
+    # A sleeve with active blocking reasons cannot be operator-approved for live allocation.
+    # Note: missing Stage5 gate (gate=None) produces no blocking reasons, so paper/shadow is unaffected.
+    if blocking_reasons and status == SleeveDecisionPackStatus.RECOMMENDED_ACTIVE:
+        status = SleeveDecisionPackStatus.BLOCKED
+
     return SleeveDecisionPackResult(
         status=status,
         recommended_active=recommendation.recommended_active,
