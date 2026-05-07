@@ -2075,6 +2075,20 @@ def build_sleeve_with_stage4_artifacts(
     )
 
 
+def _stage5_blocking_reasons(gate: Stage5LiveReadinessGate | None) -> tuple[str, ...]:
+    """Return Stage5 live-readiness blockers for promotion-candidate blocking_reasons.
+
+    - Returns () when gate is None: missing Stage5 evidence does not block paper/shadow admission.
+    - Returns () when gate passed: no promotion blocker.
+    - Returns stage5_live_readiness_blockers(gate) when gate is present and failed.
+    """
+    if gate is None:
+        return ()
+    if stage5_live_ready(gate):
+        return ()
+    return stage5_live_readiness_blockers(gate)
+
+
 def _build_sleeve_promotion_candidate_result(sleeve: CryptoSleeveState) -> SleevePromotionCandidateResult:
     campaign_evidence = sleeve.campaign_evidence
     qualification = sleeve.qualification
@@ -2107,6 +2121,7 @@ def _build_sleeve_promotion_candidate_result(sleeve: CryptoSleeveState) -> Sleev
                 *campaign_evidence.blocking_reasons,
                 *qualification.blocking_reasons,
                 *recommendation.blocking_reasons,
+                *_stage5_blocking_reasons(sleeve.stage5_entry_gate),
             )
         )
     )
