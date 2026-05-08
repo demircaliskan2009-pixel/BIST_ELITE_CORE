@@ -266,7 +266,7 @@ class OrderBookLevel:
 
     def __post_init__(self) -> None:
         _require_finite_positive(self.price, "price")
-        _require_finite_positive(self.quantity, "quantity")
+        _require_finite_non_negative(self.quantity, "quantity")
 
 
 @dataclass(frozen=True)
@@ -297,6 +297,8 @@ class OrderBookSnapshot:
         asks = _level_tuple(self.asks, "asks")
         if not bids or not asks:
             raise VenueContractError("order book sides must not be empty")
+        _require_positive_levels(bids, "bids")
+        _require_positive_levels(asks, "asks")
         if max(level.price for level in bids) >= min(level.price for level in asks):
             raise VenueContractError("order book is crossed")
         _require_positive_int(self.depth, "depth")
@@ -376,6 +378,11 @@ def _level_tuple(values: object, field_name: str) -> tuple[OrderBookLevel, ...]:
             raise VenueContractError(f"{field_name} entries must be OrderBookLevel")
         result.append(value)
     return tuple(result)
+
+
+def _require_positive_levels(levels: tuple[OrderBookLevel, ...], field_name: str) -> None:
+    if any(level.quantity <= 0.0 for level in levels):
+        raise VenueContractError(f"{field_name} levels must have positive quantity")
 
 
 def venue_capability_to_dict(capability: VenueCapability) -> dict[str, object]:
