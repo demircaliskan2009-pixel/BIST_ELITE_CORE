@@ -101,6 +101,10 @@ class OperatorDecisionPack:
     stage5_live_ready: bool = False
     stage5_live_ready_sleeve_ids: tuple[str, ...] = field(default_factory=tuple)
     stage5_live_readiness_blockers: tuple[str, ...] = field(default_factory=tuple)
+    public_data_ready: bool = False
+    public_data_ready_symbols: tuple[str, ...] = field(default_factory=tuple)
+    public_data_readiness_blockers: tuple[str, ...] = field(default_factory=tuple)
+    public_data_readiness_snapshot_count: int = 0
     readiness_criteria: tuple[dict, ...] = field(default_factory=tuple)
     readiness_blockers: tuple[str, ...] = field(default_factory=tuple)
     external_regime_quality: str = "unavailable"
@@ -223,6 +227,10 @@ def decision_pack_missing_evidence(pack: OperatorDecisionPack) -> dict:
         "stage5_live_ready": pack.stage5_live_ready,
         "stage5_live_ready_sleeve_ids": list(pack.stage5_live_ready_sleeve_ids),
         "stage5_live_readiness_blockers": list(pack.stage5_live_readiness_blockers),
+        "public_data_ready": pack.public_data_ready,
+        "public_data_ready_symbols": list(pack.public_data_ready_symbols),
+        "public_data_readiness_blockers": list(pack.public_data_readiness_blockers),
+        "public_data_readiness_snapshot_count": pack.public_data_readiness_snapshot_count,
         "summary": pack.insufficient_evidence_summary.get("summary", ""),
         "details": pack.insufficient_evidence_summary,
     }
@@ -275,6 +283,13 @@ def _optional_bool(d: dict, field_name: str, default: bool) -> bool:
     value = d.get(field_name, default)
     if not isinstance(value, bool):
         raise OperatorDecisionPackCorruptError(f"Decision pack field {field_name!r} must be a bool")
+    return value
+
+
+def _optional_non_negative_int(d: dict, field_name: str, default: int) -> int:
+    value = d.get(field_name, default)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise OperatorDecisionPackCorruptError(f"Decision pack field {field_name!r} must be a non-negative int")
     return value
 
 
@@ -335,6 +350,8 @@ def decision_pack_from_dict(d: dict) -> OperatorDecisionPack:
     if not isinstance(d, dict):
         raise OperatorDecisionPackCorruptError(f"Decision pack payload must be a dict, got {type(d).__name__!r}")
 
+    public_data_readiness_blockers = _optional_tuple_of_strings(d, "public_data_readiness_blockers")
+    public_data_ready = _optional_bool(d, "public_data_ready", False) and not public_data_readiness_blockers
     return OperatorDecisionPack(
         artifact_time_ns=_require_int(d, "artifact_time_ns"),
         review_id=_require_str(d, "review_id"),
@@ -356,6 +373,14 @@ def decision_pack_from_dict(d: dict) -> OperatorDecisionPack:
         stage5_live_ready=_optional_bool(d, "stage5_live_ready", False),
         stage5_live_ready_sleeve_ids=_optional_tuple_of_strings(d, "stage5_live_ready_sleeve_ids"),
         stage5_live_readiness_blockers=_optional_tuple_of_strings(d, "stage5_live_readiness_blockers"),
+        public_data_ready=public_data_ready,
+        public_data_ready_symbols=_optional_tuple_of_strings(d, "public_data_ready_symbols"),
+        public_data_readiness_blockers=public_data_readiness_blockers,
+        public_data_readiness_snapshot_count=_optional_non_negative_int(
+            d,
+            "public_data_readiness_snapshot_count",
+            0,
+        ),
         readiness_criteria=_optional_tuple_of_dicts(d, "readiness_criteria"),
         readiness_blockers=_optional_tuple_of_strings(d, "readiness_blockers"),
         external_regime_quality=_require_str(d, "external_regime_quality"),

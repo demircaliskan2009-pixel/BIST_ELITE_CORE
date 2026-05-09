@@ -30,6 +30,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from crypto_core.data.public_data_readiness import PublicDataReadinessSnapshot
 from crypto_core.service.artifact_export import (
     EscalationDecision,
     EscalationStage,
@@ -313,6 +314,12 @@ class OperatorSnapshot:
     # Escalation review workflow (Phase 13B)
     escalation_review: EscalationWorkflowState | None = None
 
+    # Phase 21F: public market-data readiness visibility
+    public_data_ready: bool = False
+    public_data_ready_symbols: tuple[str, ...] = ()
+    public_data_readiness_blockers: tuple[str, ...] = ()
+    public_data_readiness_snapshot_count: int = 0
+
 
 # ---------------------------------------------------------------------------
 # Service orchestrator
@@ -399,6 +406,7 @@ class ServiceOrchestrator:
         )
         self._sleeve_admission_controller = None
         self._sleeve_candidate_workflow_controller: SleeveCandidateWorkflowController | None = None
+        self._public_data_readiness_snapshots: tuple[PublicDataReadinessSnapshot, ...] = ()
 
     def build_sleeve_admission_controller(self):
         """Build and cache the sleeve admission controller from current review portfolio summary."""
@@ -601,6 +609,22 @@ class ServiceOrchestrator:
             as_of_ns=as_of_ns,
         )
         self._configured_sleeves = controller.defined_sleeves
+        return self.operator_snapshot()
+
+    def apply_public_data_readiness_snapshot(
+        self,
+        snapshot: PublicDataReadinessSnapshot,
+    ) -> OperatorSnapshot:
+        """Attach offline public-data readiness metadata to the operator surface."""
+
+        if not isinstance(snapshot, PublicDataReadinessSnapshot):
+            raise ValueError("public data readiness snapshot must be PublicDataReadinessSnapshot")
+
+        keyed = {
+            self._public_data_readiness_key(existing): existing for existing in self._public_data_readiness_snapshots
+        }
+        keyed[self._public_data_readiness_key(snapshot)] = snapshot
+        self._public_data_readiness_snapshots = tuple(keyed[key] for key in sorted(keyed))
         return self.operator_snapshot()
 
     def enable_sleeve(self, sleeve_id: str) -> SleeveOperatorOverride:
@@ -1298,6 +1322,7 @@ class ServiceOrchestrator:
             sleeve_admission = self.get_sleeve_admission_snapshot()
         except Exception:
             sleeve_admission = None
+        public_data_summary = self._public_data_readiness_summary()
         return OperatorSnapshot(
             service_mode=ss.service_mode,
             trading_enabled=ss.trading_enabled,
@@ -1320,6 +1345,10 @@ class ServiceOrchestrator:
             external_regime=ext_regime,
             external_regime_safety=ext_regime_safety,
             external_regime_scenario=ext_regime_scenario,
+            public_data_ready=public_data_summary["public_data_ready"],
+            public_data_ready_symbols=public_data_summary["public_data_ready_symbols"],
+            public_data_readiness_blockers=public_data_summary["public_data_readiness_blockers"],
+            public_data_readiness_snapshot_count=public_data_summary["public_data_readiness_snapshot_count"],
         )
 
     # ------------------------------------------------------------------
@@ -1432,6 +1461,10 @@ class ServiceOrchestrator:
             stage5_live_ready=bool(stage5_live_ready_sleeve_ids) and not stage5_live_readiness_blockers,
             stage5_live_ready_sleeve_ids=stage5_live_ready_sleeve_ids,
             stage5_live_readiness_blockers=stage5_live_readiness_blockers,
+            public_data_ready=operator_snapshot.public_data_ready,
+            public_data_ready_symbols=operator_snapshot.public_data_ready_symbols,
+            public_data_readiness_blockers=operator_snapshot.public_data_readiness_blockers,
+            public_data_readiness_snapshot_count=operator_snapshot.public_data_readiness_snapshot_count,
             readiness_criteria=(tuple(readiness_dict.get("criteria", ())) if readiness_dict is not None else ()),
             readiness_blockers=(tuple(readiness_dict.get("blockers", ())) if readiness_dict is not None else ()),
             external_regime_quality=ext_regime_quality,
@@ -2420,6 +2453,10 @@ class ServiceOrchestrator:
             "stage5_live_ready": bool(stage5_live_ready_sleeve_ids) and not stage5_live_readiness_blockers,
             "stage5_live_ready_sleeve_ids": list(stage5_live_ready_sleeve_ids),
             "stage5_live_readiness_blockers": list(stage5_live_readiness_blockers),
+            "public_data_ready": operator_snapshot.public_data_ready,
+            "public_data_ready_symbols": list(operator_snapshot.public_data_ready_symbols),
+            "public_data_readiness_blockers": list(operator_snapshot.public_data_readiness_blockers),
+            "public_data_readiness_snapshot_count": operator_snapshot.public_data_readiness_snapshot_count,
             "readiness_blockers": ([] if readiness_dict is None else list(readiness_dict.get("blockers", ()))),
             "summary": operator_snapshot.evidence.summary or missing_evidence.get("message", ""),
         }
@@ -2461,6 +2498,49 @@ class ServiceOrchestrator:
             for sleeve in operator_snapshot.sleeve_portfolio.sleeves
             if sleeve.promotion_candidate.stage5_live_ready
         )
+
+    def _public_data_readiness_summary(self) -> dict[str, object]:
+        snapshots = tuple(
+            sorted(
+                self._public_data_readiness_snapshots,
+                key=self._public_data_readiness_key,
+            )
+        )
+        if not snapshots:
+            return {
+                "public_data_ready": False,
+                "public_data_ready_symbols": (),
+                "public_data_readiness_blockers": ("public_data:readiness_snapshot_missing",),
+                "public_data_readiness_snapshot_count": 0,
+            }
+
+        ready_symbols: list[str] = []
+        blockers: list[str] = []
+        for snapshot in snapshots:
+            symbol_id = self._public_data_readiness_symbol_id(snapshot)
+            if snapshot.accepted_for_paper and snapshot.rejection_reasons == ():
+                ready_symbols.append(symbol_id)
+                continue
+            if snapshot.rejection_reasons:
+                blockers.extend(snapshot.rejection_reasons)
+            else:
+                blockers.append("public_data:not_accepted_for_paper")
+
+        ordered_blockers = self._ordered_unique(tuple(blockers))
+        return {
+            "public_data_ready": len(snapshots) > 0 and not ordered_blockers and len(ready_symbols) == len(snapshots),
+            "public_data_ready_symbols": tuple(ready_symbols),
+            "public_data_readiness_blockers": ordered_blockers,
+            "public_data_readiness_snapshot_count": len(snapshots),
+        }
+
+    @staticmethod
+    def _public_data_readiness_key(snapshot: PublicDataReadinessSnapshot) -> tuple[str, str, str]:
+        return (snapshot.venue_id.value, snapshot.symbol, snapshot.feed_type.value)
+
+    @staticmethod
+    def _public_data_readiness_symbol_id(snapshot: PublicDataReadinessSnapshot) -> str:
+        return f"{snapshot.venue_id.value}:{snapshot.symbol}:{snapshot.feed_type.value}"
 
     @staticmethod
     def _decision_pack_campaign_coverage(
@@ -2872,6 +2952,10 @@ def operator_snapshot_to_dict(snap: OperatorSnapshot) -> dict:
         ),
         "readiness_level": snap.readiness_level,
         "readiness_is_supportive": snap.readiness_is_supportive,
+        "public_data_ready": snap.public_data_ready,
+        "public_data_ready_symbols": list(snap.public_data_ready_symbols),
+        "public_data_readiness_blockers": list(snap.public_data_readiness_blockers),
+        "public_data_readiness_snapshot_count": snap.public_data_readiness_snapshot_count,
         "evidence": evidence_sufficiency_state_to_dict(snap.evidence),
         "provisional_recommendation": snap.provisional_recommendation,
         "recommendation_summary": snap.recommendation_summary,
