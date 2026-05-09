@@ -52,7 +52,7 @@ def test_deribit_evidence_package_verifies_supplied_orderbook_facts():
     assert len(verification.content_hashes) == 5
 
 
-def test_overlay_derives_local_deribit_orderbook_candidate_from_supplied_evidence():
+def test_overlay_derives_local_deribit_orderbook_candidate_without_operational_authorization():
     result = apply_public_feed_dialect_verification(_deribit_candidate_spec(), _verification_from_package())
 
     assert result.accepted is True
@@ -64,7 +64,7 @@ def test_overlay_derives_local_deribit_orderbook_candidate_from_supplied_evidenc
     assert result.verified_spec.max_gap_tolerance == 0
     assert result.verified_spec.supports_delta_stream is True
     assert result.verified_spec.supports_resync is True
-    assert public_feed_dialect_connector_ready(result.verified_spec) is True
+    assert connector_ready_dialects() == ()
 
 
 def test_static_deribit_registry_remains_unverified_connector_disabled():

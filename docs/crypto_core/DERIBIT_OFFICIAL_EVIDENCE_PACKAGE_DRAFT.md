@@ -7,6 +7,28 @@ It is not a live connector authorization, does not enable a static registry
 dialect, and must not be treated as a network, WebSocket, REST, private API,
 credential, or order-submission implementation.
 
+## Operational Verification Status
+
+Operational connector readiness: **blocked**.
+
+The `docs.example.test` URLs and `deribit-phase22b-*` hashes below are fixture
+placeholders. They may be used by offline tests to prove overlay mechanics, but
+they are not production official-document references. They must be replaced by
+real official source URLs, independently reproducible content hashes, positive
+retrieval timestamps, and reviewer evidence before any operational verification
+can pass.
+
+`CONTENT_HASH_UNAVAILABLE`, missing hashes, missing retrieval timestamps,
+summary-only Deep Research prose, and placeholder official-doc refs are all
+fail-closed. Unknown operational fields remain blockers:
+
+- public subscription rate limits
+- max staleness
+- max receive lag
+- checksum semantics if ambiguous
+- testnet versus production differences
+- regional, legal, and access review
+
 ## Package Fields
 
 - `package_id`: `deribit-public-book-phase22b-draft`
@@ -108,4 +130,6 @@ timestamp before it can be promoted outside offline tests.
 - Do not include passphrases, tokens, private keys, or account identifiers.
 - Do not convert this draft into static registry verification.
 - Do not enable connector readiness globally from this draft.
+- Do not treat placeholder URLs or placeholder hashes as operational evidence.
+- Do not treat summary-only Deep Research text as verified official evidence.
 - Unknown operational fields remain fail-closed until official source evidence is supplied.
