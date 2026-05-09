@@ -36,14 +36,15 @@ def test_deribit_draft_declares_placeholder_refs_non_operational():
 
 
 def test_placeholder_official_doc_refs_block_operational_verification():
-    package = _package()
+    placeholder_item = replace(_evidence_items()[0], doc_url="https://docs.example.test/deribit/placeholder")
+    package = _package(evidence_items=(placeholder_item,))
     verification = _verification(package)
     overlay = apply_public_feed_dialect_verification(_candidate_spec(), verification)
 
     assert overlay.accepted is True
     assert _operational_evidence_rejection_reasons(package, verification) == (
         "deribit_operational:placeholder_official_doc_ref",
-        "deribit_operational:placeholder_content_hash",
+        "deribit_operational:content_hash_unavailable",
         "deribit_operational:rate_limits_unknown",
         "deribit_operational:max_staleness_unknown",
         "deribit_operational:max_receive_lag_unknown",
@@ -55,7 +56,7 @@ def test_placeholder_official_doc_refs_block_operational_verification():
 
 
 def test_content_hash_unavailable_blocks_operational_verification():
-    package = _package(evidence_items=(replace(_evidence_items()[0], content_hash="CONTENT_HASH_UNAVAILABLE"),))
+    package = _package()
     verification = _verification(package)
 
     assert verification.accepted is True
@@ -156,12 +157,10 @@ _RETRIEVED_AT_NS = 2_200_000_000_000
 def _operational_evidence_rejection_reasons(package: OfficialEvidencePackage, verification) -> tuple[str, ...]:
     reasons = list(verification.rejection_reasons)
     for item in package.evidence_items:
-        if "docs.example.test" in item.doc_url or "placeholder" in item.evidence_id:
+        if "docs.example.test" in item.doc_url or "example" in item.doc_url:
             reasons.append("deribit_operational:placeholder_official_doc_ref")
-        if item.content_hash == "CONTENT_HASH_UNAVAILABLE":
+        if item.content_hash.startswith("CONTENT_HASH_UNAVAILABLE"):
             reasons.append("deribit_operational:content_hash_unavailable")
-        if item.content_hash.startswith("deribit-phase22b-"):
-            reasons.append("deribit_operational:placeholder_content_hash")
         if item.retrieved_at_ns <= 0:
             reasons.append("official_doc:retrieved_at_invalid")
         if item.source_name == "summary-only-deep-research":
@@ -232,10 +231,10 @@ def _evidence(claim_id: str, content_hash: str, **overrides: object) -> Official
         "evidence_id": f"{_DERIBIT_DIALECT_ID}::{claim_id}",
         "venue_id": VenueId.DERIBIT,
         "doc_type": PublicFeedType.L2_ORDERBOOK.value,
-        "doc_url": f"https://docs.example.test/deribit/{claim_id}",
+        "doc_url": f"https://docs.deribit.com/#notifications-{claim_id}",
         "retrieved_at_ns": _RETRIEVED_AT_NS + len(claim_id),
-        "content_hash": f"deribit-phase22b-{content_hash}",
-        "source_name": "supplied-deribit-official-doc-draft",
+        "content_hash": f"CONTENT_HASH_UNAVAILABLE:DERIBIT_NOTIFICATIONS:{content_hash}",
+        "source_name": "DERIBIT_NOTIFICATIONS",
         "status": OfficialDocEvidenceStatus.VERIFIED,
         "rejection_reasons": (),
     }

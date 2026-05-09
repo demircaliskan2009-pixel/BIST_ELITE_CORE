@@ -33,11 +33,14 @@ from crypto_core.venue.public_feed_dialects import connector_ready_dialects, get
 def test_deribit_draft_records_supplied_book_claims_without_static_authorization():
     text = Path("docs/crypto_core/DERIBIT_OFFICIAL_EVIDENCE_PACKAGE_DRAFT.md").read_text(encoding="utf-8")
 
+    assert "DERIBIT_NOTIFICATIONS" in text
+    assert "https://docs.deribit.com/#notifications" in text
     assert "First public WebSocket book notification is a snapshot." in text
     assert "Subsequent public book notifications are incremental deltas." in text
     assert "`change_id` and `prev_change_id` continuity" in text
     assert "`prev_change_id` mismatch requires resubscribe or resync." in text
     assert "`max_gap_tolerance` is zero" in text
+    assert "CONTENT_HASH_UNAVAILABLE" in text
     assert "Do not enable connector readiness globally from this draft." in text
 
 
@@ -253,10 +256,10 @@ def _evidence(claim_id: str, content_hash: str, **overrides: object) -> Official
         "evidence_id": f"{_DERIBIT_DIALECT_ID}::{claim_id}",
         "venue_id": VenueId.DERIBIT,
         "doc_type": PublicFeedType.L2_ORDERBOOK.value,
-        "doc_url": f"https://docs.example.test/deribit/{claim_id}",
+        "doc_url": f"https://docs.deribit.com/#notifications-{claim_id}",
         "retrieved_at_ns": _RETRIEVED_AT_NS + len(claim_id),
-        "content_hash": f"deribit-phase22b-{content_hash}",
-        "source_name": "supplied-deribit-official-doc-draft",
+        "content_hash": f"CONTENT_HASH_UNAVAILABLE:DERIBIT_NOTIFICATIONS:{content_hash}",
+        "source_name": "DERIBIT_NOTIFICATIONS",
         "status": OfficialDocEvidenceStatus.VERIFIED,
         "rejection_reasons": (),
     }
