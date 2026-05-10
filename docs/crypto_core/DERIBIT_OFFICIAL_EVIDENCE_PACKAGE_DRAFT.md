@@ -39,6 +39,12 @@ fail-closed. Unknown operational fields remain blockers:
 
 `static_registry_verified`: `false`
 
+Manual operational evidence review gate:
+`docs/crypto_core/DERIBIT_OPERATIONAL_EVIDENCE_REVIEW_CHECKLIST.md`.
+This draft remains blocked until that checklist has official-source URLs,
+positive retrieval timestamps, reproducible SHA256/content hashes, reviewer
+metadata, manual approval, and all fail-closed operational budget reviews.
+
 ## Package Fields
 
 - `package_id`: `deribit-public-book-phase22b-draft`
