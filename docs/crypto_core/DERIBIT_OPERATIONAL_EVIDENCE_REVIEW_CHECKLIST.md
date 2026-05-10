@@ -37,6 +37,8 @@ fail-closed operational readiness gate has been acquired and reviewed.
 - `phase22r_operational_policy_review_status`: `BLOCKED_PENDING_POLICY_APPROVALS`
 - `phase22s_public_connector_enablement_gate`: `src/crypto_core/venue/public_connector_enablement.py`
 - `phase22s_public_connector_enablement_status`: `BLOCKED_PENDING_SEPARATE_ENABLEMENT_APPROVAL`
+- `phase22u_public_connector_readiness_report`: `src/crypto_core/venue/public_connector_readiness_report.py`
+- `phase22u_public_connector_readiness_report_status`: `BLOCKED`
 
 ## Phase 22J Deep Research Dossier Intake Rules
 
@@ -245,6 +247,43 @@ enablement requires a separate explicit approval with
 references, and verified static registry readiness. Phase 22S does not approve
 Deribit connector readiness and must not make `connector_ready_dialects()`
 non-empty.
+
+## Phase 22U Public Connector Readiness Report
+
+Phase 22U adds an inert deterministic public connector readiness report:
+`src/crypto_core/venue/public_connector_readiness_report.py`.
+
+The report composes supplied source snapshot validation results, supplied claim
+review validation results, supplied operational evidence acceptance, supplied
+connector enablement decision, static registry verification status, and evidence
+references into a JSON-safe audit surface. It does not read files, fetch URLs,
+perform network access, mutate the registry, create a connector, start a client,
+authorize credentials, enable private API access, permit orders, or permit live
+execution.
+
+The current Deribit readiness report must remain `BLOCKED` because:
+
+- source snapshots are hashed but not manually approved
+- claim reviews remain `PENDING`
+- operational policy approvals remain `PENDING`
+- operational evidence acceptance remains rejected
+- public connector enablement remains rejected
+- `static_registry_verified`: `false`
+- `enabled_for_connector`: `false`
+- `connector_ready_dialects_expected`: `[]`
+
+Stable blocker codes for the current blocked report include:
+
+- `public_connector_readiness:source_snapshots_not_ready`
+- `public_connector_readiness:claim_reviews_not_ready`
+- `public_connector_readiness:operational_evidence_not_ready`
+- `public_connector_readiness:connector_enablement_not_ready`
+- `public_connector_readiness:static_registry_unverified`
+
+The report is an audit surface only. It must not mark current Deribit
+`connector_ready`, must not mark operational evidence ready, must not mark the
+static registry verified, must not mark the Deribit dialect verified, and must
+not make `connector_ready_dialects()` non-empty.
 
 ## Required Evidence Acquisition Fields
 
