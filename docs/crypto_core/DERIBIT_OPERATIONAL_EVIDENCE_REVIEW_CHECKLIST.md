@@ -33,6 +33,8 @@ fail-closed operational readiness gate has been acquired and reviewed.
 - `phase22n_claim_review_validation_status`: `BLOCKED_PENDING_MANUAL_APPROVAL`
 - `phase22p_operational_acceptance_gate`: `src/crypto_core/venue/operational_evidence_readiness.py`
 - `phase22p_operational_acceptance_status`: `BLOCKED_PENDING_POLICY_APPROVALS`
+- `phase22r_operational_policy_review_worksheet_path`: `docs/crypto_core/official_sources/deribit/20260510/DERIBIT_OPERATIONAL_POLICY_REVIEW_WORKSHEET.md`
+- `phase22r_operational_policy_review_status`: `BLOCKED_PENDING_POLICY_APPROVALS`
 
 ## Phase 22J Deep Research Dossier Intake Rules
 
@@ -185,6 +187,25 @@ Current Deribit source snapshots and claim rows are still pending manual
 approval, and the required policy approvals are not recorded. Therefore Phase
 22P acceptance must remain blocked and must not make
 `connector_ready_dialects()` non-empty.
+
+## Phase 22R Operational Policy Review Worksheet
+
+Phase 22R adds a manual operational policy review worksheet:
+`docs/crypto_core/official_sources/deribit/20260510/DERIBIT_OPERATIONAL_POLICY_REVIEW_WORKSHEET.md`.
+
+All policy rows remain `PENDING` and leave operational readiness blocked:
+
+- `checksum_decision`: `PENDING_MANUAL_REVIEW`
+- `liveness_policy`: `PENDING_POLICY_BUDGET`
+- `staleness_budget`: `ENGINEERING_POLICY_PROPOSAL_PENDING_APPROVAL`
+- `receive_lag_budget`: `ENGINEERING_POLICY_PROPOSAL_PENDING_APPROVAL`
+- `testnet_prod_review`: `PENDING_MANUAL_REVIEW`
+- `regional_legal_access_review`: `MANUAL_LEGAL_ACCESS_REVIEW_REQUIRED`
+- `separate_connector_enablement`: `REQUIRED_SEPARATE_PHASE`
+
+The Phase 22P acceptance gate cannot pass current Deribit evidence while these
+rows remain pending. Connector enablement is separate, explicitly forbidden in
+this phase, and must not be inferred from evidence worksheets or hashes.
 
 ## Required Evidence Acquisition Fields
 
