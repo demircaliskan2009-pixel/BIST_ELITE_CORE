@@ -35,6 +35,8 @@ fail-closed operational readiness gate has been acquired and reviewed.
 - `phase22p_operational_acceptance_status`: `BLOCKED_PENDING_POLICY_APPROVALS`
 - `phase22r_operational_policy_review_worksheet_path`: `docs/crypto_core/official_sources/deribit/20260510/DERIBIT_OPERATIONAL_POLICY_REVIEW_WORKSHEET.md`
 - `phase22r_operational_policy_review_status`: `BLOCKED_PENDING_POLICY_APPROVALS`
+- `phase22s_public_connector_enablement_gate`: `src/crypto_core/venue/public_connector_enablement.py`
+- `phase22s_public_connector_enablement_status`: `BLOCKED_PENDING_SEPARATE_ENABLEMENT_APPROVAL`
 
 ## Phase 22J Deep Research Dossier Intake Rules
 
@@ -206,6 +208,43 @@ All policy rows remain `PENDING` and leave operational readiness blocked:
 The Phase 22P acceptance gate cannot pass current Deribit evidence while these
 rows remain pending. Connector enablement is separate, explicitly forbidden in
 this phase, and must not be inferred from evidence worksheets or hashes.
+
+## Phase 22S Public Connector Enablement Gate
+
+Phase 22S adds an inert public connector enablement authorization gate:
+`src/crypto_core/venue/public_connector_enablement.py`.
+
+The gate evaluates supplied manual connector enablement metadata only. It does
+not read files, fetch URLs, perform network access, mutate the registry, create
+a connector, start a client, authorize credentials, enable private API access,
+permit orders, or permit live execution.
+
+The current Deribit connector enablement request must reject because:
+
+- `operational_evidence_accepted`: `false`
+- `static_registry_verified`: `false`
+- `connector_enablement_status`: `PENDING`
+- `reviewer_id`: `PENDING`
+- `reviewed_at_iso`: `PENDING`
+- `approved_run_mode`: `REQUIRED_SEPARATE_PHASE`
+- `enabled_for_connector`: `false`
+- `connector_ready_dialects_expected`: `[]`
+
+Stable rejection codes for the current blocked state include:
+
+- `public_connector_enablement:operational_evidence_not_accepted`
+- `public_connector_enablement:static_registry_unverified`
+- `public_connector_enablement:pending`
+- `public_connector_enablement:missing_reviewer`
+- `public_connector_enablement:missing_review_time`
+- `public_connector_enablement:invalid_run_mode`
+
+Even if operational evidence later becomes accepted, public connector
+enablement requires a separate explicit approval with
+`approved_run_mode`: `PUBLIC_MARKET_DATA_ONLY`, reviewer metadata, evidence
+references, and verified static registry readiness. Phase 22S does not approve
+Deribit connector readiness and must not make `connector_ready_dialects()`
+non-empty.
 
 ## Required Evidence Acquisition Fields
 
