@@ -23,6 +23,8 @@ The Phase 22L manifest is
 - `static_registry_verified`: `false`
 - `connector_ready_dialects_expected`: `[]`
 - `operational_readiness_effect`: `LEAVES_BLOCKER`
+- `phase22n_claim_review_validation_gate`: `src/crypto_core/venue/official_claim_reviews.py`
+- `phase22n_claim_review_validation_status`: `BLOCKED_PENDING_MANUAL_APPROVAL`
 
 ## Same Hash Caveat
 
@@ -65,4 +67,6 @@ review, operational readiness, legal access, or connector safety.
 Every row remains pending until a human reviewer records reviewer metadata,
 review time, a claim decision, and claim-specific evidence notes. Hash equality
 across rows is expected for the current single-page documentation payload and
-must not be used as a substitute for claim-level review.
+must not be used as a substitute for claim-level review. The Phase 22N
+validation gate can validate only supplied manual review records; it cannot
+auto-approve any current Deribit worksheet row.

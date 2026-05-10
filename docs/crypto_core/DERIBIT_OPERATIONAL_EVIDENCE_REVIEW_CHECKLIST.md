@@ -29,6 +29,8 @@ fail-closed operational readiness gate has been acquired and reviewed.
 - `phase22l_manual_review_status`: `PENDING`
 - `phase22m_claim_review_worksheet_path`: `docs/crypto_core/official_sources/deribit/20260510/DERIBIT_CLAIM_REVIEW_WORKSHEET.md`
 - `phase22m_claim_review_status`: `PENDING`
+- `phase22n_claim_review_validation_gate`: `src/crypto_core/venue/official_claim_reviews.py`
+- `phase22n_claim_review_validation_status`: `BLOCKED_PENDING_MANUAL_APPROVAL`
 
 ## Phase 22J Deep Research Dossier Intake Rules
 
@@ -130,6 +132,19 @@ payload caveat remains active: hashed source snapshots do not approve
 individual claims, checksum decisions, heartbeat/liveness proofs, operational
 budgets, testnet/prod equivalence, legal access, registry readiness, or
 connector readiness.
+
+## Phase 22N Claim Review Validation Gate
+
+Phase 22N adds an inert claim-review validation contract:
+`src/crypto_core/venue/official_claim_reviews.py`.
+
+The gate validates supplied manual claim-review metadata only. It does not read
+files, fetch URLs, perform network access, approve Deribit claims, mutate the
+registry, create a connector, or permit orders or live execution.
+
+Current Deribit worksheet rows remain `PENDING`, so the validation gate must
+reject the current worksheet with `official_claim_review:pending` and leave
+operational readiness blocked.
 
 ## Required Evidence Acquisition Fields
 
