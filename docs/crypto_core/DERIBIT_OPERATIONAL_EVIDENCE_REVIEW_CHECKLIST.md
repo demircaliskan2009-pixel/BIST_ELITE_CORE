@@ -22,6 +22,8 @@ fail-closed operational readiness gate has been acquired and reviewed.
 - `connector_ready_dialects_expected`: `[]`
 - `deep_research_dossier_status`: `DR_REPORTED_NEEDS_LOCAL_RETRIEVAL`
 - `evidence_status_required`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
+- `official_source_snapshots_supplied`: `false`
+- `official_source_snapshot_hashes_validated`: `false`
 
 ## Phase 22J Deep Research Dossier Intake Rules
 
@@ -52,6 +54,26 @@ Current dossier corrections:
 - `turkey_regional_access_status`: `MANUAL_LEGAL_ACCESS_REVIEW_REQUIRED`
 - `deribit_dialect_verification`: `false`
 - `enabled_for_connector`: `false`
+
+## Phase 22K Local Snapshot Hash Intake Rules
+
+The local official-source snapshot/hash contract is
+`src/crypto_core/venue/official_source_snapshots.py`. It validates only supplied
+snapshot metadata and supplied SHA256 hashes. It must not fetch URLs, read files,
+start network sessions, enable a connector, or mutate the static registry.
+
+Each accepted local snapshot must include:
+
+- `source_id`
+- `venue_id`
+- `official_url`
+- `retrieved_at_iso`
+- `content_sha256`: 64 lowercase hex characters
+- `content_size_bytes`: positive integer
+- `reviewer_id`
+- `reviewed_at_iso`
+- `manual_review_status`: `APPROVED`
+- `rejection_reasons`: `[]`
 
 ## Required Evidence Acquisition Fields
 

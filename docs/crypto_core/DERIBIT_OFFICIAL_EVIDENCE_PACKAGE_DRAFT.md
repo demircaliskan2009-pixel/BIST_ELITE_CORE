@@ -48,6 +48,13 @@ This draft remains blocked until that checklist has official-source URLs,
 positive retrieval timestamps, reproducible SHA256/content hashes, reviewer
 metadata, manual approval, and all fail-closed operational budget reviews.
 
+Phase 22K local official-source snapshot/hash intake contract:
+`src/crypto_core/venue/official_source_snapshots.py`.
+`official_source_snapshots_supplied`: `false`
+`official_source_snapshot_hashes_validated`: `false`
+This draft remains blocked until locally supplied source snapshots pass that
+inert metadata/hash contract and manual review stays approved.
+
 ## Package Fields
 
 - `package_id`: `deribit-public-book-phase22b-draft`
