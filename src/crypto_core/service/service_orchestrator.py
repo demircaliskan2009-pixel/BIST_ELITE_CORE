@@ -1486,6 +1486,7 @@ class ServiceOrchestrator:
                 insufficient_evidence,
                 tuple(readiness_dict.get("blockers", ())) if readiness_dict is not None else (),
                 ext_regime_concerns,
+                operator_snapshot.public_data_readiness_blockers,
             ),
             operator_next_inspection=self._decision_pack_operator_next_inspection(
                 fail_criteria,
@@ -1493,6 +1494,7 @@ class ServiceOrchestrator:
                 insufficient_evidence,
                 tuple(readiness_dict.get("blockers", ())) if readiness_dict is not None else (),
                 ext_regime_concerns,
+                operator_snapshot.public_data_readiness_blockers,
                 operator_snapshot,
                 promotion_verdict,
             ),
@@ -2623,8 +2625,9 @@ class ServiceOrchestrator:
         insufficient_evidence: tuple[str, ...],
         readiness_blockers: tuple[str, ...],
         ext_regime_concerns: tuple[str, ...],
+        public_data_readiness_blockers: tuple[str, ...],
     ) -> tuple[str, ...]:
-        if disposition == "promotable":
+        if disposition == "promotable" and not public_data_readiness_blockers:
             return ()
         reasons: list[str] = []
         reasons.extend(fail_criteria)
@@ -2632,6 +2635,7 @@ class ServiceOrchestrator:
         reasons.extend(warning_criteria)
         reasons.extend(f"readiness:{name}" for name in readiness_blockers)
         reasons.extend(f"external_regime:{name}" for name in ext_regime_concerns)
+        reasons.extend(public_data_readiness_blockers)
 
         ordered: list[str] = []
         for reason in reasons:
@@ -2646,6 +2650,7 @@ class ServiceOrchestrator:
         insufficient_evidence: tuple[str, ...],
         readiness_blockers: tuple[str, ...],
         ext_regime_concerns: tuple[str, ...],
+        public_data_readiness_blockers: tuple[str, ...],
         operator_snapshot: OperatorSnapshot,
         promotion_verdict: str,
     ) -> tuple[str, ...]:
@@ -2660,6 +2665,8 @@ class ServiceOrchestrator:
             items.append("readiness_blockers")
         if ext_regime_concerns:
             items.append("external_regime_governance")
+        if public_data_readiness_blockers:
+            items.append("public_data_readiness")
         if not operator_snapshot.evidence.execution_calibration_available:
             items.append("execution_calibration")
         if promotion_verdict == "promote" and not items:
@@ -2671,6 +2678,7 @@ class ServiceOrchestrator:
         blocking_reasons = self._escalation_blocking_reasons(pack, stage)
         why_not_higher = self._escalation_why_not_higher(pack, stage)
         revalidation_required = self._escalation_revalidation_required(pack, stage)
+        public_data_blockers = self._public_data_escalation_blockers(pack)
         return EscalationDecision(
             artifact_time_ns=pack.artifact_time_ns,
             review_id=pack.review_id,
@@ -2684,7 +2692,7 @@ class ServiceOrchestrator:
             readiness_is_supportive=pack.readiness_is_supportive,
             external_regime_quality=pack.external_regime_quality,
             blocking_reasons=blocking_reasons,
-            missing_evidence=pack.insufficient_evidence,
+            missing_evidence=self._ordered_unique(pack.insufficient_evidence + public_data_blockers),
             why_not_higher=why_not_higher,
             revalidation_required=revalidation_required,
             campaign_ids=pack.campaign_ids,
@@ -2708,6 +2716,8 @@ class ServiceOrchestrator:
             stage = EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE
         if pack.external_regime_quality in {"blocking", "insufficient", "unavailable", "marginal", "cautionary"}:
             stage = self._downgrade_escalation_stage(stage)
+        if self._public_data_escalation_blockers(pack):
+            stage = self._downgrade_for_public_data(stage)
         return stage
 
     @staticmethod
@@ -2735,6 +2745,30 @@ class ServiceOrchestrator:
         }[stage]
 
     @staticmethod
+    def _downgrade_for_public_data(stage: EscalationStage) -> EscalationStage:
+        if stage in {
+            EscalationStage.TINY_CAP_LIVE_REVIEW_ELIGIBLE,
+            EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE,
+            EscalationStage.CALIBRATED_PAPER,
+        }:
+            return EscalationStage.PAPER_ONLY
+        return stage
+
+    @staticmethod
+    def _public_data_escalation_blockers(pack: OperatorDecisionPack) -> tuple[str, ...]:
+        blockers = tuple(pack.public_data_readiness_blockers)
+        if pack.public_data_ready is True and not blockers:
+            return ()
+        if "public_data:readiness_snapshot_missing" in blockers:
+            return blockers
+        if pack.public_data_readiness_snapshot_count > 0:
+            if blockers:
+                return blockers
+            if pack.public_data_ready is not True:
+                return ("public_data:not_accepted_for_paper",)
+        return ()
+
+    @staticmethod
     def _escalation_summary_text(pack: OperatorDecisionPack, stage: EscalationStage) -> str:
         return f"allowed_next_step={stage.value}; promotion_verdict={pack.promotion_verdict}; summary={pack.decision_summary}"
 
@@ -2749,6 +2783,7 @@ class ServiceOrchestrator:
         if stage in {EscalationStage.PAPER_ONLY, EscalationStage.CALIBRATED_PAPER}:
             reasons.extend(pack.readiness_blockers)
             reasons.extend(pack.external_regime_concerns)
+        reasons.extend(ServiceOrchestrator._public_data_escalation_blockers(pack))
         return ServiceOrchestrator._ordered_unique(reasons)
 
     def _escalation_why_not_higher(
@@ -2776,6 +2811,7 @@ class ServiceOrchestrator:
             if pack.readiness_level != "tiny_cap_live":
                 reasons.append(f"readiness_level:{pack.readiness_level}")
             reasons.extend(f"external_regime:{item}" for item in pack.external_regime_concerns)
+        reasons.extend(self._public_data_escalation_blockers(pack))
         return self._ordered_unique(reasons)
 
     @staticmethod
@@ -2794,6 +2830,8 @@ class ServiceOrchestrator:
             items.append("external_regime_governance")
         if not pack.external_regime_evidence_sufficient:
             items.append("external_regime_evidence")
+        if ServiceOrchestrator._public_data_escalation_blockers(pack):
+            items.append("public_data_readiness")
         if not pack.criteria_summary.get("readiness", {}).get("available", False):
             items.append("readiness_assessment")
         if pack.reason_codes.get("fail_count", 0) > 0:

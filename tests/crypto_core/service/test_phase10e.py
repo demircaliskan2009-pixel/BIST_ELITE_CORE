@@ -1554,9 +1554,10 @@ class TestReportingAPI:
             orch.intake_campaign_report(_make_campaign_report(campaign_id=f"camp-{i}", verdict="pass"))
 
         decision = orch.escalation_decision()
-        assert decision.escalation_stage == EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE
-        assert "operator_review_signoff" in decision.revalidation_required
-        assert orch.escalation_summary()["allowed_next_step"] == "shadow_live_review_eligible"
+        assert decision.escalation_stage == EscalationStage.PAPER_ONLY
+        assert "public_data:readiness_snapshot_missing" in decision.blocking_reasons
+        assert "public_data_readiness" in decision.revalidation_required
+        assert orch.escalation_summary()["allowed_next_step"] == "paper_only"
         assert orch.escalation_decision_dict() == orch.escalation_decision_dict()
 
     def test_escalation_decision_ext_regime_weakness_lowers_stage(self):
@@ -1581,7 +1582,8 @@ class TestReportingAPI:
             external_regime_concerns=("stale_dominance",),
         )
         decision = orch._build_escalation_decision(pack)
-        assert decision.escalation_stage == EscalationStage.CALIBRATED_PAPER
+        assert decision.escalation_stage == EscalationStage.PAPER_ONLY
+        assert "public_data:readiness_snapshot_missing" in decision.blocking_reasons
         assert any(reason.startswith("external_regime:") for reason in decision.why_not_higher)
 
     def test_escalation_review_lifecycle_and_operator_surfaces(self):
@@ -1607,16 +1609,16 @@ class TestReportingAPI:
         assert snap is not None
         assert snap.status == "evaluating"
         assert snap.latest_decision is not None
-        assert snap.latest_decision.escalation_stage == EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE
+        assert snap.latest_decision.escalation_stage == EscalationStage.PAPER_ONLY
 
         final = orch.finalize_escalation_review()
         assert final.status == "finalized"
-        assert final.decision.escalation_stage == EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE
-        assert orch.escalation_summary()["allowed_next_step"] == "shadow_live_review_eligible"
+        assert final.decision.escalation_stage == EscalationStage.PAPER_ONLY
+        assert orch.escalation_summary()["allowed_next_step"] == "paper_only"
 
         operator = orch.operator_snapshot()
         assert operator.escalation_review is not None
-        assert operator.escalation_review.allowed_next_step == "shadow_live_review_eligible"
+        assert operator.escalation_review.allowed_next_step == "paper_only"
 
     def test_escalation_review_progression_history_current_vs_previous(self):
         svc = _make_mock_service()
@@ -1644,9 +1646,9 @@ class TestReportingAPI:
 
         comparison = orch.escalation_change_summary()
         history = orch.escalation_history_summary()
-        assert second.comparison_to_previous["direction"] == "progressed"
+        assert second.comparison_to_previous["direction"] == "unchanged"
         assert comparison["previous_allowed_next_step"] == "paper_only"
-        assert comparison["current_allowed_next_step"] == "shadow_live_review_eligible"
+        assert comparison["current_allowed_next_step"] == "paper_only"
         assert history["total_finalized_reviews"] == 2
 
     def test_escalation_review_repeated_stuck_summary(self):
