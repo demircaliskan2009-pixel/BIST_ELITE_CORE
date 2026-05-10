@@ -27,6 +27,7 @@ are intentionally not committed; the committed artifact is this hash manifest.
 - `connector_ready_dialects_expected`: `[]`
 - `official_source_snapshot_hashes_validated`: `false`
 - `evidence_status`: `SUPPLIED_HASHED_PENDING_MANUAL_REVIEW`
+- `claim_review_worksheet_path`: `docs/crypto_core/official_sources/deribit/20260510/DERIBIT_CLAIM_REVIEW_WORKSHEET.md`
 
 ## Source Snapshots
 
@@ -59,6 +60,8 @@ are intentionally not committed; the committed artifact is this hash manifest.
   the same content hash and byte size.
 - These hashes prove only that the documentation payload was retrieved and
   hashed locally. They do not prove claim-level manual review.
+- The claim-level review worksheet remains pending and every worksheet row
+  leaves operational readiness blocked.
 - No raw HTML snapshot is committed.
 - No connector, network client, exchange endpoint implementation, private API,
   credentials, orders, live execution, registry enablement, or

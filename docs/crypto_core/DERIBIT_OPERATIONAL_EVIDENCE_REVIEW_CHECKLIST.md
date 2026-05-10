@@ -27,6 +27,8 @@ fail-closed operational readiness gate has been acquired and reviewed.
 - `phase22l_source_retrieval_hash_status`: `SUPPLIED_HASHED_PENDING_REVIEW`
 - `phase22l_manifest_path`: `docs/crypto_core/official_sources/deribit/20260510/DERIBIT_SOURCE_SNAPSHOT_MANIFEST.md`
 - `phase22l_manual_review_status`: `PENDING`
+- `phase22m_claim_review_worksheet_path`: `docs/crypto_core/official_sources/deribit/20260510/DERIBIT_CLAIM_REVIEW_WORKSHEET.md`
+- `phase22m_claim_review_status`: `PENDING`
 
 ## Phase 22J Deep Research Dossier Intake Rules
 
@@ -89,6 +91,11 @@ The retrieved documentation payloads are hashed and supplied for manual review,
 but they are not manually approved and must not be treated as accepted
 operational evidence.
 
+All listed Deribit documentation fragment URLs resolved to the same single-page
+documentation payload during Phase 22L terminal retrieval. The shared hash and
+byte size do not equal claim-level approval and must not be used to satisfy
+manual review by themselves.
+
 | source_id | retrieval_status | content_hash_status | manual_review_status |
 |---|---|---|---|
 | `DERIBIT_NOTIFICATIONS` | `SUPPLIED_HASHED_PENDING_REVIEW` | `SUPPLIED_HASHED_PENDING_REVIEW` | `PENDING` |
@@ -110,6 +117,19 @@ Outstanding review decisions after Phase 22L:
 - `receive_lag_budget_defined`: `PENDING`
 - `testnet_prod_difference_reviewed`: `PENDING`
 - `regional_legal_access_reviewed`: `PENDING`
+
+## Phase 22M Claim-Level Review Worksheet
+
+Phase 22M adds a manual claim-level review worksheet:
+`docs/crypto_core/official_sources/deribit/20260510/DERIBIT_CLAIM_REVIEW_WORKSHEET.md`.
+
+The worksheet rows are all `PENDING`, with `reviewer_id`, `reviewed_at_iso`,
+and `decision` also left `PENDING`. Every row has
+`operational_readiness_effect`: `LEAVES_BLOCKER`. The same-hash documentation
+payload caveat remains active: hashed source snapshots do not approve
+individual claims, checksum decisions, heartbeat/liveness proofs, operational
+budgets, testnet/prod equivalence, legal access, registry readiness, or
+connector readiness.
 
 ## Required Evidence Acquisition Fields
 
