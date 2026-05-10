@@ -14,11 +14,11 @@ private API, credential, or order-submission implementation.
 Operational connector readiness: **blocked**.
 
 The official Deribit URLs below are DR_REPORTED research inputs for claim
-mapping. The `CONTENT_HASH_UNAVAILABLE` values are manual hash placeholders.
+mapping. Any `CONTENT_HASH_UNAVAILABLE` values are manual hash placeholders.
 They may be used by offline tests to prove overlay mechanics, but they are not
-reproducible content hashes. They must be replaced by independently
-reproducible content hashes and reviewer evidence before any operational
-verification can pass.
+reproducible content hashes. Phase 22L supplied terminal-fetched documentation
+hashes in a committed manifest, but those hashes remain pending manual review
+and do not make operational verification pass.
 
 `CONTENT_HASH_UNAVAILABLE`, missing hashes, missing retrieval timestamps,
 summary-only Deep Research prose, and placeholder official-doc refs are all
@@ -54,6 +54,18 @@ Phase 22K local official-source snapshot/hash intake contract:
 `official_source_snapshot_hashes_validated`: `false`
 This draft remains blocked until locally supplied source snapshots pass that
 inert metadata/hash contract and manual review stays approved.
+
+Phase 22L local terminal official-source snapshot/hash manifest:
+`docs/crypto_core/official_sources/deribit/20260510/DERIBIT_SOURCE_SNAPSHOT_MANIFEST.md`.
+`phase22l_source_retrieval_hash_status`: `SUPPLIED_HASHED_PENDING_REVIEW`
+`phase22l_retrieval_method`: `TERMINAL_DOC_FETCH`
+`phase22l_manual_review_status`: `PENDING`
+`phase22l_enabled_for_connector`: `false`
+`phase22l_static_registry_verified`: `false`
+`phase22l_connector_ready_dialects_expected`: `[]`
+Phase 22L hashes prove only that the official documentation payload was
+retrieved and hashed locally. They do not approve manual review, do not resolve
+operational budget blockers, and do not enable a connector.
 
 ## Package Fields
 
@@ -142,6 +154,23 @@ inert metadata/hash contract and manual review stays approved.
   - `manual_hash_required`: `YES`
   - `manual_review_required`: `YES`
   - `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
+
+## Phase 22L Local Source Snapshot Hashes
+
+These rows were retrieved with terminal-only documentation fetches from the
+official URLs above. They are supplied hashes pending manual review, not
+accepted operational evidence. The DR_REPORTED source-id rows above remain as
+dossier provenance until manual review reconciles each claim against these
+snapshots.
+
+| source_id | official_url | retrieved_at_iso | retrieval_method | retrieval_status | content_sha256 | content_size_bytes | manual_review_required | manual_review_status |
+|---|---|---|---|---|---|---:|---|---|
+| `DERIBIT_NOTIFICATIONS` | `https://docs.deribit.com/#notifications` | `2026-05-10T07:51:21Z` | `TERMINAL_DOC_FETCH` | `SUPPLIED_HASHED_PENDING_REVIEW` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `YES` | `PENDING` |
+| `DERIBIT_ENVIRONMENT` | `https://docs.deribit.com/#json-rpc-over-websocket` | `2026-05-10T07:51:22Z` | `TERMINAL_DOC_FETCH` | `SUPPLIED_HASHED_PENDING_REVIEW` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `YES` | `PENDING` |
+| `DERIBIT_RATE_LIMITS` | `https://docs.deribit.com/#rate-limits` | `2026-05-10T07:51:23Z` | `TERMINAL_DOC_FETCH` | `SUPPLIED_HASHED_PENDING_REVIEW` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `YES` | `PENDING` |
+| `DERIBIT_INSTRUMENTS` | `https://docs.deribit.com/#public-get_instruments` | `2026-05-10T07:51:24Z` | `TERMINAL_DOC_FETCH` | `SUPPLIED_HASHED_PENDING_REVIEW` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `YES` | `PENDING` |
+| `DERIBIT_TICKER` | `https://docs.deribit.com/#ticker-instrument_name-interval` | `2026-05-10T07:51:25Z` | `TERMINAL_DOC_FETCH` | `SUPPLIED_HASHED_PENDING_REVIEW` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `YES` | `PENDING` |
+| `DERIBIT_RESTRICTED` | `https://docs.deribit.com/#restricted-countries` | `2026-05-10T07:51:25Z` | `TERMINAL_DOC_FETCH` | `SUPPLIED_HASHED_PENDING_REVIEW` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `YES` | `PENDING` |
 
 ## Evidence Items
 

@@ -24,6 +24,9 @@ fail-closed operational readiness gate has been acquired and reviewed.
 - `evidence_status_required`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `official_source_snapshots_supplied`: `false`
 - `official_source_snapshot_hashes_validated`: `false`
+- `phase22l_source_retrieval_hash_status`: `SUPPLIED_HASHED_PENDING_REVIEW`
+- `phase22l_manifest_path`: `docs/crypto_core/official_sources/deribit/20260510/DERIBIT_SOURCE_SNAPSHOT_MANIFEST.md`
+- `phase22l_manual_review_status`: `PENDING`
 
 ## Phase 22J Deep Research Dossier Intake Rules
 
@@ -75,41 +78,74 @@ Each accepted local snapshot must include:
 - `manual_review_status`: `APPROVED`
 - `rejection_reasons`: `[]`
 
+## Phase 22L Terminal Documentation Fetch Intake
+
+Phase 22L retrieved the official Deribit documentation URLs already listed in
+the draft evidence package with terminal-only documentation fetches. The
+manifest is:
+`docs/crypto_core/official_sources/deribit/20260510/DERIBIT_SOURCE_SNAPSHOT_MANIFEST.md`.
+
+The retrieved documentation payloads are hashed and supplied for manual review,
+but they are not manually approved and must not be treated as accepted
+operational evidence.
+
+| source_id | retrieval_status | content_hash_status | manual_review_status |
+|---|---|---|---|
+| `DERIBIT_NOTIFICATIONS` | `SUPPLIED_HASHED_PENDING_REVIEW` | `SUPPLIED_HASHED_PENDING_REVIEW` | `PENDING` |
+| `DERIBIT_ENVIRONMENT` | `SUPPLIED_HASHED_PENDING_REVIEW` | `SUPPLIED_HASHED_PENDING_REVIEW` | `PENDING` |
+| `DERIBIT_RATE_LIMITS` | `SUPPLIED_HASHED_PENDING_REVIEW` | `SUPPLIED_HASHED_PENDING_REVIEW` | `PENDING` |
+| `DERIBIT_INSTRUMENTS` | `SUPPLIED_HASHED_PENDING_REVIEW` | `SUPPLIED_HASHED_PENDING_REVIEW` | `PENDING` |
+| `DERIBIT_TICKER` | `SUPPLIED_HASHED_PENDING_REVIEW` | `SUPPLIED_HASHED_PENDING_REVIEW` | `PENDING` |
+| `DERIBIT_RESTRICTED` | `SUPPLIED_HASHED_PENDING_REVIEW` | `SUPPLIED_HASHED_PENDING_REVIEW` | `PENDING` |
+
+Outstanding review decisions after Phase 22L:
+
+- `manual_approval_status`: `PENDING`
+- `sequence_change_id_prev_change_id_proof_reviewed`: `PENDING`
+- `snapshot_delta_resync_proof_reviewed`: `PENDING`
+- `checksum_decision_reviewed`: `PENDING`
+- `heartbeat_ping_pong_liveness_proof_reviewed`: `PENDING`
+- `rate_subscription_limit_proof_reviewed`: `PENDING`
+- `staleness_budget_defined`: `PENDING`
+- `receive_lag_budget_defined`: `PENDING`
+- `testnet_prod_difference_reviewed`: `PENDING`
+- `regional_legal_access_reviewed`: `PENDING`
+
 ## Required Evidence Acquisition Fields
 
 Every Deribit operational evidence claim remains blocked until all fields below
 are populated from official Deribit sources, independently reviewed, and mapped
 back to the evidence package.
 
-- `official_source_url_per_claim`: `BLOCKER`
+- `official_source_url_per_claim`: `SUPPLIED_HASHED_PENDING_REVIEW`
   - Requirement: every claim has a real official source URL.
-- `retrieval_timestamp`: `BLOCKER`
+- `retrieval_timestamp`: `SUPPLIED_HASHED_PENDING_REVIEW`
   - Requirement: every source snapshot has a positive retrieval timestamp.
-- `reproducible_sha256_content_hash`: `BLOCKER`
+- `reproducible_sha256_content_hash`: `SUPPLIED_HASHED_PENDING_REVIEW`
   - Requirement: every source snapshot has a reproducible SHA256/content hash.
 - `reviewer_id`: `BLOCKER`
   - Requirement: a reviewer id is recorded for the manual review.
 - `review_timestamp`: `BLOCKER`
   - Requirement: a positive review timestamp is recorded.
-- `manual_approval_status`: `BLOCKER`
+- `manual_approval_status`: `PENDING`
   - Requirement: manual approval status is explicit and approved before use.
-- `sequence_change_id_prev_change_id_proof_reviewed`: `BLOCKER`
+- `sequence_change_id_prev_change_id_proof_reviewed`: `PENDING`
   - Requirement: sequence, `change_id`, and `prev_change_id` proof reviewed.
-- `snapshot_delta_resync_proof_reviewed`: `BLOCKER`
+- `snapshot_delta_resync_proof_reviewed`: `PENDING`
   - Requirement: snapshot, delta, and resync proof reviewed.
-- `checksum_decision_reviewed`: `BLOCKER`
+- `checksum_decision_reviewed`: `PENDING`
   - Requirement: checksum model or fail-closed checksum absence reviewed.
-- `heartbeat_ping_pong_liveness_proof_reviewed`: `BLOCKER`
+- `heartbeat_ping_pong_liveness_proof_reviewed`: `PENDING`
   - Requirement: heartbeat, ping-pong, and liveness proof reviewed.
-- `rate_subscription_limit_proof_reviewed`: `BLOCKER`
+- `rate_subscription_limit_proof_reviewed`: `PENDING`
   - Requirement: rate and subscription limit proof reviewed.
-- `staleness_budget_defined`: `BLOCKER`
+- `staleness_budget_defined`: `PENDING`
   - Requirement: max staleness budget is defined from official evidence.
-- `receive_lag_budget_defined`: `BLOCKER`
+- `receive_lag_budget_defined`: `PENDING`
   - Requirement: max receive-lag budget is defined from official evidence.
-- `testnet_prod_difference_reviewed`: `BLOCKER`
+- `testnet_prod_difference_reviewed`: `PENDING`
   - Requirement: testnet and production differences are reviewed.
-- `regional_legal_access_reviewed`: `BLOCKER`
+- `regional_legal_access_reviewed`: `PENDING`
   - Requirement: regional, legal, and access constraints are reviewed.
 
 ## Safety Review Fields
@@ -130,8 +166,8 @@ These safety checks must remain true while the checklist is incomplete.
 ## Completion Rule
 
 The Deribit evidence package remains operationally blocked until every
-`BLOCKER` item above is satisfied with official-source evidence, reproducible
-hashes, retrieval timestamps, reviewer metadata, manual approval, and explicit
-budget decisions. Even after completion, a separate registry enablement and
-connector implementation phase is required before any runtime connector can
-exist.
+`BLOCKER` or `PENDING` item above is satisfied with official-source evidence,
+reproducible hashes, retrieval timestamps, reviewer metadata, manual approval,
+and explicit budget decisions. Even after completion, a separate registry
+enablement and connector implementation phase is required before any runtime
+connector can exist.
