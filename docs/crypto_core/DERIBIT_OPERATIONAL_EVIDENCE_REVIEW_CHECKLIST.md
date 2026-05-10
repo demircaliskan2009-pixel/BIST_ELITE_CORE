@@ -31,6 +31,8 @@ fail-closed operational readiness gate has been acquired and reviewed.
 - `phase22m_claim_review_status`: `PENDING`
 - `phase22n_claim_review_validation_gate`: `src/crypto_core/venue/official_claim_reviews.py`
 - `phase22n_claim_review_validation_status`: `BLOCKED_PENDING_MANUAL_APPROVAL`
+- `phase22p_operational_acceptance_gate`: `src/crypto_core/venue/operational_evidence_readiness.py`
+- `phase22p_operational_acceptance_status`: `BLOCKED_PENDING_POLICY_APPROVALS`
 
 ## Phase 22J Deep Research Dossier Intake Rules
 
@@ -145,6 +147,44 @@ registry, create a connector, or permit orders or live execution.
 Current Deribit worksheet rows remain `PENDING`, so the validation gate must
 reject the current worksheet with `official_claim_review:pending` and leave
 operational readiness blocked.
+
+## Phase 22P Operational Evidence Acceptance Gate
+
+Phase 22P adds an inert operational evidence acceptance gate to
+`src/crypto_core/venue/operational_evidence_readiness.py`.
+
+The gate evaluates supplied source snapshot validation results, supplied claim
+review validation results, and manual operational policy approvals together. It
+does not read files, fetch URLs, perform network access, auto-approve Deribit
+claims, verify a dialect, mutate the registry, request connector enablement, or
+permit orders or live execution.
+
+Required policy approvals remain:
+
+- `checksum_decision`
+- `liveness_policy`
+- `staleness_budget`
+- `receive_lag_budget`
+- `testnet_prod_review`
+- `regional_legal_access_review`
+- `separate_connector_enablement`
+
+Stable rejection codes for the current blocked state include:
+
+- `operational_evidence:source_snapshot_rejected`
+- `operational_evidence:claim_review_rejected`
+- `operational_policy:checksum_decision_missing`
+- `operational_policy:liveness_policy_missing`
+- `operational_policy:staleness_budget_missing`
+- `operational_policy:receive_lag_budget_missing`
+- `operational_policy:testnet_prod_review_missing`
+- `operational_policy:regional_legal_access_review_missing`
+- `operational_policy:separate_connector_enablement_required`
+
+Current Deribit source snapshots and claim rows are still pending manual
+approval, and the required policy approvals are not recorded. Therefore Phase
+22P acceptance must remain blocked and must not make
+`connector_ready_dialects()` non-empty.
 
 ## Required Evidence Acquisition Fields
 
