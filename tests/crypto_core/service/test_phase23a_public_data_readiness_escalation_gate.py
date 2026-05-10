@@ -173,8 +173,11 @@ def test_old_payload_without_public_data_fields_fails_closed():
 
     assert restored.public_data_ready is False
     assert restored.public_data_ready_symbols == ()
-    assert restored.public_data_readiness_blockers == ()
+    assert restored.public_data_readiness_blockers == ("public_data:readiness_snapshot_missing",)
     assert restored.public_data_readiness_snapshot_count == 0
+    decision = _decision(restored)
+    assert decision.escalation_stage == EscalationStage.PAPER_ONLY
+    assert "public_data:readiness_snapshot_missing" in decision.blocking_reasons
 
 
 def test_stage5_live_ready_logic_remains_unchanged_when_public_data_is_ready():

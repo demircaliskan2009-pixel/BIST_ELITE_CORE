@@ -351,7 +351,15 @@ def decision_pack_from_dict(d: dict) -> OperatorDecisionPack:
         raise OperatorDecisionPackCorruptError(f"Decision pack payload must be a dict, got {type(d).__name__!r}")
 
     public_data_readiness_blockers = _optional_tuple_of_strings(d, "public_data_readiness_blockers")
-    public_data_ready = _optional_bool(d, "public_data_ready", False) and not public_data_readiness_blockers
+    public_data_snapshot_count = _optional_non_negative_int(
+        d,
+        "public_data_readiness_snapshot_count",
+        0,
+    )
+    public_data_ready_raw = _optional_bool(d, "public_data_ready", False)
+    if public_data_ready_raw is not True and public_data_snapshot_count == 0 and not public_data_readiness_blockers:
+        public_data_readiness_blockers = ("public_data:readiness_snapshot_missing",)
+    public_data_ready = public_data_ready_raw and not public_data_readiness_blockers
     return OperatorDecisionPack(
         artifact_time_ns=_require_int(d, "artifact_time_ns"),
         review_id=_require_str(d, "review_id"),
@@ -376,11 +384,7 @@ def decision_pack_from_dict(d: dict) -> OperatorDecisionPack:
         public_data_ready=public_data_ready,
         public_data_ready_symbols=_optional_tuple_of_strings(d, "public_data_ready_symbols"),
         public_data_readiness_blockers=public_data_readiness_blockers,
-        public_data_readiness_snapshot_count=_optional_non_negative_int(
-            d,
-            "public_data_readiness_snapshot_count",
-            0,
-        ),
+        public_data_readiness_snapshot_count=public_data_snapshot_count,
         readiness_criteria=_optional_tuple_of_dicts(d, "readiness_criteria"),
         readiness_blockers=_optional_tuple_of_strings(d, "readiness_blockers"),
         external_regime_quality=_require_str(d, "external_regime_quality"),

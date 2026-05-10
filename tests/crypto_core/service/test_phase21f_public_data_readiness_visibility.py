@@ -147,7 +147,7 @@ def test_old_decision_pack_payload_missing_public_data_fields_defaults_fail_clos
 
     assert restored.public_data_ready is False
     assert restored.public_data_ready_symbols == ()
-    assert restored.public_data_readiness_blockers == ()
+    assert restored.public_data_readiness_blockers == ("public_data:readiness_snapshot_missing",)
     assert restored.public_data_readiness_snapshot_count == 0
 
 
