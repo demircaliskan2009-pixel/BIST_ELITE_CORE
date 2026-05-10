@@ -39,6 +39,9 @@ fail-closed operational readiness gate has been acquired and reviewed.
 - `phase22s_public_connector_enablement_status`: `BLOCKED_PENDING_SEPARATE_ENABLEMENT_APPROVAL`
 - `phase22u_public_connector_readiness_report`: `src/crypto_core/venue/public_connector_readiness_report.py`
 - `phase22u_public_connector_readiness_report_status`: `BLOCKED`
+- `phase23b_public_ws_smoke_harness`: `src/crypto_core/data/deribit_public_ws_harness.py`
+- `phase23b_public_ws_smoke_script`: `scripts/crypto_core/deribit_public_ws_smoke.py`
+- `phase23b_smoke_status`: `QUARANTINED_PUBLIC_MARKET_DATA_ONLY`
 
 ## Phase 22J Deep Research Dossier Intake Rules
 
@@ -284,6 +287,33 @@ The report is an audit surface only. It must not mark current Deribit
 `connector_ready`, must not mark operational evidence ready, must not mark the
 static registry verified, must not mark the Deribit dialect verified, and must
 not make `connector_ready_dialects()` non-empty.
+
+## Phase 23B Quarantined Public WebSocket Smoke Harness
+
+Phase 23B adds a quarantined public WebSocket smoke harness:
+`src/crypto_core/data/deribit_public_ws_harness.py`, with an operator script at
+`scripts/crypto_core/deribit_public_ws_smoke.py`.
+
+The harness is authorized only for `PUBLIC_MARKET_DATA_ONLY` observation of
+bounded, unauthenticated, aggregated public Deribit WebSocket channels. It is not
+a connector, not a connector-ready dialect, not strategy integration, not
+service/orchestrator integration, not private API access, not order routing, and
+not live trading.
+
+Required safety state remains:
+
+- `operational_status`: `BLOCKED`
+- `phase23b_smoke_status`: `QUARANTINED_PUBLIC_MARKET_DATA_ONLY`
+- `enabled_for_connector`: `false`
+- `static_registry_verified`: `false`
+- `connector_ready_dialects_expected`: `[]`
+- `deribit_dialect_verification`: `false`
+- `strategy_integration`: `FORBIDDEN`
+- `service_orchestrator_integration`: `FORBIDDEN`
+- `private_api`: `FORBIDDEN`
+- `credentials_env_api_key_reads`: `FORBIDDEN`
+- `orders`: `FORBIDDEN`
+- `live_execution`: `FORBIDDEN`
 
 ## Required Evidence Acquisition Fields
 
