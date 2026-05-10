@@ -20,6 +20,38 @@ fail-closed operational readiness gate has been acquired and reviewed.
 - `enabled_for_connector`: `false`
 - `static_registry_verified`: `false`
 - `connector_ready_dialects_expected`: `[]`
+- `deep_research_dossier_status`: `DR_REPORTED_NEEDS_LOCAL_RETRIEVAL`
+- `evidence_status_required`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
+
+## Phase 22J Deep Research Dossier Intake Rules
+
+The Deep Research Deribit dossier may seed an offline evidence table, but it is
+not primary evidence. Every DR_REPORTED source remains blocked until it is
+locally retrieved, hashed, and manually reviewed.
+
+Each source row must contain:
+
+- `source_id`
+- `venue`
+- `official_url`
+- `retrieved_at_iso`
+- `retrieval_status`: `DR_REPORTED_NEEDS_LOCAL_RETRIEVAL`
+- `content_hash`: `CONTENT_HASH_UNAVAILABLE`
+- `manual_hash_required`: `YES`
+- `manual_review_required`: `YES`
+- `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
+
+Current dossier corrections:
+
+- `checksum_absence_status`: `UNKNOWN_OR_NOT_DOCUMENTED_IN_REVIEWED_OFFICIAL_SOURCES`
+- `heartbeat_ping_pong_liveness_status`: `UNKNOWN_BLOCKED`
+- `staleness_budget_status`: `UNSATISFIED`
+- `receive_lag_budget_status`: `UNSATISFIED`
+- `testnet_prod_semantic_equivalence`: `UNKNOWN`
+- `regional_legal_access_status`: `MANUAL_LEGAL_ACCESS_REVIEW_REQUIRED`
+- `turkey_regional_access_status`: `MANUAL_LEGAL_ACCESS_REVIEW_REQUIRED`
+- `deribit_dialect_verification`: `false`
+- `enabled_for_connector`: `false`
 
 ## Required Evidence Acquisition Fields
 

@@ -1,21 +1,24 @@
 # Deribit Official Evidence Package Draft
 
-Status: draft / supplied official-source evidence intake.
+Status: draft / DR_REPORTED official-source evidence intake.
 
-This file records only the Deribit public order-book facts supplied for Phase 22B.
-It is not a live connector authorization, does not enable a static registry
-dialect, and must not be treated as a network, WebSocket, REST, private API,
-credential, or order-submission implementation.
+This file records only the Deribit public order-book facts reported by the Deep
+Research dossier for Phase 22J. The dossier is DR_REPORTED secondary evidence,
+not primary evidence, and still needs local retrieval, reproducible hashes, and
+manual review. This file is not a live connector authorization, does not enable
+a static registry dialect, and must not be treated as a network, WebSocket, REST,
+private API, credential, or order-submission implementation.
 
 ## Operational Verification Status
 
 Operational connector readiness: **blocked**.
 
-The official Deribit URLs below are supplied research inputs for claim mapping.
-The `CONTENT_HASH_UNAVAILABLE` values are manual hash placeholders. They may be
-used by offline tests to prove overlay mechanics, but they are not reproducible
-content hashes. They must be replaced by independently reproducible content
-hashes and reviewer evidence before any operational verification can pass.
+The official Deribit URLs below are DR_REPORTED research inputs for claim
+mapping. The `CONTENT_HASH_UNAVAILABLE` values are manual hash placeholders.
+They may be used by offline tests to prove overlay mechanics, but they are not
+reproducible content hashes. They must be replaced by independently
+reproducible content hashes and reviewer evidence before any operational
+verification can pass.
 
 `CONTENT_HASH_UNAVAILABLE`, missing hashes, missing retrieval timestamps,
 summary-only Deep Research prose, and placeholder official-doc refs are all
@@ -51,7 +54,9 @@ metadata, manual approval, and all fail-closed operational budget reviews.
 - `venue_id`: `deribit`
 - `research_date`: `2026-05-09`
 - `retrieved_at_ns`: `2200000000000`
-- `source_count`: `5`
+- `retrieved_at_iso`: `2026-05-09T00:00:00Z`
+- `source_count`: `6`
+- `dossier_status`: `DR_REPORTED_NEEDS_LOCAL_RETRIEVAL`
 - `reviewer_id`: `phase22b-draft-review`
 - `verifier_id`: `phase22b-offline-overlay-test`
 - `rejection_reasons`: `[]`
@@ -59,41 +64,77 @@ metadata, manual approval, and all fail-closed operational budget reviews.
 ## Official Source Ids
 
 - `DERIBIT_NOTIFICATIONS`
+  - `source_id`: `DERIBIT_NOTIFICATIONS`
+  - `venue`: `deribit`
   - `official_url`: `https://docs.deribit.com/#notifications`
   - `retrieval_date`: `2026-05-09`
+  - `retrieved_at_iso`: `2026-05-09T00:00:00Z`
+  - `retrieval_status`: `DR_REPORTED_NEEDS_LOCAL_RETRIEVAL`
   - `retrieved_at_ns`: `2200000000000`
   - `content_hash`: `CONTENT_HASH_UNAVAILABLE`
   - `manual_hash_required`: `YES`
+  - `manual_review_required`: `YES`
+  - `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `DERIBIT_ENVIRONMENT`
+  - `source_id`: `DERIBIT_ENVIRONMENT`
+  - `venue`: `deribit`
   - `official_url`: `https://docs.deribit.com/#json-rpc-over-websocket`
   - `retrieval_date`: `2026-05-09`
+  - `retrieved_at_iso`: `2026-05-09T00:00:00Z`
+  - `retrieval_status`: `DR_REPORTED_NEEDS_LOCAL_RETRIEVAL`
   - `retrieved_at_ns`: `2200000000000`
   - `content_hash`: `CONTENT_HASH_UNAVAILABLE`
   - `manual_hash_required`: `YES`
+  - `manual_review_required`: `YES`
+  - `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `DERIBIT_RATE_LIMITS`
+  - `source_id`: `DERIBIT_RATE_LIMITS`
+  - `venue`: `deribit`
   - `official_url`: `https://docs.deribit.com/#rate-limits`
   - `retrieval_date`: `2026-05-09`
+  - `retrieved_at_iso`: `2026-05-09T00:00:00Z`
+  - `retrieval_status`: `DR_REPORTED_NEEDS_LOCAL_RETRIEVAL`
   - `retrieved_at_ns`: `2200000000000`
   - `content_hash`: `CONTENT_HASH_UNAVAILABLE`
   - `manual_hash_required`: `YES`
+  - `manual_review_required`: `YES`
+  - `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `DERIBIT_INSTRUMENTS`
+  - `source_id`: `DERIBIT_INSTRUMENTS`
+  - `venue`: `deribit`
   - `official_url`: `https://docs.deribit.com/#public-get_instruments`
   - `retrieval_date`: `2026-05-09`
+  - `retrieved_at_iso`: `2026-05-09T00:00:00Z`
+  - `retrieval_status`: `DR_REPORTED_NEEDS_LOCAL_RETRIEVAL`
   - `retrieved_at_ns`: `2200000000000`
   - `content_hash`: `CONTENT_HASH_UNAVAILABLE`
   - `manual_hash_required`: `YES`
+  - `manual_review_required`: `YES`
+  - `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `DERIBIT_TICKER`
+  - `source_id`: `DERIBIT_TICKER`
+  - `venue`: `deribit`
   - `official_url`: `https://docs.deribit.com/#ticker-instrument_name-interval`
   - `retrieval_date`: `2026-05-09`
+  - `retrieved_at_iso`: `2026-05-09T00:00:00Z`
+  - `retrieval_status`: `DR_REPORTED_NEEDS_LOCAL_RETRIEVAL`
   - `retrieved_at_ns`: `2200000000000`
   - `content_hash`: `CONTENT_HASH_UNAVAILABLE`
   - `manual_hash_required`: `YES`
+  - `manual_review_required`: `YES`
+  - `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `DERIBIT_RESTRICTED`
+  - `source_id`: `DERIBIT_RESTRICTED`
+  - `venue`: `deribit`
   - `official_url`: `https://docs.deribit.com/#restricted-countries`
   - `retrieval_date`: `2026-05-09`
+  - `retrieved_at_iso`: `2026-05-09T00:00:00Z`
+  - `retrieval_status`: `DR_REPORTED_NEEDS_LOCAL_RETRIEVAL`
   - `retrieved_at_ns`: `2200000000000`
   - `content_hash`: `CONTENT_HASH_UNAVAILABLE`
   - `manual_hash_required`: `YES`
+  - `manual_review_required`: `YES`
+  - `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 
 ## Evidence Items
 
@@ -113,7 +154,7 @@ timestamp before it can be promoted outside offline tests.
 - `manual_hash_required`: `YES`
 - `cited_claim_text`: First public WebSocket book notification is a snapshot.
 - `official_source_citation`: supplied Phase 22B Deribit research fact 1.
-- `verification_status`: `verified` for offline fixture use only.
+- `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `rejection_reasons`: `[]`
 
 ### Item 2: Subsequent Book Notifications Are Deltas
@@ -129,7 +170,7 @@ timestamp before it can be promoted outside offline tests.
 - `manual_hash_required`: `YES`
 - `cited_claim_text`: Subsequent public book notifications are incremental deltas.
 - `official_source_citation`: supplied Phase 22B Deribit research fact 2.
-- `verification_status`: `verified` for offline fixture use only.
+- `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `rejection_reasons`: `[]`
 
 ### Item 3: Change Id Continuity
@@ -145,7 +186,7 @@ timestamp before it can be promoted outside offline tests.
 - `manual_hash_required`: `YES`
 - `cited_claim_text`: Book deltas carry `change_id` and `prev_change_id` continuity.
 - `official_source_citation`: supplied Phase 22B Deribit research fact 3.
-- `verification_status`: `verified` for offline fixture use only.
+- `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `rejection_reasons`: `[]`
 
 ### Item 4: Prev Change Id Mismatch Requires Resync
@@ -161,7 +202,7 @@ timestamp before it can be promoted outside offline tests.
 - `manual_hash_required`: `YES`
 - `cited_claim_text`: `prev_change_id` mismatch requires resubscribe or resync.
 - `official_source_citation`: supplied Phase 22B Deribit research fact 4.
-- `verification_status`: `verified` for offline fixture use only.
+- `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `rejection_reasons`: `[]`
 
 ### Item 5: Zero Gap Tolerance
@@ -177,7 +218,7 @@ timestamp before it can be promoted outside offline tests.
 - `manual_hash_required`: `YES`
 - `cited_claim_text`: `max_gap_tolerance` is zero for the offline Deribit L2 continuity model.
 - `official_source_citation`: supplied Phase 22B Deribit research fact 5.
-- `verification_status`: `verified` for offline fixture use only.
+- `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `rejection_reasons`: `[]`
 
 ### Item 6: Public Market Data Unauthenticated
@@ -193,7 +234,7 @@ timestamp before it can be promoted outside offline tests.
 - `manual_hash_required`: `YES`
 - `cited_claim_text`: Public market data subscriptions do not require private credentials.
 - `official_source_citation`: supplied Phase 22D Deribit research mapping.
-- `verification_status`: `verified` for offline fixture use only.
+- `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `rejection_reasons`: `[]`
 
 ### Item 7: Production And Testnet WS Endpoints
@@ -209,7 +250,7 @@ timestamp before it can be promoted outside offline tests.
 - `manual_hash_required`: `YES`
 - `cited_claim_text`: Production and testnet WebSocket environments are documented separately.
 - `official_source_citation`: supplied Phase 22D Deribit research mapping.
-- `verification_status`: `verified` for offline fixture use only.
+- `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `rejection_reasons`: `[]`
 
 ### Item 8: Reconnect Requires Resubscribe Snapshot
@@ -225,7 +266,7 @@ timestamp before it can be promoted outside offline tests.
 - `manual_hash_required`: `YES`
 - `cited_claim_text`: Reconnect requires resubscribe and a fresh full snapshot for order-book recovery.
 - `official_source_citation`: supplied Phase 22D Deribit research mapping.
-- `verification_status`: `verified` for offline fixture use only.
+- `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `rejection_reasons`: `[]`
 
 ### Item 9: Ticker Open Interest And Mark Price
@@ -241,7 +282,7 @@ timestamp before it can be promoted outside offline tests.
 - `manual_hash_required`: `YES`
 - `cited_claim_text`: Ticker data includes open interest and mark price fields.
 - `official_source_citation`: supplied Phase 22D Deribit research mapping.
-- `verification_status`: `verified` for offline fixture use only.
+- `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `rejection_reasons`: `[]`
 
 ### Item 10: Index And Funding Feeds
@@ -257,7 +298,7 @@ timestamp before it can be promoted outside offline tests.
 - `manual_hash_required`: `YES`
 - `cited_claim_text`: Index and funding market-data feeds are documented public market-data surfaces.
 - `official_source_citation`: supplied Phase 22D Deribit research mapping.
-- `verification_status`: `verified` for offline fixture use only.
+- `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `rejection_reasons`: `[]`
 
 ### Item 11: Public Subscribe Rate-Limit Evidence
@@ -273,23 +314,35 @@ timestamp before it can be promoted outside offline tests.
 - `manual_hash_required`: `YES`
 - `cited_claim_text`: Public subscription rate-limit evidence exists, but budgets still require manual review before connector authorization.
 - `official_source_citation`: supplied Phase 22D Deribit research mapping.
-- `verification_status`: `verified` for offline fixture use only.
+- `evidence_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
 - `rejection_reasons`: `[]`
 
 ## Dialect Claim Mapping
 
 - `supported_dialect_id`: `deribit:l2_orderbook:placeholder`
 - `supported_feed_type`: `l2_orderbook`
+- `deribit_dialect_verification`: `false`
+- `dialect_verification_status`: `DR_REPORTED_OFFICIAL_SOURCE_CITED_NOT_LOCALLY_HASHED`
+- `enabled_for_connector`: `false`
+- `connector_ready`: `false`
 - `sequence_model_evidence`: `change_id` / `prev_change_id` continuity maps to `prev_final_range`.
-- `checksum_model_evidence`: Not supplied. Keep checksum model `none` or fail closed if checksum is required.
-- `checksum_model`: `NONE_OR_UNKNOWN_WITH_MANUAL_REVIEW`
+- `checksum_model_evidence`: `UNKNOWN_OR_NOT_DOCUMENTED_IN_REVIEWED_OFFICIAL_SOURCES`
+- `checksum_model`: `UNKNOWN_OR_NOT_DOCUMENTED_IN_REVIEWED_OFFICIAL_SOURCES`
+- `legacy_checksum_blocker_label`: `NONE_OR_UNKNOWN_WITH_MANUAL_REVIEW`
 - `heartbeat_ping_pong_evidence`: `UNKNOWN`
+- `heartbeat_ping_pong_status`: `UNKNOWN_BLOCKED`
 - `snapshot_delta_resync_evidence`: Initial notification is snapshot, subsequent notifications are deltas, and mismatch requires resubscribe or resync.
-- `rate_limit_evidence`: Public subscribe rate-limit evidence is mapped, but operational budgets remain manual-review blocked.
+- `rate_limit_evidence`: `DR_REPORTED_NEEDS_LOCAL_RETRIEVAL_BUDGET_BLOCKED`
 - `regional_legal_access_evidence`: `UNKNOWN`
+- `regional_legal_access_status`: `MANUAL_LEGAL_ACCESS_REVIEW_REQUIRED`
 - `turkey_legal_access_evidence`: `UNKNOWN`
+- `turkey_regional_access_status`: `MANUAL_LEGAL_ACCESS_REVIEW_REQUIRED`
 - `max_staleness_ns_evidence`: `UNKNOWN`
+- `staleness_budget_status`: `UNSATISFIED`
 - `max_receive_lag_ns_evidence`: `UNKNOWN`
+- `receive_lag_budget_status`: `UNSATISFIED`
+- `testnet_prod_semantic_equivalence`: `UNKNOWN`
+- `testnet_prod_difference_status`: `BLOCKED_UNLESS_EXPLICIT_OFFICIAL_SOURCE_PROVES_EQUIVALENCE`
 
 ## Safety Warnings
 
