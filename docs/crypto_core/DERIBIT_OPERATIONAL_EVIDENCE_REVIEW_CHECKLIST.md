@@ -42,6 +42,18 @@ fail-closed operational readiness gate has been acquired and reviewed.
 - `phase23b_public_ws_smoke_harness`: `src/crypto_core/data/deribit_public_ws_harness.py`
 - `phase23b_public_ws_smoke_script`: `scripts/crypto_core/deribit_public_ws_smoke.py`
 - `phase23b_smoke_status`: `QUARANTINED_PUBLIC_MARKET_DATA_ONLY`
+- `phase23d_ci_smoke_run_id`: `25658030184`
+- `phase23d_ci_smoke_job_conclusion`: `success`
+- `phase23d_ci_smoke_classification`: `CI_DERIBIT_SMOKE_ACCEPTED_PROXY`
+- `phase23d_ci_smoke_accepted`: `true`
+- `phase23d_ci_smoke_message_count`: `19`
+- `phase23d_ci_smoke_rejection_reasons`: `[]`
+- `phase23d_ci_smoke_b8_status`: `CLOSED_BY_PROXY_CI_PROOF`
+- `phase23e_isolated_workflow_file`: `.github/workflows/deribit-public-smoke.yml`
+- `phase23e_isolated_workflow_commit`: `dd0e9c6c21894ab731b7ab3542f8e36a516e8ad5`
+- `phase23e_isolated_workflow_classification`: `ISOLATED_WORKFLOW_NOT_RUN_DEFAULT_BRANCH_BLOCKER`
+- `phase23f_smoke_proof_record`: `docs/crypto_core/DERIBIT_PUBLIC_SMOKE_PROOF_RECORD.md`
+- `phase23f_smoke_proof_record_status`: `ADVISORY_EVIDENCE_ONLY`
 
 ## Phase 22J Deep Research Dossier Intake Rules
 
