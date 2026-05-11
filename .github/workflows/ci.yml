@@ -8,6 +8,8 @@ on:
   schedule:
     # Weekly: every Sunday 02:00 UTC — runs full suite including slow tests
     - cron: "0 2 * * 0"
+  workflow_dispatch:
+    # Manually triggered only — used for Deribit public WS smoke proof
 
 permissions:
   contents: read
@@ -131,3 +133,67 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: /language:python
+
+  deribit-public-smoke:
+    name: deribit-public-smoke
+    # Runs ONLY when manually triggered via workflow_dispatch.
+    # PUBLIC MARKET DATA ONLY. NO CREDENTIALS. NO TRADING. NO SECRETS.
+    # Smoke proof for Deribit public WebSocket harness (Phase 23D).
+    # Does NOT affect normal push/PR CI pipeline.
+    # Does NOT unlock connector_ready_dialects or operational_status.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      PYTHONPATH: ${{ github.workspace }}/src
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run Deribit public WS smoke
+        run: |
+          set -euo pipefail
+          python scripts/crypto_core/deribit_public_ws_smoke.py \
+            --authorization PUBLIC_MARKET_DATA_ONLY \
+            --duration-seconds 10 \
+            --max-messages 20 \
+            > smoke_result.json
+
+      - name: Validate smoke result
+        run: |
+          set -euo pipefail
+          python - <<'EOF'
+          import json, sys
+          with open("smoke_result.json") as f:
+              result = json.load(f)
+          accepted = result.get("accepted", False)
+          msg_count = result.get("message_count", 0)
+          rejections = result.get("rejection_reasons", [])
+          print(f"accepted={accepted} message_count={msg_count} rejection_reasons={rejections}")
+          if not accepted:
+              print("SMOKE PROOF FAILED:", rejections, file=sys.stderr)
+              sys.exit(1)
+          print("SMOKE PROOF ACCEPTED")
+          EOF
+
+      - name: Upload smoke proof artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deribit-public-smoke-proof
+          path: smoke_result.json
+          retention-days: 90
