@@ -56,6 +56,11 @@ fail-closed operational readiness gate has been acquired and reviewed.
 - `phase23f_smoke_proof_record_status`: `ADVISORY_EVIDENCE_ONLY`
 - `phase24a_operator_approval_packet`: `docs/crypto_core/DERIBIT_B1_B5_OPERATOR_APPROVAL_PACKET.md`
 - `phase24a_operator_approval_packet_status`: `REVIEW_PACKET_ONLY`
+- `phase23l_main_smoke_run_id`: `25671516104`
+- `phase23l_main_smoke_classification`: `MAIN_ISOLATED_DERIBIT_SMOKE_ACCEPTED`
+- `phase23l_main_smoke_b8_contribution`: `CLOSED_BY_PROXY_AND_MAIN_CI_PUBLIC_SMOKE_PROOF`
+- `phase23l_main_smoke_status`: `ADVISORY_EVIDENCE_ONLY`
+- `phase23l_main_smoke_readiness_effect`: `DOES_NOT_CLOSE_B1_B5`
 
 ## Phase 22J Deep Research Dossier Intake Rules
 

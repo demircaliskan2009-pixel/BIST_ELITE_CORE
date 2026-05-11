@@ -103,10 +103,10 @@ def test_smoke_proof_record_public_market_data_only() -> None:
 
 
 def test_smoke_proof_record_b8_closed() -> None:
-    """Assert 8: B8 is present and marked CLOSED_BY_PROXY_CI_PROOF."""
+    """Assert 8: B8 is present and marked CLOSED_BY_PROXY_AND_MAIN_CI_PUBLIC_SMOKE_PROOF."""
     content = _read(PROOF_RECORD)
     assert "B8" in content
-    assert "CLOSED_BY_PROXY_CI_PROOF" in content
+    assert "CLOSED_BY_PROXY_AND_MAIN_CI_PUBLIC_SMOKE_PROOF" in content
 
 
 # ---------------------------------------------------------------------------
@@ -263,3 +263,59 @@ def test_proof_record_dry_run_true() -> None:
     """Smoke proof record confirms dry_run: true."""
     content = _read(PROOF_RECORD)
     assert "dry_run: true" in content
+
+
+# ---------------------------------------------------------------------------
+# Phase 23L main isolated smoke proof assertions
+# ---------------------------------------------------------------------------
+
+
+def test_smoke_proof_record_phase23l_run_id() -> None:
+    """Phase 23L run ID 25671516104 is present in the proof record."""
+    content = _read(PROOF_RECORD)
+    assert "25671516104" in content
+
+
+def test_smoke_proof_record_phase23l_classification() -> None:
+    """Phase 23L classification MAIN_ISOLATED_DERIBIT_SMOKE_ACCEPTED is present."""
+    content = _read(PROOF_RECORD)
+    assert "MAIN_ISOLATED_DERIBIT_SMOKE_ACCEPTED" in content
+
+
+def test_smoke_proof_record_phase23l_readiness_effect() -> None:
+    """Phase 23L readiness effect is DOES_NOT_CLOSE_B1_B5."""
+    content = _read(PROOF_RECORD)
+    assert "DOES_NOT_CLOSE_B1_B5" in content
+
+
+def test_smoke_proof_record_phase23l_scope_advisory() -> None:
+    """Phase 23L scope is ADVISORY_PUBLIC_MARKET_DATA_ONLY."""
+    content = _read(PROOF_RECORD)
+    assert "ADVISORY_PUBLIC_MARKET_DATA_ONLY" in content
+
+
+def test_smoke_proof_record_phase23l_b8_combined_status() -> None:
+    """B8 status reflects both proxy and main isolated proof."""
+    content = _read(PROOF_RECORD)
+    assert "CLOSED_BY_PROXY_AND_MAIN_CI_PUBLIC_SMOKE_PROOF" in content
+
+
+def test_smoke_proof_record_phase23l_b1_b5_not_closed() -> None:
+    """Phase 23L proof does not close B1-B5; DOES_NOT_CLOSE_B1_B5 is explicit."""
+    content = _read(PROOF_RECORD)
+    assert "DOES_NOT_CLOSE_B1_B5" in content
+    assert "does not satisfy B1" in content or "B1\u2013B5 requirements" in content
+
+
+def test_smoke_proof_record_phase23l_connector_not_ready() -> None:
+    """Phase 23L proof does not make connector_ready_dialects non-empty."""
+    content = _read(PROOF_RECORD)
+    assert "connector_ready_dialects()" in content
+    assert "connector_ready_dialects:               []" in content
+
+
+def test_smoke_proof_record_phase23l_operational_status_blocked() -> None:
+    """Phase 23L proof does not change operational_status from BLOCKED."""
+    content = _read(PROOF_RECORD)
+    assert "operational_status:                     BLOCKED" in content
+    assert "does not change `operational_status` from `BLOCKED`" in content
