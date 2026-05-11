@@ -67,8 +67,8 @@ jobs:
 
   slow-tests:
     name: slow-tests
-    # Only run on schedule (weekly) or when explicitly triggered
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Only run on schedule (weekly)
+    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
