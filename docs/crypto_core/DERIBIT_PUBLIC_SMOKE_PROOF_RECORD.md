@@ -23,6 +23,7 @@ This document does NOT:
 
 - `phase23d_smoke_classification`: `CI_DERIBIT_SMOKE_ACCEPTED_PROXY`
 - `phase23e_isolated_workflow_classification`: `ISOLATED_WORKFLOW_NOT_RUN_DEFAULT_BRANCH_BLOCKER`
+- `phase23l_main_smoke_classification`: `MAIN_ISOLATED_DERIBIT_SMOKE_ACCEPTED`
 
 ---
 
@@ -127,16 +128,56 @@ workflow file not registered on the default branch.
 
 ---
 
+## Phase 23L Main Isolated Smoke Proof
+
+- `phase23l_main_smoke_run_id`: `25671516104`
+- `phase23l_main_smoke_classification`: `MAIN_ISOLATED_DERIBIT_SMOKE_ACCEPTED`
+- `phase23l_main_smoke_accepted`: `true`
+- `phase23l_main_smoke_message_count`: `19`
+- `phase23l_main_smoke_rejection_reasons`: `[]`
+- `phase23l_main_smoke_dry_run`: `true`
+- `phase23l_main_smoke_operator_authorization`: `PUBLIC_MARKET_DATA_ONLY`
+- `phase23l_main_smoke_ws_url`: `wss://www.deribit.com/ws/api/v2`
+- `phase23l_main_smoke_scope`: `ADVISORY_PUBLIC_MARKET_DATA_ONLY`
+- `phase23l_main_smoke_readiness_effect`: `DOES_NOT_CLOSE_B1_B5`
+- `phase23l_main_smoke_run_url`: `https://github.com/demircaliskan2009-pixel/BIST_ELITE_CORE/actions/runs/25671516104`
+- `phase23l_main_smoke_branch`: `main` (registered on default branch)
+
+### What This Proof Establishes (Phase 23L)
+
+1. The GitHub Actions runner has unrestricted HTTPS access to
+   `wss://www.deribit.com/ws/api/v2` from the main-branch isolated workflow.
+2. The isolated smoke workflow registered on `main` successfully accepted
+   public order-book events with `accepted: true`, `message_count: 19`,
+   `rejection_reasons: []`, `dry_run: true`.
+3. The local network block (B8) is confirmed closed from cloud infrastructure
+   via a main-branch isolated workflow run.
+
+### What This Proof Does NOT Establish (Phase 23L)
+
+- It does not verify checksum model, heartbeat/liveness protocol, or rate limits.
+- It does not prove testnet/production semantic equivalence.
+- It does not prove regional or legal access for all jurisdictions.
+- It does not approve any manual claim review row.
+- It does not satisfy B1–B5 requirements.
+- It does not authorize paper or shadow trading.
+- It does not make `connector_ready_dialects()` non-empty.
+- It does not change `operational_status` from `BLOCKED`.
+
+---
+
 ## Blocker Summary
 
 ### B8 — Cloud Reachability
 
 - `blocker_id`: `B8`
 - `description`: Local network blocks Deribit HTTPS/WSS
-- `status`: `CLOSED_BY_PROXY_CI_PROOF`
-- `evidence`: Phase 23D run 25658030184, job `deribit-public-smoke`, conclusion `success`
+- `status`: `CLOSED_BY_PROXY_AND_MAIN_CI_PUBLIC_SMOKE_PROOF`
+- `evidence_phase23d`: Phase 23D run 25658030184, job `deribit-public-smoke`, conclusion `success`
+- `evidence_phase23l`: Phase 23L run 25671516104, classification `MAIN_ISOLATED_DERIBIT_SMOKE_ACCEPTED`, accepted `true`
 - `note`: Local block remains (DNS `::1`, TCP timeout to `213.14.227.50:443`);
-  cloud infrastructure has unrestricted access.
+  cloud infrastructure has unrestricted access confirmed by both proxy CI (Phase 23D)
+  and main isolated run (Phase 23L).
 
 ### Remaining Blockers (B1–B5) — All Still Open
 
