@@ -1,10 +1,16 @@
-"""Phase 25B — Deribit human-review worksheet validator.
+"""Phase 25B/25F — Deribit human-review worksheet validator.
 
 Fail-closed deterministic validator for the three human-review surfaces that
 gate Deribit B1-B5:
   1. Source Snapshot Manifest  (B2 — 6 source rows)
   2. Claim Review Worksheet    (B2 — 23 claim rows)
   3. Operational Policy Review Worksheet (B3 — 7 policy rows)
+
+Phase separation:
+  Phase 25 covers B2/B3 evidence review completion only.
+  Connector enablement (B5) is a distinct PUBLIC_MARKET_DATA_ONLY phase that
+  requires separate explicit authorization and is not reachable from here.
+  The `separate_connector_enablement` policy row is permanently DEFER in Phase 25.
 
 This module:
 - does NOT approve any B1-B5 blocker.
@@ -41,6 +47,11 @@ _MANIFEST_EXPECTED_ROW_COUNT = 6
 _CLAIM_EXPECTED_ROW_COUNT = 23
 _POLICY_EXPECTED_ROW_COUNT = 7
 
+# The separate_connector_enablement policy row must remain DEFER in Phase 25.
+# It is NOT a failure for B2/B3 evidence review completion; connector enablement
+# is a distinct PUBLIC_MARKET_DATA_ONLY phase requiring explicit authorization.
+_CONNECTOR_ENABLEMENT_ROW_ID = "separate_connector_enablement"
+
 
 # ---------------------------------------------------------------------------
 # Typed result
@@ -60,17 +71,31 @@ class DeribitReviewRowResult:
 class DeribitManualReviewReadinessResult:
     """Fail-closed result of the three Deribit human-review surfaces.
 
-    accepted=True only when every row on every worksheet has a non-PENDING
-    decision with all required metadata populated and no reject/defer rows
-    exist. In the current repo state this will always be False.
+    Phase separation:
+      evidence_review_complete — True when all B2/B3 source-snapshot, claim,
+        and policy rows carry a non-PENDING/non-REJECTED human decision with
+        required metadata, EXCLUDING the `separate_connector_enablement` policy
+        row (exempt: must remain DEFERRED in Phase 25).
 
-    ready_for_engineering_patch=True only when accepted=True. Signals that
-    dialect fields in public_feed_dialects.py may be updated with approved
-    policy values.
+      ready_for_engineering_patch — True when evidence_review_complete is True.
+        Signals that dialect policy values in public_feed_dialects.py may be
+        updated. Does NOT enable connector readiness.
+
+      connector_enablement_ready — Always False from this validator. Connector
+        enablement is a distinct PUBLIC_MARKET_DATA_ONLY phase that requires
+        explicit separate authorization. connector_ready_dialects() must remain
+        empty after Phase 25.
+
+      accepted — True only when every row on every surface (including
+        separate_connector_enablement) is non-PENDING, non-REJECTED, and
+        non-DEFERRED. Unreachable in Phase 25. In the current repo state always
+        False.
     """
 
     accepted: bool
+    evidence_review_complete: bool
     ready_for_engineering_patch: bool
+    connector_enablement_ready: bool
     b1_b5_status: dict[str, str]  # e.g. {"B1": "BLOCKED", ...}
     missing_metadata: tuple[str, ...]
     pending_rows: tuple[str, ...]
@@ -345,6 +370,19 @@ def evaluate_deribit_manual_review_readiness(
         and len(missing_meta) == 0
     )
 
+    # evidence_review_complete: same as accepted but exempts the
+    # separate_connector_enablement DEFERRED row — that row must remain DEFER
+    # in Phase 25 and is resolved in a dedicated connector-enablement phase.
+    _ce_deferred_key = f"policy_review:{_CONNECTOR_ENABLEMENT_ROW_ID}"
+    other_deferred = [r for r in deferred_rows if r != _ce_deferred_key]
+    evidence_review_complete = (
+        len(load_errors) == 0
+        and len(pending_rows) == 0
+        and len(rejected_rows) == 0
+        and len(other_deferred) == 0
+        and len(missing_meta) == 0
+    )
+
     # B1-B5 status map (coarse summary — engineering detail in row_results)
     b1_b5: dict[str, str] = {
         "B1": "BLOCKED",  # B1 gates on B2+B3+B4 — always blocked while those are blocked
@@ -352,7 +390,12 @@ def evaluate_deribit_manual_review_readiness(
         if any(rr.surface in ("source_snapshot", "claim_review") and rr.status != "APPROVED" for rr in all_row_results)
         else "READY",
         "B3": "BLOCKED"
-        if any(rr.surface == "policy_review" and rr.status != "APPROVED" for rr in all_row_results)
+        if any(
+            rr.surface == "policy_review"
+            and rr.status != "APPROVED"
+            and not (rr.row_id == _CONNECTOR_ENABLEMENT_ROW_ID and rr.status == "DEFERRED")
+            for rr in all_row_results
+        )
         else "READY",
         "B4": "BLOCKED",  # static_registry_verified=false — engineering step after B2+B3
         "B5": "BLOCKED",  # connector_ready_dialects empty — separate enablement phase
@@ -365,7 +408,9 @@ def evaluate_deribit_manual_review_readiness(
 
     return DeribitManualReviewReadinessResult(
         accepted=accepted,
-        ready_for_engineering_patch=accepted,
+        evidence_review_complete=evidence_review_complete,
+        ready_for_engineering_patch=evidence_review_complete,
+        connector_enablement_ready=False,
         b1_b5_status=b1_b5,
         missing_metadata=tuple(dict.fromkeys(missing_meta)),
         pending_rows=tuple(dict.fromkeys(pending_rows)),
