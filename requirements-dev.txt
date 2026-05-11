@@ -13,4 +13,4 @@ pytest-cov==5.0.0
 flask>=3.0.0
 
 click==8.1.7
-typing_extensions>=4.9
+typing_extensions>=4.15.0
