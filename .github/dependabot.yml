@@ -6,3 +6,8 @@ updates:
   - package-ecosystem: "pip"
     directory: "/"
     schedule: { interval: "weekly" }
+    groups:
+      python-version-updates:
+        patterns:
+          - "*"
+        applies-to: version-updates
