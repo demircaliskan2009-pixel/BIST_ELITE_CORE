@@ -9,9 +9,9 @@ Faz-3 / Adım-1: Registry implementasyonu ve yardımcı fonksiyonlar.
 
 from .data_registry import (
     DatasetRegistry,
-    register_dataset,
-    load_registered_dataset,
     get_default_registry,
+    load_registered_dataset,
+    register_dataset,
 )
 
 __all__ = [

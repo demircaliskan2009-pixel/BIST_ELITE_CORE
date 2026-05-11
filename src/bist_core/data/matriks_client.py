@@ -13,13 +13,12 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional
-from urllib.request import Request, urlopen
+from typing import Any, Dict, List
 from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from bist_core.backtest.backtest_engine import OHLCVBar
 from bist_core.data.matriks_adapter import prepare_bars_for_backtest
-
 
 # ---------------------------------------------------------------------------
 # Exceptions

@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
-from .registry import DatasetRegistry, get_default_registry, get_bist_core_home
 
+from .registry import DatasetRegistry, get_bist_core_home, get_default_registry
 
 __all__ = [
     "DEFAULT_SNAPSHOT_ENV",

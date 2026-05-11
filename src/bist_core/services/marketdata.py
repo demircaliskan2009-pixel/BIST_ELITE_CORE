@@ -1,7 +1,8 @@
 from pathlib import Path
-from typing import List, Dict
-from bist_core.providers import LocalCSVProvider, VendorAPIProvider, VendorAPIConfig
+from typing import Dict, List
+
 from bist_core import config
+from bist_core.providers import LocalCSVProvider, VendorAPIConfig, VendorAPIProvider
 
 
 class MarketData:

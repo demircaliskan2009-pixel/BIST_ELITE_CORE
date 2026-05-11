@@ -13,8 +13,8 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from bist_core.models.ohlcv import OHLCVBar
 from bist_core.data.matriks_adapter import convert_bars
+from bist_core.models.ohlcv import OHLCVBar
 
 _URL = "https://apitest.matriksdata.com/dumrul/v1/tick/bar.gz"
 _TOKEN_ENV = "MATRIKS_API_TOKEN"

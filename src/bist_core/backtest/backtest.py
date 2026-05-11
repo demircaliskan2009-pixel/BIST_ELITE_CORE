@@ -4,17 +4,29 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from bist_core.models.ohlcv import OHLCVBar
-
 from bist_core.decision.decision_engine_v2 import DecisionEngineV2
 from bist_core.execution.execution_model import ExecutionModel
+from bist_core.models.ohlcv import OHLCVBar
 
 from .metrics import compute_metrics
-
 
 MIN_BARS = 3
 DEFAULT_EXECUTION_MODEL = ExecutionModel(slippage_bps=5.0, spread_bps=10.0, commission_bps=2.0)
 INITIAL_CAPITAL = 100_000.0
+_ENTER_ACTIONS = {
+    "enter",
+    "enter_long",
+    "enter_short",
+    "enter_small",
+    "aggressive_enter",
+    "partial_enter",
+}
+_EXIT_ACTIONS = {
+    "exit",
+    "exit_long",
+    "exit_short",
+    "partial_exit",
+}
 
 
 class BacktestEngine:
@@ -80,7 +92,15 @@ class BacktestEngine:
                     if not isinstance(decision, dict):
                         continue
 
-                    action = decision.get("action")
+                    raw_action = str(decision.get("action") or "").strip().lower()
+                    if raw_action in _ENTER_ACTIONS:
+                        action = "enter"
+                    elif raw_action in _EXIT_ACTIONS:
+                        action = "exit"
+                    elif raw_action == "hold":
+                        action = "hold"
+                    else:
+                        action = None
 
                     if action not in ("enter", "hold", "exit"):
                         continue

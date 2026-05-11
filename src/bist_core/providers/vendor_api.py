@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Dict, List, Mapping, Optional, Union
+
 import requests
 
 from bist_core.env import network_allowed

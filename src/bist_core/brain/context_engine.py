@@ -8,10 +8,11 @@ Pure stdlib, deterministic, no network.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Sequence
 
 from bist_core.backtest.backtest_engine import OHLCVBar
-from bist_core.brain.regime_engine import RegimeEngine
+from bist_core.brain.regime_engine import (NO_REGIME, TREND_DOWN, TREND_UP,
+                                           RegimeEngine)
 from bist_core.brain.strategy_engine import Decision
 
 
@@ -52,7 +53,7 @@ class ContextEngine:
             return None
 
         market_regime = self._regime.detect_regime(bars)
-        if market_regime is None:
+        if market_regime.regime == NO_REGIME:
             return None
 
         close = bars[-1].close
@@ -62,11 +63,11 @@ class ContextEngine:
         if side == "long":
             entry_valid = close <= entry * 1.01
             missed_entry = close > entry * 1.03
-            pullback_possible = close < entry and market_regime.regime == "bull"
+            pullback_possible = close < entry and market_regime.regime == TREND_UP
         else:
             entry_valid = close >= entry * 0.99
             missed_entry = close < entry * 0.97
-            pullback_possible = close > entry and market_regime.regime == "bear"
+            pullback_possible = close > entry and market_regime.regime == TREND_DOWN
 
         return DecisionContext(
             symbol=decision.symbol,

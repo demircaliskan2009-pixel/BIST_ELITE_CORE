@@ -1,59 +1,64 @@
 from __future__ import annotations
 
 import csv
-from datetime import date as Date, datetime, timezone
 import json
 import os
-import uuid
-from pathlib import Path
 import platform
 import time
+import uuid
+from datetime import date as Date
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from bist_core import config
-from bist_core.services.advisor import build_advice_for_symbol
+from bist_core.advisory.generate import generate_advice
+from bist_core.dossier import write_dossier
+from bist_core.graph import write_link_graph
+from bist_core.knowledge import KnowledgeBase
+from bist_core.market_data import resolve_provider
+from bist_core.models.baseline import BaselineModel
+from bist_core.orders.strategies import resolve_strategy
+from bist_core.policy import rules_engine, rules_schema
+from bist_core.providers.corporate_actions.offline_file import (
+    OfflineFileCorporateActionsProvider,
+)
+from bist_core.providers.events.offline_file import OfflineFileEventsProvider
+from bist_core.providers.instruments.offline_file import OfflineFileInstrumentsProvider
+from bist_core.research.cache import build_research_cache
+from bist_core.risk import load_risk_rules, validate_orders_intent
+from bist_core.risk.gates import gate_order_rules, gate_restrictions
+from bist_core.risk.restrictions import get_restrictions_path, load_restrictions
+from bist_core.risk.rulespack import get_rulespack_dir, load_rulespack
+from bist_core.services import (
+    castore,
+    corporate_actions_canon,
+    instrument_timeline,
+    instrumentstore,
+    price_adjust,
+    snapshot_integrity,
+    trading_calendar,
+)
+from bist_core.services import instrument_master as instrument_master_mod
 from bist_core.services.adjustments import build_adjust_factors
+from bist_core.services.advisor import build_advice_for_symbol
 from bist_core.services.dossier import (
     atomic_write_json,
     build_dossiers_for_day,
     build_manifest,
 )
-from bist_core.market_data import resolve_provider
 from bist_core.services.events_pipeline import (
+    _provider_raw_cache,
     build_events_jsonl_for_day,
     ingest_events_from_file,
-    _provider_raw_cache,
 )
-from bist_core.providers.events.offline_file import OfflineFileEventsProvider
-from bist_core.services import instrumentstore
 from bist_core.services.features import (
     compute_features,
-    load_history as features_load_history,
     write_features,
 )
-from bist_core.providers.instruments.offline_file import OfflineFileInstrumentsProvider
-from bist_core.services import castore
-from bist_core.providers.corporate_actions.offline_file import (
-    OfflineFileCorporateActionsProvider,
+from bist_core.services.features import (
+    load_history as features_load_history,
 )
-from bist_core.services import instrument_timeline
-from bist_core.services import trading_calendar
-from bist_core.services import snapshot_integrity
-from bist_core.policy import rules_engine, rules_schema
-from bist_core.orders.strategies import resolve_strategy
-from bist_core.risk import load_risk_rules, validate_orders_intent
-from bist_core.risk.gates import gate_order_rules, gate_restrictions
-from bist_core.risk.rulespack import get_rulespack_dir, load_rulespack
-from bist_core.risk.restrictions import get_restrictions_path, load_restrictions
-from bist_core.services import instrument_master as instrument_master_mod
-from bist_core.services import corporate_actions_canon
-from bist_core.services import price_adjust
-from bist_core.research.cache import build_research_cache
-from bist_core.advisory.generate import generate_advice
-from bist_core.knowledge import KnowledgeBase
-from bist_core.dossier import write_dossier
-from bist_core.graph import write_link_graph
-from bist_core.models.baseline import BaselineModel
 
 
 def run_eod_pipeline(

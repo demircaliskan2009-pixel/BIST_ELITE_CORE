@@ -1,7 +1,7 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 
 SLIPPAGE_PCT = 0.0005  # 0.05% default
 

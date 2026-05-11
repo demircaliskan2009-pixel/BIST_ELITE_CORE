@@ -5,7 +5,6 @@ from typing import Any
 
 from bist_core.services.chat_service import build_chat_service_payload
 
-
 _ROUTE_TITLE = {
     "scan": "Tarama Sonucu",
     "comparison": "Sembol Karşılaştırma",

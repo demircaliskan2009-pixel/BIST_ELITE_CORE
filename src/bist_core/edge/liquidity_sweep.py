@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 
 def detect_liquidity_sweep(bars: List[Dict[str, float]]) -> Dict[str, Any]:

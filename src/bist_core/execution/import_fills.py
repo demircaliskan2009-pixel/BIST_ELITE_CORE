@@ -7,8 +7,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from bist_core.execution.fills_schema import read_fills_csv
 from bist_core.execution.fifo import run_fifo
+from bist_core.execution.fills_schema import read_fills_csv
 from bist_core.execution.reporting import (
     compute_summary_totals,
     write_execution_summary,

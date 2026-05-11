@@ -1,11 +1,13 @@
 from __future__ import annotations
+
 import math
 from typing import Any
-from bist_core.models.ohlcv import OHLCVBar
+
+from bist_core.brain.scoring_engine import score_symbol
 from bist_core.execution.engine import ExecutionEngine, OrderState
-from bist_core.risk.portfolio_state import PortfolioState
 from bist_core.features.feature_engine import RegistryFeatureEngine
-from bist_core.brain.scoring_engine import score_symbol, rank_symbols
+from bist_core.models.ohlcv import OHLCVBar
+from bist_core.risk.portfolio_state import PortfolioState
 
 SCORE_FEATURES = ['atr_14', 'ema_20', 'momentum_20', 'rsi_14', 'sma_20', 'sma_50']
 MIN_TRADES_REQUIRED = 5
@@ -181,7 +183,7 @@ def run_walk_forward(
     segments = []
     start = 0
     while start + train_size + test_size <= len(bars):
-        test_bars = bars[start + train_size: start + train_size + test_size]
+        bars[start + train_size: start + train_size + test_size]
         result = run_backtest(symbol, bars[:start + train_size + test_size],
                               initial_capital=initial_capital,
                               warmup_bars=start + train_size)

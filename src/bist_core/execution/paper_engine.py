@@ -5,11 +5,9 @@ performance metrics and deterministic replay.  Pure stdlib, no network.
 """
 
 from __future__ import annotations
-
-import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +124,10 @@ class PaperTrade:
     pnl: float = 0.0
     fees: float = 0.0
     slippage: float = 0.0
+    edge: str = ""
+    source: str = "technical"
+    event_kind: str = ""
+    event_multiplier: float = 1.0
 
     def close(self, exit_price: float, exit_time: str, fees: float = 0.0) -> None:
         self.exit_time = exit_time
@@ -158,6 +160,10 @@ class PaperTrade:
             "fees": self.fees,
             "slippage": self.slippage,
             "r_multiple": self.r_multiple,
+            "edge": self.edge,
+            "source": self.source,
+            "event_kind": self.event_kind,
+            "event_multiplier": self.event_multiplier,
         }
 
 
@@ -264,6 +270,7 @@ class PaperExecutionEngine:
         self._fee_bps = fee_bps
         self._journal = PaperTradeJournal()
         self._orders: list[_SimOrder] = []
+        self._order_counter = 0
 
     @property
     def journal(self) -> PaperTradeJournal:
@@ -272,7 +279,8 @@ class PaperExecutionEngine:
     # -- order creation ---------------------------------------------------
 
     def _gen_id(self) -> str:
-        return uuid.uuid4().hex[:12]
+        self._order_counter += 1
+        return f"PE-{self._order_counter:06d}"
 
     def submit_order(
         self,
@@ -349,6 +357,10 @@ class PaperExecutionEngine:
         position_size: int,
         market_price: float,
         entry_time: str,
+        edge: str = "",
+        source: str = "technical",
+        event_kind: str = "",
+        event_multiplier: float = 1.0,
     ) -> PaperTrade | None:
         if entry <= 0 or stop <= 0 or target <= 0 or position_size <= 0:
             return None
@@ -376,6 +388,10 @@ class PaperExecutionEngine:
             position_size=position_size,
             entry_time=entry_time,
             slippage=slippage,
+            edge=edge,
+            source=source,
+            event_kind=event_kind,
+            event_multiplier=event_multiplier,
         )
         self._journal.add(trade)
         return trade

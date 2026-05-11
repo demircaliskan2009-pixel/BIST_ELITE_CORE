@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from datetime import date as Date
-from pathlib import Path
 import json
 import os
 import re
 import time
+from datetime import date as Date
+from pathlib import Path
 from typing import List, Optional
 
-from bist_core.services.advisor import build_advice_for_symbol
 from bist_core.services import eventstore
+from bist_core.services.advisor import build_advice_for_symbol
 from bist_core.services.marketdata import MarketData
 
 

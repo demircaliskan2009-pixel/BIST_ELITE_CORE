@@ -6,17 +6,17 @@ import math
 import os
 from typing import Any, Dict, Optional
 
-from bist_core.edge.bucket_key import edge_bucket_key, regime_from_feat
-from bist_core.edge.edge_store import EdgeStore
-from bist_core.features.edge_features_v2 import FeatureEngineV2
-from bist_core.models.ohlcv import OHLCVBar
+from bist_core.analytics.expectancy import tracker
 from bist_core.decision.edge_signal import attach_edge_signal_to_decision, compute_edge_signal
 from bist_core.decision.institutional_brain import compute_institutional_decision
 from bist_core.decision.price_intelligence import apply_realtime_price_intelligence
+from bist_core.edge.bucket_key import edge_bucket_key, regime_from_feat
+from bist_core.edge.edge_store import EdgeStore
 from bist_core.exit_engine import compute_exit_decision
 from bist_core.exit_engine_v2 import compute_exit_v2
+from bist_core.features.edge_features_v2 import FeatureEngineV2
+from bist_core.models.ohlcv import OHLCVBar
 from bist_core.portfolio_engine_v2 import apply_portfolio_v2_to_trades
-from bist_core.analytics.expectancy import tracker
 
 
 def run_portfolio_v2_once(context: Dict[str, Any]) -> None:
@@ -121,7 +121,9 @@ def _strict_regime_blocks_new_entry(
     """RANGE entries are blocked when edge is below strict floor."""
     if _strict_trade_regime(market_state) != "RANGE":
         return False
-    if float(edge_score) >= 0.60:
+    if int(breakout_ready) <= 0:
+        return True
+    if float(edge_score) >= 0.75:
         return False
     return True
 
@@ -285,6 +287,8 @@ def _apply_mtf_conflict_final(
 def _apply_global_edge_floor(decision: Dict[str, Any]) -> Dict[str, Any]:
     """Final global gate: enter-class actions require edge >= 0.60 (exits unchanged)."""
     act = str(decision.get("action", "hold")).strip().lower()
+    if act == "enter_small":
+        return decision
     if act not in _ENTER_ACTIONS_HARD_GATE:
         return decision
     try:
@@ -312,6 +316,8 @@ def _apply_hard_edge_confidence_final(
 ) -> Dict[str, Any]:
     """Final stage: no new trades if edge < 0.60 or confidence < 0.55."""
     act = str(decision.get("action", "hold")).strip().lower()
+    if act == "enter_small":
+        return decision
     if act not in _ENTER_ACTIONS_HARD_GATE:
         return decision
 
@@ -762,10 +768,46 @@ class DecisionEngineV2:
             return attach_edge_signal_to_decision(_no_trade("engine_exception"))
 
     def _evaluate_multi_tf(self, context: Dict[str, Any], price: float) -> Dict[str, Any]:
-        """Multi-TF path: institutional brain only (no MultiTFEdge / EdgeFusion)."""
+        """Multi-TF path: require deterministic cross-TF edge consensus before entry."""
+        multi_tf = context.get("multi_tf")
+        if isinstance(multi_tf, dict) and multi_tf:
+            tf_hits: list[tuple[str, float]] = []
+            for tf_name, tf_bars in multi_tf.items():
+                if not isinstance(tf_bars, list) or len(tf_bars) < 50:
+                    continue
+                tf_feat = self.fe.extract(tf_bars)
+                tf_key = edge_bucket_key(tf_feat)
+                tf_edge = self.edge_store.get_tf(str(tf_name), tf_key)
+                if not isinstance(tf_edge, dict):
+                    continue
+                try:
+                    tf_exp = float(tf_edge.get("exp", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    tf_exp = 0.0
+                if tf_exp > 0.0:
+                    tf_hits.append((str(tf_name), tf_exp))
+            if len(tf_hits) < 2:
+                return _no_trade("multi_tf_no_consensus")
+
+            avg_exp = sum(exp for _, exp in tf_hits) / float(len(tf_hits))
+            consensus_edge = round(max(_HARD_EDGE_MIN, 0.60 + min(0.30, avg_exp)), 6)
+            consensus_confidence = round(_clamp01(0.55 + min(0.30, avg_exp * 2.0)), 6)
+            return {
+                "action": "enter",
+                "reason": f"MULTI_EDGE_{len(tf_hits)}",
+                "confidence": consensus_confidence,
+                "score": consensus_edge,
+                "edge_score": consensus_edge,
+                "edge": consensus_edge,
+                "risk": {"stop_price": float(price) * 0.97},
+                "position_size": min(1.0, consensus_edge * consensus_confidence),
+                "strategy": "multi_edge",
+                "price_source": str(context.get("price_source", "ideal")),
+                "tf_consensus": [tf_name for tf_name, _ in tf_hits],
+            }
+
         bars = context.get("bars")
         if not isinstance(bars, list) or len(bars) < 50:
-            multi_tf = context.get("multi_tf")
             if isinstance(multi_tf, dict):
                 bars = None
                 for tf in ("5m", "60m", "1m", "1d"):
@@ -1568,48 +1610,50 @@ class DecisionEngineV2:
                         "edge": float(edge_score),
                         "no_trade": True,
                     }
-            MIN_EDGE = 0.60
-            _e_chk = float(edge_score)
-            print(
-                {
-                    "EDGE_THRESHOLD_CHECK": {
-                        "edge": float(edge_score),
-                        "threshold": MIN_EDGE,
-                    }
-                },
-                flush=True,
-            )
-            if _e_chk < MIN_EDGE:
-                return {
-                    "action": "hold",
-                    "reason": "EDGE_BELOW_THRESHOLD",
-                    "edge": float(_e_chk),
-                    "edge_score": float(_e_chk),
-                    "no_trade": True,
-                    "market_state": st,
-                }
-            if _strict_regime_blocks_new_entry(
-                st, float(edge_score), int(breakout_ready)
-            ):
+            apply_strict_entry_gates = ia != "enter_small" or _mtf_raw is not None
+            if apply_strict_entry_gates:
+                MIN_EDGE = 0.60
+                _e_chk = float(edge_score)
                 print(
                     {
-                        "REGIME_BLOCK": {
-                            "symbol": symbol or "X",
-                            "regime": "RANGE",
+                        "EDGE_THRESHOLD_CHECK": {
                             "edge": float(edge_score),
-                            "breakout_ready": int(breakout_ready),
-                            "rule": "REGIME_BLOCK_EDGE_TOO_LOW",
+                            "threshold": MIN_EDGE,
                         }
                     },
                     flush=True,
                 )
-                return {
-                    "action": "hold",
-                    "reason": "REGIME_BLOCK_EDGE_TOO_LOW",
-                    "edge": float(edge_score),
-                    "no_trade": True,
-                    "market_state": st,
-                }
+                if _e_chk < MIN_EDGE:
+                    return {
+                        "action": "hold",
+                        "reason": "EDGE_BELOW_THRESHOLD",
+                        "edge": float(_e_chk),
+                        "edge_score": float(_e_chk),
+                        "no_trade": True,
+                        "market_state": st,
+                    }
+                if _strict_regime_blocks_new_entry(
+                    st, float(edge_score), int(breakout_ready)
+                ):
+                    print(
+                        {
+                            "REGIME_BLOCK": {
+                                "symbol": symbol or "X",
+                                "regime": "RANGE",
+                                "edge": float(edge_score),
+                                "breakout_ready": int(breakout_ready),
+                                "rule": "REGIME_BLOCK_EDGE_TOO_LOW",
+                            }
+                        },
+                        flush=True,
+                    )
+                    return {
+                        "action": "hold",
+                        "reason": "strict_regime_range",
+                        "edge": float(edge_score),
+                        "no_trade": True,
+                        "market_state": st,
+                    }
             alloc_frac = float(inst["position_size_frac"])
             headroom = 0.30 - portfolio_exposure
             if headroom <= 0.0:

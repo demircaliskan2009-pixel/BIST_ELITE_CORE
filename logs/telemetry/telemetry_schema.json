@@ -1,0 +1,162 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Telemetry Envelope",
+  "description": "Per-stage telemetry event emitted by each pipeline stage. One JSONL file per day: telemetry_YYYY-MM-DD.jsonl",
+  "type": "object",
+  "required": [
+    "timestamp_ms",
+    "stage",
+    "metrics"
+  ],
+  "properties": {
+    "timestamp_ms": {
+      "type": "integer",
+      "description": "Unix epoch milliseconds when the event was emitted."
+    },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "data",
+        "edge",
+        "risk",
+        "execution"
+      ],
+      "description": "Pipeline stage that emitted this event."
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Stage-specific metrics. Keys vary by stage.",
+      "properties": {
+        "stage_latency_ms": {
+          "type": "number",
+          "description": "Wall-clock duration of this stage invocation in ms. Alert >5000ms."
+        },
+        "edge_hit_rate": {
+          "type": "number",
+          "description": "[edge] Fraction of evaluated edges that produced an actionable signal. Alert <0.30 over 24h."
+        },
+        "active_edges": {
+          "type": "integer",
+          "description": "[edge] Number of edges in ACTIVE EHS state."
+        },
+        "execution_slippage_bps": {
+          "type": "number",
+          "description": "[execution] Realised slippage vs expected in basis points. Alert >10 bps."
+        },
+        "fill_rate_pct": {
+          "type": "number",
+          "description": "[execution] Percentage of order quantity filled. Alert <85%."
+        },
+        "data_drift_psi": {
+          "type": "number",
+          "description": "[data] Population Stability Index per feature. Alert >0.25."
+        },
+        "data_drift_ks": {
+          "type": "number",
+          "description": "[data] Kolmogorov-Smirnov test statistic per feature. Alert p<0.01."
+        },
+        "book_crc32_fail_rate": {
+          "type": "number",
+          "description": "[data] CRC32 check failure rate. Alert >1%."
+        },
+        "ws_reconnect_count": {
+          "type": "integer",
+          "description": "[data] WebSocket reconnections in the last hour. Alert >3."
+        },
+        "shs_value": {
+          "type": "number",
+          "description": "[risk] System Health Score (0.0-1.0). Alert <0.50."
+        },
+        "kill_switch_level": {
+          "type": "integer",
+          "description": "[risk] Current kill-switch level (0-5). Alert >=1."
+        },
+        "cvar99_pct": {
+          "type": "number",
+          "description": "[risk] CVaR99 as fraction of NAV. Alert >0.05."
+        },
+        "margin_utilization_pct": {
+          "type": "number",
+          "description": "[risk] Current margin utilization percentage."
+        }
+      },
+      "additionalProperties": true
+    },
+    "alerts": {
+      "type": "array",
+      "description": "Threshold breach alerts emitted with this event.",
+      "items": {
+        "type": "object",
+        "required": [
+          "metric",
+          "value",
+          "threshold",
+          "severity"
+        ],
+        "properties": {
+          "metric": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number"
+          },
+          "threshold": {
+            "type": "number"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "warning",
+              "critical"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "timestamp_ms": 1700000000000,
+      "stage": "data",
+      "metrics": {
+        "stage_latency_ms": 42,
+        "ws_reconnect_count": 0,
+        "book_crc32_fail_rate": 0.0
+      },
+      "alerts": []
+    },
+    {
+      "timestamp_ms": 1700000000000,
+      "stage": "edge",
+      "metrics": {
+        "stage_latency_ms": 142,
+        "edge_hit_rate": 0.42,
+        "active_edges": 3
+      },
+      "alerts": []
+    },
+    {
+      "timestamp_ms": 1700000000000,
+      "stage": "risk",
+      "metrics": {
+        "stage_latency_ms": 18,
+        "shs_value": 0.82,
+        "kill_switch_level": 0,
+        "cvar99_pct": 0.031,
+        "margin_utilization_pct": 22.5
+      },
+      "alerts": []
+    },
+    {
+      "timestamp_ms": 1700000000000,
+      "stage": "execution",
+      "metrics": {
+        "stage_latency_ms": 85,
+        "execution_slippage_bps": 3.2,
+        "fill_rate_pct": 97.5
+      },
+      "alerts": []
+    }
+  ]
+}

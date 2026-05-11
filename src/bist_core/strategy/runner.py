@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional
 from bist_core.models import EODBar, PriceBand
 from bist_core.strategy.engine import decide
 
-
 STRATEGY_REPORT_SCHEMA_VERSION = 1
 
 

@@ -14,10 +14,14 @@ from pydantic import BaseModel, Field
 from bist_core.api.app import (
     AskRequest,
     ScanRequest,
-    ask as api_ask,
-    scan as api_scan,
     _latest_snapshot_day,
     _snapshot_root,
+)
+from bist_core.api.app import (
+    ask as api_ask,
+)
+from bist_core.api.app import (
+    scan as api_scan,
 )
 from bist_core.gateway.audit import AuditLogMiddleware, RequestIdMiddleware
 from bist_core.gateway.security import GatewaySecurityMiddleware, customize_openapi

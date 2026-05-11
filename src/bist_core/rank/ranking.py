@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from .weights import InvalidWeightsError, normalize_weights
-
 
 REQUIRED_FIELDS = ("symbol", "momentum", "volatility", "score_modifier", "reasons")
 

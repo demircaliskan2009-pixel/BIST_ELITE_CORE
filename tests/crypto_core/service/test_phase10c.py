@@ -1,0 +1,2517 @@
+"""Tests for Phase 10C — Campaign-to-Promotion Integration + Review Controller.
+
+Covers:
+  1.  PromotionReviewController construction (default + custom).
+  2.  Review status lifecycle transitions (CREATED → COLLECTING → READY → FINALIZED).
+  3.  Campaign intake from completed reports.
+  4.  Duplicate campaign handling (reject deterministically).
+  5.  Malformed/non-completed campaign rejection.
+  6.  Provisional recommendation snapshot.
+  7.  Final review report correctness.
+  8.  Persistence write/read (workflow state + final review).
+  9.  Malformed restore fail-closed.
+  10. Deterministic replay / restore.
+  11. Readiness interaction truthfulness.
+  12. Reporting API views.
+  13. Symbol breadth and distribution summaries.
+
+PRD reference: §2 System Orchestration, §7 Execution Engine.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from crypto_core.service.artifact_export import (
+    EscalationDecision,
+    EscalationStage,
+    OperatorDecisionPack,
+    OperatorDecisionPackCorruptError,
+    decision_pack_decision_summary,
+    decision_pack_from_dict,
+    decision_pack_missing_evidence,
+    decision_pack_next_inspection,
+    decision_pack_to_dict,
+    decision_pack_why_not_promotable,
+    escalation_decision_blockers,
+    escalation_decision_from_dict,
+    escalation_decision_missing_evidence,
+    escalation_decision_revalidation,
+    escalation_decision_summary,
+    escalation_decision_to_dict,
+    escalation_decision_why_not_higher,
+    export_escalation_decision,
+    export_operator_decision_pack,
+    export_sleeve_portfolio_snapshot,
+    load_escalation_decision,
+    load_operator_decision_pack,
+    load_sleeve_portfolio_snapshot,
+)
+from crypto_core.service.campaign import (
+    AcceptanceResult,
+    AcceptanceVerdict,
+    CampaignReport,
+    CampaignSleeveLinkSummary,
+    CampaignSnapshot,
+    CriterionResult,
+    StabilityRollup,
+    SymbolParticipation,
+)
+from crypto_core.service.escalation_review_controller import (
+    EscalationReviewController,
+    EscalationReviewStatus,
+    EscalationWorkflowCorruptError,
+    current_escalation_review_snapshot_to_dict,
+    final_escalation_review_report_from_dict,
+    final_escalation_review_report_to_dict,
+)
+from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreConfig
+from crypto_core.service.promotion_review import PromotionThresholds, PromotionVerdict
+from crypto_core.service.promotion_review_controller import (
+    CampaignIntakeError,
+    CurrentReviewSnapshot,
+    FinalReviewReport,
+    PromotionReviewController,
+    ReviewStatus,
+    ReviewWorkflowCorruptError,
+    current_review_snapshot_to_dict,
+    final_review_report_to_dict,
+)
+from crypto_core.service.sleeve_candidate_workflow import (
+    SleeveCandidateProgression,
+    SleeveCandidateWorkflowController,
+    SleeveCandidateWorkflowCorruptError,
+    sleeve_candidate_workflow_snapshot_to_dict,
+)
+from crypto_core.service.sleeve_portfolio import (
+    CryptoSleeveState,
+    CryptoSleeveStatus,
+    CryptoSleeveType,
+    SleeveAllocationPolicy,
+    SleeveCampaignEvidenceStatus,
+    SleeveDecisionPackStatus,
+    SleeveInactiveCapitalMode,
+    SleevePortfolioCorruptError,
+    SleevePortfolioValidationError,
+    SleevePromotionCandidateStatus,
+    SleevePromotionSupportStatus,
+    SleeveQualificationStatus,
+    SleeveReasonSource,
+    SleeveRecommendationStatus,
+    build_sleeve_portfolio_snapshot,
+    crypto_sleeve_state_from_dict,
+    crypto_sleeve_state_to_dict,
+    sleeve_portfolio_snapshot_from_dict,
+    sleeve_portfolio_snapshot_to_dict,
+)
+from crypto_core.service.sleeve_portfolio_controller import (
+    SleevePortfolioController,
+    SleevePortfolioWorkflowCorruptError,
+)
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+_T0_NS = 1_000_000_000_000
+_NS_PER_S = 1_000_000_000
+
+
+def _make_escalation_decision(
+    *,
+    review_id: str = "rev-escalate",
+    review_timestamp_ns: int = _T0_NS,
+    promotion_verdict: str = "promote",
+    operator_disposition: str = "promotable",
+    escalation_stage: EscalationStage = EscalationStage.PAPER_ONLY,
+    decision_summary: str | None = None,
+    readiness_level: str = "paper_live",
+    readiness_is_supportive: bool = True,
+    external_regime_quality: str = "supportive",
+    blocking_reasons: tuple[str, ...] = (),
+    missing_evidence: tuple[str, ...] = (),
+    why_not_higher: tuple[str, ...] = (),
+    revalidation_required: tuple[str, ...] = (),
+    campaign_ids: tuple[str, ...] = ("camp-1", "camp-2", "camp-3"),
+    reason_codes: dict | None = None,
+) -> EscalationDecision:
+    return EscalationDecision(
+        artifact_time_ns=review_timestamp_ns,
+        review_id=review_id,
+        review_timestamp_ns=review_timestamp_ns,
+        review_status="finalized",
+        promotion_verdict=promotion_verdict,
+        operator_disposition=operator_disposition,
+        escalation_stage=escalation_stage,
+        decision_summary=decision_summary or f"allowed_next_step={escalation_stage.value}",
+        readiness_level=readiness_level,
+        readiness_is_supportive=readiness_is_supportive,
+        external_regime_quality=external_regime_quality,
+        blocking_reasons=blocking_reasons,
+        missing_evidence=missing_evidence,
+        why_not_higher=why_not_higher,
+        revalidation_required=revalidation_required,
+        campaign_ids=campaign_ids,
+        reason_codes=reason_codes or {},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers — campaign fixtures
+# ---------------------------------------------------------------------------
+
+
+def _make_snapshot(
+    *,
+    campaign_id: str = "camp-1",
+    total_cycles: int = 200,
+    total_fills: int = 30,
+    total_events: int = 1000,
+    symbol_count: int = 3,
+    symbols_with_events: int = 3,
+    symbols_with_cycles: int = 3,
+    elapsed_seconds: float = 600.0,
+    blocked_cycles: int = 5,
+    failed_cycles: int = 2,
+    ei_degraded: bool = False,
+    ei_route_blocks: int = 0,
+    ei_route_abstains: int = 0,
+    recovery_incidents: int = 0,
+    stability: StabilityRollup | None = None,
+) -> CampaignSnapshot:
+    return CampaignSnapshot(
+        campaign_id=campaign_id,
+        status="completed",
+        started_at_ns=_T0_NS,
+        updated_at_ns=_T0_NS + int(elapsed_seconds * _NS_PER_S),
+        elapsed_seconds=elapsed_seconds,
+        run_id="run-1",
+        service_mode="running",
+        session_mode="running",
+        total_events_enqueued=total_events,
+        total_events_dropped=0,
+        total_cycles=total_cycles,
+        approved_cycles=total_cycles - blocked_cycles - failed_cycles,
+        blocked_cycles=blocked_cycles,
+        failed_cycles=failed_cycles,
+        total_fills=total_fills,
+        queue_overflows=0,
+        watchdog_stalls=0,
+        service_restarts=0,
+        persistence_failures=0,
+        symbol_count=symbol_count,
+        symbols_ready=symbol_count,
+        symbols_blocked=0,
+        symbols_with_events=symbols_with_events,
+        symbols_with_cycles=symbols_with_cycles,
+        readiness_level="paper_live",
+        health_trend="stable",
+        persistence_status="healthy",
+        nav_usd=10_000.0,
+        last_error=None,
+        ei_degraded=ei_degraded,
+        ei_route_blocks=ei_route_blocks,
+        ei_route_abstains=ei_route_abstains,
+        recovery_incidents=recovery_incidents,
+        stability=stability,
+    )
+
+
+def _make_acceptance(
+    verdict: AcceptanceVerdict = AcceptanceVerdict.PASS,
+) -> AcceptanceResult:
+    return AcceptanceResult(
+        verdict=verdict,
+        criteria=(
+            CriterionResult(
+                name="min_events_processed",
+                passed=True,
+                severity="coverage",
+                actual=1000,
+                threshold=100,
+                message="min_events_processed: 1000 ≥ 100",
+            ),
+        ),
+        failed_criteria=(),
+        warning_criteria=(),
+        insufficient_criteria=(),
+        summary="All criteria met.",
+    )
+
+
+def _make_participation(
+    symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT", "SOLUSDT"),
+    exchange: str = "binance",
+) -> tuple[SymbolParticipation, ...]:
+    return tuple(
+        SymbolParticipation(
+            symbol=s,
+            exchange=exchange,
+            feed_ready=True,
+            blocked=False,
+            events_observed=True,
+            cycles_observed=True,
+        )
+        for s in symbols
+    )
+
+
+def _make_report(
+    *,
+    campaign_id: str = "camp-1",
+    status: str = "completed",
+    verdict: AcceptanceVerdict = AcceptanceVerdict.PASS,
+    total_cycles: int = 200,
+    total_fills: int = 30,
+    total_events: int = 1000,
+    elapsed_seconds: float = 600.0,
+    symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT", "SOLUSDT"),
+    exchange: str = "binance",
+    ei_degraded: bool = False,
+    ei_route_blocks: int = 0,
+    ei_route_abstains: int = 0,
+    recovery_incidents: int = 0,
+    stability: StabilityRollup | None = None,
+    ext_regime_available: bool = True,
+    ext_regime_fresh: bool = True,
+    ext_regime_high_risk: bool = False,
+    ext_regime_evidence_sufficient: bool = True,
+    ext_regime_scenario_available: bool = True,
+    ext_regime_scenario_step_count: int = 6,
+    ext_regime_activation_blocked_steps: int = 0,
+    ext_regime_execution_blocked_steps: int = 0,
+    ext_regime_activation_reduced_steps: int = 0,
+    ext_regime_stale_steps: int = 1,
+    ext_regime_unavailable_steps: int = 0,
+    ext_regime_high_risk_steps: int = 1,
+    ext_regime_safe_steps: int = 4,
+    ext_regime_scenario_summary: str = "steps=6; safe=4; stale=1; high_risk=1; reduced=0",
+    sleeve_link: CampaignSleeveLinkSummary | None = None,
+) -> CampaignReport:
+    snap = _make_snapshot(
+        campaign_id=campaign_id,
+        total_cycles=total_cycles,
+        total_fills=total_fills,
+        total_events=total_events,
+        elapsed_seconds=elapsed_seconds,
+        symbol_count=len(symbols),
+        symbols_with_events=len(symbols),
+        symbols_with_cycles=len(symbols),
+        ei_degraded=ei_degraded,
+        ei_route_blocks=ei_route_blocks,
+        ei_route_abstains=ei_route_abstains,
+        recovery_incidents=recovery_incidents,
+        stability=stability,
+    )
+    return CampaignReport(
+        campaign_id=campaign_id,
+        status=status,
+        verdict=verdict.value,
+        started_at_ns=_T0_NS,
+        completed_at_ns=_T0_NS + int(elapsed_seconds * _NS_PER_S),
+        elapsed_seconds=elapsed_seconds,
+        run_id="run-1",
+        snapshot=snap,
+        acceptance=_make_acceptance(verdict),
+        symbol_participation=_make_participation(symbols, exchange),
+        config={},
+        stability=stability,
+        ext_regime_available=ext_regime_available,
+        ext_regime_fresh=ext_regime_fresh,
+        ext_regime_high_risk=ext_regime_high_risk,
+        ext_regime_evidence_sufficient=ext_regime_evidence_sufficient,
+        ext_regime_summary=ext_regime_scenario_summary,
+        ext_regime_scenario_available=ext_regime_scenario_available,
+        ext_regime_scenario_step_count=ext_regime_scenario_step_count,
+        ext_regime_activation_blocked_steps=ext_regime_activation_blocked_steps,
+        ext_regime_execution_blocked_steps=ext_regime_execution_blocked_steps,
+        ext_regime_activation_reduced_steps=ext_regime_activation_reduced_steps,
+        ext_regime_stale_steps=ext_regime_stale_steps,
+        ext_regime_unavailable_steps=ext_regime_unavailable_steps,
+        ext_regime_high_risk_steps=ext_regime_high_risk_steps,
+        ext_regime_safe_steps=ext_regime_safe_steps,
+        ext_regime_scenario_summary=ext_regime_scenario_summary,
+        sleeve_link=CampaignSleeveLinkSummary() if sleeve_link is None else sleeve_link,
+    )
+
+
+def _good_reports(n: int = 3) -> tuple[CampaignReport, ...]:
+    """Create N good campaign reports that meet all promotion criteria."""
+    return tuple(
+        _make_report(
+            campaign_id=f"camp-{i}",
+            verdict=AcceptanceVerdict.PASS,
+            total_cycles=200,
+            total_fills=30,
+            total_events=1000,
+            elapsed_seconds=600.0,
+            symbols=("BTCUSDT", "ETHUSDT", "SOLUSDT"),
+        )
+        for i in range(n)
+    )
+
+
+# ===========================================================================
+# 1. Controller construction
+# ===========================================================================
+
+
+class TestControllerConstruction:
+    def test_default_construction(self):
+        ctrl = PromotionReviewController()
+        assert ctrl.review_id.startswith("review-")
+        assert ctrl.status == ReviewStatus.CREATED
+        assert ctrl.campaign_count == 0
+        assert ctrl.campaign_ids == ()
+        assert ctrl.is_finalized is False
+
+    def test_custom_review_id(self):
+        ctrl = PromotionReviewController(
+            review_id="rev-custom",
+            readiness_level="paper_live",
+            created_at_ns=_T0_NS,
+        )
+        assert ctrl.review_id == "rev-custom"
+        assert ctrl.readiness_level == "paper_live"
+        assert ctrl.readiness_is_supportive is True
+
+    def test_initial_status_is_created(self):
+        ctrl = PromotionReviewController()
+        assert ctrl.status == ReviewStatus.CREATED
+        assert ctrl.is_finalized is False
+        assert ctrl.final_report is None
+
+
+# ===========================================================================
+# 2. Review status lifecycle transitions
+# ===========================================================================
+
+
+class TestReviewLifecycle:
+    def test_created_to_collecting(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        assert ctrl.status == ReviewStatus.CREATED
+        ctrl.add_campaign_report(_make_report(campaign_id="c1"))
+        assert ctrl.status == ReviewStatus.COLLECTING
+
+    def test_collecting_to_ready_to_evaluate(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        for i in range(3):
+            ctrl.add_campaign_report(_make_report(campaign_id=f"c{i}"))
+        assert ctrl.status == ReviewStatus.READY_TO_EVALUATE
+
+    def test_ready_to_evaluate_to_finalized(self):
+        ctrl = PromotionReviewController(review_id="rev-1", created_at_ns=_T0_NS)
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        assert ctrl.status == ReviewStatus.READY_TO_EVALUATE
+        ctrl.finalize_review(finalized_at_ns=_T0_NS)
+        assert ctrl.status == ReviewStatus.FINALIZED
+        assert ctrl.is_finalized is True
+
+    def test_finalize_sets_rejected_on_reject_verdict(self):
+        ctrl = PromotionReviewController(
+            review_id="rev-rej",
+            # Phase 16M: min_paper_runs=0 disables paper gate; test focuses on REJECT status.
+            thresholds=PromotionThresholds(min_paper_runs=0),
+            created_at_ns=_T0_NS,
+        )
+        # Two failed + one pass → REJECT due to max_failed_campaigns
+        ctrl.add_campaign_report(_make_report(campaign_id="c1", verdict=AcceptanceVerdict.FAIL))
+        ctrl.add_campaign_report(_make_report(campaign_id="c2", verdict=AcceptanceVerdict.FAIL))
+        ctrl.add_campaign_report(_make_report(campaign_id="c3", verdict=AcceptanceVerdict.PASS))
+        final = ctrl.finalize_review(finalized_at_ns=_T0_NS)
+        assert ctrl.status == ReviewStatus.REJECTED
+        assert final.verdict == PromotionVerdict.REJECT.value
+
+    def test_cannot_add_after_finalized(self):
+        ctrl = PromotionReviewController(review_id="rev-1", created_at_ns=_T0_NS)
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        ctrl.finalize_review(finalized_at_ns=_T0_NS)
+        with pytest.raises(RuntimeError, match="terminal status"):
+            ctrl.add_campaign_report(_make_report(campaign_id="c-extra"))
+
+    def test_remove_reduces_status(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        for i in range(3):
+            ctrl.add_campaign_report(_make_report(campaign_id=f"c{i}"))
+        assert ctrl.status == ReviewStatus.READY_TO_EVALUATE
+        ctrl.remove_campaign("c2")
+        assert ctrl.status == ReviewStatus.COLLECTING
+        assert ctrl.campaign_count == 2
+
+    def test_reset_clears_state(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        ctrl.finalize_review(finalized_at_ns=_T0_NS)
+        ctrl.reset()
+        assert ctrl.status == ReviewStatus.CREATED
+        assert ctrl.campaign_count == 0
+        assert ctrl.final_report is None
+
+
+# ===========================================================================
+# 3. Campaign intake from completed reports
+# ===========================================================================
+
+
+class TestCampaignIntake:
+    def test_add_completed_campaign(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        report = _make_report(campaign_id="c1", status="completed")
+        ctrl.add_campaign_report(report)
+        assert ctrl.campaign_count == 1
+        assert "c1" in ctrl.campaign_ids
+
+    def test_add_rejected_status_campaign(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        report = _make_report(
+            campaign_id="c1",
+            status="rejected",
+            verdict=AcceptanceVerdict.FAIL,
+        )
+        ctrl.add_campaign_report(report)
+        assert ctrl.campaign_count == 1
+
+    def test_add_multiple_campaigns(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        for i in range(5):
+            ctrl.add_campaign_report(_make_report(campaign_id=f"c{i}"))
+        assert ctrl.campaign_count == 5
+        assert ctrl.campaign_ids == ("c0", "c1", "c2", "c3", "c4")
+
+
+# ===========================================================================
+# 4. Duplicate campaign handling
+# ===========================================================================
+
+
+class TestDuplicateHandling:
+    def test_duplicate_campaign_rejected(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        ctrl.add_campaign_report(_make_report(campaign_id="c1"))
+        with pytest.raises(CampaignIntakeError, match="duplicates rejected"):
+            ctrl.add_campaign_report(_make_report(campaign_id="c1"))
+        assert ctrl.campaign_count == 1
+
+    def test_same_set_same_result(self):
+        """Same campaign set produces identical promotion results."""
+        reports = _good_reports(3)
+
+        ctrl_a = PromotionReviewController(review_id="rev-a", created_at_ns=_T0_NS)
+        for r in reports:
+            ctrl_a.add_campaign_report(r)
+        final_a = ctrl_a.finalize_review(finalized_at_ns=_T0_NS)
+
+        ctrl_b = PromotionReviewController(review_id="rev-b", created_at_ns=_T0_NS)
+        for r in reports:
+            ctrl_b.add_campaign_report(r)
+        final_b = ctrl_b.finalize_review(finalized_at_ns=_T0_NS)
+
+        assert final_a.verdict == final_b.verdict
+        assert final_a.pass_criteria == final_b.pass_criteria
+        assert final_a.fail_criteria == final_b.fail_criteria
+        assert final_a.insufficient_evidence == final_b.insufficient_evidence
+        assert final_a.campaign_count == final_b.campaign_count
+
+
+# ===========================================================================
+# 5. Malformed/non-completed campaign rejection
+# ===========================================================================
+
+
+class TestMalformedCampaignRejection:
+    def test_running_status_rejected(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        report = _make_report(campaign_id="c1", status="running")
+        with pytest.raises(CampaignIntakeError, match="ineligible status"):
+            ctrl.add_campaign_report(report)
+
+    def test_aborted_status_rejected(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        report = _make_report(campaign_id="c1", status="aborted")
+        with pytest.raises(CampaignIntakeError, match="ineligible status"):
+            ctrl.add_campaign_report(report)
+
+    def test_failed_status_rejected(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        report = _make_report(campaign_id="c1", status="failed")
+        with pytest.raises(CampaignIntakeError, match="ineligible status"):
+            ctrl.add_campaign_report(report)
+
+    def test_invalid_verdict_rejected(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        # Create a report with a non-standard verdict
+        snap = _make_snapshot(campaign_id="c1")
+        report = CampaignReport(
+            campaign_id="c1",
+            status="completed",
+            verdict="unknown_verdict",
+            started_at_ns=_T0_NS,
+            completed_at_ns=_T0_NS + 600 * _NS_PER_S,
+            elapsed_seconds=600.0,
+            run_id="run-1",
+            snapshot=snap,
+            acceptance=_make_acceptance(),
+            symbol_participation=_make_participation(),
+            config={},
+        )
+        with pytest.raises(CampaignIntakeError, match="invalid verdict"):
+            ctrl.add_campaign_report(report)
+
+    def test_empty_campaign_id_rejected(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        snap = _make_snapshot(campaign_id="")
+        report = CampaignReport(
+            campaign_id="",
+            status="completed",
+            verdict="pass",
+            started_at_ns=_T0_NS,
+            completed_at_ns=_T0_NS + 600 * _NS_PER_S,
+            elapsed_seconds=600.0,
+            run_id="run-1",
+            snapshot=snap,
+            acceptance=_make_acceptance(),
+            symbol_participation=_make_participation(),
+            config={},
+        )
+        with pytest.raises(CampaignIntakeError, match="empty campaign_id"):
+            ctrl.add_campaign_report(report)
+
+
+# ===========================================================================
+# 6. Provisional recommendation snapshot
+# ===========================================================================
+
+
+class TestProvisionalSnapshot:
+    def test_empty_snapshot(self):
+        ctrl = PromotionReviewController(review_id="rev-1", created_at_ns=_T0_NS)
+        snap = ctrl.current_snapshot()
+        assert isinstance(snap, CurrentReviewSnapshot)
+        assert snap.review_id == "rev-1"
+        assert snap.status == "created"
+        assert snap.campaign_count == 0
+        assert snap.provisional_verdict is None
+        assert snap.is_ready_to_finalize is False
+
+    def test_snapshot_with_campaigns(self):
+        ctrl = PromotionReviewController(
+            review_id="rev-1",
+            readiness_level="paper_live",
+            created_at_ns=_T0_NS,
+        )
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        snap = ctrl.current_snapshot()
+        assert snap.campaign_count == 3
+        assert snap.provisional_verdict is not None
+        assert snap.is_ready_to_finalize is True
+        assert snap.readiness_is_supportive is True
+        assert len(snap.campaign_ids) == 3
+
+    def test_snapshot_insufficient_campaigns(self):
+        ctrl = PromotionReviewController(review_id="rev-1", created_at_ns=_T0_NS)
+        ctrl.add_campaign_report(_make_report(campaign_id="c1"))
+        snap = ctrl.current_snapshot()
+        assert snap.campaign_count == 1
+        assert snap.provisional_verdict == PromotionVerdict.INCONCLUSIVE.value
+        assert len(snap.insufficient_evidence) > 0
+
+    def test_snapshot_frozen(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        snap = ctrl.current_snapshot()
+        with pytest.raises(AttributeError):
+            snap.review_id = "x"  # type: ignore[misc]
+
+    def test_snapshot_includes_ext_regime_governance(self):
+        ctrl = PromotionReviewController(
+            review_id="rev-ext-regime",
+            readiness_level="paper_live",
+            created_at_ns=_T0_NS,
+        )
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        snap = ctrl.current_snapshot()
+        assert snap.ext_regime_quality == "supportive"
+        assert snap.ext_regime_governance["campaigns_with_meaningful_ext_regime_scenario"] == 3
+
+    def test_snapshot_preserves_legacy_ext_regime_quality_without_scenarios(self):
+        ctrl = PromotionReviewController(
+            review_id="rev-ext-regime-legacy",
+            readiness_level="paper_live",
+            created_at_ns=_T0_NS,
+        )
+        ctrl.add_campaign_report(
+            _make_report(
+                campaign_id="legacy-1",
+                ext_regime_available=True,
+                ext_regime_fresh=True,
+                ext_regime_evidence_sufficient=True,
+                ext_regime_scenario_available=False,
+                ext_regime_scenario_step_count=0,
+                ext_regime_stale_steps=0,
+                ext_regime_unavailable_steps=0,
+                ext_regime_high_risk_steps=0,
+                ext_regime_safe_steps=0,
+                ext_regime_scenario_summary="",
+            )
+        )
+        snap = ctrl.current_snapshot()
+        assert snap.ext_regime_quality == "sufficient"
+
+
+# ===========================================================================
+# 7. Final review report correctness
+# ===========================================================================
+
+
+class TestFinalReport:
+    def test_final_report_correctness(self):
+        ctrl = PromotionReviewController(
+            review_id="rev-final",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            created_at_ns=_T0_NS,
+        )
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        final = ctrl.finalize_review(finalized_at_ns=_T0_NS)
+
+        assert isinstance(final, FinalReviewReport)
+        assert final.review_id == "rev-final"
+        assert final.finalized_at_ns == _T0_NS
+        assert final.verdict == PromotionVerdict.PROMOTE.value
+        assert final.campaign_count == 3
+        assert len(final.campaign_ids) == 3
+        assert len(final.fail_criteria) == 0
+        assert len(final.insufficient_evidence) == 0
+        assert final.readiness_level == "paper_live"
+        assert final.readiness_is_supportive is True
+        assert isinstance(final.execution_calibration_quality, dict)
+        assert isinstance(final.coverage_stability_breadth, dict)
+        assert isinstance(final.reason_codes, dict)
+        assert final.summary != ""
+
+    def test_final_report_with_failures(self):
+        ctrl = PromotionReviewController(
+            review_id="rev-fail",
+            # Phase 16M: min_paper_runs=0 disables paper gate; test focuses on hard criteria.
+            thresholds=PromotionThresholds(min_paper_runs=0),
+            created_at_ns=_T0_NS,
+        )
+        ctrl.add_campaign_report(_make_report(campaign_id="c1", verdict=AcceptanceVerdict.FAIL))
+        ctrl.add_campaign_report(_make_report(campaign_id="c2", verdict=AcceptanceVerdict.FAIL))
+        ctrl.add_campaign_report(_make_report(campaign_id="c3", verdict=AcceptanceVerdict.PASS))
+        final = ctrl.finalize_review(finalized_at_ns=_T0_NS)
+        assert final.verdict == PromotionVerdict.REJECT.value
+        assert len(final.fail_criteria) > 0
+
+    def test_repeated_finalize_idempotent(self):
+        ctrl = PromotionReviewController(review_id="rev-idem", created_at_ns=_T0_NS)
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        final_1 = ctrl.finalize_review(finalized_at_ns=_T0_NS)
+        final_2 = ctrl.finalize_review(finalized_at_ns=_T0_NS + 1000)
+        assert final_1 is final_2  # same object, not re-computed
+
+    def test_cannot_finalize_empty(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        with pytest.raises(RuntimeError, match="no campaigns"):
+            ctrl.finalize_review()
+
+    def test_final_report_frozen(self):
+        ctrl = PromotionReviewController(review_id="rev-1", created_at_ns=_T0_NS)
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        final = ctrl.finalize_review(finalized_at_ns=_T0_NS)
+        with pytest.raises(AttributeError):
+            final.verdict = "x"  # type: ignore[misc]
+
+    def test_final_report_marks_missing_ext_regime_evidence_insufficient(self):
+        ctrl = PromotionReviewController(
+            review_id="rev-ext-missing",
+            readiness_level="paper_live",
+            created_at_ns=_T0_NS,
+        )
+        for idx in range(3):
+            ctrl.add_campaign_report(
+                _make_report(
+                    campaign_id=f"c{idx}",
+                    ext_regime_available=False,
+                    ext_regime_fresh=False,
+                    ext_regime_evidence_sufficient=False,
+                    ext_regime_scenario_available=False,
+                    ext_regime_scenario_step_count=0,
+                    ext_regime_activation_reduced_steps=0,
+                    ext_regime_stale_steps=0,
+                    ext_regime_high_risk_steps=0,
+                    ext_regime_safe_steps=0,
+                    ext_regime_scenario_summary="",
+                )
+            )
+        final = ctrl.finalize_review(finalized_at_ns=_T0_NS)
+        assert final.verdict == PromotionVerdict.INCONCLUSIVE.value
+        assert final.ext_regime_quality == "unavailable"
+        assert "min_ext_regime_meaningful_campaigns" in final.insufficient_evidence
+        assert final.ext_regime_governance["campaigns_with_meaningful_ext_regime_scenario"] == 0
+
+
+# ===========================================================================
+# 8. Persistence write/read
+# ===========================================================================
+
+
+class TestPersistence:
+    def test_save_workflow_state(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        ctrl = PromotionReviewController(
+            review_id="rev-persist",
+            readiness_level="paper_live",
+            evidence_store=store,
+            created_at_ns=_T0_NS,
+        )
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        result = ctrl.save_state()
+        assert result is not None
+        assert result.success
+
+    def test_save_and_restore_roundtrip(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        reports = _good_reports(3)
+        reports_by_id = {r.campaign_id: r for r in reports}
+
+        ctrl = PromotionReviewController(
+            review_id="rev-rt",
+            readiness_level="paper_live",
+            evidence_store=store,
+            created_at_ns=_T0_NS,
+        )
+        for r in reports:
+            ctrl.add_campaign_report(r)
+        ctrl.save_state()
+
+        restored = PromotionReviewController.restore(store, reports_by_id)
+        assert restored.review_id == "rev-rt"
+        assert restored.campaign_count == 3
+        assert restored.campaign_ids == ctrl.campaign_ids
+        assert restored.readiness_level == "paper_live"
+
+    def test_finalize_persists_final_review(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        ctrl = PromotionReviewController(
+            review_id="rev-fp",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            evidence_store=store,
+            created_at_ns=_T0_NS,
+        )
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        ctrl.finalize_review(finalized_at_ns=_T0_NS)
+
+        # Verify final review was persisted via PromotionReviewStore
+        from crypto_core.service.promotion_review import PromotionReviewStore
+
+        review_store = PromotionReviewStore(store)
+        loaded = review_store.load_review()
+        assert loaded["review_id"] == "rev-fp"
+        assert loaded["verdict"] == "promote"
+
+
+# ===========================================================================
+# 9. Malformed restore fail-closed
+# ===========================================================================
+
+
+class TestMalformedRestore:
+    def test_non_dict_data_fail_closed(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        store.save_snapshot("promotion_review_workflow", "not-a-dict")
+        with pytest.raises(ReviewWorkflowCorruptError, match="must be a dict"):
+            PromotionReviewController.restore(store, {})
+
+    def test_missing_fields_fail_closed(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        store.save_snapshot("promotion_review_workflow", {"review_id": "x"})
+        with pytest.raises(ReviewWorkflowCorruptError, match="missing required fields"):
+            PromotionReviewController.restore(store, {})
+
+    def test_invalid_status_fail_closed(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        store.save_snapshot(
+            "promotion_review_workflow",
+            {
+                "review_id": "x",
+                "status": "INVALID_STATUS",
+                "created_at_ns": _T0_NS,
+                "campaign_ids": [],
+            },
+        )
+        with pytest.raises(ReviewWorkflowCorruptError, match="Invalid review status"):
+            PromotionReviewController.restore(store, {})
+
+    def test_missing_campaign_report_fail_closed(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        store.save_snapshot(
+            "promotion_review_workflow",
+            {
+                "review_id": "x",
+                "status": "collecting",
+                "created_at_ns": _T0_NS,
+                "campaign_ids": ["c1", "c2"],
+            },
+        )
+        # Only provide c1, not c2
+        reports_by_id = {"c1": _make_report(campaign_id="c1")}
+        with pytest.raises(ReviewWorkflowCorruptError, match="Missing campaign reports"):
+            PromotionReviewController.restore(store, reports_by_id)
+
+
+# ===========================================================================
+# 10. Deterministic replay / restore
+# ===========================================================================
+
+
+class TestDeterministicReplay:
+    def test_same_input_same_output(self):
+        """Same campaign set → same verdict, same criteria, same report."""
+        reports = _good_reports(3)
+
+        ctrl_a = PromotionReviewController(review_id="rev-a", created_at_ns=_T0_NS)
+        for r in reports:
+            ctrl_a.add_campaign_report(r)
+        result_a = ctrl_a.evaluate()
+
+        ctrl_b = PromotionReviewController(review_id="rev-b", created_at_ns=_T0_NS)
+        for r in reports:
+            ctrl_b.add_campaign_report(r)
+        result_b = ctrl_b.evaluate()
+
+        assert result_a.verdict == result_b.verdict
+        assert len(result_a.criteria) == len(result_b.criteria)
+        for ca, cb in zip(result_a.criteria, result_b.criteria):
+            assert ca.name == cb.name
+            assert ca.passed == cb.passed
+            assert ca.actual == cb.actual
+
+    def test_restore_produces_same_result(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        reports = _good_reports(3)
+        reports_by_id = {r.campaign_id: r for r in reports}
+
+        ctrl = PromotionReviewController(
+            review_id="rev-det",
+            readiness_level="paper_live",
+            evidence_store=store,
+            created_at_ns=_T0_NS,
+        )
+        for r in reports:
+            ctrl.add_campaign_report(r)
+        original_result = ctrl.evaluate()
+        ctrl.save_state()
+
+        restored = PromotionReviewController.restore(store, reports_by_id)
+        restored_result = restored.evaluate()
+
+        assert original_result.verdict == restored_result.verdict
+        assert len(original_result.criteria) == len(restored_result.criteria)
+
+
+# ===========================================================================
+# 11. Readiness interaction truthfulness
+# ===========================================================================
+
+
+class TestReadinessInteraction:
+    def test_not_assessed_not_supportive(self):
+        ctrl = PromotionReviewController(readiness_level="not_assessed", created_at_ns=_T0_NS)
+        assert ctrl.readiness_is_supportive is False
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        final = ctrl.finalize_review(finalized_at_ns=_T0_NS)
+        assert final.readiness_is_supportive is False
+
+    def test_paper_live_is_supportive(self):
+        ctrl = PromotionReviewController(readiness_level="paper_live", created_at_ns=_T0_NS)
+        assert ctrl.readiness_is_supportive is True
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        final = ctrl.finalize_review(finalized_at_ns=_T0_NS)
+        assert final.readiness_is_supportive is True
+
+    def test_readiness_does_not_auto_finalize(self):
+        """Good readiness alone does not finalize or promote review."""
+        ctrl = PromotionReviewController(readiness_level="shadow_live", created_at_ns=_T0_NS)
+        assert ctrl.readiness_is_supportive is True
+        assert ctrl.status == ReviewStatus.CREATED
+        assert ctrl.is_finalized is False
+
+    def test_good_readiness_insufficient_campaigns_inconclusive(self):
+        """Readiness is supportive but single campaign → INCONCLUSIVE."""
+        ctrl = PromotionReviewController(readiness_level="calibrated_paper", created_at_ns=_T0_NS)
+        ctrl.add_campaign_report(_make_report(campaign_id="c1"))
+        snap = ctrl.current_snapshot()
+        assert snap.readiness_is_supportive is True
+        assert snap.provisional_verdict == PromotionVerdict.INCONCLUSIVE.value
+
+    def test_mixed_campaigns_despite_good_readiness(self):
+        """Good readiness but mixed campaign results → REJECT."""
+        ctrl = PromotionReviewController(
+            readiness_level="shadow_live",
+            # Phase 16M: min_paper_runs=0 disables paper gate; test focuses on hard REJECT path.
+            thresholds=PromotionThresholds(min_paper_runs=0),
+            created_at_ns=_T0_NS,
+        )
+        ctrl.add_campaign_report(_make_report(campaign_id="c1", verdict=AcceptanceVerdict.FAIL))
+        ctrl.add_campaign_report(_make_report(campaign_id="c2", verdict=AcceptanceVerdict.FAIL))
+        ctrl.add_campaign_report(_make_report(campaign_id="c3", verdict=AcceptanceVerdict.PASS))
+        final = ctrl.finalize_review(finalized_at_ns=_T0_NS)
+        assert final.readiness_is_supportive is True
+        assert final.verdict == PromotionVerdict.REJECT.value
+
+
+# ===========================================================================
+# 12. Reporting API views
+# ===========================================================================
+
+
+class TestReportingAPI:
+    def test_verdict_distribution_empty(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        dist = ctrl.get_verdict_distribution()
+        assert dist["total"] == 0
+
+    def test_verdict_distribution_with_campaigns(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        ctrl.add_campaign_report(_make_report(campaign_id="c1", verdict=AcceptanceVerdict.PASS))
+        ctrl.add_campaign_report(_make_report(campaign_id="c2", verdict=AcceptanceVerdict.FAIL))
+        dist = ctrl.get_verdict_distribution()
+        assert dist["total"] == 2
+        assert dist["passed"] == 1
+        assert dist["failed"] == 1
+
+    def test_execution_sufficiency(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        suf = ctrl.get_execution_sufficiency()
+        assert suf["total_campaigns"] == 3
+        assert "sufficiency_distribution" in suf
+
+    def test_missing_evidence_empty(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        missing = ctrl.get_missing_evidence()
+        assert missing["campaign_count"] == 0
+
+    def test_missing_evidence_with_campaigns(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        ctrl.add_campaign_report(_make_report(campaign_id="c1"))
+        missing = ctrl.get_missing_evidence()
+        assert missing["campaign_count"] == 1
+        assert missing["provisional_verdict"] is not None
+
+    def test_missing_evidence_reports_ext_regime_quality(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        ctrl.add_campaign_report(
+            _make_report(
+                campaign_id="c1",
+                ext_regime_available=False,
+                ext_regime_fresh=False,
+                ext_regime_evidence_sufficient=False,
+                ext_regime_scenario_available=False,
+                ext_regime_scenario_step_count=0,
+                ext_regime_activation_reduced_steps=0,
+                ext_regime_stale_steps=0,
+                ext_regime_high_risk_steps=0,
+                ext_regime_safe_steps=0,
+                ext_regime_scenario_summary="",
+            )
+        )
+        missing = ctrl.get_missing_evidence()
+        assert missing["ext_regime_quality"] == "unavailable"
+
+    def test_provisional_recommendation_empty(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        rec = ctrl.get_provisional_recommendation()
+        assert rec["verdict"] is None
+
+    def test_provisional_recommendation_with_campaigns(self):
+        ctrl = PromotionReviewController(
+            readiness_level="paper_live", thresholds=PromotionThresholds(min_paper_runs=3), created_at_ns=_T0_NS
+        )
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        rec = ctrl.get_provisional_recommendation()
+        assert rec["verdict"] == PromotionVerdict.PROMOTE.value
+        assert rec["readiness_is_supportive"] is True
+
+    def test_promotion_reason_summary_empty(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        prs = ctrl.get_promotion_reason_summary()
+        assert prs["verdict"] is None
+
+    def test_promotion_reason_summary_with_campaigns(self):
+        ctrl = PromotionReviewController(thresholds=PromotionThresholds(min_paper_runs=3), created_at_ns=_T0_NS)
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        prs = ctrl.get_promotion_reason_summary()
+        assert prs["verdict"] == PromotionVerdict.PROMOTE.value
+        assert isinstance(prs["pass_reasons"], list)
+
+
+# ===========================================================================
+# 13. Symbol breadth and distribution summaries
+# ===========================================================================
+
+
+class TestSymbolBreadthDistribution:
+    def test_multi_exchange_symbols(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        ctrl.add_campaign_report(
+            _make_report(
+                campaign_id="c1",
+                symbols=("BTCUSDT", "ETHUSDT"),
+                exchange="binance",
+            )
+        )
+        ctrl.add_campaign_report(
+            _make_report(
+                campaign_id="c2",
+                symbols=("ETHUSDT", "SOLUSDT"),
+                exchange="bybit",
+            )
+        )
+        ctrl.add_campaign_report(
+            _make_report(
+                campaign_id="c3",
+                symbols=("BTCUSDT", "SOLUSDT"),
+                exchange="binance",
+            )
+        )
+        breadth = ctrl.get_symbol_breadth()
+        assert set(breadth["unique_symbols"]) == {
+            "BTCUSDT",
+            "ETHUSDT",
+            "SOLUSDT",
+        }
+        assert set(breadth["unique_exchanges"]) == {"binance", "bybit"}
+        assert breadth["total_campaigns"] == 3
+
+    def test_empty_review_returns_empty(self):
+        ctrl = PromotionReviewController(created_at_ns=_T0_NS)
+        breadth = ctrl.get_symbol_breadth()
+        assert breadth["unique_symbols"] == []
+        assert breadth["total_campaigns"] == 0
+
+
+# ===========================================================================
+# 14. Serialization helpers
+# ===========================================================================
+
+
+class TestSerialization:
+    def test_current_review_snapshot_to_dict(self):
+        ctrl = PromotionReviewController(
+            review_id="rev-ser",
+            readiness_level="paper_live",
+            created_at_ns=_T0_NS,
+        )
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        snap = ctrl.current_snapshot()
+        d = current_review_snapshot_to_dict(snap)
+        assert d["review_id"] == "rev-ser"
+        assert d["campaign_count"] == 3
+        assert d["readiness_is_supportive"] is True
+        assert isinstance(d["verdict_distribution"], dict)
+        assert isinstance(d["ext_regime_governance"], dict)
+
+    def test_final_review_report_to_dict(self):
+        ctrl = PromotionReviewController(
+            review_id="rev-ser2",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            created_at_ns=_T0_NS,
+        )
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+        final = ctrl.finalize_review(finalized_at_ns=_T0_NS)
+        d = final_review_report_to_dict(final)
+        assert d["review_id"] == "rev-ser2"
+        assert d["verdict"] == "promote"
+        assert d["campaign_count"] == 3
+        assert isinstance(d["pass_criteria"], list)
+        assert isinstance(d["reason_codes"], dict)
+        assert isinstance(d["ext_regime_governance"], dict)
+
+
+class TestDecisionPackArtifact:
+    def test_decision_pack_to_dict_roundtrip(self):
+        pack = OperatorDecisionPack(
+            artifact_time_ns=_T0_NS,
+            review_id="rev-pack",
+            review_timestamp_ns=_T0_NS,
+            review_status="finalized",
+            promotion_verdict="promote",
+            operator_disposition="promotable",
+            decision_summary="All promotion criteria met. Evidence supports advancement.",
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            criteria_summary={
+                "promotion": {
+                    "pass_count": 3,
+                    "warning_count": 0,
+                    "fail_count": 0,
+                    "insufficient_count": 0,
+                },
+                "readiness": {
+                    "available": True,
+                    "level": "paper_live",
+                    "met": 5,
+                    "not_met": 0,
+                    "unknown": 0,
+                    "total": 5,
+                    "blocker_count": 0,
+                },
+            },
+            pass_criteria=("min_completed_campaigns",),
+            external_regime_quality="supportive",
+            external_regime_evidence_available=True,
+            external_regime_evidence_sufficient=True,
+            external_regime_governance={"campaigns_with_ext_regime": 3},
+            external_regime_summary="quality=supportive; meaningful_scenarios=3/3",
+            campaign_coverage={"campaign_count": 3},
+            reason_codes={"pass_count": 1},
+            operator_next_inspection=("promotion_ready_review",),
+            campaign_ids=("camp-1", "camp-2", "camp-3"),
+        )
+
+        d = decision_pack_to_dict(pack)
+        restored = decision_pack_from_dict(d)
+        assert restored.review_id == pack.review_id
+        assert restored.operator_disposition == "promotable"
+        assert restored.campaign_ids == pack.campaign_ids
+
+    def test_decision_pack_export_load_roundtrip(self, tmp_path: Path):
+        pack = OperatorDecisionPack(
+            artifact_time_ns=_T0_NS,
+            review_id="rev-pack",
+            review_timestamp_ns=_T0_NS,
+            review_status="collecting",
+            promotion_verdict="hold",
+            operator_disposition="hold_only",
+            decision_summary="HOLD: 1 warnings. Evidence trending but not clean.",
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            criteria_summary={"promotion": {"warning_count": 1}, "readiness": {"available": False}},
+            warning_criteria=("warn_failed_campaigns",),
+            insufficient_evidence_summary={"summary": "Need cleaner evidence."},
+            external_regime_quality="cautionary",
+            external_regime_evidence_available=True,
+            external_regime_evidence_sufficient=False,
+            external_regime_concerns=("stale_dominance",),
+            external_regime_governance={"campaigns_ext_regime_stale_dominated": 1},
+            external_regime_summary="quality=cautionary; meaningful_scenarios=2/3; stale_dominated=1",
+            campaign_coverage={"campaign_count": 3},
+            reason_codes={"warning_count": 1},
+            why_not_promotable=("warn_failed_campaigns",),
+            operator_next_inspection=("warning_criteria", "external_regime_governance"),
+            campaign_ids=("camp-1", "camp-2", "camp-3"),
+        )
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+
+        result = export_operator_decision_pack(pack=pack, evidence_store=store)
+        assert result.success is True
+
+        loaded = load_operator_decision_pack(evidence_store=store)
+        assert loaded.warning_criteria == ("warn_failed_campaigns",)
+        assert decision_pack_next_inspection(loaded)["items"] == [
+            "warning_criteria",
+            "external_regime_governance",
+        ]
+
+    def test_decision_pack_summary_helpers(self):
+        pack = OperatorDecisionPack(
+            artifact_time_ns=_T0_NS,
+            review_id="rev-pack",
+            review_timestamp_ns=_T0_NS,
+            review_status="finalized",
+            promotion_verdict="inconclusive",
+            operator_disposition="inconclusive",
+            decision_summary="Insufficient evidence: 2 coverage criteria below minimum.",
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            criteria_summary={"promotion": {"insufficient_count": 2}, "readiness": {"available": False}},
+            insufficient_evidence=("min_completed_campaigns", "min_total_fills"),
+            insufficient_evidence_summary={"summary": "Need more campaigns and fills."},
+            readiness_blockers=("operator_approval_recorded",),
+            external_regime_quality="unavailable",
+            external_regime_evidence_available=False,
+            external_regime_evidence_sufficient=False,
+            external_regime_governance={},
+            external_regime_summary="No external regime governance evidence available.",
+            campaign_coverage={"campaign_count": 1},
+            reason_codes={"insufficient_count": 2},
+            why_not_promotable=("min_completed_campaigns",),
+            operator_next_inspection=("insufficient_evidence",),
+        )
+
+        assert decision_pack_decision_summary(pack)["operator_disposition"] == "inconclusive"
+        assert decision_pack_missing_evidence(pack)["insufficient_evidence"] == [
+            "min_completed_campaigns",
+            "min_total_fills",
+        ]
+        assert decision_pack_why_not_promotable(pack)["reasons"] == ["min_completed_campaigns"]
+
+    def test_decision_pack_from_dict_fail_closed(self):
+        with pytest.raises(OperatorDecisionPackCorruptError, match="review_id"):
+            decision_pack_from_dict(
+                {
+                    "artifact_time_ns": _T0_NS,
+                    "review_timestamp_ns": _T0_NS,
+                    "review_status": "collecting",
+                    "promotion_verdict": "inconclusive",
+                    "operator_disposition": "inconclusive",
+                    "decision_summary": "missing review id",
+                    "readiness_level": "paper_live",
+                    "readiness_is_supportive": True,
+                    "criteria_summary": {},
+                    "insufficient_evidence_summary": {},
+                    "external_regime_quality": "unavailable",
+                    "external_regime_evidence_available": False,
+                    "external_regime_evidence_sufficient": False,
+                    "external_regime_governance": {},
+                    "external_regime_summary": "none",
+                    "campaign_coverage": {},
+                    "reason_codes": {},
+                }
+            )
+
+
+class TestEscalationDecisionArtifact:
+    def test_escalation_decision_to_dict_roundtrip(self):
+        decision = EscalationDecision(
+            artifact_time_ns=_T0_NS,
+            review_id="rev-escalate",
+            review_timestamp_ns=_T0_NS,
+            review_status="finalized",
+            promotion_verdict="promote",
+            operator_disposition="promotable",
+            escalation_stage=EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE,
+            decision_summary="allowed_next_step=shadow_live_review_eligible",
+            readiness_level="shadow_live",
+            readiness_is_supportive=True,
+            external_regime_quality="supportive",
+            blocking_reasons=(),
+            missing_evidence=(),
+            why_not_higher=("readiness_level:shadow_live",),
+            revalidation_required=("operator_review_signoff",),
+            campaign_ids=("camp-1", "camp-2", "camp-3"),
+            reason_codes={"pass_count": 3},
+        )
+
+        restored = escalation_decision_from_dict(escalation_decision_to_dict(decision))
+        assert restored.review_id == decision.review_id
+        assert restored.escalation_stage == EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE
+        assert restored.revalidation_required == ("operator_review_signoff",)
+
+    def test_escalation_decision_export_load_roundtrip(self, tmp_path: Path):
+        decision = EscalationDecision(
+            artifact_time_ns=_T0_NS,
+            review_id="rev-escalate",
+            review_timestamp_ns=_T0_NS,
+            review_status="finalized",
+            promotion_verdict="hold",
+            operator_disposition="hold_only",
+            escalation_stage=EscalationStage.HOLD,
+            decision_summary="allowed_next_step=hold",
+            readiness_level="calibrated_paper",
+            readiness_is_supportive=True,
+            external_regime_quality="cautionary",
+            blocking_reasons=("warn_failed_campaigns",),
+            missing_evidence=(),
+            why_not_higher=("warn_failed_campaigns",),
+            revalidation_required=("warning_criteria", "external_regime_governance"),
+            campaign_ids=("camp-1", "camp-2", "camp-3"),
+            reason_codes={"warning_count": 1},
+        )
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+
+        result = export_escalation_decision(decision=decision, evidence_store=store)
+        assert result.success is True
+
+        loaded = load_escalation_decision(evidence_store=store)
+        assert loaded.escalation_stage == EscalationStage.HOLD
+        assert escalation_decision_revalidation(loaded)["items"] == [
+            "warning_criteria",
+            "external_regime_governance",
+        ]
+
+    def test_escalation_decision_summary_helpers(self):
+        decision = EscalationDecision(
+            artifact_time_ns=_T0_NS,
+            review_id="rev-escalate",
+            review_timestamp_ns=_T0_NS,
+            review_status="finalized",
+            promotion_verdict="inconclusive",
+            operator_disposition="inconclusive",
+            escalation_stage=EscalationStage.INCONCLUSIVE,
+            decision_summary="allowed_next_step=inconclusive",
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            external_regime_quality="unavailable",
+            blocking_reasons=("min_completed_campaigns",),
+            missing_evidence=("min_completed_campaigns", "min_total_fills"),
+            why_not_higher=("min_completed_campaigns",),
+            revalidation_required=("insufficient_evidence",),
+            reason_codes={"insufficient_count": 2},
+        )
+
+        assert escalation_decision_summary(decision)["allowed_next_step"] == "inconclusive"
+        assert escalation_decision_blockers(decision)["blocking_reasons"] == ["min_completed_campaigns"]
+        assert escalation_decision_missing_evidence(decision)["missing_evidence"] == [
+            "min_completed_campaigns",
+            "min_total_fills",
+        ]
+        assert escalation_decision_why_not_higher(decision)["reasons"] == ["min_completed_campaigns"]
+
+    def test_escalation_decision_from_dict_fail_closed(self):
+        with pytest.raises(OperatorDecisionPackCorruptError, match="review_id"):
+            escalation_decision_from_dict(
+                {
+                    "artifact_time_ns": _T0_NS,
+                    "review_timestamp_ns": _T0_NS,
+                    "review_status": "finalized",
+                    "promotion_verdict": "promote",
+                    "operator_disposition": "promotable",
+                    "escalation_stage": "paper_only",
+                    "decision_summary": "missing review id",
+                    "readiness_level": "paper_live",
+                    "readiness_is_supportive": True,
+                    "external_regime_quality": "supportive",
+                    "reason_codes": {},
+                }
+            )
+
+
+class TestEscalationReviewController:
+    def test_escalation_review_lifecycle_and_snapshot(self):
+        current = _make_escalation_decision(
+            escalation_stage=EscalationStage.CALIBRATED_PAPER,
+            revalidation_required=("operator_review_signoff",),
+        )
+        controller = EscalationReviewController(
+            review_id="esc-001",
+            decision_builder=lambda: current,
+        )
+
+        assert controller.status == EscalationReviewStatus.CREATED
+        decision = controller.evaluate_current()
+        assert decision.escalation_stage == EscalationStage.CALIBRATED_PAPER
+        assert controller.status == EscalationReviewStatus.EVALUATING
+
+        snapshot = controller.current_snapshot()
+        assert snapshot.latest_decision is not None
+        assert snapshot.latest_decision.escalation_stage == EscalationStage.CALIBRATED_PAPER
+        assert snapshot.progression_state == "first_attempt"
+        assert snapshot.is_ready_to_finalize is True
+
+        final = controller.finalize_review()
+        assert final.status == "finalized"
+        assert controller.status == EscalationReviewStatus.FINALIZED
+        assert final.history_summary["total_finalized_reviews"] == 1
+
+    def test_escalation_review_finalize_reject_marks_rejected(self):
+        controller = EscalationReviewController(
+            review_id="esc-reject",
+            decision_builder=lambda: _make_escalation_decision(
+                review_id="esc-reject",
+                promotion_verdict="reject",
+                operator_disposition="reject_worthy",
+                escalation_stage=EscalationStage.REJECT,
+                blocking_reasons=("max_failed_campaigns",),
+            ),
+        )
+
+        report = controller.finalize_review()
+        assert report.status == "rejected"
+        assert controller.status == EscalationReviewStatus.REJECTED
+        assert report.decision.blocking_reasons == ("max_failed_campaigns",)
+
+    def test_escalation_review_bounded_history_and_progression(self):
+        current = {"decision": _make_escalation_decision(review_id="esc-1", escalation_stage=EscalationStage.HOLD)}
+        controller = EscalationReviewController(
+            review_id="esc-1",
+            decision_builder=lambda: current["decision"],
+            history_limit=3,
+        )
+
+        controller.finalize_review()
+        current["decision"] = _make_escalation_decision(
+            review_id="esc-2",
+            review_timestamp_ns=_T0_NS + 1,
+            escalation_stage=EscalationStage.CALIBRATED_PAPER,
+        )
+        controller.reset()
+        controller.finalize_review(finalized_at_ns=_T0_NS + 1)
+        current["decision"] = _make_escalation_decision(
+            review_id="esc-3",
+            review_timestamp_ns=_T0_NS + 2,
+            escalation_stage=EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE,
+        )
+        controller.reset()
+        controller.finalize_review(finalized_at_ns=_T0_NS + 2)
+        current["decision"] = _make_escalation_decision(
+            review_id="esc-4",
+            review_timestamp_ns=_T0_NS + 3,
+            escalation_stage=EscalationStage.INCONCLUSIVE,
+            missing_evidence=("min_completed_campaigns",),
+        )
+        controller.reset()
+        report = controller.finalize_review(finalized_at_ns=_T0_NS + 3)
+
+        assert len(controller.history) == 3
+        assert [item.allowed_next_step for item in controller.history] == [
+            "calibrated_paper",
+            "shadow_live_review_eligible",
+            "inconclusive",
+        ]
+        assert report.comparison_to_previous["direction"] == "regressed"
+        assert report.history_summary["repeatedly_stuck"] is False
+
+    def test_escalation_review_restore_roundtrip(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        current = {
+            "decision": _make_escalation_decision(review_id="esc-persist", escalation_stage=EscalationStage.HOLD)
+        }
+        controller = EscalationReviewController(
+            review_id="esc-persist",
+            decision_builder=lambda: current["decision"],
+            evidence_store=store,
+        )
+        controller.finalize_review()
+
+        restored = EscalationReviewController.restore(
+            store,
+            decision_builder=lambda: current["decision"],
+        )
+        assert restored.review_id == "esc-persist"
+        assert restored.final_report is not None
+        assert restored.final_report.decision.escalation_stage == EscalationStage.HOLD
+        assert restored.history_summary()["total_finalized_reviews"] == 1
+
+    def test_escalation_review_restore_backward_compatibility_defaults_safe(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        store.save_snapshot(
+            "escalation_review_workflow",
+            {
+                "review_id": "esc-legacy",
+                "status": "created",
+                "created_at_ns": _T0_NS,
+                "updated_at_ns": _T0_NS,
+            },
+        )
+
+        restored = EscalationReviewController.restore(
+            store,
+            decision_builder=lambda: _make_escalation_decision(
+                review_id="esc-legacy", escalation_stage=EscalationStage.INCONCLUSIVE
+            ),
+        )
+        snapshot = restored.current_snapshot()
+        assert snapshot.latest_decision is None
+        assert snapshot.progression_state == "not_assessed"
+        assert snapshot.history_summary["total_finalized_reviews"] == 0
+
+    def test_escalation_review_restore_fail_closed_on_malformed_state(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        store.save_snapshot(
+            "escalation_review_workflow",
+            {
+                "review_id": "esc-bad",
+                "status": "rejected",
+                "created_at_ns": _T0_NS,
+                "updated_at_ns": _T0_NS,
+            },
+        )
+
+        with pytest.raises(EscalationWorkflowCorruptError, match="final_report"):
+            EscalationReviewController.restore(
+                store,
+                decision_builder=lambda: _make_escalation_decision(
+                    review_id="esc-bad", escalation_stage=EscalationStage.REJECT
+                ),
+            )
+
+    def test_escalation_review_serialization_helpers(self):
+        controller = EscalationReviewController(
+            review_id="esc-ser",
+            decision_builder=lambda: _make_escalation_decision(
+                review_id="esc-ser", escalation_stage=EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE
+            ),
+        )
+        snapshot = controller.current_snapshot()
+        d = current_escalation_review_snapshot_to_dict(snapshot)
+        assert d["review_id"] == "esc-ser"
+        assert d["latest_decision"] is None
+
+        final = controller.finalize_review()
+        fd = final_escalation_review_report_to_dict(final)
+        restored = final_escalation_review_report_from_dict(fd)
+        assert restored.review_id == final.review_id
+        assert restored.decision.escalation_stage == EscalationStage.SHADOW_LIVE_REVIEW_ELIGIBLE
+
+    def test_escalation_review_deterministic_replay_same_input(self):
+        decision = _make_escalation_decision(review_id="esc-replay", escalation_stage=EscalationStage.PAPER_ONLY)
+        controller = EscalationReviewController(
+            review_id="esc-replay",
+            decision_builder=lambda: decision,
+        )
+
+        first = current_escalation_review_snapshot_to_dict(controller.current_snapshot())
+        second = current_escalation_review_snapshot_to_dict(controller.current_snapshot())
+        assert first == second
+
+
+class TestSleevePortfolioContracts:
+    def test_sleeve_model_construction_and_roundtrip(self):
+        sleeve = CryptoSleeveState(
+            sleeve_id="micro-1",
+            sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+            status=CryptoSleeveStatus.ALLOCATED,
+            target_allocation=0.40,
+            active_allocation=0.40,
+            readiness_level="paper_live",
+            escalation_stage="paper_only",
+        )
+
+        restored = crypto_sleeve_state_from_dict(crypto_sleeve_state_to_dict(sleeve))
+        assert restored == sleeve
+
+    def test_allocation_validation_fail_closed(self):
+        with pytest.raises(SleevePortfolioValidationError, match="cannot be negative"):
+            build_sleeve_portfolio_snapshot(
+                sleeves=(
+                    CryptoSleeveState(
+                        sleeve_id="bad",
+                        sleeve_type=CryptoSleeveType.TREND,
+                        status=CryptoSleeveStatus.ALLOCATED,
+                        target_allocation=-0.1,
+                        active_allocation=-0.1,
+                    ),
+                ),
+                as_of_ns=_T0_NS,
+            )
+
+        with pytest.raises(SleevePortfolioValidationError, match=r"must equal active \+ blocked \+ disabled"):
+            build_sleeve_portfolio_snapshot(
+                sleeves=(
+                    CryptoSleeveState(
+                        sleeve_id="bad-split",
+                        sleeve_type=CryptoSleeveType.CARRY,
+                        status=CryptoSleeveStatus.BLOCKED,
+                        target_allocation=0.20,
+                        blocked_allocation=0.10,
+                        blocked_reasons=("readiness_pending",),
+                        reason_summary="readiness_pending",
+                    ),
+                ),
+                as_of_ns=_T0_NS,
+            )
+
+    def test_portfolio_snapshot_serialization_enabled_blocked_and_unallocated(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.40,
+                    active_allocation=0.40,
+                ),
+                CryptoSleeveState(
+                    sleeve_id="carry-1",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.25,
+                    blocked_allocation=0.25,
+                    blocked_reasons=("readiness_pending",),
+                    reason_summary="readiness_pending",
+                ),
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ENABLED,
+                ),
+                CryptoSleeveState(
+                    sleeve_id="event-1",
+                    sleeve_type=CryptoSleeveType.EVENT_VOL,
+                    status=CryptoSleeveStatus.DEFINED,
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        assert snapshot.enabled_sleeve_ids == ("micro-1", "trend-1")
+        assert snapshot.blocked_sleeve_ids == ("carry-1",)
+        assert snapshot.allocated_sleeve_ids == ("micro-1",)
+        assert snapshot.allocation.target_allocated_share == pytest.approx(0.65)
+        assert snapshot.allocation.blocked_allocated_share == pytest.approx(0.25)
+        assert snapshot.allocation.unallocated_share == pytest.approx(0.35)
+        assert snapshot.qualification.paper_qualified_sleeves == 1
+        assert snapshot.qualification.weak_evidence_sleeves == 1
+        assert snapshot.qualification.blocked_sleeves == 1
+        assert snapshot.decision.recommended_active_sleeves == 1
+        assert snapshot.decision.eligible_but_not_selected_sleeves == 1
+        assert snapshot.decision.blocked_sleeves == 1
+        assert snapshot.decision.insufficient_evidence_sleeves == 1
+        assert {sleeve.sleeve_id: sleeve.qualification.status for sleeve in snapshot.sleeves} == {
+            "micro-1": SleeveQualificationStatus.PAPER_QUALIFIED,
+            "carry-1": SleeveQualificationStatus.BLOCKED,
+            "trend-1": SleeveQualificationStatus.WEAK_EVIDENCE,
+            "event-1": SleeveQualificationStatus.DEFINED_ONLY,
+        }
+        assert {sleeve.sleeve_id: sleeve.recommendation.status for sleeve in snapshot.sleeves} == {
+            "micro-1": SleeveRecommendationStatus.RECOMMENDED_ACTIVE,
+            "carry-1": SleeveRecommendationStatus.BLOCKED,
+            "trend-1": SleeveRecommendationStatus.ELIGIBLE_BUT_NOT_SELECTED,
+            "event-1": SleeveRecommendationStatus.INSUFFICIENT_EVIDENCE,
+        }
+
+        restored = sleeve_portfolio_snapshot_from_dict(sleeve_portfolio_snapshot_to_dict(snapshot))
+        assert restored == snapshot
+
+    def test_backward_compatibility_empty_portfolio_is_conservative(self):
+        snapshot = build_sleeve_portfolio_snapshot(as_of_ns=_T0_NS)
+
+        assert snapshot.sleeves == ()
+        assert snapshot.allocation.total_sleeves == 0
+        assert snapshot.allocation.unallocated_share == pytest.approx(1.0)
+        assert snapshot.allocation_policy.blocked_allocation_mode == SleeveInactiveCapitalMode.CONSERVE
+        assert snapshot.effective_allocation.effective_allocated_share == pytest.approx(0.0)
+        assert snapshot.qualification.total_sleeves == 0
+        assert snapshot.decision.total_sleeves == 0
+        assert snapshot.decision.recommended_active_sleeves == 0
+        assert "No explicit sleeves configured" in snapshot.summary
+
+    def test_qualification_marks_enabled_sleeve_as_weak_evidence(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="trend-weak",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ENABLED,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        sleeve = snapshot.sleeves[0]
+        assert sleeve.qualification.status == SleeveQualificationStatus.WEAK_EVIDENCE
+        assert sleeve.qualification.evidence.allocation_eligibility.value == "marginal"
+        assert sleeve.qualification.next_step == "Assign explicit paper allocation after operator review."
+        assert sleeve.recommendation.status == SleeveRecommendationStatus.ELIGIBLE_BUT_NOT_SELECTED
+        assert sleeve.recommendation.currently_eligible is True
+        assert sleeve.recommendation.exclusion_reason == "not_selected_for_active_allocation"
+
+    def test_qualification_marks_missing_governance_as_insufficient(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-insufficient",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.30,
+                    active_allocation=0.30,
+                    readiness_level="calibrated_paper",
+                    escalation_stage="shadow_live_review_eligible",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="not_assessed",
+            readiness_is_supportive=False,
+            escalation_allowed_next_step=None,
+            external_regime_execution_blocked=None,
+        )
+
+        sleeve = snapshot.sleeves[0]
+        assert sleeve.qualification.status == SleeveQualificationStatus.INSUFFICIENT_EVIDENCE
+        assert "readiness_unavailable" in sleeve.qualification.missing_evidence
+        assert "escalation_unavailable" in sleeve.qualification.missing_evidence
+        assert "external_regime_unavailable" in sleeve.qualification.missing_evidence
+        assert sleeve.recommendation.status == SleeveRecommendationStatus.INSUFFICIENT_EVIDENCE
+        assert "readiness_unavailable" in sleeve.recommendation.missing_evidence
+
+    def test_qualification_marks_blocked_sleeve_and_surfaces_next_step(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="carry-blocked",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.20,
+                    blocked_allocation=0.20,
+                    blocked_reasons=("manual_hold",),
+                    reason_summary="manual_hold",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        sleeve = snapshot.sleeves[0]
+        assert sleeve.qualification.status == SleeveQualificationStatus.BLOCKED
+        assert "manual_hold" in sleeve.qualification.blocking_reasons
+        assert sleeve.qualification.next_step == "Use enable_sleeve or unblock_sleeve after review."
+        assert sleeve.recommendation.status == SleeveRecommendationStatus.BLOCKED
+        assert sleeve.recommendation.recommended_active is False
+
+    def test_recommendation_marks_allocated_qualified_sleeve_as_recommended_active(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-active",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.35,
+                    active_allocation=0.35,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        sleeve = snapshot.sleeves[0]
+        assert sleeve.qualification.status == SleeveQualificationStatus.PAPER_QUALIFIED
+        assert sleeve.recommendation.status == SleeveRecommendationStatus.RECOMMENDED_ACTIVE
+        assert sleeve.recommendation.effective_allocation == pytest.approx(0.35)
+        assert snapshot.decision.recommended_sleeve_ids == ("micro-active",)
+
+    def test_recommendation_marks_disabled_sleeve_as_operator_off(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="trend-off",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.DISABLED,
+                    target_allocation=0.15,
+                    disabled_allocation=0.15,
+                    reason_summary="disabled_by_operator",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        sleeve = snapshot.sleeves[0]
+        assert sleeve.recommendation.status == SleeveRecommendationStatus.DISABLED_OPERATOR_OFF
+        assert sleeve.recommendation.exclusion_reason == "disabled_operator_off"
+        assert snapshot.decision.disabled_operator_off_sleeves == 1
+
+    def test_allocation_policy_defaults_to_conservative_effective_allocation(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.40,
+                    active_allocation=0.40,
+                ),
+                CryptoSleeveState(
+                    sleeve_id="carry-1",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.25,
+                    blocked_allocation=0.25,
+                    blocked_reasons=("readiness_pending",),
+                    reason_summary="readiness_pending",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+        )
+
+        by_id = {sleeve.sleeve_id: sleeve for sleeve in snapshot.sleeves}
+        assert snapshot.allocation_policy.blocked_allocation_mode == SleeveInactiveCapitalMode.CONSERVE
+        assert by_id["micro-1"].effective_allocation == pytest.approx(0.40)
+        assert by_id["carry-1"].effective_allocation == pytest.approx(0.0)
+        assert snapshot.effective_allocation.effective_allocated_share == pytest.approx(0.40)
+        assert snapshot.effective_allocation.redistributed_blocked_share == pytest.approx(0.0)
+        assert snapshot.effective_allocation.conserved_blocked_share == pytest.approx(0.25)
+
+    def test_allocation_policy_can_redistribute_blocked_share_pro_rata(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.45,
+                    active_allocation=0.45,
+                ),
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.15,
+                    active_allocation=0.15,
+                ),
+                CryptoSleeveState(
+                    sleeve_id="carry-1",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.20,
+                    blocked_allocation=0.20,
+                    blocked_reasons=("readiness_pending",),
+                    reason_summary="readiness_pending",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            allocation_policy=SleeveAllocationPolicy(
+                blocked_allocation_mode=SleeveInactiveCapitalMode.REDISTRIBUTE_PRO_RATA,
+            ),
+        )
+
+        by_id = {sleeve.sleeve_id: sleeve for sleeve in snapshot.sleeves}
+        assert by_id["micro-1"].effective_allocation == pytest.approx(0.60)
+        assert by_id["trend-1"].effective_allocation == pytest.approx(0.20)
+        assert by_id["carry-1"].effective_allocation == pytest.approx(0.0)
+        assert snapshot.effective_allocation.effective_allocated_share == pytest.approx(0.80)
+        assert snapshot.effective_allocation.redistributed_blocked_share == pytest.approx(0.20)
+        assert snapshot.effective_allocation.recipient_sleeve_ids == ("micro-1", "trend-1")
+
+    def test_artifact_export_roundtrip(self, tmp_path: Path):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.60,
+                    active_allocation=0.60,
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            allocation_policy=SleeveAllocationPolicy(
+                blocked_allocation_mode=SleeveInactiveCapitalMode.REDISTRIBUTE_PRO_RATA,
+            ),
+        )
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+
+        result = export_sleeve_portfolio_snapshot(snapshot=snapshot, evidence_store=store)
+        assert result.success is True
+
+        loaded = load_sleeve_portfolio_snapshot(evidence_store=store)
+        assert loaded == snapshot
+
+    def test_sleeve_portfolio_from_dict_fail_closed(self):
+        payload = {
+            "as_of_ns": _T0_NS,
+            "sleeves": [
+                {
+                    "sleeve_id": "carry-1",
+                    "sleeve_type": "carry",
+                    "status": "blocked",
+                    "target_allocation": 0.25,
+                    "active_allocation": 0.0,
+                    "blocked_allocation": 0.25,
+                    "disabled_allocation": 0.0,
+                    "blocked_reasons": ["readiness_pending"],
+                    "reason_summary": "readiness_pending",
+                    "readiness_level": None,
+                    "escalation_stage": None,
+                }
+            ],
+            "allocation": {
+                "target_allocated_share": 0.10,
+                "active_allocated_share": 0.0,
+                "blocked_allocated_share": 0.10,
+                "disabled_allocated_share": 0.0,
+                "unallocated_share": 0.90,
+                "total_sleeves": 1,
+                "defined_sleeves": 0,
+                "enabled_sleeves": 0,
+                "allocated_sleeves": 0,
+                "blocked_sleeves": 1,
+                "disabled_sleeves": 0,
+            },
+            "enabled_sleeve_ids": [],
+            "blocked_sleeve_ids": ["carry-1"],
+            "allocated_sleeve_ids": [],
+            "blocked_reason_summaries": ["carry-1:readiness_pending"],
+            "summary": "bad",
+            "readiness_level": "paper_live",
+            "readiness_is_supportive": True,
+            "escalation_allowed_next_step": None,
+            "external_regime_execution_blocked": False,
+        }
+
+        with pytest.raises(SleevePortfolioCorruptError, match="allocation summary"):
+            sleeve_portfolio_snapshot_from_dict(payload)
+
+    def test_sleeve_portfolio_deterministic_replay_same_input(self):
+        sleeves = (
+            CryptoSleeveState(
+                sleeve_id="trend-1",
+                sleeve_type=CryptoSleeveType.TREND,
+                status=CryptoSleeveStatus.DISABLED,
+                target_allocation=0.15,
+                disabled_allocation=0.15,
+                reason_summary="disabled_by_policy",
+            ),
+        )
+
+        first = sleeve_portfolio_snapshot_to_dict(build_sleeve_portfolio_snapshot(sleeves=sleeves, as_of_ns=_T0_NS))
+        second = sleeve_portfolio_snapshot_to_dict(build_sleeve_portfolio_snapshot(sleeves=sleeves, as_of_ns=_T0_NS))
+        assert first == second
+
+
+class TestSleevePortfolioController:
+    def test_controller_enable_disable_block_unblock_transitions(self):
+        controller = SleevePortfolioController(
+            defined_sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.DEFINED,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            )
+        )
+
+        initial = controller.current_snapshot(
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        assert initial.sleeves[0].status == CryptoSleeveStatus.DEFINED
+        assert initial.workflow_status == "active"
+
+        controller.enable_sleeve("trend-1")
+        enabled = controller.current_snapshot(
+            as_of_ns=_T0_NS + 1,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        assert enabled.sleeves[0].status == CryptoSleeveStatus.ENABLED
+        assert enabled.comparison_to_previous["changed"] is True
+
+        controller.disable_sleeve("trend-1")
+        disabled = controller.current_snapshot(
+            as_of_ns=_T0_NS + 2,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        assert disabled.sleeves[0].status == CryptoSleeveStatus.DISABLED
+        assert "Use enable_sleeve after operator review." in disabled.sleeves[0].required_changes
+
+        controller.block_sleeve("trend-1", reason_summary="manual_freeze")
+        blocked = controller.current_snapshot(
+            as_of_ns=_T0_NS + 3,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        assert blocked.sleeves[0].status == CryptoSleeveStatus.BLOCKED
+        assert blocked.sleeves[0].blocked_reasons == ("manual_freeze",)
+        assert any(reason.source == SleeveReasonSource.OPERATOR for reason in blocked.sleeves[0].reasons)
+
+        controller.unblock_sleeve("trend-1")
+        restored = controller.current_snapshot(
+            as_of_ns=_T0_NS + 4,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        assert restored.sleeves[0].status == CryptoSleeveStatus.ENABLED
+        assert len(controller.history) >= 3
+
+    def test_controller_governance_and_evidence_imposed_block_is_fail_closed(self):
+        controller = SleevePortfolioController(
+            defined_sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.35,
+                    active_allocation=0.35,
+                    readiness_level="calibrated_paper",
+                    escalation_stage="shadow_live_review_eligible",
+                ),
+            )
+        )
+
+        snapshot = controller.current_snapshot(
+            as_of_ns=_T0_NS,
+            readiness_level="not_assessed",
+            readiness_is_supportive=False,
+            escalation_allowed_next_step=None,
+            external_regime_execution_blocked=True,
+        )
+        sleeve = snapshot.sleeves[0]
+        assert sleeve.status == CryptoSleeveStatus.BLOCKED
+        assert sleeve.blocked_allocation == pytest.approx(0.35)
+        assert any(reason.source == SleeveReasonSource.EVIDENCE for reason in sleeve.reasons)
+        assert any(reason.code == "external_regime_execution_blocked" for reason in sleeve.reasons)
+        assert any("Assess readiness" in item for item in sleeve.required_changes)
+        assert sleeve.qualification.status == SleeveQualificationStatus.BLOCKED
+        assert sleeve.qualification.governance_blocked is True
+
+    def test_controller_restore_fail_closed_on_malformed_payload(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        store.save_snapshot(
+            "sleeve_portfolio_workflow",
+            {
+                "status": "active",
+                "created_at_ns": _T0_NS,
+                "updated_at_ns": _T0_NS,
+                "defined_sleeves": [],
+            },
+        )
+
+        with pytest.raises(SleevePortfolioWorkflowCorruptError, match="missing required fields"):
+            SleevePortfolioController.restore(store)
+
+    def test_controller_restore_replay_is_deterministic(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        controller = SleevePortfolioController(
+            defined_sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="carry-1",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.DEFINED,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            evidence_store=store,
+        )
+        controller.enable_sleeve("carry-1")
+        controller.current_snapshot(
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        first = sleeve_portfolio_snapshot_to_dict(
+            controller.current_snapshot(
+                as_of_ns=_T0_NS,
+                readiness_level="paper_live",
+                readiness_is_supportive=True,
+                escalation_allowed_next_step="paper_only",
+                external_regime_execution_blocked=False,
+            )
+        )
+
+        restored = SleevePortfolioController.restore(store)
+        second = sleeve_portfolio_snapshot_to_dict(
+            restored.current_snapshot(
+                as_of_ns=_T0_NS,
+                readiness_level="paper_live",
+                readiness_is_supportive=True,
+                escalation_allowed_next_step="paper_only",
+                external_regime_execution_blocked=False,
+            )
+        )
+        assert first == second
+
+    def test_controller_persists_allocation_policy_for_recompute(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        controller = SleevePortfolioController(
+            defined_sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.45,
+                    active_allocation=0.45,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.15,
+                    active_allocation=0.15,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+                CryptoSleeveState(
+                    sleeve_id="carry-1",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.20,
+                    blocked_allocation=0.20,
+                    blocked_reasons=("manual_hold",),
+                    reason_summary="manual_hold",
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            allocation_policy=SleeveAllocationPolicy(
+                blocked_allocation_mode=SleeveInactiveCapitalMode.REDISTRIBUTE_PRO_RATA,
+            ),
+            evidence_store=store,
+        )
+
+        first = controller.current_snapshot(
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        restored = SleevePortfolioController.restore(store)
+        second = restored.current_snapshot(
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        assert restored.allocation_policy.blocked_allocation_mode == SleeveInactiveCapitalMode.REDISTRIBUTE_PRO_RATA
+        assert first.effective_allocation == second.effective_allocation
+        assert {s.sleeve_id: s.effective_allocation for s in second.sleeves} == {
+            "micro-1": pytest.approx(0.60),
+            "trend-1": pytest.approx(0.20),
+            "carry-1": pytest.approx(0.0),
+        }
+
+
+class TestSleeveCampaignEvidenceAndPromotionSupport:
+    def test_campaign_supported_sleeve_roundtrips_through_snapshot_payload(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.40,
+                    active_allocation=0.40,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            campaign_report=_make_report(
+                campaign_id="camp-sleeve-1",
+                sleeve_link=CampaignSleeveLinkSummary(
+                    linkage_available=True,
+                    configured_sleeve_ids=("micro-1",),
+                    qualified_sleeve_ids=("micro-1",),
+                    recommended_sleeve_ids=("micro-1",),
+                    blocked_sleeve_ids=(),
+                    summary="micro-1 qualified and recommended",
+                ),
+            ),
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        sleeve = snapshot.sleeves[0]
+        restored = sleeve_portfolio_snapshot_from_dict(sleeve_portfolio_snapshot_to_dict(snapshot))
+
+        assert sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.CAMPAIGN_SUPPORTED
+        assert sleeve.promotion_support.status == SleevePromotionSupportStatus.SUPPORTIVE
+        assert sleeve.promotion_candidate.status == SleevePromotionCandidateStatus.SUPPORTED
+        assert sleeve.decision_pack.status == SleeveDecisionPackStatus.RECOMMENDED_ACTIVE
+        assert snapshot.evidence.campaign_supported_sleeves == 1
+        assert snapshot.decision_pack.supported_candidate_sleeves == 1
+        assert restored == snapshot
+
+    def test_missing_direct_campaign_link_degrades_conservatively(self):
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.25,
+                    active_allocation=0.25,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            campaign_report=_make_report(campaign_id="camp-sleeve-2"),
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        sleeve = snapshot.sleeves[0]
+
+        assert sleeve.campaign_evidence.explicit_link_available is False
+        assert sleeve.campaign_evidence.status == SleeveCampaignEvidenceStatus.WEAK_CAMPAIGN_EVIDENCE
+        assert sleeve.promotion_candidate.status == SleevePromotionCandidateStatus.WATCHLIST
+        assert sleeve.decision_pack.promotion_candidate is True
+        assert snapshot.evidence.weak_campaign_evidence_sleeves == 1
+        assert snapshot.decision_pack.watchlist_candidate_sleeves == 1
+
+
+class TestSleeveCandidateWorkflowController:
+    def test_candidate_workflow_progression_and_repeated_flags_are_deterministic(self):
+        controller = SleeveCandidateWorkflowController(history_limit=2)
+
+        weak_snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.25,
+                    active_allocation=0.25,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            campaign_report=_make_report(campaign_id="camp-weak-1"),
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        supported_snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="trend-1",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.25,
+                    active_allocation=0.25,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS + 10,
+            campaign_report=_make_report(
+                campaign_id="camp-strong-1",
+                sleeve_link=CampaignSleeveLinkSummary(
+                    linkage_available=True,
+                    configured_sleeve_ids=("trend-1",),
+                    qualified_sleeve_ids=("trend-1",),
+                    recommended_sleeve_ids=("trend-1",),
+                    blocked_sleeve_ids=(),
+                    summary="trend-1 qualified and recommended",
+                ),
+            ),
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+
+        controller.start(workflow_id="cand-1", started_at_ns=_T0_NS)
+        first = controller.inspect(weak_snapshot)
+        assert first.sleeves[0].progression_state == SleeveCandidateProgression.NEW_CANDIDATE
+        finalized = controller.finalize(weak_snapshot)
+        assert finalized.history_summary["total_finalized_workflows"] == 1
+
+        controller.reset(reset_at_ns=_T0_NS + 1)
+        controller.start(workflow_id="cand-2", started_at_ns=_T0_NS + 2)
+        repeated = controller.inspect(weak_snapshot)
+        assert repeated.sleeves[0].repeated_weak is True
+        assert repeated.history_summary["repeated_weak_sleeve_ids"] == ["trend-1"]
+
+        improved = controller.inspect(supported_snapshot)
+        assert improved.sleeves[0].progression_state == SleeveCandidateProgression.IMPROVED
+        assert improved.comparison_to_previous["progression_state"] == SleeveCandidateProgression.IMPROVED.value
+
+    def test_candidate_workflow_repeated_blocked_and_inconclusive_detection(self):
+        blocked_controller = SleeveCandidateWorkflowController(history_limit=2)
+        blocked_snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="carry-1",
+                    sleeve_type=CryptoSleeveType.CARRY,
+                    status=CryptoSleeveStatus.BLOCKED,
+                    target_allocation=0.20,
+                    blocked_allocation=0.20,
+                    blocked_reasons=("manual_hold",),
+                    reason_summary="manual_hold",
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        blocked_controller.start(workflow_id="blocked-1", started_at_ns=_T0_NS)
+        blocked_controller.finalize(blocked_snapshot)
+        blocked_controller.reset(reset_at_ns=_T0_NS + 1)
+        blocked_controller.start(workflow_id="blocked-2", started_at_ns=_T0_NS + 2)
+        blocked_repeat = blocked_controller.inspect(blocked_snapshot)
+        assert blocked_repeat.sleeves[0].repeated_blocked is True
+        assert blocked_repeat.history_summary["repeated_blocked_sleeve_ids"] == ["carry-1"]
+
+        inconclusive_controller = SleeveCandidateWorkflowController(history_limit=2)
+        inconclusive_snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="micro-1",
+                    sleeve_type=CryptoSleeveType.MICROSTRUCTURE,
+                    status=CryptoSleeveStatus.ENABLED,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        inconclusive_controller.start(workflow_id="inconclusive-1", started_at_ns=_T0_NS)
+        inconclusive_controller.finalize(inconclusive_snapshot)
+        inconclusive_controller.reset(reset_at_ns=_T0_NS + 1)
+        inconclusive_controller.start(workflow_id="inconclusive-2", started_at_ns=_T0_NS + 2)
+        inconclusive_repeat = inconclusive_controller.inspect(inconclusive_snapshot)
+        assert inconclusive_repeat.sleeves[0].repeated_inconclusive is True
+        assert inconclusive_repeat.history_summary["repeated_inconclusive_sleeve_ids"] == ["micro-1"]
+
+    def test_candidate_workflow_restore_fail_closed_and_replay_is_deterministic(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        controller = SleeveCandidateWorkflowController(
+            evidence_store=store,
+            history_limit=2,
+        )
+        snapshot = build_sleeve_portfolio_snapshot(
+            sleeves=(
+                CryptoSleeveState(
+                    sleeve_id="trend-restore",
+                    sleeve_type=CryptoSleeveType.TREND,
+                    status=CryptoSleeveStatus.ALLOCATED,
+                    target_allocation=0.20,
+                    active_allocation=0.20,
+                    readiness_level="paper_live",
+                    escalation_stage="paper_only",
+                ),
+            ),
+            as_of_ns=_T0_NS,
+            campaign_report=_make_report(campaign_id="camp-restore"),
+            readiness_level="paper_live",
+            readiness_is_supportive=True,
+            escalation_allowed_next_step="paper_only",
+            external_regime_execution_blocked=False,
+        )
+        controller.start(workflow_id="cand-restore", started_at_ns=_T0_NS)
+        expected = controller.finalize(snapshot)
+
+        restored = SleeveCandidateWorkflowController.restore(store)
+        assert sleeve_candidate_workflow_snapshot_to_dict(
+            restored.current_snapshot
+        ) == sleeve_candidate_workflow_snapshot_to_dict(expected)
+
+        store.save_snapshot(
+            "sleeve_candidate_workflow",
+            {
+                "workflow_id": "cand-bad",
+                "status": "active",
+                "created_at_ns": _T0_NS,
+                "updated_at_ns": _T0_NS,
+            },
+        )
+        with pytest.raises(SleeveCandidateWorkflowCorruptError, match="missing required fields"):
+            SleeveCandidateWorkflowController.restore(store)

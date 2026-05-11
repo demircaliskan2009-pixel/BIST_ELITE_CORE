@@ -9,6 +9,7 @@ from bist_core.vendors.ideal_intraday_bulk import export_intraday_tail_dataset
 
 def _pack_u32_floats(ts, o, h, l, c, v, t, r=0) -> bytes:
     import struct
+
     return struct.pack("<I6fI", ts, o, h, l, c, v, t, r)
 
 
@@ -53,13 +54,15 @@ def test_export_intraday_tail_dataset(tmp_path: Path) -> None:
     csv60 = out / "intraday_60_tail2.csv"
     assert csv60.exists()
 
-    rows60 = list(csv.DictReader(csv60.open("r", encoding="utf-8")))
+    with csv60.open("r", encoding="utf-8") as handle:
+        rows60 = list(csv.DictReader(handle))
     assert len(rows60) == 3
     cnt = Counter(r["symbol"] for r in rows60)
     assert cnt["ASELS"] == 2
     assert cnt["AKFIS"] == 1
 
     csv05 = out / "intraday_05_tail2.csv"
-    rows05 = list(csv.DictReader(csv05.open("r", encoding="utf-8")))
+    with csv05.open("r", encoding="utf-8") as handle:
+        rows05 = list(csv.DictReader(handle))
     assert len(rows05) == 2
     assert manifest["periods"]["05"]["symbols"]["ASELS"]["tail_last"]["close"] == 2.0

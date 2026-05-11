@@ -1,6 +1,6 @@
-from pathlib import Path
-from subprocess import run, PIPE
 import csv
+from pathlib import Path
+from subprocess import PIPE, run
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -28,7 +28,8 @@ def test_plan_cli_equal_weight(tmp_path: Path):
     assert "Plan yazıldı:" in out
     plan = ROOT / f"data/eod/snapshots/{day}/plan_equal_weight.csv"
     assert plan.exists(), "Plan CSV yazılmadı"
-    rows = list(csv.DictReader(plan.open(encoding="utf-8")))
+    with plan.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
     assert len(rows) >= 1
     if len(rows) == 1 and rows[0]["symbol"] == "TEST":
         assert abs(float(rows[0]["weight"]) - 1.0) < 1e-9

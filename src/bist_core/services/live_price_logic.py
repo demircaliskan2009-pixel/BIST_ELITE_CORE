@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-
 _PRICE_KEYS = (
     "current_price",
     "live_price",

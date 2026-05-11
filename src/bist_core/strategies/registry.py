@@ -4,7 +4,6 @@ from typing import Dict
 
 from bist_core.strategies.base import Strategy
 
-
 _REGISTRY: Dict[str, Strategy] = {}
 
 

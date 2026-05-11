@@ -8,17 +8,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from typing import Any, Dict, List, Sequence
 
 from bist_core.backtest.backtest_engine import BacktestEngine, CostModel, OHLCVBar
 from bist_core.brain.ranking_engine import RankingEngine
 from bist_core.brain.scanner_engine import ScannerEngine
 from bist_core.brain.strategy_engine import StrategyEngine
-from bist_core.execution.paper_engine import PaperExecutionEngine, SlippageModel
+from bist_core.execution.paper_engine import SlippageModel
 from bist_core.execution.paper_trading_loop import PaperTradingLoop
-from bist_core.risk.trade_risk_engine import RiskProfile, TradeRiskGate
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from bist_core.strategies.base import Strategy
-from bist_core.strategies.registry import register_strategy, resolve_strategy, list_strategies
-from bist_core.strategies.equal_weight import EqualWeightStrategy
-from bist_core.strategies.top_n_by_signal import TopNBySignalStrategy
 from bist_core.strategies.deny_all import DenyAllStrategy
+from bist_core.strategies.equal_weight import EqualWeightStrategy
+from bist_core.strategies.registry import list_strategies, register_strategy, resolve_strategy
+from bist_core.strategies.top_n_by_signal import TopNBySignalStrategy
 
 register_strategy("equal_weight", EqualWeightStrategy())
 register_strategy("top_n_by_signal", TopNBySignalStrategy())

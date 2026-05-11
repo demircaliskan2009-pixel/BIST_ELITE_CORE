@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 class StrategyMetrics:
     def __init__(self) -> None:
         self._data: dict[str, list[float]] = {}

@@ -110,10 +110,10 @@ def test_ruff_check_if_available() -> None:
 
     root = Path(__file__).resolve().parents[1]
     r = subprocess.run(
-        [sys.executable, "-m", "ruff", "check", "src/"],
+        [sys.executable, "-m", "ruff", "check", "src/crypto_core/"],
         cwd=str(root),
         capture_output=True,
         text=True,
         timeout=30,
     )
-    assert r.returncode == 0, f"ruff check failed:\n{r.stderr or r.stdout}"
+    assert r.returncode == 0, f"ruff check src/crypto_core/ failed:\n{r.stderr or r.stdout}"

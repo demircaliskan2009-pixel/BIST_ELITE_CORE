@@ -6,7 +6,6 @@ from typing import Any
 from bist_core.services.advisor_chat_quality import build_advisor_chat_quality_metrics
 from bist_core.services.advisor_chat_runtime import build_chat_result_via_advisor
 
-
 _REQUEST_CORE_KEYS = {
     "text",
     "query",

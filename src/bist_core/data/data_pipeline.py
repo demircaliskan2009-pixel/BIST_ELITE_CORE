@@ -10,17 +10,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Sequence
 
 from bist_core.backtest.backtest_engine import OHLCVBar
 from bist_core.data.matriks_adapter import normalize_symbol, prepare_bars_for_backtest
 from bist_core.data.matriks_client import (
-    MatriksClient,
     MatriksAPIError,
+    MatriksClient,
     NetworkDisabledError,
     fetch_and_prepare_bars,
 )
-
 
 # ---------------------------------------------------------------------------
 # Symbol universe loader

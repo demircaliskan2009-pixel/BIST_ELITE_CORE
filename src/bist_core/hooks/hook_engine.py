@@ -47,6 +47,7 @@ _PROMPT_BY_ROUTE = {
 _MIN_TOKEN_DIVERSITY = 0.35
 _MIN_UNIQUE_SENTENCES = 2
 _MIN_TOKENS_FOR_DIVERSITY = 12
+_MIN_MARKET_NUMERIC_MARKERS = 3
 
 
 logger = logging.getLogger(__name__)
@@ -169,6 +170,28 @@ def _token_diversity(text: str) -> float:
     return len(unique) / len(tokens)
 
 
+def _has_market_specific_structure(text: str) -> bool:
+    try:
+        raw = str(text or "")
+        if not raw.strip():
+            return False
+
+        upper_symbols = {token for token in re.findall(r"\b[A-Z0-9]{4,6}\b", raw) if not token.isdigit()}
+        numeric_markers = re.findall(r"[+-]?\d+(?:[.,]\d+)?%?|score=|entry|stop|target|t1", raw.casefold())
+        structured_lines = [
+            line.strip()
+            for line in raw.splitlines()
+            if any(marker in line for marker in ("|", "score=", "1)", "2)", "3)", "4)", "5)"))
+        ]
+        return (
+            len(upper_symbols) >= 2
+            and len(numeric_markers) >= _MIN_MARKET_NUMERIC_MARKERS
+            and len(structured_lines) >= 2
+        )
+    except Exception:
+        return False
+
+
 def detect_template_response(text: Any) -> bool:
     try:
         raw = re.sub(r"\s+", " ", str(text or "")).strip()
@@ -179,11 +202,13 @@ def detect_template_response(text: Any) -> bool:
         if any(pattern in lowered for pattern in _GENERIC_PATTERNS):
             return True
 
+        market_specific = _has_market_specific_structure(str(text or ""))
+
         normalized = [item for item in _normalize_sentences(raw) if len(item) >= 16]
         counts = Counter(normalized)
-        if normalized and len(set(normalized)) < min(_MIN_UNIQUE_SENTENCES, len(normalized)):
+        if not market_specific and normalized and len(set(normalized)) < min(_MIN_UNIQUE_SENTENCES, len(normalized)):
             return True
-        if any(count >= 2 for count in counts.values()):
+        if not market_specific and any(count >= 2 for count in counts.values()):
             return True
 
         rationale_bits = [bit.strip().casefold() for bit in raw.split("->") if bit.strip()]

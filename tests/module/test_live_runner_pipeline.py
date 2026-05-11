@@ -8,9 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from bist_core.live.live_runner import LiveRunner
 from bist_core.models.ohlcv import OHLCVBar
 
-from bist_core.live.live_runner import LiveRunner
+pytestmark = pytest.mark.slow
 
 
 def _dummy_bars(sym: str) -> list[OHLCVBar]:
@@ -29,9 +30,7 @@ def _dummy_bars(sym: str) -> list[OHLCVBar]:
     ]
 
 
-def test_live_runner_stops_after_max_cycles_and_verifies(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_live_runner_stops_after_max_cycles_and_verifies(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("BIST_LIVE_REQUIRE_FULL_PROOF", raising=False)
     monkeypatch.setenv("BIST_LIVE_VALIDATION_MODE", "true")
     monkeypatch.setenv("BIST_ADAPTIVE_MODE", "0")
@@ -54,9 +53,7 @@ def test_live_runner_stops_after_max_cycles_and_verifies(
     assert "MARKET_REALISM" in out and "RISK_METRICS" in out
 
 
-def test_live_runner_raises_when_no_actions(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_live_runner_raises_when_no_actions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("BIST_LIVE_REQUIRE_FULL_PROOF", raising=False)
     monkeypatch.delenv("BIST_LIVE_VALIDATION_MODE", raising=False)
     monkeypatch.setenv("BIST_ADAPTIVE_MODE", "0")

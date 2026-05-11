@@ -12,6 +12,8 @@ import pytest
 from bist_core.live.live_runner import LiveRunner
 from bist_core.models.ohlcv import OHLCVBar
 
+pytestmark = pytest.mark.slow
+
 
 def _bars_for_term(sym: str) -> list[OHLCVBar]:
     """60 bars, varying closes so unique_prices > 1 (not static)."""
@@ -30,9 +32,7 @@ def _bars_for_term(sym: str) -> list[OHLCVBar]:
     ]
 
 
-def test_live_runner_deterministic_stop_after_max_cycles(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_live_runner_deterministic_stop_after_max_cycles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("BIST_LIVE_REQUIRE_FULL_PROOF", raising=False)
     monkeypatch.setenv("BIST_LIVE_VALIDATION_MODE", "true")
     monkeypatch.setenv("BIST_ADAPTIVE_MODE", "0")
@@ -49,4 +49,3 @@ def test_live_runner_deterministic_stop_after_max_cycles(
     assert re.search(r"['\"]status['\"]\s*:\s*['\"]STOPPED_AFTER_MAX_CYCLES['\"]", out)
     assert "SIMULATION_SUMMARY" in out
     assert "SYSTEM_STATUS_REPORT" in out
-

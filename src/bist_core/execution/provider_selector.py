@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import os
 
-from bist_core.execution.base import ExecutionProvider
 from bist_core.execution.adapters.dry_run import DryRunExecutionProvider
 from bist_core.execution.adapters.real_broker_skeleton import RealBrokerExecutionProvider
+from bist_core.execution.base import ExecutionProvider
 
 
 def get_execution_provider_from_env() -> ExecutionProvider:

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import date
 from random import Random
+
 import pandas as pd
 
 

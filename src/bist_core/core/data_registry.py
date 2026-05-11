@@ -1,7 +1,7 @@
 from bist_core.data.registry import (
+    DEFAULT_REGISTRY_PATH,
     DatasetMetadata,
     DatasetRegistry,
-    DEFAULT_REGISTRY_PATH,
     get_default_registry,
     load_registered_dataset,
     register_dataset,

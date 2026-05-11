@@ -10,11 +10,11 @@ Faz-3 / Adım-1: Küçük ama net API:
 """
 
 from .data import (
-    read_csv,
     DatasetRegistry,
-    register_dataset,
-    load_registered_dataset,
     get_default_registry,
+    load_registered_dataset,
+    read_csv,
+    register_dataset,
 )
 
 __all__ = [

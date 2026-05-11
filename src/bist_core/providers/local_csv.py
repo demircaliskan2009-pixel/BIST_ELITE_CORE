@@ -1,6 +1,7 @@
 from __future__ import annotations
-from pathlib import Path
+
 import csv
+from pathlib import Path
 
 
 class LocalCSVProvider:

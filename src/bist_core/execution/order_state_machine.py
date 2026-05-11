@@ -9,15 +9,184 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
+from bist_core.providers.base import FailClosedError
 from bist_core.execution.paper_engine import (
     OrderSide,
-    OrderType,
     PaperExecutionEngine,
     PaperTrade,
     SlippageModel,
 )
+
+
+class OrderState(str, Enum):
+    NEW = "NEW"
+    VALIDATED = "VALIDATED"
+    SENT = "SENT"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    CANCELLED = "CANCELLED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+
+
+_ORDER_STATE_TRANSITIONS: dict[OrderState, frozenset[OrderState]] = {
+    OrderState.NEW: frozenset({
+        OrderState.VALIDATED,
+        OrderState.CANCELLED,
+        OrderState.REJECTED,
+        OrderState.EXPIRED,
+    }),
+    OrderState.VALIDATED: frozenset({
+        OrderState.SENT,
+        OrderState.CANCELLED,
+        OrderState.REJECTED,
+        OrderState.EXPIRED,
+    }),
+    OrderState.SENT: frozenset({
+        OrderState.PARTIALLY_FILLED,
+        OrderState.FILLED,
+        OrderState.CANCELLED,
+        OrderState.REJECTED,
+        OrderState.EXPIRED,
+    }),
+    OrderState.PARTIALLY_FILLED: frozenset({
+        OrderState.PARTIALLY_FILLED,
+        OrderState.FILLED,
+        OrderState.CANCELLED,
+        OrderState.EXPIRED,
+    }),
+    OrderState.FILLED: frozenset(),
+    OrderState.CANCELLED: frozenset(),
+    OrderState.REJECTED: frozenset(),
+    OrderState.EXPIRED: frozenset(),
+}
+
+
+@dataclass
+class Order:
+    order_id: str
+    symbol: str
+    side: OrderSide | str
+    quantity: int
+    filled_quantity: int = 0
+    price: float = 0.0
+    state: OrderState = OrderState.NEW
+    timestamp: int = 0
+    last_update: int = 0
+
+
+def _raise_fail_closed(message: str) -> None:
+    raise FailClosedError(message)
+
+
+def _validate_non_negative_int(value: Any, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        _raise_fail_closed(f"invalid_{field_name}:expected_int")
+    if value < 0:
+        _raise_fail_closed(f"invalid_{field_name}:negative")
+    return value
+
+
+def _validate_positive_int(value: Any, field_name: str) -> int:
+    normalized = _validate_non_negative_int(value, field_name)
+    if normalized == 0:
+        _raise_fail_closed(f"invalid_{field_name}:zero")
+    return normalized
+
+
+def _validate_positive_float(value: Any, field_name: str) -> float:
+    if isinstance(value, bool):
+        _raise_fail_closed(f"invalid_{field_name}:expected_number")
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError) as exc:
+        raise FailClosedError(f"invalid_{field_name}:expected_number") from exc
+    if normalized <= 0.0:
+        _raise_fail_closed(f"invalid_{field_name}:non_positive")
+    return normalized
+
+
+def _normalize_side(side: OrderSide | str) -> OrderSide:
+    if isinstance(side, OrderSide):
+        return side
+    try:
+        return OrderSide(str(side).strip().upper())
+    except ValueError as exc:
+        raise FailClosedError("invalid_side") from exc
+
+
+def _ensure_order_consistency(order: Order) -> None:
+    if not str(order.order_id or "").strip():
+        _raise_fail_closed("invalid_order_id")
+    if not str(order.symbol or "").strip():
+        _raise_fail_closed("invalid_symbol")
+    order.side = _normalize_side(order.side)
+    order.quantity = _validate_positive_int(order.quantity, "quantity")
+    order.filled_quantity = _validate_non_negative_int(order.filled_quantity, "filled_quantity")
+    order.timestamp = _validate_non_negative_int(order.timestamp, "timestamp")
+    order.last_update = _validate_non_negative_int(order.last_update, "last_update")
+    order.price = _validate_positive_float(order.price, "price")
+    if not isinstance(order.state, OrderState):
+        _raise_fail_closed("invalid_state")
+    if order.filled_quantity > order.quantity:
+        _raise_fail_closed("filled_quantity_exceeds_quantity")
+    if order.state in {OrderState.NEW, OrderState.VALIDATED, OrderState.SENT} and order.filled_quantity != 0:
+        _raise_fail_closed("premature_filled_quantity")
+    if order.state == OrderState.PARTIALLY_FILLED and not (0 < order.filled_quantity < order.quantity):
+        _raise_fail_closed("invalid_partial_fill_state")
+    if order.state == OrderState.FILLED and order.filled_quantity != order.quantity:
+        _raise_fail_closed("invalid_filled_state")
+
+
+def _advance_last_update(order: Order) -> None:
+    order.last_update = max(order.last_update, order.timestamp) + 1
+
+
+def _transition(order: Order, target_state: OrderState) -> Order:
+    allowed_states = _ORDER_STATE_TRANSITIONS.get(order.state, frozenset())
+    if target_state not in allowed_states:
+        _raise_fail_closed(f"invalid_transition:{order.state.value}->{target_state.value}")
+    order.state = target_state
+    _advance_last_update(order)
+    return order
+
+
+class OrderStateMachine:
+    def validate(self, order: Order) -> Order:
+        _ensure_order_consistency(order)
+        return _transition(order, OrderState.VALIDATED)
+
+    def send(self, order: Order) -> Order:
+        _ensure_order_consistency(order)
+        return _transition(order, OrderState.SENT)
+
+    def on_fill(self, order: Order, fill_qty: int) -> Order:
+        _ensure_order_consistency(order)
+        fill_quantity = _validate_positive_int(fill_qty, "fill_qty")
+        if order.state not in {OrderState.SENT, OrderState.PARTIALLY_FILLED}:
+            _raise_fail_closed(f"invalid_transition:{order.state.value}->PARTIALLY_FILLED")
+        remaining_quantity = order.quantity - order.filled_quantity
+        if remaining_quantity <= 0:
+            _raise_fail_closed("order_has_no_remaining_quantity")
+        if fill_quantity > remaining_quantity:
+            _raise_fail_closed("filled_quantity_exceeds_quantity")
+        order.filled_quantity += fill_quantity
+        target_state = OrderState.FILLED if order.filled_quantity == order.quantity else OrderState.PARTIALLY_FILLED
+        return _transition(order, target_state)
+
+    def cancel(self, order: Order) -> Order:
+        _ensure_order_consistency(order)
+        return _transition(order, OrderState.CANCELLED)
+
+    def reject(self, order: Order) -> Order:
+        _ensure_order_consistency(order)
+        return _transition(order, OrderState.REJECTED)
+
+    def expire(self, order: Order) -> Order:
+        _ensure_order_consistency(order)
+        return _transition(order, OrderState.EXPIRED)
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +346,10 @@ class ManagedOrder:
     trade: Optional[PaperTrade] = None
     rejection_reasons: list[str] = field(default_factory=list)
     exit_reason: Optional[str] = None
+    edge: str = ""
+    source: str = "technical"
+    event_kind: str = ""
+    event_multiplier: float = 1.0
 
     @property
     def status(self) -> ExecutionOrderStatus:
@@ -196,6 +369,9 @@ class ManagedOrder:
             "rejection_reasons": list(self.rejection_reasons),
             "exit_reason": self.exit_reason,
             "trade": self.trade.to_dict() if self.trade is not None else None,
+            "source": self.source,
+            "event_kind": self.event_kind,
+            "event_multiplier": self.event_multiplier,
         }
 
 
@@ -256,6 +432,11 @@ class OrderStateMachineController:
         target = _safe_float(decision.get("target")) or 0.0
         position_size = _safe_int(decision.get("position_size")) or 0
 
+        edge = str(decision.get("edge") or "")
+        source = str(decision.get("source") or "technical")
+        event_kind = str(decision.get("event_kind") or "")
+        event_multiplier = float(decision.get("event_multiplier") or 1.0)
+
         order = ManagedOrder(
             order_id=_next_order_id(),
             symbol=symbol,
@@ -264,6 +445,10 @@ class OrderStateMachineController:
             stop=stop,
             target=target,
             position_size=position_size,
+            edge=edge,
+            source=source,
+            event_kind=event_kind,
+            event_multiplier=event_multiplier,
         )
         self._orders.append(order)
 
@@ -304,6 +489,10 @@ class OrderStateMachineController:
             position_size=order.position_size,
             market_price=market_price,
             entry_time=entry_time,
+            edge=order.edge,
+            source=order.source,
+            event_kind=order.event_kind,
+            event_multiplier=order.event_multiplier,
         )
 
         if trade is None:
@@ -417,3 +606,17 @@ def _safe_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+__all__ = [
+    "ExecutionOrderStatus",
+    "ExecutionOrderType",
+    "ExecutionStateMachine",
+    "ManagedOrder",
+    "Order",
+    "OrderState",
+    "OrderStateMachine",
+    "OrderStateMachineController",
+    "RiskLimits",
+    "reset_order_counter",
+]

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 import json
 import platform
-from pathlib import Path
 import time
+from dataclasses import asdict
+from pathlib import Path
 from typing import Any
 
 from bist_core.providers.events.base import EventsProvider

@@ -1,0 +1,76 @@
+{
+  "market": "bist",
+  "version": "1.0.0",
+  "frozen": true,
+  "description": "BIST production configuration — frozen after A/B validation.",
+
+  "event_policy": {
+    "entry_kinds": ["partnership"],
+    "block_kinds": ["earnings", "contract"],
+    "soft_negative_kinds": ["general_disclosure"],
+    "neutral_kinds": ["dividend", "management", "investment", "capacity", "unknown"],
+
+    "size_multipliers": {
+      "partnership": 1.5,
+      "buyback": 1.0,
+      "regulatory": 1.0,
+      "general_disclosure": 0.7,
+      "earnings": 0.0,
+      "contract": 0.0,
+      "dividend": 1.0,
+      "management": 1.0,
+      "investment": 1.0,
+      "capacity": 1.0,
+      "unknown": 1.0
+    },
+
+    "confidence_multipliers": {
+      "positive": 1.2,
+      "soft_negative": 0.7
+    },
+
+    "event_entry": {
+      "stop_pct": 0.03,
+      "min_rr": 2.0,
+      "atr_period": 14,
+      "swing_lookback": 10
+    },
+
+    "positive_event_boost": 0.10,
+    "lookback_days": 5
+  },
+
+  "portfolio": {
+    "max_positions": 18,
+    "max_per_symbol": 4,
+    "max_entries_per_ts": 10,
+    "risk_per_trade_pct": 0.01,
+    "max_notional_pct": 0.10,
+    "initial_equity": 100000.0,
+    "daily_loss_limit_pct": 0.03,
+    "max_drawdown_kill_pct": 0.10,
+    "min_position_size": 1,
+    "max_position_size": 2000
+  },
+
+  "scoring": {
+    "lookback": 15,
+    "min_trades": 2,
+    "min_threshold": 0.15
+  },
+
+  "execution": {
+    "slippage_bps": 5.0,
+    "commission_bps": 10.0,
+    "exchange_fee_bps": 5.0
+  },
+
+  "validation_evidence": {
+    "partnership_pf": 2.05,
+    "partnership_wr": 0.80,
+    "buyback_pf": 0.00,
+    "regulatory_pf": 0.14,
+    "data_source": "104509 KAP events, 2024-09-02 to 2026-02-27",
+    "freeze_date": "2026-04-13"
+  }
+}

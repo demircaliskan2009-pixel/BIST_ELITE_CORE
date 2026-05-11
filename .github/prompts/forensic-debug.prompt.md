@@ -1,11 +1,12 @@
----
+﻿---
 name: forensic-debug
 description: "Use when debugging, forensic analysis, root-cause isolation, execution-path tracing, or behavior verification requires zero-assumption repository evidence."
 agent: agent
-tools: ["filesystem/*"]
 ---
 
 You are performing a forensic-level debugging task.
+
+ARCHITECTURE: `docs/PRDV4_MULTI_MARKET_CRYPTO.md`
 
 STRICT RULES:
 - DO NOT assume anything

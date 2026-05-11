@@ -6,8 +6,7 @@ import json
 import math
 import os
 import time
-from types import SimpleNamespace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -15,28 +14,28 @@ from bist_core.ai.explanation_engine import ExplanationEngine
 from bist_core.config.system_config import CONFIG
 from bist_core.data.price_provider import get_current_price
 from bist_core.execution.broker_adapter import PaperBrokerAdapter
-from bist_core.execution.execution_engine import ExecutionEngine as PaperOrderExecutionEngine
-from bist_core.live.execution_engine import ExecutionEngine
 from bist_core.execution.depth_model import DepthModel
+from bist_core.execution.execution_engine import ExecutionEngine as PaperOrderExecutionEngine
 from bist_core.execution.execution_model import ExecutionModel, apply_execution_cost
 from bist_core.execution.latency_model import LatencyModel
 from bist_core.execution.slippage_model import SlippageModel
 from bist_core.execution.spread_model import SpreadModel
 from bist_core.features.feature_engine import FeatureEngine
-from bist_core.models.ohlcv import OHLCVBar
-from bist_core.portfolio import PortfolioEngine
-from bist_core.rank.advanced_ranker import AdvancedRanker
+from bist_core.live.execution_engine import ExecutionEngine
 from bist_core.market.session_engine import SessionEngine
+from bist_core.models.ohlcv import OHLCVBar
 from bist_core.monitoring.audit_logger import AuditLogger
 from bist_core.monitoring.health_monitor import HealthMonitor
+from bist_core.portfolio import PortfolioEngine
+from bist_core.rank.advanced_ranker import AdvancedRanker
 from bist_core.risk.bist_rules import BISTRules
 from bist_core.risk.circuit_breaker import CircuitBreaker
 from bist_core.risk.correlation_engine import CorrelationEngine
 from bist_core.risk.event_risk import EventRisk
-from bist_core.risk.sector_mapper import get_sector
-from bist_core.risk.volatility_shock import VolatilityShock
 from bist_core.risk.exposure_controller import ExposureController
 from bist_core.risk.portfolio_risk_engine import PortfolioRiskEngine
+from bist_core.risk.sector_mapper import get_sector
+from bist_core.risk.volatility_shock import VolatilityShock
 from bist_core.strategy.meta_selector import MetaSelector
 from bist_core.strategy.strategy_decay import StrategyDecay
 from bist_core.strategy.strategy_metrics import StrategyMetrics
@@ -331,7 +330,8 @@ def _fetch_csv(symbol: str, csv_path: str) -> list[OHLCVBar] | None:
 def _fetch_ideal(symbol: str, chart_dir: str) -> list[OHLCVBar] | None:
     """Load bars from iDeal ChartData .G file for symbol. Fail-closed."""
     import glob as _glob
-    from bist_core.vendors.ideal.parser import IdealGParser, IdealFormatUnverifiedError
+
+    from bist_core.vendors.ideal.parser import IdealFormatUnverifiedError, IdealGParser
 
     try:
         pattern = chart_dir + "/G/*'" + symbol + ".G"
@@ -369,7 +369,8 @@ def _fetch_ideal_intraday(symbol: str, chart_dir: str) -> OHLCVBar | None:
     O(1) tail read. Fail-closed. ts_code_raw used as opaque ordering key.
     """
     import glob as _glob
-    from bist_core.vendors.ideal_intraday import parse_file, infer_symbol_from_filename
+
+    from bist_core.vendors.ideal_intraday import parse_file
     pattern = chart_dir + "/05/*'" + symbol + ".05"
     matches = _glob.glob(pattern)
     if not matches:

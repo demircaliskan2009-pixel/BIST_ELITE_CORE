@@ -4,7 +4,6 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-
 _RANKED_LINE_RE = re.compile(r"(?m)^\d+\)\s+[^\s]+")
 _ENTRY_GAP_RE = re.compile(r"entry gap\s*([+-]?\d+(?:\.\d+)?)%", re.IGNORECASE)
 

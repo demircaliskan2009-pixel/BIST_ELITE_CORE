@@ -1,9 +1,10 @@
 """Core config loader: REPO_ROOT, SOURCES, CORE, load_core_config_strict, load_broker_config."""
 
 from __future__ import annotations
-from pathlib import Path
-import os
+
 import json
+import os
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 # ---- Proje kökleri / data yolları ----

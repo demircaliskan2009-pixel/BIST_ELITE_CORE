@@ -6,9 +6,8 @@ import csv
 import tempfile
 from pathlib import Path
 
-from bist_core.models.ohlcv import OHLCVBar
-
 from bist_core.data.ingest import InvalidDataError, ingest_ohlcv_from_file
+from bist_core.models.ohlcv import OHLCVBar
 from bist_core.vendors.ideal_g32 import parse_g32_file
 
 

@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from bist_core.execution.base import ExecutionProvider
-from bist_core.execution.adapters.stub_broker import StubExecutionProvider
 from bist_core.execution.adapters.registry import get_execution_provider
+from bist_core.execution.adapters.stub_broker import StubExecutionProvider
+from bist_core.execution.base import ExecutionProvider
 
 
 def resolve_execution_provider(

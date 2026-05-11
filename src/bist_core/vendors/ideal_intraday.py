@@ -1,9 +1,8 @@
 ﻿from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from datetime import datetime
-from pathlib import Path
 import struct
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Iterator, Optional
 
 REC_SIZE = 32

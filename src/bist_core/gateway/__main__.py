@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 
+
 def main() -> int:
     # Optional runner: `python -m bist_core.gateway`
     import uvicorn

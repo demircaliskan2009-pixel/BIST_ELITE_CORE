@@ -45,8 +45,8 @@ def list_strategies() -> List[str]:
 
 
 # Register built-in strategies (route existing implementations through registry)
-from bist_core.strategies.equal_weight import EqualWeightStrategy
 from bist_core.strategies.deny_all import DenyAllStrategy
+from bist_core.strategies.equal_weight import EqualWeightStrategy
 from bist_core.strategies.top_n_by_signal import TopNBySignalStrategy
 
 register_strategy("equal_weight", EqualWeightStrategy())

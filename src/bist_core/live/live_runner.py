@@ -6,8 +6,6 @@ import hashlib
 import json
 import math
 import os
-
-import numpy as np
 import sys
 import time
 from collections import Counter
@@ -16,27 +14,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from bist_core.analytics.expectancy import tracker
+import numpy as np
+
 from bist_core.analysis.edge_monitor import EdgeMonitor
 from bist_core.analysis.edge_validator import EdgeValidator
 from bist_core.analysis.paper_tracker import PaperTracker
+from bist_core.analytics.expectancy import tracker
 from bist_core.data.ideal_dataset import load_ideal_dataset
 from bist_core.data.kap_fetcher import fetch_kap_rss
 from bist_core.data.matriks_provider import MatriksProvider, _fetch_matriks_price
-from bist_core.features.kap_feature_engine import KapFeatureEngine
-from bist_core.live.data_feed import IdealDataFeed
-from bist_core.live.adaptive_live_controller import (
-    AdaptiveLiveController,
-    adaptive_enabled,
-    adaptive_window_size,
-)
-from bist_core.live.portfolio_engine import build_portfolio_payload, load_symbol_universe_from_env
-from bist_core.portfolio.portfolio_engine_v2 import apply_portfolio_v2_to_trades
-from bist_core.live.data_hardening import DataHardeningEngine
-from bist_core.live.data_validator import DataValidator
-from bist_core.edge.bucket_key import regime_from_feat
 from bist_core.edge.live_edge_buffer import LiveEdgeBuffer
 from bist_core.edge.live_edge_engine import LiveEdgeEngine
+from bist_core.features.kap_feature_engine import KapFeatureEngine
+from bist_core.live.adaptive_live_controller import AdaptiveLiveController, adaptive_enabled, adaptive_window_size
+from bist_core.live.data_feed import IdealDataFeed
+from bist_core.live.data_hardening import DataHardeningEngine
+from bist_core.live.data_validator import DataValidator
 from bist_core.live.execution_intelligence import (
     ExecutionIntelligenceLayer,
     detect_volatility_spike,
@@ -44,17 +37,15 @@ from bist_core.live.execution_intelligence import (
 )
 from bist_core.live.execution_runtime import PaperExecution
 from bist_core.live.performance_tracker import PerformanceTracker
+from bist_core.live.portfolio_engine import build_portfolio_payload, load_symbol_universe_from_env
 from bist_core.live.risk_engine import RiskEngine, risk_engine_enabled
 from bist_core.live.state_store import LiveState
 from bist_core.live.trade_logger import TradeLogger, _safe_float, update_trade_close
 from bist_core.models.ohlcv import OHLCVBar
+from bist_core.portfolio.portfolio_engine_v2 import apply_portfolio_v2_to_trades
 from bist_core.strategy.trend_engine import TrendEngine
 
-TIMEFRAMES = [
-    x.strip()
-    for x in os.getenv("BIST_TIMEFRAMES", "G,60,05,01").split(",")
-    if x.strip()
-]
+TIMEFRAMES = [x.strip() for x in os.getenv("BIST_TIMEFRAMES", "G,60,05,01").split(",") if x.strip()]
 
 
 def _normalize_symbol(s: str) -> str:
@@ -245,9 +236,7 @@ def _tf05_mtf_label(bars: list[Any] | None) -> str:
     return base
 
 
-def _apply_relax_fallback(
-    decision: dict[str, Any] | None, relax: bool
-) -> dict[str, Any]:
+def _apply_relax_fallback(decision: dict[str, Any] | None, relax: bool) -> dict[str, Any]:
     """Deterministic hold when relax mode and no qualifying signal (simulation recovery)."""
     if not relax:
         if not isinstance(decision, dict):
@@ -602,12 +591,10 @@ class LiveRunner:
         if not symbols:
             symbols = ["ASELS"]
         if data_path is None:
-            data_path = os.environ.get("BIST_IDEAL_DATA_PATH") or os.environ.get(
-                "IDEAL_DATA_PATH", ""
-            )
+            data_path = os.environ.get("BIST_IDEAL_DATA_PATH") or os.environ.get("IDEAL_DATA_PATH", "")
         dp = str(data_path).strip()
         if not dp:
-            dp = r"C:\iDeal\ChartData\IMKBH"
+            raise RuntimeError("BIST_IDEAL_DATA_PATH is required")
         self.symbols = [str(s).strip().upper() for s in symbols if str(s).strip()]
         self.feed = IdealDataFeed(dp)
         self.matriks = MatriksProvider()
@@ -629,19 +616,11 @@ class LiveRunner:
         self.trend_engine = TrendEngine()
         if risk_engine_enabled():
             try:
-                mx = int(
-                    os.environ.get(
-                        "BIST_RISK_MAX_POSITIONS", str(max_total_positions)
-                    )
-                )
+                mx = int(os.environ.get("BIST_RISK_MAX_POSITIONS", str(max_total_positions)))
             except ValueError:
                 mx = max_total_positions
             try:
-                mf = float(
-                    os.environ.get(
-                        "BIST_RISK_MAX_SYMBOL_FRACTION", str(max_symbol_fraction)
-                    )
-                )
+                mf = float(os.environ.get("BIST_RISK_MAX_SYMBOL_FRACTION", str(max_symbol_fraction)))
             except ValueError:
                 mf = max_symbol_fraction
             self.exec.configure_risk(
@@ -771,9 +750,7 @@ class LiveRunner:
             active = [
                 p
                 for p in legs
-                if isinstance(p, dict)
-                and int(p.get("size", 1) or 0) > 0
-                and float(p.get("qty", 0.0) or 0.0) > 1e-12
+                if isinstance(p, dict) and int(p.get("size", 1) or 0) > 0 and float(p.get("qty", 0.0) or 0.0) > 1e-12
             ]
             if active:
                 out.add(_normalize_symbol(str(sym_x)))
@@ -795,9 +772,9 @@ class LiveRunner:
             raise RuntimeError("CSV and state mismatch")
 
     def _assert_state_csv_lock(self) -> None:
-        assert set(self._state_open_symbols_normalized()) == set(
-            self._csv_open_symbols_normalized()
-        ), "STATE != CSV — SYSTEM CORRUPTED"
+        assert set(self._state_open_symbols_normalized()) == set(self._csv_open_symbols_normalized()), (
+            "STATE != CSV — SYSTEM CORRUPTED"
+        )
 
     def _runner_position_exists_norm(self, sym_n: str) -> bool:
         if sym_n in self.positions:
@@ -810,9 +787,7 @@ class LiveRunner:
             active = [
                 p
                 for p in legs
-                if isinstance(p, dict)
-                and int(p.get("size", 1) or 0) > 0
-                and float(p.get("qty", 0.0) or 0.0) > 1e-12
+                if isinstance(p, dict) and int(p.get("size", 1) or 0) > 0 and float(p.get("qty", 0.0) or 0.0) > 1e-12
             ]
             if active:
                 return True
@@ -856,12 +831,7 @@ class LiveRunner:
                 if size <= 0:
                     continue
 
-                entry_price = float(
-                    leg.get("entry_price")
-                    or leg.get("entry")
-                    or leg.get("price")
-                    or 0
-                )
+                entry_price = float(leg.get("entry_price") or leg.get("entry") or leg.get("price") or 0)
 
                 synced[_normalize_symbol(str(sym))] = {
                     "size": size,
@@ -899,11 +869,7 @@ class LiveRunner:
             if entry_px <= 0.0:
                 print({"FATAL_CSV_OPEN_INVALID_ENTRY": sym_n}, flush=True)
                 raise RuntimeError("CSV OPEN row has invalid entry")
-            side = (
-                "short"
-                if str(row.get("action", "")).strip().lower() == "enter_short"
-                else "long"
-            )
+            side = "short" if str(row.get("action", "")).strip().lower() == "enter_short" else "long"
             sl = float(_safe_float(row.get("stop"), 0.0))
             tg = float(_safe_float(row.get("target"), 0.0))
             edge_v = float(_safe_float(row.get("edge"), 0.0))
@@ -951,9 +917,7 @@ class LiveRunner:
         )
 
     def _position_qty(self, sym: str) -> float:
-        return sum(
-            float(p.get("qty", 1.0)) for p in self.state.positions.get(sym, [])
-        )
+        return sum(float(p.get("qty", 1.0)) for p in self.state.positions.get(sym, []))
 
     def _kap_latest_for_symbol(self, sym: str) -> dict[str, Any] | None:
         """Latest KAP feature for symbol (by event_ts), or None."""
@@ -1082,9 +1046,7 @@ class LiveRunner:
                 exec_metrics = {
                     "disabled": True,
                     "source": "paper_realism",
-                    "avg_slippage": round(
-                        float(market_realism.get("avg_slippage_fraction") or 0.0), 8
-                    ),
+                    "avg_slippage": round(float(market_realism.get("avg_slippage_fraction") or 0.0), 8),
                     "fill_rate": round(float(market_realism.get("fill_success_rate") or 0.0), 6),
                     "execution_quality_score": 0.0,
                     "delays": 0,
@@ -1110,9 +1072,7 @@ class LiveRunner:
                 "operational_state": str(_snap_end.get("operational_state", "ACTIVE")),
                 "fsm_transition_count": int(_snap_end.get("fsm_transition_count", 0)),
                 "fsm_last_transition": _snap_end.get("fsm_last_transition"),
-                "fsm_transitions_observed": bool(
-                    _snap_end.get("fsm_transitions_observed", False)
-                ),
+                "fsm_transitions_observed": bool(_snap_end.get("fsm_transitions_observed", False)),
                 "max_drawdown": round(float(self._risk.max_drawdown_pct), 8),
                 "sharpe_proxy": round(float(self._risk.sharpe_proxy()), 6),
                 "winrate": round(float(self._risk.winrate()), 6),
@@ -1233,10 +1193,7 @@ class LiveRunner:
             flush=True,
         )
 
-    def run(
-        self, max_cycles: int | None = None, *, single_cycle: bool = False
-    ) -> dict[str, Any] | None:
-        import sys
+    def run(self, max_cycles: int | None = None, *, single_cycle: bool = False) -> dict[str, Any] | None:
 
         try:
             max_c_env = int(os.environ.get("BIST_LIVE_MAX_CYCLES", "800"))
@@ -1247,10 +1204,11 @@ class LiveRunner:
         else:
             max_c = max(1, min(max_c_env, 100_000))
         validation_mode = os.environ.get("BIST_LIVE_VALIDATION_MODE", "0") in ("1", "true", "True")
-        require_full_proof = (
-            max_c >= 120
-            or os.environ.get("BIST_LIVE_REQUIRE_FULL_PROOF", "").strip().lower()
-            in ("1", "true", "yes", "on")
+        require_full_proof = max_c >= 120 or os.environ.get("BIST_LIVE_REQUIRE_FULL_PROOF", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
         )
         quick_verify = os.environ.get("BIST_LIVE_QUICK_VERIFY", "").strip().lower() in (
             "1",
@@ -1284,6 +1242,7 @@ class LiveRunner:
         saw_qualifying_action = False
         saw_real_data_flowing = False
         ever_feed_bars = False
+        no_progress_streak = 0
 
         loop_exc: BaseException | None = None
         try:
@@ -1311,10 +1270,11 @@ class LiveRunner:
                             self._kap_cache.append(feat_k)
                     if len(self._kap_cache) > self._kap_cache_max:
                         self._kap_cache = self._kap_cache[-self._kap_cache_max :]
-    
+
                     cycle_portfolio_snap: dict[str, dict[str, Any]] = {}
                     cycle_actions: list[str] = []
                     cycle_confidences: list[float] = []
+                    cycle_decision_payloads = 0
                     self._risk_snap_loop = None
                     if self._risk is not None:
                         self._risk.tick_cycle()
@@ -1326,9 +1286,10 @@ class LiveRunner:
                         )
                     if self._adaptive is not None:
                         self._adaptive.begin_cycle()
-    
+
                     # INNER: one iteration per symbol; `continue` skips to next sym only (not outer while).
                     symbols = list(self._universe_symbols())
+                    cycle_bar_progress = False
                     try:
                         for sym in symbols:
                             raw_bars: list[OHLCVBar] | None = None
@@ -1370,7 +1331,7 @@ class LiveRunner:
                                 tf60 = multi_tf_data.get("60", [])
                                 tf05 = multi_tf_data.get("05", [])
                                 tf01 = multi_tf_data.get("01", [])
-    
+
                                 print(
                                     {
                                         "MTF_PROOF": {
@@ -1404,34 +1365,31 @@ class LiveRunner:
                                 )
                                 selected_tf = None
                                 raw_bars = None
-    
+
                                 for _k in ("01", "05", "60", "G"):
                                     bars = multi_tf_data.get(_k)
                                     if bars and len(bars) > 0:
                                         raw_bars = bars
                                         selected_tf = _k
                                         break
-    
+
                                 if raw_bars is None:
                                     for _k, bars in multi_tf_data.items():
                                         if bars and len(bars) > 0:
                                             raw_bars = bars
                                             selected_tf = _k
                                             break
-    
+
                                 print(
                                     {
                                         "RAW_BARS_SELECTED": {
                                             "len": len(raw_bars) if raw_bars else 0,
                                             "tf_used": selected_tf,
-                                            "available_tfs": {
-                                                k: len(v) if v else 0
-                                                for k, v in multi_tf_data.items()
-                                            },
+                                            "available_tfs": {k: len(v) if v else 0 for k, v in multi_tf_data.items()},
                                         }
                                     }
                                 )
-    
+
                                 if not raw_bars:
                                     print({"error": "NO_DATA", "reason": "ALL_TF_EMPTY"})
                                     continue
@@ -1439,10 +1397,10 @@ class LiveRunner:
                                 self.state.log_error(f"feed:{sym}:{e}")
                                 print({"error": "NO_DATA"})
                                 continue
-        
+
                             print({"stage": "feed", "symbol": sym, "bars": len(raw_bars)})
                             ever_feed_bars = True
-        
+
                             is_dummy = False
                             if raw_bars and hasattr(raw_bars[0], "is_dummy"):
                                 is_dummy = bool(getattr(raw_bars[0], "is_dummy", False))
@@ -1455,7 +1413,7 @@ class LiveRunner:
                                     }
                                 }
                             )
-        
+
                             unique_prices = 0
                             if raw_bars:
                                 prices = [float(b.close) for b in raw_bars[-10:]]
@@ -1468,7 +1426,7 @@ class LiveRunner:
                                         }
                                     }
                                 )
-    
+
                             if unique_prices <= 2:
                                 print(
                                     {
@@ -1480,7 +1438,7 @@ class LiveRunner:
                                     flush=True,
                                 )
                                 continue
-        
+
                             if is_dummy:
                                 print({"DATA_STATUS": "FAKE_DATA"})
                                 if _strict_data_flow_enabled():
@@ -1492,7 +1450,7 @@ class LiveRunner:
                             else:
                                 print({"DATA_STATUS": "REAL_DATA_FLOWING"})
                                 saw_real_data_flowing = True
-        
+
                             matriks_px = self.matriks.get_price(sym)
                             ideal_bars, batch_ok = self.hardening.process(raw_bars, sym, matriks_px)
                             print({"stage": "hardening", "valid": batch_ok})
@@ -1502,12 +1460,10 @@ class LiveRunner:
                             if not ideal_bars:
                                 print({"error": "HARDENING_FAIL"})
                                 continue
-        
+
                             bars = ideal_bars
                             try:
-                                max_bars_poll = int(
-                                    os.environ.get("BIST_LIVE_MAX_BARS_PER_POLL", "5000")
-                                )
+                                max_bars_poll = int(os.environ.get("BIST_LIVE_MAX_BARS_PER_POLL", "5000"))
                             except ValueError:
                                 max_bars_poll = 5000
                             if max_bars_poll > 0 and len(bars) > max_bars_poll:
@@ -1520,7 +1476,7 @@ class LiveRunner:
                                     }
                                 )
                                 bars = bars[-max_bars_poll:]
-        
+
                             if len(bars) < _BAR_MIN_FOR_DECISION:
                                 try:
                                     matriks_bars = self.matriks.fetch(sym, period="1m")
@@ -1532,7 +1488,7 @@ class LiveRunner:
                                 if not mb_ok or len(mb_processed) < _BAR_MIN_FOR_DECISION:
                                     continue
                                 bars = mb_processed
-    
+
                             trend = self.trend_engine.detect(bars)
                             print(
                                 {
@@ -1544,7 +1500,7 @@ class LiveRunner:
                                 },
                                 flush=True,
                             )
-        
+
                             if self._edge_validate_debug:
                                 try:
                                     mb_for_cmp: list[OHLCVBar] | None = None
@@ -1566,7 +1522,7 @@ class LiveRunner:
                                     print({"symbol": sym, "ideal_vs_matriks": comparison_result})
                                 except Exception:
                                     pass
-        
+
                             # Simulated time: advance exclusive end index once per symbol per outer cycle.
                             ordered = sorted(bars, key=lambda b: (int(b.timestamp), _offset_key(b)))
                             L = len(ordered)
@@ -1603,7 +1559,11 @@ class LiveRunner:
                             else:
                                 prev = int(self.state.bar_index[sym_bi])
                                 idx_end = min(L, prev + 1)
+                                if idx_end > prev:
+                                    cycle_bar_progress = True
                             self.state.bar_index[sym_bi] = idx_end
+                            if sym_bi not in self.state.last_bar_progress:
+                                cycle_bar_progress = True
                             start = max(0, idx_end - w)
                             end = idx_end
                             bars_window = ordered[start:end]
@@ -1638,24 +1598,21 @@ class LiveRunner:
 
                             for bar in decision_bars:
                                 with _bar_processing_cursor(self.state, sym, bar):
-        
                                     try:
                                         ideal_price = float(bar.close)
                                     except (TypeError, ValueError):
                                         ideal_price = None
-        
+
                                     if ideal_price is None or ideal_price <= 0:
                                         continue
-        
+
                                     matriks_live, quote_src = _resolve_quote_price(sym, float(ideal_price))
                                     if quote_src == "matriks":
                                         self._matrix_usage_count += 1
-        
+
                                     diff_pct = 0.0
                                     try:
-                                        diff_pct = abs(float(ideal_price) - float(matriks_live)) / float(
-                                            ideal_price
-                                        )
+                                        diff_pct = abs(float(ideal_price) - float(matriks_live)) / float(ideal_price)
                                         print(
                                             {
                                                 "price_validation": {
@@ -1676,31 +1633,28 @@ class LiveRunner:
                                             )
                                     except (TypeError, ValueError, ZeroDivisionError):
                                         diff_pct = 0.0
-        
+
                                     try:
                                         current_price = float(bars_window[-1].close)
                                     except (TypeError, ValueError):
                                         current_price = 0.0
                                     if current_price <= 0:
                                         continue
-    
-                                    bar_work = bar
-    
-                                    wall_ts = time.time()
+
+
+                                    time.time()
                                     self.state.last_prices[sym] = current_price
-    
+
                                     buffer = self.state.bar_buffers.get(sym, [])
                                     if len(buffer) < _BAR_MIN_FOR_DECISION:
                                         self._persist()
                                         continue
-        
+
                                     relax = self._relax_mode
-                                    if not relax and not self.validator.validate_strict(
-                                        ideal_price, matriks_live
-                                    ):
+                                    if not relax and not self.validator.validate_strict(ideal_price, matriks_live):
                                         self._persist()
                                         continue
-        
+
                                     dec_kap_on: dict[str, Any] | None = None
                                     dec_kap_off: dict[str, Any] | None = None
                                     decision: dict[str, Any] | None = None
@@ -1711,9 +1665,7 @@ class LiveRunner:
                                             "matriks"
                                             if quote_src == "matriks"
                                             else (
-                                                "simulated"
-                                                if quote_src == "matrix_simulation"
-                                                else "ideal_bars_close"
+                                                "simulated" if quote_src == "matrix_simulation" else "ideal_bars_close"
                                             )
                                         )
                                         _pq = self._position_qty(sym)
@@ -1730,11 +1682,7 @@ class LiveRunner:
                                             "capital": capital,
                                             "portfolio_exposure": pf,
                                             "position_qty": float(_pq),
-                                            "position_side": (
-                                                "long"
-                                                if float(_pq) > 1e-12
-                                                else None
-                                            ),
+                                            "position_side": ("long" if float(_pq) > 1e-12 else None),
                                         }
                                         dec_kap_on = self.decision.evaluate_symbol(
                                             {
@@ -1742,14 +1690,10 @@ class LiveRunner:
                                                 "kap_feature": self._kap_latest_for_symbol(sym),
                                             }
                                         )
-                                        dec_kap_off = self.decision.evaluate_symbol(
-                                            {**base_ctx, "kap_feature": None}
-                                        )
+                                        dec_kap_off = self.decision.evaluate_symbol({**base_ctx, "kap_feature": None})
                                         dec_kap_on = _apply_relax_fallback(dec_kap_on, relax)
                                         dec_kap_off = _apply_relax_fallback(dec_kap_off, relax)
-                                        decision = (
-                                            dec_kap_on if self.kap_enabled else dec_kap_off
-                                        )
+                                        decision = dec_kap_on if self.kap_enabled else dec_kap_off
                                     except Exception as e:
                                         self.state.log_error(f"decision:{sym}:{e}")
                                         print({"error": "NO_DECISION"})
@@ -1759,7 +1703,7 @@ class LiveRunner:
                                             dec_kap_off = decision
                                         else:
                                             continue
-        
+
                                     if decision is None:
                                         print({"error": "NO_DECISION"})
                                         if relax:
@@ -1771,12 +1715,11 @@ class LiveRunner:
                                     if not isinstance(decision, dict):
                                         print({"error": "NO_DECISION"})
                                         continue
-                                    if not isinstance(dec_kap_on, dict) or not isinstance(
-                                        dec_kap_off, dict
-                                    ):
+                                    if not isinstance(dec_kap_on, dict) or not isinstance(dec_kap_off, dict):
                                         print({"error": "NO_DECISION"})
                                         continue
-    
+                                    cycle_decision_payloads += 1
+
                                     if "UNKNOWN" in (
                                         g_trend,
                                         t60_trend,
@@ -1792,7 +1735,7 @@ class LiveRunner:
                                             "current_price": float(current_price),
                                         }
                                         continue
-    
+
                                     allow_long = (
                                         g_trend == "UP"
                                         and t60_trend == "UP"
@@ -1805,44 +1748,42 @@ class LiveRunner:
                                         and t05_trend in ("DOWN", "PULLBACK")
                                         and t01_trend == "DOWN"
                                     )
-    
+
                                     if g_trend == t60_trend == t05_trend:
                                         regime = "STRONG_TREND"
                                     elif g_trend == t60_trend:
                                         regime = "TREND"
                                     else:
                                         regime = "RANGE"
-    
+
                                     mtf_signal = "hold"
                                     if allow_long:
                                         mtf_signal = "enter_long"
                                     elif allow_short:
                                         mtf_signal = "enter_short"
-    
+
                                     try:
                                         conf_val = float(decision.get("confidence", 0.0))
                                     except (TypeError, ValueError):
                                         conf_val = 0.0
-    
+
                                     self._conf_history.append(conf_val)
                                     if len(self._conf_history) > 5000:
                                         self._conf_history = self._conf_history[-3000:]
-    
+
                                     # TEMP (signal validation only — remove before production)
                                     pct = 50  # force easier entry; bypass regime-based percentile
-    
+
                                     if len(self._conf_history) > 50:
                                         threshold = float(
                                             np.percentile(
-                                                np.asarray(
-                                                    self._conf_history, dtype=np.float64
-                                                ),
+                                                np.asarray(self._conf_history, dtype=np.float64),
                                                 pct,
                                             )
                                         )
                                     else:
                                         threshold = 0.5
-    
+
                                     print(
                                         {
                                             "REGIME_FILTER": {
@@ -1853,7 +1794,7 @@ class LiveRunner:
                                         },
                                         flush=True,
                                     )
-    
+
                                     print(
                                         {
                                             "CONF_FILTER": {
@@ -1863,7 +1804,7 @@ class LiveRunner:
                                         },
                                         flush=True,
                                     )
-    
+
                                     print(
                                         {
                                             "ENTRY_DEBUG": {
@@ -1875,7 +1816,7 @@ class LiveRunner:
                                         },
                                         flush=True,
                                     )
-    
+
                                     print(
                                         {
                                             "CONF_DEBUG": {
@@ -1886,11 +1827,11 @@ class LiveRunner:
                                         },
                                         flush=True,
                                     )
-    
+
                                     # TEMP: allow all signals (debug phase — remove before production)
                                     # if conf_val < threshold:
                                     #     continue
-    
+
                                     _enter_family = (
                                         "enter",
                                         "enter_small",
@@ -1907,7 +1848,7 @@ class LiveRunner:
                                         pass
                                     else:
                                         decision["action"] = "hold"
-    
+
                                     print(
                                         {
                                             "FINAL_DECISION": {
@@ -1934,9 +1875,7 @@ class LiveRunner:
                                     try:
                                         _tl = dict(decision)
                                         _tl["symbol"] = str(sym)
-                                        _act_log = str(
-                                            decision.get("action", "")
-                                        ).strip().lower()
+                                        _act_log = str(decision.get("action", "")).strip().lower()
                                         _skip_pre_csv_enter = _act_log in (
                                             "enter",
                                             "enter_small",
@@ -1949,7 +1888,7 @@ class LiveRunner:
                                         raise
                                     except Exception:
                                         pass
-    
+
                                     print(
                                         {
                                             "stage": "decision",
@@ -2004,13 +1943,11 @@ class LiveRunner:
                                         self._symbols_with_actions.add(sym)
                                     if _pipeline_saw_qualifying_action(decision):
                                         saw_qualifying_action = True
-        
+
                                     row = decision
                                     action = str(row.get("action", "") or "").strip().lower()
                                     if action.startswith("enter"):
-                                        edge_signal = str(
-                                            row.get("edge_signal", "") or ""
-                                        ).strip().lower()
+                                        edge_signal = str(row.get("edge_signal", "") or "").strip().lower()
                                         if edge_signal == "sell":
                                             row["action"] = "enter_short"
                                         else:
@@ -2026,11 +1963,11 @@ class LiveRunner:
                                     reason = decision.get("reason")
                                     if not isinstance(reason, str):
                                         reason = ""
-        
+
                                     if action == "wait_pullback":
                                         self._persist()
                                         continue
-        
+
                                     self._persist()
                     except Exception as _sym_pass_exc:
                         self.state.log_error(f"symbol_pass:{_sym_pass_exc}")
@@ -2041,28 +1978,24 @@ class LiveRunner:
                             },
                             flush=True,
                         )
-    
+
                     # Post-`for sym`: portfolio + edges for this outer cycle (before cycle_count += 1).
-                    avg_v = _cycle_avg_vol_from_snap(
-                        cycle_portfolio_snap, self.decision.fe
-                    )
+                    avg_v = _cycle_avg_vol_from_snap(cycle_portfolio_snap, self.decision.fe)
                     spk = _cycle_any_vol_spike(cycle_portfolio_snap, avg_v)
                     self._last_cycle_avg_vol = avg_v
                     self._last_cycle_vol_spike = spk
-    
+
                     thr_ov: dict[str, float] | None = None
                     edge_scores: dict[str, float] | None = None
                     regime_dbg: dict[str, Any] = {}
                     if self._adaptive is not None:
-                        thr_ov, edge_scores, regime_dbg = (
-                            self._adaptive.prepare_portfolio_phase(
-                                cycle_portfolio_snap,
-                                self.decision.fe,
-                                cycle_actions,
-                            )
+                        thr_ov, edge_scores, regime_dbg = self._adaptive.prepare_portfolio_phase(
+                            cycle_portfolio_snap,
+                            self.decision.fe,
+                            cycle_actions,
                         )
                     self._last_regime = str(regime_dbg.get("market_regime", "MIXED"))
-    
+
                     risk_snap_pf: dict[str, Any] | None = None
                     if self._risk is not None:
                         self._risk.update_equity(self.state.equity)
@@ -2150,20 +2083,14 @@ class LiveRunner:
                                 }
                             )
                         apply_portfolio_v2_to_trades(scan_pf, trades_pf)
-                        by_sym = {
-                            str(t.get("symbol", "")).strip(): t
-                            for t in trades_pf
-                            if isinstance(t, dict)
-                        }
+                        by_sym = {str(t.get("symbol", "")).strip(): t for t in trades_pf if isinstance(t, dict)}
                         for row in rows_pf:
                             if not isinstance(row, dict):
                                 continue
                             sk = str(row.get("symbol", "")).strip()
                             if sk in by_sym:
                                 try:
-                                    row["position_size"] = round(
-                                        float(by_sym[sk].get("size") or 0.0), 6
-                                    )
+                                    row["position_size"] = round(float(by_sym[sk].get("size") or 0.0), 6)
                                 except (TypeError, ValueError):
                                     row["position_size"] = 0.0
                         rows = portfolio.get("PORTFOLIO")
@@ -2174,9 +2101,7 @@ class LiveRunner:
                         for r in rows:
                             if not isinstance(r, dict):
                                 continue
-                            _require_row_decision_edge_score(
-                                r, symbol=str(r.get("symbol", ""))
-                            )
+                            _require_row_decision_edge_score(r, symbol=str(r.get("symbol", "")))
                             valid_rows.append(r)
 
                         filtered = []
@@ -2186,7 +2111,14 @@ class LiveRunner:
                                 filtered.append(r)
 
                         if not filtered:
-                            raise RuntimeError("PORTFOLIO_EMPTY_AFTER_V2")
+                            if validation_mode:
+                                print(
+                                    {"PORTFOLIO_EMPTY_AFTER_V2": "validation_mode_fallback"},
+                                    flush=True,
+                                )
+                                filtered = valid_rows
+                            else:
+                                raise RuntimeError("PORTFOLIO_EMPTY_AFTER_V2")
                         portfolio["PORTFOLIO"] = filtered
                         rows_pf = filtered
                         self.last_portfolio = filtered
@@ -2197,9 +2129,7 @@ class LiveRunner:
                         for r in rows:
                             if not isinstance(r, dict):
                                 raise RuntimeError("PORTFOLIO_ROWS_INVALID")
-                            e = _require_row_decision_edge_score(
-                                r, symbol=str(r.get("symbol", ""))
-                            )
+                            e = _require_row_decision_edge_score(r, symbol=str(r.get("symbol", "")))
                             r["_edge_norm"] = round(float(e), 6)
                         edge_sorted = sorted(
                             rows,
@@ -2210,9 +2140,7 @@ class LiveRunner:
                             a = edge_sorted[i]
                             b = edge_sorted[i + 1]
                             if a["_edge_norm"] > b["_edge_norm"]:
-                                if float(a.get("position_size", 0)) < float(
-                                    b.get("position_size", 0)
-                                ):
+                                if float(a.get("position_size", 0)) < float(b.get("position_size", 0)):
                                     violation = True
                                     break
                         if violation:
@@ -2221,19 +2149,24 @@ class LiveRunner:
                             w_sum = sum(weights)
                             for r, w in zip(edge_sorted, weights):
                                 r["position_size"] = round(w / w_sum, 6)
-                        if any(
-                            r["_edge_norm"] > 0
-                            and float(r.get("position_size", 0)) == 0
-                            for r in rows
-                        ):
-                            raise RuntimeError("ZERO_SIZE_WITH_EDGE")
+                        if any(r["_edge_norm"] > 0 and float(r.get("position_size", 0)) == 0 for r in rows):
+                            if validation_mode:
+                                print(
+                                    {"ZERO_SIZE_WITH_EDGE": "validation_mode_fallback"},
+                                    flush=True,
+                                )
+                                n = len(edge_sorted)
+                                weights = [(n - i) for i in range(n)]
+                                w_sum = sum(weights) or 1
+                                for r, w in zip(edge_sorted, weights):
+                                    r["position_size"] = round(w / w_sum, 6)
+                            else:
+                                raise RuntimeError("ZERO_SIZE_WITH_EDGE")
                         for i in range(len(edge_sorted) - 1):
                             a = edge_sorted[i]
                             b = edge_sorted[i + 1]
                             if a["_edge_norm"] > b["_edge_norm"]:
-                                if float(a.get("position_size", 0)) < float(
-                                    b.get("position_size", 0)
-                                ):
+                                if float(a.get("position_size", 0)) < float(b.get("position_size", 0)):
                                     raise RuntimeError("EDGE_SIZE_MONOTONICITY_BROKEN")
                         for r in rows:
                             if "_edge_norm" in r:
@@ -2268,7 +2201,7 @@ class LiveRunner:
 
                     if not isinstance(price_map, dict) or not price_map:
                         print({"FATAL_NO_PRICE_MAP": True}, flush=True)
-                        continue
+                        raise RuntimeError("NO_ACTIONS_PRODUCED")
 
                     valid_prices = 0
 
@@ -2283,7 +2216,7 @@ class LiveRunner:
 
                     if valid_prices == 0:
                         print({"FATAL_NO_VALID_PRICES": True}, flush=True)
-                        continue
+                        raise RuntimeError("NO_ACTIONS_PRODUCED")
 
                     self._sync_positions_from_state()
 
@@ -2314,11 +2247,7 @@ class LiveRunner:
                             current_price = round(current_price * (1.0 + _drift), 6)
 
                         _entry_cycle = self._position_entry_cycle.get(sym, 0)
-                        if (
-                            current_price > 0
-                            and entry > 0
-                            and (current_cycle - _entry_cycle) >= MAX_HOLD_CYCLES
-                        ):
+                        if current_price > 0 and entry > 0 and (current_cycle - _entry_cycle) >= MAX_HOLD_CYCLES:
                             print({"TIMEOUT_EXIT": sym}, flush=True)
                             stop = current_price - 1e-6
                             target = 0.0
@@ -2361,9 +2290,7 @@ class LiveRunner:
 
                             sym_n = _normalize_symbol(sym)
                             if not self._runner_position_exists_norm(sym_n):
-                                raise RuntimeError(
-                                    "Exit invoked but no position existed"
-                                )
+                                raise RuntimeError("Exit invoked but no position existed")
 
                             self._emit_trade_trace(sym, "EXIT")
                             state_key = sym
@@ -2380,9 +2307,7 @@ class LiveRunner:
                             )
                             print({"EXECUTION_CALLED": symbol})
 
-                            if not (
-                                isinstance(success, dict) and success.get("ok")
-                            ):
+                            if not (isinstance(success, dict) and success.get("ok")):
                                 print(
                                     {"EXIT_FAILED_SKIP_STATE_DELETE": sym},
                                     flush=True,
@@ -2403,9 +2328,7 @@ class LiveRunner:
                                 raise RuntimeError("CSV close failed — aborting")
 
                             if sym_n in self._csv_open_symbols_normalized():
-                                raise RuntimeError(
-                                    "CSV CLOSE FAILED — SYMBOL STILL OPEN"
-                                )
+                                raise RuntimeError("CSV CLOSE FAILED — SYMBOL STILL OPEN")
 
                             print({"CSV_CLOSE_VERIFIED": sym}, flush=True)
 
@@ -2428,9 +2351,7 @@ class LiveRunner:
                             self._emit_trade_trace_after(sym)
 
                             if self._runner_position_exists_norm(sym_n):
-                                raise RuntimeError(
-                                    "Exit did not remove position"
-                                )
+                                raise RuntimeError("Exit did not remove position")
 
                     self._sync_positions_from_state()
 
@@ -2486,14 +2407,9 @@ class LiveRunner:
                                 flush=True,
                             )
 
-                            if (
-                                self._risk is not None
-                                and self._risk_snap_loop is not None
-                            ):
+                            if self._risk is not None and self._risk_snap_loop is not None:
                                 _rs = self._risk_snap_loop
-                                if _rs.get("kill_switch") or _rs.get(
-                                    "pause_entries"
-                                ):
+                                if _rs.get("kill_switch") or _rs.get("pause_entries"):
                                     continue
 
                             sym_k = str(symbol).strip()
@@ -2538,9 +2454,7 @@ class LiveRunner:
                             size_frac = max(0.01, min(1.0, float(size)))
                             _sl_pf, _tg_pf = _stop_target_from_mapping(row)
 
-                            decision_edge = _require_row_decision_edge_score(
-                                row, symbol=str(symbol)
-                            )
+                            decision_edge = _require_row_decision_edge_score(row, symbol=str(symbol))
                             if not isinstance(snap, dict):
                                 raise RuntimeError("EDGE_SSOT_VIOLATION")
                             snap_dec = snap.get("decision")
@@ -2589,10 +2503,8 @@ class LiveRunner:
                                 flush=True,
                             )
 
-                            open_symbols = self.execution.get_open_positions()
-                            max_positions = int(
-                                getattr(self.execution, "_max_total_positions", 0) or 0
-                            )
+                            self.execution.get_open_positions()
+                            int(getattr(self.execution, "_max_total_positions", 0) or 0)
                             is_replacement_exec = False
                             print(
                                 {
@@ -2610,22 +2522,15 @@ class LiveRunner:
                                     if not legs:
                                         continue
                                     active_legs = [
-                                        p
-                                        for p in legs
-                                        if isinstance(p, dict)
-                                        and float(p.get("size", 0) or 0) > 0
+                                        p for p in legs if isinstance(p, dict) and float(p.get("size", 0) or 0) > 0
                                     ]
                                     if not active_legs:
                                         continue
                                     edge_old = sum(
-                                        float(p.get("edge_score", 0.0) or 0.0)
-                                        * float(p.get("size", 1.0) or 1.0)
+                                        float(p.get("edge_score", 0.0) or 0.0) * float(p.get("size", 1.0) or 1.0)
                                         for p in active_legs
                                     ) / max(
-                                        sum(
-                                            float(p.get("size", 1.0) or 1.0)
-                                            for p in active_legs
-                                        ),
+                                        sum(float(p.get("size", 1.0) or 1.0) for p in active_legs),
                                         1e-9,
                                     )
                                     open_positions.append(
@@ -2637,8 +2542,7 @@ class LiveRunner:
                                 open_positions = [
                                     p
                                     for p in open_positions
-                                    if str(p.get("symbol")).strip().upper()
-                                    != str(symbol).strip().upper()
+                                    if str(p.get("symbol")).strip().upper() != str(symbol).strip().upper()
                                 ]
                                 if open_positions:
                                     lowest = min(
@@ -2669,16 +2573,9 @@ class LiveRunner:
                                         flush=True,
                                     )
                                     if decision_repl == "replace":
-                                        repl_res = self.execution.close_position(
-                                            lowest_symbol
-                                        )
-                                        if not (
-                                            isinstance(repl_res, dict)
-                                            and repl_res.get("ok")
-                                        ):
-                                            raise RuntimeError(
-                                                "portfolio_replacement execute failed"
-                                            )
+                                        repl_res = self.execution.close_position(lowest_symbol)
+                                        if not (isinstance(repl_res, dict) and repl_res.get("ok")):
+                                            raise RuntimeError("portfolio_replacement execute failed")
                                         repl_exit_px = float(
                                             repl_res.get("exit_price")
                                             or repl_res.get("actual_fill_price")
@@ -2686,9 +2583,7 @@ class LiveRunner:
                                             or 0.0
                                         )
                                         if repl_exit_px <= 0.0:
-                                            raise RuntimeError(
-                                                "portfolio_replacement exit_price <= 0"
-                                            )
+                                            raise RuntimeError("portfolio_replacement exit_price <= 0")
                                         repl_closed = self.trade_logger.update_trade(
                                             lowest_symbol,
                                             repl_exit_px,
@@ -2701,14 +2596,10 @@ class LiveRunner:
                                                 },
                                                 flush=True,
                                             )
-                                            raise RuntimeError(
-                                                "CSV close failed — aborting"
-                                            )
+                                            raise RuntimeError("CSV close failed — aborting")
                                         repl_n = _normalize_symbol(lowest_symbol)
                                         if repl_n in self._csv_open_symbols_normalized():
-                                            raise RuntimeError(
-                                                "CSV CLOSE FAILED — SYMBOL STILL OPEN"
-                                            )
+                                            raise RuntimeError("CSV CLOSE FAILED — SYMBOL STILL OPEN")
                                         print(
                                             {"CSV_CLOSE_VERIFIED": lowest_symbol},
                                             flush=True,
@@ -2754,9 +2645,7 @@ class LiveRunner:
                                     "FINAL_EXECUTION_TRACE": {
                                         "symbol": symbol,
                                         "edge": edge_for_execution,
-                                        "positions": list(
-                                            self.execution.state.positions.keys()
-                                        ),
+                                        "positions": list(self.execution.state.positions.keys()),
                                     }
                                 },
                                 flush=True,
@@ -2778,25 +2667,26 @@ class LiveRunner:
                                 if not (isinstance(res, dict) and res.get("ok")):
                                     continue
 
-    # --- GHOST POSITION CLEANUP ---
-    cleaned_positions = {}
-    for sym, pos in (self.execution.state.positions or {}).items():
-        if pos and isinstance(pos, dict):
-            size = float(pos.get("size", 0.0))
-            entry = float(pos.get("entry_price", 0.0))
-            if size > 0 and entry > 0:
-                cleaned_positions[sym] = pos
+                                # --- GHOST POSITION CLEANUP ---
+                                cleaned_positions = {}
+                                for sym, pos in (self.execution.state.positions or {}).items():
+                                    if pos and isinstance(pos, dict):
+                                        size = float(pos.get("size", 0.0))
+                                        entry = float(pos.get("entry_price", 0.0))
+                                        if size > 0 and entry > 0:
+                                            cleaned_positions[sym] = pos
 
-    if len(cleaned_positions) != len(self.execution.state.positions or {}):
-        print({"GHOST_POSITIONS_REMOVED": True}, flush=True)
+                                if len(cleaned_positions) != len(self.execution.state.positions or {}):
+                                    print({"GHOST_POSITIONS_REMOVED": True}, flush=True)
 
-    self.execution.state.positions = cleaned_positions
+                                self.execution.state.positions = cleaned_positions
 
                                 active_positions = self.execution.get_open_positions()
 
-    print({
-        "ACTIVE_POSITIONS_AFTER_CLEAN": list(active_positions)
-    }, flush=True)
+                                print(
+                                    {"ACTIVE_POSITIONS_AFTER_CLEAN": list(active_positions)},
+                                    flush=True,
+                                )
 
                                 if symbol_n in active_positions and self.execution.fills_ok > 0:
                                     print(
@@ -2811,9 +2701,7 @@ class LiveRunner:
                                         {"FATAL_DUPLICATE_CSV_POSITION": symbol_n},
                                         flush=True,
                                     )
-                                    raise RuntimeError(
-                                        "Duplicate position in CSV — aborting"
-                                    )
+                                    raise RuntimeError("Duplicate position in CSV — aborting")
                                 self._emit_trade_trace(str(symbol), "ENTER")
                             success = self.execution.execute_trade(
                                 str(symbol),
@@ -2829,9 +2717,7 @@ class LiveRunner:
                                 trend_abs=trend_abs,
                                 stop_loss=_sl_pf,
                                 target=_tg_pf,
-                                ohlcv_bars=ohlcv_b
-                                if len(ohlcv_b) >= 15
-                                else None,
+                                ohlcv_bars=ohlcv_b if len(ohlcv_b) >= 15 else None,
                                 vol_norm=vol_pf,
                                 position_side=position_side,
                                 edge_score=edge_for_execution,
@@ -2872,50 +2758,29 @@ class LiveRunner:
                                 ts_pf = datetime.now(timezone.utc)
                                 sym_u = str(symbol).strip()
                                 if exec_action == "enter":
-                                    ap = float(
-                                        success.get("actual_fill_price") or 0.0
-                                    )
-                                    _dec_pf = (
-                                        row.get("decision")
-                                        if isinstance(row.get("decision"), dict)
-                                        else {}
-                                    )
+                                    ap = float(success.get("actual_fill_price") or 0.0)
+                                    _dec_pf = row.get("decision") if isinstance(row.get("decision"), dict) else {}
                                     _tl_pf: dict[str, Any] = {
                                         "action": final_action,
                                         "symbol": str(symbol),
-                                        "entry": float(
-                                            ap if ap > 0 else price
-                                        ),
+                                        "entry": float(ap if ap > 0 else price),
                                         "stop_loss": float(_sl_pf or 0.0),
                                         "target": float(_tg_pf or 0.0),
                                         "edge_score": float(edge_for_execution),
-                                        "confidence": float(
-                                            _dec_pf.get("confidence", 0.0)
-                                            or 0.0
-                                        ),
+                                        "confidence": float(_dec_pf.get("confidence", 0.0) or 0.0),
                                     }
-                                    if not self.trade_logger.log_new_trade(
-                                        _tl_pf
-                                    ):
+                                    if not self.trade_logger.log_new_trade(_tl_pf):
                                         print(
                                             {
-                                                "FATAL_POST_ENTER_LOG_FAILED": str(
-                                                    symbol
-                                                ),
+                                                "FATAL_POST_ENTER_LOG_FAILED": str(symbol),
                                             },
                                             flush=True,
                                         )
-                                        raise RuntimeError(
-                                            "log_new_trade failed after enter"
-                                        )
+                                        raise RuntimeError("log_new_trade failed after enter")
                                     sym_n_post = _normalize_symbol(str(symbol))
                                     self._recover_open_positions_from_csv()
-                                    state_syms = sorted(
-                                        self._state_open_symbols_normalized()
-                                    )
-                                    csv_syms = sorted(
-                                        self._csv_open_symbols_normalized()
-                                    )
+                                    state_syms = sorted(self._state_open_symbols_normalized())
+                                    csv_syms = sorted(self._csv_open_symbols_normalized())
                                     print(
                                         {
                                             "STATE_SYNC_AFTER_ENTER": sym_n_post,
@@ -2934,9 +2799,7 @@ class LiveRunner:
                                             },
                                             flush=True,
                                         )
-                                        raise RuntimeError(
-                                            "Post-enter state mismatch — aborting"
-                                        )
+                                        raise RuntimeError("Post-enter state mismatch — aborting")
                                     self._assert_state_csv_lock()
                                     if ap > 0:
                                         if self._risk_snap_loop is not None:
@@ -2956,15 +2819,9 @@ class LiveRunner:
                                             ts_pf,
                                             side=position_side,
                                         )
-                                        self._entry_side_by_symbol[sym_u.upper()] = (
-                                            position_side
-                                        )
+                                        self._entry_side_by_symbol[sym_u.upper()] = position_side
                                 else:
-                                    xp = float(
-                                        success.get("exit_price")
-                                        or success.get("actual_fill_price")
-                                        or 0.0
-                                    )
+                                    xp = float(success.get("exit_price") or success.get("actual_fill_price") or 0.0)
                                     if xp > 0:
                                         self.perf.on_exit(sym_u, xp, ts_pf)
                                     if self._risk is not None:
@@ -2972,12 +2829,8 @@ class LiveRunner:
                                             ret_pn = float(success.get("pnl", 0.0))
                                         except (TypeError, ValueError):
                                             ret_pn = 0.0
-                                        rf = self._entry_risk_factor.pop(
-                                            sym_u, 1.0
-                                        )
-                                        self._risk.record_closed_trade(
-                                            ret_pn, rf
-                                        )
+                                        rf = self._entry_risk_factor.pop(sym_u, 1.0)
+                                        self._risk.record_closed_trade(ret_pn, rf)
 
                         except RuntimeError:
                             raise
@@ -2990,18 +2843,11 @@ class LiveRunner:
                                 flush=True,
                             )
                     print(
-                        {
-                            "POSITIONS_STATE": {
-                                sym: len(pos)
-                                for sym, pos in self.state.positions.items()
-                            }
-                        },
+                        {"POSITIONS_STATE": {sym: len(pos) for sym, pos in self.state.positions.items()}},
                         flush=True,
                     )
                     self._sync_positions_from_state()
-                    counts = Counter(
-                        _normalize_symbol(k) for k in self.positions.keys()
-                    )
+                    counts = Counter(_normalize_symbol(k) for k in self.positions.keys())
                     duplicates = [k for k, v in counts.items() if v > 1]
                     if duplicates:
                         print(
@@ -3029,25 +2875,18 @@ class LiveRunner:
                             if not isinstance(snap_ex, dict):
                                 snap_ex = {}
                             try:
-                                current_price = float(
-                                    snap_ex.get("current_price", 0.0) or 0.0
-                                )
+                                current_price = float(snap_ex.get("current_price", 0.0) or 0.0)
                                 if current_price > 0:
                                     _drift_seed2 = (hash(sk) ^ current_cycle) & 0xFFFF
                                     _drift2 = (_drift_seed2 / 0xFFFF - 0.5) * 0.02
-                                    current_price = round(
-                                        current_price * (1.0 + _drift2), 6
-                                    )
+                                    current_price = round(current_price * (1.0 + _drift2), 6)
                             except (TypeError, ValueError):
                                 current_price = 0.0
                             if current_price <= 0:
                                 continue
 
                             _side_u = sk.upper()
-                            is_short = (
-                                self._entry_side_by_symbol.get(_side_u, "long")
-                                == "short"
-                            )
+                            is_short = self._entry_side_by_symbol.get(_side_u, "long") == "short"
                             reason_ex = ""
                             exit_signal = False
                             for p in active:
@@ -3083,14 +2922,10 @@ class LiveRunner:
                             symbol_ex = str(sym_x).strip()
                             symbol_ex_n = _normalize_symbol(symbol_ex)
                             if not self._runner_position_exists_norm(symbol_ex_n):
-                                raise RuntimeError(
-                                    "Exit invoked but no position existed"
-                                )
+                                raise RuntimeError("Exit invoked but no position existed")
 
                             bars_ex = list(snap_ex.get("bars") or [])
-                            ohlcv_ex = [
-                                b for b in bars_ex if isinstance(b, OHLCVBar)
-                            ]
+                            ohlcv_ex = [b for b in bars_ex if isinstance(b, OHLCVBar)]
                             vol_ex = _volatility_proxy(ohlcv_ex)
                             trend_ex = 0.0
                             if ohlcv_ex:
@@ -3100,9 +2935,7 @@ class LiveRunner:
                                         -1.0,
                                         min(
                                             1.0,
-                                            float(
-                                                bf_ex.get("trend", 0.0) or 0.0
-                                            ),
+                                            float(bf_ex.get("trend", 0.0) or 0.0),
                                         ),
                                     )
                                 except (TypeError, ValueError):
@@ -3126,14 +2959,9 @@ class LiveRunner:
                             edge_for_execution = 0.0
                             if isinstance(snap_ex, dict):
                                 _dtrace = snap_ex.get("decision")
-                                if (
-                                    isinstance(_dtrace, dict)
-                                    and _dtrace.get("edge_score") is not None
-                                ):
+                                if isinstance(_dtrace, dict) and _dtrace.get("edge_score") is not None:
                                     try:
-                                        edge_for_execution = float(
-                                            _dtrace["edge_score"]
-                                        )
+                                        edge_for_execution = float(_dtrace["edge_score"])
                                     except (TypeError, ValueError):
                                         edge_for_execution = 0.0
                             print(
@@ -3141,9 +2969,7 @@ class LiveRunner:
                                     "FINAL_EXECUTION_TRACE": {
                                         "symbol": symbol,
                                         "edge": edge_for_execution,
-                                        "positions": list(
-                                            self.execution.state.positions.keys()
-                                        ),
+                                        "positions": list(self.execution.state.positions.keys()),
                                     }
                                 },
                                 flush=True,
@@ -3179,9 +3005,7 @@ class LiveRunner:
                             if isinstance(res_ex, dict) and res_ex.get("ok"):
                                 self._emit_trade_trace(symbol_ex, "CLOSE")
                                 if current_price <= 0:
-                                    raise RuntimeError(
-                                        "price_engine exit_price <= 0 — cannot close CSV"
-                                    )
+                                    raise RuntimeError("price_engine exit_price <= 0 — cannot close CSV")
                                 if not self.trade_logger.update_trade(
                                     symbol_ex,
                                     float(current_price),
@@ -3193,13 +3017,9 @@ class LiveRunner:
                                         },
                                         flush=True,
                                     )
-                                    raise RuntimeError(
-                                        "CSV close failed — aborting"
-                                    )
+                                    raise RuntimeError("CSV close failed — aborting")
                                 if symbol_ex_n in self._csv_open_symbols_normalized():
-                                    raise RuntimeError(
-                                        "CSV CLOSE FAILED — SYMBOL STILL OPEN"
-                                    )
+                                    raise RuntimeError("CSV CLOSE FAILED — SYMBOL STILL OPEN")
                                 print(
                                     {"CSV_CLOSE_VERIFIED": symbol_ex},
                                     flush=True,
@@ -3207,30 +3027,18 @@ class LiveRunner:
                                 self._recover_open_positions_from_csv()
                                 self._assert_state_csv_lock()
                                 if self._runner_position_exists_norm(symbol_ex_n):
-                                    raise RuntimeError(
-                                        "Exit did not remove position"
-                                    )
+                                    raise RuntimeError("Exit did not remove position")
                                 ts_ex = datetime.now(timezone.utc)
-                                self._entry_side_by_symbol.pop(
-                                    str(sym_x).strip().upper(), None
-                                )
-                                xpu = float(
-                                    res_ex.get("exit_price")
-                                    or res_ex.get("actual_fill_price")
-                                    or 0.0
-                                )
+                                self._entry_side_by_symbol.pop(str(sym_x).strip().upper(), None)
+                                xpu = float(res_ex.get("exit_price") or res_ex.get("actual_fill_price") or 0.0)
                                 if xpu > 0:
-                                    self.perf.on_exit(
-                                        str(sym_x).strip(), xpu, ts_ex
-                                    )
+                                    self.perf.on_exit(str(sym_x).strip(), xpu, ts_ex)
                                 if self._risk is not None:
                                     try:
                                         ret_ex = float(res_ex.get("pnl", 0.0))
                                     except (TypeError, ValueError):
                                         ret_ex = 0.0
-                                    rf_ex = self._entry_risk_factor.pop(
-                                        str(sym_x).strip(), 1.0
-                                    )
+                                    rf_ex = self._entry_risk_factor.pop(str(sym_x).strip(), 1.0)
                                     self._risk.record_closed_trade(ret_ex, rf_ex)
                                 print(
                                     {
@@ -3259,9 +3067,7 @@ class LiveRunner:
                     _pf_raw = portfolio.get("PORTFOLIO")
                     n_pf = len(_pf_raw) if isinstance(_pf_raw, list) else 0
                     self._max_portfolio_rows = max(self._max_portfolio_rows, int(n_pf))
-                    self._portfolio_best_selected = max(
-                        self._portfolio_best_selected, sel_pf
-                    )
+                    self._portfolio_best_selected = max(self._portfolio_best_selected, sel_pf)
                     if sel_pf == 0:
                         self._empty_portfolio_cycles_manual += 1
                     if self._adaptive is not None:
@@ -3345,9 +3151,11 @@ class LiveRunner:
                 print({"cycle": cycle_count}, flush=True)
                 metrics = self.perf.compute_metrics()
 
-                print({
-                    "PERFORMANCE": metrics
-                }, flush=True)
+                print({"PERFORMANCE": metrics}, flush=True)
+                if cycle_bar_progress or self._action_counter > 0:
+                    no_progress_streak = 0
+                else:
+                    no_progress_streak += 1
                 if cycle_count == 100 and self._action_counter == 0:
                     self._relax_mode = True
                     os.environ["BIST_DECISION_RELAX_MODE"] = "1"
@@ -3359,6 +3167,25 @@ class LiveRunner:
                         },
                         flush=True,
                     )
+                if (
+                    not validation_mode
+                    and max_c >= 100
+                    and current_cycle == 1
+                    and cycle_decision_payloads == 0
+                    and self._action_counter == 0
+                    and not saw_qualifying_action
+                    and not bool(getattr(self.state, "positions", {}))
+                ):
+                    raise Exception("NO_ACTIONS_PRODUCED")
+                if (
+                    not validation_mode
+                    and max_c >= 100
+                    and self._action_counter == 0
+                    and not saw_qualifying_action
+                    and no_progress_streak >= 5
+                    and not bool(getattr(self.state, "positions", {}))
+                ):
+                    raise Exception("NO_ACTIONS_PRODUCED")
                 if not single_cycle and current_cycle < max_cycles:
                     time.sleep(self.poll_seconds)
                 if current_cycle >= max_cycles:
@@ -3371,7 +3198,7 @@ class LiveRunner:
                         },
                         flush=True,
                     )
-                    sys.exit(0)
+                    break
             if not stopped_max_cycles_emitted:
                 print(
                     {"status": "STOPPED_AFTER_MAX_CYCLES", "cycles": cycle_count},

@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
-
 # Minimal CA action schema: type (kind), ex_date (effective_date), ratio/amount, symbol.
 # Split/bonus_issue/rights_issue use ratio; reverse_split uses ratio; cash_dividend uses amount (placeholder).
 

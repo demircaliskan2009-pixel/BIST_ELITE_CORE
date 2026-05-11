@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .chat_logging import load_response_json, log_from_chat_payload
 
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Log live-test recommendations from a saved chat response json.")
     p.add_argument("--root", default="data/live_test", help="Live-test store root")

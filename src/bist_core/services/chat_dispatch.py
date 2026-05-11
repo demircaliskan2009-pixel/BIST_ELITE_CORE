@@ -75,7 +75,6 @@ def dispatch_chat_request(
             "text": "",
             "symbols": plan.get("symbols", []),
         "intent_symbols": intent_symbols,
-            "intent_symbols": intent_symbols,
             "top_n": plan.get("top_n"),
             "payload": {},
         }
@@ -142,7 +141,6 @@ def dispatch_chat_request(
         "error_code": "unknown_route",
         "symbols": plan.get("symbols", []),
         "intent_symbols": intent_symbols,
-            "intent_symbols": intent_symbols,
         "top_n": plan.get("top_n"),
         "payload": {},
         "text": "",

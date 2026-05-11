@@ -15,7 +15,6 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterable, List, Optional
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LOG_ROOT = REPO_ROOT / "data" / "log"
 EXEC_ROOT = LOG_ROOT / "execution"

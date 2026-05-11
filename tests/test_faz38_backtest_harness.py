@@ -50,8 +50,10 @@ def test_faz38_tiny_3day_synthetic_deterministic(tmp_path: Path) -> None:
     curve2_path = Path(metrics2["equity_curve_path"])
     assert curve1_path.is_file()
     assert curve2_path.is_file()
-    rows1 = list(csv.DictReader(curve1_path.open(encoding="utf-8")))
-    rows2 = list(csv.DictReader(curve2_path.open(encoding="utf-8")))
+    with curve1_path.open(encoding="utf-8") as handle:
+        rows1 = list(csv.DictReader(handle))
+    with curve2_path.open(encoding="utf-8") as handle:
+        rows2 = list(csv.DictReader(handle))
     assert len(rows1) == 3
     assert len(rows2) == 3
     for r1, r2 in zip(rows1, rows2):

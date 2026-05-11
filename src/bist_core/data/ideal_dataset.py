@@ -4,13 +4,13 @@ Load full iDeal binary files into OHLCVBar (registry + env path resolution).
 
 from __future__ import annotations
 
-import os
 import glob
+import math
+import os
+import statistics
 import struct
 from datetime import datetime, timezone
 from pathlib import Path
-import math
-import statistics
 from typing import TYPE_CHECKING, Any, Optional
 
 from bist_core.data.ideal_binary_parser import emit_parser_ready_report

@@ -6,7 +6,6 @@ from typing import Any
 from bist_core.services.chat_dispatch import dispatch_chat_request
 from bist_core.services.market_overview_brief import build_market_overview_brief
 
-
 _ERROR_TEXT = {
     "insufficient_comparison_symbols": "Karşılaştırma için en az iki geçerli BIST sembolü gerekli.",
     "insufficient_comparison_results": "Karşılaştırma için yeterli sembol sonucu bulunamadı.",

@@ -1,5 +1,6 @@
-from pathlib import Path
 from datetime import date
+from pathlib import Path
+
 from ..config import load_config
 from ..paths import EOD_SNAPSHOTS
 from ..providers.dummy import DummyProvider

@@ -1,8 +1,8 @@
-from pathlib import Path
-from subprocess import run, PIPE
 import csv
 import os
 import sys
+from pathlib import Path
+from subprocess import PIPE, run
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,7 +43,8 @@ def test_orders_cli_equal_weight_pass(tmp_path: Path) -> None:
     orders_csv = snap_dir / "orders_equal_weight.csv"
     meta_file = snap_dir / "orders_meta.txt"
     assert orders_csv.exists(), "Orders CSV oluşturulmadı"
-    rows = list(csv.DictReader(orders_csv.open(encoding="utf-8")))
+    with orders_csv.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
     # AAA ve BBB bekleniyor, ağırlıklar ~0.5
     symbols = {row["symbol"] for row in rows}
     assert symbols == {"AAA", "BBB"}
@@ -67,7 +68,8 @@ def test_orders_cli_equal_weight_risk_fail(tmp_path: Path) -> None:
     _ = _run("bist_core.cli.main", "plan", "--date", day, env=env)
     plan_csv = snap_dir / "plan_equal_weight.csv"
     assert plan_csv.exists()
-    rows = list(csv.DictReader(plan_csv.open(encoding="utf-8")))
+    with plan_csv.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
     assert len(rows) == 1 and rows[0]["symbol"] == "TEST"
     # 2) Orders komutunu çalıştır (FAIL bekleniyor: weight 1.0 > 0.5)
     r = run(
@@ -146,7 +148,8 @@ def test_orders_risk_pass(tmp_path: Path) -> None:
     assert "Orders yazıldı:" in result.stdout
     orders_path = snapshot_dir / "orders_equal_weight.csv"
     assert orders_path.exists(), "Orders dosyası oluşmadı (PASS durumu)"
-    rows = list(csv.DictReader(orders_path.open(encoding="utf-8")))
+    with orders_path.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
     # 100 sembol olmalı ve her birinin target_weight ~ 0.01 olmalı
     assert len(rows) == 100
     for row in rows:

@@ -12,7 +12,6 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from bist_core.backtest.backtest_engine import OHLCVBar
 from bist_core.features.indicator_library import atr, ema, momentum_20, returns, rsi, sma
 
-
 FeatureFn = Callable[[Sequence[OHLCVBar]], List[Optional[float]]]
 
 FEATURE_REGISTRY: Dict[str, FeatureFn] = {}

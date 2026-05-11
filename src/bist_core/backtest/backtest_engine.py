@@ -386,7 +386,7 @@ class BacktestEngine:
                         peak = float(pos["peak_price"])
                         current = float(last_close)
                         drawdown = (current - peak) / peak if peak > 0 else 0.0
-                        unrealized_pnl = (current - entry_price) / entry_price
+                        (current - entry_price) / entry_price
 
                         trail_threshold = -0.005
                         try:
@@ -497,11 +497,69 @@ class BacktestEngine:
         self,
         bars: Sequence[OHLCVBar],
     ) -> Dict[str, Any]:
+        """Realistic backtest: next-bar execution, dynamic slippage, partial fills.
+
+        Signal at bar T → queued → filled at bar T+1 open price with:
+        - Dynamic slippage (vol + size impact + opening spread)
+        - Partial fills (volume-based fill ratio)
+        - Order rejection (low liquidity)
+        - Tick-rounded prices
+        - Missing bar simulation (data realism)
+        """
+        from bist_core.data.data_realism import (
+            opening_spread_penalty_bps,
+            simulate_missing_bars,
+        )
+        from bist_core.execution.execution_realism import (
+            _daily_vol,
+            _avg_daily_volume,
+            apply_slippage,
+            compute_fill_ratio,
+            compute_slippage_bps,
+            compute_total_cost_bps,
+            round_decision_prices,
+        )
+
         reset_order_counter()
 
+        # Fail-closed: reject invalid OHLCV bars before processing
+        _invalid_count = 0
+        valid_bars: list[OHLCVBar] = []
+        for b in bars:
+            if (
+                b.open <= 0
+                or b.high <= 0
+                or b.low <= 0
+                or b.close <= 0
+                or b.volume < 0
+                or b.high < b.low
+                or b.high < max(b.open, b.close)
+                or b.low > min(b.open, b.close)
+            ):
+                _invalid_count += 1
+                continue
+            valid_bars.append(b)
+        bars = valid_bars
+
+        if not bars:
+            return {
+                "metrics": _compute_metrics([], [], self._initial_equity),
+                "equity_curve": [],
+                "trades": [],
+                "regime_summary": _regime_summary([], []),
+                "rejected_bars": _invalid_count,
+            }
+
+        # Data realism: simulate missing bars (1.5% dropout)
+        _original_bar_count = len(bars)
+        bars = simulate_missing_bars(bars)
+        _bars_dropped = _original_bar_count - len(bars)
+
+        # Zero slippage in PaperEngine — dynamic slippage is applied
+        # externally via apply_slippage() before order submission.
         engine = PaperExecutionEngine(
-            slippage=self._cost.slippage,
-            fee_bps=self._cost.total_fee_bps,
+            slippage=SlippageModel(base_slippage_bps=0.0),
+            fee_bps=compute_total_cost_bps(),
         )
         controller = OrderStateMachineController(
             engine=engine,
@@ -516,6 +574,19 @@ class BacktestEngine:
 
         sorted_bars = sorted(bars, key=lambda b: (b.timestamp, b.symbol))
 
+        # Portfolio feedback: detect trade closes and notify decision_fn
+        _has_notify = hasattr(self._decision_fn, "notify_trade_closed")
+        _has_equity = hasattr(self._decision_fn, "notify_equity")
+        _has_fill_failed = hasattr(self._decision_fn, "notify_fill_failed")
+        _notified_closed_ids: set[int] = set()  # track by id() to handle out-of-order closes
+
+        # Next-bar execution queue: decisions made at bar T, filled at bar T+1
+        # Key: symbol → list of pending decisions from previous bar
+        pending_decisions: dict[str, list[Dict[str, Any]]] = {}
+        prev_close_by_sym: dict[str, float] = {}  # for opening spread calc
+        _rejected_count = 0
+        _partial_count = 0
+
         for bar in sorted_bars:
             sym = bar.symbol.upper().strip()
             if sym not in bars_by_symbol:
@@ -526,14 +597,84 @@ class BacktestEngine:
             bar_index_by_symbol[sym] += 1
             idx = bar_index_by_symbol[sym]
 
+            # ---- FILL PENDING ORDERS from previous bar (next-bar execution) ----
+            if sym in pending_decisions and pending_decisions[sym]:
+                closes = [float(b.close) for b in bars_by_symbol[sym]]
+                volumes = [float(b.volume) for b in bars_by_symbol[sym]]
+                vol = _daily_vol(closes)
+                adv = _avg_daily_volume(volumes)
+
+                for pending in pending_decisions[sym]:
+                    # Fill price = current bar open (next bar after signal)
+                    fill_price = bar.open
+
+                    # Compute dynamic slippage
+                    slip_bps = compute_slippage_bps(
+                        daily_vol=vol,
+                        order_size=pending["position_size"],
+                        avg_volume=adv,
+                        price=fill_price,
+                    )
+
+                    # Add opening spread penalty (BIST auction effect)
+                    pc = prev_close_by_sym.get(sym, fill_price)
+                    slip_bps += opening_spread_penalty_bps(bar, pc)
+
+                    # Check fill ratio (partial fills / rejection)
+                    fill_ratio = compute_fill_ratio(
+                        order_size=pending["position_size"],
+                        avg_volume=adv,
+                        price=fill_price,
+                    )
+
+                    if fill_ratio <= 0:
+                        _rejected_count += 1
+                        if _has_fill_failed:
+                            self._decision_fn.notify_fill_failed(pending.get("symbol", sym))
+                        continue  # order rejected — insufficient liquidity
+
+                    # Apply partial fill
+                    filled_size = max(1, int(pending["position_size"] * fill_ratio))
+                    if filled_size < pending["position_size"]:
+                        _partial_count += 1
+                    pending["position_size"] = filled_size
+
+                    # Apply slippage to fill price
+                    slipped_price = apply_slippage(fill_price, slip_bps, "buy")
+
+                    # Override engine slippage model: use our computed price directly
+                    order = controller.create_order_from_decision(pending)
+                    if not order.sm.is_terminal:
+                        controller.submit_order(order, slipped_price, bar.timestamp)
+                    elif _has_fill_failed:
+                        self._decision_fn.notify_fill_failed(pending.get("symbol", sym))
+
+                pending_decisions[sym] = []
+
+            # ---- GENERATE SIGNAL for current bar (queued for next bar) ----
             decision = self._decision_fn(sym, bars_by_symbol[sym], idx)
             if decision is not None:
-                order = controller.create_order_from_decision(decision)
-                if not order.sm.is_terminal:
-                    controller.submit_order(order, bar.close, bar.timestamp)
+                # Tick-round all prices
+                round_decision_prices(decision)
+                # Queue for next-bar execution
+                if sym not in pending_decisions:
+                    pending_decisions[sym] = []
+                pending_decisions[sym].append(decision)
 
+            # ---- STOP/TARGET CHECKS on open trades ----
             prices = {sym: bar.close}
             controller.tick(prices, bar.timestamp)
+
+            # Detect newly closed trades and notify portfolio wrapper
+            # NOTE: closed_trades is ordered by opening time, NOT closure time.
+            # Trades can close out of order, so we track by identity (id())
+            # instead of a positional counter to avoid missing notifications.
+            if _has_notify:
+                for ct in engine.journal.closed_trades:
+                    ct_id = id(ct)
+                    if ct_id not in _notified_closed_ids:
+                        _notified_closed_ids.add(ct_id)
+                        self._decision_fn.notify_trade_closed(ct.symbol, ct.pnl)
 
             realized_pnl = sum(
                 t.pnl for t in engine.journal.closed_trades
@@ -545,6 +686,13 @@ class BacktestEngine:
             )
             equity = self._initial_equity + realized_pnl + open_pnl
 
+            # Notify portfolio wrapper of current equity
+            if _has_equity:
+                self._decision_fn.notify_equity(equity)
+
+            # Track previous close for opening spread calculation
+            prev_close_by_sym[sym] = bar.close
+
             equity_curve.append({
                 "timestamp": bar.timestamp,
                 "symbol": sym,
@@ -552,9 +700,21 @@ class BacktestEngine:
                 "close": bar.close,
             })
 
+        # Release tracker slots for unfilled pending decisions (end-of-data)
+        if _has_fill_failed:
+            for sym_key, pending_list in pending_decisions.items():
+                for pending in pending_list:
+                    self._decision_fn.notify_fill_failed(pending.get("symbol", sym_key))
+
         all_trades = engine.journal.all_trades
         metrics = _compute_metrics(all_trades, equity_curve, self._initial_equity)
         regime = _regime_summary(equity_curve, all_trades)
+
+        # Execution realism stats
+        metrics["rejected_orders"] = _rejected_count
+        metrics["partial_fills"] = _partial_count
+        metrics["bars_dropped"] = _bars_dropped
+        metrics["rejected_bars"] = _invalid_count
 
         return {
             "metrics": metrics,
