@@ -54,6 +54,8 @@ fail-closed operational readiness gate has been acquired and reviewed.
 - `phase23e_isolated_workflow_classification`: `ISOLATED_WORKFLOW_NOT_RUN_DEFAULT_BRANCH_BLOCKER`
 - `phase23f_smoke_proof_record`: `docs/crypto_core/DERIBIT_PUBLIC_SMOKE_PROOF_RECORD.md`
 - `phase23f_smoke_proof_record_status`: `ADVISORY_EVIDENCE_ONLY`
+- `phase24a_operator_approval_packet`: `docs/crypto_core/DERIBIT_B1_B5_OPERATOR_APPROVAL_PACKET.md`
+- `phase24a_operator_approval_packet_status`: `REVIEW_PACKET_ONLY`
 
 ## Phase 22J Deep Research Dossier Intake Rules
 
