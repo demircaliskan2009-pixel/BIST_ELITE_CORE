@@ -36,6 +36,11 @@ _REJECT_VALUE = "REJECT"
 _REJECTED_LEGACY = "REJECTED"
 _DEFER_VALUE = "DEFER"
 
+# Minimum expected row counts per surface — enforces fail-closed on truncated worksheets.
+_MANIFEST_EXPECTED_ROW_COUNT = 6
+_CLAIM_EXPECTED_ROW_COUNT = 23
+_POLICY_EXPECTED_ROW_COUNT = 7
+
 
 # ---------------------------------------------------------------------------
 # Typed result
@@ -146,7 +151,7 @@ def _validate_manifest(manifest_text: str) -> list[DeribitReviewRowResult]:
         missing: list[str] = []
         retrieval_status = row.get("retrieval_status", _PENDING_SENTINEL)
         sha = row.get("content_sha256", "")
-        if _is_pending(retrieval_status):
+        if _is_pending(retrieval_status) or "PENDING" in retrieval_status.upper():
             missing.append(f"{source_id}:manual_review_pending")
         if not sha or _is_pending(sha):
             missing.append(f"{source_id}:content_sha256_missing")
@@ -296,16 +301,19 @@ def evaluate_deribit_manual_review_readiness(
     all_row_results: list[DeribitReviewRowResult] = []
     load_errors: list[str] = []
 
-    for path, loader in (
-        (manifest_path, _validate_manifest),
-        (claim_worksheet_path, _validate_claims),
-        (policy_worksheet_path, _validate_policies),
+    for path, loader, expected_count in (
+        (manifest_path, _validate_manifest, _MANIFEST_EXPECTED_ROW_COUNT),
+        (claim_worksheet_path, _validate_claims, _CLAIM_EXPECTED_ROW_COUNT),
+        (policy_worksheet_path, _validate_policies, _POLICY_EXPECTED_ROW_COUNT),
     ):
         if not path.exists():
             load_errors.append(f"worksheet_missing:{path}")
             continue
         text = path.read_text(encoding="utf-8")
-        all_row_results.extend(loader(text))
+        surface_results = loader(text)
+        if len(surface_results) < expected_count:
+            load_errors.append(f"worksheet_truncated:{path}:expected_{expected_count}_got_{len(surface_results)}")
+        all_row_results.extend(surface_results)
 
     # Aggregate across all rows
     missing_meta: list[str] = []

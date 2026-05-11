@@ -16,12 +16,14 @@ import ast
 from pathlib import Path
 
 from crypto_core.venue.deribit_manual_review_readiness import (
+    _MANIFEST_EXPECTED_ROW_COUNT,
     CLAIM_WORKSHEET_PATH,
     MANIFEST_PATH,
     POLICY_WORKSHEET_PATH,
     DeribitManualReviewReadinessResult,
     DeribitReviewRowResult,
     _validate_claims,
+    _validate_manifest,
     _validate_policies,
     evaluate_deribit_manual_review_readiness,
 )
@@ -31,18 +33,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 VALIDATOR_SRC = REPO_ROOT / "src" / "crypto_core" / "venue" / "deribit_manual_review_readiness.py"
 
 # ---------------------------------------------------------------------------
-# Allowed imports for the validator module — must be inert only
+# Forbidden import patterns for the validator module — must be inert only
 # ---------------------------------------------------------------------------
-
-_ALLOWED_IMPORTS = frozenset(
-    {
-        "__future__",
-        "dataclasses",
-        "pathlib",
-        "field",
-        "crypto_core",
-    }
-)
 
 _FORBIDDEN_IMPORT_PATTERNS = (
     "requests",
@@ -333,3 +325,80 @@ def test_missing_worksheet_file_fails_closed(tmp_path: Path):
     assert result.accepted is False
     assert result.ready_for_engineering_patch is False
     assert any("worksheet_missing" in r for r in result.rejection_reasons)
+
+
+# ---------------------------------------------------------------------------
+# 8. P1 regression — manifest pending-review status recognition
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_supplied_hashed_pending_review_fails_closed():
+    """SUPPLIED_HASHED_PENDING_REVIEW retrieval_status must be treated as PENDING.
+
+    Regression test for P1 defect: the original validator used an exact equality
+    check `== "PENDING"` which did not match `SUPPLIED_HASHED_PENDING_REVIEW`.
+    Any retrieval_status containing the substring "PENDING" must be flagged as
+    pending manual review so the row cannot silently pass the gate.
+    """
+    manifest_table = (
+        "| source_id | retrieval_status | content_sha256 |\n"
+        "|---|---|---|\n"
+        "| `DERIBIT_NOTIFICATIONS` | `SUPPLIED_HASHED_PENDING_REVIEW`"
+        " | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` |\n"
+    )
+    rows = _validate_manifest(manifest_table)
+    r = next((x for x in rows if x.row_id == "DERIBIT_NOTIFICATIONS"), None)
+    assert r is not None, "Row DERIBIT_NOTIFICATIONS not parsed from synthetic manifest table"
+    assert r.status == "PENDING", f"Expected PENDING for SUPPLIED_HASHED_PENDING_REVIEW, got {r.status!r}"
+    assert any("manual_review_pending" in m for m in r.missing_metadata), (
+        f"Expected manual_review_pending in missing_metadata, got {r.missing_metadata}"
+    )
+
+
+def test_manifest_current_rows_are_pending():
+    """All 6 current manifest rows must be PENDING (not REVIEWED) after P1 fix.
+
+    Current manifest has retrieval_status=SUPPLIED_HASHED_PENDING_REVIEW for all
+    6 source IDs. These must appear as PENDING in pending_rows so they block
+    accepted=True even when claim/policy worksheets are later approved.
+    """
+    result = evaluate_deribit_manual_review_readiness(
+        manifest_path=REPO_ROOT / MANIFEST_PATH,
+        claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
+        policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
+    )
+    manifest_pending = [r for r in result.pending_rows if r.startswith("source_snapshot:")]
+    assert len(manifest_pending) == 6, (
+        f"Expected 6 pending source_snapshot rows, got {len(manifest_pending)}: {manifest_pending}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. P1 regression — truncated worksheet row count enforcement
+# ---------------------------------------------------------------------------
+
+
+def test_truncated_worksheet_fails_closed(tmp_path: Path):
+    """A manifest worksheet with fewer rows than the expected count must fail closed.
+
+    Regression test for P1 defect: a header-only or truncated worksheet produces
+    zero parsed rows which previously did not add any load_error, allowing
+    accepted=True if other surfaces were approved.
+    """
+    header_only = "| source_id | retrieval_status | content_sha256 |\n|---|---|---|\n"
+    rows = _validate_manifest(header_only)
+    assert len(rows) == 0, "Header-only manifest should produce 0 data rows"
+    assert len(rows) < _MANIFEST_EXPECTED_ROW_COUNT
+
+    truncated_manifest = tmp_path / "truncated_manifest.md"
+    truncated_manifest.write_text(header_only, encoding="utf-8")
+    result = evaluate_deribit_manual_review_readiness(
+        manifest_path=truncated_manifest,
+        claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
+        policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
+    )
+    assert result.accepted is False
+    assert result.ready_for_engineering_patch is False
+    assert any("worksheet_truncated" in r for r in result.rejection_reasons), (
+        f"Expected worksheet_truncated in rejection_reasons, got {result.rejection_reasons}"
+    )
