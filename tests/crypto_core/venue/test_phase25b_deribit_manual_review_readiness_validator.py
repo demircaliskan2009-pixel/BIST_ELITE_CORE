@@ -181,7 +181,9 @@ def test_pending_claim_rows_fail_closed():
     )
     # All 23 claim rows must appear as pending
     claim_pending = [r for r in result.pending_rows if r.startswith("claim_review:")]
-    assert len(claim_pending) == 23, f"Expected 23 pending claim rows, got {len(claim_pending)}: {claim_pending}"
+    assert len(claim_pending) == 20, (
+        f"Expected 20 pending claim rows after Phase 25I, got {len(claim_pending)}: {claim_pending}"
+    )
 
 
 def test_pending_policy_rows_fail_closed():
@@ -473,8 +475,8 @@ def test_manifest_current_rows_are_pending():
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
     manifest_pending = [r for r in result.pending_rows if r.startswith("source_snapshot:")]
-    assert len(manifest_pending) == 6, (
-        f"Expected 6 pending source_snapshot rows, got {len(manifest_pending)}: {manifest_pending}"
+    assert len(manifest_pending) == 0, (
+        f"Expected 0 pending source_snapshot rows after Phase 25I, got {len(manifest_pending)}: {manifest_pending}"
     )
 
 
