@@ -52,18 +52,29 @@ def test_every_required_claim_row_exists():
 
 
 def test_every_claim_row_has_pending_review_fields_and_hash():
+    # Phase 25I approved exactly 3 claim rows; those rows have non-PENDING fields.
+    _approved_claim_ids = frozenset(
+        {"public_websocket_availability", "unauthenticated_public_market_data", "orderbook_channel_feed"}
+    )
     for claim_id, row in _worksheet_rows().items():
         assert row["claim_id"] == claim_id
         assert row["source_id"].startswith("DERIBIT_")
         assert row["official_url"].startswith("https://docs.deribit.com/")
         assert re.fullmatch(r"[0-9a-f]{64}", row["source_sha256"])
         assert row["source_sha256"] == EXPECTED_HASH
-        assert row["review_status"] == "PENDING"
-        assert row["reviewer_id"] == "PENDING"
-        assert row["reviewed_at_iso"] == "PENDING"
-        assert row["decision"] == "PENDING"
         assert row["operational_readiness_effect"] == "LEAVES_BLOCKER"
-        assert row["rejection_reason_if_pending"].startswith("manual_review:")
+        if claim_id in _approved_claim_ids:
+            assert row["review_status"] == "APPROVED"
+            assert row["reviewer_id"] == "demir_operator"
+            assert row["reviewed_at_iso"] == "2026-05-11T00:00:00Z"
+            assert row["decision"] == "APPROVED"
+            assert "Phase25I_APPROVE_NOW_CANDIDATES_ONLY" in row["rejection_reason_if_pending"]
+        else:
+            assert row["review_status"] == "PENDING"
+            assert row["reviewer_id"] == "PENDING"
+            assert row["reviewed_at_iso"] == "PENDING"
+            assert row["decision"] == "PENDING"
+            assert row["rejection_reason_if_pending"].startswith("manual_review:")
 
 
 def test_no_claim_row_marks_operational_readiness_accepted():

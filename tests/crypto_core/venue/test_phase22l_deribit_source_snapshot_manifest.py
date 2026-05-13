@@ -55,7 +55,7 @@ def test_manifest_has_official_urls_and_successful_hash_metadata():
     for source_id, row in rows.items():
         assert row["official_url"] == EXPECTED_SOURCES[source_id]
         assert re.fullmatch(r"2026-05-10T\d{2}:\d{2}:\d{2}Z", row["retrieved_at_iso"])
-        assert row["retrieval_status"] == "SUPPLIED_HASHED_PENDING_REVIEW"
+        assert row["retrieval_status"] == "REVIEWED_APPROVED"
         assert re.fullmatch(r"[0-9a-f]{64}", row["content_sha256"])
         assert row["content_sha256"] == EXPECTED_HASH
         assert int(row["content_size_bytes"]) > 0

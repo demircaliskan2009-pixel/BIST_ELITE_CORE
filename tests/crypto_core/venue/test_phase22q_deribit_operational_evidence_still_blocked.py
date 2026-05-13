@@ -35,7 +35,7 @@ def test_current_deribit_source_hashes_exist_but_are_not_enough():
     assert rows
     assert all(re.fullmatch(r"[0-9a-f]{64}", row["content_sha256"]) for row in rows.values())
     assert all(int(row["content_size_bytes"]) > 0 for row in rows.values())
-    assert all(row["retrieval_status"] == "SUPPLIED_HASHED_PENDING_REVIEW" for row in rows.values())
+    assert all(row["retrieval_status"] == "REVIEWED_APPROVED" for row in rows.values())
     assert all(result.accepted is False for result in results)
     assert all("official_snapshot:manual_review_not_approved" in result.rejection_reasons for result in results)
 
@@ -44,8 +44,12 @@ def test_current_deribit_claim_reviews_are_not_accepted():
     results = tuple(validate_official_claim_review(_claim_from_row(row)) for row in _worksheet_rows().values())
 
     assert results
-    assert all(result.accepted is False for result in results)
-    assert all("official_claim_review:pending" in result.rejection_reasons for result in results)
+    # Phase 25I approved 3 claim rows; the remaining 20 must remain rejected.
+    rejected = [r for r in results if not r.accepted]
+    accepted = [r for r in results if r.accepted]
+    assert len(rejected) == 20
+    assert len(accepted) == 3
+    assert all("official_claim_review:pending" in r.rejection_reasons for r in rejected)
 
 
 def test_current_deribit_required_policies_are_missing_or_pending():

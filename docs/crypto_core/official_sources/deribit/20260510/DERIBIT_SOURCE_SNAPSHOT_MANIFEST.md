@@ -33,12 +33,12 @@ are intentionally not committed; the committed artifact is this hash manifest.
 
 | source_id | official_url | retrieved_at_iso | retrieval_status | content_sha256 | content_size_bytes | local_temp_path |
 |---|---|---|---|---|---:|---|
-| `DERIBIT_NOTIFICATIONS` | `https://docs.deribit.com/#notifications` | `2026-05-10T07:51:21Z` | `SUPPLIED_HASHED_PENDING_REVIEW` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_NOTIFICATIONS.html` |
-| `DERIBIT_ENVIRONMENT` | `https://docs.deribit.com/#json-rpc-over-websocket` | `2026-05-10T07:51:22Z` | `SUPPLIED_HASHED_PENDING_REVIEW` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_ENVIRONMENT.html` |
-| `DERIBIT_RATE_LIMITS` | `https://docs.deribit.com/#rate-limits` | `2026-05-10T07:51:23Z` | `SUPPLIED_HASHED_PENDING_REVIEW` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_RATE_LIMITS.html` |
-| `DERIBIT_INSTRUMENTS` | `https://docs.deribit.com/#public-get_instruments` | `2026-05-10T07:51:24Z` | `SUPPLIED_HASHED_PENDING_REVIEW` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_INSTRUMENTS.html` |
-| `DERIBIT_TICKER` | `https://docs.deribit.com/#ticker-instrument_name-interval` | `2026-05-10T07:51:25Z` | `SUPPLIED_HASHED_PENDING_REVIEW` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_TICKER.html` |
-| `DERIBIT_RESTRICTED` | `https://docs.deribit.com/#restricted-countries` | `2026-05-10T07:51:25Z` | `SUPPLIED_HASHED_PENDING_REVIEW` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_RESTRICTED.html` |
+| `DERIBIT_NOTIFICATIONS` | `https://docs.deribit.com/#notifications` | `2026-05-10T07:51:21Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_NOTIFICATIONS.html` |
+| `DERIBIT_ENVIRONMENT` | `https://docs.deribit.com/#json-rpc-over-websocket` | `2026-05-10T07:51:22Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_ENVIRONMENT.html` |
+| `DERIBIT_RATE_LIMITS` | `https://docs.deribit.com/#rate-limits` | `2026-05-10T07:51:23Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_RATE_LIMITS.html` |
+| `DERIBIT_INSTRUMENTS` | `https://docs.deribit.com/#public-get_instruments` | `2026-05-10T07:51:24Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_INSTRUMENTS.html` |
+| `DERIBIT_TICKER` | `https://docs.deribit.com/#ticker-instrument_name-interval` | `2026-05-10T07:51:25Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_TICKER.html` |
+| `DERIBIT_RESTRICTED` | `https://docs.deribit.com/#restricted-countries` | `2026-05-10T07:51:25Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_RESTRICTED.html` |
 
 ## Review Blockers
 

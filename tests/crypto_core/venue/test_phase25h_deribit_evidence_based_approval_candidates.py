@@ -101,11 +101,20 @@ def test_phase25h_does_not_add_final_reviewer_values_or_modify_worksheets():
     assert not re.search(r"reviewer-\d+", doc)
     assert not re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", doc)
     assert len(manifest_rows) == 6
-    assert all(row["retrieval_status"] == "SUPPLIED_HASHED_PENDING_REVIEW" for row in manifest_rows)
+    # Phase 25I approved all 6 manifest rows (REVIEWED_APPROVED).
+    assert all(row["retrieval_status"] == "REVIEWED_APPROVED" for row in manifest_rows)
     assert len(claim_rows) == 23
-    assert all(row["reviewer_id"] == "PENDING" for row in claim_rows)
-    assert all(row["reviewed_at_iso"] == "PENDING" for row in claim_rows)
-    assert all(row["decision"] == "PENDING" for row in claim_rows)
+    # Phase 25I approved exactly 3 claim rows; the other 20 remain PENDING.
+    _approved_claim_ids = {
+        "public_websocket_availability",
+        "unauthenticated_public_market_data",
+        "orderbook_channel_feed",
+    }
+    non_approved_claim_rows = [r for r in claim_rows if r["claim_id"] not in _approved_claim_ids]
+    assert len(non_approved_claim_rows) == 20
+    assert all(row["reviewer_id"] == "PENDING" for row in non_approved_claim_rows)
+    assert all(row["reviewed_at_iso"] == "PENDING" for row in non_approved_claim_rows)
+    assert all(row["decision"] == "PENDING" for row in non_approved_claim_rows)
     assert len(policy_rows) == 7
     assert all(row["reviewer_id"] == "PENDING" for row in policy_rows)
     assert all(row["reviewed_at_iso"] == "PENDING" for row in policy_rows)
