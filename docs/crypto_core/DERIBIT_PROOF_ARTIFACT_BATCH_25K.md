@@ -13,8 +13,8 @@
 - NOT_b1_b5_closure: true
 - NOT_connector_enablement: true
 - already_approved_phase25i_count: 3
-- proof_ready_not_approved_count: 2
-- wait_insufficient_count: 5
+- proof_ready_not_approved_count: 0
+- wait_insufficient_count: 7
 - harness_capability_records_count: 5
 - total_target_claims_in_this_batch: 10
 
@@ -52,8 +52,8 @@ This document:
 | `public_websocket_availability` | claim_review | ALREADY_APPROVED_PHASE25I | DERIBIT_CLAIM_REVIEW_WORKSHEET.md decision=APPROVED Phase25I | Approved by human operator in Phase 25I; not re-classified in this batch. |
 | `unauthenticated_public_market_data` | claim_review | ALREADY_APPROVED_PHASE25I | DERIBIT_CLAIM_REVIEW_WORKSHEET.md decision=APPROVED Phase25I | Approved by human operator in Phase 25I; not re-classified in this batch. |
 | `orderbook_channel_feed` | claim_review | ALREADY_APPROVED_PHASE25I | DERIBIT_CLAIM_REVIEW_WORKSHEET.md decision=APPROVED Phase25I | Approved by human operator in Phase 25I; not re-classified in this batch. |
-| `change_id` | claim_review | PROOF_READY_NOT_APPROVED | src/crypto_core/data/deribit_public_ws_harness.py _sequence_id_from_data() maps change_id field; DERIBIT_PUBLIC_SMOKE_PROOF_RECORD.md smoke accepted 19 messages no rejection_reasons | Committed harness code maps change_id to sequence_id. Smoke proof confirms harness processed real book messages. Worksheet row remains PENDING; human operator review required before any worksheet approval. |
-| `prev_change_id` | claim_review | PROOF_READY_NOT_APPROVED | src/crypto_core/data/deribit_public_ws_harness.py _prev_sequence_id_from_data() maps prev_change_id field; DERIBIT_PUBLIC_SMOKE_PROOF_RECORD.md smoke accepted 19 messages no rejection_reasons | Committed harness code maps prev_change_id to prev_sequence_id. Worksheet row remains PENDING; human operator review required before any worksheet approval. |
+| `change_id` | claim_review | WAIT_INSUFFICIENT | deribit_public_ws_harness.py _sequence_id_from_data() reads change_id field (advisory capability record only) | Harness code is design evidence only; no committed parse-sequence artifact proves actual change_id integer values from a real message sequence. Requires DERIBIT_BOOK_PARSE_SEQUENCE_PROOF.json. |
+| `prev_change_id` | claim_review | WAIT_INSUFFICIENT | deribit_public_ws_harness.py _prev_sequence_id_from_data() reads prev_change_id field (advisory capability record only) | Harness code is design evidence only; no committed parse-sequence artifact proves actual prev_change_id values or that prev_change_id[n] equals change_id[n-1]. Requires DERIBIT_BOOK_PARSE_SEQUENCE_PROOF.json. |
 | `first_message_snapshot` | claim_review | WAIT_INSUFFICIENT | deribit_public_ws_harness.py _payload_kind() reads type field (advisory capability record only) | No committed artifact proves first message has type equal to snapshot. Harness design documents intent; actual field values not committed to repo. Requires DERIBIT_BOOK_PARSE_SEQUENCE_PROOF.json. |
 | `incremental_delta` | claim_review | WAIT_INSUFFICIENT | deribit_public_ws_harness.py _payload_kind() reads type field (advisory capability record only) | No committed artifact proves subsequent messages carry type equal to change with populated delta entries. Harness design is advisory only. Requires DERIBIT_BOOK_PARSE_SEQUENCE_PROOF.json. |
 | `continuity_condition` | claim_review | WAIT_INSUFFICIENT | Depends on change_id and prev_change_id committed field-value proof | No committed artifact proves prev_change_id[n] equals change_id[n-1] across a real message sequence. Requires DERIBIT_BOOK_PARSE_SEQUENCE_PROOF.json. |

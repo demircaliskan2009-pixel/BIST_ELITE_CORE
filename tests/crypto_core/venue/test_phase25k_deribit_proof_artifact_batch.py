@@ -42,12 +42,7 @@ _ALREADY_APPROVED_PHASE25I: frozenset[str] = frozenset(
     }
 )
 
-_PROOF_READY_NOT_APPROVED: frozenset[str] = frozenset(
-    {
-        "change_id",
-        "prev_change_id",
-    }
-)
+_PROOF_READY_NOT_APPROVED: frozenset[str] = frozenset()
 
 _WAIT_INSUFFICIENT: frozenset[str] = frozenset(
     {
@@ -56,6 +51,8 @@ _WAIT_INSUFFICIENT: frozenset[str] = frozenset(
         "continuity_condition",
         "gap_resubscribe_rule",
         "heartbeat_liveness_proof",
+        "change_id",
+        "prev_change_id",
     }
 )
 
@@ -98,8 +95,8 @@ def test_phase25k_safety_markers_present() -> None:
 def test_phase25k_batch_count_metadata_correct() -> None:
     doc = _doc_text()
     assert "already_approved_phase25i_count: 3" in doc
-    assert "proof_ready_not_approved_count: 2" in doc
-    assert "wait_insufficient_count: 5" in doc
+    assert "proof_ready_not_approved_count: 0" in doc
+    assert "wait_insufficient_count: 7" in doc
     assert "harness_capability_records_count: 5" in doc
     assert "total_target_claims_in_this_batch: 10" in doc
 
@@ -116,11 +113,11 @@ def test_phase25k_already_approved_phase25i_claims_referenced() -> None:
         assert claim_id in doc, f"Missing already-approved claim in batch doc: {claim_id}"
 
 
-def test_phase25k_proof_ready_not_approved_claims_listed() -> None:
+def test_phase25k_proof_ready_not_approved_count_is_zero() -> None:
+    # All 7 non-already-approved claims must be WAIT_INSUFFICIENT; none are PROOF_READY.
     doc = _doc_text()
-    assert "PROOF_READY_NOT_APPROVED" in doc
-    for claim_id in _PROOF_READY_NOT_APPROVED:
-        assert claim_id in doc, f"Missing PROOF_READY_NOT_APPROVED claim in batch doc: {claim_id}"
+    assert "proof_ready_not_approved_count: 0" in doc
+    assert not _PROOF_READY_NOT_APPROVED  # frozenset is empty
 
 
 def test_phase25k_wait_insufficient_claims_listed() -> None:
@@ -128,6 +125,18 @@ def test_phase25k_wait_insufficient_claims_listed() -> None:
     assert "WAIT_INSUFFICIENT" in doc
     for claim_id in _WAIT_INSUFFICIENT:
         assert claim_id in doc, f"Missing WAIT_INSUFFICIENT claim in batch doc: {claim_id}"
+
+
+def test_phase25k_wait_insufficient_claims_still_pending_in_worksheet() -> None:
+    # All 7 WAIT_INSUFFICIENT claims must remain PENDING in the actual worksheet.
+    claim_rows = {
+        r["claim_id"]: r for r in _parse_md_table_rows((REPO_ROOT / CLAIM_WORKSHEET_PATH).read_text(encoding="utf-8"))
+    }
+    for claim_id in _WAIT_INSUFFICIENT:
+        row = claim_rows[claim_id]
+        assert row.get("decision", "").upper() == "PENDING", (
+            f"WAIT_INSUFFICIENT claim {claim_id!r} must still be PENDING in worksheet"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -177,23 +186,6 @@ def test_phase25k_worksheets_unchanged() -> None:
     # Policy: all 7 rows PENDING (no policy has been approved)
     assert len(policy_rows) == 7
     assert all(r.get("decision", "").upper() == "PENDING" for r in policy_rows)
-
-
-def test_phase25k_proof_ready_claims_still_pending_in_worksheet() -> None:
-    claim_rows = {
-        r["claim_id"]: r for r in _parse_md_table_rows((REPO_ROOT / CLAIM_WORKSHEET_PATH).read_text(encoding="utf-8"))
-    }
-    for claim_id in _PROOF_READY_NOT_APPROVED:
-        row = claim_rows[claim_id]
-        assert row.get("decision", "").upper() == "PENDING", (
-            f"PROOF_READY_NOT_APPROVED claim {claim_id!r} must still be PENDING in worksheet"
-        )
-        assert row.get("reviewer_id", "").upper() == "PENDING", (
-            f"PROOF_READY_NOT_APPROVED claim {claim_id!r} must have reviewer_id=PENDING"
-        )
-        assert row.get("reviewed_at_iso", "").upper() == "PENDING", (
-            f"PROOF_READY_NOT_APPROVED claim {claim_id!r} must have reviewed_at_iso=PENDING"
-        )
 
 
 # ---------------------------------------------------------------------------
