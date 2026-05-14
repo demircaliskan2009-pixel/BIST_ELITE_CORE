@@ -1,0 +1,95 @@
+{
+  "status": "PROOF_ARTIFACT_ONLY",
+  "phase": "25L",
+  "classification": "DETERMINISTIC_HARNESS_FIXTURE",
+  "NOT_live_observed_values": true,
+  "NOT_an_approval": true,
+  "NOT_worksheet_mutation": true,
+  "NOT_b1_b5_closure": true,
+  "NOT_connector_enablement": true,
+  "baseline_commit": "0334de43f0c4cfd530619b98ae5d5585c9211c08",
+  "artifact_description": "Deterministic fixture generated from committed harness source code and Phase 23L smoke proof acceptance. This artifact documents the harness field-mapping logic that maps Deribit book channel fields to DeribitPublicWsSmokeEvent fields. It is NOT a live parse-sequence record — no actual integer values from a live Deribit session are committed in this artifact. The smoke proof (Phase 23L, run_id=25671516104) established accepted=true, message_count=19, rejection_reasons=[] but did not commit individual message field values. This artifact bridges that gap by documenting the deterministic mapping code that was exercised in that smoke run.",
+  "smoke_proof_reference": {
+    "phase": "23L",
+    "run_id": "25671516104",
+    "run_url": "https://github.com/demircaliskan2009-pixel/BIST_ELITE_CORE/actions/runs/25671516104",
+    "accepted": true,
+    "message_count": 19,
+    "rejection_reasons": [],
+    "channel": "book.BTC-PERPETUAL.none.10.100ms",
+    "dry_run": true,
+    "operator_authorization": "PUBLIC_MARKET_DATA_ONLY",
+    "note": "Smoke proof confirms the harness successfully received and processed 19 messages with no rejections. Field-level values were NOT committed to the repo in that run."
+  },
+  "harness_field_mapping": {
+    "change_id_to_sequence_id": {
+      "claim_relevance": "change_id",
+      "source_function": "_sequence_id_from_data",
+      "source_file": "src/crypto_core/data/deribit_public_ws_harness.py",
+      "deribit_input_field": "change_id",
+      "harness_output_field": "sequence_id",
+      "priority_chain": ["change_id", "sequence", "seq"],
+      "harness_logic": "Reads data.get('change_id') first; falls back to data.get('sequence') then data.get('seq'); returns None if none found or value < 0",
+      "test_coverage_reference": "tests/crypto_core/data/test_phase23b_deribit_public_ws_harness.py::test_mocked_valid_message_produces_accepted_quarantine_summary — asserts result.sample_events[0].payload_sample['change_id'] == 10 using fixture change_id=10",
+      "evidence_classification": "COMMITTED_CODE_AND_TEST",
+      "phase25l_classification": "PROOF_READY_NOT_APPROVED"
+    },
+    "prev_change_id_to_prev_sequence_id": {
+      "claim_relevance": "prev_change_id",
+      "source_function": "_prev_sequence_id_from_data",
+      "source_file": "src/crypto_core/data/deribit_public_ws_harness.py",
+      "deribit_input_field": "prev_change_id",
+      "harness_output_field": "prev_sequence_id",
+      "priority_chain": ["prev_change_id", "prev_sequence", "prev_seq"],
+      "harness_logic": "Reads data.get('prev_change_id') first; falls back to data.get('prev_sequence') then data.get('prev_seq'); returns None if none found or value < 0",
+      "test_coverage_reference": "tests/crypto_core/data/test_phase23b_deribit_public_ws_harness.py::test_sequence_gap_rejects_when_sequence_fields_exist — uses fixture with prev_change_id=9 and change_id=12 to verify sequence-gap detection via prev_sequence_id",
+      "evidence_classification": "COMMITTED_CODE_AND_TEST",
+      "phase25l_classification": "PROOF_READY_NOT_APPROVED"
+    },
+    "payload_kind_from_type": {
+      "claim_relevance": ["first_message_snapshot", "incremental_delta"],
+      "source_function": "_payload_kind",
+      "source_file": "src/crypto_core/data/deribit_public_ws_harness.py",
+      "deribit_input_field": "type",
+      "harness_output_field": "payload_kind",
+      "harness_logic": "Returns data.get('type') if it is a non-empty string; otherwise returns 'market_data'",
+      "fixture_note": "Test fixture in test_phase23b uses type='snapshot' in _subscription_payload helper. However, this is a test-fixture value — not an actual observed Deribit server response. The smoke run did not commit the type field values of the 19 received messages.",
+      "evidence_classification": "COMMITTED_CODE_AND_TEST_FIXTURE_ONLY",
+      "phase25l_classification": "WAIT_INSUFFICIENT"
+    },
+    "continuity_condition_via_sequence_gap_check": {
+      "claim_relevance": "continuity_condition",
+      "source_function": "_event_from_payload",
+      "source_file": "src/crypto_core/data/deribit_public_ws_harness.py",
+      "harness_logic": "In _event_from_payload, if prev_sequence_id is not None and prev_sequence_id != last_sequence_by_channel[channel], a deribit_ws:sequence_gap rejection reason is added. This implements the continuity check: prev_change_id[n] must equal change_id[n-1].",
+      "fixture_note": "The continuity logic is committed code with test coverage (test_sequence_gap_rejects). But no committed artifact proves this continuity held across 19 actual received messages in the smoke run — individual message field values were not committed.",
+      "evidence_classification": "COMMITTED_CODE_AND_TEST_FIXTURE_ONLY",
+      "phase25l_classification": "WAIT_INSUFFICIENT"
+    }
+  },
+  "claim_classification": {
+    "change_id": {
+      "classification": "PROOF_READY_NOT_APPROVED",
+      "rationale": "The harness function _sequence_id_from_data() reads data['change_id'] as first-priority field and maps it to DeribitPublicWsSmokeEvent.sequence_id. This mapping is committed code with explicit test coverage in test_phase23b_deribit_public_ws_harness.py asserting payload_sample['change_id'] == 10 via fixture. The smoke run (Phase 23L, 19 messages accepted, 0 rejections) further confirms the mapping was exercised without fault. Classification: PROOF_READY_NOT_APPROVED — committed evidence of the field mapping exists; human operator worksheet approval is still required."
+    },
+    "prev_change_id": {
+      "classification": "PROOF_READY_NOT_APPROVED",
+      "rationale": "The harness function _prev_sequence_id_from_data() reads data['prev_change_id'] as first-priority field and maps it to DeribitPublicWsSmokeEvent.prev_sequence_id. The sequence-gap detection logic in _event_from_payload uses this field to enforce continuity. Test coverage in test_phase23b_deribit_public_ws_harness.py (test_sequence_gap_rejects_when_sequence_fields_exist) confirms prev_change_id is read and compared. Classification: PROOF_READY_NOT_APPROVED — committed evidence of the field mapping exists; human operator worksheet approval is still required."
+    },
+    "first_message_snapshot": {
+      "classification": "WAIT_INSUFFICIENT",
+      "rationale": "No committed artifact records an actual observed type='snapshot' value from a real Deribit book channel message. The harness _payload_kind() function is designed to read the type field, and test fixtures use type='snapshot', but these are fixture values not live observations. The smoke run's 19 messages were accepted but their type field values are not committed to this repo."
+    },
+    "incremental_delta": {
+      "classification": "WAIT_INSUFFICIENT",
+      "rationale": "No committed artifact records an actual observed type='change' value from a real Deribit book channel message. Same gap as first_message_snapshot — harness design and test fixtures exist but no live message field values are committed."
+    },
+    "continuity_condition": {
+      "classification": "WAIT_INSUFFICIENT",
+      "rationale": "No committed artifact proves prev_change_id[n] == change_id[n-1] across an actual observed message sequence. The harness implements the check and the test fixture proves it catches violations, but no record of the 19 smoke run messages' change_id/prev_change_id values is committed."
+    }
+  },
+  "observed_values": null,
+  "observed_values_note": "No actual Deribit server message field values (change_id integers, type string values, prev_change_id integers) are committed in this artifact. The smoke proof aggregates (accepted, message_count, rejection_reasons) are committed in DERIBIT_PUBLIC_SMOKE_PROOF_RECORD.md but individual event samples were not captured to a committed file.",
+  "next_required_artifact": "A committed parse-sequence fixture recording actual observed type, change_id, prev_change_id values from a real Deribit book channel message sequence would be required to promote first_message_snapshot, incremental_delta, and continuity_condition from WAIT_INSUFFICIENT to PROOF_READY_NOT_APPROVED."
+}
