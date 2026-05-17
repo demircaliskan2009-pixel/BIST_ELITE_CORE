@@ -42,13 +42,24 @@ def test_phase25z_capture_spec_requires_longer_public_book_capture() -> None:
 def test_phase25z_capture_spec_requires_non_null_prev_and_exact_continuity() -> None:
     doc = _spec_doc()
 
-    assert "At least one actual observed event has non-null integer `prev_change_id`." in doc
-    assert "current.prev_change_id == prior.change_id" in doc
+    assert "At least one actual observed event has non-null integer `payload_sample.prev_change_id`" in doc
+    assert "current.payload_sample.prev_change_id == prior.payload_sample.change_id" in doc
     assert "A non-null but mismatched `prev_change_id` is not continuity proof." in doc
     assert "`non_null_prev_change_id_observed=false`" in doc
     assert "`continuity_pair_missing=true`" in doc
     assert "`prev_change_id`: WAIT_INSUFFICIENT" in doc
     assert "`continuity_condition`: WAIT_INSUFFICIENT" in doc
+
+
+def test_phase25z_capture_spec_aligns_with_raw_smoke_sample_events_schema() -> None:
+    doc = _spec_doc()
+
+    assert "`sample_events` | Raw smoke result schema." in doc
+    assert "`observed_events` | Optional normalized proof schema derived from `sample_events`" in doc
+    assert "adjacent event rows are stored under `sample_events`" in doc
+    assert "`payload_sample.change_id`" in doc
+    assert "`payload_sample.prev_change_id`" in doc
+    assert "The normalized artifact must not invent top-level raw fields" in doc
 
 
 def test_phase25z_spec_records_no_script_or_source_runtime_edit_needed() -> None:
