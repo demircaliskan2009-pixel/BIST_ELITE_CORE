@@ -1,0 +1,96 @@
+{
+  "status": "OBSERVED_PUBLIC_MARKET_DATA_PROOF",
+  "phase": "25M",
+  "generated_at": "2026-05-17",
+  "source_artifact_name": "deribit-public-smoke-proof",
+  "source_artifact_id": 6919007152,
+  "source_artifact_digest": "sha256:326f763d075881fc2a3584c03d4b5a369f59bc3ae35242807d3bfc303717b2ba",
+  "source_artifact_file": "smoke_result.json",
+  "run_id": 25671516104,
+  "run_url": "https://github.com/demircaliskan2009-pixel/BIST_ELITE_CORE/actions/runs/25671516104",
+  "run_branch": "main",
+  "run_head_sha": "494ac1398ab4822412261d3aa29b4ef641245739",
+  "workflow_file": ".github/workflows/deribit-public-smoke.yml",
+  "operator_authorization": "PUBLIC_MARKET_DATA_ONLY",
+  "dry_run": true,
+  "accepted": true,
+  "message_count": 19,
+  "rejection_reasons": [],
+  "channel": "book.BTC-PERPETUAL.none.10.100ms",
+  "ws_url": "wss://www.deribit.com/ws/api/v2",
+  "NOT_an_approval": true,
+  "NOT_worksheet_mutation": true,
+  "NOT_b1_b5_closure": true,
+  "NOT_connector_enablement": true,
+  "NOT_live_trading": true,
+  "observed_events": [
+    {
+      "channel": "book.BTC-PERPETUAL.none.10.100ms",
+      "payload_kind": "market_data",
+      "type": null,
+      "change_id": 154673956305,
+      "prev_change_id": null,
+      "sequence_id": 154673956305,
+      "prev_sequence_id": null,
+      "timestamp": 1778504249576,
+      "receive_lag_ms": 68
+    },
+    {
+      "channel": "book.BTC-PERPETUAL.none.10.100ms",
+      "payload_kind": "market_data",
+      "type": null,
+      "change_id": 154673956448,
+      "prev_change_id": null,
+      "sequence_id": 154673956448,
+      "prev_sequence_id": null,
+      "timestamp": 1778504249710,
+      "receive_lag_ms": 63
+    },
+    {
+      "channel": "book.BTC-PERPETUAL.none.10.100ms",
+      "payload_kind": "market_data",
+      "type": null,
+      "change_id": 154673957143,
+      "prev_change_id": null,
+      "sequence_id": 154673957143,
+      "prev_sequence_id": null,
+      "timestamp": 1778504250021,
+      "receive_lag_ms": 82
+    },
+    {
+      "channel": "book.BTC-PERPETUAL.none.10.100ms",
+      "payload_kind": "market_data",
+      "type": null,
+      "change_id": 154673957512,
+      "prev_change_id": null,
+      "sequence_id": 154673957512,
+      "prev_sequence_id": null,
+      "timestamp": 1778504250361,
+      "receive_lag_ms": 73
+    },
+    {
+      "channel": "book.BTC-PERPETUAL.none.10.100ms",
+      "payload_kind": "market_data",
+      "type": null,
+      "change_id": 154673958252,
+      "prev_change_id": null,
+      "sequence_id": 154673958252,
+      "prev_sequence_id": null,
+      "timestamp": 1778504250703,
+      "receive_lag_ms": 61
+    }
+  ],
+  "proof_effect": {
+    "change_id": "PROOF_READY_NOT_APPROVED",
+    "prev_change_id": "WAIT_INSUFFICIENT",
+    "first_message_snapshot": "WAIT_INSUFFICIENT",
+    "incremental_delta": "WAIT_INSUFFICIENT",
+    "continuity_condition": "WAIT_INSUFFICIENT"
+  },
+  "strict_notes": [
+    "Actual observed sample_events exist in the downloaded main-branch deribit-public-smoke-proof artifact.",
+    "All observed events contain non-null integer change_id values and matching sequence_id values.",
+    "Observed sample_events contain type=null and prev_change_id=null, so they do not prove snapshot, delta, prev_change_id, or continuity semantics.",
+    "This artifact does not approve any worksheet row and does not enable connector readiness."
+  ]
+}
