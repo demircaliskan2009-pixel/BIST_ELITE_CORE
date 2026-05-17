@@ -10,7 +10,8 @@ DERIBIT_OFFICIAL_PUBLIC_WS_URL = "wss://www.deribit.com/ws/api/v2"
 DERIBIT_DEFAULT_PUBLIC_CHANNEL = "book.BTC-PERPETUAL.none.10.100ms"
 DERIBIT_PUBLIC_WS_MAX_DURATION_SECONDS = 30.0
 DERIBIT_PUBLIC_WS_MAX_MESSAGES = 100
-DERIBIT_PUBLIC_WS_MAX_SAMPLE_EVENTS = 5
+DERIBIT_PUBLIC_WS_DEFAULT_SAMPLE_EVENTS = 5
+DERIBIT_PUBLIC_WS_MAX_SAMPLE_EVENTS = 100
 DERIBIT_PUBLIC_WS_MAX_RECEIVE_LAG_MS = 60_000
 
 _FORBIDDEN_CHANNEL_TOKENS = (
@@ -44,7 +45,7 @@ class DeribitPublicWsSmokeConfig:
     duration_seconds: float = 5.0
     max_messages: int = 10
     max_receive_lag_ms: int = 5_000
-    sample_limit: int = DERIBIT_PUBLIC_WS_MAX_SAMPLE_EVENTS
+    sample_limit: int = DERIBIT_PUBLIC_WS_DEFAULT_SAMPLE_EVENTS
     request_id: int = 1
 
 
@@ -548,6 +549,8 @@ def _optional_positive_float(value: object, field_name: str) -> float | None:
 __all__ = [
     "DERIBIT_DEFAULT_PUBLIC_CHANNEL",
     "DERIBIT_OFFICIAL_PUBLIC_WS_URL",
+    "DERIBIT_PUBLIC_WS_DEFAULT_SAMPLE_EVENTS",
+    "DERIBIT_PUBLIC_WS_MAX_SAMPLE_EVENTS",
     "DERIBIT_PUBLIC_WS_OPERATOR_AUTHORIZATION",
     "DeribitPublicWsSmokeConfig",
     "DeribitPublicWsSmokeError",

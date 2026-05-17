@@ -8,6 +8,8 @@ from crypto_core.data import deribit_public_ws_harness as harness
 from crypto_core.data.deribit_public_ws_harness import (
     DERIBIT_DEFAULT_PUBLIC_CHANNEL,
     DERIBIT_OFFICIAL_PUBLIC_WS_URL,
+    DERIBIT_PUBLIC_WS_DEFAULT_SAMPLE_EVENTS,
+    DERIBIT_PUBLIC_WS_MAX_SAMPLE_EVENTS,
     DERIBIT_PUBLIC_WS_OPERATOR_AUTHORIZATION,
     DeribitPublicWsSmokeConfig,
     deribit_public_ws_smoke_result_from_dict,
@@ -88,6 +90,17 @@ def test_bounded_max_messages_required():
     assert "deribit_ws:max_messages_unbounded" in validate_deribit_public_ws_smoke_config(_config(max_messages=101))
 
 
+def test_sample_limit_defaults_safe_and_allows_phase26d_capture_bound():
+    default_config = DeribitPublicWsSmokeConfig()
+
+    assert default_config.sample_limit == DERIBIT_PUBLIC_WS_DEFAULT_SAMPLE_EVENTS
+    assert DERIBIT_PUBLIC_WS_DEFAULT_SAMPLE_EVENTS == 5
+    assert DERIBIT_PUBLIC_WS_MAX_SAMPLE_EVENTS == 100
+    assert "deribit_ws:sample_limit_invalid" in validate_deribit_public_ws_smoke_config(_config(sample_limit=0))
+    assert "deribit_ws:sample_limit_invalid" in validate_deribit_public_ws_smoke_config(_config(sample_limit=101))
+    assert validate_deribit_public_ws_smoke_config(_config(sample_limit=100)) == ()
+
+
 def test_valid_public_aggregated_channel_accepted_by_config_validator():
     reasons = validate_deribit_public_ws_smoke_config(_config())
 
@@ -111,6 +124,27 @@ def test_mocked_valid_message_produces_accepted_quarantine_summary(monkeypatch):
     assert result.rejection_reasons == ()
     assert result.sample_events[0].payload_sample["change_id"] == 10
     assert json.dumps(deribit_public_ws_smoke_result_to_dict(result), sort_keys=True)
+
+
+def test_sample_limit_can_preserve_adjacent_raw_sequence_events(monkeypatch):
+    payloads = tuple(
+        (_subscription_payload(change_id=10 + offset, event_time_ms=1_999 + offset), 2_000_000_000 + offset)
+        for offset in range(6)
+    )
+    monkeypatch.setattr(
+        harness,
+        "_receive_deribit_public_ws_messages",
+        lambda config: payloads,
+    )
+
+    result = run_deribit_public_ws_smoke_test(_config(sample_limit=6, max_messages=6))
+    serialized = deribit_public_ws_smoke_result_to_dict(result)
+
+    assert result.accepted is True
+    assert result.message_count == 6
+    assert len(result.sample_events) == 6
+    assert len(serialized["sample_events"]) == 6
+    assert [event.payload_sample["change_id"] for event in result.sample_events] == [10, 11, 12, 13, 14, 15]
 
 
 def test_malformed_payload_rejects(monkeypatch):
@@ -175,6 +209,19 @@ def test_no_env_or_api_key_reads():
         assert "os.environ" not in text
         assert "getenv" not in text
         assert "api_key" not in text
+
+
+def test_smoke_script_exposes_sample_limit_without_credentials_or_orders():
+    text = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "--sample-limit" in text
+    assert "DERIBIT_PUBLIC_WS_DEFAULT_SAMPLE_EVENTS" in text
+    assert "sample_limit=args.sample_limit" in text
+    assert "DERIBIT_PUBLIC_WS_OPERATOR_AUTHORIZATION" in text
+    assert "NO CREDENTIALS" in text
+    lowered = text.lower()
+    for forbidden in ("private/", "private_", "api_key", "api_secret", "create_order", "send_order"):
+        assert forbidden not in lowered
 
 
 def test_no_service_orchestrator_trading_or_risk_imports():
