@@ -55,15 +55,15 @@ REQUIRED_CLAIM_IDS = {
 
 def test_current_deribit_claim_review_rows_are_not_approved():
     rows = _worksheet_rows()
-    # Phase 25I approved exactly 3 claim rows; the other 20 remain PENDING.
-    _approved_claim_ids = frozenset(
+    # Phase 25I approved 3 rows; Phase 25R later approved only change_id.
+    approved_claim_ids = frozenset(
         {"public_websocket_availability", "unauthenticated_public_market_data", "orderbook_channel_feed"}
-    )
+    ) | frozenset({"change_id"})
 
     assert set(rows) == REQUIRED_CLAIM_IDS
     assert {row["operational_readiness_effect"] for row in rows.values()} == {"LEAVES_BLOCKER"}
-    non_approved = {cid: row for cid, row in rows.items() if cid not in _approved_claim_ids}
-    assert len(non_approved) == 20
+    non_approved = {cid: row for cid, row in rows.items() if cid not in approved_claim_ids}
+    assert len(non_approved) == 19
     assert {row["review_status"] for row in non_approved.values()} == {"PENDING"}
     assert {row["decision"] for row in non_approved.values()} == {"PENDING"}
     assert all(row["reviewer_id"] == "PENDING" for row in non_approved.values())
@@ -83,9 +83,9 @@ def test_current_deribit_claim_reviews_cannot_satisfy_operational_readiness():
         required_fields=_requirements_from_claim_review_aggregate(aggregate),
     )
 
-    # Phase 25I approved 3 rows; those pass individually but the aggregate + readiness remain blocked.
+    # Phase 25I approved 3 rows and Phase 25R approved change_id; the aggregate + readiness remain blocked.
     rejected_results = [r for r in results if not r.accepted]
-    assert len(rejected_results) == 20
+    assert len(rejected_results) == 19
     assert aggregate.accepted is False
     assert aggregate.review_status is OfficialClaimReviewStatus.PENDING
     assert "official_claim_review:pending" in aggregate.rejection_reasons

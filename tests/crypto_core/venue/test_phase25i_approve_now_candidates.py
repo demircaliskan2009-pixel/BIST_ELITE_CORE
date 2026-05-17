@@ -3,8 +3,8 @@
 Proves:
 1. Exactly the 9 APPROVE_NOW_CANDIDATE rows are no longer pending in the real
    worksheets (6 manifest source rows REVIEWED, 3 claim rows APPROVED).
-2. All WAIT_POLICY, WAIT_LEGAL, MUST_DEFER, and WAIT_INSUFFICIENT rows remain
-   PENDING in the real worksheets.
+2. All WAIT_POLICY, WAIT_LEGAL, MUST_DEFER, and still-unapproved
+   WAIT_INSUFFICIENT rows remain PENDING in the real worksheets.
 3. Operator reviewer metadata is correctly set on the 9 approved rows.
 4. Validator still returns accepted=False, evidence_review_complete=False,
    ready_for_engineering_patch=False, connector_enablement_ready=False.
@@ -38,16 +38,19 @@ _APPROVED_MANIFEST_IDS: frozenset[str] = frozenset(
         "DERIBIT_RESTRICTED",
     }
 )
-_APPROVED_CLAIM_IDS: frozenset[str] = frozenset(
+_PHASE25I_APPROVED_CLAIM_IDS: frozenset[str] = frozenset(
     {
         "public_websocket_availability",
         "unauthenticated_public_market_data",
         "orderbook_channel_feed",
     }
 )
+_PHASE25R_APPROVED_CLAIM_IDS: frozenset[str] = frozenset({"change_id"})
+_APPROVED_CLAIM_IDS: frozenset[str] = _PHASE25I_APPROVED_CLAIM_IDS | _PHASE25R_APPROVED_CLAIM_IDS
 _OPERATOR_REVIEWER_ID = "demir_operator"
 _OPERATOR_REVIEWED_AT = "2026-05-11T00:00:00Z"
-_EXPECTED_APPROVAL_SCOPE_SUBSTR = "Phase25I_APPROVE_NOW_CANDIDATES_ONLY"
+_EXPECTED_PHASE25I_APPROVAL_SCOPE_SUBSTR = "Phase25I_APPROVE_NOW_CANDIDATES_ONLY"
+_EXPECTED_PHASE25R_APPROVAL_SCOPE_SUBSTR = "Phase25R_CHANGE_ID_ONLY"
 
 # WAIT_POLICY claim rows (must remain PENDING).
 _WAIT_POLICY_CLAIM_IDS: frozenset[str] = frozenset({"checksum_decision", "staleness_budget", "receive_lag_budget"})
@@ -70,7 +73,7 @@ _WAIT_LEGAL_POLICY_IDS: frozenset[str] = frozenset({"regional_legal_access_revie
 # MUST_DEFER row (must remain PENDING in worksheets; never approved in Phase 25).
 _MUST_DEFER_POLICY_IDS: frozenset[str] = frozenset({"separate_connector_enablement"})
 
-# WAIT_INSUFFICIENT claim rows (must remain PENDING).
+# WAIT_INSUFFICIENT claim rows still unapproved after Phase 25R (must remain PENDING).
 _WAIT_INSUFFICIENT_CLAIM_IDS: frozenset[str] = frozenset(
     {
         "public_rest_availability",
@@ -78,7 +81,6 @@ _WAIT_INSUFFICIENT_CLAIM_IDS: frozenset[str] = frozenset(
         "prod_testnet_rest_endpoint",
         "first_message_snapshot",
         "incremental_delta",
-        "change_id",
         "prev_change_id",
         "continuity_condition",
         "gap_resubscribe_rule",
@@ -140,7 +142,7 @@ def test_phase25i_approved_manifest_rows_preserve_hash_and_url():
 
 
 # ---------------------------------------------------------------------------
-# 2. Claim worksheet: exactly 3 approved rows; remaining 20 still PENDING
+# 2. Claim worksheet: exactly 4 approved rows after Phase 25R; remaining 19 still PENDING
 # ---------------------------------------------------------------------------
 
 
@@ -159,15 +161,20 @@ def test_phase25i_approved_claim_rows_have_correct_decision_and_reviewer():
         assert row["review_status"] == "APPROVED", (
             f"{claim_id} review_status must be APPROVED, got {row['review_status']!r}"
         )
-        assert _EXPECTED_APPROVAL_SCOPE_SUBSTR in row["rejection_reason_if_pending"], (
-            f"{claim_id} last cell must contain {_EXPECTED_APPROVAL_SCOPE_SUBSTR!r}"
+        expected_scope = (
+            _EXPECTED_PHASE25R_APPROVAL_SCOPE_SUBSTR
+            if claim_id in _PHASE25R_APPROVED_CLAIM_IDS
+            else _EXPECTED_PHASE25I_APPROVAL_SCOPE_SUBSTR
+        )
+        assert expected_scope in row["rejection_reason_if_pending"], (
+            f"{claim_id} last cell must contain {expected_scope!r}"
         )
 
 
 def test_phase25i_non_approved_claim_rows_remain_pending():
     rows = {row["claim_id"]: row for row in _claim_rows()}
     non_approved = {cid: row for cid, row in rows.items() if cid not in _APPROVED_CLAIM_IDS}
-    assert len(non_approved) == 20, f"Expected 20 non-approved claim rows, got {len(non_approved)}"
+    assert len(non_approved) == 19, f"Expected 19 non-approved claim rows, got {len(non_approved)}"
     for claim_id, row in non_approved.items():
         assert row["reviewer_id"] == "PENDING", f"Non-approved claim {claim_id!r} reviewer_id must be PENDING"
         assert row["reviewed_at_iso"] == "PENDING", f"Non-approved claim {claim_id!r} reviewed_at_iso must be PENDING"
@@ -244,7 +251,7 @@ def test_phase25i_validator_accepted_remains_false():
 
 
 def test_phase25i_validator_evidence_review_complete_remains_false():
-    """evidence_review_complete stays False: 20 claim rows + 7 policy rows still PENDING."""
+    """evidence_review_complete stays False: 19 claim rows + 7 policy rows still PENDING."""
     result = _validator_result()
     assert result.evidence_review_complete is False
 
@@ -259,11 +266,11 @@ def test_phase25i_validator_connector_enablement_ready_remains_false():
     assert result.connector_enablement_ready is False
 
 
-def test_phase25i_validator_pending_rows_count_is_27():
-    """After Phase 25I: 0 manifest pending + 20 claim pending + 7 policy pending = 27."""
+def test_phase25i_validator_pending_rows_count_is_26():
+    """After Phase 25R: 0 manifest pending + 19 claim pending + 7 policy pending = 26."""
     result = _validator_result()
-    assert len(result.pending_rows) == 27, (
-        f"Expected 27 pending rows after Phase 25I, got {len(result.pending_rows)}: {result.pending_rows}"
+    assert len(result.pending_rows) == 26, (
+        f"Expected 26 pending rows after Phase 25R, got {len(result.pending_rows)}: {result.pending_rows}"
     )
 
 
@@ -287,8 +294,8 @@ def test_phase25i_approved_claim_rows_not_in_pending_rows():
 def test_phase25i_non_approved_claim_rows_still_in_pending_rows():
     result = _validator_result()
     claim_pending = {r for r in result.pending_rows if r.startswith("claim_review:")}
-    assert len(claim_pending) == 20, (
-        f"Expected 20 pending claim rows after Phase 25I, got {len(claim_pending)}: {claim_pending}"
+    assert len(claim_pending) == 19, (
+        f"Expected 19 pending claim rows after Phase 25R, got {len(claim_pending)}: {claim_pending}"
     )
 
 

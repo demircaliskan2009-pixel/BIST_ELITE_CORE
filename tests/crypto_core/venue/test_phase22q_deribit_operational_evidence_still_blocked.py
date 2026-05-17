@@ -44,11 +44,11 @@ def test_current_deribit_claim_reviews_are_not_accepted():
     results = tuple(validate_official_claim_review(_claim_from_row(row)) for row in _worksheet_rows().values())
 
     assert results
-    # Phase 25I approved 3 claim rows; the remaining 20 must remain rejected.
+    # Phase 25I approved 3 rows and Phase 25R approved change_id; the remaining 19 must remain rejected.
     rejected = [r for r in results if not r.accepted]
     accepted = [r for r in results if r.accepted]
-    assert len(rejected) == 20
-    assert len(accepted) == 3
+    assert len(rejected) == 19
+    assert len(accepted) == 4
     assert all("official_claim_review:pending" in r.rejection_reasons for r in rejected)
 
 

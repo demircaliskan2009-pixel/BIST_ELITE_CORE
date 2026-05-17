@@ -12,7 +12,8 @@
 ## Summary
 
 - already_approved_phase25i_count: 3
-- new_proof_ready_not_approved_count: 1
+- approved_phase25r_change_id_count: 1
+- new_proof_ready_not_approved_count: 0
 - wait_insufficient_count: 6
 - total_target_claims_in_this_batch: 7
 
@@ -22,6 +23,11 @@ usable only under the strict PUBLIC_MARKET_DATA_ONLY boundary:
 `dry_run=true`, `operator_authorization=PUBLIC_MARKET_DATA_ONLY`,
 `accepted=true`, and `rejection_reasons=[]`.
 
+Phase 25R update: the `change_id` worksheet row was subsequently approved
+under `Phase25R_CHANGE_ID_ONLY` using the supplied operator metadata. The
+strict evidence classification below remains the reason that row became
+eligible; all other rows remain WAIT_INSUFFICIENT.
+
 ## Strict Classification Table
 
 | claim_id | surface | classification | evidence_source | strict_reason |
@@ -29,7 +35,7 @@ usable only under the strict PUBLIC_MARKET_DATA_ONLY boundary:
 | `public_websocket_availability` | claim_review | ALREADY_APPROVED_PHASE25I | `DERIBIT_CLAIM_REVIEW_WORKSHEET.md` | Already approved in Phase 25I; not changed here. |
 | `unauthenticated_public_market_data` | claim_review | ALREADY_APPROVED_PHASE25I | `DERIBIT_CLAIM_REVIEW_WORKSHEET.md` | Already approved in Phase 25I; not changed here. |
 | `orderbook_channel_feed` | claim_review | ALREADY_APPROVED_PHASE25I | `DERIBIT_CLAIM_REVIEW_WORKSHEET.md` | Already approved in Phase 25I; not changed here. |
-| `change_id` | claim_review | PROOF_READY_NOT_APPROVED | `DERIBIT_OBSERVED_BOOK_SEQUENCE_PROOF_25M.json` | Actual observed Deribit sample events contain non-null integer `change_id` values and matching `sequence_id` values. Worksheet approval still requires operator reviewer metadata. |
+| `change_id` | claim_review | APPROVED_PHASE25R_CHANGE_ID_ONLY | `DERIBIT_OBSERVED_BOOK_SEQUENCE_PROOF_25M.json`; `DERIBIT_CLAIM_REVIEW_WORKSHEET.md` row `change_id` | Actual observed Deribit sample events contain non-null integer `change_id` values and matching `sequence_id` values. Phase 25R approved this row only. |
 | `prev_change_id` | claim_review | WAIT_INSUFFICIENT | `DERIBIT_OBSERVED_BOOK_SEQUENCE_PROOF_25M.json` | The observed sample events contain `prev_change_id=null` and `prev_sequence_id=null`; no actual non-null `prev_change_id` proof is committed. |
 | `first_message_snapshot` | claim_review | WAIT_INSUFFICIENT | `DERIBIT_OBSERVED_BOOK_SEQUENCE_PROOF_25M.json` | The first observed sample event has `type=null` and `payload_kind=market_data`; it does not prove snapshot semantics. |
 | `incremental_delta` | claim_review | WAIT_INSUFFICIENT | `DERIBIT_OBSERVED_BOOK_SEQUENCE_PROOF_25M.json` | The observed sample events have `type=null`; no observed `type=change` or explicit delta/change semantic proof is committed. |

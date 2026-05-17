@@ -4,8 +4,8 @@ Proves:
 1. The matrix document lists exactly the 20 remaining PENDING claim rows.
 2. The 3 Phase 25I approved rows are NOT listed as pending in the matrix.
 3. Classification invariants hold per row category.
-4. All worksheet files remain at Phase 25I state (manifest=6 approved,
-   claim=3 approved, policy=0 approved).
+4. Worksheet files remain fail-closed after Phase 25R (manifest=6 approved,
+   claim=4 approved including change_id, policy=0 approved).
 5. Validator remains accepted=False, evidence_review_complete=False,
    ready_for_engineering_patch=False, connector_enablement_ready=False.
 6. connector_ready_dialects() == ().
@@ -41,6 +41,8 @@ _PHASE25I_APPROVED_CLAIM_IDS: frozenset[str] = frozenset(
         "orderbook_channel_feed",
     }
 )
+_PHASE25R_APPROVED_CLAIM_IDS: frozenset[str] = frozenset({"change_id"})
+_CURRENT_APPROVED_CLAIM_IDS: frozenset[str] = _PHASE25I_APPROVED_CLAIM_IDS | _PHASE25R_APPROVED_CLAIM_IDS
 
 # ---------------------------------------------------------------------------
 # The 20 remaining PENDING claim rows
@@ -70,6 +72,7 @@ _REMAINING_CLAIM_IDS: frozenset[str] = frozenset(
         "regional_legal_access",
     }
 )
+_CURRENT_PENDING_CLAIM_IDS: frozenset[str] = _REMAINING_CLAIM_IDS - _PHASE25R_APPROVED_CLAIM_IDS
 
 # ---------------------------------------------------------------------------
 # Classification groups
@@ -366,25 +369,25 @@ def test_phase25j_manifest_no_pending_rows():
     assert len(pending) == 0, f"Expected 0 pending manifest rows after Phase 25I, got: {pending}"
 
 
-def test_phase25j_claim_worksheet_approved_count_is_3():
+def test_phase25j_claim_worksheet_approved_count_is_4():
     rows = _claim_worksheet_rows()
     approved = [cid for cid, row in rows.items() if row.get("decision") == "APPROVED"]
-    assert len(approved) == 3, (
-        f"Expected exactly 3 approved claim rows (Phase 25I only), got {len(approved)}: {approved}"
+    assert len(approved) == 4, (
+        f"Expected exactly 4 approved claim rows after Phase 25R, got {len(approved)}: {approved}"
     )
 
 
-def test_phase25j_claim_worksheet_approved_are_only_phase25i_rows():
+def test_phase25j_claim_worksheet_approved_are_only_current_approved_rows():
     rows = _claim_worksheet_rows()
     approved = {cid for cid, row in rows.items() if row.get("decision") == "APPROVED"}
-    assert approved == _PHASE25I_APPROVED_CLAIM_IDS, (
-        f"Approved claim rows must be exactly Phase 25I set. Got: {approved}"
+    assert approved == _CURRENT_APPROVED_CLAIM_IDS, (
+        f"Approved claim rows must be exactly Phase 25I + Phase 25R set. Got: {approved}"
     )
 
 
-def test_phase25j_claim_worksheet_remaining_20_rows_still_pending():
+def test_phase25j_claim_worksheet_remaining_19_rows_still_pending():
     rows = _claim_worksheet_rows()
-    for claim_id in _REMAINING_CLAIM_IDS:
+    for claim_id in _CURRENT_PENDING_CLAIM_IDS:
         row = rows.get(claim_id)
         assert row is not None, f"Claim row {claim_id!r} not found in worksheet"
         assert row.get("decision") == "PENDING", (
@@ -421,7 +424,7 @@ def test_phase25j_validator_accepted_remains_false():
 def test_phase25j_validator_evidence_review_complete_remains_false():
     result = _validator_result()
     assert result.evidence_review_complete is False, (
-        "evidence_review_complete must remain False: 20 claim rows + 7 policy rows still PENDING"
+        "evidence_review_complete must remain False: 19 claim rows + 7 policy rows still PENDING"
     )
 
 
@@ -435,10 +438,10 @@ def test_phase25j_validator_connector_enablement_ready_remains_false():
     assert result.connector_enablement_ready is False
 
 
-def test_phase25j_validator_pending_rows_count_is_27():
+def test_phase25j_validator_pending_rows_count_is_26():
     result = _validator_result()
-    assert len(result.pending_rows) == 27, (
-        f"Expected 27 pending rows after Phase 25J (doc-only), got {len(result.pending_rows)}: {result.pending_rows}"
+    assert len(result.pending_rows) == 26, (
+        f"Expected 26 pending rows after Phase 25R, got {len(result.pending_rows)}: {result.pending_rows}"
     )
 
 
@@ -448,10 +451,10 @@ def test_phase25j_validator_manifest_pending_count_is_0():
     assert len(manifest_pending) == 0, f"Expected 0 manifest pending rows, got: {manifest_pending}"
 
 
-def test_phase25j_validator_claim_pending_count_is_20():
+def test_phase25j_validator_claim_pending_count_is_19():
     result = _validator_result()
     claim_pending = [r for r in result.pending_rows if r.startswith("claim_review:")]
-    assert len(claim_pending) == 20, f"Expected 20 pending claim rows, got {len(claim_pending)}: {claim_pending}"
+    assert len(claim_pending) == 19, f"Expected 19 pending claim rows, got {len(claim_pending)}: {claim_pending}"
 
 
 def test_phase25j_validator_policy_pending_count_is_7():
