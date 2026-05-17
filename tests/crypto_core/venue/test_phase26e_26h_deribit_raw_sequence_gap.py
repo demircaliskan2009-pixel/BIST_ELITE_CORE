@@ -38,6 +38,7 @@ def test_phase26e_records_dispatch_gap_and_exact_next_capture_settings() -> None
     doc = _gap_doc()
 
     assert "status: CAPTURE_TRIGGER_BLOCKED_BY_LOCAL_DISPATCH_TOOLING" in doc
+    assert "latest_dispatch_status: BLOCKED_BY_GH_AUTH" in doc
     assert "workflow_accepts_inputs: true" in doc
     assert "run_id: NOT_AVAILABLE" in doc
     assert "artifact_downloaded: false" in doc
@@ -51,10 +52,29 @@ def test_phase26e_records_dispatch_gap_and_exact_next_capture_settings() -> None
     assert not PROOF_26F_PATH.exists()
 
 
+def test_phase26e_records_exact_terminal_auth_blocker_without_secrets() -> None:
+    doc = _gap_doc()
+
+    assert "gh version 2.92.0 (2026-04-28)" in doc
+    assert "You are not logged into any GitHub hosts" in doc
+    assert "GH_TOKEN` local credential probe | `present: false`" in doc
+    assert "GITHUB_TOKEN` local credential probe | `present: false`" in doc
+    assert "git credential.helper` local credential probe | `configured: false`" in doc
+    assert "gh workflow run deribit-public-smoke.yml" in doc
+    assert "-f duration_seconds=30" in doc
+    assert "-f max_messages=100" in doc
+    assert "-f sample_limit=100" in doc
+    assert "-f max_receive_lag_ms=60000" in doc
+    assert "Alternatively, populate the GH_TOKEN environment variable" in doc
+    assert "does not prove any Deribit market-data" in doc
+    assert "claim." in doc
+
+
 def test_phase26g_does_not_promote_without_raw_artifact() -> None:
     doc = _batch_doc()
 
     assert "status: WAIT_INSUFFICIENT_NO_RAW_SEQUENCE_ARTIFACT" in doc
+    assert "latest_dispatch_attempt_status: BLOCKED_BY_GH_AUTH" in doc
     assert "raw_sequence_proof_26f_created: NO" in doc
     assert "newly_proof_ready_not_approved_count: 0" in doc
     assert "operator_proposal_created: NO" in doc
@@ -65,6 +85,8 @@ def test_phase26g_does_not_promote_without_raw_artifact() -> None:
     assert "`non_null_prev_change_id_observed=false`" in doc
     assert "`continuity_pair_missing=true`" in doc
     assert "PROOF_READY_NOT_APPROVED |" not in doc
+    assert "| latest `gh workflow run` dispatch attempt succeeded | false |" in doc
+    assert "| local `GH_TOKEN` or `GITHUB_TOKEN` exists | false |" in doc
 
 
 def test_phase26g_continuity_requires_exact_adjacent_raw_equality() -> None:
@@ -80,6 +102,8 @@ def test_phase26h_summary_lists_still_blocked_rows_and_no_proposal() -> None:
 
     assert "| none | NO_PROPOSAL |" in doc
     assert "no Phase 26F proof JSON was created" in doc
+    assert "blocked because `gh`" in doc
+    assert "was installed but unauthenticated" in doc
     assert "`prev_change_id`" in doc
     assert "`continuity_condition`" in doc
     assert "`first_message_snapshot`" in doc
@@ -89,6 +113,8 @@ def test_phase26h_summary_lists_still_blocked_rows_and_no_proposal() -> None:
     assert "`checksum_decision`" in doc
     assert "`regional_legal_access`" in doc
     assert "`separate_connector_enablement` remains deferred" in doc
+    assert "Run `gh auth login` locally" in doc
+    assert "keep all raw-sequence rows WAIT_INSUFFICIENT" in doc
     assert not PROPOSAL_26H_PATH.exists()
 
 

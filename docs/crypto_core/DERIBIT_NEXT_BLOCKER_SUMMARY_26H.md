@@ -5,7 +5,10 @@ status: NEXT_ACTION_PLAN_ONLY
 Phase 26D merged the raw smoke capture enhancement, but Phase 26E could not
 dispatch the manual workflow from this workspace. No raw artifact was
 downloaded, no Phase 26F proof JSON was created, no Phase 26G rows became
-proof-ready, and no operator proposal is created.
+proof-ready, and no operator proposal is created. A follow-up retry from `main`
+at `f06425bece05970fb97f5838d2c8da66b10a805a` remained blocked because `gh`
+was installed but unauthenticated and no non-secret local token or credential
+helper was configured.
 
 ## Approved Rows So Far
 
@@ -26,10 +29,18 @@ proof-ready, and no operator proposal is created.
 
 | row_id | exact_next_capture_requirement |
 |---|---|
-| `prev_change_id` | Dispatch `deribit-public-smoke.yml` on `main` with `duration_seconds=30`, `max_messages=100`, `sample_limit=100`, and an artifact showing at least one actual observed event where `payload_sample.prev_change_id` is a non-null integer. |
+| `prev_change_id` | Authenticate `gh` or provide a GitHub workflow dispatch token through `GH_TOKEN`/`GITHUB_TOKEN`, then dispatch `deribit-public-smoke.yml` on `main` with `duration_seconds=30`, `max_messages=100`, `sample_limit=100`, and an artifact showing at least one actual observed event where `payload_sample.prev_change_id` is a non-null integer. |
 | `continuity_condition` | Same artifact must include adjacent observed events proving `current.payload_sample.prev_change_id == prior.payload_sample.change_id`. |
 | `first_message_snapshot` | Same artifact must prove first book event snapshot semantics via observed `payload_sample.type` or equivalent raw payload evidence. |
 | `incremental_delta` | Same artifact must prove change/delta semantics via observed `payload_sample.type` or equivalent raw payload evidence. |
+
+## Dispatch Recovery
+
+| blocker | recovery_step |
+|---|---|
+| `gh auth status` reports unauthenticated | Run `gh auth login` locally, or set an already-authorized `GH_TOKEN`/`GITHUB_TOKEN` without printing the token. |
+| no non-secret local credential was configured | After authentication, rerun the exact workflow command recorded in `DERIBIT_RAW_SEQUENCE_CAPTURE_TRIGGER_GAP_26E.md`. |
+| artifact still absent | Do not classify; keep all raw-sequence rows WAIT_INSUFFICIENT. |
 
 ## Rows Needing Other Public Artifacts
 

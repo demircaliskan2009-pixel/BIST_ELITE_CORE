@@ -7,6 +7,8 @@
 - workflow_accepts_inputs: true
 - merged_input_patch_pr: `#55`
 - merged_input_patch_main_sha: `c5cff2849b830bb14a76674a96532b6f2e0bd906`
+- latest_dispatch_attempt_at: 2026-05-17
+- latest_dispatch_status: BLOCKED_BY_GH_AUTH
 - run_id: NOT_AVAILABLE
 - run_url: NOT_AVAILABLE
 - artifact_downloaded: false
@@ -24,6 +26,36 @@ merge, status, job, log, and artifact reads but no `workflow_dispatch` action.
 
 No raw Deribit smoke artifact was downloaded in this phase. Therefore no
 `DERIBIT_RAW_SEQUENCE_CAPTURE_PROOF_26F.json` is created.
+
+## Latest Terminal Evidence
+
+The follow-up dispatch attempt was made from `main` at
+`f06425bece05970fb97f5838d2c8da66b10a805a`.
+
+| check | observed_output |
+|---|---|
+| `gh --version` | `gh version 2.92.0 (2026-04-28)` |
+| `gh auth status` | `You are not logged into any GitHub hosts. To log in, run: gh auth login` |
+| `GH_TOKEN` local credential probe | `present: false` |
+| `GITHUB_TOKEN` local credential probe | `present: false` |
+| `git credential.helper` local credential probe | `configured: false` |
+
+Dispatch command attempted:
+
+```text
+gh workflow run deribit-public-smoke.yml --repo demircaliskan2009-pixel/BIST_ELITE_CORE --ref main -f duration_seconds=30 -f max_messages=100 -f sample_limit=100 -f max_receive_lag_ms=60000
+```
+
+Dispatch terminal output:
+
+```text
+To get started with GitHub CLI, please run:  gh auth login
+Alternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.
+```
+
+This output is the terminal blocker for this workspace. It proves the manual
+workflow was not dispatched here; it does not prove any Deribit market-data
+claim.
 
 ## Required Next Capture
 

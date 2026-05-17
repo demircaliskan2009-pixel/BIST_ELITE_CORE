@@ -5,6 +5,7 @@
 - generated_at: 2026-05-17
 - source_capture_enhancement: PR `#55`, main SHA `c5cff2849b830bb14a76674a96532b6f2e0bd906`
 - source_trigger_gap: `docs/crypto_core/DERIBIT_RAW_SEQUENCE_CAPTURE_TRIGGER_GAP_26E.md`
+- latest_dispatch_attempt_status: BLOCKED_BY_GH_AUTH
 - raw_sequence_proof_26f_created: NO
 - newly_proof_ready_not_approved_count: 0
 - operator_proposal_created: NO
@@ -16,8 +17,10 @@
 
 Phase 26D improved the manual Deribit public smoke capture path so a future CI
 artifact can retain up to 100 raw `sample_events`. Phase 26E could not dispatch
-the workflow from this workspace, so no actual raw artifact was downloaded and
-no run ID is available.
+the workflow from this workspace. The latest retry confirmed `gh` is installed
+but unauthenticated, `GH_TOKEN` and `GITHUB_TOKEN` are absent, and no local git
+credential helper is configured. Therefore no actual raw artifact was
+downloaded and no run ID is available.
 
 Because the classification input is absent, Phase 26G makes no proof-ready
 promotion. Every sequence row below remains WAIT_INSUFFICIENT.
@@ -40,6 +43,8 @@ promotion. Every sequence row below remains WAIT_INSUFFICIENT.
 | manual workflow accepts `duration_seconds=30` | true | Capture readiness improved; no claim promotion by itself. |
 | manual workflow accepts `max_messages=100` | true | Capture readiness improved; no claim promotion by itself. |
 | manual workflow accepts `sample_limit=100` | true | Future artifacts can contain enough adjacent samples; no claim promotion by itself. |
+| latest `gh workflow run` dispatch attempt succeeded | false | No run ID; no artifact download; no claim promotion. |
+| local `GH_TOKEN` or `GITHUB_TOKEN` exists | false | No non-secret local credential was available for dispatch. |
 | actual raw artifact downloaded in this phase | false | All sequence classifications remain WAIT_INSUFFICIENT. |
 | non-null `payload_sample.prev_change_id` observed | false | `prev_change_id` remains WAIT_INSUFFICIENT. |
 | adjacent equality `current.prev_change_id == prior.change_id` proven | false | `continuity_condition` remains WAIT_INSUFFICIENT. |
