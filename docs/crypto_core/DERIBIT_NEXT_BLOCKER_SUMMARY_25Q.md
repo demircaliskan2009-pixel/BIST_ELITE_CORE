@@ -6,11 +6,15 @@ Phase 25M-25Q produced one newly proof-ready row (`change_id`) from actual
 observed Deribit public book sample events. No worksheet row was edited or
 approved.
 
-## Rows Now Proof-Ready But Not Approved
+Phase 25R update: `change_id` is now approved under
+`Phase25R_CHANGE_ID_ONLY` with supplied operator metadata. All other rows in
+this summary remain blocked as listed.
+
+## Rows Now Approved
 
 | row_id | surface | evidence | next_human_action |
 |---|---|---|---|
-| `change_id` | claim_review | `DERIBIT_OBSERVED_BOOK_SEQUENCE_PROOF_25M.json`; `DERIBIT_PROOF_ARTIFACT_BATCH_25N.md` | Operator may approve only with exact `reviewer_id` and `reviewed_at_iso` supplied in a later prompt. |
+| `change_id` | claim_review | `DERIBIT_OBSERVED_BOOK_SEQUENCE_PROOF_25M.json`; `DERIBIT_PROOF_ARTIFACT_BATCH_25N.md`; `DERIBIT_CLAIM_REVIEW_WORKSHEET.md` row `change_id` | Approved in Phase 25R only; no additional action for this row unless re-review is requested. |
 
 ## Rows Still Needing Actual Observed Artifact
 
@@ -62,8 +66,8 @@ change is authorized by this batch.
 
 ## Exact Next Safe Actions
 
-1. If the operator wants a worksheet patch, supply exact `reviewer_id` and
-   `reviewed_at_iso` for `change_id` only.
+1. Do not re-approve `change_id`; Phase 25R is the final approval for that
+   row unless a later operator prompt explicitly requests re-review.
 2. Run another PUBLIC_MARKET_DATA_ONLY observed book smoke that captures
    non-null `prev_change_id` or an official explanation of the observed
    `prev_change_id=null` aggregated channel behavior.

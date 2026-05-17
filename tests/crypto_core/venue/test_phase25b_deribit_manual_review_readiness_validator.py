@@ -181,8 +181,8 @@ def test_pending_claim_rows_fail_closed():
     )
     # All 23 claim rows must appear as pending
     claim_pending = [r for r in result.pending_rows if r.startswith("claim_review:")]
-    assert len(claim_pending) == 20, (
-        f"Expected 20 pending claim rows after Phase 25I, got {len(claim_pending)}: {claim_pending}"
+    assert len(claim_pending) == 19, (
+        f"Expected 19 pending claim rows after Phase 25R, got {len(claim_pending)}: {claim_pending}"
     )
 
 

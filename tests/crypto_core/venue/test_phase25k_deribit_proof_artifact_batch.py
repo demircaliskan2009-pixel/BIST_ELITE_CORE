@@ -7,7 +7,7 @@ Validates the Phase 25K proof artifact batch document and confirms:
     PROOF_READY_NOT_APPROVED, WAIT_INSUFFICIENT)
   - harness capability records are documented
   - no accidental worksheet mutations occurred
-  - all three worksheets remain in Phase 25I state
+  - all three worksheets remain fail-closed after the later Phase 25R change_id approval
   - validator outputs remain blocked
   - connector_ready_dialects() remains empty
   - B1-B5 remain BLOCKED
@@ -41,6 +41,7 @@ _ALREADY_APPROVED_PHASE25I: frozenset[str] = frozenset(
         "orderbook_channel_feed",
     }
 )
+_APPROVED_AFTER_PHASE25R: frozenset[str] = _ALREADY_APPROVED_PHASE25I | frozenset({"change_id"})
 
 _PROOF_READY_NOT_APPROVED: frozenset[str] = frozenset()
 
@@ -55,6 +56,7 @@ _WAIT_INSUFFICIENT: frozenset[str] = frozenset(
         "prev_change_id",
     }
 )
+_WAIT_INSUFFICIENT_STILL_PENDING: frozenset[str] = _WAIT_INSUFFICIENT - frozenset({"change_id"})
 
 _HARNESS_CAPABILITY_RECORD_IDS: frozenset[str] = frozenset(
     {
@@ -128,11 +130,12 @@ def test_phase25k_wait_insufficient_claims_listed() -> None:
 
 
 def test_phase25k_wait_insufficient_claims_still_pending_in_worksheet() -> None:
-    # All 7 WAIT_INSUFFICIENT claims must remain PENDING in the actual worksheet.
+    # The historical Phase 25K doc still lists change_id as WAIT_INSUFFICIENT;
+    # Phase 25R later approved only that row. All others must remain PENDING.
     claim_rows = {
         r["claim_id"]: r for r in _parse_md_table_rows((REPO_ROOT / CLAIM_WORKSHEET_PATH).read_text(encoding="utf-8"))
     }
-    for claim_id in _WAIT_INSUFFICIENT:
+    for claim_id in _WAIT_INSUFFICIENT_STILL_PENDING:
         row = claim_rows[claim_id]
         assert row.get("decision", "").upper() == "PENDING", (
             f"WAIT_INSUFFICIENT claim {claim_id!r} must still be PENDING in worksheet"
@@ -177,11 +180,11 @@ def test_phase25k_worksheets_unchanged() -> None:
     assert len(manifest_rows) == 6
     assert all(row["retrieval_status"] == "REVIEWED_APPROVED" for row in manifest_rows)
 
-    # Claims: exactly 3 APPROVED (Phase 25I), 20 PENDING
+    # Claims: exactly 4 APPROVED (Phase 25I + Phase 25R change_id), 19 PENDING
     approved_claim_ids = {r["claim_id"] for r in claim_rows if r.get("decision", "").upper() in ("APPROVE", "APPROVED")}
-    assert approved_claim_ids == set(_ALREADY_APPROVED_PHASE25I)
+    assert approved_claim_ids == set(_APPROVED_AFTER_PHASE25R)
     pending_claims = [r for r in claim_rows if r.get("decision", "").upper() == "PENDING"]
-    assert len(pending_claims) == 20
+    assert len(pending_claims) == 19
 
     # Policy: all 7 rows PENDING (no policy has been approved)
     assert len(policy_rows) == 7
@@ -193,7 +196,7 @@ def test_phase25k_worksheets_unchanged() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_phase25k_validator_blocked_and_pending_rows_27() -> None:
+def test_phase25k_validator_blocked_and_pending_rows_26() -> None:
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
@@ -203,8 +206,8 @@ def test_phase25k_validator_blocked_and_pending_rows_27() -> None:
     assert result.evidence_review_complete is False
     assert result.ready_for_engineering_patch is False
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 27, (
-        f"Expected 27 pending rows (0 manifest + 20 claims + 7 policies), "
+    assert len(result.pending_rows) == 26, (
+        f"Expected 26 pending rows (0 manifest + 19 claims + 7 policies), "
         f"got {len(result.pending_rows)}: {sorted(result.pending_rows)}"
     )
 

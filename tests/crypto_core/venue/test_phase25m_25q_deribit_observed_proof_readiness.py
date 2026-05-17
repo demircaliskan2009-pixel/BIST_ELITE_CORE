@@ -1,9 +1,10 @@
 """Phase 25M-25Q Deribit observed proof readiness tests.
 
-These tests validate the docs-only observed proof batch. They prove that actual
-artifact sample events can promote only the `change_id` claim to
-PROOF_READY_NOT_APPROVED, while all unproven rows remain blocked and no real
-worksheets, connector readiness, or B1-B5 gates are changed.
+These tests validate the observed proof batch and its Phase 25R follow-up.
+Actual artifact sample events promoted only the `change_id` claim to
+PROOF_READY_NOT_APPROVED in Phase 25N; Phase 25R then approved only that row
+with operator-supplied metadata. All unproven rows remain blocked and connector
+readiness remains disabled.
 """
 
 from __future__ import annotations
@@ -64,11 +65,12 @@ def test_phase25m_observed_events_prove_change_id_only() -> None:
     assert all(event["type"] is None for event in events)
 
 
-def test_phase25n_classifies_only_change_id_as_proof_ready() -> None:
+def test_phase25n_classifies_only_change_id_as_approved_after_phase25r() -> None:
     doc = _text(BATCH_25N_PATH)
 
-    assert "new_proof_ready_not_approved_count: 1" in doc
-    assert "| `change_id` | claim_review | PROOF_READY_NOT_APPROVED |" in doc
+    assert "approved_phase25r_change_id_count: 1" in doc
+    assert "new_proof_ready_not_approved_count: 0" in doc
+    assert "| `change_id` | claim_review | APPROVED_PHASE25R_CHANGE_ID_ONLY |" in doc
 
     for claim_id in (
         "prev_change_id",
@@ -87,18 +89,19 @@ def test_phase25o_candidates_include_phase25i_and_new_change_id_only() -> None:
     for approved in ("public_websocket_availability", "unauthenticated_public_market_data", "orderbook_channel_feed"):
         assert f"| ALREADY_APPROVED_PHASE25I | claim_review | `{approved}` |" in doc
 
-    assert "| PROOF_READY_NOT_APPROVED | claim_review | `change_id` |" in doc
+    assert "| APPROVED_PHASE25R_CHANGE_ID_ONLY | claim_review | `change_id` |" in doc
     assert "| PROOF_READY_NOT_APPROVED | claim_review | `prev_change_id` |" not in doc
-    assert "newly_proof_ready_not_approved_claim_count: 1" in doc
+    assert "newly_approved_phase25r_claim_count: 1" in doc
+    assert "newly_proof_ready_not_approved_claim_count: 0" in doc
 
 
 def test_phase25p_operator_fill_is_proposal_only_with_placeholders() -> None:
     doc = _text(PROPOSAL_25P_PATH)
 
-    assert "status: PROPOSAL_ONLY_NOT_APPLIED" in doc
-    assert "| claim_review | `change_id` | APPROVE_CANDIDATE | `<OPERATOR_REQUIRED>` | `<OPERATOR_REQUIRED>` |" in doc
+    assert "status: SUPERSEDED_BY_PHASE25R_CHANGE_ID_APPROVAL" in doc
+    assert "| claim_review | `change_id` | APPROVED_PHASE25R_CHANGE_ID_ONLY | `demir_operator` |" in doc
     assert "| claim_review | `prev_change_id` | APPROVE_CANDIDATE |" not in doc
-    assert "final_approvals: NONE" in doc
+    assert "final_approvals: CHANGE_ID_ONLY" in doc
     assert "connector_enablement: NONE" in doc
 
 
@@ -112,13 +115,13 @@ def test_phase25q_lists_approveable_and_blocked_rows() -> None:
     assert "`separate_connector_enablement` remains deferred" in doc
 
 
-def test_phase25m_25q_real_worksheets_are_not_changed() -> None:
+def test_phase25m_25q_real_worksheets_have_only_change_id_followup_approval() -> None:
     claim_doc = _text(REPO_ROOT / CLAIM_WORKSHEET_PATH)
 
     assert "| `change_id` | `DERIBIT_NOTIFICATIONS`" in claim_doc
     assert "| `change_id` | `DERIBIT_NOTIFICATIONS` | `https://docs.deribit.com/#notifications`" in claim_doc
-    assert "manual_review:change_id_pending" in claim_doc
-    assert "DERIBIT_OBSERVED_BOOK_SEQUENCE_PROOF_25M.json" not in claim_doc
+    assert "approved:Phase25R_CHANGE_ID_ONLY" in claim_doc
+    assert "DERIBIT_OBSERVED_BOOK_SEQUENCE_PROOF_25M.json" in claim_doc
     assert "`<OPERATOR_REQUIRED>`" not in claim_doc
 
 
@@ -129,7 +132,8 @@ def test_phase25m_25q_validator_remains_blocked() -> None:
     assert result.evidence_review_complete is False
     assert result.ready_for_engineering_patch is False
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 27
+    assert len(result.pending_rows) == 26
+    assert "claim_review:change_id" not in result.pending_rows
     assert result.b1_b5_status == {
         "B1": "BLOCKED",
         "B2": "BLOCKED",

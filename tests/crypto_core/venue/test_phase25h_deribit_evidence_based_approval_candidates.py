@@ -104,14 +104,15 @@ def test_phase25h_does_not_add_final_reviewer_values_or_modify_worksheets():
     # Phase 25I approved all 6 manifest rows (REVIEWED_APPROVED).
     assert all(row["retrieval_status"] == "REVIEWED_APPROVED" for row in manifest_rows)
     assert len(claim_rows) == 23
-    # Phase 25I approved exactly 3 claim rows; the other 20 remain PENDING.
-    _approved_claim_ids = {
+    # Phase 25I approved 3 claim rows and Phase 25R later approved change_id; the other 19 remain PENDING.
+    approved_claim_ids = {
         "public_websocket_availability",
         "unauthenticated_public_market_data",
         "orderbook_channel_feed",
+        "change_id",
     }
-    non_approved_claim_rows = [r for r in claim_rows if r["claim_id"] not in _approved_claim_ids]
-    assert len(non_approved_claim_rows) == 20
+    non_approved_claim_rows = [r for r in claim_rows if r["claim_id"] not in approved_claim_ids]
+    assert len(non_approved_claim_rows) == 19
     assert all(row["reviewer_id"] == "PENDING" for row in non_approved_claim_rows)
     assert all(row["reviewed_at_iso"] == "PENDING" for row in non_approved_claim_rows)
     assert all(row["decision"] == "PENDING" for row in non_approved_claim_rows)
