@@ -7,6 +7,7 @@ import sys
 from crypto_core.data.deribit_public_ws_harness import (
     DERIBIT_DEFAULT_PUBLIC_CHANNEL,
     DERIBIT_OFFICIAL_PUBLIC_WS_URL,
+    DERIBIT_PUBLIC_WS_DEFAULT_SAMPLE_EVENTS,
     DERIBIT_PUBLIC_WS_OPERATOR_AUTHORIZATION,
     DeribitPublicWsSmokeConfig,
     deribit_public_ws_smoke_result_to_dict,
@@ -23,6 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--duration-seconds", type=float, default=5.0)
     parser.add_argument("--max-messages", type=int, default=10)
     parser.add_argument("--max-receive-lag-ms", type=int, default=5_000)
+    parser.add_argument("--sample-limit", type=int, default=DERIBIT_PUBLIC_WS_DEFAULT_SAMPLE_EVENTS)
     parser.add_argument("--authorization", default=DERIBIT_PUBLIC_WS_OPERATOR_AUTHORIZATION)
     args = parser.parse_args(argv)
 
@@ -35,6 +37,7 @@ def main(argv: list[str] | None = None) -> int:
         duration_seconds=args.duration_seconds,
         max_messages=args.max_messages,
         max_receive_lag_ms=args.max_receive_lag_ms,
+        sample_limit=args.sample_limit,
     )
     result = run_deribit_public_ws_smoke_test(config)
     print(json.dumps(deribit_public_ws_smoke_result_to_dict(result), indent=2, sort_keys=True))

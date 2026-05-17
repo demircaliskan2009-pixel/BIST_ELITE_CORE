@@ -8,6 +8,27 @@ name: Deribit Public Smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: "PUBLIC MARKET DATA ONLY capture duration, max 30 seconds"
+        required: true
+        default: "30"
+        type: string
+      max_messages:
+        description: "PUBLIC MARKET DATA ONLY max messages, max 100"
+        required: true
+        default: "100"
+        type: string
+      sample_limit:
+        description: "PUBLIC MARKET DATA ONLY sample events to serialize, max 100"
+        required: true
+        default: "100"
+        type: string
+      max_receive_lag_ms:
+        description: "PUBLIC MARKET DATA ONLY receive lag budget, max 60000"
+        required: true
+        default: "60000"
+        type: string
 
 permissions:
   contents: read
@@ -20,6 +41,10 @@ jobs:
     env:
       PYTHONPATH: ${{ github.workspace }}/src
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      DERIBIT_SMOKE_DURATION_SECONDS: ${{ inputs.duration_seconds || '30' }}
+      DERIBIT_SMOKE_MAX_MESSAGES: ${{ inputs.max_messages || '100' }}
+      DERIBIT_SMOKE_SAMPLE_LIMIT: ${{ inputs.sample_limit || '100' }}
+      DERIBIT_SMOKE_MAX_RECEIVE_LAG_MS: ${{ inputs.max_receive_lag_ms || '60000' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,8 +65,10 @@ jobs:
           set -euo pipefail
           python scripts/crypto_core/deribit_public_ws_smoke.py \
             --authorization PUBLIC_MARKET_DATA_ONLY \
-            --duration-seconds 10 \
-            --max-messages 20 \
+            --duration-seconds "$DERIBIT_SMOKE_DURATION_SECONDS" \
+            --max-messages "$DERIBIT_SMOKE_MAX_MESSAGES" \
+            --sample-limit "$DERIBIT_SMOKE_SAMPLE_LIMIT" \
+            --max-receive-lag-ms "$DERIBIT_SMOKE_MAX_RECEIVE_LAG_MS" \
             > smoke_result.json
 
       - name: Validate smoke result
