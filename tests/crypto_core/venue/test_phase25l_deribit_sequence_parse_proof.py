@@ -3,7 +3,8 @@
 Validates the Phase 25L proof artifact batch document and the deterministic
 harness fixture (DERIBIT_BOOK_PARSE_SEQUENCE_PROOF.json), and confirms:
   - the proof JSON exists, parses, and has correct status markers
-  - change_id and prev_change_id are classified as PROOF_READY_NOT_APPROVED
+  - change_id and prev_change_id remain WAIT_INSUFFICIENT because harness-only
+    mapping evidence is advisory, not observed Deribit payload proof
   - first_message_snapshot, incremental_delta, continuity_condition remain WAIT_INSUFFICIENT
   - the batch doc exists with correct safety markers and count metadata
   - no accidental worksheet mutations occurred
@@ -44,7 +45,7 @@ _ALREADY_APPROVED_PHASE25I: frozenset[str] = frozenset(
     }
 )
 
-_PROOF_READY_NOT_APPROVED: frozenset[str] = frozenset(
+_HARNESS_CAPABILITY_ADVISORY_ONLY: frozenset[str] = frozenset(
     {
         "change_id",
         "prev_change_id",
@@ -53,6 +54,8 @@ _PROOF_READY_NOT_APPROVED: frozenset[str] = frozenset(
 
 _WAIT_INSUFFICIENT: frozenset[str] = frozenset(
     {
+        "change_id",
+        "prev_change_id",
         "first_message_snapshot",
         "incremental_delta",
         "continuity_condition",
@@ -111,11 +114,11 @@ def test_phase25l_proof_json_observed_values_is_null() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_phase25l_proof_json_change_id_classified_proof_ready_not_approved() -> None:
+def test_phase25l_proof_json_change_id_classified_wait_insufficient() -> None:
     data = _proof_json()
     claim_classification = data["claim_classification"]
     change_id_entry = claim_classification["change_id"]
-    assert change_id_entry["classification"] == "PROOF_READY_NOT_APPROVED"
+    assert change_id_entry["classification"] == "WAIT_INSUFFICIENT"
 
 
 def test_phase25l_proof_json_change_id_references_committed_harness_function() -> None:
@@ -125,6 +128,7 @@ def test_phase25l_proof_json_change_id_references_committed_harness_function() -
     assert mapping["deribit_input_field"] == "change_id"
     assert mapping["harness_output_field"] == "sequence_id"
     assert "change_id" in mapping["priority_chain"]
+    assert mapping["phase25l_classification"] == "HARNESS_CAPABILITY_ADVISORY_ONLY"
 
 
 # ---------------------------------------------------------------------------
@@ -132,11 +136,11 @@ def test_phase25l_proof_json_change_id_references_committed_harness_function() -
 # ---------------------------------------------------------------------------
 
 
-def test_phase25l_proof_json_prev_change_id_classified_proof_ready_not_approved() -> None:
+def test_phase25l_proof_json_prev_change_id_classified_wait_insufficient() -> None:
     data = _proof_json()
     claim_classification = data["claim_classification"]
     prev_change_id_entry = claim_classification["prev_change_id"]
-    assert prev_change_id_entry["classification"] == "PROOF_READY_NOT_APPROVED"
+    assert prev_change_id_entry["classification"] == "WAIT_INSUFFICIENT"
 
 
 def test_phase25l_proof_json_prev_change_id_references_committed_harness_function() -> None:
@@ -146,6 +150,7 @@ def test_phase25l_proof_json_prev_change_id_references_committed_harness_functio
     assert mapping["deribit_input_field"] == "prev_change_id"
     assert mapping["harness_output_field"] == "prev_sequence_id"
     assert "prev_change_id" in mapping["priority_chain"]
+    assert mapping["phase25l_classification"] == "HARNESS_CAPABILITY_ADVISORY_ONLY"
 
 
 # ---------------------------------------------------------------------------
@@ -153,10 +158,16 @@ def test_phase25l_proof_json_prev_change_id_references_committed_harness_functio
 # ---------------------------------------------------------------------------
 
 
-def test_phase25l_proof_json_snapshot_delta_claims_wait_insufficient() -> None:
+def test_phase25l_proof_json_pending_claims_wait_insufficient() -> None:
     data = _proof_json()
     claim_classification = data["claim_classification"]
-    for claim_id in ("first_message_snapshot", "incremental_delta", "continuity_condition"):
+    for claim_id in (
+        "change_id",
+        "prev_change_id",
+        "first_message_snapshot",
+        "incremental_delta",
+        "continuity_condition",
+    ):
         assert claim_id in claim_classification, f"Missing claim {claim_id!r} in proof JSON claim_classification"
         assert claim_classification[claim_id]["classification"] == "WAIT_INSUFFICIENT", (
             f"Expected {claim_id!r} to be WAIT_INSUFFICIENT, got {claim_classification[claim_id]['classification']!r}"
@@ -187,15 +198,16 @@ def test_phase25l_batch_doc_safety_markers_present() -> None:
 def test_phase25l_batch_doc_count_metadata_correct() -> None:
     doc = _batch_doc()
     assert "already_approved_phase25i_count: 3" in doc
-    assert "proof_ready_not_approved_count: 2" in doc
-    assert "wait_insufficient_count: 5" in doc
+    assert "proof_ready_not_approved_count: 0" in doc
+    assert "wait_insufficient_count: 7" in doc
 
 
-def test_phase25l_batch_doc_proof_ready_claims_referenced() -> None:
+def test_phase25l_batch_doc_harness_advisory_claims_referenced() -> None:
     doc = _batch_doc()
-    assert "PROOF_READY_NOT_APPROVED" in doc
-    for claim_id in _PROOF_READY_NOT_APPROVED:
-        assert claim_id in doc, f"Missing PROOF_READY_NOT_APPROVED claim in batch doc: {claim_id}"
+    assert "HARNESS_CAPABILITY_ADVISORY_ONLY" in doc
+    for claim_id in _HARNESS_CAPABILITY_ADVISORY_ONLY:
+        assert claim_id in doc, f"Missing harness advisory claim in batch doc: {claim_id}"
+        assert f"| `{claim_id}` | claim_review | WAIT_INSUFFICIENT |" in doc
 
 
 def test_phase25l_batch_doc_wait_insufficient_claims_referenced() -> None:
@@ -246,15 +258,15 @@ def test_phase25l_worksheets_unchanged() -> None:
     assert all(r.get("decision", "").upper() == "PENDING" for r in policy_rows)
 
 
-def test_phase25l_proof_ready_claims_still_pending_in_worksheet() -> None:
-    # PROOF_READY_NOT_APPROVED claims must still be PENDING (not approved) in the worksheet
+def test_phase25l_harness_advisory_claims_still_pending_in_worksheet() -> None:
+    # Harness-advisory claims must still be PENDING (not approved) in the worksheet.
     claim_rows = {
         r["claim_id"]: r for r in _parse_md_table_rows((REPO_ROOT / CLAIM_WORKSHEET_PATH).read_text(encoding="utf-8"))
     }
-    for claim_id in _PROOF_READY_NOT_APPROVED:
+    for claim_id in _HARNESS_CAPABILITY_ADVISORY_ONLY:
         row = claim_rows[claim_id]
         assert row.get("decision", "").upper() == "PENDING", (
-            f"PROOF_READY_NOT_APPROVED claim {claim_id!r} must still be PENDING in worksheet — "
+            f"Harness-advisory claim {claim_id!r} must still be PENDING in worksheet - "
             "Phase 25L does not approve worksheet rows"
         )
 
