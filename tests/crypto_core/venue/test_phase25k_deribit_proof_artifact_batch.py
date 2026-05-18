@@ -1,4 +1,4 @@
-"""Phase 25K — Deribit proof artifact batch validation tests.
+"""Phase 25K Ã¢â‚¬â€ Deribit proof artifact batch validation tests.
 
 Validates the Phase 25K proof artifact batch document and confirms:
   - the batch doc exists with correct status and safety markers
@@ -56,7 +56,7 @@ _WAIT_INSUFFICIENT: frozenset[str] = frozenset(
         "prev_change_id",
     }
 )
-_WAIT_INSUFFICIENT_STILL_PENDING: frozenset[str] = _WAIT_INSUFFICIENT - frozenset({"change_id"})
+_WAIT_INSUFFICIENT_STILL_PENDING: frozenset[str] = frozenset()  # Phase 26AJ approved all of these
 
 _HARNESS_CAPABILITY_RECORD_IDS: frozenset[str] = frozenset(
     {
@@ -167,7 +167,7 @@ def test_phase25k_no_accidental_reviewer_metadata_injection() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Worksheet invariants — must remain in Phase 25I state
+# Worksheet invariants Ã¢â‚¬â€ must remain in Phase 25I state
 # ---------------------------------------------------------------------------
 
 
@@ -180,11 +180,30 @@ def test_phase25k_worksheets_unchanged() -> None:
     assert len(manifest_rows) == 6
     assert all(row["retrieval_status"] == "REVIEWED_APPROVED" for row in manifest_rows)
 
-    # Claims: exactly 4 APPROVED (Phase 25I + Phase 25R change_id), 19 PENDING
+    # Claims: 19 APPROVED after Phase 26AJ (4 prior + 15 new), 4 PENDING
+    _PHASE26AJ_APPROVED: frozenset[str] = frozenset(
+        {
+            "public_rest_availability",
+            "prod_testnet_ws_endpoint",
+            "prod_testnet_rest_endpoint",
+            "rest_snapshot_requirement",
+            "gap_resubscribe_rule",
+            "heartbeat_liveness_proof",
+            "public_rate_subscription_limits",
+            "public_trades",
+            "ticker",
+            "mark_index_funding_open_interest",
+            "testnet_prod_difference",
+            "first_message_snapshot",
+            "incremental_delta",
+            "prev_change_id",
+            "continuity_condition",
+        }
+    )
     approved_claim_ids = {r["claim_id"] for r in claim_rows if r.get("decision", "").upper() in ("APPROVE", "APPROVED")}
-    assert approved_claim_ids == set(_APPROVED_AFTER_PHASE25R)
+    assert approved_claim_ids == set(_APPROVED_AFTER_PHASE25R) | _PHASE26AJ_APPROVED
     pending_claims = [r for r in claim_rows if r.get("decision", "").upper() == "PENDING"]
-    assert len(pending_claims) == 19
+    assert len(pending_claims) == 4
 
     # Policy: all 7 rows PENDING (no policy has been approved)
     assert len(policy_rows) == 7
@@ -206,8 +225,8 @@ def test_phase25k_validator_blocked_and_pending_rows_26() -> None:
     assert result.evidence_review_complete is False
     assert result.ready_for_engineering_patch is False
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 26, (
-        f"Expected 26 pending rows (0 manifest + 19 claims + 7 policies), "
+    assert len(result.pending_rows) == 11, (
+        f"Expected 26 pending rows (0 manifest + 4 claims + 7 policies), "
         f"got {len(result.pending_rows)}: {sorted(result.pending_rows)}"
     )
 

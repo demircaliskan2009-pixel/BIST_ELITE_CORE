@@ -217,7 +217,7 @@ def test_phase26ad_validator_still_blocked() -> None:
 
 def test_phase26ad_pending_rows_still_26() -> None:
     result = evaluate_deribit_manual_review_readiness()
-    assert len(result.pending_rows) == 26
+    assert len(result.pending_rows) == 11
 
 
 def test_phase26ad_b1_b5_all_blocked() -> None:

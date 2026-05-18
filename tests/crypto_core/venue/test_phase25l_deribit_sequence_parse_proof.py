@@ -1,4 +1,4 @@
-"""Phase 25L — Deribit sequence parse proof validation tests.
+"""Phase 25L Ã¢â‚¬â€ Deribit sequence parse proof validation tests.
 
 Validates the Phase 25L proof artifact batch document and the deterministic
 harness fixture (DERIBIT_BOOK_PARSE_SEQUENCE_PROOF.json), and confirms:
@@ -47,6 +47,25 @@ _ALREADY_APPROVED_PHASE25I: frozenset[str] = frozenset(
     }
 )
 _APPROVED_AFTER_PHASE25R: frozenset[str] = _ALREADY_APPROVED_PHASE25I | frozenset({"change_id"})
+_PHASE26AJ_APPROVED: frozenset[str] = frozenset(
+    {
+        "public_rest_availability",
+        "prod_testnet_ws_endpoint",
+        "prod_testnet_rest_endpoint",
+        "rest_snapshot_requirement",
+        "gap_resubscribe_rule",
+        "heartbeat_liveness_proof",
+        "public_rate_subscription_limits",
+        "public_trades",
+        "ticker",
+        "mark_index_funding_open_interest",
+        "testnet_prod_difference",
+        "first_message_snapshot",
+        "incremental_delta",
+        "prev_change_id",
+        "continuity_condition",
+    }
+)
 
 _HARNESS_CAPABILITY_ADVISORY_ONLY: frozenset[str] = frozenset(
     {
@@ -54,7 +73,7 @@ _HARNESS_CAPABILITY_ADVISORY_ONLY: frozenset[str] = frozenset(
         "prev_change_id",
     }
 )
-_HARNESS_CAPABILITY_STILL_PENDING: frozenset[str] = _HARNESS_CAPABILITY_ADVISORY_ONLY - frozenset({"change_id"})
+_HARNESS_CAPABILITY_STILL_PENDING: frozenset[str] = frozenset()  # Phase 26AJ approved all harness-advisory rows
 
 _WAIT_INSUFFICIENT: frozenset[str] = frozenset(
     {
@@ -238,7 +257,7 @@ def test_phase25l_no_accidental_reviewer_metadata_in_proof_json() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Worksheet invariants — must remain in Phase 25I/25K state
+# Worksheet invariants Ã¢â‚¬â€ must remain in Phase 25I/25K state
 # ---------------------------------------------------------------------------
 
 
@@ -251,11 +270,11 @@ def test_phase25l_worksheets_unchanged() -> None:
     assert len(manifest_rows) == 6
     assert all(row["retrieval_status"] == "REVIEWED_APPROVED" for row in manifest_rows)
 
-    # Claims: exactly 4 APPROVED (Phase 25I + Phase 25R change_id), 19 PENDING
+    # Claims: 19 APPROVED after Phase 26AJ, 4 still PENDING
     approved_claim_ids = {r["claim_id"] for r in claim_rows if r.get("decision", "").upper() in ("APPROVE", "APPROVED")}
-    assert approved_claim_ids == set(_APPROVED_AFTER_PHASE25R)
+    assert approved_claim_ids == set(_APPROVED_AFTER_PHASE25R) | _PHASE26AJ_APPROVED
     pending_claims = [r for r in claim_rows if r.get("decision", "").upper() == "PENDING"]
-    assert len(pending_claims) == 19
+    assert len(pending_claims) == 4
 
     # Policy: all 7 rows PENDING
     assert len(policy_rows) == 7
@@ -291,8 +310,8 @@ def test_phase25l_validator_blocked_and_pending_rows_26() -> None:
     assert result.evidence_review_complete is False
     assert result.ready_for_engineering_patch is False
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 26, (
-        f"Expected 26 pending rows (0 manifest + 19 claims + 7 policies), "
+    assert len(result.pending_rows) == 11, (
+        f"Expected 26 pending rows (0 manifest + 4 claims + 7 policies), "
         f"got {len(result.pending_rows)}: {sorted(result.pending_rows)}"
     )
 

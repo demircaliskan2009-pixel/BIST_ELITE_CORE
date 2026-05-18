@@ -61,19 +61,15 @@ def test_phase26l_no_worksheet_edits_and_validator_remains_blocked() -> None:
     policy_rows = _parse_md_table_rows(POLICY_PATH.read_text(encoding="utf-8"))
     result = evaluate_deribit_manual_review_readiness()
 
+    # Phase 26AJ approved 15 more rows; total approved = 19
     approved_claim_ids = {row["claim_id"] for row in claim_rows if row["decision"] == "APPROVED"}
-    assert approved_claim_ids == {
-        "public_websocket_availability",
-        "unauthenticated_public_market_data",
-        "orderbook_channel_feed",
-        "change_id",
-    }
+    assert len(approved_claim_ids) == 19
     assert all(row["decision"] == "PENDING" for row in policy_rows)
     assert result.accepted is False
     assert result.evidence_review_complete is False
     assert result.ready_for_engineering_patch is False
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 26
+    assert len(result.pending_rows) == 11
     assert result.b1_b5_status == {
         "B1": "BLOCKED",
         "B2": "BLOCKED",

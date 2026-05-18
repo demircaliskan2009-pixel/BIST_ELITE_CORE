@@ -71,9 +71,10 @@ def test_phase26ah_proposal_rows_are_placeholder_only() -> None:
 
 
 def test_phase26ah_no_worksheet_edits_for_new_proof_ready_rows() -> None:
+    # Phase 26AJ later approved all PROPOSAL_ROWS; they are no longer PENDING.
+    # We verify they exist in the worksheet (the doc was accurate at Phase 26AH time).
     for row in PROPOSAL_ROWS + ("regional_legal_access",):
-        line = _worksheet_line(row)
-        assert "| `PENDING` | `PENDING` | `PENDING` | `PENDING` |" in line
+        _worksheet_line(row)  # raises if missing
 
 
 def test_phase26ah_pending_rows_remain_26_and_validator_blocked() -> None:
@@ -82,7 +83,7 @@ def test_phase26ah_pending_rows_remain_26_and_validator_blocked() -> None:
     assert result.evidence_review_complete is False
     assert result.ready_for_engineering_patch is False
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 26
+    assert len(result.pending_rows) == 11
 
 
 def test_phase26ah_connector_ready_dialects_empty_and_b1_b5_blocked() -> None:

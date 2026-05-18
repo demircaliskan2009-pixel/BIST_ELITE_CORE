@@ -1,4 +1,4 @@
-"""Phase 25I — Approve-now-candidate rows worksheet patch tests.
+"""Phase 25I Ã¢â‚¬â€ Approve-now-candidate rows worksheet patch tests.
 
 Proves:
 1. Exactly the 9 APPROVE_NOW_CANDIDATE rows are no longer pending in the real
@@ -74,25 +74,8 @@ _WAIT_LEGAL_POLICY_IDS: frozenset[str] = frozenset({"regional_legal_access_revie
 _MUST_DEFER_POLICY_IDS: frozenset[str] = frozenset({"separate_connector_enablement"})
 
 # WAIT_INSUFFICIENT claim rows still unapproved after Phase 25R (must remain PENDING).
-_WAIT_INSUFFICIENT_CLAIM_IDS: frozenset[str] = frozenset(
-    {
-        "public_rest_availability",
-        "prod_testnet_ws_endpoint",
-        "prod_testnet_rest_endpoint",
-        "first_message_snapshot",
-        "incremental_delta",
-        "prev_change_id",
-        "continuity_condition",
-        "gap_resubscribe_rule",
-        "rest_snapshot_requirement",
-        "heartbeat_liveness_proof",
-        "public_rate_subscription_limits",
-        "public_trades",
-        "ticker",
-        "mark_index_funding_open_interest",
-        "testnet_prod_difference",
-    }
-)
+# NOTE: Phase 26AJ later approved all 15 of these rows. The set is now empty.
+_WAIT_INSUFFICIENT_CLAIM_IDS: frozenset[str] = frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +157,12 @@ def test_phase25i_approved_claim_rows_have_correct_decision_and_reviewer():
 def test_phase25i_non_approved_claim_rows_remain_pending():
     rows = {row["claim_id"]: row for row in _claim_rows()}
     non_approved = {cid: row for cid, row in rows.items() if cid not in _APPROVED_CLAIM_IDS}
-    assert len(non_approved) == 19, f"Expected 19 non-approved claim rows, got {len(non_approved)}"
-    for claim_id, row in non_approved.items():
+    # Phase 26AJ later approved the WAIT_INSUFFICIENT rows; only truly-pending rows (4) remain.
+    # The WAIT_POLICY and WAIT_LEGAL claim rows remain PENDING regardless.
+    wait_policy_and_legal = _WAIT_POLICY_CLAIM_IDS | _WAIT_LEGAL_CLAIM_IDS
+    still_pending = {cid: row for cid, row in non_approved.items() if cid in wait_policy_and_legal}
+    assert len(still_pending) == 4, f"Expected 4 still-pending claim rows, got {len(still_pending)}"
+    for claim_id, row in still_pending.items():
         assert row["reviewer_id"] == "PENDING", f"Non-approved claim {claim_id!r} reviewer_id must be PENDING"
         assert row["reviewed_at_iso"] == "PENDING", f"Non-approved claim {claim_id!r} reviewed_at_iso must be PENDING"
         assert row["decision"] == "PENDING", f"Non-approved claim {claim_id!r} decision must be PENDING"
@@ -251,7 +238,7 @@ def test_phase25i_validator_accepted_remains_false():
 
 
 def test_phase25i_validator_evidence_review_complete_remains_false():
-    """evidence_review_complete stays False: 19 claim rows + 7 policy rows still PENDING."""
+    """evidence_review_complete stays False: 4 claim rows + 7 policy rows still PENDING."""
     result = _validator_result()
     assert result.evidence_review_complete is False
 
@@ -269,7 +256,7 @@ def test_phase25i_validator_connector_enablement_ready_remains_false():
 def test_phase25i_validator_pending_rows_count_is_26():
     """After Phase 25R: 0 manifest pending + 19 claim pending + 7 policy pending = 26."""
     result = _validator_result()
-    assert len(result.pending_rows) == 26, (
+    assert len(result.pending_rows) == 11, (
         f"Expected 26 pending rows after Phase 25R, got {len(result.pending_rows)}: {result.pending_rows}"
     )
 
@@ -294,8 +281,8 @@ def test_phase25i_approved_claim_rows_not_in_pending_rows():
 def test_phase25i_non_approved_claim_rows_still_in_pending_rows():
     result = _validator_result()
     claim_pending = {r for r in result.pending_rows if r.startswith("claim_review:")}
-    assert len(claim_pending) == 19, (
-        f"Expected 19 pending claim rows after Phase 25R, got {len(claim_pending)}: {claim_pending}"
+    assert len(claim_pending) == 4, (
+        f"Expected 4 pending claim rows after Phase 25R, got {len(claim_pending)}: {claim_pending}"
     )
 
 

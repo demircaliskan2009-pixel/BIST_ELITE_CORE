@@ -25,7 +25,24 @@ _PHASE25I_APPROVED = {
     "orderbook_channel_feed",
 }
 _PHASE25R_APPROVED = {"change_id"}
-_EXPECTED_APPROVED = _PHASE25I_APPROVED | _PHASE25R_APPROVED
+_PHASE26AJ_APPROVED = {
+    "public_rest_availability",
+    "prod_testnet_ws_endpoint",
+    "prod_testnet_rest_endpoint",
+    "rest_snapshot_requirement",
+    "gap_resubscribe_rule",
+    "heartbeat_liveness_proof",
+    "public_rate_subscription_limits",
+    "public_trades",
+    "ticker",
+    "mark_index_funding_open_interest",
+    "testnet_prod_difference",
+    "first_message_snapshot",
+    "incremental_delta",
+    "prev_change_id",
+    "continuity_condition",
+}
+_EXPECTED_APPROVED = _PHASE25I_APPROVED | _PHASE25R_APPROVED | _PHASE26AJ_APPROVED
 
 
 def _claim_rows() -> dict[str, dict[str, str]]:
@@ -63,13 +80,14 @@ def test_phase25s_pending_counts_decrease_by_one_claim_only() -> None:
     claim_pending = [row for row in claim_rows.values() if row["decision"] == "PENDING"]
     policy_pending = [row for row in policy_rows.values() if row["decision"] == "PENDING"]
 
-    assert len(claim_pending) == 19
+    assert len(claim_pending) == 4
     assert len(policy_pending) == 7
 
     result = evaluate_deribit_manual_review_readiness()
-    assert len(result.pending_rows) == 26
+    assert len(result.pending_rows) == 11
     assert "claim_review:change_id" not in result.pending_rows
-    assert "claim_review:prev_change_id" in result.pending_rows
+    # Phase 26AJ later approved prev_change_id; it is no longer pending
+    assert "claim_review:prev_change_id" not in result.pending_rows
 
 
 def test_phase25s_validator_remains_blocked_after_change_id_only_approval() -> None:
