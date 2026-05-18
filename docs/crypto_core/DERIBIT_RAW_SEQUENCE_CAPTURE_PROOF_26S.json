@@ -1,0 +1,415 @@
+{
+  "schema": "deribit_raw_sequence_capture_proof_26s",
+  "phase": "26S",
+  "generated_at": "2026-05-18",
+  "source": "downloaded_github_actions_artifact",
+  "workflow_name": "Deribit Public Smoke",
+  "run_id": 26038507233,
+  "run_url": "https://github.com/demircaliskan2009-pixel/BIST_ELITE_CORE/actions/runs/26038507233",
+  "run_status": "completed",
+  "run_conclusion": "success",
+  "run_created_at_utc": "2026-05-18T14:04:03Z",
+  "run_updated_at_utc": "2026-05-18T14:04:36Z",
+  "job_id": 76543225178,
+  "job_name": "deribit-public-smoke",
+  "job_started_at_utc": "2026-05-18T14:04:10Z",
+  "job_completed_at_utc": "2026-05-18T14:04:35Z",
+  "head_branch": "main",
+  "head_sha": "6884356b8fb4cb2e6d5c4d59860d6ed156383c74",
+  "event": "workflow_dispatch",
+  "artifact_name": "deribit-public-smoke-proof",
+  "artifact_file": "smoke_result.json",
+  "artifact_sha256": "f6b0dd2b3a2f6c122aecbf8c3b0522e0a72120d92d98324a55653e667b4c8101",
+  "artifact_acceptance": {
+    "accepted_for_classification": true,
+    "rejection_reasons": []
+  },
+  "artifact_payload": {
+    "accepted": true,
+    "channels": [
+      "book.BTC-PERPETUAL.none.10.100ms"
+    ],
+    "completed_at_ns": 1779113070947018138,
+    "dry_run": true,
+    "duration_seconds": 10.0,
+    "max_messages": 10,
+    "message_count": 9,
+    "operator_authorization": "PUBLIC_MARKET_DATA_ONLY",
+    "rejection_reasons": [],
+    "sample_events": [
+      {
+        "channel": "book.BTC-PERPETUAL.none.10.100ms",
+        "event_time_ms": 1779113068106,
+        "payload_kind": "market_data",
+        "payload_sample": {
+          "asks_count": 10,
+          "bids_count": 10,
+          "change_id": 155703433171,
+          "instrument_name": "BTC-PERPETUAL",
+          "prev_change_id": null,
+          "timestamp": 1779113068106,
+          "type": null
+        },
+        "prev_sequence_id": null,
+        "receive_lag_ms": 72,
+        "received_at_ns": 1779113068178251461,
+        "rejection_reasons": [],
+        "sequence_id": 155703433171
+      },
+      {
+        "channel": "book.BTC-PERPETUAL.none.10.100ms",
+        "event_time_ms": 1779113068420,
+        "payload_kind": "market_data",
+        "payload_sample": {
+          "asks_count": 10,
+          "bids_count": 10,
+          "change_id": 155703434322,
+          "instrument_name": "BTC-PERPETUAL",
+          "prev_change_id": null,
+          "timestamp": 1779113068420,
+          "type": null
+        },
+        "prev_sequence_id": null,
+        "receive_lag_ms": 74,
+        "received_at_ns": 1779113068494727711,
+        "rejection_reasons": [],
+        "sequence_id": 155703434322
+      },
+      {
+        "channel": "book.BTC-PERPETUAL.none.10.100ms",
+        "event_time_ms": 1779113068749,
+        "payload_kind": "market_data",
+        "payload_sample": {
+          "asks_count": 10,
+          "bids_count": 10,
+          "change_id": 155703435850,
+          "instrument_name": "BTC-PERPETUAL",
+          "prev_change_id": null,
+          "timestamp": 1779113068749,
+          "type": null
+        },
+        "prev_sequence_id": null,
+        "receive_lag_ms": 81,
+        "received_at_ns": 1779113068830184041,
+        "rejection_reasons": [],
+        "sequence_id": 155703435850
+      },
+      {
+        "channel": "book.BTC-PERPETUAL.none.10.100ms",
+        "event_time_ms": 1779113069079,
+        "payload_kind": "market_data",
+        "payload_sample": {
+          "asks_count": 10,
+          "bids_count": 10,
+          "change_id": 155703437324,
+          "instrument_name": "BTC-PERPETUAL",
+          "prev_change_id": null,
+          "timestamp": 1779113069079,
+          "type": null
+        },
+        "prev_sequence_id": null,
+        "receive_lag_ms": 74,
+        "received_at_ns": 1779113069153129491,
+        "rejection_reasons": [],
+        "sequence_id": 155703437324
+      },
+      {
+        "channel": "book.BTC-PERPETUAL.none.10.100ms",
+        "event_time_ms": 1779113069408,
+        "payload_kind": "market_data",
+        "payload_sample": {
+          "asks_count": 10,
+          "bids_count": 10,
+          "change_id": 155703438055,
+          "instrument_name": "BTC-PERPETUAL",
+          "prev_change_id": null,
+          "timestamp": 1779113069408,
+          "type": null
+        },
+        "prev_sequence_id": null,
+        "receive_lag_ms": 75,
+        "received_at_ns": 1779113069483612714,
+        "rejection_reasons": [],
+        "sequence_id": 155703438055
+      },
+      {
+        "channel": "book.BTC-PERPETUAL.none.10.100ms",
+        "event_time_ms": 1779113069742,
+        "payload_kind": "market_data",
+        "payload_sample": {
+          "asks_count": 10,
+          "bids_count": 10,
+          "change_id": 155703439329,
+          "instrument_name": "BTC-PERPETUAL",
+          "prev_change_id": null,
+          "timestamp": 1779113069742,
+          "type": null
+        },
+        "prev_sequence_id": null,
+        "receive_lag_ms": 71,
+        "received_at_ns": 1779113069813355884,
+        "rejection_reasons": [],
+        "sequence_id": 155703439329
+      },
+      {
+        "channel": "book.BTC-PERPETUAL.none.10.100ms",
+        "event_time_ms": 1779113070068,
+        "payload_kind": "market_data",
+        "payload_sample": {
+          "asks_count": 10,
+          "bids_count": 10,
+          "change_id": 155703441252,
+          "instrument_name": "BTC-PERPETUAL",
+          "prev_change_id": null,
+          "timestamp": 1779113070068,
+          "type": null
+        },
+        "prev_sequence_id": null,
+        "receive_lag_ms": 87,
+        "received_at_ns": 1779113070155308374,
+        "rejection_reasons": [],
+        "sequence_id": 155703441252
+      },
+      {
+        "channel": "book.BTC-PERPETUAL.none.10.100ms",
+        "event_time_ms": 1779113070402,
+        "payload_kind": "market_data",
+        "payload_sample": {
+          "asks_count": 10,
+          "bids_count": 10,
+          "change_id": 155703443064,
+          "instrument_name": "BTC-PERPETUAL",
+          "prev_change_id": null,
+          "timestamp": 1779113070402,
+          "type": null
+        },
+        "prev_sequence_id": null,
+        "receive_lag_ms": 78,
+        "received_at_ns": 1779113070480894272,
+        "rejection_reasons": [],
+        "sequence_id": 155703443064
+      },
+      {
+        "channel": "book.BTC-PERPETUAL.none.10.100ms",
+        "event_time_ms": 1779113070728,
+        "payload_kind": "market_data",
+        "payload_sample": {
+          "asks_count": 10,
+          "bids_count": 10,
+          "change_id": 155703444837,
+          "instrument_name": "BTC-PERPETUAL",
+          "prev_change_id": null,
+          "timestamp": 1779113070728,
+          "type": null
+        },
+        "prev_sequence_id": null,
+        "receive_lag_ms": 77,
+        "received_at_ns": 1779113070805770978,
+        "rejection_reasons": [],
+        "sequence_id": 155703444837
+      }
+    ],
+    "started_at_ns": 1779113067466128081,
+    "ws_url": "wss://www.deribit.com/ws/api/v2"
+  },
+  "duration_seconds": 10.0,
+  "max_messages": 10,
+  "message_count": 9,
+  "accepted": true,
+  "rejection_reasons": [],
+  "sanitized_sample_events": [
+    {
+      "channel": "book.BTC-PERPETUAL.none.10.100ms",
+      "event_time_ms": 1779113068106,
+      "payload_kind": "market_data",
+      "payload_sample": {
+        "asks_count": 10,
+        "bids_count": 10,
+        "change_id": 155703433171,
+        "instrument_name": "BTC-PERPETUAL",
+        "prev_change_id": null,
+        "timestamp": 1779113068106,
+        "type": null
+      },
+      "prev_sequence_id": null,
+      "receive_lag_ms": 72,
+      "received_at_ns": 1779113068178251461,
+      "rejection_reasons": [],
+      "sequence_id": 155703433171
+    },
+    {
+      "channel": "book.BTC-PERPETUAL.none.10.100ms",
+      "event_time_ms": 1779113068420,
+      "payload_kind": "market_data",
+      "payload_sample": {
+        "asks_count": 10,
+        "bids_count": 10,
+        "change_id": 155703434322,
+        "instrument_name": "BTC-PERPETUAL",
+        "prev_change_id": null,
+        "timestamp": 1779113068420,
+        "type": null
+      },
+      "prev_sequence_id": null,
+      "receive_lag_ms": 74,
+      "received_at_ns": 1779113068494727711,
+      "rejection_reasons": [],
+      "sequence_id": 155703434322
+    },
+    {
+      "channel": "book.BTC-PERPETUAL.none.10.100ms",
+      "event_time_ms": 1779113068749,
+      "payload_kind": "market_data",
+      "payload_sample": {
+        "asks_count": 10,
+        "bids_count": 10,
+        "change_id": 155703435850,
+        "instrument_name": "BTC-PERPETUAL",
+        "prev_change_id": null,
+        "timestamp": 1779113068749,
+        "type": null
+      },
+      "prev_sequence_id": null,
+      "receive_lag_ms": 81,
+      "received_at_ns": 1779113068830184041,
+      "rejection_reasons": [],
+      "sequence_id": 155703435850
+    },
+    {
+      "channel": "book.BTC-PERPETUAL.none.10.100ms",
+      "event_time_ms": 1779113069079,
+      "payload_kind": "market_data",
+      "payload_sample": {
+        "asks_count": 10,
+        "bids_count": 10,
+        "change_id": 155703437324,
+        "instrument_name": "BTC-PERPETUAL",
+        "prev_change_id": null,
+        "timestamp": 1779113069079,
+        "type": null
+      },
+      "prev_sequence_id": null,
+      "receive_lag_ms": 74,
+      "received_at_ns": 1779113069153129491,
+      "rejection_reasons": [],
+      "sequence_id": 155703437324
+    },
+    {
+      "channel": "book.BTC-PERPETUAL.none.10.100ms",
+      "event_time_ms": 1779113069408,
+      "payload_kind": "market_data",
+      "payload_sample": {
+        "asks_count": 10,
+        "bids_count": 10,
+        "change_id": 155703438055,
+        "instrument_name": "BTC-PERPETUAL",
+        "prev_change_id": null,
+        "timestamp": 1779113069408,
+        "type": null
+      },
+      "prev_sequence_id": null,
+      "receive_lag_ms": 75,
+      "received_at_ns": 1779113069483612714,
+      "rejection_reasons": [],
+      "sequence_id": 155703438055
+    },
+    {
+      "channel": "book.BTC-PERPETUAL.none.10.100ms",
+      "event_time_ms": 1779113069742,
+      "payload_kind": "market_data",
+      "payload_sample": {
+        "asks_count": 10,
+        "bids_count": 10,
+        "change_id": 155703439329,
+        "instrument_name": "BTC-PERPETUAL",
+        "prev_change_id": null,
+        "timestamp": 1779113069742,
+        "type": null
+      },
+      "prev_sequence_id": null,
+      "receive_lag_ms": 71,
+      "received_at_ns": 1779113069813355884,
+      "rejection_reasons": [],
+      "sequence_id": 155703439329
+    },
+    {
+      "channel": "book.BTC-PERPETUAL.none.10.100ms",
+      "event_time_ms": 1779113070068,
+      "payload_kind": "market_data",
+      "payload_sample": {
+        "asks_count": 10,
+        "bids_count": 10,
+        "change_id": 155703441252,
+        "instrument_name": "BTC-PERPETUAL",
+        "prev_change_id": null,
+        "timestamp": 1779113070068,
+        "type": null
+      },
+      "prev_sequence_id": null,
+      "receive_lag_ms": 87,
+      "received_at_ns": 1779113070155308374,
+      "rejection_reasons": [],
+      "sequence_id": 155703441252
+    },
+    {
+      "channel": "book.BTC-PERPETUAL.none.10.100ms",
+      "event_time_ms": 1779113070402,
+      "payload_kind": "market_data",
+      "payload_sample": {
+        "asks_count": 10,
+        "bids_count": 10,
+        "change_id": 155703443064,
+        "instrument_name": "BTC-PERPETUAL",
+        "prev_change_id": null,
+        "timestamp": 1779113070402,
+        "type": null
+      },
+      "prev_sequence_id": null,
+      "receive_lag_ms": 78,
+      "received_at_ns": 1779113070480894272,
+      "rejection_reasons": [],
+      "sequence_id": 155703443064
+    },
+    {
+      "channel": "book.BTC-PERPETUAL.none.10.100ms",
+      "event_time_ms": 1779113070728,
+      "payload_kind": "market_data",
+      "payload_sample": {
+        "asks_count": 10,
+        "bids_count": 10,
+        "change_id": 155703444837,
+        "instrument_name": "BTC-PERPETUAL",
+        "prev_change_id": null,
+        "timestamp": 1779113070728,
+        "type": null
+      },
+      "prev_sequence_id": null,
+      "receive_lag_ms": 77,
+      "received_at_ns": 1779113070805770978,
+      "rejection_reasons": [],
+      "sequence_id": 155703444837
+    }
+  ],
+  "computed_counts": {
+    "non_null_prev_change_id_count": 0,
+    "adjacent_pair_count": 8,
+    "continuity_match_count": 0,
+    "snapshot_type_count": 0,
+    "delta_or_change_type_count": 0
+  },
+  "classification_effect": {
+    "prev_change_id": "WAIT_INSUFFICIENT",
+    "continuity_condition": "WAIT_INSUFFICIENT",
+    "first_message_snapshot": "WAIT_INSUFFICIENT",
+    "incremental_delta": "WAIT_INSUFFICIENT"
+  },
+  "safety_invariants": {
+    "public_market_data_only": true,
+    "dry_run": true,
+    "no_private_api": true,
+    "no_credentials": true,
+    "no_orders": true,
+    "no_connector_enablement": true,
+    "no_worksheet_approval": true
+  }
+}
