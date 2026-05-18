@@ -102,7 +102,7 @@ prior failure.
 | Deribit server not sending book events for `book.BTC-PERPETUAL.none.10.100ms` | **PLAUSIBLE**: Channel may have been inactive at the time |
 | Transient Deribit WS outage at `2026-05-18T12:29:xx Z` | **PLAUSIBLE**: Correlated with exact run window |
 
-**Conclusion**: The script reached Deribit and ran for the full window, but received zero WS messages. The exact sub-cause (runner network, Deribit channel, transient outage) cannot be determined from a single timeout. A retry is required.
+**Conclusion**: The script attempted connectivity to Deribit and ran for the full configured window, but received zero WS messages and no connection or subscription acknowledgement is confirmed in the available evidence. The exact sub-cause (runner network blocking WSS outbound, Deribit channel inactive, transient outage) cannot be determined from a single timeout run. A retry is required.
 
 ## Accumulated Timeout Record
 
