@@ -1,4 +1,4 @@
-"""Phase 25B — Deribit human-review readiness validator tests.
+"""Phase 25B â€” Deribit human-review readiness validator tests.
 
 Proves:
 1. Current worksheets are not ready (accepted=False, ready_for_engineering_patch=False).
@@ -34,7 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 VALIDATOR_SRC = REPO_ROOT / "src" / "crypto_core" / "venue" / "deribit_manual_review_readiness.py"
 
 # ---------------------------------------------------------------------------
-# Forbidden import patterns for the validator module — must be inert only
+# Forbidden import patterns for the validator module â€” must be inert only
 # ---------------------------------------------------------------------------
 
 _FORBIDDEN_IMPORT_PATTERNS = (
@@ -181,8 +181,8 @@ def test_pending_claim_rows_fail_closed():
     )
     # All 23 claim rows must appear as pending
     claim_pending = [r for r in result.pending_rows if r.startswith("claim_review:")]
-    assert len(claim_pending) == 19, (
-        f"Expected 19 pending claim rows after Phase 25R, got {len(claim_pending)}: {claim_pending}"
+    assert len(claim_pending) == 4, (
+        f"Expected 4 pending claim rows after Phase 25R, got {len(claim_pending)}: {claim_pending}"
     )
 
 
@@ -335,12 +335,12 @@ def test_missing_worksheet_file_fails_closed(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# 10. Phase 25F — evidence_review_complete vs connector_enablement_ready
+# 10. Phase 25F â€” evidence_review_complete vs connector_enablement_ready
 # ---------------------------------------------------------------------------
 
 
 def test_connector_enablement_ready_is_always_false():
-    """connector_enablement_ready must always be False — connector enablement is a
+    """connector_enablement_ready must always be False â€” connector enablement is a
     separate PUBLIC_MARKET_DATA_ONLY phase that cannot be satisfied here.
     """
     result = evaluate_deribit_manual_review_readiness(
@@ -358,7 +358,7 @@ def test_evidence_review_complete_excludes_connector_enablement_deferred():
     accepted must remain False (deferred_rows non-empty) and
     connector_enablement_ready must remain False (separate phase).
     """
-    # Synthetic approved manifest (1 source row — not subject to minimum count
+    # Synthetic approved manifest (1 source row â€” not subject to minimum count
     # enforcement when called via _validate_manifest directly)
     approved_manifest = (
         "| source_id | retrieval_status | content_sha256 |\n"
@@ -388,7 +388,7 @@ def test_evidence_review_complete_excludes_connector_enablement_deferred():
         "| `checksum_decision` | `deribit` | `APPROVED` | `CLEARED`"
         " | `reviewer-01` | `2026-05-11T00:00:00Z` | `DERIBIT_NOTIFICATIONS` | `checksum_decision`"
         " | `YES` | `NO` | `YES` | `APPROVE` | `` | `CLEARS_BLOCKER` |\n"
-        # deferred connector-enablement row — must NOT block evidence_review_complete
+        # deferred connector-enablement row â€” must NOT block evidence_review_complete
         f"| `{_CONNECTOR_ENABLEMENT_ROW_ID}` | `deribit` | `DEFERRED` | `REQUIRED_SEPARATE_PHASE`"
         " | `reviewer-01` | `2026-05-11T00:00:00Z` | `` | ``"
         " | `NO` | `NO` | `YES` | `DEFER` | `` | `LEAVES_BLOCKER` |\n"
@@ -435,7 +435,7 @@ def test_ready_for_engineering_patch_equals_evidence_review_complete():
 
 
 # ---------------------------------------------------------------------------
-# 8. P1 regression — manifest pending-review status recognition
+# 8. P1 regression â€” manifest pending-review status recognition
 # ---------------------------------------------------------------------------
 
 
@@ -481,7 +481,7 @@ def test_manifest_current_rows_are_pending():
 
 
 # ---------------------------------------------------------------------------
-# 9. P1 regression — truncated worksheet row count enforcement
+# 9. P1 regression â€” truncated worksheet row count enforcement
 # ---------------------------------------------------------------------------
 
 

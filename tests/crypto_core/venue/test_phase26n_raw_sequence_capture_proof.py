@@ -113,7 +113,7 @@ def test_phase26n_no_worksheet_edits_and_validator_unchanged() -> None:
     assert result.accepted is False
     assert result.evidence_review_complete is False
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 26
+    assert len(result.pending_rows) == 11
     assert result.b1_b5_status == {
         "B1": "BLOCKED",
         "B2": "BLOCKED",

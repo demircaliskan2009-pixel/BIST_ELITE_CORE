@@ -1,4 +1,4 @@
-"""Phase 25J — Remaining claim evidence matrix tests.
+"""Phase 25J Ã¢â‚¬â€ Remaining claim evidence matrix tests.
 
 Proves:
 1. The matrix document lists exactly the 20 remaining PENDING claim rows.
@@ -31,7 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 MATRIX_PATH = Path("docs/crypto_core/DERIBIT_REMAINING_CLAIM_EVIDENCE_MATRIX.md")
 
 # ---------------------------------------------------------------------------
-# Phase 25I approved rows — must NOT appear as pending in the matrix
+# Phase 25I approved rows Ã¢â‚¬â€ must NOT appear as pending in the matrix
 # ---------------------------------------------------------------------------
 
 _PHASE25I_APPROVED_CLAIM_IDS: frozenset[str] = frozenset(
@@ -42,7 +42,28 @@ _PHASE25I_APPROVED_CLAIM_IDS: frozenset[str] = frozenset(
     }
 )
 _PHASE25R_APPROVED_CLAIM_IDS: frozenset[str] = frozenset({"change_id"})
-_CURRENT_APPROVED_CLAIM_IDS: frozenset[str] = _PHASE25I_APPROVED_CLAIM_IDS | _PHASE25R_APPROVED_CLAIM_IDS
+_PHASE26AJ_APPROVED_CLAIM_IDS: frozenset[str] = frozenset(
+    {
+        "public_rest_availability",
+        "prod_testnet_ws_endpoint",
+        "prod_testnet_rest_endpoint",
+        "rest_snapshot_requirement",
+        "gap_resubscribe_rule",
+        "heartbeat_liveness_proof",
+        "public_rate_subscription_limits",
+        "public_trades",
+        "ticker",
+        "mark_index_funding_open_interest",
+        "testnet_prod_difference",
+        "first_message_snapshot",
+        "incremental_delta",
+        "prev_change_id",
+        "continuity_condition",
+    }
+)
+_CURRENT_APPROVED_CLAIM_IDS: frozenset[str] = (
+    _PHASE25I_APPROVED_CLAIM_IDS | _PHASE25R_APPROVED_CLAIM_IDS | _PHASE26AJ_APPROVED_CLAIM_IDS
+)
 
 # ---------------------------------------------------------------------------
 # The 20 remaining PENDING claim rows
@@ -72,7 +93,9 @@ _REMAINING_CLAIM_IDS: frozenset[str] = frozenset(
         "regional_legal_access",
     }
 )
-_CURRENT_PENDING_CLAIM_IDS: frozenset[str] = _REMAINING_CLAIM_IDS - _PHASE25R_APPROVED_CLAIM_IDS
+_CURRENT_PENDING_CLAIM_IDS: frozenset[str] = (
+    _REMAINING_CLAIM_IDS - _PHASE25R_APPROVED_CLAIM_IDS - _PHASE26AJ_APPROVED_CLAIM_IDS
+)
 
 # ---------------------------------------------------------------------------
 # Classification groups
@@ -296,7 +319,7 @@ def test_phase25j_smoke_artifact_rows_classified_correctly():
 
 
 def test_phase25j_sequence_gap_recovery_rows_are_not_approve_ready():
-    """Sequence/gap/recovery rows must not be APPROVE_READY — no sufficient evidence exists."""
+    """Sequence/gap/recovery rows must not be APPROVE_READY Ã¢â‚¬â€ no sufficient evidence exists."""
     sequence_rows = {
         "first_message_snapshot",
         "incremental_delta",
@@ -311,7 +334,7 @@ def test_phase25j_sequence_gap_recovery_rows_are_not_approve_ready():
         classification = rows.get(claim_id, {}).get("classification", "")
         assert classification != "APPROVE_READY_WITH_EXISTING_EVIDENCE", (
             f"Sequence/gap/recovery row {claim_id!r} must not be APPROVE_READY_WITH_EXISTING_EVIDENCE "
-            f"— no committed official-doc excerpt + smoke/parse artifact exists"
+            f"Ã¢â‚¬â€ no committed official-doc excerpt + smoke/parse artifact exists"
         )
 
 
@@ -372,8 +395,9 @@ def test_phase25j_manifest_no_pending_rows():
 def test_phase25j_claim_worksheet_approved_count_is_4():
     rows = _claim_worksheet_rows()
     approved = [cid for cid, row in rows.items() if row.get("decision") == "APPROVED"]
-    assert len(approved) == 4, (
-        f"Expected exactly 4 approved claim rows after Phase 25R, got {len(approved)}: {approved}"
+    # Phase 26AJ later approved 15 more rows; total = 19.
+    assert len(approved) == 19, (
+        f"Expected exactly 19 approved claim rows after Phase 26AJ, got {len(approved)}: {approved}"
     )
 
 
@@ -424,7 +448,7 @@ def test_phase25j_validator_accepted_remains_false():
 def test_phase25j_validator_evidence_review_complete_remains_false():
     result = _validator_result()
     assert result.evidence_review_complete is False, (
-        "evidence_review_complete must remain False: 19 claim rows + 7 policy rows still PENDING"
+        "evidence_review_complete must remain False: 4 claim rows + 7 policy rows still PENDING"
     )
 
 
@@ -440,7 +464,7 @@ def test_phase25j_validator_connector_enablement_ready_remains_false():
 
 def test_phase25j_validator_pending_rows_count_is_26():
     result = _validator_result()
-    assert len(result.pending_rows) == 26, (
+    assert len(result.pending_rows) == 11, (
         f"Expected 26 pending rows after Phase 25R, got {len(result.pending_rows)}: {result.pending_rows}"
     )
 
@@ -454,7 +478,7 @@ def test_phase25j_validator_manifest_pending_count_is_0():
 def test_phase25j_validator_claim_pending_count_is_19():
     result = _validator_result()
     claim_pending = [r for r in result.pending_rows if r.startswith("claim_review:")]
-    assert len(claim_pending) == 19, f"Expected 19 pending claim rows, got {len(claim_pending)}: {claim_pending}"
+    assert len(claim_pending) == 4, f"Expected 4 pending claim rows, got {len(claim_pending)}: {claim_pending}"
 
 
 def test_phase25j_validator_policy_pending_count_is_7():
@@ -478,7 +502,7 @@ def test_phase25j_b1_b5_all_remain_blocked():
 
 def test_phase25j_connector_ready_dialects_remains_empty():
     assert connector_ready_dialects() == (), (
-        "connector_ready_dialects() must remain () — no worksheet mutations in Phase 25J"
+        "connector_ready_dialects() must remain () Ã¢â‚¬â€ no worksheet mutations in Phase 25J"
     )
 
 
