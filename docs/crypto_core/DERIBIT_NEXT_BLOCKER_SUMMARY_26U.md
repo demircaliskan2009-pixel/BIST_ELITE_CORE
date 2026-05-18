@@ -68,9 +68,60 @@ claims remain WAIT_INSUFFICIENT. No new rows are approved. `pending_rows=26`.
 | 4 | Do NOT classify any raw sequence claim until `accepted=true`, `rejection_reasons=[]`, `message_count >= 1`, and the required fields are non-null in `sample_events`. |
 | 5 | Do NOT modify the worksheet, connector enablement, or validator until all B1-B5 blockers are resolved. |
 
-## Rows Needing Other Public Artifacts
+## All Remaining Pending Blockers (26 rows)
+
+All 26 rows remain pending as reported by `evaluate_deribit_manual_review_readiness()`.
+The table below is the authoritative inventory, grouped by blocker category.
+
+### Raw-Sequence Artifact Blockers (4 rows)
+
+These rows require an accepted smoke artifact from a channel that emits
+non-null `prev_change_id` and `type` (e.g. `book.BTC-PERPETUAL.100ms`).
+`book.BTC-PERPETUAL.none.10.100ms` does not emit these fields (Phase 26S
+finding). No progress is possible until the operator authorizes the correct
+channel.
+
+| row_id | exact_capture_requirement |
+|---|---|
+| `claim_review:prev_change_id` | Accepted artifact with at least one event where `payload_sample.prev_change_id` is a non-null integer. |
+| `claim_review:continuity_condition` | Accepted artifact with adjacent events proving `current.prev_change_id == prior.change_id`. |
+| `claim_review:first_message_snapshot` | Accepted artifact whose first book event has a non-null `payload_sample.type` proving snapshot semantics. |
+| `claim_review:incremental_delta` | Accepted artifact with a later event having a non-null `payload_sample.type` proving delta semantics. |
+
+### Documentation Artifact Blockers (15 rows)
+
+These rows require committed official Deribit documentation excerpts or
+environment observations. No raw-sequence artifact is sufficient alone.
 
 | row_id | required_artifact |
 |---|---|
-| `gap_resubscribe_rule` | Committed official Deribit documentation excerpt proving gap recovery and resubscribe rule. |
-| `heartbeat_liveness_proof` | Committed official Deribit documentation excerpt or environment proof for heartbeat, ping-pong, or liveness semantics. |
+| `claim_review:public_rest_availability` | Committed excerpt confirming Deribit public REST endpoints are available without authentication. |
+| `claim_review:prod_testnet_ws_endpoint` | Committed excerpt confirming Deribit production and testnet WebSocket endpoint URLs. |
+| `claim_review:prod_testnet_rest_endpoint` | Committed excerpt confirming Deribit production and testnet REST endpoint URLs. |
+| `claim_review:rest_snapshot_requirement` | Committed documentation proving REST snapshot is required before WebSocket delta processing. |
+| `claim_review:checksum_decision` | Committed documentation or operator decision on Deribit order book checksum validation approach. |
+| `claim_review:gap_resubscribe_rule` | Committed official Deribit documentation excerpt proving gap recovery and resubscribe rule. |
+| `claim_review:heartbeat_liveness_proof` | Committed official Deribit documentation excerpt or environment proof for heartbeat/ping-pong/liveness semantics. |
+| `claim_review:public_rate_subscription_limits` | Committed documentation confirming Deribit public WebSocket subscription rate limits. |
+| `claim_review:public_trades` | Committed documentation or observation confirming public trades channel format and semantics. |
+| `claim_review:ticker` | Committed documentation confirming Deribit ticker channel format and update frequency. |
+| `claim_review:mark_index_funding_open_interest` | Committed documentation confirming mark price, index price, funding rate, and open interest channels. |
+| `claim_review:staleness_budget` | Committed operator decision and documentation basis for maximum acceptable data staleness budget. |
+| `claim_review:receive_lag_budget` | Committed operator decision and documentation basis for maximum acceptable receive lag budget. |
+| `claim_review:testnet_prod_difference` | Committed documentation enumerating known differences between Deribit testnet and production environments. |
+| `claim_review:regional_legal_access` | Committed legal review confirming the operating jurisdiction has no restriction on Deribit API access. |
+
+### Policy Review Blockers (7 rows)
+
+These rows require explicit operator policy decisions, not data artifacts.
+No automated evidence can satisfy them.
+
+| row_id | required_action |
+|---|---|
+| `policy_review:checksum_decision` | Operator must decide whether to implement Deribit order book checksum validation (enabled or explicitly waived with justification). |
+| `policy_review:liveness_policy` | Operator must define and commit the liveness detection and reconnection policy for Deribit WebSocket connections. |
+| `policy_review:staleness_budget` | Operator must approve the maximum staleness budget for Deribit market data in the risk pipeline. |
+| `policy_review:receive_lag_budget` | Operator must approve the maximum receive lag budget for Deribit WebSocket messages. |
+| `policy_review:testnet_prod_review` | Operator must review and confirm testnet vs. production difference implications for the system. |
+| `policy_review:regional_legal_access_review` | Operator must complete and document the regional legal access review for Deribit. |
+| `policy_review:separate_connector_enablement` | Operator must separately authorize connector enablement after all B1-B5 blockers are resolved. |
