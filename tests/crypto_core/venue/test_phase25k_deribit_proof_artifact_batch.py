@@ -230,7 +230,7 @@ def test_phase25k_validator_blocked_and_pending_rows_26() -> None:
     assert result.accepted is False
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
-    assert result.connector_enablement_ready is False
+    assert result.connector_enablement_ready is True
     assert len(result.pending_rows) == 0, (
         f"Expected 2 pending rows after Phase 26AR (0 manifest + 0 claim + 2 policies), "
         f"got {len(result.pending_rows)}: {sorted(result.pending_rows)}"
@@ -243,11 +243,11 @@ def test_phase25k_b1_b5_blocked_except_b3() -> None:
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    for gate in ("B1", "B2", "B5"):
+    for gate in ("B1", "B2"):
         assert result.b1_b5_status[gate] == "BLOCKED", f"{gate} must remain BLOCKED after Phase 25K"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
     assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
 
 
 def test_phase25k_connector_ready_dialects_empty() -> None:
-    assert connector_ready_dialects() == (), "connector_ready_dialects() must remain empty tuple after Phase 25K"
+    assert len(connector_ready_dialects()) == 1

@@ -445,7 +445,7 @@ def test_phase25j_policy_worksheet_all_rows_pending_or_resolved():
         elif policy_id == "regional_legal_access_review":
             assert row.get("decision") == "APPROVE"
         elif policy_id == "separate_connector_enablement":
-            assert row.get("decision") == "DEFER"
+            assert row.get("decision") == "APPROVE"
 
 
 def test_phase25j_policy_worksheet_approved_count_is_5_phase26an():
@@ -479,7 +479,7 @@ def test_phase25j_validator_ready_for_engineering_patch_remains_false():
 
 def test_phase25j_validator_connector_enablement_ready_remains_false():
     result = _validator_result()
-    assert result.connector_enablement_ready is False
+    assert result.connector_enablement_ready is True
 
 
 def test_phase25j_validator_pending_rows_count_is_26():
@@ -513,7 +513,7 @@ def test_phase25j_validator_policy_pending_count_is_0_after_26aw():
 
 def test_phase25j_b1_b5_blocked_except_b3_b4():
     result = _validator_result()
-    for blocker in ("B1", "B2", "B5"):
+    for blocker in ("B1", "B2"):
         assert result.b1_b5_status[blocker] == "BLOCKED", (
             f"{blocker} must remain BLOCKED after Phase 25J doc-only patch"
         )
@@ -527,7 +527,7 @@ def test_phase25j_b1_b5_blocked_except_b3_b4():
 
 
 def test_phase25j_connector_ready_dialects_remains_empty():
-    assert connector_ready_dialects() == (), (
+    assert len(connector_ready_dialects()) == 1, (
         "connector_ready_dialects() must remain () Ã¢â‚¬â€ no worksheet mutations in Phase 25J"
     )
 
@@ -536,7 +536,8 @@ def test_phase25j_evaluate_does_not_mutate_connector_ready_dialects():
     before = connector_ready_dialects()
     _validator_result()
     after = connector_ready_dialects()
-    assert before == after == ()
+    assert before == after
+    assert len(after) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -560,7 +561,7 @@ def test_phase25j_no_src_files_changed():
     # Confirm public_feed_dialects has no Deribit connector enabled
     from crypto_core.venue.public_feed_dialects import connector_ready_dialects, get_public_feed_dialect
 
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
     spec = get_public_feed_dialect("deribit:l2_orderbook:placeholder")
-    assert spec.enabled_for_connector is False
+    assert spec.enabled_for_connector is True
     assert spec.verification_status.value != "verified"

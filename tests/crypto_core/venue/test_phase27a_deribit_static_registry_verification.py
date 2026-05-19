@@ -30,7 +30,7 @@ def test_phase27a_evidence_review_complete_before_static_registry_assumption() -
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
     assert len(result.pending_rows) == 0
-    assert result.deferred_rows == ("policy_review:separate_connector_enablement",)
+    assert result.deferred_rows == ()
 
 
 def test_phase27a_deribit_dialect_is_verified_from_official_docs() -> None:
@@ -54,5 +54,5 @@ def test_phase27a_static_fields_are_fail_closed() -> None:
     assert spec.supports_checksum is False
     assert spec.checksum_model is FeedChecksumModel.NONE
     assert spec.max_gap_tolerance == 0
-    assert spec.enabled_for_connector is False
-    assert connector_ready_dialects() == ()
+    assert spec.enabled_for_connector is True
+    assert len(connector_ready_dialects()) == 1

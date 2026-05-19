@@ -217,12 +217,13 @@ def test_policy_regional_legal_access_review_approved_in_26aw(policy_rows_by_id:
     )
 
 
-def test_policy_separate_connector_enablement_still_pending(policy_rows_by_id: dict[str, dict[str, str]]) -> None:
+def test_policy_separate_connector_enablement_approved_in_phase27f(
+    policy_rows_by_id: dict[str, dict[str, str]],
+) -> None:
     row = policy_rows_by_id.get("separate_connector_enablement")
     assert row is not None
-    assert row.get("decision", "").upper() in ("PENDING", "DEFER"), (
-        "separate_connector_enablement must remain PENDING or DEFER"
-    )
+    assert row.get("decision", "").upper() == "APPROVE"
+    assert row.get("policy_status", "").upper() == "APPROVED"
 
 
 def test_policy_phase26an_policy_values_present(policy_rows_by_id: dict[str, dict[str, str]]) -> None:

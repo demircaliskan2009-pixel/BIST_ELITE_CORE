@@ -72,14 +72,14 @@ def test_phase26aw_regional_legal_access_review_policy_status() -> None:
     assert row.get("policy_status", "").upper() == "APPROVED"
 
 
-# --- separate_connector_enablement deferred ---
+# --- separate_connector_enablement approved in Phase 27F ---
 
 
-def test_phase26aw_separate_connector_enablement_decision_defer() -> None:
+def test_phase26aw_separate_connector_enablement_decision_approve() -> None:
     row = _rows_by_id().get("separate_connector_enablement")
     assert row is not None
-    assert row.get("decision", "").upper() == "DEFER", (
-        f"separate_connector_enablement decision must be DEFER, got {row.get('decision')!r}"
+    assert row.get("decision", "").upper() == "APPROVE", (
+        f"separate_connector_enablement decision must be APPROVE, got {row.get('decision')!r}"
     )
 
 
@@ -95,7 +95,7 @@ def test_phase26aw_separate_connector_enablement_reviewed_at() -> None:
 
 def test_phase26aw_separate_connector_enablement_policy_status() -> None:
     row = _rows_by_id()["separate_connector_enablement"]
-    assert row.get("policy_status", "").upper() == "DEFERRED"
+    assert row.get("policy_status", "").upper() == "APPROVED"
 
 
 # --- Validator state post-26AW ---
@@ -106,9 +106,9 @@ def test_phase26aw_validator_pending_rows_zero() -> None:
     assert len(result.pending_rows) == 0, f"Expected 0 pending rows, got: {result.pending_rows}"
 
 
-def test_phase26aw_validator_deferred_rows_contains_connector_enablement() -> None:
+def test_phase26aw_validator_deferred_rows_empty_after_27f() -> None:
     result = evaluate_deribit_manual_review_readiness()
-    assert "policy_review:separate_connector_enablement" in result.deferred_rows
+    assert result.deferred_rows == ()
 
 
 def test_phase26aw_validator_evidence_review_complete_true() -> None:

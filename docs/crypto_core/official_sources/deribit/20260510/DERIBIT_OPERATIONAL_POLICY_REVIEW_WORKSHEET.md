@@ -34,18 +34,19 @@ private API, orders, or live execution.
 | `receive_lag_budget` | `deribit` | `APPROVED` | `APPROVED_FAIL_CLOSED` | `demir_operator` | `2026-05-19T00:00:00Z` | `DERIBIT_NOTIFICATIONS` | `receive_lag_budget` | `YES` | `NO` | `YES` | `APPROVED` | `approved:Phase26AM_POLICY_DECISIONS_PUBLIC_DATA_ONLY policy_value:MAX_RECEIVE_LAG_MS_1000 enforcement:REJECT_OR_QUARANTINE_EVENT_IF_EXCEEDED evidence_refs:DERIBIT_POLICY_DECISION_AUDIT_26AM.md` | `LEAVES_BLOCKER` |
 | `testnet_prod_review` | `deribit` | `APPROVED` | `APPROVED_FAIL_CLOSED` | `demir_operator` | `2026-05-19T00:00:00Z` | `DERIBIT_ENVIRONMENT` | `testnet_prod_difference` | `YES` | `NO` | `YES` | `APPROVED` | `approved:Phase26AM_POLICY_DECISIONS_PUBLIC_DATA_ONLY policy_value:PROD_AND_TESTNET_MUST_REMAIN_EXPLICITLY_CONFIG_SEPARATED enforcement:NO_IMPLICIT_ENVIRONMENT_FALLBACK;PROD_DEFAULT_FOR_LIVE_FORBIDDEN_UNTIL_LATER_ENABLEMENT evidence_refs:DERIBIT_POLICY_DECISION_AUDIT_26AM.md` | `LEAVES_BLOCKER` |
 | `regional_legal_access_review` | `deribit` | `APPROVED` | `APPROVED_OPERATOR_LEGAL_SIGNOFF` | `demir_operator` | `2026-05-19T00:00:00Z` | `DERIBIT_RESTRICTED` | `regional_legal_access` | `NO` | `YES` | `YES` | `APPROVE` | `approved:Phase26AV_TURKEY_PUBLIC_MARKET_DATA_ONLY_OPERATOR_LEGAL_SIGNOFF policy_value:TURKEY_PUBLIC_MARKET_DATA_ONLY_OPERATOR_SIGNOFF_NO_LOGIN_NO_PRIVATE_API_NO_ORDERS_NO_LIVE_NO_COMMERCIAL_REDISTRIBUTION_WITHOUT_DERIBIT_APPROVAL limitation:NO_EXPLICIT_PUBLIC_DATA_GEO_SAFE_HARBOR limitation:MARKET_DATA_PERSONAL_USE_ONLY_WITHOUT_PRIOR_WRITTEN_APPROVAL warning:NON_LEGAL_ADVICE_OPERATOR_GOVERNANCE_SIGNOFF_ONLY evidence_refs:DERIBIT_REGIONAL_LEGAL_ACCESS_RESEARCH_PACK_26AR.md;DERIBIT_REGIONAL_LEGAL_ACCESS_PROOF_BATCH_26AS.md;DERIBIT_OPERATOR_LEGAL_SIGNOFF_PROPOSAL_26AT.md;DERIBIT_OPERATOR_LEGAL_SIGNOFF_EXECUTION_AUDIT_26AV.md` | `LEAVES_BLOCKER` |
-| `separate_connector_enablement` | `deribit` | `DEFERRED` | `REQUIRED_SEPARATE_PHASE` | `demir_operator` | `2026-05-19T00:00:00Z` | `DERIBIT_OPERATIONAL_EVIDENCE_REVIEW_CHECKLIST` | `connector_ready_dialects_expected` | `YES` | `NO` | `YES` | `DEFER` | `reason:SEPARATE_PUBLIC_MARKET_DATA_CONNECTOR_ENABLEMENT_PHASE_REQUIRED connector_enablement_ready:False enabled_for_connector:false static_registry_verified:false connector_ready_dialects_expected:[] no_approval_this_phase:True` | `LEAVES_BLOCKER` |
+| `separate_connector_enablement` | `deribit` | `APPROVED` | `APPROVED_PUBLIC_MARKET_DATA_ONLY` | `demir_operator` | `2026-05-19T00:00:00Z` | `DERIBIT_PUBLIC_MARKET_DATA_CONNECTOR_ENABLEMENT_AUDIT_27F` | `connector_ready_dialects_expected` | `YES` | `NO` | `YES` | `APPROVE` | `approved:Phase27F_PUBLIC_MARKET_DATA_ONLY_CONNECTOR_ENABLEMENT policy_value:PUBLIC_MARKET_DATA_ONLY_NO_PRIVATE_API_NO_CREDENTIALS_NO_ORDERS_NO_LIVE_NO_PAPER_SHADOW_EXECUTION approved_run_mode:PUBLIC_MARKET_DATA_ONLY evidence_refs:DERIBIT_PUBLIC_MARKET_DATA_CONNECTOR_ENABLEMENT_AUDIT_27F.md;DERIBIT_STATIC_REGISTRY_VERIFICATION_27A.md;DERIBIT_NEXT_BLOCKER_SUMMARY_27E.md;DERIBIT_OPERATOR_LEGAL_SIGNOFF_EXECUTION_AUDIT_26AV.md;DERIBIT_NEXT_BLOCKER_SUMMARY_26AY.md;DERIBIT_POLICY_DECISION_AUDIT_26AM.md rejection_reason_if_pending:NONE` | `LEAVES_BLOCKER` |
 
 ## Completion Rule
 
 Every policy row remains pending until a human reviewer records reviewer
-metadata, review time, and a policy decision. The separate connector enablement
-row cannot be completed in this evidence phase; it requires a later explicitly
-authorized connector-readiness phase. Until then, Deribit operational evidence
-acceptance remains blocked and `connector_ready_dialects()` must remain empty.
+metadata, review time, and a policy decision. Phase 27F records the explicit
+separate public-market-data-only connector enablement approval for the verified
+Deribit public dialect. This approval is limited to public market data
+readiness and does not authorize private API, credentials, orders, deposits,
+withdrawals, live trading, or paper/shadow execution.
 
-Phase 22S records the separate public connector enablement gate, but it does
-not approve the `separate_connector_enablement` row. Current Deribit connector
-enablement remains pending, static registry verification remains false, and the
-only permitted future run-mode approval would be an explicit
-`PUBLIC_MARKET_DATA_ONLY` manual approval in a later phase.
+Phase 22S records the separate public connector enablement gate. Phase 27F
+approves that gate only for `PUBLIC_MARKET_DATA_ONLY` readiness after static
+registry verification. Any runtime public feed smoke, normalized event
+pipeline, paper/shadow read-only pipeline, risk gate, or trading capability
+requires a later explicit phase.

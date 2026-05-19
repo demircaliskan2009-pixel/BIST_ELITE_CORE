@@ -201,7 +201,9 @@ def test_public_connector_readiness_report_does_not_mutate_registry_or_ready_dia
     report = _report()
 
     assert report.connector_ready is True
-    assert connector_ready_dialects() == before == ()
+    assert connector_ready_dialects() == before
+    assert len(before) == 1
+    assert before[0].dialect_id == "deribit:l2_orderbook:book_instrument_interval"
 
     source = REPORT_CONTRACT_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)

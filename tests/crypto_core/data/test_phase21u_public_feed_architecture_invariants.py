@@ -153,7 +153,7 @@ def test_public_pipeline_not_ready_if_readiness_snapshot_rejects():
 
 
 def test_static_public_feed_dialect_registry_has_no_connector_ready_placeholders():
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_live_execution_still_rejected():

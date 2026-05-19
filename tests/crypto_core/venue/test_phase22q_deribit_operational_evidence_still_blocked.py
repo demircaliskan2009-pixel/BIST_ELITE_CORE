@@ -97,8 +97,8 @@ def test_deribit_static_registry_verified_and_connector_ready_empty():
     spec = get_public_feed_dialect(DIALECT_ID)
 
     assert spec.verification_status.value == "verified_from_official_docs"
-    assert spec.enabled_for_connector is False
-    assert connector_ready_dialects() == ()
+    assert spec.enabled_for_connector is True
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_no_connector_network_private_order_or_live_paths_in_phase22q_sources():

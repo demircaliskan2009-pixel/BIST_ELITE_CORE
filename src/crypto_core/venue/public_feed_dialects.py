@@ -35,6 +35,7 @@ _PUBLIC_FEED_DIALECTS: tuple[PublicFeedDialectSpec, ...] = (
             "DERIBIT_POLICY_DECISION_AUDIT_26AM.md#operator-approved-policy-values",
             "DERIBIT_REGIONAL_LEGAL_ACCESS_PROOF_BATCH_26AS.md#row-classifications",
             "DERIBIT_OPERATOR_LEGAL_SIGNOFF_EXECUTION_AUDIT_26AV.md#5-expected-validator-outcome-after-phase-26aw-patch",
+            "DERIBIT_PUBLIC_MARKET_DATA_CONNECTOR_ENABLEMENT_AUDIT_27F.md#operator-approval-scope",
         ),
         requires_rest_snapshot=False,
         supports_delta_stream=True,
@@ -47,7 +48,7 @@ _PUBLIC_FEED_DIALECTS: tuple[PublicFeedDialectSpec, ...] = (
         max_gap_tolerance=0,
         max_staleness_ns=2_000_000_000,
         max_receive_lag_ns=1_000_000_000,
-        enabled_for_connector=False,
+        enabled_for_connector=True,
         rejection_reasons=(),
     ),
     PublicFeedDialectSpec(

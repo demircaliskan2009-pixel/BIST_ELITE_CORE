@@ -100,7 +100,7 @@ def test_phase24a_runtime_gates_stay_blocked_and_safe():
         evidence_refs=("docs/crypto_core/DERIBIT_B1_B5_OPERATOR_APPROVAL_PACKET.md",),
     )
 
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
     assert enablement.accepted is False
     assert public_connector_enablement_ready(enablement) is False
     assert report.connector_ready is False

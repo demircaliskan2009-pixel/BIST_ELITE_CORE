@@ -1,17 +1,15 @@
 """Phase 26AO — Post-policy validator state.
 
 Live validator tests after Phase 26AN worksheet patches and Phase 26AR approval. Verifies:
-  pending_rows == 2
-  pending == policy_review:regional_legal_access_review
-           + policy_review:separate_connector_enablement
+  pending_rows == 0
   accepted == False
-  evidence_review_complete == False
-  connector_enablement_ready == False
-  B1-B5 all BLOCKED
-  connector_ready_dialects() == 0
+  evidence_review_complete == True
+  connector_enablement_ready == True
+  B1/B2 BLOCKED, B3/B4/B5 READY
+  connector_ready_dialects() == 1
   8 rows approved in Phase 26AN (3 claim + 5 policy)
   regional_legal_access claim approved in Phase 26AR
-  no connector enablement row approved
+  separate_connector_enablement approved in Phase 27F
 """
 
 from __future__ import annotations
@@ -42,7 +40,7 @@ def test_evidence_review_complete_true(result: DeribitManualReviewReadinessResul
 
 
 def test_connector_enablement_ready_false(result: DeribitManualReviewReadinessResult) -> None:
-    assert result.connector_enablement_ready is False
+    assert result.connector_enablement_ready is True
 
 
 # --- pending_rows count ---
@@ -65,9 +63,9 @@ def test_pending_row_regional_legal_access_review_approved(result: DeribitManual
     assert "policy_review:regional_legal_access_review" not in result.pending_rows
 
 
-def test_pending_row_separate_connector_enablement_deferred(result: DeribitManualReviewReadinessResult) -> None:
+def test_pending_row_separate_connector_enablement_approved(result: DeribitManualReviewReadinessResult) -> None:
     assert "policy_review:separate_connector_enablement" not in result.pending_rows
-    assert "policy_review:separate_connector_enablement" in result.deferred_rows
+    assert "policy_review:separate_connector_enablement" not in result.deferred_rows
 
 
 # --- Phase 26AN approved rows not in pending ---
@@ -105,7 +103,7 @@ def test_policy_testnet_prod_review_not_pending(result: DeribitManualReviewReadi
     assert "policy_review:testnet_prod_review" not in result.pending_rows
 
 
-# --- B1-B5 all BLOCKED ---
+# --- B1-B5 current state ---
 
 
 def test_b1_blocked(result: DeribitManualReviewReadinessResult) -> None:
@@ -125,7 +123,7 @@ def test_b4_ready(result: DeribitManualReviewReadinessResult) -> None:
 
 
 def test_b5_blocked(result: DeribitManualReviewReadinessResult) -> None:
-    assert result.b1_b5_status["B5"] == "BLOCKED"
+    assert result.b1_b5_status["B5"] == "READY"
 
 
 # --- connector_ready_dialects unchanged ---
@@ -133,7 +131,7 @@ def test_b5_blocked(result: DeribitManualReviewReadinessResult) -> None:
 
 def test_connector_ready_dialects_empty() -> None:
     dialects = connector_ready_dialects()
-    assert len(dialects) == 0, f"connector_ready_dialects must remain empty, got: {dialects}"
+    assert len(dialects) == 1, f"connector_ready_dialects must contain Deribit only, got: {dialects}"
 
 
 # --- No rejected rows ---
@@ -236,13 +234,13 @@ def test_row_results_regional_legal_access_review_approved(result: DeribitManual
     assert row.status == "APPROVED"  # APPROVED after Phase 26AW
 
 
-def test_row_results_separate_connector_enablement_pending(result: DeribitManualReviewReadinessResult) -> None:
+def test_row_results_separate_connector_enablement_approved(result: DeribitManualReviewReadinessResult) -> None:
     row = next(
         (r for r in result.row_results if r.surface == "policy_review" and r.row_id == "separate_connector_enablement"),
         None,
     )
     assert row is not None
-    assert row.status in ("PENDING", "DEFERRED")
+    assert row.status == "APPROVED"
 
 
 # --- Exactly 8 rows newly approved in phase 26AN across all surfaces ---

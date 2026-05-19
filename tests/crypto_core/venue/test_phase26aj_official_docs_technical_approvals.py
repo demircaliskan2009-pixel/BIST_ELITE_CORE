@@ -177,7 +177,7 @@ def test_phase26aj_policy_worksheet_untouched() -> None:
         elif policy_id == "regional_legal_access_review":
             assert "APPROVE" in row_line, f"Policy row {policy_id!r} must be APPROVED after Phase 26AW"
         elif policy_id == "separate_connector_enablement":
-            assert "DEFER" in row_line, f"Policy row {policy_id!r} must be DEFERRED after Phase 26AW"
+            assert "APPROVE" in row_line, f"Policy row {policy_id!r} must be APPROVED after Phase 27F"
 
 
 def test_phase26aj_no_enabled_for_connector_true() -> None:

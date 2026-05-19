@@ -217,7 +217,7 @@ def test_claim_review_contract_has_no_network_file_or_client_imports():
 
 
 def test_claim_review_contract_does_not_enable_registry_or_live_order_paths():
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
     source = CLAIM_REVIEW_CONTRACT_PATH.read_text(encoding="utf-8").lower()
     assert "enabled_for_connector=true" not in source

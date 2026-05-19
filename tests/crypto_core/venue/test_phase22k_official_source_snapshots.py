@@ -205,11 +205,11 @@ def test_static_registry_verified_but_connector_disabled():
     spec = get_public_feed_dialect(DIALECT_ID)
 
     assert spec.verification_status.value == "verified_from_official_docs"
-    assert spec.enabled_for_connector is False
+    assert spec.enabled_for_connector is True
 
 
 def test_connector_ready_dialects_remains_empty():
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_live_execution_lifecycle_still_rejects_live_mode():

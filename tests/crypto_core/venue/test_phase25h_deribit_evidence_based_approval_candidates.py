@@ -142,7 +142,7 @@ def test_phase25h_does_not_add_final_reviewer_values_or_modify_worksheets():
         "receive_lag_budget",
         "testnet_prod_review",
     }
-    _phase26aw_approved_policy = {"regional_legal_access_review"}
+    _phase26aw_approved_policy = {"regional_legal_access_review", "separate_connector_enablement"}
     _phase26aw_deferred_policy = {"separate_connector_enablement"}
     for row in policy_rows:
         if row["policy_id"] in _phase26an_approved_policy:
@@ -151,9 +151,6 @@ def test_phase25h_does_not_add_final_reviewer_values_or_modify_worksheets():
         elif row["policy_id"] in _phase26aw_approved_policy:
             assert row["reviewer_id"] == "demir_operator"
             assert row["decision"] == "APPROVE"
-        elif row["policy_id"] in _phase26aw_deferred_policy:
-            assert row["reviewer_id"] == "demir_operator"
-            assert row["decision"] == "DEFER"
 
 
 def test_phase25h_validator_and_connector_state_remain_blocked():
@@ -166,5 +163,5 @@ def test_phase25h_validator_and_connector_state_remain_blocked():
     assert result.accepted is False
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
-    assert result.connector_enablement_ready is False
-    assert connector_ready_dialects() == ()
+    assert result.connector_enablement_ready is True
+    assert len(connector_ready_dialects()) == 1

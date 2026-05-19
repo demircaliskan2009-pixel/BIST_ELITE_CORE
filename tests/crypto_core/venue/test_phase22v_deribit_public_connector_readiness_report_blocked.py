@@ -75,7 +75,7 @@ def test_current_deribit_operational_policy_approvals_are_pending_or_resolved():
     rows = _policy_rows()
 
     assert rows
-    # Phase 26AN approved 5 policy rows; Phase 26AW approved regional_legal_access_review and deferred separate_connector_enablement.
+    # Phase 26AN approved 5 policy rows; Phase 26AW approved regional_legal_access_review; Phase 27F approved B5.
     _phase26an_approved = {
         "checksum_decision",
         "liveness_policy",
@@ -83,17 +83,13 @@ def test_current_deribit_operational_policy_approvals_are_pending_or_resolved():
         "receive_lag_budget",
         "testnet_prod_review",
     }
-    _phase26aw_approved = {"regional_legal_access_review"}
-    _phase26aw_deferred = {"separate_connector_enablement"}
+    _phase26aw_approved = {"regional_legal_access_review", "separate_connector_enablement"}
     for pid, row in rows.items():
         if pid in _phase26an_approved:
             assert row["policy_status"] == "APPROVED"
         elif pid in _phase26aw_approved:
             assert row["policy_status"] == "APPROVED"
             assert row["decision"] == "APPROVE"
-        elif pid in _phase26aw_deferred:
-            assert row["policy_status"] == "DEFERRED"
-            assert row["decision"] == "DEFER"
 
 
 def test_current_deribit_operational_evidence_is_not_ready():
@@ -115,14 +111,14 @@ def test_current_deribit_connector_enablement_is_not_ready():
     assert decision.accepted is False
     assert public_connector_enablement_ready(decision) is False
     assert "public_connector_enablement:operational_evidence_not_accepted" in decision.rejection_reasons
-    assert "public_connector_enablement:pending" in decision.rejection_reasons
+    assert "public_connector_enablement:pending" not in decision.rejection_reasons
 
 
 def test_current_deribit_static_registry_verified_but_connector_disabled():
     spec = get_public_feed_dialect(DIALECT_ID)
 
     assert spec.verification_status.value == "verified_from_official_docs"
-    assert spec.enabled_for_connector is False
+    assert spec.enabled_for_connector is True
 
 
 def test_current_deribit_public_connector_readiness_report_remains_blocked():
@@ -152,7 +148,7 @@ def test_current_deribit_readiness_report_contains_blocker_reasons():
     assert "official_claim_review:pending" not in report.blocker_reasons
     # Phase 26AN approved checksum_decision; it must NOT appear as a blocker.
     assert "operational_policy:checksum_decision_missing" not in report.blocker_reasons
-    assert "public_connector_enablement:pending" in report.blocker_reasons
+    assert "public_connector_enablement:pending" not in report.blocker_reasons
 
 
 def test_current_deribit_checklist_says_connector_readiness_disabled():
@@ -166,14 +162,14 @@ def test_current_deribit_checklist_says_connector_readiness_disabled():
 
 
 def test_current_deribit_connector_ready_dialects_remain_empty():
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_current_deribit_dialect_is_not_verified_true():
     spec = get_public_feed_dialect(DIALECT_ID)
 
     assert spec.verification_status.value != "verified"
-    assert spec.enabled_for_connector is False
+    assert spec.enabled_for_connector is True
 
 
 def test_public_network_test_harness_is_not_enabled_for_current_deribit():
@@ -262,8 +258,6 @@ def _current_operational_evidence_result():
 def _current_connector_enablement_decision():
     row = _policy_rows()["separate_connector_enablement"]
     ce_status_str = row["policy_status"]
-    if ce_status_str == "DEFERRED":
-        ce_status_str = "PENDING"
     return evaluate_public_connector_enablement(
         PublicConnectorEnablementRequest(
             venue_id=VenueId.DERIBIT,
@@ -273,7 +267,7 @@ def _current_connector_enablement_decision():
             connector_enablement_status=PublicConnectorEnablementStatus(ce_status_str),
             reviewer_id=row["reviewer_id"],
             reviewed_at_iso=row["reviewed_at_iso"],
-            approved_run_mode=row["policy_blocker_status"],
+            approved_run_mode="PUBLIC_MARKET_DATA_ONLY",
             evidence_refs=(row["source_refs"], row["claim_refs"]),
             rejection_reasons=(),
         )

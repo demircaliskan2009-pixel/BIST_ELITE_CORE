@@ -34,24 +34,32 @@ def test_all_candidate_venues_represented():
     assert venues == set(VenueId)
 
 
-def test_no_dialect_is_connector_ready_without_b5_enablement():
+def test_only_deribit_public_dialect_is_connector_ready_after_b5_enablement():
     specs = all_public_feed_dialects()
 
     assert specs
-    assert all(public_feed_dialect_connector_ready(spec) is False for spec in specs)
+    ready = tuple(spec for spec in specs if public_feed_dialect_connector_ready(spec))
+    assert len(ready) == 1
+    assert ready[0].venue_id is VenueId.DERIBIT
     assert any(spec.verification_status is FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS for spec in specs)
     assert all(
-        spec.enabled_for_connector is False
-        and (
-            spec.verification_status is FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS
-            or "public_feed_dialect:unverified" in public_feed_dialect_rejection_reasons(spec)
+        (spec.enabled_for_connector is True and spec.venue_id is VenueId.DERIBIT)
+        or (
+            spec.enabled_for_connector is False
+            and spec.venue_id is not VenueId.DERIBIT
+            and (
+                spec.verification_status is FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS
+                or "public_feed_dialect:unverified" in public_feed_dialect_rejection_reasons(spec)
+            )
         )
         for spec in specs
     )
 
 
-def test_connector_ready_dialects_empty_without_verified_docs():
-    assert connector_ready_dialects() == ()
+def test_connector_ready_dialects_contains_only_deribit_public_market_data():
+    ready = connector_ready_dialects()
+    assert len(ready) == 1
+    assert ready[0].venue_id is VenueId.DERIBIT
 
 
 def test_unknown_dialect_fails_closed():
@@ -64,11 +72,11 @@ def test_unknown_venue_returns_empty_fail_closed():
     assert dialects_for_venue(object()) == ()  # type: ignore[arg-type]
 
 
-def test_deribit_candidate_exists_verified_but_connector_disabled():
+def test_deribit_candidate_exists_verified_and_connector_enabled():
     specs = dialects_for_venue(VenueId.DERIBIT)
 
     assert len(specs) == 1
-    assert specs[0].enabled_for_connector is False
+    assert specs[0].enabled_for_connector is True
     assert specs[0].verification_status is FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS
 
 

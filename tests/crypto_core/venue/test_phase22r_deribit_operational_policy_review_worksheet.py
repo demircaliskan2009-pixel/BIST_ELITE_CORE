@@ -37,14 +37,13 @@ REQUIRED_POLICY_STATUS = {
     "receive_lag_budget": "ENGINEERING_POLICY_PROPOSAL_PENDING_APPROVAL",
     "testnet_prod_review": "PENDING_MANUAL_REVIEW",
     "regional_legal_access_review": "MANUAL_LEGAL_ACCESS_REVIEW_REQUIRED",
-    "separate_connector_enablement": "REQUIRED_SEPARATE_PHASE",
+    "separate_connector_enablement": "APPROVED_PUBLIC_MARKET_DATA_ONLY",
 }
 _PHASE26AN_APPROVED_POLICY_IDS = frozenset(
     {"checksum_decision", "liveness_policy", "staleness_budget", "receive_lag_budget", "testnet_prod_review"}
 )
-# Phase 26AW approved regional_legal_access_review; deferred separate_connector_enablement.
-_PHASE26AW_APPROVED_POLICY_IDS = frozenset({"regional_legal_access_review"})
-_PHASE26AW_DEFERRED_POLICY_IDS = frozenset({"separate_connector_enablement"})
+# Phase 26AW approved regional_legal_access_review; Phase 27F approved separate_connector_enablement.
+_PHASE26AW_APPROVED_POLICY_IDS = frozenset({"regional_legal_access_review", "separate_connector_enablement"})
 
 
 def test_operational_policy_review_worksheet_exists():
@@ -58,7 +57,7 @@ def test_all_required_operational_policy_rows_exist():
 
 
 def test_every_required_policy_row_is_pending_or_approved_or_deferred():
-    # Phase 26AN approved 5 rows; Phase 26AW approved regional_legal_access_review and deferred separate_connector_enablement.
+    # Phase 26AN approved 5 rows; Phase 26AW approved regional_legal_access_review; Phase 27F approved B5.
     for policy_id, row in _policy_rows().items():
         assert row["policy_id"] == policy_id
         assert row["venue_id"] == "deribit"
@@ -75,11 +74,6 @@ def test_every_required_policy_row_is_pending_or_approved_or_deferred():
             assert row["reviewer_id"] == "demir_operator"
             assert row["reviewed_at_iso"] == "2026-05-19T00:00:00Z"
             assert row["decision"] == "APPROVE"
-        elif policy_id in _PHASE26AW_DEFERRED_POLICY_IDS:
-            assert row["policy_status"] == "DEFERRED"
-            assert row["reviewer_id"] == "demir_operator"
-            assert row["reviewed_at_iso"] == "2026-05-19T00:00:00Z"
-            assert row["decision"] == "DEFER"
 
 
 def test_checksum_decision_approved_in_phase26an():
@@ -116,11 +110,12 @@ def test_regional_legal_access_approved_in_phase26aw():
     assert row["reviewer_id"] == "demir_operator"
 
 
-def test_separate_connector_enablement_deferred_in_phase26aw():
+def test_separate_connector_enablement_approved_in_phase27f():
     row = _policy_rows()["separate_connector_enablement"]
 
-    assert row["policy_blocker_status"] == "REQUIRED_SEPARATE_PHASE"
-    assert row["decision"] == "DEFER"
+    assert row["policy_status"] == "APPROVED"
+    assert row["policy_blocker_status"] == "APPROVED_PUBLIC_MARKET_DATA_ONLY"
+    assert row["decision"] == "APPROVE"
     assert row["reviewer_id"] == "demir_operator"
 
 
@@ -150,15 +145,15 @@ def test_operational_evidence_acceptance_cannot_pass_current_deribit_policy_rows
     # regional_legal_access_review APPROVED in Phase 26AW — no longer missing.
     assert "operational_policy:regional_legal_access_review_missing" not in result.rejection_reasons
     # separate_connector_enablement DEFERRED in Phase 26AW — connector enablement still required.
-    assert "operational_policy:separate_connector_enablement_required" in result.rejection_reasons
+    assert "operational_policy:separate_connector_enablement_required" not in result.rejection_reasons
 
 
 def test_static_registry_verified_and_connector_ready_empty():
     spec = get_public_feed_dialect(DIALECT_ID)
 
     assert spec.verification_status.value == "verified_from_official_docs"
-    assert spec.enabled_for_connector is False
-    assert connector_ready_dialects() == ()
+    assert spec.enabled_for_connector is True
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_no_source_behavior_network_connector_private_order_or_live_paths_changed():
