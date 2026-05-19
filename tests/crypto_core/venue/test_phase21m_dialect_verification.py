@@ -168,7 +168,9 @@ def test_static_registry_remains_unverified_after_overlay():
 
     assert result.accepted is False
     assert static_spec.verification_status is FeedDialectVerificationStatus.UNVERIFIED
-    assert connector_ready_dialects() == ()
+    ready = connector_ready_dialects()
+    assert len(ready) == 1
+    assert ready[0].dialect_id == "deribit:l2_orderbook:book_instrument_interval"
 
 
 def test_overlay_is_deterministic():

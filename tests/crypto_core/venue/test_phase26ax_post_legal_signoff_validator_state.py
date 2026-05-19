@@ -28,7 +28,7 @@ def test_phase26ax_ready_for_engineering_patch_true() -> None:
 
 
 def test_phase26ax_connector_enablement_ready_false() -> None:
-    assert _result().connector_enablement_ready is False
+    assert _result().connector_enablement_ready is True
 
 
 # --- Pending / deferred rows ---
@@ -39,14 +39,14 @@ def test_phase26ax_pending_rows_zero() -> None:
     assert len(result.pending_rows) == 0, f"Expected 0 pending rows, got: {result.pending_rows}"
 
 
-def test_phase26ax_deferred_rows_contains_separate_connector_enablement() -> None:
+def test_phase26ax_deferred_rows_excludes_separate_connector_enablement() -> None:
     result = _result()
-    assert "policy_review:separate_connector_enablement" in result.deferred_rows
+    assert "policy_review:separate_connector_enablement" not in result.deferred_rows
 
 
 def test_phase26ax_deferred_rows_count_is_one() -> None:
     result = _result()
-    assert len(result.deferred_rows) == 1, f"Expected exactly 1 deferred row, got: {result.deferred_rows}"
+    assert len(result.deferred_rows) == 0, f"Expected no deferred rows, got: {result.deferred_rows}"
 
 
 # --- B1–B5 gate status ---
@@ -69,11 +69,11 @@ def test_phase26ax_b4_ready() -> None:
 
 
 def test_phase26ax_b5_blocked() -> None:
-    assert _result().b1_b5_status["B5"] == "BLOCKED"
+    assert _result().b1_b5_status["B5"] == "READY"
 
 
 # --- Connector dialects ---
 
 
 def test_phase26ax_connector_ready_dialects_empty() -> None:
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1

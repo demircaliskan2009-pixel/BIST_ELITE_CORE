@@ -14,7 +14,7 @@ SUMMARY = REPO_ROOT / "docs" / "crypto_core" / "DERIBIT_NEXT_BLOCKER_SUMMARY_27E
 STATIC_VERIFICATION = REPO_ROOT / "docs" / "crypto_core" / "DERIBIT_STATIC_REGISTRY_VERIFICATION_27A.md"
 
 
-def test_phase27e_docs_exist_and_record_b4_ready_b5_blocked() -> None:
+def test_phase27e_docs_exist_and_record_superseded_b4_ready_b5_blocked() -> None:
     summary = SUMMARY.read_text(encoding="utf-8")
     verification = STATIC_VERIFICATION.read_text(encoding="utf-8")
     assert "status: NEXT_ACTION_PLAN_ONLY" in summary
@@ -36,11 +36,11 @@ def test_phase27e_validator_and_connector_state_match_summary() -> None:
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
     assert len(result.pending_rows) == 0
-    assert result.deferred_rows == ("policy_review:separate_connector_enablement",)
-    assert result.connector_enablement_ready is False
+    assert result.deferred_rows == ()
+    assert result.connector_enablement_ready is True
     assert result.b1_b5_status["B4"] == "READY"
-    assert result.b1_b5_status["B5"] == "BLOCKED"
-    assert connector_ready_dialects() == ()
+    assert result.b1_b5_status["B5"] == "READY"
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_phase27e_forbidden_runtime_terms_absent() -> None:

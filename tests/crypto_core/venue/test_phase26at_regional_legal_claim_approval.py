@@ -41,10 +41,10 @@ def test_phase26at_policy_regional_legal_access_review_approved_in_26aw() -> Non
     assert "policy_review:regional_legal_access_review" not in result.pending_rows
 
 
-def test_phase26at_policy_separate_connector_enablement_deferred_in_26aw() -> None:
+def test_phase26at_policy_separate_connector_enablement_approved_in_27f() -> None:
     result = _result()
     assert "policy_review:separate_connector_enablement" not in result.pending_rows
-    assert "policy_review:separate_connector_enablement" in result.deferred_rows
+    assert "policy_review:separate_connector_enablement" not in result.deferred_rows
 
 
 def test_phase26at_accepted_is_false() -> None:
@@ -56,19 +56,19 @@ def test_phase26at_evidence_review_complete_is_true_after_26aw() -> None:
 
 
 def test_phase26at_connector_enablement_ready_is_false() -> None:
-    assert _result().connector_enablement_ready is False
+    assert _result().connector_enablement_ready is True
 
 
 def test_phase26at_b1_b5_blocked_except_b3_b4() -> None:
     result = _result()
-    for blocker in ("B1", "B2", "B5"):
+    for blocker in ("B1", "B2"):
         assert result.b1_b5_status[blocker] == "BLOCKED"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
     assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
 
 
 def test_phase26at_connector_ready_dialects_empty() -> None:
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_phase26aw_policy_worksheet_regional_legal_approved() -> None:
@@ -103,5 +103,5 @@ def test_phase26at_claim_row_approved_with_phase26ar_scope() -> None:
 
 def test_phase26at_no_connector_enablement() -> None:
     result = _result()
-    assert result.connector_enablement_ready is False
-    assert connector_ready_dialects() == ()
+    assert result.connector_enablement_ready is True
+    assert len(connector_ready_dialects()) == 1

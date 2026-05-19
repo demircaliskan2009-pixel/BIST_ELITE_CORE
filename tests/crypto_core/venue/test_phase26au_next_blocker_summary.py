@@ -69,13 +69,13 @@ def test_phase26au_live_validator_state_matches_summary() -> None:
     result = evaluate_deribit_manual_review_readiness()
     assert result.accepted is False
     assert len(result.pending_rows) == 0
-    assert result.connector_enablement_ready is False
-    assert connector_ready_dialects() == ()
+    assert result.connector_enablement_ready is True
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_phase26au_b1_b5_live_validator_blocked() -> None:
     result = evaluate_deribit_manual_review_readiness()
-    for blocker in ("B1", "B2", "B5"):
+    for blocker in ("B1", "B2"):
         assert result.b1_b5_status[blocker] == "BLOCKED"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
     assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification

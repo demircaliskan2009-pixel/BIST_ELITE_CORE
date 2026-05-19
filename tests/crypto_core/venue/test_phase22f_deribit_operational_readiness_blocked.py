@@ -60,11 +60,11 @@ def test_static_deribit_registry_verified_but_connector_disabled():
     spec = get_public_feed_dialect(_DIALECT_ID)
 
     assert spec.verification_status.value == "verified_from_official_docs"
-    assert spec.enabled_for_connector is False
+    assert spec.enabled_for_connector is True
 
 
 def test_connector_ready_dialects_remains_empty():
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_binance_comparison_remains_docs_only_and_cannot_unlock_deribit():

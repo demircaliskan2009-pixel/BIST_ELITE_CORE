@@ -224,7 +224,7 @@ def test_phase25i_all_policy_rows_pending_or_resolved_after_26aw():
             assert row["decision"] == "APPROVE"
             assert row["reviewer_id"] == "demir_operator"
         elif policy_id == "separate_connector_enablement":
-            assert row["decision"] == "DEFER"
+            assert row["decision"] == "APPROVE"
             assert row["reviewer_id"] == "demir_operator"
 
 
@@ -243,11 +243,11 @@ def test_phase25i_wait_legal_policy_row_approved_in_26aw():
         assert rows[policy_id]["decision"] == "APPROVE"  # APPROVED in Phase 26AW
 
 
-def test_phase25i_separate_connector_enablement_deferred_not_approved():
+def test_phase25i_separate_connector_enablement_approved_in_phase27f():
     rows = {row["policy_id"]: row for row in _policy_rows()}
     for policy_id in _MUST_DEFER_POLICY_IDS:
         row = rows[policy_id]
-        assert row["decision"] == "DEFER", f"{policy_id!r} must be DEFER; connector enablement is a separate phase"
+        assert row["decision"] == "APPROVE", f"{policy_id!r} must be APPROVE after Phase 27F B5 enablement"
         assert row["reviewer_id"] == "demir_operator"
 
 
@@ -274,7 +274,7 @@ def test_phase25i_validator_ready_for_engineering_patch_remains_false():
 
 def test_phase25i_validator_connector_enablement_ready_remains_false():
     result = _validator_result()
-    assert result.connector_enablement_ready is False
+    assert result.connector_enablement_ready is True
 
 
 def test_phase25i_validator_pending_rows_count_is_26():
@@ -320,7 +320,7 @@ def test_phase25i_all_policy_rows_still_in_pending_rows():
 
 def test_phase25i_b1_b5_blocked_except_b3_b4():
     result = _validator_result()
-    for blocker in ("B1", "B2", "B5"):
+    for blocker in ("B1", "B2"):
         assert result.b1_b5_status[blocker] == "BLOCKED", f"{blocker} must remain BLOCKED after Phase 25I"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
     assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
@@ -332,11 +332,12 @@ def test_phase25i_b1_b5_blocked_except_b3_b4():
 
 
 def test_phase25i_connector_ready_dialects_remains_empty():
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_phase25i_evaluate_does_not_mutate_connector_ready_dialects():
     before = connector_ready_dialects()
     _validator_result()
     after = connector_ready_dialects()
-    assert before == after == ()
+    assert before == after
+    assert len(after) == 1

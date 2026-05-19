@@ -58,14 +58,14 @@ def test_deribit_doc_blocks_operational_connector_readiness():
     assert "not operational proof" in text
 
 
-def test_deribit_static_registry_verified_after_phase27_but_connector_disabled():
+def test_deribit_static_registry_verified_after_phase27_and_connector_enabled():
     spec = get_public_feed_dialect("deribit:l2_orderbook:placeholder")
 
     assert spec.venue_id is VenueId.DERIBIT
     assert spec.verification_status is FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS
-    assert spec.enabled_for_connector is False
-    assert public_feed_dialect_connector_ready(spec) is False
-    assert connector_ready_dialects() == ()
+    assert spec.enabled_for_connector is True
+    assert public_feed_dialect_connector_ready(spec) is True
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_binance_comparison_is_docs_only_and_cannot_enable_any_dialect():
@@ -80,7 +80,7 @@ def test_binance_comparison_is_docs_only_and_cannot_enable_any_dialect():
     assert "Open Interest REST" in text
     assert "Connection And Rate-Limit Evidence" in text
     assert "`enabled_for_connector`: `false`" in text
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_no_network_client_or_credential_implementation_added_to_venue_sources():

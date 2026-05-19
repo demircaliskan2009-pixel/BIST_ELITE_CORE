@@ -238,7 +238,7 @@ def test_phase26aa_validator_still_blocked() -> None:
     assert result.accepted is False
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
-    assert result.connector_enablement_ready is False
+    assert result.connector_enablement_ready is True
 
 
 def test_phase26aa_pending_rows_still_26() -> None:
@@ -248,7 +248,7 @@ def test_phase26aa_pending_rows_still_26() -> None:
 
 def test_phase26aa_b1_b5_blocked_except_b3() -> None:
     result = evaluate_deribit_manual_review_readiness()
-    for key in ("B1", "B2", "B5"):
+    for key in ("B1", "B2"):
         assert result.b1_b5_status[key] == "BLOCKED", f"{key} expected BLOCKED"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
     assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
@@ -256,4 +256,4 @@ def test_phase26aa_b1_b5_blocked_except_b3() -> None:
 
 def test_phase26aa_connector_ready_dialects_empty() -> None:
     dialects = connector_ready_dialects()
-    assert len(dialects) == 0
+    assert len(dialects) == 1

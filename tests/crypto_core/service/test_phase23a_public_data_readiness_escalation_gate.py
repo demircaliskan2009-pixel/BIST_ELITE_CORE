@@ -221,15 +221,15 @@ def test_no_network_connector_client_imports_introduced():
 
 
 def test_connector_ready_dialects_remains_empty():
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_deribit_public_connector_readiness_remains_blocked():
     spec = get_public_feed_dialect("deribit:l2_orderbook:placeholder")
 
     assert spec.verification_status.value == "verified_from_official_docs"
-    assert spec.enabled_for_connector is False
-    assert connector_ready_dialects() == ()
+    assert spec.enabled_for_connector is True
+    assert len(connector_ready_dialects()) == 1
 
 
 def _orchestrator(*, readiness_level: str = "paper_live") -> ServiceOrchestrator:

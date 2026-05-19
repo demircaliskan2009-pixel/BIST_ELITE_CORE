@@ -56,7 +56,7 @@ _FORBIDDEN_IMPORT_PATTERNS = (
 # ---------------------------------------------------------------------------
 
 
-def test_current_worksheets_are_not_ready():
+def test_current_worksheets_have_public_market_data_b5_ready_but_b1_blocked():
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
@@ -66,7 +66,7 @@ def test_current_worksheets_are_not_ready():
     assert result.accepted is False
     assert result.evidence_review_complete is True  # True after Phase 26AW
     assert result.ready_for_engineering_patch is True  # True after Phase 26AW
-    assert result.connector_enablement_ready is False
+    assert result.connector_enablement_ready is True
 
 
 def test_current_worksheets_have_pending_rows():
@@ -78,16 +78,17 @@ def test_current_worksheets_have_pending_rows():
     assert len(result.pending_rows) == 0, "No pending rows after Phase 26AW"
 
 
-def test_current_b1_b5_blocked_except_b3_b4():
+def test_current_b1_b2_blocked_b3_b4_b5_ready():
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    for blocker in ("B1", "B2", "B5"):
+    for blocker in ("B1", "B2"):
         assert result.b1_b5_status[blocker] == "BLOCKED", f"{blocker} must be BLOCKED in current repo state"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW policy signoff
     assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
+    assert result.b1_b5_status["B5"] == "READY"  # B5 READY after Phase 27F public connector enablement
 
 
 def test_current_worksheets_have_rejection_reasons():
@@ -96,7 +97,7 @@ def test_current_worksheets_have_rejection_reasons():
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    assert len(result.rejection_reasons) > 0
+    assert result.rejection_reasons == ()
 
 
 def test_current_worksheets_have_no_missing_metadata():
@@ -269,9 +270,10 @@ def test_mixed_approved_and_pending_still_fails_closed():
 # ---------------------------------------------------------------------------
 
 
-def test_connector_ready_dialects_remains_empty():
+def test_connector_ready_dialects_contains_deribit_public_market_data():
     dialects = connector_ready_dialects()
-    assert dialects == (), f"connector_ready_dialects() must return () but got {dialects}"
+    assert len(dialects) == 1
+    assert dialects[0].dialect_id == "deribit:l2_orderbook:book_instrument_interval"
 
 
 def test_evaluate_does_not_mutate_connector_ready_dialects():
@@ -282,7 +284,8 @@ def test_evaluate_does_not_mutate_connector_ready_dialects():
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
     after = connector_ready_dialects()
-    assert before == after == ()
+    assert before == after
+    assert len(after) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +346,7 @@ def test_missing_worksheet_file_fails_closed(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_connector_enablement_ready_is_always_false():
+def test_connector_enablement_ready_after_phase27f_public_market_data_approval():
     """connector_enablement_ready must always be False â€” connector enablement is a
     separate PUBLIC_MARKET_DATA_ONLY phase that cannot be satisfied here.
     """
@@ -352,7 +355,8 @@ def test_connector_enablement_ready_is_always_false():
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    assert result.connector_enablement_ready is False
+    assert result.connector_enablement_ready is True
+    assert result.b1_b5_status["B5"] == "READY"
 
 
 def test_evidence_review_complete_excludes_connector_enablement_deferred():

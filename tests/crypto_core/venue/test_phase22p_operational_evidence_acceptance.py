@@ -39,7 +39,7 @@ def test_all_source_snapshots_claims_and_policies_approved_accepts():
     assert result.accepted is True
     assert result.rejection_reasons == ()
     assert operational_evidence_acceptance_ready(result) is True
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_missing_source_snapshot_rejects():
@@ -242,7 +242,7 @@ def test_operational_evidence_acceptance_module_has_no_network_file_or_client_im
 
 
 def test_operational_evidence_acceptance_does_not_enable_ready_dialects_or_live_order_paths():
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
     source = ACCEPTANCE_CONTRACT_PATH.read_text(encoding="utf-8").lower()
     assert "enabled_for_connector=true" not in source

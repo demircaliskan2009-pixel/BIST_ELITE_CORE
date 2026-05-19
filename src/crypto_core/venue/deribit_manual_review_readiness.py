@@ -9,8 +9,7 @@ gate Deribit B1-B5:
 Phase separation:
   Phase 25 covers B2/B3 evidence review completion only.
   Connector enablement (B5) is a distinct PUBLIC_MARKET_DATA_ONLY phase that
-  requires separate explicit authorization and is not reachable from here.
-  The `separate_connector_enablement` policy row is permanently DEFER in Phase 25.
+  requires separate explicit authorization.
 
 This module:
 - does NOT approve any B1-B5 blocker.
@@ -81,15 +80,13 @@ class DeribitManualReviewReadinessResult:
         Signals that dialect policy values in public_feed_dialects.py may be
         updated. Does NOT enable connector readiness.
 
-      connector_enablement_ready — Always False from this validator. Connector
-        enablement is a distinct PUBLIC_MARKET_DATA_ONLY phase that requires
-        explicit separate authorization. connector_ready_dialects() must remain
-        empty after Phase 25.
+      connector_enablement_ready — True only after the separate
+        PUBLIC_MARKET_DATA_ONLY connector enablement policy row is explicitly
+        approved and the Deribit static public dialect is connector-ready.
 
       accepted — True only when every row on every surface (including
         separate_connector_enablement) is non-PENDING, non-REJECTED, and
-        non-DEFERRED. Unreachable in Phase 25. In the current repo state always
-        False.
+        non-DEFERRED.
     """
 
     accepted: bool
@@ -370,9 +367,8 @@ def evaluate_deribit_manual_review_readiness(
         and len(missing_meta) == 0
     )
 
-    # evidence_review_complete: same as accepted but exempts the
-    # separate_connector_enablement DEFERRED row — that row must remain DEFER
-    # in Phase 25 and is resolved in a dedicated connector-enablement phase.
+    # evidence_review_complete: same as accepted but exempts a still-deferred
+    # separate_connector_enablement row until its dedicated B5 phase runs.
     _ce_deferred_key = f"policy_review:{_CONNECTOR_ENABLEMENT_ROW_ID}"
     other_deferred = [r for r in deferred_rows if r != _ce_deferred_key]
     evidence_review_complete = (
@@ -384,6 +380,10 @@ def evaluate_deribit_manual_review_readiness(
     )
 
     static_registry_verified = _deribit_static_registry_verified()
+    connector_enablement_ready = _deribit_connector_enablement_ready(
+        all_row_results,
+        static_registry_verified=static_registry_verified,
+    )
 
     # B1-B5 status map (coarse summary — engineering detail in row_results)
     b1_b5: dict[str, str] = {
@@ -400,7 +400,7 @@ def evaluate_deribit_manual_review_readiness(
         )
         else "READY",
         "B4": "READY" if static_registry_verified else "BLOCKED",
-        "B5": "BLOCKED",  # connector_ready_dialects empty — separate enablement phase
+        "B5": "READY" if connector_enablement_ready else "BLOCKED",
     }
     # B1 stays BLOCKED until B2, B3, B4 are each READY
     if b1_b5["B2"] == "READY" and b1_b5["B3"] == "READY" and b1_b5["B4"] == "READY":
@@ -408,11 +408,13 @@ def evaluate_deribit_manual_review_readiness(
     else:
         b1_b5["B1"] = "BLOCKED"
 
+    accepted = accepted and b1_b5["B1"] != "BLOCKED"
+
     return DeribitManualReviewReadinessResult(
         accepted=accepted,
         evidence_review_complete=evidence_review_complete,
         ready_for_engineering_patch=evidence_review_complete,
-        connector_enablement_ready=False,
+        connector_enablement_ready=connector_enablement_ready,
         b1_b5_status=b1_b5,
         missing_metadata=tuple(dict.fromkeys(missing_meta)),
         pending_rows=tuple(dict.fromkeys(pending_rows)),
@@ -424,7 +426,7 @@ def evaluate_deribit_manual_review_readiness(
 
 
 def _deribit_static_registry_verified() -> bool:
-    """Return True only when Deribit static dialect policy is verified but connector-disabled."""
+    """Return True only when Deribit static dialect policy fields are verified."""
     from crypto_core.data.public_feed_dialect import (
         FeedChecksumModel,
         FeedDialectVerificationStatus,
@@ -432,15 +434,11 @@ def _deribit_static_registry_verified() -> bool:
         public_feed_dialect_rejection_reasons,
     )
     from crypto_core.venue.contracts import VenueId
-    from crypto_core.venue.public_feed_dialects import connector_ready_dialects, dialects_for_venue
-
-    if connector_ready_dialects():
-        return False
+    from crypto_core.venue.public_feed_dialects import dialects_for_venue
 
     for spec in dialects_for_venue(VenueId.DERIBIT):
         if (
             spec.verification_status is FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS
-            and spec.enabled_for_connector is False
             and spec.supports_delta_stream is True
             and spec.supports_checksum is False
             and spec.checksum_model is FeedChecksumModel.NONE
@@ -455,3 +453,26 @@ def _deribit_static_registry_verified() -> bool:
         ):
             return True
     return False
+
+
+def _deribit_connector_enablement_ready(
+    row_results: list[DeribitReviewRowResult],
+    *,
+    static_registry_verified: bool,
+) -> bool:
+    """Return True only for the approved Deribit public-market-data B5 gate."""
+    from crypto_core.venue.contracts import VenueId
+    from crypto_core.venue.public_feed_dialects import connector_ready_dialects
+
+    if static_registry_verified is not True:
+        return False
+
+    connector_row = next(
+        (row for row in row_results if row.surface == "policy_review" and row.row_id == _CONNECTOR_ENABLEMENT_ROW_ID),
+        None,
+    )
+    if connector_row is None or connector_row.status != "APPROVED":
+        return False
+
+    ready_deribit_specs = tuple(spec for spec in connector_ready_dialects() if spec.venue_id is VenueId.DERIBIT)
+    return len(ready_deribit_specs) == 1 and len(connector_ready_dialects()) == 1

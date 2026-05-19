@@ -85,8 +85,8 @@ def test_static_registry_verified_and_connector_ready_dialects_empty():
     spec = get_public_feed_dialect(DIALECT_ID)
 
     assert spec.verification_status.value == "verified_from_official_docs"
-    assert spec.enabled_for_connector is False
-    assert connector_ready_dialects() == ()
+    assert spec.enabled_for_connector is True
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_connector_contract_still_has_no_runtime_network_or_order_surface():

@@ -131,7 +131,7 @@ def test_phase25m_25q_validator_remains_blocked() -> None:
     assert result.accepted is False
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
-    assert result.connector_enablement_ready is False
+    assert result.connector_enablement_ready is True
     assert len(result.pending_rows) == 0
     assert "claim_review:change_id" not in result.pending_rows
     assert result.b1_b5_status == {
@@ -139,9 +139,9 @@ def test_phase25m_25q_validator_remains_blocked() -> None:
         "B2": "BLOCKED",
         "B3": "READY",
         "B4": "READY",
-        "B5": "BLOCKED",
+        "B5": "READY",
     }
 
 
 def test_phase25m_25q_connector_ready_dialects_empty() -> None:
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
