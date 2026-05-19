@@ -209,10 +209,12 @@ def test_policy_testnet_prod_review_approved(policy_rows_by_id: dict[str, dict[s
     assert policy_rows_by_id["testnet_prod_review"]["decision"].upper() == "APPROVED"
 
 
-def test_policy_regional_legal_access_review_still_pending(policy_rows_by_id: dict[str, dict[str, str]]) -> None:
+def test_policy_regional_legal_access_review_approved_in_26aw(policy_rows_by_id: dict[str, dict[str, str]]) -> None:
     row = policy_rows_by_id.get("regional_legal_access_review")
     assert row is not None
-    assert row.get("decision", "").upper() == "PENDING", "regional_legal_access_review must remain PENDING"
+    assert row.get("decision", "").upper() in ("APPROVE", "APPROVED"), (
+        "regional_legal_access_review must be APPROVED after Phase 26AW"
+    )
 
 
 def test_policy_separate_connector_enablement_still_pending(policy_rows_by_id: dict[str, dict[str, str]]) -> None:

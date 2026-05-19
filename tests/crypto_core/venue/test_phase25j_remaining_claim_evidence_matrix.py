@@ -428,10 +428,10 @@ def test_phase25j_claim_worksheet_remaining_19_rows_still_pending():
         assert row.get("reviewer_id") == "PENDING", f"Claim row {claim_id!r} reviewer_id must be PENDING"
 
 
-def test_phase25j_policy_worksheet_all_rows_pending():
+def test_phase25j_policy_worksheet_all_rows_pending_or_resolved():
     rows = _policy_rows()
     assert len(rows) == 7, f"Expected 7 policy rows, got {len(rows)}"
-    # Phase 26AN approved 5 policy rows; 2 remain PENDING.
+    # Phase 26AN approved 5 policy rows; Phase 26AW resolved the remaining 2.
     _phase26an_approved = {
         "checksum_decision",
         "liveness_policy",
@@ -439,18 +439,20 @@ def test_phase25j_policy_worksheet_all_rows_pending():
         "receive_lag_budget",
         "testnet_prod_review",
     }
-    pending_rows = {pid: row for pid, row in rows.items() if pid not in _phase26an_approved}
-    for policy_id, row in pending_rows.items():
-        assert row.get("decision") == "PENDING", (
-            f"Policy row {policy_id!r} must remain PENDING; got {row.get('decision')!r}"
-        )
+    for policy_id, row in rows.items():
+        if policy_id in _phase26an_approved:
+            assert row.get("decision") == "APPROVED"
+        elif policy_id == "regional_legal_access_review":
+            assert row.get("decision") == "APPROVE"
+        elif policy_id == "separate_connector_enablement":
+            assert row.get("decision") == "DEFER"
 
 
-def test_phase25j_policy_worksheet_approved_count_is_0():
+def test_phase25j_policy_worksheet_approved_count_is_5_phase26an():
     rows = _policy_rows()
     approved = [pid for pid, row in rows.items() if row.get("decision") == "APPROVED"]
-    # Phase 26AN approved 5 policy rows.
-    assert len(approved) == 5, f"Expected 5 approved policy rows after Phase 26AN, got: {approved}"
+    # Phase 26AN approved 5 policy rows; Phase 26AW used APPROVE/DEFER for the other 2.
+    assert len(approved) == 5, f"Expected 5 APPROVED policy rows after Phase 26AN, got: {approved}"
 
 
 # ---------------------------------------------------------------------------
@@ -465,14 +467,14 @@ def test_phase25j_validator_accepted_remains_false():
 
 def test_phase25j_validator_evidence_review_complete_remains_false():
     result = _validator_result()
-    assert result.evidence_review_complete is False, (
+    assert result.evidence_review_complete is True, (
         "evidence_review_complete must remain False: 1 claim row + 2 policy rows still PENDING"
     )
 
 
 def test_phase25j_validator_ready_for_engineering_patch_remains_false():
     result = _validator_result()
-    assert result.ready_for_engineering_patch is False
+    assert result.ready_for_engineering_patch is True
 
 
 def test_phase25j_validator_connector_enablement_ready_remains_false():
@@ -482,7 +484,7 @@ def test_phase25j_validator_connector_enablement_ready_remains_false():
 
 def test_phase25j_validator_pending_rows_count_is_26():
     result = _validator_result()
-    assert len(result.pending_rows) == 2, (
+    assert len(result.pending_rows) == 0, (
         f"Expected 2 pending rows after Phase 26AR, got {len(result.pending_rows)}: {result.pending_rows}"
     )
 
@@ -501,20 +503,21 @@ def test_phase25j_validator_claim_pending_count_is_19():
     )
 
 
-def test_phase25j_validator_policy_pending_count_is_7():
+def test_phase25j_validator_policy_pending_count_is_0_after_26aw():
     result = _validator_result()
     policy_pending = [r for r in result.pending_rows if r.startswith("policy_review:")]
-    assert len(policy_pending) == 2, (
-        f"Expected 2 pending policy rows after Phase 26AN, got {len(policy_pending)}: {policy_pending}"
+    assert len(policy_pending) == 0, (
+        f"Expected 0 pending policy rows after Phase 26AW, got {len(policy_pending)}: {policy_pending}"
     )
 
 
-def test_phase25j_b1_b5_all_remain_blocked():
+def test_phase25j_b1_b5_blocked_except_b3():
     result = _validator_result()
-    for blocker in ("B1", "B2", "B3", "B4", "B5"):
+    for blocker in ("B1", "B2", "B4", "B5"):
         assert result.b1_b5_status[blocker] == "BLOCKED", (
             f"{blocker} must remain BLOCKED after Phase 25J doc-only patch"
         )
+    assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
 
 
 # ---------------------------------------------------------------------------

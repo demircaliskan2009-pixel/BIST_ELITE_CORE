@@ -210,10 +210,10 @@ def test_phase25k_worksheets_unchanged() -> None:
     pending_claims = [r for r in claim_rows if r.get("decision", "").upper() == "PENDING"]
     assert len(pending_claims) == 0
 
-    # Policy: Phase 26AN approved 5 rows; 2 remain PENDING.
+    # Policy: Phase 26AN approved 5 rows; Phase 26AW resolved the remaining 2.
     assert len(policy_rows) == 7
     pending_policy = [r for r in policy_rows if r.get("decision", "").upper() == "PENDING"]
-    assert len(pending_policy) == 2
+    assert len(pending_policy) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -228,23 +228,24 @@ def test_phase25k_validator_blocked_and_pending_rows_26() -> None:
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
     assert result.accepted is False
-    assert result.evidence_review_complete is False
-    assert result.ready_for_engineering_patch is False
+    assert result.evidence_review_complete is True
+    assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 2, (
+    assert len(result.pending_rows) == 0, (
         f"Expected 2 pending rows after Phase 26AR (0 manifest + 0 claim + 2 policies), "
         f"got {len(result.pending_rows)}: {sorted(result.pending_rows)}"
     )
 
 
-def test_phase25k_b1_b5_all_blocked() -> None:
+def test_phase25k_b1_b5_blocked_except_b3() -> None:
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    for gate in ("B1", "B2", "B3", "B4", "B5"):
+    for gate in ("B1", "B2", "B4", "B5"):
         assert result.b1_b5_status[gate] == "BLOCKED", f"{gate} must remain BLOCKED after Phase 25K"
+    assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
 
 
 def test_phase25k_connector_ready_dialects_empty() -> None:

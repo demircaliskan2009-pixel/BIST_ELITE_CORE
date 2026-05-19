@@ -80,17 +80,18 @@ def test_phase26ah_no_worksheet_edits_for_new_proof_ready_rows() -> None:
 def test_phase26ah_pending_rows_remain_26_and_validator_blocked() -> None:
     result = evaluate_deribit_manual_review_readiness()
     assert result.accepted is False
-    assert result.evidence_review_complete is False
-    assert result.ready_for_engineering_patch is False
+    assert result.evidence_review_complete is True  # True after Phase 26AW
+    assert result.ready_for_engineering_patch is True  # True after Phase 26AW
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 2
+    assert len(result.pending_rows) == 0
 
 
 def test_phase26ah_connector_ready_dialects_empty_and_b1_b5_blocked() -> None:
     assert len(connector_ready_dialects()) == 0
     result = evaluate_deribit_manual_review_readiness()
-    for blocker in ("B1", "B2", "B3", "B4", "B5"):
+    for blocker in ("B1", "B2", "B4", "B5"):
         assert result.b1_b5_status[blocker] == "BLOCKED"
+    assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
 
 
 def test_phase26ah_summary_records_remaining_policy_and_legal_blockers() -> None:

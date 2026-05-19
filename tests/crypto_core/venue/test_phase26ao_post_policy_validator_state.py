@@ -37,8 +37,8 @@ def test_accepted_false(result: DeribitManualReviewReadinessResult) -> None:
     assert result.accepted is False
 
 
-def test_evidence_review_complete_false(result: DeribitManualReviewReadinessResult) -> None:
-    assert result.evidence_review_complete is False
+def test_evidence_review_complete_true(result: DeribitManualReviewReadinessResult) -> None:
+    assert result.evidence_review_complete is True  # True after Phase 26AW
 
 
 def test_connector_enablement_ready_false(result: DeribitManualReviewReadinessResult) -> None:
@@ -49,7 +49,7 @@ def test_connector_enablement_ready_false(result: DeribitManualReviewReadinessRe
 
 
 def test_pending_rows_count_is_3(result: DeribitManualReviewReadinessResult) -> None:
-    assert len(result.pending_rows) == 2, (
+    assert len(result.pending_rows) == 0, (
         f"Expected 2 pending rows after Phase 26AR, got {len(result.pending_rows)}: {result.pending_rows}"
     )
 
@@ -61,12 +61,13 @@ def test_pending_row_regional_legal_access(result: DeribitManualReviewReadinessR
     assert "claim_review:regional_legal_access" not in result.pending_rows
 
 
-def test_pending_row_regional_legal_access_review(result: DeribitManualReviewReadinessResult) -> None:
-    assert "policy_review:regional_legal_access_review" in result.pending_rows
+def test_pending_row_regional_legal_access_review_approved(result: DeribitManualReviewReadinessResult) -> None:
+    assert "policy_review:regional_legal_access_review" not in result.pending_rows
 
 
-def test_pending_row_separate_connector_enablement(result: DeribitManualReviewReadinessResult) -> None:
-    assert "policy_review:separate_connector_enablement" in result.pending_rows
+def test_pending_row_separate_connector_enablement_deferred(result: DeribitManualReviewReadinessResult) -> None:
+    assert "policy_review:separate_connector_enablement" not in result.pending_rows
+    assert "policy_review:separate_connector_enablement" in result.deferred_rows
 
 
 # --- Phase 26AN approved rows not in pending ---
@@ -115,8 +116,8 @@ def test_b2_blocked(result: DeribitManualReviewReadinessResult) -> None:
     assert result.b1_b5_status["B2"] == "BLOCKED"
 
 
-def test_b3_blocked(result: DeribitManualReviewReadinessResult) -> None:
-    assert result.b1_b5_status["B3"] == "BLOCKED"
+def test_b3_ready(result: DeribitManualReviewReadinessResult) -> None:
+    assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
 
 
 def test_b4_blocked(result: DeribitManualReviewReadinessResult) -> None:
@@ -226,13 +227,13 @@ def test_row_results_regional_legal_access_pending(result: DeribitManualReviewRe
     assert row.status == "APPROVED"
 
 
-def test_row_results_regional_legal_access_review_pending(result: DeribitManualReviewReadinessResult) -> None:
+def test_row_results_regional_legal_access_review_approved(result: DeribitManualReviewReadinessResult) -> None:
     row = next(
         (r for r in result.row_results if r.surface == "policy_review" and r.row_id == "regional_legal_access_review"),
         None,
     )
     assert row is not None
-    assert row.status == "PENDING"
+    assert row.status == "APPROVED"  # APPROVED after Phase 26AW
 
 
 def test_row_results_separate_connector_enablement_pending(result: DeribitManualReviewReadinessResult) -> None:

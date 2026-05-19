@@ -85,10 +85,10 @@ def test_phase25s_pending_counts_decrease_by_one_claim_only() -> None:
     policy_pending = [row for row in policy_rows.values() if row["decision"] == "PENDING"]
 
     assert len(claim_pending) == 0
-    assert len(policy_pending) == 2
+    assert len(policy_pending) == 0  # 0 after Phase 26AW
 
     result = evaluate_deribit_manual_review_readiness()
-    assert len(result.pending_rows) == 2
+    assert len(result.pending_rows) == 0
     assert "claim_review:change_id" not in result.pending_rows
     # Phase 26AJ later approved prev_change_id; it is no longer pending
     assert "claim_review:prev_change_id" not in result.pending_rows
@@ -98,13 +98,13 @@ def test_phase25s_validator_remains_blocked_after_change_id_only_approval() -> N
     result = evaluate_deribit_manual_review_readiness()
 
     assert result.accepted is False
-    assert result.evidence_review_complete is False
-    assert result.ready_for_engineering_patch is False
+    assert result.evidence_review_complete is True
+    assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is False
     assert result.b1_b5_status == {
         "B1": "BLOCKED",
         "B2": "BLOCKED",
-        "B3": "BLOCKED",
+        "B3": "READY",
         "B4": "BLOCKED",
         "B5": "BLOCKED",
     }

@@ -65,16 +65,16 @@ def test_phase26l_no_worksheet_edits_and_validator_remains_blocked() -> None:
     approved_claim_ids = {row["claim_id"] for row in claim_rows if row["decision"] == "APPROVED"}
     assert len(approved_claim_ids) == 23
     pending_policy = [r for r in policy_rows if r["decision"] == "PENDING"]
-    assert len(pending_policy) == 2
+    assert len(pending_policy) == 0
     assert result.accepted is False
-    assert result.evidence_review_complete is False
-    assert result.ready_for_engineering_patch is False
+    assert result.evidence_review_complete is True
+    assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 2
+    assert len(result.pending_rows) == 0
     assert result.b1_b5_status == {
         "B1": "BLOCKED",
         "B2": "BLOCKED",
-        "B3": "BLOCKED",
+        "B3": "READY",
         "B4": "BLOCKED",
         "B5": "BLOCKED",
     }

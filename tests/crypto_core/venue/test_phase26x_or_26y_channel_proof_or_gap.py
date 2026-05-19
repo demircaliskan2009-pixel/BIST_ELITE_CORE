@@ -132,20 +132,20 @@ def test_phase26y_not_connector_enablement() -> None:
 
 def test_phase26y_pending_rows_unchanged() -> None:
     result = evaluate_deribit_manual_review_readiness()
-    assert len(result.pending_rows) == 2
+    assert len(result.pending_rows) == 0
 
 
 def test_phase26y_no_worksheet_edits_and_validator_unchanged() -> None:
     result = evaluate_deribit_manual_review_readiness()
 
     assert result.accepted is False
-    assert result.evidence_review_complete is False
+    assert result.evidence_review_complete is True  # True after Phase 26AW
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 2
+    assert len(result.pending_rows) == 0
     assert result.b1_b5_status == {
         "B1": "BLOCKED",
         "B2": "BLOCKED",
-        "B3": "BLOCKED",
+        "B3": "READY",
         "B4": "BLOCKED",
         "B5": "BLOCKED",
     }

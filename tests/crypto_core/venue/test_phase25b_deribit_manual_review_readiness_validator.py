@@ -64,8 +64,8 @@ def test_current_worksheets_are_not_ready():
     )
     assert isinstance(result, DeribitManualReviewReadinessResult)
     assert result.accepted is False
-    assert result.evidence_review_complete is False
-    assert result.ready_for_engineering_patch is False
+    assert result.evidence_review_complete is True  # True after Phase 26AW
+    assert result.ready_for_engineering_patch is True  # True after Phase 26AW
     assert result.connector_enablement_ready is False
 
 
@@ -75,17 +75,18 @@ def test_current_worksheets_have_pending_rows():
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    assert len(result.pending_rows) > 0, "Expected pending rows in unreviewed worksheets"
+    assert len(result.pending_rows) == 0, "No pending rows after Phase 26AW"
 
 
-def test_current_b1_b5_all_blocked():
+def test_current_b1_b5_blocked_except_b3():
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    for blocker in ("B1", "B2", "B3", "B4", "B5"):
+    for blocker in ("B1", "B2", "B4", "B5"):
         assert result.b1_b5_status[blocker] == "BLOCKED", f"{blocker} must be BLOCKED in current repo state"
+    assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW policy signoff
 
 
 def test_current_worksheets_have_rejection_reasons():
@@ -97,13 +98,13 @@ def test_current_worksheets_have_rejection_reasons():
     assert len(result.rejection_reasons) > 0
 
 
-def test_current_worksheets_have_missing_metadata():
+def test_current_worksheets_have_no_missing_metadata():
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    assert len(result.missing_metadata) > 0
+    assert len(result.missing_metadata) == 0  # No missing metadata after Phase 26AW
 
 
 # ---------------------------------------------------------------------------
@@ -193,8 +194,8 @@ def test_pending_policy_rows_fail_closed():
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
     policy_pending = [r for r in result.pending_rows if r.startswith("policy_review:")]
-    assert len(policy_pending) == 2, (
-        f"Expected 2 pending policy rows after Phase 26AN, got {len(policy_pending)}: {policy_pending}"
+    assert len(policy_pending) == 0, (
+        f"Expected 0 pending policy rows after Phase 26AW, got {len(policy_pending)}: {policy_pending}"
     )
 
 

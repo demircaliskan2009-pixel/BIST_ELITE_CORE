@@ -134,7 +134,7 @@ def test_phase25h_does_not_add_final_reviewer_values_or_modify_worksheets():
     non_approved_claim_rows = [r for r in claim_rows if r["claim_id"] not in approved_claim_ids]
     assert len(non_approved_claim_rows) == 0
     assert len(policy_rows) == 7
-    # Phase 26AN approved 5 policy rows; 2 remain PENDING.
+    # Phase 26AN approved 5 policy rows; Phase 26AW approved regional_legal_access_review and deferred separate_connector_enablement.
     _phase26an_approved_policy = {
         "checksum_decision",
         "liveness_policy",
@@ -142,10 +142,18 @@ def test_phase25h_does_not_add_final_reviewer_values_or_modify_worksheets():
         "receive_lag_budget",
         "testnet_prod_review",
     }
-    pending_policy_rows = [r for r in policy_rows if r["policy_id"] not in _phase26an_approved_policy]
-    assert all(row["reviewer_id"] == "PENDING" for row in pending_policy_rows)
-    assert all(row["reviewed_at_iso"] == "PENDING" for row in pending_policy_rows)
-    assert all(row["decision"] == "PENDING" for row in pending_policy_rows)
+    _phase26aw_approved_policy = {"regional_legal_access_review"}
+    _phase26aw_deferred_policy = {"separate_connector_enablement"}
+    for row in policy_rows:
+        if row["policy_id"] in _phase26an_approved_policy:
+            assert row["reviewer_id"] == "demir_operator"
+            assert row["decision"] == "APPROVED"
+        elif row["policy_id"] in _phase26aw_approved_policy:
+            assert row["reviewer_id"] == "demir_operator"
+            assert row["decision"] == "APPROVE"
+        elif row["policy_id"] in _phase26aw_deferred_policy:
+            assert row["reviewer_id"] == "demir_operator"
+            assert row["decision"] == "DEFER"
 
 
 def test_phase25h_validator_and_connector_state_remain_blocked():
@@ -156,7 +164,7 @@ def test_phase25h_validator_and_connector_state_remain_blocked():
     )
 
     assert result.accepted is False
-    assert result.evidence_review_complete is False
-    assert result.ready_for_engineering_patch is False
+    assert result.evidence_review_complete is True
+    assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is False
     assert connector_ready_dialects() == ()

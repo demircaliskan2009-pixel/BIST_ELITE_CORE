@@ -40,10 +40,8 @@ APPROVED_IN_26AJ = (
 )
 
 REMAINING_PENDING = (
-    # claim_review:regional_legal_access approved in Phase 26AR (all 23 claim rows now APPROVED)
-    # Only 2 policy rows remain pending (Phase 26AN approved 5 of 7)
-    "policy_review:regional_legal_access_review",
-    "policy_review:separate_connector_enablement",
+    # After Phase 26AW, all policy rows resolved: 5 APPROVED (Phase 26AN) + 1 APPROVE + 1 DEFER
+    # No pending rows remain
 )
 
 
@@ -53,27 +51,26 @@ def _readiness():
 
 def test_phase26ak_pending_rows_is_3() -> None:
     r = _readiness()
-    assert len(r.pending_rows) == 2, (
+    assert len(r.pending_rows) == 0, (
         f"Expected 2 pending rows after Phase 26AR, got {len(r.pending_rows)}: {r.pending_rows}"
     )
 
 
 def test_phase26ak_pending_rows_exact_list() -> None:
     r = _readiness()
-    for expected in REMAINING_PENDING:
-        assert expected in r.pending_rows, f"Expected {expected!r} in pending_rows"
+    assert len(r.pending_rows) == 0, f"No pending rows after Phase 26AW, got: {r.pending_rows}"
 
 
 def test_phase26ak_accepted_false() -> None:
     assert _readiness().accepted is False
 
 
-def test_phase26ak_evidence_review_complete_false() -> None:
-    assert _readiness().evidence_review_complete is False
+def test_phase26ak_evidence_review_complete_true() -> None:
+    assert _readiness().evidence_review_complete is True  # True after Phase 26AW
 
 
-def test_phase26ak_ready_for_engineering_patch_false() -> None:
-    assert _readiness().ready_for_engineering_patch is False
+def test_phase26ak_ready_for_engineering_patch_true() -> None:
+    assert _readiness().ready_for_engineering_patch is True  # True after Phase 26AW
 
 
 def test_phase26ak_connector_enablement_ready_false() -> None:
@@ -89,8 +86,8 @@ def test_phase26ak_b2_blocked() -> None:
     assert _readiness().b1_b5_status["B2"] == "BLOCKED"
 
 
-def test_phase26ak_b3_blocked() -> None:
-    assert _readiness().b1_b5_status["B3"] == "BLOCKED"
+def test_phase26ak_b3_ready_after_26aw() -> None:
+    assert _readiness().b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW policy signoff
 
 
 def test_phase26ak_b4_blocked() -> None:
@@ -125,11 +122,11 @@ def test_phase26ak_receive_lag_budget_approved_in_phase26an() -> None:
     assert "claim_review:receive_lag_budget" not in r.pending_rows
 
 
-def test_phase26ak_policy_rows_two_still_pending() -> None:
+def test_phase26ak_policy_rows_pending_zero_after_26aw() -> None:
     r = _readiness()
     policy_pending = [p for p in r.pending_rows if p.startswith("policy_review:")]
-    assert len(policy_pending) == 2, (
-        f"Expected 2 policy pending rows after Phase 26AN, got {len(policy_pending)}: {policy_pending}"
+    assert len(policy_pending) == 0, (
+        f"Expected 0 policy pending rows after Phase 26AW, got {len(policy_pending)}: {policy_pending}"
     )
 
 
@@ -178,4 +175,4 @@ def test_phase26ak_no_orders_no_live_integration() -> None:
 def test_phase26ak_pending_rows_decreased_from_11_to_3() -> None:
     r = _readiness()
     # 11 - 9 (3 claims + 5 policies approved in Phase 26AN + Phase 26AR) = 2
-    assert len(r.pending_rows) == 2
+    assert len(r.pending_rows) == 0
