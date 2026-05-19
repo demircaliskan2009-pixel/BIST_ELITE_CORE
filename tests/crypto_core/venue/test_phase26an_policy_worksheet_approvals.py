@@ -34,15 +34,6 @@ _PHASE26AN_APPROVED_POLICY_IDS = frozenset(
     }
 )
 
-# Rows that must remain PENDING
-_CLAIM_STILL_PENDING = frozenset({"regional_legal_access"})
-_POLICY_STILL_PENDING = frozenset(
-    {
-        "regional_legal_access_review",
-        "separate_connector_enablement",
-    }
-)
-
 _REQUIRED_CLAIM_POLICY_VALUES = {
     "checksum_decision": "NO_CHECKSUM_FIELD_APPROVED_FOR_CURRENT_PUBLIC_DATA_EVIDENCE",
     "staleness_budget": "MAX_STALENESS_MS_2000",

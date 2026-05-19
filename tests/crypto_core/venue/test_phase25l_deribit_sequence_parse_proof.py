@@ -278,13 +278,6 @@ def test_phase25l_worksheets_unchanged() -> None:
     assert len(pending_claims) == 1
 
     # Policy: 5 rows APPROVED in Phase 26AN, 2 still PENDING
-    _phase26an_approved_policy = {
-        "checksum_decision",
-        "liveness_policy",
-        "staleness_budget",
-        "receive_lag_budget",
-        "testnet_prod_review",
-    }
     assert len(policy_rows) == 7
     pending_policy = [r for r in policy_rows if r.get("decision", "").upper() == "PENDING"]
     assert len(pending_policy) == 2

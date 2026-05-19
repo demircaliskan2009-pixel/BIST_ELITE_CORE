@@ -56,13 +56,6 @@ def test_phase25w_does_not_create_operator_metadata_or_worksheet_edits() -> None
     # Phase 26AJ approved 15 more rows; Phase 26AN approved 3 more; the set now has 22 approved rows
     approved_claim_ids = {row["claim_id"] for row in claim_rows if row["decision"] == "APPROVED"}
     assert len(approved_claim_ids) == 22
-    _phase26an_approved_policy = {
-        "checksum_decision",
-        "liveness_policy",
-        "staleness_budget",
-        "receive_lag_budget",
-        "testnet_prod_review",
-    }
     pending_policy = [row for row in policy_rows if row["decision"] == "PENDING"]
     assert len(pending_policy) == 2
 

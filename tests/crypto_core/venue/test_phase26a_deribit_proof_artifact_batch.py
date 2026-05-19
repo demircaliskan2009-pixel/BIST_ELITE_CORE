@@ -70,13 +70,6 @@ def test_phase26a_does_not_create_operator_proposal_or_worksheet_edits() -> None
     # Phase 26AJ approved 15 more rows; total approved = 19
     approved_claim_ids = {row["claim_id"] for row in claim_rows if row["decision"] == "APPROVED"}
     assert len(approved_claim_ids) == 22
-    _phase26an_ap = {
-        "checksum_decision",
-        "liveness_policy",
-        "staleness_budget",
-        "receive_lag_budget",
-        "testnet_prod_review",
-    }
     pending_policy = [r for r in policy_rows if r["decision"] == "PENDING"]
     assert len(pending_policy) == 2
 
