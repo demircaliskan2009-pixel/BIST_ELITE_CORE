@@ -200,14 +200,16 @@ def test_phase25k_worksheets_unchanged() -> None:
             "continuity_condition",
         }
     )
+    _PHASE26AN_APPROVED: frozenset[str] = frozenset({"checksum_decision", "staleness_budget", "receive_lag_budget"})
     approved_claim_ids = {r["claim_id"] for r in claim_rows if r.get("decision", "").upper() in ("APPROVE", "APPROVED")}
-    assert approved_claim_ids == set(_APPROVED_AFTER_PHASE25R) | _PHASE26AJ_APPROVED
+    assert approved_claim_ids == set(_APPROVED_AFTER_PHASE25R) | _PHASE26AJ_APPROVED | _PHASE26AN_APPROVED
     pending_claims = [r for r in claim_rows if r.get("decision", "").upper() == "PENDING"]
-    assert len(pending_claims) == 4
+    assert len(pending_claims) == 1
 
-    # Policy: all 7 rows PENDING (no policy has been approved)
+    # Policy: Phase 26AN approved 5 rows; 2 remain PENDING.
     assert len(policy_rows) == 7
-    assert all(r.get("decision", "").upper() == "PENDING" for r in policy_rows)
+    pending_policy = [r for r in policy_rows if r.get("decision", "").upper() == "PENDING"]
+    assert len(pending_policy) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -225,8 +227,8 @@ def test_phase25k_validator_blocked_and_pending_rows_26() -> None:
     assert result.evidence_review_complete is False
     assert result.ready_for_engineering_patch is False
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 11, (
-        f"Expected 26 pending rows (0 manifest + 4 claims + 7 policies), "
+    assert len(result.pending_rows) == 3, (
+        f"Expected 3 pending rows after Phase 26AN (0 manifest + 1 claim + 2 policies), "
         f"got {len(result.pending_rows)}: {sorted(result.pending_rows)}"
     )
 

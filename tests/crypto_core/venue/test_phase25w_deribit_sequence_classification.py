@@ -53,10 +53,11 @@ def test_phase25w_does_not_create_operator_metadata_or_worksheet_edits() -> None
 
     assert "No reviewer_id or reviewed_at_iso value is filled." in doc
     assert "No Phase 25X operator-fill proposal is created" in doc
-    # Phase 26AJ approved 15 more rows; the set now has 19 approved rows
+    # Phase 26AJ approved 15 more rows; Phase 26AN approved 3 more; the set now has 22 approved rows
     approved_claim_ids = {row["claim_id"] for row in claim_rows if row["decision"] == "APPROVED"}
-    assert len(approved_claim_ids) == 19
-    assert all(row["decision"] == "PENDING" for row in policy_rows)
+    assert len(approved_claim_ids) == 22
+    pending_policy = [row for row in policy_rows if row["decision"] == "PENDING"]
+    assert len(pending_policy) == 2
 
 
 def test_phase25w_validator_remains_blocked_with_26_pending_rows() -> None:
@@ -66,7 +67,7 @@ def test_phase25w_validator_remains_blocked_with_26_pending_rows() -> None:
     assert result.evidence_review_complete is False
     assert result.ready_for_engineering_patch is False
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 11
+    assert len(result.pending_rows) == 3
     # Phase 26AJ later approved prev_change_id and continuity_condition
     assert "claim_review:prev_change_id" not in result.pending_rows
     assert "claim_review:continuity_condition" not in result.pending_rows

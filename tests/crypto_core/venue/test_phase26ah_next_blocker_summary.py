@@ -83,7 +83,7 @@ def test_phase26ah_pending_rows_remain_26_and_validator_blocked() -> None:
     assert result.evidence_review_complete is False
     assert result.ready_for_engineering_patch is False
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 11
+    assert len(result.pending_rows) == 3
 
 
 def test_phase26ah_connector_ready_dialects_empty_and_b1_b5_blocked() -> None:

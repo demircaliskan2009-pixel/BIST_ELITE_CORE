@@ -62,7 +62,10 @@ _PHASE26AJ_APPROVED_CLAIM_IDS: frozenset[str] = frozenset(
     }
 )
 _CURRENT_APPROVED_CLAIM_IDS: frozenset[str] = (
-    _PHASE25I_APPROVED_CLAIM_IDS | _PHASE25R_APPROVED_CLAIM_IDS | _PHASE26AJ_APPROVED_CLAIM_IDS
+    _PHASE25I_APPROVED_CLAIM_IDS
+    | _PHASE25R_APPROVED_CLAIM_IDS
+    | _PHASE26AJ_APPROVED_CLAIM_IDS
+    | frozenset({"checksum_decision", "staleness_budget", "receive_lag_budget"})  # Phase 26AN
 )
 
 # ---------------------------------------------------------------------------
@@ -94,7 +97,10 @@ _REMAINING_CLAIM_IDS: frozenset[str] = frozenset(
     }
 )
 _CURRENT_PENDING_CLAIM_IDS: frozenset[str] = (
-    _REMAINING_CLAIM_IDS - _PHASE25R_APPROVED_CLAIM_IDS - _PHASE26AJ_APPROVED_CLAIM_IDS
+    _REMAINING_CLAIM_IDS
+    - _PHASE25R_APPROVED_CLAIM_IDS
+    - _PHASE26AJ_APPROVED_CLAIM_IDS
+    - frozenset({"checksum_decision", "staleness_budget", "receive_lag_budget"})  # Phase 26AN
 )
 
 # ---------------------------------------------------------------------------
@@ -395,9 +401,9 @@ def test_phase25j_manifest_no_pending_rows():
 def test_phase25j_claim_worksheet_approved_count_is_4():
     rows = _claim_worksheet_rows()
     approved = [cid for cid, row in rows.items() if row.get("decision") == "APPROVED"]
-    # Phase 26AJ later approved 15 more rows; total = 19.
-    assert len(approved) == 19, (
-        f"Expected exactly 19 approved claim rows after Phase 26AJ, got {len(approved)}: {approved}"
+    # Phase 26AJ approved 15 more rows, Phase 26AN approved 3 more; total = 22.
+    assert len(approved) == 22, (
+        f"Expected exactly 22 approved claim rows after Phase 26AN, got {len(approved)}: {approved}"
     )
 
 
@@ -423,7 +429,16 @@ def test_phase25j_claim_worksheet_remaining_19_rows_still_pending():
 def test_phase25j_policy_worksheet_all_rows_pending():
     rows = _policy_rows()
     assert len(rows) == 7, f"Expected 7 policy rows, got {len(rows)}"
-    for policy_id, row in rows.items():
+    # Phase 26AN approved 5 policy rows; 2 remain PENDING.
+    _phase26an_approved = {
+        "checksum_decision",
+        "liveness_policy",
+        "staleness_budget",
+        "receive_lag_budget",
+        "testnet_prod_review",
+    }
+    pending_rows = {pid: row for pid, row in rows.items() if pid not in _phase26an_approved}
+    for policy_id, row in pending_rows.items():
         assert row.get("decision") == "PENDING", (
             f"Policy row {policy_id!r} must remain PENDING; got {row.get('decision')!r}"
         )
@@ -432,7 +447,8 @@ def test_phase25j_policy_worksheet_all_rows_pending():
 def test_phase25j_policy_worksheet_approved_count_is_0():
     rows = _policy_rows()
     approved = [pid for pid, row in rows.items() if row.get("decision") == "APPROVED"]
-    assert approved == [], f"Expected 0 approved policy rows, got: {approved}"
+    # Phase 26AN approved 5 policy rows.
+    assert len(approved) == 5, f"Expected 5 approved policy rows after Phase 26AN, got: {approved}"
 
 
 # ---------------------------------------------------------------------------
@@ -448,7 +464,7 @@ def test_phase25j_validator_accepted_remains_false():
 def test_phase25j_validator_evidence_review_complete_remains_false():
     result = _validator_result()
     assert result.evidence_review_complete is False, (
-        "evidence_review_complete must remain False: 4 claim rows + 7 policy rows still PENDING"
+        "evidence_review_complete must remain False: 1 claim row + 2 policy rows still PENDING"
     )
 
 
@@ -464,8 +480,8 @@ def test_phase25j_validator_connector_enablement_ready_remains_false():
 
 def test_phase25j_validator_pending_rows_count_is_26():
     result = _validator_result()
-    assert len(result.pending_rows) == 11, (
-        f"Expected 26 pending rows after Phase 25R, got {len(result.pending_rows)}: {result.pending_rows}"
+    assert len(result.pending_rows) == 3, (
+        f"Expected 3 pending rows after Phase 26AN, got {len(result.pending_rows)}: {result.pending_rows}"
     )
 
 
@@ -478,13 +494,17 @@ def test_phase25j_validator_manifest_pending_count_is_0():
 def test_phase25j_validator_claim_pending_count_is_19():
     result = _validator_result()
     claim_pending = [r for r in result.pending_rows if r.startswith("claim_review:")]
-    assert len(claim_pending) == 4, f"Expected 4 pending claim rows, got {len(claim_pending)}: {claim_pending}"
+    assert len(claim_pending) == 1, (
+        f"Expected 1 pending claim row after Phase 26AN, got {len(claim_pending)}: {claim_pending}"
+    )
 
 
 def test_phase25j_validator_policy_pending_count_is_7():
     result = _validator_result()
     policy_pending = [r for r in result.pending_rows if r.startswith("policy_review:")]
-    assert len(policy_pending) == 7, f"Expected 7 pending policy rows, got {len(policy_pending)}: {policy_pending}"
+    assert len(policy_pending) == 2, (
+        f"Expected 2 pending policy rows after Phase 26AN, got {len(policy_pending)}: {policy_pending}"
+    )
 
 
 def test_phase25j_b1_b5_all_remain_blocked():
