@@ -80,17 +80,14 @@ def test_current_deribit_claim_review_rows_are_not_approved():
             }
         )
         | frozenset({"checksum_decision", "staleness_budget", "receive_lag_budget"})
+        | frozenset({"regional_legal_access"})
     )
 
     assert set(rows) == REQUIRED_CLAIM_IDS
     assert {row["operational_readiness_effect"] for row in rows.values()} == {"LEAVES_BLOCKER"}
     non_approved = {cid: row for cid, row in rows.items() if cid not in approved_claim_ids}
-    # 1 row remains PENDING after Phase 26AN: regional_legal_access
-    assert len(non_approved) == 1
-    assert {row["review_status"] for row in non_approved.values()} == {"PENDING"}
-    assert {row["decision"] for row in non_approved.values()} == {"PENDING"}
-    assert all(row["reviewer_id"] == "PENDING" for row in non_approved.values())
-    assert all(row["reviewed_at_iso"] == "PENDING" for row in non_approved.values())
+    # 0 rows remain PENDING after Phase 26AR: all 23 claim rows approved
+    assert len(non_approved) == 0
 
 
 def test_current_deribit_claim_reviews_cannot_satisfy_operational_readiness():
@@ -106,18 +103,16 @@ def test_current_deribit_claim_reviews_cannot_satisfy_operational_readiness():
         required_fields=_requirements_from_claim_review_aggregate(aggregate),
     )
 
-    # Phase 26AN approved 3 more claim rows; 1 remains PENDING (regional_legal_access); aggregate + readiness remain blocked.
+    # Phase 26AR approved all 23 claim rows; aggregate is now accepted; readiness still blocked (package+verification missing).
     rejected_results = [r for r in results if not r.accepted]
-    assert len(rejected_results) == 1
-    assert aggregate.accepted is False
-    assert aggregate.review_status is OfficialClaimReviewStatus.PENDING
-    assert "official_claim_review:pending" in aggregate.rejection_reasons
-    assert official_claim_review_ready(aggregate) is False
+    assert len(rejected_results) == 0
+    assert aggregate.accepted is True
+    assert aggregate.review_status is OfficialClaimReviewStatus.APPROVED
+    assert official_claim_review_ready(aggregate) is True
     assert readiness.accepted is False
     assert operational_evidence_ready(readiness) is False
-    assert "operational_evidence:manual_review_missing" in readiness.rejection_reasons
-    assert "operational_evidence:checksum_decision_missing" in readiness.rejection_reasons
-    assert "operational_evidence:heartbeat_unknown" in readiness.rejection_reasons
+    assert "operational_evidence:package_missing" in readiness.rejection_reasons
+    assert "operational_evidence:verification_missing" in readiness.rejection_reasons
 
 
 def test_manual_approval_and_operational_status_remain_blocked_in_docs():

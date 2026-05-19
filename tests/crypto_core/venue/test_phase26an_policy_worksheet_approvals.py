@@ -126,10 +126,12 @@ def test_claim_receive_lag_budget_approved(claim_rows_by_id: dict[str, dict[str,
     assert row["decision"].upper() == "APPROVED"
 
 
-def test_claim_regional_legal_access_still_pending(claim_rows_by_id: dict[str, dict[str, str]]) -> None:
+def test_claim_regional_legal_access_approved_in_phase26ar(claim_rows_by_id: dict[str, dict[str, str]]) -> None:
     row = claim_rows_by_id.get("regional_legal_access")
     assert row is not None
-    assert row.get("decision", "").upper() == "PENDING", "regional_legal_access claim must remain PENDING"
+    assert row.get("decision", "").upper() == "APPROVED", (
+        "regional_legal_access claim must be APPROVED after Phase 26AR"
+    )
 
 
 def test_claim_phase26an_policy_values_present(claim_rows_by_id: dict[str, dict[str, str]]) -> None:

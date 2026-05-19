@@ -43,7 +43,10 @@ _PHASE26AJ_APPROVED = {
     "continuity_condition",
 }
 _PHASE26AN_APPROVED = frozenset({"checksum_decision", "staleness_budget", "receive_lag_budget"})
-_EXPECTED_APPROVED = _PHASE25I_APPROVED | _PHASE25R_APPROVED | _PHASE26AJ_APPROVED | _PHASE26AN_APPROVED
+_PHASE26AR_APPROVED = frozenset({"regional_legal_access"})
+_EXPECTED_APPROVED = (
+    _PHASE25I_APPROVED | _PHASE25R_APPROVED | _PHASE26AJ_APPROVED | _PHASE26AN_APPROVED | _PHASE26AR_APPROVED
+)
 
 
 def _claim_rows() -> dict[str, dict[str, str]]:
@@ -81,11 +84,11 @@ def test_phase25s_pending_counts_decrease_by_one_claim_only() -> None:
     claim_pending = [row for row in claim_rows.values() if row["decision"] == "PENDING"]
     policy_pending = [row for row in policy_rows.values() if row["decision"] == "PENDING"]
 
-    assert len(claim_pending) == 1
+    assert len(claim_pending) == 0
     assert len(policy_pending) == 2
 
     result = evaluate_deribit_manual_review_readiness()
-    assert len(result.pending_rows) == 3
+    assert len(result.pending_rows) == 2
     assert "claim_review:change_id" not in result.pending_rows
     # Phase 26AJ later approved prev_change_id; it is no longer pending
     assert "claim_review:prev_change_id" not in result.pending_rows

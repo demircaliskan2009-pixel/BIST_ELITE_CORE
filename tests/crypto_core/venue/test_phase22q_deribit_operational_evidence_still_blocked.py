@@ -45,12 +45,11 @@ def test_current_deribit_claim_reviews_are_not_accepted():
 
     assert results
     # Phase 25I approved 3 rows, Phase 25R approved change_id, Phase 26AJ approved 15 technical rows,
-    # Phase 26AN approved 3 more; 1 row remains rejected (regional_legal_access).
+    # Phase 26AN approved 3 more, Phase 26AR approved regional_legal_access; all 23 rows accepted.
     rejected = [r for r in results if not r.accepted]
     accepted = [r for r in results if r.accepted]
-    assert len(rejected) == 1
-    assert len(accepted) == 22
-    assert all("official_claim_review:pending" in r.rejection_reasons for r in rejected)
+    assert len(rejected) == 0
+    assert len(accepted) == 23
 
 
 def test_current_deribit_required_policies_are_missing_or_pending():
@@ -70,12 +69,7 @@ def test_current_deribit_operational_evidence_acceptance_rejects():
     assert result.accepted is False
     assert operational_evidence_acceptance_ready(result) is False
     assert "operational_evidence:source_snapshot_rejected" in result.rejection_reasons
-    assert "operational_evidence:claim_review_rejected" in result.rejection_reasons
-    assert "operational_policy:checksum_decision_missing" in result.rejection_reasons
-    assert "operational_policy:liveness_policy_missing" in result.rejection_reasons
-    assert "operational_policy:staleness_budget_missing" in result.rejection_reasons
-    assert "operational_policy:receive_lag_budget_missing" in result.rejection_reasons
-    assert "operational_policy:testnet_prod_review_missing" in result.rejection_reasons
+    # claim_review_rejected no longer present after Phase 26AR approved all 23 claim rows
     assert "operational_policy:regional_legal_access_review_missing" in result.rejection_reasons
 
 

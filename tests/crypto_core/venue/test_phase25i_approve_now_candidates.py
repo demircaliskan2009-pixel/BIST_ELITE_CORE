@@ -158,14 +158,22 @@ def test_phase25i_non_approved_claim_rows_remain_pending():
     rows = {row["claim_id"]: row for row in _claim_rows()}
     non_approved = {cid: row for cid, row in rows.items() if cid not in _APPROVED_CLAIM_IDS}
     # Phase 26AJ later approved the WAIT_INSUFFICIENT rows; Phase 26AN approved WAIT_POLICY claim rows;
-    # only WAIT_LEGAL (regional_legal_access) remains PENDING.
+    # Phase 26AR approved WAIT_LEGAL (regional_legal_access) — now APPROVED.
     wait_legal_only = _WAIT_LEGAL_CLAIM_IDS
     still_pending = {cid: row for cid, row in non_approved.items() if cid in wait_legal_only}
-    assert len(still_pending) == 1, f"Expected 1 still-pending claim row after Phase 26AN, got {len(still_pending)}"
+    assert len(still_pending) == 1, (
+        f"Expected 1 WAIT_LEGAL claim row (now approved) after Phase 26AR, got {len(still_pending)}"
+    )
     for claim_id, row in still_pending.items():
-        assert row["reviewer_id"] == "PENDING", f"Non-approved claim {claim_id!r} reviewer_id must be PENDING"
-        assert row["reviewed_at_iso"] == "PENDING", f"Non-approved claim {claim_id!r} reviewed_at_iso must be PENDING"
-        assert row["decision"] == "PENDING", f"Non-approved claim {claim_id!r} decision must be PENDING"
+        assert row["reviewer_id"] == "demir_operator", (
+            f"WAIT_LEGAL claim {claim_id!r} reviewer_id must be demir_operator"
+        )
+        assert row["reviewed_at_iso"] == "2026-05-19T00:00:00Z", (
+            f"WAIT_LEGAL claim {claim_id!r} reviewed_at_iso must be 2026-05-19T00:00:00Z"
+        )
+        assert row["decision"] == "APPROVED", (
+            f"WAIT_LEGAL claim {claim_id!r} decision must be APPROVED after Phase 26AR"
+        )
 
 
 def test_phase25i_wait_policy_claim_rows_approved_in_phase26an():
@@ -177,11 +185,11 @@ def test_phase25i_wait_policy_claim_rows_approved_in_phase26an():
         )
 
 
-def test_phase25i_wait_legal_claim_row_remains_pending():
+def test_phase25i_wait_legal_claim_row_now_approved_in_phase26ar():
     rows = {row["claim_id"]: row for row in _claim_rows()}
     for claim_id in _WAIT_LEGAL_CLAIM_IDS:
-        assert rows[claim_id]["decision"] == "PENDING"
-        assert rows[claim_id]["reviewer_id"] == "PENDING"
+        assert rows[claim_id]["decision"] == "APPROVED"
+        assert rows[claim_id]["reviewer_id"] == "demir_operator"
 
 
 def test_phase25i_wait_insufficient_claim_rows_remain_pending():
@@ -268,10 +276,10 @@ def test_phase25i_validator_connector_enablement_ready_remains_false():
 
 
 def test_phase25i_validator_pending_rows_count_is_26():
-    """After Phase 26AN: 0 manifest pending + 1 claim pending + 2 policy pending = 3."""
+    """After Phase 26AR: 0 manifest pending + 0 claim pending + 2 policy pending = 2."""
     result = _validator_result()
-    assert len(result.pending_rows) == 3, (
-        f"Expected 3 pending rows after Phase 26AN, got {len(result.pending_rows)}: {result.pending_rows}"
+    assert len(result.pending_rows) == 2, (
+        f"Expected 2 pending rows after Phase 26AR, got {len(result.pending_rows)}: {result.pending_rows}"
     )
 
 
@@ -295,8 +303,8 @@ def test_phase25i_approved_claim_rows_not_in_pending_rows():
 def test_phase25i_non_approved_claim_rows_still_in_pending_rows():
     result = _validator_result()
     claim_pending = {r for r in result.pending_rows if r.startswith("claim_review:")}
-    assert len(claim_pending) == 1, (
-        f"Expected 1 pending claim row after Phase 26AN, got {len(claim_pending)}: {claim_pending}"
+    assert len(claim_pending) == 0, (
+        f"Expected 0 pending claim rows after Phase 26AR, got {len(claim_pending)}: {claim_pending}"
     )
 
 

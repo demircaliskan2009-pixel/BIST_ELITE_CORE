@@ -68,7 +68,7 @@ def test_phase26c_validator_state_matches_summary() -> None:
     assert result.evidence_review_complete is False
     assert result.ready_for_engineering_patch is False
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 3
+    assert len(result.pending_rows) == 2
     assert result.b1_b5_status == {
         "B1": "BLOCKED",
         "B2": "BLOCKED",

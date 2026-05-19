@@ -85,11 +85,14 @@ def test_every_claim_row_has_expected_review_fields_and_hash():
             "receive_lag_budget",
         }
     )
+    # Phase 26AR approved the regional_legal_access claim row.
+    phase26ar_approved_claim_ids = frozenset({"regional_legal_access"})
     approved_claim_ids = (
         phase25i_approved_claim_ids
         | phase25r_approved_claim_ids
         | phase26aj_approved_claim_ids
         | phase26an_approved_claim_ids
+        | phase26ar_approved_claim_ids
     )
     for claim_id, row in _worksheet_rows().items():
         assert row["claim_id"] == claim_id
@@ -108,6 +111,9 @@ def test_every_claim_row_has_expected_review_fields_and_hash():
             elif claim_id in phase26aj_approved_claim_ids:
                 assert row["reviewed_at_iso"] == "2026-05-19T00:00:00Z"
                 assert "Phase26AI_OFFICIAL_DOCS_TECHNICAL_ROWS_ONLY" in row["rejection_reason_if_pending"]
+            elif claim_id in phase26ar_approved_claim_ids:
+                assert row["reviewed_at_iso"] == "2026-05-19T00:00:00Z"
+                assert "Phase26AR_TURKEY_PUBLIC_MARKET_DATA_ONLY" in row["rejection_reason_if_pending"]
             else:
                 assert row["reviewed_at_iso"] == "2026-05-11T00:00:00Z"
                 expected_scope = (

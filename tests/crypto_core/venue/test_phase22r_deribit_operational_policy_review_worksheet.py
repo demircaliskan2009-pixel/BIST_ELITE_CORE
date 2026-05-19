@@ -132,7 +132,7 @@ def test_operational_evidence_acceptance_cannot_pass_current_deribit_policy_rows
     assert result.accepted is False
     assert operational_evidence_acceptance_ready(result) is False
     assert "operational_evidence:source_snapshot_rejected" in result.rejection_reasons
-    assert "operational_evidence:claim_review_rejected" in result.rejection_reasons
+    # claim_review_rejected no longer present after Phase 26AR approved all 23 claim rows
     # Phase 26AN approved these 5 policy rows — they must NOT appear as missing.
     assert "operational_policy:checksum_decision_missing" not in result.rejection_reasons
     assert "operational_policy:liveness_policy_missing" not in result.rejection_reasons

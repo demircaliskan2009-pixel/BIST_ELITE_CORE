@@ -105,7 +105,7 @@ def test_phase25h_does_not_add_final_reviewer_values_or_modify_worksheets():
     assert all(row["retrieval_status"] == "REVIEWED_APPROVED" for row in manifest_rows)
     assert len(claim_rows) == 23
     # Phase 25I approved 3 claim rows, Phase 25R approved change_id, Phase 26AJ approved 15 more,
-    # Phase 26AN approved 3 more; 1 remains PENDING (regional_legal_access).
+    # Phase 26AN approved 3 more, Phase 26AR approved regional_legal_access; 0 remain PENDING.
     approved_claim_ids = {
         "public_websocket_availability",
         "unauthenticated_public_market_data",
@@ -129,12 +129,10 @@ def test_phase25h_does_not_add_final_reviewer_values_or_modify_worksheets():
         "checksum_decision",
         "staleness_budget",
         "receive_lag_budget",
+        "regional_legal_access",
     }
     non_approved_claim_rows = [r for r in claim_rows if r["claim_id"] not in approved_claim_ids]
-    assert len(non_approved_claim_rows) == 1
-    assert all(row["reviewer_id"] == "PENDING" for row in non_approved_claim_rows)
-    assert all(row["reviewed_at_iso"] == "PENDING" for row in non_approved_claim_rows)
-    assert all(row["decision"] == "PENDING" for row in non_approved_claim_rows)
+    assert len(non_approved_claim_rows) == 0
     assert len(policy_rows) == 7
     # Phase 26AN approved 5 policy rows; 2 remain PENDING.
     _phase26an_approved_policy = {
