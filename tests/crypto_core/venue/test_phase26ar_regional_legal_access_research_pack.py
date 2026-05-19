@@ -6,6 +6,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RESEARCH_PACK_PATH = REPO_ROOT / "docs" / "crypto_core" / "DERIBIT_REGIONAL_LEGAL_ACCESS_RESEARCH_PACK_26AR.md"
+MANIFEST_PATH = (
+    REPO_ROOT
+    / "docs"
+    / "crypto_core"
+    / "official_sources"
+    / "deribit"
+    / "20260510"
+    / "DERIBIT_SOURCE_SNAPSHOT_MANIFEST.md"
+)
 
 
 def _content() -> str:
@@ -50,10 +59,22 @@ def test_phase26ar_public_data_geo_safe_harbor_limitation() -> None:
     assert "NO_EXPLICIT_PUBLIC_DATA_GEO_SAFE_HARBOR" in _content()
 
 
-def test_phase26ar_market_data_personal_use_limitation() -> None:
+def test_phase26ar_unhashed_terms_and_llms_excluded_from_evidence() -> None:
     content = _content()
-    assert "MARKET_DATA_PERSONAL_USE_ONLY_WITHOUT_PRIOR_WRITTEN_APPROVAL" in content
-    assert "personal use" in content.lower() or "personal-use" in content.lower()
+    assert "UNHASHED_TERMS_AND_LLMS_SOURCES_EXCLUDED_FROM_APPROVAL_EVIDENCE" in content
+    assert "`DERIBIT_TERMS" not in content
+    assert "`DERIBIT_DOCS_LLMS`" not in content
+    assert "not use Terms or `llms.txt` as evidence" in content
+
+
+def test_phase26ar_official_sources_are_manifest_rows() -> None:
+    content = _content()
+    manifest = MANIFEST_PATH.read_text(encoding="utf-8")
+    for source_id in ("DERIBIT_RESTRICTED", "DERIBIT_ENVIRONMENT"):
+        assert f"`{source_id}`" in content
+        assert f"`{source_id}`" in manifest
+    for excluded_source in ("DERIBIT_TERMS_PANAMA", "DERIBIT_TERMS_FZE", "DERIBIT_DOCS_LLMS"):
+        assert f"`{excluded_source}`" not in content
 
 
 def test_phase26ar_non_legal_advice_warning_present() -> None:

@@ -54,7 +54,7 @@ scope=<OPERATOR_REQUIRED>
 1. **Phase 26AR Research Pack**: `DERIBIT_REGIONAL_LEGAL_ACCESS_RESEARCH_PACK_26AR.md`
    - Turkey not listed in restricted jurisdictions (Phase 22L snapshot)
    - Unauthenticated public API documented
-   - Market data personal-use limitation noted
+   - Terms and `llms.txt` sources excluded because they are not manifest rows
    - No Turkey-specific legal clearance found
 
 2. **Phase 26AS Proof Batch**: `DERIBIT_REGIONAL_LEGAL_ACCESS_PROOF_BATCH_26AS.md`
@@ -73,8 +73,8 @@ The operator signoff is subject to the following hard constraints:
 
 1. The signoff applies only to `PUBLIC_MARKET_DATA_ONLY` access.
 2. No private API, no credentials, no order submission.
-3. Market data use is restricted to personal use per Deribit ToS unless
-   prior written Deribit approval is obtained.
+3. Terms of Service, redistribution, commercial-use, and derived-data questions
+   are outside this manifest-tied evidence pack unless separately reviewed.
 4. No connector enablement, no `public_feed_dialects.py` change.
 5. No `static_registry_verified` change.
 6. The `separate_connector_enablement` row is NOT covered by this signoff.

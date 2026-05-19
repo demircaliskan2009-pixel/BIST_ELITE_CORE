@@ -20,6 +20,7 @@ VERDICT=TURKEY_PUBLIC_MARKET_DATA_DOCS_CLEAR_ENOUGH_FOR_OPERATOR_REVIEW
 TURKEY_RESTRICTED_STATUS=NO
 PUBLIC_MARKET_DATA_RESTRICTION_STATUS=UNCLEAR_NO_EXPLICIT_SEPARATE_PUBLIC_DATA_GEO_BAN_FOUND
 UNAUTH_PUBLIC_API_STATUS=YES
+UNHASHED_TERMS_AND_LLMS_SOURCES_USED=NO
 REGIONAL_LEGAL_ACCESS_ROW=LEGAL_DOC_PROOF_READY_NOT_APPROVED
 REGIONAL_LEGAL_ACCESS_REVIEW_ROW=LEGAL_REVIEW_READY_FOR_OPERATOR_SIGNOFF
 SEPARATE_CONNECTOR_ENABLEMENT_ROW=DEFER_SEPARATE_PHASE
@@ -37,11 +38,11 @@ CONFIDENCE=MEDIUM
 |---|---|---|
 | `DERIBIT_RESTRICTED` | `https://docs.deribit.com/#restricted-countries` | Restricted Jurisdictions page |
 | `DERIBIT_ENVIRONMENT` | `https://docs.deribit.com/#json-rpc-over-websocket` | JSON-RPC Protocol (unauthenticated public API) |
-| `DERIBIT_TERMS_PANAMA` | `https://www.deribit.com/kb/terms` | DRB Panama Inc. Terms of Service |
-| `DERIBIT_TERMS_FZE` | `https://www.deribit.com/kb/terms` | Deribit FZE Terms of Service |
-| `DERIBIT_DOCS_LLMS` | `https://docs.deribit.com/llms.txt` | Public API documentation index (unauthenticated access confirmed) |
 
-All source URLs are already listed in the Phase 22L source snapshot manifest.
+All source URLs above are listed in the Phase 22L source snapshot manifest.
+Terms of Service pages and `llms.txt` are intentionally excluded from the
+approval evidence path because they are not rows in the committed Phase 22L
+source snapshot manifest.
 
 ---
 
@@ -106,21 +107,20 @@ cannot be derived solely from the absence of Turkey in the restricted list.
 
 ---
 
-## Limitation L-3: Market Data Personal-Use-Only Without Prior Written Approval
+## Limitation L-3: Unhashed Terms/llms Sources Excluded
 
-MARKET_DATA_PERSONAL_USE_ONLY_WITHOUT_PRIOR_WRITTEN_APPROVAL
+UNHASHED_TERMS_AND_LLMS_SOURCES_EXCLUDED_FROM_APPROVAL_EVIDENCE
 
-The Deribit Terms of Service (both DRB Panama and Deribit FZE variants)
-contain provisions that market data and derived data are for personal use
-only unless prior written approval has been obtained from Deribit. Any
-redistribution, commercial use, or bulk data extraction requires
-separate written authorization.
+The Phase 22L source snapshot manifest contains only the six hashed
+`docs.deribit.com` source rows. It does not contain Terms of Service pages or
+`llms.txt`. Therefore Phase 26AR does not use Terms or `llms.txt` as evidence
+for approving the `regional_legal_access` claim row.
 
-**Impact**: This limitation applies to the operator claim review. The
-`regional_legal_access` claim row approval is scoped to
-`PUBLIC_MARKET_DATA_ONLY` with no login, no private API, no orders,
-and no live execution. Redistribution and commercial data use are
-explicitly excluded from this scope.
+**Impact**: The claim row approval is limited to the hashed manifest evidence:
+restricted-jurisdiction documentation plus unauthenticated public API
+documentation. Any Terms of Service, redistribution, commercial-use, or
+derived-data question remains outside this evidence pack and requires separate
+operator/legal review before use.
 
 ---
 
@@ -141,7 +141,7 @@ This research pack does not provide real-time legal monitoring.
 | Unauthenticated public API documented | YES |
 | Turkey-specific legal clearance | NOT FOUND |
 | Public-data-only geo safe harbor | NOT FOUND |
-| Market data personal-use limitation | YES |
+| Terms/llms evidence used | NO_UNHASHED_SOURCES_EXCLUDED |
 | Can approve claim row with scope limits | YES_WITH_OPERATOR_METADATA |
 | Can approve policy legal review row automatically | NO |
 | Can enable connector | NO |

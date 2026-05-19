@@ -41,7 +41,8 @@ classification for each row prior to operator review.
   (`source_sha256: a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd`).
 - Unauthenticated public WebSocket API is documented and confirmed.
 - No Turkey-specific affirmative legal clearance exists.
-- Market data is personal-use-only without prior written Deribit approval.
+- Terms of Service and `llms.txt` sources are not used because they are not
+  source rows in the committed Phase 22L manifest.
 
 **Approval scope if approved**:
 `Phase26AR_TURKEY_PUBLIC_MARKET_DATA_ONLY_NO_LOGIN_NO_PRIVATE_API_NO_ORDERS_NO_LIVE`
