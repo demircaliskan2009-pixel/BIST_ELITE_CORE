@@ -66,6 +66,7 @@ _CURRENT_APPROVED_CLAIM_IDS: frozenset[str] = (
     | _PHASE25R_APPROVED_CLAIM_IDS
     | _PHASE26AJ_APPROVED_CLAIM_IDS
     | frozenset({"checksum_decision", "staleness_budget", "receive_lag_budget"})  # Phase 26AN
+    | frozenset({"regional_legal_access"})  # Phase 26AR
 )
 
 # ---------------------------------------------------------------------------
@@ -101,6 +102,7 @@ _CURRENT_PENDING_CLAIM_IDS: frozenset[str] = (
     - _PHASE25R_APPROVED_CLAIM_IDS
     - _PHASE26AJ_APPROVED_CLAIM_IDS
     - frozenset({"checksum_decision", "staleness_budget", "receive_lag_budget"})  # Phase 26AN
+    - frozenset({"regional_legal_access"})  # Phase 26AR
 )
 
 # ---------------------------------------------------------------------------
@@ -401,9 +403,9 @@ def test_phase25j_manifest_no_pending_rows():
 def test_phase25j_claim_worksheet_approved_count_is_4():
     rows = _claim_worksheet_rows()
     approved = [cid for cid, row in rows.items() if row.get("decision") == "APPROVED"]
-    # Phase 26AJ approved 15 more rows, Phase 26AN approved 3 more; total = 22.
-    assert len(approved) == 22, (
-        f"Expected exactly 22 approved claim rows after Phase 26AN, got {len(approved)}: {approved}"
+    # Phase 26AJ approved 15 more rows, Phase 26AN approved 3 more, Phase 26AR approved regional_legal_access; total = 23.
+    assert len(approved) == 23, (
+        f"Expected exactly 23 approved claim rows after Phase 26AR, got {len(approved)}: {approved}"
     )
 
 
@@ -480,8 +482,8 @@ def test_phase25j_validator_connector_enablement_ready_remains_false():
 
 def test_phase25j_validator_pending_rows_count_is_26():
     result = _validator_result()
-    assert len(result.pending_rows) == 3, (
-        f"Expected 3 pending rows after Phase 26AN, got {len(result.pending_rows)}: {result.pending_rows}"
+    assert len(result.pending_rows) == 2, (
+        f"Expected 2 pending rows after Phase 26AR, got {len(result.pending_rows)}: {result.pending_rows}"
     )
 
 
@@ -494,8 +496,8 @@ def test_phase25j_validator_manifest_pending_count_is_0():
 def test_phase25j_validator_claim_pending_count_is_19():
     result = _validator_result()
     claim_pending = [r for r in result.pending_rows if r.startswith("claim_review:")]
-    assert len(claim_pending) == 1, (
-        f"Expected 1 pending claim row after Phase 26AN, got {len(claim_pending)}: {claim_pending}"
+    assert len(claim_pending) == 0, (
+        f"Expected 0 pending claim rows after Phase 26AR, got {len(claim_pending)}: {claim_pending}"
     )
 
 

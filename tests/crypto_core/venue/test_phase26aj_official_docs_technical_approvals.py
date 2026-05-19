@@ -42,9 +42,10 @@ APPROVED_IN_26AJ = (
     "continuity_condition",
 )
 
-STILL_PENDING_CLAIM = (
-    "regional_legal_access",
+STILL_PENDING_CLAIM: tuple[str, ...] = (
+    # regional_legal_access was approved in Phase 26AR
     # checksum_decision, staleness_budget, receive_lag_budget were approved in Phase 26AN
+    # All 23 claim rows are now APPROVED
 )
 
 PRIOR_APPROVED_ROWS = (
@@ -122,13 +123,13 @@ def test_phase26aj_still_pending_claim_rows() -> None:
         assert "PENDING" in row_line, f"Row {row_id!r} must remain PENDING"
 
 
-def test_phase26aj_regional_legal_access_not_approved() -> None:
+def test_phase26aj_regional_legal_access_now_approved_in_phase26ar() -> None:
     text = _worksheet()
     lines = [ln for ln in text.splitlines() if "regional_legal_access" in ln and "|" in ln]
     assert lines
     for line in lines:
         if "regional_legal_access" in line:
-            assert "PENDING" in line, "regional_legal_access must remain PENDING"
+            assert "APPROVED" in line, "regional_legal_access must be APPROVED after Phase 26AR"
 
 
 def test_phase26aj_checksum_decision_approved_in_phase26an() -> None:

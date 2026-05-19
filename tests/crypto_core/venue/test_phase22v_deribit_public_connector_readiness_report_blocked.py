@@ -63,13 +63,12 @@ def test_current_deribit_claim_reviews_are_not_accepted():
     results = tuple(validate_official_claim_review(_claim_from_row(row)) for row in _claim_rows().values())
 
     assert results
-    # Phase 25I approved 3, Phase 25R approved change_id, Phase 26AJ approved 15, Phase 26AN approved 3;
-    # 1 row remains rejected (regional_legal_access).
+    # Phase 25I approved 3, Phase 25R approved change_id, Phase 26AJ approved 15, Phase 26AN approved 3,
+    # Phase 26AR approved regional_legal_access; all 23 claim rows accepted.
     rejected = [r for r in results if not r.accepted]
     accepted = [r for r in results if r.accepted]
-    assert len(rejected) == 1
-    assert len(accepted) == 22
-    assert all("official_claim_review:pending" in r.rejection_reasons for r in rejected)
+    assert len(rejected) == 0
+    assert len(accepted) == 23
 
 
 def test_current_deribit_operational_policy_approvals_are_pending():
@@ -97,7 +96,7 @@ def test_current_deribit_operational_evidence_is_not_ready():
     assert result.accepted is False
     assert operational_evidence_acceptance_ready(result) is False
     assert "operational_evidence:source_snapshot_rejected" in result.rejection_reasons
-    assert "operational_evidence:claim_review_rejected" in result.rejection_reasons
+    # claim_review_rejected no longer present after Phase 26AR approved all 23 claim rows
     # Phase 26AN approved checksum_decision policy row; it must NOT appear as missing.
     assert "operational_policy:checksum_decision_missing" not in result.rejection_reasons
     assert "operational_policy:regional_legal_access_review_missing" in result.rejection_reasons
@@ -126,7 +125,9 @@ def test_current_deribit_public_connector_readiness_report_remains_blocked():
     assert report.connector_ready is False
     assert public_connector_readiness_ready(report) is False
     assert report.source_snapshots_ready is PublicConnectorReadinessStageStatus.BLOCKED
-    assert report.claim_reviews_ready is PublicConnectorReadinessStageStatus.BLOCKED
+    assert (
+        report.claim_reviews_ready is PublicConnectorReadinessStageStatus.READY
+    )  # Phase 26AR approved all 23 claim rows
     assert report.operational_evidence_ready is PublicConnectorReadinessStageStatus.BLOCKED
     assert report.connector_enablement_ready is PublicConnectorReadinessStageStatus.BLOCKED
     assert report.static_registry_verified is False
@@ -136,11 +137,13 @@ def test_current_deribit_readiness_report_contains_blocker_reasons():
     report = _current_deribit_readiness_report()
 
     assert "public_connector_readiness:source_snapshots_not_ready" in report.blocker_reasons
-    assert "public_connector_readiness:claim_reviews_not_ready" in report.blocker_reasons
+    # claim_reviews_not_ready no longer present after Phase 26AR approved all 23 claim rows
+    assert "public_connector_readiness:claim_reviews_not_ready" not in report.blocker_reasons
     assert "public_connector_readiness:operational_evidence_not_ready" in report.blocker_reasons
     assert "public_connector_readiness:connector_enablement_not_ready" in report.blocker_reasons
     assert "public_connector_readiness:static_registry_unverified" in report.blocker_reasons
-    assert "official_claim_review:pending" in report.blocker_reasons
+    # official_claim_review:pending no longer present after Phase 26AR
+    assert "official_claim_review:pending" not in report.blocker_reasons
     # Phase 26AN approved checksum_decision; it must NOT appear as a blocker.
     assert "operational_policy:checksum_decision_missing" not in report.blocker_reasons
     assert "public_connector_enablement:pending" in report.blocker_reasons

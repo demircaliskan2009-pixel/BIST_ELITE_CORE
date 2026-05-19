@@ -61,7 +61,7 @@ def test_phase26u_26r_run_recorded_as_success() -> None:
 
 def test_phase26u_pending_rows_unchanged() -> None:
     result = evaluate_deribit_manual_review_readiness()
-    assert len(result.pending_rows) == 3
+    assert len(result.pending_rows) == 2
 
 
 def test_phase26u_channel_limitation_recorded() -> None:
@@ -82,7 +82,7 @@ def test_phase26u_no_worksheet_edits_and_validator_unchanged() -> None:
     assert result.accepted is False
     assert result.evidence_review_complete is False
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 3
+    assert len(result.pending_rows) == 2
     assert result.b1_b5_status == {
         "B1": "BLOCKED",
         "B2": "BLOCKED",

@@ -47,7 +47,7 @@ def test_current_deribit_operational_evidence_is_not_accepted():
     assert result.accepted is False
     assert operational_evidence_acceptance_ready(result) is False
     assert "operational_evidence:source_snapshot_rejected" in result.rejection_reasons
-    assert "operational_evidence:claim_review_rejected" in result.rejection_reasons
+    # claim_review_rejected no longer present after Phase 26AR approved all 23 claim rows
     assert "operational_policy:separate_connector_enablement_required" in result.rejection_reasons
 
 

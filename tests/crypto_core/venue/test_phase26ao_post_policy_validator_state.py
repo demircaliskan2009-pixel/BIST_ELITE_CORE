@@ -1,16 +1,16 @@
 """Phase 26AO — Post-policy validator state.
 
-Live validator tests after Phase 26AN worksheet patches. Verifies:
-  pending_rows == 3
-  pending == claim_review:regional_legal_access + policy_review:regional_legal_access_review
+Live validator tests after Phase 26AN worksheet patches and Phase 26AR approval. Verifies:
+  pending_rows == 2
+  pending == policy_review:regional_legal_access_review
            + policy_review:separate_connector_enablement
   accepted == False
   evidence_review_complete == False
   connector_enablement_ready == False
   B1-B5 all BLOCKED
   connector_ready_dialects() == 0
-  8 rows approved in this phase (3 claim + 5 policy)
-  no legal row approved
+  8 rows approved in Phase 26AN (3 claim + 5 policy)
+  regional_legal_access claim approved in Phase 26AR
   no connector enablement row approved
 """
 
@@ -49,8 +49,8 @@ def test_connector_enablement_ready_false(result: DeribitManualReviewReadinessRe
 
 
 def test_pending_rows_count_is_3(result: DeribitManualReviewReadinessResult) -> None:
-    assert len(result.pending_rows) == 3, (
-        f"Expected 3 pending rows, got {len(result.pending_rows)}: {result.pending_rows}"
+    assert len(result.pending_rows) == 2, (
+        f"Expected 2 pending rows after Phase 26AR, got {len(result.pending_rows)}: {result.pending_rows}"
     )
 
 
@@ -58,7 +58,7 @@ def test_pending_rows_count_is_3(result: DeribitManualReviewReadinessResult) -> 
 
 
 def test_pending_row_regional_legal_access(result: DeribitManualReviewReadinessResult) -> None:
-    assert "claim_review:regional_legal_access" in result.pending_rows
+    assert "claim_review:regional_legal_access" not in result.pending_rows
 
 
 def test_pending_row_regional_legal_access_review(result: DeribitManualReviewReadinessResult) -> None:
@@ -223,7 +223,7 @@ def test_row_results_regional_legal_access_pending(result: DeribitManualReviewRe
         None,
     )
     assert row is not None
-    assert row.status == "PENDING"
+    assert row.status == "APPROVED"
 
 
 def test_row_results_regional_legal_access_review_pending(result: DeribitManualReviewReadinessResult) -> None:
