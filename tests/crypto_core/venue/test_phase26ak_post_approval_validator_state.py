@@ -40,15 +40,9 @@ APPROVED_IN_26AJ = (
 )
 
 REMAINING_PENDING = (
-    "claim_review:checksum_decision",
-    "claim_review:staleness_budget",
-    "claim_review:receive_lag_budget",
+    # Only regional_legal_access remains as claim (checksum_decision/staleness_budget/receive_lag_budget approved in Phase 26AN)
     "claim_review:regional_legal_access",
-    "policy_review:checksum_decision",
-    "policy_review:liveness_policy",
-    "policy_review:staleness_budget",
-    "policy_review:receive_lag_budget",
-    "policy_review:testnet_prod_review",
+    # Only 2 policy rows remain pending (Phase 26AN approved 5 of 7)
     "policy_review:regional_legal_access_review",
     "policy_review:separate_connector_enablement",
 )
@@ -58,9 +52,11 @@ def _readiness():
     return evaluate_deribit_manual_review_readiness()
 
 
-def test_phase26ak_pending_rows_is_11() -> None:
+def test_phase26ak_pending_rows_is_3() -> None:
     r = _readiness()
-    assert len(r.pending_rows) == 11, f"Expected 11 pending rows, got {len(r.pending_rows)}: {r.pending_rows}"
+    assert len(r.pending_rows) == 3, (
+        f"Expected 3 pending rows after Phase 26AN, got {len(r.pending_rows)}: {r.pending_rows}"
+    )
 
 
 def test_phase26ak_pending_rows_exact_list() -> None:
@@ -90,7 +86,7 @@ def test_phase26ak_b1_blocked() -> None:
 
 
 def test_phase26ak_b2_blocked() -> None:
-    # B2 still BLOCKED because 4 claim rows remain pending
+    # B2 still BLOCKED because 1 claim row remains pending (regional_legal_access)
     assert _readiness().b1_b5_status["B2"] == "BLOCKED"
 
 
@@ -115,25 +111,27 @@ def test_phase26ak_regional_legal_access_still_pending() -> None:
     assert "claim_review:regional_legal_access" in r.pending_rows
 
 
-def test_phase26ak_checksum_decision_still_pending_claim() -> None:
+def test_phase26ak_checksum_decision_approved_in_phase26an() -> None:
     r = _readiness()
-    assert "claim_review:checksum_decision" in r.pending_rows
+    assert "claim_review:checksum_decision" not in r.pending_rows
 
 
-def test_phase26ak_staleness_budget_still_pending_claim() -> None:
+def test_phase26ak_staleness_budget_approved_in_phase26an() -> None:
     r = _readiness()
-    assert "claim_review:staleness_budget" in r.pending_rows
+    assert "claim_review:staleness_budget" not in r.pending_rows
 
 
-def test_phase26ak_receive_lag_budget_still_pending_claim() -> None:
+def test_phase26ak_receive_lag_budget_approved_in_phase26an() -> None:
     r = _readiness()
-    assert "claim_review:receive_lag_budget" in r.pending_rows
+    assert "claim_review:receive_lag_budget" not in r.pending_rows
 
 
-def test_phase26ak_all_policy_rows_still_pending() -> None:
+def test_phase26ak_policy_rows_two_still_pending() -> None:
     r = _readiness()
     policy_pending = [p for p in r.pending_rows if p.startswith("policy_review:")]
-    assert len(policy_pending) == 7, f"Expected 7 policy pending rows, got {len(policy_pending)}: {policy_pending}"
+    assert len(policy_pending) == 2, (
+        f"Expected 2 policy pending rows after Phase 26AN, got {len(policy_pending)}: {policy_pending}"
+    )
 
 
 def test_phase26ak_approved_rows_not_in_pending() -> None:
@@ -175,7 +173,7 @@ def test_phase26ak_no_orders_no_live_integration() -> None:
     assert "connector_ready_dialects_expected: []" in text or "connector_ready_dialects_expected" in text
 
 
-def test_phase26ak_pending_rows_decreased_from_26_to_11() -> None:
+def test_phase26ak_pending_rows_decreased_from_11_to_3() -> None:
     r = _readiness()
-    # 26 - 15 = 11
-    assert len(r.pending_rows) == 11
+    # 11 - 8 (3 claims + 5 policies approved in Phase 26AN) = 3
+    assert len(r.pending_rows) == 3

@@ -179,10 +179,10 @@ def test_pending_claim_rows_fail_closed():
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    # All 23 claim rows must appear as pending
+    # Phase 26AN approved 3 claim rows; 1 remains pending (regional_legal_access).
     claim_pending = [r for r in result.pending_rows if r.startswith("claim_review:")]
-    assert len(claim_pending) == 4, (
-        f"Expected 4 pending claim rows after Phase 25R, got {len(claim_pending)}: {claim_pending}"
+    assert len(claim_pending) == 1, (
+        f"Expected 1 pending claim row after Phase 26AN, got {len(claim_pending)}: {claim_pending}"
     )
 
 
@@ -193,7 +193,9 @@ def test_pending_policy_rows_fail_closed():
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
     policy_pending = [r for r in result.pending_rows if r.startswith("policy_review:")]
-    assert len(policy_pending) == 7, f"Expected 7 pending policy rows, got {len(policy_pending)}: {policy_pending}"
+    assert len(policy_pending) == 2, (
+        f"Expected 2 pending policy rows after Phase 26AN, got {len(policy_pending)}: {policy_pending}"
+    )
 
 
 # ---------------------------------------------------------------------------

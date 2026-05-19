@@ -63,12 +63,12 @@ def test_current_deribit_claim_reviews_are_not_accepted():
     results = tuple(validate_official_claim_review(_claim_from_row(row)) for row in _claim_rows().values())
 
     assert results
-    # Phase 25I approved 3 rows, Phase 25R approved change_id, Phase 26AJ approved 15 technical rows;
-    # the remaining 4 rows remain rejected.
+    # Phase 25I approved 3, Phase 25R approved change_id, Phase 26AJ approved 15, Phase 26AN approved 3;
+    # 1 row remains rejected (regional_legal_access).
     rejected = [r for r in results if not r.accepted]
     accepted = [r for r in results if r.accepted]
-    assert len(rejected) == 4
-    assert len(accepted) == 19
+    assert len(rejected) == 1
+    assert len(accepted) == 22
     assert all("official_claim_review:pending" in r.rejection_reasons for r in rejected)
 
 
@@ -76,10 +76,19 @@ def test_current_deribit_operational_policy_approvals_are_pending():
     rows = _policy_rows()
 
     assert rows
-    assert all(row["policy_status"] == "PENDING" for row in rows.values())
-    assert all(row["decision"] == "PENDING" for row in rows.values())
-    assert all(row["reviewer_id"] == "PENDING" for row in rows.values())
-    assert all(row["reviewed_at_iso"] == "PENDING" for row in rows.values())
+    # Phase 26AN approved 5 policy rows; 2 remain PENDING.
+    _phase26an_approved = {
+        "checksum_decision",
+        "liveness_policy",
+        "staleness_budget",
+        "receive_lag_budget",
+        "testnet_prod_review",
+    }
+    pending_rows = {pid: row for pid, row in rows.items() if pid not in _phase26an_approved}
+    assert all(row["policy_status"] == "PENDING" for row in pending_rows.values())
+    assert all(row["decision"] == "PENDING" for row in pending_rows.values())
+    assert all(row["reviewer_id"] == "PENDING" for row in pending_rows.values())
+    assert all(row["reviewed_at_iso"] == "PENDING" for row in pending_rows.values())
 
 
 def test_current_deribit_operational_evidence_is_not_ready():
@@ -89,7 +98,9 @@ def test_current_deribit_operational_evidence_is_not_ready():
     assert operational_evidence_acceptance_ready(result) is False
     assert "operational_evidence:source_snapshot_rejected" in result.rejection_reasons
     assert "operational_evidence:claim_review_rejected" in result.rejection_reasons
-    assert "operational_policy:checksum_decision_missing" in result.rejection_reasons
+    # Phase 26AN approved checksum_decision policy row; it must NOT appear as missing.
+    assert "operational_policy:checksum_decision_missing" not in result.rejection_reasons
+    assert "operational_policy:regional_legal_access_review_missing" in result.rejection_reasons
 
 
 def test_current_deribit_connector_enablement_is_not_ready():
@@ -130,7 +141,8 @@ def test_current_deribit_readiness_report_contains_blocker_reasons():
     assert "public_connector_readiness:connector_enablement_not_ready" in report.blocker_reasons
     assert "public_connector_readiness:static_registry_unverified" in report.blocker_reasons
     assert "official_claim_review:pending" in report.blocker_reasons
-    assert "operational_policy:checksum_decision_missing" in report.blocker_reasons
+    # Phase 26AN approved checksum_decision; it must NOT appear as a blocker.
+    assert "operational_policy:checksum_decision_missing" not in report.blocker_reasons
     assert "public_connector_enablement:pending" in report.blocker_reasons
 
 

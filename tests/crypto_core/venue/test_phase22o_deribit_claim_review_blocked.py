@@ -55,7 +55,8 @@ REQUIRED_CLAIM_IDS = {
 
 def test_current_deribit_claim_review_rows_are_not_approved():
     rows = _worksheet_rows()
-    # Phase 25I approved 3 rows; Phase 25R approved change_id; Phase 26AJ approved 15 technical rows.
+    # Phase 25I approved 3 rows; Phase 25R approved change_id; Phase 26AJ approved 15 technical rows;
+    # Phase 26AN approved 3 policy-decision claim rows (checksum_decision, staleness_budget, receive_lag_budget).
     approved_claim_ids = (
         frozenset({"public_websocket_availability", "unauthenticated_public_market_data", "orderbook_channel_feed"})
         | frozenset({"change_id"})
@@ -78,13 +79,14 @@ def test_current_deribit_claim_review_rows_are_not_approved():
                 "continuity_condition",
             }
         )
+        | frozenset({"checksum_decision", "staleness_budget", "receive_lag_budget"})
     )
 
     assert set(rows) == REQUIRED_CLAIM_IDS
     assert {row["operational_readiness_effect"] for row in rows.values()} == {"LEAVES_BLOCKER"}
     non_approved = {cid: row for cid, row in rows.items() if cid not in approved_claim_ids}
-    # 4 rows remain PENDING: checksum_decision, staleness_budget, receive_lag_budget, regional_legal_access
-    assert len(non_approved) == 4
+    # 1 row remains PENDING after Phase 26AN: regional_legal_access
+    assert len(non_approved) == 1
     assert {row["review_status"] for row in non_approved.values()} == {"PENDING"}
     assert {row["decision"] for row in non_approved.values()} == {"PENDING"}
     assert all(row["reviewer_id"] == "PENDING" for row in non_approved.values())
@@ -104,9 +106,9 @@ def test_current_deribit_claim_reviews_cannot_satisfy_operational_readiness():
         required_fields=_requirements_from_claim_review_aggregate(aggregate),
     )
 
-    # Phase 26AJ approved 15 more rows; 4 remain PENDING; aggregate + readiness remain blocked.
+    # Phase 26AN approved 3 more claim rows; 1 remains PENDING (regional_legal_access); aggregate + readiness remain blocked.
     rejected_results = [r for r in results if not r.accepted]
-    assert len(rejected_results) == 4
+    assert len(rejected_results) == 1
     assert aggregate.accepted is False
     assert aggregate.review_status is OfficialClaimReviewStatus.PENDING
     assert "official_claim_review:pending" in aggregate.rejection_reasons

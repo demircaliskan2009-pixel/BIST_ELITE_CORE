@@ -43,10 +43,8 @@ APPROVED_IN_26AJ = (
 )
 
 STILL_PENDING_CLAIM = (
-    "checksum_decision",
-    "staleness_budget",
-    "receive_lag_budget",
     "regional_legal_access",
+    # checksum_decision, staleness_budget, receive_lag_budget were approved in Phase 26AN
 )
 
 PRIOR_APPROVED_ROWS = (
@@ -133,13 +131,13 @@ def test_phase26aj_regional_legal_access_not_approved() -> None:
             assert "PENDING" in line, "regional_legal_access must remain PENDING"
 
 
-def test_phase26aj_checksum_decision_not_approved() -> None:
+def test_phase26aj_checksum_decision_approved_in_phase26an() -> None:
+    # checksum_decision was approved in Phase 26AN (after Phase 26AJ)
     text = _worksheet()
     lines = [ln for ln in text.splitlines() if "checksum_decision" in ln and "|" in ln]
     assert lines
-    # claim_review row for checksum_decision must remain PENDING
-    claim_lines = [ln for ln in lines if "manual_review:checksum_decision_pending" in ln or "PENDING" in ln]
-    assert claim_lines, "checksum_decision claim row must remain PENDING"
+    approved_lines = [ln for ln in lines if "APPROVED" in ln]
+    assert approved_lines, "checksum_decision claim row must be APPROVED (Phase 26AN)"
 
 
 def test_phase26aj_prior_approved_rows_unchanged() -> None:
@@ -153,7 +151,14 @@ def test_phase26aj_prior_approved_rows_unchanged() -> None:
 
 def test_phase26aj_policy_worksheet_untouched() -> None:
     text = _policy_worksheet()
-    # All policy rows must remain PENDING
+    # Phase 26AN approved 5 policy rows; 2 remain PENDING
+    _phase26an_approved = {
+        "checksum_decision",
+        "liveness_policy",
+        "staleness_budget",
+        "receive_lag_budget",
+        "testnet_prod_review",
+    }
     for policy_id in (
         "checksum_decision",
         "liveness_policy",
@@ -166,7 +171,10 @@ def test_phase26aj_policy_worksheet_untouched() -> None:
         lines = [ln for ln in text.splitlines() if policy_id in ln and "|" in ln]
         assert lines, f"Policy row {policy_id!r} must exist"
         row_line = lines[0]
-        assert "PENDING" in row_line, f"Policy row {policy_id!r} must remain PENDING"
+        if policy_id in _phase26an_approved:
+            assert "APPROVED" in row_line, f"Policy row {policy_id!r} was approved in Phase 26AN"
+        else:
+            assert "PENDING" in row_line, f"Policy row {policy_id!r} must remain PENDING"
 
 
 def test_phase26aj_no_enabled_for_connector_true() -> None:

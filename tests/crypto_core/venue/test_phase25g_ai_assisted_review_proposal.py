@@ -87,7 +87,7 @@ def test_phase25g_runtime_validator_state_remains_blocked_and_connector_empty():
     assert result.accepted is False
     assert result.evidence_review_complete is False
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 11
+    assert len(result.pending_rows) == 3  # Phase 26AN reduced from 11 to 3
     assert result.b1_b5_status == {
         "B1": "BLOCKED",
         "B2": "BLOCKED",

@@ -77,7 +77,20 @@ def test_every_claim_row_has_expected_review_fields_and_hash():
             "continuity_condition",
         }
     )
-    approved_claim_ids = phase25i_approved_claim_ids | phase25r_approved_claim_ids | phase26aj_approved_claim_ids
+    # Phase 26AN approved 3 policy-decision claim rows.
+    phase26an_approved_claim_ids = frozenset(
+        {
+            "checksum_decision",
+            "staleness_budget",
+            "receive_lag_budget",
+        }
+    )
+    approved_claim_ids = (
+        phase25i_approved_claim_ids
+        | phase25r_approved_claim_ids
+        | phase26aj_approved_claim_ids
+        | phase26an_approved_claim_ids
+    )
     for claim_id, row in _worksheet_rows().items():
         assert row["claim_id"] == claim_id
         assert row["source_id"].startswith("DERIBIT_")
@@ -89,7 +102,10 @@ def test_every_claim_row_has_expected_review_fields_and_hash():
             assert row["review_status"] == "APPROVED"
             assert row["reviewer_id"] == "demir_operator"
             assert row["decision"] == "APPROVED"
-            if claim_id in phase26aj_approved_claim_ids:
+            if claim_id in phase26an_approved_claim_ids:
+                assert row["reviewed_at_iso"] == "2026-05-19T00:00:00Z"
+                assert "Phase26AM_POLICY_DECISIONS_PUBLIC_DATA_ONLY" in row["rejection_reason_if_pending"]
+            elif claim_id in phase26aj_approved_claim_ids:
                 assert row["reviewed_at_iso"] == "2026-05-19T00:00:00Z"
                 assert "Phase26AI_OFFICIAL_DOCS_TECHNICAL_ROWS_ONLY" in row["rejection_reason_if_pending"]
             else:

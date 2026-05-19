@@ -125,13 +125,21 @@ def test_phase26e_26h_no_worksheet_edits_and_validator_remains_blocked() -> None
 
     # Phase 26AJ approved 15 more rows; total approved = 19
     approved_claim_ids = {row["claim_id"] for row in claim_rows if row["decision"] == "APPROVED"}
-    assert len(approved_claim_ids) == 19
-    assert all(row["decision"] == "PENDING" for row in policy_rows)
+    assert len(approved_claim_ids) == 22
+    _phase26an_ap = {
+        "checksum_decision",
+        "liveness_policy",
+        "staleness_budget",
+        "receive_lag_budget",
+        "testnet_prod_review",
+    }
+    pending_policy = [r for r in policy_rows if r["decision"] == "PENDING"]
+    assert len(pending_policy) == 2
     assert result.accepted is False
     assert result.evidence_review_complete is False
     assert result.ready_for_engineering_patch is False
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 11
+    assert len(result.pending_rows) == 3
     assert result.b1_b5_status == {
         "B1": "BLOCKED",
         "B2": "BLOCKED",

@@ -104,8 +104,8 @@ def test_phase25h_does_not_add_final_reviewer_values_or_modify_worksheets():
     # Phase 25I approved all 6 manifest rows (REVIEWED_APPROVED).
     assert all(row["retrieval_status"] == "REVIEWED_APPROVED" for row in manifest_rows)
     assert len(claim_rows) == 23
-    # Phase 25I approved 3 claim rows, Phase 25R approved change_id, Phase 26AJ approved 15 more;
-    # the remaining 4 remain PENDING.
+    # Phase 25I approved 3 claim rows, Phase 25R approved change_id, Phase 26AJ approved 15 more,
+    # Phase 26AN approved 3 more; 1 remains PENDING (regional_legal_access).
     approved_claim_ids = {
         "public_websocket_availability",
         "unauthenticated_public_market_data",
@@ -126,16 +126,28 @@ def test_phase25h_does_not_add_final_reviewer_values_or_modify_worksheets():
         "incremental_delta",
         "prev_change_id",
         "continuity_condition",
+        "checksum_decision",
+        "staleness_budget",
+        "receive_lag_budget",
     }
     non_approved_claim_rows = [r for r in claim_rows if r["claim_id"] not in approved_claim_ids]
-    assert len(non_approved_claim_rows) == 4
+    assert len(non_approved_claim_rows) == 1
     assert all(row["reviewer_id"] == "PENDING" for row in non_approved_claim_rows)
     assert all(row["reviewed_at_iso"] == "PENDING" for row in non_approved_claim_rows)
     assert all(row["decision"] == "PENDING" for row in non_approved_claim_rows)
     assert len(policy_rows) == 7
-    assert all(row["reviewer_id"] == "PENDING" for row in policy_rows)
-    assert all(row["reviewed_at_iso"] == "PENDING" for row in policy_rows)
-    assert all(row["decision"] == "PENDING" for row in policy_rows)
+    # Phase 26AN approved 5 policy rows; 2 remain PENDING.
+    _phase26an_approved_policy = {
+        "checksum_decision",
+        "liveness_policy",
+        "staleness_budget",
+        "receive_lag_budget",
+        "testnet_prod_review",
+    }
+    pending_policy_rows = [r for r in policy_rows if r["policy_id"] not in _phase26an_approved_policy]
+    assert all(row["reviewer_id"] == "PENDING" for row in pending_policy_rows)
+    assert all(row["reviewed_at_iso"] == "PENDING" for row in pending_policy_rows)
+    assert all(row["decision"] == "PENDING" for row in pending_policy_rows)
 
 
 def test_phase25h_validator_and_connector_state_remain_blocked():
