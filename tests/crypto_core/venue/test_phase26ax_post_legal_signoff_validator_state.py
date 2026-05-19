@@ -46,9 +46,7 @@ def test_phase26ax_deferred_rows_contains_separate_connector_enablement() -> Non
 
 def test_phase26ax_deferred_rows_count_is_one() -> None:
     result = _result()
-    assert len(result.deferred_rows) == 1, (
-        f"Expected exactly 1 deferred row, got: {result.deferred_rows}"
-    )
+    assert len(result.deferred_rows) == 1, f"Expected exactly 1 deferred row, got: {result.deferred_rows}"
 
 
 # --- B1–B5 gate status ---

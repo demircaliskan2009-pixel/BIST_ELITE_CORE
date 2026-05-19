@@ -5,9 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-AUDIT_DOC_PATH = (
-    REPO_ROOT / "docs" / "crypto_core" / "DERIBIT_OPERATOR_LEGAL_SIGNOFF_EXECUTION_AUDIT_26AV.md"
-)
+AUDIT_DOC_PATH = REPO_ROOT / "docs" / "crypto_core" / "DERIBIT_OPERATOR_LEGAL_SIGNOFF_EXECUTION_AUDIT_26AV.md"
 
 
 def _audit_text() -> str:
