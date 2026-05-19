@@ -120,8 +120,8 @@ def test_b3_ready(result: DeribitManualReviewReadinessResult) -> None:
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
 
 
-def test_b4_blocked(result: DeribitManualReviewReadinessResult) -> None:
-    assert result.b1_b5_status["B4"] == "BLOCKED"
+def test_b4_ready(result: DeribitManualReviewReadinessResult) -> None:
+    assert result.b1_b5_status["B4"] == "READY"
 
 
 def test_b5_blocked(result: DeribitManualReviewReadinessResult) -> None:

@@ -78,15 +78,16 @@ def test_current_worksheets_have_pending_rows():
     assert len(result.pending_rows) == 0, "No pending rows after Phase 26AW"
 
 
-def test_current_b1_b5_blocked_except_b3():
+def test_current_b1_b5_blocked_except_b3_b4():
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    for blocker in ("B1", "B2", "B4", "B5"):
+    for blocker in ("B1", "B2", "B5"):
         assert result.b1_b5_status[blocker] == "BLOCKED", f"{blocker} must be BLOCKED in current repo state"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW policy signoff
+    assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
 
 
 def test_current_worksheets_have_rejection_reasons():

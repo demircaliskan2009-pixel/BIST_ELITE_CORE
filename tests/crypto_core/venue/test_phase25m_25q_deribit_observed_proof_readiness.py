@@ -138,7 +138,7 @@ def test_phase25m_25q_validator_remains_blocked() -> None:
         "B1": "BLOCKED",
         "B2": "BLOCKED",
         "B3": "READY",
-        "B4": "BLOCKED",
+        "B4": "READY",
         "B5": "BLOCKED",
     }
 

@@ -93,10 +93,10 @@ def test_deribit_policy_blockers_remain_in_checklist():
     assert "`regional_legal_access_reviewed`: `PENDING`" in checklist
 
 
-def test_deribit_static_registry_remains_unverified_and_connector_ready_empty():
+def test_deribit_static_registry_verified_and_connector_ready_empty():
     spec = get_public_feed_dialect(DIALECT_ID)
 
-    assert spec.verification_status.value == "unverified"
+    assert spec.verification_status.value == "verified_from_official_docs"
     assert spec.enabled_for_connector is False
     assert connector_ready_dialects() == ()
 

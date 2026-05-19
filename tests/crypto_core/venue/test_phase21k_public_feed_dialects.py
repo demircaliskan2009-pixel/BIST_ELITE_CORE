@@ -34,13 +34,20 @@ def test_all_candidate_venues_represented():
     assert venues == set(VenueId)
 
 
-def test_no_unverified_dialect_is_connector_ready():
+def test_no_dialect_is_connector_ready_without_b5_enablement():
     specs = all_public_feed_dialects()
 
     assert specs
-    assert all(spec.verification_status is FeedDialectVerificationStatus.UNVERIFIED for spec in specs)
     assert all(public_feed_dialect_connector_ready(spec) is False for spec in specs)
-    assert all("public_feed_dialect:unverified" in public_feed_dialect_rejection_reasons(spec) for spec in specs)
+    assert any(spec.verification_status is FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS for spec in specs)
+    assert all(
+        spec.enabled_for_connector is False
+        and (
+            spec.verification_status is FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS
+            or "public_feed_dialect:unverified" in public_feed_dialect_rejection_reasons(spec)
+        )
+        for spec in specs
+    )
 
 
 def test_connector_ready_dialects_empty_without_verified_docs():
@@ -57,12 +64,12 @@ def test_unknown_venue_returns_empty_fail_closed():
     assert dialects_for_venue(object()) == ()  # type: ignore[arg-type]
 
 
-def test_deribit_candidate_exists_but_unverified_connector_disabled():
+def test_deribit_candidate_exists_verified_but_connector_disabled():
     specs = dialects_for_venue(VenueId.DERIBIT)
 
     assert len(specs) == 1
     assert specs[0].enabled_for_connector is False
-    assert specs[0].verification_status is FeedDialectVerificationStatus.UNVERIFIED
+    assert specs[0].verification_status is FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS
 
 
 def test_binance_usdm_candidate_exists_but_unverified_connector_disabled():

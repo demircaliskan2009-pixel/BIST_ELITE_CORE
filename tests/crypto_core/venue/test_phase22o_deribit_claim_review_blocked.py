@@ -143,10 +143,10 @@ def test_required_operational_blockers_remain_pending_or_unknown():
     assert "`regional_legal_access_status`: `MANUAL_LEGAL_ACCESS_REVIEW_REQUIRED`" in combined
 
 
-def test_static_registry_remains_unverified_and_connector_ready_dialects_empty():
+def test_static_registry_verified_and_connector_ready_dialects_empty():
     spec = get_public_feed_dialect(DIALECT_ID)
 
-    assert spec.verification_status.value == "unverified"
+    assert spec.verification_status.value == "verified_from_official_docs"
     assert spec.enabled_for_connector is False
     assert connector_ready_dialects() == ()
 

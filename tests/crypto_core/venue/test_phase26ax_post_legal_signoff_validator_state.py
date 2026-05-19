@@ -64,8 +64,8 @@ def test_phase26ax_b3_ready() -> None:
     assert _result().b1_b5_status["B3"] == "READY"
 
 
-def test_phase26ax_b4_blocked() -> None:
-    assert _result().b1_b5_status["B4"] == "BLOCKED"
+def test_phase26ax_b4_ready() -> None:
+    assert _result().b1_b5_status["B4"] == "READY"
 
 
 def test_phase26ax_b5_blocked() -> None:

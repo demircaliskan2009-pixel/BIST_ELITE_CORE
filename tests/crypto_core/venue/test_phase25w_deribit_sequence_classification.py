@@ -75,7 +75,7 @@ def test_phase25w_validator_remains_blocked_with_26_pending_rows() -> None:
         "B1": "BLOCKED",
         "B2": "BLOCKED",
         "B3": "READY",
-        "B4": "BLOCKED",
+        "B4": "READY",
         "B5": "BLOCKED",
     }
     assert connector_ready_dialects() == ()

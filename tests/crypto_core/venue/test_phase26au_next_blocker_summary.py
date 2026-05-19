@@ -75,6 +75,7 @@ def test_phase26au_live_validator_state_matches_summary() -> None:
 
 def test_phase26au_b1_b5_live_validator_blocked() -> None:
     result = evaluate_deribit_manual_review_readiness()
-    for blocker in ("B1", "B2", "B4", "B5"):
+    for blocker in ("B1", "B2", "B5"):
         assert result.b1_b5_status[blocker] == "BLOCKED"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
+    assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification

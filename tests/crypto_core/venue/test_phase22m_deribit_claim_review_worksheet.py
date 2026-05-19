@@ -163,10 +163,10 @@ def test_deribit_draft_and_checklist_remain_blocked():
     assert "`enabled_for_connector`: `true`" not in combined
 
 
-def test_static_registry_remains_unverified_and_connector_ready_dialects_empty():
+def test_static_registry_verified_and_connector_ready_dialects_empty():
     spec = get_public_feed_dialect(DIALECT_ID)
 
-    assert spec.verification_status.value == "unverified"
+    assert spec.verification_status.value == "verified_from_official_docs"
     assert spec.enabled_for_connector is False
     assert connector_ready_dialects() == ()
 

@@ -90,8 +90,8 @@ def test_phase26ak_b3_ready_after_26aw() -> None:
     assert _readiness().b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW policy signoff
 
 
-def test_phase26ak_b4_blocked() -> None:
-    assert _readiness().b1_b5_status["B4"] == "BLOCKED"
+def test_phase26ak_b4_ready() -> None:
+    assert _readiness().b1_b5_status["B4"] == "READY"
 
 
 def test_phase26ak_b5_blocked() -> None:

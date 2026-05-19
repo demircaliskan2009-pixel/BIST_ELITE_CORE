@@ -80,7 +80,7 @@ def test_phase26m_no_worksheet_edits_and_validator_unchanged() -> None:
         "B1": "BLOCKED",
         "B2": "BLOCKED",
         "B3": "READY",
-        "B4": "BLOCKED",
+        "B4": "READY",
         "B5": "BLOCKED",
     }
     assert connector_ready_dialects() == ()

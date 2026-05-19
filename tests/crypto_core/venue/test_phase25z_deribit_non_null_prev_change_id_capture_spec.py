@@ -83,7 +83,7 @@ def test_phase25z_validator_and_connector_readiness_remain_blocked() -> None:
         "B1": "BLOCKED",
         "B2": "BLOCKED",
         "B3": "READY",
-        "B4": "BLOCKED",
+        "B4": "READY",
         "B5": "BLOCKED",
     }
     assert connector_ready_dialects() == ()

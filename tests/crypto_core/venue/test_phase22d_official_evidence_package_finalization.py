@@ -58,11 +58,11 @@ def test_deribit_doc_blocks_operational_connector_readiness():
     assert "not operational proof" in text
 
 
-def test_deribit_static_registry_remains_unverified_after_draft_finalization():
+def test_deribit_static_registry_verified_after_phase27_but_connector_disabled():
     spec = get_public_feed_dialect("deribit:l2_orderbook:placeholder")
 
     assert spec.venue_id is VenueId.DERIBIT
-    assert spec.verification_status is FeedDialectVerificationStatus.UNVERIFIED
+    assert spec.verification_status is FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS
     assert spec.enabled_for_connector is False
     assert public_feed_dialect_connector_ready(spec) is False
     assert connector_ready_dialects() == ()

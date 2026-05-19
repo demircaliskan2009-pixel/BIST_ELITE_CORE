@@ -511,13 +511,14 @@ def test_phase25j_validator_policy_pending_count_is_0_after_26aw():
     )
 
 
-def test_phase25j_b1_b5_blocked_except_b3():
+def test_phase25j_b1_b5_blocked_except_b3_b4():
     result = _validator_result()
-    for blocker in ("B1", "B2", "B4", "B5"):
+    for blocker in ("B1", "B2", "B5"):
         assert result.b1_b5_status[blocker] == "BLOCKED", (
             f"{blocker} must remain BLOCKED after Phase 25J doc-only patch"
         )
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
+    assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
 
 
 # ---------------------------------------------------------------------------

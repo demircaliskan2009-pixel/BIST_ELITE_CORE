@@ -201,10 +201,10 @@ def test_deribit_docs_still_blocked_until_snapshots_supplied():
     assert "`operational_status`: `READY`" not in combined
 
 
-def test_static_registry_remains_unverified():
+def test_static_registry_verified_but_connector_disabled():
     spec = get_public_feed_dialect(DIALECT_ID)
 
-    assert spec.verification_status.value == "unverified"
+    assert spec.verification_status.value == "verified_from_official_docs"
     assert spec.enabled_for_connector is False
 
 
