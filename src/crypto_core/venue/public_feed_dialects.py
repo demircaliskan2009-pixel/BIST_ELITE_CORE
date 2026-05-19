@@ -15,29 +15,40 @@ class VenuePublicFeedDialectRegistryError(ValueError):
 
 
 _UNVERIFIED_REASON = ("public_feed_dialect:unverified",)
+_DERIBIT_LEGACY_DIALECT_ID = "deribit:l2_orderbook:placeholder"
+_DERIBIT_VERIFIED_DIALECT_ID = "deribit:l2_orderbook:book_instrument_interval"
+_DIALECT_ALIASES = {
+    _DERIBIT_LEGACY_DIALECT_ID: _DERIBIT_VERIFIED_DIALECT_ID,
+}
 
 
 _PUBLIC_FEED_DIALECTS: tuple[PublicFeedDialectSpec, ...] = (
     PublicFeedDialectSpec(
-        dialect_id="deribit:l2_orderbook:placeholder",
+        dialect_id=_DERIBIT_VERIFIED_DIALECT_ID,
         venue_id=VenueId.DERIBIT,
         feed_type=PublicFeedType.L2_ORDERBOOK,
         instrument_type=InstrumentType.INVERSE_PERP,
-        verification_status=FeedDialectVerificationStatus.UNVERIFIED,
-        official_doc_refs=(),
+        verification_status=FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS,
+        official_doc_refs=(
+            "DERIBIT_OFFICIAL_DOCS_PROOF_BATCH_26AF.md#proof-ready-technical-rows",
+            "DERIBIT_PROOF_ARTIFACT_BATCH_26AG.md#proof_ready_not_approved-15",
+            "DERIBIT_POLICY_DECISION_AUDIT_26AM.md#operator-approved-policy-values",
+            "DERIBIT_REGIONAL_LEGAL_ACCESS_PROOF_BATCH_26AS.md#row-classifications",
+            "DERIBIT_OPERATOR_LEGAL_SIGNOFF_EXECUTION_AUDIT_26AV.md#5-expected-validator-outcome-after-phase-26aw-patch",
+        ),
         requires_rest_snapshot=False,
-        supports_delta_stream=False,
+        supports_delta_stream=True,
         supports_checksum=False,
-        sequence_model=FeedSequenceModel.UNKNOWN,
-        checksum_model=FeedChecksumModel.UNKNOWN,
-        requires_heartbeat=False,
+        sequence_model=FeedSequenceModel.SNAPSHOT_DELTA_RANGE,
+        checksum_model=FeedChecksumModel.NONE,
+        requires_heartbeat=True,
         requires_ping_pong=False,
-        supports_resync=False,
+        supports_resync=True,
         max_gap_tolerance=0,
-        max_staleness_ns=1,
-        max_receive_lag_ns=1,
+        max_staleness_ns=2_000_000_000,
+        max_receive_lag_ns=1_000_000_000,
         enabled_for_connector=False,
-        rejection_reasons=_UNVERIFIED_REASON,
+        rejection_reasons=(),
     ),
     PublicFeedDialectSpec(
         dialect_id="binance_usdm:l2_orderbook:placeholder",
@@ -154,8 +165,9 @@ def all_public_feed_dialects() -> tuple[PublicFeedDialectSpec, ...]:
 def get_public_feed_dialect(dialect_id: str) -> PublicFeedDialectSpec:
     if not isinstance(dialect_id, str) or not dialect_id:
         raise VenuePublicFeedDialectRegistryError("dialect_id must be non-empty")
+    canonical_id = _DIALECT_ALIASES.get(dialect_id, dialect_id)
     for spec in all_public_feed_dialects():
-        if spec.dialect_id == dialect_id:
+        if spec.dialect_id == canonical_id:
             return spec
     raise VenuePublicFeedDialectRegistryError(f"unknown public feed dialect: {dialect_id}")
 

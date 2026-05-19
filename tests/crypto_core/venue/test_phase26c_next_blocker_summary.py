@@ -73,7 +73,7 @@ def test_phase26c_validator_state_matches_summary() -> None:
         "B1": "BLOCKED",
         "B2": "BLOCKED",
         "B3": "READY",
-        "B4": "BLOCKED",
+        "B4": "READY",
         "B5": "BLOCKED",
     }
     assert connector_ready_dialects() == ()

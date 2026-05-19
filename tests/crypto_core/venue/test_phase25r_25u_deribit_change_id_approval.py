@@ -105,7 +105,7 @@ def test_phase25s_validator_remains_blocked_after_change_id_only_approval() -> N
         "B1": "BLOCKED",
         "B2": "BLOCKED",
         "B3": "READY",
-        "B4": "BLOCKED",
+        "B4": "READY",
         "B5": "BLOCKED",
     }
 

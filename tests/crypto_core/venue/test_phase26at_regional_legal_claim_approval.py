@@ -59,11 +59,12 @@ def test_phase26at_connector_enablement_ready_is_false() -> None:
     assert _result().connector_enablement_ready is False
 
 
-def test_phase26at_b1_b5_blocked_except_b3() -> None:
+def test_phase26at_b1_b5_blocked_except_b3_b4() -> None:
     result = _result()
-    for blocker in ("B1", "B2", "B4", "B5"):
+    for blocker in ("B1", "B2", "B5"):
         assert result.b1_b5_status[blocker] == "BLOCKED"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
+    assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
 
 
 def test_phase26at_connector_ready_dialects_empty() -> None:

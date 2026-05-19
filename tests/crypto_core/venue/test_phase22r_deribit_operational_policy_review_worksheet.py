@@ -153,10 +153,10 @@ def test_operational_evidence_acceptance_cannot_pass_current_deribit_policy_rows
     assert "operational_policy:separate_connector_enablement_required" in result.rejection_reasons
 
 
-def test_static_registry_remains_unverified_and_connector_ready_empty():
+def test_static_registry_verified_and_connector_ready_empty():
     spec = get_public_feed_dialect(DIALECT_ID)
 
-    assert spec.verification_status.value == "unverified"
+    assert spec.verification_status.value == "verified_from_official_docs"
     assert spec.enabled_for_connector is False
     assert connector_ready_dialects() == ()
 

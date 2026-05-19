@@ -227,7 +227,7 @@ def test_connector_ready_dialects_remains_empty():
 def test_deribit_public_connector_readiness_remains_blocked():
     spec = get_public_feed_dialect("deribit:l2_orderbook:placeholder")
 
-    assert spec.verification_status.value == "unverified"
+    assert spec.verification_status.value == "verified_from_official_docs"
     assert spec.enabled_for_connector is False
     assert connector_ready_dialects() == ()
 

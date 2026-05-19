@@ -383,6 +383,8 @@ def evaluate_deribit_manual_review_readiness(
         and len(missing_meta) == 0
     )
 
+    static_registry_verified = _deribit_static_registry_verified()
+
     # B1-B5 status map (coarse summary — engineering detail in row_results)
     b1_b5: dict[str, str] = {
         "B1": "BLOCKED",  # B1 gates on B2+B3+B4 — always blocked while those are blocked
@@ -397,7 +399,7 @@ def evaluate_deribit_manual_review_readiness(
             for rr in all_row_results
         )
         else "READY",
-        "B4": "BLOCKED",  # static_registry_verified=false — engineering step after B2+B3
+        "B4": "READY" if static_registry_verified else "BLOCKED",
         "B5": "BLOCKED",  # connector_ready_dialects empty — separate enablement phase
     }
     # B1 stays BLOCKED until B2, B3, B4 are each READY
@@ -419,3 +421,37 @@ def evaluate_deribit_manual_review_readiness(
         rejection_reasons=tuple(dict.fromkeys(all_rejection_reasons)),
         row_results=tuple(all_row_results),
     )
+
+
+def _deribit_static_registry_verified() -> bool:
+    """Return True only when Deribit static dialect policy is verified but connector-disabled."""
+    from crypto_core.data.public_feed_dialect import (
+        FeedChecksumModel,
+        FeedDialectVerificationStatus,
+        FeedSequenceModel,
+        public_feed_dialect_rejection_reasons,
+    )
+    from crypto_core.venue.contracts import VenueId
+    from crypto_core.venue.public_feed_dialects import connector_ready_dialects, dialects_for_venue
+
+    if connector_ready_dialects():
+        return False
+
+    for spec in dialects_for_venue(VenueId.DERIBIT):
+        if (
+            spec.verification_status is FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS
+            and spec.enabled_for_connector is False
+            and spec.supports_delta_stream is True
+            and spec.supports_checksum is False
+            and spec.checksum_model is FeedChecksumModel.NONE
+            and spec.sequence_model is FeedSequenceModel.SNAPSHOT_DELTA_RANGE
+            and spec.requires_heartbeat is True
+            and spec.supports_resync is True
+            and spec.max_gap_tolerance == 0
+            and spec.max_staleness_ns == 2_000_000_000
+            and spec.max_receive_lag_ns == 1_000_000_000
+            and bool(spec.official_doc_refs)
+            and public_feed_dialect_rejection_reasons(spec) == ()
+        ):
+            return True
+    return False

@@ -140,10 +140,10 @@ def test_operational_readiness_is_not_accepted_from_hashes_alone():
     assert "operational_evidence:receive_lag_unknown" in result.rejection_reasons
 
 
-def test_static_registry_remains_unverified_and_connector_ready_dialects_empty():
+def test_static_registry_verified_and_connector_ready_dialects_empty():
     spec = get_public_feed_dialect(DIALECT_ID)
 
-    assert spec.verification_status.value == "unverified"
+    assert spec.verification_status.value == "verified_from_official_docs"
     assert spec.enabled_for_connector is False
     assert connector_ready_dialects() == ()
 

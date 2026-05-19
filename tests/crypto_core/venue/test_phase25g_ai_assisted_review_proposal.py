@@ -92,7 +92,7 @@ def test_phase25g_runtime_validator_state_remains_blocked_and_connector_empty():
         "B1": "BLOCKED",
         "B2": "BLOCKED",
         "B3": "READY",
-        "B4": "BLOCKED",
+        "B4": "READY",
         "B5": "BLOCKED",
     }
     assert connector_ready_dialects() == ()

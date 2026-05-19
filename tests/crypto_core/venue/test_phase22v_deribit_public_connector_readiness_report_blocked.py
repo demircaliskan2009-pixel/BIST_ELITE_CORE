@@ -115,14 +115,13 @@ def test_current_deribit_connector_enablement_is_not_ready():
     assert decision.accepted is False
     assert public_connector_enablement_ready(decision) is False
     assert "public_connector_enablement:operational_evidence_not_accepted" in decision.rejection_reasons
-    assert "public_connector_enablement:static_registry_unverified" in decision.rejection_reasons
     assert "public_connector_enablement:pending" in decision.rejection_reasons
 
 
-def test_current_deribit_static_registry_remains_unverified():
+def test_current_deribit_static_registry_verified_but_connector_disabled():
     spec = get_public_feed_dialect(DIALECT_ID)
 
-    assert spec.verification_status.value == "unverified"
+    assert spec.verification_status.value == "verified_from_official_docs"
     assert spec.enabled_for_connector is False
 
 
@@ -137,7 +136,7 @@ def test_current_deribit_public_connector_readiness_report_remains_blocked():
     )  # Phase 26AR approved all 23 claim rows
     assert report.operational_evidence_ready is PublicConnectorReadinessStageStatus.BLOCKED
     assert report.connector_enablement_ready is PublicConnectorReadinessStageStatus.BLOCKED
-    assert report.static_registry_verified is False
+    assert report.static_registry_verified is True
 
 
 def test_current_deribit_readiness_report_contains_blocker_reasons():
@@ -148,7 +147,7 @@ def test_current_deribit_readiness_report_contains_blocker_reasons():
     assert "public_connector_readiness:claim_reviews_not_ready" not in report.blocker_reasons
     assert "public_connector_readiness:operational_evidence_not_ready" in report.blocker_reasons
     assert "public_connector_readiness:connector_enablement_not_ready" in report.blocker_reasons
-    assert "public_connector_readiness:static_registry_unverified" in report.blocker_reasons
+    assert "public_connector_readiness:static_registry_unverified" not in report.blocker_reasons
     # official_claim_review:pending no longer present after Phase 26AR
     assert "official_claim_review:pending" not in report.blocker_reasons
     # Phase 26AN approved checksum_decision; it must NOT appear as a blocker.
@@ -233,7 +232,7 @@ def _current_deribit_readiness_report():
         ),
         operational_evidence_result=_current_operational_evidence_result(),
         connector_enablement_decision=_current_connector_enablement_decision(),
-        static_registry_verified=False,
+        static_registry_verified=True,
         evidence_refs=(
             "docs/crypto_core/official_sources/deribit/20260510/DERIBIT_SOURCE_SNAPSHOT_MANIFEST.md",
             "docs/crypto_core/official_sources/deribit/20260510/DERIBIT_CLAIM_REVIEW_WORKSHEET.md",
@@ -253,7 +252,7 @@ def _current_operational_evidence_result():
                 validate_official_claim_review(_claim_from_row(row)) for row in _claim_rows().values()
             ),
             policy_approvals=tuple(_policy_from_row(row) for row in _policy_rows().values()),
-            static_registry_verified=False,
+            static_registry_verified=True,
             connector_enablement_requested=False,
             rejection_reasons=(),
         )
@@ -270,7 +269,7 @@ def _current_connector_enablement_decision():
             venue_id=VenueId.DERIBIT,
             dialect_id=DIALECT_ID,
             operational_evidence_accepted=False,
-            static_registry_verified=False,
+            static_registry_verified=True,
             connector_enablement_status=PublicConnectorEnablementStatus(ce_status_str),
             reviewer_id=row["reviewer_id"],
             reviewed_at_iso=row["reviewed_at_iso"],

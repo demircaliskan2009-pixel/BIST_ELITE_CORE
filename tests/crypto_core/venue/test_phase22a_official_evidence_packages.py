@@ -119,12 +119,12 @@ def test_deterministic_same_package_same_bundle():
     assert first == second
 
 
-def test_no_local_evidence_means_static_dialects_remain_unverified():
+def test_static_dialects_remain_connector_disabled_after_deribit_b4_verification():
     specs = all_public_feed_dialects()
 
     assert specs
     assert connector_ready_dialects() == ()
-    assert all(spec.verification_status is FeedDialectVerificationStatus.UNVERIFIED for spec in specs)
+    assert any(spec.verification_status is FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS for spec in specs)
     assert all(public_feed_dialect_connector_ready(spec) is False for spec in specs)
 
 

@@ -101,7 +101,7 @@ def test_summary_only_deep_research_cannot_be_verified_operational_evidence():
     )
 
 
-def test_static_registry_stays_unverified_even_after_operationally_blocked_overlay():
+def test_static_registry_stays_verified_connector_disabled_after_operationally_blocked_overlay():
     package = _package()
     verification = _verification(package)
     static_spec = get_public_feed_dialect(_DERIBIT_DIALECT_ID)
@@ -150,7 +150,7 @@ def test_live_execution_lifecycle_still_rejects_live_mode():
     assert result.rejection_reason == RejectionReason.LIVE_NOT_ENABLED
 
 
-_DERIBIT_DIALECT_ID = "deribit:l2_orderbook:placeholder"
+_DERIBIT_DIALECT_ID = "deribit:l2_orderbook:book_instrument_interval"
 _RETRIEVED_AT_NS = 2_200_000_000_000
 
 
