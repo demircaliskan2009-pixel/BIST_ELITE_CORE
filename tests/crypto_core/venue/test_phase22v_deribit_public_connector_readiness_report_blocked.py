@@ -71,11 +71,11 @@ def test_current_deribit_claim_reviews_are_not_accepted():
     assert len(accepted) == 23
 
 
-def test_current_deribit_operational_policy_approvals_are_pending():
+def test_current_deribit_operational_policy_approvals_are_pending_or_resolved():
     rows = _policy_rows()
 
     assert rows
-    # Phase 26AN approved 5 policy rows; 2 remain PENDING.
+    # Phase 26AN approved 5 policy rows; Phase 26AW approved regional_legal_access_review and deferred separate_connector_enablement.
     _phase26an_approved = {
         "checksum_decision",
         "liveness_policy",
@@ -83,11 +83,17 @@ def test_current_deribit_operational_policy_approvals_are_pending():
         "receive_lag_budget",
         "testnet_prod_review",
     }
-    pending_rows = {pid: row for pid, row in rows.items() if pid not in _phase26an_approved}
-    assert all(row["policy_status"] == "PENDING" for row in pending_rows.values())
-    assert all(row["decision"] == "PENDING" for row in pending_rows.values())
-    assert all(row["reviewer_id"] == "PENDING" for row in pending_rows.values())
-    assert all(row["reviewed_at_iso"] == "PENDING" for row in pending_rows.values())
+    _phase26aw_approved = {"regional_legal_access_review"}
+    _phase26aw_deferred = {"separate_connector_enablement"}
+    for pid, row in rows.items():
+        if pid in _phase26an_approved:
+            assert row["policy_status"] == "APPROVED"
+        elif pid in _phase26aw_approved:
+            assert row["policy_status"] == "APPROVED"
+            assert row["decision"] == "APPROVE"
+        elif pid in _phase26aw_deferred:
+            assert row["policy_status"] == "DEFERRED"
+            assert row["decision"] == "DEFER"
 
 
 def test_current_deribit_operational_evidence_is_not_ready():
@@ -99,7 +105,8 @@ def test_current_deribit_operational_evidence_is_not_ready():
     # claim_review_rejected no longer present after Phase 26AR approved all 23 claim rows
     # Phase 26AN approved checksum_decision policy row; it must NOT appear as missing.
     assert "operational_policy:checksum_decision_missing" not in result.rejection_reasons
-    assert "operational_policy:regional_legal_access_review_missing" in result.rejection_reasons
+    # regional_legal_access_review APPROVED in Phase 26AW — no longer missing.
+    assert "operational_policy:regional_legal_access_review_missing" not in result.rejection_reasons
 
 
 def test_current_deribit_connector_enablement_is_not_ready():
@@ -255,13 +262,16 @@ def _current_operational_evidence_result():
 
 def _current_connector_enablement_decision():
     row = _policy_rows()["separate_connector_enablement"]
+    ce_status_str = row["policy_status"]
+    if ce_status_str == "DEFERRED":
+        ce_status_str = "PENDING"
     return evaluate_public_connector_enablement(
         PublicConnectorEnablementRequest(
             venue_id=VenueId.DERIBIT,
             dialect_id=DIALECT_ID,
             operational_evidence_accepted=False,
             static_registry_verified=False,
-            connector_enablement_status=PublicConnectorEnablementStatus(row["policy_status"]),
+            connector_enablement_status=PublicConnectorEnablementStatus(ce_status_str),
             reviewer_id=row["reviewer_id"],
             reviewed_at_iso=row["reviewed_at_iso"],
             approved_run_mode=row["policy_blocker_status"],
@@ -346,10 +356,13 @@ def _claim_from_row(row: dict[str, str]) -> OfficialClaimReviewDecision:
 
 
 def _policy_from_row(row: dict[str, str]) -> OperationalPolicyApproval:
+    status_str = row["policy_status"]
+    if status_str == "DEFERRED":
+        status_str = "PENDING"
     return OperationalPolicyApproval(
         policy_id=row["policy_id"],
         venue_id=VenueId.DERIBIT,
-        policy_status=OperationalPolicyApprovalStatus(row["policy_status"]),
+        policy_status=OperationalPolicyApprovalStatus(status_str),
         reviewer_id=row["reviewer_id"],
         reviewed_at_iso=row["reviewed_at_iso"],
         rejection_reasons=(),

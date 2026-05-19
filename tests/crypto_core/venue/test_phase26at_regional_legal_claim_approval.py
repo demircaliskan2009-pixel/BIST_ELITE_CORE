@@ -33,47 +33,50 @@ def test_phase26at_regional_legal_access_claim_approved() -> None:
 
 def test_phase26at_pending_rows_count_is_2() -> None:
     result = _result()
-    assert len(result.pending_rows) == 2
+    assert len(result.pending_rows) == 0
 
 
-def test_phase26at_policy_regional_legal_access_review_still_pending() -> None:
+def test_phase26at_policy_regional_legal_access_review_approved_in_26aw() -> None:
     result = _result()
-    assert "policy_review:regional_legal_access_review" in result.pending_rows
+    assert "policy_review:regional_legal_access_review" not in result.pending_rows
 
 
-def test_phase26at_policy_separate_connector_enablement_still_pending() -> None:
+def test_phase26at_policy_separate_connector_enablement_deferred_in_26aw() -> None:
     result = _result()
-    assert "policy_review:separate_connector_enablement" in result.pending_rows
+    assert "policy_review:separate_connector_enablement" not in result.pending_rows
+    assert "policy_review:separate_connector_enablement" in result.deferred_rows
 
 
 def test_phase26at_accepted_is_false() -> None:
     assert _result().accepted is False
 
 
-def test_phase26at_evidence_review_complete_is_false() -> None:
-    assert _result().evidence_review_complete is False
+def test_phase26at_evidence_review_complete_is_true_after_26aw() -> None:
+    assert _result().evidence_review_complete is True  # True after Phase 26AW policy worksheet patch
 
 
 def test_phase26at_connector_enablement_ready_is_false() -> None:
     assert _result().connector_enablement_ready is False
 
 
-def test_phase26at_b1_b5_all_blocked() -> None:
+def test_phase26at_b1_b5_blocked_except_b3() -> None:
     result = _result()
-    for blocker in ("B1", "B2", "B3", "B4", "B5"):
+    for blocker in ("B1", "B2", "B4", "B5"):
         assert result.b1_b5_status[blocker] == "BLOCKED"
+    assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
 
 
 def test_phase26at_connector_ready_dialects_empty() -> None:
     assert connector_ready_dialects() == ()
 
 
-def test_phase26at_policy_worksheet_not_changed() -> None:
+def test_phase26aw_policy_worksheet_regional_legal_approved() -> None:
     policy_text = (REPO_ROOT / POLICY_WORKSHEET_PATH).read_text(encoding="utf-8")
-    # regional_legal_access_review policy row must still be PENDING
+    # regional_legal_access_review row must be APPROVE after Phase 26AW
     for line in policy_text.splitlines():
-        if "regional_legal_access_review" in line:
-            assert "PENDING" in line, "policy_review:regional_legal_access_review must remain PENDING in Phase 26AT"
+        if "`regional_legal_access_review`" in line:
+            assert "APPROVE" in line, "policy_review:regional_legal_access_review must be APPROVE after Phase 26AW"
+            assert "demir_operator" in line
             break
 
 

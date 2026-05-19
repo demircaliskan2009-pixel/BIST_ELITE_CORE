@@ -152,7 +152,7 @@ def test_phase26aj_prior_approved_rows_unchanged() -> None:
 
 def test_phase26aj_policy_worksheet_untouched() -> None:
     text = _policy_worksheet()
-    # Phase 26AN approved 5 policy rows; 2 remain PENDING
+    # Phase 26AN approved 5 policy rows; Phase 26AW resolved the remaining 2
     _phase26an_approved = {
         "checksum_decision",
         "liveness_policy",
@@ -174,8 +174,10 @@ def test_phase26aj_policy_worksheet_untouched() -> None:
         row_line = lines[0]
         if policy_id in _phase26an_approved:
             assert "APPROVED" in row_line, f"Policy row {policy_id!r} was approved in Phase 26AN"
-        else:
-            assert "PENDING" in row_line, f"Policy row {policy_id!r} must remain PENDING"
+        elif policy_id == "regional_legal_access_review":
+            assert "APPROVE" in row_line, f"Policy row {policy_id!r} must be APPROVED after Phase 26AW"
+        elif policy_id == "separate_connector_enablement":
+            assert "DEFER" in row_line, f"Policy row {policy_id!r} must be DEFERRED after Phase 26AW"
 
 
 def test_phase26aj_no_enabled_for_connector_true() -> None:

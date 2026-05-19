@@ -71,24 +71,24 @@ def test_phase26a_does_not_create_operator_proposal_or_worksheet_edits() -> None
     approved_claim_ids = {row["claim_id"] for row in claim_rows if row["decision"] == "APPROVED"}
     assert len(approved_claim_ids) == 23
     pending_policy = [r for r in policy_rows if r["decision"] == "PENDING"]
-    assert len(pending_policy) == 2
+    assert len(pending_policy) == 0
 
 
 def test_phase26a_validator_remains_blocked_with_26_pending_rows() -> None:
     result = evaluate_deribit_manual_review_readiness()
 
     assert result.accepted is False
-    assert result.evidence_review_complete is False
-    assert result.ready_for_engineering_patch is False
+    assert result.evidence_review_complete is True  # True after Phase 26AW
+    assert result.ready_for_engineering_patch is True  # True after Phase 26AW
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 2
+    assert len(result.pending_rows) == 0
     # Phase 26AJ later approved these rows
     assert "claim_review:prev_change_id" not in result.pending_rows
     assert "claim_review:continuity_condition" not in result.pending_rows
     assert result.b1_b5_status == {
         "B1": "BLOCKED",
         "B2": "BLOCKED",
-        "B3": "BLOCKED",
+        "B3": "READY",
         "B4": "BLOCKED",
         "B5": "BLOCKED",
     }

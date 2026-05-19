@@ -206,10 +206,10 @@ def test_phase25i_wait_insufficient_claim_rows_remain_pending():
 # ---------------------------------------------------------------------------
 
 
-def test_phase25i_all_policy_rows_remain_entirely_pending():
+def test_phase25i_all_policy_rows_pending_or_resolved_after_26aw():
     rows = {row["policy_id"]: row for row in _policy_rows()}
     assert len(rows) == 7
-    # Phase 26AN approved 5 policy rows; 2 remain PENDING (regional_legal_access_review, separate_connector_enablement).
+    # Phase 26AN approved 5 rows; Phase 26AW approved regional_legal_access_review and deferred separate_connector_enablement.
     _phase26an_approved = {
         "checksum_decision",
         "liveness_policy",
@@ -217,11 +217,15 @@ def test_phase25i_all_policy_rows_remain_entirely_pending():
         "receive_lag_budget",
         "testnet_prod_review",
     }
-    pending_rows = {pid: row for pid, row in rows.items() if pid not in _phase26an_approved}
-    for policy_id, row in pending_rows.items():
-        assert row["reviewer_id"] == "PENDING", f"Policy row {policy_id!r} reviewer_id must remain PENDING"
-        assert row["reviewed_at_iso"] == "PENDING", f"Policy row {policy_id!r} reviewed_at_iso must remain PENDING"
-        assert row["decision"] == "PENDING", f"Policy row {policy_id!r} decision must remain PENDING"
+    for policy_id, row in rows.items():
+        if policy_id in _phase26an_approved:
+            assert row["decision"] == "APPROVED"
+        elif policy_id == "regional_legal_access_review":
+            assert row["decision"] == "APPROVE"
+            assert row["reviewer_id"] == "demir_operator"
+        elif policy_id == "separate_connector_enablement":
+            assert row["decision"] == "DEFER"
+            assert row["reviewer_id"] == "demir_operator"
 
 
 def test_phase25i_wait_policy_policy_rows_approved_in_phase26an():
@@ -233,20 +237,18 @@ def test_phase25i_wait_policy_policy_rows_approved_in_phase26an():
         )
 
 
-def test_phase25i_wait_legal_policy_row_remains_pending():
+def test_phase25i_wait_legal_policy_row_approved_in_26aw():
     rows = {row["policy_id"]: row for row in _policy_rows()}
     for policy_id in _WAIT_LEGAL_POLICY_IDS:
-        assert rows[policy_id]["decision"] == "PENDING"
+        assert rows[policy_id]["decision"] == "APPROVE"  # APPROVED in Phase 26AW
 
 
-def test_phase25i_separate_connector_enablement_remains_pending_not_approved():
+def test_phase25i_separate_connector_enablement_deferred_not_approved():
     rows = {row["policy_id"]: row for row in _policy_rows()}
     for policy_id in _MUST_DEFER_POLICY_IDS:
         row = rows[policy_id]
-        assert row["decision"] == "PENDING", (
-            f"{policy_id!r} must remain PENDING; connector enablement is a separate phase"
-        )
-        assert row["reviewer_id"] == "PENDING"
+        assert row["decision"] == "DEFER", f"{policy_id!r} must be DEFER; connector enablement is a separate phase"
+        assert row["reviewer_id"] == "demir_operator"
 
 
 # ---------------------------------------------------------------------------
@@ -262,12 +264,12 @@ def test_phase25i_validator_accepted_remains_false():
 def test_phase25i_validator_evidence_review_complete_remains_false():
     """evidence_review_complete stays False: 1 claim row + 2 policy rows still PENDING."""
     result = _validator_result()
-    assert result.evidence_review_complete is False
+    assert result.evidence_review_complete is True
 
 
 def test_phase25i_validator_ready_for_engineering_patch_remains_false():
     result = _validator_result()
-    assert result.ready_for_engineering_patch is False
+    assert result.ready_for_engineering_patch is True
 
 
 def test_phase25i_validator_connector_enablement_ready_remains_false():
@@ -278,7 +280,7 @@ def test_phase25i_validator_connector_enablement_ready_remains_false():
 def test_phase25i_validator_pending_rows_count_is_26():
     """After Phase 26AR: 0 manifest pending + 0 claim pending + 2 policy pending = 2."""
     result = _validator_result()
-    assert len(result.pending_rows) == 2, (
+    assert len(result.pending_rows) == 0, (
         f"Expected 2 pending rows after Phase 26AR, got {len(result.pending_rows)}: {result.pending_rows}"
     )
 
@@ -311,15 +313,16 @@ def test_phase25i_non_approved_claim_rows_still_in_pending_rows():
 def test_phase25i_all_policy_rows_still_in_pending_rows():
     result = _validator_result()
     policy_pending = [r for r in result.pending_rows if r.startswith("policy_review:")]
-    assert len(policy_pending) == 2, (
-        f"Expected 2 pending policy rows after Phase 26AN, got {len(policy_pending)}: {policy_pending}"
+    assert len(policy_pending) == 0, (
+        f"Expected 0 pending policy rows after Phase 26AW, got {len(policy_pending)}: {policy_pending}"
     )
 
 
-def test_phase25i_b1_b5_all_remain_blocked():
+def test_phase25i_b1_b5_blocked_except_b3():
     result = _validator_result()
-    for blocker in ("B1", "B2", "B3", "B4", "B5"):
+    for blocker in ("B1", "B2", "B4", "B5"):
         assert result.b1_b5_status[blocker] == "BLOCKED", f"{blocker} must remain BLOCKED after Phase 25I"
+    assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
 
 
 # ---------------------------------------------------------------------------

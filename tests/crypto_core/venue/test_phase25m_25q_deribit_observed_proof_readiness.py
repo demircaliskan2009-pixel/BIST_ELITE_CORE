@@ -129,15 +129,15 @@ def test_phase25m_25q_validator_remains_blocked() -> None:
     result = evaluate_deribit_manual_review_readiness()
 
     assert result.accepted is False
-    assert result.evidence_review_complete is False
-    assert result.ready_for_engineering_patch is False
+    assert result.evidence_review_complete is True
+    assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 2
+    assert len(result.pending_rows) == 0
     assert "claim_review:change_id" not in result.pending_rows
     assert result.b1_b5_status == {
         "B1": "BLOCKED",
         "B2": "BLOCKED",
-        "B3": "BLOCKED",
+        "B3": "READY",
         "B4": "BLOCKED",
         "B5": "BLOCKED",
     }

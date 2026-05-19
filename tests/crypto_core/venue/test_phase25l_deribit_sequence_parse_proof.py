@@ -284,7 +284,7 @@ def test_phase25l_worksheets_unchanged() -> None:
     # Policy: 5 rows APPROVED in Phase 26AN, 2 still PENDING
     assert len(policy_rows) == 7
     pending_policy = [r for r in policy_rows if r.get("decision", "").upper() == "PENDING"]
-    assert len(pending_policy) == 2
+    assert len(pending_policy) == 0
 
 
 def test_phase25l_harness_advisory_claims_still_pending_in_worksheet() -> None:
@@ -313,10 +313,10 @@ def test_phase25l_validator_blocked_and_pending_rows_26() -> None:
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
     assert result.accepted is False
-    assert result.evidence_review_complete is False
-    assert result.ready_for_engineering_patch is False
+    assert result.evidence_review_complete is True  # True after Phase 26AW
+    assert result.ready_for_engineering_patch is True  # True after Phase 26AW
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 2, (
+    assert len(result.pending_rows) == 0, (
         f"Expected 26 pending rows (0 manifest + 4 claims + 7 policies), "
         f"got {len(result.pending_rows)}: {sorted(result.pending_rows)}"
     )
@@ -328,8 +328,9 @@ def test_phase25l_b1_b5_all_blocked() -> None:
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    for gate in ("B1", "B2", "B3", "B4", "B5"):
+    for gate in ("B1", "B2", "B4", "B5"):
         assert result.b1_b5_status[gate] == "BLOCKED", f"{gate} must remain BLOCKED after Phase 25L"
+    assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
 
 
 def test_phase25l_connector_ready_dialects_empty() -> None:
