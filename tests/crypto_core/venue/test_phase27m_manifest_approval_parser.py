@@ -60,6 +60,26 @@ def test_phase27m_pending_retrieval_status_remains_pending_even_with_acceptance_
     assert any("manual_review_pending" in item for item in rows[0].missing_metadata)
 
 
+def test_phase27m_pending_retrieval_status_overrides_reject_and_defer_decisions() -> None:
+    rejected = _validate_manifest(
+        _manifest_row(
+            retrieval_status="SUPPLIED_HASHED_PENDING_REVIEW",
+            acceptance_decision="REJECT",
+        )
+    )[0]
+    deferred = _validate_manifest(
+        _manifest_row(
+            retrieval_status="SUPPLIED_HASHED_PENDING_REVIEW",
+            acceptance_decision="DEFER",
+        )
+    )[0]
+
+    assert rejected.status == "PENDING"
+    assert any("manual_review_pending" in item for item in rejected.missing_metadata)
+    assert deferred.status == "PENDING"
+    assert any("manual_review_pending" in item for item in deferred.missing_metadata)
+
+
 def test_phase27m_reject_and_defer_fail_closed() -> None:
     rejected = _validate_manifest(_manifest_row(acceptance_decision="REJECT"))[0]
     deferred = _validate_manifest(_manifest_row(acceptance_decision="DEFER"))[0]

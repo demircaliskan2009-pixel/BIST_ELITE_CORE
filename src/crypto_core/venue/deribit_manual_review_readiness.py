@@ -184,15 +184,15 @@ def _validate_manifest(manifest_text: str) -> list[DeribitReviewRowResult]:
             missing.append(f"{source_id}:manual_review_pending")
         if not sha or _is_pending(sha):
             missing.append(f"{source_id}:content_sha256_missing")
-        if _is_rejected(acceptance_decision):
-            status = "REJECTED"
-            rr: tuple[str, ...] = tuple(missing) if missing else (f"{source_id}:rejected",)
-        elif _is_deferred(acceptance_decision):
-            status = "DEFERRED"
-            rr = tuple(missing) if missing else (f"{source_id}:deferred",)
-        elif missing:
+        if missing:
             status = "PENDING"
             rr = tuple(missing)
+        elif _is_rejected(acceptance_decision):
+            status = "REJECTED"
+            rr: tuple[str, ...] = (f"{source_id}:rejected",)
+        elif _is_deferred(acceptance_decision):
+            status = "DEFERRED"
+            rr = (f"{source_id}:deferred",)
         elif _is_approved(acceptance_decision):
             for col, val in (
                 ("accepted_by", accepted_by),
