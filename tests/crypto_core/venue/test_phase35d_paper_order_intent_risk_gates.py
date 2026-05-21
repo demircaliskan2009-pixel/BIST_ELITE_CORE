@@ -78,6 +78,15 @@ def test_phase35d_present_accounting_state_is_prefill_only_not_mutation_ready() 
     assert decision.position_mutation_ready is False
 
 
+def test_phase35d_malformed_policy_fails_closed_without_runtime_exception() -> None:
+    decision = validate_deribit_paper_order_intent(_frame(), _intent(), policy={"max_order_qty": 1.0})  # type: ignore[arg-type]
+
+    assert decision.accepted is False
+    assert "deribit_paper_order_intent:policy_malformed" in decision.rejection_reasons
+    assert "policy_malformed" in decision.risk_checks
+    assert decision.fill_request is None
+
+
 def _frame():
     paper_feed = build_deribit_paper_feed_input(accepted_replay_result())
     assert paper_feed.frame is not None

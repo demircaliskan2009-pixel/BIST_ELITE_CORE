@@ -118,7 +118,7 @@ def validate_deribit_paper_order_intent(
     accounting_state_present: bool = False,
     now_ns: int | None = None,
 ) -> DeribitPaperOrderIntentDecision:
-    resolved_policy = policy or DeribitPaperPreFillRiskPolicy()
+    resolved_policy: object = policy if policy is not None else DeribitPaperPreFillRiskPolicy()
     frame_reasons = list(_frame_rejection_reasons(frame, now_ns=now_ns))
     intent_reasons = list(_intent_rejection_reasons(intent, frame))
     policy_reasons = list(_policy_rejection_reasons(resolved_policy))
@@ -316,7 +316,7 @@ def _policy_rejection_reasons(policy: object) -> tuple[str, ...]:
 
 def _prefill_gate_rejection_reasons(
     intent: object,
-    policy: DeribitPaperPreFillRiskPolicy,
+    policy: object,
     *,
     kill_switch_active: bool,
     accounting_state_present: bool,
@@ -343,13 +343,18 @@ def _prefill_gate_rejection_reasons(
 
 def _risk_checks(
     intent: object,
-    policy: DeribitPaperPreFillRiskPolicy,
+    policy: object,
     *,
     kill_switch_active: bool,
     accounting_state_present: bool,
 ) -> tuple[str, ...]:
     checks: list[str] = []
     checks.append("kill_switch_clear" if kill_switch_active is False else "kill_switch_blocking")
+    if not isinstance(policy, DeribitPaperPreFillRiskPolicy):
+        checks.append("policy_malformed")
+        checks.append("ledger_mutation_disabled")
+        checks.append("slippage_fee_policy_not_implemented")
+        return tuple(dict.fromkeys(checks))
     if isinstance(intent, DeribitPaperOrderIntent):
         if _positive_float(intent.quantity) and intent.quantity <= policy.max_order_qty:
             checks.append("max_order_qty_passed")
