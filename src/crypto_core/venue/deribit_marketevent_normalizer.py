@@ -201,11 +201,7 @@ def _book_contract_for_observation(
             )
         if observation.event_type in {"change", "delta"}:
             if observation.prev_change_id is None:
-                return _BookContractResult(
-                    snapshot=None,
-                    delta=None,
-                    rejection_reasons=("deribit_marketevent:sequence_gap_unresolved",),
-                )
+                return _BookContractResult(snapshot=None, delta=None, rejection_reasons=())
             return _BookContractResult(
                 snapshot=None,
                 delta=OrderBookDelta(

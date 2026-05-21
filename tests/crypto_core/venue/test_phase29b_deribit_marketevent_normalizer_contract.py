@@ -66,6 +66,22 @@ def test_phase29b_typeless_aggregated_observation_normalizes_event_only() -> Non
     assert result.market_event.raw_payload_ref.endswith(":unspecified")
 
 
+def test_phase29b_change_without_prev_change_id_degrades_to_event_only() -> None:
+    payload = _payload(event_type="change")
+    data = payload["params"]["data"]  # type: ignore[index]
+    assert isinstance(data, dict)
+    data["prev_change_id"] = None
+    parsed = parse_deribit_public_book_payload(payload, received_at_ns=RECEIVED_AT_NS)
+
+    result = normalize_deribit_public_book_parse_result(parsed)
+
+    assert result.accepted is True
+    assert isinstance(result.market_event, PublicMarketDataEvent)
+    assert result.order_book_snapshot is None
+    assert result.order_book_delta is None
+    assert result.market_event.sequence_id == 101
+
+
 def _payload(event_type: str | None) -> dict[str, object]:
     return {
         "jsonrpc": "2.0",
