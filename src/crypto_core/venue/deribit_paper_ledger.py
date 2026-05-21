@@ -211,7 +211,11 @@ def _rejection_reasons(
     if not isinstance(ledger_state, DeribitPaperLedgerState):
         reasons.append("deribit_paper_ledger:absent_required_ledger_state")
     else:
-        if ledger_state.venue_id is not VenueId.DERIBIT or ledger_state.symbol != ledger_state.symbol:
+        if (
+            ledger_state.venue_id is not VenueId.DERIBIT
+            or not _non_empty(ledger_state.symbol)
+            or not _non_empty(ledger_state.canonical_symbol)
+        ):
             reasons.append("deribit_paper_ledger:ledger_state_invalid")
         if _contains_scope_marker(ledger_state.ledger_id) or not _finite_non_negative(ledger_state.cash_balance):
             reasons.append("deribit_paper_ledger:ledger_state_invalid")

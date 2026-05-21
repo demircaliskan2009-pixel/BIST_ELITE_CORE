@@ -51,6 +51,19 @@ def test_phase36c_missing_ledger_and_instrument_mismatch_fail_closed() -> None:
     assert "deribit_paper_ledger:instrument_mismatch" in mismatch.rejection_reasons
 
 
+def test_phase36c_malformed_ledger_identity_fails_closed() -> None:
+    _, _, reference, fill_result = _result()
+    malformed = apply_deribit_paper_fill_to_ledger(
+        replace(_ledger(), symbol="", canonical_symbol="BTC-PERP"),
+        reference,
+        fill_result,
+    )
+
+    assert malformed.accepted is False
+    assert malformed.ledger_mutated is False
+    assert "deribit_paper_ledger:ledger_state_invalid" in malformed.rejection_reasons
+
+
 def test_phase36c_zero_or_negative_qty_or_price_fail_closed() -> None:
     ledger = _ledger()
     _, _, reference, fill_result = _result()
