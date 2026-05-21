@@ -74,3 +74,19 @@ def test_phase28c_missing_prev_change_id_with_prior_sequence_fails_closed() -> N
 
     assert result.accepted is False
     assert "deribit_public_feed:sequence_gap_unresolved" in result.rejection_reasons
+
+
+def test_phase28c_negative_sequence_ids_fail_closed() -> None:
+    payload = _payload()
+    params = payload["params"]
+    assert isinstance(params, dict)
+    data = params["data"]
+    assert isinstance(data, dict)
+    data["change_id"] = -1
+    data["prev_change_id"] = -2
+
+    result = parse_deribit_public_book_payload(payload, received_at_ns=RECEIVED_AT_NS)
+
+    assert result.accepted is False
+    assert "deribit_public_feed:change_id_invalid" in result.rejection_reasons
+    assert "deribit_public_feed:prev_change_id_invalid" in result.rejection_reasons

@@ -69,3 +69,16 @@ def test_phase28b_valid_sample_public_book_payload_parses_deterministically() ->
     assert result.observation.bids[0].price == 50_000.0
     assert result.observation.asks[0].amount == 0.75
     assert deribit_public_book_observation_to_dict(result.observation)["dialect_id"] == DERIBIT_PUBLIC_BOOK_DIALECT_ID
+
+
+def test_phase28b_typeless_aggregated_book_payload_is_accepted_as_unspecified() -> None:
+    payload = _payload()
+    data = payload["params"]["data"]  # type: ignore[index]
+    assert isinstance(data, dict)
+    data["type"] = None
+
+    result = parse_deribit_public_book_payload(payload, received_at_ns=1_700_000_000_000_500_000)
+
+    assert result.accepted is True
+    assert result.observation is not None
+    assert result.observation.event_type == "unspecified"

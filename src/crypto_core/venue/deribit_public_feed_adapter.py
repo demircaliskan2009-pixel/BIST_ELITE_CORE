@@ -17,7 +17,7 @@ DERIBIT_PUBLIC_TESTNET_WS_URL = "wss://test.deribit.com/ws/api/v2"
 PUBLIC_MARKET_DATA_ONLY = "PUBLIC_MARKET_DATA_ONLY"
 
 _NS_PER_MS = 1_000_000
-_PUBLIC_BOOK_EVENT_TYPES = frozenset({"snapshot", "change", "delta"})
+_PUBLIC_BOOK_EVENT_TYPES = frozenset({"snapshot", "change", "delta", "unspecified"})
 _PRIVATE_OR_EXECUTION_KEYS = frozenset(
     {
         "api" + "_key",
@@ -153,6 +153,8 @@ def parse_deribit_public_book_payload(
         reasons.append("deribit_public_feed:instrument_mismatch")
 
     event_type = data.get("type")
+    if event_type is None:
+        event_type = "unspecified"
     if event_type not in _PUBLIC_BOOK_EVENT_TYPES:
         reasons.append("deribit_public_feed:event_type_unsupported")
 
@@ -173,7 +175,11 @@ def parse_deribit_public_book_payload(
     change_id = _optional_int(data.get("change_id"))
     if change_id is None:
         reasons.append("deribit_public_feed:change_id_missing")
+    elif change_id < 0:
+        reasons.append("deribit_public_feed:change_id_invalid")
     prev_change_id = _optional_int(data.get("prev_change_id"))
+    if prev_change_id is not None and prev_change_id < 0:
+        reasons.append("deribit_public_feed:prev_change_id_invalid")
 
     if prior_change_id is not None:
         if not _non_negative_int(prior_change_id):
