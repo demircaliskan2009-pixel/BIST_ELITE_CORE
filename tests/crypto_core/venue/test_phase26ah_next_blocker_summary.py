@@ -79,7 +79,7 @@ def test_phase26ah_no_worksheet_edits_for_new_proof_ready_rows() -> None:
 
 def test_phase26ah_pending_rows_remain_26_and_validator_blocked() -> None:
     result = evaluate_deribit_manual_review_readiness()
-    assert result.accepted is False
+    assert result.accepted is True
     assert result.evidence_review_complete is True  # True after Phase 26AW
     assert result.ready_for_engineering_patch is True  # True after Phase 26AW
     assert result.connector_enablement_ready is True
@@ -89,8 +89,8 @@ def test_phase26ah_pending_rows_remain_26_and_validator_blocked() -> None:
 def test_phase26ah_connector_ready_dialects_empty_and_b1_b5_blocked() -> None:
     assert len(connector_ready_dialects()) == 1
     result = evaluate_deribit_manual_review_readiness()
-    for blocker in ("B1", "B2"):
-        assert result.b1_b5_status[blocker] == "BLOCKED"
+    assert result.b1_b5_status["B1"] == "READY_FOR_HUMAN_GATE"
+    assert result.b1_b5_status["B2"] == "READY"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
     assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
 

@@ -77,20 +77,20 @@ def test_phase25g_proposal_contains_all_36_rows_and_required_labels():
     )
 
 
-def test_phase25g_runtime_validator_state_remains_blocked_and_connector_empty():
+def test_phase25g_runtime_validator_state_reflects_phase27k_acceptance():
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
 
-    assert result.accepted is False
+    assert result.accepted is True
     assert result.evidence_review_complete is True
     assert result.connector_enablement_ready is True
     assert len(result.pending_rows) == 0  # Phase 26AR reduced from 3 to 2
     assert result.b1_b5_status == {
-        "B1": "BLOCKED",
-        "B2": "BLOCKED",
+        "B1": "READY_FOR_HUMAN_GATE",
+        "B2": "READY",
         "B3": "READY",
         "B4": "READY",
         "B5": "READY",

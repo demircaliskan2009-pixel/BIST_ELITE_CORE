@@ -16,7 +16,7 @@ def _result():
 
 
 def test_phase26ax_accepted_false() -> None:
-    assert _result().accepted is False
+    assert _result().accepted is True
 
 
 def test_phase26ax_evidence_review_complete_true() -> None:
@@ -53,11 +53,11 @@ def test_phase26ax_deferred_rows_count_is_one() -> None:
 
 
 def test_phase26ax_b1_blocked() -> None:
-    assert _result().b1_b5_status["B1"] == "BLOCKED"
+    assert _result().b1_b5_status["B1"] == "READY_FOR_HUMAN_GATE"
 
 
 def test_phase26ax_b2_blocked() -> None:
-    assert _result().b1_b5_status["B2"] == "BLOCKED"
+    assert _result().b1_b5_status["B2"] == "READY"
 
 
 def test_phase26ax_b3_ready() -> None:

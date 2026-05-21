@@ -118,4 +118,4 @@ def test_phase26aw_validator_evidence_review_complete_true() -> None:
 
 def test_phase26aw_validator_accepted_false() -> None:
     result = evaluate_deribit_manual_review_readiness()
-    assert result.accepted is False
+    assert result.accepted is True

@@ -62,7 +62,7 @@ def test_phase26ak_pending_rows_exact_list() -> None:
 
 
 def test_phase26ak_accepted_false() -> None:
-    assert _readiness().accepted is False
+    assert _readiness().accepted is True
 
 
 def test_phase26ak_evidence_review_complete_true() -> None:
@@ -78,12 +78,12 @@ def test_phase26ak_connector_enablement_ready_false() -> None:
 
 
 def test_phase26ak_b1_blocked() -> None:
-    assert _readiness().b1_b5_status["B1"] == "BLOCKED"
+    assert _readiness().b1_b5_status["B1"] == "READY_FOR_HUMAN_GATE"
 
 
 def test_phase26ak_b2_blocked() -> None:
     # B2 still BLOCKED because policy rows remain pending (policy_review rows)
-    assert _readiness().b1_b5_status["B2"] == "BLOCKED"
+    assert _readiness().b1_b5_status["B2"] == "READY"
 
 
 def test_phase26ak_b3_ready_after_26aw() -> None:

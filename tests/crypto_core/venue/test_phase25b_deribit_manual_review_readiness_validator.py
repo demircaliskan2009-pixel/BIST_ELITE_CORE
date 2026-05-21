@@ -1,12 +1,12 @@
 """Phase 25B â€” Deribit human-review readiness validator tests.
 
 Proves:
-1. Current worksheets are not ready (accepted=False, ready_for_engineering_patch=False).
+1. Current worksheets are accepted after explicit source snapshot metadata.
 2. Missing reviewer metadata fails closed.
 3. Pending rows fail closed.
 4. Rejected/deferred rows fail closed.
 5. No runtime connector readiness changes.
-6. connector_ready_dialects() == ().
+6. connector_ready_dialects() contains only Deribit public market data.
 7. Validator imports only inert modules.
 """
 
@@ -52,20 +52,20 @@ _FORBIDDEN_IMPORT_PATTERNS = (
 
 
 # ---------------------------------------------------------------------------
-# 1. Current repo state: worksheets not ready
+# 1. Current repo state: source snapshots, claims, policies accepted
 # ---------------------------------------------------------------------------
 
 
-def test_current_worksheets_have_public_market_data_b5_ready_but_b1_blocked():
+def test_current_worksheets_have_public_market_data_acceptance_ready():
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
     assert isinstance(result, DeribitManualReviewReadinessResult)
-    assert result.accepted is False
-    assert result.evidence_review_complete is True  # True after Phase 26AW
-    assert result.ready_for_engineering_patch is True  # True after Phase 26AW
+    assert result.accepted is True
+    assert result.evidence_review_complete is True
+    assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is True
 
 
@@ -78,14 +78,14 @@ def test_current_worksheets_have_pending_rows():
     assert len(result.pending_rows) == 0, "No pending rows after Phase 26AW"
 
 
-def test_current_b1_b2_blocked_b3_b4_b5_ready():
+def test_current_b1_b5_ready_after_source_snapshot_acceptance():
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    for blocker in ("B1", "B2"):
-        assert result.b1_b5_status[blocker] == "BLOCKED", f"{blocker} must be BLOCKED in current repo state"
+    assert result.b1_b5_status["B1"] == "READY_FOR_HUMAN_GATE"
+    assert result.b1_b5_status["B2"] == "READY"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW policy signoff
     assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
     assert result.b1_b5_status["B5"] == "READY"  # B5 READY after Phase 27F public connector enablement
@@ -470,22 +470,16 @@ def test_manifest_supplied_hashed_pending_review_fails_closed():
     )
 
 
-def test_manifest_current_rows_are_pending():
-    """All 6 current manifest rows must be PENDING (not REVIEWED) after P1 fix.
-
-    Current manifest has retrieval_status=SUPPLIED_HASHED_PENDING_REVIEW for all
-    6 source IDs. These must appear as PENDING in pending_rows so they block
-    accepted=True even when claim/policy worksheets are later approved.
-    """
+def test_manifest_current_rows_are_approved_after_phase27k():
+    """All 6 current manifest rows must be APPROVED through explicit metadata."""
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    manifest_pending = [r for r in result.pending_rows if r.startswith("source_snapshot:")]
-    assert len(manifest_pending) == 0, (
-        f"Expected 0 pending source_snapshot rows after Phase 25I, got {len(manifest_pending)}: {manifest_pending}"
-    )
+    manifest_rows = [r for r in result.row_results if r.surface == "source_snapshot"]
+    assert len(manifest_rows) == _MANIFEST_EXPECTED_ROW_COUNT
+    assert all(r.status == "APPROVED" for r in manifest_rows)
 
 
 # ---------------------------------------------------------------------------

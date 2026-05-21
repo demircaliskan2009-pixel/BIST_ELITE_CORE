@@ -23,15 +23,17 @@ def test_phase27h_result_records_public_market_data_ready_not_trade_ready() -> N
     assert "orders, deposits, withdrawals" in text
 
 
-def test_phase27h_validator_matches_result_document() -> None:
+def test_phase27h_validator_reflects_phase27k_source_snapshot_acceptance() -> None:
     result = evaluate_deribit_manual_review_readiness()
 
-    assert result.accepted is False
+    assert result.accepted is True
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is True
     assert result.pending_rows == ()
     assert result.deferred_rows == ()
+    assert result.b1_b5_status["B1"] == "READY_FOR_HUMAN_GATE"
+    assert result.b1_b5_status["B2"] == "READY"
     assert result.b1_b5_status["B3"] == "READY"
     assert result.b1_b5_status["B4"] == "READY"
     assert result.b1_b5_status["B5"] == "READY"

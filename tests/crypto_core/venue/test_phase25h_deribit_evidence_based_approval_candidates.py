@@ -153,14 +153,14 @@ def test_phase25h_does_not_add_final_reviewer_values_or_modify_worksheets():
             assert row["decision"] == "APPROVE"
 
 
-def test_phase25h_validator_and_connector_state_remain_blocked():
+def test_phase25h_validator_and_connector_state_reflect_phase27k_acceptance():
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
 
-    assert result.accepted is False
+    assert result.accepted is True
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is True
