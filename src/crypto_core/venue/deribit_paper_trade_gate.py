@@ -398,3 +398,182 @@ def _intent_rejection_reasons(intent: object) -> tuple[str, ...]:
 
 
 def _decision_rejection_reasons(decision: object) -> tuple[str, ...]:
+    if not isinstance(decision, DeribitPaperOrderIntentDecision):
+        return ("deribit_paper_trade_gate:decision_malformed",)
+
+    reasons: list[str] = []
+    if decision.accepted is not True:
+        reasons.append("deribit_paper_trade_gate:intent_decision_rejected")
+    if decision.fill_request is None:
+        reasons.append("deribit_paper_trade_gate:fill_request_missing")
+    if decision.kill_switch_active is not False:
+        reasons.append("deribit_paper_trade_gate:intent_kill_switch_not_clear")
+    if decision.exchange_order_ready is not False or decision.venue_submission_ready is not False:
+        reasons.append("deribit_paper_trade_gate:decision_scope_invalid")
+    if decision.trade_ready is not False or decision.paper_execution_loop_ready is not False:
+        reasons.append("deribit_paper_trade_gate:decision_scope_invalid")
+    if decision.ledger_mutation_ready is not False or decision.position_mutation_ready is not False:
+        reasons.append("deribit_paper_trade_gate:decision_scope_invalid")
+    if decision.strategy_signal_ready is not False:
+        reasons.append("deribit_paper_trade_gate:decision_scope_invalid")
+    if decision.live_trading_ready is not False or decision.shadow_trading_ready is not False:
+        reasons.append("deribit_paper_trade_gate:decision_scope_invalid")
+    return tuple(dict.fromkeys(reasons))
+
+
+def _fill_request_rejection_reasons(fill_request: object) -> tuple[str, ...]:
+    if not isinstance(fill_request, DeribitPaperFillRequest):
+        return ("deribit_paper_trade_gate:fill_request_malformed",)
+
+    reasons: list[str] = []
+    if not _non_empty(fill_request.request_id):
+        reasons.append("deribit_paper_trade_gate:fill_request_id_missing")
+    if fill_request.simulation_only is not True:
+        reasons.append("deribit_paper_trade_gate:fill_request_not_simulation_only")
+    return tuple(dict.fromkeys(reasons))
+
+
+def _frame_rejection_reasons(frame: object, *, now_ns: int | None) -> tuple[str, ...]:
+    if not isinstance(frame, DeribitPaperFeedFrame):
+        return ("deribit_paper_trade_gate:frame_malformed",)
+
+    reasons: list[str] = []
+    if frame.venue_id is not VenueId.DERIBIT:
+        reasons.append("deribit_paper_trade_gate:frame_venue_mismatch")
+    if frame.feed_type is not PublicFeedType.L2_ORDERBOOK:
+        reasons.append("deribit_paper_trade_gate:frame_feed_type_mismatch")
+    if frame.read_only_market_data is not True or frame.accepted_for_paper_input is not True:
+        reasons.append("deribit_paper_trade_gate:frame_not_accepted")
+    if frame.paper_execution_ready is not False or frame.trade_ready is not False:
+        reasons.append("deribit_paper_trade_gate:frame_scope_invalid")
+    if not _non_empty(frame.symbol) or not _non_empty(frame.canonical_symbol):
+        reasons.append("deribit_paper_trade_gate:frame_instrument_missing")
+    if _contains_scope_marker(frame.frame_id) or _contains_scope_marker(frame.source):
+        reasons.append("deribit_paper_trade_gate:frame_scope_invalid")
+    if now_ns is not None and not _positive_int(now_ns):
+        reasons.append("deribit_paper_trade_gate:now_ns_invalid")
+    return tuple(dict.fromkeys(reasons))
+
+
+def _ledger_state_rejection_reasons(ledger_state: object) -> tuple[str, ...]:
+    if not isinstance(ledger_state, DeribitPaperLedgerState):
+        return ("deribit_paper_trade_gate:ledger_state_missing",)
+
+    reasons: list[str] = []
+    if ledger_state.venue_id is not VenueId.DERIBIT:
+        reasons.append("deribit_paper_trade_gate:ledger_state_invalid")
+    if not _non_empty(ledger_state.symbol) or not _non_empty(ledger_state.canonical_symbol):
+        reasons.append("deribit_paper_trade_gate:ledger_state_invalid")
+    return tuple(dict.fromkeys(reasons))
+
+
+def _result(
+    *,
+    accepted: bool,
+    filled: bool,
+    ledger_mutated: bool,
+    reason_code: str,
+    rejection_reasons: tuple[str, ...],
+    operator_trigger: object,
+    run_id: str | None,
+    request_id: str | None,
+    fill_id: str | None,
+    ledger_state: DeribitPaperLedgerState | None,
+    before_summary: DeribitPaperTradeLedgerSummary | None,
+    after_summary: DeribitPaperTradeLedgerSummary | None,
+) -> DeribitPaperTradeGateResult:
+    operator_id = (
+        operator_trigger.operator_id if isinstance(operator_trigger, DeribitPaperTradeOperatorTrigger) else None
+    )
+    idempotency_key = (
+        operator_trigger.idempotency_key if isinstance(operator_trigger, DeribitPaperTradeOperatorTrigger) else None
+    )
+    audit_record = DeribitPaperTradeGateAuditRecord(
+        audit_id=f"{DERIBIT_PAPER_TRADE_GATE_ID}:{run_id or 'missing-run'}:{reason_code}",
+        operator_id=operator_id,
+        run_id=run_id,
+        idempotency_key=idempotency_key,
+        request_id=request_id,
+        fill_id=fill_id,
+        accepted=accepted,
+        filled=filled,
+        ledger_mutated=ledger_mutated,
+        reason_code=reason_code,
+        rejection_reasons=tuple(dict.fromkeys(rejection_reasons)),
+        before_ledger_summary=before_summary,
+        after_ledger_summary=after_summary,
+    )
+    return DeribitPaperTradeGateResult(
+        accepted=accepted,
+        filled=filled,
+        ledger_mutated=ledger_mutated,
+        reason_code=reason_code,
+        rejection_reasons=tuple(dict.fromkeys(rejection_reasons)),
+        run_id=run_id,
+        request_id=request_id,
+        fill_id=fill_id,
+        ledger_state=ledger_state,
+        before_ledger_summary=before_summary,
+        after_ledger_summary=after_summary,
+        audit_record=audit_record,
+    )
+
+
+def _ledger_summary(ledger_state: object) -> DeribitPaperTradeLedgerSummary | None:
+    if not isinstance(ledger_state, DeribitPaperLedgerState):
+        return None
+    return DeribitPaperTradeLedgerSummary(
+        ledger_id=ledger_state.ledger_id,
+        symbol=ledger_state.symbol,
+        canonical_symbol=ledger_state.canonical_symbol,
+        cash_balance=ledger_state.cash_balance,
+        position_qty=ledger_state.position_qty,
+        average_entry_price=ledger_state.average_entry_price,
+        realized_pnl=ledger_state.realized_pnl,
+        applied_fill_count=len(ledger_state.applied_fill_ids),
+        applied_request_count=len(ledger_state.applied_request_ids),
+        applied_idempotency_count=len(ledger_state.applied_idempotency_keys),
+        audit_entry_count=len(ledger_state.audit_entries),
+    )
+
+
+def _ledger_summary_to_dict(summary: DeribitPaperTradeLedgerSummary | None) -> dict[str, object] | None:
+    if summary is None:
+        return None
+    return {
+        "ledger_id": summary.ledger_id,
+        "symbol": summary.symbol,
+        "canonical_symbol": summary.canonical_symbol,
+        "cash_balance": summary.cash_balance,
+        "position_qty": summary.position_qty,
+        "average_entry_price": summary.average_entry_price,
+        "realized_pnl": summary.realized_pnl,
+        "applied_fill_count": summary.applied_fill_count,
+        "applied_request_count": summary.applied_request_count,
+        "applied_idempotency_count": summary.applied_idempotency_count,
+        "audit_entry_count": summary.audit_entry_count,
+    }
+
+
+def _contains_scope_marker(value: object) -> bool:
+    return isinstance(value, str) and any(marker in value.lower() for marker in _SCOPE_MARKERS)
+
+
+def _non_empty(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def _positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+__all__ = [
+    "DERIBIT_PAPER_TRADE_GATE_ID",
+    "DeribitPaperTradeGateAuditRecord",
+    "DeribitPaperTradeGateResult",
+    "DeribitPaperTradeLedgerSummary",
+    "DeribitPaperTradeOperatorTrigger",
+    "deribit_paper_trade_gate_audit_record_to_dict",
+    "deribit_paper_trade_gate_result_to_dict",
+    "run_deribit_paper_trade_gate",
+]
