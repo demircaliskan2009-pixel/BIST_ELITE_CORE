@@ -198,3 +198,167 @@ def apply_deribit_paper_fill_to_ledger(
         audit_entries=state.audit_entries + (entry,),
     )
     return DeribitPaperLedgerApplyResult(True, next_state, entry, (), True)
+
+
+def _rejection_reasons(
+    ledger_state: object,
+    intent_reference: object,
+    fill_result: object,
+    *,
+    kill_switch_active: bool | None,
+) -> tuple[str, ...]:
+    reasons: list[str] = []
+    if not isinstance(ledger_state, DeribitPaperLedgerState):
+        reasons.append("deribit_paper_ledger:absent_required_ledger_state")
+    else:
+        if ledger_state.venue_id is not VenueId.DERIBIT or ledger_state.symbol != ledger_state.symbol:
+            reasons.append("deribit_paper_ledger:ledger_state_invalid")
+        if _contains_scope_marker(ledger_state.ledger_id) or not _finite_non_negative(ledger_state.cash_balance):
+            reasons.append("deribit_paper_ledger:ledger_state_invalid")
+        if ledger_state.position_qty == 0.0 and ledger_state.average_entry_price is not None:
+            reasons.append("deribit_paper_ledger:ledger_state_invalid")
+        if ledger_state.position_qty != 0.0 and not _positive_float(ledger_state.average_entry_price):
+            reasons.append("deribit_paper_ledger:ledger_state_invalid")
+    if not isinstance(intent_reference, DeribitPaperLedgerIntentReference):
+        reasons.append("deribit_paper_ledger:intent_reference_malformed")
+    else:
+        if (
+            intent_reference.venue_id is not VenueId.DERIBIT
+            or not _non_empty(intent_reference.intent_id)
+            or not _non_empty(intent_reference.request_id)
+            or not _non_empty(intent_reference.idempotency_key)
+            or not _non_empty(intent_reference.symbol)
+            or not _non_empty(intent_reference.canonical_symbol)
+            or not _positive_float(intent_reference.quantity)
+            or not _positive_float(intent_reference.limit_price)
+            or intent_reference.simulation_only is not True
+            or _contains_scope_marker(intent_reference.intent_id)
+            or _contains_scope_marker(intent_reference.idempotency_key)
+        ):
+            reasons.append("deribit_paper_ledger:intent_reference_invalid")
+    if kill_switch_active is not None and not isinstance(kill_switch_active, bool):
+        reasons.append("deribit_paper_ledger:kill_switch_flag_invalid")
+    elif kill_switch_active is True:
+        reasons.append("deribit_paper_ledger:kill_switch_active")
+    if not isinstance(fill_result, DeribitPaperFillResult):
+        reasons.append("deribit_paper_ledger:fill_result_malformed")
+        return tuple(dict.fromkeys(reasons))
+    if fill_result.accepted is not True:
+        return tuple(
+            dict.fromkeys([*reasons, "deribit_paper_ledger:fill_result_rejected", *fill_result.rejection_reasons])
+        )
+    if fill_result.filled is not True:
+        return tuple(dict.fromkeys([*reasons, "deribit_paper_ledger:no_fill_result"]))
+    if (
+        not _non_empty(fill_result.fill_id)
+        or fill_result.venue_id is not VenueId.DERIBIT
+        or not _positive_float(fill_result.simulated_qty)
+        or not _positive_float(fill_result.simulated_price)
+        or not _positive_int(fill_result.source_event_time_ns)
+        or not _positive_int(fill_result.source_receive_time_ns)
+        or not _non_negative_int(fill_result.source_sequence_id)
+        or fill_result.source_receive_time_ns < fill_result.source_event_time_ns
+        or fill_result.venue_submission_ready is not False
+        or fill_result.trade_ready is not False
+        or fill_result.position_mutation_ready is not False
+        or fill_result.strategy_signal_ready is not False
+        or _contains_scope_marker(fill_result.fill_id)
+        or _contains_scope_marker(fill_result.reason_code)
+    ):
+        reasons.append("deribit_paper_ledger:fill_result_invalid")
+    if isinstance(ledger_state, DeribitPaperLedgerState) and isinstance(
+        intent_reference, DeribitPaperLedgerIntentReference
+    ):
+        if (
+            ledger_state.symbol != intent_reference.symbol
+            or ledger_state.canonical_symbol != intent_reference.canonical_symbol
+            or fill_result.symbol != ledger_state.symbol
+            or fill_result.canonical_symbol != ledger_state.canonical_symbol
+        ):
+            reasons.append("deribit_paper_ledger:instrument_mismatch")
+        if intent_reference.request_id in ledger_state.applied_request_ids:
+            reasons.append("deribit_paper_ledger:duplicate_request_id")
+        if intent_reference.idempotency_key in ledger_state.applied_idempotency_keys:
+            reasons.append("deribit_paper_ledger:duplicate_idempotency_key")
+        if fill_result.fill_id in ledger_state.applied_fill_ids:
+            reasons.append("deribit_paper_ledger:duplicate_fill_id")
+        if not fill_result.fill_id.startswith(f"{DERIBIT_PAPER_FILL_MODEL_ID}:{intent_reference.request_id}:seq:"):
+            reasons.append("deribit_paper_ledger:fill_request_mismatch")
+        if fill_result.simulated_qty is not None and fill_result.simulated_qty > intent_reference.quantity:
+            reasons.append("deribit_paper_ledger:fill_qty_exceeds_intent")
+        if fill_result.simulated_price is not None:
+            if (
+                intent_reference.side is DeribitPaperOrderIntentSide.BUY
+                and fill_result.simulated_price > intent_reference.limit_price
+            ):
+                reasons.append("deribit_paper_ledger:buy_limit_breached")
+            if (
+                intent_reference.side is DeribitPaperOrderIntentSide.SELL
+                and fill_result.simulated_price < intent_reference.limit_price
+            ):
+                reasons.append("deribit_paper_ledger:sell_limit_breached")
+    return tuple(dict.fromkeys(reasons))
+
+
+def _apply_position(
+    position_qty: float,
+    average_entry_price: float | None,
+    side: DeribitPaperOrderIntentSide,
+    fill_qty: float,
+    fill_price: float,
+) -> tuple[float, float | None, float]:
+    if position_qty == 0.0 or average_entry_price is None:
+        return (fill_qty if side is DeribitPaperOrderIntentSide.BUY else -fill_qty, fill_price, 0.0)
+    if position_qty > 0.0 and side is DeribitPaperOrderIntentSide.BUY:
+        total_qty = position_qty + fill_qty
+        avg = ((position_qty * average_entry_price) + (fill_qty * fill_price)) / total_qty
+        return total_qty, avg, 0.0
+    if position_qty < 0.0 and side is DeribitPaperOrderIntentSide.SELL:
+        total_qty = abs(position_qty) + fill_qty
+        avg = ((abs(position_qty) * average_entry_price) + (fill_qty * fill_price)) / total_qty
+        return -total_qty, avg, 0.0
+    if position_qty > 0.0:
+        close_qty = min(position_qty, fill_qty)
+        realized = (fill_price - average_entry_price) * close_qty
+        remainder = position_qty - fill_qty
+        return (
+            (remainder, average_entry_price, realized)
+            if remainder > 0.0
+            else ((0.0, None, realized) if remainder == 0.0 else (remainder, fill_price, realized))
+        )
+    close_qty = min(abs(position_qty), fill_qty)
+    realized = (average_entry_price - fill_price) * close_qty
+    remainder = abs(position_qty) - fill_qty
+    return (
+        (-remainder, average_entry_price, realized)
+        if remainder > 0.0
+        else ((0.0, None, realized) if remainder == 0.0 else (-remainder, fill_price, realized))
+    )
+
+
+def _contains_scope_marker(value: object) -> bool:
+    return isinstance(value, str) and any(marker in value.lower() for marker in _SCOPE_MARKERS)
+
+
+def _non_empty(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def _non_negative_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _positive_float(value: object) -> bool:
+    return (
+        isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(float(value)) and value > 0.0
+    )
+
+
+def _finite_non_negative(value: object) -> bool:
+    return (
+        isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(float(value)) and value >= 0.0
+    )
