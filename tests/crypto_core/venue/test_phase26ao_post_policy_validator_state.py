@@ -32,7 +32,7 @@ def result() -> DeribitManualReviewReadinessResult:
 
 
 def test_accepted_false(result: DeribitManualReviewReadinessResult) -> None:
-    assert result.accepted is False
+    assert result.accepted is True
 
 
 def test_evidence_review_complete_true(result: DeribitManualReviewReadinessResult) -> None:
@@ -107,11 +107,11 @@ def test_policy_testnet_prod_review_not_pending(result: DeribitManualReviewReadi
 
 
 def test_b1_blocked(result: DeribitManualReviewReadinessResult) -> None:
-    assert result.b1_b5_status["B1"] == "BLOCKED"
+    assert result.b1_b5_status["B1"] == "READY_FOR_HUMAN_GATE"
 
 
 def test_b2_blocked(result: DeribitManualReviewReadinessResult) -> None:
-    assert result.b1_b5_status["B2"] == "BLOCKED"
+    assert result.b1_b5_status["B2"] == "READY"
 
 
 def test_b3_ready(result: DeribitManualReviewReadinessResult) -> None:

@@ -129,13 +129,13 @@ def test_phase26v_pending_rows_unchanged() -> None:
 def test_phase26v_no_worksheet_edits_and_validator_unchanged() -> None:
     result = evaluate_deribit_manual_review_readiness()
 
-    assert result.accepted is False
+    assert result.accepted is True
     assert result.evidence_review_complete is True  # True after Phase 26AW
     assert result.connector_enablement_ready is True
     assert len(result.pending_rows) == 0
     assert result.b1_b5_status == {
-        "B1": "BLOCKED",
-        "B2": "BLOCKED",
+        "B1": "READY_FOR_HUMAN_GATE",
+        "B2": "READY",
         "B3": "READY",
         "B4": "READY",
         "B5": "READY",

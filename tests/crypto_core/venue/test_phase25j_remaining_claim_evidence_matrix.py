@@ -460,9 +460,9 @@ def test_phase25j_policy_worksheet_approved_count_is_5_phase26an():
 # ---------------------------------------------------------------------------
 
 
-def test_phase25j_validator_accepted_remains_false():
+def test_phase25j_validator_accepted_after_phase27k():
     result = _validator_result()
-    assert result.accepted is False, "Validator accepted must remain False after Phase 25J doc-only patch"
+    assert result.accepted is True
 
 
 def test_phase25j_validator_evidence_review_complete_remains_false():
@@ -511,12 +511,10 @@ def test_phase25j_validator_policy_pending_count_is_0_after_26aw():
     )
 
 
-def test_phase25j_b1_b5_blocked_except_b3_b4():
+def test_phase25j_b1_b5_ready_after_phase27k():
     result = _validator_result()
-    for blocker in ("B1", "B2"):
-        assert result.b1_b5_status[blocker] == "BLOCKED", (
-            f"{blocker} must remain BLOCKED after Phase 25J doc-only patch"
-        )
+    assert result.b1_b5_status["B1"] == "READY_FOR_HUMAN_GATE"
+    assert result.b1_b5_status["B2"] == "READY"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
     assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
 

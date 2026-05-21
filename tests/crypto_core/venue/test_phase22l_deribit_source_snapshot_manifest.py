@@ -64,8 +64,9 @@ def test_manifest_has_official_urls_and_successful_hash_metadata():
 
 def test_manifest_is_hash_only_and_raw_html_is_not_committed():
     assert "`retrieval_method`: `TERMINAL_DOC_FETCH`" in _manifest()
-    assert "`operational_status`: `BLOCKED`" in _manifest()
-    assert "`manual_review_status`: `PENDING`" in _manifest()
+    assert "`operational_status`: `SOURCE_SNAPSHOTS_ACCEPTED`" in _manifest()
+    assert "`manual_review_status`: `APPROVED`" in _manifest()
+    assert "`acceptance_decision`: `APPROVE`" in _manifest()
     assert not list(MANIFEST_PATH.parent.glob("*.html"))
 
 

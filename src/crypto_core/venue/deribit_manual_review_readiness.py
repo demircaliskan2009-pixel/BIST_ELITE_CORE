@@ -12,7 +12,7 @@ Phase separation:
   requires separate explicit authorization.
 
 This module:
-- does NOT approve any B1-B5 blocker.
+- approves source snapshot rows only when explicit acceptance metadata exists.
 - does NOT change operational_status.
 - does NOT enable connector_ready_dialects.
 - does NOT read credentials, private API, or network.
@@ -61,7 +61,7 @@ _CONNECTOR_ENABLEMENT_ROW_ID = "separate_connector_enablement"
 class DeribitReviewRowResult:
     row_id: str
     surface: str  # "source_snapshot" | "claim_review" | "policy_review"
-    status: str  # "PENDING" | "APPROVED" | "REJECTED" | "DEFERRED" | "MISSING"
+    status: str  # "PENDING" | "REVIEWED" | "APPROVED" | "REJECTED" | "DEFERRED" | "MISSING"
     missing_metadata: tuple[str, ...]
     rejection_reasons: tuple[str, ...]
 
@@ -150,6 +150,10 @@ def _is_deferred(value: str) -> bool:
     return value.strip().upper() == _DEFER_VALUE
 
 
+def _is_provided(value: str) -> bool:
+    return bool(value.strip()) and not _is_pending(value)
+
+
 # ---------------------------------------------------------------------------
 # Per-surface validators
 # ---------------------------------------------------------------------------
@@ -158,9 +162,8 @@ def _is_deferred(value: str) -> bool:
 def _validate_manifest(manifest_text: str) -> list[DeribitReviewRowResult]:
     """Validate source snapshot manifest rows.
 
-    A row is PENDING when retrieval_status is PENDING or content_sha256 is
-    absent. No expected-ID list is hardcoded here; expected-ID coverage is
-    asserted in the test suite.
+    Explicit acceptance metadata is required for APPROVED. REVIEWED_APPROVED
+    retrieval_status alone is intentionally not sufficient.
     """
     rows = _parse_md_table_rows(manifest_text)
     results: list[DeribitReviewRowResult] = []
@@ -172,20 +175,48 @@ def _validate_manifest(manifest_text: str) -> list[DeribitReviewRowResult]:
 
         missing: list[str] = []
         retrieval_status = row.get("retrieval_status", _PENDING_SENTINEL)
+        acceptance_decision = row.get("acceptance_decision", _PENDING_SENTINEL)
+        accepted_by = row.get("accepted_by", _PENDING_SENTINEL)
+        accepted_at = row.get("accepted_at_iso", _PENDING_SENTINEL)
+        acceptance_scope = row.get("acceptance_scope", _PENDING_SENTINEL)
         sha = row.get("content_sha256", "")
         if _is_pending(retrieval_status) or "PENDING" in retrieval_status.upper():
             missing.append(f"{source_id}:manual_review_pending")
         if not sha or _is_pending(sha):
             missing.append(f"{source_id}:content_sha256_missing")
-
-        status = "PENDING" if missing else "REVIEWED"
+        if _is_rejected(acceptance_decision):
+            status = "REJECTED"
+            rr: tuple[str, ...] = tuple(missing) if missing else (f"{source_id}:rejected",)
+        elif _is_deferred(acceptance_decision):
+            status = "DEFERRED"
+            rr = tuple(missing) if missing else (f"{source_id}:deferred",)
+        elif missing:
+            status = "PENDING"
+            rr = tuple(missing)
+        elif _is_approved(acceptance_decision):
+            for col, val in (
+                ("accepted_by", accepted_by),
+                ("accepted_at_iso", accepted_at),
+                ("acceptance_scope", acceptance_scope),
+            ):
+                if not _is_provided(val):
+                    missing.append(f"{source_id}:{col}_pending")
+            if missing:
+                status = "REVIEWED"
+                rr = tuple(missing)
+            else:
+                status = "APPROVED"
+                rr = ()
+        else:
+            status = "REVIEWED"
+            rr = ()
         results.append(
             DeribitReviewRowResult(
                 row_id=source_id,
                 surface="source_snapshot",
                 status=status,
                 missing_metadata=tuple(missing),
-                rejection_reasons=tuple(missing),
+                rejection_reasons=rr,
             )
         )
 

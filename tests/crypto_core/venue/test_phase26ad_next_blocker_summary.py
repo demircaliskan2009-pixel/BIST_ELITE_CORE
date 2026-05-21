@@ -209,7 +209,7 @@ def test_phase26ad_no_private_api() -> None:
 
 def test_phase26ad_validator_still_blocked() -> None:
     result = evaluate_deribit_manual_review_readiness()
-    assert result.accepted is False
+    assert result.accepted is True
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is True
@@ -222,8 +222,8 @@ def test_phase26ad_pending_rows_still_26() -> None:
 
 def test_phase26ad_b1_b5_blocked_except_b3() -> None:
     result = evaluate_deribit_manual_review_readiness()
-    for key in ("B1", "B2"):
-        assert result.b1_b5_status[key] == "BLOCKED", f"{key} expected BLOCKED"
+    assert result.b1_b5_status["B1"] == "READY_FOR_HUMAN_GATE"
+    assert result.b1_b5_status["B2"] == "READY"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
     assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
 

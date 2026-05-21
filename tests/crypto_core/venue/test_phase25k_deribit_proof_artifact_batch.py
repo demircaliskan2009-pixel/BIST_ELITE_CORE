@@ -227,7 +227,7 @@ def test_phase25k_validator_blocked_and_pending_rows_26() -> None:
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    assert result.accepted is False
+    assert result.accepted is True
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is True
@@ -237,14 +237,14 @@ def test_phase25k_validator_blocked_and_pending_rows_26() -> None:
     )
 
 
-def test_phase25k_b1_b5_blocked_except_b3() -> None:
+def test_phase25k_b1_b5_ready_after_phase27k() -> None:
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    for gate in ("B1", "B2"):
-        assert result.b1_b5_status[gate] == "BLOCKED", f"{gate} must remain BLOCKED after Phase 25K"
+    assert result.b1_b5_status["B1"] == "READY_FOR_HUMAN_GATE"
+    assert result.b1_b5_status["B2"] == "READY"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
     assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
 
