@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from crypto_core.data.market_data_journal import replay_cursor_ready
+from crypto_core.data.market_data_journal import PublicMarketDataReplayResult, replay_cursor_ready
 from crypto_core.data.order_book import (
     OrderBookApplyResult,
     OrderBookState,
@@ -10,7 +10,7 @@ from crypto_core.data.order_book import (
     build_order_book_state_from_snapshot,
     order_book_state_rejection_reasons,
 )
-from crypto_core.venue.contracts import PublicMarketDataEvent
+from crypto_core.venue.contracts import PublicFeedHealth, PublicMarketDataEvent
 from crypto_core.venue.deribit_public_data_quality import DeribitPublicDataQualityResult
 from crypto_core.venue.deribit_public_feed_ingest import DeribitPublicFeedIngestResult
 
@@ -26,6 +26,8 @@ class DeribitOrderBookReplayResult:
     accepted: bool
     state: OrderBookState | None
     order_book_result: OrderBookApplyResult | None
+    last_public_feed_health: PublicFeedHealth | None
+    last_journal_replay_result: PublicMarketDataReplayResult | None
     applied_event_count: int
     rejection_reasons: tuple[str, ...]
 
@@ -56,6 +58,8 @@ def replay_deribit_order_book_events(
 
     applied_event_count = 0
     last_apply_result: OrderBookApplyResult | None = None
+    last_public_feed_health: PublicFeedHealth | None = None
+    last_journal_replay_result: PublicMarketDataReplayResult | None = None
     for entry in events:
         entry_reasons = _event_rejection_reasons(entry, state)
         if entry_reasons:
@@ -68,6 +72,10 @@ def replay_deribit_order_book_events(
 
         assert isinstance(entry, DeribitOrderBookReplayEvent)
         quality_result = entry.quality_result
+        last_public_feed_health = quality_result.public_feed_health
+        last_journal_replay_result = (
+            entry.ingest_result.ingest_result.replay_result if entry.ingest_result.ingest_result is not None else None
+        )
         if quality_result.order_book_snapshot is not None:
             apply_result = build_order_book_state_from_snapshot(quality_result.order_book_snapshot)
         else:
@@ -79,6 +87,8 @@ def replay_deribit_order_book_events(
             return _result(
                 state=state,
                 order_book_result=apply_result,
+                last_public_feed_health=last_public_feed_health,
+                last_journal_replay_result=last_journal_replay_result,
                 applied_event_count=applied_event_count,
                 rejection_reasons=apply_result.rejection_reasons,
             )
@@ -90,6 +100,8 @@ def replay_deribit_order_book_events(
     return _result(
         state=state,
         order_book_result=last_apply_result,
+        last_public_feed_health=last_public_feed_health,
+        last_journal_replay_result=last_journal_replay_result,
         applied_event_count=applied_event_count,
         rejection_reasons=(),
     )
@@ -186,6 +198,8 @@ def _result(
     order_book_result: OrderBookApplyResult | None,
     applied_event_count: int,
     rejection_reasons: tuple[str, ...] | list[str],
+    last_public_feed_health: PublicFeedHealth | None = None,
+    last_journal_replay_result: PublicMarketDataReplayResult | None = None,
 ) -> DeribitOrderBookReplayResult:
     normalized_reasons = tuple(dict.fromkeys(rejection_reasons))
     return DeribitOrderBookReplayResult(
@@ -195,6 +209,8 @@ def _result(
         and order_book_result.applied is True,
         state=state,
         order_book_result=order_book_result,
+        last_public_feed_health=last_public_feed_health,
+        last_journal_replay_result=last_journal_replay_result,
         applied_event_count=applied_event_count,
         rejection_reasons=normalized_reasons,
     )
