@@ -128,6 +128,14 @@ def _report_pack_rejection_reasons(
             reasons.append("report_pack:session_exceeds_max_trades")
         if item.get("session_verdict") != "PASS":
             reasons.append("report_pack:session_not_pass")
+        if item.get("simulation_only") is not True:
+            reasons.append("report_pack:session_simulation_only_not_true")
+        if item.get("trades_attempted", 0) > item.get("trades_requested", 0):
+            reasons.append("report_pack:session_attempted_exceeds_requested")
+        if item.get("trades_filled", 0) + item.get("trades_rejected", 0) != item.get("trades_attempted", 0):
+            reasons.append("report_pack:session_trade_count_mismatch")
+        if item.get("ledger_mutations", 0) != item.get("trades_filled", 0):
+            reasons.append("report_pack:session_ledger_mutation_mismatch")
         if item.get("ledger_mutated") is not True:
             reasons.append("report_pack:session_ledger_not_mutated")
         if item.get("duplicate_mutation_blocked") is not True:

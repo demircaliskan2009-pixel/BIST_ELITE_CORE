@@ -58,6 +58,50 @@ def test_phase44d_private_execution_safety_flags_fail_closed() -> None:
         assert f"report_pack:{field}_not_true" in reasons
 
 
+def test_phase44d_per_session_simulation_flag_fails_closed() -> None:
+    pack = _mutated_first_session(_report_pack(), simulation_only=False)
+    reasons = _report_pack_rejection_reasons(_session_artifact(), _promotion_readiness(), pack)
+
+    assert "report_pack:session_simulation_only_not_true" in reasons
+
+
+def test_phase44d_impossible_per_session_trade_counts_fail_closed() -> None:
+    attempted_exceeds_requested = _mutated_first_session(
+        _report_pack(),
+        trades_requested=2,
+        trades_attempted=3,
+        trades_filled=3,
+        trades_rejected=0,
+        ledger_mutations=3,
+    )
+    fill_reject_mismatch = _mutated_first_session(
+        _report_pack(),
+        trades_requested=2,
+        trades_attempted=2,
+        trades_filled=3,
+        trades_rejected=0,
+        ledger_mutations=3,
+    )
+    ledger_mismatch = _mutated_first_session(
+        _report_pack(),
+        trades_requested=2,
+        trades_attempted=2,
+        trades_filled=2,
+        trades_rejected=0,
+        ledger_mutations=1,
+    )
+
+    assert "report_pack:session_attempted_exceeds_requested" in _report_pack_rejection_reasons(
+        _session_artifact(), _promotion_readiness(), attempted_exceeds_requested
+    )
+    assert "report_pack:session_trade_count_mismatch" in _report_pack_rejection_reasons(
+        _session_artifact(), _promotion_readiness(), fill_reject_mismatch
+    )
+    assert "report_pack:session_ledger_mutation_mismatch" in _report_pack_rejection_reasons(
+        _session_artifact(), _promotion_readiness(), ledger_mismatch
+    )
+
+
 def test_phase44d_promotion_or_unbounded_session_fails_closed() -> None:
     promoted = _mutated(_report_pack(), promotion_granted=True)
     too_many_trades = _mutated_first_session(_report_pack(), trades_requested=3)
