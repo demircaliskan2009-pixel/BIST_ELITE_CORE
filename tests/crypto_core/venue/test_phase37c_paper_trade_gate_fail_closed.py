@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from crypto_core.venue.contracts import VenueId
-from crypto_core.venue.deribit_paper_fill_model import evaluate_deribit_paper_limit_fill
+from crypto_core.venue.deribit_paper_fill_model import DeribitPaperFillSide, evaluate_deribit_paper_limit_fill
 from crypto_core.venue.deribit_paper_order_intent import (
     DeribitPaperOrderIntent,
     DeribitPaperOrderIntentSide,
@@ -100,6 +100,22 @@ def test_phase37c_kill_switch_active_rejects_gate() -> None:
     assert result.accepted is False
     assert result.ledger_mutated is False
     assert "deribit_paper_trade_gate:kill_switch_active" in result.rejection_reasons
+
+
+def test_phase37c_fill_request_side_must_match_validated_intent_side() -> None:
+    trigger, intent, decision, fill_request, frame, ledger = _accepted_trade_gate_inputs(
+        intent_id="paper-trade-gate-side-mismatch",
+        side=DeribitPaperOrderIntentSide.BUY,
+        limit_price=50_020.0,
+    )
+    mutated_fill_request = replace(fill_request, side=DeribitPaperFillSide.SELL)
+    mutated_decision = replace(decision, fill_request=mutated_fill_request)
+
+    result = run_deribit_paper_trade_gate(trigger, intent, mutated_decision, mutated_fill_request, frame, ledger)
+
+    assert result.accepted is False
+    assert result.ledger_mutated is False
+    assert "deribit_paper_trade_gate:request_side_mismatch" in result.rejection_reasons
 
 
 def test_phase37c_invalid_operator_trigger_flags_fail_closed() -> None:

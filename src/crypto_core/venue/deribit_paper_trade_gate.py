@@ -4,7 +4,11 @@ from dataclasses import dataclass
 
 from crypto_core.venue.contracts import PublicFeedType, VenueId
 from crypto_core.venue.deribit_paper_feed import DeribitPaperFeedFrame
-from crypto_core.venue.deribit_paper_fill_model import DeribitPaperFillRequest, evaluate_deribit_paper_limit_fill
+from crypto_core.venue.deribit_paper_fill_model import (
+    DeribitPaperFillRequest,
+    DeribitPaperFillSide,
+    evaluate_deribit_paper_limit_fill,
+)
 from crypto_core.venue.deribit_paper_ledger import (
     DeribitPaperLedgerState,
     apply_deribit_paper_fill_to_ledger,
@@ -13,6 +17,7 @@ from crypto_core.venue.deribit_paper_ledger import (
 from crypto_core.venue.deribit_paper_order_intent import (
     DeribitPaperOrderIntent,
     DeribitPaperOrderIntentDecision,
+    DeribitPaperOrderIntentSide,
 )
 
 DERIBIT_PAPER_TRADE_GATE_ID = "deribit_paper_trade_gate_v1"
@@ -337,6 +342,11 @@ def _rejection_reasons(
         reasons.append("deribit_paper_trade_gate:trigger_idempotency_mismatch")
     if fill_request.request_id != intent.intent_id:
         reasons.append("deribit_paper_trade_gate:intent_request_mismatch")
+    expected_fill_side = (
+        DeribitPaperFillSide.BUY if intent.side is DeribitPaperOrderIntentSide.BUY else DeribitPaperFillSide.SELL
+    )
+    if fill_request.side is not expected_fill_side:
+        reasons.append("deribit_paper_trade_gate:request_side_mismatch")
     if fill_request.quantity != intent.quantity:
         reasons.append("deribit_paper_trade_gate:request_quantity_mismatch")
     if fill_request.limit_price != intent.limit_price:
