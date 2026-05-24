@@ -106,5 +106,5 @@ def test_phase42b_artifact_final_ledger_summary_is_deterministic() -> None:
     assert after["position_qty"] == 1.0
     assert after["average_entry_price"] == 50_010.0
     assert after["applied_fill_count"] == 2
-    assert after["applied_request_count"] == 2
-    assert after["applied_idempotency_count"] == 2
+    assert after["applied_request_count"] == 3
+    assert after["applied_idempotency_count"] == 3

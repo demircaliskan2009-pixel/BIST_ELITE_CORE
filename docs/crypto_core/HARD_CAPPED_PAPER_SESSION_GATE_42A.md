@@ -69,6 +69,8 @@ creating an unbounded session.
 
 - duplicate trade request ids fail closed through the Phase40/37 path
 - duplicate trade idempotency keys fail closed through the Phase40/37 path
+- successful sessions persist `session_id` and session `idempotency_key` markers
+  on the immutable paper ledger state
 - duplicate session identity markers present in the initial ledger fail closed
 - `kill_switch_active=True` rejects the session before any trade attempt
 - the first rejected trade stops the session and the accepted result is not

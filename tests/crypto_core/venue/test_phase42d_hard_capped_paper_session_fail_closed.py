@@ -37,10 +37,22 @@ def test_phase42d_missing_identity_fields_fail_closed() -> None:
         (replace(base, operator_id=""), "deribit_hard_capped_paper_session:operator_id_missing"),
         (replace(base, session_id=""), "deribit_hard_capped_paper_session:session_id_missing"),
         (replace(base, idempotency_key=""), "deribit_hard_capped_paper_session:idempotency_key_missing"),
+        (replace(base, idempotency_key=123), "deribit_hard_capped_paper_session:idempotency_key_missing"),
     )
 
     for request, expected_reason in cases:
         _rejects(request, _phase42_trade_inputs(), expected_reason)
+
+
+def test_phase42d_non_string_idempotency_key_rejects_without_hash_crash() -> None:
+    result = run_deribit_hard_capped_paper_session(
+        replace(_phase42_request(), idempotency_key=123),
+        _phase42_trade_inputs(),
+    )
+
+    assert result.accepted is False
+    assert result.artifact_payload["idempotency_key_sha256"] is None
+    assert "deribit_hard_capped_paper_session:idempotency_key_missing" in result.rejection_reasons
 
 
 def test_phase42d_hard_cap_and_session_bound_fail_closed() -> None:

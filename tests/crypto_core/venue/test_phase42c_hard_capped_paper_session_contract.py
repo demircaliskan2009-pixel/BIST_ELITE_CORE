@@ -44,4 +44,6 @@ def test_phase42c_session_chains_immutable_ledger_between_explicit_trade_inputs(
     assert result.final_ledger_state.applied_request_ids == (
         "phase42-session-trade-1",
         "phase42-session-trade-2",
+        "phase42-hard-capped-paper-session",
     )
+    assert result.final_ledger_state.applied_idempotency_keys[-1] == "idem-phase42-hard-capped-paper-session"

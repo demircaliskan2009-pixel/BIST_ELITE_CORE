@@ -69,8 +69,8 @@
     "average_entry_price": 50010.0,
     "realized_pnl": 0.0,
     "applied_fill_count": 2,
-    "applied_request_count": 2,
-    "applied_idempotency_count": 2,
+    "applied_request_count": 3,
+    "applied_idempotency_count": 3,
     "audit_entry_count": 2
   },
   "no_private_api": true,

@@ -20,13 +20,32 @@ def test_phase42e_duplicate_trade_run_and_idempotency_cannot_double_mutate_ledge
     second = run_deribit_hard_capped_paper_session(request, duplicate_inputs)
 
     assert second.accepted is False
-    assert second.trades_attempted == 1
+    assert second.trades_attempted == 0
     assert second.trades_filled == 0
-    assert second.trades_rejected == 1
+    assert second.trades_rejected == 0
     assert second.ledger_mutated is False
-    assert "deribit_hard_capped_paper_session:trade_rejected" in second.rejection_reasons
-    assert "deribit_paper_trade_gate:duplicate_run_id" in second.rejection_reasons
-    assert "deribit_paper_trade_gate:duplicate_gate_idempotency_key" in second.rejection_reasons
+    assert "deribit_hard_capped_paper_session:duplicate_session_id" in second.rejection_reasons
+    assert "deribit_hard_capped_paper_session:duplicate_session_idempotency_key" in second.rejection_reasons
+
+
+def test_phase42e_replayed_session_with_new_trade_ids_fails_before_trade_attempt() -> None:
+    request = _phase42_request()
+    first = run_deribit_hard_capped_paper_session(request, _phase42_trade_inputs())
+    assert first.accepted is True
+    assert first.final_ledger_state is not None
+
+    new_inputs = _phase42_trade_inputs()
+    new_inputs = (
+        replace(_phase42_trade_inputs(count=3)[2], ledger_state=first.final_ledger_state),
+        new_inputs[1],
+    )
+    second = run_deribit_hard_capped_paper_session(request, new_inputs)
+
+    assert second.accepted is False
+    assert second.trades_attempted == 0
+    assert second.ledger_mutated is False
+    assert "deribit_hard_capped_paper_session:duplicate_session_id" in second.rejection_reasons
+    assert "deribit_hard_capped_paper_session:duplicate_session_idempotency_key" in second.rejection_reasons
 
 
 def test_phase42e_duplicate_session_identity_markers_fail_closed_before_trade_attempt() -> None:
@@ -60,4 +79,4 @@ def test_phase42e_duplicate_artifact_payload_is_deterministic() -> None:
 
     assert one.artifact_payload == two.artifact_payload
     assert one.artifact_payload["session_verdict"] == "FAIL_CLOSED"
-    assert one.artifact_payload["trades_rejected"] == 1
+    assert one.artifact_payload["trades_rejected"] == 0

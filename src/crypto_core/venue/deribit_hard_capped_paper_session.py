@@ -149,6 +149,7 @@ def run_deribit_hard_capped_paper_session(
         if run_result.gate_result is not None and run_result.gate_result.ledger_state is not None:
             current_ledger = run_result.gate_result.ledger_state
 
+    current_ledger = _record_session_markers(current_ledger, request)
     after_summary = _ledger_summary_to_dict(current_ledger)
     return _result(
         request=request,
@@ -327,7 +328,9 @@ def _artifact_payload(
         "accepted": accepted,
         "session_id": request.session_id if request_is_valid else None,
         "operator_id": request.operator_id if request_is_valid else None,
-        "idempotency_key_sha256": _sha256(request.idempotency_key) if request_is_valid else None,
+        "idempotency_key_sha256": _sha256(request.idempotency_key)
+        if _non_empty_request_field(request, "idempotency_key")
+        else None,
         "simulation_only": request.simulation_only if request_is_valid else None,
         "live_enabled": request.live_enabled if request_is_valid else None,
         "shadow_enabled": request.shadow_enabled if request_is_valid else None,
@@ -410,8 +413,23 @@ def _ledger_summary_to_dict(summary: object) -> dict[str, object] | None:
     return None
 
 
+def _record_session_markers(
+    ledger_state: DeribitPaperLedgerState,
+    request: DeribitHardCappedPaperSessionRequest,
+) -> DeribitPaperLedgerState:
+    return replace(
+        ledger_state,
+        applied_request_ids=ledger_state.applied_request_ids + (request.session_id,),
+        applied_idempotency_keys=ledger_state.applied_idempotency_keys + (request.idempotency_key,),
+    )
+
+
 def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _non_empty_request_field(request: object, field_name: str) -> bool:
+    return isinstance(request, DeribitHardCappedPaperSessionRequest) and _non_empty(getattr(request, field_name, None))
 
 
 def _contains_scope_marker(value: object) -> bool:
