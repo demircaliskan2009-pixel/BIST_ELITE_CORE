@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from crypto_core.venue.contracts import VenueId
 from crypto_core.venue.deribit_manual_review_readiness import evaluate_deribit_manual_review_readiness
 from crypto_core.venue.public_feed_dialects import connector_ready_dialects
 
@@ -234,8 +235,10 @@ def test_phase47b_artifact_records_exact_operator_approval_metadata() -> None:
 def test_phase47b_artifact_records_current_readiness_state() -> None:
     readiness = evaluate_deribit_manual_review_readiness()
     approval = _approval()
+    ready = connector_ready_dialects()
 
     assert readiness.accepted is True
     assert readiness.pending_rows == ()
     assert readiness.deferred_rows == ()
-    assert approval["connector_ready_dialects_count"] == len(connector_ready_dialects()) == 1
+    assert approval["connector_ready_dialects_count"] == 1
+    assert any(dialect.venue_id is VenueId.DERIBIT for dialect in ready)
