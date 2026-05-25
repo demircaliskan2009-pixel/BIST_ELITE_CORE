@@ -267,6 +267,57 @@ def _approval_rejection_reasons(approval_artifact: object) -> tuple[str, ...]:
         reasons.append("deribit_bounded_paper_campaign:session_already_executed")
     if approval_artifact.get("run_execution_status") != "NOT_EXECUTED":
         reasons.append("deribit_bounded_paper_campaign:run_already_executed")
+    scope = approval_artifact.get("campaign_scope")
+    if not isinstance(scope, dict):
+        reasons.append("deribit_bounded_paper_campaign:approval_campaign_scope_missing")
+        scope = {}
+    if scope.get("venue") != "deribit":
+        reasons.append("deribit_bounded_paper_campaign:approval_venue_mismatch")
+    if scope.get("public_market_data_only") is not True:
+        reasons.append("deribit_bounded_paper_campaign:approval_public_market_data_only_not_true")
+    if scope.get("paper_only") is not True:
+        reasons.append("deribit_bounded_paper_campaign:approval_paper_only_not_true")
+    if scope.get("simulation_only") is not True:
+        reasons.append("deribit_bounded_paper_campaign:approval_simulation_only_not_true")
+    if scope.get("explicit_operator_triggered") is not True:
+        reasons.append("deribit_bounded_paper_campaign:approval_explicit_trigger_not_true")
+    for field in ("live_enabled", "shadow_enabled", "auto_loop_enabled", "scheduler_enabled"):
+        if scope.get(field) is not False:
+            reasons.append(f"deribit_bounded_paper_campaign:approval_{field}")
+    bounds = approval_artifact.get("campaign_bounds")
+    if not isinstance(bounds, dict):
+        reasons.append("deribit_bounded_paper_campaign:approval_campaign_bounds_missing")
+        bounds = {}
+    if bounds.get("hard_cap") != DERIBIT_PAPER_SESSION_HARD_CAP:
+        reasons.append("deribit_bounded_paper_campaign:approval_hard_cap_mismatch")
+    if bounds.get("per_session_max_trades") != DERIBIT_BOUNDED_PAPER_CAMPAIGN_MAX_TRADES_PER_SESSION:
+        reasons.append("deribit_bounded_paper_campaign:approval_per_session_max_trades_mismatch")
+    if bounds.get("max_sessions_approved") != DERIBIT_BOUNDED_PAPER_CAMPAIGN_MAX_SESSIONS:
+        reasons.append("deribit_bounded_paper_campaign:approval_max_sessions_mismatch")
+    if bounds.get("max_total_paper_trades_approved") != (
+        DERIBIT_BOUNDED_PAPER_CAMPAIGN_MAX_SESSIONS * DERIBIT_BOUNDED_PAPER_CAMPAIGN_MAX_TRADES_PER_SESSION
+    ):
+        reasons.append("deribit_bounded_paper_campaign:approval_max_total_trades_mismatch")
+    safety = approval_artifact.get("safety_flags")
+    if not isinstance(safety, dict):
+        reasons.append("deribit_bounded_paper_campaign:approval_safety_flags_missing")
+        safety = {}
+    for field in (
+        "no_private_api",
+        "no_credentials",
+        "no_exchange_orders",
+        "no_execution_adapter",
+        "no_order_routing",
+        "no_strategy_signal",
+        "no_scheduler",
+        "no_automatic_paper_loop",
+        "no_shadow",
+        "no_live",
+    ):
+        if safety.get(field) is not True:
+            reasons.append(f"deribit_bounded_paper_campaign:approval_{field}_not_true")
+    if approval_artifact.get("connector_ready_dialects_count") != 1:
+        reasons.append("deribit_bounded_paper_campaign:approval_connector_ready_count_mismatch")
     return tuple(dict.fromkeys(reasons))
 
 
@@ -289,7 +340,78 @@ def _session_fixture_rejection_reasons(
     raw_session_fixtures: object,
     ledger_state: object,
 ) -> tuple[str, ...]:
-    return ()
+    if not isinstance(raw_session_fixtures, Sequence) or isinstance(raw_session_fixtures, str | bytes):
+        return ("deribit_bounded_paper_campaign:session_fixtures_missing",)
+    if not normalized_fixtures:
+        return ("deribit_bounded_paper_campaign:session_fixtures_missing",)
+
+    reasons: list[str] = []
+    if len(normalized_fixtures) != len(raw_session_fixtures):
+        reasons.append("deribit_bounded_paper_campaign:session_fixture_malformed")
+    if not isinstance(request, DeribitBoundedPaperCampaignRequest):
+        return tuple(dict.fromkeys(reasons))
+    if not isinstance(ledger_state, DeribitPaperLedgerState):
+        return tuple(dict.fromkeys(reasons))
+    if len(normalized_fixtures) > request.max_campaign_sessions:
+        reasons.append("deribit_bounded_paper_campaign:session_count_exceeds_campaign_bound")
+    if isinstance(approval_artifact, dict):
+        bounds = approval_artifact.get("campaign_bounds")
+        if isinstance(bounds, dict):
+            if request.operator_id != approval_artifact.get("reviewer_id"):
+                reasons.append("deribit_bounded_paper_campaign:operator_approval_mismatch")
+            if request.hard_cap != bounds.get("hard_cap"):
+                reasons.append("deribit_bounded_paper_campaign:hard_cap_approval_mismatch")
+            if request.per_session_max_trades != bounds.get("per_session_max_trades"):
+                reasons.append("deribit_bounded_paper_campaign:per_session_max_trades_approval_mismatch")
+            if request.max_campaign_sessions > int(bounds.get("max_sessions_approved", 0)):
+                reasons.append("deribit_bounded_paper_campaign:max_campaign_sessions_exceeds_approval")
+            if sum(len(item.trade_inputs) for item in normalized_fixtures) > int(
+                bounds.get("max_total_paper_trades_approved", 0)
+            ):
+                reasons.append("deribit_bounded_paper_campaign:aggregate_trade_count_exceeds_approval")
+    if request.campaign_id in ledger_state.applied_request_ids:
+        reasons.append("deribit_bounded_paper_campaign:duplicate_campaign_id")
+    if request.idempotency_key in ledger_state.applied_idempotency_keys:
+        reasons.append("deribit_bounded_paper_campaign:duplicate_campaign_idempotency_key")
+    session_ids = tuple(item.session_id for item in normalized_fixtures)
+    session_idempotency_keys = tuple(item.idempotency_key for item in normalized_fixtures)
+    if any(not _non_empty(item.session_id) for item in normalized_fixtures):
+        reasons.append("deribit_bounded_paper_campaign:session_id_missing")
+    if any(not _non_empty(item.idempotency_key) for item in normalized_fixtures):
+        reasons.append("deribit_bounded_paper_campaign:session_idempotency_key_missing")
+    if any(_contains_scope_marker(item.session_id) for item in normalized_fixtures) or any(
+        _contains_scope_marker(item.idempotency_key) for item in normalized_fixtures
+    ):
+        reasons.append("deribit_bounded_paper_campaign:session_scope_invalid")
+    if len(set(session_ids)) != len(session_ids):
+        reasons.append("deribit_bounded_paper_campaign:duplicate_session_id")
+    if len(set(session_idempotency_keys)) != len(session_idempotency_keys):
+        reasons.append("deribit_bounded_paper_campaign:duplicate_session_idempotency_key")
+    if any(item.session_id in ledger_state.applied_request_ids for item in normalized_fixtures):
+        reasons.append("deribit_bounded_paper_campaign:duplicate_session_id")
+    if any(item.idempotency_key in ledger_state.applied_idempotency_keys for item in normalized_fixtures):
+        reasons.append("deribit_bounded_paper_campaign:duplicate_session_idempotency_key")
+    for fixture in normalized_fixtures:
+        if not fixture.trade_inputs:
+            reasons.append("deribit_bounded_paper_campaign:session_trade_inputs_missing")
+        if len(fixture.trade_inputs) > request.per_session_max_trades:
+            reasons.append("deribit_bounded_paper_campaign:session_trade_count_exceeds_session_bound")
+        if len(fixture.trade_inputs) > request.hard_cap:
+            reasons.append("deribit_bounded_paper_campaign:session_trade_count_exceeds_hard_cap")
+        if any(not isinstance(item, DeribitPaperRunHarnessInputs) for item in fixture.trade_inputs):
+            reasons.append("deribit_bounded_paper_campaign:session_trade_input_malformed")
+    trade_inputs = tuple(item for fixture in normalized_fixtures for item in fixture.trade_inputs)
+    request_ids = tuple(item.fill_request.request_id for item in trade_inputs)
+    trade_idempotency_keys = tuple(item.intent.idempotency_key for item in trade_inputs)
+    if len(set(request_ids)) != len(request_ids):
+        reasons.append("deribit_bounded_paper_campaign:duplicate_trade_request_id")
+    if len(set(trade_idempotency_keys)) != len(trade_idempotency_keys):
+        reasons.append("deribit_bounded_paper_campaign:duplicate_trade_idempotency_key")
+    if any(request_id in ledger_state.applied_request_ids for request_id in request_ids):
+        reasons.append("deribit_bounded_paper_campaign:duplicate_trade_request_id")
+    if any(key in ledger_state.applied_idempotency_keys for key in trade_idempotency_keys):
+        reasons.append("deribit_bounded_paper_campaign:duplicate_trade_idempotency_key")
+    return tuple(dict.fromkeys(reasons))
 
 
 def _kill_switch_rejection_reasons(kill_switch_active: object) -> tuple[str, ...]:
