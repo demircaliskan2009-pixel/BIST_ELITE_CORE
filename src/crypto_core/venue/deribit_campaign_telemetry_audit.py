@@ -22,11 +22,11 @@ DERIBIT_PHASE48_CAMPAIGN_EXECUTION = "docs/crypto_core/DERIBIT_BOUNDED_REPEATED_
 DERIBIT_PHASE49_NEXT_BLOCKER = "PAPER_CAMPAIGN_PERFORMANCE_EVALUATION_NOT_READY"
 # fmt: off
 _POLICY_REFS = ("BOUNDED_REPEATED_PAPER_CAMPAIGN_EXECUTION_GATE_48A.md", "BOUNDED_PAPER_CAMPAIGN_TELEMETRY_AUDIT_49A.md")
-_PHASE48_TRUE_FIELDS = tuple("simulation_only duplicate_mutation_blocked no_private_api no_credentials no_exchange_orders no_execution_adapter no_strategy_signal".split())
+_PHASE48_TRUE_FIELDS = tuple("simulation_only duplicate_mutation_blocked no_private_api no_credentials no_exchange_orders no_execution_adapter no_order_routing no_strategy_signal no_scheduler no_automatic_paper_loop no_shadow no_live".split())
 _PHASE48_FALSE_FIELDS = ("live_ready", "live_enabled", "shadow_enabled", "auto_loop_enabled", "scheduler_enabled")
 _APPROVAL_SCOPE_TRUE_FIELDS = tuple("public_market_data_only paper_only simulation_only explicit_operator_triggered".split())
 _APPROVAL_SCOPE_FALSE_FIELDS = ("live_enabled", "shadow_enabled", "auto_loop_enabled", "scheduler_enabled")
-_APPROVAL_SAFETY_FIELDS = tuple("no_private_api no_credentials no_exchange_orders no_execution_adapter no_strategy_signal no_scheduler no_automatic_paper_loop no_shadow no_live".split())
+_APPROVAL_SAFETY_FIELDS = tuple("no_private_api no_credentials no_exchange_orders no_execution_adapter no_order_routing no_strategy_signal no_scheduler no_automatic_paper_loop no_shadow no_live".split())
 _PAYLOAD_FIELDS = tuple((
     "campaign_execution_verdict sessions_requested sessions_attempted sessions_accepted sessions_rejected "
     "aggregate_trades_requested aggregate_trades_filled aggregate_ledger_mutations duplicate_mutation_blocked "
