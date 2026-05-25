@@ -32,3 +32,13 @@ def test_phase56g_proposal_payload_order_independent_for_json_roundtrip() -> Non
     reordered = dict(reversed(list(proposal.items())))
 
     assert sorted(proposal.items(), key=lambda item: item[0]) == sorted(reordered.items(), key=lambda item: item[0])
+
+
+def test_phase56g_proposal_checks_are_copied_per_payload() -> None:
+    mutated = propose_deribit_operator_promotion_review(_phase55_readiness(), _phase54_telemetry()).artifact_payload
+    mutated["proposal_checks"].append("mutated-check")
+
+    fresh = propose_deribit_operator_promotion_review(_phase55_readiness(), _phase54_telemetry()).artifact_payload
+
+    assert fresh == _proposal()
+    assert "mutated-check" not in fresh["proposal_checks"]

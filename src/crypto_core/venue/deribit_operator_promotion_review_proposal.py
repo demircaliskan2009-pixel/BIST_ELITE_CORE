@@ -126,7 +126,7 @@ def _artifact_payload(
         "shadow_enabled": False,
         "ready_for_operator_promotion_review": accepted,
         "connector_ready_dialects_count": len(connector_ready_dialects()),
-        "proposal_checks": _PROPOSAL_CHECKS,
+        "proposal_checks": list(_PROPOSAL_CHECKS),
         "reason_code": reason_code,
         "rejection_reasons": list(rejection_reasons),
         "next_blocker": DERIBIT_PHASE56_NEXT_BLOCKER if accepted else DERIBIT_PHASE56_FALLBACK_BLOCKER,
