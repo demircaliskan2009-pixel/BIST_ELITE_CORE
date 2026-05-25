@@ -55,6 +55,18 @@ def test_phase45d_private_execution_safety_flags_fail_closed() -> None:
         assert f"evaluation:{field}_not_true" in reasons
 
 
+def test_phase45d_malformed_evaluation_matrix_items_fail_closed() -> None:
+    malformed_matrix = _mutated(_evaluation(), evaluation_matrix=[{"status": "PASS"}, "corrupt"])
+    bad_status = _mutated(_evaluation(), evaluation_matrix=[{"status": "PASS"}, {"status": "WARN"}])
+
+    assert "evaluation:matrix_item_not_mapping" in _evaluation_rejection_reasons(
+        _promotion_readiness(), _report_pack(), malformed_matrix
+    )
+    assert "evaluation:matrix_status_not_pass" in _evaluation_rejection_reasons(
+        _promotion_readiness(), _report_pack(), bad_status
+    )
+
+
 def test_phase45d_automatic_promotion_or_live_ready_fails_closed() -> None:
     promoted = _mutated(_evaluation(), promotion_granted=True)
     live_ready = _mutated(_evaluation(), live_ready=True)

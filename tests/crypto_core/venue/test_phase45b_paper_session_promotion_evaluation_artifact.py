@@ -128,8 +128,12 @@ def _evaluation_rejection_reasons(
     matrix = evaluation.get("evaluation_matrix")
     if not isinstance(matrix, list) or not matrix:
         reasons.append("evaluation:matrix_missing")
-    elif any(item.get("status") != "PASS" for item in matrix if isinstance(item, dict)):
-        reasons.append("evaluation:matrix_status_not_pass")
+    else:
+        for item in matrix:
+            if not isinstance(item, dict):
+                reasons.append("evaluation:matrix_item_not_mapping")
+            elif item.get("status") != "PASS":
+                reasons.append("evaluation:matrix_status_not_pass")
     checks = evaluation.get("evaluation_checks")
     if not isinstance(checks, list) or "operator_approval_required_before_any_promotion" not in checks:
         reasons.append("evaluation:operator_approval_check_missing")
