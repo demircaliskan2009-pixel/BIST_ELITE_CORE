@@ -31,13 +31,32 @@ def test_phase50d_non_pass_verdicts_fail_closed() -> None:
 
 
 def test_phase50d_unsafe_scope_or_safety_flag_drift_fails_closed() -> None:
-    for field in ("live_enabled", "shadow_enabled", "scheduler_enabled", "auto_loop_enabled"):
+    for field in (
+        "live_ready",
+        "live_enabled",
+        "shadow_enabled",
+        "scheduler_enabled",
+        "auto_loop_enabled",
+        "campaign_execution_replayed",
+        "session_execution_replayed",
+        "run_execution_replayed",
+    ):
         artifact = deepcopy(_phase49_audit())
         artifact[field] = True
         result = evaluate_deribit_campaign_performance(artifact)
 
         assert result.accepted is False
         assert "deribit_campaign_performance_evaluation:phase49_scope_flags_invalid" in result.rejection_reasons
+
+    non_report_only = deepcopy(_phase49_audit())
+    non_report_only["report_only"] = False
+    non_report_only_result = evaluate_deribit_campaign_performance(non_report_only)
+
+    assert non_report_only_result.accepted is False
+    assert (
+        "deribit_campaign_performance_evaluation:phase49_scope_flags_invalid"
+        in non_report_only_result.rejection_reasons
+    )
 
     for field in ("no_private_api", "no_credentials", "no_exchange_orders", "no_execution_adapter"):
         artifact = deepcopy(_phase49_audit())

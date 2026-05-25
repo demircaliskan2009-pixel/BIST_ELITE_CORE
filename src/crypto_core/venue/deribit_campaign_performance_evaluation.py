@@ -28,7 +28,16 @@ _TRUE_SAFETY_FIELDS = (
     "no_shadow",
     "no_live",
 )
-_SOURCE_FALSE_FIELDS = ("scheduler_enabled", "auto_loop_enabled", "live_enabled", "shadow_enabled")
+_SOURCE_FALSE_FIELDS = (
+    "live_ready",
+    "scheduler_enabled",
+    "auto_loop_enabled",
+    "live_enabled",
+    "shadow_enabled",
+    "campaign_execution_replayed",
+    "session_execution_replayed",
+    "run_execution_replayed",
+)
 _REQUIRED_SOURCE_FIELDS = (
     "audit_verdict",
     "campaign_execution_verdict",
@@ -91,8 +100,10 @@ def _phase49_rejection_reasons(phase49_audit_artifact: object) -> tuple[str, ...
         reasons.append("deribit_campaign_performance_evaluation:phase49_metadata_invalid")
     if not all(field in phase49_audit_artifact for field in _REQUIRED_SOURCE_FIELDS):
         reasons.append("deribit_campaign_performance_evaluation:phase49_required_fields_missing")
-    if not _bool_fields_match(phase49_audit_artifact, _TRUE_SAFETY_FIELDS, True) or not _bool_fields_match(
-        phase49_audit_artifact, _SOURCE_FALSE_FIELDS, False
+    if (
+        _strict_bool(phase49_audit_artifact.get("report_only")) is not True
+        or not _bool_fields_match(phase49_audit_artifact, _TRUE_SAFETY_FIELDS, True)
+        or not _bool_fields_match(phase49_audit_artifact, _SOURCE_FALSE_FIELDS, False)
     ):
         reasons.append("deribit_campaign_performance_evaluation:phase49_scope_flags_invalid")
     if (
