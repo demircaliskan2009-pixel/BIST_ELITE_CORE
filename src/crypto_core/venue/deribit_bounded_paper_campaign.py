@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
@@ -252,6 +253,15 @@ def deribit_bounded_paper_campaign_audit_record_to_dict(record: DeribitBoundedPa
         "sessions_attempted": record.sessions_attempted,
         "sessions_accepted": record.sessions_accepted,
         "sessions_rejected": record.sessions_rejected,
+        "aggregate_trades_requested": record.aggregate_trades_requested,
+        "aggregate_trades_filled": record.aggregate_trades_filled,
+        "aggregate_ledger_mutations": record.aggregate_ledger_mutations,
+        "ledger_mutated": record.ledger_mutated,
+        "reason_code": record.reason_code,
+        "rejection_reasons": list(record.rejection_reasons),
+        "before_ledger_summary": record.before_ledger_summary,
+        "after_ledger_summary": record.after_ledger_summary,
+        "policy_refs": list(record.policy_refs),
     }
 
 
@@ -261,6 +271,16 @@ def deribit_bounded_paper_campaign_result_to_dict(result: DeribitBoundedPaperCam
         "campaign_id": result.campaign_id,
         "sessions_requested": result.sessions_requested,
         "sessions_attempted": result.sessions_attempted,
+        "sessions_accepted": result.sessions_accepted,
+        "sessions_rejected": result.sessions_rejected,
+        "aggregate_trades_requested": result.aggregate_trades_requested,
+        "aggregate_trades_filled": result.aggregate_trades_filled,
+        "aggregate_ledger_mutations": result.aggregate_ledger_mutations,
+        "ledger_mutated": result.ledger_mutated,
+        "reason_code": result.reason_code,
+        "rejection_reasons": list(result.rejection_reasons),
+        "before_ledger_summary": result.before_ledger_summary,
+        "after_ledger_summary": result.after_ledger_summary,
         "audit_record": deribit_bounded_paper_campaign_audit_record_to_dict(result.audit_record),
         "artifact_payload": result.artifact_payload,
     }
@@ -538,6 +558,12 @@ def _result(
     sessions_requested: int,
     aggregate_trades_requested: int,
 ) -> DeribitBoundedPaperCampaignResult:
+    sessions_attempted = len(session_results)
+    sessions_accepted = sum(1 for item in session_results if item.accepted)
+    sessions_rejected = sum(1 for item in session_results if item.accepted is not True)
+    aggregate_trades_filled = sum(item.trades_filled for item in session_results)
+    aggregate_ledger_mutations = sum(item.trades_filled for item in session_results)
+    ledger_mutated = aggregate_ledger_mutations > 0
     audit_record = DeribitBoundedPaperCampaignAuditRecord(
         audit_id=f"{DERIBIT_BOUNDED_PAPER_CAMPAIGN_ID}:{getattr(request, 'campaign_id', 'missing-campaign')}:{reason_code}",
         operator_id=getattr(request, "operator_id", None),
@@ -545,15 +571,15 @@ def _result(
         approval_status=approval_artifact.get("approval_status") if isinstance(approval_artifact, dict) else None,
         approval_decision=approval_artifact.get("approval_decision") if isinstance(approval_artifact, dict) else None,
         sessions_requested=sessions_requested,
-        sessions_attempted=len(session_results),
-        sessions_accepted=0,
-        sessions_rejected=0,
+        sessions_attempted=sessions_attempted,
+        sessions_accepted=sessions_accepted,
+        sessions_rejected=sessions_rejected,
         aggregate_trades_requested=aggregate_trades_requested,
-        aggregate_trades_filled=0,
-        aggregate_ledger_mutations=0,
-        ledger_mutated=False,
+        aggregate_trades_filled=aggregate_trades_filled,
+        aggregate_ledger_mutations=aggregate_ledger_mutations,
+        ledger_mutated=ledger_mutated,
         reason_code=reason_code,
-        rejection_reasons=rejection_reasons,
+        rejection_reasons=tuple(dict.fromkeys(rejection_reasons)),
         before_ledger_summary=before_summary,
         after_ledger_summary=after_summary,
     )
@@ -561,22 +587,130 @@ def _result(
         accepted=accepted,
         campaign_id=getattr(request, "campaign_id", None),
         sessions_requested=sessions_requested,
-        sessions_attempted=len(session_results),
-        sessions_accepted=0,
-        sessions_rejected=0,
+        sessions_attempted=sessions_attempted,
+        sessions_accepted=sessions_accepted,
+        sessions_rejected=sessions_rejected,
         aggregate_trades_requested=aggregate_trades_requested,
-        aggregate_trades_filled=0,
-        aggregate_ledger_mutations=0,
-        ledger_mutated=False,
+        aggregate_trades_filled=aggregate_trades_filled,
+        aggregate_ledger_mutations=aggregate_ledger_mutations,
+        ledger_mutated=ledger_mutated,
         reason_code=reason_code,
-        rejection_reasons=rejection_reasons,
+        rejection_reasons=tuple(dict.fromkeys(rejection_reasons)),
         session_results=session_results,
         final_ledger_state=final_ledger_state,
         before_ledger_summary=before_summary,
         after_ledger_summary=after_summary,
         audit_record=audit_record,
-        artifact_payload={"reason_code": reason_code, "rejection_reasons": list(rejection_reasons)},
+        artifact_payload=_artifact_payload(
+            request=request,
+            approval_artifact=approval_artifact,
+            accepted=accepted,
+            reason_code=reason_code,
+            rejection_reasons=rejection_reasons,
+            sessions_requested=sessions_requested,
+            sessions_attempted=sessions_attempted,
+            sessions_accepted=sessions_accepted,
+            sessions_rejected=sessions_rejected,
+            aggregate_trades_requested=aggregate_trades_requested,
+            aggregate_trades_filled=aggregate_trades_filled,
+            aggregate_ledger_mutations=aggregate_ledger_mutations,
+            ledger_mutated=ledger_mutated,
+            session_results=session_results,
+            before_summary=before_summary,
+            after_summary=after_summary,
+        ),
     )
+
+
+def _artifact_payload(
+    *,
+    request: object,
+    approval_artifact: object,
+    accepted: bool,
+    reason_code: str,
+    rejection_reasons: tuple[str, ...],
+    sessions_requested: int,
+    sessions_attempted: int,
+    sessions_accepted: int,
+    sessions_rejected: int,
+    aggregate_trades_requested: int,
+    aggregate_trades_filled: int,
+    aggregate_ledger_mutations: int,
+    ledger_mutated: bool,
+    session_results: tuple[DeribitHardCappedPaperSessionResult, ...],
+    before_summary: dict[str, object] | None,
+    after_summary: dict[str, object] | None,
+) -> dict[str, object]:
+    request_is_valid = isinstance(request, DeribitBoundedPaperCampaignRequest)
+    approval_is_valid = isinstance(approval_artifact, dict)
+    return {
+        "schema_version": "deribit_bounded_repeated_paper_campaign_execution.v1",
+        "phase": "48",
+        "source": DERIBIT_BOUNDED_PAPER_CAMPAIGN_ID,
+        "source_phase47_approval": DERIBIT_PHASE47_APPROVAL,
+        "source_phase46_proposal": DERIBIT_PHASE46_PROPOSAL,
+        "source_phase44_report_pack": DERIBIT_PHASE44_REPORT_PACK,
+        "campaign_id": request.campaign_id if request_is_valid else None,
+        "operator_id": request.operator_id if request_is_valid else None,
+        "idempotency_key_sha256": _sha256(request.idempotency_key)
+        if request_is_valid and _non_empty(request.idempotency_key)
+        else None,
+        "approval_status": approval_artifact.get("approval_status") if approval_is_valid else None,
+        "approval_decision": approval_artifact.get("approval_decision") if approval_is_valid else None,
+        "simulation_only": request.simulation_only if request_is_valid else None,
+        "live_enabled": request.live_enabled if request_is_valid else None,
+        "shadow_enabled": request.shadow_enabled if request_is_valid else None,
+        "auto_loop_enabled": request.auto_loop_enabled if request_is_valid else None,
+        "scheduler_enabled": request.scheduler_enabled if request_is_valid else None,
+        "hard_cap": request.hard_cap if request_is_valid else None,
+        "per_session_max_trades": request.per_session_max_trades if request_is_valid else None,
+        "max_campaign_sessions": request.max_campaign_sessions if request_is_valid else None,
+        "sessions_requested": sessions_requested,
+        "sessions_attempted": sessions_attempted,
+        "sessions_accepted": sessions_accepted,
+        "sessions_rejected": sessions_rejected,
+        "aggregate_trades_requested": aggregate_trades_requested,
+        "aggregate_trades_filled": aggregate_trades_filled,
+        "aggregate_ledger_mutations": aggregate_ledger_mutations,
+        "ledger_mutated": ledger_mutated,
+        "duplicate_mutation_blocked": True,
+        "reason_code": reason_code,
+        "rejection_reasons": list(dict.fromkeys(rejection_reasons)),
+        "session_results": [_session_result_summary(item) for item in session_results],
+        "before_ledger_summary": before_summary,
+        "after_ledger_summary": after_summary,
+        "no_private_api": True,
+        "no_credentials": True,
+        "no_exchange_orders": True,
+        "no_execution_adapter": True,
+        "no_order_routing": True,
+        "no_strategy_signal": True,
+        "no_scheduler": True,
+        "no_automatic_paper_loop": True,
+        "no_shadow": True,
+        "no_live": True,
+        "connector_ready_dialects_count": len(connector_ready_dialects()),
+        "campaign_execution_verdict": "PASS" if accepted else "FAIL_CLOSED",
+        "live_ready": False,
+        "policy_refs": list(_POLICY_REFS),
+        "next_blocker": DERIBIT_PHASE48_NEXT_BLOCKER
+        if accepted
+        else "BOUNDED_REPEATED_PAPER_CAMPAIGN_EXECUTION_GATE_NOT_READY",
+    }
+
+
+def _session_result_summary(result: DeribitHardCappedPaperSessionResult) -> dict[str, object]:
+    return {
+        "session_id": result.session_id,
+        "accepted": result.accepted,
+        "trades_requested": result.trades_requested,
+        "trades_attempted": result.trades_attempted,
+        "trades_filled": result.trades_filled,
+        "trades_rejected": result.trades_rejected,
+        "ledger_mutated": result.ledger_mutated,
+        "reason_code": result.reason_code,
+        "rejection_reasons": list(result.rejection_reasons),
+    }
 
 
 def _ledger_summary_to_dict(ledger_state: DeribitPaperLedgerState | None) -> dict[str, object] | None:
@@ -614,3 +748,30 @@ def _contains_scope_marker(value: object) -> bool:
 
 def _non_empty(value: object) -> bool:
     return isinstance(value, str) and bool(value)
+
+
+def _sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+__all__ = [
+    "DERIBIT_APPROVAL_DECISION",
+    "DERIBIT_APPROVAL_SCOPE",
+    "DERIBIT_APPROVAL_STATUS",
+    "DERIBIT_APPROVED_REVIEWED_AT_ISO",
+    "DERIBIT_APPROVED_REVIEWER_ID",
+    "DERIBIT_BOUNDED_PAPER_CAMPAIGN_ID",
+    "DERIBIT_BOUNDED_PAPER_CAMPAIGN_MAX_SESSIONS",
+    "DERIBIT_BOUNDED_PAPER_CAMPAIGN_MAX_TRADES_PER_SESSION",
+    "DERIBIT_PHASE44_REPORT_PACK",
+    "DERIBIT_PHASE46_PROPOSAL",
+    "DERIBIT_PHASE47_APPROVAL",
+    "DERIBIT_PHASE48_NEXT_BLOCKER",
+    "DeribitBoundedPaperCampaignAuditRecord",
+    "DeribitBoundedPaperCampaignRequest",
+    "DeribitBoundedPaperCampaignResult",
+    "DeribitBoundedPaperCampaignSessionFixture",
+    "deribit_bounded_paper_campaign_audit_record_to_dict",
+    "deribit_bounded_paper_campaign_result_to_dict",
+    "run_deribit_bounded_paper_campaign",
+]
