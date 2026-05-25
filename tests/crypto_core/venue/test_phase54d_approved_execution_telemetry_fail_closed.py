@@ -57,6 +57,9 @@ def test_phase54d_count_and_session_shape_drift_fails_closed() -> None:
     rejected["sessions_rejected"] = 1
     ledger_mismatch = deepcopy(_phase53_execution())
     ledger_mismatch["aggregate_ledger_mutations"] = 5
+    aggregate_mismatch = deepcopy(_phase53_execution())
+    aggregate_mismatch["aggregate_trades_filled"] = 5
+    aggregate_mismatch["aggregate_ledger_mutations"] = 5
     non_dict_session = deepcopy(_phase53_execution())
     non_dict_session["session_results"] = ["bad"]
 
@@ -67,6 +70,10 @@ def test_phase54d_count_and_session_shape_drift_fails_closed() -> None:
     assert (
         "deribit_approved_execution_telemetry_audit:phase53_counts_invalid"
         in _run_with(phase53=ledger_mismatch).rejection_reasons
+    )
+    assert (
+        "deribit_approved_execution_telemetry_audit:phase53_counts_invalid"
+        in _run_with(phase53=aggregate_mismatch).rejection_reasons
     )
     assert (
         "deribit_approved_execution_telemetry_audit:phase53_session_results_invalid"

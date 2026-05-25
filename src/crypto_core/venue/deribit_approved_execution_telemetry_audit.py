@@ -173,6 +173,10 @@ def _counts_are_safe(phase53_execution_artifact: dict[str, object]) -> bool:
         ledger_mutations,
     ):
         return False
+    session_totals = _session_result_totals(phase53_execution_artifact.get("session_results"))
+    if session_totals is None:
+        return False
+    session_count, session_trades_requested, session_trades_filled, session_trades_rejected = session_totals
     return (
         sessions_requested == DERIBIT_BOUNDED_PAPER_CAMPAIGN_MAX_SESSIONS
         and sessions_attempted == sessions_requested
@@ -181,8 +185,30 @@ def _counts_are_safe(phase53_execution_artifact: dict[str, object]) -> bool:
         and trades_requested == sessions_requested * DERIBIT_BOUNDED_PAPER_CAMPAIGN_MAX_TRADES_PER_SESSION
         and trades_requested >= trades_filled >= 0
         and ledger_mutations == trades_filled
+        and session_count == sessions_requested
+        and session_trades_requested == trades_requested
+        and session_trades_filled == trades_filled
+        and session_trades_rejected == 0
         and _strict_bool(phase53_execution_artifact.get("duplicate_mutation_blocked")) is True
     )
+
+
+def _session_result_totals(value: object) -> tuple[int, int, int, int] | None:
+    if not isinstance(value, list):
+        return None
+    totals = [0, 0, 0]
+    for item in value:
+        if not isinstance(item, dict):
+            return None
+        requested = _strict_int(item.get("trades_requested"))
+        filled = _strict_int(item.get("trades_filled"))
+        rejected = _strict_int(item.get("trades_rejected"))
+        if None in (requested, filled, rejected):
+            return None
+        totals[0] += requested
+        totals[1] += filled
+        totals[2] += rejected
+    return (len(value), totals[0], totals[1], totals[2])
 
 
 def _session_results_are_safe(value: object) -> bool:
