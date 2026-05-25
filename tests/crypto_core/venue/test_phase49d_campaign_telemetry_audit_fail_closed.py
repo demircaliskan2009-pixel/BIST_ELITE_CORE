@@ -37,3 +37,28 @@ def test_phase49d_malformed_counts_and_approval_bounds_fail_closed() -> None:
     assert result.accepted is False
     assert "deribit_campaign_telemetry_audit:phase48_counts_invalid" in result.rejection_reasons
     assert "deribit_campaign_telemetry_audit:approval_bounds_invalid" in result.rejection_reasons
+
+
+def test_phase49d_tampered_no_safety_flags_fail_closed() -> None:
+    for field in (
+        "no_order_routing",
+        "no_scheduler",
+        "no_automatic_paper_loop",
+        "no_shadow",
+        "no_live",
+    ):
+        artifact = deepcopy(_phase48_artifact())
+        artifact[field] = False
+
+        artifact_result = run_deribit_campaign_telemetry_audit(artifact, _phase47_approval())
+
+        assert artifact_result.accepted is False
+        assert "deribit_campaign_telemetry_audit:phase48_scope_flags_invalid" in artifact_result.rejection_reasons
+
+    approval = deepcopy(_phase47_approval())
+    approval["safety_flags"]["no_order_routing"] = False
+
+    approval_result = run_deribit_campaign_telemetry_audit(_phase48_artifact(), approval)
+
+    assert approval_result.accepted is False
+    assert "deribit_campaign_telemetry_audit:approval_safety_flags_invalid" in approval_result.rejection_reasons
