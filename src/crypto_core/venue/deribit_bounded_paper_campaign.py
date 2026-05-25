@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from crypto_core.venue.contracts import VenueId
 from crypto_core.venue.deribit_hard_capped_paper_session import (
     DERIBIT_PAPER_SESSION_HARD_CAP,
+    DeribitHardCappedPaperSessionRequest,
     DeribitHardCappedPaperSessionResult,
+    run_deribit_hard_capped_paper_session,
 )
 from crypto_core.venue.deribit_paper_ledger import DeribitPaperLedgerState
 from crypto_core.venue.deribit_paper_run_harness import DeribitPaperRunHarnessInputs
@@ -152,18 +154,90 @@ def run_deribit_bounded_paper_campaign(
             )
         )
     )
+    sessions_requested = _raw_session_count(session_fixtures)
+    aggregate_trades_requested = _raw_trade_count(session_fixtures)
+    if reasons:
+        return _result(
+            request=request,
+            approval_artifact=approval_artifact,
+            accepted=False,
+            reason_code=reasons[0],
+            rejection_reasons=reasons,
+            session_results=(),
+            final_ledger_state=initial_ledger,
+            before_summary=before_summary,
+            after_summary=before_summary,
+            sessions_requested=sessions_requested,
+            aggregate_trades_requested=aggregate_trades_requested,
+        )
+
+    assert isinstance(request, DeribitBoundedPaperCampaignRequest)
+    assert isinstance(approval_artifact, dict)
+    assert isinstance(initial_ledger, DeribitPaperLedgerState)
+
+    current_ledger = initial_ledger
+    session_results: list[DeribitHardCappedPaperSessionResult] = []
+    for fixture in normalized_fixtures:
+        trade_inputs = tuple(replace(item, ledger_state=current_ledger) for item in fixture.trade_inputs)
+        session_request = DeribitHardCappedPaperSessionRequest(
+            operator_id=request.operator_id,
+            session_id=fixture.session_id,
+            idempotency_key=fixture.idempotency_key,
+            simulation_only=True,
+            live_enabled=False,
+            shadow_enabled=False,
+            auto_loop_enabled=False,
+            scheduler_enabled=False,
+            max_session_trades=request.per_session_max_trades,
+        )
+        session_result = run_deribit_hard_capped_paper_session(
+            session_request,
+            trade_inputs,
+            kill_switch_active=False,
+            now_ns=now_ns,
+        )
+        session_results.append(session_result)
+        if session_result.accepted is not True:
+            rejection_reasons = tuple(
+                dict.fromkeys(
+                    (
+                        "deribit_bounded_paper_campaign:session_rejected",
+                        session_result.reason_code,
+                        *session_result.rejection_reasons,
+                    )
+                )
+            )
+            after_summary = _ledger_summary_to_dict(current_ledger)
+            return _result(
+                request=request,
+                approval_artifact=approval_artifact,
+                accepted=False,
+                reason_code=session_result.reason_code,
+                rejection_reasons=rejection_reasons,
+                session_results=tuple(session_results),
+                final_ledger_state=current_ledger,
+                before_summary=before_summary,
+                after_summary=after_summary,
+                sessions_requested=len(normalized_fixtures),
+                aggregate_trades_requested=sum(len(item.trade_inputs) for item in normalized_fixtures),
+            )
+        assert session_result.final_ledger_state is not None
+        current_ledger = session_result.final_ledger_state
+
+    current_ledger = _record_campaign_markers(current_ledger, request)
+    after_summary = _ledger_summary_to_dict(current_ledger)
     return _result(
         request=request,
         approval_artifact=approval_artifact,
-        accepted=False,
-        reason_code=reasons[0] if reasons else "deribit_bounded_paper_campaign:not_ready",
-        rejection_reasons=reasons if reasons else ("deribit_bounded_paper_campaign:not_ready",),
-        session_results=(),
-        final_ledger_state=initial_ledger,
+        accepted=True,
+        reason_code="deribit_bounded_paper_campaign:accepted",
+        rejection_reasons=(),
+        session_results=tuple(session_results),
+        final_ledger_state=current_ledger,
         before_summary=before_summary,
-        after_summary=before_summary,
-        sessions_requested=_raw_session_count(session_fixtures),
-        aggregate_trades_requested=_raw_trade_count(session_fixtures),
+        after_summary=after_summary,
+        sessions_requested=len(normalized_fixtures),
+        aggregate_trades_requested=sum(len(item.trade_inputs) for item in normalized_fixtures),
     )
 
 
@@ -521,6 +595,17 @@ def _ledger_summary_to_dict(ledger_state: DeribitPaperLedgerState | None) -> dic
         "applied_idempotency_count": len(ledger_state.applied_idempotency_keys),
         "audit_entry_count": len(ledger_state.audit_entries),
     }
+
+
+def _record_campaign_markers(
+    ledger_state: DeribitPaperLedgerState,
+    request: DeribitBoundedPaperCampaignRequest,
+) -> DeribitPaperLedgerState:
+    return replace(
+        ledger_state,
+        applied_request_ids=ledger_state.applied_request_ids + (request.campaign_id,),
+        applied_idempotency_keys=ledger_state.applied_idempotency_keys + (request.idempotency_key,),
+    )
 
 
 def _contains_scope_marker(value: object) -> bool:
