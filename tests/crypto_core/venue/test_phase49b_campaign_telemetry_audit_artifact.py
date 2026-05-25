@@ -71,4 +71,14 @@ def test_phase49b_artifact_records_report_only_audit_state() -> None:
     assert artifact["max_campaign_sessions"] == 3
     assert artifact["simulation_only"] is True
     assert artifact["live_ready"] is False
+    assert artifact["no_private_api"] is True
+    assert artifact["no_credentials"] is True
+    assert artifact["no_exchange_orders"] is True
+    assert artifact["no_execution_adapter"] is True
+    assert artifact["no_order_routing"] is True
+    assert artifact["no_strategy_signal"] is True
+    assert artifact["no_scheduler"] is True
+    assert artifact["no_automatic_paper_loop"] is True
+    assert artifact["no_shadow"] is True
+    assert artifact["no_live"] is True
     assert artifact["next_blocker"] == "PAPER_CAMPAIGN_PERFORMANCE_EVALUATION_NOT_READY"

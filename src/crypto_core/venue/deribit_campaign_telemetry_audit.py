@@ -32,7 +32,7 @@ _PAYLOAD_FIELDS = tuple((
     "aggregate_trades_requested aggregate_trades_filled aggregate_ledger_mutations duplicate_mutation_blocked "
     "hard_cap per_session_max_trades max_campaign_sessions simulation_only live_ready scheduler_enabled "
     "auto_loop_enabled shadow_enabled live_enabled no_private_api no_credentials no_exchange_orders "
-    "no_execution_adapter no_strategy_signal"
+    "no_execution_adapter no_order_routing no_strategy_signal no_scheduler no_automatic_paper_loop no_shadow no_live"
 ).split())
 # fmt: on
 _SESSION_REASON = "deribit_hard_capped_paper_session:accepted"
