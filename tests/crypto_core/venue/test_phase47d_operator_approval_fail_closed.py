@@ -38,6 +38,18 @@ def test_phase47d_approval_outside_exact_scope_fails_closed() -> None:
     assert "approval:per_session_max_trades_mismatch" in _reasons(bad_trade_cap)
 
 
+def test_phase47d_mirrored_source_status_drift_fails_closed() -> None:
+    bad_phase46_status = _mutated(_approval(), source_phase46_proposal_status="NOT_READY")
+    bad_phase46_approval = _mutated(_approval(), source_phase46_approval_status="APPROVED")
+    bad_phase45_verdict = _mutated(_approval(), source_phase45_promotion_verdict="NOT_READY")
+    bad_phase44_verdict = _mutated(_approval(), source_phase44_report_pack_verdict="FAIL")
+
+    assert "approval:source_phase46_proposal_status_mismatch" in _reasons(bad_phase46_status)
+    assert "approval:source_phase46_approval_status_mismatch" in _reasons(bad_phase46_approval)
+    assert "approval:source_phase45_promotion_verdict_mismatch" in _reasons(bad_phase45_verdict)
+    assert "approval:source_phase44_report_pack_verdict_mismatch" in _reasons(bad_phase44_verdict)
+
+
 def test_phase47d_promotion_or_execution_status_fails_closed() -> None:
     promoted = _mutated(_approval(), promotion_granted=True)
     campaign_executed = _mutated(_approval(), campaign_execution_status="EXECUTED")

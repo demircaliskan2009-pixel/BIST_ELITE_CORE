@@ -118,6 +118,14 @@ def _approval_rejection_reasons(
         reasons.append("approval:source_phase45_hash_mismatch")
     if approval.get("source_phase44_report_pack_sha256") != _sha256(PHASE44_REPORT_PACK):
         reasons.append("approval:source_phase44_hash_mismatch")
+    if approval.get("source_phase46_proposal_status") != proposal.get("proposal_status"):
+        reasons.append("approval:source_phase46_proposal_status_mismatch")
+    if approval.get("source_phase46_approval_status") != proposal.get("approval_status"):
+        reasons.append("approval:source_phase46_approval_status_mismatch")
+    if approval.get("source_phase45_promotion_verdict") != evaluation.get("promotion_verdict"):
+        reasons.append("approval:source_phase45_promotion_verdict_mismatch")
+    if approval.get("source_phase44_report_pack_verdict") != report_pack.get("report_pack_verdict"):
+        reasons.append("approval:source_phase44_report_pack_verdict_mismatch")
     if proposal.get("proposal_status") != "READY_FOR_OPERATOR_REVIEW":
         reasons.append("approval:phase46_not_ready_for_operator_review")
     if proposal.get("approval_status") != "NOT_APPROVED":
