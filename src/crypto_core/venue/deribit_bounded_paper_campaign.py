@@ -242,7 +242,9 @@ def run_deribit_bounded_paper_campaign(
     )
 
 
-def deribit_bounded_paper_campaign_audit_record_to_dict(record: DeribitBoundedPaperCampaignAuditRecord) -> dict[str, object]:
+def deribit_bounded_paper_campaign_audit_record_to_dict(
+    record: DeribitBoundedPaperCampaignAuditRecord,
+) -> dict[str, object]:
     return {
         "audit_id": record.audit_id,
         "operator_id": record.operator_id,
