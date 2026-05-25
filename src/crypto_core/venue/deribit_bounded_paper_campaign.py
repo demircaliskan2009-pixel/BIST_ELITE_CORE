@@ -453,17 +453,21 @@ def _session_fixture_rejection_reasons(
     if isinstance(approval_artifact, dict):
         bounds = approval_artifact.get("campaign_bounds")
         if isinstance(bounds, dict):
+            max_sessions_approved = _strict_int(bounds.get("max_sessions_approved"))
+            max_total_trades_approved = _strict_int(bounds.get("max_total_paper_trades_approved"))
             if request.operator_id != approval_artifact.get("reviewer_id"):
                 reasons.append("deribit_bounded_paper_campaign:operator_approval_mismatch")
             if request.hard_cap != bounds.get("hard_cap"):
                 reasons.append("deribit_bounded_paper_campaign:hard_cap_approval_mismatch")
             if request.per_session_max_trades != bounds.get("per_session_max_trades"):
                 reasons.append("deribit_bounded_paper_campaign:per_session_max_trades_approval_mismatch")
-            if request.max_campaign_sessions > int(bounds.get("max_sessions_approved", 0)):
+            if max_sessions_approved is None:
+                reasons.append("deribit_bounded_paper_campaign:approval_max_sessions_invalid")
+            elif request.max_campaign_sessions > max_sessions_approved:
                 reasons.append("deribit_bounded_paper_campaign:max_campaign_sessions_exceeds_approval")
-            if sum(len(item.trade_inputs) for item in normalized_fixtures) > int(
-                bounds.get("max_total_paper_trades_approved", 0)
-            ):
+            if max_total_trades_approved is None:
+                reasons.append("deribit_bounded_paper_campaign:approval_max_total_trades_invalid")
+            elif sum(len(item.trade_inputs) for item in normalized_fixtures) > max_total_trades_approved:
                 reasons.append("deribit_bounded_paper_campaign:aggregate_trade_count_exceeds_approval")
     if request.campaign_id in ledger_state.applied_request_ids:
         reasons.append("deribit_bounded_paper_campaign:duplicate_campaign_id")
@@ -497,6 +501,8 @@ def _session_fixture_rejection_reasons(
         if any(not isinstance(item, DeribitPaperRunHarnessInputs) for item in fixture.trade_inputs):
             reasons.append("deribit_bounded_paper_campaign:session_trade_input_malformed")
     trade_inputs = tuple(item for fixture in normalized_fixtures for item in fixture.trade_inputs)
+    if any(not isinstance(item, DeribitPaperRunHarnessInputs) for item in trade_inputs):
+        return tuple(dict.fromkeys(reasons))
     request_ids = tuple(item.fill_request.request_id for item in trade_inputs)
     trade_idempotency_keys = tuple(item.intent.idempotency_key for item in trade_inputs)
     if len(set(request_ids)) != len(request_ids):
@@ -750,6 +756,10 @@ def _contains_scope_marker(value: object) -> bool:
 
 def _non_empty(value: object) -> bool:
     return isinstance(value, str) and bool(value)
+
+
+def _strict_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _sha256(value: str) -> str:

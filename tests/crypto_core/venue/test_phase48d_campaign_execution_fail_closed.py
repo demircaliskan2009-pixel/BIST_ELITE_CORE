@@ -95,6 +95,33 @@ def test_phase48d_hard_bounds_and_kill_switch_fail_closed() -> None:
     )
 
 
+def test_phase48d_malformed_trade_input_fails_closed_without_attribute_error() -> None:
+    sessions = list(_phase48_sessions())
+    sessions[0] = replace(sessions[0], trade_inputs=("malformed", sessions[0].trade_inputs[1]))
+    result = run_deribit_bounded_paper_campaign(_phase48_request(), _approval(), tuple(sessions), _ledger())
+
+    assert result.accepted is False
+    assert result.ledger_mutated is False
+    assert "deribit_bounded_paper_campaign:session_trade_input_malformed" in result.rejection_reasons
+
+
+def test_phase48d_malformed_approval_bounds_fail_closed_without_value_error() -> None:
+    bad_approval = copy.deepcopy(_approval())
+    bad_approval["campaign_bounds"]["max_sessions_approved"] = "three"
+    bad_approval["campaign_bounds"]["max_total_paper_trades_approved"] = "six"
+    result = run_deribit_bounded_paper_campaign(
+        _phase48_request(),
+        bad_approval,
+        _phase48_sessions(),
+        _ledger(),
+    )
+
+    assert result.accepted is False
+    assert result.ledger_mutated is False
+    assert "deribit_bounded_paper_campaign:approval_max_sessions_invalid" in result.rejection_reasons
+    assert "deribit_bounded_paper_campaign:approval_max_total_trades_invalid" in result.rejection_reasons
+
+
 def test_phase48d_rejected_session_result_stops_campaign_fail_closed() -> None:
     sessions = list(_phase48_sessions())
     bad_input = replace(
