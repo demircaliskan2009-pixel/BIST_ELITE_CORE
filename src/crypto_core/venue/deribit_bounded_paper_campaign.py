@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from crypto_core.venue.contracts import VenueId
 from crypto_core.venue.deribit_hard_capped_paper_session import (
     DERIBIT_PAPER_SESSION_HARD_CAP,
     DeribitHardCappedPaperSessionResult,
@@ -192,15 +193,93 @@ def deribit_bounded_paper_campaign_result_to_dict(result: DeribitBoundedPaperCam
 
 
 def _request_rejection_reasons(request: object) -> tuple[str, ...]:
-    return ()
+    if not isinstance(request, DeribitBoundedPaperCampaignRequest):
+        return ("deribit_bounded_paper_campaign:request_malformed",)
+
+    reasons: list[str] = []
+    if not _non_empty(request.operator_id):
+        reasons.append("deribit_bounded_paper_campaign:operator_id_missing")
+    if not _non_empty(request.campaign_id):
+        reasons.append("deribit_bounded_paper_campaign:campaign_id_missing")
+    if not _non_empty(request.idempotency_key):
+        reasons.append("deribit_bounded_paper_campaign:idempotency_key_missing")
+    if request.simulation_only is not True:
+        reasons.append("deribit_bounded_paper_campaign:not_simulation_only")
+    if request.approved_campaign is not True:
+        reasons.append("deribit_bounded_paper_campaign:campaign_not_approved")
+    if request.live_enabled is not False:
+        reasons.append("deribit_bounded_paper_campaign:live_enabled")
+    if request.shadow_enabled is not False:
+        reasons.append("deribit_bounded_paper_campaign:shadow_enabled")
+    if request.auto_loop_enabled is not False:
+        reasons.append("deribit_bounded_paper_campaign:auto_loop_enabled")
+    if request.scheduler_enabled is not False:
+        reasons.append("deribit_bounded_paper_campaign:scheduler_enabled")
+    if request.hard_cap != DERIBIT_PAPER_SESSION_HARD_CAP:
+        reasons.append("deribit_bounded_paper_campaign:hard_cap_mismatch")
+    if request.per_session_max_trades != DERIBIT_BOUNDED_PAPER_CAMPAIGN_MAX_TRADES_PER_SESSION:
+        reasons.append("deribit_bounded_paper_campaign:per_session_max_trades_mismatch")
+    if (
+        not isinstance(request.max_campaign_sessions, int)
+        or isinstance(request.max_campaign_sessions, bool)
+        or request.max_campaign_sessions <= 0
+    ):
+        reasons.append("deribit_bounded_paper_campaign:max_campaign_sessions_invalid")
+    elif request.max_campaign_sessions > DERIBIT_BOUNDED_PAPER_CAMPAIGN_MAX_SESSIONS:
+        reasons.append("deribit_bounded_paper_campaign:max_campaign_sessions_exceeds_bound")
+    if (
+        _contains_scope_marker(request.operator_id)
+        or _contains_scope_marker(request.campaign_id)
+        or _contains_scope_marker(request.idempotency_key)
+    ):
+        reasons.append("deribit_bounded_paper_campaign:request_scope_invalid")
+    return tuple(dict.fromkeys(reasons))
 
 
 def _approval_rejection_reasons(approval_artifact: object) -> tuple[str, ...]:
-    return ()
+    if not isinstance(approval_artifact, dict):
+        return ("deribit_bounded_paper_campaign:approval_artifact_missing",)
+
+    reasons: list[str] = []
+    if approval_artifact.get("source_phase46_operator_proposal") != DERIBIT_PHASE46_PROPOSAL:
+        reasons.append("deribit_bounded_paper_campaign:approval_source_phase46_mismatch")
+    if approval_artifact.get("source_phase44_report_pack") != DERIBIT_PHASE44_REPORT_PACK:
+        reasons.append("deribit_bounded_paper_campaign:approval_source_phase44_mismatch")
+    if approval_artifact.get("approval_status") != DERIBIT_APPROVAL_STATUS:
+        reasons.append("deribit_bounded_paper_campaign:approval_status_not_approved")
+    if approval_artifact.get("approval_decision") != DERIBIT_APPROVAL_DECISION:
+        reasons.append("deribit_bounded_paper_campaign:approval_decision_mismatch")
+    if approval_artifact.get("reviewer_id") != DERIBIT_APPROVED_REVIEWER_ID:
+        reasons.append("deribit_bounded_paper_campaign:approval_reviewer_mismatch")
+    if approval_artifact.get("reviewed_at_iso") != DERIBIT_APPROVED_REVIEWED_AT_ISO:
+        reasons.append("deribit_bounded_paper_campaign:approval_reviewed_at_mismatch")
+    if approval_artifact.get("approval_scope") != DERIBIT_APPROVAL_SCOPE:
+        reasons.append("deribit_bounded_paper_campaign:approval_scope_mismatch")
+    if approval_artifact.get("bounded_repeated_paper_campaign_approved") is not True:
+        reasons.append("deribit_bounded_paper_campaign:approval_flag_not_true")
+    if approval_artifact.get("operator_approval_executed") is not True:
+        reasons.append("deribit_bounded_paper_campaign:approval_not_executed")
+    if approval_artifact.get("promotion_granted") is not False:
+        reasons.append("deribit_bounded_paper_campaign:promotion_granted")
+    if approval_artifact.get("campaign_execution_status") != "NOT_EXECUTED":
+        reasons.append("deribit_bounded_paper_campaign:campaign_already_executed")
+    if approval_artifact.get("session_execution_status") != "NOT_EXECUTED":
+        reasons.append("deribit_bounded_paper_campaign:session_already_executed")
+    if approval_artifact.get("run_execution_status") != "NOT_EXECUTED":
+        reasons.append("deribit_bounded_paper_campaign:run_already_executed")
+    return tuple(dict.fromkeys(reasons))
 
 
 def _ledger_state_rejection_reasons(ledger_state: object) -> tuple[str, ...]:
-    return ()
+    if not isinstance(ledger_state, DeribitPaperLedgerState):
+        return ("deribit_bounded_paper_campaign:ledger_state_missing",)
+
+    reasons: list[str] = []
+    if ledger_state.venue_id is not VenueId.DERIBIT:
+        reasons.append("deribit_bounded_paper_campaign:ledger_state_invalid")
+    if not _non_empty(ledger_state.symbol) or not _non_empty(ledger_state.canonical_symbol):
+        reasons.append("deribit_bounded_paper_campaign:ledger_state_invalid")
+    return tuple(dict.fromkeys(reasons))
 
 
 def _session_fixture_rejection_reasons(
@@ -214,6 +293,10 @@ def _session_fixture_rejection_reasons(
 
 
 def _kill_switch_rejection_reasons(kill_switch_active: object) -> tuple[str, ...]:
+    if not isinstance(kill_switch_active, bool):
+        return ("deribit_bounded_paper_campaign:kill_switch_flag_invalid",)
+    if kill_switch_active is True:
+        return ("deribit_bounded_paper_campaign:kill_switch_active",)
     return ()
 
 
@@ -316,3 +399,11 @@ def _ledger_summary_to_dict(ledger_state: DeribitPaperLedgerState | None) -> dic
         "applied_idempotency_count": len(ledger_state.applied_idempotency_keys),
         "audit_entry_count": len(ledger_state.audit_entries),
     }
+
+
+def _contains_scope_marker(value: object) -> bool:
+    return isinstance(value, str) and any(marker in value.lower() for marker in _SCOPE_MARKERS)
+
+
+def _non_empty(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
