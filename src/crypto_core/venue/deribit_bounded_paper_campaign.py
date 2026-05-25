@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from crypto_core.venue.deribit_hard_capped_paper_session import (
@@ -8,6 +9,7 @@ from crypto_core.venue.deribit_hard_capped_paper_session import (
 )
 from crypto_core.venue.deribit_paper_ledger import DeribitPaperLedgerState
 from crypto_core.venue.deribit_paper_run_harness import DeribitPaperRunHarnessInputs
+from crypto_core.venue.public_feed_dialects import connector_ready_dialects
 
 DERIBIT_BOUNDED_PAPER_CAMPAIGN_ID = "deribit_bounded_paper_campaign_v1"
 DERIBIT_BOUNDED_PAPER_CAMPAIGN_MAX_SESSIONS = 3
@@ -117,3 +119,200 @@ class DeribitBoundedPaperCampaignResult:
     after_ledger_summary: dict[str, object] | None
     audit_record: DeribitBoundedPaperCampaignAuditRecord
     artifact_payload: dict[str, object]
+
+
+def run_deribit_bounded_paper_campaign(
+    request: object,
+    approval_artifact: object,
+    session_fixtures: object,
+    ledger_state: object,
+    *,
+    kill_switch_active: bool = False,
+    now_ns: int | None = None,
+) -> DeribitBoundedPaperCampaignResult:
+    normalized_fixtures = _normalized_session_fixtures(session_fixtures)
+    initial_ledger = ledger_state if isinstance(ledger_state, DeribitPaperLedgerState) else None
+    before_summary = _ledger_summary_to_dict(initial_ledger)
+    reasons = tuple(
+        dict.fromkeys(
+            (
+                *_request_rejection_reasons(request),
+                *_approval_rejection_reasons(approval_artifact),
+                *_ledger_state_rejection_reasons(ledger_state),
+                *_session_fixture_rejection_reasons(
+                    request,
+                    approval_artifact,
+                    normalized_fixtures,
+                    session_fixtures,
+                    ledger_state,
+                ),
+                *_kill_switch_rejection_reasons(kill_switch_active),
+                *_connector_rejection_reasons(),
+            )
+        )
+    )
+    return _result(
+        request=request,
+        approval_artifact=approval_artifact,
+        accepted=False,
+        reason_code=reasons[0] if reasons else "deribit_bounded_paper_campaign:not_ready",
+        rejection_reasons=reasons if reasons else ("deribit_bounded_paper_campaign:not_ready",),
+        session_results=(),
+        final_ledger_state=initial_ledger,
+        before_summary=before_summary,
+        after_summary=before_summary,
+        sessions_requested=_raw_session_count(session_fixtures),
+        aggregate_trades_requested=_raw_trade_count(session_fixtures),
+    )
+
+
+def deribit_bounded_paper_campaign_audit_record_to_dict(record: DeribitBoundedPaperCampaignAuditRecord) -> dict[str, object]:
+    return {
+        "audit_id": record.audit_id,
+        "operator_id": record.operator_id,
+        "campaign_id": record.campaign_id,
+        "approval_status": record.approval_status,
+        "approval_decision": record.approval_decision,
+        "sessions_requested": record.sessions_requested,
+        "sessions_attempted": record.sessions_attempted,
+        "sessions_accepted": record.sessions_accepted,
+        "sessions_rejected": record.sessions_rejected,
+    }
+
+
+def deribit_bounded_paper_campaign_result_to_dict(result: DeribitBoundedPaperCampaignResult) -> dict[str, object]:
+    return {
+        "accepted": result.accepted,
+        "campaign_id": result.campaign_id,
+        "sessions_requested": result.sessions_requested,
+        "sessions_attempted": result.sessions_attempted,
+        "audit_record": deribit_bounded_paper_campaign_audit_record_to_dict(result.audit_record),
+        "artifact_payload": result.artifact_payload,
+    }
+
+
+def _request_rejection_reasons(request: object) -> tuple[str, ...]:
+    return ()
+
+
+def _approval_rejection_reasons(approval_artifact: object) -> tuple[str, ...]:
+    return ()
+
+
+def _ledger_state_rejection_reasons(ledger_state: object) -> tuple[str, ...]:
+    return ()
+
+
+def _session_fixture_rejection_reasons(
+    request: object,
+    approval_artifact: object,
+    normalized_fixtures: tuple[DeribitBoundedPaperCampaignSessionFixture, ...],
+    raw_session_fixtures: object,
+    ledger_state: object,
+) -> tuple[str, ...]:
+    return ()
+
+
+def _kill_switch_rejection_reasons(kill_switch_active: object) -> tuple[str, ...]:
+    return ()
+
+
+def _connector_rejection_reasons() -> tuple[str, ...]:
+    if len(connector_ready_dialects()) != 1:
+        return ("deribit_bounded_paper_campaign:connector_ready_dialects_mismatch",)
+    return ()
+
+
+def _normalized_session_fixtures(session_fixtures: object) -> tuple[DeribitBoundedPaperCampaignSessionFixture, ...]:
+    if not isinstance(session_fixtures, Sequence) or isinstance(session_fixtures, str | bytes):
+        return ()
+    return tuple(item for item in session_fixtures if isinstance(item, DeribitBoundedPaperCampaignSessionFixture))
+
+
+def _raw_session_count(session_fixtures: object) -> int:
+    if not isinstance(session_fixtures, Sequence) or isinstance(session_fixtures, str | bytes):
+        return 0
+    return len(session_fixtures)
+
+
+def _raw_trade_count(session_fixtures: object) -> int:
+    if not isinstance(session_fixtures, Sequence) or isinstance(session_fixtures, str | bytes):
+        return 0
+    total = 0
+    for fixture in session_fixtures:
+        if isinstance(fixture, DeribitBoundedPaperCampaignSessionFixture):
+            total += len(fixture.trade_inputs)
+    return total
+
+
+def _result(
+    *,
+    request: object,
+    approval_artifact: object,
+    accepted: bool,
+    reason_code: str,
+    rejection_reasons: tuple[str, ...],
+    session_results: tuple[DeribitHardCappedPaperSessionResult, ...],
+    final_ledger_state: DeribitPaperLedgerState | None,
+    before_summary: dict[str, object] | None,
+    after_summary: dict[str, object] | None,
+    sessions_requested: int,
+    aggregate_trades_requested: int,
+) -> DeribitBoundedPaperCampaignResult:
+    audit_record = DeribitBoundedPaperCampaignAuditRecord(
+        audit_id=f"{DERIBIT_BOUNDED_PAPER_CAMPAIGN_ID}:{getattr(request, 'campaign_id', 'missing-campaign')}:{reason_code}",
+        operator_id=getattr(request, "operator_id", None),
+        campaign_id=getattr(request, "campaign_id", None),
+        approval_status=approval_artifact.get("approval_status") if isinstance(approval_artifact, dict) else None,
+        approval_decision=approval_artifact.get("approval_decision") if isinstance(approval_artifact, dict) else None,
+        sessions_requested=sessions_requested,
+        sessions_attempted=len(session_results),
+        sessions_accepted=0,
+        sessions_rejected=0,
+        aggregate_trades_requested=aggregate_trades_requested,
+        aggregate_trades_filled=0,
+        aggregate_ledger_mutations=0,
+        ledger_mutated=False,
+        reason_code=reason_code,
+        rejection_reasons=rejection_reasons,
+        before_ledger_summary=before_summary,
+        after_ledger_summary=after_summary,
+    )
+    return DeribitBoundedPaperCampaignResult(
+        accepted=accepted,
+        campaign_id=getattr(request, "campaign_id", None),
+        sessions_requested=sessions_requested,
+        sessions_attempted=len(session_results),
+        sessions_accepted=0,
+        sessions_rejected=0,
+        aggregate_trades_requested=aggregate_trades_requested,
+        aggregate_trades_filled=0,
+        aggregate_ledger_mutations=0,
+        ledger_mutated=False,
+        reason_code=reason_code,
+        rejection_reasons=rejection_reasons,
+        session_results=session_results,
+        final_ledger_state=final_ledger_state,
+        before_ledger_summary=before_summary,
+        after_ledger_summary=after_summary,
+        audit_record=audit_record,
+        artifact_payload={"reason_code": reason_code, "rejection_reasons": list(rejection_reasons)},
+    )
+
+
+def _ledger_summary_to_dict(ledger_state: DeribitPaperLedgerState | None) -> dict[str, object] | None:
+    if not isinstance(ledger_state, DeribitPaperLedgerState):
+        return None
+    return {
+        "ledger_id": ledger_state.ledger_id,
+        "symbol": ledger_state.symbol,
+        "canonical_symbol": ledger_state.canonical_symbol,
+        "cash_balance": ledger_state.cash_balance,
+        "position_qty": ledger_state.position_qty,
+        "average_entry_price": ledger_state.average_entry_price,
+        "realized_pnl": ledger_state.realized_pnl,
+        "applied_fill_count": len(ledger_state.applied_fill_ids),
+        "applied_request_count": len(ledger_state.applied_request_ids),
+        "applied_idempotency_count": len(ledger_state.applied_idempotency_keys),
+        "audit_entry_count": len(ledger_state.audit_entries),
+    }
