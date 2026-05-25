@@ -98,7 +98,9 @@ def _phase54_rejection_reasons(phase54_telemetry_audit_artifact: object) -> tupl
         or phase54_telemetry_audit_artifact.get("next_blocker") != DERIBIT_PHASE54_NEXT_BLOCKER
     ):
         reasons.append("deribit_paper_promotion_readiness:phase54_metadata_invalid")
-    if not _bool_fields_match(phase54_telemetry_audit_artifact, _SOURCE_FALSE_FIELDS, False):
+    if _strict_bool(phase54_telemetry_audit_artifact.get("report_only")) is not True or not _bool_fields_match(
+        phase54_telemetry_audit_artifact, _SOURCE_FALSE_FIELDS, False
+    ):
         reasons.append("deribit_paper_promotion_readiness:phase54_scope_flags_invalid")
     if not _bool_fields_match(phase54_telemetry_audit_artifact, _TRUE_SAFETY_FIELDS, True):
         reasons.append("deribit_paper_promotion_readiness:phase54_safety_flags_invalid")
@@ -168,7 +170,7 @@ def _metrics_are_consistent(phase54_telemetry_audit_artifact: dict[str, object])
         "ledger_mutation_rate": _safe_ratio(ledger_mutations, trades_filled),
         "session_acceptance_rate": _safe_ratio(sessions_accepted, sessions_requested),
     }
-    return all(metrics.get(field) == value for field, value in expected.items())
+    return all(_strict_number(metrics.get(field)) == value for field, value in expected.items())
 
 
 def _artifact_payload(
@@ -257,6 +259,12 @@ def _strict_bool(value: object) -> bool | None:
 
 def _strict_int(value: object) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _strict_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 __all__ = [
