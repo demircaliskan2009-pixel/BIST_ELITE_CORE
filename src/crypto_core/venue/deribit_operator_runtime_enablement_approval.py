@@ -27,6 +27,7 @@ DERIBIT_PHASE64_NEXT_BLOCKER = "APPROVED_PAPER_RUNTIME_ENABLEMENT_EXECUTION_NOT_
 DERIBIT_PHASE64_FALLBACK_BLOCKER = DERIBIT_PHASE63_NEXT_BLOCKER
 DERIBIT_PHASE64_OPERATOR_ID = "demir_operator"
 DERIBIT_PHASE64_APPROVAL_DECISION = "APPROVE_PAPER_RUNTIME_ENABLEMENT_REVIEW"
+DERIBIT_PHASE64_REVIEWED_AT_ISO = "2026-05-26T19:42:53Z"
 _PLACEHOLDER = "<OPERATOR_REQUIRED>"
 _TRUE_SAFETY_FIELDS = tuple(
     "no_private_api no_credentials no_exchange_orders no_execution_adapter no_strategy_signal no_order_routing no_scheduler no_automatic_paper_loop no_shadow no_live".split()
@@ -74,6 +75,11 @@ def execute_deribit_operator_runtime_enablement_approval(
                 *_phase63_rejection_reasons(
                     phase63_runtime_enablement_proposal_artifact,
                     phase62_runtime_wiring_artifact,
+                ),
+                *(
+                    ()
+                    if reviewed_at_iso == DERIBIT_PHASE64_REVIEWED_AT_ISO
+                    else ("deribit_operator_runtime_enablement_approval:reviewed_at_iso_mismatch",)
                 ),
                 *(
                     ()
@@ -259,6 +265,7 @@ __all__ = [
     "DERIBIT_PHASE64_FALLBACK_BLOCKER",
     "DERIBIT_PHASE64_NEXT_BLOCKER",
     "DERIBIT_PHASE64_OPERATOR_ID",
+    "DERIBIT_PHASE64_REVIEWED_AT_ISO",
     "DeribitOperatorRuntimeEnablementApprovalResult",
     "execute_deribit_operator_runtime_enablement_approval",
 ]

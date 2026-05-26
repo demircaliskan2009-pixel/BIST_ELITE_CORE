@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from crypto_core.venue.deribit_operator_runtime_enablement_approval import (
+    DERIBIT_PHASE64_REVIEWED_AT_ISO,
     execute_deribit_operator_runtime_enablement_approval,
 )
 from crypto_core.venue.public_feed_dialects import connector_ready_dialects
@@ -15,7 +16,7 @@ PHASE62_WIRING = Path("docs/crypto_core/DERIBIT_PAPER_PROMOTED_RUNTIME_WIRING_62
 APPROVAL = Path("docs/crypto_core/DERIBIT_PAPER_RUNTIME_ENABLEMENT_OPERATOR_APPROVAL_64B.json")
 APPROVAL_METADATA = {
     "operator_id": "demir_operator",
-    "reviewed_at_iso": "2026-05-26T19:42:53Z",
+    "reviewed_at_iso": DERIBIT_PHASE64_REVIEWED_AT_ISO,
     "approval_decision": "APPROVE_PAPER_RUNTIME_ENABLEMENT_REVIEW",
 }
 APPROVAL_SCOPE_TRUE_FLAGS = tuple(

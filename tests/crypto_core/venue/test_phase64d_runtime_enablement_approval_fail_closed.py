@@ -72,6 +72,10 @@ def test_phase64d_placeholder_metadata_timestamp_and_sources_fail_closed() -> No
         in _run_with(_phase63_proposal(), _phase62_wiring(), reviewed_at_iso="2026-05-26 19:42:53").rejection_reasons
     )
     assert (
+        "deribit_operator_runtime_enablement_approval:reviewed_at_iso_mismatch"
+        in _run_with(_phase63_proposal(), _phase62_wiring(), reviewed_at_iso="2026-05-26T19:42:54Z").rejection_reasons
+    )
+    assert (
         "deribit_operator_runtime_enablement_approval:phase62_metadata_invalid"
         in _run_with(
             _phase63_proposal(),
