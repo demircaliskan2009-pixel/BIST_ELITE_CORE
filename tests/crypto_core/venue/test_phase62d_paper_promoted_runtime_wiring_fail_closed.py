@@ -20,11 +20,14 @@ def test_phase62d_missing_or_malformed_source_fails_closed() -> None:
 
 def test_phase62d_phase61_metadata_must_be_exact() -> None:
     for field, value in (
+        ("source_phase60_post_audit_sha256", ""),
+        ("source_phase60_post_audit_sha256", "0" * 64),
         ("runtime_readiness_verdict", "FAIL_CLOSED"),
         ("ready_for_paper_runtime", False),
         ("paper_promoted", False),
         ("promotion_granted", False),
         ("promotion_scope", "LIVE"),
+        ("readiness_checks", []),
         ("next_blocker", "OTHER"),
     ):
         result = _run_with(_mutated(_phase61_readiness(), **{field: value}))

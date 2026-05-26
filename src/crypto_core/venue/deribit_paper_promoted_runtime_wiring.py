@@ -14,6 +14,7 @@ from crypto_core.venue.public_feed_dialects import connector_ready_dialects
 
 DERIBIT_PAPER_PROMOTED_RUNTIME_WIRING_ID = "deterministic_phase62_paper_promoted_runtime_wiring"
 DERIBIT_PHASE61_RUNTIME_READINESS = "docs/crypto_core/DERIBIT_PAPER_PROMOTED_RUNTIME_READINESS_61B.json"
+DERIBIT_PHASE61_SOURCE_PHASE60_POST_AUDIT_SHA256 = "44b13e4847a8bfcb358bbadd5219dcb93f8004d16f429e29c0ff6a72c08fae67"
 DERIBIT_PHASE62_NEXT_BLOCKER = "PAPER_PROMOTED_RUNTIME_ENABLEMENT_APPROVAL_NOT_READY"
 DERIBIT_PHASE62_FALLBACK_BLOCKER = DERIBIT_PHASE61_NEXT_BLOCKER
 _TRUE_SAFETY_FIELDS = tuple(
@@ -68,11 +69,22 @@ def _phase61_rejection_reasons(phase61_runtime_readiness_artifact: object) -> tu
         or phase61_runtime_readiness_artifact.get("phase") != "61"
         or phase61_runtime_readiness_artifact.get("source") != DERIBIT_PAPER_PROMOTED_RUNTIME_READINESS_ID
         or phase61_runtime_readiness_artifact.get("source_phase60_post_audit") != DERIBIT_PHASE60_POST_AUDIT
+        or phase61_runtime_readiness_artifact.get("source_phase60_post_audit_sha256")
+        != DERIBIT_PHASE61_SOURCE_PHASE60_POST_AUDIT_SHA256
         or phase61_runtime_readiness_artifact.get("runtime_readiness_verdict") != "PASS"
         or phase61_runtime_readiness_artifact.get("ready_for_paper_runtime") is not True
         or phase61_runtime_readiness_artifact.get("paper_promoted") is not True
         or phase61_runtime_readiness_artifact.get("promotion_granted") is not True
         or phase61_runtime_readiness_artifact.get("promotion_scope") != DERIBIT_PHASE58_PROMOTION_SCOPE
+        or phase61_runtime_readiness_artifact.get("readiness_checks")
+        != [
+            "source_post_audit_passed",
+            "promotion_scope_preserved",
+            "no_live_scope_preserved",
+            "no_private_execution_scope_preserved",
+            "connector_ready_dialects_preserved",
+            "deterministic_artifact_chain_preserved",
+        ]
         or phase61_runtime_readiness_artifact.get("next_blocker") != DERIBIT_PHASE61_NEXT_BLOCKER
     ):
         reasons.append("deribit_paper_promoted_runtime_wiring:phase61_metadata_invalid")
@@ -139,6 +151,7 @@ def _strict_int_is_one(value: object) -> bool:
 __all__ = [
     "DERIBIT_PAPER_PROMOTED_RUNTIME_WIRING_ID",
     "DERIBIT_PHASE61_RUNTIME_READINESS",
+    "DERIBIT_PHASE61_SOURCE_PHASE60_POST_AUDIT_SHA256",
     "DERIBIT_PHASE62_FALLBACK_BLOCKER",
     "DERIBIT_PHASE62_NEXT_BLOCKER",
     "DeribitPaperPromotedRuntimeWiringResult",
