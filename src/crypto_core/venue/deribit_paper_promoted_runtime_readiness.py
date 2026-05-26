@@ -94,7 +94,7 @@ def _phase60_rejection_reasons(phase60_paper_promotion_post_audit_artifact: obje
         reasons.append("deribit_paper_promoted_runtime_readiness:phase60_metadata_invalid")
     if not _bool_fields_match(phase60_paper_promotion_post_audit_artifact, _PHASE_FALSE_FIELDS, False):
         reasons.append("deribit_paper_promoted_runtime_readiness:phase60_scope_flags_invalid")
-    if phase60_paper_promotion_post_audit_artifact.get("runtime_enabled") is True:
+    if _runtime_enabled_field_invalid(phase60_paper_promotion_post_audit_artifact):
         reasons.append("deribit_paper_promoted_runtime_readiness:phase60_runtime_flag_invalid")
     if not _bool_fields_match(phase60_paper_promotion_post_audit_artifact, _TRUE_SAFETY_FIELDS, True):
         reasons.append("deribit_paper_promoted_runtime_readiness:phase60_safety_flags_invalid")
@@ -149,6 +149,10 @@ def _canonical_sha256(payload: dict[str, object]) -> str:
 
 def _strict_int_is_one(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value == 1
+
+
+def _runtime_enabled_field_invalid(payload: dict[str, object]) -> bool:
+    return "runtime_enabled" in payload and payload.get("runtime_enabled") is not False
 
 
 __all__ = [

@@ -40,8 +40,11 @@ def test_phase61d_phase60_scope_runtime_or_safety_drift_fails_closed() -> None:
 
         assert "deribit_paper_promoted_runtime_readiness:phase60_scope_flags_invalid" in result.rejection_reasons
 
-    runtime_result = _run_with(_mutated(_phase60_post_audit(), runtime_enabled=True))
-    assert "deribit_paper_promoted_runtime_readiness:phase60_runtime_flag_invalid" in runtime_result.rejection_reasons
+    for runtime_value in (True, 1, "true"):
+        runtime_result = _run_with(_mutated(_phase60_post_audit(), runtime_enabled=runtime_value))
+        assert (
+            "deribit_paper_promoted_runtime_readiness:phase60_runtime_flag_invalid" in runtime_result.rejection_reasons
+        )
 
     connector_result = _run_with(_mutated(_phase60_post_audit(), connector_ready_dialects_count=2))
     assert (
