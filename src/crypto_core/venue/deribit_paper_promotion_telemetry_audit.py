@@ -138,6 +138,8 @@ def _artifact_payload(
         else {}
     )
     phase55 = phase55_promotion_readiness_artifact if isinstance(phase55_promotion_readiness_artifact, dict) else {}
+    phase58_false_flags = {field: (phase58.get(field) if accepted else False) for field in _PHASE58_FALSE_FIELDS}
+    phase58_safety_flags = {field: (phase58.get(field) if accepted else True) for field in _TRUE_SAFETY_FIELDS}
     return {
         "schema_version": "deribit_paper_promotion_execution_telemetry_audit.v1",
         "phase": "59",
@@ -159,8 +161,8 @@ def _artifact_payload(
         "approval_status": phase58.get("approval_status"),
         "approval_decision": phase58.get("approval_decision"),
         "operator_id": phase58.get("operator_id"),
-        **{field: phase58.get(field) for field in _PHASE58_FALSE_FIELDS},
-        **{field: phase58.get(field) for field in _TRUE_SAFETY_FIELDS},
+        **phase58_false_flags,
+        **phase58_safety_flags,
         "connector_ready_dialects_count": len(connector_ready_dialects()),
         "telemetry_checks": list(_AUDIT_CHECKS),
         "report_only": True,

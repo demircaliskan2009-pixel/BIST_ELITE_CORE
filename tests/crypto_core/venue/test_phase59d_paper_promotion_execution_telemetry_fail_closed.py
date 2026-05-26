@@ -15,6 +15,21 @@ def _run_with(phase58: object, phase55: object):
     return audit_deribit_paper_promotion_execution_telemetry(phase58, phase55)
 
 
+PHASE58_FALSE_FLAGS = (
+    "campaign_execution",
+    "session_execution",
+    "run_execution",
+    "ledger_mutation",
+    "ledger_mutated",
+    "live_ready",
+    "shadow_ready",
+    "auto_loop_enabled",
+    "scheduler_enabled",
+    "live_enabled",
+    "shadow_enabled",
+)
+
+
 def test_phase59d_missing_or_malformed_sources_fail_closed() -> None:
     assert _run_with(None, _phase55_readiness()).rejection_reasons == (
         "deribit_paper_promotion_telemetry_audit:phase58_artifact_missing",
@@ -61,6 +76,19 @@ def test_phase59d_phase58_scope_or_safety_drift_fails_closed() -> None:
         result = _run_with(_mutated(_phase58_execution(), **{field: False}), _phase55_readiness())
 
         assert "deribit_paper_promotion_telemetry_audit:phase58_safety_flags_invalid" in result.rejection_reasons
+
+
+def test_phase59d_rejected_payload_forces_fail_closed_scope_and_safety() -> None:
+    result = _run_with(_mutated(_phase58_execution(), live_enabled=True, no_live=False), _phase55_readiness())
+    payload = result.artifact_payload
+
+    assert result.accepted is False
+    assert "deribit_paper_promotion_telemetry_audit:phase58_scope_flags_invalid" in result.rejection_reasons
+    assert "deribit_paper_promotion_telemetry_audit:phase58_safety_flags_invalid" in result.rejection_reasons
+    for field in PHASE58_FALSE_FLAGS:
+        assert payload[field] is False
+    for field in SAFETY_FLAGS:
+        assert payload[field] is True
 
 
 def test_phase59d_phase55_readiness_or_safety_drift_fails_closed() -> None:
