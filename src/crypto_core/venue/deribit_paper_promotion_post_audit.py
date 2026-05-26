@@ -6,6 +6,8 @@ from typing import NamedTuple
 
 from crypto_core.venue.deribit_approved_paper_promotion_execution import (
     DERIBIT_APPROVED_PAPER_PROMOTION_EXECUTION_ID,
+    DERIBIT_PHASE55_PROMOTION_READINESS,
+    DERIBIT_PHASE57_OPERATOR_PROMOTION_APPROVAL,
     DERIBIT_PHASE58_APPROVED_ACTION,
     DERIBIT_PHASE58_NEXT_BLOCKER,
     DERIBIT_PHASE58_PROMOTION_SCOPE,
@@ -51,6 +53,12 @@ def audit_deribit_paper_promotion_execution_post_audit(
                 *(
                     ()
                     if len(connector_ready_dialects()) == 1
+                    or phase58_approved_paper_promotion_execution_artifact.get(
+                        "source_phase57_operator_promotion_approval"
+                    )
+                    != DERIBIT_PHASE57_OPERATOR_PROMOTION_APPROVAL
+                    or phase58_approved_paper_promotion_execution_artifact.get("source_phase55_promotion_readiness")
+                    != DERIBIT_PHASE55_PROMOTION_READINESS
                     else ("deribit_paper_promotion_post_audit:connector_ready_dialects_mismatch",)
                 ),
             )
@@ -114,6 +122,10 @@ def _phase58_rejection_reasons(phase58_approved_paper_promotion_execution_artifa
         or phase58_approved_paper_promotion_execution_artifact.get("phase") != "58"
         or phase58_approved_paper_promotion_execution_artifact.get("source")
         != DERIBIT_APPROVED_PAPER_PROMOTION_EXECUTION_ID
+        or phase58_approved_paper_promotion_execution_artifact.get("source_phase57_operator_promotion_approval")
+        != DERIBIT_PHASE57_OPERATOR_PROMOTION_APPROVAL
+        or phase58_approved_paper_promotion_execution_artifact.get("source_phase55_promotion_readiness")
+        != DERIBIT_PHASE55_PROMOTION_READINESS
         or phase58_approved_paper_promotion_execution_artifact.get("promotion_execution_status") != "EXECUTED"
         or phase58_approved_paper_promotion_execution_artifact.get("approved_action") != DERIBIT_PHASE58_APPROVED_ACTION
         or phase58_approved_paper_promotion_execution_artifact.get("promotion_granted") is not True

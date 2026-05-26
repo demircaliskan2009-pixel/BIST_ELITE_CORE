@@ -43,6 +43,8 @@ def test_phase60d_phase59_metadata_must_be_exact() -> None:
 
 def test_phase60d_phase58_metadata_must_be_exact() -> None:
     for field, value in (
+        ("source_phase57_operator_promotion_approval", "docs/crypto_core/TAMPERED_57B.json"),
+        ("source_phase55_promotion_readiness", "docs/crypto_core/TAMPERED_55B.json"),
         ("promotion_execution_status", "FAIL_CLOSED"),
         ("approved_action", "OTHER_ACTION"),
         ("promotion_scope", "LIVE"),
