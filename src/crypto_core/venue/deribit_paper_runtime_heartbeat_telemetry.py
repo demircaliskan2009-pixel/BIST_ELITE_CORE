@@ -4,6 +4,8 @@ import hashlib
 import json
 from typing import NamedTuple
 
+from crypto_core.venue.contracts import VenueId
+from crypto_core.venue.deribit_approved_paper_runtime_start import DERIBIT_PHASE68_REQUIRED_DIALECT_ID
 from crypto_core.venue.deribit_paper_runtime_heartbeat import (
     DERIBIT_PHASE69_RUNTIME_START_TELEMETRY,
     DERIBIT_PHASE69_RUNTIME_START_TELEMETRY_SHA256,
@@ -86,6 +88,8 @@ def audit_deribit_paper_runtime_heartbeat_telemetry(
             reasons.append(f"deribit_paper_runtime_heartbeat_telemetry:{field}_invalid")
     if phase70 and phase70.get("connector_ready_dialects_count") != 1:
         reasons.append("deribit_paper_runtime_heartbeat_telemetry:connector_ready_dialects_count_invalid")
+    if not _deribit_connector_ready():
+        reasons.append("deribit_paper_runtime_heartbeat_telemetry:connector_ready_dialects_mismatch")
     if phase70 and (
         phase70.get("source_phase69_runtime_start_telemetry") != DERIBIT_PHASE69_RUNTIME_START_TELEMETRY
         or phase70.get("source_phase69_runtime_start_telemetry_sha256")
@@ -133,6 +137,14 @@ def _artifact_payload(accepted: bool, reason_code: str, rejection_reasons: tuple
 def _canonical_sha256(payload: dict[str, object]) -> str:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _deribit_connector_ready() -> bool:
+    ready = connector_ready_dialects()
+    return len(ready) == 1 and all(
+        dialect.venue_id == VenueId.DERIBIT and dialect.dialect_id == DERIBIT_PHASE68_REQUIRED_DIALECT_ID
+        for dialect in ready
+    )
 
 
 __all__ = [
