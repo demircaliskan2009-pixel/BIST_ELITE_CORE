@@ -34,7 +34,8 @@ If any local instruction, skill, prompt, or request conflicts with that document
 - Stop and split if the phase grows unsafe.
 - No BIST/non-crypto implementation files.
 - No live/private/execution/order-routing drift unless explicitly authorized by the current phase.
-- If Auto is insufficient, stop with `HIGH_REASONING_REQUIRED` or `CODEX_REQUIRED`.
+- Codex quota is currently unavailable for this sprint; do not depend on Codex.
+- If Auto is insufficient, split into smaller safe slices and stop with `HIGH_REASONING_SPLIT_REQUIRED`, `COPILOT_SLICE_REQUIRED`, `SPLIT_PLAN_REQUIRED`, or `BLOCKED_WITH_PROOF`.
 - Mandatory proof set: Ruff, tests, readiness, connector, CI, CodeQL, and review-thread gate when applicable.
 - Standard merge only.
 - No squash, rebase, admin merge, direct main push, or branch deletion.
@@ -76,7 +77,7 @@ Stop immediately and report the blocker when:
 
 ## Escalation Conditions
 
-Return `HIGH_REASONING_REQUIRED` or `CODEX_REQUIRED` when:
+Return `HIGH_REASONING_SPLIT_REQUIRED`, `COPILOT_SLICE_REQUIRED`, `SPLIT_PLAN_REQUIRED`, or `BLOCKED_WITH_PROOF` when:
 
 - the phase is cross-file and safety-critical
 - a review thread requires a multi-step repair beyond the current slice

@@ -14,8 +14,7 @@ Optimize for maximum useful merged work per premium request, not diff size.
 ## Model Defaults
 
 - Default model: Auto
-- Backup model for harder bounded phases: GPT-5.4 Extra High Thinking, if available
-- Backup model for repair and triage: Claude Sonnet 4.6 High, if available
+- Sprint mode: Codex unavailable, so keep implementation Copilot-only and split unsafe phases.
 
 ## Operating Scope
 
@@ -115,7 +114,9 @@ Stop and escalate when:
 
 Escalation targets:
 
-- `HIGH_REASONING_REQUIRED`
-- `CODEX_REQUIRED`
+- `COPILOT_SLICE_REQUIRED`
+- `HIGH_REASONING_SPLIT_REQUIRED`
+- `SPLIT_PLAN_REQUIRED`
+- `BLOCKED_WITH_PROOF`
 - `DEEP_RESEARCH_REQUIRED`
 - `INSUFFICIENT_EVIDENCE`

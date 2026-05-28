@@ -24,7 +24,8 @@ applyTo: "docs/crypto_core/**, .github/prompts/crypto-*.prompt.md, .github/agent
 
 - Default to the `Crypto Throughput Commander` agent for bounded `crypto_core` setup, triage, closeout, and review-thread repair.
 - Use Copilot Auto for deterministic docs, prompts, telemetry artifacts, and closeout phases.
-- Escalate to Codex only when the current slice is too broad, too risky, or too reasoning-heavy for Auto.
+- Codex quota is unavailable in this sprint mode; do not stop with `CODEX_REQUIRED`.
+- If a slice is too broad, too risky, or too reasoning-heavy for Auto, split into smaller Copilot-safe PR slices and use `COPILOT_SLICE_REQUIRED`, `HIGH_REASONING_SPLIT_REQUIRED`, `SPLIT_PLAN_REQUIRED`, or `BLOCKED_WITH_PROOF`.
 - Require Deep Research only when external evidence is needed and the repository cannot prove the answer.
 
 ## Merge Discipline
