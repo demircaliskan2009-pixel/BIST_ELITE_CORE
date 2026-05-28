@@ -1,7 +1,7 @@
 ---
 name: "Crypto High-Throughput Instructions"
 description: "Persistent workspace instructions for high-throughput crypto_core setup, triage, closeout, and bounded phase dispatch."
-applyTo: "docs/crypto_core/**"
+applyTo: "docs/crypto_core/**, .github/prompts/crypto-*.prompt.md, .github/agents/crypto-throughput-commander.agent.md"
 ---
 
 # CRYPTO HIGH-THROUGHPUT WORKSPACE RULES
