@@ -5,6 +5,7 @@ import json
 from typing import NamedTuple
 
 from crypto_core.venue.contracts import VenueId
+from crypto_core.venue.deribit_approved_paper_runtime_start import DERIBIT_PHASE68_REQUIRED_DIALECT_ID
 from crypto_core.venue.deribit_paper_runtime_start_telemetry import (
     DERIBIT_PHASE68_RUNTIME_START_EXECUTION,
     DERIBIT_PHASE68_RUNTIME_START_EXECUTION_SHA256,
@@ -144,7 +145,9 @@ def _artifact_payload(accepted: bool, reason_code: str, rejection_reasons: tuple
 
 def _deribit_connector_ready() -> bool:
     ready = connector_ready_dialects()
-    return len(ready) == 1 and all(d.venue_id == VenueId.DERIBIT for d in ready)
+    return len(ready) == 1 and all(
+        d.venue_id == VenueId.DERIBIT and d.dialect_id == DERIBIT_PHASE68_REQUIRED_DIALECT_ID for d in ready
+    )
 
 
 def _canonical_sha256(payload: dict[str, object]) -> str:
