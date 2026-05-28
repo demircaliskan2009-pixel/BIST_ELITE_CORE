@@ -84,3 +84,55 @@ After merge, capture proof that the merged result is present and healthy:
 
 If a change cannot be kept small, validated, and reviewable, do not force it.
 Return `BLOCKED_WITH_PROOF` or `SPLIT_PLAN_REQUIRED` instead.
+
+## Setup V2 Complete Definition
+
+Setup v2 is complete only when all of the following are true:
+
+- the agent spec exists at `.github/agents/crypto-throughput-commander.agent.md`
+- the persistent instruction file exists at `.github/instructions/crypto-high-throughput.instructions.md`
+- the sprint dispatcher exists at `.github/prompts/crypto-four-day-sprint-dispatch.prompt.md`
+- the model escalation policy exists at `.github/prompts/crypto-model-escalation-policy.prompt.md`
+- the operator guidance in this document is aligned with the agent spec
+- the ready-to-paste custom agent spec in [COPILOT_CUSTOM_AGENT_CRYPTO_THROUGHPUT_COMMANDER.md](COPILOT_CUSTOM_AGENT_CRYPTO_THROUGHPUT_COMMANDER.md) matches the workspace agent
+- the setup has been merged and post-merge verified on `main`
+
+## Actual Agent Path
+
+Default execution path for high-throughput crypto_core work:
+
+1. `Crypto Throughput Commander` agent
+2. `Copilot Auto` as the default model
+3. `crypto-four-day-sprint-dispatch` for request routing
+4. `crypto-model-escalation-policy` for escalation decisions
+5. bounded phase or closeout prompt from the prompt library
+
+## Auto Default Policy
+
+- Use Copilot Auto first for deterministic setup, closeout, and bounded docs work.
+- Escalate only when the request is not safely bounded, needs broader reasoning, or depends on outside evidence.
+- Do not spend premium requests on broad exploration when a smaller lane can prove the answer.
+
+## Four-Day Sprint Cadence
+
+- Day 1: triage and closeout first, then the smallest safe bounded phase.
+- Day 2: continue the highest-value merged slice only.
+- Day 3: resolve blockers, review threads, or split the remaining work into safer PR-sized units.
+- Day 4: finish with merge, post-merge proof, or a blocked split plan.
+
+## Throughput Safety Gates
+
+- never start a new phase while the current PR is unresolved
+- never merge with pending CodeQL
+- never merge with unresolved review threads
+- never widen scope during CI waits
+- never let a large uncontrolled diff bypass current-branch triage
+
+## Anti-Patterns
+
+- huge uncontrolled diffs
+- starting a new phase during a pending PR
+- merging with pending CodeQL
+- skipping reviewThreads
+- repeated boilerplate prompts that do not create proof
+- request-spend without merge or blocker evidence
