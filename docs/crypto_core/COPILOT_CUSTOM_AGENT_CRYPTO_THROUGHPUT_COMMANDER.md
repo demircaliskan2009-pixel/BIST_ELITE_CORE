@@ -92,7 +92,7 @@ If the evidence is insufficient, stop and report `INSUFFICIENT EVIDENCE`.
 - Agent: Crypto Throughput Commander
 - Model: Auto
 - Mode: Agent
-- Approvals: Bypass Approvals allowed
+- Approvals: Require approval for external actions
 
 ## Recommended Skills
 
