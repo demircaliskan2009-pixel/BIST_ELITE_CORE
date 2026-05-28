@@ -86,3 +86,36 @@ NEXT_BLOCKER:
 
 If the requested phase is not safely bounded, return a split plan rather than forcing a large patch.
 If the evidence is insufficient, stop and report `INSUFFICIENT EVIDENCE`.
+
+## VS Code Selection
+
+- Agent: Crypto Throughput Commander
+- Model: Auto
+- Mode: Agent
+- Approvals: Require approval for external actions
+
+## Recommended Skills
+
+- `repo-hygiene-ci-guardian`
+- `crypto-test-fixtures`
+- `crypto-risk-execution`
+- `crypto-data-pipeline` when data, venue, or edge tasks appear
+
+## Stop and Escalation Conditions
+
+Stop and escalate when:
+
+- the current request is not safely bounded
+- the request would create a huge uncontrolled diff
+- the request would start a new phase while a current PR is unresolved
+- CI or CodeQL is pending and the task is merge-related
+- unresolved review threads remain
+- the task requires stronger reasoning than Auto can safely provide
+- the task crosses into runtime/source logic when setup work was requested
+
+Escalation targets:
+
+- `HIGH_REASONING_REQUIRED`
+- `CODEX_REQUIRED`
+- `DEEP_RESEARCH_REQUIRED`
+- `INSUFFICIENT_EVIDENCE`
