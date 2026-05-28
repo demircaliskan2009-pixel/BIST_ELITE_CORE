@@ -36,6 +36,7 @@ Thread classification:
 - `NEEDS_HUMAN_DECISION`
 
 Do not merge if any `REAL_BLOCKER` or `VALID_SAFETY_FIX` remains unresolved.
+Do not merge if any `NEEDS_HUMAN_DECISION` remains unresolved.
 
 Closeout report format:
 - PR state
