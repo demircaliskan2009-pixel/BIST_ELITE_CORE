@@ -25,6 +25,9 @@ Rules:
 - Auto model should execute autonomously until proof, merge, or blocker.
 - Do not widen scope just to spend a premium request.
 - Do not start a phase if a review gate or CI gate is still unresolved.
+- After merge or blocker outcome, run `crypto-post-pr-retrospective`.
+- Propose `crypto-error-to-protocol-update` only for broadly reusable lessons.
+- Log durable lessons in `docs/crypto_core/COPILOT_HIGH_THROUGHPUT_LESSONS_LEDGER.md`.
 
 Dispatch logic:
 1. If an open crypto_core PR exists and the task is closeout only, choose `PR_CLOSEOUT_ONLY`.

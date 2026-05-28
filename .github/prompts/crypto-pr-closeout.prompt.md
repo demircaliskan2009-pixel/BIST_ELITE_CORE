@@ -26,6 +26,9 @@ Workflow:
 8. Merge by standard merge only.
 9. Pull `main` and verify post-merge state.
 10. Capture proof.
+11. Run `crypto-post-pr-retrospective` for merge/blocker outcome.
+12. If lessons are repeated and generalizable, propose `crypto-error-to-protocol-update`.
+13. Append durable lessons to `docs/crypto_core/COPILOT_HIGH_THROUGHPUT_LESSONS_LEDGER.md`.
 
 Thread classification:
 - `REAL_BLOCKER`
