@@ -136,3 +136,13 @@ Default execution path for high-throughput crypto_core work:
 - skipping reviewThreads
 - repeated boilerplate prompts that do not create proof
 - request-spend without merge or blocker evidence
+
+## Setup V3 Scope Rule
+
+High-throughput instructions must apply only to:
+
+- `docs/crypto_core/**`
+- `.github/prompts/crypto-*.prompt.md`
+- `.github/agents/crypto-throughput-commander.agent.md`
+
+They must not apply to BIST or other non-crypto files.
