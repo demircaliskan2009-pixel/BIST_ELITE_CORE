@@ -36,6 +36,10 @@ If any local instruction, skill, prompt, or request conflicts with that document
 - No live/private/execution/order-routing drift unless explicitly authorized by the current phase.
 - Codex quota is currently unavailable for this sprint; do not depend on Codex.
 - If Auto is insufficient, split into smaller safe slices and stop with `HIGH_REASONING_SPLIT_REQUIRED`, `COPILOT_SLICE_REQUIRED`, `SPLIT_PLAN_REQUIRED`, or `BLOCKED_WITH_PROOF`.
+- After every PR closeout, run a retrospective and report whether protocol updates are needed.
+- If the same failure class appears twice, propose an `ERROR_TO_PROTOCOL_UPDATE` setup patch.
+- If a huge diff appears, run branch triage before continuing.
+- If external/current knowledge gaps appear, stop with `DEEP_RESEARCH_REQUIRED`.
 - Mandatory proof set: Ruff, tests, readiness, connector, CI, CodeQL, and review-thread gate when applicable.
 - Standard merge only.
 - No squash, rebase, admin merge, direct main push, or branch deletion.

@@ -15,6 +15,9 @@ Rules:
 - Add a regression test when the fix changes behavior.
 - Re-run validation before resolving threads.
 - Resolve threads only after the fix is proven.
+- After thread-driven PR closeout, run `crypto-post-pr-retrospective`.
+- If the same review issue class repeats, propose `crypto-error-to-protocol-update`.
+- Record durable, proven lessons in `docs/crypto_core/COPILOT_HIGH_THROUGHPUT_LESSONS_LEDGER.md`.
 
 Workflow:
 1. Fetch PR details, reviewThreads, comments, and reviews.

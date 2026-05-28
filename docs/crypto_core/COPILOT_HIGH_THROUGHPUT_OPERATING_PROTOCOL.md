@@ -155,3 +155,18 @@ They must not apply to BIST or other non-crypto files.
 - Quality gates are unchanged: Ruff, tests, readiness, connector, CI, CodeQL, and review-thread gate remain mandatory.
 - If Auto cannot safely complete a phase, return `COPILOT_SLICE_REQUIRED`, `HIGH_REASONING_SPLIT_REQUIRED`, `SPLIT_PLAN_REQUIRED`, or `BLOCKED_WITH_PROOF`.
 - Keep live/shadow/private/execution/order-routing drift out of scope unless explicitly authorized.
+
+## Setup V5 Self-Improving Workflow Loop
+
+- Every merged or blocked PR must run a retrospective classification.
+- Every failure class must become an explicit lesson entry or a justified `NO_PROTOCOL_CHANGE`.
+- Repeated and generalizable failure classes should trigger scoped setup improvements.
+- Setup improvements must go through normal validation, PR, merge, and post-merge verification.
+- Lessons are durable only with PR/review/terminal proof.
+- The loop must never weaken fail-closed, review-thread, CI, CodeQL, or merge gates.
+
+### Loop Artifacts
+
+- `crypto-post-pr-retrospective.prompt.md`
+- `crypto-error-to-protocol-update.prompt.md`
+- `docs/crypto_core/COPILOT_HIGH_THROUGHPUT_LESSONS_LEDGER.md`

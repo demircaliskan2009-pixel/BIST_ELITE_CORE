@@ -19,6 +19,10 @@ applyTo: "docs/crypto_core/**, .github/prompts/crypto-*.prompt.md, .github/agent
 - No silent refactor.
 - No speculative code.
 - No request-spend without merge, proof, or an explicit blocker.
+- Every failure must produce a lesson classification.
+- Do not repeat the same failure class without updating prompt/protocol guidance.
+- Unresolved `NEEDS_HUMAN_DECISION` blocks merge.
+- Do not weaken fail-closed rules for speed.
 
 ## Operating Preference
 
@@ -51,3 +55,9 @@ Before any merge or phase handoff, verify:
 
 If the requested work would cross into BIST or non-crypto implementation space, stop and report the blocker.
 If the evidence is insufficient, report `INSUFFICIENT EVIDENCE`.
+
+## Retrospective Loop
+
+- After every merged or blocked PR, run `crypto-post-pr-retrospective`.
+- For repeated, generalizable failures, propose `crypto-error-to-protocol-update`.
+- Record durable lessons in `docs/crypto_core/COPILOT_HIGH_THROUGHPUT_LESSONS_LEDGER.md` with proof references.
