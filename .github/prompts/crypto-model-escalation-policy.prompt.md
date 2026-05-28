@@ -1,6 +1,6 @@
 ---
 name: crypto-model-escalation-policy
-description: "Model and agent escalation policy for Setup v2 and future crypto_core high-throughput work."
+description: "Model and agent escalation policy for Setup v4 and future crypto_core high-throughput work in Codex-free sprint mode."
 agent: agent
 ---
 
@@ -46,13 +46,19 @@ Use for:
 - PRD conformance checks
 - deterministic behavior audits
 
-### Codex
+### Copilot Slice Escalation
 Use when:
-- the task is high-risk and multi-file
+- the task is high-risk or multi-file
 - runtime/service/execution/risk/allocator logic is involved
-- Copilot failed to produce a safe bounded answer
-- repeated review blockers need a broader repair
-- the task is explicitly `HIGH_REASONING_REQUIRED`
+- Copilot cannot safely complete the full slice in one PR
+- repeated review blockers need a narrower repair sequence
+- the task needs stronger reasoning but must remain Copilot-only
+
+Required output:
+- named seams
+- PR order
+- per-slice validation
+- explicit blockers
 
 ### Deep Research
 Use when:
@@ -66,14 +72,16 @@ Use when:
 - Default to the smallest model/agent that can finish safely.
 - Escalate only when proof cannot be obtained safely with the current lane.
 - Do not use a larger model to hide missing evidence.
-- Do not use Codex for work that is already safely bounded for Auto.
+- Codex quota is unavailable in this sprint mode; do not emit `CODEX_REQUIRED` unless the user explicitly re-enables Codex.
 - Do not use Deep Research for questions the repository already answers.
 
 ## Exit Codes
 
 If the current lane is insufficient, stop and report one of:
-- `HIGH_REASONING_REQUIRED`
-- `CODEX_REQUIRED`
+- `COPILOT_SLICE_REQUIRED`
+- `HIGH_REASONING_SPLIT_REQUIRED`
+- `SPLIT_PLAN_REQUIRED`
+- `BLOCKED_WITH_PROOF`
 - `DEEP_RESEARCH_REQUIRED`
 - `INSUFFICIENT EVIDENCE`
 

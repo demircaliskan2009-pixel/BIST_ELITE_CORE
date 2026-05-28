@@ -41,6 +41,7 @@ Mandatory gates:
 - CodeQL must be green when present
 - no unresolved safety blocker
 - no generated or unrelated files in the PR
+- if the phase is too large or unsafe for one Copilot slice, stop and return a split plan with named seams and PR order
 
 Fail-closed rule:
 If any required evidence is missing, return `<FAIL_CLOSED>` and stop.

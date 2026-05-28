@@ -12,7 +12,8 @@ Choose exactly one:
 - PHASE_RUNNER_HIGH_THROUGHPUT
 - REVIEW_THREAD_RESOLVER
 - NEXT_PHASE_PLANNER
-- CODEX_ESCALATION_REQUIRED
+- COPILOT_SLICE_REQUIRED
+- HIGH_REASONING_SPLIT_REQUIRED
 - DEEP_RESEARCH_REQUIRED
 
 Rules:
@@ -31,7 +32,7 @@ Dispatch logic:
 3. If the task is a bounded phase with known files and validation, choose `PHASE_RUNNER_HIGH_THROUGHPUT`.
 4. If a PR has review comments or threads that need repair, choose `REVIEW_THREAD_RESOLVER`.
 5. If the task is planning-only and must not patch, choose `NEXT_PHASE_PLANNER`.
-6. If Auto is not enough for a safe answer, choose `CODEX_ESCALATION_REQUIRED`.
+6. If Auto is not enough for a safe answer, choose `COPILOT_SLICE_REQUIRED` or `HIGH_REASONING_SPLIT_REQUIRED` with a smaller PR order.
 7. If the next decision depends on external evidence or current venue/API facts, choose `DEEP_RESEARCH_REQUIRED`.
 
 Output exactly this:

@@ -24,7 +24,7 @@ The goal is to produce validated, reviewable, mergeable work that ends in one of
 - Prefer small, sequential PR-safe slices over large uncontrolled diffs.
 - Split phases when the change set grows beyond a reviewable slice, when unrelated concerns appear, when validation scope becomes ambiguous, or when a single PR would exceed the repo gate for intended files.
 - Use Copilot for narrow, local, deterministic, well-scoped work.
-- Use Codex when the phase is broader, cross-file, review-thread heavy, or requires stronger multi-step reasoning to keep the slice safe.
+- In sprint Codex-free mode, do not depend on Codex; split broader or higher-risk phases into smaller Copilot-safe PR slices.
 - Use Deep Research only when a decision depends on external evidence, architectural confirmation, or a document-level comparison that cannot be proven from the repository alone.
 
 ## Small PR Policy
@@ -146,3 +146,12 @@ High-throughput instructions must apply only to:
 - `.github/agents/crypto-throughput-commander.agent.md`
 
 They must not apply to BIST or other non-crypto files.
+
+## Setup V4 Codex-Free Sprint Mode
+
+- Codex quota is unavailable for this sprint.
+- Copilot Auto is the default and only implementation engine.
+- Throughput comes from safe splitting, not huge diffs.
+- Quality gates are unchanged: Ruff, tests, readiness, connector, CI, CodeQL, and review-thread gate remain mandatory.
+- If Auto cannot safely complete a phase, return `COPILOT_SLICE_REQUIRED`, `HIGH_REASONING_SPLIT_REQUIRED`, `SPLIT_PLAN_REQUIRED`, or `BLOCKED_WITH_PROOF`.
+- Keep live/shadow/private/execution/order-routing drift out of scope unless explicitly authorized.
