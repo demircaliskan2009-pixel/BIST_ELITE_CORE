@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import crypto_core.venue.deribit_approved_paper_runtime_start as runtime_start_module
+from crypto_core.venue.contracts import VenueId
 from crypto_core.venue.deribit_approved_paper_runtime_start import execute_deribit_approved_paper_runtime_start
 from tests.crypto_core.venue.test_phase68b_approved_paper_runtime_start_artifact import (
     FALSE_EXECUTION_DISABLED_FIELDS,
@@ -111,6 +115,36 @@ def test_phase68d_phase67_phase65_scope_or_safety_drift_fails_closed() -> None:
         "deribit_approved_paper_runtime_start:phase65_connector_ready_dialects_invalid"
         in phase65_connector.rejection_reasons
     )
+
+
+def test_phase68d_connector_ready_dialect_must_be_deribit_verified(monkeypatch) -> None:
+    monkeypatch.setattr(
+        runtime_start_module,
+        "connector_ready_dialects",
+        lambda: (
+            SimpleNamespace(
+                venue_id=VenueId.BINANCE_USDM,
+                dialect_id="binance_usdm:l2_orderbook:placeholder",
+            ),
+        ),
+    )
+    result = _run_with(_phase67_approval(), _phase65_execution())
+
+    assert "deribit_approved_paper_runtime_start:connector_ready_dialects_mismatch" in result.rejection_reasons
+
+    monkeypatch.setattr(
+        runtime_start_module,
+        "connector_ready_dialects",
+        lambda: (
+            SimpleNamespace(
+                venue_id=VenueId.DERIBIT,
+                dialect_id="deribit:l2_orderbook:placeholder",
+            ),
+        ),
+    )
+    result = _run_with(_phase67_approval(), _phase65_execution())
+
+    assert "deribit_approved_paper_runtime_start:connector_ready_dialects_mismatch" in result.rejection_reasons
 
 
 def test_phase68d_rejected_payload_forces_runtime_disabled_and_not_started() -> None:

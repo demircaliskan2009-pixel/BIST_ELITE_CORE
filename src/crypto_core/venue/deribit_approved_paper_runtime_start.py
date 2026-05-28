@@ -4,6 +4,7 @@ import hashlib
 import json
 from typing import NamedTuple
 
+from crypto_core.venue.contracts import VenueId
 from crypto_core.venue.deribit_approved_paper_promotion_execution import DERIBIT_PHASE58_PROMOTION_SCOPE
 from crypto_core.venue.deribit_approved_paper_runtime_enablement import (
     DERIBIT_APPROVED_PAPER_RUNTIME_ENABLEMENT_ID,
@@ -32,6 +33,7 @@ from crypto_core.venue.public_feed_dialects import connector_ready_dialects
 DERIBIT_APPROVED_PAPER_RUNTIME_START_ID = "deterministic_phase68_approved_paper_runtime_start_execution"
 DERIBIT_PHASE67_RUNTIME_START_APPROVAL = "docs/crypto_core/DERIBIT_PAPER_RUNTIME_START_OPERATOR_APPROVAL_67B.json"
 DERIBIT_PHASE67_RUNTIME_START_APPROVAL_SHA256 = "04d4603923a12d518bc49c95800f439558bfb35460f91ff2d6f28b45fd49e5ef"
+DERIBIT_PHASE68_REQUIRED_DIALECT_ID = "deribit:l2_orderbook:book_instrument_interval"
 DERIBIT_PHASE68_NEXT_BLOCKER = "PAPER_RUNTIME_START_TELEMETRY_NOT_READY"
 DERIBIT_PHASE68_FALLBACK_BLOCKER = DERIBIT_PHASE67_NEXT_BLOCKER
 _TRUE_SAFETY_FIELDS = tuple(
@@ -78,7 +80,7 @@ def execute_deribit_approved_paper_runtime_start(
                 *_phase65_rejection_reasons(phase65_runtime_enablement_artifact),
                 *(
                     ()
-                    if len(connector_ready_dialects()) == 1
+                    if _deribit_connector_ready()
                     else ("deribit_approved_paper_runtime_start:connector_ready_dialects_mismatch",)
                 ),
             )
@@ -245,6 +247,14 @@ def _artifact_payload(
 
 def _approval_scope_valid(value: object) -> bool:
     return isinstance(value, dict) and all(value.get(field) is True for field in _APPROVAL_SCOPE_TRUE_FIELDS)
+
+
+def _deribit_connector_ready() -> bool:
+    ready_dialects = connector_ready_dialects()
+    return len(ready_dialects) == 1 and all(
+        dialect.venue_id == VenueId.DERIBIT and dialect.dialect_id == DERIBIT_PHASE68_REQUIRED_DIALECT_ID
+        for dialect in ready_dialects
+    )
 
 
 def _bool_fields_match(payload: dict[str, object], fields: tuple[str, ...], expected: bool) -> bool:
