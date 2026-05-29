@@ -121,10 +121,7 @@ def _artifact_payload(
         "schema_version": "deribit_paper_runtime_heartbeat_execution_post_audit.v1",
         "phase": "76",
         "source": DERIBIT_PAPER_RUNTIME_HEARTBEAT_EXECUTION_POST_AUDIT_ID,
-        "source_phase75_heartbeat_execution_telemetry_audit": DERIBIT_PHASE76_POST_AUDIT_ARTIFACT.replace(
-            "DERIBIT_PAPER_RUNTIME_HEARTBEAT_EXECUTION_POST_AUDIT_76B.json",
-            "DERIBIT_PAPER_RUNTIME_HEARTBEAT_EXECUTION_TELEMETRY_AUDIT_75B.json",
-        ),
+        "source_phase75_heartbeat_execution_telemetry_audit": DERIBIT_PHASE75_HEARTBEAT_EXECUTION_TELEMETRY,
         "source_phase75_heartbeat_execution_telemetry_audit_sha256": DERIBIT_PHASE75_HEARTBEAT_EXECUTION_TELEMETRY_SHA256,
         "source_phase74_approved_heartbeat_execution": "docs/crypto_core/DERIBIT_PAPER_RUNTIME_HEARTBEAT_EXECUTION_74B.json",
         "source_phase74_approved_heartbeat_execution_sha256": "233a5e2ebba8c17d3341e1a38ccb0a6af28359a9339f648cdc4ea205bc75e05a",
