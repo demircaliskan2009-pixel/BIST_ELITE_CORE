@@ -30,9 +30,6 @@ _TRUE_SAFETY_FIELDS = tuple(
 _PHASE68_FALSE_SCOPE_FIELDS = tuple(
     "live_ready shadow_ready scheduler_enabled auto_loop_enabled live_enabled shadow_enabled campaign_execution session_execution run_execution ledger_mutation ledger_mutated".split()
 )
-_PHASE69_FALSE_SCOPE_FIELDS = tuple(
-    "runtime_loop_started runtime_order_routing_enabled live_ready shadow_ready scheduler_enabled auto_loop_enabled live_enabled shadow_enabled campaign_execution session_execution run_execution ledger_mutation".split()
-)
 _PHASE69_TELEMETRY_CHECKS = tuple(
     "source_phase68_runtime_start_execution_exists phase68_runtime_start_executed runtime_enabled_true runtime_started_true no_live_scope_preserved no_private_execution_scope_preserved no_scheduler_loop_scope_preserved no_campaign_session_run_scope_preserved source_phase67_65_provenance_stable connector_ready_dialects_preserved".split()
 )
