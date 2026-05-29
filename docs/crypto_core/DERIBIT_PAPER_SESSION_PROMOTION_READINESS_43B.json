@@ -6,7 +6,7 @@
   "source_phase42_artifact": "docs/crypto_core/DERIBIT_HARD_CAPPED_PAPER_SESSION_ARTIFACT_42B.json",
   "source_phase41_report": "docs/crypto_core/DERIBIT_BOUNDED_PAPER_RUN_TELEMETRY_REPORT_41B.json",
   "source_phase42_artifact_sha256": "40084cca600875e476eda88e3f3bbc852d73ffb258596c1a48588d6231da48e3",
-  "source_phase41_report_sha256": "6b04f1bf0e2eb03f41da0b05e3c389553f0e67398e0ce10c22c9149e032a19f3",
+  "source_phase41_report_sha256": "2c3c439d8d3fecbd0eeafad974e1dcc80909bfe968aa6e7810f4450084fd87ba",
   "evaluated_session_id": "phase42-hard-capped-paper-session",
   "evaluated_operator_id": "operator-phase42-offline-session",
   "hard_cap": 3,

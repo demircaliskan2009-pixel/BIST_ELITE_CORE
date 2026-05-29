@@ -15,7 +15,7 @@ def test_phase28a_current_readiness_preconditions_hold() -> None:
 
     assert result.accepted is True
     assert result.evidence_review_complete is True
-    assert result.connector_enablement_ready is True
+    assert result.connector_enablement_ready is False
     assert result.pending_rows == ()
     assert result.deferred_rows == ()
     assert result.b1_b5_status == {
@@ -23,7 +23,7 @@ def test_phase28a_current_readiness_preconditions_hold() -> None:
         "B2": "READY",
         "B3": "READY",
         "B4": "READY",
-        "B5": "READY",
+        "B5": "BLOCKED",
     }
     assert len(ready) == 1
     assert ready[0].dialect_id == "deribit:l2_orderbook:book_instrument_interval"

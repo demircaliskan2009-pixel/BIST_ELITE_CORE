@@ -22,6 +22,7 @@ def test_phase76h_summary_records_current_readiness_state() -> None:
     assert "`deferred_rows` | `()`" in text
     assert "`connector_ready_dialects` | `1`" in text
     assert "`B1` | `READY_FOR_HUMAN_GATE`" in text
+    assert "`B5` | `BLOCKED`" in text
 
 
 def test_phase76h_summary_records_post_audit_state() -> None:
@@ -52,4 +53,5 @@ def test_phase76h_summary_records_post_audit_state() -> None:
 def test_phase76h_summary_points_to_next_blocker() -> None:
     text = _normalized_summary_text()
 
-    assert "PAPER_RUNTIME_HEARTBEAT_EXECUTION_POST_AUDIT_REPORT_NOT_READY" in text
+    assert "INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING" in text
+    assert "`connector_enablement_ready` | `False`" in text

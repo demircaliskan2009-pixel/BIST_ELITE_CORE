@@ -315,7 +315,7 @@ def test_phase25l_validator_blocked_and_pending_rows_26() -> None:
     assert result.accepted is True
     assert result.evidence_review_complete is True  # True after Phase 26AW
     assert result.ready_for_engineering_patch is True  # True after Phase 26AW
-    assert result.connector_enablement_ready is True
+    assert result.connector_enablement_ready is False
     assert len(result.pending_rows) == 0, (
         f"Expected 26 pending rows (0 manifest + 4 claims + 7 policies), "
         f"got {len(result.pending_rows)}: {sorted(result.pending_rows)}"
@@ -332,6 +332,7 @@ def test_phase25l_b1_b5_ready_after_phase27k() -> None:
     assert result.b1_b5_status["B2"] == "READY"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
     assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
+    assert result.b1_b5_status["B5"] == "BLOCKED"
 
 
 def test_phase25l_connector_ready_dialects_empty() -> None:

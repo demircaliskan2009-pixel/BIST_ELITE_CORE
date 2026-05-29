@@ -100,13 +100,13 @@ def test_phase25s_validator_remains_blocked_after_change_id_only_approval() -> N
     assert result.accepted is True
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
-    assert result.connector_enablement_ready is True
+    assert result.connector_enablement_ready is False
     assert result.b1_b5_status == {
         "B1": "READY_FOR_HUMAN_GATE",
         "B2": "READY",
         "B3": "READY",
         "B4": "READY",
-        "B5": "READY",
+        "B5": "BLOCKED",
     }
 
 

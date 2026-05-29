@@ -14,11 +14,12 @@ def test_phase29a_current_readiness_preconditions_hold() -> None:
     ready = connector_ready_dialects()
 
     assert result.accepted is True
-    assert result.connector_enablement_ready is True
+    assert result.connector_enablement_ready is False
     assert result.pending_rows == ()
     assert result.deferred_rows == ()
     assert result.b1_b5_status["B1"] == "READY_FOR_HUMAN_GATE"
-    assert all(result.b1_b5_status[gate] == "READY" for gate in ("B2", "B3", "B4", "B5"))
+    assert all(result.b1_b5_status[gate] == "READY" for gate in ("B2", "B3", "B4"))
+    assert result.b1_b5_status["B5"] == "BLOCKED"
     assert len(ready) == 1
     assert ready[0].dialect_id == "deribit:l2_orderbook:book_instrument_interval"
 

@@ -40,7 +40,7 @@ def test_evidence_review_complete_true(result: DeribitManualReviewReadinessResul
 
 
 def test_connector_enablement_ready_false(result: DeribitManualReviewReadinessResult) -> None:
-    assert result.connector_enablement_ready is True
+    assert result.connector_enablement_ready is False
 
 
 # --- pending_rows count ---
@@ -123,7 +123,7 @@ def test_b4_ready(result: DeribitManualReviewReadinessResult) -> None:
 
 
 def test_b5_blocked(result: DeribitManualReviewReadinessResult) -> None:
-    assert result.b1_b5_status["B5"] == "READY"
+    assert result.b1_b5_status["B5"] == "BLOCKED"
 
 
 # --- connector_ready_dialects unchanged ---

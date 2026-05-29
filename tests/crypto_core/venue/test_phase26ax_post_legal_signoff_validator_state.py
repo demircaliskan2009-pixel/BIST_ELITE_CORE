@@ -28,7 +28,7 @@ def test_phase26ax_ready_for_engineering_patch_true() -> None:
 
 
 def test_phase26ax_connector_enablement_ready_false() -> None:
-    assert _result().connector_enablement_ready is True
+    assert _result().connector_enablement_ready is False
 
 
 # --- Pending / deferred rows ---
@@ -69,7 +69,7 @@ def test_phase26ax_b4_ready() -> None:
 
 
 def test_phase26ax_b5_blocked() -> None:
-    assert _result().b1_b5_status["B5"] == "READY"
+    assert _result().b1_b5_status["B5"] == "BLOCKED"
 
 
 # --- Connector dialects ---

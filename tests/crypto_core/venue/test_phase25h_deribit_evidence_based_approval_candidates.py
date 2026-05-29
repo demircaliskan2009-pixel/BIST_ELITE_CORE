@@ -163,5 +163,5 @@ def test_phase25h_validator_and_connector_state_reflect_phase27k_acceptance():
     assert result.accepted is True
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
-    assert result.connector_enablement_ready is True
+    assert result.connector_enablement_ready is False
     assert len(connector_ready_dialects()) == 1

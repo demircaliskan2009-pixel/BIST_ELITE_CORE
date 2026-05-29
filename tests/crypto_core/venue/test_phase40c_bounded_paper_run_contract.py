@@ -10,7 +10,7 @@ def test_phase40c_current_readiness_preconditions_hold() -> None:
 
     assert readiness.accepted is True
     assert readiness.evidence_review_complete is True
-    assert readiness.connector_enablement_ready is True
+    assert readiness.connector_enablement_ready is False
     assert readiness.pending_rows == ()
     assert readiness.deferred_rows == ()
     assert len(connector_ready_dialects()) == 1

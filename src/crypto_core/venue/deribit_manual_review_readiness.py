@@ -50,6 +50,10 @@ _POLICY_EXPECTED_ROW_COUNT = 7
 # It is NOT a failure for B2/B3 evidence review completion; connector enablement
 # is a distinct PUBLIC_MARKET_DATA_ONLY phase requiring explicit authorization.
 _CONNECTOR_ENABLEMENT_ROW_ID = "separate_connector_enablement"
+_INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING = "INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING"
+_INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_PATH = Path(
+    "docs/crypto_core/DERIBIT_INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE.md"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +86,8 @@ class DeribitManualReviewReadinessResult:
 
       connector_enablement_ready — True only after the separate
         PUBLIC_MARKET_DATA_ONLY connector enablement policy row is explicitly
-        approved and the Deribit static public dialect is connector-ready.
+                approved, independent human-origin approval provenance is present,
+                and the Deribit static public dialect is connector-ready.
 
       accepted — True only when every row on every surface (including
         separate_connector_enablement) is non-PENDING, non-REJECTED, and
@@ -152,6 +157,21 @@ def _is_deferred(value: str) -> bool:
 
 def _is_provided(value: str) -> bool:
     return bool(value.strip()) and not _is_pending(value)
+
+
+def _independent_human_connector_approval_provenance_ready() -> bool:
+    """Return True only when separate human-origin approval evidence exists."""
+    if not _INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_PATH.exists():
+        return False
+
+    text = _INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_PATH.read_text(encoding="utf-8")
+    required_markers = (
+        "independent_human_origin: true",
+        "decision: APPROVE",
+        "approval_scope: Phase27F_PUBLIC_MARKET_DATA_ONLY_CONNECTOR_ENABLEMENT",
+        "separate_from_ai_enablement_pr: true",
+    )
+    return all(marker in text for marker in required_markers)
 
 
 # ---------------------------------------------------------------------------
@@ -411,9 +431,16 @@ def evaluate_deribit_manual_review_readiness(
     )
 
     static_registry_verified = _deribit_static_registry_verified()
-    connector_enablement_ready = _deribit_connector_enablement_ready(
-        all_row_results,
-        static_registry_verified=static_registry_verified,
+    independent_human_provenance_ready = _independent_human_connector_approval_provenance_ready()
+    if not independent_human_provenance_ready:
+        all_rejection_reasons.append(_INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING)
+
+    connector_enablement_ready = (
+        _deribit_connector_enablement_ready(
+            all_row_results,
+            static_registry_verified=static_registry_verified,
+        )
+        and independent_human_provenance_ready
     )
 
     # B1-B5 status map (coarse summary — engineering detail in row_results)

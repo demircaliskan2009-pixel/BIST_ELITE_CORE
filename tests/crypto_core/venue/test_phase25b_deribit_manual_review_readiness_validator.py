@@ -66,7 +66,8 @@ def test_current_worksheets_have_public_market_data_acceptance_ready():
     assert result.accepted is True
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
-    assert result.connector_enablement_ready is True
+    assert result.connector_enablement_ready is False
+    assert "INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING" in result.rejection_reasons
 
 
 def test_current_worksheets_have_pending_rows():
@@ -88,7 +89,7 @@ def test_current_b1_b5_ready_after_source_snapshot_acceptance():
     assert result.b1_b5_status["B2"] == "READY"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW policy signoff
     assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
-    assert result.b1_b5_status["B5"] == "READY"  # B5 READY after Phase 27F public connector enablement
+    assert result.b1_b5_status["B5"] == "BLOCKED"  # provenance gate remains missing
 
 
 def test_current_worksheets_have_rejection_reasons():
@@ -97,7 +98,7 @@ def test_current_worksheets_have_rejection_reasons():
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    assert result.rejection_reasons == ()
+    assert "INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING" in result.rejection_reasons
 
 
 def test_current_worksheets_have_no_missing_metadata():
@@ -355,8 +356,9 @@ def test_connector_enablement_ready_after_phase27f_public_market_data_approval()
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    assert result.connector_enablement_ready is True
-    assert result.b1_b5_status["B5"] == "READY"
+    assert result.connector_enablement_ready is False
+    assert result.b1_b5_status["B5"] == "BLOCKED"
+    assert "INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING" in result.rejection_reasons
 
 
 def test_evidence_review_complete_excludes_connector_enablement_deferred():

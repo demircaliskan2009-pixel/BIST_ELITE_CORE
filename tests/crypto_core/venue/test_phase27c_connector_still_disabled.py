@@ -33,9 +33,9 @@ def test_phase27c_enabled_for_connector_is_public_market_data_ready() -> None:
 
 def test_phase27c_connector_enablement_ready_for_public_market_data() -> None:
     result = evaluate_deribit_manual_review_readiness()
-    assert result.connector_enablement_ready is True
+    assert result.connector_enablement_ready is False
     assert result.b1_b5_status["B4"] == "READY"
-    assert result.b1_b5_status["B5"] == "READY"
+    assert result.b1_b5_status["B5"] == "BLOCKED"
 
 
 def test_phase27c_public_connector_enablement_requires_public_market_data_mode() -> None:
