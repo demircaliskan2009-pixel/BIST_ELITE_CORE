@@ -143,7 +143,6 @@ def test_phase25h_does_not_add_final_reviewer_values_or_modify_worksheets():
         "testnet_prod_review",
     }
     _phase26aw_approved_policy = {"regional_legal_access_review", "separate_connector_enablement"}
-    _phase26aw_deferred_policy = {"separate_connector_enablement"}
     for row in policy_rows:
         if row["policy_id"] in _phase26an_approved_policy:
             assert row["reviewer_id"] == "demir_operator"

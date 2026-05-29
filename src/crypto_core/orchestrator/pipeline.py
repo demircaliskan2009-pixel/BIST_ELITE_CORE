@@ -1068,22 +1068,6 @@ class PipelineOrchestrator:
             },
         )
 
-    def _emit_recovery_telemetry(self, evidence: RecoveryEvidence) -> None:
-        """Emit recovery bootstrap telemetry at initialization."""
-        self._emit_telemetry_safe(
-            "data",
-            0.0,
-            {
-                "recovery_restore_success": evidence.restore_success,
-                "recovery_restored_order_count": evidence.restored_order_count,
-                "recovery_orphan_count": len(evidence.orphan_order_ids),
-                "recovery_reconciled_count": evidence.reconciled_count,
-                "recovery_stale_count": evidence.stale_count,
-                "recovery_unresolved_count": evidence.unresolved_count,
-                "recovery_restored_position_count": evidence.restored_position_count,
-            },
-        )
-
     @property
     def recovery_evidence(self) -> RecoveryEvidence | None:
         """Recovery evidence from the last bootstrap (None if no recovery)."""

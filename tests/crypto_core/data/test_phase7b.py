@@ -20,6 +20,7 @@ import threading
 import time
 from typing import Any
 from unittest.mock import MagicMock
+from urllib.parse import urlparse
 
 import pytest
 
@@ -221,7 +222,7 @@ class TestBinanceSnapshotFetcher:
         fetcher.fetch()
 
         assert len(calls) == 1
-        assert "fapi.binance.com" in calls[0]["url"]
+        assert urlparse(calls[0]["url"]).hostname == "fapi.binance.com"
         assert calls[0]["params"]["symbol"] == _SYMBOL
 
 
