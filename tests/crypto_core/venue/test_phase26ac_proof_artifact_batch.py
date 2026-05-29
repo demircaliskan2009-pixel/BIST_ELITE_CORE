@@ -172,7 +172,7 @@ def test_phase26ac_validator_still_blocked() -> None:
     assert result.accepted is True
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
-    assert result.connector_enablement_ready is True
+    assert result.connector_enablement_ready is False
 
 
 def test_phase26ac_pending_rows_still_26() -> None:

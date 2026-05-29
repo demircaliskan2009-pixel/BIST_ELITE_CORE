@@ -69,7 +69,7 @@ def test_phase26au_live_validator_state_matches_summary() -> None:
     result = evaluate_deribit_manual_review_readiness()
     assert result.accepted is True
     assert len(result.pending_rows) == 0
-    assert result.connector_enablement_ready is True
+    assert result.connector_enablement_ready is False
     assert len(connector_ready_dialects()) == 1
 
 

@@ -6,7 +6,7 @@
   "source_phase42_artifact": "docs/crypto_core/DERIBIT_HARD_CAPPED_PAPER_SESSION_ARTIFACT_42B.json",
   "source_phase43_promotion_readiness": "docs/crypto_core/DERIBIT_PAPER_SESSION_PROMOTION_READINESS_43B.json",
   "source_phase42_artifact_sha256": "40084cca600875e476eda88e3f3bbc852d73ffb258596c1a48588d6231da48e3",
-  "source_phase43_promotion_readiness_sha256": "51af16d088cc125cdae31e4231b9d3f2b30426318bdbe89b06837a81cc322c34",
+  "source_phase43_promotion_readiness_sha256": "fd7112946adbd2e0aba1bd21d962dc883b915d0a5dddc75d07cb8660bfd10e8a",
   "hard_cap": 3,
   "per_session_max_trades": 2,
   "required_future_sessions_minimum": 3,

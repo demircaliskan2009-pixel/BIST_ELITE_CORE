@@ -56,7 +56,7 @@ def test_phase26at_evidence_review_complete_is_true_after_26aw() -> None:
 
 
 def test_phase26at_connector_enablement_ready_is_false() -> None:
-    assert _result().connector_enablement_ready is True
+    assert _result().connector_enablement_ready is False
 
 
 def test_phase26at_b1_b5_blocked_except_b3_b4() -> None:
@@ -103,5 +103,5 @@ def test_phase26at_claim_row_approved_with_phase26ar_scope() -> None:
 
 def test_phase26at_no_connector_enablement() -> None:
     result = _result()
-    assert result.connector_enablement_ready is True
+    assert result.connector_enablement_ready is False
     assert len(connector_ready_dialects()) == 1

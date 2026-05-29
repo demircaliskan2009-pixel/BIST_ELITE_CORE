@@ -74,7 +74,7 @@ def test_phase26ak_ready_for_engineering_patch_true() -> None:
 
 
 def test_phase26ak_connector_enablement_ready_false() -> None:
-    assert _readiness().connector_enablement_ready is True
+    assert _readiness().connector_enablement_ready is False
 
 
 def test_phase26ak_b1_blocked() -> None:
@@ -95,7 +95,7 @@ def test_phase26ak_b4_ready() -> None:
 
 
 def test_phase26ak_b5_blocked() -> None:
-    assert _readiness().b1_b5_status["B5"] == "READY"
+    assert _readiness().b1_b5_status["B5"] == "BLOCKED"
 
 
 def test_phase26ak_connector_ready_dialects_zero() -> None:

@@ -29,14 +29,14 @@ def test_phase27h_validator_reflects_phase27k_source_snapshot_acceptance() -> No
     assert result.accepted is True
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
-    assert result.connector_enablement_ready is True
+    assert result.connector_enablement_ready is False
     assert result.pending_rows == ()
     assert result.deferred_rows == ()
     assert result.b1_b5_status["B1"] == "READY_FOR_HUMAN_GATE"
     assert result.b1_b5_status["B2"] == "READY"
     assert result.b1_b5_status["B3"] == "READY"
     assert result.b1_b5_status["B4"] == "READY"
-    assert result.b1_b5_status["B5"] == "READY"
+    assert result.b1_b5_status["B5"] == "BLOCKED"
     assert len(connector_ready_dialects()) == 1
 
 

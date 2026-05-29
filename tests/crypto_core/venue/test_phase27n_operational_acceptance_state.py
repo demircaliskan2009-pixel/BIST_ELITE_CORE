@@ -27,17 +27,17 @@ def test_phase27n_validator_reaches_operational_acceptance_without_connector_exp
     assert result.accepted is True
     assert result.evidence_review_complete is True
     assert result.ready_for_engineering_patch is True
-    assert result.connector_enablement_ready is True
+    assert result.connector_enablement_ready is False
     assert result.pending_rows == ()
     assert result.deferred_rows == ()
     assert result.rejected_rows == ()
-    assert result.rejection_reasons == ()
+    assert result.rejection_reasons == ("INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING",)
     assert result.b1_b5_status == {
         "B1": "READY_FOR_HUMAN_GATE",
         "B2": "READY",
         "B3": "READY",
         "B4": "READY",
-        "B5": "READY",
+        "B5": "BLOCKED",
     }
 
     ready = connector_ready_dialects()

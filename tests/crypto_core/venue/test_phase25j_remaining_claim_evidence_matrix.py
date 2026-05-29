@@ -479,7 +479,7 @@ def test_phase25j_validator_ready_for_engineering_patch_remains_false():
 
 def test_phase25j_validator_connector_enablement_ready_remains_false():
     result = _validator_result()
-    assert result.connector_enablement_ready is True
+    assert result.connector_enablement_ready is False
 
 
 def test_phase25j_validator_pending_rows_count_is_26():
@@ -517,6 +517,7 @@ def test_phase25j_b1_b5_ready_after_phase27k():
     assert result.b1_b5_status["B2"] == "READY"
     assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
     assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
+    assert result.b1_b5_status["B5"] == "BLOCKED"
 
 
 # ---------------------------------------------------------------------------

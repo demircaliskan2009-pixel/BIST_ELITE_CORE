@@ -14,7 +14,15 @@ status: PAPER_RUNTIME_HEARTBEAT_EXECUTION_POST_AUDIT_COMPLETE
 | `B2` | `READY` |
 | `B3` | `READY` |
 | `B4` | `READY` |
-| `B5` | `READY` |
+| `B5` | `BLOCKED` |
+
+## Provenance Gate
+
+| Field | Value |
+| --- | --- |
+| `accepted` | `True` |
+| `connector_enablement_ready` | `False` |
+| `provenance_reason` | `INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING` |
 
 ## Post Audit State
 
@@ -44,4 +52,4 @@ all live/shadow/private-order paths remain disabled.
 
 ## Next Phase
 
-The next blocker is `PAPER_RUNTIME_HEARTBEAT_EXECUTION_POST_AUDIT_REPORT_NOT_READY`.
+The next blocker is `INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING`.

@@ -37,9 +37,9 @@ def test_phase27e_validator_and_connector_state_match_summary() -> None:
     assert result.ready_for_engineering_patch is True
     assert len(result.pending_rows) == 0
     assert result.deferred_rows == ()
-    assert result.connector_enablement_ready is True
+    assert result.connector_enablement_ready is False
     assert result.b1_b5_status["B4"] == "READY"
-    assert result.b1_b5_status["B5"] == "READY"
+    assert result.b1_b5_status["B5"] == "BLOCKED"
     assert len(connector_ready_dialects()) == 1
 
 

@@ -4,7 +4,7 @@
   "generated_at": "2026-05-24",
   "source": "deterministic_phase38_proof_artifact_audit",
   "source_proof_artifact": "docs/crypto_core/DERIBIT_FIRST_PAPER_TRADE_SMOKE_PROOF_38B.json",
-  "source_proof_sha256": "624af2bccba623ed82c828a29d7836dc4e2eaca460bb46009c84993fcde1567f",
+  "source_proof_sha256": "b00673470c3de5f8cf2d55cff5ce629380d38a2cc719d0ec8d6e60abceb6b0ec",
   "audited_run_id": "phase38-first-paper-trade-smoke",
   "audited_operator_id": "operator-phase38-offline-smoke",
   "simulation_only": true,
@@ -29,16 +29,18 @@
     "accepted": true,
     "evidence_review_complete": true,
     "ready_for_engineering_patch": true,
-    "connector_enablement_ready": true,
+    "connector_enablement_ready": false,
     "pending_rows": 0,
     "deferred_rows": [],
-    "rejection_reasons": [],
+    "rejection_reasons": [
+      "INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING"
+    ],
     "b1_b5_status": {
       "B1": "READY_FOR_HUMAN_GATE",
       "B2": "READY",
       "B3": "READY",
       "B4": "READY",
-      "B5": "READY"
+      "B5": "BLOCKED"
     }
   },
   "ledger_audit": {
