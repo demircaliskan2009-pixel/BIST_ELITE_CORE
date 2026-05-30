@@ -49,9 +49,11 @@ class PublicFeedAdapterReadiness:
 
 
 class PublicFeedAdapterProtocol(Protocol):
-    def descriptor(self) -> PublicFeedAdapterDescriptor: ...
+    def descriptor(self) -> PublicFeedAdapterDescriptor:
+        pass
 
-    def readiness(self, now_ns: int | None = None) -> PublicFeedAdapterReadiness: ...
+    def readiness(self, now_ns: int | None = None) -> PublicFeedAdapterReadiness:
+        pass
 
 
 def public_feed_adapter_descriptor_rejection_reasons(
