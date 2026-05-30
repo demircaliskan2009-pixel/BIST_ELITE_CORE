@@ -46,7 +46,6 @@ from tests.crypto_core.data.fixtures.ws_simulator import WebSocketSimulator
 # ── Shared raw message factories ──────────────────────────────────────────────
 
 _TS_MS = 1_700_000_000_000  # 2023-11-14T22:13:20Z in ms
-_TS_NS = _TS_MS * 1_000_000
 
 
 def _binance_trade(
