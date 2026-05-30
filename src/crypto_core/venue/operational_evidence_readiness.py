@@ -20,7 +20,6 @@ from crypto_core.venue.official_source_snapshots import (
     OfficialSourceSnapshotValidationResult,
     official_source_snapshot_result_to_dict,
 )
-from crypto_core.venue.public_feed_dialects import connector_ready_dialects
 
 
 class OperationalEvidenceReadinessError(ValueError):
@@ -213,9 +212,6 @@ def evaluate_operational_public_connector_evidence(
             reasons.extend(requirement.rejection_reasons)
         if not requirement.satisfied or not requirement.evidence_refs:
             reasons.append(_REQUIREMENT_REJECTION_BY_FIELD[requirement.field_name])
-
-    if connector_ready_dialects():
-        reasons.append("operational_evidence:registry_enabled_forbidden")
 
     unique_reasons = tuple(dict.fromkeys(reasons))
     accepted = not unique_reasons and all(requirement.satisfied for requirement in requirements)

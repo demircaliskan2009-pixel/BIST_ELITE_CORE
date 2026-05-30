@@ -1,12 +1,12 @@
-"""Phase 25B — Deribit human-review readiness validator tests.
+"""Phase 25B â€” Deribit human-review readiness validator tests.
 
 Proves:
-1. Current worksheets are not ready (accepted=False, ready_for_engineering_patch=False).
+1. Current worksheets are accepted after explicit source snapshot metadata.
 2. Missing reviewer metadata fails closed.
 3. Pending rows fail closed.
 4. Rejected/deferred rows fail closed.
 5. No runtime connector readiness changes.
-6. connector_ready_dialects() == ().
+6. connector_ready_dialects() contains only Deribit public market data.
 7. Validator imports only inert modules.
 """
 
@@ -34,7 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 VALIDATOR_SRC = REPO_ROOT / "src" / "crypto_core" / "venue" / "deribit_manual_review_readiness.py"
 
 # ---------------------------------------------------------------------------
-# Forbidden import patterns for the validator module — must be inert only
+# Forbidden import patterns for the validator module â€” must be inert only
 # ---------------------------------------------------------------------------
 
 _FORBIDDEN_IMPORT_PATTERNS = (
@@ -52,21 +52,22 @@ _FORBIDDEN_IMPORT_PATTERNS = (
 
 
 # ---------------------------------------------------------------------------
-# 1. Current repo state: worksheets not ready
+# 1. Current repo state: source snapshots, claims, policies accepted
 # ---------------------------------------------------------------------------
 
 
-def test_current_worksheets_are_not_ready():
+def test_current_worksheets_have_public_market_data_acceptance_ready():
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
     assert isinstance(result, DeribitManualReviewReadinessResult)
-    assert result.accepted is False
-    assert result.evidence_review_complete is False
-    assert result.ready_for_engineering_patch is False
+    assert result.accepted is True
+    assert result.evidence_review_complete is True
+    assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is False
+    assert "INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING" in result.rejection_reasons
 
 
 def test_current_worksheets_have_pending_rows():
@@ -75,17 +76,20 @@ def test_current_worksheets_have_pending_rows():
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    assert len(result.pending_rows) > 0, "Expected pending rows in unreviewed worksheets"
+    assert len(result.pending_rows) == 0, "No pending rows after Phase 26AW"
 
 
-def test_current_b1_b5_all_blocked():
+def test_current_b1_b5_ready_after_source_snapshot_acceptance():
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    for blocker in ("B1", "B2", "B3", "B4", "B5"):
-        assert result.b1_b5_status[blocker] == "BLOCKED", f"{blocker} must be BLOCKED in current repo state"
+    assert result.b1_b5_status["B1"] == "READY_FOR_HUMAN_GATE"
+    assert result.b1_b5_status["B2"] == "READY"
+    assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW policy signoff
+    assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
+    assert result.b1_b5_status["B5"] == "BLOCKED"  # provenance gate remains missing
 
 
 def test_current_worksheets_have_rejection_reasons():
@@ -94,16 +98,16 @@ def test_current_worksheets_have_rejection_reasons():
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    assert len(result.rejection_reasons) > 0
+    assert "INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING" in result.rejection_reasons
 
 
-def test_current_worksheets_have_missing_metadata():
+def test_current_worksheets_have_no_missing_metadata():
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    assert len(result.missing_metadata) > 0
+    assert len(result.missing_metadata) == 0  # No missing metadata after Phase 26AW
 
 
 # ---------------------------------------------------------------------------
@@ -179,10 +183,10 @@ def test_pending_claim_rows_fail_closed():
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    # All 23 claim rows must appear as pending
+    # Phase 26AR approved all 23 claim rows; 0 remain pending.
     claim_pending = [r for r in result.pending_rows if r.startswith("claim_review:")]
-    assert len(claim_pending) == 19, (
-        f"Expected 19 pending claim rows after Phase 25R, got {len(claim_pending)}: {claim_pending}"
+    assert len(claim_pending) == 0, (
+        f"Expected 0 pending claim rows after Phase 26AR, got {len(claim_pending)}: {claim_pending}"
     )
 
 
@@ -193,7 +197,9 @@ def test_pending_policy_rows_fail_closed():
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
     policy_pending = [r for r in result.pending_rows if r.startswith("policy_review:")]
-    assert len(policy_pending) == 7, f"Expected 7 pending policy rows, got {len(policy_pending)}: {policy_pending}"
+    assert len(policy_pending) == 0, (
+        f"Expected 0 pending policy rows after Phase 26AW, got {len(policy_pending)}: {policy_pending}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -265,9 +271,10 @@ def test_mixed_approved_and_pending_still_fails_closed():
 # ---------------------------------------------------------------------------
 
 
-def test_connector_ready_dialects_remains_empty():
+def test_connector_ready_dialects_contains_deribit_public_market_data():
     dialects = connector_ready_dialects()
-    assert dialects == (), f"connector_ready_dialects() must return () but got {dialects}"
+    assert len(dialects) == 1
+    assert dialects[0].dialect_id == "deribit:l2_orderbook:book_instrument_interval"
 
 
 def test_evaluate_does_not_mutate_connector_ready_dialects():
@@ -278,7 +285,8 @@ def test_evaluate_does_not_mutate_connector_ready_dialects():
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
     after = connector_ready_dialects()
-    assert before == after == ()
+    assert before == after
+    assert len(after) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -335,12 +343,12 @@ def test_missing_worksheet_file_fails_closed(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# 10. Phase 25F — evidence_review_complete vs connector_enablement_ready
+# 10. Phase 25F â€” evidence_review_complete vs connector_enablement_ready
 # ---------------------------------------------------------------------------
 
 
-def test_connector_enablement_ready_is_always_false():
-    """connector_enablement_ready must always be False — connector enablement is a
+def test_connector_enablement_ready_after_phase27f_public_market_data_approval():
+    """connector_enablement_ready must always be False â€” connector enablement is a
     separate PUBLIC_MARKET_DATA_ONLY phase that cannot be satisfied here.
     """
     result = evaluate_deribit_manual_review_readiness(
@@ -349,6 +357,8 @@ def test_connector_enablement_ready_is_always_false():
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
     assert result.connector_enablement_ready is False
+    assert result.b1_b5_status["B5"] == "BLOCKED"
+    assert "INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING" in result.rejection_reasons
 
 
 def test_evidence_review_complete_excludes_connector_enablement_deferred():
@@ -358,7 +368,7 @@ def test_evidence_review_complete_excludes_connector_enablement_deferred():
     accepted must remain False (deferred_rows non-empty) and
     connector_enablement_ready must remain False (separate phase).
     """
-    # Synthetic approved manifest (1 source row — not subject to minimum count
+    # Synthetic approved manifest (1 source row â€” not subject to minimum count
     # enforcement when called via _validate_manifest directly)
     approved_manifest = (
         "| source_id | retrieval_status | content_sha256 |\n"
@@ -388,7 +398,7 @@ def test_evidence_review_complete_excludes_connector_enablement_deferred():
         "| `checksum_decision` | `deribit` | `APPROVED` | `CLEARED`"
         " | `reviewer-01` | `2026-05-11T00:00:00Z` | `DERIBIT_NOTIFICATIONS` | `checksum_decision`"
         " | `YES` | `NO` | `YES` | `APPROVE` | `` | `CLEARS_BLOCKER` |\n"
-        # deferred connector-enablement row — must NOT block evidence_review_complete
+        # deferred connector-enablement row â€” must NOT block evidence_review_complete
         f"| `{_CONNECTOR_ENABLEMENT_ROW_ID}` | `deribit` | `DEFERRED` | `REQUIRED_SEPARATE_PHASE`"
         " | `reviewer-01` | `2026-05-11T00:00:00Z` | `` | ``"
         " | `NO` | `NO` | `YES` | `DEFER` | `` | `LEAVES_BLOCKER` |\n"
@@ -435,7 +445,7 @@ def test_ready_for_engineering_patch_equals_evidence_review_complete():
 
 
 # ---------------------------------------------------------------------------
-# 8. P1 regression — manifest pending-review status recognition
+# 8. P1 regression â€” manifest pending-review status recognition
 # ---------------------------------------------------------------------------
 
 
@@ -462,26 +472,20 @@ def test_manifest_supplied_hashed_pending_review_fails_closed():
     )
 
 
-def test_manifest_current_rows_are_pending():
-    """All 6 current manifest rows must be PENDING (not REVIEWED) after P1 fix.
-
-    Current manifest has retrieval_status=SUPPLIED_HASHED_PENDING_REVIEW for all
-    6 source IDs. These must appear as PENDING in pending_rows so they block
-    accepted=True even when claim/policy worksheets are later approved.
-    """
+def test_manifest_current_rows_are_approved_after_phase27k():
+    """All 6 current manifest rows must be APPROVED through explicit metadata."""
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    manifest_pending = [r for r in result.pending_rows if r.startswith("source_snapshot:")]
-    assert len(manifest_pending) == 0, (
-        f"Expected 0 pending source_snapshot rows after Phase 25I, got {len(manifest_pending)}: {manifest_pending}"
-    )
+    manifest_rows = [r for r in result.row_results if r.surface == "source_snapshot"]
+    assert len(manifest_rows) == _MANIFEST_EXPECTED_ROW_COUNT
+    assert all(r.status == "APPROVED" for r in manifest_rows)
 
 
 # ---------------------------------------------------------------------------
-# 9. P1 regression — truncated worksheet row count enforcement
+# 9. P1 regression â€” truncated worksheet row count enforcement
 # ---------------------------------------------------------------------------
 
 

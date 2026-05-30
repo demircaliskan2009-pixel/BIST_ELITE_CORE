@@ -44,12 +44,12 @@ def test_current_deribit_claim_reviews_are_not_accepted():
     results = tuple(validate_official_claim_review(_claim_from_row(row)) for row in _worksheet_rows().values())
 
     assert results
-    # Phase 25I approved 3 rows and Phase 25R approved change_id; the remaining 19 must remain rejected.
+    # Phase 25I approved 3 rows, Phase 25R approved change_id, Phase 26AJ approved 15 technical rows,
+    # Phase 26AN approved 3 more, Phase 26AR approved regional_legal_access; all 23 rows accepted.
     rejected = [r for r in results if not r.accepted]
     accepted = [r for r in results if r.accepted]
-    assert len(rejected) == 19
-    assert len(accepted) == 4
-    assert all("official_claim_review:pending" in r.rejection_reasons for r in rejected)
+    assert len(rejected) == 0
+    assert len(accepted) == 23
 
 
 def test_current_deribit_required_policies_are_missing_or_pending():
@@ -69,12 +69,7 @@ def test_current_deribit_operational_evidence_acceptance_rejects():
     assert result.accepted is False
     assert operational_evidence_acceptance_ready(result) is False
     assert "operational_evidence:source_snapshot_rejected" in result.rejection_reasons
-    assert "operational_evidence:claim_review_rejected" in result.rejection_reasons
-    assert "operational_policy:checksum_decision_missing" in result.rejection_reasons
-    assert "operational_policy:liveness_policy_missing" in result.rejection_reasons
-    assert "operational_policy:staleness_budget_missing" in result.rejection_reasons
-    assert "operational_policy:receive_lag_budget_missing" in result.rejection_reasons
-    assert "operational_policy:testnet_prod_review_missing" in result.rejection_reasons
+    # claim_review_rejected no longer present after Phase 26AR approved all 23 claim rows
     assert "operational_policy:regional_legal_access_review_missing" in result.rejection_reasons
 
 
@@ -98,12 +93,12 @@ def test_deribit_policy_blockers_remain_in_checklist():
     assert "`regional_legal_access_reviewed`: `PENDING`" in checklist
 
 
-def test_deribit_static_registry_remains_unverified_and_connector_ready_empty():
+def test_deribit_static_registry_verified_and_connector_ready_empty():
     spec = get_public_feed_dialect(DIALECT_ID)
 
-    assert spec.verification_status.value == "unverified"
-    assert spec.enabled_for_connector is False
-    assert connector_ready_dialects() == ()
+    assert spec.verification_status.value == "verified_from_official_docs"
+    assert spec.enabled_for_connector is True
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_no_connector_network_private_order_or_live_paths_in_phase22q_sources():

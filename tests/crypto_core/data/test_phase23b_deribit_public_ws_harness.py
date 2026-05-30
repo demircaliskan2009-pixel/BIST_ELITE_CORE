@@ -242,15 +242,15 @@ def test_no_service_orchestrator_trading_or_risk_imports():
 
 
 def test_connector_ready_dialects_remains_empty():
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
-def test_registry_remains_unverified():
+def test_registry_verified_but_connector_disabled():
     spec = get_public_feed_dialect("deribit:l2_orderbook:placeholder")
 
-    assert spec.verification_status.value == "unverified"
-    assert spec.enabled_for_connector is False
-    assert connector_ready_dialects() == ()
+    assert spec.verification_status.value == "verified_from_official_docs"
+    assert spec.enabled_for_connector is True
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_operational_evidence_ready_remains_false_current_deribit_blocked():

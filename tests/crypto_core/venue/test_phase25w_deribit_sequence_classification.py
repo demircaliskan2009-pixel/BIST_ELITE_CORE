@@ -53,31 +53,29 @@ def test_phase25w_does_not_create_operator_metadata_or_worksheet_edits() -> None
 
     assert "No reviewer_id or reviewed_at_iso value is filled." in doc
     assert "No Phase 25X operator-fill proposal is created" in doc
+    # Phase 26AJ approved 15 more rows; Phase 26AN approved 3 more; Phase 26AR approved 1 more; total = 23
     approved_claim_ids = {row["claim_id"] for row in claim_rows if row["decision"] == "APPROVED"}
-    assert approved_claim_ids == {
-        "public_websocket_availability",
-        "unauthenticated_public_market_data",
-        "orderbook_channel_feed",
-        "change_id",
-    }
-    assert all(row["decision"] == "PENDING" for row in policy_rows)
+    assert len(approved_claim_ids) == 23
+    pending_policy = [row for row in policy_rows if row["decision"] == "PENDING"]
+    assert len(pending_policy) == 0
 
 
 def test_phase25w_validator_remains_blocked_with_26_pending_rows() -> None:
     result = evaluate_deribit_manual_review_readiness()
 
-    assert result.accepted is False
-    assert result.evidence_review_complete is False
-    assert result.ready_for_engineering_patch is False
+    assert result.accepted is True
+    assert result.evidence_review_complete is True
+    assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 26
-    assert "claim_review:prev_change_id" in result.pending_rows
-    assert "claim_review:continuity_condition" in result.pending_rows
+    assert len(result.pending_rows) == 0
+    # Phase 26AJ later approved prev_change_id and continuity_condition
+    assert "claim_review:prev_change_id" not in result.pending_rows
+    assert "claim_review:continuity_condition" not in result.pending_rows
     assert result.b1_b5_status == {
-        "B1": "BLOCKED",
-        "B2": "BLOCKED",
-        "B3": "BLOCKED",
-        "B4": "BLOCKED",
+        "B1": "READY_FOR_HUMAN_GATE",
+        "B2": "READY",
+        "B3": "READY",
+        "B4": "READY",
         "B5": "BLOCKED",
     }
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1

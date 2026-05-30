@@ -52,7 +52,7 @@ def test_placeholder_official_doc_refs_block_operational_verification():
         "deribit_operational:testnet_prod_differences_unknown",
         "deribit_operational:regional_legal_access_unknown",
     )
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_content_hash_unavailable_blocks_operational_verification():
@@ -101,7 +101,7 @@ def test_summary_only_deep_research_cannot_be_verified_operational_evidence():
     )
 
 
-def test_static_registry_stays_unverified_even_after_operationally_blocked_overlay():
+def test_static_registry_stays_verified_connector_enabled_after_operationally_blocked_overlay():
     package = _package()
     verification = _verification(package)
     static_spec = get_public_feed_dialect(_DERIBIT_DIALECT_ID)
@@ -112,8 +112,8 @@ def test_static_registry_stays_unverified_even_after_operationally_blocked_overl
     assert overlay.accepted is True
     assert _operational_evidence_rejection_reasons(package, verification)
     assert restored_static == static_spec
-    assert restored_static.enabled_for_connector is False
-    assert connector_ready_dialects() == ()
+    assert restored_static.enabled_for_connector is True
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_source_modules_still_have_no_connector_network_or_endpoint_implementation():
@@ -150,7 +150,7 @@ def test_live_execution_lifecycle_still_rejects_live_mode():
     assert result.rejection_reason == RejectionReason.LIVE_NOT_ENABLED
 
 
-_DERIBIT_DIALECT_ID = "deribit:l2_orderbook:placeholder"
+_DERIBIT_DIALECT_ID = "deribit:l2_orderbook:book_instrument_interval"
 _RETRIEVED_AT_NS = 2_200_000_000_000
 
 

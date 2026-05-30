@@ -19,6 +19,10 @@ private_api: FORBIDDEN
 credentials: FORBIDDEN
 orders: FORBIDDEN
 agent_can_approve_b1_b5: NO
+technical_connector_registry_ready: connector_ready_dialects_is_static_registry_only
+operational_connector_authorization_requires: independent_human_origin_provenance
+same_pr_ai_created_connector_approval_artifact: INSUFFICIENT
+required_human_provenance_evidence: docs/crypto_core/DERIBIT_INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE.md
 
 ## B. CLOSED ADVISORY PROOFS
 
@@ -103,6 +107,8 @@ this document does not authorize paper-shadow integration.
 this document does not authorize private API.
 this document does not authorize orders.
 this document does not authorize live trading.
+this document does not treat connector_ready_dialects() as operational approval.
+this document requires independent human-origin connector approval provenance before B5 can be READY.
 
 ## H. NEXT HUMAN ACTION
 

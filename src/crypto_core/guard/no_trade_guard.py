@@ -42,7 +42,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _NS_PER_MS = 1_000_000
-_NS_PER_S = 1_000_000_000
 
 #: Default stale-data threshold: data older than this is considered stale.
 DEFAULT_STALE_DATA_THRESHOLD_MS: float = 5_000.0  # 5 seconds

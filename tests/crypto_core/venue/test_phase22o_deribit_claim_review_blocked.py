@@ -55,19 +55,39 @@ REQUIRED_CLAIM_IDS = {
 
 def test_current_deribit_claim_review_rows_are_not_approved():
     rows = _worksheet_rows()
-    # Phase 25I approved 3 rows; Phase 25R later approved only change_id.
-    approved_claim_ids = frozenset(
-        {"public_websocket_availability", "unauthenticated_public_market_data", "orderbook_channel_feed"}
-    ) | frozenset({"change_id"})
+    # Phase 25I approved 3 rows; Phase 25R approved change_id; Phase 26AJ approved 15 technical rows;
+    # Phase 26AN approved 3 policy-decision claim rows (checksum_decision, staleness_budget, receive_lag_budget).
+    approved_claim_ids = (
+        frozenset({"public_websocket_availability", "unauthenticated_public_market_data", "orderbook_channel_feed"})
+        | frozenset({"change_id"})
+        | frozenset(
+            {
+                "public_rest_availability",
+                "prod_testnet_ws_endpoint",
+                "prod_testnet_rest_endpoint",
+                "rest_snapshot_requirement",
+                "gap_resubscribe_rule",
+                "heartbeat_liveness_proof",
+                "public_rate_subscription_limits",
+                "public_trades",
+                "ticker",
+                "mark_index_funding_open_interest",
+                "testnet_prod_difference",
+                "first_message_snapshot",
+                "incremental_delta",
+                "prev_change_id",
+                "continuity_condition",
+            }
+        )
+        | frozenset({"checksum_decision", "staleness_budget", "receive_lag_budget"})
+        | frozenset({"regional_legal_access"})
+    )
 
     assert set(rows) == REQUIRED_CLAIM_IDS
     assert {row["operational_readiness_effect"] for row in rows.values()} == {"LEAVES_BLOCKER"}
     non_approved = {cid: row for cid, row in rows.items() if cid not in approved_claim_ids}
-    assert len(non_approved) == 19
-    assert {row["review_status"] for row in non_approved.values()} == {"PENDING"}
-    assert {row["decision"] for row in non_approved.values()} == {"PENDING"}
-    assert all(row["reviewer_id"] == "PENDING" for row in non_approved.values())
-    assert all(row["reviewed_at_iso"] == "PENDING" for row in non_approved.values())
+    # 0 rows remain PENDING after Phase 26AR: all 23 claim rows approved
+    assert len(non_approved) == 0
 
 
 def test_current_deribit_claim_reviews_cannot_satisfy_operational_readiness():
@@ -83,18 +103,16 @@ def test_current_deribit_claim_reviews_cannot_satisfy_operational_readiness():
         required_fields=_requirements_from_claim_review_aggregate(aggregate),
     )
 
-    # Phase 25I approved 3 rows and Phase 25R approved change_id; the aggregate + readiness remain blocked.
+    # Phase 26AR approved all 23 claim rows; aggregate is now accepted; readiness still blocked (package+verification missing).
     rejected_results = [r for r in results if not r.accepted]
-    assert len(rejected_results) == 19
-    assert aggregate.accepted is False
-    assert aggregate.review_status is OfficialClaimReviewStatus.PENDING
-    assert "official_claim_review:pending" in aggregate.rejection_reasons
-    assert official_claim_review_ready(aggregate) is False
+    assert len(rejected_results) == 0
+    assert aggregate.accepted is True
+    assert aggregate.review_status is OfficialClaimReviewStatus.APPROVED
+    assert official_claim_review_ready(aggregate) is True
     assert readiness.accepted is False
     assert operational_evidence_ready(readiness) is False
-    assert "operational_evidence:manual_review_missing" in readiness.rejection_reasons
-    assert "operational_evidence:checksum_decision_missing" in readiness.rejection_reasons
-    assert "operational_evidence:heartbeat_unknown" in readiness.rejection_reasons
+    assert "operational_evidence:package_missing" in readiness.rejection_reasons
+    assert "operational_evidence:verification_missing" in readiness.rejection_reasons
 
 
 def test_manual_approval_and_operational_status_remain_blocked_in_docs():
@@ -125,12 +143,12 @@ def test_required_operational_blockers_remain_pending_or_unknown():
     assert "`regional_legal_access_status`: `MANUAL_LEGAL_ACCESS_REVIEW_REQUIRED`" in combined
 
 
-def test_static_registry_remains_unverified_and_connector_ready_dialects_empty():
+def test_static_registry_verified_and_connector_ready_dialects_empty():
     spec = get_public_feed_dialect(DIALECT_ID)
 
-    assert spec.verification_status.value == "unverified"
-    assert spec.enabled_for_connector is False
-    assert connector_ready_dialects() == ()
+    assert spec.verification_status.value == "verified_from_official_docs"
+    assert spec.enabled_for_connector is True
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_phase22o_source_contracts_have_no_runtime_network_or_connector_methods():

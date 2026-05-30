@@ -57,7 +57,43 @@ def test_every_claim_row_has_expected_review_fields_and_hash():
         {"public_websocket_availability", "unauthenticated_public_market_data", "orderbook_channel_feed"}
     )
     phase25r_approved_claim_ids = frozenset({"change_id"})
-    approved_claim_ids = phase25i_approved_claim_ids | phase25r_approved_claim_ids
+    # Phase 26AJ approved 15 technical rows.
+    phase26aj_approved_claim_ids = frozenset(
+        {
+            "public_rest_availability",
+            "prod_testnet_ws_endpoint",
+            "prod_testnet_rest_endpoint",
+            "rest_snapshot_requirement",
+            "gap_resubscribe_rule",
+            "heartbeat_liveness_proof",
+            "public_rate_subscription_limits",
+            "public_trades",
+            "ticker",
+            "mark_index_funding_open_interest",
+            "testnet_prod_difference",
+            "first_message_snapshot",
+            "incremental_delta",
+            "prev_change_id",
+            "continuity_condition",
+        }
+    )
+    # Phase 26AN approved 3 policy-decision claim rows.
+    phase26an_approved_claim_ids = frozenset(
+        {
+            "checksum_decision",
+            "staleness_budget",
+            "receive_lag_budget",
+        }
+    )
+    # Phase 26AR approved the regional_legal_access claim row.
+    phase26ar_approved_claim_ids = frozenset({"regional_legal_access"})
+    approved_claim_ids = (
+        phase25i_approved_claim_ids
+        | phase25r_approved_claim_ids
+        | phase26aj_approved_claim_ids
+        | phase26an_approved_claim_ids
+        | phase26ar_approved_claim_ids
+    )
     for claim_id, row in _worksheet_rows().items():
         assert row["claim_id"] == claim_id
         assert row["source_id"].startswith("DERIBIT_")
@@ -68,14 +104,24 @@ def test_every_claim_row_has_expected_review_fields_and_hash():
         if claim_id in approved_claim_ids:
             assert row["review_status"] == "APPROVED"
             assert row["reviewer_id"] == "demir_operator"
-            assert row["reviewed_at_iso"] == "2026-05-11T00:00:00Z"
             assert row["decision"] == "APPROVED"
-            expected_scope = (
-                "Phase25R_CHANGE_ID_ONLY"
-                if claim_id in phase25r_approved_claim_ids
-                else "Phase25I_APPROVE_NOW_CANDIDATES_ONLY"
-            )
-            assert expected_scope in row["rejection_reason_if_pending"]
+            if claim_id in phase26an_approved_claim_ids:
+                assert row["reviewed_at_iso"] == "2026-05-19T00:00:00Z"
+                assert "Phase26AM_POLICY_DECISIONS_PUBLIC_DATA_ONLY" in row["rejection_reason_if_pending"]
+            elif claim_id in phase26aj_approved_claim_ids:
+                assert row["reviewed_at_iso"] == "2026-05-19T00:00:00Z"
+                assert "Phase26AI_OFFICIAL_DOCS_TECHNICAL_ROWS_ONLY" in row["rejection_reason_if_pending"]
+            elif claim_id in phase26ar_approved_claim_ids:
+                assert row["reviewed_at_iso"] == "2026-05-19T00:00:00Z"
+                assert "Phase26AR_TURKEY_PUBLIC_MARKET_DATA_ONLY" in row["rejection_reason_if_pending"]
+            else:
+                assert row["reviewed_at_iso"] == "2026-05-11T00:00:00Z"
+                expected_scope = (
+                    "Phase25R_CHANGE_ID_ONLY"
+                    if claim_id in phase25r_approved_claim_ids
+                    else "Phase25I_APPROVE_NOW_CANDIDATES_ONLY"
+                )
+                assert expected_scope in row["rejection_reason_if_pending"]
         else:
             assert row["review_status"] == "PENDING"
             assert row["reviewer_id"] == "PENDING"
@@ -117,12 +163,12 @@ def test_deribit_draft_and_checklist_remain_blocked():
     assert "`enabled_for_connector`: `true`" not in combined
 
 
-def test_static_registry_remains_unverified_and_connector_ready_dialects_empty():
+def test_static_registry_verified_and_connector_ready_dialects_empty():
     spec = get_public_feed_dialect(DIALECT_ID)
 
-    assert spec.verification_status.value == "unverified"
-    assert spec.enabled_for_connector is False
-    assert connector_ready_dialects() == ()
+    assert spec.verification_status.value == "verified_from_official_docs"
+    assert spec.enabled_for_connector is True
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_no_source_network_or_connector_behavior_added():

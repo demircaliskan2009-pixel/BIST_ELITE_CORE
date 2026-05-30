@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 from crypto_core.data.public_feed_dialect import FeedDialectVerificationStatus, public_feed_dialect_connector_ready
 from crypto_core.edge.models import EdgeFamily, EdgeSignal, SignalDirection
@@ -35,7 +37,9 @@ def test_deribit_finalized_draft_has_official_source_ids_and_no_placeholder_refs
 def test_deribit_evidence_items_have_official_url_retrieval_date_and_manual_hash_placeholder():
     text = _deribit_doc()
 
-    assert text.count("doc_url`: `https://docs.deribit.com/") >= 11
+    doc_urls = re.findall(r"doc_url`: `(https://docs\.deribit\.com/[^`]+)`", text)
+    assert len(doc_urls) >= 11
+    assert all(urlparse(url).hostname == "docs.deribit.com" for url in doc_urls)
     assert text.count("retrieval_date`: `2026-05-09`") >= 11
     assert text.count("content_hash`: `CONTENT_HASH_UNAVAILABLE") >= 11
     assert text.count("manual_hash_required`: `YES`") >= 11
@@ -58,14 +62,14 @@ def test_deribit_doc_blocks_operational_connector_readiness():
     assert "not operational proof" in text
 
 
-def test_deribit_static_registry_remains_unverified_after_draft_finalization():
+def test_deribit_static_registry_verified_after_phase27_and_connector_enabled():
     spec = get_public_feed_dialect("deribit:l2_orderbook:placeholder")
 
     assert spec.venue_id is VenueId.DERIBIT
-    assert spec.verification_status is FeedDialectVerificationStatus.UNVERIFIED
-    assert spec.enabled_for_connector is False
-    assert public_feed_dialect_connector_ready(spec) is False
-    assert connector_ready_dialects() == ()
+    assert spec.verification_status is FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS
+    assert spec.enabled_for_connector is True
+    assert public_feed_dialect_connector_ready(spec) is True
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_binance_comparison_is_docs_only_and_cannot_enable_any_dialect():
@@ -80,7 +84,7 @@ def test_binance_comparison_is_docs_only_and_cannot_enable_any_dialect():
     assert "Open Interest REST" in text
     assert "Connection And Rate-Limit Evidence" in text
     assert "`enabled_for_connector`: `false`" in text
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_no_network_client_or_credential_implementation_added_to_venue_sources():

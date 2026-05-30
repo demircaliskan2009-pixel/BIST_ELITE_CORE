@@ -67,16 +67,16 @@ def test_overlay_derives_local_deribit_orderbook_candidate_without_operational_a
     assert result.verified_spec.max_gap_tolerance == 0
     assert result.verified_spec.supports_delta_stream is True
     assert result.verified_spec.supports_resync is True
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
-def test_static_deribit_registry_remains_unverified_connector_disabled():
+def test_static_deribit_registry_verified_connector_enabled_for_public_market_data():
     static_spec = get_public_feed_dialect(_DERIBIT_DIALECT_ID)
 
-    assert static_spec.verification_status is FeedDialectVerificationStatus.UNVERIFIED
-    assert static_spec.enabled_for_connector is False
-    assert public_feed_dialect_connector_ready(static_spec) is False
-    assert connector_ready_dialects() == ()
+    assert static_spec.verification_status is FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS
+    assert static_spec.enabled_for_connector is True
+    assert public_feed_dialect_connector_ready(static_spec) is True
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_missing_content_hash_blocks_overlay_connector_readiness():
@@ -194,7 +194,7 @@ def test_live_execution_lifecycle_still_rejects_live_mode():
     assert result.rejection_reason == RejectionReason.LIVE_NOT_ENABLED
 
 
-_DERIBIT_DIALECT_ID = "deribit:l2_orderbook:placeholder"
+_DERIBIT_DIALECT_ID = "deribit:l2_orderbook:book_instrument_interval"
 _RETRIEVED_AT_NS = 2_200_000_000_000
 
 

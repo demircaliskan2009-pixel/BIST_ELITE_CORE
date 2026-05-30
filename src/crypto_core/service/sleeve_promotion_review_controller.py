@@ -288,7 +288,6 @@ class SleevePromotionReviewController:
         )
 
     def restore(self, snapshot: SleevePromotionReviewSnapshot):
-        self.workflow_snapshot = self.workflow_snapshot  # No-op for now; extend as needed
         self.history = list(snapshot.history)
         self._validate()
 

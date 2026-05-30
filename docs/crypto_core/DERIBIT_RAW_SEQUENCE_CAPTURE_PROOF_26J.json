@@ -1,0 +1,80 @@
+{
+  "schema": "deribit_raw_sequence_capture_proof_26j",
+  "phase": "26J",
+  "generated_at": "2026-05-18",
+  "source": "downloaded_github_actions_artifact",
+  "workflow_name": "Deribit Public Smoke",
+  "run_id": 26033502712,
+  "run_url": "https://github.com/demircaliskan2009-pixel/BIST_ELITE_CORE/actions/runs/26033502712",
+  "run_status": "completed",
+  "run_conclusion": "failure",
+  "run_created_at_utc": "2026-05-18T12:28:58Z",
+  "run_updated_at_utc": "2026-05-18T12:29:58Z",
+  "job_id": 76525392897,
+  "job_name": "deribit-public-smoke",
+  "job_started_at_utc": "2026-05-18T12:29:04Z",
+  "job_completed_at_utc": "2026-05-18T12:29:57Z",
+  "head_branch": "main",
+  "head_sha": "30aa40d95ad75f204635766f12f1249387786ac8",
+  "event": "workflow_dispatch",
+  "artifact_name": "deribit-public-smoke-proof",
+  "artifact_file": "smoke_result.json",
+  "artifact_sha256": "f41fa6a8a02a678a7d6714f7a9b6a9ced717d234e8e370a3ba42883479f7456d",
+  "artifact_acceptance": {
+    "accepted_for_classification": false,
+    "rejection_reasons": [
+      "artifact:accepted_false",
+      "artifact:rejection_reasons_non_empty",
+      "artifact:message_count_lt_1",
+      "artifact:sample_events_missing_or_empty"
+    ]
+  },
+  "artifact_payload": {
+    "accepted": false,
+    "channels": [
+      "book.BTC-PERPETUAL.none.10.100ms"
+    ],
+    "completed_at_ns": 1779107394863923161,
+    "dry_run": true,
+    "duration_seconds": 30.0,
+    "max_messages": 100,
+    "message_count": 0,
+    "operator_authorization": "PUBLIC_MARKET_DATA_ONLY",
+    "rejection_reasons": [
+      "deribit_ws:timeout"
+    ],
+    "sample_events": [],
+    "started_at_ns": 1779107364640752570,
+    "ws_url": "wss://www.deribit.com/ws/api/v2"
+  },
+  "duration_seconds": 30.0,
+  "max_messages": 100,
+  "message_count": 0,
+  "accepted": false,
+  "rejection_reasons": [
+    "deribit_ws:timeout"
+  ],
+  "sanitized_sample_events": [],
+  "computed_counts": {
+    "non_null_prev_change_id_count": 0,
+    "adjacent_pair_count": 0,
+    "continuity_match_count": 0,
+    "snapshot_type_count": 0,
+    "delta_or_change_type_count": 0
+  },
+  "classification_effect": {
+    "prev_change_id": "WAIT_INSUFFICIENT",
+    "continuity_condition": "WAIT_INSUFFICIENT",
+    "first_message_snapshot": "WAIT_INSUFFICIENT",
+    "incremental_delta": "WAIT_INSUFFICIENT"
+  },
+  "safety_invariants": {
+    "public_market_data_only": true,
+    "dry_run": true,
+    "no_private_api": true,
+    "no_credentials": true,
+    "no_orders": true,
+    "no_connector_enablement": true,
+    "no_worksheet_approval": true
+  }
+}

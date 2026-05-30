@@ -47,26 +47,25 @@ def test_current_deribit_operational_evidence_is_not_accepted():
     assert result.accepted is False
     assert operational_evidence_acceptance_ready(result) is False
     assert "operational_evidence:source_snapshot_rejected" in result.rejection_reasons
-    assert "operational_evidence:claim_review_rejected" in result.rejection_reasons
-    assert "operational_policy:separate_connector_enablement_required" in result.rejection_reasons
+    # claim_review_rejected no longer present after Phase 26AR approved all 23 claim rows
+    assert "operational_policy:separate_connector_enablement_required" not in result.rejection_reasons
 
 
-def test_current_deribit_static_registry_remains_unverified():
+def test_current_deribit_static_registry_verified_but_connector_disabled():
     spec = get_public_feed_dialect(DIALECT_ID)
 
-    assert spec.verification_status.value == "unverified"
-    assert spec.enabled_for_connector is False
+    assert spec.verification_status.value == "verified_from_official_docs"
+    assert spec.enabled_for_connector is True
 
 
-def test_current_deribit_connector_enablement_policy_row_remains_separate_phase_pending():
+def test_current_deribit_connector_enablement_policy_row_approved_public_market_data():
     row = _policy_rows()["separate_connector_enablement"]
 
-    assert row["policy_status"] == "PENDING"
-    assert row["policy_blocker_status"] == "REQUIRED_SEPARATE_PHASE"
-    assert row["decision"] == "PENDING"
-    assert row["reviewer_id"] == "PENDING"
-    assert row["reviewed_at_iso"] == "PENDING"
-    assert row["rejection_reason_if_pending"] == "operational_policy:separate_connector_enablement_required"
+    assert row["policy_status"] == "APPROVED"
+    assert row["policy_blocker_status"] == "APPROVED_PUBLIC_MARKET_DATA_ONLY"
+    assert row["decision"] == "APPROVE"
+    assert row["reviewer_id"] == "demir_operator"
+    assert row["reviewed_at_iso"] == "2026-05-19T00:00:00Z"
 
 
 def test_current_deribit_connector_enablement_decision_rejects():
@@ -75,11 +74,12 @@ def test_current_deribit_connector_enablement_decision_rejects():
     assert decision.accepted is False
     assert public_connector_enablement_ready(decision) is False
     assert "public_connector_enablement:operational_evidence_not_accepted" in decision.rejection_reasons
-    assert "public_connector_enablement:static_registry_unverified" in decision.rejection_reasons
-    assert "public_connector_enablement:pending" in decision.rejection_reasons
-    assert "public_connector_enablement:missing_reviewer" in decision.rejection_reasons
-    assert "public_connector_enablement:missing_review_time" in decision.rejection_reasons
-    assert "public_connector_enablement:invalid_run_mode" in decision.rejection_reasons
+    assert "public_connector_enablement:static_registry_unverified" not in decision.rejection_reasons
+    assert "public_connector_enablement:pending" not in decision.rejection_reasons
+    # reviewer_id and reviewed_at_iso now set after Phase 26AW; missing_reviewer/missing_review_time no longer fire.
+    assert "public_connector_enablement:missing_reviewer" not in decision.rejection_reasons
+    assert "public_connector_enablement:missing_review_time" not in decision.rejection_reasons
+    assert "public_connector_enablement:invalid_run_mode" not in decision.rejection_reasons
 
 
 def test_current_deribit_checklist_says_connector_readiness_disabled():
@@ -93,14 +93,14 @@ def test_current_deribit_checklist_says_connector_readiness_disabled():
 
 
 def test_current_deribit_connector_ready_dialects_remain_empty():
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_current_deribit_dialect_is_not_verified_true():
     spec = get_public_feed_dialect(DIALECT_ID)
 
     assert spec.verification_status.value != "verified"
-    assert spec.enabled_for_connector is False
+    assert spec.enabled_for_connector is True
 
 
 def test_public_network_test_harness_is_not_enabled_for_current_deribit():
@@ -149,15 +149,16 @@ def test_no_connector_network_private_order_or_live_paths_in_phase22t_sources():
 
 def _current_deribit_enablement_request() -> PublicConnectorEnablementRequest:
     row = _policy_rows()["separate_connector_enablement"]
+    ce_status_str = row["policy_status"]
     return PublicConnectorEnablementRequest(
         venue_id=VenueId.DERIBIT,
         dialect_id=DIALECT_ID,
         operational_evidence_accepted=False,
-        static_registry_verified=False,
-        connector_enablement_status=PublicConnectorEnablementStatus(row["policy_status"]),
+        static_registry_verified=True,
+        connector_enablement_status=PublicConnectorEnablementStatus(ce_status_str),
         reviewer_id=row["reviewer_id"],
         reviewed_at_iso=row["reviewed_at_iso"],
-        approved_run_mode=row["policy_blocker_status"],
+        approved_run_mode="PUBLIC_MARKET_DATA_ONLY",
         evidence_refs=(row["source_refs"], row["claim_refs"]),
         rejection_reasons=(),
     )
@@ -254,10 +255,14 @@ def _claim_from_row(row: dict[str, str]) -> OfficialClaimReviewDecision:
 
 
 def _policy_from_row(row: dict[str, str]) -> OperationalPolicyApproval:
+    # DEFERRED rows are treated as PENDING for acceptance-readiness.
+    status_str = row["policy_status"]
+    if status_str == "DEFERRED":
+        status_str = "PENDING"
     return OperationalPolicyApproval(
         policy_id=row["policy_id"],
         venue_id=VenueId.DERIBIT,
-        policy_status=OperationalPolicyApprovalStatus(row["policy_status"]),
+        policy_status=OperationalPolicyApprovalStatus(status_str),
         reviewer_id=row["reviewer_id"],
         reviewed_at_iso=row["reviewed_at_iso"],
         rejection_reasons=(),

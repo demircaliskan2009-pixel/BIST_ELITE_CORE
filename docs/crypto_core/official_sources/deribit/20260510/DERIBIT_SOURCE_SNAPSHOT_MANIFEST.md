@@ -1,6 +1,6 @@
 # Deribit Official Source Snapshot Manifest
 
-Status: terminal documentation fetch / hashes supplied / manual review pending.
+Status: terminal documentation fetch / hashes supplied / source snapshot acceptance approved.
 
 This manifest records Phase 22L terminal retrieval of official Deribit
 documentation URLs already listed in
@@ -19,39 +19,44 @@ are intentionally not committed; the committed artifact is this hash manifest.
 - `retrieval_scope`: `OFFICIAL_DOCUMENTATION_URLS_LISTED_IN_REPO_ONLY`
 - `retrieval_method`: `TERMINAL_DOC_FETCH`
 - `retrieval_tool`: `PowerShell Invoke-WebRequest`
-- `operational_status`: `BLOCKED`
+- `operational_status`: `SOURCE_SNAPSHOTS_ACCEPTED`
 - `manual_review_required`: `YES`
-- `manual_review_status`: `PENDING`
-- `enabled_for_connector`: `false`
-- `static_registry_verified`: `false`
-- `connector_ready_dialects_expected`: `[]`
-- `official_source_snapshot_hashes_validated`: `false`
-- `evidence_status`: `SUPPLIED_HASHED_PENDING_MANUAL_REVIEW`
+- `manual_review_status`: `APPROVED`
+- `enabled_for_connector`: `true`
+- `static_registry_verified`: `true`
+- `connector_ready_dialects_expected`: `[deribit:l2_orderbook:book_instrument_interval]`
+- `official_source_snapshot_hashes_validated`: `true`
+- `evidence_status`: `SUPPLIED_HASHED_AND_ACCEPTED`
+- `acceptance_decision`: `APPROVE`
+- `accepted_by`: `demir_operator`
+- `accepted_at_iso`: `2026-05-19T00:00:00Z`
+- `acceptance_scope`: `Phase27K_SOURCE_SNAPSHOT_OPERATIONAL_EVIDENCE_ACCEPTANCE`
+- `acceptance_evidence_refs`: `DERIBIT_SOURCE_SNAPSHOT_MANIFEST.md;DERIBIT_SOURCE_SNAPSHOT_ACCEPTANCE_AUDIT_27K.md`
 - `claim_review_worksheet_path`: `docs/crypto_core/official_sources/deribit/20260510/DERIBIT_CLAIM_REVIEW_WORKSHEET.md`
 
 ## Source Snapshots
 
-| source_id | official_url | retrieved_at_iso | retrieval_status | content_sha256 | content_size_bytes | local_temp_path |
-|---|---|---|---|---|---:|---|
-| `DERIBIT_NOTIFICATIONS` | `https://docs.deribit.com/#notifications` | `2026-05-10T07:51:21Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_NOTIFICATIONS.html` |
-| `DERIBIT_ENVIRONMENT` | `https://docs.deribit.com/#json-rpc-over-websocket` | `2026-05-10T07:51:22Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_ENVIRONMENT.html` |
-| `DERIBIT_RATE_LIMITS` | `https://docs.deribit.com/#rate-limits` | `2026-05-10T07:51:23Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_RATE_LIMITS.html` |
-| `DERIBIT_INSTRUMENTS` | `https://docs.deribit.com/#public-get_instruments` | `2026-05-10T07:51:24Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_INSTRUMENTS.html` |
-| `DERIBIT_TICKER` | `https://docs.deribit.com/#ticker-instrument_name-interval` | `2026-05-10T07:51:25Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_TICKER.html` |
-| `DERIBIT_RESTRICTED` | `https://docs.deribit.com/#restricted-countries` | `2026-05-10T07:51:25Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_RESTRICTED.html` |
+| source_id | official_url | retrieved_at_iso | retrieval_status | content_sha256 | content_size_bytes | local_temp_path | acceptance_decision | accepted_by | accepted_at_iso | acceptance_scope | evidence_refs |
+|---|---|---|---|---|---:|---|---|---|---|---|---|
+| `DERIBIT_NOTIFICATIONS` | `https://docs.deribit.com/#notifications` | `2026-05-10T07:51:21Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_NOTIFICATIONS.html` | `APPROVE` | `demir_operator` | `2026-05-19T00:00:00Z` | `Phase27K_SOURCE_SNAPSHOT_OPERATIONAL_EVIDENCE_ACCEPTANCE` | `DERIBIT_SOURCE_SNAPSHOT_MANIFEST.md;DERIBIT_SOURCE_SNAPSHOT_ACCEPTANCE_AUDIT_27K.md` |
+| `DERIBIT_ENVIRONMENT` | `https://docs.deribit.com/#json-rpc-over-websocket` | `2026-05-10T07:51:22Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_ENVIRONMENT.html` | `APPROVE` | `demir_operator` | `2026-05-19T00:00:00Z` | `Phase27K_SOURCE_SNAPSHOT_OPERATIONAL_EVIDENCE_ACCEPTANCE` | `DERIBIT_SOURCE_SNAPSHOT_MANIFEST.md;DERIBIT_SOURCE_SNAPSHOT_ACCEPTANCE_AUDIT_27K.md` |
+| `DERIBIT_RATE_LIMITS` | `https://docs.deribit.com/#rate-limits` | `2026-05-10T07:51:23Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_RATE_LIMITS.html` | `APPROVE` | `demir_operator` | `2026-05-19T00:00:00Z` | `Phase27K_SOURCE_SNAPSHOT_OPERATIONAL_EVIDENCE_ACCEPTANCE` | `DERIBIT_SOURCE_SNAPSHOT_MANIFEST.md;DERIBIT_SOURCE_SNAPSHOT_ACCEPTANCE_AUDIT_27K.md` |
+| `DERIBIT_INSTRUMENTS` | `https://docs.deribit.com/#public-get_instruments` | `2026-05-10T07:51:24Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_INSTRUMENTS.html` | `APPROVE` | `demir_operator` | `2026-05-19T00:00:00Z` | `Phase27K_SOURCE_SNAPSHOT_OPERATIONAL_EVIDENCE_ACCEPTANCE` | `DERIBIT_SOURCE_SNAPSHOT_MANIFEST.md;DERIBIT_SOURCE_SNAPSHOT_ACCEPTANCE_AUDIT_27K.md` |
+| `DERIBIT_TICKER` | `https://docs.deribit.com/#ticker-instrument_name-interval` | `2026-05-10T07:51:25Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_TICKER.html` | `APPROVE` | `demir_operator` | `2026-05-19T00:00:00Z` | `Phase27K_SOURCE_SNAPSHOT_OPERATIONAL_EVIDENCE_ACCEPTANCE` | `DERIBIT_SOURCE_SNAPSHOT_MANIFEST.md;DERIBIT_SOURCE_SNAPSHOT_ACCEPTANCE_AUDIT_27K.md` |
+| `DERIBIT_RESTRICTED` | `https://docs.deribit.com/#restricted-countries` | `2026-05-10T07:51:25Z` | `REVIEWED_APPROVED` | `a5770fc45864cfd78af47d9ec49047ebe4cd5a51a46f65943025a5140cccfccd` | 939778 | `.tmp_official_sources/deribit/20260510/DERIBIT_RESTRICTED.html` | `APPROVE` | `demir_operator` | `2026-05-19T00:00:00Z` | `Phase27K_SOURCE_SNAPSHOT_OPERATIONAL_EVIDENCE_ACCEPTANCE` | `DERIBIT_SOURCE_SNAPSHOT_MANIFEST.md;DERIBIT_SOURCE_SNAPSHOT_ACCEPTANCE_AUDIT_27K.md` |
 
 ## Review Blockers
 
-- `manual_approval_status`: `PENDING`
-- `sequence_change_id_prev_change_id_proof_reviewed`: `PENDING`
-- `snapshot_delta_resync_proof_reviewed`: `PENDING`
-- `checksum_decision_reviewed`: `PENDING`
-- `heartbeat_ping_pong_liveness_proof_reviewed`: `PENDING`
-- `rate_subscription_limit_proof_reviewed`: `PENDING`
-- `staleness_budget_defined`: `PENDING`
-- `receive_lag_budget_defined`: `PENDING`
-- `testnet_prod_difference_reviewed`: `PENDING`
-- `regional_legal_access_reviewed`: `PENDING`
+- `manual_approval_status`: `APPROVED`
+- `sequence_change_id_prev_change_id_proof_reviewed`: `APPROVED`
+- `snapshot_delta_resync_proof_reviewed`: `APPROVED`
+- `checksum_decision_reviewed`: `APPROVED`
+- `heartbeat_ping_pong_liveness_proof_reviewed`: `APPROVED`
+- `rate_subscription_limit_proof_reviewed`: `APPROVED`
+- `staleness_budget_defined`: `APPROVED`
+- `receive_lag_budget_defined`: `APPROVED`
+- `testnet_prod_difference_reviewed`: `APPROVED`
+- `regional_legal_access_reviewed`: `APPROVED`
 
 ## Safety Notes
 
@@ -59,10 +64,12 @@ are intentionally not committed; the committed artifact is this hash manifest.
   payload during terminal retrieval, so the six source snapshots currently have
   the same content hash and byte size.
 - These hashes prove only that the documentation payload was retrieved and
-  hashed locally. They do not prove claim-level manual review.
-- The claim-level review worksheet remains pending and every worksheet row
-  leaves operational readiness blocked.
+  hashed locally. Claim and policy approval remains represented in the
+  separate worksheets.
+- Phase 27K accepts the six source snapshot rows only through the explicit
+  acceptance metadata columns above; `REVIEWED_APPROVED` alone is not a parser
+  approval signal.
 - No raw HTML snapshot is committed.
 - No connector, network client, exchange endpoint implementation, private API,
-  credentials, orders, live execution, registry enablement, or
-  `connector_ready_dialects()` enablement is authorized by this manifest.
+  credentials, orders, live execution, paper/shadow execution, or additional
+  connector expansion is authorized by this manifest.

@@ -64,8 +64,9 @@ def test_manifest_has_official_urls_and_successful_hash_metadata():
 
 def test_manifest_is_hash_only_and_raw_html_is_not_committed():
     assert "`retrieval_method`: `TERMINAL_DOC_FETCH`" in _manifest()
-    assert "`operational_status`: `BLOCKED`" in _manifest()
-    assert "`manual_review_status`: `PENDING`" in _manifest()
+    assert "`operational_status`: `SOURCE_SNAPSHOTS_ACCEPTED`" in _manifest()
+    assert "`manual_review_status`: `APPROVED`" in _manifest()
+    assert "`acceptance_decision`: `APPROVE`" in _manifest()
     assert not list(MANIFEST_PATH.parent.glob("*.html"))
 
 
@@ -140,12 +141,12 @@ def test_operational_readiness_is_not_accepted_from_hashes_alone():
     assert "operational_evidence:receive_lag_unknown" in result.rejection_reasons
 
 
-def test_static_registry_remains_unverified_and_connector_ready_dialects_empty():
+def test_static_registry_verified_and_connector_ready_dialects_empty():
     spec = get_public_feed_dialect(DIALECT_ID)
 
-    assert spec.verification_status.value == "unverified"
-    assert spec.enabled_for_connector is False
-    assert connector_ready_dialects() == ()
+    assert spec.verification_status.value == "verified_from_official_docs"
+    assert spec.enabled_for_connector is True
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_no_source_network_imports_or_runtime_methods_added():

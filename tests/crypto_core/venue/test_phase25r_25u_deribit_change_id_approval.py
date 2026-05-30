@@ -25,7 +25,28 @@ _PHASE25I_APPROVED = {
     "orderbook_channel_feed",
 }
 _PHASE25R_APPROVED = {"change_id"}
-_EXPECTED_APPROVED = _PHASE25I_APPROVED | _PHASE25R_APPROVED
+_PHASE26AJ_APPROVED = {
+    "public_rest_availability",
+    "prod_testnet_ws_endpoint",
+    "prod_testnet_rest_endpoint",
+    "rest_snapshot_requirement",
+    "gap_resubscribe_rule",
+    "heartbeat_liveness_proof",
+    "public_rate_subscription_limits",
+    "public_trades",
+    "ticker",
+    "mark_index_funding_open_interest",
+    "testnet_prod_difference",
+    "first_message_snapshot",
+    "incremental_delta",
+    "prev_change_id",
+    "continuity_condition",
+}
+_PHASE26AN_APPROVED = frozenset({"checksum_decision", "staleness_budget", "receive_lag_budget"})
+_PHASE26AR_APPROVED = frozenset({"regional_legal_access"})
+_EXPECTED_APPROVED = (
+    _PHASE25I_APPROVED | _PHASE25R_APPROVED | _PHASE26AJ_APPROVED | _PHASE26AN_APPROVED | _PHASE26AR_APPROVED
+)
 
 
 def _claim_rows() -> dict[str, dict[str, str]]:
@@ -63,33 +84,34 @@ def test_phase25s_pending_counts_decrease_by_one_claim_only() -> None:
     claim_pending = [row for row in claim_rows.values() if row["decision"] == "PENDING"]
     policy_pending = [row for row in policy_rows.values() if row["decision"] == "PENDING"]
 
-    assert len(claim_pending) == 19
-    assert len(policy_pending) == 7
+    assert len(claim_pending) == 0
+    assert len(policy_pending) == 0  # 0 after Phase 26AW
 
     result = evaluate_deribit_manual_review_readiness()
-    assert len(result.pending_rows) == 26
+    assert len(result.pending_rows) == 0
     assert "claim_review:change_id" not in result.pending_rows
-    assert "claim_review:prev_change_id" in result.pending_rows
+    # Phase 26AJ later approved prev_change_id; it is no longer pending
+    assert "claim_review:prev_change_id" not in result.pending_rows
 
 
 def test_phase25s_validator_remains_blocked_after_change_id_only_approval() -> None:
     result = evaluate_deribit_manual_review_readiness()
 
-    assert result.accepted is False
-    assert result.evidence_review_complete is False
-    assert result.ready_for_engineering_patch is False
+    assert result.accepted is True
+    assert result.evidence_review_complete is True
+    assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is False
     assert result.b1_b5_status == {
-        "B1": "BLOCKED",
-        "B2": "BLOCKED",
-        "B3": "BLOCKED",
-        "B4": "BLOCKED",
+        "B1": "READY_FOR_HUMAN_GATE",
+        "B2": "READY",
+        "B3": "READY",
+        "B4": "READY",
         "B5": "BLOCKED",
     }
 
 
 def test_phase25s_connector_ready_dialects_remains_empty() -> None:
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_phase25s_candidate_doc_reflects_change_id_approved_not_candidate() -> None:

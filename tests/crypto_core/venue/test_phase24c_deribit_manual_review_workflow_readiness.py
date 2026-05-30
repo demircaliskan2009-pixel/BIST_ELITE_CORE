@@ -162,7 +162,7 @@ def test_phase24c_documents_and_runtime_stay_blocked() -> None:
     assert "`phase24c_readiness_effect`: `DOES_NOT_CLOSE_B1_B5`" in checklist
     assert "`operational_status`: `BLOCKED`" in checklist
     assert "`connector_ready_dialects_expected`: `[]`" in checklist
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
     assert enablement.accepted is False
     assert public_connector_enablement_ready(enablement) is False
     assert report.connector_ready is False

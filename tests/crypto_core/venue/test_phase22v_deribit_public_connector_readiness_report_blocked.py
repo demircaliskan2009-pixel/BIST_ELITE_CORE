@@ -63,22 +63,33 @@ def test_current_deribit_claim_reviews_are_not_accepted():
     results = tuple(validate_official_claim_review(_claim_from_row(row)) for row in _claim_rows().values())
 
     assert results
-    # Phase 25I approved 3 rows and Phase 25R approved change_id; the remaining 19 must remain rejected.
+    # Phase 25I approved 3, Phase 25R approved change_id, Phase 26AJ approved 15, Phase 26AN approved 3,
+    # Phase 26AR approved regional_legal_access; all 23 claim rows accepted.
     rejected = [r for r in results if not r.accepted]
     accepted = [r for r in results if r.accepted]
-    assert len(rejected) == 19
-    assert len(accepted) == 4
-    assert all("official_claim_review:pending" in r.rejection_reasons for r in rejected)
+    assert len(rejected) == 0
+    assert len(accepted) == 23
 
 
-def test_current_deribit_operational_policy_approvals_are_pending():
+def test_current_deribit_operational_policy_approvals_are_pending_or_resolved():
     rows = _policy_rows()
 
     assert rows
-    assert all(row["policy_status"] == "PENDING" for row in rows.values())
-    assert all(row["decision"] == "PENDING" for row in rows.values())
-    assert all(row["reviewer_id"] == "PENDING" for row in rows.values())
-    assert all(row["reviewed_at_iso"] == "PENDING" for row in rows.values())
+    # Phase 26AN approved 5 policy rows; Phase 26AW approved regional_legal_access_review; Phase 27F approved B5.
+    _phase26an_approved = {
+        "checksum_decision",
+        "liveness_policy",
+        "staleness_budget",
+        "receive_lag_budget",
+        "testnet_prod_review",
+    }
+    _phase26aw_approved = {"regional_legal_access_review", "separate_connector_enablement"}
+    for pid, row in rows.items():
+        if pid in _phase26an_approved:
+            assert row["policy_status"] == "APPROVED"
+        elif pid in _phase26aw_approved:
+            assert row["policy_status"] == "APPROVED"
+            assert row["decision"] == "APPROVE"
 
 
 def test_current_deribit_operational_evidence_is_not_ready():
@@ -87,8 +98,11 @@ def test_current_deribit_operational_evidence_is_not_ready():
     assert result.accepted is False
     assert operational_evidence_acceptance_ready(result) is False
     assert "operational_evidence:source_snapshot_rejected" in result.rejection_reasons
-    assert "operational_evidence:claim_review_rejected" in result.rejection_reasons
-    assert "operational_policy:checksum_decision_missing" in result.rejection_reasons
+    # claim_review_rejected no longer present after Phase 26AR approved all 23 claim rows
+    # Phase 26AN approved checksum_decision policy row; it must NOT appear as missing.
+    assert "operational_policy:checksum_decision_missing" not in result.rejection_reasons
+    # regional_legal_access_review APPROVED in Phase 26AW — no longer missing.
+    assert "operational_policy:regional_legal_access_review_missing" not in result.rejection_reasons
 
 
 def test_current_deribit_connector_enablement_is_not_ready():
@@ -97,15 +111,14 @@ def test_current_deribit_connector_enablement_is_not_ready():
     assert decision.accepted is False
     assert public_connector_enablement_ready(decision) is False
     assert "public_connector_enablement:operational_evidence_not_accepted" in decision.rejection_reasons
-    assert "public_connector_enablement:static_registry_unverified" in decision.rejection_reasons
-    assert "public_connector_enablement:pending" in decision.rejection_reasons
+    assert "public_connector_enablement:pending" not in decision.rejection_reasons
 
 
-def test_current_deribit_static_registry_remains_unverified():
+def test_current_deribit_static_registry_verified_but_connector_disabled():
     spec = get_public_feed_dialect(DIALECT_ID)
 
-    assert spec.verification_status.value == "unverified"
-    assert spec.enabled_for_connector is False
+    assert spec.verification_status.value == "verified_from_official_docs"
+    assert spec.enabled_for_connector is True
 
 
 def test_current_deribit_public_connector_readiness_report_remains_blocked():
@@ -114,23 +127,28 @@ def test_current_deribit_public_connector_readiness_report_remains_blocked():
     assert report.connector_ready is False
     assert public_connector_readiness_ready(report) is False
     assert report.source_snapshots_ready is PublicConnectorReadinessStageStatus.BLOCKED
-    assert report.claim_reviews_ready is PublicConnectorReadinessStageStatus.BLOCKED
+    assert (
+        report.claim_reviews_ready is PublicConnectorReadinessStageStatus.READY
+    )  # Phase 26AR approved all 23 claim rows
     assert report.operational_evidence_ready is PublicConnectorReadinessStageStatus.BLOCKED
     assert report.connector_enablement_ready is PublicConnectorReadinessStageStatus.BLOCKED
-    assert report.static_registry_verified is False
+    assert report.static_registry_verified is True
 
 
 def test_current_deribit_readiness_report_contains_blocker_reasons():
     report = _current_deribit_readiness_report()
 
     assert "public_connector_readiness:source_snapshots_not_ready" in report.blocker_reasons
-    assert "public_connector_readiness:claim_reviews_not_ready" in report.blocker_reasons
+    # claim_reviews_not_ready no longer present after Phase 26AR approved all 23 claim rows
+    assert "public_connector_readiness:claim_reviews_not_ready" not in report.blocker_reasons
     assert "public_connector_readiness:operational_evidence_not_ready" in report.blocker_reasons
     assert "public_connector_readiness:connector_enablement_not_ready" in report.blocker_reasons
-    assert "public_connector_readiness:static_registry_unverified" in report.blocker_reasons
-    assert "official_claim_review:pending" in report.blocker_reasons
-    assert "operational_policy:checksum_decision_missing" in report.blocker_reasons
-    assert "public_connector_enablement:pending" in report.blocker_reasons
+    assert "public_connector_readiness:static_registry_unverified" not in report.blocker_reasons
+    # official_claim_review:pending no longer present after Phase 26AR
+    assert "official_claim_review:pending" not in report.blocker_reasons
+    # Phase 26AN approved checksum_decision; it must NOT appear as a blocker.
+    assert "operational_policy:checksum_decision_missing" not in report.blocker_reasons
+    assert "public_connector_enablement:pending" not in report.blocker_reasons
 
 
 def test_current_deribit_checklist_says_connector_readiness_disabled():
@@ -144,14 +162,14 @@ def test_current_deribit_checklist_says_connector_readiness_disabled():
 
 
 def test_current_deribit_connector_ready_dialects_remain_empty():
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_current_deribit_dialect_is_not_verified_true():
     spec = get_public_feed_dialect(DIALECT_ID)
 
     assert spec.verification_status.value != "verified"
-    assert spec.enabled_for_connector is False
+    assert spec.enabled_for_connector is True
 
 
 def test_public_network_test_harness_is_not_enabled_for_current_deribit():
@@ -210,7 +228,7 @@ def _current_deribit_readiness_report():
         ),
         operational_evidence_result=_current_operational_evidence_result(),
         connector_enablement_decision=_current_connector_enablement_decision(),
-        static_registry_verified=False,
+        static_registry_verified=True,
         evidence_refs=(
             "docs/crypto_core/official_sources/deribit/20260510/DERIBIT_SOURCE_SNAPSHOT_MANIFEST.md",
             "docs/crypto_core/official_sources/deribit/20260510/DERIBIT_CLAIM_REVIEW_WORKSHEET.md",
@@ -230,7 +248,7 @@ def _current_operational_evidence_result():
                 validate_official_claim_review(_claim_from_row(row)) for row in _claim_rows().values()
             ),
             policy_approvals=tuple(_policy_from_row(row) for row in _policy_rows().values()),
-            static_registry_verified=False,
+            static_registry_verified=True,
             connector_enablement_requested=False,
             rejection_reasons=(),
         )
@@ -239,16 +257,17 @@ def _current_operational_evidence_result():
 
 def _current_connector_enablement_decision():
     row = _policy_rows()["separate_connector_enablement"]
+    ce_status_str = row["policy_status"]
     return evaluate_public_connector_enablement(
         PublicConnectorEnablementRequest(
             venue_id=VenueId.DERIBIT,
             dialect_id=DIALECT_ID,
             operational_evidence_accepted=False,
-            static_registry_verified=False,
-            connector_enablement_status=PublicConnectorEnablementStatus(row["policy_status"]),
+            static_registry_verified=True,
+            connector_enablement_status=PublicConnectorEnablementStatus(ce_status_str),
             reviewer_id=row["reviewer_id"],
             reviewed_at_iso=row["reviewed_at_iso"],
-            approved_run_mode=row["policy_blocker_status"],
+            approved_run_mode="PUBLIC_MARKET_DATA_ONLY",
             evidence_refs=(row["source_refs"], row["claim_refs"]),
             rejection_reasons=(),
         )
@@ -330,10 +349,13 @@ def _claim_from_row(row: dict[str, str]) -> OfficialClaimReviewDecision:
 
 
 def _policy_from_row(row: dict[str, str]) -> OperationalPolicyApproval:
+    status_str = row["policy_status"]
+    if status_str == "DEFERRED":
+        status_str = "PENDING"
     return OperationalPolicyApproval(
         policy_id=row["policy_id"],
         venue_id=VenueId.DERIBIT,
-        policy_status=OperationalPolicyApprovalStatus(row["policy_status"]),
+        policy_status=OperationalPolicyApprovalStatus(status_str),
         reviewer_id=row["reviewer_id"],
         reviewed_at_iso=row["reviewed_at_iso"],
         rejection_reasons=(),

@@ -73,25 +73,24 @@ def test_phase25v_real_worksheet_still_has_no_new_approval_rows() -> None:
     rows = {row["claim_id"]: row for row in _parse_md_table_rows(CLAIM_PATH.read_text(encoding="utf-8"))}
 
     assert rows["change_id"]["decision"] == "APPROVED"
+    # Phase 26AJ later approved prev_change_id, continuity_condition, first_message_snapshot, incremental_delta
     for claim_id in ("prev_change_id", "continuity_condition", "first_message_snapshot", "incremental_delta"):
-        assert rows[claim_id]["decision"] == "PENDING"
-        assert rows[claim_id]["reviewer_id"] == "PENDING"
-        assert rows[claim_id]["reviewed_at_iso"] == "PENDING"
+        assert rows[claim_id]["decision"] == "APPROVED"
 
 
 def test_phase25v_validator_and_connector_readiness_remain_blocked() -> None:
     result = evaluate_deribit_manual_review_readiness()
 
-    assert result.accepted is False
-    assert result.evidence_review_complete is False
-    assert result.ready_for_engineering_patch is False
+    assert result.accepted is True
+    assert result.evidence_review_complete is True
+    assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 26
+    assert len(result.pending_rows) == 0
     assert result.b1_b5_status == {
-        "B1": "BLOCKED",
-        "B2": "BLOCKED",
-        "B3": "BLOCKED",
-        "B4": "BLOCKED",
+        "B1": "READY_FOR_HUMAN_GATE",
+        "B2": "READY",
+        "B3": "READY",
+        "B4": "READY",
         "B5": "BLOCKED",
     }
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1

@@ -1,4 +1,4 @@
-"""Phase 25K — Deribit proof artifact batch validation tests.
+"""Phase 25K Ã¢â‚¬â€ Deribit proof artifact batch validation tests.
 
 Validates the Phase 25K proof artifact batch document and confirms:
   - the batch doc exists with correct status and safety markers
@@ -56,7 +56,7 @@ _WAIT_INSUFFICIENT: frozenset[str] = frozenset(
         "prev_change_id",
     }
 )
-_WAIT_INSUFFICIENT_STILL_PENDING: frozenset[str] = _WAIT_INSUFFICIENT - frozenset({"change_id"})
+_WAIT_INSUFFICIENT_STILL_PENDING: frozenset[str] = frozenset()  # Phase 26AJ approved all of these
 
 _HARNESS_CAPABILITY_RECORD_IDS: frozenset[str] = frozenset(
     {
@@ -167,7 +167,7 @@ def test_phase25k_no_accidental_reviewer_metadata_injection() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Worksheet invariants — must remain in Phase 25I state
+# Worksheet invariants Ã¢â‚¬â€ must remain in Phase 25I state
 # ---------------------------------------------------------------------------
 
 
@@ -180,15 +180,40 @@ def test_phase25k_worksheets_unchanged() -> None:
     assert len(manifest_rows) == 6
     assert all(row["retrieval_status"] == "REVIEWED_APPROVED" for row in manifest_rows)
 
-    # Claims: exactly 4 APPROVED (Phase 25I + Phase 25R change_id), 19 PENDING
+    # Claims: 19 APPROVED after Phase 26AJ (4 prior + 15 new), 4 PENDING
+    _PHASE26AJ_APPROVED: frozenset[str] = frozenset(
+        {
+            "public_rest_availability",
+            "prod_testnet_ws_endpoint",
+            "prod_testnet_rest_endpoint",
+            "rest_snapshot_requirement",
+            "gap_resubscribe_rule",
+            "heartbeat_liveness_proof",
+            "public_rate_subscription_limits",
+            "public_trades",
+            "ticker",
+            "mark_index_funding_open_interest",
+            "testnet_prod_difference",
+            "first_message_snapshot",
+            "incremental_delta",
+            "prev_change_id",
+            "continuity_condition",
+        }
+    )
+    _PHASE26AN_APPROVED: frozenset[str] = frozenset({"checksum_decision", "staleness_budget", "receive_lag_budget"})
+    _PHASE26AR_APPROVED: frozenset[str] = frozenset({"regional_legal_access"})
     approved_claim_ids = {r["claim_id"] for r in claim_rows if r.get("decision", "").upper() in ("APPROVE", "APPROVED")}
-    assert approved_claim_ids == set(_APPROVED_AFTER_PHASE25R)
+    assert (
+        approved_claim_ids
+        == set(_APPROVED_AFTER_PHASE25R) | _PHASE26AJ_APPROVED | _PHASE26AN_APPROVED | _PHASE26AR_APPROVED
+    )
     pending_claims = [r for r in claim_rows if r.get("decision", "").upper() == "PENDING"]
-    assert len(pending_claims) == 19
+    assert len(pending_claims) == 0
 
-    # Policy: all 7 rows PENDING (no policy has been approved)
+    # Policy: Phase 26AN approved 5 rows; Phase 26AW resolved the remaining 2.
     assert len(policy_rows) == 7
-    assert all(r.get("decision", "").upper() == "PENDING" for r in policy_rows)
+    pending_policy = [r for r in policy_rows if r.get("decision", "").upper() == "PENDING"]
+    assert len(pending_policy) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -202,25 +227,28 @@ def test_phase25k_validator_blocked_and_pending_rows_26() -> None:
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    assert result.accepted is False
-    assert result.evidence_review_complete is False
-    assert result.ready_for_engineering_patch is False
+    assert result.accepted is True
+    assert result.evidence_review_complete is True
+    assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is False
-    assert len(result.pending_rows) == 26, (
-        f"Expected 26 pending rows (0 manifest + 19 claims + 7 policies), "
+    assert len(result.pending_rows) == 0, (
+        f"Expected 2 pending rows after Phase 26AR (0 manifest + 0 claim + 2 policies), "
         f"got {len(result.pending_rows)}: {sorted(result.pending_rows)}"
     )
 
 
-def test_phase25k_b1_b5_all_blocked() -> None:
+def test_phase25k_b1_b5_ready_after_phase27k() -> None:
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
-    for gate in ("B1", "B2", "B3", "B4", "B5"):
-        assert result.b1_b5_status[gate] == "BLOCKED", f"{gate} must remain BLOCKED after Phase 25K"
+    assert result.b1_b5_status["B1"] == "READY_FOR_HUMAN_GATE"
+    assert result.b1_b5_status["B2"] == "READY"
+    assert result.b1_b5_status["B3"] == "READY"  # B3 READY after Phase 26AW
+    assert result.b1_b5_status["B4"] == "READY"  # B4 READY after Phase 27A static registry verification
+    assert result.b1_b5_status["B5"] == "BLOCKED"
 
 
 def test_phase25k_connector_ready_dialects_empty() -> None:
-    assert connector_ready_dialects() == (), "connector_ready_dialects() must remain empty tuple after Phase 25K"
+    assert len(connector_ready_dialects()) == 1

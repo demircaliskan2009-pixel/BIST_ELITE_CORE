@@ -119,13 +119,15 @@ def test_deterministic_same_package_same_bundle():
     assert first == second
 
 
-def test_no_local_evidence_means_static_dialects_remain_unverified():
+def test_static_dialects_have_only_deribit_connector_ready_after_b5_enablement():
     specs = all_public_feed_dialects()
 
     assert specs
-    assert connector_ready_dialects() == ()
-    assert all(spec.verification_status is FeedDialectVerificationStatus.UNVERIFIED for spec in specs)
-    assert all(public_feed_dialect_connector_ready(spec) is False for spec in specs)
+    ready = connector_ready_dialects()
+    assert len(ready) == 1
+    assert ready[0].venue_id is VenueId.DERIBIT
+    assert any(spec.verification_status is FeedDialectVerificationStatus.VERIFIED_FROM_OFFICIAL_DOCS for spec in specs)
+    assert all(public_feed_dialect_connector_ready(spec) is (spec.venue_id is VenueId.DERIBIT) for spec in specs)
 
 
 def test_docs_template_exists_and_contains_required_fields():

@@ -37,8 +37,13 @@ REQUIRED_POLICY_STATUS = {
     "receive_lag_budget": "ENGINEERING_POLICY_PROPOSAL_PENDING_APPROVAL",
     "testnet_prod_review": "PENDING_MANUAL_REVIEW",
     "regional_legal_access_review": "MANUAL_LEGAL_ACCESS_REVIEW_REQUIRED",
-    "separate_connector_enablement": "REQUIRED_SEPARATE_PHASE",
+    "separate_connector_enablement": "APPROVED_PUBLIC_MARKET_DATA_ONLY",
 }
+_PHASE26AN_APPROVED_POLICY_IDS = frozenset(
+    {"checksum_decision", "liveness_policy", "staleness_budget", "receive_lag_budget", "testnet_prod_review"}
+)
+# Phase 26AW approved regional_legal_access_review; Phase 27F approved separate_connector_enablement.
+_PHASE26AW_APPROVED_POLICY_IDS = frozenset({"regional_legal_access_review", "separate_connector_enablement"})
 
 
 def test_operational_policy_review_worksheet_exists():
@@ -51,58 +56,67 @@ def test_all_required_operational_policy_rows_exist():
     assert set(rows) == set(REQUIRED_POLICY_STATUS)
 
 
-def test_every_required_policy_row_is_pending_or_blocked_not_approved():
+def test_every_required_policy_row_is_pending_or_approved_or_deferred():
+    # Phase 26AN approved 5 rows; Phase 26AW approved regional_legal_access_review; Phase 27F approved B5.
     for policy_id, row in _policy_rows().items():
         assert row["policy_id"] == policy_id
         assert row["venue_id"] == "deribit"
-        assert row["policy_status"] == "PENDING"
-        assert row["policy_blocker_status"] == REQUIRED_POLICY_STATUS[policy_id]
-        assert row["reviewer_id"] == "PENDING"
-        assert row["reviewed_at_iso"] == "PENDING"
         assert row["manual_approval_required"] == "YES"
-        assert row["decision"] == "PENDING"
         assert row["operational_readiness_effect"] == "LEAVES_BLOCKER"
-        assert "APPROVED" not in row.values()
+        if policy_id in _PHASE26AN_APPROVED_POLICY_IDS:
+            assert row["policy_status"] == "APPROVED"
+            assert row["policy_blocker_status"] == "APPROVED_FAIL_CLOSED"
+            assert row["reviewer_id"] == "demir_operator"
+            assert row["reviewed_at_iso"] == "2026-05-19T00:00:00Z"
+            assert row["decision"] == "APPROVED"
+        elif policy_id in _PHASE26AW_APPROVED_POLICY_IDS:
+            assert row["policy_status"] == "APPROVED"
+            assert row["reviewer_id"] == "demir_operator"
+            assert row["reviewed_at_iso"] == "2026-05-19T00:00:00Z"
+            assert row["decision"] == "APPROVE"
 
 
-def test_checksum_decision_remains_pending_manual_review():
-    assert _policy_rows()["checksum_decision"]["policy_blocker_status"] == "PENDING_MANUAL_REVIEW"
+def test_checksum_decision_approved_in_phase26an():
+    assert _policy_rows()["checksum_decision"]["policy_blocker_status"] == "APPROVED_FAIL_CLOSED"
 
 
-def test_liveness_policy_remains_pending_policy_budget():
-    assert _policy_rows()["liveness_policy"]["policy_blocker_status"] == "PENDING_POLICY_BUDGET"
+def test_liveness_policy_approved_in_phase26an():
+    assert _policy_rows()["liveness_policy"]["policy_blocker_status"] == "APPROVED_FAIL_CLOSED"
 
 
-def test_staleness_budget_remains_pending_engineering_policy():
+def test_staleness_budget_approved_in_phase26an():
     row = _policy_rows()["staleness_budget"]
 
-    assert row["policy_blocker_status"] == "ENGINEERING_POLICY_PROPOSAL_PENDING_APPROVAL"
+    assert row["policy_blocker_status"] == "APPROVED_FAIL_CLOSED"
     assert row["engineering_policy_required"] == "YES"
 
 
-def test_receive_lag_budget_remains_pending_engineering_policy():
+def test_receive_lag_budget_approved_in_phase26an():
     row = _policy_rows()["receive_lag_budget"]
 
-    assert row["policy_blocker_status"] == "ENGINEERING_POLICY_PROPOSAL_PENDING_APPROVAL"
+    assert row["policy_blocker_status"] == "APPROVED_FAIL_CLOSED"
     assert row["engineering_policy_required"] == "YES"
 
 
-def test_testnet_prod_review_remains_pending_manual_review():
-    assert _policy_rows()["testnet_prod_review"]["policy_blocker_status"] == "PENDING_MANUAL_REVIEW"
+def test_testnet_prod_review_approved_in_phase26an():
+    assert _policy_rows()["testnet_prod_review"]["policy_blocker_status"] == "APPROVED_FAIL_CLOSED"
 
 
-def test_regional_legal_access_remains_manual_legal_review_required():
+def test_regional_legal_access_approved_in_phase26aw():
     row = _policy_rows()["regional_legal_access_review"]
-
-    assert row["policy_blocker_status"] == "MANUAL_LEGAL_ACCESS_REVIEW_REQUIRED"
+    assert row["policy_blocker_status"] == "APPROVED_OPERATOR_LEGAL_SIGNOFF"
     assert row["legal_review_required"] == "YES"
+    assert row["decision"] == "APPROVE"
+    assert row["reviewer_id"] == "demir_operator"
 
 
-def test_separate_connector_enablement_remains_required_separate_phase():
+def test_separate_connector_enablement_approved_in_phase27f():
     row = _policy_rows()["separate_connector_enablement"]
 
-    assert row["policy_blocker_status"] == "REQUIRED_SEPARATE_PHASE"
-    assert row["rejection_reason_if_pending"] == "operational_policy:separate_connector_enablement_required"
+    assert row["policy_status"] == "APPROVED"
+    assert row["policy_blocker_status"] == "APPROVED_PUBLIC_MARKET_DATA_ONLY"
+    assert row["decision"] == "APPROVE"
+    assert row["reviewer_id"] == "demir_operator"
 
 
 def test_checklist_references_policy_worksheet_and_remains_blocked():
@@ -121,22 +135,25 @@ def test_operational_evidence_acceptance_cannot_pass_current_deribit_policy_rows
     assert result.accepted is False
     assert operational_evidence_acceptance_ready(result) is False
     assert "operational_evidence:source_snapshot_rejected" in result.rejection_reasons
-    assert "operational_evidence:claim_review_rejected" in result.rejection_reasons
-    assert "operational_policy:checksum_decision_missing" in result.rejection_reasons
-    assert "operational_policy:liveness_policy_missing" in result.rejection_reasons
-    assert "operational_policy:staleness_budget_missing" in result.rejection_reasons
-    assert "operational_policy:receive_lag_budget_missing" in result.rejection_reasons
-    assert "operational_policy:testnet_prod_review_missing" in result.rejection_reasons
-    assert "operational_policy:regional_legal_access_review_missing" in result.rejection_reasons
-    assert "operational_policy:separate_connector_enablement_required" in result.rejection_reasons
+    # claim_review_rejected no longer present after Phase 26AR approved all 23 claim rows
+    # Phase 26AN approved these 5 policy rows — they must NOT appear as missing.
+    assert "operational_policy:checksum_decision_missing" not in result.rejection_reasons
+    assert "operational_policy:liveness_policy_missing" not in result.rejection_reasons
+    assert "operational_policy:staleness_budget_missing" not in result.rejection_reasons
+    assert "operational_policy:receive_lag_budget_missing" not in result.rejection_reasons
+    assert "operational_policy:testnet_prod_review_missing" not in result.rejection_reasons
+    # regional_legal_access_review APPROVED in Phase 26AW — no longer missing.
+    assert "operational_policy:regional_legal_access_review_missing" not in result.rejection_reasons
+    # separate_connector_enablement DEFERRED in Phase 26AW — connector enablement still required.
+    assert "operational_policy:separate_connector_enablement_required" not in result.rejection_reasons
 
 
-def test_static_registry_remains_unverified_and_connector_ready_empty():
+def test_static_registry_verified_and_connector_ready_empty():
     spec = get_public_feed_dialect(DIALECT_ID)
 
-    assert spec.verification_status.value == "unverified"
-    assert spec.enabled_for_connector is False
-    assert connector_ready_dialects() == ()
+    assert spec.verification_status.value == "verified_from_official_docs"
+    assert spec.enabled_for_connector is True
+    assert len(connector_ready_dialects()) == 1
 
 
 def test_no_source_behavior_network_connector_private_order_or_live_paths_changed():
@@ -266,10 +283,14 @@ def _claim_from_row(row: dict[str, str]) -> OfficialClaimReviewDecision:
 
 
 def _policy_from_row(row: dict[str, str]) -> OperationalPolicyApproval:
+    # DEFERRED rows are mapped to PENDING for the acceptance-readiness check (not approved).
+    status_str = row["policy_status"]
+    if status_str == "DEFERRED":
+        status_str = "PENDING"
     return OperationalPolicyApproval(
         policy_id=row["policy_id"],
         venue_id=VenueId.DERIBIT,
-        policy_status=OperationalPolicyApprovalStatus(row["policy_status"]),
+        policy_status=OperationalPolicyApprovalStatus(status_str),
         reviewer_id=row["reviewer_id"],
         reviewed_at_iso=row["reviewed_at_iso"],
         rejection_reasons=(),

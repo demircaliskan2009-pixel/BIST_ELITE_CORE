@@ -104,33 +104,63 @@ def test_phase25h_does_not_add_final_reviewer_values_or_modify_worksheets():
     # Phase 25I approved all 6 manifest rows (REVIEWED_APPROVED).
     assert all(row["retrieval_status"] == "REVIEWED_APPROVED" for row in manifest_rows)
     assert len(claim_rows) == 23
-    # Phase 25I approved 3 claim rows and Phase 25R later approved change_id; the other 19 remain PENDING.
+    # Phase 25I approved 3 claim rows, Phase 25R approved change_id, Phase 26AJ approved 15 more,
+    # Phase 26AN approved 3 more, Phase 26AR approved regional_legal_access; 0 remain PENDING.
     approved_claim_ids = {
         "public_websocket_availability",
         "unauthenticated_public_market_data",
         "orderbook_channel_feed",
         "change_id",
+        "public_rest_availability",
+        "prod_testnet_ws_endpoint",
+        "prod_testnet_rest_endpoint",
+        "rest_snapshot_requirement",
+        "gap_resubscribe_rule",
+        "heartbeat_liveness_proof",
+        "public_rate_subscription_limits",
+        "public_trades",
+        "ticker",
+        "mark_index_funding_open_interest",
+        "testnet_prod_difference",
+        "first_message_snapshot",
+        "incremental_delta",
+        "prev_change_id",
+        "continuity_condition",
+        "checksum_decision",
+        "staleness_budget",
+        "receive_lag_budget",
+        "regional_legal_access",
     }
     non_approved_claim_rows = [r for r in claim_rows if r["claim_id"] not in approved_claim_ids]
-    assert len(non_approved_claim_rows) == 19
-    assert all(row["reviewer_id"] == "PENDING" for row in non_approved_claim_rows)
-    assert all(row["reviewed_at_iso"] == "PENDING" for row in non_approved_claim_rows)
-    assert all(row["decision"] == "PENDING" for row in non_approved_claim_rows)
+    assert len(non_approved_claim_rows) == 0
     assert len(policy_rows) == 7
-    assert all(row["reviewer_id"] == "PENDING" for row in policy_rows)
-    assert all(row["reviewed_at_iso"] == "PENDING" for row in policy_rows)
-    assert all(row["decision"] == "PENDING" for row in policy_rows)
+    # Phase 26AN approved 5 policy rows; Phase 26AW approved regional_legal_access_review and deferred separate_connector_enablement.
+    _phase26an_approved_policy = {
+        "checksum_decision",
+        "liveness_policy",
+        "staleness_budget",
+        "receive_lag_budget",
+        "testnet_prod_review",
+    }
+    _phase26aw_approved_policy = {"regional_legal_access_review", "separate_connector_enablement"}
+    for row in policy_rows:
+        if row["policy_id"] in _phase26an_approved_policy:
+            assert row["reviewer_id"] == "demir_operator"
+            assert row["decision"] == "APPROVED"
+        elif row["policy_id"] in _phase26aw_approved_policy:
+            assert row["reviewer_id"] == "demir_operator"
+            assert row["decision"] == "APPROVE"
 
 
-def test_phase25h_validator_and_connector_state_remain_blocked():
+def test_phase25h_validator_and_connector_state_reflect_phase27k_acceptance():
     result = evaluate_deribit_manual_review_readiness(
         manifest_path=REPO_ROOT / MANIFEST_PATH,
         claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
         policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
     )
 
-    assert result.accepted is False
-    assert result.evidence_review_complete is False
-    assert result.ready_for_engineering_patch is False
+    assert result.accepted is True
+    assert result.evidence_review_complete is True
+    assert result.ready_for_engineering_patch is True
     assert result.connector_enablement_ready is False
-    assert connector_ready_dialects() == ()
+    assert len(connector_ready_dialects()) == 1
