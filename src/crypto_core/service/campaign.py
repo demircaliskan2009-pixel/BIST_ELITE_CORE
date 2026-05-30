@@ -61,6 +61,10 @@ _TERMINAL_STATUSES = frozenset(
 )
 
 
+def campaign_status_is_terminal(status: CampaignStatus) -> bool:
+    return status in _TERMINAL_STATUSES
+
+
 # ---------------------------------------------------------------------------
 # Acceptance verdict
 # ---------------------------------------------------------------------------
