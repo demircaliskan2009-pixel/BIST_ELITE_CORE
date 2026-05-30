@@ -35,7 +35,6 @@ from tests.crypto_core.data.fixtures.ws_simulator import WebSocketSimulator
 
 _SYMBOL = "BTCUSDT"
 _TS_NS = 1_700_000_000_000_000_000
-_TIMEOUT_S = 3.0
 
 # ── Fixtures / builders ───────────────────────────────────────────────────────
 

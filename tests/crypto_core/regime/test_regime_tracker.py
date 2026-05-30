@@ -31,7 +31,6 @@ from crypto_core.regime.tracker import _NS_PER_MS, MarketRegimeTracker
 
 _T0 = int(time.time() * 1e9)  # reference wall-clock in ns
 _ONE_MINUTE_NS: int = 60 * 1_000_000_000
-_ONE_HOUR_NS: int = 3600 * 1_000_000_000
 
 
 def _signal(

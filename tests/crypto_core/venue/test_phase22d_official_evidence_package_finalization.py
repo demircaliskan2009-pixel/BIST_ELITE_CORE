@@ -18,6 +18,7 @@ from crypto_core.venue.public_feed_dialects import connector_ready_dialects, get
 
 def test_deribit_finalized_draft_has_official_source_ids_and_no_placeholder_refs():
     text = _deribit_doc()
+    doc_urls = re.findall(r"https://docs\.deribit\.com/[^`\s)]+", text)
 
     for source_id in (
         "DERIBIT_NOTIFICATIONS",
@@ -29,7 +30,8 @@ def test_deribit_finalized_draft_has_official_source_ids_and_no_placeholder_refs
     ):
         assert source_id in text
     assert "docs.example.test" not in text
-    assert "https://docs.deribit.com/" in text
+    assert doc_urls
+    assert all(urlparse(url).hostname == "docs.deribit.com" for url in doc_urls)
     assert "`operational_status`: `BLOCKED`" in text
     assert "`enabled_for_connector`: `false`" in text
 

@@ -15,7 +15,6 @@ _T0 = 1_000_000_000  # base timestamp (ns)
 _1MIN = 60 * 10**9
 _10MIN = 10 * _1MIN
 _30MIN = 30 * _1MIN
-_2H = 2 * 60 * _1MIN
 _6H = 6 * 60 * _1MIN
 
 
@@ -194,7 +193,6 @@ class TestEngineStateReachability:
         eng, _ = _engine()
         # s2=1.0 → SHS = 1 - 0.15 = 0.85 → DEGRADED? No, 0.85 > 0.80 → NORMAL.
         # We need SHS <= 0.80, so at least 0.20 stress. s1=1.0 → SHS=0.80 border=DEGRADED.
-        sig = SignalInputs(s1_kill_switch=1.0)  # BUT s1=1.0 triggers HALT override
         # Let's use s2=0.5 + s3=0.5 to push SHS below 0.80
         # SHS = 1 - 0.15*0.5 - 0.15*0.5 = 1 - 0.075 - 0.075 = 0.85 → still NORMAL
         # Need to get SHS to (0.60, 0.80]: use s2=1.0 → SHS = 0.85 → NORMAL
