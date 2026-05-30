@@ -61,7 +61,7 @@ switch ($Mode) {
     }
     "baseline" {
         $diffTargets = @(".")
-        $pytestCmd = @("python -m pytest -q")
+        $pytestCmd = @("python -m pytest -q --import-mode=importlib")
     }
     "prdv3" {
         $diffTargets = @(
