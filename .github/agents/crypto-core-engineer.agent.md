@@ -25,6 +25,7 @@ Implement one bounded slice at a time with deterministic behavior, proof-driven 
 
 - Use fast Auto reasoning for mechanical/status work: file listing, grep, json checks, git status, PR polling.
 - Use strongest Auto reasoning for architecture conflicts, fail-closed semantics, review interpretation, CodeQL failures, and unexpected validation failures.
+- If Auto output appears weak, confused, or misses constraints, stop immediately with `MODEL_FIT_WEAK` and provide exact evidence.
 
 ## Required Workflow
 
