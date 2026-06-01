@@ -1,15 +1,35 @@
 {
     "name": "post-response-validator",
     "trigger": "after_response",
+    "allowedReportContracts": [
+        [
+            "RESULT",
+            "VALIDATION",
+            "PR",
+            "MERGE_METHOD",
+            "MAIN_HEAD",
+            "FINAL_GIT_STATUS",
+            "NEXT_BLOCKER"
+        ],
+        [
+            "WHAT WAS ANALYZED",
+            "WHAT WAS FOUND",
+            "WHAT WAS FIXED",
+            "WHY IT WORKS",
+            "RISKS"
+        ]
+    ],
     "rules": [
         {
             "type": "require_sections",
             "sections": [
-                "WHAT WAS ANALYZED",
-                "WHAT WAS FOUND",
-                "WHAT WAS FIXED",
-                "WHY IT WORKS",
-                "RISKS"
+                "RESULT",
+                "VALIDATION",
+                "PR",
+                "MERGE_METHOD",
+                "MAIN_HEAD",
+                "FINAL_GIT_STATUS",
+                "NEXT_BLOCKER"
             ],
             "error": "INVALID RESPONSE STRUCTURE"
         },

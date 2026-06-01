@@ -18,4 +18,5 @@ Enforce deterministic execution discipline at runtime.
 - No response without prompt selection
 - No response with missing data
 - No generic/template output
-- All outputs must follow 5-section contract
+- Outputs must follow an enforced report contract.
+- Default enforced compact contract: RESULT, VALIDATION, PR, MERGE_METHOD, MAIN_HEAD, FINAL_GIT_STATUS, NEXT_BLOCKER.

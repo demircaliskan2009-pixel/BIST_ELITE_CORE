@@ -4,9 +4,13 @@ description: "Persistent workspace instructions for high-throughput crypto_core 
 applyTo: "docs/crypto_core/**, .github/prompts/crypto-*.prompt.md, .github/agents/crypto-throughput-commander.agent.md"
 ---
 
-# CRYPTO HIGH-THROUGHPUT WORKSPACE RULES
+# LEGACY: CRYPTO HIGH-THROUGHPUT WORKSPACE RULES
 
-- Use premium requests aggressively only for validated `crypto_core` work.
+Status: legacy profile for closeout and CI polling only.
+Default product implementation mode now lives in .github/instructions/product-value-implementation.instructions.md.
+This file is not the default implementation policy.
+
+- Do not optimize for premium request burn.
 - Prefer small, mergeable PRs over huge diffs.
 - If a diff grows large or unclear, trigger current-branch triage before proceeding.
 - Do not start a new phase while a current PR is unresolved.
@@ -26,8 +30,8 @@ applyTo: "docs/crypto_core/**, .github/prompts/crypto-*.prompt.md, .github/agent
 
 ## Operating Preference
 
-- Default to the `Crypto Throughput Commander` agent for bounded `crypto_core` setup, triage, closeout, and review-thread repair.
-- Use Copilot Auto for deterministic docs, prompts, telemetry artifacts, and closeout phases.
+- Use this profile for PR closeout, check polling, and mechanical follow-through only.
+- Copilot Auto remains valid for deterministic closeout operations.
 - Codex quota is unavailable in this sprint mode; do not stop with `CODEX_REQUIRED`.
 - If a slice is too broad, too risky, or too reasoning-heavy for Auto, split into smaller Copilot-safe PR slices and use `COPILOT_SLICE_REQUIRED`, `HIGH_REASONING_SPLIT_REQUIRED`, `SPLIT_PLAN_REQUIRED`, or `BLOCKED_WITH_PROOF`.
 - Require Deep Research only when external evidence is needed and the repository cannot prove the answer.
