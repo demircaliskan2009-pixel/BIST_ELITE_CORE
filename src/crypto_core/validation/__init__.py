@@ -1,5 +1,17 @@
 """Validation foundations for deterministic pre-promotion checks."""
 
+from crypto_core.validation.backtest_replay_admission import (
+    BacktestReplayAdmissionInput,
+    BacktestReplayAdmissionPolicy,
+    BacktestReplayAdmissionResult,
+    BacktestReplayAdmissionStatus,
+    BacktestReplayWindow,
+    backtest_replay_admission_digest,
+    backtest_replay_admission_from_dict,
+    backtest_replay_admission_to_dict,
+    canonical_backtest_replay_admission_json,
+    evaluate_backtest_replay_admission,
+)
 from crypto_core.validation.leakage_bias_repaint import (
     LeakageBiasRepaintInput,
     LeakageBiasRepaintResult,
@@ -55,6 +67,11 @@ from crypto_core.validation.walk_forward import (
 )
 
 __all__ = [
+    "BacktestReplayAdmissionInput",
+    "BacktestReplayAdmissionPolicy",
+    "BacktestReplayAdmissionResult",
+    "BacktestReplayAdmissionStatus",
+    "BacktestReplayWindow",
     "CSCVMatrix",
     "DSRInputs",
     "LeakageBiasRepaintInput",
@@ -83,10 +100,15 @@ __all__ = [
     "WalkForwardValidationResult",
     "WalkForwardWindow",
     "WalkForwardWindowResult",
+    "backtest_replay_admission_digest",
+    "backtest_replay_admission_from_dict",
+    "backtest_replay_admission_to_dict",
     "build_stage4_backtest_baseline",
     "build_stage4_backtest_baseline_from_windows",
+    "canonical_backtest_replay_admission_json",
     "compare_stage4",
     "default_stress_scenarios",
+    "evaluate_backtest_replay_admission",
     "evaluate_leakage_bias_repaint",
     "leakage_bias_repaint_result_from_dict",
     "leakage_bias_repaint_result_to_dict",
