@@ -22,6 +22,7 @@ from crypto_core.validation.pbo import (
     validate_pbo,
 )
 from crypto_core.validation.pipeline import ValidationPipelineResult, ValidationPipelineStageStatus, validate_pipeline
+from crypto_core.validation.pit_parity import PitParityPolicy, validate_strategy_data_requirements
 from crypto_core.validation.stage4_comparator import (
     Stage4BacktestBaseline,
     Stage4ComparisonResult,
@@ -62,6 +63,7 @@ __all__ = [
     "MCPermutationInputs",
     "PBOSplit",
     "PBOValidationResult",
+    "PitParityPolicy",
     "RegimeGateEvidence",
     "RegimePBOResult",
     "SensitivityInputs",
@@ -83,9 +85,9 @@ __all__ = [
     "WalkForwardWindowResult",
     "build_stage4_backtest_baseline",
     "build_stage4_backtest_baseline_from_windows",
+    "compare_stage4",
     "default_stress_scenarios",
     "evaluate_leakage_bias_repaint",
-    "compare_stage4",
     "leakage_bias_repaint_result_from_dict",
     "leakage_bias_repaint_result_to_dict",
     "stage4_admission_blockers",
@@ -94,8 +96,9 @@ __all__ = [
     "stage4_comparison_result_from_dict",
     "stage4_comparison_result_to_dict",
     "stage4_paper_summary_to_dict",
-    "validate_pipeline",
     "validate_pbo",
+    "validate_pipeline",
+    "validate_strategy_data_requirements",
     "validate_stress_testing",
     "validate_walk_forward",
 ]
