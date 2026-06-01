@@ -279,20 +279,6 @@ class EvidenceStore:
             )
 
         evidence_digest = payload["evidence_digest"]
-        try:
-            if self._decision_ledger_digest_exists(evidence_digest):
-                return WriteResult(
-                    success=False,
-                    error=f"Duplicate decision ledger evidence digest: {evidence_digest}",
-                    path=str(self.evidence_log_path),
-                )
-        except EvidenceStoreCorruptError as exc:
-            return WriteResult(
-                success=False,
-                error=f"Decision ledger evidence state invalid: {exc}",
-                path=str(self.evidence_log_path),
-            )
-
         envelope = {
             "schema_version": _EVIDENCE_SCHEMA_VERSION,
             "evidence_type": _DECISION_LEDGER_EVIDENCE_TYPE,
@@ -301,6 +287,19 @@ class EvidenceStore:
         }
 
         with self._lock:
+            try:
+                if self._decision_ledger_digest_exists(evidence_digest):
+                    return WriteResult(
+                        success=False,
+                        error=f"Duplicate decision ledger evidence digest: {evidence_digest}",
+                        path=str(self.evidence_log_path),
+                    )
+            except EvidenceStoreCorruptError as exc:
+                return WriteResult(
+                    success=False,
+                    error=f"Decision ledger evidence state invalid: {exc}",
+                    path=str(self.evidence_log_path),
+                )
             try:
                 line = json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n"
                 with self.evidence_log_path.open("a", encoding="utf-8") as fh:

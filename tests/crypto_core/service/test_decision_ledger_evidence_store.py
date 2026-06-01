@@ -121,6 +121,20 @@ def _raw_lines(path: Path) -> list[dict[str, object]]:
         return [json.loads(line) for line in fh if line.strip()]
 
 
+class _TrackingLock:
+    def __init__(self) -> None:
+        self.held = False
+
+    def __enter__(self) -> "_TrackingLock":
+        assert self.held is False
+        self.held = True
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+        self.held = False
+        return False
+
+
 def test_valid_strategy_spec_decision_record_appends_to_evidence_store(tmp_path: Path) -> None:
     store = EvidenceStore(evidence_dir=tmp_path / "evidence")
     record = _strategy_record()
@@ -220,6 +234,27 @@ def test_duplicate_append_is_explicitly_rejected(tmp_path: Path) -> None:
     assert second.success is False
     assert "Duplicate decision ledger evidence digest" in (second.error or "")
     assert store.evidence_line_count() == 1
+
+
+def test_duplicate_digest_check_runs_inside_append_lock(tmp_path: Path, monkeypatch) -> None:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence")
+    tracking_lock = _TrackingLock()
+    monkeypatch.setattr(store, "_lock", tracking_lock)
+    original_exists = store._decision_ledger_digest_exists
+    checked = False
+
+    def wrapped_exists(evidence_digest: object) -> bool:
+        nonlocal checked
+        checked = True
+        assert tracking_lock.held is True
+        return original_exists(evidence_digest)
+
+    monkeypatch.setattr(store, "_decision_ledger_digest_exists", wrapped_exists)
+
+    result = store.append_decision_ledger_record(_strategy_record())
+
+    assert result.success is True
+    assert checked is True
 
 
 def test_payload_digest_equals_decision_ledger_digest(tmp_path: Path) -> None:
