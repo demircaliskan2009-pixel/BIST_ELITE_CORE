@@ -29,13 +29,25 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+from crypto_core.audit import (
+    DecisionLedgerRecord,
+    decision_ledger_digest,
+    decision_ledger_record_to_dict,
+    validate_decision_ledger_record,
+)
 
 logger = logging.getLogger(__name__)
 
 _EVIDENCE_SCHEMA_VERSION = "1"
 _SNAPSHOT_SCHEMA_VERSION = "1"
+_DECISION_LEDGER_EVIDENCE_TYPE = "audit_record"
+_DECISION_LEDGER_PAYLOAD_SCHEMA_VERSION = "1"
+_DECISION_LEDGER_PAYLOAD_TYPE = "decision_ledger_record"
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +258,75 @@ class EvidenceStore:
                 logger.error(msg)
                 return WriteResult(success=False, error=msg, path=str(self.evidence_log_path))
 
+    def append_decision_ledger_record(
+        self,
+        record_or_payload: DecisionLedgerRecord | Mapping[str, Any],
+    ) -> WriteResult:
+        """Append a deterministic DecisionLedgerRecord evidence payload.
+
+        This adapter validates the decision ledger contract first and rejects
+        duplicate ledger digests. It writes the existing evidence JSONL envelope
+        with a deterministic timestamp sentinel instead of generating wall-clock
+        time.
+        """
+        try:
+            payload = decision_ledger_record_to_evidence_payload(record_or_payload)
+        except ValueError as exc:
+            return WriteResult(
+                success=False,
+                error=f"Decision ledger evidence rejected: {exc}",
+                path=str(self.evidence_log_path),
+            )
+
+        evidence_digest = payload["evidence_digest"]
+        envelope = {
+            "schema_version": _EVIDENCE_SCHEMA_VERSION,
+            "evidence_type": _DECISION_LEDGER_EVIDENCE_TYPE,
+            "timestamp_ns": 0,
+            "data": payload,
+        }
+
+        with self._lock:
+            try:
+                if self._decision_ledger_digest_exists(evidence_digest):
+                    return WriteResult(
+                        success=False,
+                        error=f"Duplicate decision ledger evidence digest: {evidence_digest}",
+                        path=str(self.evidence_log_path),
+                    )
+            except EvidenceStoreCorruptError as exc:
+                return WriteResult(
+                    success=False,
+                    error=f"Decision ledger evidence state invalid: {exc}",
+                    path=str(self.evidence_log_path),
+                )
+            try:
+                line = json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n"
+                with self.evidence_log_path.open("a", encoding="utf-8") as fh:
+                    fh.write(line)
+                return WriteResult(success=True, path=str(self.evidence_log_path))
+            except Exception as exc:
+                msg = f"Decision ledger evidence append failed: {exc}"
+                logger.error(msg)
+                return WriteResult(success=False, error=msg, path=str(self.evidence_log_path))
+
+    def _decision_ledger_digest_exists(self, evidence_digest: object) -> bool:
+        if not isinstance(evidence_digest, str) or not evidence_digest:
+            raise EvidenceStoreCorruptError("Decision ledger evidence digest is malformed")
+
+        for record in self.load_evidence():
+            if record.get("evidence_type") != _DECISION_LEDGER_EVIDENCE_TYPE:
+                continue
+            data = record.get("data")
+            if not isinstance(data, Mapping):
+                continue
+            if (
+                data.get("payload_type") == _DECISION_LEDGER_PAYLOAD_TYPE
+                and data.get("evidence_digest") == evidence_digest
+            ):
+                return True
+        return False
+
     # ------------------------------------------------------------------
     # JSONL evidence load
     # ------------------------------------------------------------------
@@ -439,3 +520,34 @@ def _validate_snapshot_envelope(raw: object, name: str) -> None:
         raise EvidenceStoreCorruptError(f"Snapshot {name!r}: missing fields {sorted(missing)!r}")
     if raw["schema_version"] != _SNAPSHOT_SCHEMA_VERSION:
         raise EvidenceStoreCorruptError(f"Snapshot {name!r}: unknown schema_version={raw['schema_version']!r}")
+
+
+def decision_ledger_record_to_evidence_payload(
+    record_or_payload: DecisionLedgerRecord | Mapping[str, Any],
+) -> dict[str, Any]:
+    """Convert a valid DecisionLedgerRecord into a canonical evidence payload."""
+    validation = validate_decision_ledger_record(record_or_payload)
+    if not validation.accepted or validation.record is None:
+        reasons = ",".join(validation.rejection_reasons) or "decision_ledger:invalid"
+        raise ValueError(reasons)
+
+    record_payload = decision_ledger_record_to_dict(validation.record)
+    evidence_digest = decision_ledger_digest(validation.record)
+    return {
+        "schema_version": _DECISION_LEDGER_PAYLOAD_SCHEMA_VERSION,
+        "payload_type": _DECISION_LEDGER_PAYLOAD_TYPE,
+        "evidence_digest": evidence_digest,
+        "decision_ledger_record": record_payload,
+        "stage": record_payload["stage"],
+        "status": record_payload["status"],
+        "strategy_id": record_payload["strategy_id"],
+        "strategy_digest": record_payload["strategy_digest"],
+        "input_digest": record_payload["input_digest"],
+        "output_digest": record_payload["output_digest"],
+        "accepted": record_payload["accepted"],
+        "rejection_reasons": list(record_payload["rejection_reasons"]),
+        "needs_research_reasons": list(record_payload["needs_research_reasons"]),
+        "evidence_refs": list(record_payload["evidence_refs"]),
+        "correlation_id": record_payload["correlation_id"],
+        "previous_record_digest": record_payload["previous_record_digest"],
+    }
