@@ -12,6 +12,15 @@ git, gh, ruff, pytest, and python command outputs are authoritative.
 MCP servers, extensions, and UI integrations are helpers only and must not be claimed unless callable and verified.
 Do not add external MCP servers, plugins, or cloud-agent dependencies as part of normal execution.
 
+PR/CI closeout polling policy:
+- Use JSON/API polling only for PR, CI, and CodeQL state checks.
+- Forbidden: `gh pr checks --watch`, `gh run watch`, and `gh pr review --approve`.
+- Self-approval is forbidden.
+
+Search tooling fallback policy:
+- `rg`/ripgrep is optional.
+- If unavailable, use PowerShell `Get-ChildItem` + `Select-String` or Python file walks.
+
 Legacy forbidden statement retained for audit context:
 - FORBIDDEN legacy claim: Every extension is an active tool.
 

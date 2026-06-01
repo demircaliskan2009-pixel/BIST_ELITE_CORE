@@ -22,6 +22,11 @@ Do not introduce new runtime or strategy implementation while in this lane.
 Pending CI/CodeQL is polling state, not a terminal blocker.
 Terminal merge blockers are failed checks, unresolved required reviews, or policy conflicts.
 
+Closeout command policy:
+- Use JSON/API polling only for PR and check status.
+- Forbidden: `gh pr checks --watch`, `gh run watch`, and `gh pr review --approve`.
+- Self-approval is forbidden.
+
 Merge policy:
 - standard merge only
 - no squash

@@ -10,6 +10,9 @@ Rules:
 - no new product implementation
 - checks/review/merge/postverify only
 - standard merge only
+- use JSON/API polling only for PR and check status
+- do not use `gh pr checks --watch` or `gh run watch`
+- do not run `gh pr review --approve` and do not self-approve
 
 Pending CI or CodeQL is a polling state, not a blocker.
 Block only on terminal failed checks, unresolved required reviews, or merge-policy violations.
