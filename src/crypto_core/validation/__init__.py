@@ -1,5 +1,16 @@
 """Validation foundations for deterministic pre-promotion checks."""
 
+from crypto_core.validation.leakage_bias_repaint import (
+    LeakageBiasRepaintInput,
+    LeakageBiasRepaintResult,
+    LeakageBiasRepaintStatus,
+    ValidationFeatureTimestamp,
+    ValidationFundingObservation,
+    ValidationIndicatorPolicy,
+    evaluate_leakage_bias_repaint,
+    leakage_bias_repaint_result_from_dict,
+    leakage_bias_repaint_result_to_dict,
+)
 from crypto_core.validation.pbo import (
     CSCVMatrix,
     DSRInputs,
@@ -45,6 +56,9 @@ from crypto_core.validation.walk_forward import (
 __all__ = [
     "CSCVMatrix",
     "DSRInputs",
+    "LeakageBiasRepaintInput",
+    "LeakageBiasRepaintResult",
+    "LeakageBiasRepaintStatus",
     "MCPermutationInputs",
     "PBOSplit",
     "PBOValidationResult",
@@ -59,6 +73,9 @@ __all__ = [
     "StressScenarioResult",
     "StressTrade",
     "StressValidationResult",
+    "ValidationFeatureTimestamp",
+    "ValidationFundingObservation",
+    "ValidationIndicatorPolicy",
     "ValidationPipelineResult",
     "ValidationPipelineStageStatus",
     "WalkForwardValidationResult",
@@ -67,7 +84,10 @@ __all__ = [
     "build_stage4_backtest_baseline",
     "build_stage4_backtest_baseline_from_windows",
     "default_stress_scenarios",
+    "evaluate_leakage_bias_repaint",
     "compare_stage4",
+    "leakage_bias_repaint_result_from_dict",
+    "leakage_bias_repaint_result_to_dict",
     "stage4_admission_blockers",
     "stage4_backtest_baseline_from_dict",
     "stage4_backtest_baseline_to_dict",
