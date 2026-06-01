@@ -1,6 +1,24 @@
 {
     "name": "pre-response-guard",
     "trigger": "before_response",
+    "allowedReportContracts": [
+        [
+            "RESULT",
+            "VALIDATION",
+            "PR",
+            "MERGE_METHOD",
+            "MAIN_HEAD",
+            "FINAL_GIT_STATUS",
+            "NEXT_BLOCKER"
+        ],
+        [
+            "WHAT WAS ANALYZED",
+            "WHAT WAS FOUND",
+            "WHAT WAS FIXED",
+            "WHY IT WORKS",
+            "RISKS"
+        ]
+    ],
     "rules": [
         {
             "type": "require_field",

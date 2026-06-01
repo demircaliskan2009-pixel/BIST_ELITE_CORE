@@ -4,9 +4,16 @@ description: "Active agent-driven toolchain — every VS Code extension is an ac
 applyTo: "**"
 ---
 
-# ACTIVE AGENT-DRIVEN TOOLCHAIN
+# TOOLCHAIN EXECUTION RULES
 
-Every extension is an active tool. The agent triggers them deterministically.
+Only use tools proven available in the current workspace.
+Terminal commands and their outputs are source of truth for repository state and validation.
+git, gh, ruff, pytest, and python command outputs are authoritative.
+MCP servers, extensions, and UI integrations are helpers only and must not be claimed unless callable and verified.
+Do not add external MCP servers, plugins, or cloud-agent dependencies as part of normal execution.
+
+Legacy forbidden statement retained for audit context:
+- FORBIDDEN legacy claim: Every extension is an active tool.
 
 ---
 
