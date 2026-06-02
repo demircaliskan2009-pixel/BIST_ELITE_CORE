@@ -86,6 +86,7 @@ EVIDENCE_TYPES = frozenset(
         "pressure_transition",
         "service_failure",
         "audit_record",
+        "promotion_review",
         "cycle_summary",
         "service_transition",
     }

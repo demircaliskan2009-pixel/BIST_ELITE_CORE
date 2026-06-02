@@ -1271,7 +1271,9 @@ class PromotionReviewStore:
         if not result.success:
             return result
         # Also append to evidence log.
-        self._store.append_evidence("promotion_review", d)
+        evidence_result = self._store.append_evidence("promotion_review", d)
+        if not evidence_result.success:
+            return evidence_result
         return result
 
     def load_review(self) -> dict:
