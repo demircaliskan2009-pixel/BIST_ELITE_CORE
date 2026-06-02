@@ -2655,6 +2655,54 @@ class TestSleeveCampaignEvidenceIntegration:
         assert admission.verdict == SleeveAdmissionVerdict.ADMITTED_ACTIVE
         assert admission.evidence_blockers == ()
 
+    def test_sleeve_admission_cache_refreshes_after_promotion_review_finalizes(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        _seed_accepted_admission_evidence(store)
+        orch = ServiceOrchestrator(
+            service=_make_mock_service(),
+            evidence_store=store,
+            readiness_level="paper_live",
+            promotion_thresholds=PromotionThresholds(min_paper_runs=0),
+        )
+        orch.start_review(review_id="review-sleeve-admission-cache")
+        for i in range(3):
+            orch.intake_campaign_report(_make_campaign_report(campaign_id=f"camp-cache-{i}"))
+        orch.start_sleeve_promotion_review(workflow_snapshot=_supported_sleeve_workflow_snapshot())
+
+        before = orch.get_sleeve_admission_snapshot().admission_results[0]
+        final = orch.finalize_review()
+        after = orch.get_sleeve_admission_snapshot().admission_results[0]
+
+        assert before.verdict == SleeveAdmissionVerdict.REVIEW_SUPPORTED_NOT_ADMITTED
+        assert before.evidence_blockers == ("promotion_review_evidence:store_or_payload_malformed",)
+        assert final.verdict == "promote"
+        assert after.verdict == SleeveAdmissionVerdict.ADMITTED_ACTIVE
+        assert after.evidence_blockers == ()
+
+    def test_failed_promotion_finalization_preserves_cached_sleeve_admission(self, tmp_path: Path, monkeypatch):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        orch = ServiceOrchestrator(
+            service=_make_mock_service(),
+            evidence_store=store,
+            readiness_level="paper_live",
+            promotion_thresholds=PromotionThresholds(min_paper_runs=0),
+        )
+        orch.start_review(review_id="review-sleeve-admission-failed-finalize")
+        orch.start_sleeve_promotion_review(workflow_snapshot=_supported_sleeve_workflow_snapshot())
+        cached = orch.build_sleeve_admission_controller()
+        monkeypatch.setattr(orch._review, "finalize_review", MagicMock(side_effect=RuntimeError("persist failed")))
+
+        with pytest.raises(RuntimeError, match="persist failed"):
+            orch.finalize_review()
+
+        assert orch._sleeve_admission_controller is cached
+
     def test_sleeve_candidate_workflow_integration_and_restore(self, tmp_path: Path):
         svc = _make_mock_service()
         store = EvidenceStore(

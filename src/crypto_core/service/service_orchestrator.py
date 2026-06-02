@@ -1228,6 +1228,7 @@ class ServiceOrchestrator:
         """
         self._require_review("finalize review")
         report = self._review.finalize_review()
+        self._sleeve_admission_controller = None
         logger.info(
             "Review %s finalized via orchestrator (verdict=%s)",
             report.review_id,
