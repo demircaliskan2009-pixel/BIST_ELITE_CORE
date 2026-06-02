@@ -70,14 +70,19 @@ from crypto_core.service.escalation_review_controller import (
 from crypto_core.service.evidence_store import (
     EvidenceStore,
     EvidenceStoreConfig,
+    EvidenceStoreCorruptError,
     WriteResult,
     backtest_replay_admission_to_evidence_payload,
 )
 from crypto_core.service.promotion_review import (
+    PromotionReviewCorruptError,
     PromotionReviewStore,
     PromotionThresholds,
     PromotionVerdict,
     build_promotion_review,
+    promotion_review_digest,
+    promotion_review_to_dict,
+    promotion_review_to_evidence_payload,
 )
 from crypto_core.service.promotion_review_controller import (
     CampaignIntakeError,
@@ -850,6 +855,58 @@ class TestFinalReport:
 
 
 class TestPersistence:
+    def test_promotion_review_digest_is_deterministic_and_domain_bound(self):
+        review = build_promotion_review(
+            _good_reports(3),
+            review_id="rev-digest",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            reviewed_at_ns=_T0_NS,
+        )
+        same_review = build_promotion_review(
+            _good_reports(3),
+            review_id="rev-digest",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            reviewed_at_ns=_T0_NS,
+        )
+        changed_domain = build_promotion_review(
+            _good_reports(3),
+            review_id="rev-digest-changed",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            reviewed_at_ns=_T0_NS,
+        )
+        changed_time = build_promotion_review(
+            _good_reports(3),
+            review_id="rev-digest",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            reviewed_at_ns=_T0_NS + 1,
+        )
+
+        digest = promotion_review_digest(review)
+
+        assert digest == promotion_review_digest(review)
+        assert digest == promotion_review_digest(same_review)
+        assert digest != promotion_review_digest(changed_domain)
+        assert digest != promotion_review_digest(changed_time)
+
+    def test_promotion_review_evidence_payload_binds_digest(self):
+        review = build_promotion_review(
+            _good_reports(3),
+            review_id="rev-evidence-payload",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            reviewed_at_ns=_T0_NS,
+        )
+
+        payload = promotion_review_to_evidence_payload(review)
+
+        assert payload["payload_type"] == "promotion_review"
+        assert payload["evidence_digest"] == promotion_review_digest(review)
+        assert payload["promotion_review"]["review_id"] == "rev-evidence-payload"
+
     def test_save_workflow_state(self, tmp_path: Path):
         store = EvidenceStore(
             evidence_dir=tmp_path / "evidence",
@@ -920,8 +977,149 @@ class TestPersistence:
         evidence_data = promotion_evidence[0]["data"]
         assert evidence_data["review_id"] == "rev-fp"
         assert evidence_data["verdict"] == "promote"
+        assert evidence_data["payload_type"] == "promotion_review"
+        assert evidence_data["evidence_digest"]
+        assert evidence_data["evidence_digest"] == promotion_review_digest(
+            build_promotion_review(
+                _good_reports(3),
+                review_id="rev-fp",
+                readiness_level="paper_live",
+                thresholds=PromotionThresholds(min_paper_runs=3),
+                reviewed_at_ns=_T0_NS,
+            )
+        )
+        assert evidence_data["promotion_review"]["review_id"] == "rev-fp"
         assert evidence_data["aggregation"]["total_campaigns"] == 3
         assert evidence_data["result"]["summary"]
+
+        current_evidence = review_store.load_current_review_evidence(
+            build_promotion_review(
+                _good_reports(3),
+                review_id="rev-fp",
+                readiness_level="paper_live",
+                thresholds=PromotionThresholds(min_paper_runs=3),
+                reviewed_at_ns=_T0_NS,
+            )
+        )
+        assert current_evidence["evidence_digest"] == evidence_data["evidence_digest"]
+
+    def test_promotion_review_duplicate_evidence_digest_rejects(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        review = build_promotion_review(
+            _good_reports(3),
+            review_id="rev-duplicate-digest",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            reviewed_at_ns=_T0_NS,
+        )
+        review_store = PromotionReviewStore(store)
+
+        first = review_store.save_review(review)
+        second = review_store.save_review(review)
+
+        assert first.success is True
+        assert second.success is False
+        assert "Duplicate promotion review evidence digest" in (second.error or "")
+        promotion_evidence = [
+            record for record in store.load_evidence() if record["evidence_type"] == "promotion_review"
+        ]
+        assert len(promotion_evidence) == 1
+
+    def test_legacy_raw_promotion_review_evidence_loads_without_digest(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        review = build_promotion_review(
+            _good_reports(3),
+            review_id="rev-legacy-load",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            reviewed_at_ns=_T0_NS,
+        )
+        legacy_payload = promotion_review_to_dict(review)
+
+        assert store.append_evidence("promotion_review", legacy_payload).success is True
+        records = store.load_evidence()
+
+        assert records[0]["evidence_type"] == "promotion_review"
+        assert records[0]["data"]["review_id"] == "rev-legacy-load"
+        assert "evidence_digest" not in records[0]["data"]
+
+    def test_legacy_raw_promotion_review_evidence_does_not_block_canonical_append(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        review = build_promotion_review(
+            _good_reports(3),
+            review_id="rev-legacy-upgrade",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            reviewed_at_ns=_T0_NS,
+        )
+        assert store.append_evidence("promotion_review", promotion_review_to_dict(review)).success is True
+
+        result = PromotionReviewStore(store).save_review(review)
+
+        assert result.success is True
+        promotion_evidence = [
+            record for record in store.load_evidence() if record["evidence_type"] == "promotion_review"
+        ]
+        assert len(promotion_evidence) == 2
+        assert "evidence_digest" not in promotion_evidence[0]["data"]
+        assert promotion_evidence[1]["data"]["evidence_digest"] == promotion_review_digest(review)
+
+    def test_legacy_raw_promotion_review_evidence_is_not_currentness_proof(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        review = build_promotion_review(
+            _good_reports(3),
+            review_id="rev-legacy-not-current",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            reviewed_at_ns=_T0_NS,
+        )
+        assert store.append_evidence("promotion_review", promotion_review_to_dict(review)).success is True
+
+        with pytest.raises(PromotionReviewCorruptError, match="missing digest"):
+            PromotionReviewStore(store).load_current_review_evidence(review)
+
+    def test_promotion_review_tampered_evidence_digest_fails_currentness(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        review = build_promotion_review(
+            _good_reports(3),
+            review_id="rev-tampered-digest",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            reviewed_at_ns=_T0_NS,
+        )
+        payload = promotion_review_to_evidence_payload(review)
+        payload["promotion_review"]["reviewed_at_ns"] = _T0_NS + 1
+        assert store.append_evidence("promotion_review", payload).success is True
+
+        with pytest.raises(PromotionReviewCorruptError, match="evidence_digest_mismatch"):
+            PromotionReviewStore(store).load_current_review_evidence(review)
+
+    def test_malformed_promotion_review_evidence_fails_closed(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+
+        result = store.append_evidence("promotion_review", {"payload_type": "promotion_review"})
+
+        assert result.success is True
+        with pytest.raises(EvidenceStoreCorruptError, match="promotion_review data missing fields"):
+            store.load_evidence()
 
     def test_promotion_review_store_surfaces_evidence_append_failure(self, tmp_path: Path, monkeypatch):
         store = EvidenceStore(
