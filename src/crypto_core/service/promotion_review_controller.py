@@ -28,11 +28,13 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from crypto_core.service.campaign import CampaignReport
-from crypto_core.service.evidence_store import EvidenceStore, WriteResult
+from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreCorruptError, WriteResult
 from crypto_core.service.promotion_review import (
     CampaignAggregation,
     PromotionPolicy,
@@ -48,6 +50,11 @@ from crypto_core.service.promotion_review import (
     promotion_reason_summary,
     symbol_participation_summary,
     verdict_distribution,
+)
+from crypto_core.validation.backtest_replay_admission import (
+    BacktestReplayAdmissionStatus,
+    backtest_replay_admission_digest,
+    backtest_replay_admission_from_dict,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,6 +94,8 @@ _SUPPORTIVE_READINESS_LEVELS = frozenset({"paper_live", "calibrated_paper", "sha
 
 _WORKFLOW_SNAPSHOT_NAME = "promotion_review_workflow"
 _WORKFLOW_REQUIRED_FIELDS = frozenset({"review_id", "status", "created_at_ns", "campaign_ids"})
+_ADMISSION_EVIDENCE_TYPE = "audit_record"
+_ADMISSION_PAYLOAD_TYPE = "backtest_replay_admission"
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +138,183 @@ class CampaignIntakeError(RuntimeError):
 
 class ReviewWorkflowCorruptError(RuntimeError):
     """Raised when persisted review workflow state is malformed."""
+
+
+class PromotionAdmissionEvidenceError(RuntimeError):
+    """Raised when persisted BacktestReplayAdmission evidence fails closed."""
+
+
+# ---------------------------------------------------------------------------
+# Admission evidence precheck
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AdmissionEvidencePrecheck:
+    """Read-only persisted BacktestReplayAdmission evidence precheck."""
+
+    accepted: bool
+    rejection_reasons: tuple[str, ...]
+    evidence_digest: str | None = None
+    strategy_id: str | None = None
+    strategy_digest: str | None = None
+
+
+def backtest_replay_admission_evidence_precheck(
+    evidence_store: EvidenceStore,
+    *,
+    expected_strategy_id: str | None = None,
+    expected_strategy_digest: str | None = None,
+) -> AdmissionEvidencePrecheck:
+    """Require one accepted persisted BacktestReplayAdmission evidence payload.
+
+    Read-only and fail-closed. Missing, malformed, wrong-type, ambiguous,
+    rejected, needs-research, insufficient, and digest-mismatched evidence all
+    return deterministic rejection reasons.
+    """
+    try:
+        records = evidence_store.load_evidence()
+    except EvidenceStoreCorruptError:
+        return _admission_precheck_rejected("backtest_replay_admission_evidence:store_corrupt")
+
+    candidates: list[Mapping[str, Any]] = []
+    wrong_payload_type_seen = False
+    malformed_audit_seen = False
+    for record in records:
+        if record.get("evidence_type") != _ADMISSION_EVIDENCE_TYPE:
+            continue
+        data = record.get("data")
+        if not isinstance(data, Mapping):
+            malformed_audit_seen = True
+            continue
+        payload_type = data.get("payload_type")
+        if payload_type == _ADMISSION_PAYLOAD_TYPE:
+            candidates.append(data)
+        elif payload_type is not None:
+            wrong_payload_type_seen = True
+
+    if not candidates:
+        reasons: list[str] = []
+        if malformed_audit_seen:
+            reasons.append("backtest_replay_admission_evidence:payload_malformed")
+        if wrong_payload_type_seen:
+            reasons.append("backtest_replay_admission_evidence:payload_type_wrong")
+        reasons.append("backtest_replay_admission_evidence:missing")
+        return _admission_precheck_rejected(*reasons)
+
+    if len(candidates) > 1:
+        return _admission_precheck_rejected("backtest_replay_admission_evidence:ambiguous")
+
+    payload = candidates[0]
+    embedded = payload.get("backtest_replay_admission_result")
+    if not isinstance(embedded, Mapping):
+        return _admission_precheck_rejected("backtest_replay_admission_evidence:result_payload_malformed")
+
+    result = backtest_replay_admission_from_dict(embedded)
+    computed_digest = backtest_replay_admission_digest(result)
+    persisted_digest = payload.get("evidence_digest")
+    reasons = _admission_payload_rejection_reasons(
+        payload=payload,
+        result=result,
+        computed_digest=computed_digest,
+        persisted_digest=persisted_digest,
+        expected_strategy_id=expected_strategy_id,
+        expected_strategy_digest=expected_strategy_digest,
+    )
+    if reasons:
+        return AdmissionEvidencePrecheck(
+            accepted=False,
+            rejection_reasons=reasons,
+            evidence_digest=persisted_digest if isinstance(persisted_digest, str) else None,
+            strategy_id=result.strategy_id,
+            strategy_digest=result.strategy_digest,
+        )
+
+    return AdmissionEvidencePrecheck(
+        accepted=True,
+        rejection_reasons=(),
+        evidence_digest=computed_digest,
+        strategy_id=result.strategy_id,
+        strategy_digest=result.strategy_digest,
+    )
+
+
+def _admission_payload_rejection_reasons(
+    *,
+    payload: Mapping[str, Any],
+    result,
+    computed_digest: str,
+    persisted_digest: object,
+    expected_strategy_id: str | None,
+    expected_strategy_digest: str | None,
+) -> tuple[str, ...]:
+    reasons: list[str] = []
+
+    if not _is_sha256_digest(persisted_digest):
+        reasons.append("backtest_replay_admission_evidence:evidence_digest_malformed")
+    elif persisted_digest != computed_digest:
+        reasons.append("backtest_replay_admission_evidence:evidence_digest_mismatch")
+
+    if payload.get("accepted") is not result.accepted:
+        reasons.append("backtest_replay_admission_evidence:accepted_mismatch")
+    if payload.get("status") != result.status.value:
+        reasons.append("backtest_replay_admission_evidence:status_mismatch")
+    if payload.get("strategy_id") != result.strategy_id:
+        reasons.append("backtest_replay_admission_evidence:strategy_id_mismatch")
+    if payload.get("strategy_digest") != result.strategy_digest:
+        reasons.append("backtest_replay_admission_evidence:strategy_digest_mismatch")
+    if _normalized_mapping(payload.get("decision_ledger_digests")) != dict(
+        sorted(result.decision_ledger_digests.items())
+    ):
+        reasons.append("backtest_replay_admission_evidence:decision_ledger_digests_mismatch")
+    if _normalized_mapping(payload.get("evidence_digest_by_stage")) != dict(
+        sorted(result.evidence_digest_by_stage.items())
+    ):
+        reasons.append("backtest_replay_admission_evidence:evidence_digest_by_stage_mismatch")
+
+    if result.status is not BacktestReplayAdmissionStatus.ACCEPTED or result.accepted is not True:
+        reasons.append("backtest_replay_admission_evidence:not_accepted")
+    if result.status is BacktestReplayAdmissionStatus.REJECTED or result.rejection_reasons:
+        reasons.append("backtest_replay_admission_evidence:rejected")
+    if result.status is BacktestReplayAdmissionStatus.INSUFFICIENT_EVIDENCE:
+        reasons.append("backtest_replay_admission_evidence:insufficient_evidence")
+    if result.status is BacktestReplayAdmissionStatus.NEEDS_RESEARCH:
+        reasons.append("backtest_replay_admission_evidence:needs_research")
+    if result.needs_research_reasons:
+        reasons.append("backtest_replay_admission_evidence:needs_research")
+
+    if expected_strategy_id is not None and result.strategy_id != expected_strategy_id:
+        reasons.append("backtest_replay_admission_evidence:expected_strategy_id_mismatch")
+    if expected_strategy_digest is not None and result.strategy_digest != expected_strategy_digest:
+        reasons.append("backtest_replay_admission_evidence:expected_strategy_digest_mismatch")
+
+    return _stable_unique(reasons)
+
+
+def _admission_precheck_rejected(*reasons: str) -> AdmissionEvidencePrecheck:
+    return AdmissionEvidencePrecheck(
+        accepted=False,
+        rejection_reasons=_stable_unique(reasons),
+    )
+
+
+def _normalized_mapping(value: object) -> dict[str, str] | None:
+    if not isinstance(value, Mapping):
+        return None
+    parsed: dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not isinstance(item, str):
+            return None
+        parsed[key] = item
+    return dict(sorted(parsed.items()))
+
+
+def _stable_unique(reasons: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    return tuple(sorted({reason for reason in reasons if isinstance(reason, str) and reason}))
+
+
+def _is_sha256_digest(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value.lower())
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +420,7 @@ class PromotionReviewController:
         thresholds: PromotionThresholds | None = None,
         evidence_store: EvidenceStore | None = None,
         created_at_ns: int | None = None,
+        require_admission_evidence: bool = False,
     ) -> None:
         self._review_id = review_id or f"review-{uuid.uuid4().hex[:12]}"
         self._status = ReviewStatus.CREATED
@@ -246,6 +433,7 @@ class PromotionReviewController:
         self._final_report: FinalReviewReport | None = None
         self._evidence_store = evidence_store
         self._review_store = PromotionReviewStore(evidence_store) if evidence_store else None
+        self._require_admission_evidence = require_admission_evidence
 
     # ------------------------------------------------------------------
     # Properties
@@ -278,6 +466,12 @@ class PromotionReviewController:
     @property
     def readiness_is_supportive(self) -> bool:
         return self._readiness_level in _SUPPORTIVE_READINESS_LEVELS
+
+    def admission_evidence_precheck(self) -> AdmissionEvidencePrecheck:
+        """Read-only gate for persisted BacktestReplayAdmission evidence."""
+        if self._evidence_store is None:
+            return AdmissionEvidencePrecheck(accepted=True, rejection_reasons=())
+        return backtest_replay_admission_evidence_precheck(self._evidence_store)
 
     # ------------------------------------------------------------------
     # Campaign intake
@@ -421,6 +615,14 @@ class PromotionReviewController:
         aggregation = build_campaign_aggregation(reports_tuple, thresholds=self._thresholds)
         policy = PromotionPolicy(self._thresholds)
         result = policy.evaluate(aggregation, readiness_level=self._readiness_level)
+        admission_precheck = (
+            self.admission_evidence_precheck()
+            if self._require_admission_evidence
+            else AdmissionEvidencePrecheck(accepted=True, rejection_reasons=())
+        )
+        insufficient_evidence = (
+            tuple(c.name for c in result.insufficient_reasons) + admission_precheck.rejection_reasons
+        )
 
         return CurrentReviewSnapshot(
             review_id=self._review_id,
@@ -434,10 +636,10 @@ class PromotionReviewController:
             symbol_breadth=symbol_participation_summary(aggregation),
             provisional_verdict=result.verdict.value,
             provisional_summary=result.summary,
-            insufficient_evidence=tuple(c.name for c in result.insufficient_reasons),
+            insufficient_evidence=insufficient_evidence,
             readiness_level=self._readiness_level,
             readiness_is_supportive=self.readiness_is_supportive,
-            is_ready_to_finalize=len(self._reports) > 0,
+            is_ready_to_finalize=len(self._reports) > 0 and admission_precheck.accepted,
             ext_regime_quality=_classify_ext_regime_quality(aggregation, self._thresholds),
             ext_regime_governance=ext_regime_governance_summary(aggregation),
         )
@@ -471,6 +673,12 @@ class PromotionReviewController:
 
         if not self._reports:
             raise RuntimeError("Cannot finalize review with no campaigns")
+
+        if self._require_admission_evidence:
+            admission_precheck = self.admission_evidence_precheck()
+            if not admission_precheck.accepted:
+                reasons = ",".join(admission_precheck.rejection_reasons)
+                raise PromotionAdmissionEvidenceError(f"BacktestReplayAdmission evidence precheck failed: {reasons}")
 
         ts = finalized_at_ns if finalized_at_ns is not None else time.time_ns()
 
@@ -683,6 +891,9 @@ class PromotionReviewController:
         campaign_ids = data.get("campaign_ids", [])
         readiness_level = data.get("readiness_level", "not_assessed")
         updated_at_ns = data.get("updated_at_ns", created_at_ns)
+        require_admission_evidence = data.get("require_admission_evidence", False)
+        if not isinstance(require_admission_evidence, bool):
+            raise ReviewWorkflowCorruptError("Workflow state 'require_admission_evidence' must be a bool")
 
         try:
             status = ReviewStatus(status_str)
@@ -699,6 +910,7 @@ class PromotionReviewController:
             thresholds=thresholds,
             evidence_store=evidence_store,
             created_at_ns=created_at_ns,
+            require_admission_evidence=require_admission_evidence is True,
         )
         controller._status = status
         controller._updated_at_ns = updated_at_ns
@@ -735,6 +947,7 @@ class PromotionReviewController:
             "created_at_ns": self._created_at_ns,
             "updated_at_ns": self._updated_at_ns,
             "readiness_level": self._readiness_level,
+            "require_admission_evidence": self._require_admission_evidence,
             "campaign_ids": list(self._reports.keys()),
             "is_finalized": self._status in _TERMINAL_REVIEW_STATUSES,
         }
