@@ -40,6 +40,11 @@ from crypto_core.audit import (
     decision_ledger_record_to_dict,
     validate_decision_ledger_record,
 )
+from crypto_core.validation.backtest_replay_admission import (
+    BacktestReplayAdmissionResult,
+    backtest_replay_admission_digest,
+    backtest_replay_admission_to_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,9 @@ _SNAPSHOT_SCHEMA_VERSION = "1"
 _DECISION_LEDGER_EVIDENCE_TYPE = "audit_record"
 _DECISION_LEDGER_PAYLOAD_SCHEMA_VERSION = "1"
 _DECISION_LEDGER_PAYLOAD_TYPE = "decision_ledger_record"
+_BACKTEST_REPLAY_ADMISSION_EVIDENCE_TYPE = "audit_record"
+_BACKTEST_REPLAY_ADMISSION_PAYLOAD_SCHEMA_VERSION = "1"
+_BACKTEST_REPLAY_ADMISSION_PAYLOAD_TYPE = "backtest_replay_admission"
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +335,74 @@ class EvidenceStore:
                 return True
         return False
 
+    def append_backtest_replay_admission_record(
+        self,
+        result: BacktestReplayAdmissionResult,
+    ) -> WriteResult:
+        """Append a deterministic BacktestReplayAdmissionResult evidence payload.
+
+        Validates the admission contract first and rejects duplicate admission digests. Writes the
+        existing evidence JSONL envelope with a deterministic timestamp sentinel instead of
+        generating wall-clock time.
+        """
+        try:
+            payload = backtest_replay_admission_to_evidence_payload(result)
+        except ValueError as exc:
+            return WriteResult(
+                success=False,
+                error=f"Backtest replay admission evidence rejected: {exc}",
+                path=str(self.evidence_log_path),
+            )
+
+        evidence_digest = payload["evidence_digest"]
+        envelope = {
+            "schema_version": _EVIDENCE_SCHEMA_VERSION,
+            "evidence_type": _BACKTEST_REPLAY_ADMISSION_EVIDENCE_TYPE,
+            "timestamp_ns": 0,
+            "data": payload,
+        }
+
+        with self._lock:
+            try:
+                if self._backtest_replay_admission_digest_exists(evidence_digest):
+                    return WriteResult(
+                        success=False,
+                        error=f"Duplicate backtest replay admission evidence digest: {evidence_digest}",
+                        path=str(self.evidence_log_path),
+                    )
+            except EvidenceStoreCorruptError as exc:
+                return WriteResult(
+                    success=False,
+                    error=f"Backtest replay admission evidence state invalid: {exc}",
+                    path=str(self.evidence_log_path),
+                )
+            try:
+                line = json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n"
+                with self.evidence_log_path.open("a", encoding="utf-8") as fh:
+                    fh.write(line)
+                return WriteResult(success=True, path=str(self.evidence_log_path))
+            except Exception as exc:
+                msg = f"Backtest replay admission evidence append failed: {exc}"
+                logger.error(msg)
+                return WriteResult(success=False, error=msg, path=str(self.evidence_log_path))
+
+    def _backtest_replay_admission_digest_exists(self, evidence_digest: object) -> bool:
+        if not isinstance(evidence_digest, str) or not evidence_digest:
+            raise EvidenceStoreCorruptError("Backtest replay admission evidence digest is malformed")
+
+        for record in self.load_evidence():
+            if record.get("evidence_type") != _BACKTEST_REPLAY_ADMISSION_EVIDENCE_TYPE:
+                continue
+            data = record.get("data")
+            if not isinstance(data, Mapping):
+                continue
+            if (
+                data.get("payload_type") == _BACKTEST_REPLAY_ADMISSION_PAYLOAD_TYPE
+                and data.get("evidence_digest") == evidence_digest
+            ):
+                return True
+        return False
+
     # ------------------------------------------------------------------
     # JSONL evidence load
     # ------------------------------------------------------------------
@@ -550,4 +626,36 @@ def decision_ledger_record_to_evidence_payload(
         "evidence_refs": list(record_payload["evidence_refs"]),
         "correlation_id": record_payload["correlation_id"],
         "previous_record_digest": record_payload["previous_record_digest"],
+    }
+
+
+def backtest_replay_admission_to_evidence_payload(
+    result: BacktestReplayAdmissionResult,
+) -> dict[str, Any]:
+    """Convert a BacktestReplayAdmissionResult into a canonical evidence payload.
+
+    Fail-closed: non-result input is rejected. The evidence_digest equals
+    backtest_replay_admission_digest(result), so stored evidence proves the exact admission verdict.
+    The result is not mutated.
+    """
+    if not isinstance(result, BacktestReplayAdmissionResult):
+        raise ValueError("backtest_replay_admission:result_malformed")
+
+    result_payload = backtest_replay_admission_to_dict(result)
+    evidence_digest = backtest_replay_admission_digest(result)
+    return {
+        "schema_version": _BACKTEST_REPLAY_ADMISSION_PAYLOAD_SCHEMA_VERSION,
+        "payload_type": _BACKTEST_REPLAY_ADMISSION_PAYLOAD_TYPE,
+        "evidence_digest": evidence_digest,
+        "backtest_replay_admission_result": result_payload,
+        "accepted": result_payload["accepted"],
+        "status": result_payload["status"],
+        "strategy_id": result_payload["strategy_id"],
+        "strategy_digest": result_payload["strategy_digest"],
+        "replay_source_id": result_payload["replay_source_id"],
+        "historical_data_source_id": result_payload["historical_data_source_id"],
+        "decision_ledger_digests": dict(result_payload["decision_ledger_digests"]),
+        "evidence_digest_by_stage": dict(result_payload["evidence_digest_by_stage"]),
+        "rejection_reasons": list(result_payload["rejection_reasons"]),
+        "needs_research_reasons": list(result_payload["needs_research_reasons"]),
     }
