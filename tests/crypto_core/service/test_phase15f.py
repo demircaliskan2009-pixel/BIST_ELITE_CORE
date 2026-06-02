@@ -506,10 +506,78 @@ def test_sleeve_admission_not_admitted_outcome_rejects(tmp_path):
     assert precheck.rejection_reasons == ("sleeve_admission_evidence:not_admitted",)
 
 
-def test_sleeve_admission_store_rejects_duplicate_save(tmp_path):
+def test_sleeve_admission_store_idempotent_same_outcome(tmp_path):
     summary = _admitted_summary()
-    admission_store = SleeveAdmissionStore(_sleeve_admission_evidence_store(tmp_path))
+    store = _sleeve_admission_evidence_store(tmp_path)
+    admission_store = SleeveAdmissionStore(store)
     assert admission_store.save_outcome(summary).success is True
-    duplicate = admission_store.save_outcome(summary)
-    assert duplicate.success is False
-    assert "Duplicate sleeve admission evidence digest" in duplicate.error
+    # Same semantic outcome: snapshot refreshed, duplicate JSONL append skipped, success returned.
+    assert admission_store.save_outcome(summary).success is True
+    # Evidence log still contains exactly one canonical record for this digest.
+    precheck = current_sleeve_admission_evidence_precheck(store)
+    assert precheck.accepted is True
+    assert precheck.admitted_active == ("micro-1",)
+
+
+def test_sleeve_admission_store_a_b_a_recurrence(tmp_path):
+    summary_a = _admitted_summary("sleeve-a")
+    summary_b = _not_admitted_summary("sleeve-b")
+    store = _sleeve_admission_evidence_store(tmp_path)
+    admission_store = SleeveAdmissionStore(store)
+
+    assert admission_store.save_outcome(summary_a).success is True
+    assert admission_store.save_outcome(summary_b).success is True
+    # Recurrence: return to outcome A — must succeed, snapshot must be A, precheck must pass.
+    assert admission_store.save_outcome(summary_a).success is True
+
+    # Snapshot reflects latest (A), not stale (B).
+    precheck = current_sleeve_admission_evidence_precheck(store)
+    assert precheck.accepted is True
+    assert precheck.admitted_active == ("sleeve-a",)
+
+    # Evidence log has exactly one A record and one B record (no duplicate A).
+    digest_a = sleeve_admission_digest(summary_a)
+    digest_b = sleeve_admission_digest(summary_b)
+    a_count = sum(
+        1
+        for rec in store.load_evidence()
+        if rec.get("evidence_type") == "sleeve_admission"
+        and isinstance(rec.get("data"), dict)
+        and rec["data"].get("evidence_digest") == digest_a
+    )
+    b_count = sum(
+        1
+        for rec in store.load_evidence()
+        if rec.get("evidence_type") == "sleeve_admission"
+        and isinstance(rec.get("data"), dict)
+        and rec["data"].get("evidence_digest") == digest_b
+    )
+    assert a_count == 1
+    assert b_count == 1
+
+
+def test_sleeve_admission_store_same_outcome_different_as_of_ns(tmp_path):
+    summary = _admitted_summary("micro-1")
+    other = replace(summary, as_of_ns=summary.as_of_ns + 999_999_999)
+    store = _sleeve_admission_evidence_store(tmp_path)
+    admission_store = SleeveAdmissionStore(store)
+
+    assert admission_store.save_outcome(summary).success is True
+    # Different as_of_ns but same semantic outcome → same digest → idempotent.
+    assert admission_store.save_outcome(other).success is True
+    precheck = current_sleeve_admission_evidence_precheck(store)
+    assert precheck.accepted is True
+
+
+def test_sleeve_admission_corrupted_two_canonical_records_still_ambiguous(tmp_path):
+    summary = _admitted_summary()
+    evidence_payload = sleeve_admission_to_evidence_payload(summary)
+    store = _sleeve_admission_evidence_store(tmp_path)
+    assert store.save_snapshot("sleeve_admission", sleeve_admission_outcome_to_dict(summary)).success is True
+    # Manually inject two canonical records for the same digest (simulates log corruption).
+    assert store.append_evidence("sleeve_admission", evidence_payload).success is True
+    assert store.append_evidence("sleeve_admission", evidence_payload).success is True
+
+    precheck = current_sleeve_admission_evidence_precheck(store)
+    assert precheck.accepted is False
+    assert precheck.rejection_reasons == ("sleeve_admission_evidence:currentness_ambiguous",)

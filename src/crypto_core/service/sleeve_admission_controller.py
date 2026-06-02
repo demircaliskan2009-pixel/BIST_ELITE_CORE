@@ -626,24 +626,29 @@ class SleeveAdmissionStore:
         self._store = evidence_store
 
     def save_outcome(self, summary: SleeveAdmissionPortfolioSummary) -> WriteResult:
-        """Persist a sleeve admission outcome as an atomic snapshot + evidence log entry."""
+        """Persist a sleeve admission outcome as an atomic snapshot + evidence log entry.
+
+        Idempotent for recurring semantic outcomes: if the same digest already exists in
+        the evidence log (e.g. A→B→A), the snapshot is updated to the current outcome and
+        the duplicate JSONL append is skipped. The currentness precheck still rejects a log
+        that somehow contains more than one canonical record for the current digest.
+        """
         try:
             evidence_payload = sleeve_admission_to_evidence_payload(summary)
             evidence_digest = evidence_payload["evidence_digest"]
-            if self._sleeve_admission_digest_exists(evidence_digest):
-                return WriteResult(
-                    success=False,
-                    error=f"Duplicate sleeve admission evidence digest: {evidence_digest}",
-                    path=str(self._store.evidence_log_path),
-                )
+            digest_exists = self._sleeve_admission_digest_exists(evidence_digest)
         except (EvidenceStoreCorruptError, ValueError) as exc:
             return WriteResult(
                 success=False,
                 error=f"Sleeve admission evidence state invalid: {exc}",
                 path=str(self._store.evidence_log_path),
             )
+        # Always write the snapshot so it reflects the current outcome.
         result = self._store.save_snapshot(_SLEEVE_ADMISSION_SNAPSHOT_NAME, evidence_payload["sleeve_admission"])
         if not result.success:
+            return result
+        if digest_exists:
+            # Recurring outcome: snapshot updated; skip duplicate JSONL append.
             return result
         evidence_result = self._store.append_evidence(_SLEEVE_ADMISSION_EVIDENCE_TYPE, evidence_payload)
         if not evidence_result.success:
