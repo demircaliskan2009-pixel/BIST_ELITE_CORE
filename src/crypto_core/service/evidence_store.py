@@ -58,6 +58,10 @@ _BACKTEST_REPLAY_ADMISSION_PAYLOAD_SCHEMA_VERSION = "1"
 _BACKTEST_REPLAY_ADMISSION_PAYLOAD_TYPE = "backtest_replay_admission"
 _PROMOTION_REVIEW_EVIDENCE_TYPE = "promotion_review"
 _PROMOTION_REVIEW_PAYLOAD_TYPE = "promotion_review"
+_PROMOTION_REVIEW_CANONICAL_FIELDS = frozenset(
+    {"schema_version", "payload_type", "evidence_digest", "promotion_review"}
+)
+_PROMOTION_REVIEW_LEGACY_REQUIRED_FIELDS = frozenset({"review_id", "reviewed_at_ns", "verdict"})
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +601,10 @@ def _validate_promotion_review_evidence_payload_shape(data: object, line_no: int
         raise EvidenceStoreCorruptError(
             f"Evidence line {line_no}: promotion_review data must be a dict, got {type(data).__name__!r}"
         )
+    if not (_PROMOTION_REVIEW_CANONICAL_FIELDS & set(data)):
+        _validate_legacy_promotion_review_payload_shape(data, line_no)
+        return
+
     required = {"schema_version", "payload_type", "evidence_digest", "promotion_review"}
     missing = required - set(data)
     if missing:
@@ -611,6 +619,21 @@ def _validate_promotion_review_evidence_payload_shape(data: object, line_no: int
         raise EvidenceStoreCorruptError(f"Evidence line {line_no}: promotion_review evidence_digest is malformed")
     if not isinstance(data["promotion_review"], dict):
         raise EvidenceStoreCorruptError(f"Evidence line {line_no}: promotion_review payload must be a dict")
+
+
+def _validate_legacy_promotion_review_payload_shape(data: dict, line_no: int) -> None:
+    """Load-compatible shape validation for raw PR #213 promotion review evidence."""
+    missing = _PROMOTION_REVIEW_LEGACY_REQUIRED_FIELDS - set(data)
+    if missing:
+        raise EvidenceStoreCorruptError(
+            f"Evidence line {line_no}: legacy promotion_review data missing fields {sorted(missing)!r}"
+        )
+    if not isinstance(data["review_id"], str) or not data["review_id"]:
+        raise EvidenceStoreCorruptError(f"Evidence line {line_no}: legacy promotion_review review_id is malformed")
+    if type(data["reviewed_at_ns"]) is not int:
+        raise EvidenceStoreCorruptError(f"Evidence line {line_no}: legacy promotion_review reviewed_at_ns is malformed")
+    if not isinstance(data["verdict"], str) or not data["verdict"]:
+        raise EvidenceStoreCorruptError(f"Evidence line {line_no}: legacy promotion_review verdict is malformed")
 
 
 def _validate_snapshot_envelope(raw: object, name: str) -> None:

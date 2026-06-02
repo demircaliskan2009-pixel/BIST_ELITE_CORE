@@ -1305,6 +1305,8 @@ class PromotionReviewStore:
             if record.get("evidence_type") != "promotion_review":
                 continue
             payload = record.get("data")
+            if is_legacy_promotion_review_evidence_payload(payload):
+                continue
             try:
                 validated = validate_promotion_review_evidence_payload(payload)
             except ValueError as exc:
@@ -1349,6 +1351,8 @@ class PromotionReviewStore:
             if record.get("evidence_type") != "promotion_review":
                 continue
             payload = record.get("data")
+            if is_legacy_promotion_review_evidence_payload(payload):
+                continue
             validated = validate_promotion_review_evidence_payload(payload)
             if validated["evidence_digest"] == evidence_digest:
                 return True
@@ -1541,6 +1545,20 @@ def validate_promotion_review_evidence_payload(payload: object) -> dict[str, Any
         raise ValueError("promotion_review:evidence_digest_mismatch")
 
     return dict(payload)
+
+
+def is_legacy_promotion_review_evidence_payload(payload: object) -> bool:
+    """True for raw PR #213 promotion review evidence without digest proof."""
+    if not isinstance(payload, Mapping):
+        return False
+    canonical_keys = {"schema_version", "payload_type", "evidence_digest", "promotion_review"}
+    if canonical_keys & set(payload):
+        return False
+    try:
+        _validate_promotion_review_payload(payload)
+    except ValueError:
+        return False
+    return True
 
 
 def _promotion_review_payload_digest(review_payload: Mapping[str, Any]) -> str:

@@ -81,6 +81,7 @@ from crypto_core.service.promotion_review import (
     PromotionVerdict,
     build_promotion_review,
     promotion_review_digest,
+    promotion_review_to_dict,
     promotion_review_to_evidence_payload,
 )
 from crypto_core.service.promotion_review_controller import (
@@ -1026,6 +1027,68 @@ class TestPersistence:
             record for record in store.load_evidence() if record["evidence_type"] == "promotion_review"
         ]
         assert len(promotion_evidence) == 1
+
+    def test_legacy_raw_promotion_review_evidence_loads_without_digest(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        review = build_promotion_review(
+            _good_reports(3),
+            review_id="rev-legacy-load",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            reviewed_at_ns=_T0_NS,
+        )
+        legacy_payload = promotion_review_to_dict(review)
+
+        assert store.append_evidence("promotion_review", legacy_payload).success is True
+        records = store.load_evidence()
+
+        assert records[0]["evidence_type"] == "promotion_review"
+        assert records[0]["data"]["review_id"] == "rev-legacy-load"
+        assert "evidence_digest" not in records[0]["data"]
+
+    def test_legacy_raw_promotion_review_evidence_does_not_block_canonical_append(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        review = build_promotion_review(
+            _good_reports(3),
+            review_id="rev-legacy-upgrade",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            reviewed_at_ns=_T0_NS,
+        )
+        assert store.append_evidence("promotion_review", promotion_review_to_dict(review)).success is True
+
+        result = PromotionReviewStore(store).save_review(review)
+
+        assert result.success is True
+        promotion_evidence = [
+            record for record in store.load_evidence() if record["evidence_type"] == "promotion_review"
+        ]
+        assert len(promotion_evidence) == 2
+        assert "evidence_digest" not in promotion_evidence[0]["data"]
+        assert promotion_evidence[1]["data"]["evidence_digest"] == promotion_review_digest(review)
+
+    def test_legacy_raw_promotion_review_evidence_is_not_currentness_proof(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        review = build_promotion_review(
+            _good_reports(3),
+            review_id="rev-legacy-not-current",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            reviewed_at_ns=_T0_NS,
+        )
+        assert store.append_evidence("promotion_review", promotion_review_to_dict(review)).success is True
+
+        with pytest.raises(PromotionReviewCorruptError, match="missing digest"):
+            PromotionReviewStore(store).load_current_review_evidence(review)
 
     def test_promotion_review_tampered_evidence_digest_fails_currentness(self, tmp_path: Path):
         store = EvidenceStore(
