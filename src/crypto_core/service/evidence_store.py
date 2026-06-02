@@ -62,6 +62,12 @@ _PROMOTION_REVIEW_CANONICAL_FIELDS = frozenset(
     {"schema_version", "payload_type", "evidence_digest", "promotion_review"}
 )
 _PROMOTION_REVIEW_LEGACY_REQUIRED_FIELDS = frozenset({"review_id", "reviewed_at_ns", "verdict"})
+_SLEEVE_ADMISSION_EVIDENCE_TYPE = "sleeve_admission"
+_SLEEVE_ADMISSION_PAYLOAD_TYPE = "sleeve_admission"
+_SLEEVE_ADMISSION_CANONICAL_FIELDS = frozenset(
+    {"schema_version", "payload_type", "evidence_digest", "sleeve_admission"}
+)
+_SLEEVE_ADMISSION_LEGACY_REQUIRED_FIELDS = frozenset({"admission_results", "admitted_active", "admitted_unallocated"})
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +99,7 @@ EVIDENCE_TYPES = frozenset(
         "service_failure",
         "audit_record",
         _PROMOTION_REVIEW_EVIDENCE_TYPE,
+        _SLEEVE_ADMISSION_EVIDENCE_TYPE,
         "cycle_summary",
         "service_transition",
     }
@@ -593,6 +600,8 @@ def _validate_evidence_record(record: object, line_no: int) -> None:
         raise EvidenceStoreCorruptError(f"Evidence line {line_no}: unknown evidence_type={record['evidence_type']!r}")
     if record["evidence_type"] == _PROMOTION_REVIEW_EVIDENCE_TYPE:
         _validate_promotion_review_evidence_payload_shape(record["data"], line_no)
+    if record["evidence_type"] == _SLEEVE_ADMISSION_EVIDENCE_TYPE:
+        _validate_sleeve_admission_evidence_payload_shape(record["data"], line_no)
 
 
 def _validate_promotion_review_evidence_payload_shape(data: object, line_no: int) -> None:
@@ -634,6 +643,46 @@ def _validate_legacy_promotion_review_payload_shape(data: dict, line_no: int) ->
         raise EvidenceStoreCorruptError(f"Evidence line {line_no}: legacy promotion_review reviewed_at_ns is malformed")
     if not isinstance(data["verdict"], str) or not data["verdict"]:
         raise EvidenceStoreCorruptError(f"Evidence line {line_no}: legacy promotion_review verdict is malformed")
+
+
+def _validate_sleeve_admission_evidence_payload_shape(data: object, line_no: int) -> None:
+    """Fail-closed shape validation for sleeve admission evidence payloads."""
+    if not isinstance(data, dict):
+        raise EvidenceStoreCorruptError(
+            f"Evidence line {line_no}: sleeve_admission data must be a dict, got {type(data).__name__!r}"
+        )
+    if not (_SLEEVE_ADMISSION_CANONICAL_FIELDS & set(data)):
+        _validate_legacy_sleeve_admission_payload_shape(data, line_no)
+        return
+
+    required = {"schema_version", "payload_type", "evidence_digest", "sleeve_admission"}
+    missing = required - set(data)
+    if missing:
+        raise EvidenceStoreCorruptError(
+            f"Evidence line {line_no}: sleeve_admission data missing fields {sorted(missing)!r}"
+        )
+    if data["payload_type"] != _SLEEVE_ADMISSION_PAYLOAD_TYPE:
+        raise EvidenceStoreCorruptError(
+            f"Evidence line {line_no}: sleeve_admission payload_type={data['payload_type']!r}"
+        )
+    if not isinstance(data["evidence_digest"], str) or not data["evidence_digest"]:
+        raise EvidenceStoreCorruptError(f"Evidence line {line_no}: sleeve_admission evidence_digest is malformed")
+    if not isinstance(data["sleeve_admission"], dict):
+        raise EvidenceStoreCorruptError(f"Evidence line {line_no}: sleeve_admission payload must be a dict")
+
+
+def _validate_legacy_sleeve_admission_payload_shape(data: dict, line_no: int) -> None:
+    """Load-compatible shape validation for digestless sleeve admission outcome payloads."""
+    missing = _SLEEVE_ADMISSION_LEGACY_REQUIRED_FIELDS - set(data)
+    if missing:
+        raise EvidenceStoreCorruptError(
+            f"Evidence line {line_no}: legacy sleeve_admission data missing fields {sorted(missing)!r}"
+        )
+    for field_name in ("admission_results", "admitted_active", "admitted_unallocated"):
+        if not isinstance(data[field_name], list):
+            raise EvidenceStoreCorruptError(
+                f"Evidence line {line_no}: legacy sleeve_admission {field_name} is malformed"
+            )
 
 
 def _validate_snapshot_envelope(raw: object, name: str) -> None:
