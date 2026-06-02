@@ -47,9 +47,38 @@ from crypto_core.service.models import (
 )
 from crypto_core.service.service_orchestrator import ServiceOrchestrator
 from crypto_core.session.models import PaperSessionStatus
+from crypto_core.validation.backtest_replay_admission import (
+    BacktestReplayAdmissionResult,
+    BacktestReplayAdmissionStatus,
+    BacktestReplayWindow,
+)
 
 _NS_PER_S = 1_000_000_000
 _T0_NS = 1_700_000_000 * _NS_PER_S
+
+
+def _accepted_admission_result(
+    *,
+    strategy_id: str = "strategy-1",
+    strategy_digest: str = "a" * 64,
+) -> BacktestReplayAdmissionResult:
+    return BacktestReplayAdmissionResult(
+        accepted=True,
+        status=BacktestReplayAdmissionStatus.ACCEPTED,
+        strategy_id=strategy_id,
+        strategy_digest=strategy_digest,
+        replay_source_id="offline-replay-v1",
+        historical_data_source_id="historical-perp-journal-v1",
+        replay_window=BacktestReplayWindow(start_ns=1_000, end_ns=2_000),
+        decision_ledger_digests={"STRATEGY_SPEC": "b" * 64},
+        evidence_digest_by_stage={"STRATEGY_SPEC": "b" * 64},
+        rejection_reasons=(),
+        needs_research_reasons=(),
+    )
+
+
+def _seed_accepted_admission_evidence(store: EvidenceStore) -> None:
+    assert store.append_backtest_replay_admission_record(_accepted_admission_result()).success is True
 
 
 def _make_options_state(
@@ -507,6 +536,7 @@ class TestServiceOrchestratorExternalRegimeLifecycle:
         orchestrator.start_review()
         orchestrator.intake_last_campaign()
         current = orchestrator.review_snapshot()
+        _seed_accepted_admission_evidence(store)
         final = orchestrator.finalize_review()
 
         assert current is not None

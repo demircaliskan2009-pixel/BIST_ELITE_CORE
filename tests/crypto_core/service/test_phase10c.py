@@ -407,7 +407,22 @@ def _admission_gated_controller(store: EvidenceStore) -> PromotionReviewControll
         thresholds=PromotionThresholds(min_paper_runs=0),
         evidence_store=store,
         created_at_ns=_T0_NS,
-        require_admission_evidence=True,
+    )
+    for report in _good_reports(3):
+        controller.add_campaign_report(report)
+    return controller
+
+
+def _no_store_controller(*, require_admission_evidence: bool | None = None) -> PromotionReviewController:
+    kwargs = {}
+    if require_admission_evidence is not None:
+        kwargs["require_admission_evidence"] = require_admission_evidence
+    controller = PromotionReviewController(
+        review_id="rev-no-store",
+        readiness_level="paper_live",
+        thresholds=PromotionThresholds(min_paper_runs=0),
+        created_at_ns=_T0_NS,
+        **kwargs,
     )
     for report in _good_reports(3):
         controller.add_campaign_report(report)
@@ -916,6 +931,20 @@ class TestBacktestReplayAdmissionEvidencePrecheck:
         assert final.verdict == PromotionVerdict.PROMOTE.value
         assert controller.status == ReviewStatus.FINALIZED
 
+    def test_default_evidence_store_path_requires_admission_evidence(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        controller = _admission_gated_controller(store)
+
+        snapshot = controller.current_snapshot()
+
+        assert snapshot.is_ready_to_finalize is False
+        assert "backtest_replay_admission_evidence:missing" in snapshot.insufficient_evidence
+        with pytest.raises(PromotionAdmissionEvidenceError, match="backtest_replay_admission_evidence:missing"):
+            controller.finalize_review(finalized_at_ns=_T0_NS)
+
     def test_missing_admission_evidence_rejects_fail_closed(self, tmp_path: Path):
         controller = _admission_gated_controller(EvidenceStore(evidence_dir=tmp_path / "evidence"))
 
@@ -927,6 +956,28 @@ class TestBacktestReplayAdmissionEvidencePrecheck:
             controller.finalize_review(finalized_at_ns=_T0_NS)
         assert controller.status == ReviewStatus.READY_TO_EVALUATE
         assert controller.final_report is None
+
+    def test_required_admission_evidence_without_store_rejects_fail_closed(self):
+        controller = _no_store_controller(require_admission_evidence=True)
+
+        precheck = controller.admission_evidence_precheck()
+
+        assert precheck.accepted is False
+        assert precheck.rejection_reasons == ("promotion_admission_evidence:evidence_store_missing",)
+        with pytest.raises(
+            PromotionAdmissionEvidenceError, match="promotion_admission_evidence:evidence_store_missing"
+        ):
+            controller.finalize_review(finalized_at_ns=_T0_NS)
+
+    def test_explicit_admission_evidence_opt_out_allows_no_store_unit_context(self):
+        controller = _no_store_controller(require_admission_evidence=False)
+
+        snapshot = controller.current_snapshot()
+        final = controller.finalize_review(finalized_at_ns=_T0_NS)
+
+        assert snapshot.is_ready_to_finalize is True
+        assert "promotion_admission_evidence:evidence_store_missing" not in snapshot.insufficient_evidence
+        assert final.verdict == PromotionVerdict.PROMOTE.value
 
     def test_rejected_admission_evidence_rejects(self, tmp_path: Path):
         store = EvidenceStore(

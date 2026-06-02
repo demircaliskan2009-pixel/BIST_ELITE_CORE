@@ -420,7 +420,7 @@ class PromotionReviewController:
         thresholds: PromotionThresholds | None = None,
         evidence_store: EvidenceStore | None = None,
         created_at_ns: int | None = None,
-        require_admission_evidence: bool = False,
+        require_admission_evidence: bool | None = None,
     ) -> None:
         self._review_id = review_id or f"review-{uuid.uuid4().hex[:12]}"
         self._status = ReviewStatus.CREATED
@@ -433,7 +433,9 @@ class PromotionReviewController:
         self._final_report: FinalReviewReport | None = None
         self._evidence_store = evidence_store
         self._review_store = PromotionReviewStore(evidence_store) if evidence_store else None
-        self._require_admission_evidence = require_admission_evidence
+        self._require_admission_evidence = (
+            evidence_store is not None if require_admission_evidence is None else require_admission_evidence
+        )
 
     # ------------------------------------------------------------------
     # Properties
@@ -470,7 +472,7 @@ class PromotionReviewController:
     def admission_evidence_precheck(self) -> AdmissionEvidencePrecheck:
         """Read-only gate for persisted BacktestReplayAdmission evidence."""
         if self._evidence_store is None:
-            return AdmissionEvidencePrecheck(accepted=True, rejection_reasons=())
+            return _admission_precheck_rejected("promotion_admission_evidence:evidence_store_missing")
         return backtest_replay_admission_evidence_precheck(self._evidence_store)
 
     # ------------------------------------------------------------------
@@ -891,7 +893,7 @@ class PromotionReviewController:
         campaign_ids = data.get("campaign_ids", [])
         readiness_level = data.get("readiness_level", "not_assessed")
         updated_at_ns = data.get("updated_at_ns", created_at_ns)
-        require_admission_evidence = data.get("require_admission_evidence", False)
+        require_admission_evidence = data.get("require_admission_evidence", evidence_store is not None)
         if not isinstance(require_admission_evidence, bool):
             raise ReviewWorkflowCorruptError("Workflow state 'require_admission_evidence' must be a bool")
 
