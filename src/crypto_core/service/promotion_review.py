@@ -28,13 +28,17 @@ PRD reference: §2 System Orchestration, §7 Execution Engine.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from crypto_core.service.campaign import AcceptanceVerdict, CampaignReport
-from crypto_core.service.evidence_store import EvidenceStore, WriteResult
+from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreCorruptError, WriteResult
 
 logger = logging.getLogger(__name__)
 
@@ -1247,6 +1251,8 @@ def build_promotion_review(
 
 _REVIEW_SNAPSHOT_NAME = "promotion_review"
 _REVIEW_REQUIRED_FIELDS = frozenset({"review_id", "reviewed_at_ns", "verdict"})
+_PROMOTION_REVIEW_PAYLOAD_SCHEMA_VERSION = "1"
+_PROMOTION_REVIEW_PAYLOAD_TYPE = "promotion_review"
 
 
 class PromotionReviewCorruptError(RuntimeError):
@@ -1266,15 +1272,55 @@ class PromotionReviewStore:
     def save_review(self, review: PromotionReview) -> WriteResult:
         """Persist a promotion review as an atomic snapshot + evidence log entry."""
         d = promotion_review_to_dict(review)
+        try:
+            evidence_payload = promotion_review_to_evidence_payload(review)
+            evidence_digest = evidence_payload["evidence_digest"]
+            if self._promotion_review_digest_exists(evidence_digest):
+                return WriteResult(
+                    success=False,
+                    error=f"Duplicate promotion review evidence digest: {evidence_digest}",
+                    path=str(self._store.evidence_log_path),
+                )
+        except (EvidenceStoreCorruptError, ValueError, PromotionReviewCorruptError) as exc:
+            return WriteResult(
+                success=False,
+                error=f"Promotion review evidence state invalid: {exc}",
+                path=str(self._store.evidence_log_path),
+            )
         # Atomic snapshot for latest review.
         result = self._store.save_snapshot(_REVIEW_SNAPSHOT_NAME, d)
         if not result.success:
             return result
         # Also append to evidence log.
-        evidence_result = self._store.append_evidence("promotion_review", d)
+        evidence_result = self._store.append_evidence("promotion_review", evidence_payload)
         if not evidence_result.success:
             return evidence_result
         return result
+
+    def load_current_review_evidence(self, review: PromotionReview) -> dict:
+        """Load the unique digest-current evidence payload for a promotion review."""
+        expected_digest = promotion_review_digest(review)
+        matches: list[dict] = []
+        for record in self._store.load_evidence():
+            if record.get("evidence_type") != "promotion_review":
+                continue
+            payload = record.get("data")
+            try:
+                validated = validate_promotion_review_evidence_payload(payload)
+            except ValueError as exc:
+                raise PromotionReviewCorruptError(f"Promotion review evidence malformed: {exc}") from exc
+            if validated["evidence_digest"] == expected_digest:
+                matches.append(validated)
+
+        if not matches:
+            raise PromotionReviewCorruptError(
+                f"Promotion review evidence currentness failed: missing digest {expected_digest}"
+            )
+        if len(matches) > 1:
+            raise PromotionReviewCorruptError(
+                f"Promotion review evidence currentness failed: duplicate digest {expected_digest}"
+            )
+        return matches[0]
 
     def load_review(self) -> dict:
         """Load the latest promotion review from disk.
@@ -1294,6 +1340,19 @@ class PromotionReviewStore:
         if missing:
             raise PromotionReviewCorruptError(f"Promotion review missing required fields: {sorted(missing)!r}")
         return data
+
+    def _promotion_review_digest_exists(self, evidence_digest: object) -> bool:
+        if not isinstance(evidence_digest, str) or not evidence_digest:
+            raise PromotionReviewCorruptError("Promotion review evidence digest is malformed")
+
+        for record in self._store.load_evidence():
+            if record.get("evidence_type") != "promotion_review":
+                continue
+            payload = record.get("data")
+            validated = validate_promotion_review_evidence_payload(payload)
+            if validated["evidence_digest"] == evidence_digest:
+                return True
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1426,6 +1485,80 @@ def promotion_review_to_dict(review: PromotionReview) -> dict:
         "aggregation": _aggregation_to_dict(review.aggregation),
         "result": _promotion_result_to_dict(review.result),
     }
+
+
+def promotion_review_digest(review: PromotionReview) -> str:
+    """Canonical digest for a PromotionReview domain payload."""
+    if not isinstance(review, PromotionReview):
+        raise ValueError("promotion_review:review_malformed")
+    return _promotion_review_payload_digest(promotion_review_to_dict(review))
+
+
+def promotion_review_to_evidence_payload(review: PromotionReview) -> dict[str, Any]:
+    """Convert a PromotionReview into digest-bound evidence payload."""
+    if not isinstance(review, PromotionReview):
+        raise ValueError("promotion_review:review_malformed")
+
+    review_payload = promotion_review_to_dict(review)
+    evidence_digest = _promotion_review_payload_digest(review_payload)
+    return {
+        "schema_version": _PROMOTION_REVIEW_PAYLOAD_SCHEMA_VERSION,
+        "payload_type": _PROMOTION_REVIEW_PAYLOAD_TYPE,
+        "evidence_digest": evidence_digest,
+        "promotion_review": review_payload,
+        "review_id": review_payload["review_id"],
+        "reviewed_at_ns": review_payload["reviewed_at_ns"],
+        "verdict": review_payload["verdict"],
+        "readiness_level": review_payload["readiness_level"],
+        "campaign_ids": list(review_payload["campaign_ids"]),
+        "aggregation": dict(review_payload["aggregation"]),
+        "result": dict(review_payload["result"]),
+    }
+
+
+def validate_promotion_review_evidence_payload(payload: object) -> dict[str, Any]:
+    """Validate a promotion review evidence payload and its current digest."""
+    if not isinstance(payload, Mapping):
+        raise ValueError("promotion_review:evidence_payload_malformed")
+
+    required = {"schema_version", "payload_type", "evidence_digest", "promotion_review"}
+    missing = required - set(payload)
+    if missing:
+        raise ValueError(f"promotion_review:evidence_payload_missing:{','.join(sorted(missing))}")
+    if payload["schema_version"] != _PROMOTION_REVIEW_PAYLOAD_SCHEMA_VERSION:
+        raise ValueError("promotion_review:schema_version_unknown")
+    if payload["payload_type"] != _PROMOTION_REVIEW_PAYLOAD_TYPE:
+        raise ValueError("promotion_review:payload_type_wrong")
+    evidence_digest = payload["evidence_digest"]
+    if not isinstance(evidence_digest, str) or not evidence_digest:
+        raise ValueError("promotion_review:evidence_digest_malformed")
+
+    review_payload = payload["promotion_review"]
+    if not isinstance(review_payload, Mapping):
+        raise ValueError("promotion_review:review_payload_malformed")
+    expected_digest = _promotion_review_payload_digest(review_payload)
+    if evidence_digest != expected_digest:
+        raise ValueError("promotion_review:evidence_digest_mismatch")
+
+    return dict(payload)
+
+
+def _promotion_review_payload_digest(review_payload: Mapping[str, Any]) -> str:
+    _validate_promotion_review_payload(review_payload)
+    canonical = json.dumps(dict(review_payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _validate_promotion_review_payload(review_payload: Mapping[str, Any]) -> None:
+    missing = _REVIEW_REQUIRED_FIELDS - set(review_payload)
+    if missing:
+        raise ValueError(f"promotion_review:review_payload_missing:{','.join(sorted(missing))}")
+    if not isinstance(review_payload.get("review_id"), str) or not review_payload["review_id"]:
+        raise ValueError("promotion_review:review_id_malformed")
+    if type(review_payload.get("reviewed_at_ns")) is not int:
+        raise ValueError("promotion_review:reviewed_at_ns_malformed")
+    if not isinstance(review_payload.get("verdict"), str) or not review_payload["verdict"]:
+        raise ValueError("promotion_review:verdict_malformed")
 
 
 # ---------------------------------------------------------------------------
