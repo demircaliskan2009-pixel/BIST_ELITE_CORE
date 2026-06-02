@@ -85,6 +85,7 @@ from crypto_core.service.promotion_review_controller import (
     FinalReviewReport,
     PromotionAdmissionEvidenceError,
     PromotionReviewController,
+    PromotionReviewPersistenceError,
     ReviewStatus,
     ReviewWorkflowCorruptError,
     backtest_replay_admission_evidence_precheck,
@@ -949,6 +950,39 @@ class TestPersistence:
         assert result.error == "append failed"
         loaded = review_store.load_review()
         assert loaded["review_id"] == "rev-append-fail"
+
+    def test_finalize_review_surfaces_promotion_evidence_append_failure(self, tmp_path: Path, monkeypatch):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        assert store.append_backtest_replay_admission_record(_accepted_admission_result()).success is True
+        ctrl = PromotionReviewController(
+            review_id="rev-finalize-append-fail",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            evidence_store=store,
+            created_at_ns=_T0_NS,
+        )
+        for r in _good_reports(3):
+            ctrl.add_campaign_report(r)
+
+        def fail_append(evidence_type: str, data: dict) -> WriteResult:
+            assert evidence_type == "promotion_review"
+            assert data["review_id"] == "rev-finalize-append-fail"
+            return WriteResult(success=False, error="append failed", path=str(store.evidence_log_path))
+
+        monkeypatch.setattr(store, "append_evidence", fail_append)
+
+        with pytest.raises(PromotionReviewPersistenceError, match="Promotion review persistence failed: append failed"):
+            ctrl.finalize_review(finalized_at_ns=_T0_NS)
+
+        assert ctrl.status == ReviewStatus.READY_TO_EVALUATE
+        assert ctrl.final_report is None
+        workflow = store.load_snapshot("promotion_review_workflow")["data"]
+        assert workflow["status"] == ReviewStatus.READY_TO_EVALUATE.value
+        assert workflow["is_finalized"] is False
+        assert [record for record in store.load_evidence() if record["evidence_type"] == "promotion_review"] == []
 
 
 # ===========================================================================

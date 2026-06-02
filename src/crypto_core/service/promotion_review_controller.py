@@ -144,6 +144,10 @@ class PromotionAdmissionEvidenceError(RuntimeError):
     """Raised when persisted BacktestReplayAdmission evidence fails closed."""
 
 
+class PromotionReviewPersistenceError(RuntimeError):
+    """Raised when final promotion review persistence fails closed."""
+
+
 # ---------------------------------------------------------------------------
 # Admission evidence precheck
 # ---------------------------------------------------------------------------
@@ -666,6 +670,7 @@ class PromotionReviewController:
 
         Raises:
             RuntimeError: if review is in FAILED status or has no campaigns.
+            PromotionReviewPersistenceError: if final review persistence fails.
         """
         if self._final_report is not None and self._status in _TERMINAL_REVIEW_STATUSES:
             return self._final_report
@@ -726,6 +731,13 @@ class PromotionReviewController:
             ext_regime_governance=ext_regime_governance_summary(aggregation),
         )
 
+        if self._review_store is not None:
+            save_result = self._review_store.save_review(review)
+            if not save_result.success:
+                reason = save_result.error or "unknown"
+                path = f" path={save_result.path}" if save_result.path else ""
+                raise PromotionReviewPersistenceError(f"Promotion review persistence failed: {reason}{path}")
+
         self._final_report = final
 
         if result.verdict == PromotionVerdict.REJECT:
@@ -734,9 +746,6 @@ class PromotionReviewController:
             self._status = ReviewStatus.FINALIZED
 
         self._updated_at_ns = ts
-
-        if self._review_store is not None:
-            self._review_store.save_review(review)
 
         self._persist_workflow()
 
