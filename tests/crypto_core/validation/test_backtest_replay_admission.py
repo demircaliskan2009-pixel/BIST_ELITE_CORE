@@ -97,9 +97,14 @@ def _evidence_ref() -> DecisionEvidenceRef:
 
 def _records(
     spec: StrategySpec | None = None,
+    *,
+    lbr_result: LeakageBiasRepaintResult | None = None,
+    pit_result: DataRequirementValidationResult | None = None,
 ) -> tuple[DecisionLedgerRecord, DecisionLedgerRecord, DecisionLedgerRecord]:
     active_spec = _valid_spec() if spec is None else spec
     digest = strategy_spec_digest(active_spec)
+    active_lbr = _lbr_result() if lbr_result is None else lbr_result
+    active_pit = _pit_result() if pit_result is None else pit_result
     strategy_record = build_strategy_spec_decision_record(
         active_spec,
         input_digest="b" * 64,
@@ -107,7 +112,7 @@ def _records(
     )
     lbr_record = build_validation_decision_record(
         DecisionLedgerStage.LEAKAGE_BIAS_REPAINT,
-        _lbr_result(),
+        active_lbr,
         strategy_id=active_spec.strategy_id,
         strategy_digest=digest,
         input_digest="c" * 64,
@@ -116,7 +121,7 @@ def _records(
     )
     pit_record = build_validation_decision_record(
         DecisionLedgerStage.PIT_PARITY,
-        _pit_result(),
+        active_pit,
         strategy_id=active_spec.strategy_id,
         strategy_digest=digest,
         input_digest="d" * 64,
@@ -201,12 +206,14 @@ def test_lbr_rejected_rejects() -> None:
 
 
 def test_lbr_needs_research_rejects() -> None:
+    lbr = _lbr_result(
+        status=LeakageBiasRepaintStatus.NEEDS_RESEARCH,
+        needs_research_reasons=("leakage_bias_repaint:needs_calibration",),
+    )
     result = evaluate_backtest_replay_admission(
         _admission_input(
-            leakage_bias_repaint_result=_lbr_result(
-                status=LeakageBiasRepaintStatus.NEEDS_RESEARCH,
-                needs_research_reasons=("leakage_bias_repaint:needs_calibration",),
-            )
+            leakage_bias_repaint_result=lbr,
+            decision_ledger_records=_records(lbr_result=lbr),
         )
     )
 
@@ -216,12 +223,14 @@ def test_lbr_needs_research_rejects() -> None:
 
 
 def test_lbr_insufficient_evidence_rejects() -> None:
+    lbr = _lbr_result(
+        status=LeakageBiasRepaintStatus.INSUFFICIENT_EVIDENCE,
+        rejection_reasons=("leakage_bias_repaint:insufficient_evidence:missing_bars",),
+    )
     result = evaluate_backtest_replay_admission(
         _admission_input(
-            leakage_bias_repaint_result=_lbr_result(
-                status=LeakageBiasRepaintStatus.INSUFFICIENT_EVIDENCE,
-                rejection_reasons=("leakage_bias_repaint:insufficient_evidence:missing_bars",),
-            )
+            leakage_bias_repaint_result=lbr,
+            decision_ledger_records=_records(lbr_result=lbr),
         )
     )
 
@@ -251,7 +260,9 @@ def test_pit_needs_research_rejects() -> None:
         needs_research_reasons=("pit_parity:needs_research:missing_source_review",),
     )
 
-    result = evaluate_backtest_replay_admission(_admission_input(pit_parity_result=pit))
+    result = evaluate_backtest_replay_admission(
+        _admission_input(pit_parity_result=pit, decision_ledger_records=_records(pit_result=pit))
+    )
 
     assert result.accepted is False
     assert result.status is BacktestReplayAdmissionStatus.NEEDS_RESEARCH
@@ -469,3 +480,65 @@ def test_invalid_ledger_mapping_rejects() -> None:
     )
 
     assert any("decision_ledger:stage_unknown" in reason for reason in result.rejection_reasons)
+
+
+def test_matching_ledger_output_digests_pass_currentness() -> None:
+    result = evaluate_backtest_replay_admission(_admission_input())
+
+    assert result.accepted is True
+    assert "backtest_replay_admission:lbr_ledger_output_digest_mismatch" not in result.rejection_reasons
+    assert "backtest_replay_admission:pit_ledger_output_digest_mismatch" not in result.rejection_reasons
+
+
+def test_stale_lbr_ledger_output_digest_rejects() -> None:
+    strategy_record, lbr_record, pit_record = _records()
+    stale_lbr = replace(lbr_record, output_digest="0" * 64)
+
+    result = evaluate_backtest_replay_admission(
+        _admission_input(decision_ledger_records=(strategy_record, stale_lbr, pit_record))
+    )
+
+    assert result.accepted is False
+    assert "backtest_replay_admission:lbr_ledger_output_digest_mismatch" in result.rejection_reasons
+
+
+def test_stale_pit_ledger_output_digest_rejects() -> None:
+    strategy_record, lbr_record, pit_record = _records()
+    stale_pit = replace(pit_record, output_digest="1" * 64)
+
+    result = evaluate_backtest_replay_admission(
+        _admission_input(decision_ledger_records=(strategy_record, lbr_record, stale_pit))
+    )
+
+    assert result.accepted is False
+    assert "backtest_replay_admission:pit_ledger_output_digest_mismatch" in result.rejection_reasons
+
+
+def test_stale_lbr_and_pit_output_digests_reject_deterministically() -> None:
+    strategy_record, lbr_record, pit_record = _records()
+    stale_lbr = replace(lbr_record, output_digest="0" * 64)
+    stale_pit = replace(pit_record, output_digest="1" * 64)
+
+    result = evaluate_backtest_replay_admission(
+        _admission_input(decision_ledger_records=(strategy_record, stale_lbr, stale_pit))
+    )
+
+    assert result.accepted is False
+    assert "backtest_replay_admission:lbr_ledger_output_digest_mismatch" in result.rejection_reasons
+    assert "backtest_replay_admission:pit_ledger_output_digest_mismatch" in result.rejection_reasons
+    assert result.rejection_reasons == tuple(sorted(set(result.rejection_reasons)))
+
+
+def test_same_strategy_digest_with_stale_lbr_evidence_still_rejects() -> None:
+    # Strategy digest matches but the LBR ledger evidence is stale: must not pass on identity alone.
+    strategy_record, lbr_record, pit_record = _records()
+    stale_lbr = replace(lbr_record, output_digest="0" * 64)
+    assert stale_lbr.strategy_digest == lbr_record.strategy_digest
+
+    result = evaluate_backtest_replay_admission(
+        _admission_input(decision_ledger_records=(strategy_record, stale_lbr, pit_record))
+    )
+
+    assert result.accepted is False
+    assert "backtest_replay_admission:strategy_digest_mismatch:LEAKAGE_BIAS_REPAINT" not in result.rejection_reasons
+    assert "backtest_replay_admission:lbr_ledger_output_digest_mismatch" in result.rejection_reasons

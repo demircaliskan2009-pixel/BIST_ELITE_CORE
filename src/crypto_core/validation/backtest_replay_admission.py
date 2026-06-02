@@ -157,6 +157,12 @@ def evaluate_backtest_replay_admission(
         needs_research_reasons=needs_research_reasons,
         insufficient_evidence_reasons=insufficient_evidence_reasons,
     )
+    _validate_evidence_currentness(
+        lbr_result=lbr_result,
+        pit_result=input_.pit_parity_result,
+        ledger_by_stage=ledger_by_stage,
+        rejection_reasons=rejection_reasons,
+    )
     evidence_digest_by_stage = _validate_evidence_digest_by_stage(
         input_.evidence_digest_by_stage,
         ledger_by_stage,
@@ -497,6 +503,50 @@ def _validate_evidence_digest_by_stage(
         if raw_digest != expected_digest:
             rejection_reasons.append(f"backtest_replay_admission:evidence_digest_mismatch:{stage.value}")
     return dict(sorted(normalized.items()))
+
+
+def _validate_evidence_currentness(
+    *,
+    lbr_result: LeakageBiasRepaintResult | None,
+    pit_result: DataRequirementValidationResult,
+    ledger_by_stage: Mapping[DecisionLedgerStage, DecisionLedgerRecord],
+    rejection_reasons: list[str],
+) -> None:
+    """Bind LBR/PIT ledger output_digest to the digest of the CURRENT supplied result.
+
+    A matching strategy_digest is not sufficient: a stale-but-accepted same-strategy ledger record
+    must not pass admission. The expected digest is derived with decision_ledger's own helpers so it
+    matches build_validation_decision_record byte-for-byte.
+    """
+    from crypto_core.audit.decision_ledger import DecisionLedgerStage
+
+    lbr_record = ledger_by_stage.get(DecisionLedgerStage.LEAKAGE_BIAS_REPAINT)
+    if (
+        lbr_result is not None
+        and lbr_record is not None
+        and lbr_record.output_digest != _current_result_output_digest(lbr_result)
+    ):
+        rejection_reasons.append("backtest_replay_admission:lbr_ledger_output_digest_mismatch")
+
+    pit_record = ledger_by_stage.get(DecisionLedgerStage.PIT_PARITY)
+    if (
+        isinstance(pit_result, DataRequirementValidationResult)
+        and pit_record is not None
+        and pit_record.output_digest != _current_result_output_digest(pit_result)
+    ):
+        rejection_reasons.append("backtest_replay_admission:pit_ledger_output_digest_mismatch")
+
+
+def _current_result_output_digest(
+    result: LeakageBiasRepaintResult | DataRequirementValidationResult,
+) -> str:
+    # Reuse decision_ledger's private digest helpers to guarantee byte-for-byte parity with
+    # build_validation_decision_record's output_digest derivation; re-implementing the canonical
+    # payload here would risk divergent digest semantics and a stale-evidence false-accept.
+    from crypto_core.audit.decision_ledger import _digest_payload, _validation_result_facts
+
+    payload, *_ = _validation_result_facts(result)
+    return _digest_payload(payload)
 
 
 def _parse_stage(value: object) -> DecisionLedgerStage | None:
