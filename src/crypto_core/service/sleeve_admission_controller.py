@@ -13,11 +13,16 @@ PRD reference: §2 System Orchestration, §7 Execution Engine, Phase 15F.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
+from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreCorruptError, WriteResult
 from crypto_core.service.promotion_review import PromotionReviewEvidencePrecheck
 from crypto_core.service.sleeve_promotion_review_controller import (
     SleevePromotionReviewPortfolioSummary,
@@ -411,3 +416,255 @@ def _stable_ordered_unique(values: tuple[str, ...]) -> tuple[str, ...]:
         seen.add(value)
         ordered.append(value)
     return tuple(ordered)
+
+
+# ---------------------------------------------------------------------------
+# Sleeve admission outcome evidence (canonical digest + currentness)
+# ---------------------------------------------------------------------------
+#
+# Mirrors the promotion_review evidence pattern. The digest binds deterministic
+# semantic admission outcome facts only; the wall-clock ``as_of_ns`` snapshot
+# metadata is excluded so the same outcome at different times proves identical.
+
+_SLEEVE_ADMISSION_SNAPSHOT_NAME = "sleeve_admission"
+_SLEEVE_ADMISSION_EVIDENCE_TYPE = "sleeve_admission"
+_SLEEVE_ADMISSION_PAYLOAD_TYPE = "sleeve_admission"
+_SLEEVE_ADMISSION_PAYLOAD_SCHEMA_VERSION = "1"
+_SLEEVE_ADMISSION_DIGEST_EXCLUDED_FIELDS = frozenset({"as_of_ns"})
+_SLEEVE_ADMISSION_OUTCOME_REQUIRED_FIELDS = frozenset({"admission_results", "admitted_active", "admitted_unallocated"})
+_SLEEVE_ADMISSION_CANONICAL_FIELDS = frozenset(
+    {"schema_version", "payload_type", "evidence_digest", "sleeve_admission"}
+)
+
+
+@dataclass(frozen=True)
+class SleeveAdmissionEvidencePrecheck:
+    """Read-only proof that the latest persisted sleeve admission outcome is current and admitted."""
+
+    accepted: bool
+    rejection_reasons: tuple[str, ...] = ()
+    evidence_digest: str | None = None
+    admitted_active: tuple[str, ...] = ()
+    admitted_unallocated: tuple[str, ...] = ()
+
+
+def sleeve_admission_outcome_to_dict(summary: SleeveAdmissionPortfolioSummary) -> dict:
+    """Domain outcome payload for a sleeve admission portfolio summary."""
+    if not isinstance(summary, SleeveAdmissionPortfolioSummary):
+        raise ValueError("sleeve_admission:summary_malformed")
+    return sleeve_admission_portfolio_summary_to_dict(summary)
+
+
+def sleeve_admission_digest(summary: SleeveAdmissionPortfolioSummary) -> str:
+    """Canonical digest over deterministic sleeve admission outcome facts (excludes as_of_ns)."""
+    return _sleeve_admission_payload_digest(sleeve_admission_outcome_to_dict(summary))
+
+
+def sleeve_admission_to_evidence_payload(summary: SleeveAdmissionPortfolioSummary) -> dict[str, Any]:
+    """Convert a sleeve admission portfolio summary into a digest-bound evidence payload."""
+    outcome_payload = sleeve_admission_outcome_to_dict(summary)
+    evidence_digest = _sleeve_admission_payload_digest(outcome_payload)
+    return {
+        "schema_version": _SLEEVE_ADMISSION_PAYLOAD_SCHEMA_VERSION,
+        "payload_type": _SLEEVE_ADMISSION_PAYLOAD_TYPE,
+        "evidence_digest": evidence_digest,
+        "sleeve_admission": outcome_payload,
+        "as_of_ns": outcome_payload.get("as_of_ns"),
+        "admitted_active": list(outcome_payload.get("admitted_active", [])),
+        "admitted_unallocated": list(outcome_payload.get("admitted_unallocated", [])),
+    }
+
+
+def validate_sleeve_admission_evidence_payload(payload: object) -> dict[str, Any]:
+    """Validate a sleeve admission evidence payload and recompute its current digest."""
+    if not isinstance(payload, Mapping):
+        raise ValueError("sleeve_admission:evidence_payload_malformed")
+    missing = _SLEEVE_ADMISSION_CANONICAL_FIELDS - set(payload)
+    if missing:
+        raise ValueError(f"sleeve_admission:evidence_payload_missing:{','.join(sorted(missing))}")
+    if payload["schema_version"] != _SLEEVE_ADMISSION_PAYLOAD_SCHEMA_VERSION:
+        raise ValueError("sleeve_admission:schema_version_unknown")
+    if payload["payload_type"] != _SLEEVE_ADMISSION_PAYLOAD_TYPE:
+        raise ValueError("sleeve_admission:payload_type_wrong")
+    evidence_digest = payload["evidence_digest"]
+    if not isinstance(evidence_digest, str) or not evidence_digest:
+        raise ValueError("sleeve_admission:evidence_digest_malformed")
+    outcome_payload = payload["sleeve_admission"]
+    if not isinstance(outcome_payload, Mapping):
+        raise ValueError("sleeve_admission:outcome_payload_malformed")
+    expected_digest = _sleeve_admission_payload_digest(outcome_payload)
+    if evidence_digest != expected_digest:
+        raise ValueError("sleeve_admission:evidence_digest_mismatch")
+    return dict(payload)
+
+
+def is_legacy_sleeve_admission_evidence_payload(payload: object) -> bool:
+    """True for a digestless sleeve admission outcome payload (no currentness proof)."""
+    if not isinstance(payload, Mapping):
+        return False
+    if _SLEEVE_ADMISSION_CANONICAL_FIELDS & set(payload):
+        return False
+    try:
+        _validate_sleeve_admission_outcome_payload(payload)
+    except ValueError:
+        return False
+    return True
+
+
+def current_sleeve_admission_evidence_precheck(
+    evidence_store: EvidenceStore | None,
+) -> SleeveAdmissionEvidencePrecheck:
+    """Validate persisted canonical current sleeve admission outcome evidence (fail-closed)."""
+    if evidence_store is None:
+        return _sleeve_admission_evidence_rejected("sleeve_admission_evidence:evidence_store_missing")
+
+    try:
+        snapshot_payload = _load_sleeve_admission_snapshot(evidence_store)
+        expected_digest = _sleeve_admission_payload_digest(snapshot_payload)
+        legacy_seen = False
+        matches: list[dict[str, Any]] = []
+        for record in evidence_store.load_evidence():
+            if record.get("evidence_type") != _SLEEVE_ADMISSION_EVIDENCE_TYPE:
+                continue
+            payload = record.get("data")
+            if is_legacy_sleeve_admission_evidence_payload(payload):
+                legacy_seen = True
+                continue
+            validated = validate_sleeve_admission_evidence_payload(payload)
+            if validated["evidence_digest"] == expected_digest:
+                matches.append(validated)
+    except (EvidenceStoreCorruptError, ValueError):
+        return _sleeve_admission_evidence_rejected("sleeve_admission_evidence:store_or_payload_malformed")
+
+    if not matches and legacy_seen:
+        return _sleeve_admission_evidence_rejected(
+            "sleeve_admission_evidence:legacy_digestless_not_currentness_provable"
+        )
+    if not matches:
+        return _sleeve_admission_evidence_rejected("sleeve_admission_evidence:currentness_missing")
+    if len(matches) > 1:
+        return _sleeve_admission_evidence_rejected("sleeve_admission_evidence:currentness_ambiguous")
+
+    evidence_payload = matches[0]
+    outcome_payload = evidence_payload["sleeve_admission"]
+    admitted_active = _sleeve_admission_string_tuple(outcome_payload.get("admitted_active"))
+    admitted_unallocated = _sleeve_admission_string_tuple(outcome_payload.get("admitted_unallocated"))
+    if not admitted_active and not admitted_unallocated:
+        return _sleeve_admission_evidence_rejected(
+            "sleeve_admission_evidence:not_admitted",
+            evidence_digest=str(evidence_payload["evidence_digest"]),
+        )
+
+    return SleeveAdmissionEvidencePrecheck(
+        accepted=True,
+        rejection_reasons=(),
+        evidence_digest=str(evidence_payload["evidence_digest"]),
+        admitted_active=admitted_active,
+        admitted_unallocated=admitted_unallocated,
+    )
+
+
+def _sleeve_admission_evidence_rejected(
+    reason: str,
+    *,
+    evidence_digest: str | None = None,
+    admitted_active: tuple[str, ...] = (),
+    admitted_unallocated: tuple[str, ...] = (),
+) -> SleeveAdmissionEvidencePrecheck:
+    return SleeveAdmissionEvidencePrecheck(
+        accepted=False,
+        rejection_reasons=(reason,),
+        evidence_digest=evidence_digest,
+        admitted_active=admitted_active,
+        admitted_unallocated=admitted_unallocated,
+    )
+
+
+def _load_sleeve_admission_snapshot(evidence_store: EvidenceStore) -> dict:
+    envelope = evidence_store.load_snapshot(_SLEEVE_ADMISSION_SNAPSHOT_NAME)
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("sleeve_admission:snapshot_data_malformed")
+    _validate_sleeve_admission_outcome_payload(data)
+    return data
+
+
+def _sleeve_admission_payload_digest(outcome_payload: Mapping[str, Any]) -> str:
+    _validate_sleeve_admission_outcome_payload(outcome_payload)
+    semantic = {
+        key: value for key, value in outcome_payload.items() if key not in _SLEEVE_ADMISSION_DIGEST_EXCLUDED_FIELDS
+    }
+    canonical = json.dumps(semantic, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _validate_sleeve_admission_outcome_payload(outcome_payload: Mapping[str, Any]) -> None:
+    if not isinstance(outcome_payload, Mapping):
+        raise ValueError("sleeve_admission:outcome_payload_malformed")
+    missing = _SLEEVE_ADMISSION_OUTCOME_REQUIRED_FIELDS - set(outcome_payload)
+    if missing:
+        raise ValueError(f"sleeve_admission:outcome_payload_missing:{','.join(sorted(missing))}")
+    for field_name in ("admission_results", "admitted_active", "admitted_unallocated"):
+        if not isinstance(outcome_payload[field_name], list):
+            raise ValueError(f"sleeve_admission:{field_name}_malformed")
+
+
+def _sleeve_admission_string_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(item for item in value if isinstance(item, str) and item)
+
+
+class SleeveAdmissionStore:
+    """Persistent store for sleeve admission outcome evidence.
+
+    Mirrors PromotionReviewStore: an atomic snapshot for the current outcome plus a
+    digest-bound JSONL evidence record. Fail-closed: malformed/duplicate → reject.
+    """
+
+    def __init__(self, evidence_store: EvidenceStore) -> None:
+        self._store = evidence_store
+
+    def save_outcome(self, summary: SleeveAdmissionPortfolioSummary) -> WriteResult:
+        """Persist a sleeve admission outcome as an atomic snapshot + evidence log entry.
+
+        Idempotent for recurring semantic outcomes: if the same digest already exists in
+        the evidence log (e.g. A→B→A), the snapshot is updated to the current outcome and
+        the duplicate JSONL append is skipped. The currentness precheck still rejects a log
+        that somehow contains more than one canonical record for the current digest.
+        """
+        try:
+            evidence_payload = sleeve_admission_to_evidence_payload(summary)
+            evidence_digest = evidence_payload["evidence_digest"]
+            digest_exists = self._sleeve_admission_digest_exists(evidence_digest)
+        except (EvidenceStoreCorruptError, ValueError) as exc:
+            return WriteResult(
+                success=False,
+                error=f"Sleeve admission evidence state invalid: {exc}",
+                path=str(self._store.evidence_log_path),
+            )
+        # Always write the snapshot so it reflects the current outcome.
+        result = self._store.save_snapshot(_SLEEVE_ADMISSION_SNAPSHOT_NAME, evidence_payload["sleeve_admission"])
+        if not result.success:
+            return result
+        if digest_exists:
+            # Recurring outcome: snapshot updated; skip duplicate JSONL append.
+            return result
+        evidence_result = self._store.append_evidence(_SLEEVE_ADMISSION_EVIDENCE_TYPE, evidence_payload)
+        if not evidence_result.success:
+            return evidence_result
+        return result
+
+    def _sleeve_admission_digest_exists(self, evidence_digest: object) -> bool:
+        if not isinstance(evidence_digest, str) or not evidence_digest:
+            raise ValueError("sleeve_admission:evidence_digest_malformed")
+        for record in self._store.load_evidence():
+            if record.get("evidence_type") != _SLEEVE_ADMISSION_EVIDENCE_TYPE:
+                continue
+            payload = record.get("data")
+            if is_legacy_sleeve_admission_evidence_payload(payload):
+                continue
+            validated = validate_sleeve_admission_evidence_payload(payload)
+            if validated["evidence_digest"] == evidence_digest:
+                return True
+        return False
