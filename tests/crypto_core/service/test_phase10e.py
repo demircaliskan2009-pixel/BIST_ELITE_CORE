@@ -73,6 +73,8 @@ from crypto_core.service.service_orchestrator import (
     review_workflow_state_to_dict,
     sleeve_candidate_workflow_state_to_dict,
 )
+from crypto_core.service.sleeve_admission_controller import SleeveAdmissionVerdict
+from crypto_core.service.sleeve_candidate_workflow import SleeveCandidateWorkflowEntry, SleeveCandidateWorkflowSnapshot
 from crypto_core.service.sleeve_portfolio import (
     CryptoSleeveState,
     CryptoSleeveStatus,
@@ -81,6 +83,7 @@ from crypto_core.service.sleeve_portfolio import (
     SleeveDecisionPackStatus,
     SleeveInactiveCapitalMode,
     SleevePromotionCandidateStatus,
+    SleevePromotionSupportStatus,
     SleeveRecommendationStatus,
 )
 from crypto_core.session.models import PaperSessionStatus
@@ -120,6 +123,28 @@ def _accepted_admission_result(
 
 def _seed_accepted_admission_evidence(store: EvidenceStore) -> None:
     assert store.append_backtest_replay_admission_record(_accepted_admission_result()).success is True
+
+
+def _supported_sleeve_workflow_snapshot() -> SleeveCandidateWorkflowSnapshot:
+    return SleeveCandidateWorkflowSnapshot(
+        workflow_id="workflow-sleeve-admission-evidence",
+        status="active",
+        as_of_ns=_T0_NS,
+        sleeves=(
+            SleeveCandidateWorkflowEntry(
+                sleeve_id="micro-1",
+                candidate_status=SleevePromotionCandidateStatus.SUPPORTED,
+                promotion_support_status=SleevePromotionSupportStatus.SUPPORTIVE,
+                decision_pack_status=SleeveDecisionPackStatus.SUPPORTED_CANDIDATE,
+                candidate_for_future_review=True,
+                strongly_supported=True,
+                missing_evidence=(),
+                blocking_reasons=(),
+                reason_summary="Supportive sleeve candidate evidence.",
+                next_step="Continue paper monitoring.",
+            ),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2596,6 +2621,39 @@ class TestSleeveCampaignEvidenceIntegration:
         assert by_id["micro-1"].decision_pack.status == SleeveDecisionPackStatus.RECOMMENDED_ACTIVE
         assert by_id["trend-1"].promotion_candidate.status == SleevePromotionCandidateStatus.WATCHLIST
         assert snap.sleeve_portfolio.decision_pack.supported_candidate_sleeve_ids == ("micro-1",)
+
+    def test_sleeve_admission_builder_blocks_without_persisted_promotion_evidence(self):
+        orch = ServiceOrchestrator(service=_make_mock_service(), readiness_level="paper_live")
+        orch.start_sleeve_promotion_review(workflow_snapshot=_supported_sleeve_workflow_snapshot())
+
+        admission = orch.build_sleeve_admission_controller().build_admission_results()[0]
+
+        assert admission.verdict == SleeveAdmissionVerdict.REVIEW_SUPPORTED_NOT_ADMITTED
+        assert admission.evidence_blockers == ("promotion_review_evidence:evidence_store_missing",)
+
+    def test_sleeve_admission_builder_uses_persisted_canonical_promotion_evidence(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        _seed_accepted_admission_evidence(store)
+        orch = ServiceOrchestrator(
+            service=_make_mock_service(),
+            evidence_store=store,
+            readiness_level="paper_live",
+            promotion_thresholds=PromotionThresholds(min_paper_runs=0),
+        )
+        orch.start_review(review_id="review-sleeve-admission-evidence")
+        for i in range(3):
+            orch.intake_campaign_report(_make_campaign_report(campaign_id=f"camp-promotion-{i}"))
+        final = orch.finalize_review()
+        orch.start_sleeve_promotion_review(workflow_snapshot=_supported_sleeve_workflow_snapshot())
+
+        admission = orch.build_sleeve_admission_controller().build_admission_results()[0]
+
+        assert final.verdict == "promote"
+        assert admission.verdict == SleeveAdmissionVerdict.ADMITTED_ACTIVE
+        assert admission.evidence_blockers == ()
 
     def test_sleeve_candidate_workflow_integration_and_restore(self, tmp_path: Path):
         svc = _make_mock_service()

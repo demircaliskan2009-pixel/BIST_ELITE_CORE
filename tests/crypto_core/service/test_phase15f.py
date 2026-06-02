@@ -19,10 +19,17 @@ Covers:
 PRD reference: §2 System Orchestration, §7 Execution Engine, Phase 15F.
 """
 
+import hashlib
+import json
 import time
 
 import pytest
 
+from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreConfig
+from crypto_core.service.promotion_review import (
+    PromotionReviewEvidencePrecheck,
+    current_promotion_review_evidence_precheck,
+)
 from crypto_core.service.sleeve_admission_controller import (
     SleeveAdmissionController,
     SleeveAdmissionCorruptError,
@@ -33,6 +40,68 @@ from crypto_core.service.sleeve_promotion_review_controller import (
     SleevePromotionReviewResult,
     SleevePromotionReviewVerdict,
 )
+
+
+def _accepted_promotion_evidence_precheck() -> PromotionReviewEvidencePrecheck:
+    return PromotionReviewEvidencePrecheck(
+        accepted=True,
+        evidence_digest="a" * 64,
+        review_id="review-accepted",
+        verdict="promote",
+        campaign_ids=("camp-1",),
+    )
+
+
+def _rejected_promotion_evidence_precheck(reason: str) -> PromotionReviewEvidencePrecheck:
+    return PromotionReviewEvidencePrecheck(
+        accepted=False,
+        rejection_reasons=(reason,),
+        review_id="review-rejected",
+        verdict="hold",
+        campaign_ids=("camp-1",),
+    )
+
+
+def _promotion_review_payload(
+    *,
+    verdict: str = "promote",
+    review_id: str = "review-current",
+    reviewed_at_ns: int = 123,
+    campaign_ids: tuple[str, ...] = ("camp-1",),
+) -> dict:
+    return {
+        "review_id": review_id,
+        "reviewed_at_ns": reviewed_at_ns,
+        "verdict": verdict,
+        "readiness_level": "paper_live",
+        "readiness_is_supportive": True,
+        "campaign_ids": list(campaign_ids),
+    }
+
+
+def _promotion_review_digest(payload: dict) -> str:
+    canonical = json.dumps(dict(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _promotion_review_evidence_payload(payload: dict) -> dict:
+    return {
+        "schema_version": "1",
+        "payload_type": "promotion_review",
+        "evidence_digest": _promotion_review_digest(payload),
+        "promotion_review": dict(payload),
+        "review_id": payload["review_id"],
+        "reviewed_at_ns": payload["reviewed_at_ns"],
+        "verdict": payload["verdict"],
+        "readiness_level": payload["readiness_level"],
+        "campaign_ids": list(payload["campaign_ids"]),
+    }
+
+
+def _store_with_snapshot(tmp_path, payload: dict) -> EvidenceStore:
+    store = EvidenceStore(evidence_dir=tmp_path / "evidence", config=EvidenceStoreConfig())
+    assert store.save_snapshot("promotion_review", payload).success is True
+    return store
 
 
 def make_review_result(
@@ -162,3 +231,146 @@ def test_deterministic_replay():
     ctrl1 = SleeveAdmissionController(summary)
     ctrl2 = SleeveAdmissionController(summary)
     assert ctrl1.build_admission_results() == ctrl2.build_admission_results()
+
+
+def test_valid_canonical_accepted_promotion_evidence_allows_active_and_unallocated(tmp_path):
+    payload = _promotion_review_payload()
+    store = _store_with_snapshot(tmp_path, payload)
+    assert store.append_evidence("promotion_review", _promotion_review_evidence_payload(payload)).success is True
+
+    precheck = current_promotion_review_evidence_precheck(store)
+    active = make_review_result("active", SleevePromotionReviewVerdict.REVIEW_SUPPORTED)
+    unallocated = make_review_result(
+        "unallocated",
+        SleevePromotionReviewVerdict.REVIEW_SUPPORTED,
+        missing_evidence=("stage4:comparison_missing",),
+    )
+    results = SleeveAdmissionController(
+        make_portfolio_summary([active, unallocated]),
+        promotion_evidence_precheck=precheck,
+    ).build_admission_results()
+
+    assert precheck.accepted is True
+    assert results[0].verdict == SleeveAdmissionVerdict.ADMITTED_ACTIVE
+    assert results[1].verdict == SleeveAdmissionVerdict.ADMITTED_UNALLOCATED
+    assert results[1].evidence_blockers == ("stage4:comparison_missing",)
+
+
+def test_missing_promotion_evidence_blocks_supported_sleeve_admission(tmp_path):
+    payload = _promotion_review_payload()
+    store = _store_with_snapshot(tmp_path, payload)
+    precheck = current_promotion_review_evidence_precheck(store)
+    result = SleeveAdmissionController(
+        make_portfolio_summary([make_review_result("s1", SleevePromotionReviewVerdict.REVIEW_SUPPORTED)]),
+        promotion_evidence_precheck=precheck,
+    ).build_admission_results()[0]
+
+    assert precheck.rejection_reasons == ("promotion_review_evidence:currentness_missing",)
+    assert result.verdict == SleeveAdmissionVerdict.REVIEW_SUPPORTED_NOT_ADMITTED
+    assert result.evidence_blockers == ("promotion_review_evidence:currentness_missing",)
+
+
+def test_legacy_digestless_promotion_evidence_is_not_currentness_proof(tmp_path):
+    payload = _promotion_review_payload()
+    store = _store_with_snapshot(tmp_path, payload)
+    assert store.append_evidence("promotion_review", payload).success is True
+
+    precheck = current_promotion_review_evidence_precheck(store)
+
+    assert precheck.accepted is False
+    assert precheck.rejection_reasons == ("promotion_review_evidence:legacy_digestless_not_currentness_provable",)
+
+
+def test_malformed_promotion_evidence_blocks_fail_closed(tmp_path):
+    payload = _promotion_review_payload()
+    store = _store_with_snapshot(tmp_path, payload)
+    assert store.append_evidence("promotion_review", {"payload_type": "promotion_review"}).success is True
+
+    precheck = current_promotion_review_evidence_precheck(store)
+
+    assert precheck.accepted is False
+    assert precheck.rejection_reasons == ("promotion_review_evidence:store_or_payload_malformed",)
+
+
+def test_wrong_promotion_evidence_payload_type_blocks_fail_closed(tmp_path):
+    payload = _promotion_review_payload()
+    bad_payload = _promotion_review_evidence_payload(payload)
+    bad_payload["payload_type"] = "not_promotion_review"
+    store = _store_with_snapshot(tmp_path, payload)
+    assert store.append_evidence("promotion_review", bad_payload).success is True
+
+    precheck = current_promotion_review_evidence_precheck(store)
+
+    assert precheck.accepted is False
+    assert precheck.rejection_reasons == ("promotion_review_evidence:store_or_payload_malformed",)
+
+
+def test_non_accepted_promotion_outcome_blocks_supported_sleeve_admission(tmp_path):
+    payload = _promotion_review_payload(verdict="hold")
+    store = _store_with_snapshot(tmp_path, payload)
+    assert store.append_evidence("promotion_review", _promotion_review_evidence_payload(payload)).success is True
+    precheck = current_promotion_review_evidence_precheck(store)
+    result = SleeveAdmissionController(
+        make_portfolio_summary([make_review_result("s1", SleevePromotionReviewVerdict.REVIEW_SUPPORTED)]),
+        promotion_evidence_precheck=precheck,
+    ).build_admission_results()[0]
+
+    assert precheck.rejection_reasons == ("promotion_review_evidence:promotion_not_accepted",)
+    assert result.verdict == SleeveAdmissionVerdict.REVIEW_SUPPORTED_NOT_ADMITTED
+
+
+def test_tampered_promotion_evidence_digest_blocks_fail_closed(tmp_path):
+    payload = _promotion_review_payload()
+    tampered_payload = _promotion_review_evidence_payload(payload)
+    tampered_payload["promotion_review"]["reviewed_at_ns"] = payload["reviewed_at_ns"] + 1
+    store = _store_with_snapshot(tmp_path, payload)
+    assert store.append_evidence("promotion_review", tampered_payload).success is True
+
+    precheck = current_promotion_review_evidence_precheck(store)
+
+    assert precheck.accepted is False
+    assert precheck.rejection_reasons == ("promotion_review_evidence:store_or_payload_malformed",)
+
+
+def test_duplicate_canonical_promotion_evidence_blocks_as_ambiguous(tmp_path):
+    payload = _promotion_review_payload()
+    evidence_payload = _promotion_review_evidence_payload(payload)
+    store = _store_with_snapshot(tmp_path, payload)
+    assert store.append_evidence("promotion_review", evidence_payload).success is True
+    assert store.append_evidence("promotion_review", evidence_payload).success is True
+
+    precheck = current_promotion_review_evidence_precheck(store)
+
+    assert precheck.accepted is False
+    assert precheck.rejection_reasons == ("promotion_review_evidence:currentness_ambiguous",)
+
+
+def test_promotion_evidence_blockers_are_ordered_after_existing_evidence_blockers():
+    precheck = _rejected_promotion_evidence_precheck("promotion_review_evidence:currentness_missing")
+    result = SleeveAdmissionController(
+        make_portfolio_summary(
+            [
+                make_review_result(
+                    "s1",
+                    SleevePromotionReviewVerdict.REVIEW_SUPPORTED,
+                    missing_evidence=("stage4:comparison_missing",),
+                )
+            ]
+        ),
+        promotion_evidence_precheck=precheck,
+    ).build_admission_results()[0]
+
+    assert result.verdict == SleeveAdmissionVerdict.REVIEW_SUPPORTED_NOT_ADMITTED
+    assert result.evidence_blockers == (
+        "stage4:comparison_missing",
+        "promotion_review_evidence:currentness_missing",
+    )
+
+
+def test_test_unit_classification_can_still_supply_explicit_accepted_promotion_proof():
+    result = SleeveAdmissionController(
+        make_portfolio_summary([make_review_result("s1", SleevePromotionReviewVerdict.REVIEW_SUPPORTED)]),
+        promotion_evidence_precheck=_accepted_promotion_evidence_precheck(),
+    ).build_admission_results()[0]
+
+    assert result.verdict == SleeveAdmissionVerdict.ADMITTED_ACTIVE

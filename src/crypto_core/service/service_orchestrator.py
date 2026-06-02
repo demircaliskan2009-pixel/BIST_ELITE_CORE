@@ -83,7 +83,7 @@ from crypto_core.service.external_regime import (
 )
 from crypto_core.service.models import ServiceStatus
 from crypto_core.service.paper_live_service import PaperLiveService
-from crypto_core.service.promotion_review import PromotionThresholds
+from crypto_core.service.promotion_review import PromotionThresholds, current_promotion_review_evidence_precheck
 from crypto_core.service.promotion_review_controller import (
     CurrentReviewSnapshot,
     FinalReviewReport,
@@ -410,10 +410,14 @@ class ServiceOrchestrator:
 
     def build_sleeve_admission_controller(self):
         """Build and cache the sleeve admission controller from current review portfolio summary."""
-        review_portfolio_summary = self.get_review_portfolio_summary()
-        if not review_portfolio_summary:
+        if self._sleeve_promotion_review_controller is None:
             raise SleeveAdmissionCorruptError("No review portfolio summary for admission.")
-        self._sleeve_admission_controller = SleeveAdmissionController(review_portfolio_summary)
+        review_portfolio_summary = self._sleeve_promotion_review_controller.snapshot().portfolio_summary
+        promotion_evidence_precheck = current_promotion_review_evidence_precheck(self._evidence_store)
+        self._sleeve_admission_controller = SleeveAdmissionController(
+            review_portfolio_summary,
+            promotion_evidence_precheck=promotion_evidence_precheck,
+        )
         return self._sleeve_admission_controller
 
     def get_sleeve_admission_snapshot(self):

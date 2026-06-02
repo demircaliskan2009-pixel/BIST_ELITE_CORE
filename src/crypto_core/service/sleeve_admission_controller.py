@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 
+from crypto_core.service.promotion_review import PromotionReviewEvidencePrecheck
 from crypto_core.service.sleeve_promotion_review_controller import (
     SleevePromotionReviewPortfolioSummary,
     SleevePromotionReviewResult,
@@ -161,6 +162,9 @@ class SleeveAdmissionCorruptError(RuntimeError):
     pass
 
 
+_PROMOTION_EVIDENCE_MISSING = "promotion_review_evidence:precheck_missing"
+
+
 def paper_shadow_activation_plan_to_dict(plan: PaperShadowActivationPlan) -> dict:
     """Serialize PaperShadowActivationPlan to a JSON-safe dict."""
     _validate_paper_shadow_activation_plan(plan)
@@ -240,9 +244,15 @@ def _require_pbo_allocation_caps(value: tuple[tuple[str, float], ...]) -> None:
 class SleeveAdmissionController:
     """Managed controller for crypto sleeve admission gating."""
 
-    def __init__(self, review_portfolio_summary: SleevePromotionReviewPortfolioSummary, history_limit: int = 5):
+    def __init__(
+        self,
+        review_portfolio_summary: SleevePromotionReviewPortfolioSummary,
+        history_limit: int = 5,
+        promotion_evidence_precheck: PromotionReviewEvidencePrecheck | None = None,
+    ):
         self.review_portfolio_summary = review_portfolio_summary
         self.history_limit = history_limit
+        self.promotion_evidence_precheck = promotion_evidence_precheck
         self.history = []
         self._validate()
 
@@ -253,7 +263,9 @@ class SleeveAdmissionController:
     def build_admission_results(self) -> tuple[SleeveAdmissionResult, ...]:
         results = []
         for review in getattr(self.review_portfolio_summary, "review_results", []):
-            verdict, reason, next_step = self._derive_verdict(review)
+            promotion_evidence_blockers = self._promotion_evidence_blockers(review)
+            evidence_blockers = self._evidence_blockers(review, promotion_evidence_blockers)
+            verdict, reason, next_step = self._derive_verdict(review, evidence_blockers, promotion_evidence_blockers)
             results.append(
                 SleeveAdmissionResult(
                     sleeve_id=review.sleeve_id,
@@ -261,19 +273,30 @@ class SleeveAdmissionController:
                     reason=reason,
                     next_step=next_step,
                     governance_blockers=review.governance_blockers,
-                    evidence_blockers=review.missing_evidence,
+                    evidence_blockers=evidence_blockers,
                     last_review_verdict=review.verdict,
                     pbo_allocation_cap=review.pbo_allocation_cap,
                 )
             )
         return tuple(results)
 
-    def _derive_verdict(self, review: SleevePromotionReviewResult):
+    def _derive_verdict(
+        self,
+        review: SleevePromotionReviewResult,
+        evidence_blockers: tuple[str, ...],
+        promotion_evidence_blockers: tuple[str, ...],
+    ):
         # Deterministic mapping from review verdict and blockers to admission verdict
+        if review.verdict == SleevePromotionReviewVerdict.REVIEW_SUPPORTED and promotion_evidence_blockers:
+            return (
+                SleeveAdmissionVerdict.REVIEW_SUPPORTED_NOT_ADMITTED,
+                "Review supported but promotion evidence blocked.",
+                "Persist canonical accepted promotion review evidence.",
+            )
         if (
             review.verdict == SleevePromotionReviewVerdict.REVIEW_SUPPORTED
             and not review.governance_blockers
-            and not review.missing_evidence
+            and not evidence_blockers
         ):
             return (
                 SleeveAdmissionVerdict.ADMITTED_ACTIVE,
@@ -283,7 +306,7 @@ class SleeveAdmissionController:
         if (
             review.verdict == SleevePromotionReviewVerdict.REVIEW_SUPPORTED
             and not review.governance_blockers
-            and review.missing_evidence
+            and evidence_blockers
         ):
             return (
                 SleeveAdmissionVerdict.ADMITTED_UNALLOCATED,
@@ -315,6 +338,22 @@ class SleeveAdmissionController:
             "Not admitted: unknown state.",
             "Investigate admission logic.",
         )
+
+    def _evidence_blockers(
+        self,
+        review: SleevePromotionReviewResult,
+        promotion_evidence_blockers: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        return _stable_ordered_unique(review.missing_evidence + promotion_evidence_blockers)
+
+    def _promotion_evidence_blockers(self, review: SleevePromotionReviewResult) -> tuple[str, ...]:
+        if review.verdict != SleevePromotionReviewVerdict.REVIEW_SUPPORTED:
+            return ()
+        if self.promotion_evidence_precheck is None:
+            return ()
+        if self.promotion_evidence_precheck.accepted:
+            return ()
+        return self.promotion_evidence_precheck.rejection_reasons or (_PROMOTION_EVIDENCE_MISSING,)
 
     def build_portfolio_summary(self) -> SleeveAdmissionPortfolioSummary:
         results = self.build_admission_results()
@@ -361,3 +400,14 @@ class SleeveAdmissionController:
             portfolio_summary=summary,
             history=history,
         )
+
+
+def _stable_ordered_unique(values: tuple[str, ...]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return tuple(ordered)
