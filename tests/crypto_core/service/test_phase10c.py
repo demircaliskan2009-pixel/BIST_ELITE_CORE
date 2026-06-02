@@ -67,15 +67,21 @@ from crypto_core.service.escalation_review_controller import (
     final_escalation_review_report_from_dict,
     final_escalation_review_report_to_dict,
 )
-from crypto_core.service.evidence_store import EvidenceStore, EvidenceStoreConfig
+from crypto_core.service.evidence_store import (
+    EvidenceStore,
+    EvidenceStoreConfig,
+    backtest_replay_admission_to_evidence_payload,
+)
 from crypto_core.service.promotion_review import PromotionThresholds, PromotionVerdict
 from crypto_core.service.promotion_review_controller import (
     CampaignIntakeError,
     CurrentReviewSnapshot,
     FinalReviewReport,
+    PromotionAdmissionEvidenceError,
     PromotionReviewController,
     ReviewStatus,
     ReviewWorkflowCorruptError,
+    backtest_replay_admission_evidence_precheck,
     current_review_snapshot_to_dict,
     final_review_report_to_dict,
 )
@@ -109,6 +115,11 @@ from crypto_core.service.sleeve_portfolio import (
 from crypto_core.service.sleeve_portfolio_controller import (
     SleevePortfolioController,
     SleevePortfolioWorkflowCorruptError,
+)
+from crypto_core.validation.backtest_replay_admission import (
+    BacktestReplayAdmissionResult,
+    BacktestReplayAdmissionStatus,
+    BacktestReplayWindow,
 )
 
 # ---------------------------------------------------------------------------
@@ -351,6 +362,71 @@ def _good_reports(n: int = 3) -> tuple[CampaignReport, ...]:
         )
         for i in range(n)
     )
+
+
+def _accepted_admission_result(
+    *,
+    strategy_id: str = "strategy-1",
+    strategy_digest: str = "a" * 64,
+) -> BacktestReplayAdmissionResult:
+    return BacktestReplayAdmissionResult(
+        accepted=True,
+        status=BacktestReplayAdmissionStatus.ACCEPTED,
+        strategy_id=strategy_id,
+        strategy_digest=strategy_digest,
+        replay_source_id="offline-replay-v1",
+        historical_data_source_id="historical-perp-journal-v1",
+        replay_window=BacktestReplayWindow(start_ns=1_000, end_ns=2_000),
+        decision_ledger_digests={"STRATEGY_SPEC": "b" * 64},
+        evidence_digest_by_stage={"STRATEGY_SPEC": "b" * 64},
+        rejection_reasons=(),
+        needs_research_reasons=(),
+    )
+
+
+def _rejected_admission_result() -> BacktestReplayAdmissionResult:
+    return BacktestReplayAdmissionResult(
+        accepted=False,
+        status=BacktestReplayAdmissionStatus.REJECTED,
+        strategy_id="strategy-1",
+        strategy_digest="a" * 64,
+        replay_source_id="offline-replay-v1",
+        historical_data_source_id="historical-perp-journal-v1",
+        replay_window=BacktestReplayWindow(start_ns=1_000, end_ns=2_000),
+        decision_ledger_digests={},
+        evidence_digest_by_stage={},
+        rejection_reasons=("backtest_replay_admission:lbr_ledger_output_digest_mismatch",),
+        needs_research_reasons=(),
+    )
+
+
+def _admission_gated_controller(store: EvidenceStore) -> PromotionReviewController:
+    controller = PromotionReviewController(
+        review_id="rev-admission-gated",
+        readiness_level="paper_live",
+        thresholds=PromotionThresholds(min_paper_runs=0),
+        evidence_store=store,
+        created_at_ns=_T0_NS,
+    )
+    for report in _good_reports(3):
+        controller.add_campaign_report(report)
+    return controller
+
+
+def _no_store_controller(*, require_admission_evidence: bool | None = None) -> PromotionReviewController:
+    kwargs = {}
+    if require_admission_evidence is not None:
+        kwargs["require_admission_evidence"] = require_admission_evidence
+    controller = PromotionReviewController(
+        review_id="rev-no-store",
+        readiness_level="paper_live",
+        thresholds=PromotionThresholds(min_paper_runs=0),
+        created_at_ns=_T0_NS,
+        **kwargs,
+    )
+    for report in _good_reports(3):
+        controller.add_campaign_report(report)
+    return controller
 
 
 # ===========================================================================
@@ -813,6 +889,7 @@ class TestPersistence:
             evidence_dir=tmp_path / "evidence",
             config=EvidenceStoreConfig(),
         )
+        assert store.append_backtest_replay_admission_record(_accepted_admission_result()).success is True
         ctrl = PromotionReviewController(
             review_id="rev-fp",
             readiness_level="paper_live",
@@ -831,6 +908,152 @@ class TestPersistence:
         loaded = review_store.load_review()
         assert loaded["review_id"] == "rev-fp"
         assert loaded["verdict"] == "promote"
+
+
+# ===========================================================================
+# 8B. BacktestReplayAdmission evidence precheck
+# ===========================================================================
+
+
+class TestBacktestReplayAdmissionEvidencePrecheck:
+    def test_accepted_persisted_admission_evidence_allows_finalize(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        assert store.append_backtest_replay_admission_record(_accepted_admission_result()).success is True
+        controller = _admission_gated_controller(store)
+
+        precheck = controller.admission_evidence_precheck()
+        final = controller.finalize_review(finalized_at_ns=_T0_NS)
+
+        assert precheck.accepted is True
+        assert final.verdict == PromotionVerdict.PROMOTE.value
+        assert controller.status == ReviewStatus.FINALIZED
+
+    def test_default_evidence_store_path_requires_admission_evidence(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        controller = _admission_gated_controller(store)
+
+        snapshot = controller.current_snapshot()
+
+        assert snapshot.is_ready_to_finalize is False
+        assert "backtest_replay_admission_evidence:missing" in snapshot.insufficient_evidence
+        with pytest.raises(PromotionAdmissionEvidenceError, match="backtest_replay_admission_evidence:missing"):
+            controller.finalize_review(finalized_at_ns=_T0_NS)
+
+    def test_missing_admission_evidence_rejects_fail_closed(self, tmp_path: Path):
+        controller = _admission_gated_controller(EvidenceStore(evidence_dir=tmp_path / "evidence"))
+
+        snapshot = controller.current_snapshot()
+
+        assert snapshot.is_ready_to_finalize is False
+        assert "backtest_replay_admission_evidence:missing" in snapshot.insufficient_evidence
+        with pytest.raises(PromotionAdmissionEvidenceError, match="missing"):
+            controller.finalize_review(finalized_at_ns=_T0_NS)
+        assert controller.status == ReviewStatus.READY_TO_EVALUATE
+        assert controller.final_report is None
+
+    def test_required_admission_evidence_without_store_rejects_fail_closed(self):
+        controller = _no_store_controller(require_admission_evidence=True)
+
+        precheck = controller.admission_evidence_precheck()
+
+        assert precheck.accepted is False
+        assert precheck.rejection_reasons == ("promotion_admission_evidence:evidence_store_missing",)
+        with pytest.raises(
+            PromotionAdmissionEvidenceError, match="promotion_admission_evidence:evidence_store_missing"
+        ):
+            controller.finalize_review(finalized_at_ns=_T0_NS)
+
+    def test_explicit_admission_evidence_opt_out_allows_no_store_unit_context(self):
+        controller = _no_store_controller(require_admission_evidence=False)
+
+        snapshot = controller.current_snapshot()
+        final = controller.finalize_review(finalized_at_ns=_T0_NS)
+
+        assert snapshot.is_ready_to_finalize is True
+        assert "promotion_admission_evidence:evidence_store_missing" not in snapshot.insufficient_evidence
+        assert final.verdict == PromotionVerdict.PROMOTE.value
+
+    def test_rejected_admission_evidence_rejects(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        assert store.append_backtest_replay_admission_record(_rejected_admission_result()).success is True
+
+        precheck = backtest_replay_admission_evidence_precheck(store)
+
+        assert precheck.accepted is False
+        assert "backtest_replay_admission_evidence:rejected" in precheck.rejection_reasons
+        assert "backtest_replay_admission_evidence:not_accepted" in precheck.rejection_reasons
+
+    def test_malformed_admission_evidence_payload_rejects(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        result = store.append_evidence(
+            "audit_record",
+            {
+                "payload_type": "backtest_replay_admission",
+                "evidence_digest": "a" * 64,
+            },
+        )
+        assert result.success is True
+
+        precheck = backtest_replay_admission_evidence_precheck(store)
+
+        assert precheck.accepted is False
+        assert "backtest_replay_admission_evidence:result_payload_malformed" in precheck.rejection_reasons
+
+    def test_wrong_payload_type_rejects(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        assert store.append_evidence("audit_record", {"payload_type": "decision_ledger_record"}).success is True
+
+        precheck = backtest_replay_admission_evidence_precheck(store)
+
+        assert precheck.accepted is False
+        assert "backtest_replay_admission_evidence:payload_type_wrong" in precheck.rejection_reasons
+        assert "backtest_replay_admission_evidence:missing" in precheck.rejection_reasons
+
+    def test_digest_mismatch_rejects_stale_admission_evidence(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        payload = backtest_replay_admission_to_evidence_payload(_accepted_admission_result())
+        payload["evidence_digest"] = "f" * 64
+        assert store.append_evidence("audit_record", payload).success is True
+
+        precheck = backtest_replay_admission_evidence_precheck(store)
+
+        assert precheck.accepted is False
+        assert "backtest_replay_admission_evidence:evidence_digest_mismatch" in precheck.rejection_reasons
+
+    def test_duplicate_ambiguous_admission_evidence_rejects(self, tmp_path: Path):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        assert store.append_backtest_replay_admission_record(
+            _accepted_admission_result(strategy_id="strategy-1")
+        ).success
+        assert store.append_backtest_replay_admission_record(
+            _accepted_admission_result(strategy_id="strategy-2", strategy_digest="c" * 64)
+        ).success
+
+        precheck = backtest_replay_admission_evidence_precheck(store)
+
+        assert precheck.accepted is False
+        assert "backtest_replay_admission_evidence:ambiguous" in precheck.rejection_reasons
 
 
 # ===========================================================================
