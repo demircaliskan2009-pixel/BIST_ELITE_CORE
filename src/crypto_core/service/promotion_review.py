@@ -1259,6 +1259,167 @@ class PromotionReviewCorruptError(RuntimeError):
     """Raised when persisted promotion review data is malformed."""
 
 
+@dataclass(frozen=True)
+class PromotionReviewEvidencePrecheck:
+    """Read-only proof that the latest persisted promotion review is current and accepted."""
+
+    accepted: bool
+    rejection_reasons: tuple[str, ...] = ()
+    evidence_digest: str | None = None
+    review_id: str | None = None
+    verdict: str | None = None
+    campaign_ids: tuple[str, ...] = ()
+
+
+def current_promotion_review_evidence_precheck(
+    evidence_store: EvidenceStore | None,
+) -> PromotionReviewEvidencePrecheck:
+    """Validate persisted canonical current promotion-review evidence for sleeve admission."""
+    if evidence_store is None:
+        return _promotion_review_evidence_rejected("promotion_review_evidence:evidence_store_missing")
+
+    try:
+        review_payload = PromotionReviewStore(evidence_store).load_review()
+        expected_digest = _promotion_review_payload_digest(review_payload)
+        legacy_match_seen = False
+        matches: list[dict[str, Any]] = []
+
+        for record in evidence_store.load_evidence():
+            if record.get("evidence_type") != "promotion_review":
+                continue
+            payload = record.get("data")
+            if is_legacy_promotion_review_evidence_payload(payload):
+                if _legacy_promotion_review_matches(payload, review_payload):
+                    legacy_match_seen = True
+                continue
+            validated = validate_promotion_review_evidence_payload(payload)
+            if validated["evidence_digest"] == expected_digest:
+                matches.append(validated)
+    except (EvidenceStoreCorruptError, PromotionReviewCorruptError):
+        return _promotion_review_evidence_rejected("promotion_review_evidence:store_or_payload_malformed")
+    except ValueError:
+        return _promotion_review_evidence_rejected("promotion_review_evidence:store_or_payload_malformed")
+
+    try:
+        review_id = str(review_payload.get("review_id"))
+        verdict = str(review_payload.get("verdict"))
+        campaign_ids = _payload_campaign_ids(review_payload)
+    except ValueError:
+        return _promotion_review_evidence_rejected("promotion_review_evidence:store_or_payload_malformed")
+
+    if not matches and legacy_match_seen:
+        return _promotion_review_evidence_rejected(
+            "promotion_review_evidence:legacy_digestless_not_currentness_provable",
+            review_id=review_id,
+            verdict=verdict,
+            campaign_ids=campaign_ids,
+        )
+    if not matches:
+        return _promotion_review_evidence_rejected(
+            "promotion_review_evidence:currentness_missing",
+            review_id=review_id,
+            verdict=verdict,
+            campaign_ids=campaign_ids,
+        )
+    if len(matches) > 1:
+        return _promotion_review_evidence_rejected(
+            "promotion_review_evidence:currentness_ambiguous",
+            review_id=review_id,
+            verdict=verdict,
+            campaign_ids=campaign_ids,
+        )
+
+    evidence_payload = matches[0]
+    nested_payload = evidence_payload["promotion_review"]
+    evidence_verdict = str(nested_payload.get("verdict"))
+    try:
+        nested_campaign_ids = _payload_campaign_ids(nested_payload)
+        top_level_campaign_ids = _payload_campaign_ids(evidence_payload)
+    except ValueError:
+        return _promotion_review_evidence_rejected(
+            "promotion_review_evidence:store_or_payload_malformed",
+            evidence_digest=str(evidence_payload["evidence_digest"]),
+            review_id=review_id,
+            verdict=evidence_verdict,
+            campaign_ids=campaign_ids,
+        )
+    if top_level_campaign_ids and top_level_campaign_ids != nested_campaign_ids:
+        return _promotion_review_evidence_rejected(
+            "promotion_review_evidence:campaign_mismatch",
+            evidence_digest=str(evidence_payload["evidence_digest"]),
+            review_id=review_id,
+            verdict=evidence_verdict,
+            campaign_ids=campaign_ids,
+        )
+    if nested_campaign_ids != campaign_ids:
+        return _promotion_review_evidence_rejected(
+            "promotion_review_evidence:campaign_mismatch",
+            evidence_digest=str(evidence_payload["evidence_digest"]),
+            review_id=review_id,
+            verdict=evidence_verdict,
+            campaign_ids=campaign_ids,
+        )
+    if verdict != PromotionVerdict.PROMOTE.value or evidence_verdict != PromotionVerdict.PROMOTE.value:
+        return _promotion_review_evidence_rejected(
+            "promotion_review_evidence:promotion_not_accepted",
+            evidence_digest=str(evidence_payload["evidence_digest"]),
+            review_id=review_id,
+            verdict=evidence_verdict,
+            campaign_ids=campaign_ids,
+        )
+
+    return PromotionReviewEvidencePrecheck(
+        accepted=True,
+        rejection_reasons=(),
+        evidence_digest=str(evidence_payload["evidence_digest"]),
+        review_id=review_id,
+        verdict=evidence_verdict,
+        campaign_ids=campaign_ids,
+    )
+
+
+def _promotion_review_evidence_rejected(
+    reason: str,
+    *,
+    evidence_digest: str | None = None,
+    review_id: str | None = None,
+    verdict: str | None = None,
+    campaign_ids: tuple[str, ...] = (),
+) -> PromotionReviewEvidencePrecheck:
+    return PromotionReviewEvidencePrecheck(
+        accepted=False,
+        rejection_reasons=(reason,),
+        evidence_digest=evidence_digest,
+        review_id=review_id,
+        verdict=verdict,
+        campaign_ids=campaign_ids,
+    )
+
+
+def _legacy_promotion_review_matches(payload: object, review_payload: Mapping[str, Any]) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    return (
+        payload.get("review_id") == review_payload.get("review_id")
+        and payload.get("reviewed_at_ns") == review_payload.get("reviewed_at_ns")
+        and payload.get("verdict") == review_payload.get("verdict")
+    )
+
+
+def _payload_campaign_ids(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    campaign_ids = payload.get("campaign_ids", ())
+    if campaign_ids is None:
+        return ()
+    if not isinstance(campaign_ids, (list, tuple)):
+        raise ValueError("promotion_review:campaign_ids_malformed")
+    normalized: list[str] = []
+    for campaign_id in campaign_ids:
+        if not isinstance(campaign_id, str) or not campaign_id:
+            raise ValueError("promotion_review:campaign_ids_malformed")
+        normalized.append(campaign_id)
+    return tuple(normalized)
+
+
 class PromotionReviewStore:
     """Persistent store for promotion review artifacts.
 
