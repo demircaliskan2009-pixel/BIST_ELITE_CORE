@@ -70,9 +70,15 @@ from crypto_core.service.escalation_review_controller import (
 from crypto_core.service.evidence_store import (
     EvidenceStore,
     EvidenceStoreConfig,
+    WriteResult,
     backtest_replay_admission_to_evidence_payload,
 )
-from crypto_core.service.promotion_review import PromotionThresholds, PromotionVerdict
+from crypto_core.service.promotion_review import (
+    PromotionReviewStore,
+    PromotionThresholds,
+    PromotionVerdict,
+    build_promotion_review,
+)
 from crypto_core.service.promotion_review_controller import (
     CampaignIntakeError,
     CurrentReviewSnapshot,
@@ -901,13 +907,48 @@ class TestPersistence:
             ctrl.add_campaign_report(r)
         ctrl.finalize_review(finalized_at_ns=_T0_NS)
 
-        # Verify final review was persisted via PromotionReviewStore
-        from crypto_core.service.promotion_review import PromotionReviewStore
-
         review_store = PromotionReviewStore(store)
         loaded = review_store.load_review()
         assert loaded["review_id"] == "rev-fp"
         assert loaded["verdict"] == "promote"
+
+        promotion_evidence = [
+            record for record in store.load_evidence() if record["evidence_type"] == "promotion_review"
+        ]
+        assert len(promotion_evidence) == 1
+        evidence_data = promotion_evidence[0]["data"]
+        assert evidence_data["review_id"] == "rev-fp"
+        assert evidence_data["verdict"] == "promote"
+        assert evidence_data["aggregation"]["total_campaigns"] == 3
+        assert evidence_data["result"]["summary"]
+
+    def test_promotion_review_store_surfaces_evidence_append_failure(self, tmp_path: Path, monkeypatch):
+        store = EvidenceStore(
+            evidence_dir=tmp_path / "evidence",
+            config=EvidenceStoreConfig(),
+        )
+        review = build_promotion_review(
+            _good_reports(3),
+            review_id="rev-append-fail",
+            readiness_level="paper_live",
+            thresholds=PromotionThresholds(min_paper_runs=3),
+            reviewed_at_ns=_T0_NS,
+        )
+        review_store = PromotionReviewStore(store)
+
+        def fail_append(evidence_type: str, data: dict) -> WriteResult:
+            assert evidence_type == "promotion_review"
+            assert data["review_id"] == "rev-append-fail"
+            return WriteResult(success=False, error="append failed", path=str(store.evidence_log_path))
+
+        monkeypatch.setattr(store, "append_evidence", fail_append)
+
+        result = review_store.save_review(review)
+
+        assert result.success is False
+        assert result.error == "append failed"
+        loaded = review_store.load_review()
+        assert loaded["review_id"] == "rev-append-fail"
 
 
 # ===========================================================================
