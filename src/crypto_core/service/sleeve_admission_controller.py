@@ -668,3 +668,94 @@ class SleeveAdmissionStore:
             if validated["evidence_digest"] == evidence_digest:
                 return True
         return False
+
+
+# ---------------------------------------------------------------------------
+# Paper/shadow activation plan builder (evidence-gated, fail-closed)
+# ---------------------------------------------------------------------------
+#
+# Produces a PaperShadowActivationPlan that is READY_FOR_PAPER_SHADOW only when
+# the current canonical sleeve admission outcome evidence is accepted AND at
+# least one active sleeve is admitted AND no evidence/activation/governance
+# blocker is present. No evidence is written here; no orchestrator/runtime/
+# connector/live wiring is performed. PAPER-ONLY.
+
+_PAPER_SHADOW_NO_ACTIVE_SLEEVES_BLOCKER = "sleeve_admission:no_active_sleeves"
+
+
+def build_paper_shadow_activation_plan(
+    summary: SleeveAdmissionPortfolioSummary,
+    evidence_store: EvidenceStore | None,
+) -> PaperShadowActivationPlan:
+    """Build a fail-closed paper/shadow activation plan gated on sleeve admission evidence.
+
+    READY_FOR_PAPER_SHADOW requires all of:
+      - current canonical sleeve admission outcome evidence accepted (currentness-proven),
+      - at least one admitted active sleeve, and
+      - no evidence/activation/governance blocker.
+
+    Otherwise the plan is BLOCKED and carries the deterministic blocker set. No evidence is
+    written and no orchestrator/runtime/connector/live wiring is performed.
+    """
+    if not isinstance(summary, SleeveAdmissionPortfolioSummary):
+        raise SleeveAdmissionCorruptError("sleeve_admission:summary_malformed")
+
+    precheck = current_sleeve_admission_evidence_precheck(evidence_store)
+
+    admitted_active = _stable_ordered_unique(tuple(summary.admitted_active))
+    admitted_unallocated = _stable_ordered_unique(tuple(summary.admitted_unallocated))
+
+    evidence_blockers = _stable_ordered_unique((*precheck.rejection_reasons, *summary.evidence_blockers))
+    governance_blockers = _stable_ordered_unique(tuple(summary.governance_blockers))
+    activation_blockers = _stable_ordered_unique(() if admitted_active else (_PAPER_SHADOW_NO_ACTIVE_SLEEVES_BLOCKER,))
+
+    has_blockers = bool(evidence_blockers or activation_blockers or governance_blockers)
+    ready = precheck.accepted and bool(admitted_active) and not has_blockers
+
+    activation_status = (
+        PaperShadowActivationStatus.READY_FOR_PAPER_SHADOW if ready else PaperShadowActivationStatus.BLOCKED
+    )
+    source_manifest_status = PaperShadowSourceManifestStatus.READY if ready else PaperShadowSourceManifestStatus.BLOCKED
+
+    pbo_allocation_caps = tuple(
+        (result.sleeve_id, float(result.pbo_allocation_cap))
+        for result in summary.admission_results
+        if result.pbo_allocation_cap is not None
+    )
+
+    plan_id = f"paper-shadow-activation:{sleeve_admission_digest(summary)}"
+    operator_summary = _paper_shadow_activation_operator_summary(
+        ready=ready,
+        admitted_active=admitted_active,
+        evidence_blockers=evidence_blockers,
+        activation_blockers=activation_blockers,
+        governance_blockers=governance_blockers,
+    )
+
+    return PaperShadowActivationPlan(
+        plan_id=plan_id,
+        activation_status=activation_status,
+        source_manifest_status=source_manifest_status,
+        active_sleeves=admitted_active,
+        inactive_sleeves=_stable_ordered_unique((*summary.blocked, *summary.inconclusive)),
+        admitted_unallocated_sleeves=admitted_unallocated,
+        activation_blockers=activation_blockers,
+        evidence_blockers=evidence_blockers,
+        governance_blockers=governance_blockers,
+        pbo_allocation_caps=pbo_allocation_caps,
+        operator_summary=operator_summary,
+    )
+
+
+def _paper_shadow_activation_operator_summary(
+    *,
+    ready: bool,
+    admitted_active: tuple[str, ...],
+    evidence_blockers: tuple[str, ...],
+    activation_blockers: tuple[str, ...],
+    governance_blockers: tuple[str, ...],
+) -> str:
+    if ready:
+        return f"Paper/shadow activation ready: {len(admitted_active)} active sleeve(s)."
+    blocker_count = len(evidence_blockers) + len(activation_blockers) + len(governance_blockers)
+    return f"Paper/shadow activation blocked: {blocker_count} blocker(s)."
