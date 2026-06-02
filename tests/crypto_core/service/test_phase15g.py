@@ -158,6 +158,33 @@ def test_build_plan_runtime_governance_blockers_surfaced(tmp_path):
     assert plan.activation_status == PaperShadowActivationStatus.BLOCKED
 
 
+def test_build_plan_evidence_for_other_summary_blocks(tmp_path):
+    # Accepted currentness evidence exists for outcome A, but the caller passes a different
+    # admitted summary B. The precheck still accepts (it proves A), so readiness must NOT be
+    # derived from the unproven B: the digest mismatch forces BLOCKED with an evidence blocker.
+    summary_a = _admitted_summary("micro-1")
+    summary_b = _admitted_summary("micro-2")
+    assert sleeve_admission_digest(summary_a) != sleeve_admission_digest(summary_b)
+    store = _persisted_store(tmp_path, summary_a)
+
+    plan = build_paper_shadow_activation_plan(summary_b, store)
+    assert plan.activation_status == PaperShadowActivationStatus.BLOCKED
+    assert "sleeve_admission_evidence:summary_evidence_mismatch" in plan.evidence_blockers
+    # plan_id still reflects the passed (unproven) summary, but the plan is not READY.
+    assert plan.plan_id == f"paper-shadow-activation:{sleeve_admission_digest(summary_b)}"
+
+
+def test_build_plan_matching_evidence_is_ready(tmp_path):
+    # Control for the mismatch test: when the persisted evidence binds to the same summary,
+    # the digest matches and the plan is READY.
+    summary = _admitted_summary("micro-1")
+    store = _persisted_store(tmp_path, summary)
+
+    plan = build_paper_shadow_activation_plan(summary, store)
+    assert plan.activation_status == PaperShadowActivationStatus.READY_FOR_PAPER_SHADOW
+    assert "sleeve_admission_evidence:summary_evidence_mismatch" not in plan.evidence_blockers
+
+
 def test_build_plan_deterministic_blocker_ordering():
     base = _admitted_summary("micro-1")
     summary = replace(base, evidence_blockers=("z-blocker", "a-blocker"))

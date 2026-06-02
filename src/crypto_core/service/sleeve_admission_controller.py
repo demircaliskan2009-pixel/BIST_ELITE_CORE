@@ -675,12 +675,14 @@ class SleeveAdmissionStore:
 # ---------------------------------------------------------------------------
 #
 # Produces a PaperShadowActivationPlan that is READY_FOR_PAPER_SHADOW only when
-# the current canonical sleeve admission outcome evidence is accepted AND at
-# least one active sleeve is admitted AND no evidence/activation/governance
-# blocker is present. No evidence is written here; no orchestrator/runtime/
-# connector/live wiring is performed. PAPER-ONLY.
+# the current canonical sleeve admission outcome evidence is accepted, the
+# accepted evidence binds to THIS summary, at least one active sleeve is
+# admitted, AND no evidence/activation/governance blocker is present. No evidence
+# is written here; no orchestrator/runtime/connector/live wiring is performed.
+# PAPER-ONLY.
 
 _PAPER_SHADOW_NO_ACTIVE_SLEEVES_BLOCKER = "sleeve_admission:no_active_sleeves"
+_PAPER_SHADOW_SUMMARY_EVIDENCE_MISMATCH_BLOCKER = "sleeve_admission_evidence:summary_evidence_mismatch"
 
 
 def build_paper_shadow_activation_plan(
@@ -691,6 +693,7 @@ def build_paper_shadow_activation_plan(
 
     READY_FOR_PAPER_SHADOW requires all of:
       - current canonical sleeve admission outcome evidence accepted (currentness-proven),
+      - the accepted evidence binds to THIS summary (accepted digest == summary digest),
       - at least one admitted active sleeve, and
       - no evidence/activation/governance blocker.
 
@@ -701,16 +704,28 @@ def build_paper_shadow_activation_plan(
         raise SleeveAdmissionCorruptError("sleeve_admission:summary_malformed")
 
     precheck = current_sleeve_admission_evidence_precheck(evidence_store)
+    summary_digest = sleeve_admission_digest(summary)
 
     admitted_active = _stable_ordered_unique(tuple(summary.admitted_active))
     admitted_unallocated = _stable_ordered_unique(tuple(summary.admitted_unallocated))
 
-    evidence_blockers = _stable_ordered_unique((*precheck.rejection_reasons, *summary.evidence_blockers))
+    # Currentness must bind to THIS summary: the precheck proves the persisted store outcome is
+    # current, not that the passed summary matches it. Require the accepted evidence digest to
+    # equal this summary's canonical digest, else the plan would activate an outcome (summary)
+    # that has no matching canonical evidence (stale/fabricated input).
+    mismatch_blockers: tuple[str, ...] = ()
+    if precheck.accepted and precheck.evidence_digest != summary_digest:
+        mismatch_blockers = (_PAPER_SHADOW_SUMMARY_EVIDENCE_MISMATCH_BLOCKER,)
+    evidence_current = precheck.accepted and not mismatch_blockers
+
+    evidence_blockers = _stable_ordered_unique(
+        (*precheck.rejection_reasons, *mismatch_blockers, *summary.evidence_blockers)
+    )
     governance_blockers = _stable_ordered_unique(tuple(summary.governance_blockers))
     activation_blockers = _stable_ordered_unique(() if admitted_active else (_PAPER_SHADOW_NO_ACTIVE_SLEEVES_BLOCKER,))
 
     has_blockers = bool(evidence_blockers or activation_blockers or governance_blockers)
-    ready = precheck.accepted and bool(admitted_active) and not has_blockers
+    ready = evidence_current and bool(admitted_active) and not has_blockers
 
     activation_status = (
         PaperShadowActivationStatus.READY_FOR_PAPER_SHADOW if ready else PaperShadowActivationStatus.BLOCKED
@@ -723,7 +738,7 @@ def build_paper_shadow_activation_plan(
         if result.pbo_allocation_cap is not None
     )
 
-    plan_id = f"paper-shadow-activation:{sleeve_admission_digest(summary)}"
+    plan_id = f"paper-shadow-activation:{summary_digest}"
     operator_summary = _paper_shadow_activation_operator_summary(
         ready=ready,
         admitted_active=admitted_active,
