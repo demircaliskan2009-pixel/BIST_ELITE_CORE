@@ -89,6 +89,19 @@ def _blocked_directive():
     return consume_portfolio_allocation(record)
 
 
+def _blocked_directive_for(plan_id):
+    plan = PaperShadowActivationPlan(
+        plan_id=plan_id,
+        activation_status=PaperShadowActivationStatus.BLOCKED,
+        source_manifest_status=PaperShadowSourceManifestStatus.BLOCKED,
+        active_sleeves=("micro-1",),
+        evidence_blockers=("sleeve_admission_evidence:currentness_missing",),
+    )
+    decision = build_allocation_decision(plan, {"micro-1": SleeveRiskDecision("micro-1", approved=True)})
+    record = project_governed_allocation(govern_allocation_decision(decision), capital_base=_CAPITAL)
+    return consume_portfolio_allocation(record)
+
+
 def _entry(directive, *, previous=None, correlation_id=_CORR):
     return build_portfolio_governor_ledger_entry(
         directive, correlation_id=correlation_id, previous_entry_digest=previous
@@ -134,6 +147,21 @@ def test_valid_chain_replays_in_order():
     # Only the active plan's latest totals contribute.
     assert replay.total_active_weight == active.total_weight
     assert abs(replay.total_active_notional - active.total_notional) < 1e-9
+
+
+def test_counts_reflect_latest_state_per_plan():
+    # Regression (Codex P2): an active entry superseded by a blocked entry for the SAME plan must
+    # count as currently blocked, not active — consistent with total_active_weight.
+    active = _entry(_allocated_directive())  # plan deadbeef, active
+    blocked_same = _entry(_blocked_directive_for("paper-shadow-activation:deadbeef"), previous=active.entry_digest)
+    replay = replay_portfolio_governor_ledger((active, blocked_same))
+    assert replay.entry_count == 2
+    assert replay.active_count == 0
+    assert replay.blocked_count == 1
+    assert replay.total_active_weight == 0.0
+    assert replay.total_active_notional == 0.0
+    plans = {state.plan_id: state for state in replay.latest_by_plan_id}
+    assert plans["paper-shadow-activation:deadbeef"].status == PortfolioGovernorLedgerStatus.RECORDED_BLOCKED
 
 
 def test_store_and_tuple_sources_match():

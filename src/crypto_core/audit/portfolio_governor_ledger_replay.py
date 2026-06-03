@@ -61,9 +61,9 @@ class PortfolioGovernorLedgerReplay:
     """Deterministic, immutable paper-governor lifecycle replay snapshot. PAPER ONLY."""
 
     schema_version: str
-    entry_count: int
-    active_count: int
-    blocked_count: int
+    entry_count: int  # historical total number of entries in the replayed chain
+    active_count: int  # plans whose LATEST recorded entry is active (current state)
+    blocked_count: int  # plans whose LATEST recorded entry is blocked (current state)
     head_digest: str | None
     ordered_entry_digests: tuple[str, ...]
     latest_by_plan_id: tuple[PlanGovernorState, ...]
@@ -119,8 +119,6 @@ def replay_portfolio_governor_ledger(
     validated = store.snapshot()
 
     ordered_entry_digests = tuple(entry.entry_digest for entry in validated)
-    active_count = sum(1 for entry in validated if entry.status == PortfolioGovernorLedgerStatus.RECORDED_ACTIVE)
-    blocked_count = sum(1 for entry in validated if entry.status == PortfolioGovernorLedgerStatus.RECORDED_BLOCKED)
     head_digest = validated[-1].entry_digest if validated else None
 
     latest: dict[str, PortfolioGovernorLedgerEntry] = {}
@@ -135,6 +133,15 @@ def replay_portfolio_governor_ledger(
             total_notional=entry.total_notional,
         )
         for entry in (latest[plan_id] for plan_id in sorted(latest))
+    )
+    # Current-state counts derived from the latest entry per plan (consistent with the totals below):
+    # a plan that went active -> blocked counts as blocked, never as a stale active. ``entry_count``
+    # remains the historical total number of entries.
+    active_count = sum(
+        1 for state in latest_by_plan_id if state.status == PortfolioGovernorLedgerStatus.RECORDED_ACTIVE
+    )
+    blocked_count = sum(
+        1 for state in latest_by_plan_id if state.status == PortfolioGovernorLedgerStatus.RECORDED_BLOCKED
     )
     total_active_weight = round(
         math.fsum(
