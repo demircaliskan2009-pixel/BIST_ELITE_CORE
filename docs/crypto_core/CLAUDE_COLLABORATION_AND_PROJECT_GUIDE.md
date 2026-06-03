@@ -51,8 +51,9 @@
 - **Constitution:** `docs/PRDV4_MULTI_MARKET_CRYPTO.md` is the architecture constitution that all
   subsystems follow. (Earlier PRD/PRDV2/PRDV3 files are history.)
 - **Declared scope** (from `src/crypto_core/__init__.py`): Binance (primary) + Bybit (secondary) +
-  CoinGecko (discovery), with Deribit used heavily for derivatives/options public-feed evidence.
-  Base currency USD, max leverage 3x, 24/7 operation.
+  CoinGecko (discovery), with Deribit used for derivatives public-feed evidence.
+  **Instrument class: perpetual futures contracts ONLY — no spot, no options, no margin tokens**
+  (PRDV4 §0.2). Base currency USD, max leverage 3x, 24/7 operation.
 - **Mission [shared goal]:** become a top-tier (the user says "top 1") crypto trading bot that
   *actually makes money* — but only via the disciplined edge-to-money path, paper-first, with every
   promotion earned by evidence.
@@ -373,8 +374,11 @@ only fund the survivors." Lean into derivatives-native edges where structural fl
 - **Cross-venue dislocation:** Binance/Bybit/Deribit spread; needs synchronized PIT feeds + real fee
   modeling (you already model fees/funding — that's the differentiator).
 - **Order-flow imbalance / microstructure:** highest edge, highest data/latency cost; gate hard.
-- **Options IV/RV (Deribit):** you already have Deribit feed plumbing; vol-risk-premium harvesting is
-  a deep, less-crowded pool **[DEEP_RESEARCH for current IV surface/fees]**.
+- **Options / IV-RV — OUT OF SCOPE (do not pursue).** `PRDV4_MULTI_MARKET_CRYPTO.md` §0.2 restricts
+  crypto_core to *perpetual futures contracts ONLY — no spot, no options, no margin tokens*. Any
+  options / vol-risk-premium edge is constitution-forbidden: **fail closed** on out-of-scope options
+  work rather than recommending it. (Deribit feed plumbing exists for derivatives public-feed
+  evidence, not for options trading.)
 
 **B. The money is in execution quality, not just signal.** You already have TCA, markout, fill
 pricing, venue scoring. **[opinion]** A modest edge with excellent execution beats a strong edge with
