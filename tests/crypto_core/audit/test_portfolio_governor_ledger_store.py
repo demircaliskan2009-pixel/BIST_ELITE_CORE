@@ -36,6 +36,7 @@ from crypto_core.audit.portfolio_governor_ledger import (
 from crypto_core.audit.portfolio_governor_ledger_store import (
     PortfolioGovernorLedgerStore,
     PortfolioGovernorLedgerStoreError,
+    _expected_entry_digest,
 )
 from crypto_core.service.allocation_governor_view import govern_allocation_decision
 from crypto_core.service.allocator_risk_bridge import (
@@ -137,6 +138,30 @@ def test_tampered_entry_rejects():
     # Content changed but entry_digest left stale -> integrity mismatch.
     with pytest.raises(PortfolioGovernorLedgerStoreError):
         store.append(replace(entry, total_weight=entry.total_weight + 0.25))
+
+
+def test_active_entry_with_mismatched_totals_rejected_even_with_consistent_digest():
+    # Regression (Codex P2): an entry forged outside the builder with impossible totals but a
+    # self-consistent recomputed digest must still be rejected on independent total re-validation.
+    store = PortfolioGovernorLedgerStore()
+    entry = _entry(_allocated_directive())
+    forged = replace(entry, total_weight=999.0)
+    forged = replace(forged, entry_digest=_expected_entry_digest(forged))
+    # The digest is now consistent with the forged fields (the digest check would pass) ...
+    assert forged.entry_digest == _expected_entry_digest(forged)
+    # ... but the store rejects it because the totals no longer match the targets / budget.
+    with pytest.raises(PortfolioGovernorLedgerStoreError):
+        store.append(forged)
+
+
+def test_blocked_entry_with_nonzero_totals_rejected_even_with_consistent_digest():
+    store = PortfolioGovernorLedgerStore()
+    entry = _entry(_blocked_directive())
+    forged = replace(entry, total_weight=5.0)
+    forged = replace(forged, entry_digest=_expected_entry_digest(forged))
+    assert forged.entry_digest == _expected_entry_digest(forged)
+    with pytest.raises(PortfolioGovernorLedgerStoreError):
+        store.append(forged)
 
 
 def test_first_entry_with_previous_digest_rejects():

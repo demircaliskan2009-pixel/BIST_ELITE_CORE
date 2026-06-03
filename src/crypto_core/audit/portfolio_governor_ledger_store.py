@@ -45,6 +45,10 @@ from crypto_core.service.portfolio_governor_consumption import (
 _EXPECTED_ENTRY_SCHEMA_VERSION = "portfolio-governor-ledger-entry.v1"
 _SHA256_HEX_LENGTH = 64
 _HEX_CHARS = frozenset("0123456789abcdefABCDEF")
+_PRECISION = 12
+_TOLERANCE = 1e-9
+_FIXED_UNIT = 10**-_PRECISION
+_AGGREGATE_TOLERANCE_MULTIPLIER = 4
 
 _EXPECTED_EVIDENCE_SOURCES = (
     "portfolio_allocation_decision",
@@ -151,14 +155,53 @@ def _validate_evidence_refs(entry: PortfolioGovernorLedgerEntry) -> None:
         raise PortfolioGovernorLedgerStoreError("portfolio_governor_ledger_store:evidence_refs_unexpected")
 
 
+def _notional_tolerance(target_count: int) -> float:
+    return max(_TOLERANCE, _FIXED_UNIT * max(1, target_count) * _AGGREGATE_TOLERANCE_MULTIPLIER)
+
+
+def _validate_active_entry_totals(entry: PortfolioGovernorLedgerEntry) -> None:
+    # Independently re-derive the aggregate totals from the targets and reject any entry whose
+    # claimed totals/budget do not match — even when its ``entry_digest`` is internally consistent.
+    # Without this, a hand-constructed entry with impossible totals (e.g. total_weight=999 while the
+    # targets sum to 1.0) plus a recomputed digest would corrupt the append-only audit ledger.
+    capital = float(entry.capital_base)
+    budget = float(entry.budget)
+    total_weight = round(math.fsum(target.weight for target in entry.targets), _PRECISION)
+    total_notional = round(math.fsum(target.notional for target in entry.targets), _PRECISION)
+    notional_tolerance = _notional_tolerance(len(entry.targets))
+
+    for target in entry.targets:
+        expected_notional = round(float(target.weight) * capital, _PRECISION)
+        if float(target.notional) <= 0.0 or expected_notional <= 0.0:
+            raise PortfolioGovernorLedgerStoreError("portfolio_governor_ledger_store:notional_invalid")
+        if abs(float(target.notional) - expected_notional) > _notional_tolerance(1):
+            raise PortfolioGovernorLedgerStoreError("portfolio_governor_ledger_store:target_notional_inconsistent")
+
+    if abs(total_weight - float(entry.total_weight)) > _TOLERANCE:
+        raise PortfolioGovernorLedgerStoreError("portfolio_governor_ledger_store:total_weight_inconsistent")
+    if abs(total_notional - float(entry.total_notional)) > notional_tolerance:
+        raise PortfolioGovernorLedgerStoreError("portfolio_governor_ledger_store:total_notional_inconsistent")
+    if abs(total_notional - round(total_weight * capital, _PRECISION)) > notional_tolerance:
+        raise PortfolioGovernorLedgerStoreError("portfolio_governor_ledger_store:notional_weight_inconsistent")
+
+    notional_budget = round(budget * capital, _PRECISION)
+    if total_weight > budget + _TOLERANCE:
+        raise PortfolioGovernorLedgerStoreError("portfolio_governor_ledger_store:total_weight_exceeds_budget")
+    if total_notional > notional_budget + notional_tolerance:
+        raise PortfolioGovernorLedgerStoreError("portfolio_governor_ledger_store:total_notional_exceeds_budget")
+
+
 def _validate_status_coherence(entry: PortfolioGovernorLedgerEntry) -> None:
     if entry.status == PortfolioGovernorLedgerStatus.RECORDED_ACTIVE:
         if entry.action != GovernorActionType.SET_PAPER_TARGET or not entry.targets:
             raise PortfolioGovernorLedgerStoreError("portfolio_governor_ledger_store:entry_inconsistent")
         if any(target.action != GovernorActionType.SET_PAPER_TARGET for target in entry.targets):
             raise PortfolioGovernorLedgerStoreError("portfolio_governor_ledger_store:entry_inconsistent")
+        _validate_active_entry_totals(entry)
     elif entry.status == PortfolioGovernorLedgerStatus.RECORDED_BLOCKED:
         if entry.action != GovernorActionType.HOLD or entry.targets:
+            raise PortfolioGovernorLedgerStoreError("portfolio_governor_ledger_store:entry_inconsistent")
+        if abs(float(entry.total_weight)) > _TOLERANCE or abs(float(entry.total_notional)) > _TOLERANCE:
             raise PortfolioGovernorLedgerStoreError("portfolio_governor_ledger_store:entry_inconsistent")
     else:
         raise PortfolioGovernorLedgerStoreError("portfolio_governor_ledger_store:status_unknown")
