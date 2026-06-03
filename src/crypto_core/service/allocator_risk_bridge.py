@@ -45,6 +45,7 @@ _WEIGHT_PRECISION = 12
 _PLAN_NOT_READY_BLOCKER = "allocator_risk:plan_not_ready"
 _NO_ELIGIBLE_BLOCKER = "allocator_risk:no_eligible_sleeves"
 _RISK_INPUT_MISSING_BLOCKER = "allocator_risk:risk_input_missing"
+_RISK_SLEEVE_MISMATCH_BLOCKER = "allocator_risk:risk_sleeve_mismatch"
 _RISK_BLOCKED_BLOCKER = "allocator_risk:risk_blocked"
 _ZERO_CAP_BLOCKER = "allocator_risk:zero_allocation_cap"
 
@@ -146,6 +147,10 @@ def build_allocation_decision(
             classified.append((sleeve, False, cap, (_RISK_INPUT_MISSING_BLOCKER,)))
         elif not isinstance(risk, SleeveRiskDecision):
             raise AllocatorRiskBridgeError("allocator_risk:risk_decision_malformed")
+        elif risk.sleeve_id != sleeve:
+            # The risk decision must bind one-to-one to THIS sleeve. A decision stored under the
+            # wrong map key is a fail-closed identity mismatch, never an implicit approval.
+            classified.append((sleeve, False, cap, (_RISK_SLEEVE_MISMATCH_BLOCKER,)))
         elif not risk.approved:
             classified.append((sleeve, False, cap, (_RISK_BLOCKED_BLOCKER, *risk.block_reasons)))
         elif cap is not None and cap <= 0.0:
@@ -158,10 +163,18 @@ def build_allocation_decision(
 
     allocations: list[SleeveAllocation] = []
     total = 0.0
+    remaining = budget
     for sleeve, approved, cap, reasons in classified:
         if approved:
-            weight = round(equal_share if cap is None else min(equal_share, cap), _WEIGHT_PRECISION)
-            total += weight
+            target = equal_share if cap is None else min(equal_share, cap)
+            # Clamp to the remaining budget so the summed rounded weights can never exceed budget.
+            # Both operands are already at fixed precision, so the rounded min stays <= remaining;
+            # this distributes any rounding remainder downward onto the later sleeves.
+            weight = round(min(target, remaining), _WEIGHT_PRECISION)
+            if weight < 0.0:
+                weight = 0.0
+            remaining = round(remaining - weight, _WEIGHT_PRECISION)
+            total = round(total + weight, _WEIGHT_PRECISION)
             allocations.append(
                 SleeveAllocation(
                     sleeve_id=sleeve,
@@ -181,7 +194,6 @@ def build_allocation_decision(
                     block_reasons=_sorted_unique(reasons),
                 )
             )
-    total = round(total, _WEIGHT_PRECISION)
     allocations.sort(key=lambda allocation: allocation.sleeve_id)
 
     blocker_values: list[str] = []

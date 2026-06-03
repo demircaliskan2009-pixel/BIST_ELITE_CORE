@@ -207,3 +207,36 @@ def test_risk_for_non_active_sleeve_is_ignored():
     allocs = _alloc_by_id(decision)
     assert set(allocs) == {"micro-1"}
     assert allocs["micro-1"].status == AllocationStatus.ALLOCATED
+
+
+def test_budget_safe_when_equal_share_rounds_up():
+    # Regression (P2): six approved sleeves at budget=1.0 -> equal share 0.166666666667 would sum to
+    # 1.000000000002 without clamping. Summed weights must stay within budget.
+    sleeves = tuple(f"micro-{i}" for i in range(1, 7))
+    plan = _ready_plan(active=sleeves, caps=())  # uncapped -> equal-share path
+    risk = {sleeve: _approved(sleeve) for sleeve in sleeves}
+    decision = build_allocation_decision(plan, risk, budget=1.0)
+
+    weights = [allocation.weight for allocation in decision.allocations]
+    assert all(allocation.status == AllocationStatus.ALLOCATED for allocation in decision.allocations)
+    assert sum(weights) <= 1.0
+    assert decision.total_allocated <= 1.0
+    assert decision.total_allocated == round(sum(weights), 12)
+    # Deterministic and digest-stable across repeated calls.
+    again = build_allocation_decision(plan, risk, budget=1.0)
+    assert decision == again
+    assert decision.decision_digest == again.decision_digest
+
+
+def test_risk_decision_must_bind_to_sleeve():
+    # Regression (P2): a risk decision stored under the wrong key (sleeve_id != map key) must NOT
+    # approve the keyed sleeve. Fail closed with an auditable mismatch blocker.
+    plan = _ready_plan(active=("micro-1",), caps=(("micro-1", 0.5),))
+    risk = {"micro-1": SleeveRiskDecision("micro-2", approved=True)}
+    decision = build_allocation_decision(plan, risk, budget=1.0)
+    allocs = _alloc_by_id(decision)
+    assert allocs["micro-1"].status == AllocationStatus.BLOCKED
+    assert allocs["micro-1"].weight == 0.0
+    assert "allocator_risk:risk_sleeve_mismatch" in allocs["micro-1"].block_reasons
+    assert decision.status == AllocationStatus.BLOCKED
+    assert "allocator_risk:risk_sleeve_mismatch" in decision.blockers
