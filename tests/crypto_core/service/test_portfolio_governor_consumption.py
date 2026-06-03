@@ -25,6 +25,8 @@ PRD reference: §1.14-§1.28 Risk/Governance, §1.21 No-Trade, §7 Execution Eng
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import fields, replace
 
 import pytest
@@ -53,6 +55,7 @@ from crypto_core.service.sleeve_admission_controller import (
 
 _EPS = 1e-9
 _CAPITAL = 10_000.0
+_RECORD_SCHEMA_VERSION = "portfolio-allocation-record.v1"
 
 
 def _ready_plan(active=("micro-1", "micro-2"), caps=(("micro-1", 0.5), ("micro-2", 0.5))):
@@ -85,6 +88,31 @@ def _blocked_record():
     decision = build_allocation_decision(plan, {"micro-1": SleeveRiskDecision("micro-1", approved=True)})
     view = govern_allocation_decision(decision)
     return project_governed_allocation(view, capital_base=_CAPITAL)
+
+
+def _record_digest(record) -> str:
+    payload = {
+        "schema_version": _RECORD_SCHEMA_VERSION,
+        "plan_id": record.plan_id,
+        "status": record.status.value,
+        "budget": record.budget,
+        "capital_base": record.capital_base,
+        "total_weight": record.total_weight,
+        "total_notional": record.total_notional,
+        "targets": [[target.sleeve_id, target.weight, target.notional] for target in record.targets],
+        "blockers": list(record.blockers),
+        "source_decision_digest": record.source_decision_digest,
+        "view_digest": record.view_digest,
+        "paper_only": True,
+        "real_orders_enabled": False,
+        "real_money_enabled": False,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _with_recomputed_record_digest(record):
+    return replace(record, record_digest=_record_digest(record))
 
 
 def test_malformed_record_raises():
@@ -160,7 +188,7 @@ def test_no_trade_decision_block_zeroes_directive():
     assert directive.status == AllocationStatus.BLOCKED
     assert directive.action == GovernorActionType.HOLD
     assert directive.targets == ()
-    assert any(blocker.startswith("portfolio_governor:no_trade_block:") for blocker in directive.blockers)
+    assert "portfolio_governor:no_trade_block:NT-R01_ks_active" in directive.blockers
 
 
 def test_no_trade_decision_allow_does_not_block():
@@ -174,6 +202,13 @@ def test_no_trade_decision_allow_does_not_block():
 def test_malformed_no_trade_decision_rejected():
     with pytest.raises(PortfolioGovernorError):
         consume_portfolio_allocation(_allocated_record(), no_trade_decision="blocked")  # type: ignore[arg-type]
+
+
+def test_malformed_blocked_no_trade_reason_rejected():
+    for reason in (None, "", object()):
+        blocked = NoTradeDecision(allowed=False, reason=reason, severity=None, evidence={})  # type: ignore[arg-type]
+        with pytest.raises(PortfolioGovernorError):
+            consume_portfolio_allocation(_allocated_record(), no_trade_decision=blocked)
 
 
 def test_happy_path_sets_paper_targets():
@@ -218,6 +253,123 @@ def test_provenance_preserved():
     assert directive.view_digest == record.view_digest
     assert directive.record_digest == record.record_digest
     assert len(directive.directive_digest) == 64
+
+
+def test_valid_projected_record_passes_record_digest_verification():
+    record = _allocated_record()
+    directive = consume_portfolio_allocation(record)
+    assert directive.record_digest == record.record_digest
+
+
+def test_stale_record_digest_rejects_tampered_sleeve_id():
+    record = _allocated_record()
+    first, *rest = record.targets
+    tampered = replace(
+        record,
+        targets=(SleeveTarget(sleeve_id="forged-sleeve", weight=first.weight, notional=first.notional), *rest),
+    )
+    with pytest.raises(PortfolioGovernorError):
+        consume_portfolio_allocation(tampered)
+
+
+def test_stale_record_digest_rejects_tampered_target_weight_or_notional():
+    record = _allocated_record()
+    first, *rest = record.targets
+    tampered_weight = replace(
+        record,
+        targets=(SleeveTarget(sleeve_id=first.sleeve_id, weight=first.weight + 0.1, notional=first.notional), *rest),
+    )
+    tampered_notional = replace(
+        record,
+        targets=(SleeveTarget(sleeve_id=first.sleeve_id, weight=first.weight, notional=first.notional + 1.0), *rest),
+    )
+    for tampered in (tampered_weight, tampered_notional):
+        with pytest.raises(PortfolioGovernorError):
+            consume_portfolio_allocation(tampered)
+
+
+def test_stale_record_digest_rejects_tampered_blockers_or_provenance():
+    record = _allocated_record()
+    for tampered in (
+        replace(record, blockers=("forged:blocker",)),
+        replace(record, source_decision_digest="forged-source-digest"),
+        replace(record, view_digest="forged-view-digest"),
+    ):
+        with pytest.raises(PortfolioGovernorError):
+            consume_portfolio_allocation(tampered)
+
+
+def test_self_consistent_redistributed_target_notional_fails_closed():
+    record = _allocated_record(budget=1.0)
+    first, second = record.targets
+    tampered = _with_recomputed_record_digest(
+        replace(
+            record,
+            targets=(
+                SleeveTarget(sleeve_id=first.sleeve_id, weight=first.weight, notional=0.0),
+                SleeveTarget(sleeve_id=second.sleeve_id, weight=second.weight, notional=record.total_notional),
+            ),
+        )
+    )
+    with pytest.raises(PortfolioGovernorError):
+        consume_portfolio_allocation(tampered)
+
+
+def test_positive_weight_zero_notional_fails_closed():
+    record = _allocated_record(budget=1.0)
+    first, *rest = record.targets
+    tampered = _with_recomputed_record_digest(
+        replace(
+            record,
+            targets=(SleeveTarget(sleeve_id=first.sleeve_id, weight=first.weight, notional=0.0), *rest),
+        )
+    )
+    with pytest.raises(PortfolioGovernorError):
+        consume_portfolio_allocation(tampered)
+
+
+def test_duplicate_sleeve_ids_fail_closed():
+    record = _allocated_record(budget=1.0)
+    first, second = record.targets
+    tampered = _with_recomputed_record_digest(
+        replace(
+            record,
+            targets=(
+                SleeveTarget(sleeve_id=first.sleeve_id, weight=first.weight, notional=first.notional),
+                SleeveTarget(sleeve_id=first.sleeve_id, weight=second.weight, notional=second.notional),
+            ),
+        )
+    )
+    with pytest.raises(PortfolioGovernorError):
+        consume_portfolio_allocation(tampered)
+
+
+def test_large_notional_budget_does_not_expand_tolerance():
+    record = _allocated_record(budget=1.0, capital_base=1_000_000_000_000.0)
+    tampered = _with_recomputed_record_digest(replace(record, total_notional=record.total_notional + 500.0))
+    with pytest.raises(PortfolioGovernorError):
+        consume_portfolio_allocation(tampered)
+
+
+def test_tiny_capital_valid_rounding_passes():
+    record = _allocated_record(budget=1.0, capital_base=0.000001)
+    directive = consume_portfolio_allocation(record)
+    assert directive.status == AllocationStatus.ALLOCATED
+    assert directive.total_notional == record.total_notional
+
+
+def test_malformed_operational_blockers_rejected():
+    for blockers in (("",), (123,)):
+        with pytest.raises(PortfolioGovernorError):
+            consume_portfolio_allocation(_allocated_record(), operational_blockers=blockers)  # type: ignore[arg-type]
+
+
+def test_malformed_record_blockers_rejected():
+    record = _allocated_record()
+    for blockers in (("",), (123,)):
+        tampered = _with_recomputed_record_digest(replace(record, blockers=blockers))  # type: ignore[arg-type]
+        with pytest.raises(PortfolioGovernorError):
+            consume_portfolio_allocation(tampered)
 
 
 def test_tampered_total_weight_fails_closed():

@@ -52,8 +52,11 @@ from crypto_core.service.portfolio_allocation_projection import (
 )
 
 _DIRECTIVE_SCHEMA_VERSION = "portfolio-governor-directive.v1"
+_RECORD_SCHEMA_VERSION = "portfolio-allocation-record.v1"
 _PRECISION = 12
 _TOLERANCE = 1e-9
+_FIXED_UNIT = 10**-_PRECISION
+_AGGREGATE_TOLERANCE_MULTIPLIER = 4
 
 _RECORD_BLOCKED_BLOCKER = "portfolio_governor:record_blocked"
 _OPERATIONAL_HALT_BLOCKER = "portfolio_governor:operational_halt"
@@ -107,6 +110,30 @@ def _sorted_unique(values: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted(set(values)))
 
 
+def _stable_blockers(values: object, *, error: str) -> tuple[str, ...]:
+    if not isinstance(values, (tuple, list)):
+        raise PortfolioGovernorError(error)
+    blockers: list[str] = []
+    for value in values:
+        if not _non_empty_str(value):
+            raise PortfolioGovernorError(error)
+        blockers.append(value)
+    return tuple(blockers)
+
+
+def _stable_no_trade_reason(reason: object) -> str:
+    if isinstance(reason, str):
+        value = reason
+    else:
+        enum_value = getattr(reason, "value", None)
+        if not isinstance(enum_value, str):
+            raise PortfolioGovernorError("portfolio_governor:no_trade_reason_malformed")
+        value = enum_value
+    if not value:
+        raise PortfolioGovernorError("portfolio_governor:no_trade_reason_malformed")
+    return value
+
+
 def _is_non_negative_finite(value: object) -> bool:
     return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value) and value >= 0
 
@@ -119,9 +146,62 @@ def _non_empty_str(value: object) -> bool:
     return isinstance(value, str) and value != ""
 
 
-def _directive_digest(payload: dict[str, object]) -> str:
+def _canonical_digest(payload: dict[str, object]) -> str:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _directive_digest(payload: dict[str, object]) -> str:
+    return _canonical_digest(payload)
+
+
+def _expected_record_digest(
+    record: PortfolioAllocationRecord,
+    targets: tuple[SleeveTarget, ...],
+    blockers: tuple[str, ...],
+) -> str:
+    return _canonical_digest(
+        {
+            "schema_version": _RECORD_SCHEMA_VERSION,
+            "plan_id": record.plan_id,
+            "status": record.status.value,
+            "budget": record.budget,
+            "capital_base": record.capital_base,
+            "total_weight": record.total_weight,
+            "total_notional": record.total_notional,
+            "targets": [[target.sleeve_id, target.weight, target.notional] for target in targets],
+            "blockers": list(blockers),
+            "source_decision_digest": record.source_decision_digest,
+            "view_digest": record.view_digest,
+            "paper_only": True,
+            "real_orders_enabled": False,
+            "real_money_enabled": False,
+        }
+    )
+
+
+def _validate_record_targets(targets: object) -> tuple[SleeveTarget, ...]:
+    if not isinstance(targets, tuple):
+        raise PortfolioGovernorError("portfolio_governor:targets_malformed")
+    validated: list[SleeveTarget] = []
+    for target in targets:
+        if not isinstance(target, SleeveTarget):
+            raise PortfolioGovernorError("portfolio_governor:target_malformed")
+        if not _non_empty_str(target.sleeve_id):
+            raise PortfolioGovernorError("portfolio_governor:sleeve_id_invalid")
+        if not _is_positive_finite(target.weight):
+            raise PortfolioGovernorError("portfolio_governor:weight_invalid")
+        if not _is_non_negative_finite(target.notional):
+            raise PortfolioGovernorError("portfolio_governor:notional_invalid")
+        validated.append(target)
+    return tuple(validated)
+
+
+def _notional_tolerance(target_count: int) -> float:
+    return max(
+        _TOLERANCE,
+        _FIXED_UNIT * max(1, target_count) * _AGGREGATE_TOLERANCE_MULTIPLIER,
+    )
 
 
 def consume_portfolio_allocation(
@@ -145,6 +225,8 @@ def consume_portfolio_allocation(
     is_paper = record.paper_only is True and record.real_orders_enabled is False and record.real_money_enabled is False
     if not is_paper:
         raise PortfolioGovernorError("portfolio_governor:non_paper_record_rejected")
+    if not isinstance(record.status, AllocationStatus):
+        raise PortfolioGovernorError("portfolio_governor:status_invalid")
     if not (
         _non_empty_str(record.plan_id)
         and _non_empty_str(record.source_decision_digest)
@@ -159,13 +241,22 @@ def consume_portfolio_allocation(
     budget = float(record.budget)
     capital = float(record.capital_base)
 
-    operational = _sorted_unique(tuple(operational_blockers))
+    record_targets = _validate_record_targets(record.targets)
+    record_blockers = _stable_blockers(record.blockers, error="portfolio_governor:record_blockers_malformed")
+    if record.record_digest != _expected_record_digest(record, record_targets, record_blockers):
+        raise PortfolioGovernorError("portfolio_governor:record_digest_mismatch")
+
+    operational = _sorted_unique(
+        _stable_blockers(operational_blockers, error="portfolio_governor:operational_blockers_malformed")
+    )
     no_trade_reason: str | None = None
     if no_trade_decision is not None:
         if not isinstance(no_trade_decision, NoTradeDecision):
             raise PortfolioGovernorError("portfolio_governor:no_trade_decision_malformed")
+        if not isinstance(no_trade_decision.allowed, bool):
+            raise PortfolioGovernorError("portfolio_governor:no_trade_decision_malformed")
         if not no_trade_decision.allowed:
-            no_trade_reason = str(no_trade_decision.reason)
+            no_trade_reason = _stable_no_trade_reason(no_trade_decision.reason)
     halted = bool(operational) or no_trade_reason is not None
     record_blocked = record.status != AllocationStatus.ALLOCATED
 
@@ -176,18 +267,17 @@ def consume_portfolio_allocation(
         status = AllocationStatus.BLOCKED
         action = GovernorActionType.HOLD
     else:
-        if not isinstance(record.targets, tuple):
-            raise PortfolioGovernorError("portfolio_governor:targets_malformed")
         directive_list: list[SleeveTargetDirective] = []
-        for target in record.targets:
-            if not isinstance(target, SleeveTarget):
-                raise PortfolioGovernorError("portfolio_governor:target_malformed")
-            if not _non_empty_str(target.sleeve_id):
-                raise PortfolioGovernorError("portfolio_governor:sleeve_id_invalid")
-            if not _is_positive_finite(target.weight):
-                raise PortfolioGovernorError("portfolio_governor:weight_invalid")
-            if not _is_non_negative_finite(target.notional):
+        seen_sleeves: set[str] = set()
+        for target in record_targets:
+            if target.sleeve_id in seen_sleeves:
+                raise PortfolioGovernorError("portfolio_governor:duplicate_sleeve_id")
+            seen_sleeves.add(target.sleeve_id)
+            expected_notional = round(float(target.weight) * capital, _PRECISION)
+            if float(target.notional) <= 0.0 or expected_notional <= 0.0:
                 raise PortfolioGovernorError("portfolio_governor:notional_invalid")
+            if abs(float(target.notional) - expected_notional) > _notional_tolerance(1):
+                raise PortfolioGovernorError("portfolio_governor:target_notional_inconsistent")
             directive_list.append(
                 SleeveTargetDirective(
                     sleeve_id=target.sleeve_id,
@@ -204,7 +294,7 @@ def consume_portfolio_allocation(
         total_weight = round(math.fsum(directive.weight for directive in directive_list), _PRECISION)
         total_notional = round(math.fsum(directive.notional for directive in directive_list), _PRECISION)
         notional_budget = round(budget * capital, _PRECISION)
-        notional_tolerance = max(_TOLERANCE, abs(notional_budget) * _TOLERANCE)
+        notional_tolerance = _notional_tolerance(len(directive_list))
         # The record's own aggregate totals must agree with the consumed per-sleeve targets, and the
         # aggregate notional must agree with total_weight * capital_base. Any mismatch is a tampered or
         # inconsistent record and is rejected (fail closed) rather than driving a governor action.
@@ -222,7 +312,7 @@ def consume_portfolio_allocation(
         status = AllocationStatus.ALLOCATED
         action = GovernorActionType.SET_PAPER_TARGET
 
-    blocker_values = list(record.blockers)
+    blocker_values = list(record_blockers)
     if record_blocked:
         blocker_values.append(_RECORD_BLOCKED_BLOCKER)
     if operational:
