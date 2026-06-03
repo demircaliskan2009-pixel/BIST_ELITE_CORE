@@ -142,12 +142,14 @@ def project_governed_allocation(
             sleeve_id, weight = item
             if not isinstance(sleeve_id, str) or sleeve_id == "":
                 raise PortfolioAllocationError("portfolio_allocation:sleeve_id_invalid")
-            if not _is_non_negative_finite(weight):
+            if not _is_positive_finite(weight):
                 raise PortfolioAllocationError("portfolio_allocation:weight_invalid")
             effective_pairs.append((sleeve_id, float(weight)))
         for sleeve_id, weight in sorted(effective_pairs, key=lambda item: item[0]):
             notional = round(float(weight) * capital, _PRECISION)
             target_list.append(SleeveTarget(sleeve_id=sleeve_id, weight=float(weight), notional=notional))
+        if not target_list:
+            raise PortfolioAllocationError("portfolio_allocation:no_positive_targets")
         total_weight = round(math.fsum(target.weight for target in target_list), _PRECISION)
         total_notional = round(math.fsum(target.notional for target in target_list), _PRECISION)
         # The view's own governed total must agree with the consumed weights (fail closed otherwise).

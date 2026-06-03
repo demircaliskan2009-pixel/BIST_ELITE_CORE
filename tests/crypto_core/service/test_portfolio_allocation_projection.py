@@ -211,7 +211,9 @@ def test_total_inconsistent_with_targets_fails_closed():
 
 def test_malformed_effective_allocation_fails_closed():
     for bad_allocations in (
+        (),
         [("micro-1", 0.5)],
+        (("micro-1", 0.0),),
         (("micro-1", float("nan")),),
         ((True, 0.5),),
         (("micro-1", 0.5, "extra"),),
