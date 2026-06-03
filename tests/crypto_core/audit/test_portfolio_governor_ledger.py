@@ -21,6 +21,8 @@ PRD reference: §1.14-§1.28 Risk/Governance, §4 DecisionLedger/EvidenceStore, 
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import fields, replace
 
 import pytest
@@ -51,6 +53,7 @@ from crypto_core.service.sleeve_admission_controller import (
 
 _CORR = "corr:portfolio-governor-001"
 _CAPITAL = 10_000.0
+_DIRECTIVE_SCHEMA_VERSION = "portfolio-governor-directive.v1"
 
 
 def _ready_plan(active=("micro-1", "micro-2"), caps=(("micro-1", 0.5), ("micro-2", 0.5))):
@@ -84,6 +87,37 @@ def _blocked_directive():
     decision = build_allocation_decision(plan, {"micro-1": SleeveRiskDecision("micro-1", approved=True)})
     record = project_governed_allocation(govern_allocation_decision(decision), capital_base=_CAPITAL)
     return consume_portfolio_allocation(record)
+
+
+def _directive_digest(directive) -> str:
+    payload = {
+        "schema_version": _DIRECTIVE_SCHEMA_VERSION,
+        "plan_id": directive.plan_id,
+        "status": directive.status.value,
+        "action": directive.action.value,
+        "budget": directive.budget,
+        "capital_base": directive.capital_base,
+        "total_weight": directive.total_weight,
+        "total_notional": directive.total_notional,
+        "targets": [[t.sleeve_id, t.action.value, t.weight, t.notional] for t in directive.targets],
+        "blockers": list(directive.blockers),
+        "source_decision_digest": directive.source_decision_digest,
+        "view_digest": directive.view_digest,
+        "record_digest": directive.record_digest,
+        "paper_only": True,
+        "real_orders_enabled": False,
+        "real_money_enabled": False,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _with_recomputed_directive_digest(directive):
+    return replace(directive, directive_digest=_directive_digest(directive))
+
+
+def _is_sha256_hex(value: str) -> bool:
+    return len(value) == 64 and all(char in "0123456789abcdefABCDEF" for char in value)
 
 
 def test_malformed_directive_raises():
@@ -121,8 +155,13 @@ def test_missing_correlation_id_rejected():
 
 
 def test_invalid_previous_entry_digest_rejected():
-    with pytest.raises(PortfolioGovernorLedgerError):
-        build_portfolio_governor_ledger_entry(_allocated_directive(), correlation_id=_CORR, previous_entry_digest="")
+    for previous_entry_digest in ("", "not-a-digest", "f" * 63, "g" * 64):
+        with pytest.raises(PortfolioGovernorLedgerError):
+            build_portfolio_governor_ledger_entry(
+                _allocated_directive(),
+                correlation_id=_CORR,
+                previous_entry_digest=previous_entry_digest,
+            )
 
 
 def test_blocked_directive_records_blocked():
@@ -169,6 +208,19 @@ def test_provenance_preserved_and_bound_as_evidence():
         "portfolio_allocation_record": directive.record_digest,
         "portfolio_governor_directive": directive.directive_digest,
     }
+    assert all(_is_sha256_hex(ref.digest) for ref in entry.evidence_refs)
+
+
+def test_invalid_provenance_digests_rejected():
+    directive = _allocated_directive()
+    for bad in (
+        replace(directive, source_decision_digest="not-a-digest"),
+        replace(directive, view_digest="g" * 64),
+        replace(directive, record_digest="f" * 63),
+        replace(directive, directive_digest="z" * 64),
+    ):
+        with pytest.raises(PortfolioGovernorLedgerError):
+            build_portfolio_governor_ledger_entry(bad, correlation_id=_CORR)
 
 
 def test_tampered_total_weight_fails_closed():
@@ -196,6 +248,75 @@ def test_tampered_target_fails_closed():
     )
     with pytest.raises(PortfolioGovernorLedgerError):
         build_portfolio_governor_ledger_entry(replace(directive, targets=(bumped, *rest)), correlation_id=_CORR)
+
+
+def test_self_consistent_total_weight_mismatch_fails_closed():
+    directive = _allocated_directive(budget=1.0)
+    tampered = _with_recomputed_directive_digest(replace(directive, total_weight=0.1))
+    with pytest.raises(PortfolioGovernorLedgerError):
+        build_portfolio_governor_ledger_entry(tampered, correlation_id=_CORR)
+
+
+def test_self_consistent_total_notional_mismatch_fails_closed():
+    directive = _allocated_directive(budget=1.0)
+    tampered = _with_recomputed_directive_digest(replace(directive, total_notional=1.0))
+    with pytest.raises(PortfolioGovernorLedgerError):
+        build_portfolio_governor_ledger_entry(tampered, correlation_id=_CORR)
+
+
+def test_self_consistent_redistributed_target_notional_fails_closed():
+    directive = _allocated_directive(budget=1.0)
+    first, second = directive.targets
+    redistributed = (
+        SleeveTargetDirective(
+            sleeve_id=first.sleeve_id,
+            action=first.action,
+            weight=first.weight,
+            notional=first.notional - 1_000.0,
+        ),
+        SleeveTargetDirective(
+            sleeve_id=second.sleeve_id,
+            action=second.action,
+            weight=second.weight,
+            notional=second.notional + 1_000.0,
+        ),
+    )
+    tampered = _with_recomputed_directive_digest(replace(directive, targets=redistributed))
+    with pytest.raises(PortfolioGovernorLedgerError):
+        build_portfolio_governor_ledger_entry(tampered, correlation_id=_CORR)
+
+
+def test_positive_weight_zero_notional_fails_closed():
+    directive = _allocated_directive(budget=1.0)
+    first, second = directive.targets
+    zeroed = (
+        SleeveTargetDirective(sleeve_id=first.sleeve_id, action=first.action, weight=first.weight, notional=0.0),
+        second,
+    )
+    total_notional = round(sum(target.notional for target in zeroed), 12)
+    tampered = _with_recomputed_directive_digest(replace(directive, targets=zeroed, total_notional=total_notional))
+    with pytest.raises(PortfolioGovernorLedgerError):
+        build_portfolio_governor_ledger_entry(tampered, correlation_id=_CORR)
+
+
+def test_total_weight_over_budget_fails_closed():
+    directive = _allocated_directive(budget=1.0)
+    over_budget_targets = (
+        SleeveTargetDirective("micro-1", GovernorActionType.SET_PAPER_TARGET, 0.75, 7_500.0),
+        SleeveTargetDirective("micro-2", GovernorActionType.SET_PAPER_TARGET, 0.75, 7_500.0),
+    )
+    tampered = _with_recomputed_directive_digest(
+        replace(directive, targets=over_budget_targets, total_weight=1.5, total_notional=15_000.0)
+    )
+    with pytest.raises(PortfolioGovernorLedgerError):
+        build_portfolio_governor_ledger_entry(tampered, correlation_id=_CORR)
+
+
+def test_total_notional_over_budget_capital_fails_closed():
+    directive = _allocated_directive(budget=0.75)
+    tampered = _with_recomputed_directive_digest(replace(directive, budget=0.5))
+    with pytest.raises(PortfolioGovernorLedgerError):
+        build_portfolio_governor_ledger_entry(tampered, correlation_id=_CORR)
 
 
 def test_inconsistent_hold_with_targets_fails_closed():

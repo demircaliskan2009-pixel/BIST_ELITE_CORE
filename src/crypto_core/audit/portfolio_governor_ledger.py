@@ -50,7 +50,12 @@ from crypto_core.service.portfolio_governor_consumption import (
 
 _ENTRY_SCHEMA_VERSION = "portfolio-governor-ledger-entry.v1"
 _DIRECTIVE_SCHEMA_VERSION = "portfolio-governor-directive.v1"
+_PRECISION = 12
 _TOLERANCE = 1e-9
+_FIXED_UNIT = 10**-_PRECISION
+_AGGREGATE_TOLERANCE_MULTIPLIER = 4
+_SHA256_HEX_LENGTH = 64
+_HEX_CHARS = frozenset("0123456789abcdefABCDEF")
 
 _EVIDENCE_SOURCE_DECISION = "portfolio_allocation_decision"
 _EVIDENCE_SOURCE_VIEW = "allocation_governor_view"
@@ -100,6 +105,10 @@ def _non_empty_str(value: object) -> bool:
     return isinstance(value, str) and value != ""
 
 
+def _sha256_hex_digest(value: object) -> bool:
+    return isinstance(value, str) and len(value) == _SHA256_HEX_LENGTH and all(char in _HEX_CHARS for char in value)
+
+
 def _is_non_negative_finite(value: object) -> bool:
     return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value) and value >= 0
 
@@ -119,6 +128,13 @@ def _canonical_digest(payload: dict[str, object]) -> str:
 
 def _serialize_targets(targets: tuple[SleeveTargetDirective, ...]) -> list[list[object]]:
     return [[t.sleeve_id, t.action.value, t.weight, t.notional] for t in targets]
+
+
+def _notional_tolerance(target_count: int) -> float:
+    return max(
+        _TOLERANCE,
+        _FIXED_UNIT * max(1, target_count) * _AGGREGATE_TOLERANCE_MULTIPLIER,
+    )
 
 
 def _expected_directive_digest(directive: PortfolioGovernorDirective) -> str:
@@ -168,17 +184,50 @@ def _validate_directive_targets(directive: PortfolioGovernorDirective) -> tuple[
     return directive.targets
 
 
-def _resolve_ledger_status(directive: PortfolioGovernorDirective) -> PortfolioGovernorLedgerStatus:
+def _validate_active_target_totals(
+    directive: PortfolioGovernorDirective,
+    targets: tuple[SleeveTargetDirective, ...],
+) -> None:
+    total_weight = round(math.fsum(target.weight for target in targets), _PRECISION)
+    total_notional = round(math.fsum(target.notional for target in targets), _PRECISION)
+    notional_tolerance = _notional_tolerance(len(targets))
+
+    for target in targets:
+        expected_notional = round(float(target.weight) * float(directive.capital_base), _PRECISION)
+        if float(target.notional) <= 0.0 or expected_notional <= 0.0:
+            raise PortfolioGovernorLedgerError("portfolio_governor_ledger:notional_invalid")
+        if abs(float(target.notional) - expected_notional) > _notional_tolerance(1):
+            raise PortfolioGovernorLedgerError("portfolio_governor_ledger:target_notional_inconsistent")
+
+    if abs(total_weight - float(directive.total_weight)) > _TOLERANCE:
+        raise PortfolioGovernorLedgerError("portfolio_governor_ledger:total_weight_inconsistent")
+    if abs(total_notional - float(directive.total_notional)) > notional_tolerance:
+        raise PortfolioGovernorLedgerError("portfolio_governor_ledger:total_notional_inconsistent")
+    if abs(total_notional - round(total_weight * float(directive.capital_base), _PRECISION)) > notional_tolerance:
+        raise PortfolioGovernorLedgerError("portfolio_governor_ledger:notional_weight_inconsistent")
+
+    notional_budget = round(float(directive.budget) * float(directive.capital_base), _PRECISION)
+    if total_weight > float(directive.budget) + _TOLERANCE:
+        raise PortfolioGovernorLedgerError("portfolio_governor_ledger:total_weight_exceeds_budget")
+    if total_notional > notional_budget + notional_tolerance:
+        raise PortfolioGovernorLedgerError("portfolio_governor_ledger:total_notional_exceeds_budget")
+
+
+def _resolve_ledger_status(
+    directive: PortfolioGovernorDirective,
+    targets: tuple[SleeveTargetDirective, ...],
+) -> PortfolioGovernorLedgerStatus:
     if directive.status == AllocationStatus.ALLOCATED:
-        if directive.action != GovernorActionType.SET_PAPER_TARGET or not directive.targets:
+        if directive.action != GovernorActionType.SET_PAPER_TARGET or not targets:
             raise PortfolioGovernorLedgerError("portfolio_governor_ledger:directive_inconsistent")
-        if any(target.action != GovernorActionType.SET_PAPER_TARGET for target in directive.targets):
+        if any(target.action != GovernorActionType.SET_PAPER_TARGET for target in targets):
             raise PortfolioGovernorLedgerError("portfolio_governor_ledger:directive_inconsistent")
         if not (directive.total_weight > 0.0):
             raise PortfolioGovernorLedgerError("portfolio_governor_ledger:directive_inconsistent")
+        _validate_active_target_totals(directive, targets)
         return PortfolioGovernorLedgerStatus.RECORDED_ACTIVE
     if directive.status == AllocationStatus.BLOCKED:
-        if directive.action != GovernorActionType.HOLD or directive.targets:
+        if directive.action != GovernorActionType.HOLD or targets:
             raise PortfolioGovernorLedgerError("portfolio_governor_ledger:directive_inconsistent")
         if abs(directive.total_weight) > _TOLERANCE or abs(directive.total_notional) > _TOLERANCE:
             raise PortfolioGovernorLedgerError("portfolio_governor_ledger:directive_inconsistent")
@@ -213,15 +262,15 @@ def build_portfolio_governor_ledger_entry(
         raise PortfolioGovernorLedgerError("portfolio_governor_ledger:non_paper_directive_rejected")
     if not (
         _non_empty_str(directive.plan_id)
-        and _non_empty_str(directive.source_decision_digest)
-        and _non_empty_str(directive.view_digest)
-        and _non_empty_str(directive.record_digest)
-        and _non_empty_str(directive.directive_digest)
+        and _sha256_hex_digest(directive.source_decision_digest)
+        and _sha256_hex_digest(directive.view_digest)
+        and _sha256_hex_digest(directive.record_digest)
+        and _sha256_hex_digest(directive.directive_digest)
     ):
         raise PortfolioGovernorLedgerError("portfolio_governor_ledger:provenance_missing")
     if not _non_empty_str(correlation_id):
         raise PortfolioGovernorLedgerError("portfolio_governor_ledger:correlation_id_missing")
-    if previous_entry_digest is not None and not _non_empty_str(previous_entry_digest):
+    if previous_entry_digest is not None and not _sha256_hex_digest(previous_entry_digest):
         raise PortfolioGovernorLedgerError("portfolio_governor_ledger:previous_entry_digest_invalid")
     if not _is_non_negative_finite(directive.budget):
         raise PortfolioGovernorLedgerError("portfolio_governor_ledger:budget_invalid")
@@ -241,7 +290,7 @@ def build_portfolio_governor_ledger_entry(
     if directive.directive_digest != _expected_directive_digest(directive):
         raise PortfolioGovernorLedgerError("portfolio_governor_ledger:directive_digest_mismatch")
 
-    ledger_status = _resolve_ledger_status(directive)
+    ledger_status = _resolve_ledger_status(directive, targets)
 
     evidence_refs = (
         DecisionEvidenceRef(source_type=_EVIDENCE_SOURCE_DECISION, digest=directive.source_decision_digest),
