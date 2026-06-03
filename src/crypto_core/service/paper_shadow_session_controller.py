@@ -16,14 +16,20 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from crypto_core.service.sleeve_admission_controller import (
     PaperShadowActivationPlan,
     PaperShadowActivationStatus,
     SleeveAdmissionCorruptError,
+    SleeveAdmissionPortfolioSummary,
+    build_paper_shadow_activation_plan,
     paper_shadow_activation_plan_to_dict,
 )
 from crypto_core.validation.stage4_comparator import Stage4PaperSummary
+
+if TYPE_CHECKING:
+    from crypto_core.service.evidence_store import EvidenceStore
 
 
 class PaperShadowSessionStatus(str, Enum):
@@ -876,12 +882,12 @@ class PaperShadowSessionController:
                 paper_only=True,
                 real_orders_enabled=False,
                 real_money_enabled=False,
-                active_sleeves=plan.active_sleeves,
-                inactive_sleeves=plan.inactive_sleeves,
-                admitted_unallocated_sleeves=plan.admitted_unallocated_sleeves,
-                activation_blockers=plan.activation_blockers,
-                evidence_blockers=plan.evidence_blockers,
-                governance_blockers=plan.governance_blockers,
+                active_sleeves=_sorted_unique(plan.active_sleeves),
+                inactive_sleeves=_sorted_unique(plan.inactive_sleeves),
+                admitted_unallocated_sleeves=_sorted_unique(plan.admitted_unallocated_sleeves),
+                activation_blockers=_sorted_unique(plan.activation_blockers),
+                evidence_blockers=_sorted_unique(plan.evidence_blockers),
+                governance_blockers=_sorted_unique(plan.governance_blockers),
                 operator_summary=_operator_summary(status, 0, plan.active_sleeves, blockers),
             )
         )
@@ -1585,6 +1591,32 @@ class PaperShadowSessionController:
             real_money_enabled=False,
         )
         _validate_session_snapshot(self._snapshot)
+
+
+def prepare_paper_shadow_session_from_evidence(
+    summary: SleeveAdmissionPortfolioSummary,
+    evidence_store: EvidenceStore | None,
+    *,
+    controller: PaperShadowSessionController | None = None,
+) -> PaperShadowSessionSnapshot:
+    """Fail-closed bridge from sleeve admission evidence to a paper/shadow session.
+
+    Builds the evidence-gated activation plan via ``build_paper_shadow_activation_plan`` (no
+    duplicated readiness logic) and prepares the session through the existing
+    ``PaperShadowSessionController.prepare`` path. The session reaches READY only when that plan is
+    ``READY_FOR_PAPER_SHADOW`` — i.e. the current accepted sleeve admission evidence is proven and
+    binds to THIS summary, at least one active sleeve is admitted, and no evidence / activation /
+    governance blocker is present. Every other case (missing / stale / rejected / corrupt /
+    digest-mismatched evidence, no admitted active sleeve, or summary blockers) yields a BLOCKED
+    plan and a BLOCKED session that can never start. A malformed summary propagates
+    ``SleeveAdmissionCorruptError``.
+
+    No evidence is written and no live / order / scheduler / runtime wiring is performed.
+    PAPER/SHADOW ONLY.
+    """
+    plan = build_paper_shadow_activation_plan(summary, evidence_store)
+    session = controller if controller is not None else PaperShadowSessionController()
+    return session.prepare(plan)
 
 
 def paper_shadow_session_snapshot_to_dict(snapshot: PaperShadowSessionSnapshot) -> dict:
