@@ -20,6 +20,7 @@ PRD reference: §1.14-§1.28 Risk/Governance, §7 Execution Engine, Phase 16B.
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 
 import pytest
@@ -169,3 +170,85 @@ def test_paper_only_invariants():
     assert view.paper_only is True
     assert view.real_orders_enabled is False
     assert view.real_money_enabled is False
+
+
+def _paper_decision(*, status, budget, total_allocated, allocations, blockers=()):
+    return AllocationDecision(
+        plan_id="p",
+        status=status,
+        budget=budget,
+        total_allocated=total_allocated,
+        allocations=allocations,
+        blockers=blockers,
+        decision_digest="digest",
+    )
+
+
+def test_oversized_decision_fails_closed():
+    # Regression (P2): a hand-built decision whose effective weights exceed budget must NOT expose an
+    # oversized total_effective — fail closed.
+    bad = _paper_decision(
+        status=AllocationStatus.ALLOCATED,
+        budget=1.0,
+        total_allocated=999.0,
+        allocations=(SleeveAllocation("micro-1", AllocationStatus.ALLOCATED, 5.0, 5.0, ()),),
+    )
+    with pytest.raises(AllocationGovernorError):
+        govern_allocation_decision(bad)
+
+
+def test_nonzero_total_with_no_effective_sleeves_fails_closed():
+    # Regression (P2): status ALLOCATED + nonzero total but every sleeve BLOCKED -> inconsistent ->
+    # must fail closed (never expose a nonzero total with no effective sleeves).
+    bad = _paper_decision(
+        status=AllocationStatus.ALLOCATED,
+        budget=1.0,
+        total_allocated=5.0,
+        allocations=(SleeveAllocation("micro-1", AllocationStatus.BLOCKED, 0.0, 0.0, ("x",)),),
+        blockers=("x",),
+    )
+    with pytest.raises(AllocationGovernorError):
+        govern_allocation_decision(bad)
+
+
+def test_total_inconsistent_with_effective_weights_fails_closed():
+    # Regression (P2): total_allocated disagrees with the sum of ALLOCATED positive weights.
+    bad = _paper_decision(
+        status=AllocationStatus.ALLOCATED,
+        budget=1.0,
+        total_allocated=0.9,
+        allocations=(SleeveAllocation("micro-1", AllocationStatus.ALLOCATED, 0.5, 0.5, ()),),
+    )
+    with pytest.raises(AllocationGovernorError):
+        govern_allocation_decision(bad)
+
+
+def test_invalid_budget_fails_closed():
+    for budget in (-1.0, float("nan"), float("inf")):
+        bad = _paper_decision(
+            status=AllocationStatus.ALLOCATED,
+            budget=budget,
+            total_allocated=0.5,
+            allocations=(SleeveAllocation("micro-1", AllocationStatus.ALLOCATED, 0.5, 0.5, ()),),
+        )
+        with pytest.raises(AllocationGovernorError):
+            govern_allocation_decision(bad)
+
+
+def test_non_finite_weight_fails_closed():
+    bad = _paper_decision(
+        status=AllocationStatus.ALLOCATED,
+        budget=1.0,
+        total_allocated=0.5,
+        allocations=(SleeveAllocation("micro-1", AllocationStatus.ALLOCATED, float("nan"), 0.5, ()),),
+    )
+    with pytest.raises(AllocationGovernorError):
+        govern_allocation_decision(bad)
+
+
+def test_total_effective_derived_not_copied():
+    # A valid decision's derived total equals the sum of effective weights (verbatim weights, exact).
+    decision = _allocated_decision(budget=1.0)
+    view = govern_allocation_decision(decision)
+    assert view.total_effective == round(math.fsum(w for _, w in view.effective_allocations), 12)
+    assert view.total_effective <= decision.budget

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 
 from crypto_core.service.allocator_risk_bridge import AllocationDecision, AllocationStatus
@@ -28,6 +29,8 @@ from crypto_core.service.allocator_risk_bridge import AllocationDecision, Alloca
 _VIEW_SCHEMA_VERSION = "allocation-governor-view.v1"
 _DECISION_BLOCKED_BLOCKER = "allocation_governor:decision_blocked"
 _GOVERNANCE_HALT_BLOCKER = "allocation_governor:governance_halt"
+_PRECISION = 12
+_BUDGET_TOLERANCE = 1e-9
 
 
 class AllocationGovernorError(RuntimeError):
@@ -82,6 +85,15 @@ def govern_allocation_decision(
     if not is_paper:
         raise AllocationGovernorError("allocation_governor:non_paper_decision_rejected")
 
+    if (
+        isinstance(decision.budget, bool)
+        or not isinstance(decision.budget, (int, float))
+        or not math.isfinite(decision.budget)
+        or decision.budget < 0
+    ):
+        raise AllocationGovernorError("allocation_governor:budget_invalid")
+    budget = float(decision.budget)
+
     governance = _sorted_unique(tuple(governance_blockers))
     halted = bool(governance)
     decision_blocked = decision.status != AllocationStatus.ALLOCATED
@@ -91,12 +103,35 @@ def govern_allocation_decision(
         total_effective = 0.0
         status = AllocationStatus.BLOCKED
     else:
-        effective = tuple(
-            (allocation.sleeve_id, allocation.weight)
-            for allocation in sorted(decision.allocations, key=lambda item: item.sleeve_id)
-            if allocation.status == AllocationStatus.ALLOCATED and allocation.weight > 0.0
-        )
-        total_effective = decision.total_allocated
+        effective_pairs: list[tuple[str, float]] = []
+        for allocation in sorted(decision.allocations, key=lambda item: item.sleeve_id):
+            if allocation.status != AllocationStatus.ALLOCATED:
+                continue
+            weight = allocation.weight
+            if (
+                isinstance(weight, bool)
+                or not isinstance(weight, (int, float))
+                or not math.isfinite(weight)
+                or weight < 0
+            ):
+                raise AllocationGovernorError("allocation_governor:weight_invalid")
+            if weight > 0.0:
+                effective_pairs.append((allocation.sleeve_id, float(weight)))
+        # Derive the governed total from the effective weights; never trust decision.total_allocated.
+        total_effective = round(math.fsum(weight for _, weight in effective_pairs), _PRECISION)
+        if total_effective > budget + _BUDGET_TOLERANCE:
+            raise AllocationGovernorError("allocation_governor:total_exceeds_budget")
+        # The decision's own aggregate must agree with the derived effective total (no nonzero total
+        # with no effective sleeves, no oversized/tampered aggregate leaking downstream).
+        total_allocated = decision.total_allocated
+        if (
+            isinstance(total_allocated, bool)
+            or not isinstance(total_allocated, (int, float))
+            or not math.isfinite(total_allocated)
+            or abs(float(total_allocated) - total_effective) > _BUDGET_TOLERANCE
+        ):
+            raise AllocationGovernorError("allocation_governor:total_inconsistent")
+        effective = tuple(effective_pairs)
         status = AllocationStatus.ALLOCATED if effective else AllocationStatus.BLOCKED
 
     blocker_values = list(decision.blockers)
