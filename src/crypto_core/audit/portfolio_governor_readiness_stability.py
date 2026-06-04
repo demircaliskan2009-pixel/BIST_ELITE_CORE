@@ -187,6 +187,10 @@ def _trace_and_records(
 ) -> tuple[PaperGovernorReadinessTransitionTrace, tuple[PaperGovernorReadinessRecord, ...] | None]:
     if isinstance(source, PaperGovernorReadinessTransitionTrace):
         trace = source
+        # The trace digest hard-codes the schema version, so the schema_version field must be checked
+        # explicitly — otherwise a future/mismatched schema_version would slip past the digest check.
+        if trace.schema_version != _TRANSITION_SCHEMA_VERSION:
+            raise PaperGovernorReadinessStabilityError("stability:trace_schema_version_unexpected")
         if not (trace.paper_only is True and trace.real_orders_enabled is False and trace.real_money_enabled is False):
             raise PaperGovernorReadinessStabilityError("stability:non_paper_trace_rejected")
         if not isinstance(trace.transition_digest, str) or trace.transition_digest != _expected_transition_digest(

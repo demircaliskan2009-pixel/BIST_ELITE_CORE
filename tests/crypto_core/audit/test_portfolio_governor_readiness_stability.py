@@ -286,6 +286,15 @@ def test_tampered_trace_rejects():
         evaluate_paper_governor_readiness_stability(tampered)
 
 
+def test_trace_with_mismatched_schema_version_rejects():
+    # Regression (Codex P2): the digest hard-codes the schema version, so a changed schema_version
+    # field would otherwise keep the original digest valid and bypass the provenance check.
+    trace = trace_paper_governor_readiness_transitions(_chain(_readiness_ready()))
+    spoofed = replace(trace, schema_version="future")
+    with pytest.raises(PaperGovernorReadinessStabilityError):
+        evaluate_paper_governor_readiness_stability(spoofed)
+
+
 def test_decision_is_immutable():
     decision = evaluate_paper_governor_readiness_stability(_chain(_readiness_ready()))
     assert isinstance(decision.block_reasons, tuple)
