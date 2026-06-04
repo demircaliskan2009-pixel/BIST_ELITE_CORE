@@ -28,6 +28,7 @@ _EVIDENCE_SOURCE_READINESS = "paper_governor_readiness"
 _EVIDENCE_SOURCE_LIFECYCLE = "portfolio_governor_lifecycle"
 _EVIDENCE_SOURCE_REPLAY = "portfolio_governor_ledger_replay"
 _EVIDENCE_SOURCE_HEAD = "portfolio_governor_ledger_head"
+_BLOCKED_PLANS_PRESENT = "paper_governor_readiness:blocked_plans_present"
 
 
 class PaperGovernorReadinessRecordError(RuntimeError):
@@ -178,8 +179,17 @@ def _validate_readiness(readiness: object) -> PaperGovernorReadiness:
         raise PaperGovernorReadinessRecordError("paper_governor_readiness_record:ready_with_block_reasons")
     if readiness.status is not PaperGovernorReadinessStatus.READY and not readiness.block_reasons:
         raise PaperGovernorReadinessRecordError("paper_governor_readiness_record:blocked_without_reason")
+    expected_status = (
+        PaperGovernorReadinessStatus.READY
+        if not readiness.block_reasons
+        else PaperGovernorReadinessStatus.BLOCKED
+        if _BLOCKED_PLANS_PRESENT in readiness.block_reasons
+        else PaperGovernorReadinessStatus.OVER_BUDGET
+    )
+    if readiness.status is not expected_status:
+        raise PaperGovernorReadinessRecordError("paper_governor_readiness_record:status_reason_mismatch")
     if readiness.blocked_plans_block_readiness and readiness.blocked_count > 0:
-        if "paper_governor_readiness:blocked_plans_present" not in readiness.block_reasons:
+        if _BLOCKED_PLANS_PRESENT not in readiness.block_reasons:
             raise PaperGovernorReadinessRecordError("paper_governor_readiness_record:blocked_reason_missing")
     return readiness
 

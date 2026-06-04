@@ -209,6 +209,18 @@ def test_block_reasons_and_blocker_summary_must_be_stable():
         build_paper_governor_readiness_record(readiness)
 
 
+def test_status_must_match_block_reasons():
+    readiness = _with_fresh_readiness_digest(
+        replace(
+            _readiness_over_budget(),
+            status=PaperGovernorReadinessStatus.BLOCKED,
+            ready=False,
+        )
+    )
+    with pytest.raises(PaperGovernorReadinessRecordError):
+        build_paper_governor_readiness_record(readiness)
+
+
 def test_counts_and_exposure_must_be_consistent():
     readiness = _with_fresh_readiness_digest(replace(_readiness_ready(), entry_count=0))
     with pytest.raises(PaperGovernorReadinessRecordError):
