@@ -173,6 +173,22 @@ def test_ready_then_blocked_chain_is_blocked_current():
     assert dict(replay.status_counts) == {"ready": 1, "blocked": 1, "over_budget": 0}
 
 
+def test_ready_blocked_ready_chain_uses_latest_decision_with_historical_counts():
+    records = _chain(_readiness_ready(), _readiness_blocked(), _readiness_ready())
+    replay = replay_paper_governor_readiness_records(records)
+    latest = records[-1]
+
+    assert replay.entry_count == 3
+    assert replay.head_record_digest == latest.record_digest
+    assert replay.latest_record_digest == latest.record_digest
+    assert replay.latest_status is PaperGovernorReadinessStatus.READY
+    assert replay.latest_ready is True
+    assert replay.latest_readiness_digest == latest.readiness_digest
+    assert replay.current_block_reasons == ()
+    assert replay.current_blocker_summary == ()
+    assert replay.status_counts == (("blocked", 1), ("over_budget", 0), ("ready", 2))
+
+
 def test_ready_then_over_budget_chain_is_over_budget_current():
     records = _chain(_readiness_ready(), _readiness_over_budget())
     replay = replay_paper_governor_readiness_records(records)
