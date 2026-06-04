@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from crypto_core.audit.portfolio_governor_readiness import PaperGovernorReadinessStatus
 from crypto_core.audit.portfolio_governor_readiness_record import PaperGovernorReadinessRecord
 from crypto_core.audit.portfolio_governor_readiness_record_replay import (
+    PaperGovernorReadinessRecordReplayError,
     replay_paper_governor_readiness_records,
 )
 from crypto_core.audit.portfolio_governor_readiness_record_store import PaperGovernorReadinessRecordStore
@@ -78,12 +79,15 @@ def _canonical_digest(payload: dict[str, object]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _records_of(source: object) -> tuple[PaperGovernorReadinessRecord, ...]:
-    # Called only after replay validation has accepted the source, so it is a store or an ordered
-    # tuple/list of validated records here.
+def _snapshot_records(source: object) -> tuple[PaperGovernorReadinessRecord, ...]:
+    # Capture a single immutable snapshot of the source. The SAME snapshot is then used for both
+    # replay validation and transition emission, so a mutating list/store (or a subclass returning a
+    # different second snapshot) cannot make the transitions disagree with the validated summary.
     if isinstance(source, PaperGovernorReadinessRecordStore):
         return source.snapshot()
-    return tuple(source)  # type: ignore[arg-type]
+    if isinstance(source, (tuple, list)):
+        return tuple(source)
+    raise PaperGovernorReadinessRecordReplayError("paper_governor_readiness_record_replay:source_malformed")
 
 
 def _serialize_transitions(
@@ -114,14 +118,17 @@ def trace_paper_governor_readiness_transitions(
 ) -> PaperGovernorReadinessTransitionTrace:
     """Trace readiness status transitions across a readiness-record chain (store or ordered records).
 
-    The chain and per-record integrity are validated (and the summary fields produced) by reusing
-    ``replay_paper_governor_readiness_records``; the ordered records are then read back to emit one
-    transition per adjacent status change, in append order. A malformed source or broken/duplicate/
-    tampered record fails closed through that reused validation. The result is deterministic and
-    immutable; no order intent or live wiring is produced.
+    The source is snapshotted once; that same immutable snapshot is validated (and its summary fields
+    produced) by reusing ``replay_paper_governor_readiness_records`` and is also the set from which one
+    transition per adjacent status change is emitted, in append order — so the transitions can never
+    disagree with the validated summary. A malformed source or broken/duplicate/tampered record fails
+    closed through that reused validation. The result is deterministic and immutable; no order intent
+    or live wiring is produced.
     """
-    replay = replay_paper_governor_readiness_records(source)
-    records = _records_of(source)
+    # Snapshot the source once, then use that SAME immutable tuple for both replay validation and
+    # transition emission (so the two cannot disagree if the source mutates or re-snapshots).
+    records = _snapshot_records(source)
+    replay = replay_paper_governor_readiness_records(records)
 
     transitions: list[PaperGovernorReadinessStatusTransition] = []
     for previous, current in zip(records, records[1:], strict=False):

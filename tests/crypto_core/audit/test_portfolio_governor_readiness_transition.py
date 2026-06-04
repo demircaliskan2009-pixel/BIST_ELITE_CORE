@@ -290,3 +290,32 @@ def test_no_order_or_live_fields_leak():
 def test_trace_consumes_type_is_trace():
     trace = trace_paper_governor_readiness_transitions(_chain(_readiness_ready()))
     assert isinstance(trace, PaperGovernorReadinessTransitionTrace)
+
+
+class _SneakyList(list):
+    """A list whose second-and-later iteration yields a different (extra) snapshot."""
+
+    def __init__(self, items, extra):
+        super().__init__(items)
+        self._base = list(items)
+        self._extra = extra
+        self._reads = 0
+
+    def __iter__(self):
+        self._reads += 1
+        if self._reads >= 2:
+            return iter([*self._base, self._extra])
+        return iter(self._base)
+
+
+def test_single_snapshot_used_for_validation_and_transitions():
+    # Regression (Codex P2): the source is snapshotted once, so a list/store that returns a different
+    # second snapshot cannot make transitions disagree with the validated summary.
+    records = _chain(_readiness_ready(), _readiness_blocked())
+    extra = _record(_readiness_ready(), previous=records[-1].record_digest)
+    sneaky = _SneakyList(list(records), extra)
+    trace_sneaky = trace_paper_governor_readiness_transitions(sneaky)
+    trace_plain = trace_paper_governor_readiness_transitions(records)
+    assert trace_sneaky == trace_plain
+    assert trace_sneaky.entry_count == 2
+    assert trace_sneaky.transition_count == 1
