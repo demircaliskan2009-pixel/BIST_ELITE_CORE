@@ -42,6 +42,7 @@ from crypto_core.audit.portfolio_governor_lifecycle import (
 )
 
 _READINESS_SCHEMA_VERSION = "paper-governor-readiness.v1"
+_LIFECYCLE_SCHEMA_VERSION = "portfolio-governor-lifecycle-view.v1"
 _TOLERANCE = 1e-9
 
 _BLOCKED_PLANS_PRESENT = "paper_governor_readiness:blocked_plans_present"
@@ -109,6 +110,45 @@ def _canonical_digest(payload: dict[str, object]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _serialize_plan_states(states: tuple[object, ...]) -> list[list[object]]:
+    return [
+        [
+            state.plan_id,
+            state.status.value,
+            state.entry_digest,
+            state.total_weight,
+            state.total_notional,
+            list(state.blockers),
+        ]
+        for state in states
+    ]
+
+
+def _expected_lifecycle_digest(view: PaperGovernorLifecycleView) -> str:
+    # Mirror of the lifecycle view digest payload (``summarize_paper_governor_lifecycle``). Recomputed
+    # here only to verify a directly-supplied view has not been tampered with (e.g. via
+    # ``dataclasses.replace`` lowering an exposure total while keeping the original digest) before its
+    # exposure fields are trusted by this fail-closed gate. A real view keeps this in lockstep
+    # (asserted by the tests). Views produced through a store/entries source are validated by replay.
+    payload: dict[str, object] = {
+        "schema_version": _LIFECYCLE_SCHEMA_VERSION,
+        "head_digest": view.head_digest,
+        "entry_count": view.entry_count,
+        "active_count": view.active_count,
+        "blocked_count": view.blocked_count,
+        "current_active_plans": _serialize_plan_states(view.current_active_plans),
+        "current_blocked_plans": _serialize_plan_states(view.current_blocked_plans),
+        "total_active_weight": view.total_active_weight,
+        "total_active_notional": view.total_active_notional,
+        "blocker_summary": list(view.blocker_summary),
+        "replay_digest": view.replay_digest,
+        "paper_only": True,
+        "real_orders_enabled": False,
+        "real_money_enabled": False,
+    }
+    return _canonical_digest(payload)
+
+
 def _validate_policy(policy: PaperGovernorReadinessPolicy) -> None:
     if not isinstance(policy, PaperGovernorReadinessPolicy):
         raise PaperGovernorReadinessError("paper_governor_readiness:policy_malformed")
@@ -130,6 +170,10 @@ def _lifecycle_view_of(
 ) -> PaperGovernorLifecycleView:
     if isinstance(source, PaperGovernorLifecycleView):
         view = source
+        # A directly-supplied view is not chain-validated by replay, so its exposure fields cannot be
+        # trusted on faith: re-verify it hashes to its own ``lifecycle_digest`` (tamper detection).
+        if not isinstance(view.lifecycle_digest, str) or view.lifecycle_digest != _expected_lifecycle_digest(view):
+            raise PaperGovernorReadinessError("paper_governor_readiness:lifecycle_digest_mismatch")
     else:
         # Delegates chain validation to the lifecycle/replay layer (reused, not duplicated).
         view = summarize_paper_governor_lifecycle(source)

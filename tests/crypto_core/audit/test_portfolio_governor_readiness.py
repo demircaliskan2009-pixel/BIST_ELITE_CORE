@@ -199,6 +199,28 @@ def test_malformed_source_fails_closed():
         evaluate_paper_governor_readiness({"not": "a source"})
 
 
+def test_direct_tampered_view_fails_closed():
+    # Regression (Codex P1): a directly-supplied lifecycle view is not chain-validated by replay, so
+    # a view tampered via dataclasses.replace (exposure lowered / blocked plan hidden) while keeping
+    # the original lifecycle_digest must be rejected before its exposure fields are trusted.
+    active = _entry(_allocated_directive(budget=1.0))
+    view = summarize_paper_governor_lifecycle((active,))
+    forged_weight = replace(view, total_active_weight=0.5)  # keep stale digest
+    with pytest.raises(PaperGovernorReadinessError):
+        evaluate_paper_governor_readiness(
+            forged_weight, policy=PaperGovernorReadinessPolicy(max_current_active_weight=0.5)
+        )
+
+    blocked = _entry(_blocked_directive(), previous=active.entry_digest)
+    blocked_view = summarize_paper_governor_lifecycle((active, blocked))
+    forged_blocked = replace(blocked_view, blocked_count=0)  # hide the blocked plan, keep stale digest
+    with pytest.raises(PaperGovernorReadinessError):
+        evaluate_paper_governor_readiness(forged_blocked)
+
+    # A genuine, untampered view still passes (mirror stays in lockstep with the lifecycle digest).
+    assert evaluate_paper_governor_readiness(view).status == PaperGovernorReadinessStatus.READY
+
+
 def test_invalid_caps_reject():
     active = _entry(_allocated_directive())
     for policy in (
