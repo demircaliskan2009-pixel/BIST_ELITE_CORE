@@ -307,6 +307,12 @@ class _SneakyList(list):
             return iter([*self._base, self._extra])
         return iter(self._base)
 
+    def __eq__(self, other):
+        return self is other
+
+    def __hash__(self):
+        return id(self)
+
 
 def test_single_snapshot_used_for_validation_and_transitions():
     # Regression (Codex P2): the source is snapshotted once, so a list/store that returns a different
