@@ -138,6 +138,11 @@ class _CountingStore(PaperGovernorReadinessRecordStore):
         return id(self)
 
 
+class _BrokenSnapshotStore(PaperGovernorReadinessRecordStore):
+    def snapshot(self):
+        raise RuntimeError("snapshot boom")
+
+
 def test_empty_source_blocks_and_never_applies():
     plan = build_paper_governor_application_plan(PaperGovernorReadinessRecordStore())
     assert plan.application_mode is _BLOCK
@@ -213,6 +218,12 @@ def test_tampered_record_rejects():
 def test_non_record_element_rejects():
     with pytest.raises(PaperGovernorApplicationPlanError):
         build_paper_governor_application_plan(("not-a-record",))
+
+
+def test_broken_store_snapshot_wraps_as_application_plan_error():
+    with pytest.raises(PaperGovernorApplicationPlanError) as exc_info:
+        build_paper_governor_application_plan(_BrokenSnapshotStore())
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
 
 
 def test_precomputed_objects_rejected():

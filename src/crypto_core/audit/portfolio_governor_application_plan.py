@@ -129,6 +129,8 @@ def build_paper_governor_application_plan(
         PaperGovernorReadinessRecordStoreError,
     ) as exc:
         raise PaperGovernorApplicationPlanError(f"paper_governor_application_plan:source_invalid:{exc}") from exc
+    except Exception as exc:
+        raise PaperGovernorApplicationPlanError(f"paper_governor_application_plan:source_invalid:{exc}") from exc
 
     if stability.stability_status is PaperGovernorReadinessStabilityStatus.STABLE_READY:
         application_mode = PaperGovernorApplicationMode.APPLY
