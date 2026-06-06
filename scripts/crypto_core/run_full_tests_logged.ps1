@@ -22,9 +22,11 @@ $env:TEMP = "C:\tmp"
 New-Item -ItemType Directory -Force "C:\tmp" | Out-Null
 
 $stamp = Get-Date -Format "yyyyMMddHHmmss"
-$cache = "C:\tmp\pytest_cache_crypto_core_full_$stamp"
-$base = "C:\tmp\pytest_basetemp_crypto_core_full_$stamp"
-$log = "C:\tmp\crypto_core_full_pytest_$stamp.log"
+$runId = [guid]::NewGuid().ToString("N")
+$pathSuffix = "${stamp}_${PID}_${runId}"
+$cache = "C:\tmp\pytest_cache_crypto_core_full_$pathSuffix"
+$base = "C:\tmp\pytest_basetemp_crypto_core_full_$pathSuffix"
+$log = "C:\tmp\crypto_core_full_pytest_$pathSuffix.log"
 
 Write-Output "PYTEST_CACHE=$cache"
 Write-Output "PYTEST_BASETEMP=$base"
