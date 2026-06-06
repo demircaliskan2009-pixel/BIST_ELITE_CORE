@@ -57,12 +57,19 @@
   paths, not a bare pytest command. Prefer:
   `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/crypto_core/run_full_tests_logged.ps1`
   `git diff --check`
+- Run local validation commands one at a time. Do not hide chains of Ruff, format, pytest, or git
+  checks inside one shell line.
+- For validation that can hang or run longer than a trivial Ruff check, prefer a logged timeout
+  wrapper such as:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/crypto_core/run_logged_command.ps1 -CommandName "<name>" -TimeoutSeconds <seconds> -LogPrefix "<prefix>" -Command "python" -Arguments "-m" "pytest" ...`
+  The report should include the command name, exit code, log paths, and stdout/stderr tails.
 - For docs/config/setup-only patches, use `git diff --check` and exact changed-file scope unless a
   hook or prompt requires runtime tests.
 - Before commit/push, prove changed files are exactly the intended scope.
-- Do not start a second full `tests/crypto_core` run while one may still be active. If a local full
-  run is overlong, audit Python process start time, CPU, and command identity when available; stop
-  only the proven matching pytest PID, never a broad Python process set.
+- Do not start a second validation run while a previous matching Ruff/pytest/helper run may still be
+  active. If a local validation command is overlong, audit process start time, CPU, responsiveness,
+  and command identity when available; stop only the proven matching validation PID, never a broad
+  Python/PowerShell process set. Remote CI polling is separate and must not be killed locally.
 - Dependency PRs should reuse an existing logged full-suite proof after a narrow repair unless a new
   repair is made. Remote CI polling is separate from local pytest process control: pending CI is not
   failure; poll boundedly until terminal or report pending.
