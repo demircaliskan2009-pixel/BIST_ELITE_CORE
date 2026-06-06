@@ -25,6 +25,15 @@ repair, dirty-branch salvage, PR closeout, or setup hardening.
 ## Validate and Publish
 
 - Run focused Ruff/tests, then full `tests/crypto_core` when release-gating or requested.
+- Never run bare `python -m pytest -x -q tests/crypto_core`. Use the logged wrapper:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/crypto_core/run_full_tests_logged.ps1`
+  or an equivalent command with a unique `cache_dir`, unique `--basetemp`, and log captured from
+  start.
+- Do not start a second full pytest while a prior full run may be active. If a run is overlong,
+  sample Python process start time, CPU, responsiveness, and command line if accessible; stop only a
+  proven matching pytest PID. Never use broad Python process kills.
+- For dependency PRs, do not repeat full local pytest after logged proof unless a new repair is made.
+  Poll remote CI separately; pending CI is not failure.
 - Run `git diff --check` and prove exact changed-file scope.
 - Stage exact paths only.
 - Never push directly to `main`; never force push; never merge without exact PR authorization.

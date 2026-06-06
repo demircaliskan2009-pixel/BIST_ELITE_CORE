@@ -53,11 +53,19 @@
   `python -m ruff format --check <paths>`
   `python -m ruff check <paths>`
   `python -m pytest -x -q <targeted tests>`
-  `python -m pytest -x -q tests/crypto_core` when requested or release-gating.
+  Full `tests/crypto_core` release gates must use a logged wrapper with unique cache and base temp
+  paths, not a bare pytest command. Prefer:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/crypto_core/run_full_tests_logged.ps1`
   `git diff --check`
 - For docs/config/setup-only patches, use `git diff --check` and exact changed-file scope unless a
   hook or prompt requires runtime tests.
 - Before commit/push, prove changed files are exactly the intended scope.
+- Do not start a second full `tests/crypto_core` run while one may still be active. If a local full
+  run is overlong, audit Python process start time, CPU, and command identity when available; stop
+  only the proven matching pytest PID, never a broad Python process set.
+- Dependency PRs should reuse an existing logged full-suite proof after a narrow repair unless a new
+  repair is made. Remote CI polling is separate from local pytest process control: pending CI is not
+  failure; poll boundedly until terminal or report pending.
 
 ## Token Economy
 
