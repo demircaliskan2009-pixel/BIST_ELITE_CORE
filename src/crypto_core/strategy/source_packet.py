@@ -32,13 +32,17 @@ _HEX_CHARS = frozenset("0123456789abcdefABCDEF")
 
 _RESTRICTED_RIGHTS_FLAG = "source_packet:restricted_rights"
 
-# Safely-detectable BIST markers only (word-bounded; "ideal" is intentionally excluded because it
-# collides with the ordinary English word and is not safely detectable).
-_BIST_PATTERN = re.compile(r"\b(bist|bist30|bist100|borsa|kap|matriks)\b", re.IGNORECASE)
-# Forbidden live/private/order/scheduler config tokens (word-bounded so "live" matches "live trading"
-# but not "delivery").
+# Safely-detectable BIST markers only ("ideal" is intentionally excluded because it collides with the
+# ordinary English word). Unambiguous markers prefix-match so suffixed forms (bist30, borsa_istanbul)
+# are caught; "kap" stays exact so it does not false-match "kappa".
+_BIST_PATTERN = re.compile(r"\b(?:bist\w*|borsa\w*|matriks\w*)|\bkap\b", re.IGNORECASE)
+# Forbidden live/private/order/scheduler config tokens. Compound config tokens prefix-match so
+# suffixed/versioned forms (order_router_v2, private_api_key, auto_loop_v3) still fail closed; "live"
+# matches the bare word or a snake/kebab config ("live trading", "live_execution") but not ordinary
+# words like "delivery"/"liver"/"livestream".
 _FORBIDDEN_PATTERN = re.compile(
-    r"\b(live|private_api|credentials|order_router|scheduler|auto_loop|shadow_live_execution)\b",
+    r"\b(?:private_api|order_router|auto_loop|shadow_live_execution|credentials|scheduler)\w*"
+    r"|\blive(?:\b|[_-]\w+)",
     re.IGNORECASE,
 )
 

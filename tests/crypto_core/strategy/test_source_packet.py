@@ -113,6 +113,21 @@ def test_forbidden_live_order_scheduler_tokens_rejected():
             _valid(**{field: value})
 
 
+def test_suffixed_forbidden_and_bist_tokens_rejected():
+    # Regression (Codex P2): versioned/suffixed forbidden tokens must still fail closed; the same
+    # suffix gap is closed for unambiguous BIST markers.
+    for field, value in (
+        ("edge_hypothesis", "uses order_router_v2 path for entries"),
+        ("edge_hypothesis", "reads private_api_key from config"),
+        ("risk_flags", ("auto_loop_v3",)),
+        ("edge_hypothesis", "live_execution toggle assumed"),
+        ("market_scope_tags", ("borsa_istanbul", "btc-perp")),
+        ("source_title", "bist_xu100 momentum"),
+    ):
+        with pytest.raises(SourcePacketError):
+            _valid(**{field: value})
+
+
 def test_safely_detectable_only_no_false_positives():
     # "ideal" (collides with English) and substring-"live" (delivery) must NOT false-reject.
     packet = _valid(
