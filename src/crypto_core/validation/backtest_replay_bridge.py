@@ -28,7 +28,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from crypto_core.strategy.spec import StrategySpec, strategy_spec_digest, validate_strategy_spec
-from crypto_core.validation.backtest_admission import BacktestAdmissionDecision, BacktestAdmissionStatus
+from crypto_core.validation.backtest_admission import (
+    BacktestAdmissionDecision,
+    BacktestAdmissionStatus,
+    backtest_admission_decision_to_dict,
+)
 from crypto_core.validation.backtest_replay_admission import (
     BacktestReplayAdmissionInput,
     BacktestReplayAdmissionPolicy,
@@ -76,6 +80,12 @@ def _canonical_digest(payload: dict[str, object]) -> str:
 
 def _is_sha256_hex(value: object) -> bool:
     return isinstance(value, str) and len(value) == _SHA256_HEX_LENGTH and all(char in _HEX_CHARS for char in value)
+
+
+def _expected_admission_digest(admission_decision: BacktestAdmissionDecision) -> str:
+    payload = backtest_admission_decision_to_dict(admission_decision)
+    payload.pop("admission_digest", None)
+    return _canonical_digest(payload)
 
 
 def _is_non_empty_string(value: object) -> bool:
@@ -141,6 +151,8 @@ def build_backtest_replay_bridge(
         gate_rejections.append("backtest_replay_bridge:real_money_enabled")
     if not _is_sha256_hex(admission_decision.admission_digest):
         gate_rejections.append("backtest_replay_bridge:admission_digest_invalid")
+    elif admission_decision.admission_digest != _expected_admission_digest(admission_decision):
+        gate_rejections.append("backtest_replay_bridge:admission_digest_mismatch")
 
     if strategy_digest is None:
         gate_rejections.append("backtest_replay_bridge:strategy_spec_unresolvable")

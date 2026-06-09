@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, fields
+import hashlib
+import json
+from dataclasses import FrozenInstanceError, fields, replace
 
 import pytest
 
@@ -15,7 +17,11 @@ from crypto_core.audit import (
 )
 from crypto_core.data.requirements import DataRequirementValidationResult, default_perp_data_requirement_registry
 from crypto_core.strategy.spec import StrategySpec, strategy_spec_digest, validate_strategy_spec
-from crypto_core.validation.backtest_admission import BacktestAdmissionDecision, BacktestAdmissionStatus
+from crypto_core.validation.backtest_admission import (
+    BacktestAdmissionDecision,
+    BacktestAdmissionStatus,
+    backtest_admission_decision_to_dict,
+)
 from crypto_core.validation.backtest_replay_admission import (
     BacktestReplayAdmissionPolicy,
     BacktestReplayAdmissionStatus,
@@ -148,7 +154,13 @@ def _admission(**overrides) -> BacktestAdmissionDecision:
         "admission_digest": "1" * 64,
     }
     kwargs.update(overrides)
-    return BacktestAdmissionDecision(**kwargs)
+    decision = BacktestAdmissionDecision(**kwargs)
+    if "admission_digest" in overrides:
+        return decision
+    payload = backtest_admission_decision_to_dict(decision)
+    payload.pop("admission_digest", None)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return replace(decision, admission_digest=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
 
 
 def _bridge(admission=None, **overrides):
@@ -171,11 +183,12 @@ def _bridge(admission=None, **overrides):
 
 
 def test_admitted_decision_with_matching_evidence_accepted():
-    result = _bridge()
+    admission = _admission()
+    result = _bridge(admission)
     assert isinstance(result, BacktestReplayBridgeResult)
     assert result.status is BacktestReplayAdmissionStatus.ACCEPTED
     assert result.accepted is True
-    assert result.admission_digest == "1" * 64
+    assert result.admission_digest == admission.admission_digest
     assert result.replay_admission_result is not None
     assert result.replay_admission_result.accepted is True
     assert result.replay_admission_status == "ACCEPTED"
@@ -186,6 +199,16 @@ def test_admitted_decision_with_matching_evidence_accepted():
     }
     assert len(result.bridge_digest) == 64
     assert result.paper_only is True
+
+
+def test_stale_admission_digest_rejected_before_evaluator():
+    admission = _admission()
+    forged = replace(admission, bundle_digest="0" * 64)
+    result = _bridge(forged)
+    assert result.status is BacktestReplayAdmissionStatus.REJECTED
+    assert result.accepted is False
+    assert result.replay_admission_result is None
+    assert "backtest_replay_bridge:admission_digest_mismatch" in result.rejection_reasons
 
 
 def test_non_admitted_decision_rejects_before_evaluator():
