@@ -44,7 +44,8 @@ _HEX_CHARS = frozenset("0123456789abcdefABCDEF")
 # Safely-detectable BIST markers and forbidden live/order/scheduler/private config tokens (word-bounded).
 _BIST_PATTERN = re.compile(r"\b(?:bist\w*|borsa\w*|matriks\w*)|\bkap\b", re.IGNORECASE)
 _FORBIDDEN_PATTERN = re.compile(
-    r"\b(?:private|order_router|auto_loop|shadow_live_execution|credentials|scheduler)\w*"
+    r"(?<![A-Za-z0-9])orders?(?![A-Za-z0-9])"
+    r"|\b(?:private|order_router|auto_loop|shadow_live_execution|credentials|scheduler)\w*"
     r"|\blive(?:\b|[_-]\w+)",
     re.IGNORECASE,
 )

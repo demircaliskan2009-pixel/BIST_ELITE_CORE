@@ -151,6 +151,31 @@ def test_malformed_or_forbidden_identity_rejects():
     assert "paper_replay_intake:forbidden_scope_token" in bad_source.rejection_reasons
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "manifest"),
+    (
+        ({"requested_replay_id": "order"}, None),
+        ({"requested_replay_id": "orders"}, None),
+        ({"requested_replay_id": "real_order"}, None),
+        ({"requested_replay_id": "order-routing"}, None),
+        ({"operator_id": "desk_order_router"}, None),
+        ({"metadata": {"note": "real-orders"}}, None),
+        ({}, _manifest(historical_data_source_id="paper-order-source")),
+    ),
+)
+def test_plain_order_scope_tokens_reject(kwargs, manifest):
+    intake = _intake(manifest=manifest, **kwargs)
+
+    assert intake.status is PaperReplayIntakeStatus.REJECTED
+    assert intake.ready is False
+    assert "paper_replay_intake:forbidden_scope_token" in intake.rejection_reasons
+
+
+@pytest.mark.parametrize("value", ("border-study", "orderly-paper-review", "preorder-check"))
+def test_unrelated_order_substrings_do_not_reject(value):
+    assert _intake(requested_replay_id=value).status is PaperReplayIntakeStatus.READY
+
+
 def test_wrong_type_and_bad_metadata_raise():
     with pytest.raises(PaperReplayIntakeError):
         build_paper_replay_intake(
