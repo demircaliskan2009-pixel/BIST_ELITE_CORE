@@ -287,6 +287,24 @@ def test_bist_and_forbidden_leakage_rejects():
     assert any("order_router" in reason for reason in bundle.terminal_rejection_reasons)
 
 
+def test_leakage_input_for_different_strategy_rejected():
+    # Regression (Codex P1): a leakage proof built for strategy B must not certify strategy A.
+    spec_a = _valid_spec()
+    payload_b = _strategy_payload()
+    payload_b["strategy_id"] = "svb-other"
+    result_b = validate_strategy_spec(payload_b)
+    assert result_b.spec is not None
+    leakage_b = _leakage_input(result_b.spec)
+    bundle = build_strategy_validation_bundle(
+        spec_a, registry=default_perp_data_requirement_registry(), leakage_input=leakage_b, correlation_id=_CORR
+    )
+    assert bundle.status is StrategyValidationBundleStatus.REJECTED
+    assert bundle.accepted is False
+    assert "strategy_validation_bundle:leakage_strategy_mismatch" in bundle.terminal_rejection_reasons
+    # The foreign leakage proof must not enter the ledger chain (spec + PIT records only).
+    assert len(bundle.decision_record_digests) == 2
+
+
 def test_missing_leakage_input_is_insufficient_evidence():
     bundle = build_strategy_validation_bundle(
         _valid_spec(), registry=default_perp_data_requirement_registry(), leakage_input=None, correlation_id=_CORR

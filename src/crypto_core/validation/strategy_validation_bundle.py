@@ -62,7 +62,7 @@ _SHA256_HEX_LENGTH = 64
 _HEX_CHARS = frozenset("0123456789abcdefABCDEF")
 
 _SOURCE_PACKET_NOT_USABLE = "strategy_validation_bundle:source_packet_not_usable"
-_LEAKAGE_INPUT_MISSING = "strategy_validation_bundle:leakage_input_missing"
+_LEAKAGE_STRATEGY_MISMATCH = "strategy_validation_bundle:leakage_strategy_mismatch"
 
 
 class StrategyValidationBundleError(RuntimeError):
@@ -161,6 +161,17 @@ def _resolve_leakage(leakage_input: object) -> LeakageBiasRepaintResult | None:
     raise StrategyValidationBundleError("strategy_validation_bundle:leakage_input_malformed")
 
 
+def _spec_digest_or_none(spec_or_mapping: object) -> str | None:
+    """Resolve a leakage input's strategy to its canonical digest without raising (None if unresolvable)."""
+    if isinstance(spec_or_mapping, StrategySpec):
+        return strategy_spec_digest(spec_or_mapping)
+    if isinstance(spec_or_mapping, Mapping):
+        result = validate_strategy_spec(spec_or_mapping)
+        if result.accepted and result.spec is not None:
+            return strategy_spec_digest(result.spec)
+    return None
+
+
 def _append_record(
     result: DecisionLedgerValidationResult,
     digests: list[str],
@@ -233,7 +244,7 @@ def _build_ledger_chain(
             evidence_refs=(DecisionEvidenceRef(source_type="strategy_spec", digest=strategy_digest),),
             previous_record_digest=last,
         )
-        last = _append_record(leakage_record, digests, last)
+        _append_record(leakage_record, digests, last)
 
     return tuple(digests)
 
@@ -302,6 +313,14 @@ def build_strategy_validation_bundle(
     leakage_result = _resolve_leakage(leakage_input)
     leakage_present = leakage_result is not None
 
+    # Fail closed on cross-strategy evidence: a leakage proof built for a different StrategySpec must not
+    # certify this one. The mismatch is a hard rejection and the foreign proof never enters the ledger chain.
+    leakage_mismatch: tuple[str, ...] = ()
+    if leakage_present:
+        leakage_strategy_digest = _spec_digest_or_none(leakage_input.strategy_spec)
+        if leakage_strategy_digest is not None and leakage_strategy_digest != strategy_digest:
+            leakage_mismatch = (_LEAKAGE_STRATEGY_MISMATCH,)
+
     decision_record_digests = _build_ledger_chain(
         spec,
         strategy_id=strategy_id,
@@ -309,7 +328,7 @@ def build_strategy_validation_bundle(
         source_packet_digest=source_packet_digest,
         data_registry_digest=data_registry_digest,
         pit_result=pit_result,
-        leakage_result=leakage_result,
+        leakage_result=None if leakage_mismatch else leakage_result,
         correlation_id=correlation_id,
         previous_record_digest=previous_record_digest,
     )
@@ -320,7 +339,7 @@ def build_strategy_validation_bundle(
         leakage_result.status.value if leakage_present else StrategyValidationBundleStatus.INSUFFICIENT_EVIDENCE.value
     )
 
-    hard = _sorted_unique(pit_result.rejection_reasons + leakage_rejections + source_blockers)
+    hard = _sorted_unique(pit_result.rejection_reasons + leakage_rejections + source_blockers + leakage_mismatch)
     needs = _sorted_unique(pit_result.needs_research_reasons + leakage_needs)
     insufficient = (not leakage_present) or leakage_result.status is LeakageBiasRepaintStatus.INSUFFICIENT_EVIDENCE
 
