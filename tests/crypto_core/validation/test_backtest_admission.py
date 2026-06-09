@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, fields
+import hashlib
+import json
+from dataclasses import FrozenInstanceError, fields, replace
 
 import pytest
 
@@ -16,6 +18,7 @@ from crypto_core.validation.backtest_admission import (
 from crypto_core.validation.strategy_validation_bundle import (
     StrategyValidationBundle,
     StrategyValidationBundleStatus,
+    strategy_validation_bundle_to_dict,
 )
 
 _CORR = "corr:backtest-admission-001"
@@ -43,7 +46,13 @@ def _bundle(**overrides) -> StrategyValidationBundle:
         "bundle_digest": "f" * 64,
     }
     kwargs.update(overrides)
-    return StrategyValidationBundle(**kwargs)
+    bundle = StrategyValidationBundle(**kwargs)
+    if "bundle_digest" in overrides:
+        return bundle
+    payload = strategy_validation_bundle_to_dict(bundle)
+    payload.pop("bundle_digest", None)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return replace(bundle, bundle_digest=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
 
 
 def _admit(bundle=None, **kwargs):
@@ -157,6 +166,15 @@ def test_forged_accepted_bundle_rejected():
     decision = _admit(_bundle(accepted=False))
     assert decision.status is BacktestAdmissionStatus.REJECTED
     assert "backtest_admission:bundle_accepted_mismatch" in decision.rejection_reasons
+
+
+def test_stale_bundle_digest_rejected():
+    bundle = _bundle()
+    forged = replace(bundle, strategy_id="svb-forged")
+    decision = _admit(forged)
+    assert decision.status is BacktestAdmissionStatus.REJECTED
+    assert decision.admitted is False
+    assert "backtest_admission:bundle_digest_mismatch" in decision.rejection_reasons
 
 
 def test_deterministic_digest_identical_input():

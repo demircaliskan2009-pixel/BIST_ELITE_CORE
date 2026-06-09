@@ -30,6 +30,7 @@ from enum import Enum
 from crypto_core.validation.strategy_validation_bundle import (
     StrategyValidationBundle,
     StrategyValidationBundleStatus,
+    strategy_validation_bundle_to_dict,
 )
 
 _SCHEMA_VERSION = "backtest-admission.v1"
@@ -93,6 +94,12 @@ def _is_sha256_hex(value: object) -> bool:
     return isinstance(value, str) and len(value) == _SHA256_HEX_LENGTH and all(char in _HEX_CHARS for char in value)
 
 
+def _expected_bundle_digest(bundle: StrategyValidationBundle) -> str:
+    payload = strategy_validation_bundle_to_dict(bundle)
+    payload.pop("bundle_digest", None)
+    return _canonical_digest(payload)
+
+
 def _is_positive_int(value: object) -> bool:
     return not isinstance(value, bool) and isinstance(value, int) and value >= 1
 
@@ -153,6 +160,8 @@ def build_backtest_admission_decision(
         hard.append("backtest_admission:real_money_enabled")
     if not _is_sha256_hex(bundle.bundle_digest):
         hard.append("backtest_admission:bundle_digest_invalid")
+    elif bundle.bundle_digest != _expected_bundle_digest(bundle):
+        hard.append("backtest_admission:bundle_digest_mismatch")
     if any(not _is_sha256_hex(digest) for digest in bundle.decision_record_digests):
         hard.append("backtest_admission:decision_record_digest_invalid")
     if bundle.source_packet_digest is not None and not _is_sha256_hex(bundle.source_packet_digest):
