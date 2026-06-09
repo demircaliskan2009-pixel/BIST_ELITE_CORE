@@ -188,6 +188,12 @@ def build_paper_replay_run_plan(
         hard.append("paper_replay_run_plan:replay_source_id_invalid")
     if not _is_non_empty_string(intake.historical_data_source_id):
         hard.append("paper_replay_run_plan:historical_data_source_id_invalid")
+    if intake.paper_only is not True:
+        hard.append("paper_replay_run_plan:intake_non_paper")
+    if intake.real_orders_enabled is not False:
+        hard.append("paper_replay_run_plan:intake_real_orders_enabled")
+    if intake.real_money_enabled is not False:
+        hard.append("paper_replay_run_plan:intake_real_money_enabled")
 
     hard.extend(
         _scope_violations(

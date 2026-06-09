@@ -111,6 +111,22 @@ def test_tampered_intake_field_rejects():
     assert "paper_replay_run_plan:intake_digest_mismatch" in run_plan.rejection_reasons
 
 
+@pytest.mark.parametrize(
+    ("intake", "reason"),
+    (
+        (_intake(paper_only=False), "paper_replay_run_plan:intake_non_paper"),
+        (_intake(real_orders_enabled=True), "paper_replay_run_plan:intake_real_orders_enabled"),
+        (_intake(real_money_enabled=True), "paper_replay_run_plan:intake_real_money_enabled"),
+    ),
+)
+def test_non_paper_intake_flags_reject_even_with_matching_digest(intake, reason):
+    run_plan = _run_plan(intake)
+
+    assert run_plan.status is PaperReplayRunPlanStatus.REJECTED
+    assert run_plan.ready is False
+    assert reason in run_plan.rejection_reasons
+
+
 def test_non_ready_intake_statuses_propagate():
     rejected = _intake(
         status=PaperReplayIntakeStatus.REJECTED, ready=False, rejection_reasons=("paper_replay_intake:x",)
