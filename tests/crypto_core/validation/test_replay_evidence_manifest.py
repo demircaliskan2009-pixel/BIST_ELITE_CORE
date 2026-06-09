@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, fields
+import hashlib
+import json
+from dataclasses import FrozenInstanceError, fields, replace
 
 import pytest
 
@@ -11,7 +13,10 @@ from crypto_core.validation.backtest_replay_admission import (
     BacktestReplayAdmissionStatus,
     BacktestReplayWindow,
 )
-from crypto_core.validation.backtest_replay_bridge import BacktestReplayBridgeResult
+from crypto_core.validation.backtest_replay_bridge import (
+    BacktestReplayBridgeResult,
+    backtest_replay_bridge_result_to_dict,
+)
 from crypto_core.validation.replay_evidence_manifest import (
     ReplayEvidenceManifest,
     ReplayEvidenceManifestError,
@@ -69,7 +74,7 @@ def _bridge_result(
             status=status, rejection_reasons=rejection_reasons, needs_research_reasons=needs_research_reasons
         )
     accepted = status is BacktestReplayAdmissionStatus.ACCEPTED
-    return BacktestReplayBridgeResult(
+    result = BacktestReplayBridgeResult(
         schema_version="backtest-replay-bridge.v1",
         status=status,
         accepted=accepted,
@@ -83,6 +88,12 @@ def _bridge_result(
         correlation_id="corr:bridge",
         bridge_digest=bridge_digest,
     )
+    if bridge_digest != _BRIDGE:
+        return result
+    payload = backtest_replay_bridge_result_to_dict(result)
+    payload.pop("bridge_digest", None)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return replace(result, bridge_digest=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
 
 
 def _manifest(bridge_result=None, **overrides):
@@ -99,13 +110,14 @@ def _manifest(bridge_result=None, **overrides):
 
 
 def test_accepted_chain_builds_ready_manifest():
-    manifest = _manifest()
+    bridge = _bridge_result()
+    manifest = _manifest(bridge)
     assert isinstance(manifest, ReplayEvidenceManifest)
     assert manifest.status is ReplayEvidenceManifestStatus.READY
     assert manifest.ready is True
     assert manifest.bundle_digest == _BUNDLE
     assert manifest.admission_digest == _ADMISSION
-    assert manifest.bridge_digest == _BRIDGE
+    assert manifest.bridge_digest == bridge.bridge_digest
     assert manifest.replay_source_id == _SOURCE
     assert dict(manifest.decision_ledger_digests) == _LEDGER
     assert manifest.rejection_reasons == ()
@@ -142,6 +154,15 @@ def test_invalid_digests_reject():
     manifest = _manifest(bad_bridge)
     assert manifest.status is ReplayEvidenceManifestStatus.REJECTED
     assert "replay_evidence_manifest:bridge_digest_invalid" in manifest.rejection_reasons
+
+
+def test_stale_bridge_digest_rejected():
+    bridge = _bridge_result()
+    forged = replace(bridge, strategy_id="bridge-forged")
+    manifest = _manifest(forged)
+    assert manifest.status is ReplayEvidenceManifestStatus.REJECTED
+    assert manifest.ready is False
+    assert "replay_evidence_manifest:bridge_digest_mismatch" in manifest.rejection_reasons
 
 
 def test_missing_replay_result_insufficient():

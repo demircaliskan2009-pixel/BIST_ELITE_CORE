@@ -29,7 +29,10 @@ from dataclasses import dataclass
 from enum import Enum
 
 from crypto_core.validation.backtest_replay_admission import BacktestReplayAdmissionStatus
-from crypto_core.validation.backtest_replay_bridge import BacktestReplayBridgeResult
+from crypto_core.validation.backtest_replay_bridge import (
+    BacktestReplayBridgeResult,
+    backtest_replay_bridge_result_to_dict,
+)
 
 _SCHEMA_VERSION = "replay-evidence-manifest.v1"
 _SHA256_HEX_LENGTH = 64
@@ -91,6 +94,12 @@ def _canonical_digest(payload: dict[str, object]) -> str:
 
 def _is_sha256_hex(value: object) -> bool:
     return isinstance(value, str) and len(value) == _SHA256_HEX_LENGTH and all(char in _HEX_CHARS for char in value)
+
+
+def _expected_bridge_digest(bridge_result: BacktestReplayBridgeResult) -> str:
+    payload = backtest_replay_bridge_result_to_dict(bridge_result)
+    payload.pop("bridge_digest", None)
+    return _canonical_digest(payload)
 
 
 def _is_non_empty_string(value: object) -> bool:
@@ -169,6 +178,8 @@ def build_replay_evidence_manifest(
         hard.append("replay_evidence_manifest:admission_digest_mismatch")
     if not _is_sha256_hex(bridge_result.bridge_digest):
         hard.append("replay_evidence_manifest:bridge_digest_invalid")
+    elif bridge_result.bridge_digest != _expected_bridge_digest(bridge_result):
+        hard.append("replay_evidence_manifest:bridge_digest_mismatch")
 
     if not _is_non_empty_string(replay_source_id):
         hard.append("replay_evidence_manifest:replay_source_id_invalid")
