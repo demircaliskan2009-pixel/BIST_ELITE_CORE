@@ -10,6 +10,17 @@
   multi-sleeve, governance-first, and risk-bounded.
 - Architecture authority: `docs/PRDV4_MULTI_MARKET_CRYPTO.md`. PRDV3 is BIST-only legacy reference.
 
+## Canonical Workflow
+
+- The full Claude -> ChatGPT audit -> Codex repair/closeout -> authorized merge loop, model routing
+  (including Fable High), state-claim policy, skills policy, and report templates live in
+  `docs/crypto_core/agent_workflow.md`. Follow it; do not re-paste doctrine into prompts.
+- Digest-boundary rule (recurring P1 class): any consumer of a digest-carrying dataclass must
+  recompute the upstream digest via the public serializer (digest field removed, canonical JSON,
+  SHA-256) and reject mismatch before READY/ADMITTED/ACCEPTED. Tests must cover a tampered field.
+- Never claim repo/PR/CI state from memory — prove it with fresh terminal/`gh` output or mark
+  UNKNOWN. Verify open PRs live at task start.
+
 ## Hard Rails
 
 - No live trading, private APIs, real orders, credentials, scheduler/auto-loop enablement, or real
