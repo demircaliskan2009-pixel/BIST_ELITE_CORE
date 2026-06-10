@@ -141,6 +141,12 @@ def _safe_digest_value(value: object) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _safe_optional_value(value: object) -> str | None:
+    # Preserve a valid ``str | None`` field; coerce any other (non-serializable) value to "" so a forged
+    # readiness cannot raise during canonical JSON hashing.
+    return value if (value is None or isinstance(value, str)) else ""
+
+
 def _sorted_unique(reasons: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted({reason for reason in reasons if isinstance(reason, str) and reason}))
 
@@ -195,10 +201,12 @@ def _coerce_readiness_status(value: object) -> PaperReplayPromotionReadinessStat
 def _expected_readiness_digest(readiness: PaperReplayPromotionReadiness) -> str | None:
     try:
         payload = paper_replay_promotion_readiness_to_dict(readiness)
+        payload.pop("readiness_digest", None)
+        return _canonical_digest(payload)
     except (AttributeError, TypeError, ValueError):
+        # A forged readiness carrying a non-string/non-serializable digest cannot re-prove: treat the
+        # boundary digest as unresolvable (mismatch) rather than raising during canonical JSON hashing.
         return None
-    payload.pop("readiness_digest", None)
-    return _canonical_digest(payload)
 
 
 def build_paper_replay_governance_review_decision(
@@ -385,6 +393,20 @@ def _assemble(
     readiness_status_value: str,
 ) -> PaperReplayGovernanceReviewDecision:
     ready = status is PaperReplayGovernanceReviewDecisionStatus.READY
+    # Coerce carried digest fields so a forged readiness with a non-string/non-serializable digest cannot
+    # raise during canonical JSON hashing; the corresponding ``*_invalid`` reason is already recorded.
+    strategy_digest = _safe_optional_value(readiness.strategy_digest)
+    bundle_digest = _safe_digest_value(readiness.bundle_digest)
+    admission_digest = _safe_digest_value(readiness.admission_digest)
+    bridge_digest = _safe_digest_value(readiness.bridge_digest)
+    manifest_digest = _safe_digest_value(readiness.manifest_digest)
+    intake_digest = _safe_digest_value(readiness.intake_digest)
+    run_plan_digest = _safe_digest_value(readiness.run_plan_digest)
+    result_report_digest = _safe_digest_value(readiness.result_report_digest)
+    replay_trace_digest = _safe_digest_value(readiness.replay_trace_digest)
+    metrics_digest = _safe_digest_value(readiness.metrics_digest)
+    decision_trace_digest = _safe_digest_value(readiness.decision_trace_digest)
+    readiness_digest = _safe_digest_value(readiness.readiness_digest)
     payload: dict[str, object] = {
         "schema_version": _SCHEMA_VERSION,
         "status": status.value,
@@ -401,18 +423,18 @@ def _assemble(
         "requested_replay_id": readiness.requested_replay_id,
         "operator_id": readiness.operator_id,
         "strategy_id": readiness.strategy_id,
-        "strategy_digest": readiness.strategy_digest,
-        "bundle_digest": readiness.bundle_digest,
-        "admission_digest": readiness.admission_digest,
-        "bridge_digest": readiness.bridge_digest,
-        "manifest_digest": readiness.manifest_digest,
-        "intake_digest": readiness.intake_digest,
-        "run_plan_digest": readiness.run_plan_digest,
-        "result_report_digest": readiness.result_report_digest,
-        "replay_trace_digest": readiness.replay_trace_digest,
-        "metrics_digest": readiness.metrics_digest,
-        "decision_trace_digest": readiness.decision_trace_digest,
-        "readiness_digest": readiness.readiness_digest,
+        "strategy_digest": strategy_digest,
+        "bundle_digest": bundle_digest,
+        "admission_digest": admission_digest,
+        "bridge_digest": bridge_digest,
+        "manifest_digest": manifest_digest,
+        "intake_digest": intake_digest,
+        "run_plan_digest": run_plan_digest,
+        "result_report_digest": result_report_digest,
+        "replay_trace_digest": replay_trace_digest,
+        "metrics_digest": metrics_digest,
+        "decision_trace_digest": decision_trace_digest,
+        "readiness_digest": readiness_digest,
         "replay_source_id": readiness.replay_source_id,
         "historical_data_source_id": readiness.historical_data_source_id,
         "review_evidence_digest": review_evidence_digest,
@@ -441,18 +463,18 @@ def _assemble(
         requested_replay_id=readiness.requested_replay_id,
         operator_id=readiness.operator_id,
         strategy_id=readiness.strategy_id,
-        strategy_digest=readiness.strategy_digest,
-        bundle_digest=readiness.bundle_digest,
-        admission_digest=readiness.admission_digest,
-        bridge_digest=readiness.bridge_digest,
-        manifest_digest=readiness.manifest_digest,
-        intake_digest=readiness.intake_digest,
-        run_plan_digest=readiness.run_plan_digest,
-        result_report_digest=readiness.result_report_digest,
-        replay_trace_digest=readiness.replay_trace_digest,
-        metrics_digest=readiness.metrics_digest,
-        decision_trace_digest=readiness.decision_trace_digest,
-        readiness_digest=readiness.readiness_digest,
+        strategy_digest=strategy_digest,
+        bundle_digest=bundle_digest,
+        admission_digest=admission_digest,
+        bridge_digest=bridge_digest,
+        manifest_digest=manifest_digest,
+        intake_digest=intake_digest,
+        run_plan_digest=run_plan_digest,
+        result_report_digest=result_report_digest,
+        replay_trace_digest=replay_trace_digest,
+        metrics_digest=metrics_digest,
+        decision_trace_digest=decision_trace_digest,
+        readiness_digest=readiness_digest,
         replay_source_id=readiness.replay_source_id,
         historical_data_source_id=readiness.historical_data_source_id,
         review_evidence_digest=review_evidence_digest,

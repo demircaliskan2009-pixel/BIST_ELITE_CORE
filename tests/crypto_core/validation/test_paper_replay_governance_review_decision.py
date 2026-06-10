@@ -248,6 +248,30 @@ def test_malformed_carried_digests_reject(field):
     assert f"paper_replay_governance_review_decision:{field}_invalid" in record.rejection_reasons
 
 
+@pytest.mark.parametrize("value", (object(), b"bad"))
+@pytest.mark.parametrize("field", _DIGEST_FIELDS)
+def test_non_string_carried_digest_rejects_without_raising(field, value):
+    # Forge a readiness carrying a non-string/non-serializable digest; an explicit readiness_digest skips
+    # the helper recompute over the forged field. The builder must fail closed, not raise during hashing.
+    overrides: dict = {field: value}
+    if field != "readiness_digest":
+        overrides["readiness_digest"] = "2" * 64
+    record = _decision(_readiness(**overrides))
+    assert record.status is PaperReplayGovernanceReviewDecisionStatus.REJECTED
+    assert record.ready is False
+    assert f"paper_replay_governance_review_decision:{field}_invalid" in record.rejection_reasons
+    assert len(record.governance_decision_digest) == 64
+
+
+@pytest.mark.parametrize("value", (object(), b"bad"))
+def test_non_string_strategy_digest_rejects_without_raising(value):
+    # strategy_digest is str | None and copied into the payload; a non-string value must not raise.
+    record = _decision(_readiness(strategy_digest=value, readiness_digest="2" * 64))
+    assert record.status is PaperReplayGovernanceReviewDecisionStatus.REJECTED
+    assert record.ready is False
+    assert len(record.governance_decision_digest) == 64
+
+
 @pytest.mark.parametrize(
     ("readiness", "reason"),
     (
