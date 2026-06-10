@@ -224,6 +224,23 @@ def test_malformed_review_digests_reject():
         assert f"paper_replay_governance_review_decision:{field}_invalid" in record.rejection_reasons
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("review_evidence_digest", b"not-json"),
+        ("review_evidence_digest", None),
+        ("rationale_digest", object()),
+        ("rationale_digest", 42),
+    ),
+)
+def test_non_string_review_digests_reject_without_raising(field, value):
+    record = _decision(**{field: value})
+    assert record.status is PaperReplayGovernanceReviewDecisionStatus.REJECTED
+    assert record.ready is False
+    assert f"paper_replay_governance_review_decision:{field}_invalid" in record.rejection_reasons
+    assert len(record.governance_decision_digest) == 64
+
+
 @pytest.mark.parametrize("field", _DIGEST_FIELDS)
 def test_malformed_carried_digests_reject(field):
     record = _decision(_readiness(**{field: "bad"}))

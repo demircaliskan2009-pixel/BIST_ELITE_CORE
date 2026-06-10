@@ -137,6 +137,10 @@ def _string_value(value: object) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _safe_digest_value(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
 def _sorted_unique(reasons: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted({reason for reason in reasons if isinstance(reason, str) and reason}))
 
@@ -355,8 +359,8 @@ def build_paper_replay_governance_review_decision(
         governance_decision_id=_string_value(governance_decision_id),
         decision_value=decision_value,
         reviewer_id=_string_value(reviewer_id),
-        review_evidence_digest=review_evidence_digest,
-        rationale_digest=rationale_digest,
+        review_evidence_digest=_safe_digest_value(review_evidence_digest),
+        rationale_digest=_safe_digest_value(rationale_digest),
         metadata=metadata_pairs,
         rejection_reasons=combined_rejections,
         needs_research_reasons=needs_research_reasons,
