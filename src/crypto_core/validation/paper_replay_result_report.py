@@ -39,6 +39,7 @@ from crypto_core.validation.paper_replay_run_plan import (
 _SCHEMA_VERSION = "paper-replay-result-report.v1"
 _SHA256_HEX_LENGTH = 64
 _HEX_CHARS = frozenset("0123456789abcdefABCDEF")
+_ALLOWED_REPLAY_MODES = frozenset({"offline_paper_replay", "deterministic_replay_dry_run"})
 
 # Safely-detectable BIST markers and forbidden live/order/scheduler/private config tokens (word-bounded).
 # A bare ``order``/``orders`` token is rejected while ``border``/``orderly``/``preorder`` are spared.
@@ -208,6 +209,20 @@ def build_paper_replay_result_report(
         hard.append("paper_replay_result_report:result_report_id_invalid")
     if outcome is None:
         hard.append("paper_replay_result_report:outcome_status_unknown")
+    if not _is_non_empty_string(run_plan.run_plan_id):
+        hard.append("paper_replay_result_report:run_plan_id_invalid")
+    if not _is_non_empty_string(run_plan.replay_mode):
+        hard.append("paper_replay_result_report:run_plan_replay_mode_invalid")
+    elif run_plan.replay_mode not in _ALLOWED_REPLAY_MODES:
+        hard.append("paper_replay_result_report:run_plan_replay_mode_unknown")
+    if not _is_non_empty_string(run_plan.requested_replay_id):
+        hard.append("paper_replay_result_report:requested_replay_id_invalid")
+    if not _is_non_empty_string(run_plan.operator_id):
+        hard.append("paper_replay_result_report:operator_id_invalid")
+    if not _is_non_empty_string(run_plan.replay_source_id):
+        hard.append("paper_replay_result_report:replay_source_id_invalid")
+    if not _is_non_empty_string(run_plan.historical_data_source_id):
+        hard.append("paper_replay_result_report:historical_data_source_id_invalid")
 
     hard.extend(
         _scope_violations(

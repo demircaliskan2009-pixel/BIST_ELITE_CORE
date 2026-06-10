@@ -122,6 +122,29 @@ def test_tampered_run_plan_field_rejects():
     assert "paper_replay_result_report:run_plan_digest_mismatch" in report.rejection_reasons
 
 
+@pytest.mark.parametrize(
+    ("run_plan", "reason"),
+    (
+        (_run_plan(run_plan_id=""), "paper_replay_result_report:run_plan_id_invalid"),
+        (_run_plan(replay_mode=""), "paper_replay_result_report:run_plan_replay_mode_invalid"),
+        (_run_plan(replay_mode="fast_replay"), "paper_replay_result_report:run_plan_replay_mode_unknown"),
+        (_run_plan(requested_replay_id=""), "paper_replay_result_report:requested_replay_id_invalid"),
+        (_run_plan(operator_id=""), "paper_replay_result_report:operator_id_invalid"),
+        (_run_plan(replay_source_id=""), "paper_replay_result_report:replay_source_id_invalid"),
+        (
+            _run_plan(historical_data_source_id=""),
+            "paper_replay_result_report:historical_data_source_id_invalid",
+        ),
+    ),
+)
+def test_malformed_matching_digest_run_plan_identities_reject(run_plan, reason):
+    report = _report(run_plan)
+
+    assert report.status is PaperReplayResultReportStatus.REJECTED
+    assert report.ready is False
+    assert reason in report.rejection_reasons
+
+
 def test_non_ready_run_plan_statuses_propagate():
     rejected = _run_plan(
         status=PaperReplayRunPlanStatus.REJECTED, ready=False, rejection_reasons=("paper_replay_run_plan:x",)
