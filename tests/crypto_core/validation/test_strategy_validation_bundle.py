@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 
 import pytest
 
@@ -239,6 +239,19 @@ def test_usable_source_packet_evidence_included():
     assert bundle.status is StrategyValidationBundleStatus.ACCEPTED
     assert bundle.source_packet_digest == packet.packet_digest
     assert len(bundle.decision_record_digests) == 3
+
+
+def test_tampered_source_packet_digest_blocks_acceptance():
+    packet = _usable_packet()
+    tampered = replace(packet, source_title="Tampered source title without digest refresh")
+    assert tampered.packet_digest == packet.packet_digest
+
+    bundle = _bundle(source_packet=tampered)
+
+    assert bundle.status is StrategyValidationBundleStatus.REJECTED
+    assert bundle.accepted is False
+    assert bundle.source_packet_digest is None
+    assert "strategy_validation_bundle:source_packet_digest_mismatch" in bundle.terminal_rejection_reasons
 
 
 def test_decision_record_digests_deterministic_and_non_empty():
