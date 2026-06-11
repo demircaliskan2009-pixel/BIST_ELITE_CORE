@@ -47,7 +47,7 @@ from crypto_core.data.requirements import (
     data_requirement_registry_digest,
     default_perp_data_requirement_registry,
 )
-from crypto_core.strategy.source_packet import SourcePacket
+from crypto_core.strategy.source_packet import SourcePacket, source_packet_to_dict
 from crypto_core.strategy.spec import StrategySpec, strategy_spec_digest, validate_strategy_spec
 from crypto_core.validation.leakage_bias_repaint import (
     LeakageBiasRepaintInput,
@@ -62,6 +62,7 @@ _SHA256_HEX_LENGTH = 64
 _HEX_CHARS = frozenset("0123456789abcdefABCDEF")
 
 _SOURCE_PACKET_NOT_USABLE = "strategy_validation_bundle:source_packet_not_usable"
+_SOURCE_PACKET_DIGEST_MISMATCH = "strategy_validation_bundle:source_packet_digest_mismatch"
 _LEAKAGE_STRATEGY_MISMATCH = "strategy_validation_bundle:leakage_strategy_mismatch"
 
 
@@ -143,10 +144,22 @@ def _resolve_spec(strategy_spec: object) -> tuple[StrategySpec | None, tuple[str
     raise StrategyValidationBundleError("strategy_validation_bundle:strategy_spec_malformed")
 
 
+def _expected_source_packet_digest(source_packet: SourcePacket) -> str | None:
+    try:
+        payload = source_packet_to_dict(source_packet)
+        payload.pop("packet_digest", None)
+        return _canonical_digest(payload)
+    except Exception:
+        return None
+
+
 def _resolve_source_packet(source_packet: object) -> tuple[str | None, tuple[str, ...]]:
     if source_packet is None:
         return None, ()
     if isinstance(source_packet, SourcePacket):
+        expected_digest = _expected_source_packet_digest(source_packet)
+        if not _is_sha256_hex(source_packet.packet_digest) or expected_digest != source_packet.packet_digest:
+            return None, (_SOURCE_PACKET_DIGEST_MISMATCH,)
         if source_packet.usable_for_compilation:
             return source_packet.packet_digest, ()
         return source_packet.packet_digest, (_SOURCE_PACKET_NOT_USABLE,)
