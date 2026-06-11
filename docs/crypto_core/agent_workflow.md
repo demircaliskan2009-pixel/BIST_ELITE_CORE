@@ -30,8 +30,11 @@ is never final — poll until terminal or merged/closed.
 | Lane | Use for |
 |---|---|
 | Claude Default/Opus | known-pattern implementation; 1–3 file validation contracts; tests/docs/setup patches; PR creation |
-| Fable High | high-risk architecture decisions; EvidenceStore design; paper runtime boundary; Deribit/readiness/provenance gate design; repeated P1/P2 root-cause redesign; cross-module invariant/refactor decisions; setup/workflow architecture that changes future token/workflow economics |
-| Codex | PR blocker repair; CI/review/thread closeout; merge/postverify after explicit authorization; local validation proof |
+| Fable High | scarce window for architecture, high-risk safety semantics, invariant audits, chain red-team, EvidenceStore/persistence/Deribit readiness design, and top-1 roadmap decisions |
+| Codex | default executor for merge/postverify, CI/thread polling, PR closeout, docs/setup edits, mechanical repair, validation reruns, compact execution, and local validation proof |
+
+Fable must not be used for pure polling, merge mechanics, full-log handling, broad repo scans, or
+routine closeout unless no viable alternative exists and the user explicitly authorizes that use.
 
 ## 4. Digest-boundary rule (recurring P1 class — always apply)
 
@@ -82,27 +85,34 @@ objective; BIST behavior.
 
 ## 9. Report templates (compact; no full logs — failure tails only)
 
+Every report includes `FILES_READ_COUNT` and `CMDS_RUN_COUNT`. Keep reports compact; never paste full
+logs unless the failure tail itself is required to prove a blocker.
+
 **Claude implementation handoff**
 ```
 RESULT / DECISION / FILES_CHANGED / API_ADDED / FAIL_CLOSED / VALIDATION (ruff + targeted N passed +
-area + full PYTEST_EXIT) / PR (number, head SHA, files) / FINAL_GIT_STATUS / NEXT_SAFE_ACTION
+area + full PYTEST_EXIT) / PR (number, head SHA, files) / FINAL_GIT_STATUS / FILES_READ_COUNT /
+CMDS_RUN_COUNT / NEXT_SAFE_ACTION
 ```
 
 **Codex repair/closeout**
 ```
 BLOCKER (source, claim, real?) / REPAIR (diff summary) / VALIDATION / CHECKS (name=conclusion,
-terminal) / THREADS (unresolved count; only proven-fixed automated resolved) / HEAD SHA / NEXT
+terminal) / THREADS (unresolved count; only proven-fixed automated resolved) / HEAD SHA /
+FILES_READ_COUNT / CMDS_RUN_COUNT / NEXT
 ```
 
 **Merge/postverify (only after explicit per-PR authorization)**
 ```
 MERGE (PR, merge SHA, standard) / POSTVERIFY (main pulled, ruff, full helper PYTEST_EXIT,
-smoke if applicable) / REMOTE_SETTLE (merge-commit checks terminal) / FINAL_GIT_STATUS
+smoke if applicable) / REMOTE_SETTLE (merge-commit checks terminal) / FINAL_GIT_STATUS /
+FILES_READ_COUNT / CMDS_RUN_COUNT
 ```
 
 **Setup optimization**
 ```
-RESULT / DECISION / FILES_CHANGED / SETUP_SUMMARY / TOKEN_REDUCTION_EFFECT / VALIDATION / PR / NEXT
+RESULT / DECISION / FILES_CHANGED / SETUP_SUMMARY / TOKEN_REDUCTION_EFFECT / VALIDATION / PR /
+FILES_READ_COUNT / CMDS_RUN_COUNT / NEXT
 ```
 
 ## 10. Token Efficiency V2 — named lanes (prompt-template layer)

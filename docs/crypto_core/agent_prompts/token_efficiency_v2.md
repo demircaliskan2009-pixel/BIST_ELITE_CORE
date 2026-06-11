@@ -104,17 +104,22 @@ title="chore(crypto-core): <title>"); LANE:REPORT-STD. Do not merge.
 - `/compact` only with an explicit preservation summary (task, branch, head, next steps) written first.
 - Stop exploring once the named files are found; no broad scans after target files are known.
 - Failure tails only; never paste full logs, full JSON, or full diffs into reports.
-- Reports include FILES_READ_COUNT and CMDS_RUN_COUNT so overspend is visible.
+- All agents report `FILES_READ_COUNT` and `CMDS_RUN_COUNT` so overspend is visible.
 - Reference lanes and repo docs; never re-paste doctrine that lives in CLAUDE.md/AGENTS.md/this file.
 
 ## 4. Model routing v2
 
 | Lane | Model |
 |---|---|
-| Architecture, new high-risk safety semantics, invariant audits, setup architecture | Fable / strongest |
-| Bounded implementation (GATE-MODULE-STD), tests/docs patches, PR creation, closeout | Claude Sonnet/Auto or Opus |
-| Adversarial review, blocker repair, PR diff audit | Codex |
-| Pure polling, status proof, merge mechanics | cheapest available — never a high model unless no alternative |
+| Architecture, new high-risk safety semantics, invariant audits, chain red-team, EvidenceStore/persistence design, Deribit/readiness design, top-1 roadmap calls | Claude/Fable scarce window |
+| Bounded implementation (GATE-MODULE-STD), tests/docs patches, PR creation | Claude Sonnet/Auto or Opus |
+| Merge/postverify, CI/thread polling, PR closeout, docs/setup edits, mechanical repair, validation reruns, compact execution | Codex default executor |
+| Pure polling, status proof, merge mechanics, full-log handling, routine closeout | cheapest available / Codex compact lane |
+
+Fable is scarce. Reserve it for architecture, high-risk safety semantics, invariant audits,
+chain red-team, EvidenceStore/persistence/Deribit readiness design, and top-1 roadmap decisions.
+Do not use Fable for pure polling, merge mechanics, full logs, broad repo scans, or routine closeout
+unless there is no viable alternative and the user explicitly authorizes that use.
 
 ## 5. Invariants (never compressed away)
 
