@@ -20,6 +20,10 @@
   SHA-256) and reject mismatch before READY/ADMITTED/ACCEPTED. Tests must cover a tampered field.
 - Never claim repo/PR/CI state from memory — prove it with fresh terminal/`gh` output or mark
   UNKNOWN. Verify open PRs live at task start.
+- Token Efficiency V2: prompts may reference named lanes (LANE:PRECHECK-STD, GATE-MODULE-STD,
+  VALIDATE-STD, PR-STD, MERGE-STD, REPORT-STD) defined in
+  `docs/crypto_core/agent_prompts/token_efficiency_v2.md`. Expand the lane from that file; lanes
+  compress procedure text only — every hard rail below still binds unchanged.
 
 ## Hard Rails
 

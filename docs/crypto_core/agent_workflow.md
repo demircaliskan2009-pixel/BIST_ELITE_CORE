@@ -104,3 +104,12 @@ smoke if applicable) / REMOTE_SETTLE (merge-commit checks terminal) / FINAL_GIT_
 ```
 RESULT / DECISION / FILES_CHANGED / SETUP_SUMMARY / TOKEN_REDUCTION_EFFECT / VALIDATION / PR / NEXT
 ```
+
+## 10. Token Efficiency V2 — named lanes (prompt-template layer)
+
+Repeated procedure blocks (env/precheck, gate-module contract, validation ladder, PR ceremony,
+merge closeout, report format) are versioned as **named lanes** in
+`docs/crypto_core/agent_prompts/token_efficiency_v2.md`, with 20–60-line prompt templates, token
+hygiene rules (clear/compact discipline, no full logs, FILES_READ/CMDS_RUN counts), and model
+routing v2. Prompts reference lanes and supply only deltas. Lanes compress procedure text only —
+§4–§7 and `AGENTS.md` hard rails bind in every lane; on any apparent conflict the safety rule wins.

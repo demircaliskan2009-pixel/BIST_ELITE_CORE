@@ -6,6 +6,9 @@ Active scope is `crypto_core` only (`src/crypto_core`, `tests/crypto_core`, `scr
 Follow the canonical agent workflow: `docs/crypto_core/agent_workflow.md`
 (working loop, model routing, digest-boundary rule, guardrails, validation policy, state-claim
 policy, skills policy, report templates). Durable operating rails: `AGENTS.md`.
+Prompts may reference **named lanes** (LANE:PRECHECK-STD, GATE-MODULE-STD, VALIDATE-STD, PR-STD,
+MERGE-STD, REPORT-STD) — expand them from `docs/crypto_core/agent_prompts/token_efficiency_v2.md`;
+lanes compress procedure text only, never safety rules.
 
 Key hard rules (full list in the workflow doc):
 
