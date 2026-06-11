@@ -254,6 +254,18 @@ def test_tampered_source_packet_digest_blocks_acceptance():
     assert "strategy_validation_bundle:source_packet_digest_mismatch" in bundle.terminal_rejection_reasons
 
 
+def test_malformed_source_packet_payload_blocks_acceptance_without_raise():
+    packet = _usable_packet()
+    malformed = replace(packet, risk_flags=(object(),))
+
+    bundle = _bundle(source_packet=malformed)
+
+    assert bundle.status is StrategyValidationBundleStatus.REJECTED
+    assert bundle.accepted is False
+    assert bundle.source_packet_digest is None
+    assert "strategy_validation_bundle:source_packet_digest_mismatch" in bundle.terminal_rejection_reasons
+
+
 def test_decision_record_digests_deterministic_and_non_empty():
     first = _bundle().decision_record_digests
     second = _bundle().decision_record_digests

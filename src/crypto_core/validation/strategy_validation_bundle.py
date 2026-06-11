@@ -147,10 +147,10 @@ def _resolve_spec(strategy_spec: object) -> tuple[StrategySpec | None, tuple[str
 def _expected_source_packet_digest(source_packet: SourcePacket) -> str | None:
     try:
         payload = source_packet_to_dict(source_packet)
+        payload.pop("packet_digest", None)
+        return _canonical_digest(payload)
     except Exception:
         return None
-    payload.pop("packet_digest", None)
-    return _canonical_digest(payload)
 
 
 def _resolve_source_packet(source_packet: object) -> tuple[str | None, tuple[str, ...]]:
