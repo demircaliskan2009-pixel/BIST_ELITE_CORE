@@ -32,6 +32,19 @@ reference test file: READY happy path, forged + tampered digest, status/action p
 per-carried-digest malformed + non-string (no-raise) matrices, unsafe-flag matrix, token regressions,
 determinism, immutability/no-forbidden-fields. Exactly 2 new files in `validation/`; no `__init__` edit.
 
+**LANE:FABLE-ARCH(scope, evidence_pack)** - scarce-window strategic consultation only. Use for
+architecture, high-risk safety semantics, invariant audits, chain red-team, EvidenceStore/persistence
+design, Deribit/readiness design, and top-1 roadmap decisions. Codex prepares a compact evidence pack
+first; Fable should not broad-scan the repo. STOP/REFUSE if the task is mechanical, merge/CI/polling/
+closeout, needs broad repo scan, needs more than 6 files to reason about, needs external/current facts,
+or can be handled by Codex/Claude without scarce reasoning. Fable report scorecard:
+`DECISIONS_MADE`, `ARTIFACTS`, `DELEGATIONS_ISSUED`, `INVARIANT_BREAKS_FOUND`, `FILES_READ_COUNT`,
+`CMDS_RUN_COUNT`, `NOT_FABLE_WORK_REFUSED`. Evidence-pack minimum: current state proof, exact files,
+chain summary, digest boundaries, READY non-meanings, carried digests, human approval fields, paper-only
+flags, forbidden scope patterns, known coverage, unknowns, and explicit Fable questions. Roadmap note:
+after P2 digest hardening, the next strategic Fable call is EvidenceStore design + red-team;
+implementation needs explicit persistence-scope authorization.
+
 **LANE:VALIDATE-STD(files)** — one command at a time, never chained, never bare full pytest:
 1. `python -m ruff check --fix <files>` 2. `python -m ruff format <files>`
 3. `python -m ruff format --check <files>` 4. `python -m ruff check <files>`
@@ -98,6 +111,17 @@ Repo-wide ruff check + format --check; full helper; LANE:PR-STD(branch=chore/<sl
 title="chore(crypto-core): <title>"); LANE:REPORT-STD. Do not merge.
 ```
 
+**T5 - Fable architecture call (~20 lines)**
+```
+LANE:PRECHECK-STD(expect_main_at=<sha>)
+Codex read-only evidence pack only: <exact files/modules>. No broad repo scan.
+LANE:FABLE-ARCH(scope=<architecture/invariant/red-team topic>,
+  evidence_pack=<state proof + chain summary + digest boundaries + unknowns + questions>)
+Fable must return the scorecard fields and refuse mechanical work.
+No implementation. No merge. No CI polling. No external/current facts unless explicitly authorized.
+LANE:REPORT-STD
+```
+
 ## 3. Token hygiene (both agents)
 
 - `/clear` (or a fresh session) between unrelated tasks; long noisy sessions roll over.
@@ -121,9 +145,17 @@ chain red-team, EvidenceStore/persistence/Deribit readiness design, and top-1 ro
 Do not use Fable for pure polling, merge mechanics, full logs, broad repo scans, or routine closeout
 unless there is no viable alternative and the user explicitly authorizes that use.
 
+Fable work must produce decisions, artifacts, delegations, or invariant breaks. If the output is only
+status proof, polling, merge mechanics, validation reruns, or log handling, it is not Fable work.
+
 ## 5. Invariants (never compressed away)
 
 Lanes compress *procedure text*, not *rules*. The hard gates in `AGENTS.md` (Hard Rails, Git/PR
 discipline) and `agent_workflow.md` (§4 digest-boundary, §5 guardrails, §6 validation, §7 state-claim)
 bind in every lane, every prompt, with no exceptions. If a lane reference and a safety rule ever seem
 to conflict, the safety rule wins and the agent stops with proof.
+
+Digest-boundary lesson: every re-proof boundary wraps serializer call, digest-field removal, and
+canonical hash in the same exception-safe block; assemble/carry boundaries sanitize carried digest
+fields before hashing or exporting. When the reference pattern evolves, audit every existing consumer in
+the same sweep instead of fixing only the newest gate.
