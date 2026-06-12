@@ -211,6 +211,16 @@ def test_stale_admission_digest_rejected_before_evaluator():
     assert "backtest_replay_bridge:admission_digest_mismatch" in result.rejection_reasons
 
 
+def test_non_serializable_admission_digest_payload_rejected_before_evaluator():
+    admission = _admission()
+    forged = replace(admission, rejection_reasons=(object(),))
+    result = _bridge(forged)
+    assert result.status is BacktestReplayAdmissionStatus.REJECTED
+    assert result.accepted is False
+    assert result.replay_admission_result is None
+    assert "backtest_replay_bridge:admission_digest_mismatch" in result.rejection_reasons
+
+
 def test_non_admitted_decision_rejects_before_evaluator():
     for admission in (
         _admission(status=BacktestAdmissionStatus.REJECTED, admitted=False),

@@ -82,10 +82,13 @@ def _is_sha256_hex(value: object) -> bool:
     return isinstance(value, str) and len(value) == _SHA256_HEX_LENGTH and all(char in _HEX_CHARS for char in value)
 
 
-def _expected_admission_digest(admission_decision: BacktestAdmissionDecision) -> str:
-    payload = backtest_admission_decision_to_dict(admission_decision)
-    payload.pop("admission_digest", None)
-    return _canonical_digest(payload)
+def _expected_admission_digest(admission_decision: BacktestAdmissionDecision) -> str | None:
+    try:
+        payload = backtest_admission_decision_to_dict(admission_decision)
+        payload.pop("admission_digest", None)
+        return _canonical_digest(payload)
+    except Exception:
+        return None
 
 
 def _is_non_empty_string(value: object) -> bool:

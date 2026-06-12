@@ -94,10 +94,13 @@ def _is_sha256_hex(value: object) -> bool:
     return isinstance(value, str) and len(value) == _SHA256_HEX_LENGTH and all(char in _HEX_CHARS for char in value)
 
 
-def _expected_bundle_digest(bundle: StrategyValidationBundle) -> str:
-    payload = strategy_validation_bundle_to_dict(bundle)
-    payload.pop("bundle_digest", None)
-    return _canonical_digest(payload)
+def _expected_bundle_digest(bundle: StrategyValidationBundle) -> str | None:
+    try:
+        payload = strategy_validation_bundle_to_dict(bundle)
+        payload.pop("bundle_digest", None)
+        return _canonical_digest(payload)
+    except Exception:
+        return None
 
 
 def _is_positive_int(value: object) -> bool:
