@@ -105,6 +105,14 @@ def _is_non_empty_string(value: object) -> bool:
     return isinstance(value, str) and value.strip() != ""
 
 
+def _safe_digest_value(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _safe_optional_digest_value(value: object) -> str | None:
+    return value if isinstance(value, str) or value is None else None
+
+
 def _sorted_unique(reasons: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted({reason for reason in reasons if isinstance(reason, str) and reason}))
 
@@ -134,10 +142,13 @@ def _normalize_metadata(metadata: object) -> tuple[tuple[str, str], ...]:
     return tuple(sorted(items))
 
 
-def _expected_manifest_digest(manifest: ReplayEvidenceManifest) -> str:
-    payload = replay_evidence_manifest_to_dict(manifest)
-    payload.pop("manifest_digest", None)
-    return _canonical_digest(payload)
+def _expected_manifest_digest(manifest: ReplayEvidenceManifest) -> str | None:
+    try:
+        payload = replay_evidence_manifest_to_dict(manifest)
+        payload.pop("manifest_digest", None)
+        return _canonical_digest(payload)
+    except Exception:
+        return None
 
 
 def build_paper_replay_intake(
@@ -251,6 +262,11 @@ def _assemble(
     correlation_id: str,
 ) -> PaperReplayIntake:
     ready = status is PaperReplayIntakeStatus.READY
+    strategy_digest = _safe_optional_digest_value(manifest.strategy_digest)
+    bundle_digest = _safe_digest_value(manifest.bundle_digest)
+    admission_digest = _safe_digest_value(manifest.admission_digest)
+    bridge_digest = _safe_digest_value(manifest.bridge_digest)
+    manifest_digest = _safe_digest_value(manifest.manifest_digest)
     payload: dict[str, object] = {
         "schema_version": _SCHEMA_VERSION,
         "status": status.value,
@@ -258,11 +274,11 @@ def _assemble(
         "requested_replay_id": requested_replay_id,
         "operator_id": operator_id,
         "strategy_id": manifest.strategy_id,
-        "strategy_digest": manifest.strategy_digest,
-        "bundle_digest": manifest.bundle_digest,
-        "admission_digest": manifest.admission_digest,
-        "bridge_digest": manifest.bridge_digest,
-        "manifest_digest": manifest.manifest_digest,
+        "strategy_digest": strategy_digest,
+        "bundle_digest": bundle_digest,
+        "admission_digest": admission_digest,
+        "bridge_digest": bridge_digest,
+        "manifest_digest": manifest_digest,
         "manifest_status": manifest.status.value,
         "replay_source_id": manifest.replay_source_id,
         "historical_data_source_id": manifest.historical_data_source_id,
@@ -281,11 +297,11 @@ def _assemble(
         requested_replay_id=requested_replay_id,
         operator_id=operator_id,
         strategy_id=manifest.strategy_id,
-        strategy_digest=manifest.strategy_digest,
-        bundle_digest=manifest.bundle_digest,
-        admission_digest=manifest.admission_digest,
-        bridge_digest=manifest.bridge_digest,
-        manifest_digest=manifest.manifest_digest,
+        strategy_digest=strategy_digest,
+        bundle_digest=bundle_digest,
+        admission_digest=admission_digest,
+        bridge_digest=bridge_digest,
+        manifest_digest=manifest_digest,
         manifest_status=manifest.status.value,
         replay_source_id=manifest.replay_source_id,
         historical_data_source_id=manifest.historical_data_source_id,

@@ -122,6 +122,16 @@ def test_tampered_run_plan_field_rejects():
     assert "paper_replay_result_report:run_plan_digest_mismatch" in report.rejection_reasons
 
 
+def test_non_serializable_run_plan_digest_payload_rejects_without_raise():
+    forged = replace(_run_plan(), bridge_digest=object())
+    report = _report(forged)
+    assert report.status is PaperReplayResultReportStatus.REJECTED
+    assert report.ready is False
+    assert report.bridge_digest == ""
+    assert "paper_replay_result_report:bridge_digest_invalid" in report.rejection_reasons
+    assert "paper_replay_result_report:run_plan_digest_mismatch" in report.rejection_reasons
+
+
 @pytest.mark.parametrize(
     ("run_plan", "reason"),
     (

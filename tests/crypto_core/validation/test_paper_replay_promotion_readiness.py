@@ -137,6 +137,17 @@ def test_tampered_report_field_with_stale_digest_rejects():
     assert "paper_replay_promotion_readiness:result_report_digest_mismatch" in readiness.rejection_reasons
 
 
+def test_non_serializable_report_digest_payload_rejects_without_raise():
+    forged = replace(_report(), bridge_digest=object())
+    readiness = _readiness(forged)
+
+    assert readiness.status is PaperReplayPromotionReadinessStatus.REJECTED
+    assert readiness.ready is False
+    assert readiness.bridge_digest == ""
+    assert "paper_replay_promotion_readiness:bridge_digest_invalid" in readiness.rejection_reasons
+    assert "paper_replay_promotion_readiness:result_report_digest_mismatch" in readiness.rejection_reasons
+
+
 def test_report_statuses_propagate():
     rejected = _with_report_digest(
         replace(

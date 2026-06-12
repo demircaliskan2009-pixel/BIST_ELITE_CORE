@@ -124,6 +124,14 @@ def _is_non_empty_string(value: object) -> bool:
     return isinstance(value, str) and value.strip() != ""
 
 
+def _safe_digest_value(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _safe_optional_digest_value(value: object) -> str | None:
+    return value if isinstance(value, str) or value is None else None
+
+
 def _sorted_unique(reasons: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted({reason for reason in reasons if isinstance(reason, str) and reason}))
 
@@ -164,10 +172,13 @@ def _coerce_outcome(value: object) -> PaperReplayOutcomeStatus | None:
     return None
 
 
-def _expected_run_plan_digest(run_plan: PaperReplayRunPlan) -> str:
-    payload = paper_replay_run_plan_to_dict(run_plan)
-    payload.pop("run_plan_digest", None)
-    return _canonical_digest(payload)
+def _expected_run_plan_digest(run_plan: PaperReplayRunPlan) -> str | None:
+    try:
+        payload = paper_replay_run_plan_to_dict(run_plan)
+        payload.pop("run_plan_digest", None)
+        return _canonical_digest(payload)
+    except Exception:
+        return None
 
 
 def build_paper_replay_result_report(
@@ -330,6 +341,16 @@ def _assemble(
     correlation_id: str,
 ) -> PaperReplayResultReport:
     ready = status is PaperReplayResultReportStatus.READY
+    strategy_digest = _safe_optional_digest_value(run_plan.strategy_digest)
+    bundle_digest = _safe_digest_value(run_plan.bundle_digest)
+    admission_digest = _safe_digest_value(run_plan.admission_digest)
+    bridge_digest = _safe_digest_value(run_plan.bridge_digest)
+    manifest_digest = _safe_digest_value(run_plan.manifest_digest)
+    intake_digest = _safe_digest_value(run_plan.intake_digest)
+    run_plan_digest = _safe_digest_value(run_plan.run_plan_digest)
+    replay_trace_digest = _safe_digest_value(replay_trace_digest)
+    metrics_digest = _safe_digest_value(metrics_digest)
+    decision_trace_digest = _safe_digest_value(decision_trace_digest)
     payload: dict[str, object] = {
         "schema_version": _SCHEMA_VERSION,
         "status": status.value,
@@ -341,13 +362,13 @@ def _assemble(
         "requested_replay_id": run_plan.requested_replay_id,
         "operator_id": run_plan.operator_id,
         "strategy_id": run_plan.strategy_id,
-        "strategy_digest": run_plan.strategy_digest,
-        "bundle_digest": run_plan.bundle_digest,
-        "admission_digest": run_plan.admission_digest,
-        "bridge_digest": run_plan.bridge_digest,
-        "manifest_digest": run_plan.manifest_digest,
-        "intake_digest": run_plan.intake_digest,
-        "run_plan_digest": run_plan.run_plan_digest,
+        "strategy_digest": strategy_digest,
+        "bundle_digest": bundle_digest,
+        "admission_digest": admission_digest,
+        "bridge_digest": bridge_digest,
+        "manifest_digest": manifest_digest,
+        "intake_digest": intake_digest,
+        "run_plan_digest": run_plan_digest,
         "run_plan_status": run_plan.status.value,
         "replay_source_id": run_plan.replay_source_id,
         "historical_data_source_id": run_plan.historical_data_source_id,
@@ -373,13 +394,13 @@ def _assemble(
         requested_replay_id=run_plan.requested_replay_id,
         operator_id=run_plan.operator_id,
         strategy_id=run_plan.strategy_id,
-        strategy_digest=run_plan.strategy_digest,
-        bundle_digest=run_plan.bundle_digest,
-        admission_digest=run_plan.admission_digest,
-        bridge_digest=run_plan.bridge_digest,
-        manifest_digest=run_plan.manifest_digest,
-        intake_digest=run_plan.intake_digest,
-        run_plan_digest=run_plan.run_plan_digest,
+        strategy_digest=strategy_digest,
+        bundle_digest=bundle_digest,
+        admission_digest=admission_digest,
+        bridge_digest=bridge_digest,
+        manifest_digest=manifest_digest,
+        intake_digest=intake_digest,
+        run_plan_digest=run_plan_digest,
         run_plan_status=run_plan.status.value,
         replay_source_id=run_plan.replay_source_id,
         historical_data_source_id=run_plan.historical_data_source_id,

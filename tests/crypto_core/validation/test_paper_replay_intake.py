@@ -108,6 +108,16 @@ def test_tampered_manifest_field_rejects():
     assert "paper_replay_intake:manifest_digest_mismatch" in intake.rejection_reasons
 
 
+def test_non_serializable_manifest_digest_payload_rejects_without_raise():
+    forged = replace(_manifest(), bridge_digest=object())
+    intake = _intake(forged)
+    assert intake.status is PaperReplayIntakeStatus.REJECTED
+    assert intake.ready is False
+    assert intake.bridge_digest == ""
+    assert "paper_replay_intake:bridge_digest_invalid" in intake.rejection_reasons
+    assert "paper_replay_intake:manifest_digest_mismatch" in intake.rejection_reasons
+
+
 def test_non_ready_manifest_statuses_propagate():
     rejected = _manifest(
         status=ReplayEvidenceManifestStatus.REJECTED, ready=False, rejection_reasons=("replay_evidence_manifest:x",)
