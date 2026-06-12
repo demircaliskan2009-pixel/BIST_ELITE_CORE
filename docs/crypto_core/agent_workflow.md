@@ -36,6 +36,26 @@ is never final — poll until terminal or merged/closed.
 Fable must not be used for pure polling, merge mechanics, full-log handling, broad repo scans, or
 routine closeout unless no viable alternative exists and the user explicitly authorizes that use.
 
+### Fable architecture lane
+
+Fable is a scarce strategic reasoning window, not an executor. Use it only after Codex prepares a
+compact evidence pack. The pack should prove current state and include exact files, chain summary,
+digest boundaries, READY non-meanings, carried digests, human approval fields, paper-only flags,
+forbidden scope patterns, known coverage, unknowns, and focused questions. Fable should not broad-scan
+the repo.
+
+Fable reports must include:
+`DECISIONS_MADE`, `ARTIFACTS`, `DELEGATIONS_ISSUED`, `INVARIANT_BREAKS_FOUND`, `FILES_READ_COUNT`,
+`CMDS_RUN_COUNT`, and `NOT_FABLE_WORK_REFUSED`.
+
+Fable stops/refuses when the task is mechanical, requires merge/CI/polling/closeout, needs broad scans,
+needs more than 6 files to reason about, depends on external/current facts, or can be handled by
+Codex/Claude without scarce reasoning.
+
+Roadmap note: after the P2 digest-boundary hardening sweeps, the next strategic Fable call is
+EvidenceStore design + red-team. Any EvidenceStore implementation requires explicit persistence-scope
+authorization.
+
 ## 4. Digest-boundary rule (recurring P1 class — always apply)
 
 Any downstream consumer of a dataclass/result carrying a digest MUST:
@@ -43,6 +63,12 @@ recompute the upstream digest via the **public serializer**, remove the digest f
 canonical-JSON hash (`sort_keys=True`, `separators=(",", ":")`, `ensure_ascii=True`, SHA-256),
 and **reject mismatch before READY/ADMITTED/ACCEPTED**. A matching id alone is never sufficient;
 stale/forged/tampered upstream objects must fail closed. Tests must include a tampered-field case.
+
+P2 lesson: the re-proof boundary includes the serializer call, digest-field removal, and canonical hash
+inside one exception-safe block. A forged non-JSON-serializable upstream object must produce the existing
+`*_digest_mismatch` rejection path, never a `TypeError`. Assemble/carry boundaries must sanitize carried
+digest fields before hashing/exporting. When this reference pattern evolves, audit every existing
+downstream consumer in the same sweep rather than patching only the newest module.
 
 ## 5. Safety guardrails
 
@@ -113,6 +139,12 @@ FILES_READ_COUNT / CMDS_RUN_COUNT
 ```
 RESULT / DECISION / FILES_CHANGED / SETUP_SUMMARY / TOKEN_REDUCTION_EFFECT / VALIDATION / PR /
 FILES_READ_COUNT / CMDS_RUN_COUNT / NEXT
+```
+
+**Fable architecture consultation**
+```
+DECISIONS_MADE / ARTIFACTS / DELEGATIONS_ISSUED / INVARIANT_BREAKS_FOUND / FILES_READ_COUNT /
+CMDS_RUN_COUNT / NOT_FABLE_WORK_REFUSED / NEXT
 ```
 
 ## 10. Token Efficiency V2 — named lanes (prompt-template layer)
