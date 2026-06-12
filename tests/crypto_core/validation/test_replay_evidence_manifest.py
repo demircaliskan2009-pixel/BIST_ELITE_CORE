@@ -165,6 +165,15 @@ def test_stale_bridge_digest_rejected():
     assert "replay_evidence_manifest:bridge_digest_mismatch" in manifest.rejection_reasons
 
 
+def test_non_serializable_bridge_digest_payload_rejected():
+    bridge = _bridge_result()
+    forged = replace(bridge, rejection_reasons=(object(),))
+    manifest = _manifest(forged)
+    assert manifest.status is ReplayEvidenceManifestStatus.REJECTED
+    assert manifest.ready is False
+    assert "replay_evidence_manifest:bridge_digest_mismatch" in manifest.rejection_reasons
+
+
 def test_missing_replay_result_insufficient():
     bridge = _bridge_result(status=BacktestReplayAdmissionStatus.ACCEPTED, replay=None)
     manifest = _manifest(bridge)

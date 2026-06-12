@@ -177,6 +177,15 @@ def test_stale_bundle_digest_rejected():
     assert "backtest_admission:bundle_digest_mismatch" in decision.rejection_reasons
 
 
+def test_non_serializable_bundle_digest_payload_rejected_without_raise():
+    bundle = _bundle()
+    forged = replace(bundle, decision_record_digests=(object(),))
+    decision = _admit(forged)
+    assert decision.status is BacktestAdmissionStatus.REJECTED
+    assert decision.admitted is False
+    assert "backtest_admission:bundle_digest_mismatch" in decision.rejection_reasons
+
+
 def test_deterministic_digest_identical_input():
     first = _admit()
     second = _admit()

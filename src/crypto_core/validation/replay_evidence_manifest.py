@@ -96,10 +96,13 @@ def _is_sha256_hex(value: object) -> bool:
     return isinstance(value, str) and len(value) == _SHA256_HEX_LENGTH and all(char in _HEX_CHARS for char in value)
 
 
-def _expected_bridge_digest(bridge_result: BacktestReplayBridgeResult) -> str:
-    payload = backtest_replay_bridge_result_to_dict(bridge_result)
-    payload.pop("bridge_digest", None)
-    return _canonical_digest(payload)
+def _expected_bridge_digest(bridge_result: BacktestReplayBridgeResult) -> str | None:
+    try:
+        payload = backtest_replay_bridge_result_to_dict(bridge_result)
+        payload.pop("bridge_digest", None)
+        return _canonical_digest(payload)
+    except Exception:
+        return None
 
 
 def _is_non_empty_string(value: object) -> bool:
