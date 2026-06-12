@@ -111,6 +111,16 @@ def test_tampered_intake_field_rejects():
     assert "paper_replay_run_plan:intake_digest_mismatch" in run_plan.rejection_reasons
 
 
+def test_non_serializable_intake_digest_payload_rejects_without_raise():
+    forged = replace(_intake(), bridge_digest=object())
+    run_plan = _run_plan(forged)
+    assert run_plan.status is PaperReplayRunPlanStatus.REJECTED
+    assert run_plan.ready is False
+    assert run_plan.bridge_digest == ""
+    assert "paper_replay_run_plan:bridge_digest_invalid" in run_plan.rejection_reasons
+    assert "paper_replay_run_plan:intake_digest_mismatch" in run_plan.rejection_reasons
+
+
 @pytest.mark.parametrize(
     ("intake", "reason"),
     (

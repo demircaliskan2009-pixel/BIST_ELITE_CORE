@@ -126,6 +126,14 @@ def _string_value(value: object) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _safe_digest_value(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _safe_optional_digest_value(value: object) -> str | None:
+    return value if isinstance(value, str) or value is None else None
+
+
 def _sorted_unique(reasons: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted({reason for reason in reasons if isinstance(reason, str) and reason}))
 
@@ -191,10 +199,10 @@ def _coerce_target(value: object) -> PaperReplayPromotionTarget | None:
 def _expected_result_report_digest(report: PaperReplayResultReport) -> str | None:
     try:
         payload = paper_replay_result_report_to_dict(report)
-    except (AttributeError, TypeError, ValueError):
+        payload.pop("result_report_digest", None)
+        return _canonical_digest(payload)
+    except Exception:
         return None
-    payload.pop("result_report_digest", None)
-    return _canonical_digest(payload)
 
 
 def build_paper_replay_promotion_readiness(
@@ -371,6 +379,17 @@ def _assemble(
     outcome_value: str,
 ) -> PaperReplayPromotionReadiness:
     ready = status is PaperReplayPromotionReadinessStatus.READY
+    strategy_digest = _safe_optional_digest_value(report.strategy_digest)
+    bundle_digest = _safe_digest_value(report.bundle_digest)
+    admission_digest = _safe_digest_value(report.admission_digest)
+    bridge_digest = _safe_digest_value(report.bridge_digest)
+    manifest_digest = _safe_digest_value(report.manifest_digest)
+    intake_digest = _safe_digest_value(report.intake_digest)
+    run_plan_digest = _safe_digest_value(report.run_plan_digest)
+    result_report_digest = _safe_digest_value(report.result_report_digest)
+    replay_trace_digest = _safe_digest_value(report.replay_trace_digest)
+    metrics_digest = _safe_digest_value(report.metrics_digest)
+    decision_trace_digest = _safe_digest_value(report.decision_trace_digest)
     payload: dict[str, object] = {
         "schema_version": _SCHEMA_VERSION,
         "status": status.value,
@@ -386,19 +405,19 @@ def _assemble(
         "requested_replay_id": report.requested_replay_id,
         "operator_id": report.operator_id,
         "strategy_id": report.strategy_id,
-        "strategy_digest": report.strategy_digest,
-        "bundle_digest": report.bundle_digest,
-        "admission_digest": report.admission_digest,
-        "bridge_digest": report.bridge_digest,
-        "manifest_digest": report.manifest_digest,
-        "intake_digest": report.intake_digest,
-        "run_plan_digest": report.run_plan_digest,
-        "result_report_digest": report.result_report_digest,
+        "strategy_digest": strategy_digest,
+        "bundle_digest": bundle_digest,
+        "admission_digest": admission_digest,
+        "bridge_digest": bridge_digest,
+        "manifest_digest": manifest_digest,
+        "intake_digest": intake_digest,
+        "run_plan_digest": run_plan_digest,
+        "result_report_digest": result_report_digest,
         "replay_source_id": report.replay_source_id,
         "historical_data_source_id": report.historical_data_source_id,
-        "replay_trace_digest": report.replay_trace_digest,
-        "metrics_digest": report.metrics_digest,
-        "decision_trace_digest": report.decision_trace_digest,
+        "replay_trace_digest": replay_trace_digest,
+        "metrics_digest": metrics_digest,
+        "decision_trace_digest": decision_trace_digest,
         "metadata": [list(pair) for pair in metadata],
         "rejection_reasons": list(rejection_reasons),
         "needs_research_reasons": list(needs_research_reasons),
@@ -422,19 +441,19 @@ def _assemble(
         requested_replay_id=report.requested_replay_id,
         operator_id=report.operator_id,
         strategy_id=report.strategy_id,
-        strategy_digest=report.strategy_digest,
-        bundle_digest=report.bundle_digest,
-        admission_digest=report.admission_digest,
-        bridge_digest=report.bridge_digest,
-        manifest_digest=report.manifest_digest,
-        intake_digest=report.intake_digest,
-        run_plan_digest=report.run_plan_digest,
-        result_report_digest=report.result_report_digest,
+        strategy_digest=strategy_digest,
+        bundle_digest=bundle_digest,
+        admission_digest=admission_digest,
+        bridge_digest=bridge_digest,
+        manifest_digest=manifest_digest,
+        intake_digest=intake_digest,
+        run_plan_digest=run_plan_digest,
+        result_report_digest=result_report_digest,
         replay_source_id=report.replay_source_id,
         historical_data_source_id=report.historical_data_source_id,
-        replay_trace_digest=report.replay_trace_digest,
-        metrics_digest=report.metrics_digest,
-        decision_trace_digest=report.decision_trace_digest,
+        replay_trace_digest=replay_trace_digest,
+        metrics_digest=metrics_digest,
+        decision_trace_digest=decision_trace_digest,
         metadata=metadata,
         rejection_reasons=rejection_reasons,
         needs_research_reasons=needs_research_reasons,
