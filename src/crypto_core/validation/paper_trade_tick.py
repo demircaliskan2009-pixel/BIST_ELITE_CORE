@@ -46,17 +46,28 @@ _HEX_CHARS = frozenset("0123456789abcdefABCDEF")
 # Rejects ``""``, ``"1."``, ``".5"``, ``"00"``, ``"1e5"``, ``"NaN"``, ``"inf"``, whitespace, and underscores.
 _DECIMAL_PATTERN = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
 
-# Safely-detectable BIST markers and forbidden live/order-routing/scheduler/private tokens (word-bounded),
-# aligned with the EvidenceJournal token guard. A bare ``order``/``orders`` token is rejected while
-# ``border``/``reorder``/``preorder`` are spared; market-data terms (``order_book``/``order_flow``) are
-# scrubbed before the forbidden scan so they remain allowed.
+# Token guard. This is a deliberate *superset* of the EvidenceJournal token guard so that any ACCEPTED
+# tick whose ids/metadata pass here will also pass ``EvidenceJournal``'s guard on append (fail-closed,
+# audit-first): every wall-clock / forbidden token the journal rejects is rejected here too. Detection is
+# token-based on alphanumeric runs (so ``border``/``reorder`` are spared while a bare ``order`` token is
+# not), with market-data terms (``order_book``/``order_flow``/``limit_order_book``) explicitly allowed.
 _BIST_PATTERN = re.compile(r"\b(?:bist\w*|borsa\w*|matriks\w*)|\bkap\b", re.IGNORECASE)
-_FORBIDDEN_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9])orders?(?![A-Za-z0-9])"
-    r"|\b(?:private|order_router|place_order|live_order|auto_loop|connector_ready|credential|"
-    r"credentials|scheduler|shadow)\w*"
-    r"|\blive(?:\b|[_-]\w+)",
-    re.IGNORECASE,
+_WALL_CLOCK_TOKENS = ("created_at", "timestamp", "timestamp_ns", "time_ns", "utcnow", "now", "wall_clock")
+_FORBIDDEN_TOKENS = (
+    "live",
+    "private",
+    "private_api",
+    "credential",
+    "credentials",
+    "secret",
+    "api_key",
+    "order_router",
+    "place_order",
+    "live_order",
+    "scheduler",
+    "auto_loop",
+    "connector_ready",
+    "shadow",
 )
 _SAFE_MARKET_DATA_TERMS = ("limit_order_book", "order_book", "order_flow")
 
@@ -186,17 +197,60 @@ def _parse_decimal(value: object) -> Decimal | None:
     return parsed if parsed.is_finite() else None
 
 
+def _identifier_tokens(text: str) -> tuple[str, ...]:
+    tokens: list[str] = []
+    token_chars: list[str] = []
+    for char in text:
+        if char.isalnum():
+            token_chars.append(char)
+            continue
+        if token_chars:
+            tokens.append("".join(token_chars))
+            token_chars = []
+    if token_chars:
+        tokens.append("".join(token_chars))
+    return tuple(tokens)
+
+
+def _subsequence_start_indexes(tokens: tuple[str, ...], sequence: tuple[str, ...]) -> tuple[int, ...]:
+    if not sequence or len(sequence) > len(tokens):
+        return ()
+    starts: list[int] = []
+    for start in range(len(tokens) - len(sequence) + 1):
+        if tokens[start : start + len(sequence)] == sequence:
+            starts.append(start)
+    return tuple(starts)
+
+
+def _token_matches(tokens: tuple[str, ...], lowered: str, marker: str) -> bool:
+    if "_" in marker:
+        return marker in lowered or bool(_subsequence_start_indexes(tokens, tuple(marker.split("_"))))
+    return marker in tokens
+
+
+def _contains_forbidden_order(tokens: tuple[str, ...]) -> bool:
+    # A bare ``order``/``orders`` token is forbidden unless it is covered by an allowed market-data term.
+    covered: set[int] = set()
+    for safe_term in _SAFE_MARKET_DATA_TERMS:
+        safe_tokens = tuple(safe_term.split("_"))
+        for start in _subsequence_start_indexes(tokens, safe_tokens):
+            covered.update(range(start, start + len(safe_tokens)))
+    return any(token in {"order", "orders"} and index not in covered for index, token in enumerate(tokens))
+
+
 def _scope_violations(*texts: str) -> tuple[str, ...]:
     reasons: list[str] = []
     for text in texts:
         if not isinstance(text, str) or text == "":
             continue
-        if _BIST_PATTERN.search(text):
+        lowered = text.lower()
+        tokens = _identifier_tokens(lowered)
+        if "bist" in lowered or _BIST_PATTERN.search(text):
             reasons.append("paper_trade_tick:bist_scope_leakage")
-        scrubbed = text
-        for safe_term in _SAFE_MARKET_DATA_TERMS:
-            scrubbed = re.sub(re.escape(safe_term), " ", scrubbed, flags=re.IGNORECASE)
-        if _FORBIDDEN_PATTERN.search(scrubbed):
+        if any(_token_matches(tokens, lowered, marker) for marker in _WALL_CLOCK_TOKENS):
+            reasons.append("paper_trade_tick:wall_clock_token")
+        forbidden = any(_token_matches(tokens, lowered, marker) for marker in _FORBIDDEN_TOKENS)
+        if forbidden or _contains_forbidden_order(tokens):
             reasons.append("paper_trade_tick:forbidden_scope_token")
     return tuple(reasons)
 
@@ -253,6 +307,9 @@ def _intent_payload(
     upstream_report_digest: str,
     correlation_id: str,
     metadata: tuple[tuple[str, str], ...],
+    paper_only: bool,
+    real_orders_enabled: bool,
+    real_money_enabled: bool,
 ) -> dict[str, object]:
     return {
         "schema_version": schema_version,
@@ -266,9 +323,9 @@ def _intent_payload(
         "upstream_report_digest": upstream_report_digest,
         "correlation_id": correlation_id,
         "metadata": [list(pair) for pair in metadata],
-        "paper_only": True,
-        "real_orders_enabled": False,
-        "real_money_enabled": False,
+        "paper_only": paper_only,
+        "real_orders_enabled": real_orders_enabled,
+        "real_money_enabled": real_money_enabled,
     }
 
 
@@ -347,6 +404,9 @@ def build_paper_trade_intent(
         upstream_report_digest=upstream_report_digest,
         correlation_id=correlation_id,
         metadata=metadata_pairs,
+        paper_only=True,
+        real_orders_enabled=False,
+        real_money_enabled=False,
     )
     return PaperTradeIntent(
         schema_version=_INTENT_SCHEMA_VERSION,
@@ -378,6 +438,9 @@ def paper_trade_intent_to_dict(intent: PaperTradeIntent) -> dict[str, object]:
         upstream_report_digest=intent.upstream_report_digest,
         correlation_id=intent.correlation_id,
         metadata=intent.metadata,
+        paper_only=intent.paper_only,
+        real_orders_enabled=intent.real_orders_enabled,
+        real_money_enabled=intent.real_money_enabled,
     )
     payload["intent_digest"] = intent.intent_digest
     return payload
@@ -398,6 +461,9 @@ def paper_trade_intent_digest(intent: PaperTradeIntent) -> str:
             upstream_report_digest=intent.upstream_report_digest,
             correlation_id=intent.correlation_id,
             metadata=intent.metadata,
+            paper_only=intent.paper_only,
+            real_orders_enabled=intent.real_orders_enabled,
+            real_money_enabled=intent.real_money_enabled,
         )
     )
 
@@ -421,6 +487,9 @@ def _tick_payload(
     rejection_reasons: tuple[str, ...],
     needs_research_reasons: tuple[str, ...],
     correlation_id: str,
+    paper_only: bool,
+    real_orders_enabled: bool,
+    real_money_enabled: bool,
 ) -> dict[str, object]:
     return {
         "schema_version": schema_version,
@@ -440,9 +509,9 @@ def _tick_payload(
         "rejection_reasons": list(rejection_reasons),
         "needs_research_reasons": list(needs_research_reasons),
         "correlation_id": correlation_id,
-        "paper_only": True,
-        "real_orders_enabled": False,
-        "real_money_enabled": False,
+        "paper_only": paper_only,
+        "real_orders_enabled": real_orders_enabled,
+        "real_money_enabled": real_money_enabled,
     }
 
 
@@ -582,6 +651,9 @@ def build_paper_trade_tick(
             upstream_report_digest=upstream_value,
             correlation_id=correlation_id,
             metadata=metadata_pairs,
+            paper_only=True,
+            real_orders_enabled=False,
+            real_money_enabled=False,
         )
     )
 
@@ -603,6 +675,9 @@ def build_paper_trade_tick(
         rejection_reasons=combined_rejections,
         needs_research_reasons=needs_research_reasons,
         correlation_id=correlation_id,
+        paper_only=True,
+        real_orders_enabled=False,
+        real_money_enabled=False,
     )
     return PaperTradeTick(
         schema_version=_SCHEMA_VERSION,
@@ -646,6 +721,9 @@ def paper_trade_tick_to_dict(tick: PaperTradeTick) -> dict[str, object]:
         rejection_reasons=tick.rejection_reasons,
         needs_research_reasons=tick.needs_research_reasons,
         correlation_id=tick.correlation_id,
+        paper_only=tick.paper_only,
+        real_orders_enabled=tick.real_orders_enabled,
+        real_money_enabled=tick.real_money_enabled,
     )
     payload["paper_trade_tick_digest"] = tick.paper_trade_tick_digest
     return payload
@@ -672,6 +750,9 @@ def paper_trade_tick_digest(tick: PaperTradeTick) -> str:
             rejection_reasons=tick.rejection_reasons,
             needs_research_reasons=tick.needs_research_reasons,
             correlation_id=tick.correlation_id,
+            paper_only=tick.paper_only,
+            real_orders_enabled=tick.real_orders_enabled,
+            real_money_enabled=tick.real_money_enabled,
         )
     )
 

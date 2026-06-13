@@ -375,8 +375,13 @@ def test_schema_version_tamper_breaks_digest() -> None:
     assert paper_trade_tick_digest(tampered) != tampered.paper_trade_tick_digest
 
 
-# 20. an ACCEPTED tick dict is compatible with the EvidenceJournal token guard.
-def test_accepted_tick_dict_appends_to_evidence_journal() -> None:
+# 20. an ACCEPTED tick dict satisfies the EvidenceJournal token/JSON guard (shape compatibility only).
+# NOTE: this proves only that the canonical accepted-tick payload passes the journal's shared token/
+# canonical-JSON guard. It deliberately does NOT establish a production journaling path: a dedicated
+# ``EvidenceArtifactType.PAPER_TRADE_TICK`` member and a tick->journal bridge are a separate future slice
+# (this PR is contract-only and must not modify the protected EvidenceJournal). An existing artifact type
+# is used here solely to exercise that shared guard, not to assert provenance classification.
+def test_accepted_tick_dict_satisfies_evidence_journal_token_guard() -> None:
     tick = build_paper_trade_tick(**_kwargs(metadata={"market_data_source": "order_book"}))
     assert tick.status is PaperTradeTickStatus.ACCEPTED
     journal = EvidenceJournal()
@@ -387,6 +392,31 @@ def test_accepted_tick_dict_appends_to_evidence_journal() -> None:
     )
     assert journal.entry_count == 1
     assert entry.payload["paper_trade_tick_digest"] == tick.paper_trade_tick_digest
+
+
+# 20b. tokens the journal forbids (wall-clock / secret / api_key) are rejected by the builder too, so an
+# ACCEPTED tick can never carry a payload the journal would later refuse (fail-closed superset guarantee).
+@pytest.mark.parametrize("token", ["timestamp", "now", "created_at", "secret", "api_key", "utcnow"])
+def test_journal_forbidden_tokens_rejected_by_builder(token: str) -> None:
+    tick = build_paper_trade_tick(**_kwargs(metadata={"note": token}))
+    assert tick.status is PaperTradeTickStatus.REJECTED
+    assert any(
+        reason in {"paper_trade_tick:forbidden_scope_token", "paper_trade_tick:wall_clock_token"}
+        for reason in tick.rejection_reasons
+    )
+
+
+# P1 (review): the paper-safety triple is bound into the digest basis; a tampered attestation is detectable
+# and the serializer reflects the actual stored fields (no masking).
+def test_paper_safety_triple_is_bound_into_digest() -> None:
+    tick = build_paper_trade_tick(**_kwargs())
+    tampered = dataclasses.replace(tick, paper_only=False, real_orders_enabled=True, real_money_enabled=True)
+    payload = paper_trade_tick_to_dict(tampered)
+    assert payload["paper_only"] is False
+    assert payload["real_orders_enabled"] is True
+    assert payload["real_money_enabled"] is True
+    assert paper_trade_tick_digest(tampered) != tampered.paper_trade_tick_digest
+    assert paper_trade_tick_digest(tampered) != tick.paper_trade_tick_digest
 
 
 # Standalone intent contract: strict builder + deterministic digest.
@@ -419,6 +449,16 @@ def test_build_intent_digest_is_hex_and_reproves() -> None:
 def test_build_intent_raises_on_malformed_call(overrides: dict[str, object]) -> None:
     with pytest.raises(PaperTradeTickError):
         build_paper_trade_intent(**_intent_kwargs(**overrides))
+
+
+def test_intent_paper_safety_triple_is_bound_into_digest() -> None:
+    intent = build_paper_trade_intent(**_intent_kwargs())
+    tampered = dataclasses.replace(intent, paper_only=False, real_orders_enabled=True, real_money_enabled=True)
+    payload = paper_trade_intent_to_dict(tampered)
+    assert payload["paper_only"] is False
+    assert payload["real_orders_enabled"] is True
+    assert payload["real_money_enabled"] is True
+    assert paper_trade_intent_digest(tampered) != tampered.intent_digest
 
 
 def test_intent_action_and_type_enums_round_trip() -> None:
