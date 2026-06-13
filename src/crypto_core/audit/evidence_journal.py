@@ -337,16 +337,13 @@ def evidence_journal_from_dict(
         _reject_rebuilt_entry_mismatch(rebuilt_entry, stored_entry)
 
     verification = journal.verify_chain()
-    if not verification.accepted:
-        raise EvidenceJournalError(";".join(verification.rejection_reasons))
-    if verification.entry_count != entry_count:
-        raise EvidenceJournalError("evidence_journal:envelope_entry_count_mismatch")
-    if verification.head_digest != head_digest:
-        raise EvidenceJournalError("evidence_journal:envelope_head_digest_mismatch")
-    if verification.entry_count != expected_entry_count:
-        raise EvidenceJournalError("evidence_journal:expected_entry_count_mismatch")
-    if verification.head_digest != expected_head_digest:
-        raise EvidenceJournalError("evidence_journal:expected_head_digest_mismatch")
+    _reject_import_anchor_mismatch(
+        verification,
+        envelope_entry_count=entry_count,
+        envelope_head_digest=head_digest,
+        expected_entry_count=expected_entry_count,
+        expected_head_digest=expected_head_digest,
+    )
     return journal
 
 
@@ -426,6 +423,26 @@ def _reject_rebuilt_entry_mismatch(rebuilt_entry: EvidenceJournalEntry, stored_e
         raise EvidenceJournalError("evidence_journal:stored_entry_digest_mismatch")
     if rebuilt_entry.correlation_id != stored_entry.correlation_id:
         raise EvidenceJournalError("evidence_journal:stored_correlation_id_mismatch")
+
+
+def _reject_import_anchor_mismatch(
+    verification: EvidenceJournalVerification,
+    *,
+    envelope_entry_count: int,
+    envelope_head_digest: str | None,
+    expected_entry_count: int,
+    expected_head_digest: str | None,
+) -> None:
+    if not verification.accepted:
+        raise EvidenceJournalError(";".join(verification.rejection_reasons))
+    if verification.entry_count != envelope_entry_count:
+        raise EvidenceJournalError("evidence_journal:envelope_entry_count_mismatch")
+    if verification.head_digest != envelope_head_digest:
+        raise EvidenceJournalError("evidence_journal:envelope_head_digest_mismatch")
+    if verification.entry_count != expected_entry_count:
+        raise EvidenceJournalError("evidence_journal:expected_entry_count_mismatch")
+    if verification.head_digest != expected_head_digest:
+        raise EvidenceJournalError("evidence_journal:expected_head_digest_mismatch")
 
 
 def _validate_entry(entry: EvidenceJournalEntry) -> tuple[str, ...]:
