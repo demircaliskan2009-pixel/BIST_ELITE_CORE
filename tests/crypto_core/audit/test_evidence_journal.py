@@ -32,6 +32,10 @@ def _journal_with_two_entries() -> EvidenceJournal:
     return journal
 
 
+def _internal_entry_backdoor(journal: EvidenceJournal, index: int) -> EvidenceJournalEntry:
+    return journal._entries[index]
+
+
 def test_public_exports_from_crypto_core_audit_work() -> None:
     assert EvidenceArtifactType.SOURCE_PACKET.value == "SOURCE_PACKET"
     assert EvidenceJournalError.__mro__[1] is RuntimeError
@@ -94,8 +98,8 @@ def test_duplicate_payload_digest_replay_refused() -> None:
 
 def test_duplicate_entry_digest_replay_detected_by_verification() -> None:
     journal = EvidenceJournal()
-    entry = journal.append(EvidenceArtifactType.SOURCE_PACKET, _payload(), correlation_id="corr-001")
-    journal._entries.append(entry)
+    journal.append(EvidenceArtifactType.SOURCE_PACKET, _payload(), correlation_id="corr-001")
+    journal._entries.append(_internal_entry_backdoor(journal, 0))
 
     verification = journal.verify_chain()
 
@@ -105,7 +109,7 @@ def test_duplicate_entry_digest_replay_detected_by_verification() -> None:
 
 def test_second_genesis_refused_with_backdoor_mutation() -> None:
     journal = _journal_with_two_entries()
-    second = journal.snapshot()[1]
+    second = _internal_entry_backdoor(journal, 1)
     object.__setattr__(second, "prev_entry_digest", None)
 
     verification = journal.verify_chain()
@@ -116,7 +120,7 @@ def test_second_genesis_refused_with_backdoor_mutation() -> None:
 
 def test_prev_digest_fork_refused_with_backdoor_mutation() -> None:
     journal = _journal_with_two_entries()
-    second = journal.snapshot()[1]
+    second = _internal_entry_backdoor(journal, 1)
     object.__setattr__(second, "prev_entry_digest", "0" * 64)
 
     verification = journal.verify_chain()
@@ -231,10 +235,12 @@ def test_order_book_allowlist_does_not_hide_explicit_order_markers(payload: dict
         EvidenceJournal().append(EvidenceArtifactType.SOURCE_PACKET, payload, correlation_id="corr-001")
 
 
-def test_payload_tamper_after_append_causes_read_and_verify_failure() -> None:
+def test_internal_payload_tamper_causes_read_and_verify_failure() -> None:
     journal = EvidenceJournal()
-    entry = journal.append(EvidenceArtifactType.SOURCE_PACKET, _payload(), correlation_id="corr-001")
-    entry.payload["artifact_id"] = "tampered"
+    journal.append(EvidenceArtifactType.SOURCE_PACKET, _payload(), correlation_id="corr-001")
+    payload = _internal_entry_backdoor(journal, 0).payload
+    assert isinstance(payload, dict)
+    payload["artifact_id"] = "tampered"
 
     assert journal.verify_chain().accepted is False
     with pytest.raises(EvidenceJournalError):
@@ -245,7 +251,8 @@ def test_payload_tamper_after_append_causes_read_and_verify_failure() -> None:
 
 def test_entry_digest_tamper_causes_read_and_verify_failure() -> None:
     journal = EvidenceJournal()
-    entry = journal.append(EvidenceArtifactType.SOURCE_PACKET, _payload(), correlation_id="corr-001")
+    journal.append(EvidenceArtifactType.SOURCE_PACKET, _payload(), correlation_id="corr-001")
+    entry = _internal_entry_backdoor(journal, 0)
     object.__setattr__(entry, "entry_digest", "0" * 64)
 
     assert journal.verify_chain().accepted is False
@@ -255,7 +262,7 @@ def test_entry_digest_tamper_causes_read_and_verify_failure() -> None:
 
 def test_sequence_discontinuity_causes_failure() -> None:
     journal = _journal_with_two_entries()
-    second = journal.snapshot()[1]
+    second = _internal_entry_backdoor(journal, 1)
     object.__setattr__(second, "journal_seq", 3)
 
     verification = journal.verify_chain()
@@ -266,7 +273,7 @@ def test_sequence_discontinuity_causes_failure() -> None:
 
 def test_parent_discontinuity_causes_failure() -> None:
     journal = _journal_with_two_entries()
-    second = journal.snapshot()[1]
+    second = _internal_entry_backdoor(journal, 1)
     object.__setattr__(second, "prev_entry_digest", "f" * 64)
 
     verification = journal.verify_chain()
@@ -282,9 +289,27 @@ def test_get_by_sequence_verifies_before_return_and_missing_seq_raises() -> None
     with pytest.raises(EvidenceJournalError):
         journal.get_by_sequence(99)
 
-    object.__setattr__(journal.snapshot()[0], "entry_digest", "1" * 64)
+    object.__setattr__(_internal_entry_backdoor(journal, 0), "entry_digest", "1" * 64)
     with pytest.raises(EvidenceJournalError):
         journal.get_by_sequence(0)
+
+
+def test_get_by_sequence_returns_defensive_payload_copy() -> None:
+    journal = _journal_with_two_entries()
+    entry = journal.get_by_sequence(0)
+    payload = entry.payload
+    assert isinstance(payload, dict)
+    nested = payload["chain"]
+    assert isinstance(nested, dict)
+
+    payload["artifact_id"] = "tampered"
+    nested["step"] = "tampered"
+
+    assert journal.verify_chain().accepted is True
+    stored_payload = journal.get_by_sequence(0).payload
+    assert stored_payload["artifact_id"] == "a"
+    assert isinstance(stored_payload["chain"], dict)
+    assert stored_payload["chain"]["step"] == "source_packet"
 
 
 def test_get_by_entry_digest_verifies_before_return() -> None:
@@ -292,7 +317,7 @@ def test_get_by_entry_digest_verifies_before_return() -> None:
     entry = journal.snapshot()[1]
 
     assert journal.get_by_entry_digest(entry.entry_digest) == entry
-    object.__setattr__(journal.snapshot()[0], "entry_digest", "1" * 64)
+    object.__setattr__(_internal_entry_backdoor(journal, 0), "entry_digest", "1" * 64)
     with pytest.raises(EvidenceJournalError):
         journal.get_by_entry_digest(entry.entry_digest)
 
@@ -302,7 +327,7 @@ def test_get_by_payload_digest_verifies_before_return() -> None:
     entry = journal.snapshot()[1]
 
     assert journal.get_by_payload_digest(entry.payload_digest) == entry
-    object.__setattr__(journal.snapshot()[0], "entry_digest", "1" * 64)
+    object.__setattr__(_internal_entry_backdoor(journal, 0), "entry_digest", "1" * 64)
     with pytest.raises(EvidenceJournalError):
         journal.get_by_payload_digest(entry.payload_digest)
 
@@ -314,6 +339,24 @@ def test_snapshot_is_immutable_tuple() -> None:
     assert isinstance(snapshot, tuple)
     with pytest.raises(TypeError):
         snapshot[0] = snapshot[1]
+
+
+def test_snapshot_returns_defensive_payload_copies() -> None:
+    journal = _journal_with_two_entries()
+    snapshot = journal.snapshot()
+    payload = snapshot[0].payload
+    assert isinstance(payload, dict)
+    nested = payload["chain"]
+    assert isinstance(nested, dict)
+
+    payload["artifact_id"] = "tampered"
+    nested["step"] = "tampered"
+
+    assert journal.verify_chain().accepted is True
+    stored_payload = journal.snapshot()[0].payload
+    assert stored_payload["artifact_id"] == "a"
+    assert isinstance(stored_payload["chain"], dict)
+    assert stored_payload["chain"]["step"] == "source_packet"
 
 
 def test_frozen_dataclass_mutation_raises() -> None:

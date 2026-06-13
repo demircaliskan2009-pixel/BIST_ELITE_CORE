@@ -152,29 +152,29 @@ class EvidenceJournal:
         self._entries_by_seq[entry.journal_seq] = entry
         self._entries_by_entry_digest[entry.entry_digest] = entry
         self._entries_by_payload_digest[entry.payload_digest] = entry
-        return entry
+        return _defensive_entry_copy(entry)
 
     def get_by_sequence(self, journal_seq: int) -> EvidenceJournalEntry:
         self._verify_or_raise()
         if journal_seq not in self._entries_by_seq:
             raise EvidenceJournalError("evidence_journal:sequence_missing")
-        return self._entries_by_seq[journal_seq]
+        return _defensive_entry_copy(self._entries_by_seq[journal_seq])
 
     def get_by_entry_digest(self, entry_digest: str) -> EvidenceJournalEntry:
         self._verify_or_raise()
         if entry_digest not in self._entries_by_entry_digest:
             raise EvidenceJournalError("evidence_journal:entry_digest_missing")
-        return self._entries_by_entry_digest[entry_digest]
+        return _defensive_entry_copy(self._entries_by_entry_digest[entry_digest])
 
     def get_by_payload_digest(self, payload_digest: str) -> EvidenceJournalEntry:
         self._verify_or_raise()
         if payload_digest not in self._entries_by_payload_digest:
             raise EvidenceJournalError("evidence_journal:payload_digest_missing")
-        return self._entries_by_payload_digest[payload_digest]
+        return _defensive_entry_copy(self._entries_by_payload_digest[payload_digest])
 
     def snapshot(self) -> tuple[EvidenceJournalEntry, ...]:
         self._verify_or_raise()
-        return tuple(self._entries)
+        return tuple(_defensive_entry_copy(entry) for entry in self._entries)
 
     def verify_chain(self) -> EvidenceJournalVerification:
         rejection_reasons: list[str] = []
@@ -264,6 +264,19 @@ def evidence_journal_entry_digest(entry: EvidenceJournalEntry) -> str:
     payload = evidence_journal_entry_to_dict(entry)
     payload.pop("entry_digest", None)
     return _digest_mapping(payload)
+
+
+def _defensive_entry_copy(entry: EvidenceJournalEntry) -> EvidenceJournalEntry:
+    return EvidenceJournalEntry(
+        schema_version=entry.schema_version,
+        journal_seq=entry.journal_seq,
+        entry_type=entry.entry_type,
+        payload=_normalize_payload(entry.payload),
+        payload_digest=entry.payload_digest,
+        prev_entry_digest=entry.prev_entry_digest,
+        entry_digest=entry.entry_digest,
+        correlation_id=entry.correlation_id,
+    )
 
 
 def _validate_entry(entry: EvidenceJournalEntry) -> tuple[str, ...]:
