@@ -22,6 +22,8 @@ from crypto_core.audit.evidence_journal import (
     EvidenceJournalVerification,
     evidence_journal_entry_digest,
     evidence_journal_entry_to_dict,
+    evidence_journal_from_dict,
+    evidence_journal_to_dict,
 )
 
 __all__ = [
@@ -41,7 +43,9 @@ __all__ = [
     "EvidenceJournalEntry",
     "EvidenceJournalError",
     "EvidenceJournalVerification",
+    "evidence_journal_from_dict",
     "evidence_journal_entry_digest",
     "evidence_journal_entry_to_dict",
+    "evidence_journal_to_dict",
     "validate_decision_ledger_record",
 ]

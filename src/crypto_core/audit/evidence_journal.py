@@ -10,6 +10,27 @@ from enum import Enum
 from typing import Any
 
 _SCHEMA_VERSION = "1.0"
+_JOURNAL_EXPORT_SCHEMA_VERSION = "evidence-journal.v1"
+_JOURNAL_ENVELOPE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "entry_count",
+        "head_digest",
+        "entries",
+    }
+)
+_ENTRY_EXPORT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "journal_seq",
+        "entry_type",
+        "payload",
+        "payload_digest",
+        "prev_entry_digest",
+        "entry_digest",
+        "correlation_id",
+    }
+)
 
 _WALL_CLOCK_TOKENS = (
     "created_at",
@@ -260,6 +281,72 @@ def evidence_journal_entry_to_dict(entry: EvidenceJournalEntry) -> dict[str, Any
     }
 
 
+def evidence_journal_to_dict(journal: EvidenceJournal) -> dict[str, object]:
+    if not isinstance(journal, EvidenceJournal):
+        raise EvidenceJournalError("evidence_journal:journal_malformed")
+    return {
+        "schema_version": _JOURNAL_EXPORT_SCHEMA_VERSION,
+        "entry_count": journal.entry_count,
+        "head_digest": journal.head_digest,
+        "entries": [evidence_journal_entry_to_dict(entry) for entry in journal.snapshot()],
+    }
+
+
+def evidence_journal_from_dict(
+    data: Mapping[str, object],
+    *,
+    expected_entry_count: int,
+    expected_head_digest: str | None,
+) -> EvidenceJournal:
+    """Load a journal only when trusted external count/head anchors match.
+
+    The expected values must come from a trusted external anchor, not from the
+    same untrusted envelope being imported.
+    """
+    if not isinstance(expected_entry_count, int) or isinstance(expected_entry_count, bool) or expected_entry_count < 0:
+        raise EvidenceJournalError("evidence_journal:expected_entry_count_malformed")
+    if expected_head_digest is not None and not isinstance(expected_head_digest, str):
+        raise EvidenceJournalError("evidence_journal:expected_head_digest_malformed")
+
+    envelope = _require_mapping(data, "evidence_journal:envelope_malformed")
+    _require_exact_fields(envelope, _JOURNAL_ENVELOPE_FIELDS, "evidence_journal:envelope_fields_mismatch")
+
+    if envelope["schema_version"] != _JOURNAL_EXPORT_SCHEMA_VERSION:
+        raise EvidenceJournalError("evidence_journal:envelope_schema_version_mismatch")
+
+    entry_count = envelope["entry_count"]
+    if not isinstance(entry_count, int) or isinstance(entry_count, bool) or entry_count < 0:
+        raise EvidenceJournalError("evidence_journal:envelope_entry_count_malformed")
+
+    head_digest = envelope["head_digest"]
+    if head_digest is not None and not isinstance(head_digest, str):
+        raise EvidenceJournalError("evidence_journal:envelope_head_digest_malformed")
+
+    entries = envelope["entries"]
+    if not isinstance(entries, list):
+        raise EvidenceJournalError("evidence_journal:envelope_entries_malformed")
+
+    journal = EvidenceJournal()
+    for entry_data in entries:
+        stored_entry = _entry_from_export_dict(entry_data)
+        rebuilt_entry = journal.append(
+            stored_entry.entry_type,
+            stored_entry.payload,
+            correlation_id=stored_entry.correlation_id,
+        )
+        _reject_rebuilt_entry_mismatch(rebuilt_entry, stored_entry)
+
+    verification = journal.verify_chain()
+    _reject_import_anchor_mismatch(
+        verification,
+        envelope_entry_count=entry_count,
+        envelope_head_digest=head_digest,
+        expected_entry_count=expected_entry_count,
+        expected_head_digest=expected_head_digest,
+    )
+    return journal
+
+
 def evidence_journal_entry_digest(entry: EvidenceJournalEntry) -> str:
     payload = evidence_journal_entry_to_dict(entry)
     payload.pop("entry_digest", None)
@@ -277,6 +364,85 @@ def _defensive_entry_copy(entry: EvidenceJournalEntry) -> EvidenceJournalEntry:
         entry_digest=entry.entry_digest,
         correlation_id=entry.correlation_id,
     )
+
+
+def _entry_from_export_dict(data: object) -> EvidenceJournalEntry:
+    entry = _require_mapping(data, "evidence_journal:entry_malformed")
+    _require_exact_fields(entry, _ENTRY_EXPORT_FIELDS, "evidence_journal:entry_fields_mismatch")
+
+    schema_version = entry["schema_version"]
+    if not isinstance(schema_version, str):
+        raise EvidenceJournalError("evidence_journal:schema_version_malformed")
+
+    journal_seq = entry["journal_seq"]
+    if not isinstance(journal_seq, int) or isinstance(journal_seq, bool) or journal_seq < 0:
+        raise EvidenceJournalError("evidence_journal:sequence_malformed")
+
+    payload_digest = entry["payload_digest"]
+    if not isinstance(payload_digest, str):
+        raise EvidenceJournalError("evidence_journal:payload_digest_malformed")
+
+    prev_entry_digest = entry["prev_entry_digest"]
+    if prev_entry_digest is not None and not isinstance(prev_entry_digest, str):
+        raise EvidenceJournalError("evidence_journal:prev_entry_digest_malformed")
+
+    entry_digest = entry["entry_digest"]
+    if not isinstance(entry_digest, str):
+        raise EvidenceJournalError("evidence_journal:entry_digest_malformed")
+
+    correlation_id = entry["correlation_id"]
+    if not _is_non_empty_string(correlation_id):
+        raise EvidenceJournalError("evidence_journal:correlation_id_missing")
+
+    return EvidenceJournalEntry(
+        schema_version=schema_version,
+        journal_seq=journal_seq,
+        entry_type=_parse_entry_type(entry["entry_type"]),
+        payload=_normalize_payload(entry["payload"]),
+        payload_digest=payload_digest,
+        prev_entry_digest=prev_entry_digest,
+        entry_digest=entry_digest,
+        correlation_id=correlation_id,
+    )
+
+
+def _reject_rebuilt_entry_mismatch(rebuilt_entry: EvidenceJournalEntry, stored_entry: EvidenceJournalEntry) -> None:
+    if rebuilt_entry.schema_version != stored_entry.schema_version:
+        raise EvidenceJournalError("evidence_journal:stored_schema_version_mismatch")
+    if rebuilt_entry.journal_seq != stored_entry.journal_seq:
+        raise EvidenceJournalError("evidence_journal:stored_sequence_mismatch")
+    if rebuilt_entry.entry_type != stored_entry.entry_type:
+        raise EvidenceJournalError("evidence_journal:stored_entry_type_mismatch")
+    if _normalize_payload(rebuilt_entry.payload) != _normalize_payload(stored_entry.payload):
+        raise EvidenceJournalError("evidence_journal:stored_payload_mismatch")
+    if rebuilt_entry.payload_digest != stored_entry.payload_digest:
+        raise EvidenceJournalError("evidence_journal:stored_payload_digest_mismatch")
+    if rebuilt_entry.prev_entry_digest != stored_entry.prev_entry_digest:
+        raise EvidenceJournalError("evidence_journal:stored_prev_entry_digest_mismatch")
+    if rebuilt_entry.entry_digest != stored_entry.entry_digest:
+        raise EvidenceJournalError("evidence_journal:stored_entry_digest_mismatch")
+    if rebuilt_entry.correlation_id != stored_entry.correlation_id:
+        raise EvidenceJournalError("evidence_journal:stored_correlation_id_mismatch")
+
+
+def _reject_import_anchor_mismatch(
+    verification: EvidenceJournalVerification,
+    *,
+    envelope_entry_count: int,
+    envelope_head_digest: str | None,
+    expected_entry_count: int,
+    expected_head_digest: str | None,
+) -> None:
+    if not verification.accepted:
+        raise EvidenceJournalError(";".join(verification.rejection_reasons))
+    if verification.entry_count != envelope_entry_count:
+        raise EvidenceJournalError("evidence_journal:envelope_entry_count_mismatch")
+    if verification.head_digest != envelope_head_digest:
+        raise EvidenceJournalError("evidence_journal:envelope_head_digest_mismatch")
+    if verification.entry_count != expected_entry_count:
+        raise EvidenceJournalError("evidence_journal:expected_entry_count_mismatch")
+    if verification.head_digest != expected_head_digest:
+        raise EvidenceJournalError("evidence_journal:expected_head_digest_mismatch")
 
 
 def _validate_entry(entry: EvidenceJournalEntry) -> tuple[str, ...]:
@@ -317,6 +483,18 @@ def _normalize_payload(payload: Mapping[str, object]) -> dict[str, Any]:
         raise EvidenceJournalError("evidence_journal:payload_malformed")
     _validate_json_value(payload)
     return json.loads(_canonical_json(payload))
+
+
+def _require_mapping(value: object, reason: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise EvidenceJournalError(reason)
+    return value
+
+
+def _require_exact_fields(mapping: Mapping[str, object], expected_fields: frozenset[str], reason: str) -> None:
+    keys = tuple(mapping.keys())
+    if any(not isinstance(key, str) for key in keys) or set(keys) != expected_fields:
+        raise EvidenceJournalError(reason)
 
 
 def _validate_json_value(value: object) -> None:
@@ -469,6 +647,8 @@ __all__ = [
     "EvidenceJournalEntry",
     "EvidenceJournalError",
     "EvidenceJournalVerification",
+    "evidence_journal_from_dict",
     "evidence_journal_entry_digest",
     "evidence_journal_entry_to_dict",
+    "evidence_journal_to_dict",
 ]
