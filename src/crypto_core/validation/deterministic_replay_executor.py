@@ -257,11 +257,34 @@ def _run_plan_reasons(run_plan: PaperReplayRunPlan) -> list[str]:
     return reasons
 
 
-def _input_payload(run_plan: PaperReplayRunPlan, events: tuple[str, ...], correlation_id: str) -> dict[str, object]:
+def _decode_event(event_json: object) -> dict[str, object]:
+    """Decode a stored canonical event string, failing closed (never a raw ``JSONDecodeError``).
+
+    A non-string, non-JSON, or non-mapping decoded event raises ``DeterministicReplayExecutorError`` so
+    that a directly-constructed ``DeterministicReplayInput`` (one that bypassed
+    ``build_deterministic_replay_input``) cannot leak a raw exception through the serializer/executor.
+    """
+    if not isinstance(event_json, str):
+        raise DeterministicReplayExecutorError("deterministic_replay_executor:event_malformed")
+    try:
+        decoded = json.loads(event_json)
+    except (ValueError, TypeError) as exc:
+        raise DeterministicReplayExecutorError("deterministic_replay_executor:event_not_canonical_json") from exc
+    if not isinstance(decoded, dict):
+        raise DeterministicReplayExecutorError("deterministic_replay_executor:event_not_mapping")
+    return decoded
+
+
+def _input_payload(
+    run_plan: PaperReplayRunPlan,
+    events: tuple[str, ...],
+    correlation_id: str,
+    schema_version: str,
+) -> dict[str, object]:
     return {
-        "schema_version": _SCHEMA_VERSION,
+        "schema_version": schema_version,
         "run_plan": paper_replay_run_plan_to_dict(run_plan),
-        "events": [json.loads(event) for event in events],
+        "events": [_decode_event(event) for event in events],
         "correlation_id": correlation_id,
     }
 
@@ -288,7 +311,7 @@ def build_deterministic_replay_input(
         raise DeterministicReplayExecutorError("deterministic_replay_executor:events_malformed")
     normalized_events = tuple(_normalize_event(event) for event in events)
     correlation = correlation_id.strip()
-    input_digest = _canonical_digest(_input_payload(run_plan, normalized_events, correlation))
+    input_digest = _canonical_digest(_input_payload(run_plan, normalized_events, correlation, _SCHEMA_VERSION))
     return DeterministicReplayInput(
         schema_version=_SCHEMA_VERSION,
         run_plan=run_plan,
@@ -299,8 +322,17 @@ def build_deterministic_replay_input(
 
 
 def deterministic_replay_input_to_dict(replay_input: DeterministicReplayInput) -> dict[str, object]:
-    """Canonical, JSON-ready mapping for an executor input (deterministic shape)."""
-    payload = _input_payload(replay_input.run_plan, replay_input.events, replay_input.correlation_id)
+    """Canonical, JSON-ready mapping for an executor input (deterministic shape).
+
+    Serializes the dataclass ``schema_version`` value (not the module constant), so a forged/tampered
+    ``schema_version`` is visible to the input digest and cannot pass unnoticed.
+    """
+    payload = _input_payload(
+        replay_input.run_plan,
+        replay_input.events,
+        replay_input.correlation_id,
+        replay_input.schema_version,
+    )
     payload["input_digest"] = replay_input.input_digest
     return payload
 
@@ -314,6 +346,7 @@ def deterministic_replay_input_digest(replay_input: DeterministicReplayInput) ->
 
 def _output_payload(
     *,
+    schema_version: str,
     status: DeterministicReplayStatus,
     accepted: bool,
     run_plan_digest: str,
@@ -330,7 +363,7 @@ def _output_payload(
     rejection_reasons: tuple[str, ...],
 ) -> dict[str, object]:
     return {
-        "schema_version": _SCHEMA_VERSION,
+        "schema_version": schema_version,
         "status": status.value,
         "accepted": accepted,
         "run_plan_digest": run_plan_digest,
@@ -369,6 +402,9 @@ def execute_deterministic_replay(replay_input: DeterministicReplayInput) -> Dete
 
     hard: list[str] = []
 
+    if replay_input.schema_version != _SCHEMA_VERSION:
+        hard.append("deterministic_replay_executor:schema_version_mismatch")
+
     expected_input_digest = deterministic_replay_input_digest(replay_input)
     if replay_input.input_digest != expected_input_digest:
         hard.append("deterministic_replay_executor:input_digest_mismatch")
@@ -381,7 +417,7 @@ def execute_deterministic_replay(replay_input: DeterministicReplayInput) -> Dete
     accepted_event_count = 0
     rejected_event_count = 0
     for sequence_id, event_json in enumerate(replay_input.events):
-        event = json.loads(event_json)
+        event = _decode_event(event_json)
         event_reasons = _event_field_reasons(event)
         if event_reasons:
             decision = DeterministicReplayEventDecision.REJECT
@@ -434,6 +470,7 @@ def execute_deterministic_replay(replay_input: DeterministicReplayInput) -> Dete
 
     output_digest = _canonical_digest(
         _output_payload(
+            schema_version=_SCHEMA_VERSION,
             status=status,
             accepted=accepted,
             run_plan_digest=run_plan_digest,
@@ -473,7 +510,11 @@ def execute_deterministic_replay(replay_input: DeterministicReplayInput) -> Dete
 
 
 def deterministic_replay_output_to_dict(output: DeterministicReplayOutput) -> dict[str, object]:
-    """Canonical, JSON-ready mapping for a replay output (deterministic shape)."""
+    """Canonical, JSON-ready mapping for a replay output (deterministic shape).
+
+    Serializes the dataclass ``schema_version`` value (not the module constant), so a forged/tampered
+    ``schema_version`` is visible to the output digest and cannot pass unnoticed.
+    """
     metrics = {
         "event_count": output.event_count,
         "accepted_event_count": output.accepted_event_count,
@@ -491,6 +532,7 @@ def deterministic_replay_output_to_dict(output: DeterministicReplayOutput) -> di
         for entry in output.trace_entries
     ]
     payload = _output_payload(
+        schema_version=output.schema_version,
         status=output.status,
         accepted=output.accepted,
         run_plan_digest=output.run_plan_digest,

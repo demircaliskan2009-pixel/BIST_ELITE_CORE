@@ -394,3 +394,72 @@ def test_output_digests_compose_with_result_report_shape():
     for digest in (out.replay_trace_digest, out.metrics_digest, out.decision_trace_digest):
         assert len(digest) == 64
         assert all(char in "0123456789abcdef" for char in digest)
+
+
+# repair: schema_version is inside the digest boundary (input + output)
+
+
+def test_forged_input_schema_version_changes_digest_and_rejects():
+    inp = _input()
+    forged = replace(inp, schema_version="evil")
+    assert deterministic_replay_input_digest(forged) != inp.input_digest
+    out = execute_deterministic_replay(forged)
+    assert out.status is DeterministicReplayStatus.REJECTED
+    assert "deterministic_replay_executor:schema_version_mismatch" in out.rejection_reasons
+
+
+def test_input_to_dict_truthfully_serializes_schema_version():
+    forged = replace(_input(), schema_version="evil")
+    assert deterministic_replay_input_to_dict(forged)["schema_version"] == "evil"
+
+
+def test_forged_output_schema_version_changes_output_digest():
+    out = execute_deterministic_replay(_input())
+    forged = replace(out, schema_version="evil")
+    assert deterministic_replay_output_digest(forged) != out.output_digest
+    # the recomputed digest also disagrees with the (stale) stored output_digest -> tamper visible
+    assert deterministic_replay_output_digest(forged) != forged.output_digest
+
+
+def test_output_to_dict_truthfully_serializes_schema_version():
+    forged = replace(execute_deterministic_replay(_input()), schema_version="evil")
+    assert deterministic_replay_output_to_dict(forged)["schema_version"] == "evil"
+
+
+# repair: stored canonical event strings can never leak a raw JSONDecodeError
+
+
+def test_direct_constructed_input_with_non_json_event_fails_closed():
+    bad = DeterministicReplayInput(
+        schema_version="deterministic-replay-executor.v1",
+        run_plan=_run_plan(),
+        events=("not-json",),
+        correlation_id=_CORR,
+        input_digest="0" * 64,
+    )
+    with pytest.raises(DeterministicReplayExecutorError):
+        execute_deterministic_replay(bad)
+    with pytest.raises(DeterministicReplayExecutorError):
+        deterministic_replay_input_digest(bad)
+
+
+@pytest.mark.parametrize("event_json", ("[]", "5", '"scalar"', "null"))
+def test_direct_constructed_input_with_non_mapping_event_fails_closed(event_json):
+    bad = DeterministicReplayInput(
+        schema_version="deterministic-replay-executor.v1",
+        run_plan=_run_plan(),
+        events=(event_json,),
+        correlation_id=_CORR,
+        input_digest="0" * 64,
+    )
+    with pytest.raises(DeterministicReplayExecutorError):
+        execute_deterministic_replay(bad)
+
+
+def test_accepted_path_remains_accepted_and_stable_after_repair():
+    out1 = execute_deterministic_replay(_input())
+    out2 = execute_deterministic_replay(_input())
+    assert out1.status is DeterministicReplayStatus.ACCEPTED
+    assert out1.output_digest == out2.output_digest
+    assert out1.schema_version == "deterministic-replay-executor.v1"
+    assert deterministic_replay_output_digest(out1) == out1.output_digest
