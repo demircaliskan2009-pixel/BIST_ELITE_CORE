@@ -14,6 +14,15 @@ from crypto_core.audit.decision_ledger import (
     decision_ledger_record_to_dict,
     validate_decision_ledger_record,
 )
+from crypto_core.audit.evidence_journal import (
+    EvidenceArtifactType,
+    EvidenceJournal,
+    EvidenceJournalEntry,
+    EvidenceJournalError,
+    EvidenceJournalVerification,
+    evidence_journal_entry_digest,
+    evidence_journal_entry_to_dict,
+)
 
 __all__ = [
     "DecisionEvidenceRef",
@@ -27,5 +36,12 @@ __all__ = [
     "decision_ledger_digest",
     "decision_ledger_record_from_dict",
     "decision_ledger_record_to_dict",
+    "EvidenceArtifactType",
+    "EvidenceJournal",
+    "EvidenceJournalEntry",
+    "EvidenceJournalError",
+    "EvidenceJournalVerification",
+    "evidence_journal_entry_digest",
+    "evidence_journal_entry_to_dict",
     "validate_decision_ledger_record",
 ]
