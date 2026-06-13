@@ -110,6 +110,22 @@ def append_paper_replay_result_report_to_evidence_journal(
             "paper_replay_result_report_journal_adapter:result_report_digest_mismatch"
         )
 
+    # Paper-only invariant: a self-consistent (resealed) report can still attest ``paper_only=False`` or
+    # enabled real orders/money. The journal's token guard does not cover ``paper_only``, so the bridge
+    # enforces the full paper-safety triple itself before journaling into the paper-only audit log.
+    if report.paper_only is not True:
+        raise PaperReplayResultReportJournalAdapterError(
+            "paper_replay_result_report_journal_adapter:report_not_paper_only"
+        )
+    if report.real_orders_enabled is not False:
+        raise PaperReplayResultReportJournalAdapterError(
+            "paper_replay_result_report_journal_adapter:report_real_orders_enabled"
+        )
+    if report.real_money_enabled is not False:
+        raise PaperReplayResultReportJournalAdapterError(
+            "paper_replay_result_report_journal_adapter:report_real_money_enabled"
+        )
+
     # Exactly one append after all prechecks pass; no caller payload_digest is trusted.
     return journal.append(
         EvidenceArtifactType.PAPER_REPLAY_RESULT_REPORT,

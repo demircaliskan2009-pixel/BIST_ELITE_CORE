@@ -320,33 +320,43 @@ def test_convenience_helper_wrong_journal_type_raises_bridge_error():
         )
 
 
-# 14. real_orders_enabled=True / real_money_enabled=True does not append
+# 14. non-paper / non-False attestation reports do not append (bridge paper-safety triple)
 
 
-def test_true_attestation_report_does_not_append():
-    # stale-digest True flag -> bridge digest re-proof rejects before append
-    stale = replace(_report(), real_orders_enabled=True)
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"paper_only": False}, "report_not_paper_only"),
+        ({"real_orders_enabled": True}, "report_real_orders_enabled"),
+        ({"real_money_enabled": True}, "report_real_money_enabled"),
+    ],
+)
+def test_resealed_non_paper_report_rejected_by_bridge_before_append(override, reason):
+    # a self-consistent (resealed) report whose digest re-proves but violates the paper-safety triple
+    sealed = _reseal_report(replace(_report(), **override))
     journal = EvidenceJournal()
+
+    with pytest.raises(PaperReplayResultReportJournalAdapterError) as exc:
+        _append(journal, sealed)
+
+    assert reason in str(exc.value)
+    assert journal.entry_count == 0
+    assert journal.head_digest is None
+
+
+@pytest.mark.parametrize(
+    "override",
+    [{"paper_only": False}, {"real_orders_enabled": True}, {"real_money_enabled": True}],
+)
+def test_stale_digest_non_paper_report_rejected_before_append(override):
+    # without resealing, the digest re-proof already rejects (defense in depth)
+    stale = replace(_report(), **override)
+    journal = EvidenceJournal()
+
     with pytest.raises(PaperReplayResultReportJournalAdapterError) as exc:
         _append(journal, stale)
+
     assert "result_report_digest_mismatch" in str(exc.value)
-    assert journal.entry_count == 0
-
-    # self-consistent (resealed) True flag -> journal token guard rejects, journal unchanged
-    sealed = _reseal_report(replace(_report(), real_orders_enabled=True))
-    journal_two = EvidenceJournal()
-    with pytest.raises(EvidenceJournalError) as exc_two:
-        _append(journal_two, sealed)
-    assert "paper_safety_attestation_not_false" in str(exc_two.value)
-    assert journal_two.entry_count == 0
-
-
-def test_true_money_attestation_resealed_report_does_not_append():
-    sealed = _reseal_report(replace(_report(), real_money_enabled=True))
-    journal = EvidenceJournal()
-    with pytest.raises(EvidenceJournalError) as exc:
-        _append(journal, sealed)
-    assert "paper_safety_attestation_not_false" in str(exc.value)
     assert journal.entry_count == 0
 
 
