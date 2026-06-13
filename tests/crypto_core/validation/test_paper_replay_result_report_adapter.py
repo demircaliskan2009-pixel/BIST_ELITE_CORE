@@ -14,6 +14,7 @@ from crypto_core.validation.deterministic_replay_executor import (
     DeterministicReplayInput,
     DeterministicReplayStatus,
     build_deterministic_replay_input,
+    deterministic_replay_output_digest,
     execute_deterministic_replay,
 )
 from crypto_core.validation.paper_replay_result_report import (
@@ -91,6 +92,11 @@ def _build(inp, out, **overrides):
     kwargs = {"report_id": _REPORT_ID, "correlation_id": _CORR}
     kwargs.update(overrides)
     return build_paper_replay_result_report_from_deterministic_replay(inp, out, **kwargs)
+
+
+def _reseal(out):
+    """Recompute output_digest so a forged output is internally self-consistent (re-proves)."""
+    return replace(out, output_digest=deterministic_replay_output_digest(out))
 
 
 # 1. accepted output builds a real PaperReplayResultReport carrying the output's computed digests
@@ -236,6 +242,64 @@ def test_malformed_executor_artifact_raises_adapter_error_not_raw():
     with pytest.raises(PaperReplayResultReportAdapterError) as exc:
         _build(bad_input, out)
     assert "replay_evidence_malformed" in str(exc.value)
+
+
+def test_malformed_input_run_plan_raises_adapter_error_not_raw():
+    out = _pair()[1]
+    bad_input = DeterministicReplayInput(
+        schema_version="deterministic-replay-executor.v1",
+        run_plan=None,  # type: ignore[arg-type]
+        events=(),
+        correlation_id=_CORR,
+        input_digest="0" * 64,
+    )
+    with pytest.raises(PaperReplayResultReportAdapterError) as exc:
+        _build(bad_input, out)
+    assert "replay_evidence_malformed" in str(exc.value)
+
+
+def test_malformed_output_internals_raise_adapter_error_not_raw():
+    inp, out = _pair()
+    broken = replace(out, trace_entries=("not-a-trace-entry",))  # type: ignore[arg-type]
+    with pytest.raises(PaperReplayResultReportAdapterError) as exc:
+        _build(inp, broken)
+    assert "replay_evidence_malformed" in str(exc.value)
+
+
+# context binding: a self-consistent forged output must match the input's run-plan/replay context
+
+
+def test_output_run_plan_digest_mismatch_fails_closed():
+    # self-consistent forged output (output_digest re-proves) must still be rejected on context binding
+    inp, out = _pair()
+    forged = _reseal(replace(out, run_plan_digest="a" * 64))
+    with pytest.raises(PaperReplayResultReportAdapterError) as exc:
+        _build(inp, forged)
+    assert "run_plan_digest_mismatch" in str(exc.value)
+
+
+def test_output_replay_mode_mismatch_fails_closed():
+    inp, out = _pair()
+    forged = _reseal(replace(out, replay_mode="deterministic_replay_dry_run"))
+    with pytest.raises(PaperReplayResultReportAdapterError) as exc:
+        _build(inp, forged)
+    assert "replay_mode_mismatch" in str(exc.value)
+
+
+def test_output_requested_replay_id_mismatch_fails_closed():
+    inp, out = _pair()
+    forged = _reseal(replace(out, requested_replay_id="other-replay"))
+    with pytest.raises(PaperReplayResultReportAdapterError) as exc:
+        _build(inp, forged)
+    assert "requested_replay_id_mismatch" in str(exc.value)
+
+
+def test_output_correlation_id_mismatch_fails_closed():
+    inp, out = _pair()
+    forged = _reseal(replace(out, correlation_id="corr:other"))
+    with pytest.raises(PaperReplayResultReportAdapterError) as exc:
+        _build(inp, forged)
+    assert "correlation_id_mismatch" in str(exc.value)
 
 
 # 9. forbidden live/order/scheduler/connector/BIST tokens in correlation/metadata are rejected

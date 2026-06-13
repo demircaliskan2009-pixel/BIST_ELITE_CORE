@@ -30,7 +30,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from crypto_core.validation.deterministic_replay_executor import (
-    DeterministicReplayExecutorError,
     DeterministicReplayInput,
     DeterministicReplayOutput,
     DeterministicReplayStatus,
@@ -97,12 +96,14 @@ def build_paper_replay_result_report_from_deterministic_replay(
             "paper_replay_result_report_adapter:replay_output_schema_version_unexpected"
         )
 
-    # Boundary digest re-proof of the executor evidence. A malformed artifact (e.g. a directly-constructed
-    # input with non-canonical event strings) surfaces as a clean adapter error, never a raw leak.
+    # Boundary digest re-proof of the executor evidence. Any failure to serialize/digest a malformed
+    # artifact (a directly-constructed input/output that bypassed the executor — non-canonical event
+    # strings, a malformed run plan, malformed trace entries) surfaces as a clean adapter error, never a
+    # raw AttributeError/TypeError/ValueError leak. BaseException is deliberately not caught.
     try:
         expected_input_digest = deterministic_replay_input_digest(replay_input)
         expected_output_digest = deterministic_replay_output_digest(replay_output)
-    except DeterministicReplayExecutorError as exc:
+    except Exception as exc:
         raise PaperReplayResultReportAdapterError(
             "paper_replay_result_report_adapter:replay_evidence_malformed"
         ) from exc
@@ -113,6 +114,19 @@ def build_paper_replay_result_report_from_deterministic_replay(
         raise PaperReplayResultReportAdapterError("paper_replay_result_report_adapter:input_digest_mismatch")
     if replay_output.output_digest != expected_output_digest:
         raise PaperReplayResultReportAdapterError("paper_replay_result_report_adapter:output_digest_mismatch")
+
+    # Context binding: a self-consistent forged output must not carry a different run-plan/replay context
+    # than the input whose run plan the report will record. Each field the report sources from the input
+    # must match the output's own copy.
+    run_plan = replay_input.run_plan
+    if replay_output.run_plan_digest != run_plan.run_plan_digest:
+        raise PaperReplayResultReportAdapterError("paper_replay_result_report_adapter:run_plan_digest_mismatch")
+    if replay_output.replay_mode != run_plan.replay_mode:
+        raise PaperReplayResultReportAdapterError("paper_replay_result_report_adapter:replay_mode_mismatch")
+    if replay_output.requested_replay_id != run_plan.requested_replay_id:
+        raise PaperReplayResultReportAdapterError("paper_replay_result_report_adapter:requested_replay_id_mismatch")
+    if replay_output.correlation_id != replay_input.correlation_id:
+        raise PaperReplayResultReportAdapterError("paper_replay_result_report_adapter:correlation_id_mismatch")
 
     for name, digest in (
         ("replay_trace_digest", replay_output.replay_trace_digest),
@@ -128,7 +142,7 @@ def build_paper_replay_result_report_from_deterministic_replay(
         outcome_status = PaperReplayOutcomeStatus.REJECTED
 
     return build_paper_replay_result_report(
-        replay_input.run_plan,
+        run_plan,
         result_report_id=report_id,
         outcome_status=outcome_status,
         replay_trace_digest=replay_output.replay_trace_digest,
