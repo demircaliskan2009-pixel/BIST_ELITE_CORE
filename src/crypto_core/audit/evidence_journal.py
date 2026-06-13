@@ -375,9 +375,7 @@ def _scope_token_rejections(text: object) -> tuple[str, ...]:
 
     for marker in _FORBIDDEN_SCOPE_TOKENS:
         if marker in {"order", "orders"}:
-            if any(safe_term in lowered for safe_term in _SAFE_ORDER_MARKET_DATA_TERMS):
-                continue
-            if marker in tokens or lowered == marker:
+            if _contains_forbidden_order_marker(tokens):
                 rejection_reasons.append(f"evidence_journal:forbidden_token_{marker}")
             continue
         if marker in {"private_api", "api_key", "auto_loop", "connector_ready"}:
@@ -395,8 +393,32 @@ def _scope_token_rejections(text: object) -> tuple[str, ...]:
 
 def _text_matches_marker(lowered: str, tokens: tuple[str, ...], marker: str) -> bool:
     if "_" in marker:
-        return marker in lowered
+        return marker in lowered or _contains_token_sequence(tokens, tuple(marker.split("_")))
     return lowered == marker or marker in tokens
+
+
+def _contains_forbidden_order_marker(tokens: tuple[str, ...]) -> bool:
+    covered_indexes: set[int] = set()
+    for safe_term in _SAFE_ORDER_MARKET_DATA_TERMS:
+        safe_tokens = tuple(safe_term.split("_"))
+        for start_index in _token_sequence_start_indexes(tokens, safe_tokens):
+            covered_indexes.update(range(start_index, start_index + len(safe_tokens)))
+    return any(token in {"order", "orders"} and index not in covered_indexes for index, token in enumerate(tokens))
+
+
+def _contains_token_sequence(tokens: tuple[str, ...], sequence: tuple[str, ...]) -> bool:
+    return bool(_token_sequence_start_indexes(tokens, sequence))
+
+
+def _token_sequence_start_indexes(tokens: tuple[str, ...], sequence: tuple[str, ...]) -> tuple[int, ...]:
+    if not sequence or len(sequence) > len(tokens):
+        return ()
+    starts: list[int] = []
+    last_start = len(tokens) - len(sequence)
+    for start_index in range(last_start + 1):
+        if tokens[start_index : start_index + len(sequence)] == sequence:
+            starts.append(start_index)
+    return tuple(starts)
 
 
 def _identifier_tokens(text: str) -> tuple[str, ...]:

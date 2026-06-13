@@ -203,6 +203,34 @@ def test_order_book_market_data_term_is_not_a_false_positive() -> None:
     assert entry.journal_seq == 0
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"scope": "private api enabled"},
+        {"scope": "api key leaked"},
+        {"scope": "wall clock"},
+        {"scope": "auto loop"},
+        {"scope": "connector ready"},
+    ],
+)
+def test_separated_forbidden_markers_refused(payload: dict[str, object]) -> None:
+    with pytest.raises(EvidenceJournalError):
+        EvidenceJournal().append(EvidenceArtifactType.SOURCE_PACKET, payload, correlation_id="corr-001")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"order_book order": "bad"},
+        {"scope": "limit_order_book orders"},
+        {"scope": "order flow order"},
+    ],
+)
+def test_order_book_allowlist_does_not_hide_explicit_order_markers(payload: dict[str, object]) -> None:
+    with pytest.raises(EvidenceJournalError):
+        EvidenceJournal().append(EvidenceArtifactType.SOURCE_PACKET, payload, correlation_id="corr-001")
+
+
 def test_payload_tamper_after_append_causes_read_and_verify_failure() -> None:
     journal = EvidenceJournal()
     entry = journal.append(EvidenceArtifactType.SOURCE_PACKET, _payload(), correlation_id="corr-001")
