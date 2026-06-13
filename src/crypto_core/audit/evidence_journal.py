@@ -63,6 +63,13 @@ _SAFE_ORDER_MARKET_DATA_TERMS = (
     "order_flow",
 )
 
+# Exact paper-safety attestation field NAMES whose key text legitimately contains the ``orders`` token
+# (``real_orders_enabled=False`` attests *no* real orders; ``real_money_enabled=False`` attests no real
+# money). Only an exact full-key match is exempt from key-token scanning. This is a key-only exemption:
+# values and every other key are still fully scanned, so ``order``, ``orders``, ``order_router``,
+# ``live_order``, ``real_orders_enabled_live``, ``my_real_orders_enabled`` etc. all remain rejected.
+_SAFE_ATTESTATION_KEYS = frozenset({"real_orders_enabled", "real_money_enabled"})
+
 
 class EvidenceJournalError(RuntimeError):
     """Raised when evidence journal input or chain integrity fails closed."""
@@ -530,13 +537,18 @@ def _digest_mapping(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def _is_safe_attestation_key(key: object) -> bool:
+    return isinstance(key, str) and key in _SAFE_ATTESTATION_KEYS
+
+
 def _reject_scope_tokens(payload: Mapping[str, Any], correlation_id: str) -> None:
     rejection_reasons = list(_scope_token_rejections(correlation_id))
 
     def _walk(node: object) -> None:
         if isinstance(node, Mapping):
             for key, value in node.items():
-                rejection_reasons.extend(_scope_token_rejections(key))
+                if not _is_safe_attestation_key(key):
+                    rejection_reasons.extend(_scope_token_rejections(key))
                 _walk(value)
         elif isinstance(node, list):
             for item in node:

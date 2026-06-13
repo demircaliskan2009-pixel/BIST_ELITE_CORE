@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ast
-from dataclasses import FrozenInstanceError
+import hashlib
+import json
+from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
@@ -14,6 +16,19 @@ from crypto_core.audit import (
     EvidenceJournalVerification,
     evidence_journal_entry_digest,
     evidence_journal_entry_to_dict,
+    evidence_journal_from_dict,
+    evidence_journal_to_dict,
+)
+from crypto_core.validation.paper_replay_result_report import (
+    PaperReplayOutcomeStatus,
+    PaperReplayResultReportStatus,
+    build_paper_replay_result_report,
+    paper_replay_result_report_to_dict,
+)
+from crypto_core.validation.paper_replay_run_plan import (
+    PaperReplayRunPlan,
+    PaperReplayRunPlanStatus,
+    paper_replay_run_plan_to_dict,
 )
 
 
@@ -391,3 +406,167 @@ def test_module_stays_pure() -> None:
         for node in ast.walk(source)
         if isinstance(node, ast.ImportFrom)
     )
+
+
+# --- PR-A: narrow paper-safety attestation key exemption (key-only, non-weakening) ---
+
+
+def _ready_paper_replay_result_report_payload() -> dict[str, object]:
+    base = {
+        "schema_version": "paper-replay-run-plan.v1",
+        "status": PaperReplayRunPlanStatus.READY,
+        "ready": True,
+        "run_plan_id": "run-plan-001",
+        "replay_mode": "offline_paper_replay",
+        "requested_replay_id": "paper-replay-001",
+        "operator_id": "operator-quant-1",
+        "strategy_id": "bridge-s01",
+        "strategy_digest": "d" * 64,
+        "bundle_digest": "f" * 64,
+        "admission_digest": "1" * 64,
+        "bridge_digest": "e" * 64,
+        "manifest_digest": "2" * 64,
+        "intake_digest": "9" * 64,
+        "intake_status": "READY",
+        "replay_source_id": "offline-replay-v1",
+        "historical_data_source_id": "historical-perp-journal-v1",
+        "metadata": (),
+        "rejection_reasons": (),
+        "needs_research_reasons": (),
+        "correlation_id": "corr:run-plan-001",
+        "run_plan_digest": "0" * 64,
+    }
+    run_plan = PaperReplayRunPlan(**base)
+    payload = paper_replay_run_plan_to_dict(run_plan)
+    payload.pop("run_plan_digest", None)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    run_plan = replace(run_plan, run_plan_digest=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+    report = build_paper_replay_result_report(
+        run_plan,
+        result_report_id="result-report-001",
+        outcome_status=PaperReplayOutcomeStatus.COMPLETED,
+        replay_trace_digest="3" * 64,
+        metrics_digest="4" * 64,
+        decision_trace_digest="5" * 64,
+        correlation_id="corr:report-1",
+    )
+    assert report.status is PaperReplayResultReportStatus.READY
+    return paper_replay_result_report_to_dict(report)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"real_orders_enabled": False},
+        {"real_money_enabled": False},
+        {"real_orders_enabled": False, "real_money_enabled": False},
+    ],
+)
+def test_paper_safety_attestation_keys_now_append(payload: dict[str, object]) -> None:
+    journal = EvidenceJournal()
+    entry = journal.append(EvidenceArtifactType.PAPER_REPLAY_RESULT_REPORT, payload, correlation_id="corr-attest")
+
+    assert entry.journal_seq == 0
+    assert entry.entry_type is EvidenceArtifactType.PAPER_REPLAY_RESULT_REPORT
+    assert journal.entry_count == 1
+    assert journal.verify_chain().accepted is True
+
+
+def test_canonical_paper_replay_result_report_payload_appends() -> None:
+    payload = _ready_paper_replay_result_report_payload()
+    assert "real_orders_enabled" in payload  # the field that previously blocked journaling
+
+    journal = EvidenceJournal()
+    entry = journal.append(EvidenceArtifactType.PAPER_REPLAY_RESULT_REPORT, payload, correlation_id="corr:report-1")
+
+    assert entry.entry_type is EvidenceArtifactType.PAPER_REPLAY_RESULT_REPORT
+    assert entry.payload == payload
+    assert journal.entry_count == 1
+    assert journal.verify_chain().accepted is True
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"order": "x"},
+        {"orders": "x"},
+        {"place_order": "x"},
+        {"order_router": "x"},
+        {"live_order": "x"},
+        {"real_orders_enabled_live": "x"},
+        {"my_real_orders_enabled": "x"},
+        {"real_orders_enabled_extra": "x"},
+        {"private_api": "x"},
+        {"credentials": "x"},
+        {"scheduler": "x"},
+        {"connector_ready": "x"},
+        {"shadow": "x"},
+        {"market": "BIST"},
+        {"market": "bist30"},
+        {"note": "real_orders_enabled"},  # key-only exemption: same text as a VALUE still rejects
+        {"real orders enabled": "x"},  # space-separated tokens are not the exact attestation key
+    ],
+)
+def test_attestation_exemption_does_not_weaken_forbidden_tokens(payload: dict[str, object]) -> None:
+    with pytest.raises(EvidenceJournalError):
+        EvidenceJournal().append(EvidenceArtifactType.SOURCE_PACKET, payload, correlation_id="corr-001")
+
+
+def test_attestation_exemption_is_payload_key_scoped_not_correlation_id() -> None:
+    # correlation_id is not a payload key, so an attestation-looking correlation is still scanned/rejected
+    with pytest.raises(EvidenceJournalError):
+        EvidenceJournal().append(
+            EvidenceArtifactType.SOURCE_PACKET,
+            {"ok": 1},
+            correlation_id="real_orders_enabled",
+        )
+
+
+@pytest.mark.parametrize("safe_key", ["order_book", "order_flow", "limit_order_book"])
+def test_market_data_terms_still_allowed_after_refinement(safe_key: str) -> None:
+    entry = EvidenceJournal().append(
+        EvidenceArtifactType.SOURCE_PACKET,
+        {safe_key: {"best_bid": 1}},
+        correlation_id="corr-001",
+    )
+
+    assert entry.journal_seq == 0
+
+
+def test_attestation_payload_survives_serialization_round_trip() -> None:
+    journal = EvidenceJournal()
+    journal.append(
+        EvidenceArtifactType.PAPER_REPLAY_RESULT_REPORT,
+        {"id": "r1", "real_orders_enabled": False, "real_money_enabled": False},
+        correlation_id="corr-attest",
+    )
+    exported = evidence_journal_to_dict(journal)
+    restored = evidence_journal_from_dict(
+        exported,
+        expected_entry_count=journal.entry_count,
+        expected_head_digest=journal.head_digest,
+    )
+
+    assert restored.entry_count == journal.entry_count
+    assert restored.head_digest == journal.head_digest
+    assert restored.verify_chain().accepted is True
+
+
+def test_duplicate_attestation_payload_replay_refused_and_journal_unchanged() -> None:
+    journal = EvidenceJournal()
+    journal.append(
+        EvidenceArtifactType.PAPER_REPLAY_RESULT_REPORT,
+        {"id": "r1", "real_orders_enabled": False},
+        correlation_id="corr-a",
+    )
+    head_before = journal.head_digest
+
+    with pytest.raises(EvidenceJournalError):
+        journal.append(
+            EvidenceArtifactType.PAPER_REPLAY_RESULT_REPORT,
+            {"id": "r1", "real_orders_enabled": False},
+            correlation_id="corr-b",
+        )
+
+    assert journal.entry_count == 1
+    assert journal.head_digest == head_before
