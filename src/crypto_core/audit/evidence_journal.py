@@ -546,13 +546,21 @@ def _is_negative_attestation_item(key: object, value: object) -> bool:
     return isinstance(key, str) and key in _SAFE_ATTESTATION_KEYS and value is False
 
 
+def _is_safe_attestation_key(key: object) -> bool:
+    return isinstance(key, str) and key in _SAFE_ATTESTATION_KEYS
+
+
 def _reject_scope_tokens(payload: Mapping[str, Any], correlation_id: str) -> None:
     rejection_reasons = list(_scope_token_rejections(correlation_id))
 
     def _walk(node: object) -> None:
         if isinstance(node, Mapping):
             for key, value in node.items():
-                if not _is_negative_attestation_item(key, value):
+                if _is_negative_attestation_item(key, value):
+                    pass
+                else:
+                    if _is_safe_attestation_key(key):
+                        rejection_reasons.append("evidence_journal:paper_safety_attestation_not_false")
                     rejection_reasons.extend(_scope_token_rejections(key))
                 _walk(value)
         elif isinstance(node, list):
