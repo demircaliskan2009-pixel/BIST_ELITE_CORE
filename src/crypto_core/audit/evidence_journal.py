@@ -63,9 +63,12 @@ _SAFE_ORDER_MARKET_DATA_TERMS = (
     "order_flow",
 )
 
-# Exact paper-safety attestation field NAMES whose key text legitimately contains the ``orders`` token
-# (``real_orders_enabled=False`` attests *no* real orders; ``real_money_enabled=False`` attests no real
-# money). Only an exact full-key match is exempt from key-token scanning. This is a key-only exemption:
+# Exact paper-safety attestation field NAMES whose key text legitimately contains the ``orders`` token.
+# The exemption is a *negative* attestation only: it applies solely when the key is an exact full-key
+# match AND the associated value is exactly boolean ``False`` (``real_orders_enabled=False`` attests *no*
+# real orders; ``real_money_enabled=False`` attests no real money). A ``True`` (or any non-``False``)
+# value is NOT exempt and falls through to normal scanning, so an attestation that claims real orders are
+# enabled still fails closed on the forbidden ``orders`` token. This is a key-only, value-gated exemption:
 # values and every other key are still fully scanned, so ``order``, ``orders``, ``order_router``,
 # ``live_order``, ``real_orders_enabled_live``, ``my_real_orders_enabled`` etc. all remain rejected.
 _SAFE_ATTESTATION_KEYS = frozenset({"real_orders_enabled", "real_money_enabled"})
@@ -537,8 +540,10 @@ def _digest_mapping(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
-def _is_safe_attestation_key(key: object) -> bool:
-    return isinstance(key, str) and key in _SAFE_ATTESTATION_KEYS
+def _is_negative_attestation_item(key: object, value: object) -> bool:
+    # ``value is False`` is a strict identity check: only the boolean ``False`` qualifies, so ``0``,
+    # ``"false"``, ``None`` and ``True`` are all non-exempt and remain subject to forbidden-token scanning.
+    return isinstance(key, str) and key in _SAFE_ATTESTATION_KEYS and value is False
 
 
 def _reject_scope_tokens(payload: Mapping[str, Any], correlation_id: str) -> None:
@@ -547,7 +552,7 @@ def _reject_scope_tokens(payload: Mapping[str, Any], correlation_id: str) -> Non
     def _walk(node: object) -> None:
         if isinstance(node, Mapping):
             for key, value in node.items():
-                if not _is_safe_attestation_key(key):
+                if not _is_negative_attestation_item(key, value):
                     rejection_reasons.extend(_scope_token_rejections(key))
                 _walk(value)
         elif isinstance(node, list):

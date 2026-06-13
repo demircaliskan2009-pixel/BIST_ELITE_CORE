@@ -462,7 +462,7 @@ def _ready_paper_replay_result_report_payload() -> dict[str, object]:
         {"real_orders_enabled": False, "real_money_enabled": False},
     ],
 )
-def test_paper_safety_attestation_keys_now_append(payload: dict[str, object]) -> None:
+def test_negative_paper_safety_attestation_keys_now_append(payload: dict[str, object]) -> None:
     journal = EvidenceJournal()
     entry = journal.append(EvidenceArtifactType.PAPER_REPLAY_RESULT_REPORT, payload, correlation_id="corr-attest")
 
@@ -470,6 +470,26 @@ def test_paper_safety_attestation_keys_now_append(payload: dict[str, object]) ->
     assert entry.entry_type is EvidenceArtifactType.PAPER_REPLAY_RESULT_REPORT
     assert journal.entry_count == 1
     assert journal.verify_chain().accepted is True
+
+
+# The exemption is value-gated: only an exact ``orders`` attestation set to boolean ``False`` may bypass
+# the forbidden ``orders`` token. A non-``False`` value must fall through to the token guard and reject,
+# so a payload claiming real orders ARE enabled can never be journaled as audit evidence.
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"real_orders_enabled": True},  # claims real orders ARE enabled -> must fail closed
+        {"real_orders_enabled": True, "real_money_enabled": False},
+        {"real_orders_enabled": 0},  # strict identity: only boolean False is exempt, not 0
+        {"real_orders_enabled": "false"},
+        {"real_orders_enabled": None},
+        {"real_orders_enabled": [False]},
+        {"chain": {"real_orders_enabled": True}},  # nested non-false attestation still rejected
+    ],
+)
+def test_non_false_orders_attestation_value_is_not_exempt(payload: dict[str, object]) -> None:
+    with pytest.raises(EvidenceJournalError):
+        EvidenceJournal().append(EvidenceArtifactType.PAPER_REPLAY_RESULT_REPORT, payload, correlation_id="corr-x")
 
 
 def test_canonical_paper_replay_result_report_payload_appends() -> None:
