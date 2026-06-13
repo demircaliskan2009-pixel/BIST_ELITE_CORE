@@ -292,7 +292,22 @@ def evidence_journal_to_dict(journal: EvidenceJournal) -> dict[str, object]:
     }
 
 
-def evidence_journal_from_dict(data: Mapping[str, object]) -> EvidenceJournal:
+def evidence_journal_from_dict(
+    data: Mapping[str, object],
+    *,
+    expected_entry_count: int,
+    expected_head_digest: str | None,
+) -> EvidenceJournal:
+    """Load a journal only when trusted external count/head anchors match.
+
+    The expected values must come from a trusted external anchor, not from the
+    same untrusted envelope being imported.
+    """
+    if not isinstance(expected_entry_count, int) or isinstance(expected_entry_count, bool) or expected_entry_count < 0:
+        raise EvidenceJournalError("evidence_journal:expected_entry_count_malformed")
+    if expected_head_digest is not None and not isinstance(expected_head_digest, str):
+        raise EvidenceJournalError("evidence_journal:expected_head_digest_malformed")
+
     envelope = _require_mapping(data, "evidence_journal:envelope_malformed")
     _require_exact_fields(envelope, _JOURNAL_ENVELOPE_FIELDS, "evidence_journal:envelope_fields_mismatch")
 
@@ -328,6 +343,10 @@ def evidence_journal_from_dict(data: Mapping[str, object]) -> EvidenceJournal:
         raise EvidenceJournalError("evidence_journal:envelope_entry_count_mismatch")
     if verification.head_digest != head_digest:
         raise EvidenceJournalError("evidence_journal:envelope_head_digest_mismatch")
+    if verification.entry_count != expected_entry_count:
+        raise EvidenceJournalError("evidence_journal:expected_entry_count_mismatch")
+    if verification.head_digest != expected_head_digest:
+        raise EvidenceJournalError("evidence_journal:expected_head_digest_mismatch")
     return journal
 
 
