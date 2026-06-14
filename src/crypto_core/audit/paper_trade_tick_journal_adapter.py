@@ -12,6 +12,11 @@ Design rules:
     re-proof (which serializes the tick through ``paper_trade_tick_to_dict`` excluding the self-digest) and
     a mismatch is rejected before any append — a stale/forged/tampered tick cannot be journaled. No hashing
     convention is duplicated here; the contract module's serializer/digest is the single source of truth.
+  - Re-render re-proof: the self-digest hashes the stored ``intent_digest`` and verdict as opaque fields,
+    so a tick whose intent fields were tampered and then resealed could still carry a stale carried
+    ``intent_digest`` / ``status`` / ``accepted``. The bridge re-runs the tick's own intent fields through
+    the public ``build_paper_trade_tick`` and requires an identical canonical payload, re-proving the
+    carried intent digest and the rendered verdict together; a non-reproducible tick is rejected.
   - Schema pinning: ``tick.schema_version`` must equal the tick schema this bridge targets.
   - Append the canonical dict only: the journaled payload is exactly ``paper_trade_tick_to_dict(tick)``;
     no caller-supplied ``payload_digest`` is trusted (the journal computes it).
@@ -36,6 +41,7 @@ from crypto_core.audit.evidence_journal import (
 from crypto_core.validation.paper_trade_tick import (
     PaperTradeTick,
     PaperTradeTickStatus,
+    build_paper_trade_tick,
     paper_trade_tick_digest,
     paper_trade_tick_to_dict,
 )
@@ -77,11 +83,30 @@ def append_paper_trade_tick_to_evidence_journal(
     if tick.schema_version != _EXPECTED_TICK_SCHEMA_VERSION:
         raise PaperTradeTickJournalAdapterError("paper_trade_tick_journal_adapter:tick_schema_version_unexpected")
 
-    # Serialize + re-prove the digest via the public serializer. A malformed tick artifact surfaces as a
-    # clean adapter error, never a raw AttributeError/TypeError/ValueError. BaseException is not caught.
+    # Serialize, re-prove the self-digest, and re-render the tick from its own fields via the public
+    # contract builder. A malformed tick artifact surfaces as a clean adapter error, never a raw
+    # AttributeError/TypeError/ValueError. BaseException is deliberately not caught.
     try:
         payload = paper_trade_tick_to_dict(tick)
         expected_digest = paper_trade_tick_digest(tick)
+        rebuilt_payload = paper_trade_tick_to_dict(
+            build_paper_trade_tick(
+                tick_id=tick.tick_id,
+                action=tick.action,
+                intent_type=tick.intent_type,
+                instrument_id=tick.instrument_id,
+                quantity=tick.quantity,
+                strategy_id=tick.strategy_id,
+                run_plan_id=tick.run_plan_id,
+                upstream_report_digest=tick.upstream_report_digest,
+                correlation_id=tick.correlation_id,
+                limit_price=tick.limit_price,
+                metadata=dict(tick.metadata),
+                paper_only=tick.paper_only,
+                real_orders_enabled=tick.real_orders_enabled,
+                real_money_enabled=tick.real_money_enabled,
+            )
+        )
     except Exception as exc:
         raise PaperTradeTickJournalAdapterError("paper_trade_tick_journal_adapter:tick_malformed") from exc
 
@@ -105,6 +130,14 @@ def append_paper_trade_tick_to_evidence_journal(
     expected_accepted = tick.status is PaperTradeTickStatus.ACCEPTED
     if tick.accepted is not expected_accepted:
         raise PaperTradeTickJournalAdapterError("paper_trade_tick_journal_adapter:tick_status_accepted_mismatch")
+
+    # Re-render re-proof: the self-digest only covers the *stored* fields, so a tick whose intent fields
+    # were tampered and then resealed can still carry a stale ``intent_digest`` / ``status`` / ``accepted``
+    # verdict that the self-digest cannot detect. Re-running the tick's own fields through the public
+    # contract builder and requiring an identical canonical payload re-proves the carried intent digest
+    # and the verdict together, rejecting any non-reproducible (stale/tampered) tick before journaling.
+    if rebuilt_payload != payload:
+        raise PaperTradeTickJournalAdapterError("paper_trade_tick_journal_adapter:tick_not_reproducible")
 
     # Exactly one append after all prechecks pass; no caller payload_digest is trusted.
     return journal.append(

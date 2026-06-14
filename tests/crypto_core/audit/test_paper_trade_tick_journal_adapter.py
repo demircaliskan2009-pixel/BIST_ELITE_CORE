@@ -217,6 +217,37 @@ def test_rejected_status_with_accepted_true_rejected() -> None:
     assert journal.entry_count == 0
 
 
+# 11b (review P1). a tampered+resealed tick carrying a stale verdict/intent_digest is rejected by the
+# re-render re-proof, even though its self-digest re-proves and status/accepted agree with each other.
+def test_resealed_tampered_intent_field_rejected_by_rerender() -> None:
+    # Codex case: flip an ACCEPTED BUY tick to quantity="0" (which the contract rejects) but keep the stale
+    # ACCEPTED status / accepted=True and original intent_digest, then reseal the self-digest.
+    accepted = _build_tick()
+    assert accepted.status is PaperTradeTickStatus.ACCEPTED
+    tampered = _reseal_tick(replace(accepted, quantity="0"))
+    # self-digest re-proves and status/accepted are internally consistent (both stale-ACCEPTED)
+    assert paper_trade_tick_digest(tampered) == tampered.paper_trade_tick_digest
+    assert tampered.status is PaperTradeTickStatus.ACCEPTED
+    assert tampered.accepted is True
+    journal = EvidenceJournal()
+    with pytest.raises(PaperTradeTickJournalAdapterError) as exc:
+        _append(journal, tampered)
+    assert "tick_not_reproducible" in str(exc.value)
+    assert journal.entry_count == 0
+    assert journal.head_digest is None
+
+
+def test_resealed_stale_intent_digest_rejected_by_rerender() -> None:
+    # Directly forge the carried intent_digest while leaving every other field genuine, then reseal.
+    tampered = _reseal_tick(replace(_build_tick(), intent_digest="0" * 64))
+    assert paper_trade_tick_digest(tampered) == tampered.paper_trade_tick_digest
+    journal = EvidenceJournal()
+    with pytest.raises(PaperTradeTickJournalAdapterError) as exc:
+        _append(journal, tampered)
+    assert "tick_not_reproducible" in str(exc.value)
+    assert journal.entry_count == 0
+
+
 # 12. wrong journal/tick types raise bridge Error.
 def test_wrong_types_raise_bridge_error() -> None:
     with pytest.raises(PaperTradeTickJournalAdapterError):
