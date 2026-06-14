@@ -61,6 +61,10 @@ def _reseal_tick(tick):
     return replace(tick, paper_trade_tick_digest=paper_trade_tick_digest(tick))
 
 
+def _reseal_state(state):
+    return replace(state, state_digest=paper_sleeve_state_digest(state))
+
+
 def _state():
     return build_initial_paper_sleeve_state(sleeve_id="sleeve-1", correlation_id="corr:sleeve-1")
 
@@ -244,6 +248,43 @@ def test_journal_entry_payload_mismatch_fails() -> None:
         apply_paper_trade_tick_to_sleeve_state(state, tick, correlation_id="corr:a", journal_entry=entry)
     assert "journal_entry_payload_mismatch" in str(exc.value)
     assert state.record_count == 0
+
+
+# 13b (review P1). a journal entry whose payload_digest is a forged 64-hex string is rejected: the ledger
+# recomputes the journal payload digest from the canonical tick payload rather than only shape-checking it.
+def test_journal_entry_forged_payload_digest_rejected() -> None:
+    tick = _build_tick()
+    forged = replace(_journal_entry(tick), payload_digest="0" * 64)
+    state = _state()
+    with pytest.raises(PaperSleeveIntentLedgerError) as exc:
+        apply_paper_trade_tick_to_sleeve_state(state, tick, correlation_id="corr:a", journal_entry=forged)
+    assert "journal_entry_payload_digest_mismatch" in str(exc.value)
+    assert state.record_count == 0
+
+
+# 13c (review P1). a self-consistent (resealed) but non-paper-safe incoming state is rejected before append.
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"paper_only": False}, "state_not_paper_only"),
+        ({"real_orders_enabled": True}, "state_real_orders_enabled"),
+        ({"real_money_enabled": True}, "state_real_money_enabled"),
+    ],
+)
+def test_unsafe_incoming_state_rejected(override: dict[str, bool], reason: str) -> None:
+    unsafe = _reseal_state(replace(_state(), **override))
+    with pytest.raises(PaperSleeveIntentLedgerError) as exc:
+        apply_paper_trade_tick_to_sleeve_state(unsafe, _build_tick(), correlation_id="corr:a")
+    assert reason in str(exc.value)
+
+
+def test_unsafe_record_in_incoming_state_rejected() -> None:
+    base = apply_paper_trade_tick_to_sleeve_state(_state(), _build_tick(), correlation_id="corr:1").to_state
+    bad_record = replace(base.records[0], real_orders_enabled=True)
+    forged = _reseal_state(replace(base, records=(bad_record,)))
+    with pytest.raises(PaperSleeveIntentLedgerError) as exc:
+        apply_paper_trade_tick_to_sleeve_state(forged, _build_tick(action="SELL"), correlation_id="corr:2")
+    assert "state_record_not_paper_safe" in str(exc.value)
 
 
 # 14. rejected tick can be recorded as a non-executable audit record.

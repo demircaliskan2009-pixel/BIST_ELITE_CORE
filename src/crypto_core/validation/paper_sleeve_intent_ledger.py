@@ -52,8 +52,6 @@ _SCHEMA_VERSION = "paper-sleeve-intent-ledger.v1"
 _RECORD_SCHEMA_VERSION = "paper-sleeve-intent-record.v1"
 _TRANSITION_SCHEMA_VERSION = "paper-sleeve-intent-transition.v1"
 _EXPECTED_TICK_SCHEMA_VERSION = "paper-trade-tick.v1"
-_SHA256_HEX_LENGTH = 64
-_HEX_CHARS = frozenset("0123456789abcdefABCDEF")
 
 # Safely-detectable BIST markers and forbidden live/order-routing/scheduler/private/shadow tokens
 # (word-bounded). A bare ``order``/``orders`` token is rejected while ``border``/``reorder`` are spared;
@@ -151,10 +149,6 @@ class PaperSleeveTransition:
 def _canonical_digest(payload: dict[str, object]) -> str:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def _is_sha256_hex(value: object) -> bool:
-    return isinstance(value, str) and len(value) == _SHA256_HEX_LENGTH and all(char in _HEX_CHARS for char in value)
 
 
 def _is_non_empty_string(value: object) -> bool:
@@ -260,9 +254,14 @@ def _validate_journal_binding(journal_entry: object, tick_payload: dict[str, obj
         raise PaperSleeveIntentLedgerError("paper_sleeve_intent_ledger:journal_entry_artifact_type_mismatch")
     if dict(journal_entry.payload) != tick_payload:
         raise PaperSleeveIntentLedgerError("paper_sleeve_intent_ledger:journal_entry_payload_mismatch")
-    if not _is_sha256_hex(journal_entry.payload_digest):
-        raise PaperSleeveIntentLedgerError("paper_sleeve_intent_ledger:journal_entry_payload_digest_invalid")
-    return journal_entry.payload_digest
+    # Digest-boundary re-proof: recompute the journal payload digest from the canonical tick payload using
+    # the same canonical-JSON+SHA-256 convention the EvidenceJournal applies (the payload is already
+    # canonical, so this equals the journal's stored ``payload_digest``). A shape-only 64-hex check would
+    # let a hand-constructed entry bind a digest the journal never produced; mismatch fails closed.
+    expected_payload_digest = _canonical_digest(tick_payload)
+    if not isinstance(journal_entry.payload_digest, str) or journal_entry.payload_digest != expected_payload_digest:
+        raise PaperSleeveIntentLedgerError("paper_sleeve_intent_ledger:journal_entry_payload_digest_mismatch")
+    return expected_payload_digest
 
 
 def _state_self_consistent(state: PaperSleeveState) -> bool:
@@ -352,6 +351,22 @@ def apply_paper_trade_tick_to_sleeve_state(
         raise PaperSleeveIntentLedgerError("paper_sleeve_intent_ledger:state_malformed")
     if not _is_non_empty_string(correlation_id):
         raise PaperSleeveIntentLedgerError("paper_sleeve_intent_ledger:correlation_id_invalid")
+    # Paper-only invariant on the *incoming* state: a self-consistent (resealed) state can still attest
+    # ``paper_only=False`` or enabled real orders/money. The ledger refuses to extend a non-paper-safe state
+    # (or one carrying a non-paper-safe record) before any transition is accepted.
+    if state.paper_only is not True:
+        raise PaperSleeveIntentLedgerError("paper_sleeve_intent_ledger:state_not_paper_only")
+    if state.real_orders_enabled is not False:
+        raise PaperSleeveIntentLedgerError("paper_sleeve_intent_ledger:state_real_orders_enabled")
+    if state.real_money_enabled is not False:
+        raise PaperSleeveIntentLedgerError("paper_sleeve_intent_ledger:state_real_money_enabled")
+    if any(
+        record.paper_only is not True
+        or record.real_orders_enabled is not False
+        or record.real_money_enabled is not False
+        for record in state.records
+    ):
+        raise PaperSleeveIntentLedgerError("paper_sleeve_intent_ledger:state_record_not_paper_safe")
     if not _state_self_consistent(state):
         raise PaperSleeveIntentLedgerError("paper_sleeve_intent_ledger:state_digest_mismatch")
     record_metadata = _normalize_metadata(metadata)
