@@ -474,3 +474,133 @@ def test_no_execution_fields_in_payload() -> None:
         "venue_order_id",
     }
     assert keys.isdisjoint(banned)
+
+
+def _decision_with_record_field(decision, field: str, value: object):
+    """Tamper one field of the first record decision, resealing record + decision digests."""
+    bad_record = _reseal_record(replace(decision.record_decisions[0], **{field: value}))
+    return _reseal_decision(replace(decision, record_decisions=(bad_record, *decision.record_decisions[1:])))
+
+
+# 26 (review P2). total_requested_budget that disagrees with the per-record requested sum is rejected.
+def test_total_requested_budget_mismatch_rejected() -> None:
+    state, policy, decision = _decision()
+    assert decision.total_requested_budget == "250"
+    tampered = _reseal_decision(replace(decision, total_requested_budget="300"))  # valid decimal, != sum
+    journal = EvidenceJournal()
+    with pytest.raises(PaperSleeveRiskBudgetDecisionJournalAdapterError) as exc:
+        _append(journal, tampered, state, policy)
+    assert "total_requested_budget_mismatch" in str(exc.value)
+    assert journal.entry_count == 0
+
+
+# 27 (review P2). malformed decimal strings in reachable decision-level budget fields are rejected.
+@pytest.mark.parametrize(
+    ("field", "reason"),
+    [
+        ("total_budget", "total_budget_malformed"),
+        ("total_reserved_budget", "total_reserved_budget_malformed"),
+        ("total_requested_budget", "total_requested_budget_malformed"),
+    ],
+)
+def test_malformed_decision_total_decimal_rejected(field: str, reason: str) -> None:
+    state, policy, decision = _decision()
+    tampered = _reseal_decision(replace(decision, **{field: "1.2.3"}))  # not a strict decimal string
+    journal = EvidenceJournal()
+    with pytest.raises(PaperSleeveRiskBudgetDecisionJournalAdapterError) as exc:
+        _append(journal, tampered, state, policy)
+    assert reason in str(exc.value)
+    assert journal.entry_count == 0
+
+
+# 27b (review P2). malformed decimal strings in reachable record-level budget fields are rejected.
+@pytest.mark.parametrize(
+    ("field", "reason"),
+    [
+        ("reserved_budget", "record_reserved_budget_malformed"),
+        ("requested_budget", "record_requested_budget_malformed"),
+    ],
+)
+def test_malformed_record_decimal_rejected(field: str, reason: str) -> None:
+    state, policy, decision = _decision()
+    tampered = _decision_with_record_field(decision, field, "1.2.3")
+    journal = EvidenceJournal()
+    with pytest.raises(PaperSleeveRiskBudgetDecisionJournalAdapterError) as exc:
+        _append(journal, tampered, state, policy)
+    assert reason in str(exc.value)
+    assert journal.entry_count == 0
+
+
+# 28 (review P2). wrong-type gates for journal / decision / state / policy reject before append.
+def test_wrong_journal_type_rejected() -> None:
+    state, policy, decision = _decision()
+    with pytest.raises(PaperSleeveRiskBudgetDecisionJournalAdapterError) as exc:
+        append_paper_sleeve_risk_budget_decision_to_evidence_journal(
+            "not-a-journal",  # type: ignore[arg-type]
+            decision,
+            state=state,
+            policy=policy,
+            correlation_id="corr:x",
+        )
+    assert "journal_malformed" in str(exc.value)
+
+
+def test_wrong_decision_type_rejected() -> None:
+    state, policy, _ = _decision()
+    journal = EvidenceJournal()
+    with pytest.raises(PaperSleeveRiskBudgetDecisionJournalAdapterError) as exc:
+        append_paper_sleeve_risk_budget_decision_to_evidence_journal(
+            journal,
+            "not-a-decision",  # type: ignore[arg-type]
+            state=state,
+            policy=policy,
+            correlation_id="corr:x",
+        )
+    assert "decision_malformed" in str(exc.value)
+    assert journal.entry_count == 0
+
+
+def test_wrong_state_type_rejected() -> None:
+    state, policy, decision = _decision()
+    journal = EvidenceJournal()
+    with pytest.raises(PaperSleeveRiskBudgetDecisionJournalAdapterError) as exc:
+        append_paper_sleeve_risk_budget_decision_to_evidence_journal(
+            journal,
+            decision,
+            state="not-a-state",  # type: ignore[arg-type]
+            policy=policy,
+            correlation_id="corr:x",
+        )
+    assert "state_malformed" in str(exc.value)
+    assert journal.entry_count == 0
+
+
+def test_wrong_policy_type_rejected() -> None:
+    state, policy, decision = _decision()
+    journal = EvidenceJournal()
+    with pytest.raises(PaperSleeveRiskBudgetDecisionJournalAdapterError) as exc:
+        append_paper_sleeve_risk_budget_decision_to_evidence_journal(
+            journal,
+            decision,
+            state=state,
+            policy="not-a-policy",  # type: ignore[arg-type]
+            correlation_id="corr:x",
+        )
+    assert "policy_malformed" in str(exc.value)
+    assert journal.entry_count == 0
+
+
+# 29 (review P2). a record decision attesting an unsafe paper-safety flag is rejected before append.
+@pytest.mark.parametrize(
+    "override",
+    [{"paper_only": False}, {"real_orders_enabled": True}, {"real_money_enabled": True}],
+)
+def test_record_decision_not_paper_safe_rejected(override: dict[str, bool]) -> None:
+    state, policy, decision = _decision()
+    bad_record = _reseal_record(replace(decision.record_decisions[0], **override))
+    tampered = _reseal_decision(replace(decision, record_decisions=(bad_record, *decision.record_decisions[1:])))
+    journal = EvidenceJournal()
+    with pytest.raises(PaperSleeveRiskBudgetDecisionJournalAdapterError) as exc:
+        _append(journal, tampered, state, policy)
+    assert "record_decision_not_paper_safe" in str(exc.value)
+    assert journal.entry_count == 0
