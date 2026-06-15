@@ -35,7 +35,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from enum import Enum
 
 from crypto_core.validation.paper_sleeve_intent_ledger import (
@@ -180,6 +180,19 @@ def _render_decimal(value: Decimal) -> str:
     return format(value, "f")
 
 
+def _budget_arithmetic_precision(operands: tuple[Decimal, ...]) -> int:
+    """Decimal context precision large enough to make every budget product/sum exact (input-derived).
+
+    The default ``decimal`` context (28 significant digits) can silently round a high-precision
+    ``quantity * price`` product (or running budget sum) down to a cap, letting an over-budget intent
+    slip through ELIGIBLE. Summing the significant-digit counts of all operands upper-bounds the exact
+    coefficient length of any product or running sum; a fixed guard covers exponent-alignment growth.
+    The precision depends only on the inputs, so the decision stays deterministic.
+    """
+    operand_digits = sum(len(value.as_tuple().digits) for value in operands)
+    return max(28, operand_digits + 32)
+
+
 def _normalize_metadata(metadata: object) -> tuple[tuple[str, str], ...]:
     if metadata is None:
         return ()
@@ -265,18 +278,21 @@ def build_paper_sleeve_risk_budget_policy(
     ``policy_id``/``sleeve_id`` must be non-empty token-clean strings; ``total_budget`` and
     ``per_intent_budget_cap`` (and ``per_instrument_budget_cap`` when given) must be strict, strictly
     positive decimal strings (no float/NaN/inf/scientific/whitespace/underscore/negative form);
-    ``require_journal_bound`` must be a ``bool``; ``metadata`` (if given) a ``Mapping[str, str]``. A malformed
-    id/budget/flag/metadata or a forbidden BIST/live/order/scheduler/connector/shadow token raises
-    ``PaperSleeveRiskBudgetDecisionError``. The policy attests paper-safety (``paper_only`` True, real
-    orders/money False) and allocates/executes nothing — budgets are risk-budget reservation caps only.
+    ``require_journal_bound`` must be exactly ``True`` — the seam only admits journal-bound intents to
+    budget eligibility, so a ``False`` value fails closed at construction rather than silently keeping
+    unbound records blocked while changing the policy digest; ``metadata`` (if given) a
+    ``Mapping[str, str]``. A malformed id/budget/flag/metadata or a forbidden
+    BIST/live/order/scheduler/connector/shadow token raises ``PaperSleeveRiskBudgetDecisionError``. The
+    policy attests paper-safety (``paper_only`` True, real orders/money False) and allocates/executes
+    nothing — budgets are risk-budget reservation caps only.
     """
     if not _is_non_empty_string(policy_id):
         raise PaperSleeveRiskBudgetDecisionError("paper_sleeve_risk_budget_decision:policy_id_invalid")
     if not _is_non_empty_string(sleeve_id):
         raise PaperSleeveRiskBudgetDecisionError("paper_sleeve_risk_budget_decision:policy_sleeve_id_invalid")
-    if not isinstance(require_journal_bound, bool):
+    if require_journal_bound is not True:
         raise PaperSleeveRiskBudgetDecisionError(
-            "paper_sleeve_risk_budget_decision:policy_require_journal_bound_invalid"
+            "paper_sleeve_risk_budget_decision:policy_require_journal_bound_must_be_true"
         )
     _require_positive_budget(total_budget, "total_budget")
     _require_positive_budget(per_intent_budget_cap, "per_intent_budget_cap")
@@ -321,9 +337,9 @@ def _reprove_policy(policy: PaperSleeveRiskBudgetPolicy) -> tuple[Decimal, Decim
         raise PaperSleeveRiskBudgetDecisionError("paper_sleeve_risk_budget_decision:policy_real_orders_enabled")
     if policy.real_money_enabled is not False:
         raise PaperSleeveRiskBudgetDecisionError("paper_sleeve_risk_budget_decision:policy_real_money_enabled")
-    if not isinstance(policy.require_journal_bound, bool):
+    if policy.require_journal_bound is not True:
         raise PaperSleeveRiskBudgetDecisionError(
-            "paper_sleeve_risk_budget_decision:policy_require_journal_bound_invalid"
+            "paper_sleeve_risk_budget_decision:policy_require_journal_bound_must_be_true"
         )
     if not _is_non_empty_string(policy.policy_id) or not _is_non_empty_string(policy.sleeve_id):
         raise PaperSleeveRiskBudgetDecisionError("paper_sleeve_risk_budget_decision:policy_id_invalid")
@@ -509,6 +525,18 @@ def evaluate_paper_sleeve_risk_budget(
     total_budget, per_intent_cap, per_instrument_cap = _reprove_policy(policy)
     _reprove_state(state, policy.sleeve_id)
 
+    # Exact budget arithmetic: derive a precision wide enough that no product/sum is rounded (which could
+    # otherwise round an over-budget notional down to a cap and bypass it). Precision is input-derived only.
+    operands: list[Decimal] = [total_budget, per_intent_cap]
+    if per_instrument_cap is not None:
+        operands.append(per_instrument_cap)
+    for record in state.records:
+        for raw in (record.quantity, record.limit_price):
+            parsed = _parse_decimal(raw) if isinstance(raw, str) else None
+            if parsed is not None:
+                operands.append(parsed)
+    precision = _budget_arithmetic_precision(tuple(operands))
+
     zero = Decimal(0)
     total_reserved = zero
     total_requested = zero
@@ -519,28 +547,34 @@ def evaluate_paper_sleeve_risk_budget(
     insufficient_count = 0
     all_blockers: list[str] = []
 
-    for record in state.records:
-        status, requested, reserved, blockers = _classify_record(
-            record,
-            total_budget=total_budget,
-            per_intent_cap=per_intent_cap,
-            per_instrument_cap=per_instrument_cap,
-            total_reserved=total_reserved,
-            instrument_reserved=instrument_reserved,
-        )
-        if status is PaperSleeveRiskBudgetRecordStatus.ELIGIBLE:
-            total_reserved += reserved
-            instrument_reserved[record.instrument_id] = instrument_reserved.get(record.instrument_id, zero) + reserved
-            eligible_count += 1
-        elif status is PaperSleeveRiskBudgetRecordStatus.INSUFFICIENT_EVIDENCE:
-            insufficient_count += 1
-        else:
-            blocked_count += 1
-        total_requested += requested
-        all_blockers.extend(blockers)
-        record_decisions.append(
-            _finalize_record_decision(record, status=status, requested=requested, reserved=reserved, blockers=blockers)
-        )
+    with localcontext() as ctx:
+        ctx.prec = precision
+        for record in state.records:
+            status, requested, reserved, blockers = _classify_record(
+                record,
+                total_budget=total_budget,
+                per_intent_cap=per_intent_cap,
+                per_instrument_cap=per_instrument_cap,
+                total_reserved=total_reserved,
+                instrument_reserved=instrument_reserved,
+            )
+            if status is PaperSleeveRiskBudgetRecordStatus.ELIGIBLE:
+                total_reserved += reserved
+                instrument_reserved[record.instrument_id] = (
+                    instrument_reserved.get(record.instrument_id, zero) + reserved
+                )
+                eligible_count += 1
+            elif status is PaperSleeveRiskBudgetRecordStatus.INSUFFICIENT_EVIDENCE:
+                insufficient_count += 1
+            else:
+                blocked_count += 1
+            total_requested += requested
+            all_blockers.extend(blockers)
+            record_decisions.append(
+                _finalize_record_decision(
+                    record, status=status, requested=requested, reserved=reserved, blockers=blockers
+                )
+            )
 
     decision_blockers = _sorted_unique(tuple(all_blockers))
     record_decisions_tuple = tuple(record_decisions)

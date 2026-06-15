@@ -512,3 +512,44 @@ def test_original_state_unchanged() -> None:
     assert state.state_digest == before_digest
     assert state.records is before_records
     assert state.record_count == 2
+
+
+# 31 (review P1). a high-precision notional whose exact product exceeds the cap must not round down to
+# the cap and slip through ELIGIBLE; the exact product is preserved and the record is BLOCKED.
+def test_high_precision_product_not_rounded_under_cap() -> None:
+    quantity = "10000000000000000000000000004"  # 29 significant digits (> default 28-digit context)
+    state = _apply(_state(), _tick(quantity=quantity, limit_price="1"), correlation_id="corr:apply", bind=True)
+    decision = evaluate_paper_sleeve_risk_budget(
+        state,
+        _policy(total_budget="100000000000000000000000000000", per_intent_budget_cap="10000000000000000000000000000"),
+        correlation_id="corr:d",
+    )
+    rd = decision.record_decisions[0]
+    assert rd.requested_budget == quantity  # exact product preserved (no context rounding)
+    assert rd.status is PaperSleeveRiskBudgetRecordStatus.BLOCKED
+    assert "per_intent_budget_cap_exceeded" in rd.blockers
+    assert rd.reserved_budget == "0"
+    assert decision.total_reserved_budget == "0"
+
+
+# 32 (review P2). require_journal_bound must be exactly True; a non-True value fails closed at build and a
+# resealed policy attesting False is rejected at re-proof (the flag can attest, never loosen, binding).
+@pytest.mark.parametrize("bad", [False, "yes", 1, None])
+def test_require_journal_bound_must_be_true_at_build(bad: object) -> None:
+    with pytest.raises(PaperSleeveRiskBudgetDecisionError) as exc:
+        build_paper_sleeve_risk_budget_policy(
+            policy_id="policy-1",
+            sleeve_id="sleeve-1",
+            total_budget="1000",
+            per_intent_budget_cap="500",
+            require_journal_bound=bad,
+        )
+    assert "policy_require_journal_bound_must_be_true" in str(exc.value)
+
+
+def test_require_journal_bound_false_rejected_at_reprove() -> None:
+    forged = replace(_policy(), require_journal_bound=False)
+    forged = replace(forged, policy_digest=paper_sleeve_risk_budget_policy_digest(forged))
+    with pytest.raises(PaperSleeveRiskBudgetDecisionError) as exc:
+        evaluate_paper_sleeve_risk_budget(_state(), forged, correlation_id="corr:d")
+    assert "policy_require_journal_bound_must_be_true" in str(exc.value)
