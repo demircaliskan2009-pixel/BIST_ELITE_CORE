@@ -195,6 +195,16 @@ def test_journal_payload_digest_mismatch_rejected() -> None:
     assert "journal_payload_digest_mismatch" in str(exc.value)
 
 
+# 6b (review P1). a forged journal entry self-digest is rejected before binding, even when type /
+# correlation / payload / payload_digest are all intact (digest-boundary / audit-provenance contract).
+def test_journal_entry_digest_mismatch_rejected() -> None:
+    entry, decision = _journaled()
+    forged_entry = replace(entry, entry_digest="0" * 64)
+    with pytest.raises(PaperSleevePromotionCandidateError) as exc:
+        build_paper_sleeve_promotion_candidate(forged_entry, decision, correlation_id="corr:journal-dec")
+    assert "journal_entry_digest_mismatch" in str(exc.value)
+
+
 # 7. decision digest mismatch rejected.
 def test_decision_digest_mismatch_rejected() -> None:
     entry, decision = _journaled()

@@ -40,7 +40,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
-from crypto_core.audit.evidence_journal import EvidenceArtifactType, EvidenceJournalEntry
+from crypto_core.audit.evidence_journal import (
+    EvidenceArtifactType,
+    EvidenceJournalEntry,
+    evidence_journal_entry_digest,
+)
 from crypto_core.validation.paper_sleeve_risk_budget_decision import (
     PaperSleeveRiskBudgetDecision,
     PaperSleeveRiskBudgetRecordStatus,
@@ -240,6 +244,15 @@ def build_paper_sleeve_promotion_candidate(
         raise PaperSleevePromotionCandidateError("paper_sleeve_promotion_candidate:journal_payload_mismatch")
     if not isinstance(journal_entry.payload_digest, str) or journal_entry.payload_digest != expected_payload_digest:
         raise PaperSleevePromotionCandidateError("paper_sleeve_promotion_candidate:journal_payload_digest_mismatch")
+    # Re-prove the entry's own self-digest via the public journal serializer (digest-boundary rule): a caller
+    # can forge ``entry_digest`` while leaving type/correlation/payload/payload_digest intact, and the candidate
+    # carries ``journal_entry_digest`` as a provenance anchor, so a mismatch must fail closed before binding it.
+    try:
+        expected_entry_digest = evidence_journal_entry_digest(journal_entry)
+    except Exception as exc:
+        raise PaperSleevePromotionCandidateError("paper_sleeve_promotion_candidate:journal_entry_malformed") from exc
+    if not isinstance(journal_entry.entry_digest, str) or journal_entry.entry_digest != expected_entry_digest:
+        raise PaperSleevePromotionCandidateError("paper_sleeve_promotion_candidate:journal_entry_digest_mismatch")
 
     status = _promotion_status(eligible, blocked, insufficient)
     blockers = _sorted_unique(tuple(decision.blockers))
