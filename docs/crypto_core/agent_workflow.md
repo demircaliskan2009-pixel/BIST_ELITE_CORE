@@ -1,157 +1,208 @@
-# crypto_core Agent Workflow (canonical)
+# crypto_core Agent Workflow v4.1
 
-Single source of truth for the Claude + ChatGPT + Codex working loop on `crypto_core`.
-Future prompts may simply say: *"Follow repo agent workflow; this slice adds X; extra forbidden: Y."*
-Durable rails live here and in `AGENTS.md` — do not re-paste them into prompts.
+> Canonical, executable operating protocol for `crypto_core` inside `demircaliskan2009-pixel/BIST_ELITE_CORE`.
+> Companions (durable rails, not re-pasted into prompts): `AGENTS.md`, `CLAUDE.md` / `CLAUDE.local.md`,
+> and `docs/crypto_core/agent_prompts/token_efficiency_v2.md` (prompt lanes). On any apparent conflict the
+> **stricter safety rule wins**. This document contains **no secrets, credentials, API keys, exchange
+> credentials, or live-trading instructions**, and instructs no real order flow.
 
-## 1. Project scope
+## 1. Purpose
 
-- Active scope: `src/crypto_core`, `tests/crypto_core`, `scripts/crypto_core`, `docs/crypto_core` only.
-- BIST is historical context only; no BIST leakage into crypto implementation.
-- Standard: paper-first, deterministic, fail-closed, audit-first, derivatives-first,
-  governance-first, risk-bounded.
-- Current evidence chain (validated end-to-end, merged through PR #246):
-  `SourcePacket -> StrategyValidationBundle -> BacktestAdmissionDecision -> BacktestReplayBridge
-  -> ReplayEvidenceManifest -> PaperReplayIntake -> PaperReplayRunPlan -> PaperReplayResultReport`
+Persist one command-level, auditable workflow so every Claude / Codex / ChatGPT turn does the **maximum
+safe bounded work per prompt** while preserving the crypto_core standard: **paper-first, deterministic,
+fail-closed, audit-first, derivatives-first, governance-first, risk-bounded**. Active scope is
+`src/crypto_core`, `tests/crypto_core`, `scripts/crypto_core`, `docs/crypto_core` only. BIST is historical
+context — never implemented here.
 
-## 2. Working loop (proven on #244/#245/#246)
+## 2. Model Roles
 
-1. **Claude** — implements one bounded slice (usually 2 files: module + tests), validates locally,
-   opens one PR, stops. No merge, no CI polling unless the prompt asks.
-2. **ChatGPT** — audits live GitHub state: head SHA, files, checks, reviews, threads, open-PR rule.
-3. **Codex** — repairs real blockers, validates, pushes, polls CI/reviews/threads to terminal,
-   and merges **only with explicit per-PR user authorization**; then postverifies main.
-
-Rules: no direct push to `main`; one open PR at a time; standard merge only; CI/CodeQL *pending*
-is never final — poll until terminal or merged/closed.
-
-## 3. Model routing
-
-| Lane | Use for |
+| Role | Responsibility |
 |---|---|
-| Claude Default/Opus | known-pattern implementation; 1–3 file validation contracts; tests/docs/setup patches; PR creation |
-| Fable High | scarce window for architecture, high-risk safety semantics, invariant audits, chain red-team, EvidenceStore/persistence/Deribit readiness design, and top-1 roadmap decisions |
-| Codex | default executor for merge/postverify, CI/thread polling, PR closeout, docs/setup edits, mechanical repair, validation reruns, compact execution, and local validation proof |
+| **Claude** (Opus 4.8 local agent) | Implementation / repair / closeout **executor**. Bounded patch, full local validation, PR open/update, CI poll to terminal, same-branch repair of valid in-scope P1/P2, standard merge **only on explicit per-PR authorization**, post-merge verify. |
+| **Codex** | **Adversarial P1/P2 reviewer** — hidden-bug hunting, digest/fail-closed/architecture challenge. Runs **asynchronously** in a separate step; never merges. |
+| **ChatGPT** | **Live GitHub controller** — verifies head/files/checks/threads/open-PR state, classifies, and issues the next implementation / repair / merge prompt. |
 
-Fable must not be used for pure polling, merge mechanics, full-log handling, broad repo scans, or
-routine closeout unless no viable alternative exists and the user explicitly authorizes that use.
+Strongest reasoning (Opus xhigh) is reserved for contract/digest/fail-closed/review-blocker work;
+status/polling/mechanical steps use the cheapest sufficient lane.
 
-### Fable architecture lane
+## 3. Hard Rules
 
-Fable is a scarce strategic reasoning window, not an executor. Use it only after Codex prepares a
-compact evidence pack. The pack should prove current state and include exact files, chain summary,
-digest boundaries, READY non-meanings, carried digests, human approval fields, paper-only flags,
-forbidden scope patterns, known coverage, unknowns, and focused questions. Fable should not broad-scan
-the repo.
+- crypto_core only; **no BIST implementation leakage** (BIST is historical context).
+- **One open PR at a time.** Verify live (`gh pr list --state open`) at the start of every task.
+- **No direct push to `main`.** No force-push. No branch deletion unless the authorized command says so.
+- **Standard merge only** (no squash/rebase). **No merge without explicit human authorization naming the PR and the exact command.**
+- **CI `pending` / `queued` / `in_progress` / `no checks reported` is NOT_READY** — keep polling to terminal, or report a bounded-timeout snapshot. Never treat a startup window as green.
+- **Codex review is asynchronous** and is a **separate gate** — an implementation/repair turn ends at terminal CI + report; it does not block waiting for review.
+- Every repo-state claim must be **git/gh/test-verifiable** (never from memory). Unproven → mark `UNKNOWN`.
+- **Same-branch repair only** for valid in-scope P1/P2; stop on unsafe scope expansion.
+- No live/private API, real orders, order routing, scheduler, auto-loop, connector/readiness, runtime/orchestrator, or shadow/live unless **explicitly scoped and separately designed**.
+- No hidden IO/env/random/wall-clock/threading/subprocess in product code unless explicitly scoped.
+- No `gh pr review --approve` (self-approval) ever.
+- **Digest-boundary rule (recurring P1 class):** any consumer of a digest-carrying object must recompute the upstream digest via the **public serializer** (remove the self-digest field, canonical JSON `sort_keys=True, separators=(",",":"), ensure_ascii=True, allow_nan=False`, SHA-256) and **reject mismatch before READY/ADMITTED/ACCEPTED**. A matching id is never sufficient; a forged/non-serializable upstream must hit the `*_mismatch` path, never a raw `TypeError`. Tests must include a tampered-field case.
 
-Fable reports must include:
-`DECISIONS_MADE`, `ARTIFACTS`, `DELEGATIONS_ISSUED`, `INVARIANT_BREAKS_FOUND`, `FILES_READ_COUNT`,
-`CMDS_RUN_COUNT`, and `NOT_FABLE_WORK_REFUSED`.
+## 4. Standard PR Lifecycle
 
-Fable stops/refuses when the task is mechanical, requires merge/CI/polling/closeout, needs broad scans,
-needs more than 6 files to reason about, depends on external/current facts, or can be handled by
-Codex/Claude without scarce reasoning.
+1. ChatGPT selects one bounded slice → one Claude implementation prompt (pinned expected `main` HEAD, "open PRs: none").
+2. Claude executes the **Implementation Loop** (§5) → opens one PR → polls CI to terminal → reports. No merge.
+3. Codex performs adversarial P1/P2 review **asynchronously** (§8).
+4. ChatGPT verifies live GitHub state and issues a repair / merge / next prompt (§9).
+5. Claude runs the **Repair Loop** (§6) on the same branch if instructed.
+6. Claude runs the **Closeout/Merge Loop** (§7) **only** from an explicit closeout authorization.
+7. Claude runs **Post-Merge Verification** (§12) and stops. ChatGPT selects the next slice (§15).
 
-Roadmap note: after the P2 digest-boundary hardening sweeps, the next strategic Fable call is
-EvidenceStore design + red-team. Any EvidenceStore implementation requires explicit persistence-scope
-authorization.
+## 5. Claude Implementation Loop
 
-## 4. Digest-boundary rule (recurring P1 class — always apply)
-
-Any downstream consumer of a dataclass/result carrying a digest MUST:
-recompute the upstream digest via the **public serializer**, remove the digest field itself,
-canonical-JSON hash (`sort_keys=True`, `separators=(",", ":")`, `ensure_ascii=True`, SHA-256),
-and **reject mismatch before READY/ADMITTED/ACCEPTED**. A matching id alone is never sufficient;
-stale/forged/tampered upstream objects must fail closed. Tests must include a tampered-field case.
-
-P2 lesson: the re-proof boundary includes the serializer call, digest-field removal, and canonical hash
-inside one exception-safe block. A forged non-JSON-serializable upstream object must produce the existing
-`*_digest_mismatch` rejection path, never a `TypeError`. Assemble/carry boundaries must sanitize carried
-digest fields before hashing/exporting. When this reference pattern evolves, audit every existing
-downstream consumer in the same sweep rather than patching only the newest module.
-
-## 5. Safety guardrails
-
-Forbidden unless explicitly authorized and separately designed:
-live/private API; credentials; real orders; order routing; scheduler; auto-loop;
-connector-readiness changes; shadow/live execution; Deribit readiness transition;
-EvidenceStore/persistence unless that is the objective; backtest/replay engine unless that is the
-objective; BIST behavior.
-
-## 6. Validation policy
-
-- Full crypto_core tests: `scripts/crypto_core/run_full_tests_logged.ps1` only — never bare full pytest.
-- Targeted/area pytest through `scripts/crypto_core/run_logged_command.ps1` with unique
-  `cache_dir`/`--basetemp` under `C:\tmp`.
-- Run commands one at a time; no chained validation lines; no broad `git add .` (scoped paths only).
-- Ladder: ruff check --fix -> ruff format -> ruff format --check -> ruff check -> targeted tests ->
-  validation-area tests -> full helper.
-- Always end with `git diff --check` and `git status --short --branch`; prove changed files are
-  exactly the intended scope before commit.
-
-## 7. State-claim policy
-
-- Never claim repo/PR/main/CI state from memory. Every current-state claim requires terminal output,
-  GitHub (`gh`) output, or explicit fresh user-provided output.
-- If unverified, mark **UNKNOWN** or **UNPROVEN** — never guess.
-- Stale "stacked all open" summaries are not accepted; verify open PRs live
-  (`gh pr list --state open`) at the start of every task.
-
-## 8. Claude Skills policy
-
-- Do not install third-party skill ZIPs. No MCP servers, Playwright, or browser automation unless
-  the current objective needs them and the user authorizes.
-- Repo-local skill convention exists for Codex only (`.codex/skills/<name>/SKILL.md`, plain markdown,
-  non-executable). The active Claude repo-local skills path is not established — for Claude, this
-  policy file is authoritative; do not create active Claude skill packages.
-- Future project-specific skill candidates (plain markdown only, on explicit request):
-  `crypto_core_product_slice`, `crypto_core_pr_closeout`, `crypto_core_architect_fable`.
-- Any skill must be non-executable markdown, must not bypass permissions, touch credentials,
-  call live APIs, or change trading/runtime state.
-
-## 9. Report templates (compact; no full logs — failure tails only)
-
-Every report includes `FILES_READ_COUNT` and `CMDS_RUN_COUNT`. Keep reports compact; never paste full
-logs unless the failure tail itself is required to prove a blocker.
-
-**Claude implementation handoff**
 ```
-RESULT / DECISION / FILES_CHANGED / API_ADDED / FAIL_CLOSED / VALIDATION (ruff + targeted N passed +
-area + full PYTEST_EXIT) / PR (number, head SHA, files) / FINAL_GIT_STATUS / FILES_READ_COUNT /
-CMDS_RUN_COUNT / NEXT_SAFE_ACTION
+# precheck on updated main — for base / SHA proof ONLY; main is never edited or committed on
+git fetch origin
+git switch main
+git pull --ff-only origin main
+git rev-parse HEAD                         # MUST equal the prompt's expected SHA
+git status --short --branch                # MUST be clean + in sync
+gh pr list --repo demircaliskan2009-pixel/BIST_ELITE_CORE --state open --json number,title,headRefName,baseRefName,url   # MUST be []
+
+# create + switch to a topic branch BEFORE any patch/commit/push (never edit/commit on main)
+git switch -c <topic-branch>               # e.g. product/<feature>-pr1 or docs/<topic>
+git status --short --branch                # confirm: on the topic branch, clean
+# patch only after this point
 ```
 
-**Codex repair/closeout**
+**Branch invariant (implementation mode — always holds):**
+- `main` is checked out **only** for precheck / base-SHA proof — never edited, never committed on.
+- Claude **creates and switches to a topic branch** (`git switch -c <topic-branch>`) before the first edit.
+- **All commits and pushes happen on the topic branch**; never `git commit` on `main`, never push to `origin/main`.
+- The PR is opened **from the topic branch into `main`** (`gh pr create --base main --head <topic-branch>`).
+
+Then (all on the **topic branch**): bounded read (named files only, no broad scan) → design → smallest
+additive patch (enforce allowed-files + max-changed-files) → self-audit (scope / digest re-proof /
+provenance / strict-Decimal / fail-closed / no hidden IO / paper-safety triple) → targeted tests →
+relevant suite → **full helper after meaningful changes** → `git diff --check` → scoped `git add <paths>` →
+commit (on the topic branch) → push (the topic branch) → `gh pr create --base main --head <topic-branch>` →
+**poll CI to terminal** (§ CI rule in §3) → inspect threads that exist (§8) → report (§10). **No merge.**
+
+## 6. Claude Repair Loop
+
+- Precheck first (branch + `HEAD == expected SHA` + clean tree + exactly one open PR + changed files ⊆ scope).
+- Pin PR number and expected head; repair **only the named blockers**, **same branch only**, bounded to named files.
+- **Test-only by default**; touch production only if a **new failing test proves a real defect**, and only inside the named module. If test-only, prove `git diff <prev> HEAD -- src/` is **empty**.
+- Re-validate fully (targeted → relevant suite → full helper `PYTEST_EXIT=0` → `git diff --check`) → scoped add → commit → push same branch → **re-poll CI to terminal** → report. **No merge.**
+
+## 7. Claude Closeout / Merge Loop
+
+Run **only** from an explicit closeout prompt that names the PR and the exact authorized command.
+
+- Re-prove freshly (no memory): `HEAD == authorized SHA`; `state == OPEN`; `mergeable == MERGEABLE`;
+  `mergeStateStatus == CLEAN`; changed files == expected set; CI terminal green/skip; exactly one open PR;
+  zero unresolved valid review threads.
+- Resolve **only** review threads explicitly named in the closeout prompt, and **only after** proving the
+  fix exists in source at the current HEAD (line-cited). Never self-resolve otherwise.
+- Merge with the exact authorized command (standard `--merge`, `--delete-branch=false`).
+- **On 502/timeout/empty output: do NOT blind-retry.** Verify first:
+  `gh pr view <#> --json state,mergedAt,mergeCommit,mergedBy,headRefOid` and `git rev-parse origin/main`.
+  If `MERGED` → continue to §12. Else report `MERGE_TRANSIENT_NOT_MERGED` and stop.
+- If the PR is **already MERGED** before the merge command (stale prompt) → no-op, verify main contains the merge commit, continue to §12.
+
+## 8. Codex Review Protocol
+
+- Codex runs **asynchronously** after a push; findings may not exist when Claude's turn ends. Claude inspects threads that exist at terminal CI and reports `0 threads (review may post later)` if none.
+- Inspect via GraphQL: `reviewThreads(first:n){ nodes{ id isResolved isOutdated path line comments } }` + `reviews`.
+- Codex emits the report in §10. ChatGPT relays valid findings (with thread IDs) as a dedicated Claude repair prompt; Claude does not wait in-turn for review.
+
+## 9. ChatGPT Controller Gate
+
+ChatGPT independently re-verifies live GitHub state (head SHA, files, checks `name=conclusion`, threads,
+open-PR rule) before any verdict, and issues exactly one next prompt. Merge authorization must name the PR
+and the exact standard-merge command. ChatGPT emits the verdict format in §10.
+
+## 10. Required Report Formats
+
+**Claude (every task) — fixed fields, all repo claims git/gh/test-verifiable:**
 ```
-BLOCKER (source, claim, real?) / REPAIR (diff summary) / VALIDATION / CHECKS (name=conclusion,
-terminal) / THREADS (unresolved count; only proven-fixed automated resolved) / HEAD SHA /
-FILES_READ_COUNT / CMDS_RUN_COUNT / NEXT
+RESULT / PR / HEAD_SHA / BRANCH / FILES_CHANGED / COMMITS / VALIDATION / CHECKS /
+REVIEW_THREADS / SCOPE_CONFIRMATION / FINAL_GIT_STATUS / BLOCKERS / NEXT_SAFE_ACTION
+```
+The **last** element of every Claude task message is a single self-contained, copy-paste **ChatGPT handoff
+code block** (repo; PR number/state; branch/head SHA/base SHA; files changed; commits; checks; review
+threads; validation commands+results; open-PR state; exact `gh`/`git` verification commands). No full logs
+(failure tails only); no uncited state.
+
+**Codex (review):**
+```
+VERDICT / P1_BLOCKERS / P2_BLOCKERS / NON_BLOCKING_NOTES / MERGE_READINESS / REQUIRED_REPAIRS_IF_ANY
 ```
 
-**Merge/postverify (only after explicit per-PR authorization)**
+**ChatGPT (controller verdict):**
 ```
-MERGE (PR, merge SHA, standard) / POSTVERIFY (main pulled, ruff, full helper PYTEST_EXIT,
-smoke if applicable) / REMOTE_SETTLE (merge-commit checks terminal) / FINAL_GIT_STATUS /
-FILES_READ_COUNT / CMDS_RUN_COUNT
+VERDICT / PROOF / REASON / NEXT_PROMPT
 ```
 
-**Setup optimization**
-```
-RESULT / DECISION / FILES_CHANGED / SETUP_SUMMARY / TOKEN_REDUCTION_EFFECT / VALIDATION / PR /
-FILES_READ_COUNT / CMDS_RUN_COUNT / NEXT
-```
+## 11. Merge Gate
 
-**Fable architecture consultation**
-```
-DECISIONS_MADE / ARTIFACTS / DELEGATIONS_ISSUED / INVARIANT_BREAKS_FOUND / FILES_READ_COUNT /
-CMDS_RUN_COUNT / NOT_FABLE_WORK_REFUSED / NEXT
-```
+Merge only if **all** are true (each freshly proven):
+HEAD == authorized SHA · PR `state == OPEN` · `headRefOid == authorized SHA` · changed files == expected
+set · exactly one open PR (this one) · CI checks terminal **green or accepted skip only** (no
+pending/queued/in_progress/no-checks) · zero unresolved valid review threads · working tree clean · any
+test-only repair proven to have no `src/` change · no forbidden-scope surface (§16) · no protected-contract
+weakening · explicit human authorization with PR + exact command. Any miss → stop with proof, do not merge.
 
-## 10. Token Efficiency V2 — named lanes (prompt-template layer)
+## 12. Post-Merge Verification (exact commands)
 
-Repeated procedure blocks (env/precheck, gate-module contract, validation ladder, PR ceremony,
-merge closeout, report format) are versioned as **named lanes** in
-`docs/crypto_core/agent_prompts/token_efficiency_v2.md`, with 20–60-line prompt templates, token
-hygiene rules (clear/compact discipline, no full logs, FILES_READ/CMDS_RUN counts), and model
-routing v2. Prompts reference lanes and supply only deltas. Lanes compress procedure text only —
-§4–§7 and `AGENTS.md` hard rails bind in every lane; on any apparent conflict the safety rule wins.
+```
+git switch main
+git pull --ff-only origin main
+git rev-parse HEAD                                                   # == merge commit SHA
+python -m ruff check  src/crypto_core tests/crypto_core scripts/crypto_core
+python -m ruff format --check src/crypto_core tests/crypto_core scripts/crypto_core
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/crypto_core/run_full_tests_logged.ps1   # require PYTEST_EXIT=0
+git diff --check
+git status --short --branch
+gh pr list --repo demircaliskan2009-pixel/BIST_ELITE_CORE --state open --json number,title,headRefName,baseRefName,url   # expect []
+```
+The full-suite log is UTF-16 and may not carry the `N passed` line; the authoritative success signal is
+**`PYTEST_EXIT=0`**. Full crypto_core tests run **only** via `run_full_tests_logged.ps1` (never bare full
+pytest); targeted runs via `scripts/crypto_core/run_logged_command.ps1`; commands one at a time; scoped
+`git add` only.
+
+## 13. Stop Conditions (hard — stop with proof, no mutation)
+
+Wrong repo · non-crypto_core scope · unexpected PR/head (HEAD ≠ expected SHA) · more than one open PR when
+creating a PR · dirty overlapping files not owned by the task · requested repair outside allowed files ·
+live/private/order/scheduler/connector/runtime/shadow/live leakage · hidden IO/env/random/subprocess not
+scoped · failing required validation / full helper · unresolved valid review thread at the merge gate ·
+pending CI at the merge gate · direct main push · force push · self-approval · merge without exact human
+authorization · external/current fact required (→ `DEEP_RESEARCH_REQUIRED`).
+
+## 14. Warning-Not-Stop Conditions (proceed, but note)
+
+Transient `gh`/API 502/timeout (verify state once, continue) · CI `no checks reported` immediately after
+push (startup window — keep polling) · `gh pr checks` non-zero exit while checks pending (not a failure) ·
+`mergeStateStatus: BLOCKED` solely from unresolved threads on an otherwise green PR (expected pre-merge) ·
+ruff auto-reformat of your own new files / `F401` (format-then-check, continue) · unrelated dirty files not
+owned by the task (do not stage/revert; report and scope around) · UTF-16 full-suite log (rely on
+`PYTEST_EXIT`).
+
+## 15. Next-Slice Selection Rule
+
+ChatGPT selects exactly one bounded slice that maximizes edge-to-money product value along the chain
+`StrategySpec → LBR → PIT/DataRequirement → DecisionLedger → EvidenceStore → BacktestAdmission → Replay →
+PaperSleeve → Promotion → Allocator → ExecutionSim`, with: one coherent theme · bounded named files ·
+independent-safe · testable · current repo/PR state proven · no hard-gate violation · paper-first (no
+live/order/scheduler stage). Prefer the smallest additive change that unlocks the next bridge; one open PR
+only.
+
+## 16. Forbidden Scope
+
+Forbidden unless explicitly authorized and separately designed: live/private API; credentials/secrets/API
+keys; real orders; order routing; scheduler; auto-loop; connector/readiness; runtime/orchestrator;
+shadow/live execution; fills; PnL; positions; venue/order-id surface; persistence/file/network/env IO added
+to product code; backtest/replay engine unless that is the objective; EvidenceStore/persistence unless that
+is the objective; **any BIST behavior**. This document and any future prompt must never include account
+tokens, credentials, exchange keys, private local machine configuration, or live-trading/real-order
+instructions.
+
+---
+
+*v4.1 (2026-06-15): rewrote the model-role model to the current three-role protocol — Claude =
+implementation/repair/closeout executor, Codex = asynchronous adversarial P1/P2 reviewer, ChatGPT = live
+GitHub controller. Preserved the durable digest-boundary rule, validation policy (`run_full_tests_logged.ps1`),
+and state-claim policy. Companion prompt lanes remain in `docs/crypto_core/agent_prompts/token_efficiency_v2.md`.*
