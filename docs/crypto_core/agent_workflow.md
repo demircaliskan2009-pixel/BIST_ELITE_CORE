@@ -53,19 +53,31 @@ status/polling/mechanical steps use the cheapest sufficient lane.
 ## 5. Claude Implementation Loop
 
 ```
-# precheck (read-only)
+# precheck on updated main — for base / SHA proof ONLY; main is never edited or committed on
 git fetch origin
 git switch main
 git pull --ff-only origin main
 git rev-parse HEAD                         # MUST equal the prompt's expected SHA
 git status --short --branch                # MUST be clean + in sync
 gh pr list --repo demircaliskan2009-pixel/BIST_ELITE_CORE --state open --json number,title,headRefName,baseRefName,url   # MUST be []
+
+# create + switch to a topic branch BEFORE any patch/commit/push (never edit/commit on main)
+git switch -c <topic-branch>               # e.g. product/<feature>-pr1 or docs/<topic>
+git status --short --branch                # confirm: on the topic branch, clean
+# patch only after this point
 ```
 
-Then: bounded read (named files only, no broad scan) → design → smallest additive patch (enforce
-allowed-files + max-changed-files) → self-audit (scope / digest re-proof / provenance / strict-Decimal /
-fail-closed / no hidden IO / paper-safety triple) → targeted tests → relevant suite → **full helper after
-meaningful changes** → `git diff --check` → scoped `git add <paths>` → commit → push → `gh pr create` →
+**Branch invariant (implementation mode — always holds):**
+- `main` is checked out **only** for precheck / base-SHA proof — never edited, never committed on.
+- Claude **creates and switches to a topic branch** (`git switch -c <topic-branch>`) before the first edit.
+- **All commits and pushes happen on the topic branch**; never `git commit` on `main`, never push to `origin/main`.
+- The PR is opened **from the topic branch into `main`** (`gh pr create --base main --head <topic-branch>`).
+
+Then (all on the **topic branch**): bounded read (named files only, no broad scan) → design → smallest
+additive patch (enforce allowed-files + max-changed-files) → self-audit (scope / digest re-proof /
+provenance / strict-Decimal / fail-closed / no hidden IO / paper-safety triple) → targeted tests →
+relevant suite → **full helper after meaningful changes** → `git diff --check` → scoped `git add <paths>` →
+commit (on the topic branch) → push (the topic branch) → `gh pr create --base main --head <topic-branch>` →
 **poll CI to terminal** (§ CI rule in §3) → inspect threads that exist (§8) → report (§10). **No merge.**
 
 ## 6. Claude Repair Loop
