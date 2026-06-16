@@ -119,7 +119,11 @@ def _insufficient_state():
 
 
 def _journaled(*, state=None, policy=None, decision_corr: str = "corr:dec", journal_corr: str = _JOURNAL_CORR):
-    """Journal a risk-budget decision; return (decision_journal_entry, decision)."""
+    """Journal a risk-budget decision into a fresh journal; return (journal, decision_journal_entry, decision).
+
+    The returned journal already holds the PAPER_SLEEVE_RISK_BUDGET_DECISION entry at seq 0 so the promotion
+    candidate can be appended into the *same* evidence chain (the bridge requires same-chain anchoring).
+    """
     state = state if state is not None else _eligible_state()
     policy = policy if policy is not None else _policy()
     decision = evaluate_paper_sleeve_risk_budget(state, policy, correlation_id=decision_corr)
@@ -127,7 +131,7 @@ def _journaled(*, state=None, policy=None, decision_corr: str = "corr:dec", jour
     entry = append_paper_sleeve_risk_budget_decision_to_evidence_journal(
         journal, decision, state=state, policy=policy, correlation_id=journal_corr
     )
-    return entry, decision
+    return journal, entry, decision
 
 
 def _candidate(entry, decision, *, correlation_id: str = _JOURNAL_CORR, metadata=None):
@@ -150,10 +154,9 @@ def test_valid_candidate_appends_under_artifact_type() -> None:
         EvidenceArtifactType("PAPER_SLEEVE_PROMOTION_CANDIDATE")
         is EvidenceArtifactType.PAPER_SLEEVE_PROMOTION_CANDIDATE
     )
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
     assert candidate.status is PaperSleevePromotionCandidateStatus.ELIGIBLE
-    journal = EvidenceJournal()
     appended = _append(journal, candidate, entry, decision)
     assert isinstance(appended, EvidenceJournalEntry)
     assert appended.entry_type is EvidenceArtifactType.PAPER_SLEEVE_PROMOTION_CANDIDATE
@@ -161,15 +164,16 @@ def test_valid_candidate_appends_under_artifact_type() -> None:
     assert appended.payload["real_orders_enabled"] is False
     assert appended.payload["real_money_enabled"] is False
     assert appended.payload["paper_only"] is True
-    assert journal.entry_count == 1
+    # decision entry (seq 0) + candidate entry (seq 1) live in the same chain.
+    assert journal.entry_count == 2
+    assert appended.prev_entry_digest == entry.entry_digest
     assert journal.verify_chain().accepted is True
 
 
 # 2. journaled payload equals paper_sleeve_promotion_candidate_to_dict(candidate).
 def test_appended_payload_equals_canonical_to_dict() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
-    journal = EvidenceJournal()
     appended = _append(journal, candidate, entry, decision)
     assert appended.payload == paper_sleeve_promotion_candidate_to_dict(candidate)
     assert appended.payload["candidate_digest"] == candidate.candidate_digest
@@ -179,9 +183,8 @@ def test_appended_payload_equals_canonical_to_dict() -> None:
 
 # 3. entry payload_digest / entry_digest are journal-computed 64-hex.
 def test_entry_payload_digest_is_journal_hex64() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
-    journal = EvidenceJournal()
     appended = _append(journal, candidate, entry, decision)
     assert _is_hex64(appended.payload_digest)
     assert _is_hex64(appended.entry_digest)
@@ -189,17 +192,16 @@ def test_entry_payload_digest_is_journal_hex64() -> None:
 
 # 3b. export/import round-trip accepts the additive PAPER_SLEEVE_PROMOTION_CANDIDATE artifact type.
 def test_serialization_round_trip_accepts_artifact_type() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
-    journal = EvidenceJournal()
     _append(journal, candidate, entry, decision)
     data = evidence_journal_to_dict(journal)
     loaded = evidence_journal_from_dict(
         data, expected_entry_count=journal.entry_count, expected_head_digest=journal.head_digest
     )
-    assert loaded.entry_count == 1
+    assert loaded.entry_count == 2
     assert loaded.verify_chain().accepted is True
-    assert loaded.snapshot()[0].entry_type is EvidenceArtifactType.PAPER_SLEEVE_PROMOTION_CANDIDATE
+    assert loaded.snapshot()[1].entry_type is EvidenceArtifactType.PAPER_SLEEVE_PROMOTION_CANDIDATE
 
 
 # 3c. blocked / insufficient candidates also journal (status flows verbatim).
@@ -211,18 +213,17 @@ def test_serialization_round_trip_accepts_artifact_type() -> None:
     ],
 )
 def test_blocked_and_insufficient_candidates_journal(state, status) -> None:
-    entry, decision = _journaled(state=state)
+    journal, entry, decision = _journaled(state=state)
     candidate = _candidate(entry, decision)
     assert candidate.status is status
-    journal = EvidenceJournal()
     appended = _append(journal, candidate, entry, decision)
     assert appended.payload["status"] == status.value
-    assert journal.entry_count == 1
+    assert journal.entry_count == 2
 
 
 # 4. wrong journal type rejected.
 def test_wrong_journal_type_rejected() -> None:
-    entry, decision = _journaled()
+    _journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
     with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError) as exc:
         append_paper_sleeve_promotion_candidate_to_evidence_journal(
@@ -237,8 +238,7 @@ def test_wrong_journal_type_rejected() -> None:
 
 # 5. wrong candidate type rejected.
 def test_wrong_candidate_type_rejected() -> None:
-    entry, decision = _journaled()
-    journal = EvidenceJournal()
+    journal, entry, decision = _journaled()
     with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError) as exc:
         append_paper_sleeve_promotion_candidate_to_evidence_journal(
             journal,
@@ -248,14 +248,13 @@ def test_wrong_candidate_type_rejected() -> None:
             correlation_id=_AUDIT_CORR,
         )
     assert "candidate_malformed" in str(exc.value)
-    assert journal.entry_count == 0
+    assert journal.entry_count == 1
 
 
 # 6. wrong decision_journal_entry type rejected.
 def test_wrong_decision_journal_entry_type_rejected() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
-    journal = EvidenceJournal()
     with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError) as exc:
         append_paper_sleeve_promotion_candidate_to_evidence_journal(
             journal,
@@ -265,14 +264,13 @@ def test_wrong_decision_journal_entry_type_rejected() -> None:
             correlation_id=_AUDIT_CORR,
         )
     assert "decision_journal_entry_malformed" in str(exc.value)
-    assert journal.entry_count == 0
+    assert journal.entry_count == 1
 
 
 # 7. wrong decision type rejected.
 def test_wrong_decision_type_rejected() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
-    journal = EvidenceJournal()
     with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError) as exc:
         append_paper_sleeve_promotion_candidate_to_evidence_journal(
             journal,
@@ -282,7 +280,7 @@ def test_wrong_decision_type_rejected() -> None:
             correlation_id=_AUDIT_CORR,
         )
     assert "decision_malformed" in str(exc.value)
-    assert journal.entry_count == 0
+    assert journal.entry_count == 1
 
 
 # 7b. unsafe candidate paper-safety triple rejected before append.
@@ -295,58 +293,54 @@ def test_wrong_decision_type_rejected() -> None:
     ],
 )
 def test_unsafe_candidate_rejected(override: dict[str, bool], reason: str) -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
     tampered = _reseal_candidate(replace(candidate, **override))
-    journal = EvidenceJournal()
     with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError) as exc:
         _append(journal, tampered, entry, decision)
     assert reason in str(exc.value)
-    assert journal.entry_count == 0
+    assert journal.entry_count == 1
 
 
 # 8. forged candidate_digest rejected (self-digest re-proof).
 def test_forged_candidate_digest_rejected() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
     forged = replace(candidate, candidate_digest=_BAD_DIGEST)
-    journal = EvidenceJournal()
     with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError) as exc:
         _append(journal, forged, entry, decision)
     assert "candidate_digest_mismatch" in str(exc.value)
-    assert journal.entry_count == 0
+    assert journal.entry_count == 1
 
 
 # 9. stale/resealed candidate (self-consistent but not what the journaled decision yields) rejected by rebuild.
 def test_resealed_candidate_rejected_by_rebuild() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
     assert candidate.status is PaperSleevePromotionCandidateStatus.ELIGIBLE
     tampered = _reseal_candidate(replace(candidate, status=PaperSleevePromotionCandidateStatus.BLOCKED))
-    journal = EvidenceJournal()
     with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError) as exc:
         _append(journal, tampered, entry, decision)
     assert "candidate_not_reproducible" in str(exc.value)
-    assert journal.entry_count == 0
+    assert journal.entry_count == 1
 
 
 # 10. forged decision_journal_entry.entry_digest rejected through rebuild (coordinated forge bypasses the
 # explicit anchor check, but the builder's own entry self-digest re-proof still rejects it).
 def test_forged_entry_digest_rejected_through_rebuild() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
     forged_entry = replace(entry, entry_digest=_BAD_DIGEST)
     forged_candidate = _reseal_candidate(replace(candidate, journal_entry_digest=_BAD_DIGEST))
-    journal = EvidenceJournal()
     with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError) as exc:
         _append(journal, forged_candidate, forged_entry, decision)
     assert "candidate_not_reproducible" in str(exc.value)
-    assert journal.entry_count == 0
+    assert journal.entry_count == 1
 
 
 # 11. decision_journal_entry payload mismatch rejected through rebuild.
 def test_entry_payload_mismatch_rejected_through_rebuild() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
     other_state = _state()
     other_state = _apply(
@@ -354,77 +348,83 @@ def test_entry_payload_mismatch_rejected_through_rebuild() -> None:
     )
     other_decision = evaluate_paper_sleeve_risk_budget(other_state, _policy(), correlation_id="corr:dec")
     forged_entry = replace(entry, payload=paper_sleeve_risk_budget_decision_to_dict(other_decision))
-    journal = EvidenceJournal()
     with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError) as exc:
         _append(journal, candidate, forged_entry, decision)
     assert "candidate_not_reproducible" in str(exc.value)
-    assert journal.entry_count == 0
+    assert journal.entry_count == 1
 
 
 # 12. decision_journal_entry payload_digest mismatch rejected through rebuild (coordinated forge).
 def test_entry_payload_digest_mismatch_rejected_through_rebuild() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
     forged_entry = replace(entry, payload_digest=_BAD_DIGEST)
     forged_candidate = _reseal_candidate(replace(candidate, journal_payload_digest=_BAD_DIGEST))
-    journal = EvidenceJournal()
     with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError) as exc:
         _append(journal, forged_candidate, forged_entry, decision)
     assert "candidate_not_reproducible" in str(exc.value)
-    assert journal.entry_count == 0
+    assert journal.entry_count == 1
 
 
 # 13. candidate.journal_entry_digest mismatch (vs the supplied entry) rejected by the explicit anchor check.
 def test_candidate_journal_entry_digest_mismatch_rejected() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
     tampered = _reseal_candidate(replace(candidate, journal_entry_digest=_BAD_DIGEST))
-    journal = EvidenceJournal()
     with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError) as exc:
         _append(journal, tampered, entry, decision)
     assert "journal_entry_digest_mismatch" in str(exc.value)
-    assert journal.entry_count == 0
+    assert journal.entry_count == 1
 
 
 # 14. candidate.journal_payload_digest mismatch (vs the supplied entry) rejected by the explicit anchor check.
 def test_candidate_journal_payload_digest_mismatch_rejected() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
     tampered = _reseal_candidate(replace(candidate, journal_payload_digest=_BAD_DIGEST))
-    journal = EvidenceJournal()
     with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError) as exc:
         _append(journal, tampered, entry, decision)
     assert "journal_payload_digest_mismatch" in str(exc.value)
-    assert journal.entry_count == 0
+    assert journal.entry_count == 1
 
 
-# 15a. empty audit correlation_id rejected by the adapter before append.
-def test_empty_audit_correlation_id_rejected() -> None:
-    entry, decision = _journaled()
+# 15 (review P1). a decision entry that is not present in the target journal is rejected before append, so a
+# journaled candidate can never promise an anchor that lives outside this evidence chain.
+def test_decision_entry_from_other_journal_rejected() -> None:
+    _journal_a, entry, decision = _journaled()  # the decision entry lives in journal_a
     candidate = _candidate(entry, decision)
-    journal = EvidenceJournal()
+    other_journal = EvidenceJournal()  # does NOT contain the anchoring decision entry
+    with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError) as exc:
+        _append(other_journal, candidate, entry, decision)
+    assert "decision_entry_not_in_journal" in str(exc.value)
+    assert other_journal.entry_count == 0
+
+
+# 16a. empty audit correlation_id rejected by the adapter before append.
+def test_empty_audit_correlation_id_rejected() -> None:
+    journal, entry, decision = _journaled()
+    candidate = _candidate(entry, decision)
     with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError) as exc:
         _append(journal, candidate, entry, decision, correlation_id="   ")
     assert "correlation_id_invalid" in str(exc.value)
-    assert journal.entry_count == 0
+    assert journal.entry_count == 1
 
 
-# 15b. forbidden token in the audit correlation_id fails closed through the journal guard; journal unchanged.
+# 16b. forbidden token in the audit correlation_id fails closed through the journal guard; journal unchanged.
 def test_forbidden_audit_correlation_token_fails_closed() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
-    journal = EvidenceJournal()
     with pytest.raises(EvidenceJournalError):
         _append(journal, candidate, entry, decision, correlation_id="order_router_loop")
-    assert journal.entry_count == 0
+    assert journal.entry_count == 1
 
 
-# 16. journal unchanged on a rejection even when it already holds entries (duplicate replay + mid-journal).
+# 17. journal unchanged on a rejection even when the candidate already appended (duplicate replay + forged).
 def test_journal_unchanged_on_rejection_mid_journal() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
-    journal = EvidenceJournal()
     _append(journal, candidate, entry, decision, correlation_id="corr:audit-a")
+    assert journal.entry_count == 2
     head_before = journal.head_digest
     # identical candidate payload -> duplicate-payload replay fails through the journal guard.
     with pytest.raises(EvidenceJournalError):
@@ -433,34 +433,32 @@ def test_journal_unchanged_on_rejection_mid_journal() -> None:
     forged = replace(candidate, candidate_digest=_BAD_DIGEST)
     with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError):
         _append(journal, forged, entry, decision, correlation_id="corr:audit-c")
-    assert journal.entry_count == 1
+    assert journal.entry_count == 2
     assert journal.head_digest == head_before
 
 
-# 16b. safe market-data terms in candidate metadata remain allowed end-to-end.
+# 18. safe market-data terms in candidate metadata remain allowed end-to-end.
 @pytest.mark.parametrize("term", ["order_book", "order_flow", "limit_order_book"])
 def test_market_data_terms_allowed(term: str) -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision, metadata={"market_data_source": term})
-    journal = EvidenceJournal()
     appended = _append(journal, candidate, entry, decision)
     assert appended.entry_type is EvidenceArtifactType.PAPER_SLEEVE_PROMOTION_CANDIDATE
-    assert journal.entry_count == 1
+    assert journal.entry_count == 2
 
 
-# 16c. malformed candidate internals wrap into an adapter error, no raw AttributeError/TypeError leak.
+# 19. malformed candidate internals wrap into an adapter error, no raw AttributeError/TypeError leak.
 def test_malformed_candidate_internals_wrap_into_adapter_error() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
     broken = replace(candidate, metadata=123)  # to_dict iterates metadata -> raw TypeError if unguarded
-    journal = EvidenceJournal()
     with pytest.raises(PaperSleevePromotionCandidateJournalAdapterError) as exc:
         _append(journal, broken, entry, decision)
     assert "candidate_malformed" in str(exc.value)
-    assert journal.entry_count == 0
+    assert journal.entry_count == 1
 
 
-# 17a. module purity: no IO/clock/random/threading/network/service/connector/runtime imports.
+# 20a. module purity: no IO/clock/random/threading/network/service/connector/runtime imports.
 def test_module_purity_no_impure_imports() -> None:
     import crypto_core.audit.paper_sleeve_promotion_candidate_journal_adapter as mod
 
@@ -500,7 +498,7 @@ def test_module_purity_no_impure_imports() -> None:
     assert crypto_submodules.isdisjoint({"service", "connector", "runtime", "venue", "execution", "orchestrator"})
 
 
-# 17b. no live/order/scheduler/connector/execution implementation surface (exact public API only).
+# 20b. no live/order/scheduler/connector/execution implementation surface (exact public API only).
 def test_no_forbidden_implementation_surface() -> None:
     import crypto_core.audit.paper_sleeve_promotion_candidate_journal_adapter as mod
 
@@ -531,11 +529,10 @@ def test_no_forbidden_implementation_surface() -> None:
         assert all(token not in lowered for token in banned), name
 
 
-# 17c. no fill/PnL/execution/position/venue/order-id fields introduced in the journaled candidate payload.
+# 20c. no fill/PnL/execution/position/venue/order-id fields introduced in the journaled candidate payload.
 def test_no_execution_fields_in_payload() -> None:
-    entry, decision = _journaled()
+    journal, entry, decision = _journaled()
     candidate = _candidate(entry, decision)
-    journal = EvidenceJournal()
     appended = _append(journal, candidate, entry, decision)
     keys = set(appended.payload.keys())
     banned = {

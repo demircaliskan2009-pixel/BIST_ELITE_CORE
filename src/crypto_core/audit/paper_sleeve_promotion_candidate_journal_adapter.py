@@ -42,6 +42,7 @@ from crypto_core.audit.evidence_journal import (
     EvidenceArtifactType,
     EvidenceJournal,
     EvidenceJournalEntry,
+    EvidenceJournalError,
 )
 from crypto_core.validation.paper_sleeve_promotion_candidate import (
     PaperSleevePromotionCandidate,
@@ -179,6 +180,19 @@ def append_paper_sleeve_promotion_candidate_to_evidence_journal(
         raise PaperSleevePromotionCandidateJournalAdapterError(
             "paper_sleeve_promotion_candidate_journal_adapter:candidate_not_reproducible"
         )
+
+    # Same-chain provenance: the anchoring decision entry must actually live in the *target* journal being
+    # extended, so a downstream reader can resolve ``candidate.journal_entry_digest`` within this exact
+    # evidence chain. An entry from a different journal (or any free-standing self-consistent entry) is
+    # rejected before append. ``decision_journal_entry.entry_digest`` is the entry's own re-proven self-digest
+    # (verified by the re-build above); a successful collision-resistant lookup proves the genuine entry is
+    # present in this chain.
+    try:
+        journal.get_by_entry_digest(decision_journal_entry.entry_digest)
+    except EvidenceJournalError as exc:
+        raise PaperSleevePromotionCandidateJournalAdapterError(
+            "paper_sleeve_promotion_candidate_journal_adapter:decision_entry_not_in_journal"
+        ) from exc
 
     # Exactly one append after all prechecks pass; no caller payload_digest is trusted.
     return journal.append(
