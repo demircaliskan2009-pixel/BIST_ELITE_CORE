@@ -144,6 +144,23 @@ def _full_chain(*, state=None):
     return journal, decision_entry, decision, pce, candidate
 
 
+def _journal_with_decision(state=None):
+    """Journal only the risk-budget decision (seq 0); return (journal, decision_entry, decision, candidate).
+
+    The genuine candidate is built but NOT appended, so a forged variant can be raw-appended in its place to
+    exercise the candidate-vs-decision re-proof against a same-chain decision anchor.
+    """
+    state = state if state is not None else _eligible_state()
+    policy = _policy()
+    decision = evaluate_paper_sleeve_risk_budget(state, policy, correlation_id="corr:dec")
+    journal = EvidenceJournal()
+    decision_entry = append_paper_sleeve_risk_budget_decision_to_evidence_journal(
+        journal, decision, state=state, policy=policy, correlation_id=_DECISION_CORR
+    )
+    candidate = build_paper_sleeve_promotion_candidate(decision_entry, decision, correlation_id=_DECISION_CORR)
+    return journal, decision_entry, decision, candidate
+
+
 def _raw_append_candidate(journal, candidate, *, correlation_id: str = "corr:raw-cand") -> EvidenceJournalEntry:
     return journal.append(
         EvidenceArtifactType.PAPER_SLEEVE_PROMOTION_CANDIDATE,
@@ -396,6 +413,61 @@ def test_resealed_candidate_rejected_by_journal_anchoring() -> None:
     with pytest.raises(PaperSleevePromotionReadinessError) as exc:
         _build_readiness(journal, pce, tampered)
     assert "promotion_candidate_payload_mismatch" in str(exc.value)
+    assert journal.entry_count == 2
+
+
+# 18b (review P1). a forged candidate that anchors a BLOCKED decision but reseals itself ELIGIBLE (counts that
+# do NOT match the decision) is rejected — a raw-appended self-consistent candidate can never claim READY over
+# a decision whose journaled counts disagree.
+def test_forged_candidate_counts_vs_decision_rejected() -> None:
+    journal, _decision_entry, _decision, candidate = _journal_with_decision(_blocked_state())
+    assert candidate.status is PaperSleevePromotionCandidateStatus.BLOCKED
+    forged = _reseal_candidate(
+        replace(
+            candidate,
+            status=PaperSleevePromotionCandidateStatus.ELIGIBLE,
+            eligible_count=1,
+            blocked_count=0,
+            insufficient_count=0,
+        )
+    )
+    pce = _raw_append_candidate(journal, forged)
+    with pytest.raises(PaperSleevePromotionReadinessError) as exc:
+        _build_readiness(journal, pce, forged)
+    assert "candidate_decision_counts_mismatch" in str(exc.value)
+    assert journal.entry_count == 2
+
+
+# 18c (review P1). a forged candidate that keeps the BLOCKED decision's counts but reseals its status as
+# ELIGIBLE is rejected — status must be the verdict the candidate gate derives from the decision-bound counts.
+def test_forged_candidate_status_inconsistent_with_counts_rejected() -> None:
+    journal, _decision_entry, _decision, candidate = _journal_with_decision(_blocked_state())
+    forged = _reseal_candidate(replace(candidate, status=PaperSleevePromotionCandidateStatus.ELIGIBLE))
+    pce = _raw_append_candidate(journal, forged)
+    with pytest.raises(PaperSleevePromotionReadinessError) as exc:
+        _build_readiness(journal, pce, forged)
+    assert "candidate_status_inconsistent" in str(exc.value)
+    assert journal.entry_count == 2
+
+
+# 18d (review P1). a forged candidate whose decision_digest / identity / blockers disagree with the anchored
+# decision payload is rejected (the candidate must faithfully derive from the decision it points at).
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"decision_digest": _BAD_DIGEST}, "candidate_decision_digest_mismatch"),
+        ({"sleeve_id": "other-sleeve"}, "candidate_decision_identity_mismatch"),
+        ({"policy_id": "other-policy"}, "candidate_decision_identity_mismatch"),
+        ({"blockers": ("synthetic-blocker",)}, "candidate_decision_blockers_mismatch"),
+    ],
+)
+def test_forged_candidate_fields_vs_decision_rejected(override: dict[str, object], reason: str) -> None:
+    journal, _decision_entry, _decision, candidate = _journal_with_decision()
+    forged = _reseal_candidate(replace(candidate, **override))
+    pce = _raw_append_candidate(journal, forged)
+    with pytest.raises(PaperSleevePromotionReadinessError) as exc:
+        _build_readiness(journal, pce, forged)
+    assert reason in str(exc.value)
     assert journal.entry_count == 2
 
 

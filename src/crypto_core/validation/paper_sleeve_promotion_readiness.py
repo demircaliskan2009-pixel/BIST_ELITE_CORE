@@ -51,6 +51,7 @@ from crypto_core.audit.evidence_journal import (
 from crypto_core.validation.paper_sleeve_promotion_candidate import (
     PaperSleevePromotionCandidate,
     PaperSleevePromotionCandidateStatus,
+    _promotion_status,
     paper_sleeve_promotion_candidate_digest,
     paper_sleeve_promotion_candidate_to_dict,
 )
@@ -277,6 +278,40 @@ def build_paper_sleeve_promotion_readiness(
         raise PaperSleevePromotionReadinessError(
             "paper_sleeve_promotion_readiness:decision_journal_payload_digest_mismatch"
         )
+
+    # Re-prove the candidate's own derived fields against the anchored decision's journaled payload. A same-chain
+    # payload-digest match only proves the candidate *points at* this decision; it does not prove the candidate
+    # faithfully derived its identity/counts/blockers/status from it. A caller can use the raw
+    # ``EvidenceJournal.append`` to journal a self-consistent candidate that anchors a BLOCKED decision yet
+    # reseals itself as ELIGIBLE, so the candidate fields are cross-checked against the decision payload and the
+    # status is re-derived from the (now decision-bound) counts via the candidate gate's own rule before the
+    # readiness verdict is mapped.
+    decision_payload = decision_entry.payload
+    if not isinstance(decision_payload, Mapping):
+        raise PaperSleevePromotionReadinessError("paper_sleeve_promotion_readiness:decision_entry_malformed")
+    if candidate.decision_digest != decision_payload.get("decision_digest"):
+        raise PaperSleevePromotionReadinessError("paper_sleeve_promotion_readiness:candidate_decision_digest_mismatch")
+    if candidate.sleeve_id != decision_payload.get("sleeve_id") or candidate.policy_id != decision_payload.get(
+        "policy_id"
+    ):
+        raise PaperSleevePromotionReadinessError(
+            "paper_sleeve_promotion_readiness:candidate_decision_identity_mismatch"
+        )
+    if (
+        candidate.eligible_count != decision_payload.get("eligible_count")
+        or candidate.blocked_count != decision_payload.get("blocked_count")
+        or candidate.insufficient_count != decision_payload.get("insufficient_count")
+    ):
+        raise PaperSleevePromotionReadinessError("paper_sleeve_promotion_readiness:candidate_decision_counts_mismatch")
+    decision_blockers = decision_payload.get("blockers")
+    if not isinstance(decision_blockers, list) or candidate.blockers != _sorted_unique(tuple(decision_blockers)):
+        raise PaperSleevePromotionReadinessError(
+            "paper_sleeve_promotion_readiness:candidate_decision_blockers_mismatch"
+        )
+    if candidate.status is not _promotion_status(
+        candidate.eligible_count, candidate.blocked_count, candidate.insufficient_count
+    ):
+        raise PaperSleevePromotionReadinessError("paper_sleeve_promotion_readiness:candidate_status_inconsistent")
 
     status = _readiness_status(candidate.status)
     blockers = _sorted_unique(tuple(candidate.blockers))
