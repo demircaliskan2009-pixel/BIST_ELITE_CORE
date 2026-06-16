@@ -52,9 +52,11 @@ from crypto_core.audit.evidence_journal import (
     EvidenceJournalError,
     evidence_journal_entry_digest,
 )
+from crypto_core.validation.paper_sleeve_promotion_candidate import PaperSleevePromotionCandidateStatus
 from crypto_core.validation.paper_sleeve_promotion_readiness import (
     PaperSleevePromotionReadiness,
     PaperSleevePromotionReadinessStatus,
+    _readiness_status,
     paper_sleeve_promotion_readiness_digest,
     paper_sleeve_promotion_readiness_to_dict,
 )
@@ -180,14 +182,15 @@ def _draft_status(readiness_status: object) -> PaperAllocatorIntentDraftStatus:
 
 def _require_same_chain_anchor(
     journal: EvidenceJournal, entry_digest: str, expected_type: EvidenceArtifactType, *, missing: str, mismatch: str
-) -> None:
-    """Resolve ``entry_digest`` in ``journal`` and require ``expected_type``; fail closed otherwise."""
+) -> EvidenceJournalEntry:
+    """Resolve ``entry_digest`` in ``journal`` and require ``expected_type``; return it or fail closed."""
     try:
         anchor = journal.get_by_entry_digest(entry_digest)
     except EvidenceJournalError as exc:
         raise PaperAllocatorIntentDraftError(missing) from exc
     if anchor.entry_type is not expected_type:
         raise PaperAllocatorIntentDraftError(mismatch)
+    return anchor
 
 
 def build_paper_allocator_intent_draft(
@@ -276,20 +279,60 @@ def build_paper_allocator_intent_draft(
 
     # Same-chain anchoring (2): the readiness's recorded upstream anchors must ALSO resolve in the same journal
     # to the expected artifact types, so a downstream reader can resolve the full chain within THIS journal.
-    _require_same_chain_anchor(
+    candidate_anchor = _require_same_chain_anchor(
         journal,
         readiness.promotion_candidate_journal_entry_digest,
         EvidenceArtifactType.PAPER_SLEEVE_PROMOTION_CANDIDATE,
         missing="paper_allocator_intent_draft:promotion_candidate_anchor_not_in_journal",
         mismatch="paper_allocator_intent_draft:promotion_candidate_anchor_artifact_type_mismatch",
     )
-    _require_same_chain_anchor(
+    decision_anchor = _require_same_chain_anchor(
         journal,
         readiness.decision_journal_entry_digest,
         EvidenceArtifactType.PAPER_SLEEVE_RISK_BUDGET_DECISION,
         missing="paper_allocator_intent_draft:decision_anchor_not_in_journal",
         mismatch="paper_allocator_intent_draft:decision_anchor_artifact_type_mismatch",
     )
+
+    # Re-prove the readiness's recorded verdict/provenance fields back against the ACTUAL anchored entries. The
+    # anchors merely existing with the right artifact types is not enough: a readiness raw-appended via the public
+    # ``EvidenceJournal.append`` (bypassing the readiness adapter's rebuild) could point at a BLOCKED candidate
+    # entry yet reseal itself READY. So the candidate anchor payload is bound to the readiness's candidate-derived
+    # fields (payload digest, candidate_digest, identity, counts, blockers) and the readiness status is re-derived
+    # from the anchored candidate's own status via the readiness gate's rule before the draft verdict is mapped.
+    candidate_payload = candidate_anchor.payload
+    if not isinstance(candidate_payload, Mapping):
+        raise PaperAllocatorIntentDraftError("paper_allocator_intent_draft:promotion_candidate_anchor_malformed")
+    if candidate_anchor.payload_digest != readiness.promotion_candidate_payload_digest:
+        raise PaperAllocatorIntentDraftError(
+            "paper_allocator_intent_draft:promotion_candidate_anchor_payload_digest_mismatch"
+        )
+    if candidate_payload.get("candidate_digest") != readiness.candidate_digest:
+        raise PaperAllocatorIntentDraftError("paper_allocator_intent_draft:readiness_candidate_digest_mismatch")
+    if (
+        candidate_payload.get("sleeve_id") != readiness.sleeve_id
+        or candidate_payload.get("policy_id") != readiness.policy_id
+    ):
+        raise PaperAllocatorIntentDraftError("paper_allocator_intent_draft:readiness_identity_mismatch")
+    if (
+        candidate_payload.get("eligible_count") != readiness.eligible_count
+        or candidate_payload.get("blocked_count") != readiness.blocked_count
+        or candidate_payload.get("insufficient_count") != readiness.insufficient_count
+    ):
+        raise PaperAllocatorIntentDraftError("paper_allocator_intent_draft:readiness_counts_mismatch")
+    candidate_blockers = candidate_payload.get("blockers")
+    if not isinstance(candidate_blockers, list) or readiness.blockers != _sorted_unique(tuple(candidate_blockers)):
+        raise PaperAllocatorIntentDraftError("paper_allocator_intent_draft:readiness_blockers_mismatch")
+    try:
+        anchored_candidate_status = PaperSleevePromotionCandidateStatus(candidate_payload.get("status"))
+    except (ValueError, TypeError) as exc:
+        raise PaperAllocatorIntentDraftError(
+            "paper_allocator_intent_draft:promotion_candidate_anchor_malformed"
+        ) from exc
+    if readiness.status is not _readiness_status(anchored_candidate_status):
+        raise PaperAllocatorIntentDraftError("paper_allocator_intent_draft:readiness_status_inconsistent")
+    if decision_anchor.payload_digest != readiness.decision_journal_payload_digest:
+        raise PaperAllocatorIntentDraftError("paper_allocator_intent_draft:decision_anchor_payload_digest_mismatch")
 
     status = _draft_status(readiness.status)
     blockers = _sorted_unique(tuple(readiness.blockers))

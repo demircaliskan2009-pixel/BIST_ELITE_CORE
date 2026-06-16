@@ -378,6 +378,63 @@ def test_decision_anchor_wrong_artifact_type_rejected() -> None:
     assert journal.entry_count == 4
 
 
+# 17b (review P1). a forged readiness raw-appended via the public journal that keeps the BLOCKED candidate's
+# counts but reseals its status as READY is rejected — status must be the verdict derived from the ANCHORED
+# candidate, not the readiness's self-claim.
+def test_forged_readiness_status_over_blocked_candidate_rejected() -> None:
+    journal, _s, _p, _d, _de, _c, _pce, readiness = _to_candidate(_blocked_state())
+    assert readiness.status is PaperSleevePromotionReadinessStatus.BLOCKED
+    forged = _reseal_readiness(replace(readiness, status=PaperSleevePromotionReadinessStatus.READY))
+    pre = _raw_append_readiness(journal, forged)
+    with pytest.raises(PaperAllocatorIntentDraftError) as exc:
+        _build_draft(journal, pre, forged)
+    assert "readiness_status_inconsistent" in str(exc.value)
+    assert journal.entry_count == 3
+
+
+# 17c (review P1). a forged readiness that reseals READY with forged counts (not the anchored BLOCKED candidate's)
+# is rejected — counts must match the anchored candidate.
+def test_forged_readiness_counts_over_blocked_candidate_rejected() -> None:
+    journal, _s, _p, _d, _de, _c, _pce, readiness = _to_candidate(_blocked_state())
+    forged = _reseal_readiness(
+        replace(
+            readiness,
+            status=PaperSleevePromotionReadinessStatus.READY,
+            eligible_count=1,
+            blocked_count=0,
+            insufficient_count=0,
+        )
+    )
+    pre = _raw_append_readiness(journal, forged)
+    with pytest.raises(PaperAllocatorIntentDraftError) as exc:
+        _build_draft(journal, pre, forged)
+    assert "readiness_counts_mismatch" in str(exc.value)
+    assert journal.entry_count == 3
+
+
+# 17d (review P1). a forged readiness whose recorded provenance fields disagree with the anchored candidate /
+# decision payloads is rejected (digest-boundary: the readiness must faithfully derive from its anchors).
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"candidate_digest": _BAD_DIGEST}, "readiness_candidate_digest_mismatch"),
+        ({"promotion_candidate_payload_digest": _BAD_DIGEST}, "promotion_candidate_anchor_payload_digest_mismatch"),
+        ({"sleeve_id": "other-sleeve"}, "readiness_identity_mismatch"),
+        ({"policy_id": "other-policy"}, "readiness_identity_mismatch"),
+        ({"blockers": ("synthetic-blocker",)}, "readiness_blockers_mismatch"),
+        ({"decision_journal_payload_digest": _BAD_DIGEST}, "decision_anchor_payload_digest_mismatch"),
+    ],
+)
+def test_forged_readiness_fields_vs_anchors_rejected(override: dict[str, object], reason: str) -> None:
+    journal, _s, _p, _d, _de, _c, _pce, readiness = _to_candidate()
+    forged = _reseal_readiness(replace(readiness, **override))
+    pre = _raw_append_readiness(journal, forged)
+    with pytest.raises(PaperAllocatorIntentDraftError) as exc:
+        _build_draft(journal, pre, forged)
+    assert reason in str(exc.value)
+    assert journal.entry_count == 3
+
+
 # 18. wrong/empty/forbidden correlation_id or metadata rejected.
 def test_empty_correlation_id_rejected() -> None:
     c = _chain()
