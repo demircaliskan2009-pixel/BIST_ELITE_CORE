@@ -359,6 +359,21 @@ def test_symbol_mismatch_across_episodes_rejected() -> None:
         _session([btc, eth])
 
 
+def test_non_serializable_episode_routes_to_digest_mismatch() -> None:
+    # A forged episode with a non-JSON-serializable field cannot produce a recomputable canonical digest;
+    # per the digest-boundary rule this must hit the *_digest_mismatch path, not generic malformed.
+    forged = replace(_episode("1"), market_symbol=object())  # type: ignore[arg-type]
+    with pytest.raises(PaperSessionSequenceError, match="episode_digest_mismatch"):
+        _session([forged])
+
+
+def test_forged_episode_duplicate_metadata_keys_rejected() -> None:
+    # Sorted but duplicate-keyed metadata is forged provenance (the runner's Mapping path can't emit it).
+    forged = _forge_episode(_episode("1"), metadata=(("key", "a"), ("key", "b")))
+    with pytest.raises(PaperSessionSequenceError, match="episode_malformed"):
+        _session([forged])
+
+
 # --------------------------------------------------------------------------------------------------
 # Fail-closed: scope / metadata
 # --------------------------------------------------------------------------------------------------

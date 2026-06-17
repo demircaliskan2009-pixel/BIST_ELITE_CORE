@@ -166,6 +166,9 @@ def _is_metadata_tuple(metadata: object) -> bool:
             or not isinstance(pair[1], str)
         ):
             return False
+    keys = [pair[0] for pair in metadata]
+    if len(set(keys)) != len(keys):  # metadata is conceptually a mapping — duplicate keys are forged/ambiguous
+        return False
     return metadata == tuple(sorted(metadata))
 
 
@@ -331,7 +334,10 @@ def build_paper_session_sequence(
         try:
             expected_digest = paper_episode_run_result_digest(episode)
         except Exception as exc:  # noqa: BLE001 - re-raise as a typed error; BaseException not caught
-            raise PaperSessionSequenceError("paper_session_sequence:episode_malformed") from exc
+            # A non-serializable / forged episode cannot produce a recomputable canonical digest, so its
+            # stored digest cannot be proven equal — this is a digest-boundary rejection (mismatch), not a
+            # generic malformed shape, per the AGENTS.md digest-boundary rule.
+            raise PaperSessionSequenceError("paper_session_sequence:episode_digest_mismatch") from exc
         if not isinstance(episode.episode_run_digest, str) or episode.episode_run_digest != expected_digest:
             raise PaperSessionSequenceError("paper_session_sequence:episode_digest_mismatch")
         _reprove_episode(episode)
