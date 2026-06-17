@@ -469,7 +469,15 @@ def _capacity_structural_reasons(decision: PaperCapacityGateDecision) -> tuple[s
         malformed = True
     if not isinstance(decision.reason_codes, tuple) or decision.reason_codes != _sorted_unique(decision.reason_codes):
         malformed = True
-    if not _is_metadata_tuple(decision.metadata):
+    metadata_is_canonical = _is_metadata_tuple(decision.metadata)
+    if not metadata_is_canonical:
+        malformed = True
+    if _has_scope_violation(
+        decision.sleeve_id,
+        decision.policy_id,
+        decision.correlation_id,
+        *(_metadata_texts(decision.metadata) if metadata_is_canonical else ()),
+    ):
         malformed = True
     # ADMITTED must carry no reason codes; a forged "ADMITTED + reasons" decision is inconsistent.
     if (
