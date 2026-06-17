@@ -209,14 +209,14 @@ def _parse_decimal(value: object) -> Decimal | None:
 def _render_decimal(value: Decimal) -> str:
     """Render an exact ``Decimal`` as a canonical plain-decimal string.
 
-    Trailing zeros are removed via ``normalize`` so economically-identical amounts computed from
+    Trailing zeros are removed without ``normalize`` so economically-identical amounts computed from
     differently-scaled inputs render to the same canonical string (and the same digest); ``format(…,
-    "f")`` keeps it in plain fixed-point (never scientific). A normalized zero is pinned to ``"0"``.
+    "f")`` keeps it in plain fixed-point (never scientific), and signed zero is pinned to ``"0"``.
     """
-    normalized = value.normalize()
-    if normalized == 0:
-        normalized = Decimal(0)
-    return format(normalized, "f")
+    rendered = format(value, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return "0" if rendered in {"", "-0"} else rendered
 
 
 def _is_positive_decimal(value: object) -> bool:

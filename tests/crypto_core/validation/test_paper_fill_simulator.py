@@ -261,6 +261,22 @@ def test_limit_buy_marketable_fills() -> None:
     assert result.fill_price == "90.9"  # 90 * 1.01 <= 100
 
 
+def test_limit_buy_equality_marketable() -> None:
+    # fill_price == limit_price is marketable (reject only on strictly greater).
+    intent = _intent(intent_type=PaperOrderIntentType.LIMIT, side=PaperOrderSide.BUY, limit_price="100")
+    result = _simulate(intent, _snapshot(reference_price="100"), _policy(slippage_bps="0"))
+    assert result.status is PaperFillSimulationStatus.FILLED
+    assert result.fill_price == "100"
+
+
+def test_limit_sell_equality_marketable() -> None:
+    # fill_price == limit_price is marketable (reject only on strictly less).
+    intent = _intent(intent_type=PaperOrderIntentType.LIMIT, side=PaperOrderSide.SELL, limit_price="100")
+    result = _simulate(intent, _snapshot(reference_price="100"), _policy(slippage_bps="0"))
+    assert result.status is PaperFillSimulationStatus.FILLED
+    assert result.fill_price == "100"
+
+
 # --------------------------------------------------------------------------------------------------
 # Liquidity / partial / min-fill / notional cap
 # --------------------------------------------------------------------------------------------------
@@ -302,6 +318,19 @@ def test_gross_notional_over_request_rejected() -> None:
     result = _simulate(intent, _snapshot(reference_price="50"), _policy())  # 10 * 50 = 500 > 100
     assert result.status is PaperFillSimulationStatus.REJECTED
     assert "gross_notional_exceeds_request" in result.reason_codes
+    assert result.filled_units == "0"
+    assert result.gross_notional == "0"
+
+
+def test_high_precision_reference_price_not_rounded_down_past_notional_cap() -> None:
+    intent = _intent(notional="1", units="1", intent_type=PaperOrderIntentType.MARKET, limit_price=None)
+    snapshot = _snapshot(reference_price="1.000000000000000000000000000000000000001")
+
+    result = _simulate(intent, snapshot, _policy())
+
+    assert snapshot.reference_price == "1.000000000000000000000000000000000000001"
+    assert result.status is PaperFillSimulationStatus.REJECTED
+    assert result.reason_codes == ("gross_notional_exceeds_request",)
     assert result.filled_units == "0"
     assert result.gross_notional == "0"
 
@@ -444,6 +473,14 @@ def test_build_policy_rejects_negative_bps(bad: str) -> None:
 def test_build_policy_rejects_non_bool_partial() -> None:
     with pytest.raises(PaperFillSimulationError, match="allow_partial_fill_not_bool"):
         _policy(allow_partial_fill="yes")
+
+
+def test_policy_high_precision_bps_are_not_context_rounded() -> None:
+    high_precision = "1.000000000000000000000000000000000000001"
+    policy = _policy(slippage_bps=high_precision, fee_rate_bps=high_precision)
+
+    assert policy.slippage_bps == high_precision
+    assert policy.fee_rate_bps == high_precision
 
 
 def test_build_policy_rejects_forbidden_token() -> None:
