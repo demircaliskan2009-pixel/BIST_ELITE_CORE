@@ -48,14 +48,20 @@ from crypto_core.validation.paper_fill_simulator import (
     PaperFillSimulationStatus,
     paper_fill_simulation_result_digest,
 )
-from crypto_core.validation.paper_order_intent_admission import PaperOrderSide
+from crypto_core.validation.paper_order_intent_admission import PaperOrderIntentType, PaperOrderSide
 
 _STATE_SCHEMA_VERSION = "paper-position-state.v1"
 _TRANSITION_SCHEMA_VERSION = "paper-position-transition.v1"
 _EXPECTED_FILL_SCHEMA_VERSION = "paper-fill-simulation-result.v1"
 
 # Fixed precision for the weighted-average division (a weighted mean is a rational with no exact finite
-# decimal form). Fixed (not input-derived) so the rounded result is deterministic per input values.
+# decimal form). This is the DELIBERATE, declared deterministic paper average-entry precision standard
+# for this generic simulator layer: a same-side add divides numerator/|q1| at exactly this many
+# significant digits with ROUND_HALF_EVEN. It is fixed (not input-derived) so the rounded result is a
+# pure function of the input *values* (representation-independent) and stable across callers/runs; a
+# result needing more than this many significant digits is rounded HALF_EVEN here, never silently
+# elsewhere. The open / reduce / close / cross paths stay exact (no division). Regression-tested so
+# future PnL/report consumers cannot be surprised by where precision loss occurs.
 _WEIGHTED_AVERAGE_PRECISION = 50
 
 # Strict decimal-string grammar: optional sign, no leading zeros (except a bare ``0``), optional
@@ -77,7 +83,12 @@ _SAFE_MARKET_DATA_TERMS = ("limit_order_book", "order_book", "order_flow")
 
 _REASON_FILL_NOT_APPLIED = "fill_not_applied"
 
+# Upstream reason emitted by the fill simulator for a genuine partial fill (mirrored, not imported, so a
+# forged result claiming PARTIALLY_FILLED must carry exactly this reason to be re-proven).
+_REASON_PARTIAL_FILL = "partial_fill"
+
 _VALID_FILL_SIDES = frozenset(side.value for side in PaperOrderSide)
+_VALID_FILL_INTENT_TYPES = frozenset(intent_type.value for intent_type in PaperOrderIntentType)
 
 
 class PaperPositionStateError(RuntimeError):
@@ -196,6 +207,15 @@ def _sorted_unique(reasons: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted({reason for reason in reasons if isinstance(reason, str) and reason}))
 
 
+def _is_sorted_unique_reasons(reasons: object) -> bool:
+    """True iff ``reasons`` is a tuple of non-empty strings already in sorted, de-duplicated order."""
+    if not isinstance(reasons, tuple):
+        return False
+    if not all(isinstance(reason, str) and reason != "" for reason in reasons):
+        return False
+    return list(reasons) == sorted(set(reasons))
+
+
 def _parse_decimal(value: object) -> Decimal | None:
     """Return an exact finite ``Decimal`` for a strict decimal string, else ``None`` (no float/bool path)."""
     if not isinstance(value, str) or not _DECIMAL_PATTERN.fullmatch(value):
@@ -217,6 +237,20 @@ def _render_decimal(value: Decimal) -> str:
     if "." in rendered:
         rendered = rendered.rstrip("0").rstrip(".")
     return "0" if rendered in {"", "-0"} else rendered
+
+
+def _canonical_decimal(value: object) -> Decimal | None:
+    """Parse a strict decimal string that is ALSO already in canonical render form, else ``None``.
+
+    Rejects malformed *and* noncanonical strings (trailing zeros, ``-0``, redundant scale, scientific
+    form) by requiring a ``_parse_decimal`` + ``_render_decimal`` round-trip fixpoint — exactly the
+    canonical economics representation the fill simulator emits — so a forged fill cannot smuggle a
+    noncanonical/negative-zero numeric field past digest re-proof.
+    """
+    parsed = _parse_decimal(value)
+    if parsed is None or _render_decimal(parsed) != value:
+        return None
+    return parsed
 
 
 def _arithmetic_precision(operands: tuple[Decimal, ...]) -> int:
@@ -604,10 +638,16 @@ def _fill_is_paper_safe(fill: PaperFillSimulationResult) -> bool:
 
 
 def _reprove_fill_result(fill: PaperFillSimulationResult) -> tuple[PaperFillSimulationStatus, str, Decimal, Decimal]:
-    """Re-prove a digest-valid fill result's structure/safety; return (status, side, filled, price).
+    """Re-prove a digest-valid fill result's FULL structure/economics/safety; return (status, side, filled, price).
+
+    Digest equality is necessary but NOT sufficient: a self-consistent forged result (digest recomputed
+    over a tampered payload) must still fail if any structural or economic invariant the fill simulator
+    promises is violated, otherwise it could drive an ``APPLIED`` position transition off malformed
+    numbers. So after the identity checks every economics field is re-proven canonical and the
+    status/economics/reason-code triad is re-proven against the upstream contract for *all* statuses.
 
     ``filled``/``price`` are meaningful only for FILLED/PARTIALLY_FILLED (proven positive there); for
-    REJECTED they are returned as zero and the caller short-circuits.
+    REJECTED they are returned as zero and the caller short-circuits with no position application.
     """
     if fill.schema_version != _EXPECTED_FILL_SCHEMA_VERSION:
         raise PaperPositionStateError("paper_position_state:fill_result_malformed")
@@ -615,26 +655,57 @@ def _reprove_fill_result(fill: PaperFillSimulationResult) -> tuple[PaperFillSimu
         raise PaperPositionStateError("paper_position_state:fill_result_malformed")
     if not _fill_is_paper_safe(fill):
         raise PaperPositionStateError("paper_position_state:fill_result_unsafe_flags")
+    if not _is_non_empty_string(fill.fill_simulation_id):
+        raise PaperPositionStateError("paper_position_state:fill_result_malformed")
     if not _is_non_empty_string(fill.market_symbol) or not _is_non_empty_string(fill.correlation_id):
         raise PaperPositionStateError("paper_position_state:fill_result_malformed")
-    if fill.side not in _VALID_FILL_SIDES:
+    if fill.side not in _VALID_FILL_SIDES or fill.intent_type not in _VALID_FILL_INTENT_TYPES:
+        raise PaperPositionStateError("paper_position_state:fill_result_malformed")
+    if not (
+        _is_hex64_string(fill.intent_digest)
+        and _is_hex64_string(fill.market_snapshot_digest)
+        and _is_hex64_string(fill.fill_policy_digest)
+    ):
         raise PaperPositionStateError("paper_position_state:fill_result_malformed")
     if not _is_metadata_tuple(fill.metadata):
         raise PaperPositionStateError("paper_position_state:fill_result_malformed")
-    if _has_scope_violation(fill.market_symbol, fill.correlation_id, *_metadata_texts(fill.metadata)):
+    if _has_scope_violation(
+        fill.fill_simulation_id, fill.market_symbol, fill.correlation_id, *_metadata_texts(fill.metadata)
+    ):
         raise PaperPositionStateError("paper_position_state:fill_result_scope_violation")
+    if not _is_sorted_unique_reasons(fill.reason_codes):
+        raise PaperPositionStateError("paper_position_state:fill_result_malformed")
+
+    # Economics: every field a strict, canonical decimal string; the magnitudes are never negative.
+    fill_price = _canonical_decimal(fill.fill_price)
+    filled = _canonical_decimal(fill.filled_units)
+    unfilled = _canonical_decimal(fill.unfilled_units)
+    gross = _canonical_decimal(fill.gross_notional)
+    fee = _canonical_decimal(fill.fee_amount)
+    if fill_price is None or filled is None or unfilled is None or gross is None or fee is None:
+        raise PaperPositionStateError("paper_position_state:fill_result_malformed")
+    if filled < 0 or unfilled < 0 or gross < 0 or fee < 0:
+        raise PaperPositionStateError("paper_position_state:fill_result_malformed")
 
     zero = Decimal(0)
     if fill.status is PaperFillSimulationStatus.REJECTED:
+        # A genuine rejection carries zero economics and at least one sorted/unique reason; no application.
+        if filled != 0 or gross != 0 or fee != 0:
+            raise PaperPositionStateError("paper_position_state:fill_result_inconsistent")
+        if fill.reason_codes == ():
+            raise PaperPositionStateError("paper_position_state:fill_result_inconsistent")
         return fill.status, fill.side, zero, zero
 
-    filled = _parse_decimal(fill.filled_units)
-    price = _parse_decimal(fill.fill_price)
-    if filled is None or not filled > 0:
-        raise PaperPositionStateError("paper_position_state:fill_result_malformed")
-    if price is None or not price > 0:
-        raise PaperPositionStateError("paper_position_state:fill_result_malformed")
-    return fill.status, fill.side, filled, price
+    # FILLED / PARTIALLY_FILLED: positive filled units, fill price, and gross notional.
+    if not filled > 0 or not fill_price > 0 or not gross > 0:
+        raise PaperPositionStateError("paper_position_state:fill_result_inconsistent")
+    if fill.status is PaperFillSimulationStatus.FILLED:
+        if unfilled != 0 or fill.reason_codes != ():
+            raise PaperPositionStateError("paper_position_state:fill_result_inconsistent")
+    else:  # PARTIALLY_FILLED
+        if not unfilled > 0 or fill.reason_codes != (_REASON_PARTIAL_FILL,):
+            raise PaperPositionStateError("paper_position_state:fill_result_inconsistent")
+    return fill.status, fill.side, filled, fill_price
 
 
 # --------------------------------------------------------------------------------------------------
@@ -646,7 +717,9 @@ def _compute_new_position(
     *, q0: Decimal, avg0: Decimal | None, side: str, filled: Decimal, price: Decimal
 ) -> tuple[PaperPositionStateSide, Decimal, Decimal, Decimal | None]:
     """Pure exact position transition. Returns (new_side, signed_units, abs_units, average_or_none)."""
-    delta = filled if side == PaperOrderSide.BUY.value else -filled
+    # copy_negate (not unary ``-``) so the SELL sign flip is context-independent: unary minus rounds to
+    # the active context precision and would silently truncate a high-precision filled-units tail.
+    delta = filled if side == PaperOrderSide.BUY.value else filled.copy_negate()
     operands = (q0, filled, price, avg0 if avg0 is not None else Decimal(0))
     with localcontext() as ctx:
         ctx.prec = _arithmetic_precision(operands)

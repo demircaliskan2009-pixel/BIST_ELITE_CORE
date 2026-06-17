@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import FrozenInstanceError, replace
+from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 from pathlib import Path
 
 import pytest
@@ -208,6 +209,20 @@ def _apply(prior, fill, **overrides: object):
     return apply_paper_fill_to_position(prior, fill, **base)  # type: ignore[arg-type]
 
 
+def _rejected(**overrides: object) -> PaperFillSimulationResult:
+    """A structurally valid REJECTED fill (zero economics, one sorted/unique reason)."""
+    base: dict[str, object] = {
+        "status": PaperFillSimulationStatus.REJECTED,
+        "filled_units": "0",
+        "unfilled_units": "10",
+        "gross_notional": "0",
+        "fee_amount": "0",
+        "reason_codes": ("insufficient_liquidity",),
+    }
+    base.update(overrides)
+    return _fill(**base)
+
+
 # --------------------------------------------------------------------------------------------------
 # Build
 # --------------------------------------------------------------------------------------------------
@@ -360,11 +375,24 @@ def test_buy_crosses_short_to_long_sets_avg_to_fill() -> None:
     assert new_state.average_entry_price == "200"
 
 
+def _partial(**overrides: object) -> PaperFillSimulationResult:
+    """A structurally valid PARTIALLY_FILLED fill (positive unfilled, single ``partial_fill`` reason)."""
+    base: dict[str, object] = {
+        "status": PaperFillSimulationStatus.PARTIALLY_FILLED,
+        "side": "BUY",
+        "filled_units": "4",
+        "fill_price": "100",
+        "unfilled_units": "6",
+        "gross_notional": "400",
+        "fee_amount": "0",
+        "reason_codes": ("partial_fill",),
+    }
+    base.update(overrides)
+    return _fill(**base)
+
+
 def test_partial_fill_applies_only_filled_units() -> None:
-    transition, new_state = _apply(
-        _flat(),
-        _fill(status=PaperFillSimulationStatus.PARTIALLY_FILLED, side="BUY", filled_units="4", fill_price="100"),
-    )
+    transition, new_state = _apply(_flat(), _partial(side="BUY", filled_units="4", fill_price="100"))
     assert transition.status is PaperPositionTransitionStatus.APPLIED
     assert new_state is not None
     assert new_state.side is PaperPositionStateSide.LONG
@@ -480,6 +508,99 @@ def test_apply_metadata_malformed_raises() -> None:
 
 
 # --------------------------------------------------------------------------------------------------
+# Forged self-consistent fill result re-proof (digest recomputed; structure/economics still re-proven)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_forged_filled_with_reason_codes_rejected() -> None:
+    # Digest is recomputed over the tampered payload, so it matches; structural re-proof must still fail.
+    forged = _fill(reason_codes=("partial_fill",))
+    assert paper_fill_simulation_result_digest(forged) == forged.result_digest
+    with pytest.raises(PaperPositionStateError, match="fill_result_inconsistent"):
+        _apply(_flat(), forged)
+
+
+def test_forged_filled_with_positive_unfilled_rejected() -> None:
+    with pytest.raises(PaperPositionStateError, match="fill_result_inconsistent"):
+        _apply(_flat(), _fill(unfilled_units="5"))
+
+
+@pytest.mark.parametrize("gross", ["1000.0", "1,000", "abc", "1e3", "-0", "00"])
+def test_forged_filled_noncanonical_gross_notional_rejected(gross: str) -> None:
+    with pytest.raises(PaperPositionStateError, match="fill_result_malformed"):
+        _apply(_flat(), _fill(gross_notional=gross))
+
+
+@pytest.mark.parametrize("fee", ["0.0", "0.00", "abc", "1e1", "-0"])
+def test_forged_filled_noncanonical_fee_amount_rejected(fee: str) -> None:
+    with pytest.raises(PaperPositionStateError, match="fill_result_malformed"):
+        _apply(_flat(), _fill(fee_amount=fee))
+
+
+@pytest.mark.parametrize("reason_codes", [(), ("insufficient_liquidity",), ("min_fill_not_met", "partial_fill")])
+def test_forged_partial_fill_bad_reason_codes_rejected(reason_codes: tuple[str, ...]) -> None:
+    with pytest.raises(PaperPositionStateError, match="fill_result_inconsistent"):
+        _apply(_flat(), _partial(reason_codes=reason_codes))
+
+
+def test_forged_partial_fill_zero_unfilled_rejected() -> None:
+    with pytest.raises(PaperPositionStateError, match="fill_result_inconsistent"):
+        _apply(_flat(), _partial(unfilled_units="0"))
+
+
+def test_forged_rejected_with_positive_filled_rejected() -> None:
+    with pytest.raises(PaperPositionStateError, match="fill_result_inconsistent"):
+        _apply(_flat(), _rejected(filled_units="5"))
+
+
+def test_forged_rejected_with_positive_gross_rejected() -> None:
+    with pytest.raises(PaperPositionStateError, match="fill_result_inconsistent"):
+        _apply(_flat(), _rejected(gross_notional="100"))
+
+
+def test_forged_rejected_with_positive_fee_rejected() -> None:
+    with pytest.raises(PaperPositionStateError, match="fill_result_inconsistent"):
+        _apply(_flat(), _rejected(fee_amount="5"))
+
+
+def test_forged_rejected_with_empty_reason_codes_rejected() -> None:
+    with pytest.raises(PaperPositionStateError, match="fill_result_inconsistent"):
+        _apply(_flat(), _rejected(reason_codes=()))
+
+
+@pytest.mark.parametrize(
+    "reason_codes",
+    [
+        ("b", "a"),  # unsorted
+        ("insufficient_liquidity", "insufficient_liquidity"),  # duplicate
+        (123,),  # non-string element
+        "insufficient_liquidity",  # not a tuple
+        ("",),  # empty-string element
+    ],
+)
+def test_forged_rejected_malformed_reason_codes_rejected(reason_codes: object) -> None:
+    with pytest.raises(PaperPositionStateError, match="fill_result_malformed"):
+        _apply(_flat(), _rejected(reason_codes=reason_codes))
+
+
+def test_forged_malformed_fill_never_yields_applied_transition() -> None:
+    # Every digest-valid-but-forged fill below must raise (no APPLIED transition, no new state leaks).
+    forged_fills = [
+        _fill(reason_codes=("partial_fill",)),  # FILLED with reasons
+        _fill(unfilled_units="5"),  # FILLED with positive unfilled
+        _fill(gross_notional="0"),  # FILLED with zero gross
+        _partial(unfilled_units="0"),  # PARTIALLY_FILLED with zero unfilled
+        _partial(reason_codes=()),  # PARTIALLY_FILLED missing partial_fill
+        _rejected(filled_units="7"),  # REJECTED with positive filled
+        _rejected(reason_codes=()),  # REJECTED with no reason
+    ]
+    for forged in forged_fills:
+        assert paper_fill_simulation_result_digest(forged) == forged.result_digest  # self-consistent
+        with pytest.raises(PaperPositionStateError):
+            _apply(_flat(), forged)
+
+
+# --------------------------------------------------------------------------------------------------
 # Precision / determinism / immutability / no-leak
 # --------------------------------------------------------------------------------------------------
 
@@ -492,6 +613,106 @@ def test_high_precision_values_preserved_exactly() -> None:
     assert new_state.signed_units == high_units  # exact addition from flat, no rounding
     assert new_state.abs_units == high_units
     assert new_state.average_entry_price == high_price  # open-from-flat avg = fill price, exact
+
+
+# --------------------------------------------------------------------------------------------------
+# Weighted-average precision policy (declared deterministic 50-digit ROUND_HALF_EVEN; P2 regression)
+# --------------------------------------------------------------------------------------------------
+
+
+def _weighted_avg(abs_q0: str, avg0: str, abs_delta: str, price: str) -> str:
+    """Oracle mirroring the module's same-side weighted-average policy: exact numerator/denominator,
+    then divide at ``_WEIGHTED_AVERAGE_PRECISION`` significant digits with ``ROUND_HALF_EVEN``."""
+    q0, a0, dq, p = Decimal(abs_q0), Decimal(avg0), Decimal(abs_delta), Decimal(price)
+    with localcontext() as wide:
+        wide.prec = 400  # wide enough to keep the products/sums exact for these test inputs
+        numerator = q0 * a0 + dq * p
+        denom = q0 + dq
+    with localcontext() as div:
+        div.prec = paper_position_state._WEIGHTED_AVERAGE_PRECISION
+        div.rounding = ROUND_HALF_EVEN
+        result = numerator / denom
+    rendered = format(result, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return "0" if rendered in {"", "-0"} else rendered
+
+
+def test_high_precision_weighted_average_long_add() -> None:
+    avg0 = "100.0000000000000000000000000000000000000001"
+    prior = _state(side=PaperPositionStateSide.LONG, signed_units="1", abs_units="1", average_entry_price=avg0)
+    _, new_state = _apply(prior, _fill(side="BUY", filled_units="2", fill_price="100", gross_notional="200"))
+    assert new_state is not None
+    assert new_state.side is PaperPositionStateSide.LONG
+    assert new_state.signed_units == "3"
+    assert new_state.average_entry_price == _weighted_avg("1", avg0, "2", "100")
+
+
+def test_high_precision_weighted_average_short_add() -> None:
+    avg0 = "100.0000000000000000000000000000000000000001"
+    prior = _state(side=PaperPositionStateSide.SHORT, signed_units="-1", abs_units="1", average_entry_price=avg0)
+    _, new_state = _apply(prior, _fill(side="SELL", filled_units="2", fill_price="100", gross_notional="200"))
+    assert new_state is not None
+    assert new_state.side is PaperPositionStateSide.SHORT
+    assert new_state.signed_units == "-3"
+    assert new_state.average_entry_price == _weighted_avg("1", avg0, "2", "100")
+
+
+def test_high_precision_exact_close_to_flat() -> None:
+    units = "1.000000000000000000000000000000000000001"
+    prior = _state(side=PaperPositionStateSide.LONG, signed_units=units, abs_units=units, average_entry_price="100")
+    _, new_state = _apply(prior, _fill(side="SELL", filled_units=units, fill_price="200", gross_notional="1"))
+    assert new_state is not None
+    assert new_state.side is PaperPositionStateSide.FLAT
+    assert new_state.signed_units == "0"
+    assert new_state.abs_units == "0"
+    assert new_state.average_entry_price is None
+
+
+def test_high_precision_cross_long_to_short_sets_avg_to_fill() -> None:
+    filled = "2.000000000000000000000000000000000000001"
+    prior = _state(side=PaperPositionStateSide.LONG, signed_units="1", abs_units="1", average_entry_price="100")
+    _, new_state = _apply(prior, _fill(side="SELL", filled_units=filled, fill_price="200", gross_notional="1"))
+    assert new_state is not None
+    assert new_state.side is PaperPositionStateSide.SHORT
+    assert new_state.signed_units == "-1.000000000000000000000000000000000000001"
+    assert new_state.abs_units == "1.000000000000000000000000000000000000001"
+    assert new_state.average_entry_price == "200"
+
+
+def test_high_precision_cross_short_to_long_sets_avg_to_fill() -> None:
+    filled = "2.000000000000000000000000000000000000001"
+    prior = _state(side=PaperPositionStateSide.SHORT, signed_units="-1", abs_units="1", average_entry_price="100")
+    _, new_state = _apply(prior, _fill(side="BUY", filled_units=filled, fill_price="200", gross_notional="1"))
+    assert new_state is not None
+    assert new_state.side is PaperPositionStateSide.LONG
+    assert new_state.signed_units == "1.000000000000000000000000000000000000001"
+    assert new_state.average_entry_price == "200"
+
+
+def test_weighted_average_beyond_precision_rounds_half_even() -> None:
+    # 4/3 has no finite decimal form; the same-side add rounds at the declared 50-digit HALF_EVEN policy.
+    prior = _state(side=PaperPositionStateSide.LONG, signed_units="1", abs_units="1", average_entry_price="1")
+    _, new_state = _apply(prior, _fill(side="BUY", filled_units="2", fill_price="1.5", gross_notional="3"))
+    assert new_state is not None
+    assert new_state.signed_units == "3"
+    avg = new_state.average_entry_price
+    assert avg is not None
+    assert avg == _weighted_avg("1", "1", "2", "1.5")  # (1*1 + 2*1.5)/3 = 4/3
+    assert avg == "1." + "3" * 49  # leading 1 + 49 fractional threes = 50 significant digits
+    assert len(avg.replace(".", "").lstrip("0")) == paper_position_state._WEIGHTED_AVERAGE_PRECISION
+
+
+def test_rounded_weighted_average_digest_deterministic() -> None:
+    prior = _state(side=PaperPositionStateSide.LONG, signed_units="1", abs_units="1", average_entry_price="1")
+    fill = _fill(side="BUY", filled_units="2", fill_price="1.5", gross_notional="3")
+    t1, s1 = _apply(prior, fill)
+    t2, s2 = _apply(prior, fill)
+    assert s1 is not None and s2 is not None
+    assert s1.average_entry_price == s2.average_entry_price == "1." + "3" * 49
+    assert s1.position_state_digest == s2.position_state_digest
+    assert paper_position_state_digest(s1) == s1.position_state_digest
+    assert t1.transition_digest == t2.transition_digest
 
 
 def test_digests_deterministic() -> None:
@@ -528,7 +749,7 @@ def test_reason_codes_status_consistent() -> None:
     applied, _ = _apply(_flat(), _fill())
     assert applied.status is PaperPositionTransitionStatus.APPLIED
     assert applied.reason_codes == ()
-    rejected, _ = _apply(_flat(), _fill(status=PaperFillSimulationStatus.REJECTED, filled_units="0"))
+    rejected, _ = _apply(_flat(), _rejected())
     assert rejected.status is PaperPositionTransitionStatus.REJECTED
     assert rejected.reason_codes and list(rejected.reason_codes) == sorted(rejected.reason_codes)
 
