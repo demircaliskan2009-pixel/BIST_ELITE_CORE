@@ -69,8 +69,16 @@ from crypto_core.validation.paper_position_state import (
 )
 
 _EPISODE_SCHEMA_VERSION = "paper-episode-run-result.v1"
+_MARK_SNAPSHOT_SCHEMA_VERSION = "paper-mark-snapshot.v1"
 
 _REASON_FILL_REJECTED = "fill_rejected"
+
+# Canonical strictly-positive decimal string — matches the upstream ``_render_decimal`` output exactly:
+# an integer >= 1 with an optional fraction that has no trailing zero, or a sub-1 value
+# ``0.<fraction with no trailing zero>``. Rejects ``"0"``, negatives, ``"-0"``, trailing-zero scale such
+# as ``"60.0"``, and scientific notation — so a forged mark snapshot cannot bind a noncanonical /
+# nonpositive mark price even on the rejected-fill path (no Decimal arithmetic needed for this check).
+_CANONICAL_POSITIVE_DECIMAL = re.compile(r"^(?:[1-9][0-9]*(?:\.[0-9]*[1-9])?|0\.[0-9]*[1-9])$")
 
 # Scope guard mirrors the sibling validation modules (word-bounded) and rejects bare
 # ``connector``/``route_id``/``execution_instruction``/``deribit``/``venue|exchange|client_order_id``
@@ -160,6 +168,28 @@ def _is_non_empty_string(value: object) -> bool:
     return isinstance(value, str) and value.strip() != ""
 
 
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_canonical_positive_decimal(value: object) -> bool:
+    return isinstance(value, str) and _CANONICAL_POSITIVE_DECIMAL.fullmatch(value) is not None
+
+
+def _is_metadata_tuple(metadata: object) -> bool:
+    if not isinstance(metadata, tuple):
+        return False
+    for pair in metadata:
+        if (
+            not isinstance(pair, tuple)
+            or len(pair) != 2
+            or not isinstance(pair[0], str)
+            or not isinstance(pair[1], str)
+        ):
+            return False
+    return metadata == tuple(sorted(metadata))
+
+
 def _sorted_unique(reasons: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted({reason for reason in reasons if isinstance(reason, str) and reason}))
 
@@ -218,6 +248,40 @@ _DIGEST_ATTR = {
     "fill_policy": "policy_digest",
     "mark_snapshot": "mark_snapshot_digest",
 }
+
+
+def _reprove_mark_snapshot(snapshot: PaperMarkSnapshot) -> None:
+    """Structurally re-prove a digest-valid mark snapshot (runner-local mirror of the pnl_report contract).
+
+    Required because the rejected-fill path never calls ``compute_paper_pnl_report`` (the upstream mark
+    re-proof), yet still binds the mark digest — so the mark must be re-proven HERE before any branch
+    (COMPUTED or FILL_REJECTED) can return a result. Validates schema, ids, a strictly-positive canonical
+    ``mark_price`` (no zero/negative/noncanonical/scientific), ``observed_at_ns`` (None or non-negative
+    non-bool int), optional ``mark_source_id``, canonical metadata, and token scope. (The digest boundary
+    is already proven by the caller via the public ``paper_mark_snapshot_digest``.)
+    """
+    if snapshot.schema_version != _MARK_SNAPSHOT_SCHEMA_VERSION:
+        raise PaperEpisodeRunnerError("paper_episode_runner:mark_snapshot_malformed")
+    if not _is_non_empty_string(snapshot.mark_snapshot_id) or not _is_non_empty_string(snapshot.market_symbol):
+        raise PaperEpisodeRunnerError("paper_episode_runner:mark_snapshot_malformed")
+    if not _is_non_empty_string(snapshot.correlation_id):
+        raise PaperEpisodeRunnerError("paper_episode_runner:mark_snapshot_malformed")
+    if not _is_canonical_positive_decimal(snapshot.mark_price):
+        raise PaperEpisodeRunnerError("paper_episode_runner:mark_snapshot_malformed")
+    if snapshot.observed_at_ns is not None and (not _is_int(snapshot.observed_at_ns) or snapshot.observed_at_ns < 0):
+        raise PaperEpisodeRunnerError("paper_episode_runner:mark_snapshot_malformed")
+    if snapshot.mark_source_id is not None and not _is_non_empty_string(snapshot.mark_source_id):
+        raise PaperEpisodeRunnerError("paper_episode_runner:mark_snapshot_malformed")
+    if not _is_metadata_tuple(snapshot.metadata):
+        raise PaperEpisodeRunnerError("paper_episode_runner:mark_snapshot_malformed")
+    if _has_scope_violation(
+        snapshot.mark_snapshot_id,
+        snapshot.market_symbol,
+        snapshot.correlation_id,
+        snapshot.mark_source_id,
+        *_metadata_texts(snapshot.metadata),
+    ):
+        raise PaperEpisodeRunnerError("paper_episode_runner:mark_snapshot_scope_violation")
 
 
 def run_paper_episode(
@@ -289,6 +353,11 @@ def run_paper_episode(
     )
     _reprove_input_digest(actual=fill_policy, recompute=paper_fill_policy_digest, label="fill_policy")
     _reprove_input_digest(actual=mark_snapshot, recompute=paper_mark_snapshot_digest, label="mark_snapshot")
+
+    # Structurally re-prove the mark snapshot up front: the FILL_REJECTED path skips the upstream mark
+    # re-proof (compute_paper_pnl_report), so a digest-valid forged mark must be rejected here regardless
+    # of the fill outcome before any branch can bind its digest.
+    _reprove_mark_snapshot(mark_snapshot)
 
     market_symbol = order_intent.market_symbol
     for artifact_symbol in (

@@ -37,7 +37,11 @@ from crypto_core.validation.paper_order_intent_admission import (
     build_paper_order_intent_request,
     evaluate_paper_order_intent_admission,
 )
-from crypto_core.validation.paper_pnl_report import build_paper_mark_snapshot, compute_paper_pnl_report
+from crypto_core.validation.paper_pnl_report import (
+    build_paper_mark_snapshot,
+    compute_paper_pnl_report,
+    paper_mark_snapshot_digest,
+)
 from crypto_core.validation.paper_position_state import (
     apply_paper_fill_to_position,
     build_flat_paper_position_state,
@@ -413,13 +417,58 @@ def test_forged_self_consistent_fill_policy_rejected() -> None:
         _run(policy=forged)
 
 
-def test_forged_self_consistent_mark_snapshot_rejected() -> None:
-    from crypto_core.validation.paper_pnl_report import paper_mark_snapshot_digest
+def _forged_mark(**overrides: object):
+    """A digest-valid but structurally forged mark snapshot (digest recomputed over the tampered payload)."""
+    forged = replace(_mark(), **overrides)
+    return replace(forged, mark_snapshot_digest=paper_mark_snapshot_digest(forged))
 
-    forged = replace(_mark(), mark_price="0")
-    forged = replace(forged, mark_snapshot_digest=paper_mark_snapshot_digest(forged))
-    with pytest.raises(PaperEpisodeRunnerError, match="pnl_report_failed"):
+
+def _rejected_run(mark):
+    """Run a rejected-fill episode (insufficient liquidity, no partial) with the supplied mark snapshot."""
+    return _run(snapshot=_snapshot(available_units="0"), policy=_policy(allow_partial_fill=False), mark=mark)
+
+
+def test_forged_self_consistent_mark_snapshot_rejected() -> None:
+    # COMPUTED path: the runner-level mark re-proof now rejects this before compute_paper_pnl_report.
+    forged = _forged_mark(mark_price="0")
+    assert paper_mark_snapshot_digest(forged) == forged.mark_snapshot_digest  # self-consistent
+    with pytest.raises(PaperEpisodeRunnerError, match="mark_snapshot_malformed"):
         _run(mark=forged)
+
+
+@pytest.mark.parametrize(
+    "overrides,match",
+    [
+        ({"mark_price": "0"}, "mark_snapshot_malformed"),
+        ({"mark_price": "-5"}, "mark_snapshot_malformed"),
+        ({"mark_price": "60.0"}, "mark_snapshot_malformed"),
+        ({"mark_price": "1e3"}, "mark_snapshot_malformed"),
+        ({"mark_source_id": "connector-1"}, "mark_snapshot_scope_violation"),
+        ({"observed_at_ns": -1}, "mark_snapshot_malformed"),
+        ({"observed_at_ns": True}, "mark_snapshot_malformed"),
+    ],
+)
+def test_rejected_fill_forged_mark_snapshot_rejected(overrides: dict[str, object], match: str) -> None:
+    forged = _forged_mark(**overrides)
+    assert paper_mark_snapshot_digest(forged) == forged.mark_snapshot_digest  # passes digest boundary
+    with pytest.raises(PaperEpisodeRunnerError, match=match):
+        _rejected_run(forged)
+
+
+def test_rejected_fill_forged_mark_noncanonical_metadata_rejected() -> None:
+    # Unsorted metadata tuple is noncanonical; digest recomputes over it, structural re-proof rejects it.
+    forged = _forged_mark(metadata=(("b", "2"), ("a", "1")))
+    assert paper_mark_snapshot_digest(forged) == forged.mark_snapshot_digest
+    with pytest.raises(PaperEpisodeRunnerError, match="mark_snapshot_malformed"):
+        _rejected_run(forged)
+
+
+def test_rejected_fill_valid_mark_still_fill_rejected() -> None:
+    result = _rejected_run(_mark())
+    assert result.status is PaperEpisodeRunStatus.FILL_REJECTED
+    assert result.new_position_state_digest is None
+    assert result.pnl_report_digest is None
+    assert "fill_rejected" in result.reason_codes
 
 
 def test_forged_unsafe_intent_via_flag_rejected() -> None:
