@@ -487,6 +487,28 @@ def _capacity_structural_reasons(decision: PaperCapacityGateDecision) -> tuple[s
         and len(decision.reason_codes) != 0
     ):
         malformed = True
+    # An ADMITTED capacity decision must satisfy its own embedded caps: the capacity gate only emits
+    # ADMITTED when demand <= caps and eligible_count <= max_open_intents. A forged self-consistent
+    # ADMITTED decision with demand above its embedded caps would bypass the very limit this consumer
+    # enforces, so re-prove the cap invariant fail-closed (exact Decimal comparison, no rounding path).
+    if isinstance(decision.status, PaperCapacityGateStatus) and decision.status is PaperCapacityGateStatus.ADMITTED:
+        admitted_max_notional = _parse_decimal(decision.max_notional)
+        admitted_max_units = _parse_decimal(decision.max_units)
+        admitted_requested_notional = _parse_decimal(decision.requested_notional)
+        admitted_requested_units = _parse_decimal(decision.requested_units)
+        if None in (
+            admitted_max_notional,
+            admitted_max_units,
+            admitted_requested_notional,
+            admitted_requested_units,
+        ):
+            malformed = True
+        elif admitted_requested_notional > admitted_max_notional or admitted_requested_units > admitted_max_units:
+            malformed = True
+        if not (_is_int(decision.eligible_count) and _is_int(decision.max_open_intents)):
+            malformed = True
+        elif decision.eligible_count > decision.max_open_intents:
+            malformed = True
     return (_REASON_CAPACITY_MALFORMED,) if malformed else ()
 
 

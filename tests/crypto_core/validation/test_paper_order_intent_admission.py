@@ -254,6 +254,28 @@ def test_forged_self_consistent_capacity_scope_or_metadata_rejected(override: di
     assert "capacity_decision_malformed" in decision.reason_codes
 
 
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"requested_notional": "5000"},  # > embedded max_notional (1000)
+        {"requested_units": "500"},  # > embedded max_units (100)
+        {"eligible_count": 99},  # > embedded max_open_intents (5)
+    ],
+)
+def test_forged_self_consistent_over_capacity_admitted_rejected(override: dict[str, object]) -> None:
+    # A forged "ADMITTED" capacity decision whose embedded demand/count exceeds its own caps must be
+    # rejected fail-closed (the real capacity gate would have REJECTED it).
+    capacity = _admitted_capacity()
+    forged = replace(capacity, **override)
+    forged = replace(forged, decision_digest=paper_capacity_gate_decision_digest(forged))
+    assert forged.status is PaperCapacityGateStatus.ADMITTED
+    assert paper_capacity_gate_decision_digest(forged) == forged.decision_digest
+    request = _make_request(forged)
+    decision = _admit(forged, request)
+    assert decision.status is PaperOrderIntentAdmissionStatus.REJECTED
+    assert "capacity_decision_malformed" in decision.reason_codes
+
+
 def test_demand_mismatch_rejected() -> None:
     capacity = _admitted_capacity(requested_notional="500", requested_units="50")
     request = _make_request(capacity, requested_notional="600")
