@@ -58,6 +58,7 @@ from crypto_core.validation.paper_allocator_intent_draft import (
 
 _POLICY_SCHEMA_VERSION = "paper-capacity-gate-policy.v1"
 _DECISION_SCHEMA_VERSION = "paper-capacity-gate-decision.v1"
+_EXPECTED_DRAFT_SCHEMA_VERSION = "paper-allocator-intent-draft.v1"
 
 # Strict decimal-string grammar: optional sign, no leading zeros (except a bare ``0``), optional
 # fraction. Rejects ``""``, ``"1."``, ``".5"``, ``"00"``, ``"1e5"``, ``"NaN"``, ``"inf"``, whitespace,
@@ -78,6 +79,7 @@ _SAFE_MARKET_DATA_TERMS = ("limit_order_book", "order_book", "order_flow")
 
 # Verdict reason codes (bare snake_case, stable, sorted in the decision). Error messages are prefixed.
 _REASON_DRAFT_DIGEST_MISMATCH = "draft_digest_mismatch"
+_REASON_DRAFT_MALFORMED = "draft_malformed"
 _REASON_DRAFT_NOT_READY = "draft_not_ready"
 _REASON_DRAFT_UNSAFE_FLAGS = "draft_unsafe_flags"
 _REASON_DRAFT_SCOPE_VIOLATION = "draft_scope_violation"
@@ -85,6 +87,15 @@ _REASON_IDENTITY_MISMATCH = "identity_mismatch"
 _REASON_OPEN_INTENTS_OVER_CAPACITY = "open_intents_over_capacity"
 _REASON_NOTIONAL_OVER_CAPACITY = "notional_over_capacity"
 _REASON_UNITS_OVER_CAPACITY = "units_over_capacity"
+
+_DRAFT_DIGEST_FIELDS = (
+    "readiness_digest",
+    "promotion_readiness_journal_entry_digest",
+    "promotion_readiness_payload_digest",
+    "promotion_candidate_journal_entry_digest",
+    "decision_journal_entry_digest",
+    "decision_journal_payload_digest",
+)
 
 
 class PaperCapacityGateError(RuntimeError):
@@ -162,6 +173,10 @@ def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _is_hex64_string(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
 def _sorted_unique(reasons: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted({reason for reason in reasons if isinstance(reason, str) and reason}))
 
@@ -215,6 +230,42 @@ def _normalize_metadata(metadata: object) -> tuple[tuple[str, str], ...]:
 
 def _metadata_texts(metadata: tuple[tuple[str, str], ...]) -> tuple[str, ...]:
     return tuple(text for pair in metadata for text in pair)
+
+
+def _is_metadata_tuple(metadata: object) -> bool:
+    if not isinstance(metadata, tuple):
+        return False
+    for pair in metadata:
+        if (
+            not isinstance(pair, tuple)
+            or len(pair) != 2
+            or not isinstance(pair[0], str)
+            or not isinstance(pair[1], str)
+        ):
+            return False
+    return metadata == tuple(sorted(metadata))
+
+
+def _is_blockers_tuple(blockers: object) -> bool:
+    return (
+        isinstance(blockers, tuple)
+        and all(isinstance(blocker, str) for blocker in blockers)
+        and blockers == _sorted_unique(blockers)
+    )
+
+
+def _draft_status_from_counts(
+    eligible_count: int, blocked_count: int, insufficient_count: int
+) -> PaperAllocatorIntentDraftStatus:
+    if eligible_count > 0:
+        return PaperAllocatorIntentDraftStatus.DRAFT_READY
+    if blocked_count == 0 and insufficient_count > 0:
+        return PaperAllocatorIntentDraftStatus.INSUFFICIENT_EVIDENCE
+    return PaperAllocatorIntentDraftStatus.BLOCKED
+
+
+def _safe_eligible_count(draft: PaperAllocatorIntentDraft) -> int:
+    return draft.eligible_count if _is_int(draft.eligible_count) and draft.eligible_count >= 0 else 0
 
 
 def _has_scope_violation(*texts: object) -> bool:
@@ -350,6 +401,49 @@ def _draft_is_paper_safe(draft: PaperAllocatorIntentDraft) -> bool:
     )
 
 
+def _draft_structural_reasons(draft: PaperAllocatorIntentDraft) -> tuple[str, ...]:
+    malformed = False
+    if draft.schema_version != _EXPECTED_DRAFT_SCHEMA_VERSION:
+        malformed = True
+    if not isinstance(draft.status, PaperAllocatorIntentDraftStatus):
+        malformed = True
+    if not _is_non_empty_string(draft.sleeve_id) or not _is_non_empty_string(draft.policy_id):
+        malformed = True
+    if not _is_non_empty_string(draft.correlation_id):
+        malformed = True
+    if any(not _is_hex64_string(getattr(draft, field, None)) for field in _DRAFT_DIGEST_FIELDS):
+        malformed = True
+
+    counts_are_valid = (
+        _is_int(draft.eligible_count)
+        and draft.eligible_count >= 0
+        and _is_int(draft.blocked_count)
+        and draft.blocked_count >= 0
+        and _is_int(draft.insufficient_count)
+        and draft.insufficient_count >= 0
+    )
+    if not counts_are_valid:
+        malformed = True
+    blockers_are_valid = _is_blockers_tuple(draft.blockers)
+    if not blockers_are_valid:
+        malformed = True
+    if not _is_metadata_tuple(draft.metadata):
+        malformed = True
+    if counts_are_valid and isinstance(draft.status, PaperAllocatorIntentDraftStatus):
+        expected_status = _draft_status_from_counts(draft.eligible_count, draft.blocked_count, draft.insufficient_count)
+        if draft.status is not expected_status:
+            malformed = True
+    if (
+        counts_are_valid
+        and blockers_are_valid
+        and draft.blocked_count == 0
+        and draft.insufficient_count == 0
+        and len(draft.blockers) != 0
+    ):
+        malformed = True
+    return (_REASON_DRAFT_MALFORMED,) if malformed else ()
+
+
 def evaluate_paper_capacity_gate(
     draft: PaperAllocatorIntentDraft,
     policy: PaperCapacityGatePolicy,
@@ -402,22 +496,31 @@ def evaluate_paper_capacity_gate(
             policy=policy,
             requested_notional=_render_decimal(requested_notional_dec),
             requested_units=_render_decimal(requested_units_dec),
-            eligible_count=draft.eligible_count if _is_int(draft.eligible_count) else 0,
+            eligible_count=_safe_eligible_count(draft),
             reasons=(_REASON_DRAFT_DIGEST_MISMATCH,),
             correlation_id=correlation_id,
             metadata=decision_metadata,
         )
 
-    # Digest re-proved -> the draft's fields are trustworthy for the remaining checks.
+    # Digest re-proved -> re-prove the digest-carrying draft's canonical structure before judging it.
+    structural_reasons = _draft_structural_reasons(draft)
+    reasons.extend(structural_reasons)
+    draft_malformed = _REASON_DRAFT_MALFORMED in structural_reasons
     if draft.status is not PaperAllocatorIntentDraftStatus.DRAFT_READY:
         reasons.append(_REASON_DRAFT_NOT_READY)
     if not _draft_is_paper_safe(draft):
         reasons.append(_REASON_DRAFT_UNSAFE_FLAGS)
-    if _has_scope_violation(draft.sleeve_id, draft.policy_id, draft.correlation_id, *_metadata_texts(draft.metadata)):
+    if not draft_malformed and _has_scope_violation(
+        draft.sleeve_id,
+        draft.policy_id,
+        draft.correlation_id,
+        *_metadata_texts(draft.metadata),
+        *draft.blockers,
+    ):
         reasons.append(_REASON_DRAFT_SCOPE_VIOLATION)
     if draft.sleeve_id != policy.sleeve_id or draft.policy_id != policy.policy_id:
         reasons.append(_REASON_IDENTITY_MISMATCH)
-    if not _is_int(draft.eligible_count) or draft.eligible_count > max_open_intents:
+    if not draft_malformed and draft.eligible_count > max_open_intents:
         reasons.append(_REASON_OPEN_INTENTS_OVER_CAPACITY)
     if requested_notional_dec > max_notional:
         reasons.append(_REASON_NOTIONAL_OVER_CAPACITY)
@@ -431,7 +534,7 @@ def evaluate_paper_capacity_gate(
         policy=policy,
         requested_notional=_render_decimal(requested_notional_dec),
         requested_units=_render_decimal(requested_units_dec),
-        eligible_count=draft.eligible_count if _is_int(draft.eligible_count) else 0,
+        eligible_count=_safe_eligible_count(draft),
         reasons=tuple(reasons),
         correlation_id=correlation_id,
         metadata=decision_metadata,

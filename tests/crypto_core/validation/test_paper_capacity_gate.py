@@ -143,6 +143,34 @@ def test_tampered_draft_digest_rejected() -> None:
     assert decision.reason_codes == ("draft_digest_mismatch",)
 
 
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"schema_version": "paper-allocator-intent-draft.v0"},
+        {"readiness_digest": "not-a-digest"},
+        {"sleeve_id": ""},
+        {"policy_id": ""},
+        {"correlation_id": ""},
+        {"eligible_count": -1},
+        {"blocked_count": -1},
+        {"insufficient_count": -1},
+        {"eligible_count": 0, "status": PaperAllocatorIntentDraftStatus.DRAFT_READY},
+        {"eligible_count": 1, "status": PaperAllocatorIntentDraftStatus.BLOCKED},
+        {"metadata": ("place_order",)},
+        {"metadata": (("note", "ok"), ("note", "duplicate"))},
+        {"blockers": ["place_order"]},
+        {"blockers": ("duplicate", "duplicate")},
+        {"blockers": ("orphan-blocker",), "eligible_count": 1, "blocked_count": 0, "insufficient_count": 0},
+    ],
+)
+def test_self_consistent_malformed_draft_rejected(override: dict[str, object]) -> None:
+    draft = _make_draft(**override)
+    assert paper_allocator_intent_draft_digest(draft) == draft.draft_digest
+    decision = _evaluate(draft, _make_policy())
+    assert decision.status is PaperCapacityGateStatus.REJECTED
+    assert "draft_malformed" in decision.reason_codes
+
+
 def test_forged_self_consistent_unsafe_flags_rejected() -> None:
     # Self-consistent: the digest is recomputed over the unsafe flag, so the digest check passes.
     draft = _make_draft(capital_reserved=True)
@@ -213,16 +241,22 @@ def test_draft_metadata_forbidden_token_rejected(token: str) -> None:
     assert "draft_scope_violation" in decision.reason_codes
 
 
+def test_draft_blocker_forbidden_token_rejected() -> None:
+    draft = _make_draft(blockers=("place_order",), blocked_count=1)
+    decision = _evaluate(draft, _make_policy())
+    assert decision.status is PaperCapacityGateStatus.REJECTED
+    assert "draft_scope_violation" in decision.reason_codes
+
+
 def test_multiple_reasons_accumulate_sorted() -> None:
     decision = _evaluate(
-        _make_draft(status=PaperAllocatorIntentDraftStatus.BLOCKED, eligible_count=99),
+        _make_draft(eligible_count=99),
         _make_policy(max_notional="10", max_units="10", max_open_intents=1),
         requested_notional="20",
         requested_units="20",
     )
     assert decision.status is PaperCapacityGateStatus.REJECTED
     expected = (
-        "draft_not_ready",
         "notional_over_capacity",
         "open_intents_over_capacity",
         "units_over_capacity",
