@@ -717,6 +717,15 @@ def _reprove_fill_result(fill: PaperFillSimulationResult) -> tuple[PaperFillSimu
     else:  # PARTIALLY_FILLED
         if not unfilled > 0 or fill.reason_codes != (_REASON_PARTIAL_FILL,):
             raise PaperPositionStateError("paper_position_state:fill_result_inconsistent")
+    # Economic integrity: gross_notional must be the EXACT product filled_units * fill_price (the fill
+    # simulator's own invariant: ``gross = candidate * fill_price``). Digest validity proves identity,
+    # not economics: a self-consistent forged result with an impossible gross (e.g. filled=1, price=100,
+    # gross=1) would otherwise drive an APPLIED position transition off fabricated numbers. Computed under
+    # a span-aware context so the product is exact (never default-context rounded); a mismatch fails closed.
+    with localcontext() as ctx:
+        ctx.prec = _arithmetic_precision((filled, fill_price))
+        if filled * fill_price != gross:
+            raise PaperPositionStateError("paper_position_state:fill_result_inconsistent")
     return fill.status, fill.side, filled, fill_price
 
 

@@ -180,17 +180,33 @@ def _render_decimal(value: Decimal) -> str:
     return format(value, "f")
 
 
+def _decimal_span(value: Decimal) -> int:
+    """Positional span of an exact Decimal: significant digits PLUS the magnitude implied by the exponent.
+
+    ``len(as_tuple().digits)`` counts only significant digits, never the exponent gap, so a value such as
+    ``1e-100`` (one significant digit) would be sized as width 1 while it actually spans 101 fixed-point
+    places. Summing this span keeps the budget precision wide enough that a running ``total_reserved +
+    requested`` sum mixing a normal-magnitude reservation with a tiny high-scale one stays exact instead
+    of being silently rounded back inside the cap (which would let an over-budget intent slip ELIGIBLE).
+    """
+    tup = value.as_tuple()
+    return len(tup.digits) + abs(int(tup.exponent))
+
+
 def _budget_arithmetic_precision(operands: tuple[Decimal, ...]) -> int:
     """Decimal context precision large enough to make every budget product/sum exact (input-derived).
 
     The default ``decimal`` context (28 significant digits) can silently round a high-precision
     ``quantity * price`` product (or running budget sum) down to a cap, letting an over-budget intent
-    slip through ELIGIBLE. Summing the significant-digit counts of all operands upper-bounds the exact
-    coefficient length of any product or running sum; a fixed guard covers exponent-alignment growth.
-    The precision depends only on the inputs, so the decision stays deterministic.
+    slip through ELIGIBLE. Summing the *positional span* (significant digits + absolute exponent
+    magnitude) of all operands upper-bounds the exact length of any product or exponent-misaligned
+    running sum — coefficient-only widths undercount high-scale leading-zero values such as ``1e-100``,
+    so a tiny reservation could otherwise vanish when added to a normal-magnitude one. A fixed guard
+    covers further alignment growth. The precision depends only on the inputs, so the decision stays
+    deterministic.
     """
-    operand_digits = sum(len(value.as_tuple().digits) for value in operands)
-    return max(28, operand_digits + 32)
+    span = sum(_decimal_span(value) for value in operands)
+    return max(28, span + 40)
 
 
 def _normalize_metadata(metadata: object) -> tuple[tuple[str, str], ...]:

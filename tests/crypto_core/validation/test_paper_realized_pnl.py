@@ -35,6 +35,7 @@ from crypto_core.validation.paper_order_intent_admission import (
     evaluate_paper_order_intent_admission,
 )
 from crypto_core.validation.paper_position_state import (
+    PaperPositionStateError,
     PaperPositionStateSide,
     PaperPositionTransitionStatus,
     apply_paper_fill_to_position,
@@ -359,7 +360,10 @@ def test_forged_gross_notional_rejected() -> None:
     # Digest-valid forged fill: filled=4, price=150 ⇒ exact gross 600, but stored gross="1".
     forged = _fill("SELL", "4", "150", gross_notional="1")
     assert paper_fill_simulation_result_digest(forged) == forged.result_digest  # self-consistent
-    with pytest.raises(PaperRealizedPnlError, match="fill_result_inconsistent"):
+    # Rejected fail-closed at the earliest layer: apply_paper_fill_to_position (PaperPositionStateError)
+    # now also re-proves gross == filled_units * fill_price, so the forged fill never reaches the realized
+    # layer via _run; either layer's ``fill_result_inconsistent`` is an acceptable rejection.
+    with pytest.raises((PaperPositionStateError, PaperRealizedPnlError), match="fill_result_inconsistent"):
         _run(_long(signed="10", avg="100"), forged)
 
 
@@ -377,7 +381,9 @@ def test_high_scale_mismatched_gross_rejected() -> None:
     price = "1.0000000000000000000000000000000001"
     forged = _fill("SELL", "4", price, gross_notional="4")
     assert paper_fill_simulation_result_digest(forged) == forged.result_digest
-    with pytest.raises(PaperRealizedPnlError, match="fill_result_inconsistent"):
+    # Rejected fail-closed at the earliest layer (see test_forged_gross_notional_rejected): the position
+    # layer re-proves the exact high-scale product, so either layer's ``fill_result_inconsistent`` is fine.
+    with pytest.raises((PaperPositionStateError, PaperRealizedPnlError), match="fill_result_inconsistent"):
         _run(_long(signed="10", avg="100"), forged)
 
 
