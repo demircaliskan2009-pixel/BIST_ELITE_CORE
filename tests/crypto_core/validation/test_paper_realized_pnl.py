@@ -176,15 +176,15 @@ def _triple(prior, fill, suffix: str = "1"):
     )
 
 
-def _event(prior, fill, transition, **overrides: object):
+def _event(prior, fill, transition, new_state, **overrides: object):
     base: dict[str, object] = {"realized_pnl_event_id": "evt-1", "correlation_id": "corr-evt"}
     base.update(overrides)
-    return compute_paper_realized_pnl_event(prior, fill, transition, **base)  # type: ignore[arg-type]
+    return compute_paper_realized_pnl_event(prior, fill, transition, new_state, **base)  # type: ignore[arg-type]
 
 
 def _run(prior, fill, **overrides: object):
-    transition, _ = _triple(prior, fill)
-    return _event(prior, fill, transition, **overrides)
+    transition, new_state = _triple(prior, fill)
+    return _event(prior, fill, transition, new_state, **overrides)
 
 
 def _realized_oracle(prior_side: str, closed: str, avg0: str, fp: str) -> str:
@@ -327,6 +327,16 @@ def test_high_precision_realized_exact() -> None:
     assert event.realized_pnl == "199.9999999999999999999999999999999996"
 
 
+def test_high_scale_leading_zero_average_exact() -> None:
+    # avg = 1e-100: one significant digit but a 100-place exponent gap. Precision must be sized by the
+    # positional span, not the coefficient length, or 4*(1 - 1e-100) silently rounds to "4".
+    avg = "0." + "0" * 99 + "1"
+    event = _run(_long(signed="10", avg=avg), _fill("SELL", "4", "1"))
+    assert event.status is PaperRealizedPnlStatus.COMPUTED
+    assert event.realized_pnl == _realized_oracle("LONG", "4", avg, "1")
+    assert event.realized_pnl == "3." + "9" * 99 + "6"  # 4 - 4e-100, exact
+
+
 # --------------------------------------------------------------------------------------------------
 # Fail-closed: digest boundary
 # --------------------------------------------------------------------------------------------------
@@ -334,53 +344,90 @@ def test_high_precision_realized_exact() -> None:
 
 def test_prior_state_digest_mismatch_rejected() -> None:
     prior, fill = _long(), _fill("SELL", "4", "150")
-    transition, _ = _triple(prior, fill)
+    transition, new_state = _triple(prior, fill)
     forged = replace(prior, position_state_digest="d" * 64)
     with pytest.raises(PaperRealizedPnlError, match="prior_state_digest_mismatch"):
-        _event(forged, fill, transition)
+        _event(forged, fill, transition, new_state)
 
 
 def test_fill_result_digest_mismatch_rejected() -> None:
     prior, fill = _long(), _fill("SELL", "4", "150")
-    transition, _ = _triple(prior, fill)
+    transition, new_state = _triple(prior, fill)
     forged = replace(fill, result_digest="d" * 64)
     with pytest.raises(PaperRealizedPnlError, match="fill_result_digest_mismatch"):
-        _event(prior, forged, transition)
+        _event(prior, forged, transition, new_state)
 
 
 def test_transition_digest_mismatch_rejected() -> None:
     prior, fill = _long(), _fill("SELL", "4", "150")
-    transition, _ = _triple(prior, fill)
+    transition, new_state = _triple(prior, fill)
     forged = replace(transition, transition_digest="d" * 64)
     with pytest.raises(PaperRealizedPnlError, match="transition_digest_mismatch"):
-        _event(prior, fill, forged)
+        _event(prior, fill, forged, new_state)
+
+
+def test_new_state_digest_mismatch_rejected() -> None:
+    prior, fill = _long(), _fill("SELL", "4", "150")
+    transition, new_state = _triple(prior, fill)
+    forged = replace(new_state, position_state_digest="d" * 64)
+    with pytest.raises(PaperRealizedPnlError, match="new_state_digest_mismatch"):
+        _event(prior, fill, transition, forged)
+
+
+def test_wrong_typed_new_state_rejected() -> None:
+    prior, fill = _long(), _fill("SELL", "4", "150")
+    transition, _ = _triple(prior, fill)
+    with pytest.raises(PaperRealizedPnlError, match="new_state_malformed"):
+        _event(prior, fill, transition, {"x": 1})
 
 
 def test_transition_prior_digest_binding_mismatch_rejected() -> None:
     prior, fill = _long(), _fill("SELL", "4", "150")
-    transition, _ = _triple(prior, fill)
+    transition, new_state = _triple(prior, fill)
     forged = replace(transition, prior_position_state_digest="a" * 64)
     forged = replace(forged, transition_digest=paper_position_transition_result_digest(forged))
     with pytest.raises(PaperRealizedPnlError, match="transition_prior_digest_mismatch"):
-        _event(prior, fill, forged)
+        _event(prior, fill, forged, new_state)
 
 
 def test_transition_fill_digest_binding_mismatch_rejected() -> None:
     prior, fill = _long(), _fill("SELL", "4", "150")
-    transition, _ = _triple(prior, fill)
+    transition, new_state = _triple(prior, fill)
     forged = replace(transition, fill_simulation_result_digest="a" * 64)
     forged = replace(forged, transition_digest=paper_position_transition_result_digest(forged))
     with pytest.raises(PaperRealizedPnlError, match="transition_fill_digest_mismatch"):
-        _event(prior, fill, forged)
+        _event(prior, fill, forged, new_state)
+
+
+def test_transition_new_state_digest_binding_mismatch_rejected() -> None:
+    # Forge the transition's new-state digest to a random hex and recompute its self-digest.
+    prior, fill = _long(), _fill("SELL", "4", "150")
+    transition, new_state = _triple(prior, fill)
+    forged = replace(transition, new_position_state_digest="a" * 64)
+    forged = replace(forged, transition_digest=paper_position_transition_result_digest(forged))
+    with pytest.raises(PaperRealizedPnlError, match="transition_new_state_digest_mismatch"):
+        _event(prior, fill, forged, new_state)
+
+
+def test_transition_binding_unrelated_valid_new_state_rejected() -> None:
+    # Bind an unrelated-but-valid new state's digest: the economic re-proof (re-run apply) must catch it.
+    prior, fill = _long(), _fill("SELL", "4", "150")
+    transition, _ = _triple(prior, fill)
+    _, unrelated_new_state = _triple(_short(), _fill("BUY", "4", "150"), suffix="2")
+    assert unrelated_new_state is not None
+    forged = replace(transition, new_position_state_digest=unrelated_new_state.position_state_digest)
+    forged = replace(forged, transition_digest=paper_position_transition_result_digest(forged))
+    with pytest.raises(PaperRealizedPnlError, match="transition_not_reproducible"):
+        _event(prior, fill, forged, unrelated_new_state)
 
 
 def test_symbol_mismatch_rejected() -> None:
     prior, fill = _long(), _fill("SELL", "4", "150")
-    transition, _ = _triple(prior, fill)
+    transition, new_state = _triple(prior, fill)
     forged_prior = replace(prior, market_symbol="ETH-PERPETUAL")
     forged_prior = replace(forged_prior, position_state_digest=paper_position_state_digest(forged_prior))
     with pytest.raises(PaperRealizedPnlError, match="symbol_mismatch"):
-        _event(forged_prior, fill, transition)
+        _event(forged_prior, fill, transition, new_state)
 
 
 def test_rejected_fill_is_fail_closed() -> None:
@@ -395,13 +442,14 @@ def test_rejected_fill_is_fail_closed() -> None:
     )
     transition, _ = _triple(prior, rejected)
     assert transition.status is PaperPositionTransitionStatus.REJECTED
+    # REJECTED fill has no new state; the fill re-proof fails closed before any new-state binding check.
     with pytest.raises(PaperRealizedPnlError, match="fill_not_applicable"):
-        _event(prior, rejected, transition)
+        _event(prior, rejected, transition, prior)
 
 
 def test_transition_not_applied_rejected() -> None:
     prior, fill = _long(), _fill("SELL", "4", "150")
-    transition, _ = _triple(prior, fill)
+    transition, new_state = _triple(prior, fill)
     forged = replace(
         transition,
         status=PaperPositionTransitionStatus.REJECTED,
@@ -411,7 +459,7 @@ def test_transition_not_applied_rejected() -> None:
     )
     forged = replace(forged, transition_digest=paper_position_transition_result_digest(forged))
     with pytest.raises(PaperRealizedPnlError, match="transition_not_applied"):
-        _event(prior, fill, forged)
+        _event(prior, fill, forged, new_state)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -421,38 +469,38 @@ def test_transition_not_applied_rejected() -> None:
 
 def test_forged_self_consistent_prior_state_rejected() -> None:
     prior, fill = _long(), _fill("SELL", "4", "150")
-    transition, _ = _triple(prior, fill)
+    transition, new_state = _triple(prior, fill)
     forged = replace(prior, side=PaperPositionStateSide.SHORT)  # signed still > 0
     forged = replace(forged, position_state_digest=paper_position_state_digest(forged))
     with pytest.raises(PaperRealizedPnlError, match="prior_state_inconsistent"):
-        _event(forged, fill, transition)
+        _event(forged, fill, transition, new_state)
 
 
 def test_forged_self_consistent_fill_result_rejected() -> None:
     prior, fill = _long(), _fill("SELL", "4", "150")
-    transition, _ = _triple(prior, fill)
+    transition, new_state = _triple(prior, fill)
     forged = replace(fill, real_orders_enabled=True)
     forged = replace(forged, result_digest=paper_fill_simulation_result_digest(forged))
     with pytest.raises(PaperRealizedPnlError, match="fill_result_unsafe_flags"):
-        _event(prior, forged, transition)
+        _event(prior, forged, transition, new_state)
 
 
 def test_forged_self_consistent_transition_rejected() -> None:
     prior, fill = _long(), _fill("SELL", "4", "150")
-    transition, _ = _triple(prior, fill)
+    transition, new_state = _triple(prior, fill)
     forged = replace(transition, capital_mutated=True)
     forged = replace(forged, transition_digest=paper_position_transition_result_digest(forged))
     with pytest.raises(PaperRealizedPnlError, match="transition_unsafe_flags"):
-        _event(prior, fill, forged)
+        _event(prior, fill, forged, new_state)
 
 
 def test_forged_unsafe_prior_state_rejected() -> None:
     prior, fill = _long(), _fill("SELL", "4", "150")
-    transition, _ = _triple(prior, fill)
+    transition, new_state = _triple(prior, fill)
     forged = replace(prior, capital_mutated=True)
     forged = replace(forged, position_state_digest=paper_position_state_digest(forged))
     with pytest.raises(PaperRealizedPnlError, match="prior_state_unsafe_flags"):
-        _event(forged, fill, transition)
+        _event(forged, fill, transition, new_state)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -478,9 +526,9 @@ def test_metadata_malformed_rejected() -> None:
 
 def test_event_digest_deterministic() -> None:
     prior, fill = _long(), _fill("SELL", "4", "150")
-    transition, _ = _triple(prior, fill)
-    e1 = _event(prior, fill, transition)
-    e2 = _event(prior, fill, transition)
+    transition, new_state = _triple(prior, fill)
+    e1 = _event(prior, fill, transition, new_state)
+    e2 = _event(prior, fill, transition, new_state)
     assert e1 == e2
     assert e1.realized_pnl_event_digest == e2.realized_pnl_event_digest
     assert paper_realized_pnl_event_digest(e1) == e1.realized_pnl_event_digest
@@ -496,11 +544,11 @@ def test_event_immutable() -> None:
 
 def test_inputs_not_mutated() -> None:
     prior, fill = _long(), _fill("SELL", "4", "150")
-    transition, _ = _triple(prior, fill)
+    transition, new_state = _triple(prior, fill)
     prior_before = paper_position_state_digest(prior)
     fill_before = paper_fill_simulation_result_digest(fill)
     transition_before = paper_position_transition_result_digest(transition)
-    _event(prior, fill, transition)
+    _event(prior, fill, transition, new_state)
     assert paper_position_state_digest(prior) == prior_before
     assert paper_fill_simulation_result_digest(fill) == fill_before
     assert paper_position_transition_result_digest(transition) == transition_before
@@ -638,7 +686,7 @@ def test_end_to_end_open_then_close_realizes_pnl() -> None:
     assert flat_again.side is PaperPositionStateSide.FLAT
 
     event = compute_paper_realized_pnl_event(
-        long_state, fill_close, transition_close, realized_pnl_event_id="evt-e2e", correlation_id="corr-evt"
+        long_state, fill_close, transition_close, flat_again, realized_pnl_event_id="evt-e2e", correlation_id="corr-evt"
     )
     assert event.status is PaperRealizedPnlStatus.COMPUTED
     assert event.closed_units == "10"

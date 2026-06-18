@@ -50,9 +50,11 @@ from crypto_core.validation.paper_fill_simulator import (
 from crypto_core.validation.paper_order_intent_admission import PaperOrderIntentType, PaperOrderSide
 from crypto_core.validation.paper_position_state import (
     PaperPositionState,
+    PaperPositionStateError,
     PaperPositionStateSide,
     PaperPositionTransitionResult,
     PaperPositionTransitionStatus,
+    apply_paper_fill_to_position,
     paper_position_state_digest,
     paper_position_transition_result_digest,
 )
@@ -207,10 +209,22 @@ def _canonical_decimal(value: object) -> Decimal | None:
     return parsed
 
 
+def _decimal_span(value: Decimal) -> int:
+    """Positional span of an exact Decimal: significant digits PLUS the magnitude implied by the exponent.
+
+    ``len(as_tuple().digits)`` counts only significant digits, never the exponent gap, so a value such as
+    ``1e-100`` (one significant digit) would be sized as width 1 while it actually spans 101 fixed-point
+    places. Summing this span keeps the working precision wide enough that products/differences over
+    high-scale (many leading/trailing zero) inputs stay exact instead of being silently context-rounded.
+    """
+    tup = value.as_tuple()
+    return len(tup.digits) + abs(int(tup.exponent))
+
+
 def _arithmetic_precision(operands: tuple[Decimal, ...]) -> int:
     """Decimal precision wide enough that every exact product/difference over the inputs is exact."""
-    digits = sum(len(value.as_tuple().digits) for value in operands)
-    return max(28, digits + 40)
+    span = sum(_decimal_span(value) for value in operands)
+    return max(28, span + 40)
 
 
 def _normalize_metadata(metadata: object) -> tuple[tuple[str, str], ...]:
@@ -505,6 +519,7 @@ def compute_paper_realized_pnl_event(
     prior_state: PaperPositionState,
     fill_result: PaperFillSimulationResult,
     transition: PaperPositionTransitionResult,
+    new_position_state: PaperPositionState,
     *,
     realized_pnl_event_id: str,
     correlation_id: str,
@@ -512,12 +527,16 @@ def compute_paper_realized_pnl_event(
 ) -> PaperRealizedPnlEvent:
     """Compute a deterministic gross realized-PnL event for one applied fill/transition.
 
-    The ``prior_state``, ``fill_result``, and ``transition`` are re-proven via their PUBLIC digests
-    (mismatch raises) and structurally re-proven; the market symbol must match across all three; the
-    transition must be ``APPLIED`` and bind the exact prior/fill digests; the fill must be
-    ``FILLED``/``PARTIALLY_FILLED``. Realized PnL is computed from the PRIOR average and the fill price for
-    the closed/crossed prior units only (gross; no fees). Caller supplies only ids/correlation/metadata.
-    No unrealized/total PnL, no capital/balance, no order routing, no live API; inputs are never mutated.
+    The ``prior_state``, ``fill_result``, ``transition``, and the transition's resulting
+    ``new_position_state`` are re-proven via their PUBLIC digests (mismatch raises) and structurally
+    re-proven; the market symbol must match; the transition must be ``APPLIED`` and bind the exact
+    prior/fill digests; the fill must be ``FILLED``/``PARTIALLY_FILLED``. The transition + new state are
+    additionally re-proven to be the genuine deterministic result of applying THIS fill to THIS prior by
+    re-running the canonical ``apply_paper_fill_to_position`` and requiring identical transition and
+    new-state digests — so a self-consistent forged transition cannot bind an unrelated new-state digest
+    into the audit chain. Realized PnL is computed from the PRIOR average and the fill price for the
+    closed/crossed prior units only (gross; no fees). No unrealized/total PnL, no capital/balance, no
+    order routing, no live API; inputs are never mutated.
     """
     if not _is_non_empty_string(realized_pnl_event_id):
         raise PaperRealizedPnlError("paper_realized_pnl:realized_pnl_event_id_invalid")
@@ -532,6 +551,8 @@ def compute_paper_realized_pnl_event(
         raise PaperRealizedPnlError("paper_realized_pnl:fill_result_malformed")
     if not isinstance(transition, PaperPositionTransitionResult):
         raise PaperRealizedPnlError("paper_realized_pnl:transition_malformed")
+    if not isinstance(new_position_state, PaperPositionState):
+        raise PaperRealizedPnlError("paper_realized_pnl:new_state_malformed")
 
     # Digest boundaries: re-prove every input artifact's self-digest via its PUBLIC serializer.
     try:
@@ -554,6 +575,14 @@ def compute_paper_realized_pnl_event(
         raise PaperRealizedPnlError("paper_realized_pnl:transition_malformed") from exc
     if not isinstance(transition.transition_digest, str) or transition.transition_digest != expected_transition_digest:
         raise PaperRealizedPnlError("paper_realized_pnl:transition_digest_mismatch")
+    try:
+        expected_new_state_digest = paper_position_state_digest(new_position_state)
+    except Exception as exc:  # noqa: BLE001 - re-raise as a typed error; BaseException not caught
+        raise PaperRealizedPnlError("paper_realized_pnl:new_state_malformed") from exc
+    if not isinstance(new_position_state.position_state_digest, str) or new_position_state.position_state_digest != (
+        expected_new_state_digest
+    ):
+        raise PaperRealizedPnlError("paper_realized_pnl:new_state_digest_mismatch")
 
     prior_side, signed, average = _reprove_prior_state(prior_state)
     fill_side, filled, fill_price = _reprove_fill_result(fill_result)
@@ -569,6 +598,30 @@ def compute_paper_realized_pnl_event(
         raise PaperRealizedPnlError("paper_realized_pnl:transition_not_applied")
     if not _is_hex64_string(transition.new_position_state_digest):
         raise PaperRealizedPnlError("paper_realized_pnl:transition_new_state_missing")
+    if transition.new_position_state_digest != new_position_state.position_state_digest:
+        raise PaperRealizedPnlError("paper_realized_pnl:transition_new_state_digest_mismatch")
+
+    # Economic re-proof: the transition + new state must be the genuine deterministic result of applying
+    # THIS fill to THIS prior. Re-run the canonical producer with the transition's own ids/metadata and
+    # require identical transition and new-state digests — closes any self-consistent forged transition
+    # that binds an unrelated (even individually valid) new-state digest.
+    try:
+        recomputed_transition, recomputed_new_state = apply_paper_fill_to_position(
+            prior_state,
+            fill_result,
+            transition_id=transition.transition_id,
+            new_position_state_id=new_position_state.position_state_id,
+            correlation_id=transition.correlation_id,
+            metadata=dict(transition.metadata),
+        )
+    except PaperPositionStateError as exc:
+        raise PaperRealizedPnlError("paper_realized_pnl:transition_not_reproducible") from exc
+    if (
+        recomputed_new_state is None
+        or recomputed_transition.transition_digest != transition.transition_digest
+        or recomputed_new_state.position_state_digest != new_position_state.position_state_digest
+    ):
+        raise PaperRealizedPnlError("paper_realized_pnl:transition_not_reproducible")
 
     status, closed, residual, realized = _compute_realized(
         prior_side=prior_side, q0=signed, avg0=average, fill_side=fill_side, filled=filled, fill_price=fill_price
