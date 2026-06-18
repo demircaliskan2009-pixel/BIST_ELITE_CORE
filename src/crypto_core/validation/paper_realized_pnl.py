@@ -418,6 +418,13 @@ def _reprove_fill_result(fill: PaperFillSimulationResult) -> tuple[str, Decimal,
     else:  # PARTIALLY_FILLED
         if not unfilled > 0 or fill.reason_codes != (_REASON_PARTIAL_FILL,):
             raise PaperRealizedPnlError("paper_realized_pnl:fill_result_inconsistent")
+    # Economic integrity: gross_notional must be the EXACT product filled_units * fill_price (the fill
+    # simulator's own invariant). Computed under a span-aware context so the product is exact (no
+    # default-context rounding); a digest-valid forged fill with an impossible gross is rejected.
+    with localcontext() as ctx:
+        ctx.prec = _arithmetic_precision((filled, fill_price))
+        if filled * fill_price != gross:
+            raise PaperRealizedPnlError("paper_realized_pnl:fill_result_inconsistent")
     return fill.side, filled, fill_price
 
 

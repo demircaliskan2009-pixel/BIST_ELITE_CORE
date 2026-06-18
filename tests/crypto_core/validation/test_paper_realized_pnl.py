@@ -132,6 +132,17 @@ def _flat(*, market_symbol: str = "BTC-PERPETUAL"):
     )
 
 
+def _exact_gross(filled_units: str, fill_price: str) -> str:
+    """Exact filled_units * fill_price rendered canonically (matches the fill simulator's invariant)."""
+    with localcontext() as ctx:
+        ctx.prec = 200
+        product = Decimal(filled_units) * Decimal(fill_price)
+    rendered = format(product, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return "0" if rendered in {"", "-0"} else rendered
+
+
 def _fill(
     side: str,
     filled_units: str,
@@ -140,9 +151,11 @@ def _fill(
     status: PaperFillSimulationStatus = PaperFillSimulationStatus.FILLED,
     unfilled_units: str = "0",
     reason_codes: tuple[str, ...] = (),
-    gross_notional: str = "1",
+    gross_notional: str | None = None,
     market_symbol: str = "BTC-PERPETUAL",
 ) -> PaperFillSimulationResult:
+    if gross_notional is None:
+        gross_notional = _exact_gross(filled_units, fill_price)
     base = PaperFillSimulationResult(
         schema_version="paper-fill-simulation-result.v1",
         status=status,
@@ -335,6 +348,37 @@ def test_high_scale_leading_zero_average_exact() -> None:
     assert event.status is PaperRealizedPnlStatus.COMPUTED
     assert event.realized_pnl == _realized_oracle("LONG", "4", avg, "1")
     assert event.realized_pnl == "3." + "9" * 99 + "6"  # 4 - 4e-100, exact
+
+
+# --------------------------------------------------------------------------------------------------
+# Fail-closed: gross-notional economic integrity (gross == filled_units * fill_price)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_forged_gross_notional_rejected() -> None:
+    # Digest-valid forged fill: filled=4, price=150 ⇒ exact gross 600, but stored gross="1".
+    forged = _fill("SELL", "4", "150", gross_notional="1")
+    assert paper_fill_simulation_result_digest(forged) == forged.result_digest  # self-consistent
+    with pytest.raises(PaperRealizedPnlError, match="fill_result_inconsistent"):
+        _run(_long(signed="10", avg="100"), forged)
+
+
+def test_high_scale_correct_gross_accepted() -> None:
+    # High-scale fill price with the exactly-correct gross is accepted.
+    price = "1.0000000000000000000000000000000001"
+    fill = _fill("SELL", "4", price)  # helper computes the exact gross = 4 * price
+    event = _run(_long(signed="10", avg="100"), fill)
+    assert event.status is PaperRealizedPnlStatus.COMPUTED
+    assert event.realized_pnl == _realized_oracle("LONG", "4", "100", price)
+
+
+def test_high_scale_mismatched_gross_rejected() -> None:
+    # Same high-scale fill but gross truncated to "4" (true product is 4.000...0004) ⇒ rejected.
+    price = "1.0000000000000000000000000000000001"
+    forged = _fill("SELL", "4", price, gross_notional="4")
+    assert paper_fill_simulation_result_digest(forged) == forged.result_digest
+    with pytest.raises(PaperRealizedPnlError, match="fill_result_inconsistent"):
+        _run(_long(signed="10", avg="100"), forged)
 
 
 # --------------------------------------------------------------------------------------------------
