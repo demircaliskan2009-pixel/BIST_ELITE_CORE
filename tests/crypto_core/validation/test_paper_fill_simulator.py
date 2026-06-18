@@ -232,6 +232,32 @@ def test_fee_and_slippage_deterministic() -> None:
     assert result.fee_amount == "0.505"  # 505 * 10/10000
 
 
+def test_high_scale_tiny_slippage_fill_price_exact() -> None:
+    # slippage = 1e-91 ⇒ fill_price = 1 + 1e-95. Coefficient-only precision (with the +40 guard) rounds
+    # this exponent-gap tail away to "1"; span-aware precision keeps it exact.
+    intent = _intent(intent_type=PaperOrderIntentType.MARKET, side=PaperOrderSide.BUY, limit_price=None, units="1")
+    slippage = "0." + "0" * 90 + "1"
+    result = _simulate(intent, _snapshot(reference_price="1"), _policy(slippage_bps=slippage))
+    assert result.status is PaperFillSimulationStatus.FILLED
+    expected_price = "1." + "0" * 94 + "1"  # 1 + 1e-95
+    assert result.fill_price == expected_price
+    assert result.fill_price != "1"
+    assert result.gross_notional == expected_price  # filled_units == 1 ⇒ gross == fill_price, exact
+    assert "e" not in result.fill_price.lower()  # no scientific notation
+
+
+def test_high_scale_gross_notional_exact() -> None:
+    # filled = 2, price = 1 + 1e-95 ⇒ gross = 2 + 2e-95, exactly filled_units * fill_price.
+    intent = _intent(intent_type=PaperOrderIntentType.MARKET, side=PaperOrderSide.BUY, limit_price=None, units="2")
+    slippage = "0." + "0" * 90 + "1"
+    result = _simulate(intent, _snapshot(reference_price="1"), _policy(slippage_bps=slippage))
+    assert result.status is PaperFillSimulationStatus.FILLED
+    assert result.filled_units == "2"
+    assert result.fill_price == "1." + "0" * 94 + "1"
+    assert result.gross_notional == "2." + "0" * 94 + "2"  # 2 * (1 + 1e-95)
+    assert "e" not in result.gross_notional.lower()
+
+
 # --------------------------------------------------------------------------------------------------
 # Limit semantics
 # --------------------------------------------------------------------------------------------------

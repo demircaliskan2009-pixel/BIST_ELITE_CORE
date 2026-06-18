@@ -253,10 +253,22 @@ def _canonical_decimal(value: object) -> Decimal | None:
     return parsed
 
 
+def _decimal_span(value: Decimal) -> int:
+    """Positional span of an exact Decimal: significant digits PLUS the magnitude implied by the exponent.
+
+    ``len(as_tuple().digits)`` counts only significant digits, never the exponent gap, so a value such as
+    ``1e-100`` (one significant digit) would be sized as width 1 while it actually spans 101 fixed-point
+    places. Summing this span keeps the working precision wide enough that products/sums over high-scale
+    (many leading/trailing zero) inputs stay exact instead of being silently context-rounded.
+    """
+    tup = value.as_tuple()
+    return len(tup.digits) + abs(int(tup.exponent))
+
+
 def _arithmetic_precision(operands: tuple[Decimal, ...]) -> int:
     """Decimal precision wide enough that every exact product/sum over the inputs is exact."""
-    digits = sum(len(value.as_tuple().digits) for value in operands)
-    return max(28, digits + 40)
+    span = sum(_decimal_span(value) for value in operands)
+    return max(28, span + 40)
 
 
 def _normalize_metadata(metadata: object) -> tuple[tuple[str, str], ...]:

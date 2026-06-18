@@ -842,6 +842,43 @@ def _make_draft() -> PaperAllocatorIntentDraft:
     return replace(draft, draft_digest=paper_allocator_intent_draft_digest(draft))
 
 
+def test_high_scale_weighted_average_exponent_gap_exact() -> None:
+    # Same-side add where the fill price is 1e-45: the weighted-average numerator (1*1 + 1*1e-45) spans
+    # 46 places from one-significant-digit operands. Coefficient-only precision (+40 guard) rounds the
+    # numerator to 1 ⇒ avg "0.5"; span-aware precision keeps it exact.
+    price = "0." + "0" * 44 + "1"
+    prior = _state(side=PaperPositionStateSide.LONG, signed_units="1", abs_units="1", average_entry_price="1")
+    _, new_state = _apply(prior, _fill(side="BUY", filled_units="1", fill_price=price))
+    assert new_state is not None
+    assert new_state.signed_units == "2"
+    assert new_state.average_entry_price == _weighted_avg("1", "1", "1", price)
+    assert new_state.average_entry_price == "0.5" + "0" * 44 + "5"  # (1 + 1e-45)/2, exact
+    assert new_state.average_entry_price != "0.5"
+
+
+def test_high_scale_signed_units_reduce_exponent_gap_exact() -> None:
+    # A SELL of 1e-61 against a long of 1 must reduce it to 0.999…9 (61 nines), not be rounded away to 1.
+    filled = "0." + "0" * 60 + "1"
+    prior = _state(side=PaperPositionStateSide.LONG, signed_units="1", abs_units="1", average_entry_price="100")
+    _, new_state = _apply(prior, _fill(side="SELL", filled_units=filled, fill_price="100"))
+    assert new_state is not None
+    assert new_state.side is PaperPositionStateSide.LONG
+    assert new_state.signed_units == "0." + "9" * 61  # 1 - 1e-61, exact
+    assert new_state.signed_units != "1"
+    assert new_state.average_entry_price == "100"  # reduce preserves the prior average
+
+
+def test_high_scale_cross_residual_average_is_fill_price_exact() -> None:
+    # Cross-through: residual average comes directly from the fill price (no arithmetic) and is exact.
+    price = "0." + "0" * 44 + "1"
+    prior = _state(side=PaperPositionStateSide.LONG, signed_units="1", abs_units="1", average_entry_price="100")
+    _, new_state = _apply(prior, _fill(side="SELL", filled_units="3", fill_price=price))
+    assert new_state is not None
+    assert new_state.side is PaperPositionStateSide.SHORT
+    assert new_state.signed_units == "-2"  # 1 - 3, exact
+    assert new_state.average_entry_price == price  # residual opened at the fill price
+
+
 def test_end_to_end_intent_fill_position_chain() -> None:
     cap_policy = build_paper_capacity_gate_policy(
         policy_id="policy-alpha",
