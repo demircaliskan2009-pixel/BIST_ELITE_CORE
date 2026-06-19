@@ -1,30 +1,34 @@
-"""Paper realized-PnL rollup — deterministic, paper-only aggregation of realized-PnL events.
+"""Paper realized-PnL rollup — deterministic, paper-only aggregation of realized-PnL event bundles.
 
-A small, immutable, fail-closed *rollup artifact* that binds an ordered sequence of already-produced
-``PaperRealizedPnlEvent`` records into one frozen, digest-bound ``PaperRealizedPnlRollup``. It does
-**not** compute fills, positions, transitions, or per-fill realized PnL — it only re-proves, orders,
-de-duplicates, counts, and **sums the already-computed gross realized PnL** of existing realized-PnL
-events. It is gross only: it applies no fees and computes no unrealized PnL, total PnL, equity, capital,
-margin, or balances; it reserves/mutates no capital; routes no order; creates no venue/exchange/client
-order id / route id / execution instruction; calls no live/private API; schedules nothing; runs no
-auto-loop; and touches no
+A small, immutable, fail-closed *rollup artifact* that binds an ordered sequence of realized-PnL
+*provenance bundles* into one frozen, digest-bound ``PaperRealizedPnlRollup``. Each bundle pairs a
+``PaperRealizedPnlEvent`` with the exact upstream artifacts it was computed from (the prior
+``PaperPositionState``, the ``PaperFillSimulationResult``, the ``PaperPositionTransitionResult``, and the
+resulting ``PaperPositionState``). The rollup does **not** compute fills, positions, transitions, or
+per-fill realized PnL — it only re-proves provenance, orders, de-duplicates, counts, and **sums the
+already-computed gross realized PnL** of those events. It is gross only: it applies no fees and computes
+no unrealized PnL, total PnL, equity, capital, margin, or balances; it reserves/mutates no capital;
+routes no order; creates no venue/exchange/client order id / route id / execution instruction; calls no
+live/private API; schedules nothing; runs no auto-loop; and touches no
 connector/scheduler/runtime/venue/execution/service/session/data/portfolio/orchestrator/temporal
 surface, no Deribit, no BIST.
 
-Each input ``PaperRealizedPnlEvent`` is re-proven at the boundary via the PUBLIC
-``paper_realized_pnl_event_digest`` (mismatch fails closed) and then structurally re-proven for rollup
-consumption (schema, status enum, ids, paper-safe flags, gross-only attestations, status/reason/closed
-consistency, canonical decimal values). Digest equality alone is not trusted: a self-consistent forged
-event (digest recomputed over a tampered payload) is still rejected. All events must share one
-``market_symbol``; duplicate ``realized_pnl_event_digest`` or ``realized_pnl_event_id`` is rejected; the
-reserved ``REJECTED`` realized status (never emitted by the producer) is rejected fail-closed; caller
-order is preserved exactly and bound into the rollup digest.
+Provenance re-proof (per bundle): the supplied event self-digest is re-proven via the PUBLIC
+``paper_realized_pnl_event_digest``; then the canonical realized event is **reconstructed** from the
+supplied upstream artifacts via the PUBLIC ``compute_paper_realized_pnl_event`` (which transitively
+re-proves every upstream digest, the fill gross invariant, the position-state integrity, and that the
+transition + new state are the genuine deterministic product). The reconstructed event must equal the
+supplied event byte-for-byte (digest and full serialized payload); otherwise the bundle fails closed.
+This rejects a coordinated *resealed* event whose scalar economics are internally self-consistent but do
+not follow from the referenced upstream artifacts. All events must share one ``market_symbol``; duplicate
+``realized_pnl_event_id`` / ``realized_pnl_event_digest`` is rejected; the reserved ``REJECTED`` realized
+status (never emitted by the producer) is rejected fail-closed; caller order is preserved and bound.
 
 Rollup semantics: ``COMPUTED`` events add their exact gross ``realized_pnl`` and ``closed_units`` and
-increment the computed count; ``NO_REALIZED_PNL`` events add zero (and must carry zero closed units /
-zero realized PnL) and increment the no-realized count. Totals are summed under an input-derived,
-positional-span-aware ``localcontext`` so high-scale leading-zero values stay exact (no float, no
-``Decimal.normalize()``, no scientific notation, no negative zero); the canonical zero is ``"0"``.
+increment the computed count; ``NO_REALIZED_PNL`` events add zero and increment the no-realized count.
+Totals are summed under an input-derived, positional-span-aware ``localcontext`` so high-scale
+leading-zero values stay exact (no float, no ``Decimal.normalize()``, no scientific notation, no negative
+zero); the canonical zero is ``"0"``. Inputs are never mutated; the output is frozen and digest-bound.
 """
 
 from __future__ import annotations
@@ -37,16 +41,19 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, localcontext
 from enum import Enum
 
+from crypto_core.validation.paper_fill_simulator import PaperFillSimulationResult
+from crypto_core.validation.paper_position_state import PaperPositionState, PaperPositionTransitionResult
 from crypto_core.validation.paper_realized_pnl import (
+    PaperRealizedPnlError,
     PaperRealizedPnlEvent,
     PaperRealizedPnlStatus,
+    compute_paper_realized_pnl_event,
     paper_realized_pnl_event_digest,
+    paper_realized_pnl_event_to_dict,
 )
 
 _ROLLUP_SCHEMA_VERSION = "paper-realized-pnl-rollup.v1"
 _EXPECTED_EVENT_SCHEMA_VERSION = "paper-realized-pnl-event.v1"
-
-_REASON_NO_CLOSED_UNITS = "no_closed_units"
 
 # Deterministic upper bound on the number of rolled-up events (fail-closed; not a tuning knob).
 _MAX_EVENT_COUNT = 10_000
@@ -74,7 +81,7 @@ _SAFE_MARKET_DATA_TERMS = ("limit_order_book", "order_book", "order_flow")
 
 
 class PaperRealizedPnlRollupError(RuntimeError):
-    """Raised when rollup/event inputs are wrong-typed/malformed/forged or fail re-proof (fail-closed)."""
+    """Raised when rollup/bundle inputs are wrong-typed/malformed/forged or fail re-proof (fail-closed)."""
 
 
 class PaperRealizedPnlRollupStatus(str, Enum):
@@ -85,13 +92,29 @@ class PaperRealizedPnlRollupStatus(str, Enum):
 
 
 @dataclass(frozen=True)
+class PaperRealizedPnlRollupInput:
+    """One provenance bundle: a realized-PnL event plus the exact upstream artifacts it was computed from.
+
+    The rollup reconstructs the canonical realized event from these upstream artifacts and requires the
+    supplied ``event`` to match exactly, so a coordinated resealed event (scalar fields self-consistent but
+    upstream references pointing at unrelated artifacts) cannot enter the aggregation. PAPER ONLY.
+    """
+
+    event: PaperRealizedPnlEvent
+    prior_state: PaperPositionState
+    fill_result: PaperFillSimulationResult
+    transition: PaperPositionTransitionResult
+    new_position_state: PaperPositionState
+
+
+@dataclass(frozen=True)
 class PaperRealizedPnlRollup:
     """Deterministic, immutable digest-bound rollup of paper realized-PnL events. Gross only. PAPER ONLY.
 
-    Sums the already-computed gross ``realized_pnl`` and ``closed_units`` of an ordered, digest-bound
-    sequence of ``PaperRealizedPnlEvent`` records and counts them by status. Never computes fills,
-    positions, fees, unrealized/total PnL, equity, capital, margin, or balances. ``rollup_computed`` is
-    True; every hard-safety attestation is False and ``gross_only`` is True.
+    Sums the already-computed gross ``realized_pnl`` and ``closed_units`` of an ordered, provenance-proven
+    sequence of realized-PnL events and counts them by status. Never computes fills, positions, fees,
+    unrealized/total PnL, equity, capital, margin, or balances. ``rollup_computed`` is True; every
+    hard-safety attestation is False and ``gross_only`` is True.
     """
 
     schema_version: str
@@ -141,10 +164,6 @@ def _canonical_digest(payload: dict[str, object]) -> str:
 
 def _is_non_empty_string(value: object) -> bool:
     return isinstance(value, str) and value.strip() != ""
-
-
-def _is_int(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _is_hex64_string(value: object) -> bool:
@@ -253,7 +272,7 @@ def _has_scope_violation(*texts: object) -> bool:
 
 
 # --------------------------------------------------------------------------------------------------
-# Event re-proof
+# Bundle / event re-proof
 # --------------------------------------------------------------------------------------------------
 
 
@@ -282,49 +301,12 @@ def _event_is_paper_safe(event: PaperRealizedPnlEvent) -> bool:
     )
 
 
-def _rederive_realized(
-    *,
-    prior_side: str,
-    q0: Decimal,
-    avg0: Decimal | None,
-    fill_side: str,
-    filled: Decimal,
-    fill_price: Decimal,
-) -> tuple[PaperRealizedPnlStatus, Decimal, Decimal, Decimal]:
-    """Re-derive (status, closed_units, residual_open_units, realized_pnl) from the event's own economic
-    inputs, exactly mirroring ``paper_realized_pnl._compute_realized``.
+def _reprove_event_shape(event: PaperRealizedPnlEvent) -> None:
+    """Cheap structural/safety/scope re-proof of the SUPPLIED event (precise fail-closed errors).
 
-    Digest self-consistency proves only that the event has not been altered relative to its own digest, not
-    that its realized/closed amounts follow from its prior/fill economics. A forged event that recomputes
-    its digest after tampering ``realized_pnl``/``closed_units`` would otherwise be summed into the rollup;
-    re-deriving from ``prior_side``/``prior_signed_units``/``filled_units``/``average_entry_price``/
-    ``fill_price`` and requiring an exact match closes that off (fail-closed). Pure products/differences
-    (no division) under a span-aware context, so the re-derivation is exact. ``avg0`` is guaranteed present
-    by the caller's prior-side consistency check for the non-flat branch where it is used.
-    """
-    delta = filled if fill_side == "BUY" else filled.copy_negate()
-    operands = (q0, filled, fill_price, avg0 if avg0 is not None else Decimal(0))
-    with localcontext() as ctx:
-        ctx.prec = _arithmetic_precision(operands)
-        q1 = q0 + delta
-        residual = q1.copy_abs()
-        if prior_side == "FLAT" or (q0 > 0) == (delta > 0):
-            # flat open or same-side add — nothing closed, nothing realized
-            return PaperRealizedPnlStatus.NO_REALIZED_PNL, Decimal(0), residual, Decimal(0)
-        abs_q0 = q0.copy_abs()
-        closed = filled if filled < abs_q0 else abs_q0  # min(filled, |q0|)
-        if prior_side == "LONG":  # SELL closes a long
-            realized = closed * (fill_price - avg0)  # type: ignore[operator]
-        else:  # SHORT — BUY closes a short
-            realized = closed * (avg0 - fill_price)  # type: ignore[operator]
-    return PaperRealizedPnlStatus.COMPUTED, closed, residual, realized
-
-
-def _reprove_event(event: PaperRealizedPnlEvent) -> tuple[PaperRealizedPnlStatus, Decimal, Decimal]:
-    """Re-prove a digest-valid realized-PnL event's structure/safety/consistency; return (status, realized, closed).
-
-    A self-consistent forged event (digest recomputed over a tampered payload) must still fail here. The
-    reserved ``REJECTED`` realized status is never emitted by the producer and is rejected fail-closed.
+    Economics and provenance are proven by reconstruction (``_reprove_entry``); this guards shape, the
+    paper-safe attestations, gross-only (no applied fee), the supported status set (the reserved
+    ``REJECTED`` status is never emitted by the producer), and forbidden-token leakage in event fields.
     """
     if event.schema_version != _EXPECTED_EVENT_SCHEMA_VERSION:
         raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_malformed")
@@ -360,58 +342,67 @@ def _reprove_event(event: PaperRealizedPnlEvent) -> tuple[PaperRealizedPnlStatus
     ):
         raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_scope_violation")
 
-    realized = _canonical_decimal(event.realized_pnl)
-    closed = _canonical_decimal(event.closed_units)
-    residual = _canonical_decimal(event.residual_open_units)
-    q0 = _canonical_decimal(event.prior_signed_units)
-    filled = _canonical_decimal(event.filled_units)
-    fill_price = _canonical_decimal(event.fill_price)
-    if realized is None or closed is None or residual is None or q0 is None or filled is None or fill_price is None:
+
+def _reprove_entry(entry: PaperRealizedPnlRollupInput) -> tuple[PaperRealizedPnlEvent, Decimal, Decimal]:
+    """Re-prove one provenance bundle and return (canonical event, realized_pnl, closed_units).
+
+    The supplied event is shape/safety-checked and self-digest-verified, then the canonical realized event
+    is reconstructed from the supplied upstream artifacts and required to match the supplied event exactly
+    (digest + full serialized payload). A coordinated resealed event — scalar economics internally
+    consistent but not the genuine result of the referenced upstream artifacts — fails closed here.
+    """
+    if not isinstance(entry, PaperRealizedPnlRollupInput):
+        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:entry_malformed")
+    event = entry.event
+    if not isinstance(event, PaperRealizedPnlEvent):
         raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_malformed")
-    if closed < 0 or residual < 0 or not filled > 0 or not fill_price > 0:
-        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_inconsistent")
-    avg0: Decimal | None = None
-    if event.average_entry_price is not None:
-        avg0 = _canonical_decimal(event.average_entry_price)
-        if avg0 is None or not avg0 > 0:
-            raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_malformed")
+    if not isinstance(entry.prior_state, PaperPositionState):
+        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:prior_state_malformed")
+    if not isinstance(entry.fill_result, PaperFillSimulationResult):
+        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:fill_result_malformed")
+    if not isinstance(entry.transition, PaperPositionTransitionResult):
+        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:transition_malformed")
+    if not isinstance(entry.new_position_state, PaperPositionState):
+        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:new_state_malformed")
 
-    # Prior side / signed-units / average consistency (mirror of the position-state invariant).
-    if event.prior_side == "FLAT":
-        if q0 != 0 or avg0 is not None:
-            raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_inconsistent")
-    elif event.prior_side == "LONG":
-        if not q0 > 0 or avg0 is None:
-            raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_inconsistent")
-    else:  # SHORT
-        if not q0 < 0 or avg0 is None:
-            raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_inconsistent")
+    _reprove_event_shape(event)
 
-    # Economic re-proof: re-derive status/closed/residual/realized from the event's own prior+fill inputs
-    # and require an exact match. Digest validity proves identity, not economics — a self-consistent forged
-    # event whose realized/closed amounts do not follow from its inputs fails closed here, never summed.
-    derived_status, derived_closed, derived_residual, derived_realized = _rederive_realized(
-        prior_side=event.prior_side, q0=q0, avg0=avg0, fill_side=event.fill_side, filled=filled, fill_price=fill_price
-    )
-    if (
-        derived_status is not event.status
-        or derived_closed != closed
-        or derived_residual != residual
-        or derived_realized != realized
+    # Digest boundary: the supplied event must be self-consistent (digest recomputed from its own payload).
+    try:
+        supplied_digest = paper_realized_pnl_event_digest(event)
+    except Exception as exc:  # noqa: BLE001 - re-raise as a typed error; BaseException not caught
+        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_digest_mismatch") from exc
+    if not isinstance(event.realized_pnl_event_digest, str) or event.realized_pnl_event_digest != supplied_digest:
+        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_digest_mismatch")
+
+    # Provenance: reconstruct the canonical realized event from the SUPPLIED upstream artifacts. compute_*
+    # transitively re-proves every upstream digest, the fill gross invariant, position-state integrity, and
+    # that the transition + new state are the genuine deterministic product; any inconsistency raises.
+    try:
+        recomputed = compute_paper_realized_pnl_event(
+            entry.prior_state,
+            entry.fill_result,
+            entry.transition,
+            entry.new_position_state,
+            realized_pnl_event_id=event.realized_pnl_event_id,
+            correlation_id=event.correlation_id,
+            metadata=dict(event.metadata),
+        )
+    except PaperRealizedPnlError as exc:
+        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_not_reproducible") from exc
+
+    # The supplied event must be EXACTLY the canonical reconstruction (digest + full serialized payload),
+    # binding its scalar economics to the referenced upstream artifacts. Closes the coordinated reseal.
+    if recomputed.realized_pnl_event_digest != event.realized_pnl_event_digest or (
+        paper_realized_pnl_event_to_dict(recomputed) != paper_realized_pnl_event_to_dict(event)
     ):
         raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_inconsistent")
 
-    if event.status is PaperRealizedPnlStatus.COMPUTED:
-        if event.realized_pnl_computed is not True or event.reason_codes != ():
-            raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_inconsistent")
-        if not closed > 0:  # a COMPUTED event closed strictly positive units
-            raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_inconsistent")
-    else:  # NO_REALIZED_PNL
-        if event.realized_pnl_computed is not False or event.reason_codes != (_REASON_NO_CLOSED_UNITS,):
-            raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_inconsistent")
-        if closed != 0 or realized != 0:  # nothing closed ⇒ exactly zero closed units and zero realized PnL
-            raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_inconsistent")
-    return event.status, realized, closed
+    realized = _canonical_decimal(recomputed.realized_pnl)
+    closed = _canonical_decimal(recomputed.closed_units)
+    if realized is None or closed is None or closed < 0:
+        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_malformed")
+    return recomputed, realized, closed
 
 
 # --------------------------------------------------------------------------------------------------
@@ -420,21 +411,23 @@ def _reprove_event(event: PaperRealizedPnlEvent) -> tuple[PaperRealizedPnlStatus
 
 
 def build_paper_realized_pnl_rollup(
-    events: Sequence[PaperRealizedPnlEvent],
+    entries: Sequence[PaperRealizedPnlRollupInput],
     *,
     rollup_id: str,
     correlation_id: str,
     metadata: Mapping[str, str] | None = None,
 ) -> PaperRealizedPnlRollup:
-    """Build a deterministic, immutable digest-bound rollup from an ordered sequence of realized-PnL events.
+    """Build a deterministic, immutable digest-bound rollup from an ordered sequence of provenance bundles.
 
-    Each event is re-proven via the PUBLIC ``paper_realized_pnl_event_digest`` (mismatch raises) and
-    structurally re-proven for rollup consumption; all events must share one ``market_symbol`` and have
-    unique ``realized_pnl_event_digest`` / ``realized_pnl_event_id``; caller order is preserved and bound.
-    The non-empty, bounded sequence's gross ``realized_pnl`` and ``closed_units`` are summed exactly
-    (span-aware ``Decimal``; gross only — no fees, no unrealized/total PnL, no equity/capital/margin/
-    balance). Wrong-typed/malformed/forged inputs raise ``PaperRealizedPnlRollupError``; inputs are never
-    mutated; no order routing, no live API, no scheduler/auto-loop, no connector/readiness transition.
+    Each bundle's event is re-proven via the PUBLIC ``paper_realized_pnl_event_digest`` and reconstructed
+    from its supplied upstream artifacts via the PUBLIC ``compute_paper_realized_pnl_event`` (which
+    transitively re-proves the whole upstream chain); the supplied event must match the reconstruction
+    exactly. All events must share one ``market_symbol`` and have unique ``realized_pnl_event_id`` /
+    ``realized_pnl_event_digest``; caller order is preserved and bound. The non-empty, bounded sequence's
+    gross ``realized_pnl`` and ``closed_units`` are summed exactly (span-aware ``Decimal``; gross only — no
+    fees, no unrealized/total PnL, no equity/capital/margin/balance). Wrong-typed/malformed/forged/
+    coordinated-resealed inputs raise ``PaperRealizedPnlRollupError``; inputs are never mutated; no order
+    routing, no live API, no scheduler/auto-loop, no connector/readiness transition.
     """
     if not _is_non_empty_string(rollup_id):
         raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:rollup_id_invalid")
@@ -443,12 +436,12 @@ def build_paper_realized_pnl_rollup(
     rollup_metadata = _normalize_metadata(metadata)
     if _has_scope_violation(rollup_id, correlation_id, *_metadata_texts(rollup_metadata)):
         raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:scope_violation")
-    if isinstance(events, (str, bytes)) or not isinstance(events, Sequence):
-        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:events_malformed")
-    event_tuple = tuple(events)
-    if not event_tuple:
-        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:events_empty")
-    if len(event_tuple) > _MAX_EVENT_COUNT:
+    if isinstance(entries, (str, bytes)) or not isinstance(entries, Sequence):
+        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:entries_malformed")
+    entry_tuple = tuple(entries)
+    if not entry_tuple:
+        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:entries_empty")
+    if len(entry_tuple) > _MAX_EVENT_COUNT:
         raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_count_exceeds_max")
 
     market_symbol: str | None = None
@@ -459,33 +452,21 @@ def build_paper_realized_pnl_rollup(
     computed = 0
     no_realized = 0
 
-    for event in event_tuple:
-        if not isinstance(event, PaperRealizedPnlEvent):
-            raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_malformed")
-        try:
-            expected_digest = paper_realized_pnl_event_digest(event)
-        except Exception as exc:  # noqa: BLE001 - re-raise as a typed error; BaseException not caught
-            # A non-serializable / forged event cannot produce a recomputable canonical digest, so its
-            # stored digest cannot be proven equal — a digest-boundary rejection (mismatch), per the
-            # AGENTS.md digest-boundary rule.
-            raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_digest_mismatch") from exc
-        if not isinstance(event.realized_pnl_event_digest, str) or event.realized_pnl_event_digest != expected_digest:
-            raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_digest_mismatch")
-
-        status, realized, closed = _reprove_event(event)
+    for entry in entry_tuple:
+        recomputed, realized, closed = _reprove_entry(entry)
 
         if market_symbol is None:
-            market_symbol = event.market_symbol
-        elif event.market_symbol != market_symbol:
+            market_symbol = recomputed.market_symbol
+        elif recomputed.market_symbol != market_symbol:
             raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:symbol_mismatch")
 
-        digests.append(event.realized_pnl_event_digest)
-        ids.append(event.realized_pnl_event_id)
+        digests.append(recomputed.realized_pnl_event_digest)
+        ids.append(recomputed.realized_pnl_event_id)
         realized_values.append(realized)
         closed_values.append(closed)
-        if status is PaperRealizedPnlStatus.COMPUTED:
+        if recomputed.status is PaperRealizedPnlStatus.COMPUTED:
             computed += 1
-        else:  # NO_REALIZED_PNL (REJECTED already rejected by _reprove_event)
+        else:  # NO_REALIZED_PNL (REJECTED can never be a canonical reconstruction)
             no_realized += 1
 
     if len(set(digests)) != len(digests):
@@ -505,7 +486,7 @@ def build_paper_realized_pnl_rollup(
         realized_total_str = _render_decimal(realized_total)
         closed_total_str = _render_decimal(closed_total)
 
-    event_count = len(event_tuple)
+    event_count = len(entry_tuple)
     assert market_symbol is not None  # noqa: S101 - guaranteed non-empty by the loop above
     return _finalize_rollup(
         rollup_id=rollup_id,
@@ -638,6 +619,7 @@ def paper_realized_pnl_rollup_digest(rollup: PaperRealizedPnlRollup) -> str:
 __all__ = [
     "PaperRealizedPnlRollup",
     "PaperRealizedPnlRollupError",
+    "PaperRealizedPnlRollupInput",
     "PaperRealizedPnlRollupStatus",
     "build_paper_realized_pnl_rollup",
     "paper_realized_pnl_rollup_digest",

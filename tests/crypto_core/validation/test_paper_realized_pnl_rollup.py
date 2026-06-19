@@ -1,4 +1,4 @@
-"""Tests for the paper realized-PnL rollup — deterministic, paper-only, gross-only, fail-closed."""
+"""Tests for the paper realized-PnL rollup — deterministic, paper-only, gross-only, provenance-bound."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from crypto_core.validation.paper_realized_pnl import (
 )
 from crypto_core.validation.paper_realized_pnl_rollup import (
     PaperRealizedPnlRollupError,
+    PaperRealizedPnlRollupInput,
     PaperRealizedPnlRollupStatus,
     build_paper_realized_pnl_rollup,
     paper_realized_pnl_rollup_digest,
@@ -197,20 +198,7 @@ def _fill(side: str, filled: str, price: str, *, market_symbol: str = "BTC-PERPE
     return replace(base, result_digest=paper_fill_simulation_result_digest(base))
 
 
-def _event(prior, fill, *, event_id: str, correlation_id: str = "corr-evt", suffix: str = "1"):
-    transition, new_state = apply_paper_fill_to_position(
-        prior,
-        fill,
-        transition_id=f"trans-{suffix}",
-        new_position_state_id=f"newpos-{suffix}",
-        correlation_id="corr-apply",
-    )
-    return compute_paper_realized_pnl_event(
-        prior, fill, transition, new_state, realized_pnl_event_id=event_id, correlation_id=correlation_id
-    )
-
-
-def _computed(
+def _bundle(
     event_id: str,
     *,
     prior_side: str = "LONG",
@@ -219,41 +207,77 @@ def _computed(
     filled: str = "4",
     market_symbol: str = "BTC-PERPETUAL",
     correlation_id: str = "corr-evt",
-):
-    """A genuine COMPUTED realized event built through the real per-fill flow (apply + compute)."""
+) -> PaperRealizedPnlRollupInput:
+    """A genuine provenance bundle (event + the exact upstream artifacts) via the real per-fill flow."""
     if prior_side == "LONG":
         prior = _long(avg=avg, market_symbol=market_symbol)
         fill = _fill("SELL", filled, price, market_symbol=market_symbol)
-    else:
+    elif prior_side == "SHORT":
         prior = _short(avg=avg, market_symbol=market_symbol)
         fill = _fill("BUY", filled, price, market_symbol=market_symbol)
-    return _event(prior, fill, event_id=event_id, correlation_id=correlation_id, suffix=event_id)
+    else:  # FLAT — open from flat (NO_REALIZED_PNL)
+        prior = _flat(market_symbol=market_symbol)
+        fill = _fill("BUY", filled, price, market_symbol=market_symbol)
+    transition, new_state = apply_paper_fill_to_position(
+        prior,
+        fill,
+        transition_id=f"trans-{event_id}",
+        new_position_state_id=f"newpos-{event_id}",
+        correlation_id="corr-apply",
+    )
+    event = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id=event_id, correlation_id=correlation_id
+    )
+    return PaperRealizedPnlRollupInput(
+        event=event, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
 
 
-def _no_realized(event_id: str, *, market_symbol: str = "BTC-PERPETUAL", correlation_id: str = "corr-evt"):
-    """A genuine NO_REALIZED_PNL event (open from flat — nothing closed)."""
-    prior = _flat(market_symbol=market_symbol)
-    fill = _fill("BUY", "10", "100", market_symbol=market_symbol)
-    return _event(prior, fill, event_id=event_id, correlation_id=correlation_id, suffix=event_id)
+def _computed(event_id: str, **kwargs: object) -> PaperRealizedPnlRollupInput:
+    """A genuine COMPUTED bundle (LONG reduce by default)."""
+    return _bundle(event_id, **kwargs)  # type: ignore[arg-type]
 
 
-def _rollup(events, **overrides):
+def _no_realized(event_id: str, **kwargs: object) -> PaperRealizedPnlRollupInput:
+    """A genuine NO_REALIZED_PNL bundle (open from flat — nothing closed)."""
+    return _bundle(event_id, prior_side="FLAT", filled="10", price="100", **kwargs)  # type: ignore[arg-type]
+
+
+def _forge_event(bundle: PaperRealizedPnlRollupInput, *, reseal: bool = True, **event_overrides: object):
+    """Return a bundle whose EVENT is forged (optionally re-sealed self-consistent) while the upstream
+    artifacts stay the genuine originals — the coordinated-reseal threat model."""
+    forged_event = replace(bundle.event, **event_overrides)
+    if reseal:
+        forged_event = replace(forged_event, realized_pnl_event_digest=paper_realized_pnl_event_digest(forged_event))
+    return replace(bundle, event=forged_event)
+
+
+def _rollup(entries, **overrides):
     base: dict[str, object] = {"rollup_id": "rollup-1", "correlation_id": "corr-rollup"}
     base.update(overrides)
-    return build_paper_realized_pnl_rollup(events, **base)  # type: ignore[arg-type]
+    return build_paper_realized_pnl_rollup(entries, **base)  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------------------------------
-# Sanity on the realized-event fixtures the rollup consumes
+# Sanity on the genuine bundles the rollup consumes
 # --------------------------------------------------------------------------------------------------
 
 
-def test_fixture_event_is_computed_with_expected_realized() -> None:
-    event = _computed("e1")  # LONG avg 100, SELL 4 @ 150 -> +200, closed 4
+def test_fixture_bundle_is_computed_with_expected_realized() -> None:
+    event = _computed("e1").event  # LONG avg 100, SELL 4 @ 150 -> +200, closed 4
     assert event.status is PaperRealizedPnlStatus.COMPUTED
     assert event.realized_pnl == "200"
     assert event.closed_units == "4"
     assert paper_realized_pnl_event_digest(event) == event.realized_pnl_event_digest
+
+
+def test_genuine_bundle_accepted() -> None:
+    bundle = _computed("e1")
+    rollup = _rollup([bundle])
+    assert rollup.status is PaperRealizedPnlRollupStatus.COMPUTED
+    assert rollup.realized_pnl_total == "200"
+    assert rollup.closed_units_total == "4"
+    assert rollup.source_event_digests == (bundle.event.realized_pnl_event_digest,)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -262,8 +286,8 @@ def test_fixture_event_is_computed_with_expected_realized() -> None:
 
 
 def test_single_computed_event_rollup() -> None:
-    event = _computed("e1")
-    rollup = _rollup([event])
+    bundle = _computed("e1")
+    rollup = _rollup([bundle])
     assert rollup.status is PaperRealizedPnlRollupStatus.COMPUTED
     assert rollup.market_symbol == "BTC-PERPETUAL"
     assert rollup.event_count == 1
@@ -272,7 +296,7 @@ def test_single_computed_event_rollup() -> None:
     assert rollup.rejected_event_count == 0
     assert rollup.realized_pnl_total == "200"
     assert rollup.closed_units_total == "4"
-    assert rollup.source_event_digests == (event.realized_pnl_event_digest,)
+    assert rollup.source_event_digests == (bundle.event.realized_pnl_event_digest,)
     assert rollup.reason_codes == ()
     assert rollup.gross_only is True
     assert _is_hex64(rollup.rollup_digest)
@@ -286,7 +310,7 @@ def test_multiple_computed_positive_and_negative() -> None:
     assert rollup.computed_event_count == 2
     assert rollup.realized_pnl_total == "120"  # 200 + (-80)
     assert rollup.closed_units_total == "8"
-    assert rollup.source_event_digests == (gain.realized_pnl_event_digest, loss.realized_pnl_event_digest)
+    assert rollup.source_event_digests == (gain.event.realized_pnl_event_digest, loss.event.realized_pnl_event_digest)
 
 
 def test_computed_plus_no_realized_counts() -> None:
@@ -314,7 +338,7 @@ def test_high_scale_leading_zero_realized_exact_sum() -> None:
     avg = "0." + "0" * 99 + "1"
     e1 = _computed("e1", avg=avg, price="1")
     e2 = _computed("e2", avg=avg, price="1")
-    assert e1.realized_pnl == "3." + "9" * 99 + "6"
+    assert e1.event.realized_pnl == "3." + "9" * 99 + "6"
     rollup = _rollup([e1, e2])
     assert rollup.realized_pnl_total == "7." + "9" * 99 + "2"
     assert rollup.realized_pnl_total != "8"
@@ -331,31 +355,37 @@ def test_cancellation_to_canonical_zero_no_negative_zero() -> None:
 
 
 # --------------------------------------------------------------------------------------------------
-# Fail-closed
+# Fail-closed: input shape
 # --------------------------------------------------------------------------------------------------
 
 
-def test_empty_events_rejected() -> None:
-    with pytest.raises(PaperRealizedPnlRollupError, match="events_empty"):
+def test_empty_entries_rejected() -> None:
+    with pytest.raises(PaperRealizedPnlRollupError, match="entries_empty"):
         _rollup([])
 
 
 @pytest.mark.parametrize("bad", ["evt", b"evt", 5, {"e": 1}])
-def test_non_sequence_events_rejected(bad: object) -> None:
-    with pytest.raises(PaperRealizedPnlRollupError, match="events_malformed"):
+def test_non_sequence_entries_rejected(bad: object) -> None:
+    with pytest.raises(PaperRealizedPnlRollupError, match="entries_malformed"):
         _rollup(bad)  # type: ignore[arg-type]
 
 
-def test_non_event_member_rejected() -> None:
-    with pytest.raises(PaperRealizedPnlRollupError, match="event_malformed"):
-        _rollup([{"not": "an-event"}])  # type: ignore[list-item]
+def test_non_bundle_member_rejected() -> None:
+    with pytest.raises(PaperRealizedPnlRollupError, match="entry_malformed"):
+        _rollup([{"not": "a-bundle"}])  # type: ignore[list-item]
+
+
+def test_naked_event_input_rejected() -> None:
+    # The public builder requires provenance bundles; a naked event is not a bundle.
+    with pytest.raises(PaperRealizedPnlRollupError, match="entry_malformed"):
+        _rollup([_computed("e1").event])
 
 
 def test_event_count_exceeds_max_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(paper_realized_pnl_rollup, "_MAX_EVENT_COUNT", 2)
-    events = [_computed("e1"), _computed("e2"), _computed("e3")]
+    entries = [_computed("e1"), _computed("e2"), _computed("e3")]
     with pytest.raises(PaperRealizedPnlRollupError, match="event_count_exceeds_max"):
-        _rollup(events)
+        _rollup(entries)
 
 
 def test_symbol_mismatch_rejected() -> None:
@@ -366,30 +396,34 @@ def test_symbol_mismatch_rejected() -> None:
 
 
 def test_duplicate_event_digest_rejected() -> None:
-    event = _computed("e1")
+    bundle = _computed("e1")
     with pytest.raises(PaperRealizedPnlRollupError, match="duplicate_event_digest"):
-        _rollup([event, event])
+        _rollup([bundle, bundle])
 
 
 def test_duplicate_event_id_rejected() -> None:
     # Same id, different economics -> distinct digests but a duplicate id must still fail closed.
     e1 = _computed("dup", price="150")
     e2 = _computed("dup", price="80")
-    assert e1.realized_pnl_event_digest != e2.realized_pnl_event_digest
+    assert e1.event.realized_pnl_event_digest != e2.event.realized_pnl_event_digest
     with pytest.raises(PaperRealizedPnlRollupError, match="duplicate_event_id"):
         _rollup([e1, e2])
 
 
+# --------------------------------------------------------------------------------------------------
+# Fail-closed: event shape / safety re-proof (precise errors before reconstruction)
+# --------------------------------------------------------------------------------------------------
+
+
 def test_event_digest_mismatch_rejected() -> None:
-    forged = replace(_computed("e1"), realized_pnl_event_digest="d" * 64)
+    forged = _forge_event(_computed("e1"), reseal=False, realized_pnl_event_digest="d" * 64)
     with pytest.raises(PaperRealizedPnlRollupError, match="event_digest_mismatch"):
         _rollup([forged])
 
 
 def test_forged_self_consistent_unsafe_flag_rejected() -> None:
-    forged = replace(_computed("e1"), capital_mutated=True)
-    forged = replace(forged, realized_pnl_event_digest=paper_realized_pnl_event_digest(forged))
-    assert paper_realized_pnl_event_digest(forged) == forged.realized_pnl_event_digest  # self-consistent
+    forged = _forge_event(_computed("e1"), capital_mutated=True)
+    assert paper_realized_pnl_event_digest(forged.event) == forged.event.realized_pnl_event_digest  # self-consistent
     with pytest.raises(PaperRealizedPnlRollupError, match="event_unsafe_flags"):
         _rollup([forged])
 
@@ -397,60 +431,113 @@ def test_forged_self_consistent_unsafe_flag_rejected() -> None:
 def test_forged_reserved_rejected_status_rejected() -> None:
     # The reserved REJECTED realized status is never emitted by the producer; a forged self-consistent
     # event claiming it must fail closed at the rollup boundary.
-    forged = replace(_computed("e1"), status=PaperRealizedPnlStatus.REJECTED)
-    forged = replace(forged, realized_pnl_event_digest=paper_realized_pnl_event_digest(forged))
-    assert paper_realized_pnl_event_digest(forged) == forged.realized_pnl_event_digest
+    forged = _forge_event(_computed("e1"), status=PaperRealizedPnlStatus.REJECTED)
+    assert paper_realized_pnl_event_digest(forged.event) == forged.event.realized_pnl_event_digest
     with pytest.raises(PaperRealizedPnlRollupError, match="event_status_invalid"):
-        _rollup([forged])
-
-
-def test_forged_self_consistent_realized_amount_rejected() -> None:
-    # Codex P1 regression: digest recomputed over a tampered realized_pnl (true 200 -> 999) is
-    # self-consistent, but the rollup re-derives realized PnL from the event's own prior/fill economics
-    # and must fail closed rather than sum the forged amount.
-    forged = replace(_computed("e1"), realized_pnl="999")
-    forged = replace(forged, realized_pnl_event_digest=paper_realized_pnl_event_digest(forged))
-    assert paper_realized_pnl_event_digest(forged) == forged.realized_pnl_event_digest  # self-consistent
-    with pytest.raises(PaperRealizedPnlRollupError, match="event_inconsistent"):
-        _rollup([forged])
-
-
-def test_forged_self_consistent_closed_units_rejected() -> None:
-    forged = replace(_computed("e1"), closed_units="999")  # true closed is 4
-    forged = replace(forged, realized_pnl_event_digest=paper_realized_pnl_event_digest(forged))
-    assert paper_realized_pnl_event_digest(forged) == forged.realized_pnl_event_digest
-    with pytest.raises(PaperRealizedPnlRollupError, match="event_inconsistent"):
-        _rollup([forged])
-
-
-def test_forged_high_scale_realized_amount_rejected() -> None:
-    # Span-aware re-derivation catches a 1e-100-scale tamper (true tail ...6, forged ...5).
-    avg = "0." + "0" * 99 + "1"
-    genuine = _computed("e1", avg=avg, price="1")  # realized "3.<99 nines>6"
-    forged = replace(genuine, realized_pnl="3." + "9" * 99 + "5")
-    forged = replace(forged, realized_pnl_event_digest=paper_realized_pnl_event_digest(forged))
-    assert paper_realized_pnl_event_digest(forged) == forged.realized_pnl_event_digest
-    with pytest.raises(PaperRealizedPnlRollupError, match="event_inconsistent"):
-        _rollup([forged])
-
-
-def test_forged_self_consistent_prior_signed_units_rejected() -> None:
-    # Tampering the prior signed units (true 10 -> 2) changes the re-derived closed/realized/residual,
-    # so the event no longer follows from its own inputs and must fail closed.
-    forged = replace(_computed("e1"), prior_signed_units="2")
-    forged = replace(forged, realized_pnl_event_digest=paper_realized_pnl_event_digest(forged))
-    assert paper_realized_pnl_event_digest(forged) == forged.realized_pnl_event_digest
-    with pytest.raises(PaperRealizedPnlRollupError, match="event_inconsistent"):
         _rollup([forged])
 
 
 def test_forged_fee_applied_event_rejected() -> None:
     # gross-only: an event carrying an applied fee must fail closed.
-    forged = replace(_computed("e1"), fee_amount_applied="1")
-    forged = replace(forged, realized_pnl_event_digest=paper_realized_pnl_event_digest(forged))
-    assert paper_realized_pnl_event_digest(forged) == forged.realized_pnl_event_digest
+    forged = _forge_event(_computed("e1"), fee_amount_applied="1")
+    assert paper_realized_pnl_event_digest(forged.event) == forged.event.realized_pnl_event_digest
     with pytest.raises(PaperRealizedPnlRollupError, match="event_inconsistent"):
         _rollup([forged])
+
+
+# --------------------------------------------------------------------------------------------------
+# Fail-closed: provenance — coordinated resealed event + wrong upstream artifacts (Codex P1)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_coordinated_resealed_event_rejected() -> None:
+    # Codex P1: the event's scalar economics are internally consistent (a q0=2 cross: closed 2, residual 2,
+    # realized 100, self-digest recomputed) but the upstream artifact digest references still point at the
+    # genuine q0=10 chain. Reconstruction from the genuine upstream yields the canonical q0=10 event
+    # (realized 200) whose digest/payload differs, so the resealed forgery fails closed (never summed).
+    genuine = _computed("e1")  # LONG q0=10, SELL 4 @ 150 -> closed 4, residual 6, realized 200
+    forged = _forge_event(
+        genuine,
+        prior_signed_units="2",
+        closed_units="2",
+        residual_open_units="2",
+        realized_pnl="100",
+    )
+    assert paper_realized_pnl_event_digest(forged.event) == forged.event.realized_pnl_event_digest  # self-consistent
+    with pytest.raises(PaperRealizedPnlRollupError, match="event_inconsistent"):
+        _rollup([forged])
+
+
+def test_forged_self_consistent_realized_amount_rejected() -> None:
+    # Tampered realized_pnl (true 200 -> 999) re-sealed; reconstruction from genuine upstream gives 200.
+    forged = _forge_event(_computed("e1"), realized_pnl="999")
+    assert paper_realized_pnl_event_digest(forged.event) == forged.event.realized_pnl_event_digest
+    with pytest.raises(PaperRealizedPnlRollupError, match="event_inconsistent"):
+        _rollup([forged])
+
+
+def test_forged_self_consistent_closed_units_rejected() -> None:
+    forged = _forge_event(_computed("e1"), closed_units="999")  # true closed is 4
+    assert paper_realized_pnl_event_digest(forged.event) == forged.event.realized_pnl_event_digest
+    with pytest.raises(PaperRealizedPnlRollupError, match="event_inconsistent"):
+        _rollup([forged])
+
+
+def test_forged_high_scale_realized_amount_rejected() -> None:
+    # 1e-100-scale tamper (true tail ...6, forged ...5) is caught by exact reconstruction.
+    avg = "0." + "0" * 99 + "1"
+    forged = _forge_event(_computed("e1", avg=avg, price="1"), realized_pnl="3." + "9" * 99 + "5")
+    assert paper_realized_pnl_event_digest(forged.event) == forged.event.realized_pnl_event_digest
+    with pytest.raises(PaperRealizedPnlRollupError, match="event_inconsistent"):
+        _rollup([forged])
+
+
+def test_wrong_prior_state_rejected() -> None:
+    bundle = _computed("e1", avg="100")
+    other = _computed("e2", avg="120")
+    swapped = replace(bundle, prior_state=other.prior_state)
+    with pytest.raises(PaperRealizedPnlRollupError, match="event_not_reproducible"):
+        _rollup([swapped])
+
+
+def test_wrong_fill_result_rejected() -> None:
+    bundle = _computed("e1", price="150")
+    other = _computed("e2", price="80")
+    swapped = replace(bundle, fill_result=other.fill_result)
+    with pytest.raises(PaperRealizedPnlRollupError, match="event_not_reproducible"):
+        _rollup([swapped])
+
+
+def test_wrong_transition_rejected() -> None:
+    bundle = _computed("e1", avg="100")
+    other = _computed("e2", avg="120")
+    swapped = replace(bundle, transition=other.transition)
+    with pytest.raises(PaperRealizedPnlRollupError, match="event_not_reproducible"):
+        _rollup([swapped])
+
+
+def test_wrong_new_position_state_rejected() -> None:
+    bundle = _computed("e1", avg="100")
+    other = _computed("e2", avg="120")
+    swapped = replace(bundle, new_position_state=other.new_position_state)
+    with pytest.raises(PaperRealizedPnlRollupError, match="event_not_reproducible"):
+        _rollup([swapped])
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["prior_state", "fill_result", "transition", "new_position_state"],
+)
+def test_wrong_typed_upstream_artifact_rejected(field: str) -> None:
+    bundle = _computed("e1")
+    swapped = replace(bundle, **{field: {"not": "an-artifact"}})  # type: ignore[arg-type]
+    with pytest.raises(PaperRealizedPnlRollupError):
+        _rollup([swapped])
+
+
+# --------------------------------------------------------------------------------------------------
+# Fail-closed: rollup-level guards
+# --------------------------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -483,9 +570,9 @@ def test_safe_market_data_terms_allowed() -> None:
 
 
 def test_rollup_digest_deterministic() -> None:
-    events = [_computed("e1"), _computed("e2", price="80")]
-    r1 = _rollup(events)
-    r2 = _rollup(events)
+    entries = [_computed("e1"), _computed("e2", price="80")]
+    r1 = _rollup(entries)
+    r2 = _rollup(entries)
     assert r1.rollup_digest == r2.rollup_digest
     assert paper_realized_pnl_rollup_digest(r1) == r1.rollup_digest
     assert paper_realized_pnl_rollup_to_dict(r1)["rollup_digest"] == r1.rollup_digest
@@ -495,18 +582,18 @@ def test_order_is_bound_into_digest() -> None:
     a, b = _computed("e1"), _computed("e2", price="80")
     forward = _rollup([a, b])
     reverse = _rollup([b, a])
-    assert forward.source_event_digests == (a.realized_pnl_event_digest, b.realized_pnl_event_digest)
-    assert reverse.source_event_digests == (b.realized_pnl_event_digest, a.realized_pnl_event_digest)
+    assert forward.source_event_digests == (a.event.realized_pnl_event_digest, b.event.realized_pnl_event_digest)
+    assert reverse.source_event_digests == (b.event.realized_pnl_event_digest, a.event.realized_pnl_event_digest)
     assert forward.rollup_digest != reverse.rollup_digest  # order is bound
     assert forward.realized_pnl_total == reverse.realized_pnl_total  # but the sum is order-independent
 
 
 def test_inputs_not_mutated() -> None:
-    events = [_computed("e1"), _computed("e2", price="80")]
-    before = [e.realized_pnl_event_digest for e in events]
-    _rollup(events)
-    assert [e.realized_pnl_event_digest for e in events] == before
-    assert [paper_realized_pnl_event_digest(e) for e in events] == before
+    entries = [_computed("e1"), _computed("e2", price="80")]
+    before = [e.event.realized_pnl_event_digest for e in entries]
+    _rollup(entries)
+    assert [e.event.realized_pnl_event_digest for e in entries] == before
+    assert [paper_realized_pnl_event_digest(e.event) for e in entries] == before
 
 
 def test_output_immutable() -> None:
@@ -555,12 +642,12 @@ def test_module_imports_only_validation_layer() -> None:
 
 
 # --------------------------------------------------------------------------------------------------
-# Compatibility smoke: consume realized events produced by the genuine per-fill flow
+# Compatibility smoke: consume bundles produced by the genuine per-fill flow
 # --------------------------------------------------------------------------------------------------
 
 
-def test_rollup_consumes_genuine_per_fill_realized_events() -> None:
-    # Each event is produced through the real apply_paper_fill_to_position -> compute_paper_realized_pnl_event
+def test_rollup_consumes_genuine_per_fill_bundles() -> None:
+    # Each bundle is produced through the real apply_paper_fill_to_position -> compute_paper_realized_pnl_event
     # path (no session-sequence source touched). A rollup over that per-fill flow aggregates cleanly.
     long_reduce = _computed("evt-long", prior_side="LONG", avg="100", price="150", filled="4")  # +200
     short_reduce = _computed("evt-short", prior_side="SHORT", avg="100", price="80", filled="5")  # 5*(100-80)=+100
