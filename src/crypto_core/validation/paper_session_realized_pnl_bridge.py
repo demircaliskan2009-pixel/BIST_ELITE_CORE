@@ -146,6 +146,35 @@ def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _is_hex64_string(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
+def _is_sorted_unique_reasons(reasons: object) -> bool:
+    if not isinstance(reasons, tuple):
+        return False
+    if not all(isinstance(reason, str) and reason != "" for reason in reasons):
+        return False
+    return list(reasons) == sorted(set(reasons))
+
+
+def _is_metadata_tuple(metadata: object) -> bool:
+    if not isinstance(metadata, tuple):
+        return False
+    for pair in metadata:
+        if (
+            not isinstance(pair, tuple)
+            or len(pair) != 2
+            or not isinstance(pair[0], str)
+            or not isinstance(pair[1], str)
+        ):
+            return False
+    keys = [pair[0] for pair in metadata]
+    if len(set(keys)) != len(keys):  # metadata is conceptually a mapping — duplicate keys are forged/ambiguous
+        return False
+    return metadata == tuple(sorted(metadata))
+
+
 def _normalize_metadata(metadata: object) -> tuple[tuple[str, str], ...]:
     if metadata is None:
         return ()
@@ -244,6 +273,40 @@ def _reprove_session(session: PaperSessionSequenceResult) -> tuple[str, str, int
         or session.paper_session_sequence_digest != expected_digest
     ):
         raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:session_digest_mismatch")
+
+    # Re-prove the session's internal structural invariants (the session builder enforces these). Digest
+    # self-consistency proves identity, not internal consistency: a forged session that recomputed its
+    # digest after mutating structural fields — e.g. ``episode_count=0`` on a one-episode session — would
+    # otherwise bind a false episode count / count set into the bridge. Fail closed on any mismatch.
+    digests = session.episode_run_digests
+    if not isinstance(digests, tuple) or not digests or not all(_is_hex64_string(value) for value in digests):
+        raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:session_inconsistent")
+    if session.episode_count != len(digests) or len(set(digests)) != len(digests):
+        raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:session_inconsistent")
+    if session.first_episode_run_digest != digests[0] or session.last_episode_run_digest != digests[-1]:
+        raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:session_inconsistent")
+    for count in (
+        session.computed_episode_count,
+        session.fill_rejected_episode_count,
+        session.rejected_episode_count,
+    ):
+        if not _is_int(count) or count < 0:
+            raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:session_inconsistent")
+    if (
+        session.computed_episode_count + session.fill_rejected_episode_count + session.rejected_episode_count
+        != session.episode_count
+    ):
+        raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:session_inconsistent")
+    if session.final_position_state_digest is not None and not _is_hex64_string(session.final_position_state_digest):
+        raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:session_inconsistent")
+    if session.final_pnl_report_digest is not None and not _is_hex64_string(session.final_pnl_report_digest):
+        raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:session_inconsistent")
+    if session.reason_codes != () or not _is_sorted_unique_reasons(session.reason_codes):
+        raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:session_inconsistent")
+    if not _is_metadata_tuple(session.metadata):
+        raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:session_inconsistent")
+    if _has_scope_violation(*_metadata_texts(session.metadata)):
+        raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:session_scope_violation")
     return session.market_symbol, session.paper_session_id, session.episode_count, session.paper_session_sequence_digest
 
 

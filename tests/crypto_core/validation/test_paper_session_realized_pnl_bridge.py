@@ -521,6 +521,32 @@ def test_forged_session_status_rejected() -> None:
         _bridge(session=forged)
 
 
+def test_forged_session_episode_count_rejected() -> None:
+    # Codex P1: a self-consistent forged session (episode_count mutated to 0 on a one-episode session,
+    # digest recomputed) must fail closed — its episode_count no longer matches episode_run_digests.
+    forged = replace(_session(), episode_count=0)
+    forged = replace(forged, paper_session_sequence_digest=paper_session_sequence_result_digest(forged))
+    assert paper_session_sequence_result_digest(forged) == forged.paper_session_sequence_digest  # self-consistent
+    with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_inconsistent"):
+        _bridge(session=forged)
+
+
+def test_forged_session_count_sum_rejected() -> None:
+    forged = replace(_session(), computed_episode_count=5)  # 5 + 0 + 0 != episode_count 1
+    forged = replace(forged, paper_session_sequence_digest=paper_session_sequence_result_digest(forged))
+    assert paper_session_sequence_result_digest(forged) == forged.paper_session_sequence_digest
+    with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_inconsistent"):
+        _bridge(session=forged)
+
+
+def test_forged_session_first_digest_rejected() -> None:
+    forged = replace(_session(), first_episode_run_digest="d" * 64)  # no longer matches episode_run_digests[0]
+    forged = replace(forged, paper_session_sequence_digest=paper_session_sequence_result_digest(forged))
+    assert paper_session_sequence_result_digest(forged) == forged.paper_session_sequence_digest
+    with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_inconsistent"):
+        _bridge(session=forged)
+
+
 def test_market_symbol_mismatch_rejected() -> None:
     session = _session(market_symbol="BTC-PERPETUAL")
     eth = _bundle("e1", market_symbol="ETH-PERPETUAL")
