@@ -35,6 +35,7 @@ from crypto_core.validation.paper_order_intent_admission import (
     evaluate_paper_order_intent_admission,
 )
 from crypto_core.validation.paper_position_state import (
+    PaperPositionStateError,
     PaperPositionStateSide,
     PaperPositionTransitionStatus,
     apply_paper_fill_to_position,
@@ -359,7 +360,10 @@ def test_forged_gross_notional_rejected() -> None:
     # Digest-valid forged fill: filled=4, price=150 ⇒ exact gross 600, but stored gross="1".
     forged = _fill("SELL", "4", "150", gross_notional="1")
     assert paper_fill_simulation_result_digest(forged) == forged.result_digest  # self-consistent
-    with pytest.raises(PaperRealizedPnlError, match="fill_result_inconsistent"):
+    # Rejected fail-closed at the earliest layer: apply_paper_fill_to_position (PaperPositionStateError)
+    # now also re-proves gross == filled_units * fill_price, so the forged fill never reaches the realized
+    # layer via _run; either layer's ``fill_result_inconsistent`` is an acceptable rejection.
+    with pytest.raises((PaperPositionStateError, PaperRealizedPnlError), match="fill_result_inconsistent"):
         _run(_long(signed="10", avg="100"), forged)
 
 
@@ -377,8 +381,28 @@ def test_high_scale_mismatched_gross_rejected() -> None:
     price = "1.0000000000000000000000000000000001"
     forged = _fill("SELL", "4", price, gross_notional="4")
     assert paper_fill_simulation_result_digest(forged) == forged.result_digest
-    with pytest.raises(PaperRealizedPnlError, match="fill_result_inconsistent"):
+    # Rejected fail-closed at the earliest layer (see test_forged_gross_notional_rejected): the position
+    # layer re-proves the exact high-scale product, so either layer's ``fill_result_inconsistent`` is fine.
+    with pytest.raises((PaperPositionStateError, PaperRealizedPnlError), match="fill_result_inconsistent"):
         _run(_long(signed="10", avg="100"), forged)
+
+
+def test_realized_layer_independently_rejects_forged_gross() -> None:
+    # Permanent direct regression for the realized layer's OWN gross invariant. The shared _run path now
+    # fails at the position layer (apply_paper_fill_to_position re-proves gross first), so it can no longer
+    # prove paper_realized_pnl._reprove_fill_result independently rejects a gross-forged fill. Here a
+    # genuine transition + new_state are built from a VALID fill, then paired with a digest-valid
+    # gross-forged fill: compute_paper_realized_pnl_event runs the realized layer's _reprove_fill_result
+    # (which re-proves gross == filled_units * fill_price) BEFORE the transition-binding check and the
+    # position-layer re-run, so the rejection is unambiguously the realized layer's own — assert ONLY
+    # PaperRealizedPnlError.
+    prior = _long(signed="10", avg="100")
+    valid_fill = _fill("SELL", "4", "150")  # exact gross 600
+    transition, new_state = _triple(prior, valid_fill)  # genuine APPLIED transition from the valid fill
+    forged = _fill("SELL", "4", "150", gross_notional="1")  # filled=4, price=150 ⇒ exact 600, stored 1
+    assert paper_fill_simulation_result_digest(forged) == forged.result_digest  # self-consistent
+    with pytest.raises(PaperRealizedPnlError, match="fill_result_inconsistent"):
+        _event(prior, forged, transition, new_state)
 
 
 # --------------------------------------------------------------------------------------------------

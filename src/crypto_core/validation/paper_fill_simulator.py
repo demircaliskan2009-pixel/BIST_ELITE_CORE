@@ -292,10 +292,23 @@ def _has_scope_violation(*texts: object) -> bool:
     return False
 
 
+def _decimal_span(value: Decimal) -> int:
+    """Positional span of an exact Decimal: significant digits PLUS the magnitude implied by the exponent.
+
+    ``len(as_tuple().digits)`` counts only significant digits, never the exponent gap, so a value such as
+    ``1e-100`` (one significant digit) would be sized as width 1 while it actually spans 101 fixed-point
+    places. Summing this span keeps the working precision wide enough that products/sums over high-scale
+    (many leading/trailing zero) inputs stay exact instead of being silently context-rounded — e.g. a
+    tiny-slippage fill price ``1.000…0001`` must not collapse to ``1``.
+    """
+    tup = value.as_tuple()
+    return len(tup.digits) + abs(int(tup.exponent))
+
+
 def _arithmetic_precision(operands: tuple[Decimal, ...]) -> int:
     """Decimal precision wide enough that every product/sum over the inputs is exact (input-derived)."""
-    digits = sum(len(value.as_tuple().digits) for value in operands)
-    return max(28, digits + 40)
+    span = sum(_decimal_span(value) for value in operands)
+    return max(28, span + 40)
 
 
 # --------------------------------------------------------------------------------------------------

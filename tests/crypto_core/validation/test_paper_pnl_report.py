@@ -346,6 +346,31 @@ def test_high_precision_report_digest_deterministic() -> None:
     assert paper_pnl_report_digest(r1) == r1.pnl_report_digest
 
 
+def test_high_scale_long_mtm_exponent_gap_exact() -> None:
+    # avg = 1e-61 (one significant digit, 61-place exponent gap), mark = 1. unrealized = 1*(1 - 1e-61).
+    # Coefficient-only precision (+40 guard) rounds the difference to 1; span-aware keeps it exact.
+    avg = "0." + "0" * 60 + "1"
+    report = _compute(_position(signed_units="1", abs_units="1", average_entry_price=avg), _mark(mark_price="1"))
+    expected_notional, expected_unrealized = _mtm_oracle("LONG", "1", avg, "1")
+    assert report.unrealized_pnl == expected_unrealized
+    assert report.unrealized_pnl == "0." + "9" * 61  # 1 - 1e-61, exact
+    assert report.unrealized_pnl != "1"
+    assert report.mark_notional == expected_notional == "1"
+
+
+def test_high_scale_short_mtm_exponent_gap_exact() -> None:
+    # SHORT: unrealized = abs*(avg - mark); mark = 1e-61, avg = 1 ⇒ 1*(1 - 1e-61). mark_notional = 1e-61.
+    mark_price = "0." + "0" * 60 + "1"
+    position = _position(side=PaperPositionStateSide.SHORT, signed_units="-1", abs_units="1", average_entry_price="1")
+    report = _compute(position, _mark(mark_price=mark_price))
+    expected_notional, expected_unrealized = _mtm_oracle("SHORT", "1", "1", mark_price)
+    assert report.unrealized_pnl == expected_unrealized
+    assert report.unrealized_pnl == "0." + "9" * 61
+    assert report.unrealized_pnl != "1"
+    assert report.mark_notional == expected_notional == mark_price  # 1 * 1e-61, exact, no scientific
+    assert "e" not in report.mark_notional.lower()
+
+
 # --------------------------------------------------------------------------------------------------
 # Digest boundary / fail-closed
 # --------------------------------------------------------------------------------------------------

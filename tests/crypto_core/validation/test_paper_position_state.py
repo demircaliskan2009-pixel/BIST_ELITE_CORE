@@ -174,6 +174,17 @@ def _state(**overrides: object):
     return build_paper_position_state(**base)  # type: ignore[arg-type]
 
 
+def _exact_gross(filled_units: str, fill_price: str) -> str:
+    """Canonical exact ``gross_notional = filled_units * fill_price`` (mirrors the fill simulator invariant)."""
+    with localcontext() as ctx:
+        ctx.prec = 400  # wide enough to keep the product exact for these test inputs
+        product = Decimal(filled_units) * Decimal(fill_price)
+    rendered = format(product, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return "0" if rendered in {"", "-0"} else rendered
+
+
 def _fill(**overrides: object) -> PaperFillSimulationResult:
     base = PaperFillSimulationResult(
         schema_version="paper-fill-simulation-result.v1",
@@ -196,6 +207,11 @@ def _fill(**overrides: object) -> PaperFillSimulationResult:
         result_digest="",
     )
     base = replace(base, **overrides)
+    # Keep fills economically valid by default: unless the caller explicitly pins ``gross_notional`` (the
+    # forged / impossible-economics tests do), derive it as the exact product filled_units * fill_price,
+    # matching the fill simulator's invariant now re-proven by apply_paper_fill_to_position.
+    if "gross_notional" not in overrides:
+        base = replace(base, gross_notional=_exact_gross(base.filled_units, base.fill_price))
     return replace(base, result_digest=paper_fill_simulation_result_digest(base))
 
 
@@ -383,7 +399,6 @@ def _partial(**overrides: object) -> PaperFillSimulationResult:
         "filled_units": "4",
         "fill_price": "100",
         "unfilled_units": "6",
-        "gross_notional": "400",
         "fee_amount": "0",
         "reason_codes": ("partial_fill",),
     }
@@ -601,6 +616,47 @@ def test_forged_malformed_fill_never_yields_applied_transition() -> None:
 
 
 # --------------------------------------------------------------------------------------------------
+# Fill gross-notional economic integrity (gross == filled_units * fill_price; review P1 repair)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_fill_gross_notional_mismatch_rejected() -> None:
+    # Digest validity is not economic validity: a self-consistent fill whose gross_notional is not the
+    # exact product filled_units * fill_price (here 1 * 100 = 100, stored 1) must fail closed and never
+    # drive an APPLIED transition off fabricated economics.
+    forged = _fill(filled_units="1", fill_price="100", gross_notional="1")
+    assert paper_fill_simulation_result_digest(forged) == forged.result_digest  # self-consistent
+    with pytest.raises(PaperPositionStateError, match="fill_result_inconsistent"):
+        _apply(_flat(), forged)
+
+
+def test_fill_gross_notional_high_scale_mismatch_rejected() -> None:
+    # High-scale exact product 1e-45 * 1e-45 = 1e-90; a one-position-off gross (2e-90) is still caught
+    # exactly under span-aware precision (no default-context rounding masks the discrepancy).
+    tiny = "0." + "0" * 44 + "1"  # 1e-45
+    forged_gross = "0." + "0" * 89 + "2"  # 2e-90 != exact 1e-90
+    forged = _fill(filled_units=tiny, fill_price=tiny, gross_notional=forged_gross)
+    assert paper_fill_simulation_result_digest(forged) == forged.result_digest  # self-consistent
+    with pytest.raises(PaperPositionStateError, match="fill_result_inconsistent"):
+        _apply(_flat(), forged)
+
+
+def test_fill_gross_notional_high_scale_valid_accepted() -> None:
+    # The exact high-scale gross (auto-derived = filled * price) is accepted and drives an APPLIED
+    # transition with no scientific notation / negative zero leaking into the new state.
+    tiny = "0." + "0" * 44 + "1"  # 1e-45
+    fill = _fill(side="BUY", filled_units=tiny, fill_price="2")
+    assert fill.gross_notional == "0." + "0" * 44 + "2"  # 2e-45, exact
+    assert "e" not in fill.gross_notional.lower()
+    transition, new_state = _apply(_flat(), fill)
+    assert transition.status is PaperPositionTransitionStatus.APPLIED
+    assert new_state is not None
+    assert new_state.side is PaperPositionStateSide.LONG
+    assert new_state.signed_units == tiny
+    assert "e" not in new_state.signed_units.lower()
+
+
+# --------------------------------------------------------------------------------------------------
 # Precision / determinism / immutability / no-leak
 # --------------------------------------------------------------------------------------------------
 
@@ -661,7 +717,7 @@ def test_high_precision_weighted_average_short_add() -> None:
 def test_high_precision_exact_close_to_flat() -> None:
     units = "1.000000000000000000000000000000000000001"
     prior = _state(side=PaperPositionStateSide.LONG, signed_units=units, abs_units=units, average_entry_price="100")
-    _, new_state = _apply(prior, _fill(side="SELL", filled_units=units, fill_price="200", gross_notional="1"))
+    _, new_state = _apply(prior, _fill(side="SELL", filled_units=units, fill_price="200"))
     assert new_state is not None
     assert new_state.side is PaperPositionStateSide.FLAT
     assert new_state.signed_units == "0"
@@ -672,7 +728,7 @@ def test_high_precision_exact_close_to_flat() -> None:
 def test_high_precision_cross_long_to_short_sets_avg_to_fill() -> None:
     filled = "2.000000000000000000000000000000000000001"
     prior = _state(side=PaperPositionStateSide.LONG, signed_units="1", abs_units="1", average_entry_price="100")
-    _, new_state = _apply(prior, _fill(side="SELL", filled_units=filled, fill_price="200", gross_notional="1"))
+    _, new_state = _apply(prior, _fill(side="SELL", filled_units=filled, fill_price="200"))
     assert new_state is not None
     assert new_state.side is PaperPositionStateSide.SHORT
     assert new_state.signed_units == "-1.000000000000000000000000000000000000001"
@@ -683,7 +739,7 @@ def test_high_precision_cross_long_to_short_sets_avg_to_fill() -> None:
 def test_high_precision_cross_short_to_long_sets_avg_to_fill() -> None:
     filled = "2.000000000000000000000000000000000000001"
     prior = _state(side=PaperPositionStateSide.SHORT, signed_units="-1", abs_units="1", average_entry_price="100")
-    _, new_state = _apply(prior, _fill(side="BUY", filled_units=filled, fill_price="200", gross_notional="1"))
+    _, new_state = _apply(prior, _fill(side="BUY", filled_units=filled, fill_price="200"))
     assert new_state is not None
     assert new_state.side is PaperPositionStateSide.LONG
     assert new_state.signed_units == "1.000000000000000000000000000000000000001"
@@ -840,6 +896,43 @@ def _make_draft() -> PaperAllocatorIntentDraft:
     }
     draft = PaperAllocatorIntentDraft(**fields, draft_digest="")  # type: ignore[arg-type]
     return replace(draft, draft_digest=paper_allocator_intent_draft_digest(draft))
+
+
+def test_high_scale_weighted_average_exponent_gap_exact() -> None:
+    # Same-side add where the fill price is 1e-45: the weighted-average numerator (1*1 + 1*1e-45) spans
+    # 46 places from one-significant-digit operands. Coefficient-only precision (+40 guard) rounds the
+    # numerator to 1 ⇒ avg "0.5"; span-aware precision keeps it exact.
+    price = "0." + "0" * 44 + "1"
+    prior = _state(side=PaperPositionStateSide.LONG, signed_units="1", abs_units="1", average_entry_price="1")
+    _, new_state = _apply(prior, _fill(side="BUY", filled_units="1", fill_price=price))
+    assert new_state is not None
+    assert new_state.signed_units == "2"
+    assert new_state.average_entry_price == _weighted_avg("1", "1", "1", price)
+    assert new_state.average_entry_price == "0.5" + "0" * 44 + "5"  # (1 + 1e-45)/2, exact
+    assert new_state.average_entry_price != "0.5"
+
+
+def test_high_scale_signed_units_reduce_exponent_gap_exact() -> None:
+    # A SELL of 1e-61 against a long of 1 must reduce it to 0.999…9 (61 nines), not be rounded away to 1.
+    filled = "0." + "0" * 60 + "1"
+    prior = _state(side=PaperPositionStateSide.LONG, signed_units="1", abs_units="1", average_entry_price="100")
+    _, new_state = _apply(prior, _fill(side="SELL", filled_units=filled, fill_price="100"))
+    assert new_state is not None
+    assert new_state.side is PaperPositionStateSide.LONG
+    assert new_state.signed_units == "0." + "9" * 61  # 1 - 1e-61, exact
+    assert new_state.signed_units != "1"
+    assert new_state.average_entry_price == "100"  # reduce preserves the prior average
+
+
+def test_high_scale_cross_residual_average_is_fill_price_exact() -> None:
+    # Cross-through: residual average comes directly from the fill price (no arithmetic) and is exact.
+    price = "0." + "0" * 44 + "1"
+    prior = _state(side=PaperPositionStateSide.LONG, signed_units="1", abs_units="1", average_entry_price="100")
+    _, new_state = _apply(prior, _fill(side="SELL", filled_units="3", fill_price=price))
+    assert new_state is not None
+    assert new_state.side is PaperPositionStateSide.SHORT
+    assert new_state.signed_units == "-2"  # 1 - 3, exact
+    assert new_state.average_entry_price == price  # residual opened at the fill price
 
 
 def test_end_to_end_intent_fill_position_chain() -> None:

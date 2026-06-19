@@ -532,6 +532,34 @@ def test_high_precision_product_not_rounded_under_cap() -> None:
     assert decision.total_reserved_budget == "0"
 
 
+# 31b (review P1 span-aware). A tiny high-scale second reservation that, summed exactly with the first,
+# exceeds the total budget must NOT round back inside the cap and slip through ELIGIBLE. ``1e-100`` is
+# written in the contract-valid fixed form ("0." + 99 zeros + "1"); the strict grammar forbids the
+# "1E-100" scientific form. Coefficient-only precision rounds ``1 + 1e-100`` back to ``1`` and would mark
+# the second record ELIGIBLE; span-aware precision keeps the sum exact and blocks it.
+def test_high_scale_total_budget_cap_not_bypassed() -> None:
+    tiny = "0." + "0" * 99 + "1"  # 1e-100, exact fixed-point form
+    state = _state()
+    state = _apply(state, _tick(tick_id="t1", quantity="1", limit_price="1"), correlation_id="c1")
+    state = _apply(state, _tick(tick_id="t2", quantity=tiny, limit_price="1"), correlation_id="c2")
+    decision = evaluate_paper_sleeve_risk_budget(
+        state, _policy(total_budget="1", per_intent_budget_cap="1"), correlation_id="corr:d"
+    )
+    first, second = decision.record_decisions
+    assert first.status is PaperSleeveRiskBudgetRecordStatus.ELIGIBLE
+    assert first.reserved_budget == "1"
+    assert second.status is PaperSleeveRiskBudgetRecordStatus.BLOCKED
+    assert "total_budget_exceeded" in second.blockers
+    assert second.reserved_budget == "0"
+    assert decision.total_reserved_budget == "1"
+    assert Decimal(decision.total_reserved_budget) <= Decimal(decision.total_budget)
+    # High-scale exactness: the tiny requested tail is preserved (not rounded to "0" or scientific form),
+    # and the exact running total 1 + 1e-100 is rendered in full fixed-point.
+    assert second.requested_budget == tiny
+    assert "e" not in second.requested_budget.lower()
+    assert decision.total_requested_budget == "1." + "0" * 99 + "1"
+
+
 # 32 (review P2). require_journal_bound must be exactly True; a non-True value fails closed at build and a
 # resealed policy attesting False is rejected at re-proof (the flag can attest, never loosen, binding).
 @pytest.mark.parametrize("bad", [False, "yes", 1, None])

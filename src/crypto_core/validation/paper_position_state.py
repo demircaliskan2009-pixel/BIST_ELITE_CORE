@@ -253,10 +253,22 @@ def _canonical_decimal(value: object) -> Decimal | None:
     return parsed
 
 
+def _decimal_span(value: Decimal) -> int:
+    """Positional span of an exact Decimal: significant digits PLUS the magnitude implied by the exponent.
+
+    ``len(as_tuple().digits)`` counts only significant digits, never the exponent gap, so a value such as
+    ``1e-100`` (one significant digit) would be sized as width 1 while it actually spans 101 fixed-point
+    places. Summing this span keeps the working precision wide enough that products/sums over high-scale
+    (many leading/trailing zero) inputs stay exact instead of being silently context-rounded.
+    """
+    tup = value.as_tuple()
+    return len(tup.digits) + abs(int(tup.exponent))
+
+
 def _arithmetic_precision(operands: tuple[Decimal, ...]) -> int:
     """Decimal precision wide enough that every exact product/sum over the inputs is exact."""
-    digits = sum(len(value.as_tuple().digits) for value in operands)
-    return max(28, digits + 40)
+    span = sum(_decimal_span(value) for value in operands)
+    return max(28, span + 40)
 
 
 def _normalize_metadata(metadata: object) -> tuple[tuple[str, str], ...]:
@@ -704,6 +716,15 @@ def _reprove_fill_result(fill: PaperFillSimulationResult) -> tuple[PaperFillSimu
             raise PaperPositionStateError("paper_position_state:fill_result_inconsistent")
     else:  # PARTIALLY_FILLED
         if not unfilled > 0 or fill.reason_codes != (_REASON_PARTIAL_FILL,):
+            raise PaperPositionStateError("paper_position_state:fill_result_inconsistent")
+    # Economic integrity: gross_notional must be the EXACT product filled_units * fill_price (the fill
+    # simulator's own invariant: ``gross = candidate * fill_price``). Digest validity proves identity,
+    # not economics: a self-consistent forged result with an impossible gross (e.g. filled=1, price=100,
+    # gross=1) would otherwise drive an APPLIED position transition off fabricated numbers. Computed under
+    # a span-aware context so the product is exact (never default-context rounded); a mismatch fails closed.
+    with localcontext() as ctx:
+        ctx.prec = _arithmetic_precision((filled, fill_price))
+        if filled * fill_price != gross:
             raise PaperPositionStateError("paper_position_state:fill_result_inconsistent")
     return fill.status, fill.side, filled, fill_price
 
