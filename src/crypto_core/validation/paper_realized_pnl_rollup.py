@@ -282,6 +282,44 @@ def _event_is_paper_safe(event: PaperRealizedPnlEvent) -> bool:
     )
 
 
+def _rederive_realized(
+    *,
+    prior_side: str,
+    q0: Decimal,
+    avg0: Decimal | None,
+    fill_side: str,
+    filled: Decimal,
+    fill_price: Decimal,
+) -> tuple[PaperRealizedPnlStatus, Decimal, Decimal, Decimal]:
+    """Re-derive (status, closed_units, residual_open_units, realized_pnl) from the event's own economic
+    inputs, exactly mirroring ``paper_realized_pnl._compute_realized``.
+
+    Digest self-consistency proves only that the event has not been altered relative to its own digest, not
+    that its realized/closed amounts follow from its prior/fill economics. A forged event that recomputes
+    its digest after tampering ``realized_pnl``/``closed_units`` would otherwise be summed into the rollup;
+    re-deriving from ``prior_side``/``prior_signed_units``/``filled_units``/``average_entry_price``/
+    ``fill_price`` and requiring an exact match closes that off (fail-closed). Pure products/differences
+    (no division) under a span-aware context, so the re-derivation is exact. ``avg0`` is guaranteed present
+    by the caller's prior-side consistency check for the non-flat branch where it is used.
+    """
+    delta = filled if fill_side == "BUY" else filled.copy_negate()
+    operands = (q0, filled, fill_price, avg0 if avg0 is not None else Decimal(0))
+    with localcontext() as ctx:
+        ctx.prec = _arithmetic_precision(operands)
+        q1 = q0 + delta
+        residual = q1.copy_abs()
+        if prior_side == "FLAT" or (q0 > 0) == (delta > 0):
+            # flat open or same-side add — nothing closed, nothing realized
+            return PaperRealizedPnlStatus.NO_REALIZED_PNL, Decimal(0), residual, Decimal(0)
+        abs_q0 = q0.copy_abs()
+        closed = filled if filled < abs_q0 else abs_q0  # min(filled, |q0|)
+        if prior_side == "LONG":  # SELL closes a long
+            realized = closed * (fill_price - avg0)  # type: ignore[operator]
+        else:  # SHORT — BUY closes a short
+            realized = closed * (avg0 - fill_price)  # type: ignore[operator]
+    return PaperRealizedPnlStatus.COMPUTED, closed, residual, realized
+
+
 def _reprove_event(event: PaperRealizedPnlEvent) -> tuple[PaperRealizedPnlStatus, Decimal, Decimal]:
     """Re-prove a digest-valid realized-PnL event's structure/safety/consistency; return (status, realized, closed).
 
@@ -324,8 +362,44 @@ def _reprove_event(event: PaperRealizedPnlEvent) -> tuple[PaperRealizedPnlStatus
 
     realized = _canonical_decimal(event.realized_pnl)
     closed = _canonical_decimal(event.closed_units)
-    if realized is None or closed is None or closed < 0:
+    residual = _canonical_decimal(event.residual_open_units)
+    q0 = _canonical_decimal(event.prior_signed_units)
+    filled = _canonical_decimal(event.filled_units)
+    fill_price = _canonical_decimal(event.fill_price)
+    if realized is None or closed is None or residual is None or q0 is None or filled is None or fill_price is None:
         raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_malformed")
+    if closed < 0 or residual < 0 or not filled > 0 or not fill_price > 0:
+        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_inconsistent")
+    avg0: Decimal | None = None
+    if event.average_entry_price is not None:
+        avg0 = _canonical_decimal(event.average_entry_price)
+        if avg0 is None or not avg0 > 0:
+            raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_malformed")
+
+    # Prior side / signed-units / average consistency (mirror of the position-state invariant).
+    if event.prior_side == "FLAT":
+        if q0 != 0 or avg0 is not None:
+            raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_inconsistent")
+    elif event.prior_side == "LONG":
+        if not q0 > 0 or avg0 is None:
+            raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_inconsistent")
+    else:  # SHORT
+        if not q0 < 0 or avg0 is None:
+            raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_inconsistent")
+
+    # Economic re-proof: re-derive status/closed/residual/realized from the event's own prior+fill inputs
+    # and require an exact match. Digest validity proves identity, not economics — a self-consistent forged
+    # event whose realized/closed amounts do not follow from its inputs fails closed here, never summed.
+    derived_status, derived_closed, derived_residual, derived_realized = _rederive_realized(
+        prior_side=event.prior_side, q0=q0, avg0=avg0, fill_side=event.fill_side, filled=filled, fill_price=fill_price
+    )
+    if (
+        derived_status is not event.status
+        or derived_closed != closed
+        or derived_residual != residual
+        or derived_realized != realized
+    ):
+        raise PaperRealizedPnlRollupError("paper_realized_pnl_rollup:event_inconsistent")
 
     if event.status is PaperRealizedPnlStatus.COMPUTED:
         if event.realized_pnl_computed is not True or event.reason_codes != ():

@@ -404,6 +404,46 @@ def test_forged_reserved_rejected_status_rejected() -> None:
         _rollup([forged])
 
 
+def test_forged_self_consistent_realized_amount_rejected() -> None:
+    # Codex P1 regression: digest recomputed over a tampered realized_pnl (true 200 -> 999) is
+    # self-consistent, but the rollup re-derives realized PnL from the event's own prior/fill economics
+    # and must fail closed rather than sum the forged amount.
+    forged = replace(_computed("e1"), realized_pnl="999")
+    forged = replace(forged, realized_pnl_event_digest=paper_realized_pnl_event_digest(forged))
+    assert paper_realized_pnl_event_digest(forged) == forged.realized_pnl_event_digest  # self-consistent
+    with pytest.raises(PaperRealizedPnlRollupError, match="event_inconsistent"):
+        _rollup([forged])
+
+
+def test_forged_self_consistent_closed_units_rejected() -> None:
+    forged = replace(_computed("e1"), closed_units="999")  # true closed is 4
+    forged = replace(forged, realized_pnl_event_digest=paper_realized_pnl_event_digest(forged))
+    assert paper_realized_pnl_event_digest(forged) == forged.realized_pnl_event_digest
+    with pytest.raises(PaperRealizedPnlRollupError, match="event_inconsistent"):
+        _rollup([forged])
+
+
+def test_forged_high_scale_realized_amount_rejected() -> None:
+    # Span-aware re-derivation catches a 1e-100-scale tamper (true tail ...6, forged ...5).
+    avg = "0." + "0" * 99 + "1"
+    genuine = _computed("e1", avg=avg, price="1")  # realized "3.<99 nines>6"
+    forged = replace(genuine, realized_pnl="3." + "9" * 99 + "5")
+    forged = replace(forged, realized_pnl_event_digest=paper_realized_pnl_event_digest(forged))
+    assert paper_realized_pnl_event_digest(forged) == forged.realized_pnl_event_digest
+    with pytest.raises(PaperRealizedPnlRollupError, match="event_inconsistent"):
+        _rollup([forged])
+
+
+def test_forged_self_consistent_prior_signed_units_rejected() -> None:
+    # Tampering the prior signed units (true 10 -> 2) changes the re-derived closed/realized/residual,
+    # so the event no longer follows from its own inputs and must fail closed.
+    forged = replace(_computed("e1"), prior_signed_units="2")
+    forged = replace(forged, realized_pnl_event_digest=paper_realized_pnl_event_digest(forged))
+    assert paper_realized_pnl_event_digest(forged) == forged.realized_pnl_event_digest
+    with pytest.raises(PaperRealizedPnlRollupError, match="event_inconsistent"):
+        _rollup([forged])
+
+
 def test_forged_fee_applied_event_rejected() -> None:
     # gross-only: an event carrying an applied fee must fail closed.
     forged = replace(_computed("e1"), fee_amount_applied="1")
