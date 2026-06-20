@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Sequence
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError, fields, replace
 from decimal import Decimal, localcontext
 from pathlib import Path
 
@@ -43,6 +43,7 @@ from crypto_core.validation.paper_position_state import (
     build_paper_position_state,
 )
 from crypto_core.validation.paper_realized_pnl import (
+    PaperRealizedPnlEvent,
     compute_paper_realized_pnl_event,
     paper_realized_pnl_event_digest,
 )
@@ -415,6 +416,49 @@ class _StatefulRollupEntries(Sequence):
         return len(self._view())
 
 
+class _StatefulRealizedEvent(PaperRealizedPnlEvent):
+    """A PaperRealizedPnlEvent whose fill/transition digests read genuine during canonical serialization
+    but fake on a bare later attribute read (event-object TOCTOU exploit).
+
+    Trigger is robust (not a hardcoded read count): every canonical serialization reads ``schema_version``
+    first and then each digest field once, so the per-field read count stays <= the ``schema_version`` read
+    count and genuine values are returned. A later identity read of a digest field WITHOUT a preceding
+    ``schema_version`` read pushes that field's count above ``schema_version`` and returns the fake value.
+    A multi-read aggregate (digest pass via the serializer, then a separate identity attribute read) thus
+    sees fake identities; a single-payload-snapshot aggregate reads each event exactly once and sees only
+    the genuine values captured during serialization.
+    """
+
+    _SENSITIVE = ("fill_simulation_result_digest", "position_transition_digest")
+
+    def __getattribute__(self, name):
+        get = object.__getattribute__
+        if name == "schema_version":
+            counts = get(self, "_counts")
+            counts["schema_version"] = counts.get("schema_version", 0) + 1
+            return get(self, "schema_version")
+        if name in _StatefulRealizedEvent._SENSITIVE:
+            counts = get(self, "_counts")
+            counts[name] = counts.get(name, 0) + 1
+            if counts[name] <= counts.get("schema_version", 0):
+                return get(self, name)
+            return get(self, "_fakes")[name]
+        return get(self, name)
+
+
+def _make_stateful_event(genuine, *, fake_fill: str, fake_transition: str) -> _StatefulRealizedEvent:
+    ev = _StatefulRealizedEvent.__new__(_StatefulRealizedEvent)
+    for field in fields(genuine):
+        object.__setattr__(ev, field.name, getattr(genuine, field.name))
+    object.__setattr__(ev, "_counts", {})
+    object.__setattr__(
+        ev,
+        "_fakes",
+        {"fill_simulation_result_digest": fake_fill, "position_transition_digest": fake_transition},
+    )
+    return ev
+
+
 # --------------------------------------------------------------------------------------------------
 # Happy paths / aggregation
 # --------------------------------------------------------------------------------------------------
@@ -695,6 +739,67 @@ def test_stateful_rollup_entries_second_read_action_identity_bypass_rejected() -
         build_paper_session_realized_pnl_aggregate([e1, e2], aggregate_id="agg-1", correlation_id="corr-agg")
     # The repaired aggregate consumed the stateful sequence EXACTLY once (only the genuine view was seen).
     assert stateful.reads == 1
+
+
+def test_stateful_realized_event_attribute_toc_tou_identity_bypass_rejected() -> None:
+    # Codex P1 (event-object TOCTOU): two entries genuinely share ONE economic action (same fill +
+    # transition) with distinct event ids -> distinct source_event_digests (source-event dedup misses), so
+    # the action dedup MUST fire on the shared fill/transition. Entry-2's event is a stateful
+    # PaperRealizedPnlEvent that serializes GENUINE during digest/bridge verification but exposes FAKE
+    # unique fill/transition digests on a bare later attribute read. A multi-read aggregate would publish
+    # the fake identities and double-count (->400). The payload-snapshot aggregate derives digest AND
+    # identity from one canonical serialization, sees only the genuine action, and rejects the duplicate.
+    prior = _long(avg="100", idn="evttoctou")
+    fill = _fill("SELL", "4", "150", idn="evttoctou")
+    transition, new_state = apply_paper_fill_to_position(
+        prior,
+        fill,
+        transition_id="rtrans-evttoctou",
+        new_position_state_id="rnewpos-evttoctou",
+        correlation_id="corr-rapply",
+    )
+    ev_a = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-a", correlation_id="corr-revt"
+    )
+    ev_b = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-b", correlation_id="corr-revt"
+    )
+    # Genuine fill/transition are TRULY shared across the two distinct events.
+    assert ev_a.fill_simulation_result_digest == ev_b.fill_simulation_result_digest
+    assert ev_a.position_transition_digest == ev_b.position_transition_digest
+    assert ev_a.realized_pnl_event_digest != ev_b.realized_pnl_event_digest
+
+    bundle_a = PaperRealizedPnlRollupInput(
+        event=ev_a, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    bundle_b = PaperRealizedPnlRollupInput(
+        event=ev_b, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    e1 = _entry_from(_prov_for("1"), bridge_id="bridge-1", bundles=(bundle_a,))
+    prov2 = _prov_for("2")
+    bridge2 = build_paper_session_realized_pnl_bridge(
+        prov2, (bundle_b,), bridge_id="bridge-2", correlation_id="corr-bridge"
+    )
+    fake_fill = "f" * 64
+    fake_transition = "e" * 64
+    adv_event = _make_stateful_event(ev_b, fake_fill=fake_fill, fake_transition=fake_transition)
+    adv_bundle = PaperRealizedPnlRollupInput(
+        event=adv_event, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    e2 = PaperSessionRealizedPnlAggregateInput(bridge=bridge2, session_input=prov2, rollup_entries=(adv_bundle,))
+
+    # Non-vacuous: a SEPARATE probe proves the adversarial event diverges across reads. Inside a canonical
+    # serialization (schema_version read first) the digest reads genuine; a bare later read returns the fake.
+    probe = _make_stateful_event(ev_b, fake_fill=fake_fill, fake_transition=fake_transition)
+    _ = probe.schema_version
+    first_read = probe.fill_simulation_result_digest
+    second_read = probe.fill_simulation_result_digest
+    assert first_read == ev_b.fill_simulation_result_digest  # genuine while "inside" a serialization
+    assert second_read == fake_fill  # fake on the unguarded later (identity) read
+    assert first_read != second_read
+
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_fill_simulation_result_digest"):
+        build_paper_session_realized_pnl_aggregate([e1, e2], aggregate_id="agg-1", correlation_id="corr-agg")
 
 
 def test_duplicate_realized_event_id_across_bridges_rejected() -> None:

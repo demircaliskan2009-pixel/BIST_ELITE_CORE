@@ -26,12 +26,17 @@ duplicate ``bridge_digest`` / ``bridge_id`` / ``session_sequence_digest`` is rej
 ``source_event_digest`` across bridges is rejected (the same realized event must never be summed twice);
 caller order is preserved and bound.
 
-Single-read snapshot: each entry's ``rollup_entries`` is read EXACTLY once into an immutable tuple that
-feeds bridge reconstruction, the recomputed-event-digest cross-check, AND action-identity extraction
-alike, so a stateful/mutable Sequence cannot serve genuine bundles to reconstruction and then expose fake
-economic-action identities to a second read. The realized economic action of every event (its event id,
-fill-simulation-result digest, position-transition digest, and full prior/fill/transition/new-state
-identity tuple) is de-duplicated fail-closed across all bridges so one real action is never summed twice.
+Single-read snapshots (two layers): each entry's ``rollup_entries`` is read EXACTLY once into an immutable
+tuple, and each realized event in that tuple is serialized EXACTLY once (PUBLIC
+``paper_realized_pnl_event_to_dict``) into a canonical plain payload. Bridge reconstruction, the
+recomputed-event-digest cross-check, AND action-identity extraction all read only those captured snapshots
+— never the original Sequence or event objects again. A stateful/mutable Sequence therefore cannot serve
+genuine bundles to reconstruction and fake identities to a later read, and a stateful/adversarial
+``PaperRealizedPnlEvent`` cannot return genuine attributes to the digest pass and fake unique identities
+to the identity pass (digest and identity come from the same captured bytes). The realized economic action
+of every event (its event id, fill-simulation-result digest, position-transition digest, and full
+prior/fill/transition/new-state identity tuple) is de-duplicated fail-closed across all bridges so one
+real action is never summed twice.
 
 SCOPE / membership boundary: each session bridge is provenance-reconstructed (its session context from
 episode artifacts and its realized rollup from event bundles), but this aggregate does **not** prove that
@@ -50,7 +55,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, localcontext
 from enum import Enum
 
-from crypto_core.validation.paper_realized_pnl import paper_realized_pnl_event_digest
+from crypto_core.validation.paper_realized_pnl import paper_realized_pnl_event_to_dict
 from crypto_core.validation.paper_realized_pnl_rollup import PaperRealizedPnlRollupInput
 from crypto_core.validation.paper_session_realized_pnl_bridge import (
     PaperSessionRealizedPnlBridge,
@@ -324,6 +329,49 @@ def _reprove_entry(
     return reconstructed
 
 
+# Event-identity fields the aggregate dedups on; all must be present in a captured event payload.
+_EVENT_IDENTITY_KEYS = (
+    "realized_pnl_event_id",
+    "prior_position_state_digest",
+    "fill_simulation_result_digest",
+    "position_transition_digest",
+    "new_position_state_digest",
+)
+
+
+def _capture_event_payload(event: object) -> dict[str, object]:
+    """Serialize one realized event to its canonical plain payload EXACTLY once via the PUBLIC serializer.
+
+    The returned plain dict is the ONLY source the aggregate uses for BOTH the recomputed event digest and
+    the action-identity fields — the event object is never read again. This closes an event-object TOCTOU
+    where a stateful/adversarial ``PaperRealizedPnlEvent`` returns genuine values during digest/bridge
+    verification and fake unique identities during a later attribute read. Fails closed (typed error) when
+    the serializer raises, the payload is not a mapping, or a required identity field is absent.
+    """
+    try:
+        payload = paper_realized_pnl_event_to_dict(event)
+    except Exception as exc:  # noqa: BLE001 - re-raise as a typed error; BaseException not caught
+        raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:bridge_inconsistent") from exc
+    if not isinstance(payload, dict) or not all(key in payload for key in _EVENT_IDENTITY_KEYS):
+        raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:bridge_inconsistent")
+    return dict(payload)
+
+
+def _recompute_event_digest(payload: dict[str, object]) -> str:
+    """Recompute the canonical realized-event digest from a captured payload (no event-object read).
+
+    Uses the SAME digest contract as the event module's PUBLIC ``paper_realized_pnl_event_digest``: SHA-256
+    over the canonical JSON of the event payload EXCLUDING the self-digest field. Recomputing from the
+    captured payload guarantees the exact bytes proven against the bridge digest are the bytes the identity
+    fields are read from. Fails closed on a non-serializable payload.
+    """
+    digest_input = {key: value for key, value in payload.items() if key != "realized_pnl_event_digest"}
+    try:
+        return _canonical_digest(digest_input)
+    except (TypeError, ValueError) as exc:
+        raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:bridge_inconsistent") from exc
+
+
 # --------------------------------------------------------------------------------------------------
 # Aggregate construction
 # --------------------------------------------------------------------------------------------------
@@ -402,19 +450,15 @@ def build_paper_session_realized_pnl_aggregate(
         if closed is None or realized is None or closed < 0:
             raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:bridge_malformed")
 
-        # Snapshot/bridge event-digest cross-check (single source of identity, defense-in-depth): RECOMPUTE
-        # each event's PUBLIC digest from the snapshot — never trust a stored digest field from a second
-        # read — and require the ordered tuple to equal the reconstructed bridge's bound source_event_digests.
-        # The event digest binds the full action identity (prior/fill/transition/new-state digests + event
-        # id), so a match pins every identity read below to the genuine events the bridge was rebuilt from.
-        entry_events = tuple(bundle.event for bundle in rollup_entries_snapshot)
-        try:
-            snapshot_event_digests = tuple(paper_realized_pnl_event_digest(ev) for ev in entry_events)
-        except Exception as exc:  # noqa: BLE001 - re-raise as a typed error; BaseException not caught
-            raise PaperSessionRealizedPnlAggregateError(
-                "paper_session_realized_pnl_aggregate:bridge_inconsistent"
-            ) from exc
-        if snapshot_event_digests != bridge.source_event_digests:
+        # Canonical event-payload snapshot (single source of digest AND identity): serialize each event to a
+        # plain dict EXACTLY once and derive both its recomputed digest and every action-identity field from
+        # that same captured payload — the event object is never read again. This closes an event-object
+        # TOCTOU where a stateful PaperRealizedPnlEvent returns genuine values to the digest/bridge pass and
+        # fake unique identities to a later attribute read. The recompute (same contract as the PUBLIC event
+        # digest, which binds the full action identity) must equal the reconstructed bridge's bound
+        # source_event_digests, so a divergent capture fails closed here instead of bypassing dedup.
+        event_payloads = tuple(_capture_event_payload(bundle.event) for bundle in rollup_entries_snapshot)
+        if tuple(_recompute_event_digest(payload) for payload in event_payloads) != bridge.source_event_digests:
             raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:bridge_inconsistent")
 
         bridge_digests.append(bridge.bridge_digest)
@@ -422,16 +466,16 @@ def build_paper_session_realized_pnl_aggregate(
         session_digests.append(bridge.session_sequence_digest)
         rollup_digests.append(bridge.rollup_digest)
         source_event_digests.extend(bridge.source_event_digests)
-        for ev in entry_events:
-            event_ids.append(ev.realized_pnl_event_id)
-            fill_digests.append(ev.fill_simulation_result_digest)
-            transition_digests.append(ev.position_transition_digest)
+        for payload in event_payloads:
+            event_ids.append(payload["realized_pnl_event_id"])
+            fill_digests.append(payload["fill_simulation_result_digest"])
+            transition_digests.append(payload["position_transition_digest"])
             action_keys.append(
                 (
-                    ev.prior_position_state_digest,
-                    ev.fill_simulation_result_digest,
-                    ev.position_transition_digest,
-                    ev.new_position_state_digest,
+                    payload["prior_position_state_digest"],
+                    payload["fill_simulation_result_digest"],
+                    payload["position_transition_digest"],
+                    payload["new_position_state_digest"],
                 )
             )
         closed_values.append(closed)
