@@ -22,8 +22,9 @@ rollup from its event bundles, re-proving every upstream digest), and the suppli
 reconstruction exactly (digest + full serialized payload). This rejects a coordinated *resealed* bridge
 whose totals/counts are internally self-consistent but do not follow from its inputs, and transitively
 rejects coordinated resealed sessions / realized events. All bridges must share one ``market_symbol``;
-duplicate ``bridge_digest`` / ``bridge_id`` / ``session_sequence_digest`` is rejected; caller order is
-preserved and bound.
+duplicate ``bridge_digest`` / ``bridge_id`` / ``session_sequence_digest`` is rejected, and a duplicate
+``source_event_digest`` across bridges is rejected (the same realized event must never be summed twice);
+caller order is preserved and bound.
 
 SCOPE / membership boundary: each session bridge is provenance-reconstructed (its session context from
 episode artifacts and its realized rollup from event bundles), but this aggregate does **not** prove that
@@ -375,6 +376,13 @@ def build_paper_session_realized_pnl_aggregate(
     if len(set(session_digests)) != len(session_digests):
         raise PaperSessionRealizedPnlAggregateError(
             "paper_session_realized_pnl_aggregate:duplicate_session_sequence_digest"
+        )
+    # A realized event proves a unique closed/realized economic action; the SAME event digest appearing in
+    # two bridges (even with distinct bridge_id / session_sequence_digest) would double-count its realized
+    # PnL / closed units in the totals. Reject any duplicate source event digest across all bridges.
+    if len(set(source_event_digests)) != len(source_event_digests):
+        raise PaperSessionRealizedPnlAggregateError(
+            "paper_session_realized_pnl_aggregate:duplicate_source_event_digest"
         )
 
     operands = tuple(closed_values) + tuple(realized_values)

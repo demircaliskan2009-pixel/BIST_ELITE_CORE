@@ -562,6 +562,20 @@ def test_duplicate_session_sequence_digest_rejected() -> None:
         _aggregate([e1, e2])
 
 
+def test_duplicate_source_event_across_bridges_rejected() -> None:
+    # Codex P1: two distinct bridges (distinct bridge_id + session_sequence_digest) built from the SAME
+    # realized event would double-count its realized PnL / closed units. The shared source event digest
+    # must fail closed even though the bridge/session duplicate checks pass.
+    shared = _bundle("shared-evt")
+    e1 = _entry_from(_prov_for("1"), bridge_id="bridge-1", bundles=(shared,))
+    e2 = _entry_from(_prov_for("2"), bridge_id="bridge-2", bundles=(shared,))
+    assert e1.bridge.bridge_digest != e2.bridge.bridge_digest
+    assert e1.bridge.session_sequence_digest != e2.bridge.session_sequence_digest
+    assert e1.bridge.source_event_digests == e2.bridge.source_event_digests  # same realized event
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_source_event_digest"):
+        _aggregate([e1, e2])
+
+
 def test_market_symbol_mismatch_rejected() -> None:
     btc = _entry("1", market_symbol="BTC-PERPETUAL")
     eth = _entry("2", market_symbol="ETH-PERPETUAL")
