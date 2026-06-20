@@ -459,6 +459,24 @@ def _make_stateful_event(genuine, *, fake_fill: str, fake_transition: str) -> _S
     return ev
 
 
+class _SplitHashStr(str):
+    """A ``str`` with genuine content but a salted, per-instance ``__hash__`` (custom-hash dedup bypass).
+
+    ``str(self)`` and ``==`` keep canonical string content (so canonical JSON / SHA-256 / bridge provenance
+    are unaffected), but two content-equal instances with different salts hash differently and therefore
+    land in different ``set``/``dict`` buckets — bypassing duplicate detection in an aggregate that dedups
+    on the raw payload objects instead of exact plain primitives.
+    """
+
+    def __new__(cls, value: str, salt: int) -> _SplitHashStr:
+        obj = str.__new__(cls, value)
+        obj._salt = salt
+        return obj
+
+    def __hash__(self) -> int:
+        return hash((str(self), self._salt))
+
+
 # --------------------------------------------------------------------------------------------------
 # Happy paths / aggregation
 # --------------------------------------------------------------------------------------------------
@@ -800,6 +818,71 @@ def test_stateful_realized_event_attribute_toc_tou_identity_bypass_rejected() ->
 
     with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_fill_simulation_result_digest"):
         build_paper_session_realized_pnl_aggregate([e1, e2], aggregate_id="agg-1", correlation_id="corr-agg")
+
+
+def test_split_hash_str_identity_values_are_canonicalized_before_dedup() -> None:
+    # Codex P1 (non-canonical identity / custom-hash bypass): two entries share ONE economic action (same
+    # fill + transition) with distinct event ids -> distinct source_event_digests, so the action dedup MUST
+    # fire on the shared fill/transition. Each event's fill+transition digests are content-equal _SplitHashStr
+    # instances with DIFFERENT salts (equal str content, unequal hash). Canonical JSON / bridge provenance see
+    # identical content and pass; an aggregate that dedups on the shallow payload objects treats the two as
+    # distinct (different hash buckets) and double-counts (->400). The canonicalizing aggregate round-trips
+    # each payload to exact plain str and rejects the duplicate.
+    prior = _long(avg="100", idn="splithash")
+    fill = _fill("SELL", "4", "150", idn="splithash")
+    transition, new_state = apply_paper_fill_to_position(
+        prior,
+        fill,
+        transition_id="rtrans-splithash",
+        new_position_state_id="rnewpos-splithash",
+        correlation_id="corr-rapply",
+    )
+    ev_a = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-a", correlation_id="corr-revt"
+    )
+    ev_b = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-b", correlation_id="corr-revt"
+    )
+    genuine_fill = str(ev_a.fill_simulation_result_digest)
+    genuine_transition = str(ev_a.position_transition_digest)
+    assert genuine_fill == str(ev_b.fill_simulation_result_digest)  # truly shared economic action
+    adv_a = replace(
+        ev_a,
+        fill_simulation_result_digest=_SplitHashStr(genuine_fill, 1),
+        position_transition_digest=_SplitHashStr(genuine_transition, 1),
+    )
+    adv_b = replace(
+        ev_b,
+        fill_simulation_result_digest=_SplitHashStr(genuine_fill, 2),
+        position_transition_digest=_SplitHashStr(genuine_transition, 2),
+    )
+
+    # Non-vacuous: content equal, hash NOT equal; stored event digests unchanged (provenance intact).
+    assert str(adv_a.fill_simulation_result_digest) == str(adv_b.fill_simulation_result_digest)  # CONTENT_EQUAL
+    assert hash(adv_a.fill_simulation_result_digest) != hash(adv_b.fill_simulation_result_digest)  # HASH_NOT_EQUAL
+    assert adv_a.realized_pnl_event_digest == ev_a.realized_pnl_event_digest  # DIGEST_A_UNCHANGED
+    assert adv_b.realized_pnl_event_digest == ev_b.realized_pnl_event_digest  # DIGEST_B_UNCHANGED
+
+    bundle_a = PaperRealizedPnlRollupInput(
+        event=adv_a, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    bundle_b = PaperRealizedPnlRollupInput(
+        event=adv_b, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    # Bridges build (provenance/digest unaffected by the custom hash), with distinct event digests.
+    e1 = _entry_from(_prov_for("1"), bridge_id="bridge-1", bundles=(bundle_a,))
+    e2 = _entry_from(_prov_for("2"), bridge_id="bridge-2", bundles=(bundle_b,))
+    assert e1.bridge.source_event_digests != e2.bridge.source_event_digests
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_fill_simulation_result_digest"):
+        build_paper_session_realized_pnl_aggregate([e1, e2], aggregate_id="agg-1", correlation_id="corr-agg")
+
+    # The canonicalized aggregate output identity values are exact plain str (not the _SplitHashStr subclass).
+    single = _entry_from(_prov_for("9"), bridge_id="bridge-9", bundles=(bundle_a,))
+    agg = build_paper_session_realized_pnl_aggregate([single], aggregate_id="agg-1", correlation_id="corr-agg")
+    assert type(agg.fill_simulation_result_digests[0]) is str
+    assert agg.fill_simulation_result_digests[0] == genuine_fill
+    assert type(agg.position_transition_digests[0]) is str
+    assert agg.position_transition_digests[0] == genuine_transition
 
 
 def test_duplicate_realized_event_id_across_bridges_rejected() -> None:

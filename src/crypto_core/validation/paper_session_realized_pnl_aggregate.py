@@ -26,17 +26,19 @@ duplicate ``bridge_digest`` / ``bridge_id`` / ``session_sequence_digest`` is rej
 ``source_event_digest`` across bridges is rejected (the same realized event must never be summed twice);
 caller order is preserved and bound.
 
-Single-read snapshots (two layers): each entry's ``rollup_entries`` is read EXACTLY once into an immutable
-tuple, and each realized event in that tuple is serialized EXACTLY once (PUBLIC
-``paper_realized_pnl_event_to_dict``) into a canonical plain payload. Bridge reconstruction, the
-recomputed-event-digest cross-check, AND action-identity extraction all read only those captured snapshots
-— never the original Sequence or event objects again. A stateful/mutable Sequence therefore cannot serve
-genuine bundles to reconstruction and fake identities to a later read, and a stateful/adversarial
-``PaperRealizedPnlEvent`` cannot return genuine attributes to the digest pass and fake unique identities
-to the identity pass (digest and identity come from the same captured bytes). The realized economic action
-of every event (its event id, fill-simulation-result digest, position-transition digest, and full
-prior/fill/transition/new-state identity tuple) is de-duplicated fail-closed across all bridges so one
-real action is never summed twice.
+Single-read snapshots (two layers) + canonical primitives: each entry's ``rollup_entries`` is read EXACTLY
+once into an immutable tuple, and each realized event in that tuple is serialized EXACTLY once (PUBLIC
+``paper_realized_pnl_event_to_dict``) and then ROUND-TRIPPED through canonical JSON into a plain-primitive
+payload (exact ``str``/builtins — no ``str`` subclass with custom hash/equality). Bridge reconstruction,
+the recomputed-event-digest cross-check, AND action-identity extraction all read only those captured,
+normalized snapshots — never the original Sequence or event objects again. So a stateful/mutable Sequence
+cannot serve genuine bundles to reconstruction and fake identities to a later read; a stateful/adversarial
+``PaperRealizedPnlEvent`` cannot return genuine attributes to the digest pass and fake identities to the
+identity pass (digest and identity come from the same captured bytes); and a content-equal but
+hash-divergent ``str`` subclass cannot slip a duplicate canonical action past set/tuple de-dup. The
+realized economic action of every event (its event id, fill-simulation-result digest, position-transition
+digest, and full prior/fill/transition/new-state identity tuple) is de-duplicated fail-closed across all
+bridges so one real action is never summed twice.
 
 SCOPE / membership boundary: each session bridge is provenance-reconstructed (its session context from
 episode artifacts and its realized rollup from event bundles), but this aggregate does **not** prove that
@@ -340,21 +342,33 @@ _EVENT_IDENTITY_KEYS = (
 
 
 def _capture_event_payload(event: object) -> dict[str, object]:
-    """Serialize one realized event to its canonical plain payload EXACTLY once via the PUBLIC serializer.
+    """Serialize one realized event to an exact canonical plain-primitive payload EXACTLY once.
 
-    The returned plain dict is the ONLY source the aggregate uses for BOTH the recomputed event digest and
-    the action-identity fields — the event object is never read again. This closes an event-object TOCTOU
-    where a stateful/adversarial ``PaperRealizedPnlEvent`` returns genuine values during digest/bridge
-    verification and fake unique identities during a later attribute read. Fails closed (typed error) when
-    the serializer raises, the payload is not a mapping, or a required identity field is absent.
+    The PUBLIC serializer is called a single time; the payload is then ROUND-TRIPPED through canonical JSON
+    (``json.loads(json.dumps(...))`` with the same settings as ``_canonical_digest``) so every value becomes
+    an exact plain builtin — a plain ``str``, never a ``str`` subclass with custom ``__hash__``/``__eq__`` or
+    any other custom hash/equality object. This single normalized dict is the ONLY source for the recomputed
+    digest AND every action-identity field, so neither a stateful event (which cannot then diverge digest
+    from identity) nor a content-equal but hash-divergent ``str`` subclass (which cannot then slip past the
+    set/tuple dedup) can double-count an action. Fails closed (typed error) on a serializer error, a
+    non-mapping or non-canonical/non-serializable payload, or any identity field that is not an exact plain
+    ``str``.
     """
     try:
-        payload = paper_realized_pnl_event_to_dict(event)
+        raw = paper_realized_pnl_event_to_dict(event)
     except Exception as exc:  # noqa: BLE001 - re-raise as a typed error; BaseException not caught
         raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:bridge_inconsistent") from exc
-    if not isinstance(payload, dict) or not all(key in payload for key in _EVENT_IDENTITY_KEYS):
+    if not isinstance(raw, dict):
         raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:bridge_inconsistent")
-    return dict(payload)
+    try:
+        payload = json.loads(json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False))
+    except (TypeError, ValueError) as exc:
+        raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:bridge_inconsistent") from exc
+    # Strict exact-primitive identity guard: every dedup/output identity field must be a plain ``str`` (not a
+    # subclass), so set/tuple membership uses standard string hashing/equality.
+    if not isinstance(payload, dict) or any(type(payload.get(key)) is not str for key in _EVENT_IDENTITY_KEYS):
+        raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:bridge_inconsistent")
+    return payload
 
 
 def _recompute_event_digest(payload: dict[str, object]) -> str:
