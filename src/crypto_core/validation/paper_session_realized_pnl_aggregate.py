@@ -119,6 +119,8 @@ class PaperSessionRealizedPnlAggregate:
     bridge_digests: tuple[str, ...]
     rollup_digests: tuple[str, ...]
     source_event_digests: tuple[str, ...]
+    fill_simulation_result_digests: tuple[str, ...]
+    position_transition_digests: tuple[str, ...]
     episode_count_total: int
     event_count: int
     computed_event_count: int
@@ -337,6 +339,10 @@ def build_paper_session_realized_pnl_aggregate(
     session_digests: list[str] = []
     rollup_digests: list[str] = []
     source_event_digests: list[str] = []
+    event_ids: list[str] = []
+    fill_digests: list[str] = []
+    transition_digests: list[str] = []
+    action_keys: list[tuple[str, str, str, str | None]] = []
     closed_values: list[Decimal] = []
     realized_values: list[Decimal] = []
     episode_count_total = 0
@@ -357,11 +363,30 @@ def build_paper_session_realized_pnl_aggregate(
         if closed is None or realized is None or closed < 0:
             raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:bridge_malformed")
 
+        # entry.rollup_entries are pinned to the supplied bridge by the reconstruction in _reprove_entry, so
+        # their events are the exact (trusted) events the bridge bound, in order. Cross-check their digests
+        # against the reconstructed bridge's source_event_digests before reading their action identity.
+        entry_events = [bundle.event for bundle in entry.rollup_entries]
+        if tuple(ev.realized_pnl_event_digest for ev in entry_events) != bridge.source_event_digests:
+            raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:bridge_inconsistent")
+
         bridge_digests.append(bridge.bridge_digest)
         bridge_ids.append(bridge.bridge_id)
         session_digests.append(bridge.session_sequence_digest)
         rollup_digests.append(bridge.rollup_digest)
         source_event_digests.extend(bridge.source_event_digests)
+        for ev in entry_events:
+            event_ids.append(ev.realized_pnl_event_id)
+            fill_digests.append(ev.fill_simulation_result_digest)
+            transition_digests.append(ev.position_transition_digest)
+            action_keys.append(
+                (
+                    ev.prior_position_state_digest,
+                    ev.fill_simulation_result_digest,
+                    ev.position_transition_digest,
+                    ev.new_position_state_digest,
+                )
+            )
         closed_values.append(closed)
         realized_values.append(realized)
         episode_count_total += bridge.episode_count
@@ -377,12 +402,29 @@ def build_paper_session_realized_pnl_aggregate(
         raise PaperSessionRealizedPnlAggregateError(
             "paper_session_realized_pnl_aggregate:duplicate_session_sequence_digest"
         )
-    # A realized event proves a unique closed/realized economic action; the SAME event digest appearing in
-    # two bridges (even with distinct bridge_id / session_sequence_digest) would double-count its realized
-    # PnL / closed units in the totals. Reject any duplicate source event digest across all bridges.
+    # Economic-action dedup across ALL events of ALL bridges. A realized event proves a unique
+    # closed/realized economic action; the same action must never be summed twice. Exact event-digest
+    # dedup is necessary but insufficient (the same action re-emitted with a different
+    # ``realized_pnl_event_id`` yields a different event digest), so the action identity — its event id,
+    # fill-simulation-result digest, position-transition digest, and the full
+    # (prior, fill, transition, new-state) tuple — is also deduped fail-closed.
     if len(set(source_event_digests)) != len(source_event_digests):
         raise PaperSessionRealizedPnlAggregateError(
             "paper_session_realized_pnl_aggregate:duplicate_source_event_digest"
+        )
+    if len(set(event_ids)) != len(event_ids):
+        raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:duplicate_source_event_id")
+    if len(set(fill_digests)) != len(fill_digests):
+        raise PaperSessionRealizedPnlAggregateError(
+            "paper_session_realized_pnl_aggregate:duplicate_fill_simulation_result_digest"
+        )
+    if len(set(transition_digests)) != len(transition_digests):
+        raise PaperSessionRealizedPnlAggregateError(
+            "paper_session_realized_pnl_aggregate:duplicate_position_transition_digest"
+        )
+    if len(set(action_keys)) != len(action_keys):
+        raise PaperSessionRealizedPnlAggregateError(
+            "paper_session_realized_pnl_aggregate:duplicate_source_action_identity"
         )
 
     operands = tuple(closed_values) + tuple(realized_values)
@@ -406,6 +448,8 @@ def build_paper_session_realized_pnl_aggregate(
         bridge_digests=tuple(bridge_digests),
         rollup_digests=tuple(rollup_digests),
         source_event_digests=tuple(source_event_digests),
+        fill_simulation_result_digests=tuple(fill_digests),
+        position_transition_digests=tuple(transition_digests),
         episode_count_total=episode_count_total,
         event_count=event_count,
         computed_event_count=computed_event_count,
@@ -426,6 +470,8 @@ def _finalize_aggregate(
     bridge_digests: tuple[str, ...],
     rollup_digests: tuple[str, ...],
     source_event_digests: tuple[str, ...],
+    fill_simulation_result_digests: tuple[str, ...],
+    position_transition_digests: tuple[str, ...],
     episode_count_total: int,
     event_count: int,
     computed_event_count: int,
@@ -445,6 +491,8 @@ def _finalize_aggregate(
         "bridge_digests": bridge_digests,
         "rollup_digests": rollup_digests,
         "source_event_digests": source_event_digests,
+        "fill_simulation_result_digests": fill_simulation_result_digests,
+        "position_transition_digests": position_transition_digests,
         "episode_count_total": episode_count_total,
         "event_count": event_count,
         "computed_event_count": computed_event_count,
@@ -476,6 +524,8 @@ def _aggregate_fields(aggregate: PaperSessionRealizedPnlAggregate) -> dict[str, 
         "bridge_digests": aggregate.bridge_digests,
         "rollup_digests": aggregate.rollup_digests,
         "source_event_digests": aggregate.source_event_digests,
+        "fill_simulation_result_digests": aggregate.fill_simulation_result_digests,
+        "position_transition_digests": aggregate.position_transition_digests,
         "episode_count_total": aggregate.episode_count_total,
         "event_count": aggregate.event_count,
         "computed_event_count": aggregate.computed_event_count,
@@ -499,6 +549,8 @@ def _aggregate_payload_from(aggregate: PaperSessionRealizedPnlAggregate) -> dict
         "bridge_digests": list(aggregate.bridge_digests),
         "rollup_digests": list(aggregate.rollup_digests),
         "source_event_digests": list(aggregate.source_event_digests),
+        "fill_simulation_result_digests": list(aggregate.fill_simulation_result_digests),
+        "position_transition_digests": list(aggregate.position_transition_digests),
         "episode_count_total": aggregate.episode_count_total,
         "event_count": aggregate.event_count,
         "computed_event_count": aggregate.computed_event_count,

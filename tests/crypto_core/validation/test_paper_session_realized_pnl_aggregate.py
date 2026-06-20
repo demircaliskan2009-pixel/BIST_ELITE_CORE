@@ -76,6 +76,8 @@ _EXPECTED_KEYS = {
     "bridge_digests",
     "rollup_digests",
     "source_event_digests",
+    "fill_simulation_result_digests",
+    "position_transition_digests",
     "episode_count_total",
     "event_count",
     "computed_event_count",
@@ -272,9 +274,9 @@ def _exact_gross(filled_units: str, fill_price: str) -> str:
     return "0" if rendered in {"", "-0"} else rendered
 
 
-def _long(*, avg: str = "100", market_symbol: str = "BTC-PERPETUAL"):
+def _long(*, avg: str = "100", market_symbol: str = "BTC-PERPETUAL", idn: str = "1"):
     return build_paper_position_state(
-        position_state_id="rpos-1",
+        position_state_id=f"rpos-{idn}",
         market_symbol=market_symbol,
         side=PaperPositionStateSide.LONG,
         signed_units="10",
@@ -285,17 +287,19 @@ def _long(*, avg: str = "100", market_symbol: str = "BTC-PERPETUAL"):
     )
 
 
-def _rflat(*, market_symbol: str = "BTC-PERPETUAL"):
+def _rflat(*, market_symbol: str = "BTC-PERPETUAL", idn: str = "1"):
     return build_flat_paper_position_state(
-        position_state_id="rpos-1", market_symbol=market_symbol, correlation_id="corr-rpos"
+        position_state_id=f"rpos-{idn}", market_symbol=market_symbol, correlation_id="corr-rpos"
     )
 
 
-def _fill(side: str, filled: str, price: str, *, market_symbol: str = "BTC-PERPETUAL") -> PaperFillSimulationResult:
+def _fill(
+    side: str, filled: str, price: str, *, market_symbol: str = "BTC-PERPETUAL", idn: str = "1"
+) -> PaperFillSimulationResult:
     base = PaperFillSimulationResult(
         schema_version="paper-fill-simulation-result.v1",
         status=PaperFillSimulationStatus.FILLED,
-        fill_simulation_id="rfillsim-1",
+        fill_simulation_id=f"rfillsim-{idn}",
         intent_digest=_HEX,
         market_snapshot_digest=_HEX,
         fill_policy_digest=_HEX,
@@ -325,11 +329,11 @@ def _bundle(
     market_symbol: str = "BTC-PERPETUAL",
 ) -> PaperRealizedPnlRollupInput:
     if prior_side == "LONG":
-        prior = _long(avg=avg, market_symbol=market_symbol)
-        fill = _fill("SELL", filled, price, market_symbol=market_symbol)
+        prior = _long(avg=avg, market_symbol=market_symbol, idn=event_id)
+        fill = _fill("SELL", filled, price, market_symbol=market_symbol, idn=event_id)
     else:  # FLAT — open from flat (NO_REALIZED_PNL)
-        prior = _rflat(market_symbol=market_symbol)
-        fill = _fill("BUY", filled, price, market_symbol=market_symbol)
+        prior = _rflat(market_symbol=market_symbol, idn=event_id)
+        fill = _fill("BUY", filled, price, market_symbol=market_symbol, idn=event_id)
     transition, new_state = apply_paper_fill_to_position(
         prior,
         fill,
@@ -573,6 +577,49 @@ def test_duplicate_source_event_across_bridges_rejected() -> None:
     assert e1.bridge.session_sequence_digest != e2.bridge.session_sequence_digest
     assert e1.bridge.source_event_digests == e2.bridge.source_event_digests  # same realized event
     with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_source_event_digest"):
+        _aggregate([e1, e2])
+
+
+def test_duplicate_economic_action_with_distinct_event_ids_rejected() -> None:
+    # Codex P1: the SAME upstream prior/fill/transition/new-state action re-emitted as two canonical events
+    # with different realized_pnl_event_id yields different event digests (source-event dedup misses) but
+    # identical fill/transition digests -> the economic action is the same and must not be summed twice.
+    prior = _long(avg="100", idn="shared")
+    fill = _fill("SELL", "4", "150", idn="shared")
+    transition, new_state = apply_paper_fill_to_position(
+        prior,
+        fill,
+        transition_id="rtrans-shared",
+        new_position_state_id="rnewpos-shared",
+        correlation_id="corr-rapply",
+    )
+    ev_a = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-a", correlation_id="corr-revt"
+    )
+    ev_b = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-b", correlation_id="corr-revt"
+    )
+    bundle_a = PaperRealizedPnlRollupInput(
+        event=ev_a, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    bundle_b = PaperRealizedPnlRollupInput(
+        event=ev_b, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    assert ev_a.realized_pnl_event_digest != ev_b.realized_pnl_event_digest  # distinct source event digests
+    assert ev_a.fill_simulation_result_digest == ev_b.fill_simulation_result_digest  # same economic action
+    e1 = _entry_from(_prov_for("1"), bridge_id="bridge-1", bundles=(bundle_a,))
+    e2 = _entry_from(_prov_for("2"), bridge_id="bridge-2", bundles=(bundle_b,))
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_fill_simulation_result_digest"):
+        _aggregate([e1, e2])
+
+
+def test_duplicate_realized_event_id_across_bridges_rejected() -> None:
+    # Distinct economic actions (different price -> different fill/transition/event digests) but the SAME
+    # realized_pnl_event_id across two bridges must fail closed.
+    e1 = _entry("1", bundles=(_bundle("dup-id", price="150"),))
+    e2 = _entry("2", bundles=(_bundle("dup-id", price="80"),))
+    assert e1.bridge.source_event_digests != e2.bridge.source_event_digests
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_source_event_id"):
         _aggregate([e1, e2])
 
 
