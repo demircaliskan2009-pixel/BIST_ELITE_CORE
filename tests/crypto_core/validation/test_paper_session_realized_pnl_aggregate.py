@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Sequence
 from dataclasses import FrozenInstanceError, replace
 from decimal import Decimal, localcontext
 from pathlib import Path
@@ -385,6 +386,35 @@ def _aggregate(entries=None, **overrides):
     return build_paper_session_realized_pnl_aggregate(ents, **base)  # type: ignore[arg-type]
 
 
+class _StatefulRollupEntries(Sequence):
+    """A ``rollup_entries`` Sequence that returns a DIFFERENT view on each iteration (TOCTOU exploit).
+
+    The first iteration yields the genuine bundles (so bridge reconstruction passes); every later iteration
+    yields adversarial bundles (the second read a vulnerable double-read aggregate would use for action
+    identity). A snapshotting aggregate iterates it exactly once, so only the genuine first view is ever
+    observed. ``reads`` records how many times the sequence was iterated.
+    """
+
+    def __init__(self, first, rest):
+        self._first = tuple(first)
+        self._rest = tuple(rest)
+        self.reads = 0
+
+    def _view(self):
+        return self._first if self.reads == 0 else self._rest
+
+    def __iter__(self):
+        view = self._view()
+        self.reads += 1
+        return iter(view)
+
+    def __getitem__(self, index):
+        return self._view()[index]
+
+    def __len__(self):
+        return len(self._view())
+
+
 # --------------------------------------------------------------------------------------------------
 # Happy paths / aggregation
 # --------------------------------------------------------------------------------------------------
@@ -613,6 +643,60 @@ def test_duplicate_economic_action_with_distinct_event_ids_rejected() -> None:
         _aggregate([e1, e2])
 
 
+def test_stateful_rollup_entries_second_read_action_identity_bypass_rejected() -> None:
+    # Codex P1 (TOCTOU double-read): two entries genuinely share ONE economic action (same
+    # prior/fill/transition) but carry distinct realized_pnl_event_ids -> distinct source_event_digests (so
+    # the exact source-event dedup misses) while their fill/transition identities are identical (so the
+    # action dedup MUST fire). A vulnerable aggregate reads entry.rollup_entries twice: the genuine first
+    # read passes bridge reconstruction, then a stateful second read publishes a FAKE fill digest that
+    # bypasses the action dedup and double-counts realized PnL (->400). The snapshotting aggregate reads the
+    # sequence exactly once, sees only the genuine action, and rejects the duplicate fill-result digest.
+    prior = _long(avg="100", idn="toctou")
+    fill = _fill("SELL", "4", "150", idn="toctou")
+    transition, new_state = apply_paper_fill_to_position(
+        prior,
+        fill,
+        transition_id="rtrans-toctou",
+        new_position_state_id="rnewpos-toctou",
+        correlation_id="corr-rapply",
+    )
+    ev_a = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-a", correlation_id="corr-revt"
+    )
+    ev_b = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-b", correlation_id="corr-revt"
+    )
+    bundle_a = PaperRealizedPnlRollupInput(
+        event=ev_a, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    bundle_b = PaperRealizedPnlRollupInput(
+        event=ev_b, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    # Genuine first entry (real action, real bundle).
+    e1 = _entry_from(_prov_for("1"), bridge_id="bridge-1", bundles=(bundle_a,))
+    # Second entry: bridge built from the GENUINE bundle_b (its source_event_digests bind ev_b), but the
+    # input carries a stateful rollup_entries whose SECOND read swaps in a fake-identity event.
+    prov2 = _prov_for("2")
+    bridge2 = build_paper_session_realized_pnl_bridge(
+        prov2, (bundle_b,), bridge_id="bridge-2", correlation_id="corr-bridge"
+    )
+    # replace() does NOT recompute the stored self-digest, so the fake event keeps ev_b's genuine
+    # realized_pnl_event_digest -> a stored-field-only cross-check would be fooled, but a RECOMPUTE is not.
+    fake_event = replace(ev_b, fill_simulation_result_digest="f" * 64, position_transition_digest="e" * 64)
+    assert fake_event.realized_pnl_event_digest == ev_b.realized_pnl_event_digest
+    assert fake_event.fill_simulation_result_digest != ev_b.fill_simulation_result_digest
+    fake_bundle = replace(bundle_b, event=fake_event)
+    stateful = _StatefulRollupEntries(first=(bundle_b,), rest=(fake_bundle,))
+    e2 = PaperSessionRealizedPnlAggregateInput(bridge=bridge2, session_input=prov2, rollup_entries=stateful)
+    # Sanity: genuine actions truly collide on fill identity but not on source-event digest.
+    assert ev_a.realized_pnl_event_digest != ev_b.realized_pnl_event_digest
+    assert ev_a.fill_simulation_result_digest == ev_b.fill_simulation_result_digest
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_fill_simulation_result_digest"):
+        build_paper_session_realized_pnl_aggregate([e1, e2], aggregate_id="agg-1", correlation_id="corr-agg")
+    # The repaired aggregate consumed the stateful sequence EXACTLY once (only the genuine view was seen).
+    assert stateful.reads == 1
+
+
 def test_duplicate_realized_event_id_across_bridges_rejected() -> None:
     # Distinct economic actions (different price -> different fill/transition/event digests) but the SAME
     # realized_pnl_event_id across two bridges must fail closed.
@@ -708,6 +792,15 @@ def test_wrong_typed_rollup_entry_rejected_through_aggregate() -> None:
     bad = replace(entry, rollup_entries=({"not": "a-bundle"},))  # type: ignore[arg-type]
     with pytest.raises(PaperSessionRealizedPnlAggregateError, match="bridge_not_reproducible"):
         _aggregate([bad])
+
+
+@pytest.mark.parametrize("bad", [5, "x", b"x", {"k": "v"}])
+def test_non_sequence_rollup_entries_rejected(bad: object) -> None:
+    # The single-read snapshot guards the container shape: a non-Sequence (or str/bytes) rollup_entries
+    # fails closed with a typed error instead of materializing into something the builder would misread.
+    entry = replace(_entry("1"), rollup_entries=bad)  # type: ignore[arg-type]
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="rollup_entries_malformed"):
+        _aggregate([entry])
 
 
 # --------------------------------------------------------------------------------------------------

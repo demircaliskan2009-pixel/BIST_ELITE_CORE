@@ -26,6 +26,13 @@ duplicate ``bridge_digest`` / ``bridge_id`` / ``session_sequence_digest`` is rej
 ``source_event_digest`` across bridges is rejected (the same realized event must never be summed twice);
 caller order is preserved and bound.
 
+Single-read snapshot: each entry's ``rollup_entries`` is read EXACTLY once into an immutable tuple that
+feeds bridge reconstruction, the recomputed-event-digest cross-check, AND action-identity extraction
+alike, so a stateful/mutable Sequence cannot serve genuine bundles to reconstruction and then expose fake
+economic-action identities to a second read. The realized economic action of every event (its event id,
+fill-simulation-result digest, position-transition digest, and full prior/fill/transition/new-state
+identity tuple) is de-duplicated fail-closed across all bridges so one real action is never summed twice.
+
 SCOPE / membership boundary: each session bridge is provenance-reconstructed (its session context from
 episode artifacts and its realized rollup from event bundles), but this aggregate does **not** prove that
 each rolled-up realized event belongs to a specific episode of its session — a ``PaperEpisodeRunResult``
@@ -43,6 +50,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, localcontext
 from enum import Enum
 
+from crypto_core.validation.paper_realized_pnl import paper_realized_pnl_event_digest
 from crypto_core.validation.paper_realized_pnl_rollup import PaperRealizedPnlRollupInput
 from crypto_core.validation.paper_session_realized_pnl_bridge import (
     PaperSessionRealizedPnlBridge,
@@ -244,16 +252,39 @@ def _has_scope_violation(*texts: object) -> bool:
 # --------------------------------------------------------------------------------------------------
 
 
-def _reprove_entry(entry: PaperSessionRealizedPnlAggregateInput) -> PaperSessionRealizedPnlBridge:
-    """Re-prove one bridge provenance bundle and return the canonical (reconstructed) bridge.
+def _snapshot_rollup_entries(
+    entry: PaperSessionRealizedPnlAggregateInput,
+) -> tuple[PaperRealizedPnlRollupInput, ...]:
+    """Read ``entry.rollup_entries`` EXACTLY once and pin it to an immutable tuple.
 
-    The supplied bridge self-digest is verified, then the canonical bridge is reconstructed from the
-    supplied session provenance + rollup bundles via the PUBLIC builder and required to match the supplied
-    bridge exactly (digest + full serialized payload). A coordinated resealed bridge — totals/counts
-    internally consistent but not the genuine result of the supplied inputs — fails closed here.
+    Materializing a single view defeats a stateful/mutable Sequence that would otherwise return genuine
+    bundles to bridge reconstruction and adversarial (fake-identity) bundles to a later action-identity
+    read — a TOCTOU double-read that could bypass economic-action dedup and double-count realized PnL.
+    Contents are not validated here (the bridge reconstruction re-proves every bundle); only the container
+    shape is guarded so a non-sequence fails closed with a typed error rather than an untyped exception.
     """
-    if not isinstance(entry, PaperSessionRealizedPnlAggregateInput):
-        raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:entry_malformed")
+    raw = entry.rollup_entries
+    if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
+        raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:rollup_entries_malformed")
+    return tuple(raw)
+
+
+def _reprove_entry(
+    entry: PaperSessionRealizedPnlAggregateInput,
+    rollup_entries_snapshot: tuple[PaperRealizedPnlRollupInput, ...],
+) -> PaperSessionRealizedPnlBridge:
+    """Re-prove one bridge provenance bundle against a single immutable rollup snapshot; return the
+    canonical (reconstructed) bridge.
+
+    ``rollup_entries_snapshot`` is the caller's one-and-only read of ``entry.rollup_entries`` — it (never
+    ``entry.rollup_entries``) is fed to the PUBLIC builder, so a stateful/mutable Sequence cannot serve
+    genuine bundles to reconstruction here and adversarial bundles to a later read. The supplied bridge
+    self-digest is verified, then the canonical bridge is reconstructed from the supplied session
+    provenance + that snapshot via the PUBLIC builder and required to match the supplied bridge exactly
+    (digest + full serialized payload). A coordinated resealed bridge — totals/counts internally consistent
+    but not the genuine result of the supplied inputs — fails closed here. The caller validates that
+    ``entry`` is a ``PaperSessionRealizedPnlAggregateInput`` before taking the snapshot.
+    """
     bridge = entry.bridge
     if not isinstance(bridge, PaperSessionRealizedPnlBridge):
         raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:bridge_malformed")
@@ -275,7 +306,7 @@ def _reprove_entry(entry: PaperSessionRealizedPnlAggregateInput) -> PaperSession
     try:
         reconstructed = build_paper_session_realized_pnl_bridge(
             entry.session_input,
-            entry.rollup_entries,
+            rollup_entries_snapshot,
             bridge_id=bridge.bridge_id,
             correlation_id=bridge.correlation_id,
             metadata=dict(bridge.metadata),
@@ -351,7 +382,15 @@ def build_paper_session_realized_pnl_aggregate(
     no_realized_event_count = 0
 
     for entry in entry_tuple:
-        bridge = _reprove_entry(entry)
+        if not isinstance(entry, PaperSessionRealizedPnlAggregateInput):
+            raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:entry_malformed")
+        # Single-snapshot rule: read entry.rollup_entries EXACTLY once into an immutable tuple and feed that
+        # one snapshot to every consumer (bridge reconstruction, event-digest cross-check, and action-
+        # identity extraction). entry.rollup_entries is never read again, so a stateful/mutable Sequence
+        # cannot serve genuine bundles to reconstruction and adversarial (fake-identity) bundles to a later
+        # read — closing the TOCTOU double-read that could bypass economic-action dedup and double-count.
+        rollup_entries_snapshot = _snapshot_rollup_entries(entry)
+        bridge = _reprove_entry(entry, rollup_entries_snapshot)
 
         if market_symbol is None:
             market_symbol = bridge.market_symbol
@@ -363,11 +402,19 @@ def build_paper_session_realized_pnl_aggregate(
         if closed is None or realized is None or closed < 0:
             raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:bridge_malformed")
 
-        # entry.rollup_entries are pinned to the supplied bridge by the reconstruction in _reprove_entry, so
-        # their events are the exact (trusted) events the bridge bound, in order. Cross-check their digests
-        # against the reconstructed bridge's source_event_digests before reading their action identity.
-        entry_events = [bundle.event for bundle in entry.rollup_entries]
-        if tuple(ev.realized_pnl_event_digest for ev in entry_events) != bridge.source_event_digests:
+        # Snapshot/bridge event-digest cross-check (single source of identity, defense-in-depth): RECOMPUTE
+        # each event's PUBLIC digest from the snapshot — never trust a stored digest field from a second
+        # read — and require the ordered tuple to equal the reconstructed bridge's bound source_event_digests.
+        # The event digest binds the full action identity (prior/fill/transition/new-state digests + event
+        # id), so a match pins every identity read below to the genuine events the bridge was rebuilt from.
+        entry_events = tuple(bundle.event for bundle in rollup_entries_snapshot)
+        try:
+            snapshot_event_digests = tuple(paper_realized_pnl_event_digest(ev) for ev in entry_events)
+        except Exception as exc:  # noqa: BLE001 - re-raise as a typed error; BaseException not caught
+            raise PaperSessionRealizedPnlAggregateError(
+                "paper_session_realized_pnl_aggregate:bridge_inconsistent"
+            ) from exc
+        if snapshot_event_digests != bridge.source_event_digests:
             raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:bridge_inconsistent")
 
         bridge_digests.append(bridge.bridge_digest)
