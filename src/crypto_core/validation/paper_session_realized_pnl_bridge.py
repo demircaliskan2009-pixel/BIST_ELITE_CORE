@@ -13,20 +13,25 @@ execution instruction; calls no live/private API; schedules nothing; runs no aut
 connector/scheduler/runtime/venue/execution/service/session/data/portfolio/orchestrator/temporal
 surface, no Deribit, no BIST.
 
-Binding semantics: the supplied ``PaperSessionSequenceResult`` is re-proven via its PUBLIC
-``paper_session_sequence_result_digest`` (mismatch fails closed), re-proven paper-safe (status COMPUTED,
-every negative attestation False), and token-scope-clean; the realized-PnL rollup is built from the
-supplied ``PaperRealizedPnlRollupInput`` bundles (full per-event provenance reconstruction). The session
-and the rollup must share one ``market_symbol``. The bridge digest binds the session-sequence digest, the
-rollup digest, the ordered source event digests, the copied totals/counts, the episode count, and the
-ids/correlation/metadata/attestations.
+Binding semantics: the session side is supplied as a provenance bundle (``PaperSessionSequenceProvenance``
+= the ``PaperSessionSequenceResult`` plus the ordered ``PaperEpisodeRunResult`` artifacts it was built
+from). The supplied session is re-proven via its PUBLIC ``paper_session_sequence_result_digest`` (mismatch
+fails closed), re-proven paper-safe (status COMPUTED, every negative attestation False), token-scope-clean,
+and structurally consistent; then the canonical session is **reconstructed** from the supplied episode
+artifacts via the PUBLIC ``build_paper_session_sequence`` and the supplied session must equal the
+reconstruction exactly (digest + full serialized payload). This rejects a coordinated *resealed* session
+whose structural fields are internally self-consistent but do not follow from any real episodes. The
+realized-PnL rollup is built from the supplied ``PaperRealizedPnlRollupInput`` bundles (full per-event
+provenance reconstruction). The session and the rollup must share one ``market_symbol``. The bridge digest
+binds the session-sequence digest, the rollup digest, the ordered source event digests, the copied
+totals/counts, the episode count, and the ids/correlation/metadata/attestations.
 
-SCOPE / membership boundary: this bridge proves that a provenance-bound realized-PnL aggregation is
-digest-bound to a verified paper session CONTEXT for the same market — it does **not** assert per-episode
-membership (that each rolled-up realized event was produced by an episode of this exact session). A
-``PaperSessionSequenceResult`` exposes only episode-run digests, final position/PnL digests, and counts —
-not per-episode fill/transition/new-state provenance — so event-to-episode membership cannot be proven
-from the session artifact alone and is intentionally NOT claimed here (no false membership proof).
+SCOPE / membership boundary: the session context is **provenance-reconstructed** from its episode
+artifacts and the realized rollup is **provenance-reconstructed** from its event bundles, but this bridge
+does **not** prove per-episode membership — that each rolled-up realized event was produced by a specific
+episode of this session. A ``PaperEpisodeRunResult`` and a ``PaperRealizedPnlEvent`` are not linked by a
+shared identifier the bridge can cross-check, so event-to-episode membership is intentionally NOT claimed
+here (no false membership proof).
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 
+from crypto_core.validation.paper_episode_runner import PaperEpisodeRunResult
 from crypto_core.validation.paper_realized_pnl_rollup import (
     PaperRealizedPnlRollup,
     PaperRealizedPnlRollupError,
@@ -45,9 +51,12 @@ from crypto_core.validation.paper_realized_pnl_rollup import (
     build_paper_realized_pnl_rollup,
 )
 from crypto_core.validation.paper_session_sequence import (
+    PaperSessionSequenceError,
     PaperSessionSequenceResult,
     PaperSessionSequenceStatus,
+    build_paper_session_sequence,
     paper_session_sequence_result_digest,
+    paper_session_sequence_result_to_dict,
 )
 
 _BRIDGE_SCHEMA_VERSION = "paper-session-realized-pnl-bridge.v1"
@@ -77,6 +86,20 @@ class PaperSessionRealizedPnlBridgeStatus(str, Enum):
 
     COMPUTED = "COMPUTED"
     REJECTED = "REJECTED"
+
+
+@dataclass(frozen=True)
+class PaperSessionSequenceProvenance:
+    """A session provenance bundle: a ``PaperSessionSequenceResult`` plus the ordered episode-run artifacts
+    it was built from.
+
+    The bridge reconstructs the canonical session from these episode artifacts and requires the supplied
+    ``session_sequence`` to match exactly, so a coordinated resealed session (structural fields internally
+    self-consistent but not produced by real episodes) cannot enter the bridge. PAPER ONLY.
+    """
+
+    session_sequence: PaperSessionSequenceResult
+    episodes: tuple[PaperEpisodeRunResult, ...]
 
 
 @dataclass(frozen=True)
@@ -310,13 +333,66 @@ def _reprove_session(session: PaperSessionSequenceResult) -> tuple[str, str, int
     return session.market_symbol, session.paper_session_id, session.episode_count, session.paper_session_sequence_digest
 
 
+def _reprove_session_provenance(session_input: PaperSessionSequenceProvenance) -> tuple[str, str, int, str]:
+    """Re-prove a session provenance bundle and return the canonical (market, id, episode_count, digest).
+
+    The supplied session is shape/safety/structurally re-proven (precise early errors), then the canonical
+    session is reconstructed from the supplied episode artifacts via the PUBLIC ``build_paper_session_sequence``
+    and the supplied session must equal the reconstruction exactly (digest + full serialized payload). A
+    coordinated resealed session — structural fields internally consistent but not the genuine result of the
+    supplied episodes — fails closed here.
+    """
+    if not isinstance(session_input, PaperSessionSequenceProvenance):
+        raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:session_input_malformed")
+    session = session_input.session_sequence
+    episodes = session_input.episodes
+    if isinstance(episodes, (str, bytes)) or not isinstance(episodes, Sequence):
+        raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:episodes_malformed")
+    episode_tuple = tuple(episodes)
+    if not episode_tuple:
+        raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:episodes_empty")
+    for episode in episode_tuple:
+        if not isinstance(episode, PaperEpisodeRunResult):
+            raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:episode_malformed")
+
+    # Defense-in-depth: shape/safety/status/digest/structural re-proof of the SUPPLIED session (precise errors).
+    _reprove_session(session)
+
+    # Provenance: reconstruct the canonical session from the supplied episode artifacts and the session's
+    # own identity/correlation/metadata. build_paper_session_sequence re-proves each episode's digest +
+    # structure, orders, de-duplicates, and counts; any inconsistency raises.
+    try:
+        reconstructed = build_paper_session_sequence(
+            episode_tuple,
+            paper_session_id=session.paper_session_id,
+            correlation_id=session.correlation_id,
+            metadata=dict(session.metadata),
+        )
+    except PaperSessionSequenceError as exc:
+        raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:session_not_reproducible") from exc
+
+    # The supplied session must be EXACTLY the canonical reconstruction (digest + full serialized payload),
+    # binding its structural fields to real episodes. Closes the coordinated session reseal.
+    if reconstructed.paper_session_sequence_digest != session.paper_session_sequence_digest or (
+        paper_session_sequence_result_to_dict(reconstructed) != paper_session_sequence_result_to_dict(session)
+    ):
+        raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:session_inconsistent")
+
+    return (
+        reconstructed.market_symbol,
+        reconstructed.paper_session_id,
+        reconstructed.episode_count,
+        reconstructed.paper_session_sequence_digest,
+    )
+
+
 # --------------------------------------------------------------------------------------------------
 # Bridge construction
 # --------------------------------------------------------------------------------------------------
 
 
 def build_paper_session_realized_pnl_bridge(
-    session_sequence: PaperSessionSequenceResult,
+    session_input: PaperSessionSequenceProvenance,
     rollup_entries: Sequence[PaperRealizedPnlRollupInput],
     *,
     bridge_id: str,
@@ -325,15 +401,19 @@ def build_paper_session_realized_pnl_bridge(
 ) -> PaperSessionRealizedPnlBridge:
     """Build a deterministic, digest-bound bridge from a paper session sequence to a realized-PnL rollup.
 
-    The ``session_sequence`` is re-proven (schema, status COMPUTED, paper-safe attestations, token scope,
-    public digest). The realized-PnL rollup is built from the supplied ``rollup_entries`` provenance
-    bundles via the merged ``build_paper_realized_pnl_rollup`` (full per-event provenance reconstruction);
-    any provenance/shape/duplicate/symbol failure propagates fail-closed. The session and the rollup must
-    share one ``market_symbol``. The bridge copies the rollup's gross totals/counts (no Decimal arithmetic
-    of its own) and binds the session-sequence digest, rollup digest, ordered source event digests,
-    counts, and episode count. Per-episode membership is not asserted (see module docstring). Wrong-typed/
-    malformed/forged inputs raise ``PaperSessionRealizedPnlBridgeError``; inputs are never mutated; no
-    order routing, no live API, no scheduler/auto-loop, no connector/readiness transition, gross only.
+    The ``session_input`` is a ``PaperSessionSequenceProvenance`` bundle (session result + its episode-run
+    artifacts): the session is re-proven (schema, status COMPUTED, paper-safe attestations, token scope,
+    public digest, structural invariants) and then RECONSTRUCTED from the supplied episode artifacts via
+    ``build_paper_session_sequence`` and required to match exactly (digest + full serialized payload) — a
+    coordinated resealed session fails closed. The realized-PnL rollup is built from the supplied
+    ``rollup_entries`` provenance bundles via the merged ``build_paper_realized_pnl_rollup`` (full per-event
+    provenance reconstruction); any provenance/shape/duplicate/symbol failure propagates fail-closed. The
+    session and the rollup must share one ``market_symbol``. The bridge copies the rollup's gross
+    totals/counts (no Decimal arithmetic of its own) and binds the session-sequence digest, rollup digest,
+    ordered source event digests, counts, and episode count. Per-episode membership is not asserted (see
+    module docstring). Wrong-typed/malformed/forged inputs raise ``PaperSessionRealizedPnlBridgeError``;
+    inputs are never mutated; no order routing, no live API, no scheduler/auto-loop, no connector/readiness
+    transition, gross only.
     """
     if not _is_non_empty_string(bridge_id):
         raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:bridge_id_invalid")
@@ -343,7 +423,7 @@ def build_paper_session_realized_pnl_bridge(
     if _has_scope_violation(bridge_id, correlation_id, *_metadata_texts(bridge_metadata)):
         raise PaperSessionRealizedPnlBridgeError("paper_session_realized_pnl_bridge:scope_violation")
 
-    session_market, paper_session_id, episode_count, session_digest = _reprove_session(session_sequence)
+    session_market, paper_session_id, episode_count, session_digest = _reprove_session_provenance(session_input)
 
     # Build the realized-PnL rollup from provenance bundles. The rollup builder fully re-proves each
     # event's upstream provenance (reconstruction), de-duplicates, and validates shape; any failure is a
@@ -493,6 +573,7 @@ __all__ = [
     "PaperSessionRealizedPnlBridge",
     "PaperSessionRealizedPnlBridgeError",
     "PaperSessionRealizedPnlBridgeStatus",
+    "PaperSessionSequenceProvenance",
     "build_paper_session_realized_pnl_bridge",
     "paper_session_realized_pnl_bridge_digest",
     "paper_session_realized_pnl_bridge_to_dict",

@@ -52,6 +52,7 @@ from crypto_core.validation.paper_realized_pnl_rollup import (
 from crypto_core.validation.paper_session_realized_pnl_bridge import (
     PaperSessionRealizedPnlBridgeError,
     PaperSessionRealizedPnlBridgeStatus,
+    PaperSessionSequenceProvenance,
     build_paper_session_realized_pnl_bridge,
     paper_session_realized_pnl_bridge_digest,
     paper_session_realized_pnl_bridge_to_dict,
@@ -242,11 +243,34 @@ def _episode(suffix: str, *, market_symbol: str = "BTC-PERPETUAL"):
     )
 
 
-def _session(episodes=None, *, market_symbol: str = "BTC-PERPETUAL", **overrides: object):
-    base: dict[str, object] = {"paper_session_id": "sess-1", "correlation_id": "corr-sess"}
-    base.update(overrides)
-    eps = episodes if episodes is not None else [_episode("1", market_symbol=market_symbol)]
-    return build_paper_session_sequence(eps, **base)  # type: ignore[arg-type]
+def _episode_list(suffixes=("1",), *, market_symbol: str = "BTC-PERPETUAL"):
+    return [_episode(s, market_symbol=market_symbol) for s in suffixes]
+
+
+def _session_result(episodes, *, paper_session_id: str = "sess-1", correlation_id: str = "corr-sess"):
+    return build_paper_session_sequence(episodes, paper_session_id=paper_session_id, correlation_id=correlation_id)
+
+
+def _prov(
+    episodes=None,
+    *,
+    market_symbol: str = "BTC-PERPETUAL",
+    paper_session_id: str = "sess-1",
+    correlation_id: str = "corr-sess",
+) -> PaperSessionSequenceProvenance:
+    """A genuine session provenance bundle: the session result + the episode artifacts it was built from."""
+    eps = episodes if episodes is not None else _episode_list(("1",), market_symbol=market_symbol)
+    session = _session_result(eps, paper_session_id=paper_session_id, correlation_id=correlation_id)
+    return PaperSessionSequenceProvenance(session_sequence=session, episodes=tuple(eps))
+
+
+def _forge_session(prov: PaperSessionSequenceProvenance, *, reseal: bool = True, **session_overrides: object):
+    """Return a provenance bundle whose SESSION is forged (optionally re-sealed self-consistent) while the
+    supplied episode artifacts stay the genuine originals — the coordinated session-reseal threat model."""
+    forged = replace(prov.session_sequence, **session_overrides)
+    if reseal:
+        forged = replace(forged, paper_session_sequence_digest=paper_session_sequence_result_digest(forged))
+    return replace(prov, session_sequence=forged)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -365,12 +389,12 @@ def _forge_event(bundle: PaperRealizedPnlRollupInput, *, reseal: bool = True, **
     return replace(bundle, event=forged_event)
 
 
-def _bridge(session=None, entries=None, **overrides):
+def _bridge(session_input=None, entries=None, **overrides):
     base: dict[str, object] = {"bridge_id": "bridge-1", "correlation_id": "corr-bridge"}
     base.update(overrides)
-    sess = session if session is not None else _session()
+    si = session_input if session_input is not None else _prov()
     ents = entries if entries is not None else [_bundle("e1")]
-    return build_paper_session_realized_pnl_bridge(sess, ents, **base)  # type: ignore[arg-type]
+    return build_paper_session_realized_pnl_bridge(si, ents, **base)  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------------------------------
@@ -379,9 +403,10 @@ def _bridge(session=None, entries=None, **overrides):
 
 
 def test_valid_single_event_bridge() -> None:
-    session = _session()
+    prov = _prov()
+    session = prov.session_sequence
     bundle = _bundle("e1")  # LONG avg 100, SELL 4 @ 150 -> +200, closed 4
-    bridge = _bridge(session=session, entries=[bundle])
+    bridge = _bridge(session_input=prov, entries=[bundle])
     assert bridge.status is PaperSessionRealizedPnlBridgeStatus.COMPUTED
     assert bridge.market_symbol == "BTC-PERPETUAL"
     assert bridge.paper_session_id == session.paper_session_id
@@ -399,9 +424,9 @@ def test_valid_single_event_bridge() -> None:
 
 
 def test_bridge_binds_rollup_digest() -> None:
-    session = _session()
+    prov = _prov()
     bundle = _bundle("e1")
-    bridge = _bridge(session=session, entries=[bundle])
+    bridge = _bridge(session_input=prov, entries=[bundle])
     # rollup is built internally with rollup_id == bridge_id and the bridge's correlation_id.
     rollup = build_paper_realized_pnl_rollup([bundle], rollup_id="bridge-1", correlation_id="corr-bridge")
     assert bridge.rollup_digest == rollup.rollup_digest
@@ -444,12 +469,13 @@ def test_cancellation_to_canonical_zero_preserved() -> None:
 
 
 def test_bridge_binds_context_not_episode_membership() -> None:
-    # SCOPE: the bridge binds session CONTEXT (digest) + market to a provenance-bound rollup; it does NOT
-    # claim each rolled-up event was an episode of this session (a PaperSessionSequenceResult does not
-    # expose per-episode fill/transition provenance). The realized bundles below are genuine and share the
-    # session market but are not derived from the session episode — the bridge intentionally accepts this.
-    session = _session()
-    bridge = _bridge(session=session, entries=[_bundle("e1")])
+    # SCOPE: the session context is provenance-reconstructed and the realized rollup is provenance-
+    # reconstructed, but the bridge does NOT prove per-episode membership (a PaperEpisodeRunResult and a
+    # PaperRealizedPnlEvent share no identifier the bridge can cross-check). The realized bundles below are
+    # genuine and share the session market but are not derived from the session episode — accepted by design.
+    prov = _prov()
+    session = prov.session_sequence
+    bridge = _bridge(session_input=prov, entries=[_bundle("e1")])
     assert bridge.market_symbol == session.market_symbol
     assert bridge.session_sequence_digest == session.paper_session_sequence_digest
 
@@ -460,20 +486,20 @@ def test_bridge_binds_context_not_episode_membership() -> None:
 
 
 def test_bridge_digest_deterministic() -> None:
-    session = _session()
+    prov = _prov()
     entries = [_bundle("e1"), _bundle("e2", price="80")]
-    b1 = build_paper_session_realized_pnl_bridge(session, entries, bridge_id="bridge-1", correlation_id="corr-bridge")
-    b2 = build_paper_session_realized_pnl_bridge(session, entries, bridge_id="bridge-1", correlation_id="corr-bridge")
+    b1 = build_paper_session_realized_pnl_bridge(prov, entries, bridge_id="bridge-1", correlation_id="corr-bridge")
+    b2 = build_paper_session_realized_pnl_bridge(prov, entries, bridge_id="bridge-1", correlation_id="corr-bridge")
     assert b1.bridge_digest == b2.bridge_digest
     assert paper_session_realized_pnl_bridge_digest(b1) == b1.bridge_digest
     assert paper_session_realized_pnl_bridge_to_dict(b1)["bridge_digest"] == b1.bridge_digest
 
 
 def test_rollup_order_changes_bridge_digest() -> None:
-    session = _session()
+    prov = _prov()
     a, b = _bundle("e1"), _bundle("e2", price="80")
-    forward = build_paper_session_realized_pnl_bridge(session, [a, b], bridge_id="bridge-1", correlation_id="c")
-    reverse = build_paper_session_realized_pnl_bridge(session, [b, a], bridge_id="bridge-1", correlation_id="c")
+    forward = build_paper_session_realized_pnl_bridge(prov, [a, b], bridge_id="bridge-1", correlation_id="c")
+    reverse = build_paper_session_realized_pnl_bridge(prov, [b, a], bridge_id="bridge-1", correlation_id="c")
     assert forward.source_event_digests != reverse.source_event_digests
     assert forward.bridge_digest != reverse.bridge_digest
     assert forward.realized_pnl_total == reverse.realized_pnl_total  # sum order-independent
@@ -481,11 +507,11 @@ def test_rollup_order_changes_bridge_digest() -> None:
 
 def test_session_context_changes_bridge_digest() -> None:
     entries = [_bundle("e1")]
-    s1 = _session(paper_session_id="sess-1")
-    s2 = _session(paper_session_id="sess-2")
-    assert s1.paper_session_sequence_digest != s2.paper_session_sequence_digest
-    b1 = build_paper_session_realized_pnl_bridge(s1, entries, bridge_id="bridge-1", correlation_id="c")
-    b2 = build_paper_session_realized_pnl_bridge(s2, entries, bridge_id="bridge-1", correlation_id="c")
+    p1 = _prov(paper_session_id="sess-1")
+    p2 = _prov(paper_session_id="sess-2")
+    assert p1.session_sequence.paper_session_sequence_digest != p2.session_sequence.paper_session_sequence_digest
+    b1 = build_paper_session_realized_pnl_bridge(p1, entries, bridge_id="bridge-1", correlation_id="c")
+    b2 = build_paper_session_realized_pnl_bridge(p2, entries, bridge_id="bridge-1", correlation_id="c")
     assert b1.bridge_digest != b2.bridge_digest
 
 
@@ -494,64 +520,139 @@ def test_session_context_changes_bridge_digest() -> None:
 # --------------------------------------------------------------------------------------------------
 
 
-def test_wrong_typed_session_rejected() -> None:
+def test_naked_session_input_rejected() -> None:
+    # The public builder requires a session provenance bundle, not a naked PaperSessionSequenceResult.
+    with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_input_malformed"):
+        _bridge(session_input=_prov().session_sequence)
+
+
+def test_wrong_typed_session_member_rejected() -> None:
+    bad = replace(_prov(), session_sequence={"not": "a-session"})
     with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_malformed"):
-        _bridge(session={"not": "a-session"})
+        _bridge(session_input=bad)
+
+
+def test_wrong_typed_episode_member_rejected() -> None:
+    bad = replace(_prov(), episodes=({"not": "an-episode"},))
+    with pytest.raises(PaperSessionRealizedPnlBridgeError, match="episode_malformed"):
+        _bridge(session_input=bad)
+
+
+def test_empty_episodes_rejected() -> None:
+    bad = replace(_prov(), episodes=())
+    with pytest.raises(PaperSessionRealizedPnlBridgeError, match="episodes_empty"):
+        _bridge(session_input=bad)
 
 
 def test_session_digest_mismatch_rejected() -> None:
-    forged = replace(_session(), paper_session_sequence_digest="d" * 64)
+    forged = _forge_session(_prov(), reseal=False, paper_session_sequence_digest="d" * 64)
     with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_digest_mismatch"):
-        _bridge(session=forged)
+        _bridge(session_input=forged)
 
 
 def test_forged_session_unsafe_flag_rejected() -> None:
-    forged = replace(_session(), capital_mutated=True)
-    forged = replace(forged, paper_session_sequence_digest=paper_session_sequence_result_digest(forged))
-    assert paper_session_sequence_result_digest(forged) == forged.paper_session_sequence_digest  # self-consistent
+    forged = _forge_session(_prov(), capital_mutated=True)
+    assert (
+        paper_session_sequence_result_digest(forged.session_sequence)
+        == forged.session_sequence.paper_session_sequence_digest
+    )  # self-consistent
     with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_unsafe_flags"):
-        _bridge(session=forged)
+        _bridge(session_input=forged)
 
 
 def test_forged_session_status_rejected() -> None:
-    forged = replace(_session(), status=PaperSessionSequenceStatus.REJECTED)
-    forged = replace(forged, paper_session_sequence_digest=paper_session_sequence_result_digest(forged))
-    assert paper_session_sequence_result_digest(forged) == forged.paper_session_sequence_digest
+    forged = _forge_session(_prov(), status=PaperSessionSequenceStatus.REJECTED)
     with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_status_invalid"):
-        _bridge(session=forged)
+        _bridge(session_input=forged)
 
 
 def test_forged_session_episode_count_rejected() -> None:
-    # Codex P1: a self-consistent forged session (episode_count mutated to 0 on a one-episode session,
-    # digest recomputed) must fail closed — its episode_count no longer matches episode_run_digests.
-    forged = replace(_session(), episode_count=0)
-    forged = replace(forged, paper_session_sequence_digest=paper_session_sequence_result_digest(forged))
-    assert paper_session_sequence_result_digest(forged) == forged.paper_session_sequence_digest  # self-consistent
+    # Self-consistent forged session (episode_count mutated to 0 on a one-episode session) — caught by the
+    # structural invariant block before reconstruction.
+    forged = _forge_session(_prov(), episode_count=0)
+    assert (
+        paper_session_sequence_result_digest(forged.session_sequence)
+        == forged.session_sequence.paper_session_sequence_digest
+    )
     with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_inconsistent"):
-        _bridge(session=forged)
+        _bridge(session_input=forged)
 
 
 def test_forged_session_count_sum_rejected() -> None:
-    forged = replace(_session(), computed_episode_count=5)  # 5 + 0 + 0 != episode_count 1
-    forged = replace(forged, paper_session_sequence_digest=paper_session_sequence_result_digest(forged))
-    assert paper_session_sequence_result_digest(forged) == forged.paper_session_sequence_digest
+    forged = _forge_session(_prov(), computed_episode_count=5)  # 5 + 0 + 0 != episode_count 1
     with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_inconsistent"):
-        _bridge(session=forged)
+        _bridge(session_input=forged)
 
 
 def test_forged_session_first_digest_rejected() -> None:
-    forged = replace(_session(), first_episode_run_digest="d" * 64)  # no longer matches episode_run_digests[0]
-    forged = replace(forged, paper_session_sequence_digest=paper_session_sequence_result_digest(forged))
-    assert paper_session_sequence_result_digest(forged) == forged.paper_session_sequence_digest
+    forged = _forge_session(_prov(), first_episode_run_digest="d" * 64)  # != episode_run_digests[0]
     with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_inconsistent"):
-        _bridge(session=forged)
+        _bridge(session_input=forged)
+
+
+def test_forged_session_last_digest_rejected() -> None:
+    forged = _forge_session(_prov(), last_episode_run_digest="d" * 64)  # != episode_run_digests[-1]
+    with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_inconsistent"):
+        _bridge(session_input=forged)
+
+
+def test_coordinated_resealed_session_rejected() -> None:
+    # Codex P1: a coordinated resealed session — append a fake second episode digest, set episode_count=2,
+    # update last/count fields consistently, recompute the session digest — is internally self-consistent
+    # (passes structural checks) but the supplied episodes are still the genuine ONE episode. Reconstruction
+    # from those episodes yields the canonical one-episode session whose digest/payload differs ⇒ rejected.
+    prov = _prov()
+    genuine = prov.session_sequence
+    fake = "c" * 64
+    forged_session = replace(
+        genuine,
+        episode_count=2,
+        episode_run_digests=(genuine.episode_run_digests[0], fake),
+        last_episode_run_digest=fake,
+        computed_episode_count=2,
+    )
+    forged_session = replace(
+        forged_session, paper_session_sequence_digest=paper_session_sequence_result_digest(forged_session)
+    )
+    forged_prov = replace(prov, session_sequence=forged_session)  # episodes stay the genuine one
+    assert (
+        paper_session_sequence_result_digest(forged_prov.session_sequence)
+        == forged_prov.session_sequence.paper_session_sequence_digest
+    )  # self-consistent
+    with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_inconsistent"):
+        _bridge(session_input=forged_prov)
+
+
+def test_wrong_episode_artifact_rejected() -> None:
+    prov = _prov(episodes=_episode_list(("1",)))
+    mismatched = replace(prov, episodes=tuple(_episode_list(("2",))))  # different episode than the session
+    with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_inconsistent"):
+        _bridge(session_input=mismatched)
+
+
+def test_missing_episode_artifact_rejected() -> None:
+    eps = _episode_list(("1", "2"))
+    prov = _prov(episodes=eps)  # two-episode session
+    missing = replace(prov, episodes=(eps[0],))  # only one episode supplied
+    with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_inconsistent"):
+        _bridge(session_input=missing)
+
+
+def test_session_not_reproducible_rejected() -> None:
+    # A supplied episode that build_paper_session_sequence itself rejects (stale episode digest) surfaces
+    # as a fail-closed reconstruction failure.
+    prov = _prov()
+    broken = replace(prov.episodes[0], episode_run_digest="d" * 64)  # not resealed -> reconstruction raises
+    mismatched = replace(prov, episodes=(broken,))
+    with pytest.raises(PaperSessionRealizedPnlBridgeError, match="session_not_reproducible"):
+        _bridge(session_input=mismatched)
 
 
 def test_market_symbol_mismatch_rejected() -> None:
-    session = _session(market_symbol="BTC-PERPETUAL")
+    prov = _prov(market_symbol="BTC-PERPETUAL")
     eth = _bundle("e1", market_symbol="ETH-PERPETUAL")
     with pytest.raises(PaperSessionRealizedPnlBridgeError, match="market_symbol_mismatch"):
-        _bridge(session=session, entries=[eth])
+        _bridge(session_input=prov, entries=[eth])
 
 
 # --------------------------------------------------------------------------------------------------
@@ -645,13 +746,16 @@ def test_safe_market_data_terms_allowed() -> None:
 
 
 def test_inputs_not_mutated() -> None:
-    session = _session()
+    prov = _prov()
+    session = prov.session_sequence
     entries = [_bundle("e1"), _bundle("e2", price="80")]
     session_before = session.paper_session_sequence_digest
+    episodes_before = [ep.episode_run_digest for ep in prov.episodes]
     events_before = [e.event.realized_pnl_event_digest for e in entries]
-    build_paper_session_realized_pnl_bridge(session, entries, bridge_id="bridge-1", correlation_id="c")
+    build_paper_session_realized_pnl_bridge(prov, entries, bridge_id="bridge-1", correlation_id="c")
     assert session.paper_session_sequence_digest == session_before
     assert paper_session_sequence_result_digest(session) == session_before
+    assert [ep.episode_run_digest for ep in prov.episodes] == episodes_before
     assert [e.event.realized_pnl_event_digest for e in entries] == events_before
 
 
