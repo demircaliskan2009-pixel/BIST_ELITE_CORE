@@ -1,18 +1,4 @@
 {
-  "servers": {
-    "filesystem": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem"
-      ]
-    },
-    "dataframe": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-dataframe"
-      ]
-    }
-  }
+  "//": "No MCP servers are enabled for crypto_core. MCP is opt-in/manual and NOT required for the crypto_core workflow. Per MCP-none / paper-first / supply-chain-safety doctrine, do NOT add unpinned dynamic servers (e.g. `npx -y ...`); any future server must be pinned, read-only/local, and explicitly user/controller-approved. See docs/crypto_core/agent_workflow.md.",
+  "servers": {}
 }

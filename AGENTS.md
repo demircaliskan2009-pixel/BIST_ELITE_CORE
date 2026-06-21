@@ -15,6 +15,13 @@
 - The full Claude -> ChatGPT audit -> Codex repair/closeout -> authorized merge loop, model routing
   (including Fable High), state-claim policy, skills policy, and report templates live in
   `docs/crypto_core/agent_workflow.md`. Follow it; do not re-paste doctrine into prompts.
+- Role routing (full detail in `agent_workflow.md` §2/§2a): **ChatGPT** = controller/sequence owner +
+  merge authority; **Claude** = implementation/repair/closeout executor; **Codex** = read-only adversarial
+  P1/P2 reviewer (patches only when explicitly authorized); **Codex Pursue Goal** = bounded single-goal
+  loops for CI polling / repo-branch sync / PR closeout / GitHub-state PASS-FAIL-BLOCKED **only** (never
+  complex implementation, design, digest/provenance architecture, or unscoped multi-file repair);
+  **GitHub connector / `gh`** = read-only source-of-truth state gate. Durable, evidence-backed lessons live
+  in `docs/crypto_core/agent_lessons.md`; the controlled self-improvement loop is `agent_workflow.md` §17.
 - Digest-boundary rule (recurring P1 class): any consumer of a digest-carrying dataclass must
   recompute the upstream digest via the public serializer (digest field removed, canonical JSON,
   SHA-256) and reject mismatch before READY/ADMITTED/ACCEPTED. Tests must cover a tampered field.
@@ -41,6 +48,12 @@
 - Never push directly to `main`.
 - Never self-approve, admin/bypass merge, force push, or merge without exact user authorization for
   that PR.
+- Branch naming: feature slices → `feature/<crypto-core-scope>-prN`; setup/docs → `chore/<crypto-core-scope>-prN`;
+  same-PR repair stays on the same branch. (`product/*` is superseded.)
+- Setup/doctrine changes are never mixed into a feature PR — they go in a separate `chore/<scope>-prN`
+  setup PR (docs/config only). One open PR at a time either way.
+- CI not registered for a fresh head: diagnose from `gh run list` / commit `check-runs` first; at most one
+  empty re-trigger commit, and only with explicit user/controller authorization — never a no-op loop.
 - Use scoped `git add` with exact paths only. Never use broad `git add`.
 - If the tree is dirty, prove the dirty set first. Do not mix unrelated local work into a patch.
 - If scope must widen beyond the user-approved files or area, stop with proof and propose the

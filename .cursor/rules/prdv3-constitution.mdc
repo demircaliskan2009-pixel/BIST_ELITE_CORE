@@ -1,24 +1,30 @@
 ---
-description: PRDV3 architecture constitution — top-level rules for BIST_ELITE_CORE
-alwaysApply: true
+description: HISTORICAL BIST / PRDV3 reference only — NOT active crypto_core doctrine. Does not auto-apply.
+alwaysApply: false
 ---
 
-# BIST_ELITE_CORE — PRDV3 Constitution
+# BIST_ELITE_CORE — PRDV3 Constitution (HISTORICAL / NOT ACTIVE)
 
-Follow **`docs/PRDV3_FINAL_GOD_ARCHITECTURE.md`** as the architecture constitution and acceptance authority for PRDV3 work.
+> **This rule is historical context for the legacy BIST product (PRDV3) and must NOT auto-apply to active
+> `crypto_core` work.** `alwaysApply` is `false` by design. BIST is historical-only; do not leak BIST
+> assumptions, scope, or rules into `crypto_core`.
 
-## Non-negotiable
+## Active doctrine (crypto_core)
 
-- Deterministic core trading and execution paths (no RNG in signals/fills).
-- Fail-closed when data is missing, insufficient, or invalid.
-- No silent fabrication of prices or masked source failures.
-- BIST-only core product scope.
-- Explainable decisions; audit-friendly structured output where implemented.
-- PRDV2 substrate invariants (determinism, fail-closed, test-sealed modules) remain in force.
+The authoritative operating doctrine for active work is, in precedence order:
 
-## Reference
+- `AGENTS.md`
+- `docs/crypto_core/agent_workflow.md`
+- `.codex/skills/crypto-core-max-safe/SKILL.md`
+- `CLAUDE.md` (+ untracked local `CLAUDE.local.md`)
+- lessons: `docs/crypto_core/agent_lessons.md`
 
-- Compliance mapping: `docs/PRDV3_COMPLIANCE_MATRIX.md`
-- Proof: `.\proof_pack.ps1 -Mode baseline` (full pytest); `.\proof_pack.ps1 -Mode prdv3` (PRDV3 bundle)
+Active scope is `src/crypto_core`, `tests/crypto_core`, `scripts/crypto_core`, `docs/crypto_core` only,
+under the crypto_core standard: paper-first, deterministic, fail-closed, audit-first.
 
-Do not treat older PRD documents as superseding PRDV3 unless explicitly stated.
+## Historical reference (BIST / PRDV3 — do not apply to crypto_core)
+
+The legacy PRDV3 architecture documents (`docs/PRDV3_FINAL_GOD_ARCHITECTURE.md`,
+`docs/PRDV3_COMPLIANCE_MATRIX.md`) remain only as historical reference for the BIST product. They do not
+govern crypto_core and are superseded for active work by `docs/PRDV4_MULTI_MARKET_CRYPTO.md` and the
+crypto_core doctrine above.

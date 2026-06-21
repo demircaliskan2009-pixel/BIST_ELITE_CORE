@@ -1,10 +1,15 @@
-# crypto_core Agent Workflow v4.1
+# crypto_core Agent Workflow v4.2
 
 > Canonical, executable operating protocol for `crypto_core` inside `demircaliskan2009-pixel/BIST_ELITE_CORE`.
-> Companions (durable rails, not re-pasted into prompts): `AGENTS.md`, `CLAUDE.md` / `CLAUDE.local.md`,
-> and `docs/crypto_core/agent_prompts/token_efficiency_v2.md` (prompt lanes). On any apparent conflict the
-> **stricter safety rule wins**. This document contains **no secrets, credentials, API keys, exchange
-> credentials, or live-trading instructions**, and instructs no real order flow.
+> Companions (durable rails, not re-pasted into prompts): `AGENTS.md`,
+> `.codex/skills/crypto-core-max-safe/SKILL.md`, `CLAUDE.md` / `CLAUDE.local.md`,
+> `docs/crypto_core/agent_lessons.md` (evidence-backed lessons), and
+> `docs/crypto_core/agent_prompts/token_efficiency_v2.md` (prompt lanes). **Canonical doctrine precedence**
+> for active work: `AGENTS.md` + this file + `.codex/skills/crypto-core-max-safe/SKILL.md` (then `CLAUDE.md`).
+> Anything under `.github/prompts`, `.github/skills`, `.github/instructions`, `.cursor/rules`, or other legacy
+> surfaces is **overridden by this canonical doctrine** wherever they conflict (see §18). On any apparent
+> conflict the **stricter safety rule wins**. This document contains **no secrets, credentials, API keys,
+> exchange credentials, or live-trading instructions**, and instructs no real order flow.
 
 ## 1. Purpose
 
@@ -14,16 +19,28 @@ fail-closed, audit-first, derivatives-first, governance-first, risk-bounded**. A
 `src/crypto_core`, `tests/crypto_core`, `scripts/crypto_core`, `docs/crypto_core` only. BIST is historical
 context — never implemented here.
 
-## 2. Model Roles
+## 2. Model / Tool Roles
 
 | Role | Responsibility |
 |---|---|
-| **Claude** (Opus 4.8 local agent) | Implementation / repair / closeout **executor**. Bounded patch, full local validation, PR open/update, CI poll to terminal, same-branch repair of valid in-scope P1/P2, standard merge **only on explicit per-PR authorization**, post-merge verify. |
-| **Codex** | **Adversarial P1/P2 reviewer** — hidden-bug hunting, digest/fail-closed/architecture challenge. Runs **asynchronously** in a separate step; never merges. |
-| **ChatGPT** | **Live GitHub controller** — verifies head/files/checks/threads/open-PR state, classifies, and issues the next implementation / repair / merge prompt. |
+| **ChatGPT** (controller) | **Sequence owner** — authors prompts; verifies live head/files/checks/threads/open-PR state; issues verdicts `ACCEPT / REPAIR / REJECT / CODEX_REQUIRED / GITHUB_CONNECTOR_REQUIRED / MERGE_AUTH_REQUIRED`; decides **when** to use Claude, Codex, Codex Pursue Goal, the GitHub connector, and Deep Research. Owns merge authorization (per-PR, exact command). |
+| **Claude** (Opus 4.8 local agent) | Implementation / repair / closeout **executor**. Bounded feature slices, multi-file patching, full local validation loops, commit/push/PR creation, same-turn same-branch repair after a local validation failure, CI diagnosis when implementation context is needed, standard merge **only on explicit per-PR authorization**, post-merge verify. |
+| **Codex** | **Adversarial P1/P2 reviewer** — hidden-bug / exploit hunting, digest/schema/API-contract review, provenance/evidence-chain audit. **Read-only by default**; patches only when patching is **explicitly authorized and scoped**. Runs **asynchronously**; never merges. |
+| **Codex Pursue Goal** | **Bounded single-goal terminal loop** for mechanical GitHub/CI state. Use **only** for the cases in §2a. |
+| **GitHub connector / gh-native fallback** | **Source-of-truth GitHub state gate** — PR/CI/thread/review/final merge-readiness audit. **Read-only** unless an action is explicitly authorized. |
 
 Strongest reasoning (Opus xhigh) is reserved for contract/digest/fail-closed/review-blocker work;
 status/polling/mechanical steps use the cheapest sufficient lane.
+
+### 2a. Codex Pursue Goal — scope
+
+**Use Pursue Goal for:** CI polling to terminal; repo/branch sync; PR closeout / status loops;
+review-thread disposition **planning**; GitHub/`gh` state loops; merge / post-merge verification **when
+explicitly authorized**; any one-goal task needing a terminal `PASS / FAIL / BLOCKED`.
+
+**Do NOT use Pursue Goal for:** complex implementation; big design decisions; digest/provenance architecture;
+ambiguous product slicing; multi-file repair (unless explicitly scoped and authorized). Those route to
+Claude (executor) under ChatGPT's direction.
 
 ## 3. Hard Rules
 
@@ -32,6 +49,9 @@ status/polling/mechanical steps use the cheapest sufficient lane.
 - **No direct push to `main`.** No force-push. No branch deletion unless the authorized command says so.
 - **Standard merge only** (no squash/rebase). **No merge without explicit human authorization naming the PR and the exact command.**
 - **CI `pending` / `queued` / `in_progress` / `no checks reported` is NOT_READY** — keep polling to terminal, or report a bounded-timeout snapshot. Never treat a startup window as green.
+- **CI not registered (no run created for a fresh head): diagnose before re-triggering.** Prove it from `gh run list` / commit `check-runs` and classify (`ACTIONS_DELAY_OR_GITHUB_INFRA` vs trigger/path/ref issue). At most **one** empty re-trigger commit (`chore(crypto-core): retrigger …`), and **only** with explicit user/controller authorization. Never loop no-op commits.
+- **Branch naming:** feature slices → `feature/<crypto-core-scope>-prN`; setup/docs → `chore/<crypto-core-scope>-prN`; repair stays on the **same branch** for the same PR. (Older `product/*` naming is superseded.)
+- **Setup/doctrine changes are never mixed into a feature PR.** Feature PRs touch `src/`/`tests/` product code; setup PRs touch docs/config only (`AGENTS.md`, `docs/crypto_core/**`, `.codex`, `.vscode`, `.cursor`, `.github` docs, `scripts/crypto_core` audit tooling). See §17.
 - **Codex review is asynchronous** and is a **separate gate** — an implementation/repair turn ends at terminal CI + report; it does not block waiting for review.
 - Every repo-state claim must be **git/gh/test-verifiable** (never from memory). Unproven → mark `UNKNOWN`.
 - **Same-branch repair only** for valid in-scope P1/P2; stop on unsafe scope expansion.
@@ -62,7 +82,7 @@ git status --short --branch                # MUST be clean + in sync
 gh pr list --repo demircaliskan2009-pixel/BIST_ELITE_CORE --state open --json number,title,headRefName,baseRefName,url   # MUST be []
 
 # create + switch to a topic branch BEFORE any patch/commit/push (never edit/commit on main)
-git switch -c <topic-branch>               # e.g. product/<feature>-pr1 or docs/<topic>
+git switch -c <topic-branch>               # feature/<crypto-core-scope>-prN (feature) or chore/<crypto-core-scope>-prN (setup/docs)
 git status --short --branch                # confirm: on the topic branch, clean
 # patch only after this point
 ```
@@ -200,9 +220,46 @@ is the objective; **any BIST behavior**. This document and any future prompt mus
 tokens, credentials, exchange keys, private local machine configuration, or live-trading/real-order
 instructions.
 
+## 17. Controlled Self-Improvement Loop
+
+Lessons are persisted, not improvised. Full procedure + the running ledger live in
+`docs/crypto_core/agent_lessons.md`. Summary:
+
+- Each real **P1/P2** (Codex finding, CI failure, post-merge defect) emits a `LESSON_CANDIDATE` in the
+  ChatGPT handoff block, citing `PR #<n>` + `commit <sha>` + the failure mode / asserting test.
+- ChatGPT **triages** durability/generalizability/proof; transient branch/CI/commit state is never a lesson.
+- Accepted lessons are added to `agent_lessons.md` **only in a separate setup PR** (`chore/<scope>-prN`),
+  never mixed into a feature PR.
+- **No lesson may weaken a safety gate (§3, §16).** No automatic self-modification during feature PRs. Stale
+  or conflicting instructions are removed or repointed to canonical doctrine.
+
+## 18. Doctrine Precedence & Legacy Surfaces
+
+Active-work doctrine precedence: **`AGENTS.md` → this file → `.codex/skills/crypto-core-max-safe/SKILL.md`
+→ `CLAUDE.md`** (+ untracked local `CLAUDE.local.md`), with `docs/crypto_core/agent_lessons.md` as the
+lessons companion. On conflict the **stricter safety rule wins**.
+
+Legacy / secondary surfaces — `.github/prompts/*`, `.github/skills/*`, `.github/instructions/*`,
+`.github/agents/*`, `.cursor/rules/*`, and any BIST/PRDV3 material — are **historical or assistant-specific
+and are overridden by the canonical doctrine above wherever they conflict**. In particular, legacy names that
+imply scheduler/deployment/live/order-routing surfaces do **not** authorize any such behavior in crypto_core
+(paper-first, no scheduler/auto-loop, no live/order routing — §3, §16). MCP is opt-in/manual and **none** is
+enabled by default (`.vscode/mcp.json` declares no servers); any future server must be pinned, read-only/local,
+and explicitly approved. Terminal/git/`gh`/pytest/ruff are the source of truth; editor extensions are helpers
+(`.vscode/extensions.json` lists recommendations only and installs/uninstalls nothing).
+
 ---
 
 *v4.1 (2026-06-15): rewrote the model-role model to the current three-role protocol — Claude =
 implementation/repair/closeout executor, Codex = asynchronous adversarial P1/P2 reviewer, ChatGPT = live
 GitHub controller. Preserved the durable digest-boundary rule, validation policy (`run_full_tests_logged.ps1`),
 and state-claim policy. Companion prompt lanes remain in `docs/crypto_core/agent_prompts/token_efficiency_v2.md`.*
+
+*v4.2 (2026-06-21): converged agent-workflow setup after PR #288 merged. Added Codex Pursue Goal (§2a,
+scoped to mechanical GitHub/CI loops) and GitHub-connector roles to §2; CI-not-registered diagnosis +
+single-authorized-retrigger, branch-naming reconciliation (`feature/*`, `chore/*`; `product/*` superseded),
+and setup-PR-separation hard rules (§3); the controlled self-improvement loop (§17) + lessons ledger
+(`docs/crypto_core/agent_lessons.md`); and doctrine precedence / legacy-surface override (§18). Companion
+setup changes (this PR, docs/config only): neutralized `.vscode/mcp.json` (no servers), added
+`.vscode/extensions.json`, made `.cursor/rules/prdv3-constitution.mdc` historical/non-applying, and added the
+read-only `scripts/crypto_core/audit_agent_setup.ps1`. No product code touched.*
