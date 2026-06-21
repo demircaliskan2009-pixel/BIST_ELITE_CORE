@@ -6,9 +6,13 @@ already proven by one ``PaperSessionRealizedPnlAggregate`` (the artifact merged 
 first consumer of that aggregate: it does **not** recompute fills, positions, transitions, per-fill
 realized PnL, sessions, bridges, rollups, or the aggregate itself, and it does **not** reconstruct upstream
 bridges (the aggregate already re-proves them transitively). It is a *consumer / cross-check* artifact, not
-a second builder: it re-proves the supplied aggregate's self-digest via the PUBLIC
-``paper_session_realized_pnl_aggregate_digest``, binds the aggregate's gross totals / counts / digest chains
-into one frozen, digest-bound manifest, and cross-checks the aggregate's internal count/chain consistency.
+a second builder: it recomputes the supplied aggregate's self-digest FROM a single canonical snapshot using
+the SAME digest contract as the PUBLIC ``paper_session_realized_pnl_aggregate_digest`` (it never CALLS that
+helper, so the bytes proven are exactly the bytes bound — no second serialization/read), binds the
+aggregate's gross totals / counts / digest chains into one frozen, digest-bound manifest, structurally
+re-proves the aggregate's internal ``correlation_id`` / ``metadata`` / ``reason_codes`` (scope-guarding each,
+since the bound digest covers them but a naive direct-string scan would skip a non-string id, nested
+metadata, or non-empty reason codes), and cross-checks the aggregate's internal count/chain consistency.
 
 Gross only: it carries no fees, no unrealized PnL, no total PnL, no equity/capital/margin/balance; it
 reserves/mutates no capital; routes no order; creates no venue/exchange/client order id / route id /
@@ -27,13 +31,17 @@ INDEPENDENT provenance/trust anchor. The manifest does NOT reconstruct upstream 
 independently re-derive the aggregate payload: a fully self-consistent aggregate paired with its own
 (matching) expected digest is recorded on the caller's authority, so this manifest is not by itself an
 independent tamper-proof of the aggregate's economics — it pins the single snapshot to the expected digest
-and re-checks the aggregate's internal invariants. READY requires the triple-digest binding, a ``COMPUTED``
-paper-safe aggregate (expected schema, ``aggregate_computed`` True, hard-safety flags False), clean
-scope-guarded id/symbol/correlation/metadata, canonical 64-hex digest chains with coherent counts/uniqueness,
-canonical finite gross totals (``closed_units_total`` >= 0), and at least one COMPUTED realized event; zero
-computed realized events is INSUFFICIENT_EVIDENCE; every other outcome maps fail-closed to REJECTED.
-Wrong-typed/None aggregate, malformed expected digest, empty correlation id, malformed/forbidden-token
-metadata raise ``PaperSessionRealizedPnlEvidenceManifestError``.
+and re-checks the aggregate's internal invariants. The caller-supplied ``expected_aggregate_digest`` is
+recorded on EVERY built manifest (READY, REJECTED, or INSUFFICIENT_EVIDENCE) and bound into the manifest
+digest, so two different (wrong) expected anchors over the same aggregate produce distinct manifest
+payloads/digests. READY requires the triple-digest binding, a ``COMPUTED`` paper-safe aggregate (expected
+schema, ``aggregate_computed`` True, hard-safety flags False), a clean scope-guarded id/symbol and a
+structurally re-proven internal ``correlation_id`` (exact non-empty ``str``) / ``metadata`` (exact two-item
+string pairs, unique keys) / ``reason_codes`` (present and empty), canonical 64-hex digest chains with
+coherent counts/uniqueness, canonical finite gross totals (``closed_units_total`` >= 0), and at least one
+COMPUTED realized event; zero computed realized events is INSUFFICIENT_EVIDENCE; every other outcome maps
+fail-closed to REJECTED. Wrong-typed/None aggregate, malformed expected digest, empty manifest correlation
+id, or malformed/forbidden-token manifest metadata raise ``PaperSessionRealizedPnlEvidenceManifestError``.
 
 SCOPE / membership boundary: like the aggregate it records, this manifest does **not** prove that each
 rolled-up realized event belongs to a specific episode of its session (no shared identifier exists to
@@ -138,6 +146,7 @@ class PaperSessionRealizedPnlEvidenceManifest:
     ready: bool
     aggregate_id: str
     aggregate_digest: str
+    expected_aggregate_digest: str
     market_symbol: str
     session_bridge_count: int
     session_sequence_digests: tuple[str, ...]
@@ -294,18 +303,52 @@ def _recompute_aggregate_digest(snapshot: dict[str, object]) -> str | None:
         return None
 
 
-def _aggregate_scope_texts(snapshot: dict[str, object]) -> tuple[str, ...]:
-    """Aggregate-internal string fields to scope-guard from the single snapshot (correlation id + metadata)."""
-    texts: list[str] = []
+def _aggregate_internal_scope_reasons(snapshot: dict[str, object]) -> list[str]:
+    """Structurally re-prove and scope-guard the aggregate's INTERNAL ``correlation_id`` / ``metadata`` /
+    ``reason_codes`` from the single normalized snapshot; return fail-closed REJECTED reason codes.
+
+    The triple-digest binding only proves the snapshot is self-consistent and matches the caller's expected
+    anchor — a forged-but-self-consistent aggregate can still carry a non-string ``correlation_id``,
+    nested/non-string ``metadata``, or a non-empty ``reason_codes`` that the bound digest covers. A naive scan
+    of only direct string values would skip those and let the manifest READY. Each field is therefore
+    re-proven against the aggregate's serialization contract (correlation id = exact non-empty ``str``;
+    metadata = list of exact two-item ``[str, str]`` pairs with unique keys; reason_codes = present and empty
+    for a COMPUTED aggregate) and scope-scanned. Malformed shape is itself a rejection — nested values are
+    never stringified to be scanned. Returns reason codes (never raises — these are snapshot-internal, not
+    call-level input).
+    """
+    reasons: list[str] = []
+
     correlation = snapshot.get("correlation_id")
-    if isinstance(correlation, str):
-        texts.append(correlation)
+    if type(correlation) is not str or correlation.strip() == "":
+        reasons.append("paper_session_realized_pnl_evidence_manifest:aggregate_correlation_id_invalid")
+    elif _has_scope_violation(correlation):
+        reasons.append("paper_session_realized_pnl_evidence_manifest:aggregate_scope_violation")
+
     metadata = snapshot.get("metadata")
-    if isinstance(metadata, list):
+    if not isinstance(metadata, list):
+        reasons.append("paper_session_realized_pnl_evidence_manifest:aggregate_metadata_malformed")
+    else:
+        keys: list[str] = []
+        malformed = False
+        scope_violation = False
         for pair in metadata:
-            if isinstance(pair, list):
-                texts.extend(item for item in pair if isinstance(item, str))
-    return tuple(texts)
+            if not isinstance(pair, list) or len(pair) != 2 or type(pair[0]) is not str or type(pair[1]) is not str:
+                malformed = True
+                continue
+            keys.append(pair[0])
+            if _has_scope_violation(pair[0], pair[1]):
+                scope_violation = True
+        if malformed or len(set(keys)) != len(keys):
+            reasons.append("paper_session_realized_pnl_evidence_manifest:aggregate_metadata_malformed")
+        if scope_violation:
+            reasons.append("paper_session_realized_pnl_evidence_manifest:aggregate_scope_violation")
+
+    reason_codes = snapshot.get("reason_codes")
+    if not isinstance(reason_codes, list) or reason_codes:
+        reasons.append("paper_session_realized_pnl_evidence_manifest:aggregate_reason_codes_invalid")
+
+    return reasons
 
 
 def build_paper_session_realized_pnl_evidence_manifest(
@@ -325,13 +368,15 @@ def build_paper_session_realized_pnl_evidence_manifest(
     The aggregate is captured EXACTLY ONCE (PUBLIC serializer + canonical-JSON round-trip into exact plain
     primitives); the aggregate self-digest is recomputed FROM that single snapshot (never via a second
     aggregate read) and must equal BOTH the snapshot's bound ``aggregate_digest`` AND
-    ``expected_aggregate_digest``. The manifest is READY only when that triple-digest binding holds, the
-    snapshot is a ``COMPUTED`` paper-safe aggregate (expected schema, ``aggregate_computed`` True, all
-    hard-safety flags False), its scope-guarded id/symbol/correlation/metadata are clean, its bound digest
-    chains are canonical 64-hex with coherent counts/uniqueness, its gross totals are canonical finite
-    decimals (``closed_units_total`` >= 0), and it has at least one COMPUTED realized event; a consistent
-    aggregate with zero computed realized events is INSUFFICIENT_EVIDENCE; every other outcome maps
-    fail-closed to REJECTED.
+    ``expected_aggregate_digest`` (which is recorded on every built manifest and bound into the manifest
+    digest). The manifest is READY only when that triple-digest binding holds, the snapshot is a ``COMPUTED``
+    paper-safe aggregate (expected schema, ``aggregate_computed`` True, all hard-safety flags False), its
+    scope-guarded id/symbol and structurally re-proven internal ``correlation_id`` (exact non-empty ``str``)
+    / ``metadata`` (exact two-item string pairs, unique keys) / ``reason_codes`` (present and empty) are
+    clean, its bound digest chains are canonical 64-hex with coherent counts/uniqueness, its gross totals are
+    canonical finite decimals (``closed_units_total`` >= 0), and it has at least one COMPUTED realized event;
+    a consistent aggregate with zero computed realized events is INSUFFICIENT_EVIDENCE; every other outcome
+    maps fail-closed to REJECTED.
 
     Trust boundary: ``expected_aggregate_digest`` is the caller's independent anchor — the manifest does NOT
     reconstruct upstream bridges and does NOT independently re-derive the aggregate payload, so a fully
@@ -403,8 +448,13 @@ def build_paper_session_realized_pnl_evidence_manifest(
 
         if not _is_non_empty_string(aggregate_id) or not _is_non_empty_string(market_symbol):
             hard.append("paper_session_realized_pnl_evidence_manifest:aggregate_id_or_symbol_invalid")
-        if _has_scope_violation(aggregate_id, market_symbol, *_aggregate_scope_texts(snapshot)):
+        if _has_scope_violation(aggregate_id, market_symbol):
             hard.append("paper_session_realized_pnl_evidence_manifest:aggregate_scope_violation")
+        # Structurally re-prove + scope-guard the aggregate's INTERNAL correlation_id / metadata /
+        # reason_codes from the single snapshot: the bound digest covers them, but a non-string id, a
+        # nested/non-string metadata value, or a non-empty reason_codes would slip past a naive
+        # direct-string scan and reach READY. Snapshot-internal violations map fail-closed to REJECTED.
+        hard.extend(_aggregate_internal_scope_reasons(snapshot))
 
         for key in _DIGEST_TUPLE_KEYS:
             value = snapshot.get(key)
@@ -473,6 +523,7 @@ def build_paper_session_realized_pnl_evidence_manifest(
         status=status,
         aggregate_id=aggregate_id,
         aggregate_digest=aggregate_digest,
+        expected_aggregate_digest=expected_aggregate_digest,
         market_symbol=market_symbol,
         session_bridge_count=session_bridge_count,
         session_sequence_digests=chains["session_sequence_digests"],
@@ -532,6 +583,7 @@ def _finalize_manifest(
     status: PaperSessionRealizedPnlEvidenceManifestStatus,
     aggregate_id: str,
     aggregate_digest: str,
+    expected_aggregate_digest: str,
     market_symbol: str,
     session_bridge_count: int,
     session_sequence_digests: tuple[str, ...],
@@ -557,6 +609,7 @@ def _finalize_manifest(
         "ready": status is PaperSessionRealizedPnlEvidenceManifestStatus.READY,
         "aggregate_id": aggregate_id,
         "aggregate_digest": aggregate_digest,
+        "expected_aggregate_digest": expected_aggregate_digest,
         "market_symbol": market_symbol,
         "session_bridge_count": session_bridge_count,
         "session_sequence_digests": session_sequence_digests,
@@ -595,6 +648,7 @@ def _manifest_fields(manifest: PaperSessionRealizedPnlEvidenceManifest) -> dict[
         "ready": manifest.ready,
         "aggregate_id": manifest.aggregate_id,
         "aggregate_digest": manifest.aggregate_digest,
+        "expected_aggregate_digest": manifest.expected_aggregate_digest,
         "market_symbol": manifest.market_symbol,
         "session_bridge_count": manifest.session_bridge_count,
         "session_sequence_digests": manifest.session_sequence_digests,
@@ -623,6 +677,7 @@ def _manifest_payload_from(manifest: PaperSessionRealizedPnlEvidenceManifest) ->
         "ready": manifest.ready,
         "aggregate_id": manifest.aggregate_id,
         "aggregate_digest": manifest.aggregate_digest,
+        "expected_aggregate_digest": manifest.expected_aggregate_digest,
         "market_symbol": manifest.market_symbol,
         "session_bridge_count": manifest.session_bridge_count,
         "session_sequence_digests": list(manifest.session_sequence_digests),

@@ -306,6 +306,7 @@ _EXPECTED_KEYS = {
     "ready",
     "aggregate_id",
     "aggregate_digest",
+    "expected_aggregate_digest",
     "market_symbol",
     "session_bridge_count",
     "session_sequence_digests",
@@ -745,6 +746,146 @@ def test_internal_aggregate_metadata_scope_leak_rejected() -> None:
     manifest = _manifest(tampered, expected=tampered.aggregate_digest)
     assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
     assert any("aggregate_scope_violation" in r for r in manifest.rejection_reasons)
+
+
+# --------------------------------------------------------------------------------------------------
+# Fail-closed: forged-but-self-consistent aggregate INTERNAL scope/structure bypass (Codex re-audit P1/P2)
+# A resealed aggregate matching its own (caller-supplied) expected digest passes the triple-digest binding;
+# the manifest must still STRUCTURALLY re-prove + scope-guard the aggregate's internal correlation_id /
+# metadata / reason_codes from the single snapshot, so a non-string id, nested/non-string metadata, or
+# non-empty reason_codes cannot smuggle a forbidden token (or otherwise diverge) into a READY manifest.
+# --------------------------------------------------------------------------------------------------
+
+
+def test_nested_metadata_value_forbidden_token_rejected() -> None:
+    # A nested dict value would hide "scheduler" from a direct-string scan; malformed shape is rejected
+    # (the nested value is NEVER stringified to be scanned).
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, metadata=(("nested", {"x": "scheduler"}),)))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("aggregate_metadata_malformed" in r for r in manifest.rejection_reasons)
+
+
+@pytest.mark.parametrize("bad_value", [5, ["scheduler"], {"x": "y"}, None])
+def test_non_string_metadata_value_rejected(bad_value: object) -> None:
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, metadata=(("k", bad_value),)))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("aggregate_metadata_malformed" in r for r in manifest.rejection_reasons)
+
+
+@pytest.mark.parametrize("bad_key", [5, None])
+def test_non_string_metadata_key_rejected(bad_key: object) -> None:
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, metadata=((bad_key, "v"),)))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("aggregate_metadata_malformed" in r for r in manifest.rejection_reasons)
+
+
+@pytest.mark.parametrize("bad_metadata", [(("k",),), (("k", "v", "x"),), (("k", "v"), ("k", "w"))])
+def test_malformed_or_duplicate_metadata_pairs_rejected(bad_metadata: object) -> None:
+    # malformed pair length, or a duplicate key (the aggregate builds metadata from a Mapping, so keys are
+    # unique by contract) -> structural rejection.
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, metadata=bad_metadata))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("aggregate_metadata_malformed" in r for r in manifest.rejection_reasons)
+
+
+@pytest.mark.parametrize("bad_correlation", [{"x": "scheduler"}, ["live_order"], 5])
+def test_non_string_internal_correlation_rejected(bad_correlation: object) -> None:
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, correlation_id=bad_correlation))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("aggregate_correlation_id_invalid" in r for r in manifest.rejection_reasons)
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_empty_internal_correlation_rejected(blank: str) -> None:
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, correlation_id=blank))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("aggregate_correlation_id_invalid" in r for r in manifest.rejection_reasons)
+
+
+@pytest.mark.parametrize("codes", [("scheduler",), ("live_order",), ("some_reason",), ("a", "b")])
+def test_non_empty_internal_reason_codes_rejected(codes: object) -> None:
+    # A COMPUTED aggregate carries reason_codes == (); ANY non-empty reason_codes fails closed, whether or
+    # not it contains a forbidden token (a forged REJECTED-shaped aggregate must not READY here).
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, reason_codes=codes))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("aggregate_reason_codes_invalid" in r for r in manifest.rejection_reasons)
+
+
+def test_baseline_empty_internal_reason_codes_ready() -> None:
+    agg = _aggregate([_entry("1")])
+    assert agg.reason_codes == ()  # COMPUTED aggregate contract
+    manifest = _manifest(agg)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.READY
+
+
+# --------------------------------------------------------------------------------------------------
+# Expected aggregate digest output binding (Codex re-audit P2)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_expected_digest_recorded_on_ready_manifest() -> None:
+    agg = _aggregate([_entry("1")])
+    manifest = _manifest(agg, expected=agg.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.READY
+    assert manifest.expected_aggregate_digest == agg.aggregate_digest
+    payload = paper_session_realized_pnl_evidence_manifest_to_dict(manifest)
+    assert payload["expected_aggregate_digest"] == agg.aggregate_digest
+
+
+def test_two_wrong_expected_digests_produce_distinct_manifests() -> None:
+    # Before the fix, expected_aggregate_digest was not bound, so two different WRONG anchors produced
+    # identical REJECTED manifests/digests. They must now differ in payload AND manifest digest.
+    agg = _aggregate([_entry("1")])
+    a = _manifest(agg, expected="a" * 64)
+    b = _manifest(agg, expected="c" * 64)
+    assert a.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert b.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    pa = paper_session_realized_pnl_evidence_manifest_to_dict(a)
+    pb = paper_session_realized_pnl_evidence_manifest_to_dict(b)
+    assert pa["expected_aggregate_digest"] == "a" * 64
+    assert pb["expected_aggregate_digest"] == "c" * 64
+    assert pa != pb
+    assert a.manifest_digest != b.manifest_digest
+
+
+# --------------------------------------------------------------------------------------------------
+# Source regression: the builder must never import/call the PUBLIC aggregate digest helper (single-snapshot)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_source_does_not_import_or_call_public_aggregate_digest() -> None:
+    # A future refactor must not reintroduce a direct import/alias OR call of the PUBLIC aggregate digest
+    # helper: invoking it would re-serialize the aggregate a SECOND time, reopening the snapshot/digest
+    # TOCTOU the builder closes by recomputing the digest from its single captured snapshot. (A docstring
+    # mention is fine — this checks AST imports/calls, not raw text.)
+    source = Path(paper_session_realized_pnl_evidence_manifest.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    helper = "paper_session_realized_pnl_aggregate_digest"
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            assert all(alias.name != helper for alias in node.names), f"must not import {helper}"
+        elif isinstance(node, ast.Import):
+            assert all(not alias.name.endswith(helper) for alias in node.names), f"must not import {helper}"
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                assert func.id != helper, f"must not call {helper}"
+            elif isinstance(func, ast.Attribute):
+                assert func.attr != helper, f"must not call {helper}"
 
 
 # --------------------------------------------------------------------------------------------------
