@@ -17,15 +17,23 @@ wall-clock/random/IO/persistence/network; and touches no
 connector/scheduler/runtime/venue/execution/service/session/data/portfolio/orchestrator/temporal surface,
 no Deribit, no BIST.
 
-Re-proof + canonicalization: the supplied aggregate is serialized once via the PUBLIC
-``paper_session_realized_pnl_aggregate_to_dict`` and ROUND-TRIPPED through canonical JSON, so every bound
-value is an exact plain primitive (plain ``str``/builtins — no ``str`` subclass with custom hash/equality);
-the bound ``aggregate_digest`` must equal the PUBLIC recomputed digest, and the aggregate's status must be
-``COMPUTED`` with paper-safe attestations. READY requires a consistent aggregate with at least one COMPUTED
-realized event; a structurally valid aggregate with zero computed realized events is INSUFFICIENT_EVIDENCE;
-any digest mismatch / count or chain inconsistency / malformed digest / safety or scope violation is
-REJECTED. Wrong-typed/None aggregate, empty correlation id, malformed/forbidden-token metadata raise
-``PaperSessionRealizedPnlEvidenceManifestError``.
+Single snapshot + independent expected digest: the supplied aggregate is serialized EXACTLY ONCE via the
+PUBLIC ``paper_session_realized_pnl_aggregate_to_dict`` and ROUND-TRIPPED through canonical JSON into exact
+plain primitives (plain ``str``/builtins — no ``str`` subclass with custom hash/equality); the aggregate
+self-digest is recomputed FROM that single snapshot (never a second serialization/read, closing a TOCTOU
+where the bound payload and the digest-covered payload could diverge) and must equal BOTH the snapshot's
+bound ``aggregate_digest`` AND a caller-supplied ``expected_aggregate_digest`` — the latter is the caller's
+INDEPENDENT provenance/trust anchor. The manifest does NOT reconstruct upstream bridges and does NOT
+independently re-derive the aggregate payload: a fully self-consistent aggregate paired with its own
+(matching) expected digest is recorded on the caller's authority, so this manifest is not by itself an
+independent tamper-proof of the aggregate's economics — it pins the single snapshot to the expected digest
+and re-checks the aggregate's internal invariants. READY requires the triple-digest binding, a ``COMPUTED``
+paper-safe aggregate (expected schema, ``aggregate_computed`` True, hard-safety flags False), clean
+scope-guarded id/symbol/correlation/metadata, canonical 64-hex digest chains with coherent counts/uniqueness,
+canonical finite gross totals (``closed_units_total`` >= 0), and at least one COMPUTED realized event; zero
+computed realized events is INSUFFICIENT_EVIDENCE; every other outcome maps fail-closed to REJECTED.
+Wrong-typed/None aggregate, malformed expected digest, empty correlation id, malformed/forbidden-token
+metadata raise ``PaperSessionRealizedPnlEvidenceManifestError``.
 
 SCOPE / membership boundary: like the aggregate it records, this manifest does **not** prove that each
 rolled-up realized event belongs to a specific episode of its session (no shared identifier exists to
@@ -39,18 +47,23 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 
 from crypto_core.validation.paper_session_realized_pnl_aggregate import (
     PaperSessionRealizedPnlAggregate,
-    paper_session_realized_pnl_aggregate_digest,
     paper_session_realized_pnl_aggregate_to_dict,
 )
 
 _MANIFEST_SCHEMA_VERSION = "paper-session-realized-pnl-evidence-manifest.v1"
+_EXPECTED_AGGREGATE_SCHEMA_VERSION = "paper-session-realized-pnl-aggregate.v1"
 _EXPECTED_AGGREGATE_STATUS = "COMPUTED"
 _SHA256_HEX_LENGTH = 64
 _HEX_CHARS = frozenset("0123456789abcdef")
+
+# Strict decimal-string grammar (mirrors the aggregate): optional sign, no leading zeros (except a bare
+# ``0``), optional fraction. Rejects ``""``, ``"1."``, ``".5"``, ``"00"``, ``"1e5"``, ``"NaN"``, ``"Infinity"``.
+_DECIMAL_PATTERN = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
 
 # Scope guard mirrors the sibling realized-PnL modules (word-bounded). Market-data terms scrubbed first.
 _BIST_PATTERN = re.compile(r"\b(?:bist\w*|borsa\w*|matriks\w*)|\bkap\b", re.IGNORECASE)
@@ -220,13 +233,42 @@ def _metadata_texts(metadata: tuple[tuple[str, str], ...]) -> tuple[str, ...]:
     return tuple(text for pair in metadata for text in pair)
 
 
-def _canonical_aggregate_payload(aggregate: PaperSessionRealizedPnlAggregate) -> dict[str, object] | None:
-    """Serialize the aggregate via the PUBLIC serializer and ROUND-TRIP through canonical JSON.
+def _parse_decimal(value: object) -> Decimal | None:
+    """Return an exact finite ``Decimal`` for a strict decimal string, else ``None`` (no float/bool path)."""
+    if not isinstance(value, str) or not _DECIMAL_PATTERN.fullmatch(value):
+        return None
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation:
+        return None
+    return parsed if parsed.is_finite() else None
 
-    Returns an exact plain-primitive dict (plain ``str``/builtins — no ``str`` subclass with custom
-    hash/equality), so the manifest binds/cross-checks exact primitives and its uniqueness set membership
-    uses standard string hashing. Returns ``None`` (fail-closed) if the aggregate cannot be canonically
-    serialized. The aggregate object itself is never read for identity after this single capture.
+
+def _render_decimal(value: Decimal) -> str:
+    """Render an exact ``Decimal`` as a canonical plain-decimal string (context-independent). Never normalize()."""
+    rendered = format(value, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return "0" if rendered in {"", "-0"} else rendered
+
+
+def _canonical_decimal(value: object) -> Decimal | None:
+    """Parse a strict decimal string that is ALSO already in canonical render form, else ``None``."""
+    parsed = _parse_decimal(value)
+    if parsed is None or _render_decimal(parsed) != value:
+        return None
+    return parsed
+
+
+def _capture_aggregate_snapshot(aggregate: PaperSessionRealizedPnlAggregate) -> dict[str, object] | None:
+    """Serialize the aggregate via the PUBLIC serializer EXACTLY ONCE and ROUND-TRIP through canonical JSON.
+
+    The aggregate object is read once here and never again — neither for digest, identity, totals, counts,
+    flags, nor metadata. The returned dict is exact plain primitives (plain ``str``/builtins — no ``str``
+    subclass with custom hash/equality), so every manifest-bound field, the aggregate-digest recompute, and
+    the uniqueness set membership all derive from this single snapshot (closing a TOCTOU where a second
+    serialization/read could diverge from the bound payload). Returns ``None`` (fail-closed) on any
+    serialization failure.
     """
     try:
         raw = paper_session_realized_pnl_aggregate_to_dict(aggregate)
@@ -236,28 +278,73 @@ def _canonical_aggregate_payload(aggregate: PaperSessionRealizedPnlAggregate) ->
     return payload if isinstance(payload, dict) else None
 
 
+def _recompute_aggregate_digest(snapshot: dict[str, object]) -> str | None:
+    """Recompute the aggregate self-digest FROM the single captured snapshot (no second aggregate read).
+
+    Uses the same contract as the aggregate module's PUBLIC ``paper_session_realized_pnl_aggregate_digest``:
+    SHA-256 over canonical JSON of the aggregate payload EXCLUDING the ``aggregate_digest`` self field.
+    Recomputing from the snapshot (rather than re-serializing the aggregate) guarantees the digest proven
+    here covers the exact bytes the manifest binds. Returns ``None`` (fail-closed) on a non-serializable
+    snapshot.
+    """
+    digest_input = {key: value for key, value in snapshot.items() if key != "aggregate_digest"}
+    try:
+        return _canonical_digest(digest_input)
+    except (TypeError, ValueError):
+        return None
+
+
+def _aggregate_scope_texts(snapshot: dict[str, object]) -> tuple[str, ...]:
+    """Aggregate-internal string fields to scope-guard from the single snapshot (correlation id + metadata)."""
+    texts: list[str] = []
+    correlation = snapshot.get("correlation_id")
+    if isinstance(correlation, str):
+        texts.append(correlation)
+    metadata = snapshot.get("metadata")
+    if isinstance(metadata, list):
+        for pair in metadata:
+            if isinstance(pair, list):
+                texts.extend(item for item in pair if isinstance(item, str))
+    return tuple(texts)
+
+
 def build_paper_session_realized_pnl_evidence_manifest(
     aggregate: PaperSessionRealizedPnlAggregate,
     *,
+    expected_aggregate_digest: str,
     correlation_id: str,
     metadata: Mapping[str, str] | None = None,
 ) -> PaperSessionRealizedPnlEvidenceManifest:
     """Record one paper realized-PnL aggregate as a deterministic, digest-bound evidence manifest.
 
-    ``aggregate`` must be a ``PaperSessionRealizedPnlAggregate``; a wrong-typed/None aggregate, an empty
-    ``correlation_id``, or non ``Mapping[str, str]`` / forbidden-token metadata raises
-    ``PaperSessionRealizedPnlEvidenceManifestError``. The aggregate is canonicalized once (PUBLIC serializer
-    + canonical-JSON round-trip) and its self-digest re-proven via the PUBLIC
-    ``paper_session_realized_pnl_aggregate_digest``. The manifest is READY only when the aggregate's status
-    is ``COMPUTED``, its paper-safe attestations hold, its bound digest chains are canonical 64-hex with
-    counts/uniqueness consistent, and it has at least one COMPUTED realized event; a consistent aggregate
-    with zero computed realized events is INSUFFICIENT_EVIDENCE; every other outcome maps fail-closed to
-    REJECTED. Deterministic and immutable: no reconstruction of upstream bridges, no wall-clock/random/IO,
-    gross only.
+    ``aggregate`` must be a ``PaperSessionRealizedPnlAggregate`` and ``expected_aggregate_digest`` an exact
+    plain 64-lowercase-hex ``str`` — the caller's INDEPENDENT provenance/trust anchor for the aggregate. A
+    wrong-typed/None aggregate, a malformed expected digest, an empty ``correlation_id``, or non
+    ``Mapping[str, str]`` / forbidden-token metadata raises ``PaperSessionRealizedPnlEvidenceManifestError``.
+
+    The aggregate is captured EXACTLY ONCE (PUBLIC serializer + canonical-JSON round-trip into exact plain
+    primitives); the aggregate self-digest is recomputed FROM that single snapshot (never via a second
+    aggregate read) and must equal BOTH the snapshot's bound ``aggregate_digest`` AND
+    ``expected_aggregate_digest``. The manifest is READY only when that triple-digest binding holds, the
+    snapshot is a ``COMPUTED`` paper-safe aggregate (expected schema, ``aggregate_computed`` True, all
+    hard-safety flags False), its scope-guarded id/symbol/correlation/metadata are clean, its bound digest
+    chains are canonical 64-hex with coherent counts/uniqueness, its gross totals are canonical finite
+    decimals (``closed_units_total`` >= 0), and it has at least one COMPUTED realized event; a consistent
+    aggregate with zero computed realized events is INSUFFICIENT_EVIDENCE; every other outcome maps
+    fail-closed to REJECTED.
+
+    Trust boundary: ``expected_aggregate_digest`` is the caller's independent anchor — the manifest does NOT
+    reconstruct upstream bridges and does NOT independently re-derive the aggregate payload, so a fully
+    self-consistent aggregate paired with its own (matching) expected digest is recorded on the caller's
+    authority. Deterministic and immutable; no wall-clock/random/IO; gross only.
     """
     if not isinstance(aggregate, PaperSessionRealizedPnlAggregate):
         raise PaperSessionRealizedPnlEvidenceManifestError(
             "paper_session_realized_pnl_evidence_manifest:aggregate_malformed"
+        )
+    if not _is_hex64_string(expected_aggregate_digest):
+        raise PaperSessionRealizedPnlEvidenceManifestError(
+            "paper_session_realized_pnl_evidence_manifest:expected_aggregate_digest_invalid"
         )
     if not _is_non_empty_string(correlation_id):
         raise PaperSessionRealizedPnlEvidenceManifestError(
@@ -272,7 +359,7 @@ def build_paper_session_realized_pnl_evidence_manifest(
     hard: list[str] = []
     insufficient: list[str] = []
 
-    payload = _canonical_aggregate_payload(aggregate)
+    snapshot = _capture_aggregate_snapshot(aggregate)
     # Defaults bound even when the aggregate is unserializable/malformed (manifest still records REJECTED).
     aggregate_id = ""
     aggregate_digest = ""
@@ -286,35 +373,41 @@ def build_paper_session_realized_pnl_evidence_manifest(
     closed_units_total = "0"
     realized_pnl_total = "0"
 
-    if payload is None:
+    if snapshot is None:
         hard.append("paper_session_realized_pnl_evidence_manifest:aggregate_payload_invalid")
     else:
-        aggregate_id = payload.get("aggregate_id") if isinstance(payload.get("aggregate_id"), str) else ""
-        aggregate_digest = payload.get("aggregate_digest") if isinstance(payload.get("aggregate_digest"), str) else ""
-        market_symbol = payload.get("market_symbol") if isinstance(payload.get("market_symbol"), str) else ""
+        aggregate_id = snapshot.get("aggregate_id") if isinstance(snapshot.get("aggregate_id"), str) else ""
+        aggregate_digest = snapshot.get("aggregate_digest") if isinstance(snapshot.get("aggregate_digest"), str) else ""
+        market_symbol = snapshot.get("market_symbol") if isinstance(snapshot.get("market_symbol"), str) else ""
 
-        # Digest re-proof: the bound aggregate_digest must equal the PUBLIC recomputed digest.
-        try:
-            expected_digest = paper_session_realized_pnl_aggregate_digest(aggregate)
-        except Exception:  # noqa: BLE001 - unrecomputable digest is a fail-closed rejection
-            expected_digest = None
+        # Single-snapshot digest re-proof: recompute the aggregate digest from THIS snapshot (no second
+        # read) and require it to equal both the snapshot's bound digest and the caller's expected anchor.
+        recomputed = _recompute_aggregate_digest(snapshot)
         if not _is_hex64_string(aggregate_digest):
             hard.append("paper_session_realized_pnl_evidence_manifest:aggregate_digest_invalid")
-        elif expected_digest is None or aggregate_digest != expected_digest:
+        elif recomputed is None or recomputed != aggregate_digest:
             hard.append("paper_session_realized_pnl_evidence_manifest:aggregate_digest_mismatch")
+        elif expected_aggregate_digest != recomputed:
+            hard.append("paper_session_realized_pnl_evidence_manifest:expected_aggregate_digest_mismatch")
 
-        if payload.get("status") != _EXPECTED_AGGREGATE_STATUS:
+        if snapshot.get("schema_version") != _EXPECTED_AGGREGATE_SCHEMA_VERSION:
+            hard.append("paper_session_realized_pnl_evidence_manifest:aggregate_schema_invalid")
+        if snapshot.get("status") != _EXPECTED_AGGREGATE_STATUS:
             hard.append("paper_session_realized_pnl_evidence_manifest:aggregate_status_invalid")
-        if payload.get("paper_only") is not True or payload.get("gross_only") is not True:
+        if snapshot.get("aggregate_computed") is not True:
+            hard.append("paper_session_realized_pnl_evidence_manifest:aggregate_not_computed")
+        if snapshot.get("paper_only") is not True or snapshot.get("gross_only") is not True:
             hard.append("paper_session_realized_pnl_evidence_manifest:aggregate_safety_violation")
-        if any(payload.get(flag) is not False for flag in _AGGREGATE_FALSE_FLAGS):
+        if any(snapshot.get(flag) is not False for flag in _AGGREGATE_FALSE_FLAGS):
             hard.append("paper_session_realized_pnl_evidence_manifest:aggregate_safety_violation")
 
-        if not _is_non_empty_string(market_symbol) or _has_scope_violation(market_symbol, aggregate_id):
-            hard.append("paper_session_realized_pnl_evidence_manifest:aggregate_scope_or_symbol_invalid")
+        if not _is_non_empty_string(aggregate_id) or not _is_non_empty_string(market_symbol):
+            hard.append("paper_session_realized_pnl_evidence_manifest:aggregate_id_or_symbol_invalid")
+        if _has_scope_violation(aggregate_id, market_symbol, *_aggregate_scope_texts(snapshot)):
+            hard.append("paper_session_realized_pnl_evidence_manifest:aggregate_scope_violation")
 
         for key in _DIGEST_TUPLE_KEYS:
-            value = payload.get(key)
+            value = snapshot.get(key)
             if not isinstance(value, list) or any(not _is_hex64_string(item) for item in value):
                 hard.append("paper_session_realized_pnl_evidence_manifest:digest_chain_malformed")
                 chains[key] = ()
@@ -322,7 +415,7 @@ def build_paper_session_realized_pnl_evidence_manifest(
                 chains[key] = tuple(value)
 
         counts = {
-            name: payload.get(name)
+            name: snapshot.get(name)
             for name in (
                 "session_bridge_count",
                 "episode_count_total",
@@ -342,6 +435,7 @@ def build_paper_session_realized_pnl_evidence_manifest(
             hard.extend(
                 _count_chain_violations(
                     session_bridge_count=session_bridge_count,
+                    episode_count_total=episode_count_total,
                     event_count=event_count,
                     computed_event_count=computed_event_count,
                     no_realized_event_count=no_realized_event_count,
@@ -349,15 +443,19 @@ def build_paper_session_realized_pnl_evidence_manifest(
                 )
             )
 
-        for total_key in ("closed_units_total", "realized_pnl_total"):
-            if not _is_non_empty_string(payload.get(total_key)):
-                hard.append("paper_session_realized_pnl_evidence_manifest:total_malformed")
-        closed_units_total = (
-            payload.get("closed_units_total") if _is_non_empty_string(payload.get("closed_units_total")) else "0"
-        )
-        realized_pnl_total = (
-            payload.get("realized_pnl_total") if _is_non_empty_string(payload.get("realized_pnl_total")) else "0"
-        )
+        # Totals must be canonical finite decimal strings (rejects NaN/Infinity/sci/empty/non-canonical);
+        # closed units must be non-negative. Canonical zero "0" is preserved.
+        realized_candidate = snapshot.get("realized_pnl_total")
+        closed_candidate = snapshot.get("closed_units_total")
+        if _canonical_decimal(realized_candidate) is None:
+            hard.append("paper_session_realized_pnl_evidence_manifest:realized_pnl_total_malformed")
+        elif isinstance(realized_candidate, str):
+            realized_pnl_total = realized_candidate
+        closed_value = _canonical_decimal(closed_candidate)
+        if closed_value is None or closed_value < 0:
+            hard.append("paper_session_realized_pnl_evidence_manifest:closed_units_total_invalid")
+        elif isinstance(closed_candidate, str):
+            closed_units_total = closed_candidate
 
         if not hard and computed_event_count == 0:
             insufficient.append("paper_session_realized_pnl_evidence_manifest:no_computed_realized_events")
@@ -399,21 +497,27 @@ def build_paper_session_realized_pnl_evidence_manifest(
 def _count_chain_violations(
     *,
     session_bridge_count: int,
+    episode_count_total: int,
     event_count: int,
     computed_event_count: int,
     no_realized_event_count: int,
     chains: dict[str, tuple[str, ...]],
 ) -> list[str]:
-    """Cross-check the aggregate's bound counts against its digest-chain lengths and uniqueness."""
+    """Cross-check the aggregate's bound counts against its digest-chain lengths, coherence, and uniqueness."""
     reasons: list[str] = []
     bridge_scoped = ("session_sequence_digests", "bridge_digests", "rollup_digests")
     event_scoped = ("source_event_digests", "fill_simulation_result_digests", "position_transition_digests")
+    if session_bridge_count < 1:
+        reasons.append("paper_session_realized_pnl_evidence_manifest:bridge_count_invalid")
     if any(len(chains[key]) != session_bridge_count for key in bridge_scoped):
         reasons.append("paper_session_realized_pnl_evidence_manifest:bridge_count_mismatch")
     if any(len(chains[key]) != event_count for key in event_scoped):
         reasons.append("paper_session_realized_pnl_evidence_manifest:event_count_mismatch")
     if computed_event_count + no_realized_event_count != event_count:
         reasons.append("paper_session_realized_pnl_evidence_manifest:event_count_incoherent")
+    # Each real bridge contributes >=1 episode and >=1 event, so both totals must dominate the bridge count.
+    if episode_count_total < session_bridge_count or event_count < session_bridge_count:
+        reasons.append("paper_session_realized_pnl_evidence_manifest:count_incoherent")
     # Uniqueness the aggregate already enforces must not be reintroduced here (rollup_digests are not unique).
     for key in ("bridge_digests", "session_sequence_digests", *event_scoped):
         chain = chains[key]

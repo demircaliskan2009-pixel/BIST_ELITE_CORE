@@ -1,5 +1,5 @@
 """Tests for the paper session realized-PnL evidence manifest — deterministic, paper-only, gross-only,
-consumer/cross-check over a provenance-bound realized-PnL aggregate."""
+consumer/cross-check over a provenance-bound realized-PnL aggregate with an independent expected digest."""
 
 from __future__ import annotations
 
@@ -48,6 +48,7 @@ from crypto_core.validation.paper_session_realized_pnl_aggregate import (
     PaperSessionRealizedPnlAggregateInput,
     build_paper_session_realized_pnl_aggregate,
     paper_session_realized_pnl_aggregate_digest,
+    paper_session_realized_pnl_aggregate_to_dict,
 )
 from crypto_core.validation.paper_session_realized_pnl_bridge import (
     PaperSessionSequenceProvenance,
@@ -63,10 +64,18 @@ from crypto_core.validation.paper_session_realized_pnl_evidence_manifest import 
 from crypto_core.validation.paper_session_sequence import build_paper_session_sequence
 
 _HEX = "b" * 64
+_AGG_DIGEST_FN = (
+    "crypto_core.validation.paper_session_realized_pnl_aggregate.paper_session_realized_pnl_aggregate_digest"
+)
 
 
 def _is_hex64(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
+def _reseal(aggregate):
+    """Recompute the aggregate self-digest after an in-place tamper (resealed, self-consistent)."""
+    return replace(aggregate, aggregate_digest=paper_session_realized_pnl_aggregate_digest(aggregate))
 
 
 # --------------------------------------------------------------------------------------------------
@@ -279,9 +288,12 @@ def _aggregate(entries=None, **overrides):
     return build_paper_session_realized_pnl_aggregate(ents, **base)  # type: ignore[arg-type]
 
 
-def _manifest(aggregate=None, *, correlation_id: str = "corr-manifest", metadata=None):
+def _manifest(aggregate=None, *, expected=None, correlation_id: str = "corr-manifest", metadata=None):
     agg = aggregate if aggregate is not None else _aggregate([_entry("1")])
-    return build_paper_session_realized_pnl_evidence_manifest(agg, correlation_id=correlation_id, metadata=metadata)
+    digest = expected if expected is not None else agg.aggregate_digest
+    return build_paper_session_realized_pnl_evidence_manifest(
+        agg, expected_aggregate_digest=digest, correlation_id=correlation_id, metadata=metadata
+    )
 
 
 # --------------------------------------------------------------------------------------------------
@@ -424,7 +436,6 @@ def test_two_bridge_aggregate_manifest_ready() -> None:
 
 
 def test_insufficient_evidence_when_no_computed_events() -> None:
-    # A structurally valid aggregate whose only event is NO_REALIZED_PNL -> no realized evidence.
     agg = _aggregate([_entry("1", bundles=(_no_realized("n1"),))])
     manifest = _manifest(agg)
     assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.INSUFFICIENT_EVIDENCE
@@ -442,8 +453,8 @@ def test_insufficient_evidence_when_no_computed_events() -> None:
 
 def test_manifest_digest_deterministic_and_recomputes() -> None:
     agg = _aggregate([_entry("1")])
-    m1 = build_paper_session_realized_pnl_evidence_manifest(agg, correlation_id="corr-manifest")
-    m2 = build_paper_session_realized_pnl_evidence_manifest(agg, correlation_id="corr-manifest")
+    m1 = _manifest(agg, correlation_id="corr-manifest")
+    m2 = _manifest(agg, correlation_id="corr-manifest")
     assert m1.manifest_digest == m2.manifest_digest
     assert paper_session_realized_pnl_evidence_manifest_digest(m1) == m1.manifest_digest
     assert paper_session_realized_pnl_evidence_manifest_to_dict(m1)["manifest_digest"] == m1.manifest_digest
@@ -451,88 +462,289 @@ def test_manifest_digest_deterministic_and_recomputes() -> None:
 
 def test_correlation_id_changes_manifest_digest() -> None:
     agg = _aggregate([_entry("1")])
-    a = build_paper_session_realized_pnl_evidence_manifest(agg, correlation_id="corr-a")
-    b = build_paper_session_realized_pnl_evidence_manifest(agg, correlation_id="corr-b")
+    a = _manifest(agg, correlation_id="corr-a")
+    b = _manifest(agg, correlation_id="corr-b")
     assert a.manifest_digest != b.manifest_digest
 
 
 def test_metadata_canonicalized_deterministic() -> None:
     agg = _aggregate([_entry("1")])
-    a = build_paper_session_realized_pnl_evidence_manifest(agg, correlation_id="c", metadata={"z": "1", "a": "2"})
-    b = build_paper_session_realized_pnl_evidence_manifest(agg, correlation_id="c", metadata={"a": "2", "z": "1"})
+    a = _manifest(agg, correlation_id="c", metadata={"z": "1", "a": "2"})
+    b = _manifest(agg, correlation_id="c", metadata={"a": "2", "z": "1"})
     assert a.metadata == (("a", "2"), ("z", "1"))  # sorted, order-independent
     assert a.manifest_digest == b.manifest_digest
 
 
 # --------------------------------------------------------------------------------------------------
-# Fail-closed: aggregate re-proof
+# Single-snapshot / no-double-read (Codex P1)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_aggregate_serializer_called_exactly_once_no_toctou(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The builder must serialize the aggregate EXACTLY once; a stateful serializer whose 2nd call diverges
+    # (binds aaaa... while a re-read would cover bbbb...) cannot create a divergence window.
+    agg = _aggregate([_entry("1")])
+    genuine = paper_session_realized_pnl_aggregate_to_dict(agg)  # captured before patching (no counter bump)
+    divergent = dict(genuine)
+    divergent["aggregate_digest"] = "b" * 64
+    divergent["bridge_digests"] = ["b" * 64]
+    calls = {"n": 0}
+
+    def fake_to_dict(aggregate):
+        calls["n"] += 1
+        return genuine if calls["n"] == 1 else divergent
+
+    monkeypatch.setattr(
+        paper_session_realized_pnl_evidence_manifest, "paper_session_realized_pnl_aggregate_to_dict", fake_to_dict
+    )
+    manifest = _manifest(agg)
+    assert calls["n"] == 1  # serialized exactly once -> no TOCTOU window
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.READY
+    assert manifest.bridge_digests == agg.bridge_digests  # bound from the single genuine snapshot
+
+
+def test_builder_does_not_call_public_aggregate_digest(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The builder must recompute the aggregate digest from its single snapshot, never via a second read of
+    # the aggregate through the PUBLIC digest helper.
+    agg = _aggregate([_entry("1")])
+    expected = agg.aggregate_digest
+
+    def boom(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("manifest builder must not call paper_session_realized_pnl_aggregate_digest")
+
+    monkeypatch.setattr(_AGG_DIGEST_FN, boom)
+    manifest = build_paper_session_realized_pnl_evidence_manifest(
+        agg, expected_aggregate_digest=expected, correlation_id="c"
+    )
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.READY
+
+
+# --------------------------------------------------------------------------------------------------
+# Independent expected aggregate digest (Codex P1/P2)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_expected_digest_required_keyword() -> None:
+    agg = _aggregate([_entry("1")])
+    with pytest.raises(TypeError):
+        build_paper_session_realized_pnl_evidence_manifest(agg, correlation_id="c")  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize("bad", ["", "not-a-digest", "A" * 64, "b" * 63, "b" * 65, 5, None])
+def test_malformed_expected_digest_raises(bad: object) -> None:
+    agg = _aggregate([_entry("1")])
+    with pytest.raises(PaperSessionRealizedPnlEvidenceManifestError, match="expected_aggregate_digest_invalid"):
+        build_paper_session_realized_pnl_evidence_manifest(
+            agg,
+            expected_aggregate_digest=bad,
+            correlation_id="c",  # type: ignore[arg-type]
+        )
+
+
+def test_correct_expected_digest_ready() -> None:
+    agg = _aggregate([_entry("1")])
+    manifest = _manifest(agg, expected=agg.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.READY
+
+
+def test_wrong_expected_digest_rejected() -> None:
+    agg = _aggregate([_entry("1")])
+    manifest = _manifest(agg, expected="a" * 64)  # well-formed but not the aggregate's digest
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("expected_aggregate_digest_mismatch" in r for r in manifest.rejection_reasons)
+
+
+# --------------------------------------------------------------------------------------------------
+# Fail-closed: aggregate digest re-proof
 # --------------------------------------------------------------------------------------------------
 
 
 def test_forged_aggregate_digest_rejected() -> None:
     agg = _aggregate([_entry("1")])
+    genuine = agg.aggregate_digest
     forged = replace(agg, aggregate_digest="d" * 64)  # canonical hex64 but not the real digest
-    manifest = _manifest(forged)
+    manifest = _manifest(forged, expected=genuine)
     assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
     assert any("aggregate_digest_mismatch" in r for r in manifest.rejection_reasons)
 
 
 def test_invalid_shape_aggregate_digest_rejected() -> None:
     agg = _aggregate([_entry("1")])
+    genuine = agg.aggregate_digest
     forged = replace(agg, aggregate_digest="not-a-digest")
-    manifest = _manifest(forged)
+    manifest = _manifest(forged, expected=genuine)
     assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
     assert any("aggregate_digest_invalid" in r for r in manifest.rejection_reasons)
 
 
 def test_tampered_aggregate_payload_unsealed_rejected() -> None:
-    # Tamper a material field WITHOUT recomputing the aggregate digest -> recompute mismatch.
+    # Tamper a material field WITHOUT recomputing the aggregate digest -> snapshot recompute mismatch.
     agg = _aggregate([_entry("1")])
+    genuine = agg.aggregate_digest
     tampered = replace(agg, realized_pnl_total="999")
-    manifest = _manifest(tampered)
+    manifest = _manifest(tampered, expected=genuine)
     assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
     assert any("aggregate_digest_mismatch" in r for r in manifest.rejection_reasons)
 
 
-def test_resealed_bridge_count_inconsistency_rejected() -> None:
-    # Tamper a count and RESEAL the aggregate digest (self-consistent) -> count cross-check still catches it.
+# --------------------------------------------------------------------------------------------------
+# Fail-closed: resealed economic tamper caught by the ORIGINAL expected digest (Codex P1/P2 boundary)
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("realized_pnl_total", "999"),
+        ("closed_units_total", "999"),
+        ("market_symbol", "ETH-PERPETUAL"),
+        ("session_bridge_count", 5),
+    ],
+)
+def test_resealed_economic_tamper_rejected_with_original_expected(field: str, value: object) -> None:
+    # A resealed (self-consistent) tamper is caught because the caller holds the GENUINE expected digest:
+    # reseal changes the aggregate digest, so expected != recomputed.
     agg = _aggregate([_entry("1")])
-    tampered = replace(agg, session_bridge_count=99)
-    tampered = replace(tampered, aggregate_digest=paper_session_realized_pnl_aggregate_digest(tampered))
+    genuine = agg.aggregate_digest
+    tampered = _reseal(replace(agg, **{field: value}))
     assert paper_session_realized_pnl_aggregate_digest(tampered) == tampered.aggregate_digest  # self-consistent
-    manifest = _manifest(tampered)
+    manifest = _manifest(tampered, expected=genuine)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("expected_aggregate_digest_mismatch" in r for r in manifest.rejection_reasons)
+
+
+def test_trust_boundary_coherent_tamper_with_matching_expected_is_recorded() -> None:
+    # Trust-boundary clarity: if the caller's expected digest matches a fully self-consistent (resealed)
+    # aggregate, the manifest records it on the caller's authority. The manifest is NOT, by itself, an
+    # independent tamper-proof of the aggregate's economics — the expected digest is the trust anchor.
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, realized_pnl_total="999"))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.READY
+    assert manifest.realized_pnl_total == "999"
+
+
+# --------------------------------------------------------------------------------------------------
+# Fail-closed: chain/count cross-checks (resealed + matching expected to reach the invariant)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_resealed_bridge_count_inconsistency_rejected() -> None:
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, session_bridge_count=99))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
     assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
     assert any("bridge_count_mismatch" in r for r in manifest.rejection_reasons)
 
 
 def test_resealed_event_chain_count_mismatch_rejected() -> None:
-    # Truncate an event-scoped digest chain and RESEAL -> event-count cross-check catches it.
     agg = _aggregate([_entry("1")])
-    tampered = replace(agg, source_event_digests=())
-    tampered = replace(tampered, aggregate_digest=paper_session_realized_pnl_aggregate_digest(tampered))
-    manifest = _manifest(tampered)
+    tampered = _reseal(replace(agg, source_event_digests=()))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
     assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
     assert any("event_count_mismatch" in r for r in manifest.rejection_reasons)
 
 
 def test_resealed_event_count_incoherent_rejected() -> None:
-    # computed + no_realized != event_count, resealed -> incoherence cross-check catches it.
     agg = _aggregate([_entry("1")])
-    tampered = replace(agg, computed_event_count=5)
-    tampered = replace(tampered, aggregate_digest=paper_session_realized_pnl_aggregate_digest(tampered))
-    manifest = _manifest(tampered)
+    tampered = _reseal(replace(agg, computed_event_count=5))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
     assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
     assert any("event_count_incoherent" in r for r in manifest.rejection_reasons)
 
 
 def test_resealed_malformed_digest_chain_rejected() -> None:
-    # A non-hex digest in a chain, resealed -> digest_chain_malformed.
     agg = _aggregate([_entry("1")])
-    tampered = replace(agg, bridge_digests=("not-hex",))
-    tampered = replace(tampered, aggregate_digest=paper_session_realized_pnl_aggregate_digest(tampered))
-    manifest = _manifest(tampered)
+    tampered = _reseal(replace(agg, bridge_digests=("not-hex",)))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
     assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
     assert any("digest_chain_malformed" in r for r in manifest.rejection_reasons)
+
+
+# --------------------------------------------------------------------------------------------------
+# Fail-closed: malformed totals (resealed + matching expected to reach the totals invariant)
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity", "not-a-decimal", "", "1e5", "00", "-0"])
+def test_resealed_malformed_realized_total_rejected(value: str) -> None:
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, realized_pnl_total=value))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("realized_pnl_total_malformed" in r for r in manifest.rejection_reasons)
+
+
+@pytest.mark.parametrize("value", ["-1", "NaN", "not-a-decimal", ""])
+def test_resealed_invalid_closed_units_rejected(value: str) -> None:
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, closed_units_total=value))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("closed_units_total_invalid" in r for r in manifest.rejection_reasons)
+
+
+def test_canonical_zero_total_preserved() -> None:
+    e1 = _entry("1", bundles=(_bundle("g1", price="150"),))  # +200
+    e2 = _entry("2", bundles=(_bundle("l1", price="50"),))  # -200
+    agg = _aggregate([e1, e2])
+    manifest = _manifest(agg)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.READY
+    assert manifest.realized_pnl_total == "0"
+    assert manifest.closed_units_total == "8"
+
+
+# --------------------------------------------------------------------------------------------------
+# Fail-closed: aggregate invariants (resealed + matching expected to reach the invariant)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_forged_aggregate_schema_rejected() -> None:
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, schema_version="forged-schema.v1"))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("aggregate_schema_invalid" in r for r in manifest.rejection_reasons)
+
+
+def test_empty_aggregate_id_rejected() -> None:
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, aggregate_id=""))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("aggregate_id_or_symbol_invalid" in r for r in manifest.rejection_reasons)
+
+
+def test_aggregate_not_computed_flag_rejected() -> None:
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, aggregate_computed=False))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("aggregate_not_computed" in r for r in manifest.rejection_reasons)
+
+
+def test_aggregate_safety_flag_true_rejected() -> None:
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, order_routed=True))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("aggregate_safety_violation" in r for r in manifest.rejection_reasons)
+
+
+def test_internal_aggregate_correlation_scope_leak_rejected() -> None:
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, correlation_id="live_order"))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("aggregate_scope_violation" in r for r in manifest.rejection_reasons)
+
+
+def test_internal_aggregate_metadata_scope_leak_rejected() -> None:
+    agg = _aggregate([_entry("1")])
+    tampered = _reseal(replace(agg, metadata=(("note", "scheduler"),)))
+    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+    assert any("aggregate_scope_violation" in r for r in manifest.rejection_reasons)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -543,20 +755,24 @@ def test_resealed_malformed_digest_chain_rejected() -> None:
 @pytest.mark.parametrize("bad", [None, {"not": "an-aggregate"}, 5, "x"])
 def test_wrong_typed_aggregate_raises(bad: object) -> None:
     with pytest.raises(PaperSessionRealizedPnlEvidenceManifestError, match="aggregate_malformed"):
-        build_paper_session_realized_pnl_evidence_manifest(bad, correlation_id="c")  # type: ignore[arg-type]
+        build_paper_session_realized_pnl_evidence_manifest(
+            bad,  # type: ignore[arg-type]
+            expected_aggregate_digest="0" * 64,
+            correlation_id="c",
+        )
 
 
 @pytest.mark.parametrize("bad", ["", "   "])
 def test_empty_correlation_id_raises(bad: str) -> None:
     agg = _aggregate([_entry("1")])
     with pytest.raises(PaperSessionRealizedPnlEvidenceManifestError, match="correlation_id_invalid"):
-        build_paper_session_realized_pnl_evidence_manifest(agg, correlation_id=bad)
+        _manifest(agg, correlation_id=bad)
 
 
 def test_malformed_metadata_raises() -> None:
     agg = _aggregate([_entry("1")])
     with pytest.raises(PaperSessionRealizedPnlEvidenceManifestError, match="metadata_malformed"):
-        build_paper_session_realized_pnl_evidence_manifest(agg, correlation_id="c", metadata={"k": 5})  # type: ignore[dict-item]
+        _manifest(agg, metadata={"k": 5})  # type: ignore[dict-item]
 
 
 @pytest.mark.parametrize(
@@ -571,14 +787,12 @@ def test_malformed_metadata_raises() -> None:
 def test_scope_violation_in_inputs_raises(correlation_id: str, metadata: object) -> None:
     agg = _aggregate([_entry("1")])
     with pytest.raises(PaperSessionRealizedPnlEvidenceManifestError, match="scope_violation"):
-        build_paper_session_realized_pnl_evidence_manifest(agg, correlation_id=correlation_id, metadata=metadata)  # type: ignore[arg-type]
+        _manifest(agg, correlation_id=correlation_id, metadata=metadata)
 
 
 def test_safe_market_data_terms_allowed() -> None:
     agg = _aggregate([_entry("1")])
-    manifest = build_paper_session_realized_pnl_evidence_manifest(
-        agg, correlation_id="c", metadata={"src": "order_book"}
-    )
+    manifest = _manifest(agg, correlation_id="c", metadata={"src": "order_book"})
     assert manifest.metadata == (("src", "order_book"),)
     assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.READY
 
@@ -607,15 +821,6 @@ def test_high_scale_totals_preserved() -> None:
     assert "e" not in manifest.realized_pnl_total.lower()
 
 
-def test_cancellation_canonical_zero_preserved() -> None:
-    e1 = _entry("1", bundles=(_bundle("g1", price="150"),))  # +200
-    e2 = _entry("2", bundles=(_bundle("l1", price="50"),))  # -200
-    agg = _aggregate([e1, e2])
-    manifest = _manifest(agg)
-    assert manifest.realized_pnl_total == "0"
-    assert manifest.closed_units_total == "8"
-
-
 # --------------------------------------------------------------------------------------------------
 # Immutability / no-leak / no-mutation
 # --------------------------------------------------------------------------------------------------
@@ -633,7 +838,7 @@ def test_inputs_not_mutated() -> None:
     payload_before = paper_session_realized_pnl_aggregate_digest(agg)
     totals_before = (agg.realized_pnl_total, agg.closed_units_total)
     chains_before = (agg.bridge_digests, agg.source_event_digests)
-    build_paper_session_realized_pnl_evidence_manifest(agg, correlation_id="c", metadata={"k": "v"})
+    _manifest(agg, metadata={"k": "v"})
     assert agg.aggregate_digest == digest_before
     assert paper_session_realized_pnl_aggregate_digest(agg) == payload_before
     assert (agg.realized_pnl_total, agg.closed_units_total) == totals_before
@@ -660,8 +865,6 @@ def test_serializer_identity_values_are_exact_primitives() -> None:
 
 
 def test_membership_boundary_not_overclaimed() -> None:
-    # The manifest records the aggregate's market/chain by digest but asserts no event-to-episode membership;
-    # no membership/episode-linkage field is exposed in the public serializer.
     payload = paper_session_realized_pnl_evidence_manifest_to_dict(_manifest())
     assert not any("membership" in key for key in payload)
     assert not any("episode_member" in key for key in payload)
