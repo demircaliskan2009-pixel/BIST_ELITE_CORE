@@ -757,43 +757,48 @@ def test_internal_aggregate_metadata_scope_leak_rejected() -> None:
 # --------------------------------------------------------------------------------------------------
 
 
-def test_nested_metadata_value_forbidden_token_rejected() -> None:
-    # A nested dict value would hide "scheduler" from a direct-string scan; malformed shape is rejected
-    # (the nested value is NEVER stringified to be scanned).
-    agg = _aggregate([_entry("1")])
-    tampered = _reseal(replace(agg, metadata=(("nested", {"x": "scheduler"}),)))
-    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+# Malformed aggregate metadata/reason_codes now fail closed in the AGGREGATE serializer itself (see
+# test_paper_session_realized_pnl_aggregate.py). The manifest captures the aggregate snapshot via that public
+# serializer EXACTLY once, so a malformed aggregate can no longer be serialized: snapshot capture fails and
+# the manifest records REJECTED (aggregate_payload_invalid) — never READY. A non-resealed malformed aggregate
+# paired with a syntactically valid arbitrary expected digest exercises exactly that end state.
+
+
+@pytest.mark.parametrize(
+    "bad_metadata",
+    [
+        {"li": "scheduler"},  # dict -> a blind list(...) would lose the value and collide ('li' -> ['l','i'])
+        ("ab",),  # one-dimensional
+        (("nested", {"x": "scheduler"}),),  # nested dict value (forbidden token would be hidden)
+        (("nested", ["scheduler"]),),  # nested list value
+        (("k", 5),),  # non-string value
+        ((5, "v"),),  # non-string key
+        (("k",),),  # malformed pair length (short)
+        (("k", "v", "x"),),  # malformed pair length (long)
+        (("k", "v"), ("k", "w")),  # duplicate key
+    ],
+)
+def test_malformed_aggregate_metadata_cannot_ready(bad_metadata: object) -> None:
+    agg = replace(_aggregate([_entry("1")]), metadata=bad_metadata)
+    manifest = build_paper_session_realized_pnl_evidence_manifest(
+        agg, expected_aggregate_digest="a" * 64, correlation_id="c"
+    )
     assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
-    assert any("aggregate_metadata_malformed" in r for r in manifest.rejection_reasons)
+    assert manifest.ready is False
+    assert any("aggregate_payload_invalid" in r for r in manifest.rejection_reasons)
 
 
-@pytest.mark.parametrize("bad_value", [5, ["scheduler"], {"x": "y"}, None])
-def test_non_string_metadata_value_rejected(bad_value: object) -> None:
-    agg = _aggregate([_entry("1")])
-    tampered = _reseal(replace(agg, metadata=(("k", bad_value),)))
-    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
-    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
-    assert any("aggregate_metadata_malformed" in r for r in manifest.rejection_reasons)
-
-
-@pytest.mark.parametrize("bad_key", [5, None])
-def test_non_string_metadata_key_rejected(bad_key: object) -> None:
-    agg = _aggregate([_entry("1")])
-    tampered = _reseal(replace(agg, metadata=((bad_key, "v"),)))
-    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
-    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
-    assert any("aggregate_metadata_malformed" in r for r in manifest.rejection_reasons)
-
-
-@pytest.mark.parametrize("bad_metadata", [(("k",),), (("k", "v", "x"),), (("k", "v"), ("k", "w"))])
-def test_malformed_or_duplicate_metadata_pairs_rejected(bad_metadata: object) -> None:
-    # malformed pair length, or a duplicate key (the aggregate builds metadata from a Mapping, so keys are
-    # unique by contract) -> structural rejection.
-    agg = _aggregate([_entry("1")])
-    tampered = _reseal(replace(agg, metadata=bad_metadata))
-    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
-    assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
-    assert any("aggregate_metadata_malformed" in r for r in manifest.rejection_reasons)
+def test_hidden_metadata_value_cannot_collapse_into_ready() -> None:
+    # Two different hidden dict values must never produce a READY manifest (and cannot collide on a digest):
+    # the serializer raises before a snapshot/digest exists, so both map fail-closed to REJECTED.
+    base = _aggregate([_entry("1")])
+    for hidden in ({"li": "scheduler"}, {"li": "safe"}):
+        agg = replace(base, metadata=hidden)
+        manifest = build_paper_session_realized_pnl_evidence_manifest(
+            agg, expected_aggregate_digest="a" * 64, correlation_id="c"
+        )
+        assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
+        assert manifest.ready is False
 
 
 @pytest.mark.parametrize("bad_correlation", [{"x": "scheduler"}, ["live_order"], 5])
@@ -814,15 +819,18 @@ def test_empty_internal_correlation_rejected(blank: str) -> None:
     assert any("aggregate_correlation_id_invalid" in r for r in manifest.rejection_reasons)
 
 
-@pytest.mark.parametrize("codes", [("scheduler",), ("live_order",), ("some_reason",), ("a", "b")])
-def test_non_empty_internal_reason_codes_rejected(codes: object) -> None:
-    # A COMPUTED aggregate carries reason_codes == (); ANY non-empty reason_codes fails closed, whether or
-    # not it contains a forbidden token (a forged REJECTED-shaped aggregate must not READY here).
-    agg = _aggregate([_entry("1")])
-    tampered = _reseal(replace(agg, reason_codes=codes))
-    manifest = _manifest(tampered, expected=tampered.aggregate_digest)
+@pytest.mark.parametrize("codes", ["", {}, set(), ("scheduler",), ("live_order",), ("some_reason",), ("a", "b")])
+def test_malformed_aggregate_reason_codes_cannot_ready(codes: object) -> None:
+    # Lossy empty containers ("" / {} / set()) and ANY non-empty reason_codes now fail closed in the aggregate
+    # serializer (a COMPUTED aggregate carries reason_codes == ()), so the manifest cannot capture a snapshot
+    # and records REJECTED — never READY — whether or not a forbidden token is present.
+    agg = replace(_aggregate([_entry("1")]), reason_codes=codes)
+    manifest = build_paper_session_realized_pnl_evidence_manifest(
+        agg, expected_aggregate_digest="a" * 64, correlation_id="c"
+    )
     assert manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.REJECTED
-    assert any("aggregate_reason_codes_invalid" in r for r in manifest.rejection_reasons)
+    assert manifest.ready is False
+    assert any("aggregate_payload_invalid" in r for r in manifest.rejection_reasons)
 
 
 def test_baseline_empty_internal_reason_codes_ready() -> None:

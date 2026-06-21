@@ -1021,6 +1021,97 @@ def test_safe_market_data_terms_allowed() -> None:
 
 
 # --------------------------------------------------------------------------------------------------
+# Fail-closed: serializer rejects lossy/malformed containers BEFORE snapshot/digest (Codex P1)
+# A blind list(...) collapses malformed metadata/reason_codes into valid-looking, collision-prone payloads
+# (e.g. metadata={"li":"scheduler"} -> ['l','i'] loses the value; reason_codes="" -> [] == valid empty).
+# The serializer/digest must raise on the exact malformed shape before any snapshot/digest is produced.
+# --------------------------------------------------------------------------------------------------
+
+
+def test_serializer_rejects_dict_metadata() -> None:
+    agg = replace(_aggregate([_entry("1")]), metadata={"li": "scheduler"})
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="metadata_malformed"):
+        paper_session_realized_pnl_aggregate_to_dict(agg)
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="metadata_malformed"):
+        paper_session_realized_pnl_aggregate_digest(agg)
+
+
+@pytest.mark.parametrize("bad_metadata", ["ab", ("ab",), ["ab"]])
+def test_serializer_rejects_string_or_one_dimensional_metadata(bad_metadata: object) -> None:
+    agg = replace(_aggregate([_entry("1")]), metadata=bad_metadata)
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="metadata_malformed"):
+        paper_session_realized_pnl_aggregate_to_dict(agg)
+
+
+@pytest.mark.parametrize(
+    "bad_metadata",
+    [
+        (("nested", {"x": "scheduler"}),),  # nested dict value (hidden forbidden token)
+        (("nested", ["scheduler"]),),  # nested list value
+        (("k", 5),),  # non-string value
+        ((5, "v"),),  # non-string key
+    ],
+)
+def test_serializer_rejects_nested_or_non_string_metadata(bad_metadata: object) -> None:
+    agg = replace(_aggregate([_entry("1")]), metadata=bad_metadata)
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="metadata_malformed"):
+        paper_session_realized_pnl_aggregate_to_dict(agg)
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="metadata_malformed"):
+        paper_session_realized_pnl_aggregate_digest(agg)
+
+
+@pytest.mark.parametrize("bad_metadata", [(("a", "b", "c"),), (("a",),)])
+def test_serializer_rejects_malformed_metadata_pair_length(bad_metadata: object) -> None:
+    agg = replace(_aggregate([_entry("1")]), metadata=bad_metadata)
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="metadata_malformed"):
+        paper_session_realized_pnl_aggregate_digest(agg)
+
+
+def test_serializer_rejects_duplicate_metadata_keys() -> None:
+    # The builder normalizes metadata from a Mapping (keys unique by contract); a forged duplicate-key
+    # metadata must also fail closed in the serializer.
+    agg = replace(_aggregate([_entry("1")]), metadata=(("k", "v"), ("k", "w")))
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="metadata_malformed"):
+        paper_session_realized_pnl_aggregate_digest(agg)
+
+
+@pytest.mark.parametrize("bad", ["", {}, set()])
+def test_serializer_rejects_lossy_empty_reason_codes(bad: object) -> None:
+    # "" / {} / set() would each collapse to [] under a blind list(...), colliding with the valid empty state.
+    agg = replace(_aggregate([_entry("1")]), reason_codes=bad)
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="reason_codes_malformed"):
+        paper_session_realized_pnl_aggregate_to_dict(agg)
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="reason_codes_malformed"):
+        paper_session_realized_pnl_aggregate_digest(agg)
+
+
+@pytest.mark.parametrize("bad", [("scheduler",), ("live_order",), ("some_reason",)])
+def test_serializer_rejects_non_empty_reason_codes(bad: object) -> None:
+    agg = replace(_aggregate([_entry("1")]), reason_codes=bad)
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="reason_codes_malformed"):
+        paper_session_realized_pnl_aggregate_digest(agg)
+
+
+def test_serializer_baseline_valid_metadata_and_reason_codes() -> None:
+    # Baseline valid aggregate still serializes exactly as before (no digest change): sorted unique [str,str]
+    # pairs and an empty reason_codes list; digest stays exact and deterministic.
+    agg = _aggregate([_entry("1")], metadata={"a": "1", "z": "2"})
+    payload = paper_session_realized_pnl_aggregate_to_dict(agg)
+    assert payload["metadata"] == [["a", "1"], ["z", "2"]]
+    assert payload["reason_codes"] == []
+    assert paper_session_realized_pnl_aggregate_digest(agg) == agg.aggregate_digest
+
+
+def test_serializer_lossy_metadata_collision_prevented() -> None:
+    # Two different hidden dict values must NOT collapse to the same snapshot/digest; both fail closed before
+    # any digest exists, so a collision is impossible.
+    base = _aggregate([_entry("1")])
+    for hidden in ({"li": "scheduler"}, {"li": "safe"}):
+        with pytest.raises(PaperSessionRealizedPnlAggregateError, match="metadata_malformed"):
+            paper_session_realized_pnl_aggregate_digest(replace(base, metadata=hidden))
+
+
+# --------------------------------------------------------------------------------------------------
 # Immutability / no-leak / no-mutation
 # --------------------------------------------------------------------------------------------------
 
