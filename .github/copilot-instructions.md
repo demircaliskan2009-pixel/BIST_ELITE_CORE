@@ -14,6 +14,20 @@
 - B5 and human provenance gates cannot be bypassed.
 - Deep Research is allowed only for external or current facts that are not provable from this repository.
 
+## CANONICAL DOCTRINE & SCOPE
+
+- Canonical operating doctrine (precedence) is `AGENTS.md` -> `docs/crypto_core/agent_workflow.md` ->
+  `.codex/skills/crypto-core-max-safe/SKILL.md` -> `CLAUDE.md`; lessons in `docs/crypto_core/agent_lessons.md`.
+  This file and any `.github/prompts`, `.github/skills`, `.github/instructions`, `.github/agents`, or
+  `.cursor/rules` content is secondary and is **overridden by that canonical doctrine wherever they conflict**.
+- Legacy skill/prompt names that imply scheduler/deployment/live/order-routing do NOT authorize such behavior:
+  crypto_core is paper-first, no scheduler/auto-loop, no live/order routing.
+- Branch naming: feature slices `feature/<crypto-core-scope>-prN`; setup/docs `chore/<crypto-core-scope>-prN`;
+  same-PR repair on the same branch. Setup/doctrine changes never mix into a feature PR.
+- Codex Pursue Goal is for bounded single-goal GitHub/CI loops only (CI polling, repo/branch sync, PR
+  closeout/status, authorized merge/post-merge verify) — never complex implementation, design, or
+  digest/provenance architecture. MCP is opt-in/manual; none is enabled by default.
+
 ## AUTO MODEL FITNESS RULE
 
 - If Auto output appears weak, confused, or misses setup constraints, stop immediately with `MODEL_FIT_WEAK` and exact evidence.

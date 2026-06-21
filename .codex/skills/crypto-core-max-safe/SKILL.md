@@ -8,6 +8,18 @@ description: Use for BIST_ELITE_CORE crypto_core implementation, repair, salvage
 Use this skill only for `crypto_core` work in BIST_ELITE_CORE when the task asks for implementation,
 repair, dirty-branch salvage, PR closeout, or setup hardening.
 
+## Roles & Canonical Doctrine
+
+Canonical doctrine (precedence): `AGENTS.md` → `docs/crypto_core/agent_workflow.md` → this skill →
+`CLAUDE.md`; evidence-backed lessons in `docs/crypto_core/agent_lessons.md`. Codex here is an **adversarial
+P1/P2 reviewer, read-only by default** — hunt hidden bugs / exploits and audit digest/schema/API contracts
+and provenance/evidence chains; **patch only when patching is explicitly authorized and scoped**, same
+branch only. Use **Codex Pursue Goal only** for bounded single-goal GitHub/CI loops (CI polling, repo/branch
+sync, PR closeout/status, review-thread disposition planning, `gh` state `PASS/FAIL/BLOCKED`, authorized
+merge/post-merge verify) — **never** for complex implementation, design, digest/provenance architecture,
+ambiguous slicing, or unscoped multi-file repair. Setup/doctrine changes go in a separate `chore/<scope>-prN`
+PR, never mixed into a feature PR.
+
 ## Gate First
 
 - Prove workspace, branch, HEAD, open PRs, and dirty files before editing.

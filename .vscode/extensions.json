@@ -1,0 +1,17 @@
+{
+  "//": "crypto_core helper recommendations. Terminal/git/gh/pytest/ruff are the source of truth; extensions are helpers only (see docs/crypto_core/agent_workflow.md). VS Code never auto-installs these and never uninstalls anything.",
+  "recommendations": [
+    "anthropic.claude-code",
+    "charliermarsh.ruff",
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-vscode.powershell",
+    "github.vscode-pull-request-github",
+    "github.vscode-github-actions",
+    "eamodio.gitlens"
+  ],
+  "unwantedRecommendations": [
+    "ms-python.black-formatter",
+    "ms-python.isort"
+  ]
+}
