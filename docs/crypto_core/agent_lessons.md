@@ -83,3 +83,16 @@ commit `1890d2b`; repair commits `1cd2799` scope-binding, `ec95c4e` lossy-contai
   `chore/crypto-core-agent-workflow-*` PR.)
 - **One open PR at a time; no direct main push; standard merge only; no merge without explicit per-PR
   authorization.** Unchanged hard rails — restated so lessons never erode them.
+- **Deep Research is a high-leverage architecture/benchmark/current-fact tool — especially paired with
+  GitHub-connector repo evidence — but it guides bounded PR sequencing; it never bypasses local proof
+  gates.** Use it for external/current facts (exchange/API/funding/fees/limits/microstructure/custody/
+  regulation/security, Deribit/readiness/live/shadow), PRD/roadmap-vs-external-benchmark questions, and
+  overengineering detection; not for local repo/PR/CI state, merge authority, local repair, or to
+  replace Codex review. In connector chat it must separate `REPO_EVIDENCE` / `EXTERNAL_EVIDENCE` /
+  `INFERENCE` / `UNKNOWN` and never infer live repo state without GitHub evidence. **Strictly read-only /
+  advisory: it never executes a repo/GitHub mutation (branch/file/commit/push/PR/comment/thread-resolve/
+  workflow-rerun/merge/auto-merge), even when the underlying work is authorized — it may only recommend a
+  mutation task, and the controller routes any authorized mutation to Claude/`gh`, the connector, or
+  Codex.** Never an executor lane, never a merge or safety-gate waiver. Full protocol:
+  `docs/crypto_core/deep_research_protocol.md`
+  (`agent_workflow.md` §19).
