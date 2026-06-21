@@ -254,6 +254,47 @@ def _has_scope_violation(*texts: object) -> bool:
     return False
 
 
+def _serialize_metadata(metadata: object) -> list[list[str]]:
+    """Canonicalize aggregate metadata to a list of exact two-item ``[str, str]`` pairs, fail-closed.
+
+    The dataclass field is ``tuple[tuple[str, str], ...]`` (the builder normalizes a ``Mapping`` to sorted
+    unique-key pairs). A blind ``list(...)`` would LOSE data and let malformed containers masquerade as
+    valid: ``{"li": "scheduler"}`` iterates to its key ``"li"`` and ``list("li")`` collapses to
+    ``["l", "i"]`` (the hidden value is lost, and two different dicts collide on one snapshot/digest), while
+    ``("ab",)`` collapses to ``["a", "b"]``. So the exact shape is enforced BEFORE canonicalization/digest: a
+    ``tuple``/``list`` of exactly-two-item pairs whose key AND value are each an exact plain ``str``
+    (``type() is str``), with unique keys. Anything else — dict/str/set, one-dimensional or wrong-length
+    pairs, a non-string or nested dict/list/set key/value, or a duplicate key — raises
+    ``PaperSessionRealizedPnlAggregateError`` (nested values are never stringified to be scanned).
+    """
+    if type(metadata) not in (tuple, list):
+        raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:metadata_malformed")
+    pairs: list[list[str]] = []
+    keys: list[str] = []
+    for pair in metadata:
+        if type(pair) not in (tuple, list) or len(pair) != 2 or type(pair[0]) is not str or type(pair[1]) is not str:
+            raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:metadata_malformed")
+        keys.append(pair[0])
+        pairs.append([pair[0], pair[1]])
+    if len(set(keys)) != len(keys):
+        raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:metadata_malformed")
+    return pairs
+
+
+def _serialize_reason_codes(reason_codes: object) -> list[str]:
+    """Canonicalize aggregate ``reason_codes`` fail-closed.
+
+    The builder only ever emits a COMPUTED aggregate with ``reason_codes == ()``. A blind ``list(...)`` would
+    collapse a lossy container — ``""``, ``{}``, ``set()`` all serialize to ``[]`` — into the valid empty
+    state (a digest collision), and would also silently serialize a forged non-empty ``reason_codes``. So the
+    exact canonical empty sequence is required: an empty ``tuple``/``list``. Any non-empty value (e.g.
+    ``("scheduler",)``) or a non-tuple/list container raises ``PaperSessionRealizedPnlAggregateError``.
+    """
+    if type(reason_codes) not in (tuple, list) or len(reason_codes) != 0:
+        raise PaperSessionRealizedPnlAggregateError("paper_session_realized_pnl_aggregate:reason_codes_malformed")
+    return []
+
+
 # --------------------------------------------------------------------------------------------------
 # Bridge provenance re-proof
 # --------------------------------------------------------------------------------------------------
@@ -662,9 +703,9 @@ def _aggregate_payload_from(aggregate: PaperSessionRealizedPnlAggregate) -> dict
         "no_realized_event_count": aggregate.no_realized_event_count,
         "closed_units_total": aggregate.closed_units_total,
         "realized_pnl_total": aggregate.realized_pnl_total,
-        "reason_codes": list(aggregate.reason_codes),
+        "reason_codes": _serialize_reason_codes(aggregate.reason_codes),
         "correlation_id": aggregate.correlation_id,
-        "metadata": [list(pair) for pair in aggregate.metadata],
+        "metadata": _serialize_metadata(aggregate.metadata),
         "paper_only": aggregate.paper_only,
         "aggregate_computed": aggregate.aggregate_computed,
         "gross_only": aggregate.gross_only,
@@ -692,14 +733,25 @@ def _aggregate_payload_from(aggregate: PaperSessionRealizedPnlAggregate) -> dict
 
 
 def paper_session_realized_pnl_aggregate_to_dict(aggregate: PaperSessionRealizedPnlAggregate) -> dict[str, object]:
-    """Canonical, JSON-ready mapping for an aggregate (deterministic shape, includes self-digest)."""
+    """Canonical, JSON-ready mapping for an aggregate (deterministic shape, includes self-digest).
+
+    Fail-closed: ``metadata`` and ``reason_codes`` are canonicalized by exact-shape validators (no blind
+    ``list(...)``), so a lossy/malformed container (e.g. ``metadata={"li": "scheduler"}`` or
+    ``reason_codes=""``) raises ``PaperSessionRealizedPnlAggregateError`` BEFORE any snapshot/digest is
+    produced, instead of silently collapsing into a valid-looking — and collision-prone — payload.
+    """
     payload = _aggregate_payload_from(aggregate)
     payload["aggregate_digest"] = aggregate.aggregate_digest
     return payload
 
 
 def paper_session_realized_pnl_aggregate_digest(aggregate: PaperSessionRealizedPnlAggregate) -> str:
-    """Recompute the canonical aggregate digest from the serializer output, excluding the self-digest field."""
+    """Recompute the canonical aggregate digest from the serializer output, excluding the self-digest field.
+
+    Shares the serializer's exact-shape validation, so a lossy/malformed ``metadata`` / ``reason_codes``
+    container raises ``PaperSessionRealizedPnlAggregateError`` before a digest can be computed (no two
+    distinct hidden values can collapse to one digest).
+    """
     return _canonical_digest(_aggregate_payload_from(aggregate))
 
 
