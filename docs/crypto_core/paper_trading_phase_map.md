@@ -41,10 +41,20 @@ Adjacent substrate that already exists (isolated, not yet proven as one loop):
 - **Reports / replay:** `paper_pnl_report`, `paper_replay_result_report`(`_adapter`),
   `paper_replay_run_plan`, `paper_replay_intake`, `deterministic_replay_executor`,
   `paper_replay_promotion_readiness`, `paper_replay_governance_review_decision`.
-- **Governor / readiness / promotion:** `audit/portfolio_governor_*`, `service/readiness`,
+- **Governor / readiness / promotion (paper-stage):** `audit/portfolio_governor_*`, `service/readiness`,
   `paper_sleeve_admission_review_readiness`, `paper_sleeve_promotion_candidate`,
-  `paper_sleeve_promotion_readiness`, `paper_sleeve_risk_budget_decision`, `paper_sleeve_intent_ledger`,
-  `service/paper_shadow_session_controller`, `service/paper_live_service`.
+  `paper_sleeve_promotion_readiness`, `paper_sleeve_risk_budget_decision`, `paper_sleeve_intent_ledger`.
+
+**Out of scope for the minimum deterministic paper loop (reference-only):**
+`service/paper_shadow_session_controller`, `service/paper_live_service`, and any other shadow/live runtime
+service surface are **explicitly excluded** from the minimum deterministic paper-loop phase and from
+`feature/paper-run-report-pr1`. They are **not usable** until a separately authorized shadow/live phase
+(see §6). The deterministic paper loop **must not depend on** shadow/live service surfaces.
+
+**Safety note (deterministic paper substrate):** the minimum deterministic paper loop must use only
+deterministic, replayable validation modules — **no shadow/live service surface, no hidden
+IO/thread/wall-clock/random runtime, no scheduler/auto-loop, no live/private API, and no real order
+routing.** Anything outside that boundary is reference-only here and gated to a separately authorized phase.
 
 **Implication:** the components for a minimum paper loop largely exist. The gap is **wiring + one proven
 deterministic end-to-end path**, not more sibling modules.
