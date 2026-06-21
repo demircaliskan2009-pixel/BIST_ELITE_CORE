@@ -1,0 +1,1083 @@
+"""Tests for the paper session realized-PnL aggregate — deterministic, paper-only, gross-only, provenance-bound."""
+
+from __future__ import annotations
+
+import ast
+from collections.abc import Sequence
+from dataclasses import FrozenInstanceError, fields, replace
+from decimal import Decimal, localcontext
+from pathlib import Path
+
+import pytest
+
+from crypto_core.validation import paper_session_realized_pnl_aggregate
+from crypto_core.validation.paper_allocator_intent_draft import (
+    PaperAllocatorIntentDraft,
+    PaperAllocatorIntentDraftStatus,
+    paper_allocator_intent_draft_digest,
+)
+from crypto_core.validation.paper_capacity_gate import (
+    build_paper_capacity_gate_policy,
+    evaluate_paper_capacity_gate,
+)
+from crypto_core.validation.paper_episode_runner import run_paper_episode
+from crypto_core.validation.paper_fill_simulator import (
+    PaperFillSimulationResult,
+    PaperFillSimulationStatus,
+    build_paper_fill_market_snapshot,
+    build_paper_fill_policy,
+    paper_fill_simulation_result_digest,
+)
+from crypto_core.validation.paper_order_intent import build_paper_order_intent
+from crypto_core.validation.paper_order_intent_admission import (
+    PaperOrderIntentType,
+    PaperOrderSide,
+    build_paper_order_intent_request,
+    evaluate_paper_order_intent_admission,
+)
+from crypto_core.validation.paper_pnl_report import build_paper_mark_snapshot
+from crypto_core.validation.paper_position_state import (
+    PaperPositionStateSide,
+    apply_paper_fill_to_position,
+    build_flat_paper_position_state,
+    build_paper_position_state,
+)
+from crypto_core.validation.paper_realized_pnl import (
+    PaperRealizedPnlEvent,
+    compute_paper_realized_pnl_event,
+    paper_realized_pnl_event_digest,
+)
+from crypto_core.validation.paper_realized_pnl_rollup import PaperRealizedPnlRollupInput
+from crypto_core.validation.paper_session_realized_pnl_aggregate import (
+    PaperSessionRealizedPnlAggregateError,
+    PaperSessionRealizedPnlAggregateInput,
+    PaperSessionRealizedPnlAggregateStatus,
+    build_paper_session_realized_pnl_aggregate,
+    paper_session_realized_pnl_aggregate_digest,
+    paper_session_realized_pnl_aggregate_to_dict,
+)
+from crypto_core.validation.paper_session_realized_pnl_bridge import (
+    PaperSessionSequenceProvenance,
+    build_paper_session_realized_pnl_bridge,
+    paper_session_realized_pnl_bridge_digest,
+)
+from crypto_core.validation.paper_session_sequence import (
+    build_paper_session_sequence,
+    paper_session_sequence_result_digest,
+)
+
+_HEX = "b" * 64
+
+_EXPECTED_KEYS = {
+    "schema_version",
+    "aggregate_id",
+    "status",
+    "market_symbol",
+    "session_bridge_count",
+    "session_sequence_digests",
+    "bridge_digests",
+    "rollup_digests",
+    "source_event_digests",
+    "fill_simulation_result_digests",
+    "position_transition_digests",
+    "episode_count_total",
+    "event_count",
+    "computed_event_count",
+    "no_realized_event_count",
+    "closed_units_total",
+    "realized_pnl_total",
+    "reason_codes",
+    "correlation_id",
+    "metadata",
+    "aggregate_digest",
+    "paper_only",
+    "aggregate_computed",
+    "gross_only",
+    "fees_included",
+    "unrealized_pnl_included",
+    "total_pnl_computed",
+    "equity_or_capital_computed",
+    "capital_reserved",
+    "capital_mutated",
+    "balance_mutated",
+    "live_position_mutated",
+    "real_money_enabled",
+    "real_orders_enabled",
+    "order_routed",
+    "venue_order_id_created",
+    "exchange_order_id_created",
+    "client_order_id_created",
+    "route_id_created",
+    "execution_instruction_created",
+    "live_api_called",
+    "scheduler_enabled",
+    "auto_loop_enabled",
+    "connector_invoked",
+}
+
+_FORBIDDEN_VALUE_KEYS = {
+    "unrealized_pnl",
+    "unrealized_pnl_total",
+    "total_pnl",
+    "equity",
+    "equity_total",
+    "capital",
+    "capital_total",
+    "capital_balance",
+    "margin",
+    "balance",
+    "fee_amount",
+    "fees",
+    "order_id",
+    "venue_order_id",
+    "exchange_order_id",
+    "client_order_id",
+    "route_id",
+    "execution_instruction",
+}
+
+_SAFE_FALSE_FLAGS = (
+    "fees_included",
+    "unrealized_pnl_included",
+    "total_pnl_computed",
+    "equity_or_capital_computed",
+    "capital_reserved",
+    "capital_mutated",
+    "balance_mutated",
+    "live_position_mutated",
+    "real_money_enabled",
+    "real_orders_enabled",
+    "order_routed",
+    "venue_order_id_created",
+    "exchange_order_id_created",
+    "client_order_id_created",
+    "route_id_created",
+    "execution_instruction_created",
+    "live_api_called",
+    "scheduler_enabled",
+    "auto_loop_enabled",
+    "connector_invoked",
+)
+
+
+def _is_hex64(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
+# --------------------------------------------------------------------------------------------------
+# Session-sequence fixtures (mirrors test_paper_session_sequence.py / bridge test)
+# --------------------------------------------------------------------------------------------------
+
+
+def _make_draft() -> PaperAllocatorIntentDraft:
+    fields: dict[str, object] = {
+        "schema_version": "paper-allocator-intent-draft.v1",
+        "status": PaperAllocatorIntentDraftStatus.DRAFT_READY,
+        "sleeve_id": "sleeve-alpha",
+        "policy_id": "policy-alpha",
+        "readiness_digest": "a" * 64,
+        "promotion_readiness_journal_entry_digest": "a" * 64,
+        "promotion_readiness_payload_digest": "a" * 64,
+        "promotion_candidate_journal_entry_digest": "a" * 64,
+        "decision_journal_entry_digest": "a" * 64,
+        "decision_journal_payload_digest": "a" * 64,
+        "eligible_count": 2,
+        "blocked_count": 0,
+        "insufficient_count": 0,
+        "blockers": (),
+        "correlation_id": "corr-draft",
+        "metadata": (),
+    }
+    draft = PaperAllocatorIntentDraft(**fields, draft_digest="")  # type: ignore[arg-type]
+    return replace(draft, draft_digest=paper_allocator_intent_draft_digest(draft))
+
+
+def _intent(*, market_symbol: str = "BTC-PERPETUAL"):
+    cap_policy = build_paper_capacity_gate_policy(
+        policy_id="policy-alpha",
+        sleeve_id="sleeve-alpha",
+        max_notional="100000000",
+        max_units="100000",
+        max_open_intents=5,
+    )
+    capacity = evaluate_paper_capacity_gate(
+        _make_draft(), cap_policy, requested_notional="100000", requested_units="10", correlation_id="corr-capacity"
+    )
+    request = build_paper_order_intent_request(
+        request_id="req-1",
+        capacity_decision_digest=capacity.decision_digest,
+        market_symbol=market_symbol,
+        side=PaperOrderSide.BUY,
+        intent_type=PaperOrderIntentType.MARKET,
+        requested_notional=capacity.requested_notional,
+        requested_units=capacity.requested_units,
+        limit_price=None,
+        correlation_id="corr-req",
+    )
+    admission = evaluate_paper_order_intent_admission(capacity, request, correlation_id="corr-admit")
+    return build_paper_order_intent(admission, intent_id="intent-1", correlation_id="corr-intent")
+
+
+def _episode(suffix: str, *, market_symbol: str = "BTC-PERPETUAL"):
+    intent = _intent(market_symbol=market_symbol)
+    prior = build_flat_paper_position_state(
+        position_state_id=f"pos-{suffix}", market_symbol=market_symbol, correlation_id="corr-pos"
+    )
+    snapshot = build_paper_fill_market_snapshot(
+        snapshot_id=f"snap-{suffix}", market_symbol=market_symbol, reference_price="50"
+    )
+    policy = build_paper_fill_policy(
+        policy_id=f"fill-policy-{suffix}", slippage_bps="0", fee_rate_bps="0", allow_partial_fill=False
+    )
+    mark = build_paper_mark_snapshot(
+        mark_snapshot_id=f"mark-{suffix}", market_symbol=market_symbol, mark_price="60", correlation_id="corr-mark"
+    )
+    return run_paper_episode(
+        intent,
+        prior,
+        snapshot,
+        policy,
+        mark,
+        fill_simulation_id=f"fillsim-{suffix}",
+        position_transition_id=f"trans-{suffix}",
+        new_position_state_id=f"newpos-{suffix}",
+        pnl_report_id=f"pnl-{suffix}",
+        episode_run_id=f"ep-{suffix}",
+        correlation_id="corr-ep",
+    )
+
+
+def _episode_list(suffixes=("1",), *, market_symbol: str = "BTC-PERPETUAL"):
+    return [_episode(s, market_symbol=market_symbol) for s in suffixes]
+
+
+def _session_result(episodes, *, paper_session_id: str, correlation_id: str):
+    return build_paper_session_sequence(episodes, paper_session_id=paper_session_id, correlation_id=correlation_id)
+
+
+def _prov_for(idx: str, *, market_symbol: str = "BTC-PERPETUAL") -> PaperSessionSequenceProvenance:
+    eps = _episode_list((idx,), market_symbol=market_symbol)
+    session = _session_result(eps, paper_session_id=f"sess-{idx}", correlation_id=f"corr-sess-{idx}")
+    return PaperSessionSequenceProvenance(session_sequence=session, episodes=tuple(eps))
+
+
+# --------------------------------------------------------------------------------------------------
+# Realized-PnL provenance-bundle fixtures
+# --------------------------------------------------------------------------------------------------
+
+
+def _exact_gross(filled_units: str, fill_price: str) -> str:
+    with localcontext() as ctx:
+        ctx.prec = 400
+        product = Decimal(filled_units) * Decimal(fill_price)
+    rendered = format(product, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return "0" if rendered in {"", "-0"} else rendered
+
+
+def _long(*, avg: str = "100", market_symbol: str = "BTC-PERPETUAL", idn: str = "1"):
+    return build_paper_position_state(
+        position_state_id=f"rpos-{idn}",
+        market_symbol=market_symbol,
+        side=PaperPositionStateSide.LONG,
+        signed_units="10",
+        abs_units="10",
+        average_entry_price=avg,
+        transition_count=0,
+        correlation_id="corr-rpos",
+    )
+
+
+def _rflat(*, market_symbol: str = "BTC-PERPETUAL", idn: str = "1"):
+    return build_flat_paper_position_state(
+        position_state_id=f"rpos-{idn}", market_symbol=market_symbol, correlation_id="corr-rpos"
+    )
+
+
+def _fill(
+    side: str, filled: str, price: str, *, market_symbol: str = "BTC-PERPETUAL", idn: str = "1"
+) -> PaperFillSimulationResult:
+    base = PaperFillSimulationResult(
+        schema_version="paper-fill-simulation-result.v1",
+        status=PaperFillSimulationStatus.FILLED,
+        fill_simulation_id=f"rfillsim-{idn}",
+        intent_digest=_HEX,
+        market_snapshot_digest=_HEX,
+        fill_policy_digest=_HEX,
+        market_symbol=market_symbol,
+        side=side,
+        intent_type="MARKET",
+        fill_price=price,
+        filled_units=filled,
+        unfilled_units="0",
+        gross_notional=_exact_gross(filled, price),
+        fee_amount="0",
+        reason_codes=(),
+        correlation_id="corr-rfill",
+        metadata=(),
+        result_digest="",
+    )
+    return replace(base, result_digest=paper_fill_simulation_result_digest(base))
+
+
+def _bundle(
+    event_id: str,
+    *,
+    prior_side: str = "LONG",
+    avg: str = "100",
+    price: str = "150",
+    filled: str = "4",
+    market_symbol: str = "BTC-PERPETUAL",
+) -> PaperRealizedPnlRollupInput:
+    if prior_side == "LONG":
+        prior = _long(avg=avg, market_symbol=market_symbol, idn=event_id)
+        fill = _fill("SELL", filled, price, market_symbol=market_symbol, idn=event_id)
+    else:  # FLAT — open from flat (NO_REALIZED_PNL)
+        prior = _rflat(market_symbol=market_symbol, idn=event_id)
+        fill = _fill("BUY", filled, price, market_symbol=market_symbol, idn=event_id)
+    transition, new_state = apply_paper_fill_to_position(
+        prior,
+        fill,
+        transition_id=f"rtrans-{event_id}",
+        new_position_state_id=f"rnewpos-{event_id}",
+        correlation_id="corr-rapply",
+    )
+    event = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id=event_id, correlation_id="corr-revt"
+    )
+    return PaperRealizedPnlRollupInput(
+        event=event, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+
+
+def _no_realized(event_id: str, **kwargs: object) -> PaperRealizedPnlRollupInput:
+    return _bundle(event_id, prior_side="FLAT", filled="10", price="100", **kwargs)  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------------------------------
+# Aggregate-entry fixtures
+# --------------------------------------------------------------------------------------------------
+
+
+def _entry_from(prov, *, bridge_id: str, bundles, bridge_correlation: str = "corr-bridge"):
+    ents = tuple(bundles)
+    bridge = build_paper_session_realized_pnl_bridge(prov, ents, bridge_id=bridge_id, correlation_id=bridge_correlation)
+    return PaperSessionRealizedPnlAggregateInput(bridge=bridge, session_input=prov, rollup_entries=ents)
+
+
+def _entry(idx: str = "1", *, bridge_id: str | None = None, bundles=None, market_symbol: str = "BTC-PERPETUAL"):
+    prov = _prov_for(idx, market_symbol=market_symbol)
+    ents = tuple(bundles) if bundles is not None else (_bundle(f"e{idx}", market_symbol=market_symbol),)
+    return _entry_from(prov, bridge_id=bridge_id or f"bridge-{idx}", bundles=ents)
+
+
+def _forge_bridge(entry, *, reseal: bool = True, **bridge_overrides):
+    """A bridge forged in place (optionally re-sealed self-consistent) while session/rollup inputs stay genuine."""
+    forged = replace(entry.bridge, **bridge_overrides)
+    if reseal:
+        forged = replace(forged, bridge_digest=paper_session_realized_pnl_bridge_digest(forged))
+    return replace(entry, bridge=forged)
+
+
+def _aggregate(entries=None, **overrides):
+    base: dict[str, object] = {"aggregate_id": "agg-1", "correlation_id": "corr-agg"}
+    base.update(overrides)
+    ents = entries if entries is not None else [_entry("1")]
+    return build_paper_session_realized_pnl_aggregate(ents, **base)  # type: ignore[arg-type]
+
+
+class _StatefulRollupEntries(Sequence):
+    """A ``rollup_entries`` Sequence that returns a DIFFERENT view on each iteration (TOCTOU exploit).
+
+    The first iteration yields the genuine bundles (so bridge reconstruction passes); every later iteration
+    yields adversarial bundles (the second read a vulnerable double-read aggregate would use for action
+    identity). A snapshotting aggregate iterates it exactly once, so only the genuine first view is ever
+    observed. ``reads`` records how many times the sequence was iterated.
+    """
+
+    def __init__(self, first, rest):
+        self._first = tuple(first)
+        self._rest = tuple(rest)
+        self.reads = 0
+
+    def _view(self):
+        return self._first if self.reads == 0 else self._rest
+
+    def __iter__(self):
+        view = self._view()
+        self.reads += 1
+        return iter(view)
+
+    def __getitem__(self, index):
+        return self._view()[index]
+
+    def __len__(self):
+        return len(self._view())
+
+
+class _StatefulRealizedEvent(PaperRealizedPnlEvent):
+    """A PaperRealizedPnlEvent whose fill/transition digests read genuine during canonical serialization
+    but fake on a bare later attribute read (event-object TOCTOU exploit).
+
+    Trigger is robust (not a hardcoded read count): every canonical serialization reads ``schema_version``
+    first and then each digest field once, so the per-field read count stays <= the ``schema_version`` read
+    count and genuine values are returned. A later identity read of a digest field WITHOUT a preceding
+    ``schema_version`` read pushes that field's count above ``schema_version`` and returns the fake value.
+    A multi-read aggregate (digest pass via the serializer, then a separate identity attribute read) thus
+    sees fake identities; a single-payload-snapshot aggregate reads each event exactly once and sees only
+    the genuine values captured during serialization.
+    """
+
+    _SENSITIVE = ("fill_simulation_result_digest", "position_transition_digest")
+
+    def __getattribute__(self, name):
+        get = object.__getattribute__
+        if name == "schema_version":
+            counts = get(self, "_counts")
+            counts["schema_version"] = counts.get("schema_version", 0) + 1
+            return get(self, "schema_version")
+        if name in _StatefulRealizedEvent._SENSITIVE:
+            counts = get(self, "_counts")
+            counts[name] = counts.get(name, 0) + 1
+            if counts[name] <= counts.get("schema_version", 0):
+                return get(self, name)
+            return get(self, "_fakes")[name]
+        return get(self, name)
+
+
+def _make_stateful_event(genuine, *, fake_fill: str, fake_transition: str) -> _StatefulRealizedEvent:
+    ev = _StatefulRealizedEvent.__new__(_StatefulRealizedEvent)
+    for field in fields(genuine):
+        object.__setattr__(ev, field.name, getattr(genuine, field.name))
+    object.__setattr__(ev, "_counts", {})
+    object.__setattr__(
+        ev,
+        "_fakes",
+        {"fill_simulation_result_digest": fake_fill, "position_transition_digest": fake_transition},
+    )
+    return ev
+
+
+class _SplitHashStr(str):
+    """A ``str`` with genuine content but a salted, per-instance ``__hash__`` (custom-hash dedup bypass).
+
+    ``str(self)`` and ``==`` keep canonical string content (so canonical JSON / SHA-256 / bridge provenance
+    are unaffected), but two content-equal instances with different salts hash differently and therefore
+    land in different ``set``/``dict`` buckets — bypassing duplicate detection in an aggregate that dedups
+    on the raw payload objects instead of exact plain primitives.
+    """
+
+    def __new__(cls, value: str, salt: int) -> _SplitHashStr:
+        obj = str.__new__(cls, value)
+        obj._salt = salt
+        return obj
+
+    def __hash__(self) -> int:
+        return hash((str(self), self._salt))
+
+
+# --------------------------------------------------------------------------------------------------
+# Happy paths / aggregation
+# --------------------------------------------------------------------------------------------------
+
+
+def test_valid_single_bridge_aggregate() -> None:
+    entry = _entry("1")
+    agg = _aggregate([entry])
+    assert agg.status is PaperSessionRealizedPnlAggregateStatus.COMPUTED
+    assert agg.market_symbol == "BTC-PERPETUAL"
+    assert agg.session_bridge_count == 1
+    assert agg.episode_count_total == 1
+    assert agg.event_count == 1
+    assert agg.computed_event_count == 1
+    assert agg.no_realized_event_count == 0
+    assert agg.realized_pnl_total == "200"
+    assert agg.closed_units_total == "4"
+    assert agg.bridge_digests == (entry.bridge.bridge_digest,)
+    assert agg.session_sequence_digests == (entry.bridge.session_sequence_digest,)
+    assert agg.rollup_digests == (entry.bridge.rollup_digest,)
+    assert agg.source_event_digests == entry.bridge.source_event_digests
+    assert agg.reason_codes == ()
+    assert agg.gross_only is True
+    assert _is_hex64(agg.aggregate_digest)
+    assert paper_session_realized_pnl_aggregate_digest(agg) == agg.aggregate_digest
+
+
+def test_valid_two_bridge_aggregate() -> None:
+    e1, e2 = _entry("1"), _entry("2")
+    agg = _aggregate([e1, e2])
+    assert agg.session_bridge_count == 2
+    assert agg.episode_count_total == 2
+    assert agg.event_count == 2
+    assert agg.computed_event_count == 2
+    assert agg.realized_pnl_total == "400"  # 200 + 200
+    assert agg.closed_units_total == "8"
+    assert agg.bridge_digests == (e1.bridge.bridge_digest, e2.bridge.bridge_digest)
+    assert agg.source_event_digests == (*e1.bridge.source_event_digests, *e2.bridge.source_event_digests)
+
+
+def test_computed_plus_no_realized_counts_aggregate() -> None:
+    e1 = _entry("1")  # one computed event (+200, closed 4)
+    e2 = _entry("2", bundles=(_no_realized("n2"),))  # one no-realized event
+    agg = _aggregate([e1, e2])
+    assert agg.event_count == 2
+    assert agg.computed_event_count == 1
+    assert agg.no_realized_event_count == 1
+    assert agg.realized_pnl_total == "200"
+    assert agg.closed_units_total == "4"
+
+
+def test_high_scale_realized_total_preserved() -> None:
+    avg = "0." + "0" * 99 + "1"
+    e1 = _entry("1", bundles=(_bundle("h1", avg=avg, price="1"),))  # realized 3.<99 9s>6
+    e2 = _entry("2", bundles=(_bundle("h2", avg=avg, price="1"),))
+    agg = _aggregate([e1, e2])
+    assert agg.realized_pnl_total == "7." + "9" * 99 + "2"
+    assert agg.realized_pnl_total != "8"
+    assert "e" not in agg.realized_pnl_total.lower()
+    assert agg.closed_units_total == "8"
+
+
+def test_cancellation_to_canonical_zero() -> None:
+    e1 = _entry("1", bundles=(_bundle("g1", price="150"),))  # +200
+    e2 = _entry("2", bundles=(_bundle("l1", price="50"),))  # -200
+    agg = _aggregate([e1, e2])
+    assert agg.realized_pnl_total == "0"
+    assert agg.closed_units_total == "8"
+
+
+def test_aggregate_binds_context_not_episode_membership() -> None:
+    # SCOPE: each bridge is provenance-reconstructed (session context + realized rollup), but the aggregate
+    # does NOT prove that a rolled-up realized event belongs to a specific episode of its session (no shared
+    # identifier exists to cross-check). The realized bundles share the market but are not derived from the
+    # session episodes — accepted by design.
+    entry = _entry("1")
+    agg = _aggregate([entry])
+    assert agg.market_symbol == entry.bridge.market_symbol
+    assert agg.bridge_digests == (entry.bridge.bridge_digest,)
+
+
+# --------------------------------------------------------------------------------------------------
+# Determinism / digest binding
+# --------------------------------------------------------------------------------------------------
+
+
+def test_aggregate_digest_deterministic() -> None:
+    entries = [_entry("1"), _entry("2")]
+    a1 = build_paper_session_realized_pnl_aggregate(entries, aggregate_id="agg-1", correlation_id="corr-agg")
+    a2 = build_paper_session_realized_pnl_aggregate(entries, aggregate_id="agg-1", correlation_id="corr-agg")
+    assert a1.aggregate_digest == a2.aggregate_digest
+    assert paper_session_realized_pnl_aggregate_digest(a1) == a1.aggregate_digest
+    assert paper_session_realized_pnl_aggregate_to_dict(a1)["aggregate_digest"] == a1.aggregate_digest
+
+
+def test_bridge_order_changes_aggregate_digest() -> None:
+    a, b = _entry("1"), _entry("2")
+    forward = build_paper_session_realized_pnl_aggregate([a, b], aggregate_id="agg-1", correlation_id="c")
+    reverse = build_paper_session_realized_pnl_aggregate([b, a], aggregate_id="agg-1", correlation_id="c")
+    assert forward.bridge_digests != reverse.bridge_digests
+    assert forward.aggregate_digest != reverse.aggregate_digest
+    assert forward.realized_pnl_total == reverse.realized_pnl_total  # sum order-independent
+
+
+def test_session_context_changes_aggregate_digest() -> None:
+    # Same bridge_id + same rollup events, but different session context -> different bridge -> different agg.
+    prov1 = _prov_for("1")
+    prov2 = _prov_for("2")
+    e1 = _entry_from(prov1, bridge_id="bridge-x", bundles=(_bundle("e1"),))
+    e2 = _entry_from(prov2, bridge_id="bridge-x", bundles=(_bundle("e1"),))
+    a1 = build_paper_session_realized_pnl_aggregate([e1], aggregate_id="agg-1", correlation_id="c")
+    a2 = build_paper_session_realized_pnl_aggregate([e2], aggregate_id="agg-1", correlation_id="c")
+    assert a1.aggregate_digest != a2.aggregate_digest
+
+
+def test_event_order_changes_aggregate_digest() -> None:
+    prov = _prov_for("1")
+    forward = _entry_from(prov, bridge_id="bridge-1", bundles=(_bundle("e1"), _bundle("e2", price="80")))
+    reverse = _entry_from(prov, bridge_id="bridge-1", bundles=(_bundle("e2", price="80"), _bundle("e1")))
+    a1 = build_paper_session_realized_pnl_aggregate([forward], aggregate_id="agg-1", correlation_id="c")
+    a2 = build_paper_session_realized_pnl_aggregate([reverse], aggregate_id="agg-1", correlation_id="c")
+    assert a1.source_event_digests != a2.source_event_digests
+    assert a1.aggregate_digest != a2.aggregate_digest
+
+
+# --------------------------------------------------------------------------------------------------
+# Fail-closed: input shape
+# --------------------------------------------------------------------------------------------------
+
+
+def test_naked_bridge_input_rejected() -> None:
+    # The public builder requires aggregate entries (bundles), not naked bridge artifacts.
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="entry_malformed"):
+        _aggregate([_entry("1").bridge])
+
+
+def test_wrong_typed_entry_rejected() -> None:
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="entry_malformed"):
+        _aggregate([{"not": "an-entry"}])
+
+
+def test_empty_entries_rejected() -> None:
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="entries_empty"):
+        _aggregate([])
+
+
+@pytest.mark.parametrize("bad", ["x", b"x", 5, {"e": 1}])
+def test_non_sequence_entries_rejected(bad: object) -> None:
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="entries_malformed"):
+        _aggregate(bad)  # type: ignore[arg-type]
+
+
+def test_bridge_count_exceeds_max_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(paper_session_realized_pnl_aggregate, "_MAX_BRIDGE_COUNT", 1)
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="bridge_count_exceeds_max"):
+        _aggregate([_entry("1"), _entry("2")])
+
+
+def test_duplicate_bridge_digest_rejected() -> None:
+    entry = _entry("1")
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_bridge_digest"):
+        _aggregate([entry, entry])
+
+
+def test_duplicate_bridge_id_rejected() -> None:
+    e1 = _entry("1", bridge_id="bridge-dup")
+    e2 = _entry("2", bridge_id="bridge-dup")  # distinct session/digest, same bridge id
+    assert e1.bridge.bridge_digest != e2.bridge.bridge_digest
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_bridge_id"):
+        _aggregate([e1, e2])
+
+
+def test_duplicate_session_sequence_digest_rejected() -> None:
+    prov = _prov_for("1")
+    e1 = _entry_from(prov, bridge_id="bridge-1", bundles=(_bundle("ea"),))
+    e2 = _entry_from(prov, bridge_id="bridge-2", bundles=(_bundle("eb"),))  # same session, different bridge
+    assert e1.bridge.session_sequence_digest == e2.bridge.session_sequence_digest
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_session_sequence_digest"):
+        _aggregate([e1, e2])
+
+
+def test_duplicate_source_event_across_bridges_rejected() -> None:
+    # Codex P1: two distinct bridges (distinct bridge_id + session_sequence_digest) built from the SAME
+    # realized event would double-count its realized PnL / closed units. The shared source event digest
+    # must fail closed even though the bridge/session duplicate checks pass.
+    shared = _bundle("shared-evt")
+    e1 = _entry_from(_prov_for("1"), bridge_id="bridge-1", bundles=(shared,))
+    e2 = _entry_from(_prov_for("2"), bridge_id="bridge-2", bundles=(shared,))
+    assert e1.bridge.bridge_digest != e2.bridge.bridge_digest
+    assert e1.bridge.session_sequence_digest != e2.bridge.session_sequence_digest
+    assert e1.bridge.source_event_digests == e2.bridge.source_event_digests  # same realized event
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_source_event_digest"):
+        _aggregate([e1, e2])
+
+
+def test_duplicate_economic_action_with_distinct_event_ids_rejected() -> None:
+    # Codex P1: the SAME upstream prior/fill/transition/new-state action re-emitted as two canonical events
+    # with different realized_pnl_event_id yields different event digests (source-event dedup misses) but
+    # identical fill/transition digests -> the economic action is the same and must not be summed twice.
+    prior = _long(avg="100", idn="shared")
+    fill = _fill("SELL", "4", "150", idn="shared")
+    transition, new_state = apply_paper_fill_to_position(
+        prior,
+        fill,
+        transition_id="rtrans-shared",
+        new_position_state_id="rnewpos-shared",
+        correlation_id="corr-rapply",
+    )
+    ev_a = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-a", correlation_id="corr-revt"
+    )
+    ev_b = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-b", correlation_id="corr-revt"
+    )
+    bundle_a = PaperRealizedPnlRollupInput(
+        event=ev_a, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    bundle_b = PaperRealizedPnlRollupInput(
+        event=ev_b, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    assert ev_a.realized_pnl_event_digest != ev_b.realized_pnl_event_digest  # distinct source event digests
+    assert ev_a.fill_simulation_result_digest == ev_b.fill_simulation_result_digest  # same economic action
+    e1 = _entry_from(_prov_for("1"), bridge_id="bridge-1", bundles=(bundle_a,))
+    e2 = _entry_from(_prov_for("2"), bridge_id="bridge-2", bundles=(bundle_b,))
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_fill_simulation_result_digest"):
+        _aggregate([e1, e2])
+
+
+def test_stateful_rollup_entries_second_read_action_identity_bypass_rejected() -> None:
+    # Codex P1 (TOCTOU double-read): two entries genuinely share ONE economic action (same
+    # prior/fill/transition) but carry distinct realized_pnl_event_ids -> distinct source_event_digests (so
+    # the exact source-event dedup misses) while their fill/transition identities are identical (so the
+    # action dedup MUST fire). A vulnerable aggregate reads entry.rollup_entries twice: the genuine first
+    # read passes bridge reconstruction, then a stateful second read publishes a FAKE fill digest that
+    # bypasses the action dedup and double-counts realized PnL (->400). The snapshotting aggregate reads the
+    # sequence exactly once, sees only the genuine action, and rejects the duplicate fill-result digest.
+    prior = _long(avg="100", idn="toctou")
+    fill = _fill("SELL", "4", "150", idn="toctou")
+    transition, new_state = apply_paper_fill_to_position(
+        prior,
+        fill,
+        transition_id="rtrans-toctou",
+        new_position_state_id="rnewpos-toctou",
+        correlation_id="corr-rapply",
+    )
+    ev_a = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-a", correlation_id="corr-revt"
+    )
+    ev_b = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-b", correlation_id="corr-revt"
+    )
+    bundle_a = PaperRealizedPnlRollupInput(
+        event=ev_a, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    bundle_b = PaperRealizedPnlRollupInput(
+        event=ev_b, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    # Genuine first entry (real action, real bundle).
+    e1 = _entry_from(_prov_for("1"), bridge_id="bridge-1", bundles=(bundle_a,))
+    # Second entry: bridge built from the GENUINE bundle_b (its source_event_digests bind ev_b), but the
+    # input carries a stateful rollup_entries whose SECOND read swaps in a fake-identity event.
+    prov2 = _prov_for("2")
+    bridge2 = build_paper_session_realized_pnl_bridge(
+        prov2, (bundle_b,), bridge_id="bridge-2", correlation_id="corr-bridge"
+    )
+    # replace() does NOT recompute the stored self-digest, so the fake event keeps ev_b's genuine
+    # realized_pnl_event_digest -> a stored-field-only cross-check would be fooled, but a RECOMPUTE is not.
+    fake_event = replace(ev_b, fill_simulation_result_digest="f" * 64, position_transition_digest="e" * 64)
+    assert fake_event.realized_pnl_event_digest == ev_b.realized_pnl_event_digest
+    assert fake_event.fill_simulation_result_digest != ev_b.fill_simulation_result_digest
+    fake_bundle = replace(bundle_b, event=fake_event)
+    stateful = _StatefulRollupEntries(first=(bundle_b,), rest=(fake_bundle,))
+    e2 = PaperSessionRealizedPnlAggregateInput(bridge=bridge2, session_input=prov2, rollup_entries=stateful)
+    # Sanity: genuine actions truly collide on fill identity but not on source-event digest.
+    assert ev_a.realized_pnl_event_digest != ev_b.realized_pnl_event_digest
+    assert ev_a.fill_simulation_result_digest == ev_b.fill_simulation_result_digest
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_fill_simulation_result_digest"):
+        build_paper_session_realized_pnl_aggregate([e1, e2], aggregate_id="agg-1", correlation_id="corr-agg")
+    # The repaired aggregate consumed the stateful sequence EXACTLY once (only the genuine view was seen).
+    assert stateful.reads == 1
+
+
+def test_stateful_realized_event_attribute_toc_tou_identity_bypass_rejected() -> None:
+    # Codex P1 (event-object TOCTOU): two entries genuinely share ONE economic action (same fill +
+    # transition) with distinct event ids -> distinct source_event_digests (source-event dedup misses), so
+    # the action dedup MUST fire on the shared fill/transition. Entry-2's event is a stateful
+    # PaperRealizedPnlEvent that serializes GENUINE during digest/bridge verification but exposes FAKE
+    # unique fill/transition digests on a bare later attribute read. A multi-read aggregate would publish
+    # the fake identities and double-count (->400). The payload-snapshot aggregate derives digest AND
+    # identity from one canonical serialization, sees only the genuine action, and rejects the duplicate.
+    prior = _long(avg="100", idn="evttoctou")
+    fill = _fill("SELL", "4", "150", idn="evttoctou")
+    transition, new_state = apply_paper_fill_to_position(
+        prior,
+        fill,
+        transition_id="rtrans-evttoctou",
+        new_position_state_id="rnewpos-evttoctou",
+        correlation_id="corr-rapply",
+    )
+    ev_a = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-a", correlation_id="corr-revt"
+    )
+    ev_b = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-b", correlation_id="corr-revt"
+    )
+    # Genuine fill/transition are TRULY shared across the two distinct events.
+    assert ev_a.fill_simulation_result_digest == ev_b.fill_simulation_result_digest
+    assert ev_a.position_transition_digest == ev_b.position_transition_digest
+    assert ev_a.realized_pnl_event_digest != ev_b.realized_pnl_event_digest
+
+    bundle_a = PaperRealizedPnlRollupInput(
+        event=ev_a, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    bundle_b = PaperRealizedPnlRollupInput(
+        event=ev_b, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    e1 = _entry_from(_prov_for("1"), bridge_id="bridge-1", bundles=(bundle_a,))
+    prov2 = _prov_for("2")
+    bridge2 = build_paper_session_realized_pnl_bridge(
+        prov2, (bundle_b,), bridge_id="bridge-2", correlation_id="corr-bridge"
+    )
+    fake_fill = "f" * 64
+    fake_transition = "e" * 64
+    adv_event = _make_stateful_event(ev_b, fake_fill=fake_fill, fake_transition=fake_transition)
+    adv_bundle = PaperRealizedPnlRollupInput(
+        event=adv_event, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    e2 = PaperSessionRealizedPnlAggregateInput(bridge=bridge2, session_input=prov2, rollup_entries=(adv_bundle,))
+
+    # Non-vacuous: a SEPARATE probe proves the adversarial event diverges across reads. Inside a canonical
+    # serialization (schema_version read first) the digest reads genuine; a bare later read returns the fake.
+    probe = _make_stateful_event(ev_b, fake_fill=fake_fill, fake_transition=fake_transition)
+    _ = probe.schema_version
+    first_read = probe.fill_simulation_result_digest
+    second_read = probe.fill_simulation_result_digest
+    assert first_read == ev_b.fill_simulation_result_digest  # genuine while "inside" a serialization
+    assert second_read == fake_fill  # fake on the unguarded later (identity) read
+    assert first_read != second_read
+
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_fill_simulation_result_digest"):
+        build_paper_session_realized_pnl_aggregate([e1, e2], aggregate_id="agg-1", correlation_id="corr-agg")
+
+
+def test_split_hash_str_identity_values_are_canonicalized_before_dedup() -> None:
+    # Codex P1 (non-canonical identity / custom-hash bypass): two entries share ONE economic action (same
+    # fill + transition) with distinct event ids -> distinct source_event_digests, so the action dedup MUST
+    # fire on the shared fill/transition. Each event's fill+transition digests are content-equal _SplitHashStr
+    # instances with DIFFERENT salts (equal str content, unequal hash). Canonical JSON / bridge provenance see
+    # identical content and pass; an aggregate that dedups on the shallow payload objects treats the two as
+    # distinct (different hash buckets) and double-counts (->400). The canonicalizing aggregate round-trips
+    # each payload to exact plain str and rejects the duplicate.
+    prior = _long(avg="100", idn="splithash")
+    fill = _fill("SELL", "4", "150", idn="splithash")
+    transition, new_state = apply_paper_fill_to_position(
+        prior,
+        fill,
+        transition_id="rtrans-splithash",
+        new_position_state_id="rnewpos-splithash",
+        correlation_id="corr-rapply",
+    )
+    ev_a = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-a", correlation_id="corr-revt"
+    )
+    ev_b = compute_paper_realized_pnl_event(
+        prior, fill, transition, new_state, realized_pnl_event_id="evt-b", correlation_id="corr-revt"
+    )
+    genuine_fill = str(ev_a.fill_simulation_result_digest)
+    genuine_transition = str(ev_a.position_transition_digest)
+    assert genuine_fill == str(ev_b.fill_simulation_result_digest)  # truly shared economic action
+    adv_a = replace(
+        ev_a,
+        fill_simulation_result_digest=_SplitHashStr(genuine_fill, 1),
+        position_transition_digest=_SplitHashStr(genuine_transition, 1),
+    )
+    adv_b = replace(
+        ev_b,
+        fill_simulation_result_digest=_SplitHashStr(genuine_fill, 2),
+        position_transition_digest=_SplitHashStr(genuine_transition, 2),
+    )
+
+    # Non-vacuous: content equal, hash NOT equal; stored event digests unchanged (provenance intact).
+    assert str(adv_a.fill_simulation_result_digest) == str(adv_b.fill_simulation_result_digest)  # CONTENT_EQUAL
+    assert hash(adv_a.fill_simulation_result_digest) != hash(adv_b.fill_simulation_result_digest)  # HASH_NOT_EQUAL
+    assert adv_a.realized_pnl_event_digest == ev_a.realized_pnl_event_digest  # DIGEST_A_UNCHANGED
+    assert adv_b.realized_pnl_event_digest == ev_b.realized_pnl_event_digest  # DIGEST_B_UNCHANGED
+
+    bundle_a = PaperRealizedPnlRollupInput(
+        event=adv_a, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    bundle_b = PaperRealizedPnlRollupInput(
+        event=adv_b, prior_state=prior, fill_result=fill, transition=transition, new_position_state=new_state
+    )
+    # Bridges build (provenance/digest unaffected by the custom hash), with distinct event digests.
+    e1 = _entry_from(_prov_for("1"), bridge_id="bridge-1", bundles=(bundle_a,))
+    e2 = _entry_from(_prov_for("2"), bridge_id="bridge-2", bundles=(bundle_b,))
+    assert e1.bridge.source_event_digests != e2.bridge.source_event_digests
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_fill_simulation_result_digest"):
+        build_paper_session_realized_pnl_aggregate([e1, e2], aggregate_id="agg-1", correlation_id="corr-agg")
+
+    # The canonicalized aggregate output identity values are exact plain str (not the _SplitHashStr subclass).
+    single = _entry_from(_prov_for("9"), bridge_id="bridge-9", bundles=(bundle_a,))
+    agg = build_paper_session_realized_pnl_aggregate([single], aggregate_id="agg-1", correlation_id="corr-agg")
+    assert type(agg.fill_simulation_result_digests[0]) is str
+    assert agg.fill_simulation_result_digests[0] == genuine_fill
+    assert type(agg.position_transition_digests[0]) is str
+    assert agg.position_transition_digests[0] == genuine_transition
+
+
+def test_duplicate_realized_event_id_across_bridges_rejected() -> None:
+    # Distinct economic actions (different price -> different fill/transition/event digests) but the SAME
+    # realized_pnl_event_id across two bridges must fail closed.
+    e1 = _entry("1", bundles=(_bundle("dup-id", price="150"),))
+    e2 = _entry("2", bundles=(_bundle("dup-id", price="80"),))
+    assert e1.bridge.source_event_digests != e2.bridge.source_event_digests
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="duplicate_source_event_id"):
+        _aggregate([e1, e2])
+
+
+def test_market_symbol_mismatch_rejected() -> None:
+    btc = _entry("1", market_symbol="BTC-PERPETUAL")
+    eth = _entry("2", market_symbol="ETH-PERPETUAL")
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="market_symbol_mismatch"):
+        _aggregate([btc, eth])
+
+
+# --------------------------------------------------------------------------------------------------
+# Fail-closed: provenance
+# --------------------------------------------------------------------------------------------------
+
+
+def test_bridge_digest_mismatch_rejected() -> None:
+    forged = _forge_bridge(_entry("1"), reseal=False, bridge_digest="d" * 64)
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="bridge_digest_mismatch"):
+        _aggregate([forged])
+
+
+def test_coordinated_resealed_bridge_rejected() -> None:
+    # Bridge totals mutated and the bridge digest recomputed (self-consistent), but session/rollup inputs
+    # are the genuine originals; reconstruction yields the canonical bridge (realized 200) -> mismatch.
+    forged = _forge_bridge(_entry("1"), realized_pnl_total="999", closed_units_total="999")
+    assert paper_session_realized_pnl_bridge_digest(forged.bridge) == forged.bridge.bridge_digest  # self-consistent
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="bridge_inconsistent"):
+        _aggregate([forged])
+
+
+def test_wrong_session_provenance_rejected() -> None:
+    entry = _entry("1")
+    other = _prov_for("2")
+    swapped = replace(entry, session_input=other)  # reconstruction binds a different session digest
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="bridge_inconsistent"):
+        _aggregate([swapped])
+
+
+def test_wrong_rollup_provenance_rejected() -> None:
+    entry = _entry("1")
+    swapped = replace(entry, rollup_entries=(_bundle("z9", price="80"),))  # reconstruction binds a different rollup
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="bridge_inconsistent"):
+        _aggregate([swapped])
+
+
+def test_coordinated_resealed_session_rejected_through_aggregate() -> None:
+    entry = _entry("1")
+    prov = entry.session_input
+    genuine = prov.session_sequence
+    fake = "c" * 64
+    forged_session = replace(
+        genuine,
+        episode_count=2,
+        episode_run_digests=(genuine.episode_run_digests[0], fake),
+        last_episode_run_digest=fake,
+        computed_episode_count=2,
+    )
+    forged_session = replace(
+        forged_session, paper_session_sequence_digest=paper_session_sequence_result_digest(forged_session)
+    )
+    bad = replace(entry, session_input=replace(prov, session_sequence=forged_session))
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="bridge_not_reproducible"):
+        _aggregate([bad])
+
+
+def test_coordinated_resealed_event_rejected_through_aggregate() -> None:
+    entry = _entry("1")
+    bundle = entry.rollup_entries[0]
+    forged_event = replace(bundle.event, realized_pnl="999")
+    forged_event = replace(forged_event, realized_pnl_event_digest=paper_realized_pnl_event_digest(forged_event))
+    forged_bundle = replace(bundle, event=forged_event)
+    bad = replace(entry, rollup_entries=(forged_bundle,))
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="bridge_not_reproducible"):
+        _aggregate([bad])
+
+
+def test_wrong_typed_session_member_rejected_through_aggregate() -> None:
+    entry = _entry("1")
+    bad = replace(entry, session_input={"not": "a-session"})  # type: ignore[arg-type]
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="bridge_not_reproducible"):
+        _aggregate([bad])
+
+
+def test_wrong_typed_rollup_entry_rejected_through_aggregate() -> None:
+    entry = _entry("1")
+    bad = replace(entry, rollup_entries=({"not": "a-bundle"},))  # type: ignore[arg-type]
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="bridge_not_reproducible"):
+        _aggregate([bad])
+
+
+@pytest.mark.parametrize("bad", [5, "x", b"x", {"k": "v"}])
+def test_non_sequence_rollup_entries_rejected(bad: object) -> None:
+    # The single-read snapshot guards the container shape: a non-Sequence (or str/bytes) rollup_entries
+    # fails closed with a typed error instead of materializing into something the builder would misread.
+    entry = replace(_entry("1"), rollup_entries=bad)  # type: ignore[arg-type]
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="rollup_entries_malformed"):
+        _aggregate([entry])
+
+
+# --------------------------------------------------------------------------------------------------
+# Fail-closed: aggregate-level guards
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("aggregate_id", "live_order"), ("aggregate_id", "bist"), ("correlation_id", "scheduler")],
+)
+def test_forbidden_token_in_ids_rejected(field: str, value: str) -> None:
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="scope_violation"):
+        _aggregate([_entry("1")], **{field: value})
+
+
+def test_forbidden_token_in_metadata_rejected() -> None:
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="scope_violation"):
+        _aggregate([_entry("1")], metadata={"note": "place_order"})
+
+
+def test_malformed_metadata_rejected() -> None:
+    with pytest.raises(PaperSessionRealizedPnlAggregateError, match="metadata_malformed"):
+        _aggregate([_entry("1")], metadata={"k": 5})  # type: ignore[dict-item]
+
+
+def test_safe_market_data_terms_allowed() -> None:
+    agg = _aggregate([_entry("1")], metadata={"src": "order_book"})
+    assert agg.metadata == (("src", "order_book"),)
+
+
+# --------------------------------------------------------------------------------------------------
+# Immutability / no-leak / no-mutation
+# --------------------------------------------------------------------------------------------------
+
+
+def test_inputs_not_mutated() -> None:
+    entries = [_entry("1"), _entry("2")]
+    bridges_before = [e.bridge.bridge_digest for e in entries]
+    sessions_before = [e.session_input.session_sequence.paper_session_sequence_digest for e in entries]
+    episodes_before = [tuple(ep.episode_run_digest for ep in e.session_input.episodes) for e in entries]
+    events_before = [tuple(b.event.realized_pnl_event_digest for b in e.rollup_entries) for e in entries]
+    build_paper_session_realized_pnl_aggregate(entries, aggregate_id="agg-1", correlation_id="c")
+    assert [e.bridge.bridge_digest for e in entries] == bridges_before
+    assert [e.session_input.session_sequence.paper_session_sequence_digest for e in entries] == sessions_before
+    assert [tuple(ep.episode_run_digest for ep in e.session_input.episodes) for e in entries] == episodes_before
+    assert [tuple(b.event.realized_pnl_event_digest for b in e.rollup_entries) for e in entries] == events_before
+
+
+def test_output_immutable() -> None:
+    agg = _aggregate()
+    with pytest.raises(FrozenInstanceError):
+        agg.realized_pnl_total = "1"  # type: ignore[misc]
+
+
+def test_dict_keys_and_safe_flags_no_forbidden_value_fields() -> None:
+    payload = paper_session_realized_pnl_aggregate_to_dict(_aggregate())
+    assert set(payload) == _EXPECTED_KEYS
+    assert payload["paper_only"] is True
+    assert payload["aggregate_computed"] is True
+    assert payload["gross_only"] is True
+    for flag in _SAFE_FALSE_FLAGS:
+        assert payload[flag] is False
+    assert _FORBIDDEN_VALUE_KEYS.isdisjoint(payload.keys())
+
+
+def test_module_imports_only_validation_layer() -> None:
+    source = Path(paper_session_realized_pnl_aggregate.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None and node.level == 0:
+            imported.append(node.module)
+    forbidden_prefixes = (
+        "crypto_core.venue",
+        "crypto_core.execution",
+        "crypto_core.runtime",
+        "crypto_core.service",
+        "crypto_core.session",
+        "crypto_core.data",
+        "crypto_core.portfolio",
+        "crypto_core.orchestrator",
+        "crypto_core.temporal",
+        "crypto_core.audit",
+    )
+    for module in imported:
+        for prefix in forbidden_prefixes:
+            assert module != prefix and not module.startswith(prefix + "."), f"forbidden import: {module}"
+        if module.startswith("crypto_core"):
+            assert module.startswith("crypto_core.validation"), f"unexpected crypto_core import: {module}"
