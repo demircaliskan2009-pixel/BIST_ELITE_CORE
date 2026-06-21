@@ -18,7 +18,11 @@ branch only. Use **Codex Pursue Goal only** for bounded single-goal GitHub/CI lo
 sync, PR closeout/status, review-thread disposition planning, `gh` state `PASS/FAIL/BLOCKED`, authorized
 merge/post-merge verify) — **never** for complex implementation, design, digest/provenance architecture,
 ambiguous slicing, or unscoped multi-file repair. Setup/doctrine changes go in a separate `chore/<scope>-prN`
-PR, never mixed into a feature PR.
+PR, never mixed into a feature PR. **Deep Research** is the external/current-fact + architecture-benchmark
+tool (and combined repo+external review in the GitHub connector chat) — advisory only, never merge authority
+and never a safety-gate waiver; ChatGPT decides when it runs and Claude only **recommends** it
+(`DEEP_RESEARCH_REQUIRED`) when blocked by a current/external fact. Full protocol:
+`docs/crypto_core/deep_research_protocol.md` (`docs/crypto_core/agent_workflow.md` §19).
 
 ## Gate First
 

@@ -22,6 +22,16 @@
   complex implementation, design, digest/provenance architecture, or unscoped multi-file repair);
   **GitHub connector / `gh`** = read-only source-of-truth state gate. Durable, evidence-backed lessons live
   in `docs/crypto_core/agent_lessons.md`; the controlled self-improvement loop is `agent_workflow.md` §17.
+- Deep Research is the external/current-fact + architecture-benchmark tool (and, in the GitHub
+  connector chat, combined repo+external review): use it for exchange/API/funding/fees/limits/
+  microstructure/custody/regulation/security facts, Deribit/readiness/live/shadow decisions, PRD/
+  roadmap-vs-external-benchmark questions, overengineering detection, and paper/shadow/live DONE gates;
+  do NOT use it for local repo state, CI polling, merge/readiness source-of-truth, local repair, or to
+  replace Codex review. ChatGPT decides when it runs; Claude only recommends it (DEEP_RESEARCH_REQUIRED)
+  when blocked by a current/external fact. It is advisory only — never merge authority, never a
+  safety-gate waiver; in connector chat it must separate REPO_EVIDENCE / EXTERNAL_EVIDENCE / INFERENCE /
+  UNKNOWN and never infer live repo state without GitHub evidence. Full protocol:
+  `docs/crypto_core/deep_research_protocol.md` (`agent_workflow.md` section 19).
 - Digest-boundary rule (recurring P1 class): any consumer of a digest-carrying dataclass must
   recompute the upstream digest via the public serializer (digest field removed, canonical JSON,
   SHA-256) and reject mismatch before READY/ADMITTED/ACCEPTED. Tests must cover a tampered field.

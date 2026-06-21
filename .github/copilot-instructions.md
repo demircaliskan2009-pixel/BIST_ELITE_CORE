@@ -27,6 +27,15 @@
 - Codex Pursue Goal is for bounded single-goal GitHub/CI loops only (CI polling, repo/branch sync, PR
   closeout/status, authorized merge/post-merge verify) — never complex implementation, design, or
   digest/provenance architecture. MCP is opt-in/manual; none is enabled by default.
+- Deep Research is the external/current-fact + architecture-benchmark tool (and, in the GitHub
+  connector chat, combined repo+external review): use it for exchange/API/funding/fees/limits/
+  microstructure/custody/regulation/security facts, Deribit/readiness/live/shadow decisions, PRD/
+  roadmap-vs-external-benchmark questions, overengineering detection, and paper/shadow/live DONE gates;
+  not for local repo state, CI polling, merge/readiness source-of-truth, local repair, or replacing
+  Codex review. It is advisory only — never merge authority, never a safety-gate waiver; in connector
+  chat it separates REPO_EVIDENCE / EXTERNAL_EVIDENCE / INFERENCE / UNKNOWN and never infers live repo
+  state without GitHub evidence. Full protocol: `docs/crypto_core/deep_research_protocol.md`
+  (`docs/crypto_core/agent_workflow.md` section 19).
 
 ## AUTO MODEL FITNESS RULE
 

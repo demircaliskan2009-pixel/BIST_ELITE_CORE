@@ -28,6 +28,7 @@ context — never implemented here.
 | **Codex** | **Adversarial P1/P2 reviewer** — hidden-bug / exploit hunting, digest/schema/API-contract review, provenance/evidence-chain audit. **Read-only by default**; patches only when patching is **explicitly authorized and scoped**. Runs **asynchronously**; never merges. |
 | **Codex Pursue Goal** | **Bounded single-goal terminal loop** for mechanical GitHub/CI state. Use **only** for the cases in §2a. |
 | **GitHub connector / gh-native fallback** | **Source-of-truth GitHub state gate** — PR/CI/thread/review/final merge-readiness audit. **Read-only** unless an action is explicitly authorized. |
+| **Deep Research** | **External / current-fact + architecture-benchmark research** (and, in the GitHub connector chat, combined repo+external review). Advisory only — never merge authority, never a safety-gate waiver. ChatGPT decides when it is used; full protocol in §19 / `docs/crypto_core/deep_research_protocol.md`. |
 
 Strongest reasoning (Opus xhigh) is reserved for contract/digest/fail-closed/review-blocker work;
 status/polling/mechanical steps use the cheapest sufficient lane.
@@ -248,6 +249,44 @@ enabled by default (`.vscode/mcp.json` declares no servers); any future server m
 and explicitly approved. Terminal/git/`gh`/pytest/ruff are the source of truth; editor extensions are helpers
 (`.vscode/extensions.json` lists recommendations only and installs/uninstalls nothing).
 
+## 19. Deep Research & GitHub Connector Protocol
+
+Deep Research is the **external / current-fact + architecture-benchmark** tool; full protocol in
+`docs/crypto_core/deep_research_protocol.md`. Summary (the doc binds on conflict):
+
+- **Use for:** exchange/API/Deribit docs, rate limits, fee/funding/margin/liquidation behavior;
+  legal/regulatory/custody/security facts; competitor/benchmark research (Freqtrade, Hummingbot,
+  OctoBot, Jesse, institutional patterns — lessons only, no blind copy); academic/microstructure /
+  safe-execution / readiness-gate research; PRD/roadmap alignment vs external benchmarks;
+  overengineering detection (artifact proliferation vs end-to-end wiring); defining paper-trading DONE
+  / shadow DONE / live-readiness gates.
+- **Do NOT use for:** local repo state, CI polling, PR merge/readiness source-of-truth, local
+  implementation repair, routine unit-test/ruff debugging, branch hygiene, replacing Codex P1/P2
+  review, or replacing the GitHub-connector final gate.
+- **Combined repo+external review (connector chat):** cite both external sources and repo evidence;
+  label every statement as exactly one of `REPO_EVIDENCE` / `EXTERNAL_EVIDENCE` / `INFERENCE` /
+  `UNKNOWN`; never infer live repo state without GitHub evidence; never mutate repo/PRs unless
+  separately authorized; distinguish official docs/papers from weak sources; output bounded PR-level
+  recommendations, not vague strategy.
+- **Routing:** ChatGPT decides whether Deep Research is needed; Claude does not call it but may
+  **recommend** it (`DEEP_RESEARCH_REQUIRED` + the exact question) when blocked by a current/external
+  fact; Codex stays adversarial repo audit; Codex Pursue Goal stays the terminal `gh`/CI loop; the
+  GitHub connector stays the source-of-truth state gate; Deep Research is research/advisory, not merge
+  authority.
+- **Triggers:** `DEEP_RESEARCH_REQUIRED` for exchange/API/funding/fees/limits/microstructure/
+  custody/regulation/security, Deribit/readiness/live/shadow decisions, PRD/roadmap-vs-external-
+  benchmark questions, overengineering-vs-underbuilding decisions, top-bot/framework comparison, and
+  defining paper/shadow/live DONE gates. `DEEP_RESEARCH_NOT_REQUIRED` for pure local implementation,
+  tests/ruff/CI, PR/check/thread status, repo-only state, and already-documented internal doctrine.
+- **Output contract:** `RESULT / VERDICT / SOURCE_QUALITY / REPO_EVIDENCE / EXTERNAL_EVIDENCE /
+  WHAT_IS_PROVEN / WHAT_IS_INFERRED / WHAT_IS_UNKNOWN / OVERENGINEERING_AUDIT / PRD_ALIGNMENT /
+  NEXT_PR_RECOMMENDATIONS / RISKS_TO_AVOID / DEEP_RESEARCH_FOLLOWUP_NEEDED`.
+- **Misuse prevention (hard):** Deep Research must never justify skipping tests/CI/audit, authorize
+  live/private API/order routing or any §16 forbidden surface, weaken a §3 fail-closed gate, replace
+  explicit per-PR merge authorization, or produce broad PRD rewrites unless the controller asks.
+  External best practices that conflict with repo safety doctrine are **proposals only** — the stricter
+  safety rule wins.
+
 ---
 
 *v4.1 (2026-06-15): rewrote the model-role model to the current three-role protocol — Claude =
@@ -263,3 +302,9 @@ and setup-PR-separation hard rules (§3); the controlled self-improvement loop (
 setup changes (this PR, docs/config only): neutralized `.vscode/mcp.json` (no servers), added
 `.vscode/extensions.json`, made `.cursor/rules/prdv3-constitution.mdc` historical/non-applying, and added the
 read-only `scripts/crypto_core/audit_agent_setup.ps1`. No product code touched.*
+
+*v4.3 (2026-06-21): added the Deep Research & GitHub Connector protocol — a Deep Research role row in §2,
+a new §19 summary, and the full companion `docs/crypto_core/deep_research_protocol.md` (role, combined
+repo+external review with the `REPO_EVIDENCE`/`EXTERNAL_EVIDENCE`/`INFERENCE`/`UNKNOWN` separation,
+routing, triggers, output contract, and misuse prevention). Deep Research is advisory only — never merge
+authority, never a safety-gate waiver. Docs/config only; no product code touched.*
