@@ -209,7 +209,9 @@ ChatGPT selects exactly one bounded slice that maximizes edge-to-money product v
 PaperSleeve → Promotion → Allocator → ExecutionSim`, with: one coherent theme · bounded named files ·
 independent-safe · testable · current repo/PR state proven · no hard-gate violation · paper-first (no
 live/order/scheduler stage). Prefer the smallest additive change that unlocks the next bridge; one open PR
-only.
+only. Current integration-first slice sequence (paper-trading DONE definitions + next-PR order +
+overengineering guardrails) is the addendum `docs/crypto_core/paper_trading_phase_map.md` (PRDV4 remains
+the authority).
 
 ## 16. Forbidden Scope
 
