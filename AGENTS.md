@@ -28,9 +28,13 @@
   roadmap-vs-external-benchmark questions, overengineering detection, and paper/shadow/live DONE gates;
   do NOT use it for local repo state, CI polling, merge/readiness source-of-truth, local repair, or to
   replace Codex review. ChatGPT decides when it runs; Claude only recommends it (DEEP_RESEARCH_REQUIRED)
-  when blocked by a current/external fact. It is advisory only — never merge authority, never a
-  safety-gate waiver; in connector chat it must separate REPO_EVIDENCE / EXTERNAL_EVIDENCE / INFERENCE /
-  UNKNOWN and never infer live repo state without GitHub evidence. Full protocol:
+  when blocked by a current/external fact. It is advisory only — strictly read-only, never an
+  executor lane, never merge authority, never a safety-gate waiver. It never mutates repo or GitHub state
+  (branch/file/commit/push/PR/comment/thread-resolve/workflow-rerun/merge/auto-merge), even when the
+  underlying work is authorized; it may recommend a mutation task but the controller routes any
+  authorized mutation to Claude/gh, the GitHub connector, or Codex. In connector chat it must separate
+  REPO_EVIDENCE / EXTERNAL_EVIDENCE / INFERENCE / UNKNOWN and never infer live repo state without GitHub
+  evidence. Full protocol:
   `docs/crypto_core/deep_research_protocol.md` (`agent_workflow.md` section 19).
 - Digest-boundary rule (recurring P1 class): any consumer of a digest-carrying dataclass must
   recompute the upstream digest via the public serializer (digest field removed, canonical JSON,

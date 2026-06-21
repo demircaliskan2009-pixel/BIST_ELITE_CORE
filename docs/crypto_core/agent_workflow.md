@@ -28,7 +28,7 @@ context — never implemented here.
 | **Codex** | **Adversarial P1/P2 reviewer** — hidden-bug / exploit hunting, digest/schema/API-contract review, provenance/evidence-chain audit. **Read-only by default**; patches only when patching is **explicitly authorized and scoped**. Runs **asynchronously**; never merges. |
 | **Codex Pursue Goal** | **Bounded single-goal terminal loop** for mechanical GitHub/CI state. Use **only** for the cases in §2a. |
 | **GitHub connector / gh-native fallback** | **Source-of-truth GitHub state gate** — PR/CI/thread/review/final merge-readiness audit. **Read-only** unless an action is explicitly authorized. |
-| **Deep Research** | **External / current-fact + architecture-benchmark research** (and, in the GitHub connector chat, combined repo+external review). Advisory only — never merge authority, never a safety-gate waiver. ChatGPT decides when it is used; full protocol in §19 / `docs/crypto_core/deep_research_protocol.md`. |
+| **Deep Research** | **External / current-fact + architecture-benchmark research** (and, in the GitHub connector chat, combined repo+external review). **Strictly read-only / advisory** — never an executor lane, never merge authority, never a safety-gate waiver; it may recommend a mutation task but never executes one (the controller routes authorized mutations to Claude/`gh`, the connector, or Codex). ChatGPT decides when it is used; full protocol in §19 / `docs/crypto_core/deep_research_protocol.md`. |
 
 Strongest reasoning (Opus xhigh) is reserved for contract/digest/fail-closed/review-blocker work;
 status/polling/mechanical steps use the cheapest sufficient lane.
@@ -265,14 +265,17 @@ Deep Research is the **external / current-fact + architecture-benchmark** tool; 
   review, or replacing the GitHub-connector final gate.
 - **Combined repo+external review (connector chat):** cite both external sources and repo evidence;
   label every statement as exactly one of `REPO_EVIDENCE` / `EXTERNAL_EVIDENCE` / `INFERENCE` /
-  `UNKNOWN`; never infer live repo state without GitHub evidence; never mutate repo/PRs unless
-  separately authorized; distinguish official docs/papers from weak sources; output bounded PR-level
+  `UNKNOWN`; never infer live repo state without GitHub evidence; **Deep Research is strictly read-only
+  — it never mutates repo/GitHub state (branch/file/commit/push/PR/comment/thread-resolve/workflow-rerun/
+  merge/auto-merge), even when the underlying work is authorized**; connector repo evidence is read-only
+  research input only; distinguish official docs/papers from weak sources; output bounded PR-level
   recommendations, not vague strategy.
 - **Routing:** ChatGPT decides whether Deep Research is needed; Claude does not call it but may
   **recommend** it (`DEEP_RESEARCH_REQUIRED` + the exact question) when blocked by a current/external
   fact; Codex stays adversarial repo audit; Codex Pursue Goal stays the terminal `gh`/CI loop; the
-  GitHub connector stays the source-of-truth state gate; Deep Research is research/advisory, not merge
-  authority.
+  GitHub connector stays the source-of-truth state gate; Deep Research is research/advisory, **never an
+  executor lane and not merge authority** — any authorized mutation is routed by the controller to
+  Claude/`gh`, the GitHub connector, or Codex, never executed by Deep Research.
 - **Triggers:** `DEEP_RESEARCH_REQUIRED` for exchange/API/funding/fees/limits/microstructure/
   custody/regulation/security, Deribit/readiness/live/shadow decisions, PRD/roadmap-vs-external-
   benchmark questions, overengineering-vs-underbuilding decisions, top-bot/framework comparison, and
@@ -306,5 +309,7 @@ read-only `scripts/crypto_core/audit_agent_setup.ps1`. No product code touched.*
 *v4.3 (2026-06-21): added the Deep Research & GitHub Connector protocol — a Deep Research role row in §2,
 a new §19 summary, and the full companion `docs/crypto_core/deep_research_protocol.md` (role, combined
 repo+external review with the `REPO_EVIDENCE`/`EXTERNAL_EVIDENCE`/`INFERENCE`/`UNKNOWN` separation,
-routing, triggers, output contract, and misuse prevention). Deep Research is advisory only — never merge
-authority, never a safety-gate waiver. Docs/config only; no product code touched.*
+routing, triggers, output contract, and misuse prevention). Deep Research is **strictly read-only /
+advisory** — never an executor lane, never merge authority, never a safety-gate waiver; it may recommend
+a mutation task but never executes one (the controller routes authorized mutations to Claude/`gh`, the
+GitHub connector, or Codex). Docs/config only; no product code touched.*

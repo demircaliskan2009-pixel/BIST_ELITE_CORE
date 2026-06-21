@@ -5,8 +5,9 @@
 > and live repo/PR evidence. Companion to `docs/crypto_core/agent_workflow.md` (§19 points here) and
 > `docs/crypto_core/agent_lessons.md`. Canonical doctrine precedence is unchanged: `AGENTS.md` →
 > `agent_workflow.md` → `.codex/skills/crypto-core-max-safe/SKILL.md` → `CLAUDE.md`; on conflict the
-> **stricter safety rule wins**. Deep Research is **research/advisory only** — it never authorizes a
-> merge, a live/order/scheduler surface, or a weakening of any fail-closed gate. This document contains
+> **stricter safety rule wins**. Deep Research is **strictly read-only / research/advisory only** — it
+> never mutates repo or GitHub state (even when the underlying work is authorized), and never authorizes
+> a merge, a live/order/scheduler surface, or a weakening of any fail-closed gate. This document contains
 > **no secrets, credentials, API keys, or live-trading instructions**.
 
 ## 1. Why Deep Research exists here
@@ -57,8 +58,16 @@ repo+external architecture review** under these rules:
   4. `UNKNOWN` — not provable from either side (fail-closed; never upgraded to a fact).
 - **Never infer live repo state without GitHub evidence.** No repo/PR/CI claim from memory or from
   external reasoning alone.
-- **No mutation.** Deep Research does not create branches/commits/PRs, edit files, resolve threads, or
-  merge unless that action is **separately and explicitly authorized** by the controller/user.
+- **Strictly read-only / advisory — no repo or GitHub mutation, ever.** Deep Research must never create
+  branches, edit files, commit, push, open PRs, close/reopen PRs, comment on PRs, resolve threads,
+  rerun workflows, merge, enable auto-merge, or otherwise mutate repo/GitHub state — **even when a human
+  or controller authorizes the underlying work.** It may *recommend* a mutation task or produce a
+  proposed slice; it must not execute it. Authorization to implement or mutate repo state is routed
+  **outside Deep Research** by the ChatGPT controller to the appropriate executor lane (Claude local
+  agent / `gh` for implementation / repair / closeout / merge / post-merge verify; GitHub connector for
+  source-of-truth audits or explicitly controller-authorized connector actions; Codex for adversarial
+  P1/P2 audit). This holds even when Deep Research is paired with GitHub connector repo evidence — that
+  evidence is **read-only research input only**.
 - **Source discipline.** Distinguish official docs / peer-reviewed papers / primary exchange
   documentation from weak sources (forum posts, undated blogs, marketing); weak sources are flagged,
   never treated as authoritative.
@@ -75,7 +84,7 @@ repo+external architecture review** under these rules:
 | **Codex** | Remains the **adversarial repo P1/P2 reviewer**. Deep Research does not replace Codex review. |
 | **Codex Pursue Goal** | Remains the **bounded terminal `gh`/CI/status loop** tool. Deep Research does not poll CI. |
 | **GitHub connector** | Remains the **source-of-truth repo-state gate**. Deep Research consumes connector evidence; it is not the merge authority. |
-| **Deep Research** | **Architecture / external-current research + combined repo+external review.** Advisory only — not merge authority, not a safety-gate waiver. |
+| **Deep Research** | **Architecture / external-current research + combined repo+external review.** **Strictly read-only / advisory** — never an executor lane, never merge authority, never a safety-gate waiver. It may recommend a mutation task; any authorized mutation is routed by the controller to Claude/`gh`, the GitHub connector, or Codex — never executed by Deep Research. |
 
 ## 5. Triggers
 
@@ -121,7 +130,14 @@ DEEP_RESEARCH_FOLLOWUP_NEEDED:
 
 Deep Research must never:
 
+- **Mutate repo or GitHub state** — no branch/file/commit/push/PR-open/PR-close/PR-comment/
+  thread-resolve/workflow-rerun/merge/auto-merge or any other repo or GitHub action — **even when a
+  human or controller authorizes the underlying work.** It may recommend a mutation task; the
+  controller routes any authorized mutation to the correct executor lane (Claude/`gh`, GitHub
+  connector, or Codex). Deep Research is never itself an executor lane.
 - Justify **skipping tests / CI / audit**.
+- Replace the **GitHub connector final gate**, **Codex P1/P2 audit**, **tests/CI**, or **local
+  post-merge verification**.
 - Authorize **live / private API / order routing** or any forbidden surface (`agent_workflow.md` §16).
 - Weaken a **fail-closed gate** (`agent_workflow.md` §3).
 - Replace **explicit per-PR merge authorization**.

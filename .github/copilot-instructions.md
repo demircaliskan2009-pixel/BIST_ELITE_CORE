@@ -32,10 +32,13 @@
   microstructure/custody/regulation/security facts, Deribit/readiness/live/shadow decisions, PRD/
   roadmap-vs-external-benchmark questions, overengineering detection, and paper/shadow/live DONE gates;
   not for local repo state, CI polling, merge/readiness source-of-truth, local repair, or replacing
-  Codex review. It is advisory only — never merge authority, never a safety-gate waiver; in connector
-  chat it separates REPO_EVIDENCE / EXTERNAL_EVIDENCE / INFERENCE / UNKNOWN and never infers live repo
-  state without GitHub evidence. Full protocol: `docs/crypto_core/deep_research_protocol.md`
-  (`docs/crypto_core/agent_workflow.md` section 19).
+  Codex review. It is strictly read-only / advisory, never an executor lane, never merge authority,
+  never a safety-gate waiver: it never mutates repo or GitHub state (branch/file/commit/push/PR/comment/
+  thread-resolve/workflow-rerun/merge/auto-merge), even when the underlying work is authorized; it may
+  recommend a mutation task but the controller routes any authorized mutation to Claude/gh, the GitHub
+  connector, or Codex. In connector chat it separates REPO_EVIDENCE / EXTERNAL_EVIDENCE / INFERENCE /
+  UNKNOWN and never infers live repo state without GitHub evidence. Full protocol:
+  `docs/crypto_core/deep_research_protocol.md` (`docs/crypto_core/agent_workflow.md` section 19).
 
 ## AUTO MODEL FITNESS RULE
 
