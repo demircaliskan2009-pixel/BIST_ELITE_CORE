@@ -35,21 +35,32 @@ paper_realized_pnl
 Adjacent substrate that already exists (isolated, not yet proven as one loop):
 
 - **Intent / fill / position / episode:** `paper_order_intent`, `paper_order_intent_admission`,
-  `paper_allocator_intent_draft`, `paper_fill_simulator`, `execution/paper_adapter`,
-  `execution/fill_pricer`, `portfolio/fills`, `paper_position_state`, `paper_episode_runner`,
-  `paper_session_sequence`, `paper_capacity_gate`, `paper_trade_tick`.
+  `paper_allocator_intent_draft`, `paper_fill_simulator`, `execution/fill_pricer`, `portfolio/fills`,
+  `paper_position_state`, `paper_episode_runner`, `paper_session_sequence`, `paper_capacity_gate`,
+  `paper_trade_tick`.
 - **Reports / replay:** `paper_pnl_report`, `paper_replay_result_report`(`_adapter`),
   `paper_replay_run_plan`, `paper_replay_intake`, `deterministic_replay_executor`,
   `paper_replay_promotion_readiness`, `paper_replay_governance_review_decision`.
-- **Governor / readiness / promotion (paper-stage):** `audit/portfolio_governor_*`, `service/readiness`,
+- **Governor / promotion (paper-stage):** `audit/portfolio_governor_*`,
   `paper_sleeve_admission_review_readiness`, `paper_sleeve_promotion_candidate`,
   `paper_sleeve_promotion_readiness`, `paper_sleeve_risk_budget_decision`, `paper_sleeve_intent_ledger`.
 
 **Out of scope for the minimum deterministic paper loop (reference-only):**
-`service/paper_shadow_session_controller`, `service/paper_live_service`, and any other shadow/live runtime
-service surface are **explicitly excluded** from the minimum deterministic paper-loop phase and from
-`feature/paper-run-report-pr1`. They are **not usable** until a separately authorized shadow/live phase
-(see §6). The deterministic paper loop **must not depend on** shadow/live service surfaces.
+
+- `service/paper_shadow_session_controller`, `service/paper_live_service`, and any other shadow/live
+  runtime service surface — **explicitly excluded** from the minimum deterministic paper-loop phase and
+  from `feature/paper-run-report-pr1`; **not usable** until a separately authorized shadow/live phase
+  (see §6). The deterministic paper loop **must not depend on** shadow/live service surfaces.
+- `service/readiness` — a **live-readiness** surface (defines `PAPER_LIVE` / `SHADOW_LIVE` /
+  `TINY_CAP_LIVE` levels and live-credential / live-data-feed criteria). It is **not** deterministic
+  paper-stage substrate: reference-only and **excluded** from the minimum paper loop and from
+  `feature/paper-run-report-pr1`. **The paper-run-report PR must not consume readiness/live/shadow
+  service surfaces.**
+- `execution/paper_adapter` — **non-canonical** for the minimum deterministic loop: it reads wall-clock
+  time (`time.time_ns()`), conflicting with the no-hidden-wall-clock rule. **Not part of**
+  `feature/paper-run-report-pr1`, and out of the deterministic loop until its timestamp behavior is
+  explicitly hardened / injected / made deterministic. Use existing deterministic validation primitives
+  (`paper_fill_simulator` + the paper position / realized-PnL chain) instead.
 
 **Safety note (deterministic paper substrate):** the minimum deterministic paper loop must use only
 deterministic, replayable validation modules — **no shadow/live service surface, no hidden
@@ -66,26 +77,36 @@ deterministic end-to-end path**, not more sibling modules.
 - **Integration-first now has priority** over artifact proliferation. A new artifact PR is justified
   **only** when it binds a real integration seam or closes a named loop gap (see §8).
 
-## 4. Minimum deterministic paper trading — DONE definition
+## 4. Minimum deterministic paper-loop substrate milestone (NOT PRDV4 Stage 4 completion)
+
+> **Scope:** this is a deterministic *substrate milestone* — it proves a replayable deterministic paper
+> loop. It is **not** PRDV4 Stage 4 ("Paper Trading") completion. PRDV4 Stage 4 additionally requires
+> **≥ 30 days paper trading**, **paper-vs-backtest metrics** (Sharpe, hit rate, slippage, fill rate),
+> and the **paper-Sharpe ≥ 50%-of-backtest** rejection gate (PRDV4 §"Stage 4: Paper Trading"). Those
+> remain **later** requirements and are **not** satisfied by this milestone.
 
 One deterministic, replayable loop:
 
 ```
 strategy / signal output
   -> normalized deterministic paper order intent      (paper_order_intent[_admission])
-  -> deterministic paper fill                         (paper_fill_simulator / execution.paper_adapter + fill_pricer)
+  -> deterministic paper fill                         (paper_fill_simulator + fill_pricer; existing deterministic validation primitives — NOT execution/paper_adapter, which uses wall-clock)
   -> paper position / realized PnL                     (paper_position_state / paper_realized_pnl[_rollup])
   -> session / aggregate / manifest                    (…_bridge / …_aggregate / …_evidence_manifest)
   -> evidence admission                                (paper_evidence_admission_record)
   -> paper run report / probe                          (paper_pnl_report / new paper run report)
 ```
 
-DONE requires: **replayable deterministic digests** end to end (recompute == bound digest at every
-seam); **fail-closed** on malformed/stale/insufficient input (typed error or REJECTED reason codes);
-no hidden IO/network/persistence/wall-clock/random in product code. **No live/private API. No real order
-routing. No scheduler/auto-loop.**
+Milestone DONE requires: **replayable deterministic digests** end to end (recompute == bound digest at
+every seam); **fail-closed** on malformed/stale/insufficient input (typed error or REJECTED reason
+codes); no hidden IO/network/persistence/wall-clock/random in product code. **No live/private API. No
+real order routing. No scheduler/auto-loop.** (This is the substrate milestone above, not PRDV4 Stage 4.)
 
-## 5. Institutional-grade paper trading — DONE definition
+## 5. Institutional paper-substrate readiness target (NOT PRDV4 Stage 4/live readiness)
+
+> **Scope:** an institutional-grade *paper-substrate* target — **not** live/shadow readiness and **not**
+> PRDV4 Stage 5 / live readiness. It does **not** satisfy the PRDV4 Stage 4 completion gates (≥ 30-day
+> paper trading, paper-vs-backtest metrics, Sharpe gate — see §4); those remain later requirements.
 
 Builds on §4 and additionally requires:
 
@@ -130,7 +151,9 @@ isolated modules — these PRs **wire/bind** them, they do not rebuild from scra
 6. `feature/deterministic-paper-replay-harness-pr1` — replay the same paper run and **prove digest
    equality** (discrepancy = fail-closed).
 7. `feature/paper-stage4-readiness-decision-pr1` — consume run report + admission + replay evidence for
-   **paper-stage readiness only**; no live.
+   a **paper-substrate readiness decision only**; no live. (This is a paper-substrate readiness
+   artifact — **NOT** PRDV4 Stage 4 completion, which still requires the §4 ≥30-day / paper-vs-backtest /
+   Sharpe gates.)
 8. *(optional, later)* `chore/crypto-core-test-wrapper-venv-python-pr1` — make the full-test wrapper use
    the repo `.venv` interpreter (or deterministic interpreter selection) so optional deps like
    `websocket-client` resolve consistently. (Observed: `run_full_tests_logged.ps1` calls bare `python`;
