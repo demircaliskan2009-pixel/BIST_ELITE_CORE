@@ -431,6 +431,49 @@ def test_builder_unsafe_or_wrong_schema_request_is_rejected(monkeypatch, overrid
     assert bridge.paper_order_intent_request_digest == ""
 
 
+class _LiarStr(str):
+    """A ``str`` subclass whose ``__eq__`` always lies True — must never pass the request field reproof."""
+
+    def __eq__(self, _other):  # noqa: D105 - adversarial: always claims equality
+        return True
+
+    def __ne__(self, _other):  # noqa: D105
+        return False
+
+    def __hash__(self):  # noqa: D105 - keep hashable for the frozen dataclass
+        return hash(str(self))
+
+
+@pytest.mark.parametrize(
+    ("override", "expected_reason"),
+    [
+        ({"request_id": _LiarStr("foreign-signal")}, "strategy_signal_to_paper_intent:request_payload_mismatch"),
+        ({"schema_version": _LiarStr("foreign-schema.v9")}, "strategy_signal_to_paper_intent:request_safety_violation"),
+        ({"capacity_decision_digest": _LiarStr("b" * 64)}, "strategy_signal_to_paper_intent:request_payload_mismatch"),
+        ({"requested_units": _LiarStr("1")}, "strategy_signal_to_paper_intent:request_payload_mismatch"),
+        ({"requested_notional": _LiarStr("1")}, "strategy_signal_to_paper_intent:request_payload_mismatch"),
+        (
+            {"metadata": ((_LiarStr("k"), _LiarStr("v")),)},
+            "strategy_signal_to_paper_intent:request_payload_mismatch",
+        ),
+    ],
+)
+def test_builder_equality_liar_request_is_rejected(monkeypatch, override, expected_reason):
+    # A self-consistent (re-sealed) request whose internal fields are equality-liar / str-subclass values must
+    # never bind a READY bridge: the canonical-snapshot reproof compares plain-string CONTENT, not __eq__.
+    def _liar(**kwargs):
+        real = build_paper_order_intent_request(**kwargs)
+        tampered = replace(real, **override)
+        return replace(tampered, request_digest=paper_order_intent_request_digest(tampered))
+
+    monkeypatch.setattr(bridge_module, "build_paper_order_intent_request", _liar)
+    bridge = _build()
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert bridge.ready is False
+    assert expected_reason in bridge.rejection_reasons
+    assert bridge.paper_order_intent_request_digest == ""
+
+
 # --- Single canonical spec snapshot (digest + validation see the same one read) ---
 
 

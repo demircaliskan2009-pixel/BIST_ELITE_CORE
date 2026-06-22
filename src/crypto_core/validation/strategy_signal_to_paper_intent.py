@@ -59,6 +59,7 @@ from crypto_core.validation.paper_order_intent_admission import (
     PaperOrderSide,
     build_paper_order_intent_request,
     paper_order_intent_request_digest,
+    paper_order_intent_request_to_dict,
 )
 
 _SCHEMA_VERSION = "strategy-signal-to-paper-intent.v1"
@@ -469,6 +470,23 @@ def _spec_payload_scope_violation(payload: object) -> bool:
     return False
 
 
+def _capture_request_snapshot(request: PaperOrderIntentRequest) -> dict[str, object] | None:
+    """Serialize the request via its PUBLIC serializer and ROUND-TRIP through canonical JSON into primitives.
+
+    The canonical JSON round-trip strips any ``str`` subclass / equality-liar to its plain string CONTENT, so
+    the field comparisons in ``_reprove_request`` operate on plain primitives and cannot be subverted by a
+    lying ``__eq__``/``__hash__``. Returns ``None`` (fail-closed) on any serialization failure.
+    """
+    try:
+        raw = paper_order_intent_request_to_dict(request)
+        snapshot = json.loads(
+            json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+        )
+    except Exception:  # noqa: BLE001 - any serialization failure is a fail-closed rejection, not a crash
+        return None
+    return snapshot if isinstance(snapshot, dict) else None
+
+
 def _reprove_request(
     request: object,
     *,
@@ -483,13 +501,15 @@ def _reprove_request(
     capacity_decision_digest: str,
     metadata: tuple[tuple[str, str], ...],
 ) -> tuple[str, str | None]:
-    """Re-prove the builder output by exact type, recomputed digest, lower-contract safety, and field equality.
+    """Re-prove the builder output by exact type, recomputed digest, a canonical snapshot, lower-contract
+    safety, and field equality with the validated signal.
 
-    Returns ``(request_digest, None)`` when the request is the exact ``PaperOrderIntentRequest`` type, its
-    carried ``request_digest`` recomputes to itself, its lower-contract schema/paper-safety attestations are
-    correct, and every bound field matches the validated signal; else ``("", <reason>)``. Defends against a
-    foreign / wrong-typed / digest-tampered / unsafe (paper_only False, real orders/money enabled) /
-    payload-divergent builder result being bound into a READY bridge.
+    Returns ``(request_digest, None)`` only when the request is the exact ``PaperOrderIntentRequest`` type, its
+    carried ``request_digest`` is an exact plain lowercase-hex64 string that recomputes to itself, its
+    canonical-snapshot schema/paper-safety attestations are correct, and every bound field equals the
+    validated signal; else ``("", <reason>)``. The comparisons run against a public-serializer + canonical-JSON
+    snapshot of plain primitives, so a foreign / wrong-typed / digest-tampered / unsafe / equality-liar /
+    ``str``-subclass / payload-divergent request can never bind a READY bridge.
     """
     if type(request) is not PaperOrderIntentRequest:
         return "", "strategy_signal_to_paper_intent:request_type_mismatch"
@@ -497,30 +517,43 @@ def _reprove_request(
         recomputed = paper_order_intent_request_digest(request)
     except Exception:  # noqa: BLE001 - any recompute failure is a fail-closed rejection, not a crash
         return "", "strategy_signal_to_paper_intent:request_digest_mismatch"
-    if not _is_hex64_string(request.request_digest) or request.request_digest != recomputed:
+    # The carried digest must be an EXACT plain lowercase-hex64 string (no str subclass) before comparison, so
+    # an equality-liar carried digest cannot pass via a lying ``__eq__``.
+    carried_digest = request.request_digest
+    if type(carried_digest) is not str or not _is_hex64_string(carried_digest) or carried_digest != recomputed:
         return "", "strategy_signal_to_paper_intent:request_digest_mismatch"
-    # Lower-contract schema + paper-safety re-proof (a self-consistent but unsafe request must never bind).
+
+    # Canonical request snapshot (plain primitives): strips str-subclass/equality-liar fields to their CONTENT.
+    snapshot = _capture_request_snapshot(request)
+    if snapshot is None:
+        return "", "strategy_signal_to_paper_intent:request_payload_mismatch"
+
+    # Lower-contract schema + paper-safety re-proof from the canonical snapshot (exact values).
     if (
-        request.schema_version != _EXPECTED_REQUEST_SCHEMA_VERSION
-        or request.paper_only is not True
-        or request.real_orders_enabled is not False
-        or request.real_money_enabled is not False
+        snapshot.get("schema_version") != _EXPECTED_REQUEST_SCHEMA_VERSION
+        or snapshot.get("paper_only") is not True
+        or snapshot.get("real_orders_enabled") is not False
+        or snapshot.get("real_money_enabled") is not False
     ):
         return "", "strategy_signal_to_paper_intent:request_safety_violation"
+
+    # Field equality vs the validated bridge inputs — both sides are plain primitives (the snapshot from the
+    # canonical round-trip, the expected values from the already-validated signal).
+    expected_metadata = [[key, value] for key, value in metadata]
     if (
-        request.request_id != signal_id
-        or request.correlation_id != correlation_id
-        or request.market_symbol != market_symbol
-        or request.side is not side
-        or request.intent_type is not intent_type
-        or request.requested_units != requested_units
-        or request.requested_notional != requested_notional
-        or request.limit_price != limit_price
-        or request.capacity_decision_digest != capacity_decision_digest
-        or request.metadata != metadata
+        snapshot.get("request_id") != signal_id
+        or snapshot.get("correlation_id") != correlation_id
+        or snapshot.get("market_symbol") != market_symbol
+        or snapshot.get("side") != side.value
+        or snapshot.get("intent_type") != intent_type.value
+        or snapshot.get("requested_units") != requested_units
+        or snapshot.get("requested_notional") != requested_notional
+        or snapshot.get("limit_price") != limit_price
+        or snapshot.get("capacity_decision_digest") != capacity_decision_digest
+        or snapshot.get("metadata") != expected_metadata
     ):
         return "", "strategy_signal_to_paper_intent:request_payload_mismatch"
-    return request.request_digest, None
+    return carried_digest, None
 
 
 def _finalize_bridge(
