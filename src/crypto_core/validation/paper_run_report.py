@@ -474,8 +474,11 @@ def build_paper_run_report(
 
         hard.extend(_admission_scope_reasons(snapshot))
 
-        # Aggregate-context counts (bound for audit) must be coherent non-negative ints, and no sub-count may
-        # exceed the realized ``event_count`` (computed events / session bridges <= events).
+        # Aggregate-context counts (bound for audit) must be coherent non-negative ints, no sub-count may
+        # exceed the realized ``event_count`` (computed events / session bridges <= events), AND each must meet
+        # the minimum a genuinely-READY manifest carries. A genuine READY manifest has at least one COMPUTED
+        # realized event across at least one session bridge (the manifest marks computed_event_count == 0 as
+        # INSUFFICIENT_EVIDENCE), so an all-zero / empty forged-but-self-consistent admission must fail closed.
         counts = {name: snapshot.get(name) for name in ("session_bridge_count", "event_count", "computed_event_count")}
         if any(not _is_int(value) or value < 0 for value in counts.values()):
             hard.append("paper_run_report:admission_count_invalid")
@@ -485,6 +488,8 @@ def build_paper_run_report(
             computed_event_count = counts["computed_event_count"]
             if computed_event_count > event_count or session_bridge_count > event_count:
                 hard.append("paper_run_report:admission_count_incoherent")
+            if event_count < 1 or computed_event_count < 1 or session_bridge_count < 1:
+                hard.append("paper_run_report:admission_insufficient_events")
 
         # Gross totals must be canonical finite decimal strings; closed units must be non-negative.
         realized_candidate = snapshot.get("realized_pnl_total")
@@ -510,11 +515,8 @@ def build_paper_run_report(
         ):
             hard.append("paper_run_report:admission_empty_run_nonzero_totals")
 
-    # Truthful operator warnings (never block READY): surface an admitted-but-empty run so an operator can
-    # see the report binds no realized events without reading the lower-level artifacts.
-    if not hard and event_count == 0:
-        warnings.append("paper_run_report:no_realized_events")
-
+    # ``warnings`` is reserved for truthful, non-blocking operator notes. An empty/all-zero run is no longer
+    # a READY-with-warning path — it is rejected as insufficient evidence above — so no warning is emitted here.
     rejection_reasons = tuple(sorted(set(hard)))
     status = PaperRunReportStatus.REJECTED if rejection_reasons else PaperRunReportStatus.READY
 

@@ -390,6 +390,58 @@ def test_zero_events_with_nonzero_totals_cannot_be_ready():
     assert "paper_run_report:admission_empty_run_nonzero_totals" in report.rejection_reasons
 
 
+@pytest.mark.parametrize(
+    "counts",
+    [
+        {"event_count": 0, "computed_event_count": 0, "session_bridge_count": 0},
+        {"event_count": 1, "computed_event_count": 0, "session_bridge_count": 1},
+        {"event_count": 1, "computed_event_count": 1, "session_bridge_count": 0},
+        {"event_count": 0, "computed_event_count": 0, "session_bridge_count": 1},
+    ],
+)
+def test_insufficient_counts_cannot_be_ready(counts):
+    # Any sub-count below the minimum a genuine READY manifest carries (>= 1 each) must fail closed.
+    record = _admitted(realized_pnl_total="0", closed_units_total="0", **counts)
+    report = build_paper_run_report(
+        record, expected_admission_digest=_anchor(record), run_id="run-1", correlation_id="corr-report"
+    )
+    assert report.status is PaperRunReportStatus.REJECTED
+    assert "paper_run_report:admission_insufficient_events" in report.rejection_reasons
+
+
+@pytest.mark.parametrize(
+    "bad_count",
+    [
+        {"event_count": 1.0},
+        {"event_count": True},
+        {"computed_event_count": True},
+        {"event_count": "1"},
+        {"session_bridge_count": -1},
+        {"computed_event_count": -1},
+    ],
+)
+def test_malformed_count_types_cannot_be_ready(bad_count):
+    # Non-int (float/bool/str) or negative counts are malformed -> count_invalid, never READY.
+    record = _admitted(**bad_count)
+    report = build_paper_run_report(
+        record, expected_admission_digest=_anchor(record), run_id="run-1", correlation_id="corr-report"
+    )
+    assert report.status is PaperRunReportStatus.REJECTED
+    assert "paper_run_report:admission_count_invalid" in report.rejection_reasons
+
+
+def test_str_subclass_metadata_value_raises():
+    record = _admitted()
+    with pytest.raises(PaperRunReportError):
+        build_paper_run_report(
+            record,
+            expected_admission_digest=_anchor(record),
+            run_id="run-1",
+            correlation_id="corr-report",
+            metadata={"k": _SneakyStr("v")},
+        )
+
+
 # --------------------------------------------------------------------------------------------------
 # 4. Determinism / immutability
 # --------------------------------------------------------------------------------------------------
@@ -639,8 +691,9 @@ def test_serializer_exact_keys_and_json_safe():
     assert isinstance(dumped, str)
 
 
-def test_empty_run_with_zero_totals_surfaces_warning_but_stays_ready():
-    # A truthful empty run: zero events, zero counts, canonical-zero gross totals -> READY + warning.
+def test_empty_all_zero_run_cannot_be_ready():
+    # A forged/resealed all-zero "empty" run is NOT a valid READY substrate: a genuine READY manifest carries
+    # at least one computed realized event across at least one session bridge. Must fail closed.
     record = _admitted(
         event_count=0,
         computed_event_count=0,
@@ -651,5 +704,6 @@ def test_empty_run_with_zero_totals_surfaces_warning_but_stays_ready():
     report = build_paper_run_report(
         record, expected_admission_digest=_anchor(record), run_id="run-1", correlation_id="corr-report"
     )
-    assert report.status is PaperRunReportStatus.READY
-    assert "paper_run_report:no_realized_events" in report.warnings
+    assert report.status is PaperRunReportStatus.REJECTED
+    assert report.ready is False
+    assert "paper_run_report:admission_insufficient_events" in report.rejection_reasons
