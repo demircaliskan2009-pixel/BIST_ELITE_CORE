@@ -321,14 +321,17 @@ def build_strategy_signal_to_paper_intent(
         # spec (e.g. whitespace ``strategy_id``) is normalized by the validator and must not be carried READY.
         try:
             validation = validate_strategy_spec(snapshot)
-            normalized = strategy_spec_to_dict(validation.spec) if (validation.accepted and validation.spec) else None
         except Exception:  # noqa: BLE001 - any validator failure is a fail-closed rejection
             validation = None
-            normalized = None
         if validation is None or not validation.accepted or validation.spec is None:
             hard.append("strategy_signal_to_paper_intent:spec_invalid")
-        elif normalized != snapshot:
-            hard.append("strategy_signal_to_paper_intent:spec_noncanonical")
+        else:
+            try:
+                normalized = strategy_spec_to_dict(validation.spec)
+            except Exception:  # noqa: BLE001 - an unserializable normalized spec is a fail-closed rejection
+                normalized = None
+            if normalized != snapshot:
+                hard.append("strategy_signal_to_paper_intent:spec_noncanonical")
 
         # Full-payload forbidden scope scan over the SAME snapshot (catches ``deribit``/BIST/live anywhere the
         # spec validator does not itself reject, e.g. inside ``venue_assumptions``).
