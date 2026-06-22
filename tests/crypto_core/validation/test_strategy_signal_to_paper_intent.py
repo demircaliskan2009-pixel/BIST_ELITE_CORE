@@ -1,0 +1,542 @@
+"""Tests for the strategy-signal-to-paper-intent bridge — deterministic, paper-only, fail-closed mapping from
+a digest-bound ``StrategySpec`` + signal into the inert ``PaperOrderIntentRequest`` contract. Covers happy
+path, spec-digest binding, signal-vs-spec consistency, fail-closed validation, determinism, forbidden-surface
+exclusion (alias-resistant), non-overclaim, and the canonical serializer."""
+
+from __future__ import annotations
+
+import ast
+import json
+from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
+
+import pytest
+
+from crypto_core.strategy.spec import (
+    StrategySpec,
+    StrategySpecMarketType,
+    strategy_spec_digest,
+    strategy_spec_to_dict,
+    validate_strategy_spec,
+)
+from crypto_core.validation import strategy_signal_to_paper_intent as bridge_module
+from crypto_core.validation.strategy_signal_to_paper_intent import (
+    StrategySignalToPaperIntentError,
+    StrategySignalToPaperIntentStatus,
+    build_strategy_signal_to_paper_intent,
+    strategy_signal_to_paper_intent_digest,
+    strategy_signal_to_paper_intent_to_dict,
+)
+
+_HEX_CAP = "a" * 64
+_HEX_BAD = "d" * 64
+
+
+class _SneakyStr(str):
+    """A ``str`` subclass that lies about being non-empty — must never pass the exact-plain-string gate."""
+
+    def strip(self, *args, **kwargs):  # noqa: D401 - adversarial override
+        return "definitely-not-empty"
+
+
+def _is_hex64(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
+def _spec() -> StrategySpec:
+    """A genuine, validator-accepted StrategySpec whose instrument universe includes BTC-PERPETUAL."""
+    payload = {
+        "schema_version": "strategy-spec.v1",
+        "strategy_id": "alpha-funding-carry",
+        "strategy_version": "1.0.0",
+        "strategy_family": "carry",
+        "edge_family": "funding_basis_carry",
+        "instrument_universe": ["BTC-PERPETUAL", "ETH-PERPETUAL"],
+        "market_type": "usdt_perp",
+        "venue_assumptions": ["perp_linear"],
+        "timeframe": "1h",
+        "bar_definition": "time_1h",
+        "entry_conditions": ["funding_positive"],
+        "exit_conditions": ["funding_neutral"],
+        "invalidation_conditions": ["regime_break"],
+        "risk_caps": {"max_leverage": 2.0},
+        "data_requirements": {"funding_rate": "1h"},
+        "feature_requirements": {"funding_zscore": "rolling"},
+        "latency_sensitivity": "low",
+        "funding_sensitivity": "high",
+        "fee_model_requirement": "taker_10bps",
+        "slippage_model_requirement": "depth_aware",
+        "expected_regime": "ranging",
+        "failure_modes": ["funding_flip"],
+        "kill_switch_triggers": ["max_dd"],
+        "telemetry_fields": ["funding"],
+        "promotion_requirements": ["walk_forward"],
+    }
+    result = validate_strategy_spec(payload)
+    assert result.accepted, result.rejection_reasons + result.needs_research_reasons
+    assert result.spec is not None
+    return result.spec
+
+
+def _build(spec: StrategySpec | None = None, **overrides):
+    spec = spec if spec is not None else _spec()
+    kwargs = {
+        "expected_spec_digest": strategy_spec_digest(spec),
+        "signal_id": "sig-1",
+        "run_id": "run-1",
+        "correlation_id": "corr-1",
+        "market_symbol": "BTC-PERPETUAL",
+        "side": "BUY",
+        "intent_type": "MARKET",
+        "requested_units": "10",
+        "requested_notional": "100",
+        "capacity_decision_digest": _HEX_CAP,
+        "limit_price": None,
+    }
+    kwargs.update(overrides)
+    return build_strategy_signal_to_paper_intent(spec, **kwargs)
+
+
+# --------------------------------------------------------------------------------------------------
+# 1. Happy path
+# --------------------------------------------------------------------------------------------------
+
+
+def test_valid_signal_is_ready_and_produces_request_digest():
+    bridge = _build()
+    assert bridge.status is StrategySignalToPaperIntentStatus.READY
+    assert bridge.ready is True
+    assert bridge.rejection_reasons == ()
+    assert bridge.strategy_id == "alpha-funding-carry"
+    assert bridge.strategy_version == "1.0.0"
+    assert bridge.market_symbol == "BTC-PERPETUAL"
+    assert bridge.side == "BUY"
+    assert bridge.intent_type == "MARKET"
+    assert _is_hex64(bridge.paper_order_intent_request_digest)
+    assert _is_hex64(bridge.bridge_digest)
+
+
+def test_limit_signal_with_price_is_ready():
+    bridge = _build(intent_type="LIMIT", limit_price="100")
+    assert bridge.status is StrategySignalToPaperIntentStatus.READY
+    assert _is_hex64(bridge.paper_order_intent_request_digest)
+
+
+def test_bridge_digest_is_deterministic():
+    a = _build()
+    b = _build()
+    assert a.bridge_digest == b.bridge_digest
+    assert strategy_signal_to_paper_intent_to_dict(a) == strategy_signal_to_paper_intent_to_dict(b)
+
+
+# --------------------------------------------------------------------------------------------------
+# 2. Digest / provenance binding
+# --------------------------------------------------------------------------------------------------
+
+
+def test_wrong_expected_spec_digest_cannot_be_ready():
+    bridge = _build(expected_spec_digest=_HEX_BAD)
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:spec_digest_mismatch" in bridge.rejection_reasons
+    assert bridge.paper_order_intent_request_digest == ""
+
+
+def test_bound_digests_appear_in_canonical_dict():
+    spec = _spec()
+    payload = strategy_signal_to_paper_intent_to_dict(_build(spec))
+    assert payload["expected_spec_digest"] == strategy_spec_digest(spec)
+    assert payload["spec_digest"] == strategy_spec_digest(spec)
+    assert payload["capacity_decision_digest"] == _HEX_CAP
+    assert _is_hex64(payload["paper_order_intent_request_digest"])
+
+
+def test_changed_bound_field_changes_bridge_digest():
+    base = _build()
+    other = _build(signal_id="sig-2")
+    assert base.bridge_digest != other.bridge_digest
+    diff_units = _build(requested_units="11")
+    assert base.bridge_digest != diff_units.bridge_digest
+
+
+def test_request_digest_is_empty_on_rejection():
+    bridge = _build(side="HOLD")
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert bridge.paper_order_intent_request_digest == ""
+
+
+# --------------------------------------------------------------------------------------------------
+# 3. Fail-closed validation
+# --------------------------------------------------------------------------------------------------
+
+
+def test_symbol_not_in_universe_cannot_be_ready():
+    bridge = _build(market_symbol="SOL-PERPETUAL")
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:signal_symbol_not_in_universe" in bridge.rejection_reasons
+
+
+def test_unsupported_market_type_cannot_be_ready():
+    spec = replace(_spec(), market_type=StrategySpecMarketType.SPOT)
+    bridge = build_strategy_signal_to_paper_intent(
+        spec,
+        expected_spec_digest=strategy_spec_digest(spec),
+        signal_id="sig-1",
+        run_id="run-1",
+        correlation_id="corr-1",
+        market_symbol="BTC-PERPETUAL",
+        side="BUY",
+        intent_type="MARKET",
+        requested_units="10",
+        requested_notional="100",
+        capacity_decision_digest=_HEX_CAP,
+    )
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:spec_market_type_unsupported" in bridge.rejection_reasons
+
+
+@pytest.mark.parametrize("bad_side", ["HOLD", "buy", "LONG", "X"])
+def test_bad_side_cannot_be_ready(bad_side):
+    bridge = _build(side=bad_side)
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:signal_side_invalid" in bridge.rejection_reasons
+
+
+@pytest.mark.parametrize("bad_type", ["STOP", "market", "TWAP"])
+def test_bad_intent_type_cannot_be_ready(bad_type):
+    bridge = _build(intent_type=bad_type)
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:signal_intent_type_invalid" in bridge.rejection_reasons
+
+
+@pytest.mark.parametrize("bad_units", ["0", "-1", "1e5", "abc", "1.", ".5", " 1"])
+def test_non_positive_or_malformed_units_cannot_be_ready(bad_units):
+    bridge = _build(requested_units=bad_units)
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:signal_units_invalid" in bridge.rejection_reasons
+
+
+@pytest.mark.parametrize("bad_notional", ["0", "-5", "nan", "Infinity"])
+def test_non_positive_or_malformed_notional_cannot_be_ready(bad_notional):
+    bridge = _build(requested_notional=bad_notional)
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:signal_notional_invalid" in bridge.rejection_reasons
+
+
+def test_limit_without_price_cannot_be_ready():
+    bridge = _build(intent_type="LIMIT", limit_price=None)
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:signal_limit_price_invalid" in bridge.rejection_reasons
+
+
+def test_market_with_price_cannot_be_ready():
+    bridge = _build(intent_type="MARKET", limit_price="100")
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:signal_limit_price_invalid" in bridge.rejection_reasons
+
+
+@pytest.mark.parametrize("bad", [None, object(), 123, "spec", {"strategy_id": "x"}])
+def test_wrong_typed_spec_raises(bad):
+    with pytest.raises(StrategySignalToPaperIntentError):
+        build_strategy_signal_to_paper_intent(
+            bad,
+            expected_spec_digest=_HEX_CAP,
+            signal_id="sig-1",
+            run_id="run-1",
+            correlation_id="corr-1",
+            market_symbol="BTC-PERPETUAL",
+            side="BUY",
+            intent_type="MARKET",
+            requested_units="10",
+            requested_notional="100",
+            capacity_decision_digest=_HEX_CAP,
+        )
+
+
+@pytest.mark.parametrize("bad_digest", ["", "x", "g" * 64, "A" * 64, "a" * 63])
+def test_malformed_expected_spec_digest_raises(bad_digest):
+    with pytest.raises(StrategySignalToPaperIntentError):
+        _build(expected_spec_digest=bad_digest)
+
+
+@pytest.mark.parametrize("bad_digest", ["", "nope", "A" * 64])
+def test_malformed_capacity_decision_digest_raises(bad_digest):
+    with pytest.raises(StrategySignalToPaperIntentError):
+        _build(capacity_decision_digest=bad_digest)
+
+
+@pytest.mark.parametrize("field", ["signal_id", "run_id", "correlation_id", "market_symbol", "side", "intent_type"])
+@pytest.mark.parametrize("bad", ["", "   "])
+def test_empty_required_strings_raise(field, bad):
+    with pytest.raises(StrategySignalToPaperIntentError):
+        _build(**{field: bad})
+
+
+@pytest.mark.parametrize("field", ["signal_id", "run_id", "correlation_id", "market_symbol"])
+def test_str_subclass_required_strings_raise(field):
+    with pytest.raises(StrategySignalToPaperIntentError):
+        _build(**{field: _SneakyStr("x")})
+
+
+@pytest.mark.parametrize(
+    "forbidden",
+    ["live_run", "deribit-btc", "shadow_sig", "route_id", "BIST100", "scheduler"],
+)
+def test_forbidden_token_in_ids_raises(forbidden):
+    with pytest.raises(StrategySignalToPaperIntentError):
+        _build(run_id=forbidden)
+
+
+def test_forbidden_token_in_metadata_raises():
+    with pytest.raises(StrategySignalToPaperIntentError):
+        _build(metadata={"venue": "deribit"})
+
+
+@pytest.mark.parametrize(
+    "bad_meta", [{"k": 1}, {1: "v"}, [("k", "v")], "kv", {"k": _SneakyStr("v")}, {_SneakyStr("k"): "v"}]
+)
+def test_malformed_metadata_raises(bad_meta):
+    with pytest.raises(StrategySignalToPaperIntentError):
+        _build(metadata=bad_meta)
+
+
+@pytest.mark.parametrize("bad_units", [10, 10.0, True, None])
+def test_non_string_units_raises(bad_units):
+    with pytest.raises(StrategySignalToPaperIntentError):
+        _build(requested_units=bad_units)
+
+
+@pytest.mark.parametrize("bad_price", [100, 100.0, True])
+def test_non_string_limit_price_raises(bad_price):
+    with pytest.raises(StrategySignalToPaperIntentError):
+        _build(intent_type="LIMIT", limit_price=bad_price)
+
+
+def test_request_construction_failure_is_rejected_not_crash(monkeypatch):
+    def _boom(**_kwargs):
+        raise RuntimeError("builder exploded")
+
+    monkeypatch.setattr(bridge_module, "build_paper_order_intent_request", _boom)
+    bridge = _build()
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:paper_order_intent_request_construction_failed" in bridge.rejection_reasons
+    assert bridge.paper_order_intent_request_digest == ""
+
+
+# --------------------------------------------------------------------------------------------------
+# 4. Determinism / immutability
+# --------------------------------------------------------------------------------------------------
+
+
+def test_build_does_not_mutate_spec_input():
+    spec = _spec()
+    before = strategy_spec_to_dict(spec)
+    _build(spec)
+    after = strategy_spec_to_dict(spec)
+    assert before == after
+
+
+def test_bridge_is_frozen():
+    bridge = _build()
+    with pytest.raises(FrozenInstanceError):
+        bridge.ready = False  # type: ignore[misc]
+
+
+def test_digest_recompute_matches_self_digest():
+    bridge = _build()
+    assert strategy_signal_to_paper_intent_digest(bridge) == bridge.bridge_digest
+
+
+# --------------------------------------------------------------------------------------------------
+# 5. Forbidden surfaces (static analysis)
+# --------------------------------------------------------------------------------------------------
+
+
+def _module_source() -> str:
+    return Path(bridge_module.__file__).read_text(encoding="utf-8")
+
+
+_FORBIDDEN_RUNTIME_ROOTS = frozenset(
+    {
+        "time",
+        "datetime",
+        "random",
+        "uuid",
+        "secrets",
+        "socket",
+        "requests",
+        "httpx",
+        "aiohttp",
+        "asyncio",
+        "threading",
+        "multiprocessing",
+        "subprocess",
+        "os",
+        "pathlib",
+        "shutil",
+        "signal",
+        "selectors",
+    }
+)
+_ALLOWED_IMPORT_ROOTS = frozenset(
+    {"__future__", "hashlib", "json", "re", "collections", "dataclasses", "decimal", "enum", "crypto_core"}
+)
+_FORBIDDEN_BUILTIN_CALLS = frozenset({"open", "eval", "exec", "compile", "__import__", "input"})
+_FORBIDDEN_IMPORT_FRAGMENTS = (
+    "service.readiness",
+    "execution.paper_adapter",
+    "paper_live_service",
+    "paper_shadow_session_controller",
+    "connector",
+    "scheduler",
+    "runtime",
+    "orchestrator",
+    "venue",
+)
+
+
+def _collect_imports(tree: ast.AST) -> tuple[list[str], dict[str, str]]:
+    modules: list[str] = []
+    alias_to_root: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                modules.append(alias.name)
+                root = alias.name.split(".")[0]
+                alias_to_root[alias.asname or root] = root
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.append(node.module)
+            root = node.module.split(".")[0]
+            for alias in node.names:
+                alias_to_root[alias.asname or alias.name] = root
+    return modules, alias_to_root
+
+
+def test_no_forbidden_module_imports():
+    modules, _ = _collect_imports(ast.parse(_module_source()))
+    for module in modules:
+        root = module.split(".")[0]
+        assert root in _ALLOWED_IMPORT_ROOTS, f"unexpected import root: {module}"
+        assert root not in _FORBIDDEN_RUNTIME_ROOTS, f"forbidden runtime import: {module}"
+        for fragment in _FORBIDDEN_IMPORT_FRAGMENTS:
+            assert fragment not in module, f"forbidden import surface: {module}"
+    cc_imports = sorted(m for m in modules if m.startswith("crypto_core"))
+    assert cc_imports == [
+        "crypto_core.strategy.spec",
+        "crypto_core.validation.paper_order_intent_admission",
+    ]
+
+
+def test_no_forbidden_runtime_calls_alias_resistant():
+    tree = ast.parse(_module_source())
+    _, alias_to_root = _collect_imports(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            root = func
+            while isinstance(root, ast.Attribute):
+                root = root.value
+            if isinstance(root, ast.Name):
+                resolved = alias_to_root.get(root.id, root.id)
+                assert resolved not in _FORBIDDEN_RUNTIME_ROOTS, f"forbidden runtime call via '{root.id}'"
+        elif isinstance(func, ast.Name):
+            assert func.id not in _FORBIDDEN_BUILTIN_CALLS, f"forbidden builtin call: {func.id}"
+            assert alias_to_root.get(func.id) not in _FORBIDDEN_RUNTIME_ROOTS, f"forbidden call via bound '{func.id}'"
+
+
+# --------------------------------------------------------------------------------------------------
+# 6. Non-overclaim / scope
+# --------------------------------------------------------------------------------------------------
+
+
+def test_paper_only_and_safety_flags():
+    bridge = _build()
+    assert bridge.paper_only is True
+    for flag in (
+        "real_orders_enabled",
+        "real_money_enabled",
+        "capital_reserved",
+        "order_routed",
+        "venue_order_id_created",
+        "execution_authorized",
+        "fill_created",
+        "pnl_computed",
+        "position_mutated",
+        "live_api_called",
+        "scheduler_enabled",
+        "auto_loop_enabled",
+        "connector_invoked",
+    ):
+        assert getattr(bridge, flag) is False, flag
+
+
+def test_non_overclaim_flags_false():
+    bridge = _build()
+    assert bridge.prdv4_stage4_complete is False
+    assert bridge.live_ready is False
+    assert bridge.shadow_ready is False
+    assert bridge.profitability_proven is False
+    assert bridge.edge_proven is False
+
+
+# --------------------------------------------------------------------------------------------------
+# 7. Operator-readable serializer
+# --------------------------------------------------------------------------------------------------
+
+
+def test_serializer_exact_keys_and_json_safe():
+    payload = strategy_signal_to_paper_intent_to_dict(_build())
+    expected_keys = {
+        "schema_version",
+        "status",
+        "ready",
+        "strategy_id",
+        "strategy_version",
+        "signal_id",
+        "run_id",
+        "correlation_id",
+        "expected_spec_digest",
+        "spec_digest",
+        "market_symbol",
+        "side",
+        "intent_type",
+        "requested_units",
+        "requested_notional",
+        "limit_price",
+        "capacity_decision_digest",
+        "paper_order_intent_request_digest",
+        "rejection_reasons",
+        "metadata",
+        "bridge_digest",
+        "paper_only",
+        "real_orders_enabled",
+        "real_money_enabled",
+        "capital_reserved",
+        "order_routed",
+        "venue_order_id_created",
+        "execution_authorized",
+        "fill_created",
+        "pnl_computed",
+        "position_mutated",
+        "live_api_called",
+        "scheduler_enabled",
+        "auto_loop_enabled",
+        "connector_invoked",
+        "prdv4_stage4_complete",
+        "live_ready",
+        "shadow_ready",
+        "profitability_proven",
+        "edge_proven",
+    }
+    assert set(payload.keys()) == expected_keys
+    assert payload["status"] == "READY"
+    dumped = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    assert isinstance(dumped, str)
+
+
+def test_metadata_is_bound_and_changes_digest():
+    base = _build()
+    with_meta = _build(metadata={"operator": "alice"})
+    assert with_meta.metadata == (("operator", "alice"),)
+    assert with_meta.bridge_digest != base.bridge_digest
