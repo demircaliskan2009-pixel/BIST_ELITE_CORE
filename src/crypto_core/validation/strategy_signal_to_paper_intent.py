@@ -8,13 +8,18 @@ no PnL, runs no episode, evaluates no capacity decision, routes no order, and ad
 runtime/persistence/scheduler/execution/venue path. It answers one question: "given this strategy spec, does
 this signal map to a valid, inert paper order-intent request?"
 
-Digest binding (trust boundary): the supplied ``StrategySpec`` is re-digested via the PUBLIC
-``strategy_spec_digest`` (the spec is a frozen value object — no mutable-source TOCTOU) and must equal the
-caller-supplied ``expected_spec_digest`` (the caller's INDEPENDENT provenance anchor). A READY bridge also
-requires the signal to be consistent with the spec (supported market type, symbol in the spec's instrument
-universe, clean scope) and to produce a valid ``PaperOrderIntentRequest`` whose own ``request_digest`` is
-bound into the bridge digest. The bridge does NOT re-derive the spec's economics or prove edge; it pins the
-spec to the expected anchor and validates the signal-to-request mapping.
+Digest binding (trust boundary): the supplied ``StrategySpec`` is serialized EXACTLY ONCE via the public
+serializer and round-tripped through canonical JSON into a single immutable snapshot; the spec digest
+recompute, the full ``validate_strategy_spec``, the forbidden-scope scan, and every bound identity/field all
+derive from that ONE snapshot (closing a TOCTOU where a stateful/mutable source — e.g. ``risk_caps`` — could
+let the digest and validation observe different reads). The recomputed digest must equal the caller-supplied
+``expected_spec_digest`` (the caller's INDEPENDENT provenance anchor), AND a matching digest is never
+sufficient: the snapshot must pass full validation and equal the validator-normalized canonical payload (so a
+noncanonical/whitespace identity cannot be carried READY). A READY bridge also requires the signal to be
+consistent with the spec (supported market type, symbol in the spec's instrument universe, clean scope) and
+to produce a valid ``PaperOrderIntentRequest`` re-proven by exact type, recomputed digest, lower-contract
+paper-safety, and field equality — its ``request_digest`` is bound into the bridge digest. The bridge does
+NOT re-derive the spec's economics or prove edge.
 
 Produces the inert ``PaperOrderIntentRequest`` (an explicit demand descriptor — never an order, never
 routed) via the existing public builder; it carries the caller-supplied ``capacity_decision_digest`` the
@@ -45,7 +50,6 @@ from enum import Enum
 from crypto_core.strategy.spec import (
     StrategySpec,
     StrategySpecMarketType,
-    strategy_spec_digest,
     strategy_spec_to_dict,
     validate_strategy_spec,
 )
@@ -58,11 +62,14 @@ from crypto_core.validation.paper_order_intent_admission import (
 )
 
 _SCHEMA_VERSION = "strategy-signal-to-paper-intent.v1"
+# The lower-contract schema version the produced paper order-intent request must carry.
+_EXPECTED_REQUEST_SCHEMA_VERSION = "paper-order-intent-request.v1"
 _SHA256_HEX_LENGTH = 64
 _HEX_CHARS = frozenset("0123456789abcdef")
 
 # Market types this bridge supports (mirrors the strategy-spec PR1 supported set: perp only).
 _SUPPORTED_MARKET_TYPES = (StrategySpecMarketType.USDT_PERP, StrategySpecMarketType.INVERSE_PERP)
+_SUPPORTED_MARKET_TYPE_VALUES = tuple(market_type.value for market_type in _SUPPORTED_MARKET_TYPES)
 
 # Strict decimal-string grammar (mirrors the paper order-intent request contract): optional sign, no leading
 # zeros (except a bare ``0``), optional fraction. Positivity is enforced separately.
@@ -283,52 +290,62 @@ def build_strategy_signal_to_paper_intent(
     if _has_scope_violation(signal_id, run_id, correlation_id, market_symbol, *_metadata_texts(metadata_pairs)):
         raise StrategySignalToPaperIntentError("strategy_signal_to_paper_intent:scope_violation")
 
-    # Identity read once from the frozen spec value object.
-    strategy_id = spec.strategy_id if isinstance(spec.strategy_id, str) else ""
-    strategy_version = spec.strategy_version if isinstance(spec.strategy_version, str) else ""
-
     hard: list[str] = []
     request_digest = ""
 
-    # Digest boundary: re-digest the spec via the public helper (frozen value object — no TOCTOU) and require
-    # it to equal the caller's independent expected anchor.
-    try:
-        recomputed_spec_digest = strategy_spec_digest(spec)
-    except Exception:  # noqa: BLE001 - any spec serialization failure is a fail-closed rejection, not a crash
-        recomputed_spec_digest = ""
-    if not _is_hex64_string(recomputed_spec_digest):
-        hard.append("strategy_signal_to_paper_intent:spec_digest_unrecomputable")
-    elif recomputed_spec_digest != expected_spec_digest:
-        hard.append("strategy_signal_to_paper_intent:spec_digest_mismatch")
-    spec_digest_value = recomputed_spec_digest if _is_hex64_string(recomputed_spec_digest) else ""
-
-    # Full StrategySpec validation: a matching digest is never sufficient. A digest-valid but invalid spec
-    # (empty strategy_id, empty entry_conditions, excessive leverage, funding_sensitivity unknown, BIST in any
-    # field, ...) must fail closed. Re-run the repo's PUBLIC validator over the canonical spec payload, and
-    # scope-scan the FULL payload (not just selected fields) for forbidden venue/BIST/live tokens the spec
-    # validator does not itself reject (e.g. ``deribit`` in ``venue_assumptions``).
-    try:
-        spec_payload = strategy_spec_to_dict(spec)
-    except Exception:  # noqa: BLE001 - an unserializable spec is a fail-closed rejection, not a crash
-        spec_payload = None
-    if not isinstance(spec_payload, dict):
+    # Single canonical StrategySpec snapshot: serialize the (possibly mutable/stateful) spec EXACTLY ONCE via
+    # the public serializer and round-trip through canonical JSON into immutable primitives. The digest
+    # recompute, full validation, scope scan, and every bound identity/field read all derive from this ONE
+    # snapshot — closing a TOCTOU where digest and validation could otherwise observe different reads of a
+    # mutable source (e.g. stateful ``risk_caps``).
+    snapshot = _capture_spec_snapshot(spec)
+    strategy_id = ""
+    strategy_version = ""
+    spec_digest_value = ""
+    universe: tuple[str, ...] = ()
+    if snapshot is None:
         hard.append("strategy_signal_to_paper_intent:spec_invalid")
     else:
+        strategy_id = snapshot.get("strategy_id") if isinstance(snapshot.get("strategy_id"), str) else ""
+        strategy_version = snapshot.get("strategy_version") if isinstance(snapshot.get("strategy_version"), str) else ""
+
+        # Digest boundary: recompute the spec digest FROM the single snapshot (the same canonical SHA-256 over
+        # the public serializer output as ``strategy_spec_digest``) and require equality with the caller's
+        # independent expected anchor. A matching digest alone is never sufficient (see validation below).
+        spec_digest_value = _canonical_digest(snapshot)
+        if spec_digest_value != expected_spec_digest:
+            hard.append("strategy_signal_to_paper_intent:spec_digest_mismatch")
+
+        # Full validation of the SAME snapshot, then require the validator-normalized canonical payload to
+        # equal the snapshot exactly. A digest-valid but invalid spec fails closed; a noncanonical supplied
+        # spec (e.g. whitespace ``strategy_id``) is normalized by the validator and must not be carried READY.
         try:
-            spec_accepted = bool(validate_strategy_spec(spec_payload).accepted)
+            validation = validate_strategy_spec(snapshot)
+            normalized = strategy_spec_to_dict(validation.spec) if (validation.accepted and validation.spec) else None
         except Exception:  # noqa: BLE001 - any validator failure is a fail-closed rejection
-            spec_accepted = False
-        if not spec_accepted:
+            validation = None
+            normalized = None
+        if validation is None or not validation.accepted or validation.spec is None:
             hard.append("strategy_signal_to_paper_intent:spec_invalid")
-        if _spec_payload_scope_violation(spec_payload):
+        elif normalized != snapshot:
+            hard.append("strategy_signal_to_paper_intent:spec_noncanonical")
+
+        # Full-payload forbidden scope scan over the SAME snapshot (catches ``deribit``/BIST/live anywhere the
+        # spec validator does not itself reject, e.g. inside ``venue_assumptions``).
+        if _spec_payload_scope_violation(snapshot):
             hard.append("strategy_signal_to_paper_intent:spec_scope_violation")
 
-    # Spec supportedness re-proof (specific reason code; also covered by spec_invalid for unsupported types).
-    if not isinstance(spec.market_type, StrategySpecMarketType) or spec.market_type not in _SUPPORTED_MARKET_TYPES:
-        hard.append("strategy_signal_to_paper_intent:spec_market_type_unsupported")
+        # Supportedness re-proof from the snapshot's market type (specific reason code; also covered by
+        # spec_invalid for unsupported types).
+        if snapshot.get("market_type") not in _SUPPORTED_MARKET_TYPE_VALUES:
+            hard.append("strategy_signal_to_paper_intent:spec_market_type_unsupported")
 
-    # Signal-vs-spec consistency: the traded symbol must be in the spec's instrument universe.
-    universe = spec.instrument_universe if isinstance(spec.instrument_universe, tuple) else ()
+        raw_universe = snapshot.get("instrument_universe")
+        universe = (
+            tuple(item for item in raw_universe if isinstance(item, str)) if isinstance(raw_universe, list) else ()
+        )
+
+    # Signal-vs-spec consistency: the traded symbol must be in the snapshot's instrument universe.
     if market_symbol not in universe:
         hard.append("strategy_signal_to_paper_intent:signal_symbol_not_in_universe")
 
@@ -395,8 +412,9 @@ def build_strategy_signal_to_paper_intent(
         expected_spec_digest=expected_spec_digest,
         spec_digest=spec_digest_value,
         market_symbol=market_symbol,
-        side=side,
-        intent_type=intent_type,
+        # Store canonical plain-string enum VALUES (never enum objects) in the dataclass / serializer / digest.
+        side=side.value,
+        intent_type=intent_type.value,
         requested_units=requested_units,
         requested_notional=requested_notional,
         limit_price=limit_price,
@@ -405,6 +423,26 @@ def build_strategy_signal_to_paper_intent(
         rejection_reasons=rejection_reasons,
         metadata=metadata_pairs,
     )
+
+
+def _capture_spec_snapshot(spec: StrategySpec) -> dict[str, object] | None:
+    """Serialize the spec via the PUBLIC serializer EXACTLY ONCE and ROUND-TRIP through canonical JSON.
+
+    The (possibly mutable/stateful) spec is read once here and never again — neither for digest, validation,
+    scope, nor identity. The returned dict is exact immutable primitives, so the digest recompute, full
+    validation, scope scan, and every bound field all derive from this single snapshot (closing a TOCTOU where
+    a second read of a stateful source — e.g. ``risk_caps`` — could diverge). The canonical JSON round-trip
+    matches ``strategy_spec_digest``'s serializer exactly for finite specs. Returns ``None`` (fail-closed) on
+    any serialization failure or a non-finite (``NaN``/``Infinity``) payload.
+    """
+    try:
+        raw = strategy_spec_to_dict(spec)
+        snapshot = json.loads(
+            json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+        )
+    except Exception:  # noqa: BLE001 - any serialization failure / non-finite payload is a fail-closed rejection
+        return None
+    return snapshot if isinstance(snapshot, dict) else None
 
 
 def _spec_payload_scope_violation(payload: object) -> bool:
@@ -442,12 +480,13 @@ def _reprove_request(
     capacity_decision_digest: str,
     metadata: tuple[tuple[str, str], ...],
 ) -> tuple[str, str | None]:
-    """Re-prove the builder output by exact type, recomputed digest, and field equality with the signal.
+    """Re-prove the builder output by exact type, recomputed digest, lower-contract safety, and field equality.
 
     Returns ``(request_digest, None)`` when the request is the exact ``PaperOrderIntentRequest`` type, its
-    carried ``request_digest`` recomputes to itself, and every bound field matches the validated signal; else
-    ``("", <reason>)``. Defends against a foreign / wrong-typed / digest-tampered / payload-divergent builder
-    result being bound into a READY bridge.
+    carried ``request_digest`` recomputes to itself, its lower-contract schema/paper-safety attestations are
+    correct, and every bound field matches the validated signal; else ``("", <reason>)``. Defends against a
+    foreign / wrong-typed / digest-tampered / unsafe (paper_only False, real orders/money enabled) /
+    payload-divergent builder result being bound into a READY bridge.
     """
     if type(request) is not PaperOrderIntentRequest:
         return "", "strategy_signal_to_paper_intent:request_type_mismatch"
@@ -457,6 +496,14 @@ def _reprove_request(
         return "", "strategy_signal_to_paper_intent:request_digest_mismatch"
     if not _is_hex64_string(request.request_digest) or request.request_digest != recomputed:
         return "", "strategy_signal_to_paper_intent:request_digest_mismatch"
+    # Lower-contract schema + paper-safety re-proof (a self-consistent but unsafe request must never bind).
+    if (
+        request.schema_version != _EXPECTED_REQUEST_SCHEMA_VERSION
+        or request.paper_only is not True
+        or request.real_orders_enabled is not False
+        or request.real_money_enabled is not False
+    ):
+        return "", "strategy_signal_to_paper_intent:request_safety_violation"
     if (
         request.request_id != signal_id
         or request.correlation_id != correlation_id

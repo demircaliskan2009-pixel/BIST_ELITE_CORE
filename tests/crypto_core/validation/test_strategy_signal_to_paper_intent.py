@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import json
+from collections.abc import Mapping
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from crypto_core.validation.paper_order_intent_admission import (
     PaperOrderIntentType,
     PaperOrderSide,
     build_paper_order_intent_request,
+    paper_order_intent_request_digest,
 )
 from crypto_core.validation.strategy_signal_to_paper_intent import (
     StrategySignalToPaperIntentError,
@@ -406,6 +408,83 @@ def test_builder_digest_mismatch_is_rejected(monkeypatch):
     assert bridge.paper_order_intent_request_digest == ""
 
 
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"paper_only": False},
+        {"real_orders_enabled": True},
+        {"real_money_enabled": True},
+        {"schema_version": "paper-order-intent-request.v2"},
+    ],
+)
+def test_builder_unsafe_or_wrong_schema_request_is_rejected(monkeypatch, override):
+    # A self-consistent (re-sealed) request that is unsafe / wrong-schema must never bind a READY bridge.
+    def _unsafe(**kwargs):
+        real = build_paper_order_intent_request(**kwargs)
+        tampered = replace(real, **override)
+        return replace(tampered, request_digest=paper_order_intent_request_digest(tampered))
+
+    monkeypatch.setattr(bridge_module, "build_paper_order_intent_request", _unsafe)
+    bridge = _build()
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:request_safety_violation" in bridge.rejection_reasons
+    assert bridge.paper_order_intent_request_digest == ""
+
+
+# --- Single canonical spec snapshot (digest + validation see the same one read) ---
+
+
+def test_spec_serializer_called_exactly_once_on_source(monkeypatch):
+    spec = _spec()
+    original = bridge_module.strategy_spec_to_dict
+    calls = {"n": 0}
+
+    def _counting(arg):
+        if arg is spec:  # count only reads of the (potentially mutable) SOURCE spec
+            calls["n"] += 1
+        return original(arg)
+
+    monkeypatch.setattr(bridge_module, "strategy_spec_to_dict", _counting)
+    _build(spec)
+    assert calls["n"] == 1
+
+
+def test_stateful_spec_cannot_be_ready():
+    # A stateful risk_caps whose leverage changes on each materialization must not let the digest read and the
+    # validation read diverge. With a single snapshot, the caller's expected digest (one read) cannot match the
+    # bridge snapshot (a later read), so the bridge fails closed instead of READYing inconsistent payloads.
+    class _StatefulRiskCaps(Mapping):
+        def __init__(self):
+            self._reads = 0
+
+        def keys(self):
+            self._reads += 1  # each full dict() materialization counts as one read
+            return ("max_leverage",)
+
+        def __iter__(self):
+            return iter(("max_leverage",))
+
+        def __getitem__(self, key):
+            if key == "max_leverage":
+                return float(self._reads)
+            raise KeyError(key)
+
+        def __len__(self):
+            return 1
+
+    spec = replace(_spec(), risk_caps=_StatefulRiskCaps())
+    bridge = _build(spec)  # _build derives expected_spec_digest from a different read of the same spec
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert bridge.ready is False
+
+
+def test_whitespace_strategy_id_cannot_be_ready():
+    spec = replace(_spec(), strategy_id="  alpha-funding-carry  ")
+    bridge = _build(spec)
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:spec_noncanonical" in bridge.rejection_reasons
+
+
 # --------------------------------------------------------------------------------------------------
 # 4. Determinism / immutability
 # --------------------------------------------------------------------------------------------------
@@ -617,6 +696,20 @@ def test_serializer_exact_keys_and_json_safe():
     assert payload["status"] == "READY"
     dumped = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
     assert isinstance(dumped, str)
+
+
+def test_side_and_intent_type_serialized_as_plain_str():
+    bridge = _build()
+    payload = strategy_signal_to_paper_intent_to_dict(bridge)
+    # Exact plain str values (enum objects must never leak into the dataclass/serializer/digest).
+    assert type(bridge.side) is str
+    assert type(bridge.intent_type) is str
+    assert type(payload["side"]) is str
+    assert type(payload["intent_type"]) is str
+    assert payload["side"] == "BUY"
+    assert payload["intent_type"] == "MARKET"
+    # Determinism preserved.
+    assert strategy_signal_to_paper_intent_digest(bridge) == bridge.bridge_digest
 
 
 def test_metadata_is_bound_and_changes_digest():
