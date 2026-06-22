@@ -20,6 +20,11 @@ from crypto_core.strategy.spec import (
     validate_strategy_spec,
 )
 from crypto_core.validation import strategy_signal_to_paper_intent as bridge_module
+from crypto_core.validation.paper_order_intent_admission import (
+    PaperOrderIntentType,
+    PaperOrderSide,
+    build_paper_order_intent_request,
+)
 from crypto_core.validation.strategy_signal_to_paper_intent import (
     StrategySignalToPaperIntentError,
     StrategySignalToPaperIntentStatus,
@@ -86,8 +91,8 @@ def _build(spec: StrategySpec | None = None, **overrides):
         "run_id": "run-1",
         "correlation_id": "corr-1",
         "market_symbol": "BTC-PERPETUAL",
-        "side": "BUY",
-        "intent_type": "MARKET",
+        "side": PaperOrderSide.BUY,
+        "intent_type": PaperOrderIntentType.MARKET,
         "requested_units": "10",
         "requested_notional": "100",
         "capacity_decision_digest": _HEX_CAP,
@@ -117,7 +122,7 @@ def test_valid_signal_is_ready_and_produces_request_digest():
 
 
 def test_limit_signal_with_price_is_ready():
-    bridge = _build(intent_type="LIMIT", limit_price="100")
+    bridge = _build(intent_type=PaperOrderIntentType.LIMIT, limit_price="100")
     assert bridge.status is StrategySignalToPaperIntentStatus.READY
     assert _is_hex64(bridge.paper_order_intent_request_digest)
 
@@ -159,7 +164,7 @@ def test_changed_bound_field_changes_bridge_digest():
 
 
 def test_request_digest_is_empty_on_rejection():
-    bridge = _build(side="HOLD")
+    bridge = _build(requested_units="0")
     assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
     assert bridge.paper_order_intent_request_digest == ""
 
@@ -184,8 +189,8 @@ def test_unsupported_market_type_cannot_be_ready():
         run_id="run-1",
         correlation_id="corr-1",
         market_symbol="BTC-PERPETUAL",
-        side="BUY",
-        intent_type="MARKET",
+        side=PaperOrderSide.BUY,
+        intent_type=PaperOrderIntentType.MARKET,
         requested_units="10",
         requested_notional="100",
         capacity_decision_digest=_HEX_CAP,
@@ -194,18 +199,17 @@ def test_unsupported_market_type_cannot_be_ready():
     assert "strategy_signal_to_paper_intent:spec_market_type_unsupported" in bridge.rejection_reasons
 
 
-@pytest.mark.parametrize("bad_side", ["HOLD", "buy", "LONG", "X"])
-def test_bad_side_cannot_be_ready(bad_side):
-    bridge = _build(side=bad_side)
-    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
-    assert "strategy_signal_to_paper_intent:signal_side_invalid" in bridge.rejection_reasons
+@pytest.mark.parametrize("bad_side", ["BUY", "buy", "HOLD", "LONG", None, 1])
+def test_raw_or_invalid_side_raises(bad_side):
+    # Strict enum boundary: a raw/lookalike string (even the correct value "BUY") never passes.
+    with pytest.raises(StrategySignalToPaperIntentError):
+        _build(side=bad_side)
 
 
-@pytest.mark.parametrize("bad_type", ["STOP", "market", "TWAP"])
-def test_bad_intent_type_cannot_be_ready(bad_type):
-    bridge = _build(intent_type=bad_type)
-    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
-    assert "strategy_signal_to_paper_intent:signal_intent_type_invalid" in bridge.rejection_reasons
+@pytest.mark.parametrize("bad_type", ["MARKET", "market", "STOP", None, 1])
+def test_raw_or_invalid_intent_type_raises(bad_type):
+    with pytest.raises(StrategySignalToPaperIntentError):
+        _build(intent_type=bad_type)
 
 
 @pytest.mark.parametrize("bad_units", ["0", "-1", "1e5", "abc", "1.", ".5", " 1"])
@@ -223,13 +227,13 @@ def test_non_positive_or_malformed_notional_cannot_be_ready(bad_notional):
 
 
 def test_limit_without_price_cannot_be_ready():
-    bridge = _build(intent_type="LIMIT", limit_price=None)
+    bridge = _build(intent_type=PaperOrderIntentType.LIMIT, limit_price=None)
     assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
     assert "strategy_signal_to_paper_intent:signal_limit_price_invalid" in bridge.rejection_reasons
 
 
 def test_market_with_price_cannot_be_ready():
-    bridge = _build(intent_type="MARKET", limit_price="100")
+    bridge = _build(intent_type=PaperOrderIntentType.MARKET, limit_price="100")
     assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
     assert "strategy_signal_to_paper_intent:signal_limit_price_invalid" in bridge.rejection_reasons
 
@@ -308,7 +312,7 @@ def test_non_string_units_raises(bad_units):
 @pytest.mark.parametrize("bad_price", [100, 100.0, True])
 def test_non_string_limit_price_raises(bad_price):
     with pytest.raises(StrategySignalToPaperIntentError):
-        _build(intent_type="LIMIT", limit_price=bad_price)
+        _build(intent_type=PaperOrderIntentType.LIMIT, limit_price=bad_price)
 
 
 def test_request_construction_failure_is_rejected_not_crash(monkeypatch):
@@ -319,6 +323,86 @@ def test_request_construction_failure_is_rejected_not_crash(monkeypatch):
     bridge = _build()
     assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
     assert "strategy_signal_to_paper_intent:paper_order_intent_request_construction_failed" in bridge.rejection_reasons
+    assert bridge.paper_order_intent_request_digest == ""
+
+
+# --- Full StrategySpec validation enforced (digest match alone is never sufficient) ---
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"strategy_id": ""},
+        {"entry_conditions": ()},
+        {"risk_caps": {"max_leverage": 10.0}},
+        {"funding_sensitivity": "unknown"},
+        {"failure_modes": ("bist_crash",)},
+    ],
+)
+def test_digest_valid_but_invalid_spec_cannot_be_ready(override):
+    spec = replace(_spec(), **override)
+    bridge = _build(spec)  # _build re-derives expected_spec_digest from this spec (digest matches)
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:spec_invalid" in bridge.rejection_reasons
+
+
+def test_deribit_in_venue_assumptions_cannot_be_ready():
+    spec = replace(_spec(), venue_assumptions=("deribit",))
+    bridge = _build(spec)
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:spec_scope_violation" in bridge.rejection_reasons
+
+
+def test_bist_in_nested_spec_mapping_cannot_be_ready():
+    spec = replace(_spec(), data_requirements={"bist_feed": "1h"})
+    bridge = _build(spec)
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:spec_scope_violation" in bridge.rejection_reasons
+
+
+# --- Builder output re-proof: exact type, recomputed digest, payload equality ---
+
+
+def test_builder_wrong_type_is_rejected(monkeypatch):
+    monkeypatch.setattr(bridge_module, "build_paper_order_intent_request", lambda **_k: object())
+    bridge = _build()
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:request_type_mismatch" in bridge.rejection_reasons
+    assert bridge.paper_order_intent_request_digest == ""
+
+
+def test_builder_foreign_request_is_rejected(monkeypatch):
+    def _foreign(**_kwargs):
+        # A genuine but FOREIGN request (ETH/SELL/LIMIT) while the bridge signal is BTC/BUY/MARKET.
+        return build_paper_order_intent_request(
+            request_id="sig-1",
+            capacity_decision_digest=_HEX_CAP,
+            market_symbol="ETH-PERPETUAL",
+            side=PaperOrderSide.SELL,
+            intent_type=PaperOrderIntentType.LIMIT,
+            requested_notional="100",
+            requested_units="10",
+            limit_price="50",
+            correlation_id="corr-1",
+            metadata=None,
+        )
+
+    monkeypatch.setattr(bridge_module, "build_paper_order_intent_request", _foreign)
+    bridge = _build()
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:request_payload_mismatch" in bridge.rejection_reasons
+    assert bridge.paper_order_intent_request_digest == ""
+
+
+def test_builder_digest_mismatch_is_rejected(monkeypatch):
+    def _tampered(**kwargs):
+        real = build_paper_order_intent_request(**kwargs)  # the real (un-patched) admission builder
+        return replace(real, request_digest="0" * 64)
+
+    monkeypatch.setattr(bridge_module, "build_paper_order_intent_request", _tampered)
+    bridge = _build()
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:request_digest_mismatch" in bridge.rejection_reasons
     assert bridge.paper_order_intent_request_digest == ""
 
 

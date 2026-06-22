@@ -46,11 +46,15 @@ from crypto_core.strategy.spec import (
     StrategySpec,
     StrategySpecMarketType,
     strategy_spec_digest,
+    strategy_spec_to_dict,
+    validate_strategy_spec,
 )
 from crypto_core.validation.paper_order_intent_admission import (
+    PaperOrderIntentRequest,
     PaperOrderIntentType,
     PaperOrderSide,
     build_paper_order_intent_request,
+    paper_order_intent_request_digest,
 )
 
 _SCHEMA_VERSION = "strategy-signal-to-paper-intent.v1"
@@ -225,8 +229,8 @@ def build_strategy_signal_to_paper_intent(
     run_id: str,
     correlation_id: str,
     market_symbol: str,
-    side: str,
-    intent_type: str,
+    side: PaperOrderSide,
+    intent_type: PaperOrderIntentType,
     requested_units: str,
     requested_notional: str,
     capacity_decision_digest: str,
@@ -236,17 +240,21 @@ def build_strategy_signal_to_paper_intent(
     """Bridge one strategy signal over a digest-bound ``StrategySpec`` into an inert paper order-intent request.
 
     ``spec`` must be a ``StrategySpec`` and ``expected_spec_digest`` / ``capacity_decision_digest`` exact plain
-    64-lowercase-hex ``str``. ``signal_id`` / ``run_id`` / ``correlation_id`` / ``market_symbol`` / ``side`` /
-    ``intent_type`` must be exact plain non-empty ``str``; ``requested_units`` / ``requested_notional`` exact
-    ``str``; ``limit_price`` ``str`` or ``None``; ``metadata`` ``Mapping[str, str]`` or ``None``. A wrong-typed
-    input, an empty id, a malformed digest/decimal/metadata, or a forbidden BIST/live/order/scheduler/shadow
-    token raises ``StrategySignalToPaperIntentError``.
+    64-lowercase-hex ``str``. ``signal_id`` / ``run_id`` / ``correlation_id`` / ``market_symbol`` must be exact
+    plain non-empty ``str``; ``side`` / ``intent_type`` must be the exact ``PaperOrderSide`` /
+    ``PaperOrderIntentType`` enum members (a raw/lookalike string is rejected); ``requested_units`` /
+    ``requested_notional`` exact ``str``; ``limit_price`` ``str`` or ``None``; ``metadata``
+    ``Mapping[str, str]`` or ``None``. A wrong-typed input, an empty id, a malformed digest/decimal/metadata,
+    or a forbidden BIST/live/order/scheduler/shadow token raises ``StrategySignalToPaperIntentError``.
 
-    READY only when the spec re-digests to ``expected_spec_digest``, the spec market type is supported, the
-    signal symbol is in the spec's instrument universe, the side/intent-type/decimals are valid, scope is
-    clean, and a valid ``PaperOrderIntentRequest`` is produced (its ``request_digest`` is bound here). Every
-    other outcome maps fail-closed to REJECTED. Deterministic and immutable; no wall-clock/random/IO; paper
-    only; NOT PRDV4 Stage 4 / live / shadow readiness and NOT a profitability/edge/execution proof.
+    READY only when the spec re-digests to ``expected_spec_digest``, the spec passes the repo's full
+    ``validate_strategy_spec`` (a matching digest alone is never sufficient), the full spec payload is
+    scope-clean (no BIST/live/venue tokens such as ``deribit``), the spec market type is supported, the signal
+    symbol is in the spec's instrument universe, the decimals are valid, and a valid ``PaperOrderIntentRequest``
+    is produced AND re-proven by exact type, recomputed digest, and field-by-field equality with the signal
+    (its ``request_digest`` is bound here). Every other outcome maps fail-closed to REJECTED. Deterministic and
+    immutable; no wall-clock/random/IO; paper only; NOT PRDV4 Stage 4 / live / shadow readiness and NOT a
+    profitability/edge/execution proof.
     """
     if not isinstance(spec, StrategySpec):
         raise StrategySignalToPaperIntentError("strategy_signal_to_paper_intent:spec_malformed")
@@ -259,11 +267,14 @@ def build_strategy_signal_to_paper_intent(
         ("run_id", run_id),
         ("correlation_id", correlation_id),
         ("market_symbol", market_symbol),
-        ("side", side),
-        ("intent_type", intent_type),
     ):
         if not _is_plain_non_empty_string(value):
             raise StrategySignalToPaperIntentError(f"strategy_signal_to_paper_intent:{name}_invalid")
+    # Strict enum boundary: a raw/lookalike string ("BUY"/"buy"/"market") never passes — exact enum only.
+    if type(side) is not PaperOrderSide:
+        raise StrategySignalToPaperIntentError("strategy_signal_to_paper_intent:side_invalid")
+    if type(intent_type) is not PaperOrderIntentType:
+        raise StrategySignalToPaperIntentError("strategy_signal_to_paper_intent:intent_type_invalid")
     if type(requested_units) is not str or type(requested_notional) is not str:
         raise StrategySignalToPaperIntentError("strategy_signal_to_paper_intent:decimal_field_malformed")
     if limit_price is not None and type(limit_price) is not str:
@@ -291,44 +302,59 @@ def build_strategy_signal_to_paper_intent(
         hard.append("strategy_signal_to_paper_intent:spec_digest_mismatch")
     spec_digest_value = recomputed_spec_digest if _is_hex64_string(recomputed_spec_digest) else ""
 
-    # Spec-level safety / supportedness re-proofs (a directly-constructed spec may not have been validated).
+    # Full StrategySpec validation: a matching digest is never sufficient. A digest-valid but invalid spec
+    # (empty strategy_id, empty entry_conditions, excessive leverage, funding_sensitivity unknown, BIST in any
+    # field, ...) must fail closed. Re-run the repo's PUBLIC validator over the canonical spec payload, and
+    # scope-scan the FULL payload (not just selected fields) for forbidden venue/BIST/live tokens the spec
+    # validator does not itself reject (e.g. ``deribit`` in ``venue_assumptions``).
+    try:
+        spec_payload = strategy_spec_to_dict(spec)
+    except Exception:  # noqa: BLE001 - an unserializable spec is a fail-closed rejection, not a crash
+        spec_payload = None
+    if not isinstance(spec_payload, dict):
+        hard.append("strategy_signal_to_paper_intent:spec_invalid")
+    else:
+        try:
+            spec_accepted = bool(validate_strategy_spec(spec_payload).accepted)
+        except Exception:  # noqa: BLE001 - any validator failure is a fail-closed rejection
+            spec_accepted = False
+        if not spec_accepted:
+            hard.append("strategy_signal_to_paper_intent:spec_invalid")
+        if _spec_payload_scope_violation(spec_payload):
+            hard.append("strategy_signal_to_paper_intent:spec_scope_violation")
+
+    # Spec supportedness re-proof (specific reason code; also covered by spec_invalid for unsupported types).
     if not isinstance(spec.market_type, StrategySpecMarketType) or spec.market_type not in _SUPPORTED_MARKET_TYPES:
         hard.append("strategy_signal_to_paper_intent:spec_market_type_unsupported")
-    universe = spec.instrument_universe if isinstance(spec.instrument_universe, tuple) else ()
-    if _has_scope_violation(strategy_id, strategy_version, *(u for u in universe if isinstance(u, str))):
-        hard.append("strategy_signal_to_paper_intent:spec_scope_violation")
 
     # Signal-vs-spec consistency: the traded symbol must be in the spec's instrument universe.
+    universe = spec.instrument_universe if isinstance(spec.instrument_universe, tuple) else ()
     if market_symbol not in universe:
         hard.append("strategy_signal_to_paper_intent:signal_symbol_not_in_universe")
 
-    # Signal field validation (value-level -> REJECTED reason codes, not raises).
-    side_enum = _coerce_side(side)
-    if side_enum is None:
-        hard.append("strategy_signal_to_paper_intent:signal_side_invalid")
-    intent_enum = _coerce_intent_type(intent_type)
-    if intent_enum is None:
-        hard.append("strategy_signal_to_paper_intent:signal_intent_type_invalid")
+    # Signal decimal validation (value-level -> REJECTED reason codes, not raises).
     if _positive_decimal(requested_units) is None:
         hard.append("strategy_signal_to_paper_intent:signal_units_invalid")
     if _positive_decimal(requested_notional) is None:
         hard.append("strategy_signal_to_paper_intent:signal_notional_invalid")
-    if intent_enum is PaperOrderIntentType.LIMIT:
+    if intent_type is PaperOrderIntentType.LIMIT:
         if _positive_decimal(limit_price) is None:
             hard.append("strategy_signal_to_paper_intent:signal_limit_price_invalid")
-    elif intent_enum is PaperOrderIntentType.MARKET and limit_price is not None:
+    elif intent_type is PaperOrderIntentType.MARKET and limit_price is not None:
         hard.append("strategy_signal_to_paper_intent:signal_limit_price_invalid")
 
-    # Produce the real inert paper order-intent request only when the signal is fully valid. Any builder
-    # failure (defensive) maps fail-closed to REJECTED rather than crashing.
-    if not hard and side_enum is not None and intent_enum is not None:
+    # Produce the real inert paper order-intent request only when the signal is fully valid, then re-prove the
+    # builder output by exact type, recomputed digest, and field-by-field equality with the validated signal —
+    # a foreign / wrong-typed / digest-mismatched / payload-divergent request can never bind a READY bridge.
+    # Any builder failure (defensive) maps fail-closed to REJECTED rather than crashing.
+    if not hard:
         try:
             request = build_paper_order_intent_request(
                 request_id=signal_id,
                 capacity_decision_digest=capacity_decision_digest,
                 market_symbol=market_symbol,
-                side=side_enum,
-                intent_type=intent_enum,
+                side=side,
+                intent_type=intent_type,
                 requested_notional=requested_notional,
                 requested_units=requested_units,
                 limit_price=limit_price,
@@ -338,7 +364,21 @@ def build_strategy_signal_to_paper_intent(
         except Exception:  # noqa: BLE001 - any builder failure is a fail-closed rejection, never a crash
             hard.append("strategy_signal_to_paper_intent:paper_order_intent_request_construction_failed")
         else:
-            request_digest = request.request_digest
+            request_digest, reproof_reason = _reprove_request(
+                request,
+                signal_id=signal_id,
+                correlation_id=correlation_id,
+                market_symbol=market_symbol,
+                side=side,
+                intent_type=intent_type,
+                requested_units=requested_units,
+                requested_notional=requested_notional,
+                limit_price=limit_price,
+                capacity_decision_digest=capacity_decision_digest,
+                metadata=metadata_pairs,
+            )
+            if reproof_reason is not None:
+                hard.append(reproof_reason)
 
     rejection_reasons = tuple(sorted(set(hard)))
     status = (
@@ -367,18 +407,70 @@ def build_strategy_signal_to_paper_intent(
     )
 
 
-def _coerce_side(value: str) -> PaperOrderSide | None:
-    try:
-        return PaperOrderSide(value)
-    except ValueError:
-        return None
+def _spec_payload_scope_violation(payload: object) -> bool:
+    """Recursively scope-scan the full canonical spec payload (exact plain strings only).
+
+    Catches forbidden BIST/live/venue tokens (e.g. ``deribit`` in ``venue_assumptions``) anywhere in the
+    spec — keys, list/tuple items, and nested mappings — that the spec validator does not itself reject.
+    Non-string leaves are ignored (never coerced); the digest/validation gates already cover their shape.
+    """
+    if isinstance(payload, Mapping):
+        for key, value in payload.items():
+            if isinstance(key, str) and _has_scope_violation(key):
+                return True
+            if _spec_payload_scope_violation(value):
+                return True
+        return False
+    if isinstance(payload, (list, tuple)):
+        return any(_spec_payload_scope_violation(item) for item in payload)
+    if isinstance(payload, str):
+        return _has_scope_violation(payload)
+    return False
 
 
-def _coerce_intent_type(value: str) -> PaperOrderIntentType | None:
+def _reprove_request(
+    request: object,
+    *,
+    signal_id: str,
+    correlation_id: str,
+    market_symbol: str,
+    side: PaperOrderSide,
+    intent_type: PaperOrderIntentType,
+    requested_units: str,
+    requested_notional: str,
+    limit_price: str | None,
+    capacity_decision_digest: str,
+    metadata: tuple[tuple[str, str], ...],
+) -> tuple[str, str | None]:
+    """Re-prove the builder output by exact type, recomputed digest, and field equality with the signal.
+
+    Returns ``(request_digest, None)`` when the request is the exact ``PaperOrderIntentRequest`` type, its
+    carried ``request_digest`` recomputes to itself, and every bound field matches the validated signal; else
+    ``("", <reason>)``. Defends against a foreign / wrong-typed / digest-tampered / payload-divergent builder
+    result being bound into a READY bridge.
+    """
+    if type(request) is not PaperOrderIntentRequest:
+        return "", "strategy_signal_to_paper_intent:request_type_mismatch"
     try:
-        return PaperOrderIntentType(value)
-    except ValueError:
-        return None
+        recomputed = paper_order_intent_request_digest(request)
+    except Exception:  # noqa: BLE001 - any recompute failure is a fail-closed rejection, not a crash
+        return "", "strategy_signal_to_paper_intent:request_digest_mismatch"
+    if not _is_hex64_string(request.request_digest) or request.request_digest != recomputed:
+        return "", "strategy_signal_to_paper_intent:request_digest_mismatch"
+    if (
+        request.request_id != signal_id
+        or request.correlation_id != correlation_id
+        or request.market_symbol != market_symbol
+        or request.side is not side
+        or request.intent_type is not intent_type
+        or request.requested_units != requested_units
+        or request.requested_notional != requested_notional
+        or request.limit_price != limit_price
+        or request.capacity_decision_digest != capacity_decision_digest
+        or request.metadata != metadata
+    ):
+        return "", "strategy_signal_to_paper_intent:request_payload_mismatch"
+    return request.request_digest, None
 
 
 def _finalize_bridge(
