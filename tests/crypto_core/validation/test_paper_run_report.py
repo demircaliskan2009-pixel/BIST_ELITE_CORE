@@ -34,6 +34,13 @@ _HEX_C = "c" * 64
 _HEX_BAD = "d" * 64
 
 
+class _SneakyStr(str):
+    """A ``str`` subclass that lies about being non-empty — must never pass the exact-plain-string gate."""
+
+    def strip(self, *args, **kwargs):  # noqa: D401 - adversarial override
+        return "definitely-not-empty"
+
+
 def _is_hex64(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
 
@@ -140,9 +147,9 @@ def test_bound_digests_appear_in_canonical_report():
 
 def test_changed_bound_field_changes_report_digest():
     base = _build_ready()
-    other_run = _build_ready()
+    other_record = _admitted()
     other_run = build_paper_run_report(
-        _admitted(), expected_admission_digest=_anchor(_admitted()), run_id="run-2", correlation_id="corr-report"
+        other_record, expected_admission_digest=_anchor(other_record), run_id="run-2", correlation_id="corr-report"
     )
     assert base.report_digest != other_run.report_digest
 
@@ -284,6 +291,105 @@ def test_malformed_metadata_raises(bad_meta):
         )
 
 
+def test_str_subclass_empty_run_id_raises():
+    record = _admitted()
+    with pytest.raises(PaperRunReportError):
+        build_paper_run_report(
+            record, expected_admission_digest=_anchor(record), run_id=_SneakyStr(""), correlation_id="corr-report"
+        )
+
+
+def test_str_subclass_empty_correlation_id_raises():
+    record = _admitted()
+    with pytest.raises(PaperRunReportError):
+        build_paper_run_report(
+            record, expected_admission_digest=_anchor(record), run_id="run-1", correlation_id=_SneakyStr("")
+        )
+
+
+def test_str_subclass_metadata_key_raises():
+    record = _admitted()
+    with pytest.raises(PaperRunReportError):
+        build_paper_run_report(
+            record,
+            expected_admission_digest=_anchor(record),
+            run_id="run-1",
+            correlation_id="corr-report",
+            metadata={_SneakyStr("k"): "v"},
+        )
+
+
+def test_manifest_status_not_ready_cannot_be_ready():
+    record = _admitted(manifest_status="REJECTED")
+    report = build_paper_run_report(
+        record, expected_admission_digest=_anchor(record), run_id="run-1", correlation_id="corr-report"
+    )
+    assert report.status is PaperRunReportStatus.REJECTED
+    assert "paper_run_report:admission_manifest_not_ready" in report.rejection_reasons
+
+
+def test_upstream_rejection_reasons_cannot_be_ready():
+    # Forged: admitted True but upstream rejection reasons present — must fail closed.
+    record = _admitted(rejection_reasons=("upstream-x",))
+    report = build_paper_run_report(
+        record, expected_admission_digest=_anchor(record), run_id="run-1", correlation_id="corr-report"
+    )
+    assert report.status is PaperRunReportStatus.REJECTED
+    assert "paper_run_report:admission_upstream_rejected" in report.rejection_reasons
+
+
+def test_manifest_digest_not_equal_expected_cannot_be_ready():
+    # Forged: manifest_digest != expected_manifest_digest, self-consistently sealed — must fail closed.
+    record = _admitted(expected_manifest_digest="b" * 64)
+    report = build_paper_run_report(
+        record, expected_admission_digest=_anchor(record), run_id="run-1", correlation_id="corr-report"
+    )
+    assert report.status is PaperRunReportStatus.REJECTED
+    assert "paper_run_report:admission_manifest_digest_mismatch" in report.rejection_reasons
+
+
+def test_malformed_aggregate_digest_cannot_be_ready():
+    record = _admitted(aggregate_digest="not-a-hex-digest")
+    report = build_paper_run_report(
+        record, expected_admission_digest=_anchor(record), run_id="run-1", correlation_id="corr-report"
+    )
+    assert report.status is PaperRunReportStatus.REJECTED
+    assert "paper_run_report:admission_aggregate_digest_invalid" in report.rejection_reasons
+
+
+def test_computed_event_count_exceeding_event_count_cannot_be_ready():
+    record = _admitted(event_count=1, computed_event_count=2)
+    report = build_paper_run_report(
+        record, expected_admission_digest=_anchor(record), run_id="run-1", correlation_id="corr-report"
+    )
+    assert report.status is PaperRunReportStatus.REJECTED
+    assert "paper_run_report:admission_count_incoherent" in report.rejection_reasons
+
+
+def test_session_bridge_count_exceeding_event_count_cannot_be_ready():
+    record = _admitted(event_count=1, session_bridge_count=2)
+    report = build_paper_run_report(
+        record, expected_admission_digest=_anchor(record), run_id="run-1", correlation_id="corr-report"
+    )
+    assert report.status is PaperRunReportStatus.REJECTED
+    assert "paper_run_report:admission_count_incoherent" in report.rejection_reasons
+
+
+def test_zero_events_with_nonzero_totals_cannot_be_ready():
+    record = _admitted(
+        event_count=0,
+        computed_event_count=0,
+        session_bridge_count=0,
+        realized_pnl_total="100",
+        closed_units_total="10",
+    )
+    report = build_paper_run_report(
+        record, expected_admission_digest=_anchor(record), run_id="run-1", correlation_id="corr-report"
+    )
+    assert report.status is PaperRunReportStatus.REJECTED
+    assert "paper_run_report:admission_empty_run_nonzero_totals" in report.rejection_reasons
+
+
 # --------------------------------------------------------------------------------------------------
 # 4. Determinism / immutability
 # --------------------------------------------------------------------------------------------------
@@ -297,6 +403,24 @@ def test_build_does_not_mutate_admission_input():
     )
     after = paper_evidence_admission_record_to_dict(record)
     assert before == after
+
+
+def test_admission_serializer_called_exactly_once(monkeypatch):
+    # The single-snapshot contract: the public admission serializer is invoked exactly once (no second
+    # read of mutable admission state after capture).
+    original = prr_module.paper_evidence_admission_record_to_dict
+    calls = {"n": 0}
+
+    def _counting(record):
+        calls["n"] += 1
+        return original(record)
+
+    monkeypatch.setattr(prr_module, "paper_evidence_admission_record_to_dict", _counting)
+    record = _admitted()
+    build_paper_run_report(
+        record, expected_admission_digest=_anchor(record), run_id="run-1", correlation_id="corr-report"
+    )
+    assert calls["n"] == 1
 
 
 def test_report_is_frozen():
@@ -319,57 +443,99 @@ def _module_source() -> str:
     return Path(prr_module.__file__).read_text(encoding="utf-8")
 
 
-def test_no_forbidden_module_imports():
-    tree = ast.parse(_module_source())
-    imported: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.append(node.module)
-
-    forbidden_fragments = (
-        "service.readiness",
-        "execution.paper_adapter",
-        "paper_live_service",
-        "paper_shadow_session_controller",
-        "service.paper_live",
-        "service.paper_shadow",
-        "connector",
-        "scheduler",
-        "runtime",
-        "orchestrator",
-        "venue",
+# Module roots whose mere import would introduce nondeterminism / IO / network / time / threads.
+_FORBIDDEN_RUNTIME_ROOTS = frozenset(
+    {
+        "time",
+        "datetime",
+        "random",
+        "uuid",
+        "secrets",
         "socket",
         "requests",
         "httpx",
         "aiohttp",
         "asyncio",
         "threading",
+        "multiprocessing",
         "subprocess",
-    )
-    for module in imported:
-        for fragment in forbidden_fragments:
-            assert fragment not in module, f"forbidden import surface: {module}"
+        "os",
+        "pathlib",
+        "shutil",
+        "signal",
+        "selectors",
+    }
+)
+# The only roots the pure report module is allowed to import.
+_ALLOWED_IMPORT_ROOTS = frozenset(
+    {"__future__", "hashlib", "json", "re", "collections", "dataclasses", "decimal", "enum", "crypto_core"}
+)
+_FORBIDDEN_BUILTIN_CALLS = frozenset({"open", "eval", "exec", "compile", "__import__", "input"})
+_FORBIDDEN_IMPORT_FRAGMENTS = (
+    "service.readiness",
+    "execution.paper_adapter",
+    "paper_live_service",
+    "paper_shadow_session_controller",
+    "connector",
+    "scheduler",
+    "runtime",
+    "orchestrator",
+    "venue",
+)
 
+
+def _collect_imports(tree: ast.AST) -> tuple[list[str], dict[str, str]]:
+    """Return (full module paths imported, local-binding -> root-module map) — alias-aware."""
+    modules: list[str] = []
+    alias_to_root: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                modules.append(alias.name)
+                root = alias.name.split(".")[0]
+                alias_to_root[alias.asname or root] = root
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.append(node.module)
+            root = node.module.split(".")[0]
+            for alias in node.names:
+                # e.g. `from time import time as now` binds `now` -> root `time`.
+                alias_to_root[alias.asname or alias.name] = root
+    return modules, alias_to_root
+
+
+def test_no_forbidden_module_imports():
+    modules, _ = _collect_imports(ast.parse(_module_source()))
+    for module in modules:
+        root = module.split(".")[0]
+        assert root in _ALLOWED_IMPORT_ROOTS, f"unexpected import root: {module}"
+        assert root not in _FORBIDDEN_RUNTIME_ROOTS, f"forbidden runtime import: {module}"
+        for fragment in _FORBIDDEN_IMPORT_FRAGMENTS:
+            assert fragment not in module, f"forbidden import surface: {module}"
     # The only crypto_core import is the admission record contract it consumes.
-    cc_imports = [m for m in imported if m.startswith("crypto_core")]
+    cc_imports = [m for m in modules if m.startswith("crypto_core")]
     assert cc_imports == ["crypto_core.validation.paper_evidence_admission_record"]
 
 
-def test_no_nondeterministic_runtime_calls_in_source():
-    src = _module_source()
-    for needle in (
-        "time.time",
-        "time_ns",
-        "datetime.now",
-        "datetime.utcnow",
-        "random.",
-        "uuid4",
-        "open(",
-        "perf_counter",
-    ):
-        assert needle not in src, f"nondeterministic/runtime call present: {needle}"
+def test_no_forbidden_runtime_calls_alias_resistant():
+    """Catch forbidden runtime calls even through aliases (``import time as t; t.time()`` /
+    ``import datetime as dt; dt.datetime.now()`` / ``from time import time as now; now()``) and forbidden
+    builtins (``open`` etc.). Alias-proof because imports are resolved to their real root module."""
+    tree = ast.parse(_module_source())
+    _, alias_to_root = _collect_imports(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            root = func
+            while isinstance(root, ast.Attribute):
+                root = root.value
+            if isinstance(root, ast.Name):
+                resolved = alias_to_root.get(root.id, root.id)
+                assert resolved not in _FORBIDDEN_RUNTIME_ROOTS, f"forbidden runtime call via '{root.id}'"
+        elif isinstance(func, ast.Name):
+            assert func.id not in _FORBIDDEN_BUILTIN_CALLS, f"forbidden builtin call: {func.id}"
+            assert alias_to_root.get(func.id) not in _FORBIDDEN_RUNTIME_ROOTS, f"forbidden call via bound '{func.id}'"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -473,8 +639,15 @@ def test_serializer_exact_keys_and_json_safe():
     assert isinstance(dumped, str)
 
 
-def test_empty_run_surfaces_warning_but_stays_ready():
-    record = _admitted(event_count=0, computed_event_count=0)
+def test_empty_run_with_zero_totals_surfaces_warning_but_stays_ready():
+    # A truthful empty run: zero events, zero counts, canonical-zero gross totals -> READY + warning.
+    record = _admitted(
+        event_count=0,
+        computed_event_count=0,
+        session_bridge_count=0,
+        realized_pnl_total="0",
+        closed_units_total="0",
+    )
     report = build_paper_run_report(
         record, expected_admission_digest=_anchor(record), run_id="run-1", correlation_id="corr-report"
     )

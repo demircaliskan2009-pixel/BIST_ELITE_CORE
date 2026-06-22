@@ -59,6 +59,9 @@ from crypto_core.validation.paper_evidence_admission_record import (
 _SCHEMA_VERSION = "paper-run-report.v1"
 _EXPECTED_ADMISSION_SCHEMA_VERSION = "paper-evidence-admission-record.v1"
 _EXPECTED_ADMISSION_STATUS = "ADMITTED"
+# The upstream manifest status the admission record must itself carry for an ADMITTED run (re-proven here so a
+# self-consistent/resealed admission cannot surface a non-READY manifest as a READY report).
+_EXPECTED_MANIFEST_STATUS = "READY"
 _SHA256_HEX_LENGTH = 64
 _HEX_CHARS = frozenset("0123456789abcdef")
 
@@ -187,6 +190,16 @@ def _is_non_empty_string(value: object) -> bool:
     return isinstance(value, str) and value.strip() != ""
 
 
+def _is_plain_non_empty_string(value: object) -> bool:
+    """Exact plain ``str`` (no subclass) that is non-empty after strip.
+
+    Caller-supplied ids are validated with ``type(value) is str`` (not ``isinstance``) so a ``str`` subclass
+    overriding ``strip()``/``__eq__``/``__hash__`` cannot smuggle an effectively-empty or scope-violating value
+    past the gate.
+    """
+    return type(value) is str and value.strip() != ""
+
+
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -216,9 +229,11 @@ def _normalize_metadata(metadata: object) -> tuple[tuple[str, str], ...]:
         raise PaperRunReportError("paper_run_report:metadata_malformed")
     items: list[tuple[str, str]] = []
     for key, value in metadata.items():
-        if not isinstance(key, str) or not isinstance(value, str):
+        # Exact plain ``str`` only (no subclass) so a custom-hash/eq/strip ``str`` subclass cannot bypass the
+        # uniqueness or scope guard or collapse into a collision-prone key.
+        if type(key) is not str or type(value) is not str:
             raise PaperRunReportError("paper_run_report:metadata_malformed")
-        items.append((key, value))
+        items.append((str(key), str(value)))
     return tuple(sorted(items))
 
 
@@ -377,9 +392,9 @@ def build_paper_run_report(
         raise PaperRunReportError("paper_run_report:admission_malformed")
     if not _is_hex64_string(expected_admission_digest):
         raise PaperRunReportError("paper_run_report:expected_admission_digest_invalid")
-    if not _is_non_empty_string(run_id):
+    if not _is_plain_non_empty_string(run_id):
         raise PaperRunReportError("paper_run_report:run_id_invalid")
-    if not _is_non_empty_string(correlation_id):
+    if not _is_plain_non_empty_string(correlation_id):
         raise PaperRunReportError("paper_run_report:correlation_id_invalid")
     metadata_pairs = _normalize_metadata(metadata)
     if _has_scope_violation(run_id, correlation_id, *_metadata_texts(metadata_pairs)):
@@ -437,14 +452,30 @@ def build_paper_run_report(
         if any(snapshot.get(flag) is not False for flag in _ADMISSION_FALSE_FLAGS):
             hard.append("paper_run_report:admission_safety_violation")
 
-        # Carried-forward manifest digests must be present and well-formed (the report does not re-derive the
-        # manifest, but a READY report must not surface an admission with malformed manifest provenance).
+        # Carried-forward manifest digests must be present, well-formed, AND mutually consistent. The report
+        # does not re-derive the manifest, but a READY report must not surface an admission whose own manifest
+        # provenance is malformed or internally inconsistent (a forged/resealed admitted record could carry
+        # manifest_digest != expected_manifest_digest).
         if not _is_hex64_string(manifest_digest) or not _is_hex64_string(expected_manifest_digest):
             hard.append("paper_run_report:admission_manifest_digest_invalid")
+        elif manifest_digest != expected_manifest_digest:
+            hard.append("paper_run_report:admission_manifest_digest_mismatch")
+        # Carried aggregate digest must be a well-formed lowercase hex64 — never silently dropped.
+        if not _is_hex64_string(aggregate_digest):
+            hard.append("paper_run_report:admission_aggregate_digest_invalid")
+
+        # Re-prove the upstream ADMITTED structural invariants from the snapshot. ``admitted`` True alone is
+        # never sufficient: a self-consistent/resealed admission could still carry a non-READY manifest status
+        # or non-empty upstream rejection reasons.
+        if snapshot.get("manifest_status") != _EXPECTED_MANIFEST_STATUS:
+            hard.append("paper_run_report:admission_manifest_not_ready")
+        if snapshot.get("rejection_reasons") != []:
+            hard.append("paper_run_report:admission_upstream_rejected")
 
         hard.extend(_admission_scope_reasons(snapshot))
 
-        # Aggregate-context counts (bound for audit) must be coherent non-negative ints.
+        # Aggregate-context counts (bound for audit) must be coherent non-negative ints, and no sub-count may
+        # exceed the realized ``event_count`` (computed events / session bridges <= events).
         counts = {name: snapshot.get(name) for name in ("session_bridge_count", "event_count", "computed_event_count")}
         if any(not _is_int(value) or value < 0 for value in counts.values()):
             hard.append("paper_run_report:admission_count_invalid")
@@ -452,19 +483,32 @@ def build_paper_run_report(
             session_bridge_count = counts["session_bridge_count"]
             event_count = counts["event_count"]
             computed_event_count = counts["computed_event_count"]
+            if computed_event_count > event_count or session_bridge_count > event_count:
+                hard.append("paper_run_report:admission_count_incoherent")
 
         # Gross totals must be canonical finite decimal strings; closed units must be non-negative.
         realized_candidate = snapshot.get("realized_pnl_total")
         closed_candidate = snapshot.get("closed_units_total")
-        if _canonical_decimal(realized_candidate) is None:
+        realized_value = _canonical_decimal(realized_candidate)
+        closed_value = _canonical_decimal(closed_candidate)
+        if realized_value is None:
             hard.append("paper_run_report:admission_totals_malformed")
         elif isinstance(realized_candidate, str):
             realized_pnl_total = realized_candidate
-        closed_value = _canonical_decimal(closed_candidate)
         if closed_value is None or closed_value < 0:
             hard.append("paper_run_report:admission_totals_malformed")
         elif isinstance(closed_candidate, str):
             closed_units_total = closed_candidate
+
+        # A zero-event run cannot carry nonzero gross totals (impossible/forged) — fail closed.
+        if (
+            _is_int(counts["event_count"])
+            and counts["event_count"] == 0
+            and realized_value is not None
+            and closed_value is not None
+            and (realized_value != 0 or closed_value != 0)
+        ):
+            hard.append("paper_run_report:admission_empty_run_nonzero_totals")
 
     # Truthful operator warnings (never block READY): surface an admitted-but-empty run so an operator can
     # see the report binds no realized events without reading the lower-level artifacts.
