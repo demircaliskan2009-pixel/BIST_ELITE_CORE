@@ -445,23 +445,22 @@ class _LiarStr(str):
 
 
 @pytest.mark.parametrize(
-    ("override", "expected_reason"),
+    "override",
     [
-        ({"request_id": _LiarStr("foreign-signal")}, "strategy_signal_to_paper_intent:request_payload_mismatch"),
-        ({"schema_version": _LiarStr("foreign-schema.v9")}, "strategy_signal_to_paper_intent:request_safety_violation"),
-        ({"capacity_decision_digest": _LiarStr("b" * 64)}, "strategy_signal_to_paper_intent:request_payload_mismatch"),
-        ({"requested_units": _LiarStr("1")}, "strategy_signal_to_paper_intent:request_payload_mismatch"),
-        ({"requested_notional": _LiarStr("1")}, "strategy_signal_to_paper_intent:request_payload_mismatch"),
-        ({"limit_price": _LiarStr("999")}, "strategy_signal_to_paper_intent:request_payload_mismatch"),
-        (
-            {"metadata": ((_LiarStr("k"), _LiarStr("v")),)},
-            "strategy_signal_to_paper_intent:request_payload_mismatch",
-        ),
+        {"request_id": _LiarStr("foreign-signal")},
+        {"schema_version": _LiarStr("foreign-schema.v9")},
+        {"capacity_decision_digest": _LiarStr("b" * 64)},
+        {"requested_units": _LiarStr("1")},
+        {"requested_notional": _LiarStr("1")},
+        {"limit_price": _LiarStr("999")},
+        {"metadata": ((_LiarStr("k"), _LiarStr("v")),)},
     ],
 )
-def test_builder_equality_liar_request_is_rejected(monkeypatch, override, expected_reason):
+def test_builder_equality_liar_request_is_rejected(monkeypatch, override):
     # A self-consistent (re-sealed) request whose internal fields are equality-liar / str-subclass values must
-    # never bind a READY bridge: the canonical-snapshot reproof compares plain-string CONTENT, not __eq__.
+    # never bind a READY bridge. With raw exact-type validation BEFORE JSON normalization, a str-subclass field
+    # (foreign OR correct content) is rejected at the raw-type boundary, so a lying __eq__ never even reaches
+    # the content equality.
     def _liar(**kwargs):
         real = build_paper_order_intent_request(**kwargs)
         tampered = replace(real, **override)
@@ -471,14 +470,14 @@ def test_builder_equality_liar_request_is_rejected(monkeypatch, override, expect
     bridge = _build()
     assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
     assert bridge.ready is False
-    assert expected_reason in bridge.rejection_reasons
+    assert "strategy_signal_to_paper_intent:request_payload_type_violation" in bridge.rejection_reasons
     assert bridge.paper_order_intent_request_digest == ""
 
 
 def test_builder_non_plain_request_digest_is_rejected(monkeypatch):
-    # A request carrying a non-plain (equality-liar str-subclass) ``request_digest`` with WRONG content must
-    # never bind a READY bridge: the bound digest is recomputed from the canonical snapshot and compared by
-    # plain hex content, so a lying ``__eq__`` cannot fake the digest match.
+    # A request carrying a non-plain (str-subclass) ``request_digest`` with WRONG content must never bind a
+    # READY bridge: the raw serializer payload is exact-type validated before JSON normalization, so the
+    # subclass is rejected at the raw-type boundary regardless of content.
     def _wrong_digest(**kwargs):
         real = build_paper_order_intent_request(**kwargs)  # the real (un-patched) admission builder
         return replace(real, request_digest=_LiarStr("c" * 64))
@@ -487,8 +486,119 @@ def test_builder_non_plain_request_digest_is_rejected(monkeypatch):
     bridge = _build()
     assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
     assert bridge.ready is False
-    assert "strategy_signal_to_paper_intent:request_digest_mismatch" in bridge.rejection_reasons
+    assert "strategy_signal_to_paper_intent:request_payload_type_violation" in bridge.rejection_reasons
     assert bridge.paper_order_intent_request_digest == ""
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"request_id": _LiarStr("sig-1")},
+        {"schema_version": _LiarStr("paper-order-intent-request.v1")},
+        {"capacity_decision_digest": _LiarStr(_HEX_CAP)},
+        {"market_symbol": _LiarStr("BTC-PERPETUAL")},
+        {"correlation_id": _LiarStr("corr-1")},
+        {"requested_units": _LiarStr("10")},
+        {"requested_notional": _LiarStr("100")},
+    ],
+)
+def test_builder_correct_content_str_subclass_is_rejected(monkeypatch, override):
+    # The exact Codex P2 class: a str-subclass field with CORRECT content must STILL reject. The raw public-
+    # serializer payload is exact-type validated BEFORE JSON normalization, so a subclass cannot be laundered
+    # into a plain str by the round-trip and then pass the content equality on identical content.
+    def _subclassed(**kwargs):
+        real = build_paper_order_intent_request(**kwargs)
+        tampered = replace(real, **override)
+        return replace(tampered, request_digest=paper_order_intent_request_digest(tampered))
+
+    monkeypatch.setattr(bridge_module, "build_paper_order_intent_request", _subclassed)
+    bridge = _build()
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert bridge.ready is False
+    assert "strategy_signal_to_paper_intent:request_payload_type_violation" in bridge.rejection_reasons
+    assert bridge.paper_order_intent_request_digest == ""
+
+
+def test_builder_correct_content_request_digest_subclass_is_rejected(monkeypatch):
+    # The exact Codex P2 probe: request_digest = LiarStr(real.request_digest) with CORRECT content must REJECT,
+    # not READY — exact-type validation on the raw serializer payload precedes JSON normalization.
+    def _subclassed_digest(**kwargs):
+        real = build_paper_order_intent_request(**kwargs)
+        return replace(real, request_digest=_LiarStr(real.request_digest))
+
+    monkeypatch.setattr(bridge_module, "build_paper_order_intent_request", _subclassed_digest)
+    bridge = _build()
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert bridge.ready is False
+    assert "strategy_signal_to_paper_intent:request_payload_type_violation" in bridge.rejection_reasons
+    assert bridge.paper_order_intent_request_digest == ""
+
+
+def test_builder_correct_content_limit_price_subclass_is_rejected(monkeypatch):
+    # A LIMIT request whose limit_price carries CORRECT content as a str-subclass must reject at the raw-type
+    # boundary.
+    def _subclassed(**kwargs):
+        real = build_paper_order_intent_request(**kwargs)
+        tampered = replace(real, limit_price=_LiarStr("100"))
+        return replace(tampered, request_digest=paper_order_intent_request_digest(tampered))
+
+    monkeypatch.setattr(bridge_module, "build_paper_order_intent_request", _subclassed)
+    bridge = _build(intent_type=PaperOrderIntentType.LIMIT, limit_price="100")
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert bridge.ready is False
+    assert "strategy_signal_to_paper_intent:request_payload_type_violation" in bridge.rejection_reasons
+    assert bridge.paper_order_intent_request_digest == ""
+
+
+def test_builder_correct_content_metadata_subclass_is_rejected(monkeypatch):
+    # Metadata key/value carrying CORRECT expected content as str-subclass must reject at the raw exact-type
+    # boundary: the lower serializer's list comprehension keeps the element types, so the subclass survives to
+    # the raw payload and is caught before JSON normalization.
+    def _subclassed(**kwargs):
+        real = build_paper_order_intent_request(**kwargs)
+        tampered = replace(real, metadata=((_LiarStr("operator"), _LiarStr("alice")),))
+        return replace(tampered, request_digest=paper_order_intent_request_digest(tampered))
+
+    monkeypatch.setattr(bridge_module, "build_paper_order_intent_request", _subclassed)
+    bridge = _build(metadata={"operator": "alice"})
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert bridge.ready is False
+    assert "strategy_signal_to_paper_intent:request_payload_type_violation" in bridge.rejection_reasons
+    assert bridge.paper_order_intent_request_digest == ""
+
+
+def test_raw_request_payload_exact_shape_accepts_genuine_and_rejects_subclass():
+    # The raw exact-type validator accepts the genuine serializer shape and rejects str-subclass values (even
+    # correct content), metadata element subclasses, and unexpected keys — BEFORE any JSON normalization.
+    request = build_paper_order_intent_request(
+        request_id="sig-1",
+        capacity_decision_digest=_HEX_CAP,
+        market_symbol="BTC-PERPETUAL",
+        side=PaperOrderSide.BUY,
+        intent_type=PaperOrderIntentType.MARKET,
+        requested_notional="100",
+        requested_units="10",
+        limit_price=None,
+        correlation_id="corr-1",
+        metadata={"operator": "alice"},
+    )
+    raw = bridge_module._raw_request_payload(request)
+    assert bridge_module._is_exact_raw_request_payload(raw) is True
+    # Correct-content str subclass on request_digest -> non-exact raw payload (JSON would have normalized it).
+    raw_bad_digest = dict(raw)
+    raw_bad_digest["request_digest"] = _LiarStr(raw_bad_digest["request_digest"])
+    assert bridge_module._is_exact_raw_request_payload(raw_bad_digest) is False
+    # Metadata element subclass is rejected.
+    raw_bad_meta = dict(raw)
+    raw_bad_meta["metadata"] = [[_LiarStr("operator"), "alice"]]
+    assert bridge_module._is_exact_raw_request_payload(raw_bad_meta) is False
+    # Unexpected / missing keys are rejected.
+    raw_extra = dict(raw)
+    raw_extra["unexpected"] = "x"
+    assert bridge_module._is_exact_raw_request_payload(raw_extra) is False
+    raw_missing = dict(raw)
+    del raw_missing["request_id"]
+    assert bridge_module._is_exact_raw_request_payload(raw_missing) is False
 
 
 def test_builder_stateful_metadata_request_toctou_is_rejected(monkeypatch):
@@ -544,7 +654,9 @@ def test_request_snapshot_digest_matches_public_helper():
         correlation_id="corr-1",
         metadata={"operator": "alice"},
     )
-    snapshot = bridge_module._capture_request_snapshot(request)
+    raw = bridge_module._raw_request_payload(request)
+    assert bridge_module._is_exact_raw_request_payload(raw)
+    snapshot = bridge_module._canonical_request_snapshot(raw)
     assert snapshot is not None
     assert bridge_module._request_snapshot_digest(snapshot) == paper_order_intent_request_digest(request)
 

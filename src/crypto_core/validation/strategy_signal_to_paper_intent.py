@@ -469,15 +469,82 @@ def _spec_payload_scope_violation(payload: object) -> bool:
     return False
 
 
-def _capture_request_snapshot(request: PaperOrderIntentRequest) -> dict[str, object] | None:
-    """Serialize the request via its PUBLIC serializer and ROUND-TRIP through canonical JSON into primitives.
+# Exact JSON-safe shape the PUBLIC ``paper_order_intent_request_to_dict`` emits for a genuine request, used to
+# exact-type validate the RAW serializer output BEFORE any canonical-JSON normalization. String + bool field
+# groups, plus ``limit_price`` (str | None) and ``metadata`` (list of [str, str]) special cases.
+_RAW_REQUEST_STRING_FIELDS = (
+    "schema_version",
+    "request_id",
+    "capacity_decision_digest",
+    "market_symbol",
+    "side",
+    "intent_type",
+    "requested_notional",
+    "requested_units",
+    "correlation_id",
+    "request_digest",
+)
+_RAW_REQUEST_BOOL_FIELDS = ("paper_only", "real_orders_enabled", "real_money_enabled")
+_RAW_REQUEST_KEYS = frozenset((*_RAW_REQUEST_STRING_FIELDS, *_RAW_REQUEST_BOOL_FIELDS, "limit_price", "metadata"))
 
-    The canonical JSON round-trip strips any ``str`` subclass / equality-liar to its plain string CONTENT, so
-    the field comparisons in ``_reprove_request`` operate on plain primitives and cannot be subverted by a
-    lying ``__eq__``/``__hash__``. Returns ``None`` (fail-closed) on any serialization failure.
+
+def _raw_request_payload(request: PaperOrderIntentRequest) -> object | None:
+    """Serialize the request via its PUBLIC serializer EXACTLY ONCE (no JSON normalization yet).
+
+    The (possibly stateful) request is read once here and never again — every later proof derives from this one
+    raw payload. Returns ``None`` (fail-closed) on any serialization failure (e.g. a tampered non-enum side).
     """
     try:
-        raw = paper_order_intent_request_to_dict(request)
+        return paper_order_intent_request_to_dict(request)
+    except Exception:  # noqa: BLE001 - any serialization failure is a fail-closed rejection, not a crash
+        return None
+
+
+def _is_exact_raw_request_payload(raw: object) -> bool:
+    """Exact-type validate the RAW public-serializer output BEFORE canonical-JSON normalization.
+
+    A genuine ``build_paper_order_intent_request`` emits only plain JSON primitives/containers, so this rejects
+    ANY non-plain type using ``type(x) is ...`` (never ``isinstance``): ``str`` subclasses (even with correct
+    content, e.g. ``LiarStr(real.request_digest)``), ``dict``/``list``/``tuple`` subclasses, arbitrary
+    ``Mapping``/``Sequence`` objects, ``Decimal``/``Enum``, ``float``/NaN/Infinity, ``bool`` where a string is
+    expected, and unexpected/missing keys. This closes the gap where the later canonical-JSON round-trip would
+    otherwise launder a subclass into a plain ``str`` that then passes the content equality. Metadata must be
+    the lower serializer's exact canonical shape: an outer plain ``list`` of exact-length-2 plain ``list`` pairs
+    of plain ``str`` key/value. (The lower serializer rebuilds metadata via a list comprehension, so an
+    outer/pair container subclass is already normalized to a plain ``list`` there; only the surviving key/value
+    element types remain to be exact-checked here.) No coercion; the JSON round-trip is never relied on to
+    sanitize types.
+    """
+    if type(raw) is not dict:
+        return False
+    if {key for key in raw if type(key) is str} != _RAW_REQUEST_KEYS:
+        return False
+    for field in _RAW_REQUEST_STRING_FIELDS:
+        if type(raw[field]) is not str:
+            return False
+    for field in _RAW_REQUEST_BOOL_FIELDS:
+        if type(raw[field]) is not bool:
+            return False
+    limit_price = raw["limit_price"]
+    if limit_price is not None and type(limit_price) is not str:
+        return False
+    metadata = raw["metadata"]
+    if type(metadata) is not list:
+        return False
+    for pair in metadata:
+        if type(pair) is not list or len(pair) != 2 or type(pair[0]) is not str or type(pair[1]) is not str:
+            return False
+    return True
+
+
+def _canonical_request_snapshot(raw: object) -> dict[str, object] | None:
+    """Round-trip the exact-type-validated RAW payload through canonical JSON into plain primitives.
+
+    Only ever called after ``_is_exact_raw_request_payload`` has proven ``raw`` is exact JSON-safe primitives,
+    so this is a deterministic canonicalization (stable key order), not a type sanitizer. Returns ``None``
+    (fail-closed) on any serialization failure.
+    """
+    try:
         snapshot = json.loads(
             json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
         )
@@ -516,27 +583,42 @@ def _reprove_request(
     """Re-prove the builder output against ONE canonical request snapshot: exact type, snapshot-derived digest,
     lower-contract safety, and field equality with the validated signal.
 
-    The (possibly stateful) request is read EXACTLY ONCE — via ``_capture_request_snapshot`` (public serializer
-    + canonical-JSON round-trip into plain primitives). The bound digest is recomputed FROM that snapshot, and
-    the carried digest, schema/paper-safety attestations, and every field comparison also derive from that ONE
-    snapshot. No second read of the live request occurs (only the exact ``type`` is inspected before capture),
-    so a request whose digest read and equality read could otherwise diverge (e.g. mutating ``metadata``)
-    cannot bind a foreign payload digest into a READY bridge.
+    The (possibly stateful) request is read EXACTLY ONCE — via ``_raw_request_payload`` (public serializer) —
+    and the raw payload is exact-type validated as plain JSON primitives BEFORE being canonicalized through a
+    JSON round-trip. The bound digest is recomputed FROM that snapshot, and the carried digest, schema/paper-
+    safety attestations, and every field comparison also derive from that ONE snapshot. No second read of the
+    live request occurs (only the exact ``type`` is inspected before capture), so a request whose digest read
+    and equality read could otherwise diverge (e.g. mutating ``metadata``) cannot bind a foreign payload digest
+    into a READY bridge.
 
     Returns ``(request_digest, None)`` only when the request is the exact ``PaperOrderIntentRequest`` type, its
-    carried ``request_digest`` is an exact plain lowercase-hex64 string equal to the snapshot-derived digest,
-    its snapshot schema/paper-safety attestations are correct, and every bound field equals the validated
-    signal; else ``("", <reason>)``. The comparisons run on plain primitives, so a foreign / wrong-typed /
+    raw serializer payload is exact JSON-safe primitives (no ``str``/container subclass — even with correct
+    content), its carried ``request_digest`` is an exact plain lowercase-hex64 string equal to the snapshot-
+    derived digest, its snapshot schema/paper-safety attestations are correct, and every bound field equals the
+    validated signal; else ``("", <reason>)``. The proofs run on plain primitives, so a foreign / wrong-typed /
     digest-tampered / unsafe / equality-liar / ``str``-subclass / stateful / payload-divergent request can
     never bind a READY bridge.
     """
-    # Exact type is the ONLY raw attribute inspected; every value below derives from the single snapshot.
+    # Exact type is the ONLY raw attribute inspected; every value below derives from the single serializer read.
     if type(request) is not PaperOrderIntentRequest:
         return "", "strategy_signal_to_paper_intent:request_type_mismatch"
 
-    # Single canonical request snapshot (plain primitives): the live request is read once here and never again.
-    # The canonical-JSON round-trip strips any str-subclass / equality-liar field to its plain string CONTENT.
-    snapshot = _capture_request_snapshot(request)
+    # Single PUBLIC serializer read of the (possibly stateful) request — stored once; every proof below derives
+    # from this one raw payload (no second read, no public digest helper on the live object).
+    raw = _raw_request_payload(request)
+    if raw is None:
+        return "", "strategy_signal_to_paper_intent:request_payload_mismatch"
+
+    # Raw exact-type boundary BEFORE any JSON normalization: a genuine builder emits only plain JSON
+    # primitives/containers, so reject ANY non-plain type (str/list/dict subclass — even with correct content
+    # such as ``LiarStr(real.request_digest)`` — Decimal/Enum/float, bool-as-string, unexpected/missing keys).
+    # This closes the gap where the canonical-JSON round-trip would otherwise launder a subclass into a plain
+    # ``str`` that then passes the content equality.
+    if not _is_exact_raw_request_payload(raw):
+        return "", "strategy_signal_to_paper_intent:request_payload_type_violation"
+
+    # Canonical snapshot from the exact-type-validated raw payload (deterministic key order, plain primitives).
+    snapshot = _canonical_request_snapshot(raw)
     if snapshot is None:
         return "", "strategy_signal_to_paper_intent:request_payload_mismatch"
 
