@@ -1,8 +1,9 @@
 """Tests for the paper end-to-end episode — deterministic, paper-only, fail-closed binding of one episode.
 
-Binds the strategy-signal→paper-intent bridge, the paper episode run result (intent → fill → position →
-MTM), and the realized-PnL event (→ realized PnL) into one digest-bound artifact. Covers the happy path,
-digest/provenance binding, cross-artifact consistency, fail-closed validation, determinism, raw/canonical
+Binds the strategy-signal→paper-intent bridge, the admitted inert `PaperOrderIntent`, the paper episode run
+result (intent → fill → position → MTM), and the realized-PnL event (→ realized PnL) into one digest-bound
+artifact. Covers the happy path, digest/provenance binding, the strong bridge→order-intent→runner lineage
+(P2 regression), cross-artifact consistency, fail-closed validation, determinism, raw/canonical
 adversariality, forbidden-surface exclusion (alias-resistant), non-overclaim, and the serializer."""
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ from crypto_core.validation.paper_fill_simulator import (
     build_paper_fill_policy,
     simulate_paper_fill,
 )
-from crypto_core.validation.paper_order_intent import build_paper_order_intent
+from crypto_core.validation.paper_order_intent import build_paper_order_intent, paper_order_intent_digest
 from crypto_core.validation.paper_order_intent_admission import (
     PaperOrderIntentType,
     PaperOrderSide,
@@ -63,7 +64,8 @@ from crypto_core.validation.strategy_signal_to_paper_intent import (
 _HEX_CAP = "a" * 64
 _HEX_BAD = "d" * 64
 _SYMBOL = "BTC-PERPETUAL"
-_CORR = "corr-ep"
+_CORR = "corr-ep"  # runtime correlation (episode runner + realized event)
+_REQ_CORR = "corr-req"  # request-domain correlation (bridge internal request + chain request)
 _RUN = "run-ep"
 
 # Shared ids so the episode runner's internal fill/transition/state and the separately-reconstructed
@@ -80,11 +82,6 @@ _CHAIN_IDS: dict[str, object] = {
 
 def _is_hex64(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
-
-
-# --------------------------------------------------------------------------------------------------
-# Strategy-signal bridge fixture (signal -> inert paper order intent request)
-# --------------------------------------------------------------------------------------------------
 
 
 def _spec() -> StrategySpec:
@@ -121,71 +118,10 @@ def _spec() -> StrategySpec:
     return result.spec
 
 
-def _bridge(**overrides) -> StrategySignalToPaperIntent:
-    spec = _spec()
-    kwargs = {
-        "expected_spec_digest": strategy_spec_digest(spec),
-        "signal_id": "sig-1",
-        "run_id": _RUN,
-        "correlation_id": _CORR,
-        "market_symbol": _SYMBOL,
-        "side": PaperOrderSide.SELL,
-        "intent_type": PaperOrderIntentType.MARKET,
-        "requested_units": "4",
-        "requested_notional": "200",
-        "capacity_decision_digest": _HEX_CAP,
-        "limit_price": None,
-    }
-    kwargs.update(overrides)
-    return build_strategy_signal_to_paper_intent(spec, **kwargs)
-
-
 # --------------------------------------------------------------------------------------------------
-# Deterministic chain fixtures (intent -> fill -> position -> realized PnL), shared-digest by design
+# Deterministic chain fixtures. The bridge's internal PaperOrderIntentRequest and the chain's request are
+# built from identical inputs (deterministic), so they share request_digest -> strong lineage.
 # --------------------------------------------------------------------------------------------------
-
-
-def _prior_long():
-    return build_paper_position_state(
-        position_state_id="pos-1",
-        market_symbol=_SYMBOL,
-        side=PaperPositionStateSide.LONG,
-        signed_units="10",
-        abs_units="10",
-        average_entry_price="100",
-        transition_count=0,
-        correlation_id="corr-pos",
-    )
-
-
-def _order_intent(*, side: PaperOrderSide = PaperOrderSide.SELL, requested_units: str = "4"):
-    cap_policy = build_paper_capacity_gate_policy(
-        policy_id="policy-alpha",
-        sleeve_id="sleeve-alpha",
-        max_notional="100000000",
-        max_units="100000",
-        max_open_intents=5,
-    )
-    capacity = evaluate_paper_capacity_gate(
-        _make_capacity_draft(),
-        cap_policy,
-        requested_notional="200",
-        requested_units=requested_units,
-        correlation_id="corr-capacity",
-    )
-    request = build_paper_order_intent_request(
-        request_id="req-1",
-        capacity_decision_digest=capacity.decision_digest,
-        market_symbol=_SYMBOL,
-        side=side,
-        intent_type=PaperOrderIntentType.MARKET,
-        requested_notional=capacity.requested_notional,
-        requested_units=capacity.requested_units,
-        limit_price=None,
-        correlation_id="corr-req",
-    )
-    admission = evaluate_paper_order_intent_admission(capacity, request, correlation_id="corr-admit")
-    return build_paper_order_intent(admission, intent_id="intent-1", correlation_id="corr-intent")
 
 
 def _make_capacity_draft():
@@ -215,6 +151,86 @@ def _make_capacity_draft():
     }
     draft = PaperAllocatorIntentDraft(**fields, draft_digest="")  # type: ignore[arg-type]
     return replace(draft, draft_digest=paper_allocator_intent_draft_digest(draft))
+
+
+def _capacity(*, requested_units: str = "4", requested_notional: str = "200"):
+    cap_policy = build_paper_capacity_gate_policy(
+        policy_id="policy-alpha",
+        sleeve_id="sleeve-alpha",
+        max_notional="100000000",
+        max_units="100000",
+        max_open_intents=5,
+    )
+    return evaluate_paper_capacity_gate(
+        _make_capacity_draft(),
+        cap_policy,
+        requested_notional=requested_notional,
+        requested_units=requested_units,
+        correlation_id="corr-capacity",
+    )
+
+
+def _request(capacity, *, side: PaperOrderSide = PaperOrderSide.SELL):
+    return build_paper_order_intent_request(
+        request_id="req-1",
+        capacity_decision_digest=capacity.decision_digest,
+        market_symbol=_SYMBOL,
+        side=side,
+        intent_type=PaperOrderIntentType.MARKET,
+        requested_notional=capacity.requested_notional,
+        requested_units=capacity.requested_units,
+        limit_price=None,
+        correlation_id=_REQ_CORR,
+    )
+
+
+def _order_intent_from(capacity, request, *, intent_id: str = "intent-1"):
+    admission = evaluate_paper_order_intent_admission(capacity, request, correlation_id="corr-admit")
+    return build_paper_order_intent(admission, intent_id=intent_id, correlation_id="corr-intent")
+
+
+def _order_intent(
+    *,
+    side: PaperOrderSide = PaperOrderSide.SELL,
+    requested_units: str = "4",
+    requested_notional: str = "200",
+    intent_id: str = "intent-1",
+):
+    capacity = _capacity(requested_units=requested_units, requested_notional=requested_notional)
+    return _order_intent_from(capacity, _request(capacity, side=side), intent_id=intent_id)
+
+
+def _bridge(**overrides) -> StrategySignalToPaperIntent:
+    spec = _spec()
+    capacity = _capacity()
+    kwargs = {
+        "expected_spec_digest": strategy_spec_digest(spec),
+        "signal_id": "req-1",
+        "run_id": _RUN,
+        "correlation_id": _REQ_CORR,
+        "market_symbol": _SYMBOL,
+        "side": PaperOrderSide.SELL,
+        "intent_type": PaperOrderIntentType.MARKET,
+        "requested_units": capacity.requested_units,
+        "requested_notional": capacity.requested_notional,
+        "capacity_decision_digest": capacity.decision_digest,
+        "limit_price": None,
+    }
+    kwargs.update(overrides)
+    return build_strategy_signal_to_paper_intent(spec, **kwargs)
+
+
+def _prior_long():
+    return build_paper_position_state(
+        position_state_id="pos-1",
+        market_symbol=_SYMBOL,
+        side=PaperPositionStateSide.LONG,
+        signed_units="10",
+        abs_units="10",
+        average_entry_price="100",
+        transition_count=0,
+        correlation_id="corr-pos",
+    )
 
 
 def _snapshot(*, reference_price: str = "50"):
@@ -275,12 +291,26 @@ def _realized_event(order_intent=None, prior=None, snapshot=None, policy=None) -
     )
 
 
-def _build(*, bridge=None, episode_run=None, realized=None, **overrides):
-    bridge = bridge if bridge is not None else _bridge()
-    episode_run = episode_run if episode_run is not None else _episode_run()
-    realized = realized if realized is not None else _realized_event()
+def _chain():
+    """An aligned (bridge, order_intent, episode_run, realized) tuple sharing the full lineage."""
+    capacity = _capacity()
+    order_intent = _order_intent_from(capacity, _request(capacity))
+    bridge = _bridge()
+    prior = _prior_long()
+    episode_run = _episode_run(order_intent=order_intent, prior=prior)
+    realized = _realized_event(order_intent=order_intent, prior=prior)
+    return bridge, order_intent, episode_run, realized
+
+
+def _build(*, bridge=None, order_intent=None, episode_run=None, realized=None, **overrides):
+    b, oi, er, rz = _chain()
+    bridge = bridge if bridge is not None else b
+    order_intent = order_intent if order_intent is not None else oi
+    episode_run = episode_run if episode_run is not None else er
+    realized = realized if realized is not None else rz
     kwargs = {
         "expected_bridge_digest": bridge.bridge_digest,
+        "expected_order_intent_digest": order_intent.intent_digest,
         "expected_episode_run_digest": episode_run.episode_run_digest,
         "expected_realized_pnl_event_digest": realized.realized_pnl_event_digest,
         "episode_id": "e2e-1",
@@ -288,7 +318,7 @@ def _build(*, bridge=None, episode_run=None, realized=None, **overrides):
         "correlation_id": _CORR,
     }
     kwargs.update(overrides)
-    return build_paper_end_to_end_episode(bridge, episode_run, realized, **kwargs)
+    return build_paper_end_to_end_episode(bridge, order_intent, episode_run, realized, **kwargs)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -312,19 +342,26 @@ def test_valid_chain_is_ready():
 
 
 def test_all_consumed_digests_are_bound():
-    bridge, episode_run, realized = _bridge(), _episode_run(), _realized_event()
-    episode = _build(bridge=bridge, episode_run=episode_run, realized=realized)
+    bridge, order_intent, episode_run, realized = _chain()
+    episode = _build(bridge=bridge, order_intent=order_intent, episode_run=episode_run, realized=realized)
     assert episode.bridge_digest == bridge.bridge_digest
+    assert episode.order_intent_artifact_digest == order_intent.intent_digest
+    assert episode.admission_decision_digest == order_intent.admission_decision_digest
+    assert episode.capacity_decision_digest == order_intent.capacity_decision_digest
     assert episode.episode_run_digest == episode_run.episode_run_digest
     assert episode.realized_pnl_event_digest == realized.realized_pnl_event_digest
     assert episode.paper_order_intent_request_digest == bridge.paper_order_intent_request_digest
-    assert episode.fill_simulation_result_digest == episode_run.fill_simulation_result_digest
-    assert episode.position_transition_digest == episode_run.position_transition_digest
-    assert episode.new_position_state_digest == episode_run.new_position_state_digest
+    assert episode.order_intent_digest == episode_run.order_intent_digest
 
 
-def test_shared_chain_digests_match_between_episode_and_realized():
-    episode_run, realized = _episode_run(), _realized_event()
+def test_lineage_digests_chain_through():
+    bridge, order_intent, episode_run, realized = _chain()
+    # bridge request -> admitted order intent (shared request + capacity digests).
+    assert order_intent.request_digest == bridge.paper_order_intent_request_digest
+    assert order_intent.capacity_decision_digest == bridge.capacity_decision_digest
+    # admitted order intent -> runner.
+    assert order_intent.intent_digest == episode_run.order_intent_digest
+    # runner -> realized (shared fill/transition/state digests).
     assert episode_run.fill_simulation_result_digest == realized.fill_simulation_result_digest
     assert episode_run.position_transition_digest == realized.position_transition_digest
     assert episode_run.prior_position_state_digest == realized.prior_position_state_digest
@@ -360,6 +397,12 @@ def test_wrong_expected_bridge_digest_cannot_be_ready():
     assert "paper_end_to_end_episode:bridge_digest_mismatch" in episode.rejection_reasons
 
 
+def test_wrong_expected_order_intent_digest_cannot_be_ready():
+    episode = _build(expected_order_intent_digest=_HEX_BAD)
+    assert episode.status is PaperEndToEndEpisodeStatus.REJECTED
+    assert "paper_end_to_end_episode:order_intent_digest_mismatch" in episode.rejection_reasons
+
+
 def test_wrong_expected_episode_run_digest_cannot_be_ready():
     episode = _build(expected_episode_run_digest=_HEX_BAD)
     assert episode.status is PaperEndToEndEpisodeStatus.REJECTED
@@ -380,7 +423,67 @@ def test_tampered_bridge_digest_cannot_be_ready():
 
 
 # --------------------------------------------------------------------------------------------------
-# 3. Cross-artifact consistency
+# 3. Strong bridge -> order-intent -> runner lineage (P2 closure)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_p2_different_order_intent_same_weak_fields_rejected():
+    # Same symbol / side / correlation / run-id but a DIFFERENT order-intent lineage (different units) — the
+    # weak-field tie would have READY'd this; the digest lineage rejects it. This is the P2 regression.
+    foreign_intent = _order_intent(requested_units="6", requested_notional="300")  # 6 * 50 = 300 (consistent fill)
+    foreign_run = _episode_run(order_intent=foreign_intent)
+    foreign_realized = _realized_event(order_intent=foreign_intent)
+    episode = _build(
+        order_intent=foreign_intent,
+        episode_run=foreign_run,
+        realized=foreign_realized,
+        expected_order_intent_digest=foreign_intent.intent_digest,
+        expected_episode_run_digest=foreign_run.episode_run_digest,
+        expected_realized_pnl_event_digest=foreign_realized.realized_pnl_event_digest,
+    )
+    # Bridge (units 4) vs order intent (units 6): request lineage AND economic shape both break.
+    assert episode.status is PaperEndToEndEpisodeStatus.REJECTED
+    assert episode.ready is False
+    assert "paper_end_to_end_episode:bridge_request_lineage_mismatch" in episode.rejection_reasons
+    assert "paper_end_to_end_episode:bridge_intent_shape_mismatch" in episode.rejection_reasons
+
+
+def test_bridge_request_lineage_mismatch_rejected():
+    # A bridge whose internal request differs (different signal_id -> different request_digest) breaks the
+    # bridge -> order-intent lineage even though every weak field still agrees.
+    episode = _build(bridge=_bridge(signal_id="other-request"))
+    assert episode.status is PaperEndToEndEpisodeStatus.REJECTED
+    assert "paper_end_to_end_episode:bridge_request_lineage_mismatch" in episode.rejection_reasons
+
+
+def test_capacity_lineage_mismatch_rejected():
+    # A bridge built against a different capacity decision breaks the capacity lineage and request lineage.
+    other_capacity = _capacity(requested_notional="201")
+    episode = _build(bridge=_bridge(capacity_decision_digest=other_capacity.decision_digest, requested_notional="201"))
+    assert episode.status is PaperEndToEndEpisodeStatus.REJECTED
+    assert "paper_end_to_end_episode:capacity_lineage_mismatch" in episode.rejection_reasons
+
+
+def test_order_intent_runner_mismatch_rejected():
+    # An order intent whose self-digest != episode_run.order_intent_digest (different intent_id) — bridge
+    # request lineage still matches, isolating the order-intent -> runner mismatch.
+    other_intent = _order_intent(intent_id="intent-2")
+    episode = _build(order_intent=other_intent, expected_order_intent_digest=other_intent.intent_digest)
+    assert episode.status is PaperEndToEndEpisodeStatus.REJECTED
+    assert "paper_end_to_end_episode:order_intent_runner_mismatch" in episode.rejection_reasons
+
+
+def test_order_intent_unsafe_flags_rejected():
+    base = _order_intent()
+    tampered = replace(base, real_orders_enabled=True)
+    resealed = replace(tampered, intent_digest=paper_order_intent_digest(tampered))
+    episode = _build(order_intent=resealed, expected_order_intent_digest=resealed.intent_digest)
+    assert episode.status is PaperEndToEndEpisodeStatus.REJECTED
+    assert "paper_end_to_end_episode:order_intent_unsafe_flags" in episode.rejection_reasons
+
+
+# --------------------------------------------------------------------------------------------------
+# 4. Cross-artifact consistency
 # --------------------------------------------------------------------------------------------------
 
 
@@ -398,15 +501,8 @@ def test_side_mismatch_cannot_be_ready():
     assert "paper_end_to_end_episode:side_mismatch" in episode.rejection_reasons
 
 
-def test_correlation_mismatch_cannot_be_ready():
-    bridge = _bridge(correlation_id="corr-other")
-    episode = _build(bridge=bridge, correlation_id="corr-other")
-    assert episode.status is PaperEndToEndEpisodeStatus.REJECTED
-    assert "paper_end_to_end_episode:correlation_mismatch" in episode.rejection_reasons
-
-
 def test_caller_correlation_mismatch_cannot_be_ready():
-    # All artifacts agree on _CORR, but the caller-supplied correlation_id differs.
+    # Runtime artifacts agree on _CORR, but the caller-supplied correlation_id differs.
     episode = _build(correlation_id="corr-different")
     assert episode.status is PaperEndToEndEpisodeStatus.REJECTED
     assert "paper_end_to_end_episode:correlation_mismatch" in episode.rejection_reasons
@@ -437,7 +533,7 @@ def test_foreign_realized_event_chain_digest_mismatch():
 
 
 # --------------------------------------------------------------------------------------------------
-# 4. Status / safety
+# 5. Status / safety
 # --------------------------------------------------------------------------------------------------
 
 
@@ -449,9 +545,9 @@ def test_bridge_not_ready_cannot_be_ready():
 
 
 def test_fill_rejected_episode_cannot_be_ready():
-    # An episode whose fill was REJECTED is FILL_REJECTED (not COMPUTED) and cannot bind a READY episode.
+    order_intent = _order_intent()
     rejected_run = run_paper_episode(
-        _order_intent(),
+        order_intent,
         _prior_long(),
         build_paper_fill_market_snapshot(
             snapshot_id="snap-1", market_symbol=_SYMBOL, reference_price="50", available_units="0"
@@ -460,27 +556,31 @@ def test_fill_rejected_episode_cannot_be_ready():
         _mark(),
         **_CHAIN_IDS,  # type: ignore[arg-type]
     )
-    episode = _build(episode_run=rejected_run, expected_episode_run_digest=rejected_run.episode_run_digest)
+    episode = _build(
+        order_intent=order_intent,
+        episode_run=rejected_run,
+        expected_episode_run_digest=rejected_run.episode_run_digest,
+    )
     assert episode.status is PaperEndToEndEpisodeStatus.REJECTED
     assert "paper_end_to_end_episode:episode_run_not_computed" in episode.rejection_reasons
 
 
 @pytest.mark.parametrize(
-    ("override", "expected_reason"),
+    "override",
     [
-        ({"real_orders_enabled": True}, "paper_end_to_end_episode:bridge_unsafe_flags"),
-        ({"real_money_enabled": True}, "paper_end_to_end_episode:bridge_unsafe_flags"),
-        ({"live_ready": True}, "paper_end_to_end_episode:bridge_unsafe_flags"),
-        ({"prdv4_stage4_complete": True}, "paper_end_to_end_episode:bridge_unsafe_flags"),
+        {"real_orders_enabled": True},
+        {"real_money_enabled": True},
+        {"live_ready": True},
+        {"prdv4_stage4_complete": True},
     ],
 )
-def test_unsafe_bridge_flags_cannot_be_ready(override, expected_reason):
+def test_unsafe_bridge_flags_cannot_be_ready(override):
     base = _bridge()
     tampered = replace(base, **override)
     resealed = replace(tampered, bridge_digest=episode_module.strategy_signal_to_paper_intent_digest(tampered))
     episode = _build(bridge=resealed, expected_bridge_digest=resealed.bridge_digest)
     assert episode.status is PaperEndToEndEpisodeStatus.REJECTED
-    assert expected_reason in episode.rejection_reasons
+    assert "paper_end_to_end_episode:bridge_unsafe_flags" in episode.rejection_reasons
 
 
 def test_unsafe_realized_flags_cannot_be_ready():
@@ -502,14 +602,15 @@ def test_unsafe_episode_flags_cannot_be_ready():
 
 
 # --------------------------------------------------------------------------------------------------
-# 5. Call-level malformed input (raises)
+# 6. Call-level malformed input (raises)
 # --------------------------------------------------------------------------------------------------
 
 
-def _call(bridge, episode_run, realized, **overrides):
+def _call(bridge, order_intent, episode_run, realized, **overrides):
     """Call the builder directly with valid anchors (so a bad artifact reaches the isinstance gate)."""
     kwargs = {
         "expected_bridge_digest": _HEX_CAP,
+        "expected_order_intent_digest": _HEX_CAP,
         "expected_episode_run_digest": _HEX_CAP,
         "expected_realized_pnl_event_digest": _HEX_CAP,
         "episode_id": "e2e-1",
@@ -517,25 +618,31 @@ def _call(bridge, episode_run, realized, **overrides):
         "correlation_id": _CORR,
     }
     kwargs.update(overrides)
-    return build_paper_end_to_end_episode(bridge, episode_run, realized, **kwargs)
+    return build_paper_end_to_end_episode(bridge, order_intent, episode_run, realized, **kwargs)
 
 
 @pytest.mark.parametrize("bad", [None, object(), 123, "bridge"])
 def test_wrong_typed_bridge_raises(bad):
     with pytest.raises(PaperEndToEndEpisodeError):
-        _call(bad, _episode_run(), _realized_event())
+        _call(bad, _order_intent(), _episode_run(), _realized_event())
+
+
+@pytest.mark.parametrize("bad", [None, object(), 123])
+def test_wrong_typed_order_intent_raises(bad):
+    with pytest.raises(PaperEndToEndEpisodeError):
+        _call(_bridge(), bad, _episode_run(), _realized_event())
 
 
 @pytest.mark.parametrize("bad", [None, object(), 123])
 def test_wrong_typed_episode_run_raises(bad):
     with pytest.raises(PaperEndToEndEpisodeError):
-        _call(_bridge(), bad, _realized_event())
+        _call(_bridge(), _order_intent(), bad, _realized_event())
 
 
 @pytest.mark.parametrize("bad", [None, object(), 123])
 def test_wrong_typed_realized_raises(bad):
     with pytest.raises(PaperEndToEndEpisodeError):
-        _call(_bridge(), _episode_run(), bad)
+        _call(_bridge(), _order_intent(), _episode_run(), bad)
 
 
 @pytest.mark.parametrize("field", ["episode_id", "run_id", "correlation_id"])
@@ -546,7 +653,13 @@ def test_empty_required_strings_raise(field, bad):
 
 
 @pytest.mark.parametrize(
-    "field", ["expected_bridge_digest", "expected_episode_run_digest", "expected_realized_pnl_event_digest"]
+    "field",
+    [
+        "expected_bridge_digest",
+        "expected_order_intent_digest",
+        "expected_episode_run_digest",
+        "expected_realized_pnl_event_digest",
+    ],
 )
 @pytest.mark.parametrize("bad", ["", "x", "g" * 64, "A" * 64, "a" * 63])
 def test_malformed_expected_digests_raise(field, bad):
@@ -572,7 +685,7 @@ def test_forbidden_token_in_metadata_raises():
 
 
 # --------------------------------------------------------------------------------------------------
-# 6. Raw / canonical adversariality
+# 7. Raw / canonical adversariality
 # --------------------------------------------------------------------------------------------------
 
 
@@ -603,7 +716,7 @@ def test_str_subclass_required_strings_raise(field):
 
 
 def test_equality_liar_bridge_side_cannot_be_ready():
-    # A bridge whose side is an equality-liar str must not pass the side cross-check: the probe compares
+    # A bridge whose side is an equality-liar str must not pass the side/shape checks: the probe compares
     # exact plain-string content (a str subclass collapses to "").
     base = _bridge()
     tampered = replace(base, side=_LiarStr("SELL"))
@@ -614,17 +727,17 @@ def test_equality_liar_bridge_side_cannot_be_ready():
     assert episode.side == ""  # str subclass collapsed to empty in the bound artifact
 
 
-def test_equality_liar_correlation_cannot_be_ready():
-    base = _bridge()
+def test_equality_liar_realized_correlation_cannot_be_ready():
+    base = _realized_event()
     tampered = replace(base, correlation_id=_LiarStr(_CORR))
-    resealed = replace(tampered, bridge_digest=episode_module.strategy_signal_to_paper_intent_digest(tampered))
-    episode = _build(bridge=resealed, expected_bridge_digest=resealed.bridge_digest)
+    resealed = replace(tampered, realized_pnl_event_digest=paper_realized_pnl_event_digest(tampered))
+    episode = _build(realized=resealed, expected_realized_pnl_event_digest=resealed.realized_pnl_event_digest)
     assert episode.status is PaperEndToEndEpisodeStatus.REJECTED
     assert "paper_end_to_end_episode:correlation_mismatch" in episode.rejection_reasons
 
 
 # --------------------------------------------------------------------------------------------------
-# 7. Determinism / immutability
+# 8. Determinism / immutability
 # --------------------------------------------------------------------------------------------------
 
 
@@ -635,15 +748,25 @@ def test_episode_is_frozen():
 
 
 def test_build_inputs_not_mutated():
-    bridge, episode_run, realized = _bridge(), _episode_run(), _realized_event()
-    before = (bridge.bridge_digest, episode_run.episode_run_digest, realized.realized_pnl_event_digest)
-    _build(bridge=bridge, episode_run=episode_run, realized=realized)
-    after = (bridge.bridge_digest, episode_run.episode_run_digest, realized.realized_pnl_event_digest)
+    bridge, order_intent, episode_run, realized = _chain()
+    before = (
+        bridge.bridge_digest,
+        order_intent.intent_digest,
+        episode_run.episode_run_digest,
+        realized.realized_pnl_event_digest,
+    )
+    _build(bridge=bridge, order_intent=order_intent, episode_run=episode_run, realized=realized)
+    after = (
+        bridge.bridge_digest,
+        order_intent.intent_digest,
+        episode_run.episode_run_digest,
+        realized.realized_pnl_event_digest,
+    )
     assert before == after
 
 
 # --------------------------------------------------------------------------------------------------
-# 8. Forbidden surfaces (static analysis)
+# 9. Forbidden surfaces (static analysis)
 # --------------------------------------------------------------------------------------------------
 
 
@@ -718,6 +841,7 @@ def test_no_forbidden_module_imports():
     cc_imports = sorted(m for m in modules if m.startswith("crypto_core"))
     assert cc_imports == [
         "crypto_core.validation.paper_episode_runner",
+        "crypto_core.validation.paper_order_intent",
         "crypto_core.validation.paper_realized_pnl",
         "crypto_core.validation.strategy_signal_to_paper_intent",
     ]
@@ -743,7 +867,7 @@ def test_no_forbidden_runtime_calls_alias_resistant():
 
 
 # --------------------------------------------------------------------------------------------------
-# 9. Non-overclaim / scope
+# 10. Non-overclaim / scope
 # --------------------------------------------------------------------------------------------------
 
 
@@ -783,7 +907,7 @@ def test_non_overclaim_flags_false():
 
 
 # --------------------------------------------------------------------------------------------------
-# 10. Operator-readable serializer
+# 11. Operator-readable serializer
 # --------------------------------------------------------------------------------------------------
 
 
@@ -792,6 +916,8 @@ def test_serializer_keys_and_json_safe():
     assert payload["status"] == "READY"
     assert payload["realized_pnl"] == "-200"
     assert payload["prdv4_stage4_complete"] is False
+    assert _is_hex64(payload["order_intent_artifact_digest"])
+    assert _is_hex64(payload["admission_decision_digest"])
     dumped = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
     assert isinstance(dumped, str)
 

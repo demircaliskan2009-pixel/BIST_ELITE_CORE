@@ -7,20 +7,27 @@ runs no backtest, simulates no fills, mutates no positions, computes no economic
 adds no runtime/persistence/scheduler/execution/venue path. It answers one question: "do these already-
 produced paper artifacts describe ONE consistent deterministic episode that reaches realized PnL?"
 
-It binds three already-built artifacts (each re-proven at its trust boundary via its PUBLIC digest
-helper — stored digest must equal the recomputed digest and the caller's independent expected anchor):
+It binds four already-built artifacts (each re-proven at its trust boundary via its PUBLIC digest helper
+— stored digest must equal the recomputed digest and the caller's independent expected anchor):
 
   - ``StrategySignalToPaperIntent`` (READY)        — the signal → inert paper order-intent request bridge.
+  - ``PaperOrderIntent`` (CREATED)                 — the inert order intent materialized from the admitted request.
   - ``PaperEpisodeRunResult`` (COMPUTED)           — intent → fill → position → unrealized/MTM PnL.
   - ``PaperRealizedPnlEvent`` (COMPUTED / NO_REALIZED_PNL) — the realized-PnL leg over that same fill.
 
-Linkage model (honest, no fake digest link): the episode-run-result and the realized-PnL event share
-the SAME ``fill_simulation_result_digest`` / ``position_transition_digest`` / ``prior_position_state_digest``
-/ ``new_position_state_digest`` — those are re-proven EQUAL (a strong digest-bound tie that the realized
-leg covers the exact fill/transition/positions the episode produced). The strategy-signal bridge emits a
-``PaperOrderIntentRequest`` (admission contract) which is intentionally a DIFFERENT representation from the
-runner's ``PaperOrderIntent``; the two halves are therefore tied by deterministic LOGICAL consistency
-(market symbol, side, correlation id), not by an intent digest — this is stated, not overclaimed.
+Linkage model (fully digest-bound — no fake equality between distinct contracts): the runner's
+``PaperOrderIntent`` carries the SAME ``request_digest`` that the bridge produced (the admission/order-intent
+builders COPY ``PaperOrderIntentRequest.request_digest`` forward), so the bridge → order-intent lineage is
+proven by ``order_intent.request_digest == bridge.paper_order_intent_request_digest`` AND
+``order_intent.capacity_decision_digest == bridge.capacity_decision_digest`` (both reference the exact same
+request / capacity decision). The order-intent → runner lineage is proven by
+``order_intent.intent_digest == episode_run.order_intent_digest`` (the runner ran THIS order intent). The
+runner → realized lineage is proven by the SHARED ``fill_simulation_result_digest`` /
+``position_transition_digest`` / ``prior_position_state_digest`` / ``new_position_state_digest``. The two
+distinct intent contracts (``PaperOrderIntentRequest`` vs ``PaperOrderIntent``) are never claimed to share a
+digest; only the genuinely shared ``request_digest`` / ``capacity_decision_digest`` lineage values are
+compared. Economic shape (symbol, side, intent_type, units, notional, limit_price) must also agree
+bridge ↔ order-intent. Full chain: signal → request → admitted order intent → fill → position → realized PnL.
 
 Non-overclaim: a READY episode is a deterministic binding proof only. It is NOT PRDV4 Stage 4 completion
 (no ≥30-day paper trading, no paper-vs-backtest metrics, no Sharpe gate), NOT live readiness, NOT shadow
@@ -46,6 +53,11 @@ from crypto_core.validation.paper_episode_runner import (
     PaperEpisodeRunStatus,
     paper_episode_run_result_digest,
 )
+from crypto_core.validation.paper_order_intent import (
+    PaperOrderIntent,
+    PaperOrderIntentStatus,
+    paper_order_intent_digest,
+)
 from crypto_core.validation.paper_realized_pnl import (
     PaperRealizedPnlEvent,
     PaperRealizedPnlStatus,
@@ -59,6 +71,7 @@ from crypto_core.validation.strategy_signal_to_paper_intent import (
 
 _SCHEMA_VERSION = "paper-end-to-end-episode.v1"
 _EXPECTED_BRIDGE_SCHEMA_VERSION = "strategy-signal-to-paper-intent.v1"
+_EXPECTED_ORDER_INTENT_SCHEMA_VERSION = "paper-order-intent.v1"
 _EXPECTED_EPISODE_SCHEMA_VERSION = "paper-episode-run-result.v1"
 _EXPECTED_REALIZED_SCHEMA_VERSION = "paper-realized-pnl-event.v1"
 
@@ -120,6 +133,9 @@ class PaperEndToEndEpisode:
     realized_pnl_status: str
     bridge_digest: str
     paper_order_intent_request_digest: str
+    order_intent_artifact_digest: str
+    admission_decision_digest: str
+    capacity_decision_digest: str
     episode_run_digest: str
     order_intent_digest: str
     fill_simulation_result_digest: str
@@ -305,12 +321,43 @@ def _realized_is_paper_safe(event: PaperRealizedPnlEvent) -> bool:
     )
 
 
+def _order_intent_is_paper_safe(order_intent: PaperOrderIntent) -> bool:
+    return (
+        order_intent.paper_only is True
+        and order_intent.real_orders_enabled is False
+        and order_intent.real_money_enabled is False
+        and order_intent.capital_reserved is False
+        and order_intent.order_routed is False
+        and order_intent.venue_order_id_created is False
+        and order_intent.exchange_id_created is False
+        and order_intent.client_order_id_created is False
+        and order_intent.route_id_created is False
+        and order_intent.execution_instruction_created is False
+        and order_intent.execution_authorized is False
+        and order_intent.fill_created is False
+        and order_intent.pnl_computed is False
+        and order_intent.position_mutated is False
+        and order_intent.live_api_called is False
+        and order_intent.scheduler_enabled is False
+        and order_intent.connector_invoked is False
+    )
+
+
+def _same_optional_str(left: object, right: object) -> bool:
+    """True iff both are ``None`` or both are exact plain ``str`` with equal content."""
+    if left is None and right is None:
+        return True
+    return type(left) is str and type(right) is str and left == right
+
+
 def build_paper_end_to_end_episode(
     bridge: StrategySignalToPaperIntent,
+    order_intent: PaperOrderIntent,
     episode_run: PaperEpisodeRunResult,
     realized_pnl_event: PaperRealizedPnlEvent,
     *,
     expected_bridge_digest: str,
+    expected_order_intent_digest: str,
     expected_episode_run_digest: str,
     expected_realized_pnl_event_digest: str,
     episode_id: str,
@@ -318,24 +365,31 @@ def build_paper_end_to_end_episode(
     correlation_id: str,
     metadata: Mapping[str, str] | None = None,
 ) -> PaperEndToEndEpisode:
-    """Bind a strategy-signal bridge, an episode run result, and a realized-PnL event into one episode.
+    """Bind the signal bridge, the admitted order intent, the episode run, and the realized-PnL event.
 
-    ``bridge`` / ``episode_run`` / ``realized_pnl_event`` must be the exact frozen artifact types and each
-    ``expected_*_digest`` an exact plain 64-lowercase-hex ``str``; ``episode_id`` / ``run_id`` /
+    ``bridge`` / ``order_intent`` / ``episode_run`` / ``realized_pnl_event`` must be the exact frozen artifact
+    types and each ``expected_*_digest`` an exact plain 64-lowercase-hex ``str``; ``episode_id`` / ``run_id`` /
     ``correlation_id`` exact plain non-empty ``str``; ``metadata`` ``Mapping[str, str]`` or ``None``. A
     wrong-typed artifact, an empty id, a malformed digest/metadata, or a forbidden BIST/live/order token
     raises ``PaperEndToEndEpisodeError``.
 
     READY only when: each artifact re-digests to its stored digest AND the caller's expected anchor; the
-    bridge is READY + paper-safe; the episode run is COMPUTED (fill → position → MTM) + paper-safe; the
-    realized event is COMPUTED/NO_REALIZED_PNL (not REJECTED) + paper-safe; the episode-run and realized
-    event share the exact fill / transition / prior-state / new-state digests; and market symbol, side
-    (bridge order side == realized fill side), correlation id, and run id are consistent across the chain.
-    Every other outcome maps fail-closed to REJECTED. Deterministic and immutable; no wall-clock/random/IO;
-    paper only; NOT PRDV4 Stage 4 / live / shadow readiness and NOT a profitability/edge/execution proof.
+    bridge is READY + paper-safe; the order intent is CREATED + paper-safe; the episode run is COMPUTED + paper-
+    safe; the realized event is COMPUTED/NO_REALIZED_PNL (not REJECTED) + paper-safe; and the FULL lineage is
+    digest-bound — ``order_intent.request_digest == bridge.paper_order_intent_request_digest`` and
+    ``order_intent.capacity_decision_digest == bridge.capacity_decision_digest`` (bridge request → order
+    intent), ``order_intent.intent_digest == episode_run.order_intent_digest`` (order intent → runner), the
+    episode-run and realized event share the exact fill / transition / prior-state / new-state digests
+    (runner → realized), the bridge ↔ order-intent economic shape (symbol, side, intent_type, units, notional,
+    limit_price) agrees, the order side equals the realized fill side, the runtime correlation id is consistent
+    (episode/realized/caller), and run id equals the bridge's. Every other outcome maps fail-closed to
+    REJECTED. Deterministic and immutable; no wall-clock/random/IO; paper only; NOT PRDV4 Stage 4 / live /
+    shadow readiness and NOT a profitability/edge/execution proof.
     """
     if not _is_hex64_string(expected_bridge_digest):
         raise PaperEndToEndEpisodeError("paper_end_to_end_episode:expected_bridge_digest_invalid")
+    if not _is_hex64_string(expected_order_intent_digest):
+        raise PaperEndToEndEpisodeError("paper_end_to_end_episode:expected_order_intent_digest_invalid")
     if not _is_hex64_string(expected_episode_run_digest):
         raise PaperEndToEndEpisodeError("paper_end_to_end_episode:expected_episode_run_digest_invalid")
     if not _is_hex64_string(expected_realized_pnl_event_digest):
@@ -345,6 +399,8 @@ def build_paper_end_to_end_episode(
             raise PaperEndToEndEpisodeError(f"paper_end_to_end_episode:{name}_invalid")
     if not isinstance(bridge, StrategySignalToPaperIntent):
         raise PaperEndToEndEpisodeError("paper_end_to_end_episode:bridge_malformed")
+    if not isinstance(order_intent, PaperOrderIntent):
+        raise PaperEndToEndEpisodeError("paper_end_to_end_episode:order_intent_malformed")
     if not isinstance(episode_run, PaperEpisodeRunResult):
         raise PaperEndToEndEpisodeError("paper_end_to_end_episode:episode_run_malformed")
     if not isinstance(realized_pnl_event, PaperRealizedPnlEvent):
@@ -365,6 +421,15 @@ def build_paper_end_to_end_episode(
     )
     if bridge_reason is not None:
         hard.append(bridge_reason)
+    order_intent_reason = _reprove_artifact_digest(
+        artifact=order_intent,
+        recompute=paper_order_intent_digest,
+        stored=order_intent.intent_digest,
+        expected=expected_order_intent_digest,
+        label="order_intent",
+    )
+    if order_intent_reason is not None:
+        hard.append(order_intent_reason)
     episode_reason = _reprove_artifact_digest(
         artifact=episode_run,
         recompute=paper_episode_run_result_digest,
@@ -392,6 +457,14 @@ def build_paper_end_to_end_episode(
     if not _bridge_is_paper_safe(bridge):
         hard.append("paper_end_to_end_episode:bridge_unsafe_flags")
 
+    if (
+        order_intent.schema_version != _EXPECTED_ORDER_INTENT_SCHEMA_VERSION
+        or order_intent.status is not PaperOrderIntentStatus.CREATED
+    ):
+        hard.append("paper_end_to_end_episode:order_intent_invalid")
+    if not _order_intent_is_paper_safe(order_intent):
+        hard.append("paper_end_to_end_episode:order_intent_unsafe_flags")
+
     if episode_run.schema_version != _EXPECTED_EPISODE_SCHEMA_VERSION:
         hard.append("paper_end_to_end_episode:episode_run_invalid")
     elif (
@@ -415,9 +488,46 @@ def build_paper_end_to_end_episode(
     if not _realized_is_paper_safe(realized_pnl_event):
         hard.append("paper_end_to_end_episode:realized_pnl_event_unsafe_flags")
 
-    # Cross-artifact consistency. Market symbol / correlation id must agree across all three artifacts and
-    # the caller-supplied correlation id; run id must equal the bridge's; the bridge order side must equal
-    # the realized fill side. All comparisons are over exact plain strings (a str subclass yields "").
+    # --- Strong lineage: bridge request -> admitted order intent (digest-bound, distinct contracts) ---
+    # The order intent COPIES PaperOrderIntentRequest.request_digest / capacity_decision_digest forward via the
+    # admission, so equal values prove the order intent descends from THIS bridge's request (no fake equality
+    # between the request and intent self-digests, which are intentionally distinct contracts).
+    order_intent_request_digest = _plain_str_or_empty(order_intent.request_digest)
+    if not _is_hex64_string(order_intent_request_digest) or (
+        order_intent_request_digest != _plain_str_or_empty(bridge.paper_order_intent_request_digest)
+    ):
+        hard.append("paper_end_to_end_episode:bridge_request_lineage_mismatch")
+    order_intent_capacity_digest = _plain_str_or_empty(order_intent.capacity_decision_digest)
+    if not _is_hex64_string(order_intent_capacity_digest) or (
+        order_intent_capacity_digest != _plain_str_or_empty(bridge.capacity_decision_digest)
+    ):
+        hard.append("paper_end_to_end_episode:capacity_lineage_mismatch")
+
+    # --- Strong lineage: admitted order intent -> runner (digest-bound) ---
+    order_intent_self_digest = _plain_str_or_empty(order_intent.intent_digest)
+    if not _is_hex64_string(order_intent_self_digest) or (
+        order_intent_self_digest != _plain_str_or_empty(episode_run.order_intent_digest)
+    ):
+        hard.append("paper_end_to_end_episode:order_intent_runner_mismatch")
+
+    # Economic shape must agree bridge <-> order intent (a str subclass collapses to "" and fails).
+    shape_pairs = (
+        (bridge.market_symbol, order_intent.market_symbol),
+        (bridge.side, order_intent.side),
+        (bridge.intent_type, order_intent.intent_type),
+        (bridge.requested_units, order_intent.requested_units),
+        (bridge.requested_notional, order_intent.requested_notional),
+    )
+    shape_mismatch = any(
+        _plain_str_or_empty(left) == "" or _plain_str_or_empty(left) != _plain_str_or_empty(right)
+        for left, right in shape_pairs
+    )
+    if shape_mismatch or not _same_optional_str(bridge.limit_price, order_intent.limit_price):
+        hard.append("paper_end_to_end_episode:bridge_intent_shape_mismatch")
+
+    # Cross-artifact coherence: market symbol across bridge/episode/realized; runtime correlation id across
+    # episode/realized and the caller; run id == bridge's; bridge order side == realized fill side. (The bridge
+    # correlation id is the REQUEST domain — tied to the runner via the request_digest lineage above, not here.)
     symbols = {
         _plain_str_or_empty(bridge.market_symbol),
         _plain_str_or_empty(episode_run.market_symbol),
@@ -426,7 +536,6 @@ def build_paper_end_to_end_episode(
     if len(symbols) != 1 or "" in symbols:
         hard.append("paper_end_to_end_episode:symbol_mismatch")
     correlations = {
-        _plain_str_or_empty(bridge.correlation_id),
         _plain_str_or_empty(episode_run.correlation_id),
         _plain_str_or_empty(realized_pnl_event.correlation_id),
     }
@@ -458,6 +567,7 @@ def build_paper_end_to_end_episode(
         run_id=run_id,
         correlation_id=correlation_id,
         bridge=bridge,
+        order_intent=order_intent,
         episode_run=episode_run,
         realized_pnl_event=realized_pnl_event,
         rejection_reasons=rejection_reasons,
@@ -472,6 +582,7 @@ def _finalize_episode(
     run_id: str,
     correlation_id: str,
     bridge: StrategySignalToPaperIntent,
+    order_intent: PaperOrderIntent,
     episode_run: PaperEpisodeRunResult,
     realized_pnl_event: PaperRealizedPnlEvent,
     rejection_reasons: tuple[str, ...],
@@ -501,6 +612,9 @@ def _finalize_episode(
         else "",
         "bridge_digest": _plain_str_or_empty(bridge.bridge_digest),
         "paper_order_intent_request_digest": _plain_str_or_empty(bridge.paper_order_intent_request_digest),
+        "order_intent_artifact_digest": _plain_str_or_empty(order_intent.intent_digest),
+        "admission_decision_digest": _plain_str_or_empty(order_intent.admission_decision_digest),
+        "capacity_decision_digest": _plain_str_or_empty(order_intent.capacity_decision_digest),
         "episode_run_digest": _plain_str_or_empty(episode_run.episode_run_digest),
         "order_intent_digest": _plain_str_or_empty(episode_run.order_intent_digest),
         "fill_simulation_result_digest": _plain_str_or_empty(episode_run.fill_simulation_result_digest),
@@ -546,6 +660,9 @@ def _episode_fields(episode: PaperEndToEndEpisode) -> dict[str, object]:
         "realized_pnl_status": episode.realized_pnl_status,
         "bridge_digest": episode.bridge_digest,
         "paper_order_intent_request_digest": episode.paper_order_intent_request_digest,
+        "order_intent_artifact_digest": episode.order_intent_artifact_digest,
+        "admission_decision_digest": episode.admission_decision_digest,
+        "capacity_decision_digest": episode.capacity_decision_digest,
         "episode_run_digest": episode.episode_run_digest,
         "order_intent_digest": episode.order_intent_digest,
         "fill_simulation_result_digest": episode.fill_simulation_result_digest,
@@ -583,6 +700,9 @@ def _episode_payload_from(episode: PaperEndToEndEpisode) -> dict[str, object]:
         "realized_pnl_status": episode.realized_pnl_status,
         "bridge_digest": episode.bridge_digest,
         "paper_order_intent_request_digest": episode.paper_order_intent_request_digest,
+        "order_intent_artifact_digest": episode.order_intent_artifact_digest,
+        "admission_decision_digest": episode.admission_decision_digest,
+        "capacity_decision_digest": episode.capacity_decision_digest,
         "episode_run_digest": episode.episode_run_digest,
         "order_intent_digest": episode.order_intent_digest,
         "fill_simulation_result_digest": episode.fill_simulation_result_digest,
