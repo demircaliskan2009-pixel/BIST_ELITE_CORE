@@ -514,10 +514,18 @@ def _is_exact_raw_request_payload(raw: object) -> bool:
     outer/pair container subclass is already normalized to a plain ``list`` there; only the surviving key/value
     element types remain to be exact-checked here.) No coercion; the JSON round-trip is never relied on to
     sanitize types.
+
+    Key exactness is proven INDEPENDENTLY before the key-set comparison: every key must be an exact plain
+    ``str`` (rejecting any ``str`` subclass key outright), then the set of keys must equal the expected set.
+    The non-plain keys are never filtered out — filtering would let an extra subclass key (e.g.
+    ``_LiarStr("unexpected_extension")``) silently survive ``set(raw) == _RAW_REQUEST_KEYS`` and ride along in
+    a re-sealed foreign-schema/request digest.
     """
     if type(raw) is not dict:
         return False
-    if {key for key in raw if type(key) is str} != _RAW_REQUEST_KEYS:
+    if any(type(key) is not str for key in raw):
+        return False
+    if set(raw.keys()) != _RAW_REQUEST_KEYS:
         return False
     for field in _RAW_REQUEST_STRING_FIELDS:
         if type(raw[field]) is not str:

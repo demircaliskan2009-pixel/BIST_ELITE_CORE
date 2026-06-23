@@ -599,6 +599,42 @@ def test_raw_request_payload_exact_shape_accepts_genuine_and_rejects_subclass():
     raw_missing = dict(raw)
     del raw_missing["request_id"]
     assert bridge_module._is_exact_raw_request_payload(raw_missing) is False
+    # An EXTRA str-SUBCLASS key must be rejected (never filtered out so the key set still compares equal).
+    raw_extra_subclass = dict(raw)
+    raw_extra_subclass[_LiarStr("unexpected_extension")] = "x"
+    assert bridge_module._is_exact_raw_request_payload(raw_extra_subclass) is False
+    # An expected key represented as a str subclass is rejected.
+    raw_subclass_key = dict(raw)
+    digest_value = raw_subclass_key.pop("request_digest")
+    raw_subclass_key[_LiarStr("request_digest")] = digest_value
+    assert bridge_module._is_exact_raw_request_payload(raw_subclass_key) is False
+
+
+def test_builder_serializer_extra_subclass_key_blocks_ready(monkeypatch):
+    # End-to-end: even if the public serializer emitted a raw payload with an EXTRA str-subclass key and the
+    # request_digest were resealed to include it, the bridge must REJECT at the raw key-exactness boundary —
+    # never READY binding a foreign-schema/request digest. (This would go READY under a key-FILTERING validator.)
+    real_to_dict = bridge_module.paper_order_intent_request_to_dict
+
+    def _fake_to_dict(request):
+        raw = real_to_dict(request)
+        # Reseal the digest over a PLAIN-key copy carrying the extra key (sortable / JSON-equivalent to what the
+        # bridge snapshot would derive), so the only thing standing between this and READY is the raw key proof.
+        reseal = dict(raw)
+        reseal.pop("request_digest", None)  # hash-bucketed drop (a ``!=`` filter would trip _LiarStr.__ne__)
+        reseal["unexpected_extension"] = "x"
+        resealed_digest = bridge_module._canonical_digest(reseal)
+        # Inject the EXTRA key as a str SUBCLASS into the actual payload and bind the resealed digest.
+        raw[_LiarStr("unexpected_extension")] = "x"
+        raw["request_digest"] = resealed_digest
+        return raw
+
+    monkeypatch.setattr(bridge_module, "paper_order_intent_request_to_dict", _fake_to_dict)
+    bridge = _build()
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert bridge.ready is False
+    assert "strategy_signal_to_paper_intent:request_payload_type_violation" in bridge.rejection_reasons
+    assert bridge.paper_order_intent_request_digest == ""
 
 
 def test_builder_stateful_metadata_request_toctou_is_rejected(monkeypatch):
