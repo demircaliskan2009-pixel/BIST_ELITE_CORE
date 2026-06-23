@@ -1,41 +1,47 @@
 """Paper admission ledger bridge — deterministic, paper-only, fail-closed append of a paper evidence
-admission record (with its end-to-end episode provenance) into the EXISTING append-only ``EvidenceJournal``.
+admission record (with proven episode chain lineage) into the EXISTING append-only ``EvidenceJournal``.
 
 Phase-map slice 4 (``docs/crypto_core/paper_trading_phase_map.md`` §7.4): *append admission records to an
 existing evidence journal/store — no new store proliferation.* This bridge **reuses** the existing
 ``crypto_core.audit.evidence_journal.EvidenceJournal`` (it does NOT invent a parallel store/ledger): it
-consumes an already-built ``PaperEvidenceAdmissionRecord`` (the realized-PnL evidence admission decision) and
-its co-bound ``PaperEndToEndEpisode`` (the deterministic intent → fill → position → realized-PnL episode),
-re-proves both at their digest trust boundaries, and — only when everything re-proves — appends ONE
-deterministic, token-safe, digest-bound entry to the journal. It is a *bridge / probe*, not an engine: it
-runs no backtest, recomputes no fills/positions/PnL, reconstructs no manifest/aggregate, and adds no
-runtime/persistence/scheduler/execution/venue path. It journals already-produced artifacts; it never builds,
-executes, routes, schedules, connects, or mutates anything beyond appending one journal entry.
+consumes an already-built ``PaperEvidenceAdmissionRecord`` (the realized-PnL evidence admission decision),
+the ``PaperSessionRealizedPnlEvidenceManifest`` that record admitted, and the deterministic
+``PaperEndToEndEpisode`` (intent → fill → position → realized-PnL) being journaled; it re-proves them at their
+digest trust boundaries, proves the record↔episode chain lineage, and — only when everything re-proves —
+appends ONE deterministic, token-safe, digest-bound entry to the journal. It is a *bridge / probe*, not an
+engine: it runs no backtest, recomputes no fills/positions/PnL, reconstructs no manifest/aggregate, and adds
+no runtime/persistence/scheduler/execution/venue path. It journals already-produced artifacts; it never
+builds, executes, routes, schedules, connects, or mutates anything beyond appending one journal entry.
+
+Strong record↔episode chain lineage (closes connector P2 ``record_to_episode_lineage_insufficient``):
+weak shared identity (market_symbol / correlation_id / caller episode_id+run_id) is NOT sufficient — a
+digest-valid ADMITTED record from one aggregate/session and a digest-valid READY episode from a *different*
+realized-PnL chain could otherwise bind. READY now additionally requires a genuine shared-digest membership
+proof using EXISTING contracts: the admitted manifest's ``source_event_digests`` (each computed with the SAME
+contract as the PUBLIC ``paper_realized_pnl_event_digest``) MUST contain the episode's
+``realized_pnl_event_digest`` (the episode's own bound realized-PnL event self-digest). That proves the
+admitted evidence chain *contains the exact realized event the episode produced* — record → manifest (digest
+binding: ``manifest.manifest_digest == record.manifest_digest`` and ``manifest.aggregate_digest ==
+record.aggregate_digest``, manifest self-digest re-proven) and manifest → episode (event-digest membership).
+No fake equality between distinct contracts; no invented mapping; if membership cannot be proven, fail closed
+with ``record_episode_lineage_unproven`` and do NOT produce READY for episode-bound journal admission.
 
 Why a curated journal payload (not the raw artifact dict): the journal's scope guard rejects forbidden
 tokens, and ``paper_evidence_admission_record_to_dict`` carries hard-safety attestation key NAMES that
 themselves contain forbidden tokens (``order_routed`` / ``scheduler_enabled`` / ``auto_loop_enabled`` /
 ``live_api_called`` / ``venue_order_id_created`` / …). Appending that raw dict would fail the journal guard.
-So the bridge appends a small, token-safe, digest-bound summary payload (statuses, bound digests, gross
-audit context) — the full safety attestations live on the FROZEN bridge artifact's own self-digest, never in
-the journal payload.
+So the bridge appends a small, token-safe, digest-bound summary payload (statuses, bound digests incl. the
+proven lineage event digest, gross audit context) — the full safety attestations live on the FROZEN bridge
+artifact's own self-digest, never in the journal payload.
 
-Trust boundaries (no fake equality between distinct contracts — PR #295 lesson): the admission record and
-the episode sit at DIFFERENT levels of the chain (a session-aggregate realized-PnL admission vs one episode's
-realized-PnL leg) and do NOT share a self-digest, so neither digest is ever claimed equal to the other. Each
-is re-proven INDEPENDENTLY: ``paper_evidence_admission_record_digest`` / ``paper_end_to_end_episode_digest``
-must equal the artifact's stored self-digest AND the caller's independent expected anchor. They are linked
-only by genuinely shared identity: the same ``market_symbol`` and the same audit ``correlation_id`` (caller =
-record = episode), plus the caller's ``episode_id`` / ``run_id`` anchors matching the (digest-proven) episode.
-
-Fail-closed: any digest mismatch, a non-ADMITTED record, a non-READY episode, an unsafe/over-claiming flag,
-an id/symbol/correlation mismatch, a wrong prior-journal head anchor, or a journal-level append rejection
-maps to a frozen REJECTED bridge artifact and the journal is left UNCHANGED (the single append happens only
-after every precheck passes). Call-level malformed input (wrong-typed journal/record/episode, malformed
-expected digest / prior-head anchor, empty/forbidden ids, malformed metadata) raises
-``PaperAdmissionLedgerBridgeError`` before any work. Deterministic and immutable; no
-wall-clock/random/IO/network/persistence. PAPER ONLY — NOT PRDV4 Stage 4 completion, NOT live/shadow
-readiness, NOT a profitability/edge proof, NOT production execution.
+Fail-closed: any digest mismatch, a non-ADMITTED record, a non-READY episode/manifest, an unsafe/over-claiming
+flag, an id/symbol/correlation mismatch, an unproven record↔episode lineage, a wrong prior-journal head
+anchor, or a journal-level append rejection maps to a frozen REJECTED bridge artifact and the journal is left
+UNCHANGED (the single append happens only after every precheck passes). Call-level malformed input
+(wrong-typed journal/record/episode/manifest, malformed expected digest / prior-head anchor, empty/forbidden
+ids, malformed metadata) raises ``PaperAdmissionLedgerBridgeError`` before any work. Deterministic and
+immutable; no wall-clock/random/IO/network/persistence. PAPER ONLY — NOT PRDV4 Stage 4 completion, NOT
+live/shadow readiness, NOT a profitability/edge proof, NOT production execution.
 """
 
 from __future__ import annotations
@@ -62,11 +68,17 @@ from crypto_core.validation.paper_evidence_admission_record import (
     PaperEvidenceAdmissionStatus,
     paper_evidence_admission_record_digest,
 )
+from crypto_core.validation.paper_session_realized_pnl_evidence_manifest import (
+    PaperSessionRealizedPnlEvidenceManifest,
+    PaperSessionRealizedPnlEvidenceManifestStatus,
+    paper_session_realized_pnl_evidence_manifest_digest,
+)
 
 _SCHEMA_VERSION = "paper-admission-ledger-bridge.v1"
 _JOURNAL_ENTRY_PAYLOAD_SCHEMA_VERSION = "paper-admission-ledger-entry.v1"
 _EXPECTED_ADMISSION_SCHEMA_VERSION = "paper-evidence-admission-record.v1"
 _EXPECTED_EPISODE_SCHEMA_VERSION = "paper-end-to-end-episode.v1"
+_EXPECTED_MANIFEST_SCHEMA_VERSION = "paper-session-realized-pnl-evidence-manifest.v1"
 _ENTRY_TYPE = EvidenceArtifactType.PAPER_EVIDENCE_ADMISSION_RECORD
 
 _SHA256_HEX_LENGTH = 64
@@ -86,7 +98,7 @@ _SAFE_MARKET_DATA_TERMS = ("limit_order_book", "order_book", "order_flow")
 
 
 class PaperAdmissionLedgerBridgeError(RuntimeError):
-    """Raised on call-level malformed input (wrong-typed journal/record/episode / ids / digests / metadata)."""
+    """Raised on call-level malformed input (wrong-typed journal/record/episode/manifest / ids / digests)."""
 
 
 class PaperAdmissionLedgerBridgeStatus(str, Enum):
@@ -100,11 +112,13 @@ class PaperAdmissionLedgerBridgeStatus(str, Enum):
 class PaperAdmissionLedgerBridge:
     """Deterministic, immutable, digest-bound result of appending one admission record to the evidence journal.
 
-    READY iff the admission record (ADMITTED) and episode (READY) both re-prove their digests, are paper-safe
-    and non-over-claiming, agree on market/correlation/episode/run identity, the supplied prior-journal head
-    anchor matches the journal, and exactly one token-safe entry was appended. Otherwise REJECTED with reason
-    codes and the journal left unchanged. ``paper_only`` True; every safety / non-overclaim attestation False.
-    PAPER ONLY — NOT PRDV4 Stage 4 completion, NOT live/shadow readiness, NOT profitability/edge proof.
+    READY iff the admission record (ADMITTED), the admitted manifest (READY), and the episode (READY) all
+    re-prove their digests, are paper-safe and non-over-claiming, agree on market/correlation/episode/run
+    identity, the manifest is the one the record admitted, the episode's realized-PnL event digest is a member
+    of the manifest's source-event digests (strong record↔episode chain lineage), the supplied prior-journal
+    head anchor matches the journal, and exactly one token-safe entry was appended. Otherwise REJECTED with
+    reason codes and the journal left unchanged. ``paper_only`` True; every safety / non-overclaim attestation
+    False. PAPER ONLY — NOT PRDV4 Stage 4 completion, NOT live/shadow readiness, NOT profitability/edge proof.
     """
 
     schema_version: str
@@ -123,6 +137,7 @@ class PaperAdmissionLedgerBridge:
     admission_correlation_id: str
     manifest_digest: str
     expected_manifest_digest: str
+    manifest_status: str
     aggregate_id: str
     aggregate_digest: str
     session_bridge_count: int
@@ -130,13 +145,14 @@ class PaperAdmissionLedgerBridge:
     computed_event_count: int
     closed_units_total: str
     realized_pnl_total: str
-    # Episode provenance (re-proven, bound by value).
+    # Episode provenance + proven record->episode chain lineage (re-proven, bound by value).
     episode_status: str
     episode_digest: str
     expected_episode_digest: str
     episode_run_digest: str
     order_intent_digest: str
     realized_pnl_event_digest: str
+    source_event_digest_count: int
     # Journal append / ledger semantics.
     prior_journal_head_digest: str | None
     expected_prior_journal_head_digest: str | None
@@ -262,6 +278,33 @@ def _record_is_paper_safe(record: PaperEvidenceAdmissionRecord) -> bool:
     )
 
 
+def _manifest_is_paper_safe(manifest: PaperSessionRealizedPnlEvidenceManifest) -> bool:
+    return (
+        manifest.paper_only is True
+        and manifest.gross_only is True
+        and manifest.fees_included is False
+        and manifest.unrealized_pnl_included is False
+        and manifest.total_pnl_computed is False
+        and manifest.equity_or_capital_computed is False
+        and manifest.capital_reserved is False
+        and manifest.capital_mutated is False
+        and manifest.balance_mutated is False
+        and manifest.live_position_mutated is False
+        and manifest.real_money_enabled is False
+        and manifest.real_orders_enabled is False
+        and manifest.order_routed is False
+        and manifest.venue_order_id_created is False
+        and manifest.exchange_order_id_created is False
+        and manifest.client_order_id_created is False
+        and manifest.route_id_created is False
+        and manifest.execution_instruction_created is False
+        and manifest.live_api_called is False
+        and manifest.scheduler_enabled is False
+        and manifest.auto_loop_enabled is False
+        and manifest.connector_invoked is False
+    )
+
+
 def _episode_is_paper_safe(episode: PaperEndToEndEpisode) -> bool:
     return (
         episode.paper_only is True
@@ -308,13 +351,27 @@ def _reprove_artifact_digest(*, artifact: object, recompute, stored: object, exp
     return None
 
 
-def _build_journal_payload(record: PaperEvidenceAdmissionRecord, episode: PaperEndToEndEpisode) -> dict[str, object]:
+def _source_event_digests(manifest: PaperSessionRealizedPnlEvidenceManifest) -> frozenset[str]:
+    """Exact plain hex64 source-event digests carried by the admitted manifest (others ignored, fail-closed)."""
+    raw = manifest.source_event_digests
+    if not isinstance(raw, tuple):
+        return frozenset()
+    return frozenset(item for item in raw if _is_hex64_string(item))
+
+
+def _build_journal_payload(
+    record: PaperEvidenceAdmissionRecord,
+    episode: PaperEndToEndEpisode,
+    *,
+    source_event_digest_count: int,
+) -> dict[str, object]:
     """Curated, token-safe, digest-bound journal payload (NOT the raw artifact dicts; see module docstring).
 
     Built only after every precheck passes, so the record/episode fields are already re-proven and scope-clean.
     No hard-safety attestation key names are included (their token-bearing names would trip the journal guard);
-    the bound digests + statuses + gross audit context are sufficient provenance, and the journal recomputes
-    the payload digest itself. Every value is an exact plain primitive.
+    the bound digests (incl. the proven lineage realized-PnL event digest) + statuses + gross audit context are
+    sufficient provenance, and the journal recomputes the payload digest itself. Every value is an exact plain
+    primitive.
     """
     return {
         "schema_version": _JOURNAL_ENTRY_PAYLOAD_SCHEMA_VERSION,
@@ -341,6 +398,7 @@ def _build_journal_payload(record: PaperEvidenceAdmissionRecord, episode: PaperE
         "run_id": _plain_str_or_empty(episode.run_id),
         "episode_digest": _plain_str_or_empty(episode.episode_digest),
         "realized_pnl_event_digest": _plain_str_or_empty(episode.realized_pnl_event_digest),
+        "source_event_digest_count": source_event_digest_count,
     }
 
 
@@ -348,6 +406,7 @@ def append_paper_admission_record_to_evidence_journal(
     journal: EvidenceJournal,
     record: PaperEvidenceAdmissionRecord,
     episode: PaperEndToEndEpisode,
+    manifest: PaperSessionRealizedPnlEvidenceManifest,
     *,
     expected_admission_digest: str,
     expected_episode_digest: str,
@@ -357,23 +416,27 @@ def append_paper_admission_record_to_evidence_journal(
     correlation_id: str,
     metadata: Mapping[str, str] | None = None,
 ) -> PaperAdmissionLedgerBridge:
-    """Append an ADMITTED ``record`` (with its READY ``episode`` provenance) into the EXISTING ``journal``.
+    """Append an ADMITTED ``record`` (with proven ``episode`` chain lineage) into the EXISTING ``journal``.
 
     ``journal`` must be an ``EvidenceJournal``, ``record`` a ``PaperEvidenceAdmissionRecord``, ``episode`` a
-    ``PaperEndToEndEpisode``; ``expected_admission_digest`` / ``expected_episode_digest`` exact plain
-    64-lowercase-hex ``str`` (the caller's INDEPENDENT anchors); ``expected_prior_journal_head_digest`` either
-    ``None`` (empty journal) or hex64; ``episode_id`` / ``run_id`` / ``correlation_id`` exact plain non-empty
-    ``str``; ``metadata`` ``Mapping[str, str]`` or ``None``. A wrong type, malformed digest/anchor, empty id, a
-    forbidden BIST/live/order token, or malformed metadata raises ``PaperAdmissionLedgerBridgeError`` before
-    any work.
+    ``PaperEndToEndEpisode``, ``manifest`` the ``PaperSessionRealizedPnlEvidenceManifest`` the record admitted;
+    ``expected_admission_digest`` / ``expected_episode_digest`` exact plain 64-lowercase-hex ``str`` (the
+    caller's INDEPENDENT anchors); ``expected_prior_journal_head_digest`` either ``None`` (empty journal) or
+    hex64; ``episode_id`` / ``run_id`` / ``correlation_id`` exact plain non-empty ``str``; ``metadata``
+    ``Mapping[str, str]`` or ``None``. A wrong type, malformed digest/anchor, empty id, a forbidden
+    BIST/live/order token, or malformed metadata raises ``PaperAdmissionLedgerBridgeError`` before any work.
 
-    READY only when: each artifact re-digests to its stored digest AND the caller's expected anchor; the record
-    is ADMITTED + paper-safe; the episode is READY + paper-safe + non-over-claiming; record/episode agree on
-    ``market_symbol``; the caller's ``episode_id`` / ``run_id`` / ``correlation_id`` match the episode and the
-    record shares the same ``correlation_id``; the supplied prior-journal head anchor equals the journal head;
-    and exactly one token-safe entry is appended (the journal's own duplicate/token guards still apply). Every
-    other outcome maps fail-closed to a REJECTED artifact with the journal left UNCHANGED. Deterministic and
-    immutable; no wall-clock/random/IO; paper only.
+    READY only when: each artifact re-digests to its stored digest AND (record/episode) the caller's expected
+    anchor; the record is ADMITTED + paper-safe; the episode is READY + paper-safe + non-over-claiming; the
+    manifest is the one the record admitted (``manifest.manifest_digest == record.manifest_digest`` and
+    ``manifest.aggregate_digest == record.aggregate_digest``, manifest self-digest re-proven) + READY +
+    paper-safe; record/manifest/episode agree on ``market_symbol``; the caller's ``episode_id`` / ``run_id`` /
+    ``correlation_id`` match the episode and the record shares the same ``correlation_id``; the episode's
+    ``realized_pnl_event_digest`` is a member of ``manifest.source_event_digests`` (strong record↔episode chain
+    lineage — the admitted evidence chain contains the exact realized event the episode produced); the supplied
+    prior-journal head anchor equals the journal head; and exactly one token-safe entry is appended (the
+    journal's own duplicate/token guards still apply). Every other outcome maps fail-closed to a REJECTED
+    artifact with the journal left UNCHANGED. Deterministic and immutable; no wall-clock/random/IO; paper only.
     """
     if not isinstance(journal, EvidenceJournal):
         raise PaperAdmissionLedgerBridgeError("paper_admission_ledger_bridge:journal_malformed")
@@ -381,6 +444,8 @@ def append_paper_admission_record_to_evidence_journal(
         raise PaperAdmissionLedgerBridgeError("paper_admission_ledger_bridge:record_malformed")
     if not isinstance(episode, PaperEndToEndEpisode):
         raise PaperAdmissionLedgerBridgeError("paper_admission_ledger_bridge:episode_malformed")
+    if not isinstance(manifest, PaperSessionRealizedPnlEvidenceManifest):
+        raise PaperAdmissionLedgerBridgeError("paper_admission_ledger_bridge:manifest_malformed")
     if not _is_hex64_string(expected_admission_digest):
         raise PaperAdmissionLedgerBridgeError("paper_admission_ledger_bridge:expected_admission_digest_invalid")
     if not _is_hex64_string(expected_episode_digest):
@@ -417,6 +482,23 @@ def append_paper_admission_record_to_evidence_journal(
     )
     if episode_reason is not None:
         hard.append(episode_reason)
+    # The manifest's trust anchor is the digest the ADMITTED record carries (the record is independently
+    # re-proven above), so this single re-proof binds the manifest self-consistency AND record->manifest.
+    record_manifest_digest = _plain_str_or_empty(record.manifest_digest)
+    manifest_reason = _reprove_artifact_digest(
+        artifact=manifest,
+        recompute=paper_session_realized_pnl_evidence_manifest_digest,
+        stored=manifest.manifest_digest,
+        expected=record_manifest_digest,
+        label="manifest",
+    )
+    if manifest_reason is not None:
+        hard.append(manifest_reason)
+    manifest_aggregate_digest = _plain_str_or_empty(manifest.aggregate_digest)
+    if not _is_hex64_string(manifest_aggregate_digest) or manifest_aggregate_digest != _plain_str_or_empty(
+        record.aggregate_digest
+    ):
+        hard.append("paper_admission_ledger_bridge:aggregate_binding_mismatch")
 
     # Schema + status + paper-safety re-proof per artifact.
     if record.schema_version != _EXPECTED_ADMISSION_SCHEMA_VERSION:
@@ -426,6 +508,13 @@ def append_paper_admission_record_to_evidence_journal(
     if not _record_is_paper_safe(record):
         hard.append("paper_admission_ledger_bridge:admission_unsafe_flags")
 
+    if manifest.schema_version != _EXPECTED_MANIFEST_SCHEMA_VERSION:
+        hard.append("paper_admission_ledger_bridge:manifest_schema_invalid")
+    elif manifest.status is not PaperSessionRealizedPnlEvidenceManifestStatus.READY or manifest.ready is not True:
+        hard.append("paper_admission_ledger_bridge:manifest_not_ready")
+    if not _manifest_is_paper_safe(manifest):
+        hard.append("paper_admission_ledger_bridge:manifest_unsafe_flags")
+
     if episode.schema_version != _EXPECTED_EPISODE_SCHEMA_VERSION:
         hard.append("paper_admission_ledger_bridge:episode_schema_invalid")
     elif episode.status is not PaperEndToEndEpisodeStatus.READY or episode.ready is not True:
@@ -433,12 +522,15 @@ def append_paper_admission_record_to_evidence_journal(
     if not _episode_is_paper_safe(episode):
         hard.append("paper_admission_ledger_bridge:episode_unsafe_flags")
 
-    # Cross-artifact identity: same market; caller ids match the (digest-proven) episode; record shares the
-    # same audit correlation. The two distinct contracts are linked ONLY by genuinely shared identity values,
-    # never by claiming their distinct self-digests are equal.
+    # Cross-artifact identity: same market (record/manifest/episode); caller ids match the (digest-proven)
+    # episode; record shares the same audit correlation. The distinct contracts are linked ONLY by genuinely
+    # shared identity values + the chain-lineage proof below, never by claiming distinct self-digests are equal.
     episode_symbol = _plain_str_or_empty(episode.market_symbol)
-    record_symbol = _plain_str_or_empty(record.market_symbol)
-    if episode_symbol == "" or episode_symbol != record_symbol:
+    if (
+        episode_symbol == ""
+        or episode_symbol != _plain_str_or_empty(record.market_symbol)
+        or episode_symbol != _plain_str_or_empty(manifest.market_symbol)
+    ):
         hard.append("paper_admission_ledger_bridge:symbol_mismatch")
     if _plain_str_or_empty(episode.episode_id) != episode_id:
         hard.append("paper_admission_ledger_bridge:episode_id_mismatch")
@@ -449,8 +541,17 @@ def append_paper_admission_record_to_evidence_journal(
     if _plain_str_or_empty(record.correlation_id) != correlation_id:
         hard.append("paper_admission_ledger_bridge:admission_correlation_mismatch")
 
-    # Prior-journal anchor: the supplied head must match the journal head BEFORE any append (a verify_chain
-    # failure on the existing journal is itself fail-closed). verify_chain never raises; it reports accepted.
+    # Strong record -> episode chain lineage: the admitted evidence chain MUST contain the exact realized-PnL
+    # event the episode produced. The manifest's source-event digests use the SAME contract as the public
+    # paper_realized_pnl_event_digest, so the episode's bound realized_pnl_event_digest MUST be one of them.
+    # Weak identity (symbol/correlation/ids) alone is insufficient; membership is the genuine proof.
+    source_event_digests = _source_event_digests(manifest)
+    episode_event_digest = _plain_str_or_empty(episode.realized_pnl_event_digest)
+    if not _is_hex64_string(episode_event_digest) or episode_event_digest not in source_event_digests:
+        hard.append("paper_admission_ledger_bridge:record_episode_lineage_unproven")
+
+    # Prior-journal anchor: the supplied head must match the journal head BEFORE any append. verify_chain never
+    # raises; it reports accepted (a broken prior journal is itself fail-closed).
     verification = journal.verify_chain()
     prior_entry_count = verification.entry_count
     prior_head_digest = verification.head_digest
@@ -469,7 +570,7 @@ def append_paper_admission_record_to_evidence_journal(
     resulting_head_digest = prior_head_digest
 
     if not rejection_reasons:
-        payload = _build_journal_payload(record, episode)
+        payload = _build_journal_payload(record, episode, source_event_digest_count=len(source_event_digests))
         try:
             entry = journal.append(_ENTRY_TYPE, payload, correlation_id=correlation_id)
         except EvidenceJournalError:
@@ -503,6 +604,8 @@ def append_paper_admission_record_to_evidence_journal(
         appended=appended,
         record=record,
         episode=episode,
+        manifest=manifest,
+        source_event_digest_count=len(source_event_digests),
         expected_admission_digest=expected_admission_digest,
         expected_episode_digest=expected_episode_digest,
         expected_prior_journal_head_digest=expected_prior_journal_head_digest,
@@ -527,6 +630,8 @@ def _finalize_bridge(
     appended: bool,
     record: PaperEvidenceAdmissionRecord,
     episode: PaperEndToEndEpisode,
+    manifest: PaperSessionRealizedPnlEvidenceManifest,
+    source_event_digest_count: int,
     expected_admission_digest: str,
     expected_episode_digest: str,
     expected_prior_journal_head_digest: str | None,
@@ -559,6 +664,9 @@ def _finalize_bridge(
         "admission_correlation_id": _plain_str_or_empty(record.correlation_id),
         "manifest_digest": _plain_str_or_empty(record.manifest_digest),
         "expected_manifest_digest": _plain_str_or_empty(record.expected_manifest_digest),
+        "manifest_status": manifest.status.value
+        if isinstance(manifest.status, PaperSessionRealizedPnlEvidenceManifestStatus)
+        else "",
         "aggregate_id": _plain_str_or_empty(record.aggregate_id),
         "aggregate_digest": _plain_str_or_empty(record.aggregate_digest),
         "session_bridge_count": record.session_bridge_count,
@@ -572,6 +680,7 @@ def _finalize_bridge(
         "episode_run_digest": _plain_str_or_empty(episode.episode_run_digest),
         "order_intent_digest": _plain_str_or_empty(episode.order_intent_digest),
         "realized_pnl_event_digest": _plain_str_or_empty(episode.realized_pnl_event_digest),
+        "source_event_digest_count": source_event_digest_count,
         "prior_journal_head_digest": prior_journal_head_digest,
         "expected_prior_journal_head_digest": expected_prior_journal_head_digest,
         "prior_journal_entry_count": prior_journal_entry_count,
@@ -610,6 +719,7 @@ def _bridge_fields(bridge: PaperAdmissionLedgerBridge) -> dict[str, object]:
         "admission_correlation_id": bridge.admission_correlation_id,
         "manifest_digest": bridge.manifest_digest,
         "expected_manifest_digest": bridge.expected_manifest_digest,
+        "manifest_status": bridge.manifest_status,
         "aggregate_id": bridge.aggregate_id,
         "aggregate_digest": bridge.aggregate_digest,
         "session_bridge_count": bridge.session_bridge_count,
@@ -623,6 +733,7 @@ def _bridge_fields(bridge: PaperAdmissionLedgerBridge) -> dict[str, object]:
         "episode_run_digest": bridge.episode_run_digest,
         "order_intent_digest": bridge.order_intent_digest,
         "realized_pnl_event_digest": bridge.realized_pnl_event_digest,
+        "source_event_digest_count": bridge.source_event_digest_count,
         "prior_journal_head_digest": bridge.prior_journal_head_digest,
         "expected_prior_journal_head_digest": bridge.expected_prior_journal_head_digest,
         "prior_journal_entry_count": bridge.prior_journal_entry_count,
@@ -653,6 +764,7 @@ def _bridge_payload_from(bridge: PaperAdmissionLedgerBridge) -> dict[str, object
         "admission_correlation_id": bridge.admission_correlation_id,
         "manifest_digest": bridge.manifest_digest,
         "expected_manifest_digest": bridge.expected_manifest_digest,
+        "manifest_status": bridge.manifest_status,
         "aggregate_id": bridge.aggregate_id,
         "aggregate_digest": bridge.aggregate_digest,
         "session_bridge_count": bridge.session_bridge_count,
@@ -666,6 +778,7 @@ def _bridge_payload_from(bridge: PaperAdmissionLedgerBridge) -> dict[str, object
         "episode_run_digest": bridge.episode_run_digest,
         "order_intent_digest": bridge.order_intent_digest,
         "realized_pnl_event_digest": bridge.realized_pnl_event_digest,
+        "source_event_digest_count": bridge.source_event_digest_count,
         "prior_journal_head_digest": bridge.prior_journal_head_digest,
         "expected_prior_journal_head_digest": bridge.expected_prior_journal_head_digest,
         "prior_journal_entry_count": bridge.prior_journal_entry_count,
