@@ -452,6 +452,7 @@ class _LiarStr(str):
         ({"capacity_decision_digest": _LiarStr("b" * 64)}, "strategy_signal_to_paper_intent:request_payload_mismatch"),
         ({"requested_units": _LiarStr("1")}, "strategy_signal_to_paper_intent:request_payload_mismatch"),
         ({"requested_notional": _LiarStr("1")}, "strategy_signal_to_paper_intent:request_payload_mismatch"),
+        ({"limit_price": _LiarStr("999")}, "strategy_signal_to_paper_intent:request_payload_mismatch"),
         (
             {"metadata": ((_LiarStr("k"), _LiarStr("v")),)},
             "strategy_signal_to_paper_intent:request_payload_mismatch",
@@ -472,6 +473,80 @@ def test_builder_equality_liar_request_is_rejected(monkeypatch, override, expect
     assert bridge.ready is False
     assert expected_reason in bridge.rejection_reasons
     assert bridge.paper_order_intent_request_digest == ""
+
+
+def test_builder_non_plain_request_digest_is_rejected(monkeypatch):
+    # A request carrying a non-plain (equality-liar str-subclass) ``request_digest`` with WRONG content must
+    # never bind a READY bridge: the bound digest is recomputed from the canonical snapshot and compared by
+    # plain hex content, so a lying ``__eq__`` cannot fake the digest match.
+    def _wrong_digest(**kwargs):
+        real = build_paper_order_intent_request(**kwargs)  # the real (un-patched) admission builder
+        return replace(real, request_digest=_LiarStr("c" * 64))
+
+    monkeypatch.setattr(bridge_module, "build_paper_order_intent_request", _wrong_digest)
+    bridge = _build()
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert bridge.ready is False
+    assert "strategy_signal_to_paper_intent:request_digest_mismatch" in bridge.rejection_reasons
+    assert bridge.paper_order_intent_request_digest == ""
+
+
+def test_builder_stateful_metadata_request_toctou_is_rejected(monkeypatch):
+    # Request-boundary TOCTOU: the digest reproof and the equality reproof must derive from ONE canonical
+    # snapshot. A self-consistent re-sealed request whose ``metadata`` yields FOREIGN pairs on the first read
+    # (what an old two-read digest helper would see) and EXPECTED (empty) pairs on a later read (what the
+    # equality snapshot would see) must fail closed — never READY with a foreign payload digest bound. This
+    # test fails if ``_reprove_request`` ever reads the digest and the equality snapshot from different reads.
+    foreign_metadata = (("operator", "mallory"),)
+
+    class _StatefulMetadata(tuple):
+        """Outer metadata container yielding foreign pairs on the first read, expected (empty) on later reads."""
+
+        def __new__(cls):
+            return super().__new__(cls)
+
+        def __init__(self):
+            super().__init__()
+            self._reads = 0
+
+        def __iter__(self):
+            self._reads += 1
+            return iter(foreign_metadata) if self._reads == 1 else iter(())
+
+    def _stateful(**kwargs):
+        real = build_paper_order_intent_request(**kwargs)  # genuine, metadata=()
+        foreign = replace(real, metadata=foreign_metadata)
+        foreign_digest = paper_order_intent_request_digest(foreign)
+        # Re-sealed to the FOREIGN payload digest, but carrying a metadata container that reads empty later.
+        return replace(real, metadata=_StatefulMetadata(), request_digest=foreign_digest)
+
+    monkeypatch.setattr(bridge_module, "build_paper_order_intent_request", _stateful)
+    bridge = _build()
+    assert bridge.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert bridge.ready is False
+    assert "strategy_signal_to_paper_intent:request_payload_mismatch" in bridge.rejection_reasons
+    assert bridge.paper_order_intent_request_digest == ""
+
+
+def test_request_snapshot_digest_matches_public_helper():
+    # Prove the bridge's snapshot-derived request digest equals the lower-contract public helper for a genuine
+    # request, so recomputing the bound digest from the single captured snapshot (rather than a second read of
+    # the request object) is digest-equivalent.
+    request = build_paper_order_intent_request(
+        request_id="sig-1",
+        capacity_decision_digest=_HEX_CAP,
+        market_symbol="BTC-PERPETUAL",
+        side=PaperOrderSide.BUY,
+        intent_type=PaperOrderIntentType.MARKET,
+        requested_notional="100",
+        requested_units="10",
+        limit_price=None,
+        correlation_id="corr-1",
+        metadata={"operator": "alice"},
+    )
+    snapshot = bridge_module._capture_request_snapshot(request)
+    assert snapshot is not None
+    assert bridge_module._request_snapshot_digest(snapshot) == paper_order_intent_request_digest(request)
 
 
 # --- Single canonical spec snapshot (digest + validation see the same one read) ---

@@ -58,7 +58,6 @@ from crypto_core.validation.paper_order_intent_admission import (
     PaperOrderIntentType,
     PaperOrderSide,
     build_paper_order_intent_request,
-    paper_order_intent_request_digest,
     paper_order_intent_request_to_dict,
 )
 
@@ -487,6 +486,19 @@ def _capture_request_snapshot(request: PaperOrderIntentRequest) -> dict[str, obj
     return snapshot if isinstance(snapshot, dict) else None
 
 
+def _request_snapshot_digest(snapshot: dict[str, object]) -> str:
+    """Recompute the request digest FROM the single captured snapshot (excluding the self-digest field).
+
+    Applies the same canonical SHA-256 over the public-serializer payload as the lower-contract helper
+    ``paper_order_intent_request_digest`` — but over the ONE already-captured snapshot, never a second read of
+    the (possibly stateful) request object. A regression proves this equals
+    ``paper_order_intent_request_digest(request)`` for a canonical request, so the digest the bridge binds and
+    the payload it proves equal both derive from the same single read (closing the request-boundary TOCTOU).
+    """
+    payload = {key: value for key, value in snapshot.items() if key != "request_digest"}
+    return _canonical_digest(payload)
+
+
 def _reprove_request(
     request: object,
     *,
@@ -501,34 +513,43 @@ def _reprove_request(
     capacity_decision_digest: str,
     metadata: tuple[tuple[str, str], ...],
 ) -> tuple[str, str | None]:
-    """Re-prove the builder output by exact type, recomputed digest, a canonical snapshot, lower-contract
-    safety, and field equality with the validated signal.
+    """Re-prove the builder output against ONE canonical request snapshot: exact type, snapshot-derived digest,
+    lower-contract safety, and field equality with the validated signal.
+
+    The (possibly stateful) request is read EXACTLY ONCE — via ``_capture_request_snapshot`` (public serializer
+    + canonical-JSON round-trip into plain primitives). The bound digest is recomputed FROM that snapshot, and
+    the carried digest, schema/paper-safety attestations, and every field comparison also derive from that ONE
+    snapshot. No second read of the live request occurs (only the exact ``type`` is inspected before capture),
+    so a request whose digest read and equality read could otherwise diverge (e.g. mutating ``metadata``)
+    cannot bind a foreign payload digest into a READY bridge.
 
     Returns ``(request_digest, None)`` only when the request is the exact ``PaperOrderIntentRequest`` type, its
-    carried ``request_digest`` is an exact plain lowercase-hex64 string that recomputes to itself, its
-    canonical-snapshot schema/paper-safety attestations are correct, and every bound field equals the
-    validated signal; else ``("", <reason>)``. The comparisons run against a public-serializer + canonical-JSON
-    snapshot of plain primitives, so a foreign / wrong-typed / digest-tampered / unsafe / equality-liar /
-    ``str``-subclass / payload-divergent request can never bind a READY bridge.
+    carried ``request_digest`` is an exact plain lowercase-hex64 string equal to the snapshot-derived digest,
+    its snapshot schema/paper-safety attestations are correct, and every bound field equals the validated
+    signal; else ``("", <reason>)``. The comparisons run on plain primitives, so a foreign / wrong-typed /
+    digest-tampered / unsafe / equality-liar / ``str``-subclass / stateful / payload-divergent request can
+    never bind a READY bridge.
     """
+    # Exact type is the ONLY raw attribute inspected; every value below derives from the single snapshot.
     if type(request) is not PaperOrderIntentRequest:
         return "", "strategy_signal_to_paper_intent:request_type_mismatch"
-    try:
-        recomputed = paper_order_intent_request_digest(request)
-    except Exception:  # noqa: BLE001 - any recompute failure is a fail-closed rejection, not a crash
-        return "", "strategy_signal_to_paper_intent:request_digest_mismatch"
-    # The carried digest must be an EXACT plain lowercase-hex64 string (no str subclass) before comparison, so
-    # an equality-liar carried digest cannot pass via a lying ``__eq__``.
-    carried_digest = request.request_digest
-    if type(carried_digest) is not str or not _is_hex64_string(carried_digest) or carried_digest != recomputed:
-        return "", "strategy_signal_to_paper_intent:request_digest_mismatch"
 
-    # Canonical request snapshot (plain primitives): strips str-subclass/equality-liar fields to their CONTENT.
+    # Single canonical request snapshot (plain primitives): the live request is read once here and never again.
+    # The canonical-JSON round-trip strips any str-subclass / equality-liar field to its plain string CONTENT.
     snapshot = _capture_request_snapshot(request)
     if snapshot is None:
         return "", "strategy_signal_to_paper_intent:request_payload_mismatch"
 
-    # Lower-contract schema + paper-safety re-proof from the canonical snapshot (exact values).
+    # Digest boundary: recompute the request digest FROM the single snapshot and require the snapshot-carried
+    # ``request_digest`` to be an exact plain lowercase-hex64 string equal to it. Both the digest the bridge
+    # binds and the payload it proves equal come from this one read, so a stateful request cannot show foreign
+    # metadata to the digest and expected metadata to the equality reproof.
+    carried_digest = snapshot.get("request_digest")
+    snapshot_digest = _request_snapshot_digest(snapshot)
+    if type(carried_digest) is not str or not _is_hex64_string(carried_digest) or carried_digest != snapshot_digest:
+        return "", "strategy_signal_to_paper_intent:request_digest_mismatch"
+
+    # Lower-contract schema + paper-safety re-proof from the same single snapshot (exact values).
     if (
         snapshot.get("schema_version") != _EXPECTED_REQUEST_SCHEMA_VERSION
         or snapshot.get("paper_only") is not True
@@ -553,7 +574,7 @@ def _reprove_request(
         or snapshot.get("metadata") != expected_metadata
     ):
         return "", "strategy_signal_to_paper_intent:request_payload_mismatch"
-    return carried_digest, None
+    return snapshot_digest, None
 
 
 def _finalize_bridge(
