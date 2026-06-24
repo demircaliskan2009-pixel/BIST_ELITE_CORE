@@ -745,6 +745,60 @@ def test_policy_scope_violation_raises() -> None:
 
 
 # --------------------------------------------------------------------------------------------------
+# 8b. P2 regression — policy threshold invariants re-proved at the DECISION boundary
+# (a malformed-but-resealed policy whose digest re-proves must still fail closed; no false ALLOW)
+# --------------------------------------------------------------------------------------------------
+
+
+def _resealed_policy(**overrides) -> PaperGovernorPolicy:
+    """Manually construct a malformed policy and reseal its self-digest (bypassing the builder's invariants),
+    so ``paper_governor_policy_digest`` re-proves but the threshold invariants are violated."""
+    tampered = replace(_policy(), **overrides)
+    return replace(tampered, policy_digest=paper_governor_policy_digest(tampered))
+
+
+def test_resealed_review_exceeds_block_threshold_rejects_at_boundary() -> None:
+    # Exact connector false-ALLOW class: review(2000) > block(1000), bridge abs(realized)=200. The digest
+    # re-proves, but the decision boundary re-checks invariants -> REJECTED + BLOCK_PAPER (never ALLOW).
+    policy = _resealed_policy(max_abs_realized_pnl="1000", review_abs_realized_pnl="2000")
+    assert paper_governor_policy_digest(policy) == policy.policy_digest  # digest re-proves
+    decision = _decide(policy=policy)
+    assert decision.status is PaperGovernorDecisionStatus.REJECTED
+    assert decision.decision is PaperGovernorVerdict.BLOCK_PAPER
+    assert decision.allowed is False
+    assert decision.decision is not PaperGovernorVerdict.ALLOW_PAPER
+    assert any("policy_thresholds_malformed" in r for r in decision.reason_codes)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"max_abs_realized_pnl": "-1"},
+        {"review_abs_realized_pnl": "-1"},
+        {"max_closed_units": "-1"},
+        {"min_computed_event_count": -1},
+    ],
+)
+def test_resealed_invalid_threshold_rejects_at_boundary(overrides: dict[str, object]) -> None:
+    policy = _resealed_policy(**overrides)
+    assert paper_governor_policy_digest(policy) == policy.policy_digest  # digest re-proves
+    decision = _decide(policy=policy)
+    assert decision.status is PaperGovernorDecisionStatus.REJECTED
+    assert decision.decision is PaperGovernorVerdict.BLOCK_PAPER
+    assert decision.allowed is False
+    assert any("policy_thresholds_malformed" in r for r in decision.reason_codes)
+
+
+def test_boundary_reproof_independent_of_builder() -> None:
+    # The builder still rejects malformed thresholds up front, AND the decision boundary independently rejects
+    # a resealed artifact that bypassed the builder — defense in depth, no trust of builder invariants.
+    with pytest.raises(PaperGovernorPolicyError):
+        _policy(review_abs_realized_pnl="2000", max_abs_realized_pnl="1000")
+    resealed = _resealed_policy(max_abs_realized_pnl="1000", review_abs_realized_pnl="2000")
+    assert _decide(policy=resealed).status is PaperGovernorDecisionStatus.REJECTED
+
+
+# --------------------------------------------------------------------------------------------------
 # 9. Immutability / forbidden surfaces
 # --------------------------------------------------------------------------------------------------
 

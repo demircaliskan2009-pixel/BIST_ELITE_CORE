@@ -490,7 +490,25 @@ def decide_paper_governor(
     max_abs = _canonical_decimal(policy.max_abs_realized_pnl)
     review_abs = _canonical_decimal(policy.review_abs_realized_pnl)
     max_units = _canonical_decimal(policy.max_closed_units)
-    if max_abs is None or review_abs is None or max_units is None or not _is_int(policy.min_computed_event_count):
+    min_events = policy.min_computed_event_count
+    # Re-prove the FULL policy threshold invariants at the decision boundary. ``PaperGovernorPolicy`` is a
+    # public frozen dataclass, so a caller can construct malformed thresholds and reseal ``policy_digest`` —
+    # the digest re-proof alone would then pass. The builder's invariants are NOT trusted transitively; every
+    # invariant ``build_paper_governor_policy`` enforces (canonical decimals, non-negative thresholds/count,
+    # ``review_abs_realized_pnl <= max_abs_realized_pnl``) is re-checked here. Any violation maps fail-closed to
+    # REJECTED + BLOCK_PAPER (never DECIDED, never a partial ALLOW). ``and`` short-circuits so no None is compared.
+    policy_thresholds_ok = (
+        max_abs is not None
+        and review_abs is not None
+        and max_units is not None
+        and _is_int(min_events)
+        and min_events >= 0
+        and max_abs >= 0
+        and review_abs >= 0
+        and max_units >= 0
+        and review_abs <= max_abs
+    )
+    if not policy_thresholds_ok:
         hard.append("paper_governor_decision:policy_thresholds_malformed")
 
     if hard:
