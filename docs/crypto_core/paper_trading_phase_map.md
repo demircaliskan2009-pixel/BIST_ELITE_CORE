@@ -179,3 +179,106 @@ isolated modules — these PRs **wire/bind** them, they do not rebuild from scra
   waiver.
 - Always bucket findings as `REPO_EVIDENCE` / `EXTERNAL_EVIDENCE` / `INFERENCE` / `UNKNOWN`; never infer
   live repo state without GitHub evidence.
+
+## 10. Post-§7 checkpoint — paper-metrics phase (recorded after PR #299, `main` @ `fb800ab`)
+
+> Planning checkpoint only. This is a **docs-only** phase decision — it adds **no** code, **no** test, and
+> **no** runtime artifact, and authorizes none. It records the state after the §7 integration-first sequence
+> and sequences the next bounded slices; each future slice still needs its own explicit authorization, full
+> validation, one open PR, and merge only on explicit per-PR authorization (workflow §3/§7).
+
+### 10.1 §7 completion (proven from `git log` / merged PRs)
+
+The §7 integration-first **deterministic paper-substrate** sequence is complete (PRs #293–#299, all merged):
+
+```
+strategy signal → paper order intent (#294) → end-to-end episode: intent→fill→position→realized PnL (#295)
+  → evidence admission ledger bridge into the existing journal (#296) → paper governor decision (#297)
+  → deterministic paper replay-equality harness (#298) → paper-substrate readiness decision (#299)
+  (+ operator-readable paper run report, #293)
+```
+
+This is a **deterministic paper substrate**, recompute-verified and digest-bound at every seam, fail-closed,
+with no hidden IO/wall-clock/random. It is **not** operational paper trading.
+
+### 10.2 Substrate-complete vs product-incomplete (explicit)
+
+- Deterministic paper substrate = **COMPLETE** (the §7 chain above).
+- Paper trading **product** = **NOT complete** (no multi-session/30-day operational paper run system).
+- PRDV4 **Stage 4** ("Paper Trading") = **NOT complete** — PRDV4 §"Stage 4: Paper Trading" still requires
+  **≥30 days** paper trading, **paper-vs-backtest** metrics (Sharpe, hit rate, slippage, fill rate), and the
+  **paper-Sharpe ≥ 50%-of-backtest** rejection gate. None are satisfied.
+- Live / shadow / Deribit / operational readiness = **NOT started** (and remain hard-blocked, §6).
+- Profitability / edge = **NOT proven**.
+
+### 10.3 The deterministic-vs-time-series fork (the real next decision)
+
+The §7 substrate is **single-run / episode-oriented, gross/count/provenance-oriented, deterministic, and
+digest-bound** — it carries **no wall-clock and no return series**. PRDV4 Stage 4 evidence is **time-series /
+multi-session**: a ≥30-day period, a paper-vs-backtest comparison, and annualized risk metrics (Sharpe / hit
+rate / slippage / fill rate). The existing `src/crypto_core/validation/stage4_comparator.py` already encodes
+this gate (`Stage4BacktestBaseline`, `Stage4PaperSummary`, `compare_stage4`) but its `Stage4PaperSummary`
+requires a **computable `paper_sharpe`** and **`started_at_ns` / `stopped_at_ns`** (a session duration) — it
+fails closed with `stage4:paper_sharpe_not_computable` / `stage4:paper_time_invalid` otherwise. The §7
+substrate cannot produce these today, so feeding the comparator now is **premature/blocked**.
+
+Decision rule for the post-§7 path: **no real wall-clock may be smuggled into deterministic validation
+artifacts.** Any time / return-window evidence must come from **injected deterministic timestamps** or
+explicitly bounded evidence packages — never `time`/`datetime.now`/`perf_counter`. The time/methodology model
+is an explicit design decision, not an automatic continuation.
+
+### 10.4 Proposed post-§7 product sequence (paper-metrics path)
+
+One bounded feature PR each, integration-first (wire/bind existing artifacts; do **not** rebuild), paper-only,
+deterministic, fail-closed, digest-bound, one open PR at a time, no merge without explicit authorization.
+Order holds unless repo evidence proves a step impossible.
+
+1. `feature/paper-session-metrics-summary-pr1` — a **deterministic, paper-only, time-free** session metrics
+   summary: gross / count / session-aggregate descriptors (episode count, closed-units / realized-PnL gross
+   totals, win/loss/flat counts) bound by digest from the **existing** session realized-PnL aggregate and the
+   §7.7 readiness decision. **No Sharpe yet** (no time model). PRECHECK MUST first prove this is **not** already
+   covered by `paper_session_realized_pnl_aggregate` — if it is, narrow or skip (§8 anti-proliferation).
+2. `feature/paper-deterministic-time-window-adapter-pr1` — a deterministic **time/methodology adapter** using
+   **injected timestamps only** (no wall-clock); defines return windows and sample-eligibility for metrics.
+3. `feature/paper-vs-backtest-comparator-bridge-pr1` — a fail-closed **bridge that safely feeds the existing
+   `stage4_comparator.py`** from the deterministic metrics + injected-time evidence; no live/shadow/readiness.
+4. `feature/paper-30day-evidence-gate-pr1` — a deterministic **≥30-day paper-evidence gate** — only **after**
+   deterministic time-series/session evidence exists; **may require Deep Research** for the gate methodology.
+5. `feature/paper-stage4-review-package-pr1` — a **review-package artifact only** (operator-reviewable Stage-4
+   evidence dossier). Still **no** live/shadow/Deribit activation; live/shadow remains a separately authorized
+   phase (§6).
+
+### 10.5 Optional §7.8 chore (deferred)
+
+`chore/crypto-core-test-wrapper-venv-python-pr1` (§7 item 8) remains **optional and deferred** — it is test
+wrapper interpreter **hygiene**, not product progression. It may be done opportunistically as a standalone
+`chore/*` setup PR (docs/config/scripts only), never mixed into a feature PR.
+
+### 10.6 Deep Research rule (this checkpoint)
+
+- **Not required** for this planning checkpoint (it is repo-internal phase reconciliation).
+- **Required later** if external / current methodology facts are needed for: Sharpe annualization convention,
+  paper-vs-backtest methodology, the 30-day paper-gate design (§10.4.4), or any Deribit / live / shadow
+  readiness or exchange-microstructure / current-venue facts. Deep Research stays read-only / advisory
+  (`docs/crypto_core/deep_research_protocol.md`), never an executor lane or safety-gate waiver.
+
+### 10.7 GitHub connector rule
+
+- The GitHub connector remains the **read-only source-of-truth final PR gate** (PR/CI/threads/reviews/
+  mergeability). **Not needed** for phase design unless the question is GitHub-state-specific.
+- Every future §10.4 implementation PR still needs the connector final gate (or proven `gh` state) before any
+  explicit per-PR merge authorization.
+
+### 10.8 Guardrails reaffirmed (unchanged from §6/§8)
+
+No `service/readiness`; no `execution/paper_adapter`; no venue / Deribit / live / shadow surfaces; no
+scheduler / auto-loop; no real orders / order routing; no real capital / equity / margin / balance /
+reservation; no BIST; no hidden IO / wall-clock / random; no PRDV4 Stage 4 completion claim; no
+profitability / edge claim; no live / shadow / operational readiness claim.
+
+### 10.9 Stop conditions for future §10.4 code
+
+A future §10.4 feature PR must **stop with proof** if it would: require live / Deribit / readiness / service /
+adapter surfaces; require real wall-clock; duplicate an existing aggregate / artifact; fail to prove public
+digest binding (recompute == stored == anchor); blur a paper-substrate candidate with actual Stage-4
+completion; or claim live / shadow / readiness / edge / profitability.
