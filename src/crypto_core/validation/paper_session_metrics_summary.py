@@ -1,14 +1,15 @@
 """Paper session metrics summary — deterministic, paper-only, TIME-FREE summary that binds an existing
-session realized-PnL aggregate to its §7.7 readiness verdict.
+session realized-PnL aggregate (via its admitted evidence manifest) to its §7.7 readiness verdict.
 
 Phase-map slice §10.4.1 (``docs/crypto_core/paper_trading_phase_map.md``): the first post-§7 product slice.
 A small, immutable, fail-closed *summary / probe* that consumes the **existing**
-``PaperSessionRealizedPnlAggregate`` (its already-computed gross / count metrics) and the §7.7
-``PaperStage4ReadinessDecision`` (the readiness verdict context), re-proves both at their digest trust
-boundaries, proves they describe the **same paper chain**, and emits ONE operator-readable, digest-bound
-**time-free** metrics summary. It is **additive, not duplicative**: it recomputes **no** aggregation — it
-reads the aggregate's bound gross totals / counts by value (the only derived value is the absolute magnitude
-of the already-bound gross realized-PnL total) and binds the readiness verdict as context.
+``PaperSessionRealizedPnlAggregate`` (its already-computed gross / count metrics), the
+``PaperSessionRealizedPnlEvidenceManifest`` that admitted that aggregate, and the §7.7
+``PaperStage4ReadinessDecision`` (the readiness verdict context); re-proves all three at their digest trust
+boundaries, proves they describe the **same admitted paper chain**, and emits ONE operator-readable,
+digest-bound **time-free** metrics summary. It is **additive, not duplicative**: it recomputes **no**
+aggregation — it reads the aggregate's bound gross totals / counts by value (the only derived value is the
+absolute magnitude of the already-bound gross realized-PnL total) and binds the readiness verdict as context.
 
 It is **time-free by construction**: it computes no Sharpe, no annualized / time-weighted return, no
 return series, no wall-clock or session duration, and no 30-day gate — those are explicit digest-bound
@@ -16,17 +17,23 @@ return series, no wall-clock or session duration, and no 30-day gate — those a
 this).
 
 Trust boundary (fail-closed): the aggregate self-digest is re-proven via the PUBLIC
-``paper_session_realized_pnl_aggregate_digest`` and the readiness self-digest via
+``paper_session_realized_pnl_aggregate_digest``, the manifest via
+``paper_session_realized_pnl_evidence_manifest_digest``, and the readiness via
 ``paper_stage4_readiness_decision_digest`` (each stored digest must equal the recompute AND the caller's
-INDEPENDENT expected anchor). Same-chain binding: the readiness decision's bound
-``realized_pnl_event_digest`` must be a **member** of the aggregate's ``source_event_digests`` (the realized
-event the readiness chain produced is among the events the aggregate summed), and aggregate / readiness must
-agree on ``market_symbol`` and the caller's ids. Both must be paper-safe and non-over-claiming, the aggregate
-``COMPUTED`` with non-negative counts, the readiness ``DECIDED``. ``status=READY`` only over fully trusted,
-same-chain inputs. ``ready`` (the headline candidate flag) is True **only** when the readiness verdict is
-``PAPER_STAGE4_CANDIDATE`` — a ``REVIEW_REQUIRED`` / ``BLOCK_PAPER`` verdict yields ``status=READY`` (the
-metrics are summarized) with ``ready=False`` and a recorded context reason; no readiness verdict is upgraded.
-Any digest / trust / id / same-chain failure (incl. a non-``DECIDED`` readiness) maps to ``status=REJECTED``.
+INDEPENDENT expected anchor). **Strong same-chain binding** (not bare event membership): the manifest is the
+admitting evidence record, so ``manifest.aggregate_digest == aggregate.aggregate_digest`` (the aggregate is
+exactly the one the manifest admitted) AND ``manifest.manifest_digest == readiness.manifest_digest`` (the
+readiness governor→ledger→admission chain points to THIS manifest). The readiness decision's
+``realized_pnl_event_digest`` being a member of the aggregate's ``source_event_digests`` is kept only as a
+SECONDARY cross-check. All three must agree on ``market_symbol`` and the aggregate / manifest on
+``aggregate_id``; the readiness carries the caller ``run_id`` / ``correlation_id``. All must be paper-safe and
+non-over-claiming; the aggregate ``COMPUTED`` with non-negative counts, the manifest ``READY``, the readiness
+``DECIDED`` with its ``ready`` flag re-proven consistent with its ``verdict``
+(``PAPER_STAGE4_CANDIDATE`` ⇔ ``ready`` True; ``REVIEW``/``BLOCK`` ⇔ ``ready`` False). ``status=READY`` only
+over fully trusted, same-admitted-chain inputs. ``ready`` (the headline candidate flag) is True **only** when
+the readiness verdict is ``PAPER_STAGE4_CANDIDATE`` — a ``REVIEW_REQUIRED`` / ``BLOCK_PAPER`` verdict yields
+``status=READY`` (metrics summarized) with ``ready=False`` and a recorded context reason; no verdict is
+upgraded. Any digest / trust / id / same-chain / ready-verdict failure maps to ``status=REJECTED``.
 
 Non-overclaim: a READY summary proves only a deterministic, time-free, gross/count paper-session metrics
 summary for the supplied artifacts. It is NOT PRDV4 Stage 4 completion, NOT live readiness, NOT shadow
@@ -52,6 +59,11 @@ from crypto_core.validation.paper_session_realized_pnl_aggregate import (
     PaperSessionRealizedPnlAggregateStatus,
     paper_session_realized_pnl_aggregate_digest,
 )
+from crypto_core.validation.paper_session_realized_pnl_evidence_manifest import (
+    PaperSessionRealizedPnlEvidenceManifest,
+    PaperSessionRealizedPnlEvidenceManifestStatus,
+    paper_session_realized_pnl_evidence_manifest_digest,
+)
 from crypto_core.validation.paper_stage4_readiness_decision import (
     PaperStage4ReadinessDecision,
     PaperStage4ReadinessStatus,
@@ -62,6 +74,7 @@ from crypto_core.validation.paper_stage4_readiness_decision import (
 _SCHEMA_VERSION = "paper-session-metrics-summary.v1"
 _METRICS_VERSION = "paper-session-metrics.v1"
 _EXPECTED_AGGREGATE_SCHEMA_VERSION = "paper-session-realized-pnl-aggregate.v1"
+_EXPECTED_MANIFEST_SCHEMA_VERSION = "paper-session-realized-pnl-evidence-manifest.v1"
 _EXPECTED_READINESS_SCHEMA_VERSION = "paper-stage4-readiness-decision.v1"
 
 _SHA256_HEX_LENGTH = 64
@@ -98,8 +111,8 @@ class PaperSessionMetricsSummaryStatus(str, Enum):
 class PaperSessionMetricsSummary:
     """Deterministic, immutable, digest-bound time-free paper-session metrics summary.
 
-    ``status`` READY only when the aggregate + readiness re-prove, cross-bind to the same chain, and are
-    trusted. ``ready`` (headline candidate flag) True only when the readiness verdict is
+    ``status`` READY only when the aggregate + manifest + readiness re-prove, cross-bind to the same admitted
+    chain, and are trusted. ``ready`` (headline candidate flag) True only when the readiness verdict is
     ``PAPER_STAGE4_CANDIDATE``; a REVIEW/BLOCK verdict still yields READY with ``ready=False`` and a context
     reason (no verdict is upgraded). ``paper_only`` True; every safety / non-overclaim attestation False,
     incl. ``sharpe_computed`` / ``return_series_computed`` / ``thirty_day_gate_satisfied``. TIME-FREE,
@@ -115,8 +128,10 @@ class PaperSessionMetricsSummary:
     correlation_id: str
     market_symbol: str
     expected_session_aggregate_digest: str
+    expected_evidence_manifest_digest: str
     expected_readiness_decision_digest: str
     session_aggregate_digest: str
+    evidence_manifest_digest: str
     readiness_decision_digest: str
     readiness_status: str
     readiness_verdict: str
@@ -269,6 +284,33 @@ def _aggregate_is_paper_safe(aggregate: PaperSessionRealizedPnlAggregate) -> boo
     )
 
 
+def _manifest_is_paper_safe(manifest: PaperSessionRealizedPnlEvidenceManifest) -> bool:
+    return (
+        manifest.paper_only is True
+        and manifest.gross_only is True
+        and manifest.fees_included is False
+        and manifest.unrealized_pnl_included is False
+        and manifest.total_pnl_computed is False
+        and manifest.equity_or_capital_computed is False
+        and manifest.capital_reserved is False
+        and manifest.capital_mutated is False
+        and manifest.balance_mutated is False
+        and manifest.live_position_mutated is False
+        and manifest.real_money_enabled is False
+        and manifest.real_orders_enabled is False
+        and manifest.order_routed is False
+        and manifest.venue_order_id_created is False
+        and manifest.exchange_order_id_created is False
+        and manifest.client_order_id_created is False
+        and manifest.route_id_created is False
+        and manifest.execution_instruction_created is False
+        and manifest.live_api_called is False
+        and manifest.scheduler_enabled is False
+        and manifest.auto_loop_enabled is False
+        and manifest.connector_invoked is False
+    )
+
+
 def _readiness_is_paper_safe(readiness: PaperStage4ReadinessDecision) -> bool:
     return (
         readiness.paper_only is True
@@ -310,9 +352,11 @@ def _source_event_digests(aggregate: PaperSessionRealizedPnlAggregate) -> frozen
 
 def summarize_paper_session_metrics(
     session_aggregate: PaperSessionRealizedPnlAggregate,
+    evidence_manifest: PaperSessionRealizedPnlEvidenceManifest,
     readiness_decision: PaperStage4ReadinessDecision,
     *,
     expected_session_aggregate_digest: str,
+    expected_evidence_manifest_digest: str,
     expected_readiness_decision_digest: str,
     run_id: str,
     aggregate_id: str,
@@ -321,30 +365,38 @@ def summarize_paper_session_metrics(
 ) -> PaperSessionMetricsSummary:
     """Summarize a paper session's deterministic time-free gross/count metrics + its §7.7 readiness verdict.
 
-    ``session_aggregate`` must be a ``PaperSessionRealizedPnlAggregate`` and ``readiness_decision`` a
-    ``PaperStage4ReadinessDecision``; ``expected_session_aggregate_digest`` /
-    ``expected_readiness_decision_digest`` exact plain 64-lowercase-hex ``str`` (the caller's INDEPENDENT
+    ``session_aggregate`` must be a ``PaperSessionRealizedPnlAggregate``, ``evidence_manifest`` the
+    ``PaperSessionRealizedPnlEvidenceManifest`` that admitted it, ``readiness_decision`` a
+    ``PaperStage4ReadinessDecision``; ``expected_session_aggregate_digest`` / ``expected_evidence_manifest_digest``
+    / ``expected_readiness_decision_digest`` exact plain 64-lowercase-hex ``str`` (the caller's INDEPENDENT
     anchors); ``run_id`` (the readiness run), ``aggregate_id`` (the aggregate's own id), ``correlation_id``
-    (shared) exact plain non-empty ``str``; ``metadata`` ``Mapping[str, str]`` or ``None``. A wrong type,
-    malformed digest, empty id, a forbidden BIST/live/order token, or malformed metadata raises
-    ``PaperSessionMetricsSummaryError`` before any work.
+    (the readiness run correlation) exact plain non-empty ``str``; ``metadata`` ``Mapping[str, str]`` or
+    ``None``. A wrong type, malformed digest, empty id, a forbidden BIST/live/order token, or malformed
+    metadata raises ``PaperSessionMetricsSummaryError`` before any work.
 
-    Each artifact self-digest is re-proven via its PUBLIC serializer (== stored == expected anchor); the
-    aggregate must be COMPUTED + paper-safe with non-negative counts, the readiness DECIDED + paper-safe +
-    non-over-claiming; both must agree on ``market_symbol`` and the caller ids, and the readiness's
-    ``realized_pnl_event_digest`` must be a member of the aggregate's ``source_event_digests`` (same chain).
+    Each artifact self-digest is re-proven via its PUBLIC serializer (== stored == expected anchor). Strong
+    same-chain binding: ``manifest.aggregate_digest == aggregate.aggregate_digest`` (the aggregate is the one
+    the manifest admitted) AND ``manifest.manifest_digest == readiness.manifest_digest`` (the readiness chain
+    points to this manifest); event-digest membership is a secondary check. The aggregate must be COMPUTED +
+    paper-safe with non-negative counts, the manifest READY + paper-safe, the readiness DECIDED + paper-safe +
+    non-over-claiming with ``ready`` consistent with ``verdict``; all three agree on ``market_symbol`` and the
+    aggregate/manifest on ``aggregate_id``; the readiness carries the caller ``run_id`` / ``correlation_id``.
     ``status=READY`` over fully trusted same-chain inputs; ``ready`` True only when the readiness verdict is
-    ``PAPER_STAGE4_CANDIDATE`` (REVIEW/BLOCK → READY, ``ready=False``, context reason). Any trust/id/same-chain
-    failure → ``status=REJECTED``. No aggregation is recomputed (the only derived value is the absolute
-    magnitude of the already-bound gross realized-PnL total). Deterministic and immutable; no
+    ``PAPER_STAGE4_CANDIDATE`` (REVIEW/BLOCK → READY, ``ready=False``, context reason). Any trust/id/same-chain/
+    ready-verdict failure → ``status=REJECTED``. No aggregation is recomputed (the only derived value is the
+    absolute magnitude of the already-bound gross realized-PnL total). Deterministic and immutable; no
     wall-clock/random/IO; time-free; reserves NO real capital; inputs unmutated.
     """
     if not isinstance(session_aggregate, PaperSessionRealizedPnlAggregate):
         raise PaperSessionMetricsSummaryError("paper_session_metrics_summary:session_aggregate_malformed")
+    if not isinstance(evidence_manifest, PaperSessionRealizedPnlEvidenceManifest):
+        raise PaperSessionMetricsSummaryError("paper_session_metrics_summary:evidence_manifest_malformed")
     if not isinstance(readiness_decision, PaperStage4ReadinessDecision):
         raise PaperSessionMetricsSummaryError("paper_session_metrics_summary:readiness_decision_malformed")
     if not _is_hex64_string(expected_session_aggregate_digest):
         raise PaperSessionMetricsSummaryError("paper_session_metrics_summary:expected_session_aggregate_digest_invalid")
+    if not _is_hex64_string(expected_evidence_manifest_digest):
+        raise PaperSessionMetricsSummaryError("paper_session_metrics_summary:expected_evidence_manifest_digest_invalid")
     if not _is_hex64_string(expected_readiness_decision_digest):
         raise PaperSessionMetricsSummaryError(
             "paper_session_metrics_summary:expected_readiness_decision_digest_invalid"
@@ -372,6 +424,15 @@ def summarize_paper_session_metrics(
     )
     if aggregate_reason is not None:
         hard.append(aggregate_reason)
+    manifest_reason = _reprove_self_digest(
+        evidence_manifest,
+        paper_session_realized_pnl_evidence_manifest_digest,
+        evidence_manifest.manifest_digest,
+        expected_evidence_manifest_digest,
+        "evidence_manifest",
+    )
+    if manifest_reason is not None:
+        hard.append(manifest_reason)
     readiness_reason = _reprove_self_digest(
         readiness_decision,
         paper_stage4_readiness_decision_digest,
@@ -389,6 +450,15 @@ def summarize_paper_session_metrics(
         hard.append("paper_session_metrics_summary:session_aggregate_not_computed")
     if not _aggregate_is_paper_safe(session_aggregate):
         hard.append("paper_session_metrics_summary:session_aggregate_unsafe_flags")
+    if evidence_manifest.schema_version != _EXPECTED_MANIFEST_SCHEMA_VERSION:
+        hard.append("paper_session_metrics_summary:evidence_manifest_schema_invalid")
+    elif (
+        evidence_manifest.status is not PaperSessionRealizedPnlEvidenceManifestStatus.READY
+        or evidence_manifest.ready is not True
+    ):
+        hard.append("paper_session_metrics_summary:evidence_manifest_not_ready")
+    if not _manifest_is_paper_safe(evidence_manifest):
+        hard.append("paper_session_metrics_summary:evidence_manifest_unsafe_flags")
     if readiness_decision.schema_version != _EXPECTED_READINESS_SCHEMA_VERSION:
         hard.append("paper_session_metrics_summary:readiness_decision_schema_invalid")
     if not (
@@ -399,6 +469,14 @@ def summarize_paper_session_metrics(
         hard.append("paper_session_metrics_summary:readiness_decision_not_decided")
     if not _readiness_is_paper_safe(readiness_decision):
         hard.append("paper_session_metrics_summary:readiness_decision_unsafe_flags")
+
+    # P2: re-prove the readiness ``ready`` flag against its ``verdict`` at THIS consumer boundary. A resealed
+    # readiness whose digest re-proves but whose ready/verdict pair was tampered (e.g. CANDIDATE + ready=False,
+    # or BLOCK + ready=True) must fail closed here — the digest re-proof alone does not re-check the invariant.
+    verdict = readiness_decision.verdict
+    expected_ready = verdict is PaperStage4ReadinessVerdict.PAPER_STAGE4_CANDIDATE
+    if type(readiness_decision.ready) is not bool or readiness_decision.ready is not expected_ready:
+        hard.append("paper_session_metrics_summary:readiness_ready_verdict_inconsistent")
 
     # Non-negative deterministic counts (well-formed; a real session has >=1 bridge).
     if not _is_int(session_aggregate.session_bridge_count) or session_aggregate.session_bridge_count < 1:
@@ -417,10 +495,9 @@ def summarize_paper_session_metrics(
     else:
         abs_realized_total = _render_decimal(abs(realized))
 
-    # Caller ids must match: the aggregate by its own ``aggregate_id``; the readiness run/episode by ``run_id``
-    # and ``correlation_id``. The aggregate carries its OWN audit ``correlation_id`` (independent of the run
-    # correlation), so it is bound transitively via the re-proven aggregate digest, not required to equal the
-    # run correlation — the genuine cross-artifact link is the realized-event-digest membership + market below.
+    # Caller ids: the aggregate by its own ``aggregate_id`` (also bound by the manifest below); the readiness
+    # run/episode by ``run_id`` and ``correlation_id``. The aggregate's OWN audit ``correlation_id`` is
+    # independent of the run correlation and is bound transitively via the re-proven aggregate digest.
     if _plain_str_or_empty(session_aggregate.aggregate_id) != aggregate_id:
         hard.append("paper_session_metrics_summary:aggregate_id_mismatch")
     if _plain_str_or_empty(readiness_decision.run_id) != run_id:
@@ -428,18 +505,36 @@ def summarize_paper_session_metrics(
     if _plain_str_or_empty(readiness_decision.correlation_id) != correlation_id:
         hard.append("paper_session_metrics_summary:readiness_correlation_id_mismatch")
 
-    # Same-chain binding: same market, and the readiness chain's realized event is among the aggregate's
-    # summed source events (the genuine link between the readiness verdict and the aggregate economics).
+    # STRONG same-admitted-chain binding (not bare event membership): the manifest is the admitting evidence
+    # record. The aggregate must be EXACTLY the one the manifest admitted (manifest.aggregate_digest ==
+    # aggregate.aggregate_digest and same aggregate_id), and the readiness governor→ledger→admission chain must
+    # point to THIS manifest (manifest.manifest_digest == readiness.manifest_digest). A foreign-but-valid
+    # aggregate that merely contains the same realized event (member, different aggregate digest) fails here.
+    if _plain_str_or_empty(evidence_manifest.aggregate_digest) != _plain_str_or_empty(
+        session_aggregate.aggregate_digest
+    ) or _plain_str_or_empty(evidence_manifest.aggregate_id) != _plain_str_or_empty(session_aggregate.aggregate_id):
+        hard.append("paper_session_metrics_summary:readiness_aggregate_chain_mismatch")
+    if _plain_str_or_empty(evidence_manifest.manifest_digest) != _plain_str_or_empty(
+        readiness_decision.manifest_digest
+    ):
+        hard.append("paper_session_metrics_summary:readiness_manifest_chain_mismatch")
+
+    # All three must share one market symbol.
     aggregate_symbol = _plain_str_or_empty(session_aggregate.market_symbol)
-    if aggregate_symbol == "" or aggregate_symbol != _plain_str_or_empty(readiness_decision.market_symbol):
+    if (
+        aggregate_symbol == ""
+        or aggregate_symbol != _plain_str_or_empty(evidence_manifest.market_symbol)
+        or aggregate_symbol != _plain_str_or_empty(readiness_decision.market_symbol)
+    ):
         hard.append("paper_session_metrics_summary:market_symbol_mismatch")
+
+    # Secondary cross-check: the readiness chain's realized event is among the aggregate's summed source events.
     readiness_event_digest = _plain_str_or_empty(readiness_decision.realized_pnl_event_digest)
     if not _is_hex64_string(readiness_event_digest) or readiness_event_digest not in _source_event_digests(
         session_aggregate
     ):
         hard.append("paper_session_metrics_summary:realized_pnl_event_not_in_aggregate")
 
-    verdict = readiness_decision.verdict
     if hard:
         status = PaperSessionMetricsSummaryStatus.REJECTED
         ready = False
@@ -467,8 +562,10 @@ def summarize_paper_session_metrics(
         status=status,
         ready=ready,
         session_aggregate=session_aggregate,
+        evidence_manifest=evidence_manifest,
         readiness_decision=readiness_decision,
         expected_session_aggregate_digest=expected_session_aggregate_digest,
+        expected_evidence_manifest_digest=expected_evidence_manifest_digest,
         expected_readiness_decision_digest=expected_readiness_decision_digest,
         run_id=run_id,
         aggregate_id=aggregate_id,
@@ -484,8 +581,10 @@ def _finalize_summary(
     status: PaperSessionMetricsSummaryStatus,
     ready: bool,
     session_aggregate: PaperSessionRealizedPnlAggregate,
+    evidence_manifest: PaperSessionRealizedPnlEvidenceManifest,
     readiness_decision: PaperStage4ReadinessDecision,
     expected_session_aggregate_digest: str,
+    expected_evidence_manifest_digest: str,
     expected_readiness_decision_digest: str,
     run_id: str,
     aggregate_id: str,
@@ -513,8 +612,10 @@ def _finalize_summary(
         "correlation_id": correlation_id,
         "market_symbol": _plain_str_or_empty(session_aggregate.market_symbol),
         "expected_session_aggregate_digest": expected_session_aggregate_digest,
+        "expected_evidence_manifest_digest": expected_evidence_manifest_digest,
         "expected_readiness_decision_digest": expected_readiness_decision_digest,
         "session_aggregate_digest": _plain_str_or_empty(session_aggregate.aggregate_digest),
+        "evidence_manifest_digest": _plain_str_or_empty(evidence_manifest.manifest_digest),
         "readiness_decision_digest": _plain_str_or_empty(readiness_decision.readiness_decision_digest),
         "readiness_status": readiness_status,
         "readiness_verdict": readiness_verdict,
@@ -560,8 +661,10 @@ def _summary_fields(summary: PaperSessionMetricsSummary) -> dict[str, object]:
         "correlation_id": summary.correlation_id,
         "market_symbol": summary.market_symbol,
         "expected_session_aggregate_digest": summary.expected_session_aggregate_digest,
+        "expected_evidence_manifest_digest": summary.expected_evidence_manifest_digest,
         "expected_readiness_decision_digest": summary.expected_readiness_decision_digest,
         "session_aggregate_digest": summary.session_aggregate_digest,
+        "evidence_manifest_digest": summary.evidence_manifest_digest,
         "readiness_decision_digest": summary.readiness_decision_digest,
         "readiness_status": summary.readiness_status,
         "readiness_verdict": summary.readiness_verdict,
@@ -591,8 +694,10 @@ def _summary_payload_from(summary: PaperSessionMetricsSummary) -> dict[str, obje
         "correlation_id": summary.correlation_id,
         "market_symbol": summary.market_symbol,
         "expected_session_aggregate_digest": summary.expected_session_aggregate_digest,
+        "expected_evidence_manifest_digest": summary.expected_evidence_manifest_digest,
         "expected_readiness_decision_digest": summary.expected_readiness_decision_digest,
         "session_aggregate_digest": summary.session_aggregate_digest,
+        "evidence_manifest_digest": summary.evidence_manifest_digest,
         "readiness_decision_digest": summary.readiness_decision_digest,
         "readiness_status": summary.readiness_status,
         "readiness_verdict": summary.readiness_verdict,

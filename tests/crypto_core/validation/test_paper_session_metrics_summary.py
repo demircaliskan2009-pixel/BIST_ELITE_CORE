@@ -1,12 +1,13 @@
 """Tests for the paper session metrics summary (§10.4.1) — deterministic, paper-only, TIME-FREE summary that
-binds an existing ``PaperSessionRealizedPnlAggregate`` to its §7.7 ``PaperStage4ReadinessDecision`` verdict.
+binds an existing ``PaperSessionRealizedPnlAggregate`` (via its admitted evidence manifest) to its §7.7
+``PaperStage4ReadinessDecision`` verdict.
 
 Genuine artifacts are built end-to-end through the merged paper chain (the same realized event flows into both
-the session aggregate and the governor→replay→readiness verdict, so the realized-event-digest membership link
-is real); adversarial variants are derived by ``replace(...)`` + reseal. Covers the duplicate-precheck added
-value, candidate/review/block context paths, digest/provenance, same-chain binding, cross-id, status/safety,
-the time-free boundary, canonical/adversarial, forbidden-surface exclusion (alias-resistant AST), and
-non-overclaim."""
+the session aggregate/manifest and the governor→replay→readiness verdict, so the strong aggregate↔manifest↔
+readiness binding is real); adversarial variants are derived by ``replace(...)`` + reseal. Covers the
+duplicate-precheck added value, candidate/review/block context paths, digest/provenance, STRONG same-admitted-
+chain binding (foreign-aggregate membership-only regression), the readiness ready/verdict invariant, cross-id,
+status/safety, the time-free boundary, canonical/adversarial, forbidden-surface exclusion (AST), non-overclaim."""
 
 from __future__ import annotations
 
@@ -341,18 +342,15 @@ def _aligned():
     sbridge = build_paper_session_realized_pnl_bridge(
         prov, (rollup,), bridge_id="bridge-1", correlation_id="corr-bridge"
     )
-    agg = build_paper_session_realized_pnl_aggregate(
-        [PaperSessionRealizedPnlAggregateInput(bridge=sbridge, session_input=prov, rollup_entries=(rollup,))],
-        aggregate_id=_AGG_ID,
-        correlation_id="corr-agg",
-    )
+    agg_input = PaperSessionRealizedPnlAggregateInput(bridge=sbridge, session_input=prov, rollup_entries=(rollup,))
+    agg = build_paper_session_realized_pnl_aggregate([agg_input], aggregate_id=_AGG_ID, correlation_id="corr-agg")
     manifest = build_paper_session_realized_pnl_evidence_manifest(
         agg, expected_aggregate_digest=agg.aggregate_digest, correlation_id="corr-manifest"
     )
     record = build_paper_evidence_admission_record(
         manifest, expected_manifest_digest=manifest.manifest_digest, correlation_id=_CORR
     )
-    return record, manifest, episode, agg
+    return record, manifest, episode, agg, agg_input
 
 
 def _ready_bridge_from(record, manifest, episode):
@@ -389,9 +387,9 @@ def _policy(
     )
 
 
-def _chain_inputs(policy=None):
-    """Return (session_aggregate, readiness_decision) sharing one genuine deterministic paper chain."""
-    record, manifest, episode, agg = _aligned()
+def _full_chain(policy=None):
+    """Build one genuine deterministic paper chain → (aggregate, manifest, readiness, aggregate_input)."""
+    record, manifest, episode, agg, agg_input = _aligned()
     bridge = _ready_bridge_from(record, manifest, episode)
     policy = policy if policy is not None else _policy()
     governor = decide_paper_governor(
@@ -421,7 +419,12 @@ def _chain_inputs(policy=None):
         episode_id=_EPISODE_ID,
         correlation_id=_CORR,
     )
-    return agg, readiness
+    return agg, manifest, readiness, agg_input
+
+
+def _chain_inputs(policy=None):
+    agg, manifest, readiness, _ = _full_chain(policy)
+    return agg, manifest, readiness
 
 
 def _reseal_aggregate(aggregate):
@@ -432,16 +435,17 @@ def _reseal_readiness(readiness):
     return replace(readiness, readiness_decision_digest=paper_stage4_readiness_decision_digest(readiness))
 
 
-def _summarize(aggregate, readiness, **overrides):
+def _summarize(aggregate, manifest, readiness, **overrides):
     kwargs = {
         "expected_session_aggregate_digest": aggregate.aggregate_digest,
+        "expected_evidence_manifest_digest": manifest.manifest_digest,
         "expected_readiness_decision_digest": readiness.readiness_decision_digest,
         "run_id": _RUN,
         "aggregate_id": aggregate.aggregate_id,
         "correlation_id": _CORR,
     }
     kwargs.update(overrides)
-    return summarize_paper_session_metrics(aggregate, readiness, **kwargs)
+    return summarize_paper_session_metrics(aggregate, manifest, readiness, **kwargs)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -450,13 +454,14 @@ def _summarize(aggregate, readiness, **overrides):
 
 
 def test_candidate_ready_and_adds_value_over_aggregate() -> None:
-    aggregate, readiness = _chain_inputs()
-    result = _summarize(aggregate, readiness)
+    aggregate, manifest, readiness = _chain_inputs()
+    result = _summarize(aggregate, manifest, readiness)
     assert result.status is PaperSessionMetricsSummaryStatus.READY
     assert result.ready is True
     assert result.reason_codes == ()
-    # Reuses the aggregate digest + binds the §7.7 readiness digest/verdict (value NOT in the aggregate alone).
+    # Reuses aggregate digest + binds the manifest + the §7.7 readiness digest/verdict (NOT in the aggregate).
     assert result.session_aggregate_digest == aggregate.aggregate_digest
+    assert result.evidence_manifest_digest == manifest.manifest_digest
     assert result.readiness_decision_digest == readiness.readiness_decision_digest
     assert result.readiness_verdict == "PAPER_STAGE4_CANDIDATE"
     assert result.readiness_status == "DECIDED"
@@ -472,26 +477,26 @@ def test_candidate_ready_and_adds_value_over_aggregate() -> None:
 
 
 def test_abs_realized_total_is_magnitude_of_gross() -> None:
-    aggregate, readiness = _chain_inputs()
-    result = _summarize(aggregate, readiness)
+    aggregate, manifest, readiness = _chain_inputs()
+    result = _summarize(aggregate, manifest, readiness)
     # The aligned chain produces realized_pnl=-200; abs magnitude is 200 (only derived metric).
     assert result.realized_pnl_total == "-200"
     assert result.abs_realized_pnl_total == "200"
 
 
 def test_summary_digest_deterministic_and_recomputes() -> None:
-    aggregate, readiness = _chain_inputs()
-    a = _summarize(aggregate, readiness)
-    b = _summarize(aggregate, readiness)
+    aggregate, manifest, readiness = _chain_inputs()
+    a = _summarize(aggregate, manifest, readiness)
+    b = _summarize(aggregate, manifest, readiness)
     assert a.summary_digest == b.summary_digest
     assert paper_session_metrics_summary_digest(a) == a.summary_digest
     assert paper_session_metrics_summary_to_dict(a)["summary_digest"] == a.summary_digest
 
 
 def test_changed_bound_field_changes_summary_digest() -> None:
-    aggregate, readiness = _chain_inputs()
-    base = _summarize(aggregate, readiness)
-    other = _summarize(aggregate, readiness, metadata={"note": "second"})
+    aggregate, manifest, readiness = _chain_inputs()
+    base = _summarize(aggregate, manifest, readiness)
+    other = _summarize(aggregate, manifest, readiness, metadata={"note": "second"})
     assert base.summary_digest != other.summary_digest
 
 
@@ -501,8 +506,8 @@ def test_changed_bound_field_changes_summary_digest() -> None:
 
 
 def test_review_required_summarized_not_ready() -> None:
-    aggregate, readiness = _chain_inputs(policy=_policy(review_abs_realized_pnl="100"))
-    result = _summarize(aggregate, readiness)
+    aggregate, manifest, readiness = _chain_inputs(policy=_policy(review_abs_realized_pnl="100"))
+    result = _summarize(aggregate, manifest, readiness)
     assert result.status is PaperSessionMetricsSummaryStatus.READY
     assert result.ready is False
     assert result.readiness_verdict == "PAPER_REVIEW_REQUIRED"
@@ -510,8 +515,10 @@ def test_review_required_summarized_not_ready() -> None:
 
 
 def test_blocked_summarized_not_ready() -> None:
-    aggregate, readiness = _chain_inputs(policy=_policy(review_abs_realized_pnl="50", max_abs_realized_pnl="100"))
-    result = _summarize(aggregate, readiness)
+    aggregate, manifest, readiness = _chain_inputs(
+        policy=_policy(review_abs_realized_pnl="50", max_abs_realized_pnl="100")
+    )
+    result = _summarize(aggregate, manifest, readiness)
     assert result.status is PaperSessionMetricsSummaryStatus.READY
     assert result.ready is False
     assert result.readiness_verdict == "PAPER_BLOCKED"
@@ -524,136 +531,219 @@ def test_blocked_summarized_not_ready() -> None:
 
 
 def test_wrong_aggregate_anchor_rejects() -> None:
-    aggregate, readiness = _chain_inputs()
-    result = _summarize(aggregate, readiness, expected_session_aggregate_digest="a" * 64)
+    aggregate, manifest, readiness = _chain_inputs()
+    result = _summarize(aggregate, manifest, readiness, expected_session_aggregate_digest="a" * 64)
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert any("session_aggregate_digest_mismatch" in code for code in result.reason_codes)
 
 
+def test_wrong_manifest_anchor_rejects() -> None:
+    aggregate, manifest, readiness = _chain_inputs()
+    result = _summarize(aggregate, manifest, readiness, expected_evidence_manifest_digest="a" * 64)
+    assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
+    assert any("evidence_manifest_digest_mismatch" in code for code in result.reason_codes)
+
+
 def test_wrong_readiness_anchor_rejects() -> None:
-    aggregate, readiness = _chain_inputs()
-    result = _summarize(aggregate, readiness, expected_readiness_decision_digest="a" * 64)
+    aggregate, manifest, readiness = _chain_inputs()
+    result = _summarize(aggregate, manifest, readiness, expected_readiness_decision_digest="a" * 64)
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert any("readiness_decision_digest_mismatch" in code for code in result.reason_codes)
 
 
 def test_forged_aggregate_self_digest_rejects() -> None:
-    aggregate, readiness = _chain_inputs()
+    aggregate, manifest, readiness = _chain_inputs()
     forged = replace(aggregate, aggregate_digest="0" * 64)  # tampered WITHOUT reseal
-    result = _summarize(forged, readiness, expected_session_aggregate_digest="0" * 64)
+    result = _summarize(forged, manifest, readiness, expected_session_aggregate_digest="0" * 64)
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert any("session_aggregate_digest_mismatch" in code for code in result.reason_codes)
 
 
 def test_forged_readiness_self_digest_rejects() -> None:
-    aggregate, readiness = _chain_inputs()
+    aggregate, manifest, readiness = _chain_inputs()
     forged = replace(readiness, readiness_decision_digest="0" * 64)  # tampered WITHOUT reseal
-    result = _summarize(aggregate, forged, expected_readiness_decision_digest="0" * 64)
+    result = _summarize(aggregate, manifest, forged, expected_readiness_decision_digest="0" * 64)
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert any("readiness_decision_digest_mismatch" in code for code in result.reason_codes)
 
 
 # --------------------------------------------------------------------------------------------------
-# 4. Same-chain binding
+# 4. STRONG same-admitted-chain binding (P1 repair) — membership alone is insufficient
 # --------------------------------------------------------------------------------------------------
 
 
+def test_foreign_aggregate_with_same_event_rejects() -> None:
+    # A DIFFERENT but fully valid aggregate built from the same input bundle (so it CONTAINS the same realized
+    # event → event membership passes) is NOT the aggregate the manifest admitted (different aggregate digest).
+    aggregate, manifest, readiness, agg_input = _full_chain()
+    foreign = build_paper_session_realized_pnl_aggregate(
+        [agg_input], aggregate_id="agg-foreign", correlation_id="corr-agg"
+    )
+    assert foreign.aggregate_digest != aggregate.aggregate_digest
+    # Event membership alone WOULD have passed (the foreign aggregate contains the same realized event).
+    assert readiness.realized_pnl_event_digest in foreign.source_event_digests
+    result = _summarize(
+        foreign,
+        manifest,
+        readiness,
+        expected_session_aggregate_digest=foreign.aggregate_digest,
+        aggregate_id="agg-foreign",
+    )
+    assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
+    assert result.ready is False
+    assert any("readiness_aggregate_chain_mismatch" in code for code in result.reason_codes)
+
+
+def test_readiness_manifest_chain_mismatch_rejects() -> None:
+    aggregate, manifest, readiness = _chain_inputs()
+    tampered = _reseal_readiness(replace(readiness, manifest_digest="c" * 64))
+    result = _summarize(
+        aggregate, manifest, tampered, expected_readiness_decision_digest=tampered.readiness_decision_digest
+    )
+    assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
+    assert any("readiness_manifest_chain_mismatch" in code for code in result.reason_codes)
+
+
 def test_realized_event_not_in_aggregate_rejects() -> None:
-    aggregate, readiness = _chain_inputs()
+    aggregate, manifest, readiness = _chain_inputs()
     tampered = _reseal_readiness(replace(readiness, realized_pnl_event_digest="b" * 64))
-    result = _summarize(aggregate, tampered, expected_readiness_decision_digest=tampered.readiness_decision_digest)
+    result = _summarize(
+        aggregate, manifest, tampered, expected_readiness_decision_digest=tampered.readiness_decision_digest
+    )
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert any("realized_pnl_event_not_in_aggregate" in code for code in result.reason_codes)
 
 
 def test_market_symbol_mismatch_rejects() -> None:
-    aggregate, readiness = _chain_inputs()
+    aggregate, manifest, readiness = _chain_inputs()
     tampered = _reseal_readiness(replace(readiness, market_symbol="ETH-PERPETUAL"))
-    result = _summarize(aggregate, tampered, expected_readiness_decision_digest=tampered.readiness_decision_digest)
+    result = _summarize(
+        aggregate, manifest, tampered, expected_readiness_decision_digest=tampered.readiness_decision_digest
+    )
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert any("market_symbol_mismatch" in code for code in result.reason_codes)
 
 
 # --------------------------------------------------------------------------------------------------
-# 5. Cross-id
+# 5. Readiness ready/verdict invariant (P2 repair)
+# --------------------------------------------------------------------------------------------------
+
+
+def test_candidate_ready_false_inconsistent_rejects() -> None:
+    aggregate, manifest, readiness = _chain_inputs()  # CANDIDATE, ready True
+    tampered = _reseal_readiness(replace(readiness, ready=False))
+    result = _summarize(
+        aggregate, manifest, tampered, expected_readiness_decision_digest=tampered.readiness_decision_digest
+    )
+    assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
+    assert result.ready is False
+    assert any("readiness_ready_verdict_inconsistent" in code for code in result.reason_codes)
+
+
+def test_review_ready_true_inconsistent_rejects() -> None:
+    aggregate, manifest, readiness = _chain_inputs(policy=_policy(review_abs_realized_pnl="100"))  # REVIEW, ready False
+    tampered = _reseal_readiness(replace(readiness, ready=True))
+    result = _summarize(
+        aggregate, manifest, tampered, expected_readiness_decision_digest=tampered.readiness_decision_digest
+    )
+    assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
+    assert any("readiness_ready_verdict_inconsistent" in code for code in result.reason_codes)
+
+
+def test_blocked_ready_true_inconsistent_rejects() -> None:
+    aggregate, manifest, readiness = _chain_inputs(
+        policy=_policy(review_abs_realized_pnl="50", max_abs_realized_pnl="100")
+    )  # BLOCK, ready False
+    tampered = _reseal_readiness(replace(readiness, ready=True))
+    result = _summarize(
+        aggregate, manifest, tampered, expected_readiness_decision_digest=tampered.readiness_decision_digest
+    )
+    assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
+    assert any("readiness_ready_verdict_inconsistent" in code for code in result.reason_codes)
+
+
+# --------------------------------------------------------------------------------------------------
+# 6. Cross-id
 # --------------------------------------------------------------------------------------------------
 
 
 def test_run_id_mismatch_rejects() -> None:
-    aggregate, readiness = _chain_inputs()
-    result = _summarize(aggregate, readiness, run_id="other-run")
+    aggregate, manifest, readiness = _chain_inputs()
+    result = _summarize(aggregate, manifest, readiness, run_id="other-run")
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert any("readiness_run_id_mismatch" in code for code in result.reason_codes)
 
 
 def test_aggregate_id_mismatch_rejects() -> None:
-    aggregate, readiness = _chain_inputs()
-    result = _summarize(aggregate, readiness, aggregate_id="other-agg")
+    aggregate, manifest, readiness = _chain_inputs()
+    result = _summarize(aggregate, manifest, readiness, aggregate_id="other-agg")
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert any("aggregate_id_mismatch" in code for code in result.reason_codes)
 
 
 def test_correlation_id_mismatch_rejects() -> None:
-    aggregate, readiness = _chain_inputs()
-    result = _summarize(aggregate, readiness, correlation_id="corr-other")
+    aggregate, manifest, readiness = _chain_inputs()
+    result = _summarize(aggregate, manifest, readiness, correlation_id="corr-other")
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert any("readiness_correlation_id_mismatch" in code for code in result.reason_codes)
 
 
 # --------------------------------------------------------------------------------------------------
-# 6. Status / safety (untrusted -> REJECTED, no partial READY)
+# 7. Status / safety (untrusted -> REJECTED, no partial READY)
 # --------------------------------------------------------------------------------------------------
 
 
 def test_aggregate_not_computed_rejects() -> None:
-    aggregate, readiness = _chain_inputs()
+    aggregate, manifest, readiness = _chain_inputs()
     tampered = _reseal_aggregate(replace(aggregate, status=PaperSessionRealizedPnlAggregateStatus.REJECTED))
-    result = _summarize(tampered, readiness, expected_session_aggregate_digest=tampered.aggregate_digest)
+    result = _summarize(tampered, manifest, readiness, expected_session_aggregate_digest=tampered.aggregate_digest)
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert any("session_aggregate_not_computed" in code for code in result.reason_codes)
 
 
 def test_unsafe_aggregate_flag_rejects() -> None:
-    aggregate, readiness = _chain_inputs()
+    aggregate, manifest, readiness = _chain_inputs()
     tampered = _reseal_aggregate(replace(aggregate, order_routed=True))
-    result = _summarize(tampered, readiness, expected_session_aggregate_digest=tampered.aggregate_digest)
+    result = _summarize(tampered, manifest, readiness, expected_session_aggregate_digest=tampered.aggregate_digest)
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert any("session_aggregate_unsafe_flags" in code for code in result.reason_codes)
 
 
 def test_negative_count_rejects() -> None:
-    aggregate, readiness = _chain_inputs()
+    aggregate, manifest, readiness = _chain_inputs()
     tampered = _reseal_aggregate(replace(aggregate, episode_count_total=-1))
-    result = _summarize(tampered, readiness, expected_session_aggregate_digest=tampered.aggregate_digest)
+    result = _summarize(tampered, manifest, readiness, expected_session_aggregate_digest=tampered.aggregate_digest)
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert any("episode_count_total_invalid" in code for code in result.reason_codes)
 
 
 def test_unsafe_readiness_flag_rejects() -> None:
-    aggregate, readiness = _chain_inputs()
+    aggregate, manifest, readiness = _chain_inputs()
     tampered = _reseal_readiness(replace(readiness, prdv4_stage4_complete=True))
-    result = _summarize(aggregate, tampered, expected_readiness_decision_digest=tampered.readiness_decision_digest)
+    result = _summarize(
+        aggregate, manifest, tampered, expected_readiness_decision_digest=tampered.readiness_decision_digest
+    )
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert result.ready is False
     assert any("readiness_decision_unsafe_flags" in code for code in result.reason_codes)
 
 
 def test_no_partial_ready_under_unsafe_input() -> None:
-    aggregate, readiness = _chain_inputs()
+    aggregate, manifest, readiness = _chain_inputs()
     tampered = _reseal_aggregate(replace(aggregate, live_api_called=True))
-    result = _summarize(tampered, readiness, expected_session_aggregate_digest=tampered.aggregate_digest)
+    result = _summarize(tampered, manifest, readiness, expected_session_aggregate_digest=tampered.aggregate_digest)
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert result.ready is False
 
 
 # --------------------------------------------------------------------------------------------------
-# 7. Time-free boundary
+# 8. Time-free boundary
 # --------------------------------------------------------------------------------------------------
 
 
 def test_time_free_flags_false_and_no_time_fields() -> None:
-    aggregate, readiness = _chain_inputs()
-    payload = paper_session_metrics_summary_to_dict(_summarize(aggregate, readiness))
+    aggregate, manifest, readiness = _chain_inputs()
+    payload = paper_session_metrics_summary_to_dict(_summarize(aggregate, manifest, readiness))
     assert payload["sharpe_computed"] is False
     assert payload["return_series_computed"] is False
     assert payload["thirty_day_gate_satisfied"] is False
@@ -663,45 +753,65 @@ def test_time_free_flags_false_and_no_time_fields() -> None:
 
 
 # --------------------------------------------------------------------------------------------------
-# 8. Canonical / adversarial
+# 9. Canonical / adversarial
 # --------------------------------------------------------------------------------------------------
 
 
 def test_str_subclass_correlation_id_raises() -> None:
-    aggregate, readiness = _chain_inputs()
+    aggregate, manifest, readiness = _chain_inputs()
     with pytest.raises(PaperSessionMetricsSummaryError, match="correlation_id_invalid"):
-        _summarize(aggregate, readiness, correlation_id=_LiarStr("corr-ep"))
+        _summarize(aggregate, manifest, readiness, correlation_id=_LiarStr("corr-ep"))
 
 
 def test_equality_liar_event_digest_cannot_bypass() -> None:
-    aggregate, readiness = _chain_inputs()
+    aggregate, manifest, readiness = _chain_inputs()
     tampered = _reseal_readiness(replace(readiness, realized_pnl_event_digest=_LiarStr("b" * 64)))
-    result = _summarize(aggregate, tampered, expected_readiness_decision_digest=tampered.readiness_decision_digest)
+    result = _summarize(
+        aggregate, manifest, tampered, expected_readiness_decision_digest=tampered.readiness_decision_digest
+    )
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert any("realized_pnl_event_not_in_aggregate" in code for code in result.reason_codes)
 
 
 @pytest.mark.parametrize("bad_metadata", [{"k": 5}, {5: "v"}, ["not", "a", "map"]])
 def test_malformed_metadata_raises(bad_metadata: object) -> None:
-    aggregate, readiness = _chain_inputs()
+    aggregate, manifest, readiness = _chain_inputs()
     with pytest.raises(PaperSessionMetricsSummaryError, match="metadata_malformed"):
-        _summarize(aggregate, readiness, metadata=bad_metadata)
+        _summarize(aggregate, manifest, readiness, metadata=bad_metadata)
 
 
 @pytest.mark.parametrize("bad", ["", "not-a-digest", "A" * 64, "b" * 63, "b" * 65])
 def test_malformed_expected_digest_raises(bad: str) -> None:
-    aggregate, readiness = _chain_inputs()
+    aggregate, manifest, readiness = _chain_inputs()
     with pytest.raises(PaperSessionMetricsSummaryError, match="expected_session_aggregate_digest_invalid"):
-        _summarize(aggregate, readiness, expected_session_aggregate_digest=bad)
+        _summarize(aggregate, manifest, readiness, expected_session_aggregate_digest=bad)
 
 
 def test_wrong_typed_aggregate_raises() -> None:
-    _, readiness = _chain_inputs()
+    _, manifest, readiness = _chain_inputs()
     with pytest.raises(PaperSessionMetricsSummaryError, match="session_aggregate_malformed"):
         summarize_paper_session_metrics(
             {"not": "an-aggregate"},  # type: ignore[arg-type]
+            manifest,
             readiness,
             expected_session_aggregate_digest="a" * 64,
+            expected_evidence_manifest_digest="a" * 64,
+            expected_readiness_decision_digest="a" * 64,
+            run_id=_RUN,
+            aggregate_id=_AGG_ID,
+            correlation_id=_CORR,
+        )
+
+
+def test_wrong_typed_manifest_raises() -> None:
+    aggregate, _, readiness = _chain_inputs()
+    with pytest.raises(PaperSessionMetricsSummaryError, match="evidence_manifest_malformed"):
+        summarize_paper_session_metrics(
+            aggregate,
+            {"not": "a-manifest"},  # type: ignore[arg-type]
+            readiness,
+            expected_session_aggregate_digest="a" * 64,
+            expected_evidence_manifest_digest="a" * 64,
             expected_readiness_decision_digest="a" * 64,
             run_id=_RUN,
             aggregate_id=_AGG_ID,
@@ -710,12 +820,14 @@ def test_wrong_typed_aggregate_raises() -> None:
 
 
 def test_wrong_typed_readiness_raises() -> None:
-    aggregate, _ = _chain_inputs()
+    aggregate, manifest, _ = _chain_inputs()
     with pytest.raises(PaperSessionMetricsSummaryError, match="readiness_decision_malformed"):
         summarize_paper_session_metrics(
             aggregate,
+            manifest,
             {"not": "a-readiness"},  # type: ignore[arg-type]
             expected_session_aggregate_digest="a" * 64,
+            expected_evidence_manifest_digest="a" * 64,
             expected_readiness_decision_digest="a" * 64,
             run_id=_RUN,
             aggregate_id=_AGG_ID,
@@ -725,37 +837,39 @@ def test_wrong_typed_readiness_raises() -> None:
 
 @pytest.mark.parametrize("scope_id", ["live_order", "bist", "scheduler", "place_order"])
 def test_scope_violation_in_ids_raises(scope_id: str) -> None:
-    aggregate, readiness = _chain_inputs()
+    aggregate, manifest, readiness = _chain_inputs()
     with pytest.raises(PaperSessionMetricsSummaryError, match="scope_violation"):
-        _summarize(aggregate, readiness, correlation_id=scope_id)
+        _summarize(aggregate, manifest, readiness, correlation_id=scope_id)
 
 
 def test_inputs_not_mutated() -> None:
-    aggregate, readiness = _chain_inputs()
+    aggregate, manifest, readiness = _chain_inputs()
     aggregate_digest_before = aggregate.aggregate_digest
+    manifest_digest_before = manifest.manifest_digest
     readiness_digest_before = readiness.readiness_decision_digest
-    _summarize(aggregate, readiness)
+    _summarize(aggregate, manifest, readiness)
     assert aggregate.aggregate_digest == aggregate_digest_before
+    assert manifest.manifest_digest == manifest_digest_before
     assert readiness.readiness_decision_digest == readiness_digest_before
 
 
 def test_result_frozen() -> None:
-    aggregate, readiness = _chain_inputs()
-    result = _summarize(aggregate, readiness)
+    aggregate, manifest, readiness = _chain_inputs()
+    result = _summarize(aggregate, manifest, readiness)
     with pytest.raises(FrozenInstanceError):
         result.ready = True  # type: ignore[misc]
 
 
 def test_reason_codes_sorted_stable() -> None:
-    aggregate, readiness = _chain_inputs()
-    result = _summarize(aggregate, readiness, run_id="other-run", aggregate_id="other-agg")
+    aggregate, manifest, readiness = _chain_inputs()
+    result = _summarize(aggregate, manifest, readiness, run_id="other-run", aggregate_id="other-agg")
     assert result.status is PaperSessionMetricsSummaryStatus.REJECTED
     assert list(result.reason_codes) == sorted(set(result.reason_codes))
     assert len(result.reason_codes) >= 2
 
 
 # --------------------------------------------------------------------------------------------------
-# 9. Immutability / forbidden surfaces
+# 10. Immutability / forbidden surfaces
 # --------------------------------------------------------------------------------------------------
 
 
@@ -835,13 +949,13 @@ def test_public_api_exact() -> None:
 
 
 # --------------------------------------------------------------------------------------------------
-# 10. Non-overclaim
+# 11. Non-overclaim
 # --------------------------------------------------------------------------------------------------
 
 
 def test_non_overclaim_flags_false_and_bound() -> None:
-    aggregate, readiness = _chain_inputs()
-    payload = paper_session_metrics_summary_to_dict(_summarize(aggregate, readiness))
+    aggregate, manifest, readiness = _chain_inputs()
+    payload = paper_session_metrics_summary_to_dict(_summarize(aggregate, manifest, readiness))
     for flag in (
         "prdv4_stage4_complete",
         "live_ready",
