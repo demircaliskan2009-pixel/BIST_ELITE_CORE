@@ -657,8 +657,72 @@ def test_summary_ready_verdict_inconsistent_rejects() -> None:
     assert any("summary_ready_verdict_inconsistent" in code for code in result.reason_codes)
 
 
-def test_incoherent_counts_reject() -> None:
-    summary = _reseal_summary(replace(_summary(), computed_event_count=999))  # > event_count
+@pytest.mark.parametrize(
+    ("computed", "no_realized", "source"),
+    [
+        (2, 2, 3),  # overcount: 3 != 2 + 2
+        (1, 1, 3),  # undercount: 3 != 1 + 1
+        (999, 0, 3),  # computed exceeds event_count
+    ],
+)
+def test_event_partition_incoherent_rejects(computed: int, no_realized: int, source: int) -> None:
+    # A digest-valid resealed summary where event_count != computed + no_realized must fail closed. Source count
+    # is set == event_count (3) here to isolate the partition reason from the source-count reason.
+    summary = _reseal_summary(
+        replace(
+            _summary(),
+            event_count=3,
+            computed_event_count=computed,
+            no_realized_event_count=no_realized,
+            source_event_digest_count=source,
+        )
+    )
+    result = _build(summary, expected_metrics_summary_digest=summary.summary_digest)
+    assert result.status is PaperDeterministicTimeWindowEvidenceStatus.REJECTED
+    assert result.ready is False
+    assert result.sample_eligible is False
+    assert any("summary_event_count_incoherent" in code for code in result.reason_codes)
+
+
+def test_source_event_digest_count_mismatch_rejects() -> None:
+    # Partition coherent (1 == 1 + 0) but source_event_digest_count (5) != event_count (1) -> fail closed.
+    summary = _reseal_summary(replace(_summary(), source_event_digest_count=5))
+    result = _build(summary, expected_metrics_summary_digest=summary.summary_digest)
+    assert result.status is PaperDeterministicTimeWindowEvidenceStatus.REJECTED
+    assert result.ready is False
+    assert result.sample_eligible is False
+    assert any("summary_source_event_digest_count_mismatch" in code for code in result.reason_codes)
+
+
+def test_empty_candidate_cannot_be_sample_eligible() -> None:
+    # A digest-valid resealed CANDIDATE summary with COHERENT zero event/source counts, a positive injected
+    # window, and positive observations must NEVER be sample-eligible (no Stage-4/readiness upgrade).
+    summary = _reseal_summary(
+        replace(
+            _summary(),
+            event_count=0,
+            computed_event_count=0,
+            no_realized_event_count=0,
+            source_event_digest_count=0,
+        )
+    )
+    result = _build(
+        summary,
+        expected_metrics_summary_digest=summary.summary_digest,
+        started_at_ns=1_000,
+        stopped_at_ns=2_000,
+        sample_observation_count=3,
+    )
+    assert result.status is PaperDeterministicTimeWindowEvidenceStatus.READY
+    assert result.sample_eligible is False
+    assert result.window_duration_ns == 1_000
+    assert any("sample_not_eligible_empty_summary" in code for code in result.reason_codes)
+    assert result.prdv4_stage4_complete is False
+    assert result.thirty_day_gate_satisfied is False
+
+
+def test_negative_event_count_rejects() -> None:
+    summary = _reseal_summary(replace(_summary(), event_count=-1))
     result = _build(summary, expected_metrics_summary_digest=summary.summary_digest)
     assert result.status is PaperDeterministicTimeWindowEvidenceStatus.REJECTED
     assert any("summary_counts_invalid" in code for code in result.reason_codes)

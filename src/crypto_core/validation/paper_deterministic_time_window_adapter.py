@@ -409,8 +409,12 @@ def build_paper_deterministic_time_window_evidence(
     if not _summary_is_paper_safe(metrics_summary):
         hard.append("paper_deterministic_time_window_evidence:summary_unsafe_flags")
 
-    # Summary counts: exact non-negative ints + coherence; >=1 bridge; >=1 source event for a CANDIDATE summary.
-    counts_ok = (
+    # Summary counts: exact non-negative ints, THEN full partition + source-event coherence re-proved at this
+    # boundary. A digest-valid resealed summary with incoherent or empty counts must never produce
+    # ready/sample-eligible evidence, so coherence is re-checked here (the summary digest alone does not re-prove
+    # it): ``event_count == computed_event_count + no_realized_event_count`` (full event partition) and
+    # ``source_event_digest_count == event_count`` (every event has exactly one bound source-event digest).
+    counts_well_formed = (
         _is_exact_int(metrics_summary.session_bridge_count)
         and metrics_summary.session_bridge_count >= 1
         and _is_exact_int(metrics_summary.episode_count_total)
@@ -423,11 +427,17 @@ def build_paper_deterministic_time_window_evidence(
         and metrics_summary.no_realized_event_count >= 0
         and _is_exact_int(metrics_summary.source_event_digest_count)
         and metrics_summary.source_event_digest_count >= 0
-        and metrics_summary.event_count >= metrics_summary.computed_event_count
-        and metrics_summary.event_count >= metrics_summary.no_realized_event_count
     )
-    if not counts_ok:
+    if not counts_well_formed:
         hard.append("paper_deterministic_time_window_evidence:summary_counts_invalid")
+    else:
+        if (
+            metrics_summary.event_count
+            != metrics_summary.computed_event_count + metrics_summary.no_realized_event_count
+        ):
+            hard.append("paper_deterministic_time_window_evidence:summary_event_count_incoherent")
+        if metrics_summary.source_event_digest_count != metrics_summary.event_count:
+            hard.append("paper_deterministic_time_window_evidence:summary_source_event_digest_count_mismatch")
 
     # Canonical gross totals + abs consistency (no recomputation of economics — only a canonical-form check).
     realized = _canonical_decimal(metrics_summary.realized_pnl_total)
@@ -435,7 +445,8 @@ def build_paper_deterministic_time_window_evidence(
     abs_total = _canonical_decimal(metrics_summary.abs_realized_pnl_total)
     if realized is None or closed is None or closed < 0 or abs_total is None:
         hard.append("paper_deterministic_time_window_evidence:summary_totals_malformed")
-    elif _render_decimal(abs(realized)) != metrics_summary.abs_realized_pnl_total:
+    elif _render_decimal(realized.copy_abs()) != metrics_summary.abs_realized_pnl_total:
+        # ``copy_abs()`` is context-free (no ambient-context rounding), unlike ``abs(...)``.
         hard.append("paper_deterministic_time_window_evidence:summary_abs_mismatch")
 
     # Caller ids must match the (digest-proven) summary; market is carried from the summary.
@@ -479,10 +490,22 @@ def build_paper_deterministic_time_window_evidence(
     else:
         status = PaperDeterministicTimeWindowEvidenceStatus.READY
         ready = True
-        sample_eligible = window_duration_ns > 0 and sample_observation_count >= 1 and verdict == _VERDICT_CANDIDATE
-        reason_codes = (
-            () if sample_eligible else ("paper_deterministic_time_window_evidence:window_not_sample_eligible",)
+        # A CANDIDATE window is sample-eligible ONLY with positive, coherent event/source evidence AND a
+        # positive injected duration + >=1 observation. Coherent-but-EMPTY counts (event/computed/source == 0)
+        # can never be sample-eligible — a digest-valid resealed empty candidate is represented but not eligible.
+        has_positive_evidence = (
+            metrics_summary.event_count > 0
+            and metrics_summary.computed_event_count > 0
+            and metrics_summary.source_event_digest_count > 0
         )
+        positive_window = window_duration_ns > 0 and sample_observation_count >= 1
+        sample_eligible = positive_window and verdict == _VERDICT_CANDIDATE and has_positive_evidence
+        if sample_eligible:
+            reason_codes = ()
+        elif positive_window and verdict == _VERDICT_CANDIDATE and not has_positive_evidence:
+            reason_codes = ("paper_deterministic_time_window_evidence:sample_not_eligible_empty_summary",)
+        else:
+            reason_codes = ("paper_deterministic_time_window_evidence:window_not_sample_eligible",)
 
     return _finalize_evidence(
         status=status,
