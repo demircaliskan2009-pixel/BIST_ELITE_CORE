@@ -333,6 +333,22 @@ def _window_counts_coherent(window: PaperDeterministicTimeWindowEvidence) -> boo
     return window.source_event_digest_count == window.event_count
 
 
+def _window_sample_eligibility_coherent(window: PaperDeterministicTimeWindowEvidence) -> bool:
+    if type(window.sample_eligible) is not bool:
+        return False
+    if not _is_exact_int(window.sample_observation_count) or window.sample_observation_count < 0:
+        return False
+    if not window.sample_eligible:
+        return True
+    return (
+        window.window_duration_ns > 0
+        and window.sample_observation_count >= 1
+        and window.event_count > 0
+        and window.computed_event_count > 0
+        and window.source_event_digest_count > 0
+    )
+
+
 def _baseline_well_formed(baseline: Stage4BacktestBaseline) -> bool:
     return (
         _is_plain_non_empty_string(baseline.baseline_id)
@@ -391,7 +407,7 @@ def build_paper_vs_backtest_comparator_bridge(
     maps to ``status=REJECTED``. Deterministic and immutable; no wall-clock/random/IO; inputs unmutated; same
     edge is never claimed (``edge_id_unproven`` always True).
     """
-    if not isinstance(time_window_evidence, PaperDeterministicTimeWindowEvidence):
+    if type(time_window_evidence) is not PaperDeterministicTimeWindowEvidence:
         raise PaperVsBacktestComparatorBridgeError("paper_vs_backtest_comparator_bridge:time_window_evidence_malformed")
     if not _is_hex64_string(expected_time_window_digest):
         raise PaperVsBacktestComparatorBridgeError(
@@ -404,7 +420,7 @@ def build_paper_vs_backtest_comparator_bridge(
         raise PaperVsBacktestComparatorBridgeError("paper_vs_backtest_comparator_bridge:baseline_id_invalid")
     if edge_id is not None and not _is_plain_non_empty_string(edge_id):
         raise PaperVsBacktestComparatorBridgeError("paper_vs_backtest_comparator_bridge:edge_id_invalid")
-    if backtest_baseline is not None and not isinstance(backtest_baseline, Stage4BacktestBaseline):
+    if backtest_baseline is not None and type(backtest_baseline) is not Stage4BacktestBaseline:
         raise PaperVsBacktestComparatorBridgeError("paper_vs_backtest_comparator_bridge:backtest_baseline_malformed")
     if backtest_baseline is None:
         if expected_backtest_baseline_digest is not None:
@@ -462,6 +478,8 @@ def build_paper_vs_backtest_comparator_bridge(
         hard.append("paper_vs_backtest_comparator_bridge:time_window_timestamps_invalid")
     if not _window_counts_coherent(time_window_evidence):
         hard.append("paper_vs_backtest_comparator_bridge:time_window_counts_incoherent")
+    if not _window_sample_eligibility_coherent(time_window_evidence):
+        hard.append("paper_vs_backtest_comparator_bridge:time_window_sample_eligibility_inconsistent")
 
     # Window ``ready`` flag must be consistent with its own status (a resealed ready/status mismatch fails here).
     window_ready = time_window_evidence.ready if type(time_window_evidence.ready) is bool else None

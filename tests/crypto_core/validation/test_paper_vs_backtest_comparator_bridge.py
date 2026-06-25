@@ -13,7 +13,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 
 import pytest
@@ -36,6 +36,7 @@ from crypto_core.validation.paper_capacity_gate import (
     evaluate_paper_capacity_gate,
 )
 from crypto_core.validation.paper_deterministic_time_window_adapter import (
+    PaperDeterministicTimeWindowEvidence,
     PaperDeterministicTimeWindowEvidenceStatus,
     build_paper_deterministic_time_window_evidence,
     paper_deterministic_time_window_evidence_digest,
@@ -132,6 +133,14 @@ class _LiarStr(str):
         return False
 
     __hash__ = str.__hash__
+
+
+class _WindowSubclass(PaperDeterministicTimeWindowEvidence):
+    """Should be rejected by exact artifact type checks."""
+
+
+class _BaselineSubclass(Stage4BacktestBaseline):
+    """Should be rejected by exact artifact type checks."""
 
 
 def _is_hex64(value: object) -> bool:
@@ -649,6 +658,15 @@ def test_wrong_typed_window_raises() -> None:
         )
 
 
+def test_window_subclass_raises() -> None:
+    window = _window()
+    subclass_window = _WindowSubclass(
+        **{field.name: getattr(window, field.name) for field in fields(PaperDeterministicTimeWindowEvidence)}
+    )
+    with pytest.raises(PaperVsBacktestComparatorBridgeError, match="time_window_evidence_malformed"):
+        _build_bridge(subclass_window, expected_time_window_digest=subclass_window.time_window_digest)
+
+
 def test_window_unsafe_flags_reject() -> None:
     window = _reseal_window(replace(_window(), prdv4_stage4_complete=True))
     result = _build_bridge(window, expected_time_window_digest=window.time_window_digest)
@@ -682,6 +700,26 @@ def test_sample_eligible_false_blocks_comparison() -> None:
     assert result.sample_eligible is False
     assert "paper_sample_eligibility" in result.missing_comparator_inputs
     assert any("time_window_not_sample_eligible" in code for code in result.reason_codes)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"sample_observation_count": 0},
+        {"stopped_at_ns": 1_000, "window_duration_ns": 0},
+        {
+            "event_count": 0,
+            "computed_event_count": 0,
+            "no_realized_event_count": 0,
+            "source_event_digest_count": 0,
+        },
+    ],
+)
+def test_resealed_sample_eligible_without_positive_evidence_rejects(overrides: dict[str, object]) -> None:
+    window = _reseal_window(replace(_window(), sample_eligible=True, **overrides))
+    result = _build_bridge(window, expected_time_window_digest=window.time_window_digest)
+    assert result.status is PaperVsBacktestComparatorBridgeStatus.REJECTED
+    assert any("time_window_sample_eligibility_inconsistent" in code for code in result.reason_codes)
 
 
 def test_window_counts_incoherent_rejects() -> None:
@@ -777,6 +815,23 @@ def test_malformed_baseline_raises() -> None:
             _window(),
             backtest_baseline={"not": "a-baseline"},  # type: ignore[arg-type]
             expected_backtest_baseline_digest="a" * 64,
+        )
+
+
+def test_baseline_subclass_raises() -> None:
+    baseline = _BaselineSubclass(
+        baseline_id="baseline-1",
+        edge_id="edge-alpha",
+        as_of_ns=1_700_000_000_000_000_000,
+        backtest_sharpe=1.5,
+        backtest_hit_rate=0.55,
+    )
+    with pytest.raises(PaperVsBacktestComparatorBridgeError, match="backtest_baseline_malformed"):
+        _build_bridge(
+            _window(),
+            backtest_baseline=baseline,
+            expected_backtest_baseline_digest=_baseline_digest(baseline),
+            baseline_id="baseline-1",
         )
 
 
