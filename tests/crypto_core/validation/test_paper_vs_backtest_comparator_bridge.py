@@ -515,6 +515,13 @@ def _baseline_digest(baseline: Stage4BacktestBaseline) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _baseline_digest_or_mismatch_anchor(baseline: Stage4BacktestBaseline) -> str:
+    try:
+        return _baseline_digest(baseline)
+    except ValueError:
+        return "a" * 64
+
+
 # --------------------------------------------------------------------------------------------------
 # 1. Phase scope / no comparator execution
 # --------------------------------------------------------------------------------------------------
@@ -847,6 +854,68 @@ def test_invalid_baseline_fields_reject() -> None:
     assert any("backtest_baseline_invalid" in code for code in result.reason_codes)
 
 
+@pytest.mark.parametrize("bad_slippage", [-0.01, float("nan"), float("inf")])
+def test_invalid_optional_baseline_slippage_rejects(bad_slippage: float) -> None:
+    baseline = _baseline(backtest_slippage_bps=bad_slippage)
+    result = _build_bridge(
+        _window(),
+        backtest_baseline=baseline,
+        expected_backtest_baseline_digest=_baseline_digest_or_mismatch_anchor(baseline),
+        baseline_id="baseline-1",
+    )
+    assert result.status is PaperVsBacktestComparatorBridgeStatus.REJECTED
+    assert result.comparison_ready is False
+    assert result.stage4_comparator_invoked is False
+    assert any("backtest_baseline_invalid" in code for code in result.reason_codes)
+
+
+@pytest.mark.parametrize("bad_fill_rate", [-0.01, 1.01, float("nan"), float("inf")])
+def test_invalid_optional_baseline_fill_rate_rejects(bad_fill_rate: float) -> None:
+    baseline = _baseline(backtest_fill_rate=bad_fill_rate)
+    result = _build_bridge(
+        _window(),
+        backtest_baseline=baseline,
+        expected_backtest_baseline_digest=_baseline_digest_or_mismatch_anchor(baseline),
+        baseline_id="baseline-1",
+    )
+    assert result.status is PaperVsBacktestComparatorBridgeStatus.REJECTED
+    assert result.comparison_ready is False
+    assert result.stage4_comparator_invoked is False
+    assert any("backtest_baseline_invalid" in code for code in result.reason_codes)
+
+
+@pytest.mark.parametrize(
+    "bad_source_window_ids",
+    [
+        ["wf-1"],
+        ("",),
+        ("wf-1", 5),
+        (_LiarStr("wf-1"),),
+        ("server_time",),
+        ("live_order",),
+    ],
+)
+def test_malformed_baseline_source_window_ids_rejects(bad_source_window_ids: object) -> None:
+    baseline = Stage4BacktestBaseline(
+        baseline_id="baseline-1",
+        edge_id="edge-alpha",
+        as_of_ns=1_700_000_000_000_000_000,
+        backtest_sharpe=1.5,
+        backtest_hit_rate=0.55,
+        source_window_ids=bad_source_window_ids,  # type: ignore[arg-type]
+    )
+    result = _build_bridge(
+        _window(),
+        backtest_baseline=baseline,
+        expected_backtest_baseline_digest=_baseline_digest_or_mismatch_anchor(baseline),
+        baseline_id="baseline-1",
+    )
+    assert result.status is PaperVsBacktestComparatorBridgeStatus.REJECTED
+    assert result.comparison_ready is False
+    assert result.stage4_comparator_invoked is False
+    assert any("backtest_baseline_invalid" in code for code in result.reason_codes)
+
+
 def test_baseline_id_mismatch_rejects() -> None:
     baseline = _baseline()
     result = _build_bridge(
@@ -909,6 +978,12 @@ def test_scope_violation_in_metadata_raises() -> None:
 def test_clock_token_in_bridge_id_raises(token: str) -> None:
     with pytest.raises(PaperVsBacktestComparatorBridgeError, match="clock_token_forbidden"):
         _build_bridge(_window(), bridge_id=f"bridge-{token}")
+
+
+@pytest.mark.parametrize("token", ["wall_clock", "server_time"])
+def test_clock_token_in_correlation_id_raises(token: str) -> None:
+    with pytest.raises(PaperVsBacktestComparatorBridgeError, match="clock_token_forbidden"):
+        _build_bridge(_window(), correlation_id=f"corr-{token}")
 
 
 def test_clock_token_in_metadata_raises() -> None:

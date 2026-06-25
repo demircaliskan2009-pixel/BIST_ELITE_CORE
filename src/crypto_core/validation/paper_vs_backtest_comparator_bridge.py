@@ -225,6 +225,14 @@ def _is_finite_number(value: object) -> bool:
     return type(value) in (int, float) and not isinstance(value, bool) and math.isfinite(float(value))
 
 
+def _is_non_negative_optional_number(value: object) -> bool:
+    return value is None or (_is_finite_number(value) and float(value) >= 0.0)
+
+
+def _is_optional_rate(value: object) -> bool:
+    return value is None or (_is_finite_number(value) and 0.0 <= float(value) <= 1.0)
+
+
 def _plain_str_or_empty(value: object) -> str:
     """Return ``value`` only if it is an exact plain ``str`` (no subclass); else ``""`` (fail-closed)."""
     return value if type(value) is str else ""
@@ -349,6 +357,17 @@ def _window_sample_eligibility_coherent(window: PaperDeterministicTimeWindowEvid
     )
 
 
+def _baseline_source_window_ids_well_formed(source_window_ids: object) -> bool:
+    if type(source_window_ids) is not tuple:
+        return False
+    for source_window_id in source_window_ids:
+        if not _is_plain_non_empty_string(source_window_id):
+            return False
+        if _has_scope_violation(source_window_id) or _has_clock_token(source_window_id):
+            return False
+    return True
+
+
 def _baseline_well_formed(baseline: Stage4BacktestBaseline) -> bool:
     return (
         _is_plain_non_empty_string(baseline.baseline_id)
@@ -359,6 +378,9 @@ def _baseline_well_formed(baseline: Stage4BacktestBaseline) -> bool:
         and float(baseline.backtest_sharpe) > 0.0
         and _is_finite_number(baseline.backtest_hit_rate)
         and 0.0 <= float(baseline.backtest_hit_rate) <= 1.0
+        and _is_non_negative_optional_number(baseline.backtest_slippage_bps)
+        and _is_optional_rate(baseline.backtest_fill_rate)
+        and _baseline_source_window_ids_well_formed(baseline.source_window_ids)
     )
 
 
@@ -444,6 +466,7 @@ def build_paper_vs_backtest_comparator_bridge(
     if _has_clock_token(
         bridge_id,
         paper_id,
+        correlation_id,
         baseline_id if baseline_id is not None else "",
         edge_id if edge_id is not None else "",
         *_metadata_texts(metadata_pairs),
