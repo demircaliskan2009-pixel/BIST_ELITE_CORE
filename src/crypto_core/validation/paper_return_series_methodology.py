@@ -30,6 +30,8 @@ _REQUIRED_CONSECUTIVE_BUCKET_COUNT = 30
 _RETURN_BASIS = "normalized_paper_equity_index"
 _RETURN_VALUE_KIND = "unitless_decimal_return"
 _NORMALIZED_INDEX_START = "1"
+_MARK_TO_MARKET_REQUIRED = True
+_REALIZED_ONLY_PRIMARY_SERIES = False
 _ANNUALIZATION_POLICY = "daily_utc_365_review_only"
 _ANNUALIZATION_FACTOR = 365
 _PAPER_SHARPE_POLICY = "deferred_not_computed"
@@ -104,6 +106,8 @@ class PaperReturnSeriesMethodology:
     return_basis: str
     return_value_kind: str
     normalized_index_start: str
+    mark_to_market_required: bool
+    realized_only_primary_series: bool
     mtm_policy_id: str
     fee_policy_id: str
     funding_policy_id: str
@@ -167,7 +171,12 @@ def _canonical_digest(payload: dict[str, object]) -> str:
 
 
 def _require_plain_non_empty_string(value: object, field_name: str) -> str:
-    if type(value) is not str or value.strip() == "":
+    if (
+        type(value) is not str
+        or value.strip() == ""
+        or value != value.strip()
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+    ):
         raise PaperReturnSeriesMethodologyError(f"paper_return_series_methodology:{field_name}_invalid")
     return value
 
@@ -286,6 +295,8 @@ def build_paper_return_series_methodology(
         "return_basis": _RETURN_BASIS,
         "return_value_kind": _RETURN_VALUE_KIND,
         "normalized_index_start": _NORMALIZED_INDEX_START,
+        "mark_to_market_required": _MARK_TO_MARKET_REQUIRED,
+        "realized_only_primary_series": _REALIZED_ONLY_PRIMARY_SERIES,
         "mtm_policy_id": policy_ids[0],
         "fee_policy_id": policy_ids[1],
         "funding_policy_id": policy_ids[2],
@@ -337,6 +348,8 @@ def _methodology_fields(methodology: PaperReturnSeriesMethodology) -> dict[str, 
         "return_basis": methodology.return_basis,
         "return_value_kind": methodology.return_value_kind,
         "normalized_index_start": methodology.normalized_index_start,
+        "mark_to_market_required": methodology.mark_to_market_required,
+        "realized_only_primary_series": methodology.realized_only_primary_series,
         "mtm_policy_id": methodology.mtm_policy_id,
         "fee_policy_id": methodology.fee_policy_id,
         "funding_policy_id": methodology.funding_policy_id,
@@ -380,6 +393,8 @@ def _methodology_payload_from(methodology: PaperReturnSeriesMethodology) -> dict
         "return_basis": methodology.return_basis,
         "return_value_kind": methodology.return_value_kind,
         "normalized_index_start": methodology.normalized_index_start,
+        "mark_to_market_required": methodology.mark_to_market_required,
+        "realized_only_primary_series": methodology.realized_only_primary_series,
         "mtm_policy_id": methodology.mtm_policy_id,
         "fee_policy_id": methodology.fee_policy_id,
         "funding_policy_id": methodology.funding_policy_id,

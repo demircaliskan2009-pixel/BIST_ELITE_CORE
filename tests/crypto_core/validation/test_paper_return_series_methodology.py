@@ -73,6 +73,10 @@ def test_happy_path_builds_methodology_only_snapshot() -> None:
     assert methodology.return_basis == "normalized_paper_equity_index"
     assert methodology.return_value_kind == "unitless_decimal_return"
     assert methodology.normalized_index_start == "1"
+    assert methodology.mark_to_market_required is True
+    assert methodology.realized_only_primary_series is False
+    assert payload["mark_to_market_required"] is True
+    assert payload["realized_only_primary_series"] is False
     assert methodology.annualization_policy == "daily_utc_365_review_only"
     assert methodology.annualization_factor == 365
     assert methodology.paper_sharpe_policy == "deferred_not_computed"
@@ -142,6 +146,22 @@ def test_non_overclaim_flags_are_false_and_digest_bound() -> None:
     assert paper_return_series_methodology_digest(forged) != methodology.methodology_digest
 
 
+def test_mtm_primary_series_semantics_are_digest_bound_and_not_publicly_overridable() -> None:
+    methodology = _build()
+    assert paper_return_series_methodology_to_dict(methodology)["mark_to_market_required"] is True
+    assert paper_return_series_methodology_to_dict(methodology)["realized_only_primary_series"] is False
+
+    forged_no_mtm = replace(methodology, mark_to_market_required=False)
+    forged_realized_only = replace(methodology, realized_only_primary_series=True)
+    assert paper_return_series_methodology_digest(forged_no_mtm) != methodology.methodology_digest
+    assert paper_return_series_methodology_digest(forged_realized_only) != methodology.methodology_digest
+
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        _build(mark_to_market_required=False)
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        _build(realized_only_primary_series=True)
+
+
 def test_digest_is_deterministic_and_excludes_self_digest() -> None:
     first = _build(metadata={"b": "2", "a": "1"})
     second = _build(metadata={"a": "1", "b": "2"})
@@ -197,6 +217,30 @@ def test_rejects_empty_or_non_plain_string_ids(field_name: str) -> None:
         _build(**{field_name: ""})
     with pytest.raises(PaperReturnSeriesMethodologyError, match=f"{field_name}_invalid"):
         _build(**{field_name: _LiarStr("paper-return-methodology-1")})
+
+
+@pytest.mark.parametrize(
+    "field_name,bad_value",
+    [
+        ("methodology_id", " method-with-space "),
+        ("methodology_id", "method\nwithnewline"),
+        ("methodology_id", "method\twithtab"),
+        ("methodology_id", "method\rwithcarriage"),
+        ("methodology_id", "method\x1fcontrol"),
+        ("correlation_id", " corr-with-space "),
+        ("mtm_policy_id", " mtm-policy-1"),
+        ("mtm_policy_id", "mtm-policy-1\n"),
+        ("fee_policy_id", "fee-policy-1\tbad"),
+        ("funding_policy_id", "funding-policy-1\rbad"),
+        ("mark_policy_id", "mark-policy-1\x1fbad"),
+        ("exposure_policy_id", " exposure-policy-1 "),
+        ("liquidation_policy_id", "liquidation-policy-1\n"),
+        ("risk_free_policy_id", "risk-free-policy-1\tbad"),
+    ],
+)
+def test_rejects_noncanonical_identifier_strings(field_name: str, bad_value: str) -> None:
+    with pytest.raises(PaperReturnSeriesMethodologyError, match=f"{field_name}_invalid"):
+        _build(**{field_name: bad_value})
 
 
 @pytest.mark.parametrize(
