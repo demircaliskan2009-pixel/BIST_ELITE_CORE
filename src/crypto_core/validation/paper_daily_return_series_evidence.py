@@ -40,6 +40,7 @@ _BUCKET_FREQUENCY = "1d_utc"
 _BUCKET_DURATION_NS = 86_400_000_000_000
 _REQUIRED_CONSECUTIVE_BUCKET_COUNT = 30
 _RETURN_BASIS = "normalized_paper_equity_index"
+_NORMALIZED_INDEX_START = "1"
 _RETURN_VALUE_KIND = "unitless_decimal_return"
 _PAPER_SHARPE_POLICY = "deferred_not_computed"
 _ANNUALIZATION_POLICY = "daily_utc_365_review_only"
@@ -381,6 +382,7 @@ def _methodology_hard_failures(
         "bucket_duration_ns": _BUCKET_DURATION_NS,
         "required_consecutive_bucket_count": _REQUIRED_CONSECUTIVE_BUCKET_COUNT,
         "return_basis": _RETURN_BASIS,
+        "normalized_index_start": _NORMALIZED_INDEX_START,
         "return_value_kind": _RETURN_VALUE_KIND,
         "annualization_policy": _ANNUALIZATION_POLICY,
         "annualization_factor": _ANNUALIZATION_FACTOR,
@@ -542,13 +544,24 @@ def _normalize_buckets(daily_buckets: object) -> tuple[PaperDailyReturnBucket, .
 
 
 def _bucket_hard_failures(
-    buckets: tuple[PaperDailyReturnBucket, ...], time_window: PaperDeterministicTimeWindowEvidence
+    buckets: tuple[PaperDailyReturnBucket, ...],
+    time_window: PaperDeterministicTimeWindowEvidence,
+    methodology: PaperReturnSeriesMethodology,
 ) -> tuple[list[str], tuple[str, ...], str, str]:
     hard: list[str] = []
     returns: list[str] = []
     parsed_pairs: list[tuple[Decimal, Decimal]] = []
     if not buckets:
         return ["paper_daily_return_series_evidence:buckets_empty"], (), "", ""
+
+    if (
+        _is_exact_int(time_window.started_at_ns)
+        and _is_exact_int(time_window.stopped_at_ns)
+        and (
+            time_window.started_at_ns % _BUCKET_DURATION_NS != 0 or time_window.stopped_at_ns % _BUCKET_DURATION_NS != 0
+        )
+    ):
+        hard.append("paper_daily_return_series_evidence:time_window_utc_day_alignment_invalid")
 
     seen_bucket_ids: set[str] = set()
     seen_bucket_digests: set[str] = set()
@@ -570,6 +583,8 @@ def _bucket_hard_failures(
             hard.append("paper_daily_return_series_evidence:bucket_bounds_invalid")
         if bucket.bucket_end_ns - bucket.bucket_start_ns != _BUCKET_DURATION_NS:
             hard.append("paper_daily_return_series_evidence:bucket_duration_invalid")
+        if bucket.bucket_start_ns % _BUCKET_DURATION_NS != 0 or bucket.bucket_end_ns % _BUCKET_DURATION_NS != 0:
+            hard.append("paper_daily_return_series_evidence:bucket_utc_day_alignment_invalid")
         if index > 0 and bucket.bucket_start_ns != buckets[index - 1].bucket_end_ns:
             hard.append("paper_daily_return_series_evidence:bucket_sequence_non_contiguous")
         start_index = _canonical_decimal(bucket.normalized_index_start)
@@ -580,6 +595,12 @@ def _bucket_hard_failures(
         if start_index <= 0 or end_index <= 0:
             hard.append("paper_daily_return_series_evidence:bucket_index_nonpositive")
         parsed_pairs.append((start_index, end_index))
+
+    methodology_start = _canonical_decimal(methodology.normalized_index_start)
+    if methodology_start is None:
+        hard.append("paper_daily_return_series_evidence:methodology_normalized_index_start_invalid")
+    elif parsed_pairs and parsed_pairs[0][0] != methodology_start:
+        hard.append("paper_daily_return_series_evidence:normalized_index_start_mismatch")
 
     if buckets[0].bucket_start_ns != time_window.started_at_ns:
         hard.append("paper_daily_return_series_evidence:bucket_window_start_mismatch")
@@ -645,7 +666,7 @@ def build_paper_daily_return_series_evidence(
         *_methodology_hard_failures(methodology, expected_methodology_digest),
         *_window_hard_failures(time_window, expected_time_window_digest, methodology),
     ]
-    bucket_failures, daily_returns, first_index, last_index = _bucket_hard_failures(buckets, time_window)
+    bucket_failures, daily_returns, first_index, last_index = _bucket_hard_failures(buckets, time_window, methodology)
     hard.extend(bucket_failures)
 
     if correlation_id != methodology.correlation_id or correlation_id != time_window.correlation_id:

@@ -242,18 +242,27 @@ def test_high_scale_leading_zero_return_is_exact() -> None:
         daily_buckets=(
             _bucket(
                 0,
-                "0.000000000000000000000000000001",
-                "0.00000000000000000000000000000101",
+                "1",
+                "1.000000000000000000000000000001",
             ),
         ),
     )
 
     assert result.status is PaperDailyReturnSeriesEvidenceStatus.READY
-    assert result.daily_returns == ("0.01",)
+    assert result.daily_returns == ("0.000000000000000000000000000001",)
 
 
 def test_non_terminating_return_fails_closed() -> None:
-    result = _build(time_window=_window(days=1), daily_buckets=(_bucket(0, "3", "4"),))
+    result = _build(
+        time_window=_window(days=2),
+        daily_buckets=(
+            _bucket(0, "1", "3"),
+            _bucket(1, "3", "4"),
+        ),
+    )
+
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.REJECTED
+    assert "paper_daily_return_series_evidence:return_non_terminating" in result.reason_codes
 
     assert result.status is PaperDailyReturnSeriesEvidenceStatus.REJECTED
     assert "paper_daily_return_series_evidence:return_non_terminating" in result.reason_codes
@@ -392,6 +401,37 @@ def test_bucket_window_coverage_rejects() -> None:
     assert result.status is PaperDailyReturnSeriesEvidenceStatus.REJECTED
     assert "paper_daily_return_series_evidence:bucket_window_end_mismatch" in result.reason_codes
     assert "paper_daily_return_series_evidence:bucket_window_duration_mismatch" in result.reason_codes
+
+
+def test_shifted_utc_day_aligned_buckets_reject() -> None:
+    shifted_window = _window(
+        started_at_ns=1,
+        stopped_at_ns=(2 * _DAY_NS) + 1,
+        window_duration_ns=2 * _DAY_NS,
+    )
+    result = _build(
+        time_window=shifted_window,
+        daily_buckets=(
+            _bucket_at("bucket-1", 1, _DAY_NS + 1, "1", "1.01"),
+            _bucket_at("bucket-2", _DAY_NS + 1, (2 * _DAY_NS) + 1, "1.01", "1.0201"),
+        ),
+    )
+
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.REJECTED
+    assert "paper_daily_return_series_evidence:time_window_utc_day_alignment_invalid" in result.reason_codes
+    assert "paper_daily_return_series_evidence:bucket_utc_day_alignment_invalid" in result.reason_codes
+
+
+def test_first_bucket_must_match_methodology_normalized_start() -> None:
+    result = _build(
+        daily_buckets=(
+            _bucket_at("bucket-1", 0, _DAY_NS, "2", "2.02"),
+            _bucket_at("bucket-2", _DAY_NS, 2 * _DAY_NS, "2.02", "2.0402"),
+        )
+    )
+
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.REJECTED
+    assert "paper_daily_return_series_evidence:normalized_index_start_mismatch" in result.reason_codes
 
 
 def test_bucket_id_and_digest_invariants_reject() -> None:
