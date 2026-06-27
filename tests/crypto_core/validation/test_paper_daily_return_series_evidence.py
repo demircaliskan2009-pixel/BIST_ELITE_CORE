@@ -433,6 +433,37 @@ def test_malformed_bucket_or_id_inputs_raise() -> None:
 
 
 @pytest.mark.parametrize(
+    ("field_name", "field_value", "reason"),
+    [
+        ("series_id", "series-1\x07", "series_id_invalid"),
+        ("series_id", "series\n1", "series_id_invalid"),
+        ("series_id", "series\t1", "series_id_invalid"),
+        ("correlation_id", "corr-1\x07", "correlation_id_invalid"),
+        ("correlation_id", "corr\n1", "correlation_id_invalid"),
+        ("correlation_id", "corr\t1", "correlation_id_invalid"),
+    ],
+)
+def test_control_character_series_and_correlation_ids_reject(field_name: str, field_value: str, reason: str) -> None:
+    with pytest.raises(PaperDailyReturnSeriesEvidenceError, match=reason):
+        _build(**{field_name: field_value})
+
+
+@pytest.mark.parametrize("bucket_id", ["bucket-1\x07", "bucket\n1", "bucket\t1"])
+def test_control_character_bucket_ids_reject_even_with_matching_digest(
+    bucket_id: str,
+) -> None:
+    forged = _bucket_at(bucket_id, 0, _DAY_NS, "1", "1.01")
+
+    with pytest.raises(PaperDailyReturnSeriesEvidenceError, match="bucket_id_invalid"):
+        _build(
+            daily_buckets=(
+                forged,
+                _bucket_at("bucket-2", _DAY_NS, 2 * _DAY_NS, "1.01", "1.0201"),
+            )
+        )
+
+
+@pytest.mark.parametrize(
     "override",
     [
         {"series_id": "live-series"},

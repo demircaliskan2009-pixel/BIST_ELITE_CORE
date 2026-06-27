@@ -202,7 +202,12 @@ def _canonical_digest(payload: dict[str, object]) -> str:
 
 
 def _is_plain_non_empty_string(value: object) -> bool:
-    return type(value) is str and value.strip() != "" and value == value.strip()
+    return (
+        type(value) is str
+        and value.strip() != ""
+        and value == value.strip()
+        and not any(ord(char) < 32 or ord(char) == 127 for char in value)
+    )
 
 
 def _is_hex64_string(value: object) -> bool:
