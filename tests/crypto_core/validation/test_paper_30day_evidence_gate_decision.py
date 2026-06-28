@@ -258,14 +258,51 @@ def test_upstream_not_ready_rejects_even_when_digest_valid() -> None:
     assert "paper_30day_evidence_gate_decision:series_unsafe_flags" in result.reason_codes
 
 
-@pytest.mark.parametrize("days", [29, 31])
-def test_exact_thirty_bucket_policy_rejects_non_thirty_series(days: int) -> None:
+@pytest.mark.parametrize("days", [1, 29])
+def test_below_minimum_thirty_day_evidence_rejects(days: int) -> None:
     result = _build(series=_series(days=days))
 
     assert result.status is PaperThirtyDayEvidenceGateDecisionStatus.REJECTED
     assert result.thirty_day_gate_satisfied is False
     assert "paper_30day_evidence_gate_decision:insufficient_bucket_count" in result.reason_codes
     assert "paper_30day_evidence_gate_decision:insufficient_daily_return_count" in result.reason_codes
+
+
+@pytest.mark.parametrize("days", [30, 31, 45])
+def test_minimum_and_longer_windows_satisfy_gate(days: int) -> None:
+    # PRDV4 "Minimum 30 days" / phase map ">=30-day" gate: 30 and longer valid contiguous UTC windows satisfy.
+    result = _build(series=_series(days=days))
+
+    assert result.status is PaperThirtyDayEvidenceGateDecisionStatus.READY
+    assert result.thirty_day_gate_satisfied is True
+    assert result.bucket_count == days
+    assert result.daily_return_count == days
+    assert result.window_duration_ns == days * _DAY_NS
+    # The decision is taken over the FIRST 30 consecutive UTC daily buckets regardless of total length.
+    assert result.gate_minimum_consecutive_bucket_count == 30
+    assert result.gate_bucket_count_used == 30
+    assert result.gate_daily_return_count_used == 30
+    assert result.gate_used_first_bucket_id == "bucket-1"
+    assert result.gate_used_last_bucket_id == "bucket-30"
+    assert result.gate_used_first_bucket_start_ns == 0
+    assert result.gate_used_last_bucket_end_ns == 30 * _DAY_NS
+    # Full-series provenance still records the whole evidence window.
+    assert result.first_bucket_id == "bucket-1"
+    assert result.last_bucket_id == f"bucket-{days}"
+    assert result.last_bucket_end_ns == days * _DAY_NS
+
+
+def test_longer_window_extra_day_changes_series_and_gate_digest() -> None:
+    # A 31st day with a non-trivial return changes the upstream series digest and therefore the gate digest,
+    # proving evidence beyond the first 30 days is still bound (not silently ignored).
+    base = _build(series=_series(days=31))
+    changed_buckets = (*_buckets(30), _bucket(30, "1", "2"))  # day 31 index 1 -> 2 (return "1" instead of "0")
+    changed = _build(series=_series(days=31, buckets=changed_buckets))
+
+    assert base.status is PaperThirtyDayEvidenceGateDecisionStatus.READY
+    assert changed.status is PaperThirtyDayEvidenceGateDecisionStatus.READY
+    assert base.series_digest != changed.series_digest
+    assert base.decision_digest != changed.decision_digest
 
 
 def test_daily_return_count_mismatch_rejects_digest_valid_forgery() -> None:
@@ -275,6 +312,76 @@ def test_daily_return_count_mismatch_rejects_digest_valid_forgery() -> None:
     assert result.status is PaperThirtyDayEvidenceGateDecisionStatus.REJECTED
     assert "paper_30day_evidence_gate_decision:insufficient_daily_return_count" in result.reason_codes
     assert "paper_30day_evidence_gate_decision:daily_return_count_mismatch" in result.reason_codes
+
+
+def test_buckets_none_fails_closed_without_typeerror() -> None:
+    # Exact-typed upstream with buckets=None must NOT raise a raw TypeError; it fails closed with a reason.
+    forged = replace(_series(), buckets=None)
+    result = _build(series=forged)
+
+    assert result.status is PaperThirtyDayEvidenceGateDecisionStatus.REJECTED
+    assert result.thirty_day_gate_satisfied is False
+    assert "paper_30day_evidence_gate_decision:buckets_container_malformed" in result.reason_codes
+
+
+def test_buckets_list_container_rejects_even_when_resealed() -> None:
+    series = _series()
+    forged = _reseal_series(replace(series, buckets=list(series.buckets)))
+    result = _build(series=forged)
+
+    assert result.status is PaperThirtyDayEvidenceGateDecisionStatus.REJECTED
+    assert "paper_30day_evidence_gate_decision:buckets_container_malformed" in result.reason_codes
+
+
+def test_bucket_non_bucket_element_rejects() -> None:
+    series = _series()
+    forged = replace(series, buckets=(*series.buckets[:-1], "not-a-bucket"))
+    result = _build(series=forged)
+
+    assert result.status is PaperThirtyDayEvidenceGateDecisionStatus.REJECTED
+    assert "paper_30day_evidence_gate_decision:bucket_type_malformed" in result.reason_codes
+
+
+def test_daily_returns_none_fails_closed_without_typeerror() -> None:
+    forged = replace(_series(), daily_returns=None)
+    result = _build(series=forged)
+
+    assert result.status is PaperThirtyDayEvidenceGateDecisionStatus.REJECTED
+    assert "paper_30day_evidence_gate_decision:daily_returns_container_malformed" in result.reason_codes
+
+
+def test_daily_returns_list_container_rejects_even_when_resealed() -> None:
+    # The exact reviewer scenario: a 30-item LIST (not tuple) must not pass READY before being collapsed to ().
+    series = _series()
+    forged = _reseal_series(replace(series, daily_returns=list(series.daily_returns)))
+    result = _build(series=forged)
+
+    assert result.status is PaperThirtyDayEvidenceGateDecisionStatus.REJECTED
+    assert result.thirty_day_gate_satisfied is False
+    assert "paper_30day_evidence_gate_decision:daily_returns_container_malformed" in result.reason_codes
+
+
+def test_daily_returns_non_string_element_rejects_even_when_resealed() -> None:
+    series = _series()
+    forged = _reseal_series(replace(series, daily_returns=(*series.daily_returns[:-1], 123)))
+    result = _build(series=forged)
+
+    assert result.status is PaperThirtyDayEvidenceGateDecisionStatus.REJECTED
+    assert "paper_30day_evidence_gate_decision:daily_return_malformed" in result.reason_codes
+
+
+def test_malformed_container_cannot_produce_ready() -> None:
+    series = _series()
+    for forged in (
+        replace(series, buckets=None),
+        _reseal_series(replace(series, buckets=list(series.buckets))),
+        replace(series, daily_returns=None),
+        _reseal_series(replace(series, daily_returns=list(series.daily_returns))),
+    ):
+        result = _build(series=forged)
+        assert result.status is PaperThirtyDayEvidenceGateDecisionStatus.REJECTED
+        assert result.ready is False
+        assert result.thirty_day_gate_satisfied is False
 
 
 def test_bucket_payload_forgery_rejects_even_when_series_resealed() -> None:

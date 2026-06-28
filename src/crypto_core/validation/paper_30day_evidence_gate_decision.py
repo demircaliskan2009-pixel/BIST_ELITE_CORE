@@ -1,8 +1,13 @@
 """Paper 30-day evidence gate decision.
 
 This validation artifact consumes a proven ``PaperDailyReturnSeriesEvidence`` and decides only whether the
-deterministic paper daily return-series evidence satisfies the required 30 consecutive UTC daily-bucket input
-gate. It is paper-only, deterministic, digest-bound, and fail-closed.
+deterministic paper daily return-series evidence satisfies the minimum ``>=30`` consecutive UTC daily-bucket
+input gate (PRDV4 "Stage 4: Paper Trading" requires "Minimum 30 days"; the phase map scopes a ">=30-day"
+gate). A longer valid contiguous window (31+ days) also satisfies the gate; the decision is taken over the
+first 30 consecutive UTC daily buckets. The exact upstream container shapes (``buckets`` / ``daily_returns``
+must be exact tuples of exact element types) are proven before any counting/indexing, so a forged exact-typed
+upstream fails closed with a deterministic reason code rather than a raw ``TypeError`` or a silent collapse.
+It is paper-only, deterministic, digest-bound, and fail-closed.
 
 It does not compute Sharpe, does not invoke the Stage-4 comparator, does not construct ``Stage4PaperSummary``,
 and does not prove profitability, edge, live readiness, shadow readiness, Deribit readiness, execution,
@@ -31,6 +36,9 @@ _EXPECTED_SERIES_SCHEMA_VERSION = "paper-daily-return-series-evidence.v1"
 _CALENDAR = "UTC"
 _BUCKET_FREQUENCY = "1d_utc"
 _BUCKET_DURATION_NS = 86_400_000_000_000
+# Minimum (not exact) consecutive UTC daily buckets/returns required to satisfy the gate. PRDV4 §"Stage 4: Paper
+# Trading" requires "Minimum 30 days" and the phase map (§10.4) scopes this as a deterministic ">=30-day" gate, so
+# longer valid windows (31+ days) satisfy the gate; the decision is taken over the first 30 consecutive buckets.
 _REQUIRED_CONSECUTIVE_BUCKET_COUNT = 30
 _RETURN_BASIS = "normalized_paper_equity_index"
 _RETURN_VALUE_KIND = "unitless_decimal_return"
@@ -112,8 +120,13 @@ class PaperThirtyDayEvidenceGateDecision:
     required_consecutive_bucket_count: int
     bucket_count: int
     daily_return_count: int
+    gate_minimum_consecutive_bucket_count: int
     gate_bucket_count_used: int
     gate_daily_return_count_used: int
+    gate_used_first_bucket_id: str
+    gate_used_last_bucket_id: str
+    gate_used_first_bucket_start_ns: int
+    gate_used_last_bucket_end_ns: int
     bucket_ids: tuple[str, ...]
     bucket_digests: tuple[str, ...]
     daily_returns: tuple[str, ...]
@@ -261,6 +274,33 @@ def _bucket_digest(bucket: PaperDailyReturnBucket) -> str:
     return _canonical_digest(_bucket_payload_from(bucket))
 
 
+def _container_shape_failures(daily_return_series: PaperDailyReturnSeriesEvidence) -> list[str]:
+    """Prove the exact upstream container shapes BEFORE any ``len`` / iteration / indexing / payload extraction.
+
+    A forged-but-exact-typed ``PaperDailyReturnSeriesEvidence`` may carry a non-tuple ``buckets`` (e.g. ``None``
+    or a ``list``) or a non-tuple ``daily_returns``; the digest boundary alone does not distinguish a ``tuple``
+    from an equal-content ``list``. These must fail closed with a deterministic reason code (never a raw
+    ``TypeError`` and never a silent collapse to an empty tuple under a READY decision).
+    """
+    hard: list[str] = []
+    buckets = daily_return_series.buckets
+    if type(buckets) is not tuple:
+        hard.append("paper_30day_evidence_gate_decision:buckets_container_malformed")
+    elif not all(type(bucket) is PaperDailyReturnBucket for bucket in buckets):
+        hard.append("paper_30day_evidence_gate_decision:bucket_type_malformed")
+    daily_returns = daily_return_series.daily_returns
+    if type(daily_returns) is not tuple:
+        hard.append("paper_30day_evidence_gate_decision:daily_returns_container_malformed")
+    elif not all(type(daily_return) is str for daily_return in daily_returns):
+        hard.append("paper_30day_evidence_gate_decision:daily_return_malformed")
+    return hard
+
+
+def _buckets_are_exact_tuple(daily_return_series: PaperDailyReturnSeriesEvidence) -> bool:
+    buckets = daily_return_series.buckets
+    return type(buckets) is tuple and all(type(bucket) is PaperDailyReturnBucket for bucket in buckets)
+
+
 def _series_hard_failures(
     daily_return_series: PaperDailyReturnSeriesEvidence, expected_series_digest: str
 ) -> list[str]:
@@ -360,21 +400,34 @@ def _series_hard_failures(
         or daily_return_series.sample_observation_count < 1
     ):
         hard.append("paper_30day_evidence_gate_decision:series_sample_count_invalid")
+    # Minimum (>=30), not exact: a longer valid contiguous UTC daily window also satisfies the gate.
     if (
         not _is_exact_int(daily_return_series.bucket_count)
-        or daily_return_series.bucket_count != _REQUIRED_CONSECUTIVE_BUCKET_COUNT
+        or daily_return_series.bucket_count < _REQUIRED_CONSECUTIVE_BUCKET_COUNT
     ):
         hard.append("paper_30day_evidence_gate_decision:insufficient_bucket_count")
     if (
         not _is_exact_int(daily_return_series.return_count)
-        or daily_return_series.return_count != _REQUIRED_CONSECUTIVE_BUCKET_COUNT
+        or daily_return_series.return_count < _REQUIRED_CONSECUTIVE_BUCKET_COUNT
     ):
         hard.append("paper_30day_evidence_gate_decision:insufficient_daily_return_count")
-    if len(daily_return_series.buckets) != daily_return_series.bucket_count:
+    # Count-vs-container coherence: only meaningful once the containers are exact tuples (shape is proven
+    # separately by ``_container_shape_failures``); guard so a malformed container never raises here.
+    if (
+        type(daily_return_series.buckets) is tuple
+        and len(daily_return_series.buckets) != daily_return_series.bucket_count
+    ):
         hard.append("paper_30day_evidence_gate_decision:bucket_count_mismatch")
-    if len(daily_return_series.daily_returns) != daily_return_series.return_count:
+    if (
+        type(daily_return_series.daily_returns) is tuple
+        and len(daily_return_series.daily_returns) != daily_return_series.return_count
+    ):
         hard.append("paper_30day_evidence_gate_decision:daily_return_count_mismatch")
-    if daily_return_series.window_duration_ns != _REQUIRED_CONSECUTIVE_BUCKET_COUNT * _BUCKET_DURATION_NS:
+    # The whole evidence window must be exactly ``bucket_count`` contiguous UTC days (not pinned to 30).
+    if (
+        not _is_exact_int(daily_return_series.bucket_count)
+        or daily_return_series.window_duration_ns != daily_return_series.bucket_count * _BUCKET_DURATION_NS
+    ):
         hard.append("paper_30day_evidence_gate_decision:window_duration_mismatch")
 
     policy_fields = (
@@ -461,10 +514,11 @@ def _bucket_hard_failures(daily_return_series: PaperDailyReturnSeriesEvidence) -
             hard.append("paper_30day_evidence_gate_decision:bucket_window_end_mismatch")
         if buckets[-1].normalized_index_end != daily_return_series.normalized_index_end:
             hard.append("paper_30day_evidence_gate_decision:normalized_index_end_mismatch")
-    for daily_return in daily_return_series.daily_returns:
-        if not _is_canonical_decimal_string(daily_return):
-            hard.append("paper_30day_evidence_gate_decision:daily_return_noncanonical")
-            break
+    if type(daily_return_series.daily_returns) is tuple:
+        for daily_return in daily_return_series.daily_returns:
+            if not _is_canonical_decimal_string(daily_return):
+                hard.append("paper_30day_evidence_gate_decision:daily_return_noncanonical")
+                break
     return sorted(set(hard))
 
 
@@ -494,13 +548,23 @@ def build_paper_30day_evidence_gate_decision(
     if _has_clock_token(gate_id, correlation_id, *_metadata_texts(metadata_pairs)):
         raise PaperThirtyDayEvidenceGateDecisionError("paper_30day_evidence_gate_decision:clock_token_forbidden")
 
+    # Prove exact container shapes BEFORE any len/iteration/indexing/payload extraction (fail closed, never a
+    # raw TypeError and never a silent collapse under READY). Bucket-level checks run only over an exact tuple of
+    # exact buckets; a malformed container is already rejected by the shape failures above.
     hard = [
         *_series_hard_failures(daily_return_series, expected_series_digest),
-        *_bucket_hard_failures(daily_return_series),
+        *_container_shape_failures(daily_return_series),
     ]
+    if _buckets_are_exact_tuple(daily_return_series):
+        hard.extend(_bucket_hard_failures(daily_return_series))
     if correlation_id != daily_return_series.correlation_id:
         hard.append("paper_30day_evidence_gate_decision:correlation_id_mismatch")
 
+    # Deterministic decision window = the FIRST 30 consecutive UTC daily buckets of the validated (>=30-day)
+    # series. The whole series is structurally validated above; the first 30 are the buckets the gate decision is
+    # taken over. On any failure the used-window fields are empty/zero and the gate is not satisfied.
+    raw_buckets = daily_return_series.buckets
+    buckets = raw_buckets if type(raw_buckets) is tuple else ()
     if hard:
         status = PaperThirtyDayEvidenceGateDecisionStatus.REJECTED
         ready = False
@@ -508,6 +572,10 @@ def build_paper_30day_evidence_gate_decision(
         reason_codes = tuple(sorted(set(hard)))
         bucket_count_used = 0
         return_count_used = 0
+        used_first_bucket_id = ""
+        used_last_bucket_id = ""
+        used_first_bucket_start_ns = 0
+        used_last_bucket_end_ns = 0
     else:
         status = PaperThirtyDayEvidenceGateDecisionStatus.READY
         ready = True
@@ -515,8 +583,12 @@ def build_paper_30day_evidence_gate_decision(
         reason_codes = ()
         bucket_count_used = _REQUIRED_CONSECUTIVE_BUCKET_COUNT
         return_count_used = _REQUIRED_CONSECUTIVE_BUCKET_COUNT
+        used_window = buckets[:_REQUIRED_CONSECUTIVE_BUCKET_COUNT]
+        used_first_bucket_id = used_window[0].bucket_id
+        used_last_bucket_id = used_window[-1].bucket_id
+        used_first_bucket_start_ns = used_window[0].bucket_start_ns
+        used_last_bucket_end_ns = used_window[-1].bucket_end_ns
 
-    buckets = daily_return_series.buckets
     first_bucket = buckets[0] if buckets and type(buckets[0]) is PaperDailyReturnBucket else None
     last_bucket = buckets[-1] if buckets and type(buckets[-1]) is PaperDailyReturnBucket else None
     fields: dict[str, object] = {
@@ -555,11 +627,19 @@ def build_paper_30day_evidence_gate_decision(
         "daily_return_count": daily_return_series.return_count
         if _is_exact_int(daily_return_series.return_count)
         else 0,
+        "gate_minimum_consecutive_bucket_count": _REQUIRED_CONSECUTIVE_BUCKET_COUNT,
         "gate_bucket_count_used": bucket_count_used,
         "gate_daily_return_count_used": return_count_used,
+        "gate_used_first_bucket_id": used_first_bucket_id,
+        "gate_used_last_bucket_id": used_last_bucket_id,
+        "gate_used_first_bucket_start_ns": used_first_bucket_start_ns,
+        "gate_used_last_bucket_end_ns": used_last_bucket_end_ns,
         "bucket_ids": tuple(bucket.bucket_id for bucket in buckets if type(bucket) is PaperDailyReturnBucket),
         "bucket_digests": tuple(bucket.bucket_digest for bucket in buckets if type(bucket) is PaperDailyReturnBucket),
-        "daily_returns": daily_return_series.daily_returns if type(daily_return_series.daily_returns) is tuple else (),
+        "daily_returns": daily_return_series.daily_returns
+        if type(daily_return_series.daily_returns) is tuple
+        and all(type(daily_return) is str for daily_return in daily_return_series.daily_returns)
+        else (),
         "first_bucket_id": first_bucket.bucket_id if first_bucket is not None else "",
         "last_bucket_id": last_bucket.bucket_id if last_bucket is not None else "",
         "first_bucket_start_ns": first_bucket.bucket_start_ns if first_bucket is not None else 0,
@@ -634,8 +714,13 @@ def _decision_fields(decision: PaperThirtyDayEvidenceGateDecision) -> dict[str, 
         "required_consecutive_bucket_count": decision.required_consecutive_bucket_count,
         "bucket_count": decision.bucket_count,
         "daily_return_count": decision.daily_return_count,
+        "gate_minimum_consecutive_bucket_count": decision.gate_minimum_consecutive_bucket_count,
         "gate_bucket_count_used": decision.gate_bucket_count_used,
         "gate_daily_return_count_used": decision.gate_daily_return_count_used,
+        "gate_used_first_bucket_id": decision.gate_used_first_bucket_id,
+        "gate_used_last_bucket_id": decision.gate_used_last_bucket_id,
+        "gate_used_first_bucket_start_ns": decision.gate_used_first_bucket_start_ns,
+        "gate_used_last_bucket_end_ns": decision.gate_used_last_bucket_end_ns,
         "bucket_ids": decision.bucket_ids,
         "bucket_digests": decision.bucket_digests,
         "daily_returns": decision.daily_returns,
@@ -685,8 +770,13 @@ def _decision_payload_from(decision: PaperThirtyDayEvidenceGateDecision) -> dict
         "required_consecutive_bucket_count": decision.required_consecutive_bucket_count,
         "bucket_count": decision.bucket_count,
         "daily_return_count": decision.daily_return_count,
+        "gate_minimum_consecutive_bucket_count": decision.gate_minimum_consecutive_bucket_count,
         "gate_bucket_count_used": decision.gate_bucket_count_used,
         "gate_daily_return_count_used": decision.gate_daily_return_count_used,
+        "gate_used_first_bucket_id": decision.gate_used_first_bucket_id,
+        "gate_used_last_bucket_id": decision.gate_used_last_bucket_id,
+        "gate_used_first_bucket_start_ns": decision.gate_used_first_bucket_start_ns,
+        "gate_used_last_bucket_end_ns": decision.gate_used_last_bucket_end_ns,
         "bucket_ids": list(decision.bucket_ids),
         "bucket_digests": list(decision.bucket_digests),
         "daily_returns": list(decision.daily_returns),
