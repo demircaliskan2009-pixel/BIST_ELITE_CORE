@@ -39,6 +39,13 @@ class _LiarStr(str):
     """A string subclass rejected by exact string checks."""
 
 
+class _SneakyStr(str):
+    """A ``str`` subclass that lies about being non-empty — must never produce a divergent READY identity."""
+
+    def strip(self, *args, **kwargs):  # noqa: D401 - adversarial override
+        return "definitely-not-empty"
+
+
 def _is_hex64(value: object) -> bool:
     return type(value) is str and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
 
@@ -317,6 +324,54 @@ def test_strategy_spec_not_mutated() -> None:
     before = strategy_spec_digest(spec)
     _build(spec)
     assert strategy_spec_digest(spec) == before
+
+
+def test_spec_forbidden_scope_value_rejects() -> None:
+    # The artifact's no-venue/no-live/no-clock contract must apply to the spec's VALUES (validate only rejects
+    # forbidden keys). A spec carrying e.g. venue_assumptions=("deribit",) must fail closed even when validated.
+    forged = replace(_spec(), venue_assumptions=("deribit",))
+    result = build_paper_edge_identity_evidence(
+        forged,
+        expected_strategy_spec_digest=strategy_spec_digest(forged),
+        market_symbol=_MARKET,
+        edge_identity_id="edge-1",
+        paper_id="paper-1",
+        correlation_id="corr-1",
+    )
+    assert result.status is PaperEdgeIdentityEvidenceStatus.REJECTED
+    assert "paper_edge_identity_evidence:strategy_spec_scope_violation" in result.reason_codes
+
+
+def test_spec_forbidden_clock_value_rejects() -> None:
+    forged = replace(_spec(), bar_definition="datetime.now")
+    result = build_paper_edge_identity_evidence(
+        forged,
+        expected_strategy_spec_digest=strategy_spec_digest(forged),
+        market_symbol=_MARKET,
+        edge_identity_id="edge-1",
+        paper_id="paper-1",
+        correlation_id="corr-1",
+    )
+    assert result.status is PaperEdgeIdentityEvidenceStatus.REJECTED
+    assert "paper_edge_identity_evidence:strategy_spec_clock_token" in result.reason_codes
+
+
+def test_sneaky_subclass_strategy_id_cannot_diverge_identity() -> None:
+    # A forged StrategySpec with a lying empty str-subclass strategy_id must NOT pass as READY with a divergent
+    # (empty) emitted identity: the canonical snapshot round-trips to a plain "" and fails closed.
+    forged = replace(_spec(), strategy_id=_SneakyStr(""))
+    result = build_paper_edge_identity_evidence(
+        forged,
+        expected_strategy_spec_digest=strategy_spec_digest(forged),
+        market_symbol=_MARKET,
+        edge_identity_id="edge-1",
+        paper_id="paper-1",
+        correlation_id="corr-1",
+    )
+    assert result.status is PaperEdgeIdentityEvidenceStatus.REJECTED
+    assert result.edge_identity_resolved is False
+    assert result.paper_edge_id == ""
+    assert "paper_edge_identity_evidence:strategy_id_invalid" in result.reason_codes
 
 
 # --- 6. Bridge fail-closed ----------------------------------------------------------------------------------

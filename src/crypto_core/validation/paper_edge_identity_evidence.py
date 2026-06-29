@@ -40,8 +40,7 @@ from enum import Enum
 from crypto_core.strategy.spec import (
     StrategySpec,
     StrategySpecMarketType,
-    strategy_spec_digest,
-    strategy_spec_to_dict,
+    canonical_strategy_spec_json,
     validate_strategy_spec,
 )
 from crypto_core.validation.strategy_signal_to_paper_intent import (
@@ -61,6 +60,7 @@ _BINDING_UNRESOLVED = "UNRESOLVED"
 _PAPER_CHAIN_LINK = "correlation_and_market_only"
 _PAPER_CHAIN_LINK_LIMITATION = "merged_stage10_4_chain_does_not_carry_strategy_spec_digest.v1"
 _SUPPORTED_MARKET_TYPES = frozenset(StrategySpecMarketType)
+_SUPPORTED_MARKET_TYPE_VALUES = frozenset(market_type.value for market_type in StrategySpecMarketType)
 
 _SHA256_HEX_LENGTH = 64
 _HEX_CHARS = frozenset("0123456789abcdef")
@@ -259,48 +259,87 @@ def _has_clock_token(*texts: object) -> bool:
     return False
 
 
-def _str_field(value: object) -> str:
+def _snapshot_str(snapshot: dict[str, object] | None, key: str) -> str:
+    if snapshot is None:
+        return ""
+    value = snapshot.get(key)
     return value if type(value) is str else ""
 
 
-def _spec_hard_failures(
+def _collect_strings(value: object) -> list[str]:
+    """Recursively collect every string (dict keys + values, list items) for the scope/clock scan."""
+    out: list[str] = []
+    if type(value) is str:
+        out.append(value)
+    elif type(value) is list:
+        for item in value:
+            out.extend(_collect_strings(item))
+    elif type(value) is dict:
+        for key, item in value.items():
+            if type(key) is str:
+                out.append(key)
+            out.extend(_collect_strings(item))
+    return out
+
+
+def _spec_failures_and_snapshot(
     strategy_spec: StrategySpec, expected_strategy_spec_digest: str, market_symbol: str
-) -> list[str]:
+) -> tuple[list[str], dict[str, object] | None]:
+    """Prove the StrategySpec from ONE canonical snapshot.
+
+    The public serializer is read exactly once; the digest is recomputed FROM that canonical string, the snapshot
+    is ``json.loads``-ed back to plain types (so a lying ``str`` subclass identity cannot diverge the emitted
+    identity from the verified digest), and validation / scope-clock scan / output fields all derive from that
+    single plain snapshot. The artifact's own no-venue / no-live / no-clock contract is enforced over the spec's
+    text values (``validate_strategy_spec`` only rejects forbidden keys, not forbidden values).
+    """
     hard: list[str] = []
-    if type(strategy_spec.market_type) is not StrategySpecMarketType or strategy_spec.market_type not in (
-        _SUPPORTED_MARKET_TYPES
+    if type(strategy_spec.market_type) is not StrategySpecMarketType or (
+        strategy_spec.market_type not in _SUPPORTED_MARKET_TYPES
     ):
         hard.append("paper_edge_identity_evidence:unsupported_market_type")
 
     try:
-        recomputed = strategy_spec_digest(strategy_spec)
-    except Exception:  # noqa: BLE001 - public digest recompute failures fail closed at this boundary
-        recomputed = None
+        canonical = canonical_strategy_spec_json(strategy_spec)
+        snapshot = json.loads(canonical)
+    except Exception:  # noqa: BLE001 - a malformed/forged spec must fail closed, never crash
+        canonical = None
+        snapshot = None
+    recomputed = hashlib.sha256(canonical.encode("utf-8")).hexdigest() if type(canonical) is str else None
     if recomputed is None or recomputed != expected_strategy_spec_digest:
         hard.append("paper_edge_identity_evidence:strategy_spec_digest_mismatch")
 
+    if type(snapshot) is not dict:
+        hard.append("paper_edge_identity_evidence:strategy_spec_malformed_payload")
+        return sorted(set(hard)), None
+
     try:
-        validation = validate_strategy_spec(strategy_spec_to_dict(strategy_spec))
-        accepted = validation.accepted is True
-    except Exception:  # noqa: BLE001 - a malformed forged spec must fail closed, never crash
+        accepted = validate_strategy_spec(snapshot).accepted is True
+    except Exception:  # noqa: BLE001 - validation over a forged snapshot must fail closed
         accepted = False
     if not accepted:
         hard.append("paper_edge_identity_evidence:strategy_spec_invalid")
 
-    universe = strategy_spec.instrument_universe
-    if (
-        type(universe) is not tuple
-        or not all(type(symbol) is str for symbol in universe)
-        or market_symbol not in (universe)
-    ):
+    universe = snapshot.get("instrument_universe")
+    if type(universe) is not list or market_symbol not in universe:
         hard.append("paper_edge_identity_evidence:market_symbol_not_in_universe")
-    return sorted(set(hard))
+
+    spec_texts = _collect_strings(snapshot)
+    if _has_scope_violation(*spec_texts):
+        hard.append("paper_edge_identity_evidence:strategy_spec_scope_violation")
+    if _has_clock_token(*spec_texts):
+        hard.append("paper_edge_identity_evidence:strategy_spec_clock_token")
+
+    if not _is_plain_non_empty_string(snapshot.get("strategy_id")):
+        hard.append("paper_edge_identity_evidence:strategy_id_invalid")
+    return sorted(set(hard)), snapshot
 
 
 def _bridge_hard_failures(
     bridge: StrategySignalToPaperIntent,
     expected_signal_bridge_digest: str,
-    strategy_spec: StrategySpec,
+    spec_strategy_id: str,
+    spec_strategy_version: str,
     expected_strategy_spec_digest: str,
     market_symbol: str,
     correlation_id: str,
@@ -337,9 +376,9 @@ def _bridge_hard_failures(
     ):
         hard.append("paper_edge_identity_evidence:signal_bridge_unsafe_flags")
 
-    if bridge.strategy_id != strategy_spec.strategy_id:
+    if bridge.strategy_id != spec_strategy_id:
         hard.append("paper_edge_identity_evidence:signal_bridge_strategy_id_mismatch")
-    if bridge.strategy_version != strategy_spec.strategy_version:
+    if bridge.strategy_version != spec_strategy_version:
         hard.append("paper_edge_identity_evidence:signal_bridge_strategy_version_mismatch")
     if bridge.spec_digest != expected_strategy_spec_digest:
         hard.append("paper_edge_identity_evidence:signal_bridge_spec_digest_mismatch")
@@ -389,13 +428,16 @@ def build_paper_edge_identity_evidence(
     if _has_clock_token(*scope_texts):
         raise PaperEdgeIdentityEvidenceError("paper_edge_identity_evidence:clock_token_forbidden")
 
-    hard = _spec_hard_failures(strategy_spec, expected_strategy_spec_digest, market_symbol)
+    hard, snapshot = _spec_failures_and_snapshot(strategy_spec, expected_strategy_spec_digest, market_symbol)
+    strategy_id = _snapshot_str(snapshot, "strategy_id")
+    strategy_version = _snapshot_str(snapshot, "strategy_version")
     if bridge_supplied:
         hard.extend(
             _bridge_hard_failures(
                 signal_to_paper_intent,  # type: ignore[arg-type]
                 expected_signal_bridge_digest,  # type: ignore[arg-type]
-                strategy_spec,
+                strategy_id,
+                strategy_version,
                 expected_strategy_spec_digest,
                 market_symbol,
                 correlation_id,
@@ -403,7 +445,6 @@ def build_paper_edge_identity_evidence(
         )
     hard = sorted(set(hard))
 
-    strategy_id = _str_field(strategy_spec.strategy_id)
     if hard:
         status = PaperEdgeIdentityEvidenceStatus.REJECTED
         ready = False
@@ -427,7 +468,11 @@ def build_paper_edge_identity_evidence(
             binding_strength = _BINDING_SPEC_ONLY
             verified_signal_bridge_digest = ""
 
-    signal_bridge_digest = _str_field(signal_to_paper_intent.bridge_digest) if bridge_supplied else ""
+    signal_bridge_digest = (
+        signal_to_paper_intent.bridge_digest
+        if bridge_supplied and type(signal_to_paper_intent.bridge_digest) is str
+        else ""
+    )
 
     fields: dict[str, object] = {
         "schema_version": _SCHEMA_VERSION,
@@ -445,12 +490,10 @@ def build_paper_edge_identity_evidence(
         "edge_id_derivation_policy": _EDGE_ID_DERIVATION_POLICY,
         "edge_id_derivation_inputs": _EDGE_ID_DERIVATION_INPUTS,
         "strategy_id": strategy_id,
-        "strategy_version": _str_field(strategy_spec.strategy_version),
-        "strategy_family": _str_field(strategy_spec.strategy_family),
-        "edge_family": _str_field(strategy_spec.edge_family),
-        "market_type": strategy_spec.market_type.value
-        if type(strategy_spec.market_type) is StrategySpecMarketType
-        else "",
+        "strategy_version": strategy_version,
+        "strategy_family": _snapshot_str(snapshot, "strategy_family"),
+        "edge_family": _snapshot_str(snapshot, "edge_family"),
+        "market_type": _snapshot_str(snapshot, "market_type"),
         "market_symbol": market_symbol,
         "expected_strategy_spec_digest": expected_strategy_spec_digest,
         "verified_strategy_spec_digest": verified_strategy_spec_digest,
