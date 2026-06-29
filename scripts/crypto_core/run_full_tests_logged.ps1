@@ -17,6 +17,16 @@ if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
     $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 }
 
+# Deterministic interpreter: use the repo venv Python, never ambient `python` (which on some PATHs is a system
+# interpreter missing optional deps like `websocket-client`, breaking full-suite collection). Fail closed if absent.
+$PythonExe = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+if (-not (Test-Path $PythonExe)) {
+    Write-Output "PYTEST_PYTHON_MISSING=$PythonExe"
+    Write-Output "ERROR: repo venv Python not found; create .venv and install deps before running the full suite."
+    exit 1
+}
+Write-Output "PYTEST_PYTHON=$PythonExe"
+
 $env:TMP = "C:\tmp"
 $env:TEMP = "C:\tmp"
 New-Item -ItemType Directory -Force "C:\tmp" | Out-Null
@@ -34,7 +44,7 @@ Write-Output "PYTEST_LOG=$log"
 
 Push-Location $RepoRoot
 try {
-    python -m pytest -x -q tests/crypto_core -o cache_dir=$cache --basetemp=$base *> $log
+    & $PythonExe -m pytest -x -q tests/crypto_core -o cache_dir=$cache --basetemp=$base *> $log
     $exit = $LASTEXITCODE
 }
 finally {
