@@ -236,6 +236,24 @@ def _plain_str_or_empty(value: object) -> str:
     return value if type(value) is str else ""
 
 
+def _derive_paper_edge_id(strategy_id: str, market_symbol: str) -> str:
+    """Recompute the approved paper edge-id derivation. Mirrors ``paper_edge_identity_evidence`` exactly.
+
+    ``sha256(canonical_json({"strategy_id": ..., "market_symbol": ...}))`` with ``ensure_ascii=False`` — the same
+    representation the edge-identity module uses to mint ``paper_edge_id``. Re-deriving it here at the consumer
+    boundary defeats a resealed edge identity whose digest/form/policy fields are self-consistent but whose
+    ``paper_edge_id`` was not actually produced by the approved derivation.
+    """
+    canonical = json.dumps(
+        {"strategy_id": strategy_id, "market_symbol": market_symbol},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _require_plain_non_empty_string(value: object, field_name: str) -> str:
     if not _is_plain_non_empty_string(value):
         raise PaperStage4BacktestBaselineEvidenceError(f"paper_stage4_backtest_baseline_evidence:{field_name}_invalid")
@@ -404,6 +422,16 @@ def _edge_identity_hard_failures(
         hard.append("paper_stage4_backtest_baseline_evidence:edge_identity_edge_id_form_invalid")
     if edge_identity.edge_id_derivation_policy != _EDGE_ID_DERIVATION_POLICY:
         hard.append("paper_stage4_backtest_baseline_evidence:edge_identity_derivation_policy_mismatch")
+    # Recompute the edge_id from the carried identity fields: the approved derivation must be re-proven, not
+    # merely declared via edge_id_form / derivation_policy. A resealed identity whose paper_edge_id is any
+    # lowercase hex64 not produced by sha256(canonical_json({strategy_id, market_symbol})) fails closed here.
+    if (
+        not _is_plain_non_empty_string(edge_identity.strategy_id)
+        or not _is_plain_non_empty_string(edge_identity.market_symbol)
+        or not _is_hex64_string(edge_identity.paper_edge_id)
+        or _derive_paper_edge_id(edge_identity.strategy_id, edge_identity.market_symbol) != edge_identity.paper_edge_id
+    ):
+        hard.append("paper_stage4_backtest_baseline_evidence:edge_identity_edge_id_derivation_mismatch")
     if edge_identity.paper_only is not True or any(
         getattr(edge_identity, flag) is not False for flag in _EDGE_IDENTITY_SAFE_FLAGS
     ):

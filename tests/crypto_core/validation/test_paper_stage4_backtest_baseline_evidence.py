@@ -320,6 +320,25 @@ def test_edge_identity_paper_edge_id_tamper_rejects() -> None:
     assert "paper_stage4_backtest_baseline_evidence:edge_identity_paper_edge_id_invalid" in evidence.reason_codes
 
 
+def test_edge_identity_forged_paper_edge_id_recompute_rejects() -> None:
+    # P1 regression: a resealed edge identity whose paper_edge_id is a VALID lowercase hex64 but NOT the real
+    # sha256(canonical_json({strategy_id, market_symbol})) derivation, with a baseline carrying the same value,
+    # must NOT be certified READY. The consumer re-derives the edge_id and fails closed.
+    edge = _edge_identity()
+    forged = "f" * 64
+    assert forged != edge.paper_edge_id
+    tampered = replace(edge, paper_edge_id=forged)
+    resealed = replace(tampered, edge_identity_digest=paper_edge_identity_evidence_digest(tampered))
+    baseline = _baseline(forged)
+    evidence = _build(
+        edge_identity=resealed,
+        backtest_baseline=baseline,
+        expected_edge_identity_digest=resealed.edge_identity_digest,
+    )
+    assert evidence.status is PaperStage4BacktestBaselineEvidenceStatus.REJECTED
+    assert "paper_stage4_backtest_baseline_evidence:edge_identity_edge_id_derivation_mismatch" in evidence.reason_codes
+
+
 def test_edge_identity_wrong_type_raises() -> None:
     baseline = _baseline("a" * 64)
     with pytest.raises(PaperStage4BacktestBaselineEvidenceError):
