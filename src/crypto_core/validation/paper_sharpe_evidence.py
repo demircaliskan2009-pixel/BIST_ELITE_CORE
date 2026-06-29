@@ -69,6 +69,12 @@ _DECIMAL_SCALE = 18
 _DECIMAL_ROUNDING = "ROUND_HALF_EVEN"
 _DECIMAL_INTERNAL_PRECISION = 80
 _DECIMAL_QUANTUM = Decimal(1).scaleb(-_DECIMAL_SCALE)
+# Hard cap on the number of digits in a single consumed daily-return string. A digest-valid but externally
+# constructed series could carry a canonical-but-pathologically-long decimal; converting it to an int/Fraction
+# would otherwise raise a raw ``ValueError`` (CPython's int-string-conversion limit) or be a CPU sink. The cap is
+# far above any real paper daily return and well below CPython's default 4300-digit limit, so an oversize return
+# fails closed with a deterministic reason instead of crashing.
+_MAX_DAILY_RETURN_DIGITS = 1000
 
 _SHA256_HEX_LENGTH = 64
 _HEX_CHARS = frozenset("0123456789abcdef")
@@ -455,10 +461,24 @@ def _series_hard_failures(
     return sorted(set(hard))
 
 
+def _daily_return_reject_reason(value: str) -> str | None:
+    """Deterministic reject reason for a single consumed daily-return string, or ``None`` if usable.
+
+    The digit cap runs BEFORE any ``int``/``Fraction`` conversion so an oversize digest-valid forgery fails closed
+    with a deterministic reason rather than raising a raw ``ValueError`` or becoming a CPU sink.
+    """
+    if not _is_canonical_decimal_string(value):
+        return "paper_sharpe_evidence:daily_return_noncanonical"
+    if sum(char.isdigit() for char in value) > _MAX_DAILY_RETURN_DIGITS:
+        return "paper_sharpe_evidence:daily_return_too_long"
+    return None
+
+
 def _daily_return_failures(daily_returns: tuple[str, ...]) -> list[str]:
     for daily_return in daily_returns:
-        if not _is_canonical_decimal_string(daily_return):
-            return ["paper_sharpe_evidence:daily_return_noncanonical"]
+        reason = _daily_return_reject_reason(daily_return)
+        if reason is not None:
+            return [reason]
     return []
 
 
@@ -473,19 +493,20 @@ def _compute_sharpe(daily_returns: tuple[str, ...]) -> tuple[dict[str, str], lis
     context.
     """
 
-    excess: list[Fraction] = []
-    for daily_return in daily_returns:
-        if not _is_canonical_decimal_string(daily_return):
-            return {}, ["paper_sharpe_evidence:daily_return_noncanonical"]
-        excess.append(_decimal_to_fraction(Decimal(daily_return)))
-
-    count = len(excess)
-    mean = sum(excess, Fraction(0)) / count
-    variance = sum(((value - mean) ** 2 for value in excess), Fraction(0)) / (count - 1)
-    if variance == 0:
-        return {}, ["paper_sharpe_evidence:zero_variance"]
-
     try:
+        excess: list[Fraction] = []
+        for daily_return in daily_returns:
+            reason = _daily_return_reject_reason(daily_return)
+            if reason is not None:
+                return {}, [reason]
+            excess.append(_decimal_to_fraction(Decimal(daily_return)))
+
+        count = len(excess)
+        mean = sum(excess, Fraction(0)) / count
+        variance = sum(((value - mean) ** 2 for value in excess), Fraction(0)) / (count - 1)
+        if variance == 0:
+            return {}, ["paper_sharpe_evidence:zero_variance"]
+
         with localcontext() as ctx:
             ctx.prec = _DECIMAL_INTERNAL_PRECISION
             ctx.rounding = ROUND_HALF_EVEN

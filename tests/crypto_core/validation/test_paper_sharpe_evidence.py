@@ -565,6 +565,20 @@ def test_noncanonical_daily_return_rejects_even_when_resealed() -> None:
     assert "paper_sharpe_evidence:daily_return_noncanonical" in result.reason_codes
 
 
+def test_oversize_daily_return_fails_closed_without_raise() -> None:
+    # A digest-valid but externally constructed series carrying a canonical-but-pathologically-long daily return
+    # must fail closed deterministically (not raise a raw ValueError from int()/Fraction conversion).
+    series = _series()
+    oversize = "0." + ("1" * 1001)
+    forged = _reseal_series(replace(series, daily_returns=(oversize, *series.daily_returns[1:])))
+    result = _build(series=forged)
+
+    assert result.status is PaperSharpeEvidenceStatus.REJECTED
+    assert result.sharpe_computed is False
+    assert result.mean_excess_return == ""
+    assert "paper_sharpe_evidence:daily_return_too_long" in result.reason_codes
+
+
 def test_exact_zero_variance_rejects() -> None:
     # A flat normalized-index path yields all-zero returns -> exact zero variance -> fail closed.
     flat = _series(buckets=_flat_buckets(30))
