@@ -60,7 +60,6 @@ _BINDING_UNRESOLVED = "UNRESOLVED"
 _PAPER_CHAIN_LINK = "correlation_and_market_only"
 _PAPER_CHAIN_LINK_LIMITATION = "merged_stage10_4_chain_does_not_carry_strategy_spec_digest.v1"
 _SUPPORTED_MARKET_TYPES = frozenset(StrategySpecMarketType)
-_SUPPORTED_MARKET_TYPE_VALUES = frozenset(market_type.value for market_type in StrategySpecMarketType)
 
 _SHA256_HEX_LENGTH = 64
 _HEX_CHARS = frozenset("0123456789abcdef")
