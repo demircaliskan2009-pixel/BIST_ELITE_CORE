@@ -1,5 +1,5 @@
-numpy>=2.0.2
-requests>=2.33.0
+numpy>=2.2.6
+requests>=2.34.2
 fastapi>=0.110
 httpx>=0.28.1
 uvicorn>=0.24
