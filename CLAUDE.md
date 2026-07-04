@@ -6,9 +6,17 @@ Active scope is `crypto_core` only (`src/crypto_core`, `tests/crypto_core`, `scr
 Follow the canonical agent workflow: `docs/crypto_core/agent_workflow.md`
 (working loop, model routing, digest-boundary rule, guardrails, validation policy, state-claim
 policy, skills policy, report templates). Durable operating rails: `AGENTS.md`.
-Prompts may reference **named lanes** (LANE:PRECHECK-STD, GATE-MODULE-STD, VALIDATE-STD, PR-STD,
-MERGE-STD, REPORT-STD) — expand them from `docs/crypto_core/agent_prompts/token_efficiency_v2.md`;
+Prompts may reference **named lanes** (LANE:PRECHECK-STD, GATE-MODULE-STD, LANE:FABLE-ARCH, VALIDATE-STD,
+PR-STD, MERGE-STD, REPORT-STD) — expand them from `docs/crypto_core/agent_prompts/token_efficiency_v2.md`;
 lanes compress procedure text only, never safety rules.
+
+Model-tier routing (canonical: `docs/crypto_core/agent_workflow.md` §20, Fable 5 era): Fable 5 = premium
+high-reasoning lane (design/governance/adversarial audit/digest-provenance/Decimal-vs-float/final semantic
+review — never CI polling, status, ruff-only, merge mechanics); Opus 4.8 xhigh = implementation/repair +
+Fable fallback; Fast Auto/Sonnet = mechanical (hygiene/CI/merge/post-verify); Codex = independent read-only
+audit (no concurrent patching); GitHub connector = mandatory final merge-readiness gate; Deep Research =
+external/current facts only. Model strength is never proof — every §20 lane runs under the unchanged hard
+gates below.
 
 Key hard rules (full list in the workflow doc):
 

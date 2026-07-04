@@ -13,8 +13,24 @@
 ## Canonical Workflow
 
 - The full Claude -> ChatGPT audit -> Codex repair/closeout -> authorized merge loop, model routing
-  (including Fable High), state-claim policy, skills policy, and report templates live in
+  (including the Fable 5 / Opus 4.8 / Fast Auto / Codex / Connector / Deep Research routing doctrine,
+  `agent_workflow.md` §20), state-claim policy, skills policy, and report templates live in
   `docs/crypto_core/agent_workflow.md`. Follow it; do not re-paste doctrine into prompts.
+- Model-tier routing (`agent_workflow.md` §20, Fable 5 era): **Fable 5** = premium high-reasoning lane —
+  use first, when available, for design/governance/adversarial audit/digest-provenance/Decimal-vs-float/
+  fail-closed semantics and final semantic review before the connector gate; never for CI polling, git/gh
+  status, ruff/format-only, merge mechanics, or trivial docs. **Opus 4.8 xhigh** = bounded implementation/
+  repair lane and the fallback when Fable 5 is unavailable/quota-limited. **Fast Auto/Sonnet** = mechanical
+  lane (hygiene, CI polling, standard merge/post-verify, status). **Codex** = independent read-only audit
+  lane — never patches a PR concurrently with Claude, never merges. **GitHub connector** = mandatory
+  source-of-truth final merge-readiness gate before merge authorization (separate from readiness/connector
+  probes). **Deep Research** = external/current facts only. Model strength is never proof: no lane skips
+  tests, CI, review, the connector gate, or explicit per-PR merge authorization. Official Fable 5
+  limits/quota are unproven here — treat as a user-reported operational constraint.
+- Current next-slice routing (after PR #314): `PaperStage4ComparisonEvidence` design goes to Fable 5 first;
+  it is the first artifact allowed to call `compare_stage4` and must recompute the Sharpe-retention verdict
+  in Decimal (the float comparator output is advisory echo only). `PaperStage4CompletionDecision` follows;
+  the operational-day gate stays deferred until a multi-session per-UTC-day operational source exists.
 - Role routing (full detail in `agent_workflow.md` §2/§2a): **ChatGPT** = controller/sequence owner +
   merge authority; **Claude** = implementation/repair/closeout executor; **Codex** = read-only adversarial
   P1/P2 reviewer (patches only when explicitly authorized); **Codex Pursue Goal** = bounded single-goal
