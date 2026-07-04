@@ -24,14 +24,16 @@ context — never implemented here.
 | Role | Responsibility |
 |---|---|
 | **ChatGPT** (controller) | **Sequence owner** — authors prompts; verifies live head/files/checks/threads/open-PR state; issues verdicts `ACCEPT / REPAIR / REJECT / CODEX_REQUIRED / GITHUB_CONNECTOR_REQUIRED / MERGE_AUTH_REQUIRED`; decides **when** to use Claude, Codex, Codex Pursue Goal, the GitHub connector, and Deep Research. Owns merge authorization (per-PR, exact command). |
-| **Claude** (Opus 4.8 local agent) | Implementation / repair / closeout **executor**. Bounded feature slices, multi-file patching, full local validation loops, commit/push/PR creation, same-turn same-branch repair after a local validation failure, CI diagnosis when implementation context is needed, standard merge **only on explicit per-PR authorization**, post-merge verify. |
+| **Claude** (local agent — Fable 5 / Opus 4.8 / Fast Auto–Sonnet model lanes, §20) | Implementation / repair / closeout **executor**. Bounded feature slices, multi-file patching, full local validation loops, commit/push/PR creation, same-turn same-branch repair after a local validation failure, CI diagnosis when implementation context is needed, standard merge **only on explicit per-PR authorization**, post-merge verify. The model tier for each Claude task is picked by the §20 routing doctrine (Fable 5 = premium reasoning; Opus 4.8 = implementation/repair/fallback; Fast Auto/Sonnet = mechanical). |
 | **Codex** | **Adversarial P1/P2 reviewer** — hidden-bug / exploit hunting, digest/schema/API-contract review, provenance/evidence-chain audit. **Read-only by default**; patches only when patching is **explicitly authorized and scoped**. Runs **asynchronously**; never merges. |
 | **Codex Pursue Goal** | **Bounded single-goal terminal loop** for mechanical GitHub/CI state. Use **only** for the cases in §2a. |
 | **GitHub connector / gh-native fallback** | **Source-of-truth GitHub state gate** — PR/CI/thread/review/final merge-readiness audit. **Read-only** unless an action is explicitly authorized. |
 | **Deep Research** | **External / current-fact + architecture-benchmark research** (and, in the GitHub connector chat, combined repo+external review). **Strictly read-only / advisory** — never an executor lane, never merge authority, never a safety-gate waiver; it may recommend a mutation task but never executes one (the controller routes authorized mutations to Claude/`gh`, the connector, or Codex). ChatGPT decides when it is used; full protocol in §19 / `docs/crypto_core/deep_research_protocol.md`. |
 
-Strongest reasoning (Opus xhigh) is reserved for contract/digest/fail-closed/review-blocker work;
-status/polling/mechanical steps use the cheapest sufficient lane.
+Model-tier routing is §20 (Fable 5 era): **Fable 5** is the premium high-reasoning lane (use first, when
+available, for design/governance/adversarial/correctness work), **Opus 4.8 xhigh** the
+implementation/repair/fallback lane for contract/digest/fail-closed/review-blocker work, and **Fast
+Auto/Sonnet** the mechanical lane; status/polling/mechanical steps always use the cheapest sufficient lane.
 
 ### 2a. Codex Pursue Goal — scope
 
@@ -292,6 +294,127 @@ Deep Research is the **external / current-fact + architecture-benchmark** tool; 
   External best practices that conflict with repo safety doctrine are **proposals only** — the stricter
   safety rule wins.
 
+## 20. Multi-Model Routing Doctrine (Fable 5 era)
+
+Fable 5 (`claude-fable-5`) is available as a model tier for the local Claude agent. **Model strength is not
+proof**: no lane — however strong — replaces evidence, tests, CI, Codex review, the GitHub-connector final
+gate, or explicit per-PR merge authorization. Official Fable 5 limits / quota / safety-routing / pricing are
+**UNPROVEN** in this repo — treat availability limits as a user-reported operational constraint and never
+state official policy without proof.
+
+### 20.1 Lane routing — Fable 5 / Opus 4.8 / Fast Auto / Codex / Connector / Deep Research
+
+- **Fable 5 — premium high-reasoning lane (use FIRST when available).** Route to Fable 5: repo-wide
+  reasoning/design; Stage-4 governance and design (especially `PaperStage4ComparisonEvidence` design and the
+  first authorized `compare_stage4` use planning); Decimal-vs-float correctness; fail-closed semantics;
+  digest/provenance correctness; adversarial P1/P2 audits; reasoning about CodeQL/Codex findings;
+  readiness/live/Deribit overclaim audits; artifact-boundary reviews; cross-document contradiction
+  detection; phase-order decisions; high-risk prompt generation; workflow/router redesign; final semantic
+  review before the connector gate. Deliberately spend Fable 5 budget on this class of work.
+  **Never spend Fable 5 on:** `git status` / `gh pr view` / `gh pr checks` / CI polling; ruff/format-only
+  runs; simple pytest loops; standard merge / post-merge verification; trivial typo fixes; mechanical docs
+  edits; routine file search; output formatting. The scarce-window spirit of `LANE:FABLE-ARCH`
+  (`agent_prompts/token_efficiency_v2.md`) carries over unchanged; this section **supersedes its
+  consult-only framing** — when routed here, Fable 5 may run as the full local executor (tools, patches,
+  PRs) under all existing gates.
+- **Opus 4.8 (xhigh) — implementation / repair / fallback lane.** Bounded validation-module implementation;
+  complex repair after Fable/Codex/CodeQL findings; **fallback whenever Fable 5 is unavailable, blocked, or
+  quota-exhausted**; long implementation loops where Fable 5 would be too expensive; same-turn same-branch
+  repair loops within one PR.
+- **Fast Auto / Sonnet — mechanical lane.** Git hygiene; CI polling (bounded one-shot snapshots, never
+  `--watch`); `gh` checks / review-thread proof; ruff/format/test execution; standard merge and post-merge
+  verification; status reports; branch closeout; non-semantic docs mechanics.
+- **Codex — independent audit / second-opinion lane.** Read-only adversarial P1/P2 audit and second opinion
+  on Claude-authored PRs; workflow/prompt consistency audit; repair suggestions only after evidence.
+  **Never** patches the same PR concurrently with Claude; Claude prompt grammar and Codex prompt grammar are
+  **never mixed** in one prompt; Codex is not the primary implementation lane while Fable/Opus is available;
+  Codex never merges (§2, §2a, §8 bind unchanged).
+- **GitHub connector — source-of-truth FINAL merge-readiness gate.** Mandatory before merge authorization —
+  **never waived**: re-verifies PR metadata, head, files, checks, reviews, threads, and code scanning. If
+  the connector app itself is unavailable, the **same** final gate runs via `gh`-native commands (the §2
+  "GitHub connector / gh-native fallback" role) — a fallback of **mechanism**, never a waiver of the gate.
+  Required even when a PR touches no connector/readiness code. It is separate from readiness/connector
+  **probes**, which may remain `NOT_RUN_UNPROVEN_NO_SAFE_SCRIPT_FOUND` when no safe offline script exists.
+- **Deep Research — external/current-fact lane (§19 binds).** Only for external / current / high-stakes
+  facts: exchange APIs, Deribit docs, fees, rate limits, funding/basis/carry, microstructure, regulation,
+  custody/security, live readiness, current tool behavior, official model/tool policy. Never for
+  repo-internal deterministic implementation where the repo already defines the contract.
+
+### 20.2 Claude and Codex Setup Auto-Use Doctrine
+
+- **Claude** sessions in this repo auto-load `CLAUDE.md` and the untracked `CLAUDE.local.md` at session
+  start (locally proven by session context); `.claude/settings.local.json` + `.claude/hooks/**` are
+  untracked local defense-in-depth. Workflow docs are **not** auto-loaded — prompts must still name them.
+- **Codex** bootstraps from `AGENTS.md` and `.codex/skills/crypto-core-max-safe/SKILL.md` (read-only audit
+  default, no concurrent patching with Claude, no merge, P1/P2/P3 classification, forbidden-surface audit,
+  one-open-PR + connector-final-gate discipline all live there and here).
+- **AUTO_SETUP_LOADING_PROOF: PARTIAL.** Repo-local files are the enforceable mechanism; app-global
+  automatic loading is not claimed beyond the evidence above. Every serious prompt therefore includes an
+  explicit READ list (`AGENTS.md` + the relevant sections of this file + task files); the §20.5 templates
+  encode this.
+
+### 20.3 PR lifecycle (lane-annotated; all gates unchanged)
+
+Design (Fable 5) → implementation PR (Opus 4.8; Fable 5 for the hardest contract work) → adversarial audit
+(Fable 5; Codex where useful or requested) → **GitHub-connector final gate** → explicit per-PR user merge
+authorization → standard head-pinned merge + post-merge verification (Fast lane). One open PR at a time; CI
+`pending` is NOT_READY — poll to terminal with bounded snapshots (never `--watch`); §3 / §11 / §13 / §16
+bind unchanged for every lane.
+
+### 20.4 Current next-slice routing (after PR #314)
+
+- **Next:** `PaperStage4ComparisonEvidence` — route governance/design to **Fable 5 first**. It is the first
+  artifact allowed to call `compare_stage4`, and it **must recompute the Sharpe-retention verdict in
+  Decimal** from the digest-bound inputs — `compare_stage4` is float-based, so its float retention output is
+  advisory echo only, never the verdict source. It consumes the merged #310 Sharpe / #311 methodology /
+  #312 edge-identity / #313 baseline-evidence artifacts at their digest boundaries.
+- **Then:** `PaperStage4CompletionDecision` — the only artifact that may set `prdv4_stage4_complete=True`.
+- **Deferred:** operational-day evidence → operational-30-day gate, until a multi-session per-UTC-day
+  operational source exists (otherwise it duplicates the merged return-series 30-day gate or overclaims
+  operational readiness).
+- No live/shadow/Deribit/Stage-4 completion without separate authorization.
+
+### 20.5 Future Prompt Templates
+
+**Fable 5 (high-reasoning design/audit/governance):**
+`TASK` (design/audit/governance objective) · `MODEL: Fable 5 — STOP_WITH_PROOF if not; report actual model`
+· `STATE_TO_VERIFY` (main SHA, merged PRs, open-PR count) · `READ` (setup files first: `AGENTS.md`,
+`agent_workflow.md` §§ relevant, named task files) · ask for broad repo scan **with justification**,
+contradiction detection, model/tool routing decision, P1/P2 classification, exact next action ·
+`FORBIDDEN: implementation unless explicitly authorized` · report includes `FABLE5_CONFIRMED`.
+
+**Opus 4.8 (implementation/repair):**
+`TASK` (bounded slice) · branch + PR named · exact allowed files · implementation contract (digest/
+fail-closed/non-overclaim invariants) · tests required · validation ladder (targeted → full helper →
+`git diff --check`) · CI poll to terminal · same-branch repair loop allowed within scope · **no merge** ·
+fixed report fields (§10).
+
+**Fast Auto / Sonnet (mechanical):**
+`TASK` (status / CI / merge / post-verify) · exact PR number + pinned head SHA · **no code edits** · stop
+conditions (stale head, non-terminal CI, unresolved threads, CHANGES_REQUESTED) · bounded terminal polling
+· fixed report fields.
+
+**Codex (independent audit):**
+read-only · no edits/comments unless explicitly authorized · P1/P2 adversarial audit of the named PR at the
+pinned head · scope + forbidden-surface audit · verdict `READY / NOT_READY` with §10 Codex fields · never
+mixed with Claude prompt grammar.
+
+**GitHub connector (final gate):**
+source-of-truth gate for the named PR · verify head/base/files/checks/reviews/threads/code-scanning ·
+**no mutation** · output `PASS / BLOCK / UNKNOWN` with evidence lines.
+
+**Deep Research (external facts):**
+official/current external-source audit for a named question · cite sources; separate
+`REPO_EVIDENCE / EXTERNAL_EVIDENCE / INFERENCE / UNKNOWN` · no repo-state claims without repo evidence ·
+advisory only (§19 misuse-prevention binds).
+
+### 20.6 Non-overclaim
+
+Better reasoning is not proof. No lane may claim live/private-API/orders/readiness/Deribit/capital/
+scheduler behavior, edge/profitability, or Stage-4 completion without artifacts and separate authorization;
+no BIST leakage; no official Fable 5 limit/pricing/quota claims unless proven (status as of v4.4:
+UNPROVEN). "Fable 5 can replace audits / the connector gate / CI" is a forbidden claim.
+
 ---
 
 *v4.1 (2026-06-15): rewrote the model-role model to the current three-role protocol — Claude =
@@ -315,3 +438,13 @@ routing, triggers, output contract, and misuse prevention). Deep Research is **s
 advisory** — never an executor lane, never merge authority, never a safety-gate waiver; it may recommend
 a mutation task but never executes one (the controller routes authorized mutations to Claude/`gh`, the
 GitHub connector, or Codex). Docs/config only; no product code touched.*
+
+*v4.4 (2026-07-04): added §20 Multi-Model Routing Doctrine (Fable 5 era) — Fable 5 as the premium
+high-reasoning lane (with explicit non-use cases), Opus 4.8 as implementation/repair/fallback, Fast
+Auto/Sonnet as the mechanical lane, Codex/connector/Deep Research roles restated, the Claude/Codex setup
+auto-use doctrine (`AUTO_SETUP_LOADING_PROOF: PARTIAL`), the lane-annotated PR lifecycle with the
+GitHub-connector final gate, current next-slice routing (`PaperStage4ComparisonEvidence` → Fable 5 design
+first; Decimal Sharpe-retention recompute; `PaperStage4CompletionDecision` after; operational-day gate
+deferred), and six future prompt templates. Updated the §2 Claude role row and routing summary to the
+Fable 5 era. §20 supersedes the consult-only framing of `LANE:FABLE-ARCH` (the lane file's token-discipline
+spirit carries over unchanged). No safety gate weakened; docs only; no product code touched.*
