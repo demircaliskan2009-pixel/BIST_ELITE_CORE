@@ -101,6 +101,12 @@ _EXPECTED_BASELINE_EVIDENCE_SCHEMA_VERSION = "paper-stage4-backtest-baseline-evi
 _EXPECTED_GATE_SCHEMA_VERSION = "paper-30day-evidence-gate-decision.v1"
 _EXPECTED_COMPARISON_BASIS = "paper_vs_backtest_sharpe_retention.v1"
 _EXPECTED_ENFORCED_GUARDRAIL_POLICY = "sharpe_retention_and_min_duration_only.v1"
+# Consumer-boundary re-pin of the approved v1 comparison governance (mirrors the merged
+# paper_vs_backtest_methodology builder constants): a resealed, digest-self-consistent methodology carrying a
+# weakened threshold or duration must fail closed HERE — the verdict is never re-parameterized by a forgeable
+# policy field alone.
+_APPROVED_SHARPE_RETENTION_RATIO = "0.500000000000000000"
+_APPROVED_MIN_DURATION_DAYS = 30
 _EDGE_ID_FORM = "hex64_sha256"
 _EDGE_ID_DERIVATION_POLICY = "sha256_canonical_strategy_id_market_symbol.v1"
 
@@ -128,10 +134,17 @@ _NEGATIVE_ZERO_SCALE18 = "-0.000000000000000000"
 _SHA256_HEX_LENGTH = 64
 _HEX_CHARS = frozenset("0123456789abcdef")
 _SCALE18_DECIMAL_PATTERN = re.compile(r"^-?(?:0|[1-9][0-9]*)\.[0-9]{18}$")
-# Hard cap on the digits of a consumed scale-18 decimal string: a digest-valid but resealed artifact could
-# carry a canonical-but-pathologically-long value; the cap is far above any real Sharpe and keeps the
-# Decimal/float conversions bounded, so an oversize value fails closed with a deterministic reason.
-_MAX_SCALE18_DECIMAL_LENGTH = 1000
+# Hard cap on the characters of a consumed scale-18 decimal string: a digest-valid but resealed artifact
+# could carry a canonical-but-pathologically-long value. The cap bounds the integer part to <= 41 digits
+# (far above any real Sharpe), which together with the backtest-sharpe magnitude bounds below keeps every
+# scale-18 quantization inside the precision-80 Decimal context, so an oversize value fails closed with a
+# deterministic reason instead of raising during quantization.
+_MAX_SCALE18_DECIMAL_LENGTH = 60
+# Magnitude bounds for the caller-supplied baseline Sharpe float (after finite/positive checks): outside
+# [1e-18, 1e18] the scale-18 quantizations of the baseline and of the retention ratio could exceed the
+# precision-80 context. Deterministic rejection, never a Decimal exception.
+_MIN_BACKTEST_SHARPE_DECIMAL = Decimal("1E-18")
+_MAX_BACKTEST_SHARPE_DECIMAL = Decimal("1E+18")
 _BIST_PATTERN = re.compile(r"\b(?:bist\w*|borsa\w*|matriks\w*)|\bkap\b", re.IGNORECASE)
 _FORBIDDEN_PATTERN = re.compile(
     r"(?<![A-Za-z0-9])orders?(?![A-Za-z0-9])"
@@ -653,7 +666,11 @@ def _flag_failures(
 
 
 def _baseline_value_failures(baseline: Stage4BacktestBaseline) -> list[str]:
-    """Re-prove caller-supplied baseline well-formedness. Mirrors ``stage4_comparator._validate_baseline`` ranges."""
+    """Re-prove caller-supplied baseline well-formedness. Mirrors ``stage4_comparator._validate_baseline`` ranges.
+
+    Additionally bounds the positive baseline Sharpe magnitude to [1e-18, 1e18] so the Decimal retention
+    quantizations stay inside the precision-80 context (deterministic rejection, never a Decimal exception).
+    """
 
     hard: list[str] = []
     if not _is_plain_non_empty_string(baseline.baseline_id):
@@ -664,6 +681,8 @@ def _baseline_value_failures(baseline: Stage4BacktestBaseline) -> list[str]:
         hard.append(_reason("baseline_as_of_ns_invalid"))
     if not _is_finite_number(baseline.backtest_sharpe) or float(baseline.backtest_sharpe) <= 0.0:
         hard.append(_reason("backtest_sharpe_non_positive"))
+    elif not (_MIN_BACKTEST_SHARPE_DECIMAL <= Decimal(repr(baseline.backtest_sharpe)) <= _MAX_BACKTEST_SHARPE_DECIMAL):
+        hard.append(_reason("backtest_sharpe_out_of_bounds"))
     if not _is_rate(baseline.backtest_hit_rate):
         hard.append(_reason("backtest_hit_rate_invalid"))
     if not _is_non_negative_optional_number(baseline.backtest_slippage_bps):
@@ -771,8 +790,12 @@ def _methodology_failures(methodology: PaperVsBacktestMethodology, sharpe_eviden
         or Decimal(methodology.sharpe_retention_ratio) <= 0
     ):
         hard.append(_reason("methodology_retention_threshold_invalid"))
+    elif methodology.sharpe_retention_ratio != _APPROVED_SHARPE_RETENTION_RATIO:
+        hard.append(_reason("methodology_retention_threshold_unapproved"))
     if not _is_positive_int(methodology.min_duration_days):
         hard.append(_reason("methodology_min_duration_invalid"))
+    elif methodology.min_duration_days != _APPROVED_MIN_DURATION_DAYS:
+        hard.append(_reason("methodology_min_duration_unapproved"))
     hard.extend(
         _flag_failures(methodology, _METHODOLOGY_TRUE_FLAGS, _METHODOLOGY_FALSE_FLAGS, "methodology_unsafe_flags")
     )
@@ -1126,12 +1149,19 @@ def build_paper_stage4_comparison_evidence(
     comparator_rejection_reasons_echo: tuple[str, ...] = ()
     paper_summary_digest = ""
 
+    decimal_satisfied = False
     if not hard:
         backtest_sharpe_repr = repr(backtest_baseline.backtest_sharpe)
-        backtest_sharpe_decimal, sharpe_retention_ratio_decimal, decimal_satisfied = _decimal_retention_verdict(
-            sharpe_evidence.paper_sharpe_annualized, backtest_sharpe_repr, methodology.sharpe_retention_ratio
-        )
+        try:
+            backtest_sharpe_decimal, sharpe_retention_ratio_decimal, decimal_satisfied = _decimal_retention_verdict(
+                sharpe_evidence.paper_sharpe_annualized, backtest_sharpe_repr, methodology.sharpe_retention_ratio
+            )
+        except ArithmeticError:
+            # Unreachable under the scale-18 length cap and baseline magnitude bounds above; belt-and-braces
+            # so a Decimal edge case can only fail closed, never crash past the comparator gate.
+            hard = [_reason("retention_verdict_not_computable")]
 
+    if not hard:
         # Internally constructed comparator input. ``paper_trade_count=0`` is a placeholder only (the consumed
         # chain carries no trade count) and ``float(...)`` here feeds ONLY the advisory comparator echo.
         paper_summary = Stage4PaperSummary(

@@ -806,6 +806,26 @@ def test_methodology_retention_threshold_invalid_rejects() -> None:
     assert evidence.stage4_comparator_invoked is False
 
 
+def test_resealed_lowered_retention_threshold_rejects_unapproved() -> None:
+    # Codex P1 regression: a resealed, digest-self-consistent READY methodology carrying a WEAKENED but
+    # well-formed threshold must fail closed at the consumer boundary — the approved v1 governance value
+    # (0.500000000000000000) is re-pinned here, never trusted from a forgeable policy field alone.
+    methodology = _reseal_methodology(_chain()["methodology"], sharpe_retention_ratio="0.100000000000000000")
+    evidence = _build(methodology=methodology)
+    assert evidence.status is PaperStage4ComparisonEvidenceStatus.REJECTED
+    assert _rc("methodology_retention_threshold_unapproved") in evidence.reason_codes
+    assert evidence.stage4_comparator_invoked is False
+    assert evidence.comparison_verdict == ""
+
+
+def test_resealed_unapproved_min_duration_rejects() -> None:
+    methodology = _reseal_methodology(_chain()["methodology"], min_duration_days=15)
+    evidence = _build(methodology=methodology)
+    assert evidence.status is PaperStage4ComparisonEvidenceStatus.REJECTED
+    assert _rc("methodology_min_duration_unapproved") in evidence.reason_codes
+    assert evidence.stage4_comparator_invoked is False
+
+
 # --------------------------------------------------------------------------------------------------
 # 8. Edge identity re-derivation
 # --------------------------------------------------------------------------------------------------
@@ -884,6 +904,39 @@ def test_non_finite_baseline_sharpe_rejects_fail_closed() -> None:
 )
 def test_malformed_paper_sharpe_annualized_rejects(paper_value: str) -> None:
     sharpe = _reseal_sharpe(_chain()["sharpe"], paper_sharpe_annualized=paper_value)
+    evidence = _build(sharpe_evidence=sharpe)
+    assert evidence.status is PaperStage4ComparisonEvidenceStatus.REJECTED
+    assert _rc("paper_sharpe_annualized_invalid") in evidence.reason_codes
+    assert evidence.stage4_comparator_invoked is False
+
+
+@pytest.mark.parametrize("huge_sharpe", [1e308, 1e19])
+def test_huge_backtest_sharpe_out_of_bounds_rejects(huge_sharpe: float) -> None:
+    # Codex P2 regression: a digest-valid baseline with a finite but enormous Sharpe must be REJECTED
+    # deterministically — never allowed to raise decimal.InvalidOperation during scale-18 quantization.
+    chain = _chain()
+    huge = _baseline(chain["edge"].paper_edge_id, backtest_sharpe=huge_sharpe)
+    huge_evidence = _baseline_evidence(chain["edge"], huge)
+    evidence = _build(backtest_baseline=huge, baseline_evidence=huge_evidence)
+    assert evidence.status is PaperStage4ComparisonEvidenceStatus.REJECTED
+    assert _rc("backtest_sharpe_out_of_bounds") in evidence.reason_codes
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_tiny_backtest_sharpe_out_of_bounds_rejects() -> None:
+    chain = _chain()
+    tiny = _baseline(chain["edge"].paper_edge_id, backtest_sharpe=5e-324)
+    tiny_evidence = _baseline_evidence(chain["edge"], tiny)
+    evidence = _build(backtest_baseline=tiny, baseline_evidence=tiny_evidence)
+    assert evidence.status is PaperStage4ComparisonEvidenceStatus.REJECTED
+    assert _rc("backtest_sharpe_out_of_bounds") in evidence.reason_codes
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_long_but_capped_paper_sharpe_string_rejects_before_quantization() -> None:
+    # Codex P2 regression: a resealed scale-18 paper Sharpe whose integer part would overflow the
+    # precision-80 quantization is rejected by the tightened length cap, not by a Decimal exception.
+    sharpe = _reseal_sharpe(_chain()["sharpe"], paper_sharpe_annualized="1" * 45 + ".000000000000000000")
     evidence = _build(sharpe_evidence=sharpe)
     assert evidence.status is PaperStage4ComparisonEvidenceStatus.REJECTED
     assert _rc("paper_sharpe_annualized_invalid") in evidence.reason_codes
