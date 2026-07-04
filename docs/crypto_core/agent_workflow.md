@@ -329,11 +329,12 @@ state official policy without proof.
   **Never** patches the same PR concurrently with Claude; Claude prompt grammar and Codex prompt grammar are
   **never mixed** in one prompt; Codex is not the primary implementation lane while Fable/Opus is available;
   Codex never merges (§2, §2a, §8 bind unchanged).
-- **GitHub connector — source-of-truth FINAL merge-readiness gate.** Mandatory before merge authorization
-  unless the controller explicitly waives it: re-verifies PR metadata, head, files, checks, reviews,
-  threads, and code scanning. Required even when a PR touches no connector/readiness code. It is separate
-  from readiness/connector **probes**, which may remain `NOT_RUN_UNPROVEN_NO_SAFE_SCRIPT_FOUND` when no safe
-  offline script exists.
+- **GitHub connector — source-of-truth FINAL merge-readiness gate.** Mandatory before merge authorization —
+  **never waived**: re-verifies PR metadata, head, files, checks, reviews, threads, and code scanning. If
+  the connector app itself is unavailable, the **same** final gate runs via `gh`-native commands (the §2
+  "GitHub connector / gh-native fallback" role) — a fallback of **mechanism**, never a waiver of the gate.
+  Required even when a PR touches no connector/readiness code. It is separate from readiness/connector
+  **probes**, which may remain `NOT_RUN_UNPROVEN_NO_SAFE_SCRIPT_FOUND` when no safe offline script exists.
 - **Deep Research — external/current-fact lane (§19 binds).** Only for external / current / high-stakes
   facts: exchange APIs, Deribit docs, fees, rate limits, funding/basis/carry, microstructure, regulation,
   custody/security, live readiness, current tool behavior, official model/tool policy. Never for
