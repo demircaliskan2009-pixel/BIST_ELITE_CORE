@@ -357,8 +357,47 @@ def _recomputed_day_digest_or_none(day: PaperAttestedOperationalDayEvidence) -> 
         return None
 
 
+def _day_session_content_failures(day: PaperAttestedOperationalDayEvidence, session_count: int) -> list[str]:
+    """Recompute the per-session arithmetic / count / digest-shape invariants a genuine day must satisfy.
+
+    A digest-resealed day re-proves its own self-digest, so tuple lengths alone are not trust: this recomputes,
+    for every session, that the window falls fully inside the attested UTC day with a coherent positive
+    duration, is ordered and non-overlapping, has a hex64 window + metrics digest, positive source-event
+    count, and non-empty ids — mirroring the upstream ``PaperAttestedOperationalDayEvidence`` window contract.
+    """
+    day_start = day.day_start_ns
+    day_end = day.day_end_ns
+    previous_stop: int | None = None
+    for i in range(session_count):
+        start = day.session_started_at_ns_list[i]
+        stop = day.session_stopped_at_ns_list[i]
+        duration = day.session_window_duration_ns_list[i]
+        if (
+            not _is_positive_int(start)
+            or not _is_positive_int(stop)
+            or not _is_positive_int(duration)
+            or stop <= start
+            or duration != stop - start
+            or start < day_start
+            or stop > day_end
+            or (previous_stop is not None and start < previous_stop)
+        ):
+            return [_reason("operational_day_session_content_invalid")]
+        previous_stop = stop
+        if (
+            not _is_hex64_string(day.verified_session_window_digests[i])
+            or not _is_hex64_string(day.session_metrics_summary_digests[i])
+            or not _is_positive_int(day.source_event_digest_counts[i])
+            or not _is_plain_non_empty_string(day.session_run_ids[i])
+            or not _is_plain_non_empty_string(day.session_window_ids[i])
+            or not _is_plain_non_empty_string(day.session_aggregate_ids[i])
+        ):
+            return [_reason("operational_day_session_content_invalid")]
+    return []
+
+
 def _day_coherence_failures(day: PaperAttestedOperationalDayEvidence) -> list[str]:
-    """Re-check the day's UTC-day boundary arithmetic and session-list length coherence (never trust echoes)."""
+    """Re-check the day's UTC-day boundary arithmetic, session-list lengths, and per-session content."""
 
     hard: list[str] = []
     index = day.attested_utc_day_index
@@ -385,7 +424,9 @@ def _day_coherence_failures(day: PaperAttestedOperationalDayEvidence) -> list[st
         value = getattr(day, list_field)
         if type(value) is not tuple or len(value) != session_count:
             hard.append(_reason("operational_day_coherence_invalid"))
-            break
+            return hard
+    # Lengths are coherent; recompute the per-session content invariants (reseal defense, not a length trust).
+    hard.extend(_day_session_content_failures(day, session_count))
     return hard
 
 

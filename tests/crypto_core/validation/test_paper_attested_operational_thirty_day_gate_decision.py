@@ -470,6 +470,42 @@ def test_day_coherence_invalid_rejects(changes: dict) -> None:
     assert _rc("operational_day_coherence_invalid") in decision.reason_codes
 
 
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"session_started_at_ns_list": (0,)},
+        {"session_started_at_ns_list": (_BASE_INDEX * _DAY_NS - 1,)},
+        {"session_stopped_at_ns_list": ((_BASE_INDEX + 1) * _DAY_NS + 1,)},
+        {"session_window_duration_ns_list": (999,)},
+        {"source_event_digest_counts": (0,)},
+        {"session_metrics_summary_digests": ("not-a-hex-digest",)},
+        {"verified_session_window_digests": ("not-a-hex-digest",)},
+        {"session_run_ids": ("",)},
+        {"session_window_ids": ("",)},
+    ],
+)
+def test_forged_session_content_rejects(changes: dict) -> None:
+    # Codex P1 regression: a digest-resealed day (self-digest re-proves) can still carry impossible session
+    # details; the gate recomputes per-session arithmetic/count/digest-shape invariants and rejects them, so a
+    # forged READY day can never satisfy the gate on tuple-length trust alone.
+    day = _reseal_day(_day(_BASE_INDEX), **changes)
+    decision = _build((day,), expected_operational_day_evidence_digests=_anchors((day,)))
+    assert decision.status is PaperAttestedOperationalThirtyDayGateDecisionStatus.REJECTED
+    assert _rc("operational_day_session_content_invalid") in decision.reason_codes
+
+
+def test_forged_session_content_blocks_thirty_day_satisfaction() -> None:
+    # 30 consecutive days but one carries out-of-day session timestamps -> the whole gate rejects, never
+    # READY/satisfied. Proves the reseal defense holds across a full 30-day chain.
+    days = list(_days(_BASE_INDEX, 30))
+    days[10] = _reseal_day(days[10], session_started_at_ns_list=(0,))
+    supplied = tuple(days)
+    decision = _build(supplied, expected_operational_day_evidence_digests=_anchors(supplied))
+    assert decision.status is PaperAttestedOperationalThirtyDayGateDecisionStatus.REJECTED
+    assert _rc("operational_day_session_content_invalid") in decision.reason_codes
+    assert decision.attested_operational_thirty_day_gate_satisfied is False
+
+
 # --------------------------------------------------------------------------------------------------
 # 8. Cross-day scope
 # --------------------------------------------------------------------------------------------------
