@@ -970,15 +970,24 @@ def _verdict_coherence_failures(
     ):
         hard.append(_reason("comparison_verdict_incoherent"))
 
+    # A corrupted exact-typed artifact (already digest-mismatched above) must never crash this recompute:
+    # every Decimal input is proven a plain non-empty string FIRST, and any conversion/arithmetic failure is
+    # caught broadly — the decision can only fail closed, never raise past the completion boundary.
     backtest_repr = comparison_evidence.backtest_sharpe_repr
-    if not _is_plain_non_empty_string(backtest_repr):
+    paper_value = sharpe_evidence.paper_sharpe_annualized
+    threshold_value = methodology.sharpe_retention_ratio
+    if (
+        not _is_plain_non_empty_string(backtest_repr)
+        or not _is_plain_non_empty_string(paper_value)
+        or not _is_plain_non_empty_string(threshold_value)
+    ):
         hard.append(_reason("retention_recompute_mismatch"))
         return hard
     try:
         recomputed_ratio, recomputed_satisfied = _recompute_retention_verdict(
-            sharpe_evidence.paper_sharpe_annualized, backtest_repr, methodology.sharpe_retention_ratio
+            paper_value, backtest_repr, threshold_value
         )
-    except ArithmeticError:
+    except (ArithmeticError, TypeError, ValueError):
         hard.append(_reason("retention_recompute_mismatch"))
         return hard
     if recomputed_ratio != comparison_evidence.sharpe_retention_ratio_decimal:

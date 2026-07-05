@@ -1015,6 +1015,26 @@ def test_malformed_backtest_repr_rejects_without_decimal_crash() -> None:
     assert _rc("retention_recompute_mismatch") in decision.reason_codes
 
 
+@pytest.mark.parametrize("corrupted_value", [None, 1.5, b"0.5"])
+def test_corrupted_paper_sharpe_rejects_without_crash(corrupted_value: object) -> None:
+    # Codex P2 regression: a corrupted exact-typed sharpe evidence (digest reproof already fails) must
+    # produce a deterministic REJECTED decision — never a raw TypeError from Decimal(None) in the recompute.
+    corrupted = replace(_chain()["sharpe"], paper_sharpe_annualized=corrupted_value)  # type: ignore[arg-type]
+    decision = _build(sharpe_evidence=corrupted, expected_sharpe_evidence_digest=_HEX_A)
+    assert decision.status is PaperStage4CompletionDecisionStatus.REJECTED
+    assert _rc("sharpe_evidence_digest_mismatch") in decision.reason_codes
+    assert _rc("retention_recompute_mismatch") in decision.reason_codes
+    assert decision.prdv4_stage4_complete is False
+
+
+def test_corrupted_methodology_threshold_rejects_without_crash() -> None:
+    corrupted = replace(_chain()["methodology"], sharpe_retention_ratio=None)  # type: ignore[arg-type]
+    decision = _build(methodology=corrupted, expected_methodology_digest=_HEX_A)
+    assert decision.status is PaperStage4CompletionDecisionStatus.REJECTED
+    assert _rc("methodology_digest_mismatch") in decision.reason_codes
+    assert _rc("retention_recompute_mismatch") in decision.reason_codes
+
+
 # --------------------------------------------------------------------------------------------------
 # 11. Raise matrix (call-boundary malformed input)
 # --------------------------------------------------------------------------------------------------
