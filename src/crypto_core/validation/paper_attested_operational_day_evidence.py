@@ -59,6 +59,11 @@ _REASON_PREFIX = "paper_attested_operational_day_evidence"
 
 _EXPECTED_WINDOW_SCHEMA_VERSION = "paper-deterministic-time-window-evidence.v1"
 _EXPECTED_WINDOW_TIME_VERSION = "paper-deterministic-time-window.v1"
+# The upstream time-window contract for a trusted operational-day session: injected deterministic time policy
+# and the exact eligibility invariants that make ``sample_eligible=True`` valid. Re-pinned + recomputed here so
+# a digest-resealed window cannot smuggle a non-injected/clock-labeled policy or a tampered eligibility flag.
+_EXPECTED_TIMESTAMP_POLICY = "injected_deterministic_ns.v1"
+_EXPECTED_SUMMARY_READINESS_VERDICT = "PAPER_STAGE4_CANDIDATE"
 
 _UTC_DAY_POLICY = "utc_epoch_day_index.v1"
 _NANOSECONDS_PER_DAY = 86_400_000_000_000
@@ -319,6 +324,24 @@ def _recomputed_window_digest_or_none(window: PaperDeterministicTimeWindowEviden
         return None
 
 
+def _sample_eligibility_consistent(window: PaperDeterministicTimeWindowEvidence) -> bool:
+    """Recompute the upstream invariants that make ``sample_eligible=True`` valid (never trust the bare flag).
+
+    Mirrors ``paper_deterministic_time_window_adapter``: a CANDIDATE window is sample-eligible ONLY with a
+    ready CANDIDATE summary, a positive injected duration + >=1 observation, and positive/coherent
+    event / computed-event / source-event evidence. A digest-resealed window that leaves ``sample_eligible``
+    True while flipping ``summary_ready`` / ``summary_readiness_verdict`` / counts is caught here.
+    """
+    return (
+        window.summary_ready is True
+        and window.summary_readiness_verdict == _EXPECTED_SUMMARY_READINESS_VERDICT
+        and _is_positive_int(window.sample_observation_count)
+        and _is_positive_int(window.event_count)
+        and _is_positive_int(window.computed_event_count)
+        and _is_positive_int(window.source_event_digest_count)
+    )
+
+
 def _window_failures(
     window: PaperDeterministicTimeWindowEvidence,
     expected_digest: str,
@@ -343,6 +366,8 @@ def _window_failures(
         or window.time_window_version != _EXPECTED_WINDOW_TIME_VERSION
     ):
         hard.append(_reason("session_window_schema_invalid"))
+    if window.timestamp_policy != _EXPECTED_TIMESTAMP_POLICY:
+        hard.append(_reason("session_window_timestamp_policy_invalid"))
     if (
         window.status is not PaperDeterministicTimeWindowEvidenceStatus.READY
         or window.ready is not True
@@ -351,6 +376,8 @@ def _window_failures(
         hard.append(_reason("session_window_not_ready"))
     if window.sample_eligible is not True:
         hard.append(_reason("session_window_not_sample_eligible"))
+    elif not _sample_eligibility_consistent(window):
+        hard.append(_reason("session_window_eligibility_inconsistent"))
     if not _is_positive_int(window.source_event_digest_count):
         hard.append(_reason("session_window_source_events_missing"))
 

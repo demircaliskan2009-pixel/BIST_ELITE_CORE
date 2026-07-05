@@ -399,6 +399,36 @@ def test_window_eligibility_failures_reject(changes: dict, reason: str) -> None:
     assert _rc(reason) in evidence.reason_codes
 
 
+def test_non_injected_timestamp_policy_rejects() -> None:
+    # Codex P1 regression: a resealed window whose timestamp_policy is changed away from
+    # injected_deterministic_ns.v1 (e.g. a clock-labeled policy) must be rejected at this boundary.
+    window = _reseal_window(_window(), timestamp_policy="wall_clock.v1")
+    evidence = _build((window,))
+    assert evidence.status is PaperAttestedOperationalDayEvidenceStatus.REJECTED
+    assert _rc("session_window_timestamp_policy_invalid") in evidence.reason_codes
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"summary_ready": False},
+        {"summary_readiness_verdict": "PAPER_BLOCKED"},
+        {"summary_readiness_verdict": "PAPER_REVIEW_REQUIRED"},
+        {"sample_observation_count": 0},
+        {"event_count": 0},
+        {"computed_event_count": 0},
+    ],
+)
+def test_tampered_sample_eligibility_rejects(changes: dict) -> None:
+    # Codex P1 regression: sample_eligible=True is not trusted as a bare flag; the upstream eligibility
+    # invariants are recomputed, so a resealed window that keeps the flag True while flipping the fields that
+    # justify it is rejected as inconsistent.
+    window = _reseal_window(_window(), sample_eligible=True, **changes)
+    evidence = _build((window,))
+    assert evidence.status is PaperAttestedOperationalDayEvidenceStatus.REJECTED
+    assert _rc("session_window_eligibility_inconsistent") in evidence.reason_codes
+
+
 def test_zero_duration_window_rejects() -> None:
     window = _reseal_window(_window(), stopped_at_ns=_DAY_START, window_duration_ns=0)
     evidence = _build((window,))
