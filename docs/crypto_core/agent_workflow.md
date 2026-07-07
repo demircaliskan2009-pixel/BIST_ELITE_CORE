@@ -374,6 +374,47 @@ Decimal-authoritative retention verdict), #317 (`PaperStage4CompletionDecision` 
 (next: `PaperStage4CompletionDecisionV2`, Path A conservative). No live/shadow/Deribit/Stage-4 completion
 without separate authorization — unchanged.
 
+### 20.5 Future Prompt Templates (Fable-era; historical, superseded by §21.7 post-Fable skeletons)
+
+**Fable 5 (high-reasoning design/audit/governance):**
+`TASK` (design/audit/governance objective) · `MODEL: Fable 5 — STOP_WITH_PROOF if not; report actual model`
+· `STATE_TO_VERIFY` (main SHA, merged PRs, open-PR count) · `READ` (setup files first: `AGENTS.md`,
+`agent_workflow.md` §§ relevant, named task files) · ask for broad repo scan **with justification**,
+contradiction detection, model/tool routing decision, P1/P2 classification, exact next action ·
+`FORBIDDEN: implementation unless explicitly authorized` · report includes `FABLE5_CONFIRMED`.
+
+**Opus 4.8 (implementation/repair):**
+`TASK` (bounded slice) · branch + PR named · exact allowed files · implementation contract (digest/
+fail-closed/non-overclaim invariants) · tests required · validation ladder (targeted → full helper →
+`git diff --check`) · CI poll to terminal · same-branch repair loop allowed within scope · **no merge** ·
+fixed report fields (§10).
+
+**Fast Auto / Sonnet (mechanical):**
+`TASK` (status / CI / merge / post-verify) · exact PR number + pinned head SHA · **no code edits** · stop
+conditions (stale head, non-terminal CI, unresolved threads, CHANGES_REQUESTED) · bounded terminal polling
+· fixed report fields.
+
+**Codex (independent audit):**
+read-only · no edits/comments unless explicitly authorized · P1/P2 adversarial audit of the named PR at the
+pinned head · scope + forbidden-surface audit · verdict `READY / NOT_READY` with §10 Codex fields · never
+mixed with Claude prompt grammar.
+
+**GitHub connector (final gate):**
+source-of-truth gate for the named PR · verify head/base/files/checks/reviews/threads/code-scanning ·
+**no mutation** · output `PASS / BLOCK / UNKNOWN` with evidence lines.
+
+**Deep Research (external facts):**
+official/current external-source audit for a named question · cite sources; separate
+`REPO_EVIDENCE / EXTERNAL_EVIDENCE / INFERENCE / UNKNOWN` · no repo-state claims without repo evidence ·
+advisory only (§19 misuse-prevention binds).
+
+### 20.6 Non-overclaim
+
+Better reasoning is not proof. No lane may claim live/private-API/orders/readiness/Deribit/capital/
+scheduler behavior, edge/profitability, or Stage-4 completion without artifacts and separate authorization;
+no BIST leakage; no official Fable 5 limit/pricing/quota claims unless proven (status as of v4.4:
+UNPROVEN). "Fable 5 can replace audits / the connector gate / CI" is a forbidden claim.
+
 ## 21. Post-Fable Operating Model (Fable 5 exit — 2026-07-07)
 
 Fable 5 (`claude-fable-5`) is **no longer assumed available** after 2026-07-07. Everything Fable 5 previously
@@ -420,14 +461,20 @@ concurrently with Claude and never merges (§2 / §2a / §8 bind unchanged).
 
 ### 21.4 Mandatory PR loop (gates unchanged; post-Fable lanes)
 
-1. State proof on clean synced `main` (Sonnet/Fast). 2. 0-open-PR check. 3. Design or implementation
-(Opus 4.8 xhigh). 4. Local validation (ruff check/format, targeted pytest, logged full suite, `git diff
+1. State proof on clean synced `main` (Sonnet/Fast). 2. 0-open-PR check. 3a. Design draft for the named
+slice (Opus 4.8 xhigh) — pin the contract; no implementation yet. 3b. **Codex P1/P2 design audit BEFORE
+implementation** — mandatory whenever the slice is high-risk or contract-defining (§21.2/§21.3); proceed
+only once CLEAN or all P1/P2 findings are repaired; skip only for mechanical/low-risk docs-only work;
+**Fable/Claude self-review never satisfies this gate.** 3c. Implementation (Opus 4.8 xhigh), only after
+3a/3b and after the user/controller has selected the exact next slice and the one-open-PR rule is
+satisfied. 4. Local validation (ruff check/format, targeted pytest, logged full suite, `git diff
 --check`). 5. PR. 6. CI poll to terminal — pending/queued/in-progress/no-checks = **NOT_READY**
-(Sonnet/Fast, bounded snapshots). 7. Codex P1/P2 audit for high-risk PRs. 8. Same-branch repair if needed
-(Opus 4.8 xhigh). 9. **GitHub-connector final gate — never waived.** 10. **Explicit per-PR user merge
-authorization.** 11. Standard head-pinned merge (Sonnet/Fast; never squash/rebase/admin). 12. Post-merge
-`main` verification. 13. 0 open PRs. 14. Next slice. One open PR at a time; no direct `main` push; no force
-push.
+(Sonnet/Fast, bounded snapshots). 7. Codex P1/P2 implementation audit for high-risk PRs, before the
+connector gate. 8. Same-branch repair if needed (Opus 4.8 xhigh). 9. **GitHub-connector final gate — never
+waived.** 10. **Explicit per-PR user merge authorization.** 11. Standard head-pinned merge (Sonnet/Fast;
+never squash/rebase/admin). 12. Post-merge `main` verification. 13. 0 open PRs. 14. Next slice. One open PR
+at a time; no direct `main` push; no force push. Codex never merges or patches concurrently with Claude
+unless explicitly rerouted (§2/§2a/§8 bind unchanged).
 
 ### 21.5 Non-overclaim doctrine (attestation is NEVER machine proof)
 
@@ -503,47 +550,6 @@ design contracts, never repo current-state proof**, and Fable self-review never 
 replaces) the independent Codex audit or the connector gate. Do not assume Fable 5 availability in
 any future task. If Fable 5 reappears, §20 applies opportunistically again — but no plan may depend
 on it, and §21 remains the default operating model.
-
-### 20.5 Future Prompt Templates
-
-**Fable 5 (high-reasoning design/audit/governance):**
-`TASK` (design/audit/governance objective) · `MODEL: Fable 5 — STOP_WITH_PROOF if not; report actual model`
-· `STATE_TO_VERIFY` (main SHA, merged PRs, open-PR count) · `READ` (setup files first: `AGENTS.md`,
-`agent_workflow.md` §§ relevant, named task files) · ask for broad repo scan **with justification**,
-contradiction detection, model/tool routing decision, P1/P2 classification, exact next action ·
-`FORBIDDEN: implementation unless explicitly authorized` · report includes `FABLE5_CONFIRMED`.
-
-**Opus 4.8 (implementation/repair):**
-`TASK` (bounded slice) · branch + PR named · exact allowed files · implementation contract (digest/
-fail-closed/non-overclaim invariants) · tests required · validation ladder (targeted → full helper →
-`git diff --check`) · CI poll to terminal · same-branch repair loop allowed within scope · **no merge** ·
-fixed report fields (§10).
-
-**Fast Auto / Sonnet (mechanical):**
-`TASK` (status / CI / merge / post-verify) · exact PR number + pinned head SHA · **no code edits** · stop
-conditions (stale head, non-terminal CI, unresolved threads, CHANGES_REQUESTED) · bounded terminal polling
-· fixed report fields.
-
-**Codex (independent audit):**
-read-only · no edits/comments unless explicitly authorized · P1/P2 adversarial audit of the named PR at the
-pinned head · scope + forbidden-surface audit · verdict `READY / NOT_READY` with §10 Codex fields · never
-mixed with Claude prompt grammar.
-
-**GitHub connector (final gate):**
-source-of-truth gate for the named PR · verify head/base/files/checks/reviews/threads/code-scanning ·
-**no mutation** · output `PASS / BLOCK / UNKNOWN` with evidence lines.
-
-**Deep Research (external facts):**
-official/current external-source audit for a named question · cite sources; separate
-`REPO_EVIDENCE / EXTERNAL_EVIDENCE / INFERENCE / UNKNOWN` · no repo-state claims without repo evidence ·
-advisory only (§19 misuse-prevention binds).
-
-### 20.6 Non-overclaim
-
-Better reasoning is not proof. No lane may claim live/private-API/orders/readiness/Deribit/capital/
-scheduler behavior, edge/profitability, or Stage-4 completion without artifacts and separate authorization;
-no BIST leakage; no official Fable 5 limit/pricing/quota claims unless proven (status as of v4.4:
-UNPROVEN). "Fable 5 can replace audits / the connector gate / CI" is a forbidden claim.
 
 ---
 
