@@ -27,6 +27,15 @@ authorized mutation to Claude/`gh`, the GitHub connector, or Codex. ChatGPT deci
 only recommends it (`DEEP_RESEARCH_REQUIRED`) when blocked by a current/external fact. Full protocol:
 `docs/crypto_core/deep_research_protocol.md` (`docs/crypto_core/agent_workflow.md` §19).
 
+**Post-Fable increased-use policy (`agent_workflow.md` §21, 2026-07-07):** Fable 5 availability is no
+longer assumed; Codex inherits its adversarial-reasoning share and runs MORE often — a read-only P1/P2
+audit after every high-risk design (before implementation), after every high-risk implementation (before
+the GitHub-connector final gate), and whenever a claim could overreach (completion / readiness /
+live / shadow / Deribit / machine-time proof / real orders / capital / profitability / edge). Codex stays
+read-only unless explicitly rerouted as implementation fallback. Attestation-only evidence
+(`operator_attested_not_machine_proven.v1`, all five machine-proof flags structurally False) is never
+machine proof and never Stage-4 completion.
+
 ## Gate First
 
 - Prove workspace, branch, HEAD, open PRs, and dirty files before editing.
