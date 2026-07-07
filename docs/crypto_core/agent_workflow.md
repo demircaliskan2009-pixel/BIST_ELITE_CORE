@@ -465,6 +465,12 @@ completion.
   enforcement phase (design first, then slices); methodology v2 (secondary metrics enforced); **completion
   decision v3 only after machine-time proof + enforced secondary metrics** — the only future artifact that
   may set `prdv4_stage4_complete=True`, under its own design and explicit authorization.
+- **Full Fable exit contract set + canonical queue:** indexed in
+  `docs/crypto_core/fable_exit_contract_index.md` (Stage4 v2, MT machine-time, SM secondary metrics,
+  EF edge factory, RG multi-sleeve risk governance, RF regime/vol filter, funding pilot; prompt index
+  PRM-01..32; governance-required decisions; Deep Research batches). That file is archived design
+  doctrine — **never repo current-state proof**; implement only via a scoped PR with fresh `git`/`gh`
+  state proof.
 
 ### 21.7 Prompt skeletons (post-Fable)
 
@@ -488,10 +494,15 @@ completion.
 
 ### 21.8 Fable 5 exit note
 
-Fable 5's final contributions (2026-07-07): the Stage-4 completion-v2 / roadmap master design
-(`FABLE5_STAGE4_COMPLETION_V2_AND_ROADMAP_MASTER_DESIGN`, recorded in §21.6) and this post-Fable operating
-model. Do not assume Fable 5 availability in any future task. If Fable 5 reappears, §20 applies
-opportunistically again — but no plan may depend on it, and §21 remains the default operating model.
+Fable 5's final contributions (2026-07-07): this post-Fable operating model plus the exit contract
+set — Stage-4 completion v2 (Path A, §21.6), machine-time provenance (MT), hit/fill/slippage
+secondary-metrics enforcement (SM), edge-factory gate pipeline (EF), multi-sleeve risk governance
+(RG), regime/vol filter evidence (RF), the funding/basis/carry pilot design, and the CTO council
+pack — all indexed in `docs/crypto_core/fable_exit_contract_index.md`. **Fable outputs are archived
+design contracts, never repo current-state proof**, and Fable self-review never replaced (and never
+replaces) the independent Codex audit or the connector gate. Do not assume Fable 5 availability in
+any future task. If Fable 5 reappears, §20 applies opportunistically again — but no plan may depend
+on it, and §21 remains the default operating model.
 
 ### 20.5 Future Prompt Templates
 

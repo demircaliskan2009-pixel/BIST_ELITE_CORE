@@ -306,3 +306,10 @@ head-pinned merges; `main` @ `e278293cd5537cfa7174db79a1238a686199275a` after #3
 - **Remaining before any completion=True (v3, separately authorized):** machine-time origin proof (design
   first; Deep Research likely) and enforced hit/fill/slippage secondary metrics. §10.8 guardrails and §10.9
   stop conditions bind unchanged.
+- **Canonical execution queue (ROADMAP ONLY — not current implementation state; every step needs its own
+  authorization and fresh state proof):** PR #320 merge → `PaperStage4CompletionDecisionV2` → docs-sync →
+  completion review dossier → design-doc chores `[SM-1, MT-1, EF-1, RG-1, RF-1]` → combined Deep Research
+  `[PRM-07 + PRM-16]` → governance threshold approvals → SM-2..6 → EF-2..8 → RG-2..8 → RF-2..7 → MT-2..6 →
+  funding pilot slices → completion decision **v3 only if all required proofs exist** (machine-proven
+  30-day gate + enforced secondary metrics + explicit human authorization). Contract details:
+  `docs/crypto_core/fable_exit_contract_index.md` (archived design doctrine, never current-state proof).

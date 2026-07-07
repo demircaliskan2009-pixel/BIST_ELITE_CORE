@@ -35,6 +35,12 @@
   merge/post-verify — never Opus/Codex); **GitHub connector** final gate stays mandatory and never waived;
   **Deep Research** only for external/current facts. Attestation-only evidence
   (`operator_attested_not_machine_proven.v1`) is never machine proof.
+- **Fable exit contract index:** `docs/crypto_core/fable_exit_contract_index.md` holds the archived
+  Fable 5 design contracts (Stage4 v2, MT, SM, EF, RG, RF, funding pilot; prompt index PRM-01..32;
+  canonical queue; governance-required decisions; Deep Research batches). These are design doctrine,
+  **never current-state proof** — implement only via a scoped PR with fresh `git`/`gh` proof. A Codex
+  read-only audit is required after every high-risk design and implementation; the GitHub-connector
+  final gate is required before every merge authorization.
 - Current next-slice routing (after PR #319, `agent_workflow.md` §21.6): next technical PR is
   `PaperStage4CompletionDecisionV2` — Path A conservative: consumes the comparison/Sharpe/30-day chain,
   the attested 30-day gate (#319), and the predecessor v1 decision; proves selected UTC day-index

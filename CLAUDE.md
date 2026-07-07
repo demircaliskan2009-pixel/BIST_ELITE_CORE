@@ -30,3 +30,19 @@ Key hard rules (full list in the workflow doc):
 - Digest-boundary rule: consumers of digest-carrying objects recompute the upstream digest via the
   public serializer and reject mismatch before READY/ADMITTED/ACCEPTED.
 - Never claim repo/PR/CI state from memory — prove with fresh `git`/`gh` output or mark UNKNOWN.
+
+Claude operating contract (post-Fable, canonical detail in `agent_workflow.md` §21):
+
+- Never self-approve (`gh pr review --approve`), never expand an open PR beyond its named scope;
+  review-blocker repair happens on the same branch only.
+- Consume Codex findings surgically: fix only real in-scope findings, add regression proof, rerun
+  validation, push, re-prove checks; resolve only proven-fixed automated threads, never human ones.
+- Prepare the connector final gate with a head-pinned state proof (PR state, head SHA, files,
+  checks, threads); pending/queued/in-progress/no-checks = NOT_READY.
+- Stop with proof when scope would widen, validation fails out of scope, an external/current fact
+  is needed (DEEP_RESEARCH_REQUIRED), or a merge/authorization gate is reached.
+- Anti-waste: never an expensive lane for CI polling/status/merge mechanics; named files first;
+  failure tails only, no full log dumps. Reports carry at minimum RESULT / FILES_CHANGED /
+  VALIDATION / NEXT_SAFE_ACTION.
+- Archived Fable design contracts live in `docs/crypto_core/fable_exit_contract_index.md` — design
+  doctrine only, never current-state proof.

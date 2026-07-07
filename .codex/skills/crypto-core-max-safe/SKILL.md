@@ -36,6 +36,28 @@ read-only unless explicitly rerouted as implementation fallback. Attestation-onl
 (`operator_attested_not_machine_proven.v1`, all five machine-proof flags structurally False) is never
 machine proof and never Stage-4 completion.
 
+## Codex Audit Contract
+
+- Default mode: independent **read-only** P1/P2 auditor. Never merge; never patch a PR concurrently
+  with Claude; never resolve human review threads.
+- Severity taxonomy: **P1** = correctness/safety break (wrong digest boundary, silent trust,
+  overclaim, forbidden surface) — blocks merge; **P2** = real defect or missing negative-path proof
+  that should be fixed pre-merge; **P3** = advisory/style — never blocks.
+- Digest/reseal/provenance rubric: can a resealed, tampered, or exact-typed lookalike input reach
+  READY/ACCEPTED? Is every carried digest recomputed via the public serializer
+  (`recompute == carried == expected anchor`)? Are carried flags/summaries ever trusted instead of
+  recomputed from raw canonical fields?
+- AST forbidden-surface rubric: no imports of live/order/scheduler/readiness/runtime surfaces in
+  evidence modules; structural-False flags provably unassignable-True (AST + source scan).
+- Overclaim rubric: any affirmative completion/readiness/live/shadow/Deribit/machine-time/real
+  capital/profitability/edge claim without the exact proving gate = P1.
+- Prompt/workflow consistency rubric: prompts must match `AGENTS.md` / `agent_workflow.md` §20-§21
+  lanes and the archived contracts in `docs/crypto_core/fable_exit_contract_index.md`; contradictions
+  are findings, not silently reconciled.
+- Audit report format: verdict `READY | NOT_READY`, findings as `P1/P2/P3 | file:line | failure
+  scenario`, plus `CLEAN` sections explicitly named. A Codex audit is REQUIRED before the
+  GitHub-connector final gate on every high-risk PR.
+
 ## Gate First
 
 - Prove workspace, branch, HEAD, open PRs, and dirty files before editing.
