@@ -39,7 +39,10 @@ T4 decisions; paste-ready Claude/Codex setup packs; gap register).
 detailed source):** `paper_stage4_completion_decision_v2_design.md` (v2 — the Codex design-audit
 input), `secondary_metrics_enforcement_design.md` (SM), `machine_time_provenance_design.md` (MT),
 `edge_factory_design.md` (EF), `multi_sleeve_risk_governance_design.md` (RG),
-`regime_volatility_filter_design.md` (RF), `governance_decision_framework.md` (every
+`regime_volatility_filter_design.md` (RF), `funding_basis_carry_pilot_design.md` (pilot —
+candidate ladder S1→S4→S3→S2→S5 with pre-committed failure definitions),
+`deep_research_question_pack.md` (the combined DR round: venue mechanics + machine-time sources +
+packet-conditional; supersedes archived PRM-07/16 sets), `governance_decision_framework.md` (every
 GOVERNANCE_REQUIRED constant with trade-offs; numbers stay human-owned),
 `stage4_completion_v3_skeleton.md` (v3 invariant skeleton — MT/SM-independent). All DESIGN ONLY:
 same usage rules as this index (fresh repo proof + scoped PR before any implementation).
