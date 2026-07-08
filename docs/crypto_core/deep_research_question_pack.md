@@ -58,8 +58,11 @@ For each candidate venue class (major perp venues; exact venue list is itself qu
 
 ## Routing
 
-Run as ONE combined round (token/effort efficiency). Answers land as: Batch A → pilot packet
-constants + `governance_decision_framework.md` §7 approvals; Batch B → MT-3
-`machine_time_source_registry.py` constants (citation ids mandatory); Batch C → RF policy
-enable/disable flags for F5/F6. No answer authorizes implementation by itself — every consumer
+Run as ONE combined round (token/effort efficiency). Answers land as: Batch A → cited fact packet
+and decision inputs for pilot packet constants plus `governance_decision_framework.md` §7
+human/controller approval; Batch B → cited fact packet and decision inputs for MT-3
+`machine_time_source_registry.py`; Batch C → cited fact packet and decision inputs for RF policy
+enable/disable flags for F5/F6. No DR answer approves a value by itself — any repo constant must
+be introduced later through a separate scoped governance/registry PR with citations, required
+approvals, and the full §21.4 gate order. No answer authorizes implementation by itself — every consumer
 slice still runs the full §21.4 gate order.
