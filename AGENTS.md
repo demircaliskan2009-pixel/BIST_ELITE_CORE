@@ -151,9 +151,14 @@
 
 ## Token Economy
 
-- Keep durable rails here instead of repeating giant prompts or Claude guides.
+- Canonical playbook: `docs/crypto_core/token_efficiency_playbook.md` (task classes T0-T4 with
+  context budgets, intake protocol, report compression, prompt reuse, lane budget matrix,
+  anti-patterns); binding summary in `agent_workflow.md` §22. Token saving is subordinate to
+  correctness — no gate, audit, or proof requirement is ever weakened to save tokens.
+- Keep durable rails here instead of repeating giant prompts or Claude guides; new instructions
+  link to the canonical location instead of duplicating it across `AGENTS.md`/`CLAUDE.md`/skills.
 - Read named files first, then use targeted `rg` for narrow symbol lookups. Avoid broad scans unless
-  justified by the task.
+  justified by the task. Build one source surface map; do not reread unchanged files.
 - Avoid full log dumps. Summarize key lines, failures, and proof.
 - Use one thread per coherent task, short reports, and compact status updates.
 - Use goals/subagents/skills only when they materially reduce risk or token cost.
