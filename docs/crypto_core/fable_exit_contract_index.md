@@ -29,11 +29,20 @@ in every artifact until the exact gate designed to prove them does so, under its
 | **EF** (edge factory) | 7-gate idea→spec→admission→kill pipeline for new edges | EF-1 design doc; EF-2..8 slices (`edge_` module namespace) | `status` (trust) vs `gate_verdict` (outcome) separation; dual anchor = root intake digest + predecessor digest; `NEEDS_*` never advances; kill-criteria lifecycle draft→superset→seal→immutable; preregistered search bounds (multiple-testing ledger); gate 6 re-proves the full back-chain; gate 7 lifecycle state machine (DISABLED >30d → QUARANTINE >=14d → revalidation; no auto-reactivation) | No |
 | **RG** (multi-sleeve risk governance) | Portfolio-level paper risk envelope + allocator governance over isolated sleeves | RG-1 design doc; RG-2..8 slices | 7 artifacts: portfolio risk envelope → sleeve performance/drawdown → correlation (unknown correlation = worst-case 1, fail-closed) → promotion/demotion ladder → allocator (envelope exceeded = REJECTED, no silent scaling; kill-override BEFORE arithmetic) → `paper_portfolio_governance_decision`; existing `paper_sleeve_risk_budget_decision` reused as intra-sleeve layer; `audit/portfolio_governor_*` readiness surfaces stay out of scope | No |
 | **RF** (regime/vol filter) | Deterministic PIT-grade regime labels as evidence (regime filter is NOT an edge) | RF-1 design doc; RF-2..7 slices (`validation/regime_*` namespace) | RegimeFeaturePolicy (preregistration core) → FeatureSeriesEvidence (builder recomputes values from raw-input digests) → LabelEvidence (per-UTC-day, prior-day-close discipline, UNLABELED fail-closed + cap) → StabilityEvidence (dual-as-of label recompute equality = structural repaint proof) → FilterAdmissionDecision (policy digest must be a member of the EF-5 preregistration ledger — post-performance filter creation structurally impossible) → ConditionedPerformanceEvidence (feeds EF gate-6 `regime_split` + RG correlation stratification via a digest-bound pending pattern). `regime/tracker.py` (stateful/float/wall-clock) is runtime reference only — never imported by the evidence chain | Only F5/F6 feature classes (packet-conditional) |
-| **Funding pilot** (funding/basis/carry) | First edge-family pilot through the EF pipeline | Pilot slices after EF/RG/RF substrate | Repo already has `FundingRateEdge` + PIT-grade `FUNDING_RATE` DataRequirement (`funding_published_ns`/`funding_finalized_ns`, `predicted|final`); candidate order S1 passive carry → S4 vol-gated → S3 continuation → S2 basis mean-reversion → S5 two-leg (S5 blocked until SM enforced); features consume `final` funding semantics only | Yes (11-question venue-mechanics set, PRM-16) |
+| **Funding pilot** (funding/basis/carry) | First edge-family pilot through the EF pipeline | Pilot slices after EF/RG/RF substrate | Repo already has `FundingRateEdge` + PIT-grade `FUNDING_RATE` DataRequirement (`funding_published_ns`/`funding_finalized_ns`, `predicted`/`final`); candidate order S1 passive carry → S4 vol-gated → S3 continuation → S2 basis mean-reversion → S5 two-leg (S5 blocked until SM enforced); features consume `final` funding semantics only | Yes (11-question venue-mechanics set, PRM-16) |
 
 Companion doctrine locked the same day: post-Fable operating model (`agent_workflow.md` §21), CTO
 council pack (agent council protocol: Opus draft + Codex counter + internal-council synthesis for
 T4 decisions; paste-ready Claude/Codex setup packs; gap register).
+
+**Full design documents (Fable-authored 2026-07-08; supersede the one-line rows above as the
+detailed source):** `paper_stage4_completion_decision_v2_design.md` (v2 — the Codex design-audit
+input), `secondary_metrics_enforcement_design.md` (SM), `machine_time_provenance_design.md` (MT),
+`edge_factory_design.md` (EF), `multi_sleeve_risk_governance_design.md` (RG),
+`regime_volatility_filter_design.md` (RF), `governance_decision_framework.md` (every
+GOVERNANCE_REQUIRED constant with trade-offs; numbers stay human-owned),
+`stage4_completion_v3_skeleton.md` (v3 invariant skeleton — MT/SM-independent). All DESIGN ONLY:
+same usage rules as this index (fresh repo proof + scoped PR before any implementation).
 
 ## 3. Canonical execution queue
 
