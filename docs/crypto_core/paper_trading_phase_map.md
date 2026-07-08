@@ -282,3 +282,34 @@ A future §10.4 feature PR must **stop with proof** if it would: require live / 
 adapter surfaces; require real wall-clock; duplicate an existing aggregate / artifact; fail to prove public
 digest binding (recompute == stored == anchor); blur a paper-substrate candidate with actual Stage-4
 completion; or claim live / shadow / readiness / edge / profitability.
+
+## 11. Stage-4 methodology chain status (post-PR #319, recorded 2026-07-07)
+
+The §10.4 sequence is complete and the Stage-4 methodology chain continued past it. Merged (all standard
+head-pinned merges; `main` @ `e278293cd5537cfa7174db79a1238a686199275a` after #319):
+
+- #310 `paper_sharpe_evidence` → #311 `paper_vs_backtest_methodology` → #312 `paper_edge_identity_evidence`
+  → #313 `paper_stage4_backtest_baseline_evidence` → #316 `PaperStage4ComparisonEvidence` (first authorized
+  `compare_stage4` call; Decimal-authoritative retention verdict) → #317 `PaperStage4CompletionDecision` v1
+  (**BLOCKED completion** — `prdv4_stage4_complete=False` structural, four digest-bound blockers) →
+  #318 `PaperAttestedOperationalDayEvidence` → #319 `PaperAttestedOperationalThirtyDayGateDecision`.
+- The #318/#319 attested chain is **operator-attested, not machine-proven**
+  (`attestation_source="operator_attested_not_machine_proven.v1"`; all five machine-proof flags structurally
+  False). A satisfied attested gate is **not** operational readiness, not machine-time proof, and not
+  Stage-4 completion.
+- **Next technical PR:** `PaperStage4CompletionDecisionV2` — Path A conservative
+  (`docs/crypto_core/agent_workflow.md` §21.6): consumes the comparison/Sharpe/30-day chain, the attested
+  30-day gate, and the predecessor v1 decision; proves selected UTC day-index alignment; keeps
+  `prdv4_stage4_complete=False`; narrows blockers (drop stale `operational_day_evidence_source_unavailable`;
+  add `operator_attested_only_machine_time_origin_unproven`; keep
+  `timestamp_origin_not_proven_injected_deterministic_time_only` and the secondary-metrics blocker).
+- **Remaining before any completion=True (v3, separately authorized):** machine-time origin proof (design
+  first; Deep Research likely) and enforced hit/fill/slippage secondary metrics. §10.8 guardrails and §10.9
+  stop conditions bind unchanged.
+- **Canonical execution queue (ROADMAP ONLY — not current implementation state; every step needs its own
+  authorization and fresh state proof):** PR #320 merge → `PaperStage4CompletionDecisionV2` → docs-sync →
+  completion review dossier → design-doc chores `[SM-1, MT-1, EF-1, RG-1, RF-1]` → combined Deep Research
+  `[PRM-07 + PRM-16]` → governance threshold approvals → SM-2..6 → EF-2..8 → RG-2..8 → RF-2..7 → MT-2..6 →
+  funding pilot slices → completion decision **v3 only if all required proofs exist** (machine-proven
+  30-day gate + enforced secondary metrics + explicit human authorization). Contract details:
+  `docs/crypto_core/fable_exit_contract_index.md` (archived design doctrine, never current-state proof).

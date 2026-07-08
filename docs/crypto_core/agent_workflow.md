@@ -302,6 +302,10 @@ gate, or explicit per-PR merge authorization. Official Fable 5 limits / quota / 
 **UNPROVEN** in this repo — treat availability limits as a user-reported operational constraint and never
 state official policy without proof.
 
+**As of 2026-07-07, Fable 5 availability is NO LONGER ASSUMED.** §20 applies only opportunistically when
+Fable 5 happens to be present; no plan, prompt, schedule, or roadmap step may depend on it. Whenever Fable 5
+is absent, **§21 (Post-Fable Operating Model) governs routing** — same hard gates, re-routed lanes.
+
 ### 20.1 Lane routing — Fable 5 / Opus 4.8 / Fast Auto / Codex / Connector / Deep Research
 
 - **Fable 5 — premium high-reasoning lane (use FIRST when available).** Route to Fable 5: repo-wide
@@ -361,20 +365,16 @@ authorization → standard head-pinned merge + post-merge verification (Fast lan
 `pending` is NOT_READY — poll to terminal with bounded snapshots (never `--watch`); §3 / §11 / §13 / §16
 bind unchanged for every lane.
 
-### 20.4 Current next-slice routing (after PR #314)
+### 20.4 Next-slice routing (SUPERSEDED 2026-07-07 — see §21.6)
 
-- **Next:** `PaperStage4ComparisonEvidence` — route governance/design to **Fable 5 first**. It is the first
-  artifact allowed to call `compare_stage4`, and it **must recompute the Sharpe-retention verdict in
-  Decimal** from the digest-bound inputs — `compare_stage4` is float-based, so its float retention output is
-  advisory echo only, never the verdict source. It consumes the merged #310 Sharpe / #311 methodology /
-  #312 edge-identity / #313 baseline-evidence artifacts at their digest boundaries.
-- **Then:** `PaperStage4CompletionDecision` — the only artifact that may set `prdv4_stage4_complete=True`.
-- **Deferred:** operational-day evidence → operational-30-day gate, until a multi-session per-UTC-day
-  operational source exists (otherwise it duplicates the merged return-series 30-day gate or overclaims
-  operational readiness).
-- No live/shadow/Deribit/Stage-4 completion without separate authorization.
+This subsection's roadmap ("after PR #314") is complete and historical: #316 (`PaperStage4ComparisonEvidence`,
+Decimal-authoritative retention verdict), #317 (`PaperStage4CompletionDecision` v1 — BLOCKED completion,
+`prdv4_stage4_complete=False` structural), #318 (`PaperAttestedOperationalDayEvidence`), and #319
+(`PaperAttestedOperationalThirtyDayGateDecision`) are all MERGED. The current roadmap lives in **§21.6**
+(next: `PaperStage4CompletionDecisionV2`, Path A conservative). No live/shadow/Deribit/Stage-4 completion
+without separate authorization — unchanged.
 
-### 20.5 Future Prompt Templates
+### 20.5 Future Prompt Templates (Fable-era; historical, superseded by §21.7 post-Fable skeletons)
 
 **Fable 5 (high-reasoning design/audit/governance):**
 `TASK` (design/audit/governance objective) · `MODEL: Fable 5 — STOP_WITH_PROOF if not; report actual model`
@@ -414,6 +414,142 @@ Better reasoning is not proof. No lane may claim live/private-API/orders/readine
 scheduler behavior, edge/profitability, or Stage-4 completion without artifacts and separate authorization;
 no BIST leakage; no official Fable 5 limit/pricing/quota claims unless proven (status as of v4.4:
 UNPROVEN). "Fable 5 can replace audits / the connector gate / CI" is a forbidden claim.
+
+## 21. Post-Fable Operating Model (Fable 5 exit — 2026-07-07)
+
+Fable 5 (`claude-fable-5`) is **no longer assumed available** after 2026-07-07. Everything Fable 5 previously
+did is re-routed below. **Model strength is never proof** — every lane still runs under §3 / §11 / §13 / §16,
+CI-to-terminal, Codex review where required, the GitHub-connector final gate, and explicit per-PR user merge
+authorization, all unchanged. Doctrine unchanged: paper-first, deterministic, fail-closed, audit-first,
+derivatives-first, governance-first, risk-bounded.
+
+### 21.1 Lane table (post-Fable)
+
+| Lane | Use for | Never for |
+|---|---|---|
+| **Opus 4.8 xhigh** | Bounded high-risk implementation; repo-internal semantic design **first draft** when Fable is absent; same-branch repair; forensic debug; hard contract/digest/fail-closed work | CI polling; git hygiene; mechanical merge/post-verify; status |
+| **Codex GPT-5.5 extra-high thinking** | Independent **read-only** P1/P2 audit after design AND after implementation; second opinion on overclaim / digest / reseal / alignment / provenance / unsafe flags / AST forbidden surface; routing-decision and prompt/workflow consistency audit | Patching concurrently with Claude; merging; CI polling with model tokens |
+| **GitHub Connector** | Mandatory source-of-truth **FINAL merge-readiness gate**: PR metadata, head, files, checks, reviews, threads, code scanning. **Never waived** — if the connector app is unavailable, the same gate runs via `gh`-native commands (mechanism fallback, never a gate waiver) | Design; implementation; anything beyond state proof |
+| **Sonnet / Fast Auto** | Mechanical `git`/`gh` state; CI polling (bounded one-shot snapshots, never `--watch`); standard head-pinned merge + post-merge verification; low-risk mechanical docs edits | High-risk design, implementation, or adversarial audit |
+| **Deep Research** | External / current / high-stakes facts ONLY: exchange APIs, Deribit docs, fees, rate limits, funding/basis/carry, microstructure, regulation, custody/security, current tool behavior (§19 binds) | Repo-internal artifacts; repo/CI/merge state; replacing Codex or the connector gate |
+
+### 21.2 Fable replacement rules
+
+- Task was Fable-level **repo-internal design** → **Opus 4.8 xhigh first design draft + mandatory Codex
+  GPT-5.5 design audit BEFORE implementation.**
+- Task was Fable-level **adversarial review** → **Codex GPT-5.5 extra-high FIRST.**
+- Task involves **current external facts** → **Deep Research BEFORE implementation** (§19).
+- Task is **mechanical** → **Sonnet/Fast Auto.**
+- **No expensive lane (Opus/Codex) is ever used for CI polling, git hygiene, or mechanical
+  merge/post-verify.**
+
+### 21.3 Codex increased-use policy
+
+Codex GPT-5.5 runs **more frequently than in the Fable era** — it inherits Fable 5's adversarial-reasoning
+share. Run a Codex read-only audit:
+
+- after EVERY high-risk design, before implementation;
+- after EVERY high-risk implementation, before the connector final gate;
+- whenever a claim could overreach: completion, readiness, live/shadow/Deribit, machine-time proof,
+  real orders/capital, profitability/edge;
+- for P1/P2 classification;
+- for digest / reseal / provenance / AST-forbidden-surface audit;
+- for prompt/workflow consistency audit.
+
+Codex remains **read-only** unless explicitly rerouted as implementation fallback; it never patches a PR
+concurrently with Claude and never merges (§2 / §2a / §8 bind unchanged).
+
+### 21.4 Mandatory PR loop (gates unchanged; post-Fable lanes)
+
+1. State proof on clean synced `main` (Sonnet/Fast). 2. 0-open-PR check. 3a. Design draft for the named
+slice (Opus 4.8 xhigh) — pin the contract; no implementation yet. 3b. **Codex P1/P2 design audit BEFORE
+implementation** — mandatory whenever the slice is high-risk or contract-defining (§21.2/§21.3); proceed
+only once CLEAN or all P1/P2 findings are repaired; skip only for mechanical/low-risk docs-only work;
+**Fable/Claude self-review never satisfies this gate.** 3c. Implementation (Opus 4.8 xhigh), only after
+3a/3b and after the user/controller has selected the exact next slice and the one-open-PR rule is
+satisfied. 4. Local validation (ruff check/format, targeted pytest, logged full suite, `git diff
+--check`). 5. PR. 6. CI poll to terminal — pending/queued/in-progress/no-checks = **NOT_READY**
+(Sonnet/Fast, bounded snapshots). 7. Codex P1/P2 implementation audit for high-risk PRs, before the
+connector gate. 8. Same-branch repair if needed (Opus 4.8 xhigh). 9. **GitHub-connector final gate — never
+waived.** 10. **Explicit per-PR user merge authorization.** 11. Standard head-pinned merge (Sonnet/Fast;
+never squash/rebase/admin). 12. Post-merge `main` verification. 13. 0 open PRs. 14. Next slice. One open PR
+at a time; no direct `main` push; no force push. Codex never merges or patches concurrently with Claude
+unless explicitly rerouted (§2/§2a/§8 bind unchanged).
+
+### 21.5 Non-overclaim doctrine (attestation is NEVER machine proof)
+
+Never claim `prdv4_stage4_complete=True`, operational readiness, live readiness, shadow readiness, Deribit
+readiness, machine-time proof, real orders/capital/equity/margin/balance, production execution, private-API
+readiness, or connector readiness **unless the exact current gate proves it**. Hard rule for all future
+agents: **attestation-only evidence is never machine proof.** `PaperAttestedOperationalDayEvidence` and
+`PaperAttestedOperationalThirtyDayGateDecision` carry
+`attestation_source="operator_attested_not_machine_proven.v1"` and keep all five machine-proof flags
+(`operational_day_machine_proven`, `machine_time_origin_proven`, `timestamp_origin_proven`,
+`real_wall_clock_used`, `real_time_paper_operation_proven`) structurally False. A satisfied attested gate
+(`attested_operational_thirty_day_gate_satisfied=True`) proves internal consistency of operator-attested
+UTC days only — never that real time elapsed, never that real paper operation occurred, never Stage-4
+completion.
+
+### 21.6 Post-PR #319 roadmap (recorded 2026-07-07)
+
+- `main` after #319: `e278293cd5537cfa7174db79a1238a686199275a`. Merged Stage-4 methodology chain:
+  #310 Sharpe, #311 methodology, #312 edge identity, #313 baseline binding, #316 comparison evidence,
+  #317 completion decision v1 (BLOCKED), #318 attested operational day, #319 attested 30-day gate.
+- **Next technical PR: `PaperStage4CompletionDecisionV2` — Path A (conservative), Fable-designed
+  2026-07-07.** v2 consumes `PaperStage4ComparisonEvidence`, the return-series/Sharpe/30-day evidence
+  chain, `PaperAttestedOperationalThirtyDayGateDecision`, and the predecessor v1 completion decision
+  (chain-continuity check on v1's `verified_*` digests); proves selected UTC day-index alignment
+  (`gate_used_first/last_bucket_*_ns // 86_400_000_000_000` vs `selected_utc_day_indices`, with
+  day-alignment re-pin before division); keeps **`prdv4_stage4_complete=False` structural**. Blocker
+  narrowing: drop stale `operational_day_evidence_source_unavailable`; replace
+  `prdv4_minimum_30_day_live_paper_trading_unproven` with
+  `operator_attested_only_machine_time_origin_unproven`; keep
+  `timestamp_origin_not_proven_injected_deterministic_time_only` and
+  `secondary_comparison_metrics_hit_fill_slippage_declared_not_enforced_v1`. v2 must NOT claim completion,
+  readiness, or machine proof.
+- **After v2 (each its own authorization):** docs phase-map update; `paper_stage4_completion_review_package`
+  dossier; machine-time provenance DESIGN (Deep Research likely required); hit/fill/slippage trade-record
+  enforcement phase (design first, then slices); methodology v2 (secondary metrics enforced); **completion
+  decision v3 only after machine-time proof + enforced secondary metrics** — the only future artifact that
+  may set `prdv4_stage4_complete=True`, under its own design and explicit authorization.
+- **Full Fable exit contract set + canonical queue:** indexed in
+  `docs/crypto_core/fable_exit_contract_index.md` (Stage4 v2, MT machine-time, SM secondary metrics,
+  EF edge factory, RG multi-sleeve risk governance, RF regime/vol filter, funding pilot; prompt index
+  PRM-01..32; governance-required decisions; Deep Research batches). That file is archived design
+  doctrine — **never repo current-state proof**; implement only via a scoped PR with fresh `git`/`gh`
+  state proof.
+
+### 21.7 Prompt skeletons (post-Fable)
+
+- **Opus implementation:** "Opus 4.8 xhigh. Branch `feature/<scope>-prN` from proven clean `main` @ `<SHA>`.
+  Exactly `<N named files>`. Implement `<contract reference>`. Validate: ruff check/format, targeted pytest,
+  related tests, `run_full_tests_logged.ps1` PYTEST_EXIT=0, `git diff --check`. Scoped `git add`. Open PR.
+  No merge without explicit authorization. Report: RESULT / FILES_CHANGED / VALIDATION / NEXT_SAFE_ACTION."
+- **Codex P1/P2 audit:** "Read-only adversarial P1/P2 audit of PR `<N>`. Focus: digest-resealed exact-typed
+  inputs reaching READY; overclaim/unsafe flags; alignment arithmetic edge cases; AST forbidden surface;
+  raise-vs-REJECTED boundaries. No patching. Report P1/P2 with file:line."
+- **GitHub Connector final gate:** "Read-only final gate for PR `<N>`: verify state OPEN/non-draft, head
+  `<SHA>`, exact changed files, all checks SUCCESS (pending = NOT_READY), review threads resolved, no human
+  CHANGES_REQUESTED, code scanning clear. Verdict: READY_FOR_MERGE_AUTHORIZATION | NOT_READY, with proof."
+- **Sonnet merge/post-verify:** "Authorized merge of PR `<N>` ONLY: re-verify head/files/checks/threads;
+  `gh pr merge <N> --merge --match-head-commit <SHA>`; post-merge: ff-only pull of `main`, ruff + format
+  check, targeted + related tests, logged full suite PYTEST_EXIT=0, 0 open PRs, clean `git status`. No other
+  PR, no code edits, no next slice."
+- **Deep Research trigger:** "DEEP_RESEARCH_REQUIRED: `<exact external/current question>`. Reason: the repo
+  cannot prove this fact internally. Constraints: read-only advisory, §19 output contract, stricter repo
+  safety rule wins on conflict."
+
+### 21.8 Fable 5 exit note
+
+Fable 5's final contributions (2026-07-07): this post-Fable operating model plus the exit contract
+set — Stage-4 completion v2 (Path A, §21.6), machine-time provenance (MT), hit/fill/slippage
+secondary-metrics enforcement (SM), edge-factory gate pipeline (EF), multi-sleeve risk governance
+(RG), regime/vol filter evidence (RF), the funding/basis/carry pilot design, and the CTO council
+pack — all indexed in `docs/crypto_core/fable_exit_contract_index.md`. **Fable outputs are archived
+design contracts, never repo current-state proof**, and Fable self-review never replaced (and never
+replaces) the independent Codex audit or the connector gate. Do not assume Fable 5 availability in
+any future task. If Fable 5 reappears, §20 applies opportunistically again — but no plan may depend
+on it, and §21 remains the default operating model.
 
 ---
 

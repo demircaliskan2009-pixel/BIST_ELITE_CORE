@@ -27,10 +27,27 @@
   probes). **Deep Research** = external/current facts only. Model strength is never proof: no lane skips
   tests, CI, review, the connector gate, or explicit per-PR merge authorization. Official Fable 5
   limits/quota are unproven here — treat as a user-reported operational constraint.
-- Current next-slice routing (after PR #314): `PaperStage4ComparisonEvidence` design goes to Fable 5 first;
-  it is the first artifact allowed to call `compare_stage4` and must recompute the Sharpe-retention verdict
-  in Decimal (the float comparator output is advisory echo only). `PaperStage4CompletionDecision` follows;
-  the operational-day gate stays deferred until a multi-session per-UTC-day operational source exists.
+- **Post-Fable operating model (`agent_workflow.md` §21, 2026-07-07):** Fable 5 availability is NO LONGER
+  assumed. When Fable 5 is absent: **Opus 4.8 xhigh** takes repo-internal design first-drafts + bounded
+  high-risk implementation; **Codex GPT-5.5 extra-high** runs mandatory read-only P1/P2 audits after every
+  high-risk design (before implementation) and after every high-risk implementation (before the connector
+  gate) — increased use vs the Fable era; **Sonnet/Fast Auto** keeps all mechanical work (CI polling,
+  merge/post-verify — never Opus/Codex); **GitHub connector** final gate stays mandatory and never waived;
+  **Deep Research** only for external/current facts. Attestation-only evidence
+  (`operator_attested_not_machine_proven.v1`) is never machine proof.
+- **Fable exit contract index:** `docs/crypto_core/fable_exit_contract_index.md` holds the archived
+  Fable 5 design contracts (Stage4 v2, MT, SM, EF, RG, RF, funding pilot; prompt index PRM-01..32;
+  canonical queue; governance-required decisions; Deep Research batches). These are design doctrine,
+  **never current-state proof** — implement only via a scoped PR with fresh `git`/`gh` proof. A Codex
+  read-only audit is required after every high-risk design and implementation; the GitHub-connector
+  final gate is required before every merge authorization.
+- Current next-slice routing (after PR #319, `agent_workflow.md` §21.6): next technical PR is
+  `PaperStage4CompletionDecisionV2` — Path A conservative: consumes the comparison/Sharpe/30-day chain,
+  the attested 30-day gate (#319), and the predecessor v1 decision; proves selected UTC day-index
+  alignment; keeps `prdv4_stage4_complete=False` structural; narrows blockers (stale
+  `operational_day_evidence_source_unavailable` dropped; new
+  `operator_attested_only_machine_time_origin_unproven`; timestamp-origin and secondary-metrics blockers
+  remain). Completion v3 only after machine-time proof + enforced secondary metrics.
 - Role routing (full detail in `agent_workflow.md` §2/§2a): **ChatGPT** = controller/sequence owner +
   merge authority; **Claude** = implementation/repair/closeout executor; **Codex** = read-only adversarial
   P1/P2 reviewer (patches only when explicitly authorized); **Codex Pursue Goal** = bounded single-goal
