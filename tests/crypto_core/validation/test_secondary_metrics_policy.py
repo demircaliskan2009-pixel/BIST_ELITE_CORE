@@ -237,6 +237,92 @@ def test_slippage_ceiling_negative_rejects() -> None:
     assert _rc("approved_value_invalid") in policy.reason_codes
 
 
+# --- 3b. Scale-18 canonical encoding (Codex P2: reject non-scale-18 approved thresholds) --------------------
+
+_NON_SCALE_18_THRESHOLDS = (
+    "0.5",
+    "1",
+    "1.0",
+    "25",
+    "25.0",
+    "0.50000000000000000",  # 17 fractional digits
+    "0.5000000000000000000",  # 19 fractional digits
+)
+
+
+@pytest.mark.parametrize("bad", _NON_SCALE_18_THRESHOLDS)
+def test_non_scale_18_hit_rate_floor_rejects(bad: str) -> None:
+    policy = _build(approved_hit_rate_floor=bad)
+    assert policy.status is SecondaryMetricsPolicyStatus.POLICY_REJECTED
+    assert policy.ready is False
+    assert policy.secondary_metrics_policy_ready is False
+    assert _rc("approved_value_invalid") in policy.reason_codes
+
+
+@pytest.mark.parametrize("bad", _NON_SCALE_18_THRESHOLDS)
+def test_non_scale_18_fill_rate_floor_rejects(bad: str) -> None:
+    policy = _build(approved_fill_rate_floor=bad)
+    assert policy.status is SecondaryMetricsPolicyStatus.POLICY_REJECTED
+    assert policy.ready is False
+    assert policy.secondary_metrics_policy_ready is False
+    assert _rc("approved_value_invalid") in policy.reason_codes
+
+
+@pytest.mark.parametrize("bad", _NON_SCALE_18_THRESHOLDS)
+def test_non_scale_18_slippage_ceiling_rejects(bad: str) -> None:
+    policy = _build(approved_slippage_ceiling_bps=bad)
+    assert policy.status is SecondaryMetricsPolicyStatus.POLICY_REJECTED
+    assert policy.ready is False
+    assert policy.secondary_metrics_policy_ready is False
+    assert _rc("approved_value_invalid") in policy.reason_codes
+
+
+@pytest.mark.parametrize("field_name", ["approved_hit_rate_floor", "approved_fill_rate_floor"])
+@pytest.mark.parametrize("bad", ["1", "25"])
+def test_integer_looking_threshold_strings_reject(field_name: str, bad: str) -> None:
+    policy = _build(**{field_name: bad})
+    assert policy.status is SecondaryMetricsPolicyStatus.POLICY_REJECTED
+    assert _rc("approved_value_invalid") in policy.reason_codes
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"approved_hit_rate_floor": "0.000000000000000000"},
+        {"approved_hit_rate_floor": "1.000000000000000000"},
+        {"approved_fill_rate_floor": "0.000000000000000000"},
+        {"approved_fill_rate_floor": "1.000000000000000000"},
+        {"approved_slippage_ceiling_bps": "0.000000000000000000"},
+        {"approved_slippage_ceiling_bps": "25.000000000000000000"},
+    ],
+)
+def test_scale_18_boundary_values_remain_ready(overrides: dict[str, object]) -> None:
+    policy = _build(**overrides)
+    assert policy.status is SecondaryMetricsPolicyStatus.POLICY_READY
+    assert policy.ready is True
+    assert policy.reason_codes == ()
+
+
+def test_rejected_non_canonical_threshold_never_ready() -> None:
+    for bad in _NON_SCALE_18_THRESHOLDS:
+        policy = _build(approved_hit_rate_floor=bad)
+        assert policy.status is not SecondaryMetricsPolicyStatus.POLICY_READY
+        assert policy.ready is False
+
+
+def test_scale_18_rejection_digest_and_serializer_deterministic() -> None:
+    first = _build(approved_hit_rate_floor="0.5")
+    second = _build(approved_hit_rate_floor="0.5")
+
+    assert first.status is SecondaryMetricsPolicyStatus.POLICY_REJECTED
+    assert first.policy_digest == second.policy_digest
+    assert secondary_metrics_policy_digest(first) == first.policy_digest
+
+    ready = _build()
+    payload = secondary_metrics_policy_to_dict(ready)
+    assert payload["policy_digest"] == secondary_metrics_policy_digest(ready)
+
+
 @pytest.mark.parametrize("bad", [0, -1, True])
 def test_min_decided_episode_count_below_one_rejects(bad: object) -> None:
     policy = _build(approved_min_decided_episode_count=bad)

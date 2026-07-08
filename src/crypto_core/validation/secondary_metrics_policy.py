@@ -29,7 +29,9 @@ _REASON_PREFIX = "secondary_metrics_policy"
 _SHA256_HEX_LENGTH = 64
 _HEX_CHARS = frozenset("0123456789abcdef")
 
-_DECIMAL_PATTERN = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
+# Exactly _DECIMAL_SCALE (18) fractional digits are mandatory: a looser pattern would let the same
+# approved number ("0.5" vs "0.500000000000000000") produce different digest-bound encodings.
+_DECIMAL_PATTERN = re.compile(r"^-?(?:0|[1-9][0-9]*)\.[0-9]{18}$")
 _BIST_PATTERN = re.compile(r"\b(?:bist\w*|borsa\w*|matriks\w*)|\bkap\b", re.IGNORECASE)
 _FORBIDDEN_PATTERN = re.compile(
     r"(?<![A-Za-z0-9])orders?(?![A-Za-z0-9])"
