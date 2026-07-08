@@ -1060,6 +1060,22 @@ def test_end_day_off_by_one_rejected() -> None:
     assert _rc("attested_window_end_mismatch") in decision.reason_codes
 
 
+def test_gate_window_end_must_equal_30th_selected_day() -> None:
+    chain = _chain()
+    forged_end_ns = chain["gate"].gate_used_last_bucket_end_ns + _DAY_NS  # type: ignore[union-attr]
+    forged_end_day = (forged_end_ns // _DAY_NS) - 1
+    resealed_gate = _reseal_gate(chain["gate"], gate_used_last_bucket_end_ns=forged_end_ns)
+    resealed_attested = _reseal_attested(chain["attested_gate"], selected_end_utc_day_index=forged_end_day)
+    decision = _build(
+        gate_decision=resealed_gate,
+        expected_gate_decision_digest=resealed_gate.decision_digest,
+        attested_gate_decision=resealed_attested,
+        expected_attested_gate_decision_digest=(resealed_attested.attested_operational_thirty_day_gate_decision_digest),
+    )
+    assert decision.status is PaperStage4CompletionDecisionV2Status.REJECTED
+    assert _rc("gate_window_end_day_mismatch") in decision.reason_codes
+
+
 def test_attested_window_start_mismatch_rejected() -> None:
     chain = _chain()
     resealed = _reseal_attested(

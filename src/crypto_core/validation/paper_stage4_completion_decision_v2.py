@@ -935,6 +935,7 @@ def _day_alignment_failures(
     if gate_decision.gate_bucket_count_used != _REQUIRED_SELECTED_DAY_COUNT:
         hard.append(_reason("gate_bucket_count_invalid"))
     selected_indices = attested_gate.selected_utc_day_indices
+    expected_end_day = start_day + _REQUIRED_SELECTED_DAY_COUNT - 1
     if (
         type(selected_indices) is not tuple
         or len(selected_indices) != _REQUIRED_SELECTED_DAY_COUNT
@@ -942,6 +943,10 @@ def _day_alignment_failures(
         or attested_gate.day_count < _REQUIRED_SELECTED_DAY_COUNT
     ):
         hard.append(_reason("attested_day_count_invalid"))
+    elif end_day_inclusive != selected_indices[-1]:
+        hard.append(_reason("gate_window_end_day_mismatch"))
+    if end_day_inclusive != expected_end_day:
+        hard.append(_reason("gate_window_end_day_mismatch"))
     if attested_gate.selected_start_utc_day_index != start_day:
         hard.append(_reason("attested_window_start_mismatch"))
     if attested_gate.selected_end_utc_day_index != end_day_inclusive:
