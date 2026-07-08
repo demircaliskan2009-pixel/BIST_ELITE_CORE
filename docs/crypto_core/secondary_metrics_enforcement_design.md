@@ -40,11 +40,27 @@ substrate to consume (never modify): `PaperEndToEndEpisode` (intent→fill→rea
    `slippage_ceiling_enforced=True` — legal ONLY here, bound to approved numeric thresholds and
    the SM policy digest. Schema `paper-vs-backtest-methodology.v2`.
 5. **SM-6 `paper_stage4_comparison_evidence_v2.py`** (NEW module; #316 untouched). Feeds REAL
-   `paper_*` values from SM-4 into `compare_stage4`; `None` paper metrics → REJECTED (the v1
-   placeholder path is structurally impossible here); carries methodology-v2 digest; retention
-   verdict still recomputed in Decimal.
+   `paper_*` values from SM-4 into `compare_stage4` only for existing comparison/retention behavior;
+   `None` paper metrics → REJECTED (the v1 placeholder path is structurally impossible here);
+   carries methodology-v2 digest; retention verdict still recomputed in Decimal. Current
+   `compare_stage4` is NOT the enforcement authority for secondary metric thresholds unless it is
+   separately extended in a scoped PR. Passing values into `compare_stage4` is insufficient to claim
+   secondary metric enforcement.
 
-## 3. Cross-cutting invariants
+## 3. Enforcement boundary
+
+- SM-4/SM-6 explicitly compare computed Decimal metrics against approved thresholds from
+  `SecondaryMetricsPolicy`; enforcement does not rely on current `compare_stage4` echo behavior.
+  Required checks: `paper_hit_rate >= approved_hit_rate_floor`, `paper_fill_rate >=
+  approved_fill_rate_floor`, `paper_slippage_bps <= approved_slippage_ceiling_bps`, and decided / trade
+  count meets the approved minimum. Computation is Decimal/Fraction authoritative; carried float
+  echoes are advisory-only.
+- `paper_stage4_comparison_evidence_v2.py` may consume `compare_stage4` only for existing
+  comparison/retention behavior while secondary metric threshold enforcement is performed explicitly
+  in v2 evidence logic, or later in a separately extended comparator with its own scoped PR. `None`
+  paper secondary metrics remain structurally rejected. This design makes no enforced-now claim.
+
+## 4. Cross-cutting invariants
 
 - Every artifact: canonical-JSON SHA-256 self-digest (self-field excluded); recompute == carried
   == expected anchor; raise (malformed caller input) vs REJECTED (trust/value failure) split as in
@@ -55,28 +71,36 @@ substrate to consume (never modify): `PaperEndToEndEpisode` (intent→fill→rea
   dropping losing/rejected records; SM-3's reconciliation + rejected-fill first-classing exists
   precisely to make that structurally visible.
 
-## 4. GOVERNANCE_REQUIRED (numbers are human-owned)
+## 5. GOVERNANCE_REQUIRED (numbers are human-owned)
 
 Hit-rate floor, fill-rate floor, slippage ceiling (bps), minimum decided-episode count for a valid
 window. See `governance_decision_framework.md` for the trade-off analysis; artifacts REJECT
 unapproved values.
 
-## 5. Test-matrix skeleton per slice
+## 6. Test-matrix skeleton per slice
 
 Happy READY; digest tamper per anchor; reseal (carried metric != recompute); denominator attacks
 (dropped reject, dropped losing episode, duplicate episode); ledger mismatch; Decimal/float
 divergence; threshold-structure violations (unapproved number, wrong operator); structural-False
-AST + forbidden-import AST; determinism roundtrip.
+AST + forbidden-import AST; determinism roundtrip. Required named regressions:
+test_secondary_metrics_thresholds_enforced_outside_current_comparator,
+test_compare_stage4_echo_does_not_satisfy_secondary_metric_enforcement,
+test_hit_rate_below_floor_blocks_secondary_metric_enforcement,
+test_fill_rate_below_floor_blocks_secondary_metric_enforcement,
+test_slippage_above_ceiling_blocks_secondary_metric_enforcement,
+test_unapproved_thresholds_rejected.
 
-## 6. Dependencies and order
+## 7. Dependencies and order
 
 SM-2 needs governance numbers only at USE time (policy can merge with structure + rejection of
 unapproved values first). SM-3/4 need no external facts. SM-5/6 need approved numbers. v3 consumes
 SM-6 + MT chain. Comparator (`stage4_comparator.py`) already carries hit/fill/slippage end-to-end
-(`Stage4BacktestBaseline` requires backtest_hit_rate; optional slippage/fill) — no comparator
-changes needed.
+(`Stage4BacktestBaseline` requires backtest_hit_rate; optional slippage/fill), but current
+`compare_stage4` echo/retention behavior is not enough for threshold enforcement. No comparator
+change is needed only if SM-6 performs the approved-threshold comparisons explicitly in v2 evidence
+logic; a comparator-owned enforcement path would require a separate scoped comparator PR.
 
-## 7. Stop conditions
+## 8. Stop conditions
 
 Any need to modify episode/fill/pnl substrate modules; any pressure to invent threshold numbers;
 any fill-model change (that is a separate governance decision); scope beyond the named slice.

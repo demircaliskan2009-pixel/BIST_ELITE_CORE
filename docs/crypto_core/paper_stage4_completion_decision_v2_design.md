@@ -85,6 +85,16 @@ Additional reseal defense for anchors 1-6 (v1 pattern): the comparison evidence'
 
 ## 5. Day-index alignment (top P1 risk area)
 
+- Attested gate coherence is checked BEFORE consuming any attested selected-day / satisfied fields.
+  Required equalities: `attested_gate_decision.schema_version ==
+  _EXPECTED_ATTESTED_GATE_SCHEMA_VERSION`, `attested_gate_decision.status == READY`,
+  `attested_gate_decision.ready is True`, `attested_gate_decision.reason_codes == ()`,
+  `attested_gate_decision.attested_operational_thirty_day_gate_decided == True`, and
+  `attested_gate_decision.attested_operational_thirty_day_gate_satisfied == True`. Any failure is
+  REJECTED with an explicit reason code: `attested_gate_schema_version_mismatch`,
+  `attested_gate_not_ready`, `attested_gate_reason_codes_present`, `attested_gate_not_decided`, or
+  `attested_gate_not_satisfied`. Do not trust satisfied flags, selected-day fields, selected digest
+  fields, or day-count fields unless the attested gate is first proven ready and coherent.
 - Alignment BEFORE division: `gate_used_first_bucket_start_ns % _DAY_NS != 0` →
   `gate_window_start_not_day_aligned`; `gate_used_last_bucket_end_ns % _DAY_NS != 0` →
   `gate_window_end_not_day_aligned`.
@@ -152,7 +162,11 @@ comparison-consumed reseals + 6 predecessor-chain discontinuities. Predecessor: 
 wrong_schema / wrong_verdict / completion_flag_tamper / blocker_tuple_tamper / correlation /
 market. Day alignment: start_misaligned / end_misaligned / end_off_by_one / indices_mismatch /
 duplicate_digest / too_few / too_many / gate_bucket_count. Attested: not_satisfied / decided_false
-/ satisfied-field-namespace check (generic `thirty_day_gate_*` stays False). Structure:
+/ schema_mismatch / not_ready / reason_codes_present / satisfied-field-namespace check (generic
+`thirty_day_gate_*` stays False). Required named regressions:
+test_attested_gate_schema_mismatch_rejected, test_attested_gate_not_ready_rejected,
+test_attested_gate_reason_codes_present_rejected, test_attested_gate_not_decided_rejected,
+test_attested_gate_not_satisfied_rejected. Structure:
 structural_false_ast / forbidden_import_ast / assignment_regex / deterministic_digest_roundtrip /
 serializer_excludes_self_digest / frozen_immutability / metadata_validation (raise) /
 malformed_ids (raise) / wrong_type_artifacts (8× raise) / blocker_tuple_exactness /
