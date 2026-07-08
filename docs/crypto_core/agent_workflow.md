@@ -551,6 +551,26 @@ replaces) the independent Codex audit or the connector gate. Do not assume Fable
 any future task. If Fable 5 reappears, §20 applies opportunistically again — but no plan may depend
 on it, and §21 remains the default operating model.
 
+## 22. Token Economy Doctrine
+
+Canonical playbook: `docs/crypto_core/token_efficiency_playbook.md` (task classes T0-T4 with
+context budgets, context intake protocol, report compression, prompt reuse, lane budget matrix,
+anti-patterns). Binding summary:
+
+- **Token saving never outranks correctness.** High-risk contract/digest/fail-closed work keeps the
+  strongest reasoning lane (Opus 4.8 xhigh); no gate (tests, CI-to-terminal, Codex design/impl
+  audits, connector final gate, explicit merge authorization) is ever skipped or shallowed to save
+  tokens; no repo/PR/CI state is ever claimed without fresh proof to save tokens. Stop early with
+  proof rather than guess.
+- **Spend where it buys correctness:** exact source proof over broad exploration; scoped
+  `rg`/symbol reads before full-file reads; targeted tests first, full logged suite where doctrine
+  requires; compact fixed-field reports (no transcript dumps, no repeated doctrine); stable
+  procedure text lives in repo docs/skills — prompts reference it and send only task deltas.
+- **Lane hygiene:** Opus/Codex never poll CI, never run status/merge mechanics; Codex audits read
+  changed files + direct dependencies, not the whole repo; bounded one-shot CI snapshots only.
+- **Do not add duplication:** `AGENTS.md`, `CLAUDE.md`, this file, and skills each carry their own
+  layer; new instructions link to the canonical location instead of copying it.
+
 ---
 
 *v4.1 (2026-06-15): rewrote the model-role model to the current three-role protocol — Claude =

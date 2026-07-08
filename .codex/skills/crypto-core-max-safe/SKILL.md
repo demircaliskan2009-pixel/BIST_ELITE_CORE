@@ -57,6 +57,13 @@ machine proof and never Stage-4 completion.
 - Audit report format: verdict `READY | NOT_READY`, findings as `P1/P2/P3 | file:line | failure
   scenario`, plus `CLEAN` sections explicitly named. A Codex audit is REQUIRED before the
   GitHub-connector final gate on every high-risk PR.
+- Audit token discipline (`docs/crypto_core/token_efficiency_playbook.md`; correctness always wins):
+  two distinct audit types — DESIGN audit (contract/invariants, before implementation) and
+  IMPLEMENTATION audit (diff at the pinned head, before the connector gate) — never conflate them.
+  Read the changed files and their direct dependencies only; no repo-wide rereads per audit; no CI
+  polling with model tokens (state comes from the prompt or one `gh` snapshot). Keep findings
+  concise: P1/P2 with file:line and failure scenario; flag pure token waste as P3 unless it caused
+  a missed proof (then it is the appropriate higher class). Never shallow an audit to save tokens.
 
 ## Gate First
 

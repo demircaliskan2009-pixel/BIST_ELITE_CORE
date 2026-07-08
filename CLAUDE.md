@@ -44,5 +44,9 @@ Claude operating contract (post-Fable, canonical detail in `agent_workflow.md` �
 - Anti-waste: never an expensive lane for CI polling/status/merge mechanics; named files first;
   failure tails only, no full log dumps. Reports carry at minimum RESULT / FILES_CHANGED /
   VALIDATION / NEXT_SAFE_ACTION.
+- Token economy: classify each task T0-T4 and apply its context budget per
+  `docs/crypto_core/token_efficiency_playbook.md` (binding summary: `agent_workflow.md` §22;
+  on-demand checklist: `.claude/skills/crypto-core-token-efficient-loop`). Token saving never
+  outranks correctness — T3 contract/digest work keeps Opus 4.8 xhigh and every gate.
 - Archived Fable design contracts live in `docs/crypto_core/fable_exit_contract_index.md` — design
   doctrine only, never current-state proof.
