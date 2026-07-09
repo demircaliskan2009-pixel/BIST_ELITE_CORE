@@ -60,6 +60,16 @@ _MAX_RECORDS = 100_000
 _SHA256_HEX_LENGTH = 64
 _HEX_CHARS = frozenset("0123456789abcdef")
 
+# Raw-field re-validation (SM-4 recomputes every metric from raw record fields and never trusts the carried
+# derived flags): mirrors the SM-3 scale-18 policy and magnitude bounds so a re-sealed but internally
+# incoherent record fails closed instead of poisoning an aggregate.
+_SCALE18_PATTERN = re.compile(r"^-?(?:0|[1-9][0-9]*)\.[0-9]{18}$")
+_NEGATIVE_ZERO_SCALE18 = "-0.000000000000000000"
+_MAX_SCALE18_LENGTH = 60
+_MIN_POSITIVE_DECIMAL = Decimal("1E-18")
+_MAX_ABS_DECIMAL = Decimal("1E+18")
+_BPS_PER_UNIT = Decimal(10_000)
+
 _POLICY_TRUE_FLAGS = ("paper_only", "policy_only")
 _POLICY_FALSE_FLAGS = (
     "secondary_metrics_enforced",
@@ -346,6 +356,52 @@ def _policy_failures(policy: SecondaryMetricsPolicy) -> list[str]:
     return hard
 
 
+def _parse_scale18(value: object) -> Decimal | None:
+    if (
+        type(value) is not str
+        or len(value) > _MAX_SCALE18_LENGTH
+        or value == _NEGATIVE_ZERO_SCALE18
+        or not _SCALE18_PATTERN.fullmatch(value)
+    ):
+        return None
+    parsed = Decimal(value)
+    return parsed if parsed.is_finite() else None
+
+
+def _positive_in_bounds(value: Decimal) -> bool:
+    return _MIN_POSITIVE_DECIMAL <= value <= _MAX_ABS_DECIMAL
+
+
+def _record_raw_incoherent(record: TradeRecordEvidence) -> bool:
+    """Re-validate a record's RAW numeric fields (never its carried derived flags).
+
+    A digest-valid, READY-status record can still be internally incoherent if it was re-sealed by hand
+    (e.g. ``realized_pnl`` flipped negative while ``hit_flag`` stayed True, digest recomputed). SM-4 recomputes
+    every metric from these raw fields, so any raw field that does not parse or violates the SM-3 invariants
+    (positive intended in range, filled in ``[0, intended]``, positive expected price, bounded PnL, realized
+    price present and positive exactly when filled) makes the record fail closed here.
+    """
+
+    intended = _parse_scale18(record.intended_quantity)
+    filled = _parse_scale18(record.filled_quantity)
+    expected = _parse_scale18(record.expected_fill_price)
+    pnl = _parse_scale18(record.realized_pnl)
+    if intended is None or not _positive_in_bounds(intended):
+        return True
+    if filled is None or filled < 0 or filled > intended:
+        return True
+    if expected is None or not _positive_in_bounds(expected):
+        return True
+    if pnl is None or abs(pnl) > _MAX_ABS_DECIMAL:
+        return True
+    if type(record.decided_episode) is not bool:
+        return True
+    if filled > 0:
+        realized = _parse_scale18(record.realized_fill_price)
+        return realized is None or not _positive_in_bounds(realized)
+    return record.realized_fill_price is not None
+
+
 def _record_failures(record: TradeRecordEvidence, policy_id: str) -> list[str]:
     """Trust boundary for one merged SM-3 record (digest / schema / status / policy binding / safe flags)."""
 
@@ -363,6 +419,8 @@ def _record_failures(record: TradeRecordEvidence, policy_id: str) -> list[str]:
         hard.append(_reason("record_not_ready"))
     if record.policy_id != policy_id:
         hard.append(_reason("record_policy_id_mismatch"))
+    if _record_raw_incoherent(record):
+        hard.append(_reason("record_incoherent"))
     hard.extend(_flag_failures(record, _RECORD_TRUE_FLAGS, _RECORD_FALSE_FLAGS, "record_unsafe_flags"))
     return hard
 
@@ -383,7 +441,12 @@ def _format_fraction_scale18(value: Fraction) -> str:
 
 
 def _format_decimal_scale18(value: Decimal) -> str:
-    quantized = value.quantize(_DECIMAL_QUANTUM, rounding=ROUND_HALF_EVEN)
+    # Quantize inside the precision-80 context: summed quantities near the per-record cap exceed Python's
+    # default precision (28), which would raise ``InvalidOperation`` for otherwise-valid accepted inputs.
+    with localcontext() as context:
+        context.prec = _DECIMAL_INTERNAL_PRECISION
+        context.rounding = ROUND_HALF_EVEN
+        quantized = value.quantize(_DECIMAL_QUANTUM, rounding=ROUND_HALF_EVEN)
     if quantized == 0:
         quantized = Decimal(0).quantize(_DECIMAL_QUANTUM)
     return format(quantized, "f")
@@ -403,12 +466,34 @@ class _Metrics:
 
 
 def _compute_metrics(records: tuple[TradeRecordEvidence, ...]) -> _Metrics:
+    """Recompute every metric from the RAW record fields under the precision-80 context.
+
+    ``hit_flag`` / ``fill_flag`` / ``slippage_bps`` carried on the record are never read here — positive,
+    filled, and slippage are re-derived from ``realized_pnl`` / ``filled_quantity`` / prices. Callers must
+    have already excluded incoherent records via ``_record_raw_incoherent`` so every parse below is safe.
+    """
+
     decided = sum(1 for record in records if record.decided_episode)
-    positive = sum(1 for record in records if record.hit_flag)
-    filled = sum(1 for record in records if record.fill_flag)
-    intended_sum = sum((Decimal(record.intended_quantity) for record in records), Decimal(0))
-    filled_sum = sum((Decimal(record.filled_quantity) for record in records), Decimal(0))
-    slippage_values = [Decimal(record.slippage_bps) for record in records if record.slippage_bps is not None]
+    positive = 0
+    filled = 0
+    slippage_values: list[Decimal] = []
+    with localcontext() as context:
+        context.prec = _DECIMAL_INTERNAL_PRECISION
+        context.rounding = ROUND_HALF_EVEN
+        intended_sum = Decimal(0)
+        filled_sum = Decimal(0)
+        for record in records:
+            intended_qty = Decimal(record.intended_quantity)
+            filled_qty = Decimal(record.filled_quantity)
+            intended_sum += intended_qty
+            filled_sum += filled_qty
+            if filled_qty > 0:
+                filled += 1
+                expected_price = Decimal(record.expected_fill_price)
+                realized_price = Decimal(record.realized_fill_price)  # present when filled (coherence-checked)
+                slippage_values.append((realized_price - expected_price) / expected_price * _BPS_PER_UNIT)
+            if record.decided_episode and Decimal(record.realized_pnl) > 0:
+                positive += 1
 
     hit_rate = Fraction(positive, decided) if decided > 0 else None
     fill_rate_qty = Fraction(filled_sum) / Fraction(intended_sum) if intended_sum > 0 else Fraction(0)

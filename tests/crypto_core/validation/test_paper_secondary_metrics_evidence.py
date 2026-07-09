@@ -289,6 +289,63 @@ def test_duplicate_record_digest_rejects() -> None:
     assert _rc("duplicate_record_digest") in evidence.reason_codes
 
 
+def _reseal(record, **overrides):
+    """Re-seal a record with tampered fields and a freshly recomputed self-digest (digest stays valid)."""
+    tampered = replace(record, **overrides)
+    return replace(tampered, record_digest=trade_record_evidence_digest(tampered))
+
+
+def test_metrics_recomputed_from_raw_not_carried_flags() -> None:
+    # Codex P1: a digest-valid, READY record re-sealed with a LOSING raw pnl but a carried hit_flag=True must
+    # not be counted as a hit. SM-4 must recompute the hit from raw realized_pnl, not trust hit_flag.
+    incoherent_hits = [
+        _reseal(_record(0), realized_pnl="-5.000000000000000000", hit_flag=True),
+        _reseal(_record(1), realized_pnl="-5.000000000000000000", hit_flag=True),
+    ]
+    assert all(record.hit_flag is True for record in incoherent_hits)  # carried flag still lies
+    evidence = _build(records=incoherent_hits)
+    assert evidence.status is PaperSecondaryMetricsEvidenceStatus.METRICS_REJECTED
+    assert evidence.hit_rate == "0.000000000000000000"
+    assert _rc("hit_rate_below_floor") in evidence.reason_codes
+
+
+def test_slippage_recomputed_from_raw_not_carried_flag() -> None:
+    # A record whose carried slippage_bps is a benign lie but whose raw prices imply a large breach must be
+    # rejected on the recomputed slippage, not the carried value.
+    breaching = [
+        _reseal(_record(0), realized_fill_price="100.500000000000000000", slippage_bps="1.000000000000000000"),
+        _reseal(_record(1), realized_fill_price="100.500000000000000000", slippage_bps="1.000000000000000000"),
+    ]
+    evidence = _build(records=breaching)
+    assert evidence.status is PaperSecondaryMetricsEvidenceStatus.METRICS_REJECTED
+    assert evidence.average_slippage_bps == "50.000000000000000000"
+    assert _rc("slippage_above_ceiling") in evidence.reason_codes
+
+
+def test_incoherent_raw_record_rejected() -> None:
+    # filled > intended is impossible from build_trade_record_evidence; a hand re-sealed READY record with
+    # that raw incoherence must fail closed at the SM-4 boundary.
+    incoherent = _reseal(_record(0), filled_quantity="2.000000000000000000")
+    assert incoherent.status.value == "RECORD_READY"
+    evidence = _build(records=[incoherent, _record(1)])
+    assert evidence.status is PaperSecondaryMetricsEvidenceStatus.METRICS_REJECTED
+    assert _rc("record_incoherent") in evidence.reason_codes
+
+
+def test_large_summed_quantities_do_not_raise() -> None:
+    # Codex P2: summed quantities near the per-record cap exceed Python's default Decimal precision (28);
+    # the formatter must quantize under the precision-80 context instead of raising InvalidOperation.
+    big = "1000000000000000000.000000000000000000"
+    records = [
+        _record(0, intended=big, filled=big),
+        _record(1, intended=big, filled=big),
+    ]
+    evidence = _build(records=records)
+    assert evidence.status is PaperSecondaryMetricsEvidenceStatus.METRICS_READY
+    assert evidence.intended_quantity_sum == "2000000000000000000.000000000000000000"
+    assert evidence.filled_quantity_sum == "2000000000000000000.000000000000000000"
+
+
 # --- 5. Sufficiency + threshold enforcement -----------------------------------------------------------------
 
 
