@@ -337,7 +337,7 @@ def _threshold_flags(
     fill_episode_passed = fill_floor is not None and fill_episode is not None and fill_episode >= fill_floor
     fill_passed = fill_quantity_passed and fill_episode_passed
     slippage_passed = slippage_ceiling is not None and (
-        metrics_evidence.average_slippage_bps is None or slippage <= slippage_ceiling
+        metrics_evidence.average_slippage_bps is None or (slippage is not None and slippage <= slippage_ceiling)
     )
     min_decided_passed = (
         _is_exact_int(policy.approved_min_decided_episode_count)
@@ -526,6 +526,11 @@ def build_paper_secondary_metrics_enforcement_precondition(
         ready = False
         reason_codes = (_reason("threshold_snapshot_mismatch"),)
 
+    metrics_record_digests = metrics_evidence.record_digests if type(metrics_evidence.record_digests) is tuple else ()
+    reconciliation_record_digests = (
+        reconciliation.reconciled_record_digests if type(reconciliation.reconciled_record_digests) is tuple else ()
+    )
+
     precondition_fields: dict[str, object] = {
         "schema_version": _SCHEMA_VERSION,
         "precondition_version": _PRECONDITION_VERSION,
@@ -560,9 +565,9 @@ def build_paper_secondary_metrics_enforcement_precondition(
         else 0,
         "min_decided_episode_count_passed": min_decided_passed,
         "metrics_record_count": metrics_evidence.record_count if _is_exact_int(metrics_evidence.record_count) else 0,
-        "reconciled_record_count": len(reconciliation.reconciled_record_digests),
+        "reconciled_record_count": len(reconciliation_record_digests),
         "reconciled_episode_count": reconciliation.episode_count if _is_exact_int(reconciliation.episode_count) else 0,
-        "record_digests": (metrics_evidence.record_digests if type(metrics_evidence.record_digests) is tuple else ()),
+        "record_digests": metrics_record_digests,
         "reason_codes": reason_codes,
         "metadata": metadata_pairs,
     }

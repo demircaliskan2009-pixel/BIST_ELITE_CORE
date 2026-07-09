@@ -517,6 +517,20 @@ def test_record_set_count_mismatch_rejects() -> None:
     assert _rc("record_set_mismatch") in precondition.reason_codes
 
 
+def test_malformed_reconciliation_record_digest_container_rejects_without_crash() -> None:
+    scenario = _Scenario()
+    reconciliation = replace(
+        scenario.reconciliation,
+        reconciled_record_digests=None,  # type: ignore[arg-type]
+    )
+    precondition = scenario.build(reconciliation=reconciliation)
+
+    assert precondition.status is PaperSecondaryMetricsEnforcementPreconditionStatus.PRECONDITION_REJECTED
+    assert precondition.reconciled_record_count == 0
+    assert _rc("reconciliation_digest_mismatch") in precondition.reason_codes
+    assert _rc("record_set_mismatch") in precondition.reason_codes
+
+
 def test_hit_rate_floor_failure_rejects() -> None:
     scenario = _Scenario()
     metrics = _reseal_metrics(scenario.metrics, hit_rate="0.000000000000000000")
@@ -543,6 +557,19 @@ def test_slippage_ceiling_failure_rejects() -> None:
     reconciliation = _bind_reconciliation_to_metrics(scenario.reconciliation, metrics)
     precondition = scenario.build(metrics=metrics, reconciliation=reconciliation)
 
+    assert _rc("slippage_ceiling_exceeded") in precondition.reason_codes
+    assert _rc("threshold_snapshot_mismatch") in precondition.reason_codes
+
+
+def test_malformed_slippage_rejects_without_crash() -> None:
+    scenario = _Scenario()
+    metrics = _reseal_metrics(scenario.metrics, average_slippage_bps="0.5")
+    reconciliation = _bind_reconciliation_to_metrics(scenario.reconciliation, metrics)
+    precondition = scenario.build(metrics=metrics, reconciliation=reconciliation)
+
+    assert precondition.status is PaperSecondaryMetricsEnforcementPreconditionStatus.PRECONDITION_REJECTED
+    assert precondition.computed_slippage_bps == "0.5"
+    assert precondition.slippage_passed is False
     assert _rc("slippage_ceiling_exceeded") in precondition.reason_codes
     assert _rc("threshold_snapshot_mismatch") in precondition.reason_codes
 
