@@ -1,4 +1,4 @@
-# crypto_core Agent Workflow v4.2
+# crypto_core Agent Workflow v4.5
 
 > Canonical, executable operating protocol for `crypto_core` inside `demircaliskan2009-pixel/BIST_ELITE_CORE`.
 > Companions (durable rails, not re-pasted into prompts): `AGENTS.md`,
@@ -19,32 +19,35 @@ fail-closed, audit-first, derivatives-first, governance-first, risk-bounded**. A
 `src/crypto_core`, `tests/crypto_core`, `scripts/crypto_core`, `docs/crypto_core` only. BIST is historical
 context — never implemented here.
 
-## 2. Model / Tool Roles
+## 2. Model / Tool Roles (active GPT-5.6 routing)
 
 | Role | Responsibility |
 |---|---|
-| **ChatGPT** (controller) | **Sequence owner** — authors prompts; verifies live head/files/checks/threads/open-PR state; issues verdicts `ACCEPT / REPAIR / REJECT / CODEX_REQUIRED / GITHUB_CONNECTOR_REQUIRED / MERGE_AUTH_REQUIRED`; decides **when** to use Claude, Codex, Codex Pursue Goal, the GitHub connector, and Deep Research. Owns merge authorization (per-PR, exact command). |
-| **Claude** (local agent — Fable 5 / Opus 4.8 / Fast Auto–Sonnet model lanes, §20) | Implementation / repair / closeout **executor**. Bounded feature slices, multi-file patching, full local validation loops, commit/push/PR creation, same-turn same-branch repair after a local validation failure, CI diagnosis when implementation context is needed, standard merge **only on explicit per-PR authorization**, post-merge verify. The model tier for each Claude task is picked by the §20 routing doctrine (Fable 5 = premium reasoning; Opus 4.8 = implementation/repair/fallback; Fast Auto/Sonnet = mechanical). |
-| **Codex** | **Adversarial P1/P2 reviewer** — hidden-bug / exploit hunting, digest/schema/API-contract review, provenance/evidence-chain audit. **Read-only by default**; patches only when patching is **explicitly authorized and scoped**. Runs **asynchronously**; never merges. |
-| **Codex Pursue Goal** | **Bounded single-goal terminal loop** for mechanical GitHub/CI state. Use **only** for the cases in §2a. |
-| **GitHub connector / gh-native fallback** | **Source-of-truth GitHub state gate** — PR/CI/thread/review/final merge-readiness audit. **Read-only** unless an action is explicitly authorized. |
-| **Deep Research** | **External / current-fact + architecture-benchmark research** (and, in the GitHub connector chat, combined repo+external review). **Strictly read-only / advisory** — never an executor lane, never merge authority, never a safety-gate waiver; it may recommend a mutation task but never executes one (the controller routes authorized mutations to Claude/`gh`, the connector, or Codex). ChatGPT decides when it is used; full protocol in §19 / `docs/crypto_core/deep_research_protocol.md`. |
+| **ChatGPT controller** | Sequence owner, final evidence comparison, verdict, next prompt, and exact per-PR merge authorization. |
+| **GPT-5.6 Luna** | T0 mechanical git/gh state, CI polling, metadata, thread status, and postverify runner. No broad design or feature implementation. |
+| **GPT-5.6 Terra** | T1/T2 bounded Codex docs/code work, small P1/P2 repair, and fresh-context pinned-head audit. |
+| **GPT-5.6 Sol** | Scarce T4 cross-artifact trust, governance/safety, SM-5/SM-6, readiness/Deribit provenance design/audit. `xhigh` default; `max` only controller-gated. |
+| **Claude Opus 4.8** | Large local implementation/refactor, broad bounded reads, and long validation loops when Codex usage should be preserved. |
+| **Codex Pursue Goal** | Bounded single-goal terminal loop for preflight, sync, CI/status, closeout, and explicitly authorized merge/postverify. |
+| **GitHub connector / gh** | Source-of-truth final PR state and merge-readiness gate. Read-only unless an action is explicitly authorized. |
+| **Deep Research** | External/current-fact advisory only. Never executor, merge authority, or safety-gate waiver. |
 
-Model-tier routing is §20 (Fable 5 era): **Fable 5** is the premium high-reasoning lane (use first, when
-available, for design/governance/adversarial/correctness work), **Opus 4.8 xhigh** the
-implementation/repair/fallback lane for contract/digest/fail-closed/review-blocker work, and **Fast
-Auto/Sonnet** the mechanical lane; status/polling/mechanical steps always use the cheapest sufficient lane.
+Every serious prompt/report must state `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`,
+`REASONING_ACTUAL`, `EXACT_MODEL_REQUIRED`, and fallback. Exact-model mismatch means STOP_WITH_PROOF.
+Otherwise declare the actual runtime and never claim unavailable-model quality. Model strength is never proof.
 
-### 2a. Codex Pursue Goal — scope
+### 2a. Codex Pursue Goal - scope
 
-**Use Pursue Goal for:** CI polling to terminal; repo/branch sync; PR closeout / status loops;
-review-thread disposition **planning**; GitHub/`gh` state loops; merge / post-merge verification **when
-explicitly authorized**; any one-goal task needing a terminal `PASS / FAIL / BLOCKED`.
+Use Pursue Goal only for a bounded single objective with terminal `PASS`, `FAIL`, or `BLOCKED`: repo/branch
+sync, preflight, CI/status snapshots, review-thread disposition planning, PR closeout, and explicitly
+authorized merge/postverify. Do not use it for broad repo pursuit, complex design, digest/provenance
+architecture, ambiguous slicing, or unscoped multi-file implementation/repair.
 
-**Do NOT use Pursue Goal for:** complex implementation; big design decisions; digest/provenance architecture;
-ambiguous product slicing; multi-file repair (unless explicitly scoped and authorized). Those route to
-Claude (executor) under ChatGPT's direction.
+### 2b. Independent audit rule
 
+A Terra implementation cannot self-satisfy the independent audit gate in the same context. Implementation
+and audit are separate fresh-context, pinned-head tasks. Current valid P1/P2 threads block. Outdated threads
+do not block code, but any resolution needs explicit guarded closeout; human threads are never self-resolved.
 ## 3. Hard Rules
 
 - crypto_core only; **no BIST implementation leakage** (BIST is historical context).
@@ -294,7 +297,7 @@ Deep Research is the **external / current-fact + architecture-benchmark** tool; 
   External best practices that conflict with repo safety doctrine are **proposals only** — the stricter
   safety rule wins.
 
-## 20. Multi-Model Routing Doctrine (Fable 5 era)
+## 20. HISTORICAL / SUPERSEDED BY GPT-5.6 ROUTING DOCTRINE - Fable 5 era
 
 Fable 5 (`claude-fable-5`) is available as a model tier for the local Claude agent. **Model strength is not
 proof**: no lane — however strong — replaces evidence, tests, CI, Codex review, the GitHub-connector final
@@ -415,7 +418,7 @@ scheduler behavior, edge/profitability, or Stage-4 completion without artifacts 
 no BIST leakage; no official Fable 5 limit/pricing/quota claims unless proven (status as of v4.4:
 UNPROVEN). "Fable 5 can replace audits / the connector gate / CI" is a forbidden claim.
 
-## 21. Post-Fable Operating Model (Fable 5 exit — 2026-07-07)
+## 21. HISTORICAL / SUPERSEDED BY GPT-5.6 ROUTING DOCTRINE - Post-Fable model
 
 Fable 5 (`claude-fable-5`) is **no longer assumed available** after 2026-07-07. Everything Fable 5 previously
 did is re-routed below. **Model strength is never proof** — every lane still runs under §3 / §11 / §13 / §16,
@@ -549,27 +552,76 @@ pack — all indexed in `docs/crypto_core/fable_exit_contract_index.md`. **Fable
 design contracts, never repo current-state proof**, and Fable self-review never replaced (and never
 replaces) the independent Codex audit or the connector gate. Do not assume Fable 5 availability in
 any future task. If Fable 5 reappears, §20 applies opportunistically again — but no plan may depend
-on it, and §21 remains the default operating model.
+on it; section 21 remains a historical record only.
 
 ## 22. Token Economy Doctrine
 
-Canonical playbook: `docs/crypto_core/token_efficiency_playbook.md` (task classes T0-T4 with
-context budgets, context intake protocol, report compression, prompt reuse, lane budget matrix,
-anti-patterns). Binding summary:
+The common taxonomy and lane budget live in `docs/crypto_core/token_efficiency_playbook.md`. Token saving
+never outranks correctness, evidence, tests, terminal CI, independent audit, connector final gate, explicit
+merge authorization, or postmerge verification. Use Luna for mechanics, Terra for bounded work, Sol only for
+qualifying T4 reasoning, and Opus for heavy local loops. Stable procedure text stays in docs/skills; prompts
+carry task deltas, exact scope, validation, stops, and model-actual fields.
 
-- **Token saving never outranks correctness.** High-risk contract/digest/fail-closed work keeps the
-  strongest reasoning lane (Opus 4.8 xhigh); no gate (tests, CI-to-terminal, Codex design/impl
-  audits, connector final gate, explicit merge authorization) is ever skipped or shallowed to save
-  tokens; no repo/PR/CI state is ever claimed without fresh proof to save tokens. Stop early with
-  proof rather than guess.
-- **Spend where it buys correctness:** exact source proof over broad exploration; scoped
-  `rg`/symbol reads before full-file reads; targeted tests first, full logged suite where doctrine
-  requires; compact fixed-field reports (no transcript dumps, no repeated doctrine); stable
-  procedure text lives in repo docs/skills — prompts reference it and send only task deltas.
-- **Lane hygiene:** Opus/Codex never poll CI, never run status/merge mechanics; Codex audits read
-  changed files + direct dependencies, not the whole repo; bounded one-shot CI snapshots only.
-- **Do not add duplication:** `AGENTS.md`, `CLAUDE.md`, this file, and skills each carry their own
-  layer; new instructions link to the canonical location instead of copying it.
+## 23. Active GPT-5.6 Routing Doctrine (2026-07-10)
+
+This section supersedes sections 20-21 for active routing. Historical Fable/GPT-5.5/Sonnet/Fast text remains
+only as archived context and is never an active default.
+
+### 23.1 Common taxonomy
+
+| Class | Active lane | Use |
+|---|---|---|
+| T0 `LUNA_MECHANICAL` | GPT-5.6 Luna `none`/`low` | git/gh status, CI polling, PR metadata, thread state, postverify runner |
+| T1 `LUNA_OR_TERRA_READONLY` | Luna low or Terra high | bounded docs, proof, direct-dependency read-only audit |
+| T2 `TERRA_BOUNDED_CODE` | GPT-5.6 Terra high | exact-file implementation, tests/docs, deterministic small slice |
+| T3 `TERRA_REPAIR_OR_OPUS_HEAVY` | Terra xhigh or Opus 4.8 xhigh | current P1/P2 repair, fail-closed work, forensic debug, broad/long-loop execution |
+| T4 `SOL_CROSS_CONTRACT` | GPT-5.6 Sol xhigh; max controller-gated | trust boundary, governance/safety, SM-5/SM-6 design/audit, readiness/Deribit provenance |
+| XR `DEEP_RESEARCH_EXTERNAL` | Deep Research | cited external/current facts only |
+| `CONTROLLER_CONNECTOR_GATE` | ChatGPT plus connector/gh | final evidence comparison and merge authority |
+
+### 23.2 Model and fallback policy
+
+Luna does mechanics only. Terra is the bounded Codex workhorse. Sol is scarce and is never used for polling,
+merge mechanics, broad local refactors, or routine docs. Opus preserves Codex capacity for broad local work
+and long validation loops. Deep Research precedes implementation whenever current external facts are needed.
+
+If `EXACT_MODEL_REQUIRED=true`, requested/actual mismatch stops with proof. Otherwise fallback is declared:
+Sol unavailable -> Opus design draft plus independent available-Codex audit; Terra unavailable -> Opus bounded
+implementation; Luna unavailable -> terminal/gh or available mechanical lane; Opus unavailable -> split broad
+work or use Terra only when scope is genuinely bounded. No fallback may claim the unavailable model's quality.
+
+### 23.3 Mandatory PR lifecycle
+
+1. Prove clean synced `main`, expected head, and zero open PRs. 2. Classify task and report actual model.
+3. For T4, run Sol design/audit; for XR, Deep Research first. 4. Implement with Terra when bounded or Opus
+when heavy. 5. Validate by scope. 6. Open one PR. 7. Luna runs bounded CI/status snapshots; pending is
+`NOT_READY`. 8. Run fresh-context pinned-head independent audit for high-risk work. 9. Connector/gh final
+gate. 10. Explicit human authorization. 11. Standard head-pinned merge only. 12. Postmerge verification and
+zero-open-PR proof before next work.
+
+### 23.4 Safety and non-claims
+
+All rails in section 3 bind unchanged: crypto-only, paper-first, deterministic, fail-closed, audit-first, no
+BIST, live/private API, real orders/order routing, scheduler/auto-loop, readiness/Deribit transition without
+provenance, shadow/live, capital mutation, direct main push, force push, self-approval, or unproven claim.
+Pending CI is `NOT_READY`; current valid P1/P2 threads block; standard merge and explicit human authorization
+remain required.
+
+### 23.5 Current state and next gated work
+
+PRs #326, #327, and #328 are merged. `main` contains #328 merge commit
+`6c700130697833e32572c01bbef805dc477e11ad`. The blocker
+`secondary_comparison_metrics_hit_fill_slippage_declared_not_enforced_v1` remains valid. Any next
+SM-5/SM-6 work starts with a separately authorized T4 design/audit consuming the #328 precondition; this
+doctrine change does not implement it.
+
+### 23.6 Active prompt policy
+
+Active templates cover Sol workflow/cross-contract audit; Terra bounded implementation; Terra fresh independent
+audit; Terra emergency repair; Luna CI/status; Luna explicitly authorized metadata update; Luna merge/postverify;
+Opus heavy local implementation; Deep Research; connector final gate; bounded Pursue Goal preflight; and model
+fallback. Each carries model requested/actual/reasoning/exactness fields, exact scope, validation, stop
+conditions, and report fields.
 
 ---
 
@@ -595,7 +647,7 @@ advisory** — never an executor lane, never merge authority, never a safety-gat
 a mutation task but never executes one (the controller routes authorized mutations to Claude/`gh`, the
 GitHub connector, or Codex). Docs/config only; no product code touched.*
 
-*v4.4 (2026-07-04): added §20 Multi-Model Routing Doctrine (Fable 5 era) — Fable 5 as the premium
+*v4.4 (2026-07-04; HISTORICAL / SUPERSEDED for active model routing): added §20 Multi-Model Routing Doctrine (Fable 5 era) — Fable 5 as the premium
 high-reasoning lane (with explicit non-use cases), Opus 4.8 as implementation/repair/fallback, Fast
 Auto/Sonnet as the mechanical lane, Codex/connector/Deep Research roles restated, the Claude/Codex setup
 auto-use doctrine (`AUTO_SETUP_LOADING_PROOF: PARTIAL`), the lane-annotated PR lifecycle with the
@@ -604,3 +656,5 @@ first; Decimal Sharpe-retention recompute; `PaperStage4CompletionDecision` after
 deferred), and six future prompt templates. Updated the §2 Claude role row and routing summary to the
 Fable 5 era. §20 supersedes the consult-only framing of `LANE:FABLE-ARCH` (the lane file's token-discipline
 spirit carries over unchanged). No safety gate weakened; docs only; no product code touched.*
+
+*v4.5 (2026-07-10): synchronized active GPT-5.6 Sol/Terra/Luna + Claude Opus 4.8 routing. Added common T0-T4 plus XR taxonomy, actual-model/fallback fields, fresh-context independent audit rule, bounded Pursue Goal, emergency/stale-metadata sublanes, post-#328 state, and active prompt policy. Sections 20-21 and Fable ownership remain historical. Docs/setup only; no product code touched.*

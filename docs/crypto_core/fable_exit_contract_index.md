@@ -1,6 +1,8 @@
-# Fable 5 Exit Contract Index (recorded 2026-07-07, consolidated 2026-07-08)
+# Fable 5 Exit Contract Index (HISTORICAL; recorded 2026-07-07, consolidated 2026-07-08)
 
 Durable index of every design contract Fable 5 (`claude-fable-5`) locked on its exit day.
+
+**HISTORICAL / SUPERSEDED BY GPT-5.6 ROUTING DOCTRINE:** model ownership in this file is archival only. Active routing lives in `agent_workflow.md` section 23.
 These are **archived design contracts — never repo current-state proof**. Rules of use:
 
 - **Do not implement from this file without fresh current repo proof (`git`/`gh`) and a scoped PR.**
@@ -8,13 +10,13 @@ These are **archived design contracts — never repo current-state proof**. Rule
   ready, or complete. Repo/PR/CI state is proven only per `agent_workflow.md` §11 (state-claim policy).
 - All hard gates bind unchanged: paper-only, fail-closed, deterministic, digest-bound, one open PR,
   Codex audit for high-risk work, GitHub-connector final gate (never waived), explicit per-PR user
-  merge authorization (`agent_workflow.md` §21).
+  merge authorization (`agent_workflow.md` section 23).
 - Numeric thresholds marked GOVERNANCE_REQUIRED are decided by the controller/user — never invented
   by any model.
 
 ## 1. Non-overclaim doctrine (binding for every contract below)
 
-`agent_workflow.md` §21.5 binds: attestation-only evidence is never machine proof; injected
+`agent_workflow.md` section 23.5 binds: attestation-only evidence is never machine proof; injected
 deterministic time is never wall-clock proof; `prdv4_stage4_complete`, machine-time/timestamp-origin,
 live/shadow/Deribit/readiness, real orders/capital, profitability/edge flags stay structurally False
 in every artifact until the exact gate designed to prove them does so, under its own authorization.
@@ -31,7 +33,7 @@ in every artifact until the exact gate designed to prove them does so, under its
 | **RF** (regime/vol filter) | Deterministic PIT-grade regime labels as evidence (regime filter is NOT an edge) | RF-1 design doc; RF-2..7 slices (`validation/regime_*` namespace) | RegimeFeaturePolicy (preregistration core) → FeatureSeriesEvidence (builder recomputes values from raw-input digests) → LabelEvidence (per-UTC-day, prior-day-close discipline, UNLABELED fail-closed + cap) → StabilityEvidence (dual-as-of label recompute equality = structural repaint proof) → FilterAdmissionDecision (policy digest must be a member of the EF-5 preregistration ledger — post-performance filter creation structurally impossible) → ConditionedPerformanceEvidence (feeds EF gate-6 `regime_split` + RG correlation stratification via a digest-bound pending pattern). `regime/tracker.py` (stateful/float/wall-clock) is runtime reference only — never imported by the evidence chain | Only F5/F6 feature classes (packet-conditional) |
 | **Funding pilot** (funding/basis/carry) | First edge-family pilot through the EF pipeline | Pilot slices after EF/RG/RF substrate | Repo already has `FundingRateEdge` + PIT-grade `FUNDING_RATE` DataRequirement (`funding_published_ns`/`funding_finalized_ns`, `predicted`/`final`); candidate order S1 passive carry → S4 vol-gated → S3 continuation → S2 basis mean-reversion → S5 two-leg (S5 blocked until SM enforced); features consume `final` funding semantics only | Yes (11-question venue-mechanics set, PRM-16) |
 
-Companion doctrine locked the same day: post-Fable operating model (`agent_workflow.md` §21), CTO
+Historical companion doctrine locked the same day: post-Fable operating model, CTO
 council pack (agent council protocol: Opus draft + Codex counter + internal-council synthesis for
 T4 decisions; paste-ready Claude/Codex setup packs; gap register).
 
@@ -47,10 +49,9 @@ GOVERNANCE_REQUIRED constant with trade-offs; numbers stay human-owned),
 `stage4_completion_v3_skeleton.md` (v3 invariant skeleton — MT/SM-independent). All DESIGN ONLY:
 same usage rules as this index (fresh repo proof + scoped PR before any implementation).
 
-## 3. Canonical execution queue
+## 3. Historical execution queue
 
-Roadmap order — NOT current implementation state; every step needs its own authorization and fresh
-state proof:
+Historical queue only; it is not current implementation state. Current state after PR #328: #326, #327, and #328 are merged; `main` contains `6c700130697833e32572c01bbef805dc477e11ad`; `secondary_comparison_metrics_hit_fill_slippage_declared_not_enforced_v1` remains; SM-5/SM-6 starts only with separately authorized design/audit.
 
 1. PR #320 merge (docs/setup) → 2. `PaperStage4CompletionDecisionV2` (Path A) → 3. docs-sync →
 4. completion review dossier → 5. design-doc chores `[SM-1, MT-1, EF-1, RG-1, RF-1]` →
@@ -62,8 +63,7 @@ human authorization.
 
 ## 4. Prompt index (PRM-01..32)
 
-Owner lanes: Opus = Opus 4.8 xhigh implementation/design draft; Codex = read-only P1/P2 audit;
-Sonnet = mechanical; DR = Deep Research (advisory only); Connector = final gate.
+Historical owner lanes: Opus = Opus 4.8 xhigh implementation/design draft; Codex = read-only P1/P2 audit; Sonnet = mechanical; DR = Deep Research; Connector = final gate. Active ownership is superseded by the GPT-5.6 Sol/Terra/Luna matrix in `agent_workflow.md` section 23.
 
 - **PRM-01..15 — post-#320 execution-loop pack (CTO council pack).** Proven anchors: PRM-01 Opus
   v2-completion implementation; PRM-03 Codex audit of PR #320; PRM-04 Connector final gate for
