@@ -379,6 +379,20 @@ def _policy_contract_failures(policy: SecondaryMetricsPolicy) -> list[str]:
     if not _is_plain_non_empty_string(policy.approval_reference) or not _is_hex64_string(policy.approval_digest):
         hard.append(_reason("policy_approval_invalid"))
 
+    scope_texts = (
+        policy.policy_id,
+        policy.correlation_id,
+        policy.approval_reference,
+        policy.approved_hit_rate_floor,
+        policy.approved_fill_rate_floor,
+        policy.approved_slippage_ceiling_bps,
+        *_metadata_texts(policy.metadata),
+    )
+    if _has_scope_violation(*scope_texts):
+        hard.append(_reason("policy_scope_violation"))
+    if _has_clock_token(*scope_texts):
+        hard.append(_reason("policy_clock_token_forbidden"))
+
     hit_floor = _parse_scale18(policy.approved_hit_rate_floor)
     fill_floor = _parse_scale18(policy.approved_fill_rate_floor)
     slippage_ceiling = _parse_scale18(policy.approved_slippage_ceiling_bps)
@@ -479,6 +493,21 @@ def _record_contract_failures(record: TradeRecordEvidence) -> list[str]:
         or record.decimal_internal_precision != _DECIMAL_INTERNAL_PRECISION
     ):
         hard.append(_reason("record_decimal_policy_mismatch"))
+
+    scope_texts = (
+        record.record_id,
+        record.correlation_id,
+        record.sleeve_id,
+        record.policy_id,
+        record.episode_id,
+        record.strategy_id,
+        record.decision_id,
+        *_metadata_texts(record.metadata),
+    )
+    if _has_scope_violation(*scope_texts):
+        hard.append(_reason("record_scope_violation"))
+    if _has_clock_token(*scope_texts):
+        hard.append(_reason("record_clock_token_forbidden"))
     return hard
 
 

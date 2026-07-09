@@ -327,6 +327,25 @@ def test_resealed_policy_decimal_or_definition_mismatch_rejects(override: dict[s
     assert _rc(reason) in evidence.reason_codes
 
 
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"approval_reference": "live-ready"}, "policy_scope_violation"),
+        ({"approval_reference": "BIST-approval"}, "policy_scope_violation"),
+        ({"metadata": (("source", "datetime.utcnow"),)}, "policy_clock_token_forbidden"),
+    ],
+)
+def test_resealed_policy_scope_or_clock_tokens_rejects(override: dict[str, object], reason: str) -> None:
+    tampered = _reseal_policy(_policy(), **override)
+
+    evidence = _build(policy=tampered)
+
+    assert evidence.status is PaperSecondaryMetricsEvidenceStatus.METRICS_REJECTED
+    assert evidence.ready is False
+    assert evidence.status is not PaperSecondaryMetricsEvidenceStatus.METRICS_READY
+    assert _rc(reason) in evidence.reason_codes
+
+
 def test_record_digest_mismatch_rejects() -> None:
     resealed = replace(_record(0), record_digest="0" * 64)
     evidence = _build(records=[resealed, _record(1)])
@@ -432,6 +451,25 @@ def test_incoherent_raw_record_rejected() -> None:
 def test_resealed_record_definition_or_decimal_policy_mismatch_rejects(
     override: dict[str, object], reason: str
 ) -> None:
+    tampered = _reseal(_record(0), **override)
+
+    evidence = _build(records=[tampered, _record(1)])
+
+    assert evidence.status is PaperSecondaryMetricsEvidenceStatus.METRICS_REJECTED
+    assert evidence.ready is False
+    assert evidence.status is not PaperSecondaryMetricsEvidenceStatus.METRICS_READY
+    assert _rc(reason) in evidence.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"record_id": "live-ready"}, "record_scope_violation"),
+        ({"episode_id": "BIST-episode"}, "record_scope_violation"),
+        ({"metadata": (("source", "time.time"),)}, "record_clock_token_forbidden"),
+    ],
+)
+def test_resealed_record_scope_or_clock_tokens_rejects(override: dict[str, object], reason: str) -> None:
     tampered = _reseal(_record(0), **override)
 
     evidence = _build(records=[tampered, _record(1)])
