@@ -36,8 +36,6 @@ _DECIMAL_SCALE = 18
 _DECIMAL_ROUNDING = "ROUND_HALF_EVEN"
 _DECIMAL_INTERNAL_PRECISION = 80
 
-_SHA256_HEX_LENGTH = 64
-_HEX_CHARS = frozenset("0123456789abcdef")
 _BPS_PER_UNIT = Decimal(10_000)
 
 # Exactly _DECIMAL_SCALE (18) fractional digits are mandatory; a looser pattern would let the same number
