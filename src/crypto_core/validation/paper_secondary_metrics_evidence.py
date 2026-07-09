@@ -60,6 +60,17 @@ _MAX_RECORDS = 100_000
 _SHA256_HEX_LENGTH = 64
 _HEX_CHARS = frozenset("0123456789abcdef")
 
+_EXPECTED_POLICY_VERSION = "secondary-metrics-policy.v1"
+_EXPECTED_POLICY_HIT_RATE_DEFINITION = "realized_pnl_positive_episode_over_decided_episodes.v1"
+_EXPECTED_POLICY_FILL_RATE_DEFINITION = "filled_quantity_over_intended_quantity_and_filled_episode_ratio.v1"
+_EXPECTED_POLICY_SLIPPAGE_DEFINITION = "signed_bps_vs_expected_fill_reference_price.v1"
+_EXPECTED_FILL_MODEL_REFERENCE = "crypto_core.execution.fill_pricer.FillPricer.mid_plus_half_spread_plus_size_impact.v1"
+
+_EXPECTED_RECORD_VERSION = "trade-record-evidence.v1"
+_EXPECTED_RECORD_HIT_RATE_DEFINITION = "realized_pnl_positive_and_decided_episode.v1"
+_EXPECTED_RECORD_FILL_RATE_DEFINITION = "filled_quantity_positive_episode.v1"
+_EXPECTED_RECORD_SLIPPAGE_DEFINITION = "signed_bps_vs_expected_fill_reference_price.v1"
+
 # Raw-field re-validation (SM-4 recomputes every metric from raw record fields and never trusts the carried
 # derived flags): mirrors the SM-3 scale-18 policy and magnitude bounds so a re-sealed but internally
 # incoherent record fails closed instead of poisoning an aggregate.
@@ -260,6 +271,10 @@ def _is_hex64_string(value: object) -> bool:
     return type(value) is str and len(value) == _SHA256_HEX_LENGTH and all(char in _HEX_CHARS for char in value)
 
 
+def _is_exact_int(value: object) -> bool:
+    return type(value) is int
+
+
 def _require_plain_non_empty_string(value: object, field_name: str) -> str:
     if not _is_plain_non_empty_string(value):
         raise PaperSecondaryMetricsEvidenceError(_reason(f"{field_name}_invalid"))
@@ -336,6 +351,48 @@ def _recomputed_digest_or_none(compute: object, artifact: object) -> str | None:
         return None
 
 
+def _policy_contract_failures(policy: SecondaryMetricsPolicy) -> list[str]:
+    """Re-validate SM-2 governance and canonical policy fields at the SM-4 trust boundary."""
+
+    hard: list[str] = []
+    if policy.policy_version != _EXPECTED_POLICY_VERSION:
+        hard.append(_reason("policy_version_invalid"))
+    if (
+        policy.hit_rate_definition != _EXPECTED_POLICY_HIT_RATE_DEFINITION
+        or policy.fill_rate_definition != _EXPECTED_POLICY_FILL_RATE_DEFINITION
+        or policy.slippage_definition != _EXPECTED_POLICY_SLIPPAGE_DEFINITION
+    ):
+        hard.append(_reason("policy_definition_mismatch"))
+    if policy.expected_fill_model_reference != _EXPECTED_FILL_MODEL_REFERENCE:
+        hard.append(_reason("policy_expected_fill_model_reference_invalid"))
+    if not _is_hex64_string(policy.expected_fill_model_parameters_digest):
+        hard.append(_reason("policy_expected_fill_model_parameters_digest_invalid"))
+    if (
+        policy.decimal_policy != _DECIMAL_POLICY
+        or policy.decimal_scale != _DECIMAL_SCALE
+        or policy.decimal_rounding != _DECIMAL_ROUNDING
+        or policy.fraction_intermediates_required is not True
+    ):
+        hard.append(_reason("policy_decimal_policy_mismatch"))
+    if policy.thresholds_approved is not True:
+        hard.append(_reason("policy_approval_invalid"))
+    if not _is_plain_non_empty_string(policy.approval_reference) or not _is_hex64_string(policy.approval_digest):
+        hard.append(_reason("policy_approval_invalid"))
+
+    hit_floor = _parse_scale18(policy.approved_hit_rate_floor)
+    fill_floor = _parse_scale18(policy.approved_fill_rate_floor)
+    slippage_ceiling = _parse_scale18(policy.approved_slippage_ceiling_bps)
+    if hit_floor is None or hit_floor < 0 or hit_floor > 1:
+        hard.append(_reason("policy_threshold_invalid"))
+    if fill_floor is None or fill_floor < 0 or fill_floor > 1:
+        hard.append(_reason("policy_threshold_invalid"))
+    if slippage_ceiling is None or slippage_ceiling < 0:
+        hard.append(_reason("policy_threshold_invalid"))
+    if not _is_exact_int(policy.approved_min_decided_episode_count) or policy.approved_min_decided_episode_count < 1:
+        hard.append(_reason("policy_min_decided_episode_count_invalid"))
+    return hard
+
+
 def _policy_failures(policy: SecondaryMetricsPolicy) -> list[str]:
     """Trust boundary for the merged SM-2 policy (digest / schema / status / readiness / safe flags)."""
 
@@ -345,6 +402,7 @@ def _policy_failures(policy: SecondaryMetricsPolicy) -> list[str]:
         hard.append(_reason("policy_digest_mismatch"))
     if policy.schema_version != _EXPECTED_POLICY_SCHEMA_VERSION:
         hard.append(_reason("policy_schema_invalid"))
+    hard.extend(_policy_contract_failures(policy))
     if (
         policy.status is not SecondaryMetricsPolicyStatus.POLICY_READY
         or policy.ready is not True
@@ -402,6 +460,28 @@ def _record_raw_incoherent(record: TradeRecordEvidence) -> bool:
     return record.realized_fill_price is not None
 
 
+def _record_contract_failures(record: TradeRecordEvidence) -> list[str]:
+    """Re-validate SM-3 contract fields at the SM-4 trust boundary."""
+
+    hard: list[str] = []
+    if record.record_version != _EXPECTED_RECORD_VERSION:
+        hard.append(_reason("record_version_invalid"))
+    if (
+        record.hit_rate_definition != _EXPECTED_RECORD_HIT_RATE_DEFINITION
+        or record.fill_rate_definition != _EXPECTED_RECORD_FILL_RATE_DEFINITION
+        or record.slippage_definition != _EXPECTED_RECORD_SLIPPAGE_DEFINITION
+    ):
+        hard.append(_reason("record_definition_mismatch"))
+    if (
+        record.decimal_policy != _DECIMAL_POLICY
+        or record.decimal_scale != _DECIMAL_SCALE
+        or record.decimal_rounding != _DECIMAL_ROUNDING
+        or record.decimal_internal_precision != _DECIMAL_INTERNAL_PRECISION
+    ):
+        hard.append(_reason("record_decimal_policy_mismatch"))
+    return hard
+
+
 def _record_failures(record: TradeRecordEvidence, policy_id: str) -> list[str]:
     """Trust boundary for one merged SM-3 record (digest / schema / status / policy binding / safe flags)."""
 
@@ -411,6 +491,7 @@ def _record_failures(record: TradeRecordEvidence, policy_id: str) -> list[str]:
         hard.append(_reason("record_digest_mismatch"))
     if record.schema_version != _EXPECTED_RECORD_SCHEMA_VERSION:
         hard.append(_reason("record_schema_invalid"))
+    hard.extend(_record_contract_failures(record))
     if (
         record.status is not TradeRecordEvidenceStatus.RECORD_READY
         or record.ready is not True
