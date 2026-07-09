@@ -1,27 +1,59 @@
-"""Tests for the paper secondary-metrics substrate reconciliation artifact (denominator completeness)."""
+"""Tests for the paper secondary-metrics substrate reconciliation artifact (denominator completeness).
+
+Every episode / session / realized-PnL event in these fixtures is produced by its REAL builder
+(``run_paper_episode`` / ``build_paper_session_sequence`` / ``compute_paper_realized_pnl_event``), never a
+hand-forged ``PaperEpisodeRunResult`` with the impossible ``realized_pnl_computed=True`` flag. Realized-PnL
+reconciliation is therefore exercised exactly as it happens for a real paper episode: the runner leaves
+``realized_pnl_computed`` False and the session sequence rejects any episode that sets it, so the artifact
+binds realized PnL directly to the supplied event and the record's own ``realized_pnl``.
+"""
 
 from __future__ import annotations
 
 import ast
 from dataclasses import FrozenInstanceError, fields, replace
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 from crypto_core.validation import paper_secondary_metrics_substrate_reconciliation as recon_module
+from crypto_core.validation.paper_allocator_intent_draft import (
+    PaperAllocatorIntentDraft,
+    PaperAllocatorIntentDraftStatus,
+    paper_allocator_intent_draft_digest,
+)
+from crypto_core.validation.paper_capacity_gate import (
+    build_paper_capacity_gate_policy,
+    evaluate_paper_capacity_gate,
+)
 from crypto_core.validation.paper_episode_runner import (
-    PaperEpisodeRunResult,
     PaperEpisodeRunStatus,
     paper_episode_run_result_digest,
+    run_paper_episode,
 )
 from crypto_core.validation.paper_fill_simulator import (
-    PaperFillSimulationResult,
-    PaperFillSimulationStatus,
+    build_paper_fill_market_snapshot,
+    build_paper_fill_policy,
     paper_fill_simulation_result_digest,
+    simulate_paper_fill,
+)
+from crypto_core.validation.paper_order_intent import build_paper_order_intent
+from crypto_core.validation.paper_order_intent_admission import (
+    PaperOrderIntentType,
+    PaperOrderSide,
+    build_paper_order_intent_request,
+    evaluate_paper_order_intent_admission,
+)
+from crypto_core.validation.paper_pnl_report import build_paper_mark_snapshot
+from crypto_core.validation.paper_position_state import (
+    PaperPositionStateSide,
+    apply_paper_fill_to_position,
+    build_flat_paper_position_state,
+    build_paper_position_state,
 )
 from crypto_core.validation.paper_realized_pnl import (
-    PaperRealizedPnlEvent,
-    PaperRealizedPnlStatus,
+    compute_paper_realized_pnl_event,
     paper_realized_pnl_event_digest,
 )
 from crypto_core.validation.paper_secondary_metrics_evidence import build_paper_secondary_metrics_evidence
@@ -33,16 +65,13 @@ from crypto_core.validation.paper_secondary_metrics_substrate_reconciliation imp
     paper_secondary_metrics_substrate_reconciliation_digest,
     paper_secondary_metrics_substrate_reconciliation_to_dict,
 )
-from crypto_core.validation.paper_session_sequence import (
-    PaperSessionSequenceResult,
-    PaperSessionSequenceStatus,
-    paper_session_sequence_result_digest,
-)
+from crypto_core.validation.paper_session_sequence import build_paper_session_sequence
 from crypto_core.validation.secondary_metrics_policy import build_secondary_metrics_policy
 from crypto_core.validation.trade_record_evidence import build_trade_record_evidence, trade_record_evidence_digest
 
 _REASON_PREFIX = "paper_secondary_metrics_substrate_reconciliation:"
-_MARKET = "BTC-USD"
+_MARKET = "BTC-PERPETUAL"
+_CORR = "corr-1"
 
 _STRUCTURAL_FALSE_FLAGS = (
     "live_ready",
@@ -58,132 +87,205 @@ _STRUCTURAL_FALSE_FLAGS = (
     "sm6_enabled",
 )
 
-_counter = [0]
+_uid_counter = [0]
 
 
-def _hex() -> str:
-    _counter[0] += 1
-    return format(_counter[0], "064x")
+def _uid(prefix: str) -> str:
+    _uid_counter[0] += 1
+    return f"{prefix}-{_uid_counter[0]}"
 
 
 def _rc(code: str) -> str:
     return f"{_REASON_PREFIX}{code}"
 
 
-def _reseal(obj, field: str, fn):
-    return replace(obj, **{field: fn(obj)})
+def _scale18(value: object) -> str:
+    return format(Decimal(str(value)).quantize(Decimal("1E-18")), "f")
 
 
-def _fill(status: PaperFillSimulationStatus, filled: str, unfilled: str, price: str, *, correlation_id: str = "corr-1"):
-    result = PaperFillSimulationResult(
-        schema_version="paper-fill-simulation-result.v1",
-        status=status,
-        fill_simulation_id=f"fs-{_hex()[:6]}",
-        intent_digest=_hex(),
-        market_snapshot_digest=_hex(),
-        fill_policy_digest=_hex(),
-        market_symbol=_MARKET,
-        side="BUY",
-        intent_type="MARKET",
-        fill_price=price,
-        filled_units=filled,
-        unfilled_units=unfilled,
-        gross_notional="1",
-        fee_amount="0",
-        reason_codes=(),
-        correlation_id=correlation_id,
-        metadata=(),
-        result_digest="0" * 64,
+# --- Real-builder substrate scaffolding ---------------------------------------------------------------------
+
+
+def _make_draft() -> PaperAllocatorIntentDraft:
+    fields_map: dict[str, object] = {
+        "schema_version": "paper-allocator-intent-draft.v1",
+        "status": PaperAllocatorIntentDraftStatus.DRAFT_READY,
+        "sleeve_id": "sleeve-alpha",
+        "policy_id": "policy-alpha",
+        "readiness_digest": "a" * 64,
+        "promotion_readiness_journal_entry_digest": "a" * 64,
+        "promotion_readiness_payload_digest": "a" * 64,
+        "promotion_candidate_journal_entry_digest": "a" * 64,
+        "decision_journal_entry_digest": "a" * 64,
+        "decision_journal_payload_digest": "a" * 64,
+        "eligible_count": 2,
+        "blocked_count": 0,
+        "insufficient_count": 0,
+        "blockers": (),
+        "correlation_id": "corr-draft",
+        "metadata": (),
+    }
+    draft = PaperAllocatorIntentDraft(**fields_map, draft_digest="")  # type: ignore[arg-type]
+    return replace(draft, draft_digest=paper_allocator_intent_draft_digest(draft))
+
+
+def _order_intent(side: PaperOrderSide, *, requested_units: str = "1", requested_notional: str = "100000"):
+    cap_policy = build_paper_capacity_gate_policy(
+        policy_id="policy-alpha",
+        sleeve_id="sleeve-alpha",
+        max_notional="100000000",
+        max_units="100000",
+        max_open_intents=5,
     )
-    return _reseal(result, "result_digest", paper_fill_simulation_result_digest)
-
-
-def _episode(episode_id: str, fill_result, realized_pnl_computed: bool, transition: str, *, correlation_id="corr-1"):
-    result = PaperEpisodeRunResult(
-        schema_version="paper-episode-run-result.v1",
-        episode_run_id=episode_id,
-        status=PaperEpisodeRunStatus.COMPUTED,
-        market_symbol=_MARKET,
-        order_intent_digest=_hex(),
-        prior_position_state_digest=_hex(),
-        fill_market_snapshot_digest=_hex(),
-        fill_policy_digest=_hex(),
-        fill_simulation_result_digest=fill_result.result_digest,
-        fill_status="X",
-        position_transition_digest=transition,
-        transition_status="X",
-        new_position_state_digest=_hex(),
-        mark_snapshot_digest=_hex(),
-        pnl_report_digest=_hex(),
-        reason_codes=(),
-        correlation_id=correlation_id,
-        metadata=(),
-        episode_run_digest="0" * 64,
-        realized_pnl_computed=realized_pnl_computed,
+    capacity = evaluate_paper_capacity_gate(
+        _make_draft(),
+        cap_policy,
+        requested_notional=requested_notional,
+        requested_units=requested_units,
+        correlation_id="corr-capacity",
     )
-    return _reseal(result, "episode_run_digest", paper_episode_run_result_digest)
-
-
-def _event(fill_result, transition: str, realized_pnl: str, *, correlation_id="corr-1"):
-    event = PaperRealizedPnlEvent(
-        schema_version="paper-realized-pnl-event.v1",
-        realized_pnl_event_id=f"rp-{_hex()[:6]}",
-        status=PaperRealizedPnlStatus.COMPUTED,
+    request = build_paper_order_intent_request(
+        request_id=_uid("req"),
+        capacity_decision_digest=capacity.decision_digest,
         market_symbol=_MARKET,
-        prior_position_state_digest=_hex(),
-        fill_simulation_result_digest=fill_result.result_digest,
-        position_transition_digest=transition,
-        new_position_state_digest=_hex(),
-        prior_side="LONG",
-        fill_side="SELL",
-        prior_signed_units="1",
-        filled_units="1",
-        closed_units="1",
-        residual_open_units="0",
-        average_entry_price="95",
-        fill_price="100",
-        realized_pnl=realized_pnl,
-        reason_codes=(),
-        correlation_id=correlation_id,
-        metadata=(),
-        realized_pnl_event_digest="0" * 64,
+        side=side,
+        intent_type=PaperOrderIntentType.MARKET,
+        requested_notional=capacity.requested_notional,
+        requested_units=capacity.requested_units,
+        limit_price=None,
+        correlation_id="corr-req",
     )
-    return _reseal(event, "realized_pnl_event_digest", paper_realized_pnl_event_digest)
+    admission = evaluate_paper_order_intent_admission(capacity, request, correlation_id="corr-admit")
+    return build_paper_order_intent(admission, intent_id=_uid("intent"), correlation_id="corr-intent")
 
 
-def _record(
-    episode_id: str,
-    record_id: str,
-    *,
-    filled: str,
-    intended: str,
-    realized_price: str | None,
-    realized_pnl: str,
-    policy_id: str = "policy-1",
-    correlation_id: str = "corr-1",
-    decided: bool = True,
-):
+def _short_prior(*, signed: str = "-2", abs_units: str = "2", avg: str = "100"):
+    return build_paper_position_state(
+        position_state_id=_uid("pos"),
+        market_symbol=_MARKET,
+        side=PaperPositionStateSide.SHORT,
+        signed_units=signed,
+        abs_units=abs_units,
+        average_entry_price=avg,
+        transition_count=0,
+        correlation_id="corr-pos",
+    )
+
+
+def _flat_prior():
+    return build_flat_paper_position_state(
+        position_state_id=_uid("pos"), market_symbol=_MARKET, correlation_id="corr-pos"
+    )
+
+
+def _snapshot(reference_price: str, *, available_units: str | None = None):
+    return build_paper_fill_market_snapshot(
+        snapshot_id=_uid("snap"),
+        market_symbol=_MARKET,
+        reference_price=reference_price,
+        available_units=available_units,
+    )
+
+
+def _fill_policy(*, allow_partial_fill: bool = False):
+    return build_paper_fill_policy(
+        policy_id="fill-policy-1", slippage_bps="0", fee_rate_bps="0", allow_partial_fill=allow_partial_fill
+    )
+
+
+def _mark(mark_price: str = "100"):
+    return build_paper_mark_snapshot(
+        mark_snapshot_id=_uid("mark"), market_symbol=_MARKET, mark_price=mark_price, correlation_id="corr-mark"
+    )
+
+
+def _run_episode(intent, prior, snapshot, fpolicy, mark, *, episode_id: str):
+    ids: dict[str, object] = {
+        "fill_simulation_id": _uid("fillsim"),
+        "position_transition_id": _uid("trans"),
+        "new_position_state_id": _uid("newpos"),
+        "pnl_report_id": _uid("pnl"),
+        "episode_run_id": episode_id,
+        "correlation_id": _CORR,
+    }
+    episode = run_paper_episode(intent, prior, snapshot, fpolicy, mark, **ids)  # type: ignore[arg-type]
+    # Re-run the identical (deterministic) fill so the realized event can bind the episode's own fill digest.
+    fill_result = simulate_paper_fill(
+        intent, snapshot, fpolicy, fill_simulation_id=ids["fill_simulation_id"], correlation_id=_CORR
+    )
+    return episode, fill_result, ids
+
+
+def _record_from(episode_id: str, record_id: str, fill_result, *, event, policy_id: str = "policy-1"):
+    filled = Decimal(fill_result.filled_units)
+    unfilled = Decimal(fill_result.unfilled_units)
+    is_filled = filled > 0
     return build_trade_record_evidence(
         record_id=record_id,
-        correlation_id=correlation_id,
+        correlation_id=_CORR,
         sleeve_id="sleeve-1",
         policy_id=policy_id,
         episode_id=episode_id,
         strategy_id="strategy-1",
-        decision_id=f"decision-{record_id}",
-        intended_quantity=intended,
-        filled_quantity=filled,
+        decision_id=_uid("decision"),
+        intended_quantity=_scale18(filled + unfilled),
+        filled_quantity=_scale18(filled),
         expected_fill_price="100.000000000000000000",
-        realized_fill_price=realized_price,
-        realized_pnl=realized_pnl,
-        decided_episode=decided,
+        realized_fill_price=_scale18(fill_result.fill_price) if is_filled else None,
+        realized_pnl=_scale18(event.realized_pnl) if event is not None else "0.000000000000000000",
+        decided_episode=True,
     )
+
+
+def _closing_bundle(
+    episode_id: str, record_id: str, *, reference_price: str, avg: str = "100", policy_id: str = "policy-1"
+):
+    """A real FILLED episode that BUYs to reduce a prior SHORT, realizing PnL, with a real realized event."""
+
+    prior = _short_prior(avg=avg)
+    intent = _order_intent(PaperOrderSide.BUY)
+    snapshot = _snapshot(reference_price)
+    episode, fill_result, ids = _run_episode(intent, prior, snapshot, _fill_policy(), _mark(), episode_id=episode_id)
+    transition, new_state = apply_paper_fill_to_position(
+        prior,
+        fill_result,
+        transition_id=ids["position_transition_id"],
+        new_position_state_id=ids["new_position_state_id"],
+        correlation_id=_CORR,
+    )
+    event = compute_paper_realized_pnl_event(
+        prior, fill_result, transition, new_state, realized_pnl_event_id=_uid("rp"), correlation_id=_CORR
+    )
+    record = _record_from(episode_id, record_id, fill_result, event=event, policy_id=policy_id)
+    return episode, fill_result, event, record
+
+
+def _opening_bundle(episode_id: str, record_id: str, *, policy_id: str = "policy-1"):
+    """A real FILLED opening episode (flat -> long); realizes nothing, so no realized event is supplied."""
+
+    intent = _order_intent(PaperOrderSide.BUY)
+    episode, fill_result, _ = _run_episode(
+        intent, _flat_prior(), _snapshot("100"), _fill_policy(), _mark(), episode_id=episode_id
+    )
+    record = _record_from(episode_id, record_id, fill_result, event=None, policy_id=policy_id)
+    return episode, fill_result, None, record
+
+
+def _rejected_bundle(episode_id: str, record_id: str, *, policy_id: str = "policy-1"):
+    """A real REJECTED (insufficient-liquidity) episode: zero fill, no realized fill price, no event."""
+
+    intent = _order_intent(PaperOrderSide.BUY)
+    episode, fill_result, _ = _run_episode(
+        intent, _flat_prior(), _snapshot("100", available_units="0"), _fill_policy(), _mark(), episode_id=episode_id
+    )
+    record = _record_from(episode_id, record_id, fill_result, event=None, policy_id=policy_id)
+    return episode, fill_result, None, record
 
 
 def _policy(**overrides):
     payload = {
         "policy_id": "policy-1",
-        "correlation_id": "corr-1",
+        "correlation_id": _CORR,
         "expected_fill_model_parameters_digest": "a" * 64,
         "approved_hit_rate_floor": "0.500000000000000000",
         "approved_fill_rate_floor": "0.900000000000000000",
@@ -197,93 +299,45 @@ def _policy(**overrides):
     return build_secondary_metrics_policy(**payload)  # type: ignore[arg-type]
 
 
-def _session(episode_digests: tuple[str, ...], *, correlation_id="corr-1", market=_MARKET):
-    result = PaperSessionSequenceResult(
-        schema_version="paper-session-sequence-result.v1",
-        paper_session_id="ps-1",
-        status=PaperSessionSequenceStatus.COMPUTED,
-        market_symbol=market,
-        episode_count=len(episode_digests),
-        episode_run_digests=episode_digests,
-        first_episode_run_digest=episode_digests[0],
-        last_episode_run_digest=episode_digests[-1],
-        computed_episode_count=len(episode_digests),
-        fill_rejected_episode_count=0,
-        rejected_episode_count=0,
-        final_position_state_digest=_hex(),
-        final_pnl_report_digest=_hex(),
-        reason_codes=(),
-        correlation_id=correlation_id,
-        metadata=(),
-        paper_session_sequence_digest="0" * 64,
-    )
-    return _reseal(result, "paper_session_sequence_digest", paper_session_sequence_result_digest)
-
-
 class _Scenario:
-    """A coherent win/loss/rejected 3-episode reconciliation fixture, mutable per test."""
+    """A coherent win/loss/rejected 3-episode reconciliation fixture from real builders, mutable per test."""
 
-    def __init__(self) -> None:
+    def __init__(self, bundles=None) -> None:
         self.policy = _policy()
-        pt1, pt2, pt3 = _hex(), _hex(), _hex()
-        fr1 = _fill(PaperFillSimulationStatus.FILLED, "1", "0", "100.1")
-        fr2 = _fill(PaperFillSimulationStatus.FILLED, "1", "0", "99")
-        fr3 = _fill(PaperFillSimulationStatus.REJECTED, "0", "1", "0")
-        er1 = _episode("ep-0", fr1, True, pt1)
-        er2 = _episode("ep-1", fr2, True, pt2)
-        er3 = _episode("ep-2", fr3, False, pt3)
-        ev1 = _event(fr1, pt1, "5")
-        ev2 = _event(fr2, pt2, "-3")
-        rec1 = _record(
-            "ep-0",
-            "rec-0",
-            filled="1.000000000000000000",
-            intended="1.000000000000000000",
-            realized_price="100.100000000000000000",
-            realized_pnl="5.000000000000000000",
+        if bundles is None:
+            bundles = [
+                _closing_bundle("ep-0", "rec-0", reference_price="95"),  # BUY closes short @95 vs avg100 -> +5
+                _closing_bundle("ep-1", "rec-1", reference_price="103"),  # BUY closes short @103 vs avg100 -> -3
+                _rejected_bundle("ep-2", "rec-2"),
+            ]
+        self.bundles = list(bundles)
+        self._sync()
+        # Real, builder-valid session sequence over the real episodes (the digest-bound denominator ROOT).
+        self.session = build_paper_session_sequence(
+            [episode for (episode, _, _, _) in self.bundles], paper_session_id="ps-1", correlation_id=_CORR
         )
-        rec2 = _record(
-            "ep-1",
-            "rec-1",
-            filled="1.000000000000000000",
-            intended="1.000000000000000000",
-            realized_price="99.000000000000000000",
-            realized_pnl="-3.000000000000000000",
-        )
-        rec3 = _record(
-            "ep-2",
-            "rec-2",
-            filled="0.000000000000000000",
-            intended="1.000000000000000000",
-            realized_price=None,
-            realized_pnl="0.000000000000000000",
-        )
-        self.records = [rec1, rec2, rec3]
+
+    def _sync(self) -> None:
         self.inputs = [
-            PaperSecondaryMetricsSubstrateRecordInput(rec1, er1, fr1, ev1),
-            PaperSecondaryMetricsSubstrateRecordInput(rec2, er2, fr2, ev2),
-            PaperSecondaryMetricsSubstrateRecordInput(rec3, er3, fr3, None),
+            PaperSecondaryMetricsSubstrateRecordInput(record, episode, fill_result, event)
+            for (episode, fill_result, event, record) in self.bundles
         ]
-        self.session = _session((er1.episode_run_digest, er2.episode_run_digest, er3.episode_run_digest))
+        self.records = [record for (_, _, _, record) in self.bundles]
         self._rebuild_metrics()
 
     def _rebuild_metrics(self) -> None:
         self.metrics = build_paper_secondary_metrics_evidence(
-            self.policy, self.records, evidence_id="sm4-1", correlation_id="corr-1"
+            self.policy, self.records, evidence_id="sm4-1", correlation_id=_CORR
         )
 
     def rebuild_metrics_from_inputs(self) -> None:
         self.records = [item.record for item in self.inputs]
         self._rebuild_metrics()
 
-    def rebuild_session_from_inputs(self) -> None:
-        digests = tuple(paper_episode_run_result_digest(item.episode_run) for item in self.inputs)
-        self.session = _session(digests)
-
     def build(self, **overrides):
         payload = {
             "reconciliation_id": "recon-1",
-            "correlation_id": "corr-1",
+            "correlation_id": _CORR,
             "expected_policy_digest": self.policy.policy_digest,
             "expected_metrics_evidence_digest": self.metrics.evidence_digest,
             "expected_session_sequence_digest": self.session.paper_session_sequence_digest,
@@ -292,6 +346,16 @@ class _Scenario:
         return build_paper_secondary_metrics_substrate_reconciliation(
             self.policy, self.metrics, self.inputs, self.session, **payload
         )
+
+
+def _reseal_record(record, **overrides):
+    tampered = replace(record, **overrides)
+    return replace(tampered, record_digest=trade_record_evidence_digest(tampered))
+
+
+def _reseal_event(event, **overrides):
+    tampered = replace(event, **overrides)
+    return replace(tampered, realized_pnl_event_digest=paper_realized_pnl_event_digest(tampered))
 
 
 # --- 1. Public API / happy path -----------------------------------------------------------------------------
@@ -307,6 +371,20 @@ def test_public_api_exact() -> None:
         "paper_secondary_metrics_substrate_reconciliation_digest",
         "paper_secondary_metrics_substrate_reconciliation_to_dict",
     }
+
+
+def test_episodes_are_builder_valid() -> None:
+    # Guard against regressing to hand-forged substrate: every episode must reproduce its own public digest
+    # and (per the runner/session contract) carry realized_pnl_computed=False, and the session must accept them.
+    scenario = _Scenario()
+    for item in scenario.inputs:
+        assert item.episode_run.realized_pnl_computed is False
+        assert paper_episode_run_result_digest(item.episode_run) == item.episode_run.episode_run_digest
+    assert scenario.inputs[0].episode_run.status is PaperEpisodeRunStatus.COMPUTED
+    assert scenario.inputs[2].episode_run.status is PaperEpisodeRunStatus.FILL_REJECTED
+    assert scenario.session.episode_run_digests == tuple(
+        item.episode_run.episode_run_digest for item in scenario.inputs
+    )
 
 
 def test_happy_win_loss_rejected_reconciled() -> None:
@@ -380,21 +458,10 @@ def test_dropped_rejected_unfilled_record_rejected() -> None:
 
 def test_extra_record_without_episode_rejected() -> None:
     scenario = _Scenario()
-    pt = _hex()
-    extra_fill = _fill(PaperFillSimulationStatus.FILLED, "1", "0", "100")
-    extra_ep = _episode("ep-extra", extra_fill, True, pt)
-    extra_ev = _event(extra_fill, pt, "1")
-    extra_rec = _record(
-        "ep-extra",
-        "rec-extra",
-        filled="1.000000000000000000",
-        intended="1.000000000000000000",
-        realized_price="100.000000000000000000",
-        realized_pnl="1.000000000000000000",
-    )
+    extra = _closing_bundle("ep-extra", "rec-extra", reference_price="98")
     scenario.inputs = [
         *scenario.inputs,
-        PaperSecondaryMetricsSubstrateRecordInput(extra_rec, extra_ep, extra_fill, extra_ev),
+        PaperSecondaryMetricsSubstrateRecordInput(extra[3], extra[0], extra[1], extra[2]),
     ]
     scenario.rebuild_metrics_from_inputs()
     reconciliation = scenario.build()
@@ -404,21 +471,10 @@ def test_extra_record_without_episode_rejected() -> None:
 
 def test_duplicate_record_episode_id_rejected() -> None:
     scenario = _Scenario()
-    # A distinct substrate episode (different digest) re-using episode id "ep-0" of the win episode, with a
-    # record whose episode_id matches its own run id — so the collision is a genuine duplicate episode id,
-    # not a record<->run mismatch.
-    pt = _hex()
-    dup_fill = _fill(PaperFillSimulationStatus.REJECTED, "0", "1", "0")
-    dup_episode = _episode("ep-0", dup_fill, False, pt)
-    dup_record = _record(
-        "ep-0",
-        "rec-dup",
-        filled="0.000000000000000000",
-        intended="1.000000000000000000",
-        realized_price=None,
-        realized_pnl="0.000000000000000000",
-    )
-    scenario.inputs[2] = PaperSecondaryMetricsSubstrateRecordInput(dup_record, dup_episode, dup_fill, None)
+    # A distinct real episode (different fill -> different digest) re-using episode id "ep-0"; its record's
+    # episode_id matches its own run id, so the collision is a genuine duplicate episode id.
+    dup = _closing_bundle("ep-0", "rec-dup", reference_price="96")
+    scenario.inputs[2] = PaperSecondaryMetricsSubstrateRecordInput(dup[3], dup[0], dup[1], dup[2])
     scenario.rebuild_metrics_from_inputs()
     reconciliation = scenario.build()
     assert reconciliation.status is PaperSecondaryMetricsSubstrateReconciliationStatus.REJECTED
@@ -466,8 +522,9 @@ def test_stale_session_sequence_digest_rejected() -> None:
 def test_stale_fill_result_digest_rejected() -> None:
     scenario = _Scenario()
     win = scenario.inputs[0]
-    tampered_fill = _reseal(
-        replace(win.fill_result, gross_notional="999"), "result_digest", paper_fill_simulation_result_digest
+    tampered_fill = replace(
+        replace(win.fill_result, gross_notional="999"),
+        result_digest=paper_fill_simulation_result_digest(replace(win.fill_result, gross_notional="999")),
     )
     scenario.inputs[0] = replace(win, fill_result=tampered_fill)
     reconciliation = scenario.build()
@@ -487,12 +544,7 @@ def test_stale_realized_event_digest_rejected() -> None:
     assert _rc("realized_event_digest_mismatch") in reconciliation.reason_codes
 
 
-# --- 4. Record <-> substrate value binding ------------------------------------------------------------------
-
-
-def _reseal_record(record, **overrides):
-    tampered = replace(record, **overrides)
-    return replace(tampered, record_digest=trade_record_evidence_digest(tampered))
+# --- 4. Record <-> substrate value / realized-event binding -------------------------------------------------
 
 
 def test_resealed_record_quantity_mismatch_rejected() -> None:
@@ -517,9 +569,75 @@ def test_resealed_record_realized_pnl_mismatch_rejected() -> None:
     assert _rc("realized_pnl_mismatch") in reconciliation.reason_codes
 
 
+def test_losing_record_reconciles_with_matching_event() -> None:
+    # The loss episode reconciles on its own only when its realized event binds and matches the record's PnL.
+    scenario = _Scenario([_closing_bundle("ep-0", "rec-0", reference_price="103")])  # -3
+    reconciliation = scenario.build()
+    assert reconciliation.status is PaperSecondaryMetricsSubstrateReconciliationStatus.RECONCILED
+    assert reconciliation.negative_pnl_episode_count == 1
+    assert reconciliation.filled_episode_count == 1
+
+
+def test_nonzero_pnl_filled_missing_event_rejected() -> None:
+    scenario = _Scenario()
+    scenario.inputs[1] = replace(scenario.inputs[1], realized_pnl_event=None)  # loss record still claims -3
+    reconciliation = scenario.build()
+    assert reconciliation.status is PaperSecondaryMetricsSubstrateReconciliationStatus.REJECTED
+    assert _rc("realized_event_required") in reconciliation.reason_codes
+
+
+def test_supplied_event_pnl_mismatch_rejected() -> None:
+    scenario = _Scenario()
+    win = scenario.inputs[0]
+    scenario.inputs[0] = replace(win, realized_pnl_event=_reseal_event(win.realized_pnl_event, realized_pnl="9"))
+    reconciliation = scenario.build()
+    assert reconciliation.status is PaperSecondaryMetricsSubstrateReconciliationStatus.REJECTED
+    assert _rc("realized_pnl_mismatch") in reconciliation.reason_codes
+
+
+def test_supplied_event_binding_mismatch_rejected() -> None:
+    scenario = _Scenario()
+    # The loss episode's real event bound onto the win input: its fill/transition digests bind ep-1, not ep-0.
+    win = scenario.inputs[0]
+    scenario.inputs[0] = replace(win, realized_pnl_event=scenario.inputs[1].realized_pnl_event)
+    reconciliation = scenario.build()
+    assert reconciliation.status is PaperSecondaryMetricsSubstrateReconciliationStatus.REJECTED
+    assert _rc("realized_event_binding_mismatch") in reconciliation.reason_codes
+
+
+def test_supplied_event_resealed_fill_units_mismatch_rejected() -> None:
+    scenario = _Scenario()
+    win = scenario.inputs[0]
+    tampered_event = _reseal_event(win.realized_pnl_event, filled_units="0.500000000000000000")
+    scenario.inputs[0] = replace(win, realized_pnl_event=tampered_event)
+    reconciliation = scenario.build()
+    assert reconciliation.status is PaperSecondaryMetricsSubstrateReconciliationStatus.REJECTED
+    assert _rc("realized_event_binding_mismatch") in reconciliation.reason_codes
+
+
+def test_supplied_event_resealed_fill_price_mismatch_rejected() -> None:
+    scenario = _Scenario()
+    win = scenario.inputs[0]
+    tampered_event = _reseal_event(win.realized_pnl_event, fill_price="96.000000000000000000")
+    scenario.inputs[0] = replace(win, realized_pnl_event=tampered_event)
+    reconciliation = scenario.build()
+    assert reconciliation.status is PaperSecondaryMetricsSubstrateReconciliationStatus.REJECTED
+    assert _rc("realized_event_binding_mismatch") in reconciliation.reason_codes
+
+
+def test_zero_pnl_filled_without_event_reconciles() -> None:
+    # A filled opening episode legitimately realizes nothing; the substrate cannot prove an event exists, so a
+    # zero-PnL record with no event is a complete, reconciled episode (documented completeness boundary).
+    scenario = _Scenario([_opening_bundle("ep-0", "rec-0")])
+    reconciliation = scenario.build()
+    assert reconciliation.status is PaperSecondaryMetricsSubstrateReconciliationStatus.RECONCILED
+    assert reconciliation.zero_pnl_episode_count == 1
+    assert reconciliation.filled_episode_count == 1
+
+
 def test_filled_episode_missing_required_realized_event_rejected() -> None:
     scenario = _Scenario()
-    scenario.inputs[0] = replace(scenario.inputs[0], realized_pnl_event=None)  # episode says realized_pnl_computed True
+    scenario.inputs[0] = replace(scenario.inputs[0], realized_pnl_event=None)  # win record still claims +5
     reconciliation = scenario.build()
     assert reconciliation.status is PaperSecondaryMetricsSubstrateReconciliationStatus.REJECTED
     assert _rc("realized_event_required") in reconciliation.reason_codes
@@ -528,11 +646,21 @@ def test_filled_episode_missing_required_realized_event_rejected() -> None:
 def test_rejected_fill_carrying_realized_event_rejected() -> None:
     scenario = _Scenario()
     rejected = scenario.inputs[2]
-    stray_event = _event(rejected.fill_result, rejected.episode_run.position_transition_digest, "0")
+    stray_event = scenario.inputs[0].realized_pnl_event  # a real event, but this episode is REJECTED
     scenario.inputs[2] = replace(rejected, realized_pnl_event=stray_event)
     reconciliation = scenario.build()
     assert reconciliation.status is PaperSecondaryMetricsSubstrateReconciliationStatus.REJECTED
     assert _rc("unexpected_realized_event") in reconciliation.reason_codes
+
+
+def test_rejected_fill_nonzero_pnl_rejected() -> None:
+    scenario = _Scenario()
+    tampered = _reseal_record(scenario.inputs[2].record, realized_pnl="4.000000000000000000")
+    scenario.inputs[2] = replace(scenario.inputs[2], record=tampered)
+    scenario.rebuild_metrics_from_inputs()
+    reconciliation = scenario.build()
+    assert reconciliation.status is PaperSecondaryMetricsSubstrateReconciliationStatus.REJECTED
+    assert _rc("realized_pnl_mismatch") in reconciliation.reason_codes
 
 
 def test_rejected_fill_record_claiming_fill_rejected() -> None:
@@ -575,7 +703,7 @@ def test_records_not_in_metrics_evidence_rejected() -> None:
     scenario = _Scenario()
     # Metrics evidence built over only the first two records; substrate supplies all three.
     scenario.metrics = build_paper_secondary_metrics_evidence(
-        scenario.policy, scenario.records[:2], evidence_id="sm4-1", correlation_id="corr-1"
+        scenario.policy, scenario.records[:2], evidence_id="sm4-1", correlation_id=_CORR
     )
     reconciliation = scenario.build(expected_metrics_evidence_digest=scenario.metrics.evidence_digest)
     assert reconciliation.status is PaperSecondaryMetricsSubstrateReconciliationStatus.REJECTED
@@ -594,7 +722,7 @@ def test_policy_wrong_type_raises() -> None:
             scenario.inputs,
             scenario.session,  # type: ignore[arg-type]
             reconciliation_id="r",
-            correlation_id="corr-1",
+            correlation_id=_CORR,
             expected_policy_digest="a" * 64,
             expected_metrics_evidence_digest="a" * 64,
             expected_session_sequence_digest="a" * 64,
@@ -610,7 +738,7 @@ def test_empty_inputs_raises() -> None:
             [],
             scenario.session,
             reconciliation_id="r",
-            correlation_id="corr-1",
+            correlation_id=_CORR,
             expected_policy_digest=scenario.policy.policy_digest,
             expected_metrics_evidence_digest=scenario.metrics.evidence_digest,
             expected_session_sequence_digest=scenario.session.paper_session_sequence_digest,

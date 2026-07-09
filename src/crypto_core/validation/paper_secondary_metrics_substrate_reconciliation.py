@@ -125,9 +125,13 @@ class PaperSecondaryMetricsSubstrateReconciliationStatus(str, Enum):
 class PaperSecondaryMetricsSubstrateRecordInput:
     """One SM-3 record bundled with the paper substrate that produced its episode.
 
-    ``realized_pnl_event`` is optional and MUST be supplied exactly when the bound ``episode_run`` reports
-    ``realized_pnl_computed=True`` (a realized PnL, of any sign, was computed) — this prevents a losing close
-    from being hidden by omitting its event.
+    ``realized_pnl_event`` is REQUIRED whenever the record reports a non-zero ``realized_pnl`` (a realized
+    gain or loss was computed for a closing/reducing fill) — this prevents a losing close from being hidden
+    by omitting its event — and MUST be omitted for a rejected/unfilled episode; a zero-PnL filled episode
+    (e.g. an opening or same-side fill) may omit it. Whenever it is supplied it is fully re-proven against the
+    bound ``episode_run`` / ``fill_result``. Realized PnL is bound DIRECTLY to the event and the record, never
+    to the episode's ``realized_pnl_computed`` flag (which the runner always leaves False and the session
+    sequence rejects when set true, so it can never gate a real paper episode).
     """
 
     record: TradeRecordEvidence
@@ -388,38 +392,59 @@ def _input_failures(
         ):
             hard.append(_reason("realized_fill_price_mismatch"))
 
-    # Realized-PnL binding. ``episode_run.realized_pnl_computed`` is digest-bound, so it is a trusted signal:
-    # any episode that realized PnL (any sign) MUST supply its event, defeating a dropped-loss omission.
+    # Realized-PnL binding — bound DIRECTLY to the supplied event and the record's own realized PnL, never
+    # to ``episode_run.realized_pnl_computed``. The paper episode runner computes only unrealized/MTM PnL and
+    # always leaves ``realized_pnl_computed`` False (``build_paper_session_sequence`` rejects any episode that
+    # sets it true), so realized PnL for an episode lives ONLY in a separately-computed ``PaperRealizedPnlEvent``.
+    # Rules: a non-zero ``record.realized_pnl`` MUST be backed by a COMPUTED event that binds this episode's
+    # fill/transition and reports the same PnL (a losing close cannot be hidden by omitting its event); a
+    # supplied event is ALWAYS fully re-proven; a zero ``record.realized_pnl`` needs no event (an opening /
+    # same-side fill legitimately realizes nothing and the substrate cannot prove an event exists) — a
+    # documented completeness boundary, not an overclaim — but any supplied event must still bind and match.
     realized_pnl_value = Decimal(0)
-    if episode_run.realized_pnl_computed is True:
-        if event is None:
-            hard.append(_reason("realized_event_required"))
-        else:
-            event_digest = _recomputed_digest_or_none(paper_realized_pnl_event_digest, event)
-            if (
-                event_digest is None
-                or not _is_hex64_string(event.realized_pnl_event_digest)
-                or event.realized_pnl_event_digest != event_digest
-            ):
-                hard.append(_reason("realized_event_digest_mismatch"))
-            if (
-                event.fill_simulation_result_digest != episode_run.fill_simulation_result_digest
-                or event.position_transition_digest != episode_run.position_transition_digest
-            ):
-                hard.append(_reason("realized_event_binding_mismatch"))
-            if event.status is not PaperRealizedPnlStatus.COMPUTED:
-                hard.append(_reason("realized_event_not_computed"))
-            if not _decimals_equal(record.realized_pnl, event.realized_pnl):
-                hard.append(_reason("realized_pnl_mismatch"))
-            parsed_event_pnl = _decimal_or_none(event.realized_pnl)
-            if parsed_event_pnl is not None:
-                realized_pnl_value = parsed_event_pnl
-    else:
-        # No realized PnL computed: record must carry zero realized PnL and no realized event may be supplied.
+    record_pnl = _decimal_or_none(record.realized_pnl)
+    if is_rejected or not is_filled:
+        # Rejected / unfilled episode: realized PnL must be exactly zero and no realized event may exist.
+        if record_pnl is None or record_pnl != 0:
+            hard.append(_reason("realized_pnl_mismatch"))
         if event is not None:
             hard.append(_reason("unexpected_realized_event"))
-        if not _decimals_equal(record.realized_pnl, "0"):
+    elif event is not None:
+        # Filled episode WITH an event: re-prove the event fully against THIS episode and record.
+        event_digest = _recomputed_digest_or_none(paper_realized_pnl_event_digest, event)
+        if (
+            event_digest is None
+            or not _is_hex64_string(event.realized_pnl_event_digest)
+            or event.realized_pnl_event_digest != event_digest
+        ):
+            hard.append(_reason("realized_event_digest_mismatch"))
+        if (
+            event.fill_simulation_result_digest != episode_run.fill_simulation_result_digest
+            or event.position_transition_digest != episode_run.position_transition_digest
+        ):
+            hard.append(_reason("realized_event_binding_mismatch"))
+        if event.market_symbol != market_symbol or not _decimals_equal(event.filled_units, fill_result.filled_units):
+            hard.append(_reason("realized_event_binding_mismatch"))
+        if not _decimals_equal(event.fill_price, fill_result.fill_price) or (
+            record.realized_fill_price is not None and not _decimals_equal(event.fill_price, record.realized_fill_price)
+        ):
+            hard.append(_reason("realized_event_binding_mismatch"))
+        if event.status is PaperRealizedPnlStatus.REJECTED:
+            hard.append(_reason("realized_event_not_computed"))
+        if not _decimals_equal(record.realized_pnl, event.realized_pnl):
             hard.append(_reason("realized_pnl_mismatch"))
+        if record_pnl is not None and record_pnl != 0 and event.status is not PaperRealizedPnlStatus.COMPUTED:
+            # A non-zero realized PnL can only be produced by a COMPUTED event.
+            hard.append(_reason("realized_event_not_computed"))
+        parsed_event_pnl = _decimal_or_none(event.realized_pnl)
+        if parsed_event_pnl is not None:
+            realized_pnl_value = parsed_event_pnl
+    else:
+        # Filled episode with NO event: a non-zero realized PnL is unbacked; zero realized PnL is allowed.
+        if record_pnl is None:
+            hard.append(_reason("realized_pnl_mismatch"))
+        elif record_pnl != 0:
+            hard.append(_reason("realized_event_required"))
 
     # Scope hygiene over this input's identifiers/metadata (defence in depth over the merged artifacts).
     if _has_scope_violation(
