@@ -16,7 +16,7 @@ These are **archived design contracts — never repo current-state proof**. Rule
 
 ## 1. Non-overclaim doctrine (binding for every contract below)
 
-`agent_workflow.md` section 23.5 binds: attestation-only evidence is never machine proof; injected
+`agent_workflow.md` section 23.4 binds: attestation-only evidence is never machine proof; injected
 deterministic time is never wall-clock proof; `prdv4_stage4_complete`, machine-time/timestamp-origin,
 live/shadow/Deribit/readiness, real orders/capital, profitability/edge flags stay structurally False
 in every artifact until the exact gate designed to prove them does so, under its own authorization.
