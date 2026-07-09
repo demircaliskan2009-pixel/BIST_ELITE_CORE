@@ -112,6 +112,13 @@ def _build(policy=None, records=None, **overrides: object):
     return build_paper_secondary_metrics_evidence(policy, records, **payload)  # type: ignore[arg-type]
 
 
+def _reseal_policy(policy, **overrides):
+    """Re-seal a policy with tampered fields and a freshly recomputed self-digest."""
+
+    tampered = replace(policy, **overrides)
+    return replace(tampered, policy_digest=secondary_metrics_policy_digest(tampered))
+
+
 # --- 1. Public API / happy path -----------------------------------------------------------------------------
 
 
@@ -246,6 +253,99 @@ def test_unsafe_policy_flags_rejects() -> None:
     assert _rc("policy_unsafe_flags") in evidence.reason_codes
 
 
+def test_resealed_policy_thresholds_not_approved_rejects() -> None:
+    tampered = _reseal_policy(_policy(), thresholds_approved=False)
+
+    evidence = _build(policy=tampered)
+
+    assert evidence.status is PaperSecondaryMetricsEvidenceStatus.METRICS_REJECTED
+    assert evidence.ready is False
+    assert evidence.status is not PaperSecondaryMetricsEvidenceStatus.METRICS_READY
+    assert _rc("policy_approval_invalid") in evidence.reason_codes
+
+
+def test_resealed_policy_missing_approval_metadata_rejects() -> None:
+    tampered = _reseal_policy(_policy(), approval_reference=None, approval_digest=None)
+
+    evidence = _build(policy=tampered)
+
+    assert evidence.status is PaperSecondaryMetricsEvidenceStatus.METRICS_REJECTED
+    assert evidence.ready is False
+    assert _rc("policy_approval_invalid") in evidence.reason_codes
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"approved_hit_rate_floor": "0.5"},
+        {"approved_fill_rate_floor": "0.9"},
+        {"approved_slippage_ceiling_bps": "25"},
+    ],
+)
+def test_resealed_policy_non_scale18_thresholds_reject(override: dict[str, object]) -> None:
+    tampered = _reseal_policy(_policy(), **override)
+
+    evidence = _build(policy=tampered)
+
+    assert evidence.status is PaperSecondaryMetricsEvidenceStatus.METRICS_REJECTED
+    assert evidence.ready is False
+    assert _rc("policy_threshold_invalid") in evidence.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"policy_version": "secondary-metrics-policy.v2"}, "policy_version_invalid"),
+        ({"hit_rate_definition": "wins_over_decided_episodes.v1"}, "policy_definition_mismatch"),
+        ({"fill_rate_definition": "filled_episodes_only.v1"}, "policy_definition_mismatch"),
+        ({"slippage_definition": "unsigned_bps.v1"}, "policy_definition_mismatch"),
+        (
+            {"expected_fill_model_reference": "crypto_core.execution.fill_pricer.FillPricer.v2"},
+            "policy_expected_fill_model_reference_invalid",
+        ),
+        ({"expected_fill_model_parameters_digest": "g" * 64}, "policy_expected_fill_model_parameters_digest_invalid"),
+        (
+            {"decimal_policy": "decimal_quantized_scale_9_round_half_even_fraction_intermediates.v1"},
+            "policy_decimal_policy_mismatch",
+        ),
+        ({"decimal_scale": 9}, "policy_decimal_policy_mismatch"),
+        ({"decimal_rounding": "ROUND_HALF_UP"}, "policy_decimal_policy_mismatch"),
+        ({"fraction_intermediates_required": False}, "policy_decimal_policy_mismatch"),
+        ({"approved_hit_rate_floor": "1.000000000000000001"}, "policy_threshold_invalid"),
+        ({"approved_fill_rate_floor": "1.000000000000000001"}, "policy_threshold_invalid"),
+        ({"approved_slippage_ceiling_bps": "-0.000000000000000001"}, "policy_threshold_invalid"),
+        ({"approved_min_decided_episode_count": True}, "policy_min_decided_episode_count_invalid"),
+    ],
+)
+def test_resealed_policy_decimal_or_definition_mismatch_rejects(override: dict[str, object], reason: str) -> None:
+    tampered = _reseal_policy(_policy(), **override)
+
+    evidence = _build(policy=tampered)
+
+    assert evidence.status is PaperSecondaryMetricsEvidenceStatus.METRICS_REJECTED
+    assert evidence.ready is False
+    assert _rc(reason) in evidence.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"approval_reference": "live-ready"}, "policy_scope_violation"),
+        ({"approval_reference": "BIST-approval"}, "policy_scope_violation"),
+        ({"metadata": (("source", "datetime.utcnow"),)}, "policy_clock_token_forbidden"),
+    ],
+)
+def test_resealed_policy_scope_or_clock_tokens_rejects(override: dict[str, object], reason: str) -> None:
+    tampered = _reseal_policy(_policy(), **override)
+
+    evidence = _build(policy=tampered)
+
+    assert evidence.status is PaperSecondaryMetricsEvidenceStatus.METRICS_REJECTED
+    assert evidence.ready is False
+    assert evidence.status is not PaperSecondaryMetricsEvidenceStatus.METRICS_READY
+    assert _rc(reason) in evidence.reason_codes
+
+
 def test_record_digest_mismatch_rejects() -> None:
     resealed = replace(_record(0), record_digest="0" * 64)
     evidence = _build(records=[resealed, _record(1)])
@@ -330,6 +430,54 @@ def test_incoherent_raw_record_rejected() -> None:
     evidence = _build(records=[incoherent, _record(1)])
     assert evidence.status is PaperSecondaryMetricsEvidenceStatus.METRICS_REJECTED
     assert _rc("record_incoherent") in evidence.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"record_version": "trade-record-evidence.v2"}, "record_version_invalid"),
+        ({"hit_rate_definition": "wins_over_decided_episodes.v1"}, "record_definition_mismatch"),
+        ({"fill_rate_definition": "filled_quantity_only.v1"}, "record_definition_mismatch"),
+        ({"slippage_definition": "unsigned_bps.v1"}, "record_definition_mismatch"),
+        (
+            {"decimal_policy": "decimal_quantized_scale_9_round_half_even_fraction_intermediates.v1"},
+            "record_decimal_policy_mismatch",
+        ),
+        ({"decimal_scale": 9}, "record_decimal_policy_mismatch"),
+        ({"decimal_rounding": "ROUND_HALF_UP"}, "record_decimal_policy_mismatch"),
+        ({"decimal_internal_precision": 28}, "record_decimal_policy_mismatch"),
+    ],
+)
+def test_resealed_record_definition_or_decimal_policy_mismatch_rejects(
+    override: dict[str, object], reason: str
+) -> None:
+    tampered = _reseal(_record(0), **override)
+
+    evidence = _build(records=[tampered, _record(1)])
+
+    assert evidence.status is PaperSecondaryMetricsEvidenceStatus.METRICS_REJECTED
+    assert evidence.ready is False
+    assert evidence.status is not PaperSecondaryMetricsEvidenceStatus.METRICS_READY
+    assert _rc(reason) in evidence.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"record_id": "live-ready"}, "record_scope_violation"),
+        ({"episode_id": "BIST-episode"}, "record_scope_violation"),
+        ({"metadata": (("source", "time.time"),)}, "record_clock_token_forbidden"),
+    ],
+)
+def test_resealed_record_scope_or_clock_tokens_rejects(override: dict[str, object], reason: str) -> None:
+    tampered = _reseal(_record(0), **override)
+
+    evidence = _build(records=[tampered, _record(1)])
+
+    assert evidence.status is PaperSecondaryMetricsEvidenceStatus.METRICS_REJECTED
+    assert evidence.ready is False
+    assert evidence.status is not PaperSecondaryMetricsEvidenceStatus.METRICS_READY
+    assert _rc(reason) in evidence.reason_codes
 
 
 def test_large_summed_quantities_do_not_raise() -> None:
