@@ -1,161 +1,177 @@
-# Token Efficiency V2 — named lanes + short prompt templates
+# Token Efficiency V2 - GPT-5.6 named lanes and compact prompts
 
-On-demand reference (not always-on). Prompts to Claude/Codex reference **named lanes** instead of
-pasting procedure blocks. A lane name expands to the exact procedure below; the prompt supplies only
-deltas. Safety is never compressed away: every lane keeps the full hard-gate set from
-`agent_workflow.md` §5 and `AGENTS.md` Hard Rails.
+Active routing is `agent_workflow.md` section 23. Lanes compress procedure, not safety. Every serious prompt
+includes `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`, `REASONING_ACTUAL`,
+`EXACT_MODEL_REQUIRED`, declared fallback, exact scope, forbidden actions, validation, stops, and report.
+An exact-model mismatch is `STOP_WITH_PROOF`; otherwise actual runtime is reported without overclaim.
 
-Normal prompt budget: **20–60 lines.** If a prompt needs more, it is probably a new lane — propose it
-here instead of pasting blocks.
+## 1. Shared lanes
 
-## 1. Named lanes
+`LANE:ENV-STD` - set noninteractive pager/color variables.
 
-**LANE:ENV-STD** — set `GH_PAGER/PAGER/GIT_PAGER=cat`, `NO_COLOR=1`, `GH_NO_UPDATE_NOTIFIER=1`,
-`GH_PROMPT_DISABLED=1`, remove `GH_FORCE_TTY`.
+`LANE:PRECHECK-STD(expect_main_at=<sha>)` - prove repo, clean main, expected HEAD, and open PR count. Stop
+on dirty state, head mismatch, open-PR conflict, or unavailable GitHub proof.
 
-**LANE:PRECHECK-STD(expect_main_at=<sha|latest>)** — ENV-STD; `git switch main`; `git pull --ff-only`;
-`git status --short --branch`; `git rev-parse HEAD`; `gh pr list --state open` (live). STOP_WITH_PROOF
-if: dirty tree, staged files, any open PR (unless the task names one), main behind `expect_main_at`,
-or gh auth cannot prove state.
+`LANE:VALIDATE-STD(files=<paths>)` - one command at a time: scoped Ruff/format where code exists, targeted
+validation, logged full suite when required, `git diff --check`, exact changed-file proof.
 
-**LANE:GATE-MODULE-STD(name, upstream, extra)** — implement a new paper-only validation gate following
-the merged reference pattern (`src/crypto_core/validation/paper_sleeve_admission_review_readiness.py`
-+ its test file): frozen dataclass; status enum READY/REJECTED/NEEDS_RESEARCH/INSUFFICIENT_EVIDENCE;
-typed error (raise ONLY wrong-typed upstream + malformed metadata; everything else fail-closed
-REJECTED); digest-boundary re-proof of the upstream digest via its public `*_to_dict` (digest field
-removed, canonical JSON sort_keys/compact/ascii, SHA-256), exception-safe (forged non-serializable
-upstream → mismatch, never TypeError); assemble-boundary sanitization of ALL carried digest fields
-(`_safe_digest_value`, `_safe_optional_value`); BIST + forbidden-token scans (bare `order/orders`
-rejected; `border/orderly/preorder` spared); paper flags locked; explicit READY non-meanings in the
-docstring; precedence REJECTED > INSUFFICIENT_EVIDENCE > NEEDS_RESEARCH > READY. Tests mirror the
-reference test file: READY happy path, forged + tampered digest, status/action propagation matrix,
-per-carried-digest malformed + non-string (no-raise) matrices, unsafe-flag matrix, token regressions,
-determinism, immutability/no-forbidden-fields. Exactly 2 new files in `validation/`; no `__init__` edit.
+`LANE:PR-STD(branch=<feature|chore path>, title=<title>)` - exact scope gate, scoped add, commit/push, one
+PR, bounded CI/thread snapshots, no merge.
 
-**LANE:FABLE-ARCH(scope, evidence_pack)** - scarce-window strategic consultation only. Use for
-architecture, high-risk safety semantics, invariant audits, chain red-team, EvidenceStore/persistence
-design, Deribit/readiness design, and top-1 roadmap decisions. Codex prepares a compact evidence pack
-first; Fable should not broad-scan the repo. STOP/REFUSE if the task is mechanical, merge/CI/polling/
-closeout, needs broad repo scan, needs more than 6 files to reason about, needs external/current facts,
-or can be handled by Codex/Claude without scarce reasoning. Fable report scorecard:
-`DECISIONS_MADE`, `ARTIFACTS`, `DELEGATIONS_ISSUED`, `INVARIANT_BREAKS_FOUND`, `FILES_READ_COUNT`,
-`CMDS_RUN_COUNT`, `NOT_FABLE_WORK_REFUSED`. Evidence-pack minimum: current state proof, exact files,
-chain summary, digest boundaries, READY non-meanings, carried digests, human approval fields, paper-only
-flags, forbidden scope patterns, known coverage, unknowns, and explicit Fable questions. Roadmap note:
-after P2 digest hardening, the next strategic Fable call is EvidenceStore design + red-team;
-implementation needs explicit persistence-scope authorization.
+`LANE:REPORT-STD` - result, actual model, state proof, files, validation, PR/check/thread state, blockers,
+and next safe action; failure tails only.
 
-**LANE:VALIDATE-STD(files)** — one command at a time, never chained, never bare full pytest:
-1. `python -m ruff check --fix <files>` 2. `python -m ruff format <files>`
-3. `python -m ruff format --check <files>` 4. `python -m ruff check <files>`
-5. targeted pytest via `scripts/crypto_core/run_logged_command.ps1` (unique `cache_dir`/`--basetemp`
-under `C:\tmp`) 6. area pytest (same helper) 7. full `scripts/crypto_core/run_full_tests_logged.ps1`
-(require PYTEST_EXIT=0) 8. `git diff --check`; `git status --short --branch`; `git diff --name-only`.
+## 2. Active model lanes
 
-**LANE:PR-STD(branch, title)** — scope gate (changed files exactly as named); `git switch -c <branch>`;
-scoped `git add <exact files>`; `git diff --cached --name-only`; `git diff --cached --check`; commit;
-`git push -u origin <branch>`; `gh pr create` (body states what changed + the standard non-changes
-line). Then bounded CI/review poll (one-shot `gh` snapshots in a loop; never `--watch`): CI to
-terminal, review window after terminal; repair real in-scope automated findings same branch via
-VALIDATE-STD; resolve only proven-fixed automated threads, never human threads; stop at
-READY_FOR_MERGE_AUTHORIZATION. Never merge.
+`LANE:LUNA_STATE` - T0 only: git/gh state, CI polling, review-thread status, and postverify command runner.
+No broad design or feature implementation.
 
-**LANE:MERGE-STD(pr=N, head=<sha>)** — only with explicit per-PR user authorization. Re-prove: PR open,
-not draft, head matches, files exact, only-N open, checks terminal success/skipped/neutral (gh pr
-checks + direct check-runs; report 401 fallback), unresolved threads 0, no human CHANGES_REQUESTED,
-clean tree. `gh pr merge N --merge --delete-branch=false`; verify via REST (`merged=true`,
-`merge_commit_sha`); postverify main (pull, repo-wide ruff check + format --check, full helper
-PYTEST_EXIT=0, clean status, open PRs []); remote-settle merge-commit check-runs to terminal.
+`LANE:LUNA_METADATA` - explicitly authorized PR title/body/label metadata update only. Re-prove head and
+metadata target; no code, review, thread resolution, or merge.
 
-**LANE:REPORT-STD** — compact report, failure tails only (never full logs/JSON dumps). Fields:
-RESULT / DECISION / FILES_CHANGED / VALIDATION (ruff + targeted N passed + area + full PYTEST_EXIT) /
-PR (number, head SHA) / CHECKS / THREADS / OPEN_PRS / FINAL_GIT_STATUS / FILES_READ_COUNT /
-CMDS_RUN_COUNT / READY_FOR_MERGE_AUTHORIZATION / NEXT_SAFE_ACTION. End PR tasks with the single
-copy-paste ChatGPT-audit handoff block. Caps: status ≤80 lines, implementation/closeout ≤140.
+`LANE:TERRA_IMPLEMENT` - T2 exact-file bounded implementation or docs setup. Preserve deterministic,
+fail-closed, paper-only invariants; no merge.
 
-## 2. Short prompt templates (copy, fill, send)
+`LANE:TERRA_AUDIT` - fresh-context, pinned-head independent P1/P2 audit. Never audit the implementation from
+the same context that produced it.
 
-**T1 — product gate slice (~20 lines)**
-```
-LANE:PRECHECK-STD(expect_main_at=<sha>)
-LANE:GATE-MODULE-STD(name=<NewGate>, upstream=<UpstreamType>, extra=<deltas only:
-  ids/actions/whitelists/extra digests/READY non-meanings>)
-LANE:VALIDATE-STD(files=<the 2 new files>)
-LANE:PR-STD(branch=product/<slug>-pr1, title="feat(crypto-core): <title>")
-LANE:REPORT-STD
-Extra forbidden: <only task-specific items>. Do not merge.
+`LANE:TERRA_REPAIR` - T3 current valid P1/P2 repair on the same branch with regression proof. Stop if scope
+widens or the loop becomes broad; route broad/long work to Opus.
+
+`LANE:SOL_CROSS_CONTRACT` - scarce T4 trust/governance/SM-5-SM-6/readiness provenance design or audit.
+Use `xhigh` by default; `max` requires controller gate. No polling, merge mechanics, or routine docs.
+
+`LANE:OPUS_HEAVY_LOCAL` - large bounded implementation/refactor, broad local reading, or long validation
+loops. It does not replace fresh-context Codex audit.
+
+`LANE:DEEP_RESEARCH_EXTERNAL` - cited external/current facts only; advisory and read-only.
+
+`LANE:CONNECTOR_FINAL_GATE` - read-only source-of-truth verification of head, files, checks, reviews, and
+threads before merge authorization.
+
+`LANE:PURSUE_PREFLIGHT` - bounded single-goal terminal preflight/sync/CI/status/closeout/authorized
+postverify. Never broad repo pursuit, unscoped design, or unscoped implementation.
+
+`LANE:MODEL_FALLBACK` - exact model mismatch stops. Otherwise declare actual model/reasoning and use only the
+approved fallback: Sol -> Opus draft plus independent Codex audit; Terra -> Opus bounded work; Luna ->
+terminal/gh mechanical path; Opus -> split broad work or Terra only when truly bounded.
+
+## 3. Copy templates
+
+All templates below require this model header before task-specific fields:
+`MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`, `REASONING_ACTUAL`,
+`EXACT_MODEL_REQUIRED`, and `MODEL_FALLBACK`. Print actual runtime first. Exact mismatch stops; otherwise
+apply only the declared fallback and never claim unavailable-model quality.
+
+### PROMPT:SOL_CROSS_CONTRACT
+```text
+ROLE: independent design/audit. TASK_CLASS: T4 SOL_CROSS_CONTRACT.
+MODEL_REQUESTED: GPT-5.6 Sol. REASONING_REQUESTED: xhigh. EXACT_MODEL_REQUIRED: <true|false>.
+MODEL_ACTUAL: <print first>. REASONING_ACTUAL: <print first>. MODEL_FALLBACK: <declared path>.
+LANE:PRECHECK-STD(expect_main_at=<sha>); LANE:SOL_CROSS_CONTRACT.
+READ: <exact evidence pack>. FORBIDDEN: implementation, CI polling, merge, live/readiness claims.
+REPORT: decisions, P1/P2, model actual, fallback, required next action.
 ```
 
-**T2 — PR repair/closeout (~15 lines)**
-```
-LANE:ENV-STD. Continue PR #<N> (branch <branch>, expected head <sha>).
-Blocker: <one-paragraph finding>. Allowed files: <exact files>.
-Repair minimally; LANE:VALIDATE-STD(files=<files>); commit "<msg>"; push;
-poll CI/threads to terminal; resolve only the proven-fixed automated thread.
-LANE:REPORT-STD. Do not merge.
-```
-
-**T3 — authorized merge closeout (~10 lines)**
-```
-USER AUTHORIZATION: standard merge PR #<N> only if all gates pass:
-gh pr merge <N> --repo <repo> --merge --delete-branch=false
-LANE:MERGE-STD(pr=<N>, head=<sha>). Expected files: <list>.
-LANE:REPORT-STD. No next implementation.
+### PROMPT:TERRA_IMPLEMENT
+```text
+ROLE: implementer. TASK_CLASS: T2 TERRA_BOUNDED_CODE. MODEL_REQUESTED: GPT-5.6 Terra.
+REASONING_REQUESTED: high. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
+REASONING_ACTUAL: <print first>. MODEL_FALLBACK: Opus only if declared.
+LANE:PRECHECK-STD(expect_main_at=<sha>). ALLOWED_FILES: <exact paths>.
+LANE:TERRA_IMPLEMENT; LANE:VALIDATE-STD(files=<paths>);
+LANE:PR-STD(branch=feature/<scope>-prN, title="<title>"). No merge.
 ```
 
-**T4 — setup/docs change (~15 lines)**
-```
-LANE:PRECHECK-STD(expect_main_at=<sha>)
-Patch only: <files>. Goal: <2-3 lines>. No product code; safety doctrine unweakened.
-Repo-wide ruff check + format --check; full helper; LANE:PR-STD(branch=chore/<slug>-pr1,
-title="chore(crypto-core): <title>"); LANE:REPORT-STD. Do not merge.
-```
-
-**T5 - Fable architecture call (~20 lines)**
-```
-LANE:PRECHECK-STD(expect_main_at=<sha>)
-Codex read-only evidence pack only: <exact files/modules>. No broad repo scan.
-LANE:FABLE-ARCH(scope=<architecture/invariant/red-team topic>,
-  evidence_pack=<state proof + chain summary + digest boundaries + unknowns + questions>)
-Fable must return the scorecard fields and refuse mechanical work.
-No implementation. No merge. No CI polling. No external/current facts unless explicitly authorized.
-LANE:REPORT-STD
+### PROMPT:TERRA_INDEPENDENT_AUDIT
+```text
+ROLE: independent auditor. TASK_CLASS: T1 or T3. MODEL_REQUESTED: GPT-5.6 Terra.
+REASONING_REQUESTED: high. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
+REASONING_ACTUAL: <print first>. MODEL_FALLBACK: <declared path>.
+Fresh context; pinned PR head <sha>; changed files plus direct dependencies only. LANE:TERRA_AUDIT.
+No edits/comments/merge. Report P1/P2/P3, thread relevance, readiness, and actual model.
 ```
 
-## 3. Token hygiene (both agents)
+### PROMPT:TERRA_EMERGENCY_REPAIR
+```text
+ROLE: same-branch repair. TASK_CLASS: T3. MODEL_REQUESTED: GPT-5.6 Terra.
+REASONING_REQUESTED: xhigh. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
+REASONING_ACTUAL: <print first>. MODEL_FALLBACK: Opus if broad/long-loop.
+PR #<N>, head <sha>, finding <id>, allowed files <paths>. LANE:TERRA_REPAIR; add regression proof;
+validate; push. Stop on scope expansion. No merge or thread resolution without explicit guarded authority.
+```
 
-- `/clear` (or a fresh session) between unrelated tasks; long noisy sessions roll over.
-- `/compact` only with an explicit preservation summary (task, branch, head, next steps) written first.
-- Stop exploring once the named files are found; no broad scans after target files are known.
-- Failure tails only; never paste full logs, full JSON, or full diffs into reports.
-- All agents report `FILES_READ_COUNT` and `CMDS_RUN_COUNT` so overspend is visible.
-- Reference lanes and repo docs; never re-paste doctrine that lives in CLAUDE.md/AGENTS.md/this file.
+### PROMPT:LUNA_CI_STATUS
+```text
+ROLE: mechanical executor. TASK_CLASS: T0. MODEL_REQUESTED: GPT-5.6 Luna.
+REASONING_REQUESTED: low. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
+REASONING_ACTUAL: <print first>. MODEL_FALLBACK: terminal/gh or declared mechanical lane.
+LANE:LUNA_STATE. Exact PR/head required. No code/design/review/merge. Return terminal or pending proof.
+```
 
-## 4. Model routing v2
+### PROMPT:LUNA_METADATA_UPDATE
+```text
+ROLE: authorized metadata executor. TASK_CLASS: T0. MODEL_REQUESTED: GPT-5.6 Luna.
+REASONING_REQUESTED: low. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
+REASONING_ACTUAL: <print first>. MODEL_FALLBACK: terminal/gh or declared mechanical lane.
+LANE:LUNA_METADATA. Exact PR, head, and body/title/label field required. No code, review, thread resolution,
+or merge. Re-read metadata after update and report proof.
+```
 
-| Lane | Model |
-|---|---|
-| Architecture, new high-risk safety semantics, invariant audits, chain red-team, EvidenceStore/persistence design, Deribit/readiness design, top-1 roadmap calls | Claude/Fable scarce window |
-| Bounded implementation (GATE-MODULE-STD), tests/docs patches, PR creation | Claude Sonnet/Auto or Opus |
-| Merge/postverify, CI/thread polling, PR closeout, docs/setup edits, mechanical repair, validation reruns, compact execution | Codex default executor |
-| Pure polling, status proof, merge mechanics, full-log handling, routine closeout | cheapest available / Codex compact lane |
+### PROMPT:LUNA_MERGE_POSTVERIFY
+```text
+ROLE: authorized mechanical executor. TASK_CLASS: T0. MODEL_REQUESTED: GPT-5.6 Luna.
+REASONING_REQUESTED: low. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
+REASONING_ACTUAL: <print first>. MODEL_FALLBACK: terminal/gh or declared mechanical lane.
+USER AUTHORIZATION names PR and exact merge command. Re-prove head/files/checks/threads; standard head-pinned
+merge only; LANE:LUNA_STATE postverify main. No edits, no next feature, no thread resolution.
+```
 
-Fable is scarce. Reserve it for architecture, high-risk safety semantics, invariant audits,
-chain red-team, EvidenceStore/persistence/Deribit readiness design, and top-1 roadmap decisions.
-Do not use Fable for pure polling, merge mechanics, full logs, broad repo scans, or routine closeout
-unless there is no viable alternative and the user explicitly authorizes that use.
+### PROMPT:OPUS_HEAVY_LOCAL
+```text
+ROLE: heavy local implementer. TASK_CLASS: T3. MODEL_REQUESTED: Claude Opus 4.8.
+REASONING_REQUESTED: xhigh. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
+REASONING_ACTUAL: <print first>. MODEL_FALLBACK: split scope or declared Terra path if truly bounded.
+Clean main@<sha>; branch feature/<scope>-prN; named broad-but-bounded files; long validation allowed.
+No merge. Require separate fresh-context Terra or Sol audit before connector gate.
+```
 
-Fable work must produce decisions, artifacts, delegations, or invariant breaks. If the output is only
-status proof, polling, merge mechanics, validation reruns, or log handling, it is not Fable work.
+### PROMPT:DEEP_RESEARCH
+```text
+ROLE: external fact researcher. TASK_CLASS: XR. MODEL_REQUESTED: Deep Research.
+REASONING_REQUESTED: <runtime policy>. EXACT_MODEL_REQUIRED: false. MODEL_ACTUAL: <print first>.
+REASONING_ACTUAL: <print first>. MODEL_FALLBACK: STOP_WITH_PROOF if cited research cannot run.
+Exact current question: <question>. Cite sources; separate REPO_EVIDENCE / EXTERNAL_EVIDENCE / INFERENCE /
+UNKNOWN. Read-only advisory only.
+```
 
-## 5. Invariants (never compressed away)
+### PROMPT:CONNECTOR_FINAL_GATE
+```text
+ROLE: final evidence gate. TASK_CLASS: CONTROLLER_CONNECTOR_GATE. MODEL_REQUESTED: GitHub connector/gh.
+REASONING_REQUESTED: not-applicable. EXACT_MODEL_REQUIRED: false. MODEL_ACTUAL: <connector or gh>.
+REASONING_ACTUAL: not-applicable. MODEL_FALLBACK: gh-native mechanism only; never a gate waiver.
+Verify PR open/non-draft, head, exact files, terminal checks, reviews, threads, code scanning, and one-open-PR
+rule. Output READY_FOR_MERGE_AUTHORIZATION or NOT_READY with proof. No mutation.
+```
 
-Lanes compress *procedure text*, not *rules*. The hard gates in `AGENTS.md` (Hard Rails, Git/PR
-discipline) and `agent_workflow.md` (§4 digest-boundary, §5 guardrails, §6 validation, §7 state-claim)
-bind in every lane, every prompt, with no exceptions. If a lane reference and a safety rule ever seem
-to conflict, the safety rule wins and the agent stops with proof.
+### PROMPT:PURSUE_PREFLIGHT
+```text
+ROLE: bounded terminal loop. TASK_CLASS: T0. MODEL_REQUESTED: GPT-5.6 Luna.
+REASONING_REQUESTED: low. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
+REASONING_ACTUAL: <print first>. MODEL_FALLBACK: declared mechanical path.
+LANE:PURSUE_PREFLIGHT; exact goal <preflight|sync|CI|closeout|postverify>. No broad design or patching.
+```
 
-Digest-boundary lesson: every re-proof boundary wraps serializer call, digest-field removal, and
-canonical hash in the same exception-safe block; assemble/carry boundaries sanitize carried digest
-fields before hashing or exporting. When the reference pattern evolves, audit every existing consumer in
-the same sweep instead of fixing only the newest gate.
+### PROMPT:MODEL_FALLBACK
+```text
+ROLE: routing control. TASK_CLASS: <T0|T1|T2|T3|T4|XR>. MODEL_REQUESTED: <model>.
+REASONING_REQUESTED: <level>. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
+REASONING_ACTUAL: <print first>. MODEL_FALLBACK: <Luna->terminal/gh; Terra->Opus; Sol->Opus plus independent
+Codex audit; Opus->split scope or Terra only when bounded>. Stop on required exact mismatch.
+```
+## 4. Invariants
+
+One open PR; no direct main push; standard merge only; explicit human merge authorization; pending CI is
+NOT_READY; current P1/P2 block; connector final gate never waived; postmerge verification before next work;
+crypto_core-only; no BIST/live/private API/orders/scheduler/readiness/shadow/capital work. Historical Fable
+prompts are archived in `fable_exit_contract_index.md`, never active lanes.

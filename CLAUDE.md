@@ -1,52 +1,43 @@
-# BIST_ELITE_CORE — Claude Instructions
+# BIST_ELITE_CORE - Claude Instructions
 
-Active scope is `crypto_core` only (`src/crypto_core`, `tests/crypto_core`, `scripts/crypto_core`,
-`docs/crypto_core`). BIST is historical context — never leak it into crypto implementation.
+Active scope is `crypto_core` only (`src/crypto_core`, `tests/crypto_core`, `scripts/crypto_core`, and
+explicitly authorized `docs/crypto_core`). BIST is historical context and never belongs in crypto work.
 
-Follow the canonical agent workflow: `docs/crypto_core/agent_workflow.md`
-(working loop, model routing, digest-boundary rule, guardrails, validation policy, state-claim
-policy, skills policy, report templates). Durable operating rails: `AGENTS.md`.
-Prompts may reference **named lanes** (LANE:PRECHECK-STD, GATE-MODULE-STD, LANE:FABLE-ARCH, VALIDATE-STD,
-PR-STD, MERGE-STD, REPORT-STD) — expand them from `docs/crypto_core/agent_prompts/token_efficiency_v2.md`;
-lanes compress procedure text only, never safety rules.
+Follow `AGENTS.md` and the active routing doctrine in `docs/crypto_core/agent_workflow.md` section 23.
+Prompt lanes in `docs/crypto_core/agent_prompts/token_efficiency_v2.md` compress procedure only; they never
+weaken safety rules.
 
-Model-tier routing (canonical: `docs/crypto_core/agent_workflow.md` §20 + §21 post-Fable): Fable 5
-availability is NOT assumed after 2026-07-07 — when absent, §21 governs: Opus 4.8 xhigh = repo-internal
-design first-drafts + bounded high-risk implementation/repair; Codex GPT-5.5 extra-high = mandatory
-read-only P1/P2 audit after every high-risk design (before implementation) and after every high-risk
-implementation (before the connector gate) — increased use; Fast Auto/Sonnet = mechanical
-(hygiene/CI/merge/post-verify — never Opus/Codex for these); GitHub connector = mandatory final
-merge-readiness gate, never waived; Deep Research = external/current facts only. Attestation-only evidence
-is never machine proof. Model strength is never proof — every lane runs under the unchanged hard gates
-below.
+Claude role: `Claude Opus 4.8` is the heavy local executor for broad bounded implementation, complex
+refactors, and long validation loops when Codex usage should be preserved. It does not replace an independent
+Codex audit. High-risk work still requires a fresh-context, pinned-head Codex design/implementation audit
+before the connector gate.
 
-Key hard rules (full list in the workflow doc):
+Active routing: Luna handles mechanics; Terra is bounded Codex implementation/review; Sol is scarce T4
+cross-contract reasoning; Opus handles heavy local execution; Deep Research supplies external/current facts;
+ChatGPT owns final evidence comparison and merge authorization. Every serious prompt reports
+`MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`, `REASONING_ACTUAL`, `EXACT_MODEL_REQUIRED`, and
+declared fallback. Required exact-model mismatch means STOP_WITH_PROOF; unavailable-model quality is never
+claimed.
 
-- Paper-first, deterministic, fail-closed; no live/private API, credentials, real orders,
-  order routing, scheduler, connector-readiness, or BIST changes without explicit authorization.
-- One open PR; never push `main`; never merge without explicit per-PR user authorization.
-- Full test suite only via `scripts/crypto_core/run_full_tests_logged.ps1`; targeted pytest via
+Key hard rules:
+
+- Paper-first, deterministic, fail-closed; no live/private API, credentials, real orders, order routing,
+  scheduler, connector/readiness transition, shadow/live, capital mutation, or BIST changes without separate
+  authorization and design.
+- One open PR; never push `main`; standard merge only; never merge without explicit per-PR human authorization.
+- Full suite only through `scripts/crypto_core/run_full_tests_logged.ps1`; targeted pytest through
   `scripts/crypto_core/run_logged_command.ps1`; commands one at a time; scoped `git add` only.
-- Digest-boundary rule: consumers of digest-carrying objects recompute the upstream digest via the
-  public serializer and reject mismatch before READY/ADMITTED/ACCEPTED.
-- Never claim repo/PR/CI state from memory — prove with fresh `git`/`gh` output or mark UNKNOWN.
+- Digest consumers recompute upstream digest via the public serializer and reject mismatch before
+  READY/ADMITTED/ACCEPTED.
+- Never claim repo/PR/CI state from memory. Prove it with fresh `git`/`gh` output or mark `UNKNOWN`.
 
-Claude operating contract (post-Fable, canonical detail in `agent_workflow.md` §21):
+Claude operating contract:
 
-- Never self-approve (`gh pr review --approve`), never expand an open PR beyond its named scope;
-  review-blocker repair happens on the same branch only.
-- Consume Codex findings surgically: fix only real in-scope findings, add regression proof, rerun
-  validation, push, re-prove checks; resolve only proven-fixed automated threads, never human ones.
-- Prepare the connector final gate with a head-pinned state proof (PR state, head SHA, files,
-  checks, threads); pending/queued/in-progress/no-checks = NOT_READY.
-- Stop with proof when scope would widen, validation fails out of scope, an external/current fact
-  is needed (DEEP_RESEARCH_REQUIRED), or a merge/authorization gate is reached.
-- Anti-waste: never an expensive lane for CI polling/status/merge mechanics; named files first;
-  failure tails only, no full log dumps. Reports carry at minimum RESULT / FILES_CHANGED /
-  VALIDATION / NEXT_SAFE_ACTION.
-- Token economy: classify each task T0-T4 and apply its context budget per
-  `docs/crypto_core/token_efficiency_playbook.md` (binding summary: `agent_workflow.md` §22;
-  on-demand checklist: `.claude/skills/crypto-core-token-efficient-loop`). Token saving never
-  outranks correctness — T3 contract/digest work keeps Opus 4.8 xhigh and every gate.
-- Archived Fable design contracts live in `docs/crypto_core/fable_exit_contract_index.md` — design
-  doctrine only, never current-state proof.
+- Never self-approve, widen an open PR beyond named scope, or resolve human review threads.
+- Repair only real in-scope findings, add regression proof, validate, push, and re-prove state.
+- Prepare connector final gate with a pinned head/files/checks/threads proof. Pending CI is `NOT_READY`.
+- Stop with proof at scope expansion, out-of-scope validation failure, external/current-fact need, or merge gate.
+- Use the common T0-T4 plus XR taxonomy in `token_efficiency_playbook.md`. Token saving never outranks
+  correctness.
+- Archived Fable design contracts in `fable_exit_contract_index.md` are historical design evidence only,
+  never current-state proof or active model routing.
