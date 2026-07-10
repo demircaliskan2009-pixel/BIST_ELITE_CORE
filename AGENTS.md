@@ -13,7 +13,8 @@
 
 Active routing doctrine is `docs/crypto_core/agent_workflow.md` section 23. This file supplies durable
 rails; prompt lanes in `docs/crypto_core/agent_prompts/token_efficiency_v2.md` compress procedure text only.
-If documents conflict, the stricter safety rule wins.
+Per-model prompt authoring (anatomy, per-lane rules, skeletons) lives in
+`docs/crypto_core/model_prompting_guide.md`. If documents conflict, the stricter safety rule wins.
 
 ### Active GPT-5.6 Routing Doctrine
 
@@ -43,11 +44,12 @@ If documents conflict, the stricter safety rule wins.
 
 ### Current Workflow State
 
-- PRs #326, #327, and #328 are merged. `main` contains merge commit
-  `6c700130697833e32572c01bbef805dc477e11ad` from PR #328.
+- PRs #326, #327, #328, and #329 are merged. `main` contains merge commit
+  `167c508825a8ac55bb207107a7e2b4fee94860d5` from PR #329 (GPT-5.6 routing doctrine sync).
+  Expected open PRs between slices: none.
 - `secondary_comparison_metrics_hit_fill_slippage_declared_not_enforced_v1` remains a valid blocker.
 - Any SM-5/SM-6 work starts with a separately authorized design/audit slice consuming the #328
-  precondition. This doctrine PR does not implement feature work.
+  precondition. Setup/doctrine PRs do not implement feature work.
 - `docs/crypto_core/fable_exit_contract_index.md` is historical design evidence only. Fable/GPT-5.5/
   Sonnet/Fast routing there is never active routing unless explicitly labeled as fallback history.
 

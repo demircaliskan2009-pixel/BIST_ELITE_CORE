@@ -105,7 +105,7 @@ jobs:
       - name: Run full suite including slow tests
         run: |
           set -euo pipefail
-          python -m pytest -q --runslow --cov=src --cov-report=term --cov-fail-under=70
+          python -m pytest -q --runslow --cov=src/crypto_core --cov-report=term --cov-fail-under=70
 
   codeql:
     name: codeql

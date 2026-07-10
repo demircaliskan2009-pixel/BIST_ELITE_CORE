@@ -44,7 +44,10 @@ Write-Output "PYTEST_LOG=$log"
 
 Push-Location $RepoRoot
 try {
-    & $PythonExe -m pytest -x -q tests/crypto_core -o cache_dir=$cache --basetemp=$base *> $log
+    # CI parity (.github/workflows/ci.yml tests job): warnings are errors there via PYTHONWARNINGS=error
+    # and `-W error`, so the local full-suite proof must fail on the same warnings CI would fail on.
+    $env:PYTHONWARNINGS = "error"
+    & $PythonExe -m pytest -x -q -W error tests/crypto_core -o cache_dir=$cache --basetemp=$base *> $log
     $exit = $LASTEXITCODE
 }
 finally {

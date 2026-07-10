@@ -51,7 +51,7 @@ same usage rules as this index (fresh repo proof + scoped PR before any implemen
 
 ## 3. Historical execution queue
 
-Historical queue only; it is not current implementation state. Current state after PR #328: #326, #327, and #328 are merged; `main` contains `6c700130697833e32572c01bbef805dc477e11ad`; `secondary_comparison_metrics_hit_fill_slippage_declared_not_enforced_v1` remains; SM-5/SM-6 starts only with separately authorized design/audit.
+Historical queue only; it is not current implementation state. Current state after PR #329: #326, #327, #328, and #329 are merged; `main` contains #329 merge commit `167c508825a8ac55bb207107a7e2b4fee94860d5`; expected open PRs between slices: none; `secondary_comparison_metrics_hit_fill_slippage_declared_not_enforced_v1` remains; SM-5/SM-6 starts only with separately authorized design/audit.
 
 1. PR #320 merge (docs/setup) → 2. `PaperStage4CompletionDecisionV2` (Path A) → 3. docs-sync →
 4. completion review dossier → 5. design-doc chores `[SM-1, MT-1, EF-1, RG-1, RF-1]` →

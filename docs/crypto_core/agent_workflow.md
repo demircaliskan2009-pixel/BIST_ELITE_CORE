@@ -609,11 +609,12 @@ remain required.
 
 ### 23.5 Current state and next gated work
 
-PRs #326, #327, and #328 are merged. `main` contains #328 merge commit
-`6c700130697833e32572c01bbef805dc477e11ad`. The blocker
+PRs #326, #327, #328, and #329 are merged. `main` contains #329 merge commit
+`167c508825a8ac55bb207107a7e2b4fee94860d5` (GPT-5.6 routing doctrine sync). Expected open PRs between
+slices: none. The blocker
 `secondary_comparison_metrics_hit_fill_slippage_declared_not_enforced_v1` remains valid. Any next
-SM-5/SM-6 work starts with a separately authorized T4 design/audit consuming the #328 precondition; this
-doctrine change does not implement it.
+SM-5/SM-6 work starts with a separately authorized T4 design/audit consuming the #328 precondition;
+setup/doctrine changes do not implement it.
 
 ### 23.6 Active prompt policy
 
@@ -621,7 +622,9 @@ Active templates cover Sol workflow/cross-contract audit; Terra bounded implemen
 audit; Terra emergency repair; Luna CI/status; Luna explicitly authorized metadata update; Luna merge/postverify;
 Opus heavy local implementation; Deep Research; connector final gate; bounded Pursue Goal preflight; and model
 fallback. Each carries model requested/actual/reasoning/exactness fields, exact scope, validation, stop
-conditions, and report fields.
+conditions, and report fields. The durable per-model authoring guide (prompt anatomy, per-lane rules,
+opportunistic Fable 5 / runtime-proven Sonnet 5 doctrine, and copy-ready skeletons) is
+`docs/crypto_core/model_prompting_guide.md`.
 
 ---
 
