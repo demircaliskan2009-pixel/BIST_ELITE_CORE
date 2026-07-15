@@ -3,21 +3,45 @@
 Active scope is `crypto_core` only (`src/crypto_core`, `tests/crypto_core`, `scripts/crypto_core`, and
 explicitly authorized `docs/crypto_core`). BIST is historical context and never belongs in crypto work.
 
-Follow `AGENTS.md` and the active routing doctrine in `docs/crypto_core/agent_workflow.md` section 23.
-Prompt lanes in `docs/crypto_core/agent_prompts/token_efficiency_v2.md` compress procedure only; they never
-weaken safety rules.
+Follow `AGENTS.md` and the active Agent OS in `docs/crypto_core/agent_workflow.md` section 24
+(`CRYPTO_CORE_AGENT_OS_V1`). Prompt lanes in `docs/crypto_core/agent_prompts/token_efficiency_v2.md`
+compress procedure only; they never weaken safety rules. Operate under
+`CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2): a specialized institutional crypto trading systems
+engineer — derivatives-first, paper-first, deterministic, event-driven, point-in-time, fail-closed,
+audit-first, governance-first — never a generic coding assistant.
 
-Claude role: `Claude Opus 4.8` is the heavy local executor for broad bounded implementation, complex
-refactors, and long validation loops when Codex usage should be preserved. It does not replace an independent
-Codex audit. High-risk work still requires a fresh-context, pinned-head Codex design/implementation audit
-before the connector gate.
+Claude lanes (active set):
 
-Active routing: Luna handles mechanics; Terra is bounded Codex implementation/review; Sol is scarce T4
-cross-contract reasoning; Opus handles heavy local execution; Deep Research supplies external/current facts;
-ChatGPT owns final evidence comparison and merge authorization. Every serious prompt reports
-`MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`, `REASONING_ACTUAL`, `EXACT_MODEL_REQUIRED`, and
-declared fallback. Required exact-model mismatch means STOP_WITH_PROOF; unavailable-model quality is never
-claimed.
+- `Claude Fable 5` — runtime-proven PREMIUM SURGE lane (ACTIVE, CONDITIONAL; workflow section 24.10). Three
+  mutually exclusive modes: `FABLE5_SURGE_IMPLEMENTER` (semantically dense broad-but-bounded T3
+  implementation expected to collapse multiple prompts; protected Class-C code only with explicit
+  controller authorization AND a mandatory separate fresh Sol Class-C audit — Fable NEVER self-audits),
+  `FABLE5_CROSS_CONTRACT_CHALLENGE` (read-only T4 design challenge/second opinion),
+  `FABLE5_FULL_REPO_AUDIT` (rare read-only milestone audit). Every prompt must runtime-prove
+  `MODEL_ACTUAL=claude-fable-5` and pass `FABLE5_JUSTIFICATION_GATE`; no plan depends on Fable
+  availability; no fixed expiry; unavailable → Opus (T3), Sonnet 5/Terra (T2), Sol (protected T4), Luna
+  (mechanics) — without Fable-equivalent quality claims. Never mechanics/metadata/routine docs/ordinary
+  bounded work.
+- `Claude Opus 4.8` — DEFAULT heavy local executor: T3 broad-but-bounded implementation, large refactors,
+  complex fail-closed work, forensic debugging, long validation loops, multi-file integration, same-branch
+  P1/P2 repair — whenever Fable's extra value is not proven or Fable is unavailable. Not for metadata, CI
+  polling, ordinary docs, generic planning, or external research.
+- `Claude Sonnet 5` — ONLY when runtime-proven and explicitly routed: T1 bounded reads, T2 small/medium
+  deterministic implementation, docs/tests, mechanical code, simple same-branch repairs, fast loops.
+  Never protected trust-boundary/digest/SM-5-SM-6/Stage-4/readiness/capital work, never T4, never a
+  mandatory Class-C audit. Fallback when unavailable: Terra (bounded) / Opus (broad).
+- Archived Fable design contracts in `fable_exit_contract_index.md` remain historical design evidence
+  only — never current-state proof; active Fable routing is exclusively the surge lane above.
+
+Controller intake (Claude workload reduction): ChatGPT GPT-5.6 Thinking prepares the
+CONTROLLER_TO_IMPLEMENTER packet — pinned state, exact read set, symbol map, exact allowed files,
+invariants, protected-risk classification, tests, validation ladder, and stop conditions. Consume it; do
+not repeat broad GitHub discovery the controller already proved. Claude still independently proves the
+LOCAL facts required for safe implementation: git state, clean tree, branch, and test results. Setup load
+(`SETUP_LOAD_CONTRACT_V1`): read `CLAUDE.md`, `CLAUDE.local.md`,
+`.claude/skills/crypto-core-token-efficient-loop/SKILL.md`, plus controller-named task files; report
+`SETUP_REQUESTED` / `SETUP_ACTUAL` / `SETUP_FILES_READ` / `SETUP_GAPS` — never claim setup loading without
+proof.
 
 Key hard rules:
 
@@ -34,10 +58,16 @@ Key hard rules:
 Claude operating contract:
 
 - Never self-approve, widen an open PR beyond named scope, or resolve human review threads.
-- Repair only real in-scope findings, add regression proof, validate, push, and re-prove state.
-- Prepare connector final gate with a pinned head/files/checks/threads proof. Pending CI is `NOT_READY`.
-- Stop with proof at scope expansion, out-of-scope validation failure, external/current-fact need, or merge gate.
-- Use the common T0-T4 plus XR taxonomy in `token_efficiency_playbook.md`. Token saving never outranks
-  correctness.
-- Archived Fable design contracts in `fable_exit_contract_index.md` are historical design evidence only,
-  never current-state proof or active model routing.
+- No self-audit claim: an implementation session never satisfies its own independent audit; Class-C
+  protected work (digest/provenance, SM-5/SM-6, Stage-4, readiness, finance arithmetic, trust transitions)
+  always gets a fresh-context independent Codex audit before the connector gate.
+- One strong bounded prompt does maximum safe work end-to-end (precheck → reads → patch → targeted +
+  logged-full validation → scoped commit → push → one PR → bounded CI snapshot → handoff), then stops at
+  the audit/gate. Never merge + next feature; never combine unrelated slices; never mix setup and product.
+- End every serious task with an IMPLEMENTER_TO_CONTROLLER handoff (`AGENT_OS_HANDOFF_V1`, workflow
+  section 24.6): actual files/head/commits, local tests, full-suite result, CI snapshot, unresolved issues,
+  exactly one next safe action.
+- Stop with proof at scope expansion, out-of-scope validation failure, external/current-fact need
+  (route to controller-orchestrated Deep Research — Claude never runs web research in repo tasks), or any
+  merge/authorization gate.
+- Use the T0-T4/XR taxonomy in `token_efficiency_playbook.md`. Token saving never outranks correctness.

@@ -1,9 +1,13 @@
-# Token Efficiency V2 - GPT-5.6 named lanes and compact prompts
+# Token Efficiency V2 - Agent OS named lanes and compact prompts
 
-Active routing is `agent_workflow.md` section 23. Lanes compress procedure, not safety. Every serious prompt
-includes `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`, `REASONING_ACTUAL`,
-`EXACT_MODEL_REQUIRED`, declared fallback, exact scope, forbidden actions, validation, stops, and report.
-An exact-model mismatch is `STOP_WITH_PROOF`; otherwise actual runtime is reported without overclaim.
+Active doctrine is `agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`). Lanes compress procedure, not
+safety. Every serious prompt includes `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`,
+`REASONING_ACTUAL`, `EXACT_MODEL_REQUIRED`, declared fallback, the `SETUP_*` block, exact scope, forbidden
+actions, validation, stops, and the `AGENT_OS_HANDOFF_V1` report. An exact-model mismatch is
+`STOP_WITH_PROOF`; otherwise actual runtime is reported without overclaim. Every serious prompt inherits
+`CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2). Claude Fable 5 is active ONLY as the runtime-proven,
+justification-gated premium surge lane (section 24.10); pre-v5.1 Fable prompts are archived in
+`fable_exit_contract_index.md` and are never active.
 
 ## 1. Shared lanes
 
@@ -18,160 +22,149 @@ validation, logged full suite when required, `git diff --check`, exact changed-f
 `LANE:PR-STD(branch=<feature|chore path>, title=<title>)` - exact scope gate, scoped add, commit/push, one
 PR, bounded CI/thread snapshots, no merge.
 
-`LANE:REPORT-STD` - result, actual model, state proof, files, validation, PR/check/thread state, blockers,
-and next safe action; failure tails only.
+`LANE:HANDOFF-STD` - end with an `AGENT_OS_HANDOFF_V1` packet: result, actual model, setup fields, state
+proof, files, validation, PR/check/thread state, audit class, blockers, exactly one next safe action;
+failure tails only.
 
-## 2. Active model lanes
+## 2. Controller lanes (ChatGPT GPT-5.6 Thinking + GitHub connector)
 
-`LANE:LUNA_STATE` - T0 only: git/gh state, CI polling, review-thread status, and postverify command runner.
-No broad design or feature implementation.
+`LANE:CONTROLLER_STATE_PROOF` - pin main/PR/head/files/checks/threads/open-PR count from live connector
+evidence; never memory; output pinned state for downstream packets.
 
-`LANE:LUNA_METADATA` - explicitly authorized PR title/body/label metadata update only. Re-prove head and
-metadata target; no code, review, thread resolution, or merge.
+`LANE:CONTROLLER_DESIGN_SYNTHESIS` - map surfaces/symbols/contracts from pinned evidence; define invariants,
+fail-closed matrix, raise-vs-REJECTED boundaries, allowed files, negative-path tests, validation ladder,
+stops; emit one bounded PR contract; decide whether Deep Research is required. No implementation.
 
-`LANE:TERRA_IMPLEMENT` - T2 exact-file bounded implementation or docs setup. Preserve deterministic,
-fail-closed, paper-only invariants; no merge.
+`LANE:CONTROLLER_TO_IMPLEMENTER` - issue the implementation packet: pinned state, exact read set, symbol
+map, exact allowed files, invariants, forbidden surfaces, protected-risk class, exact tests, validation
+ladder, branch/commit/PR contract, stop conditions.
 
-`LANE:TERRA_AUDIT` - fresh-context, pinned-head independent P1/P2 audit. Never audit the implementation from
-the same context that produced it.
+`LANE:CONTROLLER_PRE_CODEX_TRIAGE` - verify PR/base/head/files/patches/dependencies/CI/threads; run the
+protected-trigger matrix; strip questions already proven; emit the narrow Codex packet (pinned head, exact
+changes, direct dependencies, unresolved semantic questions, adversarial cases, report contract).
 
-`LANE:TERRA_REPAIR` - T3 current valid P1/P2 repair on the same branch with regression proof. Stop if scope
-widens or the loop becomes broad; route broad/long work to Opus.
+`LANE:CONTROLLER_REPORT_VERIFY` - check every executor claim against live PR metadata, pinned head/base,
+exact files, commits, runs/jobs, tests, CodeQL, reviews, threads, open-PR count, merge state, pinned file
+contents. No report is self-authenticating; unverified claims stay UNKNOWN/UNPROVEN. Output
+HANDOFF_ACCEPTED / HANDOFF_REPAIR_REQUIRED / HANDOFF_REJECTED / HANDOFF_UNKNOWN.
 
-`LANE:SOL_CROSS_CONTRACT` - scarce T4 trust/governance/SM-5-SM-6/readiness provenance design or audit.
-Use `xhigh` by default; `max` requires controller gate. No polling, merge mechanics, or routine docs.
+`LANE:CONTROLLER_LOW_RISK_AUDIT` - Class-A independent audit (docs/setup/prompt/skill/workflow/low-risk CI
+config/helper scripts): fresh pinned-head reread, complete patch, exact files, terminal CI, thread state,
+P1/P2/P3 classification, explicit statement why Class A applies. Final gate and merge stay separate.
 
-`LANE:OPUS_HEAVY_LOCAL` - large bounded implementation/refactor, broad local reading, or long validation
-loops. It does not replace fresh-context Codex audit.
+`LANE:CONTROLLER_FINAL_GATE` - read-only merge-readiness verification: PR open/non-draft, base main, pinned
+head unchanged, exact files, required checks terminal success (accepted skips only), CodeQL clean, no
+current valid unresolved P1/P2, exactly one open PR, no forbidden scope, correct audit class completed.
+Output READY_FOR_MERGE_AUTHORIZATION | NOT_READY | UNKNOWN. Never merges.
 
-`LANE:DEEP_RESEARCH_EXTERNAL` - cited external/current facts only; advisory and read-only.
+`LANE:CONTROLLER_AUTHORIZED_ACTION` - execute ONLY an explicitly human-named GitHub action (standard merge,
+metadata, label, reviewer, draft/ready, comment, guarded thread closeout, bounded workflow rerun): re-prove
+state immediately before, perform only the named action, re-read the result, report proof. Never direct main
+push, force push, squash/rebase, self-approval, blind retry, or opportunistic adjacent mutation.
 
-`LANE:CONNECTOR_FINAL_GATE` - read-only source-of-truth verification of head, files, checks, reviews, and
-threads before merge authorization.
+## 3. Executor lanes
 
-`LANE:PURSUE_PREFLIGHT` - bounded single-goal terminal preflight/sync/CI/status/closeout/authorized
-postverify. Never broad repo pursuit, unscoped design, or unscoped implementation.
+`LANE:LUNA_MECHANICS` - T0 only: git/gh state, bounded CI polling, PR metadata (only when explicitly
+authorized), thread status, authorized standard merge + postverify command running. Reasoning none/low; no
+design, code, audit judgment, or thread resolution.
 
-`LANE:MODEL_FALLBACK` - exact model mismatch stops. Otherwise declare actual model/reasoning and use only the
-approved fallback: Sol -> Opus draft plus independent Codex audit; Terra -> Opus bounded work; Luna ->
-terminal/gh mechanical path; Opus -> split broad work or Terra only when truly bounded.
+`LANE:SONNET_BOUNDED_IMPLEMENTATION` - runtime-proven Claude Sonnet 5 only (print MODEL_ACTUAL first; stop
+if unproven): T1/T2 bounded reads, small/medium deterministic implementation, docs/tests, mechanical code,
+simple same-branch repair. Never protected/digest/SM/Stage-4/readiness/capital work, never T4, never
+Class-C audit. Fallback Terra (bounded) / Opus (broad).
 
-## 3. Copy templates
+`LANE:TERRA_BOUNDED_IMPLEMENTATION` - T2 exact-file bounded implementation or docs/tests from the controller
+packet; deterministic, fail-closed, paper-only invariants preserved; no merge.
 
-All templates below require this model header before task-specific fields:
-`MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`, `REASONING_ACTUAL`,
-`EXACT_MODEL_REQUIRED`, and `MODEL_FALLBACK`. Print actual runtime first. Exact mismatch stops; otherwise
-apply only the declared fallback and never claim unavailable-model quality.
+`LANE:TERRA_INDEPENDENT_AUDIT` - fresh-context, pinned-head ordinary independent audit (Class B when
+required); never the implementation context; changed files + direct dependencies only; no
+edits/comments/merge; AUDITOR handoff with P1/P2/P3 + exact evidence.
 
-### PROMPT:SOL_CROSS_CONTRACT
+`LANE:OPUS_HEAVY_IMPLEMENTATION` - T3 broad-but-bounded local implementation/refactor/forensic debug/long
+validation loops on named files; local state proven independently; separate independent audit still required
+for protected work; no merge.
+
+`LANE:SOL_PROTECTED_DESIGN_AUDIT` - scarce T4 protected design/audit on a controller-prepared narrow packet
+only (digest/provenance/trust boundaries, SM-5/SM-6, Stage-4, readiness/Deribit, complex security). xhigh
+default; max only controller-gated. No discovery, polling, mechanics, or implementation in audit mode.
+
+`LANE:IMPLEMENTER_HANDOFF` - close any implementation turn: actual files/head/commits, local tests,
+logged-full-suite result, CI snapshot, unresolved issues, no self-audit claim, one next safe action, in
+`AGENT_OS_HANDOFF_V1` form.
+
+`LANE:POST_MERGE_HANDOFF` - after an authorized merge: PR, merge commit, local/origin main equality, Ruff,
+format, full suite, setup audit, diff check, open PRs, clean tree, residual blockers, one next action.
+
+`LANE:FABLE5_SURGE_IMPLEMENTER` - runtime-proven claude-fable-5 only (print MODEL_ACTUAL first; STOP on
+mismatch, no silent fallback): semantically dense broad-but-bounded T3 implementation from the controller
+packet, expected to collapse >=2 ordinary prompts; one strong bounded pass (precheck -> reads -> patch ->
+targeted + logged-full validation -> commit -> push -> PR/head update -> CI snapshot -> handoff). Protected
+Class-C code only with explicit controller authorization; a separate fresh Sol Class-C audit stays
+mandatory; no self-audit claim. Requires GATE:FABLE5_JUSTIFICATION passed in the prompt.
+
+`LANE:FABLE5_CROSS_CONTRACT_CHALLENGE` - runtime-proven Fable, read-only T4: adversarial design challenge,
+cross-contract contradiction search, setup stress test, fail-closed matrix challenge, second opinion.
+No implementation, no merge authority, never replaces Sol Class-C; output is a controller handoff, never
+accepted state. Requires GATE:FABLE5_JUSTIFICATION.
+
+`LANE:FABLE5_FULL_REPO_AUDIT` - runtime-proven Fable, rare read-only milestone/phase-boundary full
+setup/workflow/architecture audit; controller must justify the broad read; never per-PR; no mutation, no CI
+polling, no self-approval, never a dependency. Requires GATE:FABLE5_JUSTIFICATION.
+
+`GATE:FABLE5_JUSTIFICATION` - controller states before any Fable prompt: FABLE5_RUNTIME_PROVEN, FABLE5_MODE,
+WHY_FABLE, WHY_NOT_SONNET, WHY_NOT_OPUS, WHY_NOT_TERRA, WHY_NOT_SOL, EXPECTED_PROMPTS_COLLAPSED,
+EXPECTED_REPAIR_RISK_REDUCTION, EXACT_READ_SET, EXACT_MUTATION_SCOPE, TOKEN_CLASS,
+TOKEN_BUDGET_ASSESSMENT, FALLBACK_IF_UNAVAILABLE. FABLE5_JUSTIFIED: true only per section 24.10 criteria;
+never for status/polling/merge/metadata/ordinary docs/simple bounded code/repetitive tests/cheap
+fully-specified tasks.
+
+`GATE:MODEL_EXPECTED_VALUE_PER_TOKEN` - serious prompts state: TOKEN_CLASS, TOKEN_BUDGET_ASSESSMENT,
+EXPECTED_VALUE_PER_TOKEN, EXPECTED_PROMPTS, MAX_REPAIR_CYCLES, CONTEXT_REUSE_PACKET, WHY_THIS_MODEL,
+CHEAPER_SAFE_ALTERNATIVE, STOP_IF_BUDGET_INSUFFICIENT. Measured harness cost, never hard-coded price
+rankings; correctness never sacrificed for tokens.
+
+## 4. Research lanes (controller-orchestrated; read-only)
+
+`LANE:DEEP_RESEARCH_FACT_CHECK` - XR_FACT_CHECK: one narrow current external question; official/primary
+sources first; retrieval date + source version; unresolved facts stay UNKNOWN; no implementation.
+
+`LANE:DEEP_RESEARCH_ARCHITECTURE_BENCHMARK` - XR_ARCHITECTURE_BENCHMARK: compare against Hummingbot /
+Freqtrade / NautilusTrader / QuantConnect LEAN / credible institutional systems on capabilities and
+evidence (never stars/marketing); architectural intent vs implemented proof; bounded repo-relevant
+recommendations; no blind copy; license/IP respected.
+
+`LANE:DEEP_RESEARCH_PHASE_GATE` - XR_PHASE_GATE_REVIEW: mandatory before material phase transitions with
+external/current assumptions (paper-DONE claims, machine-time, first connector/readiness, Deribit,
+shadow/live, custody/security/regulatory, resilience); also after major phase bundles, before roadmap
+changes on external assumptions, on stale prior evidence.
+
+`LANE:DEEP_RESEARCH_OVERENGINEERING` - XR_OVERENGINEERING_AUDIT: artifact proliferation vs end-to-end
+wiring; duplicates/unused modules/excess governance layers; freeze/consolidate/integrate recommendations;
+underbuilding check; tests-verify-composition check. Advisory until controller triage.
+
+All research lanes: connector-bound packet in (pinned repo state, exact files, benchmark set, source-quality
+requirements), `DEEP_RESEARCH_TO_CONTROLLER` packet out (research date, pinned state, source quality,
+REPO_EVIDENCE / EXTERNAL_EVIDENCE / INFERENCE / UNKNOWN, stale findings, bounded recommendations, exact next
+PR proposal, refresh trigger). Never mutation, never merge authority, never a gate waiver.
+
+## 5. Copy header (all serious templates)
+
 ```text
-ROLE: independent design/audit. TASK_CLASS: T4 SOL_CROSS_CONTRACT.
-MODEL_REQUESTED: GPT-5.6 Sol. REASONING_REQUESTED: xhigh. EXACT_MODEL_REQUIRED: <true|false>.
-MODEL_ACTUAL: <print first>. REASONING_ACTUAL: <print first>. MODEL_FALLBACK: <declared path>.
-LANE:PRECHECK-STD(expect_main_at=<sha>); LANE:SOL_CROSS_CONTRACT.
-READ: <exact evidence pack>. FORBIDDEN: implementation, CI polling, merge, live/readiness claims.
-REPORT: decisions, P1/P2, model actual, fallback, required next action.
+ROLE: <one role>. TASK_CLASS: <T0|T1|T2|T3|T4|XR|CONTROLLER_CONNECTOR_GATE>.
+MODEL_REQUESTED: <lane model>. REASONING_REQUESTED: <level>. EXACT_MODEL_REQUIRED: <true|false>.
+MODEL_ACTUAL: <print first>. REASONING_ACTUAL: <print first>. MODEL_FALLBACK: <declared path or STOP>.
+SETUP_REQUESTED: <per SETUP_LOAD_CONTRACT_V1>. SETUP_ACTUAL/SETUP_FILES_READ/SETUP_GAPS: <print>.
+PROFILE: CRYPTO_CORE_DOMAIN_OPERATING_PROFILE. STATE: <pinned main/PR/head>. SCOPE: <exact files>.
+FORBIDDEN: <task-specific + standing rails>. VALIDATION: <exact ladder>. STOP_WITH_PROOF: <conditions>.
+REPORT: AGENT_OS_HANDOFF_V1.
 ```
 
-### PROMPT:TERRA_IMPLEMENT
-```text
-ROLE: implementer. TASK_CLASS: T2 TERRA_BOUNDED_CODE. MODEL_REQUESTED: GPT-5.6 Terra.
-REASONING_REQUESTED: high. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
-REASONING_ACTUAL: <print first>. MODEL_FALLBACK: Opus only if declared.
-LANE:PRECHECK-STD(expect_main_at=<sha>). ALLOWED_FILES: <exact paths>.
-LANE:TERRA_IMPLEMENT; LANE:VALIDATE-STD(files=<paths>);
-LANE:PR-STD(branch=feature/<scope>-prN, title="<title>"). No merge.
-```
+## 6. Invariants
 
-### PROMPT:TERRA_INDEPENDENT_AUDIT
-```text
-ROLE: independent auditor. TASK_CLASS: T1 or T3. MODEL_REQUESTED: GPT-5.6 Terra.
-REASONING_REQUESTED: high. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
-REASONING_ACTUAL: <print first>. MODEL_FALLBACK: <declared path>.
-Fresh context; pinned PR head <sha>; changed files plus direct dependencies only. LANE:TERRA_AUDIT.
-No edits/comments/merge. Report P1/P2/P3, thread relevance, readiness, and actual model.
-```
-
-### PROMPT:TERRA_EMERGENCY_REPAIR
-```text
-ROLE: same-branch repair. TASK_CLASS: T3. MODEL_REQUESTED: GPT-5.6 Terra.
-REASONING_REQUESTED: xhigh. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
-REASONING_ACTUAL: <print first>. MODEL_FALLBACK: Opus if broad/long-loop.
-PR #<N>, head <sha>, finding <id>, allowed files <paths>. LANE:TERRA_REPAIR; add regression proof;
-validate; push. Stop on scope expansion. No merge or thread resolution without explicit guarded authority.
-```
-
-### PROMPT:LUNA_CI_STATUS
-```text
-ROLE: mechanical executor. TASK_CLASS: T0. MODEL_REQUESTED: GPT-5.6 Luna.
-REASONING_REQUESTED: low. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
-REASONING_ACTUAL: <print first>. MODEL_FALLBACK: terminal/gh or declared mechanical lane.
-LANE:LUNA_STATE. Exact PR/head required. No code/design/review/merge. Return terminal or pending proof.
-```
-
-### PROMPT:LUNA_METADATA_UPDATE
-```text
-ROLE: authorized metadata executor. TASK_CLASS: T0. MODEL_REQUESTED: GPT-5.6 Luna.
-REASONING_REQUESTED: low. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
-REASONING_ACTUAL: <print first>. MODEL_FALLBACK: terminal/gh or declared mechanical lane.
-LANE:LUNA_METADATA. Exact PR, head, and body/title/label field required. No code, review, thread resolution,
-or merge. Re-read metadata after update and report proof.
-```
-
-### PROMPT:LUNA_MERGE_POSTVERIFY
-```text
-ROLE: authorized mechanical executor. TASK_CLASS: T0. MODEL_REQUESTED: GPT-5.6 Luna.
-REASONING_REQUESTED: low. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
-REASONING_ACTUAL: <print first>. MODEL_FALLBACK: terminal/gh or declared mechanical lane.
-USER AUTHORIZATION names PR and exact merge command. Re-prove head/files/checks/threads; standard head-pinned
-merge only; LANE:LUNA_STATE postverify main. No edits, no next feature, no thread resolution.
-```
-
-### PROMPT:OPUS_HEAVY_LOCAL
-```text
-ROLE: heavy local implementer. TASK_CLASS: T3. MODEL_REQUESTED: Claude Opus 4.8.
-REASONING_REQUESTED: xhigh. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
-REASONING_ACTUAL: <print first>. MODEL_FALLBACK: split scope or declared Terra path if truly bounded.
-Clean main@<sha>; branch feature/<scope>-prN; named broad-but-bounded files; long validation allowed.
-No merge. Require separate fresh-context Terra or Sol audit before connector gate.
-```
-
-### PROMPT:DEEP_RESEARCH
-```text
-ROLE: external fact researcher. TASK_CLASS: XR. MODEL_REQUESTED: Deep Research.
-REASONING_REQUESTED: <runtime policy>. EXACT_MODEL_REQUIRED: false. MODEL_ACTUAL: <print first>.
-REASONING_ACTUAL: <print first>. MODEL_FALLBACK: STOP_WITH_PROOF if cited research cannot run.
-Exact current question: <question>. Cite sources; separate REPO_EVIDENCE / EXTERNAL_EVIDENCE / INFERENCE /
-UNKNOWN. Read-only advisory only.
-```
-
-### PROMPT:CONNECTOR_FINAL_GATE
-```text
-ROLE: final evidence gate. TASK_CLASS: CONTROLLER_CONNECTOR_GATE. MODEL_REQUESTED: GitHub connector/gh.
-REASONING_REQUESTED: not-applicable. EXACT_MODEL_REQUIRED: false. MODEL_ACTUAL: <connector or gh>.
-REASONING_ACTUAL: not-applicable. MODEL_FALLBACK: gh-native mechanism only; never a gate waiver.
-Verify PR open/non-draft, head, exact files, terminal checks, reviews, threads, code scanning, and one-open-PR
-rule. Output READY_FOR_MERGE_AUTHORIZATION or NOT_READY with proof. No mutation.
-```
-
-### PROMPT:PURSUE_PREFLIGHT
-```text
-ROLE: bounded terminal loop. TASK_CLASS: T0. MODEL_REQUESTED: GPT-5.6 Luna.
-REASONING_REQUESTED: low. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
-REASONING_ACTUAL: <print first>. MODEL_FALLBACK: declared mechanical path.
-LANE:PURSUE_PREFLIGHT; exact goal <preflight|sync|CI|closeout|postverify>. No broad design or patching.
-```
-
-### PROMPT:MODEL_FALLBACK
-```text
-ROLE: routing control. TASK_CLASS: <T0|T1|T2|T3|T4|XR>. MODEL_REQUESTED: <model>.
-REASONING_REQUESTED: <level>. EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
-REASONING_ACTUAL: <print first>. MODEL_FALLBACK: <Luna->terminal/gh; Terra->Opus; Sol->Opus plus independent
-Codex audit; Opus->split scope or Terra only when bounded>. Stop on required exact mismatch.
-```
-## 4. Invariants
-
-One open PR; no direct main push; standard merge only; explicit human merge authorization; pending CI is
-NOT_READY; current P1/P2 block; connector final gate never waived; postmerge verification before next work;
-crypto_core-only; no BIST/live/private API/orders/scheduler/readiness/shadow/capital work. Historical Fable
-prompts are archived in `fable_exit_contract_index.md`, never active lanes.
+One open PR; one repository writer at a time; no direct main push; standard merge only; explicit human merge
+authorization; pending CI is NOT_READY; current valid P1/P2 block; Class-C Codex audit never replaceable;
+connector final gate never waived; postmerge verification before next work; research never mutates;
+crypto_core-only; no BIST/live/private API/orders/scheduler/readiness/shadow/capital work. No autonomous
+scheduler, no auto-loop, no direct model-to-model runtime messaging. Fable runs only runtime-proven through
+GATE:FABLE5_JUSTIFICATION, never self-audits, and never replaces Sol Class-C; no plan depends on Fable
+availability. Pre-v5.1 Fable prompts are archived in `fable_exit_contract_index.md`, never active lanes.
