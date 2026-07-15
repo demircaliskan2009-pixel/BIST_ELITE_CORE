@@ -150,7 +150,8 @@ ROLE: heavy local implementer. TASK_CLASS: T3. MODEL_REQUESTED: Claude Opus 4.8.
 EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL/REASONING_ACTUAL: <print first>.
 PACKET: <CONTROLLER_TO_IMPLEMENTER>. STATE: clean main@<sha>; BRANCH feature/<scope>-prN.
 SCOPE: <named broad-but-bounded files>; long validation loops allowed. LANE:VALIDATE-STD; LANE:PR-STD.
-Protected work still gets a separate fresh Class-C/Terra audit. No merge. LANE:IMPLEMENTER_HANDOFF.
+Protected (Class-C) work gets a separate fresh independent Codex audit — Sol lane for protected
+design/audit; Terra covers only ordinary sub-Class-C review. No merge. LANE:IMPLEMENTER_HANDOFF.
 ```
 
 ### 2.6 Codex GPT-5.6 Sol — protected T4 design/audit
