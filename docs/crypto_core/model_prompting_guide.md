@@ -6,12 +6,14 @@ prompts for it and never overrides it). Companion lanes: `token_efficiency_v2.md
 `token_efficiency_playbook.md`; research: `deep_research_protocol.md`. On any apparent conflict, section 24
 and the stricter safety rule win.
 
-Active lanes covered (ten): ChatGPT GPT-5.6 Thinking, GitHub connector, Deep Research, Claude Fable 5
-(runtime-proven premium surge — conditional, section 2.10), Claude Sonnet 5 (runtime-proven only), Claude
-Opus 4.8, Codex GPT-5.6 Sol, Codex GPT-5.6 Terra, Codex GPT-5.6 Luna, and the VS Code Copilot Pro local
-Agent (execution host). Fable 5 runs only runtime-proven and justification-gated; no plan depends on its
-availability and no fixed expiry is encoded; pre-v5.1 Fable material lives in
-`fable_exit_contract_index.md` and workflow sections 20-23 under explicit HISTORICAL/SUPERSEDED labels.
+Active lanes covered (nine): ChatGPT GPT-5.6 Thinking, GitHub connector, Deep Research, Claude Fable 5
+(runtime-proven premium surge — conditional, section 2.9), Claude Sonnet 5 (runtime-proven only), Claude
+Opus 4.8, Codex GPT-5.6 Sol, Codex GPT-5.6 Terra, Codex GPT-5.6 Luna. Claude Code local sessions are the
+primary local execution environment for the Claude lanes; Codex Sol/Terra/Luna are separate local sessions.
+Fable 5 runs only runtime-proven and justification-gated; no plan depends on its availability and no fixed
+expiry is encoded; pre-v5.1 Fable material lives in `fable_exit_contract_index.md` and workflow sections
+20-23 under explicit HISTORICAL/SUPERSEDED labels. Copilot-specific repository assets are historical
+compatibility material and are not an available or routable lane in the current environment.
 Nothing in this guide proves repo state, authorizes a merge, or affects the blocker
 `secondary_comparison_metrics_hit_fill_slippage_declared_not_enforced_v1` (that closes only through its own
 audited SM-5/SM-6 gates).
@@ -217,25 +219,7 @@ AUTHORIZATION: <quoted human instruction, if mutating>. No code/design/review/th
 OUTPUT: terminal-or-pending proof; LANE:HANDOFF-STD.
 ```
 
-### 2.9 VS Code Copilot Pro local Agent — execution host
-
-- **Doctrine:** a HOST, not an independently trusted model identity; obeys `.github/copilot-instructions.md`
-  plus `AGENTS.md` plus the controller packet; Auto routing must report `MODEL_ACTUAL` where the runtime
-  exposes it and never claim a specific model without proof.
-- **Best tasks:** hosting bounded implementation/validation/git execution for a controller-packet task on
-  this machine.
-- **Bad tasks:** generic repo-wide improvement; unsupervised multi-slice work; merge decisions; identity
-  claims; anything outside the packet.
-- **Stops:** `MODEL_FIT_WEAK` with evidence when Auto output misses setup constraints; packet ambiguity.
-- **Anti-patterns:** treating host availability as model authority; silent scope growth.
-
-```text
-HOST: VS Code Copilot Pro local Agent. LOAD: .github/copilot-instructions.md + AGENTS.md + controller packet.
-TASK_CLASS: <T1|T2>. MODEL: Auto (report MODEL_ACTUAL where exposed). SCOPE: exact packet files only.
-LANE:VALIDATE-STD; LANE:PR-STD if authorized. STOP: MODEL_FIT_WEAK | scope pressure. OUTPUT: LANE:HANDOFF-STD.
-```
-
-### 2.10 Claude Fable 5 — runtime-proven premium surge lane (conditional)
+### 2.9 Claude Fable 5 — runtime-proven premium surge lane (conditional)
 
 - **Identity/doctrine:** `claude-fable-5`, ACTIVE but CONDITIONAL (`FABLE5_PREMIUM_SURGE_LANE`, workflow
   section 24.10). Every prompt must runtime-prove `MODEL_ACTUAL=claude-fable-5` (STOP_WITH_PROOF on
