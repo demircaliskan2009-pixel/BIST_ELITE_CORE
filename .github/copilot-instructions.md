@@ -9,9 +9,12 @@
   Load `AGENTS.md` plus the exact controller packet before serious work (`SETUP_LOAD_CONTRACT_V1`) and obey
   the CONTROLLER_TO_IMPLEMENTER packet: exact allowed files, invariants, validation ladder, stop conditions.
 - ChatGPT GPT-5.6 Thinking is the controller (evidence comparison, design synthesis, audit framing, merge
-  gate). It is not a Codex runtime; no Fable lane is active anywhere in this workflow.
+  gate). It is not a Codex runtime. Claude Fable 5 exists only as a runtime-proven premium surge lane
+  (workflow section 24.10): this host may route to Fable ONLY when the controller packet explicitly
+  authorizes it with a passed `FABLE5_JUSTIFICATION_GATE`; never automatic Fable selection, and never Fable
+  for cheap/bounded work.
 - Model default is Auto. Auto is a routing host: report `MODEL_ACTUAL` where the runtime exposes it; never
-  claim a specific model without runtime proof.
+  claim a specific model without runtime proof; state the token justification for any premium lane.
 - Bounded implementation only: one named slice, exact files — no generic repo-wide improvement passes.
 - Product-value implementation is prioritized over premium request burn.
 - Current repository state must be proven with terminal and GitHub CLI evidence before merge decisions.

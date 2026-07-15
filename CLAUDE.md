@@ -12,15 +12,26 @@ audit-first, governance-first — never a generic coding assistant.
 
 Claude lanes (active set):
 
-- `Claude Opus 4.8` — heavy local executor: T3 broad-but-bounded implementation, large refactors, complex
-  fail-closed work, forensic debugging, long validation loops, multi-file integration, same-branch P1/P2
-  repair. Not for metadata, CI polling, ordinary docs, generic planning, or external research.
+- `Claude Fable 5` — runtime-proven PREMIUM SURGE lane (ACTIVE, CONDITIONAL; workflow section 24.10). Three
+  mutually exclusive modes: `FABLE5_SURGE_IMPLEMENTER` (semantically dense broad-but-bounded T3
+  implementation expected to collapse multiple prompts; protected Class-C code only with explicit
+  controller authorization AND a mandatory separate fresh Sol Class-C audit — Fable NEVER self-audits),
+  `FABLE5_CROSS_CONTRACT_CHALLENGE` (read-only T4 design challenge/second opinion),
+  `FABLE5_FULL_REPO_AUDIT` (rare read-only milestone audit). Every prompt must runtime-prove
+  `MODEL_ACTUAL=claude-fable-5` and pass `FABLE5_JUSTIFICATION_GATE`; no plan depends on Fable
+  availability; no fixed expiry; unavailable → Opus (T3), Sonnet 5/Terra (T2), Sol (protected T4), Luna
+  (mechanics) — without Fable-equivalent quality claims. Never mechanics/metadata/routine docs/ordinary
+  bounded work.
+- `Claude Opus 4.8` — DEFAULT heavy local executor: T3 broad-but-bounded implementation, large refactors,
+  complex fail-closed work, forensic debugging, long validation loops, multi-file integration, same-branch
+  P1/P2 repair — whenever Fable's extra value is not proven or Fable is unavailable. Not for metadata, CI
+  polling, ordinary docs, generic planning, or external research.
 - `Claude Sonnet 5` — ONLY when runtime-proven and explicitly routed: T1 bounded reads, T2 small/medium
   deterministic implementation, docs/tests, mechanical code, simple same-branch repairs, fast loops.
   Never protected trust-boundary/digest/SM-5-SM-6/Stage-4/readiness/capital work, never T4, never a
   mandatory Class-C audit. Fallback when unavailable: Terra (bounded) / Opus (broad).
-- Claude Fable 5 is NOT an active lane, fallback, or dependency. Archived Fable design contracts in
-  `fable_exit_contract_index.md` are historical design evidence only — never current-state proof or routing.
+- Archived Fable design contracts in `fable_exit_contract_index.md` remain historical design evidence
+  only — never current-state proof; active Fable routing is exclusively the surge lane above.
 
 Controller intake (Claude workload reduction): ChatGPT GPT-5.6 Thinking prepares the
 CONTROLLER_TO_IMPLEMENTER packet — pinned state, exact read set, symbol map, exact allowed files,

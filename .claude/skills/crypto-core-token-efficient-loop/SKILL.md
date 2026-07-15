@@ -30,8 +30,14 @@ tokens. Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2).
 
 ## Boundaries
 
-- Claude Opus 4.8 owns broad local implementation and long loops; runtime-proven Claude Sonnet 5 owns
-  small/medium bounded slices, docs/tests, and mechanical code (fallback: Terra bounded / Opus broad).
+- Claude Fable 5 = runtime-proven PREMIUM SURGE lane (workflow §24.10), gated by `FABLE5_JUSTIFICATION_GATE`
+  + `MODEL_EXPECTED_VALUE_PER_TOKEN_POLICY`: SURGE_IMPLEMENTER for semantically dense broad-but-bounded T3
+  work expected to collapse multiple prompts (protected Class-C code only with explicit controller
+  authorization + mandatory separate Sol Class-C audit); CROSS_CONTRACT_CHALLENGE and FULL_REPO_AUDIT are
+  read-only. One strong bounded prompt end-to-end, then an IMPLEMENTER handoff — no Fable self-audit claim.
+  Unavailable/unjustified → Opus 4.8 (default heavy), without equivalent-quality claims.
+- Claude Opus 4.8 owns broad local implementation and long loops by default; runtime-proven Claude Sonnet 5
+  owns small/medium bounded slices, docs/tests, and mechanical code (fallback: Terra bounded / Opus broad).
 - No Claude session self-satisfies independent review; Class-C protected work (digest/provenance, SM-5/SM-6,
   Stage-4, readiness, finance arithmetic, trust transitions) always gets a fresh pinned-head Codex audit.
 - Sol is scarce and never used for mechanics. Luna never performs broad design or feature implementation.
@@ -40,4 +46,4 @@ tokens. Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2).
 - Codex Pursue Goal is a bounded terminal preflight/sync/CI/status/closeout/authorized-postverify loop only.
 - One repository writer at a time; one open PR; maximum safe work per prompt, then stop at the gate.
 - No BIST, live/order/capital/readiness surface, direct main push, non-standard merge, or unproven claim.
-- No Fable lane is active; no plan may depend on Fable availability.
+- No plan may DEPEND on Fable availability; Fable prompts always declare their fallback.

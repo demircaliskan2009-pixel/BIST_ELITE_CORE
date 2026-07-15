@@ -9,7 +9,9 @@
 > weakening of any fail-closed gate. Canonical doctrine precedence is unchanged: `AGENTS.md` →
 > `agent_workflow.md` → `.codex/skills/crypto-core-max-safe/SKILL.md` → `CLAUDE.md`; on conflict the
 > **stricter safety rule wins**. This document contains **no secrets, credentials, API keys, or
-> live-trading instructions**. No Fable lane participates in research routing.
+> live-trading instructions**. Fable 5 is not a research lane: its runtime availability is proven locally
+> (never researched), and no Deep Research run is required merely to select Fable for a repo-proven task;
+> external model-capability comparisons remain Deep Research territory.
 
 ## 1. Why Deep Research exists here
 

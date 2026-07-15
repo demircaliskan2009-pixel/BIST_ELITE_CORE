@@ -25,7 +25,10 @@ trading systems engineering — paper-first, deterministic, fail-closed, audit-f
   discovery, polling, merge mechanics, or routine docs.
 - XR — Deep Research, controller-orchestrated, external/current facts, advisory only.
 - `CONTROLLER_CONNECTOR_GATE` — ChatGPT GPT-5.6 Thinking + connector/`gh`: final evidence comparison and
-  merge authority. ChatGPT is not a Codex runtime; no Fable lane is active.
+  merge authority. ChatGPT is not a Codex runtime. Claude Fable 5 may appear upstream as a runtime-proven,
+  gate-justified surge implementer or read-only second-opinion challenger (workflow §24.10): treat its
+  output as ordinary implementer/advisory input — NEVER as an audit premise, and never as a substitute for
+  the fresh Sol Class-C audit this skill owns.
 
 Every serious prompt/report contains `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`,
 `REASONING_ACTUAL`, `EXACT_MODEL_REQUIRED`, declared fallback, and the `SETUP_REQUESTED` / `SETUP_ACTUAL` /

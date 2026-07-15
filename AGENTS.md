@@ -32,9 +32,19 @@ safety rule wins.
   action, and result verification after. Connector access is never blanket mutation authorization.
 - **Deep Research + GitHub connector** — external/current facts, benchmarks, phase-gate and
   overengineering reviews. Strictly read-only and advisory; never executor, mutation, or merge authority.
-- **Claude Opus 4.8** — heavy local executor: T3 broad-but-bounded implementation, large refactors, complex
-  fail-closed work, forensic debugging, long validation loops, multi-file integration, same-branch P1/P2
-  repair. Never spent on metadata, CI polling, ordinary docs, or work Sonnet/Terra can safely complete.
+- **Claude Fable 5 — runtime-proven premium surge lane (ACTIVE, CONDITIONAL)** — three mutually exclusive
+  modes (`FABLE5_PREMIUM_SURGE_LANE`, workflow section 24.10): SURGE_IMPLEMENTER (semantically dense
+  broad-but-bounded T3 implementation expected to collapse multiple prompts; protected Class-C code only
+  with explicit controller authorization AND a mandatory separate Sol Class-C audit),
+  CROSS_CONTRACT_CHALLENGE (read-only T4 design challenge/second opinion), FULL_REPO_AUDIT (rare read-only
+  milestone audit). Every Fable prompt requires runtime proof of `claude-fable-5` plus a passed
+  `FABLE5_JUSTIFICATION_GATE`; no plan/roadmap/checkpoint may depend on Fable availability; no fixed expiry
+  encoded; fallbacks (Opus/Sonnet/Terra/Sol/Luna) keep the workflow fully functional without it. Never for
+  mechanics, metadata, routine docs, ordinary bounded work, or any self-audit.
+- **Claude Opus 4.8** — DEFAULT heavy local executor: T3 broad-but-bounded implementation, large refactors,
+  complex fail-closed work, forensic debugging, long validation loops, multi-file integration, same-branch
+  P1/P2 repair — whenever Fable's extra value is not proven or Fable is unavailable. Never spent on
+  metadata, CI polling, ordinary docs, or work Sonnet/Terra can safely complete.
 - **Claude Sonnet 5 — runtime-proven only** — T1 bounded reads, T2 small/medium deterministic
   implementation, docs/tests, mechanical code, simple repairs, fast loops. Availability/identity must be
   runtime-proven; never protected trust-boundary/digest/SM-5-SM-6/Stage-4/readiness/capital work, never T4,
@@ -49,9 +59,12 @@ safety rule wins.
 - **VS Code Copilot Pro local Agent** — execution host only, never an independently trusted model identity;
   `MODEL_ACTUAL` is reported where exposed; it obeys the controller packet and this doctrine.
 
-Claude Fable 5 is NOT active: no routing, no prompts, no fallback, no dependency. Historical references
-exist only under explicit HISTORICAL/SUPERSEDED/ARCHIVAL labels (`fable_exit_contract_index.md`,
-workflow sections 20-23) and never affect current routing.
+Model selection follows `MODEL_EXPECTED_VALUE_PER_TOKEN_POLICY` (workflow section 24.10): expected value
+per token from safety class, semantic complexity, breadth, independence needs, expected prompts, repair
+probability, availability, and measured harness cost — Fable is premium surge (never default), Opus is the
+default heavy executor, Sonnet/Terra are the economical bounded lanes. Pre-v5.1 Fable-era material stays
+archived under HISTORICAL/SUPERSEDED/ARCHIVAL labels (`fable_exit_contract_index.md`, workflow sections
+20-23) and never affects current routing.
 
 Every serious prompt/report states `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`,
 `REASONING_ACTUAL`, `EXACT_MODEL_REQUIRED`, and declared fallback, plus `SETUP_REQUESTED` / `SETUP_ACTUAL` /
@@ -168,8 +181,9 @@ earlier handoff → memory. Unresolved load-bearing disputes stay `UNKNOWN` and 
 - `secondary_comparison_metrics_hit_fill_slippage_declared_not_enforced_v1` remains a valid blocker.
 - Any SM-5/SM-6 work starts with a separately authorized Class-C design/audit slice consuming the #328
   precondition. Setup/doctrine PRs do not implement feature work.
-- `docs/crypto_core/fable_exit_contract_index.md` is historical design evidence only; no Fable routing is
-  active anywhere.
+- `docs/crypto_core/fable_exit_contract_index.md` is historical design evidence only; active Fable routing
+  exists solely as the conditional `FABLE5_PREMIUM_SURGE_LANE` (workflow section 24.10) — runtime-proven,
+  gate-justified, never a dependency.
 
 ## Report Format
 

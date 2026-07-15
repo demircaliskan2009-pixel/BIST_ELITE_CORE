@@ -5,8 +5,9 @@ safety. Every serious prompt includes `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASON
 `REASONING_ACTUAL`, `EXACT_MODEL_REQUIRED`, declared fallback, the `SETUP_*` block, exact scope, forbidden
 actions, validation, stops, and the `AGENT_OS_HANDOFF_V1` report. An exact-model mismatch is
 `STOP_WITH_PROOF`; otherwise actual runtime is reported without overclaim. Every serious prompt inherits
-`CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2). No Fable lane exists; historical Fable prompts are
-archived in `fable_exit_contract_index.md` and are never active.
+`CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2). Claude Fable 5 is active ONLY as the runtime-proven,
+justification-gated premium surge lane (section 24.10); pre-v5.1 Fable prompts are archived in
+`fable_exit_contract_index.md` and are never active.
 
 ## 1. Shared lanes
 
@@ -94,6 +95,34 @@ logged-full-suite result, CI snapshot, unresolved issues, no self-audit claim, o
 `LANE:POST_MERGE_HANDOFF` - after an authorized merge: PR, merge commit, local/origin main equality, Ruff,
 format, full suite, setup audit, diff check, open PRs, clean tree, residual blockers, one next action.
 
+`LANE:FABLE5_SURGE_IMPLEMENTER` - runtime-proven claude-fable-5 only (print MODEL_ACTUAL first; STOP on
+mismatch, no silent fallback): semantically dense broad-but-bounded T3 implementation from the controller
+packet, expected to collapse >=2 ordinary prompts; one strong bounded pass (precheck -> reads -> patch ->
+targeted + logged-full validation -> commit -> push -> PR/head update -> CI snapshot -> handoff). Protected
+Class-C code only with explicit controller authorization; a separate fresh Sol Class-C audit stays
+mandatory; no self-audit claim. Requires GATE:FABLE5_JUSTIFICATION passed in the prompt.
+
+`LANE:FABLE5_CROSS_CONTRACT_CHALLENGE` - runtime-proven Fable, read-only T4: adversarial design challenge,
+cross-contract contradiction search, setup stress test, fail-closed matrix challenge, second opinion.
+No implementation, no merge authority, never replaces Sol Class-C; output is a controller handoff, never
+accepted state. Requires GATE:FABLE5_JUSTIFICATION.
+
+`LANE:FABLE5_FULL_REPO_AUDIT` - runtime-proven Fable, rare read-only milestone/phase-boundary full
+setup/workflow/architecture audit; controller must justify the broad read; never per-PR; no mutation, no CI
+polling, no self-approval, never a dependency. Requires GATE:FABLE5_JUSTIFICATION.
+
+`GATE:FABLE5_JUSTIFICATION` - controller states before any Fable prompt: FABLE5_RUNTIME_PROVEN, FABLE5_MODE,
+WHY_FABLE, WHY_NOT_SONNET, WHY_NOT_OPUS, WHY_NOT_TERRA, WHY_NOT_SOL, EXPECTED_PROMPTS_COLLAPSED,
+EXPECTED_REPAIR_RISK_REDUCTION, EXACT_READ_SET, EXACT_MUTATION_SCOPE, TOKEN_CLASS,
+TOKEN_BUDGET_ASSESSMENT, FALLBACK_IF_UNAVAILABLE. FABLE5_JUSTIFIED: true only per section 24.10 criteria;
+never for status/polling/merge/metadata/ordinary docs/simple bounded code/repetitive tests/cheap
+fully-specified tasks.
+
+`GATE:MODEL_EXPECTED_VALUE_PER_TOKEN` - serious prompts state: TOKEN_CLASS, TOKEN_BUDGET_ASSESSMENT,
+EXPECTED_VALUE_PER_TOKEN, EXPECTED_PROMPTS, MAX_REPAIR_CYCLES, CONTEXT_REUSE_PACKET, WHY_THIS_MODEL,
+CHEAPER_SAFE_ALTERNATIVE, STOP_IF_BUDGET_INSUFFICIENT. Measured harness cost, never hard-coded price
+rankings; correctness never sacrificed for tokens.
+
 ## 4. Research lanes (controller-orchestrated; read-only)
 
 `LANE:DEEP_RESEARCH_FACT_CHECK` - XR_FACT_CHECK: one narrow current external question; official/primary
@@ -136,5 +165,6 @@ One open PR; one repository writer at a time; no direct main push; standard merg
 authorization; pending CI is NOT_READY; current valid P1/P2 block; Class-C Codex audit never replaceable;
 connector final gate never waived; postmerge verification before next work; research never mutates;
 crypto_core-only; no BIST/live/private API/orders/scheduler/readiness/shadow/capital work. No autonomous
-scheduler, no auto-loop, no direct model-to-model runtime messaging. Historical Fable prompts are archived
-in `fable_exit_contract_index.md`, never active lanes.
+scheduler, no auto-loop, no direct model-to-model runtime messaging. Fable runs only runtime-proven through
+GATE:FABLE5_JUSTIFICATION, never self-audits, and never replaces Sol Class-C; no plan depends on Fable
+availability. Pre-v5.1 Fable prompts are archived in `fable_exit_contract_index.md`, never active lanes.
