@@ -4,15 +4,22 @@
 
 - crypto_core is active implementation scope.
 - BIST is historical-only context and must not drive new implementation work.
-- ChatGPT is used for reasoning, prompt design, and audit framing.
-- VS Code local Copilot Agent is the primary executor for edits, validation, and git operations.
-- Model default is Auto.
+- The VS Code local Copilot Agent is an EXECUTION HOST inside `CRYPTO_CORE_AGENT_OS_V1`
+  (`docs/crypto_core/agent_workflow.md` section 24), never an independently trusted model identity.
+  Load `AGENTS.md` plus the exact controller packet before serious work (`SETUP_LOAD_CONTRACT_V1`) and obey
+  the CONTROLLER_TO_IMPLEMENTER packet: exact allowed files, invariants, validation ladder, stop conditions.
+- ChatGPT GPT-5.6 Thinking is the controller (evidence comparison, design synthesis, audit framing, merge
+  gate). It is not a Codex runtime; no Fable lane is active anywhere in this workflow.
+- Model default is Auto. Auto is a routing host: report `MODEL_ACTUAL` where the runtime exposes it; never
+  claim a specific model without runtime proof.
+- Bounded implementation only: one named slice, exact files — no generic repo-wide improvement passes.
 - Product-value implementation is prioritized over premium request burn.
 - Current repository state must be proven with terminal and GitHub CLI evidence before merge decisions.
 - No live/private API changes, order routing changes, scheduler changes, or autonomous trading enablement.
 - No cloud agent delegation, Copilot CLI, GitHub.com Chat workflow, plugin installation, or external MCP additions.
 - B5 and human provenance gates cannot be bypassed.
-- Deep Research is allowed only for external or current facts that are not provable from this repository.
+- Deep Research is allowed only for external or current facts that are not provable from this repository,
+  and only controller-orchestrated.
 
 ## CANONICAL DOCTRINE & SCOPE
 

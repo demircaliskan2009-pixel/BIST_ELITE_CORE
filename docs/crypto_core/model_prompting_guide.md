@@ -1,307 +1,293 @@
-# crypto_core Model Prompting Guide (v1, 2026-07-10)
+# crypto_core Model Prompting Guide (v2, 2026-07-10 — Agent OS edition)
 
-Durable authoring guide for every model/lane prompt in the crypto_core workflow. Active routing authority
-is `docs/crypto_core/agent_workflow.md` section 23 ("Active GPT-5.6 Routing Doctrine"); this guide never
-overrides it — it teaches how to WRITE prompts for it. Companion lane shorthands live in
-`docs/crypto_core/agent_prompts/token_efficiency_v2.md`; token budgets live in
-`docs/crypto_core/token_efficiency_playbook.md`. If this guide and section 23 ever appear to conflict,
-section 23 and the stricter safety rule win.
+Durable authoring guide for every active model/tool lane in `CRYPTO_CORE_AGENT_OS_V1`
+(`docs/crypto_core/agent_workflow.md` section 24 — the routing authority; this guide teaches how to WRITE
+prompts for it and never overrides it). Companion lanes: `token_efficiency_v2.md`; budgets:
+`token_efficiency_playbook.md`; research: `deep_research_protocol.md`. On any apparent conflict, section 24
+and the stricter safety rule win.
 
-Nothing in this guide is repo-state proof, a merge authorization, or a safety-gate waiver. The blocker
-`secondary_comparison_metrics_hit_fill_slippage_declared_not_enforced_v1` is not affected by prompting
-style; it closes only through its own audited SM-5/SM-6 gates.
+Active lanes covered: ChatGPT GPT-5.6 Thinking, GitHub connector, Deep Research, Claude Sonnet 5
+(runtime-proven only), Claude Opus 4.8, Codex GPT-5.6 Sol, Codex GPT-5.6 Terra, Codex GPT-5.6 Luna, and the
+VS Code Copilot Pro local Agent (execution host). **Claude Fable 5 is not an active lane** — no routing, no
+skeleton, no fallback; historical Fable material lives only in `fable_exit_contract_index.md` and workflow
+sections 20-23 under explicit HISTORICAL/SUPERSEDED labels. Nothing in this guide proves repo state,
+authorizes a merge, or affects the blocker
+`secondary_comparison_metrics_hit_fill_slippage_declared_not_enforced_v1` (that closes only through its own
+audited SM-5/SM-6 gates).
 
 ## 1. Prompt anatomy standard
 
-Every serious prompt carries these fields, in this order. Mechanical T0 snapshots may compress, but the
-model-verification block is never dropped from a serious prompt.
+Every serious prompt carries, in order: `ROLE` (one role — never implementation + independent audit
+together), `TASK_CLASS` (T0-T4/XR/CONTROLLER_CONNECTOR_GATE — classify BEFORE picking the model),
+`MODEL_REQUESTED`, `REASONING_REQUESTED`, `EXACT_MODEL_REQUIRED`, `MODEL_ACTUAL` + `REASONING_ACTUAL`
+(printed FIRST by the executor from runtime proof), `SETUP_REQUESTED` / `SETUP_ACTUAL` / `SETUP_FILES_READ`
+/ `SETUP_GAPS` (`SETUP_LOAD_CONTRACT_V1` — never claim setup loading without proof), `PROFILE`
+(`CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` — institutional crypto trading systems engineering, never generic
+coding), `STATE_PROOF` (pinned main/PR/head; executor re-proves local facts), `SCOPE / ALLOWED_FILES`
+(exact), `FORBIDDEN` (task-specific on top of standing rails — never shortened), `VALIDATION` (exact ladder;
+full suite only via `run_full_tests_logged.ps1`), `STOP_WITH_PROOF` (enumerated), and
+`REPORT: AGENT_OS_HANDOFF_V1` (workflow section 24.6; one next safe action; failure tails only).
 
-| Field | Content | Rule |
-|---|---|---|
-| `ROLE` | One line: what the model IS this turn (implementer / auditor / mechanical executor / researcher) | One role per prompt; never implementation + independent audit together |
-| `TASK_CLASS` | `T0`-`T4`, `XR`, or `CONTROLLER_CONNECTOR_GATE` | Classify BEFORE choosing the model, never after |
-| `MODEL_REQUESTED` | Exact lane (e.g. `GPT-5.6 Sol`, `Claude Opus 4.8`) | From the section-23 table for the class |
-| `REASONING_REQUESTED` | `none`/`low`/`high`/`xhigh`/`max` | `max` only controller-gated (Sol); mechanics never above `low` |
-| `EXACT_MODEL_REQUIRED` | `true`/`false` | `true` forces STOP_WITH_PROOF on mismatch; use for T4 and model-sensitive audits |
-| `MODEL_ACTUAL` / `REASONING_ACTUAL` | Printed FIRST by the executor from runtime proof | Never claimed from the prompt text; unavailable-model quality is never claimed |
-| `STATE_PROOF` | Pinned expected `main` HEAD, clean-tree requirement, expected open-PR set | Executor re-proves with fresh `git`/`gh`; memory is never proof |
-| `SCOPE / ALLOWED_FILES` | Exact file list | Executor stops if the change set would exceed it |
-| `FORBIDDEN` | Task-specific forbidden actions on top of the standing rails | Never shortened to save tokens |
-| `VALIDATION` | Exact commands in order (scoped ruff/format, targeted tests, logged full suite when required, `git diff --check`) | Full suite only via `scripts/crypto_core/run_full_tests_logged.ps1` |
-| `STOP_WITH_PROOF` | Enumerated stop conditions | Stopping with proof always beats improvising |
-| `REPORT_FORMAT` | Exact field list the reply must return | Verdict first; failure tails only; no full logs |
+## 2. Lane-by-lane rules and skeletons
 
-## 2. Model-specific prompting rules
+### 2.1 ChatGPT GPT-5.6 Thinking — controller
 
-### 2.1 GPT-5.6 Sol — scarce T4 cross-contract reasoning
+- **Identity:** `GPT-5.6 Thinking` — never labeled Codex `GPT-5.6 Sol`; family similarity is not identity.
+- **Best tasks:** sequence control; live GitHub evidence comparison; surface mapping; design synthesis;
+  prompt/implementation-contract construction; Class-A independent audit; Class-B first-pass triage;
+  pre-Codex triage; executor-report verification; connector final gate; Deep Research orchestration and
+  verification; next-slice selection; explicitly authorized GitHub actions.
+- **Bad tasks:** substituting for local tests or unverified repo state; replacing Class-C Codex audit;
+  direct-main implementation; guessing state from memory.
+- **Setup:** active doctrine (AGENTS.md + workflow section 24), this guide, live pinned connector evidence,
+  task-specific surfaces.
+- **Reasoning:** full deliberation for design/triage; mechanics delegated to Luna.
+- **Validation:** every executor claim re-checked against live connector evidence; accepted state updated
+  only from verified evidence (`CONTROLLER_ACCEPTED_STATE`, conflict precedence in section 24.5).
+- **Stops:** insufficient evidence → HANDOFF_UNKNOWN; protected trigger → Class C; external fact → XR.
+- **Handoff:** CONTROLLER_TO_IMPLEMENTER / CONTROLLER_TO_AUDITOR / CONTROLLER_TO_DEEP_RESEARCH packets.
+- **Anti-patterns:** trusting a report because it is detailed; auditing product trust boundaries alone;
+  merging on `mergeable` alone; issuing two writers at once.
 
-- **Best tasks:** trust-boundary design/audit, governance/safety semantics, SM-5/SM-6 design and audit,
-  readiness/Deribit provenance, cross-artifact digest/provenance contradictions.
-- **Bad tasks:** CI polling, merge mechanics, routine docs, broad local refactors, anything Luna/Terra can do.
-- **Required fields:** full anatomy block; a compact READ evidence pack (exact files/symbols, never
-  "read the repo"); explicit non-implementation boundary when the task is design/audit-only.
-- **Reasoning:** `xhigh` default; `max` only with an explicit controller gate stated in the prompt.
-- **Typical validation:** none beyond read-only proof (design/audit produces decisions and P1/P2 findings,
-  not diffs); implementation follows in a SEPARATE Terra/Opus prompt.
-- **Stop conditions:** evidence pack insufficient; scope forces implementation; governance number missing
-  (route to controller); external/current fact needed (route to Deep Research).
-- **Anti-patterns:** feeding Sol the whole repo; asking Sol to also implement; spending Sol on a question
-  a targeted `rg` answers.
+```text
+LANE:CONTROLLER_DESIGN_SYNTHESIS. STATE: main@<sha>, open PRs [].
+EVIDENCE: <pinned files/symbols read via connector>. TASK: produce one bounded PR contract for <objective>:
+invariants, fail-closed matrix, raise-vs-REJECTED, allowed files, negative tests, validation ladder, stops,
+protected-risk class (A/B/C), CODEX_REQUIRED decision + trigger checklist, implementer lane selection.
+FORBIDDEN: implementation, mutation, research execution. OUTPUT: CONTROLLER_TO_IMPLEMENTER packet.
+```
 
-### 2.2 GPT-5.6 Terra — bounded Codex workhorse
+### 2.2 GitHub connector — evidence and explicitly authorized actions
 
-- **Best tasks:** exact-file T2 implementation, tests/docs, small deterministic slices, T3 same-branch
-  P1/P2 repair, fresh-context pinned-head independent audit.
-- **Bad tasks:** unbounded multi-file refactors, ambiguous slicing, cross-contract architecture, mechanics.
-- **Required fields:** `ALLOWED_FILES` exact; pinned `main` HEAD; branch name (`feature/<scope>-prN` or
-  `chore/<scope>-prN`); full validation ladder; "no merge".
-- **Reasoning:** `high` for T2; `xhigh` for T3 repair.
-- **Typical validation:** scoped ruff + format, targeted pytest, logged full suite for product code,
-  `git diff --check`, exact changed-file proof.
-- **Stop conditions:** scope expansion, out-of-scope validation failure, ambiguity not cheaply provable.
-- **Anti-patterns:** letting the implementation context "also audit" itself; combining two unrelated slices;
-  omitting the regression test for a repair.
+- **Best tasks:** pinned-ref reads (files/patches/changed files/commits/runs/jobs/logs/CodeQL/reviews/
+  threads/open-PR count/merge commits/search); final-gate verification; post-merge state proof.
+- **Mutation boundary:** ONLY after an explicit human instruction naming exact action + target (standard
+  merge, metadata, label, reviewer, draft/ready, comment, guarded thread closeout, bounded workflow rerun);
+  re-prove state immediately before; only the named action; re-read result; report proof. Never: direct main
+  push, force push, squash/rebase, self-approval, blind retry, unauthorized thread resolution or rerun,
+  merge + next feature, blanket mutation from connector availability.
+- **Stops:** any pin mismatch → NOT_READY/UNKNOWN.
 
-### 2.3 GPT-5.6 Luna — mechanics only
+```text
+LANE:CONTROLLER_FINAL_GATE for PR #<N>:
+[] open+non-draft  [] base main  [] head == <pinned sha>  [] files == <exact list>
+[] required checks terminal success (accepted skips only)  [] CodeQL clean
+[] no current valid unresolved P1/P2  [] exactly one open PR  [] no forbidden scope  [] audit class done
+OUTPUT: READY_FOR_MERGE_AUTHORIZATION | NOT_READY | UNKNOWN (+proof). No mutation; human merge auth separate.
+```
 
-- **Best tasks:** git/gh state snapshots, bounded CI polling, PR metadata (only explicitly authorized),
-  review-thread status, authorized standard merge + postverify command running.
-- **Bad tasks:** any design, any feature/test code, any audit judgment, thread resolution decisions.
-- **Required fields:** exact PR/head; the exact commands; the authorization line when the task mutates
-  anything (metadata/merge).
-- **Reasoning:** `none`/`low` — never higher.
-- **Typical validation:** the command output itself is the deliverable (terminal-or-pending proof).
-- **Stop conditions:** state mismatch vs pinned expectation; missing authorization; non-terminal checks
-  when the task requires terminal.
-- **Anti-patterns:** watch/poll loops (`--watch`); "while you're there" code edits; treating a pending
-  check as green.
+### 2.3 Deep Research — external/current facts (controller-orchestrated)
 
-### 2.4 Claude Opus 4.8 — heavy local executor
+- **Best tasks (submodes):** `XR_FACT_CHECK` (exchange/Deribit APIs, fees, rate limits, funding, margin,
+  liquidation, microstructure, custody/security/regulation, current model/tool behavior);
+  `XR_ARCHITECTURE_BENCHMARK` (Hummingbot/Freqtrade/NautilusTrader/QuantConnect LEAN/institutional systems —
+  capabilities and evidence, never marketing); `XR_PHASE_GATE_REVIEW` (before material phase transitions
+  with external assumptions); `XR_OVERENGINEERING_AUDIT` (artifact proliferation vs end-to-end wiring).
+- **Bad tasks:** repo/PR/CI state, threads, local tests, branch hygiene, routine implementation, anything
+  an `rg` answers.
+- **Setup:** CONTROLLER_TO_DEEP_RESEARCH packet (exact question, why external facts are required, pinned
+  main/PR heads, repo files/symbols, benchmark set, primary-source requirements, prohibited weak sources,
+  evidence buckets, top-1 claim standard, forbidden mutations, expected output, refresh trigger).
+- **Validation:** controller post-research gate — every repo claim connector-checked, load-bearing citations
+  inspected, facts/inference separated, doctrine compatibility checked; verdict ACCEPT_RESEARCH /
+  REPAIR_RESEARCH / REJECT_RESEARCH / DEEP_RESEARCH_FOLLOWUP_NEEDED; at most ONE bounded next-PR proposal.
+- **Stops:** citations unavailable → facts stay UNKNOWN; never guessed, never upgraded.
+- **Handoff:** DEEP_RESEARCH_TO_CONTROLLER packet (research date, pinned repo state, source quality,
+  REPO_EVIDENCE / EXTERNAL_EVIDENCE / INFERENCE / UNKNOWN, stale findings, bounded recommendations, exact
+  next PR proposal, refresh trigger).
+- **Anti-patterns:** research as merge authority; calendar-driven research; marketing-quality sources;
+  research findings implemented without controller triage.
 
-- **Best tasks:** large-but-bounded local implementation/refactor, broad bounded reads, long validation
-  loops, forensic debugging — preserving Codex capacity.
-- **Bad tasks:** status/CI polling, PR metadata, trivial docs, anything mechanical.
-- **Required fields:** full anatomy block; named broad-but-bounded file set; note that a separate
-  fresh-context Terra/Sol audit is still required before the connector gate for high-risk work.
-- **Reasoning:** `xhigh` for contract/digest/fail-closed work; `high` for ordinary bounded slices.
-- **Typical validation:** full ladder including the logged full suite.
-- **Stop conditions:** same as Terra plus token/context budget making correctness uncertain.
-- **Anti-patterns:** using Opus as a reviewer of its own diff; unbounded "improve the repo" pursuits.
+```text
+LANE:DEEP_RESEARCH_<FACT_CHECK|ARCHITECTURE_BENCHMARK|PHASE_GATE|OVERENGINEERING>.
+PACKET: <controller research packet with pinned repo state>. QUESTION: <exact current question>.
+SOURCES: official/primary first; cite with dates/versions; weak sources flagged, never authoritative.
+OUTPUT: DEEP_RESEARCH_TO_CONTROLLER packet. READ-ONLY: no mutation, no merge authority, no gate waiver.
+```
 
-### 2.5 Claude Sonnet 5 — runtime-proven fallback only
+### 2.4 Claude Sonnet 5 — runtime-proven bounded implementer
 
-- **Doctrine:** availability and capability are NEVER assumed. Use only when the active local setup
-  runtime-proves it (the session itself reports the model id) AND the controller explicitly routes it.
-  No unsupported quality claim; no plan may depend on it.
-- **Best tasks (when proven):** mechanical/low-risk lanes — status proof, bounded read-only checks,
-  low-risk docs mechanics — as a declared fallback when Luna-class capacity is unavailable.
-- **Bad tasks:** T3/T4 contract, digest, fail-closed, or audit work.
-- **Required fields:** full anatomy block with `MODEL_ACTUAL` runtime print; explicit
-  `EXACT_MODEL_REQUIRED` decision; declared fallback path.
-- **Reasoning:** `low` (mechanical) / `high` at most.
-- **Stop conditions:** model id not runtime-proven; task class above T1 without controller authorization.
-- **Anti-patterns:** assuming Sonnet 5 exists in the installed CLI; silently substituting it for a
-  required exact model.
+- **Doctrine:** availability/identity NEVER assumed — the session must runtime-prove a Sonnet 5 model id
+  AND the controller must explicitly route it. No unsupported capability claim; no plan depends on it.
+- **Best tasks:** T1 bounded reads; T2 small/medium deterministic implementation; docs and tests; mechanical
+  code with local context; simple same-branch repairs; fast implementation loops; lower-risk validation.
+- **Bad tasks:** protected trust-boundary work, digest/provenance, SM-5/SM-6, Stage-4 completion,
+  readiness/live/order/capital, broad forensic refactors, T4 design, mandatory Class-C audits.
+- **Setup:** `CLAUDE.md`, `CLAUDE.local.md`, `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`,
+  controller-named task files.
+- **Reasoning:** high for bounded implementation; low for mechanics.
+- **Validation:** scoped ruff/format, targeted pytest, logged full suite for product code, `git diff --check`.
+- **Stops:** model id unproven; task class above T2; protected trigger appears; scope expansion.
+- **Fallback:** Terra for bounded code; Opus for broad/complex work.
+- **Anti-patterns:** silent substitution for a required exact model; assuming Sonnet 5 exists in the
+  installed CLI; accepting protected work because the diff "looks small".
 
-### 2.6 Claude Fable 5 — opportunistic runtime-proven T4 audit lane
+```text
+ROLE: bounded implementer. TASK_CLASS: T2. MODEL_REQUESTED: Claude Sonnet 5. REASONING_REQUESTED: high.
+EXACT_MODEL_REQUIRED: true. VERIFY FIRST: print MODEL_ACTUAL from runtime; if not a proven Sonnet 5 id ->
+STOP_WITH_PROOF. PACKET: <CONTROLLER_TO_IMPLEMENTER>. ALLOWED_FILES: <exact>. LANE:VALIDATE-STD; LANE:PR-STD.
+No merge; LANE:IMPLEMENTER_HANDOFF.
+```
 
-- **Doctrine:** availability is NOT assumed (post-2026-07-07). Use only while the running session
-  runtime-proves `claude-fable-5`. Never a contractual dependency: no plan, schedule, or roadmap step may
-  require it. When the window closes, nothing may break.
-- **Best tasks:** full-repo adversarial audit, cross-contract second-opinion design/audit (vendor-diverse
-  complement to a Codex audit — it does not REPLACE a required independent Codex audit), setup/workflow
-  stress test, final semantic review of hard contracts.
-- **Bad tasks:** CI polling, PR metadata, routine bounded implementation, large local refactors (Opus
-  lane), mechanics of any kind.
-- **Required fields:** full anatomy block with `EXACT_MODEL_REQUIRED: true` and a mandatory
-  runtime-proof print of `MODEL_ACTUAL` before any work; STOP_WITH_PROOF on mismatch (no silent
-  Opus/Sonnet fallback when exactness is required).
-- **Reasoning:** highest available; report as configured without overclaiming what cannot be proven.
-- **Stop conditions:** model mismatch; audit would require source edits; uncited external claims needed.
-- **Anti-patterns:** "Fable said so" as proof (model strength is never proof); scheduling future work that
-  assumes Fable availability; spending the window on anything below T4 value.
+### 2.5 Claude Opus 4.8 — heavy local executor
 
-### 2.7 ChatGPT controller
+- **Best tasks:** T3 broad-but-bounded implementation; large local refactors; complex fail-closed
+  implementation; forensic debugging; long validation loops; multi-file product integration; same-branch
+  P1/P2 repair; work needing broad local context.
+- **Bad tasks:** PR metadata; CI polling; ordinary docs; generic planning; external research; work
+  Sonnet/Terra can safely complete; final connector evidence comparison.
+- **Setup:** `CLAUDE.md`, `CLAUDE.local.md`, `.claude` loop skill, controller packet, named broad-but-bounded
+  file set.
+- **Reasoning:** xhigh for contract/digest/fail-closed/forensic work; high otherwise.
+- **Validation:** full ladder incl. logged full suite; local git/test proof is Opus's own responsibility.
+- **Stops:** scope expansion; out-of-scope failure; token/context budget making correctness uncertain.
+- **Fallback:** split scope, or Terra only when genuinely bounded.
+- **Anti-patterns:** reviewing its own diff as "the audit"; unbounded improve-the-repo pursuits; duplicate
+  broad GitHub discovery already in the packet.
 
-- **Role:** sequence owner — final evidence comparison, verdict, next prompt, per-PR merge authorization.
-- **Best tasks:** comparing executor reports against live GitHub state, issuing repair/merge/next-slice
-  decisions, owning governance numbers.
-- **Bad tasks:** direct implementation; trusting any report without connector/`gh` verification.
-- **Prompting rule:** executor reports TO the controller must be compact, evidence-first, and end with one
-  next safe action — never a menu of options the controller must re-derive.
-- **Stop conditions:** none delegated — the controller IS the human-side gate; merge authorization must
-  name the PR and the exact command.
+```text
+ROLE: heavy local implementer. TASK_CLASS: T3. MODEL_REQUESTED: Claude Opus 4.8. REASONING_REQUESTED: xhigh.
+EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL/REASONING_ACTUAL: <print first>.
+PACKET: <CONTROLLER_TO_IMPLEMENTER>. STATE: clean main@<sha>; BRANCH feature/<scope>-prN.
+SCOPE: <named broad-but-bounded files>; long validation loops allowed. LANE:VALIDATE-STD; LANE:PR-STD.
+Protected work still gets a separate fresh Class-C/Terra audit. No merge. LANE:IMPLEMENTER_HANDOFF.
+```
 
-### 2.8 GitHub connector / gh — final gate
+### 2.6 Codex GPT-5.6 Sol — protected T4 design/audit
 
-- **Role:** source-of-truth read-only verification before merge authorization.
-- **Checklist (never waived):** PR open/non-draft; head SHA pinned and unchanged; exact changed files;
-  checks terminal (pending/queued/in-progress/no-checks = `NOT_READY`); reviews/threads state (current
-  valid P1/P2 block); code scanning; one-open-PR rule.
-- **Output:** `READY_FOR_MERGE_AUTHORIZATION` or `NOT_READY` with proof. No mutation.
-- **Anti-patterns:** substituting an executor's memory of CI for a fresh snapshot; merging on
-  `mergeable=MERGEABLE` alone.
+- **Best tasks:** protected cross-contract design; digest/provenance/trust-boundary design; SM-5/SM-6 design
+  and audit; Stage-4 semantic review; readiness/Deribit design; complex security/CodeQL reasoning.
+- **Bad tasks:** broad discovery, mechanics, polling, merge mechanics, routine docs, bounded implementation.
+- **Setup:** `AGENTS.md`, `.codex/skills/crypto-core-max-safe/SKILL.md`, the controller-prepared NARROW
+  evidence packet (never "read the repo").
+- **Reasoning:** xhigh default; `max` only with an explicit controller gate stated in the prompt.
+- **Validation:** none beyond read-only proof in audit mode — output is decisions/P1-P2 findings, not diffs.
+- **Stops:** packet insufficient; scope forces implementation; governance number missing (controller-owned);
+  external fact needed (XR).
+- **Handoff:** AUDITOR_TO_CONTROLLER (P1/P2/P3 + exact evidence + repair requirements + readiness class).
+- **Anti-patterns:** Sol on questions Terra/connector already answered; design + implementation in one
+  prompt; accepting implementer conclusions as premises.
 
-### 2.9 Deep Research — external facts only
+```text
+ROLE: protected designer/auditor. TASK_CLASS: T4. MODEL_REQUESTED: GPT-5.6 Sol. REASONING_REQUESTED: xhigh.
+EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL: <print first>.
+PACKET: <CONTROLLER_TO_AUDITOR: pinned head, exact changes, direct dependencies, invariants, protected
+triggers, adversarial questions>. FORBIDDEN: implementation, discovery beyond packet, CI polling, merge.
+OUTPUT: AUDITOR_TO_CONTROLLER handoff.
+```
 
-- **Best tasks:** venue APIs, fees, funding/basis mechanics, rate limits, custody/regulatory facts,
-  machine-time source facts — anything not derivable from the repo.
-- **Bad tasks:** repo-state questions, design decisions, anything an `rg` answers.
-- **Required fields:** the exact current question; required source citations; the
-  `REPO_EVIDENCE` / `EXTERNAL_EVIDENCE` / `INFERENCE` / `UNKNOWN` separation.
-- **Stop conditions:** cited research unavailable → facts stay `UNPROVEN`; never guessed.
-- **Anti-patterns:** treating DR output as merge authority or repo proof; implementing directly from an
-  uncited claim.
+### 2.7 Codex GPT-5.6 Terra — bounded implementer and ordinary independent auditor
 
-### 2.10 Codex Pursue Goal — bounded terminal loop
+- **Best tasks:** T2 exact-file implementation; small deterministic product slices; exact-file tests; T3
+  bounded repair; fresh-context ordinary independent audit; source/test semantic review below Class C.
+- **Bad tasks:** unbounded refactors, ambiguous slicing, cross-contract architecture, mechanics, auditing
+  its own implementation context.
+- **Setup:** `AGENTS.md`, `.codex` max-safe skill, controller packet, exact task files.
+- **Reasoning:** high for T2; xhigh for T3 repair.
+- **Validation:** scoped ruff + targeted pytest + logged full suite for product code + `git diff --check`.
+- **Stops:** scope expansion; out-of-scope validation failure; protected trigger → escalate to Class C.
+- **Handoff:** IMPLEMENTER_TO_CONTROLLER or AUDITOR_TO_CONTROLLER as roled.
+- **Anti-patterns:** self-satisfying the audit gate; two slices per PR; missing regression proof on repair.
 
-- **Best tasks:** single-goal preflight, repo/branch sync, CI/status snapshot loops with terminal
-  `PASS`/`FAIL`/`BLOCKED`, closeout, explicitly authorized merge/postverify.
-- **Bad tasks:** broad repo pursuit, unscoped design/implementation, ambiguous multi-goal missions.
-- **Required fields:** ONE goal; terminal condition; bounded iteration count/timeout; forbidden list.
-- **Stop conditions:** goal ambiguity; any need to patch; authorization boundary.
-- **Anti-patterns:** "pursue improving the repo"; letting a status loop mutate anything.
+```text
+ROLE: <implementer|independent auditor - never both>. TASK_CLASS: <T2|T3>.
+MODEL_REQUESTED: GPT-5.6 Terra. REASONING_REQUESTED: <high|xhigh>. MODEL_ACTUAL: <print first>.
+PACKET: <controller packet>. Implementer: ALLOWED_FILES <exact>; LANE:VALIDATE-STD; LANE:PR-STD; no merge.
+Auditor: fresh context, pinned head <sha>, changed files + direct dependencies only; no edits/comments.
+OUTPUT: role handoff.
+```
+
+### 2.8 Codex GPT-5.6 Luna — mechanics
+
+- **Best tasks:** git/gh snapshots; bounded CI polling; explicitly authorized PR metadata; review-thread
+  status; authorized standard merge + postverify command running; Pursue Goal bounded terminal loops
+  (preflight/sync/CI/closeout/authorized postverify — single goal, terminal PASS/FAIL/BLOCKED).
+- **Bad tasks:** any design, any code, any audit judgment, thread-resolution decisions, broad repo pursuit.
+- **Reasoning:** none/low — never higher.
+- **Validation:** command output is the deliverable; pending/queued/in-progress/no-checks = NOT_READY.
+- **Stops:** state mismatch vs pinned expectation; missing authorization for any mutation.
+- **Anti-patterns:** `--watch` loops; "while you're there" edits; treating pending as green.
+
+```text
+ROLE: mechanical executor. TASK_CLASS: T0. MODEL_REQUESTED: GPT-5.6 Luna. REASONING_REQUESTED: low.
+MODEL_ACTUAL: <print first>. TASK: <exact snapshot|authorized action> for PR #<N> head <sha>.
+AUTHORIZATION: <quoted human instruction, if mutating>. No code/design/review/thread resolution.
+OUTPUT: terminal-or-pending proof; LANE:HANDOFF-STD.
+```
+
+### 2.9 VS Code Copilot Pro local Agent — execution host
+
+- **Doctrine:** a HOST, not an independently trusted model identity; obeys `.github/copilot-instructions.md`
+  plus `AGENTS.md` plus the controller packet; Auto routing must report `MODEL_ACTUAL` where the runtime
+  exposes it and never claim a specific model without proof.
+- **Best tasks:** hosting bounded implementation/validation/git execution for a controller-packet task on
+  this machine.
+- **Bad tasks:** generic repo-wide improvement; unsupervised multi-slice work; merge decisions; identity
+  claims; anything outside the packet.
+- **Stops:** `MODEL_FIT_WEAK` with evidence when Auto output misses setup constraints; packet ambiguity.
+- **Anti-patterns:** treating host availability as model authority; silent scope growth.
+
+```text
+HOST: VS Code Copilot Pro local Agent. LOAD: .github/copilot-instructions.md + AGENTS.md + controller packet.
+TASK_CLASS: <T1|T2>. MODEL: Auto (report MODEL_ACTUAL where exposed). SCOPE: exact packet files only.
+LANE:VALIDATE-STD; LANE:PR-STD if authorized. STOP: MODEL_FIT_WEAK | scope pressure. OUTPUT: LANE:HANDOFF-STD.
+```
 
 ## 3. Low-prompt / maximum-work doctrine
 
-- Prefer ONE strong bounded prompt (read + patch + targeted tests + full suite + scope gate + commit/push
-  + PR + bounded CI snapshot + report) over many fragment prompts. Stable doctrine lives in docs/skills —
-  prompts carry only the task delta.
-- **Never combine:** implementation + its own independent audit in one context; merge + next feature in
-  one prompt; two unrelated slices in one PR; setup/doctrine changes inside a feature PR.
-- **Never skip:** the fresh-context independent audit for high-risk work; the connector final gate;
-  explicit per-PR human merge authorization; post-merge verification with zero-open-PR proof.
-- Batch by theme, stop at gates: push-and-stop or stop-with-proof beats widening scope.
+One strong bounded prompt does the whole safe arc (precheck → reads → patch → targeted + logged-full
+validation → scoped commit → push → one PR → bounded CI snapshot → handoff), then stops at the gate. Budgets
+(`LOW_PROMPT_MAXIMUM_WORK_POLICY`, section 24.8): Class A = 1 executor prompt + controller audit + human
+authorization + mechanical merge/postverify; Class B = 1 implementation + 1 controller audit/triage
+(+ optional Terra audit; ≤1 consolidated repair before re-audit); Class C = 1 implementation + 1 focused
+Codex audit + ≤1 consolidated same-branch repair per cycle + re-audit only on material head change + 1
+mechanical merge/postverify. Never combine: implementation + its independent audit; merge + next feature;
+unrelated slices; setup + product code; research + mutation; two implementers; two PRs; final gate +
+unauthorized merge. Never skip: required independent audit, connector final gate, explicit human merge
+authorization, post-merge verification.
 
 ## 4. Independent audit doctrine
 
-- An implementation context CANNOT self-satisfy the independent audit gate — audit prompts are
-  fresh-context and pinned-head (PR head SHA named in the prompt).
-- P1/P2-sensitive PRs (digest/provenance, fail-closed, trust-boundary, governance) require the audit
-  BEFORE the connector gate. Current valid P1/P2 threads block; human threads are never self-resolved.
-- A Fable 5 second opinion (while runtime-proven) ADDS vendor diversity; it never replaces a required
-  independent Codex audit.
+An implementation context CANNOT self-satisfy the independent audit gate. Audit prompts are fresh-context
+and pinned-head. Class A closes with the controller; Class B adds Terra when risk/evidence requires; Class C
+(protected list in section 24.4) always gets a fresh independent Codex audit BEFORE the connector gate —
+neither ChatGPT, Claude, nor implementer self-review may replace it. Current valid P1/P2 threads block;
+human threads are never self-resolved.
 
-## 5. Example prompt skeletons
+## 5. Audit class decision tree
 
-Copy, then fill. Every skeleton implicitly starts with the section-1 anatomy block; only deltas shown.
+1. Docs/setup/prompt/skill/workflow/low-risk CI config/helper script only? → **Class A** (controller audit).
+2. Product code touched → any protected trigger (digest/serialization/anchors, reseal/provenance,
+   mutable/TOCTOU, denominator/record-set, replay defense, Decimal/Fraction finance, governance thresholds,
+   trust transitions, READY/ADMITTED/ACCEPTED, SM-5/SM-6, Stage-4, machine-time, readiness/Deribit,
+   live/orders/scheduler/shadow/capital, edge/profitability, complex security, current P1/P2 findings)?
+   → **Class C** (Codex mandatory).
+3. No trigger + controller evidence sufficient? → **Class B** (controller-first; Terra audit if needed;
+   `CODEX_REQUIRED: NO` must carry the exact reason + full trigger checklist).
+4. Any uncertainty anywhere? → **Class C**.
 
-### 5.1 Sol — SM-5 design
+## 6. Research packet, output contract, freshness
 
-```text
-ROLE: independent T4 designer. TASK_CLASS: T4 SOL_CROSS_CONTRACT.
-MODEL_REQUESTED: GPT-5.6 Sol. REASONING_REQUESTED: xhigh. EXACT_MODEL_REQUIRED: true.
-STATE_PROOF: main @ <sha>, clean, open PRs [].
-READ: docs/crypto_core/secondary_metrics_enforcement_design.md;
-  src/crypto_core/validation/{secondary_metrics_policy,trade_record_evidence,
-  paper_secondary_metrics_evidence,paper_secondary_metrics_substrate_reconciliation,
-  paper_secondary_metrics_enforcement_precondition}.py; paper_vs_backtest_methodology.py.
-TASK: design paper_vs_backtest_methodology_v2 (enforced=True) consuming the #328 precondition anchor
-  (READY + digest re-proof required); define fail-closed matrix, SM-2 threshold binding, SM-6 contract.
-FORBIDDEN: implementation, comparator invocation, governance numbers (controller-owned), merge/CI work.
-REPORT: decisions, invariants, P1/P2 risks, exact next implementation slice.
-```
+CONTROLLER_TO_DEEP_RESEARCH packet fields: RESEARCH_QUESTION, WHY_CURRENT_EXTERNAL_FACTS_ARE_REQUIRED, REPO,
+PINNED_MAIN_SHA, PINNED_PR_HEADS, OPEN_PR_STATE, REPO_FILES_TO_READ, REPO_SYMBOLS_TO_INSPECT,
+EXTERNAL_BENCHMARK_SET, PRIMARY_SOURCE_REQUIREMENTS, PROHIBITED_WEAK_SOURCES, EVIDENCE_BUCKETS,
+TOP1_CLAIM_STANDARD, FORBIDDEN_MUTATIONS, EXPECTED_OUTPUT, CONTROLLER_POST_RESEARCH_CHECKS.
+DEEP_RESEARCH_TO_CONTROLLER output: RESULT, VERDICT, RESEARCH_MODE, RESEARCH_DATE, SOURCE_QUALITY,
+PINNED_REPO_STATE, REPO_EVIDENCE, EXTERNAL_EVIDENCE, WHAT_IS_PROVEN, WHAT_IS_INFERRED, WHAT_IS_UNKNOWN,
+STALE_PRIOR_FINDINGS, OVERENGINEERING_AUDIT, PRD_ALIGNMENT, TOP1_IMPLICATION, RISKS,
+BOUNDED_RECOMMENDATIONS, EXACT_NEXT_PR_PROPOSAL, WHAT_MUST_NOT_CHANGE, REFRESH_TRIGGER,
+CONTROLLER_VERIFICATION_REQUIRED, DEEP_RESEARCH_FOLLOWUP_NEEDED. Freshness: reuse only when the question,
+relevant repo state, and source versions are materially unchanged and the research date fits the fact class;
+refresh immediately on API/pricing/regulation/framework changes, phase/question changes, load-bearing
+UNKNOWNs, or before authorizing a current external decision. Post-research controller gate: verify repo
+claims via connector, inspect load-bearing citations, separate facts from inference, reject unsupported
+claims, check stricter-safety override, decide ACCEPT/REPAIR/REJECT/FOLLOWUP, convert accepted findings into
+at most ONE bounded next-PR proposal — never merge authorization.
 
-### 5.2 Terra — bounded implementation
+## 7. Non-regression
 
-```text
-ROLE: implementer. TASK_CLASS: T2 TERRA_BOUNDED_CODE.
-MODEL_REQUESTED: GPT-5.6 Terra. REASONING_REQUESTED: high. EXACT_MODEL_REQUIRED: false (fallback: Opus, declared).
-STATE_PROOF: main @ <sha>, clean, open PRs []. BRANCH: feature/<scope>-prN.
-ALLOWED_FILES: src/crypto_core/validation/<module>.py; tests/crypto_core/validation/test_<module>.py.
-IMPLEMENT: <exact artifact + invariants + digest-boundary + raise-vs-REJECTED split + structural-False flags>.
-VALIDATION: scoped ruff check+format; targeted pytest; run_full_tests_logged.ps1 (PYTEST_EXIT=0); git diff --check.
-STOP_WITH_PROOF: scope expansion; out-of-scope failure; invented semantics.
-No merge. Report per REPORT-STD.
-```
-
-### 5.3 Terra — independent audit
-
-```text
-ROLE: independent auditor (fresh context — MUST NOT be the implementation session).
-TASK_CLASS: T1/T3. MODEL_REQUESTED: GPT-5.6 Terra. REASONING_REQUESTED: high. EXACT_MODEL_REQUIRED: false.
-PINNED: PR #<N> head <sha>; changed files + direct dependencies only.
-AUDIT: digest/reseal/provenance; forbidden-surface AST; overclaim flags; fail-closed negative paths; test gaps.
-FORBIDDEN: edits, comments, thread resolution, merge.
-REPORT: P1/P2/P3 with file:line, readiness verdict, actual model.
-```
-
-### 5.4 Luna — CI/status snapshot
-
-```text
-ROLE: mechanical executor. TASK_CLASS: T0. MODEL_REQUESTED: GPT-5.6 Luna.
-REASONING_REQUESTED: low. EXACT_MODEL_REQUIRED: false (fallback: terminal/gh).
-TASK: one-shot snapshot of PR #<N> (head <sha>): statusCheckRollup + run-level cross-check.
-RULE: pending/queued/in_progress/no-checks = NOT_READY; never --watch; no code/design/merge.
-REPORT: terminal-or-pending proof only.
-```
-
-### 5.5 Opus 4.8 — heavy local implementation
-
-```text
-ROLE: heavy local implementer. TASK_CLASS: T3 TERRA_REPAIR_OR_OPUS_HEAVY.
-MODEL_REQUESTED: Claude Opus 4.8. REASONING_REQUESTED: xhigh. EXACT_MODEL_REQUIRED: false.
-STATE_PROOF: main @ <sha>, clean, open PRs []. BRANCH: feature/<scope>-prN.
-SCOPE: named broad-but-bounded file set <paths>; long validation loops allowed.
-VALIDATION: full ladder incl. run_full_tests_logged.ps1.
-NOTE: separate fresh-context Terra/Sol audit still required before connector gate. No merge.
-```
-
-### 5.6 Fable 5 — full-repo audit (runtime-proven window)
-
-```text
-ROLE: full-repo adversarial auditor. TASK_CLASS: T4.
-MODEL_REQUESTED: Claude Fable 5. REASONING_REQUESTED: highest available. EXACT_MODEL_REQUIRED: true.
-VERIFY FIRST: print MODEL_ACTUAL from runtime; if not claude-fable-5 → STOP_WITH_PROOF (no fallback).
-TASK: read-only audit of <areas>; severity P1/P2/P3; no edits/commits/PRs/merge.
-REPORT: per-area verdicts, blockers, single recommended next PR + lane.
-```
-
-### 5.7 Fable 5 — second-opinion audit
-
-```text
-ROLE: second-opinion auditor (vendor-diverse; does NOT replace the required Codex audit).
-TASK_CLASS: T4. MODEL_REQUESTED: Claude Fable 5. EXACT_MODEL_REQUIRED: true (verify runtime first).
-PINNED: design doc / PR head <sha>. READ: <exact evidence pack>.
-TASK: challenge the primary design/audit — missing invariants, digest/provenance holes, overclaim risk.
-FORBIDDEN: implementation, merge, availability assumptions beyond this session.
-REPORT: AGREE/DISAGREE per finding + new P1/P2 + exact evidence.
-```
-
-### 5.8 Sonnet 5 — mechanical fallback (only if runtime-proven)
-
-```text
-ROLE: mechanical executor (fallback lane). TASK_CLASS: T0/T1.
-MODEL_REQUESTED: Claude Sonnet 5. REASONING_REQUESTED: low. EXACT_MODEL_REQUIRED: true.
-VERIFY FIRST: print MODEL_ACTUAL from runtime; if not a proven Sonnet 5 id → STOP_WITH_PROOF.
-TASK: <status proof | bounded read-only check | low-risk docs mechanics>.
-RULE: no T2+ work; no capability claims beyond what this session proves.
-```
-
-### 5.9 Codex Pursue Goal — bounded preflight
-
-```text
-GOAL (single): prove repo preflight for <task> — fetch/prune, main == origin/main, clean tree,
-open PRs [], expected head <sha>. TERMINAL: PASS (all proven) | FAIL (mismatch, with output) |
-BLOCKED (needs authorization). BOUNDS: <=N iterations, no patching, no design, no merge, read-only
-git/gh only.
-```
-
-### 5.10 GitHub connector — final gate checklist
-
-```text
-LANE:CONNECTOR_FINAL_GATE for PR #<N>:
-[] open + non-draft        [] head == <pinned sha>      [] changed files == <exact list>
-[] checks ALL terminal-success (slow-tests SKIPPED-by-schedule acceptable; pending = NOT_READY)
-[] reviews/threads: zero current valid P1/P2 unresolved   [] code scanning clean
-[] exactly one open PR     [] base == main
-OUTPUT: READY_FOR_MERGE_AUTHORIZATION | NOT_READY (+proof). No mutation. Human merge auth still required.
-```
-
-## 6. Non-regression
-
-This guide changes prompting ergonomics only. It does not alter: one open PR; no direct `main` push;
-standard merge only; explicit per-PR human merge authorization; pending CI = `NOT_READY`; current valid
-P1/P2 threads block; independent audit requirements; connector final gate; post-merge verification;
-crypto_core-only scope; paper-first/fail-closed/deterministic rails; and every non-claim in
-`agent_workflow.md` section 23.4.
+This guide changes prompting ergonomics only. It does not alter: one open PR; one repository writer; no
+direct `main` push; standard merge only; explicit per-PR human merge authorization; pending CI = NOT_READY;
+current valid P1/P2 threads block; Class-C Codex audit; connector final gate; post-merge verification;
+crypto_core-only scope; paper-first/fail-closed/deterministic rails; every non-claim in workflow section
+24.10; and the validity of the SM blocker until its own gates close it.
