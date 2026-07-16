@@ -13,16 +13,23 @@ Proves:
 from __future__ import annotations
 
 import ast
+import inspect
 from pathlib import Path
 
+import pytest
+
+import crypto_core.venue.deribit_manual_review_readiness as _drm
 from crypto_core.venue.deribit_manual_review_readiness import (
     _CONNECTOR_ENABLEMENT_ROW_ID,
+    _INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_UNVERIFIED,
     _MANIFEST_EXPECTED_ROW_COUNT,
     CLAIM_WORKSHEET_PATH,
     MANIFEST_PATH,
     POLICY_WORKSHEET_PATH,
     DeribitManualReviewReadinessResult,
     DeribitReviewRowResult,
+    _independent_human_connector_approval_provenance_status,
+    _ProvenanceStatus,
     _validate_claims,
     _validate_manifest,
     _validate_policies,
@@ -513,3 +520,185 @@ def test_truncated_worksheet_fails_closed(tmp_path: Path):
     assert any("worksheet_truncated" in r for r in result.rejection_reasons), (
         f"Expected worksheet_truncated in rejection_reasons, got {result.rejection_reasons}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 11. P1 regression -- marker-only independent-human provenance bypass
+# ---------------------------------------------------------------------------
+#
+# A repository writer controls all file content, so no marker string, reviewer
+# id, owner name, timestamp, approval prose, backdated text, casing/whitespace
+# variant, reordering, or extra content may promote independent-human
+# provenance to READY. The status model has only MISSING and PRESENT_UNVERIFIED
+# -- there is no READY outcome in this repair. `accepted` (worksheet/review
+# completion) is deliberately left unchanged.
+
+_FORMER_FOUR_MARKERS = (
+    "independent_human_origin: true\n"
+    "decision: APPROVE\n"
+    "approval_scope: Phase27F_PUBLIC_MARKET_DATA_ONLY_CONNECTOR_ENABLEMENT\n"
+    "separate_from_ai_enablement_pr: true\n"
+)
+_HUMAN_LOOKING_METADATA = (
+    "reviewer_id: demir_operator\n"
+    "repository_owner: demircaliskan2009-pixel\n"
+    "decision: APPROVE\n"
+    "reviewed_at_iso: 2026-05-19T00:00:00Z\n"
+    "approval_scope: Phase27F_PUBLIC_MARKET_DATA_ONLY_CONNECTOR_ENABLEMENT\n"
+    "separate_from_ai_enablement_pr: true\n"
+    "independent_human_origin: true\n"
+)
+_BACKDATED_MARKERS = (
+    "reviewed_at_iso: 2020-01-01T00:00:00Z\n"
+    "independent_human_origin: true\n"
+    "decision: APPROVE\n"
+    "approval_scope: Phase27F_PUBLIC_MARKET_DATA_ONLY_CONNECTOR_ENABLEMENT\n"
+    "separate_from_ai_enablement_pr: true\n"
+)
+_ALT_CASING_WHITESPACE = (
+    "\tINDEPENDENT_HUMAN_ORIGIN:   TRUE  \n"
+    "  Decision:  approve\n"
+    "APPROVAL_SCOPE = phase27f_public_market_data_only_connector_enablement\n"
+    "separate_from_ai_enablement_pr\t:\ttrue\n"
+)
+_PARTIAL_MARKERS = "independent_human_origin: true\ndecision: APPROVE\n"
+_REORDERED_MARKERS = (
+    "separate_from_ai_enablement_pr: true\n"
+    "approval_scope: Phase27F_PUBLIC_MARKET_DATA_ONLY_CONNECTOR_ENABLEMENT\n"
+    "decision: APPROVE\n"
+    "independent_human_origin: true\n"
+)
+_EXTRA_CONTENT = _FORMER_FOUR_MARKERS + "\n# unrelated notes\nlorem ipsum dolor sit amet\n"
+_EMPTY = ""
+_WHITESPACE_ONLY = "   \n\t\n"
+
+_ADVERSARIAL_PRESENT_CONTENTS = (
+    _FORMER_FOUR_MARKERS,
+    _HUMAN_LOOKING_METADATA,
+    _BACKDATED_MARKERS,
+    _ALT_CASING_WHITESPACE,
+    _PARTIAL_MARKERS,
+    _REORDERED_MARKERS,
+    _EXTRA_CONTENT,
+    _EMPTY,
+    _WHITESPACE_ONLY,
+)
+
+
+def _write_provenance(tmp_path: Path, monkeypatch, content: str) -> Path:
+    p = tmp_path / "DERIBIT_INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE.md"
+    p.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(_drm, "_INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_PATH", p)
+    return p
+
+
+def _eval_current() -> DeribitManualReviewReadinessResult:
+    return evaluate_deribit_manual_review_readiness(
+        manifest_path=REPO_ROOT / MANIFEST_PATH,
+        claim_worksheet_path=REPO_ROOT / CLAIM_WORKSHEET_PATH,
+        policy_worksheet_path=REPO_ROOT / POLICY_WORKSHEET_PATH,
+    )
+
+
+def test_provenance_status_has_no_ready_variant():
+    members = set(_ProvenanceStatus.__members__)
+    assert members == {"MISSING", "PRESENT_UNVERIFIED"}
+    assert not any("READY" in name for name in members)
+
+
+def test_provenance_status_missing_when_file_absent(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(_drm, "_INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_PATH", tmp_path / "absent.md")
+    assert _independent_human_connector_approval_provenance_status() is _ProvenanceStatus.MISSING
+
+
+@pytest.mark.parametrize("content", _ADVERSARIAL_PRESENT_CONTENTS)
+def test_present_provenance_file_is_unverified_never_ready(tmp_path: Path, monkeypatch, content: str):
+    _write_provenance(tmp_path, monkeypatch, content)
+    assert _independent_human_connector_approval_provenance_status() is _ProvenanceStatus.PRESENT_UNVERIFIED
+
+
+def test_present_but_directory_provenance_is_unverified(tmp_path: Path, monkeypatch):
+    directory = tmp_path / "provenance_dir.md"
+    directory.mkdir()
+    monkeypatch.setattr(_drm, "_INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_PATH", directory)
+    assert _independent_human_connector_approval_provenance_status() is _ProvenanceStatus.PRESENT_UNVERIFIED
+
+
+def test_missing_provenance_keeps_b5_blocked_and_missing_reason(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(_drm, "_INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_PATH", tmp_path / "absent.md")
+    result = _eval_current()
+    assert result.connector_enablement_ready is False
+    assert result.b1_b5_status["B5"] == "BLOCKED"
+    assert "INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING" in result.rejection_reasons
+    assert _INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_UNVERIFIED not in result.rejection_reasons
+    # accepted governed only by worksheet semantics -- unchanged.
+    assert result.accepted is True
+
+
+@pytest.mark.parametrize("content", _ADVERSARIAL_PRESENT_CONTENTS)
+def test_present_provenance_cannot_promote_b5_and_uses_unverified_reason(tmp_path: Path, monkeypatch, content: str):
+    _write_provenance(tmp_path, monkeypatch, content)
+    result = _eval_current()
+    assert result.connector_enablement_ready is False
+    assert result.b1_b5_status["B5"] == "BLOCKED"
+    assert _INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_UNVERIFIED in result.rejection_reasons
+    assert "INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING" not in result.rejection_reasons
+    # accepted / worksheet-completion semantics remain unchanged regardless of
+    # the provenance file's presence or content.
+    assert result.accepted is True
+    assert result.evidence_review_complete is True
+    assert result.ready_for_engineering_patch is True
+
+
+def test_former_four_marker_file_cannot_set_connector_enablement_ready(tmp_path: Path, monkeypatch):
+    _write_provenance(tmp_path, monkeypatch, _FORMER_FOUR_MARKERS)
+    result = _eval_current()
+    # The exact former forgeable markers must no longer promote provenance.
+    assert result.connector_enablement_ready is False
+    assert result.b1_b5_status["B5"] == "BLOCKED"
+
+
+def test_provenance_status_decision_is_inert_ast():
+    # AST-level proof (docstring/comment text ignored): the authorization
+    # decision reads no file content and reaches no dynamic / environment /
+    # network / credential source -- it may only test path existence.
+    src = inspect.getsource(_independent_human_connector_approval_provenance_status)
+    tree = ast.parse(src)
+
+    forbidden_call_names = {
+        "open",
+        "eval",
+        "exec",
+        "__import__",
+        "getenv",
+        "system",
+        "read_text",
+        "read_bytes",
+    }
+    forbidden_roots = {"os", "subprocess", "socket", "importlib", "requests", "environ"}
+
+    called_attrs: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            call_name = getattr(func, "id", None) or getattr(func, "attr", None)
+            assert call_name not in forbidden_call_names, f"forbidden call: {call_name}"
+            if isinstance(func, ast.Attribute):
+                called_attrs.add(func.attr)
+        if isinstance(node, ast.Attribute):
+            root = getattr(node.value, "id", None)
+            assert root not in forbidden_roots, f"forbidden attribute root: {root}"
+        if isinstance(node, ast.Name):
+            assert node.id not in forbidden_roots, f"forbidden name: {node.id}"
+
+    # Positive inertness proof: the only method the decision may call is
+    # ``Path.exists`` -- it never reads content or invokes anything dynamic.
+    assert called_attrs <= {"exists"}, f"unexpected method calls: {called_attrs}"
+
+
+def test_technical_connector_registry_unchanged_under_present_provenance(tmp_path: Path, monkeypatch):
+    _write_provenance(tmp_path, monkeypatch, _FORMER_FOUR_MARKERS)
+    _eval_current()
+    dialects = connector_ready_dialects()
+    assert len(dialects) == 1
+    assert dialects[0].dialect_id == "deribit:l2_orderbook:book_instrument_interval"

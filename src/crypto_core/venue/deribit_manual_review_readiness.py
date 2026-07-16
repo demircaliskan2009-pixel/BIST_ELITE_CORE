@@ -22,6 +22,7 @@ This module:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -51,9 +52,29 @@ _POLICY_EXPECTED_ROW_COUNT = 7
 # is a distinct PUBLIC_MARKET_DATA_ONLY phase requiring explicit authorization.
 _CONNECTOR_ENABLEMENT_ROW_ID = "separate_connector_enablement"
 _INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING = "INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING"
+_INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_UNVERIFIED = (
+    "INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_UNVERIFIED"
+)
 _INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_PATH = Path(
     "docs/crypto_core/DERIBIT_INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE.md"
 )
+
+
+class _ProvenanceStatus(Enum):
+    """Deterministic classification of the independent-human provenance file.
+
+    There is deliberately NO ``READY`` member. Repository-controlled file
+    content — existence, name, markers, reviewer ids, timestamps, owner names,
+    decision/approval-scope strings, backdated prose, or any combination — is
+    fully controlled by a repository writer and therefore can never prove
+    independent human origin. Until a separately authorized Class-C design
+    introduces an independently origin-verifiable mechanism, provenance is only
+    ``MISSING`` (named file absent) or ``PRESENT_UNVERIFIED`` (named file present
+    but not origin-verifiable). Both fail closed.
+    """
+
+    MISSING = "MISSING"
+    PRESENT_UNVERIFIED = "PRESENT_UNVERIFIED"
 
 
 # ---------------------------------------------------------------------------
@@ -84,14 +105,20 @@ class DeribitManualReviewReadinessResult:
         Signals that dialect policy values in public_feed_dialects.py may be
         updated. Does NOT enable connector readiness.
 
-      connector_enablement_ready — True only after the separate
-        PUBLIC_MARKET_DATA_ONLY connector enablement policy row is explicitly
-                approved, independent human-origin approval provenance is present,
-                and the Deribit static public dialect is connector-ready.
+      connector_enablement_ready — operational B5 authorization. Requires the
+        separate PUBLIC_MARKET_DATA_ONLY connector enablement policy row
+        APPROVED, the Deribit static public dialect connector-ready, AND
+        independently origin-verifiable human provenance. No origin-verifiable
+        mechanism exists yet and repository-controlled file content can never
+        prove it, so this is structurally False until a separately authorized
+        Class-C design introduces one. B5 stays BLOCKED.
 
-      accepted — True only when every row on every surface (including
-        separate_connector_enablement) is non-PENDING, non-REJECTED, and
-        non-DEFERRED.
+      accepted — worksheet/review-completion result ONLY: True when every row
+        on every surface (including separate_connector_enablement) is
+        non-PENDING, non-REJECTED, non-DEFERRED with no missing metadata and
+        B1 is not BLOCKED. It describes human evidence-review completion and is
+        NOT operational connector authorization (that is
+        connector_enablement_ready / B5).
     """
 
     accepted: bool
@@ -159,19 +186,24 @@ def _is_provided(value: str) -> bool:
     return bool(value.strip()) and not _is_pending(value)
 
 
-def _independent_human_connector_approval_provenance_ready() -> bool:
-    """Return True only when separate human-origin approval evidence exists."""
-    if not _INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_PATH.exists():
-        return False
+def _independent_human_connector_approval_provenance_status() -> _ProvenanceStatus:
+    """Classify Deribit independent-human connector-approval provenance, fail-closed.
 
-    text = _INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_PATH.read_text(encoding="utf-8")
-    required_markers = (
-        "independent_human_origin: true",
-        "decision: APPROVE",
-        "approval_scope: Phase27F_PUBLIC_MARKET_DATA_ONLY_CONNECTOR_ENABLEMENT",
-        "separate_from_ai_enablement_pr: true",
-    )
-    return all(marker in text for marker in required_markers)
+    Returns ``MISSING`` when the named provenance file is absent and
+    ``PRESENT_UNVERIFIED`` when it exists. There is intentionally NO positive
+    (READY) outcome: no repository-controlled file content — markers, reviewer
+    ids, owner names, timestamps, decision or approval-scope prose, backdated
+    text, or any combination — can prove independent human origin, because a
+    repository writer controls all of it. The file's contents are therefore
+    never read for an authorization decision; only its presence is classified.
+
+    Inert and deterministic: no network, credentials, orders, scheduler, clock,
+    or environment authorization. A path that exists but is unreadable (or is a
+    directory) is still ``PRESENT_UNVERIFIED`` — fail closed, never READY.
+    """
+    if _INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_PATH.exists():
+        return _ProvenanceStatus.PRESENT_UNVERIFIED
+    return _ProvenanceStatus.MISSING
 
 
 # ---------------------------------------------------------------------------
@@ -431,9 +463,16 @@ def evaluate_deribit_manual_review_readiness(
     )
 
     static_registry_verified = _deribit_static_registry_verified()
-    independent_human_provenance_ready = _independent_human_connector_approval_provenance_ready()
-    if not independent_human_provenance_ready:
+    provenance_status = _independent_human_connector_approval_provenance_status()
+    # There is no READY provenance outcome: repository-controlled content can
+    # never prove independent human origin, so operational connector enablement
+    # stays fail-closed regardless of whether the named file is present, until a
+    # separately authorized origin-verifiable mechanism exists.
+    independent_human_provenance_ready = False
+    if provenance_status is _ProvenanceStatus.MISSING:
         all_rejection_reasons.append(_INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_MISSING)
+    else:
+        all_rejection_reasons.append(_INDEPENDENT_HUMAN_CONNECTOR_APPROVAL_PROVENANCE_UNVERIFIED)
 
     connector_enablement_ready = (
         _deribit_connector_enablement_ready(
