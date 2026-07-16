@@ -637,15 +637,21 @@ conditions, and report fields. The durable per-model authoring guide is
 Active set (exactly): **ChatGPT GPT-5.6 Thinking** (controller); **GitHub connector** (evidence + explicitly
 authorized actions); **Deep Research + GitHub connector** (external/current facts, advisory); **Claude
 Fable 5** (runtime-proven premium surge lane — conditional, section 24.10); **Claude Opus 4.8** (default
-heavy local executor); **Claude Sonnet 5** (runtime-proven only); **Codex GPT-5.6 Sol / Terra / Luna**;
-**VS Code Copilot Pro local Agent** (execution host only, never an independently trusted model identity).
+heavy local executor); **Claude Sonnet 5** (runtime-proven only); **Codex GPT-5.6 Sol / Terra / Luna**.
+Claude Code local sessions are the primary local execution environment for Claude Opus 4.8, Claude Sonnet 5,
+and conditional Claude Fable 5 tasks — this is a runtime description, not an independently trusted audit
+authority. **Copilot status: `INACTIVE_UNAVAILABLE`** — VS Code Copilot Pro local Agent is currently
+unavailable and does not enter active routing, setup loading, prompt construction, or accepted state; it is
+not part of the active model/tool set until a future explicit human decision reactivates it through a
+separately audited workflow change.
 
 Identity rules: ChatGPT is `GPT-5.6 Thinking` and is NEVER labeled Codex `GPT-5.6 Sol`; Sol/Terra/Luna are
 distinct Codex runtimes; Opus 4.8 and Sonnet 5 are distinct Claude runtimes; Sonnet 5 availability/identity
-must be runtime-proven before routing; Copilot Auto is a routing host — `MODEL_ACTUAL` is still reported
-where exposed; model-family similarity is not runtime identity; model strength is never proof. Every serious
-executor prints `MODEL_REQUESTED` / `MODEL_ACTUAL` / `REASONING_REQUESTED` / `REASONING_ACTUAL` /
-`EXACT_MODEL_REQUIRED` before work; required exact-model mismatch stops with proof.
+must be runtime-proven before routing; every Claude Code session reports its actual runtime model — model
+identity is attached to the actual Claude runtime, never to the local host; model-family similarity is not
+runtime identity; model strength is never proof. Every serious executor prints `MODEL_REQUESTED` /
+`MODEL_ACTUAL` / `REASONING_REQUESTED` / `REASONING_ACTUAL` / `EXACT_MODEL_REQUIRED` before work; required
+exact-model mismatch stops with proof.
 
 **Claude Fable 5 is ACTIVE but CONDITIONAL** (`FABLE5_PREMIUM_SURGE_LANE`, section 24.10): a runtime-proven
 premium surge lane, never a default. Every Fable task must runtime-prove `MODEL_ACTUAL=claude-fable-5` and
@@ -775,10 +781,12 @@ additionally read `AGENTS.md` for cross-agent doctrine, and Fable serious report
 `FABLE5_RUNTIME_PROVEN`, `FABLE5_MODE`, `FABLE5_JUSTIFIED`, `TOKEN_BUDGET_ASSESSMENT`, and
 `EXPECTED_VALUE_PER_TOKEN`. Codex sessions:
 `AGENTS.md`, `.codex/skills/crypto-core-max-safe/SKILL.md`, the controller evidence packet, exact task files.
-Copilot Agent sessions: `.github/copilot-instructions.md`, `AGENTS.md`, the exact controller packet, task
-files. ChatGPT controller: active doctrine, `model_prompting_guide.md`, live pinned GitHub evidence,
+ChatGPT controller: active doctrine, `model_prompting_guide.md`, live pinned GitHub evidence,
 task-specific surfaces. Deep Research: the connector-bound research packet with pinned repo state, exact repo
-files, and external-source requirements. Every serious agent report states `SETUP_REQUESTED`,
+files, and external-source requirements. Copilot-specific files (`.github/copilot-instructions.md`,
+`.github/prompts/**`, `.github/instructions/**`) are historical compatibility material only while Copilot is
+`INACTIVE_UNAVAILABLE`; they do not enter active routing, setup loading, prompt construction, or accepted
+state. Every serious agent report states `SETUP_REQUESTED`,
 `SETUP_ACTUAL`, `SETUP_FILES_READ`, `SETUP_GAPS`; if automatic loading cannot be proven, the files are
 explicitly READ — setup loading is never claimed without proof.
 

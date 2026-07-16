@@ -56,8 +56,12 @@ safety rule wins.
   ordinary independent audit when Class C is not triggered.
 - **Codex GPT-5.6 Luna** — T0 mechanics: git/gh state, bounded CI polling, PR metadata, authorized merge
   mechanics, post-merge commands. No design or product-code judgment.
-- **VS Code Copilot Pro local Agent** — execution host only, never an independently trusted model identity;
-  `MODEL_ACTUAL` is reported where exposed; it obeys the controller packet and this doctrine.
+
+**Copilot status: `INACTIVE_UNAVAILABLE`.** Copilot is currently unavailable and is not an active execution
+lane. Do not route tasks or generate Copilot prompts unless a future explicit human decision reactivates it
+through a separately audited workflow change. Local execution occurs directly through Claude Code (Opus 4.8,
+Sonnet 5, conditional Fable 5) or Codex (Sol/Terra/Luna) sessions according to the T0-T4 routing matrix above
+— neither is an execution host for the other; each Claude/Codex session is its own trusted model identity.
 
 Model selection follows `MODEL_EXPECTED_VALUE_PER_TOKEN_POLICY` (workflow section 24.10): expected value
 per token from safety class, semantic complexity, breadth, independence needs, expected prompts, repair
