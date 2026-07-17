@@ -1231,3 +1231,139 @@ def test_ast_forbids_comparator_sm4_reconciliation_filesystem_network_clock_rand
                 assert function.id not in forbidden_call_names, function.id
             if isinstance(function, ast.Attribute):
                 assert function.attr not in forbidden_call_names, function.attr
+
+
+# --------------------------------------------------------------------------------------------------
+# Anchor-carried metadata scope scan (PR #334 review repair)
+# --------------------------------------------------------------------------------------------------
+
+
+def _resealed_chain_with_anchor_metadata(chain: _Chain, anchor: str, metadata: tuple[tuple[str, str], ...]):
+    """Build a fully coherent digest-valid chain where exactly one anchor carries the given metadata.
+
+    Every reseal recomputes the anchor's public self-digest and rebinds every downstream digest reference
+    (policy digest into the precondition), so all three digest triples pass and the metadata content is the
+    ONLY difference from a READY chain. Returns the v2 build result.
+    """
+
+    if anchor == "predecessor":
+        tampered = _reseal_predecessor(chain.predecessor, metadata=metadata)
+        return _build_v2(
+            chain,
+            predecessor=tampered,
+            expected_predecessor_methodology_digest=tampered.methodology_digest,
+        )
+    if anchor == "policy":
+        tampered_policy = _reseal_policy(chain.policy, metadata=metadata)
+        rebound_precondition = _reseal_precondition(chain.precondition, policy_digest=tampered_policy.policy_digest)
+        return _build_v2(
+            chain,
+            policy=tampered_policy,
+            precondition=rebound_precondition,
+            expected_secondary_metrics_policy_digest=tampered_policy.policy_digest,
+            expected_secondary_metrics_enforcement_precondition_digest=rebound_precondition.precondition_digest,
+        )
+    tampered = _reseal_precondition(chain.precondition, metadata=metadata)
+    return _build_v2(
+        chain,
+        precondition=tampered,
+        expected_secondary_metrics_enforcement_precondition_digest=tampered.precondition_digest,
+    )
+
+
+@pytest.mark.parametrize("position", ["key", "value"])
+@pytest.mark.parametrize(
+    "token",
+    ["bist_authority", "deribit_ready", "datetime.now"],
+    ids=["bist", "scope", "clock"],
+)
+@pytest.mark.parametrize("anchor", ["predecessor", "policy", "precondition"])
+def test_anchor_metadata_bist_scope_clock_key_and_value_rejected(anchor: str, token: str, position: str) -> None:
+    """The exact review exploit: a coherent resealed anchor smuggling forbidden metadata must fail closed.
+
+    ``reason_codes`` is asserted to be EXACTLY the anchor-scope reason, which simultaneously proves that all
+    three digest triples passed (a digest mismatch is NOT why the attack is rejected) and that pre-repair —
+    without the metadata scan — this chain would have reached METHODOLOGY_READY.
+    """
+
+    chain = _Chain()
+    metadata = ((token, "x"),) if position == "key" else (("note", token),)
+    result = _resealed_chain_with_anchor_metadata(chain, anchor, metadata)
+
+    assert result.status is PaperVsBacktestMethodologyV2Status.METHODOLOGY_REJECTED
+    assert result.ready is False
+    assert result.reason_codes == (_rc("anchor_scope_violation"),)
+    # Digest triples passed before scope rejection: every verified digest is populated.
+    assert result.verified_predecessor_methodology_digest != ""
+    assert result.verified_secondary_metrics_policy_digest != ""
+    assert result.verified_secondary_metrics_enforcement_precondition_digest != ""
+    assert result.predecessor_methodology_consumed is False
+    assert result.secondary_metrics_policy_consumed is False
+    assert result.secondary_metrics_enforcement_precondition_consumed is False
+    assert result.hit_rate_floor_enforced is False
+    assert result.fill_rate_floor_enforced is False
+    assert result.slippage_ceiling_enforced is False
+    assert result.secondary_metrics_enforced is False
+    payload = paper_vs_backtest_methodology_v2_to_dict(result)
+    for flag in _ALWAYS_FALSE_FLAGS:
+        assert payload[flag] is False, flag
+
+
+def test_safe_resealed_anchor_metadata_still_ready() -> None:
+    # Control experiment: the identical reseal construction with SAFE metadata in all three anchors still
+    # reaches METHODOLOGY_READY — the attack matrix above is rejected for its tokens, not its mechanism.
+    chain = _Chain()
+    safe = (("note", "governance snapshot"),)
+    predecessor = _reseal_predecessor(chain.predecessor, metadata=safe)
+    policy = _reseal_policy(chain.policy, metadata=safe)
+    precondition = _reseal_precondition(chain.precondition, metadata=safe, policy_digest=policy.policy_digest)
+    result = _build_v2(
+        chain,
+        predecessor=predecessor,
+        policy=policy,
+        precondition=precondition,
+        expected_predecessor_methodology_digest=predecessor.methodology_digest,
+        expected_secondary_metrics_policy_digest=policy.policy_digest,
+        expected_secondary_metrics_enforcement_precondition_digest=precondition.precondition_digest,
+    )
+
+    assert result.status is PaperVsBacktestMethodologyV2Status.METHODOLOGY_READY
+    assert result.ready is True
+    assert result.reason_codes == ()
+    assert result.hit_rate_floor_enforced is True
+    assert result.fill_rate_floor_enforced is True
+    assert result.slippage_ceiling_enforced is True
+    assert result.secondary_metrics_enforced is False
+
+
+@pytest.mark.parametrize("position", ["key", "value"])
+@pytest.mark.parametrize(
+    "token,match",
+    [
+        ("bist_authority", "bist_token_forbidden"),
+        ("deribit_ready", "scope_violation"),
+        ("datetime.now", "clock_token_forbidden"),
+    ],
+    ids=["bist", "scope", "clock"],
+)
+def test_caller_metadata_with_attack_tokens_still_raises(token: str, match: str, position: str) -> None:
+    # The caller-owned boundary is unchanged by the repair: the same tokens RAISE when caller-supplied.
+    chain = _Chain()
+    metadata = {token: "x"} if position == "key" else {"note": token}
+    with pytest.raises(PaperVsBacktestMethodologyV2Error, match=_rc(match)):
+        _build_v2(chain, metadata=metadata)
+
+
+def test_malformed_anchor_metadata_container_rejects_without_crash() -> None:
+    # A non-tuple anchor metadata container must not crash the scan; the anchor already fails its digest
+    # reproof (the serializer cannot iterate the container), so the chain fails closed to REJECTED.
+    chain = _Chain()
+    tampered = replace(chain.precondition, metadata=None)  # type: ignore[arg-type]
+    result = _build_v2(
+        chain,
+        precondition=tampered,
+        expected_secondary_metrics_enforcement_precondition_digest=chain.precondition.precondition_digest,
+    )
+
+    assert result.status is PaperVsBacktestMethodologyV2Status.METHODOLOGY_REJECTED
+    assert _rc("secondary_metrics_enforcement_precondition_digest_mismatch") in result.reason_codes

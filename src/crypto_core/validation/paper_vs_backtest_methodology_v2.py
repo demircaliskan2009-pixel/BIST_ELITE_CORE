@@ -715,7 +715,19 @@ def build_paper_vs_backtest_methodology_v2(
     if not (record_digests_ok and counts_ok):
         hard.append(_reason("record_set_incoherent"))
 
-    # 19. Anchor-carried identity/scope text (REJECTED, never a caller-input RAISE).
+    # 19. Anchor-carried identity/scope text (REJECTED, never a caller-input RAISE). Metadata keys and
+    # values carried by all three digest-valid anchors are scanned too — a coherent resealed anchor must
+    # not smuggle BIST/scope/clock text through metadata. Container shape is guarded the same way as
+    # ``record_digests`` so a malformed metadata container can never crash the scan (such an anchor has
+    # already failed its digest reproof above).
+    anchor_metadata_texts = tuple(
+        text
+        for anchor_metadata in (predecessor.metadata, policy.metadata, precondition.metadata)
+        if type(anchor_metadata) is tuple
+        for pair in anchor_metadata
+        if type(pair) is tuple
+        for text in pair
+    )
     anchor_texts = (
         predecessor.methodology_id,
         predecessor.correlation_id,
@@ -725,6 +737,7 @@ def build_paper_vs_backtest_methodology_v2(
         precondition.precondition_id,
         precondition.correlation_id,
         precondition.policy_id,
+        *anchor_metadata_texts,
     )
     if _has_any_scope_violation(*anchor_texts):
         hard.append(_reason("anchor_scope_violation"))
