@@ -358,6 +358,18 @@ def _is_hex64_string(value: object) -> bool:
     return type(value) is str and len(value) == _SHA256_HEX_LENGTH and all(char in _HEX_CHARS for char in value)
 
 
+def _plain_strings_equal(left: object, right: object) -> bool:
+    return _is_plain_non_empty_string(left) and _is_plain_non_empty_string(right) and left == right
+
+
+def _exact_ints_equal(left: object, right: object) -> bool:
+    return _is_exact_int(left) and _is_exact_int(right) and left == right
+
+
+def _is_exact_empty_tuple(value: object) -> bool:
+    return type(value) is tuple and len(value) == 0
+
+
 def _require_plain_non_empty_string(value: object, field_name: str) -> str:
     if not _is_plain_non_empty_string(value):
         raise PaperVsBacktestMethodologyV2Error(_reason(f"{field_name}_malformed"))
@@ -460,7 +472,13 @@ def _recomputed_digest_or_none(compute: object, artifact: object) -> str | None:
 
 def _digest_reproof_ok(*, artifact: object, carried_digest: object, expected_digest: str, compute: object) -> bool:
     recomputed = _recomputed_digest_or_none(compute, artifact)
-    return recomputed is not None and carried_digest == recomputed and carried_digest == expected_digest
+    return (
+        _is_hex64_string(recomputed)
+        and _is_hex64_string(carried_digest)
+        and _is_hex64_string(expected_digest)
+        and recomputed == carried_digest
+        and carried_digest == expected_digest
+    )
 
 
 def _flag_failure(artifact: object, true_flags: tuple[str, ...], false_flags: tuple[str, ...]) -> bool:
@@ -586,36 +604,73 @@ def build_paper_vs_backtest_methodology_v2(
     policy_metadata_canonical = _is_canonical_anchor_metadata(policy.metadata)
     precondition_metadata_canonical = _is_canonical_anchor_metadata(precondition.metadata)
 
+    # Canonical identity/reference gates are computed before any comparison or rejected-output projection.
+    predecessor_methodology_id_canonical = _is_plain_non_empty_string(predecessor.methodology_id)
+    predecessor_correlation_id_canonical = _is_plain_non_empty_string(predecessor.correlation_id)
+
+    policy_id_canonical = _is_plain_non_empty_string(policy.policy_id)
+    policy_correlation_id_canonical = _is_plain_non_empty_string(policy.correlation_id)
+    policy_approval_reference_canonical = _is_plain_non_empty_string(policy.approval_reference)
+    policy_digest_canonical = _is_hex64_string(policy.policy_digest)
+    policy_expected_fill_parameters_digest_canonical = _is_hex64_string(policy.expected_fill_model_parameters_digest)
+    policy_approval_digest_canonical = _is_hex64_string(policy.approval_digest)
+    policy_hit_rate_floor_canonical = _scale18_in_range(policy.approved_hit_rate_floor, Decimal(0), Decimal(1))
+    policy_fill_rate_floor_canonical = _scale18_in_range(policy.approved_fill_rate_floor, Decimal(0), Decimal(1))
+    policy_slippage_ceiling_canonical = _scale18_in_range(policy.approved_slippage_ceiling_bps, Decimal(0), None)
+    policy_min_decided_count_canonical = (
+        _is_exact_int(policy.approved_min_decided_episode_count) and policy.approved_min_decided_episode_count >= 1
+    )
+    policy_thresholds_approved = policy.thresholds_approved is True
+
+    precondition_id_canonical = _is_plain_non_empty_string(precondition.precondition_id)
+    precondition_correlation_id_canonical = _is_plain_non_empty_string(precondition.correlation_id)
+    precondition_policy_id_canonical = _is_plain_non_empty_string(precondition.policy_id)
+    precondition_policy_digest_canonical = _is_hex64_string(precondition.policy_digest)
+    precondition_market_symbol_canonical = _is_plain_non_empty_string(precondition.market_symbol)
+    precondition_hit_rate_floor_canonical = _scale18_in_range(
+        precondition.approved_hit_rate_floor, Decimal(0), Decimal(1)
+    )
+    precondition_fill_rate_floor_canonical = _scale18_in_range(
+        precondition.approved_fill_rate_floor, Decimal(0), Decimal(1)
+    )
+    precondition_slippage_ceiling_canonical = _scale18_in_range(
+        precondition.approved_slippage_ceiling_bps, Decimal(0), None
+    )
+    precondition_min_decided_count_canonical = (
+        _is_exact_int(precondition.approved_min_decided_episode_count)
+        and precondition.approved_min_decided_episode_count >= 1
+    )
+
     # 7-9. Predecessor v1 readiness, frozen governance literals, and correlation continuity.
     predecessor_ready_ok = (
         predecessor.status is PaperVsBacktestMethodologyStatus.READY
         and predecessor.ready is True
-        and predecessor.reason_codes == ()
+        and _is_exact_empty_tuple(predecessor.reason_codes)
     )
     if not predecessor_ready_ok:
         hard.append(_reason("predecessor_methodology_not_ready"))
     predecessor_contract_ok = (
-        predecessor.schema_version == _EXPECTED_PREDECESSOR_SCHEMA_VERSION
-        and predecessor.methodology_version == _EXPECTED_PREDECESSOR_METHODOLOGY_VERSION
-        and predecessor.comparison_basis == _COMPARISON_BASIS
-        and predecessor.enforced_guardrail_policy == _ENFORCED_GUARDRAIL_POLICY
-        and predecessor.secondary_guardrail_policy == _V1_DECLARED_NOT_ENFORCED
-        and predecessor.hit_rate_guardrail_policy == _V1_DECLARED_NOT_ENFORCED
-        and predecessor.fill_rate_guardrail_policy == _V1_DECLARED_NOT_ENFORCED
-        and predecessor.slippage_guardrail_policy == _V1_DECLARED_NOT_ENFORCED
-        and predecessor.drawdown_guardrail_policy == _V1_DECLARED_NOT_ENFORCED
-        and predecessor.sharpe_retention_ratio == _SHARPE_RETENTION_RATIO
-        and predecessor.min_duration_days == _MIN_DURATION_DAYS
-        and predecessor.risk_free_policy_id == _RISK_FREE_POLICY_ID
-        and predecessor.annualization_factor == _ANNUALIZATION_FACTOR
-        and predecessor.annualization_policy == _ANNUALIZATION_POLICY
-        and predecessor.stddev_policy == _STDDEV_POLICY
-        and predecessor.decimal_policy == _DECIMAL_POLICY
-        and predecessor.decimal_scale == _DECIMAL_SCALE
-        and predecessor.decimal_rounding == _DECIMAL_ROUNDING
-        and predecessor.decimal_internal_precision == _DECIMAL_INTERNAL_PRECISION
-        and _is_plain_non_empty_string(predecessor.methodology_id)
-        and _is_plain_non_empty_string(predecessor.correlation_id)
+        _plain_strings_equal(predecessor.schema_version, _EXPECTED_PREDECESSOR_SCHEMA_VERSION)
+        and _plain_strings_equal(predecessor.methodology_version, _EXPECTED_PREDECESSOR_METHODOLOGY_VERSION)
+        and _plain_strings_equal(predecessor.comparison_basis, _COMPARISON_BASIS)
+        and _plain_strings_equal(predecessor.enforced_guardrail_policy, _ENFORCED_GUARDRAIL_POLICY)
+        and _plain_strings_equal(predecessor.secondary_guardrail_policy, _V1_DECLARED_NOT_ENFORCED)
+        and _plain_strings_equal(predecessor.hit_rate_guardrail_policy, _V1_DECLARED_NOT_ENFORCED)
+        and _plain_strings_equal(predecessor.fill_rate_guardrail_policy, _V1_DECLARED_NOT_ENFORCED)
+        and _plain_strings_equal(predecessor.slippage_guardrail_policy, _V1_DECLARED_NOT_ENFORCED)
+        and _plain_strings_equal(predecessor.drawdown_guardrail_policy, _V1_DECLARED_NOT_ENFORCED)
+        and _plain_strings_equal(predecessor.sharpe_retention_ratio, _SHARPE_RETENTION_RATIO)
+        and _exact_ints_equal(predecessor.min_duration_days, _MIN_DURATION_DAYS)
+        and _plain_strings_equal(predecessor.risk_free_policy_id, _RISK_FREE_POLICY_ID)
+        and _exact_ints_equal(predecessor.annualization_factor, _ANNUALIZATION_FACTOR)
+        and _plain_strings_equal(predecessor.annualization_policy, _ANNUALIZATION_POLICY)
+        and _plain_strings_equal(predecessor.stddev_policy, _STDDEV_POLICY)
+        and _plain_strings_equal(predecessor.decimal_policy, _DECIMAL_POLICY)
+        and _exact_ints_equal(predecessor.decimal_scale, _DECIMAL_SCALE)
+        and _plain_strings_equal(predecessor.decimal_rounding, _DECIMAL_ROUNDING)
+        and _exact_ints_equal(predecessor.decimal_internal_precision, _DECIMAL_INTERNAL_PRECISION)
+        and predecessor_methodology_id_canonical
+        and predecessor_correlation_id_canonical
         and predecessor_metadata_canonical
     )
     if not predecessor_contract_ok:
@@ -628,32 +683,32 @@ def build_paper_vs_backtest_methodology_v2(
         policy.status is SecondaryMetricsPolicyStatus.POLICY_READY
         and policy.ready is True
         and policy.secondary_metrics_policy_ready is True
-        and policy.reason_codes == ()
+        and _is_exact_empty_tuple(policy.reason_codes)
     )
     if not policy_ready_ok:
         hard.append(_reason("secondary_metrics_policy_not_ready"))
     policy_contract_ok = (
-        policy.schema_version == _EXPECTED_POLICY_SCHEMA_VERSION
-        and policy.policy_version == _EXPECTED_POLICY_VERSION
-        and policy.hit_rate_definition == _HIT_RATE_DEFINITION
-        and policy.fill_rate_definition == _FILL_RATE_DEFINITION
-        and policy.slippage_definition == _SLIPPAGE_DEFINITION
-        and policy.expected_fill_model_reference == _EXPECTED_FILL_MODEL_REFERENCE
-        and _is_hex64_string(policy.expected_fill_model_parameters_digest)
-        and policy.decimal_policy == _SECONDARY_METRICS_DECIMAL_POLICY
-        and policy.decimal_scale == _SECONDARY_METRICS_DECIMAL_SCALE
-        and policy.decimal_rounding == _SECONDARY_METRICS_DECIMAL_ROUNDING
+        _plain_strings_equal(policy.schema_version, _EXPECTED_POLICY_SCHEMA_VERSION)
+        and _plain_strings_equal(policy.policy_version, _EXPECTED_POLICY_VERSION)
+        and _plain_strings_equal(policy.hit_rate_definition, _HIT_RATE_DEFINITION)
+        and _plain_strings_equal(policy.fill_rate_definition, _FILL_RATE_DEFINITION)
+        and _plain_strings_equal(policy.slippage_definition, _SLIPPAGE_DEFINITION)
+        and _plain_strings_equal(policy.expected_fill_model_reference, _EXPECTED_FILL_MODEL_REFERENCE)
+        and policy_expected_fill_parameters_digest_canonical
+        and _plain_strings_equal(policy.decimal_policy, _SECONDARY_METRICS_DECIMAL_POLICY)
+        and _exact_ints_equal(policy.decimal_scale, _SECONDARY_METRICS_DECIMAL_SCALE)
+        and _plain_strings_equal(policy.decimal_rounding, _SECONDARY_METRICS_DECIMAL_ROUNDING)
         and policy.fraction_intermediates_required is True
-        and _is_plain_non_empty_string(policy.approval_reference)
-        and _is_hex64_string(policy.approval_digest)
-        and policy.thresholds_approved is True
-        and _scale18_in_range(policy.approved_hit_rate_floor, Decimal(0), Decimal(1))
-        and _scale18_in_range(policy.approved_fill_rate_floor, Decimal(0), Decimal(1))
-        and _scale18_in_range(policy.approved_slippage_ceiling_bps, Decimal(0), None)
-        and _is_exact_int(policy.approved_min_decided_episode_count)
-        and policy.approved_min_decided_episode_count >= 1
-        and _is_plain_non_empty_string(policy.policy_id)
-        and _is_plain_non_empty_string(policy.correlation_id)
+        and policy_approval_reference_canonical
+        and policy_approval_digest_canonical
+        and policy_thresholds_approved
+        and policy_hit_rate_floor_canonical
+        and policy_fill_rate_floor_canonical
+        and policy_slippage_ceiling_canonical
+        and policy_min_decided_count_canonical
+        and policy_id_canonical
+        and policy_correlation_id_canonical
+        and policy_digest_canonical
         and policy_metadata_canonical
     )
     if not policy_contract_ok:
@@ -663,19 +718,20 @@ def build_paper_vs_backtest_methodology_v2(
     precondition_ready_ok = (
         precondition.status is PaperSecondaryMetricsEnforcementPreconditionStatus.PRECONDITION_READY
         and precondition.ready is True
-        and precondition.reason_codes == ()
+        and _is_exact_empty_tuple(precondition.reason_codes)
     )
     if not precondition_ready_ok:
         hard.append(_reason("secondary_metrics_enforcement_precondition_not_ready"))
     precondition_contract_ok = (
-        precondition.schema_version == _EXPECTED_PRECONDITION_SCHEMA_VERSION
-        and precondition.precondition_version == _EXPECTED_PRECONDITION_VERSION
-        and _is_hex64_string(precondition.policy_digest)
+        _plain_strings_equal(precondition.schema_version, _EXPECTED_PRECONDITION_SCHEMA_VERSION)
+        and _plain_strings_equal(precondition.precondition_version, _EXPECTED_PRECONDITION_VERSION)
+        and precondition_policy_digest_canonical
         and _is_hex64_string(precondition.metrics_evidence_digest)
         and _is_hex64_string(precondition.reconciliation_digest)
-        and _is_plain_non_empty_string(precondition.precondition_id)
-        and _is_plain_non_empty_string(precondition.correlation_id)
-        and _is_plain_non_empty_string(precondition.policy_id)
+        and precondition_id_canonical
+        and precondition_correlation_id_canonical
+        and precondition_policy_id_canonical
+        and precondition_market_symbol_canonical
         and precondition_metadata_canonical
     )
     if not precondition_contract_ok:
@@ -690,27 +746,44 @@ def build_paper_vs_backtest_methodology_v2(
         hard.append(_reason("unsafe_flags"))
 
     # 13. Cross-binding: policy id/digest, correlations, market symbol, threshold echoes.
-    policy_binding_ok = (
-        precondition.policy_id == policy.policy_id and precondition.policy_digest == policy.policy_digest
+    policy_id_binding_ok = (
+        precondition_policy_id_canonical and policy_id_canonical and precondition.policy_id == policy.policy_id
     )
+    policy_digest_binding_ok = (
+        precondition_policy_digest_canonical
+        and policy_digest_canonical
+        and precondition.policy_digest == policy.policy_digest
+    )
+    policy_binding_ok = policy_id_binding_ok and policy_digest_binding_ok
     if not policy_binding_ok:
         hard.append(_reason("policy_binding_mismatch"))
     correlation_ok = (
-        predecessor.correlation_id == correlation_id
+        predecessor_correlation_id_canonical
+        and predecessor.correlation_id == correlation_id
+        and policy_correlation_id_canonical
         and policy.correlation_id == correlation_id
+        and precondition_correlation_id_canonical
         and precondition.correlation_id == correlation_id
     )
     if not correlation_ok:
         hard.append(_reason("correlation_id_mismatch"))
-    market_symbol_valid = _is_plain_non_empty_string(precondition.market_symbol) and not _has_any_scope_violation(
+    market_symbol_valid = precondition_market_symbol_canonical and not _has_any_scope_violation(
         precondition.market_symbol
     )
     if not market_symbol_valid:
         hard.append(_reason("market_symbol_invalid"))
     threshold_snapshot_ok = (
-        precondition.approved_hit_rate_floor == policy.approved_hit_rate_floor
+        precondition_hit_rate_floor_canonical
+        and policy_hit_rate_floor_canonical
+        and precondition.approved_hit_rate_floor == policy.approved_hit_rate_floor
+        and precondition_fill_rate_floor_canonical
+        and policy_fill_rate_floor_canonical
         and precondition.approved_fill_rate_floor == policy.approved_fill_rate_floor
+        and precondition_slippage_ceiling_canonical
+        and policy_slippage_ceiling_canonical
         and precondition.approved_slippage_ceiling_bps == policy.approved_slippage_ceiling_bps
+        and precondition_min_decided_count_canonical
+        and policy_min_decided_count_canonical
         and precondition.approved_min_decided_episode_count == policy.approved_min_decided_episode_count
     )
     if not threshold_snapshot_ok:
@@ -784,14 +857,14 @@ def build_paper_vs_backtest_methodology_v2(
         *(_metadata_texts(precondition.metadata) if precondition_metadata_canonical else ()),
     )
     anchor_texts = (
-        predecessor.methodology_id,
-        predecessor.correlation_id,
-        policy.policy_id,
-        policy.correlation_id,
-        policy.approval_reference,
-        precondition.precondition_id,
-        precondition.correlation_id,
-        precondition.policy_id,
+        *((predecessor.methodology_id,) if predecessor_methodology_id_canonical else ()),
+        *((predecessor.correlation_id,) if predecessor_correlation_id_canonical else ()),
+        *((policy.policy_id,) if policy_id_canonical else ()),
+        *((policy.correlation_id,) if policy_correlation_id_canonical else ()),
+        *((policy.approval_reference,) if policy_approval_reference_canonical else ()),
+        *((precondition.precondition_id,) if precondition_id_canonical else ()),
+        *((precondition.correlation_id,) if precondition_correlation_id_canonical else ()),
+        *((precondition.policy_id,) if precondition_policy_id_canonical else ()),
         *anchor_metadata_texts,
     )
     anchor_scope_ok = not _has_any_scope_violation(*anchor_texts)
@@ -812,6 +885,17 @@ def build_paper_vs_backtest_methodology_v2(
         and predecessor_metadata_canonical
         and policy_metadata_canonical
         and precondition_metadata_canonical
+        and predecessor_methodology_id_canonical
+        and predecessor_correlation_id_canonical
+        and policy_id_canonical
+        and policy_correlation_id_canonical
+        and policy_approval_reference_canonical
+        and policy_digest_canonical
+        and precondition_id_canonical
+        and precondition_correlation_id_canonical
+        and precondition_policy_id_canonical
+        and precondition_policy_digest_canonical
+        and precondition_market_symbol_canonical
         and predecessor_ready_ok
         and predecessor_contract_ok
         and policy_ready_ok
@@ -845,10 +929,12 @@ def build_paper_vs_backtest_methodology_v2(
         "ready": ready,
         "methodology_id": methodology_id,
         "correlation_id": correlation_id,
-        "predecessor_methodology_id": predecessor.methodology_id,
-        "secondary_metrics_policy_id": policy.policy_id,
-        "secondary_metrics_enforcement_precondition_id": precondition.precondition_id,
-        "market_symbol": precondition.market_symbol,
+        "predecessor_methodology_id": predecessor.methodology_id if predecessor_methodology_id_canonical else "",
+        "secondary_metrics_policy_id": policy.policy_id if policy_id_canonical else "",
+        "secondary_metrics_enforcement_precondition_id": (
+            precondition.precondition_id if precondition_id_canonical else ""
+        ),
+        "market_symbol": precondition.market_symbol if precondition_market_symbol_canonical else "",
         "expected_predecessor_methodology_digest": expected_predecessor_methodology_digest,
         "verified_predecessor_methodology_digest": predecessor.methodology_digest if predecessor_digest_ok else "",
         "expected_secondary_metrics_policy_digest": expected_secondary_metrics_policy_digest,
@@ -883,18 +969,24 @@ def build_paper_vs_backtest_methodology_v2(
         "fill_rate_operator": _FILL_RATE_OPERATOR,
         "slippage_operator": _SLIPPAGE_OPERATOR,
         "expected_fill_model_reference": _EXPECTED_FILL_MODEL_REFERENCE,
-        "expected_fill_model_parameters_digest": policy.expected_fill_model_parameters_digest,
+        "expected_fill_model_parameters_digest": (
+            policy.expected_fill_model_parameters_digest if policy_expected_fill_parameters_digest_canonical else None
+        ),
         "secondary_metrics_decimal_policy": _SECONDARY_METRICS_DECIMAL_POLICY,
         "secondary_metrics_decimal_scale": _SECONDARY_METRICS_DECIMAL_SCALE,
         "secondary_metrics_decimal_rounding": _SECONDARY_METRICS_DECIMAL_ROUNDING,
         "fraction_intermediates_required": _FRACTION_INTERMEDIATES_REQUIRED,
-        "approved_hit_rate_floor": policy.approved_hit_rate_floor,
-        "approved_fill_rate_floor": policy.approved_fill_rate_floor,
-        "approved_slippage_ceiling_bps": policy.approved_slippage_ceiling_bps,
-        "approved_min_decided_episode_count": policy.approved_min_decided_episode_count,
-        "approval_reference": policy.approval_reference,
-        "approval_digest": policy.approval_digest,
-        "thresholds_approved": policy.thresholds_approved,
+        "approved_hit_rate_floor": policy.approved_hit_rate_floor if policy_hit_rate_floor_canonical else None,
+        "approved_fill_rate_floor": policy.approved_fill_rate_floor if policy_fill_rate_floor_canonical else None,
+        "approved_slippage_ceiling_bps": (
+            policy.approved_slippage_ceiling_bps if policy_slippage_ceiling_canonical else None
+        ),
+        "approved_min_decided_episode_count": (
+            policy.approved_min_decided_episode_count if policy_min_decided_count_canonical else None
+        ),
+        "approval_reference": policy.approval_reference if policy_approval_reference_canonical else None,
+        "approval_digest": policy.approval_digest if policy_approval_digest_canonical else None,
+        "thresholds_approved": policy_thresholds_approved,
         "hit_rate_floor_enforced": ready,
         "fill_rate_floor_enforced": ready,
         "slippage_ceiling_enforced": ready,
