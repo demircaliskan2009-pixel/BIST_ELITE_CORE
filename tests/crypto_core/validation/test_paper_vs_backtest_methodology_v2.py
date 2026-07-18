@@ -72,6 +72,7 @@ from crypto_core.validation.paper_vs_backtest_methodology_v2 import (
 )
 from crypto_core.validation.secondary_metrics_policy import (
     SecondaryMetricsPolicy,
+    SecondaryMetricsPolicyStatus,
     build_secondary_metrics_policy,
     secondary_metrics_policy_digest,
 )
@@ -1367,3 +1368,230 @@ def test_malformed_anchor_metadata_container_rejects_without_crash() -> None:
 
     assert result.status is PaperVsBacktestMethodologyV2Status.METHODOLOGY_REJECTED
     assert _rc("secondary_metrics_enforcement_precondition_digest_mismatch") in result.reason_codes
+
+
+# --------------------------------------------------------------------------------------------------
+# Sol Class-C repair round 2: canonical anchor contracts (P2-1 / P2-2 / P2-3)
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def canonical_chain() -> _Chain:
+    # All anchors are frozen dataclasses and every adversarial case derives copies via replace()/reseal,
+    # so one shared READY chain is safe and keeps the large canonicality matrices fast.
+    return _Chain()
+
+
+_ANCHOR_CONTRACT_REASON = {
+    "predecessor": "predecessor_methodology_contract_mismatch",
+    "policy": "secondary_metrics_policy_contract_mismatch",
+    "precondition": "secondary_metrics_enforcement_precondition_contract_mismatch",
+}
+_ANCHOR_DIGEST_REASONS = (
+    "predecessor_methodology_digest_mismatch",
+    "secondary_metrics_policy_digest_mismatch",
+    "secondary_metrics_enforcement_precondition_digest_mismatch",
+)
+
+# (case name, metadata value, resealable) — resealable means the anchor's public digest helper can
+# serialize the shape, so the fixture carries a fully coherent matching digest and rejection is proven
+# to come from canonicality, not from a stale expected digest.
+_NONCANONICAL_METADATA_CASES = [
+    ("none", None, False),
+    ("outer_list", [("k", "v")], True),
+    ("list_pair", (["k", "v"],), True),
+    ("one_element_pair", (("k",),), False),
+    ("three_element_pair", (("k", "v", "x"),), False),
+    ("non_string_key", ((1, "v"),), True),
+    ("non_string_value", (("k", 2),), True),
+    ("nested_tuple_value", (("k", ("v1", "v2")),), True),
+    ("duplicate_key", (("k", "1"), ("k", "2")), True),
+    ("unsorted", (("b", "2"), ("a", "1")), True),
+    ("empty_key", (("", "v"),), True),
+    ("empty_value", (("k", ""),), True),
+    ("whitespace_key", ((" k", "v"),), True),
+    ("whitespace_value", (("k", "v "),), True),
+    ("control_in_key", (("k\x01", "v"),), True),
+    ("control_in_value", (("k", "v\x7f"),), True),
+]
+
+
+def _build_v2_with_anchor_override(chain: _Chain, anchor: str, resealable: bool, **field_overrides):
+    """Apply field overrides to exactly one anchor.
+
+    When the anchor's public digest helper can serialize the mutated artifact, the fixture is resealed
+    (and the policy digest rebound into the precondition where needed) with matching expected digests so
+    every digest triple passes. Otherwise a raw ``replace`` is used and the digest reproof fails alongside
+    the canonicality rejection — either way the builder must fail closed without a raw exception.
+    """
+
+    if anchor == "predecessor":
+        if resealable:
+            tampered = _reseal_predecessor(chain.predecessor, **field_overrides)
+            return _build_v2(
+                chain,
+                predecessor=tampered,
+                expected_predecessor_methodology_digest=tampered.methodology_digest,
+            )
+        tampered = replace(chain.predecessor, **field_overrides)
+        return _build_v2(
+            chain,
+            predecessor=tampered,
+            expected_predecessor_methodology_digest=chain.predecessor.methodology_digest,
+        )
+    if anchor == "policy":
+        if resealable:
+            tampered = _reseal_policy(chain.policy, **field_overrides)
+            rebound = _reseal_precondition(chain.precondition, policy_digest=tampered.policy_digest)
+            return _build_v2(
+                chain,
+                policy=tampered,
+                precondition=rebound,
+                expected_secondary_metrics_policy_digest=tampered.policy_digest,
+                expected_secondary_metrics_enforcement_precondition_digest=rebound.precondition_digest,
+            )
+        tampered = replace(chain.policy, **field_overrides)
+        return _build_v2(
+            chain,
+            policy=tampered,
+            expected_secondary_metrics_policy_digest=chain.policy.policy_digest,
+        )
+    if resealable:
+        tampered = _reseal_precondition(chain.precondition, **field_overrides)
+        return _build_v2(
+            chain,
+            precondition=tampered,
+            expected_secondary_metrics_enforcement_precondition_digest=tampered.precondition_digest,
+        )
+    tampered = replace(chain.precondition, **field_overrides)
+    return _build_v2(
+        chain,
+        precondition=tampered,
+        expected_secondary_metrics_enforcement_precondition_digest=chain.precondition.precondition_digest,
+    )
+
+
+def _assert_rejected_with_reason(result, required_reason: str, *, digests_coherent: bool) -> None:
+    assert result.status is PaperVsBacktestMethodologyV2Status.METHODOLOGY_REJECTED
+    assert result.ready is False
+    assert _rc(required_reason) in result.reason_codes
+    if digests_coherent:
+        for digest_reason in _ANCHOR_DIGEST_REASONS:
+            assert _rc(digest_reason) not in result.reason_codes
+    assert result.predecessor_methodology_consumed is False
+    assert result.secondary_metrics_policy_consumed is False
+    assert result.secondary_metrics_enforcement_precondition_consumed is False
+    assert result.hit_rate_floor_enforced is False
+    assert result.fill_rate_floor_enforced is False
+    assert result.slippage_ceiling_enforced is False
+    payload = paper_vs_backtest_methodology_v2_to_dict(result)
+    for flag in _ALWAYS_FALSE_FLAGS:
+        assert payload[flag] is False, flag
+
+
+@pytest.mark.parametrize(
+    "case_name,bad_metadata,resealable",
+    _NONCANONICAL_METADATA_CASES,
+    ids=[case[0] for case in _NONCANONICAL_METADATA_CASES],
+)
+@pytest.mark.parametrize("anchor", ["predecessor", "policy", "precondition"])
+def test_noncanonical_anchor_metadata_never_ready(
+    canonical_chain: _Chain, anchor: str, case_name: str, bad_metadata, resealable: bool
+) -> None:
+    result = _build_v2_with_anchor_override(canonical_chain, anchor, resealable, metadata=bad_metadata)
+    _assert_rejected_with_reason(result, _ANCHOR_CONTRACT_REASON[anchor], digests_coherent=resealable)
+
+
+_POLICY_READY_ECHO_CASES = [
+    ("echo_false", {"secondary_metrics_policy_ready": False}),
+    ("ready_false", {"ready": False}),
+    ("status_rejected", {"status": SecondaryMetricsPolicyStatus.POLICY_REJECTED}),
+    ("reasons_nonempty", {"reason_codes": ("secondary_metrics_policy:x",)}),
+    ("echo_type_confusion_int_one", {"secondary_metrics_policy_ready": 1}),
+]
+
+
+@pytest.mark.parametrize(
+    "case_name,overrides",
+    _POLICY_READY_ECHO_CASES,
+    ids=[case[0] for case in _POLICY_READY_ECHO_CASES],
+)
+def test_policy_ready_echo_incoherence_rejected(canonical_chain: _Chain, case_name: str, overrides) -> None:
+    # Digest-valid resealed + rebound chains: only the ready/status/echo/reason coherence is broken.
+    result = _build_v2_with_anchor_override(canonical_chain, "policy", True, **overrides)
+    assert result.status is PaperVsBacktestMethodologyV2Status.METHODOLOGY_REJECTED
+    assert _rc("secondary_metrics_policy_not_ready") in result.reason_codes
+    for digest_reason in _ANCHOR_DIGEST_REASONS:
+        assert _rc(digest_reason) not in result.reason_codes
+
+
+# (anchor, field, required rejection reason)
+_IDENTITY_FIELD_CASES = [
+    ("predecessor", "methodology_id", "predecessor_methodology_contract_mismatch"),
+    ("predecessor", "correlation_id", "predecessor_methodology_contract_mismatch"),
+    ("policy", "policy_id", "secondary_metrics_policy_contract_mismatch"),
+    ("policy", "correlation_id", "secondary_metrics_policy_contract_mismatch"),
+    ("policy", "approval_reference", "secondary_metrics_policy_contract_mismatch"),
+    ("precondition", "precondition_id", "secondary_metrics_enforcement_precondition_contract_mismatch"),
+    ("precondition", "correlation_id", "secondary_metrics_enforcement_precondition_contract_mismatch"),
+    ("precondition", "policy_id", "secondary_metrics_enforcement_precondition_contract_mismatch"),
+    ("precondition", "market_symbol", "market_symbol_invalid"),
+]
+_MALFORMED_IDENTITY_VALUES = [
+    ("empty", ""),
+    ("leading_ws", " x-1"),
+    ("trailing_ws", "x-1 "),
+    ("control", "x\x01id"),
+    ("del_char", "x\x7fid"),
+    ("non_string", 123),
+]
+
+
+@pytest.mark.parametrize(
+    "value_name,bad_value",
+    _MALFORMED_IDENTITY_VALUES,
+    ids=[case[0] for case in _MALFORMED_IDENTITY_VALUES],
+)
+@pytest.mark.parametrize(
+    "anchor,field,required_reason",
+    _IDENTITY_FIELD_CASES,
+    ids=[f"{case[0]}-{case[1]}" for case in _IDENTITY_FIELD_CASES],
+)
+def test_malformed_anchor_identity_never_ready(
+    canonical_chain: _Chain, anchor: str, field: str, required_reason: str, value_name: str, bad_value
+) -> None:
+    # Every case is a coherent reseal (matching expected digests supplied), so rejection is proven to come
+    # from identity canonicality, never from a trivially stale digest.
+    if anchor == "policy" and field == "policy_id":
+        # Full coherence: bind the precondition to the same malformed policy id + new policy digest so the
+        # policy-binding cross-check passes and only canonicality rejects.
+        tampered_policy = _reseal_policy(canonical_chain.policy, policy_id=bad_value)
+        rebound = _reseal_precondition(
+            canonical_chain.precondition,
+            policy_id=bad_value,
+            policy_digest=tampered_policy.policy_digest,
+        )
+        result = _build_v2(
+            canonical_chain,
+            policy=tampered_policy,
+            precondition=rebound,
+            expected_secondary_metrics_policy_digest=tampered_policy.policy_digest,
+            expected_secondary_metrics_enforcement_precondition_digest=rebound.precondition_digest,
+        )
+    else:
+        result = _build_v2_with_anchor_override(canonical_chain, anchor, True, **{field: bad_value})
+    _assert_rejected_with_reason(result, required_reason, digests_coherent=True)
+
+
+def test_canonical_chain_control_remains_ready(canonical_chain: _Chain) -> None:
+    # Control for all three matrices: the untouched canonical chain still reaches METHODOLOGY_READY with
+    # the ready echo coherent and every canonicality gate passing.
+    assert canonical_chain.policy.secondary_metrics_policy_ready is True
+    result = _build_v2(canonical_chain)
+    assert result.status is PaperVsBacktestMethodologyV2Status.METHODOLOGY_READY
+    assert result.ready is True
+    assert result.reason_codes == ()
+    assert result.hit_rate_floor_enforced is True
+    assert result.fill_rate_floor_enforced is True
+    assert result.slippage_ceiling_enforced is True
+    assert result.secondary_metrics_enforced is False

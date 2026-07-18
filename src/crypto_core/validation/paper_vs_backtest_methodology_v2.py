@@ -469,6 +469,32 @@ def _flag_failure(artifact: object, true_flags: tuple[str, ...], false_flags: tu
     )
 
 
+def _is_canonical_anchor_metadata(metadata: object) -> bool:
+    """Exact canonical-representation check for anchor-carried metadata (validates, never repairs).
+
+    Canonical means: the outer container is exactly ``tuple``; every entry is exactly a two-element
+    ``tuple``; every key and value is an exact, non-empty, stripped ``str`` containing no ASCII control or
+    DEL character; the tuple is exactly sorted; keys are unique. Anything else — list containers or pairs,
+    wrong pair arity, non-string or nested values, duplicate keys, unsorted order, padding, control
+    characters — is noncanonical and fails closed at the consuming anchor's contract check. It is never
+    normalized, repaired, or silently skipped.
+    """
+
+    if type(metadata) is not tuple:
+        return False
+    keys: list[str] = []
+    for pair in metadata:
+        if type(pair) is not tuple or len(pair) != 2:
+            return False
+        key, value = pair
+        if not _is_plain_non_empty_string(key) or not _is_plain_non_empty_string(value):
+            return False
+        keys.append(key)
+    if len(set(keys)) != len(keys):
+        return False
+    return list(metadata) == sorted(metadata)
+
+
 def build_paper_vs_backtest_methodology_v2(
     predecessor_methodology: PaperVsBacktestMethodology,
     secondary_metrics_policy: SecondaryMetricsPolicy,
@@ -554,14 +580,21 @@ def build_paper_vs_backtest_methodology_v2(
     if not precondition_digest_ok:
         hard.append(_reason("secondary_metrics_enforcement_precondition_digest_mismatch"))
 
+    # Canonical-representation gates: anchor metadata and anchor identities are validated exactly before
+    # READY selection; digest validity is never accepted as evidence of canonical representation.
+    predecessor_metadata_canonical = _is_canonical_anchor_metadata(predecessor.metadata)
+    policy_metadata_canonical = _is_canonical_anchor_metadata(policy.metadata)
+    precondition_metadata_canonical = _is_canonical_anchor_metadata(precondition.metadata)
+
     # 7-9. Predecessor v1 readiness, frozen governance literals, and correlation continuity.
-    if not (
+    predecessor_ready_ok = (
         predecessor.status is PaperVsBacktestMethodologyStatus.READY
         and predecessor.ready is True
         and predecessor.reason_codes == ()
-    ):
+    )
+    if not predecessor_ready_ok:
         hard.append(_reason("predecessor_methodology_not_ready"))
-    if not (
+    predecessor_contract_ok = (
         predecessor.schema_version == _EXPECTED_PREDECESSOR_SCHEMA_VERSION
         and predecessor.methodology_version == _EXPECTED_PREDECESSOR_METHODOLOGY_VERSION
         and predecessor.comparison_basis == _COMPARISON_BASIS
@@ -581,17 +614,25 @@ def build_paper_vs_backtest_methodology_v2(
         and predecessor.decimal_scale == _DECIMAL_SCALE
         and predecessor.decimal_rounding == _DECIMAL_ROUNDING
         and predecessor.decimal_internal_precision == _DECIMAL_INTERNAL_PRECISION
-    ):
+        and _is_plain_non_empty_string(predecessor.methodology_id)
+        and _is_plain_non_empty_string(predecessor.correlation_id)
+        and predecessor_metadata_canonical
+    )
+    if not predecessor_contract_ok:
         hard.append(_reason("predecessor_methodology_contract_mismatch"))
 
-    # 10-11. Policy readiness, definitions, fill-model reference, decimal/Fraction and approval contract.
-    if not (
+    # 10-11. Policy readiness (including the ready echo), definitions, fill-model reference,
+    # decimal/Fraction and approval contract. A digest-valid policy with any incoherent
+    # status/ready/secondary_metrics_policy_ready/reason combination is REJECTED.
+    policy_ready_ok = (
         policy.status is SecondaryMetricsPolicyStatus.POLICY_READY
         and policy.ready is True
+        and policy.secondary_metrics_policy_ready is True
         and policy.reason_codes == ()
-    ):
+    )
+    if not policy_ready_ok:
         hard.append(_reason("secondary_metrics_policy_not_ready"))
-    if not (
+    policy_contract_ok = (
         policy.schema_version == _EXPECTED_POLICY_SCHEMA_VERSION
         and policy.policy_version == _EXPECTED_POLICY_VERSION
         and policy.hit_rate_definition == _HIT_RATE_DEFINITION
@@ -611,23 +652,33 @@ def build_paper_vs_backtest_methodology_v2(
         and _scale18_in_range(policy.approved_slippage_ceiling_bps, Decimal(0), None)
         and _is_exact_int(policy.approved_min_decided_episode_count)
         and policy.approved_min_decided_episode_count >= 1
-    ):
+        and _is_plain_non_empty_string(policy.policy_id)
+        and _is_plain_non_empty_string(policy.correlation_id)
+        and policy_metadata_canonical
+    )
+    if not policy_contract_ok:
         hard.append(_reason("secondary_metrics_policy_contract_mismatch"))
 
-    # 12. Precondition readiness and nested digest formats.
-    if not (
+    # 12. Precondition readiness, nested digest formats, and identity/metadata canonicality.
+    precondition_ready_ok = (
         precondition.status is PaperSecondaryMetricsEnforcementPreconditionStatus.PRECONDITION_READY
         and precondition.ready is True
         and precondition.reason_codes == ()
-    ):
+    )
+    if not precondition_ready_ok:
         hard.append(_reason("secondary_metrics_enforcement_precondition_not_ready"))
-    if not (
+    precondition_contract_ok = (
         precondition.schema_version == _EXPECTED_PRECONDITION_SCHEMA_VERSION
         and precondition.precondition_version == _EXPECTED_PRECONDITION_VERSION
         and _is_hex64_string(precondition.policy_digest)
         and _is_hex64_string(precondition.metrics_evidence_digest)
         and _is_hex64_string(precondition.reconciliation_digest)
-    ):
+        and _is_plain_non_empty_string(precondition.precondition_id)
+        and _is_plain_non_empty_string(precondition.correlation_id)
+        and _is_plain_non_empty_string(precondition.policy_id)
+        and precondition_metadata_canonical
+    )
+    if not precondition_contract_ok:
         hard.append(_reason("secondary_metrics_enforcement_precondition_contract_mismatch"))
 
     # Structural safety / claim flags across all three anchors.
@@ -639,25 +690,30 @@ def build_paper_vs_backtest_methodology_v2(
         hard.append(_reason("unsafe_flags"))
 
     # 13. Cross-binding: policy id/digest, correlations, market symbol, threshold echoes.
-    if precondition.policy_id != policy.policy_id or precondition.policy_digest != policy.policy_digest:
+    policy_binding_ok = (
+        precondition.policy_id == policy.policy_id and precondition.policy_digest == policy.policy_digest
+    )
+    if not policy_binding_ok:
         hard.append(_reason("policy_binding_mismatch"))
-    if (
-        predecessor.correlation_id != correlation_id
-        or policy.correlation_id != correlation_id
-        or precondition.correlation_id != correlation_id
-    ):
+    correlation_ok = (
+        predecessor.correlation_id == correlation_id
+        and policy.correlation_id == correlation_id
+        and precondition.correlation_id == correlation_id
+    )
+    if not correlation_ok:
         hard.append(_reason("correlation_id_mismatch"))
     market_symbol_valid = _is_plain_non_empty_string(precondition.market_symbol) and not _has_any_scope_violation(
         precondition.market_symbol
     )
     if not market_symbol_valid:
         hard.append(_reason("market_symbol_invalid"))
-    if (
-        precondition.approved_hit_rate_floor != policy.approved_hit_rate_floor
-        or precondition.approved_fill_rate_floor != policy.approved_fill_rate_floor
-        or precondition.approved_slippage_ceiling_bps != policy.approved_slippage_ceiling_bps
-        or precondition.approved_min_decided_episode_count != policy.approved_min_decided_episode_count
-    ):
+    threshold_snapshot_ok = (
+        precondition.approved_hit_rate_floor == policy.approved_hit_rate_floor
+        and precondition.approved_fill_rate_floor == policy.approved_fill_rate_floor
+        and precondition.approved_slippage_ceiling_bps == policy.approved_slippage_ceiling_bps
+        and precondition.approved_min_decided_episode_count == policy.approved_min_decided_episode_count
+    )
+    if not threshold_snapshot_ok:
         hard.append(_reason("threshold_snapshot_mismatch"))
 
     # 14-15. Independently recompute every threshold pass from precondition-carried computed values.
@@ -684,14 +740,15 @@ def build_paper_vs_backtest_methodology_v2(
     )
     all_thresholds_cleared = hit_pass and fill_pass and slippage_pass and min_decided_pass
 
-    if (
-        precondition.hit_rate_passed is not hit_pass
-        or precondition.fill_rate_by_quantity_passed is not fill_quantity_pass
-        or precondition.fill_rate_by_episode_passed is not fill_episode_pass
-        or precondition.fill_rate_passed is not fill_pass
-        or precondition.slippage_passed is not slippage_pass
-        or precondition.min_decided_episode_count_passed is not min_decided_pass
-    ):
+    threshold_pass_coherent = (
+        precondition.hit_rate_passed is hit_pass
+        and precondition.fill_rate_by_quantity_passed is fill_quantity_pass
+        and precondition.fill_rate_by_episode_passed is fill_episode_pass
+        and precondition.fill_rate_passed is fill_pass
+        and precondition.slippage_passed is slippage_pass
+        and precondition.min_decided_episode_count_passed is min_decided_pass
+    )
+    if not threshold_pass_coherent:
         hard.append(_reason("threshold_pass_incoherent"))
 
     # 16-18. Record-set / count coherence (decided count may be below records but never exceed them).
@@ -712,21 +769,19 @@ def build_paper_vs_backtest_methodology_v2(
         and precondition.reconciled_record_count == precondition.reconciled_episode_count
         and 0 <= precondition.computed_decided_episode_count <= precondition.metrics_record_count
     )
-    if not (record_digests_ok and counts_ok):
+    record_set_ok = record_digests_ok and counts_ok
+    if not record_set_ok:
         hard.append(_reason("record_set_incoherent"))
 
     # 19. Anchor-carried identity/scope text (REJECTED, never a caller-input RAISE). Metadata keys and
-    # values carried by all three digest-valid anchors are scanned too — a coherent resealed anchor must
-    # not smuggle BIST/scope/clock text through metadata. Container shape is guarded the same way as
-    # ``record_digests`` so a malformed metadata container can never crash the scan (such an anchor has
-    # already failed its digest reproof above).
-    anchor_metadata_texts = tuple(
-        text
-        for anchor_metadata in (predecessor.metadata, policy.metadata, precondition.metadata)
-        if type(anchor_metadata) is tuple
-        for pair in anchor_metadata
-        if type(pair) is tuple
-        for text in pair
+    # values carried by all three anchors are scanned too — a coherent resealed anchor must not smuggle
+    # BIST/scope/clock text through metadata. Texts are extracted only from metadata that already passed
+    # the exact canonical-representation validation above; a noncanonical representation is REJECTED by
+    # its anchor's contract check and is never silently skipped, so the scan itself can never crash.
+    anchor_metadata_texts = (
+        *(_metadata_texts(predecessor.metadata) if predecessor_metadata_canonical else ()),
+        *(_metadata_texts(policy.metadata) if policy_metadata_canonical else ()),
+        *(_metadata_texts(precondition.metadata) if precondition_metadata_canonical else ()),
     )
     anchor_texts = (
         predecessor.methodology_id,
@@ -739,21 +794,39 @@ def build_paper_vs_backtest_methodology_v2(
         precondition.policy_id,
         *anchor_metadata_texts,
     )
-    if _has_any_scope_violation(*anchor_texts):
+    anchor_scope_ok = not _has_any_scope_violation(*anchor_texts)
+    if not anchor_scope_ok:
         hard.append(_reason("anchor_scope_violation"))
 
     # 20-21. Sorted, unique reasons select the status.
     reason_codes = _sorted_unique(hard)
     ready = not reason_codes
 
-    # 24-25. Final READY invariant guard.
+    # 24-25. Final READY invariant guard — READY is impossible unless every named gate independently
+    # re-proves: digest triples, canonical metadata, canonical identities, ready echoes, anchor contracts,
+    # cross-bindings, threshold passes, record/count coherence, and scope safety.
     if ready and not (
         predecessor_digest_ok
         and policy_digest_ok
         and precondition_digest_ok
+        and predecessor_metadata_canonical
+        and policy_metadata_canonical
+        and precondition_metadata_canonical
+        and predecessor_ready_ok
+        and predecessor_contract_ok
+        and policy_ready_ok
+        and policy_contract_ok
+        and precondition_ready_ok
+        and precondition_contract_ok
+        and policy_binding_ok
+        and correlation_ok
+        and market_symbol_valid
+        and threshold_snapshot_ok
+        and threshold_pass_coherent
+        and record_set_ok
+        and anchor_scope_ok
         and all_thresholds_cleared
         and policy.thresholds_approved is True
-        and market_symbol_valid
     ):
         reason_codes = (_reason("ready_invariant_failed"),)
         ready = False
