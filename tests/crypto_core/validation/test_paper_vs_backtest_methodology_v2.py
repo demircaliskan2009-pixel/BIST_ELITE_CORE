@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 
@@ -570,6 +571,48 @@ def test_dataclass_field_order_exact() -> None:
     names = tuple(field.name for field in fields(PaperVsBacktestMethodologyV2))
     assert names == _EXPECTED_FIELD_ORDER
     assert len(names) == 98
+
+
+def test_reason_literal_inventory_exact() -> None:
+    source = Path(methodology_v2_module.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    actual = {
+        node.args[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_reason"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    }
+    assert actual == {
+        "anchor_scope_violation",
+        "bist_token_forbidden",
+        "clock_token_forbidden",
+        "correlation_id_mismatch",
+        "enforcement_precondition_malformed",
+        "market_symbol_invalid",
+        "metadata_malformed",
+        "policy_binding_mismatch",
+        "predecessor_methodology_contract_mismatch",
+        "predecessor_methodology_digest_mismatch",
+        "predecessor_methodology_malformed",
+        "predecessor_methodology_not_ready",
+        "ready_invariant_failed",
+        "record_set_incoherent",
+        "scope_violation",
+        "secondary_metrics_enforcement_precondition_contract_mismatch",
+        "secondary_metrics_enforcement_precondition_digest_mismatch",
+        "secondary_metrics_enforcement_precondition_not_ready",
+        "secondary_metrics_policy_contract_mismatch",
+        "secondary_metrics_policy_digest_mismatch",
+        "secondary_metrics_policy_malformed",
+        "secondary_metrics_policy_not_ready",
+        "threshold_pass_incoherent",
+        "threshold_snapshot_mismatch",
+        "unsafe_flags",
+    }
 
 
 def test_ready_contract_exact() -> None:
@@ -1595,3 +1638,382 @@ def test_canonical_chain_control_remains_ready(canonical_chain: _Chain) -> None:
     assert result.fill_rate_floor_enforced is True
     assert result.slippage_ceiling_enforced is True
     assert result.secondary_metrics_enforced is False
+
+
+# --------------------------------------------------------------------------------------------------
+# Post-merge defensive hotfix: canonical digests, identities, bindings, and rejected serialization
+# --------------------------------------------------------------------------------------------------
+
+
+class _NonExactString(str):
+    pass
+
+
+class _EqualityProbe:
+    def __init__(self, *, raises: bool) -> None:
+        self.raises = raises
+        self.calls = 0
+
+    def __eq__(self, other: object) -> bool:
+        self.calls += 1
+        if self.raises:
+            raise AssertionError("unsafe anchor equality invoked")
+        return True
+
+
+def _malformed_digest_value(case_name: str, canonical_digest: str) -> object:
+    return {
+        "none": None,
+        "integer": 7,
+        "boolean": True,
+        "wrong_length": "a" * 63,
+        "uppercase": "A" * 64,
+        "non_hex": "g" * 64,
+        "string_subclass": _NonExactString(canonical_digest),
+        "equality_raises": _EqualityProbe(raises=True),
+        "equality_true": _EqualityProbe(raises=False),
+        "serializable_list": [canonical_digest],
+        "serializable_mapping": {"digest": canonical_digest},
+    }[case_name]
+
+
+def _malformed_identity_value(case_name: str, canonical_value: str) -> object:
+    return {
+        "none": None,
+        "integer": 7,
+        "list": [canonical_value],
+        "mapping": {"value": canonical_value},
+        "string_subclass": _NonExactString(canonical_value),
+        "empty": "",
+        "leading_whitespace": f" {canonical_value}",
+        "trailing_whitespace": f"{canonical_value} ",
+        "control": "x\x01id",
+        "del": "x\x7fid",
+        "equality_raises": _EqualityProbe(raises=True),
+        "equality_true": _EqualityProbe(raises=False),
+    }[case_name]
+
+
+def _build_with_tainted_anchor_field(
+    chain: _Chain,
+    anchor: str,
+    field_name: str,
+    value: object,
+) -> PaperVsBacktestMethodologyV2:
+    if anchor == "predecessor":
+        tampered = replace(chain.predecessor, **{field_name: value})
+        expected_digest = chain.predecessor.methodology_digest
+        if field_name != "methodology_digest":
+            try:
+                recomputed = paper_vs_backtest_methodology_digest(tampered)
+            except (TypeError, ValueError):
+                pass
+            else:
+                tampered = replace(tampered, methodology_digest=recomputed)
+                expected_digest = recomputed
+        return _build_v2(
+            chain,
+            predecessor=tampered,
+            expected_predecessor_methodology_digest=expected_digest,
+        )
+
+    if anchor == "policy":
+        tampered = replace(chain.policy, **{field_name: value})
+        expected_digest = chain.policy.policy_digest
+        if field_name != "policy_digest":
+            try:
+                recomputed = secondary_metrics_policy_digest(tampered)
+            except (TypeError, ValueError):
+                pass
+            else:
+                tampered = replace(tampered, policy_digest=recomputed)
+                expected_digest = recomputed
+        return _build_v2(
+            chain,
+            policy=tampered,
+            expected_secondary_metrics_policy_digest=expected_digest,
+        )
+
+    tampered = replace(chain.precondition, **{field_name: value})
+    expected_digest = chain.precondition.precondition_digest
+    if field_name != "precondition_digest":
+        try:
+            recomputed = paper_secondary_metrics_enforcement_precondition_digest(tampered)
+        except (TypeError, ValueError):
+            pass
+        else:
+            tampered = replace(tampered, precondition_digest=recomputed)
+            expected_digest = recomputed
+    return _build_v2(
+        chain,
+        precondition=tampered,
+        expected_secondary_metrics_enforcement_precondition_digest=expected_digest,
+    )
+
+
+def _assert_serializable_rejection(
+    result: PaperVsBacktestMethodologyV2,
+    required_reason: str,
+) -> dict[str, object]:
+    assert result.status is PaperVsBacktestMethodologyV2Status.METHODOLOGY_REJECTED
+    assert result.ready is False
+    assert _rc(required_reason) in result.reason_codes
+    assert result.predecessor_methodology_consumed is False
+    assert result.secondary_metrics_policy_consumed is False
+    assert result.secondary_metrics_enforcement_precondition_consumed is False
+    assert result.hit_rate_floor_enforced is False
+    assert result.fill_rate_floor_enforced is False
+    assert result.slippage_ceiling_enforced is False
+    payload = paper_vs_backtest_methodology_v2_to_dict(result)
+    json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    assert result.methodology_digest == paper_vs_backtest_methodology_v2_digest(result)
+    for flag in _ALWAYS_FALSE_FLAGS:
+        assert payload[flag] is False, flag
+    return payload
+
+
+_CARRIED_DIGEST_CASES = (
+    "none",
+    "integer",
+    "boolean",
+    "wrong_length",
+    "uppercase",
+    "non_hex",
+    "string_subclass",
+    "equality_raises",
+    "equality_true",
+    "serializable_list",
+    "serializable_mapping",
+)
+_CARRIED_DIGEST_ANCHORS = (
+    (
+        "predecessor",
+        "methodology_digest",
+        "predecessor_methodology_digest_mismatch",
+        "verified_predecessor_methodology_digest",
+    ),
+    (
+        "policy",
+        "policy_digest",
+        "secondary_metrics_policy_digest_mismatch",
+        "verified_secondary_metrics_policy_digest",
+    ),
+    (
+        "precondition",
+        "precondition_digest",
+        "secondary_metrics_enforcement_precondition_digest_mismatch",
+        "verified_secondary_metrics_enforcement_precondition_digest",
+    ),
+)
+
+
+@pytest.mark.parametrize("case_name", _CARRIED_DIGEST_CASES)
+@pytest.mark.parametrize(
+    "anchor,field_name,required_reason,verified_field",
+    _CARRIED_DIGEST_ANCHORS,
+    ids=[case[0] for case in _CARRIED_DIGEST_ANCHORS],
+)
+def test_noncanonical_carried_digest_fails_before_equality_and_stays_serializable(
+    canonical_chain: _Chain,
+    anchor: str,
+    field_name: str,
+    required_reason: str,
+    verified_field: str,
+    case_name: str,
+) -> None:
+    canonical_digest = getattr(getattr(canonical_chain, anchor), field_name)
+    bad_value = _malformed_digest_value(case_name, canonical_digest)
+
+    result = _build_with_tainted_anchor_field(canonical_chain, anchor, field_name, bad_value)
+
+    _assert_serializable_rejection(result, required_reason)
+    assert getattr(result, verified_field) == ""
+    if isinstance(bad_value, _EqualityProbe):
+        assert bad_value.calls == 0
+
+
+_IDENTITY_VALUE_CASES = (
+    "none",
+    "integer",
+    "list",
+    "mapping",
+    "string_subclass",
+    "empty",
+    "leading_whitespace",
+    "trailing_whitespace",
+    "control",
+    "del",
+    "equality_raises",
+    "equality_true",
+)
+_ANCHOR_IDENTITY_REFERENCE_FIELDS = (
+    (
+        "predecessor",
+        "methodology_id",
+        "predecessor_methodology_contract_mismatch",
+        "predecessor_methodology_id",
+        "",
+    ),
+    ("predecessor", "correlation_id", "predecessor_methodology_contract_mismatch", None, None),
+    ("policy", "policy_id", "secondary_metrics_policy_contract_mismatch", "secondary_metrics_policy_id", ""),
+    ("policy", "correlation_id", "secondary_metrics_policy_contract_mismatch", None, None),
+    ("policy", "approval_reference", "secondary_metrics_policy_contract_mismatch", "approval_reference", None),
+    (
+        "policy",
+        "policy_digest",
+        "secondary_metrics_policy_digest_mismatch",
+        "verified_secondary_metrics_policy_digest",
+        "",
+    ),
+    (
+        "precondition",
+        "precondition_id",
+        "secondary_metrics_enforcement_precondition_contract_mismatch",
+        "secondary_metrics_enforcement_precondition_id",
+        "",
+    ),
+    (
+        "precondition",
+        "correlation_id",
+        "secondary_metrics_enforcement_precondition_contract_mismatch",
+        None,
+        None,
+    ),
+    (
+        "precondition",
+        "policy_id",
+        "secondary_metrics_enforcement_precondition_contract_mismatch",
+        None,
+        None,
+    ),
+    (
+        "precondition",
+        "policy_digest",
+        "secondary_metrics_enforcement_precondition_contract_mismatch",
+        None,
+        None,
+    ),
+    ("precondition", "market_symbol", "market_symbol_invalid", "market_symbol", ""),
+)
+
+
+@pytest.mark.parametrize("case_name", _IDENTITY_VALUE_CASES)
+@pytest.mark.parametrize(
+    "anchor,field_name,required_reason,projected_field,rejected_value",
+    _ANCHOR_IDENTITY_REFERENCE_FIELDS,
+    ids=[f"{case[0]}-{case[1]}" for case in _ANCHOR_IDENTITY_REFERENCE_FIELDS],
+)
+def test_malformed_anchor_identity_or_reference_never_compares_or_escapes_rejected_output(
+    canonical_chain: _Chain,
+    anchor: str,
+    field_name: str,
+    required_reason: str,
+    projected_field: str | None,
+    rejected_value: object,
+    case_name: str,
+) -> None:
+    canonical_value = getattr(getattr(canonical_chain, anchor), field_name)
+    assert type(canonical_value) is str
+    bad_value = _malformed_identity_value(case_name, canonical_value)
+
+    result = _build_with_tainted_anchor_field(canonical_chain, anchor, field_name, bad_value)
+    payload = _assert_serializable_rejection(result, required_reason)
+
+    if projected_field is not None:
+        assert payload[projected_field] == rejected_value
+    if isinstance(bad_value, _EqualityProbe):
+        assert bad_value.calls == 0
+
+
+_THRESHOLD_ECHO_FIELDS = (
+    "approved_hit_rate_floor",
+    "approved_fill_rate_floor",
+    "approved_slippage_ceiling_bps",
+    "approved_min_decided_episode_count",
+)
+
+
+@pytest.mark.parametrize("raises", [True, False], ids=["equality_raises", "equality_true"])
+@pytest.mark.parametrize("field_name", _THRESHOLD_ECHO_FIELDS)
+@pytest.mark.parametrize("anchor", ["policy", "precondition"])
+def test_threshold_cross_binding_never_invokes_noncanonical_equality(
+    canonical_chain: _Chain,
+    anchor: str,
+    field_name: str,
+    raises: bool,
+) -> None:
+    probe = _EqualityProbe(raises=raises)
+    result = _build_with_tainted_anchor_field(canonical_chain, anchor, field_name, probe)
+    required_reason = (
+        "secondary_metrics_policy_contract_mismatch" if anchor == "policy" else "threshold_snapshot_mismatch"
+    )
+
+    payload = _assert_serializable_rejection(result, required_reason)
+    if anchor == "policy":
+        assert payload[field_name] is None
+    assert probe.calls == 0
+
+
+_POLICY_REJECTED_PROJECTION_FIELDS = (
+    ("expected_fill_model_parameters_digest", None),
+    ("approved_hit_rate_floor", None),
+    ("approved_fill_rate_floor", None),
+    ("approved_slippage_ceiling_bps", None),
+    ("approved_min_decided_episode_count", None),
+    ("approval_reference", None),
+    ("approval_digest", None),
+    ("thresholds_approved", False),
+)
+
+
+@pytest.mark.parametrize("raises", [True, False], ids=["equality_raises", "equality_true"])
+@pytest.mark.parametrize(
+    "field_name,rejected_value",
+    _POLICY_REJECTED_PROJECTION_FIELDS,
+    ids=[case[0] for case in _POLICY_REJECTED_PROJECTION_FIELDS],
+)
+def test_malformed_policy_echo_projects_to_deterministic_serializable_rejected_value(
+    canonical_chain: _Chain,
+    field_name: str,
+    rejected_value: object,
+    raises: bool,
+) -> None:
+    probe = _EqualityProbe(raises=raises)
+    result = _build_with_tainted_anchor_field(canonical_chain, "policy", field_name, probe)
+
+    payload = _assert_serializable_rejection(result, "secondary_metrics_policy_contract_mismatch")
+    assert payload[field_name] == rejected_value
+    assert probe.calls == 0
+
+
+_OTHER_ANCHOR_COMPARISON_FIELDS = (
+    ("predecessor", "schema_version", "predecessor_methodology_contract_mismatch"),
+    ("predecessor", "min_duration_days", "predecessor_methodology_contract_mismatch"),
+    ("policy", "expected_fill_model_reference", "secondary_metrics_policy_contract_mismatch"),
+    ("policy", "decimal_scale", "secondary_metrics_policy_contract_mismatch"),
+    (
+        "precondition",
+        "schema_version",
+        "secondary_metrics_enforcement_precondition_contract_mismatch",
+    ),
+)
+
+
+@pytest.mark.parametrize("raises", [True, False], ids=["equality_raises", "equality_true"])
+@pytest.mark.parametrize(
+    "anchor,field_name,required_reason",
+    _OTHER_ANCHOR_COMPARISON_FIELDS,
+    ids=[f"{case[0]}-{case[1]}" for case in _OTHER_ANCHOR_COMPARISON_FIELDS],
+)
+def test_other_anchor_contract_comparisons_require_exact_types(
+    canonical_chain: _Chain,
+    anchor: str,
+    field_name: str,
+    required_reason: str,
+    raises: bool,
+) -> None:
+    probe = _EqualityProbe(raises=raises)
+    result = _build_with_tainted_anchor_field(canonical_chain, anchor, field_name, probe)
+
+    _assert_serializable_rejection(result, required_reason)
+    assert probe.calls == 0
