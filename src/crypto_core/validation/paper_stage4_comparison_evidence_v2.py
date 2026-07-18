@@ -72,6 +72,16 @@ from crypto_core.validation.paper_secondary_metrics_evidence import (
     PaperSecondaryMetricsEvidenceStatus,
     paper_secondary_metrics_evidence_digest,
 )
+from crypto_core.validation.paper_secondary_metrics_substrate_reconciliation import (
+    PaperSecondaryMetricsSubstrateReconciliation,
+    PaperSecondaryMetricsSubstrateReconciliationStatus,
+    paper_secondary_metrics_substrate_reconciliation_digest,
+)
+from crypto_core.validation.paper_secondary_metrics_window_evidence import (
+    PaperSecondaryMetricsWindowEvidence,
+    PaperSecondaryMetricsWindowEvidenceStatus,
+    paper_secondary_metrics_window_evidence_digest,
+)
 from crypto_core.validation.paper_sharpe_evidence import (
     PaperSharpeEvidence,
     PaperSharpeEvidenceStatus,
@@ -107,6 +117,8 @@ _EXPECTED_BASELINE_EVIDENCE_SCHEMA_VERSION = "paper-stage4-backtest-baseline-evi
 _EXPECTED_GATE_SCHEMA_VERSION = "paper-30day-evidence-gate-decision.v1"
 _EXPECTED_PRECONDITION_SCHEMA_VERSION = "paper-secondary-metrics-enforcement-precondition.v1"
 _EXPECTED_METRICS_SCHEMA_VERSION = "paper-secondary-metrics-evidence.v1"
+_EXPECTED_RECONCILIATION_SCHEMA_VERSION = "paper-secondary-metrics-substrate-reconciliation.v1"
+_EXPECTED_WINDOW_EVIDENCE_SCHEMA_VERSION = "paper-secondary-metrics-window-evidence.v1"
 _EXPECTED_COMPARISON_BASIS = "paper_vs_backtest_sharpe_retention.v1"
 _EXPECTED_ENFORCED_GUARDRAIL_POLICY = "sharpe_retention_and_min_duration_only.v1"
 # Consumer-boundary re-pin of the approved comparison governance (mirrors the merged methodology-v2 builder
@@ -243,6 +255,8 @@ class PaperStage4ComparisonEvidenceV2:
     metrics_evidence_id: str
     enforcement_precondition_id: str
     methodology_v2_id: str
+    reconciliation_id: str
+    window_evidence_id: str
     expected_sharpe_evidence_digest: str
     verified_sharpe_evidence_digest: str
     expected_methodology_v2_digest: str
@@ -257,7 +271,12 @@ class PaperStage4ComparisonEvidenceV2:
     verified_enforcement_precondition_digest: str
     expected_metrics_evidence_digest: str
     verified_metrics_evidence_digest: str
+    expected_reconciliation_digest: str
+    verified_reconciliation_digest: str
+    expected_window_evidence_digest: str
+    verified_window_evidence_digest: str
     verified_secondary_metrics_policy_digest: str
+    verified_session_sequence_digest: str
     expected_baseline_digest: str
     baseline_digest: str
     paper_summary_digest: str
@@ -265,6 +284,17 @@ class PaperStage4ComparisonEvidenceV2:
     time_window_digest: str
     metrics_summary_digest: str
     series_methodology_digest: str
+    gate_window_start_ns: int
+    gate_window_end_ns: int
+    gate_window_start_utc_day_index: int
+    gate_window_end_utc_day_index: int
+    gate_utc_day_indices: tuple[int, ...]
+    secondary_metrics_observed_at_ns: tuple[int, ...]
+    secondary_metrics_observed_utc_day_indices: tuple[int, ...]
+    reconciled_record_digests: tuple[str, ...]
+    reconciled_episode_run_digests: tuple[str, ...]
+    window_fill_result_digests: tuple[str, ...]
+    window_market_snapshot_digests: tuple[str, ...]
     paper_sharpe_annualized: str
     backtest_sharpe_repr: str
     backtest_sharpe_decimal: str
@@ -332,6 +362,8 @@ class PaperStage4ComparisonEvidenceV2:
     methodology_v2_consumed: bool = False
     enforcement_precondition_consumed: bool = False
     metrics_evidence_consumed: bool = False
+    reconciliation_consumed: bool = False
+    window_evidence_consumed: bool = False
     prdv4_stage4_complete: bool = False
     stage4_completion_decided: bool = False
     thirty_day_gate_decided: bool = False
@@ -446,6 +478,14 @@ def _safe_int_value(value: object) -> int:
 
 def _safe_optional_int(value: object) -> int | None:
     return value if _is_exact_int(value) else None
+
+
+def _safe_int_tuple(value: object) -> tuple[int, ...]:
+    return value if type(value) is tuple and all(_is_exact_int(item) for item in value) else ()
+
+
+def _safe_digest_tuple(value: object) -> tuple[str, ...]:
+    return value if type(value) is tuple and all(_is_hex64_string(item) for item in value) else ()
 
 
 def _require_plain_non_empty_string(value: object, field_name: str) -> str:
@@ -801,6 +841,40 @@ _METRICS_FALSE_FLAGS = (
     "scheduler_enabled",
     "auto_loop_enabled",
     "production_execution",
+)
+_RECONCILIATION_TRUE_FLAGS = ("paper_only", "validation_only")
+_RECONCILIATION_FALSE_FLAGS = _PRECONDITION_FALSE_FLAGS
+_WINDOW_TRUE_FLAGS = (
+    "paper_only",
+    "validation_only",
+    "reconciliation_consumed",
+    "gate_decision_consumed",
+    "exact_window_bound",
+    "record_set_reconciled",
+    "timestamps_digest_bound",
+)
+_WINDOW_FALSE_FLAGS = (
+    "stage4_comparator_invoked",
+    "secondary_metrics_enforced",
+    "stage4_completion_decided",
+    "prdv4_stage4_complete",
+    "machine_time_origin_proven",
+    "timestamp_origin_proven",
+    "live_ready",
+    "shadow_ready",
+    "deribit_ready",
+    "operational_readiness",
+    "production_execution",
+    "real_orders_enabled",
+    "real_money_enabled",
+    "real_capital_reserved",
+    "capital_mutation_enabled",
+    "scheduler_enabled",
+    "auto_loop_enabled",
+    "connector_invoked",
+    "private_api_ready",
+    "live_api_called",
+    "real_wall_clock_used",
 )
 
 
@@ -1235,6 +1309,153 @@ def _metrics_evidence_failures(metrics_evidence: PaperSecondaryMetricsEvidence) 
     return hard
 
 
+def _reconciliation_failures(
+    reconciliation: PaperSecondaryMetricsSubstrateReconciliation,
+) -> list[str]:
+    """Direct SM-6 trust boundary for denominator-completeness authority."""
+
+    hard: list[str] = []
+    records = reconciliation.reconciled_record_digests
+    episodes = reconciliation.reconciled_episode_run_digests
+    if (
+        reconciliation.schema_version != _EXPECTED_RECONCILIATION_SCHEMA_VERSION
+        or reconciliation.reconciliation_version != _EXPECTED_RECONCILIATION_SCHEMA_VERSION
+    ):
+        hard.append(_reason("reconciliation_schema_invalid"))
+    if (
+        reconciliation.status is not PaperSecondaryMetricsSubstrateReconciliationStatus.RECONCILED
+        or reconciliation.ready is not True
+        or reconciliation.reason_codes != ()
+    ):
+        hard.append(_reason("reconciliation_not_ready"))
+    if (
+        not _is_hex64_string(reconciliation.verified_policy_digest)
+        or not _is_hex64_string(reconciliation.verified_metrics_evidence_digest)
+        or not _is_hex64_string(reconciliation.verified_session_sequence_digest)
+        or type(records) is not tuple
+        or type(episodes) is not tuple
+        or not _is_positive_int(reconciliation.episode_count)
+        or len(records) != reconciliation.episode_count
+        or len(episodes) != reconciliation.episode_count
+        or not all(_is_hex64_string(item) for item in (*records, *episodes))
+        or records != tuple(sorted(records))
+        or len(set(records)) != len(records)
+        or len(set(episodes)) != len(episodes)
+    ):
+        hard.append(_reason("reconciliation_contract_invalid"))
+    hard.extend(
+        _anchor_canonicality_failures(
+            identity_values=(
+                reconciliation.reconciliation_id,
+                reconciliation.correlation_id,
+                reconciliation.policy_id,
+                reconciliation.market_symbol,
+            ),
+            metadata=reconciliation.metadata,
+            reason_code="reconciliation_noncanonical",
+        )
+    )
+    hard.extend(
+        _flag_failures(
+            reconciliation,
+            _RECONCILIATION_TRUE_FLAGS,
+            _RECONCILIATION_FALSE_FLAGS,
+            "reconciliation_unsafe_flags",
+        )
+    )
+    return hard
+
+
+def _window_evidence_failures(window: PaperSecondaryMetricsWindowEvidence) -> list[str]:
+    """Trust boundary for the raw-to-gate UTC-window bridge."""
+
+    hard: list[str] = []
+    start = window.gate_window_start_ns
+    end = window.gate_window_end_ns
+    days = window.gate_utc_day_indices
+    observed = window.observed_at_ns
+    observed_days = window.observed_utc_day_indices
+    records = window.record_digests
+    episodes = window.episode_run_digests
+    fills = window.fill_result_digests
+    snapshots = window.market_snapshot_digests
+    if (
+        window.schema_version != _EXPECTED_WINDOW_EVIDENCE_SCHEMA_VERSION
+        or window.evidence_version != _EXPECTED_WINDOW_EVIDENCE_SCHEMA_VERSION
+    ):
+        hard.append(_reason("window_evidence_schema_invalid"))
+    if (
+        window.status is not PaperSecondaryMetricsWindowEvidenceStatus.WINDOW_READY
+        or window.ready is not True
+        or window.reason_codes != ()
+    ):
+        hard.append(_reason("window_evidence_not_ready"))
+    valid_window = (
+        _is_exact_int(start)
+        and _is_exact_int(end)
+        and end > start >= 0
+        and start % _DAY_NS == 0
+        and end % _DAY_NS == 0
+        and end - start == _APPROVED_MIN_DURATION_DAYS * _DAY_NS
+        and _is_exact_int(window.gate_window_start_utc_day_index)
+        and window.gate_window_start_utc_day_index == start // _DAY_NS
+        and _is_exact_int(window.gate_window_end_utc_day_index)
+        and window.gate_window_end_utc_day_index == (end // _DAY_NS) - 1
+        and type(days) is tuple
+        and days == tuple(range(window.gate_window_start_utc_day_index, window.gate_window_end_utc_day_index + 1))
+        and len(days) == _APPROVED_MIN_DURATION_DAYS
+    )
+    valid_inventory = (
+        valid_window
+        and type(observed) is tuple
+        and type(observed_days) is tuple
+        and type(records) is tuple
+        and type(episodes) is tuple
+        and type(fills) is tuple
+        and type(snapshots) is tuple
+        and _is_positive_int(window.record_count)
+        and len(observed)
+        == len(observed_days)
+        == len(records)
+        == len(episodes)
+        == len(fills)
+        == len(snapshots)
+        == window.record_count
+        and all(_is_exact_int(value) and start <= value < end for value in observed)
+        and observed_days == tuple(value // _DAY_NS for value in observed)
+        and all(day in days for day in observed_days)
+        and all(_is_hex64_string(item) for item in (*records, *episodes, *fills, *snapshots))
+        and records == tuple(sorted(records))
+        and len(set(records)) == len(records)
+        and len(set(episodes)) == len(episodes)
+    )
+    if (
+        not valid_window
+        or not valid_inventory
+        or not _is_hex64_string(window.verified_policy_digest)
+        or not _is_hex64_string(window.verified_metrics_evidence_digest)
+        or not _is_hex64_string(window.verified_session_sequence_digest)
+    ):
+        hard.append(_reason("window_evidence_contract_invalid"))
+    hard.extend(
+        _anchor_canonicality_failures(
+            identity_values=(
+                window.window_evidence_id,
+                window.correlation_id,
+                window.policy_id,
+                window.market_symbol,
+                window.window_id,
+                window.reconciliation_id,
+                window.gate_id,
+            ),
+            metadata=window.metadata,
+            reason_code="window_evidence_noncanonical",
+        )
+    )
+    hard.extend(_flag_failures(window, _WINDOW_TRUE_FLAGS, _WINDOW_FALSE_FLAGS, "window_evidence_unsafe_flags"))
+    return hard
+
+
 def _plain_strings_equal(*values: object) -> bool:
     return all(_is_plain_non_empty_string(value) for value in values) and len({*values}) == 1
 
@@ -1254,27 +1475,85 @@ def _sm_binding_failures(
     methodology_v2: PaperVsBacktestMethodologyV2,
     precondition: PaperSecondaryMetricsEnforcementPrecondition,
     metrics_evidence: PaperSecondaryMetricsEvidence,
+    reconciliation: PaperSecondaryMetricsSubstrateReconciliation,
+    window_evidence: PaperSecondaryMetricsWindowEvidence,
+    gate_decision: PaperThirtyDayEvidenceGateDecision,
 ) -> list[str]:
-    """Cross-bind the SM trust roots into ONE chain (digest, policy, computed values, record set)."""
+    """Cross-bind every direct SM trust root into one denominator- and window-complete chain."""
 
     hard: list[str] = []
     # MANDATORY: the precondition must be bound to exactly the direct SM-4 artifact supplied here.
     if not _hex64_strings_equal(precondition.metrics_evidence_digest, metrics_evidence.evidence_digest):
         hard.append(_reason("precondition_metrics_evidence_binding_mismatch"))
+    if not _hex64_strings_equal(precondition.reconciliation_digest, reconciliation.reconciliation_digest):
+        hard.append(_reason("precondition_reconciliation_binding_mismatch"))
+    if not _hex64_strings_equal(reconciliation.verified_metrics_evidence_digest, metrics_evidence.evidence_digest):
+        hard.append(_reason("reconciliation_metrics_evidence_binding_mismatch"))
     # The methodology-v2 snapshot must have bound the SAME precondition (the SM-5-recorded handoff).
     if not _hex64_strings_equal(
         methodology_v2.verified_secondary_metrics_enforcement_precondition_digest, precondition.precondition_digest
     ):
         hard.append(_reason("methodology_v2_precondition_binding_mismatch"))
-    # Policy identity quadruple: id and digest must agree across methodology-v2, precondition, and SM-4.
+    # Policy identity must agree across methodology-v2, precondition, SM-4, reconciliation, and window.
     if not _plain_strings_equal(
-        methodology_v2.secondary_metrics_policy_id, precondition.policy_id, metrics_evidence.policy_id
+        methodology_v2.secondary_metrics_policy_id,
+        precondition.policy_id,
+        metrics_evidence.policy_id,
+        reconciliation.policy_id,
+        window_evidence.policy_id,
     ) or not _hex64_strings_equal(
         methodology_v2.verified_secondary_metrics_policy_digest,
         precondition.policy_digest,
         metrics_evidence.verified_policy_digest,
+        reconciliation.verified_policy_digest,
+        window_evidence.verified_policy_digest,
     ):
         hard.append(_reason("policy_binding_mismatch"))
+    if not _hex64_strings_equal(
+        window_evidence.expected_reconciliation_digest,
+        window_evidence.verified_reconciliation_digest,
+        reconciliation.reconciliation_digest,
+    ):
+        hard.append(_reason("window_reconciliation_binding_mismatch"))
+    if not _hex64_strings_equal(
+        window_evidence.expected_gate_decision_digest,
+        window_evidence.verified_gate_decision_digest,
+        gate_decision.decision_digest,
+    ):
+        hard.append(_reason("window_gate_binding_mismatch"))
+    if not _hex64_strings_equal(
+        window_evidence.verified_metrics_evidence_digest,
+        reconciliation.verified_metrics_evidence_digest,
+        metrics_evidence.evidence_digest,
+    ) or not _hex64_strings_equal(
+        window_evidence.verified_session_sequence_digest,
+        reconciliation.verified_session_sequence_digest,
+    ):
+        hard.append(_reason("window_lineage_binding_mismatch"))
+    expected_gate_days = (
+        tuple(
+            range(
+                gate_decision.gate_used_first_bucket_start_ns // _DAY_NS,
+                gate_decision.gate_used_last_bucket_end_ns // _DAY_NS,
+            )
+        )
+        if _is_exact_int(gate_decision.gate_used_first_bucket_start_ns)
+        and _is_exact_int(gate_decision.gate_used_last_bucket_end_ns)
+        and gate_decision.gate_used_last_bucket_end_ns > gate_decision.gate_used_first_bucket_start_ns
+        else ()
+    )
+    if not (
+        _plain_strings_equal(
+            window_evidence.reconciliation_id,
+            reconciliation.reconciliation_id,
+        )
+        and _plain_strings_equal(window_evidence.gate_id, gate_decision.gate_id)
+        and _plain_strings_equal(window_evidence.window_id, gate_decision.window_id)
+        and window_evidence.gate_window_start_ns == gate_decision.gate_used_first_bucket_start_ns
+        and window_evidence.gate_window_end_ns == gate_decision.gate_used_last_bucket_end_ns
+        and window_evidence.gate_utc_day_indices == expected_gate_days
+    ):
+        hard.append(_reason("window_identity_binding_mismatch"))
     # The precondition-carried computed values must equal the direct SM-4 canonical values exactly.
     if (
         not _optional_scale18_equal(precondition.computed_hit_rate, metrics_evidence.hit_rate)
@@ -1312,16 +1591,28 @@ def _sm_binding_failures(
         or methodology_v2.approved_min_decided_episode_count != metrics_evidence.approved_min_decided_episode_count
     ):
         hard.append(_reason("threshold_snapshot_mismatch"))
-    # Record-set / denominator coherence: the SM-4 record digests are the single lineage authority.
+    # Record-set / denominator coherence: direct reconciliation is the completeness authority.
     metrics_digests = metrics_evidence.record_digests if type(metrics_evidence.record_digests) is tuple else None
     precondition_digests = precondition.record_digests if type(precondition.record_digests) is tuple else None
+    reconciliation_digests = (
+        reconciliation.reconciled_record_digests if type(reconciliation.reconciled_record_digests) is tuple else None
+    )
+    reconciliation_episodes = (
+        reconciliation.reconciled_episode_run_digests
+        if type(reconciliation.reconciled_episode_run_digests) is tuple
+        else None
+    )
     record_set_ok = (
         metrics_digests is not None
         and precondition_digests is not None
+        and reconciliation_digests is not None
+        and reconciliation_episodes is not None
         and all(_is_hex64_string(digest) for digest in metrics_digests)
         and list(metrics_digests) == sorted(metrics_digests)
         and len(set(metrics_digests)) == len(metrics_digests)
-        and metrics_digests == precondition_digests
+        and metrics_digests == precondition_digests == reconciliation_digests == window_evidence.record_digests
+        and reconciliation_episodes == window_evidence.episode_run_digests
+        and len(set(reconciliation_episodes)) == len(reconciliation_episodes)
         and _is_exact_int(metrics_evidence.record_count)
         and len(metrics_digests) == metrics_evidence.record_count
         and _is_exact_int(precondition.metrics_record_count)
@@ -1330,6 +1621,10 @@ def _sm_binding_failures(
         and precondition.reconciled_record_count == metrics_evidence.record_count
         and _is_exact_int(precondition.reconciled_episode_count)
         and precondition.reconciled_episode_count == metrics_evidence.record_count
+        and _is_exact_int(reconciliation.episode_count)
+        and reconciliation.episode_count == metrics_evidence.record_count
+        and _is_exact_int(window_evidence.record_count)
+        and window_evidence.record_count == metrics_evidence.record_count
         and _is_exact_int(metrics_evidence.decided_episode_count)
         and 0 <= metrics_evidence.decided_episode_count <= metrics_evidence.record_count
         and metrics_evidence.record_count >= 1
@@ -1481,6 +1776,8 @@ def _cross_link_failures(
     gate_decision: PaperThirtyDayEvidenceGateDecision,
     precondition: PaperSecondaryMetricsEnforcementPrecondition,
     metrics_evidence: PaperSecondaryMetricsEvidence,
+    reconciliation: PaperSecondaryMetricsSubstrateReconciliation,
+    window_evidence: PaperSecondaryMetricsWindowEvidence,
 ) -> list[str]:
     hard: list[str] = []
     if any(
@@ -1493,12 +1790,22 @@ def _cross_link_failures(
             gate_decision,
             precondition,
             metrics_evidence,
+            reconciliation,
+            window_evidence,
         )
     ):
         hard.append(_reason("correlation_id_mismatch"))
     if not _is_plain_non_empty_string(sharpe_evidence.market_symbol) or any(
         artifact.market_symbol != sharpe_evidence.market_symbol
-        for artifact in (gate_decision, edge_identity, baseline_evidence, methodology_v2, precondition)
+        for artifact in (
+            gate_decision,
+            edge_identity,
+            baseline_evidence,
+            methodology_v2,
+            precondition,
+            reconciliation,
+            window_evidence,
+        )
     ):
         hard.append(_reason("market_symbol_mismatch"))
     if not _is_plain_non_empty_string(sharpe_evidence.paper_id) or any(
@@ -1532,6 +1839,8 @@ def _anchor_scope_failures(
     gate_decision: PaperThirtyDayEvidenceGateDecision,
     precondition: PaperSecondaryMetricsEnforcementPrecondition,
     metrics_evidence: PaperSecondaryMetricsEvidence,
+    reconciliation: PaperSecondaryMetricsSubstrateReconciliation,
+    window_evidence: PaperSecondaryMetricsWindowEvidence,
 ) -> list[str]:
     """Anchor-carried identity/metadata scope scan (REJECTED, never a caller-input RAISE).
 
@@ -1559,6 +1868,22 @@ def _anchor_scope_failures(
         (gate_decision, ("gate_id", "series_id", "window_id", "correlation_id")),
         (precondition, ("precondition_id", "correlation_id", "policy_id")),
         (metrics_evidence, ("evidence_id", "correlation_id", "policy_id")),
+        (
+            reconciliation,
+            ("reconciliation_id", "correlation_id", "policy_id", "market_symbol"),
+        ),
+        (
+            window_evidence,
+            (
+                "window_evidence_id",
+                "correlation_id",
+                "policy_id",
+                "market_symbol",
+                "window_id",
+                "reconciliation_id",
+                "gate_id",
+            ),
+        ),
     ):
         for name in identity_names:
             value = getattr(artifact, name)
@@ -1653,6 +1978,10 @@ def build_paper_stage4_comparison_evidence_v2(
     expected_enforcement_precondition_digest: str,
     metrics_evidence: PaperSecondaryMetricsEvidence,
     expected_metrics_evidence_digest: str,
+    reconciliation: PaperSecondaryMetricsSubstrateReconciliation,
+    expected_reconciliation_digest: str,
+    window_evidence: PaperSecondaryMetricsWindowEvidence,
+    expected_window_evidence_digest: str,
     comparison_evidence_id: str,
     correlation_id: str,
     metadata: Mapping[str, str] | None = None,
@@ -1685,6 +2014,10 @@ def build_paper_stage4_comparison_evidence_v2(
         raise PaperStage4ComparisonEvidenceV2Error(_reason("enforcement_precondition_malformed"))
     if type(metrics_evidence) is not PaperSecondaryMetricsEvidence:
         raise PaperStage4ComparisonEvidenceV2Error(_reason("metrics_evidence_malformed"))
+    if type(reconciliation) is not PaperSecondaryMetricsSubstrateReconciliation:
+        raise PaperStage4ComparisonEvidenceV2Error(_reason("reconciliation_malformed"))
+    if type(window_evidence) is not PaperSecondaryMetricsWindowEvidence:
+        raise PaperStage4ComparisonEvidenceV2Error(_reason("window_evidence_malformed"))
     expected_baseline_digest = _require_hex64(expected_baseline_digest, "expected_baseline_digest")
     expected_baseline_evidence_digest = _require_hex64(
         expected_baseline_evidence_digest, "expected_baseline_evidence_digest"
@@ -1699,6 +2032,8 @@ def build_paper_stage4_comparison_evidence_v2(
     expected_metrics_evidence_digest = _require_hex64(
         expected_metrics_evidence_digest, "expected_metrics_evidence_digest"
     )
+    expected_reconciliation_digest = _require_hex64(expected_reconciliation_digest, "expected_reconciliation_digest")
+    expected_window_evidence_digest = _require_hex64(expected_window_evidence_digest, "expected_window_evidence_digest")
     comparison_evidence_id = _require_plain_non_empty_string(comparison_evidence_id, "comparison_evidence_id")
     correlation_id = _require_plain_non_empty_string(correlation_id, "correlation_id")
     metadata_pairs = _normalize_metadata(metadata)
@@ -1768,6 +2103,22 @@ def build_paper_stage4_comparison_evidence_v2(
         reason_code="metrics_evidence_digest_mismatch",
     )
     hard.extend(metrics_digest_failures)
+    reconciliation_digest_failures, verified_reconciliation_digest = _digest_reproof_failures(
+        artifact=reconciliation,
+        carried_digest=reconciliation.reconciliation_digest,
+        expected_digest=expected_reconciliation_digest,
+        compute=paper_secondary_metrics_substrate_reconciliation_digest,
+        reason_code="reconciliation_digest_mismatch",
+    )
+    hard.extend(reconciliation_digest_failures)
+    window_digest_failures, verified_window_evidence_digest = _digest_reproof_failures(
+        artifact=window_evidence,
+        carried_digest=window_evidence.window_evidence_digest,
+        expected_digest=expected_window_evidence_digest,
+        compute=paper_secondary_metrics_window_evidence_digest,
+        reason_code="window_evidence_digest_mismatch",
+    )
+    hard.extend(window_digest_failures)
 
     # Caller-supplied baseline: TRIPLE digest equality (recompute == caller anchor == bound-in-#313 digest).
     try:
@@ -1804,8 +2155,17 @@ def build_paper_stage4_comparison_evidence_v2(
     hard.extend(precondition_contract_failures)
     metrics_contract_failures = _metrics_evidence_failures(metrics_evidence)
     hard.extend(metrics_contract_failures)
+    reconciliation_contract_failures = _reconciliation_failures(reconciliation)
+    hard.extend(reconciliation_contract_failures)
+    window_contract_failures = _window_evidence_failures(window_evidence)
+    hard.extend(window_contract_failures)
     sm_binding_failures = _sm_binding_failures(
-        methodology_v2=methodology_v2, precondition=precondition, metrics_evidence=metrics_evidence
+        methodology_v2=methodology_v2,
+        precondition=precondition,
+        metrics_evidence=metrics_evidence,
+        reconciliation=reconciliation,
+        window_evidence=window_evidence,
+        gate_decision=gate_decision,
     )
     hard.extend(sm_binding_failures)
     cross_link_failures = _cross_link_failures(
@@ -1817,6 +2177,8 @@ def build_paper_stage4_comparison_evidence_v2(
         gate_decision=gate_decision,
         precondition=precondition,
         metrics_evidence=metrics_evidence,
+        reconciliation=reconciliation,
+        window_evidence=window_evidence,
     )
     hard.extend(cross_link_failures)
     anchor_scope_failures = _anchor_scope_failures(
@@ -1827,6 +2189,8 @@ def build_paper_stage4_comparison_evidence_v2(
         gate_decision=gate_decision,
         precondition=precondition,
         metrics_evidence=metrics_evidence,
+        reconciliation=reconciliation,
+        window_evidence=window_evidence,
     )
     hard.extend(anchor_scope_failures)
 
@@ -1930,7 +2294,7 @@ def build_paper_stage4_comparison_evidence_v2(
     reason_codes = tuple(hard)
 
     # Final READY invariant guard — READY is impossible unless every named gate independently re-proves:
-    # all seven anchor digest triples, the baseline triple, every anchor contract, the SM bindings, the
+    # all nine artifact digest triples, the baseline triple, every anchor contract, the SM bindings, the
     # cross-links, anchor scope, edge identity equality, the duration precheck, full real-metric presence,
     # the independently re-cleared thresholds, echo coherence, and one coherent comparator invocation.
     if ready and not (
@@ -1941,6 +2305,8 @@ def build_paper_stage4_comparison_evidence_v2(
         and verified_gate_decision_digest != ""
         and verified_precondition_digest != ""
         and verified_metrics_evidence_digest != ""
+        and verified_reconciliation_digest != ""
+        and verified_window_evidence_digest != ""
         and baseline_digest != ""
         and baseline_evidence.baseline_digest == baseline_digest
         and not edge_contract_failures
@@ -1950,6 +2316,8 @@ def build_paper_stage4_comparison_evidence_v2(
         and not baseline_evidence_contract_failures
         and not precondition_contract_failures
         and not metrics_contract_failures
+        and not reconciliation_contract_failures
+        and not window_contract_failures
         and not sm_binding_failures
         and not cross_link_failures
         and not anchor_scope_failures
@@ -1993,6 +2361,8 @@ def build_paper_stage4_comparison_evidence_v2(
         "metrics_evidence_id": _plain_str_or_empty(metrics_evidence.evidence_id),
         "enforcement_precondition_id": _plain_str_or_empty(precondition.precondition_id),
         "methodology_v2_id": _plain_str_or_empty(methodology_v2.methodology_id),
+        "reconciliation_id": _plain_str_or_empty(reconciliation.reconciliation_id),
+        "window_evidence_id": _plain_str_or_empty(window_evidence.window_evidence_id),
         "expected_sharpe_evidence_digest": expected_sharpe_evidence_digest,
         "verified_sharpe_evidence_digest": verified_sharpe_digest,
         "expected_methodology_v2_digest": expected_methodology_v2_digest,
@@ -2007,8 +2377,15 @@ def build_paper_stage4_comparison_evidence_v2(
         "verified_enforcement_precondition_digest": verified_precondition_digest,
         "expected_metrics_evidence_digest": expected_metrics_evidence_digest,
         "verified_metrics_evidence_digest": verified_metrics_evidence_digest,
+        "expected_reconciliation_digest": expected_reconciliation_digest,
+        "verified_reconciliation_digest": verified_reconciliation_digest,
+        "expected_window_evidence_digest": expected_window_evidence_digest,
+        "verified_window_evidence_digest": verified_window_evidence_digest,
         "verified_secondary_metrics_policy_digest": (
             _safe_digest_value(precondition.policy_digest) if not sm_binding_failures else ""
+        ),
+        "verified_session_sequence_digest": (
+            _safe_digest_value(reconciliation.verified_session_sequence_digest) if not sm_binding_failures else ""
         ),
         "expected_baseline_digest": expected_baseline_digest,
         "baseline_digest": baseline_digest,
@@ -2017,6 +2394,17 @@ def build_paper_stage4_comparison_evidence_v2(
         "time_window_digest": _safe_digest_value(sharpe_evidence.time_window_digest),
         "metrics_summary_digest": _safe_digest_value(sharpe_evidence.metrics_summary_digest),
         "series_methodology_digest": _safe_digest_value(sharpe_evidence.methodology_digest),
+        "gate_window_start_ns": _safe_int_value(window_evidence.gate_window_start_ns),
+        "gate_window_end_ns": _safe_int_value(window_evidence.gate_window_end_ns),
+        "gate_window_start_utc_day_index": _safe_int_value(window_evidence.gate_window_start_utc_day_index),
+        "gate_window_end_utc_day_index": _safe_int_value(window_evidence.gate_window_end_utc_day_index),
+        "gate_utc_day_indices": _safe_int_tuple(window_evidence.gate_utc_day_indices),
+        "secondary_metrics_observed_at_ns": _safe_int_tuple(window_evidence.observed_at_ns),
+        "secondary_metrics_observed_utc_day_indices": _safe_int_tuple(window_evidence.observed_utc_day_indices),
+        "reconciled_record_digests": _safe_digest_tuple(reconciliation.reconciled_record_digests),
+        "reconciled_episode_run_digests": _safe_digest_tuple(reconciliation.reconciled_episode_run_digests),
+        "window_fill_result_digests": _safe_digest_tuple(window_evidence.fill_result_digests),
+        "window_market_snapshot_digests": _safe_digest_tuple(window_evidence.market_snapshot_digests),
         "paper_sharpe_annualized": _plain_str_or_empty(sharpe_evidence.paper_sharpe_annualized),
         "backtest_sharpe_repr": backtest_sharpe_repr,
         "backtest_sharpe_decimal": backtest_sharpe_decimal,
@@ -2081,6 +2469,8 @@ def build_paper_stage4_comparison_evidence_v2(
         "methodology_v2_consumed": ready,
         "enforcement_precondition_consumed": ready,
         "metrics_evidence_consumed": ready,
+        "reconciliation_consumed": ready,
+        "window_evidence_consumed": ready,
     }
     seed = PaperStage4ComparisonEvidenceV2(comparison_evidence_digest="", **evidence_fields)  # type: ignore[arg-type]
     return replace(seed, comparison_evidence_digest=paper_stage4_comparison_evidence_v2_digest(seed))

@@ -65,6 +65,7 @@ from crypto_core.validation.paper_pnl_report import build_paper_mark_snapshot
 from crypto_core.validation.paper_position_state import (
     PaperPositionStateSide,
     apply_paper_fill_to_position,
+    build_flat_paper_position_state,
     build_paper_position_state,
 )
 from crypto_core.validation.paper_realized_pnl import compute_paper_realized_pnl_event
@@ -82,6 +83,14 @@ from crypto_core.validation.paper_secondary_metrics_evidence import (
 from crypto_core.validation.paper_secondary_metrics_substrate_reconciliation import (
     PaperSecondaryMetricsSubstrateRecordInput,
     build_paper_secondary_metrics_substrate_reconciliation,
+    paper_secondary_metrics_substrate_reconciliation_digest,
+)
+from crypto_core.validation.paper_secondary_metrics_window_evidence import (
+    PaperSecondaryMetricsWindowEvidence,
+    PaperSecondaryMetricsWindowEvidenceStatus,
+    PaperSecondaryMetricsWindowRecordInput,
+    build_paper_secondary_metrics_window_evidence,
+    paper_secondary_metrics_window_evidence_digest,
 )
 from crypto_core.validation.paper_session_sequence import build_paper_session_sequence
 from crypto_core.validation.paper_sharpe_evidence import (
@@ -148,6 +157,8 @@ _EXPECTED_FIELD_ORDER = (
     "metrics_evidence_id",
     "enforcement_precondition_id",
     "methodology_v2_id",
+    "reconciliation_id",
+    "window_evidence_id",
     "expected_sharpe_evidence_digest",
     "verified_sharpe_evidence_digest",
     "expected_methodology_v2_digest",
@@ -162,7 +173,12 @@ _EXPECTED_FIELD_ORDER = (
     "verified_enforcement_precondition_digest",
     "expected_metrics_evidence_digest",
     "verified_metrics_evidence_digest",
+    "expected_reconciliation_digest",
+    "verified_reconciliation_digest",
+    "expected_window_evidence_digest",
+    "verified_window_evidence_digest",
     "verified_secondary_metrics_policy_digest",
+    "verified_session_sequence_digest",
     "expected_baseline_digest",
     "baseline_digest",
     "paper_summary_digest",
@@ -170,6 +186,17 @@ _EXPECTED_FIELD_ORDER = (
     "time_window_digest",
     "metrics_summary_digest",
     "series_methodology_digest",
+    "gate_window_start_ns",
+    "gate_window_end_ns",
+    "gate_window_start_utc_day_index",
+    "gate_window_end_utc_day_index",
+    "gate_utc_day_indices",
+    "secondary_metrics_observed_at_ns",
+    "secondary_metrics_observed_utc_day_indices",
+    "reconciled_record_digests",
+    "reconciled_episode_run_digests",
+    "window_fill_result_digests",
+    "window_market_snapshot_digests",
     "paper_sharpe_annualized",
     "backtest_sharpe_repr",
     "backtest_sharpe_decimal",
@@ -237,6 +264,8 @@ _EXPECTED_FIELD_ORDER = (
     "methodology_v2_consumed",
     "enforcement_precondition_consumed",
     "metrics_evidence_consumed",
+    "reconciliation_consumed",
+    "window_evidence_consumed",
     "prdv4_stage4_complete",
     "stage4_completion_decided",
     "thirty_day_gate_decided",
@@ -600,11 +629,21 @@ def _short_prior():
     )
 
 
-def _snapshot(reference_price: str):
+def _flat_prior():
+    return build_flat_paper_position_state(
+        position_state_id=_uid("flat-pos"),
+        market_symbol=_MARKET,
+        correlation_id="corr-pos",
+    )
+
+
+def _snapshot(reference_price: str, observed_at_ns: int, *, available_units: str | None = None):
     return build_paper_fill_market_snapshot(
         snapshot_id=_uid("snap"),
         market_symbol=_MARKET,
         reference_price=reference_price,
+        available_units=available_units,
+        observed_at_ns=observed_at_ns,
     )
 
 
@@ -626,12 +665,12 @@ def _mark():
     )
 
 
-def _closing_bundle(episode_id: str, record_id: str, *, reference_price: str):
+def _closing_bundle(episode_id: str, record_id: str, *, reference_price: str, observed_at_ns: int):
     from crypto_core.validation.trade_record_evidence import build_trade_record_evidence
 
     prior = _short_prior()
     intent = _order_intent(PaperOrderSide.BUY)
-    snapshot = _snapshot(reference_price)
+    snapshot = _snapshot(reference_price, observed_at_ns)
     ids: dict[str, object] = {
         "fill_simulation_id": _uid("fillsim"),
         "position_transition_id": _uid("trans"),
@@ -680,44 +719,108 @@ def _closing_bundle(episode_id: str, record_id: str, *, reference_price: str):
         realized_pnl=_scale18(event.realized_pnl),
         decided_episode=True,
     )
-    return episode, fill_result, event, record
+    return episode, fill_result, event, record, snapshot
 
 
-def _policy():
-    return build_secondary_metrics_policy(
-        policy_id="policy-1",
+def _rejected_bundle(episode_id: str, record_id: str, *, observed_at_ns: int):
+    from crypto_core.validation.trade_record_evidence import build_trade_record_evidence
+
+    prior = _flat_prior()
+    intent = _order_intent(PaperOrderSide.BUY)
+    snapshot = _snapshot("100", observed_at_ns, available_units="0")
+    ids: dict[str, object] = {
+        "fill_simulation_id": _uid("rejected-fillsim"),
+        "position_transition_id": _uid("rejected-trans"),
+        "new_position_state_id": _uid("rejected-newpos"),
+        "pnl_report_id": _uid("rejected-pnl"),
+        "episode_run_id": episode_id,
+        "correlation_id": _CORRELATION,
+    }
+    episode = run_paper_episode(intent, prior, snapshot, _fill_policy(), _mark(), **ids)  # type: ignore[arg-type]
+    fill_result = simulate_paper_fill(
+        intent,
+        snapshot,
+        _fill_policy(),
+        fill_simulation_id=ids["fill_simulation_id"],
         correlation_id=_CORRELATION,
-        expected_fill_model_parameters_digest=_HEX_A,
-        approved_hit_rate_floor="0.500000000000000000",
-        approved_fill_rate_floor="0.900000000000000000",
-        approved_slippage_ceiling_bps="25.000000000000000000",
-        approved_min_decided_episode_count=1,
-        approval_reference="gov-sm2-1",
-        approval_digest="b" * 64,
-        thresholds_approved=True,
     )
+    filled = Decimal(fill_result.filled_units)
+    unfilled = Decimal(fill_result.unfilled_units)
+    record = build_trade_record_evidence(
+        record_id=record_id,
+        correlation_id=_CORRELATION,
+        sleeve_id="sleeve-1",
+        policy_id="policy-1",
+        episode_id=episode_id,
+        strategy_id="strategy-1",
+        decision_id=_uid("rejected-decision"),
+        intended_quantity=_scale18(filled + unfilled),
+        filled_quantity=_scale18(filled),
+        expected_fill_price="100.000000000000000000",
+        realized_fill_price=None,
+        realized_pnl="0.000000000000000000",
+        decided_episode=True,
+    )
+    return episode, fill_result, None, record, snapshot
+
+
+def _policy(**overrides: object):
+    payload: dict[str, object] = {
+        "policy_id": "policy-1",
+        "correlation_id": _CORRELATION,
+        "expected_fill_model_parameters_digest": _HEX_A,
+        "approved_hit_rate_floor": "0.500000000000000000",
+        "approved_fill_rate_floor": "0.900000000000000000",
+        "approved_slippage_ceiling_bps": "25.000000000000000000",
+        "approved_min_decided_episode_count": 1,
+        "approval_reference": "gov-sm2-1",
+        "approval_digest": "b" * 64,
+        "thresholds_approved": True,
+    }
+    payload.update(overrides)
+    return build_secondary_metrics_policy(**payload)  # type: ignore[arg-type]
 
 
 class _Chain:
-    """Complete READY 8-anchor chain: v1 lineage + policy/records/SM-4/reconciliation/precondition/mv2."""
+    """Complete READY 10-anchor chain through reconciliation and exact-window evidence."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        observed_at_ns: tuple[int, ...] = (2 * _DAY_NS, 3 * _DAY_NS, 4 * _DAY_NS),
+        include_rejected: bool = False,
+        expect_window_ready: bool = True,
+    ) -> None:
         self.edge = _edge_identity()
         self.baseline = _baseline(self.edge.paper_edge_id)
         self.baseline_evidence = _baseline_evidence(self.edge, self.baseline)
         self.series = _series()
         self.sharpe = _sharpe(self.series)
         self.gate = _gate(self.series)
-        self.policy = _policy()
+        self.policy = _policy(
+            approved_hit_rate_floor="0.300000000000000000" if include_rejected else "0.500000000000000000",
+            approved_fill_rate_floor="0.600000000000000000" if include_rejected else "0.900000000000000000",
+        )
         self.bundles = [
-            _closing_bundle("ep-0", "rec-0", reference_price="95"),
-            _closing_bundle("ep-1", "rec-1", reference_price="96"),
+            _closing_bundle("ep-0", "rec-0", reference_price="95", observed_at_ns=observed_at_ns[0]),
+            _closing_bundle(
+                "ep-1",
+                "rec-1",
+                reference_price="103" if include_rejected else "96",
+                observed_at_ns=observed_at_ns[1],
+            ),
         ]
+        if include_rejected:
+            self.bundles.append(_rejected_bundle("ep-2", "rec-2", observed_at_ns=observed_at_ns[2]))
         self.inputs = [
             PaperSecondaryMetricsSubstrateRecordInput(record, episode, fill_result, event)
-            for (episode, fill_result, event, record) in self.bundles
+            for (episode, fill_result, event, record, _) in self.bundles
         ]
-        self.records = [record for (_, _, _, record) in self.bundles]
+        self.window_inputs = [
+            PaperSecondaryMetricsWindowRecordInput(record, episode, fill_result, snapshot)
+            for (episode, fill_result, _, record, snapshot) in self.bundles
+        ]
+        self.records = [record for (_, _, _, record, _) in self.bundles]
         self.metrics = build_paper_secondary_metrics_evidence(
             self.policy,
             self.records,
@@ -726,7 +829,7 @@ class _Chain:
         )
         assert self.metrics.ready, self.metrics.reason_codes
         self.session = build_paper_session_sequence(
-            [episode for (episode, _, _, _) in self.bundles],
+            [episode for (episode, _, _, _, _) in self.bundles],
             paper_session_id="ps-1",
             correlation_id=_CORRELATION,
         )
@@ -741,6 +844,18 @@ class _Chain:
             expected_metrics_evidence_digest=self.metrics.evidence_digest,
             expected_session_sequence_digest=self.session.paper_session_sequence_digest,
         )
+        assert self.reconciliation.ready, self.reconciliation.reason_codes
+        self.window_evidence = build_paper_secondary_metrics_window_evidence(
+            self.reconciliation,
+            self.gate,
+            self.window_inputs,
+            expected_reconciliation_digest=self.reconciliation.reconciliation_digest,
+            expected_gate_decision_digest=self.gate.decision_digest,
+            window_evidence_id="window-evidence-1",
+            correlation_id=_CORRELATION,
+        )
+        if expect_window_ready:
+            assert self.window_evidence.ready, self.window_evidence.reason_codes
         self.precondition = self._precondition(self.metrics, self.reconciliation, precondition_id="precondition-1")
         assert self.precondition.ready, self.precondition.reason_codes
         self.predecessor = build_paper_vs_backtest_methodology(
@@ -835,6 +950,21 @@ def _reseal_metrics(metrics: PaperSecondaryMetricsEvidence, **changes: object) -
     return replace(seed, evidence_digest=paper_secondary_metrics_evidence_digest(seed))
 
 
+def _reseal_reconciliation(reconciliation, **changes: object):
+    seed = replace(reconciliation, **changes)
+    return replace(
+        seed,
+        reconciliation_digest=paper_secondary_metrics_substrate_reconciliation_digest(seed),
+    )
+
+
+def _reseal_window(
+    evidence: PaperSecondaryMetricsWindowEvidence, **changes: object
+) -> PaperSecondaryMetricsWindowEvidence:
+    seed = replace(evidence, **changes)  # type: ignore[arg-type]
+    return replace(seed, window_evidence_digest=paper_secondary_metrics_window_evidence_digest(seed))
+
+
 def _resealed_sm(
     chain: _Chain,
     *,
@@ -859,12 +989,90 @@ def _resealed_sm(
     return metrics2, precondition2, methodology2
 
 
+def _coherently_omit_member(chain: _Chain, index: int):
+    """Reseal every caller-carried denominator echo while retaining the original independent anchors."""
+
+    target_record_digest = chain.bundles[index][3].record_digest
+    record_digests = tuple(
+        digest for digest in chain.reconciliation.reconciled_record_digests if digest != target_record_digest
+    )
+    episode_digests = tuple(
+        digest
+        for item_index, digest in enumerate(chain.reconciliation.reconciled_episode_run_digests)
+        if item_index != index
+    )
+    metrics2 = _reseal_metrics(
+        chain.metrics,
+        record_digests=record_digests,
+        record_count=len(record_digests),
+        decided_episode_count=len(record_digests),
+    )
+    fill_status = chain.bundles[index][1].status.value
+    pnl = Decimal(chain.bundles[index][3].realized_pnl)
+    reconciliation2 = _reseal_reconciliation(
+        chain.reconciliation,
+        verified_metrics_evidence_digest=metrics2.evidence_digest,
+        episode_count=len(record_digests),
+        reconciled_episode_run_digests=episode_digests,
+        reconciled_record_digests=record_digests,
+        filled_episode_count=chain.reconciliation.filled_episode_count - int(fill_status == "FILLED"),
+        rejected_or_unfilled_episode_count=(
+            chain.reconciliation.rejected_or_unfilled_episode_count - int(fill_status != "FILLED")
+        ),
+        positive_pnl_episode_count=chain.reconciliation.positive_pnl_episode_count - int(pnl > 0),
+        negative_pnl_episode_count=chain.reconciliation.negative_pnl_episode_count - int(pnl < 0),
+        zero_pnl_episode_count=chain.reconciliation.zero_pnl_episode_count - int(pnl == 0),
+    )
+    precondition2 = _reseal_precondition(
+        chain.precondition,
+        metrics_evidence_digest=metrics2.evidence_digest,
+        reconciliation_digest=reconciliation2.reconciliation_digest,
+        computed_decided_episode_count=len(record_digests),
+        metrics_record_count=len(record_digests),
+        reconciled_record_count=len(record_digests),
+        reconciled_episode_count=len(record_digests),
+        record_digests=record_digests,
+    )
+    methodology2 = _reseal_methodology_v2(
+        chain.methodology_v2,
+        verified_secondary_metrics_enforcement_precondition_digest=precondition2.precondition_digest,
+    )
+    window2 = _reseal_window(
+        chain.window_evidence,
+        expected_reconciliation_digest=reconciliation2.reconciliation_digest,
+        verified_reconciliation_digest=reconciliation2.reconciliation_digest,
+        verified_metrics_evidence_digest=metrics2.evidence_digest,
+        observed_at_ns=tuple(
+            value for item_index, value in enumerate(chain.window_evidence.observed_at_ns) if item_index != index
+        ),
+        observed_utc_day_indices=tuple(
+            value
+            for item_index, value in enumerate(chain.window_evidence.observed_utc_day_indices)
+            if item_index != index
+        ),
+        record_digests=record_digests,
+        episode_run_digests=episode_digests,
+        fill_result_digests=tuple(
+            value for item_index, value in enumerate(chain.window_evidence.fill_result_digests) if item_index != index
+        ),
+        market_snapshot_digests=tuple(
+            value
+            for item_index, value in enumerate(chain.window_evidence.market_snapshot_digests)
+            if item_index != index
+        ),
+        record_count=len(record_digests),
+    )
+    return metrics2, reconciliation2, precondition2, methodology2, window2
+
+
 def _carried_or_placeholder(value: object) -> str:
     return value if _is_hex64(value) else _HEX_A
 
 
 def _build(**overrides: object) -> PaperStage4ComparisonEvidenceV2:
     chain = _chain()
+    reconciliation_overridden = "reconciliation" in overrides
+    window_evidence_overridden = "window_evidence" in overrides
     backtest_baseline = overrides.pop("backtest_baseline", chain.baseline)
     baseline_evidence = overrides.pop("baseline_evidence", chain.baseline_evidence)
     sharpe_evidence = overrides.pop("sharpe_evidence", chain.sharpe)
@@ -873,6 +1081,44 @@ def _build(**overrides: object) -> PaperStage4ComparisonEvidenceV2:
     gate_decision = overrides.pop("gate_decision", chain.gate)
     enforcement_precondition = overrides.pop("enforcement_precondition", chain.precondition)
     metrics_evidence = overrides.pop("metrics_evidence", chain.metrics)
+    reconciliation = overrides.pop("reconciliation", chain.reconciliation)
+    window_evidence = overrides.pop("window_evidence", chain.window_evidence)
+    if not reconciliation_overridden and metrics_evidence is not chain.metrics:
+        reconciliation = _reseal_reconciliation(
+            chain.reconciliation,
+            verified_metrics_evidence_digest=getattr(metrics_evidence, "evidence_digest", ""),
+        )
+        if (
+            type(enforcement_precondition) is PaperSecondaryMetricsEnforcementPrecondition
+            and enforcement_precondition.reconciliation_digest == chain.reconciliation.reconciliation_digest
+        ):
+            prior_precondition_digest = enforcement_precondition.precondition_digest
+            enforcement_precondition = _reseal_precondition(
+                enforcement_precondition,
+                reconciliation_digest=reconciliation.reconciliation_digest,
+            )
+            if (
+                type(methodology_v2) is PaperVsBacktestMethodologyV2
+                and methodology_v2.verified_secondary_metrics_enforcement_precondition_digest
+                == prior_precondition_digest
+            ):
+                methodology_v2 = _reseal_methodology_v2(
+                    methodology_v2,
+                    verified_secondary_metrics_enforcement_precondition_digest=enforcement_precondition.precondition_digest,
+                )
+    if not window_evidence_overridden and reconciliation is not chain.reconciliation:
+        window_evidence = _reseal_window(
+            chain.window_evidence,
+            reconciliation_id=getattr(reconciliation, "reconciliation_id", ""),
+            expected_reconciliation_digest=getattr(reconciliation, "reconciliation_digest", ""),
+            verified_reconciliation_digest=getattr(reconciliation, "reconciliation_digest", ""),
+            verified_policy_digest=getattr(reconciliation, "verified_policy_digest", ""),
+            verified_metrics_evidence_digest=getattr(reconciliation, "verified_metrics_evidence_digest", ""),
+            verified_session_sequence_digest=getattr(reconciliation, "verified_session_sequence_digest", ""),
+            record_digests=getattr(reconciliation, "reconciled_record_digests", ()),
+            episode_run_digests=getattr(reconciliation, "reconciled_episode_run_digests", ()),
+            record_count=getattr(reconciliation, "episode_count", 0),
+        )
     payload: dict[str, object] = {
         "expected_baseline_digest": (
             _baseline_digest(backtest_baseline)  # type: ignore[arg-type]
@@ -901,6 +1147,12 @@ def _build(**overrides: object) -> PaperStage4ComparisonEvidenceV2:
         ),
         "metrics_evidence": metrics_evidence,
         "expected_metrics_evidence_digest": _carried_or_placeholder(getattr(metrics_evidence, "evidence_digest", "")),
+        "reconciliation": reconciliation,
+        "expected_reconciliation_digest": _carried_or_placeholder(getattr(reconciliation, "reconciliation_digest", "")),
+        "window_evidence": window_evidence,
+        "expected_window_evidence_digest": _carried_or_placeholder(
+            getattr(window_evidence, "window_evidence_digest", "")
+        ),
         "comparison_evidence_id": "comparison-evidence-v2-1",
         "correlation_id": _CORRELATION,
         "metadata": {"purpose": "stage4 comparison v2"},
@@ -937,7 +1189,7 @@ def test_public_api_exact() -> None:
 def test_dataclass_field_order_exact() -> None:
     names = tuple(field.name for field in fields(PaperStage4ComparisonEvidenceV2))
     assert names == _EXPECTED_FIELD_ORDER
-    assert len(names) == 139
+    assert len(names) == 159
 
 
 def test_builder_signature_exact() -> None:
@@ -959,6 +1211,10 @@ def test_builder_signature_exact() -> None:
         "expected_enforcement_precondition_digest",
         "metrics_evidence",
         "expected_metrics_evidence_digest",
+        "reconciliation",
+        "expected_reconciliation_digest",
+        "window_evidence",
+        "expected_window_evidence_digest",
         "comparison_evidence_id",
         "correlation_id",
         "metadata",
@@ -1022,6 +1278,8 @@ def test_happy_ready_retention_satisfied_with_enforced_secondary_metrics() -> No
     assert evidence.methodology_v2_consumed is True
     assert evidence.enforcement_precondition_consumed is True
     assert evidence.metrics_evidence_consumed is True
+    assert evidence.reconciliation_consumed is True
+    assert evidence.window_evidence_consumed is True
     assert evidence.secondary_thresholds_cleared is True
     assert evidence.hit_rate_floor_satisfied is True
     assert evidence.fill_rate_by_quantity_floor_satisfied is True
@@ -1054,6 +1312,8 @@ def test_ready_identity_and_chain_bindings() -> None:
     assert evidence.metrics_evidence_id == "sm4-1"
     assert evidence.enforcement_precondition_id == "precondition-1"
     assert evidence.methodology_v2_id == "sm5-1"
+    assert evidence.reconciliation_id == chain.reconciliation.reconciliation_id
+    assert evidence.window_evidence_id == chain.window_evidence.window_evidence_id
     assert evidence.expected_sharpe_evidence_digest == evidence.verified_sharpe_evidence_digest
     assert evidence.expected_methodology_v2_digest == evidence.verified_methodology_v2_digest
     assert evidence.expected_edge_identity_digest == evidence.verified_edge_identity_digest
@@ -1061,11 +1321,23 @@ def test_ready_identity_and_chain_bindings() -> None:
     assert evidence.expected_gate_decision_digest == evidence.verified_gate_decision_digest
     assert evidence.expected_enforcement_precondition_digest == evidence.verified_enforcement_precondition_digest
     assert evidence.expected_metrics_evidence_digest == evidence.verified_metrics_evidence_digest
+    assert evidence.expected_reconciliation_digest == evidence.verified_reconciliation_digest
+    assert evidence.expected_window_evidence_digest == evidence.verified_window_evidence_digest
     assert evidence.verified_metrics_evidence_digest == chain.metrics.evidence_digest
     assert evidence.verified_enforcement_precondition_digest == chain.precondition.precondition_digest
     assert evidence.verified_secondary_metrics_policy_digest == chain.policy.policy_digest
+    assert evidence.verified_session_sequence_digest == chain.session.paper_session_sequence_digest
     assert evidence.baseline_digest == evidence.expected_baseline_digest == _baseline_digest(chain.baseline)
     assert evidence.series_digest == chain.gate.series_digest
+    assert evidence.gate_window_start_ns == chain.gate.gate_used_first_bucket_start_ns
+    assert evidence.gate_window_end_ns == chain.gate.gate_used_last_bucket_end_ns
+    assert evidence.gate_utc_day_indices == tuple(range(1, 31))
+    assert evidence.secondary_metrics_observed_at_ns == chain.window_evidence.observed_at_ns
+    assert evidence.secondary_metrics_observed_utc_day_indices == chain.window_evidence.observed_utc_day_indices
+    assert evidence.reconciled_record_digests == chain.reconciliation.reconciled_record_digests
+    assert evidence.reconciled_episode_run_digests == chain.reconciliation.reconciled_episode_run_digests
+    assert evidence.window_fill_result_digests == chain.window_evidence.fill_result_digests
+    assert evidence.window_market_snapshot_digests == chain.window_evidence.market_snapshot_digests
 
 
 def test_ready_paper_summary_feeds_real_metrics_with_negative_slippage_echoed_as_none() -> None:
@@ -1147,12 +1419,14 @@ def test_structural_false_defaults() -> None:
     assert field_defaults["methodology_v2_consumed"] is False
     assert field_defaults["enforcement_precondition_consumed"] is False
     assert field_defaults["metrics_evidence_consumed"] is False
+    assert field_defaults["reconciliation_consumed"] is False
+    assert field_defaults["window_evidence_consumed"] is False
     assert field_defaults["paper_only"] is True
     assert field_defaults["thresholds_reapplied_here_not_by_comparator"] is True
 
 
 # --------------------------------------------------------------------------------------------------
-# 3. Seven-anchor digest triples + caller-baseline triple
+# 3. Nine-anchor digest triples + caller-baseline triple
 # --------------------------------------------------------------------------------------------------
 
 _ANCHOR_CASES = {
@@ -1171,6 +1445,12 @@ _ANCHOR_CASES = {
         "enforcement_precondition_digest_mismatch",
     ),
     "metrics": ("metrics_evidence", "expected_metrics_evidence_digest", "metrics_evidence_digest_mismatch"),
+    "reconciliation": (
+        "reconciliation",
+        "expected_reconciliation_digest",
+        "reconciliation_digest_mismatch",
+    ),
+    "window": ("window_evidence", "expected_window_evidence_digest", "window_evidence_digest_mismatch"),
 }
 
 _RESEAL_BY_ANCHOR = {
@@ -1181,6 +1461,8 @@ _RESEAL_BY_ANCHOR = {
     "gate": lambda chain: _reseal_gate(chain.gate, metadata=(("z", "reseal"),)),
     "precondition": lambda chain: _reseal_precondition(chain.precondition, metadata=(("z", "reseal"),)),
     "metrics": lambda chain: _reseal_metrics(chain.metrics, metadata=(("z", "reseal"),)),
+    "reconciliation": lambda chain: _reseal_reconciliation(chain.reconciliation, metadata=(("z", "reseal"),)),
+    "window": lambda chain: _reseal_window(chain.window_evidence, metadata=(("z", "reseal"),)),
 }
 
 _ORIGINAL_BY_ANCHOR = {
@@ -1191,6 +1473,8 @@ _ORIGINAL_BY_ANCHOR = {
     "gate": lambda chain: chain.gate,
     "precondition": lambda chain: chain.precondition,
     "metrics": lambda chain: chain.metrics,
+    "reconciliation": lambda chain: chain.reconciliation,
+    "window": lambda chain: chain.window_evidence,
 }
 
 _DIGEST_ATTR_BY_ANCHOR = {
@@ -1201,6 +1485,8 @@ _DIGEST_ATTR_BY_ANCHOR = {
     "gate": "decision_digest",
     "precondition": "precondition_digest",
     "metrics": "evidence_digest",
+    "reconciliation": "reconciliation_digest",
+    "window": "window_evidence_digest",
 }
 
 
@@ -1770,6 +2056,243 @@ def test_dropped_record_rejected() -> None:
     _assert_rejected_with(evidence, "record_set_incoherent")
 
 
+def test_sm6_directly_reproves_reconciliation_authority() -> None:
+    chain = _chain()
+    tampered = replace(chain.reconciliation, reconciliation_digest="f" * 64)
+    evidence = _build(
+        reconciliation=tampered,
+        expected_reconciliation_digest="f" * 64,
+    )
+    _assert_rejected_with(evidence, "reconciliation_digest_mismatch")
+    assert evidence.verified_reconciliation_digest == ""
+    assert evidence.reconciliation_consumed is False
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_sm6_rejects_coherently_resealed_reconciliation() -> None:
+    chain = _chain()
+    resealed = _reseal_reconciliation(chain.reconciliation, metadata=(("attacker", "resealed"),))
+    evidence = _build(
+        reconciliation=resealed,
+        expected_reconciliation_digest=chain.reconciliation.reconciliation_digest,
+    )
+    _assert_rejected_with(evidence, "reconciliation_digest_mismatch")
+    assert evidence.stage4_comparator_invoked is False
+
+
+@pytest.mark.parametrize(
+    ("index", "counter_field"),
+    [
+        (1, "negative_pnl_episode_count"),
+        (2, "rejected_or_unfilled_episode_count"),
+    ],
+)
+def test_sm6_denominator_member_omission_is_caught_by_independent_anchor(index: int, counter_field: str) -> None:
+    chain = _Chain(include_rejected=True)
+    assert getattr(chain.reconciliation, counter_field) == 1
+    metrics2, reconciliation2, precondition2, methodology2, window2 = _coherently_omit_member(chain, index)
+    evidence = _build(
+        metrics_evidence=metrics2,
+        enforcement_precondition=precondition2,
+        methodology_v2=methodology2,
+        reconciliation=reconciliation2,
+        expected_reconciliation_digest=chain.reconciliation.reconciliation_digest,
+        window_evidence=window2,
+        expected_window_evidence_digest=chain.window_evidence.window_evidence_digest,
+    )
+    _assert_rejected_with(evidence, "reconciliation_digest_mismatch")
+    assert _rc("window_evidence_digest_mismatch") in evidence.reason_codes
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_sm6_rejects_dropped_losing_record_before_comparator() -> None:
+    chain = _Chain(include_rejected=True)
+    assert Decimal(chain.bundles[1][3].realized_pnl) < 0
+    metrics2, reconciliation2, precondition2, methodology2, window2 = _coherently_omit_member(chain, 1)
+    evidence = _build(
+        metrics_evidence=metrics2,
+        enforcement_precondition=precondition2,
+        methodology_v2=methodology2,
+        reconciliation=reconciliation2,
+        expected_reconciliation_digest=chain.reconciliation.reconciliation_digest,
+        window_evidence=window2,
+        expected_window_evidence_digest=chain.window_evidence.window_evidence_digest,
+    )
+    _assert_rejected_with(evidence, "reconciliation_digest_mismatch")
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_sm6_rejects_dropped_rejected_fill_before_comparator() -> None:
+    chain = _Chain(include_rejected=True)
+    assert chain.bundles[2][1].status.value == "REJECTED"
+    metrics2, reconciliation2, precondition2, methodology2, window2 = _coherently_omit_member(chain, 2)
+    evidence = _build(
+        metrics_evidence=metrics2,
+        enforcement_precondition=precondition2,
+        methodology_v2=methodology2,
+        reconciliation=reconciliation2,
+        expected_reconciliation_digest=chain.reconciliation.reconciliation_digest,
+        window_evidence=window2,
+        expected_window_evidence_digest=chain.window_evidence.window_evidence_digest,
+    )
+    _assert_rejected_with(evidence, "reconciliation_digest_mismatch")
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_sm6_rejects_extra_record_not_in_reconciliation() -> None:
+    chain = _chain()
+    rejected_window = build_paper_secondary_metrics_window_evidence(
+        chain.reconciliation,
+        chain.gate,
+        (*chain.window_inputs, chain.window_inputs[0]),
+        expected_reconciliation_digest=chain.reconciliation.reconciliation_digest,
+        expected_gate_decision_digest=chain.gate.decision_digest,
+        window_evidence_id="window-extra-record",
+        correlation_id=_CORRELATION,
+    )
+    assert rejected_window.ready is False
+    evidence = _build(window_evidence=rejected_window)
+    _assert_rejected_with(evidence, "window_evidence_not_ready")
+    assert _rc("record_set_incoherent") in evidence.reason_codes
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_sm6_rejects_missing_episode_from_reconciliation_inventory() -> None:
+    chain = _chain()
+    reconciliation = _reseal_reconciliation(
+        chain.reconciliation,
+        reconciled_episode_run_digests=chain.reconciliation.reconciled_episode_run_digests[:1],
+    )
+    evidence = _build(
+        reconciliation=reconciliation,
+        expected_reconciliation_digest=reconciliation.reconciliation_digest,
+    )
+    _assert_rejected_with(evidence, "reconciliation_contract_invalid")
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_sm6_rejects_secondary_metrics_from_different_utc_window() -> None:
+    chain = _Chain(observed_at_ns=(31 * _DAY_NS, 2 * _DAY_NS), expect_window_ready=False)
+    assert chain.window_evidence.ready is False
+    evidence = _build(
+        metrics_evidence=chain.metrics,
+        enforcement_precondition=chain.precondition,
+        methodology_v2=chain.methodology_v2,
+        reconciliation=chain.reconciliation,
+        window_evidence=chain.window_evidence,
+    )
+    _assert_rejected_with(evidence, "window_evidence_not_ready")
+    assert _rc("window_evidence_contract_invalid") in evidence.reason_codes
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_sm6_rejects_window_evidence_bound_to_different_gate() -> None:
+    chain = _chain()
+    window = _reseal_window(
+        chain.window_evidence,
+        expected_gate_decision_digest="f" * 64,
+        verified_gate_decision_digest="f" * 64,
+    )
+    evidence = _build(window_evidence=window, expected_window_evidence_digest=window.window_evidence_digest)
+    _assert_rejected_with(evidence, "window_gate_binding_mismatch")
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_sm6_rejects_window_evidence_bound_to_different_reconciliation() -> None:
+    chain = _chain()
+    window = _reseal_window(
+        chain.window_evidence,
+        expected_reconciliation_digest="f" * 64,
+        verified_reconciliation_digest="f" * 64,
+    )
+    evidence = _build(window_evidence=window, expected_window_evidence_digest=window.window_evidence_digest)
+    _assert_rejected_with(evidence, "window_reconciliation_binding_mismatch")
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_sm6_rejects_window_day_index_substitution() -> None:
+    chain = _chain()
+    window = _reseal_window(
+        chain.window_evidence,
+        observed_utc_day_indices=(
+            chain.window_evidence.observed_utc_day_indices[0] + 1,
+            chain.window_evidence.observed_utc_day_indices[1],
+        ),
+    )
+    evidence = _build(window_evidence=window, expected_window_evidence_digest=window.window_evidence_digest)
+    _assert_rejected_with(evidence, "window_evidence_contract_invalid")
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_sm6_window_identity_is_digest_bound_for_stage4_v3() -> None:
+    evidence = _build()
+    payload = paper_stage4_comparison_evidence_v2_to_dict(evidence)
+    assert payload["gate_window_start_ns"] == _DAY_NS
+    assert payload["gate_window_end_ns"] == 31 * _DAY_NS
+    assert payload["gate_window_start_utc_day_index"] == 1
+    assert payload["gate_window_end_utc_day_index"] == 30
+    assert payload["gate_utc_day_indices"] == list(range(1, 31))
+    assert payload["secondary_metrics_observed_at_ns"] == [2 * _DAY_NS, 3 * _DAY_NS]
+    assert payload["secondary_metrics_observed_utc_day_indices"] == [2, 3]
+    changed = replace(evidence, gate_utc_day_indices=tuple(range(2, 32)))
+    assert paper_stage4_comparison_evidence_v2_digest(changed) != evidence.comparison_evidence_digest
+
+
+def test_cross_window_metrics_never_invoke_comparator(monkeypatch: pytest.MonkeyPatch) -> None:
+    chain = _Chain(observed_at_ns=(31 * _DAY_NS, 2 * _DAY_NS), expect_window_ready=False)
+
+    def _unexpected_comparator(*_args: object, **_kwargs: object):
+        raise AssertionError("compare_stage4 must not run for cross-window evidence")
+
+    monkeypatch.setattr(comparison_v2_module, "compare_stage4", _unexpected_comparator)
+    evidence = _build(
+        metrics_evidence=chain.metrics,
+        enforcement_precondition=chain.precondition,
+        methodology_v2=chain.methodology_v2,
+        reconciliation=chain.reconciliation,
+        window_evidence=chain.window_evidence,
+    )
+    _assert_rejected_with(evidence, "window_evidence_not_ready")
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_sm6_malformed_window_lineage_rejects_without_raw_exception() -> None:
+    chain = _chain()
+    malformed = replace(chain.window_evidence, observed_at_ns=None)  # type: ignore[arg-type]
+    evidence = _build(
+        window_evidence=malformed,
+        expected_window_evidence_digest=chain.window_evidence.window_evidence_digest,
+    )
+    _assert_rejected_with(evidence, "window_evidence_digest_mismatch")
+    assert _rc("window_evidence_contract_invalid") in evidence.reason_codes
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_sm6_rejects_resealed_ready_bypass_over_cross_window_artifact() -> None:
+    chain = _Chain(observed_at_ns=(31 * _DAY_NS, 2 * _DAY_NS), expect_window_ready=False)
+    forged = _reseal_window(
+        chain.window_evidence,
+        status=PaperSecondaryMetricsWindowEvidenceStatus.WINDOW_READY,
+        ready=True,
+        reason_codes=(),
+        reconciliation_consumed=True,
+        gate_decision_consumed=True,
+        exact_window_bound=True,
+        record_set_reconciled=True,
+        timestamps_digest_bound=True,
+    )
+    evidence = _build(
+        metrics_evidence=chain.metrics,
+        enforcement_precondition=chain.precondition,
+        methodology_v2=chain.methodology_v2,
+        reconciliation=chain.reconciliation,
+        window_evidence=forged,
+        expected_window_evidence_digest=forged.window_evidence_digest,
+    )
+    _assert_rejected_with(evidence, "window_evidence_contract_invalid")
+    assert evidence.stage4_comparator_invoked is False
+
+
 def test_baseline_edge_id_mismatch_rejected() -> None:
     foreign = build_stage4_backtest_baseline(
         baseline_id="baseline-1",
@@ -1819,6 +2342,8 @@ _TYPE_CASES = [
     ("gate_decision", "gate_decision_malformed"),
     ("enforcement_precondition", "enforcement_precondition_malformed"),
     ("metrics_evidence", "metrics_evidence_malformed"),
+    ("reconciliation", "reconciliation_malformed"),
+    ("window_evidence", "window_evidence_malformed"),
 ]
 
 
@@ -1837,6 +2362,8 @@ _EXPECTED_DIGEST_KWARGS = [
     "expected_gate_decision_digest",
     "expected_enforcement_precondition_digest",
     "expected_metrics_evidence_digest",
+    "expected_reconciliation_digest",
+    "expected_window_evidence_digest",
 ]
 
 
@@ -1913,6 +2440,7 @@ def test_ast_forbidden_imports_and_calls() -> None:
         "crypto_core.validation.trade_record_evidence",
     )
     allowed_exact = {
+        "crypto_core.validation.paper_secondary_metrics_substrate_reconciliation",
         "crypto_core.validation.paper_stage4_comparison_evidence_v2",
         "crypto_core.validation.paper_vs_backtest_methodology_v2",
     }
