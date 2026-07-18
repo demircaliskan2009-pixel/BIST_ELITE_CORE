@@ -1542,6 +1542,72 @@ def test_carried_pass_booleans_cannot_override_recomputed_failure() -> None:
     assert _rc("threshold_pass_incoherent") in evidence.reason_codes
 
 
+@pytest.mark.parametrize(
+    ("metrics_field", "precondition_field", "value"),
+    [
+        ("fill_rate_by_quantity", "computed_fill_rate_by_quantity", "1.200000000000000000"),
+        ("fill_rate_by_episode", "computed_fill_rate_by_episode", "1.100000000000000000"),
+        ("hit_rate", "computed_hit_rate", "1.100000000000000000"),
+    ],
+)
+def test_rate_above_one_rejected_as_out_of_range(metrics_field: str, precondition_field: str, value: str) -> None:
+    chain = _chain()
+    # Digest-valid reseal with an IMPOSSIBLE rate above one: every floor comparison still passes and every
+    # carried echo stays coherent, and the min-based comparator fill echo would mask it — the physical
+    # domain gate must reject with exactly the out-of-range reason and never reach the comparator.
+    metrics2, precondition2, methodology2 = _resealed_sm(
+        chain,
+        metrics_changes={metrics_field: value},
+        precondition_changes={precondition_field: value},
+    )
+    evidence = _build(metrics_evidence=metrics2, enforcement_precondition=precondition2, methodology_v2=methodology2)
+    assert evidence.status is PaperStage4ComparisonEvidenceV2Status.REJECTED
+    assert evidence.reason_codes == (_rc("secondary_metric_out_of_range"),)
+    assert evidence.secondary_metrics_enforced is False
+    assert evidence.secondary_thresholds_cleared is False
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_negative_rate_rejected_as_out_of_range() -> None:
+    chain = _chain()
+    metrics2, precondition2, methodology2 = _resealed_sm(
+        chain,
+        metrics_changes={"hit_rate": "-0.100000000000000000"},
+        precondition_changes={"computed_hit_rate": "-0.100000000000000000"},
+    )
+    evidence = _build(metrics_evidence=metrics2, enforcement_precondition=precondition2, methodology_v2=methodology2)
+    _assert_rejected_with(evidence, "secondary_metric_out_of_range")
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_slippage_at_domain_bound_rejected_as_out_of_range() -> None:
+    chain = _chain()
+    # Signed slippage is strictly greater than -10000 bps for positive prices; exactly -10000 is
+    # physically impossible evidence even though it trivially clears the ceiling.
+    metrics2, precondition2, methodology2 = _resealed_sm(
+        chain,
+        metrics_changes={"average_slippage_bps": "-10000.000000000000000000"},
+        precondition_changes={"computed_slippage_bps": "-10000.000000000000000000"},
+    )
+    evidence = _build(metrics_evidence=metrics2, enforcement_precondition=precondition2, methodology_v2=methodology2)
+    assert evidence.status is PaperStage4ComparisonEvidenceV2Status.REJECTED
+    assert evidence.reason_codes == (_rc("secondary_metric_out_of_range"),)
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_slippage_just_inside_domain_bound_passes() -> None:
+    chain = _chain()
+    metrics2, precondition2, methodology2 = _resealed_sm(
+        chain,
+        metrics_changes={"average_slippage_bps": "-9999.999999999999999999"},
+        precondition_changes={"computed_slippage_bps": "-9999.999999999999999999"},
+    )
+    evidence = _build(metrics_evidence=metrics2, enforcement_precondition=precondition2, methodology_v2=methodology2)
+    assert evidence.status is PaperStage4ComparisonEvidenceV2Status.READY, evidence.reason_codes
+    assert evidence.secondary_metrics_enforced is True
+    assert evidence.paper_slippage_bps == "-9999.999999999999999999"
+
+
 def test_unapproved_thresholds_rejected() -> None:
     chain = _chain()
     methodology2 = _reseal_methodology_v2(chain.methodology_v2, thresholds_approved=False)

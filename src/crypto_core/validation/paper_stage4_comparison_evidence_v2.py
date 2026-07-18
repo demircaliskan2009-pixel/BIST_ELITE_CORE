@@ -1339,6 +1339,13 @@ def _sm_binding_failures(
     return hard
 
 
+# Domain bound for the signed average slippage: every per-record slippage is
+# ``(realized - expected) / expected * 10_000`` with strictly positive prices, so each value — and any
+# average of them — is STRICTLY greater than -10000 bps. A digest-valid resealed value at or below the
+# bound is physically impossible evidence and fails closed.
+_MIN_SLIPPAGE_BPS_EXCLUSIVE = Decimal(-10_000)
+
+
 @dataclass(frozen=True)
 class _SecondaryEnforcement:
     hit_pass: bool
@@ -1348,6 +1355,7 @@ class _SecondaryEnforcement:
     slippage_pass: bool
     min_decided_pass: bool
     all_present: bool
+    all_in_range: bool
     all_cleared: bool
     hit_rate: Decimal | None
     fill_quantity: Decimal | None
@@ -1367,7 +1375,10 @@ def _secondary_enforcement_failures(
     SM-5 vacuous ``None``-slippage pass is structurally impossible here), every threshold comparison is
     recomputed from the direct SM-4 canonical values against the methodology-v2 digest-bound approved
     thresholds, and every carried pass boolean on SM-4 and on the precondition must equal the recompute
-    (``threshold_pass_incoherent``) — carried booleans are never trusted as enforcement.
+    (``threshold_pass_incoherent``) — carried booleans are never trusted as enforcement. Every enforced
+    metric must also lie inside its physical domain (rates in ``[0, 1]``; signed slippage strictly above
+    -10000 bps): a floor comparison alone cannot admit an impossible resealed value such as a fill rate
+    above one, because the conservative ``min`` comparator echo would mask it (``secondary_metric_out_of_range``).
     """
 
     hard: list[str] = []
@@ -1384,6 +1395,17 @@ def _secondary_enforcement_failures(
     )
     if not all_present:
         hard.append(_reason("missing_secondary_metric"))
+
+    # Physical-domain gates BEFORE any floor/ceiling comparison can clear: a resealed digest-valid chain
+    # carrying an impossible rate (for example ``fill_rate_by_quantity`` above one masked by the min-based
+    # comparator echo) or a slippage at or below -10000 bps must fail closed here regardless of floors.
+    hit_in_range = hit_rate is None or Decimal(0) <= hit_rate <= Decimal(1)
+    fill_quantity_in_range = fill_quantity is None or Decimal(0) <= fill_quantity <= Decimal(1)
+    fill_episode_in_range = fill_episode is None or Decimal(0) <= fill_episode <= Decimal(1)
+    slippage_in_range = slippage is None or slippage > _MIN_SLIPPAGE_BPS_EXCLUSIVE
+    all_in_range = hit_in_range and fill_quantity_in_range and fill_episode_in_range and slippage_in_range
+    if not all_in_range:
+        hard.append(_reason("secondary_metric_out_of_range"))
 
     with localcontext() as context:
         context.prec = _DECIMAL_INTERNAL_PRECISION
@@ -1431,7 +1453,7 @@ def _secondary_enforcement_failures(
     if not echo_coherent:
         hard.append(_reason("threshold_pass_incoherent"))
 
-    all_cleared = all_present and hit_pass and fill_pass and slippage_pass and min_decided_pass
+    all_cleared = all_present and all_in_range and hit_pass and fill_pass and slippage_pass and min_decided_pass
     return hard, _SecondaryEnforcement(
         hit_pass=hit_pass,
         fill_quantity_pass=fill_quantity_pass,
@@ -1440,6 +1462,7 @@ def _secondary_enforcement_failures(
         slippage_pass=slippage_pass,
         min_decided_pass=min_decided_pass,
         all_present=all_present,
+        all_in_range=all_in_range,
         all_cleared=all_cleared,
         hit_rate=hit_rate,
         fill_quantity=fill_quantity,
@@ -1933,6 +1956,7 @@ def build_paper_stage4_comparison_evidence_v2(
         and baseline_edge_id == paper_edge_id
         and duration_satisfied
         and enforcement.all_present
+        and enforcement.all_in_range
         and enforcement.all_cleared
         and stage4_comparator_invoked
         and comparison_performed
