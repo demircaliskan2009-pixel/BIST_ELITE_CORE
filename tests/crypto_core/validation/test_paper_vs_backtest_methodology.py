@@ -62,7 +62,9 @@ def test_no_equivalent_artifact_exists() -> None:
     builders = sorted(
         path.name
         for path in validation_dir.glob("*.py")
-        if "build_paper_vs_backtest_methodology" in path.read_text(encoding="utf-8")
+        # Anchor on the exact v1 builder definition so the distinct, approved SM-5
+        # ``build_paper_vs_backtest_methodology_v2`` artifact is not counted as an equivalent duplicate.
+        if "def build_paper_vs_backtest_methodology(" in path.read_text(encoding="utf-8")
     )
     assert builders == ["paper_vs_backtest_methodology.py"]
 
