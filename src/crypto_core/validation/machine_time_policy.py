@@ -27,6 +27,15 @@ proves only that the supplied structure metadata is well-formed and governance-a
 that any machine-time anchor was verified, that time origin was proven, that a concrete source registry was
 bound, or that injected/attested time may substitute for a machine proof.
 
+Pre-Deep-Research scope boundary: a READY policy additionally proves that its caller-supplied identity
+fields (``policy_id``, ``correlation_id``, ``approval_reference``) and metadata carry NO concrete
+provider/endpoint binding material — no URL/URI scheme, network location, hostname, domain, IP literal,
+port, or provider/endpoint vocabulary. The three identity fields and metadata keys must match a conservative
+opaque-identifier grammar (lowercase alphanumerics plus ``_``/``-``), which structurally rejects network
+encodings; metadata values are additionally scanned for the same material. Any such material yields
+``POLICY_REJECTED`` and can never be resealed as READY, so no Deep-Research-gated source fact (which belongs
+to MT-3+) can enter MT-2 through free text.
+
 Trust-boundary discipline: no caller-carried value participates in equality, ordering, arithmetic, sorting,
 set construction, hashing, scope scanning, output projection, or serialization until its exact expected
 built-in type and canonical representation have been proven. A JSON-serializable ``str``/``int`` subclass
@@ -343,6 +352,65 @@ def _has_scope_violation(*texts: object) -> bool:
     return False
 
 
+# Opaque-identifier grammar for the governance-owned identity fields (policy_id, correlation_id,
+# approval_reference) and metadata keys: lowercase ASCII letters, digits, ``_`` and ``-``; begins and ends
+# with an alphanumeric; non-empty; no whitespace, dot, slash, backslash, colon, ``@``, query/fragment, or
+# control character. This structurally rejects URL/URI/host/IP/port encodings without binding any
+# Deep-Research provider fact (MT-3+ owns those). Existing canonical ids (``mt2-policy-1``, ``corr-1``,
+# ``gov-mt2-1``) satisfy it.
+_OPAQUE_IDENTIFIER_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?")
+
+# Network-location material: a concrete external service binding that MT-2 (abstract, pre-Deep-Research-safe)
+# must never carry in a READY artifact. Matched on the raw scope text.
+_NETWORK_LOCATION_PATTERN = re.compile(
+    r"[a-z][a-z0-9+.\-]*://"  # <scheme>:// (http, https, ws, wss, ftp, ...)
+    r"|(?<![a-z0-9])www\."  # www. host prefix
+    r"|(?<![0-9])(?:\d{1,3}\.){3}\d{1,3}(?![0-9])"  # IPv4 literal
+    r"|\[[0-9a-f:]+\]"  # bracketed IPv6 literal
+    r"|(?<![a-z0-9])[a-z0-9-]+\.[a-z0-9-]+(?:\.[a-z0-9-]+)*(?![a-z0-9])"  # domain-like host label.label(.tld)
+    r"|(?<=[a-z0-9\]]):[0-9]{2,5}(?![0-9])",  # host/IP:port
+    re.IGNORECASE,
+)
+
+# Provider-binding vocabulary: atomic tokens that name or bind a concrete external source/provider or a
+# network endpoint. Detected after normalizing every separator (whitespace, ``_``, ``-``, ``.``, ``:``,
+# ``/``, ``\``) to a space, so ``provider_name``, ``provider.name``, ``provider-name``, ``provider:name``,
+# ``provider/name`` and ``provider name`` are equivalent. Every forbidden compound in the MT design
+# (``endpoint_url``, ``source_hostname``, ``beacon_provider``, ``tsa_endpoint``, ``base_url``,
+# ``exchange_time_host`` ...) contains at least one of these atoms. Abstract terms that must stay allowed
+# (``external``, ``source``, ``registry``, ``offline``, ``timestamp``, ``signature`` ...) are deliberately
+# absent, so they never false-positive.
+_PROVIDER_BINDING_TOKENS = frozenset(
+    {"provider", "vendor", "endpoint", "url", "uri", "hostname", "host", "domain", "port"}
+)
+_SEPARATOR_PATTERN = re.compile(r"[\s_.:/\\-]+")
+
+
+def _is_opaque_identifier(value: object) -> bool:
+    """Exact ``str`` matching the conservative opaque-identifier grammar (structurally not a URL/host/port)."""
+
+    return type(value) is str and _OPAQUE_IDENTIFIER_PATTERN.fullmatch(value) is not None
+
+
+def _has_provider_binding_material(*texts: object) -> bool:
+    """True if any exact-``str`` scope text carries a network location or provider/endpoint vocabulary.
+
+    Side-effect-free and exact-type-guarded: a non-``str`` or empty text is skipped; no caller-controlled
+    method is invoked. The network-location regex runs on the raw text; the vocabulary check runs on
+    separator-normalized whole tokens so only exact provider-binding atoms match (never a substring of an
+    allowed word).
+    """
+
+    for text in texts:
+        if type(text) is not str or text == "":
+            continue
+        if _NETWORK_LOCATION_PATTERN.search(text):
+            return True
+        if set(_SEPARATOR_PATTERN.sub(" ", text.lower()).split()) & _PROVIDER_BINDING_TOKENS:
+            return True
+    return False
+
+
 # Every caller-exposed pinned structure identifier and its precise, stable mismatch reason. Precise
 # per-field reasons (never a single ``structure_mismatch``) keep later MT diagnostics actionable.
 _PINNED_STRING_FIELDS: tuple[tuple[str, str, str], ...] = (
@@ -511,6 +579,20 @@ def build_machine_time_policy(
         hard.append(_reason("clock_token_forbidden"))
     if _has_scope_violation(*scope_texts):
         hard.append(_reason("scope_violation"))
+    # Pre-Deep-Research provider/endpoint scope: no concrete source/network binding may reach READY.
+    # ``policy_id`` / ``correlation_id`` are already proven plain non-empty strings above (else raised), so
+    # these opaque-grammar checks are clean; ``approval_reference`` is only grammar-checked when it is a
+    # present plain string (absence is already ``approval_reference_missing``).
+    if _has_provider_binding_material(*scope_texts):
+        hard.append(_reason("provider_binding_forbidden"))
+    if not _is_opaque_identifier(policy_id):
+        hard.append(_reason("policy_id_not_opaque"))
+    if not _is_opaque_identifier(correlation_id):
+        hard.append(_reason("correlation_id_not_opaque"))
+    if _is_plain_non_empty_string(approval_reference) and not _is_opaque_identifier(approval_reference):
+        hard.append(_reason("approval_reference_not_opaque"))
+    if any(not _is_opaque_identifier(key) for key, _value in metadata_pairs):
+        hard.append(_reason("metadata_key_not_opaque"))
 
     reason_codes = _sorted_unique(hard)
     ready = not reason_codes
@@ -706,6 +788,16 @@ def _ready_semantic_ok(policy: MachineTimePolicy) -> bool:
         return False
     if policy.policy_approved is not True:
         return False
+    # Pre-Deep-Research provider/endpoint scope: identity fields + metadata keys must be opaque identifiers,
+    # and no scope text may carry network-location or provider/endpoint vocabulary material.
+    if not (
+        _is_opaque_identifier(policy.policy_id)
+        and _is_opaque_identifier(policy.correlation_id)
+        and _is_opaque_identifier(policy.approval_reference)
+    ):
+        return False
+    if any(not _is_opaque_identifier(key) for key, _value in policy.metadata):
+        return False
     scope_texts = (
         policy.policy_id,
         policy.correlation_id,
@@ -713,6 +805,8 @@ def _ready_semantic_ok(policy: MachineTimePolicy) -> bool:
         *_metadata_texts(policy.metadata),
     )
     if _has_bist_token(*scope_texts) or _has_clock_token(*scope_texts) or _has_scope_violation(*scope_texts):
+        return False
+    if _has_provider_binding_material(*scope_texts):
         return False
     return True
 

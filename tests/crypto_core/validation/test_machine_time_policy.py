@@ -1131,6 +1131,18 @@ _FORGED_READY_SEMANTIC_CASES = [
     ("metadata", (("note", "enable live orders"),)),
     ("metadata", (("note", "read system_time now"),)),
     ("metadata", (("note", "bist matriks feed"),)),
+    # Pre-Deep-Research provider/endpoint scope forgeries (network location or provider vocabulary).
+    ("policy_id", "https://provider.example/api"),
+    ("policy_id", "provider.name"),
+    ("correlation_id", "192.0.2.1:443"),
+    ("approval_reference", "tsa.example"),
+    ("approval_reference", "wss://time.example/stream"),
+    ("metadata", (("provider_name", "x"),)),
+    ("metadata", (("endpoint_url", "x"),)),
+    ("metadata", (("note", "use provider endpoint"),)),
+    ("metadata", (("note", "bind external service hostname"),)),
+    ("metadata", (("note", "connect tsa.example"),)),
+    ("metadata", (("note", "reach [2001:db8::1] node"),)),
 ]
 _FORGED_READY_SEMANTIC_IDS = [f"{name}-{index}" for index, (name, _) in enumerate(_FORGED_READY_SEMANTIC_CASES)]
 
@@ -1284,4 +1296,232 @@ def test_public_ready_reproof_matches_builder_ready_contract(field_name: str, va
     valid = _build()
     assert valid.ready is True
     assert machine_time_policy_digest(valid) == valid.policy_digest
+    assert machine_time_policy_to_dict(valid)["policy_digest"] == valid.policy_digest
+
+
+# --------------------------------------------------------------------------------------------------
+# Pre-Deep-Research provider/endpoint scope closeout: no concrete source binding may reach READY
+# --------------------------------------------------------------------------------------------------
+
+# Synthetic network-location material only (no real provider brand). Each must be detected as
+# provider-binding.
+_NETWORK_LOCATION_SAMPLES = (
+    "https://provider.example/api",
+    "http://provider.example",
+    "ws://time.example/stream",
+    "wss://time.example/stream",
+    "ftp://archive.example/proofs",
+    "scheme://host.example/x",
+    "www.provider.example",
+    "provider.example",
+    "sub.provider.example",
+    "tsa.example",
+    "192.0.2.1",
+    "192.0.2.1:443",
+    "[2001:db8::1]",
+    "[2001:db8::1]:443",
+    "host.example:8080",
+)
+
+# Provider/endpoint vocabulary, exercising each supported separator (space, ``_``, ``-``, ``.``, ``:``,
+# ``/``). None relies on a real company/service/authority name.
+_PROVIDER_VOCABULARY_SAMPLES = (
+    "provider",
+    "vendor",
+    "endpoint",
+    "hostname",
+    "use provider endpoint",
+    "provider_name",
+    "endpoint-url",
+    "source.hostname",
+    "beacon:provider",
+    "tsa/endpoint",
+    "bind external service hostname",
+    "base_url",
+    "api_url",
+    "domain_name",
+)
+
+# Abstract vocabulary + canonical identifiers that must never be flagged (false-positive guard).
+_ALLOWED_ABSTRACT_SAMPLES = (
+    "external",
+    "source",
+    "proof",
+    "signature",
+    "timestamp",
+    "public",
+    "digest",
+    "registry",
+    "offline",
+    "utc",
+    "sandwich",
+    "abstract",
+    "policy",
+    "governance",
+    "external source proof signature timestamp registry offline sandwich abstract governance",
+    "abstract machine-time sandwich policy",
+    "mt2-policy-1",
+    "corr-1",
+    "gov-mt2-1",
+    "bind a source registry",
+)
+
+
+@pytest.mark.parametrize("sample", [*_NETWORK_LOCATION_SAMPLES, *_PROVIDER_VOCABULARY_SAMPLES])
+def test_provider_binding_material_detector_flags_concrete_source(sample: str) -> None:
+    assert policy_module._has_provider_binding_material(sample) is True
+
+
+@pytest.mark.parametrize("sample", _ALLOWED_ABSTRACT_SAMPLES)
+def test_provider_binding_material_detector_allows_abstract_terms(sample: str) -> None:
+    assert policy_module._has_provider_binding_material(sample) is False
+
+
+def test_provider_binding_material_detector_is_exact_type_guarded() -> None:
+    # A non-str / empty text is skipped; no caller-controlled operation is invoked.
+    assert policy_module._has_provider_binding_material(None, 7, b"provider", "") is False
+    assert policy_module._has_provider_binding_material(_RaisingEq(), _RaisingHash()) is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["mt2-policy-1", "corr-1", "gov-mt2-1", "a", "x1", "policy_id_1", "note-2"],
+)
+def test_opaque_identifier_accepts_canonical_ids(value: str) -> None:
+    assert policy_module._is_opaque_identifier(value) is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://provider.example/api",
+        "provider.example",
+        "192.0.2.1:443",
+        "corr 1",
+        "-corr",
+        "corr-",
+        "Corr-1",
+        "corr@1",
+        "corr/1",
+        "corr:1",
+        "corr.1",
+        "",
+        7,
+        None,
+        _LyingStr("corr-1"),
+    ],
+)
+def test_opaque_identifier_rejects_network_and_non_exact(value: object) -> None:
+    assert policy_module._is_opaque_identifier(value) is False
+
+
+@pytest.mark.parametrize("field_name", ["policy_id", "correlation_id"])
+@pytest.mark.parametrize("value", ["https://provider.example/api", "192.0.2.1:443", "tsa.example"])
+def test_builder_rejects_network_location_in_identity_fields(field_name: str, value: str) -> None:
+    policy = _build(**{field_name: value})
+    _assert_serializable_rejected(policy)
+    assert _rc("provider_binding_forbidden") in policy.reason_codes
+    assert _rc(f"{field_name}_not_opaque") in policy.reason_codes
+
+
+@pytest.mark.parametrize("value", ["provider", "endpoint_name"])
+def test_builder_rejects_provider_vocabulary_in_identity_fields(value: str) -> None:
+    # Grammar-valid opaque ids that nonetheless carry provider vocabulary are still rejected.
+    assert policy_module._is_opaque_identifier(value) is True
+    policy = _build(policy_id=value)
+    _assert_serializable_rejected(policy)
+    assert _rc("provider_binding_forbidden") in policy.reason_codes
+
+
+def test_builder_rejects_canonical_but_forbidden_approval_reference() -> None:
+    # A canonical-but-forbidden approval reference returns deterministic POLICY_REJECTED, never a raw raise.
+    policy = _build(approval_reference="tsa.example")
+    _assert_serializable_rejected(policy)
+    assert _rc("provider_binding_forbidden") in policy.reason_codes
+    assert _rc("approval_reference_not_opaque") in policy.reason_codes
+    assert _rc("approval_reference_missing") not in policy.reason_codes
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["provider_name", "endpoint_url", "source_hostname", "beacon_provider", "tsa_endpoint", "exchange_time_host"],
+)
+def test_builder_rejects_provider_binding_metadata_key(key: str) -> None:
+    policy = _build(metadata={key: "x"})
+    _assert_serializable_rejected(policy)
+    assert _rc("provider_binding_forbidden") in policy.reason_codes
+
+
+@pytest.mark.parametrize("key", ["provider.name", "endpoint:url", "host/name"])
+def test_builder_rejects_non_opaque_metadata_key(key: str) -> None:
+    policy = _build(metadata={key: "x"})
+    _assert_serializable_rejected(policy)
+    assert _rc("metadata_key_not_opaque") in policy.reason_codes
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "use provider endpoint",
+        "bind external service hostname",
+        "connect tsa.example",
+        "https://provider.example/api",
+        "reach [2001:db8::1] node",
+        "call 192.0.2.1:443",
+    ],
+)
+def test_builder_rejects_provider_binding_metadata_value(value: str) -> None:
+    policy = _build(metadata={"note": value})
+    _assert_serializable_rejected(policy)
+    assert _rc("provider_binding_forbidden") in policy.reason_codes
+
+
+def test_abstract_metadata_and_canonical_ids_remain_ready() -> None:
+    # The canonical valid metadata stays READY.
+    assert _build(metadata={"purpose": "abstract machine-time sandwich policy"}).ready is True
+    # Allowed abstract vocabulary (external / source / registry / offline ...) does not false-positive.
+    ready = _build(metadata={"purpose": "external source proof signature timestamp registry offline sandwich policy"})
+    assert ready.ready is True
+    assert ready.status is MachineTimePolicyStatus.POLICY_READY
+    assert ready.reason_codes == ()
+    # ``source`` / ``registry`` remain allowed even though ``source_provider`` / ``source_hostname`` do not.
+    assert _build(metadata={"note": "bind a source registry"}).ready is True
+
+
+@pytest.mark.parametrize("field_name", ["policy_id", "correlation_id", "approval_reference"])
+def test_public_digest_rejects_ready_with_network_location_scope(field_name: str) -> None:
+    forged = _forge(**{field_name: "https://provider.example/api"})
+    assert forged.status is MachineTimePolicyStatus.POLICY_READY
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_digest(forged)
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_to_dict(forged)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        (("provider_name", "x"),),
+        (("note", "use provider endpoint"),),
+        (("note", "connect tsa.example"),),
+        (("provider.name", "x"),),
+    ],
+)
+def test_public_digest_rejects_ready_with_provider_binding_metadata(metadata: tuple) -> None:
+    forged = _forge(metadata=metadata)
+    assert forged.status is MachineTimePolicyStatus.POLICY_READY
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_digest(forged)
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_to_dict(forged)
+
+
+def test_public_provider_scope_reproof_matches_builder_contract() -> None:
+    # The exact scope violation that makes the BUILDER reject is exactly what the public READY reproof
+    # refuses to reseal on a forged READY artifact; a scope-clean READY policy still serializes.
+    assert _build(policy_id="provider.example").ready is False
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_digest(_forge(policy_id="provider.example"))
+    valid = _build()
+    assert valid.ready is True
     assert machine_time_policy_to_dict(valid)["policy_digest"] == valid.policy_digest
