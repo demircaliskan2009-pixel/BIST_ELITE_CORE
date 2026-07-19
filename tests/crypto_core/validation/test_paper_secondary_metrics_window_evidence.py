@@ -535,3 +535,139 @@ def test_ready_and_rejected_outputs_keep_all_unsafe_claims_structurally_false() 
     assert rejected.exact_window_bound is False
     assert rejected.record_set_reconciled is False
     assert rejected.timestamps_digest_bound is False
+
+
+class _RaisingEqField:
+    """Equality-raising anchor field: any comparison before the exact-type proof would crash the builder."""
+
+    def __eq__(self, other: object) -> bool:  # pragma: no cover - must never be invoked
+        raise AssertionError("custom equality on a noncanonical anchor field must never be invoked")
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+class _LyingStr(str):
+    """JSON-serializable ``str`` subclass whose equality always lies — digest-equivalent, type-distinct."""
+
+    __slots__ = ()
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __ne__(self, other: object) -> bool:
+        return False
+
+    __hash__ = str.__hash__
+
+
+class _LyingInt(int):
+    """JSON-serializable ``int`` subclass whose equality always lies — digest-equivalent, type-distinct."""
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __ne__(self, other: object) -> bool:
+        return False
+
+    __hash__ = int.__hash__
+
+
+_MEMBER_NON_STATUS_FORGERIES = (
+    ("record", "schema_version"),
+    ("record", "episode_id"),
+    ("record", "policy_id"),
+    ("episode_run", "fill_simulation_result_digest"),
+    ("episode_run", "fill_market_snapshot_digest"),
+    ("episode_run", "market_symbol"),
+    ("fill_result", "market_snapshot_digest"),
+    ("fill_result", "correlation_id"),
+    ("market_snapshot", "snapshot_id"),
+)
+
+
+@pytest.mark.parametrize(
+    ("member_name", "field_name"),
+    _MEMBER_NON_STATUS_FORGERIES,
+    ids=["-".join(pair) for pair in _MEMBER_NON_STATUS_FORGERIES],
+)
+def test_window_member_non_status_fields_never_invoke_custom_equality(member_name: str, field_name: str) -> None:
+    chain = support._chain()
+    original = chain.window_inputs[0]
+    forged_member = replace(getattr(original, member_name), **{field_name: _RaisingEqField()})  # type: ignore[arg-type]
+    forged_input = replace(original, **{member_name: forged_member})
+    evidence = _build(chain, record_inputs=(forged_input, chain.window_inputs[1]))
+    assert evidence.status is PaperSecondaryMetricsWindowEvidenceStatus.REJECTED
+    assert evidence.ready is False
+    assert evidence.reason_codes
+    assert evidence.stage4_comparator_invoked is False
+    payload = paper_secondary_metrics_window_evidence_to_dict(evidence)
+    assert payload["status"] == "REJECTED"
+    assert paper_secondary_metrics_window_evidence_digest(evidence) == evidence.window_evidence_digest
+
+
+def test_window_carried_member_digests_require_exact_hex64_before_equality() -> None:
+    # Value-identical str subclass in the carried episode->fill link: the episode self-digest recomputes
+    # UNCHANGED, so digest validity cannot catch it — only the exact hex64 type proof may reject it.
+    chain = support._chain()
+    original = chain.window_inputs[0]
+    true_link = original.episode_run.fill_simulation_result_digest
+    forged_episode = replace(original.episode_run, fill_simulation_result_digest=_LyingStr(true_link))  # type: ignore[arg-type]
+    assert paper_episode_run_result_digest(forged_episode) == original.episode_run.episode_run_digest
+    forged_input = replace(original, episode_run=forged_episode)
+    evidence = _build(chain, record_inputs=(forged_input, chain.window_inputs[1]))
+    assert evidence.status is PaperSecondaryMetricsWindowEvidenceStatus.REJECTED
+    assert _rc("episode_fill_binding_mismatch") in evidence.reason_codes
+    assert _rc("episode_run_digest_mismatch") not in evidence.reason_codes
+    assert paper_secondary_metrics_window_evidence_digest(evidence) == evidence.window_evidence_digest
+
+
+_MALFORMED_EPISODE_COUNTS = (
+    (_RaisingEqField(), False),
+    (_LyingInt(2), True),
+    (True, False),
+    ("2", False),
+    (None, False),
+)
+
+
+@pytest.mark.parametrize(
+    ("forged_count", "digest_equivalent"),
+    _MALFORMED_EPISODE_COUNTS,
+    ids=["equality_raising", "lying_int_subclass", "bool", "string", "none"],
+)
+def test_window_reconciliation_episode_count_requires_exact_int_before_comparison(
+    forged_count: object, digest_equivalent: bool
+) -> None:
+    chain = support._chain()
+    forged = replace(chain.reconciliation, episode_count=forged_count)  # type: ignore[arg-type]
+    evidence = _build(chain, reconciliation=forged)
+    assert evidence.status is PaperSecondaryMetricsWindowEvidenceStatus.REJECTED
+    assert _rc("reconciliation_contract_invalid") in evidence.reason_codes
+    assert _rc("window_inventory_count_mismatch") in evidence.reason_codes
+    if digest_equivalent:
+        assert _rc("reconciliation_digest_mismatch") not in evidence.reason_codes
+    assert paper_secondary_metrics_window_evidence_digest(evidence) == evidence.window_evidence_digest
+
+
+def test_window_builder_cross_bindings_short_circuit_on_noncanonical_fields() -> None:
+    chain = support._chain()
+    raising_market = _build(
+        chain,
+        reconciliation=replace(chain.reconciliation, market_symbol=_RaisingEqField()),  # type: ignore[arg-type]
+    )
+    assert raising_market.status is PaperSecondaryMetricsWindowEvidenceStatus.REJECTED
+    assert _rc("market_symbol_mismatch") in raising_market.reason_codes
+    raising_correlation = _build(
+        chain,
+        gate_decision=replace(chain.gate, correlation_id=_RaisingEqField()),  # type: ignore[arg-type]
+    )
+    assert raising_correlation.status is PaperSecondaryMetricsWindowEvidenceStatus.REJECTED
+    assert _rc("correlation_id_mismatch") in raising_correlation.reason_codes
+    lying_market = support._reseal_reconciliation(chain.reconciliation, market_symbol=_LyingStr(support._MARKET))
+    assert lying_market.reconciliation_digest == chain.reconciliation.reconciliation_digest
+    lying_evidence = _build(chain, reconciliation=lying_market)
+    assert lying_evidence.status is PaperSecondaryMetricsWindowEvidenceStatus.REJECTED
+    assert _rc("market_symbol_mismatch") in lying_evidence.reason_codes
+    assert _rc("reconciliation_digest_mismatch") not in lying_evidence.reason_codes
+    for evidence in (raising_market, raising_correlation, lying_evidence):
+        assert paper_secondary_metrics_window_evidence_digest(evidence) == evidence.window_evidence_digest

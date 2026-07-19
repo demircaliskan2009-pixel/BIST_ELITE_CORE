@@ -205,6 +205,37 @@ def _is_exact_int(value: object) -> bool:
     return type(value) is int and not isinstance(value, bool)
 
 
+# Exact-type-before-operation rule: no anchor-carried value may participate in equality, ordering,
+# arithmetic, sorting, set construction, or hashing until its exact built-in runtime type is proven. A
+# JSON-serializable ``str``/``int`` subclass survives every digest recompute byte-identically, so digest
+# validity can never substitute for these gates, and a custom ``__eq__``/``__hash__`` must never be
+# reachable from a coherently resealed anchor.
+
+
+def _eq_plain_str(value: object, expected: str) -> bool:
+    return type(value) is str and value == expected
+
+
+def _eq_exact_int(value: object, expected: int) -> bool:
+    return _is_exact_int(value) and value == expected
+
+
+def _is_empty_tuple(value: object) -> bool:
+    return type(value) is tuple and len(value) == 0
+
+
+def _is_hex64_tuple(value: object) -> bool:
+    return type(value) is tuple and all(_is_hex64_string(item) for item in value)
+
+
+def _plain_strings_equal(*values: object) -> bool:
+    return all(_is_plain_non_empty_string(value) for value in values) and len({*values}) == 1
+
+
+def _hex64_strings_equal(*values: object) -> bool:
+    return all(_is_hex64_string(value) for value in values) and len({*values}) == 1
+
+
 def _is_canonical_metadata(value: object) -> bool:
     if type(value) is not tuple:
         return False
@@ -300,21 +331,21 @@ def _reconciliation_failures(reconciliation: PaperSecondaryMetricsSubstrateRecon
     records = reconciliation.reconciled_record_digests
     episodes = reconciliation.reconciled_episode_run_digests
     valid_inventory = (
-        type(records) is tuple
-        and type(episodes) is tuple
+        _is_hex64_tuple(records)
+        and _is_hex64_tuple(episodes)
+        and _is_exact_int(reconciliation.episode_count)
         and 1 <= len(records) <= _MAX_RECORDS
         and len(records) == len(episodes) == reconciliation.episode_count
-        and all(_is_hex64_string(item) for item in (*records, *episodes))
         and records == tuple(sorted(records))
         and len(set(records)) == len(records)
         and len(set(episodes)) == len(episodes)
     )
     if not (
-        reconciliation.schema_version == _EXPECTED_RECONCILIATION_SCHEMA
-        and reconciliation.reconciliation_version == _EXPECTED_RECONCILIATION_SCHEMA
+        _eq_plain_str(reconciliation.schema_version, _EXPECTED_RECONCILIATION_SCHEMA)
+        and _eq_plain_str(reconciliation.reconciliation_version, _EXPECTED_RECONCILIATION_SCHEMA)
         and reconciliation.status is PaperSecondaryMetricsSubstrateReconciliationStatus.RECONCILED
         and reconciliation.ready is True
-        and reconciliation.reason_codes == ()
+        and _is_empty_tuple(reconciliation.reason_codes)
         and _is_plain_non_empty_string(reconciliation.reconciliation_id)
         and _is_plain_non_empty_string(reconciliation.correlation_id)
         and _is_plain_non_empty_string(reconciliation.policy_id)
@@ -354,11 +385,11 @@ def _gate_window_values(
     start = gate.gate_used_first_bucket_start_ns
     end = gate.gate_used_last_bucket_end_ns
     if not (
-        gate.schema_version == _EXPECTED_GATE_SCHEMA
-        and gate.decision_version == _EXPECTED_GATE_SCHEMA
+        _eq_plain_str(gate.schema_version, _EXPECTED_GATE_SCHEMA)
+        and _eq_plain_str(gate.decision_version, _EXPECTED_GATE_SCHEMA)
         and gate.status is PaperThirtyDayEvidenceGateDecisionStatus.READY
         and gate.ready is True
-        and gate.reason_codes == ()
+        and _is_empty_tuple(gate.reason_codes)
         and gate.thirty_day_gate_satisfied is True
         and _is_plain_non_empty_string(gate.gate_id)
         and _is_plain_non_empty_string(gate.window_id)
@@ -376,8 +407,8 @@ def _gate_window_values(
         and start % _DAY_NS == 0
         and end % _DAY_NS == 0
         and end - start == _REQUIRED_DAY_COUNT * _DAY_NS
-        and gate.gate_bucket_count_used == _REQUIRED_DAY_COUNT
-        and gate.gate_minimum_consecutive_bucket_count == _REQUIRED_DAY_COUNT
+        and _eq_exact_int(gate.gate_bucket_count_used, _REQUIRED_DAY_COUNT)
+        and _eq_exact_int(gate.gate_minimum_consecutive_bucket_count, _REQUIRED_DAY_COUNT)
     )
     if not valid_window:
         hard.append(_reason("gate_window_invalid"))
@@ -418,44 +449,59 @@ def _member_failures(
     episode_digest = _recomputed_digest_or_none(paper_episode_run_result_digest, episode)
     fill_digest = _recomputed_digest_or_none(paper_fill_simulation_result_digest, fill)
     snapshot_digest = _recomputed_digest_or_none(paper_fill_market_snapshot_digest, snapshot)
-    if record_digest is None or record_digest != record.record_digest:
+    if record_digest is None or not _hex64_strings_equal(record_digest, record.record_digest):
         hard.append(_reason("record_digest_mismatch"))
         record_digest = ""
-    if episode_digest is None or episode_digest != episode.episode_run_digest:
+    if episode_digest is None or not _hex64_strings_equal(episode_digest, episode.episode_run_digest):
         hard.append(_reason("episode_run_digest_mismatch"))
         episode_digest = ""
-    if fill_digest is None or fill_digest != fill.result_digest:
+    if fill_digest is None or not _hex64_strings_equal(fill_digest, fill.result_digest):
         hard.append(_reason("fill_result_digest_mismatch"))
         fill_digest = ""
-    if snapshot_digest is None or snapshot_digest != snapshot.snapshot_digest:
+    if snapshot_digest is None or not _hex64_strings_equal(snapshot_digest, snapshot.snapshot_digest):
         hard.append(_reason("market_snapshot_digest_mismatch"))
         snapshot_digest = ""
-    if record.schema_version != _EXPECTED_RECORD_SCHEMA or episode.schema_version != _EXPECTED_EPISODE_SCHEMA:
+    if not (
+        _eq_plain_str(record.schema_version, _EXPECTED_RECORD_SCHEMA)
+        and _eq_plain_str(episode.schema_version, _EXPECTED_EPISODE_SCHEMA)
+    ):
         hard.append(_reason("member_schema_invalid"))
-    if fill.schema_version != _EXPECTED_FILL_SCHEMA or snapshot.schema_version != _EXPECTED_SNAPSHOT_SCHEMA:
+    if not (
+        _eq_plain_str(fill.schema_version, _EXPECTED_FILL_SCHEMA)
+        and _eq_plain_str(snapshot.schema_version, _EXPECTED_SNAPSHOT_SCHEMA)
+    ):
         hard.append(_reason("member_schema_invalid"))
-    if record.episode_id != episode.episode_run_id:
+    if not _plain_strings_equal(record.episode_id, episode.episode_run_id):
         hard.append(_reason("record_episode_binding_mismatch"))
     # Exact enum/runtime type is proven BEFORE any ``.value`` access or status equality: a forged exact-type
     # fill carrying a malformed status (``None``/int/bool/plain string/foreign enum/equality-raising object)
     # must become deterministic REJECTED evidence, never a raw exception. A foreign ``str``-enum whose
     # ``.value`` matches a valid member is digest-equivalent through the upstream serializer, so digest
-    # validity can never substitute for this gate.
+    # validity can never substitute for this gate. The same rule covers the carried member-link digests: a
+    # digest recompute failure never licenses a later direct comparison over the malformed carried value.
     fill_status_canonical = type(fill.status) is PaperFillSimulationStatus
     episode_fill_status_canonical = _is_plain_non_empty_string(episode.fill_status)
     if not fill_status_canonical or not episode_fill_status_canonical:
         hard.append(_reason("fill_status_contract_invalid"))
-    if episode.fill_simulation_result_digest != fill_digest or (
+    if not _hex64_strings_equal(episode.fill_simulation_result_digest, fill_digest) or (
         fill_status_canonical and episode_fill_status_canonical and episode.fill_status != fill.status.value
     ):
         hard.append(_reason("episode_fill_binding_mismatch"))
-    if episode.fill_market_snapshot_digest != snapshot_digest or fill.market_snapshot_digest != snapshot_digest:
+    if not _hex64_strings_equal(episode.fill_market_snapshot_digest, snapshot_digest) or not _hex64_strings_equal(
+        fill.market_snapshot_digest, snapshot_digest
+    ):
         hard.append(_reason("snapshot_binding_mismatch"))
-    if not (record.correlation_id == episode.correlation_id == fill.correlation_id == correlation_id):
+    if not all(
+        _eq_plain_str(value, correlation_id)
+        for value in (record.correlation_id, episode.correlation_id, fill.correlation_id)
+    ):
         hard.append(_reason("correlation_id_mismatch"))
-    if record.policy_id != policy_id:
+    if not _plain_strings_equal(record.policy_id, policy_id):
         hard.append(_reason("policy_id_mismatch"))
-    if not (episode.market_symbol == fill.market_symbol == snapshot.market_symbol == market_symbol):
+    if not all(
+        _plain_strings_equal(value, market_symbol)
+        for value in (episode.market_symbol, fill.market_symbol, snapshot.market_symbol)
+    ):
         hard.append(_reason("market_symbol_mismatch"))
     observed = snapshot.observed_at_ns
     if not _is_exact_int(observed) or observed < 0:
@@ -556,9 +602,12 @@ def build_paper_secondary_metrics_window_evidence(
     hard.extend(_reconciliation_failures(reconciliation))
     gate_failures, start_ns, end_ns, start_day, end_day, gate_days = _gate_window_values(gate_decision)
     hard.extend(gate_failures)
-    if reconciliation.correlation_id != correlation_id or gate_decision.correlation_id != correlation_id:
+    if not (
+        _eq_plain_str(reconciliation.correlation_id, correlation_id)
+        and _eq_plain_str(gate_decision.correlation_id, correlation_id)
+    ):
         hard.append(_reason("correlation_id_mismatch"))
-    if reconciliation.market_symbol != gate_decision.market_symbol:
+    if not _plain_strings_equal(reconciliation.market_symbol, gate_decision.market_symbol):
         hard.append(_reason("market_symbol_mismatch"))
 
     proofs: list[_MemberProof] = []
@@ -580,17 +629,24 @@ def build_paper_secondary_metrics_window_evidence(
     snapshot_digests = tuple(proof.snapshot_digest for proof in proofs)
     observed_values = tuple(proof.observed_at_ns for proof in proofs)
     observed_days = tuple(value // _DAY_NS for value in observed_values)
-    if tuple(sorted(record_digests)) != reconciliation.reconciled_record_digests or len(set(record_digests)) != len(
-        record_digests
+    # The reconciliation-carried inventories are proven exact hex64 tuples BEFORE any equality touches
+    # their items; the recomputed member digests on the left are plain strings by construction.
+    if (
+        not _is_hex64_tuple(reconciliation.reconciled_record_digests)
+        or tuple(sorted(record_digests)) != reconciliation.reconciled_record_digests
+        or len(set(record_digests)) != len(record_digests)
     ):
         hard.append(_reason("reconciliation_record_inventory_mismatch"))
-    if episode_digests != reconciliation.reconciled_episode_run_digests or len(set(episode_digests)) != len(
-        episode_digests
+    if (
+        not _is_hex64_tuple(reconciliation.reconciled_episode_run_digests)
+        or episode_digests != reconciliation.reconciled_episode_run_digests
+        or len(set(episode_digests)) != len(episode_digests)
     ):
         hard.append(_reason("reconciliation_episode_inventory_mismatch"))
     if not (
-        len(inputs)
-        == reconciliation.episode_count
+        _is_exact_int(reconciliation.episode_count)
+        and len(inputs) == reconciliation.episode_count
+        and len(inputs)
         == len(record_digests)
         == len(episode_digests)
         == len(fill_digests)

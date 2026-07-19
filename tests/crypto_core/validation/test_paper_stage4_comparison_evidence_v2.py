@@ -8,6 +8,7 @@ import inspect
 import json
 from dataclasses import FrozenInstanceError, fields, replace
 from decimal import Decimal
+from enum import Enum
 from pathlib import Path
 
 import pytest
@@ -2495,3 +2496,232 @@ def test_reason_codes_are_sorted_unique_and_prefixed() -> None:
     assert evidence.status is PaperStage4ComparisonEvidenceV2Status.REJECTED
     assert list(evidence.reason_codes) == sorted(set(evidence.reason_codes))
     assert all(code.startswith("paper_stage4_comparison_evidence_v2:") for code in evidence.reason_codes)
+
+
+# --------------------------------------------------------------------------------------------------
+# 11. Exact-type trust boundaries (equality-bypass and raw-exception closure)
+# --------------------------------------------------------------------------------------------------
+
+
+class _RaisingEqField:
+    """Equality-raising anchor field: any comparison before the exact-type proof would crash the builder."""
+
+    def __eq__(self, other: object) -> bool:  # pragma: no cover - must never be invoked
+        raise AssertionError("custom equality on a noncanonical anchor field must never be invoked")
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+class _LyingStr(str):
+    """JSON-serializable ``str`` subclass whose equality always lies — digest-equivalent, type-distinct."""
+
+    __slots__ = ()
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __ne__(self, other: object) -> bool:
+        return False
+
+    __hash__ = str.__hash__
+
+
+class _HashRaisingStr(str):
+    """Value-identical ``str`` subclass whose hash raises: set construction must never be reachable."""
+
+    __slots__ = ()
+
+    def __hash__(self) -> int:  # pragma: no cover - must never be invoked
+        raise AssertionError("hashing a noncanonical inventory item must never be invoked")
+
+
+class _OrderRaisingStr(str):
+    """Value-identical ``str`` subclass whose ordering raises: sorting must never be reachable."""
+
+    __slots__ = ()
+
+    def __lt__(self, other: object) -> bool:  # pragma: no cover - must never be invoked
+        raise AssertionError("ordering a noncanonical inventory item must never be invoked")
+
+
+class _ForeignSharpeSchema(str, Enum):
+    """Foreign str-enum with a matching value — digest-equivalent through the serializer, type-distinct."""
+
+    V1 = "paper-sharpe-evidence.v1"
+
+
+_ANCHOR_ATTRS = {
+    "sharpe_evidence": "sharpe",
+    "methodology_v2": "methodology_v2",
+    "gate_decision": "gate",
+    "baseline_evidence": "baseline_evidence",
+    "enforcement_precondition": "precondition",
+    "metrics_evidence": "metrics",
+    "reconciliation": "reconciliation",
+    "window_evidence": "window_evidence",
+}
+
+_NONCANONICAL_FIELD_CASES = [
+    ("sharpe_evidence", "schema_version", lambda value: _RaisingEqField()),
+    ("sharpe_evidence", "schema_version", lambda value: None),
+    ("sharpe_evidence", "schema_version", lambda value: 7),
+    ("sharpe_evidence", "schema_version", lambda value: True),
+    ("sharpe_evidence", "schema_version", lambda value: _ForeignSharpeSchema.V1),
+    ("sharpe_evidence", "bucket_count", lambda value: _RaisingEqField()),
+    ("methodology_v2", "comparison_basis", lambda value: _RaisingEqField()),
+    ("methodology_v2", "reason_codes", lambda value: _RaisingEqField()),
+    ("gate_decision", "risk_free_policy_id", lambda value: _RaisingEqField()),
+    ("baseline_evidence", "baseline_id", lambda value: _RaisingEqField()),
+    ("baseline_evidence", "baseline_as_of_ns", lambda value: _RaisingEqField()),
+    ("enforcement_precondition", "schema_version", lambda value: _RaisingEqField()),
+    ("metrics_evidence", "decimal_policy", lambda value: _RaisingEqField()),
+    ("metrics_evidence", "record_digests", lambda value: list(value)),
+    ("reconciliation", "schema_version", lambda value: _RaisingEqField()),
+    ("window_evidence", "gate_utc_day_indices", lambda value: (*value[:-1], _RaisingEqField())),
+    ("window_evidence", "gate_window_start_ns", lambda value: _RaisingEqField()),
+]
+_NONCANONICAL_FIELD_IDS = [
+    "sharpe-schema-raising",
+    "sharpe-schema-none",
+    "sharpe-schema-int",
+    "sharpe-schema-bool",
+    "sharpe-schema-foreign-enum",
+    "sharpe-bucket-count-raising",
+    "methodology-basis-raising",
+    "methodology-reasons-raising",
+    "gate-risk-free-raising",
+    "baseline-evidence-id-raising",
+    "baseline-as-of-raising",
+    "precondition-schema-raising",
+    "metrics-decimal-policy-raising",
+    "metrics-record-digests-list",
+    "reconciliation-schema-raising",
+    "window-day-indices-raising",
+    "window-start-ns-raising",
+]
+
+
+def _build_with_forged_anchor(anchor_name: str, forged: object) -> PaperStage4ComparisonEvidenceV2:
+    """Build with one forged anchor, pinning downstream anchors so no fixture-side rebind can mask it."""
+
+    chain = _chain()
+    overrides: dict[str, object] = {anchor_name: forged}
+    if anchor_name == "metrics_evidence":
+        overrides["reconciliation"] = chain.reconciliation
+        overrides["window_evidence"] = chain.window_evidence
+    if anchor_name == "reconciliation":
+        overrides["window_evidence"] = chain.window_evidence
+    return _build(**overrides)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "reason"),
+    [
+        ("comparison_basis", "methodology_v2_policy_mismatch"),
+        ("enforced_guardrail_policy", "methodology_v2_policy_mismatch"),
+        ("secondary_metrics_decimal_policy", "methodology_v2_secondary_policy_mismatch"),
+        ("hit_rate_operator", "methodology_v2_secondary_policy_mismatch"),
+    ],
+)
+def test_sm6_methodology_policy_fields_require_exact_plain_strings(field_name: str, reason: str) -> None:
+    # A lying-equality str subclass carrying a FORGED policy value survives the coherent reseal with a
+    # self-consistent digest; only the exact-type gate may reject it — digest validity never can.
+    chain = _chain()
+    forged = _reseal_methodology_v2(chain.methodology_v2, **{field_name: _LyingStr("forged.value.v1")})
+    assert paper_vs_backtest_methodology_v2_digest(forged) == forged.methodology_digest
+    evidence = _build(methodology_v2=forged)
+    _assert_rejected_with(evidence, reason)
+    assert _rc("methodology_v2_digest_mismatch") not in evidence.reason_codes
+    assert evidence.stage4_comparator_invoked is False
+    assert evidence.methodology_v2_consumed is False
+
+
+def test_sm6_gate_risk_free_policy_requires_exact_plain_string() -> None:
+    # Value-identical str subclass: the gate digest is UNCHANGED, so only the exact-type proof rejects.
+    chain = _chain()
+    forged = _reseal_gate(chain.gate, risk_free_policy_id=_LyingStr(_RISK_FREE_POLICY_ID))
+    assert forged.decision_digest == chain.gate.decision_digest
+    evidence = _build(gate_decision=forged)
+    _assert_rejected_with(evidence, "gate_risk_free_policy_mismatch")
+    assert _rc("gate_decision_digest_mismatch") not in evidence.reason_codes
+    assert evidence.stage4_comparator_invoked is False
+
+
+def test_sm6_anchor_contracts_reject_str_subclass_equality_bypass() -> None:
+    chain = _chain()
+    forged_sharpe = _reseal_sharpe(chain.sharpe, schema_version=_LyingStr("forged-schema.v1"))
+    assert paper_sharpe_evidence_digest(forged_sharpe) == forged_sharpe.sharpe_evidence_digest
+    evidence = _build(sharpe_evidence=forged_sharpe)
+    _assert_rejected_with(evidence, "sharpe_evidence_schema_invalid")
+    assert _rc("sharpe_evidence_digest_mismatch") not in evidence.reason_codes
+    # Lying carried baseline digest with a WRONG value inside a coherently resealed #313 evidence: the old
+    # direct comparison would have been satisfied by the lying __eq__/__ne__ and reached READY.
+    forged_binding = _reseal_baseline_evidence(chain.baseline_evidence, baseline_digest=_LyingStr("f" * 64))
+    binding_evidence = _build(baseline_evidence=forged_binding)
+    _assert_rejected_with(binding_evidence, "baseline_evidence_baseline_digest_mismatch")
+    assert _rc("baseline_evidence_digest_mismatch") not in binding_evidence.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("anchor_name", "field_name", "forge"),
+    _NONCANONICAL_FIELD_CASES,
+    ids=_NONCANONICAL_FIELD_IDS,
+)
+def test_sm6_noncanonical_anchor_fields_never_raise_raw_exception(anchor_name: str, field_name: str, forge) -> None:
+    chain = _chain()
+    original = getattr(chain, _ANCHOR_ATTRS[anchor_name])
+    forged = replace(original, **{field_name: forge(getattr(original, field_name))})
+    evidence = _build_with_forged_anchor(anchor_name, forged)
+    assert evidence.status is PaperStage4ComparisonEvidenceV2Status.REJECTED
+    assert evidence.ready is False
+    assert evidence.reason_codes
+    assert evidence.stage4_comparator_invoked is False
+    assert evidence.secondary_metrics_enforced is False
+    payload = paper_stage4_comparison_evidence_v2_to_dict(evidence)
+    assert payload["status"] == "REJECTED"
+    json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    assert paper_stage4_comparison_evidence_v2_digest(evidence) == evidence.comparison_evidence_digest
+
+
+def test_sm6_noncanonical_policy_lineage_never_reaches_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _unexpected_comparator(*args: object, **kwargs: object) -> object:  # pragma: no cover
+        raise AssertionError("compare_stage4 must not run for noncanonical policy lineage")
+
+    monkeypatch.setattr(comparison_v2_module, "compare_stage4", _unexpected_comparator)
+    chain = _chain()
+    forged = _reseal_methodology_v2(chain.methodology_v2, enforced_guardrail_policy=_LyingStr("forged.guardrail.v1"))
+    evidence = _build(methodology_v2=forged)
+    _assert_rejected_with(evidence, "methodology_v2_policy_mismatch")
+    assert _rc("methodology_v2_digest_mismatch") not in evidence.reason_codes
+    assert evidence.stage4_comparator_invoked is False
+    assert evidence.comparison_performed is False
+    assert evidence.methodology_v2_consumed is False
+    assert evidence.comparison_verdict == ""
+
+
+def test_all_rejected_malformed_anchor_results_serialize_and_self_digest() -> None:
+    chain = _chain()
+    hash_raising_inventory = tuple(
+        _HashRaisingStr(item) for item in chain.reconciliation.reconciled_episode_run_digests
+    )
+    order_raising_records = tuple(_OrderRaisingStr(item) for item in chain.metrics.record_digests)
+    forgeries = (
+        _build(sharpe_evidence=replace(chain.sharpe, schema_version=_RaisingEqField())),
+        _build(methodology_v2=_reseal_methodology_v2(chain.methodology_v2, comparison_basis=_LyingStr("forged.v1"))),
+        _build(
+            reconciliation=replace(chain.reconciliation, reconciled_episode_run_digests=hash_raising_inventory),
+            window_evidence=chain.window_evidence,
+        ),
+        _build(
+            metrics_evidence=replace(chain.metrics, record_digests=order_raising_records),
+            reconciliation=chain.reconciliation,
+            window_evidence=chain.window_evidence,
+        ),
+    )
+    for evidence in forgeries:
+        assert evidence.status is PaperStage4ComparisonEvidenceV2Status.REJECTED
+        assert evidence.ready is False
+        assert evidence.secondary_metrics_enforced is False
+        payload = paper_stage4_comparison_evidence_v2_to_dict(evidence)
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+        assert paper_stage4_comparison_evidence_v2_digest(evidence) == evidence.comparison_evidence_digest

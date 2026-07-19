@@ -488,6 +488,46 @@ def _safe_digest_tuple(value: object) -> tuple[str, ...]:
     return value if type(value) is tuple and all(_is_hex64_string(item) for item in value) else ()
 
 
+# Exact-type-before-operation rule: no anchor-carried value may participate in equality, ordering,
+# arithmetic, parsing, sorting, set construction, or hashing until its exact built-in runtime type is
+# proven. A JSON-serializable ``str``/``int`` subclass survives every digest recompute byte-identically,
+# so digest validity can never substitute for these gates, and a custom ``__eq__``/``__hash__`` must
+# never be reachable from a coherently resealed anchor.
+
+
+def _eq_plain_str(value: object, expected: str) -> bool:
+    return type(value) is str and value == expected
+
+
+def _eq_exact_int(value: object, expected: int) -> bool:
+    return _is_exact_int(value) and value == expected
+
+
+def _exact_ints_equal(*values: object) -> bool:
+    return all(_is_exact_int(value) for value in values) and len({*values}) == 1
+
+
+def _is_empty_tuple(value: object) -> bool:
+    return type(value) is tuple and len(value) == 0
+
+
+def _is_exact_int_tuple(value: object) -> bool:
+    return type(value) is tuple and all(_is_exact_int(item) for item in value)
+
+
+def _is_hex64_tuple(value: object) -> bool:
+    return type(value) is tuple and all(_is_hex64_string(item) for item in value)
+
+
+def _plain_str_tuples_equal(left: object, right: object) -> bool:
+    return (
+        type(left) is tuple
+        and type(right) is tuple
+        and all(_is_plain_non_empty_string(item) for item in (*left, *right))
+        and left == right
+    )
+
+
 def _require_plain_non_empty_string(value: object, field_name: str) -> str:
     if not _is_plain_non_empty_string(value):
         raise PaperStage4ComparisonEvidenceV2Error(_reason(f"{field_name}_invalid"))
@@ -950,21 +990,21 @@ def _edge_identity_failures(edge_identity: PaperEdgeIdentityEvidence) -> list[st
     """Trust boundary for the merged edge identity (schema / status / resolution / policy / re-derivation / flags)."""
 
     hard: list[str] = []
-    if edge_identity.schema_version != _EXPECTED_EDGE_IDENTITY_SCHEMA_VERSION:
+    if not _eq_plain_str(edge_identity.schema_version, _EXPECTED_EDGE_IDENTITY_SCHEMA_VERSION):
         hard.append(_reason("edge_identity_schema_invalid"))
     if (
         edge_identity.status is not PaperEdgeIdentityEvidenceStatus.READY
         or edge_identity.ready is not True
-        or edge_identity.reason_codes != ()
+        or not _is_empty_tuple(edge_identity.reason_codes)
     ):
         hard.append(_reason("edge_identity_not_ready"))
     if edge_identity.edge_identity_resolved is not True or edge_identity.strategy_spec_identity_proven is not True:
         hard.append(_reason("edge_identity_not_resolved"))
     if not _is_hex64_string(edge_identity.paper_edge_id):
         hard.append(_reason("edge_identity_paper_edge_id_invalid"))
-    if edge_identity.edge_id_form != _EDGE_ID_FORM:
+    if not _eq_plain_str(edge_identity.edge_id_form, _EDGE_ID_FORM):
         hard.append(_reason("edge_identity_edge_id_form_invalid"))
-    if edge_identity.edge_id_derivation_policy != _EDGE_ID_DERIVATION_POLICY:
+    if not _eq_plain_str(edge_identity.edge_id_derivation_policy, _EDGE_ID_DERIVATION_POLICY):
         hard.append(_reason("edge_identity_derivation_policy_mismatch"))
     if (
         not _is_plain_non_empty_string(edge_identity.strategy_id)
@@ -996,12 +1036,12 @@ def _edge_identity_failures(edge_identity: PaperEdgeIdentityEvidence) -> list[st
 
 def _sharpe_evidence_failures(sharpe_evidence: PaperSharpeEvidence) -> list[str]:
     hard: list[str] = []
-    if sharpe_evidence.schema_version != _EXPECTED_SHARPE_SCHEMA_VERSION:
+    if not _eq_plain_str(sharpe_evidence.schema_version, _EXPECTED_SHARPE_SCHEMA_VERSION):
         hard.append(_reason("sharpe_evidence_schema_invalid"))
     if (
         sharpe_evidence.status is not PaperSharpeEvidenceStatus.READY
         or sharpe_evidence.ready is not True
-        or sharpe_evidence.reason_codes != ()
+        or not _is_empty_tuple(sharpe_evidence.reason_codes)
     ):
         hard.append(_reason("sharpe_evidence_not_ready"))
     if sharpe_evidence.sharpe_computed is not True:
@@ -1040,28 +1080,28 @@ def _methodology_v2_failures(
     """
 
     hard: list[str] = []
-    if (
-        methodology_v2.schema_version != _EXPECTED_METHODOLOGY_V2_SCHEMA_VERSION
-        or methodology_v2.methodology_version != _EXPECTED_METHODOLOGY_V2_SCHEMA_VERSION
+    if not (
+        _eq_plain_str(methodology_v2.schema_version, _EXPECTED_METHODOLOGY_V2_SCHEMA_VERSION)
+        and _eq_plain_str(methodology_v2.methodology_version, _EXPECTED_METHODOLOGY_V2_SCHEMA_VERSION)
     ):
         hard.append(_reason("methodology_v2_schema_invalid"))
     if (
         methodology_v2.status is not PaperVsBacktestMethodologyV2Status.METHODOLOGY_READY
         or methodology_v2.ready is not True
-        or methodology_v2.reason_codes != ()
+        or not _is_empty_tuple(methodology_v2.reason_codes)
     ):
         hard.append(_reason("methodology_v2_not_ready"))
-    if (
-        methodology_v2.comparison_basis != _EXPECTED_COMPARISON_BASIS
-        or methodology_v2.enforced_guardrail_policy != _EXPECTED_ENFORCED_GUARDRAIL_POLICY
-        or methodology_v2.risk_free_policy_id != sharpe_evidence.risk_free_policy_id
-        or methodology_v2.annualization_factor != sharpe_evidence.annualization_factor
-        or methodology_v2.annualization_policy != sharpe_evidence.annualization_policy
-        or methodology_v2.stddev_policy != sharpe_evidence.stddev_policy
-        or methodology_v2.decimal_policy != sharpe_evidence.decimal_policy
-        or methodology_v2.decimal_scale != sharpe_evidence.decimal_scale
-        or methodology_v2.decimal_rounding != sharpe_evidence.decimal_rounding
-        or methodology_v2.decimal_internal_precision != sharpe_evidence.decimal_internal_precision
+    if not (
+        _eq_plain_str(methodology_v2.comparison_basis, _EXPECTED_COMPARISON_BASIS)
+        and _eq_plain_str(methodology_v2.enforced_guardrail_policy, _EXPECTED_ENFORCED_GUARDRAIL_POLICY)
+        and _plain_strings_equal(methodology_v2.risk_free_policy_id, sharpe_evidence.risk_free_policy_id)
+        and _exact_ints_equal(methodology_v2.annualization_factor, sharpe_evidence.annualization_factor)
+        and _plain_strings_equal(methodology_v2.annualization_policy, sharpe_evidence.annualization_policy)
+        and _plain_strings_equal(methodology_v2.stddev_policy, sharpe_evidence.stddev_policy)
+        and _plain_strings_equal(methodology_v2.decimal_policy, sharpe_evidence.decimal_policy)
+        and _exact_ints_equal(methodology_v2.decimal_scale, sharpe_evidence.decimal_scale)
+        and _plain_strings_equal(methodology_v2.decimal_rounding, sharpe_evidence.decimal_rounding)
+        and _exact_ints_equal(methodology_v2.decimal_internal_precision, sharpe_evidence.decimal_internal_precision)
     ):
         hard.append(_reason("methodology_v2_policy_mismatch"))
     if (
@@ -1075,14 +1115,14 @@ def _methodology_v2_failures(
         hard.append(_reason("methodology_v2_min_duration_invalid"))
     elif methodology_v2.min_duration_days != _APPROVED_MIN_DURATION_DAYS:
         hard.append(_reason("methodology_v2_min_duration_unapproved"))
-    if (
-        methodology_v2.secondary_metrics_decimal_policy != _EXPECTED_SM_DECIMAL_POLICY
-        or methodology_v2.secondary_metrics_decimal_scale != _DECIMAL_SCALE
-        or methodology_v2.secondary_metrics_decimal_rounding != _DECIMAL_ROUNDING
-        or methodology_v2.fraction_intermediates_required is not True
-        or methodology_v2.hit_rate_operator != _EXPECTED_HIT_RATE_OPERATOR
-        or methodology_v2.fill_rate_operator != _EXPECTED_FILL_RATE_OPERATOR
-        or methodology_v2.slippage_operator != _EXPECTED_SLIPPAGE_OPERATOR
+    if not (
+        _eq_plain_str(methodology_v2.secondary_metrics_decimal_policy, _EXPECTED_SM_DECIMAL_POLICY)
+        and _eq_exact_int(methodology_v2.secondary_metrics_decimal_scale, _DECIMAL_SCALE)
+        and _eq_plain_str(methodology_v2.secondary_metrics_decimal_rounding, _DECIMAL_ROUNDING)
+        and methodology_v2.fraction_intermediates_required is True
+        and _eq_plain_str(methodology_v2.hit_rate_operator, _EXPECTED_HIT_RATE_OPERATOR)
+        and _eq_plain_str(methodology_v2.fill_rate_operator, _EXPECTED_FILL_RATE_OPERATOR)
+        and _eq_plain_str(methodology_v2.slippage_operator, _EXPECTED_SLIPPAGE_OPERATOR)
     ):
         hard.append(_reason("methodology_v2_secondary_policy_mismatch"))
     hit_floor = _parse_scale18(methodology_v2.approved_hit_rate_floor)
@@ -1127,20 +1167,20 @@ def _gate_decision_failures(
     gate_decision: PaperThirtyDayEvidenceGateDecision, methodology_v2: PaperVsBacktestMethodologyV2
 ) -> list[str]:
     hard: list[str] = []
-    if (
-        gate_decision.schema_version != _EXPECTED_GATE_SCHEMA_VERSION
-        or gate_decision.decision_version != _EXPECTED_GATE_SCHEMA_VERSION
+    if not (
+        _eq_plain_str(gate_decision.schema_version, _EXPECTED_GATE_SCHEMA_VERSION)
+        and _eq_plain_str(gate_decision.decision_version, _EXPECTED_GATE_SCHEMA_VERSION)
     ):
         hard.append(_reason("gate_decision_schema_invalid"))
     if (
         gate_decision.status is not PaperThirtyDayEvidenceGateDecisionStatus.READY
         or gate_decision.ready is not True
-        or gate_decision.reason_codes != ()
+        or not _is_empty_tuple(gate_decision.reason_codes)
     ):
         hard.append(_reason("gate_decision_not_ready"))
     if gate_decision.thirty_day_gate_satisfied is not True:
         hard.append(_reason("thirty_day_gate_not_satisfied"))
-    if gate_decision.risk_free_policy_id != methodology_v2.risk_free_policy_id:
+    if not _plain_strings_equal(gate_decision.risk_free_policy_id, methodology_v2.risk_free_policy_id):
         hard.append(_reason("gate_risk_free_policy_mismatch"))
     if (
         not _is_exact_int(gate_decision.gate_minimum_consecutive_bucket_count)
@@ -1172,30 +1212,32 @@ def _baseline_evidence_failures(
     verified_edge_identity_digest: str,
 ) -> list[str]:
     hard: list[str] = []
-    if (
-        baseline_evidence.schema_id != _EXPECTED_BASELINE_EVIDENCE_SCHEMA_VERSION
-        or baseline_evidence.schema_version != _EXPECTED_BASELINE_EVIDENCE_SCHEMA_VERSION
+    if not (
+        _eq_plain_str(baseline_evidence.schema_id, _EXPECTED_BASELINE_EVIDENCE_SCHEMA_VERSION)
+        and _eq_plain_str(baseline_evidence.schema_version, _EXPECTED_BASELINE_EVIDENCE_SCHEMA_VERSION)
     ):
         hard.append(_reason("baseline_evidence_schema_invalid"))
     if (
         baseline_evidence.status is not PaperStage4BacktestBaselineEvidenceStatus.READY
         or baseline_evidence.ready is not True
-        or baseline_evidence.reason_codes != ()
+        or not _is_empty_tuple(baseline_evidence.reason_codes)
     ):
         hard.append(_reason("baseline_evidence_not_ready"))
     if baseline_evidence.baseline_bound is not True or baseline_evidence.same_edge_identity_equal is not True:
         hard.append(_reason("baseline_evidence_not_bound"))
-    if verified_edge_identity_digest == "" or baseline_evidence.edge_identity_digest != verified_edge_identity_digest:
+    if verified_edge_identity_digest == "" or not _hex64_strings_equal(
+        baseline_evidence.edge_identity_digest, verified_edge_identity_digest
+    ):
         hard.append(_reason("edge_identity_cross_digest_mismatch"))
-    if (
-        baseline_evidence.baseline_id != backtest_baseline.baseline_id
-        or baseline_evidence.edge_id != backtest_baseline.edge_id
-        or baseline_evidence.baseline_as_of_ns != backtest_baseline.as_of_ns
-        or baseline_evidence.baseline_source_window_ids != backtest_baseline.source_window_ids
-        or baseline_evidence.paper_edge_id != edge_identity.paper_edge_id
-        or baseline_evidence.paper_id != edge_identity.paper_id
-        or baseline_evidence.market_symbol != edge_identity.market_symbol
-        or baseline_evidence.strategy_id != edge_identity.strategy_id
+    if not (
+        _plain_strings_equal(baseline_evidence.baseline_id, backtest_baseline.baseline_id)
+        and _hex64_strings_equal(baseline_evidence.edge_id, backtest_baseline.edge_id)
+        and _exact_ints_equal(baseline_evidence.baseline_as_of_ns, backtest_baseline.as_of_ns)
+        and _plain_str_tuples_equal(baseline_evidence.baseline_source_window_ids, backtest_baseline.source_window_ids)
+        and _hex64_strings_equal(baseline_evidence.paper_edge_id, edge_identity.paper_edge_id)
+        and _plain_strings_equal(baseline_evidence.paper_id, edge_identity.paper_id)
+        and _plain_strings_equal(baseline_evidence.market_symbol, edge_identity.market_symbol)
+        and _plain_strings_equal(baseline_evidence.strategy_id, edge_identity.strategy_id)
     ):
         hard.append(_reason("baseline_evidence_binding_mismatch"))
     hard.extend(
@@ -1227,15 +1269,15 @@ def _precondition_failures(precondition: PaperSecondaryMetricsEnforcementPrecond
     """Trust boundary for the SAME enforcement precondition the merged methodology-v2 bound."""
 
     hard: list[str] = []
-    if (
-        precondition.schema_version != _EXPECTED_PRECONDITION_SCHEMA_VERSION
-        or precondition.precondition_version != _EXPECTED_PRECONDITION_SCHEMA_VERSION
+    if not (
+        _eq_plain_str(precondition.schema_version, _EXPECTED_PRECONDITION_SCHEMA_VERSION)
+        and _eq_plain_str(precondition.precondition_version, _EXPECTED_PRECONDITION_SCHEMA_VERSION)
     ):
         hard.append(_reason("enforcement_precondition_schema_invalid"))
     if (
         precondition.status is not PaperSecondaryMetricsEnforcementPreconditionStatus.PRECONDITION_READY
         or precondition.ready is not True
-        or precondition.reason_codes != ()
+        or not _is_empty_tuple(precondition.reason_codes)
     ):
         hard.append(_reason("enforcement_precondition_not_ready"))
     if (
@@ -1268,28 +1310,28 @@ def _metrics_evidence_failures(metrics_evidence: PaperSecondaryMetricsEvidence) 
     """Trust boundary for the direct real SM-4 evidence (never replaced by carried copies elsewhere)."""
 
     hard: list[str] = []
-    if (
-        metrics_evidence.schema_version != _EXPECTED_METRICS_SCHEMA_VERSION
-        or metrics_evidence.evidence_version != _EXPECTED_METRICS_SCHEMA_VERSION
+    if not (
+        _eq_plain_str(metrics_evidence.schema_version, _EXPECTED_METRICS_SCHEMA_VERSION)
+        and _eq_plain_str(metrics_evidence.evidence_version, _EXPECTED_METRICS_SCHEMA_VERSION)
     ):
         hard.append(_reason("metrics_evidence_schema_invalid"))
     if (
         metrics_evidence.status is not PaperSecondaryMetricsEvidenceStatus.METRICS_READY
         or metrics_evidence.ready is not True
-        or metrics_evidence.reason_codes != ()
+        or not _is_empty_tuple(metrics_evidence.reason_codes)
         or metrics_evidence.thresholds_cleared is not True
         or metrics_evidence.sufficient_evidence is not True
     ):
         hard.append(_reason("metrics_evidence_not_ready"))
-    if (
-        metrics_evidence.decimal_policy != _EXPECTED_SM_DECIMAL_POLICY
-        or metrics_evidence.decimal_scale != _DECIMAL_SCALE
-        or metrics_evidence.decimal_rounding != _DECIMAL_ROUNDING
-        or metrics_evidence.decimal_internal_precision != _DECIMAL_INTERNAL_PRECISION
-        or metrics_evidence.hit_rate_operator != _EXPECTED_HIT_RATE_OPERATOR
-        or metrics_evidence.fill_rate_operator != _EXPECTED_FILL_RATE_OPERATOR
-        or metrics_evidence.slippage_operator != _EXPECTED_SLIPPAGE_OPERATOR
-        or not _is_hex64_string(metrics_evidence.verified_policy_digest)
+    if not (
+        _eq_plain_str(metrics_evidence.decimal_policy, _EXPECTED_SM_DECIMAL_POLICY)
+        and _eq_exact_int(metrics_evidence.decimal_scale, _DECIMAL_SCALE)
+        and _eq_plain_str(metrics_evidence.decimal_rounding, _DECIMAL_ROUNDING)
+        and _eq_exact_int(metrics_evidence.decimal_internal_precision, _DECIMAL_INTERNAL_PRECISION)
+        and _eq_plain_str(metrics_evidence.hit_rate_operator, _EXPECTED_HIT_RATE_OPERATOR)
+        and _eq_plain_str(metrics_evidence.fill_rate_operator, _EXPECTED_FILL_RATE_OPERATOR)
+        and _eq_plain_str(metrics_evidence.slippage_operator, _EXPECTED_SLIPPAGE_OPERATOR)
+        and _is_hex64_string(metrics_evidence.verified_policy_digest)
     ):
         hard.append(_reason("metrics_evidence_contract_invalid"))
     hard.extend(
@@ -1317,15 +1359,15 @@ def _reconciliation_failures(
     hard: list[str] = []
     records = reconciliation.reconciled_record_digests
     episodes = reconciliation.reconciled_episode_run_digests
-    if (
-        reconciliation.schema_version != _EXPECTED_RECONCILIATION_SCHEMA_VERSION
-        or reconciliation.reconciliation_version != _EXPECTED_RECONCILIATION_SCHEMA_VERSION
+    if not (
+        _eq_plain_str(reconciliation.schema_version, _EXPECTED_RECONCILIATION_SCHEMA_VERSION)
+        and _eq_plain_str(reconciliation.reconciliation_version, _EXPECTED_RECONCILIATION_SCHEMA_VERSION)
     ):
         hard.append(_reason("reconciliation_schema_invalid"))
     if (
         reconciliation.status is not PaperSecondaryMetricsSubstrateReconciliationStatus.RECONCILED
         or reconciliation.ready is not True
-        or reconciliation.reason_codes != ()
+        or not _is_empty_tuple(reconciliation.reason_codes)
     ):
         hard.append(_reason("reconciliation_not_ready"))
     if (
@@ -1379,15 +1421,15 @@ def _window_evidence_failures(window: PaperSecondaryMetricsWindowEvidence) -> li
     episodes = window.episode_run_digests
     fills = window.fill_result_digests
     snapshots = window.market_snapshot_digests
-    if (
-        window.schema_version != _EXPECTED_WINDOW_EVIDENCE_SCHEMA_VERSION
-        or window.evidence_version != _EXPECTED_WINDOW_EVIDENCE_SCHEMA_VERSION
+    if not (
+        _eq_plain_str(window.schema_version, _EXPECTED_WINDOW_EVIDENCE_SCHEMA_VERSION)
+        and _eq_plain_str(window.evidence_version, _EXPECTED_WINDOW_EVIDENCE_SCHEMA_VERSION)
     ):
         hard.append(_reason("window_evidence_schema_invalid"))
     if (
         window.status is not PaperSecondaryMetricsWindowEvidenceStatus.WINDOW_READY
         or window.ready is not True
-        or window.reason_codes != ()
+        or not _is_empty_tuple(window.reason_codes)
     ):
         hard.append(_reason("window_evidence_not_ready"))
     valid_window = (
@@ -1401,18 +1443,18 @@ def _window_evidence_failures(window: PaperSecondaryMetricsWindowEvidence) -> li
         and window.gate_window_start_utc_day_index == start // _DAY_NS
         and _is_exact_int(window.gate_window_end_utc_day_index)
         and window.gate_window_end_utc_day_index == (end // _DAY_NS) - 1
-        and type(days) is tuple
+        and _is_exact_int_tuple(days)
         and days == tuple(range(window.gate_window_start_utc_day_index, window.gate_window_end_utc_day_index + 1))
         and len(days) == _APPROVED_MIN_DURATION_DAYS
     )
     valid_inventory = (
         valid_window
-        and type(observed) is tuple
-        and type(observed_days) is tuple
-        and type(records) is tuple
-        and type(episodes) is tuple
-        and type(fills) is tuple
-        and type(snapshots) is tuple
+        and _is_exact_int_tuple(observed)
+        and _is_exact_int_tuple(observed_days)
+        and _is_hex64_tuple(records)
+        and _is_hex64_tuple(episodes)
+        and _is_hex64_tuple(fills)
+        and _is_hex64_tuple(snapshots)
         and _is_positive_int(window.record_count)
         and len(observed)
         == len(observed_days)
@@ -1421,10 +1463,9 @@ def _window_evidence_failures(window: PaperSecondaryMetricsWindowEvidence) -> li
         == len(fills)
         == len(snapshots)
         == window.record_count
-        and all(_is_exact_int(value) and start <= value < end for value in observed)
+        and all(start <= value < end for value in observed)
         and observed_days == tuple(value // _DAY_NS for value in observed)
         and all(day in days for day in observed_days)
-        and all(_is_hex64_string(item) for item in (*records, *episodes, *fills, *snapshots))
         and records == tuple(sorted(records))
         and len(set(records)) == len(records)
         and len(set(episodes)) == len(episodes)
@@ -1549,8 +1590,9 @@ def _sm_binding_failures(
         )
         and _plain_strings_equal(window_evidence.gate_id, gate_decision.gate_id)
         and _plain_strings_equal(window_evidence.window_id, gate_decision.window_id)
-        and window_evidence.gate_window_start_ns == gate_decision.gate_used_first_bucket_start_ns
-        and window_evidence.gate_window_end_ns == gate_decision.gate_used_last_bucket_end_ns
+        and _exact_ints_equal(window_evidence.gate_window_start_ns, gate_decision.gate_used_first_bucket_start_ns)
+        and _exact_ints_equal(window_evidence.gate_window_end_ns, gate_decision.gate_used_last_bucket_end_ns)
+        and _is_exact_int_tuple(window_evidence.gate_utc_day_indices)
         and window_evidence.gate_utc_day_indices == expected_gate_days
     ):
         hard.append(_reason("window_identity_binding_mismatch"))
@@ -1586,28 +1628,27 @@ def _sm_binding_failures(
         or not _optional_scale18_equal(
             methodology_v2.approved_slippage_ceiling_bps, metrics_evidence.approved_slippage_ceiling_bps
         )
-        or not _is_exact_int(methodology_v2.approved_min_decided_episode_count)
-        or methodology_v2.approved_min_decided_episode_count != precondition.approved_min_decided_episode_count
-        or methodology_v2.approved_min_decided_episode_count != metrics_evidence.approved_min_decided_episode_count
+        or not _exact_ints_equal(
+            methodology_v2.approved_min_decided_episode_count,
+            precondition.approved_min_decided_episode_count,
+            metrics_evidence.approved_min_decided_episode_count,
+        )
     ):
         hard.append(_reason("threshold_snapshot_mismatch"))
-    # Record-set / denominator coherence: direct reconciliation is the completeness authority.
-    metrics_digests = metrics_evidence.record_digests if type(metrics_evidence.record_digests) is tuple else None
-    precondition_digests = precondition.record_digests if type(precondition.record_digests) is tuple else None
-    reconciliation_digests = (
-        reconciliation.reconciled_record_digests if type(reconciliation.reconciled_record_digests) is tuple else None
-    )
-    reconciliation_episodes = (
-        reconciliation.reconciled_episode_run_digests
-        if type(reconciliation.reconciled_episode_run_digests) is tuple
-        else None
-    )
+    # Record-set / denominator coherence: direct reconciliation is the completeness authority. Every
+    # participating inventory is proven an exact tuple of exact hex64 strings BEFORE any equality, sorting,
+    # or set construction can touch a carried item.
+    metrics_digests = metrics_evidence.record_digests
+    precondition_digests = precondition.record_digests
+    reconciliation_digests = reconciliation.reconciled_record_digests
+    reconciliation_episodes = reconciliation.reconciled_episode_run_digests
     record_set_ok = (
-        metrics_digests is not None
-        and precondition_digests is not None
-        and reconciliation_digests is not None
-        and reconciliation_episodes is not None
-        and all(_is_hex64_string(digest) for digest in metrics_digests)
+        _is_hex64_tuple(metrics_digests)
+        and _is_hex64_tuple(precondition_digests)
+        and _is_hex64_tuple(reconciliation_digests)
+        and _is_hex64_tuple(reconciliation_episodes)
+        and _is_hex64_tuple(window_evidence.record_digests)
+        and _is_hex64_tuple(window_evidence.episode_run_digests)
         and list(metrics_digests) == sorted(metrics_digests)
         and len(set(metrics_digests)) == len(metrics_digests)
         and metrics_digests == precondition_digests == reconciliation_digests == window_evidence.record_digests
@@ -1780,8 +1821,8 @@ def _cross_link_failures(
     window_evidence: PaperSecondaryMetricsWindowEvidence,
 ) -> list[str]:
     hard: list[str] = []
-    if any(
-        artifact.correlation_id != correlation_id
+    if not all(
+        _eq_plain_str(artifact.correlation_id, correlation_id)
         for artifact in (
             sharpe_evidence,
             methodology_v2,
@@ -1795,8 +1836,8 @@ def _cross_link_failures(
         )
     ):
         hard.append(_reason("correlation_id_mismatch"))
-    if not _is_plain_non_empty_string(sharpe_evidence.market_symbol) or any(
-        artifact.market_symbol != sharpe_evidence.market_symbol
+    if not all(
+        _plain_strings_equal(artifact.market_symbol, sharpe_evidence.market_symbol)
         for artifact in (
             gate_decision,
             edge_identity,
@@ -1808,23 +1849,23 @@ def _cross_link_failures(
         )
     ):
         hard.append(_reason("market_symbol_mismatch"))
-    if not _is_plain_non_empty_string(sharpe_evidence.paper_id) or any(
-        artifact.paper_id != sharpe_evidence.paper_id for artifact in (edge_identity, baseline_evidence)
+    if not all(
+        _plain_strings_equal(artifact.paper_id, sharpe_evidence.paper_id)
+        for artifact in (edge_identity, baseline_evidence)
     ):
         hard.append(_reason("paper_id_mismatch"))
-    if (
-        not _is_hex64_string(sharpe_evidence.verified_daily_return_series_digest)
-        or sharpe_evidence.verified_daily_return_series_digest != gate_decision.series_digest
-    ):
+    if not _hex64_strings_equal(sharpe_evidence.verified_daily_return_series_digest, gate_decision.series_digest):
         hard.append(_reason("series_digest_mismatch"))
-    if (
-        sharpe_evidence.series_id != gate_decision.series_id
-        or sharpe_evidence.window_id != gate_decision.window_id
-        or sharpe_evidence.time_window_digest != gate_decision.time_window_digest
-        or sharpe_evidence.metrics_summary_digest != gate_decision.metrics_summary_digest
-        or sharpe_evidence.methodology_digest != gate_decision.methodology_digest
-        or sharpe_evidence.bucket_count != gate_decision.bucket_count
-        or sharpe_evidence.required_consecutive_bucket_count != gate_decision.required_consecutive_bucket_count
+    if not (
+        _plain_strings_equal(sharpe_evidence.series_id, gate_decision.series_id)
+        and _plain_strings_equal(sharpe_evidence.window_id, gate_decision.window_id)
+        and _hex64_strings_equal(sharpe_evidence.time_window_digest, gate_decision.time_window_digest)
+        and _hex64_strings_equal(sharpe_evidence.metrics_summary_digest, gate_decision.metrics_summary_digest)
+        and _hex64_strings_equal(sharpe_evidence.methodology_digest, gate_decision.methodology_digest)
+        and _exact_ints_equal(sharpe_evidence.bucket_count, gate_decision.bucket_count)
+        and _exact_ints_equal(
+            sharpe_evidence.required_consecutive_bucket_count, gate_decision.required_consecutive_bucket_count
+        )
     ):
         hard.append(_reason("series_binding_mismatch"))
     return hard
@@ -2130,7 +2171,7 @@ def build_paper_stage4_comparison_evidence_v2(
         baseline_digest = ""
     else:
         baseline_digest = recomputed_baseline_digest
-    if baseline_digest == "" or baseline_evidence.baseline_digest != baseline_digest:
+    if baseline_digest == "" or not _hex64_strings_equal(baseline_evidence.baseline_digest, baseline_digest):
         hard.append(_reason("baseline_evidence_baseline_digest_mismatch"))
 
     hard.extend(_baseline_value_failures(backtest_baseline))
@@ -2308,7 +2349,7 @@ def build_paper_stage4_comparison_evidence_v2(
         and verified_reconciliation_digest != ""
         and verified_window_evidence_digest != ""
         and baseline_digest != ""
-        and baseline_evidence.baseline_digest == baseline_digest
+        and _hex64_strings_equal(baseline_evidence.baseline_digest, baseline_digest)
         and not edge_contract_failures
         and not sharpe_contract_failures
         and not methodology_contract_failures
