@@ -678,6 +678,45 @@ def _is_canonical_reason_codes(value: object) -> bool:
     return list(value) == sorted(value) and len(set(value)) == len(value)
 
 
+def _ready_semantic_ok(policy: MachineTimePolicy) -> bool:
+    """Side-effect-free reproof of the COMPLETE builder READY governance contract on a stored artifact.
+
+    Reuses exactly the predicates the builder uses to DECIDE READY (``_pinned_string_failure`` /
+    ``_required_roles_failure`` / ``_quorum_failures`` / ``_day_count_failures`` / ``_spacing_failures`` /
+    the approval + scope predicates), so the public READY reproof can never drift from the builder. It
+    constructs no artifact, reads no runtime state, and never calls the public digest. Every check is
+    exact-type-before-operation, so a canonical-but-invalid primitive fails closed and no caller-controlled
+    ``__eq__`` is invoked.
+    """
+
+    for field_name, expected, mismatch_reason in _PINNED_STRING_FIELDS:
+        if _pinned_string_failure(getattr(policy, field_name), expected, mismatch_reason) is not None:
+            return False
+    if _required_roles_failure(policy.required_roles) is not None:
+        return False
+    if _quorum_failures(policy.approved_quorum_per_role):
+        return False
+    if _day_count_failures(policy.approved_required_machine_proven_day_count):
+        return False
+    if _spacing_failures(policy.approved_min_inter_day_spacing_ns, policy.approved_max_inter_day_spacing_ns):
+        return False
+    if not _is_plain_non_empty_string(policy.approval_reference):
+        return False
+    if not _is_hex64_string(policy.approval_digest):
+        return False
+    if policy.policy_approved is not True:
+        return False
+    scope_texts = (
+        policy.policy_id,
+        policy.correlation_id,
+        policy.approval_reference,
+        *_metadata_texts(policy.metadata),
+    )
+    if _has_bist_token(*scope_texts) or _has_clock_token(*scope_texts) or _has_scope_violation(*scope_texts):
+        return False
+    return True
+
+
 def _validate_machine_time_policy_artifact(policy: object, *, require_populated_self_digest: bool) -> MachineTimePolicy:
     """Prove the COMPLETE exact runtime + canonical contract of every public field before any traversal.
 
@@ -768,11 +807,24 @@ def _validate_machine_time_policy_artifact(policy: object, *, require_populated_
         if getattr(policy, field_name) is not False:
             _fail()
 
-    # Self-digest: "" only for the internal builder seed (digest path); lowercase hex64 for a built artifact.
-    if require_populated_self_digest:
-        if not _is_hex64_string(policy.policy_digest):
+    # READY governance reproof: a POLICY_READY artifact must independently re-prove the COMPLETE builder
+    # READY contract (pinned values == constants, quorum >= 2, day count >= 30, spacing window contains one
+    # UTC day, approval present, scope/BIST/clock clean). Canonical-but-invalid primitives that merely pass
+    # the shape checks above must NOT be resealable as READY. A POLICY_REJECTED artifact is exempt (its
+    # projected "" strings / None approvals / scope-violation reasons are legitimate and must stay
+    # serializable).
+    if policy.status is MachineTimePolicyStatus.POLICY_READY and not _ready_semantic_ok(policy):
+        _fail()
+
+    # Self-digest: exact ``str`` proven BEFORE any equality with "". "" is allowed only for the internal
+    # builder seed (digest path); a built artifact requires lowercase hex64.
+    digest_value = policy.policy_digest
+    if type(digest_value) is not str:
+        _fail()
+    elif require_populated_self_digest:
+        if not _is_hex64_string(digest_value):
             _fail()
-    elif not (policy.policy_digest == "" or _is_hex64_string(policy.policy_digest)):
+    elif not (digest_value == "" or _is_hex64_string(digest_value)):
         _fail()
 
     return policy
@@ -800,14 +852,21 @@ def _policy_payload_from(policy: MachineTimePolicy) -> dict[str, object]:
 def machine_time_policy_to_dict(policy: MachineTimePolicy) -> dict[str, object]:
     """Canonical JSON-ready mapping for the MT-2 policy, including its self-digest.
 
-    Requires an exact ``MachineTimePolicy`` whose every public field is canonical and whose self-digest is a
-    populated lowercase hex64; any wrong-typed or malformed artifact raises ``MachineTimePolicyError``
-    (``malformed_artifact``) rather than returning a non-JSON mapping or leaking a raw exception. The
-    returned mapping always succeeds under the canonical ``json.dumps`` contract.
+    Requires an exact ``MachineTimePolicy`` whose every public field is canonical, whose self-digest is a
+    populated lowercase hex64, and whose carried self-digest exactly equals the canonical recomputation over
+    every other field (a stale, random, or incoherent carried digest is rejected). Any wrong-typed or
+    malformed artifact raises ``MachineTimePolicyError`` (``malformed_artifact``) rather than returning a
+    non-JSON mapping, exporting a stale digest, or leaking a raw exception. The returned mapping always
+    succeeds under the canonical ``json.dumps`` contract.
     """
 
     validated = _validate_machine_time_policy_artifact(policy, require_populated_self_digest=True)
     payload = _policy_payload_from(validated)
+    # ``validated.policy_digest`` is proven exact lowercase hex64; the recompute is hex64 by construction, so
+    # this equality is a safe builtin ``str`` comparison. The export boundary refuses to publish a mapping
+    # whose carried digest does not match its own canonical content.
+    if validated.policy_digest != _canonical_digest(payload):
+        raise MachineTimePolicyError(_reason("malformed_artifact"))
     payload["policy_digest"] = validated.policy_digest
     return payload
 
@@ -815,10 +874,14 @@ def machine_time_policy_to_dict(policy: MachineTimePolicy) -> dict[str, object]:
 def machine_time_policy_digest(policy: MachineTimePolicy) -> str:
     """Recompute the canonical policy digest over every public field except the self-digest.
 
-    Requires an exact ``MachineTimePolicy`` whose every public field is canonical; the builder's
-    empty-self-digest seed is supported (``policy_digest == ""`` allowed, and excluded from its own
-    payload). A forged exact dataclass with a malformed field or a structural overclaim raises
-    ``MachineTimePolicyError`` (``malformed_artifact``) instead of resealing a digest.
+    This is the recomputation API: it NEVER trusts the carried ``policy_digest`` and always recomputes from
+    the canonical payload. Requires an exact ``MachineTimePolicy`` whose every public field is canonical and
+    whose READY governance contract (if READY) re-proves; the builder's empty-self-digest seed is supported
+    (``policy_digest`` is either exact ``""`` or lowercase hex64, proven exact ``str`` before any equality,
+    and is excluded from its own payload). A forged exact dataclass with a malformed field, a structural
+    overclaim, or a canonical-but-invalid READY value raises ``MachineTimePolicyError``
+    (``malformed_artifact``) instead of resealing a digest. A well-typed but stale carried hex64 is accepted
+    and simply recomputed (this API does not enforce carried-digest consistency; the serializer does).
     """
 
     validated = _validate_machine_time_policy_artifact(policy, require_populated_self_digest=False)
