@@ -10,19 +10,28 @@ it is sandwiched between two independent external time proofs:
 * a **not_after** proof — an external signed timestamp that COMMITS TO the day self-digest (the digest
   existed no later than the signed time),
 
-with a QUORUM of at least two independent source classes on each side, and a SPACING rule so that >= 30
-machine-proven days require >= 30 distinct sandwiches whose intervals are consistent with ~30 real elapsed
-days.
+with a QUORUM of at least two independent source classes on each side, ROLE SEPARATION between the two
+sides, EXACT digest commitment, DETERMINISTIC OFFLINE verification of supplied proofs (no network fetch in
+any builder), a UTC-day identity + proof-replay policy (one distinct sandwich per UTC day, proof identities
+never reused across days), and a SPACING rule so that >= 30 machine-proven days require >= 30 distinct
+sandwiches whose intervals are consistent with ~30 real elapsed days.
 
 MT-2 is deliberately ABSTRACT and pre-Deep-Research-safe: it pins the required roles, the quorum minimum,
-abstract verification-policy identifiers, the spacing bounds, and the canonical proof-encoding and
-digest-commitment policies, and it requires explicit governance approval of the numeric policy values. It
-binds NO concrete provider name, endpoint, beacon format, signature scheme, timestamping-authority
-semantic, clock-skew tolerance, or proof-format wire version — every such fact is Deep-Research-gated and
-belongs to MT-3+. It consumes no attested day, no anchor, no episode, no runtime/live/venue state, and no
-external fact. A READY policy proves only that the supplied structure metadata is well-formed and
-governance-approved; it never proves that any machine-time anchor was verified, that time origin was
-proven, or that injected/attested time may substitute for a machine proof.
+abstract verification/independence/offline/day-identity/replay/source-registry policy identifiers, the
+spacing bounds, and the canonical proof-encoding and digest-commitment policies, and it requires explicit
+governance approval of the numeric policy values. It binds NO concrete provider name, endpoint, beacon
+format, signature scheme, timestamping-authority semantic, clock-skew tolerance, or proof-format wire
+version — every such fact is Deep-Research-gated and belongs to MT-3+ (the concrete source registry). It
+consumes no attested day, no anchor, no external proof, and no runtime/live/venue state. A READY policy
+proves only that the supplied structure metadata is well-formed and governance-approved; it never proves
+that any machine-time anchor was verified, that time origin was proven, that a concrete source registry was
+bound, or that injected/attested time may substitute for a machine proof.
+
+Trust-boundary discipline: no caller-carried value participates in equality, ordering, arithmetic, sorting,
+set construction, hashing, scope scanning, output projection, or serialization until its exact expected
+built-in type and canonical representation have been proven. A JSON-serializable ``str``/``int`` subclass
+with lying equality can never satisfy a protected comparison; a malformed value is safely projected to a
+deterministic JSON-only built-in so every REJECTED artifact still serializes and self-digests.
 """
 
 from __future__ import annotations
@@ -50,16 +59,21 @@ _DAY_NS = 86_400_000_000_000
 _MIN_QUORUM_PER_ROLE = 2
 _MIN_MACHINE_PROVEN_DAY_COUNT = 30
 
-# Abstract, provider-agnostic structure identifiers. These describe the sandwich VERIFICATION APPROACH,
-# never a concrete provider, endpoint, wire format, or Deep-Research fact.
+# Abstract, provider-free structure identifiers. These describe the sandwich VERIFICATION APPROACH, never a
+# concrete provider, endpoint, wire format, or Deep-Research fact.
 _SANDWICH_MODEL = "not_before_beacon_and_not_after_signed_timestamp_sandwich.v1"
 _REQUIRED_ROLES = ("not_before", "not_after")
 _NOT_BEFORE_VERIFICATION_POLICY = "unpredictable_public_beacon_embedded_pre_seal.v1"
 _NOT_AFTER_VERIFICATION_POLICY = "external_signed_timestamp_commits_to_day_self_digest.v1"
 _QUORUM_MODEL = "independent_source_classes_per_role.v1"
+_INDEPENDENCE_POLICY_ID = "minimum_two_independent_source_classes_per_role.v1"
 _DIGEST_COMMITMENT_POLICY = "not_after_proof_commits_to_exact_day_self_digest.v1"
 _PROOF_ENCODING_POLICY = "canonical_deterministic_proof_bytes_no_fetch_at_verify.v1"
+_OFFLINE_VERIFICATION_POLICY_ID = "deterministic_supplied_proof_verification_no_network.v1"
+_UTC_DAY_IDENTITY_POLICY_ID = "distinct_consecutive_utc_day_identity.v1"
+_PROOF_REPLAY_POLICY_ID = "proof_identity_reuse_across_days_forbidden.v1"
 _SPACING_POLICY = "consecutive_utc_days_monotonic_nonoverlapping_interval_consistent.v1"
+_SOURCE_REGISTRY_POLICY_ID = "concrete_source_registry_required_post_deep_research.v1"
 
 _BIST_PATTERN = re.compile(r"\b(?:bist\w*|borsa\w*|matriks\w*)|\bkap\b", re.IGNORECASE)
 _FORBIDDEN_PATTERN = re.compile(
@@ -97,7 +111,7 @@ _CLOCK_TOKENS = (
 
 
 class MachineTimePolicyError(RuntimeError):
-    """Raised on malformed caller input for the MT-2 policy artifact."""
+    """Raised on malformed caller input or a malformed artifact at the MT-2 public boundary."""
 
 
 class MachineTimePolicyStatus(str, Enum):
@@ -113,8 +127,8 @@ class MachineTimePolicy:
 
     READY only when governance approval metadata and the governance-approved structural values (quorum per
     role, required machine-proven day count, inter-day spacing bounds) are present and well-formed, and
-    every pinned structure identifier matches. It binds no concrete provider fact and proves no machine
-    time.
+    every pinned structure identifier matches exactly. It binds no concrete provider fact, consumes no
+    external proof, and proves no machine time.
     """
 
     schema_version: str
@@ -128,9 +142,14 @@ class MachineTimePolicy:
     not_before_verification_policy: str
     not_after_verification_policy: str
     quorum_model: str
+    independence_policy_id: str
     digest_commitment_policy: str
     proof_encoding_policy: str
+    offline_verification_policy_id: str
+    utc_day_identity_policy_id: str
+    proof_replay_policy_id: str
     spacing_policy: str
+    source_registry_policy_id: str
     min_quorum_per_role: int
     min_machine_proven_day_count: int
     utc_day_ns: int
@@ -141,12 +160,25 @@ class MachineTimePolicy:
     approval_reference: str | None
     approval_digest: str | None
     policy_approved: bool
+    source_registry_digest: str | None
     reason_codes: tuple[str, ...]
     metadata: tuple[tuple[str, str], ...]
     policy_digest: str
     paper_only: bool = True
     policy_only: bool = True
     abstract_pre_deep_research: bool = True
+    independent_source_classes_required: bool = True
+    role_separation_required: bool = True
+    exact_digest_commitment_required: bool = True
+    deterministic_offline_verification_required: bool = True
+    network_fetch_in_builder_forbidden: bool = True
+    distinct_sandwich_per_utc_day_required: bool = True
+    proof_reuse_across_days_forbidden: bool = True
+    consecutive_utc_days_required: bool = True
+    interval_consistency_required: bool = True
+    concrete_source_registry_required: bool = True
+    concrete_source_registry_bound: bool = False
+    source_registry_consumed: bool = False
     deep_research_facts_bound: bool = False
     concrete_sources_bound: bool = False
     machine_time_anchor_verified: bool = False
@@ -154,7 +186,11 @@ class MachineTimePolicy:
     timestamp_origin_proven: bool = False
     injected_time_accepted_as_proof: bool = False
     attested_time_accepted_as_proof: bool = False
+    external_proofs_consumed: bool = False
+    operational_days_consumed: bool = False
+    machine_proven_days_consumed: bool = False
     network_fetch_performed: bool = False
+    real_wall_clock_used: bool = False
     thirty_day_gate_decided: bool = False
     stage4_completion_decided: bool = False
     prdv4_stage4_complete: bool = False
@@ -199,6 +235,41 @@ def _is_exact_int(value: object) -> bool:
 
 def _is_hex64_string(value: object) -> bool:
     return type(value) is str and len(value) == _SHA256_HEX_LENGTH and all(char in _HEX_CHARS for char in value)
+
+
+def _is_plain_string_tuple(value: object) -> bool:
+    return type(value) is tuple and all(_is_plain_non_empty_string(item) for item in value)
+
+
+# Exact-type-before-operation helpers. Each proves the exact built-in type BEFORE any equality, so a lying
+# ``str``/``int`` subclass or an equality/hash/order-raising object can never have its custom operation
+# invoked from a protected comparison.
+
+
+def _eq_plain_str(value: object, expected: str) -> bool:
+    return type(value) is str and value == expected
+
+
+def _safe_pinned_string(value: object) -> str:
+    """A valid exact plain string may remain visible (even if it mismatches); anything else projects to ``""``."""
+
+    return value if _is_plain_non_empty_string(value) else ""  # type: ignore[return-value]
+
+
+def _safe_roles(value: object) -> tuple[str, ...]:
+    return value if _is_plain_string_tuple(value) else ()  # type: ignore[return-value]
+
+
+def _safe_optional_int(value: object) -> int | None:
+    return value if _is_exact_int(value) else None  # type: ignore[return-value]
+
+
+def _safe_optional_reference(value: object) -> str | None:
+    return value if _is_plain_non_empty_string(value) else None  # type: ignore[return-value]
+
+
+def _safe_optional_digest(value: object) -> str | None:
+    return value if _is_hex64_string(value) else None  # type: ignore[return-value]
 
 
 def _require_plain_non_empty_string(value: object, field_name: str) -> str:
@@ -258,29 +329,40 @@ def _has_scope_violation(*texts: object) -> bool:
     return False
 
 
-def _structure_failures(
-    *,
-    sandwich_model: object,
-    not_before_verification_policy: object,
-    not_after_verification_policy: object,
-    quorum_model: object,
-    digest_commitment_policy: object,
-    proof_encoding_policy: object,
-    spacing_policy: object,
-) -> list[str]:
-    """Every pinned structural identifier must equal its governance-fixed constant exactly."""
+# Every caller-exposed pinned structure identifier and its precise, stable mismatch reason. Precise
+# per-field reasons (never a single ``structure_mismatch``) keep later MT diagnostics actionable.
+_PINNED_STRING_FIELDS: tuple[tuple[str, str, str], ...] = (
+    ("sandwich_model", _SANDWICH_MODEL, "sandwich_model_mismatch"),
+    ("not_before_verification_policy", _NOT_BEFORE_VERIFICATION_POLICY, "not_before_verification_policy_mismatch"),
+    ("not_after_verification_policy", _NOT_AFTER_VERIFICATION_POLICY, "not_after_verification_policy_mismatch"),
+    ("quorum_model", _QUORUM_MODEL, "quorum_model_mismatch"),
+    ("independence_policy_id", _INDEPENDENCE_POLICY_ID, "independence_policy_mismatch"),
+    ("digest_commitment_policy", _DIGEST_COMMITMENT_POLICY, "digest_commitment_policy_mismatch"),
+    ("proof_encoding_policy", _PROOF_ENCODING_POLICY, "proof_encoding_policy_mismatch"),
+    ("offline_verification_policy_id", _OFFLINE_VERIFICATION_POLICY_ID, "offline_verification_policy_mismatch"),
+    ("utc_day_identity_policy_id", _UTC_DAY_IDENTITY_POLICY_ID, "utc_day_identity_policy_mismatch"),
+    ("proof_replay_policy_id", _PROOF_REPLAY_POLICY_ID, "proof_replay_policy_mismatch"),
+    ("spacing_policy", _SPACING_POLICY, "spacing_policy_mismatch"),
+    ("source_registry_policy_id", _SOURCE_REGISTRY_POLICY_ID, "source_registry_policy_mismatch"),
+)
 
-    if (
-        sandwich_model != _SANDWICH_MODEL
-        or not_before_verification_policy != _NOT_BEFORE_VERIFICATION_POLICY
-        or not_after_verification_policy != _NOT_AFTER_VERIFICATION_POLICY
-        or quorum_model != _QUORUM_MODEL
-        or digest_commitment_policy != _DIGEST_COMMITMENT_POLICY
-        or proof_encoding_policy != _PROOF_ENCODING_POLICY
-        or spacing_policy != _SPACING_POLICY
-    ):
-        return [_reason("structure_mismatch")]
-    return []
+
+def _pinned_string_failure(value: object, expected: str, mismatch_reason: str) -> str | None:
+    """Exact-type gate: a non-exact-plain-string is a type defect; a valid exact string may only mismatch."""
+
+    if not _is_plain_non_empty_string(value):
+        return _reason("policy_field_type_invalid")
+    if value != expected:  # safe: exact ``str`` proven, builtin ``str.__eq__`` only
+        return _reason(mismatch_reason)
+    return None
+
+
+def _required_roles_failure(value: object) -> str | None:
+    if not _is_plain_string_tuple(value):
+        return _reason("policy_field_type_invalid")
+    if value != _REQUIRED_ROLES:  # safe: exact tuple of exact ``str`` proven
+        return _reason("required_roles_mismatch")
+    return None
 
 
 def _quorum_failures(value: object) -> list[str]:
@@ -340,20 +422,30 @@ def build_machine_time_policy(
     approval_digest: str | None = None,
     policy_approved: bool = False,
     sandwich_model: str = _SANDWICH_MODEL,
+    required_roles: tuple[str, ...] = _REQUIRED_ROLES,
     not_before_verification_policy: str = _NOT_BEFORE_VERIFICATION_POLICY,
     not_after_verification_policy: str = _NOT_AFTER_VERIFICATION_POLICY,
     quorum_model: str = _QUORUM_MODEL,
+    independence_policy_id: str = _INDEPENDENCE_POLICY_ID,
     digest_commitment_policy: str = _DIGEST_COMMITMENT_POLICY,
     proof_encoding_policy: str = _PROOF_ENCODING_POLICY,
+    offline_verification_policy_id: str = _OFFLINE_VERIFICATION_POLICY_ID,
+    utc_day_identity_policy_id: str = _UTC_DAY_IDENTITY_POLICY_ID,
+    proof_replay_policy_id: str = _PROOF_REPLAY_POLICY_ID,
     spacing_policy: str = _SPACING_POLICY,
+    source_registry_policy_id: str = _SOURCE_REGISTRY_POLICY_ID,
     metadata: Mapping[str, str] | None = None,
 ) -> MachineTimePolicy:
-    """Build a deterministic abstract MT-2 machine-time policy artifact.
+    """Build a deterministic abstract MT-2 machine-time policy artifact (fail-closed, trust-boundary hardened).
 
     Governance-owned structural values are accepted only when explicitly supplied with approval metadata and
     an approval flag; missing, malformed, or unapproved values produce ``POLICY_REJECTED`` rather than
-    defaults. Wrong-typed identifiers/approval flag raise ``MachineTimePolicyError``; every structure/value
-    failure maps to ``status=POLICY_REJECTED``.
+    defaults, and every safely handleable malformed value is projected to a deterministic JSON-only built-in
+    so the REJECTED artifact still serializes and self-digests. Only wrong-typed ``policy_id`` /
+    ``correlation_id`` / ``policy_approved`` / ``metadata`` raise ``MachineTimePolicyError``; every structure
+    or value failure maps to ``status=POLICY_REJECTED``. No caller value participates in a protected
+    equality before its exact built-in type is proven, so a lying ``str``/``int`` subclass can never forge
+    READY and an equality/hash/order-raising object never has its custom operation invoked.
     """
 
     policy_id = _require_plain_non_empty_string(policy_id, "policy_id")
@@ -367,6 +459,28 @@ def build_machine_time_policy(
     if policy_approved is not True:
         hard.append(_reason("policy_not_approved"))
 
+    supplied_pinned = {
+        "sandwich_model": sandwich_model,
+        "not_before_verification_policy": not_before_verification_policy,
+        "not_after_verification_policy": not_after_verification_policy,
+        "quorum_model": quorum_model,
+        "independence_policy_id": independence_policy_id,
+        "digest_commitment_policy": digest_commitment_policy,
+        "proof_encoding_policy": proof_encoding_policy,
+        "offline_verification_policy_id": offline_verification_policy_id,
+        "utc_day_identity_policy_id": utc_day_identity_policy_id,
+        "proof_replay_policy_id": proof_replay_policy_id,
+        "spacing_policy": spacing_policy,
+        "source_registry_policy_id": source_registry_policy_id,
+    }
+    for field_name, expected, mismatch_reason in _PINNED_STRING_FIELDS:
+        failure = _pinned_string_failure(supplied_pinned[field_name], expected, mismatch_reason)
+        if failure is not None:
+            hard.append(failure)
+    roles_failure = _required_roles_failure(required_roles)
+    if roles_failure is not None:
+        hard.append(roles_failure)
+
     hard.extend(_quorum_failures(approved_quorum_per_role))
     hard.extend(_day_count_failures(approved_required_machine_proven_day_count))
     hard.extend(_spacing_failures(approved_min_inter_day_spacing_ns, approved_max_inter_day_spacing_ns))
@@ -375,18 +489,6 @@ def build_machine_time_policy(
         hard.append(_reason("approval_reference_missing"))
     if not _is_hex64_string(approval_digest):
         hard.append(_reason("approval_digest_invalid"))
-
-    hard.extend(
-        _structure_failures(
-            sandwich_model=sandwich_model,
-            not_before_verification_policy=not_before_verification_policy,
-            not_after_verification_policy=not_after_verification_policy,
-            quorum_model=quorum_model,
-            digest_commitment_policy=digest_commitment_policy,
-            proof_encoding_policy=proof_encoding_policy,
-            spacing_policy=spacing_policy,
-        )
-    )
 
     scope_texts = (policy_id, correlation_id, approval_reference, *_metadata_texts(metadata_pairs))
     if _has_bist_token(*scope_texts):
@@ -397,8 +499,40 @@ def build_machine_time_policy(
         hard.append(_reason("scope_violation"))
 
     reason_codes = _sorted_unique(hard)
-    status = MachineTimePolicyStatus.POLICY_REJECTED if reason_codes else MachineTimePolicyStatus.POLICY_READY
-    ready = status is MachineTimePolicyStatus.POLICY_READY
+    ready = not reason_codes
+
+    # Defensive READY invariant: READY is impossible unless every pinned structure identifier equals its
+    # constant, the required roles match, and every approved value is present, exact-typed, and within its
+    # governance floor. This re-proves the safety conclusion on the ORIGINAL caller inputs.
+    if ready and not (
+        _eq_plain_str(sandwich_model, _SANDWICH_MODEL)
+        and _eq_plain_str(not_before_verification_policy, _NOT_BEFORE_VERIFICATION_POLICY)
+        and _eq_plain_str(not_after_verification_policy, _NOT_AFTER_VERIFICATION_POLICY)
+        and _eq_plain_str(quorum_model, _QUORUM_MODEL)
+        and _eq_plain_str(independence_policy_id, _INDEPENDENCE_POLICY_ID)
+        and _eq_plain_str(digest_commitment_policy, _DIGEST_COMMITMENT_POLICY)
+        and _eq_plain_str(proof_encoding_policy, _PROOF_ENCODING_POLICY)
+        and _eq_plain_str(offline_verification_policy_id, _OFFLINE_VERIFICATION_POLICY_ID)
+        and _eq_plain_str(utc_day_identity_policy_id, _UTC_DAY_IDENTITY_POLICY_ID)
+        and _eq_plain_str(proof_replay_policy_id, _PROOF_REPLAY_POLICY_ID)
+        and _eq_plain_str(spacing_policy, _SPACING_POLICY)
+        and _eq_plain_str(source_registry_policy_id, _SOURCE_REGISTRY_POLICY_ID)
+        and _is_plain_string_tuple(required_roles)
+        and required_roles == _REQUIRED_ROLES
+        and _is_exact_int(approved_quorum_per_role)
+        and approved_quorum_per_role >= _MIN_QUORUM_PER_ROLE
+        and _is_exact_int(approved_required_machine_proven_day_count)
+        and approved_required_machine_proven_day_count >= _MIN_MACHINE_PROVEN_DAY_COUNT
+        and _is_exact_int(approved_min_inter_day_spacing_ns)
+        and _is_exact_int(approved_max_inter_day_spacing_ns)
+        and _is_plain_non_empty_string(approval_reference)
+        and _is_hex64_string(approval_digest)
+        and policy_approved is True
+    ):
+        reason_codes = (_reason("ready_invariant_failed"),)
+        ready = False
+
+    status = MachineTimePolicyStatus.POLICY_READY if ready else MachineTimePolicyStatus.POLICY_REJECTED
 
     policy_fields: dict[str, object] = {
         "schema_version": _SCHEMA_VERSION,
@@ -407,24 +541,30 @@ def build_machine_time_policy(
         "ready": ready,
         "policy_id": policy_id,
         "correlation_id": correlation_id,
-        "sandwich_model": sandwich_model,
-        "required_roles": _REQUIRED_ROLES,
-        "not_before_verification_policy": not_before_verification_policy,
-        "not_after_verification_policy": not_after_verification_policy,
-        "quorum_model": quorum_model,
-        "digest_commitment_policy": digest_commitment_policy,
-        "proof_encoding_policy": proof_encoding_policy,
-        "spacing_policy": spacing_policy,
+        "sandwich_model": _safe_pinned_string(sandwich_model),
+        "required_roles": _safe_roles(required_roles),
+        "not_before_verification_policy": _safe_pinned_string(not_before_verification_policy),
+        "not_after_verification_policy": _safe_pinned_string(not_after_verification_policy),
+        "quorum_model": _safe_pinned_string(quorum_model),
+        "independence_policy_id": _safe_pinned_string(independence_policy_id),
+        "digest_commitment_policy": _safe_pinned_string(digest_commitment_policy),
+        "proof_encoding_policy": _safe_pinned_string(proof_encoding_policy),
+        "offline_verification_policy_id": _safe_pinned_string(offline_verification_policy_id),
+        "utc_day_identity_policy_id": _safe_pinned_string(utc_day_identity_policy_id),
+        "proof_replay_policy_id": _safe_pinned_string(proof_replay_policy_id),
+        "spacing_policy": _safe_pinned_string(spacing_policy),
+        "source_registry_policy_id": _safe_pinned_string(source_registry_policy_id),
         "min_quorum_per_role": _MIN_QUORUM_PER_ROLE,
         "min_machine_proven_day_count": _MIN_MACHINE_PROVEN_DAY_COUNT,
         "utc_day_ns": _DAY_NS,
-        "approved_quorum_per_role": approved_quorum_per_role,
-        "approved_required_machine_proven_day_count": approved_required_machine_proven_day_count,
-        "approved_min_inter_day_spacing_ns": approved_min_inter_day_spacing_ns,
-        "approved_max_inter_day_spacing_ns": approved_max_inter_day_spacing_ns,
-        "approval_reference": approval_reference,
-        "approval_digest": approval_digest,
+        "approved_quorum_per_role": _safe_optional_int(approved_quorum_per_role),
+        "approved_required_machine_proven_day_count": _safe_optional_int(approved_required_machine_proven_day_count),
+        "approved_min_inter_day_spacing_ns": _safe_optional_int(approved_min_inter_day_spacing_ns),
+        "approved_max_inter_day_spacing_ns": _safe_optional_int(approved_max_inter_day_spacing_ns),
+        "approval_reference": _safe_optional_reference(approval_reference),
+        "approval_digest": _safe_optional_digest(approval_digest),
         "policy_approved": policy_approved,
+        "source_registry_digest": None,
         "reason_codes": reason_codes,
         "metadata": metadata_pairs,
     }
@@ -433,16 +573,14 @@ def build_machine_time_policy(
 
 
 def _replace_policy_digest(policy: MachineTimePolicy, digest: str) -> MachineTimePolicy:
-    values = _policy_fields(policy)
+    values = {field.name: getattr(policy, field.name) for field in fields(policy) if field.name != "policy_digest"}
     values["policy_digest"] = digest
     return MachineTimePolicy(**values)  # type: ignore[arg-type]
 
 
-def _policy_fields(policy: MachineTimePolicy) -> dict[str, object]:
-    return {field.name: getattr(policy, field.name) for field in fields(policy) if field.name != "policy_digest"}
-
-
 def _policy_payload_from(policy: MachineTimePolicy) -> dict[str, object]:
+    if type(policy.status) is not MachineTimePolicyStatus:
+        raise MachineTimePolicyError(_reason("malformed_artifact"))
     payload: dict[str, object] = {}
     for field in fields(policy):
         if field.name == "policy_digest":
@@ -460,24 +598,39 @@ def _policy_payload_from(policy: MachineTimePolicy) -> dict[str, object]:
 
 
 def machine_time_policy_to_dict(policy: MachineTimePolicy) -> dict[str, object]:
-    """Canonical JSON-ready mapping for the MT-2 policy, including its self-digest."""
+    """Canonical JSON-ready mapping for the MT-2 policy, including its self-digest.
 
+    Requires an exact ``MachineTimePolicy`` with a canonical status and a populated lowercase-hex64
+    self-digest; a wrong-typed or malformed artifact raises ``MachineTimePolicyError`` (never a raw
+    ``AttributeError`` / ``TypeError``).
+    """
+
+    if type(policy) is not MachineTimePolicy:
+        raise MachineTimePolicyError(_reason("malformed_artifact"))
     payload = _policy_payload_from(policy)
+    if not _is_hex64_string(policy.policy_digest):
+        raise MachineTimePolicyError(_reason("malformed_artifact"))
     payload["policy_digest"] = policy.policy_digest
     return payload
 
 
 def machine_time_policy_digest(policy: MachineTimePolicy) -> str:
-    """Recompute the canonical policy digest over every public field except the self-digest."""
+    """Recompute the canonical policy digest over every public field except the self-digest.
 
+    Requires an exact ``MachineTimePolicy`` with a canonical status; the builder's empty-self-digest seed is
+    supported because ``policy_digest`` is excluded from its own payload.
+    """
+
+    if type(policy) is not MachineTimePolicy:
+        raise MachineTimePolicyError(_reason("malformed_artifact"))
     return _canonical_digest(_policy_payload_from(policy))
 
 
 __all__ = [
-    "MachineTimePolicy",
     "MachineTimePolicyError",
     "MachineTimePolicyStatus",
+    "MachineTimePolicy",
     "build_machine_time_policy",
-    "machine_time_policy_digest",
     "machine_time_policy_to_dict",
+    "machine_time_policy_digest",
 ]

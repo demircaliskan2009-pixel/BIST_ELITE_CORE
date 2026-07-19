@@ -1,4 +1,4 @@
-"""Tests for the MT-2 abstract machine-time policy artifact (pre-Deep-Research-safe)."""
+"""Tests for the MT-2 abstract machine-time policy artifact (pre-Deep-Research-safe, trust-boundary hardened)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import ast
 import inspect
 import json
 from dataclasses import FrozenInstanceError, fields, replace
+from enum import Enum
 from pathlib import Path
 
 import pytest
@@ -35,9 +36,14 @@ _EXPECTED_FIELD_ORDER = (
     "not_before_verification_policy",
     "not_after_verification_policy",
     "quorum_model",
+    "independence_policy_id",
     "digest_commitment_policy",
     "proof_encoding_policy",
+    "offline_verification_policy_id",
+    "utc_day_identity_policy_id",
+    "proof_replay_policy_id",
     "spacing_policy",
+    "source_registry_policy_id",
     "min_quorum_per_role",
     "min_machine_proven_day_count",
     "utc_day_ns",
@@ -48,12 +54,25 @@ _EXPECTED_FIELD_ORDER = (
     "approval_reference",
     "approval_digest",
     "policy_approved",
+    "source_registry_digest",
     "reason_codes",
     "metadata",
     "policy_digest",
     "paper_only",
     "policy_only",
     "abstract_pre_deep_research",
+    "independent_source_classes_required",
+    "role_separation_required",
+    "exact_digest_commitment_required",
+    "deterministic_offline_verification_required",
+    "network_fetch_in_builder_forbidden",
+    "distinct_sandwich_per_utc_day_required",
+    "proof_reuse_across_days_forbidden",
+    "consecutive_utc_days_required",
+    "interval_consistency_required",
+    "concrete_source_registry_required",
+    "concrete_source_registry_bound",
+    "source_registry_consumed",
     "deep_research_facts_bound",
     "concrete_sources_bound",
     "machine_time_anchor_verified",
@@ -61,7 +80,11 @@ _EXPECTED_FIELD_ORDER = (
     "timestamp_origin_proven",
     "injected_time_accepted_as_proof",
     "attested_time_accepted_as_proof",
+    "external_proofs_consumed",
+    "operational_days_consumed",
+    "machine_proven_days_consumed",
     "network_fetch_performed",
+    "real_wall_clock_used",
     "thirty_day_gate_decided",
     "stage4_completion_decided",
     "prdv4_stage4_complete",
@@ -82,7 +105,25 @@ _EXPECTED_FIELD_ORDER = (
     "profitability_proven",
 )
 
+_ALWAYS_TRUE = (
+    "paper_only",
+    "policy_only",
+    "abstract_pre_deep_research",
+    "independent_source_classes_required",
+    "role_separation_required",
+    "exact_digest_commitment_required",
+    "deterministic_offline_verification_required",
+    "network_fetch_in_builder_forbidden",
+    "distinct_sandwich_per_utc_day_required",
+    "proof_reuse_across_days_forbidden",
+    "consecutive_utc_days_required",
+    "interval_consistency_required",
+    "concrete_source_registry_required",
+)
+
 _ALWAYS_FALSE = (
+    "concrete_source_registry_bound",
+    "source_registry_consumed",
     "deep_research_facts_bound",
     "concrete_sources_bound",
     "machine_time_anchor_verified",
@@ -90,7 +131,11 @@ _ALWAYS_FALSE = (
     "timestamp_origin_proven",
     "injected_time_accepted_as_proof",
     "attested_time_accepted_as_proof",
+    "external_proofs_consumed",
+    "operational_days_consumed",
+    "machine_proven_days_consumed",
     "network_fetch_performed",
+    "real_wall_clock_used",
     "thirty_day_gate_decided",
     "stage4_completion_decided",
     "prdv4_stage4_complete",
@@ -110,6 +155,127 @@ _ALWAYS_FALSE = (
     "edge_proven",
     "profitability_proven",
 )
+
+_PINNED_STRING_MISMATCHES = (
+    ("sandwich_model", "sandwich_model_mismatch"),
+    ("not_before_verification_policy", "not_before_verification_policy_mismatch"),
+    ("not_after_verification_policy", "not_after_verification_policy_mismatch"),
+    ("quorum_model", "quorum_model_mismatch"),
+    ("independence_policy_id", "independence_policy_mismatch"),
+    ("digest_commitment_policy", "digest_commitment_policy_mismatch"),
+    ("proof_encoding_policy", "proof_encoding_policy_mismatch"),
+    ("offline_verification_policy_id", "offline_verification_policy_mismatch"),
+    ("utc_day_identity_policy_id", "utc_day_identity_policy_mismatch"),
+    ("proof_replay_policy_id", "proof_replay_policy_mismatch"),
+    ("spacing_policy", "spacing_policy_mismatch"),
+    ("source_registry_policy_id", "source_registry_policy_mismatch"),
+)
+_PINNED_STRING_FIELD_NAMES = tuple(name for name, _ in _PINNED_STRING_MISMATCHES)
+
+
+# --------------------------------------------------------------------------------------------------
+# Adversarial value classes
+# --------------------------------------------------------------------------------------------------
+
+
+class _LyingStr(str):
+    """JSON-serializable ``str`` subclass whose equality always lies — type-distinct from exact ``str``."""
+
+    __slots__ = ()
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __ne__(self, other: object) -> bool:
+        return False
+
+    __hash__ = str.__hash__
+
+
+class _LyingInt(int):
+    """JSON-serializable ``int`` subclass whose equality always lies — type-distinct from exact ``int``."""
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __ne__(self, other: object) -> bool:
+        return False
+
+    __hash__ = int.__hash__
+
+
+class _RaisingEq:
+    """Equality-raising object: any comparison before the exact-type proof would crash the builder."""
+
+    def __eq__(self, other: object) -> bool:  # pragma: no cover - must never be invoked
+        raise AssertionError("custom equality on an unvalidated caller value must never be invoked")
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+class _EqualityTrue:
+    """Equality-true object with a plausible value — only an exact-type gate rejects it."""
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+class _RaisingHash:
+    """Hash-raising object: any set/dict construction over it before the type proof would crash."""
+
+    def __hash__(self) -> int:  # pragma: no cover - must never be invoked
+        raise AssertionError("hashing an unvalidated caller value must never be invoked")
+
+
+class _RaisingOrder:
+    """Ordering-raising object: any sort over it before the type proof would crash."""
+
+    def __lt__(self, other: object) -> bool:  # pragma: no cover - must never be invoked
+        raise AssertionError("ordering an unvalidated caller value must never be invoked")
+
+
+class _ForeignEnum(str, Enum):
+    """A foreign str-enum member — ``type() is str`` is False, so the exact-type gate rejects it."""
+
+    SANDWICH = "not_before_beacon_and_not_after_signed_timestamp_sandwich.v1"
+
+
+class _RolesTupleSubclass(tuple):
+    """A ``tuple`` subclass — type-distinct from an exact ``tuple``, rejected by the exact-type gate."""
+
+    __slots__ = ()
+
+
+_SAFELY_MALFORMED = (
+    None,
+    True,
+    7,
+    2.5,
+    ["not", "a", "string"],
+    {"not": "a string"},
+    _LyingStr("forged.value.v1"),
+    _RaisingEq(),
+    _EqualityTrue(),
+    _RaisingHash(),
+    _RaisingOrder(),
+    _ForeignEnum.SANDWICH,
+)
+_SAFELY_MALFORMED_IDS = [
+    "none",
+    "bool",
+    "int",
+    "float",
+    "list",
+    "mapping",
+    "lying_str_subclass",
+    "equality_raising",
+    "equality_true",
+    "hash_raising",
+    "ordering_raising",
+    "foreign_enum",
+]
 
 
 def _rc(code: str) -> str:
@@ -133,25 +299,39 @@ def _build(**overrides: object) -> MachineTimePolicy:
     return build_machine_time_policy(**payload)  # type: ignore[arg-type]
 
 
+def _assert_serializable_rejected(policy: MachineTimePolicy) -> None:
+    assert policy.status is MachineTimePolicyStatus.POLICY_REJECTED
+    assert policy.ready is False
+    assert policy.reason_codes
+    payload = machine_time_policy_to_dict(policy)
+    assert payload["status"] == "POLICY_REJECTED"
+    json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    assert machine_time_policy_digest(policy) == policy.policy_digest
+    assert policy.machine_time_origin_proven is False
+    assert policy.timestamp_origin_proven is False
+    assert policy.concrete_source_registry_bound is False
+
+
 # --------------------------------------------------------------------------------------------------
 # Public contract
 # --------------------------------------------------------------------------------------------------
 
 
-def test_public_api_exact() -> None:
+def test_public_api_order_exact() -> None:
     assert policy_module.__all__ == [
-        "MachineTimePolicy",
         "MachineTimePolicyError",
         "MachineTimePolicyStatus",
+        "MachineTimePolicy",
         "build_machine_time_policy",
-        "machine_time_policy_digest",
         "machine_time_policy_to_dict",
+        "machine_time_policy_digest",
     ]
     assert [status.value for status in MachineTimePolicyStatus] == ["POLICY_READY", "POLICY_REJECTED"]
 
 
 def test_dataclass_field_order_exact() -> None:
     assert tuple(field.name for field in fields(MachineTimePolicy)) == _EXPECTED_FIELD_ORDER
+    assert len(_EXPECTED_FIELD_ORDER) == 78
 
 
 def test_builder_signature_exact() -> None:
@@ -167,12 +347,18 @@ def test_builder_signature_exact() -> None:
         "approval_digest",
         "policy_approved",
         "sandwich_model",
+        "required_roles",
         "not_before_verification_policy",
         "not_after_verification_policy",
         "quorum_model",
+        "independence_policy_id",
         "digest_commitment_policy",
         "proof_encoding_policy",
+        "offline_verification_policy_id",
+        "utc_day_identity_policy_id",
+        "proof_replay_policy_id",
         "spacing_policy",
+        "source_registry_policy_id",
         "metadata",
     ]
     assert all(parameters[name].kind is inspect.Parameter.KEYWORD_ONLY for name in parameters)
@@ -193,18 +379,20 @@ def test_happy_ready_pins_abstract_sandwich_structure() -> None:
     assert policy.not_before_verification_policy == "unpredictable_public_beacon_embedded_pre_seal.v1"
     assert policy.not_after_verification_policy == "external_signed_timestamp_commits_to_day_self_digest.v1"
     assert policy.quorum_model == "independent_source_classes_per_role.v1"
+    assert policy.independence_policy_id == "minimum_two_independent_source_classes_per_role.v1"
     assert policy.digest_commitment_policy == "not_after_proof_commits_to_exact_day_self_digest.v1"
     assert policy.proof_encoding_policy == "canonical_deterministic_proof_bytes_no_fetch_at_verify.v1"
+    assert policy.offline_verification_policy_id == "deterministic_supplied_proof_verification_no_network.v1"
+    assert policy.utc_day_identity_policy_id == "distinct_consecutive_utc_day_identity.v1"
+    assert policy.proof_replay_policy_id == "proof_identity_reuse_across_days_forbidden.v1"
     assert policy.spacing_policy == "consecutive_utc_days_monotonic_nonoverlapping_interval_consistent.v1"
+    assert policy.source_registry_policy_id == "concrete_source_registry_required_post_deep_research.v1"
     assert policy.min_quorum_per_role == 2
     assert policy.min_machine_proven_day_count == 30
     assert policy.utc_day_ns == _DAY_NS
     assert policy.approved_quorum_per_role == 2
     assert policy.approved_required_machine_proven_day_count == 30
     assert policy.policy_approved is True
-    assert policy.paper_only is True
-    assert policy.policy_only is True
-    assert policy.abstract_pre_deep_research is True
 
 
 def test_output_is_frozen() -> None:
@@ -246,7 +434,7 @@ def test_determinism_same_inputs_same_digest() -> None:
 
 
 # --------------------------------------------------------------------------------------------------
-# Approval / value gates (fail-closed to POLICY_REJECTED)
+# Approval / value gates
 # --------------------------------------------------------------------------------------------------
 
 
@@ -316,8 +504,8 @@ def test_spacing_bounds_must_be_ordered_positive_ints(min_ns: object, max_ns: ob
 @pytest.mark.parametrize(
     ("min_ns", "max_ns"),
     [
-        (_DAY_NS + 1, _DAY_NS * 2),  # window entirely above one day
-        (1, _DAY_NS - 1),  # window entirely below one day
+        (_DAY_NS + 1, _DAY_NS * 2),
+        (1, _DAY_NS - 1),
     ],
 )
 def test_spacing_window_must_contain_one_utc_day(min_ns: int, max_ns: int) -> None:
@@ -338,26 +526,213 @@ def test_missing_approval_metadata_rejected() -> None:
 
 
 # --------------------------------------------------------------------------------------------------
-# Structure identifiers must equal the pinned constants
+# Structure identifiers must equal the pinned constants (precise per-field reasons)
 # --------------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "field_name",
-    [
-        "sandwich_model",
-        "not_before_verification_policy",
-        "not_after_verification_policy",
-        "quorum_model",
-        "digest_commitment_policy",
-        "proof_encoding_policy",
-        "spacing_policy",
-    ],
-)
-def test_structure_identifier_mismatch_rejected(field_name: str) -> None:
+@pytest.mark.parametrize(("field_name", "reason"), _PINNED_STRING_MISMATCHES)
+def test_structure_identifier_value_mismatch_has_precise_reason(field_name: str, reason: str) -> None:
     policy = _build(**{field_name: "forged.structure.v1"})
     assert policy.status is MachineTimePolicyStatus.POLICY_REJECTED
-    assert _rc("structure_mismatch") in policy.reason_codes
+    assert _rc(reason) in policy.reason_codes
+    assert _rc("structure_mismatch") not in policy.reason_codes
+
+
+def test_required_roles_value_mismatch_has_precise_reason() -> None:
+    policy = _build(required_roles=("not_after", "not_before"))
+    assert policy.status is MachineTimePolicyStatus.POLICY_REJECTED
+    assert _rc("required_roles_mismatch") in policy.reason_codes
+
+
+# --------------------------------------------------------------------------------------------------
+# P1 — exact-type-before-operation: lying subclasses / raising objects
+# --------------------------------------------------------------------------------------------------
+
+
+def test_structure_policy_fields_require_exact_plain_strings_before_equality() -> None:
+    for field_name in _PINNED_STRING_FIELD_NAMES:
+        policy = _build(**{field_name: _LyingStr("anything")})
+        assert policy.status is MachineTimePolicyStatus.POLICY_REJECTED, field_name
+        assert _rc("policy_field_type_invalid") in policy.reason_codes, field_name
+
+
+def test_lie_eq_str_subclass_cannot_forge_policy_ready() -> None:
+    # Sanity: the subclass equality genuinely lies, so only the exact-type gate (not ==) can reject it.
+    assert _LyingStr("x") == "not_before_beacon_and_not_after_signed_timestamp_sandwich.v1"
+    for field_name in _PINNED_STRING_FIELD_NAMES:
+        policy = _build(**{field_name: _LyingStr("not-the-pinned-value")})
+        assert policy.ready is False, field_name
+        assert policy.machine_time_origin_proven is False
+        assert _rc("policy_field_type_invalid") in policy.reason_codes
+
+
+def test_int_subclass_cannot_forge_quorum_or_day_count() -> None:
+    assert _LyingInt(1) == 2
+    quorum = _build(approved_quorum_per_role=_LyingInt(1))
+    assert quorum.ready is False
+    assert _rc("approved_quorum_per_role_invalid") in quorum.reason_codes
+    days = _build(approved_required_machine_proven_day_count=_LyingInt(1))
+    assert days.ready is False
+    assert _rc("approved_required_machine_proven_day_count_invalid") in days.reason_codes
+
+
+def test_structure_equality_raising_objects_never_raise_raw_exception() -> None:
+    for field_name in _PINNED_STRING_FIELD_NAMES:
+        policy = _build(**{field_name: _RaisingEq()})  # would raise if equality were invoked
+        _assert_serializable_rejected(policy)
+        assert _rc("policy_field_type_invalid") in policy.reason_codes
+
+
+@pytest.mark.parametrize("malformed", _SAFELY_MALFORMED, ids=_SAFELY_MALFORMED_IDS)
+def test_malformed_rejected_inputs_are_safely_projected(malformed: object) -> None:
+    policy = _build(sandwich_model=malformed)
+    _assert_serializable_rejected(policy)
+    # A valid exact plain string may remain visible; anything else projects to "" — never the custom object.
+    assert type(policy.sandwich_model) is str
+    if not (type(malformed) is str):
+        assert policy.sandwich_model == ""
+
+
+# Values that are malformed for an exact-int field (excludes valid ints like 7): a lying int subclass, a
+# non-int, and non-numeric objects must all reject without invoking a custom operation.
+_MALFORMED_FOR_INT_FIELD = (
+    None,
+    True,
+    2.5,
+    "2",
+    ["x"],
+    _RaisingEq(),
+    _RaisingHash(),
+    _ForeignEnum.SANDWICH,
+    _LyingInt(1),
+)
+_MALFORMED_FOR_REFERENCE_FIELD = (None, True, 7, 2.5, ["x"], _RaisingEq(), _RaisingHash(), _ForeignEnum.SANDWICH)
+
+
+def test_rejected_custom_values_serialize_and_self_digest() -> None:
+    # Exercise field-appropriate malformed values across a string field, an int field, and the reference
+    # field; every case must be safely projected, POLICY_REJECTED, serializable, and self-digesting.
+    cases: list[tuple[str, object]] = [("not_before_verification_policy", value) for value in _SAFELY_MALFORMED]
+    cases += [("approved_quorum_per_role", value) for value in _MALFORMED_FOR_INT_FIELD]
+    cases += [("approval_reference", value) for value in _MALFORMED_FOR_REFERENCE_FIELD]
+    for field_name, value in cases:
+        policy = _build(**{field_name: value})
+        _assert_serializable_rejected(policy)
+        stored = getattr(policy, field_name)
+        assert type(stored) in (str, int, type(None)), (field_name, value)
+
+
+def test_malformed_int_and_reference_fields_project_to_none() -> None:
+    policy = _build(approved_quorum_per_role=_RaisingEq(), approval_reference=_RaisingHash())
+    _assert_serializable_rejected(policy)
+    assert policy.approved_quorum_per_role is None
+    assert policy.approval_reference is None
+
+
+def test_ordering_raising_required_roles_never_raise_raw_exception() -> None:
+    policy = _build(required_roles=_RolesTupleSubclass((_RaisingOrder(),)))
+    _assert_serializable_rejected(policy)
+    assert _rc("policy_field_type_invalid") in policy.reason_codes
+    assert policy.required_roles == ()
+
+
+# --------------------------------------------------------------------------------------------------
+# P2 — public serializer / digest boundary
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", [None, "not-a-policy", 7, {"policy": "dict"}, object()])
+def test_public_serializer_rejects_wrong_artifact_type_with_module_error(bad: object) -> None:
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_to_dict(bad)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("bad", [None, "not-a-policy", 7, {"policy": "dict"}, object()])
+def test_public_digest_rejects_wrong_artifact_type_with_module_error(bad: object) -> None:
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_digest(bad)  # type: ignore[arg-type]
+
+
+def test_public_serializer_rejects_malformed_status_without_raw_exception() -> None:
+    forged = replace(_build(), status="POLICY_READY")  # type: ignore[arg-type]
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_to_dict(forged)
+
+
+def test_public_digest_rejects_malformed_status_without_raw_exception() -> None:
+    forged = replace(_build(), status=None)  # type: ignore[arg-type]
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_digest(forged)
+
+
+def test_public_serializer_requires_populated_hex64_self_digest() -> None:
+    forged = replace(_build(), policy_digest="")
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_to_dict(forged)
+
+
+# --------------------------------------------------------------------------------------------------
+# Patch D — abstract future-binding contract
+# --------------------------------------------------------------------------------------------------
+
+
+def test_required_roles_contract_is_digest_bound_and_fail_closed() -> None:
+    policy = _build()
+    assert policy.required_roles == ("not_before", "not_after")
+    assert machine_time_policy_digest(replace(policy, required_roles=("x",))) != policy.policy_digest
+    assert _build(required_roles=("only_one",)).ready is False
+    assert _rc("policy_field_type_invalid") in _build(required_roles=("ok", 7)).reason_codes  # type: ignore[arg-type]
+    assert _rc("policy_field_type_invalid") in _build(required_roles=["not_before", "not_after"]).reason_codes  # type: ignore[arg-type]
+
+
+def test_source_registry_boundary_is_explicit_and_unbound() -> None:
+    for policy in (_build(), _build(policy_approved=False)):
+        assert (
+            policy.source_registry_policy_id == "concrete_source_registry_required_post_deep_research.v1"
+            or not policy.ready
+        )
+        assert policy.concrete_source_registry_required is True
+        assert policy.concrete_source_registry_bound is False
+        assert policy.source_registry_digest is None
+        assert policy.source_registry_consumed is False
+
+
+def test_offline_verification_and_replay_invariants_are_digest_bound() -> None:
+    policy = _build()
+    assert policy.deterministic_offline_verification_required is True
+    assert policy.network_fetch_in_builder_forbidden is True
+    assert policy.proof_reuse_across_days_forbidden is True
+    assert policy.distinct_sandwich_per_utc_day_required is True
+    assert policy.consecutive_utc_days_required is True
+    assert policy.interval_consistency_required is True
+    assert policy.role_separation_required is True
+    assert policy.exact_digest_commitment_required is True
+    assert policy.independent_source_classes_required is True
+    for flag in (
+        "deterministic_offline_verification_required",
+        "network_fetch_in_builder_forbidden",
+        "proof_reuse_across_days_forbidden",
+        "exact_digest_commitment_required",
+    ):
+        assert machine_time_policy_digest(replace(policy, **{flag: False})) != policy.policy_digest
+
+
+def test_no_mt2_input_can_bind_a_concrete_source_registry() -> None:
+    variants = (
+        _build(),
+        _build(policy_approved=False),
+        _build(approved_quorum_per_role=99),
+        _build(source_registry_policy_id="forged.registry.v1"),
+        _build(metadata={"note": "bind a source registry"}),
+    )
+    for policy in variants:
+        assert policy.concrete_source_registry_bound is False
+        assert policy.source_registry_digest is None
+        assert policy.source_registry_consumed is False
+        assert policy.concrete_sources_bound is False
+        assert policy.deep_research_facts_bound is False
+        assert policy.external_proofs_consumed is False
+        assert policy.machine_proven_days_consumed is False
 
 
 # --------------------------------------------------------------------------------------------------
@@ -374,6 +749,7 @@ def test_structure_identifier_mismatch_rejected(field_name: str) -> None:
         ("correlation_id", "", "correlation_id_invalid"),
         ("correlation_id", None, "correlation_id_invalid"),
         ("policy_approved", "yes", "policy_approved_invalid"),
+        ("policy_approved", 1, "policy_approved_invalid"),
         ("metadata", {"key": 5}, "metadata_malformed"),
         ("metadata", {" key": "value"}, "metadata_malformed"),
         ("metadata", "not-a-mapping", "metadata_malformed"),
@@ -401,21 +777,21 @@ def test_scope_and_clock_and_bist_tokens_rejected() -> None:
 # --------------------------------------------------------------------------------------------------
 
 
-def test_ready_and_rejected_keep_all_unsafe_claims_structurally_false() -> None:
+def test_ready_and_rejected_keep_structural_markers_true_and_unsafe_claims_false() -> None:
     ready = _build()
     rejected = _build(policy_approved=False)
     defaults = {field.name: field.default for field in fields(MachineTimePolicy)}
+    for flag in _ALWAYS_TRUE:
+        assert getattr(ready, flag) is True, flag
+        assert getattr(rejected, flag) is True, flag
+        assert defaults[flag] is True, flag
     for flag in _ALWAYS_FALSE:
         assert getattr(ready, flag) is False, flag
         assert getattr(rejected, flag) is False, flag
         assert defaults[flag] is False, flag
-    assert ready.paper_only is rejected.paper_only is True
-    assert ready.policy_only is rejected.policy_only is True
-    assert ready.abstract_pre_deep_research is rejected.abstract_pre_deep_research is True
 
 
 def test_machine_time_origin_never_provable_by_this_policy() -> None:
-    # The defining safety property: no combination of caller inputs can make MT-2 set time-origin proof.
     for policy in (_build(), _build(policy_approved=False), _build(approved_quorum_per_role=99)):
         assert policy.machine_time_origin_proven is False
         assert policy.timestamp_origin_proven is False
@@ -423,6 +799,7 @@ def test_machine_time_origin_never_provable_by_this_policy() -> None:
         assert policy.deep_research_facts_bound is False
         assert policy.injected_time_accepted_as_proof is False
         assert policy.attested_time_accepted_as_proof is False
+        assert policy.real_wall_clock_used is False
 
 
 # --------------------------------------------------------------------------------------------------
