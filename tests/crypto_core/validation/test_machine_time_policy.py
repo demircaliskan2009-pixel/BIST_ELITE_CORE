@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+from collections.abc import Mapping as _AbcMapping
 from dataclasses import FrozenInstanceError, fields, replace
 from enum import Enum
 from pathlib import Path
@@ -424,9 +425,14 @@ def test_serializer_is_fields_complete_and_excludes_only_self_digest() -> None:
 
 
 def test_output_reseal_is_detectable() -> None:
+    # A forged structural overclaim is rejected outright (not merely a different digest): the public digest
+    # refuses to reseal a forbidden True flag.
     policy = _build()
     forged = replace(policy, machine_time_origin_proven=True)
-    assert machine_time_policy_digest(forged) != policy.policy_digest
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_digest(forged)
+    # A legitimate VALUE change (roles) still recomputes to a different digest.
+    assert machine_time_policy_digest(replace(policy, required_roles=("x", "y"))) != policy.policy_digest
 
 
 def test_determinism_same_inputs_same_digest() -> None:
@@ -714,7 +720,9 @@ def test_offline_verification_and_replay_invariants_are_digest_bound() -> None:
         "proof_reuse_across_days_forbidden",
         "exact_digest_commitment_required",
     ):
-        assert machine_time_policy_digest(replace(policy, **{flag: False})) != policy.policy_digest
+        # Weakening a structural-required True flag is rejected by the public digest, not resealed.
+        with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+            machine_time_policy_digest(replace(policy, **{flag: False}))
 
 
 def test_no_mt2_input_can_bind_a_concrete_source_registry() -> None:
@@ -882,3 +890,209 @@ def test_serializer_json_roundtrip_stable() -> None:
     payload = machine_time_policy_to_dict(policy)
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
     assert json.loads(encoded)["policy_digest"] == policy.policy_digest
+
+
+# --------------------------------------------------------------------------------------------------
+# Public artifact-boundary repair: exact metadata container + complete 78-field validator
+# --------------------------------------------------------------------------------------------------
+
+
+class _HostileMapping(_AbcMapping):
+    """A genuine ``Mapping`` (isinstance True) that is NOT an exact ``dict``; every access raises."""
+
+    def __getitem__(self, key: object) -> object:  # pragma: no cover - must never be invoked
+        raise AssertionError("hostile mapping __getitem__ must never be invoked")
+
+    def __iter__(self):  # pragma: no cover - must never be invoked
+        raise AssertionError("hostile mapping __iter__ must never be invoked")
+
+    def __len__(self) -> int:  # pragma: no cover - must never be invoked
+        raise AssertionError("hostile mapping __len__ must never be invoked")
+
+    def items(self):  # pragma: no cover - must never be invoked
+        raise AssertionError("hostile mapping items() must never be invoked")
+
+
+class _EvilDictSubclass(dict):
+    """A ``dict`` subclass (type is not exact ``dict``) whose ``.items()`` override must never run."""
+
+    def items(self):  # pragma: no cover - must never be invoked
+        raise AssertionError("dict-subclass items() override must never be invoked")
+
+
+def test_builder_rejects_custom_mapping_without_invoking_items() -> None:
+    with pytest.raises(MachineTimePolicyError, match=_rc("metadata_malformed")):
+        _build(metadata=_HostileMapping())
+
+
+def test_builder_rejects_dict_subclass_without_invoking_overrides() -> None:
+    evil = _EvilDictSubclass()
+    evil["purpose"] = "hostile"
+    with pytest.raises(MachineTimePolicyError, match=_rc("metadata_malformed")):
+        _build(metadata=evil)
+
+
+def test_valid_exact_dict_metadata_order_independent() -> None:
+    assert _build(metadata={"b": "2", "a": "1"}).policy_digest == _build(metadata={"a": "1", "b": "2"}).policy_digest
+
+
+def _forge(**changes: object) -> MachineTimePolicy:
+    return replace(_build(), **changes)  # type: ignore[arg-type]
+
+
+def test_public_artifact_validator_covers_every_dataclass_field() -> None:
+    # An object() is malformed for every field family; the validator must reject a forgery in EACH of the 78
+    # fields at both public entry points, never leaking a raw exception.
+    for field in fields(MachineTimePolicy):
+        forged = _forge(**{field.name: object()})
+        with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+            machine_time_policy_digest(forged)
+        with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+            machine_time_policy_to_dict(forged)
+
+
+@pytest.mark.parametrize("field_name", ["schema_version", "policy_version", "policy_id", "correlation_id"])
+def test_public_serializer_rejects_malformed_identity_field(field_name: str) -> None:
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_to_dict(_forge(**{field_name: _RaisingEq()}))
+
+
+@pytest.mark.parametrize("field_name", ["schema_version", "policy_id"])
+def test_public_digest_rejects_malformed_identity_field(field_name: str) -> None:
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_digest(_forge(**{field_name: 7}))
+
+
+@pytest.mark.parametrize("roles", [object(), "not_before", ("ok", _RaisingEq()), (_LyingStr("not_before"),), 7])
+def test_public_serializer_rejects_malformed_roles_field(roles: object) -> None:
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_to_dict(_forge(required_roles=roles))
+
+
+@pytest.mark.parametrize(
+    "reasons",
+    [
+        object(),
+        ["machine_time_policy:x"],
+        ("plain_no_prefix",),
+        ("machine_time_policy:b", "machine_time_policy:a"),  # unsorted
+        ("machine_time_policy:a", "machine_time_policy:a"),  # duplicate
+        (_RaisingEq(),),
+    ],
+)
+def test_public_digest_rejects_malformed_reason_codes(reasons: object) -> None:
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_digest(
+            _forge(reason_codes=reasons, status=MachineTimePolicyStatus.POLICY_REJECTED, ready=False)
+        )
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        object(),
+        [["a", "1"]],
+        (("a", "1", "extra"),),
+        (("a", _RaisingEq()),),
+        (("b", "2"), ("a", "1")),  # unsorted
+        (("a", "1"), ("a", "2")),  # duplicate key
+        ((_RaisingHash(), "1"),),
+    ],
+)
+def test_public_serializer_rejects_malformed_metadata_shape(metadata: object) -> None:
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_to_dict(_forge(metadata=metadata))
+
+
+def test_public_digest_rejects_malformed_metadata_shape() -> None:
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_digest(_forge(metadata=("not-a-pair-tuple",)))
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "min_quorum_per_role",
+        "min_machine_proven_day_count",
+        "utc_day_ns",
+        "approved_quorum_per_role",
+        "approved_required_machine_proven_day_count",
+        "approved_min_inter_day_spacing_ns",
+        "approved_max_inter_day_spacing_ns",
+    ],
+)
+@pytest.mark.parametrize("bad", [True, _LyingInt(2), 2.0])
+def test_public_boundary_rejects_bool_and_int_subclass_in_integer_fields(field_name: str, bad: object) -> None:
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_digest(_forge(**{field_name: bad}))
+
+
+@pytest.mark.parametrize("flag", [*_ALWAYS_TRUE, *_ALWAYS_FALSE])
+@pytest.mark.parametrize("bad", [1, 0, "True", None, _EqualityTrue()])
+def test_public_boundary_rejects_non_bool_structural_flags(flag: str, bad: object) -> None:
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_digest(_forge(**{flag: bad}))
+
+
+@pytest.mark.parametrize("flag", _ALWAYS_FALSE)
+def test_public_digest_rejects_structural_false_flag_overclaim(flag: str) -> None:
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_digest(_forge(**{flag: True}))
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_to_dict(_forge(**{flag: True}))
+
+
+@pytest.mark.parametrize("flag", _ALWAYS_TRUE)
+def test_public_digest_rejects_structural_true_flag_weakening(flag: str) -> None:
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_digest(_forge(**{flag: False}))
+
+
+@pytest.mark.parametrize("bad", [_HEX_B, "", 0, object(), True])
+def test_public_boundary_rejects_non_none_source_registry_digest(bad: object) -> None:
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_digest(_forge(source_registry_digest=bad))
+
+
+def test_to_dict_is_json_ready_for_every_builder_produced_rejected_artifact() -> None:
+    rejected_variants = (
+        _build(policy_approved=False),
+        _build(approved_quorum_per_role=None),
+        _build(approved_quorum_per_role=1),
+        _build(approved_required_machine_proven_day_count=5),
+        _build(approved_min_inter_day_spacing_ns=None),
+        _build(sandwich_model="forged.structure.v1"),
+        _build(sandwich_model=_RaisingEq()),
+        _build(required_roles=("only_one",)),
+        _build(approval_reference=None),
+        _build(approval_digest="not-hex"),
+        _build(metadata={"note": "enable live orders"}),
+    )
+    for policy in (_build(), *rejected_variants):
+        payload = machine_time_policy_to_dict(policy)
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+        assert json.loads(encoded)["policy_digest"] == policy.policy_digest
+        assert machine_time_policy_digest(policy) == policy.policy_digest
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("policy_id", _RaisingEq()),
+        ("status", "POLICY_READY"),
+        ("ready", _EqualityTrue()),
+        ("required_roles", (_RaisingOrder(),)),
+        ("reason_codes", (_RaisingHash(),)),
+        ("metadata", (_RaisingEq(),)),
+        ("approved_quorum_per_role", _RaisingEq()),
+        ("approval_digest", _RaisingHash()),
+        ("machine_time_origin_proven", _RaisingEq()),
+        ("sandwich_model", _LyingStr("x")),
+        ("policy_digest", object()),
+    ],
+)
+def test_digest_never_leaks_raw_exception_for_forged_exact_dataclass(field_name: str, value: object) -> None:
+    # pytest.raises(MachineTimePolicyError) fails if any raw AssertionError/TypeError/ValueError/JSON/
+    # unpacking/custom-op exception escapes instead, so this proves the boundary never leaks.
+    with pytest.raises(MachineTimePolicyError, match=_rc("malformed_artifact")):
+        machine_time_policy_digest(_forge(**{field_name: value}))

@@ -39,7 +39,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from enum import Enum
 
@@ -250,6 +249,10 @@ def _eq_plain_str(value: object, expected: str) -> bool:
     return type(value) is str and value == expected
 
 
+def _eq_exact_int(value: object, expected: int) -> bool:
+    return _is_exact_int(value) and value == expected
+
+
 def _safe_pinned_string(value: object) -> str:
     """A valid exact plain string may remain visible (even if it mismatches); anything else projects to ``""``."""
 
@@ -278,10 +281,21 @@ def _require_plain_non_empty_string(value: object, field_name: str) -> str:
     return value  # type: ignore[return-value]
 
 
+def _is_canonical_text(value: object) -> bool:
+    """Exact built-in ``str`` that is stripped and free of ASCII control/DEL characters (empty allowed)."""
+
+    return (
+        type(value) is str and value == value.strip() and not any(ord(char) < 32 or ord(char) == 127 for char in value)
+    )
+
+
 def _normalize_metadata(metadata: object) -> tuple[tuple[str, str], ...]:
+    # Exact-container-before-operation: the metadata mapping must be exactly ``None`` or a built-in ``dict``
+    # BEFORE any ``.items()`` / iteration / sort. A custom ``Mapping``, ``Mapping`` subclass, or ``dict``
+    # subclass with overridden iteration must never have its caller-controlled methods invoked here.
     if metadata is None:
         return ()
-    if not isinstance(metadata, Mapping):
+    if type(metadata) is not dict:
         raise MachineTimePolicyError(_reason("metadata_malformed"))
     items: list[tuple[str, str]] = []
     for key, value in metadata.items():
@@ -434,7 +448,7 @@ def build_machine_time_policy(
     proof_replay_policy_id: str = _PROOF_REPLAY_POLICY_ID,
     spacing_policy: str = _SPACING_POLICY,
     source_registry_policy_id: str = _SOURCE_REGISTRY_POLICY_ID,
-    metadata: Mapping[str, str] | None = None,
+    metadata: dict[str, str] | None = None,
 ) -> MachineTimePolicy:
     """Build a deterministic abstract MT-2 machine-time policy artifact (fail-closed, trust-boundary hardened).
 
@@ -578,9 +592,195 @@ def _replace_policy_digest(policy: MachineTimePolicy, digest: str) -> MachineTim
     return MachineTimePolicy(**values)  # type: ignore[arg-type]
 
 
-def _policy_payload_from(policy: MachineTimePolicy) -> dict[str, object]:
-    if type(policy.status) is not MachineTimePolicyStatus:
+# Structural marker flags that must be exactly ``True`` on every legitimate artifact, and non-claim /
+# capability flags that must be exactly ``False`` on every legitimate artifact. Any deviation on a forged
+# exact dataclass is a malformed artifact — this is what closes the structural-overclaim reseal path: the
+# public digest rejects (never reseals) a digest-valid, status-READY policy carrying a forbidden overclaim.
+_ARTIFACT_TRUE_FLAGS = (
+    "paper_only",
+    "policy_only",
+    "abstract_pre_deep_research",
+    "independent_source_classes_required",
+    "role_separation_required",
+    "exact_digest_commitment_required",
+    "deterministic_offline_verification_required",
+    "network_fetch_in_builder_forbidden",
+    "distinct_sandwich_per_utc_day_required",
+    "proof_reuse_across_days_forbidden",
+    "consecutive_utc_days_required",
+    "interval_consistency_required",
+    "concrete_source_registry_required",
+)
+_ARTIFACT_FALSE_FLAGS = (
+    "concrete_source_registry_bound",
+    "source_registry_consumed",
+    "deep_research_facts_bound",
+    "concrete_sources_bound",
+    "machine_time_anchor_verified",
+    "machine_time_origin_proven",
+    "timestamp_origin_proven",
+    "injected_time_accepted_as_proof",
+    "attested_time_accepted_as_proof",
+    "external_proofs_consumed",
+    "operational_days_consumed",
+    "machine_proven_days_consumed",
+    "network_fetch_performed",
+    "real_wall_clock_used",
+    "thirty_day_gate_decided",
+    "stage4_completion_decided",
+    "prdv4_stage4_complete",
+    "operational_readiness",
+    "live_ready",
+    "shadow_ready",
+    "deribit_ready",
+    "private_api_ready",
+    "live_api_called",
+    "real_orders_enabled",
+    "real_money_enabled",
+    "real_capital_reserved",
+    "capital_mutation_enabled",
+    "scheduler_enabled",
+    "auto_loop_enabled",
+    "connector_invoked",
+    "edge_proven",
+    "profitability_proven",
+)
+# Pinned policy-string fields: an exact built-in ``str`` that is either canonical non-empty (a valid or a
+# rejected-but-visible mismatch) or ``""`` (a safely projected malformed value). Never coerced to a pinned
+# value at the serialization boundary.
+_ARTIFACT_POLICY_STRING_FIELDS = tuple(name for name, _, _ in _PINNED_STRING_FIELDS)
+
+
+def _is_canonical_or_empty_string(value: object) -> bool:
+    return type(value) is str and (value == "" or _is_plain_non_empty_string(value))
+
+
+def _is_canonical_metadata_pairs(value: object) -> bool:
+    if type(value) is not tuple:
+        return False
+    keys: list[str] = []
+    for pair in value:
+        if type(pair) is not tuple or len(pair) != 2:
+            return False
+        key, item = pair
+        if not (_is_canonical_text(key) and _is_canonical_text(item)):
+            return False
+        keys.append(key)
+    return value == tuple(sorted(value)) and len(set(keys)) == len(keys)
+
+
+def _is_canonical_reason_codes(value: object) -> bool:
+    if type(value) is not tuple:
+        return False
+    for reason in value:
+        if not _is_plain_non_empty_string(reason) or not reason.startswith(f"{_REASON_PREFIX}:"):
+            return False
+    return list(value) == sorted(value) and len(set(value)) == len(value)
+
+
+def _validate_machine_time_policy_artifact(policy: object, *, require_populated_self_digest: bool) -> MachineTimePolicy:
+    """Prove the COMPLETE exact runtime + canonical contract of every public field before any traversal.
+
+    Returns the same artifact when it is fully canonical; otherwise raises ``MachineTimePolicyError`` with
+    the single deterministic ``malformed_artifact`` reason. No caller-carried field is compared, iterated,
+    unpacked, sorted, hashed, or serialized until its exact contract is proven here, so a forged exact
+    dataclass can never produce a raw ``AttributeError`` / ``TypeError`` / ``ValueError`` / JSON / unpacking
+    / custom-operation exception, and a structural overclaim can never be resealed.
+    """
+
+    if type(policy) is not MachineTimePolicy:
         raise MachineTimePolicyError(_reason("malformed_artifact"))
+
+    def _fail() -> None:
+        raise MachineTimePolicyError(_reason("malformed_artifact"))
+
+    # Identity / version.
+    if not (
+        _eq_plain_str(policy.schema_version, _SCHEMA_VERSION)
+        and _eq_plain_str(policy.policy_version, _POLICY_VERSION)
+        and _is_plain_non_empty_string(policy.policy_id)
+        and _is_plain_non_empty_string(policy.correlation_id)
+    ):
+        _fail()
+
+    # Status / ready / reason coherence.
+    if type(policy.status) is not MachineTimePolicyStatus or type(policy.ready) is not bool:
+        _fail()
+    if not _is_canonical_reason_codes(policy.reason_codes):
+        _fail()
+    if policy.status is MachineTimePolicyStatus.POLICY_READY:
+        if policy.ready is not True or policy.reason_codes != ():
+            _fail()
+    elif policy.status is MachineTimePolicyStatus.POLICY_REJECTED:
+        if policy.ready is not False or policy.reason_codes == ():
+            _fail()
+    else:  # pragma: no cover - the enum has exactly two members
+        _fail()
+
+    # Pinned policy strings (canonical or safely projected "") and required roles.
+    for field_name in _ARTIFACT_POLICY_STRING_FIELDS:
+        if not _is_canonical_or_empty_string(getattr(policy, field_name)):
+            _fail()
+    roles = policy.required_roles
+    if type(roles) is not tuple or not all(_is_plain_non_empty_string(role) for role in roles):
+        _fail()
+
+    # Fixed structural integers.
+    if not (
+        _eq_exact_int(policy.min_quorum_per_role, _MIN_QUORUM_PER_ROLE)
+        and _eq_exact_int(policy.min_machine_proven_day_count, _MIN_MACHINE_PROVEN_DAY_COUNT)
+        and _eq_exact_int(policy.utc_day_ns, _DAY_NS)
+    ):
+        _fail()
+
+    # Optional approved integers (exact int or None; bool / int subclasses excluded).
+    for field_name in (
+        "approved_quorum_per_role",
+        "approved_required_machine_proven_day_count",
+        "approved_min_inter_day_spacing_ns",
+        "approved_max_inter_day_spacing_ns",
+    ):
+        value = getattr(policy, field_name)
+        if value is not None and not _is_exact_int(value):
+            _fail()
+
+    # Approval fields.
+    if not (policy.approval_reference is None or _is_plain_non_empty_string(policy.approval_reference)):
+        _fail()
+    if not (policy.approval_digest is None or _is_hex64_string(policy.approval_digest)):
+        _fail()
+    if type(policy.policy_approved) is not bool:
+        _fail()
+
+    # Source-registry boundary (structurally unbound in MT-2).
+    if policy.source_registry_digest is not None:
+        _fail()
+
+    # Metadata canonical representation.
+    if not _is_canonical_metadata_pairs(policy.metadata):
+        _fail()
+
+    # Structural true / false flag identity (closes overclaim reseal + required-invariant weakening).
+    for field_name in _ARTIFACT_TRUE_FLAGS:
+        if getattr(policy, field_name) is not True:
+            _fail()
+    for field_name in _ARTIFACT_FALSE_FLAGS:
+        if getattr(policy, field_name) is not False:
+            _fail()
+
+    # Self-digest: "" only for the internal builder seed (digest path); lowercase hex64 for a built artifact.
+    if require_populated_self_digest:
+        if not _is_hex64_string(policy.policy_digest):
+            _fail()
+    elif not (policy.policy_digest == "" or _is_hex64_string(policy.policy_digest)):
+        _fail()
+
+    return policy
+
+
+def _policy_payload_from(policy: MachineTimePolicy) -> dict[str, object]:
+    """Build the canonical payload. Callers MUST pass an artifact already proven by the validator."""
+
     payload: dict[str, object] = {}
     for field in fields(policy):
         if field.name == "policy_digest":
@@ -600,30 +800,29 @@ def _policy_payload_from(policy: MachineTimePolicy) -> dict[str, object]:
 def machine_time_policy_to_dict(policy: MachineTimePolicy) -> dict[str, object]:
     """Canonical JSON-ready mapping for the MT-2 policy, including its self-digest.
 
-    Requires an exact ``MachineTimePolicy`` with a canonical status and a populated lowercase-hex64
-    self-digest; a wrong-typed or malformed artifact raises ``MachineTimePolicyError`` (never a raw
-    ``AttributeError`` / ``TypeError``).
+    Requires an exact ``MachineTimePolicy`` whose every public field is canonical and whose self-digest is a
+    populated lowercase hex64; any wrong-typed or malformed artifact raises ``MachineTimePolicyError``
+    (``malformed_artifact``) rather than returning a non-JSON mapping or leaking a raw exception. The
+    returned mapping always succeeds under the canonical ``json.dumps`` contract.
     """
 
-    if type(policy) is not MachineTimePolicy:
-        raise MachineTimePolicyError(_reason("malformed_artifact"))
-    payload = _policy_payload_from(policy)
-    if not _is_hex64_string(policy.policy_digest):
-        raise MachineTimePolicyError(_reason("malformed_artifact"))
-    payload["policy_digest"] = policy.policy_digest
+    validated = _validate_machine_time_policy_artifact(policy, require_populated_self_digest=True)
+    payload = _policy_payload_from(validated)
+    payload["policy_digest"] = validated.policy_digest
     return payload
 
 
 def machine_time_policy_digest(policy: MachineTimePolicy) -> str:
     """Recompute the canonical policy digest over every public field except the self-digest.
 
-    Requires an exact ``MachineTimePolicy`` with a canonical status; the builder's empty-self-digest seed is
-    supported because ``policy_digest`` is excluded from its own payload.
+    Requires an exact ``MachineTimePolicy`` whose every public field is canonical; the builder's
+    empty-self-digest seed is supported (``policy_digest == ""`` allowed, and excluded from its own
+    payload). A forged exact dataclass with a malformed field or a structural overclaim raises
+    ``MachineTimePolicyError`` (``malformed_artifact``) instead of resealing a digest.
     """
 
-    if type(policy) is not MachineTimePolicy:
-        raise MachineTimePolicyError(_reason("malformed_artifact"))
-    return _canonical_digest(_policy_payload_from(policy))
+    validated = _validate_machine_time_policy_artifact(policy, require_populated_self_digest=False)
+    return _canonical_digest(_policy_payload_from(validated))
 
 
 __all__ = [
