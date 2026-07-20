@@ -82,11 +82,21 @@ Write-Section 'AGENT OS v5.2 ROUTING (CRYPTO_CORE_AGENT_OS_V1)'
 
 $os52 = New-Object System.Collections.Generic.List[string]
 
+# Raw UTF-8 text preserves the exact lane-title characters used by the ordinal checks below.
+function Get-RawText($path) {
+  if (-not (Test-Path -LiteralPath $path)) { return $null }
+  try {
+    $resolvedPath = (Resolve-Path -LiteralPath $path -ErrorAction Stop).Path
+    return [System.IO.File]::ReadAllText($resolvedPath, [System.Text.Encoding]::UTF8)
+  } catch {
+    return $null
+  }
+}
+
 # Active doctrine text with the HISTORICAL sections (agent_workflow.md 20-23) and trailing dated changelog
 # blocks removed, so legitimate archival/changelog Fable history never trips the active-routing checks.
 function Get-ActiveDoctrineText($path) {
-  if (-not (Test-Path $path)) { return $null }
-  $raw = Get-Content -LiteralPath $path -Raw -ErrorAction SilentlyContinue
+  $raw = Get-RawText $path
   if ($null -eq $raw) { return $null }
   $lines = $raw -split "`r?`n"
   $out = New-Object System.Collections.Generic.List[string]
@@ -101,9 +111,99 @@ function Get-ActiveDoctrineText($path) {
   return ($out -join "`n")
 }
 
-function Get-RawText($path) {
-  if (-not (Test-Path $path)) { return $null }
-  return (Get-Content -LiteralPath $path -Raw -ErrorAction SilentlyContinue)
+function Get-AgentOsActiveLaneIssues([string]$agentsText) {
+  $issues = New-Object System.Collections.Generic.List[string]
+  if ([string]::IsNullOrEmpty($agentsText)) {
+    $issues.Add('AGENTS.md missing')
+    return $issues.ToArray()
+  }
+
+  $ordinal = [System.StringComparison]::Ordinal
+  $sectionStart = '### Final durable model set (Agent OS v1)'
+  $sectionEnd = '**Copilot status:'
+  $startIndex = $agentsText.IndexOf($sectionStart, $ordinal)
+  if ($startIndex -lt 0) {
+    $issues.Add('active model-set section start missing')
+    if ($agentsText.IndexOf($sectionEnd, $ordinal) -lt 0) {
+      $issues.Add('active model-set section end missing')
+    }
+    return $issues.ToArray()
+  }
+
+  $contentStart = $startIndex + $sectionStart.Length
+  $endIndex = $agentsText.IndexOf($sectionEnd, $contentStart, $ordinal)
+  if ($endIndex -lt 0) {
+    $issues.Add('active model-set section end missing')
+    return $issues.ToArray()
+  }
+
+  $section = $agentsText.Substring($contentStart, $endIndex - $contentStart)
+  $dash = [char]0x2014
+  $retiredFableTitle = 'Claude Fable 5 ' + $dash + ' `INACTIVE_EXPIRED_RETIRED`'
+  $expectedActiveTitles = @(
+    'ChatGPT GPT-5.6 Thinking',
+    'GitHub connector',
+    'Deep Research + GitHub connector',
+    'Claude Opus 4.8',
+    ('Claude Sonnet 5 ' + $dash + ' runtime-proven only'),
+    'Codex GPT-5.6 Sol',
+    'Codex GPT-5.6 Terra',
+    'Codex GPT-5.6 Luna'
+  )
+  $expectedSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+  foreach ($title in $expectedActiveTitles) { [void]$expectedSet.Add($title) }
+
+  $activeTitles = New-Object System.Collections.Generic.List[string]
+  $nonRetiredFableTitles = New-Object System.Collections.Generic.List[string]
+  $copilotTitles = New-Object System.Collections.Generic.List[string]
+  $retiredFableCount = 0
+  $parsedBulletCount = 0
+  foreach ($line in ($section -split "`r?`n")) {
+    if ($line -match '^- \*\*(?<title>[^*]+)\*\*') {
+      $parsedBulletCount += 1
+      $title = $Matches['title']
+      if ($title.IndexOf('Copilot', $ordinal) -ge 0) { $copilotTitles.Add($title) }
+      if ($title.IndexOf('Fable', $ordinal) -ge 0 -and $title.Equals($retiredFableTitle, $ordinal)) {
+        $retiredFableCount += 1
+      } else {
+        $activeTitles.Add($title)
+        if ($title.IndexOf('Fable', $ordinal) -ge 0) { $nonRetiredFableTitles.Add($title) }
+      }
+    }
+  }
+
+  if ($parsedBulletCount -eq 0) { $issues.Add('no top-level active model-set bullets parsed') }
+  if ($retiredFableCount -eq 0) { $issues.Add('retired Fable bullet missing') }
+  if ($retiredFableCount -gt 1) { $issues.Add("duplicate retired Fable bullet: $retiredFableCount") }
+  foreach ($title in $nonRetiredFableTitles) { $issues.Add("Fable bullet not retired: $title") }
+  foreach ($title in $copilotTitles) { $issues.Add("Copilot bullet inside active model-set section: $title") }
+
+  $activeCounts = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([System.StringComparer]::Ordinal)
+  foreach ($title in $activeTitles) {
+    if ($activeCounts.ContainsKey($title)) {
+      $activeCounts[$title] = $activeCounts[$title] + 1
+    } else {
+      $activeCounts.Add($title, 1)
+    }
+  }
+
+  foreach ($title in $expectedActiveTitles) {
+    if (-not $activeCounts.ContainsKey($title)) { $issues.Add("missing active lane: $title") }
+  }
+
+  $reportedUnexpected = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+  $reportedDuplicates = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+  foreach ($title in $activeTitles) {
+    if (-not $expectedSet.Contains($title) -and $reportedUnexpected.Add($title)) {
+      $issues.Add("unexpected active lane: $title")
+    }
+    if ($activeCounts[$title] -gt 1 -and $reportedDuplicates.Add($title)) {
+      $issues.Add("duplicate active lane: $title")
+    }
+  }
+  if ($activeTitles.Count -ne 8) { $issues.Add("active lane count mismatch: $($activeTitles.Count); expected 8") }
+
+  return $issues.ToArray()
 }
 
 $activeDoctrineFiles = @(
@@ -118,19 +218,9 @@ $activeDoctrineFiles = @(
   '.codex/skills/crypto-core-max-safe/SKILL.md'
 )
 
-# 1) Exactly the eight active lanes are named in AGENTS.md, and Fable is not among them.
+# 1) The canonical model-set section must contain exactly the eight active lanes and one retired Fable bullet.
 $agentsRaw = Get-RawText 'AGENTS.md'
-$eightLanes = @(
-  'ChatGPT GPT-5.6 Thinking', 'GitHub connector', 'Deep Research', 'Claude Opus 4.8',
-  'Claude Sonnet 5', 'Codex GPT-5.6 Sol', 'Codex GPT-5.6 Terra', 'Codex GPT-5.6 Luna'
-)
-if ($null -eq $agentsRaw) {
-  $os52.Add('AGENTS.md missing')
-} else {
-  foreach ($lane in $eightLanes) {
-    if ($agentsRaw -notmatch [regex]::Escape($lane)) { $os52.Add("active lane missing in AGENTS.md: $lane") }
-  }
-}
+foreach ($issue in @(Get-AgentOsActiveLaneIssues $agentsRaw)) { $os52.Add($issue) }
 
 # 2) Fable is retired everywhere it is named as an active lane, and active surge machinery is gone.
 $forbiddenActivePhrases = @(
@@ -233,4 +323,6 @@ Write-Section 'CANONICAL DOCTRINE'
 Write-Output 'AGENTS.md + docs/crypto_core/agent_workflow.md + .codex/skills/crypto-core-max-safe/SKILL.md + docs/crypto_core/agent_lessons.md'
 Write-Output 'Terminal/git/gh/pytest/ruff are the source of truth; extensions are helpers only.'
 
-exit 0
+if ($MyInvocation.InvocationName -ne '.') {
+  exit 0
+}
