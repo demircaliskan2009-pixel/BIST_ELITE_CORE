@@ -794,7 +794,20 @@ def _source_record_payload(record: MachineTimeSourceRecord) -> dict[str, object]
     return payload
 
 
-def _validate_source_record(record: object, *, require_populated_self_digest: bool) -> MachineTimeSourceRecord:
+def _expected_entry_digest(record: MachineTimeSourceRecord) -> str:
+    """Canonical recomputation of a record's entry digest over every field except the entry self-digest.
+
+    Pure and non-recursive (never calls ``machine_time_source_entry_digest`` or the registry validator), so it
+    can be reused both by the recompute API and by the nested-digest verification inside the artifact
+    validator without creating a cycle. Callers MUST pass a record whose shape is already proven.
+    """
+
+    return _canonical_digest(_source_record_core_payload(record))
+
+
+def _validate_source_record(
+    record: object, *, require_populated_self_digest: bool, verify_entry_digest: bool = False
+) -> MachineTimeSourceRecord:
     if type(record) is not MachineTimeSourceRecord:
         raise MachineTimeSourceRegistryError(_reason("malformed_source_record"))
 
@@ -821,14 +834,24 @@ def _validate_source_record(record: object, *, require_populated_self_digest: bo
             _fail()
     elif not (digest_value == "" or _is_hex64_string(digest_value)):
         _fail()
+    # Nested-digest verification: a populated entry digest must equal the record's own recomputation, so a
+    # caller cannot swap a well-formed-but-false nested self-digest (or mutate a source field and reseal the
+    # entry digest) and have the artifact validator accept it. The record shape is fully proven above, so the
+    # core payload is JSON-serializable and this recomputation is safe and non-recursive.
+    if verify_entry_digest and _is_hex64_string(digest_value) and digest_value != _expected_entry_digest(record):
+        _fail()
     return record
 
 
 def machine_time_source_entry_digest(record: MachineTimeSourceRecord) -> str:
-    """Recompute the canonical entry digest over every record field except the entry self-digest."""
+    """Recompute the canonical entry digest over every record field except the entry self-digest.
 
-    validated = _validate_source_record(record, require_populated_self_digest=False)
-    return _canonical_digest(_source_record_core_payload(validated))
+    Recompute API: it never trusts the carried ``entry_digest`` (``verify_entry_digest=False``) and always
+    returns the canonical recomputation, so it can seal a fresh record or re-derive a stale one.
+    """
+
+    validated = _validate_source_record(record, require_populated_self_digest=False, verify_entry_digest=False)
+    return _expected_entry_digest(validated)
 
 
 def _replace_entry_digest(record: MachineTimeSourceRecord, digest: str) -> MachineTimeSourceRecord:
@@ -951,9 +974,47 @@ def _packet_semantic_ok(verified: dict[str, object], digest: str) -> bool:
     return True
 
 
-def _registry_semantic_ok(registry: MachineTimeSourceRegistry) -> bool:
-    """Artifact-side reproof of the READY contract (called only after the shape validator proves types)."""
+def _expected_registry_semantics() -> tuple[tuple[MachineTimeSourceRecord, ...], tuple[str, ...], tuple[str, ...]]:
+    """Derive the authoritative ``(sources, citation_ids, exclusion_subjects)`` from the embedded packet.
 
+    Re-proves that the embedded (mutable) module packet still canonicalizes to the pinned normalized digest
+    BEFORE deriving anything, then rebuilds the exact sealed source records, the sorted citation-ID inventory,
+    and the packet-ordered exclusion subjects from a freshly re-parsed canonical copy. The approved packet
+    must project cleanly; a corrupted or tampered embedded packet fails closed rather than yielding weakened
+    expectations. This is the single authority for READY semantic equality — never a hand-maintained partial
+    field list.
+    """
+
+    canonical = json.dumps(
+        _CONTROLLER_APPROVED_PACKET, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
+    )
+    if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != _CONTROLLER_APPROVED_PACKET_DIGEST:
+        raise MachineTimeSourceRegistryError(_reason("embedded_packet_digest_mismatch"))
+    verified = json.loads(canonical)
+    records: list[MachineTimeSourceRecord] = []
+    for source_obj in verified["sources"]:
+        seed_record, reasons = _project_source_record(source_obj)
+        if reasons:
+            raise MachineTimeSourceRegistryError(_reason("embedded_packet_source_malformed"))
+        records.append(_replace_entry_digest(seed_record, machine_time_source_entry_digest(seed_record)))
+    citation_ids = tuple(sorted(verified["citations"].keys()))
+    exclusion_subjects = tuple(entry["subject"] for entry in verified["excluded_or_unproven"])
+    return tuple(records), citation_ids, exclusion_subjects
+
+
+def _registry_semantic_ok(registry: MachineTimeSourceRegistry) -> bool:
+    """Artifact-side reproof of EXACT semantic equality with the controller-approved packet.
+
+    Called only after the shape validator proves every field's exact type (and every nested entry digest is
+    self-consistent). Beyond lineage / counts / ids it requires the artifact's source records, citation-ID
+    inventory, and exclusion subjects to equal the records / inventory derived from the re-verified embedded
+    packet, so a caller cannot mutate any load-bearing source field (provider / class / protocol / maturity /
+    verification profile / endpoints / fact items / per-source citations), reseal the nested and outer
+    digests, and still be accepted. Exact frozen-dataclass equality over the full source tuple binds every
+    source field, including its entry digest.
+    """
+
+    expected_records, expected_citation_ids, expected_exclusion_subjects = _expected_registry_semantics()
     if registry.controller_approved_packet_digest != _CONTROLLER_APPROVED_PACKET_DIGEST:
         return False
     if registry.controller_approved_packet_id != _CONTROLLER_APPROVED_PACKET_ID:
@@ -972,22 +1033,13 @@ def _registry_semantic_ok(registry: MachineTimeSourceRegistry) -> bool:
         return False
     if registry.source_ids != _EXPECTED_SOURCE_IDS:
         return False
-    if tuple(record.source_id for record in registry.sources) != _EXPECTED_SOURCE_IDS:
+    if registry.citation_ids != expected_citation_ids:
         return False
-    if len(registry.citation_ids) != _EXPECTED_CITATION_COUNT:
+    if registry.exclusion_subjects != expected_exclusion_subjects:
         return False
-    citation_id_set = set(registry.citation_ids)
-    for record in registry.sources:
-        for flag in _SOURCE_SAFETY_FLAGS:
-            if getattr(record, flag) is not False:
-                return False
-        if record.recommended_role not in _ALLOWED_RECOMMENDED_ROLES:
-            return False
-        if record.recommendation not in _ALLOWED_RECOMMENDATIONS:
-            return False
-        if any(citation_id not in citation_id_set for citation_id in record.citation_ids):
-            return False
-    return True
+    if len(registry.sources) != len(expected_records):
+        return False
+    return registry.sources == expected_records
 
 
 def _registry_payload_from(registry: MachineTimeSourceRegistry) -> dict[str, object]:
@@ -1056,8 +1108,12 @@ def _validate_machine_time_source_registry_artifact(
 
     if type(registry.sources) is not tuple:
         _fail()
+    # Every nested source record in a registry is always sealed (the builder reseals each record before
+    # constructing the artifact), so require a populated, self-consistent entry digest for every one — this
+    # protects reconstructed / caller-held artifacts, not only freshly built ones (review P1: recompute entry
+    # digests before accepting artifacts).
     for record in registry.sources:
-        _validate_source_record(record, require_populated_self_digest=require_populated_self_digest)
+        _validate_source_record(record, require_populated_self_digest=True, verify_entry_digest=True)
 
     if type(registry.source_ids) is not tuple or not all(
         _is_canonical_or_empty_string(source_id) for source_id in registry.source_ids

@@ -705,3 +705,107 @@ def test_registry_never_proves_machine_time_or_readiness() -> None:
     assert registry.operational_readiness is False
     assert registry.mt4_adapter_bound is False
     assert registry.prdv4_stage4_complete is False
+
+
+# --------------------------------------------------------------------------------------------------
+# P1 repair: nested entry-digest verification + exact packet-to-artifact semantic binding
+#
+# Each forgery below carries a SELF-CONSISTENT outer digest (recomputed with the module's own canonical
+# payload builder), so a passing test proves the validator rejects on merit — never merely because the outer
+# digest is stale.
+# --------------------------------------------------------------------------------------------------
+
+
+def _self_consistent_outer(registry: MachineTimeSourceRegistry) -> MachineTimeSourceRegistry:
+    """Return the registry carrying an outer digest that exactly matches its (forged) content."""
+
+    payload = registry_module._registry_payload_from(registry)
+    return replace(registry, registry_digest=registry_module._canonical_digest(payload))
+
+
+def _reseal_entry(record):
+    return replace(record, entry_digest=machine_time_source_entry_digest(record))
+
+
+def test_wrong_nested_entry_digest_cannot_be_outer_resealed() -> None:
+    registry = build_approved_machine_time_source_registry()
+    other_hex = "b" * 64
+    assert registry.sources[0].entry_digest != other_hex
+    forged = replace(registry, sources=(replace(registry.sources[0], entry_digest=other_hex), *registry.sources[1:]))
+    forged = _self_consistent_outer(forged)
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_digest(forged)
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_to_dict(forged)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"source_class": "forged-class"},
+        {"provider_id": "forged-provider"},
+        {"verification_profile_id": "forged-profile.v1"},
+        {"protocol_version": "forged-protocol"},
+        {"maturity": "forged-maturity"},
+        {"official_endpoints": ("https://forged.example/api",)},
+        {"fact_items": (("forged_fact", True),)},
+    ],
+)
+def test_self_consistent_source_metadata_forgery_rejected(mutation: dict) -> None:
+    registry = build_approved_machine_time_source_registry()
+    forged_record = _reseal_entry(replace(registry.sources[0], **mutation))
+    forged = _self_consistent_outer(replace(registry, sources=(forged_record, *registry.sources[1:])))
+    # the nested entry digest is now self-consistent, so this rejection is exact-semantic binding (Fix B).
+    assert machine_time_source_entry_digest(forged.sources[0]) == forged.sources[0].entry_digest
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_digest(forged)
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_to_dict(forged)
+
+
+def test_self_consistent_source_citation_inventory_forgery_rejected() -> None:
+    registry = build_approved_machine_time_source_registry()
+    victim = registry.sources[0]
+    replacement = "RFC9162"  # registered in the 29-id inventory, but not this source's real citation
+    assert replacement in registry.citation_ids and replacement not in victim.citation_ids
+    forged_record = _reseal_entry(replace(victim, citation_ids=(replacement,)))
+    forged = _self_consistent_outer(replace(registry, sources=(forged_record, *registry.sources[1:])))
+    assert machine_time_source_entry_digest(forged.sources[0]) == forged.sources[0].entry_digest
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_digest(forged)
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_to_dict(forged)
+
+
+def test_same_count_registry_citation_inventory_forgery_rejected() -> None:
+    registry = build_approved_machine_time_source_registry()
+    forged_citations = ("AAA-UNUSED",) + registry.citation_ids[1:]  # canonical, sorted, same count
+    assert len(forged_citations) == registry.citation_count
+    assert list(forged_citations) == sorted(forged_citations)
+    forged = _self_consistent_outer(replace(registry, citation_ids=forged_citations))
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_digest(forged)
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_to_dict(forged)
+
+
+def test_same_count_exclusion_inventory_forgery_rejected() -> None:
+    registry = build_approved_machine_time_source_registry()
+    forged_subjects = ("forged-but-canonical-subject",) + registry.exclusion_subjects[1:]
+    assert len(forged_subjects) == registry.exclusion_count
+    forged = _self_consistent_outer(replace(registry, exclusion_subjects=forged_subjects))
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_digest(forged)
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_to_dict(forged)
+
+
+def test_approved_registry_still_recomputes_and_serializes() -> None:
+    registry = build_approved_machine_time_source_registry()
+    assert registry.status is MachineTimeSourceRegistryStatus.REGISTRY_READY
+    for record in registry.sources:
+        assert machine_time_source_entry_digest(record) == record.entry_digest
+    assert machine_time_source_registry_digest(registry) == registry.registry_digest
+    payload = machine_time_source_registry_to_dict(registry)
+    assert payload["registry_digest"] == registry.registry_digest
+    assert build_approved_machine_time_source_registry().registry_digest == registry.registry_digest
