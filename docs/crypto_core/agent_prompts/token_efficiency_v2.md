@@ -5,9 +5,10 @@ safety. Every serious prompt includes `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASON
 `REASONING_ACTUAL`, `EXACT_MODEL_REQUIRED`, declared fallback, the `SETUP_*` block, exact scope, forbidden
 actions, validation, stops, and the `AGENT_OS_HANDOFF_V1` report. An exact-model mismatch is
 `STOP_WITH_PROOF`; otherwise actual runtime is reported without overclaim. Every serious prompt inherits
-`CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2). Claude Fable 5 is active ONLY as the runtime-proven,
-justification-gated premium surge lane (section 24.10); pre-v5.1 Fable prompts are archived in
-`fable_exit_contract_index.md` and are never active.
+`CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2). The active lane set is exactly eight (ChatGPT GPT-5.6
+Thinking read-only-first controller, GitHub connector, Deep Research, Claude Opus 4.8, Claude Sonnet 5, Codex
+Sol/Terra/Luna). Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED` (section 24.10) — not an active lane, fallback,
+or dependency; pre-v5.2 Fable prompts are archived in `fable_exit_contract_index.md` and are never active.
 
 ## 1. Shared lanes
 
@@ -52,6 +53,17 @@ HANDOFF_ACCEPTED / HANDOFF_REPAIR_REQUIRED / HANDOFF_REJECTED / HANDOFF_UNKNOWN.
 config/helper scripts): fresh pinned-head reread, complete patch, exact files, terminal CI, thread state,
 P1/P2/P3 classification, explicit statement why Class A applies. Final gate and merge stay separate.
 
+`LANE:CONTROLLER_REPO_READONLY_AUDIT` - connector-backed read-only repository/setup/workflow/architecture
+consistency audit (`CONTROLLER_READONLY_FIRST_POLICY`): tracked-file + dependency surface map,
+model-routing/lane consistency, stale-state/drift detection, evidence vs inference, severity P1/P2/P3. No
+edits/commits/PRs/merge/product implementation; never treats memory as repo state; never replaces Class-C
+Sol; output read-only audit handoff + one next safe action.
+
+`LANE:CONTROLLER_CLASS_B_AUDIT` - controller-first read-only audit of ordinary bounded product code:
+source/test + dependency map, negative-test check, fail-closed first pass, CI/CodeQL, full protected-trigger
+checklist; controller-only closeout only when every no-Codex criterion is proven, else Terra ordinary audit /
+escalate to Class C on any uncertainty. `CODEX_REQUIRED: NO` carries the exact reason + trigger checklist.
+
 `LANE:CONTROLLER_FINAL_GATE` - read-only merge-readiness verification: PR open/non-draft, base main, pinned
 head unchanged, exact files, required checks terminal success (accepted skips only), CodeQL clean, no
 current valid unresolved P1/P2, exactly one open PR, no forbidden scope, correct audit class completed.
@@ -95,28 +107,14 @@ logged-full-suite result, CI snapshot, unresolved issues, no self-audit claim, o
 `LANE:POST_MERGE_HANDOFF` - after an authorized merge: PR, merge commit, local/origin main equality, Ruff,
 format, full suite, setup audit, diff check, open PRs, clean tree, residual blockers, one next action.
 
-`LANE:FABLE5_SURGE_IMPLEMENTER` - runtime-proven claude-fable-5 only (print MODEL_ACTUAL first; STOP on
-mismatch, no silent fallback): semantically dense broad-but-bounded T3 implementation from the controller
-packet, expected to collapse >=2 ordinary prompts; one strong bounded pass (precheck -> reads -> patch ->
-targeted + logged-full validation -> commit -> push -> PR/head update -> CI snapshot -> handoff). Protected
-Class-C code only with explicit controller authorization; a separate fresh Sol Class-C audit stays
-mandatory; no self-audit claim. Requires GATE:FABLE5_JUSTIFICATION passed in the prompt.
-
-`LANE:FABLE5_CROSS_CONTRACT_CHALLENGE` - runtime-proven Fable, read-only T4: adversarial design challenge,
-cross-contract contradiction search, setup stress test, fail-closed matrix challenge, second opinion.
-No implementation, no merge authority, never replaces Sol Class-C; output is a controller handoff, never
-accepted state. Requires GATE:FABLE5_JUSTIFICATION.
-
-`LANE:FABLE5_FULL_REPO_AUDIT` - runtime-proven Fable, rare read-only milestone/phase-boundary full
-setup/workflow/architecture audit; controller must justify the broad read; never per-PR; no mutation, no CI
-polling, no self-approval, never a dependency. Requires GATE:FABLE5_JUSTIFICATION.
-
-`GATE:FABLE5_JUSTIFICATION` - controller states before any Fable prompt: FABLE5_RUNTIME_PROVEN, FABLE5_MODE,
-WHY_FABLE, WHY_NOT_SONNET, WHY_NOT_OPUS, WHY_NOT_TERRA, WHY_NOT_SOL, EXPECTED_PROMPTS_COLLAPSED,
-EXPECTED_REPAIR_RISK_REDUCTION, EXACT_READ_SET, EXACT_MUTATION_SCOPE, TOKEN_CLASS,
-TOKEN_BUDGET_ASSESSMENT, FALLBACK_IF_UNAVAILABLE. FABLE5_JUSTIFIED: true only per section 24.10 criteria;
-never for status/polling/merge/metadata/ordinary docs/simple bounded code/repetitive tests/cheap
-fully-specified tasks.
+Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED` (section 24.10): the retired `LANE:FABLE5_*` surge / challenge /
+full-repo-audit lanes and the retired Fable justification gate are never issued. Route former Fable work
+instead: broad-but-bounded T3 →
+`LANE:OPUS_HEAVY_IMPLEMENTATION` (bounded T2 → `LANE:SONNET_BOUNDED_IMPLEMENTATION` /
+`LANE:TERRA_BOUNDED_IMPLEMENTATION`); non-Class-C read-only architecture/contradiction/full-repo consistency
+analysis → the controller read-only-first lanes in §2 (`LANE:CONTROLLER_REPO_READONLY_AUDIT`,
+`LANE:CONTROLLER_LOW_RISK_AUDIT`, `LANE:CONTROLLER_CLASS_B_AUDIT`); protected Class-C →
+`LANE:SOL_PROTECTED_DESIGN_AUDIT`.
 
 `GATE:MODEL_EXPECTED_VALUE_PER_TOKEN` - serious prompts state: TOKEN_CLASS, TOKEN_BUDGET_ASSESSMENT,
 EXPECTED_VALUE_PER_TOKEN, EXPECTED_PROMPTS, MAX_REPAIR_CYCLES, CONTEXT_REUSE_PACKET, WHY_THIS_MODEL,
@@ -165,6 +163,7 @@ One open PR; one repository writer at a time; no direct main push; standard merg
 authorization; pending CI is NOT_READY; current valid P1/P2 block; Class-C Codex audit never replaceable;
 connector final gate never waived; postmerge verification before next work; research never mutates;
 crypto_core-only; no BIST/live/private API/orders/scheduler/readiness/shadow/capital work. No autonomous
-scheduler, no auto-loop, no direct model-to-model runtime messaging. Fable runs only runtime-proven through
-GATE:FABLE5_JUSTIFICATION, never self-audits, and never replaces Sol Class-C; no plan depends on Fable
-availability. Pre-v5.1 Fable prompts are archived in `fable_exit_contract_index.md`, never active lanes.
+scheduler, no auto-loop, no direct model-to-model runtime messaging. ChatGPT is the read-only-first
+controller-auditor for non-Class-C work and never replaces local tests or the Class-C Sol audit. Claude
+Fable 5 is `INACTIVE_EXPIRED_RETIRED` — never a lane, fallback, or dependency; pre-v5.2 Fable prompts are
+archived in `fable_exit_contract_index.md`, never active lanes.

@@ -30,12 +30,11 @@ tokens. Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2).
 
 ## Boundaries
 
-- Claude Fable 5 = runtime-proven PREMIUM SURGE lane (workflow §24.10), gated by `FABLE5_JUSTIFICATION_GATE`
-  + `MODEL_EXPECTED_VALUE_PER_TOKEN_POLICY`: SURGE_IMPLEMENTER for semantically dense broad-but-bounded T3
-  work expected to collapse multiple prompts (protected Class-C code only with explicit controller
-  authorization + mandatory separate Sol Class-C audit); CROSS_CONTRACT_CHALLENGE and FULL_REPO_AUDIT are
-  read-only. One strong bounded prompt end-to-end, then an IMPLEMENTER handoff — no Fable self-audit claim.
-  Unavailable/unjustified → Opus 4.8 (default heavy), without equivalent-quality claims.
+- Claude Fable 5 = `INACTIVE_EXPIRED_RETIRED` (workflow §24.10) — not an active lane, fallback, or
+  dependency. Former surge work routes to Opus 4.8 (broad-but-bounded T3) or Sonnet 5 / Terra (bounded T2);
+  former read-only challenge/full-repo audit routes to the ChatGPT read-only-first controller
+  (`CONTROLLER_READONLY_FIRST_POLICY`) or Codex Sol for protected Class-C. Archived Fable material in
+  `fable_exit_contract_index.md` is HISTORICAL/ARCHIVAL only.
 - Claude Opus 4.8 owns broad local implementation and long loops by default; runtime-proven Claude Sonnet 5
   owns small/medium bounded slices, docs/tests, and mechanical code (fallback: Terra bounded / Opus broad).
 - No Claude session self-satisfies independent review; Class-C protected work (digest/provenance, SM-5/SM-6,
@@ -46,4 +45,5 @@ tokens. Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2).
 - Codex Pursue Goal is a bounded terminal preflight/sync/CI/status/closeout/authorized-postverify loop only.
 - One repository writer at a time; one open PR; maximum safe work per prompt, then stop at the gate.
 - No BIST, live/order/capital/readiness surface, direct main push, non-standard merge, or unproven claim.
-- No plan may DEPEND on Fable availability; Fable prompts always declare their fallback.
+- ChatGPT is the read-only-first controller-auditor (`CONTROLLER_READONLY_FIRST_POLICY`) for non-Class-C
+  work; it never replaces local tests or the Class-C Sol audit. Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED`.

@@ -6,13 +6,13 @@ prompts for it and never overrides it). Companion lanes: `token_efficiency_v2.md
 `token_efficiency_playbook.md`; research: `deep_research_protocol.md`. On any apparent conflict, section 24
 and the stricter safety rule win.
 
-Active lanes covered (nine): ChatGPT GPT-5.6 Thinking, GitHub connector, Deep Research, Claude Fable 5
-(runtime-proven premium surge — conditional, section 2.9), Claude Sonnet 5 (runtime-proven only), Claude
-Opus 4.8, Codex GPT-5.6 Sol, Codex GPT-5.6 Terra, Codex GPT-5.6 Luna. Claude Code local sessions are the
-primary local execution environment for the Claude lanes; Codex Sol/Terra/Luna are separate local sessions.
-Fable 5 runs only runtime-proven and justification-gated; no plan depends on its availability and no fixed
-expiry is encoded; pre-v5.1 Fable material lives in `fable_exit_contract_index.md` and workflow sections
-20-23 under explicit HISTORICAL/SUPERSEDED labels. Copilot-specific repository assets are historical
+Active lanes covered (eight): ChatGPT GPT-5.6 Thinking (read-only-first controller-auditor,
+`CONTROLLER_READONLY_FIRST_POLICY`), GitHub connector, Deep Research, Claude Opus 4.8 (default heavy
+executor), Claude Sonnet 5 (runtime-proven only), Codex GPT-5.6 Sol, Codex GPT-5.6 Terra, Codex GPT-5.6 Luna.
+Claude Code local sessions are the primary local execution environment for the Claude lanes; Codex
+Sol/Terra/Luna are separate local sessions. Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED` — not an active or
+routable lane; pre-v5.2 Fable material lives in `fable_exit_contract_index.md` and workflow sections 20-23
+under explicit HISTORICAL/SUPERSEDED/ARCHIVAL labels only. Copilot-specific repository assets are historical
 compatibility material and are not an available or routable lane in the current environment.
 Nothing in this guide proves repo state, authorizes a merge, or affects the blocker
 `secondary_comparison_metrics_hit_fill_slippage_declared_not_enforced_v1` (that closes only through its own
@@ -58,6 +58,39 @@ EVIDENCE: <pinned files/symbols read via connector>. TASK: produce one bounded P
 invariants, fail-closed matrix, raise-vs-REJECTED, allowed files, negative tests, validation ladder, stops,
 protected-risk class (A/B/C), CODEX_REQUIRED decision + trigger checklist, implementer lane selection.
 FORBIDDEN: implementation, mutation, research execution. OUTPUT: CONTROLLER_TO_IMPLEMENTER packet.
+```
+
+Controller read-only-first skeletons (`CONTROLLER_READONLY_FIRST_POLICY`, workflow section 24.10):
+
+```text
+LANE:CONTROLLER_REPO_READONLY_AUDIT. STATE: live main@<sha> (connector-proven), open PRs <count>.
+TASK: read-only repository/setup/workflow/architecture consistency audit of <areas> via GitHub connector —
+tracked-file + dependency surface map, model-routing/lane consistency, stale-state/drift detection, exact
+evidence vs inference. SEVERITY: P1/P2/P3. FORBIDDEN: edits, commits, PRs, merge, product implementation,
+replacing Class-C Sol, treating memory as repo state. OUTPUT: read-only audit handoff + one next safe action.
+```
+
+```text
+LANE:CONTROLLER_CLASS_A_AUDIT for PR #<N> (docs/setup/prompt/skill/workflow/low-risk CI/helper-script only):
+fresh pinned-head reread, complete patch, exact files == <list>, terminal CI, CodeQL, review/thread state,
+no product source, no protected trigger, P1/P2/P3 classification, explicit "why Class A". Connector final
+gate + explicit human merge authorization stay separate. OUTPUT: AUDIT_ACCEPTED | REPAIR_REQUIRED | UNKNOWN.
+```
+
+```text
+LANE:CONTROLLER_CLASS_B_AUDIT for PR #<N> (ordinary bounded product code): source/test + dependency map,
+negative-test check, fail-closed first pass, CI/CodeQL, full protected-trigger checklist. Controller-only
+closeout only when every no-Codex criterion is proven; else CODEX_REQUIRED: YES → Terra ordinary audit /
+escalate to Class C on any uncertainty. FORBIDDEN: implementation, merge, replacing Class-C Sol.
+OUTPUT: AUDIT_ACCEPTED | TERRA_AUDIT_REQUIRED | ESCALATE_CLASS_C (+ exact reason + trigger checklist).
+```
+
+```text
+LANE:CONTROLLER_RESEARCH_VERIFICATION. PACKET: <DEEP_RESEARCH_TO_CONTROLLER handoff>.
+TASK: verify every repo claim against live connector evidence, inspect load-bearing citations, separate
+facts/inference/UNKNOWN, check stricter-safety override, decide ACCEPT/REPAIR/REJECT/FOLLOWUP, convert
+accepted findings into at most ONE bounded next-PR proposal. FORBIDDEN: mutation, merge authority, upgrading
+UNKNOWN to fact. OUTPUT: research-verification handoff.
 ```
 
 ### 2.2 GitHub connector — evidence and explicitly authorized actions
@@ -219,69 +252,17 @@ AUTHORIZATION: <quoted human instruction, if mutating>. No code/design/review/th
 OUTPUT: terminal-or-pending proof; LANE:HANDOFF-STD.
 ```
 
-### 2.9 Claude Fable 5 — runtime-proven premium surge lane (conditional)
+### 2.9 Claude Fable 5 — `INACTIVE_EXPIRED_RETIRED`
 
-- **Identity/doctrine:** `claude-fable-5`, ACTIVE but CONDITIONAL (`FABLE5_PREMIUM_SURGE_LANE`, workflow
-  section 24.10). Every prompt must runtime-prove `MODEL_ACTUAL=claude-fable-5` (STOP_WITH_PROOF on
-  mismatch — no silent Opus/Sonnet fallback when exactness is required) AND carry a passed
-  `FABLE5_JUSTIFICATION_GATE`. No plan/roadmap/checkpoint depends on Fable; no fixed expiry encoded;
-  availability is proof of availability only, never of quality.
-- **Best tasks (three mutually exclusive modes):** SURGE_IMPLEMENTER — semantically dense broad-but-bounded
-  T3 implementation expected to collapse ≥2 ordinary prompts (complex validation modules + tests,
-  multi-contract composition, complex deterministic/fail-closed slices, high-value broad-context repair;
-  repo evidence: PR #316 +2,597 and PR #317 +2,543 single-pass merged protected modules);
-  CROSS_CONTRACT_CHALLENGE — read-only T4 adversarial design challenge/contradiction search/stress
-  test/second opinion; FULL_REPO_AUDIT — rare read-only milestone audit (repo evidence: 2026-07-10
-  full-repo audit, verified findings, 0 P1).
-- **Bad tasks:** CI polling, metadata, routine docs, trivial/repetitive tests, mechanical changes, ordinary
-  bounded work that fits Sonnet/Terra, unbounded refactors, ANY self-audit, cheap fully specified tasks.
-- **Setup files:** `CLAUDE.md`, `CLAUDE.local.md`, `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`,
-  `AGENTS.md` (cross-agent doctrine), controller packet, exact task files. Reports add
-  `FABLE5_RUNTIME_PROVEN`, `FABLE5_MODE`, `FABLE5_JUSTIFIED`, `TOKEN_BUDGET_ASSESSMENT`,
-  `EXPECTED_VALUE_PER_TOKEN` to the standard `SETUP_*` block.
-- **Reasoning / token class:** highest available; `PREMIUM_T4_SETUP`/premium surge — spend only where the
-  expected-value gate proves the premium (prompt-collapse, repair-risk reduction, safety value).
-- **Scope:** exact controller-packet files; protected Class-C code only with explicit controller
-  authorization AND the mandatory separate fresh Sol Class-C audit.
-- **Validation:** full ladder incl. logged full suite for any product code; read-only modes produce
-  handoffs, not diffs.
-- **Stops:** model unproven; gate unjustified; scope expansion; budget insufficient for correctness.
-- **Handoff:** IMPLEMENTER_TO_CONTROLLER or challenge/audit handoff — never accepted state, never an audit
-  premise for Sol.
-- **Fallback:** T3 → Opus 4.8; T2 → Sonnet 5/Terra; protected T4 design/audit → Sol; mechanics → Luna;
-  external facts → Deep Research. No fallback claims Fable-equivalent quality.
-- **Anti-patterns:** "Fable because it's available"; Fable on mechanics; Fable self-audit; treating a Fable
-  challenge as the Sol Class-C audit; encoding schedules that require Fable.
-
-```text
-LANE:FABLE5_SURGE_IMPLEMENTER. TASK_CLASS: T3. MODEL_REQUESTED: Claude Fable 5.
-EXACT_MODEL_REQUIRED: true. VERIFY FIRST: print MODEL_ACTUAL from runtime; if not claude-fable-5 -> STOP.
-GATE:FABLE5_JUSTIFICATION: <all 14 fields, FABLE5_JUSTIFIED: true + reason>.
-PACKET: <CONTROLLER_TO_IMPLEMENTER: pinned state, exact read set, ALLOWED_FILES, invariants, tests, stops>.
-EXECUTE one strong bounded pass: precheck -> reads -> patch -> targeted + logged-full validation -> scoped
-commit -> push -> PR/head update -> bounded CI snapshot. Protected Class-C content requires explicit
-authorization here AND a separate fresh Sol Class-C audit after. No merge, no self-audit.
-OUTPUT: LANE:IMPLEMENTER_HANDOFF (+ FABLE5_* fields).
-```
-
-```text
-LANE:FABLE5_CROSS_CONTRACT_CHALLENGE. TASK_CLASS: T4 (read-only). MODEL_REQUESTED: Claude Fable 5.
-EXACT_MODEL_REQUIRED: true. VERIFY FIRST: MODEL_ACTUAL from runtime or STOP.
-GATE:FABLE5_JUSTIFICATION: <fields; e.g. vendor-diverse second opinion / high safety value>.
-PINNED: <design doc | PR head sha>. READ: <exact evidence pack>.
-CHALLENGE: missing invariants, cross-contract contradictions, fail-closed matrix holes, overclaim risk,
-overengineering/underwiring. FORBIDDEN: implementation, mutation, merge authority, replacing Sol Class-C.
-OUTPUT: challenge handoff (AGREE/DISAGREE per finding + new P1/P2 + exact evidence) -> controller triage.
-```
-
-```text
-LANE:FABLE5_FULL_REPO_AUDIT. TASK_CLASS: T4 (read-only, RARE - milestone/phase boundary only).
-MODEL_REQUESTED: Claude Fable 5. EXACT_MODEL_REQUIRED: true. VERIFY FIRST: MODEL_ACTUAL or STOP.
-GATE:FABLE5_JUSTIFICATION: <fields; controller justifies the broad read explicitly>.
-TASK: full setup/workflow/architecture consistency audit of <areas>; severity P1/P2/P3; classify evidence
-vs inference. FORBIDDEN: edits/commits/PRs/merge/CI polling/self-approval; never per-PR; never a dependency.
-OUTPUT: audit handoff with per-area verdicts + single recommended next action.
-```
+Claude Fable 5 (`claude-fable-5`) is retired (workflow section 24.10) and is NOT an active or routable lane:
+no `FABLE5_PREMIUM_SURGE_LANE`, no three surge modes, no `FABLE5_JUSTIFICATION_GATE`, no `FABLE5_*` prompt
+skeletons or report fields, and no Fable fallback. Author its former work in the surviving lanes instead:
+broad-but-bounded T3 implementation → §2.5 Claude Opus 4.8 (genuinely bounded T2 → §2.4 Sonnet 5 / §2.7
+Terra); non-Class-C read-only architecture / contradiction / full-repo consistency analysis → §2.1 ChatGPT
+controller read-only-first skeletons (`CONTROLLER_REPO_READONLY_AUDIT`, `CONTROLLER_CLASS_A_AUDIT`,
+`CONTROLLER_CLASS_B_AUDIT`); protected Class-C design/audit → §2.6 Codex Sol; external/current facts → §2.3
+Deep Research. Pre-v5.2 Fable prompts survive only as HISTORICAL/ARCHIVAL evidence in
+`fable_exit_contract_index.md` and are never re-issued as active prompts.
 
 ## 3. Low-prompt / maximum-work doctrine
 
@@ -299,12 +280,12 @@ authorization, post-merge verification.
 ## 4. Independent audit doctrine
 
 An implementation context CANNOT self-satisfy the independent audit gate. Audit prompts are fresh-context
-and pinned-head. Class A closes with the controller; Class B adds Terra when risk/evidence requires; Class C
-(protected list in section 24.4) always gets a fresh independent Codex Sol audit BEFORE the connector gate —
-neither ChatGPT, Claude (including Fable in any mode), nor implementer self-review may replace it. A Fable
-CROSS_CONTRACT_CHALLENGE is additive vendor-diverse input, never the Class-C audit; a Fable
-SURGE_IMPLEMENTER never audits its own output. Current valid P1/P2 threads block; human threads are never
-self-resolved.
+and pinned-head. Under `CONTROLLER_READONLY_FIRST_POLICY` (section 24.10) Class A closes with the ChatGPT
+controller and Class B is controller-first (ChatGPT read-only audit; Terra ordinary audit added only when
+evidence is incomplete, semantic independence is materially useful, or controller uncertainty remains);
+Class C (protected list in section 24.4) always gets a fresh independent Codex Sol audit BEFORE the connector
+gate — neither ChatGPT, Claude, nor implementer self-review may replace it. Current valid P1/P2 threads
+block; human threads are never self-resolved.
 
 ## 5. Audit class decision tree
 

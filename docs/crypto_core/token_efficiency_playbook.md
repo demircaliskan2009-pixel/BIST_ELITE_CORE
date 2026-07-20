@@ -11,8 +11,8 @@ doctrine: `agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`).
 | T0 `LUNA_MECHANICAL` | git/gh state, bounded CI polling, PR metadata, thread status, authorized merge mechanics, postverify | GPT-5.6 Luna, `none`/`low` | Exact commands; no design inference or source scan unless necessary for stated proof |
 | T1 `READONLY_OR_FAST_BOUNDED` | ordinary docs, bounded read-only audit, setup proof | Luna low / Terra high / runtime-proven Sonnet 5 | Named docs and direct dependencies only |
 | T2 `BOUNDED_IMPLEMENTATION` | exact-file implementation, tests/docs, small deterministic slice, simple repair | Terra high / runtime-proven Sonnet 5 high | Controller packet first; named files; targeted validation; one PR |
-| T3 `COMPLEX_IMPLEMENTATION_OR_REPAIR` | broad-but-bounded implementation, large refactors, complex fail-closed work, forensic debug, P1/P2 repair | Opus 4.8 xhigh (default) / Terra xhigh / Fable 5 surge (justification-gated) | Explicit invariants and regression proof; no token shortcut |
-| T4 `CROSS_CONTRACT_DESIGN_OR_AUDIT` | protected trust boundary, governance, SM-5/SM-6 design, readiness provenance, complex security | GPT-5.6 Sol xhigh; `max` only controller-gated; Fable 5 challenge optional (read-only, gate-passed) | Controller-prepared narrow evidence packet only |
+| T3 `COMPLEX_IMPLEMENTATION_OR_REPAIR` | broad-but-bounded implementation, large refactors, complex fail-closed work, forensic debug, P1/P2 repair | Opus 4.8 xhigh (default) / Terra xhigh | Explicit invariants and regression proof; no token shortcut |
+| T4 `CROSS_CONTRACT_DESIGN_OR_AUDIT` | protected trust boundary, governance, SM-5/SM-6 design, readiness provenance, complex security | GPT-5.6 Sol xhigh; `max` only controller-gated | Controller-prepared narrow evidence packet only |
 | XR `DEEP_RESEARCH_EXTERNAL` | external/current facts, benchmarks, phase gates | Deep Research + connector, advisory only | Connector-bound packet; citations required; unverifiable facts stay `UNPROVEN` |
 | `CONTROLLER_CONNECTOR_GATE` | final evidence comparison and merge authority | ChatGPT GPT-5.6 Thinking + connector/`gh` | Fresh head/files/checks/threads proof |
 
@@ -47,15 +47,15 @@ fallback, and the `SETUP_*` block.
 ## 5. Model selection and proof
 
 Selection follows `MODEL_EXPECTED_VALUE_PER_TOKEN_POLICY` (workflow §24.10) — lowest capable lane by
-expected value per token: Luna for mechanics → runtime-proven Sonnet 5 or Terra for bounded work → Opus
-(default) for broad/complex local work → Fable 5 surge ONLY when `FABLE5_JUSTIFICATION_GATE` proves the
-premium is worth it (e.g. collapses ≥2 prompts, materially better fit for a semantically dense bounded
-slice, high-value second opinion) → Sol only for qualifying protected T4 on a narrow packet. Fable and
-Sonnet 5 require runtime proof of availability/identity before any routing; Fable fallback = Opus (T3) /
-Sonnet-Terra (T2) / Sol (protected T4) with no equivalent-quality claim; use measured session/harness cost,
-never hard-coded price rankings. If `EXACT_MODEL_REQUIRED=true`, requested/actual mismatch stops. Never
-claim unavailable-model quality. Model selection does not prove safety, repo state, or results. Pre-v5.1
-Fable-era contracts stay archived in `fable_exit_contract_index.md` and are never routing.
+expected value per token: Luna for mechanics → runtime-proven Sonnet 5 or Terra for bounded T2 work → Opus
+4.8 (default) for broad/complex local T3 work → Sol only for qualifying protected T4 on a narrow packet;
+non-Class-C read-only mapping/audit defaults to the ChatGPT read-only-first controller
+(`CONTROLLER_READONLY_FIRST_POLICY`). Sonnet 5 requires runtime proof of availability/identity before any
+routing (fallback = Terra bounded / Opus broad, no equivalent-quality claim); use measured session/harness
+cost, never hard-coded price rankings. If `EXACT_MODEL_REQUIRED=true`, requested/actual mismatch stops. Never
+claim unavailable-model quality. Model selection does not prove safety, repo state, or results.
+Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED` — never a lane or fallback; pre-v5.2 Fable-era contracts stay
+archived in `fable_exit_contract_index.md` and are never routing.
 
 ## 6. Codex reduction matrix
 
