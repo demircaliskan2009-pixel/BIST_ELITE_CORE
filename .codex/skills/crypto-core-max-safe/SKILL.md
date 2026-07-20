@@ -24,11 +24,12 @@ trading systems engineering — paper-first, deterministic, fail-closed, audit-f
   complex security/CodeQL. Sol runs ONLY on a controller-prepared narrow evidence packet — never broad
   discovery, polling, merge mechanics, or routine docs.
 - XR — Deep Research, controller-orchestrated, external/current facts, advisory only.
-- `CONTROLLER_CONNECTOR_GATE` — ChatGPT GPT-5.6 Thinking + connector/`gh`: final evidence comparison and
-  merge authority. ChatGPT is not a Codex runtime. Claude Fable 5 may appear upstream as a runtime-proven,
-  gate-justified surge implementer or read-only second-opinion challenger (workflow §24.10): treat its
-  output as ordinary implementer/advisory input — NEVER as an audit premise, and never as a substitute for
-  the fresh Sol Class-C audit this skill owns.
+- `CONTROLLER_CONNECTOR_GATE` — ChatGPT GPT-5.6 Thinking + connector/`gh`: read-only-first controller-auditor
+  (`CONTROLLER_READONLY_FIRST_POLICY`, workflow §24.10), final evidence comparison, and merge authority.
+  ChatGPT now performs most non-Class-C read-only mapping/audit (Class A closeout; Class B first-pass with
+  Terra ordinary audit only when evidence requires) — treat its output as advisory/controller input, NEVER
+  as an audit premise and never as a substitute for the fresh Sol Class-C audit this skill owns. ChatGPT is
+  not a Codex runtime. Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED` — no active upstream Fable input exists.
 
 Every serious prompt/report contains `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`,
 `REASONING_ACTUAL`, `EXACT_MODEL_REQUIRED`, declared fallback, and the `SETUP_REQUESTED` / `SETUP_ACTUAL` /

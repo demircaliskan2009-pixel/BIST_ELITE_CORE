@@ -1,8 +1,12 @@
-# Fable 5 Exit Contract Index (HISTORICAL; recorded 2026-07-07, consolidated 2026-07-08)
+# Fable 5 Exit Contract Index (HISTORICAL / ARCHIVAL; recorded 2026-07-07, consolidated 2026-07-08)
 
 Durable index of every design contract Fable 5 (`claude-fable-5`) locked on its exit day.
 
-**HISTORICAL / SUPERSEDED BY GPT-5.6 ROUTING DOCTRINE:** model ownership in this file is archival only. Active routing lives in `agent_workflow.md` section 23.
+**Claude Fable 5 status: `INACTIVE_EXPIRED_RETIRED` (workflow v5.2, section 24.10).** This entire file is
+HISTORICAL/ARCHIVAL design evidence only — Fable is not an active lane, fallback, or dependency, and nothing
+here is active routing. **HISTORICAL / SUPERSEDED BY THE ACTIVE AGENT OS:** model ownership in this file is
+archival only; active routing lives in `agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`) — the
+in-file references to section 23 below are themselves superseded and retained only as historical text.
 These are **archived design contracts — never repo current-state proof**. Rules of use:
 
 - **Do not implement from this file without fresh current repo proof (`git`/`gh`) and a scoped PR.**

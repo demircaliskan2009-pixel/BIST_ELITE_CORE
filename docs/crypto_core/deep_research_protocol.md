@@ -9,9 +9,10 @@
 > weakening of any fail-closed gate. Canonical doctrine precedence is unchanged: `AGENTS.md` →
 > `agent_workflow.md` → `.codex/skills/crypto-core-max-safe/SKILL.md` → `CLAUDE.md`; on conflict the
 > **stricter safety rule wins**. This document contains **no secrets, credentials, API keys, or
-> live-trading instructions**. Fable 5 is not a research lane: its runtime availability is proven locally
-> (never researched), and no Deep Research run is required merely to select Fable for a repo-proven task;
-> external model-capability comparisons remain Deep Research territory.
+> live-trading instructions**. Deep Research is orchestrated by the ChatGPT read-only-first controller
+> (`CONTROLLER_READONLY_FIRST_POLICY`, `agent_workflow.md` section 24.10) and is advisory only. Claude
+> Fable 5 is `INACTIVE_EXPIRED_RETIRED` and is neither a research lane nor a routable executor; external
+> model-capability comparisons remain Deep Research territory.
 
 ## 1. Why Deep Research exists here
 

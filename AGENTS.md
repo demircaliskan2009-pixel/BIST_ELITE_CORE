@@ -21,30 +21,33 @@ safety rule wins.
 
 ### Final durable model set (Agent OS v1)
 
-- **ChatGPT GPT-5.6 Thinking** — controller: sequence owner, live GitHub evidence comparison, repository
-  surface mapping, design synthesis, prompt/implementation-contract construction, Class-A independent audit,
-  pre-Codex triage, executor-report verification, connector final gate, Deep Research orchestration,
-  next-slice selection, and explicit-authority GitHub actions. ChatGPT is `GPT-5.6 Thinking` — never labeled
-  Codex `GPT-5.6 Sol`; it never substitutes for local tests, unverified repo state, or Class-C Codex audit.
+- **ChatGPT GPT-5.6 Thinking** — controller / default read-only-first controller-auditor
+  (`CONTROLLER_READONLY_FIRST_POLICY`, `agent_workflow.md` section 24.10): sequence owner, live
+  repository/PR/SHA/open-PR evidence synthesis, tracked-file and dependency surface mapping, full PR patch and
+  exact-scope audit, setup/workflow/model-routing consistency audits, design synthesis,
+  prompt/implementation-contract construction, Class-A independent audit, Class-B first-pass and
+  controller-only closeout when every no-Codex criterion is proven, pre-Codex triage, fail-closed and
+  negative-test coverage analysis, CI/CodeQL/review-thread final-gate synthesis, architecture-drift and
+  stale-state detection, executor-report verification, Deep Research orchestration and verification, next-slice
+  and model selection, and explicit-authority GitHub actions. ChatGPT is `GPT-5.6 Thinking` — never labeled
+  Codex `GPT-5.6 Sol`; it never substitutes for local tests, unverified repo state, product implementation, or
+  the Class-C Codex audit, and never grants merge/readiness/live/capital authority.
 - **GitHub connector** — pinned-ref evidence (files, patches, changed files, commits, runs/jobs/logs,
   CodeQL, reviews/threads, open-PR count, merge commits, search). Mutation ONLY after an explicit human
   instruction naming the exact action and target, with immediate state re-proof before, only the named
   action, and result verification after. Connector access is never blanket mutation authorization.
 - **Deep Research + GitHub connector** — external/current facts, benchmarks, phase-gate and
   overengineering reviews. Strictly read-only and advisory; never executor, mutation, or merge authority.
-- **Claude Fable 5 — runtime-proven premium surge lane (ACTIVE, CONDITIONAL)** — three mutually exclusive
-  modes (`FABLE5_PREMIUM_SURGE_LANE`, workflow section 24.10): SURGE_IMPLEMENTER (semantically dense
-  broad-but-bounded T3 implementation expected to collapse multiple prompts; protected Class-C code only
-  with explicit controller authorization AND a mandatory separate Sol Class-C audit),
-  CROSS_CONTRACT_CHALLENGE (read-only T4 design challenge/second opinion), FULL_REPO_AUDIT (rare read-only
-  milestone audit). Every Fable prompt requires runtime proof of `claude-fable-5` plus a passed
-  `FABLE5_JUSTIFICATION_GATE`; no plan/roadmap/checkpoint may depend on Fable availability; no fixed expiry
-  encoded; fallbacks (Opus/Sonnet/Terra/Sol/Luna) keep the workflow fully functional without it. Never for
-  mechanics, metadata, routine docs, ordinary bounded work, or any self-audit.
+- **Claude Fable 5 — `INACTIVE_EXPIRED_RETIRED`** — the former premium-surge lane is retired and is NOT an
+  active model, fallback, or dependency (workflow section 24.10). Former responsibilities are redistributed:
+  broad-but-bounded T3 implementation → Claude Opus 4.8 (genuinely bounded T2 → Sonnet 5/Terra); non-Class-C
+  read-only architecture/contradiction analysis → the ChatGPT controller (Terra ordinary audit only when
+  evidence requires); rare read-only milestone audit → ChatGPT + GitHub connector (protected disputed
+  questions → narrow Sol packets). No lane claims Fable-equivalent quality. Pre-v5.2 Fable material survives
+  only as HISTORICAL/SUPERSEDED/ARCHIVAL evidence (`fable_exit_contract_index.md`, workflow sections 20-23).
 - **Claude Opus 4.8** — DEFAULT heavy local executor: T3 broad-but-bounded implementation, large refactors,
   complex fail-closed work, forensic debugging, long validation loops, multi-file integration, same-branch
-  P1/P2 repair — whenever Fable's extra value is not proven or Fable is unavailable. Never spent on
-  metadata, CI polling, ordinary docs, or work Sonnet/Terra can safely complete.
+  P1/P2 repair. Never spent on metadata, CI polling, ordinary docs, or work Sonnet/Terra can safely complete.
 - **Claude Sonnet 5 — runtime-proven only** — T1 bounded reads, T2 small/medium deterministic
   implementation, docs/tests, mechanical code, simple repairs, fast loops. Availability/identity must be
   runtime-proven; never protected trust-boundary/digest/SM-5-SM-6/Stage-4/readiness/capital work, never T4,
@@ -60,15 +63,16 @@ safety rule wins.
 **Copilot status: `INACTIVE_UNAVAILABLE`.** Copilot is currently unavailable and is not an active execution
 lane. Do not route tasks or generate Copilot prompts unless a future explicit human decision reactivates it
 through a separately audited workflow change. Local execution occurs directly through Claude Code (Opus 4.8,
-Sonnet 5, conditional Fable 5) or Codex (Sol/Terra/Luna) sessions according to the T0-T4 routing matrix above
-— neither is an execution host for the other; each Claude/Codex session is its own trusted model identity.
+Sonnet 5) or Codex (Sol/Terra/Luna) sessions according to the T0-T4 routing matrix above — neither is an
+execution host for the other; each Claude/Codex session is its own trusted model identity.
 
 Model selection follows `MODEL_EXPECTED_VALUE_PER_TOKEN_POLICY` (workflow section 24.10): expected value
 per token from safety class, semantic complexity, breadth, independence needs, expected prompts, repair
-probability, availability, and measured harness cost — Fable is premium surge (never default), Opus is the
-default heavy executor, Sonnet/Terra are the economical bounded lanes. Pre-v5.1 Fable-era material stays
-archived under HISTORICAL/SUPERSEDED/ARCHIVAL labels (`fable_exit_contract_index.md`, workflow sections
-20-23) and never affects current routing.
+probability, availability, and measured harness cost — Opus 4.8 is the default heavy executor, Sonnet 5/Terra
+are the economical bounded lanes, Sol is scarce protected reasoning, and ChatGPT is the read-only-first
+controller-auditor for non-Class-C work (`CONTROLLER_READONLY_FIRST_POLICY`). Pre-v5.2 Fable-era material
+(now `INACTIVE_EXPIRED_RETIRED`) stays archived under HISTORICAL/SUPERSEDED/ARCHIVAL labels
+(`fable_exit_contract_index.md`, workflow sections 20-23) and never affects current routing.
 
 Every serious prompt/report states `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`,
 `REASONING_ACTUAL`, `EXACT_MODEL_REQUIRED`, and declared fallback, plus `SETUP_REQUESTED` / `SETUP_ACTUAL` /
@@ -180,14 +184,18 @@ earlier handoff → memory. Unresolved load-bearing disputes stay `UNKNOWN` and 
 
 ## Current Workflow State
 
-- PRs #326-#330 are merged. `main` contains PR #330 merge commit
-  `16ed647357381bb4654c513925ad8142f25e8ac7`. Expected open PRs between slices: none.
-- `secondary_comparison_metrics_hit_fill_slippage_declared_not_enforced_v1` remains a valid blocker.
-- Any SM-5/SM-6 work starts with a separately authorized Class-C design/audit slice consuming the #328
-  precondition. Setup/doctrine PRs do not implement feature work.
-- `docs/crypto_core/fable_exit_contract_index.md` is historical design evidence only; active Fable routing
-  exists solely as the conditional `FABLE5_PREMIUM_SURGE_LANE` (workflow section 24.10) — runtime-proven,
-  gate-justified, never a dependency.
+- `LIVE_STATE_POLICY` (workflow section 24.11): this durable file pins NO current `main` SHA,
+  latest-merged-PR number, or open-PR count. Re-prove current `main` head, merged-PR history, open-PR count,
+  the active blocker, and the next gated slice from live `git`/`gh`/connector evidence at the start of every
+  task; current accepted state lives in controller handoffs, not here. Dated historical state may appear only
+  in archival indexes, explicitly labelled.
+- The secondary-metrics blocker and any SM/MT sequence position are proven from the live repository, never
+  from a pin here. SM-5/SM-6 work starts only with a separately authorized Class-C design/audit slice;
+  setup/doctrine PRs do not implement feature work.
+- `docs/crypto_core/fable_exit_contract_index.md` is HISTORICAL/ARCHIVAL design evidence only. Claude Fable 5
+  is `INACTIVE_EXPIRED_RETIRED` — there is no active Fable routing (workflow section 24.10); its former
+  responsibilities are redistributed to Opus 4.8 / Sonnet 5 / Terra / the ChatGPT read-only-first controller /
+  Sol.
 
 ## Report Format
 
