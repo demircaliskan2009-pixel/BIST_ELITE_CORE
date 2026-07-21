@@ -959,6 +959,14 @@ def test_custom_subtype_value_callbacks_not_invoked() -> None:
             counter["n"] += 1
             return str.__gt__(self, other)
 
+        def __le__(self, other):
+            counter["n"] += 1
+            return str.__le__(self, other)
+
+        def __ge__(self, other):
+            counter["n"] += 1
+            return str.__ge__(self, other)
+
     class _IntSub(int):
         def __eq__(self, other):
             counter["n"] += 1
@@ -992,6 +1000,14 @@ def test_exact_dict_key_subtype_rejected_without_callbacks() -> None:
         def __gt__(self, other):
             counter["n"] += 1
             return str.__gt__(self, other)
+
+        def __le__(self, other):
+            counter["n"] += 1
+            return str.__le__(self, other)
+
+        def __ge__(self, other):
+            counter["n"] += 1
+            return str.__ge__(self, other)
 
         def __eq__(self, other):
             counter["n"] += 1
