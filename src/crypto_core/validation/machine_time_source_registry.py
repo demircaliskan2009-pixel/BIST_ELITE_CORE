@@ -37,6 +37,19 @@ equality/hash/order-raising object can never have its custom operation invoked f
 every safely handleable malformed value is projected to a deterministic JSON-only built-in so that even a
 ``REGISTRY_REJECTED`` artifact still serializes and self-digests. A caller cannot substitute a different
 packet authority: any deviation from the pinned digest/lineage/inventory yields ``REGISTRY_REJECTED``.
+
+Content-addressed input binding: the supplied packet is first recursively normalized to EXACT built-in plain
+data (a fresh copy of ``dict``/``list``/``str``/``int``/``bool`` only; every subtype, non-plain scalar,
+non-string key, container cycle and over-depth is rejected with ``MachineTimeSourceRegistryError`` before any
+subtype-defined comparison/ordering/hashing/iteration/mapping/string callback can run). The exact canonical
+JSON text of that plain packet and its SHA-256 are stored on every artifact, and a single deterministic
+evaluator derives all status/reason/projection state from that same canonical text — at build time and again
+at every public boundary. Consequently the artifact is bound to the CURRENT canonical CONTENT of its input
+packet: a ``REGISTRY_REJECTED`` artifact whose projected fields happen to match the approved artifact can
+never be relabeled ``REGISTRY_READY`` (its carried canonical input still differs, so re-evaluation contradicts
+the relabel). This proves current content, NOT which historical caller or constructor invocation produced the
+artifact; reconstructing every field with the exact approved canonical packet simply yields the approved
+value artifact, which is legitimate content reconstruction and is never described as origin provenance.
 """
 
 from __future__ import annotations
@@ -558,6 +571,8 @@ class MachineTimeSourceRegistry:
     controller_approved_packet_digest: str
     packet_schema: str
     researched_on: str
+    canonical_input_packet_json: str
+    canonical_input_packet_digest: str
     sources: tuple[MachineTimeSourceRecord, ...]
     source_ids: tuple[str, ...]
     citation_ids: tuple[str, ...]
@@ -918,6 +933,54 @@ def _project_source_record(source_obj: object) -> tuple[MachineTimeSourceRecord,
     return seed_record, extra
 
 
+# Maximum container nesting depth accepted from a supplied packet. The controller-approved packet nests only a
+# few levels; 64 is a generous but bounded ceiling that fails closed (never a raw RecursionError) on hostile
+# deep input.
+_MAX_PACKET_DEPTH = 64
+
+# Exact built-in scalar domain of the controller-approved packet: str, int, bool. It carries no float and no
+# null, so the normalizer deliberately does NOT broaden the domain to those (a wider domain is unnecessary and
+# an unproved value is rejected, never coerced).
+
+
+def _normalize_plain_packet(value: object, *, _depth: int = 0, _ancestors: tuple[int, ...] = ()) -> object:
+    """Recursively copy a supplied packet into a tree of EXACT built-in plain data, or fail closed.
+
+    Accepts only ``type(value) is`` exactly ``dict`` / ``list`` / ``str`` / ``int`` / ``bool`` (dict keys must
+    be exact ``str``); every other value — including ``dict``/``list``/``str``/``int``/``bool`` SUBCLASSES,
+    ``float`` and ``None`` — raises ``MachineTimeSourceRegistryError`` BEFORE any subtype-defined comparison,
+    ordering, hashing, iteration, mapping or string behavior can run. Exact-container type is proven before any
+    ``.items()`` / iteration; keys are proven exact ``str`` before insertion (so ``json.dumps(sort_keys=True)``
+    later sorts only exact strings). Container cycles are detected by identity along the current path and depth
+    is bounded, so no raw ``RecursionError`` escapes. The returned tree is a fresh plain copy safe to hand to
+    the canonical serializer; the caller's original object is never mutated and its custom callbacks never run.
+    """
+
+    if _depth > _MAX_PACKET_DEPTH:
+        raise MachineTimeSourceRegistryError(_reason("packet_max_depth_exceeded"))
+    value_type = type(value)
+    if value_type is dict:
+        marker = id(value)
+        if marker in _ancestors:
+            raise MachineTimeSourceRegistryError(_reason("packet_cycle_detected"))
+        next_ancestors = (*_ancestors, marker)
+        result: dict[str, object] = {}
+        for key, item in value.items():  # exact dict proven above → builtin .items()
+            if type(key) is not str:
+                raise MachineTimeSourceRegistryError(_reason("packet_non_string_key"))
+            result[key] = _normalize_plain_packet(item, _depth=_depth + 1, _ancestors=next_ancestors)
+        return result
+    if value_type is list:
+        marker = id(value)
+        if marker in _ancestors:
+            raise MachineTimeSourceRegistryError(_reason("packet_cycle_detected"))
+        next_ancestors = (*_ancestors, marker)
+        return [_normalize_plain_packet(item, _depth=_depth + 1, _ancestors=next_ancestors) for item in value]
+    if value_type is bool or value_type is int or value_type is str:
+        return value
+    raise MachineTimeSourceRegistryError(_reason("packet_non_plain_value"))
+
+
 def _packet_semantic_ok(verified: dict[str, object], digest: str) -> bool:
     """Reproof of the COMPLETE READY contract on the canonical (re-parsed, plain-JSON) packet.
 
@@ -985,11 +1048,7 @@ def _expected_registry_semantics() -> tuple[tuple[MachineTimeSourceRecord, ...],
     field list.
     """
 
-    canonical = json.dumps(
-        _CONTROLLER_APPROVED_PACKET, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
-    )
-    if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != _CONTROLLER_APPROVED_PACKET_DIGEST:
-        raise MachineTimeSourceRegistryError(_reason("embedded_packet_digest_mismatch"))
+    canonical, _digest = _approved_canonical_packet()
     verified = json.loads(canonical)
     records: list[MachineTimeSourceRecord] = []
     for source_obj in verified["sources"]:
@@ -1000,6 +1059,23 @@ def _expected_registry_semantics() -> tuple[tuple[MachineTimeSourceRecord, ...],
     citation_ids = tuple(sorted(verified["citations"].keys()))
     exclusion_subjects = tuple(entry["subject"] for entry in verified["excluded_or_unproven"])
     return tuple(records), citation_ids, exclusion_subjects
+
+
+def _approved_canonical_packet() -> tuple[str, str]:
+    """Canonical JSON text + SHA-256 of the embedded controller-approved packet (re-proven each call).
+
+    Normalizes the embedded (mutable) module packet through the exact-plain-data boundary, canonicalizes it,
+    and requires the digest to equal the pinned constant before returning — so a tampered embedded packet
+    fails closed instead of yielding a weakened authority. This is the single source of the canonical approved
+    packet text against which every READY artifact's carried input must match.
+    """
+
+    plain = _normalize_plain_packet(_CONTROLLER_APPROVED_PACKET)
+    canonical = json.dumps(plain, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if digest != _CONTROLLER_APPROVED_PACKET_DIGEST:
+        raise MachineTimeSourceRegistryError(_reason("embedded_packet_digest_mismatch"))
+    return canonical, digest
 
 
 def _registry_semantic_ok(registry: MachineTimeSourceRegistry) -> bool:
@@ -1015,6 +1091,14 @@ def _registry_semantic_ok(registry: MachineTimeSourceRegistry) -> bool:
     """
 
     expected_records, expected_citation_ids, expected_exclusion_subjects = _expected_registry_semantics()
+    # READY requires the artifact to carry the EXACT approved canonical input packet (content binding), not
+    # merely pinned lineage constants — a rejected artifact whose projected fields happen to match approved can
+    # never be relabeled READY because its carried input still differs from this canonical text/digest.
+    approved_json, approved_digest = _approved_canonical_packet()
+    if registry.canonical_input_packet_digest != approved_digest:
+        return False
+    if registry.canonical_input_packet_json != approved_json:
+        return False
     if registry.controller_approved_packet_digest != _CONTROLLER_APPROVED_PACKET_DIGEST:
         return False
     if registry.controller_approved_packet_id != _CONTROLLER_APPROVED_PACKET_ID:
@@ -1145,6 +1229,38 @@ def _validate_machine_time_source_registry_artifact(
         if getattr(registry, field_name) is not False:
             _fail()
 
+    # P1-A content binding: the artifact must carry a reprovable EXACT canonical representation of its input
+    # packet, and every derived field (status / ready / reason_codes / sources / inventories / counts) must
+    # equal a deterministic re-evaluation of THAT carried packet. This is what makes a REJECTED artifact
+    # un-relabelable to READY: changing only status / reason codes / projected fields (or resealing digests)
+    # contradicts the re-evaluation of the still-different carried canonical input.
+    canonical_input = registry.canonical_input_packet_json
+    if type(canonical_input) is not str or not _is_hex64_string(registry.canonical_input_packet_digest):
+        _fail()
+    try:
+        plain_input = _normalize_plain_packet(json.loads(canonical_input))
+    except (MachineTimeSourceRegistryError, ValueError):
+        _fail()
+    recanonical = json.dumps(plain_input, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    if recanonical != canonical_input:
+        _fail()
+    if hashlib.sha256(recanonical.encode("utf-8")).hexdigest() != registry.canonical_input_packet_digest:
+        _fail()
+    evaluation = _evaluate_plain_packet(json.loads(recanonical), registry.canonical_input_packet_digest)
+    if (
+        registry.status is not evaluation.status
+        or registry.ready is not evaluation.ready
+        or registry.reason_codes != evaluation.reason_codes
+        or registry.sources != evaluation.records
+        or registry.source_ids != evaluation.source_ids
+        or registry.citation_ids != evaluation.citation_ids
+        or registry.exclusion_subjects != evaluation.exclusion_subjects
+        or registry.source_count != evaluation.source_count
+        or registry.citation_count != evaluation.citation_count
+        or registry.exclusion_count != evaluation.exclusion_count
+    ):
+        _fail()
+
     if registry.status is MachineTimeSourceRegistryStatus.REGISTRY_READY and not _registry_semantic_ok(registry):
         _fail()
 
@@ -1196,25 +1312,30 @@ def _replace_registry_digest(registry: MachineTimeSourceRegistry, digest: str) -
     return MachineTimeSourceRegistry(**values)  # type: ignore[arg-type]
 
 
-def build_machine_time_source_registry(*, packet: dict[str, object] | None = None) -> MachineTimeSourceRegistry:
-    """Compile the controller-approved MT-3 source packet into a deterministic, digest-bound registry.
+@dataclass(frozen=True)
+class _PacketEvaluation:
+    """Internal deterministic evaluation of a plain-JSON packet — the single derivation of registry state."""
 
-    With ``packet=None`` the embedded controller-approved packet is compiled (always ``REGISTRY_READY``). Any
-    caller-supplied packet is canonicalized, re-parsed to plain JSON, and verified against the pinned
-    digest/lineage/inventory/flag contract; any deviation yields ``REGISTRY_REJECTED`` with precise reasons.
-    A caller cannot substitute a different packet authority and obtain READY. Only a non-``dict`` or a
-    non-JSON-serializable packet raises ``MachineTimeSourceRegistryError``.
+    status: MachineTimeSourceRegistryStatus
+    ready: bool
+    reason_codes: tuple[str, ...]
+    records: tuple[MachineTimeSourceRecord, ...]
+    source_ids: tuple[str, ...]
+    citation_ids: tuple[str, ...]
+    exclusion_subjects: tuple[str, ...]
+    source_count: int
+    citation_count: int
+    exclusion_count: int
+
+
+def _evaluate_plain_packet(verified: dict[str, object], digest: str) -> _PacketEvaluation:
+    """Deterministically evaluate a plain-JSON packet + its canonical digest into complete registry state.
+
+    Pure function shared by the builder AND both public-boundary validators, so a stored artifact's
+    status/ready/reason_codes and every projected field can be reproved from its carried canonical input and
+    can never drift from what that input actually evaluates to. ``verified`` MUST already be exact plain JSON
+    data (produced via ``json.loads`` of a canonical serialization of a normalized packet).
     """
-
-    source_packet = _CONTROLLER_APPROVED_PACKET if packet is None else packet
-    if type(source_packet) is not dict:
-        raise MachineTimeSourceRegistryError(_reason("packet_not_mapping"))
-    try:
-        canonical = json.dumps(source_packet, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
-    except (TypeError, ValueError) as exc:
-        raise MachineTimeSourceRegistryError(_reason("packet_not_serializable")) from exc
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    verified = json.loads(canonical)
 
     hard: list[str] = []
     if digest != _CONTROLLER_APPROVED_PACKET_DIGEST:
@@ -1311,12 +1432,51 @@ def build_machine_time_source_registry(*, packet: dict[str, object] | None = Non
     status = (
         MachineTimeSourceRegistryStatus.REGISTRY_READY if ready else MachineTimeSourceRegistryStatus.REGISTRY_REJECTED
     )
+    return _PacketEvaluation(
+        status=status,
+        ready=ready,
+        reason_codes=reason_codes,
+        records=tuple(records),
+        source_ids=source_ids,
+        citation_ids=citation_ids,
+        exclusion_subjects=exclusion_subjects,
+        source_count=len(raw_sources),
+        citation_count=len(citation_ids),
+        exclusion_count=len(exclusions),
+    )
+
+
+def build_machine_time_source_registry(*, packet: dict[str, object] | None = None) -> MachineTimeSourceRegistry:
+    """Compile a supplied MT-3 source packet into a deterministic, digest-bound, content-addressed registry.
+
+    With ``packet=None`` the embedded controller-approved packet is compiled (always ``REGISTRY_READY``). Any
+    supplied packet is first recursively normalized to EXACT built-in plain data (rejecting subtypes, non-plain
+    scalars, non-string keys, cycles and over-depth via ``MachineTimeSourceRegistryError`` before any subtype
+    callback can run), canonicalized, and content-addressed: the exact canonical input text and its SHA-256 are
+    stored on the artifact and every derived field is produced by the shared deterministic evaluator. A packet
+    that is not exactly the approved packet yields ``REGISTRY_REJECTED`` (content-bound, never relabelable to
+    READY). Only a non-``dict`` outer packet or a non-plain value raises ``MachineTimeSourceRegistryError``.
+
+    The artifact binds the current canonical content of its input packet; it does NOT claim to prove which
+    historical caller or constructor invocation produced it.
+    """
+
+    source_packet = _CONTROLLER_APPROVED_PACKET if packet is None else packet
+    if type(source_packet) is not dict:
+        raise MachineTimeSourceRegistryError(_reason("packet_not_mapping"))
+    # P1-B: build a fresh EXACT-plain-data copy before any serialization/sorting so no nested subtype callback
+    # (comparison, ordering, hashing, iteration, mapping, str) can execute on unproved caller data.
+    plain_packet = _normalize_plain_packet(source_packet)
+    canonical = json.dumps(plain_packet, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    verified = json.loads(canonical)
+    evaluation = _evaluate_plain_packet(verified, digest)
 
     registry_fields: dict[str, object] = {
         "schema_version": _SCHEMA_VERSION,
         "registry_version": _REGISTRY_VERSION,
-        "status": status,
-        "ready": ready,
+        "status": evaluation.status,
+        "ready": evaluation.ready,
         "raw_packet_id": _RAW_PACKET_ID,
         "raw_packet_digest": _RAW_PACKET_DIGEST,
         "controller_normalization_id": _CONTROLLER_NORMALIZATION_ID,
@@ -1324,14 +1484,16 @@ def build_machine_time_source_registry(*, packet: dict[str, object] | None = Non
         "controller_approved_packet_digest": _CONTROLLER_APPROVED_PACKET_DIGEST,
         "packet_schema": _PACKET_SCHEMA,
         "researched_on": _RESEARCHED_ON,
-        "sources": tuple(records),
-        "source_ids": source_ids,
-        "citation_ids": citation_ids,
-        "exclusion_subjects": exclusion_subjects,
-        "source_count": len(raw_sources),
-        "citation_count": len(citation_ids),
-        "exclusion_count": len(exclusions),
-        "reason_codes": reason_codes,
+        "canonical_input_packet_json": canonical,
+        "canonical_input_packet_digest": digest,
+        "sources": evaluation.records,
+        "source_ids": evaluation.source_ids,
+        "citation_ids": evaluation.citation_ids,
+        "exclusion_subjects": evaluation.exclusion_subjects,
+        "source_count": evaluation.source_count,
+        "citation_count": evaluation.citation_count,
+        "exclusion_count": evaluation.exclusion_count,
+        "reason_codes": evaluation.reason_codes,
     }
     seed = MachineTimeSourceRegistry(registry_digest="", **registry_fields)  # type: ignore[arg-type]
     return _replace_registry_digest(seed, machine_time_source_registry_digest(seed))

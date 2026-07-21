@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import hashlib
 import json
 from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
@@ -556,10 +557,10 @@ def test_non_dict_packet_raises(value: object) -> None:
         build_machine_time_source_registry(packet=value)  # type: ignore[arg-type]
 
 
-def test_non_serializable_packet_raises() -> None:
+def test_non_plain_nested_value_raises() -> None:
     packet = _packet()
     packet["sources"][0]["fact_items"]["bad"] = object()  # type: ignore[index]
-    with pytest.raises(MachineTimeSourceRegistryError, match=_rc("packet_not_serializable")):
+    with pytest.raises(MachineTimeSourceRegistryError, match=_rc("packet_non_plain_value")):
         build_machine_time_source_registry(packet=packet)
 
 
@@ -809,3 +810,233 @@ def test_approved_registry_still_recomputes_and_serializes() -> None:
     payload = machine_time_source_registry_to_dict(registry)
     assert payload["registry_digest"] == registry.registry_digest
     assert build_approved_machine_time_source_registry().registry_digest == registry.registry_digest
+
+
+# --------------------------------------------------------------------------------------------------
+# P1 repair: content-addressed input binding (P1-A) + recursive exact-plain-data boundary (P1-B)
+#
+# The relabel/swap forgeries below compute a SELF-CONSISTENT outer digest with an INDEPENDENT, test-only
+# canonicalizer (not the production private digest helper), so a passing test proves the semantic validator
+# rejects on merit — never merely because the production helper was reused.
+# --------------------------------------------------------------------------------------------------
+
+_APPROVED_PACKET_DIGEST = "d5de63d9cc441f6d4659e8775768abaa53d80c6b9e663a936f6fdbd4348bb77a"
+
+
+def _independent_source_payload(record) -> dict:
+    return {
+        "source_id": record.source_id,
+        "provider_id": record.provider_id,
+        "source_class": record.source_class,
+        "protocol_version": record.protocol_version,
+        "maturity": record.maturity,
+        "recommended_role": record.recommended_role,
+        "recommendation": record.recommendation,
+        "verification_profile_id": record.verification_profile_id,
+        "official_endpoints": list(record.official_endpoints),
+        "citation_ids": list(record.citation_ids),
+        "fact_items": [[key, value] for key, value in record.fact_items],
+        "operational_use_approved": record.operational_use_approved,
+        "quorum_countable": record.quorum_countable,
+        "source_reachable_proven": record.source_reachable_proven,
+        "proof_verified": record.proof_verified,
+        "entry_digest": record.entry_digest,
+    }
+
+
+def _independent_outer_digest(registry: MachineTimeSourceRegistry) -> str:
+    """Recompute the outer registry digest with a fully independent test-only canonicalizer."""
+
+    payload: dict = {}
+    for field in fields(registry):
+        if field.name == "registry_digest":
+            continue
+        value = getattr(registry, field.name)
+        if field.name == "status":
+            payload[field.name] = registry.status.value
+        elif field.name == "sources":
+            payload[field.name] = [_independent_source_payload(record) for record in registry.sources]
+        elif isinstance(value, tuple):
+            payload[field.name] = list(value)
+        else:
+            payload[field.name] = value
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _independent_self_consistent(registry: MachineTimeSourceRegistry) -> MachineTimeSourceRegistry:
+    return replace(registry, registry_digest=_independent_outer_digest(registry))
+
+
+def test_independent_canonicalizer_matches_production() -> None:
+    # If this drifts, the forgery tests below would be meaningless — assert the independent helper agrees with
+    # the production digest on a legitimate artifact.
+    registry = build_approved_machine_time_source_registry()
+    assert _independent_outer_digest(registry) == registry.registry_digest
+
+
+# TEST A — a REJECTED artifact whose projected content matches approved cannot be relabeled READY.
+def test_rejected_content_cannot_be_relabeled_ready() -> None:
+    packet = _packet()
+    packet["zzz_non_projected_extra"] = "not-part-of-any-projection"
+    rejected = build_machine_time_source_registry(packet=packet)
+    assert rejected.status is MachineTimeSourceRegistryStatus.REGISTRY_REJECTED
+    approved = build_approved_machine_time_source_registry()
+    # The projected content is byte-identical to approved; only the (bound) canonical input differs.
+    assert rejected.sources == approved.sources
+    assert rejected.citation_ids == approved.citation_ids
+    assert rejected.exclusion_subjects == approved.exclusion_subjects
+    assert rejected.canonical_input_packet_json != approved.canonical_input_packet_json
+    relabeled = replace(rejected, status=MachineTimeSourceRegistryStatus.REGISTRY_READY, ready=True, reason_codes=())
+    relabeled = _independent_self_consistent(relabeled)
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_digest(relabeled)
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_to_dict(relabeled)
+
+
+# TEST B — the carried canonical input is load-bearing: swapping it (even to another canonical packet) while
+# keeping the projected metadata is rejected.
+def test_canonical_input_is_load_bearing() -> None:
+    approved = build_approved_machine_time_source_registry()
+    packet = _packet()
+    packet["zzz_non_projected_extra"] = True
+    alt = build_machine_time_source_registry(packet=packet)  # different canonical input, same projection
+    forged = replace(
+        approved,
+        canonical_input_packet_json=alt.canonical_input_packet_json,
+        canonical_input_packet_digest=alt.canonical_input_packet_digest,
+    )
+    forged = _independent_self_consistent(forged)
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_digest(forged)
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_to_dict(forged)
+
+
+# TEST C — the approved artifact's carried canonical input round-trips to the pinned approved packet.
+def test_canonical_input_round_trips_to_approved() -> None:
+    registry = build_approved_machine_time_source_registry()
+    parsed = json.loads(registry.canonical_input_packet_json)
+    recanonical = json.dumps(parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    assert recanonical == registry.canonical_input_packet_json
+    assert hashlib.sha256(recanonical.encode("utf-8")).hexdigest() == registry.canonical_input_packet_digest
+    assert registry.canonical_input_packet_digest == _APPROVED_PACKET_DIGEST
+    # Deterministic reconstruction from the carried input reproduces the identical artifact.
+    reconstructed = build_machine_time_source_registry(packet=parsed)
+    assert reconstructed.registry_digest == registry.registry_digest
+    assert machine_time_source_registry_digest(registry) == registry.registry_digest
+
+
+# TEST D — nested custom container/scalar subtypes are rejected without invoking any subtype callback.
+def _callback_counter() -> dict:
+    return {"n": 0}
+
+
+def test_custom_subtype_value_callbacks_not_invoked() -> None:
+    counter = _callback_counter()
+
+    class _DictSub(dict):
+        def __iter__(self):
+            counter["n"] += 1
+            return dict.__iter__(self)
+
+        def items(self):
+            counter["n"] += 1
+            return dict.items(self)
+
+    class _ListSub(list):
+        def __iter__(self):
+            counter["n"] += 1
+            return list.__iter__(self)
+
+    class _StrSub(str):
+        def __lt__(self, other):
+            counter["n"] += 1
+            return str.__lt__(self, other)
+
+        def __gt__(self, other):
+            counter["n"] += 1
+            return str.__gt__(self, other)
+
+    class _IntSub(int):
+        def __eq__(self, other):
+            counter["n"] += 1
+            return int.__eq__(self, other)
+
+        __hash__ = int.__hash__
+
+    for label, value in (
+        ("dict", _DictSub({"a": 1})),
+        ("list", _ListSub([1, 2])),
+        ("str", _StrSub("x")),
+        ("int", _IntSub(9)),
+    ):
+        packet = _packet()
+        packet["zzz_subtype"] = value  # nested inside the exact outer dict, constructed first
+        counter["n"] = 0  # reset AFTER construction, before the builder call
+        with pytest.raises(MachineTimeSourceRegistryError, match=_rc("packet_non_plain_value")):
+            build_machine_time_source_registry(packet=packet)
+        assert counter["n"] == 0, label
+
+
+# TEST E — a string-subtype dict key is rejected without invoking its comparison/ordering/string/hash callbacks.
+def test_exact_dict_key_subtype_rejected_without_callbacks() -> None:
+    counter = _callback_counter()
+
+    class _KeySub(str):
+        def __lt__(self, other):
+            counter["n"] += 1
+            return str.__lt__(self, other)
+
+        def __gt__(self, other):
+            counter["n"] += 1
+            return str.__gt__(self, other)
+
+        def __eq__(self, other):
+            counter["n"] += 1
+            return str.__eq__(self, other)
+
+        def __hash__(self):
+            counter["n"] += 1
+            return str.__hash__(self)
+
+    packet = _packet()
+    nested = dict(packet["provenance"])
+    nested[_KeySub("forged_key")] = "v"  # construction hashes the key once — that is before the reset
+    packet["provenance"] = nested
+    counter["n"] = 0  # reset AFTER construction, before the builder call
+    with pytest.raises(MachineTimeSourceRegistryError, match=_rc("packet_non_string_key")):
+        build_machine_time_source_registry(packet=packet)
+    assert counter["n"] == 0
+
+
+# TEST F — a container cycle and an over-depth structure fail closed (never a raw RecursionError).
+def test_packet_cycle_fails_closed() -> None:
+    packet = _packet()
+    cyclic: dict = {}
+    cyclic["self"] = cyclic
+    packet["zzz_cyclic"] = cyclic
+    with pytest.raises(MachineTimeSourceRegistryError, match=_rc("packet_cycle_detected")):
+        build_machine_time_source_registry(packet=packet)
+
+
+def test_packet_over_depth_fails_closed() -> None:
+    packet = _packet()
+    deep: dict = {}
+    cursor = deep
+    for _ in range(200):
+        child: dict = {}
+        cursor["n"] = child
+        cursor = child
+    packet["zzz_deep"] = deep
+    with pytest.raises(MachineTimeSourceRegistryError, match=_rc("packet_max_depth_exceeded")):
+        build_machine_time_source_registry(packet=packet)
+
+
+def test_canonical_input_binding_is_digest_participating() -> None:
+    # The two content-binding fields participate in equality and the outer digest.
+    approved = build_approved_machine_time_source_registry()
+    assert "canonical_input_packet_json" in {field.name for field in fields(approved)}
+    tampered = replace(approved, canonical_input_packet_digest="0" * 64)
+    assert _independent_outer_digest(tampered) != approved.registry_digest
