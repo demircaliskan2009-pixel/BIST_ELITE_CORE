@@ -21,7 +21,10 @@ Cloudflare deployed-version decision: ``DEPLOYED_VERSION_UNPROVEN``. The registr
 Roughtime protocol version for ``udp://roughtime.cloudflare.com:2003``. The official Cloudflare source at
 revision ``75645289794cfbd71a08f0e7ecf9bc4f3f87d133`` describes Google-Roughtime and IETF draft08, and no
 current public documentation publishes an immutable deployed protocol-version contract, so neither a
-draft-19 nor a legacy-only deployment claim is admitted; a timeout observation proves no deployed version.
+draft-19 nor a legacy-only deployment claim is admitted. UNPROVEN is not DISPROVEN: nothing here establishes
+that any particular version is absent. In particular a timeout observation is not admitted as evidence of any
+deployed protocol version, and it equally fails to disprove one
+(``timeout_observation_proves_deployed_protocol_version`` is ``False`` in the embedded authority).
 The Cloudflare provider record therefore carries ``protocol_version`` ``cloudflare-deployed-version-unproven``
 and does NOT cite ``ROUGHTIME-DRAFT-19`` as deployment evidence (that citation survives only for generic
 protocol/archive-policy facts that are not attributed to Cloudflare's current deployment). MT-4 verifier
