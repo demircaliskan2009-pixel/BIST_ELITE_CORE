@@ -1,9 +1,16 @@
 """Tests for the MT-3 machine-time source registry (structural, digest-bound, citation-backed, fail-closed).
 
-The registry compiles the controller-approved Deep Research packet ``mt3-dr-batch-b-2026-07-20.controller-v1``
-into an immutable, self-digesting inventory of the seven candidate machine-time source classes. These tests
-assert the adversarial contract: exact inventory, canonical ordering, deterministic digests, reseal/forgery
-detection, and that every reachability/operational/quorum/proof/machine-time flag is structurally False.
+The registry compiles the controller-approved packet
+``mt3-cloudflare-provenance-correction-2026-07-23.controller-v1`` into an immutable, self-digesting inventory
+of the seven candidate machine-time source classes. These tests assert the adversarial contract: exact
+inventory, canonical ordering, deterministic digests, reseal/forgery detection, and that every
+reachability/operational/quorum/proof/machine-time flag is structurally False.
+
+They also assert the Cloudflare protocol-provenance correction: the deployed Cloudflare Roughtime protocol
+version is recorded as UNPROVEN (never draft-19, draft-11 or draft-08), the correction authority's digest is
+recomputed over EMBEDDED canonical approval data, the superseded predecessor packet is retained as history
+but rejected as current authority, MT-4 verifier-profile selection stays blocked, and the six unrelated
+source-entry digests are byte-identical to their pre-correction values.
 """
 
 from __future__ import annotations
@@ -73,7 +80,7 @@ _EXPECTED_CITATION_IDS = (
     "SIGSTORE-THREAT-MODEL",
 )
 
-_EXPECTED_EXCLUSION_SUBJECTS = (
+_PREDECESSOR_EXCLUSION_SUBJECTS = (
     "certificate-transparency-v2-generic-machine-time-use",
     "sigstore-rekor-generic-machine-time-use",
     "nist-beacon-v2-live_certificate_fingerprint",
@@ -85,8 +92,38 @@ _EXPECTED_EXCLUSION_SUBJECTS = (
     "roughtime_not_after_quorum_without_digest_adapter",
 )
 
-_PACKET_DIGEST = "d5de63d9cc441f6d4659e8775768abaa53d80c6b9e663a936f6fdbd4348bb77a"
-_RAW_DIGEST = "f8ec03f63d4b790213bc0eea5b5089159cbd3da73792e02ab8db8d7c5d34f9d7"
+# The Cloudflare deployed-version unproven subject is appended last, after the nine preserved predecessor
+# subjects in their original order.
+_NEW_UNPROVEN_SUBJECT = "cloudflare_deployed_roughtime_protocol_version"
+_EXPECTED_EXCLUSION_SUBJECTS = (*_PREDECESSOR_EXCLUSION_SUBJECTS, _NEW_UNPROVEN_SUBJECT)
+
+# CURRENT authority (Cloudflare protocol-provenance correction).
+_PACKET_ID = "mt3-cloudflare-provenance-correction-2026-07-23.controller-v1"
+_PACKET_DIGEST = "a575eaffd2098432f08c77ba9a3c84a8177992b24b91ff350e3348ecc93b9d82"
+_AUTHORITY_ID = "mt3-cloudflare-provenance-correction-2026-07-23.authority-v1"
+_RAW_DIGEST = "4a09d5e3bb48ae2039c2c164abe1f88ee9b6ebe9edcf1e29e17147ac92dd5bd7"
+_NORMALIZATION_ID = "mt3-controller-normalization-2026-07-23.cloudflare-provenance-correction-v1"
+_HUMAN_APPROVAL_ID = "MT3-CLOUDFLARE-PROVENANCE-CORRECTION-HUMAN-APPROVAL-V1"
+
+# SUPERSEDED predecessor authority — history only, never current.
+_SUPERSEDED_PACKET_ID = "mt3-dr-batch-b-2026-07-20.controller-v1"
+_SUPERSEDED_PACKET_DIGEST = "d5de63d9cc441f6d4659e8775768abaa53d80c6b9e663a936f6fdbd4348bb77a"
+_SUPERSEDED_RAW_PACKET_ID = "mt3-dr-batch-b-2026-07-20.v2"
+_SUPERSEDED_RAW_PACKET_DIGEST = "f8ec03f63d4b790213bc0eea5b5089159cbd3da73792e02ab8db8d7c5d34f9d7"
+_SUPERSEDED_PROTOCOL_VERSION_CLAIM = "draft-ietf-ntp-roughtime-19"
+
+# Exact pre-correction entry digests of the six sources this correction must NOT touch. Captured from the
+# merged predecessor registry before mutation; any drift here means the correction leaked outside Cloudflare.
+_UNCHANGED_ENTRY_DIGESTS = {
+    "drand-quicknet-mainnet": "c3dae5eab6e5fb046d30e66f841804c95e2ecffb65efd8e77553ef096be6eb3c",
+    "nist-randomness-beacon-v2-beta": "416efc2bbe030f4a030d0738c0591178ec9af67e5ab5cddf48df9b6bda5664a4",
+    "curby-public-beacon": "74679d65c31e9d2fb341e58821ea9c21ff4627872be51684d3a5c2a249539acf",
+    "digicert-rfc3161-tsa": "c5783a22b5727f4e17ea77678402ea80cc3a25a38463cb0810383ddc7a3c11f2",
+    "opentimestamps-bitcoin": "861d0f0a8f14a5876e2ab30294776f5e56435da11251101b807697d70cbbe572",
+    "deribit-public-get-time": "d3b84c294e721607e543863a4d7b7e4cc2f6a2f22001b6f9dabbb59c169b38b8",
+}
+_PRE_CORRECTION_CLOUDFLARE_ENTRY_DIGEST = "e822748dbee977608e14512695f219adc6b2bf27b137e20e5c5ac6c7a92b0b54"
+_PRE_CORRECTION_REGISTRY_DIGEST = "9f41f4ad51603f545a24b06d009fc042703b02531379a5fc58b43de99b07a72a"
 
 _SOURCE_SAFETY_FLAGS = (
     "operational_use_approved",
@@ -103,6 +140,8 @@ _REGISTRY_FALSE_DECISIONS = (
     "all_quorum_countable",
     "not_before_operational_quorum_ready",
     "not_after_operational_quorum_ready",
+    "mt4_verifier_profile_selected",
+    "roughtime_deployed_protocol_version_proven",
 )
 
 _ARTIFACT_TRUE_FLAGS = (
@@ -200,27 +239,38 @@ def test_exact_twenty_nine_citation_inventory() -> None:
     assert list(registry.citation_ids) == sorted(registry.citation_ids)
 
 
-def test_exact_nine_exclusion_inventory_in_packet_order() -> None:
+def test_exact_ten_exclusion_inventory_in_packet_order() -> None:
     registry = build_approved_machine_time_source_registry()
-    assert registry.exclusion_count == 9
+    assert registry.exclusion_count == 10
     assert registry.exclusion_subjects == _EXPECTED_EXCLUSION_SUBJECTS
+    # The nine predecessor subjects survive in their original order; the new subject is appended once.
+    assert registry.exclusion_subjects[:9] == _PREDECESSOR_EXCLUSION_SUBJECTS
+    assert registry.exclusion_subjects.count(_NEW_UNPROVEN_SUBJECT) == 1
 
 
 def test_packet_lineage_is_pinned() -> None:
     registry = build_approved_machine_time_source_registry()
-    assert registry.controller_approved_packet_id == "mt3-dr-batch-b-2026-07-20.controller-v1"
+    assert registry.controller_approved_packet_id == _PACKET_ID
     assert registry.controller_approved_packet_digest == _PACKET_DIGEST
-    assert registry.raw_packet_id == "mt3-dr-batch-b-2026-07-20.v2"
+    assert registry.raw_packet_id == _AUTHORITY_ID
     assert registry.raw_packet_digest == _RAW_DIGEST
-    assert registry.controller_normalization_id == "mt3-controller-normalization-2026-07-20.v1"
-    assert registry.packet_schema == "machine-time-source-research-packet.v1"
+    assert registry.controller_normalization_id == _NORMALIZATION_ID
+    assert registry.packet_schema == "machine-time-source-research-packet.v2"
+
+
+def test_version_discipline_schema_unchanged_registry_bumped() -> None:
+    # The public artifact SHAPE is unchanged, so schema_version stays .v1; the admitted registry CONTENT
+    # identity changed, so registry_version is bumped. They are deliberately assessed separately.
+    registry = build_approved_machine_time_source_registry()
+    assert registry.schema_version == "machine-time-source-registry.v1"
+    assert registry.registry_version == "machine-time-source-registry.v2"
+    assert registry.schema_version != registry.registry_version
 
 
 def test_embedded_packet_recomputes_to_pinned_digest() -> None:
     canonical = json.dumps(_APPROVED_PACKET, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
-    import hashlib
-
     assert hashlib.sha256(canonical.encode("utf-8")).hexdigest() == _PACKET_DIGEST
+    assert _PACKET_DIGEST != _SUPERSEDED_PACKET_DIGEST
 
 
 @pytest.mark.parametrize(
@@ -246,7 +296,7 @@ def test_embedded_packet_recomputes_to_pinned_digest() -> None:
             "INCLUDE_NOT_AFTER_CANDIDATE",
             "bitcoin-anchored-blockchain-timestamping",
         ),
-        ("cloudflare-roughtime-beta", "not_after", "DEFER_TO_MT4_ADAPTER", "authenticated-rough-time"),
+        ("cloudflare-roughtime-beta", "not_after", "DEFER_PENDING_PROTOCOL_PROVENANCE", "authenticated-rough-time"),
         ("deribit-public-get-time", "advisory_only", "INCLUDE_ADVISORY_ONLY", "exchange-server-time"),
     ],
 )
@@ -411,26 +461,31 @@ def test_any_content_mutation_breaks_packet_digest() -> None:
 
 
 def test_packet_id_mutation_rejected() -> None:
-    _reject(lambda p: p.__setitem__("packet_id", "mt3-dr-batch-b-2026-07-20.forged"), "packet_id_mismatch")
+    _reject(lambda p: p.__setitem__("packet_id", "mt3-cloudflare-provenance-correction.forged"), "packet_id_mismatch")
+
+
+def test_superseded_packet_id_is_not_current_authority() -> None:
+    # Reinstating the superseded controller packet id fails current admission.
+    _reject(lambda p: p.__setitem__("packet_id", _SUPERSEDED_PACKET_ID), "packet_id_mismatch")
 
 
 def test_raw_packet_id_mutation_rejected() -> None:
-    _reject(lambda p: p["provenance"].__setitem__("raw_deep_research_packet_id", "forged"), "raw_packet_id_mismatch")
+    _reject(lambda p: p["provenance"].__setitem__("correction_authority_id", "forged"), "raw_packet_id_mismatch")
 
 
 def test_raw_packet_digest_mutation_rejected() -> None:
     forged = "a" * 64
     _reject(
-        lambda p: p["provenance"].__setitem__("raw_deep_research_packet_digest", forged),
+        lambda p: p["provenance"].__setitem__("correction_authority_digest", forged),
         "raw_packet_digest_mismatch",
     )
 
 
 def test_malformed_63_char_raw_digest_rejected() -> None:
-    malformed = "f8ec03f63d4b790213bc0eea5b5089159cbd3da73792e02ab8db8d7c5d34f9d"  # 63 chars
+    malformed = _RAW_DIGEST[:63]
     assert len(malformed) == 63
     _reject(
-        lambda p: p["provenance"].__setitem__("raw_deep_research_packet_digest", malformed),
+        lambda p: p["provenance"].__setitem__("correction_authority_digest", malformed),
         "raw_packet_digest_malformed",
     )
 
@@ -510,6 +565,25 @@ def test_citation_count_mutation_rejected() -> None:
 
 def test_exclusion_count_mutation_rejected() -> None:
     _reject(lambda p: p["excluded_or_unproven"].pop(), "exclusion_count_mismatch")
+
+
+def test_new_unproven_subject_removal_rejected() -> None:
+    # Dropping the Cloudflare deployed-version unproven subject must never silently succeed.
+    def drop(packet: dict[str, object]) -> None:
+        packet["excluded_or_unproven"] = [
+            entry for entry in packet["excluded_or_unproven"] if entry["subject"] != _NEW_UNPROVEN_SUBJECT
+        ]
+
+    _reject(drop, "exclusion_count_mismatch")
+
+
+def test_new_unproven_subject_mutation_rejected() -> None:
+    def rename(packet: dict[str, object]) -> None:
+        for entry in packet["excluded_or_unproven"]:
+            if entry["subject"] == _NEW_UNPROVEN_SUBJECT:
+                entry["subject"] = "cloudflare_deployed_roughtime_protocol_version_resolved"
+
+    _reject(rename, "packet_digest_mismatch")
 
 
 # --------------------------------------------------------------------------------------------------
@@ -820,7 +894,7 @@ def test_approved_registry_still_recomputes_and_serializes() -> None:
 # rejects on merit — never merely because the production helper was reused.
 # --------------------------------------------------------------------------------------------------
 
-_APPROVED_PACKET_DIGEST = "d5de63d9cc441f6d4659e8775768abaa53d80c6b9e663a936f6fdbd4348bb77a"
+_APPROVED_PACKET_DIGEST = _PACKET_DIGEST
 
 
 def _independent_source_payload(record) -> dict:
@@ -1056,3 +1130,395 @@ def test_canonical_input_binding_is_digest_participating() -> None:
     assert "canonical_input_packet_json" in {field.name for field in fields(approved)}
     tampered = replace(approved, canonical_input_packet_digest="0" * 64)
     assert _independent_outer_digest(tampered) != approved.registry_digest
+
+
+# --------------------------------------------------------------------------------------------------
+# Cloudflare protocol-provenance correction: correction authority + predecessor lineage
+# --------------------------------------------------------------------------------------------------
+
+
+def _packet_of(registry: MachineTimeSourceRegistry) -> dict:
+    """Re-parse the artifact's own carried canonical input — never the module's mutable packet object."""
+
+    return json.loads(registry.canonical_input_packet_json)
+
+
+def _cloudflare(registry: MachineTimeSourceRegistry):
+    return next(record for record in registry.sources if record.source_id == "cloudflare-roughtime-beta")
+
+
+def test_correction_authority_identity_is_exact() -> None:
+    registry = build_approved_machine_time_source_registry()
+    authority = _packet_of(registry)["correction_authority"]
+    assert registry.raw_packet_id == _AUTHORITY_ID
+    assert authority["authority_id"] == _AUTHORITY_ID
+    assert authority["approval_id"] == _HUMAN_APPROVAL_ID
+    assert authority["approval_result"] == "APPROVED_FOR_DEDICATED_MT3_CLOUDFLARE_PROVENANCE_CORRECTION_PREFLIGHT"
+    assert authority["deployed_version_decision"] == "DEPLOYED_VERSION_UNPROVEN"
+    assert authority["corrected_source_id"] == "cloudflare-roughtime-beta"
+    assert authority["mt4_verifier_profile_selected"] is False
+
+
+def test_correction_authority_digest_recomputes_independently() -> None:
+    # Independent recomputation: the authority digest is a digest over EMBEDDED canonical approval data, not
+    # an unbacked claim about approval prose. This helper never calls the production digest helper.
+    registry = build_approved_machine_time_source_registry()
+    packet = _packet_of(registry)
+    encoded = json.dumps(
+        packet["correction_authority"], sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
+    )
+    recomputed = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    assert recomputed == _RAW_DIGEST
+    assert recomputed == registry.raw_packet_digest
+    assert recomputed == packet["provenance"]["correction_authority_digest"]
+
+
+def test_correction_authority_approved_evidence_is_exact() -> None:
+    registry = build_approved_machine_time_source_registry()
+    evidence = _packet_of(registry)["correction_authority"]["approved_evidence"]
+    assert evidence["cloudflare_official_source_revision"] == "75645289794cfbd71a08f0e7ecf9bc4f3f87d133"
+    assert evidence["cloudflare_official_ecosystem_description"] == "google-roughtime-and-ietf-draft08"
+    assert evidence["deployed_endpoint"] == "udp://roughtime.cloudflare.com:2003"
+    assert evidence["published_root_key_base64"] == "0GD7c3yP8xEc4Zl2zeuN2SlLvDVVocjsPSL8/Rl/7zg="
+    # No deployed-version contract is published, and a timeout observation proves no deployed version.
+    assert evidence["deployed_protocol_version_contract_published"] is False
+    assert evidence["timeout_observation_proves_deployed_protocol_version"] is False
+    # The draft support recorded here is the official SOURCE LIBRARY's documented support, explicitly not a
+    # claim about the deployed endpoint.
+    assert evidence["official_source_library_documented_draft_support"] == [
+        "draft-ietf-ntp-roughtime-08",
+        "draft-ietf-ntp-roughtime-11",
+    ]
+
+
+def test_predecessor_lineage_is_preserved_as_history() -> None:
+    registry = build_approved_machine_time_source_registry()
+    provenance = _packet_of(registry)["provenance"]
+    assert provenance["predecessor_controller_approved_packet_id"] == _SUPERSEDED_PACKET_ID
+    assert provenance["predecessor_controller_approved_packet_digest"] == _SUPERSEDED_PACKET_DIGEST
+    assert provenance["predecessor_raw_deep_research_packet_id"] == _SUPERSEDED_RAW_PACKET_ID
+    assert provenance["predecessor_raw_deep_research_packet_digest"] == _SUPERSEDED_RAW_PACKET_DIGEST
+    assert provenance["predecessor_status"] == "SUPERSEDED_NOT_CURRENT_AUTHORITY"
+    # History is never current authority.
+    assert registry.controller_approved_packet_id != _SUPERSEDED_PACKET_ID
+    assert registry.controller_approved_packet_digest != _SUPERSEDED_PACKET_DIGEST
+    assert registry.raw_packet_digest != _SUPERSEDED_RAW_PACKET_DIGEST
+
+
+@pytest.mark.parametrize(
+    ("key", "code"),
+    [
+        ("approval_id", "correction_authority_approval_id_mismatch"),
+        ("approval_result", "correction_authority_approval_result_mismatch"),
+        ("authority_id", "correction_authority_authority_id_mismatch"),
+        ("deployed_version_decision", "correction_authority_deployed_version_decision_mismatch"),
+        (
+            "superseded_controller_approved_packet_id",
+            "correction_authority_superseded_controller_approved_packet_id_mismatch",
+        ),
+        (
+            "superseded_controller_approved_packet_digest",
+            "correction_authority_superseded_controller_approved_packet_digest_mismatch",
+        ),
+        ("superseded_status", "correction_authority_superseded_status_mismatch"),
+    ],
+)
+def test_correction_authority_field_substitution_rejected(key: str, code: str) -> None:
+    registry = _mutate(lambda p, key=key: p["correction_authority"].__setitem__(key, "forged-authority-value"))
+    assert registry.status is MachineTimeSourceRegistryStatus.REGISTRY_REJECTED
+    assert _rc(code) in registry.reason_codes
+    # Mutating the block also breaks its recomputed digest — the two guards are independent.
+    assert _rc("correction_authority_digest_mismatch") in registry.reason_codes
+
+
+def test_correction_authority_mt4_selection_forgery_rejected() -> None:
+    _reject(
+        lambda p: p["correction_authority"].__setitem__("mt4_verifier_profile_selected", True),
+        "correction_authority_mt4_verifier_profile_selected_not_false",
+    )
+
+
+def test_correction_authority_removal_rejected() -> None:
+    _reject(lambda p: p.pop("correction_authority"), "correction_authority_malformed")
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "predecessor_controller_approved_packet_id",
+        "predecessor_controller_approved_packet_digest",
+        "predecessor_raw_deep_research_packet_id",
+        "predecessor_raw_deep_research_packet_digest",
+        "predecessor_status",
+    ],
+)
+def test_predecessor_lineage_substitution_rejected(key: str) -> None:
+    _reject(lambda p, key=key: p["provenance"].__setitem__(key, "forged-predecessor"), f"{key}_mismatch")
+
+
+def test_superseded_packet_content_fails_current_admission() -> None:
+    # Restoring the superseded Cloudflare deployed-version claim is rejected: the superseded packet content is
+    # not admissible under the current authority.
+    def restore_superseded(packet: dict[str, object]) -> None:
+        source = next(s for s in packet["sources"] if s["source_id"] == "cloudflare-roughtime-beta")
+        source["protocol_version"] = _SUPERSEDED_PROTOCOL_VERSION_CLAIM
+        source["recommendation"] = "DEFER_TO_MT4_ADAPTER"
+        source["verification_profile_id"] = "roughtime-nonce-chain-adapter-required.v1"
+
+    _reject(restore_superseded, "packet_digest_mismatch")
+
+
+def test_superseded_digest_cannot_be_relabeled_current() -> None:
+    registry = build_approved_machine_time_source_registry()
+    for field_name in ("controller_approved_packet_digest", "canonical_input_packet_digest"):
+        forged = _independent_self_consistent(replace(registry, **{field_name: _SUPERSEDED_PACKET_DIGEST}))
+        with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+            machine_time_source_registry_digest(forged)
+        with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+            machine_time_source_registry_to_dict(forged)
+
+
+def test_superseded_lineage_ids_cannot_be_relabeled_current() -> None:
+    registry = build_approved_machine_time_source_registry()
+    forged = _independent_self_consistent(
+        replace(registry, controller_approved_packet_id=_SUPERSEDED_PACKET_ID, raw_packet_id=_SUPERSEDED_RAW_PACKET_ID)
+    )
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_digest(forged)
+
+
+# --------------------------------------------------------------------------------------------------
+# Cloudflare protocol-provenance correction: corrected source record
+# --------------------------------------------------------------------------------------------------
+
+
+def test_cloudflare_retained_identity_fields_are_exact() -> None:
+    record = _cloudflare(build_approved_machine_time_source_registry())
+    assert record.source_id == "cloudflare-roughtime-beta"
+    assert record.provider_id == "cloudflare"
+    assert record.source_class == "authenticated-rough-time"
+    assert record.recommended_role == "not_after"
+    assert record.official_endpoints == ("udp://roughtime.cloudflare.com:2003",)
+    facts = dict(record.fact_items)
+    assert facts["root_key_base64"] == "0GD7c3yP8xEc4Zl2zeuN2SlLvDVVocjsPSL8/Rl/7zg="
+    assert facts["signature_algorithm"] == "ed25519"
+
+
+def test_cloudflare_deployed_version_is_unproven() -> None:
+    record = _cloudflare(build_approved_machine_time_source_registry())
+    assert record.protocol_version == "cloudflare-deployed-version-unproven"
+    assert record.maturity == "beta-provider-protocol-version-unproven"
+    assert record.recommendation == "DEFER_PENDING_PROTOCOL_PROVENANCE"
+    assert record.verification_profile_id == "roughtime-provider-version-unproven-no-verifier.v1"
+
+
+def test_cloudflare_fact_items_are_exact() -> None:
+    facts = dict(_cloudflare(build_approved_machine_time_source_registry()).fact_items)
+    assert facts["beta_notice"] is True
+    assert facts["root_key_may_change"] is True
+    assert facts["deployed_protocol_version_proven"] is False
+    assert facts["deployed_draft19_proven"] is False
+    assert facts["controller_native_exact_artifact_digest_commitment_registered"] is False
+    assert facts["mt4_verifier_profile_selected"] is False
+    assert facts["official_source_revision"] == "75645289794cfbd71a08f0e7ecf9bc4f3f87d133"
+    assert facts["official_ecosystem_description"] == "google-roughtime-and-ietf-draft08"
+
+
+def test_cloudflare_record_carries_no_deployed_draft_version_claim() -> None:
+    record = _cloudflare(build_approved_machine_time_source_registry())
+    drafts = ("draft-ietf-ntp-roughtime-19", "draft-ietf-ntp-roughtime-11", "draft-ietf-ntp-roughtime-08")
+    scalar_fields = (
+        record.protocol_version,
+        record.maturity,
+        record.recommendation,
+        record.verification_profile_id,
+        record.source_class,
+    )
+    for value in scalar_fields:
+        assert not any(draft in value for draft in drafts), value
+    # The only fact carrying a draft token at all is the exact official ecosystem description, which describes
+    # the official SOURCE, never the deployed endpoint.
+    draft_facts = {key for key, value in record.fact_items if isinstance(value, str) and "draft" in value}
+    assert draft_facts == {"official_ecosystem_description"}
+
+
+def test_cloudflare_record_does_not_cite_roughtime_draft_19() -> None:
+    registry = build_approved_machine_time_source_registry()
+    record = _cloudflare(registry)
+    assert record.citation_ids == ("CLOUDFLARE-ROUGHTIME", "CLOUDFLARE-ROUGHTIME-USAGE")
+    assert "ROUGHTIME-DRAFT-19" not in record.citation_ids
+    # The citation itself survives in the 29-id inventory for generic protocol/archive-policy use only.
+    assert "ROUGHTIME-DRAFT-19" in registry.citation_ids
+    assert registry.citation_count == 29
+
+
+def test_pinned_cloudflare_and_roughtime_citation_urls() -> None:
+    citations = _packet_of(build_approved_machine_time_source_registry())["citations"]
+    assert citations["CLOUDFLARE-ROUGHTIME"] == (
+        "https://github.com/cloudflare/roughtime/blob/75645289794cfbd71a08f0e7ecf9bc4f3f87d133/ecosystem.md"
+    )
+    assert citations["CLOUDFLARE-ROUGHTIME-USAGE"] == "https://developers.cloudflare.com/time-services/roughtime/usage/"
+    assert citations["ROUGHTIME-DRAFT-19"] == "https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-19"
+
+
+def test_cloudflare_safety_flags_remain_false() -> None:
+    record = _cloudflare(build_approved_machine_time_source_registry())
+    for flag in _SOURCE_SAFETY_FLAGS:
+        assert getattr(record, flag) is False
+
+
+def test_new_unproven_subject_is_bound_to_cloudflare_citations() -> None:
+    entries = _packet_of(build_approved_machine_time_source_registry())["excluded_or_unproven"]
+    matches = [entry for entry in entries if entry["subject"] == _NEW_UNPROVEN_SUBJECT]
+    assert len(matches) == 1
+    entry = matches[0]
+    assert entry["status"] == "UNPROVEN"
+    assert entry["citation_ids"] == ["CLOUDFLARE-ROUGHTIME", "CLOUDFLARE-ROUGHTIME-USAGE"]
+    assert "does not publish an immutable deployed protocol-version contract" in entry["reason"]
+    # Explicitly refuses BOTH a draft-19 and a legacy-only deployment claim.
+    assert "No exact current draft-19 or legacy-only deployment claim is approved." in entry["reason"]
+
+
+@pytest.mark.parametrize(
+    ("field_name", "forged"),
+    [
+        ("protocol_version", _SUPERSEDED_PROTOCOL_VERSION_CLAIM),
+        ("maturity", "beta-ietf-internet-draft"),
+        ("verification_profile_id", "roughtime-draft19-verifier.v1"),
+    ],
+)
+def test_cloudflare_scalar_substitution_rejected(field_name: str, forged: str) -> None:
+    def substitute(packet: dict[str, object]) -> None:
+        source = next(s for s in packet["sources"] if s["source_id"] == "cloudflare-roughtime-beta")
+        source[field_name] = forged
+
+    _reject(substitute, "packet_digest_mismatch")
+
+
+def test_cloudflare_recommendation_substitution_rejected() -> None:
+    def substitute(packet: dict[str, object]) -> None:
+        source = next(s for s in packet["sources"] if s["source_id"] == "cloudflare-roughtime-beta")
+        source["recommendation"] = "INCLUDE_NOT_AFTER_CANDIDATE"
+
+    _reject(substitute, "packet_digest_mismatch")
+
+
+@pytest.mark.parametrize(
+    ("fact_key", "forged"),
+    [
+        ("official_source_revision", "0000000000000000000000000000000000000000"),
+        ("official_ecosystem_description", "ietf-draft19-deployed"),
+        ("deployed_protocol_version_proven", True),
+        ("deployed_draft19_proven", True),
+        ("mt4_verifier_profile_selected", True),
+    ],
+)
+def test_cloudflare_fact_forgery_rejected(fact_key: str, forged: object) -> None:
+    def substitute(packet: dict[str, object]) -> None:
+        source = next(s for s in packet["sources"] if s["source_id"] == "cloudflare-roughtime-beta")
+        source["fact_items"][fact_key] = forged
+
+    _reject(substitute, "packet_digest_mismatch")
+
+
+# --------------------------------------------------------------------------------------------------
+# Cloudflare protocol-provenance correction: controller consistency + digest isolation
+# --------------------------------------------------------------------------------------------------
+
+
+def test_no_mt4_adapter_selection_contradiction_remains() -> None:
+    decisions = _packet_of(build_approved_machine_time_source_registry())["controller_decisions"]
+    # The contradictory "adapter deferred to MT-4" claim is gone; a provenance PRECONDITION replaces it.
+    assert "roughtime_adapter_deferred_to_mt4" not in decisions
+    assert decisions["roughtime_protocol_provenance_required_before_mt4_profile_selection"] is True
+    assert decisions["mt4_verifier_profile_selected"] is False
+    assert decisions["roughtime_deployed_protocol_version_proven"] is False
+    assert decisions["cloudflare_deployed_protocol_version_decision"] == "DEPLOYED_VERSION_UNPROVEN"
+
+
+def test_roughtime_remains_non_countable_without_governed_verifier() -> None:
+    packet = _packet_of(build_approved_machine_time_source_registry())
+    decisions = packet["controller_decisions"]
+    assert decisions["roughtime_not_after_countable_without_adapter"] is False
+    # not_after counting is unchanged and still excludes authenticated rough time.
+    assert decisions["not_after_class_count_supported"] == 2
+    independence = packet["independence_policy"]
+    assert independence["not_after_classes_supported"] == [
+        "rfc3161-timestamp-authority",
+        "bitcoin-anchored-blockchain-timestamping",
+    ]
+    assert "authenticated-rough-time" not in independence["not_after_classes_supported"]
+    assert independence["deferred_pending_protocol_provenance_classes"] == ["authenticated-rough-time"]
+    assert "deferred_adapter_classes" not in independence
+
+
+def test_protocol_provenance_gate_decision_cannot_be_weakened() -> None:
+    _reject(
+        lambda p: p["controller_decisions"].__setitem__(
+            "roughtime_protocol_provenance_required_before_mt4_profile_selection", False
+        ),
+        "roughtime_protocol_provenance_gate_decision_missing",
+    )
+
+
+def test_cloudflare_deployed_version_decision_cannot_be_forged() -> None:
+    _reject(
+        lambda p: p["controller_decisions"].__setitem__(
+            "cloudflare_deployed_protocol_version_decision", "DEPLOYED_DRAFT19_PROVEN"
+        ),
+        "cloudflare_deployed_version_decision_mismatch",
+    )
+
+
+def test_unrelated_source_entry_digests_are_byte_identical_to_pre_correction() -> None:
+    # Digest isolation: the correction changed Cloudflare and nothing else.
+    registry = build_approved_machine_time_source_registry()
+    actual = {record.source_id: record.entry_digest for record in registry.sources}
+    assert len(_UNCHANGED_ENTRY_DIGESTS) == 6
+    for source_id, expected in _UNCHANGED_ENTRY_DIGESTS.items():
+        assert actual[source_id] == expected, source_id
+
+
+def test_cloudflare_entry_and_registry_digests_changed() -> None:
+    registry = build_approved_machine_time_source_registry()
+    assert _cloudflare(registry).entry_digest != _PRE_CORRECTION_CLOUDFLARE_ENTRY_DIGEST
+    assert registry.registry_digest != _PRE_CORRECTION_REGISTRY_DIGEST
+    assert registry.canonical_input_packet_digest == _PACKET_DIGEST
+    assert registry.canonical_input_packet_digest != _SUPERSEDED_PACKET_DIGEST
+    # Cloudflare's entry digest is the only source digest that moved.
+    changed = {
+        record.source_id
+        for record in registry.sources
+        if record.source_id not in _UNCHANGED_ENTRY_DIGESTS
+        or record.entry_digest != _UNCHANGED_ENTRY_DIGESTS[record.source_id]
+    }
+    assert changed == {"cloudflare-roughtime-beta"}
+
+
+def test_corrected_registry_is_deterministic_and_reseal_safe() -> None:
+    first = build_approved_machine_time_source_registry()
+    second = build_approved_machine_time_source_registry()
+    assert first == second
+    assert first.registry_digest == second.registry_digest
+    assert machine_time_source_registry_digest(first) == first.registry_digest
+    for record in first.sources:
+        assert machine_time_source_entry_digest(record) == record.entry_digest
+    assert machine_time_source_registry_to_dict(first)["registry_digest"] == first.registry_digest
+    # A stale/forged outer digest is never accepted by the serializer boundary.
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_to_dict(replace(first, registry_digest="0" * 64))
+
+
+def test_correction_proves_no_operational_or_readiness_transition() -> None:
+    registry = build_approved_machine_time_source_registry()
+    for flag in _ARTIFACT_FALSE_FLAGS:
+        assert getattr(registry, flag) is False
+    assert registry.mt4_adapter_bound is False
+    assert registry.machine_time_origin_proven is False
+    assert registry.timestamp_origin_proven is False
+    assert registry.operational_quorum_ready is False
+    assert registry.readiness_promoted is False
+    assert registry.connector_promoted is False
+    for record in registry.sources:
+        for flag in _SOURCE_SAFETY_FLAGS:
+            assert getattr(record, flag) is False
