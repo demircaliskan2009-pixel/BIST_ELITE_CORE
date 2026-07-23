@@ -1,11 +1,32 @@
-"""Roughtime draft-19 structural kernel (internal MT-4 prerequisite K1) — provider-independent, deterministic.
+"""Roughtime draft-19 bounded structural kernel (internal MT-4 prerequisite K1) — provider-independent.
 
 This module is a pure STRUCTURAL parser for the Roughtime draft-19 wire framing: the outer packet envelope
 and the generic tag/value message layout. It exists as the first internal MT-4 prerequisite so that later
-machine-time anchor work can reason about Roughtime bytes without re-deriving the framing rules. It is
-deterministic and fully self-contained.
+machine-time work can reason about Roughtime bytes without re-deriving the framing rules. It is deterministic
+and fully self-contained.
 
-Scope — what this kernel does:
+Bounded profile (honest scope): this kernel implements ONE governance-selected, versioned, bounded
+structural profile, identified by :data:`ROUGHTIME_V19_STRUCTURAL_PROFILE_ID`
+(``"roughtime-v19-structural-bounded-k1.v1"``). The profile pins controller-owned maximum packet-byte,
+message-byte and pair-count limits (:data:`ROUGHTIME_V19_MAX_PACKET_BYTES`,
+:data:`ROUGHTIME_V19_MAX_MESSAGE_BYTES`, :data:`ROUGHTIME_V19_MAX_PAIR_COUNT`). These limits are:
+
+* implementation bounds, NOT draft-19 protocol limits (draft-19 defines no matching maximum);
+* NOT evidence that a larger input is malformed;
+* NOT proof of complete draft-19 structural coverage.
+
+Therefore NOT all structurally valid draft-19 messages are necessarily accepted. An input that exceeds a
+profile limit is reported as OUTSIDE THIS BOUNDED PROFILE (reasons ``profile_packet_bytes_exceeded`` /
+``profile_message_bytes_exceeded`` / ``profile_pair_count_exceeded``), never as generally invalid or
+malformed Roughtime. No consumer may convert a profile-limit rejection into a protocol-invalid claim, and no
+consumer may infer that an over-limit input is malformed. Exact raw replay of arbitrary provenance bytes
+beyond this profile is UNSUPPORTED; a broader parser or replay profile requires separate governance.
+
+Defensible rationale for the bounded profile: it keeps memory and CPU deterministically bounded, uses no
+recursion, runs in O(N), and caps header allocation at ``8 * 64 = 512`` bytes under the profile. The profile
+is intentionally narrow and separately versioned.
+
+Scope — what this kernel does within the bounded profile:
 
 * validates the outer packet frame (8-byte ``ROUGHTIM`` magic + little-endian ``uint32`` declared message
   length + exactly one message, with no trailing and no missing bytes);
@@ -16,6 +37,13 @@ Scope — what this kernel does:
 * validates tags (four raw bytes, one to four leading uppercase ASCII letters followed only by zero
   padding, ordered strictly ascending by little-endian ``uint32`` value, never duplicated);
 * preserves every value as exact opaque bytes and preserves the exact original packet and message bytes.
+
+Self-validating artifacts and closed error contract: the public parsed-artifact classes
+(:class:`RoughtimeV19Field`, :class:`RoughtimeV19Message`, :class:`RoughtimeV19Packet`) self-validate direct
+construction against a primitive re-decode of their own raw bytes, so a directly constructed artifact can
+never represent parsed fields that differ from its exact raw bytes. :class:`RoughtimeV19KernelError` accepts
+only an exact :class:`RoughtimeV19KernelReason` member (a wrong constructor input raises a plain built-in
+``TypeError`` before any attribute of the argument is read), and is immutable after construction.
 
 Scope boundary — what this kernel is NOT:
 
@@ -31,17 +59,15 @@ Scope boundary — what this kernel is NOT:
 * it has no readiness or connector effect and triggers no readiness or connector transition.
 
 The only claim this kernel supports is that it accepts and rejects deterministic synthetic byte sequences
-according to the reviewed draft-19 framing and generic-message rules; it makes no stronger claim.
+according to the reviewed draft-19 framing and generic-message rules, within this bounded profile; it makes
+no stronger claim.
 
 Trust boundary: both public parsers accept exact built-in ``bytes`` only and reject ``bytearray``,
 ``memoryview``, ``bytes`` subclasses, and every non-bytes value before any other operation. No caller value
 participates in any indexing, slicing, arithmetic, or comparison until its exact type is proven, and every
 domain failure raises :class:`RoughtimeV19KernelError` carrying exactly one closed member of
 :class:`RoughtimeV19KernelReason`; no raw ``ValueError``/``IndexError``/``TypeError``/``OverflowError`` is
-ever leaked.
-
-The size and pair-count limits below are controller-owned implementation-defense ceilings, not protocol
-facts.
+ever leaked, and no ``BaseException``/``KeyboardInterrupt``/``SystemExit``/``GeneratorExit`` is caught.
 
 Versioned specification: https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-19
 Immutable official source snapshot reviewed: ietf-wg-ntp/draft-roughtime @
@@ -66,42 +92,45 @@ _OFFSET_ALIGNMENT = 4  # draft-19 offsets are multiples of four bytes
 _UPPER_A = 0x41  # "A"
 _UPPER_Z = 0x5A  # "Z"
 
-# --- Controller-owned defensive ceilings (implementation defense, NOT protocol constants) ----------------
-# Roughtime draft-19 defines NO fixed maximum message size, and provenance proof bytes are OFFLINE INPUTS
-# to later machine-time verification: they may arrive over TCP or from a stored capture file, not only as a
-# single unfragmented UDP datagram. These ceilings are therefore deliberately NOT tied to any network MTU;
-# tying them to a 1500-byte Ethernet MTU would reject structurally valid draft-19 packets (for example a
-# response carrying a large Merkle PATH plus a version list, on the order of ~1.5 KB). They are memory and
-# denial-of-service bounds chosen generously above any realistic single draft-19 request (padded to
-# >= 1024 bytes) or response, while still tightly bounding allocation and O(N) work. The message ceiling is
-# the packet ceiling minus the 12-byte outer frame. Realistic messages carry only a handful of top-level
-# tags, so 64 is a generous pair-count ceiling that bounds header allocation to 8 * 64 = 512 bytes. No
-# caller may override these.
-_MAX_PACKET_BYTES = 4096  # 4 KiB — generous non-MTU structural ceiling for offline provenance input bytes
-_MAX_MESSAGE_BYTES = _MAX_PACKET_BYTES - _PACKET_FRAME_BYTES  # 4084
-_MAX_PAIR_COUNT = 64
+# --- Bounded structural profile (governance-selected, versioned) -----------------------------------------
+# These are controller-owned implementation bounds for ONE narrow, separately versioned structural profile.
+# They are NOT draft-19 protocol limits and are NOT evidence that a larger input is malformed: draft-19
+# defines no matching maximum, and an over-limit input is reported as OUTSIDE THIS PROFILE, never as invalid
+# Roughtime. The bounds exist only to keep memory and CPU deterministically bounded (no recursion, O(N),
+# header allocation capped at 8 * 64 = 512 bytes under the profile). A broader parser/replay profile, and
+# exact raw replay of arbitrary provenance bytes beyond this profile, require separate governance.
+ROUGHTIME_V19_STRUCTURAL_PROFILE_ID = "roughtime-v19-structural-bounded-k1.v1"
+ROUGHTIME_V19_MAX_PACKET_BYTES = 4096
+ROUGHTIME_V19_MAX_MESSAGE_BYTES = ROUGHTIME_V19_MAX_PACKET_BYTES - _PACKET_FRAME_BYTES  # 4084
+ROUGHTIME_V19_MAX_PAIR_COUNT = 64
 
-# Minimums that make a frame/message structurally decodable.
+# Structural minimums that make a frame/message decodable (not profile ceilings).
 _MIN_MESSAGE_BYTES = _UINT32_BYTES  # the mandatory 4-byte pair-count word
 _MIN_PACKET_BYTES = _PACKET_FRAME_BYTES  # magic + declared length
 
+# Fixed repository-owned messages for the closed error constructor.
+_ERROR_REASON_TYPE_MESSAGE = "RoughtimeV19KernelError requires a RoughtimeV19KernelReason member"
+_ERROR_IMMUTABLE_MESSAGE = "RoughtimeV19KernelError is immutable after construction"
+_ERROR_LOCKED_ATTRS = frozenset({"reason", "_reason", "args"})
+
 
 class RoughtimeV19KernelReason(str, Enum):
-    """Closed, exact inventory of deterministic structural-parse failure reasons.
+    """Closed, exact inventory of deterministic structural-parse and artifact-validation reasons.
 
     Values are repository-standard lowercase identifiers; the member set is closed and never extended at
-    runtime.
+    runtime. The three ``profile_*`` reasons denote an input that is OUTSIDE THIS BOUNDED PROFILE, not an
+    input proven to be malformed draft-19.
     """
 
     WRONG_INPUT_TYPE = "wrong_input_type"
     PACKET_TOO_SHORT = "packet_too_short"
-    PACKET_TOO_LARGE = "packet_too_large"
+    PROFILE_PACKET_BYTES_EXCEEDED = "profile_packet_bytes_exceeded"
     PACKET_MAGIC_MISMATCH = "packet_magic_mismatch"
     PACKET_MESSAGE_LENGTH_MISMATCH = "packet_message_length_mismatch"
     MESSAGE_TOO_SHORT = "message_too_short"
-    MESSAGE_TOO_LARGE = "message_too_large"
+    PROFILE_MESSAGE_BYTES_EXCEEDED = "profile_message_bytes_exceeded"
     PAIR_COUNT_ZERO = "pair_count_zero"
-    PAIR_COUNT_EXCEEDS_LIMIT = "pair_count_exceeds_limit"
+    PROFILE_PAIR_COUNT_EXCEEDED = "profile_pair_count_exceeded"
     HEADER_TRUNCATED = "header_truncated"
     OFFSET_UNALIGNED = "offset_unaligned"
     OFFSET_ORDER_INVALID = "offset_order_invalid"
@@ -109,51 +138,40 @@ class RoughtimeV19KernelReason(str, Enum):
     TAG_INVALID = "tag_invalid"
     TAG_ORDER_INVALID = "tag_order_invalid"
     TAG_DUPLICATE = "tag_duplicate"
+    ARTIFACT_FIELD_INCONSISTENT = "artifact_field_inconsistent"
+    ARTIFACT_MESSAGE_INCONSISTENT = "artifact_message_inconsistent"
+    ARTIFACT_PACKET_INCONSISTENT = "artifact_packet_inconsistent"
 
 
 class RoughtimeV19KernelError(RuntimeError):
-    """Raised for every Roughtime draft-19 structural-parse failure, carrying exactly one closed reason."""
+    """Raised for every Roughtime structural-parse or artifact-validation failure, carrying one closed reason.
+
+    The constructor accepts ONLY an exact :class:`RoughtimeV19KernelReason` member. Any other argument raises
+    a plain built-in ``TypeError`` before any attribute of the argument (in particular ``.value``) is read,
+    so a hostile ``.value`` property or Enum-like substitute can never run. Once constructed the error is
+    immutable: ``reason`` is read-only, its backing storage cannot be substituted, ``args`` cannot be
+    replaced, and ``str(error)`` is always exactly ``reason.value``.
+    """
 
     def __init__(self, reason: RoughtimeV19KernelReason) -> None:
-        self.reason = reason
+        if type(reason) is not RoughtimeV19KernelReason:
+            raise TypeError(_ERROR_REASON_TYPE_MESSAGE)
+        object.__setattr__(self, "_reason", reason)
         super().__init__(reason.value)
 
+    @property
+    def reason(self) -> RoughtimeV19KernelReason:
+        return self._reason
 
-@dataclass(frozen=True)
-class RoughtimeV19Field:
-    """One parsed tag/value pair.
+    def __setattr__(self, name: str, value: object) -> None:
+        if name in _ERROR_LOCKED_ATTRS:
+            raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
+        super().__setattr__(name, value)
 
-    ``tag`` is the exact four raw tag bytes, ``tag_uint32`` is their little-endian numeric interpretation
-    (the value that defines tag ordering), and ``value`` is the exact opaque value bytes. Nested Roughtime
-    messages inside ``value`` are never recursively interpreted in K1.
-    """
-
-    tag: bytes
-    tag_uint32: int
-    value: bytes
-
-
-@dataclass(frozen=True)
-class RoughtimeV19Message:
-    """A parsed generic Roughtime message.
-
-    ``fields`` are the ``pair_count`` tag/value pairs in canonical wire order and ``raw`` is the exact
-    original message bytes.
-    """
-
-    pair_count: int
-    fields: tuple[RoughtimeV19Field, ...]
-    raw: bytes
-
-
-@dataclass(frozen=True)
-class RoughtimeV19Packet:
-    """A parsed Roughtime outer packet: magic, declared message length, the parsed message, and raw bytes."""
-
-    magic: bytes
-    message_length: int
-    message: RoughtimeV19Message
-    raw: bytes
+    def __delattr__(self, name: str) -> None:
+        if name in _ERROR_LOCKED_ATTRS:
+            raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
+        super().__delattr__(name)
 
 
 def _tag_is_canonical(tag: bytes) -> bool:
@@ -175,27 +193,29 @@ def _tag_is_canonical(tag: bytes) -> bool:
     return True
 
 
-def parse_roughtime_v19_message(message_bytes: bytes) -> RoughtimeV19Message:
-    """Parse and structurally validate a generic Roughtime draft-19 message.
+def _decode_message_primitive(
+    message_bytes: bytes,
+) -> tuple[int, tuple[tuple[bytes, int, bytes], ...]]:
+    """Validate ``message_bytes`` under the bounded profile and return primitive components.
 
-    Accepts exact built-in ``bytes`` only. Every structural violation raises
-    :class:`RoughtimeV19KernelError` with a closed :class:`RoughtimeV19KernelReason`. Values are preserved
-    as exact opaque bytes; no tag is semantically interpreted.
+    Returns ``(pair_count, fields_primitive)`` where each ``fields_primitive`` element is a
+    ``(tag_bytes, tag_uint32, value_bytes)`` triple. Constructs no public artifact and never recurses through
+    a public constructor. Raises :class:`RoughtimeV19KernelError` on any structural or profile violation.
     """
     if type(message_bytes) is not bytes:
         raise RoughtimeV19KernelError(RoughtimeV19KernelReason.WRONG_INPUT_TYPE)
 
     length = len(message_bytes)
-    if length > _MAX_MESSAGE_BYTES:
-        raise RoughtimeV19KernelError(RoughtimeV19KernelReason.MESSAGE_TOO_LARGE)
+    if length > ROUGHTIME_V19_MAX_MESSAGE_BYTES:
+        raise RoughtimeV19KernelError(RoughtimeV19KernelReason.PROFILE_MESSAGE_BYTES_EXCEEDED)
     if length < _MIN_MESSAGE_BYTES:
         raise RoughtimeV19KernelError(RoughtimeV19KernelReason.MESSAGE_TOO_SHORT)
 
     pair_count = int.from_bytes(message_bytes[0:_UINT32_BYTES], "little")
     if pair_count < 1:
         raise RoughtimeV19KernelError(RoughtimeV19KernelReason.PAIR_COUNT_ZERO)
-    if pair_count > _MAX_PAIR_COUNT:
-        raise RoughtimeV19KernelError(RoughtimeV19KernelReason.PAIR_COUNT_EXCEEDS_LIMIT)
+    if pair_count > ROUGHTIME_V19_MAX_PAIR_COUNT:
+        raise RoughtimeV19KernelError(RoughtimeV19KernelReason.PROFILE_PAIR_COUNT_EXCEEDED)
 
     # Header layout: one uint32 pair-count word, then N-1 offset words, then N tag words (== 8 * N bytes).
     count_field_bytes = _UINT32_BYTES
@@ -208,7 +228,9 @@ def parse_roughtime_v19_message(message_bytes: bytes) -> RoughtimeV19Message:
     values = message_bytes[header_length:]
     values_length = len(values)
 
-    # Decode and validate the N-1 explicit offsets. The first value's offset is implicitly zero.
+    # Decode and validate the N-1 explicit offsets. The first value's offset is implicitly zero. Only the
+    # explicit offsets must be four-byte aligned; the final value (after the last explicit offset) may be any
+    # length.
     offsets_start = count_field_bytes
     boundaries = [0]
     previous = 0
@@ -225,7 +247,9 @@ def parse_roughtime_v19_message(message_bytes: bytes) -> RoughtimeV19Message:
         previous = offset
     boundaries.append(values_length)
 
-    # Decode and validate the N tags (canonical form first, then strict little-endian ordering).
+    # Decode and validate the N tags (canonical form first, then strict little-endian ordering). Strict
+    # wire-order validation reaches the first descending relationship before a non-adjacent duplicate could
+    # be treated as an adjacent duplicate: a non-adjacent duplicate therefore surfaces as TAG_ORDER_INVALID.
     tags_start = offsets_start + offsets_bytes
     tags = []
     tag_values = []
@@ -243,27 +267,25 @@ def parse_roughtime_v19_message(message_bytes: bytes) -> RoughtimeV19Message:
         if tag_values[index] < tag_values[index - 1]:
             raise RoughtimeV19KernelError(RoughtimeV19KernelReason.TAG_ORDER_INVALID)
 
-    fields = []
-    for index in range(pair_count):
-        value = values[boundaries[index] : boundaries[index + 1]]
-        fields.append(RoughtimeV19Field(tag=tags[index], tag_uint32=tag_values[index], value=value))
+    fields_primitive = tuple(
+        (tags[index], tag_values[index], values[boundaries[index] : boundaries[index + 1]])
+        for index in range(pair_count)
+    )
+    return pair_count, fields_primitive
 
-    return RoughtimeV19Message(pair_count=pair_count, fields=tuple(fields), raw=message_bytes)
 
+def _decode_packet_frame_primitive(packet_bytes: bytes) -> tuple[bytes, int, bytes]:
+    """Validate the outer frame under the bounded profile; return ``(magic, declared_length, message_bytes)``.
 
-def parse_roughtime_v19_packet(packet_bytes: bytes) -> RoughtimeV19Packet:
-    """Parse and structurally validate a Roughtime draft-19 outer packet.
-
-    Accepts exact built-in ``bytes`` only. Validates the magic and the declared message length, then parses
-    the exact enclosed message bytes with :func:`parse_roughtime_v19_message`. Every structural violation
-    raises :class:`RoughtimeV19KernelError` with a closed :class:`RoughtimeV19KernelReason`.
+    Does not parse the enclosed message and constructs no public artifact. Raises
+    :class:`RoughtimeV19KernelError` on any structural or profile violation.
     """
     if type(packet_bytes) is not bytes:
         raise RoughtimeV19KernelError(RoughtimeV19KernelReason.WRONG_INPUT_TYPE)
 
     length = len(packet_bytes)
-    if length > _MAX_PACKET_BYTES:
-        raise RoughtimeV19KernelError(RoughtimeV19KernelReason.PACKET_TOO_LARGE)
+    if length > ROUGHTIME_V19_MAX_PACKET_BYTES:
+        raise RoughtimeV19KernelError(RoughtimeV19KernelReason.PROFILE_PACKET_BYTES_EXCEEDED)
     if length < _MIN_PACKET_BYTES:
         raise RoughtimeV19KernelError(RoughtimeV19KernelReason.PACKET_TOO_SHORT)
 
@@ -274,10 +296,154 @@ def parse_roughtime_v19_packet(packet_bytes: bytes) -> RoughtimeV19Packet:
     message_bytes = packet_bytes[_PACKET_FRAME_BYTES:]
     if declared_length != len(message_bytes):
         raise RoughtimeV19KernelError(RoughtimeV19KernelReason.PACKET_MESSAGE_LENGTH_MISMATCH)
+    return _ROUGHTIME_MAGIC, declared_length, message_bytes
 
+
+@dataclass(frozen=True)
+class RoughtimeV19Field:
+    """One parsed tag/value pair, self-validating on direct construction.
+
+    ``tag`` is the exact four raw tag bytes, ``tag_uint32`` is their little-endian numeric interpretation
+    (the value that defines tag ordering), and ``value`` is the exact opaque value bytes. Nested Roughtime
+    messages inside ``value`` are never recursively interpreted in K1. Direct construction with an
+    inconsistent, non-exact-type, or non-canonical component raises
+    :class:`RoughtimeV19KernelError` (``artifact_field_inconsistent``).
+    """
+
+    tag: bytes
+    tag_uint32: int
+    value: bytes
+
+    def __post_init__(self) -> None:
+        if type(self.tag) is not bytes:
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_FIELD_INCONSISTENT)
+        if len(self.tag) != _UINT32_BYTES:
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_FIELD_INCONSISTENT)
+        if not _tag_is_canonical(self.tag):
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_FIELD_INCONSISTENT)
+        if type(self.tag_uint32) is not int:  # exact int; bool (a subclass) is rejected
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_FIELD_INCONSISTENT)
+        if self.tag_uint32 != int.from_bytes(self.tag, "little"):
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_FIELD_INCONSISTENT)
+        if type(self.value) is not bytes:
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_FIELD_INCONSISTENT)
+
+
+@dataclass(frozen=True)
+class RoughtimeV19Message:
+    """A parsed generic Roughtime message, self-validating on direct construction.
+
+    ``fields`` are the ``pair_count`` tag/value pairs in canonical wire order and ``raw`` is the exact
+    original message bytes. Direct construction re-decodes ``raw`` under the bounded profile and requires the
+    reparsed pair count, field count and every ``(tag, tag_uint32, value)`` to match the supplied fields
+    exactly; any mismatch, non-exact-type, or forged/subclassed field raises
+    :class:`RoughtimeV19KernelError` (``artifact_message_inconsistent``). A directly constructed message can
+    therefore never represent parsed fields that differ from its exact raw bytes.
+    """
+
+    pair_count: int
+    fields: tuple[RoughtimeV19Field, ...]
+    raw: bytes
+
+    def __post_init__(self) -> None:
+        if type(self.pair_count) is not int:  # exact int; bool is rejected
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_MESSAGE_INCONSISTENT)
+        if type(self.fields) is not tuple:  # exact tuple; list and tuple subclasses are rejected
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_MESSAGE_INCONSISTENT)
+        for field in self.fields:
+            if type(field) is not RoughtimeV19Field:  # exact type; forgeries and subclasses rejected
+                raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_MESSAGE_INCONSISTENT)
+        if type(self.raw) is not bytes:
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_MESSAGE_INCONSISTENT)
+        try:
+            reparsed_count, reparsed_fields = _decode_message_primitive(self.raw)
+        except RoughtimeV19KernelError:
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_MESSAGE_INCONSISTENT) from None
+        if reparsed_count != self.pair_count:
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_MESSAGE_INCONSISTENT)
+        if len(reparsed_fields) != len(self.fields):
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_MESSAGE_INCONSISTENT)
+        for index in range(len(self.fields)):
+            supplied = self.fields[index]
+            tag, tag_uint32, value = reparsed_fields[index]
+            if supplied.tag != tag or supplied.tag_uint32 != tag_uint32 or supplied.value != value:
+                raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_MESSAGE_INCONSISTENT)
+
+
+@dataclass(frozen=True)
+class RoughtimeV19Packet:
+    """A parsed Roughtime outer packet, self-validating on direct construction.
+
+    Direct construction re-decodes the outer frame of ``raw`` under the bounded profile and requires the
+    magic, the declared length, and the embedded message bytes (which must equal ``message.raw``) to match
+    the supplied components exactly, and requires a primitive re-decode of the embedded message bytes to
+    match the supplied message artifact exactly; any mismatch, non-exact-type, or forged/subclassed message
+    raises :class:`RoughtimeV19KernelError` (``artifact_packet_inconsistent``).
+    """
+
+    magic: bytes
+    message_length: int
+    message: RoughtimeV19Message
+    raw: bytes
+
+    def __post_init__(self) -> None:
+        if type(self.magic) is not bytes:
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_PACKET_INCONSISTENT)
+        if self.magic != _ROUGHTIME_MAGIC:
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_PACKET_INCONSISTENT)
+        if type(self.message_length) is not int:  # exact int; bool is rejected
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_PACKET_INCONSISTENT)
+        if type(self.message) is not RoughtimeV19Message:  # exact type; forgeries and subclasses rejected
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_PACKET_INCONSISTENT)
+        if type(self.raw) is not bytes:
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_PACKET_INCONSISTENT)
+        try:
+            _, declared_length, message_bytes = _decode_packet_frame_primitive(self.raw)
+        except RoughtimeV19KernelError:
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_PACKET_INCONSISTENT) from None
+        if declared_length != self.message_length:
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_PACKET_INCONSISTENT)
+        if message_bytes != self.message.raw:
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_PACKET_INCONSISTENT)
+        try:
+            reparsed_count, reparsed_fields = _decode_message_primitive(message_bytes)
+        except RoughtimeV19KernelError:
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_PACKET_INCONSISTENT) from None
+        if reparsed_count != self.message.pair_count:
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_PACKET_INCONSISTENT)
+        if len(reparsed_fields) != len(self.message.fields):
+            raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_PACKET_INCONSISTENT)
+        for index in range(len(self.message.fields)):
+            supplied = self.message.fields[index]
+            tag, tag_uint32, value = reparsed_fields[index]
+            if supplied.tag != tag or supplied.tag_uint32 != tag_uint32 or supplied.value != value:
+                raise RoughtimeV19KernelError(RoughtimeV19KernelReason.ARTIFACT_PACKET_INCONSISTENT)
+
+
+def parse_roughtime_v19_message(message_bytes: bytes) -> RoughtimeV19Message:
+    """Parse and structurally validate a generic Roughtime message within the bounded profile.
+
+    Accepts exact built-in ``bytes`` only. Over-limit inputs are rejected as OUTSIDE THIS PROFILE, never as
+    malformed Roughtime. Values are preserved as exact opaque bytes; no tag is semantically interpreted.
+    """
+    pair_count, fields_primitive = _decode_message_primitive(message_bytes)
+    fields = tuple(
+        RoughtimeV19Field(tag=tag, tag_uint32=tag_uint32, value=value) for tag, tag_uint32, value in fields_primitive
+    )
+    return RoughtimeV19Message(pair_count=pair_count, fields=fields, raw=message_bytes)
+
+
+def parse_roughtime_v19_packet(packet_bytes: bytes) -> RoughtimeV19Packet:
+    """Parse and structurally validate a Roughtime outer packet within the bounded profile.
+
+    Accepts exact built-in ``bytes`` only. Validates the magic and declared message length, then parses the
+    exact enclosed message bytes with :func:`parse_roughtime_v19_message`. Over-limit inputs are rejected as
+    OUTSIDE THIS PROFILE, never as malformed Roughtime.
+    """
+    magic, declared_length, message_bytes = _decode_packet_frame_primitive(packet_bytes)
     message = parse_roughtime_v19_message(message_bytes)
     return RoughtimeV19Packet(
-        magic=_ROUGHTIME_MAGIC,
+        magic=magic,
         message_length=declared_length,
         message=message,
         raw=packet_bytes,
@@ -285,6 +451,10 @@ def parse_roughtime_v19_packet(packet_bytes: bytes) -> RoughtimeV19Packet:
 
 
 __all__ = [
+    "ROUGHTIME_V19_MAX_MESSAGE_BYTES",
+    "ROUGHTIME_V19_MAX_PACKET_BYTES",
+    "ROUGHTIME_V19_MAX_PAIR_COUNT",
+    "ROUGHTIME_V19_STRUCTURAL_PROFILE_ID",
     "RoughtimeV19Field",
     "RoughtimeV19KernelError",
     "RoughtimeV19KernelReason",
