@@ -862,8 +862,19 @@ def _is_canonical_or_empty_string(value: object) -> bool:
     return type(value) is str and (value == "" or _is_plain_non_empty_string(value))
 
 
+# Deterministic canonical integer magnitude bound, checked via ``bit_length()`` (never string conversion) so
+# it is independent of Python's mutable ``sys.set_int_max_str_digits()`` state. Every legitimate current
+# packet/source/count integer (unix timestamps, ports, bit/byte counts, protocol counts) fits comfortably
+# within 63 bits; a hostile exact integer beyond this bound (for example ``10**100000``) is rejected here
+# instead of surviving to a later canonical-JSON serialization boundary where it would raise a raw
+# ``ValueError`` from CPython's int-to-string conversion guard.
+_MAX_CANONICAL_INT_BIT_LENGTH = 63
+
+
 def _is_exact_int(value: object) -> bool:
-    return type(value) is int and not isinstance(value, bool)
+    """Exact built-in ``int`` (never ``bool``) within the deterministic canonical magnitude bound."""
+
+    return type(value) is int and not isinstance(value, bool) and value.bit_length() <= _MAX_CANONICAL_INT_BIT_LENGTH
 
 
 def _is_hex64_string(value: object) -> bool:
@@ -1130,7 +1141,14 @@ def _normalize_plain_packet(value: object, *, _depth: int = 0, _ancestors: tuple
             raise MachineTimeSourceRegistryError(_reason("packet_cycle_detected"))
         next_ancestors = (*_ancestors, marker)
         return [_normalize_plain_packet(item, _depth=_depth + 1, _ancestors=next_ancestors) for item in value]
-    if value_type is bool or value_type is int or value_type is str:
+    if value_type is bool or value_type is str:
+        return value
+    if value_type is int:
+        # Bound checked here (before any canonical serialization) via ``bit_length()``, never string
+        # conversion, so a hostile huge exact integer never reaches ``json.dumps`` and raises a raw
+        # ``ValueError`` from CPython's int-to-string conversion guard.
+        if value.bit_length() > _MAX_CANONICAL_INT_BIT_LENGTH:
+            raise MachineTimeSourceRegistryError(_reason("packet_int_magnitude_exceeded"))
         return value
     raise MachineTimeSourceRegistryError(_reason("packet_non_plain_value"))
 
@@ -1432,16 +1450,34 @@ def _validate_machine_time_source_registry_artifact(
     canonical_input = registry.canonical_input_packet_json
     if type(canonical_input) is not str or not _is_hex64_string(registry.canonical_input_packet_digest):
         _fail()
+    # Canonical JSON decoder boundary: translate every hostile-decoder failure mode (malformed JSON text,
+    # excessive nesting) into the deterministic malformed_artifact rejection instead of letting a raw
+    # ValueError/RecursionError escape this public boundary.
     try:
-        plain_input = _normalize_plain_packet(json.loads(canonical_input))
-    except (MachineTimeSourceRegistryError, ValueError):
+        decoded_input = json.loads(canonical_input)
+    except (ValueError, RecursionError):
         _fail()
-    recanonical = json.dumps(plain_input, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    # The carried canonical input must decode to an exact top-level dict before any evaluator access; a list,
+    # scalar, or other non-dict top-level value fails deterministically instead of reaching a ``.get()`` call
+    # on a non-mapping value.
+    if type(decoded_input) is not dict:
+        _fail()
+    try:
+        plain_input = _normalize_plain_packet(decoded_input)
+    except MachineTimeSourceRegistryError:
+        _fail()
+    try:
+        recanonical = json.dumps(plain_input, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    except (TypeError, ValueError, OverflowError):
+        _fail()
     if recanonical != canonical_input:
         _fail()
     if hashlib.sha256(recanonical.encode("utf-8")).hexdigest() != registry.canonical_input_packet_digest:
         _fail()
-    evaluation = _evaluate_plain_packet(json.loads(recanonical), registry.canonical_input_packet_digest)
+    # ``plain_input`` is already exact plain-JSON-compatible data (produced by ``_normalize_plain_packet``),
+    # so it is passed directly to the evaluator rather than performing a second, unguarded ``json.loads`` of
+    # the recanonicalized text.
+    evaluation = _evaluate_plain_packet(plain_input, registry.canonical_input_packet_digest)
     if (
         registry.status is not evaluation.status
         or registry.ready is not evaluation.ready
@@ -1529,7 +1565,8 @@ def _evaluate_plain_packet(verified: dict[str, object], digest: str) -> _PacketE
     Pure function shared by the builder AND both public-boundary validators, so a stored artifact's
     status/ready/reason_codes and every projected field can be reproved from its carried canonical input and
     can never drift from what that input actually evaluates to. ``verified`` MUST already be exact plain JSON
-    data (produced via ``json.loads`` of a canonical serialization of a normalized packet).
+    data: an exact ``dict`` produced either via ``json.loads`` of a canonical serialization of a normalized
+    packet, or directly via ``_normalize_plain_packet`` (both yield equivalent exact plain data).
     """
 
     hard: list[str] = []

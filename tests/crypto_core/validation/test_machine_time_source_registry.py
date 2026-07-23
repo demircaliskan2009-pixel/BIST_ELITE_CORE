@@ -1180,7 +1180,8 @@ def test_correction_authority_approved_evidence_is_exact() -> None:
     assert evidence["cloudflare_official_ecosystem_description"] == "google-roughtime-and-ietf-draft08"
     assert evidence["deployed_endpoint"] == "udp://roughtime.cloudflare.com:2003"
     assert evidence["published_root_key_base64"] == "0GD7c3yP8xEc4Zl2zeuN2SlLvDVVocjsPSL8/Rl/7zg="
-    # No deployed-version contract is published, and a timeout observation proves no deployed version.
+    # No deployed-version contract is published; a timeout observation neither proves nor disproves any
+    # deployed protocol version.
     assert evidence["deployed_protocol_version_contract_published"] is False
     assert evidence["timeout_observation_proves_deployed_protocol_version"] is False
     # The draft support recorded here is the official SOURCE LIBRARY's documented support, explicitly not a
@@ -1266,6 +1267,540 @@ def test_superseded_packet_content_fails_current_admission() -> None:
         source["verification_profile_id"] = "roughtime-nonce-chain-adapter-required.v1"
 
     _reject(restore_superseded, "packet_digest_mismatch")
+
+
+# --------------------------------------------------------------------------------------------------
+# P2-1 repair: exact complete predecessor packet reconstruction + forgery-defense proof
+#
+# ``_PREDECESSOR_CONTROLLER_PACKET`` is the COMPLETE embedded controller packet exactly as merged in the
+# predecessor revision (base commit 84b1788ff917028c5c85b9b4224d0c2e1ae6cea1, packet id
+# mt3-dr-batch-b-2026-07-20.controller-v1). It is committed test-only literal data -- never reconstructed via
+# git/subprocess/network at test time -- so this regression is fully deterministic and hermetic.
+# --------------------------------------------------------------------------------------------------
+
+_PREDECESSOR_CONTROLLER_PACKET: dict[str, object] = {
+    "archive_policy": {
+        "acquisition_endpoint_metadata_required": True,
+        "acquisition_time_is_proof": False,
+        "byte_preservation_rule": "preserve_exact_original_bytes_no_reencoding_for_verification",
+        "certificate_chain_required_for_x509_cms": True,
+        "citation_ids": ["RFC3161", "RFC5816", "OPENTS-CLIENT", "ROUGHTIME-DRAFT-19", "RFC4648", "RFC7468"],
+        "content_type_required_when_defined": True,
+        "digest_algorithm": "sha256",
+        "display_encoding": "lowercase_hex_for_opaque_bytes__rfc7468_textual_encoding_only_for_pkix_pkcs_cms_text_artifacts",
+        "network_or_chain_id_required_when_defined": True,
+        "offline_reverification_required": True,
+        "policy_identifier_required_for_rfc3161": True,
+        "profile_id": "machine-time-proof-archive.v1",
+        "protocol_version_required": True,
+        "public_key_snapshot_required_when_keyed_signature_protocol": True,
+        "raw_request_bytes_required_when_protocol_has_request": True,
+        "raw_response_or_proof_bytes_required": True,
+        "request_nonce_required_for_rfc3161_by_controller": True,
+        "request_nonce_required_for_roughtime_adapter": True,
+        "revocation_snapshot_required_for_x509_cms": True,
+        "round_or_sequence_required_when_defined": True,
+        "signature_algorithm_required_when_signed": True,
+        "source_id_required": True,
+        "trust_anchor_snapshot_required_for_x509_cms": True,
+        "verification_software_metadata_required": True,
+    },
+    "citations": {
+        "BITCOIN-GETBLOCKCHAININFO": "https://developer.bitcoin.org/reference/rpc/getblockchaininfo.html",
+        "BITCOIN-GETBLOCKHEADER": "https://developer.bitcoin.org/reference/rpc/getblockheader.html",
+        "CLOUDFLARE-ROUGHTIME": "https://developers.cloudflare.com/time-services/roughtime/",
+        "CLOUDFLARE-ROUGHTIME-USAGE": "https://developers.cloudflare.com/time-services/roughtime/usage/",
+        "CURBY-API": "https://random.colorado.edu/api-docs",
+        "CURBY-CONCEPTS": "https://random.colorado.edu/concepts",
+        "CURBY-HOME": "https://random.colorado.edu/",
+        "CURBY-NETWORK": "https://random.colorado.edu/concepts/curby-network",
+        "CURBY-USAGE": "https://random.colorado.edu/usage/usage",
+        "DERIBIT-GET-TIME": "https://docs.deribit.com/api-reference/supporting/public-get_time",
+        "DIGICERT-TSA": "https://knowledge.digicert.com/general-information/rfc3161-compliant-time-stamp-authority-server",
+        "DIGICERT-TSA-TROUBLESHOOT": "https://knowledge.digicert.com/solution/troubleshooting-timestamping-problems",
+        "DRAND-DEVELOPER": "https://docs.drand.love/developer/",
+        "DRAND-HTTP-API": "https://docs.drand.love/developer/API-v2/drand-http-api/",
+        "DRAND-QUICKNET-ANNOUNCEMENT": "https://docs.drand.love/blog/2023/10/16/quicknet-is-live/",
+        "DRAND-SPEC": "https://docs.drand.love/docs/specification/",
+        "NIST-BEACON-20": "https://csrc.nist.gov/Projects/interoperable-randomness-beacons/beacon-20",
+        "NIST-IR8213-DRAFT": "https://csrc.nist.gov/pubs/ir/8213/ipd",
+        "OPENTS-CLIENT": "https://github.com/opentimestamps/opentimestamps-client",
+        "OPENTS-HOME": "https://opentimestamps.org/",
+        "RFC3161": "https://www.rfc-editor.org/info/rfc3161/",
+        "RFC4648": "https://www.rfc-editor.org/info/rfc4648/",
+        "RFC5816": "https://www.rfc-editor.org/info/rfc5816/",
+        "RFC7468": "https://www.rfc-editor.org/info/rfc7468/",
+        "RFC9162": "https://www.rfc-editor.org/rfc/rfc9162.html",
+        "ROUGHTIME-DRAFT-19": "https://datatracker.ietf.org/doc/draft-ietf-ntp-roughtime/",
+        "SIGSTORE-BUNDLE": "https://docs.sigstore.dev/about/bundle/",
+        "SIGSTORE-REKOR-OVERVIEW": "https://docs.sigstore.dev/logging/overview/",
+        "SIGSTORE-THREAT-MODEL": "https://docs.sigstore.dev/about/threat-model/",
+    },
+    "controller_decisions": {
+        "all_operational_use_approved": False,
+        "all_quorum_countable": False,
+        "count_only_include_recommendations_for_role_totals": True,
+        "exchange_time_advisory_only": True,
+        "generic_ct_machine_time_use_excluded": True,
+        "generic_sigstore_rekor_machine_time_use_unproven_or_excluded": True,
+        "machine_time_origin_proven": False,
+        "not_after_class_count_supported": 2,
+        "not_after_operational_quorum_ready": False,
+        "not_before_class_count_supported": 3,
+        "not_before_operational_quorum_ready": False,
+        "opentimestamps_finality_policy_deferred_to_mt4": True,
+        "operational_quorum_ready": False,
+        "registry_ready_is_structural_only": True,
+        "rfc3161_nonce_required_by_controller": True,
+        "roughtime_adapter_deferred_to_mt4": True,
+        "roughtime_not_after_countable_without_adapter": False,
+        "timestamp_origin_proven": False,
+        "unverifiable_facts_excluded": True,
+    },
+    "excluded_or_unproven": [
+        {
+            "citation_ids": ["RFC9162"],
+            "reason": "Official CT specs remain certificate/precertificate logging with accepted trust anchors, not a provider-neutral exact-artifact-digest notarization source for this project.",
+            "status": "EXCLUDE",
+            "subject": "certificate-transparency-v2-generic-machine-time-use",
+        },
+        {
+            "citation_ids": ["SIGSTORE-REKOR-OVERVIEW", "SIGSTORE-THREAT-MODEL", "SIGSTORE-BUNDLE"],
+            "reason": "Official Sigstore materials describe a transparency log for signed software metadata and inclusion proofs, but this repo would need extra signing, identity, trust-root, and archival assumptions that are not yet controller-neutral MT-3 constants.",
+            "status": "UNPROVEN_OR_EXCLUDE",
+            "subject": "sigstore-rekor-generic-machine-time-use",
+        },
+        {
+            "citation_ids": ["NIST-BEACON-20"],
+            "reason": "The service page documents certificate retrieval, but this report does not fetch a live certificate artifact or pin a current fingerprint.",
+            "status": "UNPROVEN",
+            "subject": "nist-beacon-v2-live_certificate_fingerprint",
+        },
+        {
+            "citation_ids": ["CURBY-HOME", "CURBY-USAGE"],
+            "reason": "The official pages document ongoing relocation/upgrade and proof-of-concept status, but not a finalized post-upgrade steady-state assurance.",
+            "status": "UNPROVEN",
+            "subject": "curby_current_post_upgrade_operational_steady_state",
+        },
+        {
+            "citation_ids": ["DIGICERT-TSA"],
+            "reason": "Available official KB material documents the TSA endpoint and chain, but not a full public-use SLA or rate-limit contract for this repo's purposes.",
+            "status": "UNPROVEN",
+            "subject": "digicert_public_use_sla_and_rate_limits",
+        },
+        {
+            "citation_ids": ["ROUGHTIME-DRAFT-19", "CLOUDFLARE-ROUGHTIME-USAGE"],
+            "reason": "The protocol signs time and includes request-root proofs, but the exact governed-artifact digest-binding adapter must be specified separately.",
+            "status": "DEFER_TO_MT4",
+            "subject": "roughtime_exact_artifact_digest_binding_format",
+        },
+        {
+            "citation_ids": ["RFC3161"],
+            "reason": "RFC 3161 defines nonce as optional; the registry records nonce use as a controller requirement, not as a protocol-mandatory provider fact.",
+            "status": "EXCLUDE",
+            "subject": "rfc3161_nonce_is_protocol_mandatory",
+        },
+        {
+            "citation_ids": ["OPENTS-HOME", "OPENTS-CLIENT", "BITCOIN-GETBLOCKHEADER", "BITCOIN-GETBLOCKCHAININFO"],
+            "reason": "The exact confirmation/finality policy required by this repository is not fixed by the MT-3 evidence packet and must be specified by the later verifier/adapter design.",
+            "status": "DEFER_TO_MT4",
+            "subject": "opentimestamps_confirmation_or_finality_threshold",
+        },
+        {
+            "citation_ids": ["ROUGHTIME-DRAFT-19", "CLOUDFLARE-ROUGHTIME-USAGE"],
+            "reason": "Authenticated rough time alone does not satisfy the repository's exact artifact-digest commitment contract; MT-4 must define and validate an adapter before any later eligibility review.",
+            "status": "EXCLUDE",
+            "subject": "roughtime_not_after_quorum_without_digest_adapter",
+        },
+    ],
+    "independence_policy": {
+        "advisory_classes": ["exchange-server-time"],
+        "correlated_failure_notes": [
+            "curby_network_docs_describe_drand_mixins",
+            "rfc3161_depends_on_x509_trust_and_revocation_evidence",
+            "opentimestamps_depends_on_bitcoin_consensus_time_and_block_header_availability",
+            "roughtime_depends_on_server_list_and_root_key_management",
+        ],
+        "counting_rule": "count_independent_source_classes_not_provider_endpoints",
+        "curby_drand_correlation_documented": True,
+        "deferred_adapter_classes": ["authenticated-rough-time"],
+        "invalid_double_counting_examples": [
+            "multiple_drand_relays",
+            "multiple_calendars_of_same_opentimestamps_trust_system",
+            "multiple_endpoints_under_one_tsa_program",
+            "unsigned_exchange_time_variants",
+        ],
+        "not_after_classes_supported": ["rfc3161-timestamp-authority", "bitcoin-anchored-blockchain-timestamping"],
+        "not_before_classes_supported": [
+            "distributed-threshold-randomness-beacon",
+            "signed-hash-chained-public-randomness-beacon",
+            "traceable-twine-randomness-beacon",
+        ],
+        "only_structurally_supported_not_after_pair": [
+            "rfc3161-timestamp-authority",
+            "bitcoin-anchored-blockchain-timestamping",
+        ],
+        "strongest_not_before_pair": [
+            "distributed-threshold-randomness-beacon",
+            "signed-hash-chained-public-randomness-beacon",
+        ],
+    },
+    "packet_id": "mt3-dr-batch-b-2026-07-20.controller-v1",
+    "packet_schema": "machine-time-source-research-packet.v1",
+    "provenance": {
+        "controller_normalization_id": "mt3-controller-normalization-2026-07-20.v1",
+        "controller_normalization_notes": [
+            "rfc3161_nonce_is_controller_required_not_protocol_mandatory",
+            "archive_requirements_are_protocol_conditional",
+            "roughtime_not_after_requires_mt4_digest_adapter",
+            "opentimestamps_finality_policy_deferred_to_mt4",
+            "production_software_documented_maturity_added",
+        ],
+        "raw_deep_research_packet_digest": "f8ec03f63d4b790213bc0eea5b5089159cbd3da73792e02ab8db8d7c5d34f9d7",
+        "raw_deep_research_packet_id": "mt3-dr-batch-b-2026-07-20.v2",
+    },
+    "researched_on": "2026-07-20",
+    "sources": [
+        {
+            "citation_ids": ["DRAND-DEVELOPER", "DRAND-HTTP-API", "DRAND-SPEC", "DRAND-QUICKNET-ANNOUNCEMENT"],
+            "fact_items": {
+                "chain_hash": "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971",
+                "genesis_unix_seconds": 1692803367,
+                "mainnet_documented": True,
+                "period_seconds": 3,
+                "public_key": "83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183c8c4b450b6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb5ed66304de9cf809bd274ca73bab4af5a6e9c76a4bc09e76eae8991ef5ece45a",
+                "scheme": "bls-unchained-g1-rfc9380",
+            },
+            "maturity": "mainnet-documented",
+            "official_endpoints": [
+                "https://api.drand.sh",
+                "https://api2.drand.sh",
+                "https://api3.drand.sh",
+                "https://drand.cloudflare.com",
+                "https://api.drand.secureweb3.com:6875",
+            ],
+            "operational_use_approved": False,
+            "proof_verified": False,
+            "protocol_version": "drand-http-api-v2-with-chain-info",
+            "provider_id": "league-of-entropy",
+            "quorum_countable": False,
+            "recommendation": "INCLUDE_NOT_BEFORE_CANDIDATE",
+            "recommended_role": "not_before",
+            "source_class": "distributed-threshold-randomness-beacon",
+            "source_id": "drand-quicknet-mainnet",
+            "source_reachable_proven": False,
+            "verification_profile_id": "drand-quicknet-signature-and-chain-info-offline.v1",
+        },
+        {
+            "citation_ids": ["NIST-BEACON-20", "NIST-IR8213-DRAFT"],
+            "fact_items": {
+                "certificate_api_available": True,
+                "output_bits": 512,
+                "period_seconds": 60,
+                "previous_value_hash_chained": True,
+                "sequence_numbered": True,
+                "signed": True,
+                "timestamped": True,
+            },
+            "maturity": "beta-draft",
+            "official_endpoints": [
+                "https://beacon.nist.gov/beacon/2.0",
+                "https://beacon.nist.gov/beacon/2.0/pulse/last",
+                "https://beacon.nist.gov/beacon/2.0/chain/last/pulse/last",
+                "https://beacon.nist.gov/beacon/2.0/certificate/<certificateIdentifier>",
+            ],
+            "operational_use_approved": False,
+            "proof_verified": False,
+            "protocol_version": "beacon-2.0-beta",
+            "provider_id": "nist",
+            "quorum_countable": False,
+            "recommendation": "INCLUDE_NOT_BEFORE_CANDIDATE",
+            "recommended_role": "not_before",
+            "source_class": "signed-hash-chained-public-randomness-beacon",
+            "source_id": "nist-randomness-beacon-v2-beta",
+            "source_reachable_proven": False,
+            "verification_profile_id": "nist-beacon-v2-pulse-signature-hash-chain-offline.v1",
+        },
+        {
+            "citation_ids": ["CURBY-HOME", "CURBY-API", "CURBY-USAGE", "CURBY-CONCEPTS", "CURBY-NETWORK"],
+            "fact_items": {
+                "client_verification_recommended": True,
+                "proof_of_concept_warning": True,
+                "public_api_documented": True,
+                "response_format": "dag-json",
+                "twine_traceability_documented": True,
+            },
+            "maturity": "proof-of-concept",
+            "official_endpoints": ["https://random.colorado.edu/api"],
+            "operational_use_approved": False,
+            "proof_verified": False,
+            "protocol_version": "curby-http-api-dag-json",
+            "provider_id": "university-of-colorado-boulder",
+            "quorum_countable": False,
+            "recommendation": "INCLUDE_NOT_BEFORE_CANDIDATE",
+            "recommended_role": "not_before",
+            "source_class": "traceable-twine-randomness-beacon",
+            "source_id": "curby-public-beacon",
+            "source_reachable_proven": False,
+            "verification_profile_id": "curby-twine-client-and-pulse-offline.v1",
+        },
+        {
+            "citation_ids": ["RFC3161", "RFC5816", "DIGICERT-TSA", "DIGICERT-TSA-TROUBLESHOOT"],
+            "fact_items": {
+                "cms_signed_token": True,
+                "controller_requires_nonce": True,
+                "esscertidv2_update_available": True,
+                "message_imprint_exact_digest_commitment": True,
+                "rfc3161_nonce_if_present_must_match": True,
+                "trust_material_download_documented": True,
+                "tsa_cert_rotation_documented_at_least_every_15_months": True,
+            },
+            "maturity": "commercial-service-documented",
+            "official_endpoints": ["http://timestamp.digicert.com"],
+            "operational_use_approved": False,
+            "proof_verified": False,
+            "protocol_version": "rfc3161-rfc5816-over-http",
+            "provider_id": "digicert",
+            "quorum_countable": False,
+            "recommendation": "INCLUDE_NOT_AFTER_CANDIDATE",
+            "recommended_role": "not_after",
+            "source_class": "rfc3161-timestamp-authority",
+            "source_id": "digicert-rfc3161-tsa",
+            "source_reachable_proven": False,
+            "verification_profile_id": "rfc3161-sha256-nonce-cms-pki-offline.v1",
+        },
+        {
+            "citation_ids": ["OPENTS-HOME", "OPENTS-CLIENT", "BITCOIN-GETBLOCKHEADER", "BITCOIN-GETBLOCKCHAININFO"],
+            "fact_items": {
+                "bitcoin_attestation_supported": True,
+                "calendar_mirroring_supported": True,
+                "calendar_rest_protocol_may_change": True,
+                "controller_finality_policy_deferred_to_mt4": True,
+                "format_stability_claimed": True,
+                "local_bitcoin_core_required_for_direct_verification": True,
+                "local_hashing_privacy": True,
+                "production_software_claimed": True,
+                "proof_file_extension": ".ots",
+            },
+            "maturity": "production-software-documented",
+            "official_endpoints": [
+                "https://opentimestamps.org/",
+                "https://alice.btc.calendar.opentimestamps.org",
+                "https://bob.btc.calendar.opentimestamps.org",
+                "https://finney.calendar.eternitywall.com",
+                "https://ots.btc.catallaxy.com",
+            ],
+            "operational_use_approved": False,
+            "proof_verified": False,
+            "protocol_version": "ots-proof-format-stable__calendar-rest-protocol-may-change",
+            "provider_id": "opentimestamps",
+            "quorum_countable": False,
+            "recommendation": "INCLUDE_NOT_AFTER_CANDIDATE",
+            "recommended_role": "not_after",
+            "source_class": "bitcoin-anchored-blockchain-timestamping",
+            "source_id": "opentimestamps-bitcoin",
+            "source_reachable_proven": False,
+            "verification_profile_id": "opentimestamps-bitcoin-commitment-offline.v1",
+        },
+        {
+            "citation_ids": ["ROUGHTIME-DRAFT-19", "CLOUDFLARE-ROUGHTIME", "CLOUDFLARE-ROUGHTIME-USAGE"],
+            "fact_items": {
+                "beta_notice": True,
+                "controller_digest_binding_adapter_required": True,
+                "controller_native_exact_artifact_digest_commitment_registered": False,
+                "merkle_root_proves_request_inclusion": True,
+                "root_key_base64": "0GD7c3yP8xEc4Zl2zeuN2SlLvDVVocjsPSL8/Rl/7zg=",
+                "root_key_may_change": True,
+                "signature_algorithm": "ed25519",
+                "signed_response_includes_request_nonce": True,
+                "uncertainty_radius_present": True,
+            },
+            "maturity": "beta-ietf-internet-draft",
+            "official_endpoints": ["udp://roughtime.cloudflare.com:2003"],
+            "operational_use_approved": False,
+            "proof_verified": False,
+            "protocol_version": "draft-ietf-ntp-roughtime-19",
+            "provider_id": "cloudflare",
+            "quorum_countable": False,
+            "recommendation": "DEFER_TO_MT4_ADAPTER",
+            "recommended_role": "not_after",
+            "source_class": "authenticated-rough-time",
+            "source_id": "cloudflare-roughtime-beta",
+            "source_reachable_proven": False,
+            "verification_profile_id": "roughtime-nonce-chain-adapter-required.v1",
+        },
+        {
+            "citation_ids": ["DERIBIT-GET-TIME"],
+            "fact_items": {
+                "controller_cryptographic_artifact_commitment_registered": False,
+                "controller_signature_registered": False,
+                "documented_use": "clock-skew-check",
+                "response_unit": "milliseconds-since-unix-epoch",
+            },
+            "maturity": "documented-public-api",
+            "official_endpoints": ["public/get_time"],
+            "operational_use_approved": False,
+            "proof_verified": False,
+            "protocol_version": "deribit-json-rpc-v2",
+            "provider_id": "deribit",
+            "quorum_countable": False,
+            "recommendation": "INCLUDE_ADVISORY_ONLY",
+            "recommended_role": "advisory_only",
+            "source_class": "exchange-server-time",
+            "source_id": "deribit-public-get-time",
+            "source_reachable_proven": False,
+            "verification_profile_id": "unsigned-exchange-time-advisory-only.v1",
+        },
+    ],
+}
+
+
+def test_predecessor_controller_packet_recomputes_to_superseded_digest() -> None:
+    encoded = json.dumps(
+        _PREDECESSOR_CONTROLLER_PACKET, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
+    )
+    assert hashlib.sha256(encoded.encode("utf-8")).hexdigest() == _SUPERSEDED_PACKET_DIGEST
+    assert _SUPERSEDED_PACKET_DIGEST != _PACKET_DIGEST
+
+
+def test_predecessor_controller_packet_rejected_as_current() -> None:
+    registry = build_machine_time_source_registry(packet=copy.deepcopy(_PREDECESSOR_CONTROLLER_PACKET))
+    assert registry.status is MachineTimeSourceRegistryStatus.REGISTRY_REJECTED
+    assert registry.ready is False
+    assert registry.canonical_input_packet_digest == _SUPERSEDED_PACKET_DIGEST
+    assert _rc("packet_digest_mismatch") in registry.reason_codes
+    # Six of the seven sources are byte-identical historical content -- this is the real predecessor, not a
+    # decoy with different unrelated data.
+    actual_entry_digests = {record.source_id: record.entry_digest for record in registry.sources}
+    for source_id, expected_digest in _UNCHANGED_ENTRY_DIGESTS.items():
+        assert actual_entry_digests[source_id] == expected_digest, source_id
+
+
+def test_predecessor_packet_id_substitution_alone_is_insufficient() -> None:
+    # "replacing current packet ID": renaming only packet_id to the CURRENT controller packet id, while every
+    # other predecessor field remains, still fails current admission -- full exact content match is required,
+    # not merely a matching identifier.
+    packet = copy.deepcopy(_PREDECESSOR_CONTROLLER_PACKET)
+    packet["packet_id"] = _PACKET_ID
+    registry = build_machine_time_source_registry(packet=packet)
+    assert registry.status is MachineTimeSourceRegistryStatus.REGISTRY_REJECTED
+    assert _rc("packet_digest_mismatch") in registry.reason_codes
+
+
+def test_predecessor_packet_with_grafted_correction_authority_still_rejected() -> None:
+    # "replacing correction-authority block": grafting the CURRENT correction_authority block onto an
+    # otherwise-predecessor packet still fails, because the predecessor's other content (old Cloudflare
+    # draft-19 claim, old provenance keys, nine-not-ten exclusions) still diverges from the pinned digest.
+    packet = copy.deepcopy(_PREDECESSOR_CONTROLLER_PACKET)
+    packet["correction_authority"] = copy.deepcopy(_APPROVED_PACKET["correction_authority"])
+    registry = build_machine_time_source_registry(packet=packet)
+    assert registry.status is MachineTimeSourceRegistryStatus.REGISTRY_REJECTED
+    assert _rc("packet_digest_mismatch") in registry.reason_codes
+
+
+def test_predecessor_packet_with_grafted_predecessor_lineage_fields_still_rejected() -> None:
+    # "replacing predecessor lineage": grafting the CURRENT provenance.predecessor_* lineage fields onto an
+    # otherwise-predecessor packet still fails for the same reason -- lineage fields alone cannot smuggle old
+    # content back in as current.
+    packet = copy.deepcopy(_PREDECESSOR_CONTROLLER_PACKET)
+    approved_provenance = copy.deepcopy(_APPROVED_PACKET["provenance"])
+    packet["provenance"] = {**packet["provenance"], **approved_provenance}
+    registry = build_machine_time_source_registry(packet=packet)
+    assert registry.status is MachineTimeSourceRegistryStatus.REGISTRY_REJECTED
+    assert _rc("packet_digest_mismatch") in registry.reason_codes
+
+
+def test_predecessor_registry_carried_input_digest_cannot_be_recomputed_to_approved() -> None:
+    # "recomputing carried canonical-input digest": swapping ONLY the carried canonical input text/digest to
+    # the approved packet's, while keeping the predecessor-derived projected fields (sources/citations/
+    # exclusions/counts), is rejected -- re-evaluating the (now-approved) carried input no longer matches the
+    # still-predecessor projected fields.
+    predecessor_registry = build_machine_time_source_registry(packet=copy.deepcopy(_PREDECESSOR_CONTROLLER_PACKET))
+    approved = build_approved_machine_time_source_registry()
+    forged = replace(
+        predecessor_registry,
+        canonical_input_packet_json=approved.canonical_input_packet_json,
+        canonical_input_packet_digest=approved.canonical_input_packet_digest,
+    )
+    forged = _independent_self_consistent(forged)
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_digest(forged)
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_to_dict(forged)
+
+
+def test_predecessor_registry_cannot_be_relabeled_ready_via_status_fields() -> None:
+    # "setting READY fields" + "recomputing outer registry digest": forcing status/ready/reason_codes to the
+    # READY shape, with a freshly self-consistent independent outer digest, is rejected -- re-evaluating the
+    # still predecessor-content carried input yields REGISTRY_REJECTED, contradicting the forced fields.
+    predecessor_registry = build_machine_time_source_registry(packet=copy.deepcopy(_PREDECESSOR_CONTROLLER_PACKET))
+    assert predecessor_registry.status is MachineTimeSourceRegistryStatus.REGISTRY_REJECTED
+    relabeled = replace(
+        predecessor_registry,
+        status=MachineTimeSourceRegistryStatus.REGISTRY_READY,
+        ready=True,
+        reason_codes=(),
+    )
+    relabeled = _independent_self_consistent(relabeled)
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_digest(relabeled)
+    with pytest.raises(MachineTimeSourceRegistryError, match="malformed"):
+        machine_time_source_registry_to_dict(relabeled)
+
+
+# --------------------------------------------------------------------------------------------------
+# P2-1 repair: complete unproven-register mutation coverage for the new Cloudflare subject
+# --------------------------------------------------------------------------------------------------
+
+
+def _cloudflare_unproven_entry_index(packet: dict[str, object]) -> int:
+    entries = packet["excluded_or_unproven"]
+    for index, entry in enumerate(entries):
+        if entry.get("subject") == _NEW_UNPROVEN_SUBJECT:
+            return index
+    raise AssertionError("cloudflare unproven entry not found")
+
+
+def test_new_unproven_subject_duplication_rejected() -> None:
+    def duplicate(packet: dict[str, object]) -> None:
+        index = _cloudflare_unproven_entry_index(packet)
+        packet["excluded_or_unproven"].append(copy.deepcopy(packet["excluded_or_unproven"][index]))
+
+    _reject(duplicate, "exclusion_count_mismatch")
+
+
+def test_new_unproven_subject_reorder_rejected() -> None:
+    def reorder(packet: dict[str, object]) -> None:
+        entries = packet["excluded_or_unproven"]
+        index = _cloudflare_unproven_entry_index(packet)
+        entry = entries.pop(index)
+        entries.insert(0, entry)
+
+    _reject(reorder, "packet_digest_mismatch")
+
+
+def test_new_unproven_subject_status_mutation_rejected() -> None:
+    def mutate_status(packet: dict[str, object]) -> None:
+        index = _cloudflare_unproven_entry_index(packet)
+        packet["excluded_or_unproven"][index]["status"] = "EXCLUDE"
+
+    _reject(mutate_status, "packet_digest_mismatch")
+
+
+def test_new_unproven_subject_reason_mutation_rejected() -> None:
+    def mutate_reason(packet: dict[str, object]) -> None:
+        index = _cloudflare_unproven_entry_index(packet)
+        packet["excluded_or_unproven"][index]["reason"] = "forged reason text"
+
+    _reject(mutate_reason, "packet_digest_mismatch")
+
+
+def test_new_unproven_subject_citation_substitution_rejected() -> None:
+    def substitute_citations(packet: dict[str, object]) -> None:
+        index = _cloudflare_unproven_entry_index(packet)
+        packet["excluded_or_unproven"][index]["citation_ids"] = ["RFC9162"]
+
+    _reject(substitute_citations, "packet_digest_mismatch")
 
 
 def test_superseded_digest_cannot_be_relabeled_current() -> None:
@@ -1522,3 +2057,123 @@ def test_correction_proves_no_operational_or_readiness_transition() -> None:
     for record in registry.sources:
         for flag in _SOURCE_SAFETY_FLAGS:
             assert getattr(record, flag) is False
+
+
+# --------------------------------------------------------------------------------------------------
+# P1-1 / P1-2 repair: canonical JSON decoder + integer-magnitude boundary hardening regressions
+#
+# These forgeries carry a TRUE (correctly computed) canonical_input_packet_digest for their hostile
+# canonical_input_packet_json text, so a passing test proves the public boundary rejects the decoded CONTENT
+# itself -- never merely because the digest failed to match.
+# --------------------------------------------------------------------------------------------------
+
+
+def _forge_canonical_input(text: str) -> MachineTimeSourceRegistry:
+    approved = build_approved_machine_time_source_registry()
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return replace(approved, canonical_input_packet_json=text, canonical_input_packet_digest=digest)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["[]", "[1,2,3]", "7", '"hello"', "true", "null"],
+    ids=["empty-list", "non-empty-list", "bare-integer", "bare-string", "bare-boolean", "bare-null"],
+)
+def test_non_dict_top_level_canonical_json_rejected_deterministically(text: str) -> None:
+    forged = _forge_canonical_input(text)
+    with pytest.raises(MachineTimeSourceRegistryError, match=_rc("malformed_artifact")):
+        machine_time_source_registry_digest(forged)
+    with pytest.raises(MachineTimeSourceRegistryError, match=_rc("malformed_artifact")):
+        machine_time_source_registry_to_dict(forged)
+
+
+def test_excessively_nested_canonical_input_rejects_without_raw_recursion_error() -> None:
+    depth = 60000
+    text = "[" * depth + "]" * depth
+    forged = _forge_canonical_input(text)
+    with pytest.raises(MachineTimeSourceRegistryError, match=_rc("malformed_artifact")):
+        machine_time_source_registry_digest(forged)
+    with pytest.raises(MachineTimeSourceRegistryError, match=_rc("malformed_artifact")):
+        machine_time_source_registry_to_dict(forged)
+
+
+def test_hostile_huge_integer_in_supplied_packet_fact_items_rejected() -> None:
+    packet = _packet()
+    packet["sources"][0]["fact_items"]["hostile_huge_int"] = 10**100000
+    with pytest.raises(MachineTimeSourceRegistryError, match=_rc("packet_int_magnitude_exceeded")):
+        build_machine_time_source_registry(packet=packet)
+
+
+def test_hostile_huge_integer_in_source_record_fact_items_rejected() -> None:
+    approved = build_approved_machine_time_source_registry()
+    forged_record = replace(
+        approved.sources[0], fact_items=(*approved.sources[0].fact_items, ("hostile_huge_int", 10**100000))
+    )
+    with pytest.raises(MachineTimeSourceRegistryError, match=_rc("malformed_source_record")):
+        machine_time_source_entry_digest(forged_record)
+
+
+def test_hostile_huge_integer_propagated_into_reconstructed_registry_rejected() -> None:
+    approved = build_approved_machine_time_source_registry()
+    forged_record = replace(
+        approved.sources[0], fact_items=(*approved.sources[0].fact_items, ("hostile_huge_int", 10**100000))
+    )
+    forged = replace(approved, sources=(forged_record, *approved.sources[1:]))
+    with pytest.raises(MachineTimeSourceRegistryError, match=_rc("malformed_source_record")):
+        machine_time_source_registry_digest(forged)
+    with pytest.raises(MachineTimeSourceRegistryError, match=_rc("malformed_source_record")):
+        machine_time_source_registry_to_dict(forged)
+
+
+def test_canonical_integer_boundary_accepts_largest_value_and_rejects_first_over_bound() -> None:
+    max_bit_length = registry_module._MAX_CANONICAL_INT_BIT_LENGTH
+    largest_accepted = (1 << max_bit_length) - 1
+    first_rejected = 1 << max_bit_length
+
+    # An extra fact key always makes the packet content diverge from the pinned digest (any content mutation
+    # does), so the boundary-value artifact is REJECTED for that reason -- the point is that it is rejected
+    # deterministically for CONTENT reasons, never via a raw integer-conversion crash.
+    packet_ok = _packet()
+    packet_ok["sources"][0]["fact_items"]["boundary_int"] = largest_accepted
+    registry_ok = build_machine_time_source_registry(packet=packet_ok)
+    assert registry_ok.status is MachineTimeSourceRegistryStatus.REGISTRY_REJECTED
+    assert _rc("packet_digest_mismatch") in registry_ok.reason_codes
+
+    packet_over = _packet()
+    packet_over["sources"][0]["fact_items"]["boundary_int"] = first_rejected
+    with pytest.raises(MachineTimeSourceRegistryError, match=_rc("packet_int_magnitude_exceeded")):
+        build_machine_time_source_registry(packet=packet_over)
+
+
+def test_canonical_integer_boundary_negative_magnitude_symmetric() -> None:
+    # bit_length() is sign-independent, so the magnitude bound applies symmetrically to negative integers.
+    max_bit_length = registry_module._MAX_CANONICAL_INT_BIT_LENGTH
+    largest_negative_accepted = -((1 << max_bit_length) - 1)
+    first_negative_rejected = -(1 << max_bit_length)
+
+    packet_ok = _packet()
+    packet_ok["sources"][0]["fact_items"]["boundary_int"] = largest_negative_accepted
+    registry_ok = build_machine_time_source_registry(packet=packet_ok)
+    assert registry_ok.status is MachineTimeSourceRegistryStatus.REGISTRY_REJECTED
+    assert _rc("packet_digest_mismatch") in registry_ok.reason_codes
+
+    packet_over = _packet()
+    packet_over["sources"][0]["fact_items"]["boundary_int"] = first_negative_rejected
+    with pytest.raises(MachineTimeSourceRegistryError, match=_rc("packet_int_magnitude_exceeded")):
+        build_machine_time_source_registry(packet=packet_over)
+
+
+def test_bool_is_not_admitted_as_canonical_int() -> None:
+    assert registry_module._is_exact_int(True) is False
+    assert registry_module._is_exact_int(False) is False
+    assert registry_module._is_exact_int(1) is True
+    assert registry_module._is_exact_int(0) is True
+
+
+def test_approved_registry_still_ready_after_boundary_hardening() -> None:
+    registry = build_approved_machine_time_source_registry()
+    assert registry.status is MachineTimeSourceRegistryStatus.REGISTRY_READY
+    assert registry.ready is True
+    assert registry.registry_digest == "1808874889aad3f671e481e69da3e725b5119c5dd915e802b66c40b37769dfce"
+    assert registry.raw_packet_digest == _RAW_DIGEST
+    assert registry.controller_approved_packet_digest == _PACKET_DIGEST
