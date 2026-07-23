@@ -27,9 +27,10 @@ from crypto_core.validation.roughtime_v19_kernel import (
 
 # --- Independently pinned contract values (not read from the production module) --------------------------
 _MAGIC = b"ROUGHTIM"
-_EXPECTED_MAX_PACKET_BYTES = 1500
-_EXPECTED_MAX_MESSAGE_BYTES = 1488
+_EXPECTED_MAX_PACKET_BYTES = 4096
+_EXPECTED_MAX_MESSAGE_BYTES = 4084
 _EXPECTED_MAX_PAIR_COUNT = 64
+_ETHERNET_MTU = 1500  # the old, too-tight ceiling; valid draft-19 packets can exceed it
 
 # Canonical valid tags in strictly ascending little-endian uint32 order.
 _TAG_A = b"A\x00\x00\x00"  # le 0x00000041 = 65
@@ -204,6 +205,19 @@ def test_exact_raw_packet_preservation() -> None:
     packet = parse_roughtime_v19_packet(packet_bytes)
     assert packet.raw == packet_bytes
     assert packet.message.raw == message_bytes
+
+
+def test_valid_packet_above_ethernet_mtu_accepted() -> None:
+    # A structurally valid draft-19 packet larger than the Ethernet MTU (e.g. a TCP response carrying a
+    # large Merkle PATH) must parse: provenance proof bytes are offline inputs, not MTU-bounded datagrams.
+    value_length = _ETHERNET_MTU  # yields a packet well above 1500 bytes and below the 4096 ceiling
+    message_bytes = _u32(1) + _TAG_A + b"\x00" * value_length
+    packet_bytes = _encode_packet(message_bytes)
+    assert len(packet_bytes) > _ETHERNET_MTU
+    assert len(packet_bytes) <= _EXPECTED_MAX_PACKET_BYTES
+    packet = parse_roughtime_v19_packet(packet_bytes)
+    assert packet.message.pair_count == 1
+    assert len(packet.message.fields[0].value) == value_length
 
 
 # --- Negative: input trust boundary ----------------------------------------------------------------------

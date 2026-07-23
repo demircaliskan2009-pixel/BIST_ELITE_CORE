@@ -67,13 +67,18 @@ _UPPER_A = 0x41  # "A"
 _UPPER_Z = 0x5A  # "Z"
 
 # --- Controller-owned defensive ceilings (implementation defense, NOT protocol constants) ----------------
-# draft-19 exchanges are designed to fit in a single unfragmented UDP datagram: requests are padded to at
-# least 1024 bytes and responses are well under 1 KB, so a standard 1500-byte Ethernet MTU is a comfortable
-# structural ceiling that still bounds memory. The message ceiling is the packet ceiling minus the 12-byte
-# outer frame. Realistic messages carry only a handful of top-level tags, so 64 is a generous pair-count
-# ceiling that bounds header allocation to 8 * 64 = 512 bytes. No caller may override these.
-_MAX_PACKET_BYTES = 1500
-_MAX_MESSAGE_BYTES = _MAX_PACKET_BYTES - _PACKET_FRAME_BYTES  # 1488
+# Roughtime draft-19 defines NO fixed maximum message size, and provenance proof bytes are OFFLINE INPUTS
+# to later machine-time verification: they may arrive over TCP or from a stored capture file, not only as a
+# single unfragmented UDP datagram. These ceilings are therefore deliberately NOT tied to any network MTU;
+# tying them to a 1500-byte Ethernet MTU would reject structurally valid draft-19 packets (for example a
+# response carrying a large Merkle PATH plus a version list, on the order of ~1.5 KB). They are memory and
+# denial-of-service bounds chosen generously above any realistic single draft-19 request (padded to
+# >= 1024 bytes) or response, while still tightly bounding allocation and O(N) work. The message ceiling is
+# the packet ceiling minus the 12-byte outer frame. Realistic messages carry only a handful of top-level
+# tags, so 64 is a generous pair-count ceiling that bounds header allocation to 8 * 64 = 512 bytes. No
+# caller may override these.
+_MAX_PACKET_BYTES = 4096  # 4 KiB — generous non-MTU structural ceiling for offline provenance input bytes
+_MAX_MESSAGE_BYTES = _MAX_PACKET_BYTES - _PACKET_FRAME_BYTES  # 4084
 _MAX_PAIR_COUNT = 64
 
 # Minimums that make a frame/message structurally decodable.
