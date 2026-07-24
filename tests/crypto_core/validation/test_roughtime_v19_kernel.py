@@ -126,6 +126,11 @@ def _valid_packet() -> RoughtimeV19Packet:
     return parse_roughtime_v19_packet(_encode_packet(message_bytes))
 
 
+def _field(tag: bytes, value: bytes) -> RoughtimeV19Field:
+    """Construct a valid RoughtimeV19Field directly from exact test constants (no parser involvement)."""
+    return RoughtimeV19Field(tag=tag, tag_uint32=_le(tag), value=value)
+
+
 # --- Encoder self-check ----------------------------------------------------------------------------------
 def test_encoder_self_check_tag_ordering_assumptions() -> None:
     assert _le(_TAG_A) < _le(_TAG_B) < _le(_TAG_C) < _le(_TAG_AB) < _le(_TAG_ZZ)
@@ -813,6 +818,156 @@ def test_no_forged_message_can_misrepresent_its_raw_bytes() -> None:
     base = _valid_message()
     swapped = RoughtimeV19Field(tag=base.fields[0].tag, tag_uint32=base.fields[0].tag_uint32, value=b"\x01\x02\x03\x04")
     _assert_message_inconsistent(pair_count=2, fields=(swapped, base.fields[1]), raw=base.raw)
+
+
+# --- Class-C re-audit test-proof completion (SAFE_CLASS_C_REAUDIT_V1) -------------------------------------
+def test_error_deletion_and_stability_matrix() -> None:
+    # Completes the immutability matrix (adds `del error.args` and `del error._reason`) and asserts the
+    # original reason / args / str stay unchanged after every rejected assignment and deletion.
+    error = RoughtimeV19KernelError(RoughtimeV19KernelReason.OFFSET_UNALIGNED)
+    original_reason = error.reason
+    original_args = error.args
+    original_str = str(error)
+
+    def _assert_stable() -> None:
+        assert error.reason is original_reason
+        assert error.args == original_args
+        assert str(error) == original_str
+
+    for attr, value in (
+        ("reason", RoughtimeV19KernelReason.TAG_DUPLICATE),
+        ("_reason", RoughtimeV19KernelReason.TAG_DUPLICATE),
+        ("args", ("forged",)),
+    ):
+        with pytest.raises(AttributeError):
+            setattr(error, attr, value)
+        _assert_stable()
+
+    for attr in ("reason", "_reason", "args"):
+        with pytest.raises(AttributeError):
+            delattr(error, attr)
+        _assert_stable()
+
+
+def test_field_value_bytes_subclass_rejected() -> None:
+    _assert_field_inconsistent(tag=_TAG_A, tag_uint32=_le(_TAG_A), value=_BytesSubclass(b""))
+
+
+def test_message_raw_bytes_subclass_rejected() -> None:
+    raw = _encode_canonical_message([(_TAG_A, b"")])
+    _assert_message_inconsistent(pair_count=1, fields=(_field(_TAG_A, b""),), raw=_BytesSubclass(raw))
+
+
+def test_packet_magic_bytes_subclass_rejected() -> None:
+    base = _valid_packet()
+    _assert_packet_inconsistent(
+        magic=_BytesSubclass(_MAGIC), message_length=base.message_length, message=base.message, raw=base.raw
+    )
+
+
+def test_packet_raw_bytes_subclass_rejected() -> None:
+    base = _valid_packet()
+    _assert_packet_inconsistent(
+        magic=base.magic, message_length=base.message_length, message=base.message, raw=_BytesSubclass(base.raw)
+    )
+
+
+def test_message_field_count_mismatch_rejected() -> None:
+    # raw encodes two fields; the supplied tuple holds one (independently constructed) valid field.
+    raw = _encode_canonical_message([(_TAG_A, b""), (_TAG_B, b"\x01\x02\x03\x04")])
+    _assert_message_inconsistent(pair_count=2, fields=(_field(_TAG_A, b""),), raw=raw)
+
+
+def test_message_reverse_field_count_mismatch_rejected() -> None:
+    # raw encodes one field; the supplied tuple holds two (independently constructed) valid fields.
+    raw = _encode_canonical_message([(_TAG_A, b"")])
+    _assert_message_inconsistent(pair_count=1, fields=(_field(_TAG_A, b""), _field(_TAG_B, b"")), raw=raw)
+
+
+def test_message_valid_but_different_tag_binding_rejected() -> None:
+    # Pair count and value lengths match, but the first supplied tag (C) differs from the A encoded in raw.
+    raw = _encode_canonical_message([(_TAG_A, b""), (_TAG_B, b"\x01\x02\x03\x04")])
+    fields = (_field(_TAG_C, b""), _field(_TAG_B, b"\x01\x02\x03\x04"))
+    _assert_message_inconsistent(pair_count=2, fields=fields, raw=raw)
+
+
+def test_message_malformed_raw_truncated_header_translated() -> None:
+    # Supplied fields are independently valid, but raw has a truncated header; the primitive-decode failure
+    # is translated to the enclosing artifact reason.
+    truncated = _u32(2) + _u32(0) + _TAG_A
+    _assert_message_inconsistent(pair_count=1, fields=(_field(_TAG_A, b""),), raw=truncated)
+
+
+def test_message_malformed_raw_invalid_tag_translated() -> None:
+    invalid_tag_raw = _encode_message_raw(1, [], [b"aaaa"], b"")
+    _assert_message_inconsistent(pair_count=1, fields=(_field(_TAG_A, b""),), raw=invalid_tag_raw)
+
+
+def test_packet_raw_header_declared_length_smaller_rejected() -> None:
+    # The corrupted raw declares fewer message bytes than are actually present; the supplied message_length
+    # is the correct actual length, so the failure is proven to come from the corrupted raw header.
+    message_bytes = _encode_canonical_message([(_TAG_A, b""), (_TAG_B, b"\x01\x02\x03\x04")])
+    message = parse_roughtime_v19_message(message_bytes)
+    corrupted = _encode_packet(message_bytes, declared_length=len(message_bytes) - 4)
+    _assert_packet_inconsistent(magic=_MAGIC, message_length=len(message_bytes), message=message, raw=corrupted)
+
+
+def test_packet_raw_header_declared_length_larger_rejected() -> None:
+    # The corrupted raw declares more message bytes than are actually present; message_length is correct.
+    message_bytes = _encode_canonical_message([(_TAG_A, b""), (_TAG_B, b"\x01\x02\x03\x04")])
+    message = parse_roughtime_v19_message(message_bytes)
+    corrupted = _encode_packet(message_bytes, declared_length=len(message_bytes) + 4)
+    _assert_packet_inconsistent(magic=_MAGIC, message_length=len(message_bytes), message=message, raw=corrupted)
+
+
+def test_parsed_packet_immutability_and_nested_message_stable() -> None:
+    packet = _valid_packet()
+    original_message = packet.message
+    original_magic = packet.magic
+    original_length = packet.message_length
+    original_raw = packet.raw
+    for attr in ("magic", "message_length", "message", "raw"):
+        with pytest.raises(FrozenInstanceError):
+            setattr(packet, attr, None)
+        with pytest.raises(FrozenInstanceError):
+            delattr(packet, attr)
+    assert packet.message is original_message
+    assert packet.magic == original_magic
+    assert packet.message_length == original_length
+    assert packet.raw == original_raw
+
+
+def test_independent_message_direct_construction() -> None:
+    # No parser-produced Message components: raw is independently encoded and fields are independently built.
+    raw = _encode_canonical_message([(_TAG_A, b""), (_TAG_B, b"\x01\x02\x03\x04")])
+    fields = (_field(_TAG_A, b""), _field(_TAG_B, b"\x01\x02\x03\x04"))
+    message = RoughtimeV19Message(pair_count=2, fields=fields, raw=raw)
+    assert message.pair_count == 2
+    assert message.raw == raw
+    assert message.fields[0].tag == _TAG_A
+    assert message.fields[0].tag_uint32 == _le(_TAG_A)
+    assert message.fields[0].value == b""
+    assert message.fields[1].tag == _TAG_B
+    assert message.fields[1].tag_uint32 == _le(_TAG_B)
+    assert message.fields[1].value == b"\x01\x02\x03\x04"
+
+
+def test_independent_packet_direct_construction() -> None:
+    # No parser-produced Packet components: raw, message, and message_length are all independently built.
+    message_bytes = _encode_canonical_message([(_TAG_A, b""), (_TAG_B, b"\x01\x02\x03\x04")])
+    fields = (_field(_TAG_A, b""), _field(_TAG_B, b"\x01\x02\x03\x04"))
+    message = RoughtimeV19Message(pair_count=2, fields=fields, raw=message_bytes)
+    packet_raw = _encode_packet(message_bytes)
+    message_length = len(message_bytes)
+    packet = RoughtimeV19Packet(magic=_MAGIC, message_length=message_length, message=message, raw=packet_raw)
+    assert packet.magic == _MAGIC
+    assert packet.message_length == message_length
+    assert packet.raw == packet_raw
+    assert packet.message is message
+    assert packet.message.fields[0].tag == _TAG_A
+    assert packet.message.fields[0].value == b""
+    assert packet.message.fields[1].tag == _TAG_B
+    assert packet.message.fields[1].value == b"\x01\x02\x03\x04"
 
 
 # --- AST / structural safety -----------------------------------------------------------------------------
