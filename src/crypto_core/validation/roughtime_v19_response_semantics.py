@@ -102,6 +102,9 @@ _CERT_MANDATORY = frozenset({_TAG_SIG, _TAG_DELE})
 _DELE_MANDATORY = frozenset({_TAG_PUBK, _TAG_MINT, _TAG_MAXT})
 
 # --- Exact known-field lengths and pinned constants (bytes unless noted) ----------------------------------
+_TAG_BYTES = 4  # every canonical tag is exactly four bytes
+_UPPER_A = 0x41  # "A" — canonical-tag letter range (mirrors the K1 private rule; K1 helper is not importable)
+_UPPER_Z = 0x5A  # "Z"
 _SIG_BYTES = 64
 _NONC_BYTES = 32
 _TYPE_BYTES = 4
@@ -117,6 +120,10 @@ _MAXT_BYTES = 8
 _PATH_NODE_BYTES = 32
 _MAX_PATH_NODES = 32
 _VERS_ENTRY_BYTES = 4
+
+# Sentinel for safe attribute inspection of exact-type objects that may have been built without their normal
+# initializer (e.g. via object.__new__); identity comparison never triggers a caller-defined __eq__.
+_MISSING = object()
 _MAX_VERS_ENTRIES = 32
 
 # Fixed repository-owned messages for the closed error constructor.
@@ -252,7 +259,13 @@ def _decode_path(path_value: bytes) -> tuple[bytes, ...]:
 
 
 def _decode_versions(vers_value: bytes, selected_version: int) -> tuple[int, ...]:
-    """Decode VERS into strictly ascending uint32 values; must be non-empty, 4-aligned, <=32, contain VER."""
+    """Decode VERS into non-decreasing (ascending) uint32 values; non-empty, 4-aligned, <=32, contains VER.
+
+    Draft-19 requires the RESPONSE VERS list to be sorted in ascending order and to contain the selected
+    version, but — unlike the REQUEST VER list — it does NOT prohibit repeated values. Only a strictly
+    decreasing relationship is rejected; equal adjacent entries are accepted and preserved verbatim in the
+    exposed tuple. (K3, if built, must enforce the request-side no-repetition rule separately.)
+    """
     length = len(vers_value)
     if length == 0 or length % _VERS_ENTRY_BYTES != 0:
         raise _err(RoughtimeV19ResponseSemanticReason.SREP_VERS_INVALID)
@@ -264,7 +277,7 @@ def _decode_versions(vers_value: bytes, selected_version: int) -> tuple[int, ...
         for index in range(count)
     )
     for index in range(1, count):
-        if values[index] <= values[index - 1]:  # strictly ascending rejects both descending and duplicate
+        if values[index] < values[index - 1]:  # reject only a decreasing relationship; equal is allowed
             raise _err(RoughtimeV19ResponseSemanticReason.SREP_VERS_INVALID)
     if selected_version not in values:
         raise _err(RoughtimeV19ResponseSemanticReason.SREP_VERS_INVALID)
@@ -388,8 +401,10 @@ class RoughtimeV19DelegationSemantics:
 
     Carries the exact PUBK bytes, the MINT/MAXT little-endian uint64 seconds, preserved unknown ``extensions``
     in canonical wire order, and the exact DELE nested-message ``raw`` bytes. No cryptographic key object is
-    built. Direct construction re-decodes ``raw`` and requires an exact match; any mismatch, non-exact-type,
-    forged/subclassed component, or malformed raw raises ``artifact_dele_inconsistent``.
+    built. Direct construction re-decodes ``raw`` and requires every semantic field to equal that primitive
+    re-decode; any mismatch, missing/incomplete state, non-exact-type, forged/subclassed component, malformed
+    raw, or object built without its initializer raises ``artifact_dele_inconsistent`` (never a leaked
+    ``AttributeError``).
     """
 
     pubk: bytes
@@ -399,23 +414,7 @@ class RoughtimeV19DelegationSemantics:
     raw: bytes
 
     def __post_init__(self) -> None:
-        reason = RoughtimeV19ResponseSemanticReason.ARTIFACT_DELE_INCONSISTENT
-        if type(self.pubk) is not bytes:
-            raise _err(reason)
-        if type(self.min_time) is not int:  # exact int; bool and int subclasses rejected
-            raise _err(reason)
-        if type(self.max_time) is not int:
-            raise _err(reason)
-        _require_extension_tuple(self.extensions, reason)
-        if type(self.raw) is not bytes:
-            raise _err(reason)
-        try:
-            pubk, min_time, max_time, extensions = _decode_dele_primitive(self.raw)
-        except RoughtimeV19ResponseSemanticError:
-            raise _err(reason) from None
-        if self.pubk != pubk or self.min_time != min_time or self.max_time != max_time:
-            raise _err(reason)
-        _require_extensions_match(self.extensions, extensions, reason)
+        _validate_delegation_state(self, RoughtimeV19ResponseSemanticReason.ARTIFACT_DELE_INCONSISTENT)
 
 
 @dataclass(frozen=True)
@@ -424,8 +423,10 @@ class RoughtimeV19CertificateSemantics:
 
     Carries the exact 64-byte SIG bytes (never verified), the nested :class:`RoughtimeV19DelegationSemantics`,
     preserved unknown ``extensions`` in canonical wire order, and the exact CERT nested-message ``raw`` bytes.
-    Direct construction re-decodes ``raw`` (fully re-decoding the embedded DELE) and requires SIG, the embedded
-    DELE raw and the extensions to match; any mismatch raises ``artifact_cert_inconsistent``.
+    Direct construction re-decodes ``raw`` and binds SIG, the extensions, AND the nested delegation's COMPLETE
+    current state (pubk, min/max time, extensions, raw) to the exact embedded DELE — matching ``delegation.raw``
+    alone is never sufficient. Any mismatch, missing/incomplete state, non-exact-type, or object built without
+    its initializer raises ``artifact_cert_inconsistent`` (never a leaked ``AttributeError``).
     """
 
     signature: bytes
@@ -434,23 +435,7 @@ class RoughtimeV19CertificateSemantics:
     raw: bytes
 
     def __post_init__(self) -> None:
-        reason = RoughtimeV19ResponseSemanticReason.ARTIFACT_CERT_INCONSISTENT
-        if type(self.signature) is not bytes:
-            raise _err(reason)
-        if type(self.delegation) is not RoughtimeV19DelegationSemantics:  # exact type; subclasses rejected
-            raise _err(reason)
-        _require_extension_tuple(self.extensions, reason)
-        if type(self.raw) is not bytes:
-            raise _err(reason)
-        try:
-            signature, dele_raw, _dele_primitive, extensions = _decode_cert_primitive(self.raw)
-        except RoughtimeV19ResponseSemanticError:
-            raise _err(reason) from None
-        if self.signature != signature:
-            raise _err(reason)
-        if self.delegation.raw != dele_raw:  # the exact-typed delegation already bound its own raw <-> fields
-            raise _err(reason)
-        _require_extensions_match(self.extensions, extensions, reason)
+        _validate_certificate_state(self, RoughtimeV19ResponseSemanticReason.ARTIFACT_CERT_INCONSISTENT)
 
 
 @dataclass(frozen=True)
@@ -458,10 +443,12 @@ class RoughtimeV19SignedResponseSemantics:
     """SREP signed-response semantics, self-validating on direct construction.
 
     Carries the exact selected ``version`` (uint32; exposed only, never asserted operationally admitted), the
-    ``radius_seconds`` (uint32, nonzero), the ``midpoint_seconds`` (uint64; never a wall clock), the strictly
-    ascending ``versions`` tuple that contains ``version``, the exact 32-byte ``root`` (never Merkle-verified),
-    preserved unknown ``extensions`` in canonical wire order, and the exact SREP nested-message ``raw`` bytes.
-    Any mismatch on direct construction raises ``artifact_srep_inconsistent``.
+    ``radius_seconds`` (uint32, nonzero), the ``midpoint_seconds`` (uint64; never a wall clock), the
+    non-decreasing (ascending, duplicates preserved) ``versions`` tuple that contains ``version``, the exact
+    32-byte ``root`` (never Merkle-verified), preserved unknown ``extensions`` in canonical wire order, and the
+    exact SREP nested-message ``raw`` bytes. Direct construction re-decodes ``raw`` and requires every semantic
+    field to equal the primitive re-decode of that exact raw; any mismatch, missing/incomplete state,
+    non-exact-type, or forged component raises ``artifact_srep_inconsistent``.
     """
 
     version: int
@@ -473,34 +460,7 @@ class RoughtimeV19SignedResponseSemantics:
     raw: bytes
 
     def __post_init__(self) -> None:
-        reason = RoughtimeV19ResponseSemanticReason.ARTIFACT_SREP_INCONSISTENT
-        if type(self.version) is not int:
-            raise _err(reason)
-        if type(self.radius_seconds) is not int:
-            raise _err(reason)
-        if type(self.midpoint_seconds) is not int:
-            raise _err(reason)
-        if type(self.versions) is not tuple:
-            raise _err(reason)
-        for entry in self.versions:
-            if type(entry) is not int:  # exact int per version entry; bool and int subclasses rejected
-                raise _err(reason)
-        if type(self.root) is not bytes:
-            raise _err(reason)
-        _require_extension_tuple(self.extensions, reason)
-        if type(self.raw) is not bytes:
-            raise _err(reason)
-        try:
-            version, radius, midpoint, versions, root, extensions = _decode_srep_primitive(self.raw)
-        except RoughtimeV19ResponseSemanticError:
-            raise _err(reason) from None
-        if self.version != version or self.radius_seconds != radius or self.midpoint_seconds != midpoint:
-            raise _err(reason)
-        if self.versions != versions:
-            raise _err(reason)
-        if self.root != root:
-            raise _err(reason)
-        _require_extensions_match(self.extensions, extensions, reason)
+        _validate_signed_response_state(self, RoughtimeV19ResponseSemanticReason.ARTIFACT_SREP_INCONSISTENT)
 
 
 @dataclass(frozen=True)
@@ -511,8 +471,10 @@ class RoughtimeV19ResponseSemantics:
     the ``message_type`` (uint32 == 1), the ``path`` tuple of exact 32-byte nodes (never Merkle-verified), the
     ``index`` (uint32; never used for inclusion), the nested SREP and CERT artifacts, preserved unknown outer
     ``extensions`` in canonical wire order, and the exact outer packet ``raw`` bytes. Direct construction
-    re-decodes ``raw`` (including the cross-message midpoint check) and requires an exact match; any mismatch
-    raises ``artifact_response_inconsistent``.
+    re-decodes ``raw`` (including the cross-message midpoint check) and binds the outer scalars, extensions, AND
+    the COMPLETE current state of both nested artifacts to the exact embedded SREP/CERT raw — matching a nested
+    ``.raw`` alone is never sufficient. Any mismatch, missing/incomplete state, non-exact-type, or object built
+    without its initializer raises ``artifact_response_inconsistent`` (never a leaked ``AttributeError``).
     """
 
     signature: bytes
@@ -527,24 +489,6 @@ class RoughtimeV19ResponseSemantics:
 
     def __post_init__(self) -> None:
         reason = RoughtimeV19ResponseSemanticReason.ARTIFACT_RESPONSE_INCONSISTENT
-        if type(self.signature) is not bytes:
-            raise _err(reason)
-        if type(self.nonce) is not bytes:
-            raise _err(reason)
-        if type(self.message_type) is not int:
-            raise _err(reason)
-        if type(self.path) is not tuple:
-            raise _err(reason)
-        for node in self.path:
-            if type(node) is not bytes:
-                raise _err(reason)
-        if type(self.index) is not int:
-            raise _err(reason)
-        if type(self.signed_response) is not RoughtimeV19SignedResponseSemantics:  # exact type; subclasses rejected
-            raise _err(reason)
-        if type(self.certificate) is not RoughtimeV19CertificateSemantics:
-            raise _err(reason)
-        _require_extension_tuple(self.extensions, reason)
         if type(self.raw) is not bytes:
             raise _err(reason)
         try:
@@ -562,47 +506,210 @@ class RoughtimeV19ResponseSemantics:
             ) = _decode_response_primitive(self.raw)
         except RoughtimeV19ResponseSemanticError:
             raise _err(reason) from None
+        # Outer scalar fields (self's own fields are always set — __post_init__ only runs after __init__).
+        if type(self.signature) is not bytes or type(self.nonce) is not bytes or type(self.message_type) is not int:
+            raise _err(reason)
+        if type(self.path) is not tuple:
+            raise _err(reason)
+        for node in self.path:
+            if type(node) is not bytes:
+                raise _err(reason)
+        if type(self.index) is not int:
+            raise _err(reason)
         if self.signature != signature or self.nonce != nonce or self.message_type != message_type:
             raise _err(reason)
         if self.path != path:
             raise _err(reason)
         if self.index != index:
             raise _err(reason)
-        if self.signed_response.raw != srep_raw:  # exact-typed nested artifacts already bound their own raw
+        # Nested artifacts: exact type AND complete-state binding to the exact embedded raw. Matching `.raw`
+        # alone is never sufficient — every nested semantic field is re-proven against the parent raw's
+        # primitive re-decode, safely, so an exact-type object built without its initializer is rejected with
+        # this closed reason rather than admitted or leaking a raw exception.
+        if type(self.signed_response) is not RoughtimeV19SignedResponseSemantics:  # exact type; subclasses rejected
             raise _err(reason)
-        if self.certificate.raw != cert_raw:
+        if type(self.certificate) is not RoughtimeV19CertificateSemantics:
             raise _err(reason)
-        _require_extensions_match(self.extensions, extensions, reason)
+        _validate_signed_response_state(self.signed_response, reason, expected_raw=srep_raw)
+        _validate_certificate_state(self.certificate, reason, expected_raw=cert_raw)
+        _validate_extensions(self.extensions, extensions, reason)
 
 
-def _require_extension_tuple(
-    extensions: object,
-    reason: RoughtimeV19ResponseSemanticReason,
-) -> None:
-    """Reject a non-exact-tuple ``extensions`` or any non-exact-``RoughtimeV19Field`` element (subclass/forgery)."""
-    if type(extensions) is not tuple:
-        raise _err(reason)
-    for extension in extensions:
-        if type(extension) is not RoughtimeV19Field:
-            raise _err(reason)
+def _tag_bytes_canonical(tag: bytes) -> bool:
+    """Return whether ``tag`` (exactly four bytes) is a canonical draft-19 tag: 1-4 leading uppercase ASCII
+    letters then zero padding. K1's private helper is not importable, so this mirrors its rule locally for
+    safe validation of caller-supplied extension state; it never mutates or imports K1.
+    """
+    if not (_UPPER_A <= tag[0] <= _UPPER_Z):
+        return False
+    letters = 1
+    while letters < _TAG_BYTES and _UPPER_A <= tag[letters] <= _UPPER_Z:
+        letters += 1
+    for index in range(letters, _TAG_BYTES):
+        if tag[index] != 0:
+            return False
+    return True
 
 
-def _require_extensions_match(
-    supplied: tuple[RoughtimeV19Field, ...],
+def _validate_extensions(
+    supplied: object,
     decoded: tuple[RoughtimeV19Field, ...],
     reason: RoughtimeV19ResponseSemanticReason,
 ) -> None:
-    """Require element-wise ``(tag, tag_uint32, value)`` equality in order (value comparison keeps the exact-type
-    gate in :func:`_require_extension_tuple` causally isolated: a value-correct field subclass passes here and
-    is rejected only by the type gate).
+    """Validate the COMPLETE state of every supplied extension before any comparison, then bind them to the
+    K1-decoded extensions in canonical order.
+
+    Exact class identity (``type(field) is RoughtimeV19Field``) does not prove the field's normal initializer
+    ran, so each field's internal state is inspected safely: required attributes present (via ``getattr`` with
+    a sentinel — never a caller ``__getattr__`` failure), exact built-in ``bytes`` tag / exact built-in ``int``
+    ``tag_uint32`` / exact built-in ``bytes`` value, canonical four-byte tag, and ``tag_uint32`` equal to the
+    tag's little-endian integer. Only after those exact-type gates is any value compared, so a hostile
+    ``bytes``/``int`` subclass ``__eq__`` can never run first, and an incomplete field raises the closed
+    ``reason`` rather than leaking ``AttributeError``. The value comparison (not dataclass ``__eq__``) keeps the
+    exact-type gate causally isolated: a value-correct field subclass passes the comparison and is rejected
+    only by the type gate.
     """
+    if type(supplied) is not tuple:
+        raise _err(reason)
     if len(supplied) != len(decoded):
         raise _err(reason)
     for index in range(len(supplied)):
-        left = supplied[index]
-        right = decoded[index]
-        if left.tag != right.tag or left.tag_uint32 != right.tag_uint32 or left.value != right.value:
+        field = supplied[index]
+        if type(field) is not RoughtimeV19Field:  # exact type; subclasses and forgeries rejected
             raise _err(reason)
+        tag = getattr(field, "tag", _MISSING)
+        tag_uint32 = getattr(field, "tag_uint32", _MISSING)
+        value = getattr(field, "value", _MISSING)
+        if tag is _MISSING or tag_uint32 is _MISSING or value is _MISSING:
+            raise _err(reason)
+        if type(tag) is not bytes or type(tag_uint32) is not int or type(value) is not bytes:
+            raise _err(reason)
+        if len(tag) != _TAG_BYTES or not _tag_bytes_canonical(tag):
+            raise _err(reason)
+        if tag_uint32 != int.from_bytes(tag, "little"):
+            raise _err(reason)
+        expected = decoded[index]  # trusted K1-decoded field (exact type, canonical, complete)
+        if tag != expected.tag or tag_uint32 != expected.tag_uint32 or value != expected.value:
+            raise _err(reason)
+
+
+def _validate_delegation_state(
+    obj: object,
+    reason: RoughtimeV19ResponseSemanticReason,
+    *,
+    expected_raw: bytes | None = None,
+) -> None:
+    """Prove an exact-type delegation object's COMPLETE current state matches the primitive re-decode of its own
+    exact ``raw`` (and, when ``expected_raw`` is given, that its ``raw`` is exactly the parent-embedded DELE).
+
+    Used both for DELE self-validation and by a parent certificate to admit a nested delegation. Reading state
+    with ``getattr`` + sentinel and exact-type gates before any value comparison means an object built without
+    its initializer, a subsequently mutated object, or a wrong internal type raises ``reason`` and never leaks
+    ``AttributeError``/``TypeError``/etc.
+    """
+    raw = getattr(obj, "raw", _MISSING)
+    if raw is _MISSING or type(raw) is not bytes:
+        raise _err(reason)
+    if expected_raw is not None and raw != expected_raw:
+        raise _err(reason)
+    try:
+        pubk, min_time, max_time, extensions = _decode_dele_primitive(raw)
+    except RoughtimeV19ResponseSemanticError:
+        raise _err(reason) from None
+    obj_pubk = getattr(obj, "pubk", _MISSING)
+    obj_min = getattr(obj, "min_time", _MISSING)
+    obj_max = getattr(obj, "max_time", _MISSING)
+    obj_ext = getattr(obj, "extensions", _MISSING)
+    if obj_pubk is _MISSING or obj_min is _MISSING or obj_max is _MISSING or obj_ext is _MISSING:
+        raise _err(reason)
+    if type(obj_pubk) is not bytes or type(obj_min) is not int or type(obj_max) is not int:
+        raise _err(reason)
+    if obj_pubk != pubk or obj_min != min_time or obj_max != max_time:
+        raise _err(reason)
+    _validate_extensions(obj_ext, extensions, reason)
+
+
+def _validate_signed_response_state(
+    obj: object,
+    reason: RoughtimeV19ResponseSemanticReason,
+    *,
+    expected_raw: bytes | None = None,
+) -> None:
+    """Prove an exact-type signed-response object's COMPLETE current state matches the primitive re-decode of its
+    own exact SREP ``raw`` (and its ``raw`` equals ``expected_raw`` when a parent supplies it). Safe against
+    objects built without their initializer or mutated after construction; never leaks a raw exception.
+    """
+    raw = getattr(obj, "raw", _MISSING)
+    if raw is _MISSING or type(raw) is not bytes:
+        raise _err(reason)
+    if expected_raw is not None and raw != expected_raw:
+        raise _err(reason)
+    try:
+        version, radius, midpoint, versions, root, extensions = _decode_srep_primitive(raw)
+    except RoughtimeV19ResponseSemanticError:
+        raise _err(reason) from None
+    obj_version = getattr(obj, "version", _MISSING)
+    obj_radius = getattr(obj, "radius_seconds", _MISSING)
+    obj_midpoint = getattr(obj, "midpoint_seconds", _MISSING)
+    obj_versions = getattr(obj, "versions", _MISSING)
+    obj_root = getattr(obj, "root", _MISSING)
+    obj_ext = getattr(obj, "extensions", _MISSING)
+    if (
+        obj_version is _MISSING
+        or obj_radius is _MISSING
+        or obj_midpoint is _MISSING
+        or obj_versions is _MISSING
+        or obj_root is _MISSING
+        or obj_ext is _MISSING
+    ):
+        raise _err(reason)
+    if type(obj_version) is not int or type(obj_radius) is not int or type(obj_midpoint) is not int:
+        raise _err(reason)
+    if type(obj_root) is not bytes or type(obj_versions) is not tuple:
+        raise _err(reason)
+    for entry in obj_versions:
+        if type(entry) is not int:  # exact int per version entry; bool and int subclasses rejected
+            raise _err(reason)
+    if obj_version != version or obj_radius != radius or obj_midpoint != midpoint:
+        raise _err(reason)
+    if obj_versions != versions or obj_root != root:
+        raise _err(reason)
+    _validate_extensions(obj_ext, extensions, reason)
+
+
+def _validate_certificate_state(
+    obj: object,
+    reason: RoughtimeV19ResponseSemanticReason,
+    *,
+    expected_raw: bytes | None = None,
+) -> None:
+    """Prove an exact-type certificate object's COMPLETE current state matches the primitive re-decode of its own
+    exact CERT ``raw`` — signature, extensions, and the nested delegation's complete state bound to the exact
+    embedded DELE raw (never trusting ``delegation.raw`` alone). Safe against uninitialized or mutated objects;
+    never leaks a raw exception.
+    """
+    raw = getattr(obj, "raw", _MISSING)
+    if raw is _MISSING or type(raw) is not bytes:
+        raise _err(reason)
+    if expected_raw is not None and raw != expected_raw:
+        raise _err(reason)
+    try:
+        signature, dele_raw, _dele_primitive, extensions = _decode_cert_primitive(raw)
+    except RoughtimeV19ResponseSemanticError:
+        raise _err(reason) from None
+    obj_signature = getattr(obj, "signature", _MISSING)
+    obj_delegation = getattr(obj, "delegation", _MISSING)
+    obj_ext = getattr(obj, "extensions", _MISSING)
+    if obj_signature is _MISSING or obj_delegation is _MISSING or obj_ext is _MISSING:
+        raise _err(reason)
+    if type(obj_signature) is not bytes:
+        raise _err(reason)
+    if obj_signature != signature:
+        raise _err(reason)
+    if type(obj_delegation) is not RoughtimeV19DelegationSemantics:  # exact type; subclasses rejected
+        raise _err(reason)
+    _validate_extensions(obj_ext, extensions, reason)
+    _validate_delegation_state(obj_delegation, reason, expected_raw=dele_raw)
 
 
 # --- Builders (assemble artifacts from already-decoded primitives) ----------------------------------------

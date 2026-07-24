@@ -492,8 +492,23 @@ def test_srep_vers_descending_rejected() -> None:
     _assert_reason(R.SREP_VERS_INVALID, _packet(srep=_srep_raw(vers=_u32(1) + _u32(0))))
 
 
-def test_srep_vers_duplicate_rejected() -> None:
-    _assert_reason(R.SREP_VERS_INVALID, _packet(srep=_srep_raw(vers=_u32(1) + _u32(1))))
+def test_srep_vers_adjacent_duplicate_accepted_and_preserved() -> None:
+    # Draft-19 does NOT prohibit repeated response VERS values (only the REQUEST VER list forbids repetition).
+    response = parse_roughtime_v19_response(_packet(srep=_srep_raw(ver=_u32(1), vers=_u32(1) + _u32(1))))
+    assert response.signed_response.versions == (1, 1)
+
+
+def test_srep_vers_duplicate_triplet_accepted_and_preserved() -> None:
+    response = parse_roughtime_v19_response(_packet(srep=_srep_raw(ver=_u32(1), vers=_u32(1) + _u32(2) + _u32(2))))
+    assert response.signed_response.versions == (1, 2, 2)
+
+
+def test_srep_vers_duplicate_parse_is_deterministic() -> None:
+    packet = _packet(srep=_srep_raw(ver=_u32(1), vers=_u32(1) + _u32(1) + _u32(2)))
+    first = parse_roughtime_v19_response(packet)
+    second = parse_roughtime_v19_response(packet)
+    assert first == second
+    assert first.signed_response.versions == (1, 1, 2)
 
 
 def test_srep_selected_version_missing_from_vers_rejected() -> None:
@@ -1068,6 +1083,276 @@ def test_response_frozen_and_nested_stable() -> None:
     # Nested artifacts remain unchanged and consistent after a rejected assignment.
     assert response.signed_response.raw == _srep_raw()
     assert response.certificate.delegation.raw == _dele_raw()
+
+
+# =========================================================================================================
+# Complete nested-state binding matrix (exact-type objects built without / mutated after their initializer)
+# =========================================================================================================
+def _hollow(cls: type, **attrs: object) -> object:
+    """An exact-type instance built WITHOUT its dataclass initializer (object.__new__), attributes set raw."""
+    obj = object.__new__(cls)
+    for name, value in attrs.items():
+        object.__setattr__(obj, name, value)
+    return obj
+
+
+def _mutate(obj: object, **attrs: object) -> object:
+    """Replace fields on an already-constructed frozen artifact via low-level direct state replacement."""
+    for name, value in attrs.items():
+        object.__setattr__(obj, name, value)
+    return obj
+
+
+# --- A. Signed-response parent boundary ---
+def test_hollow_signed_response_raw_only_rejected_by_response_parent() -> None:
+    hollow = _hollow(RoughtimeV19SignedResponseSemantics, raw=_srep_raw())  # matching raw, no semantic fields
+    with pytest.raises(RoughtimeV19ResponseSemanticError) as excinfo:
+        RoughtimeV19ResponseSemantics(
+            signature=_OUTER_SIG64,
+            nonce=_NONC32,
+            message_type=1,
+            path=(),
+            index=0,
+            signed_response=hollow,
+            certificate=_make_certificate(),
+            extensions=(_ext(_EXT, _OUTER_EXT_VAL),),
+            raw=_packet(),
+        )
+    assert excinfo.value.reason is R.ARTIFACT_RESPONSE_INCONSISTENT
+
+
+def test_signed_response_all_fields_present_one_wrong_rejected() -> None:
+    hollow = _hollow(
+        RoughtimeV19SignedResponseSemantics,
+        version=1,
+        radius_seconds=3,
+        midpoint_seconds=151,  # 151 != 150
+        versions=(1, _VERS_SECOND),
+        root=_ROOT32,
+        extensions=(_ext(_EXT, _SREP_EXT_VAL),),
+        raw=_srep_raw(),
+    )
+    with pytest.raises(RoughtimeV19ResponseSemanticError) as excinfo:
+        RoughtimeV19ResponseSemantics(
+            signature=_OUTER_SIG64,
+            nonce=_NONC32,
+            message_type=1,
+            path=(),
+            index=0,
+            signed_response=hollow,
+            certificate=_make_certificate(),
+            extensions=(_ext(_EXT, _OUTER_EXT_VAL),),
+            raw=_packet(),
+        )
+    assert excinfo.value.reason is R.ARTIFACT_RESPONSE_INCONSISTENT
+
+
+# --- B. Certificate parent boundary ---
+def test_hollow_certificate_raw_only_rejected_by_response_parent() -> None:
+    hollow = _hollow(RoughtimeV19CertificateSemantics, raw=_cert_raw())
+    with pytest.raises(RoughtimeV19ResponseSemanticError) as excinfo:
+        RoughtimeV19ResponseSemantics(
+            signature=_OUTER_SIG64,
+            nonce=_NONC32,
+            message_type=1,
+            path=(),
+            index=0,
+            signed_response=_make_signed_response(),
+            certificate=hollow,
+            extensions=(_ext(_EXT, _OUTER_EXT_VAL),),
+            raw=_packet(),
+        )
+    assert excinfo.value.reason is R.ARTIFACT_RESPONSE_INCONSISTENT
+
+
+def test_certificate_inconsistent_signature_rejected_by_response_parent() -> None:
+    hollow = _hollow(
+        RoughtimeV19CertificateSemantics,
+        signature=bytes(range(1, 65)),  # wrong signature
+        delegation=_make_delegation(),
+        extensions=(_ext(_EXT, _CERT_EXT_VAL),),
+        raw=_cert_raw(),
+    )
+    with pytest.raises(RoughtimeV19ResponseSemanticError) as excinfo:
+        RoughtimeV19ResponseSemantics(
+            signature=_OUTER_SIG64,
+            nonce=_NONC32,
+            message_type=1,
+            path=(),
+            index=0,
+            signed_response=_make_signed_response(),
+            certificate=hollow,
+            extensions=(_ext(_EXT, _OUTER_EXT_VAL),),
+            raw=_packet(),
+        )
+    assert excinfo.value.reason is R.ARTIFACT_RESPONSE_INCONSISTENT
+
+
+# --- C. Delegation boundary (certificate parent) ---
+def test_hollow_delegation_raw_only_rejected_by_certificate_parent() -> None:
+    hollow = _hollow(RoughtimeV19DelegationSemantics, raw=_dele_raw())
+    with pytest.raises(RoughtimeV19ResponseSemanticError) as excinfo:
+        RoughtimeV19CertificateSemantics(
+            signature=_CERT_SIG64,
+            delegation=hollow,
+            extensions=(_ext(_EXT, _CERT_EXT_VAL),),
+            raw=_cert_raw(),
+        )
+    assert excinfo.value.reason is R.ARTIFACT_CERT_INCONSISTENT
+
+
+def test_delegation_inconsistent_pubk_rejected_by_certificate_parent() -> None:
+    hollow = _hollow(
+        RoughtimeV19DelegationSemantics,
+        pubk=bytes(range(1, 33)),  # wrong pubk
+        min_time=_MINT_VALUE,
+        max_time=_MAXT_VALUE,
+        extensions=(_ext(_EXT, _DELE_EXT_VAL),),
+        raw=_dele_raw(),
+    )
+    with pytest.raises(RoughtimeV19ResponseSemanticError) as excinfo:
+        RoughtimeV19CertificateSemantics(
+            signature=_CERT_SIG64,
+            delegation=hollow,
+            extensions=(_ext(_EXT, _CERT_EXT_VAL),),
+            raw=_cert_raw(),
+        )
+    assert excinfo.value.reason is R.ARTIFACT_CERT_INCONSISTENT
+
+
+# --- D. Existing valid object mutated before parent admission ---
+def test_mutated_signed_response_rejected_by_response_parent() -> None:
+    srep = _mutate(_make_signed_response(), midpoint_seconds=149)  # raw unchanged, midpoint now wrong
+    with pytest.raises(RoughtimeV19ResponseSemanticError) as excinfo:
+        RoughtimeV19ResponseSemantics(
+            signature=_OUTER_SIG64,
+            nonce=_NONC32,
+            message_type=1,
+            path=(),
+            index=0,
+            signed_response=srep,
+            certificate=_make_certificate(),
+            extensions=(_ext(_EXT, _OUTER_EXT_VAL),),
+            raw=_packet(),
+        )
+    assert excinfo.value.reason is R.ARTIFACT_RESPONSE_INCONSISTENT
+
+
+def test_mutated_certificate_rejected_by_response_parent() -> None:
+    cert = _mutate(_make_certificate(), signature=bytes(range(1, 65)))  # raw unchanged, signature now wrong
+    with pytest.raises(RoughtimeV19ResponseSemanticError) as excinfo:
+        RoughtimeV19ResponseSemantics(
+            signature=_OUTER_SIG64,
+            nonce=_NONC32,
+            message_type=1,
+            path=(),
+            index=0,
+            signed_response=_make_signed_response(),
+            certificate=cert,
+            extensions=(_ext(_EXT, _OUTER_EXT_VAL),),
+            raw=_packet(),
+        )
+    assert excinfo.value.reason is R.ARTIFACT_RESPONSE_INCONSISTENT
+
+
+def test_mutated_delegation_rejected_by_certificate_parent() -> None:
+    dele = _mutate(_make_delegation(), min_time=_MINT_VALUE + 1)  # raw unchanged, min_time now wrong
+    with pytest.raises(RoughtimeV19ResponseSemanticError) as excinfo:
+        RoughtimeV19CertificateSemantics(
+            signature=_CERT_SIG64,
+            delegation=dele,
+            extensions=(_ext(_EXT, _CERT_EXT_VAL),),
+            raw=_cert_raw(),
+        )
+    assert excinfo.value.reason is R.ARTIFACT_CERT_INCONSISTENT
+
+
+# --- E. Extension boundary — exact-type K1 field built without/with malformed internal state ---
+def _hollow_field(**attrs: object) -> RoughtimeV19Field:
+    return _hollow(RoughtimeV19Field, **attrs)  # type: ignore[return-value]
+
+
+def _dele_with_extensions(extensions: tuple[object, ...]) -> None:
+    RoughtimeV19DelegationSemantics(
+        pubk=_PUBK32,
+        min_time=_MINT_VALUE,
+        max_time=_MAXT_VALUE,
+        extensions=extensions,
+        raw=_dele_raw(),
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        _hollow_field(),  # no attributes at all
+        _hollow_field(tag=_EXT, tag_uint32=_le(_EXT)),  # missing value attribute
+        _hollow_field(tag=_EXT, tag_uint32=999, value=_DELE_EXT_VAL),  # exact tag, wrong numeric value
+        _hollow_field(tag=_BytesSubclass(_EXT), tag_uint32=_le(_EXT), value=_DELE_EXT_VAL),  # bytes-subclass tag
+        _hollow_field(tag=_EXT, tag_uint32=_IntSubclass(_le(_EXT)), value=_DELE_EXT_VAL),  # int-subclass uint32
+        _hollow_field(
+            tag=b"\x01\x02\x03\x04", tag_uint32=_le(b"\x01\x02\x03\x04"), value=_DELE_EXT_VAL
+        ),  # non-canonical
+        _hollow_field(tag=_EXT, tag_uint32=_le(_EXT), value=b"\x00\x00\x00\x00"),  # value-correct type, wrong value
+        _hollow_field(tag=_EXT, tag_uint32=_le(_EXT), value=_HostileEqBytes(_DELE_EXT_VAL)),  # hostile-eq value
+    ],
+)
+def test_incomplete_extension_field_rejected_in_delegation(field: RoughtimeV19Field) -> None:
+    with pytest.raises(RoughtimeV19ResponseSemanticError) as excinfo:
+        _dele_with_extensions((field,))
+    assert excinfo.value.reason is R.ARTIFACT_DELE_INCONSISTENT
+
+
+def test_incomplete_extension_field_rejected_in_signed_response() -> None:
+    hollow_field = _hollow_field()  # no attributes -> must not leak AttributeError
+    with pytest.raises(RoughtimeV19ResponseSemanticError) as excinfo:
+        RoughtimeV19SignedResponseSemantics(
+            version=1,
+            radius_seconds=3,
+            midpoint_seconds=_MIDP_VALUE,
+            versions=(1, _VERS_SECOND),
+            root=_ROOT32,
+            extensions=(hollow_field,),
+            raw=_srep_raw(),
+        )
+    assert excinfo.value.reason is R.ARTIFACT_SREP_INCONSISTENT
+
+
+def test_incomplete_extension_field_rejected_in_outer_response() -> None:
+    hollow_field = _hollow_field(tag=_EXT, tag_uint32=999, value=_OUTER_EXT_VAL)  # wrong numeric value
+    with pytest.raises(RoughtimeV19ResponseSemanticError) as excinfo:
+        RoughtimeV19ResponseSemantics(
+            signature=_OUTER_SIG64,
+            nonce=_NONC32,
+            message_type=1,
+            path=(),
+            index=0,
+            signed_response=_make_signed_response(),
+            certificate=_make_certificate(),
+            extensions=(hollow_field,),
+            raw=_packet(),
+        )
+    assert excinfo.value.reason is R.ARTIFACT_RESPONSE_INCONSISTENT
+
+
+def test_incomplete_extension_field_does_not_leak_raw_exception() -> None:
+    # A field with no internal state at all must surface the closed reason, never a raw AttributeError.
+    try:
+        _dele_with_extensions((_hollow_field(),))
+    except RoughtimeV19ResponseSemanticError:
+        pass
+    except Exception as exc:  # noqa: BLE001 - the whole point is proving nothing else escapes
+        raise AssertionError(f"raw exception leaked: {type(exc).__name__}") from exc
+    else:  # pragma: no cover
+        raise AssertionError("expected a closed semantic error")
+
+
+# --- F. Positive independence after complete-state validation ---
+def test_full_valid_nested_hierarchy_still_accepted() -> None:
+    response = _make_response()  # independently constructed nested hierarchy
+    assert response == parse_roughtime_v19_response(_packet())
+    assert response.certificate.delegation.min_time == _MINT_VALUE
+    assert response.signed_response.versions == (1, _VERS_SECOND)
 
 
 # =========================================================================================================
