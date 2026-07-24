@@ -66,6 +66,22 @@ do not block code, but any resolution needs explicit guarded closeout; human thr
 - No `gh pr review --approve` (self-approval) ever.
 - **Digest-boundary rule (recurring P1 class):** any consumer of a digest-carrying object must recompute the upstream digest via the **public serializer** (remove the self-digest field, canonical JSON `sort_keys=True, separators=(",",":"), ensure_ascii=True, allow_nan=False`, SHA-256) and **reject mismatch before READY/ADMITTED/ACCEPTED**. A matching id is never sufficient; a forged/non-serializable upstream must hit the `*_mismatch` path, never a raw `TypeError`. Tests must include a tampered-field case.
 
+### Dependabot collision prevention
+
+- Scheduled Dependabot version-update PRs are disabled for all currently configured ecosystems using
+  `open-pull-requests-limit: 0`.
+- This does not disable Dependabot alerts or security-update PRs.
+- Normal dependency version updates are admitted only through a dedicated controller-selected maintenance
+  slice.
+- Dependency maintenance requires zero pre-existing open PRs and follows normal topic-branch, validation,
+  audit and explicit merge-authorization gates.
+- Scheduled version updates must not be temporarily re-enabled while an active crypto_core PR exists.
+- An automatically generated security-update PR is treated as an externally generated urgent input requiring
+  controller triage.
+- A security-update PR does not silently waive one-open-PR and does not authorize concurrent implementation.
+- No dependency update is performed by this governance PR.
+- No security finding is being dismissed or ignored.
+
 ## 4. Standard PR Lifecycle
 
 1. ChatGPT selects one bounded slice → one Claude implementation prompt (pinned expected `main` HEAD, "open PRs: none").
