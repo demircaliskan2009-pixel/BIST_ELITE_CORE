@@ -83,6 +83,19 @@ commit `1890d2b`; repair commits `1cd2799` scope-binding, `ec95c4e` lossy-contai
   `chore/crypto-core-agent-workflow-*` PR.)
 - **One open PR at a time; no direct main push; standard merge only; no merge without explicit per-PR
   authorization.** Unchanged hard rails — restated so lessons never erode them.
+- **Repository process invariants must be enforced by configuration where possible, not merely repeated in
+  prompts.** While governed feature PR #342 was active, Dependabot automatically opened scheduled
+  version-update PRs #343 (github-actions, `actions/setup-python` 5→7) and #344 (pip, `typer` bump in the
+  `python-version-updates` group), producing concurrently open PRs that violated the one-open-PR operating
+  invariant; both were closed without merge to restore it. This was a **configuration/process collision**,
+  not a Dependabot policy breach or a dismissed security finding. Durable repair: `open-pull-requests-limit:
+  0` on both configured ecosystems in `.github/dependabot.yml`, which disables scheduled **version-update**
+  PR generation while **retaining Dependabot alerts and security-update PRs**. Dependency version maintenance
+  now occurs only in a dedicated controller-selected maintenance window with zero pre-existing open PRs; an
+  automatically generated security-update PR still requires immediate controller triage but never silently
+  waives one-open-PR. (PR #342 active feature PR · PR #343/#344 scheduled version updates closed without
+  merge · `.github/dependabot.yml` `open-pull-requests-limit: 0` · `agent_workflow.md` §3 "Dependabot
+  collision prevention".)
 - **Deep Research is a high-leverage architecture/benchmark/current-fact tool — especially paired with
   GitHub-connector repo evidence — but it guides bounded PR sequencing; it never bypasses local proof
   gates.** Use it for external/current facts (exchange/API/funding/fees/limits/microstructure/custody/
