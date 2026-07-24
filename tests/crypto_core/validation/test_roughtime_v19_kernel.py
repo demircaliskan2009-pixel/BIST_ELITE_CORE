@@ -885,9 +885,12 @@ def test_message_reverse_field_count_mismatch_rejected() -> None:
 
 
 def test_message_valid_but_different_tag_binding_rejected() -> None:
-    # Pair count and value lengths match, but the first supplied tag (C) differs from the A encoded in raw.
+    # Pair count and value lengths match and the supplied tags stay in canonical ascending order (A, C), but
+    # the second supplied tag (C) differs from the B encoded in raw — an ordered raw/tag binding mismatch
+    # (not a descending supplied sequence).
     raw = _encode_canonical_message([(_TAG_A, b""), (_TAG_B, b"\x01\x02\x03\x04")])
-    fields = (_field(_TAG_C, b""), _field(_TAG_B, b"\x01\x02\x03\x04"))
+    fields = (_field(_TAG_A, b""), _field(_TAG_C, b"\x01\x02\x03\x04"))
+    assert _le(fields[0].tag) < _le(fields[1].tag)  # supplied tags remain ascending
     _assert_message_inconsistent(pair_count=2, fields=fields, raw=raw)
 
 
@@ -968,6 +971,42 @@ def test_independent_packet_direct_construction() -> None:
     assert packet.message.fields[0].value == b""
     assert packet.message.fields[1].tag == _TAG_B
     assert packet.message.fields[1].value == b"\x01\x02\x03\x04"
+
+
+# --- Exact built-in int contracts (value-preserving int-subclass rejection) ------------------------------
+class _IntSubclass(int):
+    pass
+
+
+def test_field_int_subclass_tag_uint32_rejected() -> None:
+    # Numerically correct (== int.from_bytes(_TAG_A, "little")), but an int subclass, not exact int. This
+    # fails only if production weakens `type(tag_uint32) is int` to `isinstance(tag_uint32, int)`, since every
+    # later consistency check would then pass.
+    subclass_value = _IntSubclass(_le(_TAG_A))
+    assert subclass_value == _le(_TAG_A)
+    _assert_field_inconsistent(tag=_TAG_A, tag_uint32=subclass_value, value=b"")
+
+
+def test_message_int_subclass_pair_count_rejected() -> None:
+    # pair_count is numerically correct (== decoded raw pair count == supplied field count == 2), but an int
+    # subclass, not exact int. Isolates only the exact-type requirement.
+    raw = _encode_canonical_message([(_TAG_A, b""), (_TAG_B, b"\x01\x02\x03\x04")])
+    fields = (_field(_TAG_A, b""), _field(_TAG_B, b"\x01\x02\x03\x04"))
+    subclass_count = _IntSubclass(2)
+    assert subclass_count == 2 == len(fields)
+    _assert_message_inconsistent(pair_count=subclass_count, fields=fields, raw=raw)
+
+
+def test_packet_int_subclass_message_length_rejected() -> None:
+    # message_length is numerically correct (== raw header declared length == embedded message length), but an
+    # int subclass, not exact int. Isolates only the exact-type requirement.
+    message_bytes = _encode_canonical_message([(_TAG_A, b""), (_TAG_B, b"\x01\x02\x03\x04")])
+    fields = (_field(_TAG_A, b""), _field(_TAG_B, b"\x01\x02\x03\x04"))
+    message = RoughtimeV19Message(pair_count=2, fields=fields, raw=message_bytes)
+    packet_raw = _encode_packet(message_bytes)
+    subclass_length = _IntSubclass(len(message.raw))
+    assert subclass_length == len(message.raw) == len(message_bytes)
+    _assert_packet_inconsistent(magic=_MAGIC, message_length=subclass_length, message=message, raw=packet_raw)
 
 
 # --- AST / structural safety -----------------------------------------------------------------------------
