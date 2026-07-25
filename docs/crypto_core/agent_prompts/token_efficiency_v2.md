@@ -6,9 +6,14 @@ safety. Every serious prompt includes `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASON
 actions, validation, stops, and the `AGENT_OS_HANDOFF_V1` report. An exact-model mismatch is
 `STOP_WITH_PROOF`; otherwise actual runtime is reported without overclaim. Every serious prompt inherits
 `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2). The active lane set is exactly eight (ChatGPT GPT-5.6
-Thinking read-only-first controller, GitHub connector, Deep Research, Claude Opus 4.8, Claude Sonnet 5, Codex
-Sol/Terra/Luna). Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED` (section 24.10) — not an active lane, fallback,
-or dependency; pre-v5.2 Fable prompts are archived in `fable_exit_contract_index.md` and are never active.
+Thinking read-only-first controller, GitHub connector, Deep Research, Claude Opus 5, Claude Sonnet 5, Codex
+Sol/Terra/Luna). Lane and effort selection is not restated here: the single `AUTHORITATIVE_ROUTING_MATRIX`
+is section 24.3, the effort/thinking architecture is section 24.12, and Claude prompt templates plus the
+prompt-compiler contract live in `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`. Claude
+mutation lanes require the exact model id (`claude-opus-5` / `claude-sonnet-5`) plus session-level proof of
+the actual effort — an unresolved alias is not proof. Claude Opus 4.8 is `SUPERSEDED_BY_OPUS_5` and Claude
+Fable 5 is `INACTIVE_EXPIRED_RETIRED` (section 24.10) — neither is an active lane, fallback, or dependency;
+pre-v5.2 Fable prompts are archived in `fable_exit_contract_index.md` and are never active.
 
 ## 1. Shared lanes
 

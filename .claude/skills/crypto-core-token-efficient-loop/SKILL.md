@@ -14,9 +14,14 @@ tokens. Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2).
 1. Intake the controller packet first (CONTROLLER_TO_IMPLEMENTER: pinned state, exact read set, allowed
    files, invariants, protected-risk class, validation ladder, stops). Do NOT repeat broad GitHub discovery
    the controller already proved.
-2. Classify: T0 Luna mechanical; T1 read-only/fast bounded (Luna/Terra/runtime-proven Sonnet 5); T2 bounded
-   implementation (Terra/Sonnet 5); T3 complex/repair (Opus 4.8 heavy local or Terra xhigh); T4 Sol
+2. Classify against the single authoritative routing matrix (`agent_workflow.md` §24.3): T0 mechanical
+   (Sonnet 5 low / Luna); T1 read-only, fast-bounded and governed closeout (Sonnet 5 low / Luna / Terra);
+   T2 bounded implementation (Sonnet 5 medium / Terra); T3A complex implementation (Opus 5 xhigh, default
+   heavy local) ; T3B capability-critical (Opus 5 max, explicit trigger only); T3C review (Opus 5
+   medium/high/xhigh by breadth); T3D architecture and T3E prompt architecture (Opus 5 high/xhigh); T4 Sol
    cross-contract; XR controller-orchestrated Deep Research; controller/connector final evidence gate.
+   Effort selection: §24.12. Prove `MODEL_ACTUAL` and `MODEL_EFFORT_ACTUAL` from session runtime evidence
+   before mutating — an unresolved alias is not proof; mismatch or fallback is `STOP_WITH_PROOF`.
 3. Prove LOCAL state once with `git`/`gh`: HEAD, clean tree, open PRs, and checks when relevant — local
    proof stays Claude's own responsibility even with a controller packet.
 4. Read the named set; use symbol search before full files; build one source surface map.
@@ -31,12 +36,21 @@ tokens. Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2).
 ## Boundaries
 
 - Claude Fable 5 = `INACTIVE_EXPIRED_RETIRED` (workflow §24.10) — not an active lane, fallback, or
-  dependency. Former surge work routes to Opus 4.8 (broad-but-bounded T3) or Sonnet 5 / Terra (bounded T2);
+  dependency. Former surge work routes to Opus 5 (broad-but-bounded T3) or Sonnet 5 / Terra (bounded T2);
   former read-only challenge/full-repo audit routes to the ChatGPT read-only-first controller
   (`CONTROLLER_READONLY_FIRST_POLICY`) or Codex Sol for protected Class-C. Archived Fable material in
   `fable_exit_contract_index.md` is HISTORICAL/ARCHIVAL only.
-- Claude Opus 4.8 owns broad local implementation and long loops by default; runtime-proven Claude Sonnet 5
-  owns small/medium bounded slices, docs/tests, and mechanical code (fallback: Terra bounded / Opus broad).
+- Claude Opus 5 (`claude-opus-5`) owns broad local implementation, long loops, review, architecture and
+  complex prompt design; runtime-proven Claude Sonnet 5 (`claude-sonnet-5`) is the DEFAULT lane for status,
+  polling, governed closeout, small/medium bounded slices, docs/tests and mechanical code (fallback: Terra
+  bounded / Opus 5 broad). Claude Opus 4.8 is `SUPERSEDED_BY_OPUS_5` — historical evidence only.
+- Effort: Opus 5 `xhigh` is the normal coding default; `max` only on an explicit T3B trigger, never for
+  polling, closeout, formatting, routine tests, simple docs or one-line repair. Keep adaptive thinking
+  enabled — never `thinking: disabled` on a T3 lane or with `xhigh`/`max`.
+- Subagents default 0 (max 2 read-only, genuinely independent substantial tracks only). Run each
+  deterministic gate once per unchanged head; no generic re-verification loops. Deliver exactly the
+  authorized scope — report and stop instead of widening. `ultracode`, if exposed, is an orchestration mode,
+  never an effort level and never a default.
 - No Claude session self-satisfies independent review; Class-C protected work (digest/provenance, SM-5/SM-6,
   Stage-4, readiness, finance arithmetic, trust transitions) always gets a fresh pinned-head Codex audit.
 - Sol is scarce and never used for mechanics. Luna never performs broad design or feature implementation.

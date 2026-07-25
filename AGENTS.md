@@ -15,9 +15,10 @@
 
 Active doctrine is `docs/crypto_core/agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`). This file
 supplies durable rails; prompt lanes in `docs/crypto_core/agent_prompts/token_efficiency_v2.md` compress
-procedure text only; per-model prompt authoring lives in `docs/crypto_core/model_prompting_guide.md`; the
-research protocol lives in `docs/crypto_core/deep_research_protocol.md`. If documents conflict, the stricter
-safety rule wins.
+procedure text only; per-model prompt authoring lives in `docs/crypto_core/model_prompting_guide.md`; Claude
+effort selection, prompt templates and the prompt-compiler contract live in
+`docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`; the research protocol lives in
+`docs/crypto_core/deep_research_protocol.md`. If documents conflict, the stricter safety rule wins.
 
 ### Final durable model set (Agent OS v1)
 
@@ -40,18 +41,24 @@ safety rule wins.
   overengineering reviews. Strictly read-only and advisory; never executor, mutation, or merge authority.
 - **Claude Fable 5 — `INACTIVE_EXPIRED_RETIRED`** — the former premium-surge lane is retired and is NOT an
   active model, fallback, or dependency (workflow section 24.10). Former responsibilities are redistributed:
-  broad-but-bounded T3 implementation → Claude Opus 4.8 (genuinely bounded T2 → Sonnet 5/Terra); non-Class-C
+  broad-but-bounded T3 implementation → Claude Opus 5 (genuinely bounded T2 → Sonnet 5/Terra); non-Class-C
   read-only architecture/contradiction analysis → the ChatGPT controller (Terra ordinary audit only when
   evidence requires); rare read-only milestone audit → ChatGPT + GitHub connector (protected disputed
   questions → narrow Sol packets). No lane claims Fable-equivalent quality. Pre-v5.2 Fable material survives
   only as HISTORICAL/SUPERSEDED/ARCHIVAL evidence (`fable_exit_contract_index.md`, workflow sections 20-23).
-- **Claude Opus 4.8** — DEFAULT heavy local executor: T3 broad-but-bounded implementation, large refactors,
-  complex fail-closed work, forensic debugging, long validation loops, multi-file integration, same-branch
-  P1/P2 repair. Never spent on metadata, CI polling, ordinary docs, or work Sonnet/Terra can safely complete.
-- **Claude Sonnet 5 — runtime-proven only** — T1 bounded reads, T2 small/medium deterministic
-  implementation, docs/tests, mechanical code, simple repairs, fast loops. Availability/identity must be
-  runtime-proven; never protected trust-boundary/digest/SM-5-SM-6/Stage-4/readiness/capital work, never T4,
-  never a mandatory Class-C audit. Fallback: Terra (bounded) / Opus (broad).
+- **Claude Opus 5** — DEFAULT heavy local executor (`claude-opus-5`): T3A complex/broad-but-bounded
+  implementation, large refactors, complex fail-closed work, forensic debugging, long validation loops,
+  multi-file integration, same-branch P1/P2 repair at `xhigh`; T3B capability-critical work at `max` only
+  on an explicit trigger; T3C review at `medium`/`high`/`xhigh` by breadth; T3D architecture and T3E prompt
+  architecture at `high`/`xhigh`. Never spent on metadata, CI polling, ordinary docs, or work Sonnet/Terra
+  can safely complete. Effort architecture: `agent_workflow.md` section 24.12; prompting:
+  `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`.
+- **Claude Sonnet 5 — runtime-proven only** — the default Claude lane for routine work (`claude-sonnet-5`):
+  T0 status/polling/git hygiene and T1 bounded reads plus governed mechanical closeout at `low`; T2
+  small/medium deterministic implementation, docs/tests, config, mechanical code and simple repairs at
+  `medium`. Availability/identity must be runtime-proven; never protected
+  trust-boundary/digest/SM-5-SM-6/Stage-4/readiness/capital work, never T4, never a mandatory Class-C
+  audit. Fallback: Terra (bounded) / Opus 5 (broad).
 - **Codex GPT-5.6 Sol** — protected T4 cross-contract design/audit: digest/provenance/trust boundaries,
   SM-5/SM-6, Stage-4 semantics, readiness/Deribit design, complex security/CodeQL. Only on a
   controller-prepared narrow evidence packet; never broad discovery or mechanics.
@@ -62,13 +69,15 @@ safety rule wins.
 
 **Copilot status: `INACTIVE_UNAVAILABLE`.** Copilot is currently unavailable and is not an active execution
 lane. Do not route tasks or generate Copilot prompts unless a future explicit human decision reactivates it
-through a separately audited workflow change. Local execution occurs directly through Claude Code (Opus 4.8,
-Sonnet 5) or Codex (Sol/Terra/Luna) sessions according to the T0-T4 routing matrix above — neither is an
-execution host for the other; each Claude/Codex session is its own trusted model identity.
+through a separately audited workflow change. Local execution occurs directly through Claude Code (Opus 5,
+Sonnet 5) or Codex (Sol/Terra/Luna) sessions according to the single authoritative routing matrix in
+`agent_workflow.md` section 24.3 — neither is an execution host for the other; each Claude/Codex session is
+its own trusted model identity. **Claude Opus 4.8 status: `SUPERSEDED_BY_OPUS_5`** — not an active lane,
+fallback, or dependency; dated Opus 4.8 execution records remain HISTORICAL evidence only.
 
 Model selection follows `MODEL_EXPECTED_VALUE_PER_TOKEN_POLICY` (workflow section 24.10): expected value
 per token from safety class, semantic complexity, breadth, independence needs, expected prompts, repair
-probability, availability, and measured harness cost — Opus 4.8 is the default heavy executor, Sonnet 5/Terra
+probability, availability, and measured harness cost — Opus 5 is the default heavy executor, Sonnet 5/Terra
 are the economical bounded lanes, Sol is scarce protected reasoning, and ChatGPT is the read-only-first
 controller-auditor for non-Class-C work (`CONTROLLER_READONLY_FIRST_POLICY`). Pre-v5.2 Fable-era material
 (now `INACTIVE_EXPIRED_RETIRED`) stays archived under HISTORICAL/SUPERSEDED/ARCHIVAL labels
@@ -83,8 +92,12 @@ connector gate, explicit human merge authorization, or post-merge verification.
 ### Task taxonomy and audit classes
 
 - T0 `LUNA_MECHANICAL`; T1 `READONLY_OR_FAST_BOUNDED`; T2 `BOUNDED_IMPLEMENTATION`;
-  T3 `COMPLEX_IMPLEMENTATION_OR_REPAIR`; T4 `CROSS_CONTRACT_DESIGN_OR_AUDIT`;
-  XR `DEEP_RESEARCH_EXTERNAL`; `CONTROLLER_CONNECTOR_GATE`.
+  T3A `COMPLEX_IMPLEMENTATION`; T3B `CAPABILITY_CRITICAL_IMPLEMENTATION_OR_REPAIR`;
+  T3C `CODE_REVIEW_AND_BUG_FINDING`; T3D `ARCHITECTURE_AND_NEXT_SLICE`;
+  T3E `COMPLEX_PROMPT_ARCHITECTURE`; T4 `CROSS_CONTRACT_DESIGN_OR_AUDIT`;
+  XR `DEEP_RESEARCH_EXTERNAL`; `CONTROLLER_CONNECTOR_GATE`. Unsuffixed "T3" means T3A. The single
+  authoritative class → lane → model id → effort matrix is `agent_workflow.md` section 24.3; no other file
+  restates it as authority.
 - **Class A (controller-sufficient):** docs/setup/prompt/skill/workflow-doc/low-risk-CI/helper-script PRs —
   ChatGPT + connector may satisfy the independent audit with fresh pinned-head reread, full patch, exact
   files, terminal CI, thread state, and P1/P2/P3 classification; final gate + human merge stay separate.
@@ -194,7 +207,7 @@ earlier handoff → memory. Unresolved load-bearing disputes stay `UNKNOWN` and 
   setup/doctrine PRs do not implement feature work.
 - `docs/crypto_core/fable_exit_contract_index.md` is HISTORICAL/ARCHIVAL design evidence only. Claude Fable 5
   is `INACTIVE_EXPIRED_RETIRED` — there is no active Fable routing (workflow section 24.10); its former
-  responsibilities are redistributed to Opus 4.8 / Sonnet 5 / Terra / the ChatGPT read-only-first controller /
+  responsibilities are redistributed to Opus 5 / Sonnet 5 / Terra / the ChatGPT read-only-first controller /
   Sol.
 
 ## Report Format

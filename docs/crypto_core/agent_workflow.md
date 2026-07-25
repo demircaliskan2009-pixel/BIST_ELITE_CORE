@@ -1,4 +1,4 @@
-# crypto_core Agent Workflow v5.2
+# crypto_core Agent Workflow v5.3
 
 > Canonical, executable operating protocol for `crypto_core` inside `demircaliskan2009-pixel/BIST_ELITE_CORE`.
 > Companions (durable rails, not re-pasted into prompts): `AGENTS.md`,
@@ -21,13 +21,17 @@ context — never implemented here.
 
 ## 2. Model / Tool Roles (active GPT-5.6 routing)
 
+Role summary only. The single `AUTHORITATIVE_ROUTING_MATRIX` (class → lane → model id → effort) is section
+24.3; effort/thinking selection is section 24.12. On any conflict, section 24 wins.
+
 | Role | Responsibility |
 |---|---|
 | **ChatGPT controller** | Sequence owner, final evidence comparison, verdict, next prompt, and exact per-PR merge authorization. |
 | **GPT-5.6 Luna** | T0 mechanical git/gh state, CI polling, metadata, thread status, and postverify runner. No broad design or feature implementation. |
 | **GPT-5.6 Terra** | T1/T2 bounded Codex docs/code work, small P1/P2 repair, and fresh-context pinned-head audit. |
 | **GPT-5.6 Sol** | Scarce T4 cross-artifact trust, governance/safety, SM-5/SM-6, readiness/Deribit provenance design/audit. `xhigh` default; `max` only controller-gated. |
-| **Claude Opus 4.8** | Large local implementation/refactor, broad bounded reads, and long validation loops when Codex usage should be preserved. |
+| **Claude Opus 5** (`claude-opus-5`) | Large local implementation/refactor, broad bounded reads, review/architecture/prompt design, and long validation loops when Codex usage should be preserved. Effort per section 24.12. |
+| **Claude Sonnet 5** (`claude-sonnet-5`) | Default Claude lane for T0/T1 status, polling and governed mechanical closeout (low) and T2 bounded docs/config/tests/routine repair (medium). Runtime-proven only. |
 | **Codex Pursue Goal** | Bounded single-goal terminal loop for preflight, sync, CI/status, closeout, and explicitly authorized merge/postverify. |
 | **GitHub connector / gh** | Source-of-truth final PR state and merge-readiness gate. Read-only unless an action is explicitly authorized. |
 | **Deep Research** | External/current-fact advisory only. Never executor, merge authority, or safety-gate waiver. |
@@ -654,10 +658,13 @@ conditions, and report fields. The durable per-model authoring guide is
 
 Active set (exactly eight lanes): **ChatGPT GPT-5.6 Thinking** (controller / read-only-first controller-auditor,
 `CONTROLLER_READONLY_FIRST_POLICY`, section 24.10); **GitHub connector** (evidence + explicitly authorized
-actions); **Deep Research + GitHub connector** (external/current facts, advisory); **Claude Opus 4.8**
-(default heavy local executor); **Claude Sonnet 5** (runtime-proven only); **Codex GPT-5.6 Sol / Terra /
-Luna**. Claude Code local sessions are the primary local execution environment for Claude Opus 4.8 and Claude
-Sonnet 5 tasks — this is a runtime description, not an independently trusted audit authority. **Copilot
+actions); **Deep Research + GitHub connector** (external/current facts, advisory); **Claude Opus 5**
+(`claude-opus-5`, default heavy local executor); **Claude Sonnet 5** (`claude-sonnet-5`, runtime-proven
+only); **Codex GPT-5.6 Sol / Terra / Luna**. Claude Code local sessions are the primary local execution
+environment for Claude Opus 5 and Claude Sonnet 5 tasks — this is a runtime description, not an
+independently trusted audit authority. **Claude Opus 4.8 status: `SUPERSEDED_BY_OPUS_5`** — it is not an
+active lane, fallback, or dependency; dated Opus 4.8 execution records, archived prompts, and changelog
+entries remain HISTORICAL evidence and never re-enter active routing. **Copilot
 status: `INACTIVE_UNAVAILABLE`** — VS Code Copilot Pro local Agent is currently unavailable and does not enter
 active routing, setup loading, prompt construction, or accepted state; it is not part of the active model/tool
 set until a future explicit human decision reactivates it through a separately audited workflow change.
@@ -668,16 +675,26 @@ HISTORICAL/SUPERSEDED/ARCHIVAL evidence (`fable_exit_contract_index.md`, section
 current routing.
 
 Identity rules: ChatGPT is `GPT-5.6 Thinking` and is NEVER labeled Codex `GPT-5.6 Sol`; Sol/Terra/Luna are
-distinct Codex runtimes; Opus 4.8 and Sonnet 5 are distinct Claude runtimes; Sonnet 5 availability/identity
+distinct Codex runtimes; Opus 5 and Sonnet 5 are distinct Claude runtimes; Sonnet 5 availability/identity
 must be runtime-proven before routing; every Claude Code session reports its actual runtime model — model
 identity is attached to the actual Claude runtime, never to the local host; model-family similarity is not
 runtime identity; model strength is never proof. Every serious executor prints `MODEL_REQUESTED` /
 `MODEL_ACTUAL` / `REASONING_REQUESTED` / `REASONING_ACTUAL` / `EXACT_MODEL_REQUIRED` before work; required
 exact-model mismatch stops with proof.
 
+`CLAUDE_EXACT_MODEL_ID_RULE` — a Claude mutation lane is selected by exact model id, never by an unresolved
+convenience alias. `claude-opus-5` and `claude-sonnet-5` are the only ids that satisfy the active Claude
+lanes; the bare strings `opus` / `sonnet` are aliases and are insufficient evidence on their own. Runtime
+proof means session-level evidence of the resolved model AND the resolved effort (for example the Claude
+Code runtime banner, `/model`, `/status`, or an equivalent local diagnostic), not a settings file alone —
+a settings pin states an intent, the session states the fact. Requested/actual mismatch on model, effort,
+or fallback is `STOP_WITH_PROOF` before mutation; a human may waive an effort-level mismatch for a specific
+task, and the waiver plus the true `MODEL_EFFORT_ACTUAL` is then recorded in the handoff — the actual
+effort is never restated as the requested one. Effort/thinking architecture: section 24.12.
+
 **Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED`** (section 24.10): the former `FABLE5_PREMIUM_SURGE_LANE` is
 retired and is never selected, never a fallback, and never a dependency. Its former responsibilities are
-redistributed to the optimal remaining lanes: broad-but-bounded T3 implementation → Claude Opus 4.8 xhigh
+redistributed to the optimal remaining lanes: broad-but-bounded T3 implementation → Claude Opus 5 xhigh
 (genuinely bounded T2 → Sonnet 5/Terra); non-Class-C read-only architecture / contradiction / cross-contract
 analysis → the ChatGPT controller (`CONTROLLER_READONLY_FIRST_POLICY`), with a Terra ordinary independent
 audit only when controller evidence requires it; rare milestone read-only full-repo audit → ChatGPT + GitHub
@@ -699,15 +716,32 @@ real orders, scheduler, auto-loop, or capital mutation unless separately authori
 
 ### 24.3 Common taxonomy and optimal routing matrix
 
-| Class | Label | Primary lane(s) | Use |
-|---|---|---|---|
-| T0 | `LUNA_MECHANICAL` | Luna `none`/`low` | git/gh state, bounded CI polling, PR metadata, thread status, authorized merge mechanics, postverify |
-| T1 | `READONLY_OR_FAST_BOUNDED` | Luna low / Terra high / Sonnet 5 (runtime-proven) | bounded reads, proof, docs, direct-dependency read-only audit |
-| T2 | `BOUNDED_IMPLEMENTATION` | Terra high / Sonnet 5 (runtime-proven) high | exact-file deterministic slices, tests/docs, mechanical code with local context, simple same-branch repair |
-| T3 | `COMPLEX_IMPLEMENTATION_OR_REPAIR` | Opus 4.8 xhigh (default) / Terra xhigh | broad-but-bounded implementation, large refactors, complex fail-closed work, forensic debug, long validation loops, multi-file integration, P1/P2 repair |
-| T4 | `CROSS_CONTRACT_DESIGN_OR_AUDIT` | Sol xhigh (`max` controller-gated) | protected cross-contract design, digest/provenance/trust boundaries, SM-5/SM-6, Stage-4 semantics, readiness/Deribit design, complex security/CodeQL |
-| XR | `DEEP_RESEARCH_EXTERNAL` | Deep Research + connector | cited external/current facts, benchmarks, phase gates (submodes in 24.9) |
-| — | `CONTROLLER_CONNECTOR_GATE` | ChatGPT + connector/gh | final evidence comparison and merge authority |
+**`AUTHORITATIVE_ROUTING_MATRIX` — this table is the single active routing authority for crypto_core.** No
+other file may restate it as authority; every other active surface (`AGENTS.md`, `CLAUDE.md`,
+`model_prompting_guide.md`, `token_efficiency_playbook.md`, `token_efficiency_v2.md`, the Claude and Codex
+skills) references this section instead of duplicating it. Effort/thinking selection, the deterministic
+routing function, and Claude behavior calibration live in section 24.12; Claude prompt construction and
+reusable templates live in `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`. Pick the LOWEST
+lane that safely proves correctness — model prestige is never a selection reason.
+
+| Class | Label | Primary lane(s) | Model id | Default effort | Use |
+|---|---|---|---|---|---|
+| T0 | `LUNA_MECHANICAL` | Luna `none`/`low` — or Claude Sonnet 5 low in a Claude Code session | `claude-sonnet-5` (Claude lane) | low | **STATUS family only**: git/gh state, bounded CI polling, PR metadata, review/thread status, open-PR counts, branch and clean-tree checks, deterministic status reporting. T0 owns no merge or postverify scope — see T1 |
+| T1 | `READONLY_OR_FAST_BOUNDED` | Luna low / Terra high / Sonnet 5 (runtime-proven) | `claude-sonnet-5` (Claude lane) | low | bounded reads, proof, docs, direct-dependency read-only audit, and the sole governed CLOSEOUT family — authorized standard merge, branch-protection-required auto-merge only when separately authorized by doctrine, post-merge commands, parent/digest verification, clean-main proof, and postverify. **A merge is a mutation and stays T1** when it is fully authorized, mechanically bounded, free of semantic anomaly and free of any readiness/connector transition |
+| T2 | `BOUNDED_IMPLEMENTATION` | Terra high / Sonnet 5 (runtime-proven) | `claude-sonnet-5` (Claude lane) | medium (high when moderately complex) | exact-file deterministic slices, narrow docs, config-only changes, mechanical fixtures/tests, obvious localized repair, PR-body corrections, bounded governance closeout |
+| T3A | `COMPLEX_IMPLEMENTATION` | Claude Opus 5 (default) / Terra xhigh | `claude-opus-5` | xhigh | complex production implementation, multi-file semantic features, protocol semantics, deterministic state machines, fail-closed artifacts, provenance logic, complex cross-module repair, long-horizon agentic coding. Complexity is proven by evidence (interacting invariants, novel semantic contract, fail-closed artifact design, cross-module behavior, substantial validation loop, in-scope architectural choice, complex repair) — **never by file count**; a two-file production+test protocol-semantic slice is correctly T3A |
+| T3B | `CAPABILITY_CRITICAL_IMPLEMENTATION_OR_REPAIR` | Claude Opus 5 | `claude-opus-5` | max | **IMPLEMENTATION or REPAIR intent + mutation only** — T3B never accepts REVIEW, ARCHITECTURE or PROMPT_ARCHITECTURE work, whatever risk flags are set. Requires an explicitly NAMED trigger: cryptographic verification boundary implementation; readiness/provenance promotion implementation; protocol ambiguity with safety consequences inside an implementation; complex trust-boundary repair; **complex semantic** controller P1/P2 repair after a failed audit; unexpected cross-layer implementation failure; controller-designated capability-critical implementation/repair. A bare risk flag and a bare audit origin are both insufficient — a mechanical or obvious post-audit repair stays T2 |
+| T3C | `CODE_REVIEW_AND_BUG_FINDING` | Claude Opus 5 | `claude-opus-5` | medium (focused) / high (broad) / xhigh (protocol-crypto or multi-trust-boundary) | **REVIEW intent, read-only.** Focused one- or two-file review and first-pass bug discovery at medium; broad multi-module, subtle-semantic, security-sensitive or post-failure review at high; protocol/crypto, multi-trust-boundary, conflicting-findings or cross-layer reconstruction at xhigh. Protocol or cryptographic subject matter raises the EFFORT to xhigh — it never changes the class to T3B. Any resulting fix is a separate, explicitly created task |
+| T3D | `ARCHITECTURE_AND_NEXT_SLICE` | Claude Opus 5 | `claude-opus-5` | high / xhigh (interacting or multi-module) / max (readiness, crypto, irreversible) | **ARCHITECTURE intent, read-only — produces a decision, not a diff.** Next-slice selection, architecture comparison, sequencing. `max` when the decision controls readiness/provenance, involves cryptographic boundaries, a wrong sequence creates irreversible or high-cost work, or the controller designates it critical. Readiness or cryptographic subject matter raises the EFFORT to max inside T3D — it never changes the class to T3B |
+| T3E | `COMPLEX_PROMPT_ARCHITECTURE` | Claude Opus 5 | `claude-opus-5` | high / xhigh (synthesis) / max (capability-critical) | **PROMPT_ARCHITECTURE intent.** Converting a new complex objective into one complete execution contract; prompts needing repository archaeology; many interacting gates. `max` for Agent OS or model-routing prompts, prompts governing readiness/provenance promotion, prompts governing cryptographic verification, capability-critical controller repair prompts, and controller-designated critical prompts — capability-criticality raises the EFFORT to max inside T3E and the work stays T3E. Known bounded mechanical prompt generation stays Sonnet 5 medium |
+| T4 | `CROSS_CONTRACT_DESIGN_OR_AUDIT` | Sol xhigh (`max` controller-gated) | — (Codex) | xhigh | protected cross-contract design, digest/provenance/trust boundaries, SM-5/SM-6, Stage-4 semantics, readiness/Deribit design, complex security/CodeQL. Class C is never satisfied by a Claude lane |
+| XR | `DEEP_RESEARCH_EXTERNAL` | Deep Research + connector | — | — | cited external/current facts, benchmarks, phase gates (submodes in 24.9). Claude execution alone is insufficient; no Claude lane may infer load-bearing current external facts from memory |
+| — | `CONTROLLER_CONNECTOR_GATE` | ChatGPT + connector/gh, then the human | — | — | final evidence comparison, merge-readiness judgement, and explicit per-PR human merge authorization. No Claude or Codex lane replaces either authority |
+
+Label reconciliation (durable): a request phrased as "T3" without a suffix means T3A. A request phrased as
+"T4 = current external facts" means `XR`; a request phrased as "T5 = controller and human authority" means
+`CONTROLLER_CONNECTOR_GATE`. The numbered class `T4` in this repository is and stays
+`CROSS_CONTRACT_DESIGN_OR_AUDIT` (Codex Sol) — Codex doctrine is not renumbered.
 
 ChatGPT GPT-5.6 Thinking additionally owns, read-only-first (`CONTROLLER_READONLY_FIRST_POLICY`, section
 24.10): sequence control, live GitHub evidence comparison, repository surface and dependency mapping, design
@@ -722,9 +756,18 @@ merge/readiness/live/capital authority. GitHub connector mutation happens only a
 instruction naming the exact action and target, with state re-proof immediately before, only the named
 action, and result re-read after. Do not route to Sonnet 5: protected trust-boundary work, digest/provenance,
 SM-5/SM-6, Stage-4 completion, readiness/live/order/capital, broad forensic refactors, T4 design, or mandatory
-Class-C audits; Sonnet 5 fallback when unavailable: Terra (bounded) / Opus (broad). Do not spend Opus on
+Class-C audits; Sonnet 5 fallback when unavailable: Terra (bounded) / Opus 5 (broad). Do not spend Opus 5 on
 metadata, CI polling, ordinary docs, generic planning, external research, or work Sonnet/Terra can safely
 complete. Sol runs only on a controller-prepared narrow evidence packet, never broad discovery or mechanics.
+
+Sonnet 5 is the DEFAULT Claude lane for T0/T1/T2 and is not weakened by the existence of Opus 5: stronger
+reasoning does not materially improve a `gh pr view`, an authorized standard merge, a config edit, or a
+mechanical fixture, and spending Opus there costs latency, tokens and premium requests for no correctness
+gain. Escalate T0/T1 out of Sonnet when evidence conflicts, ancestry is unexpected, state cannot be
+reconciled, merge parents or merged scope differ, post-merge validation fails, branch protection behaves
+unexpectedly, a readiness/connector transition appears, or the task turns semantic. Escalate T2 first to
+Sonnet 5 high; move to Opus 5 high/xhigh only when semantic invariants interact, the trust boundary changes,
+full-suite failures are unexpected, architecture is required, or the repair cannot be proven locally.
 
 ### 24.4 Audit class matrix
 
@@ -868,7 +911,7 @@ GitHub without an exact human action authorization; never grants merge/readiness
 `FABLE5_PREMIUM_SURGE_LANE` (three modes) and `FABLE5_JUSTIFICATION_GATE` are retired: no active model set,
 routing matrix, prompt skeleton, setup-load contract, fallback table, model-selection rule, active handoff
 requirement, Deep Research orchestration, or execution plan may reference Fable as an active lane. Former
-responsibilities are redistributed: former SURGE_IMPLEMENTER work → Claude Opus 4.8 xhigh for broad-but-bounded
+responsibilities are redistributed: former SURGE_IMPLEMENTER work → Claude Opus 5 xhigh for broad-but-bounded
 T3 (Sonnet 5 or Terra for genuinely bounded T2), with no Fable-equivalent quality claim; former
 CROSS_CONTRACT_CHALLENGE work → protected Class-C questions to Codex Sol, non-Class-C read-only architecture
 and contradiction analysis to the ChatGPT controller (Terra ordinary audit only when controller evidence
@@ -884,7 +927,7 @@ probability, model availability, measured usage/cost in the current harness (nev
 price rankings), fallback quality, and deadline/throughput. Required prompt fields: `TOKEN_CLASS`,
 `TOKEN_BUDGET_ASSESSMENT`, `EXPECTED_VALUE_PER_TOKEN`, `EXPECTED_PROMPTS`, `MAX_REPAIR_CYCLES`,
 `CONTEXT_REUSE_PACKET`, `WHY_THIS_MODEL`, `CHEAPER_SAFE_ALTERNATIVE`, `STOP_IF_BUDGET_INSUFFICIENT`.
-Rules: Opus 4.8 = default heavy local executor for broad-but-bounded T3; Sonnet/Terra = bounded economical
+Rules: Opus 5 = default heavy local executor for broad-but-bounded T3; Sonnet/Terra = bounded economical
 work; Luna = mechanics; Sol = protected scarce reasoning (Class C); ChatGPT = read-only-first controller-auditor
 that prepares evidence to shrink all executor context and independently audits non-Class-C work; Deep Research
 only for external/current questions; correctness is never sacrificed to save tokens. Context economy: consume `AGENT_OS_HANDOFF_V1`
@@ -906,6 +949,241 @@ PR, no direct main push, standard merge only, explicit per-PR human merge author
 `NOT_READY`, current valid P1/P2 threads block, connector final gate never waived, post-merge verification
 before next work, digest-boundary rule, no BIST/live/private-API/order/scheduler/readiness/shadow/capital
 surface without separate authorization.
+
+### 24.12 CLAUDE_MODEL_EFFORT_ARCHITECTURE_V1
+
+Effort/thinking architecture for the Claude lanes. The routing matrix (24.3) selects the CLASS and MODEL;
+this section selects the EFFORT, the context budget, the subagent and verification policy, and the
+escalation/de-escalation rules. Prompt construction and reusable templates live in
+`docs/crypto_core/agent_prompts/opus5_prompting_playbook.md` — the durable Claude prompting authority.
+
+**Effort ladder.** The user-facing phrase "thinking level" maps operationally to Claude's `effort` setting
+(`low`, `medium`, `high`, `xhigh`, `max`). `low` — extremely narrow read-only classification, cheap
+high-volume review subtasks, concise extraction where an Opus-specific capability is still required; prefer
+Sonnet 5 instead; never for mutation across a trust boundary. `medium` — focused code review, bounded bug
+discovery, narrow read-only audit, prompt refinement, constrained architecture comparison, cost-sensitive
+Opus work proven sufficient by repository evidence. `high` — nuanced review, architecture selection, complex
+prompt design, difficult read-only analysis, moderate multi-step reasoning where long-horizon coding is not
+required. `xhigh` — the NORMAL Opus 5 coding/agentic starting point: difficult implementation, multi-file
+work, protocol semantics, long-running tool use, complex repair, deep repository exploration, interacting
+invariants. `max` — capability-critical only, per the T3B trigger list in 24.3.
+
+Indiscriminate `max` is inefficient, not merely expensive: it lengthens reasoning and latency, multiplies
+tool calls and tokens, and invites overthinking and unnecessary scope exploration. `max` is never justified
+by a task merely being important. Never `max` for polling, merge closeout, formatting, routine tests, simple
+documentation, or ordinary one-line repair. Audit origin is likewise not an effort input on its own: the
+fact that work follows a P1/P2 finding says nothing about its complexity, so a mechanical or obvious
+post-audit repair stays in the bounded Sonnet lane (T2) and only a complex, semantic, trust-boundary,
+protocol/crypto or cross-layer post-audit repair reaches T3B/`max`.
+
+**Codex lane non-regression.** Codex GPT-5.6 Sol (protected T4 `CROSS_CONTRACT_DESIGN_OR_AUDIT`), Terra
+(bounded implementation and ordinary independent audit) and Luna (T0 mechanics) are permanent workflow
+lanes; nothing in the Claude effort architecture narrows, renames, renumbers or absorbs them, and Class C
+always requires a fresh-context independent Codex Sol audit that no Claude lane and no Claude self-review
+can satisfy. Temporary model availability or quota state — for any vendor — is transient operational
+information, never durable routing: it is recorded in a controller handoff for that task only and never
+written into this doctrine.
+
+**Thinking policy.** Adaptive thinking stays enabled. Never request or set `thinking: disabled` for a T3
+mutation lane, and never combine disabled thinking with `xhigh` or `max`. Control cost through effort
+selection, scope and context — never by suppressing reasoning.
+
+**`TASK_INTENT` — the input contract.** Routing is intent-first. Every task carries exactly one explicit
+task family:
+
+```text
+TASK_INTENT ∈ { STATUS | CLOSEOUT | BOUNDED_READ | IMPLEMENTATION | REPAIR | REVIEW |
+                ARCHITECTURE | PROMPT_ARCHITECTURE | CLASS_C_CROSS_CONTRACT | EXTERNAL_RESEARCH }
+```
+
+The family is chosen BEFORE any risk or complexity flag is consulted. Risk and complexity determine the
+effort, the context budget, the audit class and the escalation path — they never overwrite the family. A
+cryptographic review is still a review. A readiness architecture decision is still architecture. A
+capability-critical prompt design is still prompt architecture.
+
+Intent resolution when `TASK_INTENT` is not stated explicitly: derive it from the legacy booleans, but if
+more than one of `review_intent` / `architecture_intent` / `prompt_architecture_intent` is set, the task is
+`AMBIGUOUS` and routes to `UNRESOLVED`. Never resolve a conflict by falling through to T3B.
+
+**Deterministic routing function.** Evaluate in order; the first matching rule wins. Ordering is
+load-bearing: gates first, then family, then effort inside that family.
+
+```text
+route(task) -> {TASK_CLASS, MODEL, MODEL_ID, EFFORT, THINKING_POLICY, TOKEN_CLASS,
+                CONTEXT_BUDGET_CLASS, SUBAGENT_POLICY, EXTERNAL_RESEARCH_POLICY,
+                MUTATION_AUTHORITY, VERIFICATION_PROFILE, STOP_CONDITIONS, REPORT_PROFILE}
+
+inputs: TASK_INTENT; read_only|mutation; mechanical|semantic; known|novel; bounded; file_count;
+        module_count; status_or_polling_or_git_hygiene; governed_closeout; review_intent;
+        architecture_intent; prompt_architecture_intent; trust_boundary_change; protocol_involved;
+        crypto_involved; readiness_or_provenance_effect; class_c_cross_contract;
+        interacting_invariants; novel_semantic_contract; fail_closed_artifact_design;
+        cross_module_behavior; substantial_validation_loop; architectural_choice_in_scope;
+        complex_repair; candidates_interact; multi_module_architecture;
+        irreversible_or_high_cost_sequencing; prompt_complex_synthesis;
+        prompt_explicit_critical_trigger; prompt_governs_agent_os_or_routing; prior_audit_failure;
+        audit_repair_is_mechanical; unexpected_cross_layer_failure;
+        controller_designated_capability_critical; external_fact_dependency;
+        human_authorization_required; authorization_present; semantic_anomaly;
+        readiness_or_connector_transition
+
+--- gates: evaluated before any family ---
+ 1 external_fact_dependency == load_bearing
+   or TASK_INTENT == EXTERNAL_RESEARCH             -> XR   Deep Research (no Claude mutation)
+ 2 human_authorization_required and not authorization_present
+                                                   -> STOP (controller/human)
+ 3 class_c_cross_contract
+   or TASK_INTENT == CLASS_C_CROSS_CONTRACT        -> T4   Codex GPT-5.6 Sol   xhigh
+                                                          (controller-gated max; never a Claude lane)
+ 3b TASK_INTENT == AMBIGUOUS                        -> UNRESOLVED (fail closed, never T3B)
+
+--- mechanical families ---
+ 4 TASK_INTENT == STATUS and read_only             -> T0   claude-sonnet-5 low
+ 5 TASK_INTENT == CLOSEOUT and mutation
+   and governed_closeout and authorization_present
+   and not semantic_anomaly
+   and not readiness_or_connector_transition       -> T1   claude-sonnet-5 low
+                                                          (a merge IS a mutation and still T1 when
+                                                           fully authorized and mechanically bounded)
+ 6 TASK_INTENT == BOUNDED_READ and read_only
+   and (mechanical or bounded)                     -> T1   claude-sonnet-5 low
+
+--- read-only reasoning families: chosen BEFORE any risk escalation ---
+ 7 TASK_INTENT == REVIEW                           -> T3C  claude-opus-5
+      protocol / crypto / trust-boundary / multi-trust-boundary /
+      conflicting findings / cross-layer                        -> xhigh
+      broad / security-sensitive / post-failure                 -> high
+      focused (<= 2 files), no such complexity                  -> medium
+      A review NEVER becomes T3B because crypto_involved,
+      readiness_or_provenance_effect, trust_boundary_change or
+      prior_audit_failure is set. Review stays read-only; any
+      resulting mutation is a SEPARATE, explicitly created task.
+ 8 TASK_INTENT == ARCHITECTURE                     -> T3D  claude-opus-5
+      readiness/provenance, cryptographic boundary,
+      irreversible/high-cost sequencing, controller-designated     -> max
+      interacting candidate slices or several modules             -> xhigh
+      ordinary bounded architecture                               -> high
+      Architecture NEVER becomes T3B merely because its SUBJECT is
+      readiness, provenance or cryptography. T3D stays read-only
+      and produces a decision, not a diff.
+ 9 TASK_INTENT == PROMPT_ARCHITECTURE
+      known and mechanical and bounded and no critical trigger    -> T2  claude-sonnet-5 medium
+      Agent OS / model-routing prompt, prompt governing readiness
+      or provenance promotion, prompt governing cryptographic
+      verification, capability-critical controller repair prompt,
+      controller-designated critical prompt                       -> T3E claude-opus-5 max
+      protocol/crypto/readiness synthesis, several safe paths,
+      post-audit-failure synthesis                                -> T3E claude-opus-5 xhigh
+      ordinary complex prompt architecture                        -> T3E claude-opus-5 high
+
+--- implementation / repair family only ---
+10 TASK_INTENT ∈ {IMPLEMENTATION, REPAIR} and mutation
+   and named_capability_critical_trigger != none   -> T3B  claude-opus-5   max
+      named triggers (explicit, exhaustive):
+        cryptographic verification boundary implementation
+        readiness/provenance promotion implementation
+        protocol ambiguity with safety consequences inside an implementation
+        complex trust-boundary repair
+        complex semantic P1/P2 repair after a failed audit
+              (prior_audit_failure and not audit_repair_is_mechanical
+               and (semantic or trust_boundary_change or protocol_involved or complex_repair))
+        unexpected cross-layer implementation failure
+        explicit controller-designated capability-critical implementation/repair
+      T3B requires mutation AND implementation/repair intent. It can never accept
+      REVIEW, ARCHITECTURE or PROMPT_ARCHITECTURE. A bare risk flag and a bare
+      audit origin both remain insufficient.
+11 TASK_INTENT ∈ {IMPLEMENTATION, REPAIR} and mutation
+   and (semantic or protocol_involved)
+   and complexity_evidence(task) != none
+   and named_capability_critical_trigger == none   -> T3A  claude-opus-5   xhigh
+      complexity_evidence (any one suffices):
+        interacting_invariants | novel_semantic_contract | fail_closed_artifact_design |
+        cross_module_behavior | substantial_validation_loop | architectural_choice_in_scope |
+        complex_repair
+      file_count/module_count are NOT complexity criteria. A two-file
+      production+test protocol-semantic slice is correctly T3A/xhigh.
+12 mutation and known and bounded and mechanical
+   and not trust_boundary_change and not protocol_involved
+   and not crypto_involved
+   and not readiness_or_provenance_effect          -> T2   claude-sonnet-5 medium (high if moderate)
+                                                          (prior_audit_failure alone never overrides
+                                                           this rule)
+13 otherwise                                       -> UNRESOLVED
+```
+
+Fail-closed behavior. `UNRESOLVED` classification → perform read-only Opus 5 `high`/`xhigh` analysis and do
+NOT mutate until the controller selects the lane. Conflicting task families without an explicit
+`TASK_INTENT` → `UNRESOLVED`, never a silent T3B. Current external facts required → route to Deep Research.
+Merge authorization required and absent or ambiguous → stop. Actual model or effort mismatched against the
+requirement → stop before mutation (a human may waive an effort mismatch for a specific task; record the
+waiver and the true actual). Fallback occurred → stop before mutation. Active PR collision → stop.
+Readiness or connector transition detected → stop and escalate — and note that rule 5 is void whenever such
+a transition is present, so a closeout that would move readiness or connector state can never stay T1.
+
+Precedence guarantees. The ordering above exists to prevent ten specific failures: current external facts
+being inferred locally (rule 1 first); Class-C cross-contract work being absorbed by a Claude lane (rule 3
+precedes every Claude rule); conflicting intent silently resolving to a capability-critical lane (rule 3b);
+T0 being shadowed by the generic read-only rule (rule 4 precedes rule 6); an explicitly authorized merge
+closeout falling through to T2 (rule 5 precedes rule 12); **a review being consumed by T3B because its
+subject is cryptographic or trust-boundary (rule 7 precedes rule 10)**; **an architecture decision being
+consumed by T3B because its subject is readiness, provenance or cryptography (rule 8 precedes rule 10)**;
+**a capability-critical prompt design being consumed by T3B instead of reaching the T3E `max` branch (rule 9
+precedes rule 10)**; a simple mechanical post-audit repair jumping to `max` (rule 10 requires a named
+trigger and excludes mechanical audit repair); and bounded two-file protocol-semantic work becoming
+`UNRESOLVED` (rule 11 uses complexity evidence, not file count).
+
+De-escalation is mandatory, not optional: when the proven scope turns out narrower than classified (fewer
+files, no trust boundary, mechanical repair), drop to the lowest lane that still proves correctness for the
+REMAINING work rather than finishing at the original lane. Escalation requires a stated reason recorded in
+the handoff; `max` additionally requires naming which T3B trigger fired.
+
+**Context budget classes.** `MINIMAL` (T0/T1) — exact commands and named files only. `BOUNDED` (T2/T3C
+focused) — named files plus immediate dependency interfaces. `BROAD_BUT_BOUNDED` (T3A/T3B/T3C broad/T3D/T3E)
+— authoritative setup files, directly affected production/test files, immediate dependency interfaces, and
+relevant current PR/main evidence. Never automatically read the whole repository, every historical lesson,
+unrelated modules, stale archives, old prompts, or generated output. Expand only on progressive disclosure:
+an unresolved reference, an invariant crossing modules, a test-exposed dependency, or architecture that
+cannot be proven locally. Pin exact SHAs, branch, PR head, file paths, profile ids, digests, tests and the
+current open-PR count — never rely on conversational memory for live repository state.
+
+**Subagent policy.** Default `0`. Bounded one- or two-file work: `0`. Maximum: `2` read-only subagents, only
+for genuinely independent, substantial, parallelizable investigation tracks. Never for routine commands,
+polling, duplicate self-review, one- or two-file patches, or work finishable through a few direct tool
+calls. Only one agent may mutate a branch or worktree, and the primary agent independently validates every
+subagent conclusion.
+
+**Verification calibration.** Keep every explicit deterministic gate (scoped Ruff/format, targeted pytest,
+logged full suite via `run_full_tests_logged.ps1`, `git diff --check`, exact-scope diff proof, terminal CI
+and CodeQL to a terminal state). Remove vague repetition — "verify everything repeatedly", "double-check
+every step several times", "continue reviewing until perfect". Run each relevant gate once per unchanged
+head; rerun only after a relevant mutation or invalidating evidence.
+
+**Behavior calibration (active prompt guidance for the Claude lanes).** Scope: deliver exactly the
+authorized task at the intended scope; make routine implementation judgements independently; never widen,
+narrow or transform the slice; when a materially better architecture requires scope expansion, report it and
+stop before unauthorized mutation. Decision commitment: select the strongest evidence-supported design and
+proceed; reopen a settled decision only when new repository or test evidence directly contradicts it.
+Progress narration: one concise sentence before the first tool call, then only material findings, blockers,
+direction changes and phase transitions — never routine-command narration. Self-correction: correct an
+earlier statement only when the error changes code, conclusions, authorization or the next action; fix
+non-material slips silently. Review independence: a same-model self-review is labelled
+`SELF_AUDIT_ONLY_NOT_INDEPENDENT` and never satisfies an independent audit — Class C always needs a fresh
+Codex Sol context. Review process: discover every evidence-backed issue without severity filtering, classify
+severity after discovery, then separate blocker from non-blocker. Visible output stays compact and
+evidence-dense: decisions, evidence, commands and results, blockers — never internal chain of thought.
+
+**Sonnet 5 prompt shape.** Sonnet prompts stay concise, mechanically explicit, low-context,
+command-oriented, deterministic and bounded, with explicit terminal-CI polling, explicit escalation
+triggers, and an explicit no-scope-expansion rule. Do not burden them with architecture speculation,
+repository archaeology, broad alternative analysis, maximum-thinking language, long report formats, or
+Opus-only subagent instructions. Sonnet remains the fastest safe lane for T0/T1/T2.
+
+**`ULTRACODE_POLICY`.** If a Claude Code build exposes `ultracode`, it is an ORCHESTRATION MODE, not an API
+effort level (the effort levels are exactly `low`, `medium`, `high`, `xhigh`, `max`). It is never a routing
+default and is never persisted. Use it only when runtime-proven in the active local setup, explicitly
+controller-authorized, and justified by genuinely independent substantial parallel work with isolated
+ownership, no overlapping mutations, and primary-agent verification of every result. Otherwise use normal
+single-agent `xhigh`/`max` execution.
 
 ---
 
@@ -981,3 +1259,73 @@ mandatory fresh Sol audit unchanged; Opus default-heavy, Sonnet/Terra/Luna prese
 GitHub/terminal state re-proven per task; no durable SHA/PR pins; dated history stays in changelog only).
 Historical Fable material (sections 20-23, `fable_exit_contract_index.md`, dated changelog) preserved as
 HISTORICAL/SUPERSEDED/ARCHIVAL. Docs/setup only; no product code touched; no safety gate weakened.*
+
+*v5.3 (2026-07-25): Claude Opus 5 Agent OS migration. Claude Opus 4.8 replaced by **Claude Opus 5**
+(`claude-opus-5`) in every ACTIVE routing surface and marked `SUPERSEDED_BY_OPUS_5`; dated Opus 4.8
+execution records, archived prompts, design docs and changelog entries are preserved untouched as
+HISTORICAL evidence. The active set stays exactly eight lanes and Copilot stays `INACTIVE_UNAVAILABLE`;
+Fable stays `INACTIVE_EXPIRED_RETIRED` with no routing change; Codex Sol/Terra/Luna doctrine, audit classes
+A/B/C, the Class-C requirement, the connector gate and explicit human merge authorization are unchanged.
+§24.3 is now the single `AUTHORITATIVE_ROUTING_MATRIX` — every other active surface references it instead of
+restating it — and subdivides the Claude heavy class into T3A complex implementation (xhigh default), T3B
+capability-critical (max, explicit narrow triggers), T3C review (medium focused / high broad / xhigh
+multi-trust-boundary), T3D architecture and next-slice (high, xhigh when slices interact), and T3E complex
+prompt architecture (high, xhigh on synthesis); Sonnet 5 is restated as the DEFAULT Claude lane for T0/T1
+(low) and T2 (medium) with explicit escalation triggers. Added `CLAUDE_EXACT_MODEL_ID_RULE` (§24.1: exact
+model id, session-level model AND effort proof, aliases insufficient, recorded human waiver never restated
+as the requested value) and §24.12 `CLAUDE_MODEL_EFFORT_ARCHITECTURE_V1` (effort ladder low→max with
+anti-`max` economics, adaptive-thinking-always-on rule, an ordered deterministic routing function with
+fail-closed and mandatory de-escalation behavior, context-budget classes with progressive disclosure,
+subagent policy default 0 / max 2 read-only, verification calibration that keeps deterministic gates and
+deletes generic re-verification loops, behavior calibration for scope/decision-commitment/narration/
+self-correction/review-independence, Sonnet prompt shape, and `ULTRACODE_POLICY` classifying `ultracode` as
+a non-default orchestration mode, never an effort level). Added the durable
+`docs/crypto_core/agent_prompts/opus5_prompting_playbook.md` (effort-selection guide, user prompting guide,
+eleven reusable templates, and the `PROMPT_COMPILER_CONTRACT_V1` that emits exactly one best prompt).
+Label reconciliation is explicit: unsuffixed "T3" means T3A, "external facts" means `XR`, "controller and
+human authority" means `CONTROLLER_CONNECTOR_GATE`; the numbered `T4` stays
+`CROSS_CONTRACT_DESIGN_OR_AUDIT` so Codex doctrine is not renumbered. Docs/setup only; one assertion string
+updated in the read-only advisory `scripts/crypto_core/audit_agent_setup.ps1` so its expected-lane check
+tracks the renamed lane; no product code, tests, dependencies or CI workflows touched; no readiness or
+connector transition; no safety gate weakened.
+Same-PR controller repair (2026-07-25): the section 24.12 routing function was rewritten after a controller
+audit found four deterministic contradictions against the 24.3 matrix — T0 shadowed by the generic
+read-only rule, an explicitly authorized merge closeout falling through to T2 because it is a mutation, a
+bare `prior_audit_failure` escalating every post-audit repair to `max`, and bounded two-file
+protocol-semantic work becoming `UNRESOLVED` because complexity was gated on file count. The function now
+orders specific rules before generic ones, adds an explicit Class-C rule so Codex Sol work is never absorbed
+by a Claude lane, requires a NAMED capability-critical trigger for T3B, proves T3A complexity by evidence
+rather than file count, and keeps an authorized mechanically bounded merge in T1. Sixteen deterministic
+routing cases pass. Codex Sol/Terra/Luna lanes, the Class-C requirement, T4, the XR boundary, controller and
+human merge authority are all unchanged, and no temporary model-availability state is persisted.
+Second same-PR controller repair (2026-07-25): a further exact-head audit found that the generic T3B
+capability-critical rule preceded the intent-specific T3C/T3D/T3E rules and carried no intent guard, so a
+read-only cryptographic review, a readiness/provenance architecture decision and a capability-critical
+prompt design were all consumed by T3B/`max` — executed against the previous function, all four reported
+scenarios misrouted, which also made the documented T3E `max` branch unreachable. Routing is now
+INTENT-FIRST: an explicit `TASK_INTENT` field (`STATUS`, `CLOSEOUT`, `BOUNDED_READ`, `IMPLEMENTATION`,
+`REPAIR`, `REVIEW`, `ARCHITECTURE`, `PROMPT_ARCHITECTURE`, `CLASS_C_CROSS_CONTRACT`, `EXTERNAL_RESEARCH`)
+selects the family before any risk flag is read; risk and complexity now choose only the effort inside that
+family; T3B requires mutation plus IMPLEMENTATION/REPAIR intent and explicitly cannot accept review,
+architecture or prompt-architecture work; T3C reaches `xhigh`, T3D `max` and T3E `max` inside their own
+families; and conflicting families without an explicit `TASK_INTENT` fail closed to `UNRESOLVED` rather
+than to T3B. Twenty-five deterministic routing cases pass. Codex Sol/Terra/Luna, Class C, T4, XR,
+controller and human merge authority remain unchanged; no temporary model-availability state is persisted.
+Third same-PR controller repair (2026-07-25, T2 bounded doctrine alignment): fixed three residual textual
+contradictions left over from the intent-first rewrite. (1) The playbook's top-level T3B trigger inventory
+still listed architecture-family concepts (Agent OS architecture, model-routing migration, several
+plausible architectures with materially different safety outcomes) even though the function itself had
+already scoped T3B to implementation/repair only; the inventory is now implementation/repair-scoped and
+states explicitly that those three concepts route to T3D or T3E, never T3B, unless the actual authorized
+task is an implementation/repair mutation that also fires a named T3B trigger. (2) The prompt-compiler's
+`max`-effort rule required a T3B trigger for every `max` selection, which would have forced a `max`-effort
+T3D or T3E task to be misdescribed as T3B; it now requires a family-specific named trigger (T3B
+implementation/repair, T3D architecture, T3E prompt-architecture) and states that `TASK_INTENT` fixes the
+family before this rule runs. (3) The 24.3 matrix's T0 row still listed "authorized merge mechanics,
+postverify" in its Use column, overlapping T1's governed-closeout family; T0 is now STATUS-only (git/gh
+state, CI polling, PR metadata, thread status, open-PR counts, clean-tree checks, status reporting) and T1
+is stated as the sole owner of governed closeout including postverify. Template 3.1 and the T3B/T3D/T3E
+templates were reworded to match. Twenty-nine deterministic routing cases pass, including four new cases
+proving an Agent-OS architecture decision stays T3D/max, a model-routing prompt stays T3E/max, a named
+capability-critical implementation reaches T3B/max, and an authorized merge stays T1/low with no T0 overlap.
+No routing architecture, task-intent family or Codex doctrine changed; docs only, two files.*
