@@ -28,10 +28,29 @@ Codex audit.
 | `max` | Capability-critical work only, per the T3B triggers below. | Polling; merge closeout; formatting; routine tests; simple documentation; ordinary one-line repair; a task merely because it is important. |
 
 **T3B `max` triggers (the complete list).** Cryptographic verification boundaries; readiness/provenance
-promotion logic; protocol ambiguity with safety consequences; complex trust-boundary repair; controller
-P1/P2 repair after a previous implementation failed audit; Agent OS architecture; model-routing migration;
-several plausible architectures with materially different safety outcomes; unexpected cross-layer failures;
-work the controller explicitly designates capability-critical. Naming the fired trigger is mandatory.
+promotion logic; protocol ambiguity with safety consequences; complex trust-boundary repair; **complex
+semantic** controller P1/P2 repair after a previous implementation failed audit; Agent OS architecture;
+model-routing migration; several plausible architectures with materially different safety outcomes;
+unexpected cross-layer failures; work the controller explicitly designates capability-critical. Naming the
+fired trigger is mandatory — if you cannot name one, the task is not T3B.
+
+**Audit origin is an input, not a trigger.** That work follows a P1/P2 finding says nothing about its
+complexity. A mechanical or obvious post-audit repair — a one-file documentation correction, a PR-body fix,
+a renamed constant, a missing assertion — stays **T2 / Sonnet 5 / medium**. Only a post-audit repair that is
+genuinely semantic, trust-boundary, protocol/crypto or cross-layer reaches T3B/`max`. A bare
+`prior_audit_failure` never escalates anything on its own.
+
+**Complexity is not file count.** T3A is proven by evidence — interacting invariants, a novel semantic
+contract, fail-closed artifact design, cross-module behavior, a substantial validation loop, an
+architectural choice inside the authorized scope, or a complex repair. A bounded two-file
+production-plus-test protocol-semantic slice is correctly **T3A / Opus 5 / xhigh**; it must never be demoted
+or left unresolved because it touches only two files.
+
+**An authorized merge is T1 even though it mutates.** Governed mechanical closeout — standard merge,
+branch-protection-required auto-merge when separately authorized by doctrine, post-merge commands,
+parent/digest verification, clean-main proof — stays **T1 / Sonnet 5 / low** when it is fully authorized,
+mechanically bounded, free of semantic anomaly and free of any readiness/connector transition. Mutation
+alone does not push it into T2. If any of those conditions fails, it leaves T1 and escalates.
 
 **Why indiscriminate `max` is inefficient.** It produces more tool calls, longer reasoning and higher
 latency, consumes more tokens and premium requests, and increases the chance of overthinking and
@@ -391,7 +410,9 @@ SUBAGENT_POLICY           ONE_COMPLETE_PROMPT
 1. Emit exactly one best prompt. No competing alternatives unless explicitly requested.
 2. Select the lowest-cost lane that safely proves correctness.
 3. Use Opus 5 only when Sonnet 5 is insufficient; state why in one line.
-4. Use `max` only when `xhigh` is insufficient, and name the T3B trigger.
+4. Use `max` only when `xhigh` is insufficient, and name the T3B trigger. `RISK_CLASS` alone, and the fact
+   that the task follows an audit finding, are never sufficient — a mechanical or obvious post-audit repair
+   compiles to the T2 Sonnet template (3.10), not to 3.3.
 5. Do not ask the user to choose an effort level when the classification is provable from the inputs.
 6. `EXTERNAL_FACT_REQUIREMENT` present and load-bearing → emit template 3.11, not an implementation prompt.
 7. Unresolved risk → emit a READ-ONLY analysis prompt (Opus 5 `high`/`xhigh`) before any mutation prompt.
@@ -434,3 +455,15 @@ per-PR human merge authorization; pending CI is `NOT_READY`; current valid P1/P2
 always gets a fresh independent Codex Sol audit that no Claude lane may satisfy; the connector final gate is
 never waived; post-merge verification precedes the next slice; crypto_core scope only — no BIST, live or
 private API, credentials, orders, scheduler/auto-loop, shadow/live execution, or capital mutation.
+
+**Codex lanes are permanent.** Codex GPT-5.6 Sol (protected T4 `CROSS_CONTRACT_DESIGN_OR_AUDIT`), Codex
+GPT-5.6 Terra (bounded implementation and ordinary independent audit) and Codex GPT-5.6 Luna (T0 mechanics)
+remain durable workflow lanes. Nothing in this playbook narrows, renames, renumbers or absorbs them; the
+Claude lanes never take Class-C work, and a Claude self-review never satisfies the Class-C requirement.
+ChatGPT GPT-5.6 Thinking remains the controller, auditor and router, and explicit per-PR human merge
+authorization remains mandatory.
+
+**Temporary availability is never durable routing.** Model quota, rate limits or short-term unavailability —
+for any vendor, Claude or Codex — are transient operational facts. Record them in the controller handoff for
+that one task and route around them there. Never write a temporary availability state into this playbook or
+into `agent_workflow.md`, and never infer from a quota event that a lane has been retired.

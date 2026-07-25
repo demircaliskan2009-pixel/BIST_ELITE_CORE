@@ -727,10 +727,10 @@ lane that safely proves correctness — model prestige is never a selection reas
 | Class | Label | Primary lane(s) | Model id | Default effort | Use |
 |---|---|---|---|---|---|
 | T0 | `LUNA_MECHANICAL` | Luna `none`/`low` — or Claude Sonnet 5 low in a Claude Code session | `claude-sonnet-5` (Claude lane) | low | git/gh state, bounded CI polling, PR metadata, thread status, open-PR counts, clean-tree checks, authorized merge mechanics, postverify |
-| T1 | `READONLY_OR_FAST_BOUNDED` | Luna low / Terra high / Sonnet 5 (runtime-proven) | `claude-sonnet-5` (Claude lane) | low | bounded reads, proof, docs, direct-dependency read-only audit, governed mechanical closeout (authorized standard merge, post-merge commands, parent/digest verification, clean-main proof) |
+| T1 | `READONLY_OR_FAST_BOUNDED` | Luna low / Terra high / Sonnet 5 (runtime-proven) | `claude-sonnet-5` (Claude lane) | low | bounded reads, proof, docs, direct-dependency read-only audit, and governed mechanical closeout — authorized standard merge, branch-protection-required auto-merge only when separately authorized by doctrine, post-merge commands, parent/digest verification, clean-main proof. **A merge is a mutation and stays T1** when it is fully authorized, mechanically bounded, free of semantic anomaly and free of any readiness/connector transition |
 | T2 | `BOUNDED_IMPLEMENTATION` | Terra high / Sonnet 5 (runtime-proven) | `claude-sonnet-5` (Claude lane) | medium (high when moderately complex) | exact-file deterministic slices, narrow docs, config-only changes, mechanical fixtures/tests, obvious localized repair, PR-body corrections, bounded governance closeout |
-| T3A | `COMPLEX_IMPLEMENTATION` | Claude Opus 5 (default) / Terra xhigh | `claude-opus-5` | xhigh | complex production implementation, multi-file semantic features, protocol semantics, deterministic state machines, fail-closed artifacts, provenance logic, complex cross-module repair, long-horizon agentic coding |
-| T3B | `CAPABILITY_CRITICAL_IMPLEMENTATION_OR_REPAIR` | Claude Opus 5 | `claude-opus-5` | max | cryptographic verification boundaries; readiness/provenance promotion logic; protocol ambiguity with safety consequences; complex trust-boundary repair; controller P1/P2 repair after a failed audit; Agent OS / model-routing architecture; several plausible architectures with materially different safety outcomes; unexpected cross-layer failures; controller-designated capability-critical work |
+| T3A | `COMPLEX_IMPLEMENTATION` | Claude Opus 5 (default) / Terra xhigh | `claude-opus-5` | xhigh | complex production implementation, multi-file semantic features, protocol semantics, deterministic state machines, fail-closed artifacts, provenance logic, complex cross-module repair, long-horizon agentic coding. Complexity is proven by evidence (interacting invariants, novel semantic contract, fail-closed artifact design, cross-module behavior, substantial validation loop, in-scope architectural choice, complex repair) — **never by file count**; a two-file production+test protocol-semantic slice is correctly T3A |
+| T3B | `CAPABILITY_CRITICAL_IMPLEMENTATION_OR_REPAIR` | Claude Opus 5 | `claude-opus-5` | max | Requires an explicitly NAMED trigger: cryptographic verification boundaries; readiness/provenance promotion logic; protocol ambiguity with safety consequences; complex trust-boundary repair; **complex semantic** controller P1/P2 repair after a failed audit; Agent OS / model-routing architecture; several plausible architectures with materially different safety outcomes; unexpected cross-layer failures; controller-designated capability-critical work. Audit origin is ONE input, never an automatic trigger — a mechanical or obvious post-audit repair stays T2 |
 | T3C | `CODE_REVIEW_AND_BUG_FINDING` | Claude Opus 5 | `claude-opus-5` | medium (focused) / high (broad) / xhigh (multi-trust-boundary) | focused one- or two-file review and first-pass bug discovery at medium; broad multi-module, subtle-semantic, security-sensitive or post-failure review at high; multi-trust-boundary, protocol/crypto, conflicting-findings or cross-layer reconstruction at xhigh |
 | T3D | `ARCHITECTURE_AND_NEXT_SLICE` | Claude Opus 5 | `claude-opus-5` | high (xhigh when candidate slices interact) | next-slice selection, architecture comparison, sequencing; `max` only when the decision controls readiness/provenance, involves cryptographic boundaries, or a wrong sequence creates irreversible or high-cost work |
 | T3E | `COMPLEX_PROMPT_ARCHITECTURE` | Claude Opus 5 | `claude-opus-5` | high (xhigh for protocol/crypto/readiness synthesis or post-audit-failure) | converting a new complex objective into one complete execution contract; prompts needing repository archaeology; many interacting gates. `max` only for Agent OS/routing architecture, capability-critical P1/P2 repair prompts, or prompts governing readiness/cryptographic implementation. Known bounded mechanical prompt generation stays Sonnet 5 medium |
@@ -971,49 +971,114 @@ invariants. `max` — capability-critical only, per the T3B trigger list in 24.3
 Indiscriminate `max` is inefficient, not merely expensive: it lengthens reasoning and latency, multiplies
 tool calls and tokens, and invites overthinking and unnecessary scope exploration. `max` is never justified
 by a task merely being important. Never `max` for polling, merge closeout, formatting, routine tests, simple
-documentation, or ordinary one-line repair.
+documentation, or ordinary one-line repair. Audit origin is likewise not an effort input on its own: the
+fact that work follows a P1/P2 finding says nothing about its complexity, so a mechanical or obvious
+post-audit repair stays in the bounded Sonnet lane (T2) and only a complex, semantic, trust-boundary,
+protocol/crypto or cross-layer post-audit repair reaches T3B/`max`.
+
+**Codex lane non-regression.** Codex GPT-5.6 Sol (protected T4 `CROSS_CONTRACT_DESIGN_OR_AUDIT`), Terra
+(bounded implementation and ordinary independent audit) and Luna (T0 mechanics) are permanent workflow
+lanes; nothing in the Claude effort architecture narrows, renames, renumbers or absorbs them, and Class C
+always requires a fresh-context independent Codex Sol audit that no Claude lane and no Claude self-review
+can satisfy. Temporary model availability or quota state — for any vendor — is transient operational
+information, never durable routing: it is recorded in a controller handoff for that task only and never
+written into this doctrine.
 
 **Thinking policy.** Adaptive thinking stays enabled. Never request or set `thinking: disabled` for a T3
 mutation lane, and never combine disabled thinking with `xhigh` or `max`. Control cost through effort
 selection, scope and context — never by suppressing reasoning.
 
-**Deterministic routing function.** Evaluate in order; the first matching rule wins.
+**Deterministic routing function.** Evaluate in order; the first matching rule wins. Ordering is
+load-bearing: the specific rules precede the generic ones so no class is shadowed.
 
 ```text
 route(task) -> {TASK_CLASS, MODEL, MODEL_ID, EFFORT, THINKING_POLICY, TOKEN_CLASS,
                 CONTEXT_BUDGET_CLASS, SUBAGENT_POLICY, EXTERNAL_RESEARCH_POLICY,
                 MUTATION_AUTHORITY, VERIFICATION_PROFILE, STOP_CONDITIONS, REPORT_PROFILE}
 
-inputs: read_only|mutation; mechanical|semantic; known|novel; file_count; module_count;
-        trust_boundary_effect; protocol_involved; crypto_involved; readiness_or_provenance_effect;
-        expected_runtime; expected_tool_calls; expected_test_surface; prior_audit_failure;
-        unexpected_failure; external_fact_dependency; parallelizable; human_authorization_required
+inputs: read_only|mutation; mechanical|semantic; known|novel; bounded; file_count; module_count;
+        status_or_polling_or_git_hygiene; governed_closeout; review_intent; architecture_intent;
+        prompt_architecture_intent; trust_boundary_change; protocol_involved; crypto_involved;
+        readiness_or_provenance_effect; class_c_cross_contract; interacting_invariants;
+        novel_semantic_contract; fail_closed_artifact_design; cross_module_behavior;
+        substantial_validation_loop; architectural_choice_in_scope; complex_repair;
+        prior_audit_failure; audit_repair_is_mechanical; unexpected_cross_layer_failure;
+        controller_designated_capability_critical; external_fact_dependency;
+        human_authorization_required; authorization_present; semantic_anomaly;
+        readiness_or_connector_transition
 
- 1 external_fact_dependency is load-bearing        -> XR   Deep Research (no Claude mutation)
- 2 human_authorization_required and ambiguous      -> STOP (controller/human)
- 3 readiness_or_provenance_effect or crypto_involved
-   or trust_boundary_effect(change) or prior_audit_failure
-   or unexpected_failure(cross-layer)              -> T3B  claude-opus-5   max
- 4 mutation and (protocol_involved or semantic)
-   and (file_count > 2 or module_count > 1)        -> T3A  claude-opus-5   xhigh
- 5 read_only and review-intent
-      focused (<= 2 files)                         -> T3C  claude-opus-5   medium
-      broad / security / post-failure              -> T3C  claude-opus-5   high
-      multi-trust-boundary / conflicting findings   -> T3C  claude-opus-5   xhigh
- 6 read_only and architecture/next-slice intent    -> T3D  claude-opus-5   high  (xhigh if slices interact)
- 7 novel and prompt-architecture intent            -> T3E  claude-opus-5   high  (xhigh on synthesis)
- 8 mutation and mechanical and known and bounded   -> T2   claude-sonnet-5 medium (high if moderate)
- 9 read_only and (mechanical or closeout)          -> T1   claude-sonnet-5 low
-10 read_only and status/polling/git hygiene        -> T0   claude-sonnet-5 low
-11 otherwise                                       -> UNRESOLVED
+ 1 external_fact_dependency == load_bearing        -> XR   Deep Research (no Claude mutation)
+ 2 human_authorization_required and not authorization_present
+                                                   -> STOP (controller/human)
+ 3 class_c_cross_contract                          -> T4   Codex GPT-5.6 Sol   xhigh
+                                                          (never absorbed by a Claude lane)
+ 4 read_only and status_or_polling_or_git_hygiene  -> T0   claude-sonnet-5 low
+                                                          (BEFORE any generic read-only rule)
+ 5 mutation and governed_closeout and authorization_present
+   and not semantic_anomaly
+   and not readiness_or_connector_transition       -> T1   claude-sonnet-5 low
+                                                          (a merge IS a mutation and still T1 when
+                                                           fully authorized and mechanically bounded)
+ 6 read_only and (mechanical or bounded)
+   and not review_intent and not architecture_intent
+   and not prompt_architecture_intent              -> T1   claude-sonnet-5 low
+ 7 capability_critical_trigger(task) != none       -> T3B  claude-opus-5   max
+      triggers (explicit, exhaustive):
+        crypto_involved
+        readiness_or_provenance_effect
+        protocol_involved and trust_boundary_change      (protocol ambiguity w/ safety consequences)
+        trust_boundary_change and complex_repair
+        prior_audit_failure and not audit_repair_is_mechanical
+              and (semantic or trust_boundary_change or protocol_involved or complex_repair)
+        unexpected_cross_layer_failure
+        controller_designated_capability_critical
+      NOTE: a bare prior_audit_failure is NOT a trigger.
+ 8 mutation and (semantic or protocol_involved)
+   and complexity_evidence(task) != none           -> T3A  claude-opus-5   xhigh
+      complexity_evidence (any one suffices):
+        interacting_invariants | novel_semantic_contract | fail_closed_artifact_design |
+        cross_module_behavior | substantial_validation_loop | architectural_choice_in_scope |
+        complex_repair
+      NOTE: file_count/module_count are NOT complexity criteria. A two-file
+            production+test protocol-semantic slice is correctly T3A/xhigh.
+ 9 read_only and review_intent
+      multi_trust_boundary / protocol-crypto /
+      conflicting findings / cross-layer            -> T3C  claude-opus-5   xhigh
+      broad / security / post-failure               -> T3C  claude-opus-5   high
+      focused (<= 2 files)                          -> T3C  claude-opus-5   medium
+10 read_only and architecture_intent               -> T3D  claude-opus-5   high
+                                                          (xhigh if candidates interact; max only for
+                                                           readiness/provenance or crypto boundaries)
+11 prompt_architecture_intent
+   and not (known and mechanical and bounded)      -> T3E  claude-opus-5   high
+                                                          (xhigh on complex synthesis; max ONLY when an
+                                                           explicit critical trigger is named)
+12 mutation and known and bounded and mechanical
+   and not trust_boundary_change and not protocol_involved
+   and not crypto_involved
+   and not readiness_or_provenance_effect          -> T2   claude-sonnet-5 medium (high if moderate)
+                                                          (prior_audit_failure alone never overrides
+                                                           this rule)
+13 prompt_architecture_intent
+   and known and mechanical and bounded            -> T2   claude-sonnet-5 medium
+14 otherwise                                       -> UNRESOLVED
 ```
 
 Fail-closed behavior. `UNRESOLVED` classification → perform read-only Opus 5 `high`/`xhigh` analysis and do
 NOT mutate until the controller selects the lane. Current external facts required → route to Deep Research.
-Merge authorization ambiguous → stop. Actual model or effort mismatched against the requirement → stop
-before mutation (a human may waive an effort mismatch for a specific task; record the waiver and the true
-actual). Fallback occurred → stop before mutation. Active PR collision → stop. Readiness or connector
-transition detected → stop and escalate.
+Merge authorization required and absent or ambiguous → stop. Actual model or effort mismatched against the
+requirement → stop before mutation (a human may waive an effort mismatch for a specific task; record the
+waiver and the true actual). Fallback occurred → stop before mutation. Active PR collision → stop.
+Readiness or connector transition detected → stop and escalate — and note that rule 5 is void whenever such
+a transition is present, so a closeout that would move readiness or connector state can never stay T1.
+
+Precedence guarantees. The ordering above exists to prevent six specific failures: T0 being shadowed by the
+generic read-only rule (rule 4 precedes rule 6); an explicitly authorized merge closeout falling through to
+T2 (rule 5 precedes rule 12); a simple mechanical post-audit repair jumping to `max` (rule 7 requires a
+named trigger, and mechanical audit repair is excluded from it); bounded two-file protocol-semantic work
+becoming `UNRESOLVED` (rule 8 uses complexity evidence, not file count); Class-C cross-contract work being
+absorbed by a Claude lane (rule 3 precedes every Claude rule); and current external facts being inferred
+locally (rule 1 precedes everything).
 
 De-escalation is mandatory, not optional: when the proven scope turns out narrower than classified (fewer
 files, no trust boundary, mechanical repair), drop to the lowest lane that still proves correctness for the
@@ -1170,4 +1235,14 @@ human authority" means `CONTROLLER_CONNECTOR_GATE`; the numbered `T4` stays
 `CROSS_CONTRACT_DESIGN_OR_AUDIT` so Codex doctrine is not renumbered. Docs/setup only; one assertion string
 updated in the read-only advisory `scripts/crypto_core/audit_agent_setup.ps1` so its expected-lane check
 tracks the renamed lane; no product code, tests, dependencies or CI workflows touched; no readiness or
-connector transition; no safety gate weakened.*
+connector transition; no safety gate weakened.
+Same-PR controller repair (2026-07-25): the section 24.12 routing function was rewritten after a controller
+audit found four deterministic contradictions against the 24.3 matrix — T0 shadowed by the generic
+read-only rule, an explicitly authorized merge closeout falling through to T2 because it is a mutation, a
+bare `prior_audit_failure` escalating every post-audit repair to `max`, and bounded two-file
+protocol-semantic work becoming `UNRESOLVED` because complexity was gated on file count. The function now
+orders specific rules before generic ones, adds an explicit Class-C rule so Codex Sol work is never absorbed
+by a Claude lane, requires a NAMED capability-critical trigger for T3B, proves T3A complexity by evidence
+rather than file count, and keeps an authorized mechanically bounded merge in T1. Sixteen deterministic
+routing cases pass. Codex Sol/Terra/Luna lanes, the Class-C requirement, T4, the XR boundary, controller and
+human merge authority are all unchanged, and no temporary model-availability state is persisted.*
