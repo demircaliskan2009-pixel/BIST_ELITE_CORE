@@ -46,6 +46,16 @@ architectural choice inside the authorized scope, or a complex repair. A bounded
 production-plus-test protocol-semantic slice is correctly **T3A / Opus 5 / xhigh**; it must never be demoted
 or left unresolved because it touches only two files.
 
+**Task family is chosen before effort.** Routing is intent-first: `TASK_INTENT` selects the family
+(`STATUS`, `CLOSEOUT`, `BOUNDED_READ`, `IMPLEMENTATION`, `REPAIR`, `REVIEW`, `ARCHITECTURE`,
+`PROMPT_ARCHITECTURE`, `CLASS_C_CROSS_CONTRACT`, `EXTERNAL_RESEARCH`), and only then do risk and complexity
+choose the effort inside it. **T3B accepts IMPLEMENTATION or REPAIR mutation only** — it can never absorb a
+review, an architecture decision or a prompt design, no matter which risk flags are set. A cryptographic
+review is still a review (T3C, effort `xhigh`). A readiness architecture decision is still architecture
+(T3D, effort `max`). A capability-critical prompt design is still prompt architecture (T3E, effort `max`).
+If two families are implied and no explicit `TASK_INTENT` is given, the task is `UNRESOLVED` and read-only
+until the controller classifies it — never a silent T3B.
+
 **An authorized merge is T1 even though it mutates.** Governed mechanical closeout — standard merge,
 branch-protection-required auto-merge when separately authorized by doctrine, post-merge commands,
 parent/digest verification, clean-main proof — stays **T1 / Sonnet 5 / low** when it is fully authorized,
@@ -181,8 +191,10 @@ REPORT FORMAT: AGENT_OS_HANDOFF_V1, compact, failure tails only, exactly one nex
 
 ### 3.2 `OPUS5_T3B_CAPABILITY_CRITICAL_MAX`
 
-Use for protocol, cryptographic, readiness/provenance and trust-boundary work.
-Do NOT use because a task feels important — name the fired T3B trigger or drop to 3.1.
+Use for capability-critical **IMPLEMENTATION OR REPAIR** after a named T3B trigger.
+Do NOT use for review, architecture or prompt architecture — those remain T3C/T3D/T3E and scale effort
+inside their own family. Do NOT use because a task feels important: name the fired T3B trigger, or drop
+to 3.1.
 
 ```text
 MODEL_REQUESTED: Claude Opus 5
@@ -212,8 +224,11 @@ REPORT FORMAT: AGENT_OS_HANDOFF_V1 + READINESS_BEFORE/AFTER + CONNECTOR_BEFORE/A
 
 ### 3.3 `OPUS5_T3B_CONTROLLER_REPAIR_MAX`
 
-Use after an exact-head P1/P2 audit finding.
-Do NOT use for a first implementation, or for a mechanical/obvious repair (use 3.10).
+Use only for complex **semantic, trust-boundary, protocol/crypto or cross-layer** repair after an
+exact-head P1/P2 audit finding.
+Do NOT use for a first implementation; do NOT use for a mechanical or obvious audit repair — that stays
+T2 (use 3.10). A review finding on its own does not authorize mutation: the repair is a separate,
+explicitly created IMPLEMENTATION/REPAIR task.
 
 ```text
 MODEL_REQUESTED: Claude Opus 5 | MODEL_ID_REQUIRED: claude-opus-5 | MODEL_EFFORT_REQUESTED: max
@@ -256,9 +271,11 @@ INDEPENDENCE: if this session wrote the code, label the output SELF_AUDIT_ONLY_N
 ### 3.5 `OPUS5_T3C_BROAD_REVIEW_HIGH`
 
 Use for broad multi-module, subtle-semantic or security-sensitive review, and review after an unexpected
-failure. Raise to `xhigh` only when the review spans multiple trust boundaries, requires protocol/crypto
+failure. Raise to `xhigh` when the review spans multiple trust boundaries, requires protocol/crypto
 reasoning, findings conflict, or behavior must be reconstructed across several layers.
-Do NOT use for a two-file diff (use 3.4).
+Do NOT use for a two-file diff (use 3.4). Protocol or cryptographic subject matter raises the review
+**effort** to `xhigh`; it does **not** change the task class to T3B. A review stays read-only — any fix it
+motivates is a separate IMPLEMENTATION/REPAIR task.
 
 ```text
 MODEL_REQUESTED: Claude Opus 5 | MODEL_ID_REQUIRED: claude-opus-5
@@ -277,7 +294,8 @@ REPORT: P1/P2/P3 with file:line + failure scenario; UNKNOWN for anything unprove
 ### 3.6 `OPUS5_T3D_ARCHITECTURE_HIGH_OR_XHIGH`
 
 Use for next-slice selection and architecture comparison.
-Do NOT use to implement; this lane produces a decision, not a diff.
+Do NOT use to implement; this lane produces a decision, not a diff. Readiness/provenance or cryptographic
+criticality raises the **effort to `max` inside T3D** — it does not move the task to T3B.
 
 ```text
 MODEL_REQUESTED: Claude Opus 5 | MODEL_ID_REQUIRED: claude-opus-5
@@ -297,7 +315,10 @@ OUTPUT: exactly ONE recommended slice + WHY_NOW + FILES_TO_READ + RISKS + STOP_I
 ### 3.7 `OPUS5_T3E_COMPLEX_PROMPT_DESIGN_HIGH_OR_XHIGH`
 
 Use to convert a new complex objective into ONE execution prompt.
-Do NOT use for a known bounded mechanical task — that prompt is Sonnet 5 / medium.
+Do NOT use for a known bounded mechanical task — that prompt is Sonnet 5 / medium. Capability-critical
+prompt design (Agent OS or model-routing prompts, prompts governing readiness/provenance promotion or
+cryptographic verification, capability-critical controller repair prompts) raises the **effort to `max`
+inside T3E** and the work stays T3E — it never becomes T3B.
 
 ```text
 MODEL_REQUESTED: Claude Opus 5 | MODEL_ID_REQUIRED: claude-opus-5
@@ -390,23 +411,45 @@ A deterministic contract a ChatGPT or Claude controller uses to generate ONE bes
 **Input fields**
 
 ```text
-TASK_OBJECTIVE            CURRENT_REPO_STATE        TASK_ARCHETYPE
-RISK_CLASS                TRUST_BOUNDARY_EFFECT     PROTOCOL_OR_CRYPTO_EFFECT
-READINESS_EFFECT          EXTERNAL_FACT_REQUIREMENT AUTHORIZED_FILES
-MAX_CHANGED_FILES         TEST_SURFACE              PR_STATE
-MERGE_AUTHORITY
+TASK_INTENT               TASK_OBJECTIVE            CURRENT_REPO_STATE
+TASK_ARCHETYPE            RISK_CLASS                TRUST_BOUNDARY_EFFECT
+PROTOCOL_OR_CRYPTO_EFFECT READINESS_EFFECT          EXTERNAL_FACT_REQUIREMENT
+AUTHORIZED_FILES          MAX_CHANGED_FILES         TEST_SURFACE
+PR_STATE                  MERGE_AUTHORITY
+```
+
+`TASK_INTENT` is one of `STATUS | CLOSEOUT | BOUNDED_READ | IMPLEMENTATION | REPAIR | REVIEW |
+ARCHITECTURE | PROMPT_ARCHITECTURE | CLASS_C_CROSS_CONTRACT | EXTERNAL_RESEARCH`. It is resolved FIRST and
+is never overridden by a risk field.
+
+**Compilation order (mandatory)**
+
+```text
+intent family
+  -> external / Class-C / human-authorization gates
+  -> complexity and risk INSIDE that family
+  -> model
+  -> effort
+  -> context budget
+  -> permissions
+  -> verification and report profile
 ```
 
 **Output fields**
 
 ```text
-SELECTED_TASK_CLASS       SELECTED_MODEL            SELECTED_MODEL_ID
-SELECTED_EFFORT           SELECTION_RATIONALE       CONTEXT_BUDGET_CLASS
-SUBAGENT_POLICY           ONE_COMPLETE_PROMPT
+SELECTED_TASK_INTENT      SELECTED_TASK_CLASS       SELECTED_MODEL
+SELECTED_MODEL_ID         SELECTED_EFFORT           SELECTION_RATIONALE
+CONTEXT_BUDGET_CLASS      SUBAGENT_POLICY           ONE_COMPLETE_PROMPT
 ```
 
 **Rules**
 
+0. Resolve `TASK_INTENT` before consulting any risk field. A risk flag selects the EFFORT inside the
+   family; it never changes the family. Review stays T3C, architecture stays T3D, prompt architecture
+   stays T3E, however cryptographic, readiness-bearing or trust-boundary-bearing the subject is. If two
+   families are implied and no explicit `TASK_INTENT` is given, emit a read-only `UNRESOLVED` analysis
+   prompt — never a T3B prompt.
 1. Emit exactly one best prompt. No competing alternatives unless explicitly requested.
 2. Select the lowest-cost lane that safely proves correctness.
 3. Use Opus 5 only when Sonnet 5 is insufficient; state why in one line.

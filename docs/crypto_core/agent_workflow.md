@@ -730,10 +730,10 @@ lane that safely proves correctness — model prestige is never a selection reas
 | T1 | `READONLY_OR_FAST_BOUNDED` | Luna low / Terra high / Sonnet 5 (runtime-proven) | `claude-sonnet-5` (Claude lane) | low | bounded reads, proof, docs, direct-dependency read-only audit, and governed mechanical closeout — authorized standard merge, branch-protection-required auto-merge only when separately authorized by doctrine, post-merge commands, parent/digest verification, clean-main proof. **A merge is a mutation and stays T1** when it is fully authorized, mechanically bounded, free of semantic anomaly and free of any readiness/connector transition |
 | T2 | `BOUNDED_IMPLEMENTATION` | Terra high / Sonnet 5 (runtime-proven) | `claude-sonnet-5` (Claude lane) | medium (high when moderately complex) | exact-file deterministic slices, narrow docs, config-only changes, mechanical fixtures/tests, obvious localized repair, PR-body corrections, bounded governance closeout |
 | T3A | `COMPLEX_IMPLEMENTATION` | Claude Opus 5 (default) / Terra xhigh | `claude-opus-5` | xhigh | complex production implementation, multi-file semantic features, protocol semantics, deterministic state machines, fail-closed artifacts, provenance logic, complex cross-module repair, long-horizon agentic coding. Complexity is proven by evidence (interacting invariants, novel semantic contract, fail-closed artifact design, cross-module behavior, substantial validation loop, in-scope architectural choice, complex repair) — **never by file count**; a two-file production+test protocol-semantic slice is correctly T3A |
-| T3B | `CAPABILITY_CRITICAL_IMPLEMENTATION_OR_REPAIR` | Claude Opus 5 | `claude-opus-5` | max | Requires an explicitly NAMED trigger: cryptographic verification boundaries; readiness/provenance promotion logic; protocol ambiguity with safety consequences; complex trust-boundary repair; **complex semantic** controller P1/P2 repair after a failed audit; Agent OS / model-routing architecture; several plausible architectures with materially different safety outcomes; unexpected cross-layer failures; controller-designated capability-critical work. Audit origin is ONE input, never an automatic trigger — a mechanical or obvious post-audit repair stays T2 |
-| T3C | `CODE_REVIEW_AND_BUG_FINDING` | Claude Opus 5 | `claude-opus-5` | medium (focused) / high (broad) / xhigh (multi-trust-boundary) | focused one- or two-file review and first-pass bug discovery at medium; broad multi-module, subtle-semantic, security-sensitive or post-failure review at high; multi-trust-boundary, protocol/crypto, conflicting-findings or cross-layer reconstruction at xhigh |
-| T3D | `ARCHITECTURE_AND_NEXT_SLICE` | Claude Opus 5 | `claude-opus-5` | high (xhigh when candidate slices interact) | next-slice selection, architecture comparison, sequencing; `max` only when the decision controls readiness/provenance, involves cryptographic boundaries, or a wrong sequence creates irreversible or high-cost work |
-| T3E | `COMPLEX_PROMPT_ARCHITECTURE` | Claude Opus 5 | `claude-opus-5` | high (xhigh for protocol/crypto/readiness synthesis or post-audit-failure) | converting a new complex objective into one complete execution contract; prompts needing repository archaeology; many interacting gates. `max` only for Agent OS/routing architecture, capability-critical P1/P2 repair prompts, or prompts governing readiness/cryptographic implementation. Known bounded mechanical prompt generation stays Sonnet 5 medium |
+| T3B | `CAPABILITY_CRITICAL_IMPLEMENTATION_OR_REPAIR` | Claude Opus 5 | `claude-opus-5` | max | **IMPLEMENTATION or REPAIR intent + mutation only** — T3B never accepts REVIEW, ARCHITECTURE or PROMPT_ARCHITECTURE work, whatever risk flags are set. Requires an explicitly NAMED trigger: cryptographic verification boundary implementation; readiness/provenance promotion implementation; protocol ambiguity with safety consequences inside an implementation; complex trust-boundary repair; **complex semantic** controller P1/P2 repair after a failed audit; unexpected cross-layer implementation failure; controller-designated capability-critical implementation/repair. A bare risk flag and a bare audit origin are both insufficient — a mechanical or obvious post-audit repair stays T2 |
+| T3C | `CODE_REVIEW_AND_BUG_FINDING` | Claude Opus 5 | `claude-opus-5` | medium (focused) / high (broad) / xhigh (protocol-crypto or multi-trust-boundary) | **REVIEW intent, read-only.** Focused one- or two-file review and first-pass bug discovery at medium; broad multi-module, subtle-semantic, security-sensitive or post-failure review at high; protocol/crypto, multi-trust-boundary, conflicting-findings or cross-layer reconstruction at xhigh. Protocol or cryptographic subject matter raises the EFFORT to xhigh — it never changes the class to T3B. Any resulting fix is a separate, explicitly created task |
+| T3D | `ARCHITECTURE_AND_NEXT_SLICE` | Claude Opus 5 | `claude-opus-5` | high / xhigh (interacting or multi-module) / max (readiness, crypto, irreversible) | **ARCHITECTURE intent, read-only — produces a decision, not a diff.** Next-slice selection, architecture comparison, sequencing. `max` when the decision controls readiness/provenance, involves cryptographic boundaries, a wrong sequence creates irreversible or high-cost work, or the controller designates it critical. Readiness or cryptographic subject matter raises the EFFORT to max inside T3D — it never changes the class to T3B |
+| T3E | `COMPLEX_PROMPT_ARCHITECTURE` | Claude Opus 5 | `claude-opus-5` | high / xhigh (synthesis) / max (capability-critical) | **PROMPT_ARCHITECTURE intent.** Converting a new complex objective into one complete execution contract; prompts needing repository archaeology; many interacting gates. `max` for Agent OS or model-routing prompts, prompts governing readiness/provenance promotion, prompts governing cryptographic verification, capability-critical controller repair prompts, and controller-designated critical prompts — capability-criticality raises the EFFORT to max inside T3E and the work stays T3E. Known bounded mechanical prompt generation stays Sonnet 5 medium |
 | T4 | `CROSS_CONTRACT_DESIGN_OR_AUDIT` | Sol xhigh (`max` controller-gated) | — (Codex) | xhigh | protected cross-contract design, digest/provenance/trust boundaries, SM-5/SM-6, Stage-4 semantics, readiness/Deribit design, complex security/CodeQL. Class C is never satisfied by a Claude lane |
 | XR | `DEEP_RESEARCH_EXTERNAL` | Deep Research + connector | — | — | cited external/current facts, benchmarks, phase gates (submodes in 24.9). Claude execution alone is insufficient; no Claude lane may infer load-bearing current external facts from memory |
 | — | `CONTROLLER_CONNECTOR_GATE` | ChatGPT + connector/gh, then the human | — | — | final evidence comparison, merge-readiness judgement, and explicit per-PR human merge authorization. No Claude or Codex lane replaces either authority |
@@ -988,97 +988,149 @@ written into this doctrine.
 mutation lane, and never combine disabled thinking with `xhigh` or `max`. Control cost through effort
 selection, scope and context — never by suppressing reasoning.
 
+**`TASK_INTENT` — the input contract.** Routing is intent-first. Every task carries exactly one explicit
+task family:
+
+```text
+TASK_INTENT ∈ { STATUS | CLOSEOUT | BOUNDED_READ | IMPLEMENTATION | REPAIR | REVIEW |
+                ARCHITECTURE | PROMPT_ARCHITECTURE | CLASS_C_CROSS_CONTRACT | EXTERNAL_RESEARCH }
+```
+
+The family is chosen BEFORE any risk or complexity flag is consulted. Risk and complexity determine the
+effort, the context budget, the audit class and the escalation path — they never overwrite the family. A
+cryptographic review is still a review. A readiness architecture decision is still architecture. A
+capability-critical prompt design is still prompt architecture.
+
+Intent resolution when `TASK_INTENT` is not stated explicitly: derive it from the legacy booleans, but if
+more than one of `review_intent` / `architecture_intent` / `prompt_architecture_intent` is set, the task is
+`AMBIGUOUS` and routes to `UNRESOLVED`. Never resolve a conflict by falling through to T3B.
+
 **Deterministic routing function.** Evaluate in order; the first matching rule wins. Ordering is
-load-bearing: the specific rules precede the generic ones so no class is shadowed.
+load-bearing: gates first, then family, then effort inside that family.
 
 ```text
 route(task) -> {TASK_CLASS, MODEL, MODEL_ID, EFFORT, THINKING_POLICY, TOKEN_CLASS,
                 CONTEXT_BUDGET_CLASS, SUBAGENT_POLICY, EXTERNAL_RESEARCH_POLICY,
                 MUTATION_AUTHORITY, VERIFICATION_PROFILE, STOP_CONDITIONS, REPORT_PROFILE}
 
-inputs: read_only|mutation; mechanical|semantic; known|novel; bounded; file_count; module_count;
-        status_or_polling_or_git_hygiene; governed_closeout; review_intent; architecture_intent;
-        prompt_architecture_intent; trust_boundary_change; protocol_involved; crypto_involved;
-        readiness_or_provenance_effect; class_c_cross_contract; interacting_invariants;
-        novel_semantic_contract; fail_closed_artifact_design; cross_module_behavior;
-        substantial_validation_loop; architectural_choice_in_scope; complex_repair;
-        prior_audit_failure; audit_repair_is_mechanical; unexpected_cross_layer_failure;
+inputs: TASK_INTENT; read_only|mutation; mechanical|semantic; known|novel; bounded; file_count;
+        module_count; status_or_polling_or_git_hygiene; governed_closeout; review_intent;
+        architecture_intent; prompt_architecture_intent; trust_boundary_change; protocol_involved;
+        crypto_involved; readiness_or_provenance_effect; class_c_cross_contract;
+        interacting_invariants; novel_semantic_contract; fail_closed_artifact_design;
+        cross_module_behavior; substantial_validation_loop; architectural_choice_in_scope;
+        complex_repair; candidates_interact; multi_module_architecture;
+        irreversible_or_high_cost_sequencing; prompt_complex_synthesis;
+        prompt_explicit_critical_trigger; prompt_governs_agent_os_or_routing; prior_audit_failure;
+        audit_repair_is_mechanical; unexpected_cross_layer_failure;
         controller_designated_capability_critical; external_fact_dependency;
         human_authorization_required; authorization_present; semantic_anomaly;
         readiness_or_connector_transition
 
- 1 external_fact_dependency == load_bearing        -> XR   Deep Research (no Claude mutation)
+--- gates: evaluated before any family ---
+ 1 external_fact_dependency == load_bearing
+   or TASK_INTENT == EXTERNAL_RESEARCH             -> XR   Deep Research (no Claude mutation)
  2 human_authorization_required and not authorization_present
                                                    -> STOP (controller/human)
- 3 class_c_cross_contract                          -> T4   Codex GPT-5.6 Sol   xhigh
-                                                          (never absorbed by a Claude lane)
- 4 read_only and status_or_polling_or_git_hygiene  -> T0   claude-sonnet-5 low
-                                                          (BEFORE any generic read-only rule)
- 5 mutation and governed_closeout and authorization_present
+ 3 class_c_cross_contract
+   or TASK_INTENT == CLASS_C_CROSS_CONTRACT        -> T4   Codex GPT-5.6 Sol   xhigh
+                                                          (controller-gated max; never a Claude lane)
+ 3b TASK_INTENT == AMBIGUOUS                        -> UNRESOLVED (fail closed, never T3B)
+
+--- mechanical families ---
+ 4 TASK_INTENT == STATUS and read_only             -> T0   claude-sonnet-5 low
+ 5 TASK_INTENT == CLOSEOUT and mutation
+   and governed_closeout and authorization_present
    and not semantic_anomaly
    and not readiness_or_connector_transition       -> T1   claude-sonnet-5 low
                                                           (a merge IS a mutation and still T1 when
                                                            fully authorized and mechanically bounded)
- 6 read_only and (mechanical or bounded)
-   and not review_intent and not architecture_intent
-   and not prompt_architecture_intent              -> T1   claude-sonnet-5 low
- 7 capability_critical_trigger(task) != none       -> T3B  claude-opus-5   max
-      triggers (explicit, exhaustive):
-        crypto_involved
-        readiness_or_provenance_effect
-        protocol_involved and trust_boundary_change      (protocol ambiguity w/ safety consequences)
-        trust_boundary_change and complex_repair
-        prior_audit_failure and not audit_repair_is_mechanical
-              and (semantic or trust_boundary_change or protocol_involved or complex_repair)
-        unexpected_cross_layer_failure
-        controller_designated_capability_critical
-      NOTE: a bare prior_audit_failure is NOT a trigger.
- 8 mutation and (semantic or protocol_involved)
-   and complexity_evidence(task) != none           -> T3A  claude-opus-5   xhigh
+ 6 TASK_INTENT == BOUNDED_READ and read_only
+   and (mechanical or bounded)                     -> T1   claude-sonnet-5 low
+
+--- read-only reasoning families: chosen BEFORE any risk escalation ---
+ 7 TASK_INTENT == REVIEW                           -> T3C  claude-opus-5
+      protocol / crypto / trust-boundary / multi-trust-boundary /
+      conflicting findings / cross-layer                        -> xhigh
+      broad / security-sensitive / post-failure                 -> high
+      focused (<= 2 files), no such complexity                  -> medium
+      A review NEVER becomes T3B because crypto_involved,
+      readiness_or_provenance_effect, trust_boundary_change or
+      prior_audit_failure is set. Review stays read-only; any
+      resulting mutation is a SEPARATE, explicitly created task.
+ 8 TASK_INTENT == ARCHITECTURE                     -> T3D  claude-opus-5
+      readiness/provenance, cryptographic boundary,
+      irreversible/high-cost sequencing, controller-designated     -> max
+      interacting candidate slices or several modules             -> xhigh
+      ordinary bounded architecture                               -> high
+      Architecture NEVER becomes T3B merely because its SUBJECT is
+      readiness, provenance or cryptography. T3D stays read-only
+      and produces a decision, not a diff.
+ 9 TASK_INTENT == PROMPT_ARCHITECTURE
+      known and mechanical and bounded and no critical trigger    -> T2  claude-sonnet-5 medium
+      Agent OS / model-routing prompt, prompt governing readiness
+      or provenance promotion, prompt governing cryptographic
+      verification, capability-critical controller repair prompt,
+      controller-designated critical prompt                       -> T3E claude-opus-5 max
+      protocol/crypto/readiness synthesis, several safe paths,
+      post-audit-failure synthesis                                -> T3E claude-opus-5 xhigh
+      ordinary complex prompt architecture                        -> T3E claude-opus-5 high
+
+--- implementation / repair family only ---
+10 TASK_INTENT ∈ {IMPLEMENTATION, REPAIR} and mutation
+   and named_capability_critical_trigger != none   -> T3B  claude-opus-5   max
+      named triggers (explicit, exhaustive):
+        cryptographic verification boundary implementation
+        readiness/provenance promotion implementation
+        protocol ambiguity with safety consequences inside an implementation
+        complex trust-boundary repair
+        complex semantic P1/P2 repair after a failed audit
+              (prior_audit_failure and not audit_repair_is_mechanical
+               and (semantic or trust_boundary_change or protocol_involved or complex_repair))
+        unexpected cross-layer implementation failure
+        explicit controller-designated capability-critical implementation/repair
+      T3B requires mutation AND implementation/repair intent. It can never accept
+      REVIEW, ARCHITECTURE or PROMPT_ARCHITECTURE. A bare risk flag and a bare
+      audit origin both remain insufficient.
+11 TASK_INTENT ∈ {IMPLEMENTATION, REPAIR} and mutation
+   and (semantic or protocol_involved)
+   and complexity_evidence(task) != none
+   and named_capability_critical_trigger == none   -> T3A  claude-opus-5   xhigh
       complexity_evidence (any one suffices):
         interacting_invariants | novel_semantic_contract | fail_closed_artifact_design |
         cross_module_behavior | substantial_validation_loop | architectural_choice_in_scope |
         complex_repair
-      NOTE: file_count/module_count are NOT complexity criteria. A two-file
-            production+test protocol-semantic slice is correctly T3A/xhigh.
- 9 read_only and review_intent
-      multi_trust_boundary / protocol-crypto /
-      conflicting findings / cross-layer            -> T3C  claude-opus-5   xhigh
-      broad / security / post-failure               -> T3C  claude-opus-5   high
-      focused (<= 2 files)                          -> T3C  claude-opus-5   medium
-10 read_only and architecture_intent               -> T3D  claude-opus-5   high
-                                                          (xhigh if candidates interact; max only for
-                                                           readiness/provenance or crypto boundaries)
-11 prompt_architecture_intent
-   and not (known and mechanical and bounded)      -> T3E  claude-opus-5   high
-                                                          (xhigh on complex synthesis; max ONLY when an
-                                                           explicit critical trigger is named)
+      file_count/module_count are NOT complexity criteria. A two-file
+      production+test protocol-semantic slice is correctly T3A/xhigh.
 12 mutation and known and bounded and mechanical
    and not trust_boundary_change and not protocol_involved
    and not crypto_involved
    and not readiness_or_provenance_effect          -> T2   claude-sonnet-5 medium (high if moderate)
                                                           (prior_audit_failure alone never overrides
                                                            this rule)
-13 prompt_architecture_intent
-   and known and mechanical and bounded            -> T2   claude-sonnet-5 medium
-14 otherwise                                       -> UNRESOLVED
+13 otherwise                                       -> UNRESOLVED
 ```
 
 Fail-closed behavior. `UNRESOLVED` classification → perform read-only Opus 5 `high`/`xhigh` analysis and do
-NOT mutate until the controller selects the lane. Current external facts required → route to Deep Research.
+NOT mutate until the controller selects the lane. Conflicting task families without an explicit
+`TASK_INTENT` → `UNRESOLVED`, never a silent T3B. Current external facts required → route to Deep Research.
 Merge authorization required and absent or ambiguous → stop. Actual model or effort mismatched against the
 requirement → stop before mutation (a human may waive an effort mismatch for a specific task; record the
 waiver and the true actual). Fallback occurred → stop before mutation. Active PR collision → stop.
 Readiness or connector transition detected → stop and escalate — and note that rule 5 is void whenever such
 a transition is present, so a closeout that would move readiness or connector state can never stay T1.
 
-Precedence guarantees. The ordering above exists to prevent six specific failures: T0 being shadowed by the
-generic read-only rule (rule 4 precedes rule 6); an explicitly authorized merge closeout falling through to
-T2 (rule 5 precedes rule 12); a simple mechanical post-audit repair jumping to `max` (rule 7 requires a
-named trigger, and mechanical audit repair is excluded from it); bounded two-file protocol-semantic work
-becoming `UNRESOLVED` (rule 8 uses complexity evidence, not file count); Class-C cross-contract work being
-absorbed by a Claude lane (rule 3 precedes every Claude rule); and current external facts being inferred
-locally (rule 1 precedes everything).
+Precedence guarantees. The ordering above exists to prevent ten specific failures: current external facts
+being inferred locally (rule 1 first); Class-C cross-contract work being absorbed by a Claude lane (rule 3
+precedes every Claude rule); conflicting intent silently resolving to a capability-critical lane (rule 3b);
+T0 being shadowed by the generic read-only rule (rule 4 precedes rule 6); an explicitly authorized merge
+closeout falling through to T2 (rule 5 precedes rule 12); **a review being consumed by T3B because its
+subject is cryptographic or trust-boundary (rule 7 precedes rule 10)**; **an architecture decision being
+consumed by T3B because its subject is readiness, provenance or cryptography (rule 8 precedes rule 10)**;
+**a capability-critical prompt design being consumed by T3B instead of reaching the T3E `max` branch (rule 9
+precedes rule 10)**; a simple mechanical post-audit repair jumping to `max` (rule 10 requires a named
+trigger and excludes mechanical audit repair); and bounded two-file protocol-semantic work becoming
+`UNRESOLVED` (rule 11 uses complexity evidence, not file count).
 
 De-escalation is mandatory, not optional: when the proven scope turns out narrower than classified (fewer
 files, no trust boundary, mechanical repair), drop to the lowest lane that still proves correctness for the
@@ -1245,4 +1297,17 @@ orders specific rules before generic ones, adds an explicit Class-C rule so Code
 by a Claude lane, requires a NAMED capability-critical trigger for T3B, proves T3A complexity by evidence
 rather than file count, and keeps an authorized mechanically bounded merge in T1. Sixteen deterministic
 routing cases pass. Codex Sol/Terra/Luna lanes, the Class-C requirement, T4, the XR boundary, controller and
-human merge authority are all unchanged, and no temporary model-availability state is persisted.*
+human merge authority are all unchanged, and no temporary model-availability state is persisted.
+Second same-PR controller repair (2026-07-25): a further exact-head audit found that the generic T3B
+capability-critical rule preceded the intent-specific T3C/T3D/T3E rules and carried no intent guard, so a
+read-only cryptographic review, a readiness/provenance architecture decision and a capability-critical
+prompt design were all consumed by T3B/`max` — executed against the previous function, all four reported
+scenarios misrouted, which also made the documented T3E `max` branch unreachable. Routing is now
+INTENT-FIRST: an explicit `TASK_INTENT` field (`STATUS`, `CLOSEOUT`, `BOUNDED_READ`, `IMPLEMENTATION`,
+`REPAIR`, `REVIEW`, `ARCHITECTURE`, `PROMPT_ARCHITECTURE`, `CLASS_C_CROSS_CONTRACT`, `EXTERNAL_RESEARCH`)
+selects the family before any risk flag is read; risk and complexity now choose only the effort inside that
+family; T3B requires mutation plus IMPLEMENTATION/REPAIR intent and explicitly cannot accept review,
+architecture or prompt-architecture work; T3C reaches `xhigh`, T3D `max` and T3E `max` inside their own
+families; and conflicting families without an explicit `TASK_INTENT` fail closed to `UNRESOLVED` rather
+than to T3B. Twenty-five deterministic routing cases pass. Codex Sol/Terra/Luna, Class C, T4, XR,
+controller and human merge authority remain unchanged; no temporary model-availability state is persisted.*
