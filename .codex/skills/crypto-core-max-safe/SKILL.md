@@ -17,8 +17,9 @@ trading systems engineering — paper-first, deterministic, fail-closed, audit-f
 - T1 `READONLY_OR_FAST_BOUNDED` — Luna low or Terra high: bounded proof, docs, direct-dependency audit.
 - T2 `BOUNDED_IMPLEMENTATION` — Terra high: exact-file deterministic implementation, tests/docs, small
   same-branch repairs. (Runtime-proven Claude Sonnet 5 may also hold this class per section 24.3.)
-- T3 `COMPLEX_IMPLEMENTATION_OR_REPAIR` — Terra xhigh for bounded repair; Claude Opus 4.8 xhigh when broad
-  reads or long local validation loops are needed.
+- T3 `COMPLEX_IMPLEMENTATION_OR_REPAIR` — Terra xhigh for bounded repair; Claude Opus 5 xhigh when broad
+  reads or long local validation loops are needed. (The Claude side of T3 is subdivided T3A-T3E in section
+  24.3; Codex classes are unchanged.)
 - T4 `CROSS_CONTRACT_DESIGN_OR_AUDIT` — Sol xhigh (`max` only controller-gated): protected trust-boundary,
   digest/provenance, governance/safety, SM-5/SM-6 design/audit, Stage-4 semantics, readiness/Deribit,
   complex security/CodeQL. Sol runs ONLY on a controller-prepared narrow evidence packet — never broad

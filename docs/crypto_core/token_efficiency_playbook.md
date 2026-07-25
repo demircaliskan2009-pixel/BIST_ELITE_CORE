@@ -4,17 +4,30 @@ Purpose: use the lowest capable lane without weakening proof, audit depth, deter
 discipline. Token savings are never evidence; research economy never outranks factual accuracy. Active
 doctrine: `agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`).
 
-## 1. Common task classes and context budgets
+## 1. Context budgets per task class
 
-| Class | Task type | Active lane | Context budget |
-|---|---|---|---|
-| T0 `LUNA_MECHANICAL` | git/gh state, bounded CI polling, PR metadata, thread status, authorized merge mechanics, postverify | GPT-5.6 Luna, `none`/`low` | Exact commands; no design inference or source scan unless necessary for stated proof |
-| T1 `READONLY_OR_FAST_BOUNDED` | ordinary docs, bounded read-only audit, setup proof | Luna low / Terra high / runtime-proven Sonnet 5 | Named docs and direct dependencies only |
-| T2 `BOUNDED_IMPLEMENTATION` | exact-file implementation, tests/docs, small deterministic slice, simple repair | Terra high / runtime-proven Sonnet 5 high | Controller packet first; named files; targeted validation; one PR |
-| T3 `COMPLEX_IMPLEMENTATION_OR_REPAIR` | broad-but-bounded implementation, large refactors, complex fail-closed work, forensic debug, P1/P2 repair | Opus 4.8 xhigh (default) / Terra xhigh | Explicit invariants and regression proof; no token shortcut |
-| T4 `CROSS_CONTRACT_DESIGN_OR_AUDIT` | protected trust boundary, governance, SM-5/SM-6 design, readiness provenance, complex security | GPT-5.6 Sol xhigh; `max` only controller-gated | Controller-prepared narrow evidence packet only |
-| XR `DEEP_RESEARCH_EXTERNAL` | external/current facts, benchmarks, phase gates | Deep Research + connector, advisory only | Connector-bound packet; citations required; unverifiable facts stay `UNPROVEN` |
-| `CONTROLLER_CONNECTOR_GATE` | final evidence comparison and merge authority | ChatGPT GPT-5.6 Thinking + connector/`gh` | Fresh head/files/checks/threads proof |
+Lane and effort selection is NOT restated here. The single `AUTHORITATIVE_ROUTING_MATRIX` (class → lane →
+model id → effort) is `agent_workflow.md` section 24.3, and the effort/thinking architecture is section
+24.12. This table adds only the context budget for each class.
+
+| Class | Context budget |
+|---|---|
+| T0 `LUNA_MECHANICAL` | `MINIMAL` — exact commands; no design inference or source scan unless necessary for the stated proof |
+| T1 `READONLY_OR_FAST_BOUNDED` | `MINIMAL` — named docs and direct dependencies only |
+| T2 `BOUNDED_IMPLEMENTATION` | `BOUNDED` — controller packet first; named files plus immediate dependency interfaces; targeted validation; one PR |
+| T3A `COMPLEX_IMPLEMENTATION` | `BROAD_BUT_BOUNDED` — authoritative setup files, affected production/test files, immediate dependency interfaces, current PR/main evidence; explicit invariants and regression proof; no token shortcut |
+| T3B `CAPABILITY_CRITICAL_IMPLEMENTATION_OR_REPAIR` | `BROAD_BUT_BOUNDED` — as T3A plus the exact protected-trigger evidence and readiness/connector baseline before and after |
+| T3C `CODE_REVIEW_AND_BUG_FINDING` | `BOUNDED` when focused (<= 2 files); `BROAD_BUT_BOUNDED` for broad/security review — named modules plus immediate dependency interfaces |
+| T3D `ARCHITECTURE_AND_NEXT_SLICE` | `BROAD_BUT_BOUNDED` — pinned state, candidate slices, their direct dependencies; no repository-wide sweep |
+| T3E `COMPLEX_PROMPT_ARCHITECTURE` | `BROAD_BUT_BOUNDED` — only the archaeology needed to pin invariants and prior decisions |
+| T4 `CROSS_CONTRACT_DESIGN_OR_AUDIT` | Controller-prepared narrow evidence packet only |
+| XR `DEEP_RESEARCH_EXTERNAL` | Connector-bound packet; citations required; unverifiable facts stay `UNPROVEN` |
+| `CONTROLLER_CONNECTOR_GATE` | Fresh head/files/checks/threads proof |
+
+Expand a budget only on progressive disclosure — an unresolved reference, an invariant crossing modules, a
+test-exposed dependency, or architecture that cannot be proven locally — and state why. Never automatically
+read the whole repository, every historical lesson, unrelated modules, stale archives, old prompts, or
+generated output.
 
 ## 2. Controller preprocessing (primary token saver)
 
@@ -47,13 +60,18 @@ fallback, and the `SETUP_*` block.
 ## 5. Model selection and proof
 
 Selection follows `MODEL_EXPECTED_VALUE_PER_TOKEN_POLICY` (workflow §24.10) — lowest capable lane by
-expected value per token: Luna for mechanics → runtime-proven Sonnet 5 or Terra for bounded T2 work → Opus
-4.8 (default) for broad/complex local T3 work → Sol only for qualifying protected T4 on a narrow packet;
-non-Class-C read-only mapping/audit defaults to the ChatGPT read-only-first controller
-(`CONTROLLER_READONLY_FIRST_POLICY`). Sonnet 5 requires runtime proof of availability/identity before any
-routing (fallback = Terra bounded / Opus broad, no equivalent-quality claim); use measured session/harness
-cost, never hard-coded price rankings. If `EXACT_MODEL_REQUIRED=true`, requested/actual mismatch stops. Never
-claim unavailable-model quality. Model selection does not prove safety, repo state, or results.
+expected value per token: Luna or Sonnet 5 `low` for mechanics → runtime-proven Sonnet 5 `medium` or Terra
+for bounded T2 work → Opus 5 (default) for broad/complex local T3 work → Sol only for qualifying protected
+T4 on a narrow packet; non-Class-C read-only mapping/audit defaults to the ChatGPT read-only-first
+controller (`CONTROLLER_READONLY_FIRST_POLICY`). Effort is chosen per workflow §24.12: `xhigh` is the normal
+Opus 5 coding default, `max` only on an explicit T3B trigger, review at `medium`/`high`/`xhigh` by breadth.
+Sonnet 5 requires runtime proof of availability/identity before any routing (fallback = Terra bounded /
+Opus 5 broad, no equivalent-quality claim); use measured session/harness cost, never hard-coded price
+rankings. Claude mutation lanes require the exact model id (`claude-opus-5` / `claude-sonnet-5`) — an
+unresolved alias is not proof — plus session-level proof of the actual effort; if
+`EXACT_MODEL_REQUIRED=true`, requested/actual mismatch stops before mutation, and a human effort waiver is
+recorded with the TRUE actual value. Never claim unavailable-model quality. Model selection does not prove
+safety, repo state, or results.
 Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED` — never a lane or fallback; pre-v5.2 Fable-era contracts stay
 archived in `fable_exit_contract_index.md` and are never routing.
 
@@ -92,6 +110,9 @@ UNKNOWN findings, and its refresh trigger. Research savings never outrank factua
 
 - Full-file reads where a symbol search answers the question; duplicate discovery already in the packet.
 - Sol/Opus status polling, implementer self-review, unavailable-model claims, unproven Sonnet 5 routing.
+- Routing everything to Opus 5, or every Opus task to `max`; `max` without a named T3B trigger.
+- Generic re-verification loops ("double-check everything") in place of the deterministic gate ladder;
+  rerunning a passed gate on an unchanged head; subagents for polling, routine commands or small patches.
 - Spending Codex on questions the connector already answered; broad Codex repo reads without justification.
 - Broad scans, full logs, duplicate doctrine, `product/*` branch templates, per-PR reflex research.
 

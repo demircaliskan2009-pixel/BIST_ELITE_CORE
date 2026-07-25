@@ -144,7 +144,7 @@ function Get-AgentOsActiveLaneIssues([string]$agentsText) {
     'ChatGPT GPT-5.6 Thinking',
     'GitHub connector',
     'Deep Research + GitHub connector',
-    'Claude Opus 4.8',
+    'Claude Opus 5',
     ('Claude Sonnet 5 ' + $dash + ' runtime-proven only'),
     'Codex GPT-5.6 Sol',
     'Codex GPT-5.6 Terra',

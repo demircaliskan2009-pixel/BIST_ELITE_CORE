@@ -7,8 +7,9 @@ prompts for it and never overrides it). Companion lanes: `token_efficiency_v2.md
 and the stricter safety rule win.
 
 Active lanes covered (eight): ChatGPT GPT-5.6 Thinking (read-only-first controller-auditor,
-`CONTROLLER_READONLY_FIRST_POLICY`), GitHub connector, Deep Research, Claude Opus 4.8 (default heavy
-executor), Claude Sonnet 5 (runtime-proven only), Codex GPT-5.6 Sol, Codex GPT-5.6 Terra, Codex GPT-5.6 Luna.
+`CONTROLLER_READONLY_FIRST_POLICY`), GitHub connector, Deep Research, Claude Opus 5 (`claude-opus-5`,
+default heavy executor), Claude Sonnet 5 (`claude-sonnet-5`, runtime-proven only), Codex GPT-5.6 Sol,
+Codex GPT-5.6 Terra, Codex GPT-5.6 Luna. Claude Opus 4.8 is `SUPERSEDED_BY_OPUS_5` — historical only.
 Claude Code local sessions are the primary local execution environment for the Claude lanes; Codex
 Sol/Terra/Luna are separate local sessions. Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED` — not an active or
 routable lane; pre-v5.2 Fable material lives in `fable_exit_contract_index.md` and workflow sections 20-23
@@ -145,49 +146,88 @@ OUTPUT: DEEP_RESEARCH_TO_CONTROLLER packet. READ-ONLY: no mutation, no merge aut
 
 - **Doctrine:** availability/identity NEVER assumed — the session must runtime-prove a Sonnet 5 model id
   AND the controller must explicitly route it. No unsupported capability claim; no plan depends on it.
-- **Best tasks:** T1 bounded reads; T2 small/medium deterministic implementation; docs and tests; mechanical
-  code with local context; simple same-branch repairs; fast implementation loops; lower-risk validation.
+Model id `claude-sonnet-5`. This is the DEFAULT Claude lane for routine work — the existence of Opus 5 does
+not weaken it. Stronger reasoning does not materially improve a status snapshot, an authorized merge, a
+config edit or a mechanical fixture, and spending Opus there costs latency, tokens and premium requests for
+no correctness gain.
+
+- **Best tasks:** T0 status, polling, git/GitHub hygiene, clean-tree and open-PR proof; T1 bounded reads,
+  direct-dependency read-only audit, governed mechanical closeout (authorized standard merge, post-merge
+  commands, parent/digest verification, clean-main proof); T2 small/medium deterministic implementation,
+  narrow docs, config-only changes, mechanical fixtures and tests, obvious localized repair, PR-body
+  corrections, bounded governance closeout.
 - **Bad tasks:** protected trust-boundary work, digest/provenance, SM-5/SM-6, Stage-4 completion,
   readiness/live/order/capital, broad forensic refactors, T4 design, mandatory Class-C audits.
 - **Setup:** `CLAUDE.md`, `CLAUDE.local.md`, `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`,
   controller-named task files.
-- **Reasoning:** high for bounded implementation; low for mechanics.
+- **Effort:** `low` for T0/T1; `medium` for T2 (`high` only when the bounded slice is moderately complex).
+- **Prompt shape:** concise, mechanically explicit, low-context, command-oriented, deterministic, bounded;
+  explicit terminal-CI polling; explicit escalation triggers; explicit no-scope-expansion rule. Do NOT add
+  architecture speculation, repository archaeology, broad alternative analysis, maximum-thinking language,
+  long report formats, or Opus-only subagent instructions.
 - **Validation:** scoped ruff/format, targeted pytest, logged full suite for product code, `git diff --check`.
-- **Stops:** model id unproven; task class above T2; protected trigger appears; scope expansion.
-- **Fallback:** Terra for bounded code; Opus for broad/complex work.
+- **Stops / escalation:** model id unproven; task class above T2; protected trigger appears; scope
+  expansion; conflicting evidence; unexpected ancestry; state cannot be reconciled; merge parents or merged
+  scope differ; post-merge validation fails; branch protection behaves unexpectedly; readiness/connector
+  transition; interacting semantic invariants; trust-boundary change; unexpected full-suite failure;
+  architecture required; repair not provable locally. Escalate to Sonnet 5 `high` first, then Opus 5
+  `high`/`xhigh`.
+- **Fallback:** Terra for bounded code; Opus 5 for broad/complex work.
 - **Anti-patterns:** silent substitution for a required exact model; assuming Sonnet 5 exists in the
-  installed CLI; accepting protected work because the diff "looks small".
+  installed CLI; accepting protected work because the diff "looks small"; improvising past an escalation
+  trigger instead of stopping.
 
 ```text
-ROLE: bounded implementer. TASK_CLASS: T2. MODEL_REQUESTED: Claude Sonnet 5. REASONING_REQUESTED: high.
+ROLE: bounded implementer. TASK_CLASS: T2. MODEL_REQUESTED: Claude Sonnet 5.
+MODEL_ID_REQUIRED: claude-sonnet-5. REASONING_REQUESTED: medium (high only if moderately complex).
 EXACT_MODEL_REQUIRED: true. VERIFY FIRST: print MODEL_ACTUAL from runtime; if not a proven Sonnet 5 id ->
 STOP_WITH_PROOF. PACKET: <CONTROLLER_TO_IMPLEMENTER>. ALLOWED_FILES: <exact>. LANE:VALIDATE-STD; LANE:PR-STD.
-No merge; LANE:IMPLEMENTER_HANDOFF.
+ESCALATE, do not improvise: interacting invariants | trust-boundary change | unexpected failure |
+architecture needed | scope would widen. No merge; LANE:IMPLEMENTER_HANDOFF.
 ```
 
-### 2.5 Claude Opus 4.8 — heavy local executor
+### 2.5 Claude Opus 5 — heavy local executor
 
-- **Best tasks:** T3 broad-but-bounded implementation; large local refactors; complex fail-closed
-  implementation; forensic debugging; long validation loops; multi-file product integration; same-branch
-  P1/P2 repair; work needing broad local context.
+Model id `claude-opus-5`. Full effort architecture: `agent_workflow.md` section 24.12. Reusable templates
+and the prompt-compiler contract: `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`.
+
+- **Best tasks:** T3A complex/broad-but-bounded implementation, large local refactors, complex fail-closed
+  implementation, forensic debugging, long validation loops, multi-file product integration, same-branch
+  P1/P2 repair; T3B capability-critical work; T3C code review and bug finding; T3D architecture and
+  next-slice selection; T3E complex prompt architecture.
 - **Bad tasks:** PR metadata; CI polling; ordinary docs; generic planning; external research; work
   Sonnet/Terra can safely complete; final connector evidence comparison.
-- **Setup:** `CLAUDE.md`, `CLAUDE.local.md`, `.claude` loop skill, controller packet, named broad-but-bounded
-  file set.
-- **Reasoning:** xhigh for contract/digest/fail-closed/forensic work; high otherwise.
+- **Setup:** `CLAUDE.md`, `CLAUDE.local.md`, `.claude` loop skill, controller packet, named
+  broad-but-bounded file set.
+- **Effort:** `xhigh` is the normal coding/agentic default (T3A). `max` only on an explicit T3B trigger —
+  cryptographic verification boundaries, readiness/provenance promotion, protocol ambiguity with safety
+  consequences, complex trust-boundary repair, post-audit-failure P1/P2 repair, Agent OS/model-routing
+  architecture, materially different candidate architectures, unexpected cross-layer failures, or
+  controller-designated capability-critical work. Review: `medium` focused, `high` broad,
+  `xhigh` multi-trust-boundary. Architecture and prompt design: `high`, `xhigh` when interacting.
+  Adaptive thinking stays enabled; never `thinking: disabled` on a T3 lane or with `xhigh`/`max`.
 - **Validation:** full ladder incl. logged full suite; local git/test proof is Opus's own responsibility.
-- **Stops:** scope expansion; out-of-scope failure; token/context budget making correctness uncertain.
-- **Fallback:** split scope, or Terra only when genuinely bounded.
+  Each gate runs once per unchanged head — no generic re-verification loops.
+- **Stops:** model/effort mismatch or fallback before mutation; scope expansion; out-of-scope failure;
+  readiness/connector transition; external-fact dependency; token/context budget making correctness
+  uncertain.
+- **Fallback:** split scope, or Terra only when genuinely bounded. No unavailable-model quality claim.
+- **Subagents:** default 0; maximum 2 read-only for genuinely independent substantial tracks; never for
+  polling, routine commands, duplicate self-review, or one- or two-file patches.
 - **Anti-patterns:** reviewing its own diff as "the audit"; unbounded improve-the-repo pursuits; duplicate
-  broad GitHub discovery already in the packet.
+  broad GitHub discovery already in the packet; routing everything to `max`; narrating routine commands.
 
 ```text
-ROLE: heavy local implementer. TASK_CLASS: T3. MODEL_REQUESTED: Claude Opus 4.8. REASONING_REQUESTED: xhigh.
-EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL/REASONING_ACTUAL: <print first>.
+ROLE: heavy local implementer. TASK_CLASS: T3A. MODEL_REQUESTED: Claude Opus 5.
+MODEL_ID_REQUIRED: claude-opus-5. REASONING_REQUESTED: xhigh (max ONLY with a named T3B trigger).
+EXACT_MODEL_REQUIRED: <true|false>. MODEL_ACTUAL/REASONING_ACTUAL: <print first from runtime; alias is not
+proof; mismatch or fallback -> STOP_WITH_PROOF before mutation>.
 PACKET: <CONTROLLER_TO_IMPLEMENTER>. STATE: clean main@<sha>; BRANCH feature/<scope>-prN.
 SCOPE: <named broad-but-bounded files>; long validation loops allowed. LANE:VALIDATE-STD; LANE:PR-STD.
+Deliver exactly the authorized scope; report-and-stop instead of widening. SUBAGENTS: 0.
 Protected (Class-C) work gets a separate fresh independent Codex audit — Sol lane for protected
-design/audit; Terra covers only ordinary sub-Class-C review. No merge. LANE:IMPLEMENTER_HANDOFF.
+design/audit; Terra covers only ordinary sub-Class-C review; this session's self-review is
+SELF_AUDIT_ONLY_NOT_INDEPENDENT. No merge. LANE:IMPLEMENTER_HANDOFF.
 ```
 
 ### 2.6 Codex GPT-5.6 Sol — protected T4 design/audit
@@ -257,7 +297,7 @@ OUTPUT: terminal-or-pending proof; LANE:HANDOFF-STD.
 Claude Fable 5 (`claude-fable-5`) is retired (workflow section 24.10) and is NOT an active or routable lane:
 no `FABLE5_PREMIUM_SURGE_LANE`, no three surge modes, no `FABLE5_JUSTIFICATION_GATE`, no `FABLE5_*` prompt
 skeletons or report fields, and no Fable fallback. Author its former work in the surviving lanes instead:
-broad-but-bounded T3 implementation → §2.5 Claude Opus 4.8 (genuinely bounded T2 → §2.4 Sonnet 5 / §2.7
+broad-but-bounded T3 implementation → §2.5 Claude Opus 5 (genuinely bounded T2 → §2.4 Sonnet 5 / §2.7
 Terra); non-Class-C read-only architecture / contradiction / full-repo consistency analysis → §2.1 ChatGPT
 controller read-only-first skeletons (`CONTROLLER_REPO_READONLY_AUDIT`, `CONTROLLER_CLASS_A_AUDIT`,
 `CONTROLLER_CLASS_B_AUDIT`); protected Class-C design/audit → §2.6 Codex Sol; external/current facts → §2.3

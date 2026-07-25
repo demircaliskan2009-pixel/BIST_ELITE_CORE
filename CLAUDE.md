@@ -10,18 +10,42 @@ compress procedure only; they never weaken safety rules. Operate under
 engineer — derivatives-first, paper-first, deterministic, event-driven, point-in-time, fail-closed,
 audit-first, governance-first — never a generic coding assistant.
 
-Claude lanes (active set — Opus 4.8 and runtime-proven Sonnet 5 only):
+Claude lanes (active set — Opus 5 and runtime-proven Sonnet 5 only). The single authoritative routing
+matrix is workflow section 24.3; effort/thinking selection is section 24.12; prompt construction and
+reusable templates are `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`. Select the LOWEST lane
+that safely proves correctness — never by model prestige:
 
-- `Claude Opus 4.8` — DEFAULT heavy local executor: T3 broad-but-bounded implementation, large refactors,
-  complex fail-closed work, forensic debugging, long validation loops, multi-file integration, same-branch
-  P1/P2 repair. Not for metadata, CI polling, ordinary docs, generic planning, or external research.
-- `Claude Sonnet 5` — ONLY when runtime-proven and explicitly routed: T1 bounded reads, T2 small/medium
-  deterministic implementation, docs/tests, mechanical code, simple same-branch repairs, fast loops.
-  Never protected trust-boundary/digest/SM-5-SM-6/Stage-4/readiness/capital work, never T4, never a
-  mandatory Class-C audit. Fallback when unavailable: Terra (bounded) / Opus (broad).
-- `Claude Fable 5` is `INACTIVE_EXPIRED_RETIRED` — not an active Claude lane, fallback, or dependency
-  (workflow section 24.10). Archived Fable design contracts in `fable_exit_contract_index.md` remain
-  HISTORICAL/ARCHIVAL design evidence only, never current-state proof or active routing.
+- `Claude Opus 5` (`claude-opus-5`) — DEFAULT heavy local executor. T3A complex implementation, large
+  refactors, complex fail-closed work, forensic debugging, long validation loops, multi-file integration,
+  same-branch P1/P2 repair — default effort `xhigh`. T3B capability-critical work at `max` ONLY on an
+  explicit trigger (cryptographic verification boundaries, readiness/provenance promotion, protocol
+  ambiguity with safety consequences, complex trust-boundary repair, post-audit-failure P1/P2 repair, Agent
+  OS/model-routing architecture, materially different candidate architectures, unexpected cross-layer
+  failures, controller-designated capability-critical work) — never because a task merely feels important.
+  T3C review `medium` focused / `high` broad / `xhigh` multi-trust-boundary; T3D architecture and T3E
+  prompt architecture `high` (`xhigh` on interacting/synthesis work). Not for metadata, CI polling, ordinary
+  docs, generic planning, or external research.
+- `Claude Sonnet 5` (`claude-sonnet-5`) — the DEFAULT Claude lane for routine work when runtime-proven:
+  T0 status/polling/git hygiene and T1 bounded reads plus governed mechanical closeout at `low`; T2
+  small/medium deterministic implementation, docs/tests, config, mechanical code and simple same-branch
+  repairs at `medium` (`high` when moderately complex). Opus 5 existing does not weaken this — stronger
+  reasoning does not improve a status snapshot, an authorized merge or a config edit. Escalate on
+  conflicting evidence, unexpected ancestry, interacting invariants, trust-boundary change, unexpected
+  full-suite failure, or a readiness/connector transition. Never protected
+  trust-boundary/digest/SM-5-SM-6/Stage-4/readiness/capital work, never T4, never a mandatory Class-C
+  audit. Fallback when unavailable: Terra (bounded) / Opus 5 (broad).
+- Exact model ids are required for Claude mutation lanes; the bare aliases `opus` / `sonnet` are not
+  sufficient proof. Prove `MODEL_ACTUAL` and `MODEL_EFFORT_ACTUAL` from session runtime evidence before
+  mutating, keep adaptive thinking enabled (never `thinking: disabled` on a T3 lane, never with
+  `xhigh`/`max`), and stop before mutation on mismatch or fallback. A human may waive an effort mismatch
+  for a specific task; record the waiver and the TRUE actual effort — never restate actual as requested.
+- Subagents default to 0 (max 2 read-only, only for genuinely independent substantial tracks); a same-model
+  self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`; `ultracode`, if exposed, is an orchestration mode and
+  never an effort level or a default (workflow section 24.12).
+- `Claude Opus 4.8` is `SUPERSEDED_BY_OPUS_5` and `Claude Fable 5` is `INACTIVE_EXPIRED_RETIRED` — neither
+  is an active Claude lane, fallback, or dependency (workflow sections 24.1 and 24.10). Dated Opus 4.8
+  execution records and archived Fable design contracts (`fable_exit_contract_index.md`) remain
+  HISTORICAL/ARCHIVAL evidence only, never current-state proof or active routing.
 - Protected Class-C work (digest/provenance, SM-5/SM-6, Stage-4, readiness, finance arithmetic, trust
   transitions) always gets a fresh independent Codex GPT-5.6 Sol audit; ChatGPT GPT-5.6 Thinking is the
   read-only-first controller (`CONTROLLER_READONLY_FIRST_POLICY`) that supplies controller-preprocessed
@@ -65,4 +89,5 @@ Claude operating contract:
 - Stop with proof at scope expansion, out-of-scope validation failure, external/current-fact need
   (route to controller-orchestrated Deep Research — Claude never runs web research in repo tasks), or any
   merge/authorization gate.
-- Use the T0-T4/XR taxonomy in `token_efficiency_playbook.md`. Token saving never outranks correctness.
+- Use the authoritative routing matrix in workflow section 24.3 (context budgets in
+  `token_efficiency_playbook.md`). Token saving never outranks correctness.
