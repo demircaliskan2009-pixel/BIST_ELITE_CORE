@@ -25,14 +25,25 @@ Codex audit.
 | `medium` | Focused one- or two-file code review; bounded bug discovery; narrow read-only audit; prompt refinement; constrained architecture comparison; cost-sensitive Opus work that repository evidence shows is sufficient. | Broad multi-module review; architecture with interacting consequences; complex implementation. |
 | `high` | Nuanced review; architecture selection; complex prompt design; difficult read-only analysis; moderate multi-step reasoning where long-horizon coding is not required. | Long-horizon multi-file implementation (use `xhigh`); capability-critical boundaries (use `max`). |
 | `xhigh` | **The normal Opus 5 coding/agentic starting point.** Difficult implementation; multi-file work; protocol semantics; long-running tool use; complex repair; deep repository exploration; interacting invariants. | Status, polling, closeout, formatting, ordinary docs — those are Sonnet lanes. |
-| `max` | Capability-critical work only, per the T3B triggers below. | Polling; merge closeout; formatting; routine tests; simple documentation; ordinary one-line repair; a task merely because it is important. |
+| `max` | Capability-critical work only. **MAX requires an explicit named maximum-effort trigger inside the selected task family** — the T3B implementation/repair triggers below, the T3D architecture triggers, or the T3E prompt-architecture triggers. | Polling; merge closeout; formatting; routine tests; simple documentation; ordinary one-line repair; a task merely because it is important. |
 
-**T3B `max` triggers (the complete list).** Cryptographic verification boundaries; readiness/provenance
-promotion logic; protocol ambiguity with safety consequences; complex trust-boundary repair; **complex
-semantic** controller P1/P2 repair after a previous implementation failed audit; Agent OS architecture;
-model-routing migration; several plausible architectures with materially different safety outcomes;
-unexpected cross-layer failures; work the controller explicitly designates capability-critical. Naming the
-fired trigger is mandatory — if you cannot name one, the task is not T3B.
+**T3B `max` triggers (the complete list — IMPLEMENTATION or REPAIR mutation only).** Cryptographic
+verification boundary implementation; readiness/provenance promotion implementation; protocol ambiguity
+with safety consequences inside an implementation; complex trust-boundary repair; **complex semantic**
+controller P1/P2 repair; unexpected cross-layer implementation failure; work the controller explicitly
+designates capability-critical IMPLEMENTATION or REPAIR. Naming the fired trigger is mandatory — if you
+cannot name one, the task is not T3B.
+
+These triggers apply only when `TASK_INTENT ∈ {IMPLEMENTATION, REPAIR}` and the task is a mutation. They are
+never a route into T3B on their own:
+- **Agent OS or model-routing ARCHITECTURE** (a decision, not a diff) → `T3D` / `max`, per the existing T3D
+  policy — never T3B.
+- **Agent OS or model-routing PROMPT_ARCHITECTURE** (writing the execution contract) → `T3E` / `max` — never
+  T3B.
+- **Several candidate architectures with materially different safety outcomes** → `T3D`, effort selected by
+  the existing T3D policy (`high` / `xhigh` / `max`) — never T3B.
+These concepts become T3B only when the actual authorized task is an implementation/repair mutation that
+also fires one of the named triggers above — never merely because the subject matter is architectural.
 
 **Audit origin is an input, not a trigger.** That work follows a P1/P2 finding says nothing about its
 complexity. A mechanical or obvious post-audit repair — a one-file documentation correction, a PR-body fix,
@@ -160,8 +171,9 @@ use it. Opus mutation templates carry the full model/effort block; Sonnet templa
 ### 3.1 `OPUS5_T3A_COMPLEX_IMPLEMENTATION_XHIGH`
 
 Use for difficult multi-file semantic implementation.
-Do NOT use for cryptographic/readiness/trust-boundary work (use 3.2), for review (3.4/3.5), or for anything
-Sonnet can safely complete (3.10).
+Do NOT use for capability-critical cryptographic/readiness/trust-boundary IMPLEMENTATION OR REPAIR; use 3.2.
+Review, architecture and prompt architecture remain templates 3.4–3.7. Do NOT use for anything Sonnet can
+safely complete (3.10).
 
 ```text
 MODEL_REQUESTED: Claude Opus 5
@@ -453,9 +465,15 @@ CONTEXT_BUDGET_CLASS      SUBAGENT_POLICY           ONE_COMPLETE_PROMPT
 1. Emit exactly one best prompt. No competing alternatives unless explicitly requested.
 2. Select the lowest-cost lane that safely proves correctness.
 3. Use Opus 5 only when Sonnet 5 is insufficient; state why in one line.
-4. Use `max` only when `xhigh` is insufficient, and name the T3B trigger. `RISK_CLASS` alone, and the fact
-   that the task follows an audit finding, are never sufficient — a mechanical or obvious post-audit repair
-   compiles to the T2 Sonnet template (3.10), not to 3.3.
+4. Use `max` only when `xhigh` is insufficient, and name the family-specific maximum-effort trigger:
+   `T3B` requires a named IMPLEMENTATION/REPAIR trigger (3.2/3.3); `T3D` requires a named ARCHITECTURE
+   trigger — readiness/provenance, cryptographic boundary, irreversible/high-cost sequencing, or explicit
+   controller designation (3.6); `T3E` requires a named PROMPT_ARCHITECTURE trigger — Agent OS/model-routing
+   prompt, a prompt governing readiness/provenance or cryptographic verification, or explicit controller
+   designation (3.7). `RISK_CLASS` alone, and the fact that the task follows an audit finding, are never
+   sufficient on their own — a mechanical or obvious post-audit repair compiles to the T2 Sonnet template
+   (3.10), not to 3.3. **Never convert a `max`-effort T3D or T3E task into T3B**: the family is fixed by
+   `TASK_INTENT` (rule 0) before this rule ever runs.
 5. Do not ask the user to choose an effort level when the classification is provable from the inputs.
 6. `EXTERNAL_FACT_REQUIREMENT` present and load-bearing → emit template 3.11, not an implementation prompt.
 7. Unresolved risk → emit a READ-ONLY analysis prompt (Opus 5 `high`/`xhigh`) before any mutation prompt.

@@ -726,8 +726,8 @@ lane that safely proves correctness — model prestige is never a selection reas
 
 | Class | Label | Primary lane(s) | Model id | Default effort | Use |
 |---|---|---|---|---|---|
-| T0 | `LUNA_MECHANICAL` | Luna `none`/`low` — or Claude Sonnet 5 low in a Claude Code session | `claude-sonnet-5` (Claude lane) | low | git/gh state, bounded CI polling, PR metadata, thread status, open-PR counts, clean-tree checks, authorized merge mechanics, postverify |
-| T1 | `READONLY_OR_FAST_BOUNDED` | Luna low / Terra high / Sonnet 5 (runtime-proven) | `claude-sonnet-5` (Claude lane) | low | bounded reads, proof, docs, direct-dependency read-only audit, and governed mechanical closeout — authorized standard merge, branch-protection-required auto-merge only when separately authorized by doctrine, post-merge commands, parent/digest verification, clean-main proof. **A merge is a mutation and stays T1** when it is fully authorized, mechanically bounded, free of semantic anomaly and free of any readiness/connector transition |
+| T0 | `LUNA_MECHANICAL` | Luna `none`/`low` — or Claude Sonnet 5 low in a Claude Code session | `claude-sonnet-5` (Claude lane) | low | **STATUS family only**: git/gh state, bounded CI polling, PR metadata, review/thread status, open-PR counts, branch and clean-tree checks, deterministic status reporting. T0 owns no merge or postverify scope — see T1 |
+| T1 | `READONLY_OR_FAST_BOUNDED` | Luna low / Terra high / Sonnet 5 (runtime-proven) | `claude-sonnet-5` (Claude lane) | low | bounded reads, proof, docs, direct-dependency read-only audit, and the sole governed CLOSEOUT family — authorized standard merge, branch-protection-required auto-merge only when separately authorized by doctrine, post-merge commands, parent/digest verification, clean-main proof, and postverify. **A merge is a mutation and stays T1** when it is fully authorized, mechanically bounded, free of semantic anomaly and free of any readiness/connector transition |
 | T2 | `BOUNDED_IMPLEMENTATION` | Terra high / Sonnet 5 (runtime-proven) | `claude-sonnet-5` (Claude lane) | medium (high when moderately complex) | exact-file deterministic slices, narrow docs, config-only changes, mechanical fixtures/tests, obvious localized repair, PR-body corrections, bounded governance closeout |
 | T3A | `COMPLEX_IMPLEMENTATION` | Claude Opus 5 (default) / Terra xhigh | `claude-opus-5` | xhigh | complex production implementation, multi-file semantic features, protocol semantics, deterministic state machines, fail-closed artifacts, provenance logic, complex cross-module repair, long-horizon agentic coding. Complexity is proven by evidence (interacting invariants, novel semantic contract, fail-closed artifact design, cross-module behavior, substantial validation loop, in-scope architectural choice, complex repair) — **never by file count**; a two-file production+test protocol-semantic slice is correctly T3A |
 | T3B | `CAPABILITY_CRITICAL_IMPLEMENTATION_OR_REPAIR` | Claude Opus 5 | `claude-opus-5` | max | **IMPLEMENTATION or REPAIR intent + mutation only** — T3B never accepts REVIEW, ARCHITECTURE or PROMPT_ARCHITECTURE work, whatever risk flags are set. Requires an explicitly NAMED trigger: cryptographic verification boundary implementation; readiness/provenance promotion implementation; protocol ambiguity with safety consequences inside an implementation; complex trust-boundary repair; **complex semantic** controller P1/P2 repair after a failed audit; unexpected cross-layer implementation failure; controller-designated capability-critical implementation/repair. A bare risk flag and a bare audit origin are both insufficient — a mechanical or obvious post-audit repair stays T2 |
@@ -1310,4 +1310,22 @@ family; T3B requires mutation plus IMPLEMENTATION/REPAIR intent and explicitly c
 architecture or prompt-architecture work; T3C reaches `xhigh`, T3D `max` and T3E `max` inside their own
 families; and conflicting families without an explicit `TASK_INTENT` fail closed to `UNRESOLVED` rather
 than to T3B. Twenty-five deterministic routing cases pass. Codex Sol/Terra/Luna, Class C, T4, XR,
-controller and human merge authority remain unchanged; no temporary model-availability state is persisted.*
+controller and human merge authority remain unchanged; no temporary model-availability state is persisted.
+Third same-PR controller repair (2026-07-25, T2 bounded doctrine alignment): fixed three residual textual
+contradictions left over from the intent-first rewrite. (1) The playbook's top-level T3B trigger inventory
+still listed architecture-family concepts (Agent OS architecture, model-routing migration, several
+plausible architectures with materially different safety outcomes) even though the function itself had
+already scoped T3B to implementation/repair only; the inventory is now implementation/repair-scoped and
+states explicitly that those three concepts route to T3D or T3E, never T3B, unless the actual authorized
+task is an implementation/repair mutation that also fires a named T3B trigger. (2) The prompt-compiler's
+`max`-effort rule required a T3B trigger for every `max` selection, which would have forced a `max`-effort
+T3D or T3E task to be misdescribed as T3B; it now requires a family-specific named trigger (T3B
+implementation/repair, T3D architecture, T3E prompt-architecture) and states that `TASK_INTENT` fixes the
+family before this rule runs. (3) The 24.3 matrix's T0 row still listed "authorized merge mechanics,
+postverify" in its Use column, overlapping T1's governed-closeout family; T0 is now STATUS-only (git/gh
+state, CI polling, PR metadata, thread status, open-PR counts, clean-tree checks, status reporting) and T1
+is stated as the sole owner of governed closeout including postverify. Template 3.1 and the T3B/T3D/T3E
+templates were reworded to match. Twenty-nine deterministic routing cases pass, including four new cases
+proving an Agent-OS architecture decision stays T3D/max, a model-routing prompt stays T3E/max, a named
+capability-critical implementation reaches T3B/max, and an authorized merge stays T1/low with no T0 overlap.
+No routing architecture, task-intent family or Codex doctrine changed; docs only, two files.*
