@@ -836,7 +836,123 @@ def test_artifact_is_frozen(attribute: str) -> None:
 
 
 # =========================================================================================================
-# 24. AST / safety matrix
+# 24. Sealed public artifact — no subclass may enter the trusted artifact boundary
+# =========================================================================================================
+_EXPECTED_SEAL_MESSAGE = "RoughtimeV19RequestSemantics is a sealed artifact type and cannot be subclassed"
+
+
+def test_exact_base_valid_construction_still_succeeds() -> None:
+    # Sealing must not disturb the legitimate exact-base path.
+    packet = _full_packet()
+    assert _independent_artifact(packet) == parse_roughtime_v19_request(packet)
+
+
+def test_exact_base_inconsistent_construction_still_closed() -> None:
+    kwargs = _base_kwargs(_full_packet())
+    kwargs["nonce"] = b"\xff" * 32
+    with pytest.raises(RoughtimeV19RequestSemanticError) as excinfo:
+        RoughtimeV19RequestSemantics(**kwargs)  # type: ignore[arg-type]
+    assert _reason(excinfo) is R.ARTIFACT_REQUEST_INCONSISTENT
+
+
+def test_parser_output_is_exactly_the_base_type() -> None:
+    assert type(parse_roughtime_v19_request(_full_packet())) is RoughtimeV19RequestSemantics
+
+
+def test_ordinary_subclass_definition_is_rejected() -> None:
+    with pytest.raises(TypeError) as excinfo:
+
+        class _Ordinary(RoughtimeV19RequestSemantics):
+            pass
+
+    assert str(excinfo.value) == _EXPECTED_SEAL_MESSAGE
+
+
+def test_subclass_overriding_post_init_cannot_be_defined() -> None:
+    # The pre-repair bypass: overriding __post_init__ skipped base validation entirely and admitted an
+    # instance whose declared fields did not match its own raw bytes. Sealing fires first, at class
+    # definition, so the override can never exist.
+    with pytest.raises(TypeError) as excinfo:
+
+        class _NoValidation(RoughtimeV19RequestSemantics):
+            def __post_init__(self) -> None:
+                raise AssertionError("hostile __post_init__ must never execute")
+
+    assert str(excinfo.value) == _EXPECTED_SEAL_MESSAGE
+
+
+def test_subclass_with_hostile_getattribute_cannot_be_defined() -> None:
+    with pytest.raises(TypeError) as excinfo:
+
+        class _HostileAttr(RoughtimeV19RequestSemantics):
+            def __getattribute__(self, name: str) -> object:
+                raise AssertionError("hostile __getattribute__ must never execute")
+
+    assert str(excinfo.value) == _EXPECTED_SEAL_MESSAGE
+
+
+def test_subclass_with_custom_new_cannot_be_defined() -> None:
+    with pytest.raises(TypeError) as excinfo:
+
+        class _CustomNew(RoughtimeV19RequestSemantics):
+            def __new__(cls, *args: object, **kwargs: object) -> object:
+                raise AssertionError("hostile __new__ must never execute")
+
+    assert str(excinfo.value) == _EXPECTED_SEAL_MESSAGE
+
+
+def test_dynamic_type_subclass_creation_is_rejected() -> None:
+    with pytest.raises(TypeError) as excinfo:
+        type("_Dynamic", (RoughtimeV19RequestSemantics,), {})
+    assert str(excinfo.value) == _EXPECTED_SEAL_MESSAGE
+
+
+def test_seal_error_is_builtin_typeerror_with_fixed_message() -> None:
+    with pytest.raises(TypeError) as excinfo:
+        type("_Fixed", (RoughtimeV19RequestSemantics,), {})
+    assert type(excinfo.value) is TypeError  # exact built-in type, not a semantic error subclass
+    assert not isinstance(excinfo.value, RoughtimeV19RequestSemanticError)
+    assert str(excinfo.value) == _EXPECTED_SEAL_MESSAGE
+
+
+def test_hostile_subclass_bodies_never_execute() -> None:
+    # Every hostile override below raises AssertionError if it is ever called. Sealing at definition time
+    # means none of them can run, so the only exception observed is the fixed seal TypeError.
+    executed: list[str] = []
+
+    for name, namespace in (
+        ("post_init", {"__post_init__": lambda self: executed.append("post_init")}),
+        ("getattribute", {"__getattribute__": lambda self, n: executed.append("getattribute")}),
+        ("new", {"__new__": lambda cls, *a, **k: executed.append("new")}),
+    ):
+        with pytest.raises(TypeError) as excinfo:
+            type(f"_Hostile_{name}", (RoughtimeV19RequestSemantics,), namespace)
+        assert str(excinfo.value) == _EXPECTED_SEAL_MESSAGE
+    assert executed == []
+
+
+def test_unbound_post_init_on_foreign_object_is_closed() -> None:
+    # Defence in depth: with no subclass definable, the remaining path is calling the base __post_init__
+    # unbound against a foreign object. The validator's exact-type gate closes it with the closed reason.
+    class _Foreign:
+        pass
+
+    foreign = _Foreign()
+    request = parse_roughtime_v19_request(_full_packet())
+    for attribute in ("versions", "nonce", "message_type", "server_key_id", "padding", "extensions", "raw"):
+        object.__setattr__(foreign, attribute, getattr(request, attribute))
+    with pytest.raises(RoughtimeV19RequestSemanticError) as excinfo:
+        RoughtimeV19RequestSemantics.__post_init__(foreign)  # type: ignore[arg-type]
+    assert _reason(excinfo) is R.ARTIFACT_REQUEST_INCONSISTENT
+
+
+def test_seal_does_not_add_a_semantic_reason() -> None:
+    assert len(R) == 9
+    assert not any("subclass" in member.value or "seal" in member.value for member in R)
+
+
+# =========================================================================================================
+# 25. AST / safety matrix
 # =========================================================================================================
 _PRODUCTION_PATH = (
     Path(__file__).resolve().parents[3] / "src" / "crypto_core" / "validation" / "roughtime_v19_request_semantics.py"

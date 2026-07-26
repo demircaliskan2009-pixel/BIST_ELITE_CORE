@@ -62,9 +62,13 @@ structural work is delegated to the K1 public parser; every K1 failure and every
 to exactly one closed member of :class:`RoughtimeV19RequestSemanticReason`, so no raw
 ``RoughtimeV19KernelError``/``ValueError``/``IndexError``/``KeyError``/``TypeError``/``OverflowError`` and no
 assertion failure is ever leaked, and no ``BaseException``/``KeyboardInterrupt``/``SystemExit``/
-``GeneratorExit`` is caught. The public artifact is frozen and self-validates its own raw bytes through a
-primitive semantic re-decode (never recursing through its public constructor), so a directly constructed
-artifact can never represent decoded fields that differ from its exact raw bytes.
+``GeneratorExit`` is caught. The public artifact is frozen, SEALED against subclassing, and self-validates
+its own raw bytes through a primitive semantic re-decode (never recursing through its public constructor),
+so a directly constructed artifact can never represent decoded fields that differ from its exact raw bytes.
+Sealing is enforced at class-definition time via ``__init_subclass__`` and raises a fixed repository-owned
+built-in ``TypeError``; an exact-type check inside ``__post_init__`` alone would be bypassable by a subclass
+that overrides ``__post_init__``, so the definition-time seal is the load-bearing control and the validator's
+exact-type gate is defence in depth.
 
 Versioned specification: https://datatracker.ietf.org/doc/html/draft-ietf-ntp-roughtime-19
 Immutable official source snapshot reviewed: ietf-wg-ntp/draft-roughtime @
@@ -115,10 +119,11 @@ _MAX_VER_ENTRIES = 32
 # initializer (e.g. via object.__new__); identity comparison never triggers a caller-defined __eq__.
 _MISSING = object()
 
-# Fixed repository-owned messages for the closed error constructor.
+# Fixed repository-owned messages for the closed error constructor and the sealed public artifact.
 _ERROR_REASON_TYPE_MESSAGE = "RoughtimeV19RequestSemanticError requires a RoughtimeV19RequestSemanticReason member"
 _ERROR_IMMUTABLE_MESSAGE = "RoughtimeV19RequestSemanticError is immutable after construction"
 _ERROR_LOCKED_ATTRS = frozenset({"reason", "_reason", "args"})
+_SEALED_ARTIFACT_MESSAGE = "RoughtimeV19RequestSemantics is a sealed artifact type and cannot be subclassed"
 
 
 class RoughtimeV19RequestSemanticReason(str, Enum):
@@ -343,7 +348,14 @@ def _validate_request_state(obj: object, reason: RoughtimeV19RequestSemanticReas
     Reading state with ``getattr`` + a sentinel and applying exact-type gates before any value comparison means
     an object built without its initializer, an object mutated afterwards, or a wrong internal type raises
     ``reason`` and never leaks ``AttributeError``/``TypeError``/etc.
+
+    Defence in depth: the artifact type itself is sealed against subclassing at class-definition time (see
+    :class:`RoughtimeV19RequestSemantics`), so a subclass instance cannot exist. This exact-type gate closes
+    the remaining unbound path — calling ``RoughtimeV19RequestSemantics.__post_init__(foreign_object)``
+    directly — which would otherwise validate and silently admit a foreign object's state.
     """
+    if type(obj) is not RoughtimeV19RequestSemantics:  # exact type; nothing else may pass this boundary
+        raise _err(reason)
     raw = getattr(obj, "raw", _MISSING)
     if raw is _MISSING or type(raw) is not bytes:
         raise _err(reason)
@@ -400,6 +412,16 @@ class RoughtimeV19RequestSemantics:
     any mismatch, missing/incomplete state, non-exact-type, forged/subclassed component, malformed raw, or
     object built without its initializer raises ``artifact_request_inconsistent`` (never a leaked
     ``AttributeError``).
+
+    SEALED TYPE: this artifact is closed to subclassing. Any attempt to derive from it — an ordinary
+    subclass, one overriding ``__post_init__``/``__getattribute__``/``__new__``, or a dynamically created
+    ``type(...)`` subclass — raises a fixed repository-owned built-in ``TypeError`` at CLASS-DEFINITION time,
+    before any subclass instance can exist and therefore before any overriding method body can run. Sealing
+    at definition time is required because an exact-type check inside ``__post_init__`` alone is bypassable:
+    a subclass that overrides ``__post_init__`` simply never invokes it. The seal raises a plain built-in
+    ``TypeError`` (never caller text) rather than a semantic reason, because a subclass definition is a
+    programming error, not a wire-semantic outcome; the closed nine-member reason inventory is unchanged and
+    inconsistent EXACT-base construction still raises ``artifact_request_inconsistent``.
     """
 
     versions: tuple[int, ...]
@@ -409,6 +431,11 @@ class RoughtimeV19RequestSemantics:
     padding: bytes | None
     extensions: tuple[RoughtimeV19Field, ...]
     raw: bytes
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        # Fires when a subclass is DEFINED, before it can be instantiated and before any overridden
+        # lifecycle method of that subclass can execute. Deterministic, no caller-supplied text.
+        raise TypeError(_SEALED_ARTIFACT_MESSAGE)
 
     def __post_init__(self) -> None:
         _validate_request_state(self, RoughtimeV19RequestSemanticReason.ARTIFACT_REQUEST_INCONSISTENT)
