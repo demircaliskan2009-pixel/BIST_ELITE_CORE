@@ -93,8 +93,9 @@ _TAG_TYPE = b"TYPE"
 _TAG_SRV = b"SRV\x00"
 _TAG_ZZZZ = b"ZZZZ"
 
-# Mandatory request tags; everything outside the KNOWN set below is a preserved extension.
-_REQUEST_MANDATORY = frozenset({_TAG_VER, _TAG_NONC, _TAG_TYPE})
+# Mandatory request tags, in a PINNED order so the selected missing-tag reason can never depend on
+# unordered iteration; everything outside the KNOWN set below is a preserved extension.
+_REQUEST_MANDATORY_ORDERED = (_TAG_VER, _TAG_NONC, _TAG_TYPE)
 # Known tags are excluded from ``extensions`` because each is exposed as its own typed attribute. ``PAD`` is
 # deliberately absent: it is not a draft-19 known padding field and must surface as an unknown extension.
 _REQUEST_KNOWN = frozenset({_TAG_VER, _TAG_NONC, _TAG_TYPE, _TAG_SRV, _TAG_ZZZZ})
@@ -241,7 +242,7 @@ def _decode_request_primitive(
     by_tag: dict[bytes, RoughtimeV19Field] = {}
     for field in packet.message.fields:
         by_tag[field.tag] = field
-    for tag in (_TAG_VER, _TAG_NONC, _TAG_TYPE):  # pinned order; never set-iteration order
+    for tag in _REQUEST_MANDATORY_ORDERED:  # pinned order; never set-iteration order
         if tag not in by_tag:
             raise _err(RoughtimeV19RequestSemanticReason.REQUEST_MISSING_MANDATORY_TAG)
 

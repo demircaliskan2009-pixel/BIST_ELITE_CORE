@@ -57,7 +57,6 @@ _EXT_AAAA = b"AAAA"  # canonical four-letter tag; sorts between SRV and NONC
 
 _NONC_BYTES = 32
 _SRV_BYTES = 32
-_TYPE_BYTES = 4
 _VER_ENTRY_BYTES = 4
 _MAX_VER_ENTRIES = 32
 _K1_MAX_PACKET_BYTES = 4096
@@ -553,7 +552,8 @@ def _independent_artifact(packet: bytes) -> RoughtimeV19RequestSemantics:
     by_tag = _decoded_parts(packet)
     ver_value = by_tag[_TAG_VER].value
     versions = tuple(
-        int.from_bytes(ver_value[index * 4 : (index + 1) * 4], "little") for index in range(len(ver_value) // 4)
+        int.from_bytes(ver_value[index * _VER_ENTRY_BYTES : (index + 1) * _VER_ENTRY_BYTES], "little")
+        for index in range(len(ver_value) // _VER_ENTRY_BYTES)
     )
     known = {_TAG_VER, _TAG_NONC, _TAG_TYPE, _TAG_SRV, _TAG_ZZZZ}
     parsed = parse_roughtime_v19_packet(packet)
