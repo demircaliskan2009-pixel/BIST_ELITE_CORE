@@ -859,12 +859,49 @@ def test_parser_output_is_exactly_the_base_type() -> None:
     assert type(parse_roughtime_v19_request(_full_packet())) is RoughtimeV19RequestSemantics
 
 
+# Hostile override bodies RECORD their execution instead of raising, so "never executed" is proven by an
+# empty ledger rather than by an absent exception. Each definer uses the literal `class` statement and
+# RETURNS the created class, so the class name is genuinely read (never a dead local) — the return can only
+# ever be reached if sealing fails.
+_HOSTILE_EXECUTIONS: list[str] = []
+
+
+def _define_ordinary_subclass() -> type:
+    class _Ordinary(RoughtimeV19RequestSemantics):
+        pass
+
+    return _Ordinary
+
+
+def _define_post_init_subclass() -> type:
+    class _NoValidation(RoughtimeV19RequestSemantics):
+        def __post_init__(self) -> None:
+            _HOSTILE_EXECUTIONS.append("__post_init__")
+
+    return _NoValidation
+
+
+def _define_getattribute_subclass() -> type:
+    class _HostileAttr(RoughtimeV19RequestSemantics):
+        def __getattribute__(self, name: str) -> object:
+            _HOSTILE_EXECUTIONS.append("__getattribute__")
+            return object.__getattribute__(self, name)
+
+    return _HostileAttr
+
+
+def _define_new_subclass() -> type:
+    class _CustomNew(RoughtimeV19RequestSemantics):
+        def __new__(cls, *args: object, **kwargs: object) -> object:
+            _HOSTILE_EXECUTIONS.append("__new__")
+            return object.__new__(cls)
+
+    return _CustomNew
+
+
 def test_ordinary_subclass_definition_is_rejected() -> None:
     with pytest.raises(TypeError) as excinfo:
-
-        class _Ordinary(RoughtimeV19RequestSemantics):
-            pass
-
+        _define_ordinary_subclass()
     assert str(excinfo.value) == _EXPECTED_SEAL_MESSAGE
 
 
@@ -873,31 +910,19 @@ def test_subclass_overriding_post_init_cannot_be_defined() -> None:
     # instance whose declared fields did not match its own raw bytes. Sealing fires first, at class
     # definition, so the override can never exist.
     with pytest.raises(TypeError) as excinfo:
-
-        class _NoValidation(RoughtimeV19RequestSemantics):
-            def __post_init__(self) -> None:
-                raise AssertionError("hostile __post_init__ must never execute")
-
+        _define_post_init_subclass()
     assert str(excinfo.value) == _EXPECTED_SEAL_MESSAGE
 
 
 def test_subclass_with_hostile_getattribute_cannot_be_defined() -> None:
     with pytest.raises(TypeError) as excinfo:
-
-        class _HostileAttr(RoughtimeV19RequestSemantics):
-            def __getattribute__(self, name: str) -> object:
-                raise AssertionError("hostile __getattribute__ must never execute")
-
+        _define_getattribute_subclass()
     assert str(excinfo.value) == _EXPECTED_SEAL_MESSAGE
 
 
 def test_subclass_with_custom_new_cannot_be_defined() -> None:
     with pytest.raises(TypeError) as excinfo:
-
-        class _CustomNew(RoughtimeV19RequestSemantics):
-            def __new__(cls, *args: object, **kwargs: object) -> object:
-                raise AssertionError("hostile __new__ must never execute")
-
+        _define_new_subclass()
     assert str(excinfo.value) == _EXPECTED_SEAL_MESSAGE
 
 
@@ -916,10 +941,21 @@ def test_seal_error_is_builtin_typeerror_with_fixed_message() -> None:
 
 
 def test_hostile_subclass_bodies_never_execute() -> None:
-    # Every hostile override below raises AssertionError if it is ever called. Sealing at definition time
-    # means none of them can run, so the only exception observed is the fixed seal TypeError.
-    executed: list[str] = []
+    # Each hostile override records into a ledger when called. Sealing at definition time means none of them
+    # can run, so the ledger stays empty and the only exception observed is the fixed seal TypeError. This
+    # covers both the literal `class` statement definers above and the dynamic type(...) form below.
+    _HOSTILE_EXECUTIONS.clear()
+    for definer in (
+        _define_ordinary_subclass,
+        _define_post_init_subclass,
+        _define_getattribute_subclass,
+        _define_new_subclass,
+    ):
+        with pytest.raises(TypeError) as excinfo:
+            definer()
+        assert str(excinfo.value) == _EXPECTED_SEAL_MESSAGE
 
+    executed: list[str] = []
     for name, namespace in (
         ("post_init", {"__post_init__": lambda self: executed.append("post_init")}),
         ("getattribute", {"__getattribute__": lambda self, n: executed.append("getattribute")}),
@@ -928,7 +964,9 @@ def test_hostile_subclass_bodies_never_execute() -> None:
         with pytest.raises(TypeError) as excinfo:
             type(f"_Hostile_{name}", (RoughtimeV19RequestSemantics,), namespace)
         assert str(excinfo.value) == _EXPECTED_SEAL_MESSAGE
+
     assert executed == []
+    assert _HOSTILE_EXECUTIONS == []
 
 
 def test_unbound_post_init_on_foreign_object_is_closed() -> None:
