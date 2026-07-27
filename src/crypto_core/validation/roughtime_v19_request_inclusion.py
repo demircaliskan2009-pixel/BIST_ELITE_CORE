@@ -115,6 +115,19 @@ _RESPONSE_FIELD_NAMES = (
     "raw",
 )
 
+# The COMPLETE and EXCLUSIVE instance-namespace inventory of this module's own output artifact, in exact
+# declaration order. A valid artifact's __dict__ must contain exactly these keys and nothing else — see
+# _validate_inclusion_state. Private on purpose: it is an internal enforcement inventory, never public API.
+_INCLUSION_FIELD_NAMES = (
+    "request_raw",
+    "response_raw",
+    "leaf",
+    "computed_root",
+    "declared_root",
+    "path_length",
+    "index",
+)
+
 _ERROR_REASON_TYPE_MESSAGE = "RoughtimeV19RequestInclusionError requires a RoughtimeV19RequestInclusionReason member"
 _ERROR_IMMUTABLE_MESSAGE = "RoughtimeV19RequestInclusionError is immutable after construction"
 _ERROR_LOCKED_ATTRS = frozenset({"reason", "_reason", "args"})
@@ -229,11 +242,30 @@ def _validate_inclusion_state(obj: object, reason: RoughtimeV19RequestInclusionR
     """Prove an exact-type inclusion artifact's COMPLETE declared state equals an independent recomputation.
 
     Defence in depth: the exact-type gate rejects a foreign object handed to an unbound
-    ``RoughtimeV19RequestInclusion.__post_init__`` call. Every field is then read safely, exact-typed (which
-    rejects ``bytes``/``int`` subclasses and ``bool``), length-checked, and finally re-derived from the carried
-    ``request_raw``/``response_raw`` alone. Every defect normalizes to ``reason``.
+    ``RoughtimeV19RequestInclusion.__post_init__`` call. The exact INSTANCE NAMESPACE is then proven to hold
+    exactly the seven declared field names and nothing else, so an artifact can never smuggle extra state — an
+    overclaim such as ``root_authentic = True``, a private cache, or a foreign key — past validation while
+    remaining equal to and hash-identical with a clean proof. Only afterwards is every field read safely,
+    exact-typed (which rejects ``bytes``/``int`` subclasses and ``bool``), length-checked, and re-derived from
+    the carried ``request_raw``/``response_raw`` alone. Every defect normalizes to ``reason``.
+
+    Namespace gate ordering is load-bearing and each step makes the next one safe. ``__dict__`` accepts a dict
+    SUBCLASS through ``object.__setattr__``, so the exact-``dict`` check must come first or a subclass could lie
+    about its length, iteration or equality. A key whose ``__eq__`` is hostile survives insertion, so every key
+    must be proven an exact built-in ``str`` BEFORE any set or equality comparison can invoke it. Only then is
+    the key inventory compared.
     """
     if type(obj) is not RoughtimeV19RequestInclusion:
+        raise _err(reason)
+    namespace = getattr(obj, "__dict__", _MISSING)
+    if namespace is _MISSING or type(namespace) is not dict:
+        raise _err(reason)
+    if len(namespace) != len(_INCLUSION_FIELD_NAMES):
+        raise _err(reason)
+    for key in namespace:
+        if type(key) is not str:
+            raise _err(reason)
+    if set(namespace) != set(_INCLUSION_FIELD_NAMES):
         raise _err(reason)
     request_raw = getattr(obj, "request_raw", _MISSING)
     response_raw = getattr(obj, "response_raw", _MISSING)
@@ -296,6 +328,13 @@ class RoughtimeV19RequestInclusion:
     wrong digest length, unused index bit, root mismatch, malformed raw, or object built without its initializer
     raises ``artifact_inclusion_inconsistent`` — never a leaked ``AttributeError`` and never an underlying K2/K3
     semantic error.
+
+    EXACT STATE: the instance namespace must contain exactly these seven keys and nothing else. Extra state of
+    any form — an overclaim such as ``root_authentic = True``, an innocuous extra public attribute, a private
+    cache, or a foreign non-string key — raises ``artifact_inclusion_inconsistent``. This boundary is enforced
+    because a frozen dataclass compares and hashes only its declared fields, so without it an artifact carrying
+    smuggled state would validate, and would remain equal to and hash-identical with a clean proof, while a
+    downstream reader could still observe the smuggled attribute.
 
     SEALED TYPE: closed to subclassing. Any attempt to derive from it — an ordinary subclass, one overriding
     ``__post_init__``/``__getattribute__``/``__new__``, or a dynamically created ``type(...)`` subclass — raises a

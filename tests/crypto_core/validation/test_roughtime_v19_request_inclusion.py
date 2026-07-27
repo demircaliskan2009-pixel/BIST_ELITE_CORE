@@ -1095,6 +1095,181 @@ def test_artifact_is_frozen() -> None:
 
 
 # ============================================================================================================
+# Exact instance-namespace boundary (Sol Ultra Stage-2 P2-1)
+#
+# A frozen dataclass compares and hashes ONLY its declared fields, so an artifact carrying smuggled state
+# would otherwise validate and stay equal to and hash-identical with a clean proof while a downstream reader
+# could still observe the smuggled attribute. The artifact namespace must therefore be exactly the seven
+# declared keys and nothing else.
+# ============================================================================================================
+def _tainted_artifact(**extra_state: object) -> RoughtimeV19RequestInclusion:
+    """Build a VALID seven-field artifact, then smuggle extra state past the frozen barrier."""
+    artifact = RoughtimeV19RequestInclusion(**_valid_artifact_fields())
+    for name, value in extra_state.items():
+        object.__setattr__(artifact, name, value)
+    return artifact
+
+
+def test_verifier_produced_artifact_has_exactly_the_seven_expected_keys() -> None:
+    request, response = _pair(path=(_FIXED_PATH_0,), directions=(RIGHT,))
+    artifact = verify_roughtime_v19_request_inclusion(request, response)
+    assert type(artifact.__dict__) is dict
+    assert sorted(artifact.__dict__) == sorted(_EXPECTED_ARTIFACT_FIELDS)
+    assert len(artifact.__dict__) == 7
+
+
+def test_directly_constructed_valid_artifact_has_exactly_the_seven_expected_keys() -> None:
+    artifact = RoughtimeV19RequestInclusion(**_valid_artifact_fields())
+    assert sorted(artifact.__dict__) == sorted(_EXPECTED_ARTIFACT_FIELDS)
+    assert artifact.computed_root.hex() == _FIXED_ROOT_INDEX_1_HEX
+
+
+def test_overclaim_extra_state_rejected() -> None:
+    """The exact finding: root_authentic = True must never survive validation."""
+    tainted = _tainted_artifact(root_authentic=True)
+    assert tainted.root_authentic is True
+    with pytest.raises(RoughtimeV19RequestInclusionError) as excinfo:
+        RoughtimeV19RequestInclusion.__post_init__(tainted)
+    assert excinfo.value.reason is R.ARTIFACT_INCLUSION_INCONSISTENT
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"root_authentic": True},
+        {"signature_verified": True},
+        {"provider_id": "cloudflare"},
+        {"note": "innocuous"},
+        {"_cache": {"trusted": True}},
+        {"_memo": 1},
+        {"root_authentic": True, "_cache": 0},
+    ],
+)
+def test_every_extra_state_form_is_rejected(extra) -> None:
+    tainted = _tainted_artifact(**extra)
+    with pytest.raises(RoughtimeV19RequestInclusionError) as excinfo:
+        RoughtimeV19RequestInclusion.__post_init__(tainted)
+    assert excinfo.value.reason is R.ARTIFACT_INCLUSION_INCONSISTENT
+
+
+def test_non_str_namespace_key_rejected_without_raw_exception_leak() -> None:
+    artifact = RoughtimeV19RequestInclusion(**_valid_artifact_fields())
+    artifact.__dict__[42] = "foreign"
+    with pytest.raises(RoughtimeV19RequestInclusionError) as excinfo:
+        RoughtimeV19RequestInclusion.__post_init__(artifact)
+    assert excinfo.value.reason is R.ARTIFACT_INCLUSION_INCONSISTENT
+
+
+def test_str_subclass_namespace_key_rejected() -> None:
+    class _Str(str):
+        pass
+
+    artifact = RoughtimeV19RequestInclusion(**_valid_artifact_fields())
+    del artifact.__dict__["index"]
+    artifact.__dict__[_Str("index")] = 1
+    with pytest.raises(RoughtimeV19RequestInclusionError) as excinfo:
+        RoughtimeV19RequestInclusion.__post_init__(artifact)
+    assert excinfo.value.reason is R.ARTIFACT_INCLUSION_INCONSISTENT
+
+
+def test_hostile_equality_key_rejected_before_its_eq_can_run() -> None:
+    """A key whose __hash__ works but whose __eq__ is hostile survives insertion; it must never be compared."""
+    eq_calls: list[str] = []
+
+    class _HostileKey:
+        def __hash__(self) -> int:
+            return hash("index")
+
+        def __eq__(self, other: object) -> bool:
+            eq_calls.append("__eq__")
+            return True
+
+    artifact = RoughtimeV19RequestInclusion(**_valid_artifact_fields())
+    del artifact.__dict__["index"]
+    artifact.__dict__[_HostileKey()] = 1
+    eq_calls.clear()
+    with pytest.raises(RoughtimeV19RequestInclusionError) as excinfo:
+        RoughtimeV19RequestInclusion.__post_init__(artifact)
+    assert excinfo.value.reason is R.ARTIFACT_INCLUSION_INCONSISTENT
+    assert eq_calls == []
+
+
+def test_dict_subclass_namespace_rejected() -> None:
+    """__dict__ accepts a dict SUBCLASS via object.__setattr__, which could lie about length or iteration."""
+
+    class _Dict(dict):
+        def __len__(self) -> int:
+            return 7
+
+    artifact = RoughtimeV19RequestInclusion(**_valid_artifact_fields())
+    substituted = _Dict(artifact.__dict__)
+    substituted["root_authentic"] = True
+    object.__setattr__(artifact, "__dict__", substituted)
+    assert type(artifact.__dict__) is not dict
+    with pytest.raises(RoughtimeV19RequestInclusionError) as excinfo:
+        RoughtimeV19RequestInclusion.__post_init__(artifact)
+    assert excinfo.value.reason is R.ARTIFACT_INCLUSION_INCONSISTENT
+
+
+def test_missing_declared_field_still_rejected() -> None:
+    artifact = RoughtimeV19RequestInclusion(**_valid_artifact_fields())
+    del artifact.__dict__["index"]
+    with pytest.raises(RoughtimeV19RequestInclusionError) as excinfo:
+        RoughtimeV19RequestInclusion.__post_init__(artifact)
+    assert excinfo.value.reason is R.ARTIFACT_INCLUSION_INCONSISTENT
+
+
+def test_renamed_declared_field_rejected() -> None:
+    """Correct length and all-str keys, but the wrong inventory."""
+    artifact = RoughtimeV19RequestInclusion(**_valid_artifact_fields())
+    value = artifact.__dict__.pop("index")
+    artifact.__dict__["indx"] = value
+    assert len(artifact.__dict__) == 7
+    with pytest.raises(RoughtimeV19RequestInclusionError) as excinfo:
+        RoughtimeV19RequestInclusion.__post_init__(artifact)
+    assert excinfo.value.reason is R.ARTIFACT_INCLUSION_INCONSISTENT
+
+
+def test_hollow_exact_type_artifact_with_empty_namespace_rejected() -> None:
+    hollow = object.__new__(RoughtimeV19RequestInclusion)
+    with pytest.raises(RoughtimeV19RequestInclusionError) as excinfo:
+        RoughtimeV19RequestInclusion.__post_init__(hollow)
+    assert excinfo.value.reason is R.ARTIFACT_INCLUSION_INCONSISTENT
+
+
+def test_clean_artifact_equality_and_hashing_unchanged() -> None:
+    first = RoughtimeV19RequestInclusion(**_valid_artifact_fields())
+    second = RoughtimeV19RequestInclusion(**_valid_artifact_fields())
+    assert first == second
+    assert hash(first) == hash(second)
+    assert len({first, second}) == 1
+
+
+def test_production_declares_one_private_inclusion_field_inventory_in_order() -> None:
+    inventory: list[str] = []
+    for node in ast.walk(_production_tree()):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "_INCLUSION_FIELD_NAMES":
+                    inventory = [element.value for element in node.value.elts]
+    assert inventory == list(_EXPECTED_ARTIFACT_FIELDS)
+
+
+def test_private_inventory_is_not_public_api() -> None:
+    source = _PRODUCTION_PATH.read_text(encoding="utf-8")
+    exports_block = source.split("__all__", 1)[1]
+    assert "_INCLUSION_FIELD_NAMES" not in exports_block
+
+
+def test_namespace_gate_does_not_use_slots() -> None:
+    """The repair is a semantic namespace allowlist, not a slots-only rejection."""
+    source = _PRODUCTION_PATH.read_text(encoding="utf-8")
+    assert "slots=True" not in source
+    assert "__slots__" not in source
+    assert RoughtimeV19RequestInclusion.__dict__.get("__slots__") is None
+
+
+# ============================================================================================================
 # Artifact sealing
 # ============================================================================================================
 _SEAL_LEDGER: list[str] = []
