@@ -1421,14 +1421,14 @@ def test_sequence_protocol_is_absent_from_the_artifact(name) -> None:
 def test_sequence_operations_fail_without_exposing_proof_state() -> None:
     artifact = _artifact()
     operations = (
-        ("len", lambda obj: len(obj)),
-        ("iter", lambda obj: iter(obj)),
+        ("len", len),
+        ("iter", iter),
         ("for", lambda obj: [item for item in obj]),
         ("index", lambda obj: obj[0]),
         ("slice", lambda obj: obj[0:1]),
         ("membership", lambda obj: _V01_DELE_RAW in obj),
         ("unpack", lambda obj: [*obj]),
-        ("reversed", lambda obj: reversed(obj)),
+        ("reversed", reversed),
     )
     for label, operation in operations:
         with pytest.raises(TypeError) as excinfo:
@@ -1496,8 +1496,8 @@ def test_verifier_artifact_fields_are_byte_identical_to_the_accepted_vectors() -
 _TUPLE_BASE_CALLS = (
     ("tuple.__getitem__", lambda obj: tuple.__getitem__(obj, 0)),
     ("tuple.__iter__", lambda obj: list(tuple.__iter__(obj))),
-    ("tuple.__repr__", lambda obj: tuple.__repr__(obj)),
-    ("tuple.__getnewargs__", lambda obj: tuple.__getnewargs__(obj)),
+    ("tuple.__repr__", tuple.__repr__),
+    ("tuple.__getnewargs__", tuple.__getnewargs__),
     ("tuple.__contains__", lambda obj: tuple.__contains__(obj, 1)),
     ("tuple.count", lambda obj: tuple.count(obj, 1)),
     ("tuple.index", lambda obj: tuple.index(obj, 1)),
@@ -1506,8 +1506,8 @@ _TUPLE_BASE_CALLS = (
     ("tuple.__eq__", lambda obj: tuple.__eq__(obj, ())),
     ("tuple.__ne__", lambda obj: tuple.__ne__(obj, ())),
     ("tuple.__lt__", lambda obj: tuple.__lt__(obj, ())),
-    ("tuple.__hash__", lambda obj: tuple.__hash__(obj)),
-    ("tuple.__len__", lambda obj: tuple.__len__(obj)),
+    ("tuple.__hash__", tuple.__hash__),
+    ("tuple.__len__", tuple.__len__),
 )
 
 _PROOF_TEXT_MARKERS = (
