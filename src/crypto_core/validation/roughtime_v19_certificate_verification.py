@@ -53,9 +53,11 @@ storage those calls read, so the escape is structurally absent rather than black
 every built-in container base call is simply inapplicable to this type.
 
 Because ``object.__new__`` can still fabricate a hollow exact-type instance that bypasses the public keyword
-constructor, EVERY public surface (each of the eight named properties, ``repr``, ``hash``, ``==``, ``!=`` and
-``copy``/``deepcopy``/pickle reconstruction) re-proves exact type, identity-bound registry membership, weak
-reference liveness and the COMPLETE cryptographic derivation before it returns anything.
+constructor, EVERY public surface (each of the eight named properties, ``repr``, ``hash``, ``==``, ``!=``,
+``bool``/truthiness and ``copy``/``deepcopy``/pickle reconstruction) re-proves exact type, identity-bound
+registry membership, weak reference liveness and the COMPLETE cryptographic derivation before it returns
+anything. Truthiness is included deliberately: without an explicit ``__bool__`` a caller writing
+``if verification:`` would receive ``object``'s default ``True`` for an unregistered object.
 
 SUPPORTED TRUST BOUNDARY (public/supported operations): hostile public inputs; wrong exact types and
 subclasses; hostile public attribute access; ordinary ``setattr``/``delattr``; explicit
@@ -461,8 +463,8 @@ def _build_certificate_verification_class() -> type:
         Construction through the public keyword constructor re-parses ``response_raw`` and re-runs the
         COMPLETE verification BEFORE the object is registered, so a failed construction leaves no registry
         entry and no consumable object. Every public surface — each of the eight named properties, ``repr``,
-        ``hash``, ``==``, ``!=`` and ``copy``/``deepcopy``/pickle reconstruction — re-proves identity,
-        registry binding and the full cryptographic derivation before it returns anything. A hollow
+        ``hash``, ``==``, ``!=``, ``bool``/truthiness and ``copy``/``deepcopy``/pickle reconstruction —
+        re-proves identity, registry binding and the full cryptographic derivation before it returns anything. A hollow
         ``object.__new__(RoughtimeV19CertificateVerification)`` has no registry entry and therefore fails
         closed on every one of them with exactly ``artifact_certificate_verification_inconsistent``; no
         ``KeyError``, ``LookupError``, ``ReferenceError``, ``AttributeError``, ``IndexError``, ``TypeError``,
@@ -570,6 +572,10 @@ def _build_certificate_verification_class() -> type:
         @property
         def max_time(self) -> int:
             return proven_state(self)[7]
+
+        def __bool__(self) -> bool:
+            proven_state(self)
+            return True
 
         def __repr__(self) -> str:
             state = proven_state(self)

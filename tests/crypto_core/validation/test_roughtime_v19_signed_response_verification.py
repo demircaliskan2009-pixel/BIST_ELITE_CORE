@@ -433,6 +433,17 @@ def test_equality_and_hashing_are_deterministic() -> None:
     assert len({first, second}) == 1
 
 
+def test_genuine_artifact_truthiness_is_exact_true_after_complete_revalidation() -> None:
+    assert bool(_artifact()) is True
+
+
+def test_hollow_artifact_truthiness_raises_the_exact_closed_reason() -> None:
+    hollow = object.__new__(RoughtimeV19SignedResponseVerification)
+    with pytest.raises(RoughtimeV19SignedResponseVerificationError) as excinfo:
+        bool(hollow)
+    assert excinfo.value.reason is R.ARTIFACT_SIGNED_RESPONSE_VERIFICATION_INCONSISTENT
+
+
 def test_v08_reverse_generator_positive_verifies_through_production() -> None:
     """V08 as a POSITIVE: cross-backend in the opposite direction to V05.
 
@@ -745,7 +756,7 @@ def test_registry_revalidation_rejects_planted_but_well_shaped_wrong_state() -> 
     original = registry[key]
     registry[key] = (weakref.ref(victim), forged)
     try:
-        for consume in (lambda obj: obj.signed_midpoint, repr, hash, lambda obj: obj.__reduce__()):
+        for consume in (lambda obj: obj.signed_midpoint, bool, repr, hash, lambda obj: obj.__reduce__()):
             with pytest.raises(RoughtimeV19SignedResponseVerificationError) as excinfo:
                 consume(victim)
             assert excinfo.value.reason is R.ARTIFACT_SIGNED_RESPONSE_VERIFICATION_INCONSISTENT
@@ -1045,7 +1056,6 @@ def test_no_raw_backend_exception_leaks() -> None:
 # ============================================================================================================
 # Input trust boundary
 # ============================================================================================================
-_HOSTILE_ACCESS: list[str] = []
 
 
 @pytest.mark.parametrize("bad", [object(), None, b"", 0, "artifact", _V05_PUBLIC_KEY])
@@ -1071,10 +1081,11 @@ def test_hollow_k5_artifact_fails_closed() -> None:
 
 def test_k5_artifact_subclass_is_impossible_so_no_override_can_run() -> None:
     """K5 is sealed, so a hostile subclass cannot even be defined - the strongest possible form."""
-    with pytest.raises(TypeError):
-
-        class _Hostile(RoughtimeV19CertificateVerification):
-            pass
+    with pytest.raises(
+        TypeError,
+        match="RoughtimeV19CertificateVerification is a sealed artifact type and cannot be subclassed",
+    ):
+        type("_Hostile", (RoughtimeV19CertificateVerification,), {})
 
 
 def test_wrong_input_type_precedes_artifact_consistency() -> None:
@@ -1330,15 +1341,27 @@ def test_sequence_protocol_is_absent_from_the_artifact(name) -> None:
     assert not hasattr(artifact, name), name
 
 
+def test_truthiness_does_not_add_a_len_or_sequence_protocol() -> None:
+    artifact = _artifact()
+    assert "__bool__" in vars(RoughtimeV19SignedResponseVerification)
+    assert "__len__" not in vars(RoughtimeV19SignedResponseVerification)
+    assert bool(artifact) is True
+    with pytest.raises(TypeError):
+        len(artifact)
+
+
+_SEQUENCE_OPERATIONS = (
+    ("len", len),
+    ("iter", iter),
+    ("index", lambda obj: obj[0]),
+    ("membership", lambda obj: _V05_SREP_RAW in obj),
+    ("unpack", lambda obj: [*obj]),
+)
+
+
 def test_sequence_operations_fail_without_exposing_proof_state() -> None:
     artifact = _artifact()
-    for label, operation in (
-        ("len", lambda obj: len(obj)),
-        ("iter", lambda obj: iter(obj)),
-        ("index", lambda obj: obj[0]),
-        ("membership", lambda obj: _V05_SREP_RAW in obj),
-        ("unpack", lambda obj: [*obj]),
-    ):
+    for label, operation in _SEQUENCE_OPERATIONS:
         with pytest.raises(TypeError) as excinfo:
             operation(artifact)
         assert _V05_SREP_RAW.hex() not in str(excinfo.value), label
@@ -1462,15 +1485,27 @@ def test_wrong_artifact_field_type_rejected(field, value) -> None:
 _TUPLE_BASE_CALLS = (
     ("tuple.__getitem__", lambda obj: tuple.__getitem__(obj, 0)),
     ("tuple.__iter__", lambda obj: list(tuple.__iter__(obj))),
-    ("tuple.__repr__", lambda obj: tuple.__repr__(obj)),
-    ("tuple.__getnewargs__", lambda obj: tuple.__getnewargs__(obj)),
+    ("tuple.__repr__", tuple.__repr__),
+    ("tuple.__getnewargs__", tuple.__getnewargs__),
     ("tuple.__contains__", lambda obj: tuple.__contains__(obj, 1)),
     ("tuple.count", lambda obj: tuple.count(obj, 1)),
     ("tuple.index", lambda obj: tuple.index(obj, 1)),
     ("tuple.__add__", lambda obj: tuple.__add__(obj, ())),
-    ("tuple.__hash__", lambda obj: tuple.__hash__(obj)),
-    ("tuple.__len__", lambda obj: tuple.__len__(obj)),
+    ("tuple.__hash__", tuple.__hash__),
+    ("tuple.__len__", tuple.__len__),
 )
+
+
+def test_codeql_cleaned_direct_callable_consumption_surfaces_are_preserved() -> None:
+    sequence_calls = dict(_SEQUENCE_OPERATIONS)
+    tuple_calls = dict(_TUPLE_BASE_CALLS)
+    assert sequence_calls["len"] is len
+    assert sequence_calls["iter"] is iter
+    assert tuple_calls["tuple.__repr__"] is tuple.__repr__
+    assert tuple_calls["tuple.__getnewargs__"] is tuple.__getnewargs__
+    assert tuple_calls["tuple.__hash__"] is tuple.__hash__
+    assert tuple_calls["tuple.__len__"] is tuple.__len__
+
 
 _SECRET_MARKERS = (_V05_SREP_RAW, _V05_SIGNATURE, _V05_PUBLIC_KEY, _V01_PUBLIC_KEY)
 
@@ -1600,7 +1635,7 @@ def test_a_stale_or_mismatched_weakref_never_authenticates_another_object() -> N
     assert key not in registry
     registry[key] = (weakref.ref(genuine), state)
     try:
-        for consume in (lambda obj: obj.response_raw, repr, hash, lambda obj: obj.__reduce__()):
+        for consume in (lambda obj: obj.response_raw, bool, repr, hash, lambda obj: obj.__reduce__()):
             with pytest.raises(RoughtimeV19SignedResponseVerificationError) as excinfo:
                 consume(impostor)
             assert excinfo.value.reason is R.ARTIFACT_SIGNED_RESPONSE_VERIFICATION_INCONSISTENT
@@ -1622,7 +1657,7 @@ def test_a_dead_weakref_entry_never_authenticates() -> None:
     registry[key] = (reference, state)
     try:
         with pytest.raises(RoughtimeV19SignedResponseVerificationError) as excinfo:
-            impostor.response_raw
+            bool(impostor)
         assert excinfo.value.reason is R.ARTIFACT_SIGNED_RESPONSE_VERIFICATION_INCONSISTENT
     finally:
         registry.pop(key, None)
@@ -1648,11 +1683,32 @@ _CONSUMPTION_SURFACES = (
     ("signed_versions_property", lambda obj: obj.signed_versions),
     ("repr", repr),
     ("hash", hash),
+    ("bool", bool),
     ("reduce", lambda obj: obj.__reduce__()),
     ("copy", copy.copy),
     ("deepcopy", copy.deepcopy),
     ("pickle", pickle.dumps),
 )
+
+
+def test_bool_is_a_declared_revalidating_public_surface() -> None:
+    matches = [
+        child
+        for node in ast.walk(_production_tree())
+        if isinstance(node, ast.ClassDef) and node.name == "RoughtimeV19SignedResponseVerification"
+        for child in node.body
+        if isinstance(child, ast.FunctionDef) and child.name == "__bool__"
+    ]
+    assert len(matches) == 1
+    calls = {
+        node.func.id for node in ast.walk(matches[0]) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "proven_state" in calls
+
+
+def test_production_documents_truthiness_as_a_revalidating_public_surface() -> None:
+    source = _PRODUCTION_PATH.read_text(encoding="utf-8")
+    assert source.count("``bool``/truthiness") == 2
 
 
 @pytest.mark.parametrize(

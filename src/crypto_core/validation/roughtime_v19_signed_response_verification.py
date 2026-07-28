@@ -47,9 +47,10 @@ non-module-global registry bound to one exact object identity and guarded by a w
 dataclass would keep a writable instance ``__dict__``; a ``tuple`` subclass would keep the values in a base
 object that explicit unbound base calls (``tuple.__getitem__`` and friends) read without validation. Keeping
 no proof in the instance removes both surfaces structurally rather than blacklisting methods. Because
-``object.__new__`` can still fabricate a hollow exact-type instance, EVERY public surface re-proves exact
-type, identity-bound registry membership, weak-reference liveness and the COMPLETE cryptographic derivation
-before it returns anything.
+``object.__new__`` can still fabricate a hollow exact-type instance, EVERY public surface — each named
+property, ``repr``, ``hash``, ``==``, ``!=``, ``bool``/truthiness and ``copy``/``deepcopy``/pickle
+reconstruction — re-proves exact type, identity-bound registry membership, weak-reference liveness and the
+COMPLETE cryptographic derivation before it returns anything.
 
 Supported trust boundary (Option A): public inputs and public API operations; ``object.__new__`` hollow
 instances; ``object.__setattr__``/``object.__delattr__`` against the artifact; explicit built-in base calls;
@@ -510,8 +511,9 @@ def _build_signed_response_verification_class() -> type:
 
         Construction re-runs the COMPLETE verification BEFORE the object is registered, so a failed
         construction leaves no registry entry and no consumable object. Every public surface — each named
-        property, ``repr``, ``hash``, ``==``, ``!=`` and ``copy``/``deepcopy``/pickle reconstruction —
-        re-proves identity, registry binding and the full cryptographic derivation before returning anything.
+        property, ``repr``, ``hash``, ``==``, ``!=``, ``bool``/truthiness and
+        ``copy``/``deepcopy``/pickle reconstruction — re-proves identity, registry binding and the full
+        cryptographic derivation before returning anything.
         A hollow ``object.__new__(RoughtimeV19SignedResponseVerification)`` has no registry entry and fails
         closed on every one of them with exactly ``artifact_signed_response_verification_inconsistent``; no
         ``KeyError``, ``LookupError``, ``ReferenceError``, ``AttributeError``, ``IndexError``, ``TypeError``,
@@ -613,6 +615,10 @@ def _build_signed_response_verification_class() -> type:
         @property
         def signed_versions(self) -> tuple[int, ...]:
             return proven_state(self)[9]
+
+        def __bool__(self) -> bool:
+            proven_state(self)
+            return True
 
         def __repr__(self) -> str:
             state = proven_state(self)
