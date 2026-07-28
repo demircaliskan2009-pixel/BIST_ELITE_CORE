@@ -31,12 +31,23 @@ verifier.
 
 Trust boundary: K5 consumes an artifact it did not build. It requires the EXACT merged public type
 (``type(x) is C``, never ``isinstance``), which alone rejects every subclass and so prevents a hostile
-``__getattribute__``/``__post_init__``/``__new__`` override from executing; it then re-parses ``response.raw``
+``__getattribute__``/``__new__`` override from executing; it then re-parses ``response.raw``
 through the merged K2 public parser and performs ALL cryptographic work on that fresh canonical artifact, so
 a caller-carried nested field can never influence the result. Every K2 failure, every state defect and every
 backend exception is normalized to exactly one closed member of
 :class:`RoughtimeV19CertificateVerificationReason`; no raw PyNaCl exception, ``AttributeError``,
 ``TypeError`` or ``ValueError`` escapes, and no ``BaseException`` is caught.
+
+Output representation: the artifact this module returns is a SEALED, TUPLE-BACKED value object with
+``__slots__ = ()``, so it has no instance ``__dict__`` and no writable slot at all. A frozen dataclass only
+intercepts ``__setattr__`` while still carrying a writable instance namespace, which lets a caller replace a
+cryptographically derived field AFTER verification succeeded and thereby invalidate the type-as-proof
+contract, equality, hashing and dict/set membership. Storing the eight values in the immutable tuple base
+removes that surface by construction rather than by interception: there is nothing to write through
+``setattr``, through ``object.__setattr__`` or through ``__dict__``. Because ``tuple.__new__`` can still
+fabricate an exact-type instance that bypasses the public keyword constructor, EVERY consumption surface
+(each named field, ``repr``, ``hash``, equality, iteration, indexing, copy, deepcopy and pickle) re-proves the
+complete state before it returns anything, using only base ``tuple`` operations so validation cannot recurse.
 
 A successful artifact proves EXACTLY:
 
@@ -57,7 +68,6 @@ Versioned specification: https://datatracker.ietf.org/doc/html/draft-ietf-ntp-ro
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
 
 from nacl.encoding import RawEncoder
@@ -106,8 +116,9 @@ _SMALL_ORDER_ENCODINGS = (
 # Sentinel for safe attribute reads: distinguishes "attribute absent" from any legitimate value.
 _MISSING = object()
 
-# The COMPLETE and EXCLUSIVE instance-namespace inventory of this module's output artifact, in exact
-# declaration order. A valid artifact's __dict__ must hold exactly these keys and nothing else.
+# The COMPLETE and EXCLUSIVE public field inventory of this module's output artifact, in exact declaration
+# order. This tuple IS the storage layout: index i of the artifact's tuple base holds field i below, and a
+# valid artifact holds exactly this many elements and nothing else.
 _VERIFICATION_FIELD_NAMES = (
     "response_raw",
     "long_term_public_key",
@@ -141,6 +152,11 @@ class RoughtimeV19CertificateVerificationReason(str, Enum):
     CERT_SIGNATURE_INVALID = "cert_signature_invalid"
     CRYPTO_BACKEND_FAILURE = "crypto_backend_failure"
     ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT = "artifact_certificate_verification_inconsistent"
+
+
+# The single reason every artifact-state defect normalizes to, on construction and on every consumption
+# surface. Bound once so no surface can drift onto a different (more informative, oracle-leaking) reason.
+_ARTIFACT_INCONSISTENT = RoughtimeV19CertificateVerificationReason.ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT
 
 
 class RoughtimeV19CertificateVerificationError(RuntimeError):
@@ -281,38 +297,26 @@ def _validate_verification_state(
     obj: object,
     reason: RoughtimeV19CertificateVerificationReason,
 ) -> None:
-    """Prove an exact-type artifact's COMPLETE declared state equals an independent re-derivation.
+    """Prove an exact-type artifact's COMPLETE stored state equals an independent re-derivation.
 
-    The exact-type gate rejects a foreign object handed to an unbound ``__post_init__`` call. The exact
-    instance namespace is then proven to hold exactly the eight declared field names and nothing else, so an
-    artifact can never smuggle extra state — an overclaim, a private cache or a foreign key — past validation
-    while remaining equal to and hash-identical with a clean proof. Only afterwards is every field read,
-    exact-typed and re-derived by re-running the FULL verification from ``response_raw`` and
+    This is the ONLY gate every consumption surface passes through, so it must hold for a hollow instance
+    fabricated by ``tuple.__new__`` exactly as it holds for one built by the public keyword constructor. The
+    exact-type gate rejects a foreign object handed to this function directly. The tuple length is then proven
+    to be exactly the declared field count, which — combined with ``__slots__ = ()`` and the immutable tuple
+    base — makes extra artifact state IMPOSSIBLE rather than merely detectable: there is no instance
+    namespace to smuggle an overclaim, a private cache or a foreign key into. Only afterwards is every element
+    read, exact-typed and re-derived by re-running the FULL verification from ``response_raw`` and
     ``long_term_public_key`` alone.
 
-    Namespace gate ordering is load-bearing: ``__dict__`` accepts a dict SUBCLASS through
-    ``object.__setattr__``, so the exact-``dict`` check must come first; and a key whose ``__eq__`` is hostile
-    survives insertion, so every key must be proven an exact built-in ``str`` BEFORE any set or equality
-    comparison can invoke it.
+    Every read here goes through the ``tuple`` base (``tuple.__len__``/``tuple.__getitem__``) and never
+    through the artifact's own named properties, ``__len__`` or ``__getitem__``, so validation can never
+    recurse into itself.
     """
     if type(obj) is not RoughtimeV19CertificateVerification:
         raise _err(reason)
-    namespace = getattr(obj, "__dict__", _MISSING)
-    if namespace is _MISSING or type(namespace) is not dict:
+    if tuple.__len__(obj) != len(_VERIFICATION_FIELD_NAMES):
         raise _err(reason)
-    if len(namespace) != len(_VERIFICATION_FIELD_NAMES):
-        raise _err(reason)
-    for key in namespace:
-        if type(key) is not str:
-            raise _err(reason)
-    if set(namespace) != set(_VERIFICATION_FIELD_NAMES):
-        raise _err(reason)
-    values = []
-    for name in _VERIFICATION_FIELD_NAMES:
-        value = getattr(obj, name, _MISSING)
-        if value is _MISSING:
-            raise _err(reason)
-        values.append(value)
+    values = [tuple.__getitem__(obj, index) for index in range(len(_VERIFICATION_FIELD_NAMES))]
     (
         response_raw,
         long_term_public_key,
@@ -353,21 +357,40 @@ def _validate_verification_state(
 # --- Immutable, self-validating public artifact ------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class RoughtimeV19CertificateVerification:
+class RoughtimeV19CertificateVerification(tuple):
     """Proof that one exact ``CERT`` signature validates over one exact ``DELE`` under one supplied key.
 
     Carries the exact complete ``response_raw`` packet bytes, the exact 32-byte ``long_term_public_key`` the
     caller supplied, the exact preserved ``certificate_raw`` and 64-byte ``certificate_signature``, the exact
     signed ``delegation_raw``, and the ``delegated_public_key``/``min_time``/``max_time`` that K2 decoded from
-    those signed bytes. Frozen and hashable.
+    those signed bytes.
 
-    Direct construction re-parses ``response_raw`` and re-runs the COMPLETE verification — key policy,
-    signature-encoding policy and the backend group equation — then requires every declared field to equal the
-    re-derivation. No stored verdict is ever trusted. Any mismatch, missing or incomplete state, non-exact type,
-    extra namespace state, malformed raw, or object built without its initializer raises
-    ``artifact_certificate_verification_inconsistent`` — never a leaked backend, ``AttributeError`` or
-    ``TypeError``.
+    GENUINELY IMMUTABLE, not merely write-intercepted. The eight values live in the immutable ``tuple`` base
+    and are exposed only through read-only properties; ``__slots__ = ()`` means there is no instance
+    ``__dict__`` and no writable slot. Consequently ``setattr``, ``delattr``, ``object.__setattr__``,
+    ``object.__delattr__`` and ``__dict__`` assignment cannot alter a verified field, no attribute can be added
+    dynamically, and ``hash``/equality are permanently fixed at construction. A frozen dataclass would keep a
+    writable instance namespace and so permit exactly that post-verification mutation.
+
+    Construction through the public keyword constructor re-parses ``response_raw`` and re-runs the COMPLETE
+    verification — key policy, signature-encoding policy and the backend group equation — then requires every
+    stored element to equal the re-derivation, so no invalid instance is ever returned. Because
+    ``tuple.__new__`` can fabricate an exact-type instance that bypasses that constructor, EVERY surface that
+    exposes a stored element re-proves the complete state first: each of the eight named properties, ``repr``,
+    ``hash``, ``==``, ``!=``, membership, ``count``, ``index``, iteration, indexing, ``__getnewargs__`` and
+    ``copy``/``deepcopy``/pickle reconstruction. Any mismatch, wrong length, non-exact element type, malformed
+    raw, or hollow object raises ``artifact_certificate_verification_inconsistent`` — never a leaked
+    ``IndexError``, ``AttributeError``, ``TypeError``, ``ValueError`` or backend exception. No verdict is
+    cached: nothing mutable is stored. ``len()`` is deliberately the base implementation because it reveals a
+    element count and never a proof value.
+
+    Inherited sequence behaviour that would read stored elements WITHOUT re-proving them, or would decant a
+    proof into a bare sequence, is refused rather than inherited: ``<``/``<=``/``>``/``>=`` and
+    ``+``/``*`` return ``NotImplemented`` (so Python raises its ordinary ``TypeError``), and ``!=`` is defined
+    explicitly because ``tuple`` supplies one that would otherwise bypass the validating ``__eq__``.
+
+    Equality is strictly type-bound. A bare ``tuple`` carrying the same eight values is NOT equal to this
+    proof in either direction, so a plain sequence can never impersonate a verified artifact in a container.
 
     SEALED TYPE: closed to subclassing. Any attempt to derive from it raises a fixed repository-owned built-in
     ``TypeError`` at CLASS-DEFINITION time, before any subclass instance can exist and therefore before any
@@ -380,25 +403,182 @@ class RoughtimeV19CertificateVerification:
     ``time_valid`` or ``ready`` field: the type itself is the claim, and its scope is exactly this docstring.
     """
 
-    response_raw: bytes
-    long_term_public_key: bytes
-    certificate_raw: bytes
-    certificate_signature: bytes
-    delegation_raw: bytes
-    delegated_public_key: bytes
-    min_time: int
-    max_time: int
+    __slots__ = ()
+
+    def __new__(
+        cls,
+        *,
+        response_raw: bytes,
+        long_term_public_key: bytes,
+        certificate_raw: bytes,
+        certificate_signature: bytes,
+        delegation_raw: bytes,
+        delegated_public_key: bytes,
+        min_time: int,
+        max_time: int,
+    ) -> RoughtimeV19CertificateVerification:
+        instance = tuple.__new__(
+            cls,
+            (
+                response_raw,
+                long_term_public_key,
+                certificate_raw,
+                certificate_signature,
+                delegation_raw,
+                delegated_public_key,
+                min_time,
+                max_time,
+            ),
+        )
+        _validate_verification_state(instance, _ARTIFACT_INCONSISTENT)
+        return instance
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         # Fires when a subclass is DEFINED, before it can be instantiated and therefore before any overriding
         # lifecycle method of that subclass can execute. Deterministic, no caller-supplied text.
         raise TypeError(_SEALED_ARTIFACT_MESSAGE)
 
-    def __post_init__(self) -> None:
-        _validate_verification_state(
-            self,
-            RoughtimeV19CertificateVerificationReason.ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT,
+    def _proven_element(self, index: int) -> object:
+        """Re-prove the complete state, then return one stored element through the ``tuple`` base."""
+        _validate_verification_state(self, _ARTIFACT_INCONSISTENT)
+        return tuple.__getitem__(self, index)
+
+    @property
+    def response_raw(self) -> bytes:
+        return self._proven_element(0)
+
+    @property
+    def long_term_public_key(self) -> bytes:
+        return self._proven_element(1)
+
+    @property
+    def certificate_raw(self) -> bytes:
+        return self._proven_element(2)
+
+    @property
+    def certificate_signature(self) -> bytes:
+        return self._proven_element(3)
+
+    @property
+    def delegation_raw(self) -> bytes:
+        return self._proven_element(4)
+
+    @property
+    def delegated_public_key(self) -> bytes:
+        return self._proven_element(5)
+
+    @property
+    def min_time(self) -> int:
+        return self._proven_element(6)
+
+    @property
+    def max_time(self) -> int:
+        return self._proven_element(7)
+
+    def __repr__(self) -> str:
+        _validate_verification_state(self, _ARTIFACT_INCONSISTENT)
+        rendered = ", ".join(
+            f"{name}={tuple.__getitem__(self, index)!r}" for index, name in enumerate(_VERIFICATION_FIELD_NAMES)
         )
+        return f"RoughtimeV19CertificateVerification({rendered})"
+
+    def __hash__(self) -> int:
+        _validate_verification_state(self, _ARTIFACT_INCONSISTENT)
+        return tuple.__hash__(self)
+
+    def __eq__(self, other: object) -> bool:
+        _validate_verification_state(self, _ARTIFACT_INCONSISTENT)
+        if type(other) is not RoughtimeV19CertificateVerification:
+            # Deliberately False rather than NotImplemented: a bare tuple of the same eight values must not
+            # compare equal to a verified proof through the reflected operation either.
+            return False
+        _validate_verification_state(other, _ARTIFACT_INCONSISTENT)
+        return tuple.__eq__(self, other)
+
+    def __ne__(self, other: object) -> bool:
+        # MUST be explicit: `tuple` supplies its own __ne__, which would otherwise compare raw stored elements
+        # and let `forged != genuine` answer from UNVALIDATED state, bypassing __eq__ entirely.
+        return not self.__eq__(other)
+
+    def __lt__(self, other: object) -> object:
+        # Ordering a cryptographic proof is meaningless, and tuple's inherited ordering would read stored
+        # elements without re-proving them. NotImplemented restores the plain `TypeError` an unordered value
+        # object raises, without raising from inside the comparison itself.
+        return NotImplemented
+
+    def __le__(self, other: object) -> object:
+        return NotImplemented
+
+    def __gt__(self, other: object) -> object:
+        return NotImplemented
+
+    def __ge__(self, other: object) -> object:
+        return NotImplemented
+
+    def __add__(self, other: object) -> object:
+        # Concatenating or repeating a proof would extract its elements into a bare sequence; refuse instead.
+        return NotImplemented
+
+    def __radd__(self, other: object) -> object:
+        return NotImplemented
+
+    def __mul__(self, other: object) -> object:
+        return NotImplemented
+
+    def __rmul__(self, other: object) -> object:
+        return NotImplemented
+
+    def __contains__(self, value: object) -> bool:
+        _validate_verification_state(self, _ARTIFACT_INCONSISTENT)
+        return tuple.__contains__(self, value)
+
+    def count(self, value: object) -> int:
+        _validate_verification_state(self, _ARTIFACT_INCONSISTENT)
+        return tuple.count(self, value)
+
+    def index(self, value: object, *args: object) -> int:
+        _validate_verification_state(self, _ARTIFACT_INCONSISTENT)
+        return tuple.index(self, value, *args)
+
+    def __getnewargs__(self):
+        _validate_verification_state(self, _ARTIFACT_INCONSISTENT)
+        return (tuple(tuple.__getitem__(self, index) for index in range(len(_VERIFICATION_FIELD_NAMES))),)
+
+    def __iter__(self):
+        _validate_verification_state(self, _ARTIFACT_INCONSISTENT)
+        return tuple.__iter__(self)
+
+    def __getitem__(self, index):
+        _validate_verification_state(self, _ARTIFACT_INCONSISTENT)
+        return tuple.__getitem__(self, index)
+
+    def __reduce__(self):
+        """Route ``copy``/``deepcopy``/pickle through the validating public constructor.
+
+        The default tuple-subclass reduction would call ``cls.__new__(cls, values)`` positionally and bypass
+        the keyword constructor, so reconstruction is pinned to a rebuild that re-runs the full verification.
+        """
+        _validate_verification_state(self, _ARTIFACT_INCONSISTENT)
+        return (
+            _rebuild_certificate_verification,
+            (tuple(tuple.__getitem__(self, index) for index in range(len(_VERIFICATION_FIELD_NAMES))),),
+        )
+
+
+def _rebuild_certificate_verification(state: object) -> RoughtimeV19CertificateVerification:
+    """Reconstruct an artifact from copy/deepcopy/pickle state by re-running the COMPLETE verification."""
+    if type(state) is not tuple or len(state) != len(_VERIFICATION_FIELD_NAMES):
+        raise _err(_ARTIFACT_INCONSISTENT)
+    return RoughtimeV19CertificateVerification(
+        response_raw=state[0],
+        long_term_public_key=state[1],
+        certificate_raw=state[2],
+        certificate_signature=state[3],
+        delegation_raw=state[4],
+        delegated_public_key=state[5],
+        min_time=state[6],
+        max_time=state[7],
+    )
 
 
 def verify_roughtime_v19_certificate(

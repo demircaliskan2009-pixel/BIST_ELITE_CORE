@@ -19,8 +19,9 @@ packet's exact DELE and CERT bytes verbatim so K2 preserves them unchanged.
 from __future__ import annotations
 
 import ast
+import copy
 import importlib.metadata
-from dataclasses import FrozenInstanceError
+import pickle
 from pathlib import Path
 
 import pytest
@@ -374,7 +375,6 @@ def test_production_imports_no_cryptography_and_only_the_pinned_backend() -> Non
             modules.add(node.module or "")
     assert modules == {
         "__future__",
-        "dataclasses",
         "enum",
         "nacl.encoding",
         "nacl.exceptions",
@@ -832,81 +832,50 @@ def test_key_policy_precedes_signature_policy() -> None:
 # ============================================================================================================
 # Output artifact contract
 # ============================================================================================================
-def test_artifact_has_exactly_eight_fields_in_order() -> None:
-    assert tuple(RoughtimeV19CertificateVerification.__dataclass_fields__) == _EXPECTED_ARTIFACT_FIELDS
-    assert len(RoughtimeV19CertificateVerification.__dataclass_fields__) == 8
+def test_artifact_declares_exactly_eight_public_fields_in_order() -> None:
+    from crypto_core.validation.roughtime_v19_certificate_verification import _VERIFICATION_FIELD_NAMES
+
+    assert _VERIFICATION_FIELD_NAMES == _EXPECTED_ARTIFACT_FIELDS
+    assert len(_VERIFICATION_FIELD_NAMES) == 8
+    for name in _EXPECTED_ARTIFACT_FIELDS:
+        assert type(getattr(RoughtimeV19CertificateVerification, name)) is property
+
+
+def test_storage_order_equals_declared_public_field_order() -> None:
+    """Stronger than a field-name list: proves tuple slot i IS public field i, so order cannot silently drift."""
+    artifact = verify_roughtime_v19_certificate(_response(), _V01_PUBLIC_KEY)
+    for index, name in enumerate(_EXPECTED_ARTIFACT_FIELDS):
+        assert artifact[index] is getattr(artifact, name)
+    assert len(tuple(artifact)) == 8
 
 
 def test_artifact_field_names_avoid_forbidden_tokens() -> None:
-    for name in RoughtimeV19CertificateVerification.__dataclass_fields__:
+    for name in _EXPECTED_ARTIFACT_FIELDS:
         for token in _FORBIDDEN_FIELD_TOKENS:
             assert token not in name
 
 
-def test_verifier_artifact_namespace_is_exactly_eight_keys() -> None:
-    artifact = verify_roughtime_v19_certificate(_response(), _V01_PUBLIC_KEY)
-    assert type(artifact.__dict__) is dict
-    assert sorted(artifact.__dict__) == sorted(_EXPECTED_ARTIFACT_FIELDS)
+def test_validation_entry_point_rejects_a_foreign_object() -> None:
+    from crypto_core.validation.roughtime_v19_certificate_verification import (
+        _ARTIFACT_INCONSISTENT,
+        _validate_verification_state,
+    )
 
-
-def _tainted(**extra: object) -> RoughtimeV19CertificateVerification:
-    artifact = RoughtimeV19CertificateVerification(**_valid_artifact_fields())
-    for name, value in extra.items():
-        object.__setattr__(artifact, name, value)
-    return artifact
-
-
-@pytest.mark.parametrize(
-    "extra",
-    [
-        {"root_authentic": True},
-        {"signature_verified": True},
-        {"provider_id": "cloudflare"},
-        {"_cache": {"trusted": True}},
-        {"note": "innocuous"},
-    ],
-)
-def test_extra_artifact_state_rejected(extra) -> None:
-    tainted = _tainted(**extra)
+    foreign = _hollow(RoughtimeV19ResponseSemantics, raw=b"")
     with pytest.raises(RoughtimeV19CertificateVerificationError) as excinfo:
-        RoughtimeV19CertificateVerification.__post_init__(tainted)
+        _validate_verification_state(foreign, _ARTIFACT_INCONSISTENT)
     assert excinfo.value.reason is R.ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT
 
 
-def test_non_str_namespace_key_rejected() -> None:
-    artifact = RoughtimeV19CertificateVerification(**_valid_artifact_fields())
-    artifact.__dict__[42] = "foreign"
-    with pytest.raises(RoughtimeV19CertificateVerificationError) as excinfo:
-        RoughtimeV19CertificateVerification.__post_init__(artifact)
-    assert excinfo.value.reason is R.ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT
+def test_pickle_rebuild_helper_rejects_malformed_state() -> None:
+    from crypto_core.validation.roughtime_v19_certificate_verification import _rebuild_certificate_verification
 
-
-def test_dict_subclass_namespace_rejected() -> None:
-    class _Dict(dict):
-        def __len__(self) -> int:
-            return 8
-
-    artifact = RoughtimeV19CertificateVerification(**_valid_artifact_fields())
-    substituted = _Dict(artifact.__dict__)
-    substituted["root_authentic"] = True
-    object.__setattr__(artifact, "__dict__", substituted)
-    with pytest.raises(RoughtimeV19CertificateVerificationError) as excinfo:
-        RoughtimeV19CertificateVerification.__post_init__(artifact)
-    assert excinfo.value.reason is R.ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT
-
-
-def test_missing_and_renamed_output_field_rejected() -> None:
-    artifact = RoughtimeV19CertificateVerification(**_valid_artifact_fields())
-    del artifact.__dict__["min_time"]
-    with pytest.raises(RoughtimeV19CertificateVerificationError) as excinfo:
-        RoughtimeV19CertificateVerification.__post_init__(artifact)
-    assert excinfo.value.reason is R.ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT
-    renamed = RoughtimeV19CertificateVerification(**_valid_artifact_fields())
-    value = renamed.__dict__.pop("max_time")
-    renamed.__dict__["maxtime"] = value
-    with pytest.raises(RoughtimeV19CertificateVerificationError) as excinfo:
-        RoughtimeV19CertificateVerification.__post_init__(renamed)
-    assert excinfo.value.reason is R.ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT
+    state = tuple(verify_roughtime_v19_certificate(_response(), _V01_PUBLIC_KEY))
+    for bad in (None, (), state[:7], (*state, b"extra"), list(state)):
+        with pytest.raises(RoughtimeV19CertificateVerificationError) as excinfo:
+            _rebuild_certificate_verification(bad)
+        assert excinfo.value.reason is R.ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT
+    assert _rebuild_certificate_verification(state).delegation_raw == _V01_DELE_RAW
 
 
 @pytest.mark.parametrize(
@@ -948,17 +917,291 @@ def test_wrong_artifact_field_type_rejected(field, value) -> None:
     assert excinfo.value.reason is R.ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT
 
 
-def test_unbound_post_init_with_foreign_object_rejected() -> None:
-    foreign = _hollow(RoughtimeV19ResponseSemantics, raw=b"")
+# ============================================================================================================
+# P1 regression: the verified proof is genuinely immutable (no writable instance namespace)
+#
+# The reported defect: @dataclass(frozen=True) only intercepts __setattr__ while keeping a writable instance
+# __dict__, so `artifact.__dict__["delegated_public_key"] = forged` mutated a cryptographically derived field
+# AFTER verification, invalidating type-as-proof, equality, hashing and dict/set membership. The tuple-backed
+# representation removes the surface entirely, so these tests assert impossibility, not interception.
+# ============================================================================================================
+def _artifact() -> RoughtimeV19CertificateVerification:
+    return verify_roughtime_v19_certificate(_response(), _V01_PUBLIC_KEY)
+
+
+def test_artifact_has_no_instance_dict() -> None:
+    artifact = _artifact()
+    assert RoughtimeV19CertificateVerification.__slots__ == ()
+    assert not hasattr(artifact, "__dict__")
+    assert type(artifact).__dictoffset__ == 0
+    assert "__dict__" not in dir(artifact)
+
+
+def test_vars_on_artifact_fails() -> None:
+    with pytest.raises(TypeError):
+        vars(_artifact())
+
+
+def test_artifact_dunder_dict_access_and_replacement_fail() -> None:
+    artifact = _artifact()
+    with pytest.raises(AttributeError):
+        _ = artifact.__dict__
+    with pytest.raises(AttributeError):
+        object.__setattr__(artifact, "__dict__", {"root_authentic": True})
+    with pytest.raises(AttributeError):
+        object.__delattr__(artifact, "__dict__")
+
+
+@pytest.mark.parametrize("field", _EXPECTED_ARTIFACT_FIELDS)
+def test_setattr_rejected_for_every_field(field) -> None:
+    artifact = _artifact()
+    with pytest.raises(AttributeError):
+        setattr(artifact, field, _V09_PUBLIC_KEY)
+
+
+@pytest.mark.parametrize("field", _EXPECTED_ARTIFACT_FIELDS)
+def test_delattr_rejected_for_every_field(field) -> None:
+    artifact = _artifact()
+    with pytest.raises(AttributeError):
+        delattr(artifact, field)
+
+
+@pytest.mark.parametrize("field", _EXPECTED_ARTIFACT_FIELDS)
+def test_object_setattr_cannot_replace_any_proof_field(field) -> None:
+    """The exact reported defect: object.__setattr__/__delattr__ must not reach a verified field."""
+    artifact = _artifact()
+    before = getattr(artifact, field)
+    with pytest.raises(AttributeError):
+        object.__setattr__(artifact, field, _V09_PUBLIC_KEY)
+    with pytest.raises(AttributeError):
+        object.__delattr__(artifact, field)
+    assert getattr(artifact, field) == before
+
+
+@pytest.mark.parametrize("name", ["root_authentic", "signature_verified", "provider_id", "note"])
+def test_arbitrary_public_state_cannot_be_added(name) -> None:
+    artifact = _artifact()
+    with pytest.raises(AttributeError):
+        setattr(artifact, name, True)
+    with pytest.raises(AttributeError):
+        object.__setattr__(artifact, name, True)
+    assert not hasattr(artifact, name)
+
+
+@pytest.mark.parametrize("name", ["_cache", "_verified", "_trusted_root", "_reason"])
+def test_arbitrary_private_state_cannot_be_added(name) -> None:
+    artifact = _artifact()
+    with pytest.raises(AttributeError):
+        setattr(artifact, name, {"trusted": True})
+    with pytest.raises(AttributeError):
+        object.__setattr__(artifact, name, {"trusted": True})
+    assert not hasattr(artifact, name)
+
+
+def test_hash_is_stable_after_every_attempted_mutation() -> None:
+    artifact = _artifact()
+    before = hash(artifact)
+    for name in (*_EXPECTED_ARTIFACT_FIELDS, "root_authentic", "_cache", "__dict__"):
+        with pytest.raises(AttributeError):
+            setattr(artifact, name, b"forged")
+        with pytest.raises(AttributeError):
+            object.__setattr__(artifact, name, b"forged")
+        with pytest.raises(AttributeError):
+            delattr(artifact, name)
+    assert hash(artifact) == before
+    assert hash(artifact) == hash(_artifact())
+
+
+def test_dictionary_key_and_set_membership_stay_stable() -> None:
+    first = _artifact()
+    second = _artifact()
+    mapping = {first: "proof"}
+    registry = {first}
+    assert mapping[second] == "proof"
+    assert second in registry
+    with pytest.raises(AttributeError):
+        object.__setattr__(second, "delegated_public_key", bytes(32))
+    assert mapping[second] == "proof"
+    assert second in registry
+    assert len({first, second}) == 1
+
+
+def test_equality_is_stable_and_strictly_type_bound() -> None:
+    first = _artifact()
+    second = _artifact()
+    assert first == second
+    assert not first != second
+    plain = tuple(first)
+    assert first != plain
+    assert plain != first  # the reflected tuple comparison must not match a bare sequence either
+    assert not first == plain
+    assert first != object()
+    with pytest.raises(AttributeError):
+        object.__setattr__(second, "min_time", 0)
+    assert first == second
+
+
+def test_inequality_is_defined_explicitly_and_not_inherited_from_tuple() -> None:
+    """tuple supplies __ne__; if it were inherited, `!=` would answer from unvalidated stored elements."""
+    assert RoughtimeV19CertificateVerification.__ne__ is not tuple.__ne__
+    assert "__ne__" in vars(RoughtimeV19CertificateVerification)
+
+
+@pytest.mark.parametrize("operation", ["lt", "le", "gt", "ge"])
+def test_ordering_is_refused_rather_than_inherited_from_tuple(operation) -> None:
+    import operator
+
+    first = _artifact()
+    second = _artifact()
+    with pytest.raises(TypeError):
+        getattr(operator, operation)(first, second)
+
+
+@pytest.mark.parametrize("operand", [(), (1,), 2])
+def test_concatenation_and_repetition_are_refused(operand) -> None:
+    artifact = _artifact()
+    with pytest.raises(TypeError):
+        _ = artifact + operand
+    with pytest.raises(TypeError):
+        _ = artifact * operand
+
+
+def test_element_exposing_sequence_surfaces_validate_first() -> None:
+    artifact = _artifact()
+    assert _V01_DELE_RAW in artifact
+    assert artifact.count(_V01_DELE_RAW) == 1
+    assert artifact.index(_V01_DELE_RAW) == 4
+    assert artifact.__getnewargs__() == (tuple(artifact),)
+    assert len(artifact) == 8
+
+
+def test_copy_deepcopy_and_pickle_stay_valid_and_immutable() -> None:
+    artifact = _artifact()
+    clones = (
+        copy.copy(artifact),
+        copy.deepcopy(artifact),
+        pickle.loads(pickle.dumps(artifact)),  # noqa: S301 - round-trips this module's own artifact only
+    )
+    for clone in clones:
+        assert type(clone) is RoughtimeV19CertificateVerification
+        assert clone == artifact
+        assert hash(clone) == hash(artifact)
+        assert not hasattr(clone, "__dict__")
+        assert clone.delegation_raw == _V01_DELE_RAW
+        assert clone.certificate_signature == _V01_SIGNATURE
+        with pytest.raises(AttributeError):
+            object.__setattr__(clone, "min_time", 0)
+
+
+def test_verifier_artifact_fields_are_byte_identical_to_the_accepted_vectors() -> None:
+    response = _response()
+    artifact = verify_roughtime_v19_certificate(response, _V01_PUBLIC_KEY)
+    assert artifact.response_raw == response.raw
+    assert artifact.long_term_public_key == _V01_PUBLIC_KEY
+    assert artifact.certificate_raw == response.certificate.raw
+    assert artifact.certificate_signature == _V01_SIGNATURE
+    assert artifact.delegation_raw == _V01_DELE_RAW
+    assert artifact.delegated_public_key == _V01_DELE_RAW[32:64]
+    assert artifact.min_time == _V01_MINT
+    assert artifact.max_time == _V01_MAXT
+    assert tuple(artifact) == (
+        response.raw,
+        _V01_PUBLIC_KEY,
+        response.certificate.raw,
+        _V01_SIGNATURE,
+        _V01_DELE_RAW,
+        _V01_DELE_RAW[32:64],
+        _V01_MINT,
+        _V01_MAXT,
+    )
+
+
+# ============================================================================================================
+# P1 regression: no hollow or forged exact-type instance is consumable on ANY surface
+# ============================================================================================================
+_HOLLOW_LABELS = (
+    "empty",
+    "short_by_one",
+    "long_by_one",
+    "all_none",
+    "forged_response_raw",
+    "forged_long_term_public_key",
+    "forged_certificate_signature",
+    "forged_delegation_raw",
+    "forged_delegated_public_key",
+    "forged_min_time",
+    "forged_max_time",
+    "wrong_element_type",
+)
+
+
+def _hollow_variant(label: str) -> RoughtimeV19CertificateVerification:
+    """Fabricate an exact-type instance through the tuple base, bypassing the public keyword constructor.
+
+    Built lazily inside each test, never at import time: a module-level fixture would turn any unrelated
+    cryptographic regression into an opaque collection error instead of a named test failure.
+    """
+    state = tuple(_artifact())
+    forged = {
+        "empty": (),
+        "short_by_one": state[:7],
+        "long_by_one": (*state, b"extra"),
+        "all_none": (None,) * 8,
+        "forged_response_raw": (_response_packet(dele=_V11_DELE_RAW), *state[1:]),
+        "forged_long_term_public_key": (state[0], _V09_PUBLIC_KEY, *state[2:]),
+        "forged_certificate_signature": (*state[:3], bytes(64), *state[4:]),
+        "forged_delegation_raw": (*state[:4], _V11_DELE_RAW, *state[5:]),
+        "forged_delegated_public_key": (*state[:5], bytes(32), *state[6:]),
+        "forged_min_time": (*state[:6], 0, state[7]),
+        "forged_max_time": (*state[:7], 0),
+        "wrong_element_type": (bytearray(state[0]), *state[1:]),
+    }[label]
+    return tuple.__new__(RoughtimeV19CertificateVerification, forged)
+
+
+_CONSUMPTION_SURFACES = (
+    ("first_field_property", lambda obj: obj.response_raw),
+    ("key_field_property", lambda obj: obj.long_term_public_key),
+    ("last_field_property", lambda obj: obj.max_time),
+    ("repr", repr),
+    ("hash", hash),
+    ("equality_with_self", lambda obj: obj == obj),
+    ("inequality_with_self", lambda obj: obj != obj),
+    ("membership", lambda obj: _V09_PUBLIC_KEY in obj),
+    ("count", lambda obj: obj.count(_V09_PUBLIC_KEY)),
+    ("index", lambda obj: obj.index(_V09_PUBLIC_KEY)),
+    ("iteration", lambda obj: list(iter(obj))),
+    ("tuple_conversion", tuple),
+    ("list_conversion", list),
+    ("indexing", lambda obj: obj[0]),
+    ("getnewargs", lambda obj: obj.__getnewargs__()),
+    ("copy", copy.copy),
+    ("deepcopy", copy.deepcopy),
+    ("pickle", pickle.dumps),
+)
+
+
+@pytest.mark.parametrize("label", _HOLLOW_LABELS)
+@pytest.mark.parametrize(
+    "surface,consume", _CONSUMPTION_SURFACES, ids=lambda value: value if isinstance(value, str) else ""
+)
+def test_hollow_or_forged_instance_fails_closed_on_every_consumption_surface(surface, consume, label) -> None:
+    variant = _hollow_variant(label)
     with pytest.raises(RoughtimeV19CertificateVerificationError) as excinfo:
-        RoughtimeV19CertificateVerification.__post_init__(foreign)
-    assert excinfo.value.reason is R.ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT
+        consume(variant)
+    assert excinfo.value.reason is R.ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT, f"{label}/{surface}"
 
 
-def test_artifact_is_frozen() -> None:
-    artifact = RoughtimeV19CertificateVerification(**_valid_artifact_fields())
-    with pytest.raises(FrozenInstanceError):
-        artifact.min_time = 5
+@pytest.mark.parametrize("label", _HOLLOW_LABELS)
+def test_forged_instance_never_equals_or_collides_with_a_genuine_proof(label) -> None:
+    genuine = _artifact()
+    variant = _hollow_variant(label)
+    with pytest.raises(RoughtimeV19CertificateVerificationError):
+        _ = genuine == variant
+    with pytest.raises(RoughtimeV19CertificateVerificationError):
+        _ = variant == genuine
+    with pytest.raises(RoughtimeV19CertificateVerificationError):
+        _ = variant in {genuine}
 
 
 # ============================================================================================================
@@ -974,10 +1217,11 @@ def _define_ordinary_subclass() -> type:
     return _Ordinary
 
 
-def _define_post_init_subclass() -> type:
+def _define_new_override_subclass() -> type:
     class _NoValidation(RoughtimeV19CertificateVerification):
-        def __post_init__(self) -> None:
-            _SEAL_LEDGER.append("__post_init__")
+        def __new__(cls, **fields: object) -> object:
+            _SEAL_LEDGER.append("__new__")
+            return tuple.__new__(cls, tuple(fields.values()))
 
     return _NoValidation
 
@@ -991,9 +1235,27 @@ def _define_getattribute_subclass() -> type:
     return _Hostile
 
 
+def _define_equality_override_subclass() -> type:
+    class _AlwaysEqual(RoughtimeV19CertificateVerification):
+        def __eq__(self, other: object) -> bool:
+            _SEAL_LEDGER.append("__eq__")
+            return True
+
+        def __hash__(self) -> int:
+            _SEAL_LEDGER.append("__hash__")
+            return 0
+
+    return _AlwaysEqual
+
+
 def test_every_subclass_form_is_sealed() -> None:
     _SEAL_LEDGER.clear()
-    for definer in (_define_ordinary_subclass, _define_post_init_subclass, _define_getattribute_subclass):
+    for definer in (
+        _define_ordinary_subclass,
+        _define_new_override_subclass,
+        _define_getattribute_subclass,
+        _define_equality_override_subclass,
+    ):
         with pytest.raises(TypeError) as excinfo:
             definer()
         assert type(excinfo.value) is TypeError
