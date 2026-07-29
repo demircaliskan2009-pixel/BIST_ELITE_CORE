@@ -15,6 +15,7 @@ every encoder is test-only and never calls a production encoder.
 from __future__ import annotations
 
 import ast
+import contextlib
 import copy
 import gc
 import hashlib
@@ -627,6 +628,36 @@ def test_inclusion_type_gate_precedes_signed_response_type_gate() -> None:
     assert excinfo.value.reason is R.WRONG_INPUT_TYPE
 
 
+def test_both_exact_type_gates_complete_before_any_k4_lifecycle_surface_is_consumed(monkeypatch) -> None:
+    """A GENUINE K4 input must stay untouched while the SECOND exact-type gate is still pending.
+
+    Behavioural, not structural. A deterministic tripwire replaces the first K4 consumption point the
+    verifier reaches - the exact base ``RoughtimeV19RequestInclusion.__post_init__`` it re-invokes before it
+    reads any K4 field - and the verifier is then called with a genuine first input and an invalid second
+    input. Observing ``wrong_input_type`` while the tripwire stays silent proves the second gate completed
+    first; moving that gate below any K4 access makes the tripwire fire and fails this named test.
+
+    The trailing control proves the tripwire is live rather than an inert patch: with BOTH gates satisfied the
+    very same call reaches it.
+    """
+    inclusion, signed_response = _pair()
+    reached: list[str] = []
+
+    def _tripwire(*args: object, **kwargs: object) -> None:
+        reached.append("__post_init__")
+        raise AssertionError("K4 __post_init__ ran before both exact-type gates completed")
+
+    monkeypatch.setattr(RoughtimeV19RequestInclusion, "__post_init__", _tripwire)
+    for bad in (object(), None, b"", 0, "signed", (), _LONG_TERM_PUBLIC_KEY, inclusion):
+        with pytest.raises(RoughtimeV19RequestInSignedResponseError) as excinfo:
+            verify_roughtime_v19_request_in_signed_response(inclusion, bad)
+        assert excinfo.value.reason is R.WRONG_INPUT_TYPE
+        assert reached == [], bad
+    with pytest.raises(AssertionError):
+        verify_roughtime_v19_request_in_signed_response(inclusion, signed_response)
+    assert reached == ["__post_init__"]
+
+
 def test_prerequisite_types_are_sealed_so_no_hostile_override_can_run() -> None:
     """Both prerequisites are sealed at class-definition time - the strongest possible form."""
     for base, message in (
@@ -1029,29 +1060,228 @@ def test_altered_anchor_value_rejected() -> None:
 # ============================================================================================================
 # Public consumption surfaces
 # ============================================================================================================
+# The EXACT public-consumption inventory required by the independent Class-C audit, written as an immutable
+# literal and compared name-for-name against the harness below. Deleting one parameterized case therefore
+# shrinks the harness and fails a NAMED test instead of silently reducing coverage.
+_REQUIRED_CONSUMPTION_SURFACES = (
+    "request_raw",
+    "response_raw",
+    "long_term_public_key",
+    "delegated_public_key",
+    "signed_response_raw",
+    "signed_root",
+    "signed_midpoint",
+    "signed_radius",
+    "signed_version",
+    "signed_versions",
+    "request_leaf",
+    "request_index",
+    "request_path_length",
+    "repr",
+    "str",
+    "bool_dunder",
+    "bool",
+    "truth",
+    "hash",
+    "eq",
+    "ne",
+    "reduce",
+    "reduce_ex",
+    "copy",
+    "deepcopy",
+    "pickle_dumps",
+    "pickle_roundtrip",
+)
+
+
+def _consume_eq(artifact):
+    return operator.eq(artifact, _artifact())
+
+
+def _consume_ne(artifact):
+    return operator.ne(artifact, _artifact())
+
+
+def _consume_reduce(artifact):
+    return artifact.__reduce__()
+
+
+def _consume_reduce_ex(artifact):
+    return artifact.__reduce_ex__(2)
+
+
+def _consume_pickle_roundtrip(artifact):
+    return pickle.loads(pickle.dumps(artifact))  # noqa: S301 - round-trips this module's own artifact only
+
+
 _CONSUMPTION_SURFACES = (
     *((name, operator.attrgetter(name)) for name in _EXPECTED_PUBLIC_FIELDS),
     ("repr", repr),
     ("str", str),
-    ("hash", hash),
+    ("bool_dunder", RoughtimeV19RequestInSignedResponse.__bool__),
     ("bool", bool),
     ("truth", operator.truth),
-    ("reduce", lambda obj: obj.__reduce__()),
-    ("reduce_ex", lambda obj: obj.__reduce_ex__(2)),
+    ("hash", hash),
+    ("eq", _consume_eq),
+    ("ne", _consume_ne),
+    ("reduce", _consume_reduce),
+    ("reduce_ex", _consume_reduce_ex),
     ("copy", copy.copy),
     ("deepcopy", copy.deepcopy),
-    ("pickle", pickle.dumps),
+    ("pickle_dumps", pickle.dumps),
+    ("pickle_roundtrip", _consume_pickle_roundtrip),
 )
+_CONSUMPTION_SURFACE_IDS = [name for name, _ in _CONSUMPTION_SURFACES]
 
 
-@pytest.mark.parametrize(
-    "surface,consume", _CONSUMPTION_SURFACES, ids=lambda value: value if isinstance(value, str) else ""
+# --- The four invalid artifact states, as an exact immutable inventory ------------------------------------
+# Each factory is a context manager so every closure-local registry mutation is restored in a finally block,
+# whatever the parameterized case does. All of them are deterministic: no sleep, no probabilistic id() reuse
+# and no repeated collection loop.
+@contextlib.contextmanager
+def _hollow_state():
+    """A fabricated exact-type instance with no registry entry at all."""
+    yield object.__new__(RoughtimeV19RequestInSignedResponse)
+
+
+@contextlib.contextmanager
+def _dead_owner_state():
+    """A registry entry whose owning weak reference is already dead."""
+    registry = _closure_registry()
+    state = _registered_state(_artifact())
+    doomed = _artifact()
+    reference = weakref.ref(doomed)
+    del doomed
+    gc.collect()
+    assert reference() is None
+    impostor = object.__new__(RoughtimeV19RequestInSignedResponse)
+    key = id(impostor)
+    assert key not in registry
+    registry[key] = (reference, state)
+    try:
+        yield impostor
+    finally:
+        registry.pop(key, None)
+
+
+@contextlib.contextmanager
+def _mismatched_owner_state():
+    """A registry entry whose live weak reference owns a DIFFERENT artifact."""
+    registry = _closure_registry()
+    owner = _artifact()
+    state = _registered_state(owner)
+    impostor = object.__new__(RoughtimeV19RequestInSignedResponse)
+    key = id(impostor)
+    assert key not in registry
+    registry[key] = (weakref.ref(owner), state)
+    try:
+        yield impostor
+    finally:
+        registry.pop(key, None)
+        assert bool(owner) is True
+
+
+@contextlib.contextmanager
+def _inconsistent_registered_state():
+    """A correctly owned registry entry carrying well-shaped but unprovable anchors."""
+    registry = _closure_registry()
+    victim = _artifact()
+    key = id(victim)
+    original = registry[key]
+    other_request, _ = _packets(request_nonce=bytes(range(70, 102)))
+    forged = (other_request, original[1][1], original[1][2])
+    registry[key] = (weakref.ref(victim), forged)
+    try:
+        yield victim
+    finally:
+        registry[key] = original
+        assert bool(victim) is True
+
+
+_INVALID_ARTIFACT_STATES = (
+    ("hollow", _hollow_state),
+    ("dead_owner", _dead_owner_state),
+    ("mismatched_owner", _mismatched_owner_state),
+    ("inconsistent_registered_state", _inconsistent_registered_state),
 )
+_REQUIRED_INVALID_ARTIFACT_STATES = (
+    "hollow",
+    "dead_owner",
+    "mismatched_owner",
+    "inconsistent_registered_state",
+)
+_INVALID_ARTIFACT_STATE_IDS = [name for name, _ in _INVALID_ARTIFACT_STATES]
+
+
+def test_public_consumption_surface_inventory_is_exact_and_complete() -> None:
+    """Pin the complete 27-surface public-consumption inventory by exact name, exact order and exact count.
+
+    Derivation of 27 from the independent Class-C audit harness, which enumerated 25 named items: the 13
+    public properties; ``repr``; ``str``; the direct ``__bool__`` call; ``bool()``; ``operator.truth``;
+    ``hash``; equality; inequality; the direct ``__reduce__``; the direct ``__reduce_ex__``; ``copy.copy``;
+    ``copy.deepcopy``; and pickle consumption. Truthiness contributes TWO invocations (``bool`` and
+    ``operator.truth``) and pickle contributes TWO (``pickle.dumps`` serialization and the
+    ``pickle.loads(pickle.dumps(...))`` round trip), which is exactly how 25 named items become the 27
+    invoked surfaces the audit matrix executed.
+
+    The inventory is a fixed literal rather than a discovered one, so it cannot shrink with the harness.
+    """
+    assert type(_CONSUMPTION_SURFACES) is tuple
+    assert type(_REQUIRED_CONSUMPTION_SURFACES) is tuple
+    assert tuple(name for name, _ in _CONSUMPTION_SURFACES) == _REQUIRED_CONSUMPTION_SURFACES
+    assert len(_CONSUMPTION_SURFACES) == 27
+    assert len(_REQUIRED_CONSUMPTION_SURFACES) == 27
+    assert len(set(_REQUIRED_CONSUMPTION_SURFACES)) == 27
+    assert _REQUIRED_CONSUMPTION_SURFACES[: len(_EXPECTED_PUBLIC_FIELDS)] == _EXPECTED_PUBLIC_FIELDS
+    assert _CONSUMPTION_SURFACE_IDS == list(_REQUIRED_CONSUMPTION_SURFACES)
+    for name, consume in _CONSUMPTION_SURFACES:
+        assert type(name) is str, name
+        assert callable(consume), name
+
+
+def test_invalid_artifact_state_inventory_is_exact_and_complete() -> None:
+    """Pin the four invalid artifact states the complete negative matrix must cover."""
+    assert type(_INVALID_ARTIFACT_STATES) is tuple
+    assert tuple(name for name, _ in _INVALID_ARTIFACT_STATES) == _REQUIRED_INVALID_ARTIFACT_STATES
+    assert len(_INVALID_ARTIFACT_STATES) == 4
+    assert len(set(_REQUIRED_INVALID_ARTIFACT_STATES)) == 4
+    assert _INVALID_ARTIFACT_STATE_IDS == list(_REQUIRED_INVALID_ARTIFACT_STATES)
+    for name, factory in _INVALID_ARTIFACT_STATES:
+        assert type(name) is str, name
+        assert callable(factory), name
+
+
+@pytest.mark.parametrize(("surface", "consume"), _CONSUMPTION_SURFACES, ids=_CONSUMPTION_SURFACE_IDS)
 def test_hollow_instance_fails_closed_on_every_public_surface(surface, consume) -> None:
     hollow = object.__new__(RoughtimeV19RequestInSignedResponse)
     with pytest.raises(RoughtimeV19RequestInSignedResponseError) as excinfo:
         consume(hollow)
     assert excinfo.value.reason is R.ARTIFACT_AGGREGATE_INCONSISTENT, surface
+
+
+@pytest.mark.parametrize(("surface", "consume"), _CONSUMPTION_SURFACES, ids=_CONSUMPTION_SURFACE_IDS)
+def test_every_public_consumption_surface_succeeds_for_a_genuine_artifact(surface, consume) -> None:
+    """Positive half of the matrix: a genuine proof must remain consumable on all 27 surfaces."""
+    artifact = _artifact()
+    result = consume(artifact)
+    assert result is not None, surface
+
+
+@pytest.mark.parametrize(("state", "factory"), _INVALID_ARTIFACT_STATES, ids=_INVALID_ARTIFACT_STATE_IDS)
+@pytest.mark.parametrize(("surface", "consume"), _CONSUMPTION_SURFACES, ids=_CONSUMPTION_SURFACE_IDS)
+def test_every_invalid_artifact_state_fails_closed_on_every_public_consumption_surface(
+    surface, consume, state, factory
+) -> None:
+    """The complete 4-state x 27-surface negative matrix: 108 cases, one closed reason, no raw leak.
+
+    ``pytest.raises`` is bound to this module's exact error class, so any raw ``KeyError``, ``LookupError``,
+    ``ReferenceError``, ``AttributeError``, ``IndexError``, ``TypeError``, ``ValueError`` or prerequisite
+    domain error would escape and fail the case rather than be tolerated.
+    """
+    with factory() as invalid, pytest.raises(RoughtimeV19RequestInSignedResponseError) as excinfo:
+        consume(invalid)
+    assert type(excinfo.value) is RoughtimeV19RequestInSignedResponseError, (state, surface)
+    assert excinfo.value.reason is R.ARTIFACT_AGGREGATE_INCONSISTENT, (state, surface)
 
 
 def test_truthiness_returns_exact_true_for_a_genuine_proof() -> None:
@@ -1686,6 +1916,60 @@ def test_no_raw_prerequisite_exception_leaks_from_the_public_surfaces() -> None:
 # ============================================================================================================
 # Import policy, absence of new cryptography, and protected invariants
 # ============================================================================================================
+def test_output_construction_consumes_only_the_freshly_rebuilt_artifacts() -> None:
+    """Pin the anchor PROVENANCE of the returned artifact to the fresh rebuilds, never the caller objects.
+
+    Both prerequisite types are exact and sealed, and both caller objects are completely re-proven before this
+    point, so reading ``signed_response_verification.long_term_public_key`` instead of
+    ``fresh_signed_response.long_term_public_key`` is behaviourally indistinguishable through the supported
+    public boundary: single-threaded, with no hostile override reachable past the exact-type gates, the two
+    values cannot disagree. The relation is therefore pinned as dataflow, which the accepted contract permits
+    only for exactly this case.
+
+    This asserts the exact constructor keyword SOURCE - not merely that a fresh artifact exists somewhere in
+    the function - and additionally pins each fresh name to a single assignment from the exact prerequisite
+    constructor, so the name cannot be rebound to a caller object and then read.
+    """
+    node = _production_function("verify_roughtime_v19_request_in_signed_response")
+    parameters = tuple(argument.arg for argument in node.args.args)
+    assert parameters == ("request_inclusion", "signed_response_verification")
+    returns = [child for child in ast.walk(node) if isinstance(child, ast.Return)]
+    assert len(returns) == 1
+    call = returns[0].value
+    assert isinstance(call, ast.Call)
+    assert isinstance(call.func, ast.Name)
+    assert call.func.id == "RoughtimeV19RequestInSignedResponse"
+    assert call.args == []
+    sources: dict[str, tuple[str, str]] = {}
+    for keyword in call.keywords:
+        assert keyword.arg is not None, "dictionary expansion would hide the anchor provenance"
+        assert isinstance(keyword.value, ast.Attribute), keyword.arg
+        assert isinstance(keyword.value.value, ast.Name), keyword.arg
+        sources[keyword.arg] = (keyword.value.value.id, keyword.value.attr)
+    assert sources == {
+        "request_raw": ("fresh_inclusion", "request_raw"),
+        "response_raw": ("fresh_inclusion", "response_raw"),
+        "long_term_public_key": ("fresh_signed_response", "long_term_public_key"),
+    }
+    bindings: dict[str, list[ast.expr]] = {}
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Assign):
+            continue
+        for target in child.targets:
+            if isinstance(target, ast.Name) and target.id in ("fresh_inclusion", "fresh_signed_response"):
+                bindings.setdefault(target.id, []).append(child.value)
+    assert sorted(bindings) == ["fresh_inclusion", "fresh_signed_response"]
+    for name, constructor in (
+        ("fresh_inclusion", "RoughtimeV19RequestInclusion"),
+        ("fresh_signed_response", "RoughtimeV19SignedResponseVerification"),
+    ):
+        assert len(bindings[name]) == 1, name
+        bound = bindings[name][0]
+        assert isinstance(bound, ast.Call), name
+        assert isinstance(bound.func, ast.Name), name
+        assert bound.func.id == constructor, name
+
+
 def test_verifier_rebuilds_both_prerequisites_instead_of_trusting_the_caller_objects() -> None:
     """Structural pin for a mandated step whose behaviour is redundant by construction.
 
