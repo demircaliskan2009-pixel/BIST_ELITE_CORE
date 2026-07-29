@@ -468,6 +468,17 @@ def test_equality_and_hashing_are_deterministic() -> None:
     assert len({first, second}) == 1
 
 
+def test_genuine_artifact_truthiness_is_exact_true_after_complete_revalidation() -> None:
+    assert bool(_artifact()) is True
+
+
+def test_hollow_artifact_truthiness_raises_the_exact_closed_reason() -> None:
+    hollow = object.__new__(RoughtimeV19CertificateVerification)
+    with pytest.raises(RoughtimeV19CertificateVerificationError) as excinfo:
+        bool(hollow)
+    assert excinfo.value.reason is R.ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT
+
+
 @pytest.mark.parametrize("midpoint", [100, 150, 200])
 def test_v20_v22_interval_boundaries_still_verify(midpoint) -> None:
     """V20-V22: MIDP sits outside the signed DELE, so boundary midpoints never disturb the CERT signature."""
@@ -1418,6 +1429,15 @@ def test_sequence_protocol_is_absent_from_the_artifact(name) -> None:
     assert not hasattr(artifact, name), name
 
 
+def test_truthiness_does_not_add_a_len_or_sequence_protocol() -> None:
+    artifact = _artifact()
+    assert "__bool__" in vars(RoughtimeV19CertificateVerification)
+    assert "__len__" not in vars(RoughtimeV19CertificateVerification)
+    assert bool(artifact) is True
+    with pytest.raises(TypeError):
+        len(artifact)
+
+
 def test_sequence_operations_fail_without_exposing_proof_state() -> None:
     artifact = _artifact()
     operations = (
@@ -1570,7 +1590,9 @@ def _artifact_method_node(name: str) -> ast.FunctionDef:
     return matches[0]
 
 
-@pytest.mark.parametrize("method_name", (*_EXPECTED_ARTIFACT_FIELDS, "__repr__", "__hash__", "__eq__", "__reduce__"))
+@pytest.mark.parametrize(
+    "method_name", (*_EXPECTED_ARTIFACT_FIELDS, "__bool__", "__repr__", "__hash__", "__eq__", "__reduce__")
+)
 def test_every_public_state_consumer_revalidates_through_proven_state(method_name) -> None:
     """Static causality pin: removing a public consumer's revalidation names that consumer as a failure."""
     method = _artifact_method_node(method_name)
@@ -1578,6 +1600,11 @@ def test_every_public_state_consumer_revalidates_through_proven_state(method_nam
         node.func.id for node in ast.walk(method) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
     assert "proven_state" in calls, method_name
+
+
+def test_production_documents_truthiness_as_a_revalidating_public_surface() -> None:
+    source = _PRODUCTION_PATH.read_text(encoding="utf-8")
+    assert source.count("``bool``/truthiness") == 2
 
 
 def test_production_documents_exact_option_a_trust_boundary() -> None:
@@ -1720,7 +1747,7 @@ def test_whitebox_mismatched_weakref_never_authenticates_another_object() -> Non
     assert key not in registry
     registry[key] = (weakref.ref(genuine), state)
     try:
-        for consume in (lambda obj: obj.response_raw, repr, hash, lambda obj: obj.__reduce__()):
+        for consume in (lambda obj: obj.response_raw, bool, repr, hash, lambda obj: obj.__reduce__()):
             with pytest.raises(RoughtimeV19CertificateVerificationError) as excinfo:
                 consume(impostor)
             assert excinfo.value.reason is R.ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT
@@ -1745,10 +1772,27 @@ def test_whitebox_dead_weakref_entry_never_authenticates() -> None:
     registry[key] = (reference, state)
     try:
         with pytest.raises(RoughtimeV19CertificateVerificationError) as excinfo:
-            _ = impostor.response_raw
+            bool(impostor)
         assert excinfo.value.reason is R.ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT
     finally:
         registry.pop(key, None)
+
+
+def test_truthiness_rejects_a_well_shaped_but_inconsistent_registered_state() -> None:
+    registry = _closure_registry()
+    victim = _artifact()
+    key = id(victim)
+    original = registry[key]
+    reference, state = original
+    forged = (*state[:6], state[6] + 1, state[7])
+    registry[key] = (reference, forged)
+    try:
+        with pytest.raises(RoughtimeV19CertificateVerificationError) as excinfo:
+            bool(victim)
+        assert excinfo.value.reason is R.ARTIFACT_CERTIFICATE_VERIFICATION_INCONSISTENT
+    finally:
+        registry[key] = original
+    assert bool(victim) is True
 
 
 def test_whitebox_stale_callback_deletes_only_the_entry_its_exact_weakref_owns() -> None:
@@ -1796,6 +1840,7 @@ _CONSUMPTION_SURFACES = (
     ("max_time", lambda obj: obj.max_time),
     ("repr", repr),
     ("hash", hash),
+    ("bool", bool),
     ("reduce", lambda obj: obj.__reduce__()),
     ("copy", copy.copy),
     ("deepcopy", copy.deepcopy),
