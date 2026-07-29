@@ -1663,6 +1663,61 @@ def test_a_dead_weakref_entry_never_authenticates() -> None:
         registry.pop(key, None)
 
 
+def test_srep_stale_weakref_callback_does_not_delete_replacement_owner_entry() -> None:
+    """A stale callback must delete ONLY the registry entry its own exact weakref owns.
+
+    CPython may reuse an integer identity after a collection, so an obsolete callback firing late could
+    otherwise evict a NEWER artifact's entry and silently turn a valid proof into a fail-closed error. The
+    replacement entry is therefore installed under the original key DETERMINISTICALLY instead of waiting for
+    a probabilistic id() reuse, and the callback invoked here is the exact one production attached to the
+    stored weakref (``reference.__callback__``) - never a test-side copy of its ownership condition.
+
+    White-box lifecycle invariant only. Reading and writing the closure-local registry is an EXCLUDED
+    private-state operation under the Option-A boundary: it does not widen the public attacker model and
+    claims no resistance to arbitrary private closure mutation.
+    """
+    gc.collect()  # Clear pending cyclic garbage first so the leak assertion below is exact, not approximate.
+    registry = _closure_registry()
+    baseline = len(registry)
+    owner = _artifact()
+    replacement = _artifact()
+    owner_key = id(owner)
+    replacement_key = id(replacement)
+    assert owner_key != replacement_key
+    assert len(registry) == baseline + 2
+
+    owner_reference, owner_state = registry[owner_key]
+    replacement_entry = registry[replacement_key]
+    replacement_reference, replacement_state = replacement_entry
+    assert replacement_reference is not owner_reference
+
+    stale_callback = owner_reference.__callback__
+    assert stale_callback is not None
+
+    # The reused-identity accident: the newer artifact's entry now sits under the older artifact's key.
+    registry[owner_key] = replacement_entry
+    try:
+        stale_callback(owner_reference)
+        assert owner_key in registry
+        surviving_reference, surviving_state = registry[owner_key]
+        assert surviving_reference is replacement_reference
+        assert surviving_state is replacement_state
+        assert surviving_reference() is replacement
+    finally:
+        registry[owner_key] = (owner_reference, owner_state)
+
+    # Both proofs stay fully consumable, and neither entry leaks once its artifact dies.
+    assert bool(owner) is True
+    assert bool(replacement) is True
+    assert len(registry) == baseline + 2
+    del owner
+    del replacement
+    gc.collect()
+    assert owner_key not in registry
+    assert replacement_key not in registry
+    assert len(registry) == baseline
+
+
 def test_registry_lookup_never_invokes_artifact_equality_or_hash() -> None:
     registry = _closure_registry()
     _artifact()
