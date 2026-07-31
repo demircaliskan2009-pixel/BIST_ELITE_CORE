@@ -104,6 +104,7 @@ Versioned specification: https://datatracker.ietf.org/doc/html/draft-ietf-ntp-ro
 
 from __future__ import annotations
 
+import re
 import weakref
 from dataclasses import fields
 from enum import Enum
@@ -330,24 +331,44 @@ _ANCHOR_FIELD_NAMES = (
     "response_raw",
     "long_term_public_key",
 )
-_BYTES_ANCHOR_FIELD_NAMES = (
-    "request_raw",
-    "response_raw",
-    "long_term_public_key",
-)
-
-# The COMPLETE and EXCLUSIVE public property inventory, in exact declaration order. Index i of the validated
-# view returned by proven_state is public property i.
-_PUBLIC_FIELD_NAMES = (
-    "operational_day",
-    "attested_operational_day_evidence_digest",
-    "request_raw",
-    "response_raw",
-    "long_term_public_key",
-    "signed_root",
-)
-
 _DAY_TYPE_NAME = "PaperAttestedOperationalDayEvidence"
+
+# D11 scope / clock gates, re-pinned verbatim from the governed-day builder's own admission rules so a
+# RESEALED day cannot smuggle a syntactically plain but forbidden token (an out-of-scope exchange, live,
+# order, scheduler, connector or capital term, or a wall-clock term) past a re-validation that the upstream
+# builder would have refused. The excluded vocabulary appears ONLY inside the rejection pattern below.
+_SCOPE_EXCLUSION_PATTERN = re.compile(r"\b(?:bist\w*|borsa\w*|matriks\w*)|\bkap\b", re.IGNORECASE)
+_FORBIDDEN_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])orders?(?![A-Za-z0-9])"
+    r"|\b(?:private|order_router|place_order|live_order|auto_loop|connector|connector_ready|"
+    r"credential|credentials|scheduler|shadow|route_id|execution_instruction|deribit|"
+    r"venue_order_id|exchange_order_id|client_order_id|readiness|service|real_money|paper_adapter|"
+    r"capital|margin|balance|reservation|real_account_equity|account_equity|real_equity)\w*"
+    r"|crypto_core\.(?:service|execution|venue|runtime|orchestrator|temporal|session|data|portfolio)\b"
+    r"|\blive(?:\b|[_-]\w+)",
+    re.IGNORECASE,
+)
+_SAFE_MARKET_DATA_TERMS = ("limit_order_book", "order_book", "order_flow")
+_CLOCK_TOKENS = (
+    "wall_clock",
+    "wall-clock",
+    "wallclock",
+    "datetime.now",
+    "datetime.utcnow",
+    "utcnow",
+    "time.time_ns",
+    "time.time",
+    "perf_counter",
+    "monotonic",
+    "server_time",
+    "exchange_time",
+    "live_time",
+    "real_time",
+    "realtime",
+    "system_time",
+    "clock",
+    "now()",
+)
 
 _ERROR_REASON_TYPE_MESSAGE = (
     "RoughtimeV19AttestedOperationalDayDigestBindingError requires a "
@@ -442,6 +463,34 @@ def _is_hex64(value: str) -> bool:
     return len(value) == _SHA256_HEX_LENGTH and all(char in _HEX_CHARS for char in value)
 
 
+def _has_scope_violation(*texts: str) -> bool:
+    """Mirror of the governed-day builder's scope admission rule (out-of-scope venue/live/order/capital terms)."""
+
+    for text in texts:
+        if text == "":
+            continue
+        if _SCOPE_EXCLUSION_PATTERN.search(text):
+            return True
+        scrubbed = text
+        for safe_term in _SAFE_MARKET_DATA_TERMS:
+            scrubbed = re.sub(re.escape(safe_term), " ", scrubbed, flags=re.IGNORECASE)
+        if _FORBIDDEN_PATTERN.search(scrubbed):
+            return True
+    return False
+
+
+def _has_clock_token(*texts: str) -> bool:
+    """Mirror of the governed-day builder's wall-clock token admission rule."""
+
+    for text in texts:
+        if text == "":
+            continue
+        lowered = text.lower()
+        if any(token in lowered for token in _CLOCK_TOKENS):
+            return True
+    return False
+
+
 def _validated_day_digest(
     operational_day: object,
     reason: RoughtimeV19AttestedOperationalDayDigestBindingReason,
@@ -505,7 +554,11 @@ def _validated_day_digest(
         key, item = pair
         if type(key) is not str or type(item) is not str:
             raise _err(reason)
-        if not _is_plain_text(key) or item != item.strip() or not _is_control_free(item):
+        # Mirror the governed-day builder's normalization exactly: stripped, control-free key AND value. An
+        # EMPTY key is admitted upstream, so it must not be rejected here.
+        if key != key.strip() or not _is_control_free(key):
+            raise _err(reason)
+        if item != item.strip() or not _is_control_free(item):
             raise _err(reason)
         metadata_keys.append(key)
     if list(metadata) != sorted(metadata):
@@ -545,6 +598,16 @@ def _validated_day_digest(
     for name in _DAY_IDENTITY_FIELDS:
         if not _is_plain_text(values[name]):  # type: ignore[arg-type]
             raise _err(reason)
+    # D11 scope / clock admission, re-applied to exactly the texts the governed-day builder screens. Without
+    # this a RESEALED day carrying a syntactically plain but forbidden token would be authenticated here even
+    # though the builder would never have admitted it.
+    scope_texts = tuple(values[name] for name in _DAY_IDENTITY_FIELDS) + tuple(
+        text for pair in metadata for text in pair
+    )
+    if _has_scope_violation(*scope_texts):  # type: ignore[arg-type]
+        raise _err(reason)
+    if _has_clock_token(*scope_texts):  # type: ignore[arg-type]
+        raise _err(reason)
     # D12 day arithmetic.
     day_index = values["attested_utc_day_index"]
     if day_index <= 0:  # type: ignore[operator]

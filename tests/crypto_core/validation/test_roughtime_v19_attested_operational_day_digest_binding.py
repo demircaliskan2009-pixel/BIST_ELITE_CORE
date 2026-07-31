@@ -109,10 +109,8 @@ _TAG_ZZZZ = b"ZZZZ"
 # TEST-ONLY deterministic keys from fixed disclosed seeds. Production never signs and never generates a key.
 _LONG_TERM_SIGNING_KEY = SigningKey(bytes(range(32)), encoder=RawEncoder)
 _DELEGATED_SIGNING_KEY = SigningKey(bytes(range(100, 132)), encoder=RawEncoder)
-_OTHER_LONG_TERM_SIGNING_KEY = SigningKey(bytes(range(50, 82)), encoder=RawEncoder)
 _LONG_TERM_PUBLIC_KEY = bytes(_LONG_TERM_SIGNING_KEY.verify_key)
 _DELEGATED_PUBLIC_KEY = bytes(_DELEGATED_SIGNING_KEY.verify_key)
-_OTHER_LONG_TERM_PUBLIC_KEY = bytes(_OTHER_LONG_TERM_SIGNING_KEY.verify_key)
 
 _RESPONSE_NONCE = bytes(range(32))
 _OTHER_RESPONSE_NONCE = bytes(range(100, 132))
@@ -281,6 +279,7 @@ def _day(
     correlation_id: str = _CORRELATION,
     market_symbol: str = _MARKET,
     attestor_id: str = "operator-1",
+    metadata: dict[str, str] | None = None,
 ) -> PaperAttestedOperationalDayEvidence:
     windows = tuple(_window(index, suffix=str(offset), market_symbol=market_symbol) for offset in range(sessions))
     return build_paper_attested_operational_day_evidence(
@@ -291,7 +290,7 @@ def _day(
         attestation_id=f"attestation-{index}",
         operational_day_evidence_id=f"operational-day-{index}",
         correlation_id=correlation_id,
-        metadata={"purpose": "attested operational day"},
+        metadata={"purpose": "attested operational day"} if metadata is None else metadata,
     )
 
 
@@ -660,6 +659,11 @@ def test_t07_binding_holds_and_operational_day_is_the_exact_original_reference()
         object.__setattr__(day, "attestor_id", original)
     assert binding.operational_day is day
     assert bool(binding) is True
+    # Parity with the governed builder: an EMPTY metadata key is admitted upstream, so a day carrying one must
+    # still bind here rather than being rejected by an incompatible non-empty constraint.
+    empty_key_day = _day(_BASE_INDEX + 11, metadata={"": "x"})
+    assert empty_key_day.metadata == (("", "x"),)
+    assert _bound(empty_key_day).operational_day is empty_key_day
 
 
 def test_t08_exposed_digest_equals_an_independent_canonical_recomputation() -> None:
@@ -751,16 +755,17 @@ def test_t13_wrong_second_input_type_is_rejected(kind) -> None:
 
 
 def test_t14_no_attribute_of_either_input_is_read_before_both_type_gates_pass() -> None:
-    class _RecordingDay:
-        reads: list[str] = []
+    reads: list[str] = []
 
+    class _RecordingDay:
         def __getattribute__(self, name):  # pragma: no cover - must never run
-            object.__getattribute__(self, "reads").append(name)
-            raise AssertionError(f"attribute {name} read before the type gate")
+            reads.append(f"day.{name}")
+            raise AttributeError(name)
 
     class _RecordingAggregate:
         def __getattribute__(self, name):  # pragma: no cover - must never run
-            raise AssertionError(f"attribute {name} read before the type gate")
+            reads.append(f"aggregate.{name}")
+            raise AttributeError(name)
 
     with pytest.raises(_ERROR) as excinfo:
         verify_roughtime_v19_attested_operational_day_digest_binding(
@@ -768,6 +773,7 @@ def test_t14_no_attribute_of_either_input_is_read_before_both_type_gates_pass() 
             _RecordingAggregate(),  # type: ignore[arg-type]
         )
     assert excinfo.value.reason is R.WRONG_INPUT_TYPE
+    assert reads == []
 
 
 def test_t15_the_day_type_gate_precedes_the_aggregate_type_gate() -> None:
@@ -894,10 +900,41 @@ def test_t25_every_false_flag_flipped_true_is_rejected(field_name) -> None:
 
 @pytest.mark.parametrize(
     "field_name",
-    ["operational_day_evidence_id", "correlation_id", "market_symbol", "attestor_id", "attestation_id"],
+    [
+        "operational_day_evidence_id",
+        "correlation_id",
+        "market_symbol",
+        "attestor_id",
+        "attestation_id",
+        "metadata",
+    ],
 )
-@pytest.mark.parametrize("bad", ["", "  ", " padded", "with\nnewline"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "  ",
+        " padded",
+        "with\nnewline",
+        # Scope / clock admission parity with the governed builder: a RESEALED day carrying a syntactically
+        # plain but forbidden token must never authenticate here either.
+        "scheduler-run",
+        "live_order-1",
+        "capital-1",
+        "wall_clock-1",
+        "system_time-1",
+        "bist-thing",
+    ],
+)
 def test_t26_blank_or_non_canonical_identity_strings_are_rejected(field_name, bad) -> None:
+    """D11, carrying the D18 market_symbol trace and the builder's own scope/clock admission rule."""
+    if field_name == "metadata":
+        if bad == "":
+            # An EMPTY metadata KEY is admitted upstream; only a forbidden or non-canonical text is refused.
+            return
+        _expect_day_rejection(_reseal_day(_day(), metadata=(("purpose", bad),)))
+        _expect_day_rejection(_reseal_day(_day(), metadata=((bad, "value"),)))
+        return
     _expect_day_rejection(_reseal_day(_day(), **{field_name: bad}))
 
 
@@ -1311,7 +1348,6 @@ def test_t54_the_constructor_accepts_exactly_four_keywords() -> None:
 
 
 def test_t55_exactly_six_read_only_public_properties_in_declared_order() -> None:
-    assert binding_module._PUBLIC_FIELD_NAMES == _EXPECTED_PUBLIC_FIELDS
     declared = [name for name, value in vars(_BINDING).items() if isinstance(value, property)]
     assert tuple(declared) == _EXPECTED_PUBLIC_FIELDS
     binding = _bound()
@@ -1394,11 +1430,11 @@ def test_t60_a_non_exact_type_day_in_stored_state_is_rejected() -> None:
 # J. CONSUMPTION-SURFACE MATRIX (T61-T65)
 # ==========================================================================================================
 def _consume_eq(binding):
-    return binding == binding
+    return operator.eq(binding, binding)
 
 
 def _consume_ne(binding):
-    return binding != binding
+    return operator.ne(binding, binding)
 
 
 def _consume_reduce(binding):
@@ -1673,9 +1709,9 @@ def test_t69_the_binding_is_explicitly_unhashable_before_during_and_after_mutati
             hash(binding)
         assert type(excinfo.value) is TypeError
         with pytest.raises(TypeError):
-            {binding}
+            _members = {binding}
         with pytest.raises(TypeError):
-            {binding: 1}
+            _mapping = {binding: 1}
 
     _assert_unhashable()
     original = day.attestor_id
@@ -1693,17 +1729,25 @@ def test_t70_equality_is_validating_and_identity_only() -> None:
     day = _day()
     binding = _bound(day)
 
+    touched: list[str] = []
+
     class _Hostile:
         def __getattribute__(self, name):  # pragma: no cover - must never run
-            raise AssertionError("hostile other was read")
+            touched.append(name)
+            raise AttributeError(name)
 
         def __eq__(self, other):  # pragma: no cover - must never run
-            raise AssertionError("hostile __eq__ was invoked")
+            touched.append("__eq__")
+            raise AttributeError("__eq__")
+
+        __hash__ = None
 
     assert (binding == _Hostile()) is False
     assert (binding != _Hostile()) is True
-    assert (binding == binding) is True
-    assert (binding != binding) is False
+    assert touched == []
+    same = binding
+    assert (binding == same) is True
+    assert (binding != same) is False
     same_content = _bound(day)
     assert (binding == same_content) is False
     assert (binding != same_content) is True
@@ -1714,7 +1758,7 @@ def test_t70_equality_is_validating_and_identity_only() -> None:
             binding.__eq__(binding)
     finally:
         object.__setattr__(day, "attestor_id", original)
-    assert (binding == binding) is True
+    assert (binding == same) is True
 
 
 def test_t71_copy_deepcopy_and_pickle_rebuild_from_exactly_the_four_values() -> None:
@@ -1856,14 +1900,14 @@ def test_t80_no_public_property_is_a_writable_descriptor() -> None:
 @pytest.mark.parametrize(
     "action",
     [
-        lambda b: len(b),
-        lambda b: iter(b),
-        lambda b: reversed(b),
+        len,
+        iter,
+        reversed,
         lambda b: b[0],
         lambda b: 1 in b,
         lambda b: b + b,
         lambda b: b * 2,
-        lambda b: b < b,
+        lambda b: operator.lt(b, b),
     ],
 )
 def test_t81_the_sequence_protocol_is_absent(action) -> None:
@@ -2169,9 +2213,12 @@ def test_t98_production_declares_no_readiness_connector_or_profile_selection_sym
 
 
 def test_t99_production_contains_no_bist_reference() -> None:
-    lowered = _PRODUCTION_SOURCE.lower()
+    """Out-of-scope vocabulary may appear ONLY inside the re-pinned rejection pattern, nowhere else."""
+    gate_lines = [line for line in _PRODUCTION_SOURCE.splitlines() if line.startswith("_SCOPE_EXCLUSION_PATTERN")]
+    assert len(gate_lines) == 1
+    remainder = _PRODUCTION_SOURCE.replace(gate_lines[0], "").lower()
     for forbidden in ("bist", "kap", "ideal", "matriks", "borsa"):
-        assert forbidden not in lowered, forbidden
+        assert forbidden not in remainder, forbidden
 
 
 # ==========================================================================================================
