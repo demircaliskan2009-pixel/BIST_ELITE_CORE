@@ -296,6 +296,17 @@ _DAY_IDENTITY_FIELDS = (
     "attestation_id",
 )
 
+# D11 scope/clock parity. The governed-day builder screens EXACTLY these four identifiers plus every metadata
+# key and value (paper_attested_operational_day_evidence.py :448-458). ``market_symbol`` is deliberately NOT
+# screened upstream, so screening it here would newly reject genuine upstream READY artifacts; it therefore
+# keeps its plain-text D11 validation only.
+_DAY_SCOPE_CLOCK_IDENTITY_FIELDS = (
+    "operational_day_evidence_id",
+    "correlation_id",
+    "attestor_id",
+    "attestation_id",
+)
+
 # D14. Every session-indexed tuple must have length exactly ``session_count``.
 _DAY_SESSION_LIST_FIELDS = (
     "expected_session_window_digests",
@@ -598,10 +609,12 @@ def _validated_day_digest(
     for name in _DAY_IDENTITY_FIELDS:
         if not _is_plain_text(values[name]):  # type: ignore[arg-type]
             raise _err(reason)
-    # D11 scope / clock admission, re-applied to exactly the texts the governed-day builder screens. Without
-    # this a RESEALED day carrying a syntactically plain but forbidden token would be authenticated here even
-    # though the builder would never have admitted it.
-    scope_texts = tuple(values[name] for name in _DAY_IDENTITY_FIELDS) + tuple(
+    # D11 scope / clock admission, re-applied to EXACTLY the texts the governed-day builder screens: the four
+    # identifiers plus every metadata key and value. Without this a RESEALED day carrying a syntactically plain
+    # but forbidden token would be authenticated here even though the builder would never have admitted it.
+    # ``market_symbol`` is excluded to preserve upstream parity -- screening it would newly reject genuine
+    # upstream READY artifacts -- and keeps its plain-text validation above.
+    scope_texts = tuple(values[name] for name in _DAY_SCOPE_CLOCK_IDENTITY_FIELDS) + tuple(
         text for pair in metadata for text in pair
     )
     if _has_scope_violation(*scope_texts):  # type: ignore[arg-type]

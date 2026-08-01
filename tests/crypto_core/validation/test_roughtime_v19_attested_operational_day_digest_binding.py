@@ -45,6 +45,8 @@ from crypto_core.validation.roughtime_v19_attested_operational_day_digest_bindin
 from crypto_core.validation.roughtime_v19_certificate_verification import verify_roughtime_v19_certificate
 from crypto_core.validation.roughtime_v19_request_in_signed_response import (
     RoughtimeV19RequestInSignedResponse,
+    RoughtimeV19RequestInSignedResponseError,
+    RoughtimeV19RequestInSignedResponseReason,
     verify_roughtime_v19_request_in_signed_response,
 )
 from crypto_core.validation.roughtime_v19_request_inclusion import (
@@ -130,6 +132,12 @@ RIGHT = "RIGHT"
 _MAX_PACKET_BYTES = 4096
 _PACKET_FRAME_BYTES = 12
 _MAX_MESSAGE_BYTES = _MAX_PACKET_BYTES - _PACKET_FRAME_BYTES
+
+# D11 text groups. Non-canonical texts are refused for EVERY identity string; the scope/clock group is refused
+# only for the four identifiers the governed-day builder screens and for metadata, and is upstream-legal in
+# market_symbol. ``order_book`` is an upstream SAFE market-data term and is legal everywhere.
+_NON_CANONICAL_TEXTS = ("", "  ", " padded", "with\nnewline")
+_UPSTREAM_SAFE_MARKET_TEXT = "order_book"
 
 _FIXED_TEMPLATE_LENGTH = 445
 _HARD_REPR_CAP = 512
@@ -822,10 +830,59 @@ def test_t17_hollow_day_normalizes_without_a_raw_attribute_error() -> None:
     _expect_day_rejection(object.__new__(PaperAttestedOperationalDayEvidence))
 
 
-def test_t18_pinned_field_inventory_matches_the_live_dataclass_exactly() -> None:
+def test_t18_pinned_field_inventory_matches_the_live_dataclass_exactly(monkeypatch) -> None:
+    """D02 is a live gate, not a constant: drift in the reported inventory must fail CLOSED at the verifier."""
     live = tuple(field.name for field in fields(PaperAttestedOperationalDayEvidence))
     assert binding_module._DAY_FIELD_NAMES == live
     assert len(binding_module._DAY_FIELD_NAMES) == 66
+
+    day = _day()
+    aggregate = _aggregate_for(day)
+    real_fields = binding_module.fields
+    descriptors = list(real_fields(day))
+
+    class _Descriptor:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    missing = tuple(descriptors[1:])
+    reordered = (descriptors[1], descriptors[0], *descriptors[2:])
+    extra = (*descriptors, _Descriptor("smuggled_field"))
+
+    digest_calls: list[str] = []
+    aggregate_reads: list[str] = []
+    real_digest = binding_module.paper_attested_operational_day_evidence_digest
+
+    def _tripwire_digest(value):
+        digest_calls.append("digest")
+        return real_digest(value)
+
+    real_class = binding_module.RoughtimeV19RequestInSignedResponse
+    original_request_raw = real_class.request_raw.fget
+
+    def _recording_request_raw(self):
+        aggregate_reads.append("request_raw")
+        return original_request_raw(self)
+
+    monkeypatch.setattr(binding_module, "paper_attested_operational_day_evidence_digest", _tripwire_digest)
+    monkeypatch.setattr(real_class, "request_raw", property(_recording_request_raw), raising=True)
+    for drifted in (missing, reordered, extra):
+        digest_calls.clear()
+        aggregate_reads.clear()
+        monkeypatch.setattr(binding_module, "fields", lambda _value, _drifted=drifted: _drifted)
+        with pytest.raises(_ERROR) as excinfo:
+            verify_roughtime_v19_attested_operational_day_digest_binding(day, aggregate)
+        assert type(excinfo.value) is _ERROR
+        assert excinfo.value.reason is R.GOVERNED_DAY_ARTIFACT_INCONSISTENT
+        assert digest_calls == []
+        assert aggregate_reads == []
+    # Live control: with the genuine inventory restored the same inputs bind and the tripwires fire.
+    monkeypatch.setattr(binding_module, "fields", real_fields)
+    digest_calls.clear()
+    aggregate_reads.clear()
+    assert verify_roughtime_v19_attested_operational_day_digest_binding(day, aggregate).operational_day is day
+    assert digest_calls
+    assert aggregate_reads
 
 
 @pytest.mark.parametrize(
@@ -912,12 +969,10 @@ def test_t25_every_false_flag_flipped_true_is_rejected(field_name) -> None:
 @pytest.mark.parametrize(
     "bad",
     [
-        "",
-        "  ",
-        " padded",
-        "with\nnewline",
+        *_NON_CANONICAL_TEXTS,
         # Scope / clock admission parity with the governed builder: a RESEALED day carrying a syntactically
-        # plain but forbidden token must never authenticate here either.
+        # plain but forbidden token must never authenticate through one of the four screened identifiers or
+        # through metadata -- but the same value in market_symbol is upstream-legal and must bind.
         "scheduler-run",
         "live_order-1",
         "capital-1",
@@ -927,13 +982,39 @@ def test_t25_every_false_flag_flipped_true_is_rejected(field_name) -> None:
     ],
 )
 def test_t26_blank_or_non_canonical_identity_strings_are_rejected(field_name, bad) -> None:
-    """D11, carrying the D18 market_symbol trace and the builder's own scope/clock admission rule."""
+    """D11 plus exact upstream scope/clock parity. Every collected case makes a real assertion.
+
+    All five identity strings keep plain, non-empty, stripped, control-free validation. Scope and clock
+    filtering applies ONLY to the four identifiers the governed-day builder screens
+    (paper_attested_operational_day_evidence.py :448-458) plus every metadata key and value, so a genuine
+    upstream READY ``market_symbol`` carrying such a token must still BIND rather than be newly rejected.
+    """
     if field_name == "metadata":
         if bad == "":
-            # An EMPTY metadata KEY is admitted upstream; only a forbidden or non-canonical text is refused.
+            # An EMPTY metadata KEY is admitted upstream, so this collected case asserts POSITIVE parity: the
+            # day binds and returns the exact supplied reference with a valid fresh digest/NONC binding.
+            day = _day(_BASE_INDEX + 12, metadata={"": "x"})
+            assert day.metadata == (("", "x"),)
+            binding = _bound(day)
+            assert binding.operational_day is day
+            assert binding.attested_operational_day_evidence_digest == _independent_day_digest(day)
+            assert (
+                bytes.fromhex(binding.attested_operational_day_evidence_digest)
+                == parse_roughtime_v19_request(binding.request_raw).nonce
+            )
             return
         _expect_day_rejection(_reseal_day(_day(), metadata=(("purpose", bad),)))
         _expect_day_rejection(_reseal_day(_day(), metadata=((bad, "value"),)))
+        return
+    if field_name == "market_symbol" and bad not in _NON_CANONICAL_TEXTS:
+        # UPSTREAM PARITY: market_symbol is NOT scope/clock screened by the builder, so a plain value carrying
+        # such a token is a genuine READY artifact and MUST bind here rather than be newly rejected.
+        for symbol in (bad, _UPSTREAM_SAFE_MARKET_TEXT):
+            day = _day(_BASE_INDEX + 13, market_symbol=symbol)
+            assert day.market_symbol == symbol
+            binding = _bound(day)
+            assert binding.operational_day is day
+            assert binding.attested_operational_day_evidence_digest == _independent_day_digest(day)
         return
     _expect_day_rejection(_reseal_day(_day(), **{field_name: bad}))
 
@@ -1161,72 +1242,80 @@ def test_t43_an_aggregate_with_a_mismatched_owner_entry_is_rejected() -> None:
         aggregate_registry.pop(id(impostor), None)
 
 
-def test_t44_exact_caller_snapshot_and_fresh_signed_root_dataflow() -> None:
-    """Bounded instrumentation at the NEW MODULE boundary only; no prerequisite internals are counted."""
+def test_t44_exact_caller_snapshot_and_two_stage_fresh_aggregate_dataflow() -> None:
+    """Bounded instrumentation at the NEW MODULE boundary only; no prerequisite internals are counted.
+
+    Exactly ONE public verifier call performs SEVEN top-level aggregate executions in this exact order:
+    three caller validating property reads, then the public P5 fresh construction and its fresh signed_root
+    read, then the returned artifact constructor's own revalidation construction and fresh signed_root read.
+    The P4/P5 stage owns 5 of them; the remaining 2 belong to validate-before-register on the output.
+    """
     day = _day()
     request, response = _packets(nonce=bytes.fromhex(day.attested_operational_day_evidence_digest))
     caller = _aggregate(request, response)
-    caller_reads: list[str] = []
-    fresh_reads: list[str] = []
+    events: list[tuple[str, str]] = []
     constructions: list[dict] = []
+    fresh_instances: list[object] = []
     real_class = binding_module.RoughtimeV19RequestInSignedResponse
 
-    class _Recorder:
-        """Wraps the caller aggregate and records every validating public property read."""
-
-        def __init__(self, inner):
-            object.__setattr__(self, "_inner", inner)
-
-        def __getattr__(self, name):
-            caller_reads.append(name)
-            return getattr(object.__getattribute__(self, "_inner"), name)
-
-    recorder = _Recorder(caller)
-    # The exact-type gate must still see the real type, so the recorder is only used to count reads through a
-    # patched module-level name resolution rather than by passing a foreign object to the verifier.
-    original_getattr = type(caller).request_raw.fget
-    seen: list[str] = []
-
-    def _patched(prop_name):
+    def _recording_property(prop_name):
         original = getattr(real_class, prop_name).fget
 
         def _wrapper(self):
-            if self is caller:
-                caller_reads.append(prop_name)
-            else:
-                fresh_reads.append(prop_name)
+            events.append((prop_name, "caller" if self is caller else "fresh"))
             return original(self)
 
-        return _wrapper
+        return property(_wrapper)
+
+    original_new = real_class.__new__
+
+    def _recording_new(cls, **kwargs):
+        constructions.append(dict(kwargs))
+        instance = original_new(cls, **kwargs)
+        fresh_instances.append(instance)
+        events.append(("__new__", "fresh"))
+        return instance
 
     monkey = pytest.MonkeyPatch()
     try:
         for prop_name in ("request_raw", "response_raw", "long_term_public_key", "signed_root"):
-            monkey.setattr(real_class, prop_name, property(_patched(prop_name)), raising=True)
-
-        original_new = real_class.__new__
-
-        def _counting_new(cls, **kwargs):
-            constructions.append(dict(kwargs))
-            return original_new(cls, **kwargs)
-
-        monkey.setattr(real_class, "__new__", _counting_new, raising=True)
+            monkey.setattr(real_class, prop_name, _recording_property(prop_name), raising=True)
+        monkey.setattr(real_class, "__new__", _recording_new, raising=True)
         binding = verify_roughtime_v19_attested_operational_day_digest_binding(day, caller)
     finally:
         monkey.undo()
+
+    assert events == [
+        ("request_raw", "caller"),
+        ("response_raw", "caller"),
+        ("long_term_public_key", "caller"),
+        ("__new__", "fresh"),
+        ("signed_root", "fresh"),
+        ("__new__", "fresh"),
+        ("signed_root", "fresh"),
+    ], events
+    caller_reads = [name for name, owner in events if owner == "caller"]
     assert caller_reads == ["request_raw", "response_raw", "long_term_public_key"]
     assert "signed_root" not in caller_reads
-    assert fresh_reads.count("signed_root") >= 1
-    assert len(constructions) >= 1
-    first = constructions[0]
-    assert first["request_raw"] == request
-    assert first["response_raw"] == response
-    assert first["long_term_public_key"] == _LONG_TERM_PUBLIC_KEY
+    assert len(caller_reads) == 3
+    assert len(constructions) == 2
+    assert len([1 for name, owner in events if name == "signed_root" and owner == "fresh"]) == 2
+    assert len(events) == 7
+    # Stage ownership: the P4/P5 stage owns the first five executions, the output constructor the last two.
+    assert events[:5].count(("__new__", "fresh")) == 1
+    assert events[5:].count(("__new__", "fresh")) == 1
+    assert fresh_instances[0] is not fresh_instances[1]
+    assert fresh_instances[0] is not caller and fresh_instances[1] is not caller
+    # Both constructions receive byte-identical snapshots of the exact three caller anchors.
+    for construction in constructions:
+        assert construction["request_raw"] == request
+        assert construction["response_raw"] == response
+        assert construction["long_term_public_key"] == _LONG_TERM_PUBLIC_KEY
+    assert constructions[0] == constructions[1]
     assert binding.request_raw == request
     assert binding.response_raw == response
     assert binding.long_term_public_key == _LONG_TERM_PUBLIC_KEY
     assert binding.signed_root == _oracle_root(_oracle_leaf(request), ((LEFT, _SIBLING_A),))
-    assert seen == [] and original_getattr is not None and recorder is not None
 
 
 def test_t45_the_nonce_is_located_by_the_k3_parser_and_never_by_a_fixed_offset() -> None:
@@ -1237,11 +1326,64 @@ def test_t45_the_nonce_is_located_by_the_k3_parser_and_never_by_a_fixed_offset()
 
 
 def test_t46_no_raw_prerequisite_exception_leaks_from_a_public_surface() -> None:
+    """Hollow-artifact closure PLUS exact-stage normalization at every aggregate-owned verifier handler."""
     hollow = object.__new__(_BINDING)
     for consume in (repr, str, bool, lambda b: b.operational_day, lambda b: b.signed_root, copy.copy):
         with pytest.raises(_ERROR) as excinfo:
             consume(hollow)
         assert type(excinfo.value) is _ERROR
+
+    day = _day()
+    caller = _aggregate_for(day)
+    real_class = binding_module.RoughtimeV19RequestInSignedResponse
+    domain_error = RoughtimeV19RequestInSignedResponseError
+    reason = RoughtimeV19RequestInSignedResponseReason.ARTIFACT_AGGREGATE_INCONSISTENT
+
+    def _raising_property(prop_name):
+        original = getattr(real_class, prop_name).fget
+
+        def _wrapper(self):
+            if self is caller or prop_name == "signed_root":
+                raise domain_error(reason)
+            return original(self)
+
+        return property(_wrapper)
+
+    original_new = real_class.__new__
+
+    def _raising_new(cls, **kwargs):
+        raise domain_error(reason)
+
+    stages = (
+        ("caller_request_raw", "request_raw", None),
+        ("caller_response_raw", "response_raw", None),
+        ("caller_long_term_public_key", "long_term_public_key", None),
+        ("fresh_construction", None, _raising_new),
+        ("fresh_signed_root", "signed_root", None),
+    )
+    for label, prop_name, replacement_new in stages:
+        monkey = pytest.MonkeyPatch()
+        try:
+            if prop_name is not None:
+                monkey.setattr(real_class, prop_name, _raising_property(prop_name), raising=True)
+            if replacement_new is not None:
+                monkey.setattr(real_class, "__new__", replacement_new, raising=True)
+            with pytest.raises(_ERROR) as excinfo:
+                verify_roughtime_v19_attested_operational_day_digest_binding(day, caller)
+            assert type(excinfo.value) is _ERROR, label
+            assert excinfo.value.reason is R.REQUEST_IN_SIGNED_RESPONSE_INCONSISTENT, label
+        finally:
+            monkey.undo()
+    # Unrelated exceptions are unaffected by the aggregate-domain normalization.
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(real_class, "__new__", lambda cls, **kwargs: (_ for _ in ()).throw(_ProbeError()), raising=True)
+        with pytest.raises(_ProbeError):
+            verify_roughtime_v19_attested_operational_day_digest_binding(day, caller)
+    finally:
+        monkey.undo()
+    assert original_new is not None
+    assert verify_roughtime_v19_attested_operational_day_digest_binding(day, caller).operational_day is day
 
 
 # ==========================================================================================================
@@ -1585,6 +1727,35 @@ def test_t64_every_validating_surface_succeeds_for_a_genuine_artifact(surface, c
 @pytest.mark.parametrize(("state", "factory"), _INVALID_ARTIFACT_STATES, ids=_INVALID_ARTIFACT_STATE_IDS)
 @pytest.mark.parametrize(("surface", "consume"), _CONSUMPTION_SURFACES, ids=_CONSUMPTION_SURFACE_IDS)
 def test_t65_every_invalid_state_fails_closed_on_every_validating_surface(surface, consume, state, factory) -> None:
+    if state == "inconsistent_registered_state" and surface == "operational_day":
+        # This one matrix cell additionally pins the derivation ORDER: the standalone K3 parse must run and
+        # reject the planted request BEFORE any fresh aggregate reconstruction is attempted, which is what
+        # keeps the request-semantic catch behaviourally reachable on the reconstruction path.
+        ledger: list[str] = []
+        real_parse = binding_module.parse_roughtime_v19_request
+
+        def _ledger_parse(raw):
+            ledger.append("k3")
+            return real_parse(raw)
+
+        class _AggregateTripwire:
+            def __init__(self, *args, **kwargs):  # pragma: no cover - must never be reached
+                ledger.append("aggregate")
+                raise AssertionError("fresh aggregate reconstruction ran before the standalone K3 parse")
+
+        with factory() as invalid:
+            monkey = pytest.MonkeyPatch()
+            try:
+                monkey.setattr(binding_module, "parse_roughtime_v19_request", _ledger_parse)
+                monkey.setattr(binding_module, "RoughtimeV19RequestInSignedResponse", _AggregateTripwire)
+                with pytest.raises(_ERROR) as excinfo:
+                    consume(invalid)
+                assert type(excinfo.value) is _ERROR, (state, surface)
+                assert excinfo.value.reason is R.BINDING_ARTIFACT_INCONSISTENT, (state, surface)
+            finally:
+                monkey.undo()
+        assert ledger == ["k3"], ledger
+        return
     with factory() as invalid, pytest.raises(_ERROR) as excinfo:
         consume(invalid)
     assert type(excinfo.value) is _ERROR, (state, surface)
@@ -1786,6 +1957,33 @@ def test_t71_copy_deepcopy_and_pickle_rebuild_from_exactly_the_four_values() -> 
     for rebuilt in (shallow, deep, roundtrip):
         _, state = registry[id(rebuilt)]
         assert len(state) == 4
+    # The rebuild SHAPE gate is load-bearing: every malformed reconstruction argument must close with the
+    # owned reason and must never leak a raw TypeError / ValueError / IndexError or unpacking failure, and
+    # must never create a registry entry or a consumable artifact.
+    valid_state = _registered_state(binding)
+    assert type(valid_state) is tuple and len(valid_state) == 4
+
+    class _TupleSubclass(tuple):
+        """A tuple SUBCLASS rejected by the exact ``type(state) is tuple`` gate."""
+
+    malformed = (
+        None,
+        list(valid_state),
+        (),
+        (valid_state[0],),
+        valid_state[:3],
+        (*valid_state, valid_state[1]),
+        _TupleSubclass(valid_state),
+    )
+    before = set(registry)
+    for candidate in malformed:
+        with pytest.raises(_ERROR) as excinfo:
+            binding_module._rebuild_attested_operational_day_digest_binding(candidate)
+        assert type(excinfo.value) is _ERROR, candidate
+        assert excinfo.value.reason is R.BINDING_ARTIFACT_INCONSISTENT, candidate
+    assert set(registry) == before
+    # A genuine exact four-element built-in tuple still reconstructs.
+    assert binding_module._rebuild_attested_operational_day_digest_binding(valid_state).operational_day is day
 
 
 # ==========================================================================================================
