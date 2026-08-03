@@ -340,6 +340,62 @@ def test_raw_trust_fingerprint_text_and_evidence_precedence() -> None:
     )
 
 
+@pytest.mark.parametrize("surrogate", (chr(0xD800), chr(0xDFFF)))
+def test_required_text_surrogates_reject_through_closed_reason(surrogate: str) -> None:
+    _raises(module.MachineTimeSourceTrustSnapshotReason.CANONICAL_TEXT_INVALID, snapshot_id=surrogate)
+
+
+def test_optional_and_tuple_text_surrogates_reject_through_closed_reason() -> None:
+    _raises(
+        module.MachineTimeSourceTrustSnapshotReason.CANONICAL_TEXT_INVALID,
+        approved_by=chr(0xDC00),
+        approved_at=1,
+    )
+    _raises(
+        module.MachineTimeSourceTrustSnapshotReason.CANONICAL_TEXT_INVALID,
+        official_citation_ids=("DRAND-DEVELOPER", chr(0xD800)),
+    )
+
+
+def test_reconstruction_and_rebuild_surrogates_close_without_unicode_error() -> None:
+    snapshot = _build()
+    descriptor = module.machine_time_source_trust_snapshot_commitment_descriptor(snapshot)
+    descriptor["snapshot_id"] = "prefix" + chr(0xD800) + "suffix"
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        module.reconstruct_machine_time_source_trust_snapshot(
+            descriptor,
+            trust_material_bytes=b"drand-group-key-bytes",
+            linked_evidence=_linked(snapshot),
+        )
+    assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.CANONICAL_TEXT_INVALID
+
+    state = snapshot.__reduce__()[1][0]
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        module._rebuild_machine_time_source_trust_snapshot(state[:1] + (chr(0xDFFF),) + state[2:])
+    assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.CANONICAL_TEXT_INVALID
+
+
+def test_valid_unicode_scalars_bounds_and_precedence_remain_exact() -> None:
+    scalar = chr(0x1F600)
+    assert _build(snapshot_id=scalar * 32).snapshot_id == scalar * 32
+    _raises(module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED, snapshot_id=scalar * 33)
+    _raises(
+        module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED,
+        snapshot_id=chr(0xD800),
+        trust_material_bytes=b"x" * 65_537,
+    )
+
+
+def test_unicode_normalization_is_strict_and_not_broadly_caught() -> None:
+    source = inspect.getsource(module)
+    assert "except UnicodeEncodeError:" in source
+    assert "except Exception" not in source
+    assert 'errors="ignore"' not in source
+    assert 'errors="replace"' not in source
+    assert "surrogatepass" not in source
+    assert "surrogateescape" not in source
+
+
 def test_lifecycle_copy_deepcopy_pickle_and_malformed_hidden_state() -> None:
     snapshot = _build(revocation_status="revoked")
     with pytest.raises(TypeError):

@@ -199,7 +199,11 @@ def _text_is_canonical(value: str, *, allow_empty: bool = False) -> bool:
 
 
 def _check_text_bound(value: str) -> None:
-    if len(value) > _MAX_TEXT_CHARS or len(value.encode("utf-8")) > _MAX_TEXT_CHARS:
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise _err(MachineTimeSourceTrustSnapshotReason.CANONICAL_TEXT_INVALID) from None
+    if len(value) > _MAX_TEXT_CHARS or len(encoded) > _MAX_TEXT_CHARS:
         raise _err(MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED)
 
 
