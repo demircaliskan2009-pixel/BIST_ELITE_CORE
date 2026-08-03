@@ -1,7 +1,10 @@
 import copy
+import gc
 import hashlib
 import inspect
+import json
 import pickle
+import weakref
 
 import pytest
 
@@ -10,6 +13,61 @@ from crypto_core.validation import machine_time_source_trust_snapshot as module
 _OFFICIAL = b"official-evidence"
 _REVOCATION = b"revocation-evidence"
 _MISSING = object()
+
+_EXPECTED_SELF_DIGEST_DOMAIN = b"machine-time-source-trust-snapshot.v2/self-digest\x00"
+_EXPECTED_SELF_DIGEST = "18496b4cc0d983006d044efced524111d874bb56ab57da76d55e92df88c1d5bc"
+_EXPECTED_DESCRIPTOR: dict[str, object] = {
+    "snapshot_schema": "machine-time-source-trust-snapshot.v2",
+    "snapshot_id": "drand-snapshot-001",
+    "source_id": "drand-quicknet-mainnet",
+    "provider_id": "league-of-entropy",
+    "source_class": "distributed-threshold-randomness-beacon",
+    "recommended_role": "not_before",
+    "protocol_profile_id": "drand-quicknet-signature-and-chain-info-offline.v1",
+    "protocol_wire_version": "drand-http-api-v2-with-chain-info",
+    "independence_class": "threshold-bls-beacon",
+    "trust_material_kind": "bls_group_public_key",
+    "trust_material_encoding": "raw",
+    "trust_material_fingerprint_algorithm": "sha256",
+    "trust_material_fingerprint": "739b863c9892606af50c4a5a790d231ef852e52ed58c6dea7078e587d6b2b690",
+    "valid_from": None,
+    "valid_until": None,
+    "supersedes_snapshot_id": None,
+    "supersedes_key_id": None,
+    "revocation_status": "revocation_evidence_absent",
+    "revocation_evidence_digest": None,
+    "official_evidence_packet_digest": "18719671d29bda67acfc0b4c88799a466342ec0839e17385b05a9530796495d1",
+    "official_citation_ids": ["DRAND-DEVELOPER"],
+    "dependency_profile_id": "D-DEP-02",
+    "fixture_corpus_id": "FX-DRAND-QUICKNET.v1",
+    "verification_policy_id": "deterministic_supplied_proof_verification_no_network.v1",
+    "governance_decision_ids": [],
+    "approved_by": None,
+    "approved_at": None,
+    "operational_use_approved": False,
+    "quorum_countable": False,
+    "source_reachable_proven": False,
+    "proof_verified": False,
+}
+_EXPECTED_CANONICAL_JSON = (
+    '{"approved_at":null,"approved_by":null,"dependency_profile_id":"D-DEP-02",'
+    '"fixture_corpus_id":"FX-DRAND-QUICKNET.v1","governance_decision_ids":[],'
+    '"independence_class":"threshold-bls-beacon","official_citation_ids":["DRAND-DEVELOPER"],'
+    '"official_evidence_packet_digest":"18719671d29bda67acfc0b4c88799a466342ec0839e17385b05a9530796495d1",'
+    '"operational_use_approved":false,"proof_verified":false,'
+    '"protocol_profile_id":"drand-quicknet-signature-and-chain-info-offline.v1",'
+    '"protocol_wire_version":"drand-http-api-v2-with-chain-info","provider_id":"league-of-entropy",'
+    '"quorum_countable":false,"recommended_role":"not_before","revocation_evidence_digest":null,'
+    '"revocation_status":"revocation_evidence_absent","snapshot_id":"drand-snapshot-001",'
+    '"snapshot_schema":"machine-time-source-trust-snapshot.v2",'
+    '"source_class":"distributed-threshold-randomness-beacon","source_id":"drand-quicknet-mainnet",'
+    '"source_reachable_proven":false,"supersedes_key_id":null,"supersedes_snapshot_id":null,'
+    '"trust_material_encoding":"raw",'
+    '"trust_material_fingerprint":"739b863c9892606af50c4a5a790d231ef852e52ed58c6dea7078e587d6b2b690",'
+    '"trust_material_fingerprint_algorithm":"sha256","trust_material_kind":"bls_group_public_key",'
+    '"valid_from":null,"valid_until":null,'
+    '"verification_policy_id":"deterministic_supplied_proof_verification_no_network.v1"}'
+)
 
 
 def _official(raw: bytes = _OFFICIAL) -> str:
@@ -115,6 +173,50 @@ def _successor(
     )
 
 
+def _closure_registry(
+    snapshot: module.MachineTimeSourceTrustSnapshot,
+) -> dict[int, tuple[object, ...]]:
+    candidates: list[dict[int, tuple[object, ...]]] = []
+    visited: set[int] = set()
+
+    def visit(value: object) -> None:
+        identity = id(value)
+        if identity in visited:
+            return
+        visited.add(identity)
+        if type(value) is dict:
+            entry = value.get(id(snapshot))
+            if (
+                type(entry) is tuple
+                and len(entry) == 2
+                and type(entry[0]) is weakref.ReferenceType
+                and entry[0]() is snapshot
+                and type(entry[1]) is tuple
+                and len(entry[1]) == len(module._INPUT_FIELD_NAMES) + 2
+            ):
+                candidates.append(value)
+            return
+        if inspect.isfunction(value) and value.__closure__ is not None:
+            for cell in value.__closure__:
+                try:
+                    visit(cell.cell_contents)
+                except ValueError:
+                    continue
+
+    visit(module._proven_snapshot_state)
+    assert len(candidates) == 1
+    return candidates[0]
+
+
+def _assert_registry_unchanged(
+    registry: dict[int, tuple[object, ...]],
+    before: dict[int, tuple[object, ...]],
+) -> None:
+    assert registry.keys() == before.keys()
+    for key, entry in before.items():
+        assert registry[key] is entry
+
+
 def test_exact_public_contract_and_evidence_bound_builder() -> None:
     assert module.__all__ == (
         "MACHINE_TIME_SOURCE_TRUST_SNAPSHOT_SCHEMA",
@@ -148,6 +250,46 @@ def test_exact_public_contract_and_evidence_bound_builder() -> None:
     assert snapshot.source_id == "drand-quicknet-mainnet"
     assert snapshot.operational_use_approved is False
     assert bool(snapshot) is True
+
+
+def test_literal_descriptor_canonical_json_and_self_digest_known_answer() -> None:
+    snapshot = _build()
+    descriptor = module.machine_time_source_trust_snapshot_commitment_descriptor(snapshot)
+
+    assert descriptor == _EXPECTED_DESCRIPTOR
+    assert len(_EXPECTED_DESCRIPTOR) == 31
+    assert set(_EXPECTED_DESCRIPTOR) == set(descriptor)
+    assert "trust_material_bytes" not in _EXPECTED_DESCRIPTOR
+    assert "snapshot_self_digest" not in _EXPECTED_DESCRIPTOR
+    assert _EXPECTED_DESCRIPTOR["official_citation_ids"] == ["DRAND-DEVELOPER"]
+    assert _EXPECTED_DESCRIPTOR["governance_decision_ids"] == []
+    for optional in (
+        "valid_from",
+        "valid_until",
+        "supersedes_snapshot_id",
+        "supersedes_key_id",
+        "revocation_evidence_digest",
+        "approved_by",
+        "approved_at",
+    ):
+        assert optional in _EXPECTED_DESCRIPTOR
+        assert _EXPECTED_DESCRIPTOR[optional] is None
+
+    canonical_json = json.dumps(
+        _EXPECTED_DESCRIPTOR,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    assert canonical_json == _EXPECTED_CANONICAL_JSON
+    assert len(_EXPECTED_SELF_DIGEST_DOMAIN) == 50
+    independently_computed = hashlib.sha256(
+        _EXPECTED_SELF_DIGEST_DOMAIN + _EXPECTED_CANONICAL_JSON.encode("utf-8")
+    ).hexdigest()
+    assert independently_computed == _EXPECTED_SELF_DIGEST
+    assert snapshot.snapshot_self_digest == _EXPECTED_SELF_DIGEST
+    assert module.machine_time_source_trust_snapshot_self_digest(snapshot) == _EXPECTED_SELF_DIGEST
 
 
 def test_official_evidence_is_required_bounded_and_domain_bound() -> None:
@@ -423,6 +565,109 @@ def test_lifecycle_copy_deepcopy_pickle_and_malformed_hidden_state() -> None:
         module._rebuild_machine_time_source_trust_snapshot(state[:32] + (object(),) + state[33:])
 
 
+def test_failed_builds_and_rebuilds_leave_the_closure_registry_unchanged() -> None:
+    anchor = _build(revocation_status="revoked")
+    registry = _closure_registry(anchor)
+    before = dict(registry)
+
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        _build(trust_material_bytes=b"")
+    assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.TRUST_MATERIAL_INVALID
+    _assert_registry_unchanged(registry, before)
+
+    state = anchor.__reduce__()[1][0]
+    malformed_states = (
+        (state[:-1], module.MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID),
+        (
+            state[:-2] + (b"wrong", state[-1]),
+            module.MachineTimeSourceTrustSnapshotReason.EVIDENCE_DIGEST_MISMATCH,
+        ),
+        (
+            state[: len(module._INPUT_FIELD_NAMES)] + (object(),) + state[len(module._INPUT_FIELD_NAMES) + 1 :],
+            module.MachineTimeSourceTrustSnapshotReason.SELF_DIGEST_INVALID,
+        ),
+    )
+    for malformed_state, reason in malformed_states:
+        with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+            module._rebuild_machine_time_source_trust_snapshot(malformed_state)
+        assert captured.value.reason is reason
+        _assert_registry_unchanged(registry, before)
+
+    hollow = object.__new__(module.MachineTimeSourceTrustSnapshot)
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        bool(hollow)
+    assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT
+    _assert_registry_unchanged(registry, before)
+
+
+def test_registry_removes_only_the_exact_collected_owner() -> None:
+    snapshot = _build()
+    registry = _closure_registry(snapshot)
+    key = id(snapshot)
+    registered_ref = registry[key][0]
+    assert type(registered_ref) is weakref.ReferenceType
+    assert registered_ref() is snapshot
+
+    del snapshot
+    gc.collect()
+
+    assert registered_ref() is None
+    assert key not in registry
+
+
+def test_registry_rejects_mismatched_owners_and_stale_callbacks_preserve_replacements() -> None:
+    owner = _build()
+    registry = _closure_registry(owner)
+    owner_key = id(owner)
+    owner_entry = registry[owner_key]
+
+    impostor = object.__new__(module.MachineTimeSourceTrustSnapshot)
+    impostor_key = id(impostor)
+    registry[impostor_key] = (weakref.ref(owner), owner_entry[1])
+    try:
+        with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+            bool(impostor)
+        assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT
+    finally:
+        registry.pop(impostor_key, None)
+
+    original_ref = owner_entry[0]
+    replacement_owner = _build(snapshot_id="replacement-owner")
+    replacement_ref = weakref.ref(replacement_owner)
+    registry[owner_key] = (replacement_ref, owner_entry[1])
+    try:
+        del owner
+        gc.collect()
+        assert original_ref() is None
+        assert registry[owner_key][0] is replacement_ref
+        assert replacement_ref() is replacement_owner
+    finally:
+        registry.pop(owner_key, None)
+
+
+def test_reduce_ex_protocols_rebuild_fresh_valid_artifacts_with_hidden_evidence() -> None:
+    snapshot = _build(revocation_status="revoked")
+    expected_state = snapshot.__reduce__()[1][0]
+    assert pickle.HIGHEST_PROTOCOL >= 5
+
+    for protocol in range(6):
+        reducer = snapshot.__reduce_ex__(protocol)
+        assert type(reducer) is tuple and len(reducer) == 2
+        assert reducer[0] is module._rebuild_machine_time_source_trust_snapshot
+        assert type(reducer[1]) is tuple and len(reducer[1]) == 1
+        assert reducer[1][0] == expected_state
+        assert len(reducer[1][0]) == len(module._FIELD_NAMES) + 2
+        assert reducer[1][0][-2:] == (_OFFICIAL, _REVOCATION)
+
+        directly_rebuilt = reducer[0](*reducer[1])
+        round_tripped = pickle.loads(pickle.dumps(snapshot, protocol=protocol))  # noqa: S301
+        for rebuilt in (directly_rebuilt, round_tripped):
+            assert rebuilt is not snapshot
+            assert bool(rebuilt) is True
+            assert rebuilt.snapshot_self_digest == snapshot.snapshot_self_digest
+            assert rebuilt.__reduce__()[1][0][-2:] == (_OFFICIAL, _REVOCATION)
+
+
 def test_public_consumption_rehashes_hidden_evidence_on_every_surface(monkeypatch: pytest.MonkeyPatch) -> None:
     snapshot = _build()
     monkeypatch.setattr(module, "_OFFICIAL_EVIDENCE_DOMAIN", b"wrong-domain\x00")
@@ -565,6 +810,32 @@ def test_collection_has_no_policy_switch_and_enforces_exact_bound() -> None:
     assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.COLLECTION_CANONICALITY_VIOLATION
 
 
+def test_collection_empty_singleton_and_corrupt_singleton_semantics() -> None:
+    empty: tuple[module.MachineTimeSourceTrustSnapshot, ...] = ()
+    assert module.validate_machine_time_source_trust_snapshot_collection(empty) is empty
+
+    snapshot = _build()
+    singleton = (snapshot,)
+    result = module.validate_machine_time_source_trust_snapshot_collection(singleton)
+    assert result is singleton
+    assert result[0] is snapshot
+    assert snapshot.operational_use_approved is False
+    assert snapshot.quorum_countable is False
+    assert snapshot.source_reachable_proven is False
+    assert snapshot.proof_verified is False
+
+    registry = _closure_registry(snapshot)
+    key = id(snapshot)
+    valid_entry = registry[key]
+    registry[key] = (valid_entry[0], valid_entry[1][:-1])
+    try:
+        with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+            module.validate_machine_time_source_trust_snapshot_collection(singleton)
+        assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT
+    finally:
+        registry[key] = valid_entry
+
+
 def test_collection_rejects_duplicate_targets_forks_cycles_and_bad_f18() -> None:
     first = _build(
         snapshot_id="first",
@@ -655,6 +926,32 @@ def test_collection_rejects_duplicate_targets_forks_cycles_and_bad_f18() -> None
     )
     with pytest.raises(module.MachineTimeSourceTrustSnapshotError):
         module.validate_machine_time_source_trust_snapshot_collection((long_a, long_b, long_c))
+
+
+def test_nested_missing_targets_close_identically_for_all_tuple_orders() -> None:
+    nested_b_raw = b"nested-b"
+    nested_b = _build(
+        snapshot_id="nested-b",
+        trust_material_bytes=nested_b_raw,
+        trust_material_fingerprint=hashlib.sha256(nested_b_raw).hexdigest(),
+        supersedes_snapshot_id="missing",
+        supersedes_key_id=hashlib.sha256(b"missing").hexdigest(),
+    )
+    nested_c = _successor(nested_b, snapshot_id="nested-c", trust_material_bytes=b"nested-c")
+    nested_d = _successor(nested_c, snapshot_id="nested-d", trust_material_bytes=b"nested-d")
+
+    cases = (
+        (nested_b,),
+        (nested_b, nested_c),
+        (nested_c, nested_b),
+        (nested_b, nested_c, nested_d),
+        (nested_d, nested_c, nested_b),
+        (nested_c, nested_b, nested_d),
+    )
+    for snapshots in cases:
+        with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+            module.validate_machine_time_source_trust_snapshot_collection(snapshots)
+        assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.COLLECTION_CANONICALITY_VIOLATION
 
 
 def test_collection_uses_f14_not_f18_as_current_active_key() -> None:
