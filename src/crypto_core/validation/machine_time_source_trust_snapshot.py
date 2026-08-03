@@ -35,6 +35,7 @@ _DIGEST_DOMAIN = b"machine-time-source-trust-snapshot.v2/self-digest\x00"
 _REVOCATION_EVIDENCE_DOMAIN = b"machine-time-source-trust-snapshot.v2/revocation-evidence\x00"
 _OFFICIAL_EVIDENCE_DOMAIN = b"machine-time-source-trust-snapshot.v2/official-evidence-packet\x00"
 _MAX_TRUST_MATERIAL_BYTES = 65_536
+_MAX_EVIDENCE_BYTES = 65_536
 _MAX_TEXT_CHARS = 128
 _MAX_TUPLE_LENGTH = 32
 _MAX_COLLECTION_LENGTH = 256
@@ -82,6 +83,7 @@ _FIELD_NAMES = (
 )
 _INPUT_FIELD_NAMES = _FIELD_NAMES[:-1]
 _DESCRIPTOR_FIELD_NAMES = tuple(name for name in _INPUT_FIELD_NAMES if name != "trust_material_bytes")
+_DESCRIPTOR_FIELD_NAME_SET = frozenset(_DESCRIPTOR_FIELD_NAMES)
 
 # Controller contract MT4-S1-DRAND-ONLY-STRUCTURAL-ELIGIBILITY-V1.  This is deliberately a whole row:
 # independently valid values must never form an accepted cross-product.
@@ -124,10 +126,12 @@ _DRAND_CITATION_IDS = frozenset(
     }
 )
 _REVOCATION_STATUSES = frozenset({"not_revoked_per_archived_snapshot", "revoked", "revocation_evidence_absent"})
+_OFFICIAL_EVIDENCE_KEY = "official_evidence_packet_digest"
+_REVOCATION_EVIDENCE_KEY = "revocation_evidence_digest"
 
 
 class MachineTimeSourceTrustSnapshotReason(str, Enum):
-    """Closed failure inventory in the implementation's total precedence order."""
+    """Closed failure inventory; each validation surface owns its documented order."""
 
     WRONG_INPUT_TYPE = "wrong_input_type"
     FIELD_INVENTORY_INVALID = "field_inventory_invalid"
@@ -139,11 +143,11 @@ class MachineTimeSourceTrustSnapshotReason(str, Enum):
     FINGERPRINT_INVALID = "fingerprint_invalid"
     FINGERPRINT_MISMATCH = "fingerprint_mismatch"
     EVIDENCE_DIGEST_INVALID = "evidence_digest_invalid"
+    EVIDENCE_DIGEST_MISMATCH = "evidence_digest_mismatch"
     TEMPORAL_CONTRACT_VIOLATION = "temporal_contract_violation"
     GOVERNANCE_STRUCTURAL_VIOLATION = "governance_structural_violation"
     SUPERSESSION_INVALID = "supersession_invalid"
     RESOURCE_BOUND_EXCEEDED = "resource_bound_exceeded"
-    SERIALIZATION_FAILED = "serialization_failed"
     SELF_DIGEST_INVALID = "self_digest_invalid"
     SELF_DIGEST_MISMATCH = "self_digest_mismatch"
     RECONSTRUCTION_INPUT_INVALID = "reconstruction_input_invalid"
@@ -222,7 +226,7 @@ def _canonical_descriptor_text(values: dict[str, object]) -> str:
             allow_nan=False,
         )
     except (TypeError, ValueError):
-        raise _err(MachineTimeSourceTrustSnapshotReason.SERIALIZATION_FAILED) from None
+        raise _err(MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT) from None
 
 
 def _self_digest(values: dict[str, object]) -> str:
@@ -341,7 +345,10 @@ def _validate_values(values: object) -> tuple[dict[str, object], str]:
         raise _err(MachineTimeSourceTrustSnapshotReason.GOVERNANCE_STRUCTURAL_VIOLATION)
     if values["supersedes_snapshot_id"] == values["snapshot_id"]:
         raise _err(MachineTimeSourceTrustSnapshotReason.SUPERSESSION_INVALID)
-    if values["supersedes_snapshot_id"] is None and values["supersedes_key_id"] is not None:
+    if values["supersedes_snapshot_id"] is None:
+        if values["supersedes_key_id"] is not None:
+            raise _err(MachineTimeSourceTrustSnapshotReason.SUPERSESSION_INVALID)
+    elif values["supersedes_key_id"] is None or not _is_hex64(values["supersedes_key_id"]):
         raise _err(MachineTimeSourceTrustSnapshotReason.SUPERSESSION_INVALID)
     if not all(
         values[name] is False
@@ -367,21 +374,62 @@ def _validate_values(values: object) -> tuple[dict[str, object], str]:
     return validated, _self_digest(validated)
 
 
-def _validate_linked_evidence(values: dict[str, object], linked_evidence: object) -> None:
+def _validate_evidence_anchors(
+    values: dict[str, object],
+    official_evidence_packet_bytes: object,
+    revocation_evidence_bytes: object,
+) -> tuple[bytes, bytes | None]:
+    if type(official_evidence_packet_bytes) is not bytes or not official_evidence_packet_bytes:
+        raise _err(MachineTimeSourceTrustSnapshotReason.EVIDENCE_DIGEST_INVALID)
+    if len(official_evidence_packet_bytes) > _MAX_EVIDENCE_BYTES:
+        raise _err(MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED)
+    official_digest = hashlib.sha256(_OFFICIAL_EVIDENCE_DOMAIN + official_evidence_packet_bytes).hexdigest()
+    if official_digest != values[_OFFICIAL_EVIDENCE_KEY]:
+        raise _err(MachineTimeSourceTrustSnapshotReason.EVIDENCE_DIGEST_MISMATCH)
+
+    if values["revocation_status"] == "revocation_evidence_absent":
+        if revocation_evidence_bytes is not None:
+            raise _err(MachineTimeSourceTrustSnapshotReason.EVIDENCE_DIGEST_INVALID)
+        return official_evidence_packet_bytes, None
+    if type(revocation_evidence_bytes) is not bytes or not revocation_evidence_bytes:
+        raise _err(MachineTimeSourceTrustSnapshotReason.EVIDENCE_DIGEST_INVALID)
+    if len(revocation_evidence_bytes) > _MAX_EVIDENCE_BYTES:
+        raise _err(MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED)
+    revocation_digest = hashlib.sha256(_REVOCATION_EVIDENCE_DOMAIN + revocation_evidence_bytes).hexdigest()
+    if revocation_digest != values[_REVOCATION_EVIDENCE_KEY]:
+        raise _err(MachineTimeSourceTrustSnapshotReason.EVIDENCE_DIGEST_MISMATCH)
+    return official_evidence_packet_bytes, revocation_evidence_bytes
+
+
+def _descriptor_values(descriptor: object) -> dict[str, object]:
+    if type(descriptor) is not dict:
+        raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
+    for key in descriptor:
+        if type(key) is not str:
+            raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
+    if len(descriptor) != len(_DESCRIPTOR_FIELD_NAMES) or frozenset(descriptor) != _DESCRIPTOR_FIELD_NAME_SET:
+        raise _err(MachineTimeSourceTrustSnapshotReason.FIELD_INVENTORY_INVALID)
+    return dict(descriptor)
+
+
+def _linked_evidence_anchors(values: dict[str, object], linked_evidence: object) -> tuple[bytes, bytes | None]:
     if type(linked_evidence) is not dict:
         raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
-    expected = {"official_evidence_packet_digest"}
-    if values["revocation_evidence_digest"] is not None:
-        expected.add("revocation_evidence_digest")
-    if set(linked_evidence) != expected or not all(type(key) is str for key in linked_evidence):
-        raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
-    for key in expected:
-        raw = linked_evidence[key]
-        if type(raw) is not bytes:
+    for key in linked_evidence:
+        if type(key) is not str:
             raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
-        domain = _OFFICIAL_EVIDENCE_DOMAIN if key == "official_evidence_packet_digest" else _REVOCATION_EVIDENCE_DOMAIN
-        if hashlib.sha256(domain + raw).hexdigest() != values[key]:
-            raise _err(MachineTimeSourceTrustSnapshotReason.EVIDENCE_DIGEST_INVALID)
+    for key in linked_evidence:
+        if type(linked_evidence[key]) is not bytes:
+            raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
+
+    expected = {_OFFICIAL_EVIDENCE_KEY}
+    if values["revocation_status"] != "revocation_evidence_absent":
+        expected.add(_REVOCATION_EVIDENCE_KEY)
+    if len(linked_evidence) != len(expected) or frozenset(linked_evidence) != expected:
+        raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
+    official = linked_evidence[_OFFICIAL_EVIDENCE_KEY]
+    revocation = linked_evidence.get(_REVOCATION_EVIDENCE_KEY)
+    return _validate_evidence_anchors(values, official, revocation)
 
 
 def _build_snapshot_class() -> tuple[type, object, object]:
@@ -397,29 +445,46 @@ def _build_snapshot_class() -> tuple[type, object, object]:
 
         registry[key] = (weakref.ref(artifact, forget), state)
 
-    def proven_state(artifact: object) -> tuple[object, ...]:
+    def proven_parts(artifact: object) -> tuple[tuple[object, ...], bytes, bytes | None]:
         if type(artifact) is not MachineTimeSourceTrustSnapshot:
             raise _err(MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT)
         entry = registry.get(id(artifact))
         if entry is None or entry[0]() is not artifact:
             raise _err(MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT)
         state = entry[1]
-        if type(state) is not tuple or len(state) != len(_INPUT_FIELD_NAMES):
+        if type(state) is not tuple or len(state) != len(_INPUT_FIELD_NAMES) + 2:
             raise _err(MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT)
+        values = dict(zip(_INPUT_FIELD_NAMES, state[: len(_INPUT_FIELD_NAMES)], strict=True))
         try:
-            values = dict(zip(_INPUT_FIELD_NAMES, state, strict=True))
-        except (TypeError, ValueError):
-            raise _err(MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT) from None
-        try:
-            _, digest = _validate_values(values)
+            validated, digest = _validate_values(values)
+            official, revocation = _validate_evidence_anchors(
+                validated,
+                state[len(_INPUT_FIELD_NAMES)],
+                state[len(_INPUT_FIELD_NAMES) + 1],
+            )
         except MachineTimeSourceTrustSnapshotError:
             raise _err(MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT) from None
-        return state + (digest,)
+        public_state = tuple(validated[name] for name in _INPUT_FIELD_NAMES) + (digest,)
+        return public_state, official, revocation
 
-    def create(values: dict[str, object]) -> MachineTimeSourceTrustSnapshot:
+    def proven_state(artifact: object) -> tuple[object, ...]:
+        return proven_parts(artifact)[0]
+
+    def proven_rebuild_state(artifact: object) -> tuple[object, ...]:
+        public_state, official, revocation = proven_parts(artifact)
+        return public_state + (official, revocation)
+
+    def create(
+        values: dict[str, object],
+        official_evidence_packet_bytes: object,
+        revocation_evidence_bytes: object,
+    ) -> MachineTimeSourceTrustSnapshot:
         validated, _ = _validate_values(values)
+        official, revocation = _validate_evidence_anchors(
+            validated, official_evidence_packet_bytes, revocation_evidence_bytes
+        )
         artifact = object.__new__(MachineTimeSourceTrustSnapshot)
-        register(artifact, tuple(validated[name] for name in _INPUT_FIELD_NAMES))
+        register(artifact, tuple(validated[name] for name in _INPUT_FIELD_NAMES) + (official, revocation))
         return artifact
 
     class MachineTimeSourceTrustSnapshot:
@@ -478,7 +543,7 @@ def _build_snapshot_class() -> tuple[type, object, object]:
             return not self.__eq__(other)
 
         def __reduce__(self) -> tuple[object, tuple[tuple[object, ...]]]:
-            return (_rebuild_machine_time_source_trust_snapshot, (proven_state(self),))
+            return (_rebuild_machine_time_source_trust_snapshot, (proven_rebuild_state(self),))
 
     def make_property(index: int):
         def getter(self: MachineTimeSourceTrustSnapshot) -> object:
@@ -500,8 +565,12 @@ def _build_snapshot_class() -> tuple[type, object, object]:
 ) = _build_snapshot_class()
 
 
-def _create_from_values(values: dict[str, object]) -> MachineTimeSourceTrustSnapshot:
-    return _create_snapshot(values)  # type: ignore[operator]
+def _create_from_values(
+    values: dict[str, object],
+    official_evidence_packet_bytes: object,
+    revocation_evidence_bytes: object,
+) -> MachineTimeSourceTrustSnapshot:
+    return _create_snapshot(values, official_evidence_packet_bytes, revocation_evidence_bytes)  # type: ignore[operator]
 
 
 def build_machine_time_source_trust_snapshot(
@@ -538,8 +607,10 @@ def build_machine_time_source_trust_snapshot(
     quorum_countable: bool,
     source_reachable_proven: bool,
     proof_verified: bool,
+    official_evidence_packet_bytes: bytes,
+    revocation_evidence_bytes: bytes | None,
 ) -> MachineTimeSourceTrustSnapshot:
-    """Build the one public raw-data S1 artifact; no provider verification occurs."""
+    """Build one fully evidence-bound raw-data S1 artifact; no provider verification occurs."""
     return _create_from_values(
         {
             "snapshot_schema": snapshot_schema,
@@ -574,7 +645,9 @@ def build_machine_time_source_trust_snapshot(
             "quorum_countable": quorum_countable,
             "source_reachable_proven": source_reachable_proven,
             "proof_verified": proof_verified,
-        }
+        },
+        official_evidence_packet_bytes,
+        revocation_evidence_bytes,
     )
 
 
@@ -601,14 +674,12 @@ def reconstruct_machine_time_source_trust_snapshot(
     carried_snapshot_self_digest: str | None = None,
     linked_evidence: dict[str, bytes] | None = None,
 ) -> MachineTimeSourceTrustSnapshot:
-    """Reconstruct only with raw trust bytes and every raw linked-evidence input."""
-    if type(descriptor) is not dict or type(trust_material_bytes) is not bytes:
+    """Reconstruct only with raw trust bytes and retained raw evidence anchors."""
+    if type(trust_material_bytes) is not bytes:
         raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
-    if len(descriptor) != len(_DESCRIPTOR_FIELD_NAMES) or set(descriptor) != set(_DESCRIPTOR_FIELD_NAMES):
-        raise _err(MachineTimeSourceTrustSnapshotReason.FIELD_INVENTORY_INVALID)
     if carried_snapshot_self_digest is not None and type(carried_snapshot_self_digest) is not str:
         raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
-    values = dict(descriptor)
+    values = _descriptor_values(descriptor)
     for name in ("official_citation_ids", "governance_decision_ids"):
         if type(values[name]) is not list:
             raise _err(MachineTimeSourceTrustSnapshotReason.FIELD_TYPE_INVALID)
@@ -616,31 +687,35 @@ def reconstruct_machine_time_source_trust_snapshot(
     values["trust_material_bytes"] = trust_material_bytes
     ordered = {name: values[name] for name in _INPUT_FIELD_NAMES}
     validated, digest = _validate_values(ordered)
-    _validate_linked_evidence(validated, linked_evidence)
+    official, revocation = _linked_evidence_anchors(validated, linked_evidence)
     if carried_snapshot_self_digest is not None:
         if not _is_hex64(carried_snapshot_self_digest):
             raise _err(MachineTimeSourceTrustSnapshotReason.SELF_DIGEST_INVALID)
         if carried_snapshot_self_digest != digest:
             raise _err(MachineTimeSourceTrustSnapshotReason.SELF_DIGEST_MISMATCH)
-    return _create_from_values(validated)
+    return _create_from_values(validated, official, revocation)
 
 
 def _rebuild_machine_time_source_trust_snapshot(state: object) -> MachineTimeSourceTrustSnapshot:
-    if type(state) is not tuple or len(state) != len(_FIELD_NAMES):
+    if type(state) is not tuple or len(state) != len(_FIELD_NAMES) + 2:
         raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
-    values = dict(zip(_INPUT_FIELD_NAMES, state[:-1], strict=True))
+    values = dict(zip(_INPUT_FIELD_NAMES, state[: len(_INPUT_FIELD_NAMES)], strict=True))
     validated, digest = _validate_values(values)
-    if type(state[-1]) is not str or state[-1] != digest:
+    carried_digest = state[len(_INPUT_FIELD_NAMES)]
+    if type(carried_digest) is not str or not _is_hex64(carried_digest):
+        raise _err(MachineTimeSourceTrustSnapshotReason.SELF_DIGEST_INVALID)
+    if carried_digest != digest:
         raise _err(MachineTimeSourceTrustSnapshotReason.SELF_DIGEST_MISMATCH)
-    return _create_from_values(validated)
+    official = state[len(_FIELD_NAMES)]
+    revocation = state[len(_FIELD_NAMES) + 1]
+    _validate_evidence_anchors(validated, official, revocation)
+    return _create_from_values(validated, official, revocation)
 
 
 def validate_machine_time_source_trust_snapshot_collection(
     snapshots: tuple[MachineTimeSourceTrustSnapshot, ...],
-    *,
-    require_single_active_per_profile_key: bool,
 ) -> tuple[MachineTimeSourceTrustSnapshot, ...]:
-    if type(snapshots) is not tuple or type(require_single_active_per_profile_key) is not bool:
+    if type(snapshots) is not tuple:
         raise _err(MachineTimeSourceTrustSnapshotReason.WRONG_INPUT_TYPE)
     if len(snapshots) > _MAX_COLLECTION_LENGTH:
         raise _err(MachineTimeSourceTrustSnapshotReason.COLLECTION_CANONICALITY_VIOLATION)
@@ -651,24 +726,40 @@ def validate_machine_time_source_trust_snapshot_collection(
     if len(set(ids)) != len(ids):
         raise _err(MachineTimeSourceTrustSnapshotReason.COLLECTION_CANONICALITY_VIOLATION)
     by_id = {view[1]: view for view in views}
-    superseded = {view[16] for view in views if view[16] is not None}
+
+    successor_counts: dict[object, int] = {}
+    superseded: set[object] = set()
     for view in views:
+        snapshot_id = view[1]
         target = view[16]
-        if target is not None and target not in by_id:
+        predecessor_key_id = view[17]
+        if target is None:
+            if predecessor_key_id is not None:
+                raise _err(MachineTimeSourceTrustSnapshotReason.COLLECTION_CANONICALITY_VIOLATION)
+            continue
+        predecessor = by_id.get(target)
+        if predecessor is None or target == snapshot_id or predecessor_key_id != predecessor[13]:
             raise _err(MachineTimeSourceTrustSnapshotReason.COLLECTION_CANONICALITY_VIOLATION)
-        seen: set[str] = set()
+        successor_counts[target] = successor_counts.get(target, 0) + 1
+        if successor_counts[target] > 1:
+            raise _err(MachineTimeSourceTrustSnapshotReason.COLLECTION_CANONICALITY_VIOLATION)
+        superseded.add(target)
+
+    for view in views:
+        seen: set[object] = {view[1]}
+        target = view[16]
         while target is not None:
             if target in seen:
                 raise _err(MachineTimeSourceTrustSnapshotReason.COLLECTION_CANONICALITY_VIOLATION)
             seen.add(target)
             target = by_id[target][16]
-    if require_single_active_per_profile_key:
-        active_keys: set[tuple[object, object, object]] = set()
-        for view in views:
-            if view[1] in superseded:
-                continue
-            key = (view[6], view[2], view[13])
-            if key in active_keys:
-                raise _err(MachineTimeSourceTrustSnapshotReason.COLLECTION_CANONICALITY_VIOLATION)
-            active_keys.add(key)
+
+    active_keys: set[tuple[object, object, object]] = set()
+    for view in views:
+        if view[1] in superseded:
+            continue
+        key = (view[2], view[6], view[13])
+        if key in active_keys:
+            raise _err(MachineTimeSourceTrustSnapshotReason.COLLECTION_CANONICALITY_VIOLATION)
+        active_keys.add(key)
     return snapshots
