@@ -1009,33 +1009,66 @@ def test_reconstruction_reproves_nonclaims_and_the_carried_digest() -> None:
 def test_failed_build_and_rebuild_leave_the_closure_registry_unchanged() -> None:
     anchor = _build()
     registry = _closure_registry(anchor)
-    before = dict(registry)
+    anchor_key = id(anchor)
 
-    def assert_unchanged() -> None:
-        assert registry.keys() == before.keys()
-        for key, entry in before.items():
-            assert registry[key] is entry
+    def assert_registry_unchanged(before: dict[int, tuple[object, ...]]) -> None:
+        """Prove no failed build or rebuild added a key or replaced a surviving entry.
+
+        The key set may only SHRINK.  Every entry is owned by a real production weakref whose callback
+        removes it as soon as that artifact is collected, and deferred cyclic collection makes the timing
+        of unrelated collections unpredictable, so whole-key-set equality would assert something the
+        closure registry never promises.  The contract that does hold is: never grows, the explicitly
+        retained anchor entry stays present, and every surviving entry is still the identical object.
+        """
+        assert registry.keys() <= before.keys()
+        assert anchor_key in registry
+        for key, entry in registry.items():
+            assert entry is before[key]
+
+    # Deterministic proof that a legal shrink is accepted: one unrelated transient owner is collected
+    # between the snapshot and the assertion, exactly the situation whole-key-set equality rejected.
+    transient = _build()
+    transient_key = id(transient)
+    transient_ref = registry[transient_key][0]
+    assert type(transient_ref) is weakref.ReferenceType
+    assert transient_ref() is transient
+    assert anchor_key in registry
+
+    before = dict(registry)
+    assert {anchor_key, transient_key} <= before.keys()
+
+    del transient
+    gc.collect()
+
+    assert transient_ref() is None
+    assert transient_key not in registry
+    assert registry.keys() < before.keys()
+    assert_registry_unchanged(before)
 
     with pytest.raises(_ERROR):
         _build(chain_hash="0" * 64)
-    assert_unchanged()
+    assert_registry_unchanged(before)
     with pytest.raises(_ERROR):
         _build(snapshot=object())
-    assert_unchanged()
+    assert_registry_unchanged(before)
     with pytest.raises(_ERROR):
         _build(registry=object())
-    assert_unchanged()
+    assert_registry_unchanged(before)
 
     state = _reduce_state(anchor)
     for malformed in (state[:-1], state[:4] + ("0" * 64,), state[:3] + ((True,) + state[3][1:], state[4])):
         with pytest.raises(_ERROR):
             module._rebuild_machine_time_drand_quicknet_chain_profile(malformed)
-        assert_unchanged()
+        assert_registry_unchanged(before)
 
     hollow = object.__new__(module.MachineTimeDrandQuicknetChainProfile)
     with pytest.raises(_ERROR):
         bool(hollow)
-    assert_unchanged()
+    assert_registry_unchanged(before)
+
+    assert registry[anchor_key] is before[anchor_key]
+    assert bool(anchor) is True
+    assert anchor.profile_self_digest == _EXPECTED_PROFILE_SELF_DIGEST
 
 
 def test_repr_and_str_are_redacted_ascii_single_line_and_bounded() -> None:
