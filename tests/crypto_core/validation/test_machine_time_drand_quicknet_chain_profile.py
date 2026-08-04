@@ -1,5 +1,6 @@
 import copy
 import dataclasses
+import gc
 import hashlib
 import inspect
 import json
@@ -12,9 +13,11 @@ from crypto_core.validation import machine_time_drand_quicknet_chain_profile as 
 from crypto_core.validation.machine_time_source_registry import (
     build_approved_machine_time_source_registry,
     build_machine_time_source_registry,
+    machine_time_source_registry_to_dict,
 )
 from crypto_core.validation.machine_time_source_trust_snapshot import (
     MACHINE_TIME_SOURCE_TRUST_SNAPSHOT_SCHEMA,
+    MachineTimeSourceTrustSnapshot,
     build_machine_time_source_trust_snapshot,
 )
 from crypto_core.venue.public_feed_dialects import connector_ready_dialects
@@ -30,26 +33,37 @@ _PUBLIC_KEY_HEX = (
 _PUBLIC_KEY = bytes.fromhex(_PUBLIC_KEY_HEX)
 _CHAIN_HASH = "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971"
 _SNAPSHOT_ID = "drand-quicknet-trust-001"
+_UNICODE_SNAPSHOT_ID = "drand-" + chr(0xE9) * 4 + chr(0x1F600)
 _OFFICIAL_RAW = b"drand-quicknet-official-evidence"
 _S1_OFFICIAL_DOMAIN = b"machine-time-source-trust-snapshot.v2/official-evidence-packet\x00"
 _CITATION_IDS = ("DRAND-DEVELOPER", "DRAND-HTTP-API", "DRAND-QUICKNET-ANNOUNCEMENT", "DRAND-SPEC")
+_DEFERRED_FACTS = (
+    "beacon_id",
+    "curve_id",
+    "public_key_group",
+    "signature_group",
+    "signature_encoded_length",
+)
 
-# Known-answer vector.  Every expected value below is a TEST-OWNED literal: the descriptor is
-# hand-written, and the canonical JSON and both digests were derived from that literal with stdlib
-# json/hashlib only.  No production-private helper (_canonical_descriptor, _canonical_text, _derive)
-# is used to establish an expectation.  The three upstream digests are the merged public S1/MT-3
-# values and are additionally cross-checked against their own public APIs below.
+# Known-answer vectors.  Every expected value below is a TEST-OWNED literal: the descriptors are
+# hand-written and the canonical JSON strings and digests were derived from those literals with stdlib
+# json/hashlib only.  No production-private helper (_canonical_descriptor, _canonical_text,
+# _derive_from_normalized_chain_info) and no production output is used to establish an expectation.  The
+# three upstream digests are the merged public S1/MT-3 values and are cross-checked against their own
+# public APIs below.
 _EXPECTED_SELF_DIGEST_DOMAIN = b"machine-time-drand-quicknet-chain-profile.v1/self-digest\x00"
 _EXPECTED_CHAIN_INFO_DOMAIN = b"machine-time-drand-quicknet-chain-profile.v1/chain-info\x00"
 _EXPECTED_PUBLIC_KEY_FINGERPRINT = "96e74fcdd3a118406d3800a4e4935e67450a6befde915d47a0d6a13519cee134"
 _EXPECTED_BOUND_SNAPSHOT_SELF_DIGEST = "c1c4fbc8a1f6259fcb527fd082cdde18487cb7dce43aa3f2af7e41cf60539c9d"
+_EXPECTED_UNICODE_SNAPSHOT_SELF_DIGEST = "913930a595fe522260d14a619b441f5edf1a707b3968c450336f89ecaae13686"
 _EXPECTED_BOUND_REGISTRY_DIGEST = "1808874889aad3f671e481e69da3e725b5119c5dd915e802b66c40b37769dfce"
 _EXPECTED_BOUND_ENTRY_DIGEST = "c3dae5eab6e5fb046d30e66f841804c95e2ecffb65efd8e77553ef096be6eb3c"
-_EXPECTED_CHAIN_INFO_DIGEST = "fb0b07de25c95890fe0a2e794cd39ef1e79e0022c69900724f8f8f59fe05c3d3"
-_EXPECTED_PROFILE_SELF_DIGEST = "70895c8a9af7a543892cc42ceffce1a7883d6281bc7afc054d4a9d47911e2f09"
+_EXPECTED_CHAIN_INFO_DIGEST = "8c15669e77d0da7250abf9247322e02a4acd8d2bc65d50578e32031ecc6ac5c1"
+_EXPECTED_PROFILE_SELF_DIGEST = "588596a153eee002997cc172a9058ab055015fca5b27ab2ff3043ffac6762fef"
+_EXPECTED_UNICODE_PROFILE_SELF_DIGEST = "3793b5a112c7e28919c0888843ee2af8d1adb952535d26bf5d9761e9ff6d3694"
+_EXPECTED_UNESCAPED_UNICODE_DIGEST = "e47ddf32def56c0fbc68511cf3cceb8d8a9bc5953519b7cad44b3bcda655d203"
 
 _EXPECTED_CHAIN_INFO: dict[str, object] = {
-    "beacon_id": "quicknet",
     "chain_hash": _CHAIN_HASH,
     "public_key": _PUBLIC_KEY_HEX,
     "scheme_id": "bls-unchained-g1-rfc9380",
@@ -76,70 +90,98 @@ _EXPECTED_FALSE_FLAGS = (
     "readiness_promoted",
     "connector_promoted",
 )
-_EXPECTED_DESCRIPTOR: dict[str, object] = {
-    "profile_schema": "machine-time-drand-quicknet-chain-profile.v1",
-    "profile_id": "machine-time-drand-quicknet-chain-profile-structural.v1",
-    "source_id": "drand-quicknet-mainnet",
-    "provider_id": "league-of-entropy",
-    "chain_hash": _CHAIN_HASH,
-    "beacon_id": "quicknet",
-    "scheme_id": "bls-unchained-g1-rfc9380",
-    "curve_id": "bls12-381",
-    "period_seconds": 3,
-    "genesis_time_seconds": 1_692_803_367,
-    "public_key_group": "g2",
-    "signature_group": "g1",
-    "public_key_encoded_length": 96,
-    "signature_encoded_length": 48,
-    "public_key_fingerprint": _EXPECTED_PUBLIC_KEY_FINGERPRINT,
-    "protocol_profile_id": "drand-quicknet-signature-and-chain-info-offline.v1",
-    "wire_profile_id": "drand-http-api-v2-with-chain-info",
-    "dependency_profile_id": "D-DEP-02",
-    "fixture_corpus_id": "FX-DRAND-QUICKNET.v1",
-    "verification_policy_id": "deterministic_supplied_proof_verification_no_network.v1",
-    "official_citation_ids": list(_CITATION_IDS),
-    "bound_snapshot_id": _SNAPSHOT_ID,
-    "bound_snapshot_self_digest": _EXPECTED_BOUND_SNAPSHOT_SELF_DIGEST,
-    "bound_registry_digest": _EXPECTED_BOUND_REGISTRY_DIGEST,
-    "bound_registry_source_entry_digest": _EXPECTED_BOUND_ENTRY_DIGEST,
-    "chain_info_canonical_digest": _EXPECTED_CHAIN_INFO_DIGEST,
-    "chain_profile_structurally_bound": True,
-    **dict.fromkeys(_EXPECTED_FALSE_FLAGS, False),
-}
+
+
+def _expected_descriptor(snapshot_id: str, snapshot_self_digest: str) -> dict[str, object]:
+    values: dict[str, object] = {
+        "profile_schema": "machine-time-drand-quicknet-chain-profile.v1",
+        "profile_id": "machine-time-drand-quicknet-chain-profile-structural.v1",
+        "source_id": "drand-quicknet-mainnet",
+        "provider_id": "league-of-entropy",
+        "chain_hash": _CHAIN_HASH,
+        "scheme_id": "bls-unchained-g1-rfc9380",
+        "period_seconds": 3,
+        "genesis_time_seconds": 1_692_803_367,
+        "public_key_encoded_length": 96,
+        "public_key_fingerprint": _EXPECTED_PUBLIC_KEY_FINGERPRINT,
+        "protocol_profile_id": "drand-quicknet-signature-and-chain-info-offline.v1",
+        "wire_profile_id": "drand-http-api-v2-with-chain-info",
+        "dependency_profile_id": "D-DEP-02",
+        "fixture_corpus_id": "FX-DRAND-QUICKNET.v1",
+        "verification_policy_id": "deterministic_supplied_proof_verification_no_network.v1",
+        "official_citation_ids": list(_CITATION_IDS),
+        "bound_snapshot_id": snapshot_id,
+        "bound_snapshot_self_digest": snapshot_self_digest,
+        "bound_registry_digest": _EXPECTED_BOUND_REGISTRY_DIGEST,
+        "bound_registry_source_entry_digest": _EXPECTED_BOUND_ENTRY_DIGEST,
+        "chain_info_canonical_digest": _EXPECTED_CHAIN_INFO_DIGEST,
+        "chain_profile_structurally_bound": True,
+    }
+    values.update(dict.fromkeys(_EXPECTED_FALSE_FLAGS, False))
+    return values
+
+
+_EXPECTED_DESCRIPTOR = _expected_descriptor(_SNAPSHOT_ID, _EXPECTED_BOUND_SNAPSHOT_SELF_DIGEST)
+_EXPECTED_UNICODE_DESCRIPTOR = _expected_descriptor(_UNICODE_SNAPSHOT_ID, _EXPECTED_UNICODE_SNAPSHOT_SELF_DIGEST)
 _EXPECTED_CHAIN_INFO_CANONICAL_JSON = (
-    '{"beacon_id":"quicknet","chain_hash":"52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971","genes'
-    'is_time_seconds":1692803367,"period_seconds":3,"public_key":"83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb'
-    "90022d3e760183c8c4b450b6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb5ed66304de9cf809bd274ca73bab4af"
-    '5a6e9c76a4bc09e76eae8991ef5ece45a","scheme_id":"bls-unchained-g1-rfc9380"}'
+    '{"chain_hash":"52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971","genesis_time_seconds":169280'
+    '3367,"period_seconds":3,"public_key":"83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183c8c4b450b'
+    "6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb5ed66304de9cf809bd274ca73bab4af5a6e9c76a4bc09e76eae899"
+    '1ef5ece45a","scheme_id":"bls-unchained-g1-rfc9380"}'
 )
 _EXPECTED_DESCRIPTOR_CANONICAL_JSON = (
-    '{"beacon_id":"quicknet","bound_registry_digest":"1808874889aad3f671e481e69da3e725b5119c5dd915e802b66c40b37769d'
-    'fce","bound_registry_source_entry_digest":"c3dae5eab6e5fb046d30e66f841804c95e2ecffb65efd8e77553ef096be6eb3c","'
-    'bound_snapshot_id":"drand-quicknet-trust-001","bound_snapshot_self_digest":"c1c4fbc8a1f6259fcb527fd082cdde1848'
-    '7cb7dce43aa3f2af7e41cf60539c9d","chain_hash":"52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971'
-    '","chain_info_canonical_digest":"fb0b07de25c95890fe0a2e794cd39ef1e79e0022c69900724f8f8f59fe05c3d3","chain_prof'
-    'ile_structurally_bound":true,"connector_promoted":false,"cryptographic_backend_selected":false,"curve_id":"bls'
-    '12-381","dependency_profile_admitted":false,"dependency_profile_id":"D-DEP-02","fixture_corpus_id":"FX-DRAND-Q'
-    'UICKNET.v1","fixture_corpus_loaded":false,"fixture_corpus_verified":false,"genesis_time_seconds":1692803367,"m'
-    'achine_time_origin_proven":false,"message_encoding_profile_selected":false,"official_citation_ids":["DRAND-DEV'
-    'ELOPER","DRAND-HTTP-API","DRAND-QUICKNET-ANNOUNCEMENT","DRAND-SPEC"],"operational_quorum_ready":false,"operati'
-    'onal_use_approved":false,"period_seconds":3,"profile_id":"machine-time-drand-quicknet-chain-profile-structural'
-    '.v1","profile_schema":"machine-time-drand-quicknet-chain-profile.v1","proof_verified":false,"protocol_profile_'
-    'id":"drand-quicknet-signature-and-chain-info-offline.v1","provider_id":"league-of-entropy","provider_operation'
-    'ally_approved":false,"public_key_encoded_length":96,"public_key_fingerprint":"96e74fcdd3a118406d3800a4e4935e67'
-    '450a6befde915d47a0d6a13519cee134","public_key_group":"g2","quorum_countable":false,"randomness_verified":false'
-    ',"readiness_promoted":false,"scheme_id":"bls-unchained-g1-rfc9380","signature_encoded_length":48,"signature_gr'
-    'oup":"g1","signature_parsed":false,"signature_verified":false,"source_id":"drand-quicknet-mainnet","source_rea'
-    'chable_proven":false,"timestamp_origin_proven":false,"verification_policy_id":"deterministic_supplied_proof_ve'
-    'rification_no_network.v1","wire_profile_id":"drand-http-api-v2-with-chain-info"}'
+    '{"bound_registry_digest":"1808874889aad3f671e481e69da3e725b5119c5dd915e802b66c40b37769dfce","bound_registry_so'
+    'urce_entry_digest":"c3dae5eab6e5fb046d30e66f841804c95e2ecffb65efd8e77553ef096be6eb3c","bound_snapshot_id":"dra'
+    'nd-quicknet-trust-001","bound_snapshot_self_digest":"c1c4fbc8a1f6259fcb527fd082cdde18487cb7dce43aa3f2af7e41cf6'
+    '0539c9d","chain_hash":"52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971","chain_info_canonical'
+    '_digest":"8c15669e77d0da7250abf9247322e02a4acd8d2bc65d50578e32031ecc6ac5c1","chain_profile_structurally_bound"'
+    ':true,"connector_promoted":false,"cryptographic_backend_selected":false,"dependency_profile_admitted":false,"d'
+    'ependency_profile_id":"D-DEP-02","fixture_corpus_id":"FX-DRAND-QUICKNET.v1","fixture_corpus_loaded":false,"fix'
+    'ture_corpus_verified":false,"genesis_time_seconds":1692803367,"machine_time_origin_proven":false,"message_enco'
+    'ding_profile_selected":false,"official_citation_ids":["DRAND-DEVELOPER","DRAND-HTTP-API","DRAND-QUICKNET-ANNOU'
+    'NCEMENT","DRAND-SPEC"],"operational_quorum_ready":false,"operational_use_approved":false,"period_seconds":3,"p'
+    'rofile_id":"machine-time-drand-quicknet-chain-profile-structural.v1","profile_schema":"machine-time-drand-quic'
+    'knet-chain-profile.v1","proof_verified":false,"protocol_profile_id":"drand-quicknet-signature-and-chain-info-o'
+    'ffline.v1","provider_id":"league-of-entropy","provider_operationally_approved":false,"public_key_encoded_lengt'
+    'h":96,"public_key_fingerprint":"96e74fcdd3a118406d3800a4e4935e67450a6befde915d47a0d6a13519cee134","quorum_coun'
+    'table":false,"randomness_verified":false,"readiness_promoted":false,"scheme_id":"bls-unchained-g1-rfc9380","si'
+    'gnature_parsed":false,"signature_verified":false,"source_id":"drand-quicknet-mainnet","source_reachable_proven'
+    '":false,"timestamp_origin_proven":false,"verification_policy_id":"deterministic_supplied_proof_verification_no'
+    '_network.v1","wire_profile_id":"drand-http-api-v2-with-chain-info"}'
 )
+_EXPECTED_UNICODE_DESCRIPTOR_CANONICAL_JSON = (
+    '{"bound_registry_digest":"1808874889aad3f671e481e69da3e725b5119c5dd915e802b66c40b37769dfce","bound_registry_so'
+    'urce_entry_digest":"c3dae5eab6e5fb046d30e66f841804c95e2ecffb65efd8e77553ef096be6eb3c","bound_snapshot_id":"dra'
+    'nd-\\u00e9\\u00e9\\u00e9\\u00e9\\ud83d\\ude00","bound_snapshot_self_digest":"913930a595fe522260d14a619b441f5ed'
+    'f1a707b3968c450336f89ecaae13686","chain_hash":"52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e97'
+    '1","chain_info_canonical_digest":"8c15669e77d0da7250abf9247322e02a4acd8d2bc65d50578e32031ecc6ac5c1","chain_pro'
+    'file_structurally_bound":true,"connector_promoted":false,"cryptographic_backend_selected":false,"dependency_pr'
+    'ofile_admitted":false,"dependency_profile_id":"D-DEP-02","fixture_corpus_id":"FX-DRAND-QUICKNET.v1","fixture_c'
+    'orpus_loaded":false,"fixture_corpus_verified":false,"genesis_time_seconds":1692803367,"machine_time_origin_pro'
+    'ven":false,"message_encoding_profile_selected":false,"official_citation_ids":["DRAND-DEVELOPER","DRAND-HTTP-AP'
+    'I","DRAND-QUICKNET-ANNOUNCEMENT","DRAND-SPEC"],"operational_quorum_ready":false,"operational_use_approved":fal'
+    'se,"period_seconds":3,"profile_id":"machine-time-drand-quicknet-chain-profile-structural.v1","profile_schema":'
+    '"machine-time-drand-quicknet-chain-profile.v1","proof_verified":false,"protocol_profile_id":"drand-quicknet-si'
+    'gnature-and-chain-info-offline.v1","provider_id":"league-of-entropy","provider_operationally_approved":false,"'
+    'public_key_encoded_length":96,"public_key_fingerprint":"96e74fcdd3a118406d3800a4e4935e67450a6befde915d47a0d6a1'
+    '3519cee134","quorum_countable":false,"randomness_verified":false,"readiness_promoted":false,"scheme_id":"bls-u'
+    'nchained-g1-rfc9380","signature_parsed":false,"signature_verified":false,"source_id":"drand-quicknet-mainnet",'
+    '"source_reachable_proven":false,"timestamp_origin_proven":false,"verification_policy_id":"deterministic_suppli'
+    'ed_proof_verification_no_network.v1","wire_profile_id":"drand-http-api-v2-with-chain-info"}'
+)
+_CANONICAL_SETTINGS = {
+    "sort_keys": True,
+    "separators": (",", ":"),
+    "ensure_ascii": True,
+    "allow_nan": False,
+}
 
 
 def _official_digest(raw: bytes = _OFFICIAL_RAW) -> str:
     return hashlib.sha256(_S1_OFFICIAL_DOMAIN + raw).hexdigest()
 
 
-def _snapshot(**changes: object) -> object:
+def _snapshot(**changes: object) -> MachineTimeSourceTrustSnapshot:
     material = changes.pop("trust_material_bytes", _PUBLIC_KEY)
     values: dict[str, object] = {
         "snapshot_schema": MACHINE_TIME_SOURCE_TRUST_SNAPSHOT_SCHEMA,
@@ -207,6 +249,15 @@ def _raises(reason: object, **changes: object) -> None:
     assert captured.value.reason is reason
 
 
+def _drand_record() -> dict[str, object]:
+    payload = machine_time_source_registry_to_dict(build_approved_machine_time_source_registry())
+    return next(item for item in payload["sources"] if item["source_id"] == "drand-quicknet-mainnet")
+
+
+def _record_facts(record: dict[str, object]) -> dict[str, object]:
+    return {pair[0]: pair[1] for pair in record["fact_items"]}
+
+
 def _closure_registry(profile: object) -> dict[int, tuple[object, ...]]:
     candidates: list[dict[int, tuple[object, ...]]] = []
     visited: set[int] = set()
@@ -258,22 +309,22 @@ def test_exact_public_api_field_inventory_and_digest_domains() -> None:
     signature = inspect.signature(module.build_machine_time_drand_quicknet_chain_profile)
     assert tuple(signature.parameters) == ("snapshot", "registry", "chain_info")
     assert all(parameter.kind is inspect.Parameter.KEYWORD_ONLY for parameter in signature.parameters.values())
-    assert len(module._FIELD_NAMES) == 46
-    assert len(module._DESCRIPTOR_FIELD_NAMES) == 45
+    assert len(module._FIELD_NAMES) == 41
+    assert len(module._DESCRIPTOR_FIELD_NAMES) == 40
     assert module._FIELD_NAMES[-1] == "profile_self_digest"
     assert module._DESCRIPTOR_FIELD_NAMES == module._FIELD_NAMES[:-1]
-    assert len(set(module._FIELD_NAMES)) == 46
+    assert len(set(module._FIELD_NAMES)) == 41
     assert len(_REASON) == 16
     assert len(module._PROFILE_FALSE_FLAGS) == 18
     assert module._PROFILE_FALSE_FLAGS == _EXPECTED_FALSE_FLAGS
     assert module._CHAIN_INFO_FIELD_NAMES == (
-        "beacon_id",
         "chain_hash",
         "public_key",
         "scheme_id",
         "genesis_time_seconds",
         "period_seconds",
     )
+    assert len(module._CHAIN_INFO_FIELD_NAMES) == 5
     assert module._PROFILE_DIGEST_DOMAIN == _EXPECTED_SELF_DIGEST_DOMAIN
     assert module._CHAIN_INFO_DIGEST_DOMAIN == _EXPECTED_CHAIN_INFO_DOMAIN
     assert len(_EXPECTED_SELF_DIGEST_DOMAIN) == 57
@@ -282,13 +333,110 @@ def test_exact_public_api_field_inventory_and_digest_domains() -> None:
     assert _EXPECTED_CHAIN_INFO_DOMAIN.endswith(b"\x00")
     assert module.MACHINE_TIME_DRAND_QUICKNET_CHAIN_PROFILE_SCHEMA == _EXPECTED_DESCRIPTOR["profile_schema"]
     assert module.MACHINE_TIME_DRAND_QUICKNET_CHAIN_PROFILE_ID == _EXPECTED_DESCRIPTOR["profile_id"]
-    # groupHash is named in the module docstring only, to record that it is deliberately not bound.
-    assert "group_hash" not in module._CHAIN_INFO_FIELD_NAMES
-    assert "group_hash" not in module._DESCRIPTOR_FIELD_NAMES
-    assert "group_hash" not in module._REGISTRY_FACT_KEYS
-    body = inspect.getsource(module).split('"""', 2)[-1]
-    assert "groupHash" not in body
-    assert "group_hash" not in body
+
+
+def test_removed_unsupported_protocol_facts_cannot_reenter_the_contract() -> None:
+    assert module._DEFERRED_UNBOUND_PROTOCOL_FACTS == _DEFERRED_FACTS
+    profile = _build()
+    descriptor = module.machine_time_drand_quicknet_chain_profile_commitment_descriptor(profile)
+    for name in _DEFERRED_FACTS:
+        assert name not in module._FIELD_NAMES, name
+        assert name not in module._DESCRIPTOR_FIELD_NAMES, name
+        assert name not in module._CHAIN_INFO_FIELD_NAMES, name
+        assert name not in descriptor, name
+        assert not hasattr(profile, name), name
+    assert set(_DEFERRED_FACTS).isdisjoint(module._DESCRIPTOR_FIELD_NAMES)
+    for constant in (
+        "_BEACON_ID",
+        "_CURVE_ID",
+        "_PUBLIC_KEY_GROUP",
+        "_SIGNATURE_GROUP",
+        "_SIGNATURE_ENCODED_LENGTH",
+        "_PUBLIC_KEY_ENCODED_LENGTH",
+    ):
+        assert not hasattr(module, constant), constant
+    # the caller cannot smuggle a deferred fact back in through the chain-info mapping
+    for name in _DEFERRED_FACTS:
+        smuggled = _chain_info()
+        smuggled[name] = "quicknet"
+        _raises(_REASON.FIELD_INVENTORY_INVALID, chain_info=smuggled)
+
+
+def test_every_published_external_fact_has_exact_upstream_provenance() -> None:
+    snapshot = _snapshot()
+    registry = build_approved_machine_time_source_registry()
+    profile = _build(snapshot=snapshot, registry=registry)
+    payload = machine_time_source_registry_to_dict(registry)
+    record = next(item for item in payload["sources"] if item["source_id"] == "drand-quicknet-mainnet")
+    facts = _record_facts(record)
+
+    mt3_facts = {
+        "chain_hash": (profile.chain_hash, facts["chain_hash"]),
+        "scheme_id": (profile.scheme_id, facts["scheme"]),
+        "period_seconds": (profile.period_seconds, facts["period_seconds"]),
+        "genesis_time_seconds": (profile.genesis_time_seconds, facts["genesis_unix_seconds"]),
+        "public_key_encoded_length": (profile.public_key_encoded_length, len(bytes.fromhex(facts["public_key"]))),
+    }
+    for name, (published, upstream) in mt3_facts.items():
+        assert published == upstream, name
+
+    shared_identifiers = {
+        "source_id": (profile.source_id, record["source_id"], snapshot.source_id),
+        "provider_id": (profile.provider_id, record["provider_id"], snapshot.provider_id),
+        "protocol_profile_id": (
+            profile.protocol_profile_id,
+            record["verification_profile_id"],
+            snapshot.protocol_profile_id,
+        ),
+        "wire_profile_id": (profile.wire_profile_id, record["protocol_version"], snapshot.protocol_wire_version),
+    }
+    for name, (published, mt3_value, s1_value) in shared_identifiers.items():
+        assert published == mt3_value == s1_value, name
+    assert tuple(profile.official_citation_ids) == tuple(sorted(record["citation_ids"]))
+    assert tuple(profile.official_citation_ids) == snapshot.official_citation_ids
+
+    mt3_digests = {
+        "bound_registry_digest": (profile.bound_registry_digest, payload["registry_digest"]),
+        "bound_registry_source_entry_digest": (profile.bound_registry_source_entry_digest, record["entry_digest"]),
+    }
+    for name, (published, upstream) in mt3_digests.items():
+        assert published == upstream, name
+
+    s1_fields = {
+        "dependency_profile_id": (profile.dependency_profile_id, snapshot.dependency_profile_id),
+        "fixture_corpus_id": (profile.fixture_corpus_id, snapshot.fixture_corpus_id),
+        "verification_policy_id": (profile.verification_policy_id, snapshot.verification_policy_id),
+        "bound_snapshot_id": (profile.bound_snapshot_id, snapshot.snapshot_id),
+        "bound_snapshot_self_digest": (profile.bound_snapshot_self_digest, snapshot.snapshot_self_digest),
+        "public_key_fingerprint": (profile.public_key_fingerprint, snapshot.trust_material_fingerprint),
+    }
+    for name, (published, upstream) in s1_fields.items():
+        assert published == upstream, name
+
+    module_owned = {"profile_schema", "profile_id", "chain_profile_structurally_bound"}
+    derived_from_caller_input = {"chain_info_canonical_digest"}
+    partition = (
+        set(mt3_facts)
+        | set(shared_identifiers)
+        | {"official_citation_ids"}
+        | set(mt3_digests)
+        | set(s1_fields)
+        | module_owned
+        | derived_from_caller_input
+        | set(module._PROFILE_FALSE_FLAGS)
+    )
+    assert partition == set(module._DESCRIPTOR_FIELD_NAMES)
+    assert len(partition) == 40
+
+
+def test_public_key_encoded_length_is_derived_from_the_bound_registry_key() -> None:
+    record = _drand_record()
+    derived = len(bytes.fromhex(_record_facts(record)["public_key"]))
+    assert derived == 96
+    assert _build().public_key_encoded_length == derived
+    int_constants = {name: value for name, value in vars(module).items() if type(value) is int and name.upper() == name}
+    assert derived not in set(int_constants.values()), int_constants
+    assert _EXPECTED_DESCRIPTOR["public_key_encoded_length"] == derived
 
 
 def test_valid_structural_binding_and_literal_known_answer_vector() -> None:
@@ -296,15 +444,13 @@ def test_valid_structural_binding_and_literal_known_answer_vector() -> None:
     registry = build_approved_machine_time_source_registry()
     profile = _build(snapshot=snapshot, registry=registry)
 
-    # the three upstream digests in the literal vector really are the merged public upstream values
     assert snapshot.snapshot_self_digest == _EXPECTED_BOUND_SNAPSHOT_SELF_DIGEST
     assert registry.registry_digest == _EXPECTED_BOUND_REGISTRY_DIGEST
+    assert _drand_record()["entry_digest"] == _EXPECTED_BOUND_ENTRY_DIGEST
     assert hashlib.sha256(_PUBLIC_KEY).hexdigest() == _EXPECTED_PUBLIC_KEY_FINGERPRINT
     assert len(_PUBLIC_KEY) == 96
 
-    chain_canonical = json.dumps(
-        _EXPECTED_CHAIN_INFO, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
-    )
+    chain_canonical = json.dumps(_EXPECTED_CHAIN_INFO, **_CANONICAL_SETTINGS)
     assert chain_canonical == _EXPECTED_CHAIN_INFO_CANONICAL_JSON
     assert (
         hashlib.sha256(_EXPECTED_CHAIN_INFO_DOMAIN + _EXPECTED_CHAIN_INFO_CANONICAL_JSON.encode("utf-8")).hexdigest()
@@ -313,16 +459,13 @@ def test_valid_structural_binding_and_literal_known_answer_vector() -> None:
 
     descriptor = module.machine_time_drand_quicknet_chain_profile_commitment_descriptor(profile)
     assert descriptor == _EXPECTED_DESCRIPTOR
-    assert len(_EXPECTED_DESCRIPTOR) == 45
+    assert len(_EXPECTED_DESCRIPTOR) == 40
     assert "profile_self_digest" not in _EXPECTED_DESCRIPTOR
     assert type(descriptor["official_citation_ids"]) is list
     assert descriptor["official_citation_ids"] == list(_CITATION_IDS)
     assert descriptor["chain_info_canonical_digest"] == _EXPECTED_CHAIN_INFO_DIGEST
-    assert descriptor["bound_registry_source_entry_digest"] == _EXPECTED_BOUND_ENTRY_DIGEST
 
-    descriptor_canonical = json.dumps(
-        _EXPECTED_DESCRIPTOR, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
-    )
+    descriptor_canonical = json.dumps(_EXPECTED_DESCRIPTOR, **_CANONICAL_SETTINGS)
     assert descriptor_canonical == _EXPECTED_DESCRIPTOR_CANONICAL_JSON
     assert _EXPECTED_DESCRIPTOR_CANONICAL_JSON.isascii()
     assert (
@@ -333,6 +476,58 @@ def test_valid_structural_binding_and_literal_known_answer_vector() -> None:
     assert module.machine_time_drand_quicknet_chain_profile_self_digest(profile) == _EXPECTED_PROFILE_SELF_DIGEST
     assert profile.chain_profile_structurally_bound is True
     assert bool(profile) is True
+
+
+def test_literal_non_ascii_descriptor_canonical_json_and_self_digest_known_answer() -> None:
+    assert not _UNICODE_SNAPSHOT_ID.isascii()
+    assert chr(0xE9) in _UNICODE_SNAPSHOT_ID
+    assert chr(0x1F600) in _UNICODE_SNAPSHOT_ID
+    assert len(_UNICODE_SNAPSHOT_ID) == 11
+    assert len(_UNICODE_SNAPSHOT_ID.encode("utf-8")) == 18
+
+    snapshot = _snapshot(snapshot_id=_UNICODE_SNAPSHOT_ID)
+    assert snapshot.snapshot_self_digest == _EXPECTED_UNICODE_SNAPSHOT_SELF_DIGEST
+    profile = _build(snapshot=snapshot)
+    assert profile.chain_profile_structurally_bound is True
+    assert profile.bound_snapshot_id == _UNICODE_SNAPSHOT_ID
+
+    descriptor = module.machine_time_drand_quicknet_chain_profile_commitment_descriptor(profile)
+    assert descriptor == _EXPECTED_UNICODE_DESCRIPTOR
+    assert len(_EXPECTED_UNICODE_DESCRIPTOR) == 40
+    assert set(_EXPECTED_UNICODE_DESCRIPTOR) == set(_EXPECTED_DESCRIPTOR)
+    assert set(_EXPECTED_UNICODE_DESCRIPTOR) == set(module._DESCRIPTOR_FIELD_NAMES)
+
+    canonical_json = json.dumps(_EXPECTED_UNICODE_DESCRIPTOR, **_CANONICAL_SETTINGS)
+    assert canonical_json == _EXPECTED_UNICODE_DESCRIPTOR_CANONICAL_JSON
+    assert _EXPECTED_UNICODE_DESCRIPTOR_CANONICAL_JSON.isascii()
+    assert "\\u00e9" in _EXPECTED_UNICODE_DESCRIPTOR_CANONICAL_JSON
+    assert "\\ud83d\\ude00" in _EXPECTED_UNICODE_DESCRIPTOR_CANONICAL_JSON
+    assert chr(0xE9) not in _EXPECTED_UNICODE_DESCRIPTOR_CANONICAL_JSON
+    assert chr(0x1F600) not in _EXPECTED_UNICODE_DESCRIPTOR_CANONICAL_JSON
+
+    assert len(_EXPECTED_SELF_DIGEST_DOMAIN) == 57
+    assert _EXPECTED_SELF_DIGEST_DOMAIN.endswith(b"\x00")
+    independently_computed = hashlib.sha256(
+        _EXPECTED_SELF_DIGEST_DOMAIN + _EXPECTED_UNICODE_DESCRIPTOR_CANONICAL_JSON.encode("utf-8")
+    ).hexdigest()
+    assert independently_computed == _EXPECTED_UNICODE_PROFILE_SELF_DIGEST
+    assert _EXPECTED_UNICODE_PROFILE_SELF_DIGEST != _EXPECTED_PROFILE_SELF_DIGEST
+    assert profile.profile_self_digest == _EXPECTED_UNICODE_PROFILE_SELF_DIGEST
+    assert (
+        module.machine_time_drand_quicknet_chain_profile_self_digest(profile) == _EXPECTED_UNICODE_PROFILE_SELF_DIGEST
+    )
+
+    unescaped = json.dumps(
+        _EXPECTED_UNICODE_DESCRIPTOR,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    assert not unescaped.isascii()
+    unescaped_digest = hashlib.sha256(_EXPECTED_SELF_DIGEST_DOMAIN + unescaped.encode("utf-8")).hexdigest()
+    assert unescaped_digest == _EXPECTED_UNESCAPED_UNICODE_DIGEST
+    assert unescaped_digest != _EXPECTED_UNICODE_PROFILE_SELF_DIGEST
 
 
 def test_descriptor_output_is_isolated_and_key_order_of_input_is_free() -> None:
@@ -353,14 +548,72 @@ def test_descriptor_output_is_isolated_and_key_order_of_input_is_free() -> None:
     assert other.profile_self_digest == _EXPECTED_PROFILE_SELF_DIGEST
 
 
+def test_caller_chain_info_is_normalized_exactly_once_per_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    caller = _chain_info()
+    real = module._validate_and_normalize_chain_info
+    caller_reads: list[object] = []
+
+    def counting(candidate: object) -> dict[str, object]:
+        normalized = real(candidate)
+        if candidate is caller:
+            caller_reads.append(candidate)
+            # hostile mutation immediately after the first (and only allowed) caller read
+            caller["chain_hash"] = "0" * 64
+            caller["public_key"] = "00" * 96
+        return normalized
+
+    monkeypatch.setattr(module, "_validate_and_normalize_chain_info", counting)
+    profile = module.build_machine_time_drand_quicknet_chain_profile(
+        snapshot=_snapshot(),
+        registry=build_approved_machine_time_source_registry(),
+        chain_info=caller,
+    )
+
+    assert len(caller_reads) == 1
+    assert caller["chain_hash"] == "0" * 64
+    assert bool(profile) is True
+    assert profile.chain_hash == _CHAIN_HASH
+    assert profile.chain_info_canonical_digest == _EXPECTED_CHAIN_INFO_DIGEST
+    assert profile.profile_self_digest == _EXPECTED_PROFILE_SELF_DIGEST
+
+    registry = _closure_registry(profile)
+    retained = registry[id(profile)][1][2]
+    assert retained is not caller
+    assert retained == _EXPECTED_CHAIN_INFO
+    assert len(caller_reads) == 1
+
+    caller["scheme_id"] = "mutated-again"
+    assert profile.profile_self_digest == _EXPECTED_PROFILE_SELF_DIGEST
+
+
+def test_reconstruction_normalizes_the_incoming_mapping_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile = _build()
+    state = _reduce_state(profile)
+    incoming = state[2]
+    real = module._validate_and_normalize_chain_info
+    incoming_reads: list[object] = []
+
+    def counting(candidate: object) -> dict[str, object]:
+        normalized = real(candidate)
+        if candidate is incoming:
+            incoming_reads.append(candidate)
+            incoming["chain_hash"] = "0" * 64
+        return normalized
+
+    monkeypatch.setattr(module, "_validate_and_normalize_chain_info", counting)
+    rebuilt = module._rebuild_machine_time_drand_quicknet_chain_profile(state)
+    assert len(incoming_reads) == 1
+    assert rebuilt is not profile
+    assert rebuilt.profile_self_digest == _EXPECTED_PROFILE_SELF_DIGEST
+    assert rebuilt.chain_hash == _CHAIN_HASH
+
+
 @pytest.mark.parametrize("candidate", (object(), None, "snapshot", 7))
 def test_wrong_snapshot_type_fails_closed(candidate: object) -> None:
     _raises(_REASON.SNAPSHOT_BINDING_INVALID, snapshot=candidate)
 
 
-def test_hollow_and_dead_snapshot_fail_through_the_s1_boundary() -> None:
-    from crypto_core.validation.machine_time_source_trust_snapshot import MachineTimeSourceTrustSnapshot
-
+def test_hollow_snapshot_fails_through_the_s1_boundary() -> None:
     hollow = object.__new__(MachineTimeSourceTrustSnapshot)
     _raises(_REASON.SNAPSHOT_BINDING_INVALID, snapshot=hollow)
 
@@ -396,8 +649,7 @@ def test_rejected_and_mutated_registry_fail_closed() -> None:
     ("field", "value"),
     (
         ("chain_hash", "0" * 64),
-        ("beacon_id", "mainnet"),
-        ("beacon_id", "Quicknet"),
+        ("chain_hash", _CHAIN_HASH.upper()),
         ("scheme_id", "bls-unchained-on-g2-rfc9380"),
         ("period_seconds", 4),
         ("period_seconds", 30),
@@ -419,7 +671,7 @@ def test_public_key_encoding_length_and_mismatch() -> None:
     # the supplied encoding must equal the S1 trust material itself, not merely the MT-3 record value
     _raises(_REASON.PUBLIC_KEY_MISMATCH, snapshot=_snapshot(trust_material_bytes=bytes(96)))
     _raises(_REASON.PUBLIC_KEY_MISMATCH, snapshot=_snapshot(trust_material_bytes=b"\x01" * 96))
-    flipped = ("83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183d") + _PUBLIC_KEY_HEX[64:]
+    flipped = "83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183d" + _PUBLIC_KEY_HEX[64:]
     assert flipped != _PUBLIC_KEY_HEX
     _raises(_REASON.PUBLIC_KEY_MISMATCH, public_key=flipped)
 
@@ -434,7 +686,7 @@ def test_chain_info_inventory_and_hostile_keys_reject_before_comparison() -> Non
     _raises(_REASON.WRONG_INPUT_TYPE, chain_info=DictSubclass(_chain_info()))
 
     missing = _chain_info()
-    missing.pop("beacon_id")
+    missing.pop("scheme_id")
     _raises(_REASON.FIELD_INVENTORY_INVALID, chain_info=missing)
     extra = _chain_info()
     extra["group_hash"] = "deadbeef"
@@ -453,19 +705,19 @@ def test_chain_info_inventory_and_hostile_keys_reject_before_comparison() -> Non
         compared = False
 
         def __hash__(self) -> int:
-            return hash("beacon_id")
+            return hash("scheme_id")
 
         def __eq__(self, other: object) -> bool:
             type(self).compared = True
             raise AssertionError("caller equality must not run")
 
     subclass_key = _chain_info()
-    subclass_key[ExplosiveStr("beacon_id")] = subclass_key.pop("beacon_id")
+    subclass_key[ExplosiveStr("scheme_id")] = subclass_key.pop("scheme_id")
     _raises(_REASON.FIELD_INVENTORY_INVALID, chain_info=subclass_key)
     assert ExplosiveStr.compared is False
 
     hostile = _chain_info()
-    hostile[HostileKey()] = hostile.pop("beacon_id")
+    hostile[HostileKey()] = hostile.pop("scheme_id")
     _raises(_REASON.FIELD_INVENTORY_INVALID, chain_info=hostile)
     assert HostileKey.compared is False
 
@@ -477,28 +729,29 @@ def test_chain_info_value_types_bounds_and_canonical_text() -> None:
     class IntSubclass(int):
         pass
 
-    _raises(_REASON.FIELD_TYPE_INVALID, beacon_id=StrSubclass("quicknet"))
+    _raises(_REASON.FIELD_TYPE_INVALID, scheme_id=StrSubclass("bls-unchained-g1-rfc9380"))
     _raises(_REASON.FIELD_TYPE_INVALID, period_seconds=IntSubclass(3))
     _raises(_REASON.FIELD_TYPE_INVALID, period_seconds=True)
     _raises(_REASON.FIELD_TYPE_INVALID, period_seconds="3")
     _raises(_REASON.FIELD_TYPE_INVALID, genesis_time_seconds=1_692_803_367.0)
     _raises(_REASON.FIELD_TYPE_INVALID, chain_hash=None)
 
-    _raises(_REASON.RESOURCE_BOUND_EXCEEDED, beacon_id="q" * 257)
-    _raises(_REASON.RESOURCE_BOUND_EXCEEDED, beacon_id=chr(0xE9) * 129)
+    _raises(_REASON.RESOURCE_BOUND_EXCEEDED, scheme_id="q" * 257)
+    _raises(_REASON.RESOURCE_BOUND_EXCEEDED, scheme_id=chr(0xE9) * 129)
     _raises(_REASON.RESOURCE_BOUND_EXCEEDED, period_seconds=0)
     _raises(_REASON.RESOURCE_BOUND_EXCEEDED, period_seconds=-3)
     _raises(_REASON.RESOURCE_BOUND_EXCEEDED, genesis_time_seconds=1 << 63)
 
-    _raises(_REASON.CANONICAL_TEXT_INVALID, beacon_id="quick" + chr(7) + "net")
-    _raises(_REASON.CANONICAL_TEXT_INVALID, beacon_id="quicknet" + chr(127))
-    _raises(_REASON.CANONICAL_TEXT_INVALID, beacon_id=" quicknet")
-    _raises(_REASON.CANONICAL_TEXT_INVALID, beacon_id="quicknet\n")
-    _raises(_REASON.CANONICAL_TEXT_INVALID, beacon_id="quick" + chr(0x2028) + "net")
-    _raises(_REASON.CANONICAL_TEXT_INVALID, beacon_id="quick" + chr(0x2029) + "net")
-    _raises(_REASON.CANONICAL_TEXT_INVALID, beacon_id="")
-    _raises(_REASON.CANONICAL_TEXT_INVALID, beacon_id=chr(0xD800))
-    _raises(_REASON.CANONICAL_TEXT_INVALID, scheme_id="prefix" + chr(0xDFFF) + "suffix")
+    _raises(_REASON.CANONICAL_TEXT_INVALID, scheme_id="bls" + chr(7) + "scheme")
+    _raises(_REASON.CANONICAL_TEXT_INVALID, scheme_id="bls" + chr(127))
+    _raises(_REASON.CANONICAL_TEXT_INVALID, scheme_id="bls" + chr(0x2028) + "scheme")
+    _raises(_REASON.CANONICAL_TEXT_INVALID, scheme_id="bls" + chr(0x2029) + "scheme")
+    _raises(_REASON.CANONICAL_TEXT_INVALID, scheme_id=" bls-unchained-g1-rfc9380")
+    _raises(_REASON.CANONICAL_TEXT_INVALID, scheme_id="bls-unchained-g1-rfc9380" + chr(10))
+    _raises(_REASON.CANONICAL_TEXT_INVALID, scheme_id="bls-unchained-g1-rfc9380" + chr(9))
+    _raises(_REASON.CANONICAL_TEXT_INVALID, scheme_id="")
+    _raises(_REASON.CANONICAL_TEXT_INVALID, scheme_id=chr(0xD800))
+    _raises(_REASON.CANONICAL_TEXT_INVALID, chain_hash="prefix" + chr(0xDFFF) + "suffix")
 
 
 def test_hidden_bound_state_tampering_closes_every_public_surface() -> None:
@@ -535,6 +788,7 @@ def test_hidden_bound_state_tampering_closes_every_public_surface() -> None:
         assert captured.value.reason is _REASON.ARTIFACT_INCONSISTENT
     finally:
         registry[key] = valid_entry
+    assert profile.profile_self_digest == _EXPECTED_PROFILE_SELF_DIGEST
 
 
 def test_sealing_hollow_impostor_equality_and_hash_contract() -> None:
@@ -577,16 +831,89 @@ def test_sealing_hollow_impostor_equality_and_hash_contract() -> None:
     assert (profile != hostile) is True
     assert HostileOperand.inspected is False
 
-    registry = _closure_registry(profile)
+
+def test_registry_entry_with_a_foreign_weakref_fails_closed() -> None:
+    owner = _build()
+    registry = _closure_registry(owner)
     impostor = object.__new__(module.MachineTimeDrandQuicknetChainProfile)
     impostor_key = id(impostor)
-    registry[impostor_key] = (weakref.ref(profile), registry[id(profile)][1])
+    baseline = set(registry)
+    registry[impostor_key] = (weakref.ref(owner), registry[id(owner)][1])
     try:
-        with pytest.raises(_ERROR) as captured:
-            bool(impostor)
-        assert captured.value.reason is _REASON.ARTIFACT_INCONSISTENT
+        for consume in (bool, repr, lambda value: value.source_id):
+            with pytest.raises(_ERROR) as captured:
+                consume(impostor)
+            assert captured.value.reason is _REASON.ARTIFACT_INCONSISTENT
     finally:
         registry.pop(impostor_key, None)
+    assert set(registry) == baseline
+    assert bool(owner) is True
+
+
+def test_dead_owner_entry_is_removed_by_the_production_weakref_callback() -> None:
+    profile = _build()
+    registry = _closure_registry(profile)
+    key = id(profile)
+    registered_ref = registry[key][0]
+    assert type(registered_ref) is weakref.ReferenceType
+    assert registered_ref() is profile
+    baseline = set(registry) - {key}
+
+    del profile
+    gc.collect()
+
+    assert registered_ref() is None
+    assert key not in registry
+    # no entry may be added by the cleanup; other live artifacts may legitimately also have been
+    # collected between the baseline snapshot and here, so the invariant is "never grows".
+    assert set(registry) <= baseline
+
+
+def test_stale_weakref_callback_cannot_delete_a_replacement_entry() -> None:
+    owner = _build()
+    registry = _closure_registry(owner)
+    owner_key = id(owner)
+    owner_entry = registry[owner_key]
+    original_ref = owner_entry[0]
+
+    replacement_owner = _build()
+    replacement_ref = weakref.ref(replacement_owner)
+    registry[owner_key] = (replacement_ref, owner_entry[1])
+    try:
+        del owner
+        gc.collect()
+        assert original_ref() is None
+        assert owner_key in registry
+        assert registry[owner_key][0] is replacement_ref
+        assert replacement_ref() is replacement_owner
+    finally:
+        registry.pop(owner_key, None)
+    assert bool(replacement_owner) is True
+
+
+def test_closure_registry_has_no_cross_test_state_leak() -> None:
+    anchor = _build()
+    anchor_key = id(anchor)
+    registry = _closure_registry(anchor)
+    baseline = set(registry)
+
+    transient = _build()
+    transient_key = id(transient)
+    assert transient_key in registry
+    assert set(registry) == baseline | {transient_key}
+    del transient
+    gc.collect()
+    assert transient_key not in registry
+    # the registry may only shrink as unrelated artifacts die; it must never grow or lose the anchor
+    assert set(registry) <= baseline
+    assert anchor_key in registry
+
+    with pytest.raises(_ERROR):
+        _build(chain_hash="0" * 64)
+    gc.collect()
+    assert set(registry) <= baseline
+    assert anchor_key in registry
+    assert bool(anchor) is True
 
 
 def test_copy_deepcopy_and_reduce_ex_protocols_rebuild_fresh_valid_identities() -> None:
@@ -596,6 +923,7 @@ def test_copy_deepcopy_and_reduce_ex_protocols_rebuild_fresh_valid_identities() 
     assert len(expected_state) == 5
     assert expected_state[3] == tuple([False] * 18)
     assert expected_state[4] == _EXPECTED_PROFILE_SELF_DIGEST
+    assert expected_state[2] == _EXPECTED_CHAIN_INFO
 
     duplicate = copy.copy(profile)
     deep = copy.deepcopy(profile)
@@ -684,7 +1012,7 @@ def test_repr_and_str_are_redacted_ascii_single_line_and_bounded() -> None:
     assert rendered.isascii()
     assert "\n" not in rendered and "\r" not in rendered
     assert len(rendered) <= 512
-    assert len(rendered) == 431
+    assert len(rendered) == 411
     assert _PUBLIC_KEY_HEX not in rendered
     assert _PUBLIC_KEY_HEX[:32] not in rendered
     assert _PUBLIC_KEY not in rendered.encode()
@@ -696,6 +1024,13 @@ def test_repr_and_str_are_redacted_ascii_single_line_and_bounded() -> None:
     assert "chain_profile_structurally_bound=True" in rendered
     for forbidden in ("ready=", "verified=True", "admitted=True", "approved=True", "operational=True"):
         assert forbidden not in rendered
+    for deferred in _DEFERRED_FACTS:
+        assert deferred not in rendered
+
+    unicode_rendered = repr(_build(snapshot=_snapshot(snapshot_id=_UNICODE_SNAPSHOT_ID)))
+    assert unicode_rendered.isascii()
+    assert _UNICODE_SNAPSHOT_ID not in unicode_rendered
+    assert "snapshot_id=<str len=11>" in unicode_rendered
 
 
 def test_every_protected_promotion_flag_is_exactly_false() -> None:
@@ -706,11 +1041,8 @@ def test_every_protected_promotion_flag_is_exactly_false() -> None:
         assert value is False, name
         assert descriptor[name] is False, name
     assert profile.chain_profile_structurally_bound is True
-    assert not hasattr(profile, "ready")
-    assert not hasattr(profile, "verified")
-    assert not hasattr(profile, "admitted")
-    assert not hasattr(profile, "operational")
-    assert not hasattr(profile, "approved")
+    for absent in ("ready", "verified", "admitted", "operational", "approved"):
+        assert not hasattr(profile, absent)
     assert set(_EXPECTED_FALSE_FLAGS).isdisjoint({"chain_profile_structurally_bound"})
     assert len(_EXPECTED_FALSE_FLAGS) == 18
 
@@ -736,8 +1068,8 @@ def test_every_retained_closed_reason_is_behaviorally_reachable() -> None:
         reason_of(lambda: _build(chain_info=[])),
         reason_of(lambda: _build(chain_info={})),
         reason_of(lambda: _build(period_seconds="3")),
-        reason_of(lambda: _build(beacon_id="quick" + chr(7) + "net")),
-        reason_of(lambda: _build(beacon_id="q" * 257)),
+        reason_of(lambda: _build(scheme_id="bls" + chr(7))),
+        reason_of(lambda: _build(scheme_id="q" * 257)),
         reason_of(lambda: _build(snapshot=object())),
         reason_of(lambda: _build(registry=object())),
         reason_of(lambda: _build(chain_hash="0" * 64)),

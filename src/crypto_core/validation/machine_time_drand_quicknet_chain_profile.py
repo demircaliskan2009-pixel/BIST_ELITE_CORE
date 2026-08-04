@@ -1,16 +1,29 @@
 """Fail-closed structural Drand Quicknet chain-profile binding.
 
 This module implements only the controller-authorized S2 structural artifact.  It binds one exact
-S1 ``MachineTimeSourceTrustSnapshot``, one exact structurally READY MT-3 ``MachineTimeSourceRegistry``,
-the controller-approved Quicknet chain-identity constants, and one caller-supplied plain chain-info
-mapping into a single deterministic self-digested commitment.
+S1 ``MachineTimeSourceTrustSnapshot``, one exact structurally READY MT-3 ``MachineTimeSourceRegistry``
+record, and one caller-supplied plain chain-info mapping into a single deterministic self-digested
+commitment.
+
+PROVENANCE RULE.  Every provider/protocol fact this artifact publishes is traceable to an exact
+serialized field of the merged upstream authority: the MT-3 Drand record ``fact_items`` inventory
+(``chain_hash``, ``genesis_unix_seconds``, ``mainnet_documented``, ``period_seconds``, ``public_key``,
+``scheme``), the MT-3 record identifiers, or the S1 eligible row.  ``public_key_encoded_length`` is
+DERIVED from the digest-bound MT-3 ``public_key`` value, never hard-coded.  Facts that the accepted
+upstream authority does NOT serialize -- beacon id, curve id, public-key group, signature group and
+signature encoded length -- are deliberately NOT published, NOT accepted from the caller and NOT
+inferred from the scheme identifier; they are deferred to a future, separately governed verifier or
+protocol-profile slice.  ``groupHash`` is likewise neither accepted nor bound as a trust root here.
 
 It verifies chain/profile IDENTITY ONLY.  It does not verify BLS, parse or verify a beacon signature,
 select a cryptographic dependency or message encoding, load or verify a fixture corpus, admit a
 provider operationally, claim source reachability, prove machine time or a timestamp origin, or promote
-readiness, connectors, quorum countability or proof verification.  ``groupHash`` is deliberately NOT
-accepted and NOT bound as a trust root in this slice.  The public key is never restated here: it is
-taken from the bound S1 trust material and the caller-supplied encoding must equal it exactly.
+readiness, connectors, quorum countability or proof verification.  The public key is never restated
+here: it is taken from the bound S1 trust material, and the caller-supplied encoding must equal both
+that material and the MT-3 record value exactly.
+
+The caller mapping is normalized EXACTLY ONCE per public build or reconstruction attempt, and only that
+one private normalized copy is derived from and retained.
 """
 
 from __future__ import annotations
@@ -59,20 +72,15 @@ _SEALED_ARTIFACT_MESSAGE = "MachineTimeDrandQuicknetChainProfile is sealed and c
 _DIRECT_CONSTRUCTION_MESSAGE = "use build_machine_time_drand_quicknet_chain_profile"
 _ERROR_CONSTRUCTION_MESSAGE = "reason must be an exact MachineTimeDrandQuicknetChainProfileReason"
 
-# Controller-approved MT4-S2 Quicknet chain identity.  Every value is already carried by the merged
-# MT-3 registry record (citation-backed) or by the S1 eligible row; nothing here is a new provider fact.
+# Controller-approved MT4-S2 Quicknet identity.  EVERY constant below is an exact serialized value of
+# the merged MT-3 Drand record or of the S1 eligible row (see the module PROVENANCE RULE).  No protocol
+# fact that upstream does not serialize may be added here, and no fact may be inferred from another.
 _SOURCE_ID = "drand-quicknet-mainnet"
 _PROVIDER_ID = "league-of-entropy"
 _CHAIN_HASH = "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971"
-_BEACON_ID = "quicknet"
 _SCHEME_ID = "bls-unchained-g1-rfc9380"
-_CURVE_ID = "bls12-381"
 _PERIOD_SECONDS = 3
 _GENESIS_TIME_SECONDS = 1_692_803_367
-_PUBLIC_KEY_GROUP = "g2"
-_SIGNATURE_GROUP = "g1"
-_PUBLIC_KEY_ENCODED_LENGTH = 96
-_SIGNATURE_ENCODED_LENGTH = 48
 _PROTOCOL_PROFILE_ID = "drand-quicknet-signature-and-chain-info-offline.v1"
 _WIRE_PROFILE_ID = "drand-http-api-v2-with-chain-info"
 _DEPENDENCY_PROFILE_ID = "D-DEP-02"
@@ -165,9 +173,11 @@ _REGISTRY_FACT_KEYS = (
     "scheme",
 )
 
-# Caller-supplied chain-info inventory.  Exactly the venue-documented values; every other structural
-# fact (curve, groups, encoded lengths, profile ids) is pinned here and never caller-controlled.
-_CHAIN_INFO_TEXT_FIELDS = ("beacon_id", "chain_hash", "public_key", "scheme_id")
+# Caller-supplied chain-info inventory.  Exactly the five values that the MT-3 record independently
+# serializes, so every caller value can be bound against digest-bound upstream authority.  Nothing that
+# upstream does not serialize is accepted here.  Caller KEY ORDER IS FREE (exact set + exact length
+# equality, and the canonical serializer sorts keys); the inventory itself is exact.
+_CHAIN_INFO_TEXT_FIELDS = ("chain_hash", "public_key", "scheme_id")
 _CHAIN_INFO_INT_FIELDS = ("genesis_time_seconds", "period_seconds")
 _CHAIN_INFO_FIELD_NAMES = (*_CHAIN_INFO_TEXT_FIELDS, *_CHAIN_INFO_INT_FIELDS)
 _CHAIN_INFO_FIELD_NAME_SET = frozenset(_CHAIN_INFO_FIELD_NAMES)
@@ -195,21 +205,26 @@ _PROFILE_FALSE_FLAGS = (
     "connector_promoted",
 )
 
+# Deferred to a future separately governed slice because the accepted S1/MT-3 authority does not
+# serialize them.  They must never re-enter this contract without new governed provenance.
+_DEFERRED_UNBOUND_PROTOCOL_FACTS = (
+    "beacon_id",
+    "curve_id",
+    "public_key_group",
+    "signature_group",
+    "signature_encoded_length",
+)
+
 _DESCRIPTOR_FIELD_NAMES = (
     "profile_schema",
     "profile_id",
     "source_id",
     "provider_id",
     "chain_hash",
-    "beacon_id",
     "scheme_id",
-    "curve_id",
     "period_seconds",
     "genesis_time_seconds",
-    "public_key_group",
-    "signature_group",
     "public_key_encoded_length",
-    "signature_encoded_length",
     "public_key_fingerprint",
     "protocol_profile_id",
     "wire_profile_id",
@@ -304,10 +319,13 @@ def _check_text_bound(value: str) -> None:
         raise _err(MachineTimeDrandQuicknetChainProfileReason.RESOURCE_BOUND_EXCEEDED)
 
 
-def _validated_chain_info(chain_info: object) -> dict[str, object]:
-    """Prove the caller mapping is exact plain data before any comparison, ordering or hashing.
+def _validate_and_normalize_chain_info(chain_info: object) -> dict[str, object]:
+    """Prove a mapping is exact plain data before any comparison, ordering or hashing, and normalize it.
 
-    Returns a FRESH plain dict, so the artifact never retains a caller-owned mutable mapping.
+    Returns a FRESH plain dict.  Public entry points call this EXACTLY ONCE on the caller-owned mapping
+    and then pass only the returned private copy onward, so no caller mapping is ever read twice and the
+    artifact never retains a caller-owned mutable object.  Revalidation calls it again on the artifact's
+    own private copy, which is tamper detection rather than a caller read.
     """
     if type(chain_info) is not dict:
         raise _err(MachineTimeDrandQuicknetChainProfileReason.WRONG_INPUT_TYPE)
@@ -359,8 +377,6 @@ def _snapshot_binding(snapshot: object) -> dict[str, object]:
         raise _err(MachineTimeDrandQuicknetChainProfileReason.SNAPSHOT_BINDING_INVALID)
     if hashlib.sha256(material).hexdigest() != read["trust_material_fingerprint"]:
         raise _err(MachineTimeDrandQuicknetChainProfileReason.SNAPSHOT_BINDING_INVALID)
-    if len(material) != _PUBLIC_KEY_ENCODED_LENGTH:
-        raise _err(MachineTimeDrandQuicknetChainProfileReason.PUBLIC_KEY_LENGTH_INVALID)
     return read
 
 
@@ -412,12 +428,16 @@ def _registry_binding(registry: object) -> dict[str, object]:
     registry_public_key = facts["public_key"]
     if type(registry_public_key) is not str or not _is_lower_hex(registry_public_key):
         raise _err(MachineTimeDrandQuicknetChainProfileReason.REGISTRY_BINDING_INVALID)
-    if len(bytes.fromhex(registry_public_key)) != _PUBLIC_KEY_ENCODED_LENGTH:
+    # The expected key length is DERIVED from this digest-bound MT-3 value; it is never a local constant.
+    registry_public_key_bytes = bytes.fromhex(registry_public_key)
+    if not registry_public_key_bytes:
         raise _err(MachineTimeDrandQuicknetChainProfileReason.REGISTRY_BINDING_INVALID)
     return {
         "registry_digest": payload["registry_digest"],
         "entry_digest": record["entry_digest"],
         "public_key": registry_public_key,
+        "public_key_bytes": registry_public_key_bytes,
+        "public_key_encoded_length": len(registry_public_key_bytes),
     }
 
 
@@ -436,28 +456,37 @@ def _canonical_descriptor(values: dict[str, object]) -> dict[str, object]:
     return payload
 
 
-def _derive(snapshot: object, registry: object, chain_info: object) -> tuple[dict[str, object], str]:
-    """Total S2 precedence over the three exact inputs; the single derivation of every public value."""
-    chain = _validated_chain_info(chain_info)
+def _derive_from_normalized_chain_info(
+    snapshot: object, registry: object, normalized_chain_info: object
+) -> tuple[dict[str, object], str]:
+    """Total S2 precedence; the single derivation of every public value.
+
+    ``normalized_chain_info`` must already be the output of ``_validate_and_normalize_chain_info``.  It is
+    re-proven here on every call because that is the revalidation guarantee for the artifact's own
+    private retained state; no caller-owned mapping is read by this function.
+    """
+    chain = _validate_and_normalize_chain_info(normalized_chain_info)
     bound_snapshot = _snapshot_binding(snapshot)
     bound_registry = _registry_binding(registry)
 
     if (
         chain["chain_hash"] != _CHAIN_HASH
-        or chain["beacon_id"] != _BEACON_ID
         or chain["scheme_id"] != _SCHEME_ID
         or chain["period_seconds"] != _PERIOD_SECONDS
         or chain["genesis_time_seconds"] != _GENESIS_TIME_SECONDS
     ):
         raise _err(MachineTimeDrandQuicknetChainProfileReason.CHAIN_IDENTITY_MISMATCH)
 
+    expected_length = bound_registry["public_key_encoded_length"]
+    if len(bound_snapshot["trust_material_bytes"]) != expected_length:
+        raise _err(MachineTimeDrandQuicknetChainProfileReason.PUBLIC_KEY_LENGTH_INVALID)
     supplied_key = chain["public_key"]
     if not _is_lower_hex(supplied_key):
         raise _err(MachineTimeDrandQuicknetChainProfileReason.PUBLIC_KEY_ENCODING_INVALID)
     decoded = bytes.fromhex(supplied_key)
-    if len(decoded) != _PUBLIC_KEY_ENCODED_LENGTH:
+    if len(decoded) != expected_length:
         raise _err(MachineTimeDrandQuicknetChainProfileReason.PUBLIC_KEY_LENGTH_INVALID)
-    if decoded != bound_snapshot["trust_material_bytes"] or supplied_key != bound_registry["public_key"]:
+    if decoded != bound_snapshot["trust_material_bytes"] or decoded != bound_registry["public_key_bytes"]:
         raise _err(MachineTimeDrandQuicknetChainProfileReason.PUBLIC_KEY_MISMATCH)
 
     values: dict[str, object] = {
@@ -466,15 +495,10 @@ def _derive(snapshot: object, registry: object, chain_info: object) -> tuple[dic
         "source_id": _SOURCE_ID,
         "provider_id": _PROVIDER_ID,
         "chain_hash": _CHAIN_HASH,
-        "beacon_id": _BEACON_ID,
         "scheme_id": _SCHEME_ID,
-        "curve_id": _CURVE_ID,
         "period_seconds": _PERIOD_SECONDS,
         "genesis_time_seconds": _GENESIS_TIME_SECONDS,
-        "public_key_group": _PUBLIC_KEY_GROUP,
-        "signature_group": _SIGNATURE_GROUP,
-        "public_key_encoded_length": _PUBLIC_KEY_ENCODED_LENGTH,
-        "signature_encoded_length": _SIGNATURE_ENCODED_LENGTH,
+        "public_key_encoded_length": expected_length,
         "public_key_fingerprint": bound_snapshot["trust_material_fingerprint"],
         "protocol_profile_id": _PROTOCOL_PROFILE_ID,
         "wire_profile_id": _WIRE_PROFILE_ID,
@@ -508,7 +532,7 @@ def _derive(snapshot: object, registry: object, chain_info: object) -> tuple[dic
 def _build_profile_class() -> tuple[type, object, object]:
     registry: dict[int, tuple[ReferenceType, tuple[object, ...]]] = {}
 
-    def register(artifact: object, state: tuple[object, ...]) -> None:
+    def register_proven_profile(artifact: object, state: tuple[object, ...]) -> None:
         key = id(artifact)
 
         def forget(dead: ReferenceType, key: int = key) -> None:
@@ -528,7 +552,7 @@ def _build_profile_class() -> tuple[type, object, object]:
         if type(state) is not tuple or len(state) != 3:
             raise _err(MachineTimeDrandQuicknetChainProfileReason.ARTIFACT_INCONSISTENT)
         try:
-            values, digest = _derive(state[0], state[1], state[2])
+            values, digest = _derive_from_normalized_chain_info(state[0], state[1], state[2])
         except MachineTimeDrandQuicknetChainProfileError:
             raise _err(MachineTimeDrandQuicknetChainProfileReason.ARTIFACT_INCONSISTENT) from None
         return tuple(values[name] for name in _DESCRIPTOR_FIELD_NAMES) + (digest,), state
@@ -536,10 +560,17 @@ def _build_profile_class() -> tuple[type, object, object]:
     def proven_state(artifact: object) -> tuple[object, ...]:
         return proven_parts(artifact)[0]
 
-    def create(snapshot: object, registry_artifact: object, chain_info: object) -> MachineTimeDrandQuicknetChainProfile:
-        _derive(snapshot, registry_artifact, chain_info)
+    def create_from_normalized(
+        snapshot: object, registry_artifact: object, normalized_chain_info: dict[str, object]
+    ) -> MachineTimeDrandQuicknetChainProfile:
+        """Register ONE artifact over the exact private normalized mapping that passed validation.
+
+        The mapping must already be a private normalized copy; this function never reads a
+        caller-owned mapping, and it registers the identical object it validated.
+        """
+        _derive_from_normalized_chain_info(snapshot, registry_artifact, normalized_chain_info)
         artifact = object.__new__(MachineTimeDrandQuicknetChainProfile)
-        register(artifact, (snapshot, registry_artifact, _validated_chain_info(chain_info)))
+        register_proven_profile(artifact, (snapshot, registry_artifact, normalized_chain_info))
         return artifact
 
     class MachineTimeDrandQuicknetChainProfile:
@@ -567,7 +598,6 @@ def _build_profile_class() -> tuple[type, object, object]:
             rendered = (
                 "MachineTimeDrandQuicknetChainProfile("
                 f"source_id={values['source_id']}, "
-                f"beacon_id={values['beacon_id']}, "
                 f"scheme_id={values['scheme_id']}, "
                 f"chain_hash=<str len={len(values['chain_hash'])}>, "
                 f"public_key=<redacted len={values['public_key_encoded_length']} "
@@ -618,12 +648,12 @@ def _build_profile_class() -> tuple[type, object, object]:
         setattr(MachineTimeDrandQuicknetChainProfile, name, make_property(index))
     MachineTimeDrandQuicknetChainProfile.__qualname__ = "MachineTimeDrandQuicknetChainProfile"
     MachineTimeDrandQuicknetChainProfile.__module__ = __name__
-    return MachineTimeDrandQuicknetChainProfile, create, proven_state
+    return MachineTimeDrandQuicknetChainProfile, create_from_normalized, proven_state
 
 
 (
     MachineTimeDrandQuicknetChainProfile,
-    _create_profile,
+    _create_profile_from_normalized,
     _proven_profile_state,
 ) = _build_profile_class()
 
@@ -634,8 +664,13 @@ def build_machine_time_drand_quicknet_chain_profile(
     registry: MachineTimeSourceRegistry,
     chain_info: dict[str, object],
 ) -> MachineTimeDrandQuicknetChainProfile:
-    """Bind one structural Quicknet chain profile; no provider verification or admission occurs."""
-    return _create_profile(snapshot, registry, chain_info)  # type: ignore[operator]
+    """Bind one structural Quicknet chain profile; no provider verification or admission occurs.
+
+    The caller mapping is normalized EXACTLY ONCE here; every later step, including registration, uses
+    only that one private normalized copy.
+    """
+    normalized = _validate_and_normalize_chain_info(chain_info)
+    return _create_profile_from_normalized(snapshot, registry, normalized)  # type: ignore[operator]
 
 
 def machine_time_drand_quicknet_chain_profile_commitment_descriptor(
@@ -655,7 +690,11 @@ def machine_time_drand_quicknet_chain_profile_self_digest(profile: MachineTimeDr
 
 
 def _rebuild_machine_time_drand_quicknet_chain_profile(state: object) -> MachineTimeDrandQuicknetChainProfile:
-    """Reconstruct only from the exact retained bindings, re-proving non-claims and the carried digest."""
+    """Reconstruct only from the exact retained bindings, re-proving non-claims and the carried digest.
+
+    The incoming mapping is normalized EXACTLY ONCE; the carried digest is compared against a digest
+    derived from that same normalized copy, and that same copy is the one registered.
+    """
     if type(state) is not tuple or len(state) != 5:
         raise _err(MachineTimeDrandQuicknetChainProfileReason.RECONSTRUCTION_INPUT_INVALID)
     flags = state[3]
@@ -663,10 +702,11 @@ def _rebuild_machine_time_drand_quicknet_chain_profile(state: object) -> Machine
         raise _err(MachineTimeDrandQuicknetChainProfileReason.RECONSTRUCTION_INPUT_INVALID)
     if any(flag is not False for flag in flags):
         raise _err(MachineTimeDrandQuicknetChainProfileReason.GOVERNANCE_STRUCTURAL_VIOLATION)
-    _, digest = _derive(state[0], state[1], state[2])
+    normalized = _validate_and_normalize_chain_info(state[2])
+    _, digest = _derive_from_normalized_chain_info(state[0], state[1], normalized)
     carried = state[4]
     if not _is_hex64(carried):
         raise _err(MachineTimeDrandQuicknetChainProfileReason.SELF_DIGEST_INVALID)
     if carried != digest:
         raise _err(MachineTimeDrandQuicknetChainProfileReason.SELF_DIGEST_MISMATCH)
-    return _create_profile(state[0], state[1], state[2])  # type: ignore[operator]
+    return _create_profile_from_normalized(state[0], state[1], normalized)  # type: ignore[operator]
