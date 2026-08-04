@@ -71,6 +71,10 @@ _LINE_SEPARATORS = frozenset({"\u2028", "\u2029"})
 _SEALED_ARTIFACT_MESSAGE = "MachineTimeDrandQuicknetChainProfile is sealed and cannot be subclassed"
 _DIRECT_CONSTRUCTION_MESSAGE = "use build_machine_time_drand_quicknet_chain_profile"
 _ERROR_CONSTRUCTION_MESSAGE = "reason must be an exact MachineTimeDrandQuicknetChainProfileReason"
+_ERROR_IMMUTABLE_MESSAGE = "MachineTimeDrandQuicknetChainProfileError is immutable"
+# The seal itself is protected: it can never be deleted, reassigned or weakened, so the diagnostic
+# cannot be altered by first removing the marker that used to gate this protection.
+_ERROR_IMMUTABLE_ATTRS = frozenset({"_reason", "reason", "args", "_sealed"})
 
 # Controller-approved MT4-S2 Quicknet identity.  EVERY constant below is an exact serialized value of
 # the merged MT-3 Drand record or of the S1 eligible row (see the module PROVENANCE RULE).  No protocol
@@ -95,9 +99,11 @@ _OFFICIAL_CITATION_IDS = (
 _SOURCE_CLASS = "distributed-threshold-randomness-beacon"
 _RECOMMENDED_ROLE = "not_before"
 
-# Exact S1 row this profile may bind.  S1 already pins the same whole row, so a row mismatch is
-# DEFENSE IN DEPTH: it is unreachable with a valid S1 artifact and exists so a future S1 allowlist
-# widening can never silently widen this profile.
+# Exact S1 row this profile may bind.  It mirrors the COMPLETE S1 eligible row, in S1's order and with
+# S1's values, so no independently valid cross-product can ever be wider here than upstream.  S1 already
+# pins the same whole row, so a mismatch is DEFENSE IN DEPTH: it is unreachable with a valid S1 artifact
+# and exists so a future S1 allowlist widening can never silently widen this profile.
+_INDEPENDENCE_CLASS = "threshold-bls-beacon"
 _SNAPSHOT_ROW_FIELDS = (
     "source_id",
     "provider_id",
@@ -105,6 +111,7 @@ _SNAPSHOT_ROW_FIELDS = (
     "recommended_role",
     "protocol_profile_id",
     "protocol_wire_version",
+    "independence_class",
     "trust_material_kind",
     "trust_material_encoding",
     "trust_material_fingerprint_algorithm",
@@ -119,6 +126,7 @@ _SNAPSHOT_ROW = (
     _RECOMMENDED_ROLE,
     _PROTOCOL_PROFILE_ID,
     _WIRE_PROFILE_ID,
+    _INDEPENDENCE_CLASS,
     "bls_group_public_key",
     "raw",
     "sha256",
@@ -282,13 +290,16 @@ class MachineTimeDrandQuicknetChainProfileError(RuntimeError):
         return self._reason
 
     def __setattr__(self, name: str, value: object) -> None:
-        if getattr(self, "_sealed", False) and name in {"_reason", "reason", "args"}:
-            raise AttributeError("MachineTimeDrandQuicknetChainProfileError is immutable")
+        # Unconditional: the guard must not depend on a marker that ordinary code could remove first.
+        # The constructor populates its slots through ``object.__setattr__``, so construction is
+        # unaffected and every post-construction ordinary assignment is refused.
+        if name in _ERROR_IMMUTABLE_ATTRS:
+            raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name: str) -> None:
-        if name in {"_reason", "reason", "args"}:
-            raise AttributeError("MachineTimeDrandQuicknetChainProfileError is immutable")
+        if name in _ERROR_IMMUTABLE_ATTRS:
+            raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
         object.__delattr__(self, name)
 
 

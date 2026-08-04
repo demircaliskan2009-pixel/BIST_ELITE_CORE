@@ -10,6 +10,7 @@ import weakref
 import pytest
 
 from crypto_core.validation import machine_time_drand_quicknet_chain_profile as module
+from crypto_core.validation import machine_time_source_trust_snapshot as s1_module
 from crypto_core.validation.machine_time_source_registry import (
     build_approved_machine_time_source_registry,
     build_machine_time_source_registry,
@@ -43,6 +44,38 @@ _DEFERRED_FACTS = (
     "public_key_group",
     "signature_group",
     "signature_encoded_length",
+)
+# The complete S1 eligible row, hand-written here so the S2 mirror is pinned by test-owned literals and
+# not only by comparison against the upstream module.
+_EXPECTED_SNAPSHOT_ROW_FIELDS = (
+    "source_id",
+    "provider_id",
+    "source_class",
+    "recommended_role",
+    "protocol_profile_id",
+    "protocol_wire_version",
+    "independence_class",
+    "trust_material_kind",
+    "trust_material_encoding",
+    "trust_material_fingerprint_algorithm",
+    "dependency_profile_id",
+    "fixture_corpus_id",
+    "verification_policy_id",
+)
+_EXPECTED_SNAPSHOT_ROW = (
+    "drand-quicknet-mainnet",
+    "league-of-entropy",
+    "distributed-threshold-randomness-beacon",
+    "not_before",
+    "drand-quicknet-signature-and-chain-info-offline.v1",
+    "drand-http-api-v2-with-chain-info",
+    "threshold-bls-beacon",
+    "bls_group_public_key",
+    "raw",
+    "sha256",
+    "D-DEP-02",
+    "FX-DRAND-QUICKNET.v1",
+    "deterministic_supplied_proof_verification_no_network.v1",
 )
 
 # Known-answer vectors.  Every expected value below is a TEST-OWNED literal: the descriptors are
@@ -1045,6 +1078,130 @@ def test_every_protected_promotion_flag_is_exactly_false() -> None:
         assert not hasattr(profile, absent)
     assert set(_EXPECTED_FALSE_FLAGS).isdisjoint({"chain_profile_structurally_bound"})
     assert len(_EXPECTED_FALSE_FLAGS) == 18
+
+
+def test_snapshot_eligible_row_mirrors_the_complete_s1_eligible_row() -> None:
+    assert module._SNAPSHOT_ROW_FIELDS == _EXPECTED_SNAPSHOT_ROW_FIELDS
+    assert module._SNAPSHOT_ROW == _EXPECTED_SNAPSHOT_ROW
+    assert len(module._SNAPSHOT_ROW_FIELDS) == 13
+    assert len(module._SNAPSHOT_ROW) == 13
+    assert len(set(module._SNAPSHOT_ROW_FIELDS)) == 13
+    assert module._SNAPSHOT_ROW_FIELDS.count("independence_class") == 1
+    assert module._SNAPSHOT_ROW_FIELDS.index("independence_class") == 6
+    assert module._SNAPSHOT_ROW[6] == "threshold-bls-beacon"
+    assert module._INDEPENDENCE_CLASS == "threshold-bls-beacon"
+
+    # the row is READ through the S1 public boundary exactly once
+    assert "independence_class" in module._SNAPSHOT_READ_FIELDS
+    assert module._SNAPSHOT_READ_FIELDS.count("independence_class") == 1
+    assert module._SNAPSHOT_READ_FIELDS[: len(module._SNAPSHOT_ROW_FIELDS)] == module._SNAPSHOT_ROW_FIELDS
+
+    # the S2 contract must mirror the COMPLETE upstream S1 eligible row, in S1's order with S1's values,
+    # so no independently valid cross-product can ever be accepted here that S1 would reject
+    assert module._SNAPSHOT_ROW_FIELDS == s1_module._ROW_FIELD_NAMES
+    assert module._SNAPSHOT_ROW == s1_module._ELIGIBLE_ROW
+    assert set(s1_module._ROW_FIELD_NAMES) - set(module._SNAPSHOT_ROW_FIELDS) == set()
+    assert len(s1_module._ROW_FIELD_NAMES) == len(module._SNAPSHOT_ROW_FIELDS)
+
+    # a valid S1 artifact really does carry that independence class, and binding still succeeds
+    snapshot = _snapshot()
+    assert snapshot.independence_class == "threshold-bls-beacon"
+    profile = _build(snapshot=snapshot)
+    assert bool(profile) is True
+    assert profile.profile_self_digest == _EXPECTED_PROFILE_SELF_DIGEST
+
+    # it is a verification input only: it is never published and cannot change any digest
+    assert "independence_class" not in module._DESCRIPTOR_FIELD_NAMES
+    assert "independence_class" not in module._FIELD_NAMES
+    assert not hasattr(profile, "independence_class")
+
+
+def test_diagnostic_seal_is_permanent_under_ordinary_attribute_operations() -> None:
+    reasons = tuple(module.MachineTimeDrandQuicknetChainProfileReason)
+    assert len(reasons) == 16
+    assert module._ERROR_IMMUTABLE_ATTRS == frozenset({"_reason", "reason", "args", "_sealed"})
+
+    for reason in reasons:
+        constructed = module.MachineTimeDrandQuicknetChainProfileError(reason)
+        assert constructed.reason is reason
+        assert constructed.args == (reason.value,)
+        assert str(constructed) == reason.value
+        assert constructed._sealed is True
+
+    for wrong in ("wrong_input_type", 0, None, object(), module.MachineTimeDrandQuicknetChainProfileReason):
+        with pytest.raises(TypeError):
+            module.MachineTimeDrandQuicknetChainProfileError(wrong)
+    with pytest.raises(TypeError) as captured_type:
+        module.MachineTimeDrandQuicknetChainProfileError("caller-controlled-secret")
+    assert "caller-controlled-secret" not in str(captured_type.value)
+
+    first = module.MachineTimeDrandQuicknetChainProfileReason.WRONG_INPUT_TYPE
+    other = module.MachineTimeDrandQuicknetChainProfileReason.SELF_DIGEST_MISMATCH
+    error = module.MachineTimeDrandQuicknetChainProfileError(first)
+    baseline_args = error.args
+    baseline_text = str(error)
+    assert baseline_args == (first.value,)
+    assert baseline_text == first.value
+
+    def assert_diagnostic_intact() -> None:
+        assert error.reason is first
+        assert error._reason is first
+        assert error.args == baseline_args
+        assert str(error) == baseline_text
+        assert error._sealed is True
+
+    for name, value in (
+        ("_reason", other),
+        ("reason", other),
+        ("args", ("tampered",)),
+        ("_sealed", False),
+        ("_sealed", True),
+        ("_sealed", None),
+    ):
+        with pytest.raises(AttributeError):
+            setattr(error, name, value)
+        assert_diagnostic_intact()
+
+    for name in ("_reason", "reason", "args", "_sealed"):
+        with pytest.raises(AttributeError):
+            delattr(error, name)
+        assert_diagnostic_intact()
+
+    # a failed attempt must never weaken the seal for a later attempt (the reproduced bypass was
+    # exactly "delete the marker first, then mutate the diagnostic")
+    for _ in range(2):
+        with pytest.raises(AttributeError):
+            error._sealed = False
+        with pytest.raises(AttributeError):
+            del error._sealed
+        with pytest.raises(AttributeError):
+            error._reason = other
+        with pytest.raises(AttributeError):
+            error.args = ("tampered",)
+        assert_diagnostic_intact()
+    assert "tampered" not in str(error)
+    assert other.value not in str(error)
+
+
+def test_diagnostic_raised_by_production_is_sealed_and_reason_stays_exact() -> None:
+    with pytest.raises(module.MachineTimeDrandQuicknetChainProfileError) as captured:
+        _build(chain_hash="0" * 64)
+    caught = captured.value
+    assert caught.reason is module.MachineTimeDrandQuicknetChainProfileReason.CHAIN_IDENTITY_MISMATCH
+    assert caught.args == ("chain_identity_mismatch",)
+    assert str(caught) == "chain_identity_mismatch"
+
+    for name in ("_reason", "reason", "args", "_sealed"):
+        with pytest.raises(AttributeError):
+            delattr(caught, name)
+    with pytest.raises(AttributeError):
+        caught._sealed = False
+    with pytest.raises(AttributeError):
+        caught._reason = module.MachineTimeDrandQuicknetChainProfileReason.SELF_DIGEST_MISMATCH
+
+    assert caught.reason is module.MachineTimeDrandQuicknetChainProfileReason.CHAIN_IDENTITY_MISMATCH
+    assert str(caught) == "chain_identity_mismatch"
+    assert caught._sealed is True
 
 
 def test_connector_ready_dialect_projection_is_unchanged() -> None:
