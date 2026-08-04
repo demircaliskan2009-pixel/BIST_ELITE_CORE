@@ -45,6 +45,10 @@ _HEX_CHARS = frozenset("0123456789abcdef")
 _SEALED_ARTIFACT_MESSAGE = "MachineTimeSourceTrustSnapshot is sealed and cannot be subclassed"
 _DIRECT_CONSTRUCTION_MESSAGE = "use build_machine_time_source_trust_snapshot"
 _ERROR_CONSTRUCTION_MESSAGE = "reason must be an exact MachineTimeSourceTrustSnapshotReason"
+_ERROR_IMMUTABLE_MESSAGE = "MachineTimeSourceTrustSnapshotError is immutable"
+# The seal itself is protected: it can never be deleted, reassigned or weakened, so the diagnostic
+# cannot be altered by first removing the marker that used to gate this protection.
+_ERROR_IMMUTABLE_ATTRS = frozenset({"_reason", "reason", "args", "_sealed"})
 
 _FIELD_NAMES = (
     "snapshot_schema",
@@ -172,13 +176,16 @@ class MachineTimeSourceTrustSnapshotError(RuntimeError):
         return self._reason
 
     def __setattr__(self, name: str, value: object) -> None:
-        if getattr(self, "_sealed", False) and name in {"_reason", "reason", "args"}:
-            raise AttributeError("MachineTimeSourceTrustSnapshotError is immutable")
+        # Unconditional: the guard must not depend on a marker that ordinary code could remove first.
+        # The constructor populates its slots through ``object.__setattr__``, so construction is
+        # unaffected and every post-construction ordinary assignment is refused.
+        if name in _ERROR_IMMUTABLE_ATTRS:
+            raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name: str) -> None:
-        if name in {"_reason", "reason", "args"}:
-            raise AttributeError("MachineTimeSourceTrustSnapshotError is immutable")
+        if name in _ERROR_IMMUTABLE_ATTRS:
+            raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
         object.__delattr__(self, name)
 
 

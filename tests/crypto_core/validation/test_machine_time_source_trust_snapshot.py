@@ -281,10 +281,20 @@ def _closure_registry(
 def _assert_registry_unchanged(
     registry: dict[int, tuple[object, ...]],
     before: dict[int, tuple[object, ...]],
+    anchor_key: int,
 ) -> None:
-    assert registry.keys() == before.keys()
-    for key, entry in before.items():
-        assert registry[key] is entry
+    """Prove a failed build or rebuild registered nothing and replaced no surviving entry.
+
+    The key set may only SHRINK: entries belonging to artifacts created by earlier tests can be removed
+    at any moment by the real weakref callback once those artifacts are collected, and deferred cyclic
+    collection makes that timing unpredictable.  Whole-key-set equality would therefore assert something
+    the contract never promised; the invariant that matters is that the registry never GROWS, the anchor
+    entry survives, and every surviving entry is still the identical object.
+    """
+    assert registry.keys() <= before.keys()
+    assert anchor_key in registry
+    for key, entry in registry.items():
+        assert entry is before[key]
 
 
 def test_exact_public_contract_and_evidence_bound_builder() -> None:
@@ -627,6 +637,94 @@ def test_raw_trust_fingerprint_text_and_evidence_precedence() -> None:
     )
 
 
+def test_diagnostic_seal_is_permanent_under_ordinary_attribute_operations() -> None:
+    reasons = tuple(module.MachineTimeSourceTrustSnapshotReason)
+    assert len(reasons) == 20
+    assert module._ERROR_IMMUTABLE_ATTRS == frozenset({"_reason", "reason", "args", "_sealed"})
+
+    for reason in reasons:
+        constructed = module.MachineTimeSourceTrustSnapshotError(reason)
+        assert constructed.reason is reason
+        assert constructed.args == (reason.value,)
+        assert str(constructed) == reason.value
+        assert constructed._sealed is True
+
+    for wrong in ("wrong_input_type", 0, None, object(), module.MachineTimeSourceTrustSnapshotReason):
+        with pytest.raises(TypeError):
+            module.MachineTimeSourceTrustSnapshotError(wrong)
+    with pytest.raises(TypeError) as captured_type:
+        module.MachineTimeSourceTrustSnapshotError("caller-controlled-secret")
+    assert "caller-controlled-secret" not in str(captured_type.value)
+
+    first = module.MachineTimeSourceTrustSnapshotReason.WRONG_INPUT_TYPE
+    other = module.MachineTimeSourceTrustSnapshotReason.SELF_DIGEST_MISMATCH
+    error = module.MachineTimeSourceTrustSnapshotError(first)
+    baseline_args = error.args
+    baseline_text = str(error)
+    assert baseline_args == (first.value,)
+    assert baseline_text == first.value
+
+    def assert_diagnostic_intact() -> None:
+        assert error.reason is first
+        assert error._reason is first
+        assert error.args == baseline_args
+        assert str(error) == baseline_text
+        assert error._sealed is True
+
+    for name, value in (
+        ("_reason", other),
+        ("reason", other),
+        ("args", ("tampered-diagnostic",)),
+        ("_sealed", False),
+        ("_sealed", True),
+        ("_sealed", None),
+    ):
+        with pytest.raises(AttributeError):
+            setattr(error, name, value)
+        assert_diagnostic_intact()
+
+    for name in ("_reason", "reason", "args", "_sealed"):
+        with pytest.raises(AttributeError):
+            delattr(error, name)
+        assert_diagnostic_intact()
+
+    # a failed attempt must never weaken the seal for a later attempt (the reproduced bypass was
+    # exactly "delete the marker first, then mutate the diagnostic")
+    for _ in range(2):
+        with pytest.raises(AttributeError):
+            error._sealed = False
+        with pytest.raises(AttributeError):
+            del error._sealed
+        with pytest.raises(AttributeError):
+            error._reason = other
+        with pytest.raises(AttributeError):
+            error.args = ("tampered-diagnostic",)
+        assert_diagnostic_intact()
+    assert "tampered" not in str(error)
+    assert other.value not in str(error)
+
+
+def test_diagnostic_raised_by_production_is_sealed_and_reason_stays_exact() -> None:
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        _build(trust_material_bytes=b"")
+    caught = captured.value
+    assert caught.reason is module.MachineTimeSourceTrustSnapshotReason.TRUST_MATERIAL_INVALID
+    assert caught.args == ("trust_material_invalid",)
+    assert str(caught) == "trust_material_invalid"
+
+    for name in ("_reason", "reason", "args", "_sealed"):
+        with pytest.raises(AttributeError):
+            delattr(caught, name)
+    with pytest.raises(AttributeError):
+        caught._sealed = False
+    with pytest.raises(AttributeError):
+        caught._reason = module.MachineTimeSourceTrustSnapshotReason.SELF_DIGEST_MISMATCH
+
+    assert caught.reason is module.MachineTimeSourceTrustSnapshotReason.TRUST_MATERIAL_INVALID
+    assert str(caught) == "trust_material_invalid"
+    assert caught._sealed is True
+
+
 @pytest.mark.parametrize("surrogate", (chr(0xD800), chr(0xDFFF)))
 def test_required_text_surrogates_reject_through_closed_reason(surrogate: str) -> None:
     _raises(module.MachineTimeSourceTrustSnapshotReason.CANONICAL_TEXT_INVALID, snapshot_id=surrogate)
@@ -713,12 +811,13 @@ def test_lifecycle_copy_deepcopy_pickle_and_malformed_hidden_state() -> None:
 def test_failed_builds_and_rebuilds_leave_the_closure_registry_unchanged() -> None:
     anchor = _build(revocation_status="revoked")
     registry = _closure_registry(anchor)
+    anchor_key = id(anchor)
     before = dict(registry)
 
     with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
         _build(trust_material_bytes=b"")
     assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.TRUST_MATERIAL_INVALID
-    _assert_registry_unchanged(registry, before)
+    _assert_registry_unchanged(registry, before, anchor_key)
 
     state = anchor.__reduce__()[1][0]
     malformed_states = (
@@ -736,13 +835,13 @@ def test_failed_builds_and_rebuilds_leave_the_closure_registry_unchanged() -> No
         with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
             module._rebuild_machine_time_source_trust_snapshot(malformed_state)
         assert captured.value.reason is reason
-        _assert_registry_unchanged(registry, before)
+        _assert_registry_unchanged(registry, before, anchor_key)
 
     hollow = object.__new__(module.MachineTimeSourceTrustSnapshot)
     with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
         bool(hollow)
     assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT
-    _assert_registry_unchanged(registry, before)
+    _assert_registry_unchanged(registry, before, anchor_key)
 
 
 def test_registry_removes_only_the_exact_collected_owner() -> None:
