@@ -69,6 +69,76 @@ _EXPECTED_CANONICAL_JSON = (
     '"verification_policy_id":"deterministic_supplied_proof_verification_no_network.v1"}'
 )
 
+# Second known-answer vector.  The first vector is all-ASCII with every optional field null, so it
+# cannot observe ensure_ascii.  This one carries non-ASCII BMP and non-BMP scalars and sets every
+# optional field, which pins ensure_ascii=True, the escaped canonical form, and the non-null branches.
+_UNICODE_TRUST_MATERIAL = b"drand-group-key-bytes-unicode"
+_UNICODE_SNAPSHOT_ID = "é" * 8 + "\U0001f600"
+_UNICODE_APPROVED_BY = "governor-ü"
+_UNICODE_SUPERSEDES_SNAPSHOT_ID = "prior-é"
+_UNICODE_SUPERSEDES_KEY_ID = "0052b1b3f2daec4e50338f81ab960028e6f07cae5c094793770b0cb29d35a605"
+_UNICODE_TRUST_MATERIAL_FINGERPRINT = "9d00bd85a7ccea69f029fb91ea4cf13ecd5892b3211c81de78fa278932dd49df"
+_UNICODE_REVOCATION_EVIDENCE_DIGEST = "5effa12b1a68fe32a2aa34bccc632fcfe9c18c66b29b0b056106ef28de7821a1"
+_UNICODE_VALID_UNTIL = 9_223_372_036_854_775_807
+_UNICODE_OFFICIAL_CITATION_IDS = (
+    "DRAND-DEVELOPER",
+    "DRAND-HTTP-API",
+    "DRAND-QUICKNET-ANNOUNCEMENT",
+    "DRAND-SPEC",
+)
+_UNICODE_GOVERNANCE_DECISION_IDS = ("GOV-MT4-01", "GOV-MT4-15")
+_EXPECTED_UNICODE_SELF_DIGEST = "54fadca5b4c4f5e10358c88ef00c80dd1060781967309ffa3e7f798f6d71440d"
+_EXPECTED_UNICODE_DESCRIPTOR: dict[str, object] = {
+    "snapshot_schema": "machine-time-source-trust-snapshot.v2",
+    "snapshot_id": _UNICODE_SNAPSHOT_ID,
+    "source_id": "drand-quicknet-mainnet",
+    "provider_id": "league-of-entropy",
+    "source_class": "distributed-threshold-randomness-beacon",
+    "recommended_role": "not_before",
+    "protocol_profile_id": "drand-quicknet-signature-and-chain-info-offline.v1",
+    "protocol_wire_version": "drand-http-api-v2-with-chain-info",
+    "independence_class": "threshold-bls-beacon",
+    "trust_material_kind": "bls_group_public_key",
+    "trust_material_encoding": "raw",
+    "trust_material_fingerprint_algorithm": "sha256",
+    "trust_material_fingerprint": _UNICODE_TRUST_MATERIAL_FINGERPRINT,
+    "valid_from": 1,
+    "valid_until": _UNICODE_VALID_UNTIL,
+    "supersedes_snapshot_id": _UNICODE_SUPERSEDES_SNAPSHOT_ID,
+    "supersedes_key_id": _UNICODE_SUPERSEDES_KEY_ID,
+    "revocation_status": "revoked",
+    "revocation_evidence_digest": _UNICODE_REVOCATION_EVIDENCE_DIGEST,
+    "official_evidence_packet_digest": "18719671d29bda67acfc0b4c88799a466342ec0839e17385b05a9530796495d1",
+    "official_citation_ids": list(_UNICODE_OFFICIAL_CITATION_IDS),
+    "dependency_profile_id": "D-DEP-02",
+    "fixture_corpus_id": "FX-DRAND-QUICKNET.v1",
+    "verification_policy_id": "deterministic_supplied_proof_verification_no_network.v1",
+    "governance_decision_ids": list(_UNICODE_GOVERNANCE_DECISION_IDS),
+    "approved_by": _UNICODE_APPROVED_BY,
+    "approved_at": 1,
+    "operational_use_approved": False,
+    "quorum_countable": False,
+    "source_reachable_proven": False,
+    "proof_verified": False,
+}
+_EXPECTED_UNICODE_CANONICAL_JSON = (
+    '{"approved_at":1,"approved_by":"governor-\\u00fc","dependency_profile_id":"D-DEP-02","fixture_corpus_id":"FX-D'
+    'RAND-QUICKNET.v1","governance_decision_ids":["GOV-MT4-01","GOV-MT4-15"],"independence_class":"threshold-bls-be'
+    'acon","official_citation_ids":["DRAND-DEVELOPER","DRAND-HTTP-API","DRAND-QUICKNET-ANNOUNCEMENT","DRAND-SPEC"],'
+    '"official_evidence_packet_digest":"18719671d29bda67acfc0b4c88799a466342ec0839e17385b05a9530796495d1","operatio'
+    'nal_use_approved":false,"proof_verified":false,"protocol_profile_id":"drand-quicknet-signature-and-chain-info-'
+    'offline.v1","protocol_wire_version":"drand-http-api-v2-with-chain-info","provider_id":"league-of-entropy","quo'
+    'rum_countable":false,"recommended_role":"not_before","revocation_evidence_digest":"5effa12b1a68fe32a2aa34bccc6'
+    '32fcfe9c18c66b29b0b056106ef28de7821a1","revocation_status":"revoked","snapshot_id":"\\u00e9\\u00e9\\u00e9'
+    '\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\\ud83d\\ude00","snapshot_schema":"machine-time-source-trust-snapshot.v2","'
+    'source_class":"distributed-threshold-randomness-beacon","source_id":"drand-quicknet-mainnet","source_reachable'
+    '_proven":false,"supersedes_key_id":"0052b1b3f2daec4e50338f81ab960028e6f07cae5c094793770b0cb29d35a605","superse'
+    'des_snapshot_id":"prior-\\u00e9","trust_material_encoding":"raw","trust_material_fingerprint":"9d00bd85a7ccea6'
+    '9f029fb91ea4cf13ecd5892b3211c81de78fa278932dd49df","trust_material_fingerprint_algorithm":"sha256","trust_mate'
+    'rial_kind":"bls_group_public_key","valid_from":1,"valid_until":9223372036854775807,"verification_policy_id":"d'
+    'eterministic_supplied_proof_verification_no_network.v1"}'
+)
+
 
 def _official(raw: bytes = _OFFICIAL) -> str:
     return hashlib.sha256(b"machine-time-source-trust-snapshot.v2/official-evidence-packet\x00" + raw).hexdigest()
@@ -290,6 +360,81 @@ def test_literal_descriptor_canonical_json_and_self_digest_known_answer() -> Non
     assert independently_computed == _EXPECTED_SELF_DIGEST
     assert snapshot.snapshot_self_digest == _EXPECTED_SELF_DIGEST
     assert module.machine_time_source_trust_snapshot_self_digest(snapshot) == _EXPECTED_SELF_DIGEST
+
+
+def test_literal_non_ascii_descriptor_canonical_json_and_self_digest_known_answer() -> None:
+    snapshot = _build(
+        snapshot_id=_UNICODE_SNAPSHOT_ID,
+        trust_material_bytes=_UNICODE_TRUST_MATERIAL,
+        valid_from=1,
+        valid_until=_UNICODE_VALID_UNTIL,
+        supersedes_snapshot_id=_UNICODE_SUPERSEDES_SNAPSHOT_ID,
+        supersedes_key_id=_UNICODE_SUPERSEDES_KEY_ID,
+        revocation_status="revoked",
+        official_citation_ids=_UNICODE_OFFICIAL_CITATION_IDS,
+        governance_decision_ids=_UNICODE_GOVERNANCE_DECISION_IDS,
+        approved_by=_UNICODE_APPROVED_BY,
+        approved_at=1,
+    )
+    descriptor = module.machine_time_source_trust_snapshot_commitment_descriptor(snapshot)
+
+    assert descriptor == _EXPECTED_UNICODE_DESCRIPTOR
+    assert len(_EXPECTED_UNICODE_DESCRIPTOR) == 31
+    assert set(_EXPECTED_UNICODE_DESCRIPTOR) == set(_EXPECTED_DESCRIPTOR)
+    assert "trust_material_bytes" not in _EXPECTED_UNICODE_DESCRIPTOR
+    assert "snapshot_self_digest" not in _EXPECTED_UNICODE_DESCRIPTOR
+    for optional in (
+        "valid_from",
+        "valid_until",
+        "supersedes_snapshot_id",
+        "supersedes_key_id",
+        "revocation_evidence_digest",
+        "approved_by",
+        "approved_at",
+    ):
+        assert _EXPECTED_UNICODE_DESCRIPTOR[optional] is not None
+    assert type(descriptor["official_citation_ids"]) is list
+    assert type(descriptor["governance_decision_ids"]) is list
+    assert descriptor["official_citation_ids"] == list(_UNICODE_OFFICIAL_CITATION_IDS)
+    assert descriptor["governance_decision_ids"] == list(_UNICODE_GOVERNANCE_DECISION_IDS)
+    assert hashlib.sha256(_UNICODE_TRUST_MATERIAL).hexdigest() == _UNICODE_TRUST_MATERIAL_FINGERPRINT
+
+    canonical_json = json.dumps(
+        _EXPECTED_UNICODE_DESCRIPTOR,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    assert canonical_json == _EXPECTED_UNICODE_CANONICAL_JSON
+    assert _EXPECTED_UNICODE_CANONICAL_JSON.isascii()
+    assert "\\u00e9" in _EXPECTED_UNICODE_CANONICAL_JSON
+    assert "\\u00fc" in _EXPECTED_UNICODE_CANONICAL_JSON
+    assert "\\ud83d\\ude00" in _EXPECTED_UNICODE_CANONICAL_JSON
+    assert "é" not in _EXPECTED_UNICODE_CANONICAL_JSON
+    assert "ü" not in _EXPECTED_UNICODE_CANONICAL_JSON
+    assert "\U0001f600" not in _EXPECTED_UNICODE_CANONICAL_JSON
+
+    assert len(_EXPECTED_SELF_DIGEST_DOMAIN) == 50
+    assert _EXPECTED_SELF_DIGEST_DOMAIN.endswith(b"\x00")
+    independently_computed = hashlib.sha256(
+        _EXPECTED_SELF_DIGEST_DOMAIN + _EXPECTED_UNICODE_CANONICAL_JSON.encode("utf-8")
+    ).hexdigest()
+    assert independently_computed == _EXPECTED_UNICODE_SELF_DIGEST
+    assert _EXPECTED_UNICODE_SELF_DIGEST != _EXPECTED_SELF_DIGEST
+    assert snapshot.snapshot_self_digest == _EXPECTED_UNICODE_SELF_DIGEST
+    assert module.machine_time_source_trust_snapshot_self_digest(snapshot) == _EXPECTED_UNICODE_SELF_DIGEST
+
+    unescaped_form = json.dumps(
+        _EXPECTED_UNICODE_DESCRIPTOR,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    assert not unescaped_form.isascii()
+    unescaped_digest = hashlib.sha256(_EXPECTED_SELF_DIGEST_DOMAIN + unescaped_form.encode("utf-8")).hexdigest()
+    assert unescaped_digest != _EXPECTED_UNICODE_SELF_DIGEST
 
 
 def test_official_evidence_is_required_bounded_and_domain_bound() -> None:
