@@ -1,0 +1,279 @@
+{
+  "admission": {
+    "crypto_implementation_authorized": false,
+    "dependency_admitted": false,
+    "fixture_corpus_admitted": false,
+    "machine_time_origin_proven": false,
+    "provider_operational_approval": false,
+    "proof_verified": false,
+    "quorum_countable": false,
+    "readiness_promoted": false,
+    "status": "QUALIFIED_CANDIDATE_NOT_ADMITTED"
+  },
+  "candidate_dependency": {
+    "cargo_package_version": "0.3.14",
+    "cargo_package_version_contradicts_distribution_version": true,
+    "distribution_version": "0.3.15",
+    "license_resolution": "MIT_TEXT_IN_LICENSE_TXT_NO_SPDX_CLASSIFIER_AND_NULL_PYPI_LICENSE_FIELD",
+    "license_sdist_file_sha256": "e611139381c1d1167bf2e377c19e668e596f9a42416184ed9a1c1299e24d4dc7",
+    "license_wheel_file_sha256": "b672dfe9177a29fe44488d5eddfd2cea96535cf99caf729f1921668f35dd1d73",
+    "package": "pyblst",
+    "profile_id": "D-DEP-DRAND-PYBLST-0.3.15-CANDIDATE.v1",
+    "pyo3_version": "0.26.0",
+    "sdist_filename": "pyblst-0.3.15.tar.gz",
+    "sdist_sha256": "258831210c069ece6d9894bffbe8013834f094d874f30070a4ad8d5a0e317c08",
+    "upstream_blst_version": "0.3.16",
+    "wheel_extension_sha256": "9fddfae2d226e61f40bb3b19584787d196119a5a297ac566027c5923223d8862",
+    "wheel_filename": "pyblst-0.3.15-cp312-cp312-win_amd64.whl",
+    "wheel_sha256": "0c2e1f73a4739e9c5c000f00e362d6abe8cd405ec4b94a7db509ef546033999a"
+  },
+  "chain_profile": {
+    "beacon_id": "quicknet",
+    "chain_hash": "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971",
+    "dst": "BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_",
+    "genesis_time_seconds": 1692803367,
+    "message_algorithm": "sha256(round.to_bytes(8, 'big', signed=False))",
+    "period_seconds": 3,
+    "public_key_encoded_length": 96,
+    "public_key_group": "G2",
+    "randomness_algorithm": "sha256(signature_bytes)",
+    "round_time_formula": "genesis_time + (round - 1) * period",
+    "scheme_id": "bls-unchained-g1-rfc9380",
+    "signature_encoded_length": 48,
+    "signature_group": "G1"
+  },
+  "corpus_id": "FX-DRAND-QUICKNET-RFC9380-QUALIFICATION.v1",
+  "negative_fixtures": [
+    {
+      "derivation": "round_number set to 0",
+      "expected_reason": "round_invalid",
+      "fixture_id": "neg_round_zero",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "round_number set to 2**64",
+      "expected_reason": "round_invalid",
+      "fixture_id": "neg_round_above_uint64",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "round_number 43 against the round-42 signature",
+      "expected_reason": "signature_verification_failed",
+      "fixture_id": "neg_wrong_round",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "round encoded little-endian instead of big-endian",
+      "expected_reason": "signature_verification_failed",
+      "fixture_id": "neg_little_endian_round",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "raw 8-byte round used as message without the SHA-256 pre-hash",
+      "expected_reason": "signature_verification_failed",
+      "fixture_id": "neg_no_sha256_prehash",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "DST replaced with a non-Quicknet domain separation tag",
+      "expected_reason": "dst_mismatch",
+      "fixture_id": "neg_wrong_dst",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "final signature byte XOR 0x01",
+      "expected_reason": "subgroup_check_failed",
+      "fixture_id": "neg_one_bit_signature_corruption",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "public key replaced by the BLS12-381 G2 generator",
+      "expected_reason": "signature_verification_failed",
+      "fixture_id": "neg_wrong_public_key",
+      "provenance": "OFFICIAL_DRAND_V2_1_6_KEYGROUP_BASE_POINT",
+      "source_type": "official_reference"
+    },
+    {
+      "derivation": "chain_hash replaced with 32 zero bytes",
+      "expected_reason": "chain_profile_binding_invalid",
+      "fixture_id": "neg_wrong_chain_hash",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "signature truncated to 47 bytes",
+      "expected_reason": "signature_encoding_invalid",
+      "fixture_id": "neg_signature_47_bytes",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "signature extended to 49 bytes",
+      "expected_reason": "signature_encoding_invalid",
+      "fixture_id": "neg_signature_49_bytes",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "public key truncated to 95 bytes",
+      "expected_reason": "public_key_encoding_invalid",
+      "fixture_id": "neg_public_key_95_bytes",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "public key extended to 97 bytes",
+      "expected_reason": "public_key_encoding_invalid",
+      "fixture_id": "neg_public_key_97_bytes",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "48 bytes of 0xff, not a valid compressed G1 encoding",
+      "expected_reason": "signature_point_invalid",
+      "fixture_id": "neg_malformed_signature_encoding",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "96 bytes of 0xff, not a valid compressed G2 encoding",
+      "expected_reason": "public_key_point_invalid",
+      "fixture_id": "neg_malformed_public_key_encoding",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "canonical compressed G1 infinity: 0xc0 followed by 47 zero bytes",
+      "expected_reason": "point_at_infinity_rejected",
+      "fixture_id": "neg_g1_infinity_signature",
+      "provenance": "NORMATIVE_CANONICAL_ENCODING",
+      "source_type": "normative"
+    },
+    {
+      "derivation": "canonical compressed G2 infinity: 0xc0 followed by 95 zero bytes",
+      "expected_reason": "point_at_infinity_rejected",
+      "fixture_id": "neg_g2_infinity_public_key",
+      "provenance": "NORMATIVE_CANONICAL_ENCODING",
+      "source_type": "normative"
+    },
+    {
+      "derivation": "valid official signature with 32 zero bytes supplied as expected randomness",
+      "expected_reason": "randomness_mismatch",
+      "fixture_id": "neg_valid_signature_wrong_randomness",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "round supplied as str",
+      "expected_reason": "wrong_input_type",
+      "fixture_id": "neg_round_wrong_type_str",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "round supplied as bool",
+      "expected_reason": "wrong_input_type",
+      "fixture_id": "neg_round_wrong_type_bool",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "signature supplied as a mutable bytearray alias",
+      "expected_reason": "wrong_input_type",
+      "fixture_id": "neg_signature_mutable_alias",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "signature supplied as a hostile bytes subclass",
+      "expected_reason": "wrong_input_type",
+      "fixture_id": "neg_signature_hostile_bytes_subclass",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    },
+    {
+      "derivation": "public key supplied as a hostile bytes subclass",
+      "expected_reason": "wrong_input_type",
+      "fixture_id": "neg_public_key_hostile_bytes_subclass",
+      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    }
+  ],
+  "nonclaims": {
+    "no_bls_verifier_implemented_in_product": true,
+    "no_capital_or_order_or_position_effect": true,
+    "no_clock_access": true,
+    "no_connector_transition": true,
+    "no_environment_access": true,
+    "no_fixture_acquisition_at_test_time": true,
+    "no_network_access": true,
+    "no_product_runtime_dependency_on_pyblst": true,
+    "no_readiness_transition": true,
+    "no_source_reachability_claim": true
+  },
+  "positive_fixtures": [
+    {
+      "expected_message_digest_hex": "a6bb133cb1e3638ad7b8a3ff0539668e9e56f9b850ef1b2a810f5422eaa6c323",
+      "expected_randomness_hex": "8ada64bae5c6c0f5540a6a13af56e663240edfbd2c76ac6a8f27671eb7259ce3",
+      "expected_result": "qualified",
+      "expected_round_time": 1692803490,
+      "fixture_id": "pos_official_round_42",
+      "license": "OFFICIAL_PUBLIC_RANDOMNESS_BEACON_OUTPUT",
+      "provenance": "OFFICIAL_DRAND_HTTP_API_V2",
+      "raw_response_sha256": "b7f86008c4b7ddffe6b8cf65371c801973360f4b13f107a9c3bf1460a6b1f44e",
+      "round": 42,
+      "signature_hex": "95a9f9f5b231b7714de1553105d8ffdf3dcda24cfdb1e689319bccf79a9c8ce430a91b811fbfaf763900bc998b5d686a",
+      "source_pin": "https://api.drand.sh/v2/chains/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971/rounds/42",
+      "source_type": "official_http_api"
+    },
+    {
+      "expected_result": "qualified",
+      "fixture_id": "pos_official_chain_info",
+      "license": "OFFICIAL_PUBLIC_RANDOMNESS_BEACON_METADATA",
+      "provenance": "OFFICIAL_DRAND_HTTP_API_V2",
+      "public_key_hex": "83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183c8c4b450b6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb5ed66304de9cf809bd274ca73bab4af5a6e9c76a4bc09e76eae8991ef5ece45a",
+      "raw_response_sha256": "ff9887bdaa43734aa86582837ef43ba1ee1b14d3bd841d5535f94651b85ab7d3",
+      "source_pin": "https://api.drand.sh/v2/chains/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971/info",
+      "source_type": "official_http_api"
+    },
+    {
+      "expected_result": "qualified",
+      "fixture_id": "pos_repeated_deterministic_verification",
+      "license": "DERIVED_FROM_ADMITTED_POSITIVE",
+      "note": "the identical positive input verified twice must produce byte-identical results",
+      "provenance": "DETERMINISTIC_REPEAT_OF_ADMITTED_POSITIVE",
+      "source_type": "derived"
+    }
+  ],
+  "reference_verifier": {
+    "agreement": "EXACT_ON_ALL_COMPARED_CASES",
+    "go_toolchain": "go1.26.5 windows/amd64",
+    "module": "github.com/drand/drand/v2",
+    "module_go_sum_h1": "h1:QpQ6FPy5JMPRTSFvD9HtqDRse/t9dQhDZj7hNMCjM6w=",
+    "schemes_go_sha256": "58f32452ce9e38e9f25d8692baa1c51b9cfac0167d899aff44cbe70c11a04629",
+    "version": "v2.1.6"
+  },
+  "schema": "mt4-s3a-drand-quicknet-qualification-manifest",
+  "unresolved_or_blocked_fixtures": [
+    {
+      "blocked_reason": "fixture_provenance_invalid",
+      "fixture_id": "blocked_subgroup_invalid_g1_point",
+      "note": "A subgroup-invalid G1 point with admissible primary-source provenance was not obtained. The one-bit signature corruption fixture exercises the subgroup_check_failed path with a deterministically derived input, but a dedicated normative subgroup-invalid vector is NOT admitted here. Bytes were deliberately NOT invented.",
+      "status": "FIXTURE_ADMISSION_BLOCKED"
+    },
+    {
+      "blocked_reason": "fixture_provenance_invalid",
+      "fixture_id": "blocked_non_canonical_encoding_point",
+      "note": "A non-canonical (unreduced field element) compressed encoding with admissible primary-source provenance was not obtained. The qualification logic implements the canonical re-compression check, but no provenance-backed non-canonical vector is admitted. Bytes were deliberately NOT invented.",
+      "status": "FIXTURE_ADMISSION_BLOCKED"
+    }
+  ],
+  "version": 1
+}
