@@ -402,6 +402,61 @@ def test_source_bindings_remain_not_proven_after_the_research() -> None:
     assert "SOURCE_TO_WHEEL_BINDING: NOT_PROVEN" in doc.replace("`", "")
 
 
+def test_document_never_overclaims_source_binding_as_a_categorical_no() -> None:
+    """NOT_PROVEN must never be rewritten as a categorical 'No' to the binding question.
+
+    'Not proven with the available evidence' is a statement about the current evidence state.
+    'No' is a statement about the underlying fact. The document must preserve the former and never
+    collapse it into the latter, and must not claim binding is impossible.
+    """
+    doc = _DOC_PATH.read_text(encoding="utf-8")
+
+    # the exact categorical pattern the prior revision used must never reappear
+    categorical_no = re.compile(r"Can the exact PyPI wheel/sdist bytes be bound.{0,80}\*\*No\.\*\*", re.DOTALL)
+    assert categorical_no.search(doc) is None, "document must not answer the binding question as a categorical No"
+
+    # the corrected question form and its NOT_PROVEN answer must be present
+    assert "currently be bound to tag commit `dadf9cba` from the available\n   evidence" in doc
+    assert "**`NOT_PROVEN`.**" in doc
+
+    # the uncertainty concepts must be present near the binding discussion
+    binding_start = doc.index("Can the exact PyPI wheel/sdist bytes currently be bound")
+    binding_end = doc.index("What explicit licence or reuse grant covers", binding_start)
+    binding_section = doc[binding_start:binding_end]
+    assert "not established" in binding_section
+    assert "impossible" in binding_section
+    assert "could still establish it later" in binding_section or "future" in binding_section.lower()
+
+    # binding must never be ASSERTED as disproven/impossible; the token may appear only in a negation
+    for line in doc.splitlines():
+        if "DISPROVEN" in line:
+            assert "not" in line.lower(), line
+    assert "binding is impossible" not in doc.lower()
+    assert re.search(r"binding (is|was) (disproven|impossible)\b", doc, re.IGNORECASE) is None
+
+
+def test_document_never_asserts_no_licence_can_exist_anywhere() -> None:
+    """The rights finding is scoped to the sources searched, not a universal negative claim."""
+    doc = _DOC_PATH.read_text(encoding="utf-8")
+    assert "no explicit grant was found in the official primary sources searched" in doc.lower() or (
+        "no explicit grant was found in the official primary sources" in doc
+    )
+    # must not claim a universal absence of any possible grant
+    assert "no grant can exist" not in doc.lower()
+    assert "no licence can exist" not in doc.lower()
+    assert "None found.**" not in doc
+
+
+def test_document_distinguishes_research_completion_from_conclusive_resolution() -> None:
+    """'Both questions answered' conflates completing a research track with settling the facts."""
+    doc = _DOC_PATH.read_text(encoding="utf-8")
+    assert "both questions answered" not in doc
+    assert "research tracks completed" in doc
+    assert "neither blocker resolved" in doc
+    # the distinction itself must be spelled out, not merely implied by word choice
+    assert "not the same as" in doc or "does not mean the question was settled" in doc
+
+
 def test_public_and_publicly_verifiable_wording_does_not_prove_fixture_reuse_license() -> None:
     rights = _manifest()["drand_rights_evidence"]
     assert rights["drand_output_is_publicly_available"] is True

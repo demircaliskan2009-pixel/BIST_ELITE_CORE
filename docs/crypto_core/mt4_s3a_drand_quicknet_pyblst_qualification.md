@@ -528,21 +528,30 @@ What survives as useful candidate evidence: the exact chain profile (§2), the e
 most importantly — the F5 argument-order trap, which any future verifier must respect regardless of
 which dependency is eventually admitted.
 
-### 8.1 Controller-executed research — both questions answered, both answers keep the blockers
+### 8.1 Controller-executed research — both research tracks completed; neither blocker resolved
 
-Both external-fact questions below were answered by controller-executed primary-source research
-(§3.1, §6.2). **Neither answer resolves its blocker; both blockers stand exactly as before.**
+Both external-fact questions below were investigated by controller-executed primary-source research
+(§3.1, §6.2). **Both research tracks are complete — the searches were carried out and their findings are
+recorded — but that is not the same as the underlying external facts being conclusively resolved.**
+Completing a research track means an answer was sought and evidence was gathered; it does not mean the
+question was settled either way. Neither blocker is resolved; both blockers stand exactly as before.
 
-1. *Can the exact PyPI wheel/sdist bytes be bound to tag commit `dadf9cba`?* **No.** The commit is
-   authentically signed (`VALID_GITHUB_VERIFIED_PGP_SIGNATURE`), but the CI run's Actions artifacts
-   expired (`HTTP_410_GONE`) and the two digests still on record are ZIP-archive digests, not the
-   individual wheel/sdist file hashes — they cannot be compared against `wheel_sha256` / `sdist_sha256`.
-   `SOURCE_TO_SDIST_BINDING` and `SOURCE_TO_WHEEL_BINDING` remain `NOT_PROVEN`.
+1. *Can the exact PyPI wheel/sdist bytes currently be bound to tag commit `dadf9cba` from the available
+   evidence?* **`NOT_PROVEN`.** The commit itself is authentically signed
+   (`VALID_GITHUB_VERIFIED_PGP_SIGNATURE`), which proves the *source* is genuine. But the CI run's
+   Actions artifacts expired (`HTTP_410_GONE`) and the two digests still on record are ZIP-archive
+   digests, not the individual wheel/sdist file hashes — they cannot be compared against `wheel_sha256`
+   / `sdist_sha256`. This means byte-level binding was **not established** with the evidence available
+   today. It does **not** mean binding is **impossible** — a reproducible build, a recovered artifact
+   hash, or a maintainer statement could still establish it later. `SOURCE_TO_SDIST_BINDING` and
+   `SOURCE_TO_WHEEL_BINDING` remain `NOT_PROVEN`, not `DISPROVEN` or `IMPOSSIBLE`.
 2. *What explicit licence or reuse grant covers drand Quicknet beacon output committed as test
-   fixtures?* **None found.** The beacon is public and publicly verifiable, and its HTTP API use is
-   documented, but no primary source explicitly grants copying or redistributing that output as
-   committed fixtures. `FIXTURE_REUSE_LICENSE` remains `NOT_PROVEN`; `FIXTURE_REUSE_SCOPE` and
-   `ATTRIBUTION_REQUIRED` remain `UNKNOWN` — not inferred from availability.
+   fixtures?* **`NOT_PROVEN` — no explicit grant was found in the official primary sources searched.**
+   The beacon is public and publicly verifiable, and its HTTP API use is documented, but none of the
+   primary sources examined explicitly grants copying or redistributing that output as committed
+   fixtures. This is a statement about what was found in the sources searched, **not** a claim that no
+   such grant exists anywhere or could never be located. `FIXTURE_REUSE_LICENSE` remains `NOT_PROVEN`;
+   `FIXTURE_REUSE_SCOPE` and `ATTRIBUTION_REQUIRED` remain `UNKNOWN` — not inferred from availability.
 
 ```
 SOURCE_TO_SDIST_BINDING:  NOT_PROVEN
