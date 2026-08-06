@@ -55,7 +55,10 @@ DRAND_QUICKNET_QUALIFICATION_PROFILE_ID = "MT4-S3A-DRAND-QUICKNET-QUALIFICATION-
 DEPENDENCY_QUALIFICATION = "BLOCKED"
 DEPENDENCY_QUALIFICATION_BLOCKERS = ("package_version_identity_ambiguous",)
 FIXTURE_QUALIFICATION = "BLOCKED"
-FIXTURE_QUALIFICATION_BLOCKERS = ("fixture_license_unresolved",)
+FIXTURE_QUALIFICATION_BLOCKERS = (
+    "fixture_license_unresolved",
+    "mandatory_subgroup_invalid_fixture_provenance_unresolved",
+)
 PACKAGE_SOURCE_CONTRADICTIONS = "UNRESOLVED_PACKAGE_VERSION_IDENTITY_AMBIGUITY"
 
 # Permanent-false governance states. Nothing in this slice may flip any of these.
@@ -198,28 +201,52 @@ def _is_canonical_infinity(raw: bytes) -> bool:
 def _load_candidate_dependency():
     """Lazily import the candidate dependency. Returns (module, reason). Fails closed on any error.
 
-    Every dependency-controlled failure is mapped to a closed reason. ``KeyboardInterrupt`` and
-    ``SystemExit`` derive from ``BaseException`` and are deliberately NOT caught.
+    Absence and failure are deliberately NOT the same thing.
+    ``DEPENDENCY_PROFILE_UNAVAILABLE`` means the candidate package is genuinely not installed:
+    a ``ModuleNotFoundError`` naming exactly ``pyblst``, or ``PackageNotFoundError`` for its
+    distribution. Everything else - an ``ImportError`` raised while an existing ``pyblst`` executes, a
+    ``ModuleNotFoundError`` naming one of its own internal dependencies, any metadata-backend failure -
+    is ``DEPENDENCY_EXCEPTION``. Reporting a broken install as "not installed" would understate a real
+    dependency failure.
+
+    ``KeyboardInterrupt`` and ``SystemExit`` derive from ``BaseException`` and are never caught.
     """
     reason_type = QuicknetQualificationReason
+
+    # Step 1 - import the candidate package. ONLY genuine absence of the candidate package itself may
+    # be reported as DEPENDENCY_PROFILE_UNAVAILABLE. A module that exists but fails while executing,
+    # or that is missing one of its OWN internal dependencies, is a failure, not an absence.
     try:
         import pyblst
+    except ModuleNotFoundError as error:
+        try:
+            missing_module = error.name
+        except Exception:
+            return None, reason_type.DEPENDENCY_EXCEPTION
+        if type(missing_module) is str and missing_module == CANDIDATE_PACKAGE_NAME:
+            return None, reason_type.DEPENDENCY_PROFILE_UNAVAILABLE
+        return None, reason_type.DEPENDENCY_EXCEPTION
     except ImportError:
-        return None, reason_type.DEPENDENCY_PROFILE_UNAVAILABLE
+        # the module was found but raised ImportError while executing
+        return None, reason_type.DEPENDENCY_EXCEPTION
     except Exception:
         return None, reason_type.DEPENDENCY_EXCEPTION
 
+    # Step 2 - import the stdlib metadata module separately. Its failure is never package absence.
     try:
         import importlib.metadata as importlib_metadata
+    except Exception:
+        return None, reason_type.DEPENDENCY_EXCEPTION
 
+    # Step 3 - only PackageNotFoundError for the candidate distribution is an absence.
+    try:
         observed = importlib_metadata.version(CANDIDATE_PACKAGE_NAME)
     except importlib_metadata.PackageNotFoundError:
         return None, reason_type.DEPENDENCY_PROFILE_UNAVAILABLE
-    except ImportError:
-        return None, reason_type.DEPENDENCY_PROFILE_UNAVAILABLE
     except Exception:
         return None, reason_type.DEPENDENCY_EXCEPTION
 
+    # Step 4 - the returned value is dependency-controlled; comparing it must not raise either.
     try:
         if type(observed) is not str or observed != CANDIDATE_PACKAGE_VERSION:
             return None, reason_type.DEPENDENCY_VERSION_MISMATCH

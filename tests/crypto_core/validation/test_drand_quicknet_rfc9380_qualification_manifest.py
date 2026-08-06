@@ -30,7 +30,18 @@ _DOC_PATH = _REPO_ROOT / "docs" / "crypto_core" / "mt4_s3a_drand_quicknet_pyblst
 _DEPENDENCY_QUALIFICATION = "BLOCKED"
 _DEPENDENCY_BLOCKERS = ("package_version_identity_ambiguous",)
 _FIXTURE_QUALIFICATION = "BLOCKED"
-_FIXTURE_BLOCKERS = ("fixture_license_unresolved",)
+_FIXTURE_BLOCKERS = (
+    "fixture_license_unresolved",
+    "mandatory_subgroup_invalid_fixture_provenance_unresolved",
+)
+_EXPECTED_BLOCKED_COVERAGE_CLASSES = ("subgroup_invalid",)
+_EXPECTED_PROVEN_COVERAGE_CLASSES = ("infinity", "non_canonical_encoding")
+_G1_SOURCE_FILE = "g1.go"
+_G1_SOURCE_SHA256 = "51143a23a7818f0347b60ed6d0bdc42fbbc1640344013ffded1dd48f99a709b6"
+_G2_SOURCE_FILE = "g2.go"
+_G2_SOURCE_SHA256 = "0c227f0ce968cb8350bc86bfbd400d88183b4781940adca66d042ce18b250b81"
+_MODULUS_SOURCE_FILE = "bls12_381.go"
+_MODULUS_SOURCE_SHA256 = "19dad068bf44c42af69fd15896540749172ec3ff31ece151c6f9d6bc3c673246"
 _PACKAGE_SOURCE_CONTRADICTIONS = "UNRESOLVED_PACKAGE_VERSION_IDENTITY_AMBIGUITY"
 _BLS12_381_BASE_FIELD_MODULUS = int(
     "1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab",
@@ -68,16 +79,24 @@ _EXPECTED_NEGATIVE_IDS = (
     "neg_signature_hostile_bytes_subclass",
     "neg_public_key_hostile_bytes_subclass",
 )
-_EXPECTED_BLOCKED_IDS = ()
-_ADMISSIBLE_PROVENANCE = frozenset(
+_EXPECTED_BLOCKED_IDS = ("blocked_subgroup_invalid_g1_point",)
+# Labels that MAY back a mandatory coverage class: official, or a hash-pinned upstream source.
+_PROVENANCE_BACKING_LABELS = frozenset(
     {
         "OFFICIAL_DRAND_HTTP_API_V2",
         "OFFICIAL_DRAND_V2_1_6_KEYGROUP_BASE_POINT",
         "PINNED_UPSTREAM_SOURCE_KILIC_BLS12_381_V0_1_0",
-        "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
-        "DETERMINISTIC_REPEAT_OF_ADMITTED_POSITIVE",
     }
 )
+# Labels that are candidate evidence ONLY. No positive fixture is admitted (licence unresolved), so a
+# derivation from one confers no provenance and must never back a mandatory coverage class.
+_CANDIDATE_ONLY_PROVENANCE_LABELS = frozenset(
+    {
+        "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
+        "DETERMINISTIC_REPEAT_OF_UNADMITTED_OFFICIAL_POSITIVE",
+    }
+)
+_ADMISSIBLE_PROVENANCE = _PROVENANCE_BACKING_LABELS | _CANDIDATE_ONLY_PROVENANCE_LABELS
 # A provenance label is only admissible when the manifest also carries its evidence.
 _PROVENANCE_REQUIRING_SOURCE_EVIDENCE = frozenset({"PINNED_UPSTREAM_SOURCE_KILIC_BLS12_381_V0_1_0"})
 _REQUIRED_SOURCE_EVIDENCE_FIELDS = (
@@ -364,6 +383,66 @@ def test_a_provenance_label_is_never_accepted_without_its_source_evidence() -> N
         assert fixture["source_uri"].startswith("https://")
 
 
+def test_every_source_backed_fixture_pins_a_file_that_exists_with_the_matching_hash() -> None:
+    manifest = _manifest()
+    files = manifest["curve_encoding_source"]["files"]
+    source = manifest["curve_encoding_source"]
+    for fixture in manifest["negative_fixtures"]:
+        if fixture["provenance"] not in _PROVENANCE_REQUIRING_SOURCE_EVIDENCE:
+            continue
+        name = fixture["source_file"]
+        assert name in files, (fixture["fixture_id"], name)
+        assert fixture["source_sha256"] == files[name]["sha256"], fixture["fixture_id"]
+        assert fixture["source_version"] == source["version"], fixture["fixture_id"]
+        assert fixture["source_uri"] == source["source_uri"], fixture["fixture_id"]
+        assert fixture["license_result"] == source["license_result"], fixture["fixture_id"]
+
+
+def test_g2_evidence_is_never_sourced_from_the_g1_implementation() -> None:
+    """G2 compressed serialization is a separate contract in g2.go; g1.go must not stand in for it."""
+    manifest = _manifest()
+    for fixture in manifest["negative_fixtures"]:
+        if fixture.get("group") == "G2" and "source_file" in fixture:
+            assert fixture["source_file"] != _G1_SOURCE_FILE, fixture["fixture_id"]
+            assert fixture["source_file"] == _G2_SOURCE_FILE, fixture["fixture_id"]
+            assert fixture["source_sha256"] == _G2_SOURCE_SHA256, fixture["fixture_id"]
+            assert fixture["source_symbol"] == "G2.FromCompressed", fixture["fixture_id"]
+        if fixture.get("group") == "G1" and "source_file" in fixture:
+            assert fixture["source_file"] in {_G1_SOURCE_FILE, _MODULUS_SOURCE_FILE}
+            assert fixture["source_file"] != _G2_SOURCE_FILE, fixture["fixture_id"]
+
+    g2 = _fixture("negative_fixtures", "neg_g2_infinity_public_key")
+    assert g2["source_file"] == _G2_SOURCE_FILE
+    assert g2["source_sha256"] == _G2_SOURCE_SHA256
+    assert g2["group"] == "G2"
+    assert "96" in g2["derivation_algorithm"]
+    assert len(bytes.fromhex(g2["public_key_hex"])) == 96
+
+    g1 = _fixture("negative_fixtures", "neg_g1_infinity_signature")
+    assert g1["source_file"] == _G1_SOURCE_FILE
+    assert g1["source_sha256"] == _G1_SOURCE_SHA256
+    assert g1["group"] == "G1"
+    assert "48" in g1["derivation_algorithm"]
+    assert len(bytes.fromhex(g1["signature_hex"])) == 48
+
+
+def test_group_specific_source_lines_are_recorded_for_both_groups() -> None:
+    source = _manifest()["curve_encoding_source"]
+    assert source["g1_compressed_infinity_symbol"] == "G1.FromCompressed"
+    assert source["g2_compressed_infinity_symbol"] == "G2.FromCompressed"
+    assert "48 bytes" in source["g1_length_source_line"]
+    assert "96 bytes" in source["g2_length_source_line"]
+    for key in ("g1_compression_flag_source_line", "g2_compression_flag_source_line"):
+        assert "1<<7" in source[key], key
+    for key in ("g1_compressed_infinity_source_line", "g2_compressed_infinity_source_line"):
+        match = re.search(r"v\s*!=\s*0x([0-9a-fA-F]{2})", source[key])
+        assert match is not None, key
+        assert int(match.group(1), 16) == 0xC0, key
+    # the old group-agnostic keys must not come back
+    for stale in ("compressed_infinity_symbol", "compressed_infinity_source_line"):
+        assert stale not in source, stale
+
+
 def test_pinned_curve_encoding_source_carries_complete_evidence() -> None:
     source = _manifest()["curve_encoding_source"]
     assert source["module"] == "github.com/kilic/bls12-381"
@@ -402,44 +481,95 @@ def test_field_modulus_is_derived_from_the_recorded_source_line_not_a_local_cons
 
 def test_compressed_infinity_flag_byte_is_derived_from_the_recorded_source_line() -> None:
     source = _manifest()["curve_encoding_source"]
-    match = re.search(r"v\s*!=\s*0x([0-9a-fA-F]{2})", source["compressed_infinity_source_line"])
-    assert match is not None, source["compressed_infinity_source_line"]
-    flag_byte = int(match.group(1), 16)
-    assert flag_byte == 0xC0
-    assert "1<<7" in source["compression_flag_source_line"]
-
-    for fixture_id, key, length in (
-        ("neg_g1_infinity_signature", "signature_hex", 48),
-        ("neg_g2_infinity_public_key", "public_key_hex", 96),
+    for fixture_id, key, length, line_key in (
+        ("neg_g1_infinity_signature", "signature_hex", 48, "g1_compressed_infinity_source_line"),
+        ("neg_g2_infinity_public_key", "public_key_hex", 96, "g2_compressed_infinity_source_line"),
     ):
+        match = re.search(r"v\s*!=\s*0x([0-9a-fA-F]{2})", source[line_key])
+        assert match is not None, line_key
+        flag_byte = int(match.group(1), 16)
+        assert flag_byte == 0xC0, line_key
         raw = bytes.fromhex(_fixture("negative_fixtures", fixture_id)[key])
         assert len(raw) == length
         assert raw[0] == flag_byte
         assert not any(raw[1:])
 
 
-def test_no_fixture_class_remains_blocked() -> None:
-    assert _manifest()["unresolved_or_blocked_fixtures"] == []
+def test_the_subgroup_invalid_class_is_recorded_as_blocked() -> None:
+    blocked = _manifest()["unresolved_or_blocked_fixtures"]
+    assert tuple(entry["fixture_id"] for entry in blocked) == _EXPECTED_BLOCKED_IDS
+    entry = blocked[0]
+    assert entry["status"] == "FIXTURE_ADMISSION_BLOCKED"
+    assert entry["coverage_class"] == "subgroup_invalid"
+    assert entry["blocked_reason"] == "mandatory_subgroup_invalid_fixture_provenance_unresolved"
+    # the blocker must state WHY: the deterministic base positive is unadmitted
+    assert "NOT admitted" in entry["note"]
+    assert "license_explicitly_proven=false" in entry["note"]
 
 
-def test_every_mandatory_coverage_class_is_provenance_backed() -> None:
+def test_mandatory_coverage_matrix_separates_proven_classes_from_blocked_ones() -> None:
     matrix = _manifest()["mandatory_coverage_matrix"]
     assert set(matrix) == {"infinity", "non_canonical_encoding", "subgroup_invalid"}
     negative_ids = {entry["fixture_id"] for entry in _manifest()["negative_fixtures"]}
-    for name, entry in matrix.items():
+
+    for name in _EXPECTED_PROVEN_COVERAGE_CLASSES:
+        entry = matrix[name]
         assert entry["result"] == "PROVENANCE_BACKED", name
         assert entry["provenance_backed"] is True, name
         assert entry["fixture_ids"], name
         assert entry["why_distinct"].strip(), name
-        for fixture_id in entry["fixture_ids"]:
-            assert fixture_id in negative_ids, (name, fixture_id)
 
-    # each class must be carried by fixtures that actually declare that coverage class
+    for name in _EXPECTED_BLOCKED_COVERAGE_CLASSES:
+        entry = matrix[name]
+        assert entry["result"] == "BLOCKED", name
+        assert entry["provenance_backed"] is False, name
+        assert entry["blocked_reason"], name
+        assert entry["candidate_evidence_retained"].strip(), name
+
     for name, entry in matrix.items():
         for fixture_id in entry["fixture_ids"]:
+            assert fixture_id in negative_ids, (name, fixture_id)
             fixture = _fixture("negative_fixtures", fixture_id)
             assert fixture["coverage_class"] == name, (name, fixture_id)
             assert fixture["observed_reproducibly"] is True, fixture_id
+
+
+def test_a_provenance_backed_class_never_rests_on_an_unadmitted_positive() -> None:
+    """No positive fixture is admitted, so a derivation from one cannot confer provenance."""
+    manifest = _manifest()
+    for fixture in manifest["positive_fixtures"]:
+        assert fixture["license_explicitly_proven"] is False, fixture["fixture_id"]
+    assert manifest["admission"]["fixture_corpus_admitted"] is False
+
+    matrix = manifest["mandatory_coverage_matrix"]
+    for name, entry in matrix.items():
+        if entry["result"] != "PROVENANCE_BACKED":
+            continue
+        for fixture_id in entry["fixture_ids"]:
+            provenance = _fixture("negative_fixtures", fixture_id)["provenance"]
+            assert provenance in _PROVENANCE_BACKING_LABELS, (name, fixture_id, provenance)
+            assert provenance not in _CANDIDATE_ONLY_PROVENANCE_LABELS
+
+    # and no fixture anywhere may still claim derivation from an *admitted* positive
+    raw = _MANIFEST_PATH.read_text(encoding="utf-8")
+    assert "OF_ADMITTED_POSITIVE" not in raw
+    assert "DERIVED_FROM_ADMITTED_POSITIVE" not in raw
+
+
+def test_the_retained_subgroup_candidate_keeps_its_observed_evidence() -> None:
+    """Downgrading provenance must not delete the reproducible BLST_POINT_NOT_IN_GROUP observation."""
+    fixture = _fixture("negative_fixtures", "neg_one_bit_signature_corruption")
+    assert fixture["provenance"] == "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE"
+    assert fixture["provenance_backed"] is False
+    assert fixture["base_fixture_admitted"] is False
+    assert fixture["evidence_status"] == "CANDIDATE_EVIDENCE_ONLY_NOT_PROVENANCE_BACKED"
+    assert fixture["blocked_reason"] == "base_positive_fixture_unadmitted_license_unresolved"
+    # evidence retained, not deleted
+    assert fixture["observed_blst_code"] == "BLST_POINT_NOT_IN_GROUP"
+    assert fixture["observed_reproducibly"] is True
+    assert fixture["expected_reason"] == "subgroup_check_failed"
+    # never relabelled official or normative
+    assert fixture["source_type"] == "derived"
 
 
 def test_coverage_classes_are_not_satisfied_by_length_rejections_or_by_each_other() -> None:
@@ -463,12 +593,14 @@ def test_coverage_classes_are_not_satisfied_by_length_rejections_or_by_each_othe
     assert not infinity_ids & set(matrix["non_canonical_encoding"]["fixture_ids"])
 
 
-def test_subgroup_invalid_fixture_is_a_real_subgroup_rejection() -> None:
+def test_subgroup_invalid_candidate_is_a_real_subgroup_rejection_but_not_provenance_backed() -> None:
+    """The observation is real; the provenance is not. The test name must not overstate either."""
     fixture = _fixture("negative_fixtures", "neg_one_bit_signature_corruption")
     assert fixture["coverage_class"] == "subgroup_invalid"
     assert fixture["expected_reason"] == "subgroup_check_failed"
     assert fixture["observed_blst_code"] == "BLST_POINT_NOT_IN_GROUP"
-    assert fixture["provenance"] == "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE"
+    assert fixture["provenance"] == "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE"
+    assert fixture["provenance_backed"] is False
 
     corrupted = bytes.fromhex(fixture["signature_hex"])
     official = bytes.fromhex(_OFFICIAL_SIGNATURE_HEX)
@@ -940,29 +1072,116 @@ def test_canonical_infinity_is_rejected_before_any_pairing_work() -> None:
         assert details == {}
 
 
-def test_uncompressed_flagged_infinity_still_fails_closed_without_being_called_canonical() -> None:
-    """0x40||zeros must not be labelled canonical compressed infinity, but must still fail closed."""
-    module = _load_script("uncompressed_infinity")
+def _decode_recording_pyblst(reject: dict[bytes, Exception]) -> types.ModuleType:
+    """A fake dependency that records what reached each decoder and raises for chosen inputs.
+
+    Everything not in ``reject`` decodes and re-compresses to the identical bytes, so the harness is
+    forced all the way to the decoder under test rather than short-circuiting earlier.
+    """
+    seen: dict[str, list[bytes]] = {"g1": [], "g2": []}
+
+    class P1:
+        def __init__(self, raw: bytes) -> None:
+            self._raw = raw
+
+        @staticmethod
+        def uncompress(raw):
+            seen["g1"].append(bytes(raw))
+            if raw in reject:
+                raise reject[raw]
+            return P1(bytes(raw))
+
+        @staticmethod
+        def hash_to_group(message, dst):
+            return P1(bytes(48))
+
+        def compress(self):
+            return self._raw
+
+    class P2:
+        def __init__(self, raw: bytes) -> None:
+            self._raw = raw
+
+        @staticmethod
+        def uncompress(raw):
+            seen["g2"].append(bytes(raw))
+            if raw in reject:
+                raise reject[raw]
+            return P2(bytes(raw))
+
+        def compress(self):
+            return self._raw
+
+    fake = types.ModuleType("pyblst")
+    fake.BlstP1Element = P1
+    fake.BlstP2Element = P2
+    fake.miller_loop = lambda a, b: object()
+    fake.final_verify = lambda a, b: True
+    fake._seen = seen
+    return fake
+
+
+def test_g1_0x40_reaches_g1_point_decoding_and_returns_signature_point_invalid(monkeypatch) -> None:
+    """0x40||47 zeros must be routed to G1 decoding, not short-circuited anywhere earlier."""
+    import importlib.metadata as importlib_metadata
+
+    g1_uncompressed_infinity = bytes([0x40]) + bytes(47)
+    fake = _decode_recording_pyblst({g1_uncompressed_infinity: ValueError("BLST_BAD_ENCODING")})
+    monkeypatch.setitem(sys.modules, "pyblst", fake)
+    monkeypatch.setattr(importlib_metadata, "version", lambda name: "0.3.15")
+    module = _load_script("g1_0x40")
     reason_type = module.QuicknetQualificationReason
-    uncompressed_infinity = bytes([0x40]) + bytes(47)
-    assert module._is_canonical_infinity(uncompressed_infinity) is False
+
+    assert module._is_canonical_infinity(g1_uncompressed_infinity) is False
 
     verified, reason, details = module.qualify_quicknet_round(
         round_number=_OFFICIAL_ROUND,
-        public_key_bytes=bytes(96),
-        signature_bytes=uncompressed_infinity,
+        public_key_bytes=bytes.fromhex(_OFFICIAL_PUBLIC_KEY_HEX),
+        signature_bytes=g1_uncompressed_infinity,
         chain_hash=_QUICKNET_CHAIN_HASH,
     )
     assert verified is False
+    assert reason is reason_type.SIGNATURE_POINT_INVALID
     assert details == {}
-    # it must NOT be reported as an infinity rejection; with pyblst absent it fails closed on the
-    # dependency gate, and with pyblst present it fails on point decoding - never verified.
-    assert reason is not reason_type.POINT_AT_INFINITY_REJECTED
-    assert reason in {
+    # the bytes must actually have reached the G1 decoder
+    assert g1_uncompressed_infinity in fake._seen["g1"]
+    # and none of the permissive fallbacks may be what produced the result
+    assert reason not in {
         reason_type.DEPENDENCY_PROFILE_UNAVAILABLE,
-        reason_type.SIGNATURE_POINT_INVALID,
         reason_type.SUBGROUP_CHECK_FAILED,
         reason_type.DEPENDENCY_EXCEPTION,
+        reason_type.POINT_AT_INFINITY_REJECTED,
+    }
+
+
+def test_g2_0x40_reaches_g2_point_decoding_and_returns_public_key_point_invalid(monkeypatch) -> None:
+    """0x40||95 zeros must be routed to G2 decoding, not short-circuited anywhere earlier."""
+    import importlib.metadata as importlib_metadata
+
+    g2_uncompressed_infinity = bytes([0x40]) + bytes(95)
+    fake = _decode_recording_pyblst({g2_uncompressed_infinity: ValueError("BLST_BAD_ENCODING")})
+    monkeypatch.setitem(sys.modules, "pyblst", fake)
+    monkeypatch.setattr(importlib_metadata, "version", lambda name: "0.3.15")
+    module = _load_script("g2_0x40")
+    reason_type = module.QuicknetQualificationReason
+
+    assert module._is_canonical_infinity(g2_uncompressed_infinity) is False
+
+    verified, reason, details = module.qualify_quicknet_round(
+        round_number=_OFFICIAL_ROUND,
+        public_key_bytes=g2_uncompressed_infinity,
+        signature_bytes=bytes.fromhex(_OFFICIAL_SIGNATURE_HEX),
+        chain_hash=_QUICKNET_CHAIN_HASH,
+    )
+    assert verified is False
+    assert reason is reason_type.PUBLIC_KEY_POINT_INVALID
+    assert details == {}
+    assert g2_uncompressed_infinity in fake._seen["g2"]
+    assert reason not in {
+        reason_type.DEPENDENCY_PROFILE_UNAVAILABLE,
+        reason_type.SUBGROUP_CHECK_FAILED,
+        reason_type.DEPENDENCY_EXCEPTION,
+        reason_type.POINT_AT_INFINITY_REJECTED,
     }
 
 
@@ -1118,6 +1337,123 @@ def test_no_dependency_exception_escapes_raw_from_any_stage(stage: str, monkeypa
     assert details == {}
     assert _HOSTILE_MARKER not in reason.value
     assert _HOSTILE_MARKER not in repr(details)
+
+
+def _install_raising_pyblst(monkeypatch, exc: BaseException) -> None:
+    class RaisingLoader(importlib.abc.Loader):
+        def create_module(self, spec):
+            return types.ModuleType(spec.name)
+
+        def exec_module(self, module):
+            raise exc
+
+    class RaisingFinder(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname == "pyblst":
+                return importlib.machinery.ModuleSpec(fullname, RaisingLoader())
+            return None
+
+    monkeypatch.delitem(sys.modules, "pyblst", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [RaisingFinder(), *sys.meta_path])
+
+
+def _qualify(module):
+    return module.qualify_quicknet_round(
+        round_number=_OFFICIAL_ROUND,
+        public_key_bytes=bytes.fromhex(_OFFICIAL_PUBLIC_KEY_HEX),
+        signature_bytes=bytes.fromhex(_OFFICIAL_SIGNATURE_HEX),
+        chain_hash=_QUICKNET_CHAIN_HASH,
+    )
+
+
+def test_genuine_package_absence_is_the_only_unavailable_import_case() -> None:
+    """pyblst really is absent in the repo venv, so this is the true DEPENDENCY_PROFILE_UNAVAILABLE."""
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("pyblst")
+    module = _load_script("absent_import")
+    verified, reason, details = _qualify(module)
+    assert verified is False
+    assert reason is module.QuicknetQualificationReason.DEPENDENCY_PROFILE_UNAVAILABLE
+    assert details == {}
+
+
+def test_internal_pyblst_importerror_is_a_failure_not_an_absence(monkeypatch) -> None:
+    _install_raising_pyblst(monkeypatch, ImportError("INTERNAL_PYBLST_IMPORT_FAILURE"))
+    module = _load_script("internal_importerror")
+    verified, reason, details = _qualify(module)
+    assert verified is False
+    assert reason is module.QuicknetQualificationReason.DEPENDENCY_EXCEPTION
+    assert reason is not module.QuicknetQualificationReason.DEPENDENCY_PROFILE_UNAVAILABLE
+    assert details == {}
+    assert "INTERNAL_PYBLST_IMPORT_FAILURE" not in reason.value
+
+
+def test_missing_internal_dependency_of_pyblst_is_a_failure_not_an_absence(monkeypatch) -> None:
+    _install_raising_pyblst(monkeypatch, ModuleNotFoundError("No module named 'blst_backend'", name="blst_backend"))
+    module = _load_script("internal_modulenotfound")
+    verified, reason, details = _qualify(module)
+    assert verified is False
+    assert reason is module.QuicknetQualificationReason.DEPENDENCY_EXCEPTION
+    assert details == {}
+
+
+def test_modulenotfound_naming_pyblst_itself_is_an_absence(monkeypatch) -> None:
+    _install_raising_pyblst(monkeypatch, ModuleNotFoundError("No module named 'pyblst'", name="pyblst"))
+    module = _load_script("named_absence")
+    verified, reason, details = _qualify(module)
+    assert verified is False
+    assert reason is module.QuicknetQualificationReason.DEPENDENCY_PROFILE_UNAVAILABLE
+    assert details == {}
+
+
+def test_package_metadata_absence_is_unavailable_but_metadata_errors_are_not(monkeypatch) -> None:
+    import importlib.metadata as importlib_metadata
+
+    monkeypatch.setitem(sys.modules, "pyblst", types.ModuleType("pyblst"))
+
+    def not_found(name):
+        raise importlib_metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib_metadata, "version", not_found)
+    module = _load_script("metadata_absent")
+    verified, reason, details = _qualify(module)
+    assert verified is False
+    assert reason is module.QuicknetQualificationReason.DEPENDENCY_PROFILE_UNAVAILABLE
+    assert details == {}
+
+    for error in (ImportError("METADATA_BACKEND_FAILURE"), RuntimeError("METADATA_BACKEND_EXPLODED")):
+
+        def boom(name, _error=error):
+            raise _error
+
+        monkeypatch.setattr(importlib_metadata, "version", boom)
+        module = _load_script(f"metadata_{type(error).__name__}")
+        verified, reason, details = _qualify(module)
+        assert verified is False, type(error).__name__
+        assert reason is module.QuicknetQualificationReason.DEPENDENCY_EXCEPTION, type(error).__name__
+        assert reason is not module.QuicknetQualificationReason.DEPENDENCY_PROFILE_UNAVAILABLE
+        assert details == {}
+        assert "METADATA_BACKEND" not in reason.value
+
+
+def test_hostile_metadata_return_type_is_a_version_mismatch_not_a_crash(monkeypatch) -> None:
+    import importlib.metadata as importlib_metadata
+
+    monkeypatch.setitem(sys.modules, "pyblst", _hostile_pyblst("none"))
+
+    class HostileVersion(str):
+        def __eq__(self, other):
+            raise RuntimeError("HOSTILE_VERSION_COMPARISON")
+
+        __hash__ = None
+
+    monkeypatch.setattr(importlib_metadata, "version", lambda name: HostileVersion("0.3.15"))
+    module = _load_script("hostile_version_type")
+    verified, reason, details = _qualify(module)
+    assert verified is False
+    # exact-type check rejects the subclass before its __eq__ can ever run
+    assert reason is module.QuicknetQualificationReason.DEPENDENCY_VERSION_MISMATCH
+    assert details == {}
 
 
 def test_dependency_import_failures_are_all_mapped(monkeypatch) -> None:

@@ -5,7 +5,7 @@
 | Decision | Value | Blocker |
 |---|---|---|
 | `DEPENDENCY_QUALIFICATION` | **BLOCKED** | `package_version_identity_ambiguous` |
-| `FIXTURE_QUALIFICATION` | **BLOCKED** | `fixture_license_unresolved` |
+| `FIXTURE_QUALIFICATION` | **BLOCKED** | `fixture_license_unresolved`, `mandatory_subgroup_invalid_fixture_provenance_unresolved` |
 | `PACKAGE_SOURCE_CONTRADICTIONS` | `UNRESOLVED_PACKAGE_VERSION_IDENTITY_AMBIGUITY` | — |
 
 Neither qualification passed. The candidate dependency reproduces the official drand reference exactly
@@ -281,18 +281,35 @@ raw response body:
 - chain info — `ff9887bdaa43734aa86582837ef43ba1ee1b14d3bd841d5535f94651b85ab7d3`
 - round 42 — `b7f86008c4b7ddffe6b8cf65371c801973360f4b13f107a9c3bf1460a6b1f44e`
 
-### 6.1 Mandatory coverage classes — all three now provenance-backed
+### 6.1 Mandatory coverage classes — two proven, one blocked
 
-The previous revision recorded `blocked_subgroup_invalid_g1_point` and
-`blocked_non_canonical_encoding_point` as blocked. Re-auditing the actual observed behaviour against
-the decision rules shows both classes **are** satisfiable with admissible provenance, and neither
-required inventing bytes. Both blocked entries are removed and replaced by real fixtures.
+| Class | Fixture | Provenance | Result | Observed blst result |
+|---|---|---|---|---|
+| non-canonical | `neg_non_canonical_unreduced_x_signature` | pinned upstream `bls12_381.go` | **PROVENANCE_BACKED** | `BLST_BAD_ENCODING` |
+| infinity (G1) | `neg_g1_infinity_signature` | pinned upstream `g1.go` | **PROVENANCE_BACKED** | accepted by `uncompress`; consumer must reject |
+| infinity (G2) | `neg_g2_infinity_public_key` | pinned upstream `g2.go` | **PROVENANCE_BACKED** | accepted by `uncompress`; consumer must reject |
+| subgroup-invalid | `neg_one_bit_signature_corruption` | derived from an **unadmitted** positive | **BLOCKED** | `BLST_POINT_NOT_IN_GROUP` |
 
-| Class | Fixture | Provenance | Observed blst result |
-|---|---|---|---|
-| subgroup-invalid | `neg_one_bit_signature_corruption` | deterministic mutation of an admitted positive | `BLST_POINT_NOT_IN_GROUP` |
-| non-canonical | `neg_non_canonical_unreduced_x_signature` | pinned upstream source (below) | `BLST_BAD_ENCODING` |
-| infinity | `neg_g1_infinity_signature`, `neg_g2_infinity_public_key` | pinned upstream source (below) | accepted by `uncompress`; consumer must reject |
+**The subgroup-invalid class is blocked, and an earlier revision of this document was wrong to call it
+proven.** The decision rule allows an invalid fixture to be provenance-backed when it is official,
+normative, or deterministically derived from an *admitted* positive fixture. No positive fixture is
+admitted here — `pos_official_round_42` carries `license_explicitly_proven: false` and
+`fixture_corpus_admitted` is `false` — so a derivation from it confers no provenance. Claiming
+otherwise was circular.
+
+What is retained, and what is not:
+
+- **Retained:** `neg_one_bit_signature_corruption` and its reproducible `BLST_POINT_NOT_IN_GROUP`
+  observation, now labelled `DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE` with
+  `provenance_backed: false` and `evidence_status: CANDIDATE_EVIDENCE_ONLY_NOT_PROVENANCE_BACKED`.
+  The observation is real and useful; only the provenance claim was withdrawn.
+- **Not done:** the bytes were not relabelled official or normative, and no replacement vector was
+  invented. `blocked_subgroup_invalid_g1_point` is restored as an explicit blocked entry.
+
+For the same reason, every `DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE` /
+`DETERMINISTIC_REPEAT_OF_ADMITTED_POSITIVE` label across the corpus has been renamed to its
+`..._UNADMITTED_OFFICIAL_POSITIVE` form. Nothing in the manifest now asserts that a positive fixture is
+admitted.
 
 **Provenance is a pinned source, not a label.** An earlier revision asserted
 `NORMATIVE_FIELD_MODULUS_ENCODING` / `NORMATIVE_CANONICAL_ENCODING` with nothing behind them but the
@@ -305,15 +322,23 @@ with an immutable, hash-verifiable source:
 | `go.sum` | `h1:encrdjqKMEvabVQ7qYOKu1OvhqpK4s47wDYtNiPtlp4=` |
 | Source URI | `https://proxy.golang.org/github.com/kilic/bls12-381/@v/v0.1.0.zip` |
 | `bls12_381.go` | `19dad068bf44c42af69fd15896540749172ec3ff31ece151c6f9d6bc3c673246` — defines `p` |
-| `g1.go` | `51143a23a7818f0347b60ed6d0bdc42fbbc1640344013ffded1dd48f99a709b6` — defines the encodings |
+| `g1.go` | `51143a23a7818f0347b60ed6d0bdc42fbbc1640344013ffded1dd48f99a709b6` — **G1** encodings |
+| `g2.go` | `0c227f0ce968cb8350bc86bfbd400d88183b4781940adca66d042ce18b250b81` — **G2** encodings |
 | Licence | Apache-2.0, `58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd` |
+
+**G1 and G2 are pinned separately.** An earlier revision sourced the G2 infinity fixture from `g1.go`
+because the flag convention happens to match. That is not evidence: the pinned module implements
+`G2.FromCompressed` in `g2.go` as its own contract, with its own 96-byte length rule. Each fixture now
+pins the file for its own group, and a permanent test fails if any G2 fixture points at `g1.go`.
 
 Verbatim load-bearing lines from that pinned source:
 
-- modulus — `// p = 0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab`
-- canonicality — `return nil, errors.New("must be less than modulus")` (so canonical requires `x < p`)
-- compression flag — `if in[0]&(1<<7) == 0 {` → "compression flag must be set"
-- compressed infinity — `if (i == 0 && v != 0xc0) || (i != 0 && v != 0x00) {`
+- modulus (`bls12_381.go`) — `// p = 0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab`
+- canonicality (`fp.go`) — `return nil, errors.New("must be less than modulus")` (canonical requires `x < p`)
+- `G1.FromCompressed` (`g1.go`) — `if in[0]&(1<<7) == 0 {`, `if (i == 0 && v != 0xc0) || (i != 0 && v != 0x00) {`,
+  `return nil, errors.New("input string length must be equal to 48 bytes")`
+- `G2.FromCompressed` (`g2.go`) — `if in[0]&(1<<7) == 0 {`, `if (i == 0 && v != 0xc0) || (i != 0 && v != 0x00) {`,
+  `return nil, errors.New("input string length must be equal to 96 bytes")`
 
 The permanent tests re-derive both `p` and the `0xC0` flag byte **by parsing those recorded source
 lines**, then check the fixture bytes against the parsed values — so the assertion no longer depends on
@@ -349,17 +374,20 @@ identical bytes, so it is neither a length nor a decode rejection. The consumer 
 harness does, before any pairing work. Infinity coverage is therefore distinct from subgroup-invalid
 coverage and is not counted as such.
 
-### 6.2 Why `FIXTURE_QUALIFICATION` is still BLOCKED
+### 6.2 Why `FIXTURE_QUALIFICATION` is still BLOCKED — two blockers
 
-Coverage is no longer the blocker; **licensing is**. The rules require that *every committed raw
-fixture has explicit reuse/license support*. The committed official bytes (the round-42 signature, the
-chain public key) are labelled `OFFICIAL_PUBLIC_RANDOMNESS_BEACON_OUTPUT` — but that is a
-characterisation written here, not an explicit licence or reuse grant proven from a primary source. No
-terms-of-use or licence statement for the drand beacon data was ever fetched or verified.
+**1. `fixture_license_unresolved`.** The rules require that *every committed raw fixture has explicit
+reuse/license support*. The committed official bytes (the round-42 signature, the chain public key) are
+labelled `OFFICIAL_PUBLIC_RANDOMNESS_BEACON_OUTPUT` — but that is a characterisation written here, not
+an explicit licence or reuse grant proven from a primary source. No terms-of-use or licence statement
+for the drand beacon data was ever fetched or verified. Recorded as `license_explicitly_proven: false`
+on each official positive fixture.
 
-Recorded honestly as `license_explicitly_proven: false` on each official positive fixture, and as
-`FIXTURE_QUALIFICATION: BLOCKED` with blocker `fixture_license_unresolved`. Resolving it needs a
-primary-source licence/reuse statement for drand beacon output, which is an external-fact question for
+**2. `mandatory_subgroup_invalid_fixture_provenance_unresolved`.** Because of blocker 1, no positive
+fixture is admitted, so the subgroup-invalid class has no admissible derivation base (§6.1).
+
+The two are linked: resolving the licence question would admit the positive fixtures and, in turn, make
+the deterministic subgroup derivation admissible. Both are external-fact questions for
 controller-orchestrated Deep Research — not something to settle by assertion here.
 
 ---
@@ -388,6 +416,7 @@ DEPENDENCY_QUALIFICATION:      BLOCKED
 DEPENDENCY_BLOCKERS:           package_version_identity_ambiguous
 FIXTURE_QUALIFICATION:         BLOCKED
 FIXTURE_BLOCKERS:              fixture_license_unresolved
+                               mandatory_subgroup_invalid_fixture_provenance_unresolved
 PACKAGE_SOURCE_CONTRADICTIONS: UNRESOLVED_PACKAGE_VERSION_IDENTITY_AMBIGUITY
 ```
 
@@ -399,11 +428,12 @@ binding the exact PyPI bytes to that run, and the compiled binary cannot be tied
 tree. Case B applies, so the decision is BLOCKED. The blocker wording is refined to name the missing
 artifact binding rather than a missing tag — but it is not removed by inference.
 
-`FIXTURE_QUALIFICATION` cannot be `PASS_CANDIDATE_ONLY` either. All three mandatory coverage classes —
-subgroup-invalid, non-canonical and infinity — are now provenance-backed (§6.1), which closes the
-previous coverage blockers. But explicit reuse/licence support for the committed official beacon bytes
-was never proven from a primary source (§6.2), so the decision is BLOCKED on
-`fixture_license_unresolved`.
+`FIXTURE_QUALIFICATION` cannot be `PASS_CANDIDATE_ONLY` either. Non-canonical and infinity coverage are
+provenance-backed against a hash-pinned upstream source, but subgroup-invalid coverage is **BLOCKED**:
+its only fixture is derived from a positive that is not admitted (§6.1). Explicit reuse/licence support
+for the committed official beacon bytes was also never proven from a primary source (§6.2). Two
+blockers therefore stand: `fixture_license_unresolved` and
+`mandatory_subgroup_invalid_fixture_provenance_unresolved`.
 
 Permanently, and independently of the above:
 

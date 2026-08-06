@@ -7,7 +7,8 @@
     ],
     "dependency_qualification": "BLOCKED",
     "fixture_blockers": [
-      "fixture_license_unresolved"
+      "fixture_license_unresolved",
+      "mandatory_subgroup_invalid_fixture_provenance_unresolved"
     ],
     "fixture_corpus_admitted": false,
     "fixture_qualification": "BLOCKED",
@@ -88,9 +89,6 @@
   },
   "corpus_id": "FX-DRAND-QUICKNET-RFC9380-QUALIFICATION.v1",
   "curve_encoding_source": {
-    "compressed_infinity_source_line": "if (i == 0 && v != 0xc0) || (i != 0 && v != 0x00) {",
-    "compressed_infinity_symbol": "G1.FromCompressed",
-    "compression_flag_source_line": "if in[0]&(1<<7) == 0 {",
     "evidence_origin": "LOCALLY_PINNED_UPSTREAM_GO_MODULE_IN_OFFICIAL_DRAND_DEPENDENCY_GRAPH",
     "field_modulus_source_line": "// p = 0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab",
     "field_modulus_symbol": "modulus",
@@ -100,10 +98,22 @@
         "sha256": "19dad068bf44c42af69fd15896540749172ec3ff31ece151c6f9d6bc3c673246"
       },
       "g1.go": {
-        "provides": "canonical compressed/uncompressed infinity encodings and the compression flag rule",
+        "provides": "canonical compressed/uncompressed G1 infinity encodings and the G1 compression flag rule",
         "sha256": "51143a23a7818f0347b60ed6d0bdc42fbbc1640344013ffded1dd48f99a709b6"
+      },
+      "g2.go": {
+        "provides": "canonical compressed G2 infinity encoding and the G2 compression flag rule",
+        "sha256": "0c227f0ce968cb8350bc86bfbd400d88183b4781940adca66d042ce18b250b81"
       }
     },
+    "g1_compressed_infinity_source_line": "if (i == 0 && v != 0xc0) || (i != 0 && v != 0x00) {",
+    "g1_compressed_infinity_symbol": "G1.FromCompressed",
+    "g1_compression_flag_source_line": "if in[0]&(1<<7) == 0 {",
+    "g1_length_source_line": "return nil, errors.New(\"input string length must be equal to 48 bytes\")",
+    "g2_compressed_infinity_source_line": "if (i == 0 && v != 0xc0) || (i != 0 && v != 0x00) {",
+    "g2_compressed_infinity_symbol": "G2.FromCompressed",
+    "g2_compression_flag_source_line": "if in[0]&(1<<7) == 0 {",
+    "g2_length_source_line": "return nil, errors.New(\"input string length must be equal to 96 bytes\")",
     "is_normative_specification": false,
     "license_file_sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
     "license_result": "APACHE-2.0",
@@ -135,12 +145,14 @@
       "why_distinct": "x-coordinate equals the normative BLS12-381 base field modulus, so the encoding is unreduced and non-canonical by definition; it is a 48-byte input, therefore not a length rejection, and it is not infinity"
     },
     "subgroup_invalid": {
-      "evidence_basis": "DETERMINISTIC_DERIVATION_FROM_OFFICIAL_POSITIVE_FIXTURE",
+      "blocked_reason": "mandatory_subgroup_invalid_fixture_provenance_unresolved",
+      "candidate_evidence_retained": "neg_one_bit_signature_corruption reproducibly yields BLST_POINT_NOT_IN_GROUP, but its base positive fixture is not admitted because explicit reuse/licence support is unresolved, so under the decision rule it is candidate evidence only and not provenance-backed.",
+      "evidence_basis": "DETERMINISTIC_DERIVATION_FROM_UNADMITTED_OFFICIAL_POSITIVE",
       "fixture_ids": [
         "neg_one_bit_signature_corruption"
       ],
-      "provenance_backed": true,
-      "result": "PROVENANCE_BACKED",
+      "provenance_backed": false,
+      "result": "BLOCKED",
       "why_distinct": "48-byte input that decodes far enough for blst to run the subgroup test and return BLST_POINT_NOT_IN_GROUP; it is not a length rejection, not infinity, and not a bad-encoding rejection"
     }
   },
@@ -149,52 +161,56 @@
       "derivation": "round_number set to 0",
       "expected_reason": "round_invalid",
       "fixture_id": "neg_round_zero",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "round_number set to 2**64",
       "expected_reason": "round_invalid",
       "fixture_id": "neg_round_above_uint64",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "round_number 43 against the round-42 signature",
       "expected_reason": "signature_verification_failed",
       "fixture_id": "neg_wrong_round",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "round encoded little-endian instead of big-endian",
       "expected_reason": "signature_verification_failed",
       "fixture_id": "neg_little_endian_round",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "raw 8-byte round used as message without the SHA-256 pre-hash",
       "expected_reason": "signature_verification_failed",
       "fixture_id": "neg_no_sha256_prehash",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "DST replaced with a non-Quicknet domain separation tag",
       "expected_reason": "dst_mismatch",
       "fixture_id": "neg_wrong_dst",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
+      "base_fixture_admitted": false,
+      "blocked_reason": "base_positive_fixture_unadmitted_license_unresolved",
       "coverage_class": "subgroup_invalid",
       "derivation": "final signature byte XOR 0x01",
+      "evidence_status": "CANDIDATE_EVIDENCE_ONLY_NOT_PROVENANCE_BACKED",
       "expected_reason": "subgroup_check_failed",
       "fixture_id": "neg_one_bit_signature_corruption",
       "observed_blst_code": "BLST_POINT_NOT_IN_GROUP",
       "observed_reproducibly": true,
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
+      "provenance_backed": false,
       "signature_hex": "95a9f9f5b231b7714de1553105d8ffdf3dcda24cfdb1e689319bccf79a9c8ce430a91b811fbfaf763900bc998b5d686b",
       "source_type": "derived"
     },
@@ -204,6 +220,7 @@
       "derivation_algorithm": "x := field_modulus_p; encode x as 48-byte big-endian; set byte0 |= 0x80",
       "expected_reason": "signature_point_invalid",
       "fixture_id": "neg_non_canonical_unreduced_x_signature",
+      "group": "G1",
       "license_result": "APACHE-2.0",
       "normative_constant": "BLS12_381_BASE_FIELD_MODULUS",
       "observed_blst_code": "BLST_BAD_ENCODING",
@@ -212,6 +229,7 @@
       "signature_hex": "9a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab",
       "source_file": "bls12_381.go",
       "source_sha256": "19dad068bf44c42af69fd15896540749172ec3ff31ece151c6f9d6bc3c673246",
+      "source_symbol": "modulus",
       "source_type": "pinned_upstream_source",
       "source_uri": "https://proxy.golang.org/github.com/kilic/bls12-381/@v/v0.1.0.zip",
       "source_version": "v0.1.0"
@@ -227,57 +245,58 @@
       "derivation": "chain_hash replaced with 32 zero bytes",
       "expected_reason": "chain_profile_binding_invalid",
       "fixture_id": "neg_wrong_chain_hash",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "signature truncated to 47 bytes",
       "expected_reason": "signature_encoding_invalid",
       "fixture_id": "neg_signature_47_bytes",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "signature extended to 49 bytes",
       "expected_reason": "signature_encoding_invalid",
       "fixture_id": "neg_signature_49_bytes",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "public key truncated to 95 bytes",
       "expected_reason": "public_key_encoding_invalid",
       "fixture_id": "neg_public_key_95_bytes",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "public key extended to 97 bytes",
       "expected_reason": "public_key_encoding_invalid",
       "fixture_id": "neg_public_key_97_bytes",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "48 bytes of 0xff, not a valid compressed G1 encoding",
       "expected_reason": "signature_point_invalid",
       "fixture_id": "neg_malformed_signature_encoding",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "96 bytes of 0xff, not a valid compressed G2 encoding",
       "expected_reason": "public_key_point_invalid",
       "fixture_id": "neg_malformed_public_key_encoding",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "coverage_class": "infinity",
       "derivation": "canonical compressed G1 infinity: 0xc0 followed by 47 zero bytes",
-      "derivation_algorithm": "byte0 := 0xc0 (compression bit 0x80 | infinity bit 0x40); remaining 47 bytes zero",
+      "derivation_algorithm": "G1.FromCompressed: byte0 := 0xc0 (compression bit 0x80 | infinity bit 0x40); remaining 47 bytes zero; total length 48",
       "expected_reason": "point_at_infinity_rejected",
       "fixture_id": "neg_g1_infinity_signature",
+      "group": "G1",
       "license_result": "APACHE-2.0",
       "observed_blst_code": "ACCEPTED_BY_UNCOMPRESS_CONSUMER_MUST_REJECT",
       "observed_reproducibly": true,
@@ -285,6 +304,7 @@
       "signature_hex": "c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
       "source_file": "g1.go",
       "source_sha256": "51143a23a7818f0347b60ed6d0bdc42fbbc1640344013ffded1dd48f99a709b6",
+      "source_symbol": "G1.FromCompressed",
       "source_type": "pinned_upstream_source",
       "source_uri": "https://proxy.golang.org/github.com/kilic/bls12-381/@v/v0.1.0.zip",
       "source_version": "v0.1.0"
@@ -292,16 +312,18 @@
     {
       "coverage_class": "infinity",
       "derivation": "canonical compressed G2 infinity: 0xc0 followed by 95 zero bytes",
-      "derivation_algorithm": "byte0 := 0xc0 (compression bit 0x80 | infinity bit 0x40); remaining 95 bytes zero",
+      "derivation_algorithm": "G2.FromCompressed: byte0 := 0xc0 (compression bit 0x80 | infinity bit 0x40); remaining 95 bytes zero; total length 96",
       "expected_reason": "point_at_infinity_rejected",
       "fixture_id": "neg_g2_infinity_public_key",
+      "group": "G2",
       "license_result": "APACHE-2.0",
       "observed_blst_code": "ACCEPTED_BY_UNCOMPRESS_CONSUMER_MUST_REJECT",
       "observed_reproducibly": true,
       "provenance": "PINNED_UPSTREAM_SOURCE_KILIC_BLS12_381_V0_1_0",
       "public_key_hex": "c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-      "source_file": "g1.go",
-      "source_sha256": "51143a23a7818f0347b60ed6d0bdc42fbbc1640344013ffded1dd48f99a709b6",
+      "source_file": "g2.go",
+      "source_sha256": "0c227f0ce968cb8350bc86bfbd400d88183b4781940adca66d042ce18b250b81",
+      "source_symbol": "G2.FromCompressed",
       "source_type": "pinned_upstream_source",
       "source_uri": "https://proxy.golang.org/github.com/kilic/bls12-381/@v/v0.1.0.zip",
       "source_version": "v0.1.0"
@@ -310,42 +332,42 @@
       "derivation": "valid official signature with 32 zero bytes supplied as expected randomness",
       "expected_reason": "randomness_mismatch",
       "fixture_id": "neg_valid_signature_wrong_randomness",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "round supplied as str",
       "expected_reason": "wrong_input_type",
       "fixture_id": "neg_round_wrong_type_str",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "round supplied as bool",
       "expected_reason": "wrong_input_type",
       "fixture_id": "neg_round_wrong_type_bool",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "signature supplied as a mutable bytearray alias",
       "expected_reason": "wrong_input_type",
       "fixture_id": "neg_signature_mutable_alias",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "signature supplied as a hostile bytes subclass",
       "expected_reason": "wrong_input_type",
       "fixture_id": "neg_signature_hostile_bytes_subclass",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     },
     {
       "derivation": "public key supplied as a hostile bytes subclass",
       "expected_reason": "wrong_input_type",
       "fixture_id": "neg_public_key_hostile_bytes_subclass",
-      "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     }
   ],
@@ -391,10 +413,10 @@
     {
       "expected_result": "round_structurally_verified",
       "fixture_id": "pos_repeated_deterministic_verification",
-      "license": "DERIVED_FROM_ADMITTED_POSITIVE",
+      "license": "DERIVED_FROM_UNADMITTED_OFFICIAL_POSITIVE",
       "license_explicitly_proven": false,
       "note": "the identical positive input verified twice must produce byte-identical results",
-      "provenance": "DETERMINISTIC_REPEAT_OF_ADMITTED_POSITIVE",
+      "provenance": "DETERMINISTIC_REPEAT_OF_UNADMITTED_OFFICIAL_POSITIVE",
       "source_type": "derived"
     }
   ],
@@ -407,6 +429,14 @@
     "version": "v2.1.6"
   },
   "schema": "mt4-s3a-drand-quicknet-qualification-manifest",
-  "unresolved_or_blocked_fixtures": [],
+  "unresolved_or_blocked_fixtures": [
+    {
+      "blocked_reason": "mandatory_subgroup_invalid_fixture_provenance_unresolved",
+      "coverage_class": "subgroup_invalid",
+      "fixture_id": "blocked_subgroup_invalid_g1_point",
+      "note": "No official or normative subgroup-invalid G1 vector with complete source and licence evidence is available. The retained candidate neg_one_bit_signature_corruption is deterministically derived from pos_official_round_42, which is NOT admitted (license_explicitly_proven=false), so the derivation rule does not confer provenance. Bytes were deliberately NOT invented and the observed BLST_POINT_NOT_IN_GROUP evidence is retained on the candidate fixture.",
+      "status": "FIXTURE_ADMISSION_BLOCKED"
+    }
+  ],
   "version": 1
 }
