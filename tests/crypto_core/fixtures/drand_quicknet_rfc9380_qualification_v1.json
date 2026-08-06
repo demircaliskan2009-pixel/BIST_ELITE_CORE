@@ -1,5 +1,6 @@
 {
   "admission": {
+    "attribution_required": "UNKNOWN",
     "crypto_implementation_authorized": false,
     "dependency_admitted": false,
     "dependency_blockers": [
@@ -12,7 +13,10 @@
     ],
     "fixture_corpus_admitted": false,
     "fixture_qualification": "BLOCKED",
+    "fixture_reuse_license": "NOT_PROVEN",
+    "fixture_reuse_scope": "UNKNOWN",
     "machine_time_origin_proven": false,
+    "mt4_s3b_authorized": false,
     "mt4_verifier_profile_selected": false,
     "operational_quorum_ready": false,
     "operational_use_approved": false,
@@ -26,6 +30,7 @@
     "timestamp_origin_proven": false
   },
   "candidate_dependency": {
+    "artifact_digest_is_not_wheel_or_sdist_file_hash": true,
     "attestations_present": false,
     "binary_source_correspondence_proven": false,
     "cargo_lock_version": "0.3.14",
@@ -48,17 +53,30 @@
     "sdist_filename": "pyblst-0.3.15.tar.gz",
     "sdist_metadata_version": "0.3.15",
     "sdist_sha256": "258831210c069ece6d9894bffbe8013834f094d874f30070a4ad8d5a0e317c08",
+    "signed_tag_does_not_attest_pypi_artifacts": true,
+    "source_binding_resolution_reason": "The tag and commit are authentic (GitHub-verified PGP signature) and the CI run is bound to the exact commit, but the Actions artifacts expired and cannot be downloaded (HTTP_410_GONE on log/artifact retrieval). The recorded artifact archive digests are ZIP-archive digests, not hashes of the individual wheel/sdist files inside them, and cannot be compared against the exact PyPI wheel_sha256/sdist_sha256. No Trusted Publishing, PEP 740 or Sigstore attestation bridges that gap. A signed source commit is not an artifact attestation.",
     "source_to_sdist_binding": "NOT_PROVEN",
     "source_to_wheel_binding": "NOT_PROVEN",
     "tag_build_workflow": ".github/workflows/CI.yml",
     "tag_build_workflow_behavior": "tag checkout -> build wheels/sdist -> Actions artifacts -> uv publish",
     "tag_cargo_lock_version": "0.3.14",
     "tag_cargo_toml_version": "0.3.14",
+    "tag_ci_artifact_count": 7,
+    "tag_ci_artifact_expiry": "2026-01-12T20:46:33Z",
+    "tag_ci_artifacts_expired": true,
+    "tag_ci_job_log_download_result": "HTTP_410_GONE",
     "tag_ci_run_head": "dadf9cbac859774d8e9115881b34f8e7a82e61d8",
     "tag_ci_run_id": "18509666718",
     "tag_ci_run_result": "SUCCESS",
+    "tag_ci_sdist_artifact_digest": "sha256:5579477f52515428c3112cd3db007457578b5dbbb7b1b102cc91d1639a8f2d1a",
+    "tag_ci_sdist_artifact_id": "4269933891",
+    "tag_ci_sdist_artifact_name": "wheels-sdist-",
+    "tag_ci_windows_artifact_digest": "sha256:ffdf9728d7d23488f6ab55adbb6f19a7733079daa93311b1b6cf1cf69abd75d6",
+    "tag_ci_windows_artifact_id": "4269953270",
+    "tag_ci_windows_artifact_name": "wheels-windows-x64",
     "tag_commit": "dadf9cbac859774d8e9115881b34f8e7a82e61d8",
     "tag_commit_message": "New release with locked cargo",
+    "tag_commit_signature": "VALID_GITHUB_VERIFIED_PGP_SIGNATURE",
     "tag_evidence_origin": "CONTROLLER_VERIFIED_NOT_LOCALLY_REFETCHED",
     "tag_pyproject_version": "0.3.15",
     "tag_version": "0.3.15",
@@ -123,6 +141,20 @@
     "scope_limitation": "This is a hash-pinned upstream IMPLEMENTATION source that sits in the official drand v2.1.6 dependency graph. It is NOT the normative specification; the module itself cites the zcash BLS12-381 serialization rules as its authority. Claims below are scoped to this pinned source only.",
     "source_uri": "https://proxy.golang.org/github.com/kilic/bls12-381/@v/v0.1.0.zip",
     "version": "v0.1.0"
+  },
+  "drand_rights_evidence": {
+    "attribution_required": "UNKNOWN",
+    "drand_output_is_publicly_available": true,
+    "drand_output_is_publicly_verifiable": true,
+    "evidence_origin": "CONTROLLER_VERIFIED_NOT_LOCALLY_REFETCHED",
+    "explicit_output_copy_grant_found": false,
+    "explicit_output_redistribution_grant_found": false,
+    "explicit_test_fixture_commit_grant_found": false,
+    "fixture_reuse_license": "NOT_PROVEN",
+    "fixture_reuse_scope": "UNKNOWN",
+    "official_api_use_documented": true,
+    "public_availability_is_not_a_redistribution_license": true,
+    "resolution_reason": "Official drand sources describe beacon output as public and publicly verifiable, and document application use through the HTTP API. Located Apache-2.0/MIT licences govern software or documentation, not API response data. No official primary source was found that explicitly grants copying and redistributing API response data as committed repository test fixtures. 'Public randomness', 'publicly available', 'publicly verifiable' and 'application use' are not equivalent to a redistribution licence."
   },
   "mandatory_coverage_matrix": {
     "infinity": {

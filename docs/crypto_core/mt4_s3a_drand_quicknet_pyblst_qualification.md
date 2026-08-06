@@ -124,6 +124,45 @@ corrected here.** The tag exists, and so does a successful tag-triggered publish
 These tag facts are **controller-verified**, not re-fetched locally in this session; they are recorded as
 `tag_evidence_origin: CONTROLLER_VERIFIED_NOT_LOCALLY_REFETCHED`.
 
+### 3.1 Controller-executed research: tag signature and CI artifacts — still `NOT_PROVEN`
+
+A follow-up controller-executed primary-source check went further than the tag/workflow facts above.
+It found stronger *authenticity* evidence but no *artifact-binding* evidence, and the two must not be
+conflated.
+
+| Evidence | Value |
+|---|---|
+| Tag commit signature | `VALID_GITHUB_VERIFIED_PGP_SIGNATURE` |
+| CI run artifact count | `7` |
+| Windows artifact | id `4269953270`, name `wheels-windows-x64` |
+| Windows artifact digest | `sha256:ffdf9728d7d23488f6ab55adbb6f19a7733079daa93311b1b6cf1cf69abd75d6` |
+| Sdist artifact | id `4269933891`, name `wheels-sdist-` |
+| Sdist artifact digest | `sha256:5579477f52515428c3112cd3db007457578b5dbbb7b1b102cc91d1639a8f2d1a` |
+| All CI artifacts | **expired** (`tag_ci_artifacts_expired: true`, expiry `2026-01-12T20:46:33Z`) |
+| CI job log / artifact download | `HTTP_410_GONE` |
+| Expected PyPI wheel sha256 | `0c2e1f73a4739e9c5c000f00e362d6abe8cd405ec4b94a7db509ef546033999a` |
+| Expected PyPI sdist sha256 | `258831210c069ece6d9894bffbe8013834f094d874f30070a4ad8d5a0e317c08` |
+
+**The tag commit is authentically signed. That does not prove artifact binding, and neither claim may
+stand in for the other.** Two things are true and distinct:
+
+1. **The commit is genuine.** `dadf9cba` carries a valid GitHub-verified PGP signature. This proves the
+   *source* — the commit that says "New release with locked cargo" — is authentic and was not tampered
+   with in transit.
+2. **The published wheel/sdist bytes are still not tied to that commit.** The CI run that built from
+   this commit produced 7 Actions artifacts, but Actions artifacts expire, and these expired before
+   this check (`HTTP_410_GONE` on both the job log and the artifact downloads). The two digests that
+   *are* still recorded — `ffdf9728…` for the Windows artifact and `5579477f…` for the sdist artifact —
+   are **archive digests of the Actions ZIP artifact container**, not hashes of the individual wheel or
+   sdist file packed inside it. An archive digest cannot be compared against `wheel_sha256` /
+   `sdist_sha256` (the PyPI file hashes above) to prove they are the same bytes, because a ZIP digest
+   changes with compression, timestamps and container metadata even when the payload file is identical.
+
+A signed commit is not an artifact attestation. Nothing here is a PEP 740 attestation, a Sigstore
+bundle, or Trusted Publishing provenance — none of which exist for this release (§3, `attestations:
+absent`, `provenance: null`). **`SOURCE_TO_SDIST_BINDING` and `SOURCE_TO_WHEEL_BINDING` remain
+`NOT_PROVEN`.** The commit-authenticity finding is recorded as additional context, not as resolution.
+
 A maturin project can legitimately carry a Python distribution version in `[project].version` that
 differs from the Rust crate version, and the tag tree shows exactly that divergence, deliberately
 committed under the message "New release with locked cargo". The divergence therefore *has* a plausible
@@ -389,9 +428,31 @@ coverage and is not counted as such.
 **1. `fixture_license_unresolved`.** The rules require that *every committed raw fixture has explicit
 reuse/license support*. The committed official bytes (the round-42 signature, the chain public key) are
 labelled `OFFICIAL_PUBLIC_RANDOMNESS_BEACON_OUTPUT` — but that is a characterisation written here, not
-an explicit licence or reuse grant proven from a primary source. No terms-of-use or licence statement
-for the drand beacon data was ever fetched or verified. Recorded as `license_explicitly_proven: false`
-on each official positive fixture.
+an explicit licence or reuse grant proven from a primary source. Recorded as `license_explicitly_proven:
+false` on each official positive fixture.
+
+**Controller-executed research: drand rights — still `NOT_PROVEN`.** A follow-up controller-executed
+primary-source check specifically looked for a reuse/redistribution grant and did not find one:
+
+| Finding | Value |
+|---|---|
+| Beacon output publicly available | `true` |
+| Beacon output publicly verifiable | `true` |
+| Official application-use documented (HTTP API) | `true` |
+| Explicit grant to *copy* output data | **not found** |
+| Explicit grant to *redistribute* output data | **not found** |
+| Explicit grant to *commit output as test fixtures* | **not found** |
+| `FIXTURE_REUSE_LICENSE` | `NOT_PROVEN` |
+| `FIXTURE_REUSE_SCOPE` | `UNKNOWN` |
+| `ATTRIBUTION_REQUIRED` | `UNKNOWN` |
+
+Official drand sources describe the beacon output as public and publicly verifiable, and document
+*using* it through the HTTP API. The Apache-2.0/MIT licences that were located govern *software or
+documentation*, not the API response data itself. **"Public randomness", "publicly available",
+"publicly verifiable" and "documented application use" are not a redistribution licence, and none of
+them were treated as one.** No primary source granting the right to copy and redistribute beacon output
+as committed repository test fixtures was found. `FIXTURE_REUSE_SCOPE` and `ATTRIBUTION_REQUIRED` stay
+`UNKNOWN` rather than being inferred from the availability findings above.
 
 **2. `mandatory_subgroup_invalid_fixture_provenance_unresolved`.** Because of blocker 1, no positive
 fixture is admitted, so the subgroup-invalid class has no admissible derivation base (§6.1).
@@ -467,14 +528,37 @@ What survives as useful candidate evidence: the exact chain profile (§2), the e
 most importantly — the F5 argument-order trap, which any future verifier must respect regardless of
 which dependency is eventually admitted.
 
-To move either decision off BLOCKED, two external-fact questions must be answered by
-controller-orchestrated Deep Research:
+### 8.1 Controller-executed research — both questions answered, both answers keep the blockers
 
-1. Can the exact PyPI wheel/sdist bytes be bound to tag commit `dadf9cba` — e.g. by recovering the
-   artifact hashes from CI run `18509666718`, by a reproducible build, or by a maintainer statement?
-   The tag and the green workflow are already established; what is missing is the artifact binding.
-2. What explicit licence or reuse grant covers drand Quicknet beacon output committed as test fixtures?
+Both external-fact questions below were answered by controller-executed primary-source research
+(§3.1, §6.2). **Neither answer resolves its blocker; both blockers stand exactly as before.**
+
+1. *Can the exact PyPI wheel/sdist bytes be bound to tag commit `dadf9cba`?* **No.** The commit is
+   authentically signed (`VALID_GITHUB_VERIFIED_PGP_SIGNATURE`), but the CI run's Actions artifacts
+   expired (`HTTP_410_GONE`) and the two digests still on record are ZIP-archive digests, not the
+   individual wheel/sdist file hashes — they cannot be compared against `wheel_sha256` / `sdist_sha256`.
+   `SOURCE_TO_SDIST_BINDING` and `SOURCE_TO_WHEEL_BINDING` remain `NOT_PROVEN`.
+2. *What explicit licence or reuse grant covers drand Quicknet beacon output committed as test
+   fixtures?* **None found.** The beacon is public and publicly verifiable, and its HTTP API use is
+   documented, but no primary source explicitly grants copying or redistributing that output as
+   committed fixtures. `FIXTURE_REUSE_LICENSE` remains `NOT_PROVEN`; `FIXTURE_REUSE_SCOPE` and
+   `ATTRIBUTION_REQUIRED` remain `UNKNOWN` — not inferred from availability.
+
+```
+SOURCE_TO_SDIST_BINDING:  NOT_PROVEN
+SOURCE_TO_WHEEL_BINDING:  NOT_PROVEN
+FIXTURE_REUSE_LICENSE:    NOT_PROVEN
+FIXTURE_REUSE_SCOPE:      UNKNOWN
+ATTRIBUTION_REQUIRED:     UNKNOWN
+MT4_S3B_AUTHORIZED:       NO
+```
+
+No blocker was removed, renamed to a weaker meaning, or converted to a P3 note as a result of this
+research. `DEPENDENCY_QUALIFICATION` and `FIXTURE_QUALIFICATION` remain exactly `BLOCKED` (§8, top).
 
 **Next safe action:** none in this slice. MT4-S3B (verifier profile selection) must not begin, and no
 production BLS verification code may be written, until both decisions are resolved under separate
-authorization and an independent Class-C audit.
+authorization and an independent Class-C audit. Both external-fact questions above have now been
+answered without resolving either blocker; further progress requires either new primary-source evidence
+(a reproducible build / maintainer statement for §8.1.1, or an explicit rights grant for §8.1.2) or a
+separate authorization to proceed under stated risk.

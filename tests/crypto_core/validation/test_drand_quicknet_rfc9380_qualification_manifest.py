@@ -234,10 +234,14 @@ def test_manifest_admits_nothing() -> None:
     admission = _manifest()["admission"]
     assert admission["status"] == "BLOCKED_NOT_QUALIFIED_NOT_ADMITTED"
     assert set(admission) == set(_ADMISSION_FLAGS) | {
+        "attribution_required",
         "dependency_blockers",
         "dependency_qualification",
         "fixture_blockers",
         "fixture_qualification",
+        "fixture_reuse_license",
+        "fixture_reuse_scope",
+        "mt4_s3b_authorized",
         "package_source_contradictions",
         "roughtime_protocol_provenance_required_before_mt4_profile_selection",
         "status",
@@ -245,6 +249,7 @@ def test_manifest_admits_nothing() -> None:
     for flag in _ADMISSION_FLAGS:
         assert admission[flag] is False, flag
     assert admission["roughtime_protocol_provenance_required_before_mt4_profile_selection"] is True
+    assert admission["mt4_s3b_authorized"] is False
 
 
 def test_both_qualification_decisions_are_blocked_with_exact_blockers() -> None:
@@ -254,6 +259,9 @@ def test_both_qualification_decisions_are_blocked_with_exact_blockers() -> None:
     assert admission["fixture_qualification"] == _FIXTURE_QUALIFICATION
     assert tuple(admission["fixture_blockers"]) == _FIXTURE_BLOCKERS
     assert admission["package_source_contradictions"] == _PACKAGE_SOURCE_CONTRADICTIONS
+    assert admission["fixture_reuse_license"] == "NOT_PROVEN"
+    assert admission["fixture_reuse_scope"] == "UNKNOWN"
+    assert admission["attribution_required"] == "UNKNOWN"
 
 
 def test_no_authoritative_field_claims_a_passing_qualification() -> None:
@@ -347,6 +355,128 @@ def test_document_subgroup_provenance_language_matches_the_manifest() -> None:
     assert "derived from an admitted positive fixture" not in doc
 
 
+def test_tag_signature_authenticity_is_distinct_from_artifact_binding() -> None:
+    """A valid signed commit proves the SOURCE is genuine; it does not bind any published artifact."""
+    dependency = _manifest()["candidate_dependency"]
+    assert dependency["tag_commit_signature"] == "VALID_GITHUB_VERIFIED_PGP_SIGNATURE"
+    # authenticity of the commit must NOT be conflated with binding of the published bytes
+    assert dependency["signed_tag_does_not_attest_pypi_artifacts"] is True
+    assert dependency["source_to_sdist_binding"] == "NOT_PROVEN"
+    assert dependency["source_to_wheel_binding"] == "NOT_PROVEN"
+
+
+def test_ci_artifact_archive_digest_is_never_represented_as_a_wheel_or_sdist_file_hash() -> None:
+    dependency = _manifest()["candidate_dependency"]
+    assert dependency["artifact_digest_is_not_wheel_or_sdist_file_hash"] is True
+    windows_digest = dependency["tag_ci_windows_artifact_digest"]
+    sdist_digest = dependency["tag_ci_sdist_artifact_digest"]
+    # the archive digests must be distinct from, and never asserted equal to, the PyPI file hashes
+    assert windows_digest.removeprefix("sha256:") != dependency["wheel_sha256"]
+    assert sdist_digest.removeprefix("sha256:") != dependency["sdist_sha256"]
+    assert windows_digest == "sha256:ffdf9728d7d23488f6ab55adbb6f19a7733079daa93311b1b6cf1cf69abd75d6"
+    assert sdist_digest == "sha256:5579477f52515428c3112cd3db007457578b5dbbb7b1b102cc91d1639a8f2d1a"
+
+
+def test_expired_ci_artifacts_cannot_be_treated_as_downloaded_or_hash_compared() -> None:
+    dependency = _manifest()["candidate_dependency"]
+    assert dependency["tag_ci_artifacts_expired"] is True
+    assert dependency["tag_ci_artifact_expiry"] == "2026-01-12T20:46:33Z"
+    assert dependency["tag_ci_artifact_count"] == 7
+    # expiry must gate binding proof - it cannot be silently treated as available evidence
+    assert dependency["source_to_sdist_binding"] == "NOT_PROVEN"
+    assert dependency["source_to_wheel_binding"] == "NOT_PROVEN"
+
+
+def test_ci_job_log_download_result_is_recorded_as_gone() -> None:
+    dependency = _manifest()["candidate_dependency"]
+    assert dependency["tag_ci_job_log_download_result"] == "HTTP_410_GONE"
+
+
+def test_source_bindings_remain_not_proven_after_the_research() -> None:
+    dependency = _manifest()["candidate_dependency"]
+    assert dependency["source_to_sdist_binding"] == "NOT_PROVEN"
+    assert dependency["source_to_wheel_binding"] == "NOT_PROVEN"
+    assert dependency["binary_source_correspondence_proven"] is False
+    doc = _DOC_PATH.read_text(encoding="utf-8")
+    assert "SOURCE_TO_SDIST_BINDING: NOT_PROVEN" in doc.replace("`", "")
+    assert "SOURCE_TO_WHEEL_BINDING: NOT_PROVEN" in doc.replace("`", "")
+
+
+def test_public_and_publicly_verifiable_wording_does_not_prove_fixture_reuse_license() -> None:
+    rights = _manifest()["drand_rights_evidence"]
+    assert rights["drand_output_is_publicly_available"] is True
+    assert rights["drand_output_is_publicly_verifiable"] is True
+    assert rights["official_api_use_documented"] is True
+    assert rights["public_availability_is_not_a_redistribution_license"] is True
+    # availability findings above must NOT flip the reuse licence to proven
+    assert rights["fixture_reuse_license"] == "NOT_PROVEN"
+
+
+def test_software_or_documentation_license_does_not_prove_api_output_redistribution() -> None:
+    rights = _manifest()["drand_rights_evidence"]
+    assert rights["explicit_output_copy_grant_found"] is False
+    assert rights["explicit_output_redistribution_grant_found"] is False
+    assert rights["explicit_test_fixture_commit_grant_found"] is False
+    assert rights["fixture_reuse_license"] == "NOT_PROVEN"
+
+
+def test_fixture_reuse_scope_and_attribution_remain_unknown() -> None:
+    rights = _manifest()["drand_rights_evidence"]
+    assert rights["fixture_reuse_scope"] == "UNKNOWN"
+    assert rights["attribution_required"] == "UNKNOWN"
+    admission = _manifest()["admission"]
+    assert admission["fixture_reuse_scope"] == "UNKNOWN"
+    assert admission["attribution_required"] == "UNKNOWN"
+    # UNKNOWN must never be silently inferred as a NO or a PROVEN
+    assert rights["fixture_reuse_scope"] not in ("NO", "PROVEN", "NONE")
+    assert rights["attribution_required"] not in ("NO", "PROVEN", "NONE")
+
+
+def test_external_research_did_not_clear_any_qualification_blocker() -> None:
+    """The research documented here must leave every blocker exactly as it was."""
+    admission = _manifest()["admission"]
+    assert admission["dependency_qualification"] == "BLOCKED"
+    assert admission["fixture_qualification"] == "BLOCKED"
+    assert tuple(admission["dependency_blockers"]) == ("package_version_identity_ambiguous",)
+    assert tuple(admission["fixture_blockers"]) == (
+        "fixture_license_unresolved",
+        "mandatory_subgroup_invalid_fixture_provenance_unresolved",
+    )
+    assert admission["dependency_admitted"] is False
+    assert admission["fixture_corpus_admitted"] is False
+    assert admission["mt4_s3b_authorized"] is False
+    assert admission["crypto_implementation_authorized"] is False
+
+
+def test_admission_readiness_and_connector_state_unchanged_by_external_evidence_record() -> None:
+    admission = _manifest()["admission"]
+    for flag in (
+        "machine_time_origin_proven",
+        "mt4_verifier_profile_selected",
+        "operational_quorum_ready",
+        "operational_use_approved",
+        "proof_verified",
+        "provider_operational_approval",
+        "quorum_countable",
+        "readiness_promoted",
+        "timestamp_origin_proven",
+    ):
+        assert admission[flag] is False, flag
+
+    from crypto_core.validation.machine_time_source_registry import (
+        build_approved_machine_time_source_registry,
+        machine_time_source_registry_to_dict,
+    )
+    from crypto_core.venue.public_feed_dialects import connector_ready_dialects
+
+    payload = machine_time_source_registry_to_dict(build_approved_machine_time_source_registry())
+    assert payload["readiness_promoted"] is False
+    assert payload["connector_promoted"] is False
+    assert tuple(spec.dialect_id for spec in connector_ready_dialects()) == (
+        "deribit:l2_orderbook:book_instrument_interval",
+    )
+
+
 def test_script_permanent_false_governance_states_are_all_false() -> None:
     module = _load_script("governance")
     for name in (
@@ -390,6 +520,7 @@ def test_manifest_fixture_inventory_is_exact_and_cannot_silently_widen() -> None
         "chain_profile",
         "corpus_id",
         "curve_encoding_source",
+        "drand_rights_evidence",
         "mandatory_coverage_matrix",
         "negative_fixtures",
         "nonclaims",
