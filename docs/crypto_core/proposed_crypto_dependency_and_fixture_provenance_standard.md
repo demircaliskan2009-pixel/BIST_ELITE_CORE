@@ -33,7 +33,10 @@ for it, and the absence of that audit is not evidence of anything.
 
 ### 0.1 Source pins used by this draft
 
-Cited rather than restated, so this draft cannot drift from the records it describes.
+The records below are pinned and selectively restated for context. Their source artifacts remain
+authoritative. If a restated value conflicts with its pinned source, the source controls and this
+draft is stale. Pinning fixes what a citation refers to; it does not make surrounding prose incapable
+of drifting from it.
 
 | Record | Pin |
 |---|---|
@@ -154,13 +157,27 @@ class never satisfies a requirement in another.
 | Archive-container digest | the digest of a container (e.g. a ZIP) | the hash of any individual file inside it; container digests move with compression, timestamps and metadata even when the payload is identical |
 | Individual artifact file hash | the exact bytes of one wheel or sdist file | which build produced it |
 | Published artifact hash | the exact bytes an index serves | provenance of those bytes |
-| Artifact attestation | a cryptographic statement binding published bytes to a build and source | correctness, licence, or maintenance quality |
+| Generic artifact attestation | after signature verification and issuer-identity verification, that an authenticated issuer made the claims encoded in the exact attestation predicate about an exact subject digest | build provenance, source correspondence, builder identity, correctness, licence or maintenance quality — none of these unless that property is explicitly carried by the predicate and accepted under a verification policy |
+| Verified build-provenance attestation | only the build and source correspondence explicitly established by the verified predicate, together with the subject digest, the issuer identity, the builder identity, the source reference and the verification policy under which it was accepted | cryptographic correctness, licence sufficiency, runtime safety, maintenance quality or vulnerability-response quality |
 | Source-to-artifact correspondence | published bytes were produced from a stated source | that the compiled contents match that source |
 | Binary-source correspondence | a compiled object corresponds to a stated source tree | source authenticity by itself |
 | Maintainer testimony | a human assertion, attributable and reviewable | a cryptographic binding; unsupported testimony is not attestation |
 | Reproducible-build proof | independent parties derive byte-identical output from a pinned source and toolchain | that the original publisher used that toolchain, unless the output matches the published bytes exactly |
 | Controlled project build | exactly what this project built, from what pinned inputs | anything about a third-party published artifact |
 | Runtime behavioural agreement | outputs agree with a reference implementation on compared cases | provenance of any artifact |
+
+On attestations specifically: an attestation is a signed statement, and what it is worth depends
+entirely on its predicate, its subject digest, the issuer identity that signed it, the builder
+identity it names, and the verification policy under which a consumer accepts it. No named
+attestation format or publishing mechanism — including Trusted Publishing, PEP 740 or any successor —
+automatically satisfies a provenance requirement. The actual predicate and the actual identities must
+be inspected each time, and a format name is never a substitute for that inspection.
+
+The classes above stay distinct and none of them collapses into another: an artifact hash names bytes;
+an attestation is a signed claim about a subject digest; source-to-artifact correspondence is the
+claim that published bytes came from a stated source; binary-source correspondence is the claim that a
+compiled object matches a stated source tree; and a reproducible-build proof is an independently
+re-derived byte-identical result. Establishing one of these never establishes another.
 
 ### 3.1 Hard prohibitions (PROPOSED)
 
@@ -175,7 +192,7 @@ class never satisfies a requirement in another.
 ### 3.2 PROPOSED conservative candidate criteria
 
 Offered as criteria a future candidate could be measured against. They are not in force, they admit
-nothing, and they name no candidate.
+nothing, and they select or recommend no candidate.
 
 Cryptographic capability: BLS12-381; the orientation the target chain uses; RFC 9380 hash-to-curve
 with a caller-supplied domain separation tag; subgroup checks on decode; a decode path that lets the
@@ -199,7 +216,9 @@ merged in this repository (§7).
 ### 3.3 Identification of candidates
 
 Identifying actual candidate packages requires current external facts and is out of scope here. See
-the Deep Research packet in §9. No dependency is named in this draft.
+the Deep Research packet in §9. No alternative candidate dependency is selected, recommended,
+qualified or admitted in this draft. References to the existing `PyNaCl` and `pyblst` records are
+contextual evidence only, and no external package is newly proposed here.
 
 ---
 
@@ -335,8 +354,10 @@ No inference from dependency or fixture progress may clear that gate.
 
 ## 9. PROPOSED Deep Research request packet
 
-None of these questions is answered here. No external or current fact is asserted anywhere in this
-draft.
+No unresolved external research question in this packet is answered here. Repository facts are stated
+only when pinned to exact repository refs or artifacts (§0.1). All external questions D1–D4 and F1–F4
+remain open, and I1 remains a `CONTROLLER_GOVERNANCE_DECISION_REQUIRED` item rather than a research
+answer.
 
 ### Dependency
 
