@@ -567,7 +567,7 @@ research. `DEPENDENCY_QUALIFICATION` and `FIXTURE_QUALIFICATION` remain exactly 
 
 **Next safe action:** none in this slice. MT4-S3B (verifier profile selection) must not begin, and no
 production BLS verification code may be written, until both decisions are resolved under separate
-authorization and an independent Class-C audit. Both external-fact questions above have now been
-answered without resolving either blocker; further progress requires either new primary-source evidence
-(a reproducible build / maintainer statement for §8.1.1, or an explicit rights grant for §8.1.2) or a
-separate authorization to proceed under stated risk.
+authorization and an independent Class-C audit. Both research tracks are complete, but neither external
+fact has been conclusively resolved. Further progress requires new primary-source evidence (a
+reproducible build / maintainer statement for §8.1.1, or an explicit rights grant for §8.1.2) or a
+separately authorized risk decision to proceed under stated risk.

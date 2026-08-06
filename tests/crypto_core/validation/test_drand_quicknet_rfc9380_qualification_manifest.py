@@ -448,13 +448,61 @@ def test_document_never_asserts_no_licence_can_exist_anywhere() -> None:
 
 
 def test_document_distinguishes_research_completion_from_conclusive_resolution() -> None:
-    """'Both questions answered' conflates completing a research track with settling the facts."""
+    """No sentence may assert the external-fact QUESTIONS were answered/resolved/settled/concluded.
+
+    Completing a research track (searching, gathering evidence) is not the same claim as the
+    underlying external fact being conclusively resolved. A prior revision fixed the section header
+    but left an equivalent claim ("questions ... have now been answered") in the closing "Next safe
+    action" paragraph - so this test scans the whole external-evidence section (from the §8.1 header
+    to end of document) with a semantic pattern, not just a literal string.
+    """
     doc = _DOC_PATH.read_text(encoding="utf-8")
-    assert "both questions answered" not in doc
-    assert "research tracks completed" in doc
-    assert "neither blocker resolved" in doc
-    # the distinction itself must be spelled out, not merely implied by word choice
-    assert "not the same as" in doc or "does not mean the question was settled" in doc
+
+    section_start = doc.index("### 8.1 Controller-executed research")
+    section = doc[section_start:]
+
+    # explicit banned literals named by the repair spec
+    for banned in (
+        "both questions answered",
+        "both external-fact questions answered",
+        "both external-fact questions above have now been answered",
+        "questions above have been answered",
+    ):
+        assert banned not in section.lower(), banned
+
+    # semantic sweep: any sentence claiming the QUESTIONS themselves were answered/resolved/settled/
+    # concluded must be negated (not/never/neither/cannot/n't) within that same sentence. This catches
+    # paraphrases the literal list above does not enumerate.
+    question_resolution_claim = re.compile(
+        r"\bquestions?\b(?:(?![.!?]).){0,80}?\b(answered|resolved|settled|concluded)\b",
+        re.IGNORECASE | re.DOTALL,
+    )
+    negation_words = ("not ", "n't", "never", "neither", "cannot", "no ")
+    for sentence in re.split(r"(?<=[.!?])\s+", section):
+        match = question_resolution_claim.search(sentence)
+        if match is None:
+            continue
+        lowered = sentence.lower()
+        assert any(neg in lowered for neg in negation_words), f"unnegated question-resolution claim: {sentence!r}"
+
+    # positive requirements: the section must state completion of the TRACKS distinctly from
+    # resolution of the FACTS, and must point toward what would actually move the needle
+    assert re.search(r"research tracks?\b(?:(?![.!?]).){0,40}\bcomplete(d)?\b", section, re.IGNORECASE | re.DOTALL)
+    assert re.search(r"neither\s+(the\s+)?(external\s+fact|blocker)", section, re.IGNORECASE)
+
+    # "conclusively resolved" must appear only inside a negated sentence
+    for sentence in re.split(r"(?<=[.!?])\s+", section):
+        if re.search(r"conclusively\s+resolved", sentence, re.IGNORECASE):
+            assert any(neg in sentence.lower() for neg in ("not ", "n't", "never", "neither")), sentence
+            break
+    else:
+        raise AssertionError("expected a negated 'conclusively resolved' sentence in the section")
+
+    assert "new primary-source evidence" in section.lower()
+
+    # process language describing the search itself ("an answer was sought") is legitimate and must
+    # never be flagged: it has no answered/resolved/settled/concluded token, so the semantic sweep
+    # above does not touch it. No additional assertion is needed to prove a negative test never fires.
 
 
 def test_public_and_publicly_verifiable_wording_does_not_prove_fixture_reuse_license() -> None:
