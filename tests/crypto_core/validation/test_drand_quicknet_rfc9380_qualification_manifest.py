@@ -14,12 +14,24 @@ import importlib
 import importlib.util
 import json
 import pathlib
+import re
 
 import pytest
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _MANIFEST_PATH = _REPO_ROOT / "tests" / "crypto_core" / "fixtures" / "drand_quicknet_rfc9380_qualification_v1.json"
 _SCRIPT_PATH = _REPO_ROOT / "scripts" / "crypto_core" / "qualify_drand_quicknet_pyblst.py"
+_DOC_PATH = _REPO_ROOT / "docs" / "crypto_core" / "mt4_s3a_drand_quicknet_pyblst_qualification.md"
+
+_DEPENDENCY_QUALIFICATION = "BLOCKED"
+_DEPENDENCY_BLOCKERS = ("package_version_identity_ambiguous",)
+_FIXTURE_QUALIFICATION = "BLOCKED"
+_FIXTURE_BLOCKERS = ("fixture_license_unresolved",)
+_PACKAGE_SOURCE_CONTRADICTIONS = "UNRESOLVED_PACKAGE_VERSION_IDENTITY_AMBIGUITY"
+_BLS12_381_BASE_FIELD_MODULUS = int(
+    "1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab",
+    16,
+)
 
 _EXPECTED_POSITIVE_IDS = (
     "pos_official_round_42",
@@ -34,6 +46,7 @@ _EXPECTED_NEGATIVE_IDS = (
     "neg_no_sha256_prehash",
     "neg_wrong_dst",
     "neg_one_bit_signature_corruption",
+    "neg_non_canonical_unreduced_x_signature",
     "neg_wrong_public_key",
     "neg_wrong_chain_hash",
     "neg_signature_47_bytes",
@@ -51,15 +64,13 @@ _EXPECTED_NEGATIVE_IDS = (
     "neg_signature_hostile_bytes_subclass",
     "neg_public_key_hostile_bytes_subclass",
 )
-_EXPECTED_BLOCKED_IDS = (
-    "blocked_subgroup_invalid_g1_point",
-    "blocked_non_canonical_encoding_point",
-)
+_EXPECTED_BLOCKED_IDS = ()
 _ADMISSIBLE_PROVENANCE = frozenset(
     {
         "OFFICIAL_DRAND_HTTP_API_V2",
         "OFFICIAL_DRAND_V2_1_6_KEYGROUP_BASE_POINT",
         "NORMATIVE_CANONICAL_ENCODING",
+        "NORMATIVE_FIELD_MODULUS_ENCODING",
         "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
         "DETERMINISTIC_REPEAT_OF_ADMITTED_POSITIVE",
     }
@@ -69,10 +80,14 @@ _ADMISSION_FLAGS = (
     "dependency_admitted",
     "fixture_corpus_admitted",
     "machine_time_origin_proven",
+    "mt4_verifier_profile_selected",
+    "operational_quorum_ready",
+    "operational_use_approved",
     "provider_operational_approval",
     "proof_verified",
     "quorum_countable",
     "readiness_promoted",
+    "timestamp_origin_proven",
 )
 _NONCLAIM_FLAGS = (
     "no_bls_verifier_implemented_in_product",
@@ -180,10 +195,95 @@ def test_manifest_is_strict_utf8_without_bom_and_pins_schema_identity() -> None:
 
 def test_manifest_admits_nothing() -> None:
     admission = _manifest()["admission"]
-    assert admission["status"] == "QUALIFIED_CANDIDATE_NOT_ADMITTED"
-    assert set(admission) == set(_ADMISSION_FLAGS) | {"status"}
+    assert admission["status"] == "BLOCKED_NOT_QUALIFIED_NOT_ADMITTED"
+    assert set(admission) == set(_ADMISSION_FLAGS) | {
+        "dependency_blockers",
+        "dependency_qualification",
+        "fixture_blockers",
+        "fixture_qualification",
+        "package_source_contradictions",
+        "roughtime_protocol_provenance_required_before_mt4_profile_selection",
+        "status",
+    }
     for flag in _ADMISSION_FLAGS:
         assert admission[flag] is False, flag
+    assert admission["roughtime_protocol_provenance_required_before_mt4_profile_selection"] is True
+
+
+def test_both_qualification_decisions_are_blocked_with_exact_blockers() -> None:
+    admission = _manifest()["admission"]
+    assert admission["dependency_qualification"] == _DEPENDENCY_QUALIFICATION
+    assert tuple(admission["dependency_blockers"]) == _DEPENDENCY_BLOCKERS
+    assert admission["fixture_qualification"] == _FIXTURE_QUALIFICATION
+    assert tuple(admission["fixture_blockers"]) == _FIXTURE_BLOCKERS
+    assert admission["package_source_contradictions"] == _PACKAGE_SOURCE_CONTRADICTIONS
+
+
+def test_no_authoritative_field_claims_a_passing_qualification() -> None:
+    """No file may ASSERT PASS while an authoritative decision is BLOCKED.
+
+    The document may still discuss ``PASS_CANDIDATE_ONLY`` when explaining why it does not apply, so
+    the machine-readable files forbid the token outright while the document forbids the claim form.
+    """
+    for path in (_MANIFEST_PATH, _SCRIPT_PATH):
+        text = path.read_text(encoding="utf-8")
+        assert "PASS_CANDIDATE_ONLY" not in text, path.name
+        assert "QUALIFIED_CANDIDATE_NOT_ADMITTED" not in text, path.name
+
+    doc = _DOC_PATH.read_text(encoding="utf-8")
+    assert "QUALIFIED_CANDIDATE_NOT_ADMITTED" not in doc
+    claim = re.compile(r"(DEPENDENCY_QUALIFICATION|FIXTURE_QUALIFICATION)\s*:?\s*`?\s*PASS", re.IGNORECASE)
+    assert claim.search(doc) is None, "document must never assert a passing qualification"
+    # every mention of the passing token must be a negation, not a claim
+    for line in doc.splitlines():
+        if "PASS_CANDIDATE_ONLY" in line:
+            assert "cannot be" in line, line
+
+    # the round-level success reason must not be spelled "qualified"
+    manifest_text = _MANIFEST_PATH.read_text(encoding="utf-8")
+    assert '"qualified"' not in manifest_text
+    module = _load_script("no_pass")
+    assert not hasattr(module.QuicknetQualificationReason, "QUALIFIED")
+    assert module.QuicknetQualificationReason.ROUND_STRUCTURALLY_VERIFIED.value == ("round_structurally_verified")
+
+
+def test_script_manifest_and_document_agree_on_every_decision() -> None:
+    module = _load_script("decisions")
+    admission = _manifest()["admission"]
+    doc = _DOC_PATH.read_text(encoding="utf-8")
+
+    assert module.DEPENDENCY_QUALIFICATION == admission["dependency_qualification"]
+    assert tuple(module.DEPENDENCY_QUALIFICATION_BLOCKERS) == tuple(admission["dependency_blockers"])
+    assert module.FIXTURE_QUALIFICATION == admission["fixture_qualification"]
+    assert tuple(module.FIXTURE_QUALIFICATION_BLOCKERS) == tuple(admission["fixture_blockers"])
+    assert module.PACKAGE_SOURCE_CONTRADICTIONS == admission["package_source_contradictions"]
+
+    assert "DEPENDENCY_QUALIFICATION:      BLOCKED" in doc
+    assert "FIXTURE_QUALIFICATION:         BLOCKED" in doc
+    assert "BLOCKED_NOT_QUALIFIED_NOT_ADMITTED" in doc
+    for blocker in _DEPENDENCY_BLOCKERS + _FIXTURE_BLOCKERS:
+        assert blocker in doc, blocker
+    assert _PACKAGE_SOURCE_CONTRADICTIONS in doc
+
+
+def test_script_permanent_false_governance_states_are_all_false() -> None:
+    module = _load_script("governance")
+    for name in (
+        "DEPENDENCY_ADMITTED",
+        "FIXTURE_CORPUS_ADMITTED",
+        "CRYPTO_IMPLEMENTATION_AUTHORIZED",
+        "PROVIDER_OPERATIONAL_APPROVAL",
+        "MT4_VERIFIER_PROFILE_SELECTED",
+        "READINESS_PROMOTED",
+        "MACHINE_TIME_ORIGIN_PROVEN",
+        "TIMESTAMP_ORIGIN_PROVEN",
+        "PROOF_VERIFIED",
+        "OPERATIONAL_USE_APPROVED",
+        "QUORUM_COUNTABLE",
+        "OPERATIONAL_QUORUM_READY",
+    ):
+        assert getattr(module, name) is False, name
+    assert module.ROUGHTIME_PROTOCOL_PROVENANCE_REQUIRED_BEFORE_MT4_PROFILE_SELECTION is True
 
 
 def test_manifest_states_every_required_nonclaim() -> None:
@@ -208,6 +308,7 @@ def test_manifest_fixture_inventory_is_exact_and_cannot_silently_widen() -> None
         "candidate_dependency",
         "chain_profile",
         "corpus_id",
+        "mandatory_coverage_matrix",
         "negative_fixtures",
         "nonclaims",
         "positive_fixtures",
@@ -225,14 +326,91 @@ def test_every_admitted_fixture_declares_admissible_provenance() -> None:
         assert fixture["source_type"] in {"official_http_api", "official_reference", "normative", "derived"}
 
 
-def test_blocked_fixtures_are_declared_blocked_and_carry_no_invented_bytes() -> None:
-    for fixture in _manifest()["unresolved_or_blocked_fixtures"]:
-        assert fixture["status"] == "FIXTURE_ADMISSION_BLOCKED"
-        assert fixture["blocked_reason"] == "fixture_provenance_invalid"
-        assert "provenance" not in fixture
-        assert set(fixture) == {"blocked_reason", "fixture_id", "note", "status"}
-        for banned in ("signature_hex", "public_key_hex", "bytes_hex", "expected_result"):
-            assert banned not in fixture, (fixture["fixture_id"], banned)
+def test_no_fixture_class_remains_blocked() -> None:
+    assert _manifest()["unresolved_or_blocked_fixtures"] == []
+
+
+def test_every_mandatory_coverage_class_is_provenance_backed() -> None:
+    matrix = _manifest()["mandatory_coverage_matrix"]
+    assert set(matrix) == {"infinity", "non_canonical_encoding", "subgroup_invalid"}
+    negative_ids = {entry["fixture_id"] for entry in _manifest()["negative_fixtures"]}
+    for name, entry in matrix.items():
+        assert entry["result"] == "PROVENANCE_BACKED", name
+        assert entry["provenance_backed"] is True, name
+        assert entry["fixture_ids"], name
+        assert entry["why_distinct"].strip(), name
+        for fixture_id in entry["fixture_ids"]:
+            assert fixture_id in negative_ids, (name, fixture_id)
+
+    # each class must be carried by fixtures that actually declare that coverage class
+    for name, entry in matrix.items():
+        for fixture_id in entry["fixture_ids"]:
+            fixture = _fixture("negative_fixtures", fixture_id)
+            assert fixture["coverage_class"] == name, (name, fixture_id)
+            assert fixture["observed_reproducibly"] is True, fixture_id
+
+
+def test_coverage_classes_are_not_satisfied_by_length_rejections_or_by_each_other() -> None:
+    matrix = _manifest()["mandatory_coverage_matrix"]
+    length_rejection_ids = {
+        "neg_signature_47_bytes",
+        "neg_signature_49_bytes",
+        "neg_public_key_95_bytes",
+        "neg_public_key_97_bytes",
+    }
+    claimed: set[str] = set()
+    for entry in matrix.values():
+        ids = set(entry["fixture_ids"])
+        assert not ids & length_rejection_ids
+        assert not ids & claimed, "a fixture may not satisfy two mandatory classes at once"
+        claimed |= ids
+
+    # infinity must not be counted as subgroup-invalid coverage
+    infinity_ids = set(matrix["infinity"]["fixture_ids"])
+    assert not infinity_ids & set(matrix["subgroup_invalid"]["fixture_ids"])
+    assert not infinity_ids & set(matrix["non_canonical_encoding"]["fixture_ids"])
+
+
+def test_subgroup_invalid_fixture_is_a_real_subgroup_rejection() -> None:
+    fixture = _fixture("negative_fixtures", "neg_one_bit_signature_corruption")
+    assert fixture["coverage_class"] == "subgroup_invalid"
+    assert fixture["expected_reason"] == "subgroup_check_failed"
+    assert fixture["observed_blst_code"] == "BLST_POINT_NOT_IN_GROUP"
+    assert fixture["provenance"] == "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE"
+
+    corrupted = bytes.fromhex(fixture["signature_hex"])
+    official = bytes.fromhex(_OFFICIAL_SIGNATURE_HEX)
+    assert len(corrupted) == 48, "must not be a length rejection"
+    # exactly the stated derivation: final byte XOR 0x01
+    assert corrupted == official[:-1] + bytes([official[-1] ^ 0x01])
+    assert sum(bin(a ^ b).count("1") for a, b in zip(corrupted, official, strict=True)) == 1
+
+
+def test_non_canonical_fixture_encodes_the_normative_field_modulus() -> None:
+    fixture = _fixture("negative_fixtures", "neg_non_canonical_unreduced_x_signature")
+    assert fixture["coverage_class"] == "non_canonical_encoding"
+    assert fixture["provenance"] == "NORMATIVE_FIELD_MODULUS_ENCODING"
+    assert fixture["normative_constant"] == "BLS12_381_BASE_FIELD_MODULUS"
+    assert fixture["observed_blst_code"] == "BLST_BAD_ENCODING"
+    assert fixture["expected_reason"] == "signature_point_invalid"
+
+    raw = bytes.fromhex(fixture["signature_hex"])
+    assert len(raw) == 48, "must not be a length rejection"
+    assert raw[0] & 0x80 == 0x80, "compression bit must be set"
+    assert raw[0] & 0x40 == 0, "must not be an infinity encoding"
+    x_coordinate = int.from_bytes(bytes([raw[0] & 0x1F]) + raw[1:], "big")
+    assert x_coordinate == _BLS12_381_BASE_FIELD_MODULUS
+    # non-canonical precisely because a canonical encoding requires x < p
+    assert x_coordinate >= _BLS12_381_BASE_FIELD_MODULUS
+
+    module = _load_script("modulus")
+    assert module.BLS12_381_BASE_FIELD_MODULUS == _BLS12_381_BASE_FIELD_MODULUS
+
+
+def test_fixture_license_support_is_recorded_honestly_as_unproven() -> None:
+    for fixture in _manifest()["positive_fixtures"]:
+        assert fixture["license_explicitly_proven"] is False, fixture["fixture_id"]
+    assert "fixture_license_unresolved" in _manifest()["admission"]["fixture_blockers"]
 
 
 def test_official_positive_fixtures_are_pinned_to_the_official_chain_endpoints() -> None:
@@ -245,7 +423,7 @@ def test_official_positive_fixtures_are_pinned_to_the_official_chain_endpoints()
         assert len(fixture["raw_response_sha256"]) == 64
         assert set(fixture["raw_response_sha256"]) <= _HEX_CHARS
         assert fixture["license"].startswith("OFFICIAL_PUBLIC_RANDOMNESS_BEACON")
-        assert fixture["expected_result"] == "qualified"
+        assert fixture["expected_result"] == "round_structurally_verified"
 
 
 def test_chain_profile_matches_the_reverified_official_quicknet_values() -> None:
@@ -306,14 +484,34 @@ def test_dst_is_pinned_exactly_to_the_g1_rfc9380_tag() -> None:
     assert _manifest()["chain_profile"]["dst"] == _QUICKNET_DST
 
 
-def test_candidate_dependency_pins_and_the_version_contradiction_are_recorded() -> None:
+def test_candidate_dependency_pins_and_the_version_ambiguity_are_recorded() -> None:
     dependency = _manifest()["candidate_dependency"]
     assert dependency["profile_id"] == "D-DEP-DRAND-PYBLST-0.3.15-CANDIDATE.v1"
     assert dependency["package"] == "pyblst"
-    assert dependency["distribution_version"] == "0.3.15"
-    assert dependency["cargo_package_version"] == "0.3.14"
-    assert dependency["cargo_package_version_contradicts_distribution_version"] is True
     assert dependency["upstream_blst_version"] == "0.3.16"
+
+    # exactly which object carries 0.3.15
+    for field in (
+        "distribution_version",
+        "pypi_info_version",
+        "wheel_metadata_version",
+        "sdist_metadata_version",
+        "pyproject_project_version",
+    ):
+        assert dependency[field] == "0.3.15", field
+    # exactly which object remains 0.3.14
+    assert dependency["cargo_toml_version"] == "0.3.14"
+    assert dependency["cargo_lock_version"] == "0.3.14"
+    # what could not be observed at all
+    assert dependency["compiled_crate_version"] == "NOT_OBSERVABLE"
+    assert dependency["tag_version"] == "NOT_OBSERVED"
+    # why the divergence is an ambiguity rather than a closed metadata contradiction
+    assert dependency["version_identity_resolved"] is False
+    assert dependency["binary_source_correspondence_proven"] is False
+    assert dependency["attestations_present"] is False
+    assert dependency["provenance_present"] is False
+    assert dependency["version_0_3_14_also_published_as_a_distribution"] is True
+    assert dependency["version_identity_ambiguity_reason"]
     assert dependency["pyo3_version"] == "0.26.0"
     assert dependency["wheel_sha256"] == ("0c2e1f73a4739e9c5c000f00e362d6abe8cd405ec4b94a7db509ef546033999a")
     assert dependency["sdist_sha256"] == ("258831210c069ece6d9894bffbe8013834f094d874f30070a4ad8d5a0e317c08")
@@ -422,7 +620,7 @@ def test_qualification_reason_inventory_is_closed_and_complete() -> None:
         "fixture_license_unresolved",
         "governance_structural_violation",
         "artifact_inconsistent",
-        "qualified",
+        "round_structurally_verified",
     }
     assert reasons == required
     # every negative fixture expectation must name a member of the closed inventory

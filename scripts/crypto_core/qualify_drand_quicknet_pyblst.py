@@ -14,6 +14,12 @@ It performs NO acquisition and NO network, clock, filesystem-discovery or enviro
 input is supplied explicitly by the caller. ``pyblst`` is imported lazily and only inside the
 verification entry point, so importing this module never requires the candidate dependency.
 
+OVERALL DECISION (see the qualification document): BOTH qualification decisions are ``BLOCKED``. The
+dependency is blocked by ``package_version_identity_ambiguous``; the fixture corpus is blocked by
+``fixture_license_unresolved``. A per-round ``ROUND_STRUCTURALLY_VERIFIED`` result from this module is a
+byte-level statement about one supplied round only. It is NOT a qualification decision, NOT an
+admission, and must never be reported as one.
+
 Qualification finding pinned by this module (see the qualification document): pyblst 0.3.15 declares
 ``hash_to_group(arg1, arg2)`` with internal variable names ``dst``/``msg``, but forwards them to
 ``blst_hash_to_g1(out, msg, msg_len, DST, DST_len, aug, aug_len)`` in that positional order. The TRUE
@@ -27,7 +33,14 @@ import hashlib
 from enum import Enum
 
 __all__ = (
+    "DEPENDENCY_ADMITTED",
+    "DEPENDENCY_QUALIFICATION",
+    "DEPENDENCY_QUALIFICATION_BLOCKERS",
     "DRAND_QUICKNET_QUALIFICATION_PROFILE_ID",
+    "FIXTURE_CORPUS_ADMITTED",
+    "FIXTURE_QUALIFICATION",
+    "FIXTURE_QUALIFICATION_BLOCKERS",
+    "PACKAGE_SOURCE_CONTRADICTIONS",
     "QuicknetQualificationReason",
     "quicknet_message_digest",
     "quicknet_randomness",
@@ -36,6 +49,29 @@ __all__ = (
 )
 
 DRAND_QUICKNET_QUALIFICATION_PROFILE_ID = "MT4-S3A-DRAND-QUICKNET-QUALIFICATION-CANDIDATE.v1"
+
+# Authoritative qualification decisions. Single source of truth for this slice; the manifest, the
+# qualification document and the permanent tests all mirror these exact values.
+DEPENDENCY_QUALIFICATION = "BLOCKED"
+DEPENDENCY_QUALIFICATION_BLOCKERS = ("package_version_identity_ambiguous",)
+FIXTURE_QUALIFICATION = "BLOCKED"
+FIXTURE_QUALIFICATION_BLOCKERS = ("fixture_license_unresolved",)
+PACKAGE_SOURCE_CONTRADICTIONS = "UNRESOLVED_PACKAGE_VERSION_IDENTITY_AMBIGUITY"
+
+# Permanent-false governance states. Nothing in this slice may flip any of these.
+DEPENDENCY_ADMITTED = False
+FIXTURE_CORPUS_ADMITTED = False
+CRYPTO_IMPLEMENTATION_AUTHORIZED = False
+PROVIDER_OPERATIONAL_APPROVAL = False
+MT4_VERIFIER_PROFILE_SELECTED = False
+READINESS_PROMOTED = False
+MACHINE_TIME_ORIGIN_PROVEN = False
+TIMESTAMP_ORIGIN_PROVEN = False
+PROOF_VERIFIED = False
+OPERATIONAL_USE_APPROVED = False
+QUORUM_COUNTABLE = False
+OPERATIONAL_QUORUM_READY = False
+ROUGHTIME_PROTOCOL_PROVENANCE_REQUIRED_BEFORE_MT4_PROFILE_SELECTION = True
 
 # Candidate dependency profile. CANDIDATE ONLY - NOT ADMITTED.
 CANDIDATE_DEPENDENCY_PROFILE_ID = "D-DEP-DRAND-PYBLST-0.3.15-CANDIDATE.v1"
@@ -55,6 +91,16 @@ BLS12_381_G2_GENERATOR_COMPRESSED = bytes.fromhex(
     "93e02b6052719f607dacd3a088274f65596bd0d09920b61ab5da61bbdc7f5049"
     "334cf11213945d57e5ac7d055d042b7e024aa2b2f08f0a91260805272dc51051"
     "c6e47ad4fa403b02b4510b647ae3d1770bac0326a805bbefd48056c8c121bdb8"
+)
+
+# BLS12-381 base field modulus p. A normative curve constant, not an invented value. A compressed
+# encoding is canonical only when its x-coordinate is strictly less than p, so an encoding whose
+# x-coordinate equals p is non-canonical by definition. blst rejects such an encoding at uncompress
+# with BLST_BAD_ENCODING, which this module maps to SIGNATURE_POINT_INVALID / PUBLIC_KEY_POINT_INVALID.
+# The re-compression check further below therefore remains reachable only as defence in depth.
+BLS12_381_BASE_FIELD_MODULUS = int(
+    "1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab",
+    16,
 )
 
 _PUBLIC_KEY_LENGTH = 96
@@ -95,7 +141,9 @@ class QuicknetQualificationReason(str, Enum):
     FIXTURE_LICENSE_UNRESOLVED = "fixture_license_unresolved"
     GOVERNANCE_STRUCTURAL_VIOLATION = "governance_structural_violation"
     ARTIFACT_INCONSISTENT = "artifact_inconsistent"
-    QUALIFIED = "qualified"
+    # Per-round byte-level success ONLY. Deliberately NOT named "qualified": the overall dependency
+    # and fixture qualifications are BLOCKED, and no round result may be read as a qualification.
+    ROUND_STRUCTURALLY_VERIFIED = "round_structurally_verified"
 
 
 def quicknet_message_digest(round_number: int) -> bytes:
@@ -161,10 +209,12 @@ def qualify_quicknet_round(
     genesis_time: int = QUICKNET_GENESIS_TIME_SECONDS,
     period: int = QUICKNET_PERIOD_SECONDS,
 ) -> tuple[bool, QuicknetQualificationReason, dict[str, object]]:
-    """Deterministically qualify one Quicknet round. Returns (qualified, closed_reason, details).
+    """Deterministically check one Quicknet round. Returns (verified, closed_reason, details).
 
-    Admits nothing. A ``True`` result means only that the supplied bytes satisfy the structural and
-    cryptographic checks of the candidate profile under the candidate dependency.
+    Admits nothing and qualifies nothing. A ``True`` result means ONLY that the supplied bytes satisfy
+    the structural and cryptographic checks of the candidate profile under the candidate dependency,
+    for that one round. The overall DEPENDENCY_QUALIFICATION and FIXTURE_QUALIFICATION are BLOCKED and
+    are not affected by any per-round result.
     """
     reason_type = QuicknetQualificationReason
 
@@ -250,14 +300,17 @@ def qualify_quicknet_round(
 
     return (
         True,
-        reason_type.QUALIFIED,
+        reason_type.ROUND_STRUCTURALLY_VERIFIED,
         {
             "message_digest_hex": message.hex(),
             "randomness_hex": randomness.hex(),
             "round_time": quicknet_round_time(round_number, genesis_time, period),
-            "dependency_admitted": False,
-            "fixture_corpus_admitted": False,
-            "provider_operationally_approved": False,
-            "readiness_promoted": False,
+            "dependency_qualification": DEPENDENCY_QUALIFICATION,
+            "fixture_qualification": FIXTURE_QUALIFICATION,
+            "dependency_admitted": DEPENDENCY_ADMITTED,
+            "fixture_corpus_admitted": FIXTURE_CORPUS_ADMITTED,
+            "provider_operationally_approved": PROVIDER_OPERATIONAL_APPROVAL,
+            "mt4_verifier_profile_selected": MT4_VERIFIER_PROFILE_SELECTED,
+            "readiness_promoted": READINESS_PROMOTED,
         },
     )

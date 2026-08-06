@@ -2,29 +2,56 @@
   "admission": {
     "crypto_implementation_authorized": false,
     "dependency_admitted": false,
+    "dependency_blockers": [
+      "package_version_identity_ambiguous"
+    ],
+    "dependency_qualification": "BLOCKED",
+    "fixture_blockers": [
+      "fixture_license_unresolved"
+    ],
     "fixture_corpus_admitted": false,
+    "fixture_qualification": "BLOCKED",
     "machine_time_origin_proven": false,
-    "provider_operational_approval": false,
+    "mt4_verifier_profile_selected": false,
+    "operational_quorum_ready": false,
+    "operational_use_approved": false,
+    "package_source_contradictions": "UNRESOLVED_PACKAGE_VERSION_IDENTITY_AMBIGUITY",
     "proof_verified": false,
+    "provider_operational_approval": false,
     "quorum_countable": false,
     "readiness_promoted": false,
-    "status": "QUALIFIED_CANDIDATE_NOT_ADMITTED"
+    "roughtime_protocol_provenance_required_before_mt4_profile_selection": true,
+    "status": "BLOCKED_NOT_QUALIFIED_NOT_ADMITTED",
+    "timestamp_origin_proven": false
   },
   "candidate_dependency": {
-    "cargo_package_version": "0.3.14",
-    "cargo_package_version_contradicts_distribution_version": true,
+    "attestations_present": false,
+    "binary_source_correspondence_proven": false,
+    "cargo_lock_version": "0.3.14",
+    "cargo_toml_version": "0.3.14",
+    "compiled_crate_version": "NOT_OBSERVABLE",
     "distribution_version": "0.3.15",
     "license_resolution": "MIT_TEXT_IN_LICENSE_TXT_NO_SPDX_CLASSIFIER_AND_NULL_PYPI_LICENSE_FIELD",
     "license_sdist_file_sha256": "e611139381c1d1167bf2e377c19e668e596f9a42416184ed9a1c1299e24d4dc7",
     "license_wheel_file_sha256": "b672dfe9177a29fe44488d5eddfd2cea96535cf99caf729f1921668f35dd1d73",
+    "maturin_generator": "maturin (1.9.6)",
     "package": "pyblst",
     "profile_id": "D-DEP-DRAND-PYBLST-0.3.15-CANDIDATE.v1",
+    "provenance_present": false,
     "pyo3_version": "0.26.0",
+    "pypi_info_version": "0.3.15",
+    "pyproject_project_version": "0.3.15",
     "sdist_filename": "pyblst-0.3.15.tar.gz",
+    "sdist_metadata_version": "0.3.15",
     "sdist_sha256": "258831210c069ece6d9894bffbe8013834f094d874f30070a4ad8d5a0e317c08",
+    "tag_version": "NOT_OBSERVED",
     "upstream_blst_version": "0.3.16",
+    "version_0_3_14_also_published_as_a_distribution": true,
+    "version_identity_ambiguity_reason": "cargo_version_names_a_different_published_distribution_and_binary_source_link_is_unattested",
+    "version_identity_resolved": false,
     "wheel_extension_sha256": "9fddfae2d226e61f40bb3b19584787d196119a5a297ac566027c5923223d8862",
     "wheel_filename": "pyblst-0.3.15-cp312-cp312-win_amd64.whl",
+    "wheel_metadata_version": "0.3.15",
     "wheel_sha256": "0c2e1f73a4739e9c5c000f00e362d6abe8cd405ec4b94a7db509ef546033999a"
   },
   "chain_profile": {
@@ -43,6 +70,33 @@
     "signature_group": "G1"
   },
   "corpus_id": "FX-DRAND-QUICKNET-RFC9380-QUALIFICATION.v1",
+  "mandatory_coverage_matrix": {
+    "infinity": {
+      "fixture_ids": [
+        "neg_g1_infinity_signature",
+        "neg_g2_infinity_public_key"
+      ],
+      "provenance_backed": true,
+      "result": "PROVENANCE_BACKED",
+      "why_distinct": "canonical compressed infinity is accepted by blst uncompress and re-compresses to the identical bytes, so it is neither a length rejection nor a decode rejection; the consumer must reject it explicitly before pairing"
+    },
+    "non_canonical_encoding": {
+      "fixture_ids": [
+        "neg_non_canonical_unreduced_x_signature"
+      ],
+      "provenance_backed": true,
+      "result": "PROVENANCE_BACKED",
+      "why_distinct": "x-coordinate equals the normative BLS12-381 base field modulus, so the encoding is unreduced and non-canonical by definition; it is a 48-byte input, therefore not a length rejection, and it is not infinity"
+    },
+    "subgroup_invalid": {
+      "fixture_ids": [
+        "neg_one_bit_signature_corruption"
+      ],
+      "provenance_backed": true,
+      "result": "PROVENANCE_BACKED",
+      "why_distinct": "48-byte input that decodes far enough for blst to run the subgroup test and return BLST_POINT_NOT_IN_GROUP; it is not a length rejection, not infinity, and not a bad-encoding rejection"
+    }
+  },
   "negative_fixtures": [
     {
       "derivation": "round_number set to 0",
@@ -87,11 +141,27 @@
       "source_type": "derived"
     },
     {
+      "coverage_class": "subgroup_invalid",
       "derivation": "final signature byte XOR 0x01",
       "expected_reason": "subgroup_check_failed",
       "fixture_id": "neg_one_bit_signature_corruption",
+      "observed_blst_code": "BLST_POINT_NOT_IN_GROUP",
+      "observed_reproducibly": true,
       "provenance": "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
+      "signature_hex": "95a9f9f5b231b7714de1553105d8ffdf3dcda24cfdb1e689319bccf79a9c8ce430a91b811fbfaf763900bc998b5d686b",
       "source_type": "derived"
+    },
+    {
+      "coverage_class": "non_canonical_encoding",
+      "derivation": "48-byte compressed G1 encoding whose x-coordinate equals the BLS12-381 base field modulus p, with the compression bit set; canonical encodings require x < p",
+      "expected_reason": "signature_point_invalid",
+      "fixture_id": "neg_non_canonical_unreduced_x_signature",
+      "normative_constant": "BLS12_381_BASE_FIELD_MODULUS",
+      "observed_blst_code": "BLST_BAD_ENCODING",
+      "observed_reproducibly": true,
+      "provenance": "NORMATIVE_FIELD_MODULUS_ENCODING",
+      "signature_hex": "9a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab",
+      "source_type": "normative"
     },
     {
       "derivation": "public key replaced by the BLS12-381 G2 generator",
@@ -150,16 +220,22 @@
       "source_type": "derived"
     },
     {
+      "coverage_class": "infinity",
       "derivation": "canonical compressed G1 infinity: 0xc0 followed by 47 zero bytes",
       "expected_reason": "point_at_infinity_rejected",
       "fixture_id": "neg_g1_infinity_signature",
+      "observed_blst_code": "ACCEPTED_BY_UNCOMPRESS_CONSUMER_MUST_REJECT",
+      "observed_reproducibly": true,
       "provenance": "NORMATIVE_CANONICAL_ENCODING",
       "source_type": "normative"
     },
     {
+      "coverage_class": "infinity",
       "derivation": "canonical compressed G2 infinity: 0xc0 followed by 95 zero bytes",
       "expected_reason": "point_at_infinity_rejected",
       "fixture_id": "neg_g2_infinity_public_key",
+      "observed_blst_code": "ACCEPTED_BY_UNCOMPRESS_CONSUMER_MUST_REJECT",
+      "observed_reproducibly": true,
       "provenance": "NORMATIVE_CANONICAL_ENCODING",
       "source_type": "normative"
     },
@@ -222,10 +298,11 @@
     {
       "expected_message_digest_hex": "a6bb133cb1e3638ad7b8a3ff0539668e9e56f9b850ef1b2a810f5422eaa6c323",
       "expected_randomness_hex": "8ada64bae5c6c0f5540a6a13af56e663240edfbd2c76ac6a8f27671eb7259ce3",
-      "expected_result": "qualified",
+      "expected_result": "round_structurally_verified",
       "expected_round_time": 1692803490,
       "fixture_id": "pos_official_round_42",
       "license": "OFFICIAL_PUBLIC_RANDOMNESS_BEACON_OUTPUT",
+      "license_explicitly_proven": false,
       "provenance": "OFFICIAL_DRAND_HTTP_API_V2",
       "raw_response_sha256": "b7f86008c4b7ddffe6b8cf65371c801973360f4b13f107a9c3bf1460a6b1f44e",
       "round": 42,
@@ -234,9 +311,10 @@
       "source_type": "official_http_api"
     },
     {
-      "expected_result": "qualified",
+      "expected_result": "round_structurally_verified",
       "fixture_id": "pos_official_chain_info",
       "license": "OFFICIAL_PUBLIC_RANDOMNESS_BEACON_METADATA",
+      "license_explicitly_proven": false,
       "provenance": "OFFICIAL_DRAND_HTTP_API_V2",
       "public_key_hex": "83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183c8c4b450b6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb5ed66304de9cf809bd274ca73bab4af5a6e9c76a4bc09e76eae8991ef5ece45a",
       "raw_response_sha256": "ff9887bdaa43734aa86582837ef43ba1ee1b14d3bd841d5535f94651b85ab7d3",
@@ -244,9 +322,10 @@
       "source_type": "official_http_api"
     },
     {
-      "expected_result": "qualified",
+      "expected_result": "round_structurally_verified",
       "fixture_id": "pos_repeated_deterministic_verification",
       "license": "DERIVED_FROM_ADMITTED_POSITIVE",
+      "license_explicitly_proven": false,
       "note": "the identical positive input verified twice must produce byte-identical results",
       "provenance": "DETERMINISTIC_REPEAT_OF_ADMITTED_POSITIVE",
       "source_type": "derived"
@@ -261,19 +340,6 @@
     "version": "v2.1.6"
   },
   "schema": "mt4-s3a-drand-quicknet-qualification-manifest",
-  "unresolved_or_blocked_fixtures": [
-    {
-      "blocked_reason": "fixture_provenance_invalid",
-      "fixture_id": "blocked_subgroup_invalid_g1_point",
-      "note": "A subgroup-invalid G1 point with admissible primary-source provenance was not obtained. The one-bit signature corruption fixture exercises the subgroup_check_failed path with a deterministically derived input, but a dedicated normative subgroup-invalid vector is NOT admitted here. Bytes were deliberately NOT invented.",
-      "status": "FIXTURE_ADMISSION_BLOCKED"
-    },
-    {
-      "blocked_reason": "fixture_provenance_invalid",
-      "fixture_id": "blocked_non_canonical_encoding_point",
-      "note": "A non-canonical (unreduced field element) compressed encoding with admissible primary-source provenance was not obtained. The qualification logic implements the canonical re-compression check, but no provenance-backed non-canonical vector is admitted. Bytes were deliberately NOT invented.",
-      "status": "FIXTURE_ADMISSION_BLOCKED"
-    }
-  ],
+  "unresolved_or_blocked_fixtures": [],
   "version": 1
 }
