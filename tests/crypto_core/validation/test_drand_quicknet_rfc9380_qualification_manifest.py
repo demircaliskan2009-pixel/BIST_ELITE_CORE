@@ -11,10 +11,14 @@ from __future__ import annotations
 import ast
 import hashlib
 import importlib
+import importlib.abc
+import importlib.machinery
 import importlib.util
 import json
 import pathlib
 import re
+import sys
+import types
 
 import pytest
 
@@ -69,11 +73,20 @@ _ADMISSIBLE_PROVENANCE = frozenset(
     {
         "OFFICIAL_DRAND_HTTP_API_V2",
         "OFFICIAL_DRAND_V2_1_6_KEYGROUP_BASE_POINT",
-        "NORMATIVE_CANONICAL_ENCODING",
-        "NORMATIVE_FIELD_MODULUS_ENCODING",
+        "PINNED_UPSTREAM_SOURCE_KILIC_BLS12_381_V0_1_0",
         "DETERMINISTIC_MUTATION_OF_ADMITTED_POSITIVE",
         "DETERMINISTIC_REPEAT_OF_ADMITTED_POSITIVE",
     }
+)
+# A provenance label is only admissible when the manifest also carries its evidence.
+_PROVENANCE_REQUIRING_SOURCE_EVIDENCE = frozenset({"PINNED_UPSTREAM_SOURCE_KILIC_BLS12_381_V0_1_0"})
+_REQUIRED_SOURCE_EVIDENCE_FIELDS = (
+    "derivation_algorithm",
+    "license_result",
+    "source_file",
+    "source_sha256",
+    "source_uri",
+    "source_version",
 )
 _ADMISSION_FLAGS = (
     "crypto_implementation_authorized",
@@ -105,6 +118,11 @@ _NONCLAIM_FLAGS = (
 _OFFICIAL_ROUND = 42
 _OFFICIAL_SIGNATURE_HEX = (
     "95a9f9f5b231b7714de1553105d8ffdf3dcda24cfdb1e689319bccf79a9c8ce430a91b811fbfaf763900bc998b5d686a"
+)
+_OFFICIAL_PUBLIC_KEY_HEX = (
+    "83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183c"
+    "8c4b450b6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb"
+    "5ed66304de9cf809bd274ca73bab4af5a6e9c76a4bc09e76eae8991ef5ece45a"
 )
 _OFFICIAL_MESSAGE_DIGEST_HEX = "a6bb133cb1e3638ad7b8a3ff0539668e9e56f9b850ef1b2a810f5422eaa6c323"
 _OFFICIAL_RANDOMNESS_HEX = "8ada64bae5c6c0f5540a6a13af56e663240edfbd2c76ac6a8f27671eb7259ce3"
@@ -308,6 +326,7 @@ def test_manifest_fixture_inventory_is_exact_and_cannot_silently_widen() -> None
         "candidate_dependency",
         "chain_profile",
         "corpus_id",
+        "curve_encoding_source",
         "mandatory_coverage_matrix",
         "negative_fixtures",
         "nonclaims",
@@ -323,7 +342,80 @@ def test_every_admitted_fixture_declares_admissible_provenance() -> None:
     data = _manifest()
     for fixture in data["positive_fixtures"] + data["negative_fixtures"]:
         assert fixture["provenance"] in _ADMISSIBLE_PROVENANCE, fixture["fixture_id"]
-        assert fixture["source_type"] in {"official_http_api", "official_reference", "normative", "derived"}
+        assert fixture["source_type"] in {
+            "official_http_api",
+            "official_reference",
+            "pinned_upstream_source",
+            "derived",
+        }
+
+
+def test_a_provenance_label_is_never_accepted_without_its_source_evidence() -> None:
+    """A label alone is not provenance: any source-backed claim must carry pin, hash and licence."""
+    data = _manifest()
+    for fixture in data["positive_fixtures"] + data["negative_fixtures"]:
+        if fixture["provenance"] not in _PROVENANCE_REQUIRING_SOURCE_EVIDENCE:
+            continue
+        for field in _REQUIRED_SOURCE_EVIDENCE_FIELDS:
+            assert field in fixture, (fixture["fixture_id"], field)
+            assert str(fixture[field]).strip(), (fixture["fixture_id"], field)
+        assert len(fixture["source_sha256"]) == 64
+        assert set(fixture["source_sha256"]) <= _HEX_CHARS
+        assert fixture["source_uri"].startswith("https://")
+
+
+def test_pinned_curve_encoding_source_carries_complete_evidence() -> None:
+    source = _manifest()["curve_encoding_source"]
+    assert source["module"] == "github.com/kilic/bls12-381"
+    assert source["version"] == "v0.1.0"
+    assert source["module_go_sum_h1"].startswith("h1:")
+    assert source["source_uri"].startswith("https://")
+    assert source["license_result"] == "APACHE-2.0"
+    assert len(source["license_file_sha256"]) == 64
+    for name, entry in source["files"].items():
+        assert name.endswith(".go")
+        assert len(entry["sha256"]) == 64
+        assert set(entry["sha256"]) <= _HEX_CHARS
+        assert entry["provides"].strip()
+    # the pinned source must not be overclaimed as the normative specification
+    assert source["is_normative_specification"] is False
+    assert "NOT the normative specification" in source["scope_limitation"]
+    assert source["evidence_origin"] == ("LOCALLY_PINNED_UPSTREAM_GO_MODULE_IN_OFFICIAL_DRAND_DEPENDENCY_GRAPH")
+
+
+def test_field_modulus_is_derived_from_the_recorded_source_line_not_a_local_constant() -> None:
+    """Re-derive p from the verbatim upstream source line the manifest records, then match bytes."""
+    source = _manifest()["curve_encoding_source"]
+    line = source["field_modulus_source_line"]
+    match = re.search(r"0x([0-9a-fA-F]{96})", line)
+    assert match is not None, line
+    modulus_from_source = int(match.group(1), 16)
+
+    fixture = _fixture("negative_fixtures", "neg_non_canonical_unreduced_x_signature")
+    raw = bytes.fromhex(fixture["signature_hex"])
+    x_coordinate = int.from_bytes(bytes([raw[0] & 0x1F]) + raw[1:], "big")
+    assert x_coordinate == modulus_from_source
+    # and only then cross-check the local duplicate, which is not the authority
+    assert modulus_from_source == _BLS12_381_BASE_FIELD_MODULUS
+    assert "must be less than modulus" in source["non_canonical_rule_source_line"]
+
+
+def test_compressed_infinity_flag_byte_is_derived_from_the_recorded_source_line() -> None:
+    source = _manifest()["curve_encoding_source"]
+    match = re.search(r"v\s*!=\s*0x([0-9a-fA-F]{2})", source["compressed_infinity_source_line"])
+    assert match is not None, source["compressed_infinity_source_line"]
+    flag_byte = int(match.group(1), 16)
+    assert flag_byte == 0xC0
+    assert "1<<7" in source["compression_flag_source_line"]
+
+    for fixture_id, key, length in (
+        ("neg_g1_infinity_signature", "signature_hex", 48),
+        ("neg_g2_infinity_public_key", "public_key_hex", 96),
+    ):
+        raw = bytes.fromhex(_fixture("negative_fixtures", fixture_id)[key])
+        assert len(raw) == length
+        assert raw[0] == flag_byte
+        assert not any(raw[1:])
 
 
 def test_no_fixture_class_remains_blocked() -> None:
@@ -389,7 +481,7 @@ def test_subgroup_invalid_fixture_is_a_real_subgroup_rejection() -> None:
 def test_non_canonical_fixture_encodes_the_normative_field_modulus() -> None:
     fixture = _fixture("negative_fixtures", "neg_non_canonical_unreduced_x_signature")
     assert fixture["coverage_class"] == "non_canonical_encoding"
-    assert fixture["provenance"] == "NORMATIVE_FIELD_MODULUS_ENCODING"
+    assert fixture["provenance"] == "PINNED_UPSTREAM_SOURCE_KILIC_BLS12_381_V0_1_0"
     assert fixture["normative_constant"] == "BLS12_381_BASE_FIELD_MODULUS"
     assert fixture["observed_blst_code"] == "BLST_BAD_ENCODING"
     assert fixture["expected_reason"] == "signature_point_invalid"
@@ -504,7 +596,6 @@ def test_candidate_dependency_pins_and_the_version_ambiguity_are_recorded() -> N
     assert dependency["cargo_lock_version"] == "0.3.14"
     # what could not be observed at all
     assert dependency["compiled_crate_version"] == "NOT_OBSERVABLE"
-    assert dependency["tag_version"] == "NOT_OBSERVED"
     # why the divergence is an ambiguity rather than a closed metadata contradiction
     assert dependency["version_identity_resolved"] is False
     assert dependency["binary_source_correspondence_proven"] is False
@@ -512,6 +603,37 @@ def test_candidate_dependency_pins_and_the_version_ambiguity_are_recorded() -> N
     assert dependency["provenance_present"] is False
     assert dependency["version_0_3_14_also_published_as_a_distribution"] is True
     assert dependency["version_identity_ambiguity_reason"]
+
+
+def test_upstream_tag_and_build_workflow_facts_are_recorded_not_erased() -> None:
+    """The tag exists; NOT_OBSERVED was wrong and must never come back."""
+    dependency = _manifest()["candidate_dependency"]
+    assert dependency["upstream_repository"] == "OpShin/pyblst"
+    assert dependency["tag_version"] == "0.3.15"
+    assert dependency["tag_version"] != "NOT_OBSERVED"
+    assert dependency["tag_commit"] == "dadf9cbac859774d8e9115881b34f8e7a82e61d8"
+    assert dependency["tag_commit_message"] == "New release with locked cargo"
+    assert dependency["tag_pyproject_version"] == "0.3.15"
+    assert dependency["tag_cargo_toml_version"] == "0.3.14"
+    assert dependency["tag_cargo_lock_version"] == "0.3.14"
+    assert dependency["github_release_object"] == "NONE"
+    assert dependency["tag_build_workflow"] == ".github/workflows/CI.yml"
+    assert dependency["tag_ci_run_id"] == "18509666718"
+    assert dependency["tag_ci_run_result"] == "SUCCESS"
+    assert dependency["tag_ci_run_head"] == dependency["tag_commit"]
+    assert dependency["tag_evidence_origin"] == "CONTROLLER_VERIFIED_NOT_LOCALLY_REFETCHED"
+
+
+def test_a_tag_plus_successful_workflow_is_never_upgraded_to_artifact_attestation() -> None:
+    dependency = _manifest()["candidate_dependency"]
+    assert dependency["pypi_trusted_publishing"] == "NO"
+    assert dependency["pypi_artifact_attestation"] == "ABSENT"
+    assert dependency["source_to_sdist_binding"] == "NOT_PROVEN"
+    assert dependency["source_to_wheel_binding"] == "NOT_PROVEN"
+    assert dependency["binary_source_correspondence_proven"] is False
+    # the blocker survives the stronger tag evidence
+    assert _manifest()["admission"]["dependency_qualification"] == "BLOCKED"
+    assert "package_version_identity_ambiguous" in _manifest()["admission"]["dependency_blockers"]
     assert dependency["pyo3_version"] == "0.26.0"
     assert dependency["wheel_sha256"] == ("0c2e1f73a4739e9c5c000f00e362d6abe8cd405ec4b94a7db509ef546033999a")
     assert dependency["sdist_sha256"] == ("258831210c069ece6d9894bffbe8013834f094d874f30070a4ad8d5a0e317c08")
@@ -710,6 +832,79 @@ def test_hostile_bytes_subclasses_are_rejected_by_exact_type_checks() -> None:
         assert details == {}
 
 
+def test_only_the_exact_quicknet_temporal_profile_can_ever_verify() -> None:
+    """A successful round result must be impossible under any non-Quicknet genesis/period."""
+    module = _load_script("temporal")
+    reason_type = module.QuicknetQualificationReason
+    baseline = {
+        "round_number": _OFFICIAL_ROUND,
+        "public_key_bytes": bytes(96),
+        "signature_bytes": bytes(48),
+        "chain_hash": _QUICKNET_CHAIN_HASH,
+    }
+    rejected_profiles = (
+        {"genesis_time": _GENESIS - 1},
+        {"genesis_time": _GENESIS + 1},
+        {"genesis_time": 0},
+        {"genesis_time": -1},
+        {"genesis_time": 1 << 64},
+        {"period": 0},
+        {"period": -1},
+        {"period": -7},
+        {"period": 1},
+        {"period": 4},
+        {"period": 1 << 64},
+        {"genesis_time": 0, "period": -7},
+    )
+    for override in rejected_profiles:
+        call = dict(baseline)
+        call.update(override)
+        verified, reason, details = module.qualify_quicknet_round(**call)
+        assert verified is False, override
+        assert reason is reason_type.CHAIN_PROFILE_BINDING_INVALID, (override, reason)
+        assert details == {}
+
+    # wrong exact types are still type errors, never a silent profile override
+    for override in (
+        {"genesis_time": True},
+        {"period": True},
+        {"genesis_time": float(_GENESIS)},
+        {"period": 3.0},
+    ):
+        call = dict(baseline)
+        call.update(override)
+        verified, reason, details = module.qualify_quicknet_round(**call)
+        assert verified is False, override
+        assert reason is reason_type.FIELD_TYPE_INVALID, (override, reason)
+        assert details == {}
+
+
+def test_temporal_profile_is_rejected_before_the_dependency_is_ever_loaded() -> None:
+    """The wrong-profile rejection must precede dependency import, so it holds with pyblst absent."""
+    with pytest.raises(ImportError):
+        importlib.import_module("pyblst")
+    module = _load_script("temporal_order")
+    verified, reason, details = module.qualify_quicknet_round(
+        round_number=_OFFICIAL_ROUND,
+        public_key_bytes=bytes.fromhex(_OFFICIAL_PUBLIC_KEY_HEX),
+        signature_bytes=bytes.fromhex(_OFFICIAL_SIGNATURE_HEX),
+        chain_hash=_QUICKNET_CHAIN_HASH,
+        genesis_time=0,
+        period=-7,
+    )
+    # not DEPENDENCY_PROFILE_UNAVAILABLE: the profile check must win the race
+    assert verified is False
+    assert reason is module.QuicknetQualificationReason.CHAIN_PROFILE_BINDING_INVALID
+    assert details == {}
+
+
+def test_official_defaults_still_yield_the_exact_official_round_time() -> None:
+    module = _load_script("official_time")
+    assert module.QUICKNET_GENESIS_TIME_SECONDS == _GENESIS
+    assert module.QUICKNET_PERIOD_SECONDS == _PERIOD
+    assert module.quicknet_round_time(_OFFICIAL_ROUND, _GENESIS, _PERIOD) == 1_692_803_490
+
+
 def test_canonical_infinity_is_rejected_before_any_pairing_work() -> None:
     module = _load_script("infinity")
     reason_type = module.QuicknetQualificationReason
@@ -720,13 +915,15 @@ def test_canonical_infinity_is_rejected_before_any_pairing_work() -> None:
     assert module._is_canonical_infinity(g2_infinity) is True
     assert module._is_canonical_infinity(bytes.fromhex(_OFFICIAL_SIGNATURE_HEX)) is False
     assert module._is_canonical_infinity(b"") is False
-    # the infinity flag is bit 0x40; it is treated as infinity with or without the 0x80 compression
-    # bit, so an uncompressed-flagged infinity encoding is rejected on the same path
-    assert module._is_canonical_infinity(bytes([0x40]) + bytes(47)) is True
+    # canonical COMPRESSED infinity requires BOTH the compression bit 0x80 and the infinity bit 0x40.
+    # 0x40 alone is the canonical UNCOMPRESSED infinity encoding and must NOT be classified here.
+    assert module._is_canonical_infinity(bytes([0x40]) + bytes(47)) is False
+    assert module._is_canonical_infinity(bytes([0x80]) + bytes(47)) is False
     # any non-zero residual bit in the flag byte or the body is NOT canonical infinity
     assert module._is_canonical_infinity(bytes([0xC1]) + bytes(47)) is False
     assert module._is_canonical_infinity(bytes([0xC0]) + bytes(46) + bytes([0x01])) is False
     assert module._is_canonical_infinity(bytes(48)) is False
+    assert module._COMPRESSED_INFINITY_FLAG_BYTE == 0xC0
 
     baseline = {
         "round_number": _OFFICIAL_ROUND,
@@ -741,6 +938,32 @@ def test_canonical_infinity_is_rejected_before_any_pairing_work() -> None:
         assert qualified is False
         assert reason is reason_type.POINT_AT_INFINITY_REJECTED
         assert details == {}
+
+
+def test_uncompressed_flagged_infinity_still_fails_closed_without_being_called_canonical() -> None:
+    """0x40||zeros must not be labelled canonical compressed infinity, but must still fail closed."""
+    module = _load_script("uncompressed_infinity")
+    reason_type = module.QuicknetQualificationReason
+    uncompressed_infinity = bytes([0x40]) + bytes(47)
+    assert module._is_canonical_infinity(uncompressed_infinity) is False
+
+    verified, reason, details = module.qualify_quicknet_round(
+        round_number=_OFFICIAL_ROUND,
+        public_key_bytes=bytes(96),
+        signature_bytes=uncompressed_infinity,
+        chain_hash=_QUICKNET_CHAIN_HASH,
+    )
+    assert verified is False
+    assert details == {}
+    # it must NOT be reported as an infinity rejection; with pyblst absent it fails closed on the
+    # dependency gate, and with pyblst present it fails on point decoding - never verified.
+    assert reason is not reason_type.POINT_AT_INFINITY_REJECTED
+    assert reason in {
+        reason_type.DEPENDENCY_PROFILE_UNAVAILABLE,
+        reason_type.SIGNATURE_POINT_INVALID,
+        reason_type.SUBGROUP_CHECK_FAILED,
+        reason_type.DEPENDENCY_EXCEPTION,
+    }
 
 
 def test_absent_candidate_dependency_fails_closed_and_never_qualifies() -> None:
@@ -798,6 +1021,189 @@ def test_manifest_and_script_constants_cannot_drift_apart() -> None:
     assert len(bytes.fromhex(public_key_hex)) == profile["public_key_encoded_length"]
     # the recorded G2 generator must never be mistaken for the chain public key
     assert module.BLS12_381_G2_GENERATOR_COMPRESSED.hex() != public_key_hex
+
+
+_HOSTILE_MARKER = "HOSTILE_DEPENDENCY_MARKER"
+_DEPENDENCY_STAGES = (
+    "pk_uncompress",
+    "sig_uncompress",
+    "pk_compress",
+    "sig_compress",
+    "bytes_conversion",
+    "hash_to_group",
+    "generator_uncompress",
+    "miller_loop",
+    "final_verify",
+)
+
+
+def _hostile_pyblst(stage: str):
+    """A fake candidate dependency that raises a marked RuntimeError at exactly one stage."""
+    boom = RuntimeError(f"{_HOSTILE_MARKER}_{stage}")
+    signature = bytes.fromhex(_OFFICIAL_SIGNATURE_HEX)
+    public_key = bytes.fromhex(_OFFICIAL_PUBLIC_KEY_HEX)
+
+    class ExplodingBytes:
+        def __bytes__(self):
+            raise boom
+
+    class P1:
+        @staticmethod
+        def uncompress(raw):
+            if stage == "sig_uncompress":
+                raise boom
+            return P1()
+
+        @staticmethod
+        def hash_to_group(message, dst):
+            if stage == "hash_to_group":
+                raise boom
+            return P1()
+
+        def compress(self):
+            if stage == "sig_compress":
+                raise boom
+            if stage == "bytes_conversion":
+                return ExplodingBytes()
+            return signature
+
+    class P2:
+        @staticmethod
+        def uncompress(raw):
+            if stage == "generator_uncompress" and raw != public_key:
+                raise boom
+            if stage == "pk_uncompress":
+                raise boom
+            return P2()
+
+        def compress(self):
+            if stage == "pk_compress":
+                raise boom
+            return public_key
+
+    def miller_loop(a, b):
+        if stage == "miller_loop":
+            raise boom
+        return object()
+
+    def final_verify(a, b):
+        if stage == "final_verify":
+            raise boom
+        return True
+
+    fake = types.ModuleType("pyblst")
+    fake.BlstP1Element = P1
+    fake.BlstP2Element = P2
+    fake.miller_loop = miller_loop
+    fake.final_verify = final_verify
+    return fake
+
+
+@pytest.mark.parametrize("stage", _DEPENDENCY_STAGES)
+def test_no_dependency_exception_escapes_raw_from_any_stage(stage: str, monkeypatch) -> None:
+    import importlib.metadata as importlib_metadata
+
+    monkeypatch.setitem(sys.modules, "pyblst", _hostile_pyblst(stage))
+    monkeypatch.setattr(importlib_metadata, "version", lambda name: "0.3.15")
+    module = _load_script(f"hostile_{stage}")
+
+    verified, reason, details = module.qualify_quicknet_round(
+        round_number=_OFFICIAL_ROUND,
+        public_key_bytes=bytes.fromhex(_OFFICIAL_PUBLIC_KEY_HEX),
+        signature_bytes=bytes.fromhex(_OFFICIAL_SIGNATURE_HEX),
+        chain_hash=_QUICKNET_CHAIN_HASH,
+    )
+    assert verified is False, stage
+    assert reason is module.QuicknetQualificationReason.DEPENDENCY_EXCEPTION, (stage, reason)
+    assert details == {}
+    assert _HOSTILE_MARKER not in reason.value
+    assert _HOSTILE_MARKER not in repr(details)
+
+
+def test_dependency_import_failures_are_all_mapped(monkeypatch) -> None:
+    import importlib.metadata as importlib_metadata
+
+    # a non-ImportError raised during import must map to DEPENDENCY_EXCEPTION
+    class BoomLoader(importlib.abc.Loader):
+        def create_module(self, spec):
+            return types.ModuleType(spec.name)
+
+        def exec_module(self, module):
+            raise RuntimeError(f"{_HOSTILE_MARKER}_import")
+
+    class BoomFinder(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname == "pyblst":
+                return importlib.machinery.ModuleSpec(fullname, BoomLoader())
+            return None
+
+    monkeypatch.delitem(sys.modules, "pyblst", raising=False)
+    finder = BoomFinder()
+    monkeypatch.setattr(sys, "meta_path", [finder, *sys.meta_path])
+    module = _load_script("hostile_import")
+    verified, reason, details = module.qualify_quicknet_round(
+        round_number=_OFFICIAL_ROUND,
+        public_key_bytes=bytes.fromhex(_OFFICIAL_PUBLIC_KEY_HEX),
+        signature_bytes=bytes.fromhex(_OFFICIAL_SIGNATURE_HEX),
+        chain_hash=_QUICKNET_CHAIN_HASH,
+    )
+    assert verified is False
+    assert reason is module.QuicknetQualificationReason.DEPENDENCY_EXCEPTION
+    assert details == {}
+    assert _HOSTILE_MARKER not in reason.value
+
+    # importlib.metadata raising something other than PackageNotFoundError must also be mapped
+    monkeypatch.setattr(sys, "meta_path", [m for m in sys.meta_path if m is not finder])
+    monkeypatch.setitem(sys.modules, "pyblst", types.ModuleType("pyblst"))
+
+    def boom_version(name):
+        raise RuntimeError(f"{_HOSTILE_MARKER}_metadata")
+
+    monkeypatch.setattr(importlib_metadata, "version", boom_version)
+    module = _load_script("hostile_metadata")
+    verified, reason, details = module.qualify_quicknet_round(
+        round_number=_OFFICIAL_ROUND,
+        public_key_bytes=bytes.fromhex(_OFFICIAL_PUBLIC_KEY_HEX),
+        signature_bytes=bytes.fromhex(_OFFICIAL_SIGNATURE_HEX),
+        chain_hash=_QUICKNET_CHAIN_HASH,
+    )
+    assert verified is False
+    assert reason is module.QuicknetQualificationReason.DEPENDENCY_EXCEPTION
+    assert details == {}
+
+
+def test_dependency_version_mismatch_is_still_distinctly_reported(monkeypatch) -> None:
+    import importlib.metadata as importlib_metadata
+
+    monkeypatch.setitem(sys.modules, "pyblst", _hostile_pyblst("none"))
+    monkeypatch.setattr(importlib_metadata, "version", lambda name: "0.3.14")
+    module = _load_script("version_mismatch")
+    verified, reason, details = module.qualify_quicknet_round(
+        round_number=_OFFICIAL_ROUND,
+        public_key_bytes=bytes.fromhex(_OFFICIAL_PUBLIC_KEY_HEX),
+        signature_bytes=bytes.fromhex(_OFFICIAL_SIGNATURE_HEX),
+        chain_hash=_QUICKNET_CHAIN_HASH,
+    )
+    assert verified is False
+    assert reason is module.QuicknetQualificationReason.DEPENDENCY_VERSION_MISMATCH
+    assert details == {}
+
+
+def test_dependency_wrapper_never_catches_baseexception() -> None:
+    source = _script_source()
+    assert "except:" not in source
+    parsed = ast.parse(source)
+    for node in ast.walk(parsed):
+        if isinstance(node, ast.ExceptHandler):
+            assert node.type is not None, "bare except is forbidden"
+            names = (
+                [node.type.id]
+                if isinstance(node.type, ast.Name)
+                else [e.id for e in getattr(node.type, "elts", []) if isinstance(e, ast.Name)]
+            )
+            assert "BaseException" not in names
+            assert "KeyboardInterrupt" not in names
+            assert "SystemExit" not in names
 
 
 def test_the_candidate_dependency_is_not_a_project_runtime_dependency() -> None:

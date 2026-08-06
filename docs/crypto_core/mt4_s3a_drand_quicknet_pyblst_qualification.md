@@ -104,26 +104,51 @@ directly from the acquired artifacts:
 | Rust crate | `Cargo.toml` `[package].version` | **`0.3.14`** |
 | Rust lockfile | `Cargo.lock` `pyblst` entry | **`0.3.14`** |
 | Compiled crate | version string embedded in `pyblst.cp312-win_amd64.pyd` | **`NOT_OBSERVABLE`** |
-| Repository tag / release object | — | **`NOT_OBSERVED`** |
+| Upstream tag | `OpShin/pyblst` tag `0.3.15` | `0.3.15` |
+| Tag commit | `dadf9cbac859774d8e9115881b34f8e7a82e61d8` "New release with locked cargo" | — |
+| Tag tree `pyproject.toml` | `[project].version` | `0.3.15` |
+| Tag tree `Cargo.toml` / `Cargo.lock` | `[package].version` / lock entry | **`0.3.14`** |
+| GitHub release object | — | `NONE` |
+
+An earlier revision of this document recorded the tag as `NOT_OBSERVED`. **That was wrong and is
+corrected here.** The tag exists, and so does a successful tag-triggered publish workflow:
+
+| Fact | Value |
+|---|---|
+| Build workflow | `.github/workflows/CI.yml` |
+| Behaviour | tag checkout → build wheels/sdist → Actions artifacts → `uv publish` (`PYPI_API_TOKEN`) |
+| CI run | `18509666718`, result `SUCCESS`, head `dadf9cbac859774d8e9115881b34f8e7a82e61d8` |
+| PyPI Trusted Publishing | `NO` |
+| PyPI artifact attestation | `ABSENT` |
+
+These tag facts are **controller-verified**, not re-fetched locally in this session; they are recorded as
+`tag_evidence_origin: CONTROLLER_VERIFIED_NOT_LOCALLY_REFETCHED`.
 
 A maturin project can legitimately carry a Python distribution version in `[project].version` that
-differs from the Rust crate version, so the divergence *has* a plausible mechanical explanation. That
-explanation is not sufficient here, for three exact reasons:
+differs from the Rust crate version, and the tag tree shows exactly that divergence, deliberately
+committed under the message "New release with locked cargo". The divergence therefore *has* a plausible
+mechanical explanation, and the tag evidence makes it materially stronger than the previous
+`NOT_OBSERVED` state. It is still not sufficient, for three exact reasons:
 
 1. **`0.3.14` is itself a separately published distribution version** of this same package (present in
    the PyPI `releases` map). The crate version inside the reviewed `0.3.15` sdist therefore names a
    *different published distribution*, rather than being an inert internal number.
-2. **No build provenance exists.** Every one of the 35 files in the `0.3.15` release — including the
-   exact `cp312-win_amd64` wheel and the sdist — reports `attestations: absent` and `provenance: null`.
-   There is no PEP 740 attestation and no signature binding either artifact to a source revision.
+2. **No artifact attestation binds the published bytes to that CI run.** Every one of the 35 files in
+   the `0.3.15` release — including the exact `cp312-win_amd64` wheel and the sdist — reports
+   `attestations: absent` and `provenance: null`. The workflow publishes with `uv publish` and a
+   `PYPI_API_TOKEN`, not Trusted Publishing, so nothing cryptographically ties run `18509666718` to the
+   exact bytes we hashed. A tag plus a green workflow proves a build *happened*; it does not prove
+   *these* bytes came out of it.
 3. **The compiled binary cannot be tied to the reviewed source.** The `.pyd` contains no
    `CARGO_PKG_VERSION` and no `0.3.1x` string, the module exposes no `__version__`, and the build is
    not reproducible here. `binary_source_correspondence_proven = false`.
 
-Under the decision rules this is case **B — an unresolved package/source identity ambiguity**, not case
-A. It is recorded as `PACKAGE_SOURCE_CONTRADICTIONS: UNRESOLVED_PACKAGE_VERSION_IDENTITY_AMBIGUITY` and
-it blocks `DEPENDENCY_QUALIFICATION`. It is explicitly **not** downgraded to a P3 note, and no
-interpretation was adopted for the purpose of preserving a passing result.
+`SOURCE_TO_SDIST_BINDING: NOT_PROVEN` and `SOURCE_TO_WHEEL_BINDING: NOT_PROVEN`.
+
+Under the decision rules this remains case **B — an unresolved package/source identity ambiguity**, not
+case A. It is recorded as `PACKAGE_SOURCE_CONTRADICTIONS: UNRESOLVED_PACKAGE_VERSION_IDENTITY_AMBIGUITY`
+and it blocks `DEPENDENCY_QUALIFICATION`. It is explicitly **not** downgraded to a P3 note, and the tag
+evidence was **not** inflated into attestation in order to clear the blocker.
 
 **F2 — license resolution is weak.** `LICENSE.txt` contains MIT-style text, but the PyPI `info.license`
 field is `None` and there is no SPDX license classifier. The license is *legible* but not
@@ -153,6 +178,31 @@ This was proven three independent ways:
 Guard (2) and (3) together show the length-bounded parameter is the second one — i.e. the DST — which
 means the first parameter is the message. This is a latent correctness trap for any future
 implementation and is the single most important output of this qualification.
+
+**F7 (repaired) — the harness accepted an arbitrary temporal profile.** Before this revision,
+`qualify_quicknet_round` honoured caller-supplied `genesis_time` and `period`, so the official round-42
+signature could return `ROUND_STRUCTURALLY_VERIFIED` with `genesis_time=0`, `period=-7` and a nonsensical
+`round_time` of `-287`. A successful result is a statement about the Quicknet chain, so it may only ever
+be produced under the exact profile. Both parameters are now rejected unless they equal
+`1692803367` / `3`, returning `CHAIN_PROFILE_BINDING_INVALID` with empty details **before** the candidate
+dependency is imported and before any curve operation runs. The official defaults still yield
+`round_time = 1692803490`.
+
+**F8 (repaired) — candidate dependency exceptions escaped raw.** Point re-compression, the `bytes()`
+conversion of a dependency-returned value, a non-`ImportError` raised during `import pyblst`, and a
+non-`PackageNotFoundError` raised by `importlib.metadata.version` all propagated the raw exception. All
+eleven dependency-controlled surfaces are now wrapped and map to `DEPENDENCY_EXCEPTION` with empty
+details; `str(error)` — itself dependency-controlled — is guarded too. Intentional mappings
+(`DEPENDENCY_PROFILE_UNAVAILABLE`, `DEPENDENCY_VERSION_MISMATCH`, `SUBGROUP_CHECK_FAILED`,
+`*_POINT_INVALID`) are preserved. `BaseException`, `KeyboardInterrupt` and `SystemExit` are never caught,
+and a permanent AST test enforces that.
+
+**F9 (repaired) — `0x40` was classified as canonical compressed infinity.** It is not: the compression
+bit `0x80` is absent, so `0x40 || zeros` is the canonical *uncompressed* infinity encoding. Canonical
+*compressed* infinity requires the first byte to be exactly `0xC0`. The predicate now demands exactly
+that, and the permanent test that previously pinned the wrong behaviour has been corrected. An
+uncompressed-flagged input still fails closed through the ordinary point-decoding path — it is simply no
+longer mislabelled as an infinity rejection.
 
 **F6 — subgroup checks are performed, infinity is not rejected.** `uncompress` performs subgroup
 checks (`blst_p1_in_g1` / `blst_p2_in_g2`) and enforces exact 48/96 byte lengths, but it accepts the
@@ -202,6 +252,16 @@ mutation was actually executed and actually changed the outcome.
 | Infinity | canonical compressed G1/G2 infinity | `point_at_infinity_rejected`, before any pairing |
 | Profile binding | chain hash replaced with 32 zero bytes | `chain_profile_binding_invalid` |
 | Manifest widening | a fixture id added, removed or reordered | inventory test fails |
+| Temporal genesis override | caller genesis accepted | `CHAIN_PROFILE_BINDING_INVALID` no longer returned |
+| Temporal period override | caller period accepted | `CHAIN_PROFILE_BINDING_INVALID` no longer returned |
+| Dependency compress escape | re-compression wrapper removed | raw `RuntimeError` escapes |
+| Dependency import escape | non-`ImportError` unwrapped | raw `RuntimeError` escapes |
+| Dependency metadata escape | non-`PackageNotFoundError` unwrapped | raw `RuntimeError` escapes |
+| Infinity flag widening | `0x40` counted as canonical compressed | predicate test fails |
+| Provenance without pin | source hash/URI removed from a fixture | evidence test fails |
+| Tag regression | `tag_version` reverted to `NOT_OBSERVED` | tag-evidence test fails |
+| Dependency decision flip | `DEPENDENCY_QUALIFICATION` set to PASS | decision tests fail |
+| Fixture decision flip | `FIXTURE_QUALIFICATION` set to PASS | decision tests fail |
 
 The `hash_to_group` order trap (F5) is itself the result of the DST/message track: the initial
 positive case failed with `SIGNATURE_VERIFICATION_FAILED` until the true argument order was
@@ -231,8 +291,40 @@ required inventing bytes. Both blocked entries are removed and replaced by real 
 | Class | Fixture | Provenance | Observed blst result |
 |---|---|---|---|
 | subgroup-invalid | `neg_one_bit_signature_corruption` | deterministic mutation of an admitted positive | `BLST_POINT_NOT_IN_GROUP` |
-| non-canonical | `neg_non_canonical_unreduced_x_signature` | normative field-modulus encoding | `BLST_BAD_ENCODING` |
-| infinity | `neg_g1_infinity_signature`, `neg_g2_infinity_public_key` | normative canonical encoding | accepted by `uncompress`; consumer must reject |
+| non-canonical | `neg_non_canonical_unreduced_x_signature` | pinned upstream source (below) | `BLST_BAD_ENCODING` |
+| infinity | `neg_g1_infinity_signature`, `neg_g2_infinity_public_key` | pinned upstream source (below) | accepted by `uncompress`; consumer must reject |
+
+**Provenance is a pinned source, not a label.** An earlier revision asserted
+`NORMATIVE_FIELD_MODULUS_ENCODING` / `NORMATIVE_CANONICAL_ENCODING` with nothing behind them but the
+string itself and a curve constant duplicated inside the test. That is circular and has been replaced
+with an immutable, hash-verifiable source:
+
+| Evidence | Value |
+|---|---|
+| Module | `github.com/kilic/bls12-381` `v0.1.0` (inside the official drand v2.1.6 dependency graph) |
+| `go.sum` | `h1:encrdjqKMEvabVQ7qYOKu1OvhqpK4s47wDYtNiPtlp4=` |
+| Source URI | `https://proxy.golang.org/github.com/kilic/bls12-381/@v/v0.1.0.zip` |
+| `bls12_381.go` | `19dad068bf44c42af69fd15896540749172ec3ff31ece151c6f9d6bc3c673246` — defines `p` |
+| `g1.go` | `51143a23a7818f0347b60ed6d0bdc42fbbc1640344013ffded1dd48f99a709b6` — defines the encodings |
+| Licence | Apache-2.0, `58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd` |
+
+Verbatim load-bearing lines from that pinned source:
+
+- modulus — `// p = 0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab`
+- canonicality — `return nil, errors.New("must be less than modulus")` (so canonical requires `x < p`)
+- compression flag — `if in[0]&(1<<7) == 0 {` → "compression flag must be set"
+- compressed infinity — `if (i == 0 && v != 0xc0) || (i != 0 && v != 0x00) {`
+
+The permanent tests re-derive both `p` and the `0xC0` flag byte **by parsing those recorded source
+lines**, then check the fixture bytes against the parsed values — so the assertion no longer depends on
+the locally duplicated constant. The local constant is cross-checked only afterwards, and is not the
+authority.
+
+**Scope limit, stated plainly:** `kilic/bls12-381` is a hash-pinned upstream *implementation*, not the
+normative specification. It cites the zcash BLS12-381 serialization rules as its own authority. The
+manifest records `is_normative_specification: false` and every coverage entry carries
+`evidence_basis: PINNED_UPSTREAM_SOURCE_NOT_NORMATIVE_SPECIFICATION`. A future admission step that needs
+specification-level provenance must still fetch the specification itself.
 
 **Subgroup-invalid.** Flipping the final bit of the official round-42 signature is a deterministic
 mutation of an admitted positive fixture, which the decision rules accept as provenance. Executed
@@ -301,9 +393,11 @@ PACKAGE_SOURCE_CONTRADICTIONS: UNRESOLVED_PACKAGE_VERSION_IDENTITY_AMBIGUITY
 
 `DEPENDENCY_QUALIFICATION` cannot be `PASS_CANDIDATE_ONLY`. That result requires, among other things,
 that there be *no unresolved package/version identity ambiguity*. F1 is exactly such an ambiguity: the
-Rust crate version inside the reviewed sdist names a different published distribution, no PEP 740
-attestation or provenance exists for any `0.3.15` artifact, and the compiled binary cannot be tied to
-the reviewed source tree. Case B applies, so the decision is BLOCKED.
+Rust crate version inside the reviewed sdist names a different published distribution, the upstream tag
+and its successful publish workflow exist but carry no Trusted Publishing or artifact attestation
+binding the exact PyPI bytes to that run, and the compiled binary cannot be tied to the reviewed source
+tree. Case B applies, so the decision is BLOCKED. The blocker wording is refined to name the missing
+artifact binding rather than a missing tag — but it is not removed by inference.
 
 `FIXTURE_QUALIFICATION` cannot be `PASS_CANDIDATE_ONLY` either. All three mandatory coverage classes —
 subgroup-invalid, non-canonical and infinity — are now provenance-backed (§6.1), which closes the
@@ -336,9 +430,9 @@ which dependency is eventually admitted.
 To move either decision off BLOCKED, two external-fact questions must be answered by
 controller-orchestrated Deep Research:
 
-1. Is there a verifiable source-to-artifact binding for pyblst `0.3.15` (signed tag, release object, or
-   reproducible build) that resolves the `0.3.14` crate version, or a maintainer statement explaining
-   it?
+1. Can the exact PyPI wheel/sdist bytes be bound to tag commit `dadf9cba` — e.g. by recovering the
+   artifact hashes from CI run `18509666718`, by a reproducible build, or by a maintainer statement?
+   The tag and the green workflow are already established; what is missing is the artifact binding.
 2. What explicit licence or reuse grant covers drand Quicknet beacon output committed as test fixtures?
 
 **Next safe action:** none in this slice. MT4-S3B (verifier profile selection) must not begin, and no

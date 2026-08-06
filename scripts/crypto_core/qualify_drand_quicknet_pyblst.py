@@ -103,6 +103,9 @@ BLS12_381_BASE_FIELD_MODULUS = int(
     16,
 )
 
+# Canonical COMPRESSED infinity flag byte: compression bit 0x80 | infinity bit 0x40.
+_COMPRESSED_INFINITY_FLAG_BYTE = 0xC0
+
 _PUBLIC_KEY_LENGTH = 96
 _SIGNATURE_LENGTH = 48
 _RANDOMNESS_LENGTH = 32
@@ -175,27 +178,90 @@ def quicknet_round_time(round_number: int, genesis_time: int, period: int) -> in
 
 
 def _is_canonical_infinity(raw: bytes) -> bool:
-    """Canonical compressed point at infinity: compression+infinity bits set, all other bits zero."""
-    if not raw:
+    """Canonical COMPRESSED point at infinity: first byte exactly 0xC0, every other byte 0x00.
+
+    Both flags are required: the compression bit ``0x80`` AND the infinity bit ``0x40``. An input whose
+    infinity bit is set but whose compression bit is clear (``0x40`` followed by zeros) is the canonical
+    UNCOMPRESSED infinity encoding, not the compressed one, and this predicate returns False for it. It
+    still fails closed later through the ordinary point-decoding path.
+
+    Pinned upstream authority: ``github.com/kilic/bls12-381@v0.1.0`` ``g1.go`` ``FromCompressed``
+    requires ``in[0]&(1<<7) != 0`` ("compression flag must be set") and, when the infinity bit is set,
+    requires the first byte to equal exactly ``0xc0`` with all remaining bytes zero. The corresponding
+    ``FromUncompressed`` uses ``0x40`` instead, which is precisely the distinction enforced here.
+    """
+    if type(raw) is not bytes or not raw:
         return False
-    return raw[0] & 0x40 == 0x40 and raw[0] & 0x3F == 0 and all(byte == 0 for byte in raw[1:])
+    return raw[0] == _COMPRESSED_INFINITY_FLAG_BYTE and not any(raw[1:])
 
 
 def _load_candidate_dependency():
-    """Lazily import the candidate dependency. Returns (module, reason). Fails closed when absent."""
+    """Lazily import the candidate dependency. Returns (module, reason). Fails closed on any error.
+
+    Every dependency-controlled failure is mapped to a closed reason. ``KeyboardInterrupt`` and
+    ``SystemExit`` derive from ``BaseException`` and are deliberately NOT caught.
+    """
+    reason_type = QuicknetQualificationReason
     try:
         import pyblst
     except ImportError:
-        return None, QuicknetQualificationReason.DEPENDENCY_PROFILE_UNAVAILABLE
+        return None, reason_type.DEPENDENCY_PROFILE_UNAVAILABLE
+    except Exception:
+        return None, reason_type.DEPENDENCY_EXCEPTION
+
     try:
         import importlib.metadata as importlib_metadata
 
         observed = importlib_metadata.version(CANDIDATE_PACKAGE_NAME)
     except importlib_metadata.PackageNotFoundError:
-        return None, QuicknetQualificationReason.DEPENDENCY_PROFILE_UNAVAILABLE
-    if observed != CANDIDATE_PACKAGE_VERSION:
-        return None, QuicknetQualificationReason.DEPENDENCY_VERSION_MISMATCH
+        return None, reason_type.DEPENDENCY_PROFILE_UNAVAILABLE
+    except ImportError:
+        return None, reason_type.DEPENDENCY_PROFILE_UNAVAILABLE
+    except Exception:
+        return None, reason_type.DEPENDENCY_EXCEPTION
+
+    try:
+        if type(observed) is not str or observed != CANDIDATE_PACKAGE_VERSION:
+            return None, reason_type.DEPENDENCY_VERSION_MISMATCH
+    except Exception:
+        return None, reason_type.DEPENDENCY_EXCEPTION
     return pyblst, None
+
+
+def _decode_failure_reason(error: BaseException, default: QuicknetQualificationReason) -> QuicknetQualificationReason:
+    """Classify a point-decode ValueError without ever letting dependency text escape.
+
+    ``str(error)`` is dependency-controlled and may itself raise, so it is guarded. Only the closed
+    reason is returned; no exception text, repr, path or caller byte is propagated.
+    """
+    try:
+        text = str(error)
+    except Exception:
+        return QuicknetQualificationReason.DEPENDENCY_EXCEPTION
+    if type(text) is not str:
+        return QuicknetQualificationReason.DEPENDENCY_EXCEPTION
+    if "NOT_IN_GROUP" in text:
+        return QuicknetQualificationReason.SUBGROUP_CHECK_FAILED
+    return default
+
+
+def _dependency_compressed_bytes(point: object) -> bytes | None:
+    """Re-compress a dependency point to exact bytes, or None on ANY dependency-controlled failure.
+
+    ``compress()`` and the ``bytes()`` conversion of its return value are both dependency-controlled
+    surfaces and must never raise through this module.
+    """
+    try:
+        compressed = point.compress()
+    except Exception:
+        return None
+    try:
+        raw = bytes(compressed)
+    except Exception:
+        return None
+    if type(raw) is not bytes:
+        return None
+    return raw
 
 
 def qualify_quicknet_round(
@@ -228,6 +294,13 @@ def qualify_quicknet_round(
         if type(value) is not int or type(value) is bool:
             return False, reason_type.FIELD_TYPE_INVALID, {}
 
+    # EXACT TEMPORAL PROFILE BINDING. A successful round result is a statement about the Quicknet
+    # chain, so it may only ever be produced under the exact Quicknet genesis and period. The
+    # parameters are retained for call compatibility but any deviation is rejected here - before the
+    # candidate dependency is imported and before any curve operation runs.
+    if genesis_time != QUICKNET_GENESIS_TIME_SECONDS or period != QUICKNET_PERIOD_SECONDS:
+        return False, reason_type.CHAIN_PROFILE_BINDING_INVALID, {}
+
     if round_number < 1 or round_number > _MAX_ROUND:
         return False, reason_type.ROUND_INVALID, {}
     if len(chain_hash) != 64 or not all(char in _HEX_CHARS for char in chain_hash):
@@ -256,24 +329,29 @@ def qualify_quicknet_round(
     try:
         public_key_point = pyblst.BlstP2Element.uncompress(public_key_bytes)
     except ValueError as error:
-        if "NOT_IN_GROUP" in str(error):
-            return False, reason_type.SUBGROUP_CHECK_FAILED, {}
-        return False, reason_type.PUBLIC_KEY_POINT_INVALID, {}
+        return False, _decode_failure_reason(error, reason_type.PUBLIC_KEY_POINT_INVALID), {}
     except Exception:
         return False, reason_type.DEPENDENCY_EXCEPTION, {}
 
     try:
         signature_point = pyblst.BlstP1Element.uncompress(signature_bytes)
     except ValueError as error:
-        if "NOT_IN_GROUP" in str(error):
-            return False, reason_type.SUBGROUP_CHECK_FAILED, {}
-        return False, reason_type.SIGNATURE_POINT_INVALID, {}
+        return False, _decode_failure_reason(error, reason_type.SIGNATURE_POINT_INVALID), {}
     except Exception:
         return False, reason_type.DEPENDENCY_EXCEPTION, {}
 
-    if bytes(public_key_point.compress()) != public_key_bytes:
+    # Re-compression is a dependency-controlled surface: compress() and the bytes() conversion of its
+    # result must both fail closed rather than raise.
+    public_key_recompressed = _dependency_compressed_bytes(public_key_point)
+    if public_key_recompressed is None:
+        return False, reason_type.DEPENDENCY_EXCEPTION, {}
+    if public_key_recompressed != public_key_bytes:
         return False, reason_type.NON_CANONICAL_ENCODING, {}
-    if bytes(signature_point.compress()) != signature_bytes:
+
+    signature_recompressed = _dependency_compressed_bytes(signature_point)
+    if signature_recompressed is None:
+        return False, reason_type.DEPENDENCY_EXCEPTION, {}
+    if signature_recompressed != signature_bytes:
         return False, reason_type.NON_CANONICAL_ENCODING, {}
 
     try:
@@ -286,7 +364,12 @@ def qualify_quicknet_round(
     except Exception:
         return False, reason_type.DEPENDENCY_EXCEPTION, {}
 
-    if verified is not True:
+    # ``verified`` is dependency-controlled; comparing it must not invoke dependency code that raises.
+    try:
+        verified_is_true = verified is True
+    except Exception:
+        return False, reason_type.DEPENDENCY_EXCEPTION, {}
+    if not verified_is_true:
         return False, reason_type.SIGNATURE_VERIFICATION_FAILED, {}
 
     randomness = quicknet_randomness(signature_bytes)

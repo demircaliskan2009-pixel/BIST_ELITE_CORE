@@ -31,6 +31,7 @@
     "cargo_toml_version": "0.3.14",
     "compiled_crate_version": "NOT_OBSERVABLE",
     "distribution_version": "0.3.15",
+    "github_release_object": "NONE",
     "license_resolution": "MIT_TEXT_IN_LICENSE_TXT_NO_SPDX_CLASSIFIER_AND_NULL_PYPI_LICENSE_FIELD",
     "license_sdist_file_sha256": "e611139381c1d1167bf2e377c19e668e596f9a42416184ed9a1c1299e24d4dc7",
     "license_wheel_file_sha256": "b672dfe9177a29fe44488d5eddfd2cea96535cf99caf729f1921668f35dd1d73",
@@ -39,15 +40,31 @@
     "profile_id": "D-DEP-DRAND-PYBLST-0.3.15-CANDIDATE.v1",
     "provenance_present": false,
     "pyo3_version": "0.26.0",
+    "pypi_artifact_attestation": "ABSENT",
     "pypi_info_version": "0.3.15",
+    "pypi_trusted_publishing": "NO",
     "pyproject_project_version": "0.3.15",
     "sdist_filename": "pyblst-0.3.15.tar.gz",
     "sdist_metadata_version": "0.3.15",
     "sdist_sha256": "258831210c069ece6d9894bffbe8013834f094d874f30070a4ad8d5a0e317c08",
-    "tag_version": "NOT_OBSERVED",
+    "source_to_sdist_binding": "NOT_PROVEN",
+    "source_to_wheel_binding": "NOT_PROVEN",
+    "tag_build_workflow": ".github/workflows/CI.yml",
+    "tag_build_workflow_behavior": "tag checkout -> build wheels/sdist -> Actions artifacts -> uv publish",
+    "tag_cargo_lock_version": "0.3.14",
+    "tag_cargo_toml_version": "0.3.14",
+    "tag_ci_run_head": "dadf9cbac859774d8e9115881b34f8e7a82e61d8",
+    "tag_ci_run_id": "18509666718",
+    "tag_ci_run_result": "SUCCESS",
+    "tag_commit": "dadf9cbac859774d8e9115881b34f8e7a82e61d8",
+    "tag_commit_message": "New release with locked cargo",
+    "tag_evidence_origin": "CONTROLLER_VERIFIED_NOT_LOCALLY_REFETCHED",
+    "tag_pyproject_version": "0.3.15",
+    "tag_version": "0.3.15",
     "upstream_blst_version": "0.3.16",
+    "upstream_repository": "OpShin/pyblst",
     "version_0_3_14_also_published_as_a_distribution": true,
-    "version_identity_ambiguity_reason": "cargo_version_names_a_different_published_distribution_and_binary_source_link_is_unattested",
+    "version_identity_ambiguity_reason": "tag_and_successful_tag_triggered_build_workflow_exist_but_no_trusted_publishing_or_artifact_attestation_binds_the_exact_pypi_bytes_to_that_run",
     "version_identity_resolved": false,
     "wheel_extension_sha256": "9fddfae2d226e61f40bb3b19584787d196119a5a297ac566027c5923223d8862",
     "wheel_filename": "pyblst-0.3.15-cp312-cp312-win_amd64.whl",
@@ -70,8 +87,36 @@
     "signature_group": "G1"
   },
   "corpus_id": "FX-DRAND-QUICKNET-RFC9380-QUALIFICATION.v1",
+  "curve_encoding_source": {
+    "compressed_infinity_source_line": "if (i == 0 && v != 0xc0) || (i != 0 && v != 0x00) {",
+    "compressed_infinity_symbol": "G1.FromCompressed",
+    "compression_flag_source_line": "if in[0]&(1<<7) == 0 {",
+    "evidence_origin": "LOCALLY_PINNED_UPSTREAM_GO_MODULE_IN_OFFICIAL_DRAND_DEPENDENCY_GRAPH",
+    "field_modulus_source_line": "// p = 0x1a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab",
+    "field_modulus_symbol": "modulus",
+    "files": {
+      "bls12_381.go": {
+        "provides": "BLS12-381 base field modulus p",
+        "sha256": "19dad068bf44c42af69fd15896540749172ec3ff31ece151c6f9d6bc3c673246"
+      },
+      "g1.go": {
+        "provides": "canonical compressed/uncompressed infinity encodings and the compression flag rule",
+        "sha256": "51143a23a7818f0347b60ed6d0bdc42fbbc1640344013ffded1dd48f99a709b6"
+      }
+    },
+    "is_normative_specification": false,
+    "license_file_sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+    "license_result": "APACHE-2.0",
+    "module": "github.com/kilic/bls12-381",
+    "module_go_sum_h1": "h1:encrdjqKMEvabVQ7qYOKu1OvhqpK4s47wDYtNiPtlp4=",
+    "non_canonical_rule_source_line": "return nil, errors.New(\"must be less than modulus\")",
+    "scope_limitation": "This is a hash-pinned upstream IMPLEMENTATION source that sits in the official drand v2.1.6 dependency graph. It is NOT the normative specification; the module itself cites the zcash BLS12-381 serialization rules as its authority. Claims below are scoped to this pinned source only.",
+    "source_uri": "https://proxy.golang.org/github.com/kilic/bls12-381/@v/v0.1.0.zip",
+    "version": "v0.1.0"
+  },
   "mandatory_coverage_matrix": {
     "infinity": {
+      "evidence_basis": "PINNED_UPSTREAM_SOURCE_NOT_NORMATIVE_SPECIFICATION",
       "fixture_ids": [
         "neg_g1_infinity_signature",
         "neg_g2_infinity_public_key"
@@ -81,6 +126,7 @@
       "why_distinct": "canonical compressed infinity is accepted by blst uncompress and re-compresses to the identical bytes, so it is neither a length rejection nor a decode rejection; the consumer must reject it explicitly before pairing"
     },
     "non_canonical_encoding": {
+      "evidence_basis": "PINNED_UPSTREAM_SOURCE_NOT_NORMATIVE_SPECIFICATION",
       "fixture_ids": [
         "neg_non_canonical_unreduced_x_signature"
       ],
@@ -89,6 +135,7 @@
       "why_distinct": "x-coordinate equals the normative BLS12-381 base field modulus, so the encoding is unreduced and non-canonical by definition; it is a 48-byte input, therefore not a length rejection, and it is not infinity"
     },
     "subgroup_invalid": {
+      "evidence_basis": "DETERMINISTIC_DERIVATION_FROM_OFFICIAL_POSITIVE_FIXTURE",
       "fixture_ids": [
         "neg_one_bit_signature_corruption"
       ],
@@ -154,14 +201,20 @@
     {
       "coverage_class": "non_canonical_encoding",
       "derivation": "48-byte compressed G1 encoding whose x-coordinate equals the BLS12-381 base field modulus p, with the compression bit set; canonical encodings require x < p",
+      "derivation_algorithm": "x := field_modulus_p; encode x as 48-byte big-endian; set byte0 |= 0x80",
       "expected_reason": "signature_point_invalid",
       "fixture_id": "neg_non_canonical_unreduced_x_signature",
+      "license_result": "APACHE-2.0",
       "normative_constant": "BLS12_381_BASE_FIELD_MODULUS",
       "observed_blst_code": "BLST_BAD_ENCODING",
       "observed_reproducibly": true,
-      "provenance": "NORMATIVE_FIELD_MODULUS_ENCODING",
+      "provenance": "PINNED_UPSTREAM_SOURCE_KILIC_BLS12_381_V0_1_0",
       "signature_hex": "9a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab",
-      "source_type": "normative"
+      "source_file": "bls12_381.go",
+      "source_sha256": "19dad068bf44c42af69fd15896540749172ec3ff31ece151c6f9d6bc3c673246",
+      "source_type": "pinned_upstream_source",
+      "source_uri": "https://proxy.golang.org/github.com/kilic/bls12-381/@v/v0.1.0.zip",
+      "source_version": "v0.1.0"
     },
     {
       "derivation": "public key replaced by the BLS12-381 G2 generator",
@@ -222,22 +275,36 @@
     {
       "coverage_class": "infinity",
       "derivation": "canonical compressed G1 infinity: 0xc0 followed by 47 zero bytes",
+      "derivation_algorithm": "byte0 := 0xc0 (compression bit 0x80 | infinity bit 0x40); remaining 47 bytes zero",
       "expected_reason": "point_at_infinity_rejected",
       "fixture_id": "neg_g1_infinity_signature",
+      "license_result": "APACHE-2.0",
       "observed_blst_code": "ACCEPTED_BY_UNCOMPRESS_CONSUMER_MUST_REJECT",
       "observed_reproducibly": true,
-      "provenance": "NORMATIVE_CANONICAL_ENCODING",
-      "source_type": "normative"
+      "provenance": "PINNED_UPSTREAM_SOURCE_KILIC_BLS12_381_V0_1_0",
+      "signature_hex": "c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "source_file": "g1.go",
+      "source_sha256": "51143a23a7818f0347b60ed6d0bdc42fbbc1640344013ffded1dd48f99a709b6",
+      "source_type": "pinned_upstream_source",
+      "source_uri": "https://proxy.golang.org/github.com/kilic/bls12-381/@v/v0.1.0.zip",
+      "source_version": "v0.1.0"
     },
     {
       "coverage_class": "infinity",
       "derivation": "canonical compressed G2 infinity: 0xc0 followed by 95 zero bytes",
+      "derivation_algorithm": "byte0 := 0xc0 (compression bit 0x80 | infinity bit 0x40); remaining 95 bytes zero",
       "expected_reason": "point_at_infinity_rejected",
       "fixture_id": "neg_g2_infinity_public_key",
+      "license_result": "APACHE-2.0",
       "observed_blst_code": "ACCEPTED_BY_UNCOMPRESS_CONSUMER_MUST_REJECT",
       "observed_reproducibly": true,
-      "provenance": "NORMATIVE_CANONICAL_ENCODING",
-      "source_type": "normative"
+      "provenance": "PINNED_UPSTREAM_SOURCE_KILIC_BLS12_381_V0_1_0",
+      "public_key_hex": "c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "source_file": "g1.go",
+      "source_sha256": "51143a23a7818f0347b60ed6d0bdc42fbbc1640344013ffded1dd48f99a709b6",
+      "source_type": "pinned_upstream_source",
+      "source_uri": "https://proxy.golang.org/github.com/kilic/bls12-381/@v/v0.1.0.zip",
+      "source_version": "v0.1.0"
     },
     {
       "derivation": "valid official signature with 32 zero bytes supplied as expected randomness",
