@@ -272,7 +272,7 @@ established, which is how the finding surfaced.
 ## 6. Fixture corpus — `FX-DRAND-QUICKNET-RFC9380-QUALIFICATION.v1`
 
 Recorded in `tests/crypto_core/fixtures/drand_quicknet_rfc9380_qualification_v1.json`: 3 positive,
-24 negative, 0 blocked. Every fixture declares its provenance; the permanent test rejects any
+24 negative, 1 blocked. Every fixture declares its provenance; the permanent test rejects any
 provenance outside the admissible set.
 
 Positive fixtures come from the official drand HTTP API v2, pinned by URL and by the sha256 of the
@@ -351,11 +351,21 @@ manifest records `is_normative_specification: false` and every coverage entry ca
 `evidence_basis: PINNED_UPSTREAM_SOURCE_NOT_NORMATIVE_SPECIFICATION`. A future admission step that needs
 specification-level provenance must still fetch the specification itself.
 
-**Subgroup-invalid.** Flipping the final bit of the official round-42 signature is a deterministic
-mutation of an admitted positive fixture, which the decision rules accept as provenance. Executed
-against the candidate dependency it returns `BLST_POINT_NOT_IN_GROUP` — reproduced on two runs. This is
-a genuine subgroup rejection: the input is a full 48 bytes, so it is not a length rejection; it is not
-infinity; and it is not a bad-encoding rejection.
+**Subgroup-invalid — BLOCKED, not provenance-backed.** Flipping the final bit of the official round-42
+signature is a deterministic mutation of `pos_official_round_42`. Executed against the candidate
+dependency it returns `BLST_POINT_NOT_IN_GROUP` — reproduced on two runs, and this is a genuine subgroup
+rejection: the input is a full 48 bytes, so it is not a length rejection; it is not infinity; and it is
+not a bad-encoding rejection. That observation is retained as candidate evidence
+(`neg_one_bit_signature_corruption`, `evidence_status: CANDIDATE_EVIDENCE_ONLY_NOT_PROVENANCE_BACKED`).
+
+It does **not** satisfy provenance under the decision rule, because `pos_official_round_42` is itself
+**unadmitted** — `license_explicitly_proven: false` and `fixture_corpus_admitted: false` — and a
+derivation from an unadmitted positive confers no provenance. The fixture's provenance label is
+`DETERMINISTIC_MUTATION_OF_UNADMITTED_OFFICIAL_POSITIVE`, `provenance_backed` is `false`, and
+`mandatory_coverage_matrix.subgroup_invalid.result` is `BLOCKED` with `blocked_reason:
+mandatory_subgroup_invalid_fixture_provenance_unresolved`. `blocked_subgroup_invalid_g1_point` is
+recorded as the explicit blocked entry. No official or normative replacement vector was invented, and
+the bytes were never relabelled official or normative.
 
 **Non-canonical.** The x-coordinate is set to the BLS12-381 base field modulus `p` with the compression
 bit set. `p` is a normative curve constant, and a compressed encoding is canonical only when `x < p`,

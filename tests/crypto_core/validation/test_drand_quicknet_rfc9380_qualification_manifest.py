@@ -303,6 +303,50 @@ def test_script_manifest_and_document_agree_on_every_decision() -> None:
     assert _PACKAGE_SOURCE_CONTRADICTIONS in doc
 
 
+def test_document_fixture_inventory_matches_the_manifest_exactly() -> None:
+    """The document's inventory sentence must be DERIVED from the manifest, not just hard-coded.
+
+    A prior revision hard-coded ``0 blocked`` in this sentence and never updated it when a blocked
+    fixture entry was later restored. This test recomputes the exact counts from the manifest at
+    import time, so the assertion tracks the manifest even if the numbers change again.
+    """
+    manifest = _manifest()
+    positive_count = len(manifest["positive_fixtures"])
+    negative_count = len(manifest["negative_fixtures"])
+    blocked_count = len(manifest["unresolved_or_blocked_fixtures"])
+
+    doc = _DOC_PATH.read_text(encoding="utf-8")
+    expected_inventory_sentence = f"{positive_count} positive,\n{negative_count} negative, {blocked_count} blocked."
+    assert expected_inventory_sentence in doc, (
+        positive_count,
+        negative_count,
+        blocked_count,
+    )
+    # the specific stale wording must never come back
+    assert "24 negative, 0 blocked" not in doc
+
+
+def test_document_subgroup_provenance_language_matches_the_manifest() -> None:
+    """The document must describe the subgroup-invalid class exactly as the manifest records it."""
+    manifest = _manifest()
+    matrix_entry = manifest["mandatory_coverage_matrix"]["subgroup_invalid"]
+    assert matrix_entry["result"] == "BLOCKED"
+    assert matrix_entry["provenance_backed"] is False
+
+    doc = _DOC_PATH.read_text(encoding="utf-8")
+    subgroup_start = doc.index("Subgroup-invalid")
+    subgroup_end = doc.index("Non-canonical", subgroup_start)
+    section = doc[subgroup_start:subgroup_end]
+
+    assert "unadmitted" in section.lower()
+    assert "candidate evidence" in section.lower()
+    assert "BLOCKED" in section
+
+    # the stale claims that provenance was proven must never come back
+    assert "mutation of an admitted positive fixture" not in doc
+    assert "derived from an admitted positive fixture" not in doc
+
+
 def test_script_permanent_false_governance_states_are_all_false() -> None:
     module = _load_script("governance")
     for name in (
