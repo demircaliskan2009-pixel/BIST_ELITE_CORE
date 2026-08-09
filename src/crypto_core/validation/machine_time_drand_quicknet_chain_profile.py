@@ -189,6 +189,10 @@ _CHAIN_INFO_TEXT_FIELDS = ("chain_hash", "public_key", "scheme_id")
 _CHAIN_INFO_INT_FIELDS = ("genesis_time_seconds", "period_seconds")
 _CHAIN_INFO_FIELD_NAMES = (*_CHAIN_INFO_TEXT_FIELDS, *_CHAIN_INFO_INT_FIELDS)
 _CHAIN_INFO_FIELD_NAME_SET = frozenset(_CHAIN_INFO_FIELD_NAMES)
+_CHAIN_INFO_FIELD_COUNT = len(_CHAIN_INFO_FIELD_NAMES)
+# A caller mapping is advanced at most one entry past the exact inventory: the sixth observed entry
+# proves the mapping grew during consumption and rejects immediately.
+_MAX_CHAIN_INFO_ADVANCES = _CHAIN_INFO_FIELD_COUNT + 1
 
 # Non-claims this artifact publishes as exactly False.  A structural chain-profile binding proves
 # identity only; every capability, admission, verification and promotion statement stays False.
@@ -335,12 +339,69 @@ def _text_is_canonical(value: str) -> bool:
 
 
 def _check_text_bound(value: str) -> None:
+    """Bound the cheap character count BEFORE encoding.
+
+    ``str`` length is O(1), so an oversized caller string is rejected without ever materializing its
+    UTF-8 encoding.  Only a string already known to be within the character bound is encoded, and the
+    encoded byte length is then bounded separately because multi-byte text can exceed the cap while
+    the character count does not.
+    """
+    if len(value) > _MAX_TEXT_CHARS:
+        raise _err(MachineTimeDrandQuicknetChainProfileReason.RESOURCE_BOUND_EXCEEDED)
     try:
         encoded = value.encode("utf-8")
     except UnicodeEncodeError:
         raise _err(MachineTimeDrandQuicknetChainProfileReason.CANONICAL_TEXT_INVALID) from None
-    if len(value) > _MAX_TEXT_CHARS or len(encoded) > _MAX_TEXT_CHARS:
+    if len(encoded) > _MAX_TEXT_CHARS:
         raise _err(MachineTimeDrandQuicknetChainProfileReason.RESOURCE_BOUND_EXCEEDED)
+
+
+def _chain_info_items(mapping: dict[str, object]) -> object:
+    """The single point where caller-controlled iteration begins.
+
+    In production this is a plain ``iter`` call; isolating it keeps bounded consumption and the
+    mutation-during-iteration failure path auditable and directly testable.
+    """
+    return iter(mapping.items())
+
+
+def _bounded_chain_info_snapshot(chain_info: object) -> dict[str, object]:
+    """Consume a caller mapping ONCE, bounded, into a fresh private snapshot.
+
+    ``dict`` cardinality is O(1), so a mapping of the wrong size is rejected without traversing it at
+    all.  A correctly sized mapping is then advanced at most ``_MAX_CHAIN_INFO_ADVANCES`` entries: a
+    caller that grows the mapping after that O(1) observation cannot force an unbounded traversal,
+    because the sixth observed entry rejects immediately.  Keys are typed and matched against the
+    exact inventory while being consumed -- the exact-``str`` check precedes any set membership, so a
+    hostile key subclass never gets equality or hash dispatch -- and mutation during iteration fails
+    closed instead of leaking ``RuntimeError`` or ``KeyError``.  The caller mapping is never read
+    again: everything downstream reads only the returned private copy.
+    """
+    if type(chain_info) is not dict:
+        raise _err(MachineTimeDrandQuicknetChainProfileReason.WRONG_INPUT_TYPE)
+    if len(chain_info) != _CHAIN_INFO_FIELD_COUNT:
+        raise _err(MachineTimeDrandQuicknetChainProfileReason.FIELD_INVENTORY_INVALID)
+
+    snapshot: dict[str, object] = {}
+    advances = 0
+    items = _chain_info_items(chain_info)
+    while True:
+        try:
+            item = next(items)
+        except StopIteration:
+            break
+        except RuntimeError:
+            raise _err(MachineTimeDrandQuicknetChainProfileReason.FIELD_INVENTORY_INVALID) from None
+        advances += 1
+        if advances > _CHAIN_INFO_FIELD_COUNT:
+            raise _err(MachineTimeDrandQuicknetChainProfileReason.FIELD_INVENTORY_INVALID)
+        key, value = item
+        if type(key) is not str or key not in _CHAIN_INFO_FIELD_NAME_SET or key in snapshot:
+            raise _err(MachineTimeDrandQuicknetChainProfileReason.FIELD_INVENTORY_INVALID)
+        snapshot[key] = value
+    if len(snapshot) != _CHAIN_INFO_FIELD_COUNT:
+        raise _err(MachineTimeDrandQuicknetChainProfileReason.FIELD_INVENTORY_INVALID)
+    return {name: snapshot[name] for name in _CHAIN_INFO_FIELD_NAMES}
 
 
 def _validate_and_normalize_chain_info(chain_info: object) -> dict[str, object]:
@@ -351,15 +412,7 @@ def _validate_and_normalize_chain_info(chain_info: object) -> dict[str, object]:
     artifact never retains a caller-owned mutable object.  Revalidation calls it again on the artifact's
     own private copy, which is tamper detection rather than a caller read.
     """
-    if type(chain_info) is not dict:
-        raise _err(MachineTimeDrandQuicknetChainProfileReason.WRONG_INPUT_TYPE)
-    for key in chain_info:
-        if type(key) is not str:
-            raise _err(MachineTimeDrandQuicknetChainProfileReason.FIELD_INVENTORY_INVALID)
-    if len(chain_info) != len(_CHAIN_INFO_FIELD_NAMES) or frozenset(chain_info) != _CHAIN_INFO_FIELD_NAME_SET:
-        raise _err(MachineTimeDrandQuicknetChainProfileReason.FIELD_INVENTORY_INVALID)
-
-    values = {name: chain_info[name] for name in _CHAIN_INFO_FIELD_NAMES}
+    values = _bounded_chain_info_snapshot(chain_info)
     for name in _CHAIN_INFO_TEXT_FIELDS:
         if type(values[name]) is not str:
             raise _err(MachineTimeDrandQuicknetChainProfileReason.FIELD_TYPE_INVALID)

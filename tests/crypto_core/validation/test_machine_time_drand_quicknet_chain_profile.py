@@ -1113,6 +1113,273 @@ def test_every_protected_promotion_flag_is_exactly_false() -> None:
     assert len(_EXPECTED_FALSE_FLAGS) == 18
 
 
+# ---------------------------------------------------------------------------------------------
+# P2-S2-CALLER-MAPPING-BOUND-TOCTOU — one bounded consumption of caller-owned mappings
+# ---------------------------------------------------------------------------------------------
+
+
+def test_oversized_caller_mapping_is_rejected_without_any_traversal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``dict`` cardinality is O(1): a wrong-sized mapping must never begin iteration at all."""
+    huge = {f"field-{index:06d}": index for index in range(100_000)}
+
+    def explode(mapping: dict) -> object:
+        raise AssertionError("an oversized caller mapping must be rejected before iteration begins")
+
+    monkeypatch.setattr(module, "_chain_info_items", explode)
+    with pytest.raises(_ERROR) as captured:
+        module._bounded_chain_info_snapshot(huge)
+    assert captured.value.reason is _REASON.FIELD_INVENTORY_INVALID
+
+    with pytest.raises(_ERROR) as captured:
+        module._bounded_chain_info_snapshot({})
+    assert captured.value.reason is _REASON.FIELD_INVENTORY_INVALID
+
+
+def test_caller_mapping_expansion_during_consumption_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mapping that grows after the O(1) cardinality observation cannot force unbounded traversal."""
+    caller = _chain_info()
+    served: list[str] = []
+    original = module._chain_info_items
+
+    def growing(mapping: dict) -> object:
+        def generate():
+            for pair in list(original(mapping)):
+                served.append(pair[0])
+                yield pair
+            for index in range(100_000):
+                served.append(f"grown-{index:06d}")
+                yield (f"grown-{index:06d}", index)
+
+        return generate()
+
+    monkeypatch.setattr(module, "_chain_info_items", growing)
+    with pytest.raises(_ERROR) as captured:
+        module._bounded_chain_info_snapshot(caller)
+    assert captured.value.reason is _REASON.FIELD_INVENTORY_INVALID
+    assert len(served) == module._MAX_CHAIN_INFO_ADVANCES == 6
+    assert module._CHAIN_INFO_FIELD_COUNT == 5
+
+
+def test_caller_mapping_mutation_during_iteration_closes_without_raw_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Control: growing a real dict while its iterator is live is a genuine CPython RuntimeError.
+    control = _chain_info()
+    with pytest.raises(RuntimeError) as raw:
+        for index, _ in enumerate(control):
+            control[f"added-{index}"] = index
+    assert type(raw.value) is RuntimeError
+    assert "changed size during iteration" in str(raw.value)
+
+    original = module._chain_info_items
+    caller = _chain_info()
+
+    def grow_after_iterator(mapping: dict) -> object:
+        iterator = original(mapping)
+        caller["grown-during-iteration"] = 1
+        return iterator
+
+    monkeypatch.setattr(module, "_chain_info_items", grow_after_iterator)
+    with pytest.raises(_ERROR) as captured:
+        module._bounded_chain_info_snapshot(caller)
+    assert type(captured.value) is _ERROR
+    assert captured.value.reason is _REASON.FIELD_INVENTORY_INVALID
+
+
+def test_caller_mapping_removal_and_replacement_during_consumption_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = module._chain_info_items
+
+    # Removal changes cardinality while the iterator is live.
+    removing_caller = _chain_info()
+
+    def removing(mapping: dict) -> object:
+        iterator = original(mapping)
+        removing_caller.pop("scheme_id")
+        return iterator
+
+    monkeypatch.setattr(module, "_chain_info_items", removing)
+    with pytest.raises(_ERROR) as captured:
+        module._bounded_chain_info_snapshot(removing_caller)
+    assert captured.value.reason is _REASON.FIELD_INVENTORY_INVALID
+
+    # Same-size substitution keeps cardinality at five, so no RuntimeError fires; the substituted key
+    # is still outside the exact inventory and rejects.
+    replacing_caller = _chain_info()
+
+    def replacing(mapping: dict) -> object:
+        iterator = original(mapping)
+        replacing_caller.pop("scheme_id")
+        replacing_caller["substituted_key"] = "x"
+        return iterator
+
+    monkeypatch.setattr(module, "_chain_info_items", replacing)
+    with pytest.raises(_ERROR) as captured:
+        module._bounded_chain_info_snapshot(replacing_caller)
+    assert captured.value.reason is _REASON.FIELD_INVENTORY_INVALID
+
+    # A duplicated required key cannot overwrite an already-consumed entry.
+    duplicate_caller = _chain_info()
+
+    def duplicating(mapping: dict) -> object:
+        pairs = list(original(mapping))
+        return iter(pairs[:-1] + [(pairs[0][0], "duplicate")])
+
+    monkeypatch.setattr(module, "_chain_info_items", duplicating)
+    with pytest.raises(_ERROR) as captured:
+        module._bounded_chain_info_snapshot(duplicate_caller)
+    assert captured.value.reason is _REASON.FIELD_INVENTORY_INVALID
+
+
+def test_caller_mapping_is_consumed_exactly_once_and_never_reread(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = module._chain_info_items
+    consumed: list[int] = []
+
+    def counting(mapping: dict) -> object:
+        consumed.append(id(mapping))
+        return original(mapping)
+
+    monkeypatch.setattr(module, "_chain_info_items", counting)
+    caller = _chain_info()
+    profile = _build(chain_info=caller)
+
+    # The caller-owned mapping is consumed exactly once; every later derivation reads only the
+    # private normalized copy, which is a different object.
+    assert consumed.count(id(caller)) == 1
+    assert len(consumed) > 1
+
+    digest_before = profile.profile_self_digest
+    chain_digest_before = profile.chain_info_canonical_digest
+    caller["scheme_id"] = "tampered-after-snapshot"
+    caller["unexpected_key_after_snapshot"] = "x"
+    caller.pop("chain_hash", None)
+    assert profile.profile_self_digest == digest_before
+    assert profile.chain_info_canonical_digest == chain_digest_before
+    assert profile.scheme_id == "bls-unchained-g1-rfc9380"
+
+
+def test_no_second_caller_read_after_the_bounded_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller that empties itself the instant consumption finishes must not affect the result.
+
+    Any reread of the caller mapping after the snapshot would raise a raw ``KeyError`` here, so a
+    successful return proves consumption happened exactly once.
+    """
+    caller = _chain_info()
+    original = module._chain_info_items
+
+    def emptying(mapping: dict) -> object:
+        def generate():
+            for pair in list(original(mapping)):
+                yield pair
+            # Consumption is complete; from here a caller reread would fail.
+            caller.clear()
+
+        return generate()
+
+    monkeypatch.setattr(module, "_chain_info_items", emptying)
+    snapshot = module._bounded_chain_info_snapshot(caller)
+    assert tuple(snapshot) == module._CHAIN_INFO_FIELD_NAMES
+    assert snapshot["scheme_id"] == "bls-unchained-g1-rfc9380"
+    assert snapshot["chain_hash"] == _CHAIN_HASH
+    assert caller == {}
+
+
+def test_bounded_snapshot_retains_exactly_the_inventory_and_reconstruction_shares_it() -> None:
+    snapshot = module._bounded_chain_info_snapshot(_chain_info())
+    assert type(snapshot) is dict
+    assert len(snapshot) == module._CHAIN_INFO_FIELD_COUNT == 5
+    assert tuple(snapshot) == module._CHAIN_INFO_FIELD_NAMES
+
+    # Caller key order is free; the private snapshot is always canonically ordered.
+    reordered = dict(reversed(list(_chain_info().items())))
+    assert tuple(reordered) != module._CHAIN_INFO_FIELD_NAMES
+    assert tuple(module._bounded_chain_info_snapshot(reordered)) == module._CHAIN_INFO_FIELD_NAMES
+
+    for wrong in (None, [], (), "mapping", 7):
+        with pytest.raises(_ERROR) as captured:
+            module._bounded_chain_info_snapshot(wrong)
+        assert captured.value.reason is _REASON.WRONG_INPUT_TYPE
+
+    class DictSubclass(dict):
+        pass
+
+    with pytest.raises(_ERROR) as captured:
+        module._bounded_chain_info_snapshot(DictSubclass(_chain_info()))
+    assert captured.value.reason is _REASON.WRONG_INPUT_TYPE
+
+    # Reconstruction runs the identical bounded primitive on its incoming mapping.
+    state = _reduce_state(_build())
+    oversized = dict(state[2])
+    oversized["unexpected_reconstruction_key"] = "x"
+    with pytest.raises(_ERROR) as captured:
+        module._rebuild_machine_time_drand_quicknet_chain_profile((state[0], state[1], oversized, state[3], state[4]))
+    assert captured.value.reason is _REASON.FIELD_INVENTORY_INVALID
+
+
+def test_hostile_key_types_never_receive_equality_or_hash_dispatch() -> None:
+    class ExplosiveStr(str):
+        dispatched = False
+
+        def __eq__(self, other: object) -> bool:
+            type(self).dispatched = True
+            raise AssertionError("caller key equality must not run")
+
+        __hash__ = str.__hash__
+
+    hostile = _chain_info()
+    hostile[ExplosiveStr("scheme_id")] = hostile.pop("scheme_id")
+    with pytest.raises(_ERROR) as captured:
+        module._bounded_chain_info_snapshot(hostile)
+    assert captured.value.reason is _REASON.FIELD_INVENTORY_INVALID
+    assert ExplosiveStr.dispatched is False
+
+
+# ---------------------------------------------------------------------------------------------
+# P2-S2-TEXT-BOUND-ORDER — cheap character bound precedes UTF-8 encoding
+# ---------------------------------------------------------------------------------------------
+
+
+def test_text_character_bound_is_checked_before_utf8_encoding() -> None:
+    """Oversized AND unencodable input must close on the cheap bound.
+
+    If the encode ran first it would surface the unicode reason instead, so the reason itself proves
+    the execution order without any product seam.
+    """
+    with pytest.raises(_ERROR) as captured:
+        module._check_text_bound(chr(0xD800) * 4096)
+    assert captured.value.reason is _REASON.RESOURCE_BOUND_EXCEEDED
+
+    with pytest.raises(_ERROR) as captured:
+        module._check_text_bound(chr(0xD800))
+    assert captured.value.reason is _REASON.CANONICAL_TEXT_INVALID
+
+    assert module._check_text_bound("x" * 256) is None
+    for oversized in ("x" * 257, "x" * 100_000, chr(0xD800) * 257):
+        with pytest.raises(_ERROR) as captured:
+            module._check_text_bound(oversized)
+        assert captured.value.reason is _REASON.RESOURCE_BOUND_EXCEEDED
+
+    # Within the character bound but over the encoded byte bound.
+    multibyte = "é" * 200
+    assert len(multibyte) <= module._MAX_TEXT_CHARS
+    assert len(multibyte.encode("utf-8")) > module._MAX_TEXT_CHARS
+    with pytest.raises(_ERROR) as captured:
+        module._check_text_bound(multibyte)
+    assert captured.value.reason is _REASON.RESOURCE_BOUND_EXCEEDED
+
+
+def test_chain_info_text_bound_precedence_through_the_public_builder() -> None:
+    _raises(_REASON.RESOURCE_BOUND_EXCEEDED, scheme_id="x" * 257)
+    _raises(_REASON.RESOURCE_BOUND_EXCEEDED, scheme_id=chr(0xD800) * 257)
+    _raises(_REASON.CANONICAL_TEXT_INVALID, scheme_id=chr(0xD800))
+    _raises(_REASON.RESOURCE_BOUND_EXCEEDED, scheme_id="é" * 200)
+    _raises(_REASON.RESOURCE_BOUND_EXCEEDED, chain_hash="x" * 257)
+    _raises(_REASON.RESOURCE_BOUND_EXCEEDED, public_key="0" * 257)
+    # Valid behaviour is unchanged.
+    assert _build().scheme_id == "bls-unchained-g1-rfc9380"
+
+
 def test_public_key_must_equal_the_mt3_record_even_when_caller_and_snapshot_agree() -> None:
     """Isolate the MT-3 leg of the triple binding.
 
