@@ -39,16 +39,22 @@ _MAX_EVIDENCE_BYTES = 65_536
 _MAX_TEXT_CHARS = 128
 _MAX_TUPLE_LENGTH = 32
 _MAX_COLLECTION_LENGTH = 256
+_MAX_MAPPING_KEYS = 256
 _MAX_CANONICAL_INT = (1 << 63) - 1
 _MAX_REPR_CHARS = 512
 _HEX_CHARS = frozenset("0123456789abcdef")
 _SEALED_ARTIFACT_MESSAGE = "MachineTimeSourceTrustSnapshot is sealed and cannot be subclassed"
+_SEALED_ARTIFACT_ATTR_MESSAGE = "MachineTimeSourceTrustSnapshot is immutable"
+_SEALED_ERROR_MESSAGE = "MachineTimeSourceTrustSnapshotError is sealed and cannot be subclassed"
 _DIRECT_CONSTRUCTION_MESSAGE = "use build_machine_time_source_trust_snapshot"
 _ERROR_CONSTRUCTION_MESSAGE = "reason must be an exact MachineTimeSourceTrustSnapshotReason"
 _ERROR_IMMUTABLE_MESSAGE = "MachineTimeSourceTrustSnapshotError is immutable"
+_ERROR_UNSEALED_TEXT = "machine_time_source_trust_snapshot_error_unsealed"
 # The seal itself is protected: it can never be deleted, reassigned or weakened, so the diagnostic
-# cannot be altered by first removing the marker that used to gate this protection.
-_ERROR_IMMUTABLE_ATTRS = frozenset({"_reason", "reason", "args", "_sealed"})
+# cannot be altered by first removing the marker that used to gate this protection.  ``__class__``,
+# ``__dict__`` and the note channel are guarded for the same reason: each is otherwise an ordinary
+# writable path into visible diagnostic state.
+_ERROR_IMMUTABLE_ATTRS = frozenset({"_reason", "reason", "args", "_sealed", "__class__", "__dict__", "__notes__"})
 
 _FIELD_NAMES = (
     "snapshot_schema",
@@ -88,6 +94,11 @@ _FIELD_NAMES = (
 _INPUT_FIELD_NAMES = _FIELD_NAMES[:-1]
 _DESCRIPTOR_FIELD_NAMES = tuple(name for name in _INPUT_FIELD_NAMES if name != "trust_material_bytes")
 _DESCRIPTOR_FIELD_NAME_SET = frozenset(_DESCRIPTOR_FIELD_NAMES)
+# A registry entry is exactly ``(owner_ref, state)`` and the registered state repeats the owner
+# reference in its first slot, so an otherwise valid state belonging to a different artifact cannot be
+# transplanted onto this artifact's key.
+_REGISTRY_ENTRY_LENGTH = 2
+_REGISTRY_STATE_LENGTH = len(_INPUT_FIELD_NAMES) + 3
 
 # Controller contract MT4-S1-DRAND-ONLY-STRUCTURAL-ELIGIBILITY-V1.  This is deliberately a whole row:
 # independently valid values must never form an accepted cross-product.
@@ -159,21 +170,67 @@ class MachineTimeSourceTrustSnapshotReason(str, Enum):
     SNAPSHOT_ARTIFACT_INCONSISTENT = "snapshot_artifact_inconsistent"
 
 
+def _sealed_error_reason(error: object) -> MachineTimeSourceTrustSnapshotReason | None:
+    """Read the sealed authority slot directly; ``None`` means the diagnostic was never constructed."""
+    try:
+        reason = object.__getattribute__(error, "_reason")
+    except AttributeError:
+        return None
+    return reason if type(reason) is MachineTimeSourceTrustSnapshotReason else None
+
+
+def _sealed_error_text(error: object) -> str:
+    reason = _sealed_error_reason(error)
+    return _ERROR_UNSEALED_TEXT if reason is None else reason.value
+
+
 class MachineTimeSourceTrustSnapshotError(RuntimeError):
-    """Closed diagnostic carrying one exact reason and no caller-controlled message."""
+    """Closed diagnostic carrying one exact reason and no caller-controlled message.
+
+    The immutable private reason slot is the only authority.  ``reason``, ``args``, ``str`` and
+    ``repr`` are derived from that slot on every read instead of trusting ``BaseException``'s mutable
+    argument slot, so a second ``__init__``, a direct ``RuntimeError.__init__`` /
+    ``BaseException.__init__`` call, an ordinary attribute write or delete, a class reassignment and
+    the note channel all leave visible diagnostic state exactly where construction sealed it.
+    """
 
     __slots__ = ("_reason", "_sealed")
 
     def __init__(self, reason: MachineTimeSourceTrustSnapshotReason) -> None:
+        # Construction happens exactly once; re-initialization is refused before anything is written.
+        if _sealed_error_reason(self) is not None:
+            raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
         if type(reason) is not MachineTimeSourceTrustSnapshotReason:
             raise TypeError(_ERROR_CONSTRUCTION_MESSAGE)
         RuntimeError.__init__(self, reason.value)
         object.__setattr__(self, "_reason", reason)
         object.__setattr__(self, "_sealed", True)
 
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        raise TypeError(_SEALED_ERROR_MESSAGE)
+
     @property
     def reason(self) -> MachineTimeSourceTrustSnapshotReason:
         return self._reason
+
+    @property
+    def args(self) -> tuple[str, ...]:
+        return (_sealed_error_text(self),)
+
+    @property
+    def __notes__(self) -> tuple[str, ...]:
+        # Refusing the read closes the instance-dictionary note channel too: this data descriptor
+        # shadows any ``__notes__`` entry an attacker writes into the instance dictionary.
+        raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
+
+    def add_note(self, note: object) -> None:
+        raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
+
+    def __str__(self) -> str:
+        return _sealed_error_text(self)
+
+    def __repr__(self) -> str:
+        return f"MachineTimeSourceTrustSnapshotError({_sealed_error_text(self)})"
 
     def __setattr__(self, name: str, value: object) -> None:
         # Unconditional: the guard must not depend on a marker that ordinary code could remove first.
@@ -193,6 +250,53 @@ def _err(reason: MachineTimeSourceTrustSnapshotReason) -> MachineTimeSourceTrust
     return MachineTimeSourceTrustSnapshotError(reason)
 
 
+def _paired_values(
+    names: tuple[str, ...],
+    values: tuple[object, ...],
+    reason: MachineTimeSourceTrustSnapshotReason,
+) -> dict[str, object]:
+    """Pair exactly equal-length sequences.
+
+    Length-checked ``zip`` is Python 3.10+ and this project's floor is 3.8, so the exact-length
+    invariant is proven explicitly here instead.  Every call site already proves the length, which
+    makes this a fail-closed backstop rather than a new validation surface.
+    """
+    if len(names) != len(values):
+        raise _err(reason)
+    return dict(zip(names, values))
+
+
+def _mapping_copy(mapping: dict[str, object]) -> dict[str, object]:
+    """The single copy point for caller mappings, isolated so its failure path stays auditable."""
+    return dict(mapping)
+
+
+def _stable_mapping_snapshot(
+    mapping: object,
+    reason: MachineTimeSourceTrustSnapshotReason,
+) -> dict[str, object]:
+    """Bound a caller mapping cheaply, then take exactly one snapshot.
+
+    Validation and consumption both read only the returned snapshot, so a caller mapping cannot be
+    validated in one state and consumed in another.  Mutation during the snapshot fails closed
+    instead of leaking ``RuntimeError``.
+    """
+    if type(mapping) is not dict:
+        raise _err(reason)
+    if len(mapping) > _MAX_MAPPING_KEYS:
+        raise _err(MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED)
+    try:
+        snapshot = _mapping_copy(mapping)
+    except RuntimeError:
+        raise _err(reason) from None
+    if len(snapshot) > _MAX_MAPPING_KEYS:
+        raise _err(MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED)
+    for key in snapshot:
+        if type(key) is not str:
+            raise _err(reason)
+    return snapshot
+
+
 def _is_hex64(value: object) -> bool:
     return type(value) is str and len(value) == 64 and all(char in _HEX_CHARS for char in value)
 
@@ -206,11 +310,14 @@ def _text_is_canonical(value: str, *, allow_empty: bool = False) -> bool:
 
 
 def _check_text_bound(value: str) -> None:
+    # Cheap character bound first: an oversized string is rejected before it is ever encoded.
+    if len(value) > _MAX_TEXT_CHARS:
+        raise _err(MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED)
     try:
         encoded = value.encode("utf-8")
     except UnicodeEncodeError:
         raise _err(MachineTimeSourceTrustSnapshotReason.CANONICAL_TEXT_INVALID) from None
-    if len(value) > _MAX_TEXT_CHARS or len(encoded) > _MAX_TEXT_CHARS:
+    if len(encoded) > _MAX_TEXT_CHARS:
         raise _err(MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED)
 
 
@@ -321,6 +428,11 @@ def _validate_values(values: object) -> tuple[dict[str, object], str]:
         value = values[name]
         if not all(type(item) is str for item in value):
             raise _err(MachineTimeSourceTrustSnapshotReason.FIELD_TYPE_INVALID)
+        # Cheap per-item character bound before canonical scanning, sorting and encoding: cardinality
+        # was already bounded above, so no oversized item reaches the expensive canonical work.
+        for item in value:
+            if len(item) > _MAX_TEXT_CHARS:
+                raise _err(MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED)
         if not all(_text_is_canonical(item) for item in value):
             raise _err(MachineTimeSourceTrustSnapshotReason.CANONICAL_TEXT_INVALID)
         if tuple(sorted(value)) != value or len(set(value)) != len(value):
@@ -413,68 +525,86 @@ def _validate_evidence_anchors(
 
 
 def _descriptor_values(descriptor: object) -> dict[str, object]:
-    if type(descriptor) is not dict:
-        raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
-    for key in descriptor:
-        if type(key) is not str:
-            raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
-    if len(descriptor) != len(_DESCRIPTOR_FIELD_NAMES) or frozenset(descriptor) != _DESCRIPTOR_FIELD_NAME_SET:
+    # One bounded snapshot is validated and returned; the caller mapping is never read again, so an
+    # added unknown key or a removed required key cannot slip between validation and consumption.
+    values = _stable_mapping_snapshot(descriptor, MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
+    if len(values) != len(_DESCRIPTOR_FIELD_NAMES) or frozenset(values) != _DESCRIPTOR_FIELD_NAME_SET:
         raise _err(MachineTimeSourceTrustSnapshotReason.FIELD_INVENTORY_INVALID)
-    return dict(descriptor)
+    return values
 
 
 def _linked_evidence_anchors(values: dict[str, object], linked_evidence: object) -> tuple[bytes, bytes | None]:
-    if type(linked_evidence) is not dict:
-        raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
-    for key in linked_evidence:
-        if type(key) is not str:
-            raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
-    for key in linked_evidence:
-        if type(linked_evidence[key]) is not bytes:
-            raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
-
+    evidence = _stable_mapping_snapshot(
+        linked_evidence, MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID
+    )
     expected = {_OFFICIAL_EVIDENCE_KEY}
     if values["revocation_status"] != "revocation_evidence_absent":
         expected.add(_REVOCATION_EVIDENCE_KEY)
-    if len(linked_evidence) != len(expected) or frozenset(linked_evidence) != expected:
+    if len(evidence) != len(expected) or frozenset(evidence) != expected:
         raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
-    official = linked_evidence[_OFFICIAL_EVIDENCE_KEY]
-    revocation = linked_evidence.get(_REVOCATION_EVIDENCE_KEY)
+    for key in evidence:
+        if type(evidence[key]) is not bytes:
+            raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
+    official = evidence[_OFFICIAL_EVIDENCE_KEY]
+    revocation = evidence.get(_REVOCATION_EVIDENCE_KEY)
     return _validate_evidence_anchors(values, official, revocation)
 
 
 def _build_snapshot_class() -> tuple[type, object, object]:
-    registry: dict[int, tuple[ReferenceType, tuple[object, ...]]] = {}
+    registry: dict[int, tuple[object, ...]] = {}
+
+    def entry_is_well_formed(entry: object) -> bool:
+        """Prove the exact entry shape before anything is indexed or dereferenced."""
+        if type(entry) is not tuple or len(entry) != _REGISTRY_ENTRY_LENGTH:
+            return False
+        return type(entry[0]) is ReferenceType
 
     def register(artifact: object, state: tuple[object, ...]) -> None:
         key = id(artifact)
 
         def forget(dead: ReferenceType, key: int = key) -> None:
             current = registry.get(key)
-            if current is not None and current[0] is dead:
+            # A corrupted entry must not raise IndexError/TypeError inside a weakref callback, and a
+            # replacement entry must survive a stale callback from the artifact it replaced.
+            if entry_is_well_formed(current) and current[0] is dead:
                 del registry[key]
 
-        registry[key] = (weakref.ref(artifact, forget), state)
+        owner = weakref.ref(artifact, forget)
+        registry[key] = (owner, (owner,) + state)
 
     def proven_parts(artifact: object) -> tuple[tuple[object, ...], bytes, bytes | None]:
         if type(artifact) is not MachineTimeSourceTrustSnapshot:
             raise _err(MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT)
-        entry = registry.get(id(artifact))
-        if entry is None or entry[0]() is not artifact:
+        key = id(artifact)
+        entry = registry.get(key)
+        if not entry_is_well_formed(entry):
             raise _err(MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT)
+        owner = entry[0]
         state = entry[1]
-        if type(state) is not tuple or len(state) != len(_INPUT_FIELD_NAMES) + 2:
+        if owner() is not artifact:
             raise _err(MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT)
-        values = dict(zip(_INPUT_FIELD_NAMES, state[: len(_INPUT_FIELD_NAMES)], strict=True))
+        # The state carries its own owner reference, so a coherent state donated by another artifact
+        # fails closed here instead of being reported under this artifact's identity.
+        if type(state) is not tuple or len(state) != _REGISTRY_STATE_LENGTH or state[0] is not owner:
+            raise _err(MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT)
+        values = _paired_values(
+            _INPUT_FIELD_NAMES,
+            state[1 : len(_INPUT_FIELD_NAMES) + 1],
+            MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT,
+        )
         try:
             validated, digest = _validate_values(values)
             official, revocation = _validate_evidence_anchors(
                 validated,
-                state[len(_INPUT_FIELD_NAMES)],
                 state[len(_INPUT_FIELD_NAMES) + 1],
+                state[len(_INPUT_FIELD_NAMES) + 2],
             )
         except MachineTimeSourceTrustSnapshotError:
             raise _err(MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT) from None
+        # Recheck the exact entry identity before returning trusted state: nothing may have replaced
+        # the entry while it was being proven.
+        if registry.get(key) is not entry:
+            raise _err(MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT)
         public_state = tuple(validated[name] for name in _INPUT_FIELD_NAMES) + (digest,)
         return public_state, official, revocation
 
@@ -515,9 +645,17 @@ def _build_snapshot_class() -> tuple[type, object, object]:
         def __init_subclass__(cls, **kwargs: object) -> None:
             raise TypeError(_SEALED_ARTIFACT_MESSAGE)
 
+        def __setattr__(self, name: str, value: object) -> None:
+            raise AttributeError(_SEALED_ARTIFACT_ATTR_MESSAGE)
+
+        def __delattr__(self, name: str) -> None:
+            raise AttributeError(_SEALED_ARTIFACT_ATTR_MESSAGE)
+
         def __repr__(self) -> str:
             state = proven_state(self)
-            values = dict(zip(_FIELD_NAMES, state, strict=True))
+            values = _paired_values(
+                _FIELD_NAMES, state, MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT
+            )
             rendered = (
                 "MachineTimeSourceTrustSnapshot("
                 f"snapshot_id=<str len={len(values['snapshot_id'])}>, "
@@ -668,7 +806,7 @@ def machine_time_source_trust_snapshot_commitment_descriptor(
     if type(snapshot) is not MachineTimeSourceTrustSnapshot:
         raise _err(MachineTimeSourceTrustSnapshotReason.WRONG_INPUT_TYPE)
     state = _proven_snapshot_state(snapshot)  # type: ignore[operator]
-    values = dict(zip(_FIELD_NAMES, state, strict=True))
+    values = _paired_values(_FIELD_NAMES, state, MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT)
     return _canonical_descriptor(values)
 
 
@@ -692,9 +830,14 @@ def reconstruct_machine_time_source_trust_snapshot(
         raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
     values = _descriptor_values(descriptor)
     for name in ("official_citation_ids", "governance_decision_ids"):
-        if type(values[name]) is not list:
+        value = values[name]
+        if type(value) is not list:
             raise _err(MachineTimeSourceTrustSnapshotReason.FIELD_TYPE_INVALID)
-        values[name] = tuple(values[name])
+        # Cardinality before conversion: an oversized caller list is rejected without materializing a
+        # second container of the same size.
+        if len(value) > _MAX_TUPLE_LENGTH:
+            raise _err(MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED)
+        values[name] = tuple(value)
     values["trust_material_bytes"] = trust_material_bytes
     ordered = {name: values[name] for name in _INPUT_FIELD_NAMES}
     validated, digest = _validate_values(ordered)
@@ -710,7 +853,11 @@ def reconstruct_machine_time_source_trust_snapshot(
 def _rebuild_machine_time_source_trust_snapshot(state: object) -> MachineTimeSourceTrustSnapshot:
     if type(state) is not tuple or len(state) != len(_FIELD_NAMES) + 2:
         raise _err(MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
-    values = dict(zip(_INPUT_FIELD_NAMES, state[: len(_INPUT_FIELD_NAMES)], strict=True))
+    values = _paired_values(
+        _INPUT_FIELD_NAMES,
+        state[: len(_INPUT_FIELD_NAMES)],
+        MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID,
+    )
     validated, digest = _validate_values(values)
     carried_digest = state[len(_INPUT_FIELD_NAMES)]
     if type(carried_digest) is not str or not _is_hex64(carried_digest):

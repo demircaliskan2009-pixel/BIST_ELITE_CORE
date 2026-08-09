@@ -2,6 +2,7 @@ import copy
 import gc
 import hashlib
 import inspect
+import itertools
 import json
 import pickle
 import weakref
@@ -13,6 +14,102 @@ from crypto_core.validation import machine_time_source_trust_snapshot as module
 _OFFICIAL = b"official-evidence"
 _REVOCATION = b"revocation-evidence"
 _MISSING = object()
+
+# ---------------------------------------------------------------------------------------------
+# Test-owned contracts.  These literals deliberately duplicate production inventories instead of
+# importing them: a test that reads the production tuple cannot observe that tuple losing a member,
+# so every contract that must not silently shrink is restated here in full.
+# ---------------------------------------------------------------------------------------------
+_EXPECTED_REASONS: tuple[tuple[str, str], ...] = (
+    ("WRONG_INPUT_TYPE", "wrong_input_type"),
+    ("FIELD_INVENTORY_INVALID", "field_inventory_invalid"),
+    ("FIELD_TYPE_INVALID", "field_type_invalid"),
+    ("CANONICAL_TEXT_INVALID", "canonical_text_invalid"),
+    ("CLOSED_DOMAIN_VIOLATION", "closed_domain_violation"),
+    ("MT3_CROSS_CONSISTENCY_VIOLATION", "mt3_cross_consistency_violation"),
+    ("TRUST_MATERIAL_INVALID", "trust_material_invalid"),
+    ("FINGERPRINT_INVALID", "fingerprint_invalid"),
+    ("FINGERPRINT_MISMATCH", "fingerprint_mismatch"),
+    ("EVIDENCE_DIGEST_INVALID", "evidence_digest_invalid"),
+    ("EVIDENCE_DIGEST_MISMATCH", "evidence_digest_mismatch"),
+    ("TEMPORAL_CONTRACT_VIOLATION", "temporal_contract_violation"),
+    ("GOVERNANCE_STRUCTURAL_VIOLATION", "governance_structural_violation"),
+    ("SUPERSESSION_INVALID", "supersession_invalid"),
+    ("RESOURCE_BOUND_EXCEEDED", "resource_bound_exceeded"),
+    ("SELF_DIGEST_INVALID", "self_digest_invalid"),
+    ("SELF_DIGEST_MISMATCH", "self_digest_mismatch"),
+    ("RECONSTRUCTION_INPUT_INVALID", "reconstruction_input_invalid"),
+    ("COLLECTION_CANONICALITY_VIOLATION", "collection_canonicality_violation"),
+    ("SNAPSHOT_ARTIFACT_INCONSISTENT", "snapshot_artifact_inconsistent"),
+)
+# A diagnostic is a closed identifier, never prose and never caller text.
+_MAX_REASON_VALUE_CHARS = 48
+_REASON_VALUE_ALPHABET = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
+_EXPECTED_ERROR_IMMUTABLE_ATTRS = frozenset(
+    {"_reason", "reason", "args", "_sealed", "__class__", "__dict__", "__notes__"}
+)
+_EXPECTED_ROW_FIELD_NAMES: tuple[str, ...] = (
+    "source_id",
+    "provider_id",
+    "source_class",
+    "recommended_role",
+    "protocol_profile_id",
+    "protocol_wire_version",
+    "independence_class",
+    "trust_material_kind",
+    "trust_material_encoding",
+    "trust_material_fingerprint_algorithm",
+    "dependency_profile_id",
+    "fixture_corpus_id",
+    "verification_policy_id",
+)
+_EXPECTED_ELIGIBLE_ROW: tuple[str, ...] = (
+    "drand-quicknet-mainnet",
+    "league-of-entropy",
+    "distributed-threshold-randomness-beacon",
+    "not_before",
+    "drand-quicknet-signature-and-chain-info-offline.v1",
+    "drand-http-api-v2-with-chain-info",
+    "threshold-bls-beacon",
+    "bls_group_public_key",
+    "raw",
+    "sha256",
+    "D-DEP-02",
+    "FX-DRAND-QUICKNET.v1",
+    "deterministic_supplied_proof_verification_no_network.v1",
+)
+_EXPECTED_REQUIRED_TEXT_FIELDS: tuple[str, ...] = (
+    "snapshot_schema",
+    "snapshot_id",
+    "source_id",
+    "provider_id",
+    "source_class",
+    "recommended_role",
+    "protocol_profile_id",
+    "protocol_wire_version",
+    "independence_class",
+    "trust_material_kind",
+    "trust_material_encoding",
+    "trust_material_fingerprint_algorithm",
+    "trust_material_fingerprint",
+    "revocation_status",
+    "official_evidence_packet_digest",
+    "dependency_profile_id",
+    "fixture_corpus_id",
+    "verification_policy_id",
+)
+_EXPECTED_OPTIONAL_TEXT_FIELDS: tuple[str, ...] = (
+    "supersedes_snapshot_id",
+    "supersedes_key_id",
+    "revocation_evidence_digest",
+    "approved_by",
+)
+_EXPECTED_PROTECTED_FALSE_FIELDS: tuple[str, ...] = (
+    "operational_use_approved",
+    "quorum_countable",
+    "source_reachable_proven",
+    "proof_verified",
+)
 
 _EXPECTED_SELF_DIGEST_DOMAIN = b"machine-time-source-trust-snapshot.v2/self-digest\x00"
 _EXPECTED_SELF_DIGEST = "18496b4cc0d983006d044efced524111d874bb56ab57da76d55e92df88c1d5bc"
@@ -262,7 +359,8 @@ def _closure_registry(
                 and type(entry[0]) is weakref.ReferenceType
                 and entry[0]() is snapshot
                 and type(entry[1]) is tuple
-                and len(entry[1]) == len(module._INPUT_FIELD_NAMES) + 2
+                and len(entry[1]) == len(module._INPUT_FIELD_NAMES) + 3
+                and entry[1][0] is entry[0]
             ):
                 candidates.append(value)
             return
@@ -557,7 +655,7 @@ def test_descriptor_reconstruction_preserves_hidden_evidence_anchors_and_input()
         )
 
 
-@pytest.mark.parametrize("field", module._ROW_FIELD_NAMES)
+@pytest.mark.parametrize("field", _EXPECTED_ROW_FIELD_NAMES)
 def test_every_eligible_row_field_is_whole_row_bound(field: str) -> None:
     changed = _kwargs()
     changed[field] = changed[field] + "-changed"
@@ -640,7 +738,7 @@ def test_raw_trust_fingerprint_text_and_evidence_precedence() -> None:
 def test_diagnostic_seal_is_permanent_under_ordinary_attribute_operations() -> None:
     reasons = tuple(module.MachineTimeSourceTrustSnapshotReason)
     assert len(reasons) == 20
-    assert module._ERROR_IMMUTABLE_ATTRS == frozenset({"_reason", "reason", "args", "_sealed"})
+    assert module._ERROR_IMMUTABLE_ATTRS == _EXPECTED_ERROR_IMMUTABLE_ATTRS
 
     for reason in reasons:
         constructed = module.MachineTimeSourceTrustSnapshotError(reason)
@@ -1345,3 +1443,738 @@ def test_public_mapping_requires_exact_builtin_dict_and_equality_ignores_hostile
     assert (snapshot == hostile) is False
     assert (snapshot != hostile) is True
     assert HostileOperand.inspected is False
+
+
+# ---------------------------------------------------------------------------------------------
+# P2-S1-TEST-CAUSALITY-06 — test-owned inventories
+# ---------------------------------------------------------------------------------------------
+
+
+def test_reason_inventory_names_values_and_text_bounds_are_test_owned() -> None:
+    observed = tuple((member.name, member.value) for member in module.MachineTimeSourceTrustSnapshotReason)
+    assert observed == _EXPECTED_REASONS
+    assert len(_EXPECTED_REASONS) == 20
+    assert len({name for name, _ in _EXPECTED_REASONS}) == 20
+    assert len({value for _, value in _EXPECTED_REASONS}) == 20
+
+    for name, value in _EXPECTED_REASONS:
+        member = module.MachineTimeSourceTrustSnapshotReason[name]
+        assert member.value == value
+        assert type(member) is module.MachineTimeSourceTrustSnapshotReason
+        # Each diagnostic stays a bounded closed identifier: never prose, never caller text.
+        assert value.isascii()
+        assert 0 < len(value) <= _MAX_REASON_VALUE_CHARS
+        assert set(value) <= _REASON_VALUE_ALPHABET
+        assert value == value.strip()
+        error = module.MachineTimeSourceTrustSnapshotError(member)
+        assert error.reason is member
+        assert error.args == (value,)
+        assert str(error) == value
+        assert len(str(error)) <= _MAX_REASON_VALUE_CHARS
+        assert repr(error) == f"MachineTimeSourceTrustSnapshotError({value})"
+
+
+def test_eligible_row_inventory_and_values_are_test_owned() -> None:
+    assert module._ROW_FIELD_NAMES == _EXPECTED_ROW_FIELD_NAMES
+    assert module._ELIGIBLE_ROW == _EXPECTED_ELIGIBLE_ROW
+    assert len(_EXPECTED_ROW_FIELD_NAMES) == 13
+    assert len(_EXPECTED_ELIGIBLE_ROW) == 13
+    assert len(set(_EXPECTED_ROW_FIELD_NAMES)) == 13
+    assert set(_EXPECTED_ROW_FIELD_NAMES) <= set(module._INPUT_FIELD_NAMES)
+
+    # Structural-only identifiers must stay inside the whole-row contract; losing either from the
+    # inventory would silently stop binding it.
+    assert "dependency_profile_id" in _EXPECTED_ROW_FIELD_NAMES
+    assert "fixture_corpus_id" in _EXPECTED_ROW_FIELD_NAMES
+    assert _EXPECTED_ELIGIBLE_ROW[_EXPECTED_ROW_FIELD_NAMES.index("dependency_profile_id")] == "D-DEP-02"
+    assert _EXPECTED_ELIGIBLE_ROW[_EXPECTED_ROW_FIELD_NAMES.index("fixture_corpus_id")] == "FX-DRAND-QUICKNET.v1"
+
+    snapshot = _build()
+    assert tuple(getattr(snapshot, name) for name in _EXPECTED_ROW_FIELD_NAMES) == _EXPECTED_ELIGIBLE_ROW
+    for name in _EXPECTED_PROTECTED_FALSE_FIELDS:
+        assert getattr(snapshot, name) is False
+
+
+@pytest.mark.parametrize("field", _EXPECTED_ROW_FIELD_NAMES)
+def test_test_owned_row_fields_reject_every_independent_substitution(field: str) -> None:
+    baseline = _kwargs()[field]
+    assert type(baseline) is str
+    _raises(module.MachineTimeSourceTrustSnapshotReason.MT3_CROSS_CONSISTENCY_VIOLATION, **{field: baseline + "-x"})
+    for other in _EXPECTED_ELIGIBLE_ROW:
+        if other != baseline:
+            _raises(module.MachineTimeSourceTrustSnapshotReason.MT3_CROSS_CONSISTENCY_VIOLATION, **{field: other})
+
+
+@pytest.mark.parametrize("field", _EXPECTED_REQUIRED_TEXT_FIELDS + _EXPECTED_OPTIONAL_TEXT_FIELDS)
+def test_every_textual_field_is_unicode_and_bound_checked(field: str) -> None:
+    _raises(module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED, **{field: "x" * 129})
+    # 65 non-ASCII BMP scalars stay under the character bound but exceed the byte bound.
+    _raises(module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED, **{field: "é" * 65})
+    _raises(module.MachineTimeSourceTrustSnapshotReason.CANONICAL_TEXT_INVALID, **{field: "x" + chr(0xD800)})
+    _raises(module.MachineTimeSourceTrustSnapshotReason.CANONICAL_TEXT_INVALID, **{field: "x\ty"})
+    _raises(module.MachineTimeSourceTrustSnapshotReason.CANONICAL_TEXT_INVALID, **{field: " padded"})
+
+
+def test_optional_text_fields_are_all_covered_and_structurally_optional() -> None:
+    # Guards the parametrisation above against silently losing a field.
+    assert set(_EXPECTED_REQUIRED_TEXT_FIELDS + _EXPECTED_OPTIONAL_TEXT_FIELDS) <= set(module._INPUT_FIELD_NAMES)
+    assert len(_EXPECTED_REQUIRED_TEXT_FIELDS) == 18
+    assert len(_EXPECTED_OPTIONAL_TEXT_FIELDS) == 4
+    assert not set(_EXPECTED_REQUIRED_TEXT_FIELDS) & set(_EXPECTED_OPTIONAL_TEXT_FIELDS)
+    snapshot = _build()
+    for field in _EXPECTED_OPTIONAL_TEXT_FIELDS:
+        assert getattr(snapshot, field) is None
+    for field in _EXPECTED_REQUIRED_TEXT_FIELDS:
+        assert type(getattr(snapshot, field)) is str
+
+
+def test_valid_non_null_supersession_chain_is_accepted_in_every_input_order() -> None:
+    root = _build(
+        snapshot_id="chain-root",
+        trust_material_bytes=b"chain-root",
+        trust_material_fingerprint=hashlib.sha256(b"chain-root").hexdigest(),
+    )
+    middle = _successor(root, snapshot_id="chain-middle", trust_material_bytes=b"chain-middle")
+    head = _successor(middle, snapshot_id="chain-head", trust_material_bytes=b"chain-head")
+
+    assert middle.supersedes_snapshot_id == "chain-root"
+    assert middle.supersedes_key_id == root.trust_material_fingerprint
+    assert head.supersedes_snapshot_id == "chain-middle"
+    assert head.supersedes_key_id == middle.trust_material_fingerprint
+
+    for order in itertools.permutations((root, middle, head)):
+        assert module.validate_machine_time_source_trust_snapshot_collection(order) is order
+    for order in itertools.permutations((root, middle)):
+        assert module.validate_machine_time_source_trust_snapshot_collection(order) is order
+    assert module.validate_machine_time_source_trust_snapshot_collection((root,)) is not None
+
+
+def test_distinct_artifacts_sharing_one_snapshot_id_are_rejected() -> None:
+    twin_a = _build(
+        snapshot_id="twin",
+        trust_material_bytes=b"twin-a",
+        trust_material_fingerprint=hashlib.sha256(b"twin-a").hexdigest(),
+    )
+    twin_b = _build(
+        snapshot_id="twin",
+        trust_material_bytes=b"twin-b",
+        trust_material_fingerprint=hashlib.sha256(b"twin-b").hexdigest(),
+    )
+    # Distinct objects with distinct fingerprints: only snapshot_id collides, so an identity-based
+    # duplicate check would accept this pair.
+    assert twin_a is not twin_b
+    assert twin_a.snapshot_id == twin_b.snapshot_id == "twin"
+    assert twin_a.trust_material_fingerprint != twin_b.trust_material_fingerprint
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        module.validate_machine_time_source_trust_snapshot_collection((twin_a, twin_b))
+    assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.COLLECTION_CANONICALITY_VIOLATION
+
+
+def test_repr_redacts_every_populated_optional_caller_text() -> None:
+    approver_text = "governor-private-approver"
+    predecessor_text = "prior-private-snapshot"
+    predecessor_key = hashlib.sha256(b"predecessor-key").hexdigest()
+    snapshot = _build(
+        snapshot_id="private-snapshot-identifier",
+        valid_from=1,
+        valid_until=2,
+        supersedes_snapshot_id=predecessor_text,
+        supersedes_key_id=predecessor_key,
+        revocation_status="revoked",
+        approved_by=approver_text,
+        approved_at=1,
+        official_citation_ids=_UNICODE_OFFICIAL_CITATION_IDS,
+        governance_decision_ids=_UNICODE_GOVERNANCE_DECISION_IDS,
+    )
+    rendered = repr(snapshot)
+
+    assert str(snapshot) == rendered
+    assert rendered.isascii()
+    assert "\n" not in rendered and "\r" not in rendered
+    assert len(rendered) <= 512
+    for private_value in (
+        approver_text,
+        predecessor_text,
+        predecessor_key,
+        "private-snapshot-identifier",
+        "revoked",
+        "D-DEP-02",
+        "FX-DRAND-QUICKNET.v1",
+        "deterministic_supplied_proof_verification_no_network.v1",
+        "DRAND-QUICKNET-ANNOUNCEMENT",
+        "GOV-MT4-15",
+        _revocation(),
+    ):
+        assert private_value not in rendered
+    assert b"drand-group-key-bytes" not in rendered.encode()
+    # The values are retained on the artifact; only the rendering is redacted.
+    assert snapshot.approved_by == approver_text
+    assert snapshot.supersedes_snapshot_id == predecessor_text
+
+
+def test_artifact_attributes_cannot_be_set_or_deleted() -> None:
+    snapshot = _build(revocation_status="revoked")
+    digest_before = snapshot.snapshot_self_digest
+    descriptor_before = module.machine_time_source_trust_snapshot_commitment_descriptor(snapshot)
+
+    for name in module._FIELD_NAMES + ("unknown_attribute", "__class__", "__dict__", "__weakref__"):
+        with pytest.raises((AttributeError, TypeError)):
+            setattr(snapshot, name, "tampered")
+        with pytest.raises((AttributeError, TypeError)):
+            delattr(snapshot, name)
+
+    with pytest.raises(TypeError):
+        vars(snapshot)
+    assert snapshot.snapshot_self_digest == digest_before
+    assert module.machine_time_source_trust_snapshot_self_digest(snapshot) == digest_before
+    assert module.machine_time_source_trust_snapshot_commitment_descriptor(snapshot) == descriptor_before
+    assert repr(snapshot) == str(snapshot)
+
+
+# ---------------------------------------------------------------------------------------------
+# P2-S1-DIAGNOSTIC-REINIT-02 — the sealed reason is the only diagnostic authority
+# ---------------------------------------------------------------------------------------------
+
+
+def test_diagnostic_cannot_be_reinitialized_after_construction() -> None:
+    first = module.MachineTimeSourceTrustSnapshotReason.WRONG_INPUT_TYPE
+    other = module.MachineTimeSourceTrustSnapshotReason.SELF_DIGEST_MISMATCH
+    error = module.MachineTimeSourceTrustSnapshotError(first)
+    baseline_args = error.args
+    baseline_text = str(error)
+    baseline_repr = repr(error)
+
+    with pytest.raises(AttributeError):
+        error.__init__(other)
+    with pytest.raises(AttributeError):
+        module.MachineTimeSourceTrustSnapshotError.__init__(error, other)
+    with pytest.raises(AttributeError):
+        error.__init__(first)
+    with pytest.raises(AttributeError):
+        module.MachineTimeSourceTrustSnapshotError.__init__(error, "caller-controlled-secret")
+
+    assert error.reason is first
+    assert error._reason is first
+    assert error.args == baseline_args == (first.value,)
+    assert str(error) == baseline_text == first.value
+    assert repr(error) == baseline_repr
+    assert other.value not in str(error)
+    assert "caller-controlled-secret" not in str(error)
+    assert "caller-controlled-secret" not in repr(error)
+
+
+def test_base_initializers_cannot_move_visible_diagnostic_state() -> None:
+    for reason in module.MachineTimeSourceTrustSnapshotReason:
+        error = module.MachineTimeSourceTrustSnapshotError(reason)
+        # Both base initializers write BaseException's argument slot directly; visible state must be
+        # derived from the sealed reason instead, so neither call can move it.
+        RuntimeError.__init__(error, "tampered-diagnostic")
+        BaseException.__init__(error, "tampered-diagnostic", 2, 3)
+        assert error.reason is reason
+        assert error.args == (reason.value,)
+        assert str(error) == reason.value
+        assert repr(error) == f"MachineTimeSourceTrustSnapshotError({reason.value})"
+        assert "tampered-diagnostic" not in str(error)
+        assert "tampered-diagnostic" not in repr(error)
+        assert "tampered-diagnostic" not in "".join(str(item) for item in error.args)
+
+
+def test_diagnostic_note_channel_admits_no_caller_content() -> None:
+    error = module.MachineTimeSourceTrustSnapshotError(
+        module.MachineTimeSourceTrustSnapshotReason.TRUST_MATERIAL_INVALID
+    )
+    with pytest.raises(AttributeError):
+        error.add_note("caller-controlled-note")
+    with pytest.raises(AttributeError):
+        error.__notes__ = ["caller-controlled-note"]
+    with pytest.raises(AttributeError):
+        del error.__notes__
+
+    # Even a direct instance-dictionary injection stays invisible: the class data descriptor shadows
+    # it, so the value the traceback machinery reads is still absent.
+    error.__dict__["__notes__"] = ["caller-controlled-note"]
+    assert getattr(error, "__notes__", None) is None
+    assert "caller-controlled-note" not in str(error)
+    assert "caller-controlled-note" not in repr(error)
+    assert error.args == ("trust_material_invalid",)
+    assert error.reason is module.MachineTimeSourceTrustSnapshotReason.TRUST_MATERIAL_INVALID
+
+
+def test_diagnostic_class_cannot_be_reassigned_or_subclassed() -> None:
+    error = module.MachineTimeSourceTrustSnapshotError(module.MachineTimeSourceTrustSnapshotReason.SUPERSESSION_INVALID)
+    with pytest.raises(AttributeError):
+        error.__class__ = RuntimeError
+    with pytest.raises(AttributeError):
+        del error.__class__
+    with pytest.raises(AttributeError):
+        error.__dict__ = {}
+    assert type(error) is module.MachineTimeSourceTrustSnapshotError
+    assert error.reason is module.MachineTimeSourceTrustSnapshotReason.SUPERSESSION_INVALID
+    assert str(error) == "supersession_invalid"
+
+    with pytest.raises(TypeError) as captured_subclass:
+        type("ErrorChild", (module.MachineTimeSourceTrustSnapshotError,), {})
+    assert str(captured_subclass.value) == module._SEALED_ERROR_MESSAGE
+
+
+def test_diagnostic_remains_ordinary_exception_machinery() -> None:
+    # Sealing must not break normal raising, catching or reason inspection.
+    with pytest.raises(RuntimeError):
+        raise module.MachineTimeSourceTrustSnapshotError(
+            module.MachineTimeSourceTrustSnapshotReason.FINGERPRINT_MISMATCH
+        )
+    try:
+        raise module.MachineTimeSourceTrustSnapshotError(
+            module.MachineTimeSourceTrustSnapshotReason.FINGERPRINT_MISMATCH
+        )
+    except module.MachineTimeSourceTrustSnapshotError as caught:
+        assert caught.reason is module.MachineTimeSourceTrustSnapshotReason.FINGERPRINT_MISMATCH
+        assert isinstance(caught, RuntimeError)
+        assert caught.__traceback__ is not None
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError, match="fingerprint_mismatch"):
+        raise module.MachineTimeSourceTrustSnapshotError(
+            module.MachineTimeSourceTrustSnapshotReason.FINGERPRINT_MISMATCH
+        )
+
+
+# ---------------------------------------------------------------------------------------------
+# P2-S1-MUTABLE-MAPPING-TOCTOU-03 — one bounded snapshot per caller mapping
+# ---------------------------------------------------------------------------------------------
+
+
+def test_stable_mapping_snapshot_bounds_type_cardinality_and_keys() -> None:
+    reason = module.MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID
+    source = {"a": 1}
+    taken = module._stable_mapping_snapshot(source, reason)
+    assert taken == {"a": 1}
+    source["b"] = 2
+    assert taken == {"a": 1}
+
+    class DictSubclass(dict):
+        pass
+
+    for wrong in (None, [], (), "mapping", 7, DictSubclass({"a": 1})):
+        with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+            module._stable_mapping_snapshot(wrong, reason)
+        assert captured.value.reason is reason
+
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        module._stable_mapping_snapshot({7: "x"}, reason)
+    assert captured.value.reason is reason
+
+    assert len(module._stable_mapping_snapshot({f"k{index}": index for index in range(256)}, reason)) == 256
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        module._stable_mapping_snapshot({f"k{index}": index for index in range(257)}, reason)
+    assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED
+
+
+def test_caller_mapping_mutation_after_the_snapshot_is_invisible(monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = _build(revocation_status="revoked")
+    descriptor = module.machine_time_source_trust_snapshot_commitment_descriptor(snapshot)
+    linked = _linked(snapshot, revocation=True)
+    original = module._mapping_copy
+    mutated: list[int] = []
+
+    def copying(mapping: dict) -> dict:
+        taken = original(mapping)
+        # The caller mutates immediately after the snapshot: adding an unknown key and removing a
+        # required one would both be rejected if anything re-read the caller mapping afterwards.
+        mapping["unexpected_key_after_snapshot"] = b"injected"
+        mapping.pop(next(iter(taken)), None)
+        mutated.append(len(mapping))
+        return taken
+
+    monkeypatch.setattr(module, "_mapping_copy", copying)
+    rebuilt = module.reconstruct_machine_time_source_trust_snapshot(
+        descriptor,
+        trust_material_bytes=b"drand-group-key-bytes",
+        carried_snapshot_self_digest=snapshot.snapshot_self_digest,
+        linked_evidence=linked,
+    )
+    assert len(mutated) == 2
+    assert rebuilt.snapshot_self_digest == snapshot.snapshot_self_digest
+    assert "unexpected_key_after_snapshot" in descriptor
+    assert "unexpected_key_after_snapshot" in linked
+
+
+def test_mapping_mutation_during_snapshot_closes_without_raw_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _build()
+    descriptor = module.machine_time_source_trust_snapshot_commitment_descriptor(snapshot)
+
+    def exploding(mapping: dict) -> dict:
+        raise RuntimeError("dictionary changed size during iteration")
+
+    monkeypatch.setattr(module, "_mapping_copy", exploding)
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        module.reconstruct_machine_time_source_trust_snapshot(
+            descriptor, trust_material_bytes=b"drand-group-key-bytes", linked_evidence=_linked(snapshot)
+        )
+    assert type(captured.value) is module.MachineTimeSourceTrustSnapshotError
+    assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID
+
+
+def test_descriptor_and_evidence_key_set_changes_are_rejected_not_ignored() -> None:
+    snapshot = _build(revocation_status="revoked")
+    descriptor = module.machine_time_source_trust_snapshot_commitment_descriptor(snapshot)
+    linked = _linked(snapshot, revocation=True)
+
+    def reconstruct(candidate: dict, evidence: dict) -> module.MachineTimeSourceTrustSnapshot:
+        return module.reconstruct_machine_time_source_trust_snapshot(
+            candidate, trust_material_bytes=b"drand-group-key-bytes", linked_evidence=evidence
+        )
+
+    assert reconstruct(dict(descriptor), dict(linked)).snapshot_self_digest == snapshot.snapshot_self_digest
+
+    inventory = module.MachineTimeSourceTrustSnapshotReason.FIELD_INVENTORY_INVALID
+    reconstruction = module.MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID
+    added_field = dict(descriptor)
+    added_field["unknown_field"] = "x"
+    removed_field = dict(descriptor)
+    removed_field.pop("dependency_profile_id")
+    added_evidence = dict(linked)
+    added_evidence["unknown_evidence"] = b"x"
+    removed_revocation = dict(linked)
+    removed_revocation.pop("revocation_evidence_digest")
+    removed_official = dict(linked)
+    removed_official.pop("official_evidence_packet_digest")
+
+    cases = (
+        (added_field, dict(linked), inventory),
+        (removed_field, dict(linked), inventory),
+        (dict(descriptor), added_evidence, reconstruction),
+        (dict(descriptor), removed_revocation, reconstruction),
+        (dict(descriptor), removed_official, reconstruction),
+    )
+    for candidate, evidence, reason in cases:
+        with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+            reconstruct(candidate, evidence)
+        # A removed required key must never surface as a raw KeyError.
+        assert type(captured.value) is module.MachineTimeSourceTrustSnapshotError
+        assert captured.value.reason is reason
+
+
+def test_oversized_caller_mappings_are_bounded_before_inventory_comparison() -> None:
+    snapshot = _build()
+    descriptor = module.machine_time_source_trust_snapshot_commitment_descriptor(snapshot)
+    oversized_descriptor = {f"field-{index:04d}": index for index in range(257)}
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        module.reconstruct_machine_time_source_trust_snapshot(
+            oversized_descriptor,
+            trust_material_bytes=b"drand-group-key-bytes",
+            linked_evidence=_linked(snapshot),
+        )
+    assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED
+
+    oversized_evidence = {f"evidence-{index:04d}": b"x" for index in range(257)}
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        module.reconstruct_machine_time_source_trust_snapshot(
+            descriptor, trust_material_bytes=b"drand-group-key-bytes", linked_evidence=oversized_evidence
+        )
+    assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED
+
+
+def test_oversized_caller_mapping_is_rejected_before_the_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The post-snapshot bound yields the same reason, so only the absence of the copy proves that the
+    # cheap cardinality check runs first.
+    snapshot = _build()
+    evidence = _linked(snapshot)
+    oversized_descriptor = {f"field-{index:04d}": index for index in range(257)}
+
+    def explode(mapping: dict) -> dict:
+        raise AssertionError("an oversized caller mapping must be rejected before it is copied")
+
+    monkeypatch.setattr(module, "_mapping_copy", explode)
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        module.reconstruct_machine_time_source_trust_snapshot(
+            oversized_descriptor, trust_material_bytes=b"drand-group-key-bytes", linked_evidence=evidence
+        )
+    assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED
+
+
+# ---------------------------------------------------------------------------------------------
+# P2-S1-REGISTRY-INTEGRITY-04 — malformed entries and owner binding
+# ---------------------------------------------------------------------------------------------
+
+
+def _registry_dependent_surfaces() -> tuple:
+    return (
+        bool,
+        repr,
+        str,
+        lambda value: value.snapshot_id,
+        lambda value: value.snapshot_self_digest,
+        module.machine_time_source_trust_snapshot_self_digest,
+        module.machine_time_source_trust_snapshot_commitment_descriptor,
+        lambda value: value.__reduce__(),
+        lambda value: value == value,
+        copy.copy,
+        copy.deepcopy,
+        pickle.dumps,
+        lambda value: module.validate_machine_time_source_trust_snapshot_collection((value,)),
+    )
+
+
+def test_malformed_registry_entries_fail_closed_on_every_surface() -> None:
+    anchor = _build(revocation_status="revoked")
+    registry = _closure_registry(anchor)
+    key = id(anchor)
+    valid_entry = registry[key]
+    valid_ref, valid_state = valid_entry
+    donor = _build(
+        snapshot_id="donor-artifact",
+        trust_material_bytes=b"donor-artifact",
+        trust_material_fingerprint=hashlib.sha256(b"donor-artifact").hexdigest(),
+    )
+    donor_entry = registry[id(donor)]
+
+    malformed = (
+        ("empty_entry", ()),
+        ("short_entry", (valid_ref,)),
+        ("long_entry", (valid_ref, valid_state, valid_ref)),
+        ("non_tuple_entry", "not-an-entry"),
+        ("integer_entry", 7),
+        ("none_entry", None),
+        ("list_entry", [valid_ref, valid_state]),
+        ("non_reference_head", ("not-a-weakref", valid_state)),
+        ("callable_head", (lambda: anchor, valid_state)),
+        ("foreign_reference_head", (weakref.ref(donor), valid_state)),
+        ("non_tuple_state", (valid_ref, "not-a-state")),
+        ("short_state", (valid_ref, valid_state[:-1])),
+        ("long_state", (valid_ref, valid_state + (None,))),
+        ("state_without_owner", (valid_ref, valid_state[1:] + (None,))),
+        ("foreign_owner_inside_state", (valid_ref, (donor_entry[0],) + valid_state[1:])),
+        ("donor_state", (valid_ref, donor_entry[1])),
+    )
+    for label, entry in malformed:
+        registry[key] = entry
+        try:
+            for surface in _registry_dependent_surfaces():
+                with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+                    surface(anchor)
+                # No raw IndexError/TypeError may escape a malformed entry.
+                assert type(captured.value) is module.MachineTimeSourceTrustSnapshotError, label
+                assert (
+                    captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT
+                ), label
+        finally:
+            registry[key] = valid_entry
+
+    assert anchor.snapshot_id == "drand-snapshot-001"
+    assert donor.snapshot_id == "donor-artifact"
+
+
+def test_coherent_donor_state_cannot_report_another_artifacts_identity() -> None:
+    owner = _build(
+        snapshot_id="owner-artifact",
+        trust_material_bytes=b"owner-artifact",
+        trust_material_fingerprint=hashlib.sha256(b"owner-artifact").hexdigest(),
+    )
+    donor = _build(
+        snapshot_id="donor-artifact",
+        trust_material_bytes=b"donor-artifact",
+        trust_material_fingerprint=hashlib.sha256(b"donor-artifact").hexdigest(),
+    )
+    registry = _closure_registry(owner)
+    owner_key = id(owner)
+    owner_entry = registry[owner_key]
+    donor_entry = registry[id(donor)]
+
+    # The donated state is entirely valid on its own owner.
+    assert donor.snapshot_id == "donor-artifact"
+    assert donor_entry[1][0] is donor_entry[0]
+    donor_digest = donor.snapshot_self_digest
+    donor_fingerprint = donor.trust_material_fingerprint
+
+    registry[owner_key] = (owner_entry[0], donor_entry[1])
+    try:
+        for surface in _registry_dependent_surfaces():
+            with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+                surface(owner)
+            assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT
+    finally:
+        registry[owner_key] = owner_entry
+
+    assert owner.snapshot_id == "owner-artifact"
+    assert owner.trust_material_fingerprint != donor_fingerprint
+    assert owner.snapshot_self_digest != donor_digest
+    assert donor.snapshot_self_digest == donor_digest
+
+
+def test_registry_entry_replaced_during_proof_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    owner = _build()
+    registry = _closure_registry(owner)
+    owner_key = id(owner)
+    owner_entry = registry[owner_key]
+    original = module._validate_evidence_anchors
+
+    def swapping(values: dict, official: object, revocation: object) -> tuple:
+        # Replace the entry with an equal-content but distinct object while the proof is in flight.
+        registry[owner_key] = (owner_entry[0], owner_entry[1])
+        return original(values, official, revocation)
+
+    monkeypatch.setattr(module, "_validate_evidence_anchors", swapping)
+    try:
+        with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+            bool(owner)
+        assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT
+    finally:
+        monkeypatch.undo()
+        registry[owner_key] = owner_entry
+    assert bool(owner) is True
+
+
+def test_registered_state_embeds_its_owner_reference() -> None:
+    snapshot = _build()
+    registry = _closure_registry(snapshot)
+    entry = registry[id(snapshot)]
+    assert type(entry) is tuple
+    assert len(entry) == 2
+    assert type(entry[0]) is weakref.ReferenceType
+    assert entry[0]() is snapshot
+    assert type(entry[1]) is tuple
+    assert len(entry[1]) == len(module._INPUT_FIELD_NAMES) + 3
+    assert entry[1][0] is entry[0]
+    # The owner reference stays private: it never reaches public state.
+    assert entry[0] not in snapshot.__reduce__()[1][0]
+    assert len(snapshot.__reduce__()[1][0]) == len(module._FIELD_NAMES) + 2
+
+
+# ---------------------------------------------------------------------------------------------
+# P2-S1-BOUND-ORDER-05 — cheap bounds precede expensive work
+# ---------------------------------------------------------------------------------------------
+
+
+def test_text_character_bound_is_checked_before_utf8_encoding() -> None:
+    # Oversized AND unencodable: the character bound must win, which is only possible when the
+    # count is checked before the encode is attempted.
+    _raises(module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED, snapshot_id=chr(0xD800) * 4096)
+    # A short unencodable string still closes through the unicode reason (historical closure).
+    _raises(module.MachineTimeSourceTrustSnapshotReason.CANONICAL_TEXT_INVALID, snapshot_id=chr(0xD800))
+
+    assert module._check_text_bound("x" * 128) is None
+    for oversized, reason in (
+        ("x" * 129, module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED),
+        (chr(0xD800) * 129, module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED),
+        ("é" * 65, module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED),
+        (chr(0xD800), module.MachineTimeSourceTrustSnapshotReason.CANONICAL_TEXT_INVALID),
+    ):
+        with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+            module._check_text_bound(oversized)
+        assert captured.value.reason is reason
+
+
+def test_tuple_bounds_precede_canonical_scanning_and_sorting() -> None:
+    # Unsorted AND oversized item: the cheap per-item character bound must win over canonicality.
+    _raises(module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED, official_citation_ids=("Z" * 200, "A"))
+    # Cardinality is bounded before any sorting work happens.
+    oversized = tuple(f"DRAND-{index:04d}" for index in range(33))[::-1]
+    _raises(module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED, official_citation_ids=oversized)
+    # Ordinary unsorted tuples still close on canonicality, so the bound did not swallow that path.
+    _raises(
+        module.MachineTimeSourceTrustSnapshotReason.CANONICAL_TEXT_INVALID,
+        official_citation_ids=("DRAND-SPEC", "DRAND-DEVELOPER"),
+    )
+    _raises(
+        module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED,
+        governance_decision_ids=tuple(f"GOV-MT4-{index:02d}" for index in range(1, 34)),
+    )
+
+
+def test_reconstruction_bounds_caller_lists_before_any_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = _build()
+    descriptor = module.machine_time_source_trust_snapshot_commitment_descriptor(snapshot)
+    descriptor["governance_decision_ids"] = ["GOV-MT4-01"] * 33
+
+    def explode(values: dict) -> tuple:
+        raise AssertionError("validation must not run on an oversized caller list")
+
+    monkeypatch.setattr(module, "_validate_values", explode)
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        module.reconstruct_machine_time_source_trust_snapshot(
+            descriptor, trust_material_bytes=b"drand-group-key-bytes", linked_evidence=_linked(snapshot)
+        )
+    assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED
+
+
+def test_trust_material_bound_precedes_fingerprint_hashing() -> None:
+    _raises(module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED, trust_material_bytes=b"x" * 65_537)
+    _raises(
+        module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED,
+        official_evidence_packet_bytes=b"o" * 65_537,
+    )
+    _raises(
+        module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED,
+        revocation_status="revoked",
+        revocation_evidence_bytes=b"r" * 65_537,
+    )
+    # Oversized trust material is rejected even when the fingerprint field is itself malformed,
+    # proving the size bound precedes fingerprint work.
+    _raises(
+        module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED,
+        trust_material_bytes=b"x" * 65_537,
+        trust_material_fingerprint="A" * 64,
+    )
+
+
+# ---------------------------------------------------------------------------------------------
+# P2-S1-PY38-COMPAT-07 — no Python 3.10+ only runtime API
+# ---------------------------------------------------------------------------------------------
+
+
+def test_module_uses_no_python_310_only_zip_strict() -> None:
+    import ast
+
+    source = inspect.getsource(module)
+    assert "strict=True" not in source
+    assert "strict =" not in source
+    parsed = ast.parse(source)
+    zip_calls = 0
+    for node in ast.walk(parsed):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "zip":
+            zip_calls += 1
+            assert [keyword.arg for keyword in node.keywords] == []
+    assert zip_calls >= 1
+    # The module must also still parse under the declared 3.8 floor.
+    assert ast.parse(source, feature_version=(3, 8)) is not None
+
+
+def test_exact_length_pairing_helper_is_fail_closed() -> None:
+    reconstruction = module.MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID
+    inconsistent = module.MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT
+    assert module._paired_values(("a", "b"), (1, 2), reconstruction) == {"a": 1, "b": 2}
+    assert module._paired_values((), (), reconstruction) == {}
+    for names, values, reason in (
+        (("a", "b"), (1,), reconstruction),
+        (("a",), (1, 2), inconsistent),
+        ((), (1,), inconsistent),
+    ):
+        with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+            module._paired_values(names, values, reason)
+        assert captured.value.reason is reason
+
+
+def test_pairing_dependent_surfaces_retain_exact_semantics() -> None:
+    snapshot = _build(revocation_status="revoked")
+    state = snapshot.__reduce__()[1][0]
+    assert len(state) == len(module._FIELD_NAMES) + 2
+
+    for index, name in enumerate(module._FIELD_NAMES):
+        assert getattr(snapshot, name) == state[index]
+
+    descriptor = module.machine_time_source_trust_snapshot_commitment_descriptor(snapshot)
+    assert tuple(sorted(descriptor)) == tuple(sorted(module._DESCRIPTOR_FIELD_NAMES))
+    assert descriptor["snapshot_id"] == snapshot.snapshot_id
+
+    rendered = repr(snapshot)
+    assert rendered.startswith("MachineTimeSourceTrustSnapshot(")
+    assert rendered.endswith(f"self_digest={snapshot.snapshot_self_digest})")
+
+    rebuilt = module._rebuild_machine_time_source_trust_snapshot(state)
+    assert rebuilt is not snapshot
+    assert rebuilt.snapshot_self_digest == snapshot.snapshot_self_digest
+    assert rebuilt.__reduce__()[1][0] == state
+
+    assert module.validate_machine_time_source_trust_snapshot_collection((snapshot,)) == (snapshot,)
+    assert module.machine_time_source_trust_snapshot_self_digest(snapshot) == snapshot.snapshot_self_digest
