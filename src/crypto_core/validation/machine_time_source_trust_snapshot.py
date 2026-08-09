@@ -49,12 +49,12 @@ _SEALED_ERROR_MESSAGE = "MachineTimeSourceTrustSnapshotError is sealed and canno
 _DIRECT_CONSTRUCTION_MESSAGE = "use build_machine_time_source_trust_snapshot"
 _ERROR_CONSTRUCTION_MESSAGE = "reason must be an exact MachineTimeSourceTrustSnapshotReason"
 _ERROR_IMMUTABLE_MESSAGE = "MachineTimeSourceTrustSnapshotError is immutable"
-_ERROR_UNSEALED_TEXT = "machine_time_source_trust_snapshot_error_unsealed"
-# The seal itself is protected: it can never be deleted, reassigned or weakened, so the diagnostic
-# cannot be altered by first removing the marker that used to gate this protection.  ``__class__``,
-# ``__dict__`` and the note channel are guarded for the same reason: each is otherwise an ordinary
-# writable path into visible diagnostic state.
+# Ordinary attribute writes are still refused, but they are no longer what protects the diagnostic:
+# the authoritative reason lives outside the instance entirely (see ``_build_error_class``), so these
+# names carry no authority even when a raw ``object.__setattr__`` writes them into the instance
+# dictionary.  ``__class__``, ``__dict__`` and the note channel are guarded for the same reason.
 _ERROR_IMMUTABLE_ATTRS = frozenset({"_reason", "reason", "args", "_sealed", "__class__", "__dict__", "__notes__"})
+_ERROR_AUTHORITY_ENTRY_LENGTH = 2
 
 _FIELD_NAMES = (
     "snapshot_schema",
@@ -170,80 +170,126 @@ class MachineTimeSourceTrustSnapshotReason(str, Enum):
     SNAPSHOT_ARTIFACT_INCONSISTENT = "snapshot_artifact_inconsistent"
 
 
-def _sealed_error_reason(error: object) -> MachineTimeSourceTrustSnapshotReason | None:
-    """Read the sealed authority slot directly; ``None`` means the diagnostic was never constructed."""
-    try:
-        reason = object.__getattribute__(error, "_reason")
-    except AttributeError:
-        return None
-    return reason if type(reason) is MachineTimeSourceTrustSnapshotReason else None
+def _build_error_class() -> type:
+    """Build the diagnostic whose authority lives outside caller-writable instance state.
 
-
-def _sealed_error_text(error: object) -> str:
-    reason = _sealed_error_reason(error)
-    return _ERROR_UNSEALED_TEXT if reason is None else reason.value
-
-
-class MachineTimeSourceTrustSnapshotError(RuntimeError):
-    """Closed diagnostic carrying one exact reason and no caller-controlled message.
-
-    The immutable private reason slot is the only authority.  ``reason``, ``args``, ``str`` and
-    ``repr`` are derived from that slot on every read instead of trusting ``BaseException``'s mutable
-    argument slot, so a second ``__init__``, a direct ``RuntimeError.__init__`` /
-    ``BaseException.__init__`` call, an ordinary attribute write or delete, a class reassignment and
-    the note channel all leave visible diagnostic state exactly where construction sealed it.
+    ``id(error) -> (owner_ref, reason)`` is held in this closure.  No attribute wrapper reaches it:
+    ``object.__setattr__``, ``BaseException.__setattr__`` and ``object.__delattr__`` can only touch
+    the instance dictionary, and nothing reads authority from there.  The weak owner reference binds
+    each reason to one exact object identity and keeps the store bounded -- an entry is dropped as
+    soon as its diagnostic is collected, so no diagnostic is retained and the store cannot grow
+    without limit.
     """
+    authority: dict[int, tuple[object, ...]] = {}
+    unsealed_reason = MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT
 
-    __slots__ = ("_reason", "_sealed")
+    def entry_is_well_formed(entry: object) -> bool:
+        """Prove the exact entry shape before anything is indexed or dereferenced."""
+        if type(entry) is not tuple or len(entry) != _ERROR_AUTHORITY_ENTRY_LENGTH:
+            return False
+        if type(entry[0]) is not ReferenceType:
+            return False
+        return type(entry[1]) is MachineTimeSourceTrustSnapshotReason
 
-    def __init__(self, reason: MachineTimeSourceTrustSnapshotReason) -> None:
-        # Construction happens exactly once; re-initialization is refused before anything is written.
-        if _sealed_error_reason(self) is not None:
+    def seal(error: object, reason: MachineTimeSourceTrustSnapshotReason) -> None:
+        key = id(error)
+
+        def forget(dead: ReferenceType, key: int = key) -> None:
+            current = authority.get(key)
+            # A replacement entry must survive a stale callback, and a corrupted entry must not
+            # raise inside a weakref callback.
+            if entry_is_well_formed(current) and current[0] is dead:
+                del authority[key]
+
+        authority[key] = (weakref.ref(error, forget), reason)
+
+    def is_sealed(error: object) -> bool:
+        entry = authority.get(id(error))
+        return entry_is_well_formed(entry) and entry[0]() is error
+
+    def sealed_reason(error: object) -> MachineTimeSourceTrustSnapshotReason:
+        """Total and deterministic.
+
+        A hollow diagnostic -- one produced by ``BaseException.__new__`` without construction -- and
+        any diagnostic whose authority entry is missing, malformed or bound to a different object
+        reports the closed inconsistency reason instead of leaking ``AttributeError``, raw base
+        arguments or caller text.  Returning an exact inventory member also keeps this path free of
+        recursive diagnostic construction.
+        """
+        entry = authority.get(id(error))
+        if not entry_is_well_formed(entry) or entry[0]() is not error:
+            return unsealed_reason
+        return entry[1]
+
+    class MachineTimeSourceTrustSnapshotError(RuntimeError):
+        """Closed diagnostic carrying one exact reason and no caller-controlled message.
+
+        ``reason``, ``args``, ``str``, ``repr`` and ``__reduce__`` are derived from the sealed
+        authority on every read.  ``BaseException`` keeps its own argument tuple writable through its
+        raw C-level descriptor and Python offers no way to freeze it, but no supported surface of
+        this class reads that tuple, so caller text written there cannot reach a project consumer.
+        """
+
+        # ``__weakref__`` only; BaseException grants no weak reference slot of its own and the
+        # instance dictionary it does grant carries nothing authoritative.
+        __slots__ = ("__weakref__",)
+
+        def __init__(self, reason: MachineTimeSourceTrustSnapshotReason) -> None:
+            # Construction happens exactly once; re-initialization is refused before any write.
+            if is_sealed(self):
+                raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
+            if type(reason) is not MachineTimeSourceTrustSnapshotReason:
+                raise TypeError(_ERROR_CONSTRUCTION_MESSAGE)
+            RuntimeError.__init__(self, reason.value)
+            seal(self, reason)
+
+        def __init_subclass__(cls, **kwargs: object) -> None:
+            raise TypeError(_SEALED_ERROR_MESSAGE)
+
+        @property
+        def reason(self) -> MachineTimeSourceTrustSnapshotReason:
+            return sealed_reason(self)
+
+        @property
+        def args(self) -> tuple[str, ...]:
+            return (sealed_reason(self).value,)
+
+        @property
+        def __notes__(self) -> tuple[str, ...]:
+            # Refusing the read closes the instance-dictionary note channel too: this data
+            # descriptor shadows any ``__notes__`` entry written into the instance dictionary.
             raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
-        if type(reason) is not MachineTimeSourceTrustSnapshotReason:
-            raise TypeError(_ERROR_CONSTRUCTION_MESSAGE)
-        RuntimeError.__init__(self, reason.value)
-        object.__setattr__(self, "_reason", reason)
-        object.__setattr__(self, "_sealed", True)
 
-    def __init_subclass__(cls, **kwargs: object) -> None:
-        raise TypeError(_SEALED_ERROR_MESSAGE)
-
-    @property
-    def reason(self) -> MachineTimeSourceTrustSnapshotReason:
-        return self._reason
-
-    @property
-    def args(self) -> tuple[str, ...]:
-        return (_sealed_error_text(self),)
-
-    @property
-    def __notes__(self) -> tuple[str, ...]:
-        # Refusing the read closes the instance-dictionary note channel too: this data descriptor
-        # shadows any ``__notes__`` entry an attacker writes into the instance dictionary.
-        raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
-
-    def add_note(self, note: object) -> None:
-        raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
-
-    def __str__(self) -> str:
-        return _sealed_error_text(self)
-
-    def __repr__(self) -> str:
-        return f"MachineTimeSourceTrustSnapshotError({_sealed_error_text(self)})"
-
-    def __setattr__(self, name: str, value: object) -> None:
-        # Unconditional: the guard must not depend on a marker that ordinary code could remove first.
-        # The constructor populates its slots through ``object.__setattr__``, so construction is
-        # unaffected and every post-construction ordinary assignment is refused.
-        if name in _ERROR_IMMUTABLE_ATTRS:
+        def add_note(self, note: object) -> None:
             raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
-        object.__setattr__(self, name, value)
 
-    def __delattr__(self, name: str) -> None:
-        if name in _ERROR_IMMUTABLE_ATTRS:
-            raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
-        object.__delattr__(self, name)
+        def __str__(self) -> str:
+            return sealed_reason(self).value
+
+        def __repr__(self) -> str:
+            return f"MachineTimeSourceTrustSnapshotError({sealed_reason(self).value})"
+
+        def __reduce__(self) -> tuple[object, tuple[object, ...]]:
+            # Reconstruction derives from sealed authority; BaseException's default reduction would
+            # hand a mutated argument tuple straight to the constructor.
+            return (MachineTimeSourceTrustSnapshotError, (sealed_reason(self),))
+
+        def __setattr__(self, name: str, value: object) -> None:
+            if name in _ERROR_IMMUTABLE_ATTRS:
+                raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
+            object.__setattr__(self, name, value)
+
+        def __delattr__(self, name: str) -> None:
+            if name in _ERROR_IMMUTABLE_ATTRS:
+                raise AttributeError(_ERROR_IMMUTABLE_MESSAGE)
+            object.__delattr__(self, name)
+
+    MachineTimeSourceTrustSnapshotError.__qualname__ = "MachineTimeSourceTrustSnapshotError"
+    MachineTimeSourceTrustSnapshotError.__module__ = __name__
+    return MachineTimeSourceTrustSnapshotError
+
+
+MachineTimeSourceTrustSnapshotError = _build_error_class()
 
 
 def _err(reason: MachineTimeSourceTrustSnapshotReason) -> MachineTimeSourceTrustSnapshotError:
@@ -266,35 +312,71 @@ def _paired_values(
     return dict(zip(names, values))
 
 
-def _mapping_copy(mapping: dict[str, object]) -> dict[str, object]:
-    """The single copy point for caller mappings, isolated so its failure path stays auditable."""
-    return dict(mapping)
+def _iter_source(source: object) -> object:
+    """The single point where caller-controlled iteration begins.
+
+    In production this is a plain ``iter`` call; isolating it keeps bounded consumption and the
+    mutation-during-iteration failure path auditable and directly testable.
+    """
+    return iter(source)
 
 
 def _stable_mapping_snapshot(
     mapping: object,
     reason: MachineTimeSourceTrustSnapshotReason,
 ) -> dict[str, object]:
-    """Bound a caller mapping cheaply, then take exactly one snapshot.
+    """Consume at most ``_MAX_MAPPING_KEYS + 1`` caller entries into one stable bounded snapshot.
 
-    Validation and consumption both read only the returned snapshot, so a caller mapping cannot be
-    validated in one state and consumed in another.  Mutation during the snapshot fails closed
-    instead of leaking ``RuntimeError``.
+    The bound is enforced *while* consuming rather than from an earlier length observation, so a
+    caller that grows the mapping after any preliminary check cannot force a copy larger than the
+    bound: consumption stops at the first entry beyond it.  Keys are typed as they are consumed,
+    mutation during iteration fails closed instead of leaking ``RuntimeError``, and the caller
+    mapping is never read again -- validation and consumption both use only this snapshot.
     """
     if type(mapping) is not dict:
         raise _err(reason)
-    if len(mapping) > _MAX_MAPPING_KEYS:
-        raise _err(MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED)
-    try:
-        snapshot = _mapping_copy(mapping)
-    except RuntimeError:
-        raise _err(reason) from None
-    if len(snapshot) > _MAX_MAPPING_KEYS:
-        raise _err(MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED)
-    for key in snapshot:
+    snapshot: dict[str, object] = {}
+    consumed = 0
+    items = _iter_source(mapping.items())
+    while True:
+        try:
+            item = next(items)
+        except StopIteration:
+            break
+        except RuntimeError:
+            raise _err(reason) from None
+        consumed += 1
+        if consumed > _MAX_MAPPING_KEYS:
+            raise _err(MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED)
+        key, value = item
         if type(key) is not str:
             raise _err(reason)
+        snapshot[key] = value
     return snapshot
+
+
+def _bounded_list_snapshot(
+    value: list[object],
+    reason: MachineTimeSourceTrustSnapshotReason,
+) -> tuple[object, ...]:
+    """Materialize at most ``_MAX_TUPLE_LENGTH + 1`` caller elements into one bounded snapshot.
+
+    Nothing converts the caller list wholesale first, so growth during consumption cannot force an
+    oversized materialization, and the returned tuple is the sole consumed sequence.
+    """
+    items: list[object] = []
+    source = _iter_source(value)
+    while True:
+        try:
+            item = next(source)
+        except StopIteration:
+            break
+        except RuntimeError:
+            raise _err(reason) from None
+        if len(items) >= _MAX_TUPLE_LENGTH:
+            raise _err(MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED)
+        items.append(item)
+    return tuple(items)
 
 
 def _is_hex64(value: object) -> bool:
@@ -833,11 +915,9 @@ def reconstruct_machine_time_source_trust_snapshot(
         value = values[name]
         if type(value) is not list:
             raise _err(MachineTimeSourceTrustSnapshotReason.FIELD_TYPE_INVALID)
-        # Cardinality before conversion: an oversized caller list is rejected without materializing a
-        # second container of the same size.
-        if len(value) > _MAX_TUPLE_LENGTH:
-            raise _err(MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED)
-        values[name] = tuple(value)
+        # Bounded materialization: the caller list is never converted wholesale, so it cannot be
+        # grown between a length observation and the conversion.
+        values[name] = _bounded_list_snapshot(value, MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID)
     values["trust_material_bytes"] = trust_material_bytes
     ordered = {name: values[name] for name in _INPUT_FIELD_NAMES}
     validated, digest = _validate_values(ordered)

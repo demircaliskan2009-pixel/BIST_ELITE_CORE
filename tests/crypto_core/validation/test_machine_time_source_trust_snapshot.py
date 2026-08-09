@@ -745,7 +745,8 @@ def test_diagnostic_seal_is_permanent_under_ordinary_attribute_operations() -> N
         assert constructed.reason is reason
         assert constructed.args == (reason.value,)
         assert str(constructed) == reason.value
-        assert constructed._sealed is True
+        # Authority is external: the instance itself carries no reason state at all.
+        assert vars(constructed) == {}
 
     for wrong in ("wrong_input_type", 0, None, object(), module.MachineTimeSourceTrustSnapshotReason):
         with pytest.raises(TypeError):
@@ -764,10 +765,9 @@ def test_diagnostic_seal_is_permanent_under_ordinary_attribute_operations() -> N
 
     def assert_diagnostic_intact() -> None:
         assert error.reason is first
-        assert error._reason is first
         assert error.args == baseline_args
         assert str(error) == baseline_text
-        assert error._sealed is True
+        assert repr(error) == f"MachineTimeSourceTrustSnapshotError({first.value})"
 
     for name, value in (
         ("_reason", other),
@@ -820,7 +820,8 @@ def test_diagnostic_raised_by_production_is_sealed_and_reason_stays_exact() -> N
 
     assert caught.reason is module.MachineTimeSourceTrustSnapshotReason.TRUST_MATERIAL_INVALID
     assert str(caught) == "trust_material_invalid"
-    assert caught._sealed is True
+    assert caught.args == ("trust_material_invalid",)
+    assert vars(caught) == {}
 
 
 @pytest.mark.parametrize("surrogate", (chr(0xD800), chr(0xDFFF)))
@@ -1654,7 +1655,6 @@ def test_diagnostic_cannot_be_reinitialized_after_construction() -> None:
         module.MachineTimeSourceTrustSnapshotError.__init__(error, "caller-controlled-secret")
 
     assert error.reason is first
-    assert error._reason is first
     assert error.args == baseline_args == (first.value,)
     assert str(error) == baseline_text == first.value
     assert repr(error) == baseline_repr
@@ -1768,23 +1768,29 @@ def test_stable_mapping_snapshot_bounds_type_cardinality_and_keys() -> None:
     assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED
 
 
-def test_caller_mapping_mutation_after_the_snapshot_is_invisible(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_caller_mapping_mutation_after_consumption_is_invisible(monkeypatch: pytest.MonkeyPatch) -> None:
     snapshot = _build(revocation_status="revoked")
     descriptor = module.machine_time_source_trust_snapshot_commitment_descriptor(snapshot)
     linked = _linked(snapshot, revocation=True)
-    original = module._mapping_copy
+    original = module._iter_source
     mutated: list[int] = []
 
-    def copying(mapping: dict) -> dict:
-        taken = original(mapping)
-        # The caller mutates immediately after the snapshot: adding an unknown key and removing a
-        # required one would both be rejected if anything re-read the caller mapping afterwards.
-        mapping["unexpected_key_after_snapshot"] = b"injected"
-        mapping.pop(next(iter(taken)), None)
-        mutated.append(len(mapping))
-        return taken
+    dict_items_type = type({}.items())
 
-    monkeypatch.setattr(module, "_mapping_copy", copying)
+    def draining(source: object) -> object:
+        # Drain the caller view, then mutate that mapping: adding an unknown key and removing a
+        # required one would both be rejected if anything reread the caller mapping afterwards.
+        # reconstruct consumes the descriptor mapping first, then the linked-evidence mapping.
+        consumed = list(original(source))
+        if type(source) is not dict_items_type:
+            return iter(consumed)
+        caller = descriptor if not mutated else linked
+        caller["unexpected_key_after_snapshot"] = b"injected"
+        caller.pop(consumed[0][0], None)
+        mutated.append(len(caller))
+        return iter(consumed)
+
+    monkeypatch.setattr(module, "_iter_source", draining)
     rebuilt = module.reconstruct_machine_time_source_trust_snapshot(
         descriptor,
         trust_material_bytes=b"drand-group-key-bytes",
@@ -1797,22 +1803,33 @@ def test_caller_mapping_mutation_after_the_snapshot_is_invisible(monkeypatch: py
     assert "unexpected_key_after_snapshot" in linked
 
 
-def test_mapping_mutation_during_snapshot_closes_without_raw_runtime_error(
+def test_mapping_mutation_during_iteration_closes_without_raw_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    snapshot = _build()
-    descriptor = module.machine_time_source_trust_snapshot_commitment_descriptor(snapshot)
+    reason = module.MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID
 
-    def exploding(mapping: dict) -> dict:
-        raise RuntimeError("dictionary changed size during iteration")
+    # Control: growing a dict while its iterator is live is a genuine CPython RuntimeError.
+    control = {f"key-{index:03d}": index for index in range(8)}
+    with pytest.raises(RuntimeError) as raw:
+        for index, _ in enumerate(control):
+            control[f"added-{index}"] = index
+    assert type(raw.value) is RuntimeError
+    assert "changed size during iteration" in str(raw.value)
 
-    monkeypatch.setattr(module, "_mapping_copy", exploding)
+    # The same real failure inside bounded consumption closes through the module's reason instead.
+    caller = {f"key-{index:03d}": index for index in range(8)}
+    original = module._iter_source
+
+    def grow_after_iterator(source: object) -> object:
+        iterator = original(source)
+        caller["grown-during-iteration"] = 1
+        return iterator
+
+    monkeypatch.setattr(module, "_iter_source", grow_after_iterator)
     with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
-        module.reconstruct_machine_time_source_trust_snapshot(
-            descriptor, trust_material_bytes=b"drand-group-key-bytes", linked_evidence=_linked(snapshot)
-        )
+        module._stable_mapping_snapshot(caller, reason)
     assert type(captured.value) is module.MachineTimeSourceTrustSnapshotError
-    assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID
+    assert captured.value.reason is reason
 
 
 def test_descriptor_and_evidence_key_set_changes_are_rejected_not_ignored() -> None:
@@ -1875,22 +1892,277 @@ def test_oversized_caller_mappings_are_bounded_before_inventory_comparison() -> 
     assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED
 
 
-def test_oversized_caller_mapping_is_rejected_before_the_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The post-snapshot bound yields the same reason, so only the absence of the copy proves that the
-    # cheap cardinality check runs first.
-    snapshot = _build()
-    evidence = _linked(snapshot)
-    oversized_descriptor = {f"field-{index:04d}": index for index in range(257)}
+def test_mapping_consumption_is_capped_even_when_the_caller_grows_without_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bounded consumption, proven by counting what the caller was actually asked for.
 
-    def explode(mapping: dict) -> dict:
-        raise AssertionError("an oversized caller mapping must be rejected before it is copied")
+    The hostile source would yield a million entries.  A design that observes a length and then
+    copies would traverse all of them; bounded consumption must stop at _MAX_MAPPING_KEYS + 1.
+    """
+    reason = module.MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID
+    served = []
 
-    monkeypatch.setattr(module, "_mapping_copy", explode)
+    def unbounded_source(source: object) -> object:
+        def generate():
+            for index in range(100_000):
+                served.append(index)
+                yield (f"grown-{index:07d}", index)
+
+        return generate()
+
+    monkeypatch.setattr(module, "_iter_source", unbounded_source)
     with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
-        module.reconstruct_machine_time_source_trust_snapshot(
-            oversized_descriptor, trust_material_bytes=b"drand-group-key-bytes", linked_evidence=evidence
-        )
+        module._stable_mapping_snapshot({"snapshot_schema": "x"}, reason)
     assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED
+    assert len(served) == module._MAX_MAPPING_KEYS + 1 == 257
+
+
+def test_list_consumption_is_capped_even_when_the_caller_grows_without_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reason = module.MachineTimeSourceTrustSnapshotReason.RECONSTRUCTION_INPUT_INVALID
+    served = []
+
+    def unbounded_source(source: object) -> object:
+        def generate():
+            for index in range(100_000):
+                served.append(index)
+                yield f"GOV-MT4-{index:02d}"
+
+        return generate()
+
+    monkeypatch.setattr(module, "_iter_source", unbounded_source)
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        module._bounded_list_snapshot(["GOV-MT4-01"], reason)
+    assert captured.value.reason is module.MachineTimeSourceTrustSnapshotReason.RESOURCE_BOUND_EXCEEDED
+    assert len(served) == module._MAX_TUPLE_LENGTH + 1 == 33
+
+
+# ---------------------------------------------------------------------------------------------
+# P2-PR354-DIAGNOSTIC-CLEVEL-SEAL-BYPASS — authority outside caller-writable instance state
+# ---------------------------------------------------------------------------------------------
+
+
+def _diagnostic_authority() -> dict:
+    """Locate the closure-private diagnostic authority store without any module-level accessor."""
+    visited: set[int] = set()
+    candidates: list[dict] = []
+
+    def visit(value: object) -> None:
+        identity = id(value)
+        if identity in visited:
+            return
+        visited.add(identity)
+        if type(value) is dict:
+            candidates.append(value)
+            return
+        if inspect.isfunction(value) and value.__closure__ is not None:
+            for cell in value.__closure__:
+                try:
+                    visit(cell.cell_contents)
+                except ValueError:
+                    continue
+
+    visit(module.MachineTimeSourceTrustSnapshotError.__init__)
+    assert len(candidates) == 1
+    return candidates[0]
+
+
+def _diagnostic_surfaces() -> tuple:
+    return (
+        lambda error: error.reason,
+        lambda error: error.args,
+        str,
+        repr,
+        lambda error: error.__reduce__(),
+    )
+
+
+def test_diagnostic_authority_is_not_stored_in_instance_state() -> None:
+    reason = module.MachineTimeSourceTrustSnapshotReason.TRUST_MATERIAL_INVALID
+    error = module.MachineTimeSourceTrustSnapshotError(reason)
+
+    # Nothing authoritative is reachable through ordinary instance state.
+    assert vars(error) == {}
+    assert module.MachineTimeSourceTrustSnapshotError.__slots__ == ("__weakref__",)
+    authority = _diagnostic_authority()
+    assert id(error) in authority
+    entry = authority[id(error)]
+    assert type(entry) is tuple
+    assert len(entry) == module._ERROR_AUTHORITY_ENTRY_LENGTH == 2
+    assert type(entry[0]) is weakref.ReferenceType
+    assert entry[0]() is error
+    assert entry[1] is reason
+
+
+@pytest.mark.parametrize(
+    "attack",
+    (
+        "object_setattr_reason",
+        "object_setattr_private_reason",
+        "object_setattr_sealed",
+        "object_setattr_args",
+        "base_setattr_private_reason",
+        "base_setattr_args_name",
+        "object_delattr_private_reason",
+        "base_delattr_private_reason",
+        "dict_injection",
+        "dict_clear",
+        "base_args_descriptor",
+        "base_init_caller_text",
+        "runtime_init_caller_text",
+    ),
+)
+def test_raw_slot_wrappers_cannot_move_supported_diagnostic_state(attack: str) -> None:
+    first = module.MachineTimeSourceTrustSnapshotReason.WRONG_INPUT_TYPE
+    other = module.MachineTimeSourceTrustSnapshotReason.SELF_DIGEST_MISMATCH
+    error = module.MachineTimeSourceTrustSnapshotError(first)
+    caller_text = "caller-controlled-diagnostic-text"
+
+    attacks = {
+        "object_setattr_reason": lambda: object.__setattr__(error, "reason", other),
+        "object_setattr_private_reason": lambda: object.__setattr__(error, "_reason", other),
+        "object_setattr_sealed": lambda: object.__setattr__(error, "_sealed", False),
+        "object_setattr_args": lambda: object.__setattr__(error, "args", (caller_text,)),
+        "base_setattr_private_reason": lambda: BaseException.__setattr__(error, "_reason", other),
+        "base_setattr_args_name": lambda: BaseException.__setattr__(error, "_sealed", None),
+        "object_delattr_private_reason": lambda: object.__delattr__(error, "_reason"),
+        "base_delattr_private_reason": lambda: BaseException.__delattr__(error, "_reason"),
+        "dict_injection": lambda: error.__dict__.update({"_reason": other, "_sealed": False, "args": (caller_text,)}),
+        "dict_clear": lambda: error.__dict__.clear(),
+        "base_args_descriptor": lambda: BaseException.args.__set__(error, (caller_text, 2)),
+        "base_init_caller_text": lambda: BaseException.__init__(error, caller_text),
+        "runtime_init_caller_text": lambda: RuntimeError.__init__(error, caller_text),
+    }
+
+    # Some wrappers legitimately succeed (they write the instance dictionary or BaseException's own
+    # argument slot); others raise.  Either way, no supported surface may move.
+    try:
+        attacks[attack]()
+    except (AttributeError, TypeError):
+        pass
+
+    assert error.reason is first
+    assert error.args == (first.value,)
+    assert str(error) == first.value
+    assert repr(error) == f"MachineTimeSourceTrustSnapshotError({first.value})"
+    assert error.__reduce__() == (module.MachineTimeSourceTrustSnapshotError, (first,))
+    for surface in _diagnostic_surfaces():
+        assert caller_text not in str(surface(error))
+        assert other.value not in str(surface(error))
+
+    # Raising and catching after the attack still carries the sealed reason.
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        raise error
+    assert captured.value.reason is first
+    assert str(captured.value) == first.value
+
+
+def test_raw_base_argument_slot_is_the_documented_boundary() -> None:
+    reason = module.MachineTimeSourceTrustSnapshotReason.FINGERPRINT_MISMATCH
+    error = module.MachineTimeSourceTrustSnapshotError(reason)
+    caller_text = "caller-controlled-raw-args"
+    assert BaseException.args.__get__(error) == (reason.value,)
+
+    BaseException.args.__set__(error, (caller_text,))
+
+    # Raw BaseException internals are writable and Python offers no way to freeze them; that read is
+    # the explicitly documented boundary.
+    assert BaseException.args.__get__(error) == (caller_text,)
+    # Every supported project surface remains sealed, including serialization.
+    assert error.args == (reason.value,)
+    assert error.reason is reason
+    assert str(error) == reason.value
+    assert repr(error) == f"MachineTimeSourceTrustSnapshotError({reason.value})"
+    assert error.__reduce__() == (module.MachineTimeSourceTrustSnapshotError, (reason,))
+    restored = pickle.loads(pickle.dumps(error))  # noqa: S301 - local round-trip of a sealed diagnostic
+    assert type(restored) is module.MachineTimeSourceTrustSnapshotError
+    assert restored.reason is reason
+    assert restored.args == (reason.value,)
+    assert caller_text not in str(restored)
+    assert caller_text not in repr(restored)
+    assert caller_text.encode() not in pickle.dumps(error)
+
+
+def test_hollow_diagnostic_fails_closed_without_leaking_caller_content() -> None:
+    unsealed = module.MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT
+    hollow = BaseException.__new__(module.MachineTimeSourceTrustSnapshotError)
+    assert id(hollow) not in _diagnostic_authority()
+
+    # Deterministic, bounded, no raw AttributeError from any supported surface.
+    assert hollow.reason is unsealed
+    assert hollow.args == (unsealed.value,)
+    assert str(hollow) == unsealed.value
+    assert repr(hollow) == f"MachineTimeSourceTrustSnapshotError({unsealed.value})"
+    assert hollow.__reduce__() == (module.MachineTimeSourceTrustSnapshotError, (unsealed,))
+
+    caller_text = "injected-hollow-caller-text"
+    BaseException.__init__(hollow, caller_text, 2, 3)
+    BaseException.args.__set__(hollow, (caller_text,))
+    for surface in _diagnostic_surfaces():
+        assert caller_text not in str(surface(hollow))
+    assert hollow.reason is unsealed
+    assert hollow.args == (unsealed.value,)
+    assert str(hollow) == unsealed.value
+
+    with pytest.raises(module.MachineTimeSourceTrustSnapshotError) as captured:
+        raise hollow
+    assert captured.value.reason is unsealed
+    assert caller_text not in str(captured.value)
+
+    # A hollow diagnostic can still be sealed exactly once by ordinary construction.
+    hollow.__init__(module.MachineTimeSourceTrustSnapshotReason.SUPERSESSION_INVALID)
+    assert hollow.reason is module.MachineTimeSourceTrustSnapshotReason.SUPERSESSION_INVALID
+    with pytest.raises(AttributeError):
+        hollow.__init__(module.MachineTimeSourceTrustSnapshotReason.WRONG_INPUT_TYPE)
+
+
+def test_diagnostic_authority_is_owner_bound_and_lifecycle_bounded() -> None:
+    authority = _diagnostic_authority()
+    reason = module.MachineTimeSourceTrustSnapshotReason.EVIDENCE_DIGEST_INVALID
+    error = module.MachineTimeSourceTrustSnapshotError(reason)
+    key = id(error)
+    entry = authority[key]
+
+    # Donor substitution: another diagnostic's authority cannot be transplanted onto this identity.
+    donor = module.MachineTimeSourceTrustSnapshotError(module.MachineTimeSourceTrustSnapshotReason.SELF_DIGEST_MISMATCH)
+    donor_entry = authority[id(donor)]
+    authority[key] = donor_entry
+    try:
+        assert error.reason is module.MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT
+        assert error.args == ("snapshot_artifact_inconsistent",)
+    finally:
+        authority[key] = entry
+    assert error.reason is reason
+
+    # Malformed authority entries fail closed rather than raising raw IndexError/TypeError.
+    for malformed in ((), (entry[0],), (entry[0], "not-a-reason"), ("not-a-ref", reason), 7, None):
+        authority[key] = malformed
+        try:
+            assert error.reason is module.MachineTimeSourceTrustSnapshotReason.SNAPSHOT_ARTIFACT_INCONSISTENT
+            assert str(error) == "snapshot_artifact_inconsistent"
+        finally:
+            authority[key] = entry
+    assert error.reason is reason
+
+    # Lifecycle: entries are dropped as the diagnostics die, so the store cannot grow without bound.
+    del donor
+    gc.collect()
+    baseline = len(authority)
+    for _ in range(2000):
+        transient = module.MachineTimeSourceTrustSnapshotError(
+            module.MachineTimeSourceTrustSnapshotReason.WRONG_INPUT_TYPE
+        )
+        del transient
+    gc.collect()
+    assert len(authority) <= baseline
+    assert key in authority
+    assert error.reason is reason
+
+    del error
+    gc.collect()
+    assert key not in authority
 
 
 # ---------------------------------------------------------------------------------------------
