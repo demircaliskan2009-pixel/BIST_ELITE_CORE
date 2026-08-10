@@ -255,6 +255,13 @@ _DESCRIPTOR_FIELD_NAMES = (
 _FIELD_NAMES = (*_DESCRIPTOR_FIELD_NAMES, "profile_self_digest")
 _PROFILE_FALSE_FLAG_INDEXES = tuple(_DESCRIPTOR_FIELD_NAMES.index(name) for name in _PROFILE_FALSE_FLAGS)
 
+# A registry entry is exactly ``(owner_ref, state)`` and the registered state repeats that same owner
+# reference object in its first slot, so an otherwise valid state belonging to a different profile
+# cannot be transplanted beneath this profile's legitimate entry.  The retained bindings therefore
+# live at state[1:4]; the owner reference never leaves this module's private registry.
+_REGISTRY_ENTRY_LENGTH = 2
+_REGISTRY_STATE_LENGTH = 4
+
 
 class MachineTimeDrandQuicknetChainProfileReason(str, Enum):
     """Closed failure inventory; each validation surface owns its documented order."""
@@ -609,30 +616,54 @@ def _derive_from_normalized_chain_info(
 def _build_profile_class() -> tuple[type, object, object]:
     registry: dict[int, tuple[ReferenceType, tuple[object, ...]]] = {}
 
+    def entry_is_well_formed(entry: object) -> bool:
+        """Prove the exact entry shape before anything is indexed or dereferenced."""
+        if type(entry) is not tuple or len(entry) != _REGISTRY_ENTRY_LENGTH:
+            return False
+        return type(entry[0]) is ReferenceType
+
     def register_proven_profile(artifact: object, state: tuple[object, ...]) -> None:
         key = id(artifact)
 
         def forget(dead: ReferenceType, key: int = key) -> None:
             current = registry.get(key)
-            if current is not None and current[0] is dead:
+            # A replacement entry must survive a stale callback, and a corrupted entry must not
+            # raise IndexError/TypeError inside a weakref callback.
+            if entry_is_well_formed(current) and current[0] is dead:
                 del registry[key]
 
-        registry[key] = (weakref.ref(artifact, forget), state)
+        owner = weakref.ref(artifact, forget)
+        # The SAME reference object is stored in both slots; identity is what binds them.
+        registry[key] = (owner, (owner,) + state)
 
     def proven_parts(artifact: object) -> tuple[tuple[object, ...], tuple[object, ...]]:
         if type(artifact) is not MachineTimeDrandQuicknetChainProfile:
             raise _err(MachineTimeDrandQuicknetChainProfileReason.ARTIFACT_INCONSISTENT)
-        entry = registry.get(id(artifact))
-        if entry is None or entry[0]() is not artifact:
+        key = id(artifact)
+        entry = registry.get(key)
+        if not entry_is_well_formed(entry):
             raise _err(MachineTimeDrandQuicknetChainProfileReason.ARTIFACT_INCONSISTENT)
+        owner = entry[0]
         state = entry[1]
-        if type(state) is not tuple or len(state) != 3:
+        if owner() is not artifact:
             raise _err(MachineTimeDrandQuicknetChainProfileReason.ARTIFACT_INCONSISTENT)
+        # The retained state carries its own owner reference, so a coherent state donated by another
+        # profile fails closed here instead of being derived under this profile's identity.  Identity
+        # (``is``), never equality: a distinct reference to the same artifact must not satisfy it.
+        if type(state) is not tuple or len(state) != _REGISTRY_STATE_LENGTH or state[0] is not owner:
+            raise _err(MachineTimeDrandQuicknetChainProfileReason.ARTIFACT_INCONSISTENT)
+        # The owner reference is deliberately excluded from the returned bindings so it can never
+        # reach a public surface, a digest input or a serialization payload.
+        bound = (state[1], state[2], state[3])
         try:
-            values, digest = _derive_from_normalized_chain_info(state[0], state[1], state[2])
+            values, digest = _derive_from_normalized_chain_info(bound[0], bound[1], bound[2])
         except MachineTimeDrandQuicknetChainProfileError:
             raise _err(MachineTimeDrandQuicknetChainProfileReason.ARTIFACT_INCONSISTENT) from None
-        return tuple(values[name] for name in _DESCRIPTOR_FIELD_NAMES) + (digest,), state
+        # Recheck the exact entry identity before returning trusted state: nothing may have replaced
+        # the entry while it was being proven.
+        if registry.get(key) is not entry:
+            raise _err(MachineTimeDrandQuicknetChainProfileReason.ARTIFACT_INCONSISTENT)
+        return tuple(values[name] for name in _DESCRIPTOR_FIELD_NAMES) + (digest,), bound
 
     def proven_state(artifact: object) -> tuple[object, ...]:
         return proven_parts(artifact)[0]

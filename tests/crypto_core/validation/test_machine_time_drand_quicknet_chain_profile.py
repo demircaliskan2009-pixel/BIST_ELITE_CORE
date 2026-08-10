@@ -308,7 +308,8 @@ def _closure_registry(profile: object) -> dict[int, tuple[object, ...]]:
                 and type(entry[0]) is weakref.ReferenceType
                 and entry[0]() is profile
                 and type(entry[1]) is tuple
-                and len(entry[1]) == 3
+                and len(entry[1]) == 4
+                and entry[1][0] is entry[0]
             ):
                 candidates.append(value)
             return
@@ -610,7 +611,8 @@ def test_caller_chain_info_is_normalized_exactly_once_per_build(monkeypatch: pyt
     assert profile.profile_self_digest == _EXPECTED_PROFILE_SELF_DIGEST
 
     registry = _closure_registry(profile)
-    retained = registry[id(profile)][1][2]
+    # Retained state is (owner_ref, snapshot, registry, normalized_chain_info).
+    retained = registry[id(profile)][1][3]
     assert retained is not caller
     assert retained == _EXPECTED_CHAIN_INFO
     assert len(caller_reads) == 1
@@ -792,9 +794,12 @@ def test_hidden_bound_state_tampering_closes_every_public_surface() -> None:
     registry = _closure_registry(profile)
     key = id(profile)
     valid_entry = registry[key]
-    tampered_chain = dict(valid_entry[1][2])
+    tampered_chain = dict(valid_entry[1][3])
     tampered_chain["chain_hash"] = "0" * 64
-    registry[key] = (valid_entry[0], (valid_entry[1][0], valid_entry[1][1], tampered_chain))
+    registry[key] = (
+        valid_entry[0],
+        (valid_entry[1][0], valid_entry[1][1], valid_entry[1][2], tampered_chain),
+    )
     try:
         for consume in (
             lambda value: value.profile_self_digest,
@@ -822,6 +827,207 @@ def test_hidden_bound_state_tampering_closes_every_public_surface() -> None:
     finally:
         registry[key] = valid_entry
     assert profile.profile_self_digest == _EXPECTED_PROFILE_SELF_DIGEST
+
+
+def _owner_bound_consumption_surfaces() -> tuple:
+    return (
+        bool,
+        repr,
+        str,
+        lambda value: value.profile_self_digest,
+        lambda value: value.bound_snapshot_id,
+        lambda value: value.source_id,
+        module.machine_time_drand_quicknet_chain_profile_commitment_descriptor,
+        module.machine_time_drand_quicknet_chain_profile_self_digest,
+        lambda value: value.__reduce__(),
+        lambda value: value == value,
+        copy.copy,
+        copy.deepcopy,
+        pickle.dumps,
+    )
+
+
+def test_donor_retained_state_cannot_be_transplanted_beneath_another_owner() -> None:
+    """The exact Class-C finding: B's otherwise-valid retained state under A's legitimate weakref.
+
+    Before the owner binding, A derived B's values instead of failing closed.
+    """
+    profile_a = _build()
+    profile_b = _build(snapshot=_snapshot(snapshot_id="drand-quicknet-trust-donor"))
+    registry = _closure_registry(profile_a)
+    key_a = id(profile_a)
+    entry_a = registry[key_a]
+    entry_b = registry[id(profile_b)]
+
+    # Both are independently valid, and the donor genuinely carries different bound values.
+    assert profile_a.bound_snapshot_id == _SNAPSHOT_ID
+    assert profile_b.bound_snapshot_id == "drand-quicknet-trust-donor"
+    donor_digest = profile_b.profile_self_digest
+    assert donor_digest != profile_a.profile_self_digest
+    assert entry_b[1][0] is entry_b[0]
+
+    registry[key_a] = (entry_a[0], entry_b[1])
+    try:
+        for consume in _owner_bound_consumption_surfaces():
+            with pytest.raises(_ERROR) as captured:
+                consume(profile_a)
+            assert type(captured.value) is _ERROR
+            assert captured.value.reason is _REASON.ARTIFACT_INCONSISTENT
+    finally:
+        registry[key_a] = entry_a
+
+    # Both artifacts remain valid, and A never reported the donor's identity.
+    assert profile_a.bound_snapshot_id == _SNAPSHOT_ID
+    assert profile_a.profile_self_digest == _EXPECTED_PROFILE_SELF_DIGEST
+    assert profile_b.bound_snapshot_id == "drand-quicknet-trust-donor"
+    assert profile_b.profile_self_digest == donor_digest
+
+
+def test_whole_donor_entry_cannot_be_transplanted_onto_another_key() -> None:
+    """A fully self-consistent entry from B, moved onto A's key.
+
+    Both of B's slots agree with each other, so the embedded owner binding alone would accept it;
+    only the outer ``owner() is artifact`` proof rejects it.
+    """
+    profile_a = _build()
+    profile_b = _build(snapshot=_snapshot(snapshot_id="drand-quicknet-trust-entry-donor"))
+    registry = _closure_registry(profile_a)
+    key_a = id(profile_a)
+    entry_a = registry[key_a]
+    entry_b = registry[id(profile_b)]
+
+    assert entry_b[1][0] is entry_b[0]
+    assert entry_b[0]() is profile_b
+    donor_digest = profile_b.profile_self_digest
+
+    registry[key_a] = entry_b
+    try:
+        for consume in _owner_bound_consumption_surfaces():
+            with pytest.raises(_ERROR) as captured:
+                consume(profile_a)
+            assert type(captured.value) is _ERROR
+            assert captured.value.reason is _REASON.ARTIFACT_INCONSISTENT
+    finally:
+        registry[key_a] = entry_a
+
+    assert profile_a.profile_self_digest == _EXPECTED_PROFILE_SELF_DIGEST
+    assert profile_a.bound_snapshot_id == _SNAPSHOT_ID
+    assert profile_b.profile_self_digest == donor_digest
+
+
+def test_registry_entry_replaced_during_proof_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An entry swapped for an equal-content but distinct object mid-derivation must not be trusted."""
+    profile = _build()
+    registry = _closure_registry(profile)
+    key = id(profile)
+    entry = registry[key]
+    original = module._derive_from_normalized_chain_info
+
+    def swapping(snapshot: object, registry_artifact: object, normalized: object) -> tuple:
+        registry[key] = (entry[0], tuple(entry[1]))
+        return original(snapshot, registry_artifact, normalized)
+
+    monkeypatch.setattr(module, "_derive_from_normalized_chain_info", swapping)
+    try:
+        with pytest.raises(_ERROR) as captured:
+            bool(profile)
+        assert captured.value.reason is _REASON.ARTIFACT_INCONSISTENT
+    finally:
+        monkeypatch.undo()
+        registry[key] = entry
+
+    assert bool(profile) is True
+    assert profile.profile_self_digest == _EXPECTED_PROFILE_SELF_DIGEST
+
+
+def test_retained_state_owner_slot_must_be_the_exact_outer_weakref() -> None:
+    profile = _build()
+    other = _build()
+    registry = _closure_registry(profile)
+    key = id(profile)
+    valid_entry = registry[key]
+    owner, state = valid_entry
+
+    # A DISTINCT reference to the very same artifact must not satisfy the binding: identity, not
+    # equality, is what ties the retained state to its entry.
+    equal_but_distinct = weakref.ref(profile)
+    assert equal_but_distinct is not owner
+    assert equal_but_distinct() is owner()
+
+    malformed_states = (
+        ("equal_but_distinct_owner", (equal_but_distinct,) + state[1:]),
+        ("foreign_live_owner", (registry[id(other)][0],) + state[1:]),
+        ("non_weakref_owner", ("not-a-weakref",) + state[1:]),
+        ("none_owner", (None,) + state[1:]),
+        ("owner_slot_dropped", state[1:]),
+        ("short_state", state[:3]),
+        ("long_state", state + (None,)),
+        ("non_tuple_state", "not-a-state"),
+        ("empty_state", ()),
+    )
+    for label, tampered in malformed_states:
+        registry[key] = (owner, tampered)
+        try:
+            for consume in (bool, repr, lambda value: value.profile_self_digest, pickle.dumps):
+                with pytest.raises(_ERROR) as captured:
+                    consume(profile)
+                # No raw IndexError/TypeError may escape a malformed retained state.
+                assert type(captured.value) is _ERROR, label
+                assert captured.value.reason is _REASON.ARTIFACT_INCONSISTENT, label
+        finally:
+            registry[key] = valid_entry
+
+    # Malformed entry shapes fail closed the same way.
+    for label, bad_entry in (
+        ("empty_entry", ()),
+        ("short_entry", (owner,)),
+        ("long_entry", (owner, state, owner)),
+        ("non_tuple_entry", "not-an-entry"),
+        ("none_entry", None),
+        ("non_weakref_head", ("not-a-weakref", state)),
+    ):
+        registry[key] = bad_entry
+        try:
+            with pytest.raises(_ERROR) as captured:
+                bool(profile)
+            assert type(captured.value) is _ERROR, label
+            assert captured.value.reason is _REASON.ARTIFACT_INCONSISTENT, label
+        finally:
+            registry[key] = valid_entry
+
+    assert profile.profile_self_digest == _EXPECTED_PROFILE_SELF_DIGEST
+    assert bool(other) is True
+
+
+def test_serialization_and_reconstruction_produce_freshly_owner_bound_artifacts() -> None:
+    profile = _build()
+    registry = _closure_registry(profile)
+    entry = registry[id(profile)]
+    owner_ref = entry[0]
+
+    # The owner reference never reaches public state, the digest inputs or the serialized payload.
+    state = _reduce_state(profile)
+    assert owner_ref not in state
+    assert not any(type(item) is weakref.ReferenceType for item in state)
+    assert weakref.ReferenceType.__name__.encode() not in pickle.dumps(profile)
+    descriptor = module.machine_time_drand_quicknet_chain_profile_commitment_descriptor(profile)
+    assert not any(type(value) is weakref.ReferenceType for value in descriptor.values())
+
+    for rebuilt in (
+        copy.copy(profile),
+        copy.deepcopy(profile),
+        pickle.loads(pickle.dumps(profile)),  # noqa: S301 - local round-trip of a sealed artifact
+        module._rebuild_machine_time_drand_quicknet_chain_profile(state),
+    ):
+        assert rebuilt is not profile
+        assert bool(rebuilt) is True
+        assert rebuilt.profile_self_digest == profile.profile_self_digest
+        rebuilt_entry = _closure_registry(rebuilt)[id(rebuilt)]
+        # Each fresh artifact owns a NEW reference bound to itself in both slots.
+        assert rebuilt_entry[0] is not owner_ref
+        assert rebuilt_entry[0]() is rebuilt
+        assert rebuilt_entry[1][0] is rebuilt_entry[0]
+        assert len(rebuilt_entry[1]) == 4
 
 
 def test_sealing_hollow_impostor_equality_and_hash_contract() -> None:
