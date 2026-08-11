@@ -73,11 +73,17 @@ static const byte MT4_S3A_QUICKNET_DST[] = "BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_
 /*
  * QUALIFICATION SCAFFOLDING -- NOT part of the verification contract.
  *
- * Emits the compressed BLS12-381 G2 generator taken from the stable upstream constant
- * ``BLS12_381_G2``.  Lane A needs a deterministic, offline, licence-clean G2 point that is genuinely
- * in the prime-order subgroup so the G1 signature gate can be reached at all: the verification
- * sequence proves the public key first, so an official G1 low-order vector can only be pushed
- * against the signature gate behind a valid public key.
+ * Emits the compressed BLS12-381 G2 generator obtained through the stable public accessor
+ * ``blst_p2_affine_generator()``.  Lane A needs a deterministic, offline, licence-clean G2 point
+ * that is genuinely in the prime-order subgroup so the G1 signature gate can be reached at all: the
+ * verification sequence proves the public key first, so an official G1 low-order vector can only be
+ * pushed against the signature gate behind a valid public key.
+ *
+ * The accessor is used rather than addressing the exported ``BLS12_381_G2`` datum directly.  Upstream
+ * declares that datum as ``blst_p2_affine`` in bindings/blst.h but DEFINES it in src/e2.c as a
+ * projective ``POINTonE2``; only the accessor performs the reinterpretation to affine inside the
+ * library.  Going through the function keeps this scaffolding on the intended stable surface instead
+ * of depending on that struct-layout type pun.
  *
  * This helper performs NO verification, decodes nothing supplied by a caller, and carries no trust
  * decision.  It exists solely so Lane A never has to embed a point literal or borrow Lane-B
@@ -85,13 +91,19 @@ static const byte MT4_S3A_QUICKNET_DST[] = "BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_
  */
 MT4_S3A_EXPORT int mt4_s3a_qualification_g2_generator_compressed(uint8_t *out, size_t out_len)
 {
+    const blst_p2_affine *generator;
+
     if (out == NULL) {
         return MT4_S3A_NULL_INPUT;
     }
     if (out_len != MT4_S3A_PUBLIC_KEY_LEN) {
         return MT4_S3A_BAD_LENGTH;
     }
-    blst_p2_affine_compress(out, &BLS12_381_G2);
+    generator = blst_p2_affine_generator();
+    if (generator == NULL) {
+        return MT4_S3A_VERIFY_FAILED;
+    }
+    blst_p2_affine_compress(out, generator);
     return MT4_S3A_OK;
 }
 

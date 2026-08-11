@@ -68,6 +68,7 @@ _STABLE_SYMBOLS = (
     "blst_p1_affine_is_inf",
     "blst_p1_affine_compress",
     "blst_core_verify_pk_in_g2",
+    "blst_p2_affine_generator",
 )
 
 
@@ -389,17 +390,42 @@ def test_workflow_lane_b_enforces_randomness_and_scheme_consistency() -> None:
     assert "bls-unchained-g1-rfc9380" in workflow
 
 
+def test_scaffolding_generator_uses_the_stable_public_accessor() -> None:
+    """The generator must come from blst_p2_affine_generator(), not the raw exported datum.
+
+    Upstream declares BLS12_381_G2 as blst_p2_affine in bindings/blst.h but defines it in src/e2.c
+    as a projective POINTonE2; only the accessor reinterprets it to affine inside the library.
+    """
+    shim = _read(_SHIM_PATH)
+    helper = shim.split("MT4_S3A_EXPORT int mt4_s3a_qualification_g2_generator_compressed", 1)[1]
+    helper = helper.split("\n}", 1)[0]
+    assert "blst_p2_affine_generator()" in helper
+    assert "blst_p2_affine_compress(out, generator)" in helper
+    # The raw datum must not be addressed anywhere in the executable body.
+    assert "BLS12_381_G2" not in helper
+    assert "&BLS12_381_G2" not in shim
+    # Bounded NULL / exact-length gates, and a fail-closed accessor result.
+    assert "if (out == NULL)" in helper
+    assert "MT4_S3A_NULL_INPUT" in helper
+    assert "out_len != MT4_S3A_PUBLIC_KEY_LEN" in helper
+    assert "MT4_S3A_BAD_LENGTH" in helper
+    assert "if (generator == NULL)" in helper
+
+
 def test_scaffolding_generator_is_declared_non_load_bearing() -> None:
     shim = _read(_SHIM_PATH)
     probe_source = _read(_PROBE_PATH)
     assert "mt4_s3a_qualification_g2_generator_compressed" in shim
-    assert "BLS12_381_G2" in shim
     assert "QUALIFICATION SCAFFOLDING -- NOT part of the verification contract." in shim
     assert "GENERATOR_ENTRY_POINT" in probe_source
     # The scaffolding must not decode caller material or reach any verification branch.
-    helper = shim.split("mt4_s3a_qualification_g2_generator_compressed", 1)[1].split("\n}", 1)[0]
-    for forbidden in ("uncompress", "in_g1", "in_g2", "core_verify", "memcmp"):
+    helper = shim.split("MT4_S3A_EXPORT int mt4_s3a_qualification_g2_generator_compressed", 1)[1]
+    helper = helper.split("\n}", 1)[0]
+    for forbidden in ("uncompress", "in_g1", "in_g2", "core_verify", "memcmp", "hash_to"):
         assert forbidden not in helper, forbidden
+    # No new ABI status may be introduced by the scaffolding.
+    statuses = set(re.findall(r"MT4_S3A_([A-Z_]+)", helper))
+    assert statuses <= {"EXPORT", "NULL_INPUT", "BAD_LENGTH", "PUBLIC_KEY_LEN", "OK", "VERIFY_FAILED"}, statuses
 
 
 def test_workflow_admits_nothing_and_promotes_nothing() -> None:
@@ -495,6 +521,7 @@ def test_contract_tests_kill_the_intended_semantic_mutants() -> None:
         "remove G1 Lane-A infinity case": "test_workflow_lane_a_covers_the_mandatory_negative_matrix",
         "remove randomness-consistency gate": "test_workflow_lane_b_enforces_randomness_and_scheme_consistency",
         "let scaffolding perform verification": "test_scaffolding_generator_is_declared_non_load_bearing",
+        "replace stable generator accessor with the raw exported datum": "test_scaffolding_generator_uses_the_stable_public_accessor",
         "unpin the upstream negative source path": "test_workflow_executes_upstream_subgroup_vectors_rather_than_enumerating",
     }
     module_source = _read(_TEST_PATH)

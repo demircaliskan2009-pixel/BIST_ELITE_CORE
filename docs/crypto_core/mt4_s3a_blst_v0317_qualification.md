@@ -149,10 +149,17 @@ never accepted as evidence for these cases.
 
 Reaching the **signature** gates requires a public key that genuinely lies in the prime-order
 subgroup, because the public key is proven first. That point is the compressed G2 generator, emitted
-by a clearly separated qualification-scaffolding entry point built on the stable upstream constant
-`BLS12_381_G2`. The scaffolding decodes nothing from a caller, performs no verification and carries
-no trust decision; it exists so Lane A never embeds a point literal nor borrows Lane-B production
-bytes.
+by a clearly separated qualification-scaffolding entry point that obtains it through the stable
+public accessor `blst_p2_affine_generator()`.
+
+The exported datum `BLS12_381_G2` is deliberately **not** addressed directly. Upstream declares it as
+`blst_p2_affine` in `bindings/blst.h` but defines it in `src/e2.c` as a projective `POINTonE2`; only
+the accessor performs the reinterpretation to affine inside the library. Going through the function
+keeps the scaffolding on the intended stable surface instead of depending on that struct-layout type
+pun.
+
+The scaffolding decodes nothing from a caller, performs no verification and carries no trust
+decision; it exists so Lane A never embeds a point literal nor borrows Lane-B production bytes.
 
 **Non-canonical encodings are NOT wired.** No confirmed upstream non-canonical compressed-input
 vector class was established at the pinned commit, and none is invented here. The shim retains its

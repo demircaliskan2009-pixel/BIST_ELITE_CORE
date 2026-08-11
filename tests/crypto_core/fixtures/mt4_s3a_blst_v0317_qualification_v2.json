@@ -33,8 +33,16 @@
     "blst_p1_affine_in_g1",
     "blst_p1_affine_is_inf",
     "blst_p1_affine_compress",
-    "blst_core_verify_pk_in_g2"
+    "blst_core_verify_pk_in_g2",
+    "blst_p2_affine_generator"
   ],
+  "scaffolding_generator_source": {
+    "accessor": "blst_p2_affine_generator",
+    "header": "bindings/blst.h",
+    "commit": "54e6e55674722fc2797ebb4bbb71b26d881eb4b8",
+    "rejected_alternative": "BLS12_381_G2",
+    "rejected_reason": "declared as blst_p2_affine in bindings/blst.h but defined in src/e2.c as a projective POINTonE2; only the accessor reinterprets it to affine inside the library, so addressing the datum directly would depend on a struct-layout type pun rather than the intended stable surface"
+  },
   "blst_aux_used": false,
   "experimental_api_used": false,
   "upstream_negative_vector_source": {
