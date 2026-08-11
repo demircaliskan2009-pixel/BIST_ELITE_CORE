@@ -152,11 +152,13 @@ subgroup, because the public key is proven first. That point is the compressed G
 by a clearly separated qualification-scaffolding entry point that obtains it through the stable
 public accessor `blst_p2_affine_generator()`.
 
-The exported datum `BLS12_381_G2` is deliberately **not** addressed directly. Upstream declares it as
-`blst_p2_affine` in `bindings/blst.h` but defines it in `src/e2.c` as a projective `POINTonE2`; only
-the accessor performs the reinterpretation to affine inside the library. Going through the function
-keeps the scaffolding on the intended stable surface instead of depending on that struct-layout type
-pun.
+The pinned public header (`bindings/blst.h`) declares both the exported `BLS12_381_G2` datum and
+`blst_p2_affine_generator()`. This qualification deliberately selects the accessor and does not
+directly address the datum, as a project-side encapsulation choice — not because upstream forbids or
+fails to support direct use. `src/e2.c` defines the datum as a projective `POINTonE2` and implements
+the accessor as an affine cast of it; `src/aggregate.c` also casts the same datum directly in more
+than one internal path outside the accessor. So no claim is made that only the accessor performs this
+reinterpretation, or that the datum is undeclared, aux-only, experimental, or unsupported.
 
 The scaffolding decodes nothing from a caller, performs no verification and carries no trust
 decision; it exists so Lane A never embeds a point literal nor borrows Lane-B production bytes.

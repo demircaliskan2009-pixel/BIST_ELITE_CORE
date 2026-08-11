@@ -393,8 +393,11 @@ def test_workflow_lane_b_enforces_randomness_and_scheme_consistency() -> None:
 def test_scaffolding_generator_uses_the_stable_public_accessor() -> None:
     """The generator must come from blst_p2_affine_generator(), not the raw exported datum.
 
-    Upstream declares BLS12_381_G2 as blst_p2_affine in bindings/blst.h but defines it in src/e2.c
-    as a projective POINTonE2; only the accessor reinterprets it to affine inside the library.
+    This is a project-side encapsulation choice, not an upstream constraint: the pinned header
+    declares both BLS12_381_G2 and blst_p2_affine_generator(), and upstream itself casts the datum
+    directly in more than one internal path outside the accessor (src/aggregate.c). No claim is made
+    that only the accessor performs this reinterpretation, or that the datum is undeclared, aux-only,
+    experimental or unsupported.
     """
     shim = _read(_SHIM_PATH)
     helper = shim.split("MT4_S3A_EXPORT int mt4_s3a_qualification_g2_generator_compressed", 1)[1]
@@ -426,6 +429,40 @@ def test_scaffolding_generator_is_declared_non_load_bearing() -> None:
     # No new ABI status may be introduced by the scaffolding.
     statuses = set(re.findall(r"MT4_S3A_([A-Z_]+)", helper))
     assert statuses <= {"EXPORT", "NULL_INPUT", "BAD_LENGTH", "PUBLIC_KEY_LEN", "OK", "VERIFY_FAILED"}, statuses
+
+
+def test_generator_provenance_wording_is_accurate_not_overclaimed() -> None:
+    """The tracked record must not overclaim upstream facts about BLS12_381_G2.
+
+    Narrow, structured checks rather than a broad language ban: this asserts the specific false
+    claims are absent and the specific corrected facts are present, so corrective historical
+    explanations or exact-evidence quotations elsewhere are never accidentally rejected.
+    """
+    shim = _read(_SHIM_PATH)
+    doc = _read(_DOC_PATH)
+    manifest_text = _read(_MANIFEST_PATH)
+    manifest = _manifest()
+
+    forbidden_claims = (
+        "only the accessor performs the reinterpretation",
+        "only the accessor reinterprets",
+    )
+    for text, name in ((shim, "shim"), (doc, "doc")):
+        for claim in forbidden_claims:
+            assert claim not in text, (name, claim)
+
+    # The corrected record must state the two upstream facts that make the old claim false.
+    for text, name in ((shim, "shim"), (doc, "doc")):
+        assert "aggregate.c" in text, name
+        assert "outside the accessor" in text, name
+        assert "declares both" in text or "declares BOTH" in text, name
+
+    rejected_reason = manifest["scaffolding_generator_source"]["rejected_reason"]
+    assert "unsupportedness" in rejected_reason or "unsupported" in rejected_reason
+    assert "exclusivity" in rejected_reason
+    assert "undeclared" not in manifest_text.lower()
+    assert "aux-only" not in manifest_text.lower()
+    assert "experimental" not in rejected_reason.lower()
 
 
 def test_workflow_admits_nothing_and_promotes_nothing() -> None:
@@ -522,6 +559,7 @@ def test_contract_tests_kill_the_intended_semantic_mutants() -> None:
         "remove randomness-consistency gate": "test_workflow_lane_b_enforces_randomness_and_scheme_consistency",
         "let scaffolding perform verification": "test_scaffolding_generator_is_declared_non_load_bearing",
         "replace stable generator accessor with the raw exported datum": "test_scaffolding_generator_uses_the_stable_public_accessor",
+        "reintroduce the exclusivity overclaim about the accessor": "test_generator_provenance_wording_is_accurate_not_overclaimed",
         "unpin the upstream negative source path": "test_workflow_executes_upstream_subgroup_vectors_rather_than_enumerating",
     }
     module_source = _read(_TEST_PATH)

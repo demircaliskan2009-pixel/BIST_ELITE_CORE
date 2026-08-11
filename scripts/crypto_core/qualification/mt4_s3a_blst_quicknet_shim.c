@@ -79,11 +79,14 @@ static const byte MT4_S3A_QUICKNET_DST[] = "BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_
  * verification sequence proves the public key first, so an official G1 low-order vector can only be
  * pushed against the signature gate behind a valid public key.
  *
- * The accessor is used rather than addressing the exported ``BLS12_381_G2`` datum directly.  Upstream
- * declares that datum as ``blst_p2_affine`` in bindings/blst.h but DEFINES it in src/e2.c as a
- * projective ``POINTonE2``; only the accessor performs the reinterpretation to affine inside the
- * library.  Going through the function keeps this scaffolding on the intended stable surface instead
- * of depending on that struct-layout type pun.
+ * The pinned public header (bindings/blst.h) declares both the exported ``BLS12_381_G2`` datum and
+ * ``blst_p2_affine_generator()``.  This qualification deliberately selects the accessor and does not
+ * directly address the datum, as a project-side encapsulation choice -- not because upstream forbids
+ * or fails to support direct use.  src/e2.c defines the datum as a projective ``POINTonE2`` and
+ * implements the accessor as an affine cast of it; src/aggregate.c also casts the same datum directly
+ * in more than one internal path outside the accessor.  So no claim is made that only the accessor
+ * performs this reinterpretation, or that the datum is undeclared, aux-only, experimental, or
+ * unsupported.
  *
  * This helper performs NO verification, decodes nothing supplied by a caller, and carries no trust
  * decision.  It exists solely so Lane A never has to embed a point literal or borrow Lane-B
