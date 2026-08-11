@@ -1,0 +1,131 @@
+{
+  "schema": "mt4-s3a-blst-qualification.v2",
+  "architecture_id": "MT4-S3A-BLST-V0317-NARROW-C-ABI-CTYPES-V2",
+  "supersedes": "mt4-s3a-drand-quicknet-qualification.v1",
+  "supersedes_note": "V1 remains immutable historical evidence on wip/crypto-core-mt4-s3a-drand-quicknet-qualification and is neither rewritten nor re-adjudicated by this manifest.",
+  "status": "ARCHITECTURE_CANDIDATE",
+  "upstream_repository": "https://github.com/supranational/blst",
+  "upstream_release": "v0.3.17",
+  "upstream_commit": "54e6e55674722fc2797ebb4bbb71b26d881eb4b8",
+  "upstream_license": "Apache-2.0",
+  "quicknet_contract": {
+    "scheme": "bls-unchained-g1-rfc9380",
+    "curve": "BLS12-381",
+    "chain_hash": "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971",
+    "genesis_unix_seconds": 1692803367,
+    "period_seconds": 3,
+    "public_key_group": "G2",
+    "public_key_compressed_bytes": 96,
+    "signature_group": "G1",
+    "signature_compressed_bytes": 48,
+    "message_digest_bytes": 32,
+    "message_derivation": "SHA256(uint64_big_endian(round))",
+    "randomness_derivation": "SHA256(signature_bytes)",
+    "dst": "BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_",
+    "augmentation": "none"
+  },
+  "stable_c_api_symbols": [
+    "blst_p2_uncompress",
+    "blst_p2_affine_in_g2",
+    "blst_p2_affine_is_inf",
+    "blst_p2_affine_compress",
+    "blst_p1_uncompress",
+    "blst_p1_affine_in_g1",
+    "blst_p1_affine_is_inf",
+    "blst_p1_affine_compress",
+    "blst_core_verify_pk_in_g2"
+  ],
+  "blst_aux_used": false,
+  "experimental_api_used": false,
+  "abi": {
+    "entry_point": "mt4_s3a_verify_quicknet_bls",
+    "caller_selectable_dst": false,
+    "caller_selectable_curve_or_group": false,
+    "caller_selectable_hash_mode": false,
+    "caller_selectable_augmentation": false,
+    "heap_owned_across_abi": false,
+    "blst_object_crosses_abi": false,
+    "mutable_global_state": false,
+    "upstream_blst_error_exposed": false,
+    "status_codes": {
+      "0": "OK",
+      "1": "NULL_INPUT",
+      "2": "BAD_LENGTH",
+      "3": "PK_BAD_ENCODING",
+      "4": "PK_NON_CANONICAL",
+      "5": "PK_INFINITY",
+      "6": "PK_NOT_IN_GROUP",
+      "7": "SIG_BAD_ENCODING",
+      "8": "SIG_NON_CANONICAL",
+      "9": "SIG_INFINITY",
+      "10": "SIG_NOT_IN_GROUP",
+      "11": "VERIFY_FAILED"
+    }
+  },
+  "runtime_determinism": {
+    "native_library_filesystem_load_at_init": true,
+    "filesystem_required_per_verify_call": false,
+    "network_required_per_verify_call": false,
+    "clock_required_per_verify_call": false,
+    "randomness_required_per_verify_call": false,
+    "environment_required_per_verify_call": false
+  },
+  "lane_a_policy": {
+    "name": "LANE_A_COMMITTED_OFFLINE_CORPUS",
+    "committed": true,
+    "network_at_test_time": false,
+    "admissible_material": [
+      "explicit-license and hash-pinned upstream material",
+      "official blst Apache-2.0 vectors at the pinned commit",
+      "deterministic generated KATs whose derivation is fully specified",
+      "deterministic negatives derived from an admitted Lane-A licensed base"
+    ],
+    "raw_production_response_bytes_permitted": false,
+    "raw_production_permitted_only_if": "independent explicit reuse permission is proven, which has NOT been proven and is NOT assumed here",
+    "generated_bytes_may_be_labelled_upstream_vector": false
+  },
+  "lane_b_policy": {
+    "name": "LANE_B_TRANSIENT_PRODUCTION_COMPATIBILITY",
+    "committed": false,
+    "execution_context": "qualification workflow runner temporary storage and process memory only",
+    "raw_bytes_committed": false,
+    "raw_bytes_uploaded_as_artifact": false,
+    "raw_bytes_printed_to_logs": false,
+    "persistent_report_fields": [
+      "source_endpoint_identity",
+      "chain_hash",
+      "round_number",
+      "sha256_of_raw_signature",
+      "sha256_of_public_key",
+      "verification_result",
+      "pinned_verifier_architecture_identity",
+      "retrieval_timestamp_as_qualification_metadata_only"
+    ],
+    "does_not_admit": [
+      "provider_reachability",
+      "machine_time_origin",
+      "timestamp_origin",
+      "provider_operational_approval",
+      "source_quorum_countability",
+      "readiness_promotion",
+      "connector_promotion"
+    ]
+  },
+  "raw_production_bytes_committed": false,
+  "windows_execution_proof": "PENDING_CI",
+  "linux_execution_proof": "PENDING_CI",
+  "python38_execution_proof": "PENDING_CI",
+  "local_workstation_toolchain": "ABSENT_NO_NATIVE_COMPILER",
+  "protected_flags": {
+    "dependency_profile_admitted": false,
+    "fixture_corpus_admitted": false,
+    "mt4_verifier_profile_selected": false,
+    "proof_verified": false,
+    "quorum_countable": false,
+    "operational_quorum_ready": false,
+    "machine_time_origin_proven": false,
+    "timestamp_origin_proven": false,
+    "readiness_promoted": false,
+    "connector_promoted": false
+  }
+}

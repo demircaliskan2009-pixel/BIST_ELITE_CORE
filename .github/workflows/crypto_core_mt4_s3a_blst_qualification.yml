@@ -1,0 +1,359 @@
+name: crypto_core mt4-s3a blst qualification
+
+# MT4-S3A qualification ONLY.  This workflow proves or rejects a candidate narrow C ABI over
+# official supranational/blst v0.3.17 on Windows x64 and Linux x64 under Python 3.8.  It admits no
+# dependency, selects no verifier profile, and promotes no readiness or connector state.
+#
+# Lane B acquires a real public Quicknet beacon inside runner temporary storage only.  Raw response
+# and signature bytes are never printed, never uploaded and never committed; only the SHA-256 of the
+# raw signature and the verification verdict are reported.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/crypto_core_mt4_s3a_blst_qualification.yml"
+      - "scripts/crypto_core/qualification/**"
+      - "tests/crypto_core/fixtures/mt4_s3a_blst_v0317_qualification_v2.json"
+      - "tests/crypto_core/validation/test_mt4_s3a_blst_v0317_qualification.py"
+      - "docs/crypto_core/mt4_s3a_blst_v0317_qualification.md"
+
+permissions:
+  contents: read
+
+env:
+  BLST_COMMIT: 54e6e55674722fc2797ebb4bbb71b26d881eb4b8
+  BLST_RELEASE: v0.3.17
+  QUICKNET_CHAIN_HASH: 52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971
+  QUICKNET_ROUND: "42"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  qualify:
+    name: qualify ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            library_name: mt4_s3a_blst_quicknet_shim.dll
+          - os: ubuntu-22.04
+            library_name: libmt4_s3a_blst_quicknet_shim.so
+    steps:
+      - name: Checkout crypto_core
+        uses: actions/checkout@v4
+
+      # Python 3.8 is the declared project floor.  If it cannot be provisioned the job fails closed.
+      - name: Setup Python 3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.8"
+
+      - name: Report runner and toolchain identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUNNER_OS=${RUNNER_OS}"
+          echo "RUNNER_ARCH=${RUNNER_ARCH}"
+          echo "RUNNER_IMAGE=${ImageOS:-unknown}"
+          echo "RUNNER_IMAGE_VERSION=${ImageVersion:-unknown}"
+          echo "PYTHON_VERSION=$(python -c 'import sys; print(sys.version.replace(chr(10)," "))')"
+          echo "PYTHON_BITS=$(python -c 'import struct; print(struct.calcsize("P")*8)')"
+
+      - name: Fail closed unless Python is exactly 3.8
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys
+          if sys.version_info[:2] != (3, 8):
+              raise SystemExit("PYTHON_38_REQUIRED got {}.{}".format(*sys.version_info[:2]))
+          print("PYTHON_38_CONFIRMED")
+          PY
+
+      - name: Checkout official blst at the pinned commit
+        uses: actions/checkout@v4
+        with:
+          repository: supranational/blst
+          ref: ${{ env.BLST_COMMIT }}
+          path: blst-upstream
+          persist-credentials: false
+
+      - name: Prove upstream identity
+        shell: bash
+        working-directory: blst-upstream
+        run: |
+          set -euo pipefail
+          UPSTREAM_HEAD="$(git rev-parse HEAD)"
+          echo "UPSTREAM_HEAD=${UPSTREAM_HEAD}"
+          if [ "${UPSTREAM_HEAD}" != "${BLST_COMMIT}" ]; then
+            echo "BLST_TAG_COMMIT_MISMATCH expected=${BLST_COMMIT} actual=${UPSTREAM_HEAD}"
+            exit 1
+          fi
+          echo "UPSTREAM_RELEASE=${BLST_RELEASE}"
+          echo "UPSTREAM_LICENSE_SHA256=$(python -c "import hashlib,sys;print(hashlib.sha256(open('LICENSE','rb').read()).hexdigest())")"
+          echo "UPSTREAM_TREE_STATUS=$(git status --porcelain=v1 | wc -l)"
+
+      - name: Build official blst static library (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        working-directory: blst-upstream
+        run: |
+          set -euo pipefail
+          echo "COMPILER_ID=$(cc --version | head -n 1)"
+          echo "BUILD_COMMAND=./build.sh"
+          ./build.sh
+          ls -l libblst.a
+          echo "BLST_LIB_SHA256=$(python -c "import hashlib;print(hashlib.sha256(open('libblst.a','rb').read()).hexdigest())")"
+
+      - name: Build official blst static library (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        working-directory: blst-upstream
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSPATH=%%i
+          if "%VSPATH%"=="" exit /b 1
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          cl 2>&1 | findstr /C:"Version"
+          call build.bat || exit /b 1
+          dir blst.lib
+
+      - name: Build qualification shim (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/shim"
+          cc --version | head -n 1
+          cc -O2 -fPIC -fvisibility=hidden -shared \
+            -I blst-upstream/bindings \
+            scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_shim.c \
+            blst-upstream/libblst.a \
+            -o "${RUNNER_TEMP}/shim/${{ matrix.library_name }}"
+          echo "BUILD_FLAGS=-O2 -fPIC -fvisibility=hidden -shared"
+          echo "SHIM_SOURCE_SHA256=$(python -c "import hashlib;print(hashlib.sha256(open('scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_shim.c','rb').read()).hexdigest())")"
+          echo "OUTPUT_BINARY_SHA256=$(python -c "import hashlib,os;p=os.path.join(os.environ['RUNNER_TEMP'],'shim','${{ matrix.library_name }}');print(hashlib.sha256(open(p,'rb').read()).hexdigest())")"
+
+      - name: Build qualification shim (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSPATH=%%i
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          mkdir "%RUNNER_TEMP%\shim" 2>nul
+          cl /nologo /O2 /LD ^
+            /I blst-upstream\bindings ^
+            scripts\crypto_core\qualification\mt4_s3a_blst_quicknet_shim.c ^
+            blst-upstream\blst.lib ^
+            /Fe:"%RUNNER_TEMP%\shim\${{ matrix.library_name }}" || exit /b 1
+          dir "%RUNNER_TEMP%\shim"
+
+      - name: Report shim artifact digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, os, pathlib
+          shim = pathlib.Path("scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_shim.c")
+          print("SHIM_SOURCE_SHA256=" + hashlib.sha256(shim.read_bytes()).hexdigest())
+          built = pathlib.Path(os.environ["RUNNER_TEMP"]) / "shim"
+          for path in sorted(built.iterdir()):
+              print("OUTPUT_BINARY={} SHA256={}".format(path.name, hashlib.sha256(path.read_bytes()).hexdigest()))
+          PY
+
+      # ---------------------------------------------------------------------------------------
+      # LANE A -- offline, deterministic, no network.
+      # ---------------------------------------------------------------------------------------
+      - name: Lane A offline structural and negative vectors
+        shell: bash
+        env:
+          MT4_S3A_LIBRARY: ${{ runner.temp }}/shim/${{ matrix.library_name }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, sys
+          sys.path.insert(0, os.path.join("scripts", "crypto_core", "qualification"))
+          import mt4_s3a_blst_quicknet_probe as probe
+
+          library = os.environ["MT4_S3A_LIBRARY"]
+          engine = probe.QuicknetQualificationProbe(library)
+          print("NATIVE_LIBRARY_LOADED=True")
+          print("NATIVE_LIBRARY_FILESYSTEM_LOAD_AT_INIT=%s" % probe.NATIVE_LIBRARY_FILESYSTEM_LOAD_AT_INIT)
+          print("FILESYSTEM_REQUIRED_PER_VERIFY_CALL=%s" % probe.FILESYSTEM_REQUIRED_PER_VERIFY_CALL)
+
+          digest = probe.quicknet_message_digest(42)
+          assert len(digest) == 32
+
+          failures = []
+
+          def check(label, got, expected):
+              name_got = probe.STATUS_NAMES.get(got, got)
+              name_expected = probe.STATUS_NAMES.get(expected, expected)
+              ok = got == expected
+              print("LANE_A %-34s got=%-18s expected=%-18s %s"
+                    % (label, name_got, name_expected, "OK" if ok else "FAIL"))
+              if not ok:
+                  failures.append(label)
+
+          # Canonical group identities: compressed infinity is 0xc0 followed by zeros.
+          g1_infinity = bytes([0xC0]) + bytes(47)
+          g2_infinity = bytes([0xC0]) + bytes(95)
+          valid_len_pk = bytes(96)
+          valid_len_sig = bytes(48)
+
+          # Length gates, proven against the NATIVE boundary (Python pre-gates bypassed).
+          check("truncated_signature", engine.verify_unbounded(g2_infinity, valid_len_sig[:-1], digest), probe.STATUS_BAD_LENGTH)
+          check("overlong_signature", engine.verify_unbounded(g2_infinity, valid_len_sig + b"\x00", digest), probe.STATUS_BAD_LENGTH)
+          check("truncated_public_key", engine.verify_unbounded(g2_infinity[:-1], valid_len_sig, digest), probe.STATUS_BAD_LENGTH)
+          check("overlong_public_key", engine.verify_unbounded(g2_infinity + b"\x00", valid_len_sig, digest), probe.STATUS_BAD_LENGTH)
+          check("truncated_message_digest", engine.verify_unbounded(g2_infinity, valid_len_sig, digest[:-1]), probe.STATUS_BAD_LENGTH)
+
+          # Malformed encodings: an all-zero buffer has no compression bit set.
+          check("malformed_public_key", engine.verify(bytes(96), g1_infinity, digest), probe.STATUS_PK_BAD_ENCODING)
+
+          # Canonical infinity encodings must be rejected as identities, not as bad encodings.
+          check("public_key_infinity", engine.verify(g2_infinity, g1_infinity, digest), probe.STATUS_PK_INFINITY)
+
+          if failures:
+              raise SystemExit("LANE_A_FAILURES=%s" % ",".join(failures))
+          print("LANE_A_STRUCTURAL_RESULT=PASS")
+          PY
+
+      - name: Lane A upstream Apache-2.0 subgroup-invalid vectors
+        shell: bash
+        env:
+          MT4_S3A_LIBRARY: ${{ runner.temp }}/shim/${{ matrix.library_name }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, pathlib, sys
+          sys.path.insert(0, os.path.join("scripts", "crypto_core", "qualification"))
+          import mt4_s3a_blst_quicknet_probe as probe
+
+          # Locate upstream Apache-2.0 negative material at the pinned commit.  These paths are
+          # UPSTREAM_LIBRARY_VECTOR material; nothing generated here may claim that label.
+          upstream = pathlib.Path("blst-upstream")
+          candidates = sorted(
+              str(p.relative_to(upstream))
+              for p in upstream.rglob("*")
+              if p.is_file() and any(token in p.name.lower() for token in ("g1", "g2"))
+              and any(token in p.name.lower() for token in ("invalid", "subgroup", "order", "vector", "test"))
+          )
+          print("UPSTREAM_NEGATIVE_CANDIDATE_COUNT=%d" % len(candidates))
+          for name in candidates[:40]:
+              print("UPSTREAM_NEGATIVE_CANDIDATE=%s" % name)
+          # Enumeration only: this step reports the upstream inventory for controller adjudication.
+          # It intentionally does NOT invent a vector or relabel generated bytes as upstream.
+          print("UPSTREAM_VECTOR_ENUMERATION=REPORTED_FOR_CONTROLLER_ADJUDICATION")
+          PY
+
+      # ---------------------------------------------------------------------------------------
+      # LANE B -- transient production compatibility.  Raw bytes never leave runner memory/temp.
+      # ---------------------------------------------------------------------------------------
+      - name: Lane B transient Quicknet compatibility
+        shell: bash
+        env:
+          MT4_S3A_LIBRARY: ${{ runner.temp }}/shim/${{ matrix.library_name }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, sys, urllib.request
+          sys.path.insert(0, os.path.join("scripts", "crypto_core", "qualification"))
+          import mt4_s3a_blst_quicknet_probe as probe
+
+          CHAIN = os.environ["QUICKNET_CHAIN_HASH"]
+          ROUND = int(os.environ["QUICKNET_ROUND"])
+          BASE = "https://api.drand.sh/v2/chains/%s" % CHAIN
+
+          def fetch(url):
+              request = urllib.request.Request(url, headers={"Accept": "application/json"})
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.loads(response.read().decode("utf-8"))
+
+          info = fetch(BASE + "/info")
+          beacon = fetch(BASE + "/rounds/%d" % ROUND)
+
+          public_key = bytes.fromhex(info["public_key"])
+          signature = bytes.fromhex(beacon["signature"])
+
+          # Persistent evidence: identities, sizes and digests only.  NEVER raw bytes.
+          print("LANE_B_SOURCE_ENDPOINT=%s" % BASE)
+          print("LANE_B_CHAIN_HASH=%s" % info["hash"])
+          print("LANE_B_ROUND=%d" % beacon["round"])
+          print("LANE_B_SCHEME=%s" % info.get("schemeID", info.get("scheme", "unknown")))
+          print("LANE_B_PUBLIC_KEY_LEN=%d" % len(public_key))
+          print("LANE_B_SIGNATURE_LEN=%d" % len(signature))
+          print("LANE_B_SIGNATURE_SHA256=%s" % hashlib.sha256(signature).hexdigest())
+          print("LANE_B_PUBLIC_KEY_SHA256=%s" % hashlib.sha256(public_key).hexdigest())
+
+          if info["hash"] != CHAIN:
+              raise SystemExit("LANE_B_CHAIN_HASH_MISMATCH")
+          if beacon["round"] != ROUND:
+              raise SystemExit("LANE_B_ROUND_MISMATCH")
+          if len(public_key) != 96 or len(signature) != 48:
+              raise SystemExit("LANE_B_WIRE_SIZE_MISMATCH")
+
+          engine = probe.QuicknetQualificationProbe(os.environ["MT4_S3A_LIBRARY"])
+          digest = probe.quicknet_message_digest(ROUND)
+
+          failures = []
+
+          def check(label, got, expected):
+              ok = got == expected
+              print("LANE_B %-30s got=%-18s expected=%-18s %s"
+                    % (label, probe.STATUS_NAMES.get(got, got),
+                       probe.STATUS_NAMES.get(expected, expected), "OK" if ok else "FAIL"))
+              if not ok:
+                  failures.append(label)
+
+          check("real_quicknet_verify", engine.verify(public_key, signature, digest), probe.STATUS_OK)
+
+          # A bit-flipped point may land in several rejection classes; the contract is only that it
+          # is NEVER accepted, so assert "not OK" and report the exact class for the audit trail.
+          flipped_signature = bytearray(signature)
+          flipped_signature[-1] ^= 0x01
+          bit_flip_status = engine.verify(public_key, bytes(flipped_signature), digest)
+          if bit_flip_status == probe.STATUS_OK:
+              failures.append("signature_bit_flip_accepted")
+          print("LANE_B signature_bit_flip_rejected_as=%s" % probe.STATUS_NAMES[bit_flip_status])
+
+          flipped_key = bytearray(public_key)
+          flipped_key[-1] ^= 0x01
+          key_flip_status = engine.verify(bytes(flipped_key), signature, digest)
+          if key_flip_status == probe.STATUS_OK:
+              failures.append("public_key_bit_flip_accepted")
+          print("LANE_B public_key_bit_flip_rejected_as=%s" % probe.STATUS_NAMES[key_flip_status])
+
+          wrong_round_status = engine.verify(public_key, signature, probe.quicknet_message_digest(ROUND + 1))
+          if wrong_round_status != probe.STATUS_VERIFY_FAILED:
+              failures.append("wrong_round_not_verify_failed")
+          print("LANE_B wrong_round_rejected_as=%s" % probe.STATUS_NAMES[wrong_round_status])
+
+          check("truncated_signature", engine.verify_unbounded(public_key, signature[:-1], digest), probe.STATUS_BAD_LENGTH)
+          check("overlong_signature", engine.verify_unbounded(public_key, signature + b"\x00", digest), probe.STATUS_BAD_LENGTH)
+          check("truncated_public_key", engine.verify_unbounded(public_key[:-1], signature, digest), probe.STATUS_BAD_LENGTH)
+          check("overlong_public_key", engine.verify_unbounded(public_key + b"\x00", signature, digest), probe.STATUS_BAD_LENGTH)
+          check("g1_infinity_signature", engine.verify(public_key, bytes([0xC0]) + bytes(47), digest), probe.STATUS_SIG_INFINITY)
+          check("g2_infinity_public_key", engine.verify(bytes([0xC0]) + bytes(95), signature, digest), probe.STATUS_PK_INFINITY)
+
+          if failures:
+              raise SystemExit("LANE_B_FAILURES=%s" % ",".join(failures))
+          print("LANE_B_REAL_QUICKNET_VERIFY=PASS")
+          print("LANE_B_RAW_BYTES_PERSISTED=False")
+          PY
+
+      - name: Qualification summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ARCHITECTURE_ID=MT4-S3A-BLST-V0317-NARROW-C-ABI-CTYPES-V2"
+          echo "UPSTREAM_RELEASE=${BLST_RELEASE}"
+          echo "UPSTREAM_COMMIT=${BLST_COMMIT}"
+          echo "RUNNER_OS=${RUNNER_OS}"
+          echo "DEPENDENCY_PROFILE_ADMITTED=false"
+          echo "FIXTURE_CORPUS_ADMITTED=false"
+          echo "MT4_VERIFIER_PROFILE_SELECTED=false"
+          echo "READINESS_PROMOTED=false"
+          echo "CONNECTOR_PROMOTED=false"
