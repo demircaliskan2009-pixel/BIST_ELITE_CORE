@@ -71,6 +71,31 @@ static const byte MT4_S3A_QUICKNET_DST[] = "BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_
 #define MT4_S3A_QUICKNET_DST_LEN (sizeof(MT4_S3A_QUICKNET_DST) - 1)
 
 /*
+ * QUALIFICATION SCAFFOLDING -- NOT part of the verification contract.
+ *
+ * Emits the compressed BLS12-381 G2 generator taken from the stable upstream constant
+ * ``BLS12_381_G2``.  Lane A needs a deterministic, offline, licence-clean G2 point that is genuinely
+ * in the prime-order subgroup so the G1 signature gate can be reached at all: the verification
+ * sequence proves the public key first, so an official G1 low-order vector can only be pushed
+ * against the signature gate behind a valid public key.
+ *
+ * This helper performs NO verification, decodes nothing supplied by a caller, and carries no trust
+ * decision.  It exists solely so Lane A never has to embed a point literal or borrow Lane-B
+ * production bytes.
+ */
+MT4_S3A_EXPORT int mt4_s3a_qualification_g2_generator_compressed(uint8_t *out, size_t out_len)
+{
+    if (out == NULL) {
+        return MT4_S3A_NULL_INPUT;
+    }
+    if (out_len != MT4_S3A_PUBLIC_KEY_LEN) {
+        return MT4_S3A_BAD_LENGTH;
+    }
+    blst_p2_affine_compress(out, &BLS12_381_G2);
+    return MT4_S3A_OK;
+}
+
+/*
  * Verify one Quicknet beacon signature.
  *
  * Returns exactly one MT4_S3A_* status.  Inputs are read-only and are never retained.

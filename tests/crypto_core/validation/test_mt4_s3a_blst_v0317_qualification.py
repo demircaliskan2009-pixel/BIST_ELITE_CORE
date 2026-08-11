@@ -323,6 +323,85 @@ def test_workflow_never_uploads_or_persists_lane_b_raw_material() -> None:
         assert forbidden not in workflow, forbidden
 
 
+_UPSTREAM_NEGATIVE_SOURCE = "bindings/python/run.me"
+_G1_LOW_ORDER_IDS = ("p11", "p10177", "p859267")
+_G2_LOW_ORDER_IDS = ("p13", "p23", "p2713")
+
+
+def test_workflow_executes_upstream_subgroup_vectors_rather_than_enumerating() -> None:
+    """The subgroup step must EXECUTE official low-order vectors, not list candidate filenames."""
+    workflow = _read(_WORKFLOW_PATH)
+    assert _UPSTREAM_NEGATIVE_SOURCE in workflow
+    for identifier in _G1_LOW_ORDER_IDS + _G2_LOW_ORDER_IDS:
+        assert '"' + identifier + '"' in workflow, identifier
+    # The vectors must be pushed through the real shim and reach EXACT bounded statuses.
+    assert "probe.STATUS_SIG_NOT_IN_GROUP" in workflow
+    assert "probe.STATUS_PK_NOT_IN_GROUP" in workflow
+    assert "upstream_g1_low_order" in workflow
+    assert "upstream_g2_low_order" in workflow
+    assert "LANE_A_SUBGROUP_FAILURES" in workflow
+    # The enumeration-only regression must never come back.
+    assert "UPSTREAM_NEGATIVE_CANDIDATE" not in workflow
+    assert "REPORTED_FOR_CONTROLLER_ADJUDICATION" not in workflow
+    # The pinned commit is re-proven before the source file is trusted as authority.
+    assert "PINNED_UPSTREAM_SOURCE_MISMATCH" in workflow
+    assert "UPSTREAM_IDENTIFIER_NOT_UNIQUE" in workflow
+    assert "UPSTREAM_VECTOR_MALFORMED" in workflow
+
+
+def test_workflow_lane_a_covers_the_mandatory_negative_matrix() -> None:
+    workflow = _read(_WORKFLOW_PATH)
+    required = {
+        "malformed_public_key": "probe.STATUS_PK_BAD_ENCODING",
+        "malformed_signature": "probe.STATUS_SIG_BAD_ENCODING",
+        "public_key_infinity": "probe.STATUS_PK_INFINITY",
+        "signature_infinity": "probe.STATUS_SIG_INFINITY",
+        "truncated_signature": "probe.STATUS_BAD_LENGTH",
+        "overlong_signature": "probe.STATUS_BAD_LENGTH",
+        "truncated_public_key": "probe.STATUS_BAD_LENGTH",
+        "overlong_public_key": "probe.STATUS_BAD_LENGTH",
+        "truncated_message_digest": "probe.STATUS_BAD_LENGTH",
+    }
+    for label, expected_status in required.items():
+        assert label in workflow, label
+        assert expected_status in workflow, expected_status
+    # The four rejection classes must stay distinguishable, never collapsed into "not OK".
+    for status in (
+        "probe.STATUS_PK_BAD_ENCODING",
+        "probe.STATUS_SIG_BAD_ENCODING",
+        "probe.STATUS_PK_INFINITY",
+        "probe.STATUS_SIG_INFINITY",
+        "probe.STATUS_PK_NOT_IN_GROUP",
+        "probe.STATUS_SIG_NOT_IN_GROUP",
+        "probe.STATUS_BAD_LENGTH",
+    ):
+        assert status in workflow, status
+
+
+def test_workflow_lane_b_enforces_randomness_and_scheme_consistency() -> None:
+    workflow = _read(_WORKFLOW_PATH)
+    assert "LANE_B_RANDOMNESS_CONSISTENCY=PASS" in workflow
+    assert "LANE_B_RANDOMNESS_INCONSISTENT" in workflow
+    assert "LANE_B_RANDOMNESS_WRONG_LENGTH" in workflow
+    assert "LANE_B_RANDOMNESS_NOT_HEX" in workflow
+    assert "hashlib.sha256(signature).digest()" in workflow
+    assert "LANE_B_SCHEME_MISMATCH" in workflow
+    assert "bls-unchained-g1-rfc9380" in workflow
+
+
+def test_scaffolding_generator_is_declared_non_load_bearing() -> None:
+    shim = _read(_SHIM_PATH)
+    probe_source = _read(_PROBE_PATH)
+    assert "mt4_s3a_qualification_g2_generator_compressed" in shim
+    assert "BLS12_381_G2" in shim
+    assert "QUALIFICATION SCAFFOLDING -- NOT part of the verification contract." in shim
+    assert "GENERATOR_ENTRY_POINT" in probe_source
+    # The scaffolding must not decode caller material or reach any verification branch.
+    helper = shim.split("mt4_s3a_qualification_g2_generator_compressed", 1)[1].split("\n}", 1)[0]
+    for forbidden in ("uncompress", "in_g1", "in_g2", "core_verify", "memcmp"):
+        assert forbidden not in helper, forbidden
+
+
 def test_workflow_admits_nothing_and_promotes_nothing() -> None:
     workflow = _read(_WORKFLOW_PATH)
     for statement in (
@@ -408,6 +487,15 @@ def test_contract_tests_kill_the_intended_semantic_mutants() -> None:
         "drop Windows or Linux coverage": "test_workflow_covers_windows_and_linux_x64",
         "upload Lane-B raw material": "test_workflow_never_uploads_or_persists_lane_b_raw_material",
         "give the probe network capability": "test_probe_is_stdlib_only_and_imports_no_network_capability",
+        "remove G1 upstream vector execution": "test_workflow_executes_upstream_subgroup_vectors_rather_than_enumerating",
+        "remove G2 upstream vector execution": "test_workflow_executes_upstream_subgroup_vectors_rather_than_enumerating",
+        "replace exact subgroup status with generic not-OK": "test_workflow_lane_a_covers_the_mandatory_negative_matrix",
+        "restore enumeration-only subgroup step": "test_workflow_executes_upstream_subgroup_vectors_rather_than_enumerating",
+        "remove malformed G1 case": "test_workflow_lane_a_covers_the_mandatory_negative_matrix",
+        "remove G1 Lane-A infinity case": "test_workflow_lane_a_covers_the_mandatory_negative_matrix",
+        "remove randomness-consistency gate": "test_workflow_lane_b_enforces_randomness_and_scheme_consistency",
+        "let scaffolding perform verification": "test_scaffolding_generator_is_declared_non_load_bearing",
+        "unpin the upstream negative source path": "test_workflow_executes_upstream_subgroup_vectors_rather_than_enumerating",
     }
     module_source = _read(_TEST_PATH)
     for mutant, guard in mutant_to_guard.items():

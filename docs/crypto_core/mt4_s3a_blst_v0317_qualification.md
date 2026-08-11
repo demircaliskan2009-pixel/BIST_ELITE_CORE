@@ -42,7 +42,7 @@ Rejected or deferred alternatives (recorded so the choice is auditable, not for 
 
 ## Quicknet contract (fixed, never caller-selectable)
 
-```
+```text
 scheme        bls-unchained-g1-rfc9380
 curve         BLS12-381
 public key    G2, compressed, exactly 96 bytes
@@ -116,6 +116,49 @@ Lane B is evidence only. It does **not** admit provider reachability, prove mach
 origin, make a provider operationally approved, make a source quorum-countable, or promote readiness
 or connectors. One successful run also does not establish network availability as a property.
 
+## Lane A negative matrix and its two distinct claims
+
+Two things must never be conflated:
+
+- **SOURCE-PINNED VECTOR AVAILABILITY** — the official low-order vectors exist at an exact upstream
+  path and commit, and the workflow extracts them by exact identifier. This is a *provenance* claim
+  and it is true today.
+- **CI-EXECUTED QUALIFICATION RESULT** — those vectors were actually pushed through the shim on a
+  runner and produced the exact expected bounded statuses. This is an *execution* claim and it is
+  `PENDING_CI`. It is not asserted anywhere in this repository.
+
+Authority for the negative matrix is `bindings/python/run.me` at commit
+`54e6e55674722fc2797ebb4bbb71b26d881eb4b8` (Apache-2.0), which carries the low-order families
+`p11`, `p10177`, `p859267` (G1) and `p13`, `p23`, `p2713` (G2) and itself proves `in_group() == false`
+for each. Vectors are parsed at CI runtime by an identifier-anchored strict parser and are **not**
+copied into this repository. The parser fails closed if an identifier is absent, duplicated, or its
+literal is the wrong size, and it re-proves the pinned upstream commit before trusting the file.
+
+| Case | Required bounded status |
+| --- | --- |
+| official G1 low-order (`p11`, `p10177`, `p859267`) | `SIG_NOT_IN_GROUP` |
+| official G2 low-order (`p13`, `p23`, `p2713`) | `PK_NOT_IN_GROUP` |
+| malformed G1 | `SIG_BAD_ENCODING` |
+| malformed G2 | `PK_BAD_ENCODING` |
+| canonical G1 infinity | `SIG_INFINITY` |
+| canonical G2 infinity | `PK_INFINITY` |
+| truncated / overlong G1, G2, digest | `BAD_LENGTH` |
+
+`BAD_ENCODING`, `INFINITY`, `NOT_IN_GROUP` and `BAD_LENGTH` stay distinguishable; "rejected" alone is
+never accepted as evidence for these cases.
+
+Reaching the **signature** gates requires a public key that genuinely lies in the prime-order
+subgroup, because the public key is proven first. That point is the compressed G2 generator, emitted
+by a clearly separated qualification-scaffolding entry point built on the stable upstream constant
+`BLS12_381_G2`. The scaffolding decodes nothing from a caller, performs no verification and carries
+no trust decision; it exists so Lane A never embeds a point literal nor borrows Lane-B production
+bytes.
+
+**Non-canonical encodings are NOT wired.** No confirmed upstream non-canonical compressed-input
+vector class was established at the pinned commit, and none is invented here. The shim retains its
+recompress-and-compare gate and the `PK_NON_CANONICAL` / `SIG_NON_CANONICAL` statuses, which are
+covered structurally by the permanent tests only.
+
 ## Cross-platform evidence
 
 The development workstation has no native toolchain (no MSVC/GCC/Clang, no Rust, no SWIG, no Python
@@ -124,7 +167,7 @@ produced exclusively by `.github/workflows/crypto_core_mt4_s3a_blst_qualificatio
 hosted runner families (`windows-2022`, `ubuntu-22.04`) with Python 3.8 provisioned explicitly and
 the upstream commit re-proven at runtime.
 
-```
+```text
 windows_execution_proof  PENDING_CI
 linux_execution_proof    PENDING_CI
 python38_execution_proof PENDING_CI
@@ -145,7 +188,7 @@ GitHub artifact attestation should be treated as **OPTIONAL** at qualification s
 
 ## Files in this slice
 
-```
+```text
 .github/workflows/crypto_core_mt4_s3a_blst_qualification.yml
 scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_shim.c
 scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_probe.py

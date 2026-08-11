@@ -22,6 +22,8 @@ NATIVE_LIBRARY_FILESYSTEM_LOAD_AT_INIT = True
 FILESYSTEM_REQUIRED_PER_VERIFY_CALL = False
 
 ENTRY_POINT = "mt4_s3a_verify_quicknet_bls"
+# Qualification scaffolding only; carries no verification decision.
+GENERATOR_ENTRY_POINT = "mt4_s3a_qualification_g2_generator_compressed"
 
 PUBLIC_KEY_LEN = 96
 SIGNATURE_LEN = 48
@@ -108,8 +110,23 @@ class QuicknetQualificationProbe:
             ctypes.c_size_t,
         )
         entry.restype = ctypes.c_int
+        try:
+            generator = getattr(library, GENERATOR_ENTRY_POINT)
+        except AttributeError as error:
+            raise QualificationProbeError("qualification scaffolding entry point is missing") from error
+        generator.argtypes = (ctypes.c_char_p, ctypes.c_size_t)
+        generator.restype = ctypes.c_int
         self._library = library
         self._entry = entry
+        self._generator = generator
+
+    def g2_generator_compressed(self) -> bytes:
+        """Return the compressed G2 generator; qualification scaffolding, never a trust decision."""
+        buffer = ctypes.create_string_buffer(PUBLIC_KEY_LEN)
+        status = self._generator(buffer, PUBLIC_KEY_LEN)
+        if status != STATUS_OK:
+            raise QualificationProbeError("scaffolding generator failed with status " + str(status))
+        return bytes(buffer.raw[:PUBLIC_KEY_LEN])
 
     def verify(self, public_key: object, signature: object, message_digest: object) -> int:
         """Return one bounded MT4_S3A status code."""
