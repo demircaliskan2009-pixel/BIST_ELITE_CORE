@@ -170,15 +170,32 @@ covered structurally by the permanent tests only.
 
 ## Drand v2 contract and the Quicknet root of trust
 
-Lane B talks to the **current Drand v2** API and uses v2-native field names only:
+Lane B talks to the **current Drand v2** API and uses v2-native field names only. Two separate
+contracts apply here:
 
 ```text
-identity  /v2/chains/<chain_hash>/info   -> public_key, period, genesis_time, genesis_seed, scheme
-round     /v2/chains/<chain_hash>/rounds/<round> -> round, signature
+generic /v2/chains/<chain_hash>/info schema
+  required: public_key, period, genesis_time, scheme
+  optional: genesis_seed, chain_hash, beacon_id
+
+this Quicknet qualification's root-binding policy
+  required: public_key, period, genesis_time, genesis_seed, scheme
+
+round /v2/chains/<chain_hash>/rounds/<round>
+  required: round, signature
 ```
 
-The legacy v1 names `hash`, `groupHash`, `schemeID` and `metadata.beaconID` are **not** accepted as
-aliases. A v1-shaped response cannot satisfy this v2 parser.
+The official generic Drand v2 schema makes `genesis_seed` optional. This qualification nevertheless
+fails closed when Quicknet `genesis_seed` is missing or empty, because canonical root recomputation
+requires it. `chain_hash` is schema-optional and is only a self-reported cross-check, never the
+trust root. `beacon_id` is also schema-optional; this qualification independently pins Quicknet's
+non-default `quicknet` beacon ID for canonical-root recomputation and cross-checks a returned value
+if present.
+
+The legacy names `hash`, `groupHash`, `schemeID` and `metadata.beaconID` are deliberately rejected
+by this qualification's project-side strict v2 parser. That is a project policy, not an assertion
+about upstream parser capability: upstream Drand's `Info.UnmarshalJSON` retains compatibility for
+legacy `schemeID`, `groupHash`, and `metadata.beaconID` aliases.
 
 **Why renaming the field was not enough.** The relay that reports the chain identity is the same
 relay that supplies the public key used for BLS verification. Trusting `chain_hash` because that
@@ -195,7 +212,14 @@ sha256( uint32_be(period)
       == 52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971
 ```
 
-Quicknet's beacon id `quicknet` is non-default, so it participates in the hash. HTTPS transport and
+The canonical-hash provenance is [`drand/drand`](https://github.com/drand/drand), commit
+[`2363f3b9ba5fd6f14e0b84a096b248479790d75d`](https://github.com/drand/drand/blob/2363f3b9ba5fd6f14e0b84a096b248479790d75d/common/chain/info.go),
+`common/chain/info.go`, `Info.Hash`. Its algorithm is `sha256(uint32_be(period_seconds) ||
+int64_be(genesis_time) || public_key_marshaled_bytes || genesis_seed_bytes ||
+non_default_beacon_id_bytes)`. This pinned source is provenance evidence for this qualification
+contract only; it is not a dependency admission, provider approval, or future API guarantee.
+
+Quicknet's beacon ID `quicknet` is non-default, so it participates in the hash. HTTPS transport and
 endpoint path routing are **not** treated as the cryptographic root. Only after this binding passes
 is the fetched key handed to the shim.
 

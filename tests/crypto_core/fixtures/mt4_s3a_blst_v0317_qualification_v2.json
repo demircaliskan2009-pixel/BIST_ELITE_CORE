@@ -31,10 +31,19 @@
     "round_path": "/v2/chains/<chain_hash>/rounds/<round>",
     "v2_chain_hash_field": "chain_hash",
     "v2_scheme_field": "scheme",
-    "v2_required_info_fields": ["public_key", "period", "genesis_time", "genesis_seed", "scheme"],
+    "v2_schema_required_info_fields": ["public_key", "period", "genesis_time", "scheme"],
+    "v2_schema_optional_info_fields": ["genesis_seed", "chain_hash", "beacon_id"],
+    "quicknet_qualification_required_info_fields": ["public_key", "period", "genesis_time", "genesis_seed", "scheme"],
     "v2_required_round_fields": ["round", "signature"],
     "legacy_v1_aliases_accepted": false,
     "legacy_v1_alias_names_rejected": ["hash", "groupHash", "schemeID", "metadata.beaconID"],
+    "canonical_chain_hash_authority": {
+      "repository": "https://github.com/drand/drand",
+      "commit": "2363f3b9ba5fd6f14e0b84a096b248479790d75d",
+      "path": "common/chain/info.go",
+      "symbol": "Info.Hash",
+      "algorithm": "sha256(uint32_be(period_seconds) || int64_be(genesis_time) || public_key_marshaled_bytes || genesis_seed_bytes || non_default_beacon_id_bytes)"
+    },
     "v2_round_randomness_field_required": false,
     "optional_extra_randomness_consistency": "if present, strict 32-byte hex must equal SHA256(signature_bytes); absence is normal for current v2",
     "unchained_previous_signature_policy": "absent or empty required; a non-empty previous_signature fails closed for pinned unchained Quicknet"

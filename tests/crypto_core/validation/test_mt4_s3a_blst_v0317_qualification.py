@@ -30,6 +30,10 @@ _UPSTREAM_COMMIT = "54e6e55674722fc2797ebb4bbb71b26d881eb4b8"
 _UPSTREAM_RELEASE = "v0.3.17"
 _QUICKNET_DST = "BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_"
 _QUICKNET_CHAIN_HASH = "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971"
+_DRAND_CHAIN_HASH_REPOSITORY = "https://github.com/drand/drand"
+_DRAND_CHAIN_HASH_COMMIT = "2363f3b9ba5fd6f14e0b84a096b248479790d75d"
+_DRAND_CHAIN_HASH_PATH = "common/chain/info.go"
+_DRAND_CHAIN_HASH_SYMBOL = "Info.Hash"
 
 _PROTECTED_FLAGS = (
     "dependency_profile_admitted",
@@ -541,6 +545,12 @@ def test_workflow_binds_the_public_key_to_the_pinned_quicknet_root() -> None:
     assert "LANE_B_CHAIN_ROOT_BINDING=PASS" in workflow
     assert "LANE_B_CHAIN_HASH_RECOMPUTED" in workflow
 
+    # The generic v2 schema may make genesis_seed optional, but this Quicknet root binding may
+    # not proceed with it absent or empty.
+    assert 'genesis_seed = exact_hex(info, "genesis_seed", "LANE_B_GENESIS_SEED_INVALID")' in workflow
+    assert "if not genesis_seed:" in workflow
+    assert 'raise SystemExit("LANE_B_GENESIS_SEED_INVALID")' in workflow
+
     # Ordering: the root binding must precede any BLS verification of the fetched key.
     binding_at = workflow.index("LANE_B_CANONICAL_CHAIN_HASH_MISMATCH")
     verify_at = workflow.index('check("real_quicknet_verify"')
@@ -598,6 +608,60 @@ def test_manifest_records_v2_contract_root_binding_and_exact_head() -> None:
 
     # The corrected randomness record must not imply v2 returns or requires it.
     assert "randomness_derivation" not in manifest["quicknet_contract"]
+
+
+def test_manifest_distinguishes_drand_v2_schema_from_quicknet_root_policy() -> None:
+    api = _manifest()["drand_api_contract"]
+
+    generic_required = tuple(api["v2_schema_required_info_fields"])
+    generic_optional = tuple(api["v2_schema_optional_info_fields"])
+    quicknet_required = tuple(api["quicknet_qualification_required_info_fields"])
+    assert generic_required == ("public_key", "period", "genesis_time", "scheme")
+    assert generic_optional == ("genesis_seed", "chain_hash", "beacon_id")
+    assert set(quicknet_required) == {
+        "public_key",
+        "period",
+        "genesis_time",
+        "genesis_seed",
+        "scheme",
+    }
+    assert "genesis_seed" not in generic_required
+    assert "v2_required_info_fields" not in api
+
+    authority = api["canonical_chain_hash_authority"]
+    assert authority["repository"] == _DRAND_CHAIN_HASH_REPOSITORY
+    assert authority["commit"] == _DRAND_CHAIN_HASH_COMMIT
+    assert authority["path"] == _DRAND_CHAIN_HASH_PATH
+    assert authority["symbol"] == _DRAND_CHAIN_HASH_SYMBOL
+    algorithm = authority["algorithm"]
+    components = (
+        "period_seconds",
+        "genesis_time",
+        "public_key_marshaled_bytes",
+        "genesis_seed_bytes",
+        "non_default_beacon_id_bytes",
+    )
+    positions = [algorithm.index(component) for component in components]
+    assert positions == sorted(positions)
+
+
+def test_document_distinguishes_schema_requiredness_from_project_policy() -> None:
+    doc = _read(_DOC_PATH)
+    for marker in (
+        "generic /v2/chains/<chain_hash>/info schema",
+        "this Quicknet qualification's root-binding policy",
+        "The official generic Drand v2 schema makes `genesis_seed` optional.",
+        "fails closed when Quicknet `genesis_seed` is missing or empty",
+        "`chain_hash` is schema-optional and is only a self-reported cross-check",
+        "`beacon_id` is also schema-optional",
+        _DRAND_CHAIN_HASH_REPOSITORY,
+        _DRAND_CHAIN_HASH_COMMIT,
+        _DRAND_CHAIN_HASH_PATH,
+        _DRAND_CHAIN_HASH_SYMBOL,
+        "upstream Drand's `Info.UnmarshalJSON` retains compatibility",
+        "That is a project policy, not an assertion\nabout upstream parser capability",
+    ):
+        assert marker in doc, marker
 
 
 def test_workflow_admits_nothing_and_promotes_nothing() -> None:
@@ -702,6 +766,8 @@ def test_contract_tests_kill_the_intended_semantic_mutants() -> None:
         "remove the exact scheme check": "test_workflow_uses_only_current_drand_v2_fields",
         "remove canonical chain-hash recomputation": "test_workflow_binds_the_public_key_to_the_pinned_quicknet_root",
         "trust the self-reported chain_hash only": "test_workflow_binds_the_public_key_to_the_pinned_quicknet_root",
+        "misstate generic v2 genesis_seed requiredness": "test_manifest_distinguishes_drand_v2_schema_from_quicknet_root_policy",
+        "omit canonical Drand hash provenance": "test_manifest_distinguishes_drand_v2_schema_from_quicknet_root_policy",
         "drop public key from the canonical hash": "test_workflow_binds_the_public_key_to_the_pinned_quicknet_root",
         "drop genesis seed from the canonical hash": "test_workflow_binds_the_public_key_to_the_pinned_quicknet_root",
         "drop the quicknet beacon id from the canonical hash": "test_workflow_binds_the_public_key_to_the_pinned_quicknet_root",
