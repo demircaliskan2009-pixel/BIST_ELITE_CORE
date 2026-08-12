@@ -168,6 +168,73 @@ vector class was established at the pinned commit, and none is invented here. Th
 recompress-and-compare gate and the `PK_NON_CANONICAL` / `SIG_NON_CANONICAL` statuses, which are
 covered structurally by the permanent tests only.
 
+## Drand v2 contract and the Quicknet root of trust
+
+Lane B talks to the **current Drand v2** API and uses v2-native field names only:
+
+```text
+identity  /v2/chains/<chain_hash>/info   -> public_key, period, genesis_time, genesis_seed, scheme
+round     /v2/chains/<chain_hash>/rounds/<round> -> round, signature
+```
+
+The legacy v1 names `hash`, `groupHash`, `schemeID` and `metadata.beaconID` are **not** accepted as
+aliases. A v1-shaped response cannot satisfy this v2 parser.
+
+**Why renaming the field was not enough.** The relay that reports the chain identity is the same
+relay that supplies the public key used for BLS verification. Trusting `chain_hash` because that
+response said so is circular: an attacker controlling the response could supply a matching pair.
+Lane B therefore recomputes the canonical Drand chain-info hash over the returned material and
+requires equality with the project-pinned Quicknet root **before** the key may be used:
+
+```text
+sha256( uint32_be(period)
+      || int64_be(genesis_time)
+      || public_key_bytes
+      || genesis_seed_bytes
+      || beacon_id_bytes_if_non_default )
+      == 52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971
+```
+
+Quicknet's beacon id `quicknet` is non-default, so it participates in the hash. HTTPS transport and
+endpoint path routing are **not** treated as the cryptographic root. Only after this binding passes
+is the fetched key handed to the shim.
+
+Current v2 round data does **not** define a required `randomness` field, and the official Quicknet
+round-42 response carries only `round` and `signature`. This qualification therefore does not require
+it. If an extra `randomness` value is present it is checked defensively (strict 32-byte hex equal to
+`SHA256(signature)`) and a mismatch fails closed — a project-side consistency rule, not a v2 schema
+requirement. Quicknet is unchained, so a non-empty `previous_signature` fails closed.
+
+## Exact-head qualification provenance
+
+Pull-request runs check out `github.event.pull_request.head.sha` explicitly, not GitHub's synthetic
+`refs/pull/<n>/merge` commit, and the job asserts at runtime that `git rev-parse HEAD` equals that
+expected SHA before any build or qualification step runs. Qualification evidence must describe code
+that actually exists on the branch under audit. Mismatch fails closed with
+`QUALIFICATION_SOURCE_HEAD_MISMATCH`; success emits `QUALIFICATION_EXACT_HEAD=PASS`.
+
+## Pre-repair PR run — what it did and did not establish
+
+The first PR run of this workflow produced, on **both** `windows-2022` and `ubuntu-22.04`:
+
+```text
+normal ci                                    SUCCESS
+Python 3.8 provisioning                      PASS
+pinned blst checkout and build               PASS
+native shim build and load                   PASS
+Lane A structural negative matrix            PASS
+Lane A official upstream low-order subgroup  PASS
+Lane B                                       FAILED
+```
+
+Lane B failed **before reaching any real BLS verification**, because it used the legacy v1 `hash`
+field against the v2 endpoint. That run therefore did **not** establish `REAL_QUICKNET_VERIFY`, nor
+full Windows or Linux qualification. It did establish that the toolchain, the pinned upstream build,
+the native ABI and the entire Lane-A matrix work on both platforms.
+
+The repaired workflow has not yet been observed by the controller. No repaired-run success is
+claimed here.
+
 ## Cross-platform evidence
 
 The development workstation has no native toolchain (no MSVC/GCC/Clang, no Rust, no SWIG, no Python

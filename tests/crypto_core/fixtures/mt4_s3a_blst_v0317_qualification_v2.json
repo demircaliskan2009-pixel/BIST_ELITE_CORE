@@ -20,9 +20,44 @@
     "signature_compressed_bytes": 48,
     "message_digest_bytes": 32,
     "message_derivation": "SHA256(uint64_big_endian(round))",
-    "randomness_derivation": "SHA256(signature_bytes)",
     "dst": "BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_",
-    "augmentation": "none"
+    "augmentation": "none",
+    "beacon_id": "quicknet",
+    "mode": "UNCHAINED"
+  },
+  "drand_api_contract": {
+    "version": "v2",
+    "identity_path": "/v2/chains/<chain_hash>/info",
+    "round_path": "/v2/chains/<chain_hash>/rounds/<round>",
+    "v2_chain_hash_field": "chain_hash",
+    "v2_scheme_field": "scheme",
+    "v2_required_info_fields": ["public_key", "period", "genesis_time", "genesis_seed", "scheme"],
+    "v2_required_round_fields": ["round", "signature"],
+    "legacy_v1_aliases_accepted": false,
+    "legacy_v1_alias_names_rejected": ["hash", "groupHash", "schemeID", "metadata.beaconID"],
+    "v2_round_randomness_field_required": false,
+    "optional_extra_randomness_consistency": "if present, strict 32-byte hex must equal SHA256(signature_bytes); absence is normal for current v2",
+    "unchained_previous_signature_policy": "absent or empty required; a non-empty previous_signature fails closed for pinned unchained Quicknet"
+  },
+  "quicknet_root_of_trust": {
+    "root_type": "canonical_drand_chain_info_hash",
+    "expected_chain_hash": "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971",
+    "canonical_input": "sha256(uint32_be(period) || int64_be(genesis_time) || public_key_bytes || genesis_seed_bytes || beacon_id_bytes_if_non_default)",
+    "period_seconds": 3,
+    "genesis_unix_seconds": 1692803367,
+    "beacon_id": "quicknet",
+    "beacon_id_is_non_default": true,
+    "public_key_source": "transient_v2_chain_info_but_accepted_only_after_canonical_root_binding",
+    "self_reported_chain_hash_is_sufficient": false,
+    "public_key_accepted_only_after_root_binding": true
+  },
+  "exact_head_qualification": {
+    "required": true,
+    "pull_request_source": "github.event.pull_request.head.sha",
+    "workflow_dispatch_source": "github.sha",
+    "runtime_git_head_assertion": true,
+    "synthetic_merge_ref_is_execution_authority": false,
+    "persist_credentials": false
   },
   "stable_c_api_symbols": [
     "blst_p2_uncompress",

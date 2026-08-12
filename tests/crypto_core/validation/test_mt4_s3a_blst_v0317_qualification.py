@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -380,13 +381,18 @@ def test_workflow_lane_a_covers_the_mandatory_negative_matrix() -> None:
 
 
 def test_workflow_lane_b_enforces_randomness_and_scheme_consistency() -> None:
+    """Defensive randomness consistency and the exact scheme gate remain enforced.
+
+    Current Drand v2 does not define a required round `randomness` field, so the consistency check
+    is conditional; the scheme gate is unconditional because v2 requires `scheme`.
+    """
     workflow = _read(_WORKFLOW_PATH)
-    assert "LANE_B_RANDOMNESS_CONSISTENCY=PASS" in workflow
+    assert "OPTIONAL_EXTRA_RANDOMNESS_CONSISTENCY=PASS" in workflow
     assert "LANE_B_RANDOMNESS_INCONSISTENT" in workflow
-    assert "LANE_B_RANDOMNESS_WRONG_LENGTH" in workflow
     assert "LANE_B_RANDOMNESS_NOT_HEX" in workflow
     assert "hashlib.sha256(signature).digest()" in workflow
     assert "LANE_B_SCHEME_MISMATCH" in workflow
+    assert "LANE_B_SCHEME_MISSING" in workflow
     assert "bls-unchained-g1-rfc9380" in workflow
 
 
@@ -463,6 +469,135 @@ def test_generator_provenance_wording_is_accurate_not_overclaimed() -> None:
     assert "undeclared" not in manifest_text.lower()
     assert "aux-only" not in manifest_text.lower()
     assert "experimental" not in rejected_reason.lower()
+
+
+def test_workflow_qualifies_the_exact_head_not_the_synthetic_merge_ref() -> None:
+    """Qualification evidence must describe code that exists on the branch under audit."""
+    workflow = _read(_WORKFLOW_PATH)
+    assert "github.event.pull_request.head.sha" in workflow
+    assert "persist-credentials: false" in workflow
+    # Runtime proof that the worktree really is that head, with an explicit fail-closed marker.
+    assert "QUALIFICATION_EXPECTED_HEAD" in workflow
+    assert "QUALIFICATION_CHECKOUT_HEAD" in workflow
+    assert "QUALIFICATION_EXACT_HEAD=PASS" in workflow
+    assert "QUALIFICATION_SOURCE_HEAD_MISMATCH" in workflow
+    assert 'ACTUAL_SOURCE_HEAD="$(git rev-parse HEAD)"' in workflow
+
+    # Structural, not textual: the explanatory comment may name refs/pull while no step is allowed
+    # to actually check it out.
+    parsed = yaml.safe_load(workflow)
+    steps = parsed["jobs"]["qualify"]["steps"]
+    checkout = steps[0]
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert "head.sha" in checkout["with"]["ref"]
+    assert checkout["with"]["persist-credentials"] is False
+
+    for step in steps:
+        ref = (step.get("with") or {}).get("ref")
+        if ref is not None:
+            assert "refs/pull" not in ref, step.get("name")
+    # The head assertion must run immediately after checkout, before any build or qualification
+    # step consumes the worktree.
+    names = [step.get("name", "") for step in steps]
+    assertion_index = next(i for i, n in enumerate(names) if n.startswith("Prove the checked-out worktree"))
+    assert assertion_index == 1, names[:3]
+
+
+def test_workflow_uses_only_current_drand_v2_fields() -> None:
+    workflow = _read(_WORKFLOW_PATH)
+    assert "/v2/chains/" in workflow
+    # v2-native names are required.
+    assert 'info.get("scheme")' in workflow
+    assert 'info.get("chain_hash")' in workflow
+    assert '"genesis_seed"' in workflow
+    assert '"genesis_time"' in workflow
+    # No v1 alias may be load-bearing.  Matching against accessor forms keeps the explanatory
+    # comment that names the rejected aliases from producing a false positive.
+    for legacy in (
+        'info["hash"]',
+        'info.get("hash"',
+        'info["schemeID"]',
+        'info.get("schemeID"',
+        'info["groupHash"]',
+        'info.get("groupHash"',
+        'info["metadata"]',
+        'info.get("metadata"',
+    ):
+        assert legacy not in workflow, legacy
+
+
+def test_workflow_binds_the_public_key_to_the_pinned_quicknet_root() -> None:
+    """The relay supplies the verification key, so its self-reported identity cannot be the root."""
+    workflow = _read(_WORKFLOW_PATH)
+    # Canonical recomputation with every load-bearing component present.
+    assert 'struct.pack(">I", period)' in workflow
+    assert 'struct.pack(">q", genesis_time)' in workflow
+    assert "+ public_key" in workflow
+    assert "+ genesis_seed" in workflow
+    assert "+ QUICKNET_BEACON_ID" in workflow
+    assert 'QUICKNET_BEACON_ID = b"quicknet"' in workflow
+    assert "computed_chain_hash = hashlib.sha256(canonical_input).hexdigest()" in workflow
+    assert "LANE_B_CANONICAL_CHAIN_HASH_MISMATCH" in workflow
+    assert "LANE_B_CHAIN_ROOT_BINDING=PASS" in workflow
+    assert "LANE_B_CHAIN_HASH_RECOMPUTED" in workflow
+
+    # Ordering: the root binding must precede any BLS verification of the fetched key.
+    binding_at = workflow.index("LANE_B_CANONICAL_CHAIN_HASH_MISMATCH")
+    verify_at = workflow.index('check("real_quicknet_verify"')
+    assert binding_at < verify_at, "root binding must gate BLS verification"
+
+    # The pinned root and immutable identity constants must not be relay-selected.
+    assert "QUICKNET_PERIOD_SECONDS = 3" in workflow
+    assert "QUICKNET_GENESIS_TIME = 1692803367" in workflow
+    assert 'QUICKNET_SCHEME = "bls-unchained-g1-rfc9380"' in workflow
+
+
+def test_workflow_round_contract_does_not_require_randomness() -> None:
+    workflow = _read(_WORKFLOW_PATH)
+    assert "V2_RANDOMNESS_FIELD_POLICY=NOT_REQUIRED" in workflow
+    assert "OPTIONAL_EXTRA_RANDOMNESS_CONSISTENCY=FIELD_ABSENT_V2_EXPECTED" in workflow
+    assert "OPTIONAL_EXTRA_RANDOMNESS_CONSISTENCY=PASS" in workflow
+    # A present-but-inconsistent randomness value still fails closed.
+    assert "LANE_B_RANDOMNESS_INCONSISTENT" in workflow
+    # Unchained profile: a non-empty previous_signature contradicts pinned Quicknet.
+    assert "LANE_B_UNEXPECTED_PREVIOUS_SIGNATURE" in workflow
+    # round and signature remain required.
+    assert 'exact_int(beacon, "round"' in workflow
+    assert 'exact_hex(beacon, "signature"' in workflow
+
+
+def test_manifest_records_v2_contract_root_binding_and_exact_head() -> None:
+    manifest = _manifest()
+
+    api = manifest["drand_api_contract"]
+    assert api["version"] == "v2"
+    assert api["v2_chain_hash_field"] == "chain_hash"
+    assert api["v2_scheme_field"] == "scheme"
+    assert api["legacy_v1_aliases_accepted"] is False
+    assert api["v2_round_randomness_field_required"] is False
+    assert set(api["v2_required_round_fields"]) == {"round", "signature"}
+    for legacy in ("hash", "groupHash", "schemeID", "metadata.beaconID"):
+        assert legacy in api["legacy_v1_alias_names_rejected"], legacy
+
+    root = manifest["quicknet_root_of_trust"]
+    assert root["root_type"] == "canonical_drand_chain_info_hash"
+    assert root["expected_chain_hash"] == _QUICKNET_CHAIN_HASH
+    assert root["period_seconds"] == 3
+    assert root["genesis_unix_seconds"] == 1692803367
+    assert root["beacon_id"] == "quicknet"
+    assert root["beacon_id_is_non_default"] is True
+    assert root["self_reported_chain_hash_is_sufficient"] is False
+    assert root["public_key_accepted_only_after_root_binding"] is True
+
+    head = manifest["exact_head_qualification"]
+    assert head["required"] is True
+    assert head["pull_request_source"] == "github.event.pull_request.head.sha"
+    assert head["runtime_git_head_assertion"] is True
+    assert head["synthetic_merge_ref_is_execution_authority"] is False
+    assert head["persist_credentials"] is False
+
+    # The corrected randomness record must not imply v2 returns or requires it.
+    assert "randomness_derivation" not in manifest["quicknet_contract"]
 
 
 def test_workflow_admits_nothing_and_promotes_nothing() -> None:
@@ -560,6 +695,20 @@ def test_contract_tests_kill_the_intended_semantic_mutants() -> None:
         "let scaffolding perform verification": "test_scaffolding_generator_is_declared_non_load_bearing",
         "replace stable generator accessor with the raw exported datum": "test_scaffolding_generator_uses_the_stable_public_accessor",
         "reintroduce the exclusivity overclaim about the accessor": "test_generator_provenance_wording_is_accurate_not_overclaimed",
+        "restore default PR merge-ref checkout": "test_workflow_qualifies_the_exact_head_not_the_synthetic_merge_ref",
+        "remove the runtime exact-HEAD assertion": "test_workflow_qualifies_the_exact_head_not_the_synthetic_merge_ref",
+        "restore the v1 info[hash] alias": "test_workflow_uses_only_current_drand_v2_fields",
+        "restore the v1 schemeID fallback": "test_workflow_uses_only_current_drand_v2_fields",
+        "remove the exact scheme check": "test_workflow_uses_only_current_drand_v2_fields",
+        "remove canonical chain-hash recomputation": "test_workflow_binds_the_public_key_to_the_pinned_quicknet_root",
+        "trust the self-reported chain_hash only": "test_workflow_binds_the_public_key_to_the_pinned_quicknet_root",
+        "drop public key from the canonical hash": "test_workflow_binds_the_public_key_to_the_pinned_quicknet_root",
+        "drop genesis seed from the canonical hash": "test_workflow_binds_the_public_key_to_the_pinned_quicknet_root",
+        "drop the quicknet beacon id from the canonical hash": "test_workflow_binds_the_public_key_to_the_pinned_quicknet_root",
+        "switch canonical packing to little-endian": "test_workflow_binds_the_public_key_to_the_pinned_quicknet_root",
+        "verify BLS before the root binding gate": "test_workflow_binds_the_public_key_to_the_pinned_quicknet_root",
+        "require a v2 randomness field": "test_workflow_round_contract_does_not_require_randomness",
+        "accept a non-empty previous_signature": "test_workflow_round_contract_does_not_require_randomness",
         "unpin the upstream negative source path": "test_workflow_executes_upstream_subgroup_vectors_rather_than_enumerating",
     }
     module_source = _read(_TEST_PATH)

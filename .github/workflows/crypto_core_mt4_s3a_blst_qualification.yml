@@ -42,8 +42,29 @@ jobs:
           - os: ubuntu-22.04
             library_name: libmt4_s3a_blst_quicknet_shim.so
     steps:
-      - name: Checkout crypto_core
+      # The qualification source MUST be the exact frozen branch head, never GitHub's synthetic
+      # refs/pull/<n>/merge commit: the evidence has to describe code that actually exists on the
+      # branch under audit.
+      - name: Checkout crypto_core at the exact qualification head
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Prove the checked-out worktree is the exact qualification head
+        shell: bash
+        env:
+          QUALIFICATION_EXPECTED_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SOURCE_HEAD="$(git rev-parse HEAD)"
+          echo "QUALIFICATION_EXPECTED_HEAD=${QUALIFICATION_EXPECTED_HEAD}"
+          echo "QUALIFICATION_CHECKOUT_HEAD=${ACTUAL_SOURCE_HEAD}"
+          if [ "${ACTUAL_SOURCE_HEAD}" != "${QUALIFICATION_EXPECTED_HEAD}" ]; then
+            echo "QUALIFICATION_SOURCE_HEAD_MISMATCH expected=${QUALIFICATION_EXPECTED_HEAD} actual=${ACTUAL_SOURCE_HEAD}"
+            exit 1
+          fi
+          echo "QUALIFICATION_EXACT_HEAD=PASS"
 
       # Python 3.8 is the declared project floor.  If it cannot be provisioned the job fails closed.
       - name: Setup Python 3.8
@@ -348,7 +369,7 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import hashlib, json, os, sys, urllib.request
+          import hashlib, json, os, struct, sys, urllib.request
           sys.path.insert(0, os.path.join("scripts", "crypto_core", "qualification"))
           import mt4_s3a_blst_quicknet_probe as probe
 
@@ -356,56 +377,128 @@ jobs:
           ROUND = int(os.environ["QUICKNET_ROUND"])
           BASE = "https://api.drand.sh/v2/chains/%s" % CHAIN
 
+          # Pinned immutable Quicknet identity.  These are project-side constants, never values the
+          # relay is allowed to choose for us.
+          QUICKNET_BEACON_ID = b"quicknet"
+          QUICKNET_PERIOD_SECONDS = 3
+          QUICKNET_GENESIS_TIME = 1692803367
+          QUICKNET_SCHEME = "bls-unchained-g1-rfc9380"
+
           def fetch(url):
               request = urllib.request.Request(url, headers={"Accept": "application/json"})
               with urllib.request.urlopen(request, timeout=30) as response:
                   return json.loads(response.read().decode("utf-8"))
 
+          def exact_int(container, name, marker):
+              value = container.get(name)
+              if type(value) is not int or type(value) is bool:
+                  raise SystemExit(marker)
+              return value
+
+          def exact_hex(container, name, marker, expected_len=None):
+              value = container.get(name)
+              if type(value) is not str:
+                  raise SystemExit(marker)
+              try:
+                  raw = bytes.fromhex(value)
+              except ValueError:
+                  raise SystemExit(marker)
+              if expected_len is not None and len(raw) != expected_len:
+                  raise SystemExit(marker)
+              return raw
+
           info = fetch(BASE + "/info")
           beacon = fetch(BASE + "/rounds/%d" % ROUND)
+          if type(info) is not dict or type(beacon) is not dict:
+              raise SystemExit("LANE_B_RESPONSE_NOT_OBJECT")
 
-          public_key = bytes.fromhex(info["public_key"])
-          signature = bytes.fromhex(beacon["signature"])
+          # ---------------------------------------------------------------------------------
+          # Current Drand v2 chain-info contract.  v2-native field names ONLY: no `hash`, no
+          # `schemeID`, no `groupHash`, no `metadata.beaconID` aliases are accepted.
+          # ---------------------------------------------------------------------------------
+          public_key = exact_hex(info, "public_key", "LANE_B_PUBLIC_KEY_INVALID", 96)
+          genesis_seed = exact_hex(info, "genesis_seed", "LANE_B_GENESIS_SEED_INVALID")
+          if not genesis_seed:
+              raise SystemExit("LANE_B_GENESIS_SEED_INVALID")
+          period = exact_int(info, "period", "LANE_B_PERIOD_INVALID")
+          genesis_time = exact_int(info, "genesis_time", "LANE_B_GENESIS_TIME_INVALID")
+
+          scheme = info.get("scheme")
+          if type(scheme) is not str:
+              raise SystemExit("LANE_B_SCHEME_MISSING")
+          if scheme != QUICKNET_SCHEME:
+              raise SystemExit("LANE_B_SCHEME_MISMATCH")
+          if period != QUICKNET_PERIOD_SECONDS:
+              raise SystemExit("LANE_B_PERIOD_MISMATCH")
+          if genesis_time != QUICKNET_GENESIS_TIME:
+              raise SystemExit("LANE_B_GENESIS_TIME_MISMATCH")
+
+          # Self-reported identity may be cross-checked, but it is NOT the root of trust.
+          reported_chain_hash = info.get("chain_hash")
+          if reported_chain_hash is not None:
+              if type(reported_chain_hash) is not str or len(bytes.fromhex(reported_chain_hash)) != 32:
+                  raise SystemExit("LANE_B_REPORTED_CHAIN_HASH_INVALID")
+              if reported_chain_hash != CHAIN:
+                  raise SystemExit("LANE_B_REPORTED_CHAIN_HASH_MISMATCH")
+          beacon_id = info.get("beacon_id")
+          if beacon_id is not None and beacon_id != QUICKNET_BEACON_ID.decode():
+              raise SystemExit("LANE_B_BEACON_ID_MISMATCH")
 
           # Persistent evidence: identities, sizes and digests only.  NEVER raw bytes.
           print("LANE_B_SOURCE_ENDPOINT=%s" % BASE)
-          print("LANE_B_CHAIN_HASH=%s" % info["hash"])
-          print("LANE_B_ROUND=%d" % beacon["round"])
-          print("LANE_B_SCHEME=%s" % info.get("schemeID", info.get("scheme", "unknown")))
+          print("LANE_B_ROUND=%d" % beacon.get("round", -1))
+          print("LANE_B_SCHEME=%s" % scheme)
+          print("LANE_B_PERIOD=%d" % period)
+          print("LANE_B_GENESIS_TIME=%d" % genesis_time)
           print("LANE_B_PUBLIC_KEY_LEN=%d" % len(public_key))
-          print("LANE_B_SIGNATURE_LEN=%d" % len(signature))
-          print("LANE_B_SIGNATURE_SHA256=%s" % hashlib.sha256(signature).hexdigest())
           print("LANE_B_PUBLIC_KEY_SHA256=%s" % hashlib.sha256(public_key).hexdigest())
 
-          if info["hash"] != CHAIN:
-              raise SystemExit("LANE_B_CHAIN_HASH_MISMATCH")
-          if beacon["round"] != ROUND:
+          # ---------------------------------------------------------------------------------
+          # CANONICAL QUICKNET ROOT BINDING.  The relay supplies the public key used for BLS
+          # verification, so its own claimed chain_hash cannot be the trust root.  Recompute the
+          # canonical Drand chain-info hash over the returned material and require equality with
+          # the project-pinned Quicknet root BEFORE the key may be used.
+          # ---------------------------------------------------------------------------------
+          canonical_input = (
+              struct.pack(">I", period)
+              + struct.pack(">q", genesis_time)
+              + public_key
+              + genesis_seed
+              + QUICKNET_BEACON_ID
+          )
+          computed_chain_hash = hashlib.sha256(canonical_input).hexdigest()
+          print("LANE_B_CHAIN_HASH_EXPECTED=%s" % CHAIN)
+          print("LANE_B_CHAIN_HASH_RECOMPUTED=%s" % computed_chain_hash)
+          if computed_chain_hash != CHAIN:
+              raise SystemExit("LANE_B_CANONICAL_CHAIN_HASH_MISMATCH")
+          print("LANE_B_CHAIN_ROOT_BINDING=PASS")
+
+          # ---------------------------------------------------------------------------------
+          # Current Drand v2 round contract: `round` and `signature` are required.  `randomness`
+          # is NOT a defined required v2 round field and is never required here.
+          # ---------------------------------------------------------------------------------
+          if exact_int(beacon, "round", "LANE_B_ROUND_INVALID") != ROUND:
               raise SystemExit("LANE_B_ROUND_MISMATCH")
-          if len(public_key) != 96 or len(signature) != 48:
-              raise SystemExit("LANE_B_WIRE_SIZE_MISMATCH")
+          signature = exact_hex(beacon, "signature", "LANE_B_SIGNATURE_INVALID", 48)
+          print("LANE_B_SIGNATURE_LEN=%d" % len(signature))
+          print("LANE_B_SIGNATURE_SHA256=%s" % hashlib.sha256(signature).hexdigest())
 
-          # Chain-profile gate: a contradictory scheme fails closed.  Absence is tolerated because
-          # the endpoint's field naming is not part of this contract; a present-but-wrong value is
-          # not.
-          scheme = info.get("schemeID", info.get("scheme"))
-          if scheme is not None and scheme != "bls-unchained-g1-rfc9380":
-              raise SystemExit("LANE_B_SCHEME_MISMATCH")
-          print("LANE_B_SCHEME_GATE=%s" % ("ENFORCED" if scheme is not None else "FIELD_ABSENT"))
+          # Quicknet is unchained: a non-empty previous_signature contradicts the pinned profile.
+          previous_signature = beacon.get("previous_signature")
+          if previous_signature not in (None, ""):
+              raise SystemExit("LANE_B_UNEXPECTED_PREVIOUS_SIGNATURE")
+          print("LANE_B_UNCHAINED_PREVIOUS_SIGNATURE=ABSENT_OR_EMPTY")
 
-          # Randomness consistency: Quicknet randomness is SHA256(signature_bytes).
+          print("V2_RANDOMNESS_FIELD_POLICY=NOT_REQUIRED")
           randomness_hex = beacon.get("randomness")
-          if randomness_hex is not None:
-              try:
-                  randomness = bytes.fromhex(randomness_hex)
-              except ValueError:
-                  raise SystemExit("LANE_B_RANDOMNESS_NOT_HEX")
-              if len(randomness) != 32:
-                  raise SystemExit("LANE_B_RANDOMNESS_WRONG_LENGTH")
+          if randomness_hex is None:
+              print("OPTIONAL_EXTRA_RANDOMNESS_CONSISTENCY=FIELD_ABSENT_V2_EXPECTED")
+          else:
+              # Defensive consistency rule of THIS qualification, not a v2 schema requirement.
+              randomness = exact_hex(beacon, "randomness", "LANE_B_RANDOMNESS_NOT_HEX", 32)
               if randomness != hashlib.sha256(signature).digest():
                   raise SystemExit("LANE_B_RANDOMNESS_INCONSISTENT")
-              print("LANE_B_RANDOMNESS_CONSISTENCY=PASS")
-          else:
-              print("LANE_B_RANDOMNESS_CONSISTENCY=FIELD_ABSENT")
+              print("OPTIONAL_EXTRA_RANDOMNESS_CONSISTENCY=PASS")
 
           engine = probe.QuicknetQualificationProbe(os.environ["MT4_S3A_LIBRARY"])
           digest = probe.quicknet_message_digest(ROUND)
