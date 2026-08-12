@@ -664,6 +664,99 @@ def test_document_distinguishes_schema_requiredness_from_project_policy() -> Non
         assert marker in doc, marker
 
 
+def test_shim_preserves_the_g1_decode_time_subgroup_status() -> None:
+    """Pinned blst distinguishes two G1 decode failures; the ABI must not collapse them.
+
+    src/e1.c POINTonE1_Uncompress_Z returns BLST_POINT_NOT_IN_GROUP for the canonical X=0 edge
+    (the curve points (0, +/-2)) after a SUCCESSFUL reconstruction.  That is a subgroup verdict, so
+    it must reach SIG_NOT_IN_GROUP, while genuine encoding/curve failures stay SIG_BAD_ENCODING.
+    """
+    shim = _read(_SHIM_PATH)
+
+    # The exact upstream result must be captured, not tested inline against BLST_SUCCESS.
+    assert "BLST_ERROR signature_decode;" in shim
+    assert "signature_decode = blst_p1_uncompress(&signature_affine, signature);" in shim
+    assert "if (signature_decode == BLST_POINT_NOT_IN_GROUP) {" in shim
+    assert "return MT4_S3A_SIG_NOT_IN_GROUP;" in shim
+    assert "if (signature_decode != BLST_SUCCESS) {" in shim
+    assert "return MT4_S3A_SIG_BAD_ENCODING;" in shim
+
+    # The collapsed form must never come back.
+    assert "if (blst_p1_uncompress(&signature_affine, signature) != BLST_SUCCESS) {" not in shim
+
+    # Ordering: the subgroup verdict is decided before the generic bad-encoding fallback.
+    not_in_group_at = shim.index("if (signature_decode == BLST_POINT_NOT_IN_GROUP)")
+    bad_encoding_at = shim.index("if (signature_decode != BLST_SUCCESS)")
+    assert not_in_group_at < bad_encoding_at
+
+    # Route B must survive: a point that decodes cleanly still faces the explicit subgroup gate.
+    assert "!blst_p1_affine_in_g1(&signature_affine)" in shim
+    gate_at = shim.index("!blst_p1_affine_in_g1(&signature_affine)")
+    assert bad_encoding_at < gate_at
+
+
+def _shim_executable_source() -> str:
+    """Return the shim with C comments removed, so prose cannot satisfy a code assertion."""
+    source = _read(_SHIM_PATH)
+    source = re.sub(r"/\*.*?\*/", " ", source, flags=re.DOTALL)
+    return re.sub(r"//[^\n]*", " ", source)
+
+
+def test_g2_decode_mapping_is_not_symmetrised_without_evidence() -> None:
+    """Pinned src/e2.c has no decode-time BLST_POINT_NOT_IN_GROUP, so G2 must NOT mirror G1."""
+    code = _shim_executable_source()
+    assert "if (blst_p2_uncompress(&public_key_affine, public_key) != BLST_SUCCESS) {" in code
+    # Exactly one executable mention of the upstream subgroup result: the G1 decode mapping.
+    assert code.count("BLST_POINT_NOT_IN_GROUP") == 1
+    assert "signature_decode == BLST_POINT_NOT_IN_GROUP" in code
+    # The explicit G2 subgroup gate remains the authority for G2.
+    assert "!blst_p2_affine_in_g2(&public_key_affine)" in code
+    assert "return MT4_S3A_PK_NOT_IN_GROUP;" in code
+
+
+def test_workflow_executes_the_g1_decode_time_edge_on_both_platforms() -> None:
+    workflow = _read(_WORKFLOW_PATH)
+    # The proven canonical encoding: compressed bit set, infinity bit clear, X == 0.
+    assert "g1_decode_edge_positive_sign = bytes([0x80]) + bytes(47)" in workflow
+    assert "g1_decode_edge_negative_sign = bytes([0xA0]) + bytes(47)" in workflow
+    assert "g1_decode_time_not_in_group_x0" in workflow
+    assert "probe.STATUS_SIG_NOT_IN_GROUP" in workflow
+    assert "LANE_A_G1_DECODE_SUBGROUP_RESULT=SIG_NOT_IN_GROUP" in workflow
+
+    # It must run inside the aggregate Lane-A step that fails closed, and before the PASS marker.
+    edge_at = workflow.index("g1_decode_time_not_in_group_x0")
+    failure_at = workflow.index("LANE_A_SUBGROUP_FAILURES")
+    pass_at = workflow.index("LANE_A_UPSTREAM_SUBGROUP_RESULT=PASS")
+    assert edge_at < failure_at < pass_at
+
+    # The pre-existing upstream run.me families must remain, unreplaced.
+    for identifier in _G1_LOW_ORDER_IDS + _G2_LOW_ORDER_IDS:
+        assert '"' + identifier + '"' in workflow, identifier
+    assert "probe.STATUS_PK_NOT_IN_GROUP" in workflow
+
+
+def test_g1_decode_edge_provenance_is_e1_source_not_run_me() -> None:
+    """The X=0 edge derives from src/e1.c semantics and must never be labelled a run.me vector."""
+    manifest = _manifest()
+    edge = manifest["g1_decode_time_subgroup_edge"]
+    assert edge["source_path"] == "src/e1.c"
+    assert edge["source_symbol"] == "POINTonE1_Uncompress_Z"
+    assert edge["upstream_commit"] == _UPSTREAM_COMMIT
+    assert edge["upstream_result"] == "BLST_POINT_NOT_IN_GROUP"
+    assert edge["project_abi_result"] == "SIG_NOT_IN_GROUP"
+    assert edge["is_run_me_vector"] is False
+    assert edge["source_class"] != "UPSTREAM_LIBRARY_VECTOR"
+
+    # The run.me family keeps its own distinct provenance record.
+    assert manifest["upstream_negative_vector_source"]["path"] == _UPSTREAM_NEGATIVE_SOURCE
+
+    # Two bounded causal routes to the same status are recorded.
+    routes = manifest["g1_subgroup_status_routes"]
+    assert len(routes) == 2
+    assert any("blst_p1_uncompress" in route for route in routes)
+    assert any("blst_p1_affine_in_g1" in route for route in routes)
+
+
 def test_workflow_admits_nothing_and_promotes_nothing() -> None:
     workflow = _read(_WORKFLOW_PATH)
     for statement in (

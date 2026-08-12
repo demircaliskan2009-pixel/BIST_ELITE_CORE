@@ -346,10 +346,27 @@ jobs:
                     engine.verify(vector, bytes([0xC0]) + bytes(47), digest),
                     probe.STATUS_PK_NOT_IN_GROUP)
 
+          # -----------------------------------------------------------------------------------
+          # Decode-time G1 subgroup edge.  Authority is pinned src/e1.c, NOT bindings/python/run.me.
+          #
+          # POINTonE1_Uncompress_Z masks the three flag bits out of X, so 0x80 followed by 47 zero
+          # bytes decodes to X == 0.  That is on the curve (Y^2 = 0^3 + 4, so Y = +/-2) and rebuilds
+          # successfully, after which the decoder itself returns BLST_POINT_NOT_IN_GROUP.  The shim
+          # must surface that as a SUBGROUP verdict, never as a malformed encoding.
+          # -----------------------------------------------------------------------------------
+          g1_decode_edge_positive_sign = bytes([0x80]) + bytes(47)
+          g1_decode_edge_negative_sign = bytes([0xA0]) + bytes(47)
+          for label, vector in (
+              ("g1_decode_time_not_in_group_x0", g1_decode_edge_positive_sign),
+              ("g1_decode_time_not_in_group_x0_sign", g1_decode_edge_negative_sign),
+          ):
+              check(label, engine.verify(valid_public_key, vector, digest), probe.STATUS_SIG_NOT_IN_GROUP)
+
           if failures:
               raise SystemExit("LANE_A_SUBGROUP_FAILURES=%s" % ",".join(failures))
           print("G1_LOW_ORDER_RESULT=SIG_NOT_IN_GROUP")
           print("G2_LOW_ORDER_RESULT=PK_NOT_IN_GROUP")
+          print("LANE_A_G1_DECODE_SUBGROUP_RESULT=SIG_NOT_IN_GROUP")
           print("LANE_A_UPSTREAM_SUBGROUP_RESULT=PASS")
 
           # Non-canonical: report the source-level finding honestly.  No upstream non-canonical

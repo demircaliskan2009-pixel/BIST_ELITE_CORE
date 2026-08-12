@@ -103,6 +103,28 @@
     "vector_availability": "SOURCE_PINNED",
     "ci_executed_result": "PENDING_CI"
   },
+  "g1_decode_time_subgroup_edge": {
+    "label": "g1_decode_time_not_in_group_x0",
+    "upstream_repository": "https://github.com/supranational/blst",
+    "upstream_commit": "54e6e55674722fc2797ebb4bbb71b26d881eb4b8",
+    "source_path": "src/e1.c",
+    "source_symbol": "POINTonE1_Uncompress_Z",
+    "source_class": "PINNED_IMPLEMENTATION_SEMANTICS",
+    "is_run_me_vector": false,
+    "encoding": "compressed bit set, infinity bit clear, X == 0 (0x80 followed by 47 zero bytes; 0xA0 selects the opposite Y sign)",
+    "encoding_derivation": "POINTonE1_Uncompress_Z masks the three flag bits out of X, so the remaining X is exactly zero; Y^2 = 0^3 + 4 reconstructs to Y = +/-2 and the decoder then returns a subgroup verdict",
+    "curve_points": "(0, +/-2)",
+    "upstream_result": "BLST_POINT_NOT_IN_GROUP",
+    "project_abi_result": "SIG_NOT_IN_GROUP",
+    "executed_on": ["windows-2022", "ubuntu-22.04"],
+    "ci_executed_result": "PENDING_CI"
+  },
+  "g1_subgroup_status_routes": [
+    "blst_p1_uncompress returns BLST_POINT_NOT_IN_GROUP for the canonical X=0 decode edge -> SIG_NOT_IN_GROUP",
+    "blst_p1_uncompress returns BLST_SUCCESS and the explicit blst_p1_affine_in_g1 gate rejects -> SIG_NOT_IN_GROUP"
+  ],
+  "g1_decode_failure_policy": "encoding and not-on-curve decode failures remain SIG_BAD_ENCODING; only BLST_POINT_NOT_IN_GROUP maps to SIG_NOT_IN_GROUP",
+  "g2_decode_time_subgroup_return_exists": false,
   "noncanonical_vector_status": "NOT_WIRED_NO_CONFIRMED_UPSTREAM_VECTOR_CLASS",
   "abi": {
     "entry_point": "mt4_s3a_verify_quicknet_bls",

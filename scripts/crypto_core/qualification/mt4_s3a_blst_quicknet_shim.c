@@ -8,9 +8,11 @@
  * it proves nothing about provider reachability, machine time, timestamp origin or quorum.
  *
  * UPSTREAM.  supranational/blst, release v0.3.17, commit
- * 54e6e55674722fc2797ebb4bbb71b26d881eb4b8, Apache-2.0.  Only the stable blst.h surface is used.
- * blst_aux.h is deliberately NOT included: no experimental interface may carry a load-bearing
- * qualification claim.
+ * 54e6e55674722fc2797ebb4bbb71b26d881eb4b8, Apache-2.0.  Only the stable blst.h surface is used:
+ * this translation unit directly includes blst.h alone and makes no direct call to any auxiliary
+ * API, so no experimental interface carries a load-bearing qualification claim.  The pinned blst.h
+ * itself ends with an #include of blst_aux.h, so those declarations are transitively visible; the
+ * claim here is about what this project includes and calls, not about header reachability.
  *
  * QUICKNET CONTRACT (fixed at compile time, never caller-selectable):
  *   scheme      bls-unchained-g1-rfc9380
@@ -126,6 +128,7 @@ MT4_S3A_EXPORT int mt4_s3a_verify_quicknet_bls(const uint8_t *public_key,
     blst_p1_affine signature_affine;
     byte public_key_recompressed[MT4_S3A_PUBLIC_KEY_LEN];
     byte signature_recompressed[MT4_S3A_SIGNATURE_LEN];
+    BLST_ERROR signature_decode;
     BLST_ERROR verify_result;
 
     /* 1. NULL and exact-length gates run before any cryptographic work. */
@@ -142,7 +145,12 @@ MT4_S3A_EXPORT int mt4_s3a_verify_quicknet_bls(const uint8_t *public_key,
         return MT4_S3A_BAD_LENGTH;
     }
 
-    /* 2. Compressed G2 public-key decode. */
+    /*
+     * 2. Compressed G2 public-key decode.  The G1 asymmetry below is deliberate and verified:
+     * pinned src/e2.c contains NO decode-time BLST_POINT_NOT_IN_GROUP return, so every G2 decode
+     * failure here really is an encoding/curve failure and G2 subgroup membership is decided by the
+     * explicit gate in step 5.  Do not mirror the G1 mapping onto G2 without pinned-source evidence.
+     */
     if (blst_p2_uncompress(&public_key_affine, public_key) != BLST_SUCCESS) {
         return MT4_S3A_PK_BAD_ENCODING;
     }
@@ -163,8 +171,24 @@ MT4_S3A_EXPORT int mt4_s3a_verify_quicknet_bls(const uint8_t *public_key,
         return MT4_S3A_PK_NOT_IN_GROUP;
     }
 
-    /* 6. Compressed G1 signature decode. */
-    if (blst_p1_uncompress(&signature_affine, signature) != BLST_SUCCESS) {
+    /*
+     * 6. Compressed G1 signature decode.  The exact upstream result is captured rather than
+     * collapsed, because pinned blst v0.3.17 distinguishes two different failures here.
+     *
+     * src/e1.c POINTonE1_Uncompress_Z ends with:
+     *     return vec_is_zero(out->X, sizeof(out->X)) ? BLST_POINT_NOT_IN_GROUP : BLST_SUCCESS;
+     * so the canonical X=0 encoding -- the curve points (0, +/-2) -- reconstructs successfully and
+     * is then rejected by the DECODER itself on subgroup grounds.  That is a subgroup verdict, not a
+     * malformed encoding, and it must keep its causal meaning across the ABI.
+     *
+     * Every other decode failure at this boundary (bad encoding, not on curve) stays bounded as
+     * SIG_BAD_ENCODING.  Raw BLST_ERROR values never cross the ABI.
+     */
+    signature_decode = blst_p1_uncompress(&signature_affine, signature);
+    if (signature_decode == BLST_POINT_NOT_IN_GROUP) {
+        return MT4_S3A_SIG_NOT_IN_GROUP;
+    }
+    if (signature_decode != BLST_SUCCESS) {
         return MT4_S3A_SIG_BAD_ENCODING;
     }
 

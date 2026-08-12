@@ -27,8 +27,11 @@ A project-owned narrow C ABI over the official upstream C library, loaded from P
 
 - Upstream: `supranational/blst`, release `v0.3.17`, commit
   `54e6e55674722fc2797ebb4bbb71b26d881eb4b8`, Apache-2.0.
-- Only the stable `blst.h` surface is used. `blst_aux.h` is excluded: no experimental interface may
-  carry a load-bearing qualification claim.
+- Only the stable `blst.h` surface is used: the shim directly includes `blst.h` alone and makes no
+  direct call to any auxiliary API, so no experimental interface carries a load-bearing
+  qualification claim. The pinned `blst.h` itself ends with an `#include` of `blst_aux.h`, so those
+  declarations are transitively visible — the claim is about what this project includes and calls,
+  not about header reachability.
 - `ctypes` avoids depending on an upstream Python extension ABI, which keeps the Python 3.8 floor
   reachable without a compiled Python module.
 
@@ -162,6 +165,45 @@ reinterpretation, or that the datum is undeclared, aux-only, experimental, or un
 
 The scaffolding decodes nothing from a caller, performs no verification and carries no trust
 decision; it exists so Lane A never embeds a point literal nor borrows Lane-B production bytes.
+
+### `SIG_NOT_IN_GROUP` has two bounded causal routes
+
+Pinned blst does not decide G1 subgroup membership in only one place, so the qualification ABI must
+not pretend it does:
+
+| Route | Mechanism | Status |
+| --- | --- | --- |
+| A | `blst_p1_uncompress` itself returns `BLST_POINT_NOT_IN_GROUP` | `SIG_NOT_IN_GROUP` |
+| B | decode returns `BLST_SUCCESS`, then the explicit `blst_p1_affine_in_g1` gate rejects | `SIG_NOT_IN_GROUP` |
+
+Route A exists because `src/e1.c` `POINTonE1_Uncompress_Z` ends with:
+
+```text
+/* (0,±2) is not in group, but application might want to ignore? */
+return vec_is_zero(out->X, sizeof(out->X)) ? BLST_POINT_NOT_IN_GROUP : BLST_SUCCESS;
+```
+
+The decoder masks the three flag bits out of X, so a compressed input of `0x80` followed by 47 zero
+bytes decodes to **X = 0**. That is a genuine curve point — `Y² = 0³ + 4`, so `Y = ±2` — which
+reconstructs successfully and is then rejected by the decoder on *subgroup* grounds. `0xA0` selects
+the opposite Y sign and behaves identically.
+
+Collapsing that into `SIG_BAD_ENCODING` would misreport a subgroup rejection as a malformed input,
+so the shim captures the exact `BLST_ERROR` and maps only `BLST_POINT_NOT_IN_GROUP` to
+`SIG_NOT_IN_GROUP`. **Malformed and not-on-curve compressed signatures remain `SIG_BAD_ENCODING`.**
+
+This edge is executed natively on both platforms as `g1_decode_time_not_in_group_x0`, emitting
+`LANE_A_G1_DECODE_SUBGROUP_RESULT=SIG_NOT_IN_GROUP`.
+
+**Provenance is distinct from the low-order family.** The six `p11`/`p10177`/`p859267` /
+`p13`/`p23`/`p2713` vectors come from `bindings/python/run.me`. The X=0 edge does **not** — its
+authority is `src/e1.c` implementation semantics at the same pinned commit, and it is never labelled
+a `run.me` vector.
+
+**G2 is deliberately not symmetric.** `src/e2.c` contains no decode-time `BLST_POINT_NOT_IN_GROUP`
+return at this commit, so every G2 decode failure really is an encoding/curve failure and G2 subgroup
+membership stays the responsibility of the explicit `blst_p2_affine_in_g2` gate. No symmetric mapping
+is invented without pinned-source evidence.
 
 **Non-canonical encodings are NOT wired.** No confirmed upstream non-canonical compressed-input
 vector class was established at the pinned commit, and none is invented here. The shim retains its
