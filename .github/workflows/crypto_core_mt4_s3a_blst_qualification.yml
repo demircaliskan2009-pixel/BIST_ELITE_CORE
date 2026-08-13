@@ -4,6 +4,18 @@ name: crypto_core mt4-s3a blst qualification
 # official supranational/blst v0.3.17 on Windows x64 and Linux x64 under Python 3.8.  It admits no
 # dependency, selects no verifier profile, and promotes no readiness or connector state.
 #
+# THIS WORKFLOW IS ENTIRELY UNPRIVILEGED.  Its definition is pull-request-controlled, so it may
+# never hold id-token or attestations capability -- not at workflow scope and not on any job.
+# Attestation happens only in crypto_core_mt4_trusted_attestation.yml, which is anchored to the
+# default branch through workflow_run and therefore cannot be defined by an open pull request.
+#
+# Two trust stages live here:
+#   Stage A  build-*-candidate    builds and uploads an IMMUTABLE candidate artifact.
+#   Stage B  qualify-*-candidate  FRESH-DOWNLOADS that exact artifact and qualifies those bytes.
+#
+# The artifact is the immutability boundary.  Stage B never qualifies a mutable build-workspace
+# path, so no PR-controlled background process can mutate bytes between qualification and upload.
+#
 # Lane B acquires a real public Quicknet beacon inside runner temporary storage only.  Raw response
 # and signature bytes are never printed, never uploaded and never committed; only the SHA-256 of the
 # raw signature and the verification verdict are reported.
@@ -13,6 +25,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/crypto_core_mt4_s3a_blst_qualification.yml"
+      - ".github/workflows/crypto_core_mt4_trusted_attestation.yml"
       - "scripts/crypto_core/qualification/**"
       - "tests/crypto_core/fixtures/mt4_s3a_blst_v0317_qualification_v2.json"
       - "tests/crypto_core/fixtures/mt4_blst_dependency_admission_evidence_v1.json"
@@ -35,34 +48,29 @@ env:
   ACTIONS_SETUP_PYTHON_COMMIT: a26af69be951a213d495a4c3e4e4022e16d87065
   ACTIONS_ATTEST_COMMIT: 508db95dd578ae2727ebd6217d5ba78e4fbda05d
   ACTIONS_UPLOAD_ARTIFACT_COMMIT: 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-  # download-artifact is the trusted transport across the credential trust boundary, so its exact
-  # identity is part of the admission evidence and is bound into the manifest.
   ACTIONS_DOWNLOAD_ARTIFACT_COMMIT: 3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
   QUICKNET_SCHEME: bls-unchained-g1-rfc9380
   DEPENDENCY_PROFILE_ID: D-DEP-02
   FIXTURE_CORPUS_ID: FX-DRAND-QUICKNET.v1
   VERIFICATION_POLICY_ID: deterministic_supplied_proof_verification_no_network.v1
+  RECEIPT_SCHEMA_VERSION: mt4-blst-qualification-receipt.v1
 
 jobs:
-  qualify:
-    name: qualify ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+  # =============================================================================================
+  # STAGE A -- UNPRIVILEGED BUILD.  Produces the immutable candidate artifact and stops.
+  # No Lane A or Lane B runs here: qualification must consume a fresh download, not this workspace.
+  # =============================================================================================
+  build-linux-candidate:
+    name: build-linux-candidate
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
-    # UNPRIVILEGED DOMAIN.  This job checks out and executes pull-request-controlled Python, C and
-    # shell, so it must hold NO attestation capability.  GitHub exposes the OIDC token at JOB
-    # scope, so granting id-token here would place PR-controlled execution in the same trust domain
-    # as the Sigstore signing identity.  Attestation happens only in attest-qualified-evidence,
-    # which executes no repository code.  contents: read is the entire privilege set.
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-2022
-            library_name: mt4_s3a_blst_quicknet_shim.dll
-          - os: ubuntu-22.04
-            library_name: libmt4_s3a_blst_quicknet_shim.so
+    outputs:
+      artifact-id: ${{ steps.upload-candidate.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload-candidate.outputs.artifact-digest }}
+    env:
+      MT4_LIBRARY_NAME: libmt4_s3a_blst_quicknet_shim.so
     steps:
       # The qualification source MUST be the exact frozen branch head, never GitHub's synthetic
       # refs/pull/<n>/merge commit: the evidence has to describe code that actually exists on the
@@ -94,17 +102,6 @@ jobs:
         with:
           python-version: "3.8"
 
-      - name: Report runner and toolchain identity
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "RUNNER_OS=${RUNNER_OS}"
-          echo "RUNNER_ARCH=${RUNNER_ARCH}"
-          echo "RUNNER_IMAGE=${ImageOS:-unknown}"
-          echo "RUNNER_IMAGE_VERSION=${ImageVersion:-unknown}"
-          echo "PYTHON_VERSION=$(python -c 'import sys; print(sys.version.replace(chr(10)," "))')"
-          echo "PYTHON_BITS=$(python -c 'import struct; print(struct.calcsize("P")*8)')"
-
       - name: Fail closed unless Python is exactly 3.8
         shell: bash
         run: |
@@ -115,6 +112,17 @@ jobs:
               raise SystemExit("PYTHON_38_REQUIRED got {}.{}".format(*sys.version_info[:2]))
           print("PYTHON_38_CONFIRMED")
           PY
+
+      - name: Report runner and toolchain identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUNNER_OS=${RUNNER_OS}"
+          echo "RUNNER_ARCH=${RUNNER_ARCH}"
+          echo "RUNNER_IMAGE=${ImageOS:-unknown}"
+          echo "RUNNER_IMAGE_VERSION=${ImageVersion:-unknown}"
+          echo "PYTHON_VERSION=$(python -c 'import sys; print(sys.version.replace(chr(10)," "))')"
+          echo "PYTHON_BITS=$(python -c 'import struct; print(struct.calcsize("P")*8)')"
 
       - name: Checkout official blst at the pinned commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -144,8 +152,7 @@ jobs:
       # the build.sh command line, build.sh forwards unrecognised -* options into cflags, and
       # src/vect.h (72, 144) and src/sha256.h gate the ADX/SHA specialisations on
       # !defined(__BLST_PORTABLE__).  The portable binary is what the whole qualification then runs.
-      - name: Build official blst static library (Linux)
-        if: runner.os == 'Linux'
+      - name: Build official blst static library
         shell: bash
         working-directory: blst-upstream
         run: |
@@ -165,26 +172,201 @@ jobs:
             echo "MT4_BUILD_FLAGS=-D__BLST_PORTABLE__ -O2 -fPIC -fvisibility=hidden -shared"
             echo "MT4_PORTABLE_MODE=PORTABLE"
             echo "MT4_PORTABILITY_EVIDENCE=build.sh would add -D__ADX__ from build-host /proc/cpuinfo; -D__BLST_PORTABLE__ (pinned README) disables the ADX/SHA specialisations gated in src/vect.h 72,144 and src/sha256.h"
+            echo "MT4_BLST_STATIC_LIBRARY=blst-upstream/libblst.a"
           } >> "${GITHUB_ENV}"
 
-      - name: Build official blst static library (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
+      - name: Build qualification shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/candidate"
+          cc -O2 -fPIC -fvisibility=hidden -shared \
+            -I blst-upstream/bindings \
+            scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_shim.c \
+            blst-upstream/libblst.a \
+            -o "${RUNNER_TEMP}/candidate/${MT4_LIBRARY_NAME}"
+          echo "SHIM_SOURCE_SHA256=$(python -c "import hashlib;print(hashlib.sha256(open('scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_shim.c','rb').read()).hexdigest())")"
+
+      - name: Generate canonical build-provenance manifest
+        shell: bash
+        env:
+          MT4_SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test -f "${RUNNER_TEMP}/candidate/${MT4_LIBRARY_NAME}"
+          python scripts/crypto_core/qualification/mt4_blst_dependency_admission_manifest.py \
+            --output "${RUNNER_TEMP}/candidate/mt4_blst_dependency_admission_manifest.json" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --source-head-sha "${MT4_SOURCE_HEAD}" \
+            --upstream-repository "https://github.com/supranational/blst" \
+            --upstream-release "${BLST_RELEASE}" \
+            --upstream-commit "${BLST_COMMIT}" \
+            --upstream-license "Apache-2.0" \
+            --upstream-license-path "blst-upstream/LICENSE" \
+            --upstream-checkout "blst-upstream" \
+            --runner-os "${RUNNER_OS}" \
+            --runner-arch "${RUNNER_ARCH}" \
+            --runner-image "${ImageOS:-unknown}" \
+            --runner-image-version "${ImageVersion:-unknown}" \
+            --compiler-id "${MT4_COMPILER_ID}" \
+            --compiler-version "${MT4_COMPILER_VERSION}" \
+            --target-identity "${MT4_TARGET_IDENTITY}" \
+            --build-command "${MT4_BUILD_COMMAND}" \
+            --build-flags "${MT4_BUILD_FLAGS}" \
+            --portable-mode "${MT4_PORTABLE_MODE}" \
+            --portability-evidence "${MT4_PORTABILITY_EVIDENCE}" \
+            --blst-static-library "${MT4_BLST_STATIC_LIBRARY}" \
+            --shim-source "scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_shim.c" \
+            --probe-source "scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_probe.py" \
+            --qualification-workflow ".github/workflows/crypto_core_mt4_s3a_blst_qualification.yml" \
+            --output-binary "${RUNNER_TEMP}/candidate/${MT4_LIBRARY_NAME}" \
+            --output-binary-name "${MT4_LIBRARY_NAME}" \
+            --actions-checkout-commit "${ACTIONS_CHECKOUT_COMMIT}" \
+            --actions-setup-python-commit "${ACTIONS_SETUP_PYTHON_COMMIT}" \
+            --actions-attest-commit "${ACTIONS_ATTEST_COMMIT}" \
+            --actions-upload-artifact-commit "${ACTIONS_UPLOAD_ARTIFACT_COMMIT}" \
+            --actions-download-artifact-commit "${ACTIONS_DOWNLOAD_ARTIFACT_COMMIT}" \
+            --quicknet-chain-hash "${QUICKNET_CHAIN_HASH}" \
+            --quicknet-scheme "${QUICKNET_SCHEME}" \
+            --dependency-profile-id "${DEPENDENCY_PROFILE_ID}" \
+            --fixture-corpus-id "${FIXTURE_CORPUS_ID}" \
+            --verification-policy-id "${VERIFICATION_POLICY_ID}" \
+            --workflow-run-id "${GITHUB_RUN_ID}" \
+            --workflow-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --ci-workflow-identity "${GITHUB_WORKFLOW_REF:-${GITHUB_WORKFLOW}}"
+          echo "MT4_BLST_BUILD_PROVENANCE=PASS"
+
+      # THE IMMUTABILITY BOUNDARY.  Exactly two explicitly named paths, uploaded once, never
+      # overwritten and never re-uploaded.  Everything downstream consumes this artifact, not this
+      # runner's mutable filesystem.
+      - name: Upload immutable candidate artifact
+        id: upload-candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mt4-blst-candidate-linux-x64
+          path: |
+            ${{ runner.temp }}/candidate/libmt4_s3a_blst_quicknet_shim.so
+            ${{ runner.temp }}/candidate/mt4_blst_dependency_admission_manifest.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 30
+
+      - name: Report immutable candidate identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "MT4_CANDIDATE_ARTIFACT_NAME=mt4-blst-candidate-linux-x64"
+          echo "MT4_CANDIDATE_ARTIFACT_ID=${{ steps.upload-candidate.outputs.artifact-id }}"
+          echo "MT4_CANDIDATE_ARTIFACT_DIGEST=${{ steps.upload-candidate.outputs.artifact-digest }}"
+          echo "MT4_CANDIDATE_IMMUTABLE=true"
+
+  build-windows-candidate:
+    name: build-windows-candidate
+    runs-on: windows-2022
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.upload-candidate.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload-candidate.outputs.artifact-digest }}
+    env:
+      MT4_LIBRARY_NAME: mt4_s3a_blst_quicknet_shim.dll
+    steps:
+      - name: Checkout crypto_core at the exact qualification head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Prove the checked-out worktree is the exact qualification head
+        shell: bash
+        env:
+          QUALIFICATION_EXPECTED_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SOURCE_HEAD="$(git rev-parse HEAD)"
+          echo "QUALIFICATION_EXPECTED_HEAD=${QUALIFICATION_EXPECTED_HEAD}"
+          echo "QUALIFICATION_CHECKOUT_HEAD=${ACTUAL_SOURCE_HEAD}"
+          if [ "${ACTUAL_SOURCE_HEAD}" != "${QUALIFICATION_EXPECTED_HEAD}" ]; then
+            echo "QUALIFICATION_SOURCE_HEAD_MISMATCH expected=${QUALIFICATION_EXPECTED_HEAD} actual=${ACTUAL_SOURCE_HEAD}"
+            exit 1
+          fi
+          echo "QUALIFICATION_EXACT_HEAD=PASS"
+
+      - name: Setup Python 3.8
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.8"
+
+      - name: Fail closed unless Python is exactly 3.8
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys
+          if sys.version_info[:2] != (3, 8):
+              raise SystemExit("PYTHON_38_REQUIRED got {}.{}".format(*sys.version_info[:2]))
+          print("PYTHON_38_CONFIRMED")
+          PY
+
+      - name: Report runner and toolchain identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUNNER_OS=${RUNNER_OS}"
+          echo "RUNNER_ARCH=${RUNNER_ARCH}"
+          echo "RUNNER_IMAGE=${ImageOS:-unknown}"
+          echo "RUNNER_IMAGE_VERSION=${ImageVersion:-unknown}"
+          echo "PYTHON_VERSION=$(python -c 'import sys; print(sys.version.replace(chr(10)," "))')"
+          echo "PYTHON_BITS=$(python -c 'import struct; print(struct.calcsize("P")*8)')"
+
+      - name: Checkout official blst at the pinned commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: supranational/blst
+          ref: ${{ env.BLST_COMMIT }}
+          path: blst-upstream
+          persist-credentials: false
+
+      - name: Prove upstream identity
+        shell: bash
         working-directory: blst-upstream
+        run: |
+          set -euo pipefail
+          UPSTREAM_HEAD="$(git rev-parse HEAD)"
+          echo "UPSTREAM_HEAD=${UPSTREAM_HEAD}"
+          if [ "${UPSTREAM_HEAD}" != "${BLST_COMMIT}" ]; then
+            echo "BLST_TAG_COMMIT_MISMATCH expected=${BLST_COMMIT} actual=${UPSTREAM_HEAD}"
+            exit 1
+          fi
+          echo "UPSTREAM_RELEASE=${BLST_RELEASE}"
+          echo "UPSTREAM_LICENSE_SHA256=$(python -c "import hashlib,sys;print(hashlib.sha256(open('LICENSE','rb').read()).hexdigest())")"
+          echo "UPSTREAM_TREE_STATUS=$(git status --porcelain=v1 | wc -l)"
+
+      - name: Build official blst static library and shim
+        shell: cmd
         run: |
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSPATH=%%i
           if "%VSPATH%"=="" exit /b 1
           call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
           cl 2>&1 | findstr /C:"Version"
           cl 2>&1 | findstr /C:"Version" > "%RUNNER_TEMP%\msvc_version.txt"
+          cd blst-upstream
           call build.bat || exit /b 1
           dir blst.lib
+          cd ..
+          mkdir "%RUNNER_TEMP%\candidate" 2>nul
+          cl /nologo /O2 /LD ^
+            /I blst-upstream\bindings ^
+            scripts\crypto_core\qualification\mt4_s3a_blst_quicknet_shim.c ^
+            blst-upstream\blst.lib ^
+            /Fe:"%RUNNER_TEMP%\candidate\%MT4_LIBRARY_NAME%" || exit /b 1
+          dir "%RUNNER_TEMP%\candidate"
 
       # build.bat performs NO host CPU feature detection, never defines __ADX__ and passes no
       # /arch: flag, so src/vect.h never aliases to the mulx_/sqrx_/ctx_ specialisations.  No
       # portable flag exists for build.bat and none is invented here.
       - name: Record Windows build metadata
-        if: runner.os == 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -202,58 +384,222 @@ jobs:
             echo "MT4_BUILD_FLAGS=/nologo /O2 /LD"
             echo "MT4_PORTABLE_MODE=PORTABLE"
             echo "MT4_PORTABILITY_EVIDENCE=build.bat performs no host CPU detection, never defines __ADX__ and passes no /arch: flag, so src/vect.h keeps the baseline x86-64 paths; emitted-binary disassembly was not performed"
+            echo "MT4_BLST_STATIC_LIBRARY=blst-upstream/blst.lib"
           } >> "${GITHUB_ENV}"
+          echo "SHIM_SOURCE_SHA256=$(python -c "import hashlib;print(hashlib.sha256(open('scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_shim.c','rb').read()).hexdigest())")"
 
-      - name: Build qualification shim (Linux)
-        if: runner.os == 'Linux'
+      - name: Generate canonical build-provenance manifest
+        shell: bash
+        env:
+          MT4_SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test -f "${RUNNER_TEMP}/candidate/${MT4_LIBRARY_NAME}"
+          python scripts/crypto_core/qualification/mt4_blst_dependency_admission_manifest.py \
+            --output "${RUNNER_TEMP}/candidate/mt4_blst_dependency_admission_manifest.json" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --source-head-sha "${MT4_SOURCE_HEAD}" \
+            --upstream-repository "https://github.com/supranational/blst" \
+            --upstream-release "${BLST_RELEASE}" \
+            --upstream-commit "${BLST_COMMIT}" \
+            --upstream-license "Apache-2.0" \
+            --upstream-license-path "blst-upstream/LICENSE" \
+            --upstream-checkout "blst-upstream" \
+            --runner-os "${RUNNER_OS}" \
+            --runner-arch "${RUNNER_ARCH}" \
+            --runner-image "${ImageOS:-unknown}" \
+            --runner-image-version "${ImageVersion:-unknown}" \
+            --compiler-id "${MT4_COMPILER_ID}" \
+            --compiler-version "${MT4_COMPILER_VERSION}" \
+            --target-identity "${MT4_TARGET_IDENTITY}" \
+            --build-command "${MT4_BUILD_COMMAND}" \
+            --build-flags "${MT4_BUILD_FLAGS}" \
+            --portable-mode "${MT4_PORTABLE_MODE}" \
+            --portability-evidence "${MT4_PORTABILITY_EVIDENCE}" \
+            --blst-static-library "${MT4_BLST_STATIC_LIBRARY}" \
+            --shim-source "scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_shim.c" \
+            --probe-source "scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_probe.py" \
+            --qualification-workflow ".github/workflows/crypto_core_mt4_s3a_blst_qualification.yml" \
+            --output-binary "${RUNNER_TEMP}/candidate/${MT4_LIBRARY_NAME}" \
+            --output-binary-name "${MT4_LIBRARY_NAME}" \
+            --actions-checkout-commit "${ACTIONS_CHECKOUT_COMMIT}" \
+            --actions-setup-python-commit "${ACTIONS_SETUP_PYTHON_COMMIT}" \
+            --actions-attest-commit "${ACTIONS_ATTEST_COMMIT}" \
+            --actions-upload-artifact-commit "${ACTIONS_UPLOAD_ARTIFACT_COMMIT}" \
+            --actions-download-artifact-commit "${ACTIONS_DOWNLOAD_ARTIFACT_COMMIT}" \
+            --quicknet-chain-hash "${QUICKNET_CHAIN_HASH}" \
+            --quicknet-scheme "${QUICKNET_SCHEME}" \
+            --dependency-profile-id "${DEPENDENCY_PROFILE_ID}" \
+            --fixture-corpus-id "${FIXTURE_CORPUS_ID}" \
+            --verification-policy-id "${VERIFICATION_POLICY_ID}" \
+            --workflow-run-id "${GITHUB_RUN_ID}" \
+            --workflow-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --ci-workflow-identity "${GITHUB_WORKFLOW_REF:-${GITHUB_WORKFLOW}}"
+          echo "MT4_BLST_BUILD_PROVENANCE=PASS"
+
+      - name: Upload immutable candidate artifact
+        id: upload-candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mt4-blst-candidate-windows-x64
+          path: |
+            ${{ runner.temp }}/candidate/mt4_s3a_blst_quicknet_shim.dll
+            ${{ runner.temp }}/candidate/mt4_blst_dependency_admission_manifest.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 30
+
+      - name: Report immutable candidate identity
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/shim"
-          cc --version | head -n 1
-          cc -O2 -fPIC -fvisibility=hidden -shared \
-            -I blst-upstream/bindings \
-            scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_shim.c \
-            blst-upstream/libblst.a \
-            -o "${RUNNER_TEMP}/shim/${{ matrix.library_name }}"
-          echo "BUILD_FLAGS=-O2 -fPIC -fvisibility=hidden -shared"
-          echo "SHIM_SOURCE_SHA256=$(python -c "import hashlib;print(hashlib.sha256(open('scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_shim.c','rb').read()).hexdigest())")"
-          echo "OUTPUT_BINARY_SHA256=$(python -c "import hashlib,os;p=os.path.join(os.environ['RUNNER_TEMP'],'shim','${{ matrix.library_name }}');print(hashlib.sha256(open(p,'rb').read()).hexdigest())")"
+          echo "MT4_CANDIDATE_ARTIFACT_NAME=mt4-blst-candidate-windows-x64"
+          echo "MT4_CANDIDATE_ARTIFACT_ID=${{ steps.upload-candidate.outputs.artifact-id }}"
+          echo "MT4_CANDIDATE_ARTIFACT_DIGEST=${{ steps.upload-candidate.outputs.artifact-digest }}"
+          echo "MT4_CANDIDATE_IMMUTABLE=true"
 
-      - name: Build qualification shim (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
+  # =============================================================================================
+  # STAGE B -- UNPRIVILEGED FRESH-DOWNLOAD QUALIFICATION.
+  # Lane A and Lane B run against the bytes fetched back out of the immutable artifact, addressed
+  # by the exact artifact ID emitted by the build job, never against a build-workspace path.
+  # =============================================================================================
+  qualify-linux-candidate:
+    name: qualify-linux-candidate
+    needs: build-linux-candidate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      MT4_PLATFORM: linux-x64
+      MT4_LIBRARY_NAME: libmt4_s3a_blst_quicknet_shim.so
+      MT4_CANDIDATE_ARTIFACT_NAME: mt4-blst-candidate-linux-x64
+      MT4_CANDIDATE_ARTIFACT_ID: ${{ needs.build-linux-candidate.outputs.artifact-id }}
+      MT4_CANDIDATE_ARTIFACT_DIGEST: ${{ needs.build-linux-candidate.outputs.artifact-digest }}
+      MT4_RECEIPT_ARTIFACT_NAME: mt4-blst-qualification-receipt-linux-x64
+    steps:
+      - name: Checkout crypto_core at the exact qualification head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Prove the checked-out worktree is the exact qualification head
+        shell: bash
+        env:
+          QUALIFICATION_EXPECTED_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
-          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSPATH=%%i
-          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
-          mkdir "%RUNNER_TEMP%\shim" 2>nul
-          cl /nologo /O2 /LD ^
-            /I blst-upstream\bindings ^
-            scripts\crypto_core\qualification\mt4_s3a_blst_quicknet_shim.c ^
-            blst-upstream\blst.lib ^
-            /Fe:"%RUNNER_TEMP%\shim\${{ matrix.library_name }}" || exit /b 1
-          dir "%RUNNER_TEMP%\shim"
+          set -euo pipefail
+          ACTUAL_SOURCE_HEAD="$(git rev-parse HEAD)"
+          echo "QUALIFICATION_EXPECTED_HEAD=${QUALIFICATION_EXPECTED_HEAD}"
+          echo "QUALIFICATION_CHECKOUT_HEAD=${ACTUAL_SOURCE_HEAD}"
+          if [ "${ACTUAL_SOURCE_HEAD}" != "${QUALIFICATION_EXPECTED_HEAD}" ]; then
+            echo "QUALIFICATION_SOURCE_HEAD_MISMATCH expected=${QUALIFICATION_EXPECTED_HEAD} actual=${ACTUAL_SOURCE_HEAD}"
+            exit 1
+          fi
+          echo "QUALIFICATION_EXACT_HEAD=PASS"
 
-      - name: Report shim artifact digests
+      - name: Setup Python 3.8
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.8"
+
+      - name: Fail closed unless Python is exactly 3.8
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import hashlib, os, pathlib
-          shim = pathlib.Path("scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_shim.c")
-          print("SHIM_SOURCE_SHA256=" + hashlib.sha256(shim.read_bytes()).hexdigest())
-          built = pathlib.Path(os.environ["RUNNER_TEMP"]) / "shim"
-          for path in sorted(built.iterdir()):
-              print("OUTPUT_BINARY={} SHA256={}".format(path.name, hashlib.sha256(path.read_bytes()).hexdigest()))
+          import sys
+          if sys.version_info[:2] != (3, 8):
+              raise SystemExit("PYTHON_38_REQUIRED got {}.{}".format(*sys.version_info[:2]))
+          print("PYTHON_38_CONFIRMED")
           PY
 
+      # Lane A's negative vectors are read from the pinned upstream source, so the pinned upstream
+      # tree is required here too.  It is source data only; nothing from it is built in this job.
+      - name: Checkout official blst at the pinned commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: supranational/blst
+          ref: ${{ env.BLST_COMMIT }}
+          path: blst-upstream
+          persist-credentials: false
+
+      - name: Download the immutable candidate artifact by exact artifact id
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build-linux-candidate.outputs.artifact-id }}
+          path: ${{ runner.temp }}/candidate
+          digest-mismatch: error
+
+      - name: Bind the downloaded candidate identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, pathlib
+
+          root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "candidate"
+          binary_name = os.environ["MT4_LIBRARY_NAME"]
+          manifest_name = "mt4_blst_dependency_admission_manifest.json"
+
+          # The artifact must contain EXACTLY the two expected files -- an unexpected third file
+          # would mean the immutable candidate is not what this qualification believes it is.
+          found = sorted(p for p in root.rglob("*") if p.is_file())
+          names = sorted(p.name for p in found)
+          print("CANDIDATE_DOWNLOADED_FILES=%s" % ",".join(names))
+          if names != sorted([binary_name, manifest_name]):
+              raise SystemExit("CANDIDATE_ARTIFACT_INVENTORY_MISMATCH:%s" % ",".join(names))
+
+          binary = next(p for p in found if p.name == binary_name)
+          manifest_path = next(p for p in found if p.name == manifest_name)
+
+          binary_bytes = binary.read_bytes()
+          manifest_bytes = manifest_path.read_bytes()
+          binary_sha256 = hashlib.sha256(binary_bytes).hexdigest()
+          manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+          manifest = json.loads(manifest_bytes.decode("utf-8"))
+
+          print("CANDIDATE_BINARY_SHA256=%s" % binary_sha256)
+          print("CANDIDATE_MANIFEST_SHA256=%s" % manifest_sha256)
+
+          # Fail closed on any identity disagreement inside the immutable artifact itself.
+          if manifest["output_binary_sha256"] != binary_sha256:
+              raise SystemExit("CANDIDATE_BINARY_DIGEST_MISMATCH")
+          if manifest["output_binary_name"] != binary_name:
+              raise SystemExit("CANDIDATE_BINARY_NAME_MISMATCH")
+
+          expected_head = os.environ["MT4_EXPECTED_SOURCE_HEAD"]
+          if manifest["source_head_sha"] != expected_head:
+              raise SystemExit("CANDIDATE_SOURCE_HEAD_MISMATCH")
+
+          for flag in (
+              "dependency_profile_admitted", "fixture_corpus_admitted", "mt4_verifier_profile_selected",
+              "proof_verified", "quorum_countable", "operational_quorum_ready",
+              "machine_time_origin_proven", "timestamp_origin_proven", "readiness_promoted",
+              "connector_promoted",
+          ):
+              if manifest[flag] is not False:
+                  raise SystemExit("PROTECTED_FLAG_NOT_FALSE:" + flag)
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write("MT4_S3A_LIBRARY=%s\n" % binary)
+              handle.write("MT4_CANDIDATE_MANIFEST=%s\n" % manifest_path)
+              handle.write("MT4_CANDIDATE_BINARY_SHA256=%s\n" % binary_sha256)
+              handle.write("MT4_CANDIDATE_MANIFEST_SHA256=%s\n" % manifest_sha256)
+              handle.write("MT4_UPSTREAM_SOURCE_TREE_DIGEST=%s\n" % manifest["upstream_source_tree_digest"])
+              handle.write("MT4_BUILD_RECIPE_DIGEST=%s\n" % manifest["build_recipe_digest"])
+          print("CANDIDATE_IDENTITY_BOUND=PASS")
+          print("QUALIFICATION_INPUT_SOURCE=github_artifact_fresh_download")
+          PY
+        env:
+          MT4_EXPECTED_SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
       # ---------------------------------------------------------------------------------------
-      # LANE A -- offline, deterministic, no network.
+      # LANE A -- offline, deterministic, no network.  Runs against the DOWNLOADED binary.
       # ---------------------------------------------------------------------------------------
       - name: Lane A offline structural and negative vectors
         shell: bash
-        env:
-          MT4_S3A_LIBRARY: ${{ runner.temp }}/shim/${{ matrix.library_name }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -312,11 +658,10 @@ jobs:
               raise SystemExit("LANE_A_FAILURES=%s" % ",".join(failures))
           print("LANE_A_STRUCTURAL_RESULT=PASS")
           PY
+          echo "MT4_LANE_A_STRUCTURAL=PASS" >> "${GITHUB_ENV}"
 
       - name: Lane A upstream Apache-2.0 subgroup-invalid vectors
         shell: bash
-        env:
-          MT4_S3A_LIBRARY: ${{ runner.temp }}/shim/${{ matrix.library_name }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -438,14 +783,16 @@ jobs:
           print("UPSTREAM_NONCANONICAL_MENTIONS=%d" % len(noncanonical))
           print("NONCANONICAL_STATUS=NOT_WIRED_NO_CONFIRMED_UPSTREAM_VECTOR_CLASS")
           PY
+          {
+            echo "MT4_LANE_A_UPSTREAM_SUBGROUP=PASS"
+            echo "MT4_LANE_A_G1_DECODE_SUBGROUP=PASS"
+          } >> "${GITHUB_ENV}"
 
       # ---------------------------------------------------------------------------------------
       # LANE B -- transient production compatibility.  Raw bytes never leave runner memory/temp.
       # ---------------------------------------------------------------------------------------
       - name: Lane B transient Quicknet compatibility
         shell: bash
-        env:
-          MT4_S3A_LIBRARY: ${{ runner.temp }}/shim/${{ matrix.library_name }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -628,107 +975,52 @@ jobs:
           print("LANE_B_REAL_QUICKNET_VERIFY=PASS")
           print("LANE_B_RAW_BYTES_PERSISTED=False")
           PY
+          {
+            echo "MT4_LANE_B_CHAIN_ROOT_BINDING=PASS"
+            echo "MT4_LANE_B_REAL_QUICKNET=PASS"
+          } >> "${GITHUB_ENV}"
 
-      # ---------------------------------------------------------------------------------------
-      # DEPENDENCY-ADMISSION EVIDENCE.  Everything below runs ONLY after the complete Lane A and
-      # Lane B qualification above has passed, and describes the EXACT SAME binary at the exact
-      # same canonical path -- never a rebuild or a copy.  This collects evidence for a future
-      # governed admission decision; it admits nothing.
-      # ---------------------------------------------------------------------------------------
-      - name: Generate canonical build-provenance manifest
+      - name: Generate qualification receipt
         shell: bash
         env:
-          MT4_S3A_LIBRARY: ${{ runner.temp }}/shim/${{ matrix.library_name }}
           MT4_SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          test -f "${MT4_S3A_LIBRARY}"
-          python scripts/crypto_core/qualification/mt4_blst_dependency_admission_manifest.py \
-            --output "${RUNNER_TEMP}/shim/mt4_blst_dependency_admission_manifest.json" \
-            --repository "${GITHUB_REPOSITORY}" \
+          mkdir -p "${RUNNER_TEMP}/receipt"
+          python scripts/crypto_core/qualification/mt4_blst_dependency_admission_manifest.py --emit-receipt \
+            --receipt-output "${RUNNER_TEMP}/receipt/mt4_blst_qualification_receipt.json" \
+            --receipt-schema-version "${RECEIPT_SCHEMA_VERSION}" \
+            --platform "${MT4_PLATFORM}" \
+            --source-run-id "${GITHUB_RUN_ID}" \
+            --source-run-attempt "${GITHUB_RUN_ATTEMPT}" \
             --source-head-sha "${MT4_SOURCE_HEAD}" \
-            --upstream-repository "https://github.com/supranational/blst" \
-            --upstream-release "${BLST_RELEASE}" \
-            --upstream-commit "${BLST_COMMIT}" \
-            --upstream-license "Apache-2.0" \
-            --upstream-license-path "blst-upstream/LICENSE" \
-            --upstream-checkout "blst-upstream" \
-            --runner-os "${RUNNER_OS}" \
-            --runner-arch "${RUNNER_ARCH}" \
-            --runner-image "${ImageOS:-unknown}" \
-            --runner-image-version "${ImageVersion:-unknown}" \
-            --compiler-id "${MT4_COMPILER_ID}" \
-            --compiler-version "${MT4_COMPILER_VERSION}" \
-            --target-identity "${MT4_TARGET_IDENTITY}" \
-            --build-command "${MT4_BUILD_COMMAND}" \
-            --build-flags "${MT4_BUILD_FLAGS}" \
-            --portable-mode "${MT4_PORTABLE_MODE}" \
-            --portability-evidence "${MT4_PORTABILITY_EVIDENCE}" \
-            --blst-static-library "$( [ "${RUNNER_OS}" = "Windows" ] && echo blst-upstream/blst.lib || echo blst-upstream/libblst.a )" \
-            --shim-source "scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_shim.c" \
-            --probe-source "scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_probe.py" \
+            --candidate-artifact-id "${MT4_CANDIDATE_ARTIFACT_ID}" \
+            --candidate-artifact-name "${MT4_CANDIDATE_ARTIFACT_NAME}" \
+            --candidate-artifact-digest "${MT4_CANDIDATE_ARTIFACT_DIGEST}" \
+            --binary-name "${MT4_LIBRARY_NAME}" \
+            --binary-sha256 "${MT4_CANDIDATE_BINARY_SHA256}" \
+            --manifest-sha256 "${MT4_CANDIDATE_MANIFEST_SHA256}" \
+            --qualification-workflow-identity "${GITHUB_WORKFLOW_REF:-${GITHUB_WORKFLOW}}" \
             --qualification-workflow ".github/workflows/crypto_core_mt4_s3a_blst_qualification.yml" \
-            --output-binary "${MT4_S3A_LIBRARY}" \
-            --output-binary-name "${{ matrix.library_name }}" \
-            --actions-checkout-commit "${ACTIONS_CHECKOUT_COMMIT}" \
-            --actions-setup-python-commit "${ACTIONS_SETUP_PYTHON_COMMIT}" \
-            --actions-attest-commit "${ACTIONS_ATTEST_COMMIT}" \
-            --actions-upload-artifact-commit "${ACTIONS_UPLOAD_ARTIFACT_COMMIT}" \
-            --actions-download-artifact-commit "${ACTIONS_DOWNLOAD_ARTIFACT_COMMIT}" \
+            --blst-release "${BLST_RELEASE}" \
+            --blst-commit "${BLST_COMMIT}" \
             --quicknet-chain-hash "${QUICKNET_CHAIN_HASH}" \
-            --quicknet-scheme "${QUICKNET_SCHEME}" \
-            --dependency-profile-id "${DEPENDENCY_PROFILE_ID}" \
-            --fixture-corpus-id "${FIXTURE_CORPUS_ID}" \
-            --verification-policy-id "${VERIFICATION_POLICY_ID}" \
-            --workflow-run-id "${GITHUB_RUN_ID}" \
-            --workflow-run-attempt "${GITHUB_RUN_ATTEMPT}" \
-            --ci-workflow-identity "${GITHUB_WORKFLOW_REF:-${GITHUB_WORKFLOW}}"
-          echo "MT4_BLST_BUILD_PROVENANCE=PASS"
+            --upstream-source-tree-digest "${MT4_UPSTREAM_SOURCE_TREE_DIGEST}" \
+            --build-recipe-digest "${MT4_BUILD_RECIPE_DIGEST}" \
+            --lane-a-structural "${MT4_LANE_A_STRUCTURAL}" \
+            --lane-a-upstream-subgroup "${MT4_LANE_A_UPSTREAM_SUBGROUP}" \
+            --lane-a-g1-decode-subgroup "${MT4_LANE_A_G1_DECODE_SUBGROUP}" \
+            --lane-b-chain-root-binding "${MT4_LANE_B_CHAIN_ROOT_BINDING}" \
+            --lane-b-real-quicknet "${MT4_LANE_B_REAL_QUICKNET}"
+          echo "MT4_QUALIFICATION_RECEIPT=GENERATED"
 
-      # Re-hash the exact bytes immediately before the artifact leaves this runner, so no window
-      # exists in which the manifest could describe one file while another is uploaded and later
-      # attested.  This is the last gate inside the unprivileged domain.
-      - name: Prove the attestation subject is the qualified binary
-        shell: bash
-        env:
-          MT4_S3A_LIBRARY: ${{ runner.temp }}/shim/${{ matrix.library_name }}
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import hashlib, json, os, pathlib
-          binary = pathlib.Path(os.environ["MT4_S3A_LIBRARY"])
-          manifest_path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "shim" / "mt4_blst_dependency_admission_manifest.json"
-          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-          actual = hashlib.sha256(binary.read_bytes()).hexdigest()
-          print("SUBJECT_BINARY=%s" % binary.name)
-          print("SUBJECT_BINARY_SHA256=%s" % actual)
-          print("MANIFEST_BINARY_SHA256=%s" % manifest["output_binary_sha256"])
-          if actual != manifest["output_binary_sha256"]:
-              raise SystemExit("TOCTOU_BINARY_IDENTITY_MISMATCH")
-          if manifest["output_binary_name"] != binary.name:
-              raise SystemExit("SUBJECT_NAME_MISMATCH")
-          for flag in (
-              "dependency_profile_admitted", "fixture_corpus_admitted", "mt4_verifier_profile_selected",
-              "proof_verified", "quorum_countable", "operational_quorum_ready",
-              "machine_time_origin_proven", "timestamp_origin_proven", "readiness_promoted",
-              "connector_promoted",
-          ):
-              if manifest[flag] is not False:
-                  raise SystemExit("PROTECTED_FLAG_NOT_FALSE:" + flag)
-          print("MANIFEST_SHA256=%s" % hashlib.sha256(manifest_path.read_bytes()).hexdigest())
-          print("SUBJECT_IDENTITY_PROVEN=PASS")
-          PY
-
-      # Upload ONLY the exact binary and the exact manifest.  No raw Quicknet material, no
-      # temporary fetch files, no compiler intermediates: the two paths are named explicitly.
-      - name: Upload admission evidence
+      - name: Upload qualification receipt
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: mt4-blst-admission-evidence-${{ runner.os == 'Windows' && 'windows-x64' || 'linux-x64' }}
-          path: |
-            ${{ runner.temp }}/shim/${{ matrix.library_name }}
-            ${{ runner.temp }}/shim/mt4_blst_dependency_admission_manifest.json
+          name: mt4-blst-qualification-receipt-linux-x64
+          path: ${{ runner.temp }}/receipt/mt4_blst_qualification_receipt.json
           if-no-files-found: error
+          overwrite: false
           retention-days: 30
 
       - name: Qualification summary
@@ -737,6 +1029,8 @@ jobs:
           set -euo pipefail
           echo "DEPENDENCY_ADMISSION_EVIDENCE=COLLECTED"
           echo "ARCHITECTURE_ID=MT4-S3A-BLST-V0317-NARROW-C-ABI-CTYPES-V2"
+          echo "QUALIFICATION_INPUT_SOURCE=github_artifact_fresh_download"
+          echo "TRUSTED_ATTESTATION_EXECUTION=POST_MERGE_REQUIRED"
           echo "UPSTREAM_RELEASE=${BLST_RELEASE}"
           echo "UPSTREAM_COMMIT=${BLST_COMMIT}"
           echo "RUNNER_OS=${RUNNER_OS}"
@@ -746,60 +1040,577 @@ jobs:
           echo "READINESS_PROMOTED=false"
           echo "CONNECTOR_PROMOTED=false"
 
-  # -------------------------------------------------------------------------------------------
-  # PRIVILEGED ATTESTATION DOMAIN.
-  #
-  # This job is a credential-bearing envelope and nothing else.  It holds the Sigstore OIDC and
-  # attestation capability, and in exchange it MUST NOT execute anything a pull request can
-  # influence: no actions/checkout, no run: step of any shell, no local ./ action, no repository
-  # script, no dependency install, and no execution of the downloaded binary -- actions/attest
-  # only hashes its subject.  Every step is a trusted GitHub action pinned to a full commit SHA.
-  #
-  # Its only input is the artifact produced by the completed qualification matrix in THIS workflow
-  # run, retrieved by the pinned download action, which defaults to the current repository and the
-  # current run and therefore needs no github-token and no extra permission.  digest-mismatch is
-  # set to error explicitly so corrupted transport fails closed rather than being attested.
-  #
-  # The job boundary is what carries the security property: qualification runs on a different
-  # machine, so no process it started can survive into this runner or reach this credential.
-  # This proves credential ISOLATION.  It does not, and must not be read to, prove that the
-  # qualification code itself is non-malicious.
-  # -------------------------------------------------------------------------------------------
-  attest-qualified-evidence:
-    name: attest ${{ matrix.platform }}
-    needs: qualify
-    runs-on: ubuntu-22.04
-    timeout-minutes: 15
+  qualify-windows-candidate:
+    name: qualify-windows-candidate
+    needs: build-windows-candidate
+    runs-on: windows-2022
+    timeout-minutes: 30
     permissions:
       contents: read
-      id-token: write
-      attestations: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: windows-x64
-            artifact_name: mt4-blst-admission-evidence-windows-x64
-            binary_name: mt4_s3a_blst_quicknet_shim.dll
-          - platform: linux-x64
-            artifact_name: mt4-blst-admission-evidence-linux-x64
-            binary_name: libmt4_s3a_blst_quicknet_shim.so
+    env:
+      MT4_PLATFORM: windows-x64
+      MT4_LIBRARY_NAME: mt4_s3a_blst_quicknet_shim.dll
+      MT4_CANDIDATE_ARTIFACT_NAME: mt4-blst-candidate-windows-x64
+      MT4_CANDIDATE_ARTIFACT_ID: ${{ needs.build-windows-candidate.outputs.artifact-id }}
+      MT4_CANDIDATE_ARTIFACT_DIGEST: ${{ needs.build-windows-candidate.outputs.artifact-digest }}
+      MT4_RECEIPT_ARTIFACT_NAME: mt4-blst-qualification-receipt-windows-x64
     steps:
-      - name: Download the qualified admission evidence
+      - name: Checkout crypto_core at the exact qualification head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Prove the checked-out worktree is the exact qualification head
+        shell: bash
+        env:
+          QUALIFICATION_EXPECTED_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SOURCE_HEAD="$(git rev-parse HEAD)"
+          echo "QUALIFICATION_EXPECTED_HEAD=${QUALIFICATION_EXPECTED_HEAD}"
+          echo "QUALIFICATION_CHECKOUT_HEAD=${ACTUAL_SOURCE_HEAD}"
+          if [ "${ACTUAL_SOURCE_HEAD}" != "${QUALIFICATION_EXPECTED_HEAD}" ]; then
+            echo "QUALIFICATION_SOURCE_HEAD_MISMATCH expected=${QUALIFICATION_EXPECTED_HEAD} actual=${ACTUAL_SOURCE_HEAD}"
+            exit 1
+          fi
+          echo "QUALIFICATION_EXACT_HEAD=PASS"
+
+      - name: Setup Python 3.8
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.8"
+
+      - name: Fail closed unless Python is exactly 3.8
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys
+          if sys.version_info[:2] != (3, 8):
+              raise SystemExit("PYTHON_38_REQUIRED got {}.{}".format(*sys.version_info[:2]))
+          print("PYTHON_38_CONFIRMED")
+          PY
+
+      - name: Checkout official blst at the pinned commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: supranational/blst
+          ref: ${{ env.BLST_COMMIT }}
+          path: blst-upstream
+          persist-credentials: false
+
+      - name: Download the immutable candidate artifact by exact artifact id
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ runner.temp }}/admission-evidence
+          artifact-ids: ${{ needs.build-windows-candidate.outputs.artifact-id }}
+          path: ${{ runner.temp }}/candidate
           digest-mismatch: error
 
-      - name: Attest the qualified native binary
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
-        with:
-          subject-path: ${{ runner.temp }}/admission-evidence/${{ matrix.binary_name }}
-          create-storage-record: false
+      - name: Bind the downloaded candidate identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, pathlib
 
-      - name: Attest the canonical provenance manifest
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+          root = pathlib.Path(os.environ["RUNNER_TEMP"]) / "candidate"
+          binary_name = os.environ["MT4_LIBRARY_NAME"]
+          manifest_name = "mt4_blst_dependency_admission_manifest.json"
+
+          # The artifact must contain EXACTLY the two expected files -- an unexpected third file
+          # would mean the immutable candidate is not what this qualification believes it is.
+          found = sorted(p for p in root.rglob("*") if p.is_file())
+          names = sorted(p.name for p in found)
+          print("CANDIDATE_DOWNLOADED_FILES=%s" % ",".join(names))
+          if names != sorted([binary_name, manifest_name]):
+              raise SystemExit("CANDIDATE_ARTIFACT_INVENTORY_MISMATCH:%s" % ",".join(names))
+
+          binary = next(p for p in found if p.name == binary_name)
+          manifest_path = next(p for p in found if p.name == manifest_name)
+
+          binary_bytes = binary.read_bytes()
+          manifest_bytes = manifest_path.read_bytes()
+          binary_sha256 = hashlib.sha256(binary_bytes).hexdigest()
+          manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+          manifest = json.loads(manifest_bytes.decode("utf-8"))
+
+          print("CANDIDATE_BINARY_SHA256=%s" % binary_sha256)
+          print("CANDIDATE_MANIFEST_SHA256=%s" % manifest_sha256)
+
+          # Fail closed on any identity disagreement inside the immutable artifact itself.
+          if manifest["output_binary_sha256"] != binary_sha256:
+              raise SystemExit("CANDIDATE_BINARY_DIGEST_MISMATCH")
+          if manifest["output_binary_name"] != binary_name:
+              raise SystemExit("CANDIDATE_BINARY_NAME_MISMATCH")
+
+          expected_head = os.environ["MT4_EXPECTED_SOURCE_HEAD"]
+          if manifest["source_head_sha"] != expected_head:
+              raise SystemExit("CANDIDATE_SOURCE_HEAD_MISMATCH")
+
+          for flag in (
+              "dependency_profile_admitted", "fixture_corpus_admitted", "mt4_verifier_profile_selected",
+              "proof_verified", "quorum_countable", "operational_quorum_ready",
+              "machine_time_origin_proven", "timestamp_origin_proven", "readiness_promoted",
+              "connector_promoted",
+          ):
+              if manifest[flag] is not False:
+                  raise SystemExit("PROTECTED_FLAG_NOT_FALSE:" + flag)
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write("MT4_S3A_LIBRARY=%s\n" % binary)
+              handle.write("MT4_CANDIDATE_MANIFEST=%s\n" % manifest_path)
+              handle.write("MT4_CANDIDATE_BINARY_SHA256=%s\n" % binary_sha256)
+              handle.write("MT4_CANDIDATE_MANIFEST_SHA256=%s\n" % manifest_sha256)
+              handle.write("MT4_UPSTREAM_SOURCE_TREE_DIGEST=%s\n" % manifest["upstream_source_tree_digest"])
+              handle.write("MT4_BUILD_RECIPE_DIGEST=%s\n" % manifest["build_recipe_digest"])
+          print("CANDIDATE_IDENTITY_BOUND=PASS")
+          print("QUALIFICATION_INPUT_SOURCE=github_artifact_fresh_download")
+          PY
+        env:
+          MT4_EXPECTED_SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      # ---------------------------------------------------------------------------------------
+      # LANE A -- offline, deterministic, no network.  Runs against the DOWNLOADED binary.
+      # ---------------------------------------------------------------------------------------
+      - name: Lane A offline structural and negative vectors
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, sys
+          sys.path.insert(0, os.path.join("scripts", "crypto_core", "qualification"))
+          import mt4_s3a_blst_quicknet_probe as probe
+
+          library = os.environ["MT4_S3A_LIBRARY"]
+          engine = probe.QuicknetQualificationProbe(library)
+          print("NATIVE_LIBRARY_LOADED=True")
+          print("NATIVE_LIBRARY_FILESYSTEM_LOAD_AT_INIT=%s" % probe.NATIVE_LIBRARY_FILESYSTEM_LOAD_AT_INIT)
+          print("FILESYSTEM_REQUIRED_PER_VERIFY_CALL=%s" % probe.FILESYSTEM_REQUIRED_PER_VERIFY_CALL)
+
+          digest = probe.quicknet_message_digest(42)
+          assert len(digest) == 32
+
+          failures = []
+
+          def check(label, got, expected):
+              name_got = probe.STATUS_NAMES.get(got, got)
+              name_expected = probe.STATUS_NAMES.get(expected, expected)
+              ok = got == expected
+              print("LANE_A %-34s got=%-18s expected=%-18s %s"
+                    % (label, name_got, name_expected, "OK" if ok else "FAIL"))
+              if not ok:
+                  failures.append(label)
+
+          # Canonical group identities: compressed infinity is 0xc0 followed by zeros.
+          g1_infinity = bytes([0xC0]) + bytes(47)
+          g2_infinity = bytes([0xC0]) + bytes(95)
+          valid_len_pk = bytes(96)
+          valid_len_sig = bytes(48)
+
+          # Length gates, proven against the NATIVE boundary (Python pre-gates bypassed).
+          check("truncated_signature", engine.verify_unbounded(g2_infinity, valid_len_sig[:-1], digest), probe.STATUS_BAD_LENGTH)
+          check("overlong_signature", engine.verify_unbounded(g2_infinity, valid_len_sig + b"\x00", digest), probe.STATUS_BAD_LENGTH)
+          check("truncated_public_key", engine.verify_unbounded(g2_infinity[:-1], valid_len_sig, digest), probe.STATUS_BAD_LENGTH)
+          check("overlong_public_key", engine.verify_unbounded(g2_infinity + b"\x00", valid_len_sig, digest), probe.STATUS_BAD_LENGTH)
+          check("truncated_message_digest", engine.verify_unbounded(g2_infinity, valid_len_sig, digest[:-1]), probe.STATUS_BAD_LENGTH)
+
+          # A valid in-subgroup public key is required to reach the SIGNATURE gates at all, because
+          # the public key is proven first.  It comes from the stable upstream G2 constant.
+          valid_public_key = engine.g2_generator_compressed()
+          if len(valid_public_key) != 96:
+              raise SystemExit("SCAFFOLDING_GENERATOR_WRONG_SIZE")
+
+          # Malformed encodings: an all-zero buffer has no compression bit set.
+          check("malformed_public_key", engine.verify(bytes(96), g1_infinity, digest), probe.STATUS_PK_BAD_ENCODING)
+          check("malformed_signature", engine.verify(valid_public_key, bytes(48), digest), probe.STATUS_SIG_BAD_ENCODING)
+
+          # Canonical infinity encodings must be rejected as identities, not as bad encodings.
+          check("public_key_infinity", engine.verify(g2_infinity, g1_infinity, digest), probe.STATUS_PK_INFINITY)
+          check("signature_infinity", engine.verify(valid_public_key, g1_infinity, digest), probe.STATUS_SIG_INFINITY)
+
+          if failures:
+              raise SystemExit("LANE_A_FAILURES=%s" % ",".join(failures))
+          print("LANE_A_STRUCTURAL_RESULT=PASS")
+          PY
+          echo "MT4_LANE_A_STRUCTURAL=PASS" >> "${GITHUB_ENV}"
+
+      - name: Lane A upstream Apache-2.0 subgroup-invalid vectors
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, pathlib, re, subprocess, sys
+          sys.path.insert(0, os.path.join("scripts", "crypto_core", "qualification"))
+          import mt4_s3a_blst_quicknet_probe as probe
+
+          # ---------------------------------------------------------------------------------
+          # Authority: the EXACT pinned upstream source file.  Nothing here is invented, and no
+          # generated value may ever be labelled UPSTREAM_LIBRARY_VECTOR.
+          # ---------------------------------------------------------------------------------
+          UPSTREAM = pathlib.Path("blst-upstream")
+          SOURCE_PATH = UPSTREAM / "bindings" / "python" / "run.me"
+          EXPECTED_COMMIT = os.environ["BLST_COMMIT"]
+
+          head = subprocess.check_output(
+              ["git", "rev-parse", "HEAD"], cwd=str(UPSTREAM)).decode().strip()
+          if head != EXPECTED_COMMIT:
+              raise SystemExit("PINNED_UPSTREAM_SOURCE_MISMATCH head=%s" % head)
+          if not SOURCE_PATH.is_file():
+              raise SystemExit("PINNED_UPSTREAM_SOURCE_MISSING path=%s" % SOURCE_PATH)
+          print("UPSTREAM_NEGATIVE_SOURCE_PATH=bindings/python/run.me")
+          print("UPSTREAM_NEGATIVE_SOURCE_COMMIT=%s" % head)
+
+          source = SOURCE_PATH.read_text(encoding="utf-8", errors="strict")
+
+          # Exact upstream low-order identifiers.  G1 points compress to 48 bytes (96 hex chars),
+          # G2 points to 96 bytes (192 hex chars).
+          G1_IDENTIFIERS = ("p11", "p10177", "p859267")
+          G2_IDENTIFIERS = ("p13", "p23", "p2713")
+          HEX_SIZES = {"G1": 96, "G2": 192}
+
+          def extract(identifier, group):
+              """Strict, identifier-anchored extraction.  Fails closed on any structural surprise."""
+              assignments = re.findall(
+                  r"(?m)^[ \t]*" + re.escape(identifier) + r"[ \t]*=(.*(?:\n(?![ \t]*\w+[ \t]*=).*)*)",
+                  source,
+              )
+              if len(assignments) != 1:
+                  raise SystemExit(
+                      "UPSTREAM_IDENTIFIER_NOT_UNIQUE id=%s count=%d" % (identifier, len(assignments)))
+              literals = re.findall(r"[0-9a-fA-F]{32,}", assignments[0])
+              exact = [item for item in literals if len(item) == HEX_SIZES[group]]
+              if len(exact) != 1:
+                  raise SystemExit(
+                      "UPSTREAM_VECTOR_MALFORMED id=%s group=%s expected_hex=%d found=%s"
+                      % (identifier, group, HEX_SIZES[group], [len(i) for i in literals]))
+              raw = bytes.fromhex(exact[0])
+              if len(raw) != HEX_SIZES[group] // 2:
+                  raise SystemExit("UPSTREAM_VECTOR_WRONG_SIZE id=%s" % identifier)
+              return raw
+
+          g1_vectors = {name: extract(name, "G1") for name in G1_IDENTIFIERS}
+          g2_vectors = {name: extract(name, "G2") for name in G2_IDENTIFIERS}
+          print("G1_LOW_ORDER_VECTOR_IDS=%s" % ",".join(G1_IDENTIFIERS))
+          print("G2_LOW_ORDER_VECTOR_IDS=%s" % ",".join(G2_IDENTIFIERS))
+
+          engine = probe.QuicknetQualificationProbe(os.environ["MT4_S3A_LIBRARY"])
+          digest = probe.quicknet_message_digest(42)
+
+          # Deterministic, offline, licence-clean valid G2 point from the stable upstream constant.
+          # It is required because the public key is proven BEFORE the signature, so the G1 subgroup
+          # gate is unreachable without a genuinely in-subgroup public key.
+          valid_public_key = engine.g2_generator_compressed()
+          if len(valid_public_key) != 96:
+              raise SystemExit("SCAFFOLDING_GENERATOR_WRONG_SIZE")
+          if engine.verify(valid_public_key, bytes([0xC0]) + bytes(47), digest) != probe.STATUS_SIG_INFINITY:
+              raise SystemExit("SCAFFOLDING_GENERATOR_NOT_ACCEPTED_AS_PUBLIC_KEY")
+          print("LANE_A_SCAFFOLDING_G2_GENERATOR=VALID_IN_SUBGROUP")
+
+          failures = []
+
+          def check(label, got, expected):
+              ok = got == expected
+              print("LANE_A %-42s got=%-18s expected=%-18s %s"
+                    % (label, probe.STATUS_NAMES.get(got, got),
+                       probe.STATUS_NAMES.get(expected, expected), "OK" if ok else "FAIL"))
+              if not ok:
+                  failures.append(label)
+
+          # Official G1 low-order vectors MUST reach the exact signature subgroup status.
+          for name, vector in g1_vectors.items():
+              check("upstream_g1_low_order[%s]" % name,
+                    engine.verify(valid_public_key, vector, digest),
+                    probe.STATUS_SIG_NOT_IN_GROUP)
+
+          # Official G2 low-order vectors MUST reach the exact public-key subgroup status.
+          for name, vector in g2_vectors.items():
+              check("upstream_g2_low_order[%s]" % name,
+                    engine.verify(vector, bytes([0xC0]) + bytes(47), digest),
+                    probe.STATUS_PK_NOT_IN_GROUP)
+
+          # -----------------------------------------------------------------------------------
+          # Decode-time G1 subgroup edge.  Authority is pinned src/e1.c, NOT bindings/python/run.me.
+          #
+          # POINTonE1_Uncompress_Z masks the three flag bits out of X, so 0x80 followed by 47 zero
+          # bytes decodes to X == 0.  That is on the curve (Y^2 = 0^3 + 4, so Y = +/-2) and rebuilds
+          # successfully, after which the decoder itself returns BLST_POINT_NOT_IN_GROUP.  The shim
+          # must surface that as a SUBGROUP verdict, never as a malformed encoding.
+          # -----------------------------------------------------------------------------------
+          g1_decode_edge_positive_sign = bytes([0x80]) + bytes(47)
+          g1_decode_edge_negative_sign = bytes([0xA0]) + bytes(47)
+          for label, vector in (
+              ("g1_decode_time_not_in_group_x0", g1_decode_edge_positive_sign),
+              ("g1_decode_time_not_in_group_x0_sign", g1_decode_edge_negative_sign),
+          ):
+              check(label, engine.verify(valid_public_key, vector, digest), probe.STATUS_SIG_NOT_IN_GROUP)
+
+          if failures:
+              raise SystemExit("LANE_A_SUBGROUP_FAILURES=%s" % ",".join(failures))
+          print("G1_LOW_ORDER_RESULT=SIG_NOT_IN_GROUP")
+          print("G2_LOW_ORDER_RESULT=PK_NOT_IN_GROUP")
+          print("LANE_A_G1_DECODE_SUBGROUP_RESULT=SIG_NOT_IN_GROUP")
+          print("LANE_A_UPSTREAM_SUBGROUP_RESULT=PASS")
+
+          # Non-canonical: report the source-level finding honestly.  No upstream non-canonical
+          # compressed-input class is claimed, and none is invented.
+          noncanonical = re.findall(r"(?i)non[-_ ]?canonical", source)
+          print("UPSTREAM_NONCANONICAL_MENTIONS=%d" % len(noncanonical))
+          print("NONCANONICAL_STATUS=NOT_WIRED_NO_CONFIRMED_UPSTREAM_VECTOR_CLASS")
+          PY
+          {
+            echo "MT4_LANE_A_UPSTREAM_SUBGROUP=PASS"
+            echo "MT4_LANE_A_G1_DECODE_SUBGROUP=PASS"
+          } >> "${GITHUB_ENV}"
+
+      # ---------------------------------------------------------------------------------------
+      # LANE B -- transient production compatibility.  Raw bytes never leave runner memory/temp.
+      # ---------------------------------------------------------------------------------------
+      - name: Lane B transient Quicknet compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, struct, sys, urllib.request
+          sys.path.insert(0, os.path.join("scripts", "crypto_core", "qualification"))
+          import mt4_s3a_blst_quicknet_probe as probe
+
+          CHAIN = os.environ["QUICKNET_CHAIN_HASH"]
+          ROUND = int(os.environ["QUICKNET_ROUND"])
+          BASE = "https://api.drand.sh/v2/chains/%s" % CHAIN
+
+          # Pinned immutable Quicknet identity.  These are project-side constants, never values the
+          # relay is allowed to choose for us.
+          QUICKNET_BEACON_ID = b"quicknet"
+          QUICKNET_PERIOD_SECONDS = 3
+          QUICKNET_GENESIS_TIME = 1692803367
+          QUICKNET_SCHEME = "bls-unchained-g1-rfc9380"
+
+          def fetch(url):
+              request = urllib.request.Request(url, headers={"Accept": "application/json"})
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.loads(response.read().decode("utf-8"))
+
+          def exact_int(container, name, marker):
+              value = container.get(name)
+              if type(value) is not int or type(value) is bool:
+                  raise SystemExit(marker)
+              return value
+
+          def exact_hex(container, name, marker, expected_len=None):
+              value = container.get(name)
+              if type(value) is not str:
+                  raise SystemExit(marker)
+              try:
+                  raw = bytes.fromhex(value)
+              except ValueError:
+                  raise SystemExit(marker)
+              if expected_len is not None and len(raw) != expected_len:
+                  raise SystemExit(marker)
+              return raw
+
+          info = fetch(BASE + "/info")
+          beacon = fetch(BASE + "/rounds/%d" % ROUND)
+          if type(info) is not dict or type(beacon) is not dict:
+              raise SystemExit("LANE_B_RESPONSE_NOT_OBJECT")
+
+          # ---------------------------------------------------------------------------------
+          # Current Drand v2 chain-info contract.  v2-native field names ONLY: no `hash`, no
+          # `schemeID`, no `groupHash`, no `metadata.beaconID` aliases are accepted.
+          # ---------------------------------------------------------------------------------
+          public_key = exact_hex(info, "public_key", "LANE_B_PUBLIC_KEY_INVALID", 96)
+          genesis_seed = exact_hex(info, "genesis_seed", "LANE_B_GENESIS_SEED_INVALID")
+          if not genesis_seed:
+              raise SystemExit("LANE_B_GENESIS_SEED_INVALID")
+          period = exact_int(info, "period", "LANE_B_PERIOD_INVALID")
+          genesis_time = exact_int(info, "genesis_time", "LANE_B_GENESIS_TIME_INVALID")
+
+          scheme = info.get("scheme")
+          if type(scheme) is not str:
+              raise SystemExit("LANE_B_SCHEME_MISSING")
+          if scheme != QUICKNET_SCHEME:
+              raise SystemExit("LANE_B_SCHEME_MISMATCH")
+          if period != QUICKNET_PERIOD_SECONDS:
+              raise SystemExit("LANE_B_PERIOD_MISMATCH")
+          if genesis_time != QUICKNET_GENESIS_TIME:
+              raise SystemExit("LANE_B_GENESIS_TIME_MISMATCH")
+
+          # Self-reported identity may be cross-checked, but it is NOT the root of trust.
+          reported_chain_hash = info.get("chain_hash")
+          if reported_chain_hash is not None:
+              if type(reported_chain_hash) is not str or len(bytes.fromhex(reported_chain_hash)) != 32:
+                  raise SystemExit("LANE_B_REPORTED_CHAIN_HASH_INVALID")
+              if reported_chain_hash != CHAIN:
+                  raise SystemExit("LANE_B_REPORTED_CHAIN_HASH_MISMATCH")
+          beacon_id = info.get("beacon_id")
+          if beacon_id is not None and beacon_id != QUICKNET_BEACON_ID.decode():
+              raise SystemExit("LANE_B_BEACON_ID_MISMATCH")
+
+          # Persistent evidence: identities, sizes and digests only.  NEVER raw bytes.
+          print("LANE_B_SOURCE_ENDPOINT=%s" % BASE)
+          print("LANE_B_ROUND=%d" % beacon.get("round", -1))
+          print("LANE_B_SCHEME=%s" % scheme)
+          print("LANE_B_PERIOD=%d" % period)
+          print("LANE_B_GENESIS_TIME=%d" % genesis_time)
+          print("LANE_B_PUBLIC_KEY_LEN=%d" % len(public_key))
+          print("LANE_B_PUBLIC_KEY_SHA256=%s" % hashlib.sha256(public_key).hexdigest())
+
+          # ---------------------------------------------------------------------------------
+          # CANONICAL QUICKNET ROOT BINDING.  The relay supplies the public key used for BLS
+          # verification, so its own claimed chain_hash cannot be the trust root.  Recompute the
+          # canonical Drand chain-info hash over the returned material and require equality with
+          # the project-pinned Quicknet root BEFORE the key may be used.
+          # ---------------------------------------------------------------------------------
+          canonical_input = (
+              struct.pack(">I", period)
+              + struct.pack(">q", genesis_time)
+              + public_key
+              + genesis_seed
+              + QUICKNET_BEACON_ID
+          )
+          computed_chain_hash = hashlib.sha256(canonical_input).hexdigest()
+          print("LANE_B_CHAIN_HASH_EXPECTED=%s" % CHAIN)
+          print("LANE_B_CHAIN_HASH_RECOMPUTED=%s" % computed_chain_hash)
+          if computed_chain_hash != CHAIN:
+              raise SystemExit("LANE_B_CANONICAL_CHAIN_HASH_MISMATCH")
+          print("LANE_B_CHAIN_ROOT_BINDING=PASS")
+
+          # ---------------------------------------------------------------------------------
+          # Current Drand v2 round contract: `round` and `signature` are required.  `randomness`
+          # is NOT a defined required v2 round field and is never required here.
+          # ---------------------------------------------------------------------------------
+          if exact_int(beacon, "round", "LANE_B_ROUND_INVALID") != ROUND:
+              raise SystemExit("LANE_B_ROUND_MISMATCH")
+          signature = exact_hex(beacon, "signature", "LANE_B_SIGNATURE_INVALID", 48)
+          print("LANE_B_SIGNATURE_LEN=%d" % len(signature))
+          print("LANE_B_SIGNATURE_SHA256=%s" % hashlib.sha256(signature).hexdigest())
+
+          # Quicknet is unchained: a non-empty previous_signature contradicts the pinned profile.
+          previous_signature = beacon.get("previous_signature")
+          if previous_signature not in (None, ""):
+              raise SystemExit("LANE_B_UNEXPECTED_PREVIOUS_SIGNATURE")
+          print("LANE_B_UNCHAINED_PREVIOUS_SIGNATURE=ABSENT_OR_EMPTY")
+
+          print("V2_RANDOMNESS_FIELD_POLICY=NOT_REQUIRED")
+          randomness_hex = beacon.get("randomness")
+          if randomness_hex is None:
+              print("OPTIONAL_EXTRA_RANDOMNESS_CONSISTENCY=FIELD_ABSENT_V2_EXPECTED")
+          else:
+              # Defensive consistency rule of THIS qualification, not a v2 schema requirement.
+              randomness = exact_hex(beacon, "randomness", "LANE_B_RANDOMNESS_NOT_HEX", 32)
+              if randomness != hashlib.sha256(signature).digest():
+                  raise SystemExit("LANE_B_RANDOMNESS_INCONSISTENT")
+              print("OPTIONAL_EXTRA_RANDOMNESS_CONSISTENCY=PASS")
+
+          engine = probe.QuicknetQualificationProbe(os.environ["MT4_S3A_LIBRARY"])
+          digest = probe.quicknet_message_digest(ROUND)
+
+          failures = []
+
+          def check(label, got, expected):
+              ok = got == expected
+              print("LANE_B %-30s got=%-18s expected=%-18s %s"
+                    % (label, probe.STATUS_NAMES.get(got, got),
+                       probe.STATUS_NAMES.get(expected, expected), "OK" if ok else "FAIL"))
+              if not ok:
+                  failures.append(label)
+
+          check("real_quicknet_verify", engine.verify(public_key, signature, digest), probe.STATUS_OK)
+
+          # A bit-flipped point may land in several rejection classes; the contract is only that it
+          # is NEVER accepted, so assert "not OK" and report the exact class for the audit trail.
+          flipped_signature = bytearray(signature)
+          flipped_signature[-1] ^= 0x01
+          bit_flip_status = engine.verify(public_key, bytes(flipped_signature), digest)
+          if bit_flip_status == probe.STATUS_OK:
+              failures.append("signature_bit_flip_accepted")
+          print("LANE_B signature_bit_flip_rejected_as=%s" % probe.STATUS_NAMES[bit_flip_status])
+
+          flipped_key = bytearray(public_key)
+          flipped_key[-1] ^= 0x01
+          key_flip_status = engine.verify(bytes(flipped_key), signature, digest)
+          if key_flip_status == probe.STATUS_OK:
+              failures.append("public_key_bit_flip_accepted")
+          print("LANE_B public_key_bit_flip_rejected_as=%s" % probe.STATUS_NAMES[key_flip_status])
+
+          wrong_round_status = engine.verify(public_key, signature, probe.quicknet_message_digest(ROUND + 1))
+          if wrong_round_status != probe.STATUS_VERIFY_FAILED:
+              failures.append("wrong_round_not_verify_failed")
+          print("LANE_B wrong_round_rejected_as=%s" % probe.STATUS_NAMES[wrong_round_status])
+
+          check("truncated_signature", engine.verify_unbounded(public_key, signature[:-1], digest), probe.STATUS_BAD_LENGTH)
+          check("overlong_signature", engine.verify_unbounded(public_key, signature + b"\x00", digest), probe.STATUS_BAD_LENGTH)
+          check("truncated_public_key", engine.verify_unbounded(public_key[:-1], signature, digest), probe.STATUS_BAD_LENGTH)
+          check("overlong_public_key", engine.verify_unbounded(public_key + b"\x00", signature, digest), probe.STATUS_BAD_LENGTH)
+          check("g1_infinity_signature", engine.verify(public_key, bytes([0xC0]) + bytes(47), digest), probe.STATUS_SIG_INFINITY)
+          check("g2_infinity_public_key", engine.verify(bytes([0xC0]) + bytes(95), signature, digest), probe.STATUS_PK_INFINITY)
+
+          if failures:
+              raise SystemExit("LANE_B_FAILURES=%s" % ",".join(failures))
+          print("LANE_B_REAL_QUICKNET_VERIFY=PASS")
+          print("LANE_B_RAW_BYTES_PERSISTED=False")
+          PY
+          {
+            echo "MT4_LANE_B_CHAIN_ROOT_BINDING=PASS"
+            echo "MT4_LANE_B_REAL_QUICKNET=PASS"
+          } >> "${GITHUB_ENV}"
+
+      - name: Generate qualification receipt
+        shell: bash
+        env:
+          MT4_SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/receipt"
+          python scripts/crypto_core/qualification/mt4_blst_dependency_admission_manifest.py --emit-receipt \
+            --receipt-output "${RUNNER_TEMP}/receipt/mt4_blst_qualification_receipt.json" \
+            --receipt-schema-version "${RECEIPT_SCHEMA_VERSION}" \
+            --platform "${MT4_PLATFORM}" \
+            --source-run-id "${GITHUB_RUN_ID}" \
+            --source-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --source-head-sha "${MT4_SOURCE_HEAD}" \
+            --candidate-artifact-id "${MT4_CANDIDATE_ARTIFACT_ID}" \
+            --candidate-artifact-name "${MT4_CANDIDATE_ARTIFACT_NAME}" \
+            --candidate-artifact-digest "${MT4_CANDIDATE_ARTIFACT_DIGEST}" \
+            --binary-name "${MT4_LIBRARY_NAME}" \
+            --binary-sha256 "${MT4_CANDIDATE_BINARY_SHA256}" \
+            --manifest-sha256 "${MT4_CANDIDATE_MANIFEST_SHA256}" \
+            --qualification-workflow-identity "${GITHUB_WORKFLOW_REF:-${GITHUB_WORKFLOW}}" \
+            --qualification-workflow ".github/workflows/crypto_core_mt4_s3a_blst_qualification.yml" \
+            --blst-release "${BLST_RELEASE}" \
+            --blst-commit "${BLST_COMMIT}" \
+            --quicknet-chain-hash "${QUICKNET_CHAIN_HASH}" \
+            --upstream-source-tree-digest "${MT4_UPSTREAM_SOURCE_TREE_DIGEST}" \
+            --build-recipe-digest "${MT4_BUILD_RECIPE_DIGEST}" \
+            --lane-a-structural "${MT4_LANE_A_STRUCTURAL}" \
+            --lane-a-upstream-subgroup "${MT4_LANE_A_UPSTREAM_SUBGROUP}" \
+            --lane-a-g1-decode-subgroup "${MT4_LANE_A_G1_DECODE_SUBGROUP}" \
+            --lane-b-chain-root-binding "${MT4_LANE_B_CHAIN_ROOT_BINDING}" \
+            --lane-b-real-quicknet "${MT4_LANE_B_REAL_QUICKNET}"
+          echo "MT4_QUALIFICATION_RECEIPT=GENERATED"
+
+      - name: Upload qualification receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          subject-path: ${{ runner.temp }}/admission-evidence/mt4_blst_dependency_admission_manifest.json
-          create-storage-record: false
+          name: mt4-blst-qualification-receipt-windows-x64
+          path: ${{ runner.temp }}/receipt/mt4_blst_qualification_receipt.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 30
+
+      - name: Qualification summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "DEPENDENCY_ADMISSION_EVIDENCE=COLLECTED"
+          echo "ARCHITECTURE_ID=MT4-S3A-BLST-V0317-NARROW-C-ABI-CTYPES-V2"
+          echo "QUALIFICATION_INPUT_SOURCE=github_artifact_fresh_download"
+          echo "TRUSTED_ATTESTATION_EXECUTION=POST_MERGE_REQUIRED"
+          echo "UPSTREAM_RELEASE=${BLST_RELEASE}"
+          echo "UPSTREAM_COMMIT=${BLST_COMMIT}"
+          echo "RUNNER_OS=${RUNNER_OS}"
+          echo "DEPENDENCY_PROFILE_ADMITTED=false"
+          echo "FIXTURE_CORPUS_ADMITTED=false"
+          echo "MT4_VERIFIER_PROFILE_SELECTED=false"
+          echo "READINESS_PROMOTED=false"
+          echo "CONNECTOR_PROMOTED=false"

@@ -26,6 +26,10 @@ from pathlib import Path
 SCHEMA_VERSION = "mt4-blst-dependency-admission-evidence.v1"
 EVIDENCE_STATUS = "ADMISSION_EVIDENCE_ONLY"
 
+# Lane outcomes are recorded in the receipt only when the qualification step actually reached its
+# success marker.  Any other value fails closed: a receipt never guesses that a lane passed.
+LANE_SUCCESS_MARKER = "PASS"
+
 # Domain separators keep independently derived digests from ever colliding.
 _SOURCE_TREE_DOMAIN = b"mt4-blst-dependency-admission-evidence.v1/upstream-source-tree\x00"
 _BUILD_RECIPE_DOMAIN = b"mt4-blst-dependency-admission-evidence.v1/build-recipe\x00"
@@ -279,6 +283,111 @@ def build_manifest(arguments: argparse.Namespace) -> dict:
     return manifest
 
 
+def _require_lane_pass(value: str, name: str) -> bool:
+    """A lane is recorded as passed ONLY on the exact success token emitted by that lane's step."""
+    if value != LANE_SUCCESS_MARKER:
+        raise ManifestError(name + " must be exactly " + LANE_SUCCESS_MARKER)
+    return True
+
+
+def _require_artifact_digest(value: str) -> str:
+    """GitHub reports the artifact ARCHIVE digest as ``sha256:<64 hex>``; never a bare digest."""
+    if type(value) is not str or not value.startswith("sha256:"):
+        raise ManifestError("candidate_artifact_digest must be sha256:<hex>")
+    _require_hex(value[len("sha256:") :], "candidate_artifact_digest", 64)
+    return value
+
+
+def _require_decimal(value: str, name: str) -> str:
+    if type(value) is not str or not value.isdigit():
+        raise ManifestError(name + " must be a decimal identifier")
+    return value
+
+
+def build_receipt(arguments: argparse.Namespace) -> dict:
+    """Structured record of ONE fresh-download qualification of ONE immutable candidate artifact.
+
+    The receipt is NOT a trust anchor.  The trusted default-branch attestation gate independently
+    re-derives every digest it names and re-reads artifact identity from the GitHub artifact
+    service, so a forged receipt cannot promote itself.
+    """
+    receipt = {
+        "schema_version": arguments.receipt_schema_version,
+        "evidence_status": EVIDENCE_STATUS,
+        "platform": arguments.platform,
+        "source_run_id": _require_decimal(arguments.source_run_id, "source_run_id"),
+        "source_run_attempt": _require_decimal(arguments.source_run_attempt, "source_run_attempt"),
+        "source_head_sha": _require_hex(arguments.source_head_sha, "source_head_sha", 40),
+        "candidate_artifact_id": _require_decimal(arguments.candidate_artifact_id, "candidate_artifact_id"),
+        "candidate_artifact_name": arguments.candidate_artifact_name,
+        "candidate_artifact_digest": _require_artifact_digest(arguments.candidate_artifact_digest),
+        "binary_name": arguments.binary_name,
+        "binary_sha256": _require_hex(arguments.binary_sha256, "binary_sha256", 64),
+        "manifest_sha256": _require_hex(arguments.manifest_sha256, "manifest_sha256", 64),
+        "qualification_workflow_identity": arguments.qualification_workflow_identity,
+        "qualification_workflow_sha256": _sha256_file(Path(arguments.qualification_workflow)),
+        "blst_release": arguments.blst_release,
+        "blst_commit": _require_hex(arguments.blst_commit, "blst_commit", 40),
+        "quicknet_chain_hash": _require_hex(arguments.quicknet_chain_hash, "quicknet_chain_hash", 64),
+        "upstream_source_tree_digest": _require_hex(
+            arguments.upstream_source_tree_digest, "upstream_source_tree_digest", 64
+        ),
+        "build_recipe_digest": _require_hex(arguments.build_recipe_digest, "build_recipe_digest", 64),
+        "qualification_input_source": "github_artifact_fresh_download",
+        "candidate_artifact_immutable": True,
+        "lane_a_structural_pass": _require_lane_pass(arguments.lane_a_structural, "lane_a_structural"),
+        "lane_a_upstream_subgroup_pass": _require_lane_pass(
+            arguments.lane_a_upstream_subgroup, "lane_a_upstream_subgroup"
+        ),
+        "lane_a_g1_decode_subgroup_pass": _require_lane_pass(
+            arguments.lane_a_g1_decode_subgroup, "lane_a_g1_decode_subgroup"
+        ),
+        "lane_b_chain_root_binding_pass": _require_lane_pass(
+            arguments.lane_b_chain_root_binding, "lane_b_chain_root_binding"
+        ),
+        "lane_b_real_quicknet_pass": _require_lane_pass(arguments.lane_b_real_quicknet, "lane_b_real_quicknet"),
+        "raw_bytes_persisted": False,
+        "attestation_source": "trusted_default_branch_workflow_run",
+        "attestation_execution_status": "POST_MERGE_REQUIRED",
+    }
+    for flag in PROTECTED_FLAGS:
+        receipt[flag] = False
+    return receipt
+
+
+def _receipt_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Generate the MT4 blst qualification receipt.")
+    parser.add_argument("--emit-receipt", action="store_true", required=True)
+    for name in (
+        "--receipt-output",
+        "--receipt-schema-version",
+        "--platform",
+        "--source-run-id",
+        "--source-run-attempt",
+        "--source-head-sha",
+        "--candidate-artifact-id",
+        "--candidate-artifact-name",
+        "--candidate-artifact-digest",
+        "--binary-name",
+        "--binary-sha256",
+        "--manifest-sha256",
+        "--qualification-workflow-identity",
+        "--qualification-workflow",
+        "--blst-release",
+        "--blst-commit",
+        "--quicknet-chain-hash",
+        "--upstream-source-tree-digest",
+        "--build-recipe-digest",
+        "--lane-a-structural",
+        "--lane-a-upstream-subgroup",
+        "--lane-a-g1-decode-subgroup",
+        "--lane-b-chain-root-binding",
+        "--lane-b-real-quicknet",
+    ):
+        parser.add_argument(name, required=True)
+    return parser
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate the MT4 blst admission-evidence manifest.")
     for name in (
@@ -327,6 +436,19 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list) -> int:
+    if "--emit-receipt" in argv:
+        arguments = _receipt_parser().parse_args(argv)
+        receipt = build_receipt(arguments)
+        serialized = canonical_json(receipt)
+        Path(arguments.receipt_output).write_bytes(serialized.encode("utf-8"))
+        print("MT4_BLST_RECEIPT_PATH=" + str(arguments.receipt_output))
+        print("MT4_BLST_RECEIPT_SHA256=" + hashlib.sha256(serialized.encode("utf-8")).hexdigest())
+        print("MT4_BLST_RECEIPT_PLATFORM=" + receipt["platform"])
+        print("MT4_BLST_RECEIPT_CANDIDATE_ARTIFACT_ID=" + receipt["candidate_artifact_id"])
+        print("MT4_BLST_RECEIPT_QUALIFICATION_WORKFLOW_SHA256=" + receipt["qualification_workflow_sha256"])
+        print("MT4_BLST_QUALIFICATION_RECEIPT=PASS")
+        return 0
+
     arguments = _parser().parse_args(argv)
     manifest = build_manifest(arguments)
     serialized = canonical_json(manifest)

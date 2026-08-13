@@ -1,0 +1,141 @@
+﻿name: crypto_core mt4 trusted attestation
+
+# TRUSTED DEFAULT-BRANCH ATTESTATION.
+#
+# This is the ONLY credential-bearing workflow in the MT4 blst evidence pipeline.  It is triggered
+# exclusively by workflow_run restricted to the default branch, which is the trust boundary that
+# matters: GitHub only runs a workflow_run workflow from the DEFAULT BRANCH definition, so an open
+# pull request can never define, alter or reach the Sigstore signing capability granted below.
+#
+# Consequence, and it is intentional: while the pull request that introduces this file is open,
+# this workflow DOES NOT RUN.  Its first execution can only happen after merge, when a maintainer
+# dispatches the qualification workflow on main.  Pre-merge status is therefore:
+#
+#   TRUSTED_ATTESTATION_EXECUTION=POST_MERGE_REQUIRED
+#
+# No workaround exists here to make it run earlier, and none may be added.
+#
+# The qualification workflow that produced the source run is unprivileged and pull-request-editable,
+# so its PASS receipt is NOT trusted on its own.  mt4_trusted_attestation_gate.py independently
+# re-derives every digest, re-reads artifact identity from the artifact service, and requires the
+# qualification workflow blob at the source head to match a digest approved here on main.
+
+on:
+  workflow_run:
+    workflows:
+      - crypto_core mt4-s3a blst qualification
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  BLST_COMMIT: 54e6e55674722fc2797ebb4bbb71b26d881eb4b8
+  BLST_RELEASE: v0.3.17
+  QUICKNET_CHAIN_HASH: 52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971
+  QUALIFICATION_WORKFLOW_PATH: .github/workflows/crypto_core_mt4_s3a_blst_qualification.yml
+  QUALIFICATION_WORKFLOW_NAME: crypto_core mt4-s3a blst qualification
+  # APPROVED QUALIFICATION WORKFLOW DIGEST.
+  # Deliberately stored HERE, on the trusted surface, and never inside the qualification workflow
+  # itself -- a self-referential digest could not exist, and a candidate-reported digest could be
+  # forged.  If a later pull request edits the qualification workflow, trusted attestation fails
+  # closed until a separately reviewed change to main updates this constant.
+  APPROVED_QUALIFICATION_WORKFLOW_SHA256: 45d0f8dba660af516a2e92e7f8579a22da61a731d9948a61c9298878160e89c3
+  ACTIONS_CHECKOUT_COMMIT: 11d5960a326750d5838078e36cf38b85af677262
+  ACTIONS_ATTEST_COMMIT: 508db95dd578ae2727ebd6217d5ba78e4fbda05d
+
+jobs:
+  attest-trusted-evidence:
+    name: attest-trusted-evidence
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    # Fail closed on the source run's identity BEFORE any credential-bearing step exists.
+    # Only a successful, default-branch, workflow_dispatch run of this repository's own
+    # qualification workflow may be attested.  No fork, no pull request, no arbitrary branch,
+    # and no operator-supplied run id: the source run is exactly github.event.workflow_run.id.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      # The checked-out commit is the source run's head, and the guard above has already proven
+      # that head is on the default branch -- so this is reviewed, merged code, never PR code.
+      - name: Checkout trusted main qualification source at the source run head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Prove the checkout is the exact source-run head on the default branch
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.workflow_run.head_sha }}
+          SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          ACTUAL_HEAD="$(git rev-parse HEAD)"
+          echo "TRUSTED_SOURCE_HEAD_EXPECTED=${EXPECTED_HEAD}"
+          echo "TRUSTED_SOURCE_HEAD_ACTUAL=${ACTUAL_HEAD}"
+          echo "TRUSTED_SOURCE_BRANCH=${SOURCE_BRANCH}"
+          if [ "${ACTUAL_HEAD}" != "${EXPECTED_HEAD}" ]; then
+            echo "TRUSTED_SOURCE_HEAD_MISMATCH"
+            exit 1
+          fi
+          if [ "${SOURCE_BRANCH}" != "main" ]; then
+            echo "TRUSTED_SOURCE_BRANCH_NOT_DEFAULT"
+            exit 1
+          fi
+          echo "TRUSTED_SOURCE_BINDING=PASS"
+
+      # The gate re-derives every digest and every artifact identity from the artifact service.
+      # The downloaded binary and manifest are DATA ONLY; nothing from the source run is executed.
+      - name: Run the trusted attestation gate
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          python scripts/crypto_core/qualification/mt4_trusted_attestation_gate.py \
+            --repository "${GITHUB_REPOSITORY}" \
+            --source-run-id "${SOURCE_RUN_ID}" \
+            --expected-head-sha "${SOURCE_HEAD_SHA}" \
+            --expected-workflow-path "${QUALIFICATION_WORKFLOW_PATH}" \
+            --expected-workflow-name "${QUALIFICATION_WORKFLOW_NAME}" \
+            --trusted-workflow-identity "${GITHUB_WORKFLOW_REF:-${GITHUB_WORKFLOW}}" \
+            --approved-qualification-workflow-sha256 "${APPROVED_QUALIFICATION_WORKFLOW_SHA256}" \
+            --qualification-workflow "${QUALIFICATION_WORKFLOW_PATH}" \
+            --blst-release "${BLST_RELEASE}" \
+            --blst-commit "${BLST_COMMIT}" \
+            --quicknet-chain-hash "${QUICKNET_CHAIN_HASH}" \
+            --work-dir "${RUNNER_TEMP}/trusted" \
+            --default-branch main
+          echo "TRUSTED_GATE_RESULT=PASS"
+
+      # Sign exactly the digests the gate validated.  subject-checksums is used rather than
+      # subject-path so the action cannot independently re-resolve a mutable path after validation.
+      - name: Attest validated linux-x64 admission evidence
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-checksums: ${{ runner.temp }}/trusted/attest/linux-x64.checksums.txt
+          predicate-type: https://github.com/demircaliskan2009-pixel/BIST_ELITE_CORE/attestations/crypto-core/mt4-blst-admission-evidence/v1
+          predicate-path: ${{ runner.temp }}/trusted/attest/linux-x64.predicate.json
+          create-storage-record: false
+
+      - name: Attest validated windows-x64 admission evidence
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-checksums: ${{ runner.temp }}/trusted/attest/windows-x64.checksums.txt
+          predicate-type: https://github.com/demircaliskan2009-pixel/BIST_ELITE_CORE/attestations/crypto-core/mt4-blst-admission-evidence/v1
+          predicate-path: ${{ runner.temp }}/trusted/attest/windows-x64.predicate.json
+          create-storage-record: false
