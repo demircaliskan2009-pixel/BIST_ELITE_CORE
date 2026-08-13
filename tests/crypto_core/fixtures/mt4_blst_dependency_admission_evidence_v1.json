@@ -31,7 +31,8 @@
       "compiler_id", "compiler_version", "target_identity",
       "build_command", "build_flags", "portable_mode", "output_binary_name",
       "actions_checkout_commit", "actions_setup_python_commit",
-      "actions_attest_commit", "actions_upload_artifact_commit"
+      "actions_attest_commit", "actions_upload_artifact_commit",
+      "actions_download_artifact_commit"
     ],
     "excludes": [
       "output_binary_sha256",
@@ -49,7 +50,46 @@
     "actions_checkout": "11d5960a326750d5838078e36cf38b85af677262",
     "actions_setup_python": "a26af69be951a213d495a4c3e4e4022e16d87065",
     "actions_attest": "508db95dd578ae2727ebd6217d5ba78e4fbda05d",
-    "actions_upload_artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    "actions_upload_artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    "actions_download_artifact": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+  },
+  "credential_isolation_contract": {
+    "finding_repaired": "P1-MT4-ATTESTATION-CREDENTIALS-EXPOSED-TO-PR-CODE",
+    "rationale": "GitHub exposes the OIDC token at JOB scope, so a job that both executes pull-request-controlled code and holds id-token: write places untrusted execution in the same trust domain as the Sigstore signing identity",
+    "unprivileged_job": {
+      "id": "qualify",
+      "executes_pull_request_controlled_code": true,
+      "permissions": {"contents": "read"},
+      "id_token": false,
+      "attestations": false,
+      "artifact_metadata": false,
+      "attest_action_present": false
+    },
+    "privileged_job": {
+      "id": "attest-qualified-evidence",
+      "needs": "qualify",
+      "executes_pull_request_controlled_code": false,
+      "permissions": {"contents": "read", "id-token": "write", "attestations": "write"},
+      "checkout_present": false,
+      "run_step_present": false,
+      "local_action_present": false,
+      "allowed_actions": ["actions/download-artifact", "actions/attest"],
+      "runs_on": "ubuntu-22.04",
+      "executes_downloaded_binary": false,
+      "executes_downloaded_manifest_as_code": false
+    },
+    "transport": {
+      "path": "PR-controlled qualification -> pinned upload-artifact -> GitHub artifact service -> separate runner -> pinned download-artifact -> pinned actions/attest",
+      "same_workflow_run_only": true,
+      "github_token_supplied": false,
+      "github_token_rationale": "the pinned action documents that omitting github-token downloads from the current repository and the current workflow run, so no additional permission is required",
+      "digest_mismatch": "error",
+      "external_artifact_url": false,
+      "cache_based_handoff": false,
+      "shared_runner_workspace_assumption": false
+    },
+    "proves": "credential isolation between qualification execution and the attestation capability",
+    "does_not_prove": "that the qualification build code itself is non-malicious"
   },
   "attestation_contract": {
     "action": "actions/attest",
@@ -59,6 +99,7 @@
     "create_storage_record_note": "the pinned action documents that create-storage-record requires push-to-registry=true; this workflow pushes to no registry and sets it false explicitly",
     "push_to_registry": false,
     "required_permissions": ["contents: read", "id-token: write", "attestations: write"],
+    "required_permissions_scope": "granted ONLY on the privileged attest-qualified-evidence job, never on the qualification job and never at workflow scope",
     "forbidden_permissions": [
       "contents: write",
       "packages: write",
@@ -82,14 +123,19 @@
       "Lane A G1 X=0 decode-time subgroup edge",
       "Lane B canonical root binding and real Quicknet verify",
       "generate canonical provenance manifest",
+      "prove subject identity against the manifest",
+      "upload binary and manifest only",
+      "PRIVILEGED JOB BOUNDARY: qualify matrix must succeed in full",
+      "download exactly one named artifact with digest-mismatch error",
       "attest exact binary",
-      "attest exact manifest",
-      "upload binary and manifest only"
+      "attest exact manifest"
     ],
     "attestation_requires_qualification_pass": true,
+    "attestation_requires_qualification_pass_mechanism": "needs: qualify -- a dependent job is skipped unless every matrix member of the qualification job succeeded",
     "same_binary_throughout": true,
     "canonical_binary_path_per_job": "${RUNNER_TEMP}/shim/<library_name>",
-    "rebuild_or_copy_between_qualification_and_attestation": false
+    "rebuild_or_copy_between_qualification_and_attestation": false,
+    "attestation_in_same_job_as_build": false
   },
   "portability": {
     "vocabulary": ["PORTABLE", "TARGET_BOUND", "PORTABILITY_UNPROVEN"],

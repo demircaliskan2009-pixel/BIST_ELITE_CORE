@@ -71,6 +71,7 @@ _BUILD_RECIPE_FIELDS = (
     "actions_setup_python_commit",
     "actions_attest_commit",
     "actions_upload_artifact_commit",
+    "actions_download_artifact_commit",
 )
 
 
@@ -247,6 +248,11 @@ def build_manifest(arguments: argparse.Namespace) -> dict:
         "actions_upload_artifact_commit": _require_hex(
             arguments.actions_upload_artifact_commit, "upload-artifact pin", 40
         ),
+        # download-artifact carries the evidence across the credential trust boundary from the
+        # unprivileged qualification job to the privileged attestation job, so it is recipe input.
+        "actions_download_artifact_commit": _require_hex(
+            arguments.actions_download_artifact_commit, "download-artifact pin", 40
+        ),
         "quicknet_chain_hash": arguments.quicknet_chain_hash,
         "quicknet_scheme": arguments.quicknet_scheme,
         "dependency_profile_id": arguments.dependency_profile_id,
@@ -306,6 +312,7 @@ def _parser() -> argparse.ArgumentParser:
         "--actions-setup-python-commit",
         "--actions-attest-commit",
         "--actions-upload-artifact-commit",
+        "--actions-download-artifact-commit",
         "--quicknet-chain-hash",
         "--quicknet-scheme",
         "--dependency-profile-id",

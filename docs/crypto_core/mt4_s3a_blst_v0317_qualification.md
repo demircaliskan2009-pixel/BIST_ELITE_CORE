@@ -346,19 +346,56 @@ canonical path per matrix job (`${RUNNER_TEMP}/shim/<library>`) and never rebuil
 qualification and attestation:
 
 ```text
-exact PR head → upstream pin → build → Lane A → Lane B
-   → manifest → re-hash subject vs manifest → attest binary → attest manifest → upload
+UNPRIVILEGED JOB  qualify                     (permissions: contents: read)
+  exact PR head → upstream pin → build → Lane A → Lane B
+     → manifest → re-hash subject vs manifest → upload binary + manifest only
+                              │
+                              ▼  GitHub artifact service — trust boundary
+PRIVILEGED JOB    attest-qualified-evidence   (+ id-token: write, attestations: write)
+  download exactly one named artifact (digest-mismatch: error)
+     → attest binary → attest manifest
 ```
 
-A dedicated step re-hashes the binary immediately before attestation and fails with
+A dedicated step re-hashes the binary immediately before it leaves the build runner and fails with
 `TOCTOU_BINARY_IDENTITY_MISMATCH` if it differs from the manifest, so no window exists in which the
-manifest could describe one file while another is attested or uploaded.
+manifest could describe one file while another is uploaded and later attested.
+
+### Credential isolation (repairs `P1-MT4-ATTESTATION-CREDENTIALS-EXPOSED-TO-PR-CODE`)
+
+GitHub exposes the OIDC token at **job** scope. An earlier revision of this workflow granted
+`id-token: write` and `attestations: write` to the same job that checks out the pull-request head and
+executes repository-controlled Python, C and shell. That placed untrusted execution in the same trust
+domain as the Sigstore signing identity, regardless of step ordering — the successful attestations it
+produced did not make the architecture sound.
+
+The two capabilities are now separated by a job boundary:
+
+- **`qualify`** executes all PR-controlled code and holds exactly `contents: read`. It has no
+  `id-token`, no `attestations`, no `artifact-metadata`, and contains no `actions/attest` step.
+- **`attest-qualified-evidence`** holds the credential and is a signing envelope only. It declares
+  `needs: qualify`, so it is skipped unless every matrix member of the qualification job succeeded.
+  It contains **no `actions/checkout`, no `run:` step of any shell, and no local `./` action** —
+  only two trusted actions pinned to full commit SHAs. It never executes the downloaded binary;
+  `actions/attest` hashes its subject.
+
+Transport is the artifact service, not a shared filesystem: no cache handoff, no shared workspace
+assumption, no external artifact URL, and no cross-run or cross-repository download. The pinned
+`actions/download-artifact` documents that omitting `github-token` reads from the current repository
+and the current run, so no additional permission is granted; `digest-mismatch: error` makes corrupted
+transport fail closed rather than get attested.
+
+Because the jobs run on different machines, no process started during qualification can survive into
+the attestation runner or reach the credential. **This proves credential isolation between
+qualification execution and the attestation capability. It does not prove the qualification build
+code itself is non-malicious** — that remains the job of review and the pinned upstream digest.
 
 ### What the manifest binds
 
 Upstream identity and licence, the **upstream source-tree digest**, compiler identity/version, target
 identity, build command/flags, portable mode, the blst static library, shim and probe sources, the
-workflow itself, the output binary digest, the four pinned action commits, and the Quicknet contract.
+workflow itself, the output binary digest, the five pinned action commits — including
+`actions_download_artifact_commit`, because that action is the transport across the credential trust
+boundary and is therefore security-relevant — and the Quicknet contract.
 
 The source-tree digest is computed from the **pinned git object inventory**
 (`git ls-tree -r -z <commit>` binding mode, type, path and the SHA-256 of exact `git cat-file` blob
@@ -373,8 +410,9 @@ outside the digest and explicitly not trust evidence.
 ### Supply-chain pinning and permissions
 
 Every action is pinned to a full immutable commit SHA — a moving tag would let an attested build's
-supply-chain identity change with no repository commit. The job grants exactly `contents: read`,
-`id-token: write`, `attestations: write`. `artifact-metadata: write` is deliberately **not** granted:
+supply-chain identity change with no repository commit. Workflow scope grants only `contents: read`,
+so no job inherits the credential implicitly; `id-token: write` and `attestations: write` exist
+**only** on `attest-qualified-evidence`. `artifact-metadata: write` is deliberately **not** granted:
 the pinned `actions/attest` documents it as necessary only to create an artifact storage record, and
 this workflow sets `create-storage-record: false` and pushes to no registry. Provenance mode is
 selected automatically because no SBOM or predicate input is supplied.
