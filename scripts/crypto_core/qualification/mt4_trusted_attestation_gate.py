@@ -99,7 +99,7 @@ class TrustedGateError(RuntimeError):
 
 
 class _StripAuthOnRedirect(urllib.request.HTTPRedirectHandler):
-    """Never forward the API credential to the signed storage host a download redirects to."""
+    """Never forward the API credential if an ordinary API metadata request redirects."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
@@ -115,6 +115,23 @@ class _StripAuthOnRedirect(urllib.request.HTTPRedirectHandler):
 
 def _opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(_StripAuthOnRedirect())
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Expose a redirect response to the caller instead of following it."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _authenticated_redirect_opener() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(_NoRedirect())
+
+
+def _storage_download_opener() -> urllib.request.OpenerDirector:
+    # A storage redirect is unexpected.  Refusing it keeps the artifact source exactly equal to
+    # the HTTPS Location selected by GitHub's authenticated artifact endpoint.
+    return urllib.request.build_opener(_NoRedirect())
 
 
 def _request(url: str, token: str, accept: str) -> urllib.request.Request:
@@ -137,18 +154,88 @@ def api_json(api_url: str, path: str, token: str) -> dict:
         raise TrustedGateError(f"github api failed for {path} (status {error.code})") from error
 
 
-def download_artifact_zip(api_url: str, repository: str, artifact_id: int, token: str) -> bytes:
+_REDIRECT_STATUS_CODES = frozenset((301, 302, 303, 307, 308))
+
+
+def _validated_storage_url(location: str) -> str:
+    """Accept only an absolute, credential-free-to-call HTTPS storage URL.
+
+    The URL itself can contain temporary authorization material in its query string.  Error
+    markers therefore never interpolate it.
+    """
+    if not isinstance(location, str) or not location or location != location.strip():
+        raise TrustedGateError("artifact redirect Location is malformed")
+    if any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in location):
+        raise TrustedGateError("artifact redirect Location is malformed")
+    try:
+        parsed = urllib.parse.urlsplit(location)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        raise TrustedGateError("artifact redirect Location is malformed") from None
+    if parsed.scheme.lower() != "https":
+        raise TrustedGateError("artifact redirect Location must be https")
+    if parsed.username is not None or parsed.password is not None:
+        raise TrustedGateError("artifact redirect Location must not contain userinfo")
+    if not parsed.netloc or not hostname:
+        raise TrustedGateError("artifact redirect Location must contain a hostname")
+    if port == 0:
+        raise TrustedGateError("artifact redirect Location is malformed")
+    return location
+
+
+def _resolve_artifact_redirect(api_url: str, repository: str, artifact_id: int, token: str) -> str:
+    """Use the GitHub credential only to resolve the artifact's signed storage URL.
+
+    The authenticated response body is intentionally never read.  A no-redirect opener makes the
+    transition explicit and prevents a token-bearing Request from reaching the storage host.
+    """
     url = f"{api_url.rstrip('/')}/repos/{repository}/actions/artifacts/{artifact_id}/zip"
     if not url.startswith("https://"):
         raise TrustedGateError("api url must be https")
+    request = _request(url, token, "application/vnd.github+json")
     try:
-        with _opener().open(_request(url, token, "application/vnd.github+json"), timeout=300) as response:
+        response = _authenticated_redirect_opener().open(request, timeout=60)
+    except urllib.error.HTTPError as error:
+        if error.code not in _REDIRECT_STATUS_CODES:
+            raise TrustedGateError(
+                f"artifact redirect resolution failed for {artifact_id} (status {error.code})"
+            ) from None
+        location = error.headers.get("Location")
+        error.close()
+    except urllib.error.URLError:
+        raise TrustedGateError(f"artifact redirect resolution failed for {artifact_id}") from None
+    else:
+        with response:
+            status = response.getcode()
+            if status not in _REDIRECT_STATUS_CODES:
+                raise TrustedGateError(f"artifact redirect required for {artifact_id}")
+            location = response.headers.get("Location")
+    if not location:
+        raise TrustedGateError(f"artifact redirect Location missing for {artifact_id}")
+    return _validated_storage_url(location)
+
+
+def _download_signed_artifact(storage_url: str, artifact_id: int) -> bytes:
+    """Download bytes from GitHub-selected storage with a wholly credential-free request."""
+    storage_url = _validated_storage_url(storage_url)
+    request = urllib.request.Request(storage_url)  # noqa: S310 - validated HTTPS GitHub redirect target
+    try:
+        with _storage_download_opener().open(request, timeout=300) as response:
             payload = response.read(_MAX_ARTIFACT_BYTES + 1)
     except urllib.error.HTTPError as error:  # pragma: no cover - network failure path
-        raise TrustedGateError(f"artifact download failed for {artifact_id} (status {error.code})") from error
+        raise TrustedGateError(f"artifact storage download failed for {artifact_id} (status {error.code})") from None
+    except urllib.error.URLError:  # pragma: no cover - network failure path
+        raise TrustedGateError(f"artifact storage download failed for {artifact_id}") from None
     if len(payload) > _MAX_ARTIFACT_BYTES:
         raise TrustedGateError("artifact exceeds bounded size")
     return payload
+
+
+def download_artifact_zip(api_url: str, repository: str, artifact_id: int, token: str) -> bytes:
+    """Resolve with GitHub authentication, then download from storage without credentials."""
+    storage_url = _resolve_artifact_redirect(api_url, repository, artifact_id, token)
+    return _download_signed_artifact(storage_url, artifact_id)
 
 
 def extract_exact(payload: bytes, destination: Path, expected: tuple) -> dict:
@@ -281,11 +368,10 @@ def select_artifacts(artifacts_payload: dict) -> dict:
 
 
 def fetch_platform_archives(platform: str, selected: dict, arguments: argparse.Namespace, token: str) -> tuple:
-    """The ONLY credential-bearing step: fetch both archives for one platform.
+    """Fetch both archives across the explicit authenticated-to-storage boundary.
 
-    Deliberately separated from verification so the ephemeral job token cannot reach -- and cannot
-    be shown by static analysis to reach -- any value that is later written to disk.  Verification
-    below is a pure function of bytes.
+    Authentication resolves only GitHub's signed redirect.  The bytes come from a distinct request
+    that cannot receive the token.  Verification below remains a pure function of those bytes.
     """
     candidate_name, receipt_artifact_name, _binary = PLATFORMS[platform]
     return (

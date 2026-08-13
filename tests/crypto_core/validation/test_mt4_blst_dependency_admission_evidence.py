@@ -644,6 +644,50 @@ class _SyntheticEvidence:
         )
 
 
+class _FakeUrlResponse:
+    def __init__(self, payload=b"", *, status=200, headers=None, fail_on_read=False):
+        self.payload = payload
+        self.status = status
+        self.headers = {} if headers is None else headers
+        self.fail_on_read = fail_on_read
+        self.read_calls = 0
+        self.read_limits = []
+        self.closed = False
+
+    def getcode(self):
+        return self.status
+
+    def read(self, limit=-1):
+        self.read_calls += 1
+        self.read_limits.append(limit)
+        if self.fail_on_read:
+            raise AssertionError("authenticated redirect response body must not be read")
+        return self.payload if limit < 0 else self.payload[:limit]
+
+    def close(self):
+        self.closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+
+class _FakeUrlOpener:
+    def __init__(self, *responses):
+        self.responses = list(responses)
+        self.requests = []
+        self.timeouts = []
+
+    def open(self, request, timeout):
+        self.requests.append(request)
+        self.timeouts.append(timeout)
+        if not self.responses:
+            raise AssertionError("unexpected additional urllib request")
+        return self.responses.pop(0)
+
+
 def test_verification_is_separated_from_the_credential_bearing_fetch() -> None:
     """The token must not reach any value later written to disk."""
     gate = _gate_module()
@@ -652,12 +696,162 @@ def test_verification_is_separated_from_the_credential_bearing_fetch() -> None:
     verify_parameters = set(inspect.signature(gate.verify_platform).parameters)
     assert "token" not in verify_parameters, verify_parameters
     assert {"candidate_archive", "receipt_archive"} <= verify_parameters, verify_parameters
-    # Fetching is the only credential-bearing step and returns bytes, never a record.
+    # The orchestration receives the token, but its storage-only byte producer cannot receive it.
     fetch_parameters = set(inspect.signature(gate.fetch_platform_archives).parameters)
     assert "token" in fetch_parameters, fetch_parameters
+    storage_parameters = set(inspect.signature(gate._download_signed_artifact).parameters)
+    assert "token" not in storage_parameters, storage_parameters
+    storage_source = inspect.getsource(gate._download_signed_artifact)
+    assert "Authorization" not in storage_source
+    assert "_request(" not in storage_source
     source = _read(_GATE_PATH)
     assert "def build_predicate(record: dict, arguments" in source
     assert "token" not in inspect.signature(gate.build_predicate).parameters
+
+
+def test_authenticated_phase_sends_authorization_but_never_reads_artifact_bytes(monkeypatch) -> None:
+    gate = _gate_module()
+    api_header_value = "github-credential-must-stop-at-api"
+    signed_url = "https://storage.example.invalid/artifact.zip?signature=temporary"
+    response = _FakeUrlResponse(status=302, headers={"Location": signed_url}, fail_on_read=True)
+    opener = _FakeUrlOpener(response)
+    monkeypatch.setattr(gate, "_authenticated_redirect_opener", lambda: opener)
+
+    actual = gate._resolve_artifact_redirect("https://api.github.com", _REPOSITORY, 4242, api_header_value)
+
+    assert actual == signed_url
+    assert len(opener.requests) == 1
+    request = opener.requests[0]
+    assert request.full_url == f"https://api.github.com/repos/{_REPOSITORY}/actions/artifacts/4242/zip"
+    assert request.get_header("Authorization") == "Bearer " + api_header_value
+    assert response.read_calls == 0
+
+
+def test_authenticated_phase_cannot_automatically_follow_the_redirect() -> None:
+    gate = _gate_module()
+    request = gate.urllib.request.Request("https://api.github.com/repos/example/actions/artifacts/1/zip")
+    signed_url = "https://storage.example.invalid/artifact.zip?signature=temporary"
+    handler = gate._NoRedirect()
+
+    assert handler.redirect_request(request, None, 302, "Found", {"Location": signed_url}, signed_url) is None
+    assert any(isinstance(item, gate._NoRedirect) for item in gate._authenticated_redirect_opener().handlers)
+
+
+def test_authenticated_phase_requires_a_redirect_response(monkeypatch) -> None:
+    gate = _gate_module()
+    response = _FakeUrlResponse(
+        status=200,
+        headers={"Location": "https://storage.example.invalid/artifact.zip"},
+        fail_on_read=True,
+    )
+    monkeypatch.setattr(gate, "_authenticated_redirect_opener", lambda: _FakeUrlOpener(response))
+
+    with pytest.raises(gate.TrustedGateError, match="redirect required"):
+        gate._resolve_artifact_redirect("https://api.github.com", _REPOSITORY, 4242, "token")
+    assert response.read_calls == 0
+
+
+@pytest.mark.parametrize(
+    "location,marker",
+    [
+        (None, "Location missing"),
+        ("https://[malformed", "Location is malformed"),
+        ("http://storage.example.invalid/artifact.zip", "must be https"),
+        ("https://temporary-user@storage.example.invalid/artifact.zip", "must not contain userinfo"),
+        ("https:///artifact.zip", "must contain a hostname"),
+    ],
+)
+def test_authenticated_phase_rejects_an_unsafe_redirect_location(monkeypatch, location, marker) -> None:
+    gate = _gate_module()
+    headers = {} if location is None else {"Location": location}
+    response = _FakeUrlResponse(status=302, headers=headers, fail_on_read=True)
+    monkeypatch.setattr(gate, "_authenticated_redirect_opener", lambda: _FakeUrlOpener(response))
+
+    with pytest.raises(gate.TrustedGateError, match=marker):
+        gate._resolve_artifact_redirect("https://api.github.com", _REPOSITORY, 4242, "token")
+    assert response.read_calls == 0
+
+
+def test_storage_phase_is_credential_free_and_returns_bounded_bytes(monkeypatch) -> None:
+    gate = _gate_module()
+    forbidden_header_value = "github-credential-must-not-reach-storage"
+    signed_url = "https://storage.example.invalid/artifact.zip?signature=temporary"
+    payload = b"bounded artifact bytes"
+    response = _FakeUrlResponse(payload=payload)
+    opener = _FakeUrlOpener(response)
+    monkeypatch.setattr(gate, "_storage_download_opener", lambda: opener)
+
+    assert gate._download_signed_artifact(signed_url, 4242) == payload
+
+    assert len(opener.requests) == 1
+    request = opener.requests[0]
+    headers = {name.lower(): value for name, value in request.header_items()}
+    assert "authorization" not in headers
+    assert all("github_token" not in name for name in headers)
+    assert all(forbidden_header_value not in value for value in headers.values())
+    assert response.read_limits == [gate._MAX_ARTIFACT_BYTES + 1]
+    assert gate._MAX_ARTIFACT_BYTES == 64 * 1024 * 1024
+
+
+def test_storage_phase_rejects_an_oversized_response(monkeypatch) -> None:
+    gate = _gate_module()
+    monkeypatch.setattr(gate, "_MAX_ARTIFACT_BYTES", 8)
+    response = _FakeUrlResponse(payload=b"123456789")
+    monkeypatch.setattr(gate, "_storage_download_opener", lambda: _FakeUrlOpener(response))
+
+    with pytest.raises(gate.TrustedGateError, match="artifact exceeds bounded size"):
+        gate._download_signed_artifact("https://storage.example.invalid/artifact.zip", 4242)
+    assert response.read_limits == [9]
+
+
+def test_signed_storage_urls_are_never_printed_or_persisted(monkeypatch, tmp_path: Path, capsys) -> None:
+    gate = _gate_module()
+    evidence = _SyntheticEvidence(gate)
+    signed_urls = (
+        "https://storage.example.invalid/candidate.zip?signature=candidate-secret",
+        "https://storage.example.invalid/receipt.zip?signature=receipt-secret",
+    )
+    redirect_opener = _FakeUrlOpener(
+        *(_FakeUrlResponse(status=302, headers={"Location": url}, fail_on_read=True) for url in signed_urls)
+    )
+    storage_opener = _FakeUrlOpener(
+        _FakeUrlResponse(payload=evidence.candidate_archive()),
+        _FakeUrlResponse(payload=evidence.receipt_archive()),
+    )
+    monkeypatch.setattr(gate, "_authenticated_redirect_opener", lambda: redirect_opener)
+    monkeypatch.setattr(gate, "_storage_download_opener", lambda: storage_opener)
+
+    candidate_archive, receipt_archive = gate.fetch_platform_archives(
+        evidence.platform,
+        evidence.selected(),
+        _gate_arguments(),
+        "github-token-must-stop-at-api",
+    )
+    record = gate.verify_platform(
+        evidence.platform,
+        evidence.selected(),
+        _gate_arguments(),
+        candidate_archive,
+        receipt_archive,
+        tmp_path,
+    )
+    checksums_path = tmp_path / "attest" / "linux-x64.checksums.txt"
+    predicate_path = tmp_path / "attest" / "linux-x64.predicate.json"
+    gate.write_subject_checksums(record, checksums_path)
+    predicate_path.write_text(json.dumps(gate.build_predicate(record, _gate_arguments())), encoding="utf-8")
+
+    captured = capsys.readouterr()
+    persisted = "\n".join(
+        (
+            json.dumps(record, sort_keys=True),
+            checksums_path.read_text(encoding="utf-8"),
+            predicate_path.read_text(encoding="utf-8"),
+        )
+    )
+    for signed_url in signed_urls:
+        assert signed_url not in captured.out
+        assert signed_url not in captured.err
+        assert signed_url not in persisted
 
 
 def test_gate_accepts_consistent_synthetic_evidence(tmp_path: Path) -> None:
