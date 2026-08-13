@@ -15,7 +15,9 @@ on:
       - ".github/workflows/crypto_core_mt4_s3a_blst_qualification.yml"
       - "scripts/crypto_core/qualification/**"
       - "tests/crypto_core/fixtures/mt4_s3a_blst_v0317_qualification_v2.json"
+      - "tests/crypto_core/fixtures/mt4_blst_dependency_admission_evidence_v1.json"
       - "tests/crypto_core/validation/test_mt4_s3a_blst_v0317_qualification.py"
+      - "tests/crypto_core/validation/test_mt4_blst_dependency_admission_evidence.py"
       - "docs/crypto_core/mt4_s3a_blst_v0317_qualification.md"
 
 permissions:
@@ -27,12 +29,29 @@ env:
   QUICKNET_CHAIN_HASH: 52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971
   QUICKNET_ROUND: "42"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # Pinned action identities.  Full immutable commit SHAs only: a moving tag would let the
+  # supply-chain identity of an attested build change without any repository commit.
+  ACTIONS_CHECKOUT_COMMIT: 11d5960a326750d5838078e36cf38b85af677262
+  ACTIONS_SETUP_PYTHON_COMMIT: a26af69be951a213d495a4c3e4e4022e16d87065
+  ACTIONS_ATTEST_COMMIT: 508db95dd578ae2727ebd6217d5ba78e4fbda05d
+  ACTIONS_UPLOAD_ARTIFACT_COMMIT: 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+  QUICKNET_SCHEME: bls-unchained-g1-rfc9380
+  DEPENDENCY_PROFILE_ID: D-DEP-02
+  FIXTURE_CORPUS_ID: FX-DRAND-QUICKNET.v1
+  VERIFICATION_POLICY_ID: deterministic_supplied_proof_verification_no_network.v1
 
 jobs:
   qualify:
     name: qualify ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    # Least privilege for attestation: id-token mints the Sigstore OIDC token and attestations
+    # persists the bundle.  artifact-metadata is deliberately NOT granted -- it is only needed to
+    # create an artifact storage record, and this workflow sets create-storage-record: false.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -46,7 +65,7 @@ jobs:
       # refs/pull/<n>/merge commit: the evidence has to describe code that actually exists on the
       # branch under audit.
       - name: Checkout crypto_core at the exact qualification head
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
@@ -68,7 +87,7 @@ jobs:
 
       # Python 3.8 is the declared project floor.  If it cannot be provisioned the job fails closed.
       - name: Setup Python 3.8
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.8"
 
@@ -95,7 +114,7 @@ jobs:
           PY
 
       - name: Checkout official blst at the pinned commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: supranational/blst
           ref: ${{ env.BLST_COMMIT }}
@@ -117,17 +136,33 @@ jobs:
           echo "UPSTREAM_LICENSE_SHA256=$(python -c "import hashlib,sys;print(hashlib.sha256(open('LICENSE','rb').read()).hexdigest())")"
           echo "UPSTREAM_TREE_STATUS=$(git status --porcelain=v1 | wc -l)"
 
+      # Pinned build.sh adds -D__ADX__ when the BUILD HOST /proc/cpuinfo reports adx, which would
+      # specialise the artifact to this runner.  The pinned README documents -D__BLST_PORTABLE__ on
+      # the build.sh command line, build.sh forwards unrecognised -* options into cflags, and
+      # src/vect.h (72, 144) and src/sha256.h gate the ADX/SHA specialisations on
+      # !defined(__BLST_PORTABLE__).  The portable binary is what the whole qualification then runs.
       - name: Build official blst static library (Linux)
         if: runner.os == 'Linux'
         shell: bash
         working-directory: blst-upstream
         run: |
           set -euo pipefail
-          echo "COMPILER_ID=$(cc --version | head -n 1)"
-          echo "BUILD_COMMAND=./build.sh"
-          ./build.sh
+          COMPILER_VERSION="$(cc --version | head -n 1)"
+          echo "COMPILER_ID=cc"
+          echo "COMPILER_VERSION=${COMPILER_VERSION}"
+          echo "BUILD_COMMAND=./build.sh -D__BLST_PORTABLE__"
+          ./build.sh -D__BLST_PORTABLE__
           ls -l libblst.a
           echo "BLST_LIB_SHA256=$(python -c "import hashlib;print(hashlib.sha256(open('libblst.a','rb').read()).hexdigest())")"
+          {
+            echo "MT4_COMPILER_ID=cc"
+            echo "MT4_COMPILER_VERSION=${COMPILER_VERSION}"
+            echo "MT4_TARGET_IDENTITY=x86_64-unknown-linux-gnu"
+            echo "MT4_BUILD_COMMAND=./build.sh -D__BLST_PORTABLE__ ; cc -O2 -fPIC -fvisibility=hidden -shared"
+            echo "MT4_BUILD_FLAGS=-D__BLST_PORTABLE__ -O2 -fPIC -fvisibility=hidden -shared"
+            echo "MT4_PORTABLE_MODE=PORTABLE"
+            echo "MT4_PORTABILITY_EVIDENCE=build.sh would add -D__ADX__ from build-host /proc/cpuinfo; -D__BLST_PORTABLE__ (pinned README) disables the ADX/SHA specialisations gated in src/vect.h 72,144 and src/sha256.h"
+          } >> "${GITHUB_ENV}"
 
       - name: Build official blst static library (Windows)
         if: runner.os == 'Windows'
@@ -138,8 +173,33 @@ jobs:
           if "%VSPATH%"=="" exit /b 1
           call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
           cl 2>&1 | findstr /C:"Version"
+          cl 2>&1 | findstr /C:"Version" > "%RUNNER_TEMP%\msvc_version.txt"
           call build.bat || exit /b 1
           dir blst.lib
+
+      # build.bat performs NO host CPU feature detection, never defines __ADX__ and passes no
+      # /arch: flag, so src/vect.h never aliases to the mulx_/sqrx_/ctx_ specialisations.  No
+      # portable flag exists for build.bat and none is invented here.
+      - name: Record Windows build metadata
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # cl is only on PATH inside the vcvars cmd step, so its banner was captured there.
+          COMPILER_VERSION="$(tr -d '\r' < "${RUNNER_TEMP}/msvc_version.txt" | head -n 1 | sed 's/^[[:space:]]*//')"
+          if [ -z "${COMPILER_VERSION}" ]; then
+            echo "MSVC_VERSION_CAPTURE_FAILED"
+            exit 1
+          fi
+          {
+            echo "MT4_COMPILER_ID=msvc-cl"
+            echo "MT4_COMPILER_VERSION=${COMPILER_VERSION}"
+            echo "MT4_TARGET_IDENTITY=x86_64-pc-windows-msvc"
+            echo "MT4_BUILD_COMMAND=build.bat ; cl /nologo /O2 /LD"
+            echo "MT4_BUILD_FLAGS=/nologo /O2 /LD"
+            echo "MT4_PORTABLE_MODE=PORTABLE"
+            echo "MT4_PORTABILITY_EVIDENCE=build.bat performs no host CPU detection, never defines __ADX__ and passes no /arch: flag, so src/vect.h keeps the baseline x86-64 paths; emitted-binary disassembly was not performed"
+          } >> "${GITHUB_ENV}"
 
       - name: Build qualification shim (Linux)
         if: runner.os == 'Linux'
@@ -566,10 +626,130 @@ jobs:
           print("LANE_B_RAW_BYTES_PERSISTED=False")
           PY
 
+      # ---------------------------------------------------------------------------------------
+      # DEPENDENCY-ADMISSION EVIDENCE.  Everything below runs ONLY after the complete Lane A and
+      # Lane B qualification above has passed, and describes the EXACT SAME binary at the exact
+      # same canonical path -- never a rebuild or a copy.  This collects evidence for a future
+      # governed admission decision; it admits nothing.
+      # ---------------------------------------------------------------------------------------
+      - name: Generate canonical build-provenance manifest
+        shell: bash
+        env:
+          MT4_S3A_LIBRARY: ${{ runner.temp }}/shim/${{ matrix.library_name }}
+          MT4_SOURCE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test -f "${MT4_S3A_LIBRARY}"
+          python scripts/crypto_core/qualification/mt4_blst_dependency_admission_manifest.py \
+            --output "${RUNNER_TEMP}/shim/mt4_blst_dependency_admission_manifest.json" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --source-head-sha "${MT4_SOURCE_HEAD}" \
+            --upstream-repository "https://github.com/supranational/blst" \
+            --upstream-release "${BLST_RELEASE}" \
+            --upstream-commit "${BLST_COMMIT}" \
+            --upstream-license "Apache-2.0" \
+            --upstream-license-path "blst-upstream/LICENSE" \
+            --upstream-checkout "blst-upstream" \
+            --runner-os "${RUNNER_OS}" \
+            --runner-arch "${RUNNER_ARCH}" \
+            --runner-image "${ImageOS:-unknown}" \
+            --runner-image-version "${ImageVersion:-unknown}" \
+            --compiler-id "${MT4_COMPILER_ID}" \
+            --compiler-version "${MT4_COMPILER_VERSION}" \
+            --target-identity "${MT4_TARGET_IDENTITY}" \
+            --build-command "${MT4_BUILD_COMMAND}" \
+            --build-flags "${MT4_BUILD_FLAGS}" \
+            --portable-mode "${MT4_PORTABLE_MODE}" \
+            --portability-evidence "${MT4_PORTABILITY_EVIDENCE}" \
+            --blst-static-library "$( [ "${RUNNER_OS}" = "Windows" ] && echo blst-upstream/blst.lib || echo blst-upstream/libblst.a )" \
+            --shim-source "scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_shim.c" \
+            --probe-source "scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_probe.py" \
+            --qualification-workflow ".github/workflows/crypto_core_mt4_s3a_blst_qualification.yml" \
+            --output-binary "${MT4_S3A_LIBRARY}" \
+            --output-binary-name "${{ matrix.library_name }}" \
+            --actions-checkout-commit "${ACTIONS_CHECKOUT_COMMIT}" \
+            --actions-setup-python-commit "${ACTIONS_SETUP_PYTHON_COMMIT}" \
+            --actions-attest-commit "${ACTIONS_ATTEST_COMMIT}" \
+            --actions-upload-artifact-commit "${ACTIONS_UPLOAD_ARTIFACT_COMMIT}" \
+            --quicknet-chain-hash "${QUICKNET_CHAIN_HASH}" \
+            --quicknet-scheme "${QUICKNET_SCHEME}" \
+            --dependency-profile-id "${DEPENDENCY_PROFILE_ID}" \
+            --fixture-corpus-id "${FIXTURE_CORPUS_ID}" \
+            --verification-policy-id "${VERIFICATION_POLICY_ID}" \
+            --workflow-run-id "${GITHUB_RUN_ID}" \
+            --workflow-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --ci-workflow-identity "${GITHUB_WORKFLOW_REF:-${GITHUB_WORKFLOW}}"
+          echo "MT4_BLST_BUILD_PROVENANCE=PASS"
+
+      # Re-hash the exact bytes immediately before attestation so no window exists in which the
+      # manifest could describe one file while another is attested or uploaded.
+      - name: Prove the attestation subject is the qualified binary
+        shell: bash
+        env:
+          MT4_S3A_LIBRARY: ${{ runner.temp }}/shim/${{ matrix.library_name }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os, pathlib
+          binary = pathlib.Path(os.environ["MT4_S3A_LIBRARY"])
+          manifest_path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "shim" / "mt4_blst_dependency_admission_manifest.json"
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          actual = hashlib.sha256(binary.read_bytes()).hexdigest()
+          print("SUBJECT_BINARY=%s" % binary.name)
+          print("SUBJECT_BINARY_SHA256=%s" % actual)
+          print("MANIFEST_BINARY_SHA256=%s" % manifest["output_binary_sha256"])
+          if actual != manifest["output_binary_sha256"]:
+              raise SystemExit("TOCTOU_BINARY_IDENTITY_MISMATCH")
+          if manifest["output_binary_name"] != binary.name:
+              raise SystemExit("SUBJECT_NAME_MISMATCH")
+          for flag in (
+              "dependency_profile_admitted", "fixture_corpus_admitted", "mt4_verifier_profile_selected",
+              "proof_verified", "quorum_countable", "operational_quorum_ready",
+              "machine_time_origin_proven", "timestamp_origin_proven", "readiness_promoted",
+              "connector_promoted",
+          ):
+              if manifest[flag] is not False:
+                  raise SystemExit("PROTECTED_FLAG_NOT_FALSE:" + flag)
+          print("MANIFEST_SHA256=%s" % hashlib.sha256(manifest_path.read_bytes()).hexdigest())
+          print("SUBJECT_IDENTITY_PROVEN=PASS")
+          PY
+
+      - name: Attest the qualified native binary
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: ${{ runner.temp }}/shim/${{ matrix.library_name }}
+          create-storage-record: false
+
+      - name: Attest the canonical provenance manifest
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: ${{ runner.temp }}/shim/mt4_blst_dependency_admission_manifest.json
+          create-storage-record: false
+
+      - name: Report attestation creation
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "MT4_BLST_BINARY_ATTESTATION=CREATED"
+          echo "MT4_BLST_MANIFEST_ATTESTATION=CREATED"
+
+      # Upload ONLY the exact binary and the exact manifest.  No raw Quicknet material, no
+      # temporary fetch files, no compiler intermediates: the two paths are named explicitly.
+      - name: Upload admission evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mt4-blst-admission-evidence-${{ runner.os == 'Windows' && 'windows-x64' || 'linux-x64' }}
+          path: |
+            ${{ runner.temp }}/shim/${{ matrix.library_name }}
+            ${{ runner.temp }}/shim/mt4_blst_dependency_admission_manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Qualification summary
         shell: bash
         run: |
           set -euo pipefail
+          echo "DEPENDENCY_ADMISSION_EVIDENCE=COLLECTED"
           echo "ARCHITECTURE_ID=MT4-S3A-BLST-V0317-NARROW-C-ABI-CTYPES-V2"
           echo "UPSTREAM_RELEASE=${BLST_RELEASE}"
           echo "UPSTREAM_COMMIT=${BLST_COMMIT}"

@@ -328,6 +328,94 @@ Designed here, deliberately **not** implemented: `UPSTREAM_REPO`, `UPSTREAM_TAG`
 GitHub artifact attestation should be treated as **OPTIONAL** at qualification stage and
 **REQUIRED** at dependency-admission stage. No attestation exists today and none is claimed.
 
+## Dependency-admission evidence (added after the S3A merge)
+
+The qualification above proves the boundary *works*. It does not make `blst` an admitted dependency.
+A later governed decision must do that, and this section exists so that decision is evidence-backed
+and content-addressed rather than a promotion of whatever binary a CI job happened to produce.
+
+**Status: `ADMISSION_EVIDENCE_ONLY`.** Every protected flag remains `false`:
+`dependency_profile_admitted`, `fixture_corpus_admitted`, `mt4_verifier_profile_selected`,
+`proof_verified`, `quorum_countable`, `operational_quorum_ready`, `machine_time_origin_proven`,
+`timestamp_origin_proven`, `readiness_promoted`, `connector_promoted`.
+
+### The exact-same-binary rule
+
+Provenance is only meaningful if it describes the binary that actually passed. The workflow uses one
+canonical path per matrix job (`${RUNNER_TEMP}/shim/<library>`) and never rebuilds or copies between
+qualification and attestation:
+
+```text
+exact PR head → upstream pin → build → Lane A → Lane B
+   → manifest → re-hash subject vs manifest → attest binary → attest manifest → upload
+```
+
+A dedicated step re-hashes the binary immediately before attestation and fails with
+`TOCTOU_BINARY_IDENTITY_MISMATCH` if it differs from the manifest, so no window exists in which the
+manifest could describe one file while another is attested or uploaded.
+
+### What the manifest binds
+
+Upstream identity and licence, the **upstream source-tree digest**, compiler identity/version, target
+identity, build command/flags, portable mode, the blst static library, shim and probe sources, the
+workflow itself, the output binary digest, the four pinned action commits, and the Quicknet contract.
+
+The source-tree digest is computed from the **pinned git object inventory**
+(`git ls-tree -r -z <commit>` binding mode, type, path and the SHA-256 of exact `git cat-file` blob
+bytes), never from an OS-materialised checkout — so Windows and Linux agree despite line-ending and
+filesystem presentation differences.
+
+`build_recipe_digest` covers recipe fields only. It deliberately **excludes** `output_binary_sha256`
+(which would be circular), run ids, attempts, wall clock and artifact/attestation URLs, so it
+identifies the recipe rather than one execution of it. Run ids live in `operational_metadata`,
+outside the digest and explicitly not trust evidence.
+
+### Supply-chain pinning and permissions
+
+Every action is pinned to a full immutable commit SHA — a moving tag would let an attested build's
+supply-chain identity change with no repository commit. The job grants exactly `contents: read`,
+`id-token: write`, `attestations: write`. `artifact-metadata: write` is deliberately **not** granted:
+the pinned `actions/attest` documents it as necessary only to create an artifact storage record, and
+this workflow sets `create-storage-record: false` and pushes to no registry. Provenance mode is
+selected automatically because no SBOM or predicate input is supplied.
+
+Attestation validity is established by GitHub's cryptographic verification (`gh attestation verify`),
+never by a string printed into a workflow log.
+
+### Portability — stated exactly, not optimistically
+
+| Platform | Mode | Basis |
+| --- | --- | --- |
+| Linux | `PORTABLE` | `./build.sh -D__BLST_PORTABLE__` |
+| Windows | `PORTABLE` | `build.bat` unmodified |
+
+Pinned `build.sh` adds `-D__ADX__` **only when the build host's `/proc/cpuinfo` reports `adx`**, which
+would specialise the artifact to that runner. The pinned README documents passing
+`-D__BLST_PORTABLE__` on the `build.sh` command line; `build.sh` forwards unrecognised `-*` options
+into `cflags`; and `src/vect.h` (lines 72, 144) plus `src/sha256.h` gate the ADX/SHA specialisations
+on `!defined(__BLST_PORTABLE__)`. The portable binary is what the entire qualification then runs.
+
+Pinned `build.bat` performs **no** host-CPU detection, never defines `__ADX__` and passes no `/arch:`
+flag, so `src/vect.h` never aliases to the `mulx_`/`sqrx_`/`ctx_` specialisations. No portable flag
+exists for `build.bat` and none was invented. Caveat recorded in the fixture: this establishes the
+*recipe* is not build-host specialised; instruction-level disassembly of the emitted binary was not
+performed. `PORTABILITY_UNPROVEN` is never presented as `PORTABLE`.
+
+### Upload boundary
+
+Only two paths are uploaded per platform — the exact binary and the exact manifest — under
+platform-distinct artifact names. No directory, no glob, and therefore no route by which a fetched
+Quicknet beacon, temporary file or compiler intermediate could be published.
+
+```text
+windows_attested_build   PENDING_CI
+linux_attested_build     PENDING_CI
+artifact_attestation     PENDING_CI
+```
+
+Committed source never self-promotes execution proof; runtime GitHub evidence is authoritative. This
+slice does **not** implement the MT-4 anchor, a machine-time sandwich, or any production verifier.
+
 ## Files in this slice
 
 ```text

@@ -320,13 +320,32 @@ def test_workflow_covers_windows_and_linux_x64() -> None:
 
 
 def test_workflow_never_uploads_or_persists_lane_b_raw_material() -> None:
+    """Lane-B raw material must never leave the runner.
+
+    Uploads are no longer banned outright -- the admission-evidence slice uploads the qualified
+    binary and its provenance manifest -- so this asserts the property that actually matters: every
+    uploaded path is one of those two explicit files, with no directory or glob that could sweep up
+    a fetched beacon.  The precise upload inventory is additionally owned by
+    test_mt4_blst_dependency_admission_evidence.py.
+    """
     workflow = _read(_WORKFLOW_PATH)
-    assert "upload-artifact" not in workflow
     assert "LANE_B_RAW_BYTES_PERSISTED=False" in workflow
     # Only digests and identities may be emitted for Lane B.
     assert "LANE_B_SIGNATURE_SHA256" in workflow
     for forbidden in ("print(signature", "print(beacon", 'print("%s" % signature', "echo ${signature"):
         assert forbidden not in workflow, forbidden
+
+    parsed = yaml.safe_load(workflow)
+    allowed_suffixes = ("${{ matrix.library_name }}", "mt4_blst_dependency_admission_manifest.json")
+    for step in parsed["jobs"]["qualify"]["steps"]:
+        uses = step.get("uses", "")
+        if "upload-artifact" not in uses:
+            continue
+        paths = [line.strip() for line in str(step["with"]["path"]).strip().split("\n") if line.strip()]
+        assert paths, step.get("name")
+        for path in paths:
+            assert path.endswith(allowed_suffixes), path
+            assert "*" not in path, path
 
 
 _UPSTREAM_NEGATIVE_SOURCE = "bindings/python/run.me"

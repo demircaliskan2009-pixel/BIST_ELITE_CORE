@@ -1,0 +1,156 @@
+{
+  "schema": "mt4-blst-dependency-admission-evidence.v1",
+  "evidence_status": "ADMISSION_EVIDENCE_ONLY",
+  "purpose": "Produce attested, content-addressed build provenance for the already-qualified blst v0.3.17 native boundary so a FUTURE governed dependency-admission decision is evidence-backed. This slice performs no admission itself.",
+  "predecessor": {
+    "slice": "MT4-S3A",
+    "pull_request": 356,
+    "merge_commit": "272573d77f53e7b096da3ecb652b7a7e8a3c8afc",
+    "qualified_head": "ea3b105dc4ffe968d04951728d4b4f017a8e10e5"
+  },
+  "upstream": {
+    "repository": "https://github.com/supranational/blst",
+    "release": "v0.3.17",
+    "commit": "54e6e55674722fc2797ebb4bbb71b26d881eb4b8",
+    "license": "Apache-2.0"
+  },
+  "upstream_source_tree_digest_contract": {
+    "authority": "pinned git object inventory, never an OS-materialised checkout",
+    "inventory_command": "git ls-tree -r -z <upstream_commit>",
+    "binds": ["mode", "type", "path", "blob sha256 of exact git cat-file bytes"],
+    "submodule_entries": "bound as submodule:<oid>; submodules have no content in this repository",
+    "symlinks_followed_on_filesystem": false,
+    "platform_independent": true,
+    "rationale": "git object bytes are unaffected by checkout line-ending or filesystem presentation, so Windows and Linux runners agree"
+  },
+  "build_recipe_digest_contract": {
+    "binds": [
+      "upstream_repository", "upstream_release", "upstream_commit", "upstream_license_sha256",
+      "upstream_source_tree_digest_algorithm", "upstream_source_tree_digest",
+      "shim_source_sha256", "probe_source_sha256", "qualification_workflow_sha256",
+      "compiler_id", "compiler_version", "target_identity",
+      "build_command", "build_flags", "portable_mode", "output_binary_name",
+      "actions_checkout_commit", "actions_setup_python_commit",
+      "actions_attest_commit", "actions_upload_artifact_commit"
+    ],
+    "excludes": [
+      "output_binary_sha256",
+      "workflow_run_id",
+      "workflow_run_attempt",
+      "wall_clock_time",
+      "artifact_url",
+      "attestation_url"
+    ],
+    "circular_output_digest": false,
+    "rationale": "the recipe digest identifies the recipe, not one execution of it, and can never contain its own output"
+  },
+  "pinned_actions": {
+    "policy": "full immutable commit SHAs only; moving tags are forbidden in uses:",
+    "actions_checkout": "11d5960a326750d5838078e36cf38b85af677262",
+    "actions_setup_python": "a26af69be951a213d495a4c3e4e4022e16d87065",
+    "actions_attest": "508db95dd578ae2727ebd6217d5ba78e4fbda05d",
+    "actions_upload_artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+  },
+  "attestation_contract": {
+    "action": "actions/attest",
+    "mode": "provenance",
+    "mode_selection": "automatic when no sbom-path or predicate input is supplied",
+    "create_storage_record": false,
+    "create_storage_record_note": "the pinned action documents that create-storage-record requires push-to-registry=true; this workflow pushes to no registry and sets it false explicitly",
+    "push_to_registry": false,
+    "required_permissions": ["contents: read", "id-token: write", "attestations: write"],
+    "forbidden_permissions": [
+      "contents: write",
+      "packages: write",
+      "pull-requests: write",
+      "actions: write",
+      "security-events: write",
+      "artifact-metadata: write"
+    ],
+    "repository_visibility": "public",
+    "verification_authority": "GitHub cryptographic attestation verification (gh attestation verify), never a workflow log string"
+  },
+  "ordering_contract": {
+    "mandatory_sequence": [
+      "checkout exact PR head",
+      "prove exact source head",
+      "checkout exact pinned blst commit",
+      "prove upstream identity",
+      "build native blst and shim",
+      "Lane A structural negatives",
+      "Lane A upstream subgroup vectors",
+      "Lane A G1 X=0 decode-time subgroup edge",
+      "Lane B canonical root binding and real Quicknet verify",
+      "generate canonical provenance manifest",
+      "attest exact binary",
+      "attest exact manifest",
+      "upload binary and manifest only"
+    ],
+    "attestation_requires_qualification_pass": true,
+    "same_binary_throughout": true,
+    "canonical_binary_path_per_job": "${RUNNER_TEMP}/shim/<library_name>",
+    "rebuild_or_copy_between_qualification_and_attestation": false
+  },
+  "portability": {
+    "vocabulary": ["PORTABLE", "TARGET_BOUND", "PORTABILITY_UNPROVEN"],
+    "linux": {
+      "mode": "PORTABLE",
+      "recipe": "./build.sh -D__BLST_PORTABLE__",
+      "evidence": "pinned build.sh adds -D__ADX__ only when the BUILD HOST /proc/cpuinfo reports adx, which would be host-specialised; pinned README documents passing -D__BLST_PORTABLE__ on the build.sh command line; build.sh forwards unrecognised -* options into cflags; src/vect.h lines 72 and 144 and src/sha256.h gate the ADX and SHA specialisations on !defined(__BLST_PORTABLE__)"
+    },
+    "windows": {
+      "mode": "PORTABLE",
+      "recipe": "build.bat (unmodified)",
+      "evidence": "pinned build.bat performs NO host CPU feature detection, never defines __ADX__, and passes no /arch: flag, so src/vect.h never aliases to the mulx_/sqrx_/ctx_ specialisations and MSVC targets baseline x86-64",
+      "caveat": "no portable flag exists for build.bat and none was invented; the claim is that the recipe is not specialised to the build host, established from pinned source. Instruction-level disassembly of the emitted binary was not performed."
+    },
+    "unproven_must_not_be_presented_as_portable": true
+  },
+  "upload_contract": {
+    "allowed": ["exact native binary", "exact canonical provenance manifest"],
+    "forbidden": [
+      "raw Quicknet response",
+      "raw Quicknet signature",
+      "provider response files",
+      "temporary fetch files",
+      ".git",
+      "compiler intermediates",
+      "tokens",
+      "logs containing raw production bytes"
+    ],
+    "artifact_names": [
+      "mt4-blst-admission-evidence-windows-x64",
+      "mt4-blst-admission-evidence-linux-x64"
+    ]
+  },
+  "execution_proofs": {
+    "windows_attested_build": "PENDING_CI",
+    "linux_attested_build": "PENDING_CI",
+    "artifact_attestation": "PENDING_CI",
+    "note": "committed source may never self-promote execution proof; runtime GitHub evidence is authoritative"
+  },
+  "protected_flags": {
+    "dependency_profile_admitted": false,
+    "fixture_corpus_admitted": false,
+    "mt4_verifier_profile_selected": false,
+    "proof_verified": false,
+    "quorum_countable": false,
+    "operational_quorum_ready": false,
+    "machine_time_origin_proven": false,
+    "timestamp_origin_proven": false,
+    "readiness_promoted": false,
+    "connector_promoted": false
+  },
+  "explicitly_not_established": [
+    "MT4 completion",
+    "machine-time anchor evidence",
+    "complete machine-time sandwich",
+    "dependency admission",
+    "verifier profile selection",
+    "fixture corpus admission",
+    "provider reachability",
+    "quorum countability",
+    "readiness promotion",
+    "connector promotion"
+  ]
+}
