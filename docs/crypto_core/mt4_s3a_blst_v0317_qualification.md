@@ -328,14 +328,206 @@ Designed here, deliberately **not** implemented: `UPSTREAM_REPO`, `UPSTREAM_TAG`
 GitHub artifact attestation should be treated as **OPTIONAL** at qualification stage and
 **REQUIRED** at dependency-admission stage. No attestation exists today and none is claimed.
 
+## Dependency-admission evidence (added after the S3A merge)
+
+The qualification above proves the boundary *works*. It does not make `blst` an admitted dependency.
+A later governed decision must do that, and this section exists so that decision is evidence-backed
+and content-addressed rather than a promotion of whatever binary a CI job happened to produce.
+
+**Status: `ADMISSION_EVIDENCE_ONLY`.** Every protected flag remains `false`:
+`dependency_profile_admitted`, `fixture_corpus_admitted`, `mt4_verifier_profile_selected`,
+`proof_verified`, `quorum_countable`, `operational_quorum_ready`, `machine_time_origin_proven`,
+`timestamp_origin_proven`, `readiness_promoted`, `connector_promoted`.
+
+### The exact-same-binary rule
+
+Provenance is only meaningful if it describes the binary that actually passed. The pipeline has three
+trust stages, and the GitHub artifact — not a filesystem path — is the identity that carries across
+them:
+
+```text
+STAGE A  build-{linux,windows}-candidate      unprivileged, permissions: contents: read
+  exact head → upstream pin → build → manifest → upload IMMUTABLE candidate artifact
+                              │                      (binary + manifest, overwrite: false)
+                              ▼   IMMUTABILITY BOUNDARY
+STAGE B  qualify-{linux,windows}-candidate    unprivileged, permissions: contents: read
+  fresh-download that exact artifact BY ARTIFACT ID (digest-mismatch: error)
+     → enumerate exactly two files → recompute digests → Lane A → Lane B
+     → qualification receipt (separate artifact)
+                              │
+                              ▼   MERGE BOUNDARY — nothing privileged may run before here
+STAGE C  attest-trusted-evidence              workflow_run on main only
+  independently revalidate run, jobs, artifacts, digests, receipt, approved workflow digest
+     → attest the validated checksums
+```
+
+### Why the earlier no-window claim was wrong
+
+A previous revision qualified the binary at a mutable path and *then* uploaded it, asserting that
+re-hashing immediately before upload left no window. That was an overclaim: a re-hash and a
+subsequent upload are two operations, and anything running concurrently on that runner could act
+between them. Comparing artifact digests does not close it either — it only proves *uploaded ==
+downloaded*, never *uploaded == locally checked*.
+
+The order is now inverted. The artifact is created **first** and is immutable (`overwrite: false`,
+uploaded once, never re-uploaded). Qualification then fetches that artifact back by its exact
+artifact id and runs Lane A and Lane B against the downloaded bytes. Stage C fetches the same
+artifact again and re-derives the digests a third time. No stage trusts a path.
+
+### Trusted default-branch attestation
+
+Two findings drove this architecture:
+
+- `P1-MT4-ATTESTATION-CREDENTIALS-EXPOSED-TO-PR-CODE` — a job that executed PR-controlled code also
+  held `id-token: write`.
+- `P1-MT4-ATTESTATION-WORKFLOW-DEFINITION-PR-CONTROLLED` — moving the credential to a separate job
+  in the *same* pull-request-triggered workflow was still insufficient, because **a pull request
+  authors the very file that grants the capability**.
+
+So the qualification workflow now holds no privileged capability anywhere — not at workflow scope,
+not on any job, and the strings `id-token:` and `attestations:` do not appear in it at all.
+Attestation lives in `crypto_core_mt4_trusted_attestation.yml`, triggered only by:
+
+```yaml
+on:
+  workflow_run:
+    workflows: [crypto_core mt4-s3a blst qualification]
+    types: [completed]
+    branches: [main]
+```
+
+GitHub runs a `workflow_run` workflow from the **default-branch** definition, so an open pull request
+cannot define, alter or reach it. The job additionally refuses to start unless the source run
+concluded `success`, was a `workflow_dispatch`, ran on `main`, and came from this repository — no
+fork, no PR, no operator-supplied run id. The source run is exactly `github.event.workflow_run.id`.
+
+**Consequence, and it is intentional: while this pull request is open the trusted workflow does not
+run at all.** Pre-merge status is `TRUSTED_ATTESTATION_EXECUTION=POST_MERGE_REQUIRED`. No workaround
+to make it execute earlier exists or may be added.
+
+### What the trusted gate re-derives
+
+`mt4_trusted_attestation_gate.py` believes nothing the qualification run reports about itself. It
+re-reads the run, its jobs and its artifacts from the API; requires exactly one live candidate and
+one live receipt artifact per platform with unique ids; extracts each archive requiring exactly the
+expected members; recomputes the binary and manifest digests; and only then checks that the manifest
+and receipt agree with those recomputed values, with the artifact ids and service-reported archive
+digests, and with the source run and head from the trusted event.
+
+It also binds the **qualification workflow definition itself**: the digest of
+`crypto_core_mt4_s3a_blst_qualification.yml` at the source head must equal
+`APPROVED_QUALIFICATION_WORKFLOW_SHA256`, which lives on the trusted surface — never inside the file
+it approves, which would be circular, and never taken from the candidate, which could be forged. If a
+later pull request changes qualification semantics, trusted attestation **fails closed** until a
+separately reviewed change to `main` updates that constant.
+
+The downloaded binary and manifest are **data only**; the trusted job never executes them, never
+checks out a pull-request ref, and runs no script other than the gate from the trusted checkout. The
+API credential is stripped before any offsite storage redirect.
+
+### Four digests, never conflated
+
+| Digest | What it covers |
+| --- | --- |
+| artifact archive digest | the GitHub artifact ZIP (`sha256:…`), from the artifact service |
+| binary digest | the native shim bytes inside the artifact |
+| manifest digest | the canonical provenance manifest bytes inside the artifact |
+| qualification receipt digest | the receipt JSON, carried in its own artifact |
+
+Attestation subjects are the **binary and manifest digests**, signed via `subject-checksums` so the
+action cannot re-resolve a mutable path after validation.
+
+**What this proves:** credential isolation, default-branch anchoring of the signing capability, and
+immutable-artifact identity from build through attestation. **What it does not prove:** that the
+qualification build code is non-malicious, or that the build is bit-for-bit reproducible. The
+attestation therefore carries a project-owned predicate rather than claiming SLSA build provenance —
+the attesting workflow did not build the binary and must not imply that it did.
+
+### What the manifest binds
+
+Upstream identity and licence, the **upstream source-tree digest**, compiler identity/version, target
+identity, build command/flags, portable mode, the blst static library, shim and probe sources, the
+workflow itself, the output binary digest, the five pinned action commits — including
+`actions_download_artifact_commit`, because that action is the transport across the credential trust
+boundary and is therefore security-relevant — and the Quicknet contract.
+
+The source-tree digest is computed from the **pinned git object inventory**
+(`git ls-tree -r -z <commit>` binding mode, type, path and the SHA-256 of exact `git cat-file` blob
+bytes), never from an OS-materialised checkout — so Windows and Linux agree despite line-ending and
+filesystem presentation differences.
+
+`build_recipe_digest` covers recipe fields only. It deliberately **excludes** `output_binary_sha256`
+(which would be circular), run ids, attempts, wall clock and artifact/attestation URLs, so it
+identifies the recipe rather than one execution of it. Run ids live in `operational_metadata`,
+outside the digest and explicitly not trust evidence.
+
+### Supply-chain pinning and permissions
+
+Every action is pinned to a full immutable commit SHA — a moving tag would let an attested build's
+supply-chain identity change with no repository commit. Workflow scope grants only `contents: read`,
+so no job inherits the credential implicitly; `id-token: write` and `attestations: write` exist
+**only** on `attest-qualified-evidence`. `artifact-metadata: write` is deliberately **not** granted:
+the pinned `actions/attest` documents it as necessary only to create an artifact storage record, and
+this workflow sets `create-storage-record: false` and pushes to no registry. Provenance mode is
+selected automatically because no SBOM or predicate input is supplied.
+
+Attestation validity is established by GitHub's cryptographic verification (`gh attestation verify`),
+never by a string printed into a workflow log.
+
+### Portability — stated exactly, not optimistically
+
+| Platform | Mode | Basis |
+| --- | --- | --- |
+| Linux | `PORTABLE` | `./build.sh -D__BLST_PORTABLE__` |
+| Windows | `PORTABLE` | `build.bat` unmodified |
+
+Pinned `build.sh` adds `-D__ADX__` **only when the build host's `/proc/cpuinfo` reports `adx`**, which
+would specialise the artifact to that runner. The pinned README documents passing
+`-D__BLST_PORTABLE__` on the `build.sh` command line; `build.sh` forwards unrecognised `-*` options
+into `cflags`; and `src/vect.h` (lines 72, 144) plus `src/sha256.h` gate the ADX/SHA specialisations
+on `!defined(__BLST_PORTABLE__)`. The portable binary is what the entire qualification then runs.
+
+Pinned `build.bat` performs **no** host-CPU detection, never defines `__ADX__` and passes no `/arch:`
+flag, so `src/vect.h` never aliases to the `mulx_`/`sqrx_`/`ctx_` specialisations. No portable flag
+exists for `build.bat` and none was invented. Caveat recorded in the fixture: this establishes the
+*recipe* is not build-host specialised; instruction-level disassembly of the emitted binary was not
+performed. `PORTABILITY_UNPROVEN` is never presented as `PORTABLE`.
+
+### Upload boundary
+
+Only two paths are uploaded per candidate artifact — the exact binary and the exact manifest — under
+platform-distinct names, plus one receipt file per platform in its own artifact. No directory, no
+glob, and therefore no route by which a fetched Quicknet beacon, temporary file or compiler
+intermediate could be published. Every upload sets `overwrite: false` and `if-no-files-found: error`.
+
+```text
+windows_candidate_build              PENDING_CI
+linux_candidate_build                PENDING_CI
+windows_fresh_download_qualification PENDING_CI
+linux_fresh_download_qualification   PENDING_CI
+trusted_attestation_execution        POST_MERGE_REQUIRED
+attestation_verified                 POST_MERGE_REQUIRED
+```
+
+Attestations produced by the superseded pre-repair heads `520a2fb1…` and `6ce0ae04…` are
+**historical only** and must never be cited as merge evidence for this architecture.
+
+Committed source never self-promotes execution proof; runtime GitHub evidence is authoritative. This
+slice does **not** implement the MT-4 anchor, a machine-time sandwich, or any production verifier.
+
 ## Files in this slice
 
 ```text
-.github/workflows/crypto_core_mt4_s3a_blst_qualification.yml
+.github/workflows/crypto_core_mt4_s3a_blst_qualification.yml        unprivileged stages A and B
+.github/workflows/crypto_core_mt4_trusted_attestation.yml           trusted stage C (main only)
 scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_shim.c
 scripts/crypto_core/qualification/mt4_s3a_blst_quicknet_probe.py
+scripts/crypto_core/qualification/mt4_blst_dependency_admission_manifest.py
+scripts/crypto_core/qualification/mt4_trusted_attestation_gate.py   trusted revalidation
 tests/crypto_core/fixtures/mt4_s3a_blst_v0317_qualification_v2.json
+tests/crypto_core/fixtures/mt4_blst_dependency_admission_evidence_v1.json
 tests/crypto_core/validation/test_mt4_s3a_blst_v0317_qualification.py
+tests/crypto_core/validation/test_mt4_blst_dependency_admission_evidence.py
 docs/crypto_core/mt4_s3a_blst_v0317_qualification.md
 ```
 

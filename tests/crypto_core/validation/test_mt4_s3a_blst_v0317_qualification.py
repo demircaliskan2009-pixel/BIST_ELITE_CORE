@@ -311,22 +311,54 @@ def test_workflow_pins_upstream_commit_and_requires_python_38() -> None:
 
 def test_workflow_covers_windows_and_linux_x64() -> None:
     workflow = _read(_WORKFLOW_PATH)
-    assert "os: windows-2022" in workflow
-    assert "os: ubuntu-22.04" in workflow
-    assert "fail-fast: false" in workflow
+    parsed = yaml.safe_load(workflow)
+    # Explicit per-platform jobs rather than a matrix, so each build job can publish an unambiguous
+    # artifact id output for its own qualification job to consume.
+    runners = {job_id: job["runs-on"] for job_id, job in parsed["jobs"].items()}
+    assert set(runners.values()) == {"windows-2022", "ubuntu-22.04"}, runners
+    assert sum(1 for value in runners.values() if value == "windows-2022") == 2, runners
+    assert sum(1 for value in runners.values() if value == "ubuntu-22.04") == 2, runners
     # Fixed runner families rather than "latest" for reproducible qualification evidence.
     assert "windows-latest" not in workflow
     assert "ubuntu-latest" not in workflow
 
 
 def test_workflow_never_uploads_or_persists_lane_b_raw_material() -> None:
+    """Lane-B raw material must never leave the runner.
+
+    Uploads are no longer banned outright -- the admission-evidence slice uploads the qualified
+    binary and its provenance manifest -- so this asserts the property that actually matters: every
+    uploaded path is one of those two explicit files, with no directory or glob that could sweep up
+    a fetched beacon.  The precise upload inventory is additionally owned by
+    test_mt4_blst_dependency_admission_evidence.py.
+    """
     workflow = _read(_WORKFLOW_PATH)
-    assert "upload-artifact" not in workflow
     assert "LANE_B_RAW_BYTES_PERSISTED=False" in workflow
     # Only digests and identities may be emitted for Lane B.
     assert "LANE_B_SIGNATURE_SHA256" in workflow
     for forbidden in ("print(signature", "print(beacon", 'print("%s" % signature', "echo ${signature"):
         assert forbidden not in workflow, forbidden
+
+    parsed = yaml.safe_load(workflow)
+    allowed_suffixes = (
+        "libmt4_s3a_blst_quicknet_shim.so",
+        "mt4_s3a_blst_quicknet_shim.dll",
+        "mt4_blst_dependency_admission_manifest.json",
+        "mt4_blst_qualification_receipt.json",
+    )
+    uploads = 0
+    for job in parsed["jobs"].values():
+        for step in job["steps"]:
+            if "upload-artifact" not in step.get("uses", ""):
+                continue
+            uploads += 1
+            paths = [line.strip() for line in str(step["with"]["path"]).strip().split("\n") if line.strip()]
+            assert paths, step.get("name")
+            for path in paths:
+                assert path.endswith(allowed_suffixes), path
+                assert "*" not in path, path
+    # Two immutable candidate uploads plus two receipt uploads; nothing else may be published.
+    assert uploads == 4, uploads
 
 
 _UPSTREAM_NEGATIVE_SOURCE = "bindings/python/run.me"
@@ -490,21 +522,24 @@ def test_workflow_qualifies_the_exact_head_not_the_synthetic_merge_ref() -> None
     # Structural, not textual: the explanatory comment may name refs/pull while no step is allowed
     # to actually check it out.
     parsed = yaml.safe_load(workflow)
-    steps = parsed["jobs"]["qualify"]["steps"]
-    checkout = steps[0]
-    assert checkout["uses"].startswith("actions/checkout@")
-    assert "head.sha" in checkout["with"]["ref"]
-    assert checkout["with"]["persist-credentials"] is False
+    # Every job in the pipeline checks out the exact head and proves it before doing anything else.
+    assert parsed["jobs"], "workflow declares no jobs"
+    for job_id, job in parsed["jobs"].items():
+        steps = job["steps"]
+        checkout = steps[0]
+        assert checkout["uses"].startswith("actions/checkout@"), job_id
+        assert "head.sha" in checkout["with"]["ref"], job_id
+        assert checkout["with"]["persist-credentials"] is False, job_id
 
-    for step in steps:
-        ref = (step.get("with") or {}).get("ref")
-        if ref is not None:
-            assert "refs/pull" not in ref, step.get("name")
-    # The head assertion must run immediately after checkout, before any build or qualification
-    # step consumes the worktree.
-    names = [step.get("name", "") for step in steps]
-    assertion_index = next(i for i, n in enumerate(names) if n.startswith("Prove the checked-out worktree"))
-    assert assertion_index == 1, names[:3]
+        for step in steps:
+            ref = (step.get("with") or {}).get("ref")
+            if ref is not None:
+                assert "refs/pull" not in ref, (job_id, step.get("name"))
+        # The head assertion must run immediately after checkout, before any build or
+        # qualification step consumes the worktree.
+        names = [step.get("name", "") for step in steps]
+        assertion_index = next(i for i, n in enumerate(names) if n.startswith("Prove the checked-out worktree"))
+        assert assertion_index == 1, (job_id, names[:3])
 
 
 def test_workflow_uses_only_current_drand_v2_fields() -> None:
