@@ -623,52 +623,64 @@ class _SyntheticEvidence:
             self.receipt_name: self.receipt_artifact,
         }
 
-    def install(self, monkeypatch) -> None:
-        candidate_zip = _zip_bytes({self.binary_name: self.binary, self.gate.MANIFEST_NAME: self._manifest_bytes()})
-        receipt_zip = _zip_bytes({self.gate.RECEIPT_NAME: json.dumps(self.receipt, sort_keys=True).encode()})
-        payloads = {self.candidate_artifact["id"]: candidate_zip, self.receipt_artifact["id"]: receipt_zip}
-
-        def fake_download(api_url, repository, artifact_id, token):
-            return payloads[artifact_id]
-
-        monkeypatch.setattr(self.gate, "download_artifact_zip", fake_download)
-
     def _manifest_bytes(self) -> bytes:
         return json.dumps(self.manifest, sort_keys=True, separators=(",", ":")).encode()
 
-    def run(self, tmp_path: Path):
-        return self.gate.verify_platform(self.platform, self.selected(), _gate_arguments(), "token", tmp_path)
+    def candidate_archive(self) -> bytes:
+        return _zip_bytes({self.binary_name: self.binary, self.gate.MANIFEST_NAME: self._manifest_bytes()})
+
+    def receipt_archive(self) -> bytes:
+        return _zip_bytes({self.gate.RECEIPT_NAME: json.dumps(self.receipt, sort_keys=True).encode()})
+
+    def run(self, tmp_path: Path, candidate_archive: bytes = None):
+        """Verification is a pure function of bytes: no credential, no download to stub."""
+        return self.gate.verify_platform(
+            self.platform,
+            self.selected(),
+            _gate_arguments(),
+            self.candidate_archive() if candidate_archive is None else candidate_archive,
+            self.receipt_archive(),
+            tmp_path,
+        )
 
 
-def test_gate_accepts_consistent_synthetic_evidence(monkeypatch, tmp_path: Path) -> None:
+def test_verification_is_separated_from_the_credential_bearing_fetch() -> None:
+    """The token must not reach any value later written to disk."""
+    gate = _gate_module()
+    import inspect
+
+    verify_parameters = set(inspect.signature(gate.verify_platform).parameters)
+    assert "token" not in verify_parameters, verify_parameters
+    assert {"candidate_archive", "receipt_archive"} <= verify_parameters, verify_parameters
+    # Fetching is the only credential-bearing step and returns bytes, never a record.
+    fetch_parameters = set(inspect.signature(gate.fetch_platform_archives).parameters)
+    assert "token" in fetch_parameters, fetch_parameters
+    source = _read(_GATE_PATH)
+    assert "def build_predicate(record: dict, arguments" in source
+    assert "token" not in inspect.signature(gate.build_predicate).parameters
+
+
+def test_gate_accepts_consistent_synthetic_evidence(tmp_path: Path) -> None:
     gate = _gate_module()
     evidence = _SyntheticEvidence(gate)
-    evidence.install(monkeypatch)
     record = evidence.run(tmp_path)
     assert record["binary_sha256"] == evidence.binary_sha256
     assert record["candidate_artifact_id"] == str(evidence.candidate_artifact["id"])
     assert record["candidate_artifact_digest"] == evidence.candidate_artifact["digest"]
 
 
-def test_gate_rejects_an_unexpected_third_file_in_the_candidate_artifact(monkeypatch, tmp_path: Path) -> None:
+def test_gate_rejects_an_unexpected_third_file_in_the_candidate_artifact(tmp_path: Path) -> None:
     gate = _gate_module()
     evidence = _SyntheticEvidence(gate)
-    evidence.install(monkeypatch)
-
-    def fake_download(api_url, repository, artifact_id, token):
-        if artifact_id == evidence.candidate_artifact["id"]:
-            return _zip_bytes(
-                {
-                    evidence.binary_name: evidence.binary,
-                    gate.MANIFEST_NAME: evidence._manifest_bytes(),
-                    "unexpected_extra_payload.bin": b"smuggled",
-                }
-            )
-        return _zip_bytes({gate.RECEIPT_NAME: json.dumps(evidence.receipt, sort_keys=True).encode()})
-
-    monkeypatch.setattr(gate, "download_artifact_zip", fake_download)
+    smuggled = _zip_bytes(
+        {
+            evidence.binary_name: evidence.binary,
+            gate.MANIFEST_NAME: evidence._manifest_bytes(),
+            "unexpected_extra_payload.bin": b"smuggled",
+        }
+    )
     with pytest.raises(gate.TrustedGateError):
-        evidence.run(tmp_path)
+        evidence.run(tmp_path, candidate_archive=smuggled)
 
 
 @pytest.mark.parametrize(
@@ -694,11 +706,10 @@ def test_gate_rejects_an_unexpected_third_file_in_the_candidate_artifact(monkeyp
         ("dependency_profile_admitted", True),
     ],
 )
-def test_gate_rejects_every_receipt_forgery(monkeypatch, tmp_path: Path, field, value) -> None:
+def test_gate_rejects_every_receipt_forgery(tmp_path: Path, field, value) -> None:
     gate = _gate_module()
     evidence = _SyntheticEvidence(gate)
     evidence.receipt[field] = value
-    evidence.install(monkeypatch)
     with pytest.raises(gate.TrustedGateError):
         evidence.run(tmp_path)
 
@@ -715,19 +726,17 @@ def test_gate_rejects_every_receipt_forgery(monkeypatch, tmp_path: Path, field, 
         ("proof_verified", True),
     ],
 )
-def test_gate_rejects_every_manifest_forgery(monkeypatch, tmp_path: Path, field, value) -> None:
+def test_gate_rejects_every_manifest_forgery(tmp_path: Path, field, value) -> None:
     gate = _gate_module()
     evidence = _SyntheticEvidence(gate)
     evidence.manifest[field] = value
-    evidence.install(monkeypatch)
     with pytest.raises(gate.TrustedGateError):
         evidence.run(tmp_path)
 
 
-def test_gate_writes_shasum_compatible_checksums_and_a_truthful_predicate(monkeypatch, tmp_path: Path) -> None:
+def test_gate_writes_shasum_compatible_checksums_and_a_truthful_predicate(tmp_path: Path) -> None:
     gate = _gate_module()
     evidence = _SyntheticEvidence(gate)
-    evidence.install(monkeypatch)
     record = evidence.run(tmp_path)
 
     checksums = tmp_path / "linux-x64.checksums.txt"
@@ -1154,6 +1163,7 @@ def test_contract_tests_kill_the_intended_supply_chain_mutants() -> None:
         "execute a source-artifact script in the trusted workflow": "test_trusted_workflow_never_executes_the_candidate_binary_or_source_scripts",
         "widen trusted workflow permissions": "test_trusted_workflow_permissions_are_bounded",
         "forward the API token to a storage redirect": "test_gate_strips_the_api_credential_when_a_download_redirects_offsite",
+        "let the API token reach a value written to disk": "test_verification_is_separated_from_the_credential_bearing_fetch",
         # P2 -- immutability and identity
         "qualify the local build output instead of a fresh download": "test_qualification_consumes_a_fresh_download_addressed_by_artifact_id",
         "wildcard the candidate artifact download": "test_qualification_consumes_a_fresh_download_addressed_by_artifact_id",

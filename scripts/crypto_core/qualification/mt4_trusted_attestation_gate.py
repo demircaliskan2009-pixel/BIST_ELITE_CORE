@@ -280,25 +280,43 @@ def select_artifacts(artifacts_payload: dict) -> dict:
     return selected
 
 
+def fetch_platform_archives(platform: str, selected: dict, arguments: argparse.Namespace, token: str) -> tuple:
+    """The ONLY credential-bearing step: fetch both archives for one platform.
+
+    Deliberately separated from verification so the ephemeral job token cannot reach -- and cannot
+    be shown by static analysis to reach -- any value that is later written to disk.  Verification
+    below is a pure function of bytes.
+    """
+    candidate_name, receipt_artifact_name, _binary = PLATFORMS[platform]
+    return (
+        download_artifact_zip(arguments.api_url, arguments.repository, selected[candidate_name]["id"], token),
+        download_artifact_zip(arguments.api_url, arguments.repository, selected[receipt_artifact_name]["id"], token),
+    )
+
+
 def verify_platform(
     platform: str,
     selected: dict,
     arguments: argparse.Namespace,
-    token: str,
+    candidate_archive: bytes,
+    receipt_archive: bytes,
     work_dir: Path,
 ) -> dict:
-    """Bindings 14-27 for one platform.  Returns the validated evidence record."""
+    """Bindings 14-27 for one platform.  Pure: no credential, no network.
+
+    Returns the validated evidence record.
+    """
     candidate_name, receipt_artifact_name, binary_name = PLATFORMS[platform]
     candidate = selected[candidate_name]
     receipt_artifact = selected[receipt_artifact_name]
 
     candidate_files = extract_exact(
-        download_artifact_zip(arguments.api_url, arguments.repository, candidate["id"], token),
+        candidate_archive,
         work_dir / platform / "candidate",
         (binary_name, MANIFEST_NAME),
     )
     receipt_files = extract_exact(
-        download_artifact_zip(arguments.api_url, arguments.repository, receipt_artifact["id"], token),
+        receipt_archive,
         work_dir / platform / "receipt",
         (RECEIPT_NAME,),
     )
@@ -513,7 +531,8 @@ def main(argv: list) -> int:
 
     work_dir = Path(arguments.work_dir)
     for platform in sorted(PLATFORMS):
-        record = verify_platform(platform, selected, arguments, token, work_dir)
+        candidate_archive, receipt_archive = fetch_platform_archives(platform, selected, arguments, token)
+        record = verify_platform(platform, selected, arguments, candidate_archive, receipt_archive, work_dir)
         checksums_path = work_dir / "attest" / (platform + ".checksums.txt")
         predicate_path = work_dir / "attest" / (platform + ".predicate.json")
         write_subject_checksums(record, checksums_path)
