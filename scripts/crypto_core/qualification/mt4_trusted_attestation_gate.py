@@ -513,10 +513,14 @@ def build_predicate(record: dict, arguments: argparse.Namespace) -> dict:
     This deliberately does NOT claim SLSA build provenance: the attesting workflow did not build the
     binary, it validated an immutable artifact produced by a separate unprivileged qualification run.
     """
+    # The attesting workflow's identity is deliberately NOT duplicated here.  GitHub's artifact
+    # attestation binds the signer workflow cryptographically in the Sigstore certificate
+    # (buildSignerURI / repository identity), which a verifier authenticates.  A descriptive copy
+    # inside this project-owned predicate would be unauthenticated JSON restating a fact the
+    # certificate already proves, so it is omitted rather than asserted twice.
     return {
         "evidenceStatus": "ADMISSION_EVIDENCE_ONLY",
         "attestationSource": "trusted_default_branch_workflow_run",
-        "attestingWorkflow": arguments.trusted_workflow_identity,
         "sourceQualification": {
             "workflowPath": arguments.expected_workflow_path,
             "workflowName": arguments.expected_workflow_name,
@@ -574,6 +578,10 @@ def _parser() -> argparse.ArgumentParser:
         "--expected-head-sha",
         "--expected-workflow-path",
         "--expected-workflow-name",
+        # Supplied by the trusted workflow invocation as GITHUB_WORKFLOW_REF.  Accepted for
+        # invocation compatibility but intentionally never persisted, logged or written: the
+        # signer workflow identity is authenticated by the GitHub attestation certificate, not
+        # by an unauthenticated field in this project's predicate.
         "--trusted-workflow-identity",
         "--approved-qualification-workflow-sha256",
         "--qualification-workflow",

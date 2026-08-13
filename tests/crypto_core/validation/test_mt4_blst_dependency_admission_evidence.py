@@ -956,6 +956,102 @@ def test_gate_writes_shasum_compatible_checksums_and_a_truthful_predicate(tmp_pa
     assert "SLSA" in joined
 
 
+def test_predicate_does_not_duplicate_the_attesting_workflow_identity(tmp_path: Path) -> None:
+    """The signer workflow identity is the certificate's job, not this predicate's.
+
+    GitHub's artifact attestation authenticates the attesting workflow in the Sigstore certificate.
+    Restating it as unauthenticated JSON inside a project-owned predicate adds no trust, and the
+    value (GITHUB_WORKFLOW_REF) is a public workflow reference that static analysis classifies as a
+    credential -- so it is omitted entirely rather than suppressed or renamed.
+    """
+    gate = _gate_module()
+    evidence = _SyntheticEvidence(gate)
+    record = evidence.run(tmp_path)
+
+    predicate = gate.build_predicate(record, _gate_arguments())
+    assert "attestingWorkflow" not in predicate, sorted(predicate)
+
+
+def test_predicate_is_non_interfering_with_the_trusted_workflow_identity_argument(tmp_path: Path) -> None:
+    """No value of that argument may change a single byte of the serialized predicate."""
+    gate = _gate_module()
+    evidence = _SyntheticEvidence(gate)
+    record = evidence.run(tmp_path)
+
+    def serialize(identity: str) -> str:
+        arguments = _gate_arguments(trusted_workflow_identity=identity)
+        return json.dumps(gate.build_predicate(record, arguments), sort_keys=True, separators=(",", ":"))
+
+    baseline = serialize("trusted")
+    for identity in (
+        "owner/repo/.github/workflows/x.yml@refs/heads/main",
+        "ghp_000000000000000000000000000000000000",
+        "",
+        "totally-different-value",
+    ):
+        assert serialize(identity) == baseline, identity
+        assert identity not in baseline or identity == ""
+
+
+def test_predicate_retains_every_real_evidence_field(tmp_path: Path) -> None:
+    """Removing the redundant field must not quietly drop any actual evidence."""
+    gate = _gate_module()
+    evidence = _SyntheticEvidence(gate)
+    record = evidence.run(tmp_path)
+    predicate = gate.build_predicate(record, _gate_arguments())
+
+    assert predicate["evidenceStatus"] == "ADMISSION_EVIDENCE_ONLY"
+    assert predicate["attestationSource"] == "trusted_default_branch_workflow_run"
+    source = predicate["sourceQualification"]
+    for key in (
+        "workflowPath",
+        "workflowName",
+        "workflowSha256",
+        "workflowDigestApprovedOnDefaultBranch",
+        "runId",
+        "headSha",
+        "headBranch",
+        "event",
+        "repository",
+    ):
+        assert key in source, key
+    for key in (
+        "candidateArtifact",
+        "qualificationReceiptArtifact",
+        "subjects",
+        "upstream",
+        "quicknet",
+        "qualificationOutcomes",
+        "qualificationInputSource",
+        "rawProductionBytesPersisted",
+        "protectedFlags",
+        "dependencyAdmissionPerformed",
+        "notProven",
+    ):
+        assert key in predicate, key
+    assert predicate["rawProductionBytesPersisted"] is False
+    assert predicate["dependencyAdmissionPerformed"] is False
+    assert set(predicate["protectedFlags"]) == set(_PROTECTED_FLAGS)
+    assert all(value is False for value in predicate["protectedFlags"].values())
+    assert predicate["quicknet"]["chainHash"] == _QUICKNET_CHAIN_HASH
+    assert predicate["upstream"]["blstCommit"] == _UPSTREAM_COMMIT
+
+
+def test_repair_uses_no_suppression_marker_and_no_identifier_rename() -> None:
+    """The fix must be structural: no scanner suppression, no cosmetic rename."""
+    source = _read(_GATE_PATH)
+    for suppression in ("# codeql", "codeql[", "lgtm[", "nosec", "# noqa: S105", "# type: ignore"):
+        assert suppression not in source.lower(), suppression
+    # The argument keeps its original name and is still accepted from the trusted workflow, so the
+    # workflow file needs no change and the fix cannot be mistaken for a rename-to-evade.
+    assert "--trusted-workflow-identity" in source
+    gate = _gate_module()
+    dests = {action.dest for action in gate._parser()._actions}
+    assert "trusted_workflow_identity" in dests, sorted(dests)
+    # But its value must never be written, logged or otherwise persisted.
+    assert "arguments.trusted_workflow_identity" not in source
+
+
 def test_gate_strips_the_api_credential_when_a_download_redirects_offsite() -> None:
     """A signed storage redirect must never receive the GitHub token."""
     gate = _gate_module()
@@ -1375,6 +1471,10 @@ def test_contract_tests_kill_the_intended_supply_chain_mutants() -> None:
         "drop the fresh-download inventory gate": "test_downloaded_candidate_identity_is_bound_fail_closed",
         "sign subject-path instead of the validated checksums": "test_trusted_attestation_signs_validated_checksums_with_a_truthful_predicate",
         "claim SLSA build provenance for a cross-workflow attestation": "test_gate_writes_shasum_compatible_checksums_and_a_truthful_predicate",
+        "restore the redundant attestingWorkflow predicate field": "test_predicate_does_not_duplicate_the_attesting_workflow_identity",
+        "let the trusted-workflow-identity argument influence the predicate": "test_predicate_is_non_interfering_with_the_trusted_workflow_identity_argument",
+        "drop a real evidence field while removing the redundant one": "test_predicate_retains_every_real_evidence_field",
+        "silence the scanner with a suppression marker or a rename": "test_repair_uses_no_suppression_marker_and_no_identifier_rename",
         "keep the retired same_binary_throughout claim": "test_fixture_drops_the_overstated_same_binary_claim",
         "keep the 'no window exists' documentation overclaim": "test_documentation_drops_the_no_window_overclaim_and_states_the_real_chain",
         "record a lane as passed without its success token": "test_receipt_records_a_lane_only_on_the_exact_success_token",
