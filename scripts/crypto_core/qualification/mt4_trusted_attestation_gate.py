@@ -207,6 +207,22 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def normalise_artifact_digest(value: str) -> str:
+    """Canonicalise the artifact ARCHIVE digest to ``sha256:<64 hex>``.
+
+    The same bytes are reported in two encodings: ``actions/upload-artifact``'s ``artifact-digest``
+    output is bare hex, while the artifacts REST API prefixes it with ``sha256:``.  Comparing raw
+    strings would therefore fail-open on a representation difference rather than a real mismatch,
+    so both sides are normalised before any equality check.
+    """
+    if not isinstance(value, str):
+        raise TrustedGateError("artifact digest must be a string")
+    body = value[len("sha256:") :] if value.startswith("sha256:") else value
+    if len(body) != 64 or any(character not in "0123456789abcdef" for character in body):
+        raise TrustedGateError("artifact digest must be 64 lowercase hex characters")
+    return "sha256:" + body
+
+
 def _require(condition: bool, marker: str) -> None:
     if not condition:
         raise TrustedGateError(marker)
@@ -312,7 +328,8 @@ def verify_platform(
         "RECEIPT_ARTIFACT_NAME_MISMATCH:" + platform,
     )
     _require(
-        receipt.get("candidate_artifact_digest") == candidate["digest"],
+        normalise_artifact_digest(receipt.get("candidate_artifact_digest", ""))
+        == normalise_artifact_digest(candidate["digest"]),
         "RECEIPT_ARTIFACT_DIGEST_MISMATCH:" + platform,
     )
 
@@ -366,10 +383,10 @@ def verify_platform(
         "manifest_sha256": manifest_sha256,
         "candidate_artifact_id": str(candidate["id"]),
         "candidate_artifact_name": candidate_name,
-        "candidate_artifact_digest": candidate["digest"],
+        "candidate_artifact_digest": normalise_artifact_digest(candidate["digest"]),
         "receipt_artifact_id": str(receipt_artifact["id"]),
         "receipt_artifact_name": receipt_artifact_name,
-        "receipt_artifact_digest": receipt_artifact["digest"],
+        "receipt_artifact_digest": normalise_artifact_digest(receipt_artifact["digest"]),
         "receipt_sha256": _sha256(receipt_files[RECEIPT_NAME]),
         "upstream_source_tree_digest": manifest.get("upstream_source_tree_digest"),
         "build_recipe_digest": manifest.get("build_recipe_digest"),

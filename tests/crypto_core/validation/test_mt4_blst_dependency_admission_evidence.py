@@ -802,12 +802,30 @@ def test_receipt_records_a_lane_only_on_the_exact_success_token() -> None:
             module._require_lane_pass(bad, "lane")
 
 
-def test_receipt_rejects_malformed_artifact_identity() -> None:
+def test_receipt_canonicalises_both_artifact_digest_encodings() -> None:
+    """upload-artifact emits bare hex; the REST API prefixes it. Both mean the same bytes."""
     module = _generator_module()
-    assert module._require_artifact_digest("sha256:" + "a" * 64).startswith("sha256:")
-    for bad in ("a" * 64, "sha512:" + "a" * 64, "sha256:zz", ""):
+    canonical = "sha256:" + "a" * 64
+    assert module._require_artifact_digest(canonical) == canonical
+    assert module._require_artifact_digest("a" * 64) == canonical
+    for bad in ("sha512:" + "a" * 64, "sha256:zz", "", "A" * 64, "a" * 63):
         with pytest.raises(module.ManifestError):
             module._require_artifact_digest(bad)
+
+
+def test_gate_normalises_artifact_digests_before_comparing() -> None:
+    """A representation difference must never be mistaken for a real digest match or mismatch."""
+    gate = _gate_module()
+    canonical = "sha256:" + "b" * 64
+    assert gate.normalise_artifact_digest(canonical) == canonical
+    assert gate.normalise_artifact_digest("b" * 64) == canonical
+    for bad in ("sha256:zz", "", "B" * 64, "b" * 63, None):
+        with pytest.raises(gate.TrustedGateError):
+            gate.normalise_artifact_digest(bad)
+
+
+def test_receipt_rejects_malformed_artifact_identity() -> None:
+    module = _generator_module()
     assert module._require_decimal("123", "id") == "123"
     for bad in ("12a", "-1", ""):
         with pytest.raises(module.ManifestError):
@@ -1156,6 +1174,8 @@ def test_contract_tests_kill_the_intended_supply_chain_mutants() -> None:
         "keep the retired same_binary_throughout claim": "test_fixture_drops_the_overstated_same_binary_claim",
         "keep the 'no window exists' documentation overclaim": "test_documentation_drops_the_no_window_overclaim_and_states_the_real_chain",
         "record a lane as passed without its success token": "test_receipt_records_a_lane_only_on_the_exact_success_token",
+        "compare artifact digests across encodings without normalising": "test_gate_normalises_artifact_digests_before_comparing",
+        "reject the bare-hex artifact digest upload-artifact actually emits": "test_receipt_canonicalises_both_artifact_digest_encodings",
         "let the two platforms drift apart in lane logic": "test_the_two_qualification_jobs_run_identical_lane_logic",
         "collide the platform artifact names": "test_artifact_names_are_platform_distinct_and_non_colliding",
         "self-promote pre-merge attestation": "test_committed_evidence_never_self_promotes_pre_merge_attestation",

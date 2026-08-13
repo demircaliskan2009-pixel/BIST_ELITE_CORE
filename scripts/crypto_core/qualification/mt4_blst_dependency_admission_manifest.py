@@ -291,11 +291,17 @@ def _require_lane_pass(value: str, name: str) -> bool:
 
 
 def _require_artifact_digest(value: str) -> str:
-    """GitHub reports the artifact ARCHIVE digest as ``sha256:<64 hex>``; never a bare digest."""
-    if type(value) is not str or not value.startswith("sha256:"):
-        raise ManifestError("candidate_artifact_digest must be sha256:<hex>")
-    _require_hex(value[len("sha256:") :], "candidate_artifact_digest", 64)
-    return value
+    """Canonicalise the artifact ARCHIVE digest to ``sha256:<64 hex>``.
+
+    GitHub reports this value in two encodings for the same bytes: ``actions/upload-artifact``
+    emits a bare 64-hex digest through its ``artifact-digest`` output, while the artifacts REST
+    API reports it prefixed as ``sha256:<hex>``.  Both are accepted and normalised here so the
+    receipt is unambiguous and the trusted gate's comparison is encoding-independent.
+    """
+    if type(value) is not str:
+        raise ManifestError("candidate_artifact_digest must be sha256:<hex> or <hex>")
+    body = value[len("sha256:") :] if value.startswith("sha256:") else value
+    return "sha256:" + _require_hex(body, "candidate_artifact_digest", 64)
 
 
 def _require_decimal(value: str, name: str) -> str:
