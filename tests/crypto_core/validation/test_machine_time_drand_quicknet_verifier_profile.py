@@ -699,10 +699,9 @@ def test_decision_is_structured_and_immutable() -> None:
         decision.accepted = False
     with pytest.raises(AttributeError):
         del decision.reason
+    # Expression form: a class statement would bind an unused local that never comes into existence.
     with pytest.raises(TypeError):
-
-        class _Sub(module.MachineTimeDrandQuicknetBinaryDigestDecision):
-            pass
+        type("HostileDecisionSubclass", (module.MachineTimeDrandQuicknetBinaryDigestDecision,), {})
 
 
 def test_authorizes_native_load_is_always_false() -> None:
@@ -758,10 +757,9 @@ def test_profile_is_immutable_unhashable_and_sealed() -> None:
         profile.dependency_profile_admitted = False
     with pytest.raises(AttributeError):
         del profile.scheme
+    # Expression form: a class statement would bind an unused local that never comes into existence.
     with pytest.raises(TypeError):
-
-        class _Sub(module.MachineTimeDrandQuicknetVerifierProfile):
-            pass
+        type("HostileProfileSubclass", (module.MachineTimeDrandQuicknetVerifierProfile,), {})
 
     with pytest.raises(TypeError):
         module.MachineTimeDrandQuicknetVerifierProfile()
