@@ -620,6 +620,73 @@ def test_matching_recipe_with_unknown_digest_is_never_admitted(platform_id: str,
     assert decision.matched_instance_id is None
 
 
+def test_admitted_instance_table_is_deeply_immutable() -> None:
+    """Regression for the P1: a tuple of dicts would be only SHALLOWLY immutable.
+
+    With mutable rows, in-process code could rewrite a binary digest and the profile would silently
+    publish a NEW self-digest instead of detecting it -- a governance bypass needing no code or
+    evidence change. Rows are therefore tuples of str, which cannot be mutated at all.
+    """
+    for row in module._INSTANCE_ROWS:
+        assert type(row) is tuple, row
+        assert all(type(value) is str for value in row), row
+        with pytest.raises(TypeError):
+            row[4] = "0" * 64
+    with pytest.raises(TypeError):
+        module._INSTANCE_ROWS[0] = ()
+
+
+def test_public_instance_views_are_fresh_copies_not_module_state() -> None:
+    """Mutating what a caller receives must never reach the governed table."""
+    profile = _profile()
+    first = profile.admitted_instances
+    first[0]["binary_sha256"] = "0" * 64
+    first[0]["status"] = "revoked"
+
+    second = _profile().admitted_instances
+    assert second[0]["binary_sha256"] == _LINUX_BINARY
+    assert second[0]["status"] == _STATUS.ACTIVE.value
+    # And the tampered copy still cannot influence a decision.
+    decision = module.evaluate_machine_time_drand_quicknet_binary_digest(
+        _profile(), platform_id="linux-x64", binary_sha256="0" * 64
+    )
+    assert decision.accepted is False
+
+
+def test_instance_table_commitment_is_bound_and_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The table is compared to a fixed commitment before any accepted decision is produced."""
+    profile = _profile()
+    assert profile.admitted_instance_table_sha256 == module._INSTANCE_TABLE_SHA256
+    assert module._instance_table_digest() == module._INSTANCE_TABLE_SHA256
+
+    forged = (
+        (
+            "mt4-blst-v0317-linux-x64.1",
+            "linux-x64",
+            "x86_64-unknown-linux-gnu",
+            "libmt4_s3a_blst_quicknet_shim.so",
+            "0" * 64,
+            "14b6f426ba0b08e4355d2b31fef78ba22ed3fdbf865011cb32702cda26db9d73",
+            "3ec4d7250117323035330443d272b2b82f9f22b748e9f758408946d71b9a7e1a",
+            "2c1fb9c45881ab76a91c524dba779092a0801978228ce13ede451fd9260ea896",
+            "eb8e35d52f1276fc63946fe0b29dfab33ef16f7dd08353e5fbf5ef114332d337",
+            "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+            "87e38a708682aa58c5e01aa8ab72721d25289e5b49fe71f2999ce0de28214932",
+            "PORTABLE",
+            "active",
+        ),
+    )
+    monkeypatch.setattr(module, "_INSTANCE_ROWS", forged)
+    # Substituting the table must fail closed, not silently re-derive a fresh self-digest.
+    with pytest.raises(_ERROR) as captured:
+        _profile()
+    assert captured.value.reason is _REASON.GOVERNANCE_STRUCTURAL_VIOLATION
+    with pytest.raises(_ERROR):
+        module.evaluate_machine_time_drand_quicknet_binary_digest(
+            profile, platform_id="linux-x64", binary_sha256="0" * 64
+        )
+
+
 def test_no_recipe_field_can_be_used_as_an_acceptance_key() -> None:
     """Passing a recipe digest where a binary digest is expected must not accept."""
     profile = _profile()

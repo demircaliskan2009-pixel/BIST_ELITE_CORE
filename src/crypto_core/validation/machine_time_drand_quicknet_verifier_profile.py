@@ -231,43 +231,97 @@ class MachineTimeDrandQuicknetInstanceStatus(str, Enum):
     REVOKED = "revoked"
 
 
-# Enumerated governed instances.  Each entry is one separately governed decision; adding a row is a
+# Enumerated governed instances.  Each row is one separately governed decision; adding a row is a
 # reviewed governance change, never an inference from a matching recipe.
-_INSTANCES = (
-    {
-        "instance_id": "mt4-blst-v0317-linux-x64.1",
-        "platform_id": "linux-x64",
-        "target_identity": "x86_64-unknown-linux-gnu",
-        "binary_name": "libmt4_s3a_blst_quicknet_shim.so",
-        "binary_sha256": "366d17c18db8dda0112b9a155ffbbb17e558654f0aed22da9748b5ab07f5b867",
-        "manifest_sha256": "14b6f426ba0b08e4355d2b31fef78ba22ed3fdbf865011cb32702cda26db9d73",
-        "qualification_receipt_sha256": "3ec4d7250117323035330443d272b2b82f9f22b748e9f758408946d71b9a7e1a",
-        "build_recipe_sha256": "2c1fb9c45881ab76a91c524dba779092a0801978228ce13ede451fd9260ea896",
-        "attestation_bundle_sha256": "eb8e35d52f1276fc63946fe0b29dfab33ef16f7dd08353e5fbf5ef114332d337",
-        # Checkout-normalised digests: git rewrites LF to CRLF on the Windows checkout, so the same
-        # logical source hashes differently per platform.  Never treat these as content digests.
-        "upstream_license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
-        "shim_source_sha256": "87e38a708682aa58c5e01aa8ab72721d25289e5b49fe71f2999ce0de28214932",
-        "portable_mode": "PORTABLE",
-        "status": MachineTimeDrandQuicknetInstanceStatus.ACTIVE.value,
-    },
-    {
-        "instance_id": "mt4-blst-v0317-windows-x64.1",
-        "platform_id": "windows-x64",
-        "target_identity": "x86_64-pc-windows-msvc",
-        "binary_name": "mt4_s3a_blst_quicknet_shim.dll",
-        "binary_sha256": "d18ccbe99f4bdff6d2f1314b38c3a63231aea7287df278a864e77c1cc9afb362",
-        "manifest_sha256": "09484f268ad31c83d52870ba85c5dfe556d231604cd160156020c524f596ea9b",
-        "qualification_receipt_sha256": "1dc0a293e523dd084ee255023e29fab0ebc83e831b4c76848d9a51bce3dc2f95",
-        "build_recipe_sha256": "cd229ba172779bcad1285189a75aeda233d5ad1d7a108998c15951a8a53faae7",
-        "attestation_bundle_sha256": "03222bee6e610049c5bd34b83dee210c0a66e6794cc3eb395a47fc414d134c05",
-        "upstream_license_sha256": "1eb85fc97224598dad1852b5d6483bbcf0aa8608790dcc657a5a2a761ae9c8c6",
-        "shim_source_sha256": "7255e343984ba3b4bb4f399cdeb68855833acddea51b37aceb977aad3360ee17",
-        "portable_mode": "PORTABLE",
-        "status": MachineTimeDrandQuicknetInstanceStatus.ACTIVE.value,
-    },
+#
+# STORED AS IMMUTABLE ROWS ON PURPOSE.  A tuple of dicts would be only shallowly immutable: any
+# in-process import could rewrite an entry's binary digest, and because the self-digest is derived
+# from this table on every read, the artifact would silently publish a NEW digest instead of
+# detecting the tampering -- a governance bypass needing no code or evidence change.  Tuples of str
+# cannot be mutated, and public reads below hand out FRESH dict copies, so a caller can only ever
+# mutate its own copy.  A fixed commitment over the table is additionally re-proven before any
+# accepted decision is produced.
+_INSTANCE_FIELDS = (
+    "instance_id",
+    "platform_id",
+    "target_identity",
+    "binary_name",
+    "binary_sha256",
+    "manifest_sha256",
+    "qualification_receipt_sha256",
+    "build_recipe_sha256",
+    "attestation_bundle_sha256",
+    # Checkout-normalised digests: git rewrites LF to CRLF on the Windows checkout, so the same
+    # logical source hashes differently per platform.  Never treat these as content digests.
+    "upstream_license_sha256",
+    "shim_source_sha256",
+    "portable_mode",
+    "status",
 )
+_INSTANCE_ROWS = (
+    (
+        "mt4-blst-v0317-linux-x64.1",
+        "linux-x64",
+        "x86_64-unknown-linux-gnu",
+        "libmt4_s3a_blst_quicknet_shim.so",
+        "366d17c18db8dda0112b9a155ffbbb17e558654f0aed22da9748b5ab07f5b867",
+        "14b6f426ba0b08e4355d2b31fef78ba22ed3fdbf865011cb32702cda26db9d73",
+        "3ec4d7250117323035330443d272b2b82f9f22b748e9f758408946d71b9a7e1a",
+        "2c1fb9c45881ab76a91c524dba779092a0801978228ce13ede451fd9260ea896",
+        "eb8e35d52f1276fc63946fe0b29dfab33ef16f7dd08353e5fbf5ef114332d337",
+        "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "87e38a708682aa58c5e01aa8ab72721d25289e5b49fe71f2999ce0de28214932",
+        "PORTABLE",
+        "active",
+    ),
+    (
+        "mt4-blst-v0317-windows-x64.1",
+        "windows-x64",
+        "x86_64-pc-windows-msvc",
+        "mt4_s3a_blst_quicknet_shim.dll",
+        "d18ccbe99f4bdff6d2f1314b38c3a63231aea7287df278a864e77c1cc9afb362",
+        "09484f268ad31c83d52870ba85c5dfe556d231604cd160156020c524f596ea9b",
+        "1dc0a293e523dd084ee255023e29fab0ebc83e831b4c76848d9a51bce3dc2f95",
+        "cd229ba172779bcad1285189a75aeda233d5ad1d7a108998c15951a8a53faae7",
+        "03222bee6e610049c5bd34b83dee210c0a66e6794cc3eb395a47fc414d134c05",
+        "1eb85fc97224598dad1852b5d6483bbcf0aa8608790dcc657a5a2a761ae9c8c6",
+        "7255e343984ba3b4bb4f399cdeb68855833acddea51b37aceb977aad3360ee17",
+        "PORTABLE",
+        "active",
+    ),
+)
+
+# Fixed commitment over the governed instance table.  Re-proven on every derivation and again
+# immediately before any accepted digest decision, so a table that does not match the governed
+# constant fails closed instead of silently re-deriving a fresh self-digest.
+_INSTANCE_TABLE_SHA256 = "06456299895ea6171c405ea148547b39e96b2e363948c7c6837b7ada8cc05669"
+
+_INSTANCE_TABLE_DIGEST_DOMAIN = b"machine-time-drand-quicknet-verifier-profile.v1/instance-table\x00"
 _SUPPORTED_PLATFORMS = ("linux-x64", "windows-x64")
+
+
+def _instance_view(row: tuple) -> dict:
+    """Fresh, caller-owned copy of one governed row.  Never a reference to module state."""
+    return dict(zip(_INSTANCE_FIELDS, row))
+
+
+def _instance_views() -> tuple:
+    return tuple(_instance_view(row) for row in _INSTANCE_ROWS)
+
+
+def _instance_table_digest() -> str:
+    payload = [list(row) for row in _INSTANCE_ROWS]
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return hashlib.sha256(_INSTANCE_TABLE_DIGEST_DOMAIN + canonical.encode("utf-8")).hexdigest()
+
+
+def _require_governed_instance_table() -> str:
+    """Fail closed unless the in-memory table is exactly the governed one."""
+    actual = _instance_table_digest()
+    if actual != _INSTANCE_TABLE_SHA256:
+        raise _err(MachineTimeDrandQuicknetVerifierProfileReason.GOVERNANCE_STRUCTURAL_VIOLATION)
+    return actual
+
 
 # Mandatory future-loader contract.  Published as governed policy so the deferral is machine-readable
 # rather than prose.  The forbidden pattern is named explicitly because it is the exact defect the
@@ -379,6 +433,7 @@ _DESCRIPTOR_FIELD_NAMES = (
     "stage_c_evidence_relative_path",
     "supported_platform_ids",
     "admitted_instances",
+    "admitted_instance_table_sha256",
     "recipe_digest_authorizes_binary",
     "windows_bit_reproducibility_claimed",
     "linux_bit_reproducibility_required",
@@ -688,9 +743,10 @@ def _dependency_identity_binding() -> None:
         raise _err(MachineTimeDrandQuicknetVerifierProfileReason.DEPENDENCY_IDENTITY_MISMATCH)
     if _UPSTREAM_REPOSITORY != "https://github.com/supranational/blst" or _UPSTREAM_RELEASE != "v0.3.17":
         raise _err(MachineTimeDrandQuicknetVerifierProfileReason.DEPENDENCY_IDENTITY_MISMATCH)
+    _require_governed_instance_table()
     seen_ids = set()
     seen_digests = set()
-    for instance in _INSTANCES:
+    for instance in _instance_views():
         if instance["platform_id"] not in _SUPPORTED_PLATFORMS:
             raise _err(MachineTimeDrandQuicknetVerifierProfileReason.DEPENDENCY_IDENTITY_MISMATCH)
         for key in (
@@ -779,7 +835,8 @@ def _derive_values(snapshot: object, registry: object, chain_profile: object) ->
         "stage_c_evidence_sha256": evidence["stage_c_evidence_sha256"],
         "stage_c_evidence_relative_path": MT4_BLST_STAGE_C_ADMISSION_EVIDENCE_RELATIVE_PATH,
         "supported_platform_ids": _SUPPORTED_PLATFORMS,
-        "admitted_instances": _INSTANCES,
+        "admitted_instances": _instance_views(),
+        "admitted_instance_table_sha256": _require_governed_instance_table(),
         # Structural, machine-readable statements of the two policies the audit demanded.
         "recipe_digest_authorizes_binary": False,
         "windows_bit_reproducibility_claimed": False,
@@ -1012,6 +1069,10 @@ def evaluate_machine_time_drand_quicknet_binary_digest(
         return decide(False, MachineTimeDrandQuicknetBinaryDigestReason.PLATFORM_UNSUPPORTED, None)
     if not _is_hex64(binary_sha256):
         return decide(False, MachineTimeDrandQuicknetBinaryDigestReason.BINARY_DIGEST_INVALID, None)
+
+    # Re-prove the governed table immediately before any acceptance can be produced, so a table
+    # substituted after the profile was built cannot yield accepted=True.
+    _require_governed_instance_table()
 
     for instance in values["admitted_instances"]:
         if instance["binary_sha256"] != binary_sha256:
