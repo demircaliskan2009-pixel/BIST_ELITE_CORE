@@ -291,12 +291,16 @@ _INSTANCE_ROWS = (
     ),
 )
 
-# Fixed commitment over the governed instance table.  Re-proven on every derivation and again
-# immediately before any accepted digest decision, so a table that does not match the governed
-# constant fails closed instead of silently re-deriving a fresh self-digest.
-_INSTANCE_TABLE_SHA256 = "06456299895ea6171c405ea148547b39e96b2e363948c7c6837b7ada8cc05669"
+# ONE fixed commitment over the COMPLETE instance authority: schema version, exact ordered field
+# inventory AND every row.  Committing rows alone would leave the field inventory as a separate
+# mutable semantic authority -- swapping the names of `binary_sha256` and `manifest_sha256` would
+# then reinterpret unchanged governed rows and let a manifest digest be accepted as a binary digest
+# while a rows-only commitment still passed.  Field identity and field ORDER are therefore inside
+# the commitment, because `dict(zip(fields, row))` gives position its meaning.
+_INSTANCE_AUTHORITY_SCHEMA = "mt4-blst-instance-authority.v1"
+_INSTANCE_AUTHORITY_DOMAIN = b"machine-time-drand-quicknet-verifier-profile.v1/instance-authority\x00"
+_INSTANCE_AUTHORITY_SHA256 = "37d5e8eced4fa301233ae1c16f7d1068a943ce275e5a572c2e9649fefc4fe914"
 
-_INSTANCE_TABLE_DIGEST_DOMAIN = b"machine-time-drand-quicknet-verifier-profile.v1/instance-table\x00"
 _SUPPORTED_PLATFORMS = ("linux-x64", "windows-x64")
 
 
@@ -309,16 +313,31 @@ def _instance_views() -> tuple:
     return tuple(_instance_view(row) for row in _INSTANCE_ROWS)
 
 
-def _instance_table_digest() -> str:
-    payload = [list(row) for row in _INSTANCE_ROWS]
+def _instance_authority_digest() -> str:
+    """Canonical digest over schema + ordered field inventory + all rows, as ONE authority."""
+    payload = {
+        "schema": _INSTANCE_AUTHORITY_SCHEMA,
+        "field_count": len(_INSTANCE_FIELDS),
+        "fields": list(_INSTANCE_FIELDS),
+        "row_count": len(_INSTANCE_ROWS),
+        # Rows are emitted as explicit name->value records so field meaning is committed, not just
+        # position, and a reordered inventory changes the digest even with identical row values.
+        "records": [dict(zip(_INSTANCE_FIELDS, row)) for row in _INSTANCE_ROWS],
+        "row_order": [row[0] for row in _INSTANCE_ROWS],
+    }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
-    return hashlib.sha256(_INSTANCE_TABLE_DIGEST_DOMAIN + canonical.encode("utf-8")).hexdigest()
+    return hashlib.sha256(_INSTANCE_AUTHORITY_DOMAIN + canonical.encode("utf-8")).hexdigest()
 
 
-def _require_governed_instance_table() -> str:
-    """Fail closed unless the in-memory table is exactly the governed one."""
-    actual = _instance_table_digest()
-    if actual != _INSTANCE_TABLE_SHA256:
+def _require_governed_instance_authority() -> str:
+    """Fail closed unless schema, field inventory AND rows are exactly the governed authority."""
+    if len(_INSTANCE_FIELDS) != len(frozenset(_INSTANCE_FIELDS)):
+        raise _err(MachineTimeDrandQuicknetVerifierProfileReason.GOVERNANCE_STRUCTURAL_VIOLATION)
+    for row in _INSTANCE_ROWS:
+        if type(row) is not tuple or len(row) != len(_INSTANCE_FIELDS):
+            raise _err(MachineTimeDrandQuicknetVerifierProfileReason.GOVERNANCE_STRUCTURAL_VIOLATION)
+    actual = _instance_authority_digest()
+    if actual != _INSTANCE_AUTHORITY_SHA256:
         raise _err(MachineTimeDrandQuicknetVerifierProfileReason.GOVERNANCE_STRUCTURAL_VIOLATION)
     return actual
 
@@ -326,32 +345,70 @@ def _require_governed_instance_table() -> str:
 # Mandatory future-loader contract.  Published as governed policy so the deferral is machine-readable
 # rather than prose.  The forbidden pattern is named explicitly because it is the exact defect the
 # independent audit identified: hashing a path and then loading that path is two different objects.
-_NATIVE_LOAD_POLICY = {
-    "policy_id": "mt4-blst-native-load-policy.v1",
-    "implemented_here": False,
-    "authorizes_native_load": False,
-    "forbidden_pattern": "hash(path) then load(path)",
-    "bytes_hashed_must_be_bytes_mapped": True,
-    "requirements": (
-        "derive OS and architecture internally, never from a caller string",
-        "open the candidate without symlink or reparse-point substitution",
-        "require a bounded regular native file",
-        "hash from that exact held handle or object",
-        "copy verified bytes to an exclusively created process-private target, "
-        "or hold an equivalently protected immutable object",
-        "re-prove digest and file identity while preventing write and delete races",
-        "load only that protected verified object while protection is still held",
-        "use restricted dependency search",
-        "validate format, architecture, required exports, import/DT_NEEDED allowlist "
-        "and unsafe RPATH/RUNPATH search behaviour",
-        "fail closed on any path, identity, digest, metadata, dependency or post-load mismatch",
+#
+# STORED AS IMMUTABLE PAIRS.  A dict here would be authoritative mutable state: safety requirements
+# could be weakened in-process and the profile would merely emit a new self-digest.  Nothing nested
+# is mutable, and the whole policy is bound to a fixed commitment below.
+_NATIVE_LOAD_POLICY_ITEMS = (
+    ("policy_id", "mt4-blst-native-load-policy.v1"),
+    ("implemented_here", False),
+    ("authorizes_native_load", False),
+    ("forbidden_pattern", "hash(path) then load(path)"),
+    ("bytes_hashed_must_be_bytes_mapped", True),
+    (
+        "requirements",
+        (
+            "derive OS and architecture internally, never from a caller string",
+            "open the candidate without symlink or reparse-point substitution",
+            "require a bounded regular native file",
+            "hash from that exact held handle or object",
+            "copy verified bytes to an exclusively created process-private target, "
+            "or hold an equivalently protected immutable object",
+            "re-prove digest and file identity while preventing write and delete races",
+            "load only that protected verified object while protection is still held",
+            "use restricted dependency search",
+            "validate format, architecture, required exports, import/DT_NEEDED allowlist "
+            "and unsafe RPATH/RUNPATH search behaviour",
+            "fail closed on any path, identity, digest, metadata, dependency or post-load mismatch",
+        ),
     ),
-    "linux_architecture_class": "sealed memfd or equivalently protected held inode",
-    "windows_architecture_class": (
+    ("linux_architecture_class", "sealed memfd or equivalently protected held inode"),
+    (
+        "windows_architecture_class",
         "CREATE_NEW with private ACL and no write/delete sharing, LoadLibraryExW restricted search, "
-        "file-id and digest reproof"
+        "file-id and digest reproof",
     ),
-}
+)
+
+_NATIVE_LOAD_POLICY_DOMAIN = b"machine-time-drand-quicknet-verifier-profile.v1/native-load-policy\x00"
+_NATIVE_LOAD_POLICY_SHA256 = "b37e153e71b2a86d79ca8fc4106d09dfd9ea4d07247c618203ae47134a36185c"
+
+
+def _native_load_policy_view() -> dict:
+    """Fresh caller-owned deep copy.  Requirements become a list; internal state stays tuples."""
+    view = {}
+    for key, value in _NATIVE_LOAD_POLICY_ITEMS:
+        view[key] = list(value) if type(value) is tuple else value
+    return view
+
+
+def _native_load_policy_digest() -> str:
+    payload = {
+        "item_count": len(_NATIVE_LOAD_POLICY_ITEMS),
+        # Order of the requirement sequence is governed, so it is committed as a list.
+        "items": [[key, list(value) if type(value) is tuple else value] for key, value in _NATIVE_LOAD_POLICY_ITEMS],
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return hashlib.sha256(_NATIVE_LOAD_POLICY_DOMAIN + canonical.encode("utf-8")).hexdigest()
+
+
+def _require_governed_native_load_policy() -> str:
+    """Fail closed unless the complete future-loader safety contract is exactly the governed one."""
+    actual = _native_load_policy_digest()
+    if actual != _NATIVE_LOAD_POLICY_SHA256:
+        raise _err(MachineTimeDrandQuicknetVerifierProfileReason.GOVERNANCE_STRUCTURAL_VIOLATION)
+    return actual
+
 
 # Exactly the four selections S3B may govern.
 _TRUE_GOVERNANCE_FLAGS = (
@@ -433,7 +490,8 @@ _DESCRIPTOR_FIELD_NAMES = (
     "stage_c_evidence_relative_path",
     "supported_platform_ids",
     "admitted_instances",
-    "admitted_instance_table_sha256",
+    "admitted_instance_authority_sha256",
+    "native_load_policy_sha256",
     "recipe_digest_authorizes_binary",
     "windows_bit_reproducibility_claimed",
     "linux_bit_reproducibility_required",
@@ -743,7 +801,8 @@ def _dependency_identity_binding() -> None:
         raise _err(MachineTimeDrandQuicknetVerifierProfileReason.DEPENDENCY_IDENTITY_MISMATCH)
     if _UPSTREAM_REPOSITORY != "https://github.com/supranational/blst" or _UPSTREAM_RELEASE != "v0.3.17":
         raise _err(MachineTimeDrandQuicknetVerifierProfileReason.DEPENDENCY_IDENTITY_MISMATCH)
-    _require_governed_instance_table()
+    _require_governed_instance_authority()
+    _require_governed_native_load_policy()
     seen_ids = set()
     seen_digests = set()
     for instance in _instance_views():
@@ -836,12 +895,13 @@ def _derive_values(snapshot: object, registry: object, chain_profile: object) ->
         "stage_c_evidence_relative_path": MT4_BLST_STAGE_C_ADMISSION_EVIDENCE_RELATIVE_PATH,
         "supported_platform_ids": _SUPPORTED_PLATFORMS,
         "admitted_instances": _instance_views(),
-        "admitted_instance_table_sha256": _require_governed_instance_table(),
+        "admitted_instance_authority_sha256": _require_governed_instance_authority(),
+        "native_load_policy_sha256": _require_governed_native_load_policy(),
         # Structural, machine-readable statements of the two policies the audit demanded.
         "recipe_digest_authorizes_binary": False,
         "windows_bit_reproducibility_claimed": False,
         "linux_bit_reproducibility_required": False,
-        "native_load_policy": _NATIVE_LOAD_POLICY,
+        "native_load_policy": _native_load_policy_view(),
         "bound_snapshot_id": bound_snapshot["snapshot_id"],
         "bound_snapshot_self_digest": bound_snapshot["snapshot_self_digest"],
         "bound_registry_digest": bound_registry["registry_digest"],
@@ -862,7 +922,7 @@ def _derive_values(snapshot: object, registry: object, chain_profile: object) ->
         raise _err(MachineTimeDrandQuicknetVerifierProfileReason.GOVERNANCE_STRUCTURAL_VIOLATION)
     if values["windows_bit_reproducibility_claimed"] is not False:
         raise _err(MachineTimeDrandQuicknetVerifierProfileReason.GOVERNANCE_STRUCTURAL_VIOLATION)
-    if _NATIVE_LOAD_POLICY["authorizes_native_load"] is not False:
+    if dict(_NATIVE_LOAD_POLICY_ITEMS)["authorizes_native_load"] is not False:
         raise _err(MachineTimeDrandQuicknetVerifierProfileReason.GOVERNANCE_STRUCTURAL_VIOLATION)
     if tuple(values) != _DESCRIPTOR_FIELD_NAMES:
         raise _err(MachineTimeDrandQuicknetVerifierProfileReason.ARTIFACT_INCONSISTENT)
@@ -1070,9 +1130,10 @@ def evaluate_machine_time_drand_quicknet_binary_digest(
     if not _is_hex64(binary_sha256):
         return decide(False, MachineTimeDrandQuicknetBinaryDigestReason.BINARY_DIGEST_INVALID, None)
 
-    # Re-prove the governed table immediately before any acceptance can be produced, so a table
-    # substituted after the profile was built cannot yield accepted=True.
-    _require_governed_instance_table()
+    # Re-prove BOTH fixed governance commitments immediately before any acceptance can be produced,
+    # so an authority substituted after the profile was built cannot yield accepted=True.
+    _require_governed_instance_authority()
+    _require_governed_native_load_policy()
 
     for instance in values["admitted_instances"]:
         if instance["binary_sha256"] != binary_sha256:

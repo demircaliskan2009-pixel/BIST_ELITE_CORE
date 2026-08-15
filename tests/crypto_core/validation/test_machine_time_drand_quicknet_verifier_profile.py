@@ -653,11 +653,11 @@ def test_public_instance_views_are_fresh_copies_not_module_state() -> None:
     assert decision.accepted is False
 
 
-def test_instance_table_commitment_is_bound_and_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The table is compared to a fixed commitment before any accepted decision is produced."""
+def test_instance_authority_commitment_is_bound_and_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The authority is compared to a fixed commitment before any accepted decision is produced."""
     profile = _profile()
-    assert profile.admitted_instance_table_sha256 == module._INSTANCE_TABLE_SHA256
-    assert module._instance_table_digest() == module._INSTANCE_TABLE_SHA256
+    assert profile.admitted_instance_authority_sha256 == module._INSTANCE_AUTHORITY_SHA256
+    assert module._instance_authority_digest() == module._INSTANCE_AUTHORITY_SHA256
 
     forged = (
         (
@@ -684,6 +684,279 @@ def test_instance_table_commitment_is_bound_and_fails_closed(monkeypatch: pytest
     with pytest.raises(_ERROR):
         module.evaluate_machine_time_drand_quicknet_binary_digest(
             profile, platform_id="linux-x64", binary_sha256="0" * 64
+        )
+
+
+# ---------------------------------------------------------------------------------------------
+# P1-S3B-INSTANCE-SCHEMA-COMMITMENT-BYPASS -- the exact independent-audit attack
+# ---------------------------------------------------------------------------------------------
+
+_LINUX_MANIFEST = "14b6f426ba0b08e4355d2b31fef78ba22ed3fdbf865011cb32702cda26db9d73"
+_WINDOWS_MANIFEST = "09484f268ad31c83d52870ba85c5dfe556d231604cd160156020c524f596ea9b"
+
+
+def _swap_fields(first: str, second: str) -> tuple:
+    fields = list(module._INSTANCE_FIELDS)
+    i, j = fields.index(first), fields.index(second)
+    fields[i], fields[j] = fields[j], fields[i]
+    return tuple(fields)
+
+
+def test_schema_only_swap_of_binary_and_manifest_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """THE audit attack: reinterpret governed rows by renaming fields, leaving rows untouched.
+
+    A rows-only commitment passed this, letting the governed Linux MANIFEST digest be accepted as a
+    Linux BINARY digest with no governed row change. The commitment now covers field identity and
+    order, so the swap is detected.
+    """
+    profile = _profile()
+    monkeypatch.setattr(module, "_INSTANCE_FIELDS", _swap_fields("binary_sha256", "manifest_sha256"))
+
+    with pytest.raises(_ERROR) as captured:
+        _profile()
+    assert captured.value.reason is _REASON.GOVERNANCE_STRUCTURAL_VIOLATION
+    # And an already-built profile cannot be used to launder the swap into an acceptance.
+    with pytest.raises(_ERROR):
+        module.evaluate_machine_time_drand_quicknet_binary_digest(
+            profile, platform_id="linux-x64", binary_sha256=_LINUX_MANIFEST
+        )
+
+
+@pytest.mark.parametrize("manifest,platform", [(_LINUX_MANIFEST, "linux-x64"), (_WINDOWS_MANIFEST, "windows-x64")])
+def test_manifest_digest_can_never_be_accepted_as_a_binary(manifest: str, platform: str) -> None:
+    decision = module.evaluate_machine_time_drand_quicknet_binary_digest(
+        _profile(), platform_id=platform, binary_sha256=manifest
+    )
+    assert decision.accepted is False
+    assert decision.reason is _DIGEST_REASON.BINARY_INSTANCE_NOT_ADMITTED
+
+
+@pytest.mark.parametrize(
+    "first,second",
+    [
+        ("binary_sha256", "manifest_sha256"),
+        ("manifest_sha256", "build_recipe_sha256"),
+        ("binary_sha256", "attestation_bundle_sha256"),
+        ("platform_id", "target_identity"),
+        ("instance_id", "binary_name"),
+        ("upstream_license_sha256", "shim_source_sha256"),
+        ("portable_mode", "status"),
+        ("qualification_receipt_sha256", "build_recipe_sha256"),
+    ],
+)
+def test_any_field_name_swap_fails_closed(monkeypatch: pytest.MonkeyPatch, first: str, second: str) -> None:
+    monkeypatch.setattr(module, "_INSTANCE_FIELDS", _swap_fields(first, second))
+    with pytest.raises(_ERROR) as captured:
+        _profile()
+    assert captured.value.reason is _REASON.GOVERNANCE_STRUCTURAL_VIOLATION
+
+
+def test_schema_reorder_drop_and_extension_all_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = module._INSTANCE_FIELDS
+
+    monkeypatch.setattr(module, "_INSTANCE_FIELDS", tuple(reversed(original)))
+    with pytest.raises(_ERROR):
+        _profile()
+
+    monkeypatch.setattr(module, "_INSTANCE_FIELDS", original[:-1])
+    with pytest.raises(_ERROR):
+        _profile()
+
+    monkeypatch.setattr(module, "_INSTANCE_FIELDS", original + ("smuggled_field",))
+    with pytest.raises(_ERROR):
+        _profile()
+
+    # A duplicated field name is refused before any digest comparison.
+    monkeypatch.setattr(module, "_INSTANCE_FIELDS", original[:-1] + (original[0],))
+    with pytest.raises(_ERROR) as captured:
+        _profile()
+    assert captured.value.reason is _REASON.GOVERNANCE_STRUCTURAL_VIOLATION
+
+
+@pytest.mark.parametrize(
+    "index,field",
+    list(
+        enumerate(
+            (
+                "instance_id",
+                "platform_id",
+                "target_identity",
+                "binary_name",
+                "binary_sha256",
+                "manifest_sha256",
+                "qualification_receipt_sha256",
+                "build_recipe_sha256",
+                "attestation_bundle_sha256",
+                "upstream_license_sha256",
+                "shim_source_sha256",
+                "portable_mode",
+                "status",
+            )
+        )
+    ),
+)
+def test_every_row_value_change_fails_closed(monkeypatch: pytest.MonkeyPatch, index: int, field: str) -> None:
+    """Each load-bearing value is independently committed."""
+    assert module._INSTANCE_FIELDS[index] == field
+    rows = list(module._INSTANCE_ROWS)
+    row = list(rows[0])
+    row[index] = "tampered-" + row[index]
+    rows[0] = tuple(row)
+    monkeypatch.setattr(module, "_INSTANCE_ROWS", tuple(rows))
+    with pytest.raises(_ERROR) as captured:
+        _profile()
+    assert captured.value.reason is _REASON.GOVERNANCE_STRUCTURAL_VIOLATION
+
+
+def test_row_order_extra_and_missing_rows_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = module._INSTANCE_ROWS
+
+    monkeypatch.setattr(module, "_INSTANCE_ROWS", tuple(reversed(original)))
+    with pytest.raises(_ERROR):
+        _profile()
+
+    monkeypatch.setattr(module, "_INSTANCE_ROWS", original[:1])
+    with pytest.raises(_ERROR):
+        _profile()
+
+    monkeypatch.setattr(module, "_INSTANCE_ROWS", original + (original[0],))
+    with pytest.raises(_ERROR):
+        _profile()
+
+
+def test_profile_self_digest_cannot_launder_instance_authority_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mutating authority must FAIL, never merely produce a new coherent self-digest."""
+    before = module.machine_time_drand_quicknet_verifier_profile_self_digest(_profile())
+    monkeypatch.setattr(module, "_INSTANCE_FIELDS", _swap_fields("binary_sha256", "manifest_sha256"))
+    profile = None
+    with pytest.raises(_ERROR):
+        profile = _profile()
+    assert profile is None
+    monkeypatch.undo()
+    assert module.machine_time_drand_quicknet_verifier_profile_self_digest(_profile()) == before
+
+
+def test_instance_authority_commitment_is_hardcoded_not_self_derived() -> None:
+    """The commitment must be a governed constant, never re-derived from current state."""
+    source = _MODULE_PATH.read_text(encoding="utf-8")
+    assert re.search(r'_INSTANCE_AUTHORITY_SHA256 = "[0-9a-f]{64}"', source)
+    assert re.search(r'_NATIVE_LOAD_POLICY_SHA256 = "[0-9a-f]{64}"', source)
+    # Exactly one instance authority; the superseded rows-only commitment must be gone.
+    assert "_INSTANCE_TABLE_SHA256" not in source
+    assert "admitted_instance_table_sha256" not in source
+
+
+# ---------------------------------------------------------------------------------------------
+# P2-S3B-MUTABLE-FUTURE-LOADER-POLICY
+# ---------------------------------------------------------------------------------------------
+
+
+def test_native_load_policy_internal_state_is_deeply_immutable() -> None:
+    items = module._NATIVE_LOAD_POLICY_ITEMS
+    assert type(items) is tuple
+    for key, value in items:
+        assert type(key) is str
+        assert type(value) in (str, bool, tuple), (key, type(value))
+        if type(value) is tuple:
+            assert all(type(entry) is str for entry in value)
+            with pytest.raises(TypeError):
+                value[0] = "weakened"
+    with pytest.raises(TypeError):
+        items[0] = ("policy_id", "other")
+
+
+def test_native_load_policy_commitment_is_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile = _profile()
+    assert profile.native_load_policy_sha256 == module._NATIVE_LOAD_POLICY_SHA256
+    assert module._native_load_policy_digest() == module._NATIVE_LOAD_POLICY_SHA256
+
+
+def _policy_with(**changes: object) -> tuple:
+    return tuple((key, changes.get(key, value)) for key, value in module._NATIVE_LOAD_POLICY_ITEMS)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"policy_id": "mt4-blst-native-load-policy.v2"},
+        {"implemented_here": True},
+        {"authorizes_native_load": True},
+        {"forbidden_pattern": ""},
+        {"forbidden_pattern": "hash then load, probably fine"},
+        {"bytes_hashed_must_be_bytes_mapped": False},
+        {"linux_architecture_class": "any writable temp file"},
+        {"windows_architecture_class": "LoadLibraryW default search"},
+    ],
+)
+def test_every_native_policy_field_change_fails_closed(monkeypatch: pytest.MonkeyPatch, changes: dict) -> None:
+    monkeypatch.setattr(module, "_NATIVE_LOAD_POLICY_ITEMS", _policy_with(**changes))
+    with pytest.raises(_ERROR) as captured:
+        _profile()
+    assert captured.value.reason is _REASON.GOVERNANCE_STRUCTURAL_VIOLATION
+
+
+def test_every_individual_requirement_removal_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    requirements = dict(module._NATIVE_LOAD_POLICY_ITEMS)["requirements"]
+    assert len(requirements) == 10
+    for index in range(len(requirements)):
+        weakened = requirements[:index] + requirements[index + 1 :]
+        monkeypatch.setattr(module, "_NATIVE_LOAD_POLICY_ITEMS", _policy_with(requirements=weakened))
+        with pytest.raises(_ERROR) as captured:
+            _profile()
+        assert captured.value.reason is _REASON.GOVERNANCE_STRUCTURAL_VIOLATION
+        monkeypatch.undo()
+
+
+def test_requirement_reorder_and_rewrite_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    requirements = dict(module._NATIVE_LOAD_POLICY_ITEMS)["requirements"]
+
+    monkeypatch.setattr(module, "_NATIVE_LOAD_POLICY_ITEMS", _policy_with(requirements=tuple(reversed(requirements))))
+    with pytest.raises(_ERROR):
+        _profile()
+    monkeypatch.undo()
+
+    for phrase in ("restricted dependency search", "write and delete races", "RPATH/RUNPATH", "symlink"):
+        rewritten = tuple(entry for entry in requirements if phrase not in entry)
+        assert len(rewritten) < len(requirements), phrase
+        monkeypatch.setattr(module, "_NATIVE_LOAD_POLICY_ITEMS", _policy_with(requirements=rewritten))
+        with pytest.raises(_ERROR):
+            _profile()
+        monkeypatch.undo()
+
+
+def test_public_native_load_policy_is_a_fresh_deep_copy() -> None:
+    profile = _profile()
+    view = profile.native_load_policy
+    view["authorizes_native_load"] = True
+    view["implemented_here"] = True
+    view["requirements"].clear()
+    view["forbidden_pattern"] = ""
+
+    fresh = _profile().native_load_policy
+    assert fresh["authorizes_native_load"] is False
+    assert fresh["implemented_here"] is False
+    assert len(fresh["requirements"]) == 10
+    assert fresh["forbidden_pattern"] == "hash(path) then load(path)"
+    assert module._native_load_policy_digest() == module._NATIVE_LOAD_POLICY_SHA256
+
+
+def test_reconstruction_rechecks_both_fixed_commitments(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Coherently recomputed canonical bytes must not launder an altered governance authority."""
+    canonical = module.machine_time_drand_quicknet_verifier_profile_canonical_bytes(_profile())
+
+    monkeypatch.setattr(module, "_INSTANCE_FIELDS", _swap_fields("binary_sha256", "manifest_sha256"))
+    with pytest.raises(_ERROR):
+        module.reconstruct_machine_time_drand_quicknet_verifier_profile(
+            canonical, snapshot=_snapshot(), registry=_registry(), chain_profile=_chain_profile()
+        )
+    monkeypatch.undo()
+
+    monkeypatch.setattr(module, "_NATIVE_LOAD_POLICY_ITEMS", _policy_with(authorizes_native_load=True))
+    with pytest.raises(_ERROR):
+        module.reconstruct_machine_time_drand_quicknet_verifier_profile(
+            canonical, snapshot=_snapshot(), registry=_registry(), chain_profile=_chain_profile()
         )
 
 
