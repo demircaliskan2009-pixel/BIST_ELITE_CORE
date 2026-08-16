@@ -821,14 +821,57 @@ def test_no_raw_production_signature_material_is_committed() -> None:
         assert found == [], (path.name, [run[:16] + "..." for run in found])
 
 
+# The governed MT4-S3B verifier profile names the qualification/BLST surface because pinning it is
+# the admission decision itself. It is exempt from the NAME scan below and is instead held to the
+# stricter property this test actually cares about: it must not IMPORT or EXECUTE qualification code.
+_GOVERNED_ADMISSION_MODULE = "src/crypto_core/validation/machine_time_drand_quicknet_verifier_profile.py"
+
+
 def test_qualification_code_is_not_reachable_from_product_modules() -> None:
     product_root = _REPO_ROOT / "src" / "crypto_core"
     offenders = []
     for path in product_root.rglob("*.py"):
+        if path.relative_to(_REPO_ROOT).as_posix() == _GOVERNED_ADMISSION_MODULE:
+            continue
         text = path.read_text(encoding="utf-8")
-        if "mt4_s3a" in text or "qualification" in text.lower() and "blst" in text.lower():
+        if "mt4_s3a" in text or ("qualification" in text.lower() and "blst" in text.lower()):
             offenders.append(str(path.relative_to(_REPO_ROOT)))
     assert offenders == [], offenders
+
+
+def test_governed_admission_module_names_but_never_imports_qualification_code() -> None:
+    """The exemption above is narrow: naming the surface is allowed, reaching it is not.
+
+    Reachability is what this file guards, so the exempt module is proven to import nothing outside
+    crypto_core.validation and the standard library, and to reference no qualification script module.
+    """
+    import ast
+
+    path = _REPO_ROOT / _GOVERNED_ADMISSION_MODULE
+    assert path.is_file(), _GOVERNED_ADMISSION_MODULE
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+        elif isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+    for name in imported:
+        assert name.startswith(("crypto_core.validation.machine_time_", "__future__")) or name in {
+            "hashlib",
+            "json",
+            "enum",
+        }, name
+    # None of the qualification scripts may be importable targets of the governed module.
+    for forbidden in (
+        "mt4_s3a_blst_quicknet_probe",
+        "mt4_blst_dependency_admission_manifest",
+        "mt4_trusted_attestation_gate",
+        "scripts",
+        "ctypes",
+        "cffi",
+    ):
+        assert not any(name == forbidden or name.startswith(forbidden + ".") for name in imported), forbidden
 
 
 def test_no_bls_dependency_is_admitted_and_python_floor_is_unchanged() -> None:
