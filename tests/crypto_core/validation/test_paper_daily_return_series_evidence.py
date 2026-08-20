@@ -727,6 +727,16 @@ def _series_for(methodology: PaperReturnSeriesMethodology, **overrides: object):
     return _build(**payload)
 
 
+def _producer_accepts(**overrides: object) -> bool:
+    """True when the public methodology builder accepts the supplied overrides."""
+
+    try:
+        _methodology(**overrides)
+    except PaperReturnSeriesMethodologyError:
+        return False
+    return True
+
+
 def _assert_digest_causality(result, methodology: PaperReturnSeriesMethodology) -> None:
     """Rejection must be semantic, not a digest artefact."""
 
@@ -1042,38 +1052,23 @@ def test_producer_permitted_metadata_whitespace_stays_accepted() -> None:
 
 @pytest.mark.parametrize("candidate", _DRIFT_TEXT_CANDIDATES)
 def test_producer_identity_text_parity_matches_public_builder(candidate: str) -> None:
-    try:
-        _methodology(mtm_policy_id=candidate)
-    except PaperReturnSeriesMethodologyError:
-        producer_accepts = False
-    else:
-        producer_accepts = True
+    scope_rejected = series_module._producer_has_scope_violation(candidate)  # noqa: SLF001
+    clock_rejected = series_module._producer_has_clock_token(candidate)  # noqa: SLF001
+    plain_accepted = series_module._is_plain_non_empty_string(candidate)  # noqa: SLF001
+    replayed_accepts = plain_accepted and not (scope_rejected or clock_rejected)
 
-    replayed_accepts = series_module._is_plain_non_empty_string(candidate) and not (  # noqa: SLF001
-        series_module._producer_has_scope_violation(candidate)  # noqa: SLF001
-        or series_module._producer_has_clock_token(candidate)  # noqa: SLF001
-    )
-
-    assert replayed_accepts is producer_accepts
+    assert replayed_accepts is _producer_accepts(mtm_policy_id=candidate)
 
 
 @pytest.mark.parametrize("candidate", _DRIFT_TEXT_CANDIDATES)
 def test_producer_metadata_text_parity_matches_public_builder(candidate: str) -> None:
     """Metadata text obeys producer scope/clock semantics only - not the nine-field plain-string rule."""
 
-    try:
-        _methodology(metadata={"note": candidate})
-    except PaperReturnSeriesMethodologyError:
-        producer_accepts = False
-    else:
-        producer_accepts = True
+    scope_rejected = series_module._producer_has_scope_violation(candidate)  # noqa: SLF001
+    clock_rejected = series_module._producer_has_clock_token(candidate)  # noqa: SLF001
+    replayed_accepts = not (scope_rejected or clock_rejected)
 
-    replayed_accepts = not (
-        series_module._producer_has_scope_violation(candidate)  # noqa: SLF001
-        or series_module._producer_has_clock_token(candidate)  # noqa: SLF001
-    )
-
-    assert replayed_accepts is producer_accepts
+    assert replayed_accepts is _producer_accepts(metadata={"note": candidate})
 
 
 def test_producer_policy_inventory_tripwire() -> None:
