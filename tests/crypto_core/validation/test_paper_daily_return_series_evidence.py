@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator, Mapping
 from dataclasses import FrozenInstanceError, dataclass, fields, replace
 from pathlib import Path
 
@@ -48,6 +49,27 @@ class _LiarStr(str):
 
 class _IntSub(int):
     """An int subclass rejected by exact integer checks."""
+
+
+class _DuplicateKeyMapping(Mapping):
+    """A valid Mapping whose ``items()`` repeats a key, exactly as the public producer permits."""
+
+    _PAIRS = (("dup", "one"), ("dup", "two"))
+
+    def __getitem__(self, key: str) -> str:
+        for pair_key, pair_value in self._PAIRS:
+            if pair_key == key:
+                return pair_value
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter([pair_key for pair_key, _ in self._PAIRS])
+
+    def __len__(self) -> int:
+        return len(self._PAIRS)
+
+    def items(self) -> Iterator[tuple[str, str]]:  # type: ignore[override]
+        return iter(self._PAIRS)
 
 
 @dataclass(frozen=True)
@@ -828,8 +850,6 @@ def test_producer_refused_methodology_text_rejects_downstream(carrier: str) -> N
         {"metadata": (("venue", "BIST"),)},
         {"metadata": (("source", "time.time_ns"),)},
         {"metadata": (("path", "crypto_core.execution.paper_adapter"),)},
-        {"metadata": (("policy", "account_equity_policy"),)},
-        {"reason_codes": ("real_equity_method",)},
     ],
 )
 def test_methodology_container_text_scope_violations_reject(override: dict[str, object]) -> None:
@@ -874,9 +894,99 @@ def test_producer_valid_but_daily_series_refused_text_stays_rejected(carrier_val
 def test_intersected_methodology_text_policy_is_monotonic(candidate: str) -> None:
     """OLD REJECT -> NEW REJECT. The intersection may only add rejections, never remove one."""
 
-    assert series_module._methodology_text_rejected(candidate) or not _daily_series_generic_rejects(  # noqa: SLF001
+    assert series_module._methodology_identity_text_rejected(candidate) or not _daily_series_generic_rejects(  # noqa: SLF001
         candidate
     )
+
+
+# --- H2. producer-owned container text is governed by the PRODUCER policy alone --------------------------------
+
+
+@pytest.mark.parametrize("candidate", _DAILY_SERIES_ONLY_REFUSED_TEXTS)
+def test_container_text_policy_is_producer_only(candidate: str) -> None:
+    """These are refused by the daily-series generic policy but emittable by the producer."""
+
+    assert _daily_series_generic_rejects(candidate)
+    assert _replayed_producer_text_accepts(candidate)
+    assert series_module._methodology_identity_text_rejected(candidate)  # noqa: SLF001
+    assert not series_module._producer_methodology_text_rejected(candidate)  # noqa: SLF001
+
+
+@pytest.mark.parametrize("candidate", _DAILY_SERIES_ONLY_REFUSED_TEXTS)
+def test_producer_valid_container_text_yields_ready_series(candidate: str) -> None:
+    """Producer-emitted reason-code and metadata text must not be refused downstream."""
+
+    for methodology in (
+        _methodology(reason_codes=(candidate,)),
+        _methodology(metadata={"policy": candidate}),
+        _methodology(metadata={candidate: "value"}),
+    ):
+        result = _series_for(methodology)
+        _assert_digest_causality(result, methodology)
+        assert result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+        assert result.ready is True
+        assert result.reason_codes == ()
+
+
+def test_producer_valid_reason_code_yields_ready_series() -> None:
+    """Class-C positive control A: a producer-emitted reason code must reach READY."""
+
+    methodology = _methodology(reason_codes=("account_equity_policy",))
+    result = _series_for(methodology)
+
+    assert methodology.reason_codes == ("account_equity_policy",)
+    _assert_digest_causality(result, methodology)
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+    assert _SCOPE_VIOLATION not in result.reason_codes
+    assert result.reason_codes == ()
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"policy": "account_equity_policy"},
+        {"account_equity_policy": "value"},
+    ],
+)
+def test_producer_valid_metadata_text_yields_ready_series(metadata: dict[str, str]) -> None:
+    """Class-C positive control B: producer-emitted metadata text must reach READY."""
+
+    methodology = _methodology(metadata=metadata)
+    result = _series_for(methodology)
+
+    _assert_digest_causality(result, methodology)
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+    assert _SCOPE_VIOLATION not in result.reason_codes
+    assert result.reason_codes == ()
+
+
+def test_producer_duplicate_key_metadata_yields_ready_series() -> None:
+    """Class-C positive control C: the public builder can emit a sorted tuple that repeats a metadata key."""
+
+    methodology = _methodology(metadata=_DuplicateKeyMapping())
+    result = _series_for(methodology)
+
+    assert methodology.metadata == (("dup", "one"), ("dup", "two"))
+    _assert_digest_causality(result, methodology)
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+    assert result.ready is True
+    assert _METADATA_NONCANONICAL not in result.reason_codes
+    assert result.reason_codes == ()
+
+
+@pytest.mark.parametrize("candidate", _DRIFT_TEXT_CANDIDATES)
+def test_no_public_producer_container_output_is_falsely_rejected(candidate: str) -> None:
+    """Closure: anything the public builder accepts in a producer-owned container must reach READY."""
+
+    if _producer_accepts(metadata={"note": candidate}):
+        metadata_result = _series_for(_methodology(metadata={"note": candidate}))
+        assert metadata_result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+        assert metadata_result.reason_codes == ()
+
+    if _producer_accepts(reason_codes=(candidate,)):
+        reason_result = _series_for(_methodology(reason_codes=(candidate,)))
+        assert reason_result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+        assert reason_result.reason_codes == ()
 
 
 # --- I. fixed producer contract values -------------------------------------------------------------------------
@@ -1022,7 +1132,6 @@ def test_producer_permitted_reason_code_text_stays_accepted() -> None:
     [
         [("note", "value")],
         (("note-b", "2"), ("note-a", "1")),
-        (("note", "1"), ("note", "2")),
         (["note", "value"],),
     ],
 )

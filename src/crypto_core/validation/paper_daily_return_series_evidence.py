@@ -11,10 +11,16 @@ no wall-clock, runtime, service, execution, venue, scheduler, filesystem, networ
 Recomputing the carried methodology digest proves only that the methodology object is internally self-consistent;
 it does not prove the object could have been produced by the public methodology builder. This module therefore
 also replays the producer's public-builder contract locally: its forbidden-scope/clock text semantics, its fixed
-contract values, and the canonical reason-code/metadata output shape it is able to emit. The replay is an
-ADDITIONAL fail-closed condition intersected with this module's own policy - it never widens what this module
-already rejects, it never mutates or imports producer-private helpers, and producer-permitted values that this
-module already refuses stay refused.
+contract values, and the canonical reason-code/metadata output shape it is able to emit. It never mutates the
+producer and never imports producer-private helpers.
+
+The replay is applied at two deliberately different strengths, because the two text surfaces have different
+owners. The nine methodology identity/policy carriers must satisfy BOTH this module's own text policy and the
+producer policy, so producer-permitted values this module already refused stay refused. Methodology reason codes
+and metadata are producer-owned OUTPUT containers that this module never governed, so the producer policy alone
+decides whether their text is emittable: the daily-series generic policy is deliberately not applied there, and
+anything the public builder can canonically emit stays accepted - including padded/control-character text and a
+sorted metadata tuple that repeats a key, which a Mapping whose ``items()`` repeats a key produces.
 """
 
 from __future__ import annotations
@@ -103,7 +109,8 @@ _CLOCK_TOKENS = (
 # Producer-parity replay surface. These mirror the public methodology producer's own text policy so this
 # consumer can prove that methodology-owned text could have been emitted by
 # ``build_paper_return_series_methodology``. They are deliberately SEPARATE from the daily-series generic
-# policy above and never replace it: both policies must accept methodology-owned text.
+# policy above and never replace it: identity/policy carriers must satisfy both policies, while
+# producer-owned reason-code and metadata text is governed by the producer policy alone.
 _PRODUCER_BIST_PATTERN = re.compile(r"\b(?:bist\w*|borsa\w*|matriks\w*)|\bkap\b", re.IGNORECASE)
 _PRODUCER_FORBIDDEN_PATTERN = re.compile(
     r"(?<![A-Za-z0-9])orders?(?![A-Za-z0-9])"
@@ -481,15 +488,16 @@ def _producer_has_clock_token(*texts: object) -> bool:
     return False
 
 
-def _methodology_text_rejected(*texts: object) -> bool:
-    """Intersect the daily-series generic policy with the producer replay; either refusal rejects."""
+def _producer_methodology_text_rejected(*texts: object) -> bool:
+    """Producer policy alone. Authoritative for producer-OWNED output text (reason codes and metadata)."""
 
-    return (
-        _has_scope_violation(*texts)
-        or _has_clock_token(*texts)
-        or _producer_has_scope_violation(*texts)
-        or _producer_has_clock_token(*texts)
-    )
+    return _producer_has_scope_violation(*texts) or _producer_has_clock_token(*texts)
+
+
+def _methodology_identity_text_rejected(*texts: object) -> bool:
+    """Identity/policy carriers must satisfy BOTH this module's own text policy and the producer policy."""
+
+    return _has_scope_violation(*texts) or _has_clock_token(*texts) or _producer_methodology_text_rejected(*texts)
 
 
 def _producer_canonical_reason_codes(reason_codes: object) -> tuple[str, ...] | None:
@@ -520,8 +528,9 @@ def _producer_canonical_metadata(metadata: object) -> tuple[tuple[str, str], ...
         if type(key) is not str or type(value) is not str:
             return None
         pairs.append((key, value))
-    keys = [key for key, _ in pairs]
-    if len(set(keys)) != len(keys) or pairs != sorted(pairs):
+    # The producer sorts whatever ``Mapping.items()`` yields and never enforces key uniqueness, so a
+    # canonical producer-emitted tuple may legitimately repeat a key. Only the ordering is canonical.
+    if pairs != sorted(pairs):
         return None
     return tuple(pairs)
 
@@ -544,7 +553,7 @@ def _methodology_container_failures(methodology: PaperReturnSeriesMethodology) -
     else:
         texts.extend(text for pair in metadata for text in pair)
 
-    if _methodology_text_rejected(*texts):
+    if _producer_methodology_text_rejected(*texts):
         failures.append("paper_daily_return_series_evidence:methodology_scope_violation")
     return failures
 
@@ -627,7 +636,7 @@ def _methodology_hard_failures(
     )
     if not all(_is_plain_non_empty_string(value) for value in policy_ids):
         hard.append("paper_daily_return_series_evidence:methodology_policy_id_invalid")
-    elif _methodology_text_rejected(*policy_ids):
+    elif _methodology_identity_text_rejected(*policy_ids):
         hard.append("paper_daily_return_series_evidence:methodology_scope_violation")
     hard.extend(_methodology_container_failures(methodology))
     return hard
