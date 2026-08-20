@@ -727,6 +727,30 @@ def _series_for(methodology: PaperReturnSeriesMethodology, **overrides: object):
     return _build(**payload)
 
 
+def _daily_series_generic_rejects(candidate: object) -> bool:
+    """Verdict of the untouched daily-series generic text policy for one value."""
+
+    if series_module._has_scope_violation(candidate):  # noqa: SLF001
+        return True
+    return series_module._has_clock_token(candidate)  # noqa: SLF001
+
+
+def _replayed_producer_text_accepts(candidate: object) -> bool:
+    """Local producer-parity replay verdict for methodology container text (scope/clock only)."""
+
+    if series_module._producer_has_scope_violation(candidate):  # noqa: SLF001
+        return False
+    return not series_module._producer_has_clock_token(candidate)  # noqa: SLF001
+
+
+def _replayed_producer_identity_accepts(candidate: object) -> bool:
+    """Local producer-parity replay verdict for a methodology identity/policy carrier."""
+
+    if not series_module._is_plain_non_empty_string(candidate):  # noqa: SLF001
+        return False
+    return _replayed_producer_text_accepts(candidate)
+
+
 def _producer_accepts(**overrides: object) -> bool:
     """True when the public methodology builder accepts the supplied overrides."""
 
@@ -850,11 +874,9 @@ def test_producer_valid_but_daily_series_refused_text_stays_rejected(carrier_val
 def test_intersected_methodology_text_policy_is_monotonic(candidate: str) -> None:
     """OLD REJECT -> NEW REJECT. The intersection may only add rejections, never remove one."""
 
-    scope = series_module._has_scope_violation(candidate)  # noqa: SLF001
-    clock = series_module._has_clock_token(candidate)  # noqa: SLF001
-    intersected = series_module._methodology_text_rejected(candidate)  # noqa: SLF001
-
-    assert not (scope or clock) or intersected
+    assert series_module._methodology_text_rejected(candidate) or not _daily_series_generic_rejects(  # noqa: SLF001
+        candidate
+    )
 
 
 # --- I. fixed producer contract values -------------------------------------------------------------------------
@@ -1052,23 +1074,14 @@ def test_producer_permitted_metadata_whitespace_stays_accepted() -> None:
 
 @pytest.mark.parametrize("candidate", _DRIFT_TEXT_CANDIDATES)
 def test_producer_identity_text_parity_matches_public_builder(candidate: str) -> None:
-    scope_rejected = series_module._producer_has_scope_violation(candidate)  # noqa: SLF001
-    clock_rejected = series_module._producer_has_clock_token(candidate)  # noqa: SLF001
-    plain_accepted = series_module._is_plain_non_empty_string(candidate)  # noqa: SLF001
-    replayed_accepts = plain_accepted and not (scope_rejected or clock_rejected)
-
-    assert replayed_accepts is _producer_accepts(mtm_policy_id=candidate)
+    assert _replayed_producer_identity_accepts(candidate) is _producer_accepts(mtm_policy_id=candidate)
 
 
 @pytest.mark.parametrize("candidate", _DRIFT_TEXT_CANDIDATES)
 def test_producer_metadata_text_parity_matches_public_builder(candidate: str) -> None:
     """Metadata text obeys producer scope/clock semantics only - not the nine-field plain-string rule."""
 
-    scope_rejected = series_module._producer_has_scope_violation(candidate)  # noqa: SLF001
-    clock_rejected = series_module._producer_has_clock_token(candidate)  # noqa: SLF001
-    replayed_accepts = not (scope_rejected or clock_rejected)
-
-    assert replayed_accepts is _producer_accepts(metadata={"note": candidate})
+    assert _replayed_producer_text_accepts(candidate) is _producer_accepts(metadata={"note": candidate})
 
 
 def test_producer_policy_inventory_tripwire() -> None:
