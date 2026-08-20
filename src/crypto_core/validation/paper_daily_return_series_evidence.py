@@ -7,6 +7,14 @@ normalized paper equity index bucket endpoints. It is paper-only, deterministic,
 It does not compute Sharpe, does not decide the 30-day gate, does not invoke the Stage-4 comparator, and does not
 construct ``Stage4PaperSummary``. Bucket timestamps and index values are injected evidence data; this module calls
 no wall-clock, runtime, service, execution, venue, scheduler, filesystem, network, or random surface.
+
+Recomputing the carried methodology digest proves only that the methodology object is internally self-consistent;
+it does not prove the object could have been produced by the public methodology builder. This module therefore
+also replays the producer's public-builder contract locally: its forbidden-scope/clock text semantics, its fixed
+contract values, and the canonical reason-code/metadata output shape it is able to emit. The replay is an
+ADDITIONAL fail-closed condition intersected with this module's own policy - it never widens what this module
+already rejects, it never mutates or imports producer-private helpers, and producer-permitted values that this
+module already refuses stay refused.
 """
 
 from __future__ import annotations
@@ -34,6 +42,13 @@ from crypto_core.validation.paper_return_series_methodology import (
 _SCHEMA_VERSION = "paper-daily-return-series-evidence.v1"
 _SERIES_VERSION = "paper-daily-return-series.v1"
 _EXPECTED_METHODOLOGY_SCHEMA_VERSION = "paper-return-series-methodology.v1"
+_EXPECTED_METHODOLOGY_VERSION = "paper-return-series-methodology.v1"
+_EXPECTED_METHODOLOGY_MISSING_POLICY_INPUT_STATUS = "BLOCKED"
+_EXPECTED_METHODOLOGY_SPARSE_WINDOW_STATUS = "BLOCKED"
+_EXPECTED_METHODOLOGY_INSUFFICIENT_SAMPLE_STATUS = "BLOCKED"
+_EXPECTED_METHODOLOGY_NO_TRADE_STATUS = "NOT_COMPUTABLE"
+_EXPECTED_METHODOLOGY_ZERO_VARIANCE_STATUS = "NOT_COMPUTABLE"
+_EXPECTED_METHODOLOGY_MISMATCH_STATUS = "BLOCKED"
 _EXPECTED_TIME_WINDOW_SCHEMA_VERSION = "paper-deterministic-time-window-evidence.v1"
 _CALENDAR = "UTC"
 _BUCKET_FREQUENCY = "1d_utc"
@@ -84,6 +99,77 @@ _CLOCK_TOKENS = (
     "clock",
     "now()",
 )
+
+# Producer-parity replay surface. These mirror the public methodology producer's own text policy so this
+# consumer can prove that methodology-owned text could have been emitted by
+# ``build_paper_return_series_methodology``. They are deliberately SEPARATE from the daily-series generic
+# policy above and never replace it: both policies must accept methodology-owned text.
+_PRODUCER_BIST_PATTERN = re.compile(r"\b(?:bist\w*|borsa\w*|matriks\w*)|\bkap\b", re.IGNORECASE)
+_PRODUCER_FORBIDDEN_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])orders?(?![A-Za-z0-9])"
+    r"|\b(?:private|order_router|place_order|live_order|auto_loop|connector|connector_ready|"
+    r"credential|credentials|scheduler|shadow|route_id|execution_instruction|deribit|"
+    r"venue_order_id|exchange_order_id|client_order_id|"
+    r"readiness|service|capital|equity|margin|balance|reservation|real_money|paper_adapter|"
+    r"stage4_comparator|compare_stage4|Stage4PaperSummary)\w*"
+    r"|crypto_core\.(?:service|execution|venue|runtime|orchestrator|temporal|session|data|portfolio)\b"
+    r"|\blive(?:\b|[_-]\w+)",
+    re.IGNORECASE,
+)
+_PRODUCER_SAFE_MARKET_DATA_TERMS = ("limit_order_book", "order_book", "order_flow")
+_PRODUCER_CLOCK_TOKENS = (
+    "wall_clock",
+    "wall-clock",
+    "wallclock",
+    "datetime.now",
+    "datetime.utcnow",
+    "utcnow",
+    "time.time_ns",
+    "time.time",
+    "perf_counter",
+    "monotonic",
+    "server_time",
+    "exchange_time",
+    "live_time",
+    "real_time",
+    "realtime",
+    "system_time",
+    "clock",
+    "now()",
+)
+
+# Fixed methodology contract values the public producer pins for every emitted snapshot.
+_EXPECTED_METHODOLOGY_TEXT_VALUES: dict[str, str] = {
+    "schema_version": _EXPECTED_METHODOLOGY_SCHEMA_VERSION,
+    "methodology_version": _EXPECTED_METHODOLOGY_VERSION,
+    "calendar": _CALENDAR,
+    "bucket_frequency": _BUCKET_FREQUENCY,
+    "return_basis": _RETURN_BASIS,
+    "normalized_index_start": _NORMALIZED_INDEX_START,
+    "return_value_kind": _RETURN_VALUE_KIND,
+    "annualization_policy": _ANNUALIZATION_POLICY,
+    "paper_sharpe_policy": _PAPER_SHARPE_POLICY,
+    "missing_policy_input_status": _EXPECTED_METHODOLOGY_MISSING_POLICY_INPUT_STATUS,
+    "sparse_window_status": _EXPECTED_METHODOLOGY_SPARSE_WINDOW_STATUS,
+    "insufficient_sample_status": _EXPECTED_METHODOLOGY_INSUFFICIENT_SAMPLE_STATUS,
+    "no_trade_status": _EXPECTED_METHODOLOGY_NO_TRADE_STATUS,
+    "zero_variance_status": _EXPECTED_METHODOLOGY_ZERO_VARIANCE_STATUS,
+    "methodology_mismatch_status": _EXPECTED_METHODOLOGY_MISMATCH_STATUS,
+}
+_EXPECTED_METHODOLOGY_INT_VALUES: dict[str, int] = {
+    "bucket_duration_ns": _BUCKET_DURATION_NS,
+    "required_consecutive_bucket_count": _REQUIRED_CONSECUTIVE_BUCKET_COUNT,
+    "annualization_factor": _ANNUALIZATION_FACTOR,
+}
+_EXPECTED_METHODOLOGY_BOOL_VALUES: dict[str, bool] = {
+    "duration_sufficiency_assessed": False,
+    "sample_sufficiency_assessed": False,
+    "fee_policy_required": True,
+    "funding_policy_required": True,
+    "mark_policy_required": True,
+    "exposure_policy_required": True,
+    "liquidation_policy_required": True,
+}
 
 
 class PaperDailyReturnSeriesEvidenceError(RuntimeError):
@@ -209,6 +295,14 @@ def _is_plain_non_empty_string(value: object) -> bool:
         and value == value.strip()
         and not any(ord(char) < 32 or ord(char) == 127 for char in value)
     )
+
+
+def _eq_plain_str(value: object, expected: str) -> bool:
+    return type(value) is str and value == expected
+
+
+def _eq_exact_int(value: object, expected: int) -> bool:
+    return _is_exact_int(value) and value == expected
 
 
 def _is_hex64_string(value: object) -> bool:
@@ -359,6 +453,102 @@ def _has_clock_token(*texts: object) -> bool:
     return False
 
 
+def _producer_has_scope_violation(*texts: object) -> bool:
+    """Replay the public methodology producer's forbidden-scope semantics on methodology-owned text."""
+
+    for text in texts:
+        if type(text) is not str or text == "":
+            continue
+        if _PRODUCER_BIST_PATTERN.search(text):
+            return True
+        scrubbed = text
+        for safe_term in _PRODUCER_SAFE_MARKET_DATA_TERMS:
+            scrubbed = re.sub(re.escape(safe_term), " ", scrubbed, flags=re.IGNORECASE)
+        if _PRODUCER_FORBIDDEN_PATTERN.search(scrubbed):
+            return True
+    return False
+
+
+def _producer_has_clock_token(*texts: object) -> bool:
+    """Replay the public methodology producer's clock-token semantics on methodology-owned text."""
+
+    for text in texts:
+        if type(text) is not str or text == "":
+            continue
+        lowered = text.lower()
+        if any(token in lowered for token in _PRODUCER_CLOCK_TOKENS):
+            return True
+    return False
+
+
+def _methodology_text_rejected(*texts: object) -> bool:
+    """Intersect the daily-series generic policy with the producer replay; either refusal rejects."""
+
+    return (
+        _has_scope_violation(*texts)
+        or _has_clock_token(*texts)
+        or _producer_has_scope_violation(*texts)
+        or _producer_has_clock_token(*texts)
+    )
+
+
+def _producer_canonical_reason_codes(reason_codes: object) -> tuple[str, ...] | None:
+    """Return producer-canonical reason codes, or ``None`` when the public builder could not emit them."""
+
+    if type(reason_codes) is not tuple:
+        return None
+    codes: list[str] = []
+    for code in reason_codes:
+        if type(code) is not str or code.strip() == "":
+            return None
+        codes.append(code)
+    if codes != sorted(set(codes)):
+        return None
+    return tuple(codes)
+
+
+def _producer_canonical_metadata(metadata: object) -> tuple[tuple[str, str], ...] | None:
+    """Return producer-canonical metadata pairs, or ``None`` when the public builder could not emit them."""
+
+    if type(metadata) is not tuple:
+        return None
+    pairs: list[tuple[str, str]] = []
+    for pair in metadata:
+        if type(pair) is not tuple or len(pair) != 2:
+            return None
+        key, value = pair
+        if type(key) is not str or type(value) is not str:
+            return None
+        pairs.append((key, value))
+    keys = [key for key, _ in pairs]
+    if len(set(keys)) != len(keys) or pairs != sorted(pairs):
+        return None
+    return tuple(pairs)
+
+
+def _methodology_container_failures(methodology: PaperReturnSeriesMethodology) -> list[str]:
+    """Fail closed on methodology reason-code/metadata state the public builder could not have emitted."""
+
+    failures: list[str] = []
+    texts: list[str] = []
+
+    reason_codes = _producer_canonical_reason_codes(methodology.reason_codes)
+    if reason_codes is None:
+        failures.append("paper_daily_return_series_evidence:methodology_reason_codes_noncanonical")
+    else:
+        texts.extend(reason_codes)
+
+    metadata = _producer_canonical_metadata(methodology.metadata)
+    if metadata is None:
+        failures.append("paper_daily_return_series_evidence:methodology_metadata_noncanonical")
+    else:
+        texts.extend(text for pair in metadata for text in pair)
+
+    if _methodology_text_rejected(*texts):
+        failures.append("paper_daily_return_series_evidence:methodology_scope_violation")
+    return failures
+
+
 def _methodology_hard_failures(
     methodology: PaperReturnSeriesMethodology, expected_methodology_digest: str
 ) -> list[str]:
@@ -375,21 +565,14 @@ def _methodology_hard_failures(
     ):
         hard.append("paper_daily_return_series_evidence:methodology_digest_mismatch")
 
-    expected_values = {
-        "schema_version": _EXPECTED_METHODOLOGY_SCHEMA_VERSION,
-        "calendar": _CALENDAR,
-        "bucket_frequency": _BUCKET_FREQUENCY,
-        "bucket_duration_ns": _BUCKET_DURATION_NS,
-        "required_consecutive_bucket_count": _REQUIRED_CONSECUTIVE_BUCKET_COUNT,
-        "return_basis": _RETURN_BASIS,
-        "normalized_index_start": _NORMALIZED_INDEX_START,
-        "return_value_kind": _RETURN_VALUE_KIND,
-        "annualization_policy": _ANNUALIZATION_POLICY,
-        "annualization_factor": _ANNUALIZATION_FACTOR,
-        "paper_sharpe_policy": _PAPER_SHARPE_POLICY,
-    }
-    for field_name, expected in expected_values.items():
-        if getattr(methodology, field_name) != expected:
+    for field_name, expected_text in _EXPECTED_METHODOLOGY_TEXT_VALUES.items():
+        if not _eq_plain_str(getattr(methodology, field_name), expected_text):
+            hard.append(f"paper_daily_return_series_evidence:methodology_{field_name}_mismatch")
+    for field_name, expected_int in _EXPECTED_METHODOLOGY_INT_VALUES.items():
+        if not _eq_exact_int(getattr(methodology, field_name), expected_int):
+            hard.append(f"paper_daily_return_series_evidence:methodology_{field_name}_mismatch")
+    for field_name, expected_flag in _EXPECTED_METHODOLOGY_BOOL_VALUES.items():
+        if getattr(methodology, field_name) is not expected_flag:
             hard.append(f"paper_daily_return_series_evidence:methodology_{field_name}_mismatch")
 
     if methodology.status is not PaperReturnSeriesMethodologyStatus.READY or methodology.ready is not True:
@@ -444,8 +627,9 @@ def _methodology_hard_failures(
     )
     if not all(_is_plain_non_empty_string(value) for value in policy_ids):
         hard.append("paper_daily_return_series_evidence:methodology_policy_id_invalid")
-    elif _has_scope_violation(*policy_ids) or _has_clock_token(*policy_ids):
+    elif _methodology_text_rejected(*policy_ids):
         hard.append("paper_daily_return_series_evidence:methodology_scope_violation")
+    hard.extend(_methodology_container_failures(methodology))
     return hard
 
 
