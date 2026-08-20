@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator, Mapping
 from dataclasses import FrozenInstanceError, dataclass, fields, replace
 from pathlib import Path
 
 import pytest
 
 from crypto_core.validation import paper_daily_return_series_evidence as series_module
+from crypto_core.validation import paper_return_series_methodology as methodology_module
 from crypto_core.validation.paper_daily_return_series_evidence import (
     PaperDailyReturnBucket,
     PaperDailyReturnSeriesEvidenceError,
@@ -24,6 +26,7 @@ from crypto_core.validation.paper_deterministic_time_window_adapter import (
 )
 from crypto_core.validation.paper_return_series_methodology import (
     PaperReturnSeriesMethodology,
+    PaperReturnSeriesMethodologyError,
     build_paper_return_series_methodology,
     paper_return_series_methodology_digest,
 )
@@ -46,6 +49,27 @@ class _LiarStr(str):
 
 class _IntSub(int):
     """An int subclass rejected by exact integer checks."""
+
+
+class _DuplicateKeyMapping(Mapping):
+    """A valid Mapping whose ``items()`` repeats a key, exactly as the public producer permits."""
+
+    _PAIRS = (("dup", "one"), ("dup", "two"))
+
+    def __getitem__(self, key: str) -> str:
+        for pair_key, pair_value in self._PAIRS:
+            if pair_key == key:
+                return pair_value
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter([pair_key for pair_key, _ in self._PAIRS])
+
+    def __len__(self) -> int:
+        return len(self._PAIRS)
+
+    def items(self) -> Iterator[tuple[str, str]]:  # type: ignore[override]
+        return iter(self._PAIRS)
 
 
 @dataclass(frozen=True)
@@ -612,3 +636,658 @@ def test_source_has_no_forbidden_runtime_or_stage4_execution_surfaces() -> None:
                 assert function.id not in forbidden_call_names
             if isinstance(function, ast.Attribute):
                 assert function.attr not in forbidden_call_names
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Producer -> consumer methodology contract closure.
+#
+# Recomputing the carried methodology digest proves self-consistency only. These tests prove the daily-series
+# consumer additionally fails closed on methodology state the PUBLIC methodology builder could never have emitted,
+# and prove the repair is monotonic: nothing this module already rejected becomes READY.
+# ---------------------------------------------------------------------------------------------------------------
+
+_METHODOLOGY_TEXT_CARRIERS = (
+    "methodology_id",
+    "correlation_id",
+    "mtm_policy_id",
+    "fee_policy_id",
+    "funding_policy_id",
+    "mark_policy_id",
+    "exposure_policy_id",
+    "liquidation_policy_id",
+    "risk_free_policy_id",
+)
+
+# Refused by the methodology producer, accepted by the daily-series generic policy. This is the exact gap the
+# repair closes; `test_producer_only_refused_text_is_the_real_gap` proves both halves behaviorally.
+_PRODUCER_ONLY_REFUSED_TEXT = "equity_policy"
+
+# Accepted by the methodology producer, already refused by the daily-series generic policy. These must stay
+# rejected: producer parity is intersected with the existing policy, never substituted for it.
+_DAILY_SERIES_ONLY_REFUSED_TEXTS = (
+    "account_equity",
+    "account_equity_policy",
+    "real_equity_policy",
+    "real_account_equity_policy",
+    "real_equity_method",
+)
+
+_DRIFT_TEXT_CANDIDATES = (
+    "method-1",
+    "equity",
+    "equity_policy",
+    "EQUITY_Policy",
+    "my_equity",
+    "account_equity",
+    "real_equity_policy",
+    "capital-x",
+    "margin-x",
+    "balance-x",
+    "reservation-x",
+    "readiness-x",
+    "service-x",
+    "private-x",
+    "connector-x",
+    "scheduler-x",
+    "shadow-x",
+    "deribit-x",
+    "real_money-x",
+    "paper_adapter-x",
+    "compare_stage4",
+    "stage4_comparator",
+    "Stage4PaperSummary",
+    "order",
+    "orders",
+    "order_book-policy",
+    "limit_order_book-policy",
+    "order_flow-policy",
+    "live",
+    "live_time-policy",
+    "bist-policy",
+    "BORSA-policy",
+    "matriks-policy",
+    "kap",
+    "wall_clock-policy",
+    "datetime.now-policy",
+    "system_time-policy",
+    "crypto_core.execution",
+    " padded ",
+    "",
+    "with\ncontrol",
+)
+
+_DIGEST_MISMATCH = "paper_daily_return_series_evidence:methodology_digest_mismatch"
+_SCOPE_VIOLATION = "paper_daily_return_series_evidence:methodology_scope_violation"
+_REASON_CODES_NONCANONICAL = "paper_daily_return_series_evidence:methodology_reason_codes_noncanonical"
+_METADATA_NONCANONICAL = "paper_daily_return_series_evidence:methodology_metadata_noncanonical"
+
+
+def _resealed(**overrides: object) -> PaperReturnSeriesMethodology:
+    """Tamper a public-builder methodology and reseal it so its carried digest recomputes consistently."""
+
+    return _reseal_methodology(replace(_methodology(), **overrides))
+
+
+def _unsealed(**overrides: object) -> PaperReturnSeriesMethodology:
+    """Tamper a public-builder methodology whose state the producer serializer cannot even serialize."""
+
+    return replace(_methodology(), **overrides)
+
+
+def _series_for(methodology: PaperReturnSeriesMethodology, **overrides: object):
+    """Build daily-series evidence with every identity carrier aligned to the supplied methodology."""
+
+    payload: dict[str, object] = {
+        "methodology": methodology,
+        "time_window": _window(
+            methodology_id=methodology.methodology_id,
+            correlation_id=methodology.correlation_id,
+        ),
+        "correlation_id": methodology.correlation_id,
+    }
+    payload.update(overrides)
+    return _build(**payload)
+
+
+def _daily_series_generic_rejects(candidate: object) -> bool:
+    """Verdict of the untouched daily-series generic text policy for one value."""
+
+    if series_module._has_scope_violation(candidate):  # noqa: SLF001
+        return True
+    return series_module._has_clock_token(candidate)  # noqa: SLF001
+
+
+def _replayed_producer_text_accepts(candidate: object) -> bool:
+    """Local producer-parity replay verdict for methodology container text (scope/clock only)."""
+
+    if series_module._producer_has_scope_violation(candidate):  # noqa: SLF001
+        return False
+    return not series_module._producer_has_clock_token(candidate)  # noqa: SLF001
+
+
+def _replayed_producer_identity_accepts(candidate: object) -> bool:
+    """Local producer-parity replay verdict for a methodology identity/policy carrier."""
+
+    if not series_module._is_plain_non_empty_string(candidate):  # noqa: SLF001
+        return False
+    return _replayed_producer_text_accepts(candidate)
+
+
+def _producer_accepts(**overrides: object) -> bool:
+    """True when the public methodology builder accepts the supplied overrides."""
+
+    try:
+        _methodology(**overrides)
+    except PaperReturnSeriesMethodologyError:
+        return False
+    return True
+
+
+def _assert_digest_causality(result, methodology: PaperReturnSeriesMethodology) -> None:
+    """Rejection must be semantic, not a digest artefact."""
+
+    assert paper_return_series_methodology_digest(methodology) == methodology.methodology_digest
+    assert result.expected_methodology_digest == methodology.methodology_digest
+    assert result.methodology_digest == methodology.methodology_digest
+    assert _DIGEST_MISMATCH not in result.reason_codes
+
+
+# --- A. safe baseline ------------------------------------------------------------------------------------------
+
+
+def test_public_builder_methodology_with_containers_still_ready() -> None:
+    methodology = _methodology(
+        reason_codes=("note-b", "note-a"),
+        metadata={"purpose": "methodology", "review": "manual"},
+    )
+    result = _series_for(methodology)
+
+    assert methodology.reason_codes == ("note-a", "note-b")
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+    assert result.ready is True
+    assert result.reason_codes == ()
+    assert _is_hex64(result.series_digest)
+
+
+# --- B. nine methodology text carriers -------------------------------------------------------------------------
+
+
+def test_producer_only_refused_text_is_the_real_gap() -> None:
+    """The probe text must be producer-refused AND accepted by the untouched daily-series generic policy."""
+
+    with pytest.raises(PaperReturnSeriesMethodologyError):
+        _methodology(mtm_policy_id=_PRODUCER_ONLY_REFUSED_TEXT)
+
+    assert series_module._is_plain_non_empty_string(_PRODUCER_ONLY_REFUSED_TEXT)  # noqa: SLF001
+    assert not series_module._has_scope_violation(_PRODUCER_ONLY_REFUSED_TEXT)  # noqa: SLF001
+    assert not series_module._has_clock_token(_PRODUCER_ONLY_REFUSED_TEXT)  # noqa: SLF001
+
+
+@pytest.mark.parametrize("carrier", _METHODOLOGY_TEXT_CARRIERS)
+def test_producer_refused_methodology_text_rejects_downstream(carrier: str) -> None:
+    forged = _resealed(**{carrier: _PRODUCER_ONLY_REFUSED_TEXT})
+    result = _series_for(forged)
+
+    _assert_digest_causality(result, forged)
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.REJECTED
+    assert result.ready is False
+    assert _SCOPE_VIOLATION in result.reason_codes
+
+
+# --- C/D/F. producer-refused text carried through reason codes and metadata ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"reason_codes": (_PRODUCER_ONLY_REFUSED_TEXT,)},
+        {"metadata": ((_PRODUCER_ONLY_REFUSED_TEXT, "value"),)},
+        {"metadata": (("policy", _PRODUCER_ONLY_REFUSED_TEXT),)},
+        {"reason_codes": ("EQUITY_Policy",)},
+        {"reason_codes": ("bist-note",)},
+        {"reason_codes": ("wall_clock-note",)},
+        {"reason_codes": ("crypto_core.execution",)},
+        {"metadata": (("venue", "BIST"),)},
+        {"metadata": (("source", "time.time_ns"),)},
+        {"metadata": (("path", "crypto_core.execution.paper_adapter"),)},
+    ],
+)
+def test_methodology_container_text_scope_violations_reject(override: dict[str, object]) -> None:
+    forged = _resealed(**override)
+    result = _series_for(forged)
+
+    _assert_digest_causality(result, forged)
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.REJECTED
+    assert _SCOPE_VIOLATION in result.reason_codes
+
+
+# --- G. safe market-data terms stay permitted ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("safe_text", ["order_book-policy", "limit_order_book-policy", "order_flow-policy"])
+def test_safe_market_data_terms_remain_accepted_in_methodology_text(safe_text: str) -> None:
+    methodology = _methodology(
+        mtm_policy_id=safe_text,
+        reason_codes=(safe_text,),
+        metadata={"note": safe_text},
+    )
+    result = _series_for(methodology)
+
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+    assert result.reason_codes == ()
+
+
+# --- H. no broadening: producer-valid but daily-series-refused text stays refused -------------------------------
+
+
+@pytest.mark.parametrize("carrier_value", _DAILY_SERIES_ONLY_REFUSED_TEXTS)
+def test_producer_valid_but_daily_series_refused_text_stays_rejected(carrier_value: str) -> None:
+    methodology = _methodology(mtm_policy_id=carrier_value)
+    result = _series_for(methodology)
+
+    _assert_digest_causality(result, methodology)
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.REJECTED
+    assert _SCOPE_VIOLATION in result.reason_codes
+
+
+@pytest.mark.parametrize("candidate", _DRIFT_TEXT_CANDIDATES)
+def test_intersected_methodology_text_policy_is_monotonic(candidate: str) -> None:
+    """OLD REJECT -> NEW REJECT. The intersection may only add rejections, never remove one."""
+
+    assert series_module._methodology_identity_text_rejected(candidate) or not _daily_series_generic_rejects(  # noqa: SLF001
+        candidate
+    )
+
+
+# --- H2. producer-owned container text is governed by the PRODUCER policy alone --------------------------------
+
+
+@pytest.mark.parametrize("candidate", _DAILY_SERIES_ONLY_REFUSED_TEXTS)
+def test_container_text_policy_is_producer_only(candidate: str) -> None:
+    """These are refused by the daily-series generic policy but emittable by the producer."""
+
+    assert _daily_series_generic_rejects(candidate)
+    assert _replayed_producer_text_accepts(candidate)
+    assert series_module._methodology_identity_text_rejected(candidate)  # noqa: SLF001
+    assert not series_module._producer_methodology_text_rejected(candidate)  # noqa: SLF001
+
+
+@pytest.mark.parametrize("candidate", _DAILY_SERIES_ONLY_REFUSED_TEXTS)
+def test_producer_valid_container_text_yields_ready_series(candidate: str) -> None:
+    """Producer-emitted reason-code and metadata text must not be refused downstream."""
+
+    for methodology in (
+        _methodology(reason_codes=(candidate,)),
+        _methodology(metadata={"policy": candidate}),
+        _methodology(metadata={candidate: "value"}),
+    ):
+        result = _series_for(methodology)
+        _assert_digest_causality(result, methodology)
+        assert result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+        assert result.ready is True
+        assert result.reason_codes == ()
+
+
+def test_producer_valid_reason_code_yields_ready_series() -> None:
+    """Class-C positive control A: a producer-emitted reason code must reach READY."""
+
+    methodology = _methodology(reason_codes=("account_equity_policy",))
+    result = _series_for(methodology)
+
+    assert methodology.reason_codes == ("account_equity_policy",)
+    _assert_digest_causality(result, methodology)
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+    assert _SCOPE_VIOLATION not in result.reason_codes
+    assert result.reason_codes == ()
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"policy": "account_equity_policy"},
+        {"account_equity_policy": "value"},
+    ],
+)
+def test_producer_valid_metadata_text_yields_ready_series(metadata: dict[str, str]) -> None:
+    """Class-C positive control B: producer-emitted metadata text must reach READY."""
+
+    methodology = _methodology(metadata=metadata)
+    result = _series_for(methodology)
+
+    _assert_digest_causality(result, methodology)
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+    assert _SCOPE_VIOLATION not in result.reason_codes
+    assert result.reason_codes == ()
+
+
+def test_producer_duplicate_key_metadata_yields_ready_series() -> None:
+    """Class-C positive control C: the public builder can emit a sorted tuple that repeats a metadata key."""
+
+    methodology = _methodology(metadata=_DuplicateKeyMapping())
+    result = _series_for(methodology)
+
+    assert methodology.metadata == (("dup", "one"), ("dup", "two"))
+    _assert_digest_causality(result, methodology)
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+    assert result.ready is True
+    assert _METADATA_NONCANONICAL not in result.reason_codes
+    assert result.reason_codes == ()
+
+
+@pytest.mark.parametrize("candidate", _DRIFT_TEXT_CANDIDATES)
+def test_no_public_producer_container_output_is_falsely_rejected(candidate: str) -> None:
+    """Closure: anything the public builder accepts in a producer-owned container must reach READY."""
+
+    if _producer_accepts(metadata={"note": candidate}):
+        metadata_result = _series_for(_methodology(metadata={"note": candidate}))
+        assert metadata_result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+        assert metadata_result.reason_codes == ()
+
+    if _producer_accepts(reason_codes=(candidate,)):
+        reason_result = _series_for(_methodology(reason_codes=(candidate,)))
+        assert reason_result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+        assert reason_result.reason_codes == ()
+
+
+# --- I. fixed producer contract values -------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("field_name", "tampered"),
+    [
+        ("methodology_version", "paper-return-series-methodology.v2"),
+        ("duration_sufficiency_assessed", True),
+        ("sample_sufficiency_assessed", True),
+        ("fee_policy_required", False),
+        ("funding_policy_required", False),
+        ("mark_policy_required", False),
+        ("exposure_policy_required", False),
+        ("liquidation_policy_required", False),
+        ("missing_policy_input_status", "NOT_COMPUTABLE"),
+        ("sparse_window_status", "READY"),
+        ("insufficient_sample_status", "NOT_COMPUTABLE"),
+        ("no_trade_status", "READY"),
+        ("zero_variance_status", "READY"),
+        ("methodology_mismatch_status", "NOT_COMPUTABLE"),
+    ],
+)
+def test_fixed_producer_contract_values_reject(field_name: str, tampered: object) -> None:
+    forged = _resealed(**{field_name: tampered})
+    result = _series_for(forged)
+
+    _assert_digest_causality(result, forged)
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.REJECTED
+    assert f"paper_daily_return_series_evidence:methodology_{field_name}_mismatch" in result.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("field_name", "tampered"),
+    [
+        ("duration_sufficiency_assessed", 0),
+        ("sample_sufficiency_assessed", 0),
+        ("fee_policy_required", 1),
+        ("liquidation_policy_required", 1),
+        ("bucket_duration_ns", _IntSub(_DAY_NS)),
+        ("required_consecutive_bucket_count", _IntSub(30)),
+        ("annualization_factor", _IntSub(365)),
+        ("schema_version", _LiarStr("tampered-schema")),
+        ("methodology_version", _LiarStr("tampered-version")),
+        ("calendar", _LiarStr("TAMPERED")),
+        ("no_trade_status", _LiarStr("READY")),
+        ("paper_sharpe_policy", _LiarStr("computed")),
+    ],
+)
+def test_exact_type_producer_contract_values_reject(field_name: str, tampered: object) -> None:
+    """Truthiness and str/int-subclass equality bypasses must not satisfy a fixed producer contract value."""
+
+    forged = _resealed(**{field_name: tampered})
+    result = _series_for(forged)
+
+    _assert_digest_causality(result, forged)
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.REJECTED
+    assert f"paper_daily_return_series_evidence:methodology_{field_name}_mismatch" in result.reason_codes
+
+
+def test_expected_methodology_tables_match_public_builder_output() -> None:
+    """Behavioral pin: every value the consumer requires is a value the public builder actually emits."""
+
+    methodology = _methodology()
+
+    for field_name, expected in series_module._EXPECTED_METHODOLOGY_TEXT_VALUES.items():  # noqa: SLF001
+        assert getattr(methodology, field_name) == expected
+    for field_name, expected_int in series_module._EXPECTED_METHODOLOGY_INT_VALUES.items():  # noqa: SLF001
+        assert getattr(methodology, field_name) == expected_int
+    for field_name, expected_flag in series_module._EXPECTED_METHODOLOGY_BOOL_VALUES.items():  # noqa: SLF001
+        assert getattr(methodology, field_name) is expected_flag
+
+
+def test_fixed_producer_contract_coverage_is_complete() -> None:
+    pinned = (
+        set(series_module._EXPECTED_METHODOLOGY_TEXT_VALUES)  # noqa: SLF001
+        | set(series_module._EXPECTED_METHODOLOGY_INT_VALUES)  # noqa: SLF001
+        | set(series_module._EXPECTED_METHODOLOGY_BOOL_VALUES)  # noqa: SLF001
+    )
+
+    assert {
+        "methodology_version",
+        "duration_sufficiency_assessed",
+        "sample_sufficiency_assessed",
+        "fee_policy_required",
+        "funding_policy_required",
+        "mark_policy_required",
+        "exposure_policy_required",
+        "liquidation_policy_required",
+        "missing_policy_input_status",
+        "sparse_window_status",
+        "insufficient_sample_status",
+        "no_trade_status",
+        "zero_variance_status",
+        "methodology_mismatch_status",
+    } <= pinned
+
+
+# --- J. reason_codes canonical output shape --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "reason_codes",
+    [
+        ["note-a", "note-b"],
+        "ab",
+        frozenset({"note-a"}),
+        ("note-b", "note-a"),
+        ("note-a", "note-a"),
+        ("",),
+        ("   ",),
+        (1,),
+        (None,),
+        (_LiarStr("note-a"),),
+        (("note-a",),),
+    ],
+)
+def test_noncanonical_methodology_reason_codes_reject(reason_codes: object) -> None:
+    forged = _resealed(reason_codes=reason_codes)
+    result = _series_for(forged)
+
+    _assert_digest_causality(result, forged)
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.REJECTED
+    assert _REASON_CODES_NONCANONICAL in result.reason_codes
+
+
+def test_producer_permitted_reason_code_text_stays_accepted() -> None:
+    """The producer allows padded/control-character reason codes; the consumer must not invent a stricter rule."""
+
+    methodology = _methodology(reason_codes=("  padded-note  ", "note\nwith-newline"))
+    result = _series_for(methodology)
+
+    assert methodology.reason_codes == ("  padded-note  ", "note\nwith-newline")
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+
+
+# --- K. metadata canonical output shape ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        [("note", "value")],
+        (("note-b", "2"), ("note-a", "1")),
+        (["note", "value"],),
+    ],
+)
+def test_noncanonical_methodology_metadata_rejects_with_consistent_digest(metadata: object) -> None:
+    forged = _resealed(metadata=metadata)
+    result = _series_for(forged)
+
+    _assert_digest_causality(result, forged)
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.REJECTED
+    assert _METADATA_NONCANONICAL in result.reason_codes
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        "note",
+        (("note", "value", "extra"),),
+        (("note",),),
+        (("note", 1),),
+        ((1, "value"),),
+        ((_LiarStr("note"), "value"),),
+        (("note", _LiarStr("value")),),
+        (None,),
+    ],
+)
+def test_unserializable_methodology_metadata_fails_closed_without_raising(metadata: object) -> None:
+    """The producer serializer cannot even serialize these; the consumer must still reject deterministically."""
+
+    forged = _unsealed(metadata=metadata)
+    result = _series_for(forged)
+
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.REJECTED
+    assert _METADATA_NONCANONICAL in result.reason_codes
+    assert _DIGEST_MISMATCH in result.reason_codes
+
+
+def test_producer_permitted_metadata_whitespace_stays_accepted() -> None:
+    """The producer does not apply the nine-field trim/control rule to metadata; neither may the consumer."""
+
+    methodology = _methodology(metadata={"  padded key  ": "  padded value  ", "note": "line\nbreak"})
+    result = _series_for(methodology)
+
+    assert methodology.metadata == (("  padded key  ", "  padded value  "), ("note", "line\nbreak"))
+    assert result.status is PaperDailyReturnSeriesEvidenceStatus.READY
+
+
+# --- L. drift guard: the public builder is the behavioral authority ---------------------------------------------
+
+
+@pytest.mark.parametrize("candidate", _DRIFT_TEXT_CANDIDATES)
+def test_producer_identity_text_parity_matches_public_builder(candidate: str) -> None:
+    assert _replayed_producer_identity_accepts(candidate) is _producer_accepts(mtm_policy_id=candidate)
+
+
+@pytest.mark.parametrize("candidate", _DRIFT_TEXT_CANDIDATES)
+def test_producer_metadata_text_parity_matches_public_builder(candidate: str) -> None:
+    """Metadata text obeys producer scope/clock semantics only - not the nine-field plain-string rule."""
+
+    assert _replayed_producer_text_accepts(candidate) is _producer_accepts(metadata={"note": candidate})
+
+
+def test_producer_policy_inventory_tripwire() -> None:
+    """Secondary, non-authoritative tripwire: the replicated producer policy inventory must not drift."""
+
+    assert series_module._PRODUCER_BIST_PATTERN.pattern == methodology_module._BIST_PATTERN.pattern  # noqa: SLF001
+    assert series_module._PRODUCER_BIST_PATTERN.flags == methodology_module._BIST_PATTERN.flags  # noqa: SLF001
+    assert (
+        series_module._PRODUCER_FORBIDDEN_PATTERN.pattern  # noqa: SLF001
+        == methodology_module._FORBIDDEN_PATTERN.pattern  # noqa: SLF001
+    )
+    assert (
+        series_module._PRODUCER_FORBIDDEN_PATTERN.flags  # noqa: SLF001
+        == methodology_module._FORBIDDEN_PATTERN.flags  # noqa: SLF001
+    )
+    assert (
+        series_module._PRODUCER_SAFE_MARKET_DATA_TERMS  # noqa: SLF001
+        == methodology_module._SAFE_MARKET_DATA_TERMS  # noqa: SLF001
+    )
+    assert series_module._PRODUCER_CLOCK_TOKENS == methodology_module._CLOCK_TOKENS  # noqa: SLF001
+    assert series_module._EXPECTED_METHODOLOGY_VERSION == methodology_module._METHODOLOGY_VERSION  # noqa: SLF001
+    assert (
+        series_module._EXPECTED_METHODOLOGY_MISSING_POLICY_INPUT_STATUS  # noqa: SLF001
+        == methodology_module._MISSING_POLICY_INPUT_STATUS  # noqa: SLF001
+    )
+    assert (
+        series_module._EXPECTED_METHODOLOGY_SPARSE_WINDOW_STATUS  # noqa: SLF001
+        == methodology_module._SPARSE_WINDOW_STATUS  # noqa: SLF001
+    )
+    assert (
+        series_module._EXPECTED_METHODOLOGY_INSUFFICIENT_SAMPLE_STATUS  # noqa: SLF001
+        == methodology_module._INSUFFICIENT_SAMPLE_STATUS  # noqa: SLF001
+    )
+    assert (
+        series_module._EXPECTED_METHODOLOGY_NO_TRADE_STATUS  # noqa: SLF001
+        == methodology_module._NO_TRADE_STATUS  # noqa: SLF001
+    )
+    assert (
+        series_module._EXPECTED_METHODOLOGY_ZERO_VARIANCE_STATUS  # noqa: SLF001
+        == methodology_module._ZERO_VARIANCE_STATUS  # noqa: SLF001
+    )
+    assert (
+        series_module._EXPECTED_METHODOLOGY_MISMATCH_STATUS  # noqa: SLF001
+        == methodology_module._METHODOLOGY_MISMATCH_STATUS  # noqa: SLF001
+    )
+
+
+def test_production_module_does_not_import_producer_private_helpers() -> None:
+    source = Path(series_module.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "crypto_core.validation.paper_return_series_methodology":
+            for alias in node.names:
+                assert not alias.name.startswith("_")
+        if isinstance(node, ast.Attribute):
+            value = node.value
+            if isinstance(value, ast.Name) and value.id.endswith("methodology"):
+                assert not node.attr.startswith("_")
+
+
+# --- N. root closure -------------------------------------------------------------------------------------------
+
+
+def test_producer_invalid_methodology_can_no_longer_produce_a_ready_series() -> None:
+    """End-to-end closure through the public daily-series builder for every closed contract dimension."""
+
+    forged_states = (
+        _resealed(mtm_policy_id=_PRODUCER_ONLY_REFUSED_TEXT),
+        _resealed(reason_codes=(_PRODUCER_ONLY_REFUSED_TEXT,)),
+        _resealed(metadata=(("policy", _PRODUCER_ONLY_REFUSED_TEXT),)),
+        _resealed(methodology_version="paper-return-series-methodology.v2"),
+        _resealed(duration_sufficiency_assessed=True),
+        _resealed(sample_sufficiency_assessed=True),
+        _resealed(fee_policy_required=False),
+        _resealed(funding_policy_required=False),
+        _resealed(mark_policy_required=False),
+        _resealed(exposure_policy_required=False),
+        _resealed(liquidation_policy_required=False),
+        _resealed(missing_policy_input_status="NOT_COMPUTABLE"),
+        _resealed(sparse_window_status="READY"),
+        _resealed(insufficient_sample_status="NOT_COMPUTABLE"),
+        _resealed(no_trade_status="READY"),
+        _resealed(zero_variance_status="READY"),
+        _resealed(methodology_mismatch_status="NOT_COMPUTABLE"),
+        _resealed(reason_codes=("note-b", "note-a")),
+        _resealed(metadata=(("note-b", "2"), ("note-a", "1"))),
+    )
+
+    for forged in forged_states:
+        result = _series_for(forged)
+        assert result.status is PaperDailyReturnSeriesEvidenceStatus.REJECTED
+        assert result.ready is False
+        assert result.return_series_computed is False
+        assert result.daily_returns_computed is False
+        assert result.thirty_day_gate_satisfied is False
+        assert result.comparison_ready is False
+        assert result.stage4_comparator_invoked is False
+        assert result.prdv4_stage4_complete is False
+        assert _DIGEST_MISMATCH not in result.reason_codes
