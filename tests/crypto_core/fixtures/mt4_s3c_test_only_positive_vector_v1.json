@@ -1,0 +1,251 @@
+{
+  "schema": "mt4-s3c-test-only-vector.v1",
+  "vector_authority": "PROJECT_GENERATED_DETERMINISTIC_TEST_VECTOR",
+  "fixture_material_state": "PENDING_OFFLINE_GENERATION",
+  "generator_source_sha256": "",
+  "generator_binary_sha256": "",
+  "generation_mode": "OFFLINE_ONE_TIME_OUTSIDE_THE_QUALIFICATION_RUN",
+  "generator_path": "scripts/crypto_core/qualification/s3c/mt4_s3c_test_only_vector_generator.c",
+  "wire": {
+    "request_frame_bytes": 184,
+    "response_frame_bytes": 8
+  },
+  "cases": [
+    {
+      "case_id": "C01_POSITIVE_EXACT_FIXTURE",
+      "construction_intent": "GOVERNED_TEST_ONLY_POSITIVE_VECTOR",
+      "stimulus_kind": 0,
+      "expected_result_class": 1,
+      "expected_result_code": 0,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C02_DETERMINISM_EXACT_REPEAT",
+      "construction_intent": "BYTE_IDENTICAL_REPEAT_OF_C01",
+      "stimulus_kind": 0,
+      "expected_result_class": 1,
+      "expected_result_code": 0,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C03_PK_BAD_ENCODING",
+      "construction_intent": "G2_MALFORMED_COMPRESSION_FLAG_PATTERN",
+      "stimulus_kind": 0,
+      "expected_result_class": 1,
+      "expected_result_code": 3,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C04_PK_NON_CANONICAL",
+      "construction_intent": "G2_X_COORDINATE_GREATER_OR_EQUAL_FIELD_MODULUS",
+      "stimulus_kind": 0,
+      "expected_result_class": 1,
+      "expected_result_code": 4,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C05_PK_INFINITY",
+      "construction_intent": "G2_CANONICAL_INFINITY_ENCODING",
+      "stimulus_kind": 0,
+      "expected_result_class": 1,
+      "expected_result_code": 5,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C06_PK_NOT_IN_GROUP",
+      "construction_intent": "G2_VALID_ENCODING_OUTSIDE_PRIME_ORDER_SUBGROUP",
+      "stimulus_kind": 0,
+      "expected_result_class": 1,
+      "expected_result_code": 6,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C07_SIG_BAD_ENCODING",
+      "construction_intent": "G1_MALFORMED_COMPRESSION_FLAG_PATTERN",
+      "stimulus_kind": 0,
+      "expected_result_class": 1,
+      "expected_result_code": 7,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C08_SIG_NON_CANONICAL",
+      "construction_intent": "G1_X_COORDINATE_GREATER_OR_EQUAL_FIELD_MODULUS",
+      "stimulus_kind": 0,
+      "expected_result_class": 1,
+      "expected_result_code": 8,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C09_SIG_INFINITY",
+      "construction_intent": "G1_CANONICAL_INFINITY_ENCODING",
+      "stimulus_kind": 0,
+      "expected_result_class": 1,
+      "expected_result_code": 9,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C10_SIG_NOT_IN_GROUP",
+      "construction_intent": "G1_VALID_ENCODING_OUTSIDE_PRIME_ORDER_SUBGROUP",
+      "stimulus_kind": 0,
+      "expected_result_class": 1,
+      "expected_result_code": 10,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C11_VERIFY_FAILED_WRONG_DIGEST",
+      "construction_intent": "VALID_SIGNATURE_OVER_A_DIFFERENT_MESSAGE_DIGEST",
+      "stimulus_kind": 0,
+      "expected_result_class": 1,
+      "expected_result_code": 11,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C12_VERIFY_FAILED_WRONG_PUBLIC_KEY",
+      "construction_intent": "VALID_IN_SUBGROUP_PUBLIC_KEY_THAT_IS_NOT_THE_SIGNER",
+      "stimulus_kind": 0,
+      "expected_result_class": 1,
+      "expected_result_code": 11,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C13_WRONG_MAGIC",
+      "construction_intent": "FULL_FRAME_WITH_MAGIC_NOT_MT4W",
+      "stimulus_kind": 0,
+      "expected_result_class": 2,
+      "expected_result_code": 1,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C14_WRONG_VERSION",
+      "construction_intent": "FULL_FRAME_WITH_VERSION_NOT_ONE",
+      "stimulus_kind": 0,
+      "expected_result_class": 2,
+      "expected_result_code": 2,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C15_WRONG_OPCODE",
+      "construction_intent": "FULL_FRAME_WITH_OPCODE_NOT_ONE",
+      "stimulus_kind": 0,
+      "expected_result_class": 2,
+      "expected_result_code": 3,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C16_RESERVED_NONZERO",
+      "construction_intent": "FULL_FRAME_WITH_NONZERO_REQUEST_RESERVED_FIELD",
+      "stimulus_kind": 0,
+      "expected_result_class": 2,
+      "expected_result_code": 4,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C17_SHORT_FRAME_EOF_EMPTY",
+      "construction_intent": "ZERO_BYTES_THEN_EOF",
+      "stimulus_kind": 0,
+      "expected_result_class": 2,
+      "expected_result_code": 5,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C18_SHORT_FRAME_EOF_PARTIAL_HEADER",
+      "construction_intent": "SEVEN_BYTES_THEN_EOF",
+      "stimulus_kind": 0,
+      "expected_result_class": 2,
+      "expected_result_code": 5,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C19_SHORT_FRAME_EOF_ONE_SHORT",
+      "construction_intent": "ONE_HUNDRED_EIGHTY_THREE_BYTES_THEN_EOF",
+      "stimulus_kind": 0,
+      "expected_result_class": 2,
+      "expected_result_code": 5,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C20_TRAILING_INPUT_ONE_BYTE",
+      "construction_intent": "ONE_HUNDRED_EIGHTY_FIVE_BYTES_THEN_EOF",
+      "stimulus_kind": 0,
+      "expected_result_class": 2,
+      "expected_result_code": 6,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C21_TRAILING_INPUT_SECOND_FRAME",
+      "construction_intent": "TWO_COMPLETE_FRAMES_THEN_EOF",
+      "stimulus_kind": 0,
+      "expected_result_class": 2,
+      "expected_result_code": 6,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C22_ORDER_TRAILING_BEFORE_MAGIC",
+      "construction_intent": "OVER_LONG_INPUT_WHOSE_FIRST_FRAME_CARRIES_A_WRONG_MAGIC",
+      "stimulus_kind": 0,
+      "expected_result_class": 2,
+      "expected_result_code": 6,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C23_ORDER_SHORT_BEFORE_MAGIC",
+      "construction_intent": "SHORT_INPUT_THAT_ALSO_CARRIES_A_WRONG_MAGIC",
+      "stimulus_kind": 0,
+      "expected_result_class": 2,
+      "expected_result_code": 5,
+      "expected_exit_status": 0,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C24_CRASH_MID_REQUEST",
+      "construction_intent": "PARTIAL_INPUT_THEN_EXTERNAL_SIGKILL",
+      "stimulus_kind": 1,
+      "expected_result_class": 0,
+      "expected_result_code": -1,
+      "expected_exit_status": -1,
+      "input_hex": ""
+    },
+    {
+      "case_id": "C25_TIMEOUT_WRITER_WITHHOLDS",
+      "construction_intent": "PARTIAL_INPUT_WITH_THE_WRITER_HELD_OPEN_PAST_THE_DEADLINE",
+      "stimulus_kind": 2,
+      "expected_result_class": 0,
+      "expected_result_code": -1,
+      "expected_exit_status": -1,
+      "input_hex": ""
+    }
+  ],
+  "non_claims": {
+    "fixture_corpus_admitted": false,
+    "fixture_corpus_loaded": false,
+    "fixture_corpus_verified": false,
+    "proof_verified": false,
+    "randomness_verified": false,
+    "provider_operationally_approved": false,
+    "readiness_promoted": false,
+    "is_official_or_normative_vector": false,
+    "is_quicknet_beacon_material": false
+  }
+}

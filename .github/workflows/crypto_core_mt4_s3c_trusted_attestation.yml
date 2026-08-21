@@ -1,0 +1,257 @@
+name: crypto_core mt4-s3c trusted attestation
+
+# TRUSTED DEFAULT-BRANCH STAGE-C GATE FOR MT4-S3C P0 QUALIFICATION EVIDENCE.
+#
+# ARCHITECTURE: MT4-S3C-P0-STATIC-WORKER-QUALIFICATION-INFRA-V9, SECTIONS 10, 24, 25, 26, 38.
+#
+# THIS IS THE ONLY TRUST BOUNDARY IN THE DESIGN.  It is triggered exclusively by workflow_run
+# restricted to the default branch, which is the boundary that matters: GitHub only runs a
+# workflow_run workflow from the DEFAULT BRANCH definition, so an open pull request can never
+# define, alter or reach the authority granted here.
+#
+# Consequence, and it is intentional: while the pull request that introduces this file is open, this
+# workflow DOES NOT RUN.  Its first execution can only happen after merge, when a maintainer
+# dispatches the qualification workflow on the default branch.  Pre-merge status is therefore:
+#
+#   MT4_S3C_TRUSTED_STAGE_C_EXECUTION=POST_MERGE_REQUIRED
+#
+# No workaround exists here to make it run earlier, and none may be added.
+#
+# THE QUALIFICATION WORKFLOW IS UNPRIVILEGED AND PULL-REQUEST-EDITABLE, so its receipt is NOT
+# trusted on its own.  mt4_s3c_trusted_attestation_gate.py independently re-derives every digest,
+# re-reads artifact identity from the artifact service under complete pagination with the governed
+# total_count reconciliation, recomputes the qualification source bundle digest and the compile
+# dependency inventory digest, and recomputes every per-case internal filter equivalence digest so
+# that A3 == A4 == STAGE_C_RECOMPUTED.  Unprivileged B2 is never the final authority.
+#
+# THIS WORKFLOW GRANTS NOTHING.  A passing Stage-C predicate is ADMISSION_EVIDENCE_ONLY.  It creates
+# no governed worker row, no custody artifact, no readiness or connector transition, no
+# machine-time authority, no MT-5, no MT-6 and no Stage-4 completion.
+
+on:
+  workflow_run:
+    workflows:
+      - crypto_core mt4-s3c static worker qualification
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  ACTIONS_CHECKOUT_COMMIT: 11d5960a326750d5838078e36cf38b85af677262
+  ACTIONS_SETUP_PYTHON_COMMIT: a26af69be951a213d495a4c3e4e4022e16d87065
+  ACTIONS_DOWNLOAD_ARTIFACT_COMMIT: 3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+
+  QUALIFICATION_WORKFLOW_PATH: .github/workflows/crypto_core_mt4_s3c_static_worker_qualification.yml
+  QUALIFICATION_WORKFLOW_NAME: crypto_core mt4-s3c static worker qualification
+  TRUSTED_GATE_PATH: scripts/crypto_core/qualification/mt4_s3c_trusted_attestation_gate.py
+
+  # APPROVED CONSTANTS.  Deliberately stored HERE, on the trusted surface, and never inside the
+  # qualification workflow or the source bundle itself: a self-referential digest could not exist,
+  # and a candidate-reported digest could be forged.  The thing being measured therefore cannot
+  # change the measuring constant.  If a later pull request edits the qualification workflow, the
+  # gate source or any bundle entry, trusted attestation fails closed until a separately reviewed
+  # change to the default branch updates the corresponding constant below.
+  APPROVED_S3C_QUALIFICATION_WORKFLOW_SHA256: "82f00d038363316f6e2b77f3b44b584cd385bda054668e04882d5993f40d3003"
+  APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256: "4f30dcaaed4f86ccf39954538cc38862edd6e012107abd42c52fae1315f545a4"
+  APPROVED_S3C_TRUSTED_GATE_SHA256: "184bd993aa48980b523b602252cc252c1426a76d061ed746116d6d7543f816c3"
+
+  # EM-11: the identical literal expected program-header inventory the reviewed ELF qualifier and
+  # the qualification workflow both carry.  Pinned here so a THIRD non-candidate authority agrees.
+  S3C_EXPECTED_PHDR_INVENTORY: "PT_LOAD:5,PT_LOAD:6,PT_GNU_STACK:6"
+
+  # The governed __blst_platform_cap object size, pinned on the trusted surface exactly as V9
+  # SECTION 30 rule Q5 requires.  The candidate symbol table is compared AGAINST this value.
+  S3C_BLST_PLATFORM_CAP_SIZE_BYTES: "4"
+
+jobs:
+  s3c-attest-trusted-evidence:
+    name: s3c-attest-trusted-evidence
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    # Fail closed on the source run's identity BEFORE any credential-bearing step exists.  Only a
+    # successful, default-branch, workflow_dispatch run of this repository's own qualification
+    # workflow may be attested.  No fork, no pull request, no arbitrary branch and no
+    # operator-supplied run id: the source run is exactly github.event.workflow_run.id.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout the trusted qualification source at the source-run head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Prove the checkout is the exact source-run head on the default branch
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.workflow_run.head_sha }}
+          SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          ACTUAL_HEAD="$(git rev-parse HEAD)"
+          echo "S3C_TRUSTED_SOURCE_HEAD_EXPECTED=${EXPECTED_HEAD}"
+          echo "S3C_TRUSTED_SOURCE_HEAD_ACTUAL=${ACTUAL_HEAD}"
+          if [ "${ACTUAL_HEAD}" != "${EXPECTED_HEAD}" ]; then
+            echo "S3C_TRUSTED_SOURCE_HEAD_MISMATCH"
+            exit 1
+          fi
+          if [ "${SOURCE_BRANCH}" != "main" ]; then
+            echo "S3C_TRUSTED_SOURCE_BRANCH_NOT_DEFAULT"
+            exit 1
+          fi
+          echo "S3C_TRUSTED_SOURCE_BINDING=PASS"
+
+      # The gate's own bytes are checked against the constant approved on the default branch BEFORE
+      # the gate runs, and no step is interposed between this check and the run.
+      - name: Verify the trusted gate source against the default-branch approved digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_GATE_SHA256="$(sha256sum "${TRUSTED_GATE_PATH}" | cut -d' ' -f1)"
+          echo "S3C_TRUSTED_GATE_SHA256_ACTUAL=${ACTUAL_GATE_SHA256}"
+          if [ "${ACTUAL_GATE_SHA256}" != "${APPROVED_S3C_TRUSTED_GATE_SHA256}" ]; then
+            echo "S3C_TRUSTED_GATE_DIGEST_NOT_APPROVED"
+            exit 1
+          fi
+          echo "S3C_TRUSTED_GATE_DIGEST=PASS"
+
+      # The qualification source bundle inventory is built HERE, inside the trust boundary, from the
+      # GIT OBJECT STORE at the proven source head.  Committed bytes are used rather than
+      # working-tree bytes because checkout line-ending rewriting would make working-tree digests
+      # platform-dependent.  The gate then validates this inventory exhaustively and recomputes the
+      # bundle digest from it; the APPROVED constant lives only on this trusted surface.
+      - name: Build the qualification source bundle inventory from the git object store
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/trusted"
+          python3 - "${RUNNER_TEMP}/trusted/source_bundle_inventory.json" <<'PYTHON_BUNDLE_INVENTORY'
+          import hashlib
+          import json
+          import subprocess
+          import sys
+
+          PATHS = (
+              ".github/workflows/crypto_core_mt4_s3c_static_worker_qualification.yml",
+              "scripts/crypto_core/qualification/s3c/mt4_s3c_blst_capability.c",
+              "scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py",
+              "scripts/crypto_core/qualification/s3c/mt4_s3c_elf_qualify.py",
+              "scripts/crypto_core/qualification/s3c/mt4_s3c_observation_adjudicator.py",
+              "scripts/crypto_core/qualification/s3c/mt4_s3c_observation_parser.py",
+              "scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c",
+              "scripts/crypto_core/qualification/s3c/mt4_s3c_protocol_qualifier.py",
+              "scripts/crypto_core/qualification/s3c/mt4_s3c_receipt_generator.py",
+              "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c",
+              "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c",
+              "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_qualifier.py",
+              "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_bootstrap.c",
+              "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_start.S",
+              "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_verify.c",
+              "tests/crypto_core/fixtures/mt4_s3c_test_only_positive_vector_v1.json",
+          )
+
+          entries = []
+          for path in PATHS:
+              listing = subprocess.run(
+                  ["git", "ls-tree", "HEAD", "--", path], check=True, capture_output=True, text=True
+              ).stdout.strip()
+              if not listing:
+                  raise SystemExit("S3C_SOURCE_BUNDLE_PATH_MISSING:" + path)
+              meta, _tab, listed_path = listing.partition("\t")
+              mode, kind, object_id = meta.split()
+              if listed_path != path:
+                  raise SystemExit("S3C_SOURCE_BUNDLE_PATH_MISMATCH:" + path)
+              committed = subprocess.run(
+                  ["git", "cat-file", "blob", object_id], check=True, capture_output=True
+              ).stdout
+              entries.append(
+                  {
+                      "path": path,
+                      "mode": mode,
+                      "type": kind,
+                      "sha256": hashlib.sha256(committed).hexdigest(),
+                  }
+              )
+          entries.sort(key=lambda entry: entry["path"])
+          with open(sys.argv[1], "w", encoding="ascii") as handle:
+              json.dump({"entries": entries}, handle, sort_keys=True, separators=(",", ":"))
+          PYTHON_BUNDLE_INVENTORY
+          echo "S3C_SOURCE_BUNDLE_INVENTORY=PASS"
+
+      - name: Setup the trusted Python interpreter
+        id: setup-python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Fresh-download the compile dependency inventory from the source run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
+        with:
+          name: mt4-s3c-compile-dependency-inventory
+          path: ${{ runner.temp }}/trusted/dependency
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      # THE FROZEN ISOLATED INVOCATION (V9 SECTION 26.2).  An ABSOLUTE interpreter path captured from
+      # the pinned setup action's recorded output -- a bare `python` or `python3` token is FORBIDDEN
+      # because PATH resolution is an uncontrolled lookup.  -I is isolated mode.  -S prevents site,
+      # and therefore prevents sitecustomize and usercustomize from executing at all.  The gate path
+      # is ABSOLUTE, formed from the workspace root plus the exact committed relative path; a
+      # relative path resolved against the process working directory is FORBIDDEN.  The environment
+      # passed to this step is exactly the sanitized allowlist below and nothing else, and the gate
+      # re-proves all of that about itself before it touches any untrusted byte.
+      - name: Run the trusted Stage-C attestation gate under the frozen isolated invocation
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TRUSTED_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          env -i \
+            GITHUB_TOKEN="${GITHUB_TOKEN}" \
+            GITHUB_API_URL="${GITHUB_API_URL}" \
+            GITHUB_REPOSITORY="${GITHUB_REPOSITORY}" \
+            GITHUB_RUN_ID="${GITHUB_RUN_ID}" \
+            "${TRUSTED_PYTHON}" -I -S "${GITHUB_WORKSPACE}/${TRUSTED_GATE_PATH}" \
+              --workspace-root "${GITHUB_WORKSPACE}" \
+              --trusted-entrypoint "${APPROVED_S3C_TRUSTED_GATE_SHA256}:${GITHUB_WORKSPACE}/${TRUSTED_GATE_PATH}" \
+              --work-dir "${RUNNER_TEMP}/trusted" \
+              --api-url "${GITHUB_API_URL}" \
+              --repository "${GITHUB_REPOSITORY}" \
+              --source-run-id "${SOURCE_RUN_ID}" \
+              --expected-head-sha "${SOURCE_HEAD_SHA}" \
+              --expected-workflow-path "${QUALIFICATION_WORKFLOW_PATH}" \
+              --expected-workflow-name "${QUALIFICATION_WORKFLOW_NAME}" \
+              --approved-qualification-workflow-sha256 "${APPROVED_S3C_QUALIFICATION_WORKFLOW_SHA256}" \
+              --approved-source-bundle-sha256 "${APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256}" \
+              --source-bundle-inventory "${RUNNER_TEMP}/trusted/source_bundle_inventory.json" \
+              --compile-dependency-inventory "${RUNNER_TEMP}/trusted/dependency/compile_dependency_inventory.json" \
+              --default-branch main \
+              --out "${RUNNER_TEMP}/trusted/mt4_s3c_trusted_predicate.json"
+          echo "S3C_TRUSTED_GATE_RESULT=PASS"
+
+      # The predicate is EVIDENCE, not authority.  No attestation, no signing, no governed worker
+      # row and no admission decision happens in this workflow, and none may be added to it without
+      # a separately authorized and separately audited architecture slice.
+      - name: Report the trusted Stage-C predicate as evidence only
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "MT4_S3C_TRUSTED_PREDICATE=ADMISSION_EVIDENCE_ONLY"
+          echo "MT4_S3C_GOVERNED_WORKER_ROW_CREATED=false"
+          echo "MT4_S3C_READINESS_TRANSITION=NONE"
+          echo "MT4_S3C_CONNECTOR_TRANSITION=NONE"
+          echo "MT4_S3C_MACHINE_TIME_AUTHORITY=NONE"
+          echo "MT4_S3C_STAGE4_AUTHORITY=NONE"

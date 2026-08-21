@@ -1,0 +1,394 @@
+name: crypto_core mt4-s3c static worker qualification
+
+# MT4-S3C P0 QUALIFICATION INFRASTRUCTURE ONLY.  Linux x86_64.
+#
+# ARCHITECTURE: MT4-S3C-P0-STATIC-WORKER-QUALIFICATION-INFRA-V9.  This file is BUNDLE ENTRY 1 of the
+# exact 16-entry qualification source bundle, and its committed bytes are digested into
+# APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256.
+#
+# WHAT A PASS MEANS, AND NOTHING MORE: a specific candidate binary, identified by digest, behaved as
+# the governed contract requires, under a governed containment policy, inside a governed pipeline, in
+# one authenticated workflow run.  It is not permission to do anything with that binary.  This
+# workflow grants no MachineTimeAnchor, no MT-5, no MT-6, no Stage-4 completion, no readiness or
+# connector transition, no live or shadow execution, no orders, no capital mutation, no scheduler and
+# no product-native loading.
+#
+# THIS WORKFLOW IS ENTIRELY UNPRIVILEGED.  It holds no id-token and no attestations capability, not
+# at workflow scope and not on any job.  Attestation happens only in
+# crypto_core_mt4_s3c_trusted_attestation.yml, which is anchored to the default branch through
+# workflow_run and therefore cannot be defined or altered by an open pull request.
+#
+# WHY workflow_dispatch ONLY.  The trusted Stage-C gate accepts a source run only when its event is
+# workflow_dispatch on the default branch, exactly as the merged S3B trusted workflow already
+# requires.  A pull-request-triggered qualification run could therefore never be attested, so it
+# would produce evidence that is structurally unattestable.  Consequence, and it is intentional:
+# while the pull request that introduces this file is open, this workflow DOES NOT RUN, and its
+# first execution can only happen after merge when a maintainer dispatches it on the default branch.
+#
+# WORKFLOW COMMAND GRAMMAR (V9 SECTION 28.3 leg A).  Every qualification command below is a LITERAL
+# command with LITERAL arguments.  There is NO command substitution, NO backtick, NO eval, NO
+# sourcing, NO glob, NO inline interpreter code, NO dynamically constructed path and NO repo-local
+# `uses: ./...` action anywhere in this file.  Values are moved between steps only by bundled
+# scripts writing NAME=value lines into the step environment file.  The ONLY shell variable
+# references permitted are the frozen, enumerated non-repository variables in
+# S3C_ALLOWED_SHELL_VARIABLES; none of them can name a repository file, and every
+# repository-relative path token in this file is a literal string that matches a bundle entry
+# exactly.  A permanent test enforces every clause of this paragraph against this file.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Pinned action identities.  Full immutable commit SHAs only: a moving tag would let the
+  # supply-chain identity of a qualified build change without any repository commit.
+  ACTIONS_CHECKOUT_COMMIT: 11d5960a326750d5838078e36cf38b85af677262
+  ACTIONS_SETUP_PYTHON_COMMIT: a26af69be951a213d495a4c3e4e4022e16d87065
+  ACTIONS_UPLOAD_ARTIFACT_COMMIT: 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+  ACTIONS_DOWNLOAD_ARTIFACT_COMMIT: 3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+
+  # Pinned upstream identity, identical to the governing S3B verifier profile.
+  BLST_REPOSITORY: https://github.com/supranational/blst
+  BLST_RELEASE: v0.3.17
+  BLST_COMMIT: 54e6e55674722fc2797ebb4bbb71b26d881eb4b8
+
+  # EM-11: the literal, non-candidate-derived expected program-header inventory.  The identical
+  # literal is pinned again on the trusted Stage-C surface, and the ELF qualifier holds a third copy
+  # in reviewed source.  The candidate's own headers are compared AGAINST these and can only fail.
+  S3C_EXPECTED_PHDR_INVENTORY: "PT_LOAD:5,PT_LOAD:6,PT_GNU_STACK:6"
+
+  # The exact enumerated shell variables any qualification command may reference.  None of them can
+  # name a repository file.  Adding one requires an architecture revision, not a workflow edit.
+  S3C_ALLOWED_SHELL_VARIABLES: "RUNNER_TEMP GITHUB_WORKSPACE GITHUB_ENV GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA EXPECTED_HEAD BLST_COMMIT BLST_REPOSITORY S3C_EXPECTED_PHDR_INVENTORY S3C_CANDIDATE_NAME S3C_WORKER_SHA256 S3C_WORKER_BYTES S3C_DEPENDENCY_DIGEST S3C_POLICY_INTERNAL_ID S3C_POLICY_INTERNAL_SHA256 S3C_POLICY_INTERNAL_COUNT S3C_POLICY_INTERNAL_CBPF S3C_POLICY_OUTER_DIGEST S3C_CASE_SET_DIGEST CANDIDATE_ARTIFACT_ID CANDIDATE_ARTIFACT_DIGEST"
+
+  S3C_CANDIDATE_NAME: mt4_s3c_static_worker
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  # ===============================================================================================
+  # STAGE A -- BUILD.  Produces the IMMUTABLE candidate artifact and stops.  No qualification
+  # judgement is made here: the artifact is the immutability boundary, and every later stage
+  # FRESH-DOWNLOADS exactly those bytes rather than reading a mutable build workspace.
+  # ===============================================================================================
+  s3c-build-candidate:
+    name: s3c-build-candidate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    outputs:
+      candidate-artifact-id: ${{ steps.upload-candidate.outputs.artifact-id }}
+      candidate-artifact-digest: ${{ steps.upload-candidate.outputs.artifact-digest }}
+    steps:
+      - name: Checkout crypto_core at the exact qualification head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Prove the checked-out worktree is the exact qualification head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > "$RUNNER_TEMP/actual_head.txt"
+          echo "$EXPECTED_HEAD" > "$RUNNER_TEMP/expected_head.txt"
+          diff -q "$RUNNER_TEMP/actual_head.txt" "$RUNNER_TEMP/expected_head.txt"
+          echo "S3C_SOURCE_HEAD_BINDING=PASS"
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Checkout pinned blst at the governed commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init "$RUNNER_TEMP/blst"
+          git -C "$RUNNER_TEMP/blst" remote add origin "$BLST_REPOSITORY"
+          git -C "$RUNNER_TEMP/blst" fetch --depth 1 origin "$BLST_COMMIT"
+          git -C "$RUNNER_TEMP/blst" checkout --detach FETCH_HEAD
+          git -C "$RUNNER_TEMP/blst" rev-parse HEAD > "$RUNNER_TEMP/blst_head.txt"
+          echo "$BLST_COMMIT" > "$RUNNER_TEMP/blst_expected.txt"
+          diff -q "$RUNNER_TEMP/blst_head.txt" "$RUNNER_TEMP/blst_expected.txt"
+          echo "S3C_BLST_PIN_BINDING=PASS"
+
+      # Both macros are mandatory (V9 SECTION 30 point 1).  __BLST_NO_CPUID__ removes the only
+      # upstream definition of __blst_platform_cap while the pinned assembly still reads it, so a
+      # missing project definition is a LINK ERROR rather than a silent fallback to runtime CPUID.
+      - name: Build pinned blst without runtime capability discovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/obj"
+          gcc -c -O2 -fno-pic -fno-builtin -fno-asynchronous-unwind-tables -fcf-protection=none -D__BLST_PORTABLE__ -D__BLST_NO_CPUID__ -I "$RUNNER_TEMP/blst/src" -I "$RUNNER_TEMP/blst/build" -I "$RUNNER_TEMP/blst/bindings" -o "$RUNNER_TEMP/obj/blst_server.o" "$RUNNER_TEMP/blst/src/server.c"
+          gcc -c -O2 -fno-pic -fno-asynchronous-unwind-tables -fcf-protection=none -o "$RUNNER_TEMP/obj/blst_assembly.o" "$RUNNER_TEMP/blst/build/assembly.S"
+          objcopy --remove-section=.note.gnu.property "$RUNNER_TEMP/obj/blst_server.o"
+          objcopy --remove-section=.note.gnu.property "$RUNNER_TEMP/obj/blst_assembly.o"
+          echo "S3C_BLST_BUILD=PASS"
+
+      # Compiler dependency evidence is emitted here by the COMPILER itself, never by a repository
+      # script that could be rewritten to lie about itself (V9 SECTION 28.7 leg E).
+      - name: Compile the freestanding worker translation units with dependency evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/dep"
+          gcc -c -O2 -std=c11 -ffreestanding -fno-pic -fno-builtin -fno-stack-protector -fno-asynchronous-unwind-tables -fcf-protection=none -Wall -Wextra -Werror -MD -MF "$RUNNER_TEMP/dep/bootstrap.d" -o "$RUNNER_TEMP/obj/bootstrap.o" scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_bootstrap.c
+          gcc -c -O2 -std=c11 -ffreestanding -fno-pic -fno-builtin -fno-stack-protector -fno-asynchronous-unwind-tables -fcf-protection=none -Wall -Wextra -Werror -MD -MF "$RUNNER_TEMP/dep/policy.d" -o "$RUNNER_TEMP/obj/policy.o" scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c
+          gcc -c -O2 -std=c11 -ffreestanding -fno-pic -fno-builtin -fno-stack-protector -fno-asynchronous-unwind-tables -fcf-protection=none -Wall -Wextra -Werror -MD -MF "$RUNNER_TEMP/dep/capability.d" -o "$RUNNER_TEMP/obj/capability.o" scripts/crypto_core/qualification/s3c/mt4_s3c_blst_capability.c
+          gcc -c -O2 -std=c11 -ffreestanding -fno-pic -fno-builtin -fno-stack-protector -fno-asynchronous-unwind-tables -fcf-protection=none -Wall -Wextra -Werror -I "$RUNNER_TEMP/blst/bindings" -MD -MF "$RUNNER_TEMP/dep/verify.d" -o "$RUNNER_TEMP/obj/verify.o" scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_verify.c
+          gcc -c -MD -MF "$RUNNER_TEMP/dep/start.d" -o "$RUNNER_TEMP/obj/start.o" scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_start.S
+          echo "S3C_WORKER_COMPILE=PASS"
+
+      # The frozen link policy: static, non-PIE ET_EXEC, no CRT, no dynamic surface, no runtime
+      # relocation, no build id, non-executable stack, and a hard failure on any undefined symbol.
+      - name: Link the static freestanding candidate worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcc -static -no-pie -nostdlib -nostartfiles -Wl,-e,_start -Wl,--build-id=none -Wl,-z,noexecstack -Wl,-z,noseparate-code -Wl,--no-eh-frame-hdr -Wl,-z,defs -Wl,--fatal-warnings -o "$RUNNER_TEMP/$S3C_CANDIDATE_NAME" "$RUNNER_TEMP/obj/start.o" "$RUNNER_TEMP/obj/bootstrap.o" "$RUNNER_TEMP/obj/verify.o" "$RUNNER_TEMP/obj/policy.o" "$RUNNER_TEMP/obj/capability.o" "$RUNNER_TEMP/obj/blst_server.o" "$RUNNER_TEMP/obj/blst_assembly.o"
+          echo "S3C_WORKER_LINK=PASS"
+
+      - name: Emit the build manifest and the compile dependency inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/candidate"
+          cp "$RUNNER_TEMP/$S3C_CANDIDATE_NAME" "$RUNNER_TEMP/candidate/$S3C_CANDIDATE_NAME"
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --worker-binary "$RUNNER_TEMP/candidate/$S3C_CANDIDATE_NAME" --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --dependency-file "$RUNNER_TEMP/dep/bootstrap.d" --dependency-file "$RUNNER_TEMP/dep/policy.d" --dependency-file "$RUNNER_TEMP/dep/capability.d" --dependency-file "$RUNNER_TEMP/dep/verify.d" --dependency-file "$RUNNER_TEMP/dep/start.d" --include-root "$RUNNER_TEMP/blst" --include-root "$GITHUB_WORKSPACE/scripts/crypto_core/qualification/s3c" --build-macro __BLST_PORTABLE__ --build-macro __BLST_NO_CPUID__ --compiler-identity gcc-ubuntu-22.04 --linker-identity ld-ubuntu-22.04 --source-run-id "$GITHUB_RUN_ID" --source-run-attempt "$GITHUB_RUN_ATTEMPT" --source-head-sha "$GITHUB_SHA" --inventory-out "$RUNNER_TEMP/compile_dependency_inventory.json" --out "$RUNNER_TEMP/candidate/mt4_s3c_build_manifest.json"
+          echo "S3C_BUILD_MANIFEST=PASS"
+
+      - name: Upload the immutable candidate artifact
+        id: upload-candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: mt4-s3c-candidate-linux-x86_64
+          path: ${{ runner.temp }}/candidate
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload the compile dependency inventory for the trusted gate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: mt4-s3c-compile-dependency-inventory
+          path: ${{ runner.temp }}/compile_dependency_inventory.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # ===============================================================================================
+  # STAGE B0 -- STATIC ELF QUALIFICATION.  A pure static parse with ZERO EXECUTION of the candidate.
+  # ===============================================================================================
+  s3c-elf-qualify:
+    name: s3c-elf-qualify
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    needs: s3c-build-candidate
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout crypto_core at the exact qualification head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Fresh-download the candidate artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
+        with:
+          name: mt4-s3c-candidate-linux-x86_64
+          path: ${{ runner.temp }}/candidate
+
+      - name: Export the governed candidate identity from the committed manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --emit-env-from-manifest "$RUNNER_TEMP/candidate/mt4_s3c_build_manifest.json" --emit-env "$GITHUB_ENV"
+
+      - name: Qualify the candidate ELF image
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/elf"
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_elf_qualify.py --candidate "$RUNNER_TEMP/candidate/$S3C_CANDIDATE_NAME" --expected-phdr-inventory "$S3C_EXPECTED_PHDR_INVENTORY" --compile-dependency-inventory-digest "$S3C_DEPENDENCY_DIGEST" --out "$RUNNER_TEMP/elf/mt4_s3c_elf_qualification_record.json"
+          echo "S3C_ELF_QUALIFICATION=PASS"
+
+      - name: Upload the ELF qualification record
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: mt4-s3c-elf-qualification-record
+          path: ${{ runner.temp }}/elf
+          if-no-files-found: error
+          retention-days: 7
+
+  # ===============================================================================================
+  # STAGE B1 -- OBSERVATION.  The ONLY stage that executes candidate bytes, and it does so under the
+  # outer containment policy with the trusted observer built from reviewed, bundle-digested source in
+  # this same job.  permissions: {} -- the candidate never runs anywhere that holds a credential.
+  # ===============================================================================================
+  s3c-observe:
+    name: s3c-observe
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    needs: s3c-build-candidate
+    permissions: {}
+    steps:
+      - name: Checkout crypto_core at the exact qualification head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Fresh-download the candidate artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
+        with:
+          name: mt4-s3c-candidate-linux-x86_64
+          path: ${{ runner.temp }}/candidate
+
+      - name: Build the canonical policy probe and the trusted observer from reviewed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/obj"
+          gcc -c -O2 -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/obj/policy.o" scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c
+          gcc -c -O2 -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/obj/probe.o" scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c
+          gcc -O2 -o "$RUNNER_TEMP/mt4_s3c_policy_probe" "$RUNNER_TEMP/obj/probe.o" "$RUNNER_TEMP/obj/policy.o"
+          gcc -c -O2 -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror -o "$RUNNER_TEMP/obj/launcher.o" scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c
+          gcc -O2 -o "$RUNNER_TEMP/mt4_s3c_observer" "$RUNNER_TEMP/obj/launcher.o" "$RUNNER_TEMP/obj/policy.o" -lcap
+          echo "S3C_OBSERVER_BUILD=PASS"
+
+      - name: Derive the canonical policy record independently of the candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/mt4_s3c_policy_probe" > "$RUNNER_TEMP/policy_probe.json"
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_qualifier.py --probe-json "$RUNNER_TEMP/policy_probe.json" --out "$RUNNER_TEMP/policy_record.json" --emit-env "$GITHUB_ENV"
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --emit-env-from-manifest "$RUNNER_TEMP/candidate/mt4_s3c_build_manifest.json" --emit-env "$GITHUB_ENV"
+
+      - name: Build the deterministic case plan from the governed TEST-ONLY fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_protocol_qualifier.py --fixture tests/crypto_core/fixtures/mt4_s3c_test_only_positive_vector_v1.json --plan-out "$RUNNER_TEMP/case_plan.bin" --record-out "$RUNNER_TEMP/protocol_record.json"
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_observation_adjudicator.py --emit-case-set-digest "$GITHUB_ENV"
+
+      - name: Observe the candidate under outer containment across the governed case set
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/observation"
+          "$RUNNER_TEMP/mt4_s3c_observer" --candidate "$RUNNER_TEMP/candidate/$S3C_CANDIDATE_NAME" --candidate-sha256 "$S3C_WORKER_SHA256" --candidate-size "$S3C_WORKER_BYTES" --case-plan "$RUNNER_TEMP/case_plan.bin" --canonical-internal-policy-id "$S3C_POLICY_INTERNAL_ID" --canonical-internal-policy-sha256 "$S3C_POLICY_INTERNAL_SHA256" --canonical-internal-cbpf-count "$S3C_POLICY_INTERNAL_COUNT" --canonical-internal-cbpf-sha256 "$S3C_POLICY_INTERNAL_CBPF" --outer-containment-policy-digest "$S3C_POLICY_OUTER_DIGEST" --observation-case-set-digest "$S3C_CASE_SET_DIGEST" --source-run-id "$GITHUB_RUN_ID" --source-run-attempt "$GITHUB_RUN_ATTEMPT" --source-head-sha "$GITHUB_SHA" --out "$RUNNER_TEMP/observation/mt4_s3c_raw_observation_record.json"
+          echo "S3C_OBSERVATION=PASS"
+
+      - name: Upload the raw observation record
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: mt4-s3c-raw-observation-record
+          path: ${{ runner.temp }}/observation
+          if-no-files-found: error
+          retention-days: 7
+
+  # ===============================================================================================
+  # STAGE B2 -- ADJUDICATION AND RECEIPT.  A different job on a different ephemeral runner that
+  # NEVER executes candidate bytes.  That is what makes the receipt something the candidate cannot
+  # write, and it is why the receipt is EVIDENCE rather than a claim by the thing being measured.
+  # ===============================================================================================
+  s3c-adjudicate:
+    name: s3c-adjudicate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    needs:
+      - s3c-build-candidate
+      - s3c-elf-qualify
+      - s3c-observe
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout crypto_core at the exact qualification head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Fresh-download the candidate artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
+        with:
+          name: mt4-s3c-candidate-linux-x86_64
+          path: ${{ runner.temp }}/candidate
+
+      - name: Fresh-download the ELF qualification record
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
+        with:
+          name: mt4-s3c-elf-qualification-record
+          path: ${{ runner.temp }}/elf
+
+      - name: Fresh-download the raw observation record
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
+        with:
+          name: mt4-s3c-raw-observation-record
+          path: ${{ runner.temp }}/observation
+
+      - name: Rebuild the canonical policy record independently in this job
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/obj"
+          gcc -c -O2 -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/obj/policy.o" scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c
+          gcc -c -O2 -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/obj/probe.o" scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c
+          gcc -O2 -o "$RUNNER_TEMP/mt4_s3c_policy_probe" "$RUNNER_TEMP/obj/probe.o" "$RUNNER_TEMP/obj/policy.o"
+          "$RUNNER_TEMP/mt4_s3c_policy_probe" > "$RUNNER_TEMP/policy_probe.json"
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_qualifier.py --probe-json "$RUNNER_TEMP/policy_probe.json" --out "$RUNNER_TEMP/policy_record.json"
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_protocol_qualifier.py --fixture tests/crypto_core/fixtures/mt4_s3c_test_only_positive_vector_v1.json --plan-out "$RUNNER_TEMP/case_plan.bin" --record-out "$RUNNER_TEMP/protocol_record.json"
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --emit-env-from-manifest "$RUNNER_TEMP/candidate/mt4_s3c_build_manifest.json" --emit-env "$GITHUB_ENV"
+
+      - name: Normalise the raw observation record
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_observation_parser.py --observation "$RUNNER_TEMP/observation/mt4_s3c_raw_observation_record.json" --out "$RUNNER_TEMP/normalised_observation.json"
+          echo "S3C_OBSERVATION_PARSE=PASS"
+
+      - name: Adjudicate the governed observation case set
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_observation_adjudicator.py --normalised-observation "$RUNNER_TEMP/normalised_observation.json" --policy-record "$RUNNER_TEMP/policy_record.json" --elf-record "$RUNNER_TEMP/elf/mt4_s3c_elf_qualification_record.json" --source-run-id "$GITHUB_RUN_ID" --source-run-attempt "$GITHUB_RUN_ATTEMPT" --source-head-sha "$GITHUB_SHA" --candidate-sha256 "$S3C_WORKER_SHA256" --out "$RUNNER_TEMP/adjudication.json"
+          echo "S3C_ADJUDICATION=PASS"
+
+      - name: Generate the qualification receipt
+        shell: bash
+        env:
+          CANDIDATE_ARTIFACT_ID: ${{ needs.s3c-build-candidate.outputs.candidate-artifact-id }}
+          CANDIDATE_ARTIFACT_DIGEST: ${{ needs.s3c-build-candidate.outputs.candidate-artifact-digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/receipt"
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_receipt_generator.py --manifest "$RUNNER_TEMP/candidate/mt4_s3c_build_manifest.json" --elf-record "$RUNNER_TEMP/elf/mt4_s3c_elf_qualification_record.json" --policy-record "$RUNNER_TEMP/policy_record.json" --protocol-record "$RUNNER_TEMP/protocol_record.json" --adjudication "$RUNNER_TEMP/adjudication.json" --source-run-id "$GITHUB_RUN_ID" --source-run-attempt "$GITHUB_RUN_ATTEMPT" --source-head-sha "$GITHUB_SHA" --candidate-sha256 "$S3C_WORKER_SHA256" --candidate-artifact-id "$CANDIDATE_ARTIFACT_ID" --candidate-artifact-archive-digest "$CANDIDATE_ARTIFACT_DIGEST" --out "$RUNNER_TEMP/receipt/mt4_s3c_qualification_receipt.json"
+          echo "S3C_RECEIPT=PASS"
+
+      - name: Upload the qualification receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: mt4-s3c-qualification-receipt
+          path: ${{ runner.temp }}/receipt
+          if-no-files-found: error
+          retention-days: 7
