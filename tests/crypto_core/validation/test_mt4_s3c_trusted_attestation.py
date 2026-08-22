@@ -581,8 +581,8 @@ def stage_c_equivalence_recomputation():
 def startup_attestation_state():
     assert sys.flags.isolated == 1
     assert sys.flags.no_site == 1
-    assert gate.ORIGIN_TRUSTED_ENTRYPOINT in gate.ALLOWED_ORIGIN_CLASSES
-    assert len(gate._TRUSTED_ENTRYPOINTS) == 2
+    assert gate.ORIGIN_DECLARED_ENTRYPOINT in gate.ALLOWED_ORIGIN_CLASSES
+    assert len(gate._DECLARED_ENTRYPOINTS) == 2
     for entry in sys.path:
         assert not entry.replace(chr(92), "/").startswith(gate._WORKSPACE_ROOT)
 

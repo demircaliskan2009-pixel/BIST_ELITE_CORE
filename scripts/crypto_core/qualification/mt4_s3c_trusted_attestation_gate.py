@@ -41,10 +41,10 @@ import sys
 # Only `sys` is bound at this point.  Nothing below this block may move above it.
 # =================================================================================================
 
-TRUSTED_PYTHON_INVOCATION_VIOLATION = "TRUSTED_PYTHON_INVOCATION_VIOLATION"
-TRUSTED_PYTHON_PATH_VIOLATION = "TRUSTED_PYTHON_PATH_VIOLATION"
-TRUSTED_PYTHON_ORIGIN_VIOLATION = "TRUSTED_PYTHON_ORIGIN_VIOLATION"
-TRUSTED_PYTHON_ENVIRONMENT_VIOLATION = "TRUSTED_PYTHON_ENVIRONMENT_VIOLATION"
+MARKER_PYTHON_INVOCATION_VIOLATION = "TRUSTED_PYTHON_INVOCATION_VIOLATION"
+MARKER_PYTHON_PATH_VIOLATION = "TRUSTED_PYTHON_PATH_VIOLATION"
+MARKER_PYTHON_ORIGIN_VIOLATION = "TRUSTED_PYTHON_ORIGIN_VIOLATION"
+MARKER_PYTHON_ENVIRONMENT_VIOLATION = "TRUSTED_PYTHON_ENVIRONMENT_VIOLATION"
 
 ORIGIN_BUILTIN = "BUILTIN"
 ORIGIN_FROZEN = "FROZEN"
@@ -68,14 +68,14 @@ ORIGIN_STDLIB_EXTENSION = "STDLIB_EXTENSION"
 # the class, because it cannot make the trusted surface name it and cannot make its bytes hash to a
 # digest the trusted surface already pinned.  A permanent test asserts the production workflow
 # declares EXACTLY ONE entrypoint and that it is the gate path with the approved constant.
-ORIGIN_TRUSTED_ENTRYPOINT = "TRUSTED_ENTRYPOINT"
+ORIGIN_DECLARED_ENTRYPOINT = "TRUSTED_ENTRYPOINT"
 
 ALLOWED_ORIGIN_CLASSES = (
     ORIGIN_BUILTIN,
     ORIGIN_FROZEN,
     ORIGIN_STDLIB_SOURCE,
     ORIGIN_STDLIB_EXTENSION,
-    ORIGIN_TRUSTED_ENTRYPOINT,
+    ORIGIN_DECLARED_ENTRYPOINT,
 )
 
 
@@ -143,7 +143,7 @@ def _argument_values(name):
     return values
 
 
-def _resolve_trusted_entrypoints():
+def _resolve_declared_entrypoints():
     """Verify every declared entrypoint against the digest the trusted surface supplied.
 
     Each declaration has the frozen shape <64 lowercase hex>:<absolute path>.  The digest prefix is
@@ -156,27 +156,27 @@ def _resolve_trusted_entrypoints():
     resolved = {}
     for declaration in _argument_values("--trusted-entrypoint"):
         if len(declaration) < 66 or declaration[64] != ":":
-            _attestation_failure(TRUSTED_PYTHON_INVOCATION_VIOLATION, "malformed entrypoint declaration")
+            _attestation_failure(MARKER_PYTHON_INVOCATION_VIOLATION, "malformed entrypoint declaration")
         declared_digest = declaration[:64]
         declared_path = _normalise_path(declaration[65:])
         if any(character not in "0123456789abcdef" for character in declared_digest):
-            _attestation_failure(TRUSTED_PYTHON_INVOCATION_VIOLATION, "malformed entrypoint digest")
+            _attestation_failure(MARKER_PYTHON_INVOCATION_VIOLATION, "malformed entrypoint digest")
         if not declared_path.startswith("/") and not (len(declared_path) > 2 and declared_path[1] == ":"):
-            _attestation_failure(TRUSTED_PYTHON_INVOCATION_VIOLATION, "entrypoint path must be absolute")
+            _attestation_failure(MARKER_PYTHON_INVOCATION_VIOLATION, "entrypoint path must be absolute")
         try:
             with open(declared_path, "rb") as handle:
                 body = handle.read(MAX_LOCAL_INPUT_BYTES + 1)
             if len(body) > MAX_LOCAL_INPUT_BYTES:
-                _attestation_failure(TRUSTED_PYTHON_INVOCATION_VIOLATION, "entrypoint exceeds the governed bound")
+                _attestation_failure(MARKER_PYTHON_INVOCATION_VIOLATION, "entrypoint exceeds the governed bound")
             actual_digest = hashlib.sha256(body).hexdigest()
         except OSError:
-            _attestation_failure(TRUSTED_PYTHON_INVOCATION_VIOLATION, "entrypoint is unreadable")
+            _attestation_failure(MARKER_PYTHON_INVOCATION_VIOLATION, "entrypoint is unreadable")
             return {}
         if actual_digest != declared_digest:
-            _attestation_failure(TRUSTED_PYTHON_INVOCATION_VIOLATION, "entrypoint digest mismatch")
+            _attestation_failure(MARKER_PYTHON_INVOCATION_VIOLATION, "entrypoint digest mismatch")
         resolved[declared_path] = declared_digest
     if not resolved:
-        _attestation_failure(TRUSTED_PYTHON_INVOCATION_VIOLATION, "--trusted-entrypoint is required")
+        _attestation_failure(MARKER_PYTHON_INVOCATION_VIOLATION, "--trusted-entrypoint is required")
     return resolved
 
 
@@ -184,9 +184,9 @@ def _startup_attestation_first_pass():
     # S-1.  This is the check that makes a plain `python gate.py` invocation fail the contract even
     # if the workflow text were changed: the flags are a REQUEST, and this is the PROOF.
     if int(getattr(sys.flags, "isolated", 0)) != 1:
-        _attestation_failure(TRUSTED_PYTHON_INVOCATION_VIOLATION, "isolated mode is not active")
+        _attestation_failure(MARKER_PYTHON_INVOCATION_VIOLATION, "isolated mode is not active")
     if int(getattr(sys.flags, "no_site", 0)) != 1:
-        _attestation_failure(TRUSTED_PYTHON_INVOCATION_VIOLATION, "site import is not disabled")
+        _attestation_failure(MARKER_PYTHON_INVOCATION_VIOLATION, "site import is not disabled")
 
     # S-2.  APPROVED_STDLIB_ROOTS are derived FROM THE INTERPRETER ITSELF, never from the
     # environment: deriving them from an environment variable would reintroduce exactly the
@@ -195,7 +195,7 @@ def _startup_attestation_first_pass():
     for prefix in (sys.base_prefix, sys.base_exec_prefix):
         normalised = _normalise_path(prefix)
         if not normalised:
-            _attestation_failure(TRUSTED_PYTHON_ORIGIN_VIOLATION, "interpreter reported no base prefix")
+            _attestation_failure(MARKER_PYTHON_ORIGIN_VIOLATION, "interpreter reported no base prefix")
         if normalised not in roots:
             roots.append(normalised)
 
@@ -207,20 +207,20 @@ def _startup_attestation_first_pass():
     workspace = _normalise_path(_argument_value("--workspace-root") or "")
     scratch = _normalise_path(_argument_value("--work-dir") or "")
     if not workspace:
-        _attestation_failure(TRUSTED_PYTHON_INVOCATION_VIOLATION, "--workspace-root is required")
+        _attestation_failure(MARKER_PYTHON_INVOCATION_VIOLATION, "--workspace-root is required")
     for entry in sys.path:
         normalised = _normalise_path(entry)
         if normalised in ("", "."):
-            _attestation_failure(TRUSTED_PYTHON_PATH_VIOLATION, "the working directory is on sys.path")
+            _attestation_failure(MARKER_PYTHON_PATH_VIOLATION, "the working directory is on sys.path")
         if _is_contained(normalised, workspace):
-            _attestation_failure(TRUSTED_PYTHON_PATH_VIOLATION, "a repository-controlled directory is on sys.path")
+            _attestation_failure(MARKER_PYTHON_PATH_VIOLATION, "a repository-controlled directory is on sys.path")
         if scratch and _is_contained(normalised, scratch):
-            _attestation_failure(TRUSTED_PYTHON_PATH_VIOLATION, "a scratch directory is on sys.path")
+            _attestation_failure(MARKER_PYTHON_PATH_VIOLATION, "a scratch directory is on sys.path")
 
     # The entrypoint set is resolved and DIGEST-VERIFIED before origin validation, because origin
     # validation needs it: the honest gate's own module is a repo-resident file, and it must be
     # admitted by exact digest-bound identity rather than by a blanket workspace exemption.
-    entrypoints = _resolve_trusted_entrypoints()
+    entrypoints = _resolve_declared_entrypoints()
 
     _validate_module_origins(roots, workspace, scratch, entrypoints)
     return roots, workspace, scratch, entrypoints
@@ -238,7 +238,7 @@ def _classify_origin(module, roots, entrypoints):
     if not location:
         return ORIGIN_BUILTIN, ""
     if location in entrypoints:
-        return ORIGIN_TRUSTED_ENTRYPOINT, location
+        return ORIGIN_DECLARED_ENTRYPOINT, location
     for root in roots:
         if _is_contained(location, root):
             if location.endswith(".so") or location.endswith(".pyd") or location.endswith(".dylib"):
@@ -262,26 +262,26 @@ def _validate_module_origins(roots, workspace, scratch, entrypoints):
             continue
         origin_class, location = _classify_origin(module, roots, entrypoints)
         if origin_class not in ALLOWED_ORIGIN_CLASSES:
-            _attestation_failure(TRUSTED_PYTHON_ORIGIN_VIOLATION, "a module resolves to a disallowed origin class")
-        if origin_class == ORIGIN_TRUSTED_ENTRYPOINT:
+            _attestation_failure(MARKER_PYTHON_ORIGIN_VIOLATION, "a module resolves to a disallowed origin class")
+        if origin_class == ORIGIN_DECLARED_ENTRYPOINT:
             # Already admitted by exact digest-bound identity.  The workspace and scratch checks
             # below deliberately do NOT apply to it: the honest gate is a repo-resident file, and
             # rejecting it for that reason alone would be a false positive rather than a control.
             continue
         if location and workspace and _is_contained(location, workspace):
             _attestation_failure(
-                TRUSTED_PYTHON_ORIGIN_VIOLATION,
+                MARKER_PYTHON_ORIGIN_VIOLATION,
                 "a module resolves under the repository workspace root",
             )
         if location and scratch and _is_contained(location, scratch):
-            _attestation_failure(TRUSTED_PYTHON_ORIGIN_VIOLATION, "a module resolves under the scratch directory")
+            _attestation_failure(MARKER_PYTHON_ORIGIN_VIOLATION, "a module resolves under the scratch directory")
 
 
 (
     _APPROVED_STDLIB_ROOTS,
     _WORKSPACE_ROOT,
     _SCRATCH_ROOT,
-    _TRUSTED_ENTRYPOINTS,
+    _DECLARED_ENTRYPOINTS,
 ) = _startup_attestation_first_pass()
 
 # =================================================================================================
@@ -313,7 +313,7 @@ def _environment_attestation():
     for name in sorted(os.environ):
         if name.startswith(FORBIDDEN_ENVIRONMENT_PREFIX):
             _attestation_failure(
-                TRUSTED_PYTHON_ENVIRONMENT_VIOLATION,
+                MARKER_PYTHON_ENVIRONMENT_VIOLATION,
                 "an environment variable carrying the forbidden prefix is present",
             )
 
@@ -333,8 +333,8 @@ DEPENDENCY_DIGEST_DOMAIN = b"mt4-s3c-compile-dependency-inventory.v1\x00"
 INTERNAL_EQUIVALENCE_SCHEMA = "mt4-s3c-internal-filter-equivalence.v1"
 INTERNAL_EQUIVALENCE_DIGEST_DOMAIN = b"mt4-s3c-internal-filter-equivalence.v1\x00"
 PROGRAM_REPRESENTATION_VERSION = "mt4-s3c-cbpf-canonical.v1"
-TRUSTED_PREDICATE_SCHEMA = "mt4-s3c-trusted-stage-c-predicate.v1"
-TRUSTED_PREDICATE_DIGEST_DOMAIN = b"mt4-s3c-trusted-stage-c-predicate.v1\x00"
+STAGE_C_PREDICATE_SCHEMA = "mt4-s3c-trusted-stage-c-predicate.v1"
+STAGE_C_PREDICATE_DIGEST_DOMAIN = b"mt4-s3c-trusted-stage-c-predicate.v1\x00"
 
 SOURCE_BUNDLE_PATHS = (
     ".github/workflows/crypto_core_mt4_s3c_static_worker_qualification.yml",
@@ -1267,7 +1267,7 @@ def run_gate(arguments):
         fail("ACTIVE_ROW_FORBIDDEN_IN_P0")
 
     predicate = {
-        "schema": TRUSTED_PREDICATE_SCHEMA,
+        "schema": STAGE_C_PREDICATE_SCHEMA,
         "platform_id": PLATFORM_ID,
         "repository": repository,
         "source_run_id": run_id,
@@ -1300,7 +1300,7 @@ def run_gate(arguments):
             "governed_worker_row_created": False,
         },
     }
-    predicate["trusted_predicate_digest_sha256"] = domain_digest(TRUSTED_PREDICATE_DIGEST_DOMAIN, predicate)
+    predicate["trusted_predicate_digest_sha256"] = domain_digest(STAGE_C_PREDICATE_DIGEST_DOMAIN, predicate)
     return predicate
 
 
@@ -1330,7 +1330,7 @@ def main(argv=None):
     # S-6: the attestation is REPEATED immediately before the first byte of untrusted content is
     # parsed, so a module imported lazily between startup and use is also covered.  Both runs must
     # pass; this is the second.
-    _validate_module_origins(_APPROVED_STDLIB_ROOTS, _WORKSPACE_ROOT, _SCRATCH_ROOT, _TRUSTED_ENTRYPOINTS)
+    _validate_module_origins(_APPROVED_STDLIB_ROOTS, _WORKSPACE_ROOT, _SCRATCH_ROOT, _DECLARED_ENTRYPOINTS)
     _environment_attestation()
 
     # Presence only.  The value itself is never bound here: it is read, used and discarded
