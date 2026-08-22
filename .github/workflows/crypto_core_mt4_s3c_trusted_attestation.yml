@@ -57,7 +57,7 @@ env:
   # change to the default branch updates the corresponding constant below.
   APPROVED_S3C_QUALIFICATION_WORKFLOW_SHA256: "82f00d038363316f6e2b77f3b44b584cd385bda054668e04882d5993f40d3003"
   APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256: "4f30dcaaed4f86ccf39954538cc38862edd6e012107abd42c52fae1315f545a4"
-  APPROVED_S3C_TRUSTED_GATE_SHA256: "184bd993aa48980b523b602252cc252c1426a76d061ed746116d6d7543f816c3"
+  APPROVED_S3C_TRUSTED_GATE_SHA256: "012eefd71d597eede7d6180616dabeeed397f693038e75c23a9ed9f17a41d961"
 
   # EM-11: the identical literal expected program-header inventory the reviewed ELF qualifier and
   # the qualification workflow both carry.  Pinned here so a THIRD non-candidate authority agrees.

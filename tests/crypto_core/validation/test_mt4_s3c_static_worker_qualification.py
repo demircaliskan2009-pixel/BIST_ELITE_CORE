@@ -345,13 +345,11 @@ def test_pt_124_an_identical_semantic_table_with_a_changed_program_changes_only_
     assert honest["governed_digest_sha256"] != tampered["governed_digest_sha256"]
 
 
-def test_pt_115_a_default_allow_action_changes_the_governed_digest(programs):
-    outer, internal = programs
+def test_pt_115_a_default_allow_action_changes_the_governed_digest():
     permissive = synthetic_constants(seccomp_ret_kill_process_u32=0x7FFF0000)
     with pytest.raises(policy_qualifier.SandboxPolicyError):
         # ALLOW and KILL_PROCESS collapsing to one value is not a policy, it is a contradiction.
         policy_qualifier._validate_constant_relations(permissive)
-    del outer, internal
 
 
 def test_pt_120_widening_an_argument_rule_changes_the_governed_digest(constants, programs):

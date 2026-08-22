@@ -837,7 +837,7 @@ def test_every_zip_rule_carries_a_distinct_failure_reason():
         assert reason in source, reason
 
 
-def test_the_archive_reader_is_never_given_an_unbounded_read(tmp_path):
+def test_the_archive_reader_is_never_given_an_unbounded_read():
     # A defensive structural check that complements the behavioural ones: the only read call in the
     # streaming path is bounded by the frozen chunk size.
     code = _gate_code()
@@ -848,4 +848,3 @@ def test_the_archive_reader_is_never_given_an_unbounded_read(tmp_path):
     assert unbounded == [], unbounded
     assert "MAX_LOCAL_INPUT_BYTES" in code
     assert "LOCAL_INPUT_BOUND_EXCEEDED" in code
-    del tmp_path

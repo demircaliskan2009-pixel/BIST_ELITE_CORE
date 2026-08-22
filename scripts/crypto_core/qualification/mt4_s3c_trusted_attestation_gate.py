@@ -86,6 +86,15 @@ MAX_LOCAL_INPUT_BYTES = 4 * 1024 * 1024
 
 
 def _attestation_failure(marker, detail):
+    """Fail the attestation with a FROZEN marker and a FROZEN detail literal.
+
+    Neither argument may ever carry environment-derived, path-derived or argument-derived
+    text.  This channel runs on the credential-bearing trusted surface, and a failure
+    message that echoed an environment variable name, a sys.path entry or a module origin
+    would write attacker-influenced content into a log an operator reads.  The marker
+    identifies the violation class exactly, which is what a fail-closed decision needs;
+    the workflow log already carries the invocation context for everything else.
+    """
     sys.stderr.write("MT4_S3C_TRUSTED_GATE_FAILED=" + marker + ":" + detail + "\n")
     raise SystemExit(3)
 
@@ -204,9 +213,9 @@ def _startup_attestation_first_pass():
         if normalised in ("", "."):
             _attestation_failure(TRUSTED_PYTHON_PATH_VIOLATION, "the working directory is on sys.path")
         if _is_contained(normalised, workspace):
-            _attestation_failure(TRUSTED_PYTHON_PATH_VIOLATION, normalised)
+            _attestation_failure(TRUSTED_PYTHON_PATH_VIOLATION, "a repository-controlled directory is on sys.path")
         if scratch and _is_contained(normalised, scratch):
-            _attestation_failure(TRUSTED_PYTHON_PATH_VIOLATION, normalised)
+            _attestation_failure(TRUSTED_PYTHON_PATH_VIOLATION, "a scratch directory is on sys.path")
 
     # The entrypoint set is resolved and DIGEST-VERIFIED before origin validation, because origin
     # validation needs it: the honest gate's own module is a repo-resident file, and it must be
@@ -253,16 +262,19 @@ def _validate_module_origins(roots, workspace, scratch, entrypoints):
             continue
         origin_class, location = _classify_origin(module, roots, entrypoints)
         if origin_class not in ALLOWED_ORIGIN_CLASSES:
-            _attestation_failure(TRUSTED_PYTHON_ORIGIN_VIOLATION, name + " -> " + location)
+            _attestation_failure(TRUSTED_PYTHON_ORIGIN_VIOLATION, "a module resolves to a disallowed origin class")
         if origin_class == ORIGIN_TRUSTED_ENTRYPOINT:
             # Already admitted by exact digest-bound identity.  The workspace and scratch checks
             # below deliberately do NOT apply to it: the honest gate is a repo-resident file, and
             # rejecting it for that reason alone would be a false positive rather than a control.
             continue
         if location and workspace and _is_contained(location, workspace):
-            _attestation_failure(TRUSTED_PYTHON_ORIGIN_VIOLATION, name + " -> " + location)
+            _attestation_failure(
+                TRUSTED_PYTHON_ORIGIN_VIOLATION,
+                "a module resolves under the repository workspace root",
+            )
         if location and scratch and _is_contained(location, scratch):
-            _attestation_failure(TRUSTED_PYTHON_ORIGIN_VIOLATION, name + " -> " + location)
+            _attestation_failure(TRUSTED_PYTHON_ORIGIN_VIOLATION, "a module resolves under the scratch directory")
 
 
 (
@@ -300,7 +312,10 @@ FORBIDDEN_ENVIRONMENT_PREFIX = "PYTHON"
 def _environment_attestation():
     for name in sorted(os.environ):
         if name.startswith(FORBIDDEN_ENVIRONMENT_PREFIX):
-            _attestation_failure(TRUSTED_PYTHON_ENVIRONMENT_VIOLATION, name)
+            _attestation_failure(
+                TRUSTED_PYTHON_ENVIRONMENT_VIOLATION,
+                "an environment variable carrying the forbidden prefix is present",
+            )
 
 
 _environment_attestation()
@@ -516,21 +531,35 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _request(url, credential, accept):
+def _authorization_header():
+    """Build the Authorization header value, and confine the credential to this function.
+
+    The credential is deliberately NOT threaded through the call graph as a parameter.  It
+    is read here, consumed here, and never bound to a name that any other function can
+    reach, so it cannot flow into the trusted predicate this gate writes to disk, into a
+    log line, or into any error marker.  It is never printed and never persisted.
+    """
+    value = os.environ.get("GITHUB_TOKEN") or ""
+    if not value:
+        fail("CREDENTIAL_UNAVAILABLE")
+    return "Bearer " + value
+
+
+def _request(url, accept):
     request = urllib.request.Request(url)  # noqa: S310 - fixed https API base, no user-supplied scheme
     request.add_header("Accept", accept)
     request.add_header("X-GitHub-Api-Version", "2022-11-28")
-    request.add_header("Authorization", "Bearer " + credential)
+    request.add_header("Authorization", _authorization_header())
     return request
 
 
-def api_json(api_url, path, credential):
+def api_json(api_url, path):
     url = api_url.rstrip("/") + path
     if not url.startswith("https://"):
         fail("API_URL_INVALID")
     opener = urllib.request.build_opener(_StripAuthOnRedirect())
     try:
-        with opener.open(_request(url, credential, "application/vnd.github+json"), timeout=60) as response:
+        with opener.open(_request(url, "application/vnd.github+json"), timeout=60) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         fail("GITHUB_API_FAILED", path + " status " + str(error.code))
@@ -544,7 +573,7 @@ def api_json(api_url, path, credential):
 # =================================================================================================
 
 
-def enumerate_collection(api_url, base_path, item_key, credential, endpoint_name):
+def enumerate_collection(api_url, base_path, item_key, endpoint_name):
     """Enumerate EVERY page.  The first page is NEVER assumed complete (P7).
 
     No selection, duplicate check or existence check may run until enumeration has terminated by the
@@ -560,9 +589,7 @@ def enumerate_collection(api_url, base_path, item_key, credential, endpoint_name
         if page > MAX_PAGES_PER_COLLECTION:
             fail("PAGINATION_BOUND_EXCEEDED", endpoint_name + " pages")
         separator = "&" if "?" in base_path else "?"
-        payload = api_json(
-            api_url, base_path + separator + "per_page=" + str(PER_PAGE) + "&page=" + str(page), credential
-        )
+        payload = api_json(api_url, base_path + separator + "per_page=" + str(PER_PAGE) + "&page=" + str(page))
         if not isinstance(payload, dict):
             fail("PAGINATION_MALFORMED", endpoint_name)
         batch = payload.get(item_key)
@@ -663,14 +690,14 @@ def _validated_storage_url(location):
     return location
 
 
-def download_artifact(api_url, repository, artifact_id, credential):
+def download_artifact(api_url, repository, artifact_id):
     url = api_url.rstrip("/") + "/repos/" + repository + "/actions/artifacts/" + str(artifact_id) + "/zip"
     if not url.startswith("https://"):
         fail("API_URL_INVALID")
     opener = urllib.request.build_opener(_NoRedirect())
     location = None
     try:
-        response = opener.open(_request(url, credential, "application/vnd.github+json"), timeout=60)
+        response = opener.open(_request(url, "application/vnd.github+json"), timeout=60)
     except urllib.error.HTTPError as error:
         if error.code not in REDIRECT_STATUS_CODES:
             fail("ARTIFACT_REDIRECT_FAILED", str(artifact_id))
@@ -1000,8 +1027,8 @@ def stage_c_equivalence_digest(observation, case, receipt_digest):
 # =================================================================================================
 
 
-def authenticate_source_run(api_url, repository, run_id, arguments, credential):
-    run = api_json(api_url, "/repos/" + repository + "/actions/runs/" + str(run_id), credential)
+def authenticate_source_run(api_url, repository, run_id, arguments):
+    run = api_json(api_url, "/repos/" + repository + "/actions/runs/" + str(run_id))
     if not isinstance(run, dict):
         fail("SOURCE_RUN_MALFORMED")
     # run_attempt is NEVER taken from the event payload; the SERVICE response is the authority, and
@@ -1029,12 +1056,11 @@ def authenticate_source_run(api_url, repository, run_id, arguments, credential):
     return attempt
 
 
-def authenticate_jobs(api_url, repository, run_id, attempt, credential):
+def authenticate_jobs(api_url, repository, run_id, attempt):
     jobs = enumerate_collection(
         api_url,
         "/repos/" + repository + "/actions/runs/" + str(run_id) + "/attempts/" + str(attempt) + "/jobs",
         "jobs",
-        credential,
         "attempt_jobs",
     )
     if jobs is None:
@@ -1054,12 +1080,11 @@ def authenticate_jobs(api_url, repository, run_id, attempt, credential):
     return jobs
 
 
-def select_artifacts(api_url, repository, run_id, credential):
+def select_artifacts(api_url, repository, run_id):
     artifacts = enumerate_collection(
         api_url,
         "/repos/" + repository + "/actions/runs/" + str(run_id) + "/artifacts",
         "artifacts",
-        credential,
         "run_artifacts",
     )
     selected = {}
@@ -1095,20 +1120,20 @@ def normalise_archive_digest(value):
 # =================================================================================================
 
 
-def run_gate(arguments, credential):
+def run_gate(arguments):
     api_url = arguments.api_url
     repository = arguments.repository
     run_id = arguments.source_run_id
 
     # --- SOURCE_RUN_AUTHENTICATED -> RUN_ATTEMPT_AUTHENTICATED ---
-    attempt = authenticate_source_run(api_url, repository, run_id, arguments, credential)
+    attempt = authenticate_source_run(api_url, repository, run_id, arguments)
 
     # --- EXPECTED_JOBS_AUTHENTICATED -> JOBS_TOTAL_COUNT_RECONCILED ---
-    authenticate_jobs(api_url, repository, run_id, attempt, credential)
+    authenticate_jobs(api_url, repository, run_id, attempt)
 
     # --- COMPLETE_ARTIFACT_ENUMERATION_PROVEN -> ARTIFACTS_TOTAL_COUNT_RECONCILED ---
     # --- -> UNIQUE_EXPECTED_ARTIFACTS_SELECTED ---
-    artifacts = select_artifacts(api_url, repository, run_id, credential)
+    artifacts = select_artifacts(api_url, repository, run_id)
 
     # --- CANDIDATE_SERVICE_IDENTITY_AUTHENTICATED / RECEIPT_SERVICE_IDENTITY_AUTHENTICATED ---
     payloads = {}
@@ -1116,7 +1141,7 @@ def run_gate(arguments, credential):
     for name in EXPECTED_ARTIFACT_SET:
         artifact = artifacts[name]
         artifact_id = require_int(artifact.get("id"), "ARTIFACT_RECORD_MALFORMED", 1)
-        payload = download_artifact(api_url, repository, artifact_id, credential)
+        payload = download_artifact(api_url, repository, artifact_id)
         contents, digests = extract_artifact(payload, EXPECTED_MEMBERS[name])
         payloads[name] = contents
         member_digests[name] = digests
@@ -1308,11 +1333,12 @@ def main(argv=None):
     _validate_module_origins(_APPROVED_STDLIB_ROOTS, _WORKSPACE_ROOT, _SCRATCH_ROOT, _TRUSTED_ENTRYPOINTS)
     _environment_attestation()
 
-    credential = os.environ.get("GITHUB_TOKEN") or ""
-    if not credential:
+    # Presence only.  The value itself is never bound here: it is read, used and discarded
+    # inside _authorization_header, which is the only function that ever sees it.
+    if not os.environ.get("GITHUB_TOKEN"):
         fail("CREDENTIAL_UNAVAILABLE")
 
-    predicate = run_gate(arguments, credential)
+    predicate = run_gate(arguments)
     output = pathlib.Path(arguments.out)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(canonical_json(predicate))
