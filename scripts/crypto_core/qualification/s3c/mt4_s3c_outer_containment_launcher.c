@@ -165,6 +165,152 @@ extern const struct sock_fprog mt4_s3c_outer_filter_fprog;
  */
 #define MT4_S3C_PTRACE_OPTIONS (PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACEEXEC | PTRACE_O_EXITKILL)
 
+/*
+ * THE POSITIVE TRACER ORACLE (repair 5A).  Proving that a few forbidden TOKENS do not appear in the
+ * source is not a contract: it says nothing about a numeric request, a computed request, or a
+ * request nobody thought to name.  The oracle below is the complete, finite, EXACT set of ptrace
+ * requests this observer may ever issue, and mt4_s3c_ptrace_permitted() is the ONLY place in this
+ * translation unit that calls ptrace().  Anything outside the set is refused before the kernel is
+ * reached, whatever value produced it.
+ *
+ * Every permitted request is READ-ONLY or CONTROL-ONLY with respect to the tracee.  There is no
+ * POKE, no SET, no SIGINFO write, no DETACH, no SEIZE, no INTERRUPT and no LISTEN: those are not
+ * merely unused, they cannot be issued.
+ */
+#define MT4_S3C_PTRACE_REQUEST_COUNT 7
+
+static const long mt4_s3c_permitted_ptrace_requests[MT4_S3C_PTRACE_REQUEST_COUNT] = {
+    (long)PTRACE_TRACEME,
+    (long)PTRACE_SETOPTIONS,
+    (long)PTRACE_SYSCALL,
+    (long)PTRACE_CONT,
+    (long)PTRACE_GETREGSET,
+    (long)PTRACE_PEEKDATA,
+    (long)PTRACE_SECCOMP_GET_FILTER,
+};
+
+/*
+ * The forbidden option bit is asserted by VALUE, not by token absence: PTRACE_O_SUSPEND_SECCOMP is
+ * 0x00200000, and a build in which the frozen option word carried it would fail to compile.
+ */
+#define MT4_S3C_PTRACE_O_SUSPEND_SECCOMP_VALUE 0x00200000u
+#define MT4_S3C_PTRACE_OPTION_BITS_ALLOWED \
+    ((unsigned long)PTRACE_O_TRACESYSGOOD | (unsigned long)PTRACE_O_TRACEEXEC | (unsigned long)PTRACE_O_EXITKILL)
+
+_Static_assert(((unsigned long)MT4_S3C_PTRACE_OPTIONS & (unsigned long)MT4_S3C_PTRACE_O_SUSPEND_SECCOMP_VALUE) == 0ul,
+               "MT4_S3C forbids PTRACE_O_SUSPEND_SECCOMP");
+_Static_assert(((unsigned long)MT4_S3C_PTRACE_OPTIONS & ~MT4_S3C_PTRACE_OPTION_BITS_ALLOWED) == 0ul,
+               "MT4_S3C ptrace options carry a bit outside the frozen three");
+
+/*
+ * SUPERVISOR_DUMPABILITY_LIFECYCLE_V1 (repair 3).
+ *
+ * THE DEFECT THIS CLOSES.  One supervisor process runs all 25 cases.  N5 makes that process
+ * non-dumpable, and on Linux the dumpable flag is INHERITED across clone: from case 2 onward the
+ * child is born non-dumpable, its /proc/<pid>/uid_map, gid_map and setgroups become root-owned, and
+ * the unprivileged supervisor can no longer write them.  Case 2 therefore reached
+ * UID_GID_MAP_FAILED, the adjudicator rejected the case set, and the workflow could never produce a
+ * passing receipt.  Restoring dumpability is not an optimisation; without it the sequence is broken.
+ *
+ * THE FROZEN PER-CASE STATE MACHINE.  Restoration happens ONLY after the child is completely reaped
+ * and no map operation is outstanding, and ALWAYS before the next clone3 and before the next uid_map
+ * or gid_map write:
+ *
+ *   CASE_START
+ *     -> PRE_CLONE_AUTHENTICATED     dumpability is PROVEN 1 by reading it back, never assumed
+ *     -> CLONED                      clone3
+ *     -> MAPS_WRITTEN                setgroups deny, uid_map, gid_map
+ *     -> SUPERVISOR_NON_DUMPABLE     N5 prctl(PR_SET_DUMPABLE, 0) on the supervisor itself
+ *     -> CHILD_REAPED                teardown: signal, wait, response collected, no live child
+ *     -> RESTORED                    prctl(PR_SET_DUMPABLE, 1) and PR_GET_DUMPABLE re-authenticated
+ *     -> NEXT CASE
+ *
+ * A failed restoration is a QUALIFICATION INFRASTRUCTURE FAILURE that HALTS THE SEQUENCE.  It never
+ * becomes a candidate verdict, and no further case runs: continuing would silently produce the same
+ * broken maps the repair exists to prevent.
+ */
+#define MT4_S3C_SUPERVISOR_DUMPABLE_REQUIRED 1
+
+typedef enum {
+    MT4_S3C_DUMPABILITY_CASE_START = 0,
+    MT4_S3C_DUMPABILITY_PRE_CLONE_AUTHENTICATED,
+    MT4_S3C_DUMPABILITY_CLONED,
+    MT4_S3C_DUMPABILITY_MAPS_WRITTEN,
+    MT4_S3C_DUMPABILITY_SUPERVISOR_NON_DUMPABLE,
+    MT4_S3C_DUMPABILITY_CHILD_REAPED,
+    MT4_S3C_DUMPABILITY_RESTORED
+} mt4_s3c_dumpability_state_t;
+
+/* Set when restoration fails.  The case loop stops; it is never cleared. */
+static int mt4_s3c_sequence_halted = 0;
+
+/* Authenticate, never assume: the value is READ BACK from the kernel. */
+static int mt4_s3c_supervisor_dumpability_is(int expected)
+{
+    int observed = prctl(PR_GET_DUMPABLE, 0, 0, 0, 0);
+
+    return observed == expected;
+}
+
+/* CASE_START precondition.  A supervisor that cannot be made dumpable cannot map the next child. */
+static int mt4_s3c_supervisor_dumpability_precondition(void)
+{
+    if (mt4_s3c_supervisor_dumpability_is(MT4_S3C_SUPERVISOR_DUMPABLE_REQUIRED)) {
+        return 0;
+    }
+    if (prctl(PR_SET_DUMPABLE, MT4_S3C_SUPERVISOR_DUMPABLE_REQUIRED, 0, 0, 0) != 0) {
+        return -1;
+    }
+    return mt4_s3c_supervisor_dumpability_is(MT4_S3C_SUPERVISOR_DUMPABLE_REQUIRED) ? 0 : -1;
+}
+
+/*
+ * Restoration.  Called ONLY from the teardown path, after the child has been reaped, and its result
+ * is authenticated by reading the flag back rather than by trusting the prctl return value.
+ */
+static int mt4_s3c_supervisor_dumpability_restore(void)
+{
+    if (prctl(PR_SET_DUMPABLE, MT4_S3C_SUPERVISOR_DUMPABLE_REQUIRED, 0, 0, 0) != 0) {
+        return -1;
+    }
+    return mt4_s3c_supervisor_dumpability_is(MT4_S3C_SUPERVISOR_DUMPABLE_REQUIRED) ? 0 : -1;
+}
+
+/* The literal zero every resume path must deliver.  A nonzero signal is never representable here. */
+#define MT4_S3C_PTRACE_RESUME_SIGNAL ((void *)0)
+
+/*
+ * THE SINGLE GATEWAY.  Every ptrace in this file goes through here, so the oracle is enforced at
+ * RUNTIME as well as by inspection, and a resume that somehow carried a signal is refused rather
+ * than delivered.
+ */
+static long mt4_s3c_ptrace_permitted(long request, pid_t pid, void *address, void *data)
+{
+    unsigned int index;
+    int permitted = 0;
+
+    for (index = 0u; index < (unsigned int)MT4_S3C_PTRACE_REQUEST_COUNT; index++) {
+        if (mt4_s3c_permitted_ptrace_requests[index] == request) {
+            permitted = 1;
+        }
+    }
+    if (permitted == 0) {
+        errno = EPERM;
+        return -1L;
+    }
+    /* 5B: a resume request may carry NOTHING but the literal zero signal. */
+    if ((request == (long)PTRACE_SYSCALL || request == (long)PTRACE_CONT) && data != MT4_S3C_PTRACE_RESUME_SIGNAL) {
+        errno = EPERM;
+        return -1L;
+    }
+    /* The option word is frozen: SETOPTIONS may install exactly the three approved bits. */
+    if (request == (long)PTRACE_SETOPTIONS && data != (void *)(unsigned long)MT4_S3C_PTRACE_OPTIONS) {
+        errno = EPERM;
+        return -1L;
+    }
+    return ptrace((enum __ptrace_request)request, pid, address, data);
+}
+
 /* ==============================================================================================
  * TYPED REASON DOMAIN (V9 32.1).  Infrastructure reasons are NEVER verifier statuses.
  * ============================================================================================ */
@@ -177,6 +323,7 @@ typedef enum {
     MT4_S3C_REASON_SECCOMP_BASELINE_FIELD_DUPLICATE,
     MT4_S3C_REASON_SECCOMP_BASELINE_FIELD_MALFORMED,
     MT4_S3C_REASON_SECCOMP_BASELINE_UNREADABLE,
+    MT4_S3C_REASON_SECCOMP_BASELINE_ENCODING_INVALID,
     MT4_S3C_REASON_SECCOMP_COUNT_TRANSITION_INVALID,
     MT4_S3C_REASON_SECCOMP_COUNT_DISAGREEMENT,
     MT4_S3C_REASON_TRACER_CONTRACT_VIOLATION,
@@ -203,7 +350,9 @@ typedef enum {
     MT4_S3C_REASON_TRANSPORT_FRAMING_FAILURE,
     MT4_S3C_REASON_OBSERVATION_EVENT_BUDGET_EXCEEDED,
     MT4_S3C_REASON_SUPERVISOR_REAP_FAILED,
-    MT4_S3C_REASON_CASE_PLAN_MALFORMED
+    MT4_S3C_REASON_CASE_PLAN_MALFORMED,
+    MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED,
+    MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_PRECONDITION_FAILED
 } mt4_s3c_reason_t;
 
 static const char *mt4_s3c_reason_name(mt4_s3c_reason_t reason)
@@ -223,6 +372,12 @@ static const char *mt4_s3c_reason_name(mt4_s3c_reason_t reason)
         return "SECCOMP_BASELINE_FIELD_MALFORMED";
     case MT4_S3C_REASON_SECCOMP_BASELINE_UNREADABLE:
         return "SECCOMP_BASELINE_UNREADABLE";
+    case MT4_S3C_REASON_SECCOMP_BASELINE_ENCODING_INVALID:
+        return "SECCOMP_BASELINE_ENCODING_INVALID";
+    case MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED:
+        return "SUPERVISOR_DUMPABILITY_NOT_RESTORED";
+    case MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_PRECONDITION_FAILED:
+        return "SUPERVISOR_DUMPABILITY_PRECONDITION_FAILED";
     case MT4_S3C_REASON_SECCOMP_COUNT_TRANSITION_INVALID:
         return "SECCOMP_COUNT_TRANSITION_INVALID";
     case MT4_S3C_REASON_SECCOMP_COUNT_DISAGREEMENT:
@@ -804,6 +959,33 @@ static int mt4_s3c_read_seccomp_status(const char *path,
         *reason = MT4_S3C_REASON_SECCOMP_BASELINE_UNREADABLE;
         return -1;
     }
+    /*
+     * 5C: THE WHOLE BUFFER IS VALIDATED BEFORE ANY FIELD IS EXTRACTED.  Decoding the two fields we
+     * want while ignoring whatever else the file contains is permissive parsing: an embedded NUL, a
+     * high byte or a control character anywhere in the document means this is not the /proc/status
+     * this contract describes, and a parser that skipped past it would be reading an unknown format
+     * while reporting a confident number.  The accepted alphabet is exactly printable ASCII plus
+     * horizontal tab and newline.
+     */
+    {
+        size_t index;
+
+        for (index = 0; index < used; index++) {
+            unsigned char byte = (unsigned char)buffer[index];
+
+            if (byte == 0u) {
+                *reason = MT4_S3C_REASON_SECCOMP_BASELINE_ENCODING_INVALID;
+                return -1;
+            }
+            if (byte == (unsigned char)'\n' || byte == (unsigned char)'\t') {
+                continue;
+            }
+            if (byte < 0x20u || byte > 0x7Eu) {
+                *reason = MT4_S3C_REASON_SECCOMP_BASELINE_ENCODING_INVALID;
+                return -1;
+            }
+        }
+    }
     if (mt4_s3c_parse_status_field(buffer, used, "Seccomp", &out->seccomp_mode, reason) != 0) {
         return -1;
     }
@@ -925,6 +1107,50 @@ static int mt4_s3c_sys_pidfd_send_signal(int pidfd, int signal_number)
 static int mt4_s3c_sys_close_range(unsigned int first, unsigned int last, unsigned int flags)
 {
     return (int)syscall(__NR_close_range, first, last, flags);
+}
+
+/*
+ * POST-FILTER SYSCALLS ARE PROJECT-OWNED (repair 5D).
+ *
+ * WHY A LIBC WRAPPER IS NOT ACCEPTABLE HERE.  The outer filter this launcher installs on itself
+ * classifies ALL SIX seccomp_data argument words for every permitted syscall, and requires the
+ * unused tail to be exactly zero (UNUSED_ARGUMENT_WORDS_MUST_BE_ZERO).  A libc execve sets only the
+ * three registers it needs; %r10, %r8 and %r9 keep whatever the caller left in them.  The filter
+ * sees a nonzero tail and kills the process -- and the failure would look like a candidate defect
+ * rather than a launcher one.  The two syscalls issued AFTER the filter is installed therefore go
+ * through a project-owned wrapper that loads all six argument registers explicitly, zeroing the
+ * tail, exactly as the freestanding worker's own wrapper does.
+ *
+ * This wrapper is used ONLY after the outer filter exists.  Everything before that point is
+ * unconstrained by the filter and continues to use ordinary libc calls.
+ */
+static inline long mt4_s3c_syscall6(long number, long a0, long a1, long a2, long a3, long a4, long a5)
+{
+    long result;
+    register long r10 __asm__("r10") = a3;
+    register long r8 __asm__("r8") = a4;
+    register long r9 __asm__("r9") = a5;
+
+    __asm__ volatile("syscall"
+                     : "=a"(result)
+                     : "a"(number), "D"(a0), "S"(a1), "d"(a2), "r"(r10), "r"(r8), "r"(r9)
+                     : "rcx", "r11", "memory");
+    return result;
+}
+
+/* execve with an explicitly zeroed argument tail.  Returns only on failure, exactly like execve. */
+static inline long mt4_s3c_sys_execve(const char *path, char *const argv[], char *const envp[])
+{
+    return mt4_s3c_syscall6(__NR_execve, (long)path, (long)argv, (long)envp, 0, 0, 0);
+}
+
+/* exit_group with an explicitly zeroed argument tail.  arg0 is the status the policy leaves
+ * intentionally unconstrained (UNCONSTRAINED_SCALAR); args 1..5 are zero. */
+__attribute__((noreturn)) static void mt4_s3c_sys_exit_group(int status)
+{
+    for (;;) {
+        (void)mt4_s3c_syscall6(__NR_exit_group, (long)status, 0, 0, 0, 0, 0);
+    }
 }
 
 static long mt4_s3c_monotonic_ms(void)
@@ -1114,7 +1340,7 @@ static int mt4_s3c_read_registers(pid_t pid, struct user_regs_struct *registers)
 
     vector.iov_base = registers;
     vector.iov_len = sizeof(*registers);
-    if (ptrace(PTRACE_GETREGSET, pid, (void *)(unsigned long)NT_PRSTATUS, &vector) != 0) {
+    if (mt4_s3c_ptrace_permitted((long)PTRACE_GETREGSET, pid, (void *)(unsigned long)NT_PRSTATUS, &vector) != 0) {
         return -1;
     }
     if (vector.iov_len != sizeof(*registers)) {
@@ -1129,7 +1355,7 @@ static int mt4_s3c_read_registers(pid_t pid, struct user_regs_struct *registers)
  */
 static int mt4_s3c_resume_to_syscall(pid_t pid)
 {
-    return (int)ptrace(PTRACE_SYSCALL, pid, NULL, (void *)0);
+    return (int)mt4_s3c_ptrace_permitted((long)PTRACE_SYSCALL, pid, NULL, MT4_S3C_PTRACE_RESUME_SIGNAL);
 }
 
 /* Read tracee memory a word at a time through the kernel-mediated tracer interface (T6). */
@@ -1142,7 +1368,7 @@ static int mt4_s3c_read_tracee_memory(pid_t pid, unsigned long address, unsigned
         size_t take;
 
         errno = 0;
-        word = (unsigned long)ptrace(PTRACE_PEEKDATA, pid, (void *)(address + copied), NULL);
+        word = (unsigned long)mt4_s3c_ptrace_permitted((long)PTRACE_PEEKDATA, pid, (void *)(address + copied), NULL);
         if (errno != 0) {
             return -1;
         }
@@ -1606,7 +1832,7 @@ __attribute__((noreturn)) static void mt4_s3c_launcher_child(const mt4_s3c_child
      * namespace, because the tracee consents.  An external attach would have to satisfy exactly that
      * check against a process which later makes itself non-dumpable.
      */
-    if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0) {
+    if (mt4_s3c_ptrace_permitted((long)PTRACE_TRACEME, 0, NULL, NULL) != 0) {
         mt4_s3c_child_fail();
     }
     if (raise(SIGSTOP) != 0) {
@@ -1631,9 +1857,9 @@ __attribute__((noreturn)) static void mt4_s3c_launcher_child(const mt4_s3c_child
         char *const argument_vector[] = {(char *)MT4_S3C_CANDIDATE_NAME, NULL};
         char *const environment_vector[] = {NULL};
 
-        (void)execve(MT4_S3C_CANDIDATE_PATH, argument_vector, environment_vector);
+        (void)mt4_s3c_sys_execve(MT4_S3C_CANDIDATE_PATH, argument_vector, environment_vector);
     }
-    _exit(MT4_S3C_EXIT_LAUNCHER_FAILED);
+    mt4_s3c_sys_exit_group(MT4_S3C_EXIT_LAUNCHER_FAILED);
 }
 
 /* ==============================================================================================
@@ -1715,7 +1941,8 @@ static void mt4_s3c_attempt_dump_leg(pid_t pid, mt4_s3c_case_result_t *result)
     result->dump_available = 0;
     result->dump_terminates_at_index = -1;
     errno = 0;
-    index0 = ptrace(PTRACE_SECCOMP_GET_FILTER, pid, (void *)(unsigned long)0, result->dump_index0);
+    index0 = mt4_s3c_ptrace_permitted((long)PTRACE_SECCOMP_GET_FILTER, pid, (void *)(unsigned long)0,
+                                     result->dump_index0);
     if (index0 < 0) {
         return;
     }
@@ -1723,12 +1950,13 @@ static void mt4_s3c_attempt_dump_leg(pid_t pid, mt4_s3c_case_result_t *result)
         return;
     }
     errno = 0;
-    index1 = ptrace(PTRACE_SECCOMP_GET_FILTER, pid, (void *)(unsigned long)1, result->dump_index1);
+    index1 = mt4_s3c_ptrace_permitted((long)PTRACE_SECCOMP_GET_FILTER, pid, (void *)(unsigned long)1,
+                                     result->dump_index1);
     if (index1 < 0 || index1 > (long)MT4_S3C_MAX_FILTER_INSTRUCTIONS) {
         return;
     }
     errno = 0;
-    index2 = ptrace(PTRACE_SECCOMP_GET_FILTER, pid, (void *)(unsigned long)2, NULL);
+    index2 = mt4_s3c_ptrace_permitted((long)PTRACE_SECCOMP_GET_FILTER, pid, (void *)(unsigned long)2, NULL);
     if (index2 >= 0) {
         /* A third installed filter contradicts the authenticated count of exactly two. */
         mt4_s3c_case_fail(result, MT4_S3C_REASON_SECCOMP_COUNT_DISAGREEMENT, "dump_leg_index2_present");
@@ -1809,6 +2037,7 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
     int internal_capture_done = 0;
     unsigned int namespace_index;
     long clone_result;
+    mt4_s3c_dumpability_state_t dumpability_state = MT4_S3C_DUMPABILITY_CASE_START;
 
     memset(result, 0, sizeof(*result));
     result->reason = MT4_S3C_REASON_NONE;
@@ -1816,6 +2045,20 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
     result->dump_terminates_at_index = -1;
     result->outer_install_return = -1;
     result->internal_install_return = -1;
+
+    /*
+     * CASE_START -> PRE_CLONE_AUTHENTICATED (repair 3).  The supervisor's dumpability is PROVEN to
+     * be the required pre-clone value before anything else happens.  The child inherits this flag,
+     * and a non-dumpable child cannot have its uid_map or gid_map written by an unprivileged
+     * supervisor, so this is a precondition of the whole case, not a detail of teardown.
+     */
+    if (mt4_s3c_supervisor_dumpability_precondition() != 0) {
+        result->reason = MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_PRECONDITION_FAILED;
+        result->reason_marker = "D-0";
+        mt4_s3c_sequence_halted = 1;
+        return;
+    }
+    dumpability_state = MT4_S3C_DUMPABILITY_PRE_CLONE_AUTHENTICATED;
 
     /*
      * N0a SUPERVISOR_SECCOMP_BASELINE, measurement M-1.  S measures ITSELF BEFORE clone3: if S is
@@ -1865,6 +2108,7 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
         mt4_s3c_launcher_child(&child_context);
     }
     child = (pid_t)clone_result;
+    dumpability_state = MT4_S3C_DUMPABILITY_CLONED;
     (void)close(go_pipe[0]);
     (void)close(request_pipe[0]);
     (void)close(response_pipe[1]);
@@ -1916,15 +2160,23 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
         (void)close(fd);
     }
 
+    dumpability_state = MT4_S3C_DUMPABILITY_MAPS_WRITTEN;
+
     /*
      * N5 SUPERVISOR_DUMPABILITY_SET.  Only NOW does S set PR_SET_DUMPABLE 0 on ITSELF.  Doing it
      * before writing the maps is the inherited P3 hazard and is forbidden.  S never sets
-     * dumpability on the child.
+     * dumpability on the child.  The ordering is asserted rather than assumed: reaching this point
+     * in any state other than MAPS_WRITTEN would mean the sequence was reordered.
      */
+    if (dumpability_state != MT4_S3C_DUMPABILITY_MAPS_WRITTEN) {
+        mt4_s3c_case_fail(result, MT4_S3C_REASON_NAMESPACE_RELEASE_ORDER_VIOLATION, "dumpability_order");
+        goto teardown;
+    }
     if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) {
         mt4_s3c_case_fail(result, MT4_S3C_REASON_PRIVILEGE_SETUP_FAILED, "supervisor_dumpable");
         goto teardown;
     }
+    dumpability_state = MT4_S3C_DUMPABILITY_SUPERVISOR_NON_DUMPABLE;
 
     /* N6 and N7: all six namespace identities queried and required to DIFFER.  No exceptions. */
     for (namespace_index = 0; namespace_index < (unsigned int)MT4_S3C_NAMESPACE_COUNT; namespace_index++) {
@@ -2002,7 +2254,8 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
             goto teardown;
         }
     }
-    if (ptrace(PTRACE_SETOPTIONS, child, NULL, (void *)(unsigned long)MT4_S3C_PTRACE_OPTIONS) != 0) {
+    if (mt4_s3c_ptrace_permitted((long)PTRACE_SETOPTIONS, child, NULL,
+                                 (void *)(unsigned long)MT4_S3C_PTRACE_OPTIONS) != 0) {
         mt4_s3c_case_fail(result, MT4_S3C_REASON_WORKER_FILTER_OBSERVATION_UNAVAILABLE, "setoptions");
         goto teardown;
     }
@@ -2293,10 +2546,11 @@ teardown:
                 break;
             }
             if (WIFSTOPPED(status_word)) {
-                (void)ptrace(PTRACE_CONT, child, NULL, (void *)0);
+                (void)mt4_s3c_ptrace_permitted((long)PTRACE_CONT, child, NULL, MT4_S3C_PTRACE_RESUME_SIGNAL);
             }
         }
         child = -1;
+        dumpability_state = MT4_S3C_DUMPABILITY_CHILD_REAPED;
     }
     if (request_pipe[1] >= 0) {
         (void)close(request_pipe[1]);
@@ -2315,6 +2569,27 @@ teardown:
         (void)close(pidfd);
     }
 
+    /*
+     * RESTORATION (repair 3).  This is the ONLY restoration site, and it is placed here on purpose:
+     * the child has been signalled, waited for and reaped, the response has been collected, and
+     * every descriptor belonging to the case is closed, so no map operation and no live child
+     * remains.  Restoring earlier would race the very lifecycle this state machine exists to order;
+     * restoring later, or not at all, is what broke case 2.
+     *
+     * A restoration failure is infrastructure, not a candidate verdict, and it HALTS THE SEQUENCE.
+     */
+    if (dumpability_state == MT4_S3C_DUMPABILITY_SUPERVISOR_NON_DUMPABLE ||
+        dumpability_state == MT4_S3C_DUMPABILITY_CHILD_REAPED) {
+        if (mt4_s3c_supervisor_dumpability_restore() != 0) {
+            mt4_s3c_sequence_halted = 1;
+            if (result->reason == MT4_S3C_REASON_NONE) {
+                mt4_s3c_case_fail(result, MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED, "D-1");
+            }
+        } else {
+            dumpability_state = MT4_S3C_DUMPABILITY_RESTORED;
+        }
+    }
+
     /* Cross-check C-3 (V9 11.6): the trace-derived count must AGREE with the /proc authority. */
     if (result->reason == MT4_S3C_REASON_NONE && result->exec_transition_observed) {
         unsigned long expected = result->baseline_supervisor_filters + result->trace_seccomp_success_count;
@@ -2329,10 +2604,17 @@ teardown:
     }
 
     /*
-     * The per-case internal filter equivalence digest (V9 SECTION 16).  It is computed ONLY from
-     * observer-derived fields, and only when every governed constraint holds; a case that did not
-     * reach a proven internal installation carries an empty digest and the adjudicator treats that
-     * as an absent equivalence rather than as a passing one.
+     * The per-case internal filter equivalence digest (V9 SECTION 16), computed for EVERY CASE
+     * (repair 4).
+     *
+     * WHY EVERY CASE, INCLUDING THE TWO PROCESS CASES.  The internal filter is installed by the
+     * candidate during BOOTSTRAP, before a single byte of the request is consumed.  A case that
+     * ends in a signal (C24) or a deadline (C25) therefore has exactly the same installation
+     * evidence as one that answers a frame; its semantic RESULT differs, its containment evidence
+     * does not.  Emitting an empty digest for those two cases gave them an unbound trust path
+     * through adjudication, and made A3 and A4 disagree by construction whenever the observer did
+     * capture the installation.  There is no empty-digest branch any more: an internal capture that
+     * did not happen is a case failure with its own reason, never a silently absent equivalence.
      */
     result->equivalence_valid = 0;
     result->equivalence_digest[0] = '\0';
@@ -2664,6 +2946,15 @@ int main(int argc, char **argv)
     mt4_s3c_emit("\",\"case_count\":%u,\"cases\":[", plan.case_count);
 
     for (index = 0; index < plan.case_count; index++) {
+        /*
+         * Repair 3: a supervisor whose dumpability could not be restored cannot map the next
+         * child's namespaces.  Continuing would emit UID_GID_MAP_FAILED for every remaining case
+         * and present an infrastructure failure as a candidate verdict, so the sequence stops with
+         * the exact reason instead.
+         */
+        if (mt4_s3c_sequence_halted) {
+            mt4_s3c_fatal(MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED, "sequence_halted");
+        }
         mt4_s3c_run_case(&candidate, &identity, &plan.cases[index], result);
         if (index > 0u) {
             mt4_s3c_emit(",");

@@ -92,6 +92,48 @@ CLASS_UPSTREAM_PINNED = "UPSTREAM_PINNED"
 CLASS_EXTERNAL_TOOLCHAIN = "EXTERNAL_TOOLCHAIN"
 DEPENDENCY_CLASSES = (CLASS_REPO_BUNDLED, CLASS_UPSTREAM_PINNED, CLASS_EXTERNAL_TOOLCHAIN)
 
+# =================================================================================================
+# THE COMPLETE COMPILE INVENTORY (repair 7E) AND ITS FROZEN SCHEMA (repair 7F).
+#
+# WHAT WAS MISSING.  The inventory covered only the five freestanding worker translation units.  The
+# two pinned upstream blst inputs were compiled with no dependency evidence at all, and so were the
+# observer and probe translation units, even though all four are load-bearing for the qualification
+# result: the upstream inputs are linked into the very binary being qualified, and the observer and
+# probe produce the evidence everything downstream is derived from.  An inventory that omits them
+# cannot claim source closure over the build.
+#
+# EVERY entry now also carries PROVENANCE, and provenance is class-determined rather than free text.
+# A REPO_BUNDLED row is provable only as one of the sixteen bundle entries; an UPSTREAM_PINNED row
+# is bound to the exact pinned blst commit and source-tree digest; an EXTERNAL_TOOLCHAIN row names
+# the pinned runner image and carries no digest, which is what keeps leg E non-circular.
+# =================================================================================================
+
+REQUIRED_TRANSLATION_UNITS = (
+    "scripts/crypto_core/qualification/s3c/mt4_s3c_blst_capability.c",
+    "scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c",
+    "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c",
+    "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c",
+    "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_bootstrap.c",
+    "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_start.S",
+    "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_verify.c",
+)
+
+# The two pinned upstream native inputs that are linked into the qualified image.  Their presence in
+# the inventory is MANDATORY; a build that omits their dependency evidence is not source-closed.
+REQUIRED_UPSTREAM_INPUTS = ("src/server.c", "build/assembly.S")
+
+PROVENANCE_REPO_BUNDLED = "QUALIFICATION_SOURCE_BUNDLE_V1"
+PROVENANCE_UPSTREAM_PINNED = "BLST_PINNED_COMMIT_" + UPSTREAM_COMMIT + "_TREE_" + UPSTREAM_SOURCE_TREE_DIGEST
+PROVENANCE_EXTERNAL_TOOLCHAIN = "UBUNTU_22_04_PINNED_RUNNER_TOOLCHAIN"
+
+CLASS_PROVENANCE = {
+    CLASS_REPO_BUNDLED: PROVENANCE_REPO_BUNDLED,
+    CLASS_UPSTREAM_PINNED: PROVENANCE_UPSTREAM_PINNED,
+    CLASS_EXTERNAL_TOOLCHAIN: PROVENANCE_EXTERNAL_TOOLCHAIN,
+}
+
+DEPENDENCY_ENTRY_FIELDS = ("class", "path", "provenance", "sha256")
+
 
 class BuildManifestError(RuntimeError):
     """Any failure to prove a required build property.  There is no partial success."""
@@ -192,15 +234,48 @@ def build_dependency_inventory(dependency_files, repository_root, upstream_root)
             entries[key] = digest
 
     ordered = sorted(entries.items(), key=lambda item: (item[0][0], item[0][1]))
-    inventory = [{"path": path, "class": kind, "sha256": digest} for (path, kind), digest in ordered]
+    inventory = [
+        {"path": path, "class": kind, "provenance": CLASS_PROVENANCE[kind], "sha256": digest}
+        for (path, kind), digest in ordered
+    ]
+    validate_dependency_inventory(inventory)
+    return inventory
+
+
+def validate_dependency_inventory(inventory):
+    """The frozen inventory schema (repair 7F).  Exact fields, unique paths, complete coverage."""
+    seen = set()
     for entry in inventory:
+        if tuple(sorted(entry)) != tuple(sorted(DEPENDENCY_ENTRY_FIELDS)):
+            _fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_MALFORMED", "entry field set")
         if entry["class"] not in DEPENDENCY_CLASSES:
             _fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_MALFORMED", entry["class"])
+        if entry["provenance"] != CLASS_PROVENANCE[entry["class"]]:
+            _fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_PROVENANCE_INVALID", entry["path"])
+        # A path may appear once and once only.  Two rows for one path, even in different classes,
+        # would make the inventory ambiguous about which bytes were actually compiled.
+        if entry["path"] in seen:
+            _fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_DUPLICATE", entry["path"])
+        seen.add(entry["path"])
         if entry["class"] == CLASS_EXTERNAL_TOOLCHAIN:
             if entry["sha256"] != "":
                 _fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_MALFORMED", "external entry carries a digest")
         elif not _is_hex64(entry["sha256"]):
             _fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_MALFORMED", "missing digest for " + entry["path"])
+        if entry["class"] == CLASS_REPO_BUNDLED and entry["path"] not in SOURCE_BUNDLE_PATHS:
+            _fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_UNBUNDLED", entry["path"])
+
+    bundled = {entry["path"] for entry in inventory if entry["class"] == CLASS_REPO_BUNDLED}
+    for required in REQUIRED_TRANSLATION_UNITS:
+        if required not in bundled:
+            _fail("SOURCE_CLOSURE_COMPILE_INVENTORY_INCOMPLETE", required)
+    upstream = {entry["path"] for entry in inventory if entry["class"] == CLASS_UPSTREAM_PINNED}
+    for required in REQUIRED_UPSTREAM_INPUTS:
+        if required not in upstream:
+            _fail("SOURCE_CLOSURE_COMPILE_INVENTORY_INCOMPLETE", required)
+    paths = [entry["path"] for entry in inventory]
+    if paths != sorted(paths):
+        _fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_MALFORMED", "ordering")
     return inventory
 
 

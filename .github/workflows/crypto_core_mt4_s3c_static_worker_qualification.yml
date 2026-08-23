@@ -54,10 +54,14 @@ env:
   BLST_RELEASE: v0.3.17
   BLST_COMMIT: 54e6e55674722fc2797ebb4bbb71b26d881eb4b8
 
-  # EM-11: the literal, non-candidate-derived expected program-header inventory.  The identical
-  # literal is pinned again on the trusted Stage-C surface, and the ELF qualifier holds a third copy
-  # in reviewed source.  The candidate's own headers are compared AGAINST these and can only fail.
-  S3C_EXPECTED_PHDR_INVENTORY: "PT_LOAD:5,PT_LOAD:6,PT_GNU_STACK:6"
+  # EM-11: the literal, non-candidate-derived expected program-header authority, now including the
+  # exact p_align of every segment.  The identical literal is pinned again on the trusted Stage-C
+  # surface, and the ELF qualifier holds a third copy in reviewed source.  The candidate's own
+  # headers are compared AGAINST these and can only fail.
+  #
+  # The PT_LOAD alignment is a property of the BUILD CONTRACT, not an assumption about a toolchain
+  # default: the link step below passes -Wl,-z,max-page-size=0x1000, which is what fixes it.
+  S3C_EXPECTED_PHDR_INVENTORY: "PT_LOAD:5:0x1000,PT_LOAD:6:0x1000,PT_GNU_STACK:6:0x10"
 
   # The exact enumerated shell variables any qualification command may reference.  None of them can
   # name a repository file.  Adding one requires an architecture revision, not a workflow edit.
@@ -125,8 +129,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/obj"
-          gcc -c -O2 -fno-pic -fno-builtin -fno-asynchronous-unwind-tables -fcf-protection=none -D__BLST_PORTABLE__ -D__BLST_NO_CPUID__ -I "$RUNNER_TEMP/blst/src" -I "$RUNNER_TEMP/blst/build" -I "$RUNNER_TEMP/blst/bindings" -o "$RUNNER_TEMP/obj/blst_server.o" "$RUNNER_TEMP/blst/src/server.c"
-          gcc -c -O2 -fno-pic -fno-asynchronous-unwind-tables -fcf-protection=none -o "$RUNNER_TEMP/obj/blst_assembly.o" "$RUNNER_TEMP/blst/build/assembly.S"
+          mkdir -p "$RUNNER_TEMP/dep"
+          gcc -c -O2 -fno-pic -fno-builtin -fno-asynchronous-unwind-tables -fcf-protection=none -D__BLST_PORTABLE__ -D__BLST_NO_CPUID__ -I "$RUNNER_TEMP/blst/src" -I "$RUNNER_TEMP/blst/build" -I "$RUNNER_TEMP/blst/bindings" -MD -MF "$RUNNER_TEMP/dep/blst_server.d" -o "$RUNNER_TEMP/obj/blst_server.o" "$RUNNER_TEMP/blst/src/server.c"
+          gcc -c -O2 -fno-pic -fno-asynchronous-unwind-tables -fcf-protection=none -MD -MF "$RUNNER_TEMP/dep/blst_assembly.d" -o "$RUNNER_TEMP/obj/blst_assembly.o" "$RUNNER_TEMP/blst/build/assembly.S"
           objcopy --remove-section=.note.gnu.property "$RUNNER_TEMP/obj/blst_server.o"
           objcopy --remove-section=.note.gnu.property "$RUNNER_TEMP/obj/blst_assembly.o"
           echo "S3C_BLST_BUILD=PASS"
@@ -145,13 +150,29 @@ jobs:
           gcc -c -MD -MF "$RUNNER_TEMP/dep/start.d" -o "$RUNNER_TEMP/obj/start.o" scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_start.S
           echo "S3C_WORKER_COMPILE=PASS"
 
+      # THE COMPILE INVENTORY MUST COVER EVERY LOAD-BEARING NATIVE INPUT (repair 7E).  The observer
+      # and the probe are compiled and RUN in the observation job, but their translation units are
+      # every bit as load-bearing for the qualification result as the worker's: the observer
+      # produces the raw observation record and the probe reports the UAPI constants the policy is
+      # derived against.  Dependency evidence for both is emitted HERE, in the job that owns the
+      # inventory, so the inventory is complete rather than covering only the linked image.  The
+      # objects produced here are dependency evidence only and are not linked into the candidate.
+      - name: Emit dependency evidence for the observer and probe translation units
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/depobj"
+          gcc -c -O2 -std=c11 -Wall -Wextra -Werror -MD -MF "$RUNNER_TEMP/dep/probe.d" -o "$RUNNER_TEMP/depobj/probe.o" scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c
+          gcc -c -O2 -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror -MD -MF "$RUNNER_TEMP/dep/launcher.d" -o "$RUNNER_TEMP/depobj/launcher.o" scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c
+          echo "S3C_OBSERVER_PROBE_DEPENDENCY_EVIDENCE=PASS"
+
       # The frozen link policy: static, non-PIE ET_EXEC, no CRT, no dynamic surface, no runtime
       # relocation, no build id, non-executable stack, and a hard failure on any undefined symbol.
       - name: Link the static freestanding candidate worker
         shell: bash
         run: |
           set -euo pipefail
-          gcc -static -no-pie -nostdlib -nostartfiles -Wl,-e,_start -Wl,--build-id=none -Wl,-z,noexecstack -Wl,-z,noseparate-code -Wl,--no-eh-frame-hdr -Wl,-z,defs -Wl,--fatal-warnings -o "$RUNNER_TEMP/$S3C_CANDIDATE_NAME" "$RUNNER_TEMP/obj/start.o" "$RUNNER_TEMP/obj/bootstrap.o" "$RUNNER_TEMP/obj/verify.o" "$RUNNER_TEMP/obj/policy.o" "$RUNNER_TEMP/obj/capability.o" "$RUNNER_TEMP/obj/blst_server.o" "$RUNNER_TEMP/obj/blst_assembly.o"
+          gcc -static -no-pie -nostdlib -nostartfiles -Wl,-e,_start -Wl,--build-id=none -Wl,-z,noexecstack -Wl,-z,noseparate-code -Wl,-z,max-page-size=0x1000 -Wl,--no-eh-frame-hdr -Wl,-z,defs -Wl,--fatal-warnings -o "$RUNNER_TEMP/$S3C_CANDIDATE_NAME" "$RUNNER_TEMP/obj/start.o" "$RUNNER_TEMP/obj/bootstrap.o" "$RUNNER_TEMP/obj/verify.o" "$RUNNER_TEMP/obj/policy.o" "$RUNNER_TEMP/obj/capability.o" "$RUNNER_TEMP/obj/blst_server.o" "$RUNNER_TEMP/obj/blst_assembly.o"
           echo "S3C_WORKER_LINK=PASS"
 
       - name: Emit the build manifest and the compile dependency inventory
@@ -160,7 +181,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/candidate"
           cp "$RUNNER_TEMP/$S3C_CANDIDATE_NAME" "$RUNNER_TEMP/candidate/$S3C_CANDIDATE_NAME"
-          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --worker-binary "$RUNNER_TEMP/candidate/$S3C_CANDIDATE_NAME" --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --dependency-file "$RUNNER_TEMP/dep/bootstrap.d" --dependency-file "$RUNNER_TEMP/dep/policy.d" --dependency-file "$RUNNER_TEMP/dep/capability.d" --dependency-file "$RUNNER_TEMP/dep/verify.d" --dependency-file "$RUNNER_TEMP/dep/start.d" --include-root "$RUNNER_TEMP/blst" --include-root "$GITHUB_WORKSPACE/scripts/crypto_core/qualification/s3c" --build-macro __BLST_PORTABLE__ --build-macro __BLST_NO_CPUID__ --compiler-identity gcc-ubuntu-22.04 --linker-identity ld-ubuntu-22.04 --source-run-id "$GITHUB_RUN_ID" --source-run-attempt "$GITHUB_RUN_ATTEMPT" --source-head-sha "$GITHUB_SHA" --inventory-out "$RUNNER_TEMP/compile_dependency_inventory.json" --out "$RUNNER_TEMP/candidate/mt4_s3c_build_manifest.json"
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --worker-binary "$RUNNER_TEMP/candidate/$S3C_CANDIDATE_NAME" --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --dependency-file "$RUNNER_TEMP/dep/bootstrap.d" --dependency-file "$RUNNER_TEMP/dep/policy.d" --dependency-file "$RUNNER_TEMP/dep/capability.d" --dependency-file "$RUNNER_TEMP/dep/verify.d" --dependency-file "$RUNNER_TEMP/dep/start.d" --dependency-file "$RUNNER_TEMP/dep/blst_server.d" --dependency-file "$RUNNER_TEMP/dep/blst_assembly.d" --dependency-file "$RUNNER_TEMP/dep/probe.d" --dependency-file "$RUNNER_TEMP/dep/launcher.d" --include-root "$RUNNER_TEMP/blst" --include-root "$GITHUB_WORKSPACE/scripts/crypto_core/qualification/s3c" --build-macro __BLST_PORTABLE__ --build-macro __BLST_NO_CPUID__ --compiler-identity gcc-ubuntu-22.04 --linker-identity ld-ubuntu-22.04 --source-run-id "$GITHUB_RUN_ID" --source-run-attempt "$GITHUB_RUN_ATTEMPT" --source-head-sha "$GITHUB_SHA" --inventory-out "$RUNNER_TEMP/compile_dependency_inventory.json" --out "$RUNNER_TEMP/candidate/mt4_s3c_build_manifest.json"
           echo "S3C_BUILD_MANIFEST=PASS"
 
       - name: Upload the immutable candidate artifact

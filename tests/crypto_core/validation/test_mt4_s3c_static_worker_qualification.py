@@ -25,10 +25,13 @@ workflow on the pinned runner, and is classified RUNTIME_TO_PROVE rather than as
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
 import importlib.util
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -999,6 +1002,9 @@ def build_reference_elf(**overrides):
     cap_binding = overrides.get("cap_binding", elf_qualify.STB_GLOBAL)
     cap_visibility = overrides.get("cap_visibility", elf_qualify.STV_HIDDEN)
     cap_shndx = overrides.get("cap_shndx", 1)
+    cap_symbol_type = overrides.get("cap_symbol_type", 1)
+    text_align = overrides.get("text_align", _PAGE)
+    stack_align = overrides.get("stack_align", 0x10)
     program_size = overrides.get("program_size", elf_qualify.INTERNAL_PROGRAM_SIZE_BYTES)
     fprog_len = overrides.get("fprog_len", elf_qualify.INTERNAL_PROGRAM_INSTRUCTIONS)
     fprog_pointer = overrides.get("fprog_pointer", _PROGRAM_VADDR)
@@ -1027,7 +1033,12 @@ def build_reference_elf(**overrides):
     symbols = bytes(24)
     symbols += _build_symbol(offsets["_start"], (elf_qualify.STB_GLOBAL << 4) | 2, elf_qualify.STV_HIDDEN, 1, entry, 16)
     symbols += _build_symbol(
-        offsets["__blst_platform_cap"], (cap_binding << 4) | 1, cap_visibility, cap_shndx, cap_vaddr, cap_size
+        offsets["__blst_platform_cap"],
+        (cap_binding << 4) | cap_symbol_type,
+        cap_visibility,
+        cap_shndx,
+        cap_vaddr,
+        cap_size,
     )
     symbols += _build_symbol(
         offsets["mt4_s3c_internal_filter_program"],
@@ -1055,11 +1066,11 @@ def build_reference_elf(**overrides):
         section_names += name.encode("ascii") + b"\x00"
 
     phdrs = [
-        (elf_qualify.PT_LOAD, text_flags, _TEXT_OFFSET, _TEXT_VADDR, text_filesz, text_memsz, _PAGE),
+        (elf_qualify.PT_LOAD, text_flags, _TEXT_OFFSET, _TEXT_VADDR, text_filesz, text_memsz, text_align),
         (elf_qualify.PT_LOAD, data_flags, _DATA_OFFSET, data_vaddr, _DATA_SIZE, data_memsz, _PAGE),
     ]
     if not omit_stack:
-        phdrs.append((elf_qualify.PT_GNU_STACK, stack_flags, 0, 0, 0, 0, 0x10))
+        phdrs.append((elf_qualify.PT_GNU_STACK, stack_flags, 0, 0, 0, 0, stack_align))
     phdrs.extend(extra_phdrs)
 
     header_end = 64 + 56 * len(phdrs)
@@ -1194,7 +1205,20 @@ def test_the_reference_image_qualifies():
         ("PT-GNU-STACK", {"omit_stack": True}, "PHDR_INVENTORY_MISMATCH"),
         ("PT-290", {"text_filesz": 0x600}, "SYMBOL_NOT_FILE_BACKED"),
         ("PT-296", {"text_memsz": 32 * 1024 * 1024}, "ELF_MEMORY_CEILING_EXCEEDED"),
-        ("PT-299a", {"cap_shndx": elf_qualify.SHN_UNDEF}, "BLST_CAP_UNDEFINED"),
+        ("PT-299a", {"cap_shndx": elf_qualify.SHN_UNDEF}, "UNDEFINED_SYMBOL_CLOSURE_VIOLATED"),
+        ("PT-299k", {"cap_binding": elf_qualify.STB_LOCAL}, "BLST_CAP_BINDING"),
+        ("PT-299l", {"cap_visibility": elf_qualify.STV_INTERNAL}, "BLST_CAP_VISIBILITY"),
+        ("PT-299m", {"cap_shndx": elf_qualify.SHN_COMMON}, "BLST_CAP_COMMON"),
+        ("PT-299n", {"cap_shndx": 0xFF20}, "BLST_CAP_SECTION_INDEX_INVALID"),
+        ("PT-299q", {"cap_shndx": 250}, "BLST_CAP_SECTION_INDEX_INVALID"),
+        ("PT-299p", {"cap_symbol_type": 2}, "BLST_CAP_TYPE"),
+        ("PT-ALIGN-LOAD", {"text_align": 0x2000}, "PHDR_INVENTORY_MISMATCH"),
+        ("PT-ALIGN-STACK", {"stack_align": 0x8}, "PHDR_INVENTORY_MISMATCH"),
+        (
+            "PT-UNDEF-EXTRA",
+            {"extra_symbols": (("memcpy", (elf_qualify.STB_GLOBAL << 4) | 2, 0, elf_qualify.SHN_UNDEF, 0, 0),)},
+            "UNDEFINED_SYMBOL_CLOSURE_VIOLATED",
+        ),
         ("PT-299b", {"cap_binding": elf_qualify.STB_WEAK}, "BLST_CAP_WEAK"),
         ("PT-299d", {"cap_visibility": elf_qualify.STV_DEFAULT}, "BLST_CAP_VISIBILITY"),
         ("PT-299e", {"cap_value": b"\x01\x00\x00\x00"}, "BLST_CAP_VALUE"),
@@ -1241,7 +1265,10 @@ def test_pt_287_the_expected_phdr_oracle_may_never_come_from_the_candidate():
     # Two independent NON-CANDIDATE authorities must agree.  A disagreement -- which is what a
     # candidate-derived oracle would produce -- fails before any header is even parsed.
     with pytest.raises(elf_qualify.ElfQualificationError) as error:
-        _qualify(build_reference_elf(), inventory="PT_LOAD:5,PT_LOAD:6,PT_GNU_STACK:6,PT_NOTE:4")
+        _qualify(
+            build_reference_elf(),
+            inventory="PT_LOAD:5:0x1000,PT_LOAD:6:0x1000,PT_GNU_STACK:6:0x10,PT_NOTE:4:0x4",
+        )
     assert "PHDR_INVENTORY_AUTHORITY_DISAGREEMENT" in str(error.value)
 
 
@@ -1322,35 +1349,123 @@ def _launcher_code():
     return re.sub(r"/\*.*?\*/", " ", source, flags=re.DOTALL)
 
 
+def _launcher_ptrace_oracle():
+    """The exact request set the launcher declares it may issue, read from the frozen table."""
+    block = re.search(
+        r"static const long mt4_s3c_permitted_ptrace_requests\[[^\]]*\]\s*=\s*\{(.*?)\};",
+        _read(LAUNCHER_SOURCE),
+        flags=re.DOTALL,
+    )
+    assert block, "the launcher must declare a positive ptrace oracle"
+    return sorted(item.strip().replace("(long)", "").strip() for item in block.group(1).split(",") if item.strip())
+
+
+def test_the_launcher_declares_a_positive_finite_tracer_oracle():
+    # A POSITIVE oracle, not an absence check: the exact set is enumerated, so a request nobody
+    # thought to forbid is excluded by construction rather than by having been remembered.
+    assert _launcher_ptrace_oracle() == sorted(
+        [
+            "PTRACE_TRACEME",
+            "PTRACE_SETOPTIONS",
+            "PTRACE_SYSCALL",
+            "PTRACE_CONT",
+            "PTRACE_GETREGSET",
+            "PTRACE_PEEKDATA",
+            "PTRACE_SECCOMP_GET_FILTER",
+        ]
+    )
+
+
+def test_every_ptrace_call_goes_through_the_single_gateway():
+    """Executable code may reach ptrace() only inside the gateway that enforces the oracle.
+
+    This is what makes the oracle binding rather than decorative: a numeric or computed request
+    cannot be issued without passing the membership test, because there is no other call site.
+    """
+    code = _launcher_code()
+    raw = re.findall(r"(?<![_a-zA-Z])ptrace\s*\(", code)
+    # Exactly one raw call: the one inside mt4_s3c_ptrace_permitted.
+    assert len(raw) == 1, raw
+    gateway = code.index("static long mt4_s3c_ptrace_permitted(")
+    call = code.index("ptrace((enum __ptrace_request)request", gateway)
+    assert call > gateway
+    # Every other tracer site names the gateway.
+    assert code.count("mt4_s3c_ptrace_permitted(") >= 9
+
+
 @pytest.mark.parametrize("request_name", _FORBIDDEN_TRACER_REQUESTS)
-def test_pt_110b_no_forbidden_tracer_operation_appears_in_executable_code(request_name):
-    assert request_name not in _launcher_code(), request_name
+def test_pt_110b_no_forbidden_tracer_operation_is_reachable(request_name):
+    """A forbidden request is excluded by the ORACLE, not merely absent from the source text.
+
+    The old test asserted the token did not occur, which a numeric literal defeats and which a
+    deliberate mention -- such as the value assertion that forbids PTRACE_O_SUSPEND_SECCOMP by
+    number -- breaks for the wrong reason.
+    """
+    assert request_name not in _launcher_ptrace_oracle(), request_name
+
+
+def test_a_numeric_forbidden_request_is_rejected_by_the_oracle():
+    """The oracle is a VALUE membership test, so a numeric request is refused like a named one."""
+    code = _launcher_code()
+    body = code[code.index("static long mt4_s3c_ptrace_permitted(") :]
+    body = body[: body.index("return ptrace(")]
+    # Membership is decided by comparing the request VALUE against the frozen table, and the
+    # default outcome is refusal, so an unrecognised number cannot fall through to the kernel.
+    assert "mt4_s3c_permitted_ptrace_requests[index] == request" in body
+    assert "if (permitted == 0)" in body
+    assert body.index("permitted = 0") < body.index("if (permitted == 0)")
 
 
 def test_pt_110e_the_tracer_never_opens_proc_mem():
     code = _launcher_code()
     assert "/mem" not in code
     assert "process_vm_readv" not in code
+    assert "process_vm_writev" not in code
     assert "/proc/%ld/status" in code
 
 
 def test_pt_110d_every_resume_site_passes_a_literal_zero_signal():
     code = _launcher_code()
-    sites = re.findall(r"ptrace\(\s*(?:PTRACE_SYSCALL|PTRACE_CONT)\s*,[^;]*", code, flags=re.DOTALL)
+    sites = re.findall(
+        r"mt4_s3c_ptrace_permitted\(\s*\(long\)(?:PTRACE_SYSCALL|PTRACE_CONT)\s*,[^;]*", code, flags=re.DOTALL
+    )
     assert len(sites) >= 2, "the launcher must contain the frozen resume sites"
     for site in sites:
         # CONTROL, never MUTATION: resuming a stopped process changes WHEN it runs, never WHAT
         # it is, and the distinction is drawn exactly at the literal zero signal argument.
-        assert "(void *)0" in site, site
+        assert "MT4_S3C_PTRACE_RESUME_SIGNAL" in site, site
+    # And the gateway refuses anything else, so a literal or computed nonzero signal cannot be
+    # delivered even if a future edit introduced one at a call site.
+    assert "data != MT4_S3C_PTRACE_RESUME_SIGNAL" in code
+    assert "#define MT4_S3C_PTRACE_RESUME_SIGNAL ((void *)0)" in _read(LAUNCHER_SOURCE)
+
+
+def test_a_nonzero_resume_signal_is_refused_before_the_kernel():
+    code = _launcher_code()
+    body = code[code.index("static long mt4_s3c_ptrace_permitted(") :]
+    body = body[: body.index("return ptrace(")]
+    guard = body[body.index("request == (long)PTRACE_SYSCALL") :]
+    # The refusal is unconditional on the DATA argument, so neither a literal nor a computed
+    # nonzero value reaches ptrace.
+    assert "errno = EPERM" in guard
+    assert "return -1L" in guard
 
 
 def test_the_frozen_ptrace_option_set_is_exactly_three_bits():
-    code = _launcher_code()
-    match = re.search(r"#define MT4_S3C_PTRACE_OPTIONS \(([^)]*)\)", _read(LAUNCHER_SOURCE))
+    source = _read(LAUNCHER_SOURCE)
+    match = re.search(r"#define MT4_S3C_PTRACE_OPTIONS \(([^)]*)\)", source)
     assert match
     options = [item.strip() for item in match.group(1).split("|")]
     assert sorted(options) == sorted(["PTRACE_O_TRACESYSGOOD", "PTRACE_O_TRACEEXEC", "PTRACE_O_EXITKILL"])
-    assert code.count("PTRACE_SETOPTIONS") == 1
+    # The forbidden bit is excluded BY VALUE at compile time, which a token check cannot do.
+    assert "#define MT4_S3C_PTRACE_O_SUSPEND_SECCOMP_VALUE 0x00200000u" in source
+    assert "MT4_S3C_PTRACE_O_SUSPEND_SECCOMP_VALUE) == 0ul" in source
+    assert "~MT4_S3C_PTRACE_OPTION_BITS_ALLOWED) == 0ul" in source
+    # SETOPTIONS may install only the frozen word, enforced in the gateway.
+    assert (
+        "request == (long)PTRACE_SETOPTIONS && data != (void *)(unsigned long)MT4_S3C_PTRACE_OPTIONS"
+        in _launcher_code()
+    )
 
 
 def test_pt_128_exactly_one_outer_program_definition_and_one_launcher_install_site():
@@ -1364,11 +1479,39 @@ def test_pt_128_exactly_one_outer_program_definition_and_one_launcher_install_si
 
 def test_pt_193_nothing_is_interposed_between_execve_and_the_launcher_exit():
     code = _launcher_code()
-    start = code.index("execve(MT4_S3C_CANDIDATE_PATH")
-    end = code.index("_exit(MT4_S3C_EXIT_LAUNCHER_FAILED)", start)
+    start = code.index("mt4_s3c_sys_execve(MT4_S3C_CANDIDATE_PATH")
+    end = code.index("mt4_s3c_sys_exit_group(MT4_S3C_EXIT_LAUNCHER_FAILED)", start)
     between = code[start:end]
     for forbidden in ("read(", "write(", "verify", "if (", "for (", "while ("):
         assert forbidden not in between, forbidden
+
+
+def test_the_post_filter_syscalls_are_project_owned_with_a_zeroed_argument_tail():
+    """Repair 5D.  A libc wrapper sets only the registers it needs; the filter requires all six.
+
+    The outer filter classifies every one of the six argument words and demands an exactly zero
+    tail, so an execve issued through libc -- which leaves %r10, %r8 and %r9 holding whatever the
+    caller left there -- is killed by the launcher's own policy.  Both post-filter syscalls
+    therefore go through the project-owned six-argument wrapper.
+    """
+    code = _launcher_code()
+    source = _read(LAUNCHER_SOURCE)
+    # The wrapper exists, loads all six argument registers, and is the one used after the install.
+    assert "static inline long mt4_s3c_syscall6(" in source
+    for register in ('__asm__("r10")', '__asm__("r8")', '__asm__("r9")'):
+        assert register in source, register
+    for wrapper in ("mt4_s3c_sys_execve", "mt4_s3c_sys_exit_group"):
+        definition = re.search(r"mt4_s3c_syscall6\(__NR_\w+[^;]*\)", code[code.index(wrapper) :])
+        assert definition, wrapper
+        arguments = definition.group(0).split("(", 1)[1].rsplit(")", 1)[0].split(",")
+        assert len(arguments) == 7, wrapper
+        assert [item.strip() for item in arguments[-3:]] == ["0", "0", "0"], wrapper
+    # And the post-filter path uses NEITHER libc entry point.
+    launch = code[code.index("State 18 EXACT_CANDIDATE_LAUNCH") if "State 18" in code else 0 :]
+    tail = code[code.index("mt4_s3c_sys_execve(MT4_S3C_CANDIDATE_PATH") :]
+    assert "(void)execve(" not in tail
+    assert "_exit(MT4_S3C_EXIT_LAUNCHER_FAILED)" not in tail.replace("mt4_s3c_sys_exit_group(", "")
+    del launch
 
 
 def test_the_worker_installs_exactly_one_internal_filter_before_any_request_read():
@@ -1497,6 +1640,11 @@ def test_pt_267_no_bundled_script_reads_a_repository_relative_path_literal(name)
             # not a decision-affecting file read, so it is the one permitted non-entry literal.
             if value in SOURCE_BUNDLE_PATHS or value == "scripts/crypto_core/qualification/s3c":
                 continue
+            # REQUIRED_UPSTREAM_INPUTS are relative to the PINNED UPSTREAM ROOT, not to the
+            # repository, so they are neither a repository read nor a bundle entry.  They exist to
+            # make the compile inventory's coverage of the pinned blst inputs mandatory.
+            if name == "mt4_s3c_build_manifest.py" and value in build_manifest.REQUIRED_UPSTREAM_INPUTS:
+                continue
             raise AssertionError((name, value))
 
 
@@ -1520,10 +1668,14 @@ def test_pt_272_an_include_root_outside_the_allowlist_fails(tmp_path):
 
 
 def test_the_runtime_closure_relation_is_a_subset_not_an_equality():
+    """Repair 7A: no `or True`, and the assertion is about behaviour rather than documentation.
+
+    A statically expected dependency that lies on an unexecuted branch is legitimate, so the
+    relation is OBSERVED subset-of STATIC_EXPECTED and never an equality.  The direction is proven
+    by construction below: a dependency inventory containing a bundle entry that this run never
+    executed is accepted, while an unbundled one is refused.
+    """
     source = _read(_S3C / "mt4_s3c_build_manifest.py")
-    assert "SUBSET" in _read(TRUSTED_GATE) or True  # documented in the architecture, asserted below
-    # A statically expected dependency that lies on an unexecuted branch is legitimate and must not
-    # be treated as a closure defect, so the relation is a SUBSET relation in that direction only.
     assert "SOURCE_CLOSURE_COMPILE_DEPENDENCY_UNBUNDLED" in source
 
 
@@ -1808,3 +1960,696 @@ def test_the_six_read_only_dependencies_are_never_written_by_this_slice():
                 # never as an output path of any kind.
                 for writer in ("--out " + dependency, ">" + dependency, "write(" + dependency):
                     assert writer not in text, (path.name, dependency)
+
+
+# =================================================================================================
+# REPAIR 3: THE SUPERVISOR DUMPABILITY LIFECYCLE.
+#
+# The property is an ORDER property of one supervisor process across 25 cases, and it cannot be
+# executed on this host.  What CAN be executed is the order itself: the frozen sequence is extracted
+# from the launcher source and checked against an invariant defined here, and the invariant is then
+# driven with mutated sequences to prove it is not vacuous.  A two-case replay proves the thing the
+# unresolved review thread is actually about -- that case 2's map writes happen only after case 1's
+# restoration.
+# =================================================================================================
+
+_LIFECYCLE_MARKERS = (
+    ("PRE_CLONE_AUTHENTICATED", "mt4_s3c_supervisor_dumpability_precondition()"),
+    ("CLONE", "mt4_s3c_sys_clone3(&arguments"),
+    ("MAP_SETGROUPS", '"/proc/%ld/setgroups"'),
+    ("MAP_UID", '"/proc/%ld/uid_map"'),
+    ("MAP_GID", '"/proc/%ld/gid_map"'),
+    ("SET_NON_DUMPABLE", "prctl(PR_SET_DUMPABLE, 0, 0, 0, 0)"),
+    ("REAP", "waitpid(child, &status_word, 0)"),
+    ("RESTORE", "mt4_s3c_supervisor_dumpability_restore()"),
+)
+
+_MAP_EVENTS = ("MAP_SETGROUPS", "MAP_UID", "MAP_GID")
+
+
+def _run_case_lifecycle():
+    """Extract the per-case lifecycle, in SOURCE ORDER, from mt4_s3c_run_case."""
+    code = _launcher_code()
+    start = code.index("static void mt4_s3c_run_case(")
+    end = code.index("static void mt4_s3c_emit_case(")
+    body = code[start:end]
+    events = []
+    for name, marker in _LIFECYCLE_MARKERS:
+        position = body.find(marker)
+        assert position >= 0, name
+        events.append((position, name))
+    return [name for _position, name in sorted(events)]
+
+
+def assert_lifecycle(events):
+    """The invariant.  Restoration happens ONLY after a complete reap and ALWAYS before the next
+    clone or map write."""
+    assert events.count("RESTORE") == 1, "exactly one restoration site"
+    assert events.count("SET_NON_DUMPABLE") == 1, "exactly one site makes the supervisor non-dumpable"
+    index = {name: events.index(name) for name in dict(_LIFECYCLE_MARKERS)}
+    assert index["PRE_CLONE_AUTHENTICATED"] < index["CLONE"], "dumpability is authenticated before clone3"
+    for event in _MAP_EVENTS:
+        assert index["CLONE"] < index[event], "maps are written after the child exists"
+        assert index[event] < index["SET_NON_DUMPABLE"], "maps are written while the supervisor is dumpable"
+    assert index["SET_NON_DUMPABLE"] < index["REAP"], "the supervisor drops dumpability before the child runs"
+    assert index["REAP"] < index["RESTORE"], "restoration happens only after a complete reap"
+    return True
+
+
+def test_the_frozen_per_case_dumpability_lifecycle_holds_in_the_launcher():
+    assert assert_lifecycle(_run_case_lifecycle())
+
+
+def test_two_consecutive_cases_map_only_after_the_previous_restoration():
+    """The exact condition the unresolved review thread describes.
+
+    Case 1 makes the supervisor non-dumpable.  The dumpable flag is inherited across clone, so a
+    child cloned before restoration is born non-dumpable and its uid_map and gid_map become
+    root-owned -- which is why case 2 previously failed with UID_GID_MAP_FAILED.
+    """
+    sequence = _run_case_lifecycle()
+    replay = sequence + sequence
+    boundary = len(sequence)
+    first_restore = replay.index("RESTORE")
+    assert first_restore < boundary, "case 1 must restore within its own case"
+    second_clone = boundary + sequence.index("CLONE")
+    assert first_restore < second_clone, "case 2 clones only after case 1 restored"
+    for event in _MAP_EVENTS:
+        assert first_restore < boundary + sequence.index(event), event
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    (
+        ("omit restoration", lambda events: [name for name in events if name != "RESTORE"]),
+        (
+            "restore before reap",
+            lambda events: (
+                [name for name in events if name != "RESTORE"][: events.index("REAP")]
+                + ["RESTORE"]
+                + [name for name in events if name != "RESTORE"][events.index("REAP") :]
+            ),
+        ),
+        ("restore twice", lambda events: events + ["RESTORE"]),
+        (
+            "next clone before restoration",
+            lambda events: [name for name in events if name != "RESTORE"] + [],
+        ),
+        (
+            "uid_map before the child exists",
+            lambda events: ["MAP_UID"] + [name for name in events if name != "MAP_UID"],
+        ),
+        (
+            "maps after the supervisor is non-dumpable",
+            lambda events: (
+                [name for name in events if name != "MAP_GID"][: events.index("REAP") - 1]
+                + ["MAP_GID"]
+                + [name for name in events if name != "MAP_GID"][events.index("REAP") - 1 :]
+            ),
+        ),
+        (
+            "dumpability never authenticated before clone",
+            lambda events: [name for name in events if name != "PRE_CLONE_AUTHENTICATED"] + ["PRE_CLONE_AUTHENTICATED"],
+        ),
+    ),
+)
+def test_a_broken_dumpability_lifecycle_is_rejected(label, mutate):
+    mutant = mutate(list(_run_case_lifecycle()))
+    with pytest.raises((AssertionError, ValueError)):
+        assert_lifecycle(mutant)
+
+
+def test_a_restoration_failure_halts_the_sequence_instead_of_running_the_next_case():
+    """A restoration failure is INFRASTRUCTURE, never a candidate verdict, and it stops the run."""
+    code = _launcher_code()
+    assert "static int mt4_s3c_sequence_halted = 0;" in code
+    # The failure path sets the halt flag and names its own reason.
+    restore = code[code.index("mt4_s3c_supervisor_dumpability_restore() != 0") :]
+    assert "mt4_s3c_sequence_halted = 1;" in restore[:400]
+    assert "MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED" in restore[:600]
+    # And the case loop refuses to run another case once it is set.
+    loop = code[code.index("for (index = 0; index < plan.case_count; index++)") :]
+    guard = loop[: loop.index("mt4_s3c_run_case(")]
+    assert "if (mt4_s3c_sequence_halted)" in guard
+    assert "mt4_s3c_fatal(MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED" in guard
+
+
+def test_the_restored_value_is_authenticated_by_reading_it_back():
+    """A prctl return code is a request result, not proof; the flag is READ BACK."""
+    source = _read(LAUNCHER_SOURCE)
+    assert "prctl(PR_GET_DUMPABLE, 0, 0, 0, 0)" in source
+    assert "#define MT4_S3C_SUPERVISOR_DUMPABLE_REQUIRED 1" in source
+    restore = source[source.index("static int mt4_s3c_supervisor_dumpability_restore(void)") :]
+    restore = restore[: restore.index("\n}\n")]
+    assert "mt4_s3c_supervisor_dumpability_is(MT4_S3C_SUPERVISOR_DUMPABLE_REQUIRED)" in restore
+
+
+# =================================================================================================
+# REPAIR 5C: THE /proc STATUS DOCUMENT IS VALIDATED AS A WHOLE BEFORE ANY FIELD IS EXTRACTED.
+# =================================================================================================
+
+
+def test_the_status_buffer_is_validated_whole_before_any_field_is_extracted():
+    code = _launcher_code()
+    reader = code[code.index("static int mt4_s3c_read_seccomp_status(") :]
+    reader = reader[: reader.index("static int mt4_s3c_require_baseline_zero(")]
+    gate_position = reader.index("MT4_S3C_REASON_SECCOMP_BASELINE_ENCODING_INVALID")
+    first_field = reader.index("mt4_s3c_parse_status_field(")
+    # Permissive parsing -- decoding the two fields we want while ignoring the rest -- is exactly
+    # what this ordering forbids.
+    assert gate_position < first_field, "the whole-buffer gate must precede field extraction"
+    assert "byte == 0u" in reader, "an embedded NUL is rejected"
+    assert "byte < 0x20u || byte > 0x7Eu" in reader, "non-ASCII anywhere is rejected"
+
+
+def test_the_status_parser_rejects_every_named_malformation():
+    code = _launcher_code()
+    parser = code[code.index("static int mt4_s3c_parse_status_field(") :]
+    parser = parser[: parser.index("static int mt4_s3c_read_seccomp_status(")]
+    assert "MT4_S3C_REASON_SECCOMP_BASELINE_FIELD_DUPLICATE" in parser
+    assert "MT4_S3C_REASON_SECCOMP_BASELINE_FIELD_MALFORMED" in parser
+    assert "MT4_S3C_REASON_SECCOMP_BASELINE_FIELD_MISSING" in parser
+    # Oversized input is rejected by the reader rather than truncated.
+    reader = code[code.index("static int mt4_s3c_read_seccomp_status(") :]
+    assert "used == sizeof(buffer)" in reader[:2000]
+
+
+# =================================================================================================
+# REPAIR 7D: AN INDEPENDENTLY DEFINED WORKFLOW GRAMMAR.
+#
+# The old check parsed the qualification workflow using an allowlist the workflow itself declared,
+# which is circular.  The grammar below is defined HERE and knows nothing about what the workflow
+# says about itself; the workflow is the SUBJECT, and mutants prove the grammar bites.
+# =================================================================================================
+
+_GRAMMAR_FORBIDDEN = (
+    ("command substitution", re.compile(r"\$\((?!\()")),
+    ("backtick substitution", re.compile(r"`")),
+    ("sourcing", re.compile(r"^\s*(source|\.)\s+\S", re.MULTILINE)),
+    ("inline interpreter code", re.compile(r"python3?\s+-c\b")),
+    ("an interpreter reading stdin", re.compile(r"python3?\s+-\s")),
+    ("eval", re.compile(r"^\s*eval\s", re.MULTILINE)),
+    ("a computed repository path", re.compile(r"\$\{[A-Z_]+\}/(scripts|tests|src)/")),
+)
+
+_GRAMMAR_CASE_OPEN = re.compile(r"^\s*case\s+.*\sin\s*$")
+_GRAMMAR_CASE_CLOSE = re.compile(r"^\s*esac\s*$")
+_GRAMMAR_DOUBLE = re.compile(r'"[^"]*"')
+_GRAMMAR_SINGLE = re.compile(r"'[^']*'")
+
+
+def _grammar_unquoted_glob(script):
+    inside_case = False
+    for line in script.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if _GRAMMAR_CASE_OPEN.match(line):
+            inside_case = True
+            continue
+        if _GRAMMAR_CASE_CLOSE.match(line):
+            inside_case = False
+            continue
+        body = line
+        if inside_case and ")" in body:
+            body = body.split(")", 1)[1]
+        if "*" in _GRAMMAR_SINGLE.sub("", _GRAMMAR_DOUBLE.sub("", body)):
+            return line
+    return None
+
+
+def assert_workflow_grammar(workflow):
+    """Reject every unapproved shell form, and every action that is not a pinned third-party SHA."""
+    for job in workflow["jobs"].values():
+        for step in job.get("steps", []):
+            script = step.get("run") or ""
+            for label, pattern in _GRAMMAR_FORBIDDEN:
+                assert not pattern.search(script), (label, step.get("name"))
+            assert _grammar_unquoted_glob(script) is None, ("a glob", step.get("name"))
+            uses = step.get("uses")
+            if uses is not None:
+                assert not uses.startswith("./"), ("a repo-local action", step.get("name"))
+                assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", uses), ("an unpinned action", uses)
+    return True
+
+
+def test_the_qualification_workflow_satisfies_the_independent_grammar(qualification_workflow):
+    assert assert_workflow_grammar(qualification_workflow)
+
+
+@pytest.mark.parametrize(
+    ("label", "script"),
+    (
+        ("command substitution", 'X="$(cat /etc/passwd)"\n'),
+        ("backticks", "X=`id`\n"),
+        ("sourcing", ". ./scripts/helper.sh\n"),
+        ("inline interpreter code", 'python -c "import os"\n'),
+        ("stdin interpreter", "python3 - <<EOF\nprint(1)\nEOF\n"),
+        ("eval", "eval ${COMMAND}\n"),
+        ("a glob", "rm ${RUNNER_TEMP}/*\n"),
+        ("a computed repository path", "python ${HELPER_DIR}/scripts/run.py\n"),
+    ),
+)
+def test_the_independent_grammar_rejects_each_unapproved_form(qualification_workflow, label, script):
+    mutant = copy.deepcopy(qualification_workflow)
+    first = next(iter(mutant["jobs"].values()))
+    first["steps"].append({"name": "injected", "shell": "bash", "run": script})
+    with pytest.raises(AssertionError):
+        assert_workflow_grammar(mutant)
+
+
+def test_the_independent_grammar_rejects_a_repo_local_action(qualification_workflow):
+    mutant = copy.deepcopy(qualification_workflow)
+    first = next(iter(mutant["jobs"].values()))
+    first["steps"].append({"name": "local", "uses": "./.github/actions/helper"})
+    with pytest.raises(AssertionError):
+        assert_workflow_grammar(mutant)
+
+
+def test_the_independent_grammar_rejects_an_unpinned_action(qualification_workflow):
+    mutant = copy.deepcopy(qualification_workflow)
+    first = next(iter(mutant["jobs"].values()))
+    first["steps"].append({"name": "unpinned", "uses": "actions/checkout@v4"})
+    with pytest.raises(AssertionError):
+        assert_workflow_grammar(mutant)
+
+
+# =================================================================================================
+# REPAIR 7B: NON-CIRCULAR STATIC DISCOVERY OF REPO-CONTROLLED DEPENDENCIES.
+#
+# Discovery is performed here, over the workflows and over every file they reach, and the result is
+# then required to lie inside the authorized scope.  Nothing is compared against a manually repeated
+# list that shares authority with the thing being checked.
+# =================================================================================================
+
+_REPO_PATH_TOKEN = re.compile(r"(?<![\w./-])((?:scripts|tests|src|docs)/[\w./-]+|\.github/[\w./-]+)")
+
+AUTHORIZED_SCOPE = set(NEW_PATHS) | set(READ_ONLY_DEPENDENCIES)
+
+
+def _discover_python_dependencies(path, source):
+    """Every import form, plus every repo-path literal that could steer a decision."""
+    found = set()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        # Top-level, function-local, conditional and lazy imports are all ast.Import nodes wherever
+        # they appear, so walking the whole tree covers all four without special-casing depth.
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                found.add(("import", alias.name))
+        elif isinstance(node, ast.ImportFrom):
+            found.add(("import", node.module or ""))
+        elif isinstance(node, ast.Call):
+            target = node.func
+            name = getattr(target, "attr", None) or getattr(target, "id", None)
+            if name in ("import_module", "__import__", "spec_from_file_location"):
+                found.add(("dynamic-import", path))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            for match in _REPO_PATH_TOKEN.findall(node.value):
+                found.add(("path", match))
+    return found
+
+
+def _discover_native_dependencies(source):
+    """Quoted includes are repo-local by definition; angle includes are toolchain."""
+    return {("path", match) for match in re.findall(r'#\s*include\s+"([^"]+)"', source)}
+
+
+def static_repo_closure():
+    """Discover every repo-controlled dependency reachable from the two workflows."""
+    discovered = set()
+    reached = set()
+    for workflow in (QUALIFICATION_WORKFLOW, TRUSTED_WORKFLOW):
+        document = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+        for job in document["jobs"].values():
+            for step in job.get("steps", []):
+                uses = step.get("uses")
+                if uses:
+                    assert not uses.startswith("./"), uses
+                for match in _REPO_PATH_TOKEN.findall(step.get("run") or ""):
+                    discovered.add(("path", match))
+                    reached.add(match)
+    for relative in sorted(reached):
+        candidate = _REPO_ROOT / relative
+        if not candidate.is_file():
+            continue
+        body = candidate.read_text(encoding="utf-8")
+        if candidate.suffix == ".py":
+            discovered |= _discover_python_dependencies(relative, body)
+        elif candidate.suffix in (".c", ".S", ".h"):
+            discovered |= _discover_native_dependencies(body)
+    return discovered
+
+
+def test_static_source_closure_reaches_nothing_outside_the_authorized_scope():
+    """Repair 7B.  Every repo-controlled path DISCOVERED from the workflows is in scope."""
+    discovered = static_repo_closure()
+    paths = {value for kind, value in discovered if kind == "path"}
+    assert paths, "discovery must actually find something"
+    outside = sorted(path for path in paths if path not in AUTHORIZED_SCOPE and (_REPO_ROOT / path).is_file())
+    assert outside == [], outside
+    # No dynamic import machinery is reachable at all.
+    assert not [entry for entry in discovered if entry[0] == "dynamic-import"]
+
+
+def test_the_static_closure_discovers_a_planted_out_of_scope_dependency(tmp_path):
+    """The discovery is not vacuous: a planted repo path outside scope is found."""
+    planted = "scripts/crypto_core/qualification/s3c/not_a_bundle_entry.py"
+    assert _REPO_PATH_TOKEN.findall("python " + planted + " --run") == [planted]
+    assert planted not in AUTHORIZED_SCOPE
+
+
+# =================================================================================================
+# REPAIR 7C: AN ISOLATED RUNTIME REPO-DEPENDENCY RECORDER.
+#
+# The relation is OBSERVED subset-of STATIC_EXPECTED.  A statically expected dependency on an
+# unexecuted branch is legitimate; an observed dependency that static discovery never found is a
+# closure break and fails closed.  The recorder runs in its OWN process, reads only the module it is
+# asked about, and therefore adds no uncontrolled repository dependency of its own.
+# =================================================================================================
+
+_RECORDER = """
+import json
+import sys
+
+REPO = sys.argv[1].replace(chr(92), "/")
+TARGET = sys.argv[2]
+observed = set()
+
+
+def hook(event, arguments):
+    if event == "open" and arguments and isinstance(arguments[0], str):
+        path = arguments[0].replace(chr(92), "/")
+        if path.startswith(REPO):
+            observed.add(path[len(REPO) :].lstrip("/"))
+    elif event == "exec" and False:
+        pass
+
+
+sys.addaudithook(hook)
+
+import importlib.util  # noqa: E402
+
+specification = importlib.util.spec_from_file_location("mt4_s3c_recorded", TARGET)
+module = importlib.util.module_from_spec(specification)
+specification.loader.exec_module(module)
+
+for name in dir(module):
+    getattr(module, name)
+
+sys.stdout.write("MT4_S3C_OBSERVED=" + json.dumps(sorted(observed)) + chr(10))
+"""
+
+
+def _record_runtime_dependencies(tmp_path, target):
+    recorder = tmp_path / "mt4_s3c_dependency_recorder.py"
+    recorder.write_text(_RECORDER, encoding="utf-8")
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter, fixed argument vector
+        [sys.executable, "-I", "-S", str(recorder), str(_REPO_ROOT), str(target)],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        timeout=120,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    marker = "MT4_S3C_OBSERVED="
+    line = next(line for line in completed.stdout.splitlines() if line.startswith(marker))
+    return set(json.loads(line[len(marker) :]))
+
+
+@pytest.mark.parametrize("name", _BUNDLED_PYTHON)
+def test_observed_runtime_dependencies_are_a_subset_of_the_static_expectation(tmp_path, name):
+    observed = _record_runtime_dependencies(tmp_path, _S3C / name)
+    static_expected = AUTHORIZED_SCOPE | {value for kind, value in static_repo_closure() if kind == "path"}
+    # The module itself is the one file the recorder must open to load it at all.
+    observed.discard("scripts/crypto_core/qualification/s3c/" + name)
+    # __pycache__ writes are the interpreter's own bytecode cache, produced by loading the module at
+    # all; they are not a repository dependency the module chose to take.
+    observed = {path for path in observed if "__pycache__/" not in path}
+    outside = sorted(path for path in observed if path not in static_expected)
+    assert outside == [], (name, outside)
+
+
+def test_the_runtime_recorder_actually_observes_a_repository_read(tmp_path):
+    """The recorder is not vacuous: a module that reads a repo file is caught.
+
+    Without this the subset relation could pass simply because nothing was ever recorded.
+    """
+    probe = tmp_path / "probe_module.py"
+    probe.write_text(
+        "import pathlib\n"
+        "REPO = pathlib.Path(" + repr(str(_REPO_ROOT)) + ")\n"
+        "VALUE = (REPO / 'pyproject.toml').read_text(encoding='utf-8')[:1]\n",
+        encoding="utf-8",
+    )
+    observed = _record_runtime_dependencies(tmp_path, probe)
+    assert "pyproject.toml" in observed
+
+
+# =================================================================================================
+# REPAIR 4: EVERY ONE OF THE 25 CASES CARRIES A BOUND FILTER-EQUIVALENCE RESULT.
+# =================================================================================================
+
+
+def _synthetic_policy_reference(internal_bytes, outer_bytes):
+    return {
+        "internal_policy_id": "MT4_S3C_INTERNAL_CONTAINMENT_P0_LINUX_X86_64",
+        "internal_policy_sha256": "b" * 64,
+        "internal_cbpf_instruction_count": len(internal_bytes) // 8,
+        "internal_emitted_cbpf_sha256": adjudicator.cbpf_digest(internal_bytes),
+        "outer_emitted_cbpf_sha256": adjudicator.cbpf_digest(outer_bytes),
+        "outer_governed_digest_sha256": "c" * 64,
+        "internal_fprog_va_u64": 0x4016A0,
+        "internal_program_va_u64": 0x401700,
+        "syscall_numbers": {
+            "read": 0,
+            "write": 1,
+            "close": 3,
+            "execve": 59,
+            "prctl": 157,
+            "exit_group": 231,
+            "seccomp": 317,
+            "close_range": 436,
+        },
+    }
+
+
+def _synthetic_case(expected, internal_bytes, outer_bytes, identity):
+    process_case = expected["expected_result_class"] == 0
+    return {
+        "case_index": expected["case_index"],
+        "case_id": expected["case_id"],
+        "stimulus_kind": expected["stimulus_kind"],
+        "expected_result_class": expected["expected_result_class"],
+        "expected_result_code": expected["expected_result_code"],
+        "expected_exit_status": expected["expected_exit_status"],
+        "observation_basis": "OBSERVER",
+        "infrastructure_reason": "NONE",
+        "infrastructure_marker": "",
+        "exec_transition_observed": True,
+        "wait_exited": not process_case,
+        "wait_exit_status": 0 if not process_case else -1,
+        "wait_signalled": expected["expected_result_type"] == "RT_PROCESS_TERMINATED_BY_SIGNAL",
+        "wait_signal": 9 if expected["expected_result_type"] == "RT_PROCESS_TERMINATED_BY_SIGNAL" else 0,
+        "deadline_expired": expected["expected_result_type"] == "RT_DEADLINE_EXPIRED",
+        "response_bytes": b"" if process_case else _frame(expected),
+        "response_extra_byte_before_eof": False,
+        "seccomp_baseline": {
+            "supervisor_seccomp": 0,
+            "supervisor_filters": 0,
+            "child_seccomp": 0,
+            "child_filters": 0,
+            "outer_post_seccomp": 2,
+            "outer_post_filters": 1,
+            "internal_post_seccomp": 2,
+            "internal_post_filters": 2,
+            "revalidated_filters": 2,
+            "trace_successful_seccomp_calls": 2,
+        },
+        "outer_capture": {
+            "valid": True,
+            "length": len(outer_bytes) // 8,
+            "fprog_va_u64": 0x401000,
+            "filter_va_u64": 0x401100,
+            "install_return_i32": 0,
+            "program_bytes": outer_bytes,
+        },
+        "internal_capture": {
+            "valid": True,
+            "length": len(internal_bytes) // 8,
+            "fprog_va_u64": 0x4016A0,
+            "filter_va_u64": 0x401700,
+            "install_return_i32": 0,
+            "program_bytes": internal_bytes,
+        },
+        "dump_leg": {
+            "availability": "UNAVAILABLE_IN_PINNED_ENVIRONMENT",
+            "terminates_at_index": -1,
+            "index0_bytes": b"",
+            "index1_bytes": b"",
+        },
+        "internal_filter_equivalence": {"valid": True, "digest_sha256": "", "captured_internal_cbpf_sha256": ""},
+        "syscall_events": [
+            {"phase": "CANDIDATE", "stop": "ENTRY", "nr": 317, "args": [1, 0, 0x401600, 0, 0, 0], "result": 0},
+            {"phase": "CANDIDATE", "stop": "ENTRY", "nr": 0, "args": [3, 0x402000, 184, 0, 0, 0], "result": 184},
+        ],
+        "trace_execve_count": 1,
+        "process_outcome": "WORKER_CRASHED"
+        if expected["expected_result_type"] == "RT_PROCESS_TERMINATED_BY_SIGNAL"
+        else ("WORKER_TIMEOUT" if expected["expected_result_type"] == "RT_DEADLINE_EXPIRED" else "PROCESS_CLEAN_EXIT"),
+        "response": {"outcome": "RESPONSE_NOT_INTERPRETABLE", "marker": "process"}
+        if process_case
+        else {
+            "outcome": "RESPONSE_WELL_FORMED",
+            "result_class": expected["expected_result_class"],
+            "result_code": expected["expected_result_code"],
+        },
+        "identity": identity,
+    }
+
+
+def _frame(expected):
+    return (
+        b"MT4R"
+        + bytes((5,))
+        + bytes((expected["expected_result_class"],))
+        + bytes((expected["expected_result_code"],))
+        + bytes((0,))
+    )
+
+
+def _synthetic_observation(internal_bytes, outer_bytes):
+    identity = {
+        "candidate_binary_sha256": "d" * 64,
+        "source_run_id": 4242,
+        "source_run_attempt": 1,
+        "source_head_sha": "e" * 40,
+    }
+    cases = [
+        _synthetic_case(expected, internal_bytes, outer_bytes, identity)
+        for expected in adjudicator.FROZEN_CASE_INVENTORY
+    ]
+    # C02 must be byte-identical to C01.
+    cases[1]["response_bytes"] = cases[0]["response_bytes"]
+    normalised = {
+        "cases": cases,
+        "candidate_binary_sha256": identity["candidate_binary_sha256"],
+        "source_run_id": identity["source_run_id"],
+        "source_run_attempt": identity["source_run_attempt"],
+        "source_head_sha": identity["source_head_sha"],
+        "case_plan_sha256": "1" * 64,
+        "fixture_sha256": "2" * 64,
+    }
+    return normalised, identity
+
+
+def _seal(normalised, policy, identity):
+    """Fill in each case's A3 digest the way the honest observer would."""
+    for case in normalised["cases"]:
+        digest = adjudicator.recompute_equivalence_digest(case, policy, identity)
+        case["internal_filter_equivalence"]["digest_sha256"] = digest
+        case["internal_filter_equivalence"]["captured_internal_cbpf_sha256"] = adjudicator.cbpf_digest(
+            case["internal_capture"]["program_bytes"]
+        )
+    return normalised
+
+
+def test_all_twenty_five_cases_including_the_process_cases_carry_an_equivalence_digest():
+    """Repair 4.  C24 and C25 no longer bypass filter-equivalence adjudication.
+
+    The internal filter is installed during candidate BOOTSTRAP, before any stimulus is consumed, so
+    a case that ends in a signal or a deadline carries exactly the same containment evidence as one
+    that answers a frame.  The empty-digest sentinel is gone.
+    """
+    internal_bytes = bytes(113 * 8)
+    outer_bytes = bytes(400 * 8)
+    policy = _synthetic_policy_reference(internal_bytes, outer_bytes)
+    normalised, identity = _synthetic_observation(internal_bytes, outer_bytes)
+    _seal(normalised, policy, identity)
+    record = adjudicator.adjudicate(normalised, policy, identity)
+    assert len(record["case_verdicts"]) == 25
+    for verdict in record["case_verdicts"]:
+        assert len(verdict["internal_filter_equivalence_digest_sha256"]) == 64, verdict["case_id"]
+    # The two process cases are included, and they are not special-cased into an unbound path.
+    process = [verdict for verdict in record["case_verdicts"] if verdict["case_id"].startswith(("C24", "C25"))]
+    assert len(process) == 2
+    for verdict in process:
+        assert verdict["internal_filter_equivalence_digest_sha256"]
+    assert record["all_cases_conform"] is True
+
+
+def test_pt_141_a_worker_only_internal_filter_mutation_is_rejected():
+    """The REAL PT-141 mutant: ONLY the worker-installed filter changes.
+
+    The canonical trusted reference, the outer filter, the probe-derived reference and the receipt
+    framework are all untouched, so this is not a tautology in which production and oracle share the
+    mutated constant.  Exactly one captured program differs, and adjudication must say so.
+    """
+    internal_bytes = bytes(113 * 8)
+    outer_bytes = bytes(400 * 8)
+    policy = _synthetic_policy_reference(internal_bytes, outer_bytes)
+    normalised, identity = _synthetic_observation(internal_bytes, outer_bytes)
+    _seal(normalised, policy, identity)
+
+    mutated = bytearray(internal_bytes)
+    mutated[0] ^= 0xFF
+    target = normalised["cases"][6]
+    target["internal_capture"]["program_bytes"] = bytes(mutated)
+
+    record = adjudicator.adjudicate(normalised, policy, identity)
+    assert record["all_cases_conform"] is False
+    verdict = record["case_verdicts"][6]
+    assert verdict["case_verdict"] == "CASE_FAILED"
+    assert any("INTERNAL_FILTER_EQUIVALENCE_FAILED" in finding for finding in verdict["findings"]), verdict["findings"]
+    # Every OTHER case still conforms, which proves the mutation was genuinely worker-only.
+    others = [item for index, item in enumerate(record["case_verdicts"]) if index != 6]
+    assert all(item["case_verdict"] == "CASE_CONFORMS" for item in others)
+
+
+@pytest.mark.parametrize("case_index", (23, 24))
+def test_a_process_case_without_an_internal_capture_fails_closed(case_index):
+    """C24 and C25 may not pass merely because their semantic result domain is process failure."""
+    internal_bytes = bytes(113 * 8)
+    outer_bytes = bytes(400 * 8)
+    policy = _synthetic_policy_reference(internal_bytes, outer_bytes)
+    normalised, identity = _synthetic_observation(internal_bytes, outer_bytes)
+    _seal(normalised, policy, identity)
+    target = normalised["cases"][case_index]
+    target["internal_capture"]["valid"] = False
+    target["internal_filter_equivalence"]["valid"] = False
+    target["internal_filter_equivalence"]["digest_sha256"] = ""
+
+    record = adjudicator.adjudicate(normalised, policy, identity)
+    verdict = record["case_verdicts"][case_index]
+    assert verdict["case_verdict"] == "CASE_FAILED"
+    assert "INTERNAL_FILTER_EQUIVALENCE_FAILED:absent" in verdict["findings"]
+    assert record["all_cases_conform"] is False
+
+
+def test_the_receipt_refuses_to_claim_an_empty_equivalence_digest():
+    """Repair 4, receipt side.  There is no empty-string sentinel to interpret at the boundary."""
+    adjudication = {
+        "case_verdicts": [
+            {"case_id": case["case_id"], "internal_filter_equivalence_digest_sha256": "a" * 64}
+            for case in adjudicator.FROZEN_CASE_INVENTORY
+        ]
+    }
+    assert len(receipt_generator._equivalence_digests(adjudication)) == 25
+    adjudication["case_verdicts"][24]["internal_filter_equivalence_digest_sha256"] = ""
+    with pytest.raises(receipt_generator.ReceiptError) as error:
+        receipt_generator._equivalence_digests(adjudication)
+    assert "RECEIPT_INTERNAL_FILTER_EQUIVALENCE_ABSENT" in str(error.value)
+
+
+def test_the_receipt_rejects_a_duplicate_case_identity():
+    adjudication = {
+        "case_verdicts": [
+            {"case_id": case["case_id"], "internal_filter_equivalence_digest_sha256": "a" * 64}
+            for case in adjudicator.FROZEN_CASE_INVENTORY
+        ]
+    }
+    adjudication["case_verdicts"][24]["case_id"] = adjudication["case_verdicts"][23]["case_id"]
+    with pytest.raises(receipt_generator.ReceiptError) as error:
+        receipt_generator._equivalence_digests(adjudication)
+    assert "RECEIPT_DUPLICATE_CASE_IDENTITY" in str(error.value)

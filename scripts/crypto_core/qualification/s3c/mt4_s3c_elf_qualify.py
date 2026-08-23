@@ -114,6 +114,14 @@ SHT_FINI_ARRAY = 15
 
 SHN_UNDEF = 0
 SHN_COMMON = 0xFFF2
+# The reserved range.  SHN_LORESERVE .. SHN_HIRESERVE never denote a real containing section, so a
+# governed object whose defining index lands there is not section-defined however it got there.
+SHN_LORESERVE = 0xFF00
+SHN_HIRESERVE = 0xFFFF
+
+STT_NOTYPE = 0
+STT_OBJECT = 1
+STT_FUNC = 2
 
 STB_LOCAL = 0
 STB_GLOBAL = 1
@@ -156,10 +164,27 @@ _PT_TYPE_NAMES = {
 # expected header.  The comparison below is exact multiset equality.
 # =================================================================================================
 
+# THE EXACT ALIGNMENT AUTHORITY (repair 8A).  p_align was DOCUMENTED as exact and then never
+# compared, so an image with arbitrary segment alignment satisfied the inventory check.  It is now
+# part of the tuple.
+#
+# WHERE THE VALUES COME FROM, since they must come from a NON-CANDIDATE authority:
+#   PT_LOAD 0x1000  -- pinned by the frozen link flags in the reviewed qualification workflow, which
+#                      passes -Wl,-z,max-page-size=0x1000.  This is a property of the approved BUILD
+#                      CONTRACT, not an assumption about a toolchain default, which is exactly why
+#                      the flag is stated in the workflow rather than inferred here.
+#   PT_GNU_STACK 0x10 -- the x86_64 psABI stack alignment the marker segment carries.
+#
+# If the pinned toolchain ever contradicts these values the correct outcome is a CLOSED FAILURE that
+# returns to architecture with the observed value.  Widening this tuple to make a build pass would
+# destroy the only thing it proves.
+PT_LOAD_ALIGN_REQUIRED = 0x1000
+PT_GNU_STACK_ALIGN_REQUIRED = 0x10
+
 EXPECTED_PHDR_INVENTORY = (
-    (PT_LOAD, PF_R | PF_X),
-    (PT_LOAD, PF_R | PF_W),
-    (PT_GNU_STACK, PF_R | PF_W),
+    (PT_LOAD, PF_R | PF_X, PT_LOAD_ALIGN_REQUIRED),
+    (PT_LOAD, PF_R | PF_W, PT_LOAD_ALIGN_REQUIRED),
+    (PT_GNU_STACK, PF_R | PF_W, PT_GNU_STACK_ALIGN_REQUIRED),
 )
 
 # PT_INTERP and PT_DYNAMIC in the OBSERVED inventory are an immediate FAIL regardless of the
@@ -176,8 +201,15 @@ def _fail(marker, detail=""):
 
 
 def canonical_phdr_inventory(inventory):
-    """The canonical string form both non-candidate authorities compare on."""
-    return ",".join(_PT_TYPE_NAMES.get(kind, "PT_" + str(kind)) + ":" + str(flags) for kind, flags in inventory)
+    """The canonical string form every non-candidate authority compares on.
+
+    The alignment is part of the string, so the reviewed source, the qualification workflow and the
+    trusted Stage-C surface all have to agree about it, not merely about type and flags.
+    """
+    return ",".join(
+        _PT_TYPE_NAMES.get(kind, "PT_" + str(kind)) + ":" + str(flags) + ":" + hex(align)
+        for kind, flags, align in inventory
+    )
 
 
 # =================================================================================================
@@ -273,6 +305,9 @@ class Symbol:
 
     def visibility(self):
         return self.other & 0x03
+
+    def symbol_type(self):
+        return self.info & 0x0F
 
 
 def parse_elf(data):
@@ -463,7 +498,7 @@ def check_phdr_inventory(program_headers, expected_inventory):
         if header.p_type in ALWAYS_FORBIDDEN_PHDR_TYPES:
             _fail("DYNAMIC_SURFACE_PRESENT", header.type_name())
 
-    observed = sorted((header.p_type, header.p_flags) for header in program_headers)
+    observed = sorted((header.p_type, header.p_flags, header.p_align) for header in program_headers)
     expected = sorted(expected_inventory)
     if observed != expected:
         _fail(
@@ -572,14 +607,51 @@ def parse_symbols(data, section_headers):
     return symbols
 
 
+# =================================================================================================
+# COMPLETE UNDEFINED-SYMBOL CLOSURE (repair 8B).
+#
+# Rejecting a handful of NAMED forbidden undefined symbols proves nothing about the one nobody
+# thought to name.  The candidate is linked -static -nostdlib -nostartfiles -Wl,-z,defs into a fully
+# resolved ET_EXEC, so the approved undefined-symbol inventory is EMPTY.  Any undefined symbol at
+# all -- whatever it is called -- means the image is not the closed static object this
+# qualification describes.
+#
+# The empty tuple is the contract, stated explicitly rather than implied by an absent check.
+# =================================================================================================
+
+APPROVED_UNDEFINED_SYMBOLS = ()
+
+
+def check_undefined_symbol_closure(symbols):
+    """The final static worker may contain ONLY the approved undefined-symbol inventory."""
+    observed = sorted({symbol.name for symbol in symbols if symbol.shndx == SHN_UNDEF and symbol.name})
+    approved = sorted(APPROVED_UNDEFINED_SYMBOLS)
+    if observed != approved:
+        _fail("UNDEFINED_SYMBOL_CLOSURE_VIOLATED", ",".join(observed) if observed else "empty")
+    return observed
+
+
+def check_defined_section_index(symbol, section_headers, marker):
+    """8D: the defining section index must be a REAL, in-range, non-reserved section."""
+    index = symbol.shndx
+    if index == SHN_UNDEF:
+        _fail(marker, "SHN_UNDEF")
+    if index >= SHN_LORESERVE:
+        # SHN_LORESERVE .. SHN_HIRESERVE are reserved; SHN_ABS and SHN_COMMON live in that range and
+        # neither denotes a real containing section.
+        _fail(marker, "reserved section index " + str(index))
+    if index >= len(section_headers):
+        _fail(marker, "section index out of range " + str(index))
+    return section_headers[index]
+
+
 def require_single_definition(symbols, name):
     """Q1, Q2, Q6 and Q8 for one governed symbol name.
 
     Q2 REJECTS STB_WEAK outright, which is the hazard it names: a weak definition is overridable and
-    a weak-only definition would let a different object silently win.  A hidden object may emerge
-    from the final static link with either a GLOBAL or a LOCAL binding depending on the linker's
-    treatment of hidden visibility; both are non-weak and non-interposable, so both satisfy the
-    property Q2 protects, while STB_WEAK never does.  SHN_UNDEF and SHN_COMMON are rejected by Q6.
+    a weak-only definition would let a different object silently win.  SHN_UNDEF and SHN_COMMON are
+    rejected by Q6.  The BINDING and VISIBILITY of the governed capability object are checked
+    exactly, by the caller, against the frozen authority -- see check_capability_identity.
     """
     matches = [symbol for symbol in symbols if symbol.name == name]
     definitions = [symbol for symbol in matches if symbol.shndx not in (SHN_UNDEF, SHN_COMMON)]
@@ -603,6 +675,41 @@ def require_single_definition(symbols, name):
     if symbol.visibility() not in (STV_HIDDEN, STV_INTERNAL):
         _fail("BLST_CAP_VISIBILITY" if name == BLST_PLATFORM_CAP_SYMBOL else "SYMBOL_VISIBILITY", name)
     return symbol
+
+
+# =================================================================================================
+# THE EXACT __blst_platform_cap IDENTITY (repair 8C).
+#
+# The governed authority is EXACT and is asserted here rather than inside the shared helper, so that
+# the general rule for internal filter objects is not silently widened by the capability object's
+# stricter contract.
+#
+#   binding    STB_GLOBAL   -- NOT STB_LOCAL.  A lowered binding is not accepted "because a linker
+#                              may lower it": the approved contract names the binding the final
+#                              image must carry, and an image that does not carry it is not the
+#                              approved image.  A pinned-toolchain contradiction here is an
+#                              UNRESOLVED finding that returns to architecture with the observed
+#                              value, never a widened verifier.
+#   visibility STV_HIDDEN   -- NOT STV_INTERNAL, which carries additional reference restrictions and
+#                              is a different object contract.
+#   type       STT_OBJECT   -- a data object, never a function or a notype placeholder.
+#   section    defined      -- a real, in-range, non-reserved section index (see 8D).
+# =================================================================================================
+
+BLST_PLATFORM_CAP_BINDING_REQUIRED = STB_GLOBAL
+BLST_PLATFORM_CAP_VISIBILITY_REQUIRED = STV_HIDDEN
+BLST_PLATFORM_CAP_TYPE_REQUIRED = STT_OBJECT
+
+
+def check_capability_identity(symbol, section_headers):
+    """Q2..Q9 for the governed capability object, at EXACT identity."""
+    if symbol.binding() != BLST_PLATFORM_CAP_BINDING_REQUIRED:
+        _fail("BLST_CAP_BINDING", str(symbol.binding()))
+    if symbol.visibility() != BLST_PLATFORM_CAP_VISIBILITY_REQUIRED:
+        _fail("BLST_CAP_VISIBILITY", str(symbol.visibility()))
+    if symbol.symbol_type() != BLST_PLATFORM_CAP_TYPE_REQUIRED:
+        _fail("BLST_CAP_TYPE", str(symbol.symbol_type()))
+    return check_defined_section_index(symbol, section_headers, "BLST_CAP_SECTION_INDEX_INVALID")
 
 
 # =================================================================================================
@@ -703,10 +810,14 @@ def qualify(data, page_size, expected_inventory_text, compile_dependency_digest)
     scan_for_cpuid(data, program_headers)
 
     symbols = parse_symbols(data, section_headers)
+    # Repair 8B: the closure runs before any named-symbol rule, so an unrelated undefined symbol is
+    # reported as the closure violation it is rather than surviving because nothing asked about it.
+    check_undefined_symbol_closure(symbols)
     check_entry_point(data, program_headers, symbols, parsed["e_entry"])
 
     # SECTION 30 Q1..Q9 for __blst_platform_cap.
     cap_symbol = require_single_definition(symbols, BLST_PLATFORM_CAP_SYMBOL)
+    cap_section = check_capability_identity(cap_symbol, section_headers)
     if cap_symbol.size != BLST_PLATFORM_CAP_SIZE_BYTES:
         _fail("BLST_CAP_SIZE", str(cap_symbol.size) + " != " + str(BLST_PLATFORM_CAP_SIZE_BYTES))
     cap_segment, cap_offset, cap_bytes = translate_symbol(
@@ -719,6 +830,7 @@ def qualify(data, page_size, expected_inventory_text, compile_dependency_digest)
 
     # SECTION 29.6 Q10 for the canonical internal filter objects.
     fprog_symbol = require_single_definition(symbols, INTERNAL_FPROG_SYMBOL)
+    check_defined_section_index(fprog_symbol, section_headers, "FILTER_OBJECT_SECTION_INDEX_INVALID")
     if fprog_symbol.size != INTERNAL_FPROG_SIZE_BYTES:
         _fail("FILTER_OBJECT_SIZE_INVALID", INTERNAL_FPROG_SYMBOL)
     fprog_segment, fprog_offset, fprog_bytes = translate_symbol(
@@ -727,6 +839,7 @@ def qualify(data, page_size, expected_inventory_text, compile_dependency_digest)
     require_non_writable_file_backed(fprog_segment)
 
     program_symbol = require_single_definition(symbols, INTERNAL_PROGRAM_SYMBOL)
+    check_defined_section_index(program_symbol, section_headers, "FILTER_OBJECT_SECTION_INDEX_INVALID")
     if program_symbol.size != INTERNAL_PROGRAM_SIZE_BYTES:
         _fail("FILTER_OBJECT_SIZE_INVALID", INTERNAL_PROGRAM_SYMBOL)
     program_segment, program_offset, program_bytes = translate_symbol(
@@ -767,7 +880,7 @@ def qualify(data, page_size, expected_inventory_text, compile_dependency_digest)
         "expected_phdr_inventory_schema": EXPECTED_PHDR_SCHEMA,
         "expected_phdr_inventory": canonical_phdr_inventory(EXPECTED_PHDR_INVENTORY),
         "observed_phdr_inventory": canonical_phdr_inventory(
-            sorted((header.p_type, header.p_flags) for header in program_headers)
+            sorted((header.p_type, header.p_flags, header.p_align) for header in program_headers)
         ),
         "program_headers": [
             {
@@ -799,6 +912,11 @@ def qualify(data, page_size, expected_inventory_text, compile_dependency_digest)
             "value_hex": cap_bytes.hex(),
             "segment_flags_u32": cap_segment.p_flags,
             "size_authority": "APPROVED_SOURCE_BUILD_CONTRACT_BUNDLE_ENTRY_2",
+            "binding": "STB_GLOBAL",
+            "visibility": "STV_HIDDEN",
+            "symbol_type": "STT_OBJECT",
+            "section_index": cap_symbol.shndx,
+            "section_name": cap_section.name,
         },
         "canonical_internal_filter_object": {
             "fprog_symbol": INTERNAL_FPROG_SYMBOL,
@@ -813,6 +931,10 @@ def qualify(data, page_size, expected_inventory_text, compile_dependency_digest)
             "program_segment_flags_u32": program_segment.p_flags,
             "program_instruction_count": declared_length,
             "program_bytes_sha256": hashlib.sha256(program_bytes).hexdigest(),
+        },
+        "undefined_symbol_closure": {
+            "approved_inventory": list(APPROVED_UNDEFINED_SYMBOLS),
+            "observed_inventory": [],
         },
         "authority_non_transition": {
             "readiness_transition": "NONE",

@@ -104,6 +104,31 @@ def _require_hex64(value, marker):
     return value
 
 
+def _equivalence_digests(adjudication):
+    """Repair 4: EVERY case carries a real digest, and the identity set is exact.
+
+    The empty-string sentinel is gone.  A case whose containment evidence did not survive
+    adjudication is a FAILED case, and a receipt that claimed an empty digest for it would push the
+    interpretation of that emptiness onto the trust boundary, where A3 and A4 then disagreed by
+    construction.  The receipt now either carries 25 real digests or is not produced at all.
+    """
+    verdicts = adjudication["case_verdicts"]
+    if len(verdicts) != EXACT_CASE_COUNT:
+        _fail("RECEIPT_CASE_COUNT_MISMATCH", str(len(verdicts)))
+    digests = []
+    seen = set()
+    for verdict in verdicts:
+        case_id = verdict["case_id"]
+        if case_id in seen:
+            _fail("RECEIPT_DUPLICATE_CASE_IDENTITY", case_id)
+        seen.add(case_id)
+        digest = verdict["internal_filter_equivalence_digest_sha256"]
+        if not _is_hex64(digest):
+            _fail("RECEIPT_INTERNAL_FILTER_EQUIVALENCE_ABSENT", case_id)
+        digests.append({"case_id": case_id, "digest_sha256": digest})
+    return digests
+
+
 def build_receipt(manifest, elf_record, policy_record, protocol_record, adjudication, identity):
     """Assemble A4 with every binding of V9 SECTION 25 present and cross-checked."""
     # Cross-record identity binding.  One authenticated run identity, or nothing.
@@ -171,13 +196,7 @@ def build_receipt(manifest, elf_record, policy_record, protocol_record, adjudica
         "canonical_internal_policy_id": policy_record["canonical_internal_policy_id"],
         "canonical_internal_policy_sha256": policy_record["canonical_internal_policy_sha256"],
         "canonical_internal_cbpf_sha256": policy_record["canonical_internal_cbpf_sha256"],
-        "internal_filter_equivalence_digests": [
-            {
-                "case_id": verdict["case_id"],
-                "digest_sha256": verdict["internal_filter_equivalence_digest_sha256"],
-            }
-            for verdict in adjudication["case_verdicts"]
-        ],
+        "internal_filter_equivalence_digests": _equivalence_digests(adjudication),
         # --- artifact-production identity, riding with the manifest it describes ---
         "compile_dependency_inventory_digest_sha256": manifest["compile_dependency_inventory_digest_sha256"],
         "compile_dependency_entry_count": manifest["compile_dependency_entry_count"],

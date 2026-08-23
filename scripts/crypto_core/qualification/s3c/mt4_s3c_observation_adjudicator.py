@@ -627,6 +627,10 @@ def adjudicate_case(expected, case, policy, identity):
 
     _check_seccomp_baseline(case, findings)
     _check_syscall_ordering(case, policy, findings)
+    # Repair 4: the containment legs run for EVERY case, before the result-type split below.  They
+    # describe what the candidate INSTALLED during bootstrap, which is complete before any stimulus
+    # is consumed and is therefore independent of how the case ended.
+    _check_filter_equivalence(case, policy, findings)
 
     process_outcome = case["process_outcome"]
     response = case["response"]
@@ -657,7 +661,6 @@ def adjudicate_case(expected, case, policy, identity):
                 findings.append("OBSERVATION_CASE_RESULT_CLASS_MISMATCH")
             elif response["result_code"] != expected["expected_result_code"]:
                 findings.append("OBSERVATION_CASE_RESULT_CODE_MISMATCH:" + str(response["result_code"]))
-        _check_filter_equivalence(case, policy, findings)
 
     # The phase-scoped exit-status taxonomy (V9 20.5).  Candidate {0,64,65}; launcher {70}.  After a
     # proven exec transition a status of 70 is a CANDIDATE behaviour and is WORKER_CRASHED.
@@ -665,9 +668,13 @@ def adjudicate_case(expected, case, policy, identity):
         if case["wait_exit_status"] not in CANDIDATE_EXIT_CODES:
             findings.append("CANDIDATE_EXIT_STATUS_OUT_OF_TAXONOMY:" + str(case["wait_exit_status"]))
 
+    # Repair 4.  EVERY case is required to carry a recomputed equivalence digest.  The old
+    # PROCESS_CLEAN_EXIT precondition made the two process cases exempt, which is exactly the
+    # unbound path this closes: an absent internal capture is now a CASE FAILURE for every case,
+    # never a silently empty digest that downstream code has to interpret.
     equivalence_digest = ""
     equivalence_recomputed = False
-    if case["internal_capture"]["valid"] and process_outcome == "PROCESS_CLEAN_EXIT":
+    if case["internal_capture"]["valid"]:
         try:
             equivalence_digest = recompute_equivalence_digest(case, policy, identity)
             equivalence_recomputed = True
@@ -676,7 +683,7 @@ def adjudicate_case(expected, case, policy, identity):
         if equivalence_recomputed and case["internal_filter_equivalence"]["digest_sha256"] != equivalence_digest:
             # A3 must equal the adjudicator's INDEPENDENT recomputation.
             findings.append("INTERNAL_FILTER_EQUIVALENCE_DIGEST_MISMATCH")
-    elif result_type in ("RT_VERIFIER_STATUS_FRAME", "RT_REQUEST_PROTOCOL_ERROR_FRAME"):
+    else:
         findings.append("INTERNAL_FILTER_EQUIVALENCE_FAILED:absent")
 
     return {
