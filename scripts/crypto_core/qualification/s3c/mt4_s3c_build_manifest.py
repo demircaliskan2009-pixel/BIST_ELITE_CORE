@@ -134,6 +134,197 @@ CLASS_PROVENANCE = {
 
 DEPENDENCY_ENTRY_FIELDS = ("class", "path", "provenance", "sha256")
 
+# =================================================================================================
+# THE ACTUAL COMPILE/LINK INSTANCE INVENTORY (repair 8A and 8B).
+#
+# WHAT WAS MISSING.  Dependency-file evidence proves what a compilation INCLUDED; it does not prove
+# WHICH compilation produced the artifact.  A separate dependency-only compile can differ from the
+# real one in flags, include roots or inputs and still emit an identical .d file, so the two are not
+# the same claim.  Every native invocation that actually contributes to the qualification artifacts
+# is therefore recorded here as an INSTANCE, with its tool, its exact argument vector, its inputs,
+# its flags and its output.
+#
+# A SYSTEM LIBRARY IS NOT A BUNDLE ENTRY (repair 8C).  -lcap resolves to a file from the pinned
+# runner image, which is neither repository-controlled nor pinned-upstream source.  Pretending it
+# belongs to the 16-entry bundle would be false; it gets its own provenance class instead, and its
+# identity is the pinned toolchain contract rather than a repo digest.
+# =================================================================================================
+
+COMPILE_INSTANCE_SCHEMA = "mt4-s3c-compile-instance-inventory.v1"
+COMPILE_INSTANCE_DIGEST_DOMAIN = b"mt4-s3c-compile-instance-inventory.v1\x00"
+
+INSTANCE_KIND_COMPILE = "COMPILE"
+INSTANCE_KIND_LINK = "LINK"
+INSTANCE_KINDS = (INSTANCE_KIND_COMPILE, INSTANCE_KIND_LINK)
+
+CLASS_SYSTEM_LIBRARY = "SYSTEM_LIBRARY"
+PROVENANCE_SYSTEM_LIBRARY = "UBUNTU_22_04_PINNED_RUNNER_LIBRARY"
+
+COMPILE_INSTANCE_FIELDS = (
+    "argv",
+    "flags",
+    "include_roots",
+    "inputs",
+    "instance_id",
+    "kind",
+    "libraries",
+    "output",
+    "tool",
+    "working_directory_class",
+)
+
+# The instances that MUST be present.  Derived from the reviewed workflow's actual commands, not
+# from a count reported by an earlier implementation.
+REQUIRED_COMPILE_INSTANCES = (
+    "blst-server",
+    "blst-assembly",
+    "worker-bootstrap",
+    "worker-policy",
+    "worker-capability",
+    "worker-verify",
+    "worker-start",
+    "observer-probe",
+    "observer-launcher",
+)
+REQUIRED_LINK_INSTANCES = ("worker-link", "observer-link")
+
+# The system libraries the real link commands consume.  -lcap is resolved from the pinned runner
+# image, so it is recorded as a SYSTEM_LIBRARY rather than pretended into the repository bundle.
+REQUIRED_SYSTEM_LIBRARIES = ("cap",)
+
+WORKING_DIRECTORY_CLASS = "GITHUB_WORKSPACE"
+
+
+def _shell_split(argv_text):
+    """Split one recorded argument vector.  The workflow supplies it already space-separated with
+    no embedded quoting, which the validation below enforces rather than assumes."""
+    if not isinstance(argv_text, str) or not argv_text.strip():
+        _fail("COMPILE_INSTANCE_MALFORMED", "empty argv")
+    for character in (chr(34), chr(39), "`", "$"):
+        if character in argv_text:
+            _fail("COMPILE_INSTANCE_MALFORMED", "argv carries shell metacharacters")
+    return argv_text.split()
+
+
+def parse_compile_instance(declaration, repository_root, upstream_root):
+    """Parse one `<kind>:<instance_id>:<argv>` declaration into a governed instance record."""
+    if not isinstance(declaration, str):
+        _fail("COMPILE_INSTANCE_MALFORMED", "type")
+    kind, _sep, remainder = declaration.partition(":")
+    instance_id, _sep2, argv_text = remainder.partition(":")
+    if kind not in INSTANCE_KINDS:
+        _fail("COMPILE_INSTANCE_MALFORMED", "kind")
+    if not instance_id:
+        _fail("COMPILE_INSTANCE_MALFORMED", "instance id")
+    argv = _shell_split(argv_text)
+
+    tool = argv[0]
+    flags = []
+    include_roots = []
+    inputs = []
+    libraries = []
+    output = ""
+    index = 1
+    while index < len(argv):
+        word = argv[index]
+        if word == "-o":
+            index += 1
+            if index >= len(argv):
+                _fail("COMPILE_INSTANCE_MALFORMED", "missing output")
+            output = argv[index]
+        elif word == "-I":
+            index += 1
+            if index >= len(argv):
+                _fail("COMPILE_INSTANCE_MALFORMED", "missing include root")
+            include_roots.append(argv[index])
+        elif word in ("-MF",):
+            index += 1
+        elif word.startswith("-l"):
+            libraries.append(word[2:])
+        elif word.startswith("-"):
+            flags.append(word)
+        else:
+            inputs.append(word)
+        index += 1
+
+    if not output:
+        _fail("COMPILE_INSTANCE_MALFORMED", "no output artifact")
+    if not inputs:
+        _fail("COMPILE_INSTANCE_MALFORMED", "no inputs")
+
+    classified = []
+    for item in inputs:
+        kind_of_input, normalised = classify_dependency(item, repository_root, upstream_root)
+        classified.append({"path": normalised, "class": kind_of_input})
+    return {
+        "instance_id": instance_id,
+        "kind": kind,
+        "tool": tool,
+        "argv": argv,
+        "flags": sorted(flags),
+        "include_roots": sorted(include_roots),
+        "inputs": classified,
+        "libraries": sorted(libraries),
+        "output": os.path.basename(output),
+        "working_directory_class": WORKING_DIRECTORY_CLASS,
+    }
+
+
+def build_compile_instance_inventory(declarations, repository_root, upstream_root):
+    instances = [parse_compile_instance(item, repository_root, upstream_root) for item in declarations]
+    validate_compile_instances(instances)
+    return sorted(instances, key=lambda instance: instance["instance_id"])
+
+
+def validate_compile_instances(instances):
+    """Exact schema, unique ids, and COMPLETE coverage of the real build."""
+    seen = set()
+    for instance in instances:
+        if tuple(sorted(instance)) != tuple(sorted(COMPILE_INSTANCE_FIELDS)):
+            _fail("COMPILE_INSTANCE_MALFORMED", "field set")
+        if instance["instance_id"] in seen:
+            _fail("COMPILE_INSTANCE_DUPLICATE", instance["instance_id"])
+        seen.add(instance["instance_id"])
+        if instance["working_directory_class"] != WORKING_DIRECTORY_CLASS:
+            _fail("COMPILE_INSTANCE_MALFORMED", "working directory class")
+        for item in instance["inputs"]:
+            if item["class"] not in (CLASS_REPO_BUNDLED, CLASS_UPSTREAM_PINNED, CLASS_EXTERNAL_TOOLCHAIN):
+                _fail("COMPILE_INSTANCE_MALFORMED", "input class")
+            if item["class"] == CLASS_REPO_BUNDLED and item["path"] not in SOURCE_BUNDLE_PATHS:
+                _fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_UNBUNDLED", item["path"])
+    for required in REQUIRED_COMPILE_INSTANCES:
+        if required not in seen:
+            _fail("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", required)
+    for required in REQUIRED_LINK_INSTANCES:
+        if required not in seen:
+            _fail("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", required)
+    links = [instance for instance in instances if instance["kind"] == INSTANCE_KIND_LINK]
+    if len(links) != len(REQUIRED_LINK_INSTANCES):
+        _fail("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", "link instance count")
+    # Repair 8C: every system library the real link commands consume is RECORDED, in its own class.
+    observed_libraries = set()
+    for instance in links:
+        observed_libraries.update(instance["libraries"])
+    for required in REQUIRED_SYSTEM_LIBRARIES:
+        if required not in observed_libraries:
+            _fail("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", "system library " + required)
+    return instances
+
+
+def compile_instance_preimage(instances):
+    return {
+        "schema": COMPILE_INSTANCE_SCHEMA,
+        "instance_count": len(instances),
+        "instances": instances,
+        "instance_id_order": [instance["instance_id"] for instance in instances],
+    }
+
+
+def compile_instance_digest(instances):
+    return hashlib.sha256(
+        COMPILE_INSTANCE_DIGEST_DOMAIN + canonical_json(compile_instance_preimage(instances))
+    ).hexdigest()
+
 
 class BuildManifestError(RuntimeError):
     """Any failure to prove a required build property.  There is no partial success."""
@@ -354,7 +545,7 @@ def source_bundle_digest(entries):
 # =================================================================================================
 
 
-def build_manifest(arguments, inventory, include_roots):
+def build_manifest(arguments, inventory, include_roots, instances):
     binary_digest = _sha256_file(arguments.worker_binary)
     binary_bytes = os.path.getsize(arguments.worker_binary)
     if binary_bytes <= 0 or binary_bytes > MAX_WORKER_BINARY_BYTES:
@@ -382,6 +573,9 @@ def build_manifest(arguments, inventory, include_roots):
         "compile_dependency_inventory_schema": DEPENDENCY_SCHEMA,
         "compile_dependency_entry_count": len(inventory),
         "compile_dependency_inventory_digest_sha256": dependency_inventory_digest(inventory),
+        "compile_instance_inventory_schema": COMPILE_INSTANCE_SCHEMA,
+        "compile_instance_count": len(instances),
+        "compile_instance_inventory_digest_sha256": compile_instance_digest(instances),
         "source_run_id": arguments.source_run_id,
         "source_run_attempt": arguments.source_run_attempt,
         "source_head_sha": arguments.source_head_sha,
@@ -437,6 +631,7 @@ _REQUIRED_BUILD_ARGUMENTS = (
     "repository_root",
     "upstream_root",
     "dependency_file",
+    "compile_instance",
     "include_root",
     "build_macro",
     "compiler_identity",
@@ -457,6 +652,7 @@ def main(argv=None):
     parser.add_argument("--repository-root")
     parser.add_argument("--upstream-root")
     parser.add_argument("--dependency-file", action="append")
+    parser.add_argument("--compile-instance", action="append")
     parser.add_argument("--include-root", action="append")
     parser.add_argument("--build-macro", action="append")
     parser.add_argument("--compiler-identity")
@@ -465,6 +661,7 @@ def main(argv=None):
     parser.add_argument("--source-run-attempt", type=int)
     parser.add_argument("--source-head-sha")
     parser.add_argument("--inventory-out")
+    parser.add_argument("--instance-out")
     parser.add_argument("--out")
     args = parser.parse_args(argv)
 
@@ -479,10 +676,14 @@ def main(argv=None):
 
     include_roots = check_include_roots(args.include_root, args.repository_root, args.upstream_root)
     inventory = build_dependency_inventory(args.dependency_file, args.repository_root, args.upstream_root)
-    manifest = build_manifest(args, inventory, include_roots)
+    instances = build_compile_instance_inventory(args.compile_instance, args.repository_root, args.upstream_root)
+    manifest = build_manifest(args, inventory, include_roots, instances)
 
     with open(args.inventory_out, "wb") as handle:
         handle.write(canonical_json(dependency_inventory_preimage(inventory)))
+    if args.instance_out:
+        with open(args.instance_out, "wb") as handle:
+            handle.write(canonical_json(compile_instance_preimage(instances)))
     with open(args.out, "wb") as handle:
         handle.write(canonical_json(manifest))
     sys.stdout.write("MT4_S3C_WORKER_BINARY_SHA256=" + manifest["worker_binary_sha256"] + "\n")

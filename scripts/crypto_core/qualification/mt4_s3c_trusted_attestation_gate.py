@@ -379,6 +379,8 @@ DEPENDENCY_CLASSES = (CLASS_REPO_BUNDLED, CLASS_UPSTREAM_PINNED, CLASS_EXTERNAL_
 # surface: the gate imports no repository module, and a candidate-reported pin would be forgeable.
 UPSTREAM_COMMIT = "54e6e55674722fc2797ebb4bbb71b26d881eb4b8"
 UPSTREAM_SOURCE_TREE_DIGEST = "5a709c19ef7a1b9798ad58728fc5dd3b4d2026ecdd0342ebf8546c5950cea006"
+UPSTREAM_RELEASE = "v0.3.17"
+UPSTREAM_REPOSITORY = "https://github.com/supranational/blst"
 
 PROVENANCE_REPO_BUNDLED = "QUALIFICATION_SOURCE_BUNDLE_V1"
 PROVENANCE_UPSTREAM_PINNED = "BLST_PINNED_COMMIT_" + UPSTREAM_COMMIT + "_TREE_" + UPSTREAM_SOURCE_TREE_DIGEST
@@ -400,6 +402,176 @@ REQUIRED_TRANSLATION_UNITS = (
     "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_verify.c",
 )
 REQUIRED_UPSTREAM_INPUTS = ("src/server.c", "build/assembly.S")
+
+# =================================================================================================
+# THE ACTUAL COMPILE/LINK INSTANCE CONTRACT, FROZEN ON THE TRUSTED SURFACE (repair 8).
+#
+# Dependency evidence proves what a compilation INCLUDED.  It does not prove WHICH compilation made
+# the artifact, so the instance inventory -- one record per real native invocation, with its tool,
+# argument vector, inputs, flags and output -- is validated here too.  The required set is derived
+# from the reviewed workflow, not from a count an earlier build reported.
+# =================================================================================================
+
+COMPILE_INSTANCE_SCHEMA = "mt4-s3c-compile-instance-inventory.v1"
+COMPILE_INSTANCE_DIGEST_DOMAIN = b"mt4-s3c-compile-instance-inventory.v1\x00"
+
+COMPILE_INSTANCE_FIELDS = (
+    "argv",
+    "flags",
+    "include_roots",
+    "inputs",
+    "instance_id",
+    "kind",
+    "libraries",
+    "output",
+    "tool",
+    "working_directory_class",
+)
+
+REQUIRED_COMPILE_INSTANCES = (
+    "blst-server",
+    "blst-assembly",
+    "worker-bootstrap",
+    "worker-policy",
+    "worker-capability",
+    "worker-verify",
+    "worker-start",
+    "observer-probe",
+    "observer-launcher",
+)
+REQUIRED_LINK_INSTANCES = ("observer-link", "worker-link")
+REQUIRED_SYSTEM_LIBRARIES = ("cap",)
+APPROVED_BUILD_TOOL = "gcc"
+WORKING_DIRECTORY_CLASS = "GITHUB_WORKSPACE"
+
+# The link flags the frozen build contract requires.  A link that drops one of these produces a
+# different kind of image than the one this qualification describes.
+REQUIRED_WORKER_LINK_FLAGS = (
+    "-static",
+    "-no-pie",
+    "-nostdlib",
+    "-nostartfiles",
+    "-Wl,-z,defs",
+    "-Wl,-z,noexecstack",
+    "-Wl,-z,max-page-size=0x1000",
+    "-Wl,--build-id=none",
+    "-Wl,--fatal-warnings",
+)
+
+
+def recompute_compile_instance_digest(payload):
+    """Validate the ACTUAL compile/link inventory and recompute its digest (repair 8A, 8B, 8E)."""
+    if not isinstance(payload, dict):
+        fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "type")
+    if payload.get("schema") != COMPILE_INSTANCE_SCHEMA:
+        fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "schema")
+    if tuple(sorted(payload)) != ("instance_count", "instance_id_order", "instances", "schema"):
+        fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "document field set")
+    instances = payload.get("instances")
+    if not isinstance(instances, list) or not instances:
+        fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "instances")
+
+    identifiers = []
+    seen = set()
+    kinds = {}
+    libraries = set()
+    for instance in instances:
+        if not isinstance(instance, dict):
+            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "instance type")
+        if tuple(sorted(instance)) != tuple(sorted(COMPILE_INSTANCE_FIELDS)):
+            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "instance field set")
+        identifier = require_str(instance.get("instance_id"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
+        if identifier in seen:
+            fail("COMPILE_INSTANCE_DUPLICATE")
+        seen.add(identifier)
+        identifiers.append(identifier)
+        kind = require_str(instance.get("kind"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
+        if kind not in ("COMPILE", "LINK"):
+            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "kind")
+        kinds[identifier] = kind
+        if require_str(instance.get("tool"), "COMPILE_INSTANCE_INVENTORY_MISMATCH") != APPROVED_BUILD_TOOL:
+            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "tool")
+        if (
+            require_str(instance.get("working_directory_class"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
+            != WORKING_DIRECTORY_CLASS
+        ):
+            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "working directory class")
+        argv = instance.get("argv")
+        if not isinstance(argv, list) or not argv or argv[0] != APPROVED_BUILD_TOOL:
+            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "argv")
+        inputs = instance.get("inputs")
+        if not isinstance(inputs, list) or not inputs:
+            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "inputs")
+        for item in inputs:
+            if not isinstance(item, dict) or tuple(sorted(item)) != ("class", "path"):
+                fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "input shape")
+            item_class = require_str(item.get("class"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
+            item_path = require_str(item.get("path"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
+            if item_class not in DEPENDENCY_CLASSES:
+                fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "input class")
+            if item_class == CLASS_REPO_BUNDLED and item_path not in SOURCE_BUNDLE_PATHS:
+                fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_UNBUNDLED")
+        instance_libraries = instance.get("libraries")
+        if not isinstance(instance_libraries, list):
+            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "libraries")
+        if kind == "LINK":
+            libraries.update(require_str(item, "COMPILE_INSTANCE_INVENTORY_MISMATCH") for item in instance_libraries)
+
+    for required in REQUIRED_COMPILE_INSTANCES:
+        if required not in seen or kinds.get(required) != "COMPILE":
+            fail("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", required)
+    for required in REQUIRED_LINK_INSTANCES:
+        if required not in seen or kinds.get(required) != "LINK":
+            fail("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", required)
+    # Repair 8C: system libraries are their OWN provenance class and must be recorded, not silently
+    # absorbed into the repository bundle.
+    for required in REQUIRED_SYSTEM_LIBRARIES:
+        if required not in libraries:
+            fail("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", "system library")
+
+    worker_link = [instance for instance in instances if instance["instance_id"] == "worker-link"][0]
+    worker_flags = set(worker_link.get("flags") or ())
+    for required in REQUIRED_WORKER_LINK_FLAGS:
+        if required not in worker_flags:
+            fail("COMPILE_INSTANCE_LINK_CONTRACT_VIOLATED")
+
+    if identifiers != sorted(identifiers):
+        fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "ordering")
+    if require_int(payload.get("instance_count"), "COMPILE_INSTANCE_INVENTORY_MISMATCH", 1) != len(instances):
+        fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "instance_count")
+    if payload.get("instance_id_order") != identifiers:
+        fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "instance_id_order")
+    return domain_digest(COMPILE_INSTANCE_DIGEST_DOMAIN, payload)
+
+
+def bind_pinned_upstream_identity(manifest):
+    """Repair 8D.  The pinned upstream identity is compared to TRUSTED LITERALS, not to a shape.
+
+    The gate previously accepted any syntactically valid 64-hex value as an upstream digest, which
+    is not provenance at all.  The commit and source-tree digest below are the ones the governing
+    S3B verifier profile pins, transcribed onto this trusted surface, so a producer that names a
+    different upstream tree fails here rather than being believed.
+
+    WHAT THIS DOES NOT YET PROVE, stated rather than implied: the per-file upstream digests are
+    bound into the inventory digest and to this pinned tree identity, but Stage C does not hold an
+    independent per-file digest table for blst v0.3.17 and cannot obtain one without external
+    evidence.  The predicate records that explicitly instead of claiming a verification that did
+    not happen.
+    """
+    if manifest.get("upstream_commit") != UPSTREAM_COMMIT:
+        fail("PINNED_UPSTREAM_IDENTITY_MISMATCH", "commit")
+    if manifest.get("upstream_source_tree_digest") != UPSTREAM_SOURCE_TREE_DIGEST:
+        fail("PINNED_UPSTREAM_IDENTITY_MISMATCH", "source tree digest")
+    if manifest.get("upstream_release") != UPSTREAM_RELEASE:
+        fail("PINNED_UPSTREAM_IDENTITY_MISMATCH", "release")
+    if manifest.get("upstream_repository") != UPSTREAM_REPOSITORY:
+        fail("PINNED_UPSTREAM_IDENTITY_MISMATCH", "repository")
+    return {
+        "upstream_commit": UPSTREAM_COMMIT,
+        "upstream_source_tree_digest": UPSTREAM_SOURCE_TREE_DIGEST,
+        "pinned_upstream_per_file_digests_verified": False,
+    }
+
 
 REQUIRED_JOBS = (
     "s3c-build-candidate",
@@ -552,6 +724,106 @@ _TRUSTED_INTERNAL_INVENTORY = (
     ),
 )
 
+OUTER_POLICY_SCHEMA = "mt4-s3c-outer-containment-policy.v1"
+OUTER_POLICY_DIGEST_DOMAIN = b"mt4-s3c-outer-containment-policy.v1\x00"
+CANONICAL_OUTER_POLICY_ID = "MT4_S3C_OUTER_CONTAINMENT_P0_LINUX_X86_64"
+
+TRUSTED_SYSCALL_NR_CLOSE = 3
+TRUSTED_SYSCALL_NR_EXECVE = 59
+TRUSTED_SYSCALL_NR_PRCTL = 157
+TRUSTED_SYSCALL_NR_SECCOMP = 317
+TRUSTED_SYSCALL_NR_CLOSE_RANGE = 436
+
+TRUSTED_PR_SET_DUMPABLE = 4
+TRUSTED_PR_SET_NO_NEW_PRIVS = 38
+TRUSTED_SECCOMP_SET_MODE_FILTER = 1
+CLOSE_RANGE_FIRST_FD = 5
+CLOSE_RANGE_MAX_FD = 4294967295
+CLOSE_LEGAL_FDS = (0, 1, 2)
+
+
+def _rule(*classified):
+    """Build one six-word rule, defaulting every unnamed index to ZERO_REQUIRED."""
+    spec = [(CAT_ZERO, 0, 0)] * ARG_WORDS
+    for index, category, low, high in classified:
+        spec[index] = (category, low, high)
+    return tuple(spec)
+
+
+# The OUTER containment inventory: eight syscalls in the frozen ascending dispatch order, with the
+# ordered alternative tuples that close/prctl require.  Reconstructed here so that A3's and A4's
+# outer policy and cBPF claims are compared against Stage C's own derivation rather than adopted.
+_TRUSTED_OUTER_INVENTORY = (
+    (
+        "read",
+        TRUSTED_SYSCALL_NR_READ,
+        "CANDIDATE_VERIFY",
+        ((_rule((0, CAT_EXACT, FD_REQUEST, 0), (1, CAT_POINTER, 0, 0), (2, CAT_RANGE, 1, REQUEST_FRAME_BYTES))),),
+    ),
+    (
+        "write",
+        TRUSTED_SYSCALL_NR_WRITE,
+        "CANDIDATE_RESPONSE",
+        ((_rule((0, CAT_EXACT, FD_RESPONSE, 0), (1, CAT_POINTER, 0, 0), (2, CAT_RANGE, 1, RESPONSE_FRAME_BYTES))),),
+    ),
+    (
+        "close",
+        TRUSTED_SYSCALL_NR_CLOSE,
+        "CANDIDATE_BOOTSTRAP",
+        tuple(_rule((0, CAT_EXACT, descriptor, 0)) for descriptor in CLOSE_LEGAL_FDS),
+    ),
+    (
+        "execve",
+        TRUSTED_SYSCALL_NR_EXECVE,
+        "LAUNCH_TRANSITION",
+        ((_rule((0, CAT_POINTER, 0, 0), (1, CAT_POINTER, 0, 0), (2, CAT_POINTER, 0, 0))),),
+    ),
+    (
+        "prctl",
+        TRUSTED_SYSCALL_NR_PRCTL,
+        "CANDIDATE_BOOTSTRAP",
+        (
+            _rule((0, CAT_EXACT, TRUSTED_PR_SET_DUMPABLE, 0), (1, CAT_EXACT, 0, 0)),
+            _rule((0, CAT_EXACT, TRUSTED_PR_SET_NO_NEW_PRIVS, 0), (1, CAT_EXACT, 1, 0)),
+        ),
+    ),
+    (
+        "exit_group",
+        TRUSTED_SYSCALL_NR_EXIT_GROUP,
+        "PROCESS_EXIT",
+        ((_rule((0, CAT_SCALAR, 0, 0))),),
+    ),
+    (
+        "seccomp",
+        TRUSTED_SYSCALL_NR_SECCOMP,
+        "CANDIDATE_BOOTSTRAP",
+        (
+            (
+                _rule(
+                    (0, CAT_EXACT, TRUSTED_SECCOMP_SET_MODE_FILTER, 0),
+                    (1, CAT_EXACT, 0, 0),
+                    (2, CAT_POINTER, 0, 0),
+                )
+            ),
+        ),
+    ),
+    (
+        "close_range",
+        TRUSTED_SYSCALL_NR_CLOSE_RANGE,
+        "CANDIDATE_BOOTSTRAP",
+        (
+            (
+                _rule(
+                    (0, CAT_EXACT, CLOSE_RANGE_FIRST_FD, 0),
+                    (1, CAT_EXACT, CLOSE_RANGE_MAX_FD, 0),
+                    (2, CAT_EXACT, 0, 0),
+                )
+            ),
+        ),
+    ),
+)
+
+CANONICAL_OUTER_CBPF_INSTRUCTION_COUNT = 400
 CANONICAL_INTERNAL_CBPF_INSTRUCTION_COUNT = 113
 
 # The reconstruction below must reproduce these exactly.  They are asserted at import time, so a
@@ -560,6 +832,10 @@ CANONICAL_INTERNAL_CBPF_INSTRUCTION_COUNT = 113
 EXPECTED_INTERNAL_POLICY_SHA256 = "ba8b6ca197472a8dada2d703d879bb104ebc73089de621f8695daf52795154d4"
 EXPECTED_INTERNAL_CBPF_SHA256 = "dd044cda4588d641f6c57a27a64fb8d09eaf15ac7eb86622c047a2b4b4bf9d6d"
 EXPECTED_INTERNAL_PROGRAM_BYTES_SHA256 = "129a4ee7f0265f0d150e7466b298b728d6572f73206fc0fc59f5f1459ed26cb6"
+
+EXPECTED_OUTER_POLICY_SHA256 = "2b8a65d835debfee798e0cef09369509d84fca01fff8e821494b7d1582efbdd3"
+EXPECTED_OUTER_GOVERNED_SHA256 = "e65c5e5b8a03a60aea092b745021d87c974234b84329c160b2f9001db492adcb"
+EXPECTED_OUTER_CBPF_SHA256 = "630cfe5b3b90d582b0d43493cb7774d978bb75a276f246324c12483f97c5e6cd"
 
 INTERNAL_FPROG_SYMBOL = "mt4_s3c_internal_filter_fprog"
 INTERNAL_PROGRAM_SYMBOL = "mt4_s3c_internal_filter_program"
@@ -596,8 +872,8 @@ def _emit_argument_check(out, target, index, category, low, high):
         out.append(("JA", target))
 
 
-def _derive_internal_program():
-    """Reconstruct the canonical internal classic-BPF program from the frozen constants alone."""
+def _derive_program(inventory):
+    """Reconstruct one canonical classic-BPF program from the frozen constants alone."""
     out = []
     out.append((TRUSTED_OPCODE_LD_W_ABS, TRUSTED_OFFSET_ARCH, 0, 0))
     out.append((TRUSTED_OPCODE_JEQ_K, TRUSTED_AUDIT_ARCH_X86_64, 1, 0))
@@ -606,9 +882,9 @@ def _derive_internal_program():
     out.append((TRUSTED_OPCODE_JGE_K, TRUSTED_X32_SYSCALL_BIT, 0, 1))
     out.append(("JA", "KILL"))
 
-    for position, (name, number, _reason, rules) in enumerate(_TRUSTED_INTERNAL_INVENTORY):
-        last_entry = position + 1 == len(_TRUSTED_INTERNAL_INVENTORY)
-        next_entry = "KILL" if last_entry else (_TRUSTED_INTERNAL_INVENTORY[position + 1][0], "ENTRY")
+    for position, (name, number, _reason, rules) in enumerate(inventory):
+        last_entry = position + 1 == len(inventory)
+        next_entry = "KILL" if last_entry else (inventory[position + 1][0], "ENTRY")
         out.append((name, "ENTRY"))
         out.append((TRUSTED_OPCODE_LD_W_ABS, TRUSTED_OFFSET_NR, 0, 0))
         out.append((TRUSTED_OPCODE_JEQ_K, number, 1, 0))
@@ -682,10 +958,10 @@ def _argument_rule_to_canonical(rule):
     }
 
 
-def _derive_internal_semantic_preimage():
-    """Reconstruct the canonical semantic policy document -- the POLICY BYTES, not just a digest."""
+def _derive_semantic_preimage(inventory, schema, policy_domain):
+    """Reconstruct one canonical semantic policy document -- the POLICY BYTES, not just a digest."""
     entries = []
-    for name, number, reason, rules in _TRUSTED_INTERNAL_INVENTORY:
+    for name, number, reason, rules in inventory:
         entries.append(
             {
                 "name": name,
@@ -697,8 +973,8 @@ def _derive_internal_semantic_preimage():
         )
     entries.sort(key=lambda entry: entry["nr_u32"])
     return {
-        "schema": INTERNAL_POLICY_SCHEMA,
-        "policy_domain": CANONICAL_INTERNAL_POLICY_ID,
+        "schema": schema,
+        "policy_domain": policy_domain,
         "audit_architecture_name": AUDIT_ARCHITECTURE_NAME,
         "audit_architecture_value_u32": TRUSTED_AUDIT_ARCH_X86_64,
         "alternate_abi_policy": ALTERNATE_ABI_POLICY,
@@ -716,23 +992,48 @@ def _derive_internal_semantic_preimage():
     }
 
 
-def stage_c_canonical_internal_policy():
-    """The Stage-C canonical internal policy: bytes, digests and program, all self-derived."""
-    semantic = _derive_internal_semantic_preimage()
+def _stage_c_canonical_policy(inventory, schema, digest_domain, policy_domain, expected_count):
+    """One self-derived canonical policy: semantic bytes, digests, program bytes and program digest.
+
+    The GOVERNED digest adds the emitted program identity to the SEMANTIC document, exactly as the
+    bundled qualifier's build_policy_record does, and the two must differ -- a policy whose semantic
+    and governed digests collided would have lost the separation that lets a program change be
+    detected independently of a rule change.
+    """
+    semantic = _derive_semantic_preimage(inventory, schema, policy_domain)
     semantic_bytes = canonical_json(semantic)
-    program_bytes = _derive_internal_program()
+    program_bytes = _derive_program(inventory)
     instruction_count = len(program_bytes) // 8
-    if instruction_count != CANONICAL_INTERNAL_CBPF_INSTRUCTION_COUNT:
+    if instruction_count != expected_count:
         fail("STAGE_C_CANONICAL_POLICY_DERIVATION_FAILED", "instruction count")
-    canonical = {
-        "policy_id": CANONICAL_INTERNAL_POLICY_ID,
+    governed = dict(semantic)
+    governed["emitted_cbpf_instruction_count"] = instruction_count
+    governed["emitted_cbpf_sha256"] = cbpf_digest(program_bytes)
+    semantic_digest = hashlib.sha256(digest_domain + semantic_bytes).hexdigest()
+    governed_digest = hashlib.sha256(digest_domain + canonical_json(governed)).hexdigest()
+    if semantic_digest == governed_digest:
+        fail("STAGE_C_CANONICAL_POLICY_DERIVATION_FAILED", "digest separation lost")
+    return {
+        "policy_id": policy_domain,
         "semantic_bytes": semantic_bytes,
-        "policy_sha256": hashlib.sha256(INTERNAL_POLICY_DIGEST_DOMAIN + semantic_bytes).hexdigest(),
+        "policy_sha256": semantic_digest,
+        "governed_sha256": governed_digest,
         "cbpf_instruction_count": instruction_count,
         "cbpf_program_bytes": program_bytes,
-        "cbpf_sha256": cbpf_digest(program_bytes),
+        "cbpf_sha256": governed["emitted_cbpf_sha256"],
         "program_bytes_sha256": hashlib.sha256(program_bytes).hexdigest(),
     }
+
+
+def stage_c_canonical_internal_policy():
+    """The Stage-C canonical internal policy: bytes, digests and program, all self-derived."""
+    canonical = _stage_c_canonical_policy(
+        _TRUSTED_INTERNAL_INVENTORY,
+        INTERNAL_POLICY_SCHEMA,
+        INTERNAL_POLICY_DIGEST_DOMAIN,
+        CANONICAL_INTERNAL_POLICY_ID,
+        CANONICAL_INTERNAL_CBPF_INSTRUCTION_COUNT,
+    )
     # Drift in any frozen constant or in the emitter is a failure of THIS file, not of the candidate.
     if canonical["policy_sha256"] != EXPECTED_INTERNAL_POLICY_SHA256:
         fail("STAGE_C_CANONICAL_POLICY_DERIVATION_FAILED", "policy digest")
@@ -740,6 +1041,29 @@ def stage_c_canonical_internal_policy():
         fail("STAGE_C_CANONICAL_POLICY_DERIVATION_FAILED", "cbpf digest")
     if canonical["program_bytes_sha256"] != EXPECTED_INTERNAL_PROGRAM_BYTES_SHA256:
         fail("STAGE_C_CANONICAL_POLICY_DERIVATION_FAILED", "program bytes digest")
+    return canonical
+
+
+def stage_c_canonical_outer_policy():
+    """The Stage-C canonical OUTER policy (repair 1C).
+
+    A3 and A4 both carry an outer containment policy digest.  Comparing them to each other proves
+    only that the unprivileged job agreed with itself, which is the same circularity the internal
+    policy repair closed; the outer policy is therefore reconstructed here too.
+    """
+    canonical = _stage_c_canonical_policy(
+        _TRUSTED_OUTER_INVENTORY,
+        OUTER_POLICY_SCHEMA,
+        OUTER_POLICY_DIGEST_DOMAIN,
+        CANONICAL_OUTER_POLICY_ID,
+        CANONICAL_OUTER_CBPF_INSTRUCTION_COUNT,
+    )
+    if canonical["policy_sha256"] != EXPECTED_OUTER_POLICY_SHA256:
+        fail("STAGE_C_CANONICAL_POLICY_DERIVATION_FAILED", "outer policy digest")
+    if canonical["governed_sha256"] != EXPECTED_OUTER_GOVERNED_SHA256:
+        fail("STAGE_C_CANONICAL_POLICY_DERIVATION_FAILED", "outer governed digest")
+    if canonical["cbpf_sha256"] != EXPECTED_OUTER_CBPF_SHA256:
+        fail("STAGE_C_CANONICAL_POLICY_DERIVATION_FAILED", "outer cbpf digest")
     return canonical
 
 
@@ -910,14 +1234,106 @@ def stage_c_case_set_digest():
     return digest
 
 
-def stage_c_validate_filter_object(elf_record, canonical):
-    """Bind the ELF-qualified canonical filter objects, and prove they ARE the canonical program.
+ELF_RECORD_SCHEMA = "mt4-s3c-elf-qualification-record.v1"
+ELF_RECORD_DIGEST_DOMAIN = b"mt4-s3c-elf-qualification-record.v1\x00"
 
-    Repair 2B.  A captured address is accepted only when the AUTHENTICATED static analysis of the
-    same digest-proven image places the canonical objects there, and only when the object the ELF
-    record describes at that address carries exactly the canonical instruction count and exactly the
-    canonical program bytes.  Hashing captured bytes correctly is not enough on its own: without
-    this binding an arbitrary stack or heap address holding a copy would satisfy the digest.
+# Section header types and flags Stage C reasons about.  Frozen here so the trusted surface does not
+# have to believe A2's own description of what a section IS.
+SHT_NULL = 0
+SHT_NOBITS = 8
+SHF_ALLOC = 0x2
+SHN_LORESERVE = 0xFF00
+
+# The sock_fprog object layout on x86_64: u16 len, six padding bytes, u64 filter pointer.
+FPROG_LAYOUT_BYTES = 16
+FPROG_POINTER_OFFSET = 8
+
+
+def recompute_elf_record_digest(elf_record):
+    """Repair 1B.  The A2 digest is RECOMPUTED from the full canonical record, never compared.
+
+    A2 and A4 both carry an ELF qualification digest, and the previous gate only checked that they
+    matched each other -- which one unprivileged job can arrange trivially.  The digest is the
+    domain-separated canonical hash of the whole record minus the digest field itself, so Stage C
+    can and now does derive it.
+    """
+    if not isinstance(elf_record, dict):
+        fail("ELF_RECORD_MALFORMED", "type")
+    if elf_record.get("schema") != ELF_RECORD_SCHEMA:
+        fail("ELF_RECORD_MALFORMED", "schema")
+    claimed = require_str(elf_record.get("elf_qualification_digest_sha256"), "ELF_RECORD_MALFORMED")
+    if not is_hex64(claimed):
+        fail("ELF_RECORD_MALFORMED", "digest shape")
+    preimage = {key: value for key, value in elf_record.items() if key != "elf_qualification_digest_sha256"}
+    recomputed = domain_digest(ELF_RECORD_DIGEST_DOMAIN, preimage)
+    if recomputed != claimed:
+        fail("ELF_QUALIFICATION_DIGEST_MISMATCH", "A2 self-digest")
+    return recomputed
+
+
+def _require_section_and_load(objects, prefix, symbol_va, symbol_size, file_offset, marker):
+    """Repair 1A.  SYMBOL subset-of DECLARED SECTION subset-of APPROVED PT_LOAD, proven here.
+
+    An address that merely lands inside some mapping is not an identity.  Every level of the
+    containment is re-derived from the authenticated record and cross-checked against the level
+    above it, so a filter object cannot choose its own coordinates: the section it declares must
+    really hold it, that section's file range must really hold its bytes, and the segment that maps
+    the section must really be a readable, non-writable, file-backed PT_LOAD.
+    """
+    section_index = require_int(objects.get(prefix + "_section_index"), marker, 1, SHN_LORESERVE - 1)
+    section_addr = require_int(objects.get(prefix + "_section_addr_u64"), marker, 0)
+    section_size = require_int(objects.get(prefix + "_section_size_bytes"), marker, 1)
+    section_offset = require_int(objects.get(prefix + "_section_file_offset_u64"), marker, 0)
+    section_type = require_int(objects.get(prefix + "_section_type_u32"), marker, 0)
+    section_flags = require_int(objects.get(prefix + "_section_flags_u64"), marker, 0)
+    symbol_file_offset = require_int(objects.get(prefix + "_section_file_offset_of_symbol_u64"), marker, 0)
+    require_str(objects.get(prefix + "_section_name"), marker)
+
+    if section_type in (SHT_NULL, SHT_NOBITS):
+        fail(marker, "declared section holds no file-backed bytes")
+    if not section_flags & SHF_ALLOC:
+        fail(marker, "declared section is not allocated")
+    # SYMBOL subset-of SECTION, by address.
+    if symbol_va < section_addr or symbol_va + symbol_size > section_addr + section_size:
+        fail(marker, "symbol range escapes its declared section")
+    # SYMBOL subset-of SECTION, by file range, and the two views must agree exactly.
+    if symbol_file_offset != section_offset + (symbol_va - section_addr):
+        fail(marker, "symbol file offset disagrees with its declared section")
+    if symbol_file_offset != file_offset:
+        fail(marker, "declared file offset disagrees with the section-derived offset")
+    if symbol_file_offset + symbol_size > section_offset + section_size:
+        fail(marker, "symbol bytes escape the declared section file extent")
+
+    load_vaddr = require_int(objects.get(prefix + "_load_vaddr_u64"), marker, 0)
+    load_filesz = require_int(objects.get(prefix + "_load_filesz_u64"), marker, 1)
+    load_offset = require_int(objects.get(prefix + "_load_file_offset_u64"), marker, 0)
+    load_flags = require_int(objects.get(prefix + "_load_flags_u32"), marker, 0, 0xFFFFFFFF)
+    require_int(objects.get(prefix + "_load_index"), marker, 0)
+
+    # SECTION subset-of PT_LOAD, in both views.
+    if section_addr < load_vaddr or section_addr + section_size > load_vaddr + load_filesz:
+        fail(marker, "declared section escapes its PT_LOAD mapping")
+    if section_offset < load_offset or section_offset + section_size > load_offset + load_filesz:
+        fail(marker, "declared section file range escapes its PT_LOAD file range")
+    if section_offset - load_offset != section_addr - load_vaddr:
+        fail(marker, "section file and virtual offsets are inconsistent within the mapping")
+    if load_flags & PF_W:
+        fail(marker, "writable filter mapping")
+    if not load_flags & PF_R:
+        fail(marker, "unreadable filter mapping")
+    return {"section_index": section_index, "load_flags": load_flags, "file_offset": symbol_file_offset}
+
+
+def stage_c_validate_filter_object(elf_record, canonical):
+    """Bind the ELF-qualified canonical filter objects, completely (repair 1A).
+
+    A captured address is accepted only when the AUTHENTICATED static analysis of the same
+    digest-proven image places the canonical objects there, when the object the record describes at
+    that address carries exactly the canonical instruction count and exactly the canonical program
+    bytes, and when the whole coordinate set -- symbol, declared section, section ranges, file
+    ranges, PT_LOAD mapping and flags -- is internally consistent.  Hashing captured bytes correctly
+    is not enough on its own: without this binding, an arbitrary stack or heap address holding a
+    copy would satisfy the digest.
     """
     objects = elf_record.get("canonical_internal_filter_object")
     if not isinstance(objects, dict):
@@ -938,19 +1354,49 @@ def stage_c_validate_filter_object(elf_record, canonical):
         != canonical["cbpf_instruction_count"]
     ):
         fail("FILTER_OBJECT_BINDING_INVALID", "program instruction count")
+    # THE NON-CIRCULAR ANCHOR: the object at that address must BE the Stage-C canonical program.
     if objects.get("program_bytes_sha256") != canonical["program_bytes_sha256"]:
         fail("FILTER_OBJECT_BINDING_INVALID", "program bytes are not the canonical program")
+
     fprog_va = require_int(objects.get("fprog_va_u64"), "FILTER_OBJECT_BINDING_INVALID", 1)
     program_va = require_int(objects.get("program_va_u64"), "FILTER_OBJECT_BINDING_INVALID", 1)
-    for key in ("fprog_file_offset_u64", "program_file_offset_u64"):
-        require_int(objects.get(key), "FILTER_OBJECT_BINDING_INVALID", 0)
-    for key in ("fprog_segment_flags_u32", "program_segment_flags_u32"):
-        flags = require_int(objects.get(key), "FILTER_OBJECT_BINDING_INVALID", 0, 0xFFFFFFFF)
-        if flags & PF_W:
-            fail("FILTER_OBJECT_BINDING_INVALID", "writable filter mapping")
-        if not flags & PF_R:
-            fail("FILTER_OBJECT_BINDING_INVALID", "unreadable filter mapping")
-    return {"fprog_va_u64": fprog_va, "program_va_u64": program_va}
+    fprog_offset = require_int(objects.get("fprog_file_offset_u64"), "FILTER_OBJECT_BINDING_INVALID", 0)
+    program_offset = require_int(objects.get("program_file_offset_u64"), "FILTER_OBJECT_BINDING_INVALID", 0)
+
+    fprog_place = _require_section_and_load(
+        objects, "fprog", fprog_va, INTERNAL_FPROG_SIZE_BYTES, fprog_offset, "FILTER_OBJECT_BINDING_INVALID"
+    )
+    program_place = _require_section_and_load(
+        objects, "program", program_va, INTERNAL_PROGRAM_SIZE_BYTES, program_offset, "FILTER_OBJECT_BINDING_INVALID"
+    )
+
+    # The two objects are distinct, and neither may overlap the other.
+    if fprog_va == program_va:
+        fail("FILTER_OBJECT_BINDING_INVALID", "fprog and program share an address")
+    if fprog_va < program_va + INTERNAL_PROGRAM_SIZE_BYTES and program_va < fprog_va + INTERNAL_FPROG_SIZE_BYTES:
+        fail("FILTER_OBJECT_BINDING_INVALID", "fprog and program overlap")
+
+    # The fprog's OWN BYTES are reconstructed: a u16 length, six zero padding bytes and a u64
+    # pointer that must be exactly the program's link-time address.  A descriptor pointing anywhere
+    # else describes a different filter than the one that was qualified.
+    expected_fprog = (
+        canonical["cbpf_instruction_count"].to_bytes(2, "little")
+        + bytes(FPROG_POINTER_OFFSET - 2)
+        + program_va.to_bytes(8, "little")
+    )
+    if len(expected_fprog) != FPROG_LAYOUT_BYTES:
+        fail("FILTER_OBJECT_BINDING_INVALID", "fprog layout")
+    if objects.get("fprog_bytes_sha256") != hashlib.sha256(expected_fprog).hexdigest():
+        fail("FILTER_OBJECT_BINDING_INVALID", "fprog does not describe the canonical program")
+
+    return {
+        "fprog_va_u64": fprog_va,
+        "program_va_u64": program_va,
+        "fprog_section_index": fprog_place["section_index"],
+        "program_section_index": program_place["section_index"],
+        "fprog_file_offset_u64": fprog_place["file_offset"],
+        "program_file_offset_u64": program_place["file_offset"],
+    }
 
 
 # =================================================================================================
@@ -1089,8 +1535,75 @@ def decode_hex(value, marker):
     return b""
 
 
+# The governed structural bound for any trusted JSON document.  Every document this gate reads is a
+# flat-to-shallow record; a deeply nested one is not a schema variation, it is a resource attack, and
+# a RecursionError escaping as a traceback would be exactly the unfrozen failure channel the policy
+# forbids.  The depth is measured BEFORE parsing, from the text, so the parser is never asked to
+# descend at all.
+MAX_JSON_DEPTH = 32
+
+
+def _json_structure_status(decoded):
+    """Bounded structural scan over the raw text.  String contents are skipped.
+
+    Returns "" when the document is balanced and within the depth bound, otherwise the exact frozen
+    reason -- an over-deep document and an unbalanced one are different defects and are named
+    differently, so a truncated record is not reported as a depth attack.
+    """
+    depth = 0
+    inside_string = False
+    escaped = False
+    for character in decoded:
+        if inside_string:
+            if escaped:
+                escaped = False
+            elif character == chr(92):
+                escaped = True
+            elif character == '"':
+                inside_string = False
+            continue
+        if character == '"':
+            inside_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                return "structure exceeds the governed depth bound"
+        elif character in "]}":
+            depth -= 1
+            if depth < 0:
+                return "unbalanced structure"
+    if inside_string or depth != 0:
+        return "unbalanced structure"
+    return ""
+
+
+def _reject_duplicate_keys(pairs):
+    """Repair 6B.  Last-key-wins silently normalises a malformed document; this refuses it."""
+    seen = set()
+    for key, _value in pairs:
+        if key in seen:
+            raise _StrictJsonError("duplicate key")
+        seen.add(key)
+    return dict(pairs)
+
+
+def _reject_non_standard_constant(_text):
+    """NaN, Infinity and -Infinity are not JSON, and none of them is a governed value."""
+    raise _StrictJsonError("non-standard constant")
+
+
+class _StrictJsonError(ValueError):
+    """Raised inside the parser hooks; converted to a frozen reason by decode_json."""
+
+
 def decode_json(body, marker):
-    """Decode one UNTRUSTED JSON document.  No exception text ever escapes."""
+    """Decode one UNTRUSTED JSON document STRICTLY.  No exception text ever escapes.
+
+    Repair 6B and 6C.  Duplicate object keys fail rather than resolving to last-key-wins; NaN,
+    Infinity and -Infinity fail rather than becoming floats no governed comparison expects; and a
+    deeply nested document is refused by the depth scan before the parser can raise RecursionError.
+    Every failure below is a frozen reason class and none of them echoes the input.
+    """
     if not isinstance(body, (bytes, bytearray)):
         fail(marker, "body type")
     try:
@@ -1098,9 +1611,20 @@ def decode_json(body, marker):
     except UnicodeDecodeError:
         fail(marker, "not valid utf-8")
         return None
+    structure = _json_structure_status(decoded)
+    if structure:
+        fail(marker, structure)
     try:
-        return json.loads(decoded)
-    except ValueError:
+        return json.loads(
+            decoded,
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_non_standard_constant,
+        )
+    except _StrictJsonError:
+        fail(marker, "document violates the strict json contract")
+    except RecursionError:
+        fail(marker, "structure exceeds the governed depth bound")
+    except (ValueError, OverflowError):
         fail(marker, "not valid json")
     return None
 
@@ -1218,7 +1742,7 @@ def enumerate_collection(api_url, base_path, item_key, endpoint_name):
             identifier = require_int(item.get("id"), "PAGINATION_MALFORMED", 0)
             # P5: an id seen on more than one page fails closed.
             if identifier in identifiers:
-                fail("PAGINATION_REPEATED_RECORD", endpoint_name + " id " + str(identifier))
+                fail("PAGINATION_REPEATED_RECORD", endpoint_name)
             identifiers.add(identifier)
             items.append(item)
         if len(items) > MAX_RECORDS_PER_COLLECTION:
@@ -1500,13 +2024,31 @@ def stream_member(archive, info, aggregate_state, payload):
                     fail("ZIP_MEMBER_STREAM_TRUNCATED")
                 chunk = bytes(payload[position : min(position + CHUNK_BYTES, limit)])
                 position += len(chunk)
-                consumed_compressed += len(chunk)
                 pending = chunk
+            # EXACT CONSUMPTION (repair 6A), measured PER CALL.  Counting bytes FED is not the
+            # same quantity: a bounded decompress call leaves whatever it could not turn into
+            # output in unconsumed_tail, and at end-of-stream everything after the deflate stream
+            # lands in unused_data.  Neither has been consumed.  Consumption for this call is
+            # therefore exactly what was offered minus what came back unconsumed, and because the
+            # tail is re-offered on the next iteration and measured again the same way, nothing is
+            # double-counted.  Every Z18 decision below uses the real consumed count rather than an
+            # over-count that would make the ratio bound more permissive than it is meant to be.
+            offered = len(pending)
             produced = decompressor.decompress(pending, CHUNK_BYTES)
+            leftover = len(decompressor.unconsumed_tail)
+            if decompressor.eof:
+                # AT END-OF-STREAM THE TWO BUFFERS DESCRIBE THE SAME BYTES.  Once the deflate stream
+                # has ended every byte still held is post-stream data, so CPython reports it in
+                # unused_data AND mirrors it in unconsumed_tail.  Adding them is the double-count
+                # this rule exists to avoid -- it silently understates consumption, which makes the
+                # ratio bound more permissive and breaks reconciliation against the declared size.
+                leftover = max(leftover, len(decompressor.unused_data))
+            if leftover > offered:
+                fail("ZIP_CONSUMPTION_ACCOUNTING_INVALID")
+            consumed_compressed += offered - leftover
             pending = decompressor.unconsumed_tail
             account(produced)
             if decompressor.eof:
-                consumed_compressed -= len(decompressor.unused_data)
                 break
 
     # Z18 restated on the FINAL corrected consumption.  The per-step check runs before the trailing
@@ -1576,11 +2118,11 @@ def recompute_source_bundle_digest(inventory_payload):
         kind = require_str(entry.get("type"), "SOURCE_BUNDLE_CONTRADICTION")
         digest = require_str(entry.get("sha256"), "SOURCE_BUNDLE_CONTRADICTION")
         if mode not in ("100644", "100755"):
-            fail("SOURCE_BUNDLE_CONTRADICTION", "mode " + path)
+            fail("SOURCE_BUNDLE_CONTRADICTION", "mode")
         if kind != "blob":
-            fail("SOURCE_BUNDLE_CONTRADICTION", "type " + path)
+            fail("SOURCE_BUNDLE_CONTRADICTION", "type")
         if not is_hex64(digest):
-            fail("SOURCE_BUNDLE_CONTRADICTION", "digest " + path)
+            fail("SOURCE_BUNDLE_CONTRADICTION", "digest")
         normalised.append({"path": path, "mode": mode, "type": kind, "sha256": digest})
     paths = [entry["path"] for entry in normalised]
     if paths != sorted(paths):
@@ -1626,28 +2168,28 @@ def recompute_dependency_inventory_digest(inventory_payload, bundle_entries):
         provenance = require_str(entry.get("provenance"), "COMPILE_DEPENDENCY_INVENTORY_MISMATCH")
         digest = require_str(entry.get("sha256"), "COMPILE_DEPENDENCY_INVENTORY_MISMATCH")
         if kind not in DEPENDENCY_CLASSES:
-            fail("COMPILE_DEPENDENCY_INVENTORY_MISMATCH", "class " + path)
+            fail("COMPILE_DEPENDENCY_INVENTORY_MISMATCH", "class")
         # A generic "this dependency exists" row is not accepted: provenance is class-determined and
         # the upstream class is bound to the exact pinned commit and source-tree digest.
         if provenance != CLASS_PROVENANCE[kind]:
-            fail("COMPILE_DEPENDENCY_PROVENANCE_INVALID", path)
+            fail("COMPILE_DEPENDENCY_PROVENANCE_INVALID")
         if path in seen:
-            fail("COMPILE_DEPENDENCY_DUPLICATE_PATH", path)
+            fail("COMPILE_DEPENDENCY_DUPLICATE_PATH")
         seen.add(path)
         if kind == CLASS_REPO_BUNDLED:
             # Every REPO_BUNDLED path must be a bundle entry, and its content digest must equal the
             # digest re-derived from the git object store at the proven source head.
             if path not in SOURCE_BUNDLE_PATHS:
-                fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_UNBUNDLED", path)
+                fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_UNBUNDLED")
             if committed.get(path) != digest:
-                fail("COMPILE_DEPENDENCY_INVENTORY_MISMATCH", "content digest " + path)
+                fail("COMPILE_DEPENDENCY_INVENTORY_MISMATCH", "content digest")
             bundled.add(path)
         elif kind == CLASS_EXTERNAL_TOOLCHAIN:
             if digest != "":
                 fail("COMPILE_DEPENDENCY_INVENTORY_MISMATCH", "external entry carries a digest")
         else:
             if not is_hex64(digest):
-                fail("COMPILE_DEPENDENCY_INVENTORY_MISMATCH", "upstream digest " + path)
+                fail("COMPILE_DEPENDENCY_INVENTORY_MISMATCH", "upstream digest")
             upstream.add(path)
         paths.append(path)
 
@@ -1701,7 +2243,7 @@ INTERNAL_EQUIVALENCE_REQUIRED_VALUES = {
 
 def cbpf_digest(program_bytes):
     if len(program_bytes) % 8 != 0:
-        fail("CBPF_REPRESENTATION_INVALID", str(len(program_bytes)))
+        fail("CBPF_REPRESENTATION_INVALID")
     count = len(program_bytes) // 8
     preimage = PROGRAM_REPRESENTATION_VERSION.encode("ascii") + b"\x00" + count.to_bytes(4, "little") + program_bytes
     return hashlib.sha256(preimage).hexdigest()
@@ -1878,20 +2420,26 @@ def select_artifacts(api_url, repository, run_id):
         "run_artifacts",
     )
     selected = {}
+    service_ids = []
     for artifact in artifacts:
         name = require_str(artifact.get("name"), "ARTIFACT_RECORD_MALFORMED")
         if name not in EXPECTED_ARTIFACT_SET:
             # Outside the expected set: IGNORED for selection, but still counted for enumeration.
             continue
         if artifact.get("expired") is True:
-            fail("EXPIRED_ARTIFACT", name)
+            fail("EXPIRED_ARTIFACT")
         if name in selected:
             # A stale sibling left by a previous attempt under the same name BLOCKS, on any page.
-            fail("DUPLICATE_EXPECTED_ARTIFACT_NAME", name)
+            fail("DUPLICATE_EXPECTED_ARTIFACT_NAME")
         selected[name] = artifact
+        # Every expected artifact must carry a well-formed service id.  Uniqueness ACROSS the whole
+        # enumeration is already owned by the pagination layer's repeated-record rule (P5), which
+        # sees every record rather than only the expected ones, so it is not restated here: a second
+        # rule that can never fire is not defence in depth, it is dead code.
+        service_ids.append(require_int(artifact.get("id"), "ARTIFACT_RECORD_MALFORMED", 1))
     for name in EXPECTED_ARTIFACT_SET:
         if name not in selected:
-            fail("EXPECTED_ARTIFACT_MISSING", name)
+            fail("EXPECTED_ARTIFACT_MISSING")
     return selected
 
 
@@ -1981,19 +2529,44 @@ def run_gate(arguments):
         fail("RECEIPT_BINDING_MISMATCH", "candidate archive digest")
     if "receipt_artifact_id" in receipt:
         fail("RECEIPT_BINDING_MISMATCH", "the receipt must not claim its own artifact id")
+    if "receipt_artifact_archive_digest" in receipt:
+        fail("RECEIPT_BINDING_MISMATCH", "the receipt must not claim its own archive digest")
+
+    # --- A5 RECEIPT CUSTODY IDENTITY (repair 1D) ---
+    #
+    # The receipt's own service identity CANNOT come from the receipt: that id does not exist until
+    # after upload.  Stage C therefore takes it from the authenticated artifact enumeration, and
+    # binds the candidate and the receipt to ONE run: two artifacts produced by different runs, or
+    # an artifact whose service record points at another run, break the pairing.
+    receipt_artifact = artifacts[RECEIPT_ARTIFACT]
+    receipt_artifact_id = require_int(receipt_artifact.get("id"), "ARTIFACT_RECORD_MALFORMED", 1)
+    receipt_archive_digest = normalise_archive_digest(receipt_artifact.get("digest"))
+    if not receipt_archive_digest:
+        fail("RECEIPT_BINDING_MISMATCH", "receipt archive digest")
+    if receipt_artifact_id == require_int(candidate_artifact.get("id"), "ARTIFACT_RECORD_MALFORMED", 1):
+        fail("RECEIPT_BINDING_MISMATCH", "candidate and receipt share a service id")
+    for name in EXPECTED_ARTIFACT_SET:
+        record = artifacts[name]
+        owner = record.get("workflow_run")
+        if not isinstance(owner, dict):
+            fail("RECEIPT_BINDING_MISMATCH", "artifact carries no owning run")
+        if require_int(owner.get("id"), "RUN_ATTEMPT_MISMATCH", 1) != run_id:
+            fail("RUN_ATTEMPT_MISMATCH", "artifact belongs to a different run")
+        if require_str(owner.get("head_sha"), "SOURCE_HEAD_MISMATCH") != arguments.expected_head_sha:
+            fail("SOURCE_HEAD_MISMATCH", "artifact owning run head")
 
     # --- SOURCE_BUNDLE_DIGEST_AUTHENTICATED ---
     bundle_payload = _load_bounded_json(arguments.source_bundle_inventory, "source bundle inventory")
     bundle_digest, bundle_entries = recompute_source_bundle_digest(bundle_payload)
     if bundle_digest != arguments.approved_source_bundle_sha256:
-        fail("SOURCE_BUNDLE_DIGEST_NOT_APPROVED", bundle_digest)
+        fail("SOURCE_BUNDLE_DIGEST_NOT_APPROVED")
 
     # --- the qualification workflow BYTES at the source head ---
     workflow_entry = [entry for entry in bundle_entries if entry["path"] == arguments.expected_workflow_path]
     if len(workflow_entry) != 1:
         fail("QUALIFICATION_WORKFLOW_DIGEST_NOT_APPROVED", "workflow is not a bundle entry")
     if workflow_entry[0]["sha256"] != arguments.approved_qualification_workflow_sha256:
-        fail("QUALIFICATION_WORKFLOW_DIGEST_NOT_APPROVED", workflow_entry[0]["sha256"])
+        fail("QUALIFICATION_WORKFLOW_DIGEST_NOT_APPROVED")
 
     # --- COMPILE_DEPENDENCY_INVENTORY_AUTHENTICATED ---
     dependency_payload = _load_bounded_json(arguments.compile_dependency_inventory, "compile dependency inventory")
@@ -2005,27 +2578,59 @@ def run_gate(arguments):
     if receipt.get("compile_dependency_inventory_digest_sha256") != dependency_digest:
         fail("COMPILE_DEPENDENCY_INVENTORY_MISMATCH", "receipt")
 
+    # --- ACTUAL_COMPILE_LINK_INSTANCES_AUTHENTICATED (repair 8A, 8B, 8C, 8E) ---
+    instance_payload = _load_bounded_json(arguments.compile_instance_inventory, "compile instance inventory")
+    instance_digest = recompute_compile_instance_digest(instance_payload)
+    if manifest.get("compile_instance_inventory_digest_sha256") != instance_digest:
+        fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "manifest")
+    if manifest.get("compile_instance_inventory_schema") != COMPILE_INSTANCE_SCHEMA:
+        fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "manifest schema")
+
+    # --- PINNED_UPSTREAM_IDENTITY_BOUND (repair 8D) ---
+    upstream = bind_pinned_upstream_identity(manifest)
+
     # --- QUALIFICATION_DIGESTS_BOUND ---
-    if receipt.get("elf_qualification_digest_sha256") != elf_record.get("elf_qualification_digest_sha256"):
-        fail("ELF_QUALIFICATION_DIGEST_MISMATCH")
+    #
+    # Repair 1B: the A2 digest is RECOMPUTED from A2's own canonical record, and A2, A4 and the
+    # recomputation must all agree.  A2 == A4 alone proved only that one unprivileged job was
+    # self-consistent.
+    elf_digest = recompute_elf_record_digest(elf_record)
+    if receipt.get("elf_qualification_digest_sha256") != elf_digest:
+        fail("ELF_QUALIFICATION_DIGEST_MISMATCH", "A4 vs Stage C")
     if not is_hex64(receipt.get("protocol_conformance_digest_sha256")):
         fail("PROTOCOL_CONFORMANCE_DIGEST_MISMATCH")
     if not is_hex64(receipt.get("sandbox_policy_digest_sha256")):
         fail("SANDBOX_POLICY_DIGEST_MISMATCH")
 
-    # --- STAGE_C_SELF_ANCHORED_AUTHORITY_RECONSTRUCTED (repair 2A, 2B, 2C) ---
+    # --- STAGE_C_SELF_ANCHORED_AUTHORITY_RECONSTRUCTED (repair 1A, 1C, 2A, 2B, 2C) ---
     #
     # Everything Stage C is about to require is derived HERE, before a single claimed value is read.
     # A3 and A4 are then compared against it.  Nothing below adopts an expected value from either.
     canonical = stage_c_canonical_internal_policy()
+    outer_canonical = stage_c_canonical_outer_policy()
     filter_object = stage_c_validate_filter_object(elf_record, canonical)
     case_set_digest = stage_c_case_set_digest()
 
-    # --- ENVIRONMENT_DIGESTS_BOUND ---
-    if receipt.get("outer_containment_policy_digest_sha256") != observation.get(
-        "outer_containment_policy_digest_sha256"
+    # Repair 1C: A3's and A4's TOP-LEVEL policy and cBPF claims are compared against Stage C's own
+    # reconstruction of BOTH policies.  Neither record supplies an expected value.
+    for record, label in ((observation, "A3"), (receipt, "A4")):
+        if record.get("canonical_internal_policy_id") != canonical["policy_id"]:
+            fail("STAGE_C_CANONICAL_POLICY_SUBSTITUTED", label + " internal policy id")
+        if record.get("canonical_internal_policy_sha256") != canonical["policy_sha256"]:
+            fail("STAGE_C_CANONICAL_POLICY_SUBSTITUTED", label + " internal policy digest")
+        if record.get("canonical_internal_cbpf_sha256") != canonical["cbpf_sha256"]:
+            fail("STAGE_C_CANONICAL_POLICY_SUBSTITUTED", label + " internal cbpf digest")
+        if record.get("outer_containment_policy_digest_sha256") != outer_canonical["governed_sha256"]:
+            fail("STAGE_C_CANONICAL_POLICY_SUBSTITUTED", label + " outer governed digest")
+    if (
+        require_int(observation.get("canonical_internal_cbpf_instruction_count"), "OBSERVATION_MALFORMED", 1, 512)
+        != canonical["cbpf_instruction_count"]
     ):
-        fail("OUTER_POLICY_DIGEST_MISMATCH", "A3 vs A4")
+        fail("STAGE_C_CANONICAL_POLICY_SUBSTITUTED", "A3 internal cbpf instruction count")
+
+    # --- ENVIRONMENT_DIGESTS_BOUND ---
+    # The outer policy digest is now recomputed above rather than cross-compared, so A3 == A4 here
+    # is a consequence rather than the proof.
     # The case-set digest is RECOMPUTED, not merely cross-compared.  A3 == A4 proves only that the
     # unprivileged job agreed with itself about which 25 cases it claims to have run.
     if observation.get("observation_case_set_digest_sha256") != case_set_digest:
@@ -2051,7 +2656,7 @@ def run_gate(arguments):
         fail("OBSERVATION_CASE_DUPLICATE")
     for identifier in TRUSTED_CASE_IDS:
         if identifier not in observed_ids:
-            fail("OBSERVATION_CASE_MISSING", identifier)
+            fail("OBSERVATION_CASE_MISSING")
     for identifier in observed_ids:
         if identifier not in TRUSTED_CASE_IDS:
             fail("OBSERVATION_CASE_UNKNOWN")
@@ -2071,7 +2676,7 @@ def run_gate(arguments):
         identifier = require_str(item.get("case_id"), "RECEIPT_BINDING_MISMATCH")
         claimed_ids.append(identifier)
         if identifier in receipt_digests:
-            fail("RECEIPT_DUPLICATE_CASE_IDENTITY", identifier)
+            fail("RECEIPT_DUPLICATE_CASE_IDENTITY")
         receipt_digests[identifier] = require_str(item.get("digest_sha256"), "RECEIPT_BINDING_MISMATCH")
     if tuple(claimed_ids) != TRUSTED_CASE_IDS:
         fail("RECEIPT_BINDING_MISMATCH", "equivalence digest identity order")
@@ -2118,12 +2723,22 @@ def run_gate(arguments):
         "qualification_workflow_sha256": arguments.approved_qualification_workflow_sha256,
         "qualification_source_bundle_sha256": bundle_digest,
         "compile_dependency_inventory_digest_sha256": dependency_digest,
+        "compile_instance_inventory_digest_sha256": instance_digest,
+        "pinned_upstream_commit": upstream["upstream_commit"],
+        "pinned_upstream_source_tree_digest": upstream["upstream_source_tree_digest"],
+        "pinned_upstream_per_file_digests_verified": upstream["pinned_upstream_per_file_digests_verified"],
         "worker_binary_sha256": worker_digest,
+        "candidate_artifact_id": require_int(candidate_artifact.get("id"), "ARTIFACT_RECORD_MALFORMED", 1),
+        "candidate_artifact_archive_digest": normalise_archive_digest(candidate_artifact.get("digest")),
+        "receipt_artifact_id": receipt_artifact_id,
+        "receipt_artifact_archive_digest": receipt_archive_digest,
         "build_manifest_sha256": member_digests[CANDIDATE_ARTIFACT][BUILD_MANIFEST_MEMBER],
-        "elf_qualification_digest_sha256": elf_record.get("elf_qualification_digest_sha256"),
+        "elf_qualification_digest_sha256": elf_digest,
         "protocol_conformance_digest_sha256": receipt.get("protocol_conformance_digest_sha256"),
         "sandbox_policy_digest_sha256": receipt.get("sandbox_policy_digest_sha256"),
-        "outer_containment_policy_digest_sha256": receipt.get("outer_containment_policy_digest_sha256"),
+        "outer_containment_policy_digest_sha256": outer_canonical["governed_sha256"],
+        "canonical_outer_policy_id": outer_canonical["policy_id"],
+        "canonical_outer_cbpf_sha256": outer_canonical["cbpf_sha256"],
         "observation_case_set_digest_sha256": case_set_digest,
         "canonical_internal_policy_id": canonical["policy_id"],
         "canonical_internal_policy_sha256": canonical["policy_sha256"],
@@ -2164,6 +2779,7 @@ def build_parser():
     parser.add_argument("--approved-source-bundle-sha256", required=True)
     parser.add_argument("--source-bundle-inventory", required=True)
     parser.add_argument("--compile-dependency-inventory", required=True)
+    parser.add_argument("--compile-instance-inventory", required=True)
     parser.add_argument("--default-branch", required=True)
     parser.add_argument("--out", required=True)
     return parser

@@ -78,9 +78,9 @@ env:
   # change the measuring constant.  If a later pull request edits the qualification workflow, the
   # gate source or any bundle entry, trusted attestation fails closed until a separately reviewed
   # change to the default branch updates the corresponding constant below.
-  APPROVED_S3C_QUALIFICATION_WORKFLOW_SHA256: "fae96b0ccdd8af3cb38e26aff1e97517958eb3b3db3c0fc68db0c5c94cb5bb60"
-  APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256: "516c320b4473e0ebd367de62e8dac635ac889e128cbbebea1ac8a068b9fe89c9"
-  APPROVED_S3C_TRUSTED_GATE_SHA256: "8d109c6e3f5e0d8fe5d748d4d212010333d5261ba1cd1fc660cbcb1f989d52bd"
+  APPROVED_S3C_QUALIFICATION_WORKFLOW_SHA256: "cdc157f276db720129ac63cc14018890645cc96009cd9920776faf0938170f92"
+  APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256: "e2720b81fd8f5443b3f289c49355c1b5d267f5c96ec83aeb4c18af329df9f9e8"
+  APPROVED_S3C_TRUSTED_GATE_SHA256: "4bb9bb97e1071fc2e343101511c3b7c22fbb4ee45817bb06f43fafe2d2a6f735"
 
   # EM-11: the identical literal expected program-header authority the reviewed ELF qualifier and
   # the qualification workflow both carry, now including the frozen p_align of every segment.
@@ -314,6 +314,7 @@ jobs:
               --approved-source-bundle-sha256 "${APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256}" \
               --source-bundle-inventory "${RUNNER_TEMP}/trusted/source_bundle_inventory.json" \
               --compile-dependency-inventory "${RUNNER_TEMP}/trusted/dependency/compile_dependency_inventory.json" \
+              --compile-instance-inventory "${RUNNER_TEMP}/trusted/dependency/compile_instance_inventory.json" \
               --default-branch main \
               --out "${RUNNER_TEMP}/trusted/mt4_s3c_trusted_predicate.json"
           echo "S3C_TRUSTED_GATE_RESULT=PASS"

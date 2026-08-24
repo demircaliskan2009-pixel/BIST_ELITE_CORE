@@ -282,13 +282,66 @@ _CONTIGUITY_ALLOWED = (
     re.compile(r"^\s*exit 1\s*$"),
 )
 
+# CROSS-STEP STATE MUTATION, IN EVERY WRITTEN FORM (repair 4).
+#
+# The previous pattern only matched an unquoted `>> $GITHUB_ENV`.  Every one of these is the same
+# mutation and every one of them escaped it:
+#
+#     echo "X=1" >> "$GITHUB_ENV"        quoted redirection target
+#     echo 'X=1' >> "${GITHUB_ENV}"      braced expansion
+#     printf 'X=1' >> $GITHUB_ENV        printf instead of echo
+#     cat <<EOF >> "$GITHUB_ENV"         heredoc
+#     TARGET="$GITHUB_ENV"; echo >> "$TARGET"    variable aliasing
+#
+# The detector therefore normalises quoting and brace forms before matching, and separately refuses
+# any alias that binds an environment-file variable to another name -- because after an alias the
+# redirection target is no longer statically obvious.
+_ENV_FILE_NAMES = ("GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT", "GITHUB_STATE")
+
+_QUOTE_CHARACTERS = str(chr(34)) + str(chr(39))
+
+
+def _normalise_shell(script):
+    """Strip quoting and brace expansion so one pattern covers every written form."""
+    normalised = script
+    for character in _QUOTE_CHARACTERS:
+        normalised = normalised.replace(character, "")
+    normalised = normalised.replace("${", "$").replace("}", "")
+    return normalised
+
+
+def _environment_file_mutation(script):
+    """Return the offending line when the script can write an Actions environment file."""
+    normalised = _normalise_shell(script)
+    for line in normalised.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        for name in _ENV_FILE_NAMES:
+            reference = "$" + name
+            if reference not in stripped:
+                continue
+            # Any redirection at all onto the environment file, by any command.
+            if re.search(r">>?\s*" + re.escape(reference), stripped):
+                return line
+            # Aliasing the environment file into another variable hides the target from a static
+            # reading of the later redirection, so it is refused outright.
+            if re.search(r"^[A-Za-z_][A-Za-z0-9_]*=\s*" + re.escape(reference), stripped):
+                return line
+            if re.search(r"\b(tee|dd|cp|mv|ln)\b[^\n]*" + re.escape(reference), stripped):
+                return line
+        # A heredoc whose redirection target is an environment file.
+        if re.search(r"<<-?\s*[A-Za-z_\x27\x22]*[^\n]*>>?\s*\$(GITHUB_(ENV|PATH|OUTPUT|STATE))", stripped):
+            return line
+    return None
+
+
 # Forms that may not appear ANYWHERE in the trusted workflow.
 _TRUSTED_WORKFLOW_FORBIDDEN = (
     ("an interpreter reading stdin", re.compile(r"python3?\s+-\s")),
     ("inline interpreter code", re.compile(r"python3?\s+-c\b")),
     ("a sourced script", re.compile(r"^\s*(source|\.)\s+\S", re.MULTILINE)),
     ("a repo-local action", re.compile(r"uses:\s*\./")),
-    ("cross-step state mutation", re.compile(r">>\s*\$\{?GITHUB_(ENV|PATH)")),
 )
 
 # A shell CASE PATTERN is not pathname expansion: it matches a variable's value and touches no
@@ -373,11 +426,21 @@ def assert_contiguous(workflow):
             assert not pattern.search(script_text), (label, step.get("name"))
             assert not pattern.search("uses: " + uses if uses else ""), (label, step.get("name"))
         assert _unquoted_glob(script_text) is None, ("a glob", step.get("name"))
+        assert _environment_file_mutation(script_text) is None, ("cross-step state mutation", step.get("name"))
 
-    # 5. THE INVOCATION IS THE FROZEN ONE.
+    # 5. THE INVOCATION IS THE FROZEN ONE, matched POSITIVELY.
     invocation = "\n".join(lines[end:])
     for required in ('"${TRUSTED_PYTHON}" -I -S', '"${GITHUB_WORKSPACE}/${TRUSTED_GATE_PATH}"', "--trusted-entrypoint"):
         assert required in invocation, required
+    # The interpreter and the gate path are LITERAL references to the two validated variables; a
+    # rewritten interpreter or a rewritten gate path is a different command family, not a variant.
+    assert re.search(r'"\$\{TRUSTED_PYTHON\}"\s+-I\s+-S\s+"\$\{GITHUB_WORKSPACE\}/\$\{TRUSTED_GATE_PATH\}"', invocation)
+    assert invocation.count('"${TRUSTED_PYTHON}"') == 1
+    assert invocation.count("env -i ") == 1
+
+    # 6. THE MEASUREMENT MEASURES THE PATH THAT IS INVOKED, not some other file.
+    measurement = "\n".join(lines[:end])
+    assert 'sha256sum "${GITHUB_WORKSPACE}/${TRUSTED_GATE_PATH}"' in measurement
     return True
 
 
@@ -439,6 +502,106 @@ def test_moving_the_invocation_into_a_separate_step_is_rejected(trusted_workflow
     # precisely the place another change can later be inserted.
     with pytest.raises(AssertionError):
         assert_contiguous(mutant)
+
+
+DOUBLE = chr(34)
+SINGLE = chr(39)
+
+# Every one of these writes an Actions environment file, and every one of them escaped the previous
+# unquoted-substring rule.  They are listed as WRITTEN FORMS, not as one canonical form, because the
+# defect was precisely that the detector only recognised one spelling.
+_ENVIRONMENT_MUTATION_FORMS = (
+    ("unquoted target", "echo X=1 >> $GITHUB_ENV" + chr(10)),
+    ("double-quoted target", "echo " + DOUBLE + "X=1" + DOUBLE + " >> " + DOUBLE + "$GITHUB_ENV" + DOUBLE + chr(10)),
+    ("single-quoted value", "echo " + SINGLE + "X=1" + SINGLE + " >> " + DOUBLE + "$GITHUB_ENV" + DOUBLE + chr(10)),
+    ("braced expansion", "echo X=1 >> " + DOUBLE + "${GITHUB_ENV}" + DOUBLE + chr(10)),
+    (
+        "printf instead of echo",
+        "printf " + SINGLE + "X=1" + SINGLE + " >> " + DOUBLE + "$GITHUB_ENV" + DOUBLE + chr(10),
+    ),
+    ("tee instead of redirection", "echo X=1 | tee -a " + DOUBLE + "$GITHUB_ENV" + DOUBLE + chr(10)),
+    ("single-chevron truncation", "echo X=1 > " + DOUBLE + "${GITHUB_ENV}" + DOUBLE + chr(10)),
+    ("heredoc write", "cat <<EOF >> " + DOUBLE + "$GITHUB_ENV" + DOUBLE + chr(10) + "X=1" + chr(10) + "EOF" + chr(10)),
+    ("variable alias", "TARGET=" + DOUBLE + "$GITHUB_ENV" + DOUBLE + chr(10)),
+    ("github path", "echo /tmp >> " + DOUBLE + "${GITHUB_PATH}" + DOUBLE + chr(10)),
+    ("github output", "echo X=1 >> " + DOUBLE + "$GITHUB_OUTPUT" + DOUBLE + chr(10)),
+)
+
+
+@pytest.mark.parametrize(("label", "script"), _ENVIRONMENT_MUTATION_FORMS)
+def test_every_written_form_of_environment_mutation_is_detected(label, script):
+    """The detector is exercised DIRECTLY, so no form can pass because the workflow happens not to
+    contain it."""
+    assert _environment_file_mutation(script) is not None, label
+
+
+def test_the_environment_detector_does_not_fire_on_a_harmless_read():
+    # Reading a value is not mutating the file, and the oracle must not become noise.
+    assert _environment_file_mutation("echo " + DOUBLE + "${GITHUB_WORKSPACE}" + DOUBLE + chr(10)) is None
+    assert _environment_file_mutation("echo " + DOUBLE + "S3C_MARKER=PASS" + DOUBLE + chr(10)) is None
+
+
+@pytest.mark.parametrize(("label", "script"), _ENVIRONMENT_MUTATION_FORMS)
+def test_environment_mutation_anywhere_in_the_trusted_workflow_is_rejected(trusted_workflow, label, script):
+    def transform(steps):
+        steps.insert(1, {"name": "injected", "shell": "bash", "run": script})
+
+    with pytest.raises(AssertionError):
+        assert_contiguous(_mutate(trusted_workflow, transform))
+
+
+@pytest.mark.parametrize(
+    ("label", "replacement"),
+    (
+        (
+            "rewritten interpreter",
+            (DOUBLE + "${TRUSTED_PYTHON}" + DOUBLE + " -I -S", "/usr/bin/python3 -I -S"),
+        ),
+        (
+            "rewritten gate path",
+            (
+                DOUBLE + "${GITHUB_WORKSPACE}/${TRUSTED_GATE_PATH}" + DOUBLE,
+                DOUBLE + "${GITHUB_WORKSPACE}/other_gate.py" + DOUBLE,
+            ),
+        ),
+        (
+            "isolation flags dropped",
+            (DOUBLE + "${TRUSTED_PYTHON}" + DOUBLE + " -I -S", DOUBLE + "${TRUSTED_PYTHON}" + DOUBLE),
+        ),
+    ),
+)
+def test_the_positive_invocation_oracle_rejects_a_rewritten_command(trusted_workflow, label, replacement):
+    old, new = replacement
+
+    def transform(steps):
+        for index, step in enumerate(steps):
+            script = step.get("run") or ""
+            if CONTIGUITY_MEASUREMENT in script:
+                steps[index] = dict(step, run=script.replace(old, new))
+                return
+        raise AssertionError("no measuring step")
+
+    with pytest.raises(AssertionError):
+        assert_contiguous(_mutate(trusted_workflow, transform))
+
+
+def test_the_measurement_must_measure_the_invoked_path(trusted_workflow):
+    def transform(steps):
+        for index, step in enumerate(steps):
+            script = step.get("run") or ""
+            if CONTIGUITY_MEASUREMENT in script:
+                steps[index] = dict(
+                    step,
+                    run=script.replace(
+                        "sha256sum " + DOUBLE + "${GITHUB_WORKSPACE}/${TRUSTED_GATE_PATH}" + DOUBLE,
+                        "sha256sum " + DOUBLE + "${GITHUB_WORKSPACE}/some_other_file" + DOUBLE,
+                    ),
+                )
+                return
+        raise AssertionError("no measuring step")
+
+    with pytest.raises(AssertionError):
+        assert_contiguous(_mutate(trusted_workflow, transform))
 
 
 def test_a_repo_local_action_anywhere_in_the_trusted_workflow_is_rejected(trusted_workflow):
@@ -830,29 +993,146 @@ def dependency_inventory_recomputation():
 
 _FPROG_VA = 0x4016A0
 _PROGRAM_VA = 0x401700
+_SECTION_ADDR = 0x401000
+_SECTION_SIZE = 0x1000
+_SECTION_OFFSET = 0x1000
+_LOAD_VADDR = 0x400000
+_LOAD_FILESZ = 0x3000
+_LOAD_OFFSET = 0
 
 
 def _canonical():
     return gate.stage_c_canonical_internal_policy()
 
 
+def _place(prefix, symbol_va):
+    # One coherent placement: SYMBOL subset-of SECTION subset-of PT_LOAD, with the file and virtual
+    # views in exact agreement, which is what the trusted binding now requires.
+    return {
+        prefix + "_section_index": 1,
+        prefix + "_section_name": ".rodata.mt4_s3c_filter",
+        prefix + "_section_addr_u64": _SECTION_ADDR,
+        prefix + "_section_size_bytes": _SECTION_SIZE,
+        prefix + "_section_file_offset_u64": _SECTION_OFFSET,
+        prefix + "_section_type_u32": 1,
+        prefix + "_section_flags_u64": 2,
+        prefix + "_section_file_offset_of_symbol_u64": _SECTION_OFFSET + (symbol_va - _SECTION_ADDR),
+        prefix + "_load_index": 0,
+        prefix + "_load_vaddr_u64": _LOAD_VADDR,
+        prefix + "_load_filesz_u64": _LOAD_FILESZ,
+        prefix + "_load_file_offset_u64": _LOAD_OFFSET,
+        prefix + "_load_flags_u32": 5,
+    }
+
+
+def _expected_fprog_bytes(canonical, program_va=_PROGRAM_VA):
+    return (
+        canonical["cbpf_instruction_count"].to_bytes(2, "little")
+        + bytes(6)
+        + program_va.to_bytes(8, "little")
+    )
+
+
 def _elf_record(canonical, **overrides):
     objects = {
         "fprog_symbol": "mt4_s3c_internal_filter_fprog",
         "fprog_va_u64": _FPROG_VA,
-        "fprog_file_offset_u64": 0x16A0,
+        "fprog_file_offset_u64": _SECTION_OFFSET + (_FPROG_VA - _SECTION_ADDR),
         "fprog_size_bytes": 16,
         "fprog_segment_flags_u32": 5,
+        "fprog_bytes_sha256": hashlib.sha256(_expected_fprog_bytes(canonical)).hexdigest(),
         "program_symbol": "mt4_s3c_internal_filter_program",
         "program_va_u64": _PROGRAM_VA,
-        "program_file_offset_u64": 0x1700,
+        "program_file_offset_u64": _SECTION_OFFSET + (_PROGRAM_VA - _SECTION_ADDR),
         "program_size_bytes": canonical["cbpf_instruction_count"] * 8,
         "program_segment_flags_u32": 5,
         "program_instruction_count": canonical["cbpf_instruction_count"],
         "program_bytes_sha256": canonical["program_bytes_sha256"],
     }
+    objects.update(_place("fprog", _FPROG_VA))
+    objects.update(_place("program", _PROGRAM_VA))
     objects.update(overrides)
     return {"canonical_internal_filter_object": objects}
+
+
+def _sealed_elf_record(canonical, **overrides):
+    # A COMPLETE A2 record whose self-digest is recomputed exactly as an honest producer would, so
+    # that a reseal test changes only the value under test and nothing else.
+    record = {
+        "schema": gate.ELF_RECORD_SCHEMA,
+        "platform_id": "LINUX_X86_64",
+        "candidate_binary_sha256": "d" * 64,
+        "compile_dependency_inventory_digest_sha256": "e" * 64,
+    }
+    record.update(_elf_record(canonical))
+    for key, value in overrides.items():
+        if key in record["canonical_internal_filter_object"]:
+            record["canonical_internal_filter_object"][key] = value
+        else:
+            record[key] = value
+    record["elf_qualification_digest_sha256"] = gate.domain_digest(gate.ELF_RECORD_DIGEST_DOMAIN, record)
+    return record
+
+
+def elf_record_digest_recomputation():
+    # REPAIR 1B.  The A2 digest is DERIVED from A2's own record, so a substituted digest fails even
+    # when A4 repeats it, and a tampered field fails even when the digest is left alone.
+    canonical = _canonical()
+    honest = _sealed_elf_record(canonical)
+    assert gate.recompute_elf_record_digest(honest) == honest["elf_qualification_digest_sha256"]
+
+    substituted = json.loads(json.dumps(honest))
+    substituted["elf_qualification_digest_sha256"] = "1" * 64
+    expect("ELF_QUALIFICATION_DIGEST_MISMATCH", lambda: gate.recompute_elf_record_digest(substituted))
+
+    tampered = json.loads(json.dumps(honest))
+    tampered["canonical_internal_filter_object"]["program_va_u64"] = 0x7FFF0000
+    expect("ELF_QUALIFICATION_DIGEST_MISMATCH", lambda: gate.recompute_elf_record_digest(tampered))
+
+    # A COORDINATED A2 reseal -- the record is changed AND its digest recomputed, so it is
+    # internally perfect -- still fails, because the binding below is anchored on Stage C's own
+    # canonical program rather than on anything A2 says about itself.
+    resealed = _sealed_elf_record(canonical, program_bytes_sha256="b" * 64)
+    assert gate.recompute_elf_record_digest(resealed) == resealed["elf_qualification_digest_sha256"]
+    expect(
+        "FILTER_OBJECT_BINDING_INVALID",
+        lambda: gate.stage_c_validate_filter_object(resealed, canonical),
+    )
+
+
+def filter_object_containment():
+    # REPAIR 1A.  SYMBOL subset-of DECLARED SECTION subset-of APPROVED PT_LOAD, at every level.
+    canonical = _canonical()
+    assert gate.stage_c_validate_filter_object(_elf_record(canonical), canonical)["program_va_u64"] == _PROGRAM_VA
+
+    for label, override in (
+        ("symbol escapes its section", {"program_va_u64": _SECTION_ADDR + _SECTION_SIZE - 8}),
+        ("section is not allocated", {"program_section_flags_u64": 0}),
+        ("section holds no file bytes", {"program_section_type_u32": 8}),
+        ("section escapes its mapping", {"program_section_addr_u64": _LOAD_VADDR + _LOAD_FILESZ}),
+        ("file and virtual views disagree", {"program_section_file_offset_u64": _SECTION_OFFSET + 8}),
+        ("declared file offset disagrees", {"program_file_offset_u64": 0x2222}),
+        ("writable mapping", {"program_load_flags_u32": 6}),
+        ("unreadable mapping", {"program_load_flags_u32": 1}),
+        ("reserved section index", {"program_section_index": 0xFF20}),
+        ("null section index", {"program_section_index": 0}),
+        ("fprog points elsewhere", {"fprog_bytes_sha256": "c" * 64}),
+        ("objects overlap", {"fprog_va_u64": _PROGRAM_VA + 8}),
+    ):
+        expect(
+            "FILTER_OBJECT_BINDING_INVALID",
+            lambda override=override: gate.stage_c_validate_filter_object(
+                _elf_record(canonical, **override), canonical
+            ),
+        )
+
+    # A coordinated A2 move -- the address changes AND the fprog descriptor is rebuilt to match --
+    # still fails, because the section that is supposed to contain it does not.
+    moved = _elf_record(canonical, program_va_u64=0x7FF000000000)
+    moved["canonical_internal_filter_object"]["fprog_bytes_sha256"] = hashlib.sha256(
+        _expected_fprog_bytes(canonical, 0x7FF000000000)
+    ).hexdigest()
+    expect("FILTER_OBJECT_BINDING_INVALID", lambda: gate.stage_c_validate_filter_object(moved, canonical))
 
 
 def _observation(canonical, **overrides):
@@ -911,6 +1191,22 @@ def stage_c_self_anchored_authority():
     # And the case-set inventory is reconstructed and digested here too.
     assert gate.stage_c_case_set_digest() == gate.EXPECTED_CASE_SET_DIGEST
     assert len(gate.TRUSTED_CASE_IDS) == 25
+
+
+def stage_c_outer_policy_reconstruction():
+    # REPAIR 1C.  The OUTER policy is reconstructed too, so no A3/A4 top-level claim is an oracle.
+    outer = gate.stage_c_canonical_outer_policy()
+    assert outer["policy_id"] == "MT4_S3C_OUTER_CONTAINMENT_P0_LINUX_X86_64"
+    assert outer["cbpf_instruction_count"] == 400
+    assert outer["policy_sha256"] == gate.EXPECTED_OUTER_POLICY_SHA256
+    assert outer["governed_sha256"] == gate.EXPECTED_OUTER_GOVERNED_SHA256
+    assert outer["cbpf_sha256"] == gate.EXPECTED_OUTER_CBPF_SHA256
+    # The two policies are genuinely different documents, and the semantic/governed separation holds.
+    inner = gate.stage_c_canonical_internal_policy()
+    assert outer["policy_sha256"] != inner["policy_sha256"]
+    assert outer["cbpf_sha256"] != inner["cbpf_sha256"]
+    assert outer["governed_sha256"] != outer["policy_sha256"]
+    assert b'"policy_domain":"MT4_S3C_OUTER_CONTAINMENT_P0_LINUX_X86_64"' in outer["semantic_bytes"]
 
 
 def stage_c_equivalence_recomputation():
@@ -1041,10 +1337,11 @@ def coordinated_reseal_is_rejected():
         "FILTER_OBJECT_BINDING_INVALID",
         lambda: gate.stage_c_validate_filter_object(_elf_record(canonical, program_instruction_count=112), canonical),
     )
-    # 7. A writable filter mapping is never an acceptable home for the canonical object.
+    # 7. A writable filter mapping is never an acceptable home for the canonical object.  The
+    #    authority is the PT_LOAD that actually maps the declared section, not a repeated flag.
     expect(
         "FILTER_OBJECT_BINDING_INVALID",
-        lambda: gate.stage_c_validate_filter_object(_elf_record(canonical, program_segment_flags_u32=6), canonical),
+        lambda: gate.stage_c_validate_filter_object(_elf_record(canonical, program_load_flags_u32=6), canonical),
     )
     # 8. A false case-set digest cannot be adopted: Stage C recomputes it from its own table.
     assert gate.stage_c_case_set_digest() != "0" * 64
@@ -1128,6 +1425,814 @@ def zip_runtime_consumption_and_reachable_rules():
     )
 
 
+# =================================================================================================
+# THE REAL run_gate HARNESS.
+#
+# Everything below builds a COMPLETE, internally consistent, authenticated-looking source run and
+# then calls gate.run_gate.  The GitHub surface is served from a dictionary, so no network and no
+# credential is involved, but every rule the gate applies runs for real.  Each mutation changes one
+# controlled input and holds the trusted authority fixed.
+# =================================================================================================
+
+RUN_ID = 424242
+ATTEMPT = 1
+HEAD_SHA = "c" * 40
+REPOSITORY = "demircaliskan2009-pixel/BIST_ELITE_CORE"
+WORKFLOW_PATH = ".github/workflows/crypto_core_mt4_s3c_static_worker_qualification.yml"
+WORKFLOW_NAME = "crypto_core mt4-s3c static worker qualification"
+ARTIFACT_IDS = {
+    "mt4-s3c-candidate-linux-x86_64": 9001,
+    "mt4-s3c-elf-qualification-record": 9002,
+    "mt4-s3c-raw-observation-record": 9003,
+    "mt4-s3c-qualification-receipt": 9004,
+}
+
+
+class _Arguments(object):
+    pass
+
+
+def _zip_bytes(members):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, body in members:
+            archive.writestr(name, body)
+    return buffer.getvalue()
+
+
+def _canonical_bytes(payload):
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+
+
+def _instance(instance_id, kind, inputs, libraries=(), flags=()):
+    return {
+        "instance_id": instance_id,
+        "kind": kind,
+        "tool": "gcc",
+        "argv": ["gcc", "-c", "-o", "out.o"] + list(inputs),
+        "flags": sorted(flags),
+        "include_roots": [],
+        "inputs": list(inputs),
+        "libraries": sorted(libraries),
+        "output": "out.o",
+        "working_directory_class": "GITHUB_WORKSPACE",
+    }
+
+
+def _complete_instances():
+    # ONE record per REAL native invocation, exactly the set the reviewed workflow performs.
+    bundled = {
+        "worker-bootstrap": "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_bootstrap.c",
+        "worker-policy": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c",
+        "worker-capability": "scripts/crypto_core/qualification/s3c/mt4_s3c_blst_capability.c",
+        "worker-verify": "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_verify.c",
+        "worker-start": "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_start.S",
+        "observer-probe": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c",
+        "observer-launcher": "scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c",
+    }
+    instances = [
+        _instance(name, "COMPILE", [{"path": path, "class": "REPO_BUNDLED"}])
+        for name, path in sorted(bundled.items())
+    ]
+    instances.append(_instance("blst-server", "COMPILE", [{"path": "src/server.c", "class": "UPSTREAM_PINNED"}]))
+    instances.append(
+        _instance("blst-assembly", "COMPILE", [{"path": "build/assembly.S", "class": "UPSTREAM_PINNED"}])
+    )
+    instances.append(
+        _instance(
+            "observer-link",
+            "LINK",
+            [{"path": "/tmp/launcher.o", "class": "EXTERNAL_TOOLCHAIN"}],
+            libraries=("cap",),
+        )
+    )
+    instances.append(
+        _instance(
+            "worker-link",
+            "LINK",
+            [{"path": "/tmp/start.o", "class": "EXTERNAL_TOOLCHAIN"}],
+            flags=gate.REQUIRED_WORKER_LINK_FLAGS,
+        )
+    )
+    instances.sort(key=lambda item: item["instance_id"])
+    return {
+        "schema": gate.COMPILE_INSTANCE_SCHEMA,
+        "instance_count": len(instances),
+        "instances": instances,
+        "instance_id_order": [item["instance_id"] for item in instances],
+    }
+
+
+def _build_world(mutate=None):
+    # ONE coherent run: the same canonical policy, the same 25 cases, the same identity everywhere.
+    canonical = gate.stage_c_canonical_internal_policy()
+    outer = gate.stage_c_canonical_outer_policy()
+    case_set = gate.stage_c_case_set_digest()
+
+    elf_record = _sealed_elf_record(canonical)
+    worker = b"\x7fELF" + bytes(508)
+    worker_digest = hashlib.sha256(worker).hexdigest()
+    elf_record["candidate_binary_sha256"] = worker_digest
+
+    dependency = _complete_inventory()
+    dependency_digest = None
+
+    manifest = {
+        "schema": "mt4-s3c-build-manifest.v1",
+        "worker_binary_sha256": worker_digest,
+        "source_run_id": RUN_ID,
+        "source_run_attempt": ATTEMPT,
+        "source_head_sha": HEAD_SHA,
+        "upstream_repository": gate.UPSTREAM_REPOSITORY,
+        "upstream_release": gate.UPSTREAM_RELEASE,
+        "upstream_commit": gate.UPSTREAM_COMMIT,
+        "upstream_source_tree_digest": gate.UPSTREAM_SOURCE_TREE_DIGEST,
+        "compile_instance_inventory_schema": gate.COMPILE_INSTANCE_SCHEMA,
+    }
+
+    cases = []
+    for row in gate.TRUSTED_CASE_INVENTORY:
+        cases.append(
+            {
+                "case_id": row[1],
+                "internal_capture": {
+                    "program_bytes_hex": canonical["cbpf_program_bytes"].hex(),
+                    "fprog_va_u64": _FPROG_VA,
+                    "filter_va_u64": _PROGRAM_VA,
+                    "length": canonical["cbpf_instruction_count"],
+                    "install_return_i32": 0,
+                },
+                "seccomp_baseline": {
+                    "supervisor_seccomp": 0,
+                    "supervisor_filters": 0,
+                    "child_seccomp": 0,
+                    "child_filters": 0,
+                    "outer_post_filters": 1,
+                    "internal_post_filters": 2,
+                    "internal_post_seccomp": 2,
+                    "revalidated_filters": 2,
+                },
+                "dump_leg": {"availability": "UNAVAILABLE_IN_PINNED_ENVIRONMENT", "terminates_at_index": -1},
+                "internal_filter_equivalence": {"valid": True, "digest_sha256": ""},
+            }
+        )
+
+    observation = {
+        "candidate_binary_sha256": worker_digest,
+        "source_run_id": RUN_ID,
+        "source_run_attempt": ATTEMPT,
+        "source_head_sha": HEAD_SHA,
+        "canonical_internal_policy_id": canonical["policy_id"],
+        "canonical_internal_policy_sha256": canonical["policy_sha256"],
+        "canonical_internal_cbpf_instruction_count": canonical["cbpf_instruction_count"],
+        "canonical_internal_cbpf_sha256": canonical["cbpf_sha256"],
+        "outer_containment_policy_digest_sha256": outer["governed_sha256"],
+        "observation_case_set_digest_sha256": case_set,
+        "cases": cases,
+    }
+
+    receipt = {
+        "worker_binary_sha256": worker_digest,
+        "source_run_id": RUN_ID,
+        "source_run_attempt": ATTEMPT,
+        "source_head_sha": HEAD_SHA,
+        "candidate_artifact_id": ARTIFACT_IDS["mt4-s3c-candidate-linux-x86_64"],
+        "candidate_artifact_archive_digest": "sha256:" + "a" * 64,
+        "elf_qualification_digest_sha256": elf_record["elf_qualification_digest_sha256"],
+        "protocol_conformance_digest_sha256": "1" * 64,
+        "sandbox_policy_digest_sha256": "2" * 64,
+        "outer_containment_policy_digest_sha256": outer["governed_sha256"],
+        "observation_case_set_digest_sha256": case_set,
+        "canonical_internal_policy_id": canonical["policy_id"],
+        "canonical_internal_policy_sha256": canonical["policy_sha256"],
+        "canonical_internal_cbpf_sha256": canonical["cbpf_sha256"],
+        "case_count": 25,
+        "all_cases_conform": True,
+        "evidence_status": "ADMISSION_EVIDENCE_ONLY",
+        "governed_worker_row_created": False,
+        "internal_filter_equivalence_digests": [],
+    }
+
+    world = {
+        "canonical": canonical,
+        "elf_record": elf_record,
+        "worker": worker,
+        "manifest": manifest,
+        "observation": observation,
+        "receipt": receipt,
+        "dependency": dependency,
+        "instances": _complete_instances(),
+        "bundle": {"entries": _bundle_entries()},
+        "artifact_ids": dict(ARTIFACT_IDS),
+        "archive_digests": {name: "sha256:" + format(index, "064x") for index, name in enumerate(ARTIFACT_IDS)},
+        "jobs": [{"id": 100 + index, "name": name, "conclusion": "success"} for index, name in enumerate(gate.REQUIRED_JOBS)],
+        "run": {
+            "run_attempt": ATTEMPT,
+            "head_sha": HEAD_SHA,
+            "head_branch": "main",
+            "event": "workflow_dispatch",
+            "status": "completed",
+            "conclusion": "success",
+            "path": WORKFLOW_PATH,
+            "name": WORKFLOW_NAME,
+            "repository": {"full_name": REPOSITORY},
+        },
+    }
+    del dependency_digest
+    # The receipt's CANDIDATE claims must match what the service reports, which is only known once
+    # the world exists; an honest producer reads them from the upload result the same way.
+    world["receipt"]["candidate_artifact_archive_digest"] = world["archive_digests"][
+        "mt4-s3c-candidate-linux-x86_64"
+    ]
+
+    if mutate is not None:
+        mutate(world)
+
+    # SEAL: the per-case equivalence digests are computed the way an honest producer would, AFTER
+    # any mutation, so a coordinated reseal is genuinely internally consistent.
+    filter_object = gate.stage_c_validate_filter_object(world["elf_record"], world["canonical"])
+    digests = []
+    for case in world["observation"]["cases"]:
+        record = _equivalence_record(world, case, filter_object)
+        digest = gate.domain_digest(gate.INTERNAL_EQUIVALENCE_DIGEST_DOMAIN, record)
+        case["internal_filter_equivalence"]["digest_sha256"] = digest
+        digests.append({"case_id": case["case_id"], "digest_sha256": digest})
+    if not world["receipt"]["internal_filter_equivalence_digests"]:
+        world["receipt"]["internal_filter_equivalence_digests"] = digests
+    return world
+
+
+def _equivalence_record(world, case, filter_object):
+    observation = world["observation"]
+    capture = case["internal_capture"]
+    baseline = case["seccomp_baseline"]
+    del filter_object
+    return {
+        "schema": gate.INTERNAL_EQUIVALENCE_SCHEMA,
+        "canonical_internal_policy_id": world["canonical"]["policy_id"],
+        "canonical_internal_policy_sha256": world["canonical"]["policy_sha256"],
+        "program_representation_version": gate.PROGRAM_REPRESENTATION_VERSION,
+        "canonical_internal_cbpf_instruction_count": world["canonical"]["cbpf_instruction_count"],
+        "canonical_internal_cbpf_sha256": world["canonical"]["cbpf_sha256"],
+        "captured_internal_cbpf_sha256": gate.cbpf_digest(bytes.fromhex(capture["program_bytes_hex"])),
+        "captured_internal_uargs_va_u64": capture["fprog_va_u64"],
+        "captured_internal_len_u32": capture["length"],
+        "install_exit_return_i32": capture["install_return_i32"],
+        "baseline_supervisor_seccomp": baseline["supervisor_seccomp"],
+        "baseline_supervisor_filters": baseline["supervisor_filters"],
+        "baseline_child_seccomp": baseline["child_seccomp"],
+        "baseline_child_filters": baseline["child_filters"],
+        "pre_install_filters": baseline["outer_post_filters"],
+        "post_install_filters": baseline["internal_post_filters"],
+        "post_install_seccomp_mode": baseline["internal_post_seccomp"],
+        "revalidated_filters": baseline["revalidated_filters"],
+        "dump_leg_availability": case["dump_leg"]["availability"],
+        "dump_leg_index0_sha256": "",
+        "dump_leg_index1_sha256": "",
+        "dump_leg_terminates_at_index": -1,
+        "case_id": case["case_id"],
+        "source_run_id": observation["source_run_id"],
+        "source_run_attempt": observation["source_run_attempt"],
+        "source_head_sha": observation["source_head_sha"],
+        "candidate_binary_sha256": observation["candidate_binary_sha256"],
+    }
+
+
+def _install_world(world, work_dir):
+    # Serve the synthetic GitHub surface and the two local inventories.
+    archives = {
+        world["artifact_ids"]["mt4-s3c-candidate-linux-x86_64"]: _zip_bytes(
+            [("mt4_s3c_static_worker", world["worker"]), ("mt4_s3c_build_manifest.json", _canonical_bytes(world["manifest"]))]
+        ),
+        world["artifact_ids"]["mt4-s3c-elf-qualification-record"]: _zip_bytes(
+            [("mt4_s3c_elf_qualification_record.json", _canonical_bytes(world["elf_record"]))]
+        ),
+        world["artifact_ids"]["mt4-s3c-raw-observation-record"]: _zip_bytes(
+            [("mt4_s3c_raw_observation_record.json", _canonical_bytes(world["observation"]))]
+        ),
+        world["artifact_ids"]["mt4-s3c-qualification-receipt"]: _zip_bytes(
+            [("mt4_s3c_qualification_receipt.json", _canonical_bytes(world["receipt"]))]
+        ),
+    }
+    artifacts = []
+    for name in gate.EXPECTED_ARTIFACT_SET:
+        artifacts.append(
+            {
+                "id": world["artifact_ids"][name],
+                "name": name,
+                "expired": False,
+                "digest": world["archive_digests"][name],
+                "workflow_run": {
+                    "id": 777777 if world.get("foreign_owner") and name == "mt4-s3c-qualification-receipt" else RUN_ID,
+                    "head_sha": HEAD_SHA,
+                },
+            }
+        )
+    if world.get("extra_artifacts"):
+        artifacts.extend(world["extra_artifacts"])
+
+    def api_json(api_url, path):
+        del api_url
+        if path.endswith("/actions/runs/" + str(RUN_ID)):
+            return world["run"]
+        if "/attempts/" in path and "jobs" in path:
+            return {"total_count": len(world["jobs"]), "jobs": world["jobs"]}
+        if "artifacts" in path:
+            return {"total_count": len(artifacts), "artifacts": artifacts}
+        raise AssertionError("unexpected api path " + path)
+
+    def download_artifact(api_url, repository, artifact_id):
+        del api_url, repository
+        return archives[artifact_id]
+
+    gate.api_json = api_json
+    gate.download_artifact = download_artifact
+
+    bundle_path = work_dir + "/bundle.json"
+    dependency_path = work_dir + "/dependency.json"
+    instance_path = work_dir + "/instances.json"
+    with open(bundle_path, "wb") as handle:
+        handle.write(_canonical_bytes(world["bundle"]))
+    with open(dependency_path, "wb") as handle:
+        handle.write(_canonical_bytes(world["dependency"]))
+    with open(instance_path, "wb") as handle:
+        handle.write(_canonical_bytes(world["instances"]))
+
+    arguments = _Arguments()
+    arguments.api_url = "https://api.github.com"
+    arguments.repository = REPOSITORY
+    arguments.source_run_id = RUN_ID
+    arguments.expected_head_sha = HEAD_SHA
+    arguments.expected_workflow_path = WORKFLOW_PATH
+    arguments.expected_workflow_name = WORKFLOW_NAME
+    arguments.default_branch = "main"
+    arguments.source_bundle_inventory = bundle_path
+    arguments.compile_dependency_inventory = dependency_path
+    arguments.compile_instance_inventory = instance_path
+    arguments.approved_source_bundle_sha256 = gate.recompute_source_bundle_digest(world["bundle"])[0]
+    entry = [item for item in world["bundle"]["entries"] if item["path"] == WORKFLOW_PATH][0]
+    arguments.approved_qualification_workflow_sha256 = entry["sha256"]
+    return arguments
+
+
+def _run_world(work_dir, mutate=None):
+    world = _build_world(mutate)
+    world["manifest"]["compile_dependency_inventory_digest_sha256"] = None
+    arguments = _install_world(world, work_dir)
+    inventory_digest = gate.recompute_dependency_inventory_digest(world["dependency"], world["bundle"]["entries"])
+    world["manifest"]["compile_dependency_inventory_digest_sha256"] = inventory_digest
+    if not world.get("freeze_instance_digest"):
+        world["manifest"]["compile_instance_inventory_digest_sha256"] = gate.recompute_compile_instance_digest(
+            world["instances"]
+        )
+    world["elf_record"]["compile_dependency_inventory_digest_sha256"] = inventory_digest
+    world["receipt"]["compile_dependency_inventory_digest_sha256"] = inventory_digest
+    # The ELF record's own digest is resealed after the inventory digest is known, so the honest
+    # world is genuinely self-consistent.  A mutation may FREEZE the digest instead, which is what
+    # a forged-digest attacker does: A2 and A4 agree on a value the record does not actually hash to.
+    if not world.get("freeze_elf_digest"):
+        preimage = {
+            key: value for key, value in world["elf_record"].items() if key != "elf_qualification_digest_sha256"
+        }
+        world["elf_record"]["elf_qualification_digest_sha256"] = gate.domain_digest(
+            gate.ELF_RECORD_DIGEST_DOMAIN, preimage
+        )
+        world["receipt"]["elf_qualification_digest_sha256"] = world["elf_record"]["elf_qualification_digest_sha256"]
+    arguments = _install_world(world, work_dir)
+    return gate.run_gate(arguments), world
+
+
+def run_gate_reference():
+    # The honest world passes, which is what makes every rejection below meaningful.
+    work_dir = sys.argv[sys.argv.index("--work-dir") + 1]
+    predicate, world = _run_world(work_dir)
+    assert predicate["case_count"] == 25
+    assert predicate["evidence_status"] == "ADMISSION_EVIDENCE_ONLY"
+    assert predicate["admission"] == "NONE"
+    # REPAIR 1D: the receipt custody identity comes from the SERVICE, not from the receipt.
+    assert predicate["receipt_artifact_id"] == ARTIFACT_IDS["mt4-s3c-qualification-receipt"]
+    assert predicate["receipt_artifact_archive_digest"] == world["archive_digests"]["mt4-s3c-qualification-receipt"]
+    assert predicate["candidate_artifact_id"] == ARTIFACT_IDS["mt4-s3c-candidate-linux-x86_64"]
+    assert len(predicate["internal_filter_equivalence_digests"]) == 25
+    assert predicate["canonical_outer_policy_id"] == "MT4_S3C_OUTER_CONTAINMENT_P0_LINUX_X86_64"
+
+
+def _expect_run_gate(marker, mutate):
+    work_dir = sys.argv[sys.argv.index("--work-dir") + 1]
+    try:
+        _run_world(work_dir, mutate)
+    except gate.TrustedGateError as error:
+        assert marker in str(error), marker + " not in " + str(error)
+        return
+    raise AssertionError("run_gate accepted " + marker)
+
+
+def run_gate_coordinated_reseal():
+    # REPAIR 1E.  Both producer records are resealed CONSISTENTLY with a false but internally
+    # matching value.  Every cross-record equality still holds; the trusted reconstruction does not.
+    def false_policy_id(world):
+        world["observation"]["canonical_internal_policy_id"] = "ATTACKER_POLICY"
+        world["receipt"]["canonical_internal_policy_id"] = "ATTACKER_POLICY"
+
+    _expect_run_gate("STAGE_C_CANONICAL_POLICY_SUBSTITUTED", false_policy_id)
+
+    def false_policy_digest(world):
+        world["observation"]["canonical_internal_policy_sha256"] = "a" * 64
+        world["receipt"]["canonical_internal_policy_sha256"] = "a" * 64
+
+    _expect_run_gate("STAGE_C_CANONICAL_POLICY_SUBSTITUTED", false_policy_digest)
+
+    def false_cbpf(world):
+        weaker = bytes(113 * 8)
+        world["observation"]["canonical_internal_cbpf_sha256"] = gate.cbpf_digest(weaker)
+        world["receipt"]["canonical_internal_cbpf_sha256"] = gate.cbpf_digest(weaker)
+        for case in world["observation"]["cases"]:
+            case["internal_capture"]["program_bytes_hex"] = weaker.hex()
+
+    _expect_run_gate("STAGE_C_CANONICAL_POLICY_SUBSTITUTED", false_cbpf)
+
+    def false_outer(world):
+        world["observation"]["outer_containment_policy_digest_sha256"] = "b" * 64
+        world["receipt"]["outer_containment_policy_digest_sha256"] = "b" * 64
+
+    _expect_run_gate("STAGE_C_CANONICAL_POLICY_SUBSTITUTED", false_outer)
+
+    def false_case_set(world):
+        world["observation"]["observation_case_set_digest_sha256"] = "c" * 64
+        world["receipt"]["observation_case_set_digest_sha256"] = "c" * 64
+
+    _expect_run_gate("OBSERVATION_CASE_SET_DIGEST_MISMATCH", false_case_set)
+
+    def false_elf_digest(world):
+        # A2 AND A4 agree on a forged ELF digest, and the world stops resealing it -- so the two
+        # records are perfectly consistent with each other and inconsistent only with the truth.
+        world["freeze_elf_digest"] = True
+        world["elf_record"]["elf_qualification_digest_sha256"] = "d" * 64
+        world["receipt"]["elf_qualification_digest_sha256"] = "d" * 64
+
+    _expect_run_gate("ELF_QUALIFICATION_DIGEST_MISMATCH", false_elf_digest)
+
+    def false_address(world):
+        # A2 moves the object and A4 follows.  The declared section no longer contains it.
+        world["elf_record"]["canonical_internal_filter_object"]["program_va_u64"] = 0x7FF000000000
+        for case in world["observation"]["cases"]:
+            case["internal_capture"]["filter_va_u64"] = 0x7FF000000000
+
+    _expect_run_gate("FILTER_OBJECT_BINDING_INVALID", false_address)
+
+    def false_receipt_relation(world):
+        # A4 claims a candidate artifact id the SERVICE does not report.
+        world["receipt"]["candidate_artifact_id"] = 999999
+
+    _expect_run_gate("RECEIPT_BINDING_MISMATCH", false_receipt_relation)
+
+    def self_asserted_receipt_identity(world):
+        world["receipt"]["receipt_artifact_id"] = ARTIFACT_IDS["mt4-s3c-qualification-receipt"]
+
+    _expect_run_gate("RECEIPT_BINDING_MISMATCH", self_asserted_receipt_identity)
+
+    def foreign_run_owner(world):
+        # An artifact whose SERVICE record points at another run breaks the one-run pairing.
+        world["foreign_owner"] = True
+
+    _expect_run_gate("RUN_ATTEMPT_MISMATCH", foreign_run_owner)
+
+
+def run_gate_compile_provenance():
+    # REPAIR 8.  The ACTUAL invocation inventory is validated and recomputed at the boundary, and
+    # the pinned upstream identity is compared to trusted literals rather than to a hex shape.
+    work_dir = sys.argv[sys.argv.index("--work-dir") + 1]
+    predicate, _world = _run_world(work_dir)
+    assert len(predicate["compile_instance_inventory_digest_sha256"]) == 64
+    assert predicate["pinned_upstream_commit"] == gate.UPSTREAM_COMMIT
+    assert predicate["pinned_upstream_source_tree_digest"] == gate.UPSTREAM_SOURCE_TREE_DIGEST
+    # The residual is NAMED rather than implied: Stage C holds no per-file blst digest table.
+    assert predicate["pinned_upstream_per_file_digests_verified"] is False
+
+    def drop_observer_launcher(world):
+        world["instances"]["instances"] = [
+            item for item in world["instances"]["instances"] if item["instance_id"] != "observer-launcher"
+        ]
+        world["instances"]["instance_count"] = len(world["instances"]["instances"])
+        world["instances"]["instance_id_order"] = [item["instance_id"] for item in world["instances"]["instances"]]
+
+    _expect_run_gate("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", drop_observer_launcher)
+
+    def drop_upstream_assembly(world):
+        world["instances"]["instances"] = [
+            item for item in world["instances"]["instances"] if item["instance_id"] != "blst-assembly"
+        ]
+        world["instances"]["instance_count"] = len(world["instances"]["instances"])
+        world["instances"]["instance_id_order"] = [item["instance_id"] for item in world["instances"]["instances"]]
+
+    _expect_run_gate("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", drop_upstream_assembly)
+
+    def drop_system_library(world):
+        for item in world["instances"]["instances"]:
+            if item["instance_id"] == "observer-link":
+                item["libraries"] = []
+
+    _expect_run_gate("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", drop_system_library)
+
+    def weaken_link_flags(world):
+        for item in world["instances"]["instances"]:
+            if item["instance_id"] == "worker-link":
+                item["flags"] = [flag for flag in item["flags"] if flag != "-Wl,-z,defs"]
+
+    _expect_run_gate("COMPILE_INSTANCE_LINK_CONTRACT_VIOLATED", weaken_link_flags)
+
+    def substitute_tool(world):
+        for item in world["instances"]["instances"]:
+            if item["instance_id"] == "worker-policy":
+                item["tool"] = "clang"
+
+    _expect_run_gate("COMPILE_INSTANCE_INVENTORY_MISMATCH", substitute_tool)
+
+    def unbundled_input(world):
+        for item in world["instances"]["instances"]:
+            if item["instance_id"] == "worker-policy":
+                item["inputs"] = [{"path": "src/crypto_core/__init__.py", "class": "REPO_BUNDLED"}]
+
+    _expect_run_gate("SOURCE_CLOSURE_COMPILE_DEPENDENCY_UNBUNDLED", unbundled_input)
+
+    def duplicate_instance(world):
+        world["instances"]["instances"].append(json.loads(json.dumps(world["instances"]["instances"][0])))
+        world["instances"]["instances"].sort(key=lambda item: item["instance_id"])
+        world["instances"]["instance_count"] = len(world["instances"]["instances"])
+        world["instances"]["instance_id_order"] = [item["instance_id"] for item in world["instances"]["instances"]]
+
+    _expect_run_gate("COMPILE_INSTANCE_DUPLICATE", duplicate_instance)
+
+    def reorder_instances(world):
+        world["instances"]["instances"] = list(reversed(world["instances"]["instances"]))
+        world["instances"]["instance_id_order"] = [item["instance_id"] for item in world["instances"]["instances"]]
+
+    _expect_run_gate("COMPILE_INSTANCE_INVENTORY_MISMATCH", reorder_instances)
+
+    def substituted_instance_digest(world):
+        world["freeze_instance_digest"] = True
+        world["manifest"]["compile_instance_inventory_digest_sha256"] = "9" * 64
+
+    _expect_run_gate("COMPILE_INSTANCE_INVENTORY_MISMATCH", substituted_instance_digest)
+
+    for label, field in (
+        ("commit", "upstream_commit"),
+        ("tree", "upstream_source_tree_digest"),
+        ("release", "upstream_release"),
+        ("repository", "upstream_repository"),
+    ):
+
+        def substitute_upstream(world, field=field):
+            world["manifest"][field] = "0" * 40 if field == "upstream_commit" else "substituted"
+
+        _expect_run_gate("PINNED_UPSTREAM_IDENTITY_MISMATCH", substitute_upstream)
+        del label
+
+
+def run_gate_duplicate_identities():
+    # REPAIR 3, at the real entrypoint rather than in a helper.
+    def duplicate_case(world):
+        world["observation"]["cases"][24] = json.loads(json.dumps(world["observation"]["cases"][23]))
+
+    _expect_run_gate("OBSERVATION_CASE_DUPLICATE", duplicate_case)
+
+    def duplicate_receipt_identity(world):
+        world["receipt"]["internal_filter_equivalence_digests"] = [
+            {"case_id": gate.TRUSTED_CASE_IDS[0], "digest_sha256": "e" * 64} for _ in range(25)
+        ]
+
+    _expect_run_gate("RECEIPT_DUPLICATE_CASE_IDENTITY", duplicate_receipt_identity)
+
+    def reordered_cases(world):
+        cases = world["observation"]["cases"]
+        cases[0], cases[1] = cases[1], cases[0]
+
+    _expect_run_gate("OBSERVATION_CASE_ORDER_MISMATCH", reordered_cases)
+
+    def unknown_case(world):
+        world["observation"]["cases"][12]["case_id"] = "C99_NOT_A_CASE"
+
+    _expect_run_gate("OBSERVATION_CASE_MISSING", unknown_case)
+
+    def short_receipt_list(world):
+        world["receipt"]["internal_filter_equivalence_digests"] = [
+            {"case_id": identifier, "digest_sha256": "f" * 64} for identifier in gate.TRUSTED_CASE_IDS[:24]
+        ]
+
+    _expect_run_gate("RECEIPT_BINDING_MISMATCH", short_receipt_list)
+
+    def duplicate_artifact_service_id(world):
+        world["artifact_ids"]["mt4-s3c-qualification-receipt"] = world["artifact_ids"][
+            "mt4-s3c-candidate-linux-x86_64"
+        ]
+
+    # The OWNING rule is the pagination layer's repeated-record check, which sees every enumerated
+    # record rather than only the expected four.
+    _expect_run_gate("PAGINATION_REPEATED_RECORD", duplicate_artifact_service_id)
+
+
+# =================================================================================================
+# THE COMPLETE Z1..Z20 CAUSAL MATRIX (repair 6E).
+#
+# Every rule constructs ONE controlled malformed archive, runs the REAL reader, and asserts the
+# exact owning reason.  No rule is proven by a source token, and the ordering is checked too: an
+# earlier rule must not silently swallow a later one's class.
+# =================================================================================================
+
+
+def _info_archive(infos):
+    # A central-directory stand-in, so rules that run BEFORE any member is opened can be reached
+    # with values a real writer would refuse to produce.
+    class _Archive(object):
+        def infolist(self):
+            return infos
+
+    return _Archive()
+
+
+class _Info(object):
+    def __init__(self, filename, file_size=4, compress_size=4, compress_type=8, flag_bits=0, external_attr=0):
+        self.filename = filename
+        self.file_size = file_size
+        self.compress_size = compress_size
+        self.compress_type = compress_type
+        self.flag_bits = flag_bits
+        self.external_attr = external_attr
+
+    def is_dir(self):
+        return self.filename.endswith("/")
+
+
+def _pair(**overrides):
+    worker = _Info(WORKER, **overrides)
+    return [worker, _Info(MANIFEST)]
+
+
+def z_matrix_pre_decompression():
+    members = gate.EXPECTED_MEMBERS[CANDIDATE]
+
+    # Z1: the whole archive is bounded before anything is parsed.
+    expect(
+        "ZIP_ARCHIVE_BYTES",
+        lambda: gate.pre_decompression_gate(
+            _info_archive(_pair()), b"x" * (gate.MAX_ARCHIVE_BYTES + 1), members
+        ),
+    )
+    # Z2: the member count is exact.
+    expect(
+        "ZIP_MEMBER_COUNT",
+        lambda: gate.pre_decompression_gate(_info_archive([_Info(WORKER)]), b"x", members),
+    )
+    # Z4: a duplicate reaches the duplicate rule, ahead of the name-set rule.
+    expect(
+        "ZIP_DUPLICATE_MEMBER",
+        lambda: gate.pre_decompression_gate(_info_archive([_Info(WORKER), _Info(WORKER)]), b"x", members),
+    )
+    # Z3: a wrong NAME reaches the name-set rule, which Z4 must not have swallowed.
+    expect(
+        "ZIP_MEMBER_NAME_SET",
+        lambda: gate.pre_decompression_gate(_info_archive([_Info(WORKER), _Info("other")]), b"x", members),
+    )
+    # Z5 and Z6 are DEFENCE IN DEPTH behind Z3.  In production the name set is frozen, so a
+    # directory entry or a traversing path is already refused by Z3 -- these rules exist for the
+    # case where the expected set itself ever changed.  Each is therefore reached here with an
+    # expected set that admits the name, which is the only way to observe the rule that owns it.
+    expect(
+        "ZIP_UNSAFE_MEMBER",
+        lambda: gate.pre_decompression_gate(
+            _info_archive([_Info(WORKER + "/"), _Info(MANIFEST)]), b"x", (WORKER + "/", MANIFEST)
+        ),
+    )
+    # Z6: path traversal.
+    expect(
+        "ZIP_UNSAFE_MEMBER",
+        lambda: gate.pre_decompression_gate(
+            _info_archive([_Info("../" + WORKER), _Info(MANIFEST)]),
+            b"x",
+            ("../" + WORKER, MANIFEST),
+        ),
+    )
+    # Z7: a non-regular Unix file type.
+    expect(
+        "ZIP_UNSAFE_MEMBER",
+        lambda: gate.pre_decompression_gate(_info_archive(_pair(external_attr=0o120000 << 16)), b"x", members),
+    )
+    # Z8: an encrypted member.
+    expect(
+        "ZIP_ENCRYPTED_MEMBER",
+        lambda: gate.pre_decompression_gate(_info_archive(_pair(flag_bits=0x1)), b"x", members),
+    )
+    # Z9: an unapproved compression method.
+    expect(
+        "ZIP_COMPRESSION_METHOD",
+        lambda: gate.pre_decompression_gate(_info_archive(_pair(compress_type=93)), b"x", members),
+    )
+    # Z10: a declared size above the member cap.
+    expect(
+        "ZIP_DECLARED_SIZE",
+        lambda: gate.pre_decompression_gate(
+            _info_archive(_pair(file_size=gate.MAX_MEMBER_UNCOMPRESSED_BINARY + 1, compress_size=10**7)),
+            b"x",
+            members,
+        ),
+    )
+    # Z11: a declared compressed size above the member cap.
+    expect(
+        "ZIP_COMPRESSED_SIZE",
+        lambda: gate.pre_decompression_gate(
+            _info_archive(_pair(file_size=4, compress_size=gate.MAX_MEMBER_COMPRESSED + 1)), b"x", members
+        ),
+    )
+    # Z12: the AGGREGATE declared size.
+    #
+    # With the current two-member candidate archive the per-member caps already sum to less than the
+    # aggregate bound, so in production Z12 is subsumed by Z10 -- it exists to bound any FUTURE
+    # member set, and Z17 bounds the same quantity during streaming.  It is reached here with an
+    # expected set large enough for the sum to matter, which is the only way to observe its class.
+    cap = gate.MAX_MEMBER_UNCOMPRESSED_JSON
+    names = tuple("member_" + str(index) + ".json" for index in range(6))
+    aggregate = [_Info(name, file_size=cap, compress_size=cap) for name in names]
+    expect("ZIP_DECLARED_AGGREGATE", lambda: gate.pre_decompression_gate(_info_archive(aggregate), b"x", names))
+    # Z13: the EXACT declared ratio, including the value floor division used to miss.
+    expect(
+        "ZIP_DECLARED_RATIO",
+        lambda: gate.pre_decompression_gate(_info_archive(_pair(file_size=201, compress_size=2)), b"x", members),
+    )
+    expect(
+        "ZIP_DECLARED_RATIO",
+        lambda: gate.pre_decompression_gate(_info_archive(_pair(file_size=10, compress_size=0)), b"x", members),
+    )
+    # And the honest boundary case is ACCEPTED, so the rule is a bound rather than a blanket refusal.
+    gate.pre_decompression_gate(_info_archive(_pair(file_size=200, compress_size=2)), b"x", members)
+
+
+def z_matrix_streaming():
+    members = gate.EXPECTED_MEMBERS[CANDIDATE]
+    body = bytes((index * 37 + (index >> 4)) & 0xFF for index in range(20000))
+
+    # Z14 and Z20: the reference member decodes and its CRC is proven.
+    payload = build_archive([(WORKER, body), (MANIFEST, b"{}")])
+    contents, _digests = gate.extract_artifact(payload, members)
+    assert contents[WORKER] == body
+
+    def _corrupt(payload_bytes, marker, replacement):
+        position = payload_bytes.find(marker)
+        assert position > 0
+        mutated = bytearray(payload_bytes)
+        mutated[position : position + len(replacement)] = replacement
+        return bytes(mutated)
+
+    # Z20: a flipped CRC in the central directory.
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        info = archive.getinfo(WORKER)
+    crc_bytes = (info.CRC & 0xFFFFFFFF).to_bytes(4, "little")
+    central = payload.find(b"PK" + bytes((1, 2)))
+    assert central > 0
+    lied = bytearray(payload)
+    at = lied.find(crc_bytes, central)
+    assert at > 0
+    lied[at : at + 4] = ((info.CRC ^ 0xFF) & 0xFFFFFFFF).to_bytes(4, "little")
+    expect("ZIP_CRC_INVALID", lambda: gate.extract_artifact(bytes(lied), members))
+    del _corrupt
+
+    # Z16: a central directory that UNDERSTATES the member size is caught mid-stream.
+    understated = bytearray(payload)
+    size_bytes = len(body).to_bytes(4, "little")
+    at = understated.find(size_bytes, central)
+    assert at > 0
+    understated[at : at + 4] = (len(body) - 16).to_bytes(4, "little")
+    expect("ZIP_DECLARED_SIZE_UNDERSTATED", lambda: gate.extract_artifact(bytes(understated), members))
+
+    # Z19: a central directory that OVERSTATES it is caught at the end.
+    overstated = bytearray(payload)
+    at = overstated.find(size_bytes, central)
+    overstated[at : at + 4] = (len(body) + 16).to_bytes(4, "little")
+    expect("ZIP_DECLARED_SIZE_OVERSTATED", lambda: gate.extract_artifact(bytes(overstated), members))
+
+    # A stored member exercises the other accounting path end to end.
+    stored = build_archive([(WORKER, body), (MANIFEST, b"{}")], zipfile.ZIP_STORED)
+    contents, _digests = gate.extract_artifact(stored, members)
+    assert contents[WORKER] == body
+
+    # A local header whose name disagrees with the central directory.
+    mismatched = bytearray(payload)
+    local = mismatched.find(b"PK" + bytes((3, 4)))
+    name_at = mismatched.find(WORKER.encode("ascii"), local)
+    assert name_at > 0
+    mismatched[name_at : name_at + len(WORKER)] = bytes(WORKER.encode("ascii")[:-1]) + b"X"
+    expect("ZIP_LOCAL_HEADER_NAME_MISMATCH", lambda: gate.extract_artifact(bytes(mismatched), members))
+
+    # A corrupt deflate stream becomes a FROZEN class, never a zlib message.
+    broken = bytearray(payload)
+    data_at = payload.find(b"PK" + bytes((3, 4)))
+    broken[data_at + 60 : data_at + 70] = bytes(10)
+    try:
+        gate.extract_artifact(bytes(broken), members)
+    except gate.TrustedGateError as error:
+        assert "zlib" not in str(error).lower()
+        assert "Error" not in str(error)
+
+
 def startup_attestation_state():
     assert sys.flags.isolated == 1
     assert sys.flags.no_site == 1
@@ -1150,9 +2255,18 @@ check("total_count_all_four_conditions", total_count_all_four_conditions)
 check("source_bundle_recomputation", source_bundle_recomputation)
 check("dependency_inventory_recomputation", dependency_inventory_recomputation)
 check("stage_c_self_anchored_authority", stage_c_self_anchored_authority)
+check("elf_record_digest_recomputation", elf_record_digest_recomputation)
+check("filter_object_containment", filter_object_containment)
+check("stage_c_outer_policy_reconstruction", stage_c_outer_policy_reconstruction)
 check("stage_c_equivalence_recomputation", stage_c_equivalence_recomputation)
 check("coordinated_reseal_is_rejected", coordinated_reseal_is_rejected)
 check("zip_runtime_consumption_and_reachable_rules", zip_runtime_consumption_and_reachable_rules)
+check("run_gate_reference", run_gate_reference)
+check("run_gate_coordinated_reseal", run_gate_coordinated_reseal)
+check("run_gate_duplicate_identities", run_gate_duplicate_identities)
+check("run_gate_compile_provenance", run_gate_compile_provenance)
+check("z_matrix_pre_decompression", z_matrix_pre_decompression)
+check("z_matrix_streaming", z_matrix_streaming)
 check("startup_attestation_state", startup_attestation_state)
 
 canonical = gate.stage_c_canonical_internal_policy()
@@ -1249,9 +2363,18 @@ def driver_values(driver_results):
         "source_bundle_recomputation",
         "dependency_inventory_recomputation",
         "stage_c_self_anchored_authority",
+        "elf_record_digest_recomputation",
+        "filter_object_containment",
+        "stage_c_outer_policy_reconstruction",
         "stage_c_equivalence_recomputation",
         "coordinated_reseal_is_rejected",
         "zip_runtime_consumption_and_reachable_rules",
+        "run_gate_reference",
+        "run_gate_coordinated_reseal",
+        "run_gate_duplicate_identities",
+        "run_gate_compile_provenance",
+        "z_matrix_pre_decompression",
+        "z_matrix_streaming",
         "startup_attestation_state",
     ),
 )

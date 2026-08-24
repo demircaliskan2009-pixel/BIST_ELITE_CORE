@@ -119,6 +119,9 @@ SHN_COMMON = 0xFFF2
 SHN_LORESERVE = 0xFF00
 SHN_HIRESERVE = 0xFFFF
 
+# Section flags and the two section types a governed object may never be declared in.
+SHF_ALLOC = 0x2
+
 STT_NOTYPE = 0
 STT_OBJECT = 1
 STT_FUNC = 2
@@ -623,16 +626,44 @@ APPROVED_UNDEFINED_SYMBOLS = ()
 
 
 def check_undefined_symbol_closure(symbols):
-    """The final static worker may contain ONLY the approved undefined-symbol inventory."""
-    observed = sorted({symbol.name for symbol in symbols if symbol.shndx == SHN_UNDEF and symbol.name})
-    approved = sorted(APPROVED_UNDEFINED_SYMBOLS)
-    if observed != approved:
-        _fail("UNDEFINED_SYMBOL_CLOSURE_VIOLATED", ",".join(observed) if observed else "empty")
-    return observed
+    """The final static worker may contain ONLY the approved undefined-symbol inventory.
+
+    EVERY symbol-table ENTRY is examined, by INDEX (repair 9B).  The previous set-of-names form had
+    two ways to lose an entry: an anonymous undefined symbol has an empty name and was filtered out
+    by the truthiness test, and two undefined entries sharing a name collapsed into one.  A symbol
+    table is a LIST, and an undefined entry is undefined whatever it is or is not called, so the
+    scan below indexes the list and never builds a name-keyed collection.
+
+    Entry 0 is the reserved null entry, which is STN_UNDEF by definition and is the one entry that
+    is not a symbol at all; it is skipped explicitly rather than by accident.
+    """
+    approved = set(APPROVED_UNDEFINED_SYMBOLS)
+    offending = []
+    for index, symbol in enumerate(symbols):
+        if index == 0:
+            # The reserved null entry: st_name 0, st_value 0, st_size 0, st_shndx SHN_UNDEF.
+            if symbol.name or symbol.value or symbol.size or symbol.info or symbol.other:
+                _fail("ELF_NULL_SYMBOL_ENTRY_INVALID", str(index))
+            continue
+        if symbol.shndx != SHN_UNDEF:
+            continue
+        if symbol.name in approved:
+            continue
+        offending.append(str(index) + ":" + (symbol.name or "<anonymous>"))
+    if offending:
+        _fail("UNDEFINED_SYMBOL_CLOSURE_VIOLATED", ",".join(offending))
+    return [symbol.name for symbol in symbols if symbol.shndx == SHN_UNDEF and symbol.name in approved]
 
 
-def check_defined_section_index(symbol, section_headers, marker):
-    """8D: the defining section index must be a REAL, in-range, non-reserved section."""
+def check_declared_section_containment(symbol, section_headers, program_headers, data, marker):
+    """Repair 9A.  SYMBOL RANGE subset-of DECLARED SECTION subset-of APPROVED LOAD MAPPING.
+
+    A virtual address that merely lands inside SOME PT_LOAD proves nothing about which object the
+    symbol actually is.  st_shndx NAMES the defining section, and a symbol whose address sits in a
+    different section than the one it declares is describing an object that is not there.  The
+    three-level containment below is checked in that exact order, so a mismatch is reported at the
+    level it actually occurs.
+    """
     index = symbol.shndx
     if index == SHN_UNDEF:
         _fail(marker, "SHN_UNDEF")
@@ -642,7 +673,39 @@ def check_defined_section_index(symbol, section_headers, marker):
         _fail(marker, "reserved section index " + str(index))
     if index >= len(section_headers):
         _fail(marker, "section index out of range " + str(index))
-    return section_headers[index]
+    section = section_headers[index]
+
+    if section.sh_type == SHT_NULL:
+        _fail(marker, "declared section is SHT_NULL")
+    if not section.sh_flags & SHF_ALLOC:
+        # A non-allocated section is not mapped at run time, so no live object can live in it.
+        _fail(marker, "declared section is not SHF_ALLOC")
+    if symbol.size <= 0:
+        _fail("SYMBOL_SIZE_INVALID", str(symbol.size))
+    if symbol.value < section.sh_addr or symbol.value + symbol.size > section.sh_addr + section.sh_size:
+        _fail(marker, "symbol range escapes its declared section")
+
+    # A file-backed section must contain the symbol's file bytes as well as its addresses.  SHT_NOBITS
+    # occupies no file range at all, which is why a governed object may never be declared in one.
+    if section.sh_type == SHT_NOBITS:
+        _fail(marker, "declared section is SHT_NOBITS")
+    file_start = section.sh_offset + (symbol.value - section.sh_addr)
+    if file_start < section.sh_offset or file_start + symbol.size > section.sh_offset + section.sh_size:
+        _fail(marker, "symbol bytes escape the declared section file extent")
+    if file_start + symbol.size > len(data):
+        _fail(marker, "symbol bytes escape the image")
+
+    # And the declared section itself must live inside exactly one approved PT_LOAD mapping.
+    containing = [
+        header
+        for header in program_headers
+        if header.p_type == PT_LOAD
+        and header.p_vaddr <= section.sh_addr
+        and section.sh_addr + section.sh_size <= header.p_vaddr + header.p_filesz
+    ]
+    if len(containing) != 1:
+        _fail(marker, "declared section is not inside exactly one file-backed PT_LOAD")
+    return section, containing[0], file_start
 
 
 def require_single_definition(symbols, name):
@@ -702,14 +765,20 @@ BLST_PLATFORM_CAP_TYPE_REQUIRED = STT_OBJECT
 
 
 def check_capability_identity(symbol, section_headers):
-    """Q2..Q9 for the governed capability object, at EXACT identity."""
+    """Q2..Q9 for the governed capability object, at EXACT identity.
+
+    The three-level range containment is proven separately by
+    check_declared_section_containment, which the caller runs first; this function owns the
+    symbol's IDENTITY, so widening one can never quietly widen the other.
+    """
+    del section_headers
     if symbol.binding() != BLST_PLATFORM_CAP_BINDING_REQUIRED:
         _fail("BLST_CAP_BINDING", str(symbol.binding()))
     if symbol.visibility() != BLST_PLATFORM_CAP_VISIBILITY_REQUIRED:
         _fail("BLST_CAP_VISIBILITY", str(symbol.visibility()))
     if symbol.symbol_type() != BLST_PLATFORM_CAP_TYPE_REQUIRED:
         _fail("BLST_CAP_TYPE", str(symbol.symbol_type()))
-    return check_defined_section_index(symbol, section_headers, "BLST_CAP_SECTION_INDEX_INVALID")
+    return symbol
 
 
 # =================================================================================================
@@ -817,7 +886,10 @@ def qualify(data, page_size, expected_inventory_text, compile_dependency_digest)
 
     # SECTION 30 Q1..Q9 for __blst_platform_cap.
     cap_symbol = require_single_definition(symbols, BLST_PLATFORM_CAP_SYMBOL)
-    cap_section = check_capability_identity(cap_symbol, section_headers)
+    cap_section, cap_load, cap_section_offset = check_declared_section_containment(
+        cap_symbol, section_headers, program_headers, data, "BLST_CAP_SECTION_INDEX_INVALID"
+    )
+    check_capability_identity(cap_symbol, section_headers)
     if cap_symbol.size != BLST_PLATFORM_CAP_SIZE_BYTES:
         _fail("BLST_CAP_SIZE", str(cap_symbol.size) + " != " + str(BLST_PLATFORM_CAP_SIZE_BYTES))
     cap_segment, cap_offset, cap_bytes = translate_symbol(
@@ -830,7 +902,9 @@ def qualify(data, page_size, expected_inventory_text, compile_dependency_digest)
 
     # SECTION 29.6 Q10 for the canonical internal filter objects.
     fprog_symbol = require_single_definition(symbols, INTERNAL_FPROG_SYMBOL)
-    check_defined_section_index(fprog_symbol, section_headers, "FILTER_OBJECT_SECTION_INDEX_INVALID")
+    fprog_section, fprog_load, fprog_section_offset = check_declared_section_containment(
+        fprog_symbol, section_headers, program_headers, data, "FILTER_OBJECT_SECTION_INDEX_INVALID"
+    )
     if fprog_symbol.size != INTERNAL_FPROG_SIZE_BYTES:
         _fail("FILTER_OBJECT_SIZE_INVALID", INTERNAL_FPROG_SYMBOL)
     fprog_segment, fprog_offset, fprog_bytes = translate_symbol(
@@ -839,7 +913,9 @@ def qualify(data, page_size, expected_inventory_text, compile_dependency_digest)
     require_non_writable_file_backed(fprog_segment)
 
     program_symbol = require_single_definition(symbols, INTERNAL_PROGRAM_SYMBOL)
-    check_defined_section_index(program_symbol, section_headers, "FILTER_OBJECT_SECTION_INDEX_INVALID")
+    program_section, program_load, program_section_offset = check_declared_section_containment(
+        program_symbol, section_headers, program_headers, data, "FILTER_OBJECT_SECTION_INDEX_INVALID"
+    )
     if program_symbol.size != INTERNAL_PROGRAM_SIZE_BYTES:
         _fail("FILTER_OBJECT_SIZE_INVALID", INTERNAL_PROGRAM_SYMBOL)
     program_segment, program_offset, program_bytes = translate_symbol(
@@ -917,24 +993,72 @@ def qualify(data, page_size, expected_inventory_text, compile_dependency_digest)
             "symbol_type": "STT_OBJECT",
             "section_index": cap_symbol.shndx,
             "section_name": cap_section.name,
+            "section_addr_u64": cap_section.sh_addr,
+            "section_size_bytes": cap_section.sh_size,
+            "section_file_offset_u64": cap_section.sh_offset,
+            "section_type_u32": cap_section.sh_type,
+            "section_flags_u64": cap_section.sh_flags,
+            "section_file_offset_of_symbol_u64": cap_section_offset,
+            "load_index": cap_load.index,
+            "load_vaddr_u64": cap_load.p_vaddr,
+            "load_filesz_u64": cap_load.p_filesz,
+            "load_memsz_u64": cap_load.p_memsz,
+            "load_file_offset_u64": cap_load.p_offset,
+            "load_flags_u32": cap_load.p_flags,
         },
+        # REPAIR 1A: the COMPLETE authenticated coordinates of both governed filter objects.
+        #
+        # Stage C must be able to re-establish, and cross-check against one another: the symbol
+        # identity, the virtual address, the object size, the DECLARED section index and that
+        # section's address, size, type, flags and file range, the file offset the object actually
+        # occupies, the PT_LOAD that maps it and that segment's own ranges and flags, and the
+        # canonical bytes.  A record that carried only an address and a size would leave the object
+        # free to choose its own coordinates.
         "canonical_internal_filter_object": {
             "fprog_symbol": INTERNAL_FPROG_SYMBOL,
             "fprog_va_u64": fprog_symbol.value,
             "fprog_file_offset_u64": fprog_offset,
             "fprog_size_bytes": INTERNAL_FPROG_SIZE_BYTES,
             "fprog_segment_flags_u32": fprog_segment.p_flags,
+            "fprog_section_index": fprog_symbol.shndx,
+            "fprog_section_name": fprog_section.name,
+            "fprog_section_addr_u64": fprog_section.sh_addr,
+            "fprog_section_size_bytes": fprog_section.sh_size,
+            "fprog_section_file_offset_u64": fprog_section.sh_offset,
+            "fprog_section_type_u32": fprog_section.sh_type,
+            "fprog_section_flags_u64": fprog_section.sh_flags,
+            "fprog_section_file_offset_of_symbol_u64": fprog_section_offset,
+            "fprog_load_index": fprog_load.index,
+            "fprog_load_vaddr_u64": fprog_load.p_vaddr,
+            "fprog_load_filesz_u64": fprog_load.p_filesz,
+            "fprog_load_file_offset_u64": fprog_load.p_offset,
+            "fprog_load_flags_u32": fprog_load.p_flags,
+            "fprog_bytes_sha256": hashlib.sha256(fprog_bytes).hexdigest(),
             "program_symbol": INTERNAL_PROGRAM_SYMBOL,
             "program_va_u64": program_symbol.value,
             "program_file_offset_u64": program_offset,
             "program_size_bytes": INTERNAL_PROGRAM_SIZE_BYTES,
             "program_segment_flags_u32": program_segment.p_flags,
+            "program_section_index": program_symbol.shndx,
+            "program_section_name": program_section.name,
+            "program_section_addr_u64": program_section.sh_addr,
+            "program_section_size_bytes": program_section.sh_size,
+            "program_section_file_offset_u64": program_section.sh_offset,
+            "program_section_type_u32": program_section.sh_type,
+            "program_section_flags_u64": program_section.sh_flags,
+            "program_section_file_offset_of_symbol_u64": program_section_offset,
+            "program_load_index": program_load.index,
+            "program_load_vaddr_u64": program_load.p_vaddr,
+            "program_load_filesz_u64": program_load.p_filesz,
+            "program_load_file_offset_u64": program_load.p_offset,
+            "program_load_flags_u32": program_load.p_flags,
             "program_instruction_count": declared_length,
             "program_bytes_sha256": hashlib.sha256(program_bytes).hexdigest(),
         },
         "undefined_symbol_closure": {
             "approved_inventory": list(APPROVED_UNDEFINED_SYMBOLS),
             "observed_inventory": [],
+            "symbol_table_entry_count": len(symbols),
         },
         "authority_non_transition": {
             "readiness_transition": "NONE",

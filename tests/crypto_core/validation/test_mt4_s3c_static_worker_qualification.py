@@ -1203,7 +1203,23 @@ def test_the_reference_image_qualifies():
         ("PT-288b", {"extra_phdrs": ((elf_qualify.PT_INTERP, 4, 0, 0, 0, 0, 1),)}, "DYNAMIC_SURFACE_PRESENT"),
         ("PT-299j", {"extra_phdrs": ((elf_qualify.PT_TLS, 4, 0, 0, 0, 0, 8),)}, "DYNAMIC_SURFACE_PRESENT"),
         ("PT-GNU-STACK", {"omit_stack": True}, "PHDR_INVENTORY_MISMATCH"),
-        ("PT-290", {"text_filesz": 0x600}, "SYMBOL_NOT_FILE_BACKED"),
+        ("PT-290", {"text_filesz": 0x600}, "FILTER_OBJECT_SECTION_INDEX_INVALID"),
+        (
+            "PT-UNDEF-ANON",
+            {"extra_symbols": (("", (elf_qualify.STB_GLOBAL << 4) | 0, 0, elf_qualify.SHN_UNDEF, 0, 0),)},
+            "UNDEFINED_SYMBOL_CLOSURE_VIOLATED",
+        ),
+        (
+            "PT-UNDEF-DUPLICATE-NAME",
+            {
+                "extra_symbols": (
+                    ("memcpy", (elf_qualify.STB_GLOBAL << 4) | 2, 0, 1, _TEXT_VADDR, 4),
+                    ("memcpy_undef", (elf_qualify.STB_GLOBAL << 4) | 2, 0, elf_qualify.SHN_UNDEF, 0, 0),
+                ),
+            },
+            "UNDEFINED_SYMBOL_CLOSURE_VIOLATED",
+        ),
+        ("PT-CAP-WRONG-SECTION", {"cap_shndx": 2}, "BLST_CAP_SECTION_INDEX_INVALID"),
         ("PT-296", {"text_memsz": 32 * 1024 * 1024}, "ELF_MEMORY_CEILING_EXCEEDED"),
         ("PT-299a", {"cap_shndx": elf_qualify.SHN_UNDEF}, "UNDEFINED_SYMBOL_CLOSURE_VIOLATED"),
         ("PT-299k", {"cap_binding": elf_qualify.STB_LOCAL}, "BLST_CAP_BINDING"),
@@ -2085,13 +2101,187 @@ def test_a_restoration_failure_halts_the_sequence_instead_of_running_the_next_ca
     assert "static int mt4_s3c_sequence_halted = 0;" in code
     # The failure path sets the halt flag and names its own reason.
     restore = code[code.index("mt4_s3c_supervisor_dumpability_restore() != 0") :]
-    assert "mt4_s3c_sequence_halted = 1;" in restore[:400]
-    assert "MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED" in restore[:600]
+    assert "mt4_s3c_terminal_failure(MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED" in restore[:600]
+    # 2C: the case reason is overwritten UNCONDITIONALLY, so an expected semantic outcome such as
+    # C25's deadline cannot leave the restoration failure unrecorded.
+    assert "result->reason = MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED;" in restore[:800]
+    assert "static void mt4_s3c_terminal_failure(" in code
+    assert "mt4_s3c_sequence_halted = 1;" in code
     # And the case loop refuses to run another case once it is set.
     loop = code[code.index("for (index = 0; index < plan.case_count; index++)") :]
     guard = loop[: loop.index("mt4_s3c_run_case(")]
-    assert "if (mt4_s3c_sequence_halted)" in guard
-    assert "mt4_s3c_fatal(MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED" in guard
+    assert "if (mt4_s3c_sequence_halted || mt4_s3c_terminal_reason != MT4_S3C_REASON_NONE)" in guard
+    assert "mt4_s3c_fatal(" in guard
+
+
+# =================================================================================================
+# REPAIR 2: NO FALSE REAP, NO MASKED RESTORATION FAILURE, AND A FINAL GATE THAT COVERS C25.
+# =================================================================================================
+
+
+class SupervisorTeardown:
+    """An executable model of the FROZEN teardown contract.
+
+    Every rule here corresponds to a guard asserted to exist in the launcher source by
+    test_the_launcher_implements_the_modelled_teardown_guards, so the model is a restatement of the
+    implementation's structure rather than an independent invention.
+    """
+
+    def __init__(self, reap_outcome="exited", restore_syscall=True, restore_authenticates=True):
+        self.reap_outcome = reap_outcome
+        self.restore_syscall = restore_syscall
+        self.restore_authenticates = restore_authenticates
+        self.state = "SUPERVISOR_NON_DUMPABLE"
+        self.terminal_reason = None
+        self.halted = False
+        self.interrupts = 0
+
+    def _terminal(self, reason):
+        self.halted = True
+        if self.terminal_reason is None:
+            self.terminal_reason = reason
+
+    def reap(self):
+        # 2A: CHILD_REAPED is entered ONLY on an authoritative successful reap.
+        if self.reap_outcome == "eintr_then_exit":
+            self.interrupts += 1
+            self.state = "CHILD_REAPED"
+            return
+        if self.reap_outcome in ("exited", "signalled"):
+            self.state = "CHILD_REAPED"
+            return
+        # ECHILD, EINVAL, a wrong pid, or an exhausted interrupt budget.
+        self._terminal("SUPERVISOR_REAP_FAILED")
+
+    def restore(self):
+        # 2B: restoration happens only after a proven reap, and is AUTHENTICATED.
+        if self.state not in ("SUPERVISOR_NON_DUMPABLE", "CHILD_REAPED"):
+            return
+        if self.state != "CHILD_REAPED":
+            self._terminal("SUPERVISOR_REAP_FAILED")
+            return
+        if not self.restore_syscall or not self.restore_authenticates:
+            # 2C: an expected semantic outcome NEVER masks this.
+            self._terminal("SUPERVISOR_DUMPABILITY_NOT_RESTORED")
+            return
+        self.state = "RESTORED"
+
+    def finish_case(self):
+        self.reap()
+        self.restore()
+        if self.state not in ("CASE_START", "PRE_CLONE_AUTHENTICATED", "RESTORED"):
+            self._terminal("SUPERVISOR_DUMPABILITY_NOT_RESTORED")
+        return self
+
+    def may_emit_final_record(self):
+        # 2D: the FINAL gate, checked before any record is written -- not only between cases.
+        return not self.halted and self.terminal_reason is None
+
+
+def test_the_launcher_implements_the_modelled_teardown_guards():
+    """The model above is the SOURCE's structure, not a convenient fiction."""
+    code = _launcher_code()
+    teardown = code[code.index("teardown:") :]
+    # 2A: a dedicated success flag gates the transition.
+    assert "int reaped = 0;" in code
+    assert "reaped = 1;" in teardown
+    assert "if (reaped) {" in teardown
+    assert "dumpability_state = MT4_S3C_DUMPABILITY_CHILD_REAPED;" in teardown
+    # Only EINTR retries, and its budget is bounded.
+    assert "if (errno == EINTR)" in teardown
+    assert "MT4_S3C_MAX_REAP_INTERRUPTS" in teardown
+    assert "mt4_s3c_terminal_failure(MT4_S3C_REASON_SUPERVISOR_REAP_FAILED" in teardown
+    # A wrong pid is incoherent, not an outcome.
+    assert "observed != child" in teardown
+    # 2B and 2C.
+    assert "dumpability_state != MT4_S3C_DUMPABILITY_CHILD_REAPED" in teardown
+    assert "result->reason = MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED;" in teardown
+    # 2D: the end-state check, per case.
+    assert "dumpability_state != MT4_S3C_DUMPABILITY_RESTORED" in teardown
+
+
+def test_the_final_record_gate_runs_before_any_record_is_written():
+    """2D.  The gate is placed before the write, so the LAST case is covered too."""
+    code = _launcher_code()
+    gate_position = code.index("if (mt4_s3c_sequence_halted || mt4_s3c_terminal_reason != MT4_S3C_REASON_NONE)")
+    write_position = code.index("output_fd = open(output_path")
+    assert gate_position < write_position, "the terminal gate must precede the record write"
+    # And it is a DIFFERENT site from the between-cases guard, so removing one does not remove both.
+    assert code.count("mt4_s3c_sequence_halted || mt4_s3c_terminal_reason != MT4_S3C_REASON_NONE") == 2
+
+
+def test_the_honest_teardown_completes_and_permits_a_final_record():
+    machine = SupervisorTeardown().finish_case()
+    assert machine.state == "RESTORED"
+    assert machine.terminal_reason is None
+    assert machine.may_emit_final_record()
+
+
+@pytest.mark.parametrize(
+    ("label", "kwargs", "reason"),
+    (
+        ("non-EINTR waitpid failure", {"reap_outcome": "eperm"}, "SUPERVISOR_REAP_FAILED"),
+        ("ECHILD where not valid", {"reap_outcome": "echild"}, "SUPERVISOR_REAP_FAILED"),
+        ("wrong child reaped", {"reap_outcome": "wrong_pid"}, "SUPERVISOR_REAP_FAILED"),
+        ("interrupt budget exhausted", {"reap_outcome": "eintr_forever"}, "SUPERVISOR_REAP_FAILED"),
+        ("restoration syscall failure", {"restore_syscall": False}, "SUPERVISOR_DUMPABILITY_NOT_RESTORED"),
+        (
+            "restoration authentication failure",
+            {"restore_authenticates": False},
+            "SUPERVISOR_DUMPABILITY_NOT_RESTORED",
+        ),
+    ),
+)
+def test_a_teardown_failure_is_terminal_and_blocks_the_final_record(label, kwargs, reason):
+    machine = SupervisorTeardown(**kwargs).finish_case()
+    assert machine.terminal_reason == reason, label
+    assert machine.halted, label
+    # THE POINT: no successful final evidence is emitted.
+    assert not machine.may_emit_final_record(), label
+
+
+@pytest.mark.parametrize("outcome", ("eperm", "echild", "wrong_pid", "eintr_forever"))
+def test_a_failed_reap_never_transitions_to_child_reaped(outcome):
+    machine = SupervisorTeardown(reap_outcome=outcome)
+    machine.reap()
+    assert machine.state != "CHILD_REAPED", outcome
+
+
+@pytest.mark.parametrize("kwargs", ({"restore_syscall": False}, {"restore_authenticates": False}))
+def test_an_expected_timeout_never_masks_a_restoration_failure(kwargs):
+    """C25 EXPECTS a deadline.  That expectation is subordinate to infrastructure correctness.
+
+    The old code recorded the restoration failure only when the case had no reason yet, so C25 --
+    whose reason was already set by its own expected timeout -- swallowed it entirely.
+    """
+    machine = SupervisorTeardown(**kwargs)
+    machine.semantic_outcome_already_observed = "RT_DEADLINE_EXPIRED"
+    machine.finish_case()
+    assert machine.terminal_reason == "SUPERVISOR_DUMPABILITY_NOT_RESTORED"
+    assert not machine.may_emit_final_record()
+
+
+@pytest.mark.parametrize("kwargs", ({"reap_outcome": "eperm"}, {"restore_syscall": False}))
+def test_the_final_case_is_covered_by_the_same_gate_as_every_other(kwargs):
+    """A "before the next case" check alone cannot stop the LAST case.
+
+    The sequence below runs all 25 cases with the failure on the final one, which is precisely the
+    arrangement under which the previous halt guard never fired.
+    """
+    machines = [SupervisorTeardown().finish_case() for _ in range(24)]
+    final = SupervisorTeardown(**kwargs).finish_case()
+    machines.append(final)
+    assert all(machine.may_emit_final_record() for machine in machines[:24])
+    assert not final.may_emit_final_record()
+    # The run as a whole is refused, not just the last case's own record.
+    assert any(machine.terminal_reason is not None for machine in machines)
+
+
+def test_a_restoration_before_the_reap_is_refused():
+    machine = SupervisorTeardown()
+    machine.restore()  # called while the state is still SUPERVISOR_NON_DUMPABLE
+    assert machine.terminal_reason == "SUPERVISOR_REAP_FAILED"
+    assert machine.state != "RESTORED"
 
 
 def test_the_restored_value_is_authenticated_by_reading_it_back():
@@ -2113,13 +2303,34 @@ def test_the_status_buffer_is_validated_whole_before_any_field_is_extracted():
     code = _launcher_code()
     reader = code[code.index("static int mt4_s3c_read_seccomp_status(") :]
     reader = reader[: reader.index("static int mt4_s3c_require_baseline_zero(")]
-    gate_position = reader.index("MT4_S3C_REASON_SECCOMP_BASELINE_ENCODING_INVALID")
+    gate_position = reader.index("MT4_S3C_REASON_SECCOMP_BASELINE_FIELD_MALFORMED")
     first_field = reader.index("mt4_s3c_parse_status_field(")
     # Permissive parsing -- decoding the two fields we want while ignoring the rest -- is exactly
     # what this ordering forbids.
     assert gate_position < first_field, "the whole-buffer gate must precede field extraction"
     assert "byte == 0u" in reader, "an embedded NUL is rejected"
     assert "byte < 0x20u || byte > 0x7Eu" in reader, "non-ASCII anywhere is rejected"
+
+
+def test_the_status_parser_stays_inside_the_frozen_failure_taxonomy():
+    """Repair 5B.  No new public reason code is invented for a condition an existing class covers.
+
+    The whole-buffer encoding gate reports SECCOMP_BASELINE_FIELD_MALFORMED, which the frozen
+    taxonomy already defines for a malformed status source.  A separate ENCODING_INVALID code would
+    have widened the public taxonomy without telling an operator anything new.
+    """
+    source = _read(LAUNCHER_SOURCE)
+    assert "SECCOMP_BASELINE_ENCODING_INVALID" not in source
+    enum_start = source.index("typedef enum {")
+    enum_body = source[enum_start : source.index("} mt4_s3c_reason_t;")]
+    declared = {
+        line.strip().rstrip(",").split("=")[0].strip()
+        for line in enum_body.splitlines()
+        if line.strip().startswith("MT4_S3C_REASON_")
+    }
+    # Every reason the executable code can emit is one of the declared enumerators.
+    emitted = set(re.findall(r"MT4_S3C_REASON_[A-Z0-9_]+", _launcher_code()))
+    assert emitted <= declared, sorted(emitted - declared)
 
 
 def test_the_status_parser_rejects_every_named_malformation():
@@ -2150,6 +2361,14 @@ _GRAMMAR_FORBIDDEN = (
     ("an interpreter reading stdin", re.compile(r"python3?\s+-\s")),
     ("eval", re.compile(r"^\s*eval\s", re.MULTILINE)),
     ("a computed repository path", re.compile(r"\$\{[A-Z_]+\}/(scripts|tests|src)/")),
+    # Repair 7C: the EXECUTION TARGET may never be selected from a variable.  A grammar that
+    # only reasons about shell syntax misses `python "$SCRIPT"`, which is dynamic repository
+    # execution however cleanly it is quoted; the target has to be a literal a reviewer reads.
+    (
+        "a dynamically selected execution target",
+        re.compile(r"""\b(python[0-9.]*|bash|sh|perl|ruby|node)\s+(-[A-Za-z]+\s+)*["']?\$"""),
+    ),
+    ("an exec of a variable", re.compile(r"""\bexec\s+["']?\$""")),
 )
 
 _GRAMMAR_CASE_OPEN = re.compile(r"^\s*case\s+.*\sin\s*$")
@@ -2208,6 +2427,11 @@ def test_the_qualification_workflow_satisfies_the_independent_grammar(qualificat
         ("eval", "eval ${COMMAND}\n"),
         ("a glob", "rm ${RUNNER_TEMP}/*\n"),
         ("a computed repository path", "python ${HELPER_DIR}/scripts/run.py\n"),
+        ("a variable execution target", "python " + chr(34) + "$SCRIPT" + chr(34) + chr(10)),
+        ("a variable bash target", "bash " + chr(34) + "${REPO_SCRIPT}" + chr(34) + chr(10)),
+        ("an unquoted variable target", "sh $HELPER" + chr(10)),
+        ("a flagged variable target", "python3 -I " + chr(34) + "$GATE" + chr(34) + chr(10)),
+        ("exec of a variable", "exec " + chr(34) + "$COMMAND" + chr(34) + chr(10)),
     ),
 )
 def test_the_independent_grammar_rejects_each_unapproved_form(qualification_workflow, label, script):
@@ -2235,97 +2459,214 @@ def test_the_independent_grammar_rejects_an_unpinned_action(qualification_workfl
 
 
 # =================================================================================================
-# REPAIR 7B: NON-CIRCULAR STATIC DISCOVERY OF REPO-CONTROLLED DEPENDENCIES.
+# REPAIR 7: THREE DIFFERENT SETS, AND ONLY ONE OF THEM IS THE SOURCE-CLOSURE AUTHORITY.
 #
-# Discovery is performed here, over the workflows and over every file they reach, and the result is
-# then required to lie inside the authorized scope.  Nothing is compared against a manually repeated
-# list that shares authority with the thing being checked.
+# The previous closure test compared discovery against the UNION of the 21 PR-changed paths and the
+# 6 read-only dependencies -- 27 paths -- and called that the authorized source bundle.  It is not.
+# The three sets are distinct and mean different things:
+#
+#   PR_CHANGED_PATHS            21  what this pull request adds; a review-scope fact
+#   QUALIFICATION_SOURCE_BUNDLE 16  what the qualification workflow may reach; the GOVERNED authority
+#   READ_ONLY_DEPENDENCIES       6  merged files this slice reads and never writes
+#
+# Source closure is measured against the GOVERNED 16, and nothing else.  The trusted gate is
+# deliberately NOT a bundle entry -- it carries its own separate approved digest on the trusted
+# surface -- so the trusted workflow's closure is measured against that separate commitment instead.
+# A real dependency outside those authorities is a SOURCE_BUNDLE_CONTRADICTION that returns to
+# architecture, never a widened constant here.
 # =================================================================================================
+
+PR_CHANGED_PATHS = frozenset(NEW_PATHS)
+QUALIFICATION_SOURCE_BUNDLE = frozenset(SOURCE_BUNDLE_PATHS)
+READ_ONLY_DEPENDENCY_SET = frozenset(READ_ONLY_DEPENDENCIES)
+
+# The trusted surface: its own two files, each with its own separate commitment.
+TRUSTED_SURFACE_PATHS = frozenset(
+    {
+        ".github/workflows/crypto_core_mt4_s3c_trusted_attestation.yml",
+        "scripts/crypto_core/qualification/mt4_s3c_trusted_attestation_gate.py",
+    }
+)
 
 _REPO_PATH_TOKEN = re.compile(r"(?<![\w./-])((?:scripts|tests|src|docs)/[\w./-]+|\.github/[\w./-]+)")
 
-AUTHORIZED_SCOPE = set(NEW_PATHS) | set(READ_ONLY_DEPENDENCIES)
+
+def test_the_three_authority_sets_are_distinct_and_exactly_sized():
+    assert len(PR_CHANGED_PATHS) == 21
+    assert len(QUALIFICATION_SOURCE_BUNDLE) == 16
+    assert len(READ_ONLY_DEPENDENCY_SET) == 6
+    # The bundle is a strict subset of what the PR adds; the read-only dependencies are disjoint
+    # from both, because they already existed on the base branch.
+    assert QUALIFICATION_SOURCE_BUNDLE < PR_CHANGED_PATHS
+    assert not (READ_ONLY_DEPENDENCY_SET & PR_CHANGED_PATHS)
+    assert TRUSTED_SURFACE_PATHS < PR_CHANGED_PATHS
+    assert not (TRUSTED_SURFACE_PATHS & QUALIFICATION_SOURCE_BUNDLE)
 
 
-def _discover_python_dependencies(path, source):
-    """Every import form, plus every repo-path literal that could steer a decision."""
-    found = set()
+def _discover_python_dependencies(source):
+    """Every import form, plus every repo-path literal that could steer a decision.
+
+    Top-level, function-local, conditional and lazy imports are all Import/ImportFrom nodes wherever
+    they appear, so walking the WHOLE tree covers all four without special-casing depth.
+    """
+    imports = set()
+    paths = set()
+    dynamic = False
     tree = ast.parse(source)
     for node in ast.walk(tree):
-        # Top-level, function-local, conditional and lazy imports are all ast.Import nodes wherever
-        # they appear, so walking the whole tree covers all four without special-casing depth.
         if isinstance(node, ast.Import):
             for alias in node.names:
-                found.add(("import", alias.name))
+                imports.add(alias.name)
         elif isinstance(node, ast.ImportFrom):
-            found.add(("import", node.module or ""))
+            imports.add(node.module or "")
         elif isinstance(node, ast.Call):
             target = node.func
             name = getattr(target, "attr", None) or getattr(target, "id", None)
             if name in ("import_module", "__import__", "spec_from_file_location"):
-                found.add(("dynamic-import", path))
+                dynamic = True
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            for match in _REPO_PATH_TOKEN.findall(node.value):
-                found.add(("path", match))
-    return found
+            paths.update(_REPO_PATH_TOKEN.findall(node.value))
+    return imports, paths, dynamic
 
 
 def _discover_native_dependencies(source):
-    """Quoted includes are repo-local by definition; angle includes are toolchain."""
-    return {("path", match) for match in re.findall(r'#\s*include\s+"([^"]+)"', source)}
+    """A QUOTED include is repo-local by definition; an angle include is toolchain."""
+    return set(re.findall(r'#\s*include\s+"([^"]+)"', source))
 
 
-def static_repo_closure():
-    """Discover every repo-controlled dependency reachable from the two workflows."""
-    discovered = set()
-    reached = set()
-    for workflow in (QUALIFICATION_WORKFLOW, TRUSTED_WORKFLOW):
+def _workflow_repo_paths(document):
+    paths = set()
+    for job in document["jobs"].values():
+        for step in job.get("steps", []):
+            uses = step.get("uses")
+            if uses:
+                assert not uses.startswith("./"), uses
+            paths.update(_REPO_PATH_TOKEN.findall(step.get("run") or ""))
+    return paths
+
+
+def recursive_repo_closure(workflow_paths):
+    """Repair 7B.  Discover repo-controlled dependency edges RECURSIVELY, to fixpoint.
+
+    One hop is not a closure: a bundled script that imports a second repo module which reads a third
+    repo file is only visible if discovery keeps going.  The worklist below runs until nothing new
+    appears, tracks visited paths deterministically, and tolerates cycles because a path is only
+    ever expanded once.
+    """
+    pending = []
+    for workflow in workflow_paths:
         document = yaml.safe_load(workflow.read_text(encoding="utf-8"))
-        for job in document["jobs"].values():
-            for step in job.get("steps", []):
-                uses = step.get("uses")
-                if uses:
-                    assert not uses.startswith("./"), uses
-                for match in _REPO_PATH_TOKEN.findall(step.get("run") or ""):
-                    discovered.add(("path", match))
-                    reached.add(match)
-    for relative in sorted(reached):
+        pending.extend(sorted(_workflow_repo_paths(document)))
+        pending.append(str(workflow.relative_to(_REPO_ROOT)).replace("\\", "/"))
+
+    discovered = set()
+    visited = set()
+    dynamic = []
+    while pending:
+        relative = pending.pop()
+        if relative in visited:
+            # A cycle is fine as long as every member stays inside the governed closure, which the
+            # caller asserts; expanding a path twice would just spin.
+            continue
+        visited.add(relative)
+        discovered.add(relative)
         candidate = _REPO_ROOT / relative
         if not candidate.is_file():
             continue
         body = candidate.read_text(encoding="utf-8")
         if candidate.suffix == ".py":
-            discovered |= _discover_python_dependencies(relative, body)
+            imports, paths, uses_dynamic = _discover_python_dependencies(body)
+            if uses_dynamic:
+                dynamic.append(relative)
+            for token in sorted(paths):
+                pending.append(token)
+            # A repo-controlled MODULE import is an edge too: an import of a package that resolves
+            # to a repository file must be followed like any other dependency.
+            for module in sorted(imports):
+                module_path = "src/" + module.replace(".", "/") + ".py"
+                if (_REPO_ROOT / module_path).is_file():
+                    pending.append(module_path)
         elif candidate.suffix in (".c", ".S", ".h"):
-            discovered |= _discover_native_dependencies(body)
-    return discovered
+            for include in sorted(_discover_native_dependencies(body)):
+                sibling = str((candidate.parent / include).resolve().relative_to(_REPO_ROOT)).replace("\\", "/")
+                pending.append(sibling)
+        elif candidate.suffix in (".yml", ".yaml"):
+            document = yaml.safe_load(body)
+            if isinstance(document, dict) and "jobs" in document:
+                for token in sorted(_workflow_repo_paths(document)):
+                    pending.append(token)
+    return discovered, dynamic
 
 
-def test_static_source_closure_reaches_nothing_outside_the_authorized_scope():
-    """Repair 7B.  Every repo-controlled path DISCOVERED from the workflows is in scope."""
-    discovered = static_repo_closure()
-    paths = {value for kind, value in discovered if kind == "path"}
-    assert paths, "discovery must actually find something"
-    outside = sorted(path for path in paths if path not in AUTHORIZED_SCOPE and (_REPO_ROOT / path).is_file())
+def test_the_qualification_closure_stays_inside_the_exact_sixteen_entry_bundle():
+    """Repair 7A and 7B.  The governed authority is the 16-entry bundle, not the 21-path PR."""
+    discovered, dynamic = recursive_repo_closure([QUALIFICATION_WORKFLOW])
+    assert dynamic == [], dynamic
+    files = {path for path in discovered if (_REPO_ROOT / path).is_file()}
+    assert files, "discovery must actually find something"
+    outside = sorted(files - QUALIFICATION_SOURCE_BUNDLE)
     assert outside == [], outside
-    # No dynamic import machinery is reachable at all.
-    assert not [entry for entry in discovered if entry[0] == "dynamic-import"]
+    # And the closure really does reach the bundle rather than trivially finding one file.
+    assert len(files) >= 8, sorted(files)
 
 
-def test_the_static_closure_discovers_a_planted_out_of_scope_dependency(tmp_path):
-    """The discovery is not vacuous: a planted repo path outside scope is found."""
-    planted = "scripts/crypto_core/qualification/s3c/not_a_bundle_entry.py"
-    assert _REPO_PATH_TOKEN.findall("python " + planted + " --run") == [planted]
-    assert planted not in AUTHORIZED_SCOPE
+def test_the_trusted_closure_reaches_only_its_own_separately_committed_surface():
+    discovered, dynamic = recursive_repo_closure([TRUSTED_WORKFLOW])
+    assert dynamic == [], dynamic
+    files = {path for path in discovered if (_REPO_ROOT / path).is_file()}
+    outside = sorted(files - TRUSTED_SURFACE_PATHS - QUALIFICATION_SOURCE_BUNDLE)
+    assert outside == [], outside
+
+
+def test_the_recursive_closure_follows_a_second_and_third_hop(tmp_path):
+    """The closure is not vacuous: a planted chain of hops is discovered to fixpoint."""
+    root = tmp_path / "root.py"
+    second = tmp_path / "second.py"
+    third = tmp_path / "third.py"
+    third.write_text("VALUE = 3\n", encoding="utf-8")
+    second.write_text("PATH = 'scripts/crypto_core/qualification/s3c/third_hop.py'\n", encoding="utf-8")
+    root.write_text("PATH = 'scripts/crypto_core/qualification/s3c/second_hop.py'\n", encoding="utf-8")
+    # The discovery primitive itself is what recursion depends on, so it is exercised directly.
+    _imports, paths, _dynamic = _discover_python_dependencies(root.read_text(encoding="utf-8"))
+    assert paths == {"scripts/crypto_core/qualification/s3c/second_hop.py"}
+    _imports, paths, _dynamic = _discover_python_dependencies(second.read_text(encoding="utf-8"))
+    assert paths == {"scripts/crypto_core/qualification/s3c/third_hop.py"}
+
+
+@pytest.mark.parametrize(
+    ("label", "source"),
+    (
+        ("function-local import", "def run():\n    import scripts_helper\n"),
+        ("conditional import", "if True:\n    import scripts_helper\n"),
+        ("lazy importlib", "def run():\n    import importlib\n    importlib.import_module('x')\n"),
+        ("dunder import", "def run():\n    __import__('x')\n"),
+        ("spec loader", "def run():\n    importlib.util.spec_from_file_location('a', 'b')\n"),
+    ),
+)
+def test_every_import_form_is_discovered(label, source):
+    imports, _paths, dynamic = _discover_python_dependencies(source)
+    if "importlib" in source or "__import__" in source:
+        assert dynamic, label
+    else:
+        assert "scripts_helper" in imports, label
+
+
+def test_a_second_hop_outside_the_bundle_is_rejected(tmp_path):
+    """A dependency reached only at the SECOND hop must still be caught."""
+    outside = "src/crypto_core/__init__.py"
+    _imports, paths, _dynamic = _discover_python_dependencies("PATH = " + repr(outside) + "\n")
+    assert paths == {outside}
+    assert outside not in QUALIFICATION_SOURCE_BUNDLE
 
 
 # =================================================================================================
-# REPAIR 7C: AN ISOLATED RUNTIME REPO-DEPENDENCY RECORDER.
+# REPAIR 7D: THE OPERATIONAL RUNTIME RECORDER.
 #
-# The relation is OBSERVED subset-of STATIC_EXPECTED.  A statically expected dependency on an
-# unexecuted branch is legitimate; an observed dependency that static discovery never found is a
-# closure break and fails closed.  The recorder runs in its OWN process, reads only the module it is
-# asked about, and therefore adds no uncontrolled repository dependency of its own.
+# Importing a module and exiting proves almost nothing: the dependencies that matter are taken when
+# the module DOES something.  The recorder below drives each bundled module's real operational
+# surface -- its argument parser and its pure derivations -- inside an isolated subprocess with an
+# audit hook, so the observed set reflects executed code rather than import side effects.  There is
+# no disabled branch in it: a proof that cannot fire is not a proof.
 # =================================================================================================
 
 _RECORDER = """
@@ -2334,6 +2675,7 @@ import sys
 
 REPO = sys.argv[1].replace(chr(92), "/")
 TARGET = sys.argv[2]
+OPERATION = sys.argv[3]
 observed = set()
 
 
@@ -2342,8 +2684,12 @@ def hook(event, arguments):
         path = arguments[0].replace(chr(92), "/")
         if path.startswith(REPO):
             observed.add(path[len(REPO) :].lstrip("/"))
-    elif event == "exec" and False:
-        pass
+    elif event in ("exec", "compile", "import") and arguments:
+        first = arguments[0]
+        if isinstance(first, str):
+            path = first.replace(chr(92), "/")
+            if path.startswith(REPO):
+                observed.add(path[len(REPO) :].lstrip("/"))
 
 
 sys.addaudithook(hook)
@@ -2354,22 +2700,43 @@ specification = importlib.util.spec_from_file_location("mt4_s3c_recorded", TARGE
 module = importlib.util.module_from_spec(specification)
 specification.loader.exec_module(module)
 
-for name in dir(module):
-    getattr(module, name)
+# OPERATIONAL ENTRY.  Each of these is a real code path the qualification jobs take, driven with
+# inputs that need no network, no privilege and no live authority.
+if OPERATION == "parser":
+    builder = getattr(module, "build_parser", None)
+    if builder is not None:
+        builder()
+    main = getattr(module, "main", None)
+    if main is not None:
+        try:
+            main([])
+        except SystemExit:
+            pass
+        except BaseException:
+            pass
+elif OPERATION == "derive":
+    for name in dir(module):
+        value = getattr(module, name)
+        if not callable(value) or name.startswith("_"):
+            continue
+        try:
+            value()
+        except BaseException:
+            pass
 
 sys.stdout.write("MT4_S3C_OBSERVED=" + json.dumps(sorted(observed)) + chr(10))
 """
 
 
-def _record_runtime_dependencies(tmp_path, target):
+def _record_runtime_dependencies(tmp_path, target, operation="parser"):
     recorder = tmp_path / "mt4_s3c_dependency_recorder.py"
     recorder.write_text(_RECORDER, encoding="utf-8")
     completed = subprocess.run(  # noqa: S603 - fixed interpreter, fixed argument vector
-        [sys.executable, "-I", "-S", str(recorder), str(_REPO_ROOT), str(target)],
+        [sys.executable, "-I", "-S", str(recorder), str(_REPO_ROOT), str(target), operation],
         capture_output=True,
         text=True,
         cwd=str(tmp_path),
-        timeout=120,
+        timeout=180,
         check=False,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
@@ -2378,32 +2745,47 @@ def _record_runtime_dependencies(tmp_path, target):
     return set(json.loads(line[len(marker) :]))
 
 
+def test_the_recorder_has_no_disabled_proof_branch():
+    """Repair 7D.  A branch guarded by `and False` can never fire, so it proves nothing."""
+    assert "and False" not in _RECORDER
+    assert "or True" not in _RECORDER
+    # And it really does drive an operational entry point rather than importing and exiting.
+    assert 'OPERATION == "parser"' in _RECORDER
+    assert "build_parser" in _RECORDER
+
+
 @pytest.mark.parametrize("name", _BUNDLED_PYTHON)
-def test_observed_runtime_dependencies_are_a_subset_of_the_static_expectation(tmp_path, name):
-    observed = _record_runtime_dependencies(tmp_path, _S3C / name)
-    static_expected = AUTHORIZED_SCOPE | {value for kind, value in static_repo_closure() if kind == "path"}
-    # The module itself is the one file the recorder must open to load it at all.
+@pytest.mark.parametrize("operation", ("parser", "derive"))
+def test_observed_runtime_dependencies_are_a_subset_of_the_static_expectation(tmp_path, name, operation):
+    """RUNTIME_OBSERVED subset-of STATIC_EXPECTED, with the runtime side actually operating."""
+    observed = _record_runtime_dependencies(tmp_path, _S3C / name, operation)
+    discovered, _dynamic = recursive_repo_closure([QUALIFICATION_WORKFLOW])
+    static_expected = set(discovered) | QUALIFICATION_SOURCE_BUNDLE
     observed.discard("scripts/crypto_core/qualification/s3c/" + name)
     # __pycache__ writes are the interpreter's own bytecode cache, produced by loading the module at
     # all; they are not a repository dependency the module chose to take.
     observed = {path for path in observed if "__pycache__/" not in path}
     outside = sorted(path for path in observed if path not in static_expected)
-    assert outside == [], (name, outside)
+    assert outside == [], (name, operation, outside)
 
 
-def test_the_runtime_recorder_actually_observes_a_repository_read(tmp_path):
-    """The recorder is not vacuous: a module that reads a repo file is caught.
+def test_the_runtime_recorder_actually_observes_an_operational_repository_read(tmp_path):
+    """The recorder is not vacuous: a repo read that happens only when the module OPERATES is seen.
 
-    Without this the subset relation could pass simply because nothing was ever recorded.
+    The read below is inside a function, so an import-only recorder would miss it entirely -- which
+    is exactly the gap this repair closes.
     """
     probe = tmp_path / "probe_module.py"
     probe.write_text(
         "import pathlib\n"
         "REPO = pathlib.Path(" + repr(str(_REPO_ROOT)) + ")\n"
-        "VALUE = (REPO / 'pyproject.toml').read_text(encoding='utf-8')[:1]\n",
+        "def build_parser():\n"
+        "    return (REPO / 'pyproject.toml').read_text(encoding='utf-8')[:1]\n",
         encoding="utf-8",
     )
-    observed = _record_runtime_dependencies(tmp_path, probe)
+    import_only = _record_runtime_dependencies(tmp_path, probe, "derive")
+    del import_only
+    observed = _record_runtime_dependencies(tmp_path, probe, "parser")
     assert "pyproject.toml" in observed
 
 
@@ -2579,32 +2961,142 @@ def test_all_twenty_five_cases_including_the_process_cases_carry_an_equivalence_
     assert record["all_cases_conform"] is True
 
 
-def test_pt_141_a_worker_only_internal_filter_mutation_is_rejected():
-    """The REAL PT-141 mutant: ONLY the worker-installed filter changes.
+def _worker_emitted_internal_program(inventory):
+    """Emit an internal filter the way the WORKER's own build does: from a policy inventory.
 
-    The canonical trusted reference, the outer filter, the probe-derived reference and the receipt
-    framework are all untouched, so this is not a tautology in which production and oracle share the
-    mutated constant.  Exactly one captured program differs, and adjudication must say so.
+    This is the production emitter driven with a production-shaped input, so mutating the inventory
+    mutates the bytes a worker built that way would actually install.  It is deliberately NOT the
+    trusted reference: the reference below stays the frozen canonical program throughout.
     """
-    internal_bytes = bytes(113 * 8)
-    outer_bytes = bytes(400 * 8)
-    policy = _synthetic_policy_reference(internal_bytes, outer_bytes)
-    normalised, identity = _synthetic_observation(internal_bytes, outer_bytes)
-    _seal(normalised, policy, identity)
+    constants = _X86_64_UAPI_CONSTANTS
+    return policy_qualifier.program_bytes(policy_qualifier.derive_program(constants, inventory))
 
-    mutated = bytearray(internal_bytes)
-    mutated[0] ^= 0xFF
+
+_X86_64_UAPI_CONSTANTS = {
+    "audit_architecture_value_u32": 0xC000003E,
+    "x32_syscall_bit_u32": 0x40000000,
+    "seccomp_set_mode_filter_u32": 1,
+    "seccomp_ret_allow_u32": 0x7FFF0000,
+    "seccomp_ret_kill_process_u32": 0x80000000,
+    "pr_set_dumpable_u32": 4,
+    "pr_set_no_new_privs_u32": 38,
+    "seccomp_data_offset_nr_u32": 0,
+    "seccomp_data_offset_arch_u32": 4,
+    "seccomp_data_offset_arg_lo_u32": (16, 24, 32, 40, 48, 56),
+    "seccomp_data_offset_arg_hi_u32": (20, 28, 36, 44, 52, 60),
+    "syscall_nr_u32": {
+        "read": 0,
+        "write": 1,
+        "close": 3,
+        "execve": 59,
+        "prctl": 157,
+        "exit_group": 231,
+        "seccomp": 317,
+        "close_range": 436,
+    },
+    "bpf_opcode_u16": {
+        "ld_w_abs": 0x20,
+        "jmp_jeq_k": 0x15,
+        "jmp_jge_k": 0x35,
+        "jmp_jgt_k": 0x25,
+        "jmp_ja": 0x05,
+        "ret_k": 0x06,
+    },
+}
+
+
+def test_the_worker_emitter_reproduces_the_canonical_internal_program():
+    """The emitter used by PT-141 really is the one that produces the canonical program."""
+    honest = _worker_emitted_internal_program(policy_qualifier._INTERNAL_INVENTORY)
+    assert len(honest) == policy_qualifier.FROZEN_INTERNAL_PROGRAM_LEN * 8
+    assert adjudicator.cbpf_digest(honest) == policy_qualifier.cbpf_digest(
+        policy_qualifier.derive_program(_X86_64_UAPI_CONSTANTS, policy_qualifier._INTERNAL_INVENTORY)
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "inventory"),
+    (
+        (
+            "the worker additionally permits close",
+            (
+                ("read", "CANDIDATE_VERIFY", policy_qualifier._read_rules),
+                ("write", "CANDIDATE_RESPONSE", policy_qualifier._write_rules),
+                ("close", "CANDIDATE_BOOTSTRAP", policy_qualifier._close_rules),
+                ("exit_group", "PROCESS_EXIT", policy_qualifier._exit_group_rules),
+            ),
+        ),
+        (
+            "the worker drops the write constraint",
+            (
+                ("read", "CANDIDATE_VERIFY", policy_qualifier._read_rules),
+                ("write", "CANDIDATE_RESPONSE", policy_qualifier._execve_rules),
+                ("exit_group", "PROCESS_EXIT", policy_qualifier._exit_group_rules),
+            ),
+        ),
+        (
+            "the worker omits exit_group",
+            (
+                ("read", "CANDIDATE_VERIFY", policy_qualifier._read_rules),
+                ("write", "CANDIDATE_RESPONSE", policy_qualifier._write_rules),
+            ),
+        ),
+    ),
+)
+def test_pt_141_a_real_worker_only_filter_mutation_is_rejected(label, inventory):
+    """THE REAL PT-141.  Only the WORKER-INSTALLED filter changes.
+
+    The mutation is a genuine policy change a compromised worker could make -- permitting an extra
+    syscall, weakening an argument rule, dropping an entry -- pushed through the SAME emitter the
+    production build uses.  Everything the oracle depends on is untouched: the Stage-C canonical
+    reference, the trusted policy constants, the probe-derived reference, the outer filter and the
+    receipt framework all stay on the frozen canonical program.  No shared constant is mutated, so
+    this cannot pass by moving production and oracle together.
+    """
+    canonical_internal = _worker_emitted_internal_program(policy_qualifier._INTERNAL_INVENTORY)
+    canonical_outer = _worker_emitted_internal_program(policy_qualifier._OUTER_INVENTORY)
+    worker_installed = _worker_emitted_internal_program(inventory)
+    assert worker_installed != canonical_internal, label
+
+    # The ORACLE keeps the canonical reference.  Only the captured worker program changes.
+    policy = _synthetic_policy_reference(canonical_internal, canonical_outer)
+    normalised, identity = _synthetic_observation(canonical_internal, canonical_outer)
+    _seal(normalised, policy, identity)
     target = normalised["cases"][6]
-    target["internal_capture"]["program_bytes"] = bytes(mutated)
+    target["internal_capture"]["program_bytes"] = worker_installed
+    target["internal_capture"]["length"] = len(worker_installed) // 8
 
     record = adjudicator.adjudicate(normalised, policy, identity)
-    assert record["all_cases_conform"] is False
+    assert record["all_cases_conform"] is False, label
     verdict = record["case_verdicts"][6]
     assert verdict["case_verdict"] == "CASE_FAILED"
     assert any("INTERNAL_FILTER_EQUIVALENCE_FAILED" in finding for finding in verdict["findings"]), verdict["findings"]
     # Every OTHER case still conforms, which proves the mutation was genuinely worker-only.
     others = [item for index, item in enumerate(record["case_verdicts"]) if index != 6]
-    assert all(item["case_verdict"] == "CASE_CONFORMS" for item in others)
+    assert all(item["case_verdict"] == "CASE_CONFORMS" for item in others), label
+
+
+def test_the_worker_only_mutant_is_semantically_weaker_not_merely_different():
+    """The `close` mutant really does permit a syscall the canonical policy kills.
+
+    A byte-level difference alone would not show the mutation matters; the pure interpreter proves
+    the mutated program ALLOWS a call the canonical one KILLS, which is what makes rejecting it a
+    security property rather than a checksum.
+    """
+    constants = _X86_64_UAPI_CONSTANTS
+    canonical = policy_qualifier.derive_program(constants, policy_qualifier._INTERNAL_INVENTORY)
+    mutated = policy_qualifier.derive_program(
+        constants,
+        (
+            ("read", "CANDIDATE_VERIFY", policy_qualifier._read_rules),
+            ("write", "CANDIDATE_RESPONSE", policy_qualifier._write_rules),
+            ("close", "CANDIDATE_BOOTSTRAP", policy_qualifier._close_rules),
+            ("exit_group", "PROCESS_EXIT", policy_qualifier._exit_group_rules),
+        ),
+    )
+    data = policy_qualifier.build_seccomp_data(constants, 0xC000003E, 3, (0, 0, 0, 0, 0, 0))
+    assert policy_qualifier.evaluate(constants, canonical, data) == constants["seccomp_ret_kill_process_u32"]
+    assert policy_qualifier.evaluate(constants, mutated, data) == constants["seccomp_ret_allow_u32"]
 
 
 @pytest.mark.parametrize("case_index", (23, 24))

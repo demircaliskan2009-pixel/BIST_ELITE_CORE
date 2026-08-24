@@ -241,8 +241,38 @@ typedef enum {
     MT4_S3C_DUMPABILITY_RESTORED
 } mt4_s3c_dumpability_state_t;
 
-/* Set when restoration fails.  The case loop stops; it is never cleared. */
+/*
+ * THE TERMINAL INFRASTRUCTURE FAILURE CHANNEL (repair 2).
+ *
+ * An infrastructure failure during teardown is NOT a candidate verdict and must never be masked by
+ * one.  Three ways that used to happen are closed here:
+ *
+ *   1. CHILD_REAPED was entered unconditionally after the reap loop, including when the loop broke
+ *      on a non-EINTR waitpid failure -- so a child that was never authoritatively reaped looked
+ *      reaped, and restoration then ran while it might still exist.
+ *   2. A restoration failure only recorded a reason when the case had none.  C25 EXPECTS a timeout,
+ *      so its reason was already set and the restoration failure disappeared.
+ *   3. The halt flag was only consulted BEFORE the next case, so on the last case there was no next
+ *      case to stop and the run completed anyway.
+ *
+ * The flag below is sticky, is never cleared, and is checked again before ANY final record is
+ * written -- so the last case is covered by exactly the same gate as every other one.
+ */
 static int mt4_s3c_sequence_halted = 0;
+static mt4_s3c_reason_t mt4_s3c_terminal_reason = MT4_S3C_REASON_NONE;
+static const char *mt4_s3c_terminal_marker = "";
+
+static void mt4_s3c_terminal_failure(mt4_s3c_reason_t reason, const char *marker)
+{
+    mt4_s3c_sequence_halted = 1;
+    if (mt4_s3c_terminal_reason == MT4_S3C_REASON_NONE) {
+        mt4_s3c_terminal_reason = reason;
+        mt4_s3c_terminal_marker = marker;
+    }
+}
+
+/* The bounded EINTR retry budget.  An unbounded retry loop is not a bounded contract. */
+#define MT4_S3C_MAX_REAP_INTERRUPTS 4096
 
 /* Authenticate, never assume: the value is READ BACK from the kernel. */
 static int mt4_s3c_supervisor_dumpability_is(int expected)
@@ -323,7 +353,6 @@ typedef enum {
     MT4_S3C_REASON_SECCOMP_BASELINE_FIELD_DUPLICATE,
     MT4_S3C_REASON_SECCOMP_BASELINE_FIELD_MALFORMED,
     MT4_S3C_REASON_SECCOMP_BASELINE_UNREADABLE,
-    MT4_S3C_REASON_SECCOMP_BASELINE_ENCODING_INVALID,
     MT4_S3C_REASON_SECCOMP_COUNT_TRANSITION_INVALID,
     MT4_S3C_REASON_SECCOMP_COUNT_DISAGREEMENT,
     MT4_S3C_REASON_TRACER_CONTRACT_VIOLATION,
@@ -372,8 +401,6 @@ static const char *mt4_s3c_reason_name(mt4_s3c_reason_t reason)
         return "SECCOMP_BASELINE_FIELD_MALFORMED";
     case MT4_S3C_REASON_SECCOMP_BASELINE_UNREADABLE:
         return "SECCOMP_BASELINE_UNREADABLE";
-    case MT4_S3C_REASON_SECCOMP_BASELINE_ENCODING_INVALID:
-        return "SECCOMP_BASELINE_ENCODING_INVALID";
     case MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED:
         return "SUPERVISOR_DUMPABILITY_NOT_RESTORED";
     case MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_PRECONDITION_FAILED:
@@ -966,6 +993,11 @@ static int mt4_s3c_read_seccomp_status(const char *path,
      * this contract describes, and a parser that skipped past it would be reading an unknown format
      * while reporting a confident number.  The accepted alphabet is exactly printable ASCII plus
      * horizontal tab and newline.
+     *
+     * The failure class is the FROZEN SECCOMP_BASELINE_FIELD_MALFORMED.  A whole-buffer encoding
+     * violation is a malformed status source, which that class already names, and inventing a new
+     * public reason code for a condition an existing class covers would widen the taxonomy without
+     * telling an operator anything the existing class does not.
      */
     {
         size_t index;
@@ -974,14 +1006,14 @@ static int mt4_s3c_read_seccomp_status(const char *path,
             unsigned char byte = (unsigned char)buffer[index];
 
             if (byte == 0u) {
-                *reason = MT4_S3C_REASON_SECCOMP_BASELINE_ENCODING_INVALID;
+                *reason = MT4_S3C_REASON_SECCOMP_BASELINE_FIELD_MALFORMED;
                 return -1;
             }
             if (byte == (unsigned char)'\n' || byte == (unsigned char)'\t') {
                 continue;
             }
             if (byte < 0x20u || byte > 0x7Eu) {
-                *reason = MT4_S3C_REASON_SECCOMP_BASELINE_ENCODING_INVALID;
+                *reason = MT4_S3C_REASON_SECCOMP_BASELINE_FIELD_MALFORMED;
                 return -1;
             }
         }
@@ -2038,6 +2070,7 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
     unsigned int namespace_index;
     long clone_result;
     mt4_s3c_dumpability_state_t dumpability_state = MT4_S3C_DUMPABILITY_CASE_START;
+    int reaped = 0;
 
     memset(result, 0, sizeof(*result));
     result->reason = MT4_S3C_REASON_NONE;
@@ -2520,37 +2553,64 @@ teardown:
         } else {
             (void)kill(child, SIGKILL);
         }
-        for (;;) {
-            int status_word = 0;
-            pid_t observed = waitpid(child, &status_word, 0);
+        {
+            unsigned int interrupts = 0;
 
-            if (observed < 0) {
-                if (errno == EINTR) {
-                    continue;
+            for (;;) {
+                int status_word = 0;
+                pid_t observed = waitpid(child, &status_word, 0);
+
+                if (observed < 0) {
+                    if (errno == EINTR) {
+                        /* EINTR is the ONLY retryable case, and the retry budget is bounded. */
+                        interrupts++;
+                        if (interrupts > (unsigned int)MT4_S3C_MAX_REAP_INTERRUPTS) {
+                            mt4_s3c_case_fail(result, MT4_S3C_REASON_SUPERVISOR_REAP_FAILED, "reap_interrupt_budget");
+                            mt4_s3c_terminal_failure(MT4_S3C_REASON_SUPERVISOR_REAP_FAILED, "reap_interrupt_budget");
+                            break;
+                        }
+                        continue;
+                    }
+                    /*
+                     * ECHILD, EINVAL or anything else means this supervisor cannot prove the child
+                     * is gone.  That is terminal, not a case outcome.
+                     */
+                    mt4_s3c_case_fail(result, MT4_S3C_REASON_SUPERVISOR_REAP_FAILED, "final_reap");
+                    mt4_s3c_terminal_failure(MT4_S3C_REASON_SUPERVISOR_REAP_FAILED, "final_reap");
+                    break;
                 }
-                mt4_s3c_case_fail(result, MT4_S3C_REASON_SUPERVISOR_REAP_FAILED, "final_reap");
-                break;
-            }
-            if (WIFEXITED(status_word)) {
-                if (!result->wait_exited && !result->wait_signalled) {
-                    result->wait_exited = 1;
-                    result->wait_exit_status = WEXITSTATUS(status_word);
+                if (observed != child) {
+                    /* waitpid was asked about exactly one pid; any other answer is incoherent. */
+                    mt4_s3c_case_fail(result, MT4_S3C_REASON_SUPERVISOR_REAP_FAILED, "reap_wrong_child");
+                    mt4_s3c_terminal_failure(MT4_S3C_REASON_SUPERVISOR_REAP_FAILED, "reap_wrong_child");
+                    break;
                 }
-                break;
-            }
-            if (WIFSIGNALED(status_word)) {
-                if (!result->wait_exited && !result->wait_signalled) {
-                    result->wait_signalled = 1;
-                    result->wait_signal = WTERMSIG(status_word);
+                if (WIFEXITED(status_word)) {
+                    if (!result->wait_exited && !result->wait_signalled) {
+                        result->wait_exited = 1;
+                        result->wait_exit_status = WEXITSTATUS(status_word);
+                    }
+                    reaped = 1;
+                    break;
                 }
-                break;
-            }
-            if (WIFSTOPPED(status_word)) {
-                (void)mt4_s3c_ptrace_permitted((long)PTRACE_CONT, child, NULL, MT4_S3C_PTRACE_RESUME_SIGNAL);
+                if (WIFSIGNALED(status_word)) {
+                    if (!result->wait_exited && !result->wait_signalled) {
+                        result->wait_signalled = 1;
+                        result->wait_signal = WTERMSIG(status_word);
+                    }
+                    reaped = 1;
+                    break;
+                }
+                if (WIFSTOPPED(status_word)) {
+                    (void)mt4_s3c_ptrace_permitted((long)PTRACE_CONT, child, NULL, MT4_S3C_PTRACE_RESUME_SIGNAL);
+                }
             }
         }
         child = -1;
-        dumpability_state = MT4_S3C_DUMPABILITY_CHILD_REAPED;
+        /* 2A: the transition happens ONLY on an authoritative successful reap. */
+        if (reaped) {
+            dumpability_state = MT4_S3C_DUMPABILITY_CHILD_REAPED;
+        }
     }
     if (request_pipe[1] >= 0) {
         (void)close(request_pipe[1]);
@@ -2580,14 +2640,40 @@ teardown:
      */
     if (dumpability_state == MT4_S3C_DUMPABILITY_SUPERVISOR_NON_DUMPABLE ||
         dumpability_state == MT4_S3C_DUMPABILITY_CHILD_REAPED) {
-        if (mt4_s3c_supervisor_dumpability_restore() != 0) {
-            mt4_s3c_sequence_halted = 1;
-            if (result->reason == MT4_S3C_REASON_NONE) {
-                mt4_s3c_case_fail(result, MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED, "D-1");
-            }
+        if (dumpability_state != MT4_S3C_DUMPABILITY_CHILD_REAPED) {
+            /*
+             * The child exists, or existed and could not be proven gone.  Restoring now would race
+             * a live child's namespace lifecycle, so the failure is recorded and the sequence is
+             * terminal rather than restoring optimistically.
+             */
+            mt4_s3c_terminal_failure(MT4_S3C_REASON_SUPERVISOR_REAP_FAILED, "D-2");
+        } else if (mt4_s3c_supervisor_dumpability_restore() != 0) {
+            /*
+             * 2C: an EXPECTED semantic outcome NEVER masks this.  C25's deadline is the reason the
+             * old code path swallowed the failure -- result->reason was already set, so nothing was
+             * recorded.  The terminal channel is independent of result->reason for exactly that
+             * reason, and the case reason is overwritten unconditionally.
+             */
+            mt4_s3c_terminal_failure(MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED, "D-1");
+            result->reason = MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED;
+            result->reason_marker = "D-1";
         } else {
             dumpability_state = MT4_S3C_DUMPABILITY_RESTORED;
         }
+    }
+
+    /*
+     * 2D, per case: teardown must END in a valid state.  The only acceptable terminal states are
+     * "the child was never created" and "the child was reaped and dumpability was restored and
+     * re-authenticated".  Anything else is an infrastructure failure whatever the case's semantic
+     * outcome was.
+     */
+    if (dumpability_state != MT4_S3C_DUMPABILITY_CASE_START &&
+        dumpability_state != MT4_S3C_DUMPABILITY_PRE_CLONE_AUTHENTICATED &&
+        dumpability_state != MT4_S3C_DUMPABILITY_RESTORED) {
+        mt4_s3c_terminal_failure(MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED, "D-3");
+        result->reason = MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED;
+        result->reason_marker = "D-3";
     }
 
     /* Cross-check C-3 (V9 11.6): the trace-derived count must AGREE with the /proc authority. */
@@ -2952,8 +3038,11 @@ int main(int argc, char **argv)
          * and present an infrastructure failure as a candidate verdict, so the sequence stops with
          * the exact reason instead.
          */
-        if (mt4_s3c_sequence_halted) {
-            mt4_s3c_fatal(MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED, "sequence_halted");
+        if (mt4_s3c_sequence_halted || mt4_s3c_terminal_reason != MT4_S3C_REASON_NONE) {
+            mt4_s3c_fatal(mt4_s3c_terminal_reason == MT4_S3C_REASON_NONE
+                              ? MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED
+                              : mt4_s3c_terminal_reason,
+                          "sequence_halted");
         }
         mt4_s3c_run_case(&candidate, &identity, &plan.cases[index], result);
         if (index > 0u) {
@@ -2966,6 +3055,20 @@ int main(int argc, char **argv)
 
     if (mt4_s3c_output_overflow) {
         mt4_s3c_fatal(MT4_S3C_REASON_OBSERVATION_EVENT_BUDGET_EXCEEDED, "record_capacity");
+    }
+
+    /*
+     * 2D, THE FINAL GATE.  Checked HERE, before a single byte of the observation record is written,
+     * so it is effective on the LAST case as well as between cases.  A "before the next case" check
+     * alone left C25 -- the final case -- able to complete a successful run after its own teardown
+     * had failed, which is precisely the hole this closes.  No record is written at all when the
+     * sequence carries a terminal infrastructure failure.
+     */
+    if (mt4_s3c_sequence_halted || mt4_s3c_terminal_reason != MT4_S3C_REASON_NONE) {
+        mt4_s3c_fatal(mt4_s3c_terminal_reason == MT4_S3C_REASON_NONE
+                          ? MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED
+                          : mt4_s3c_terminal_reason,
+                      mt4_s3c_terminal_marker[0] == '\0' ? "terminal_teardown" : mt4_s3c_terminal_marker);
     }
     output_fd = open(output_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (output_fd < 0 || mt4_s3c_write_all(output_fd, mt4_s3c_output, mt4_s3c_output_used) != 0) {
