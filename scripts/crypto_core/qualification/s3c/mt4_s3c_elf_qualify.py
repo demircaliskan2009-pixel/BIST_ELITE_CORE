@@ -293,10 +293,11 @@ class SectionHeader:
 
 
 class Symbol:
-    __slots__ = ("name", "info", "other", "shndx", "value", "size")
+    __slots__ = ("name", "name_offset", "info", "other", "shndx", "value", "size")
 
-    def __init__(self, name, info, other, shndx, value, size):
+    def __init__(self, name, info, other, shndx, value, size, name_offset=0):
         self.name = name
+        self.name_offset = name_offset
         self.info = info
         self.other = other
         self.shndx = shndx
@@ -606,7 +607,7 @@ def parse_symbols(data, section_headers):
         value = _u64(data, offset + 8)
         size = _u64(data, offset + 16)
         name = _read_cstring(string_blob, name_offset) if name_offset else ""
-        symbols.append(Symbol(name, info, other, shndx, value, size))
+        symbols.append(Symbol(name, info, other, shndx, value, size, name_offset))
     return symbols
 
 
@@ -641,9 +642,22 @@ def check_undefined_symbol_closure(symbols):
     offending = []
     for index, symbol in enumerate(symbols):
         if index == 0:
-            # The reserved null entry: st_name 0, st_value 0, st_size 0, st_shndx SHN_UNDEF.
-            if symbol.name or symbol.value or symbol.size or symbol.info or symbol.other:
-                _fail("ELF_NULL_SYMBOL_ENTRY_INVALID", str(index))
+            # REPAIR 14: the reserved null entry has ONE canonical ELF64 shape and EVERY field of it
+            # is checked, st_shndx included.  A null entry whose section index is not SHN_UNDEF is a
+            # malformed symbol table, and accepting it would mean the very first entry of the table
+            # the closure scan walks was never validated at all.
+            if symbol.name_offset != 0:
+                _fail("ELF_NULL_SYMBOL_ENTRY_INVALID", "st_name")
+            if symbol.info != 0:
+                _fail("ELF_NULL_SYMBOL_ENTRY_INVALID", "st_info")
+            if symbol.other != 0:
+                _fail("ELF_NULL_SYMBOL_ENTRY_INVALID", "st_other")
+            if symbol.shndx != SHN_UNDEF:
+                _fail("ELF_NULL_SYMBOL_ENTRY_INVALID", "st_shndx")
+            if symbol.value != 0:
+                _fail("ELF_NULL_SYMBOL_ENTRY_INVALID", "st_value")
+            if symbol.size != 0:
+                _fail("ELF_NULL_SYMBOL_ENTRY_INVALID", "st_size")
             continue
         if symbol.shndx != SHN_UNDEF:
             continue
@@ -705,7 +719,22 @@ def check_declared_section_containment(symbol, section_headers, program_headers,
     ]
     if len(containing) != 1:
         _fail(marker, "declared section is not inside exactly one file-backed PT_LOAD")
-    return section, containing[0], file_start
+    segment = containing[0]
+
+    # REPAIR 13: THE FILE OFFSET IS DERIVED TWICE, INDEPENDENTLY, AND THE TWO MUST AGREE.
+    #
+    # A single derivation cannot see a shift in the field it does not use: adding four to sh_offset
+    # moves only the section-derived answer, and adding four to p_offset moves only the
+    # segment-derived one.  Requiring equality catches either on its own, and requiring the section
+    # to sit at the same relative position in both views catches a shift applied to both.
+    segment_derived = segment.p_offset + (symbol.value - segment.p_vaddr)
+    if segment_derived != file_start:
+        _fail("SYMBOL_FILE_OFFSET_DERIVATION_DISAGREEMENT", str(file_start) + " != " + str(segment_derived))
+    if section.sh_offset - segment.p_offset != section.sh_addr - segment.p_vaddr:
+        _fail("SYMBOL_FILE_OFFSET_DERIVATION_DISAGREEMENT", "section within mapping")
+    if file_start + symbol.size > segment.p_offset + segment.p_filesz:
+        _fail(marker, "symbol bytes escape the mapping file extent")
+    return section, segment, file_start
 
 
 def require_single_definition(symbols, name):
@@ -970,6 +999,20 @@ def qualify(data, page_size, expected_inventory_text, compile_dependency_digest)
                 "align_u64": header.p_align,
             }
             for header in program_headers
+        ],
+        # The section table travels with A2 so the trusted surface can see what the producer
+        # claims about section geometry; Stage C re-derives the governed parts from the bytes.
+        "sections": [
+            {
+                "index": section.index,
+                "name": section.name,
+                "type_u32": section.sh_type,
+                "flags_u64": section.sh_flags,
+                "addr_u64": section.sh_addr,
+                "offset_u64": section.sh_offset,
+                "size_bytes": section.sh_size,
+            }
+            for section in section_headers
         ],
         "memory": {
             "aggregate_effective_bytes": aggregate,

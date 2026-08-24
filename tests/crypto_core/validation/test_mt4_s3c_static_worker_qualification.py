@@ -982,6 +982,20 @@ def _build_symbol(name_offset, info, other, shndx, value, size):
     )
 
 
+_CANONICAL_INTERNAL_PROGRAM = []
+
+
+def canonical_internal_program():
+    """The canonical internal cBPF program, derived once from the frozen x86_64 constants."""
+    if not _CANONICAL_INTERNAL_PROGRAM:
+        _CANONICAL_INTERNAL_PROGRAM.append(
+            policy_qualifier.program_bytes(
+                policy_qualifier.derive_program(_X86_64_UAPI_CONSTANTS, policy_qualifier._INTERNAL_INVENTORY)
+            )
+        )
+    return _CANONICAL_INTERNAL_PROGRAM[0]
+
+
 def build_reference_elf(**overrides):
     """Synthesise a minimal ELF64 image that satisfies every frozen qualification row.
 
@@ -1015,7 +1029,12 @@ def build_reference_elf(**overrides):
 
     text = bytearray(b"\x90" * text_filesz)
     text[_CAP_VADDR - _TEXT_VADDR : _CAP_VADDR - _TEXT_VADDR + len(cap_value)] = cap_value
-    text[_PROGRAM_VADDR - _TEXT_VADDR : _PROGRAM_VADDR - _TEXT_VADDR + program_size] = bytes(program_size)
+    # The reference image carries the REAL canonical internal program.  A placeholder of zeros
+    # would make every consumer that anchors on the canonical bytes unreachable in tests.
+    program_body = overrides.get("program_bytes", canonical_internal_program()[:program_size])
+    if len(program_body) < program_size:
+        program_body = program_body + bytes(program_size - len(program_body))
+    text[_PROGRAM_VADDR - _TEXT_VADDR : _PROGRAM_VADDR - _TEXT_VADDR + program_size] = program_body[:program_size]
     fprog = fprog_len.to_bytes(2, "little") + bytes(6) + fprog_pointer.to_bytes(8, "little")
     text[_FPROG_VADDR - _TEXT_VADDR : _FPROG_VADDR - _TEXT_VADDR + 16] = fprog
     if text_body_extra:
@@ -1628,20 +1647,65 @@ def test_pt_265_no_bundled_script_imports_a_repository_module(name):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 root = alias.name.split(".")[0]
-                assert root in _ALLOWED_STDLIB_IMPORTS, (name, alias.name)
+                allowed = _ALLOWED_STDLIB_IMPORTS | ({"subprocess"} if name == _SUBPROCESS_EXEMPT else set())
+                assert root in allowed, (name, alias.name)
         elif isinstance(node, ast.ImportFrom):
             if node.module == "__future__":
                 continue
             assert node.level == 0, (name, "relative import")
             root = (node.module or "").split(".")[0]
-            assert root in _ALLOWED_STDLIB_IMPORTS, (name, node.module)
+            allowed = _ALLOWED_STDLIB_IMPORTS | ({"subprocess"} if name == _SUBPROCESS_EXEMPT else set())
+            assert root in allowed, (name, node.module)
+
+
+# THE BUILD WRAPPER EXEMPTION, stated rather than implied.
+#
+# mt4_s3c_build_manifest.py now RUNS the compiler: that is the whole point of recording the actual
+# invocation rather than a declaration of it, and a wrapper that cannot execute cannot observe.  It
+# therefore needs subprocess, which the blanket rule forbids.  The rule is not deleted -- it is
+# narrowed to one named file, and that file is held to a STRICTER contract than the ban provided:
+# a fixed argument vector, no shell, no repository-supplied command, and none of the other dynamic
+# machinery.  Every other bundled script keeps the blanket ban unchanged.
+_SUBPROCESS_EXEMPT = "mt4_s3c_build_manifest.py"
 
 
 @pytest.mark.parametrize("name", _BUNDLED_PYTHON)
 def test_pt_266_no_bundled_script_contains_dynamic_import_machinery(name):
     source = (_S3C / name).read_text(encoding="utf-8")
-    for forbidden in ("importlib", "__import__", "exec(", "eval(", "compile(", "subprocess", "ctypes"):
+    forbidden_forms = ["importlib", "__import__", "exec(", "eval(", "compile(", "ctypes"]
+    if name != _SUBPROCESS_EXEMPT:
+        forbidden_forms.append("subprocess")
+    for forbidden in forbidden_forms:
         assert forbidden not in source, (name, forbidden)
+
+
+def test_the_build_wrapper_executes_only_a_fixed_argument_vector():
+    """The one subprocess exemption is held to a STRICTER contract than the ban it replaces."""
+    source = (_S3C / _SUBPROCESS_EXEMPT).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    calls = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        target = node.func
+        if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+            if target.value.id == "subprocess":
+                calls.append((target.attr, node))
+    assert calls, "the wrapper must actually invoke subprocess"
+    for attribute, node in calls:
+        # ONLY run().  No Popen, no call, no check_output, no shell helper.
+        assert attribute == "run", attribute
+        keywords = {keyword.arg: keyword for keyword in node.keywords}
+        # NEVER a shell.  A shell would reintroduce every construct the workflow grammar forbids.
+        assert "shell" not in keywords, "the wrapper must never use a shell"
+        # The command is a LIST, not a string: a string command is a shell command in disguise.
+        first = node.args[0] if node.args else None
+        assert isinstance(first, (ast.Name, ast.List)), "the command must be a fixed argument vector"
+
+    # And none of the other dynamic machinery reappears under the exemption.
+    for forbidden in ("importlib", "__import__", "exec(", "eval(", "compile(", "ctypes", "os.system", "shell=True"):
+        assert forbidden not in source, forbidden
 
 
 @pytest.mark.parametrize("name", _BUNDLED_PYTHON)
@@ -2182,11 +2246,10 @@ def test_the_launcher_implements_the_modelled_teardown_guards():
     """The model above is the SOURCE's structure, not a convenient fiction."""
     code = _launcher_code()
     teardown = code[code.index("teardown:") :]
-    # 2A: a dedicated success flag gates the transition.
+    # 2A / repair 3: ONE authoritative transition records all three facts together.
     assert "int reaped = 0;" in code
-    assert "reaped = 1;" in teardown
-    assert "if (reaped) {" in teardown
-    assert "dumpability_state = MT4_S3C_DUMPABILITY_CHILD_REAPED;" in teardown
+    assert "#define MT4_S3C_MARK_CHILD_REAPED()" in code
+    assert "MT4_S3C_MARK_CHILD_REAPED();" in teardown
     # Only EINTR retries, and its budget is bounded.
     assert "if (errno == EINTR)" in teardown
     assert "MT4_S3C_MAX_REAP_INTERRUPTS" in teardown
@@ -2198,6 +2261,70 @@ def test_the_launcher_implements_the_modelled_teardown_guards():
     assert "result->reason = MT4_S3C_REASON_SUPERVISOR_DUMPABILITY_NOT_RESTORED;" in teardown
     # 2D: the end-state check, per case.
     assert "dumpability_state != MT4_S3C_DUMPABILITY_RESTORED" in teardown
+
+
+def test_every_definitive_reap_uses_the_single_authoritative_transition():
+    """Repair 3.  Reap state may never be encoded in pieces.
+
+    Three paths used to clear `child` and stop there, leaving `reaped` false and the lifecycle state
+    behind; the teardown then declared a terminal failure for a case that had completed honestly.
+    Every path that has DEFINITIVELY reaped now goes through one macro that sets all three facts.
+    """
+    code = _launcher_code()
+    run_case = code[code.index("static void mt4_s3c_run_case(") : code.index("static void mt4_s3c_emit_case(")]
+
+    # The macro sets all three facts, in one place.
+    definition = code[code.index("#define MT4_S3C_MARK_CHILD_REAPED()") :]
+    definition = definition[: definition.index("while (0)")]
+    assert "child = -1;" in definition
+    assert "reaped = 1;" in definition
+    assert "dumpability_state = MT4_S3C_DUMPABILITY_CHILD_REAPED;" in definition
+
+    # No path outside the macro sets any of the three individually.
+    body = run_case.replace("MT4_S3C_MARK_CHILD_REAPED();", "")
+    assert "reaped = 1;" not in body, "a path sets reaped without the authoritative transition"
+    assert "dumpability_state = MT4_S3C_DUMPABILITY_CHILD_REAPED;" not in body
+
+    # Every definitive reap observation uses it: died-before-trace, stepping exit, stepping signal,
+    # and both teardown outcomes.
+    assert run_case.count("MT4_S3C_MARK_CHILD_REAPED();") == 5
+
+    # `child = -1` survives only where the child's fate could NOT be established.
+    remaining = [line.strip() for line in body.splitlines() if line.strip() == "child = -1;"]
+    assert len(remaining) == 1, remaining
+
+
+def test_a_non_eintr_stepping_wait_error_is_terminal():
+    """Repair 3.  A wait error in the REAPING loop means the child's fate is unknown."""
+    code = _launcher_code()
+    stepping = code[code.index("observed = waitpid(child, &status_word, WUNTRACED | WNOHANG);") :]
+    guard = stepping[: stepping.index("if (WIFEXITED(status_word))")]
+    assert "if (errno == EINTR)" in guard
+    assert "mt4_s3c_terminal_failure(MT4_S3C_REASON_SUPERVISOR_REAP_FAILED" in guard
+
+
+@pytest.mark.parametrize(
+    ("label", "outcome"),
+    (
+        ("normal exit already reaped in the stepping loop", "exited"),
+        ("signal exit already reaped in the stepping loop", "signalled"),
+        ("expected timeout with a successful reap", "eintr_then_exit"),
+    ),
+)
+def test_an_honest_completed_case_is_not_terminal(label, outcome):
+    """The opposite false accept: an honestly completed case must NOT become terminal."""
+    machine = SupervisorTeardown(reap_outcome=outcome).finish_case()
+    assert machine.state == "RESTORED", label
+    assert machine.terminal_reason is None, label
+    assert machine.may_emit_final_record(), label
+
+
+@pytest.mark.parametrize("position", ("middle", "final"))
+def test_an_honest_case_completes_at_any_position(position):
+    machines = [SupervisorTeardown().finish_case() for _ in range(25)]
+    index = 12 if position == "middle" else 24
+    assert machines[index].may_emit_final_record()
+    assert all(machine.state == "RESTORED" for machine in machines)
 
 
 def test_the_final_record_gate_runs_before_any_record_is_written():
@@ -2529,9 +2656,16 @@ def _discover_python_dependencies(source):
     return imports, paths, dynamic
 
 
+# REPAIR 9A.  Assembly sources take dependencies through constructs a C-include regex never sees.
+# `.include` and `.incbin` are assembler directives, and a `.S` file also goes through the C
+# preprocessor, so a quoted `#include` is valid there too.  All three forms are parsed.
+_ASM_INCLUDE = re.compile(r'^\s*\.(?:include|incbin)\s+"([^"]+)"', re.MULTILINE)
+_C_INCLUDE = re.compile(r'#\s*include\s+"([^"]+)"')
+
+
 def _discover_native_dependencies(source):
     """A QUOTED include is repo-local by definition; an angle include is toolchain."""
-    return set(re.findall(r'#\s*include\s+"([^"]+)"', source))
+    return set(_C_INCLUDE.findall(source)) | set(_ASM_INCLUDE.findall(source))
 
 
 def _workflow_repo_paths(document):
@@ -2543,6 +2677,38 @@ def _workflow_repo_paths(document):
                 assert not uses.startswith("./"), uses
             paths.update(_REPO_PATH_TOKEN.findall(step.get("run") or ""))
     return paths
+
+
+# The governed include-root DIRECTORY.  It is a directory by design: the build passes it to the
+# compiler with -I, and a directory is what -I takes.
+GOVERNED_INCLUDE_ROOT = "scripts/crypto_core/qualification/s3c"
+
+
+def _classify_non_repo_reference(relative, candidate):
+    """Name the class of a reference that is not a regular repository file, or return None.
+
+    Returning None means UNACCOUNTABLE, which the governed callers treat as a closure break.  Every
+    exemption below is a real, distinct class rather than a convenience:
+      * the governed include root is a DIRECTORY the compiler is given with -I;
+      * a pinned-upstream input path is relative to the blst tree, not to this repository;
+      * a quoted native include that does not resolve beside its includer resolves through an
+        include root, which the include-root allowlist governs instead.
+    """
+    if relative == GOVERNED_INCLUDE_ROOT and candidate.is_dir():
+        return "GOVERNED_INCLUDE_ROOT"
+    tail = relative.split("/")[-1]
+    if relative in build_manifest.REQUIRED_UPSTREAM_INPUTS or tail in {
+        item.split("/")[-1] for item in build_manifest.REQUIRED_UPSTREAM_INPUTS
+    }:
+        return "UPSTREAM_PINNED"
+    if relative.startswith(GOVERNED_INCLUDE_ROOT + "/") and tail in _UPSTREAM_HEADER_NAMES:
+        return "UPSTREAM_PINNED_HEADER"
+    return None
+
+
+# Headers the freestanding worker includes by name and the build resolves through the pinned blst
+# bindings include root.  They are upstream files, so they are not repository closure edges.
+_UPSTREAM_HEADER_NAMES = frozenset({"blst.h", "blst_aux.h"})
 
 
 def recursive_repo_closure(workflow_paths):
@@ -2562,6 +2728,7 @@ def recursive_repo_closure(workflow_paths):
     discovered = set()
     visited = set()
     dynamic = []
+    unresolved = []
     while pending:
         relative = pending.pop()
         if relative in visited:
@@ -2569,10 +2736,16 @@ def recursive_repo_closure(workflow_paths):
             # caller asserts; expanding a path twice would just spin.
             continue
         visited.add(relative)
-        discovered.add(relative)
         candidate = _REPO_ROOT / relative
         if not candidate.is_file():
+            # REPAIR 9B.  A reference that does not resolve to a regular repository file is
+            # CLASSIFIED, never silently skipped.  There are exactly three legitimate non-repo
+            # classes, each named, and anything else is unaccountable and fails closed.
+            classification = _classify_non_repo_reference(relative, candidate)
+            if classification is None:
+                unresolved.append(relative)
             continue
+        discovered.add(relative)
         body = candidate.read_text(encoding="utf-8")
         if candidate.suffix == ".py":
             imports, paths, uses_dynamic = _discover_python_dependencies(body)
@@ -2595,13 +2768,14 @@ def recursive_repo_closure(workflow_paths):
             if isinstance(document, dict) and "jobs" in document:
                 for token in sorted(_workflow_repo_paths(document)):
                     pending.append(token)
-    return discovered, dynamic
+    return discovered, dynamic, unresolved
 
 
 def test_the_qualification_closure_stays_inside_the_exact_sixteen_entry_bundle():
     """Repair 7A and 7B.  The governed authority is the 16-entry bundle, not the 21-path PR."""
-    discovered, dynamic = recursive_repo_closure([QUALIFICATION_WORKFLOW])
+    discovered, dynamic, unresolved = recursive_repo_closure([QUALIFICATION_WORKFLOW])
     assert dynamic == [], dynamic
+    assert unresolved == [], unresolved
     files = {path for path in discovered if (_REPO_ROOT / path).is_file()}
     assert files, "discovery must actually find something"
     outside = sorted(files - QUALIFICATION_SOURCE_BUNDLE)
@@ -2611,26 +2785,81 @@ def test_the_qualification_closure_stays_inside_the_exact_sixteen_entry_bundle()
 
 
 def test_the_trusted_closure_reaches_only_its_own_separately_committed_surface():
-    discovered, dynamic = recursive_repo_closure([TRUSTED_WORKFLOW])
+    discovered, dynamic, unresolved = recursive_repo_closure([TRUSTED_WORKFLOW])
     assert dynamic == [], dynamic
+    assert unresolved == [], unresolved
     files = {path for path in discovered if (_REPO_ROOT / path).is_file()}
     outside = sorted(files - TRUSTED_SURFACE_PATHS - QUALIFICATION_SOURCE_BUNDLE)
     assert outside == [], outside
 
 
-def test_the_recursive_closure_follows_a_second_and_third_hop(tmp_path):
-    """The closure is not vacuous: a planted chain of hops is discovered to fixpoint."""
-    root = tmp_path / "root.py"
-    second = tmp_path / "second.py"
-    third = tmp_path / "third.py"
-    third.write_text("VALUE = 3\n", encoding="utf-8")
-    second.write_text("PATH = 'scripts/crypto_core/qualification/s3c/third_hop.py'\n", encoding="utf-8")
-    root.write_text("PATH = 'scripts/crypto_core/qualification/s3c/second_hop.py'\n", encoding="utf-8")
-    # The discovery primitive itself is what recursion depends on, so it is exercised directly.
-    _imports, paths, _dynamic = _discover_python_dependencies(root.read_text(encoding="utf-8"))
-    assert paths == {"scripts/crypto_core/qualification/s3c/second_hop.py"}
-    _imports, paths, _dynamic = _discover_python_dependencies(second.read_text(encoding="utf-8"))
-    assert paths == {"scripts/crypto_core/qualification/s3c/third_hop.py"}
+def test_the_production_recursion_reaches_a_third_hop_outside_the_bundle(tmp_path):
+    """REPAIR 9C.  The regression RUNS the production fixpoint closure, not a discovery primitive.
+
+    A planted chain -- workflow -> first hop -> second hop -> third hop -- is followed to fixpoint,
+    and the third hop lies outside the governed bundle so the closure must surface it.
+    """
+    scratch = tmp_path / "repo"
+    (scratch / "scripts" / "crypto_core" / "qualification" / "s3c").mkdir(parents=True)
+    (scratch / ".github" / "workflows").mkdir(parents=True)
+    base = "scripts/crypto_core/qualification/s3c/"
+
+    (scratch / base / "first_hop.py").write_text("PATH = '" + base + "second_hop.py'\n", encoding="utf-8")
+    (scratch / base / "second_hop.py").write_text("PATH = '" + base + "third_hop.py'\n", encoding="utf-8")
+    (scratch / base / "third_hop.py").write_text("VALUE = 3\n", encoding="utf-8")
+    workflow = scratch / ".github" / "workflows" / "planted.yml"
+    workflow.write_text(
+        "jobs:\n  build:\n    steps:\n      - run: python " + base + "first_hop.py\n",
+        encoding="utf-8",
+    )
+
+    original = globals()["_REPO_ROOT"]
+    globals()["_REPO_ROOT"] = scratch
+    try:
+        discovered, dynamic, unresolved = recursive_repo_closure([workflow])
+    finally:
+        globals()["_REPO_ROOT"] = original
+
+    assert dynamic == []
+    assert unresolved == []
+    # All three hops were reached, by RECURSION rather than by one pass.
+    for hop in ("first_hop.py", "second_hop.py", "third_hop.py"):
+        assert base + hop in discovered, hop
+    # And the third hop is outside the governed bundle, which is what a real closure must surface.
+    assert base + "third_hop.py" not in QUALIFICATION_SOURCE_BUNDLE
+
+
+def test_an_unresolvable_or_non_file_dependency_fails_closed(tmp_path):
+    """REPAIR 9B.  A missing path, or a directory where a file is required, is not skipped."""
+    scratch = tmp_path / "repo"
+    (scratch / "scripts" / "crypto_core" / "qualification" / "s3c" / "a_directory").mkdir(parents=True)
+    (scratch / ".github" / "workflows").mkdir(parents=True)
+    base = "scripts/crypto_core/qualification/s3c/"
+    workflow = scratch / ".github" / "workflows" / "planted.yml"
+    workflow.write_text(
+        "jobs:\n  build:\n    steps:\n      - run: |\n"
+        "          python " + base + "missing_helper.py\n"
+        "          python " + base + "a_directory\n",
+        encoding="utf-8",
+    )
+
+    original = globals()["_REPO_ROOT"]
+    globals()["_REPO_ROOT"] = scratch
+    try:
+        _discovered, _dynamic, unresolved = recursive_repo_closure([workflow])
+    finally:
+        globals()["_REPO_ROOT"] = original
+
+    assert base + "missing_helper.py" in unresolved
+    assert base + "a_directory" in unresolved
+
+
+def test_assembly_include_forms_are_discovered():
+    """REPAIR 9A.  `.include`, `.incbin` and a preprocessor include are all dependency edges."""
+    source = '.include "shared_macros.inc"' + chr(10) + '.incbin "blob.bin"' + chr(10) + '#include "header.h"' + chr(10)
+    assert _discover_native_dependencies(source) == {"shared_macros.inc", "blob.bin", "header.h"}
+    # An ANGLE include is toolchain, not repo-local, and must not be claimed as a repo edge.
+    assert _discover_native_dependencies("#include <stdio.h>" + chr(10)) == set()
 
 
 @pytest.mark.parametrize(
@@ -2677,6 +2906,7 @@ REPO = sys.argv[1].replace(chr(92), "/")
 TARGET = sys.argv[2]
 OPERATION = sys.argv[3]
 observed = set()
+failures = []
 
 
 def hook(event, arguments):
@@ -2700,29 +2930,53 @@ specification = importlib.util.spec_from_file_location("mt4_s3c_recorded", TARGE
 module = importlib.util.module_from_spec(specification)
 specification.loader.exec_module(module)
 
+
+def drive(label, call):
+    # REPAIR 9D.  EXPECTED controlled termination is a parser exiting on argument validation, or a
+    # module's own governed error type refusing bad input.  ANYTHING ELSE is an instrumentation
+    # failure and is reported, not swallowed: a recorder that hides exceptions records nothing and
+    # proves nothing, which is exactly what `except BaseException: pass` did here before.
+    try:
+        return call()
+    except SystemExit:
+        # A parser exiting on argument validation is the expected controlled termination.
+        return None
+    except BaseException as error:
+        name = type(error).__name__
+        # The module's OWN governed error type is a controlled refusal of the input we supplied.
+        if hasattr(module, name):
+            return None
+        failures.append(label + ":" + name + ":" + str(error)[:120])
+        return None
+
+
 # OPERATIONAL ENTRY.  Each of these is a real code path the qualification jobs take, driven with
-# inputs that need no network, no privilege and no live authority.
+# arguments that need no network, no privilege and no live authority.
 if OPERATION == "parser":
     builder = getattr(module, "build_parser", None)
     if builder is not None:
-        builder()
+        # ONE call: drive returns the result and owns the failure, so nothing is invoked twice and
+        # nothing escapes untracked.  The hasattr check that follows is a CAPABILITY check, not an
+        # exception swallow -- a builder returning another shape is still exercised.
+        built = drive("build_parser", builder)
+        if hasattr(built, "parse_args"):
+            drive("parse_help", lambda: built.parse_args(["--help"]))
     main = getattr(module, "main", None)
     if main is not None:
-        try:
-            main([])
-        except SystemExit:
-            pass
-        except BaseException:
-            pass
+        drive("main_no_arguments", lambda: main([]))
 elif OPERATION == "derive":
-    for name in dir(module):
+    for name in sorted(dir(module)):
         value = getattr(module, name)
-        if not callable(value) or name.startswith("_"):
+        if not callable(value) or name.startswith("_") or isinstance(value, type):
             continue
-        try:
-            value()
-        except BaseException:
-            pass
+        code = getattr(value, "__code__", None)
+        if code is None or code.co_argcount != 0:
+            continue
+        drive(name, value)
+
+if failures:
+    sys.stdout.write("MT4_S3C_RECORDER_FAILED=" + json.dumps(failures) + chr(10))
+    raise SystemExit(3)
 
 sys.stdout.write("MT4_S3C_OBSERVED=" + json.dumps(sorted(observed)) + chr(10))
 """
@@ -2746,12 +3000,34 @@ def _record_runtime_dependencies(tmp_path, target, operation="parser"):
 
 
 def test_the_recorder_has_no_disabled_proof_branch():
-    """Repair 7D.  A branch guarded by `and False` can never fire, so it proves nothing."""
+    """Repair 7D and 9D.  No disabled branch, and no blanket exception swallow."""
     assert "and False" not in _RECORDER
     assert "or True" not in _RECORDER
-    # And it really does drive an operational entry point rather than importing and exiting.
+    # It drives operational entry points rather than importing and exiting.
     assert 'OPERATION == "parser"' in _RECORDER
     assert "build_parser" in _RECORDER
+    assert "parse_args" in _RECORDER
+    # REPAIR 9D: an unexpected exception FAILS the recorder rather than being discarded.  The
+    # check runs over CODE only -- the recorder's own comment names the defect it fixed, and prose
+    # describing a forbidden form must not be mistaken for the form itself.
+    code = chr(10).join(line for line in _RECORDER.splitlines() if not line.strip().startswith("#"))
+    assert "except BaseException:" not in code
+    assert "except Exception:" not in code
+    assert ": pass" not in code
+    assert "failures.append" in code
+    assert "MT4_S3C_RECORDER_FAILED" in code
+
+
+def test_the_recorder_fails_on_an_unexpected_exception(tmp_path):
+    """REPAIR 9D.  A module that raises something ungoverned must break the proof, not pass it."""
+    probe = tmp_path / "exploding_module.py"
+    probe.write_text(
+        "def build_parser():" + chr(10) + "    raise MemoryError('instrumentation broke')" + chr(10),
+        encoding="utf-8",
+    )
+    with pytest.raises(AssertionError) as error:
+        _record_runtime_dependencies(tmp_path, probe, "parser")
+    assert "MT4_S3C_RECORDER_FAILED" in str(error.value)
 
 
 @pytest.mark.parametrize("name", _BUNDLED_PYTHON)
@@ -2759,7 +3035,7 @@ def test_the_recorder_has_no_disabled_proof_branch():
 def test_observed_runtime_dependencies_are_a_subset_of_the_static_expectation(tmp_path, name, operation):
     """RUNTIME_OBSERVED subset-of STATIC_EXPECTED, with the runtime side actually operating."""
     observed = _record_runtime_dependencies(tmp_path, _S3C / name, operation)
-    discovered, _dynamic = recursive_repo_closure([QUALIFICATION_WORKFLOW])
+    discovered, _dynamic, _unresolved = recursive_repo_closure([QUALIFICATION_WORKFLOW])
     static_expected = set(discovered) | QUALIFICATION_SOURCE_BUNDLE
     observed.discard("scripts/crypto_core/qualification/s3c/" + name)
     # __pycache__ writes are the interpreter's own bytecode cache, produced by loading the module at
@@ -2780,7 +3056,8 @@ def test_the_runtime_recorder_actually_observes_an_operational_repository_read(t
         "import pathlib\n"
         "REPO = pathlib.Path(" + repr(str(_REPO_ROOT)) + ")\n"
         "def build_parser():\n"
-        "    return (REPO / 'pyproject.toml').read_text(encoding='utf-8')[:1]\n",
+        "    (REPO / 'pyproject.toml').read_text(encoding='utf-8')\n"
+        "    return None\n",
         encoding="utf-8",
     )
     import_only = _record_runtime_dependencies(tmp_path, probe, "derive")
@@ -3003,6 +3280,105 @@ _X86_64_UAPI_CONSTANTS = {
         "ret_k": 0x06,
     },
 }
+
+
+# =================================================================================================
+# REPAIR 6: PT-141 IS WORKER-OWNED.
+#
+# The mutation lives in the C source that emits the worker's internal filter, not in a Python
+# reconstruction of it.  This host has no C toolchain, so the BUILD and RUNTIME halves are a
+# declared Linux regression contract rather than a local execution; what IS proven locally is that
+# the hook exists, that it is unreachable from production, that it changes the emitted bytes, and
+# that the change is semantically real.
+# =================================================================================================
+
+PT141_MUTANT_MACRO = "MT4_S3C_TEST_ONLY_INTERNAL_FILTER_MUTANT"
+PT141_ACKNOWLEDGEMENT_MACRO = "MT4_S3C_TEST_ONLY_NOT_QUALIFIABLE"
+
+
+def test_pt_141_the_mutation_hook_lives_in_the_worker_source():
+    """The hook is in the C that EMITS the filter, so a mutant is worker-owned by construction."""
+    source = _read(POLICY_SOURCE)
+    assert PT141_MUTANT_MACRO in source
+    assert "#define MT4_S3C_INTERNAL_READ_FD 0" in source
+    assert "#define MT4_S3C_INTERNAL_READ_FD MT4_S3C_FD_REQUEST" in source
+    # The mutable constant is used by the INTERNAL entry only; the outer filter is untouched.
+    assert "MT4_S3C_ENTRY_READ_INTERNAL(MT4_S3C_INTERNAL_BASE_READ" in source
+    outer = source[source.index("mt4_s3c_outer_filter_program[") :]
+    outer = outer[: outer.index("};")]
+    assert "MT4_S3C_INTERNAL_READ_FD" not in outer, "the outer filter must not depend on the hook"
+
+
+def test_pt_141_production_cannot_enable_the_mutation_by_accident():
+    """TWO macros are required, and defining only the first is a compile-time error."""
+    source = _read(POLICY_SOURCE)
+    guard = source[source.index("#ifdef " + PT141_MUTANT_MACRO) :]
+    guard = guard[: guard.index("#else")]
+    assert "#ifndef " + PT141_ACKNOWLEDGEMENT_MACRO in guard
+    assert "#error" in guard
+    # Neither macro appears anywhere in the qualification workflow, so no governed build defines it.
+    workflow = _read(QUALIFICATION_WORKFLOW)
+    assert PT141_MUTANT_MACRO not in workflow
+    assert PT141_ACKNOWLEDGEMENT_MACRO not in workflow
+    # Nor in the trusted surface.
+    trusted = _read(TRUSTED_WORKFLOW)
+    assert PT141_MUTANT_MACRO not in trusted
+    assert PT141_ACKNOWLEDGEMENT_MACRO not in trusted
+
+
+def test_pt_141_the_mutation_changes_the_emitted_program_without_changing_its_length():
+    """The mutant must still BUILD and INSTALL -- otherwise it proves a compile error, not a
+    rejection.  The Python emitter models exactly the constant the C hook changes."""
+    constants = _X86_64_UAPI_CONSTANTS
+    canonical = policy_qualifier.derive_program(constants, policy_qualifier._INTERNAL_INVENTORY)
+
+    def mutated_read_rules(_constants):
+        # The SAME rule shape with the SAME six-word classification; only the descriptor differs,
+        # exactly as the C hook does it.
+        return (
+            policy_qualifier.ArgumentRule(
+                policy_qualifier._zero_tail(
+                    policy_qualifier._exact(0, 0),
+                    policy_qualifier._pointer(1),
+                    policy_qualifier._range(2, 1, policy_qualifier.REQUEST_FRAME_BYTES),
+                )
+            ),
+        )
+
+    mutant = policy_qualifier.derive_program(
+        constants,
+        (
+            ("read", "CANDIDATE_VERIFY", mutated_read_rules),
+            ("write", "CANDIDATE_RESPONSE", policy_qualifier._write_rules),
+            ("exit_group", "PROCESS_EXIT", policy_qualifier._exit_group_rules),
+        ),
+    )
+    assert len(mutant) == len(canonical) == policy_qualifier.FROZEN_INTERNAL_PROGRAM_LEN
+    assert policy_qualifier.program_bytes(mutant) != policy_qualifier.program_bytes(canonical)
+
+    # And the difference is SEMANTIC: the mutant permits a read the canonical program kills.
+    data = policy_qualifier.build_seccomp_data(constants, 0xC000003E, 0, (0, 0x1000, 8, 0, 0, 0))
+    assert policy_qualifier.evaluate(constants, canonical, data) == constants["seccomp_ret_kill_process_u32"]
+    assert policy_qualifier.evaluate(constants, mutant, data) == constants["seccomp_ret_allow_u32"]
+
+    # The owning path rejects it: the captured program can no longer equal the canonical one.
+    assert adjudicator.cbpf_digest(policy_qualifier.program_bytes(mutant)) != adjudicator.cbpf_digest(
+        policy_qualifier.program_bytes(canonical)
+    )
+
+
+def test_pt_141_declares_its_linux_build_and_runtime_contract():
+    """The build and runtime halves are a DECLARED Linux regression, not a local claim.
+
+    This host has no C toolchain, so the mutant is not compiled or installed here.  The contract is
+    stated in the source it belongs to, so an auditor sees the obligation rather than an implied
+    completeness.
+    """
+    source = _read(POLICY_SOURCE)
+    contract = source[source.index("TEST-ONLY INTERNAL FILTER MUTATION") :]
+    contract = contract[: contract.index("#ifdef")]
+    for clause in ("worker", "canonical", "COUNT is unchanged", "outer filter", "probe"):
+        assert clause in contract, clause
 
 
 def test_the_worker_emitter_reproduces_the_canonical_internal_program():

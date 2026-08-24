@@ -274,6 +274,27 @@ static void mt4_s3c_terminal_failure(mt4_s3c_reason_t reason, const char *marker
 /* The bounded EINTR retry budget.  An unbounded retry loop is not a bounded contract. */
 #define MT4_S3C_MAX_REAP_INTERRUPTS 4096
 
+/*
+ * THE ONE AUTHORITATIVE REAP TRANSITION (repair 3).
+ *
+ * Reap state was previously encoded in PIECES: some paths that had definitively reaped the child
+ * cleared `child` and stopped there, leaving `reaped` false and the lifecycle state behind.  The
+ * teardown then saw an unreaped child and declared a terminal infrastructure failure for a case
+ * that had in fact completed honestly -- a false accept in the opposite direction.
+ *
+ * There is now exactly ONE way to record a reap, and it records all three facts together.  A path
+ * that has not authoritatively reaped the child must not use it; a path that has must use nothing
+ * else.  It is a macro rather than a function because the state it owns is per-case local, and
+ * splitting it across a pointer-passing helper would reintroduce the possibility of setting one
+ * part without the others.
+ */
+#define MT4_S3C_MARK_CHILD_REAPED()                                                                \
+    do {                                                                                           \
+        child = -1;                                                                                \
+        reaped = 1;                                                                                \
+        dumpability_state = MT4_S3C_DUMPABILITY_CHILD_REAPED;                                      \
+    } while (0)
+
 /* Authenticate, never assume: the value is READ BACK from the kernel. */
 static int mt4_s3c_supervisor_dumpability_is(int expected)
 {
@@ -2283,7 +2304,7 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
             result->wait_signalled = WIFSIGNALED(status_word);
             result->wait_signal = result->wait_signalled ? WTERMSIG(status_word) : 0;
             mt4_s3c_case_fail(result, MT4_S3C_REASON_LAUNCH_FAILED, "died_before_trace");
-            child = -1;
+            MT4_S3C_MARK_CHILD_REAPED();
             goto teardown;
         }
     }
@@ -2334,19 +2355,25 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
             if (errno == EINTR) {
                 continue;
             }
+            /*
+             * ECHILD, EINVAL or anything else here means the supervisor can no longer establish
+             * what happened to the child.  That is infrastructure, not a case outcome, and it goes
+             * on the terminal channel so no final evidence is produced.
+             */
             mt4_s3c_case_fail(result, MT4_S3C_REASON_SUPERVISOR_REAP_FAILED, "waitpid");
+            mt4_s3c_terminal_failure(MT4_S3C_REASON_SUPERVISOR_REAP_FAILED, "stepping_wait");
             break;
         }
         if (WIFEXITED(status_word)) {
             result->wait_exited = 1;
             result->wait_exit_status = WEXITSTATUS(status_word);
-            child = -1;
+            MT4_S3C_MARK_CHILD_REAPED();
             break;
         }
         if (WIFSIGNALED(status_word)) {
             result->wait_signalled = 1;
             result->wait_signal = WTERMSIG(status_word);
-            child = -1;
+            MT4_S3C_MARK_CHILD_REAPED();
             break;
         }
         if (!WIFSTOPPED(status_word)) {
@@ -2590,7 +2617,7 @@ teardown:
                         result->wait_exited = 1;
                         result->wait_exit_status = WEXITSTATUS(status_word);
                     }
-                    reaped = 1;
+                    MT4_S3C_MARK_CHILD_REAPED();
                     break;
                 }
                 if (WIFSIGNALED(status_word)) {
@@ -2598,7 +2625,7 @@ teardown:
                         result->wait_signalled = 1;
                         result->wait_signal = WTERMSIG(status_word);
                     }
-                    reaped = 1;
+                    MT4_S3C_MARK_CHILD_REAPED();
                     break;
                 }
                 if (WIFSTOPPED(status_word)) {
@@ -2606,11 +2633,12 @@ teardown:
                 }
             }
         }
+        /*
+         * 2A: the transition happened, or did not, inside the loop -- through the one authoritative
+         * macro.  `child` is cleared here for the failure path so nothing later attempts a second
+         * reap of a pid whose fate could not be established.
+         */
         child = -1;
-        /* 2A: the transition happens ONLY on an authoritative successful reap. */
-        if (reaped) {
-            dumpability_state = MT4_S3C_DUMPABILITY_CHILD_REAPED;
-        }
     }
     if (request_pipe[1] >= 0) {
         (void)close(request_pipe[1]);

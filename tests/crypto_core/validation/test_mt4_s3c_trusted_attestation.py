@@ -269,7 +269,11 @@ def test_exactly_one_digest_bound_trusted_entrypoint_is_declared():
 # thing it validates proves nothing.
 # =================================================================================================
 
-CONTIGUITY_MEASUREMENT = 'if [ "${ACTUAL_GATE_SHA256}" != "${APPROVED_S3C_TRUSTED_GATE_SHA256}" ]; then'
+# The transition is owned from the MEASUREMENT COMMAND onward.  Starting at the comparison left a
+# window -- between hashing the file and comparing the hash -- in which a mutating command could
+# have replaced the very bytes that were measured, and the oracle would not have looked there.
+CONTIGUITY_MEASUREMENT = 'sha256sum "${GITHUB_WORKSPACE}/${TRUSTED_GATE_PATH}"'
+CONTIGUITY_COMPARISON = 'if [ "${ACTUAL_GATE_SHA256}" != "${APPROVED_S3C_TRUSTED_GATE_SHA256}" ]; then'
 CONTIGUITY_INVOCATION = "env -i "
 
 # Between the measurement and the invocation only these forms may appear.  Anything else -- an
@@ -278,8 +282,12 @@ _CONTIGUITY_ALLOWED = (
     re.compile(r"^\s*$"),
     re.compile(r"^\s*#"),
     re.compile(r"^\s*fi\s*$"),
-    re.compile(r'^\s*echo "S3C_[A-Z0-9_]+(=(\$\{[A-Z_]+\}|[A-Z_]+))?"\s*$'),
+    re.compile(r'^\s*echo "S3C_[A-Z0-9_]+(=(\$\{[A-Z_0-9]+\}|[A-Z_0-9]+))?"\s*$'),
     re.compile(r"^\s*exit 1\s*$"),
+    # The measurement region additionally reads the digest it just wrote and compares it.
+    re.compile(r'^\s*ACTUAL_GATE_SHA256=""\s*$'),
+    re.compile(r'^\s*read -r ACTUAL_GATE_SHA256 _ < "\$\{RUNNER_TEMP\}/trusted/gate\.sha"\s*$'),
+    re.compile(r'^\s*if \[ "\$\{ACTUAL_GATE_SHA256\}" != "\$\{APPROVED_S3C_TRUSTED_GATE_SHA256\}" \]; then\s*$'),
 )
 
 # CROSS-STEP STATE MUTATION, IN EVERY WRITTEN FORM (repair 4).
@@ -308,6 +316,22 @@ def _normalise_shell(script):
         normalised = normalised.replace(character, "")
     normalised = normalised.replace("${", "$").replace("}", "")
     return normalised
+
+
+_INDIRECT_EXPANSION = re.compile(r"\$\{!")
+
+
+def _indirect_expansion(script):
+    """`${!TARGET}` resolves a variable NAMED by another variable.
+
+    A static reader cannot tell what it will expand to, so it cannot prove the redirection target is
+    not an environment file.  It is refused outright rather than analysed.
+    """
+    for line in script.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and _INDIRECT_EXPANSION.search(stripped):
+            return line
+    return None
 
 
 def _environment_file_mutation(script):
@@ -407,12 +431,15 @@ def assert_contiguous(workflow):
     start = next(index for index, line in enumerate(lines) if CONTIGUITY_MEASUREMENT in line)
     end = next(index for index, line in enumerate(lines) if line.lstrip().startswith(CONTIGUITY_INVOCATION))
     assert start < end, "the measurement must precede the invocation"
+    # THE WHOLE TRANSITION, from the measurement command to the invocation, admits only the frozen
+    # forms.  A mutating command placed between the hash and the comparison is now visible.
+    comparison = next(index for index, line in enumerate(lines) if CONTIGUITY_COMPARISON in line)
+    assert start < comparison < end, "the comparison must sit inside the transition"
     for line in lines[start + 1 : end]:
         assert any(pattern.match(line) for pattern in _CONTIGUITY_ALLOWED), line
 
     # 3. THE MEASUREMENT ITSELF IS NOT CHECKOUT-CONTROLLED.
     before = "\n".join(lines[:start])
-    assert "sha256sum" in before, "the gate bytes must be measured by a trusted system tool"
     # No INTERPRETER INVOCATION may run before the measurement.  Naming ${TRUSTED_PYTHON} while
     # validating it is not an invocation; executing python is.
     interpreter = re.compile(r"(^|[;&|]|\s)(python[0-9.]*|perl|ruby|node)\s")
@@ -427,6 +454,7 @@ def assert_contiguous(workflow):
             assert not pattern.search("uses: " + uses if uses else ""), (label, step.get("name"))
         assert _unquoted_glob(script_text) is None, ("a glob", step.get("name"))
         assert _environment_file_mutation(script_text) is None, ("cross-step state mutation", step.get("name"))
+        assert _indirect_expansion(script_text) is None, ("indirect expansion", step.get("name"))
 
     # 5. THE INVOCATION IS THE FROZEN ONE, matched POSITIVELY.
     invocation = "\n".join(lines[end:])
@@ -604,6 +632,76 @@ def test_the_measurement_must_measure_the_invoked_path(trusted_workflow):
         assert_contiguous(_mutate(trusted_workflow, transform))
 
 
+def _insert_between_measurement_and_comparison(steps, injected):
+    """Split the transition BETWEEN the hash command and the comparison.
+
+    This is the window the old oracle could not see: the bytes have been measured, but the
+    measurement has not been acted on yet, so a command here replaces the file that was measured.
+    """
+    for index, step in enumerate(steps):
+        script = step.get("run") or ""
+        if CONTIGUITY_MEASUREMENT not in script:
+            continue
+        lines = script.splitlines()
+        cut = next(position for position, line in enumerate(lines) if CONTIGUITY_MEASUREMENT in line) + 1
+        steps[index] = dict(step, run="\n".join(lines[:cut] + [injected.rstrip()] + lines[cut:]) + "\n")
+        return
+    raise AssertionError("no measuring step")
+
+
+@pytest.mark.parametrize(
+    ("label", "injected"),
+    (
+        ("gate rewritten after the hash", '          printf "x" >> "${GITHUB_WORKSPACE}/${TRUSTED_GATE_PATH}"'),
+        ("gate replaced after the hash", '          cp /tmp/other.py "${GITHUB_WORKSPACE}/${TRUSTED_GATE_PATH}"'),
+        ("gate relinked after the hash", '          ln -sf /tmp/other.py "${GITHUB_WORKSPACE}/${TRUSTED_GATE_PATH}"'),
+        ("digest file rewritten", '          echo deadbeef > "${RUNNER_TEMP}/trusted/gate.sha"'),
+        ("an interpreter runs after the hash", '          python3 -c "pass"'),
+    ),
+)
+def test_a_mutation_between_the_hash_and_the_comparison_is_rejected(trusted_workflow, label, injected):
+    """REPAIR 5.  The oracle owns the transition from the MEASUREMENT COMMAND onward."""
+    mutant = _mutate(trusted_workflow, lambda steps: _insert_between_measurement_and_comparison(steps, injected))
+    with pytest.raises(AssertionError):
+        assert_contiguous(mutant)
+
+
+@pytest.mark.parametrize(
+    ("label", "script"),
+    (
+        ("indirect env write", "TARGET=GITHUB_ENV" + chr(10) + 'echo X=1 >> "${!TARGET}"' + chr(10)),
+        ("indirect path write", "TARGET=GITHUB_PATH" + chr(10) + 'echo /tmp >> "${!TARGET}"' + chr(10)),
+        ("indirect anything", 'echo "${!NAME}"' + chr(10)),
+    ),
+)
+def test_indirect_expansion_cannot_reach_an_environment_file(trusted_workflow, label, script):
+    """REPAIR 5.  `${!VAR}` names a variable at runtime, so a static reader cannot prove the target.
+
+    It is refused outright rather than analysed -- the whole point of the rule is that its target is
+    not statically knowable.
+    """
+    assert _indirect_expansion(script) is not None, label
+
+    def transform(steps):
+        steps.insert(1, {"name": "injected", "shell": "bash", "run": script})
+
+    with pytest.raises(AssertionError):
+        assert_contiguous(_mutate(trusted_workflow, transform))
+
+
+def test_the_oracle_begins_at_the_measurement_command(trusted_workflow):
+    """The transition's first owned line is the hash command itself, not the comparison."""
+    steps, final = _final_transition_step(trusted_workflow)
+    del steps
+    lines = final["run"].splitlines()
+    measurement = next(index for index, line in enumerate(lines) if CONTIGUITY_MEASUREMENT in line)
+    comparison = next(index for index, line in enumerate(lines) if CONTIGUITY_COMPARISON in line)
+    assert measurement < comparison, "the hash is taken before it is compared"
+    # Everything between them is inside the owned region.
+    for line in lines[measurement + 1 : comparison]:
+        assert any(pattern.match(line) for pattern in _CONTIGUITY_ALLOWED), line
+
+
 def test_a_repo_local_action_anywhere_in_the_trusted_workflow_is_rejected(trusted_workflow):
     def transform(steps):
         steps.insert(1, {"name": "local action", "uses": "./.github/actions/helper"})
@@ -682,6 +780,7 @@ def test_the_approved_constants_live_only_on_the_trusted_surface():
 _DRIVER = """
 import hashlib
 import io
+import zlib
 import json
 import sys
 import zipfile
@@ -798,8 +897,11 @@ def z_constants_are_literal():
     ) * 25 + 20000 + gate.MAX_RECORD_ENVELOPE_BYTES
     assert worst <= gate.MAX_MEMBER_UNCOMPRESSED_JSON
     assert gate.EXPECTED_MEMBERS[CANDIDATE] == (WORKER, MANIFEST)
+    # The observation and receipt artifacts now also carry their job's observed invocation log, so
+    # the whole build graph reaches the trusted surface; the ELF record artifact stays single.
+    assert len(gate.EXPECTED_MEMBERS[gate.ELF_ARTIFACT]) == 1
     for name, members in gate.EXPECTED_MEMBERS.items():
-        assert len(members) == (2 if name == CANDIDATE else 1)
+        assert len(members) == (1 if name == gate.ELF_ARTIFACT else 2), name
 
 
 def total_count_all_four_conditions():
@@ -867,9 +969,12 @@ def _complete_inventory():
             "path": path,
             "class": "UPSTREAM_PINNED",
             "provenance": gate.PROVENANCE_UPSTREAM_PINNED,
-            "sha256": format(700 + index, "064x"),
+            # REPAIR 12: a producer per-file hash is not authority, so the slot is EMPTY.  The
+            # trusted pinned identity -- repository, release, commit, source-tree digest -- binds
+            # these inputs instead.
+            "sha256": "",
         }
-        for index, path in enumerate(gate.REQUIRED_UPSTREAM_INPUTS)
+        for path in gate.REQUIRED_UPSTREAM_INPUTS
     ]
     entries.append(
         {
@@ -991,148 +1096,55 @@ def dependency_inventory_recomputation():
 # THE SELF-ANCHORED STAGE-C AUTHORITY (repair 2).
 # =================================================================================================
 
-_FPROG_VA = 0x4016A0
-_PROGRAM_VA = 0x401700
-_SECTION_ADDR = 0x401000
-_SECTION_SIZE = 0x1000
-_SECTION_OFFSET = 0x1000
-_LOAD_VADDR = 0x400000
-_LOAD_FILESZ = 0x3000
-_LOAD_OFFSET = 0
+def _work_dir():
+    return sys.argv[sys.argv.index("--work-dir") + 1]
+
+
+def _worker_bytes():
+    with open(_work_dir() + "/worker.bin", "rb") as handle:
+        return handle.read()
+
+
+def _reviewed_a2():
+    with open(_work_dir() + "/worker_a2.json", "rb") as handle:
+        return json.loads(handle.read().decode("utf-8"))
 
 
 def _canonical():
     return gate.stage_c_canonical_internal_policy()
 
 
-def _place(prefix, symbol_va):
-    # One coherent placement: SYMBOL subset-of SECTION subset-of PT_LOAD, with the file and virtual
-    # views in exact agreement, which is what the trusted binding now requires.
-    return {
-        prefix + "_section_index": 1,
-        prefix + "_section_name": ".rodata.mt4_s3c_filter",
-        prefix + "_section_addr_u64": _SECTION_ADDR,
-        prefix + "_section_size_bytes": _SECTION_SIZE,
-        prefix + "_section_file_offset_u64": _SECTION_OFFSET,
-        prefix + "_section_type_u32": 1,
-        prefix + "_section_flags_u64": 2,
-        prefix + "_section_file_offset_of_symbol_u64": _SECTION_OFFSET + (symbol_va - _SECTION_ADDR),
-        prefix + "_load_index": 0,
-        prefix + "_load_vaddr_u64": _LOAD_VADDR,
-        prefix + "_load_filesz_u64": _LOAD_FILESZ,
-        prefix + "_load_file_offset_u64": _LOAD_OFFSET,
-        prefix + "_load_flags_u32": 5,
-    }
+def _reconstructed():
+    # Stage C's OWN parse of the real image.  Nothing here reads A2.
+    return gate.stage_c_reconstruct_worker_authority(_worker_bytes(), _canonical())
 
 
-def _expected_fprog_bytes(canonical, program_va=_PROGRAM_VA):
-    return (
-        canonical["cbpf_instruction_count"].to_bytes(2, "little")
-        + bytes(6)
-        + program_va.to_bytes(8, "little")
-    )
-
-
-def _elf_record(canonical, **overrides):
-    objects = {
-        "fprog_symbol": "mt4_s3c_internal_filter_fprog",
-        "fprog_va_u64": _FPROG_VA,
-        "fprog_file_offset_u64": _SECTION_OFFSET + (_FPROG_VA - _SECTION_ADDR),
-        "fprog_size_bytes": 16,
-        "fprog_segment_flags_u32": 5,
-        "fprog_bytes_sha256": hashlib.sha256(_expected_fprog_bytes(canonical)).hexdigest(),
-        "program_symbol": "mt4_s3c_internal_filter_program",
-        "program_va_u64": _PROGRAM_VA,
-        "program_file_offset_u64": _SECTION_OFFSET + (_PROGRAM_VA - _SECTION_ADDR),
-        "program_size_bytes": canonical["cbpf_instruction_count"] * 8,
-        "program_segment_flags_u32": 5,
-        "program_instruction_count": canonical["cbpf_instruction_count"],
-        "program_bytes_sha256": canonical["program_bytes_sha256"],
-    }
-    objects.update(_place("fprog", _FPROG_VA))
-    objects.update(_place("program", _PROGRAM_VA))
-    objects.update(overrides)
-    return {"canonical_internal_filter_object": objects}
-
-
-def _sealed_elf_record(canonical, **overrides):
-    # A COMPLETE A2 record whose self-digest is recomputed exactly as an honest producer would, so
-    # that a reseal test changes only the value under test and nothing else.
-    record = {
-        "schema": gate.ELF_RECORD_SCHEMA,
-        "platform_id": "LINUX_X86_64",
-        "candidate_binary_sha256": "d" * 64,
-        "compile_dependency_inventory_digest_sha256": "e" * 64,
-    }
-    record.update(_elf_record(canonical))
+def _sealed_elf_record(**overrides):
+    # A2 as the REVIEWED QUALIFIER produced it, resealed after any mutation so the record is
+    # internally perfect -- which is exactly the attack the reconstruction has to defeat.
+    record = _reviewed_a2()
     for key, value in overrides.items():
+        if key == "__drop__":
+            for field in value:
+                record.pop(field, None)
+            continue
+        if key == "__drop_filter__":
+            for field in value:
+                record["canonical_internal_filter_object"].pop(field, None)
+            continue
+        if key == "__drop_cap__":
+            for field in value:
+                record["blst_platform_cap"].pop(field, None)
+            continue
         if key in record["canonical_internal_filter_object"]:
             record["canonical_internal_filter_object"][key] = value
+        elif key in record["blst_platform_cap"]:
+            record["blst_platform_cap"][key] = value
         else:
             record[key] = value
+    record.pop("elf_qualification_digest_sha256", None)
     record["elf_qualification_digest_sha256"] = gate.domain_digest(gate.ELF_RECORD_DIGEST_DOMAIN, record)
     return record
-
-
-def elf_record_digest_recomputation():
-    # REPAIR 1B.  The A2 digest is DERIVED from A2's own record, so a substituted digest fails even
-    # when A4 repeats it, and a tampered field fails even when the digest is left alone.
-    canonical = _canonical()
-    honest = _sealed_elf_record(canonical)
-    assert gate.recompute_elf_record_digest(honest) == honest["elf_qualification_digest_sha256"]
-
-    substituted = json.loads(json.dumps(honest))
-    substituted["elf_qualification_digest_sha256"] = "1" * 64
-    expect("ELF_QUALIFICATION_DIGEST_MISMATCH", lambda: gate.recompute_elf_record_digest(substituted))
-
-    tampered = json.loads(json.dumps(honest))
-    tampered["canonical_internal_filter_object"]["program_va_u64"] = 0x7FFF0000
-    expect("ELF_QUALIFICATION_DIGEST_MISMATCH", lambda: gate.recompute_elf_record_digest(tampered))
-
-    # A COORDINATED A2 reseal -- the record is changed AND its digest recomputed, so it is
-    # internally perfect -- still fails, because the binding below is anchored on Stage C's own
-    # canonical program rather than on anything A2 says about itself.
-    resealed = _sealed_elf_record(canonical, program_bytes_sha256="b" * 64)
-    assert gate.recompute_elf_record_digest(resealed) == resealed["elf_qualification_digest_sha256"]
-    expect(
-        "FILTER_OBJECT_BINDING_INVALID",
-        lambda: gate.stage_c_validate_filter_object(resealed, canonical),
-    )
-
-
-def filter_object_containment():
-    # REPAIR 1A.  SYMBOL subset-of DECLARED SECTION subset-of APPROVED PT_LOAD, at every level.
-    canonical = _canonical()
-    assert gate.stage_c_validate_filter_object(_elf_record(canonical), canonical)["program_va_u64"] == _PROGRAM_VA
-
-    for label, override in (
-        ("symbol escapes its section", {"program_va_u64": _SECTION_ADDR + _SECTION_SIZE - 8}),
-        ("section is not allocated", {"program_section_flags_u64": 0}),
-        ("section holds no file bytes", {"program_section_type_u32": 8}),
-        ("section escapes its mapping", {"program_section_addr_u64": _LOAD_VADDR + _LOAD_FILESZ}),
-        ("file and virtual views disagree", {"program_section_file_offset_u64": _SECTION_OFFSET + 8}),
-        ("declared file offset disagrees", {"program_file_offset_u64": 0x2222}),
-        ("writable mapping", {"program_load_flags_u32": 6}),
-        ("unreadable mapping", {"program_load_flags_u32": 1}),
-        ("reserved section index", {"program_section_index": 0xFF20}),
-        ("null section index", {"program_section_index": 0}),
-        ("fprog points elsewhere", {"fprog_bytes_sha256": "c" * 64}),
-        ("objects overlap", {"fprog_va_u64": _PROGRAM_VA + 8}),
-    ):
-        expect(
-            "FILTER_OBJECT_BINDING_INVALID",
-            lambda override=override: gate.stage_c_validate_filter_object(
-                _elf_record(canonical, **override), canonical
-            ),
-        )
-
-    # A coordinated A2 move -- the address changes AND the fprog descriptor is rebuilt to match --
-    # still fails, because the section that is supposed to contain it does not.
-    moved = _elf_record(canonical, program_va_u64=0x7FF000000000)
-    moved["canonical_internal_filter_object"]["fprog_bytes_sha256"] = hashlib.sha256(
-        _expected_fprog_bytes(canonical, 0x7FF000000000)
-    ).hexdigest()
-    expect("FILTER_OBJECT_BINDING_INVALID", lambda: gate.stage_c_validate_filter_object(moved, canonical))
 
 
 def _observation(canonical, **overrides):
@@ -1150,13 +1162,13 @@ def _observation(canonical, **overrides):
     return record
 
 
-def _case(canonical, **overrides):
+def _case(canonical, fprog_va, program_va, **overrides):
     record = {
         "case_id": "C01_POSITIVE_EXACT_FIXTURE",
         "internal_capture": {
             "program_bytes_hex": canonical["cbpf_program_bytes"].hex(),
-            "fprog_va_u64": _FPROG_VA,
-            "filter_va_u64": _PROGRAM_VA,
+            "fprog_va_u64": fprog_va,
+            "filter_va_u64": program_va,
             "length": canonical["cbpf_instruction_count"],
             "install_return_i32": 0,
         },
@@ -1175,6 +1187,156 @@ def _case(canonical, **overrides):
     }
     record.update(overrides)
     return record
+
+
+def _equivalence_digest_for(canonical, case, observation):
+    # The digest an HONEST observer would compute, built from the same frozen field set Stage C
+    # uses.  It is derived here rather than read back from Stage C so the comparison has two sides.
+    capture = case["internal_capture"]
+    baseline = case["seccomp_baseline"]
+    return gate.domain_digest(
+        gate.INTERNAL_EQUIVALENCE_DIGEST_DOMAIN,
+        {
+            "schema": gate.INTERNAL_EQUIVALENCE_SCHEMA,
+            "canonical_internal_policy_id": canonical["policy_id"],
+            "canonical_internal_policy_sha256": canonical["policy_sha256"],
+            "program_representation_version": gate.PROGRAM_REPRESENTATION_VERSION,
+            "canonical_internal_cbpf_instruction_count": canonical["cbpf_instruction_count"],
+            "canonical_internal_cbpf_sha256": canonical["cbpf_sha256"],
+            "captured_internal_cbpf_sha256": gate.cbpf_digest(bytes.fromhex(capture["program_bytes_hex"])),
+            "captured_internal_uargs_va_u64": capture["fprog_va_u64"],
+            "captured_internal_len_u32": capture["length"],
+            "install_exit_return_i32": capture["install_return_i32"],
+            "baseline_supervisor_seccomp": baseline["supervisor_seccomp"],
+            "baseline_supervisor_filters": baseline["supervisor_filters"],
+            "baseline_child_seccomp": baseline["child_seccomp"],
+            "baseline_child_filters": baseline["child_filters"],
+            "pre_install_filters": baseline["outer_post_filters"],
+            "post_install_filters": baseline["internal_post_filters"],
+            "post_install_seccomp_mode": baseline["internal_post_seccomp"],
+            "revalidated_filters": baseline["revalidated_filters"],
+            "dump_leg_availability": case["dump_leg"]["availability"],
+            "dump_leg_index0_sha256": "",
+            "dump_leg_index1_sha256": "",
+            "dump_leg_terminates_at_index": -1,
+            "case_id": case["case_id"],
+            "source_run_id": observation["source_run_id"],
+            "source_run_attempt": observation["source_run_attempt"],
+            "source_head_sha": observation["source_head_sha"],
+            "candidate_binary_sha256": observation["candidate_binary_sha256"],
+        },
+    )
+
+
+def stage_c_worker_reconstruction():
+    # REPAIR 1B.  Stage C's independent parse AGREES with the reviewed qualifier on every governed
+    # coordinate.  Two implementations, one binary, one answer.
+    canonical = _canonical()
+    reconstructed = _reconstructed()
+    reviewed = _reviewed_a2()
+    for field in ("entry_va_u64", "program_header_count", "section_header_count"):
+        assert reconstructed[field] == reviewed["elf"][field], field
+    assert reconstructed["observed_phdr_inventory"] == reviewed["observed_phdr_inventory"]
+    for block in ("blst_platform_cap", "canonical_internal_filter_object"):
+        for field, value in sorted(reconstructed[block].items()):
+            assert reviewed[block][field] == value, block + "." + field
+    # And the reconstruction is anchored on the canonical program, not on anything A2 said.
+    assert reconstructed["canonical_internal_filter_object"]["program_bytes_sha256"] == canonical["program_bytes_sha256"]
+
+    # The honest A2 binds cleanly.
+    gate.validate_a2_schema(reviewed)
+    gate.bind_a2_to_reconstruction(reviewed, reconstructed)
+
+
+def a2_truncation_and_relocation():
+    # REPAIR 1A and 1D.  A truncated A2 fails on the schema; a relocated A2 fails on the bytes.
+    canonical = _canonical()
+    reconstructed = _reconstructed()
+
+    for field in (
+        "blst_platform_cap",
+        "canonical_internal_filter_object",
+        "undefined_symbol_closure",
+        "observed_phdr_inventory",
+        "program_headers",
+        "sections",
+        "memory",
+        "elf",
+    ):
+        expect(
+            "ELF_RECORD_SCHEMA_INVALID",
+            lambda field=field: gate.validate_a2_schema(_sealed_elf_record(__drop__=(field,))),
+        )
+    for field in ("program_va_u64", "program_section_addr_u64", "program_load_vaddr_u64", "program_file_offset_u64"):
+        expect(
+            "ELF_RECORD_SCHEMA_INVALID",
+            lambda field=field: gate.validate_a2_schema(_sealed_elf_record(__drop_filter__=(field,))),
+        )
+    for field in ("section_index", "load_flags_u32", "file_offset_u64"):
+        expect(
+            "ELF_RECORD_SCHEMA_INVALID",
+            lambda field=field: gate.validate_a2_schema(_sealed_elf_record(__drop_cap__=(field,))),
+        )
+    # An EXTRA field is a record this contract does not describe.
+    expect("ELF_RECORD_SCHEMA_INVALID", lambda: gate.validate_a2_schema(_sealed_elf_record(unreviewed_field=1)))
+
+    # COORDINATED RELOCATION: A2 moves an object and reseals itself perfectly.  The bytes disagree.
+    for label, override in (
+        ("object virtual address", {"program_va_u64": 0x7FF000000000}),
+        ("object file offset", {"program_file_offset_u64": 0x2222}),
+        ("object size", {"program_size_bytes": 800}),
+        ("section address", {"program_section_addr_u64": 0x500000}),
+        ("section file offset", {"program_section_file_offset_u64": 0x9999}),
+        ("section index", {"program_section_index": 2}),
+        ("load flags", {"program_load_flags_u32": 6}),
+        ("load vaddr", {"program_load_vaddr_u64": 0x300000}),
+        ("capability address", {"va_u64": 0x7FF000000000}),
+        ("capability section", {"section_index": 2}),
+        ("phdr inventory", {"observed_phdr_inventory": "PT_LOAD:5:0x1000"}),
+        ("entry point", {"elf": None}),
+    ):
+        if override.get("elf") is None and "elf" in override:
+            record = _reviewed_a2()
+            record["elf"]["entry_va_u64"] = 0x999999
+            record.pop("elf_qualification_digest_sha256", None)
+            record["elf_qualification_digest_sha256"] = gate.domain_digest(gate.ELF_RECORD_DIGEST_DOMAIN, record)
+        else:
+            record = _sealed_elf_record(**override)
+        # The reseal is perfect: A2's own digest still verifies.
+        assert gate.recompute_elf_record_digest(record) == record["elf_qualification_digest_sha256"], label
+        expect(
+            "ELF_RECORD_CONTRADICTS_CANDIDATE",
+            lambda record=record: gate.bind_a2_to_reconstruction(record, reconstructed),
+        )
+
+    del canonical
+
+
+def stage_c_outer_program_binding():
+    # REPAIR 2.  The OBSERVED outer program is bound to Stage C's reconstruction.
+    outer = gate.stage_c_canonical_outer_policy()
+    honest = {
+        "outer_capture": {
+            "valid": True,
+            "program_bytes_hex": outer["cbpf_program_bytes"].hex(),
+            "length": outer["cbpf_instruction_count"],
+            "install_return_i32": 0,
+            "fprog_va_u64": 0x401000,
+            "filter_va_u64": 0x401100,
+        }
+    }
+    assert gate.bind_observed_outer_program(honest, outer, None) == outer["cbpf_sha256"]
+
+    for label, mutate in (
+        ("substituted program", lambda case: case["outer_capture"].update({"program_bytes_hex": bytes(400 * 8).hex()})),
+        ("wrong length", lambda case: case["outer_capture"].update({"length": 399})),
+        ("failed install", lambda case: case["outer_capture"].update({"install_return_i32": -1})),
+        ("not captured", lambda case: case["outer_capture"].update({"valid": False})),
+    ):
+        case = json.loads(json.dumps(honest))
+        mutate(case)
+        expect("OUTER_FILTER_EQUIVALENCE_FAILED", lambda case=case: gate.bind_observed_outer_program(case, outer, None))
+        del label
 
 
 def stage_c_self_anchored_authority():
@@ -1211,10 +1373,12 @@ def stage_c_outer_policy_reconstruction():
 
 def stage_c_equivalence_recomputation():
     canonical = _canonical()
-    elf_record = _elf_record(canonical)
-    filter_object = gate.stage_c_validate_filter_object(elf_record, canonical)
+    reconstructed = _reconstructed()
+    filter_object = reconstructed["canonical_internal_filter_object"]
+    fprog_va = filter_object["fprog_va_u64"]
+    program_va = filter_object["program_va_u64"]
     observation = _observation(canonical)
-    case = _case(canonical)
+    case = _case(canonical, fprog_va, program_va)
 
     # The honest digest, discovered by asking Stage C what it recomputes.
     try:
@@ -1223,42 +1387,10 @@ def stage_c_equivalence_recomputation():
     except gate.TrustedGateError as error:
         assert "A3 vs Stage C" in str(error)
 
-    honest = gate.domain_digest(
-        gate.INTERNAL_EQUIVALENCE_DIGEST_DOMAIN,
-        {
-            "schema": gate.INTERNAL_EQUIVALENCE_SCHEMA,
-            "canonical_internal_policy_id": canonical["policy_id"],
-            "canonical_internal_policy_sha256": canonical["policy_sha256"],
-            "program_representation_version": gate.PROGRAM_REPRESENTATION_VERSION,
-            "canonical_internal_cbpf_instruction_count": canonical["cbpf_instruction_count"],
-            "canonical_internal_cbpf_sha256": canonical["cbpf_sha256"],
-            "captured_internal_cbpf_sha256": canonical["cbpf_sha256"],
-            "captured_internal_uargs_va_u64": _FPROG_VA,
-            "captured_internal_len_u32": canonical["cbpf_instruction_count"],
-            "install_exit_return_i32": 0,
-            "baseline_supervisor_seccomp": 0,
-            "baseline_supervisor_filters": 0,
-            "baseline_child_seccomp": 0,
-            "baseline_child_filters": 0,
-            "pre_install_filters": 1,
-            "post_install_filters": 2,
-            "post_install_seccomp_mode": 2,
-            "revalidated_filters": 2,
-            "dump_leg_availability": "UNAVAILABLE_IN_PINNED_ENVIRONMENT",
-            "dump_leg_index0_sha256": "",
-            "dump_leg_index1_sha256": "",
-            "dump_leg_terminates_at_index": -1,
-            "case_id": "C01_POSITIVE_EXACT_FIXTURE",
-            "source_run_id": 4242,
-            "source_run_attempt": 1,
-            "source_head_sha": "c" * 40,
-            "candidate_binary_sha256": "d" * 64,
-        },
-    )
+    honest = _equivalence_digest_for(canonical, case, observation)
     case["internal_filter_equivalence"]["digest_sha256"] = honest
     assert gate.stage_c_equivalence_digest(observation, case, honest, canonical, filter_object) == honest
 
-    # A4 alone changed -> mismatch.  A3 alone changed -> mismatch.  Both must agree with Stage C.
     expect(
         "INTERNAL_FILTER_EQUIVALENCE_DIGEST_MISMATCH",
         lambda: gate.stage_c_equivalence_digest(observation, case, "e" * 64, canonical, filter_object),
@@ -1275,75 +1407,61 @@ def stage_c_equivalence_recomputation():
         "INTERNAL_FILTER_EQUIVALENCE_CONSTRAINT_VIOLATED",
         lambda: gate.stage_c_equivalence_digest(observation, broken, honest, canonical, filter_object),
     )
+    # A capture at an address the RECONSTRUCTION does not place the object at is refused.
+    moved = json.loads(json.dumps(case))
+    moved["internal_capture"]["fprog_va_u64"] = 0x7FFF00000000
+    expect(
+        "INTERNAL_FILTER_EQUIVALENCE_FAILED",
+        lambda: gate.stage_c_equivalence_digest(observation, moved, honest, canonical, filter_object),
+    )
 
 
 def coordinated_reseal_is_rejected():
-    # THE CENTRAL REPAIR-2 ORACLE.
-    #
-    # A3 and A4 are resealed TOGETHER and CONSISTENTLY with the same false value, so every
-    # cross-record equality the old gate relied on still holds.  Each substitution must still fail,
-    # because the authority it contradicts is Stage C's own reconstruction rather than anything the
-    # unprivileged job supplied.
-    #
+    # THE CENTRAL REPAIR-2 ORACLE, now anchored on the reconstruction rather than on A2.
     canonical = _canonical()
-    elf_record = _elf_record(canonical)
-    filter_object = gate.stage_c_validate_filter_object(elf_record, canonical)
+    reconstructed = _reconstructed()
+    filter_object = reconstructed["canonical_internal_filter_object"]
+    fprog_va = filter_object["fprog_va_u64"]
+    program_va = filter_object["program_va_u64"]
 
     def sealed(observation, case):
-        # Recompute the digest the way a resealing attacker would, then present it as A3 AND A4.
-        # The attacker cannot know Stage C's expected digest, but can make A3 and A4 agree with
-        # each other perfectly.  That agreement is what must stop being sufficient.
         forged = "9" * 64
         case = json.loads(json.dumps(case))
         case["internal_filter_equivalence"]["digest_sha256"] = forged
         return lambda: gate.stage_c_equivalence_digest(observation, case, forged, canonical, filter_object)
 
-    # 1. A false internal policy ID, declared consistently.
     expect(
         "STAGE_C_CANONICAL_POLICY_SUBSTITUTED",
-        sealed(_observation(canonical, canonical_internal_policy_id="ATTACKER_POLICY"), _case(canonical)),
+        sealed(
+            _observation(canonical, canonical_internal_policy_id="ATTACKER_POLICY"),
+            _case(canonical, fprog_va, program_va),
+        ),
     )
-    # 2. A false internal policy digest.
     expect(
         "STAGE_C_CANONICAL_POLICY_SUBSTITUTED",
-        sealed(_observation(canonical, canonical_internal_policy_sha256="a" * 64), _case(canonical)),
+        sealed(
+            _observation(canonical, canonical_internal_policy_sha256="a" * 64),
+            _case(canonical, fprog_va, program_va),
+        ),
     )
-    # 3. A false cBPF instruction count.
     expect(
         "STAGE_C_CANONICAL_POLICY_SUBSTITUTED",
-        sealed(_observation(canonical, canonical_internal_cbpf_instruction_count=112), _case(canonical)),
+        sealed(
+            _observation(canonical, canonical_internal_cbpf_instruction_count=112),
+            _case(canonical, fprog_va, program_va),
+        ),
     )
-    # 4. A false cBPF digest, with a capture that matches it -- the fully consistent reseal.
     weaker = bytes(113 * 8)
-    coordinated_case = _case(canonical)
+    coordinated_case = _case(canonical, fprog_va, program_va)
     coordinated_case["internal_capture"]["program_bytes_hex"] = weaker.hex()
     expect(
         "STAGE_C_CANONICAL_POLICY_SUBSTITUTED",
         sealed(_observation(canonical, canonical_internal_cbpf_sha256=gate.cbpf_digest(weaker)), coordinated_case),
     )
-    # 5. A capture at an address the authenticated ELF record does not place the object at.
-    moved = _case(canonical)
-    moved["internal_capture"]["fprog_va_u64"] = 0x7FFF00000000
+    moved = _case(canonical, 0x7FFF00000000, program_va)
     expect("INTERNAL_FILTER_EQUIVALENCE_FAILED", sealed(_observation(canonical), moved))
-    moved_filter = _case(canonical)
-    moved_filter["internal_capture"]["filter_va_u64"] = 0x7FFF00000000
+    moved_filter = _case(canonical, fprog_va, 0x7FFF00000000)
     expect("INTERNAL_FILTER_EQUIVALENCE_FAILED", sealed(_observation(canonical), moved_filter))
-    # 6. An ELF record that claims a DIFFERENT program at the same address.
-    expect(
-        "FILTER_OBJECT_BINDING_INVALID",
-        lambda: gate.stage_c_validate_filter_object(_elf_record(canonical, program_bytes_sha256="b" * 64), canonical),
-    )
-    expect(
-        "FILTER_OBJECT_BINDING_INVALID",
-        lambda: gate.stage_c_validate_filter_object(_elf_record(canonical, program_instruction_count=112), canonical),
-    )
-    # 7. A writable filter mapping is never an acceptable home for the canonical object.  The
-    #    authority is the PT_LOAD that actually maps the declared section, not a repeated flag.
-    expect(
-        "FILTER_OBJECT_BINDING_INVALID",
-        lambda: gate.stage_c_validate_filter_object(_elf_record(canonical, program_load_flags_u32=6), canonical),
-    )
-    # 8. A false case-set digest cannot be adopted: Stage C recomputes it from its own table.
     assert gate.stage_c_case_set_digest() != "0" * 64
 
 
@@ -1464,63 +1582,110 @@ def _canonical_bytes(payload):
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
 
 
-def _instance(instance_id, kind, inputs, libraries=(), flags=()):
+def _instance(instance_id, kind, inputs, libraries=(), flags=(), output="out.o"):
     return {
         "instance_id": instance_id,
         "kind": kind,
         "tool": "gcc",
-        "argv": ["gcc", "-c", "-o", "out.o"] + list(inputs),
+        "argv": ["gcc", "-c", "-o", output] + [item["path"] for item in inputs],
         "flags": sorted(flags),
         "include_roots": [],
         "inputs": list(inputs),
         "libraries": sorted(libraries),
-        "output": "out.o",
+        "output": output,
         "working_directory_class": "GITHUB_WORKSPACE",
     }
 
 
-def _complete_instances():
-    # ONE record per REAL native invocation, exactly the set the reviewed workflow performs.
-    bundled = {
-        "worker-bootstrap": "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_bootstrap.c",
-        "worker-policy": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c",
-        "worker-capability": "scripts/crypto_core/qualification/s3c/mt4_s3c_blst_capability.c",
-        "worker-verify": "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_verify.c",
-        "worker-start": "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_start.S",
-        "observer-probe": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c",
-        "observer-launcher": "scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c",
-    }
+_BUNDLED_SOURCE = {
+    "worker-bootstrap": "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_bootstrap.c",
+    "worker-policy": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c",
+    "worker-capability": "scripts/crypto_core/qualification/s3c/mt4_s3c_blst_capability.c",
+    "worker-verify": "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_verify.c",
+    "worker-start": "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_start.S",
+    "observer-probe": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c",
+    "observer-launcher": "scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c",
+    "observer-policy": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c",
+    "observe-policy": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c",
+    "observe-probe": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c",
+    "observe-launcher": "scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c",
+    "adjudicate-policy": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c",
+    "adjudicate-probe": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c",
+}
+
+_LINK_INPUTS = {
+    "worker-link": ("start.o", "bootstrap.o"),
+    "observer-link": ("launcher.o", "policy.o"),
+    "observe-probe-link": ("probe.o", "policy.o"),
+    "observe-observer-link": ("launcher.o", "policy.o"),
+    "adjudicate-probe-link": ("probe.o", "policy.o"),
+}
+
+# Which object each compile produces, so the producer -> consumer edges close.
+_COMPILE_OUTPUT = {
+    "worker-start": "start.o",
+    "worker-bootstrap": "bootstrap.o",
+    "observer-launcher": "launcher.o",
+    "observer-policy": "policy.o",
+    "observer-probe": "probe.o",
+    "observe-launcher": "launcher.o",
+    "observe-policy": "policy.o",
+    "observe-probe": "probe.o",
+    "adjudicate-policy": "policy.o",
+    "adjudicate-probe": "probe.o",
+}
+
+
+def _graph_instance(instance_id, kind):
+    if kind == "COMPILE":
+        if instance_id in _BUNDLED_SOURCE:
+            inputs = [{"path": _BUNDLED_SOURCE[instance_id], "class": "REPO_BUNDLED"}]
+        elif instance_id == "blst-server":
+            inputs = [{"path": "src/server.c", "class": "UPSTREAM_PINNED"}]
+        else:
+            inputs = [{"path": "build/assembly.S", "class": "UPSTREAM_PINNED"}]
+        output = _COMPILE_OUTPUT.get(instance_id, instance_id + ".o")
+        return _instance(instance_id, kind, inputs, output=output)
+    inputs = [{"path": "/tmp/" + name, "class": "EXTERNAL_TOOLCHAIN"} for name in _LINK_INPUTS[instance_id]]
+    libraries = ("cap",) if instance_id in ("observer-link", "observe-observer-link") else ()
+    flags = gate.REQUIRED_WORKER_LINK_FLAGS if instance_id == "worker-link" else ()
+    return _instance(instance_id, kind, inputs, libraries=libraries, flags=flags, output=instance_id)
+
+
+def _build_job_instances():
     instances = [
-        _instance(name, "COMPILE", [{"path": path, "class": "REPO_BUNDLED"}])
-        for name, path in sorted(bundled.items())
+        _graph_instance(name, "LINK" if name in gate.REQUIRED_LINK_INSTANCES else "COMPILE")
+        for name in gate.BUILD_JOB_INSTANCES
     ]
-    instances.append(_instance("blst-server", "COMPILE", [{"path": "src/server.c", "class": "UPSTREAM_PINNED"}]))
-    instances.append(
-        _instance("blst-assembly", "COMPILE", [{"path": "build/assembly.S", "class": "UPSTREAM_PINNED"}])
-    )
-    instances.append(
-        _instance(
-            "observer-link",
-            "LINK",
-            [{"path": "/tmp/launcher.o", "class": "EXTERNAL_TOOLCHAIN"}],
-            libraries=("cap",),
-        )
-    )
-    instances.append(
-        _instance(
-            "worker-link",
-            "LINK",
-            [{"path": "/tmp/start.o", "class": "EXTERNAL_TOOLCHAIN"}],
-            flags=gate.REQUIRED_WORKER_LINK_FLAGS,
-        )
-    )
     instances.sort(key=lambda item: item["instance_id"])
     return {
         "schema": gate.COMPILE_INSTANCE_SCHEMA,
         "instance_count": len(instances),
         "instances": instances,
         "instance_id_order": [item["instance_id"] for item in instances],
+        "system_libraries": [
+            {
+                "name": "cap",
+                "resolved_path": "/usr/lib/x86_64-linux-gnu/libcap.so.2.44",
+                "soname": "libcap.so.2.44",
+                "digest_sha256": "b" * 64,
+                "provenance": gate.PROVENANCE_SYSTEM_LIBRARY,
+            }
+        ],
     }
+
+
+def _job_log(names):
+    return {
+        "schema": gate.INSTANCE_LOG_SCHEMA,
+        "instances": [
+            _graph_instance(name, "LINK" if name in gate.REQUIRED_LINK_INSTANCES else "COMPILE") for name in names
+        ],
+    }
+
+
+def _complete_instances():
+    return _build_job_instances()
 
 
 def _build_world(mutate=None):
@@ -1529,9 +1694,11 @@ def _build_world(mutate=None):
     outer = gate.stage_c_canonical_outer_policy()
     case_set = gate.stage_c_case_set_digest()
 
-    elf_record = _sealed_elf_record(canonical)
-    worker = b"\x7fELF" + bytes(508)
+    # The REAL synthetic worker image, and the A2 the REVIEWED qualifier derived from it.  Stage C
+    # parses these same bytes itself, so a mutation to A2 alone can no longer agree with anything.
+    worker = _worker_bytes()
     worker_digest = hashlib.sha256(worker).hexdigest()
+    elf_record = _reviewed_a2()
     elf_record["candidate_binary_sha256"] = worker_digest
 
     dependency = _complete_inventory()
@@ -1551,16 +1718,26 @@ def _build_world(mutate=None):
     }
 
     cases = []
+    reconstructed = gate.stage_c_reconstruct_worker_authority(worker, canonical)
+    objects = reconstructed["canonical_internal_filter_object"]
     for row in gate.TRUSTED_CASE_INVENTORY:
         cases.append(
             {
                 "case_id": row[1],
                 "internal_capture": {
                     "program_bytes_hex": canonical["cbpf_program_bytes"].hex(),
-                    "fprog_va_u64": _FPROG_VA,
-                    "filter_va_u64": _PROGRAM_VA,
+                    "fprog_va_u64": objects["fprog_va_u64"],
+                    "filter_va_u64": objects["program_va_u64"],
                     "length": canonical["cbpf_instruction_count"],
                     "install_return_i32": 0,
+                },
+                "outer_capture": {
+                    "valid": True,
+                    "program_bytes_hex": outer["cbpf_program_bytes"].hex(),
+                    "length": outer["cbpf_instruction_count"],
+                    "install_return_i32": 0,
+                    "fprog_va_u64": 1,
+                    "filter_va_u64": 2,
                 },
                 "seccomp_baseline": {
                     "supervisor_seccomp": 0,
@@ -1605,7 +1782,12 @@ def _build_world(mutate=None):
         "observation_case_set_digest_sha256": case_set,
         "canonical_internal_policy_id": canonical["policy_id"],
         "canonical_internal_policy_sha256": canonical["policy_sha256"],
+        "canonical_internal_cbpf_instruction_count": canonical["cbpf_instruction_count"],
         "canonical_internal_cbpf_sha256": canonical["cbpf_sha256"],
+        "canonical_outer_policy_id": outer["policy_id"],
+        "canonical_outer_policy_sha256": outer["policy_sha256"],
+        "canonical_outer_cbpf_instruction_count": outer["cbpf_instruction_count"],
+        "canonical_outer_cbpf_sha256": outer["cbpf_sha256"],
         "case_count": 25,
         "all_cases_conform": True,
         "evidence_status": "ADMISSION_EVIDENCE_ONLY",
@@ -1622,6 +1804,10 @@ def _build_world(mutate=None):
         "receipt": receipt,
         "dependency": dependency,
         "instances": _complete_instances(),
+        "observe_log": _job_log(
+            ("observe-policy", "observe-probe", "observe-probe-link", "observe-launcher", "observe-observer-link")
+        ),
+        "adjudicate_log": _job_log(("adjudicate-policy", "adjudicate-probe", "adjudicate-probe-link")),
         "bundle": {"entries": _bundle_entries()},
         "artifact_ids": dict(ARTIFACT_IDS),
         "archive_digests": {name: "sha256:" + format(index, "064x") for index, name in enumerate(ARTIFACT_IDS)},
@@ -1650,7 +1836,9 @@ def _build_world(mutate=None):
 
     # SEAL: the per-case equivalence digests are computed the way an honest producer would, AFTER
     # any mutation, so a coordinated reseal is genuinely internally consistent.
-    filter_object = gate.stage_c_validate_filter_object(world["elf_record"], world["canonical"])
+    filter_object = gate.stage_c_reconstruct_worker_authority(world["worker"], world["canonical"])[
+        "canonical_internal_filter_object"
+    ]
     digests = []
     for case in world["observation"]["cases"]:
         record = _equivalence_record(world, case, filter_object)
@@ -1662,7 +1850,7 @@ def _build_world(mutate=None):
     return world
 
 
-def _equivalence_record(world, case, filter_object):
+def _equivalence_record(world, case, filter_object):  # noqa: ARG001 - kept for call-site symmetry
     observation = world["observation"]
     capture = case["internal_capture"]
     baseline = case["seccomp_baseline"]
@@ -1708,10 +1896,16 @@ def _install_world(world, work_dir):
             [("mt4_s3c_elf_qualification_record.json", _canonical_bytes(world["elf_record"]))]
         ),
         world["artifact_ids"]["mt4-s3c-raw-observation-record"]: _zip_bytes(
-            [("mt4_s3c_raw_observation_record.json", _canonical_bytes(world["observation"]))]
+            [
+                ("mt4_s3c_raw_observation_record.json", _canonical_bytes(world["observation"])),
+                ("mt4_s3c_observe_instances.json", _canonical_bytes(world["observe_log"])),
+            ]
         ),
         world["artifact_ids"]["mt4-s3c-qualification-receipt"]: _zip_bytes(
-            [("mt4_s3c_qualification_receipt.json", _canonical_bytes(world["receipt"]))]
+            [
+                ("mt4_s3c_qualification_receipt.json", _canonical_bytes(world["receipt"])),
+                ("mt4_s3c_adjudicate_instances.json", _canonical_bytes(world["adjudicate_log"])),
+            ]
         ),
     }
     artifacts = []
@@ -1873,12 +2067,12 @@ def run_gate_coordinated_reseal():
     _expect_run_gate("ELF_QUALIFICATION_DIGEST_MISMATCH", false_elf_digest)
 
     def false_address(world):
-        # A2 moves the object and A4 follows.  The declared section no longer contains it.
+        # A2 moves the object and A4 follows.  The BYTES do not move, so the reconstruction wins.
         world["elf_record"]["canonical_internal_filter_object"]["program_va_u64"] = 0x7FF000000000
         for case in world["observation"]["cases"]:
             case["internal_capture"]["filter_va_u64"] = 0x7FF000000000
 
-    _expect_run_gate("FILTER_OBJECT_BINDING_INVALID", false_address)
+    _expect_run_gate("ELF_RECORD_CONTRADICTS_CANDIDATE", false_address)
 
     def false_receipt_relation(world):
         # A4 claims a candidate artifact id the SERVICE does not report.
@@ -2233,6 +2427,84 @@ def z_matrix_streaming():
         assert "Error" not in str(error)
 
 
+def z_matrix_streaming_bounds():
+    # REPAIR 8.  Z15, Z17 and Z18 each reach their OWN rule, and the tail accounting is exercised
+    # by a member that genuinely leaves a non-empty unconsumed_tail.
+    members = gate.EXPECTED_MEMBERS[CANDIDATE]
+
+    # A member whose ratio is legal by DECLARATION but whose real expansion crosses the bound
+    # mid-stream: Z18 owns it, and it is a different rule from Z13.
+    base = bytes((index * 31 + (index >> 5)) & 0xFF for index in range(150000))
+    body = b"".join(bytes((value,)) * 8 for value in base)
+    payload = build_archive([(WORKER, body), (MANIFEST, b"{}")])
+    contents, _digests = gate.extract_artifact(payload, members)
+    assert contents[WORKER] == body
+
+    # THE TAIL IS REAL.  Each 64 KiB input chunk expands to far more than the per-call production
+    # cap, so decompress() returns early and leaves unconsumed_tail non-empty; the accounting must
+    # not count those bytes as consumed, and must not count them twice when they are re-offered.
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        info = archive.getinfo(WORKER)
+    header_offset = info.header_offset
+    header = payload[header_offset : header_offset + 30]
+    data_start = header_offset + 30 + int.from_bytes(header[26:28], "little") + int.from_bytes(header[28:30], "little")
+    decompressor = zlib.decompressobj(-15)
+    chunk = payload[data_start : data_start + gate.CHUNK_BYTES]
+    decompressor.decompress(chunk, gate.CHUNK_BYTES)
+    assert len(decompressor.unconsumed_tail) > 0, "the fixture must actually force a tail"
+
+    # Z15: a member whose real output exceeds its own cap.  The manifest cap is the smaller one, so
+    # a JSON member that expands past it is stopped by the stream bound rather than by the
+    # declaration.
+    class _Lying:
+        filename = MANIFEST
+        file_size = gate.MAX_MEMBER_UNCOMPRESSED_JSON + 1
+        compress_size = gate.MAX_MEMBER_UNCOMPRESSED_JSON
+        compress_type = 8
+        flag_bits = 0
+        external_attr = 0
+
+        def is_dir(self):
+            return False
+
+    expect(
+        "ZIP_DECLARED_SIZE",
+        lambda: gate.pre_decompression_gate(
+            _info_archive([_Info(WORKER), _Lying()]), b"x", members
+        ),
+    )
+
+    # Z17: the AGGREGATE streamed bound, reached through the real reader by pre-loading the shared
+    # aggregate state close to its limit.
+    small = build_archive([(WORKER, b"A" * 64), (MANIFEST, b"{}")])
+    with zipfile.ZipFile(io.BytesIO(small)) as archive:
+        infos = archive.infolist()
+        state = {"streamed": gate.MAX_AGGREGATE_UNCOMPRESSED}
+        expect(
+            "ZIP_AGGREGATE_OVERRUN",
+            lambda: gate.stream_member(archive, infos[0], state, small),
+        )
+
+    # Z19 boundary: the exact declared size is accepted, one more is not.
+    exact = build_archive([(WORKER, b"B" * 1024), (MANIFEST, b"{}")])
+    contents, _digests = gate.extract_artifact(exact, members)
+    assert len(contents[WORKER]) == 1024
+
+
+def z_ratio_boundary():
+    # REPAIR 8.  The declared-ratio bound is EXACT at the boundary and fails one past it.
+    members = gate.EXPECTED_MEMBERS[CANDIDATE]
+
+    class _AtBound(_Info):
+        pass
+
+    at_bound = [_Info(WORKER, file_size=1000, compress_size=10), _Info(MANIFEST)]
+    gate.pre_decompression_gate(_info_archive(at_bound), b"x", members)
+    over = [_Info(WORKER, file_size=1001, compress_size=10), _Info(MANIFEST)]
+    expect("ZIP_DECLARED_RATIO", lambda: gate.pre_decompression_gate(_info_archive(over), b"x", members))
+    del _AtBound
+
+
 def startup_attestation_state():
     assert sys.flags.isolated == 1
     assert sys.flags.no_site == 1
@@ -2255,8 +2527,9 @@ check("total_count_all_four_conditions", total_count_all_four_conditions)
 check("source_bundle_recomputation", source_bundle_recomputation)
 check("dependency_inventory_recomputation", dependency_inventory_recomputation)
 check("stage_c_self_anchored_authority", stage_c_self_anchored_authority)
-check("elf_record_digest_recomputation", elf_record_digest_recomputation)
-check("filter_object_containment", filter_object_containment)
+check("stage_c_worker_reconstruction", stage_c_worker_reconstruction)
+check("a2_truncation_and_relocation", a2_truncation_and_relocation)
+check("stage_c_outer_program_binding", stage_c_outer_program_binding)
 check("stage_c_outer_policy_reconstruction", stage_c_outer_policy_reconstruction)
 check("stage_c_equivalence_recomputation", stage_c_equivalence_recomputation)
 check("coordinated_reseal_is_rejected", coordinated_reseal_is_rejected)
@@ -2267,6 +2540,8 @@ check("run_gate_duplicate_identities", run_gate_duplicate_identities)
 check("run_gate_compile_provenance", run_gate_compile_provenance)
 check("z_matrix_pre_decompression", z_matrix_pre_decompression)
 check("z_matrix_streaming", z_matrix_streaming)
+check("z_matrix_streaming_bounds", z_matrix_streaming_bounds)
+check("z_ratio_boundary", z_ratio_boundary)
 check("startup_attestation_state", startup_attestation_state)
 
 canonical = gate.stage_c_canonical_internal_policy()
@@ -2294,6 +2569,37 @@ def _sanitised_environment():
     return environment
 
 
+_QUALIFICATION_TESTS = (
+    _REPO_ROOT / "tests" / "crypto_core" / "validation" / "test_mt4_s3c_static_worker_qualification.py"
+)
+
+
+def _qualification_module():
+    """The sibling test module owns the synthetic ELF builder; reuse it rather than duplicate it."""
+    specification = importlib.util.spec_from_file_location("mt4_s3c_qualification_tests", _QUALIFICATION_TESTS)
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
+def build_worker_and_record(**overrides):
+    """A REAL synthetic worker image plus the A2 record the REVIEWED qualifier derives from it.
+
+    This is what makes the Stage-C reconstruction a genuine second opinion: A2 comes from the
+    independent reviewed implementation, and Stage C parses the same bytes with its own parser.  If
+    the two ever disagreed about a governed coordinate, the honest path would fail.
+    """
+    module = _qualification_module()
+    image = module.build_reference_elf(**overrides)
+    record = module.elf_qualify.qualify(
+        image,
+        module._PAGE,
+        module.elf_qualify.canonical_phdr_inventory(module.elf_qualify.EXPECTED_PHDR_INVENTORY),
+        "e" * 64,
+    )
+    return image, record
+
+
 _DRIVER_VALUES = []
 
 
@@ -2303,6 +2609,12 @@ def driver_results(tmp_path_factory):
     workspace = tmp_path_factory.mktemp("s3c_driver")
     driver = workspace / "mt4_s3c_gate_driver.py"
     driver.write_text(_DRIVER, encoding="utf-8")
+
+    # The worker image and the reviewed qualifier's A2 record travel to the isolated driver as
+    # DATA.  The driver may not import a repository module, so it cannot build them itself.
+    image, record = build_worker_and_record()
+    (workspace / "worker.bin").write_bytes(image)
+    (workspace / "worker_a2.json").write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
 
     def declaration(path):
         return hashlib.sha256(path.read_bytes()).hexdigest() + ":" + str(path).replace("\\", "/")
@@ -2363,8 +2675,9 @@ def driver_values(driver_results):
         "source_bundle_recomputation",
         "dependency_inventory_recomputation",
         "stage_c_self_anchored_authority",
-        "elf_record_digest_recomputation",
-        "filter_object_containment",
+        "stage_c_worker_reconstruction",
+        "a2_truncation_and_relocation",
+        "stage_c_outer_program_binding",
         "stage_c_outer_policy_reconstruction",
         "stage_c_equivalence_recomputation",
         "coordinated_reseal_is_rejected",
@@ -2375,6 +2688,8 @@ def driver_values(driver_results):
         "run_gate_compile_provenance",
         "z_matrix_pre_decompression",
         "z_matrix_streaming",
+        "z_matrix_streaming_bounds",
+        "z_ratio_boundary",
         "startup_attestation_state",
     ),
 )

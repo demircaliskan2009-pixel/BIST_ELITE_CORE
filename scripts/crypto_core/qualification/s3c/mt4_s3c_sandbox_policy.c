@@ -367,10 +367,54 @@ const struct sock_fprog mt4_s3c_outer_filter_fprog = {
  * uninstalled.  The internal filter can therefore only narrow the outer one, never widen it.
  * ------------------------------------------------------------------------------------------- */
 
+/* ---------------------------------------------------------------------------------------------
+ * TEST-ONLY INTERNAL FILTER MUTATION (permanent test PT-141).
+ *
+ * WHY THIS EXISTS.  PT-141 has to prove that a filter the WORKER ITSELF emits, differing from the
+ * canonical one, is rejected by the qualification chain.  Constructing different bytes in Python
+ * and handing them to the adjudicator does not prove that: it exercises the consumer against a
+ * fabricated input, not the producer's own emission path.  The mutation therefore lives HERE, in
+ * the source that actually emits the worker's internal filter.
+ *
+ * WHY PRODUCTION CANNOT ENABLE IT BY ACCIDENT.  It requires TWO macros to be defined together, one
+ * of which spells out that the result is not qualifiable, and defining only the first is a
+ * compile-time error rather than a silently mutated filter.  Neither macro appears anywhere in the
+ * qualification workflow, and a permanent test asserts that.
+ *
+ * WHAT IT CHANGES.  Exactly one argument constant in the worker's own read entry: the request
+ * descriptor the internal filter permits.  The instruction COUNT is unchanged, so the mutant still
+ * builds and still installs -- which is the point.  The bytes differ, so the captured program can
+ * no longer equal the canonical one, and the equivalence digest cannot match.  Nothing else moves:
+ * the outer filter, the probe, the trusted reference and the receipt framework are untouched.
+ * ------------------------------------------------------------------------------------------- */
+
+#ifdef MT4_S3C_TEST_ONLY_INTERNAL_FILTER_MUTANT
+#ifndef MT4_S3C_TEST_ONLY_NOT_QUALIFIABLE
+#error "MT4_S3C_TEST_ONLY_INTERNAL_FILTER_MUTANT requires MT4_S3C_TEST_ONLY_NOT_QUALIFIABLE"
+#endif
+/* The mutated worker permits reading a DIFFERENT descriptor than the governed request descriptor. */
+#define MT4_S3C_INTERNAL_READ_FD 0
+#else
+#define MT4_S3C_INTERNAL_READ_FD MT4_S3C_FD_REQUEST
+#endif
+
+/*
+ * The internal read entry, written out so the mutable descriptor constant is visible at exactly one
+ * place.  The shape is identical to MT4_S3C_ENTRY_READ; only the descriptor is parameterised.
+ */
+#define MT4_S3C_ENTRY_READ_INTERNAL(base, next_entry, kill)                                                        \
+    MT4_S3C_NR_MATCH((base) + 0, __NR_read, (next_entry)),                                                   \
+        MT4_S3C_ARG_EXACT((base) + 3, (kill), 0, MT4_S3C_INTERNAL_READ_FD),                            \
+        MT4_S3C_ARG_RANGE((base) + 9, (kill), 2, 1, MT4_S3C_REQUEST_FRAME_BYTES),                      \
+        MT4_S3C_ARG_EXACT((base) + 17, (kill), 3, 0),                                                  \
+        MT4_S3C_ARG_EXACT((base) + 23, (kill), 4, 0),                                                  \
+        MT4_S3C_ARG_EXACT((base) + 29, (kill), 5, 0), MT4_S3C_ALLOW()
+
 MT4_S3C_FILTER_RODATA
 const struct sock_filter mt4_s3c_internal_filter_program[MT4_S3C_INTERNAL_PROGRAM_LEN] = {
     MT4_S3C_PROLOGUE(MT4_S3C_INTERNAL_BASE_PROLOGUE, MT4_S3C_INTERNAL_INDEX_KILL),
-    MT4_S3C_ENTRY_READ(MT4_S3C_INTERNAL_BASE_READ, MT4_S3C_INTERNAL_BASE_WRITE, MT4_S3C_INTERNAL_INDEX_KILL),
+    MT4_S3C_ENTRY_READ_INTERNAL(MT4_S3C_INTERNAL_BASE_READ, MT4_S3C_INTERNAL_BASE_WRITE,
+                                MT4_S3C_INTERNAL_INDEX_KILL),
     MT4_S3C_ENTRY_WRITE(MT4_S3C_INTERNAL_BASE_WRITE, MT4_S3C_INTERNAL_BASE_EXIT_GROUP,
                         MT4_S3C_INTERNAL_INDEX_KILL),
     MT4_S3C_ENTRY_EXIT_GROUP(MT4_S3C_INTERNAL_BASE_EXIT_GROUP, MT4_S3C_INTERNAL_INDEX_KILL,

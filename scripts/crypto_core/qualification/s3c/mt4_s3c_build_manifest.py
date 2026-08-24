@@ -30,6 +30,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 import sys
 
 # =================================================================================================
@@ -159,6 +160,39 @@ INSTANCE_KINDS = (INSTANCE_KIND_COMPILE, INSTANCE_KIND_LINK)
 
 CLASS_SYSTEM_LIBRARY = "SYSTEM_LIBRARY"
 PROVENANCE_SYSTEM_LIBRARY = "UBUNTU_22_04_PINNED_RUNNER_LIBRARY"
+APPROVED_SYSTEM_LIBRARY_ROOTS = ("/usr/lib/", "/lib/")
+
+
+def resolve_system_library(name, compiler):
+    """Repair 11.  Ask the LINKER which file it selects for -l<name>, then identify that file.
+
+    `-lcap` is a search request; the answer depends on the search path, so the name alone is not
+    provenance.  The compiler's own --print-file-name gives the file it would link, which is the
+    only answer that describes this build.  An unresolved or out-of-root answer fails closed rather
+    than being recorded as a guess.
+    """
+    for candidate in ("lib" + name + ".so", "lib" + name + ".a"):
+        completed = subprocess.run(  # noqa: S603 - fixed argument vector, no shell
+            [compiler, "--print-file-name=" + candidate], check=False, capture_output=True, text=True
+        )
+        resolved = completed.stdout.strip()
+        if completed.returncode != 0 or not resolved or resolved == candidate:
+            continue
+        resolved = os.path.realpath(resolved)
+        if not os.path.isfile(resolved):
+            continue
+        if not any(resolved.startswith(root) for root in APPROVED_SYSTEM_LIBRARY_ROOTS):
+            _fail("SYSTEM_LIBRARY_RESOLUTION_OUT_OF_ROOT", resolved)
+        return {
+            "name": name,
+            "resolved_path": resolved,
+            "soname": os.path.basename(resolved),
+            "digest_sha256": _sha256_file(resolved),
+            "provenance": PROVENANCE_SYSTEM_LIBRARY,
+        }
+    _fail("SYSTEM_LIBRARY_UNRESOLVED", name)
+    return None
+
 
 COMPILE_INSTANCE_FIELDS = (
     "argv",
@@ -172,6 +206,25 @@ COMPILE_INSTANCE_FIELDS = (
     "tool",
     "working_directory_class",
 )
+
+# =================================================================================================
+# THE OBSERVED BUILD GRAPH (repair 10).
+#
+# WHAT WAS WRONG.  The inventory was a HAND-WRITTEN list of declarations passed on the command line.
+# A declaration is a claim about a build, not a record of one: it can drift from the commands that
+# actually ran, and an auditor counting real invocations in the workflow got a different number.
+#
+# The build now goes through a WRAPPER.  Every gcc invocation the workflow makes is executed by
+# mt4_s3c_build_manifest.py itself, which records the exact argv it is about to run, runs it, and
+# appends one canonical instance record on success.  The inventory is therefore an OBSERVATION of
+# the real graph rather than a description of an intended one, and a command the workflow runs
+# without the wrapper simply does not appear -- which the coverage rules below then reject.
+#
+# PRODUCER -> CONSUMER EDGES are explicit: every link instance names the object files it consumes,
+# and every one of those must be the output of a recorded compile instance.
+# =================================================================================================
+
+INSTANCE_LOG_SCHEMA = "mt4-s3c-build-instance-log.v1"
 
 # The instances that MUST be present.  Derived from the reviewed workflow's actual commands, not
 # from a count reported by an earlier implementation.
@@ -270,6 +323,41 @@ def parse_compile_instance(declaration, repository_root, upstream_root):
     }
 
 
+def record_invocation(log_path, instance_id, kind, argv, repository_root, upstream_root):
+    """Run ONE real native invocation and append its observed record.
+
+    The wrapper is the single point at which a build command becomes evidence: the argv recorded is
+    the argv executed, because the same list is used for both.
+    """
+    completed = subprocess.run(argv, check=False)  # noqa: S603 - argv is a fixed list, no shell
+    if completed.returncode != 0:
+        _fail("BUILD_INVOCATION_FAILED", instance_id)
+    record = parse_compile_instance(kind + ":" + instance_id + ":" + " ".join(argv), repository_root, upstream_root)
+    entries = []
+    if os.path.exists(log_path):
+        with open(log_path, "rb") as handle:
+            entries = json.loads(handle.read().decode("utf-8"))["instances"]
+    entries.append(record)
+    with open(log_path, "wb") as handle:
+        handle.write(canonical_json({"schema": INSTANCE_LOG_SCHEMA, "instances": entries}))
+    return record
+
+
+def load_observed_instances(log_path):
+    """Read the OBSERVED invocation log the wrapper produced."""
+    if not os.path.exists(log_path):
+        _fail("BUILD_INSTANCE_LOG_MISSING")
+    with open(log_path, "rb") as handle:
+        payload = json.loads(handle.read().decode("utf-8"))
+    if not isinstance(payload, dict) or payload.get("schema") != INSTANCE_LOG_SCHEMA:
+        _fail("BUILD_INSTANCE_LOG_MALFORMED", "schema")
+    instances = payload.get("instances")
+    if not isinstance(instances, list) or not instances:
+        _fail("BUILD_INSTANCE_LOG_MALFORMED", "instances")
+    validate_compile_instances(instances)
+    return sorted(instances, key=lambda instance: instance["instance_id"])
+
+
 def build_compile_instance_inventory(declarations, repository_root, upstream_root):
     instances = [parse_compile_instance(item, repository_root, upstream_root) for item in declarations]
     validate_compile_instances(instances)
@@ -308,21 +396,32 @@ def validate_compile_instances(instances):
     for required in REQUIRED_SYSTEM_LIBRARIES:
         if required not in observed_libraries:
             _fail("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", "system library " + required)
+
+    # Repair 10: PRODUCER -> CONSUMER edges.  Every object a link consumes must be the recorded
+    # output of a recorded compile, so a link cannot quietly consume an object nobody observed
+    # being built.
+    produced = {instance["output"] for instance in instances if instance["kind"] == INSTANCE_KIND_COMPILE}
+    for instance in links:
+        for item in instance["inputs"]:
+            consumed = os.path.basename(item["path"])
+            if consumed.endswith(".o") and consumed not in produced:
+                _fail("COMPILE_INSTANCE_LINK_INPUT_UNPRODUCED", consumed)
     return instances
 
 
-def compile_instance_preimage(instances):
+def compile_instance_preimage(instances, system_libraries=()):
     return {
         "schema": COMPILE_INSTANCE_SCHEMA,
         "instance_count": len(instances),
         "instances": instances,
         "instance_id_order": [instance["instance_id"] for instance in instances],
+        "system_libraries": sorted(system_libraries, key=lambda entry: entry["name"]),
     }
 
 
-def compile_instance_digest(instances):
+def compile_instance_digest(instances, system_libraries=()):
     return hashlib.sha256(
-        COMPILE_INSTANCE_DIGEST_DOMAIN + canonical_json(compile_instance_preimage(instances))
+        COMPILE_INSTANCE_DIGEST_DOMAIN + canonical_json(compile_instance_preimage(instances, system_libraries))
     ).hexdigest()
 
 
@@ -414,7 +513,13 @@ def build_dependency_inventory(dependency_files, repository_root, upstream_root)
                     _fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_UNBUNDLED", normalised)
                 digest = _sha256_file(os.path.join(repository_root, normalised))
             elif kind == CLASS_UPSTREAM_PINNED:
-                digest = _sha256_file(os.path.join(upstream_root, normalised))
+                # REPAIR 12.  The trusted surface holds no independent per-file table for the pinned
+                # upstream tree, so a per-file hash computed here would be a producer claim sitting
+                # inside a trusted equality chain while proving nothing.  The pinned identity that
+                # IS trusted -- repository, release, commit and source-tree digest -- binds these
+                # inputs instead, and the per-file slot is left empty so it cannot be mistaken for
+                # a verified value.
+                digest = ""
             else:
                 # An external toolchain path carries no content digest by design: the toolchain is
                 # outside the measured set, which is exactly what makes leg E non-circular.
@@ -451,6 +556,9 @@ def validate_dependency_inventory(inventory):
         if entry["class"] == CLASS_EXTERNAL_TOOLCHAIN:
             if entry["sha256"] != "":
                 _fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_MALFORMED", "external entry carries a digest")
+        elif entry["class"] == CLASS_UPSTREAM_PINNED:
+            if entry["sha256"] != "":
+                _fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_MALFORMED", "upstream entry carries a per-file digest")
         elif not _is_hex64(entry["sha256"]):
             _fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_MALFORMED", "missing digest for " + entry["path"])
         if entry["class"] == CLASS_REPO_BUNDLED and entry["path"] not in SOURCE_BUNDLE_PATHS:
@@ -545,7 +653,7 @@ def source_bundle_digest(entries):
 # =================================================================================================
 
 
-def build_manifest(arguments, inventory, include_roots, instances):
+def build_manifest(arguments, inventory, include_roots, instances, system_libraries=()):
     binary_digest = _sha256_file(arguments.worker_binary)
     binary_bytes = os.path.getsize(arguments.worker_binary)
     if binary_bytes <= 0 or binary_bytes > MAX_WORKER_BINARY_BYTES:
@@ -575,7 +683,7 @@ def build_manifest(arguments, inventory, include_roots, instances):
         "compile_dependency_inventory_digest_sha256": dependency_inventory_digest(inventory),
         "compile_instance_inventory_schema": COMPILE_INSTANCE_SCHEMA,
         "compile_instance_count": len(instances),
-        "compile_instance_inventory_digest_sha256": compile_instance_digest(instances),
+        "compile_instance_inventory_digest_sha256": compile_instance_digest(instances, system_libraries),
         "source_run_id": arguments.source_run_id,
         "source_run_attempt": arguments.source_run_attempt,
         "source_head_sha": arguments.source_head_sha,
@@ -631,7 +739,8 @@ _REQUIRED_BUILD_ARGUMENTS = (
     "repository_root",
     "upstream_root",
     "dependency_file",
-    "compile_instance",
+    "instance_log",
+    "system_library",
     "include_root",
     "build_macro",
     "compiler_identity",
@@ -653,6 +762,13 @@ def main(argv=None):
     parser.add_argument("--upstream-root")
     parser.add_argument("--dependency-file", action="append")
     parser.add_argument("--compile-instance", action="append")
+    # THE BUILD WRAPPER (repair 10).  The workflow runs every native command through this, so the
+    # recorded argv is the executed argv and the inventory is an observation rather than a claim.
+    parser.add_argument("--run-invocation")
+    parser.add_argument("--invocation-kind")
+    parser.add_argument("--instance-log")
+    parser.add_argument("--system-library", action="append")
+    parser.add_argument("--compiler", default="gcc")
     parser.add_argument("--include-root", action="append")
     parser.add_argument("--build-macro", action="append")
     parser.add_argument("--compiler-identity")
@@ -665,6 +781,24 @@ def main(argv=None):
     parser.add_argument("--out")
     args = parser.parse_args(argv)
 
+    if args.run_invocation:
+        if not args.instance_log or not args.invocation_kind or not args.repository_root or not args.upstream_root:
+            _fail("BUILD_MANIFEST_ARGUMENT_MISSING", "--run-invocation")
+        separator = argv.index("--") if argv is not None and "--" in argv else sys.argv.index("--")
+        command = (argv if argv is not None else sys.argv)[separator + 1 :]
+        if not command:
+            _fail("BUILD_MANIFEST_ARGUMENT_MISSING", "invocation argv")
+        record_invocation(
+            args.instance_log,
+            args.run_invocation,
+            args.invocation_kind,
+            command,
+            args.repository_root,
+            args.upstream_root,
+        )
+        sys.stdout.write("MT4_S3C_BUILD_INSTANCE_RECORDED=" + args.run_invocation + "\n")
+        return 0
+
     if args.emit_env_from_manifest:
         if not args.emit_env:
             _fail("BUILD_MANIFEST_ARGUMENT_MISSING", "--emit-env")
@@ -676,14 +810,17 @@ def main(argv=None):
 
     include_roots = check_include_roots(args.include_root, args.repository_root, args.upstream_root)
     inventory = build_dependency_inventory(args.dependency_file, args.repository_root, args.upstream_root)
-    instances = build_compile_instance_inventory(args.compile_instance, args.repository_root, args.upstream_root)
-    manifest = build_manifest(args, inventory, include_roots, instances)
+    # REPAIR 10: the inventory comes from the OBSERVED invocation log the wrapper wrote.
+    instances = load_observed_instances(args.instance_log)
+    # REPAIR 11: every system library the links consumed is resolved to an actual file identity.
+    system_libraries = [resolve_system_library(name, args.compiler) for name in sorted(set(args.system_library or ()))]
+    manifest = build_manifest(args, inventory, include_roots, instances, system_libraries)
 
     with open(args.inventory_out, "wb") as handle:
         handle.write(canonical_json(dependency_inventory_preimage(inventory)))
     if args.instance_out:
         with open(args.instance_out, "wb") as handle:
-            handle.write(canonical_json(compile_instance_preimage(instances)))
+            handle.write(canonical_json(compile_instance_preimage(instances, system_libraries)))
     with open(args.out, "wb") as handle:
         handle.write(canonical_json(manifest))
     sys.stdout.write("MT4_S3C_WORKER_BINARY_SHA256=" + manifest["worker_binary_sha256"] + "\n")
