@@ -65,7 +65,7 @@ env:
 
   # The exact enumerated shell variables any qualification command may reference.  None of them can
   # name a repository file.  Adding one requires an architecture revision, not a workflow edit.
-  S3C_ALLOWED_SHELL_VARIABLES: "RUNNER_TEMP GITHUB_WORKSPACE GITHUB_ENV GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA EXPECTED_HEAD BLST_COMMIT BLST_REPOSITORY S3C_EXPECTED_PHDR_INVENTORY S3C_CANDIDATE_NAME S3C_WORKER_SHA256 S3C_WORKER_BYTES S3C_DEPENDENCY_DIGEST S3C_POLICY_INTERNAL_ID S3C_POLICY_INTERNAL_SHA256 S3C_POLICY_INTERNAL_COUNT S3C_POLICY_INTERNAL_CBPF S3C_POLICY_OUTER_DIGEST S3C_CASE_SET_DIGEST CANDIDATE_ARTIFACT_ID CANDIDATE_ARTIFACT_DIGEST"
+  S3C_ALLOWED_SHELL_VARIABLES: "RUNNER_TEMP GITHUB_WORKSPACE GITHUB_ENV GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA EXPECTED_HEAD BLST_COMMIT BLST_REPOSITORY S3C_EXPECTED_PHDR_INVENTORY S3C_CANDIDATE_NAME S3C_WORKER_SHA256 S3C_WORKER_BYTES S3C_DEPENDENCY_DIGEST S3C_POLICY_INTERNAL_ID S3C_POLICY_INTERNAL_SHA256 S3C_POLICY_INTERNAL_COUNT S3C_POLICY_INTERNAL_CBPF S3C_POLICY_OUTER_DIGEST S3C_CASE_SET_DIGEST CANDIDATE_ARTIFACT_ID CANDIDATE_ARTIFACT_DIGEST BLST_SERVER_BEFORE BLST_ASSEMBLY_BEFORE"
 
   S3C_CANDIDATE_NAME: mt4_s3c_static_worker
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -132,8 +132,18 @@ jobs:
           mkdir -p "$RUNNER_TEMP/dep"
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --run-invocation "blst-server" --invocation-kind COMPILE -- gcc -c -O2 -fno-pic -fno-builtin -fno-asynchronous-unwind-tables -fcf-protection=none -D__BLST_PORTABLE__ -D__BLST_NO_CPUID__ -I "$RUNNER_TEMP/blst/src" -I "$RUNNER_TEMP/blst/build" -I "$RUNNER_TEMP/blst/bindings" -MD -MF "$RUNNER_TEMP/dep/blst_server.d" -o "$RUNNER_TEMP/obj/blst_server.o" "$RUNNER_TEMP/blst/src/server.c"
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --run-invocation "blst-assembly" --invocation-kind COMPILE -- gcc -c -O2 -fno-pic -fno-asynchronous-unwind-tables -fcf-protection=none -MD -MF "$RUNNER_TEMP/dep/blst_assembly.d" -o "$RUNNER_TEMP/obj/blst_assembly.o" "$RUNNER_TEMP/blst/build/assembly.S"
-          objcopy --remove-section=.note.gnu.property "$RUNNER_TEMP/obj/blst_server.o"
-          objcopy --remove-section=.note.gnu.property "$RUNNER_TEMP/obj/blst_assembly.o"
+          # Repair 5D: objcopy REWRITES the object bytes that are later linked and qualified,
+          # so it is a governed build operation and goes through the same wrapper as every
+          # other one.  --digest-before binds the pre-transform state; the wrapper records the
+          # post-transform digest itself, and downstream link edges consume the post state.
+          BLST_SERVER_BEFORE=""
+          sha256sum "$RUNNER_TEMP/obj/blst_server.o" > "$RUNNER_TEMP/dep/blst_server_before.sha"
+          read -r BLST_SERVER_BEFORE _ < "$RUNNER_TEMP/dep/blst_server_before.sha"
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --run-invocation "blst-server-strip" --invocation-kind TRANSFORM --digest-before "$BLST_SERVER_BEFORE" -- objcopy --remove-section=.note.gnu.property "$RUNNER_TEMP/obj/blst_server.o"
+          BLST_ASSEMBLY_BEFORE=""
+          sha256sum "$RUNNER_TEMP/obj/blst_assembly.o" > "$RUNNER_TEMP/dep/blst_assembly_before.sha"
+          read -r BLST_ASSEMBLY_BEFORE _ < "$RUNNER_TEMP/dep/blst_assembly_before.sha"
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --run-invocation "blst-assembly-strip" --invocation-kind TRANSFORM --digest-before "$BLST_ASSEMBLY_BEFORE" -- objcopy --remove-section=.note.gnu.property "$RUNNER_TEMP/obj/blst_assembly.o"
           echo "S3C_BLST_BUILD=PASS"
 
       # Compiler dependency evidence is emitted here by the COMPILER itself, never by a repository

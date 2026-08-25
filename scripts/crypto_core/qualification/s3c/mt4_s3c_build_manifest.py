@@ -156,7 +156,116 @@ COMPILE_INSTANCE_DIGEST_DOMAIN = b"mt4-s3c-compile-instance-inventory.v1\x00"
 
 INSTANCE_KIND_COMPILE = "COMPILE"
 INSTANCE_KIND_LINK = "LINK"
-INSTANCE_KINDS = (INSTANCE_KIND_COMPILE, INSTANCE_KIND_LINK)
+# Repair 5D: objcopy REWRITES the bytes that are later linked and qualified.  A graph that called
+# itself complete while omitting a step that changes the artifact was not describing the build.
+INSTANCE_KIND_TRANSFORM = "TRANSFORM"
+INSTANCE_KINDS = (INSTANCE_KIND_COMPILE, INSTANCE_KIND_LINK, INSTANCE_KIND_TRANSFORM)
+
+# =================================================================================================
+# THE FROZEN EXECUTION BOUNDARY (repairs 3D, 3E, 3F, 3G and 4).
+#
+# The wrapper is the ONLY place in the bundle that may start a process, so everything about that
+# process is pinned here rather than inherited:
+#
+#   TOOL         an exact basename from a closed set, resolved to an absolute path inside an
+#                approved toolchain directory.  The caller supplies metadata, never an executable:
+#                a path, a shell, an interpreter or a repository script cannot become the tool.
+#   CWD          explicit and governed.  Inheriting the ambient directory would let the caller
+#                change what a relative input means after validation.
+#   ENVIRONMENT  built from nothing.  CC, CFLAGS, LDFLAGS, CPATH, LIBRARY_PATH, LD_PRELOAD and
+#                PYTHONPATH all change what a compiler does; an allowlist that starts empty
+#                excludes them by construction rather than by remembering to name them.
+# =================================================================================================
+
+APPROVED_TOOLCHAIN_ROOTS = ("/usr/bin", "/usr/local/bin", "/bin")
+APPROVED_TOOLS = {
+    INSTANCE_KIND_COMPILE: ("gcc",),
+    INSTANCE_KIND_LINK: ("gcc",),
+    INSTANCE_KIND_TRANSFORM: ("objcopy",),
+}
+FORBIDDEN_BUILD_ENVIRONMENT = (
+    "CC",
+    "CXX",
+    "CFLAGS",
+    "CPATH",
+    "CPPFLAGS",
+    "C_INCLUDE_PATH",
+    "GCC_EXEC_PREFIX",
+    "LDFLAGS",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "LD_RUN_PATH",
+    "LIBRARY_PATH",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+)
+GOVERNED_BUILD_ENVIRONMENT = {
+    "PATH": "/usr/local/bin:/usr/bin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C",
+}
+
+
+def resolve_governed_tool(kind, name):
+    """Deterministically resolve a tool basename inside the approved toolchain roots.
+
+    PATH is not consulted: PATH is an uncontrolled lookup, and "the basename was gcc" is not an
+    identity.  Exactly one approved directory must hold an executable regular file of that name.
+    """
+    if kind not in APPROVED_TOOLS:
+        _fail("BUILD_COMMAND_REJECTED", "operation class")
+    if name not in APPROVED_TOOLS[kind]:
+        _fail("BUILD_COMMAND_REJECTED", "tool is not approved for this operation")
+    if os.sep in name or (os.altsep and os.altsep in name):
+        _fail("BUILD_COMMAND_REJECTED", "tool must be a bare approved name")
+    resolved = [
+        os.path.join(root, name)
+        for root in APPROVED_TOOLCHAIN_ROOTS
+        if os.path.isfile(os.path.join(root, name)) and os.access(os.path.join(root, name), os.X_OK)
+    ]
+    if not resolved:
+        _fail("BUILD_TOOL_UNRESOLVED", name)
+    real = os.path.realpath(resolved[0])
+    if not any(real.startswith(root + os.sep) for root in APPROVED_TOOLCHAIN_ROOTS):
+        _fail("BUILD_TOOL_OUT_OF_ROOT", name)
+    return real
+
+
+def governed_build_environment():
+    """The exact environment a governed build runs under, built from nothing."""
+    environment = dict(GOVERNED_BUILD_ENVIRONMENT)
+    for name in FORBIDDEN_BUILD_ENVIRONMENT:
+        if name in environment:
+            _fail("BUILD_ENVIRONMENT_REJECTED", name)
+    return environment
+
+
+def validate_build_command(kind, command, repository_root, upstream_root):
+    """Repair 3C.  COMPLETE validation, BEFORE any child process exists.
+
+    An invocation that fails here starts nothing at all; the previous ordering ran the command and
+    then asked whether it had been allowed, which is not a gate.
+    """
+    if kind not in INSTANCE_KINDS:
+        _fail("BUILD_COMMAND_REJECTED", "operation class")
+    if not isinstance(command, list) or not command:
+        _fail("BUILD_COMMAND_REJECTED", "empty command")
+    for word in command:
+        if not isinstance(word, str) or not word:
+            _fail("BUILD_COMMAND_REJECTED", "argument type")
+        for character in (chr(34), chr(39), "`", "$", ";", "|", "&", "\n"):
+            if character in word:
+                _fail("BUILD_COMMAND_REJECTED", "argument carries a shell metacharacter")
+    executable = resolve_governed_tool(kind, command[0])
+
+    # The command must parse into the governed shape for its operation class, and every input must
+    # classify.  parse_compile_instance performs that classification and fails closed on an
+    # unbundled repository input.
+    record = parse_compile_instance(kind + ":" + "validation" + ":" + " ".join(command), repository_root, upstream_root)
+    if kind == INSTANCE_KIND_TRANSFORM and record["inputs"] and len(record["inputs"]) != 1:
+        _fail("BUILD_COMMAND_REJECTED", "a transform takes exactly one artifact")
+    return executable, record
+
 
 CLASS_SYSTEM_LIBRARY = "SYSTEM_LIBRARY"
 PROVENANCE_SYSTEM_LIBRARY = "UBUNTU_22_04_PINNED_RUNNER_LIBRARY"
@@ -171,9 +280,17 @@ def resolve_system_library(name, compiler):
     only answer that describes this build.  An unresolved or out-of-root answer fails closed rather
     than being recorded as a guess.
     """
+    executable = resolve_governed_tool(INSTANCE_KIND_LINK, compiler)
+    environment = governed_build_environment()
     for candidate in ("lib" + name + ".so", "lib" + name + ".a"):
-        completed = subprocess.run(  # noqa: S603 - fixed argument vector, no shell
-            [compiler, "--print-file-name=" + candidate], check=False, capture_output=True, text=True
+        completed = subprocess.run(  # noqa: S603 - frozen executable, fixed argument vector, no shell
+            [executable, "--print-file-name=" + candidate],
+            check=False,
+            shell=False,
+            cwd=os.sep,
+            env=environment,
+            capture_output=True,
+            text=True,
         )
         resolved = completed.stdout.strip()
         if completed.returncode != 0 or not resolved or resolved == candidate:
@@ -194,6 +311,9 @@ def resolve_system_library(name, compiler):
     return None
 
 
+# The fields EVERY recorded invocation carries.  resolved_tool_path and working_directory are
+# the wrapper's frozen execution boundary made evidence: the tool that actually ran and the
+# directory it ran in, rather than a basename and an assumption.
 COMPILE_INSTANCE_FIELDS = (
     "argv",
     "flags",
@@ -203,9 +323,26 @@ COMPILE_INSTANCE_FIELDS = (
     "kind",
     "libraries",
     "output",
+    "resolved_tool_path",
     "tool",
+    "working_directory",
     "working_directory_class",
 )
+
+# A TRANSFORM rewrites an artifact in place, so its record carries the two distinct graph
+# STATES of the same path.  Without them the post-transform bytes would be indistinguishable
+# from the pre-transform ones in the graph.
+TRANSFORM_INSTANCE_FIELDS = tuple(
+    sorted(COMPILE_INSTANCE_FIELDS + ("digest_after", "digest_before", "transform_target"))
+)
+
+
+def instance_fields_for(kind):
+    """The exact field set one recorded invocation must carry, by operation class."""
+    if kind == INSTANCE_KIND_TRANSFORM:
+        return TRANSFORM_INSTANCE_FIELDS
+    return COMPILE_INSTANCE_FIELDS
+
 
 # =================================================================================================
 # THE OBSERVED BUILD GRAPH (repair 10).
@@ -238,8 +375,29 @@ REQUIRED_COMPILE_INSTANCES = (
     "worker-start",
     "observer-probe",
     "observer-launcher",
+    "observer-policy",
 )
 REQUIRED_LINK_INSTANCES = ("worker-link", "observer-link")
+
+# Repair 5D: the two objcopy operations REWRITE bytes that are later linked and qualified, so they
+# are governed build operations with their own class rather than invisible side effects.
+REQUIRED_TRANSFORM_INSTANCES = ("blst-assembly-strip", "blst-server-strip")
+
+# Repair 5B: the EXACT objects each real link consumes, derived from the reviewed workflow's actual
+# link commands rather than from a simplified test model.  A link that silently dropped an input
+# would otherwise still satisfy a partial expectation.
+REQUIRED_LINK_INPUT_PRODUCERS = {
+    "worker-link": (
+        "worker-start",
+        "worker-bootstrap",
+        "worker-verify",
+        "worker-policy",
+        "worker-capability",
+        "blst-server-strip",
+        "blst-assembly-strip",
+    ),
+    "observer-link": ("observer-launcher", "observer-policy"),
+}
 
 # The system libraries the real link commands consume.  -lcap is resolved from the pinned runner
 # image, so it is recorded as a SYSTEM_LIBRARY rather than pretended into the repository bundle.
@@ -300,15 +458,31 @@ def parse_compile_instance(declaration, repository_root, upstream_root):
             inputs.append(word)
         index += 1
 
-    if not output:
-        _fail("COMPILE_INSTANCE_MALFORMED", "no output artifact")
     if not inputs:
         _fail("COMPILE_INSTANCE_MALFORMED", "no inputs")
+    if kind == INSTANCE_KIND_TRANSFORM:
+        # An in-place transform names one artifact and rewrites it; the same path is both the
+        # consumed PRE state and the produced POST state, which the two digests below distinguish.
+        if output:
+            _fail("COMPILE_INSTANCE_MALFORMED", "a transform does not redirect its output")
+        if len(inputs) != 1:
+            _fail("COMPILE_INSTANCE_MALFORMED", "a transform takes exactly one artifact")
+        output = inputs[0]
+    if not output:
+        _fail("COMPILE_INSTANCE_MALFORMED", "no output artifact")
 
     classified = []
     for item in inputs:
         kind_of_input, normalised = classify_dependency(item, repository_root, upstream_root)
-        classified.append({"path": normalised, "class": kind_of_input})
+        classified.append(
+            {
+                "path": normalised,
+                "class": kind_of_input,
+                # The consumer edge names the exact producer node, so a same-basename artifact from
+                # another job can never satisfy it.
+                "graph_identity": _graph_identity(item, repository_root),
+            }
+        )
     return {
         "instance_id": instance_id,
         "kind": kind,
@@ -318,21 +492,57 @@ def parse_compile_instance(declaration, repository_root, upstream_root):
         "include_roots": sorted(include_roots),
         "inputs": classified,
         "libraries": sorted(libraries),
-        "output": os.path.basename(output),
+        # Repair 5A: the graph node identity is the CANONICAL PATH, never the basename.  Two jobs
+        # can each produce a policy.o, and a basename cannot say which one a link consumed.
+        "output": _graph_identity(output, repository_root),
         "working_directory_class": WORKING_DIRECTORY_CLASS,
     }
 
 
-def record_invocation(log_path, instance_id, kind, argv, repository_root, upstream_root):
-    """Run ONE real native invocation and append its observed record.
+def _graph_identity(path, repository_root):
+    """One canonical, path-scoped identity for a build artifact node."""
+    absolute = os.path.normpath(os.path.abspath(path))
+    root = os.path.normpath(os.path.abspath(repository_root))
+    if absolute == root or absolute.startswith(root + os.sep):
+        return os.path.relpath(absolute, root).replace(os.sep, "/")
+    return absolute.replace(os.sep, "/")
+
+
+def record_invocation(log_path, instance_id, kind, argv, repository_root, upstream_root, digest_before=None):
+    """Validate, THEN run ONE real native invocation, then append its observed record.
 
     The wrapper is the single point at which a build command becomes evidence: the argv recorded is
-    the argv executed, because the same list is used for both.
+    the argv executed, because the same list is used for both.  The ordering below is the contract --
+    PARSE, then COMPLETE VALIDATION, then EXECUTE.  An invalid invocation produces no child process
+    at all, which is what makes this a gate rather than an audit trail.
     """
-    completed = subprocess.run(argv, check=False)  # noqa: S603 - argv is a fixed list, no shell
+    executable, _preview = validate_build_command(kind, argv, repository_root, upstream_root)
+    working_directory = os.path.normpath(os.path.abspath(repository_root))
+    if not os.path.isdir(working_directory):
+        _fail("BUILD_COMMAND_REJECTED", "working directory")
+    environment = governed_build_environment()
+    # The resolved absolute executable replaces the caller's basename, so the process that runs is
+    # the one that was validated rather than whatever PATH would have found at exec time.
+    resolved_argv = [executable] + list(argv[1:])
+    completed = subprocess.run(  # noqa: S603 - validated argv list, frozen executable, no shell
+        resolved_argv,
+        check=False,
+        shell=False,
+        cwd=working_directory,
+        env=environment,
+    )
     if completed.returncode != 0:
         _fail("BUILD_INVOCATION_FAILED", instance_id)
     record = parse_compile_instance(kind + ":" + instance_id + ":" + " ".join(argv), repository_root, upstream_root)
+    record["resolved_tool_path"] = executable
+    record["working_directory"] = _graph_identity(working_directory, repository_root)
+    if kind == INSTANCE_KIND_TRANSFORM:
+        # Repair 5D: an in-place transform has two distinct graph STATES even though the path is
+        # unchanged, so both digests are bound and downstream consumers must name the post state.
+        target = record["inputs"][0]["graph_identity"]
+        record["transform_target"] = target
+        record["digest_before"] = digest_before or ""
+        record["digest_after"] = _sha256_file(os.path.join(working_directory, target))
     entries = []
     if os.path.exists(log_path):
         with open(log_path, "rb") as handle:
@@ -368,7 +578,7 @@ def validate_compile_instances(instances):
     """Exact schema, unique ids, and COMPLETE coverage of the real build."""
     seen = set()
     for instance in instances:
-        if tuple(sorted(instance)) != tuple(sorted(COMPILE_INSTANCE_FIELDS)):
+        if tuple(sorted(instance)) != tuple(sorted(instance_fields_for(instance.get("kind")))):
             _fail("COMPILE_INSTANCE_MALFORMED", "field set")
         if instance["instance_id"] in seen:
             _fail("COMPILE_INSTANCE_DUPLICATE", instance["instance_id"])
@@ -386,6 +596,12 @@ def validate_compile_instances(instances):
     for required in REQUIRED_LINK_INSTANCES:
         if required not in seen:
             _fail("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", required)
+    for required in REQUIRED_TRANSFORM_INSTANCES:
+        if required not in seen:
+            _fail("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", required)
+
+    validate_build_graph(instances)
+
     links = [instance for instance in instances if instance["kind"] == INSTANCE_KIND_LINK]
     if len(links) != len(REQUIRED_LINK_INSTANCES):
         _fail("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", "link instance count")
@@ -406,6 +622,55 @@ def validate_compile_instances(instances):
             consumed = os.path.basename(item["path"])
             if consumed.endswith(".o") and consumed not in produced:
                 _fail("COMPILE_INSTANCE_LINK_INPUT_UNPRODUCED", consumed)
+    return instances
+
+
+def validate_build_graph(instances):
+    """Repair 5A and 5C.  Every consumed artifact has EXACTLY ONE recorded producer.
+
+    Identity is the canonical path, never the basename: two jobs can each produce a policy.o, and a
+    basename cannot say which one a link consumed.  A transform makes the same path carry two
+    distinct graph STATES, so the producer of a transformed object is the TRANSFORM, not the compile
+    that preceded it -- a downstream consumer that named the pre-transform producer would be
+    consuming bytes that no longer exist.
+    """
+    producers = {}
+    for instance in instances:
+        identity = instance["output"]
+        if instance["kind"] == INSTANCE_KIND_TRANSFORM:
+            # The transform SUPERSEDES the earlier producer of the same path.
+            producers[identity] = instance["instance_id"]
+        elif identity in producers:
+            _fail("BUILD_GRAPH_DUPLICATE_PRODUCER", identity)
+        else:
+            producers[identity] = instance["instance_id"]
+
+    # A transform must consume something a recorded operation actually produced.
+    for instance in instances:
+        if instance["kind"] != INSTANCE_KIND_TRANSFORM:
+            continue
+        if instance.get("digest_before") == instance.get("digest_after"):
+            _fail("BUILD_GRAPH_TRANSFORM_INERT", instance["instance_id"])
+        for field in ("digest_before", "digest_after"):
+            value = instance.get(field)
+            if not _is_hex64(value):
+                _fail("BUILD_GRAPH_TRANSFORM_DIGEST_INVALID", instance["instance_id"])
+
+    for instance in instances:
+        if instance["kind"] != INSTANCE_KIND_LINK:
+            continue
+        expected = REQUIRED_LINK_INPUT_PRODUCERS.get(instance["instance_id"])
+        if expected is None:
+            _fail("BUILD_GRAPH_UNKNOWN_LINK", instance["instance_id"])
+        observed = []
+        for item in instance["inputs"]:
+            identity = item["graph_identity"]
+            producer = producers.get(identity)
+            if producer is None:
+                _fail("BUILD_GRAPH_UNPRODUCED_INPUT", identity)
+            observed.append(producer)
+        if tuple(observed) != tuple(expected):
+            _fail("BUILD_GRAPH_LINK_INPUTS_MISMATCH", instance["instance_id"])
     return instances
 
 
@@ -753,7 +1018,28 @@ _REQUIRED_BUILD_ARGUMENTS = (
 )
 
 
+def split_command_tail(raw):
+    """Repair 3A.  Extract the governed command tail BEFORE any wrapper option is parsed.
+
+    argparse cannot be allowed to see `-- gcc -c ...`: it treats the tail as unrecognised
+    positionals and exits 2, which under `set -euo pipefail` terminated the very first governed
+    build command.  The separator is therefore located first, and the parser only ever sees the
+    wrapper's own options.
+    """
+    if raw is None:
+        raw = list(sys.argv[1:])
+    raw = list(raw)
+    separators = [index for index, word in enumerate(raw) if word == "--"]
+    if len(separators) > 1:
+        _fail("BUILD_INVOCATION_SEPARATOR_AMBIGUOUS", str(len(separators)))
+    if not separators:
+        return raw, None
+    index = separators[0]
+    return raw[:index], raw[index + 1 :]
+
+
 def main(argv=None):
+    wrapper_argv, command_argv = split_command_tail(argv)
     parser = argparse.ArgumentParser(description="MT4-S3C build manifest and compile dependency inventory")
     parser.add_argument("--emit-env-from-manifest")
     parser.add_argument("--emit-env")
@@ -767,7 +1053,10 @@ def main(argv=None):
     parser.add_argument("--run-invocation")
     parser.add_argument("--invocation-kind")
     parser.add_argument("--instance-log")
+    parser.add_argument("--digest-before")
     parser.add_argument("--system-library", action="append")
+    # Repair 3D: this names a TOOL for library resolution, never a path.  An arbitrary
+    # executable, a shell, an interpreter or a repository script cannot be selected through it.
     parser.add_argument("--compiler", default="gcc")
     parser.add_argument("--include-root", action="append")
     parser.add_argument("--build-macro", action="append")
@@ -779,22 +1068,23 @@ def main(argv=None):
     parser.add_argument("--inventory-out")
     parser.add_argument("--instance-out")
     parser.add_argument("--out")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(wrapper_argv)
 
     if args.run_invocation:
         if not args.instance_log or not args.invocation_kind or not args.repository_root or not args.upstream_root:
             _fail("BUILD_MANIFEST_ARGUMENT_MISSING", "--run-invocation")
-        separator = argv.index("--") if argv is not None and "--" in argv else sys.argv.index("--")
-        command = (argv if argv is not None else sys.argv)[separator + 1 :]
-        if not command:
+        if command_argv is None:
+            _fail("BUILD_MANIFEST_ARGUMENT_MISSING", "command separator")
+        if not command_argv:
             _fail("BUILD_MANIFEST_ARGUMENT_MISSING", "invocation argv")
         record_invocation(
             args.instance_log,
             args.run_invocation,
             args.invocation_kind,
-            command,
+            command_argv,
             args.repository_root,
             args.upstream_root,
+            args.digest_before,
         )
         sys.stdout.write("MT4_S3C_BUILD_INSTANCE_RECORDED=" + args.run_invocation + "\n")
         return 0
@@ -832,4 +1122,11 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # A governed failure reaches the workflow as a FROZEN marker on stderr and a nonzero exit,
+    # not as a traceback: under `set -euo pipefail` the exit code is what stops the build, and
+    # the marker is what an operator reads.
+    try:
+        raise SystemExit(main())
+    except BuildManifestError as error:
+        sys.stderr.write("MT4_S3C_BUILD_MANIFEST_FAILED=" + str(error) + chr(10))
+        raise SystemExit(1) from None

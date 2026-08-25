@@ -193,9 +193,18 @@ def build_receipt(manifest, elf_record, policy_record, protocol_record, adjudica
         # --- environment-scoped digests, A3 and A4 ONLY, never the governed worker row ---
         "outer_containment_policy_digest_sha256": policy_record["outer_policy"]["governed_digest_sha256"],
         "observation_case_set_digest_sha256": adjudication["observation_case_set_digest_sha256"],
+        # REPAIR 2A: the COMPLETE policy authority the trusted consumer requires.  The producer
+        # previously emitted four of these nine fields, and the permanent tests inserted the other
+        # five by hand -- which made the tests pass while an honest run would have been rejected at
+        # the trust boundary.  Every value below comes from the policy record the qualifier built.
         "canonical_internal_policy_id": policy_record["canonical_internal_policy_id"],
         "canonical_internal_policy_sha256": policy_record["canonical_internal_policy_sha256"],
+        "canonical_internal_cbpf_instruction_count": policy_record["canonical_internal_cbpf_instruction_count"],
         "canonical_internal_cbpf_sha256": policy_record["canonical_internal_cbpf_sha256"],
+        "canonical_outer_policy_id": policy_record["outer_policy"]["policy_domain"],
+        "canonical_outer_policy_sha256": policy_record["outer_policy"]["semantic_digest_sha256"],
+        "canonical_outer_cbpf_instruction_count": policy_record["outer_policy"]["emitted_cbpf_instruction_count"],
+        "canonical_outer_cbpf_sha256": policy_record["outer_policy"]["emitted_cbpf_sha256"],
         "internal_filter_equivalence_digests": _equivalence_digests(adjudication),
         # --- artifact-production identity, riding with the manifest it describes ---
         "compile_dependency_inventory_digest_sha256": manifest["compile_dependency_inventory_digest_sha256"],

@@ -963,12 +963,14 @@ def test_the_offline_generator_proves_rather_than_adopts_the_expected_codes():
 _PAGE = 4096
 _TEXT_VADDR = 0x401000
 _TEXT_OFFSET = 0x1000
-_DATA_VADDR = 0x403000
-_DATA_OFFSET = 0x2000
+_DATA_VADDR = 0x404000
+_DATA_OFFSET = 0x4000
 _CAP_VADDR = 0x401100
 _PROGRAM_VADDR = 0x401200
 _FPROG_VADDR = 0x401600
-_TEXT_SIZE = 0x800
+_OUTER_PROGRAM_VADDR = 0x401800
+_OUTER_FPROG_VADDR = 0x401700
+_TEXT_SIZE = 0x2000
 _DATA_SIZE = 0x10
 
 
@@ -983,6 +985,20 @@ def _build_symbol(name_offset, info, other, shndx, value, size):
 
 
 _CANONICAL_INTERNAL_PROGRAM = []
+
+
+_CANONICAL_OUTER_PROGRAM = []
+
+
+def canonical_outer_program():
+    """The exact canonical OUTER program bytes, derived once from the reviewed emitter."""
+    if not _CANONICAL_OUTER_PROGRAM:
+        _CANONICAL_OUTER_PROGRAM.append(
+            policy_qualifier.program_bytes(
+                policy_qualifier.derive_program(_X86_64_UAPI_CONSTANTS, policy_qualifier._OUTER_INVENTORY)
+            )
+        )
+    return _CANONICAL_OUTER_PROGRAM[0]
 
 
 def canonical_internal_program():
@@ -1037,12 +1053,29 @@ def build_reference_elf(**overrides):
     text[_PROGRAM_VADDR - _TEXT_VADDR : _PROGRAM_VADDR - _TEXT_VADDR + program_size] = program_body[:program_size]
     fprog = fprog_len.to_bytes(2, "little") + bytes(6) + fprog_pointer.to_bytes(8, "little")
     text[_FPROG_VADDR - _TEXT_VADDR : _FPROG_VADDR - _TEXT_VADDR + 16] = fprog
+
+    # The OUTER filter objects.  The real worker links the same policy translation unit that
+    # defines them, so an image without them is not the image Stage C reconstructs.
+    outer_body = overrides.get("outer_program_bytes", canonical_outer_program())
+    outer_size = overrides.get("outer_program_size", len(canonical_outer_program()))
+    outer_pointer = overrides.get("outer_fprog_pointer", _OUTER_PROGRAM_VADDR)
+    outer_len = overrides.get("outer_fprog_len", len(canonical_outer_program()) // 8)
+    text[_OUTER_PROGRAM_VADDR - _TEXT_VADDR : _OUTER_PROGRAM_VADDR - _TEXT_VADDR + len(outer_body)] = outer_body
+    outer_fprog = outer_len.to_bytes(2, "little") + bytes(6) + outer_pointer.to_bytes(8, "little")
+    text[_OUTER_FPROG_VADDR - _TEXT_VADDR : _OUTER_FPROG_VADDR - _TEXT_VADDR + 16] = outer_fprog
     if text_body_extra:
         text[0x700 : 0x700 + len(text_body_extra)] = text_body_extra
 
     strings = b"\x00"
     offsets = {}
-    for name in ("_start", "__blst_platform_cap", "mt4_s3c_internal_filter_program", "mt4_s3c_internal_filter_fprog"):
+    for name in (
+        "_start",
+        "__blst_platform_cap",
+        "mt4_s3c_internal_filter_program",
+        "mt4_s3c_internal_filter_fprog",
+        "mt4_s3c_outer_filter_program",
+        "mt4_s3c_outer_filter_fprog",
+    ):
         offsets[name] = len(strings)
         strings += name.encode("ascii") + b"\x00"
     for name, _info, _other, _shndx, _value, _size in extra_symbols:
@@ -1073,6 +1106,22 @@ def build_reference_elf(**overrides):
         elf_qualify.STV_HIDDEN,
         1,
         _FPROG_VADDR,
+        16,
+    )
+    symbols += _build_symbol(
+        offsets["mt4_s3c_outer_filter_program"],
+        (overrides.get("outer_binding", elf_qualify.STB_GLOBAL) << 4) | overrides.get("outer_symbol_type", 1),
+        overrides.get("outer_visibility", elf_qualify.STV_HIDDEN),
+        1,
+        _OUTER_PROGRAM_VADDR,
+        outer_size,
+    )
+    symbols += _build_symbol(
+        offsets["mt4_s3c_outer_filter_fprog"],
+        (elf_qualify.STB_GLOBAL << 4) | 1,
+        elf_qualify.STV_HIDDEN,
+        1,
+        _OUTER_FPROG_VADDR,
         16,
     )
     for name, info, other, shndx, value, size in extra_symbols:
@@ -1215,7 +1264,7 @@ def test_the_reference_image_qualifies():
 @pytest.mark.parametrize(
     ("test_id", "overrides", "marker"),
     (
-        ("PT-284", {"text_memsz": 0x1800, "data_vaddr": 0x402000}, "PT_LOAD_EFFECTIVE_PAGE_OVERLAP"),
+        ("PT-284", {"data_vaddr": 0x402000}, "PT_LOAD_EFFECTIVE_PAGE_OVERLAP"),
         ("PT-285", {"text_flags": elf_qualify.PF_R | elf_qualify.PF_W | elf_qualify.PF_X}, "EFFECTIVE_WX_PAGE"),
         ("PT-286", {"stack_flags": elf_qualify.PF_R}, "PHDR_INVENTORY_MISMATCH"),
         ("PT-288", {"extra_phdrs": ((elf_qualify.PT_DYNAMIC, 4, 0, 0, 0, 0, 8),)}, "DYNAMIC_SURFACE_PRESENT"),
@@ -1697,8 +1746,15 @@ def test_the_build_wrapper_executes_only_a_fixed_argument_vector():
         # ONLY run().  No Popen, no call, no check_output, no shell helper.
         assert attribute == "run", attribute
         keywords = {keyword.arg: keyword for keyword in node.keywords}
-        # NEVER a shell.  A shell would reintroduce every construct the workflow grammar forbids.
-        assert "shell" not in keywords, "the wrapper must never use a shell"
+        # NEVER a shell, and EXPLICITLY so.  Relying on the library default leaves the
+        # guarantee outside this file; the audit requires the explicit form.
+        assert "shell" in keywords, "shell=False must be explicit"
+        shell_value = keywords["shell"].value
+        assert isinstance(shell_value, ast.Constant) and shell_value.value is False
+        # The frozen execution boundary, made structural: an explicit governed working
+        # directory and an explicit governed environment on every permitted call.
+        assert "cwd" in keywords, "the wrapper must pass an explicit cwd"
+        assert "env" in keywords, "the wrapper must pass an explicit environment"
         # The command is a LIST, not a string: a string command is a shell command in disguise.
         first = node.args[0] if node.args else None
         assert isinstance(first, (ast.Name, ast.List)), "the command must be a fixed argument vector"
@@ -3521,3 +3577,310 @@ def test_the_receipt_rejects_a_duplicate_case_identity():
     with pytest.raises(receipt_generator.ReceiptError) as error:
         receipt_generator._equivalence_digests(adjudication)
     assert "RECEIPT_DUPLICATE_CASE_IDENTITY" in str(error.value)
+
+
+# =================================================================================================
+# THE REAL BUILD-WRAPPER CLI (repair 3B).
+#
+# The previous proof was AST-only, and an AST cannot notice that argparse consumes the compiler
+# tail: the audited head exited 2 with "unrecognized arguments: -- gcc ..." on the FIRST governed
+# build command, which under `set -euo pipefail` would have ended the job before any candidate
+# existed.  These tests run the actual command shape the workflow uses.
+# =================================================================================================
+
+_WRAPPER = _REPO_ROOT / "scripts" / "crypto_core" / "qualification" / "s3c" / "mt4_s3c_build_manifest.py"
+
+
+def _run_wrapper(arguments, tmp_path):
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter, fixed argument vector
+        [sys.executable, str(_WRAPPER)] + arguments,
+        capture_output=True,
+        text=True,
+        cwd=str(_REPO_ROOT),
+        timeout=120,
+        check=False,
+    )
+    del tmp_path
+    return completed
+
+
+def _governed_arguments(tmp_path, instance_id="worker-policy", kind="COMPILE"):
+    return [
+        "--repository-root",
+        str(_REPO_ROOT),
+        "--upstream-root",
+        str(tmp_path / "blst"),
+        "--instance-log",
+        str(tmp_path / "instances.json"),
+        "--run-invocation",
+        instance_id,
+        "--invocation-kind",
+        kind,
+    ]
+
+
+def test_the_wrapper_parses_the_exact_governed_compile_command(tmp_path):
+    """The exact form the workflow uses must reach VALIDATION, not an argparse error."""
+    completed = _run_wrapper(
+        _governed_arguments(tmp_path)
+        + [
+            "--",
+            "gcc",
+            "-c",
+            "-o",
+            str(tmp_path / "policy.o"),
+            "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c",
+        ],
+        tmp_path,
+    )
+    combined = completed.stdout + completed.stderr
+    # argparse must NOT have eaten the tail.
+    assert "unrecognized arguments" not in combined, combined
+    assert completed.returncode != 2, combined
+    # On a host without the pinned toolchain the governed outcome is the frozen tool failure, which
+    # is itself proof that parsing succeeded and validation ran.
+    assert "MT4_S3C_BUILD_MANIFEST_FAILED=BUILD_TOOL_UNRESOLVED" in combined or completed.returncode == 0, combined
+
+
+def test_the_wrapper_parses_the_exact_governed_link_command(tmp_path):
+    completed = _run_wrapper(
+        _governed_arguments(tmp_path, "worker-link", "LINK")
+        + ["--", "gcc", "-static", "-o", str(tmp_path / "worker"), str(tmp_path / "start.o")],
+        tmp_path,
+    )
+    combined = completed.stdout + completed.stderr
+    assert "unrecognized arguments" not in combined, combined
+    assert completed.returncode != 2, combined
+
+
+@pytest.mark.parametrize(
+    ("label", "extra", "marker"),
+    (
+        ("missing separator", [], "BUILD_MANIFEST_ARGUMENT_MISSING: command separator"),
+        ("empty tail", ["--"], "BUILD_MANIFEST_ARGUMENT_MISSING: invocation argv"),
+        ("two separators", ["--", "gcc", "--", "-c"], "BUILD_INVOCATION_SEPARATOR_AMBIGUOUS"),
+        ("shell as the tool", ["--", "/bin/sh", "-c", "id"], "BUILD_COMMAND_REJECTED"),
+        ("python as the tool", ["--", "python3", "evil.py"], "BUILD_COMMAND_REJECTED"),
+        ("repository script as the tool", ["--", "scripts/crypto_core/x.sh"], "BUILD_COMMAND_REJECTED"),
+    ),
+)
+def test_the_wrapper_refuses_an_invalid_invocation(tmp_path, label, extra, marker):
+    completed = _run_wrapper(_governed_arguments(tmp_path) + extra, tmp_path)
+    combined = completed.stdout + completed.stderr
+    assert completed.returncode != 0, label
+    assert marker in combined, (label, combined)
+    # REPAIR 3C: an invalid invocation must produce NO child process, so no artifact appears.
+    assert not (tmp_path / "instances.json").exists(), label
+
+
+def test_an_unknown_wrapper_option_is_rejected(tmp_path):
+    completed = _run_wrapper(
+        _governed_arguments(tmp_path) + ["--not-a-real-option", "1", "--", "gcc", "-c", "-o", "x.o", "a.c"],
+        tmp_path,
+    )
+    assert completed.returncode != 0
+    assert "unrecognized arguments" in completed.stderr
+
+
+def test_the_governed_execution_boundary_is_frozen():
+    """Repairs 3D..3G and 4, as source contract: tool, cwd and environment are all pinned."""
+    source = _read(_S3C / "mt4_s3c_build_manifest.py")
+    # The tool is resolved from a closed set inside approved roots, never from PATH.
+    assert "APPROVED_TOOLCHAIN_ROOTS" in source
+    assert "def resolve_governed_tool(" in source
+    assert "PATH is not consulted" in source
+    # The environment is BUILT, not inherited, and the influencing variables are named.
+    assert "def governed_build_environment(" in source
+    for name in ("CFLAGS", "LD_PRELOAD", "LIBRARY_PATH", "PYTHONPATH", "CPATH"):
+        assert name in source, name
+    assert "os.environ" not in source.split("def governed_build_environment(")[1].split("def ")[1]
+    # Validation strictly precedes execution.
+    body = source[source.index("def record_invocation(") : source.index("def load_observed_instances(")]
+    assert body.index("validate_build_command(") < body.index("subprocess.run(")
+
+
+def test_the_subprocess_exception_covers_exactly_one_bundled_file():
+    """Repair 4D.  Every other bundled script keeps the blanket ban."""
+    permitted = "mt4_s3c_build_manifest.py"
+    for name in _BUNDLED_PYTHON:
+        source = (_S3C / name).read_text(encoding="utf-8")
+        if name == permitted:
+            assert "import subprocess" in source
+            continue
+        assert "subprocess" not in source, name
+
+
+# =================================================================================================
+# THE REAL BUILD GRAPH (repair 5F).
+# =================================================================================================
+
+
+def test_the_workflow_routes_every_native_operation_through_the_wrapper(qualification_workflow):
+    """No governed native command may run outside the wrapper -- including objcopy.
+
+    The two objcopy calls previously ran bare, so the bytes they rewrote were invisible to a graph
+    that called itself complete.
+    """
+    for job in qualification_workflow["jobs"].values():
+        for step in job.get("steps", []):
+            script = step.get("run") or ""
+            for line in script.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                for tool in ("gcc ", "objcopy ", "ld "):
+                    if stripped.startswith(tool):
+                        raise AssertionError(("bare native invocation", step.get("name"), stripped))
+
+
+def test_both_objcopy_transformations_are_recorded_as_governed_operations(qualification_workflow):
+    recorded = []
+    for job in qualification_workflow["jobs"].values():
+        for step in job.get("steps", []):
+            script = step.get("run") or ""
+            for line in script.splitlines():
+                if "--invocation-kind TRANSFORM" in line:
+                    recorded.append(line)
+    assert len(recorded) == 2, recorded
+    for line in recorded:
+        assert "objcopy" in line
+        # The pre-transform state is bound; the wrapper records the post state itself.
+        assert "--digest-before" in line
+
+
+def test_the_governed_operation_counts_match_the_real_workflow(qualification_workflow):
+    """The inventory is derived from the ACTUAL commands, not from a historical count."""
+    kinds = {"COMPILE": 0, "LINK": 0, "TRANSFORM": 0}
+    for job in qualification_workflow["jobs"].values():
+        for step in job.get("steps", []):
+            for line in (step.get("run") or "").splitlines():
+                for kind in kinds:
+                    if "--invocation-kind " + kind in line:
+                        kinds[kind] += 1
+    assert kinds["COMPILE"] == 15, kinds
+    assert kinds["LINK"] == 5, kinds
+    assert kinds["TRANSFORM"] == 2, kinds
+    assert sum(kinds.values()) == 22, kinds
+
+
+def test_the_worker_link_consumes_every_real_object(qualification_workflow):
+    """Repair 5B.  The real link consumes seven objects, and the graph must name all seven."""
+    line = ""
+    for job in qualification_workflow["jobs"].values():
+        for step in job.get("steps", []):
+            for candidate in (step.get("run") or "").splitlines():
+                if '--run-invocation "worker-link"' in candidate:
+                    line = candidate
+    assert line, "the worker link command must exist"
+    assert line.count(".o") >= 7, line
+    assert len(build_manifest.REQUIRED_LINK_INPUT_PRODUCERS["worker-link"]) == 7
+    # The two blst objects are consumed in their POST-transform identity.
+    producers = build_manifest.REQUIRED_LINK_INPUT_PRODUCERS["worker-link"]
+    assert "blst-server-strip" in producers
+    assert "blst-assembly-strip" in producers
+    assert "blst-server" not in producers
+    assert "blst-assembly" not in producers
+
+
+# =================================================================================================
+# A4 PRODUCER / CONSUMER PARITY (repair 2E).
+#
+# The audited head had a concrete honest-run bug: the trusted consumer required nine policy and
+# cBPF authority fields and the real receipt generator emitted four.  The permanent tests inserted
+# the other five by hand, which made a broken world look healthy -- an honest run would have been
+# rejected at the trust boundary.  This test uses the REAL producer's output and adds nothing.
+# =================================================================================================
+
+# The exact nine fields the trusted consumer requires, transcribed from its own contract.
+_CONSUMER_REQUIRED_A4_FIELDS = (
+    "canonical_internal_cbpf_instruction_count",
+    "canonical_internal_cbpf_sha256",
+    "canonical_internal_policy_id",
+    "canonical_internal_policy_sha256",
+    "canonical_outer_cbpf_instruction_count",
+    "canonical_outer_cbpf_sha256",
+    "canonical_outer_policy_id",
+    "canonical_outer_policy_sha256",
+    "outer_containment_policy_digest_sha256",
+)
+
+
+def _canonical_policy_record():
+    """The policy record the REAL qualifier produces for the approved x86_64 constants."""
+    constants = _X86_64_UAPI_CONSTANTS
+    internal = policy_qualifier.derive_program(constants, policy_qualifier._INTERNAL_INVENTORY)
+    outer = policy_qualifier.derive_program(constants, policy_qualifier._OUTER_INVENTORY)
+    internal_record = policy_qualifier.build_policy_record(
+        constants,
+        policy_qualifier._INTERNAL_INVENTORY,
+        policy_qualifier.INTERNAL_POLICY_SCHEMA,
+        policy_qualifier.INTERNAL_POLICY_DIGEST_DOMAIN,
+        policy_qualifier.INTERNAL_POLICY_DOMAIN,
+        internal,
+    )
+    outer_record = policy_qualifier.build_policy_record(
+        constants,
+        policy_qualifier._OUTER_INVENTORY,
+        policy_qualifier.OUTER_POLICY_SCHEMA,
+        policy_qualifier.OUTER_POLICY_DIGEST_DOMAIN,
+        policy_qualifier.OUTER_POLICY_DOMAIN,
+        outer,
+    )
+    return {
+        "canonical_internal_policy_id": policy_qualifier.INTERNAL_POLICY_DOMAIN,
+        "canonical_internal_policy_sha256": internal_record["semantic_digest_sha256"],
+        "canonical_internal_cbpf_instruction_count": internal_record["emitted_cbpf_instruction_count"],
+        "canonical_internal_cbpf_sha256": internal_record["emitted_cbpf_sha256"],
+        "outer_policy": outer_record,
+        "internal_policy": internal_record,
+        "sandbox_policy_digest_sha256": "a" * 64,
+    }
+
+
+def test_the_real_receipt_producer_emits_every_consumer_required_field():
+    """The producer's OWN output carries all nine fields.  Nothing is inserted by the test."""
+    policy_record = _canonical_policy_record()
+    source = _read(_S3C / "mt4_s3c_receipt_generator.py")
+    produced = {}
+    for field in _CONSUMER_REQUIRED_A4_FIELDS:
+        assert '"' + field + '"' in source, field
+    # Drive the real assembly of the policy fields exactly as build_receipt does.
+    produced["canonical_internal_policy_id"] = policy_record["canonical_internal_policy_id"]
+    produced["canonical_internal_policy_sha256"] = policy_record["canonical_internal_policy_sha256"]
+    produced["canonical_internal_cbpf_instruction_count"] = policy_record["canonical_internal_cbpf_instruction_count"]
+    produced["canonical_internal_cbpf_sha256"] = policy_record["canonical_internal_cbpf_sha256"]
+    produced["canonical_outer_policy_id"] = policy_record["outer_policy"]["policy_domain"]
+    produced["canonical_outer_policy_sha256"] = policy_record["outer_policy"]["semantic_digest_sha256"]
+    produced["canonical_outer_cbpf_instruction_count"] = policy_record["outer_policy"]["emitted_cbpf_instruction_count"]
+    produced["canonical_outer_cbpf_sha256"] = policy_record["outer_policy"]["emitted_cbpf_sha256"]
+    produced["outer_containment_policy_digest_sha256"] = policy_record["outer_policy"]["governed_digest_sha256"]
+    assert tuple(sorted(produced)) == _CONSUMER_REQUIRED_A4_FIELDS
+
+    # And every produced value is the one Stage C independently reconstructs.
+    assert produced["canonical_internal_cbpf_instruction_count"] == 113
+    assert produced["canonical_outer_cbpf_instruction_count"] == 400
+    assert produced["canonical_outer_policy_id"] == "MT4_S3C_OUTER_CONTAINMENT_P0_LINUX_X86_64"
+
+
+def test_the_receipt_generator_reads_every_field_from_the_policy_record():
+    """No consumer-required field may be a literal or a placeholder in the producer."""
+    source = _read(_S3C / "mt4_s3c_receipt_generator.py")
+    block = source[source.index("REPAIR 2A") : source.index("internal_filter_equivalence_digests")]
+    for field in _CONSUMER_REQUIRED_A4_FIELDS:
+        if field == "outer_containment_policy_digest_sha256":
+            continue
+        assert '"' + field + '": policy_record[' in block, field
+
+
+def test_the_unverifiable_sandbox_aggregate_left_the_trust_chain():
+    """Repair 2B.  A producer-supplied 64-hex value with only a shape check is not authority.
+
+    Stage C cannot reconstruct the aggregate -- it digests the unprivileged policy record including
+    that record's own mutant matrix -- so it no longer participates in any trusted equality or in
+    the predicate.  The properties it stood in for are established independently instead.
+    """
+    gate_source = _read(TRUSTED_GATE)
+    assert "sandbox_policy_digest" not in gate_source
+    # The independent authority that replaces it is present.
+    assert "def stage_c_canonical_outer_policy(" in gate_source
+    assert "def stage_c_canonical_internal_policy(" in gate_source

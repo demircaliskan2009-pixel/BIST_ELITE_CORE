@@ -415,6 +415,9 @@ REQUIRED_UPSTREAM_INPUTS = ("src/server.c", "build/assembly.S")
 COMPILE_INSTANCE_SCHEMA = "mt4-s3c-compile-instance-inventory.v1"
 COMPILE_INSTANCE_DIGEST_DOMAIN = b"mt4-s3c-compile-instance-inventory.v1\x00"
 
+# The fields EVERY recorded invocation carries.  resolved_tool_path and working_directory are
+# the wrapper's frozen execution boundary made evidence: the tool that actually ran and the
+# directory it ran in, rather than a basename and an assumption.
 COMPILE_INSTANCE_FIELDS = (
     "argv",
     "flags",
@@ -424,9 +427,26 @@ COMPILE_INSTANCE_FIELDS = (
     "kind",
     "libraries",
     "output",
+    "resolved_tool_path",
     "tool",
+    "working_directory",
     "working_directory_class",
 )
+
+# A TRANSFORM rewrites an artifact in place, so its record carries the two distinct graph
+# STATES of the same path.  Without them the post-transform bytes would be indistinguishable
+# from the pre-transform ones in the graph.
+TRANSFORM_INSTANCE_FIELDS = tuple(
+    sorted(COMPILE_INSTANCE_FIELDS + ("digest_after", "digest_before", "transform_target"))
+)
+
+
+def instance_fields_for(kind):
+    """The exact field set one recorded invocation must carry, by operation class."""
+    if kind == "TRANSFORM":
+        return TRANSFORM_INSTANCE_FIELDS
+    return COMPILE_INSTANCE_FIELDS
+
 
 # THE COMPLETE GRAPH.  Fifteen compiles and five links, derived from the reviewed workflow's
 # ACTUAL commands across all three jobs -- not from a count an earlier implementation reported, and
@@ -456,15 +476,48 @@ REQUIRED_LINK_INSTANCES = (
     "observer-link",
     "worker-link",
 )
+# Repair 5D: the two objcopy operations REWRITE the object bytes that are later linked and
+# qualified.  A graph that called itself complete while omitting a step that changes the artifact
+# was describing an intention, not the build.
+REQUIRED_TRANSFORM_INSTANCES = (
+    "blst-assembly-strip",
+    "blst-server-strip",
+)
 EXPECTED_COMPILE_INSTANCE_COUNT = 15
 EXPECTED_LINK_INSTANCE_COUNT = 5
+EXPECTED_TRANSFORM_INSTANCE_COUNT = 2
+EXPECTED_BUILD_OPERATION_COUNT = (
+    EXPECTED_COMPILE_INSTANCE_COUNT + EXPECTED_LINK_INSTANCE_COUNT + EXPECTED_TRANSFORM_INSTANCE_COUNT
+)
+
+# Repair 5B and 5C: the EXACT producer of every object each real link consumes, in order.  Derived
+# from the reviewed workflow's actual link commands.  The producer of a TRANSFORMED object is the
+# transform, never the compile that preceded it: a consumer naming the compile would be claiming
+# bytes that no longer exist.
+REQUIRED_LINK_INPUT_PRODUCERS = {
+    "worker-link": (
+        "worker-start",
+        "worker-bootstrap",
+        "worker-verify",
+        "worker-policy",
+        "worker-capability",
+        "blst-server-strip",
+        "blst-assembly-strip",
+    ),
+    "observer-link": ("observer-launcher", "observer-policy"),
+    "observe-observer-link": ("observe-launcher", "observe-policy"),
+    "observe-probe-link": ("observe-probe", "observe-policy"),
+    "adjudicate-probe-link": ("adjudicate-probe", "adjudicate-policy"),
+}
 
 # The build job observes only its OWN invocations; the observe and adjudicate jobs record theirs and
 # carry them in the artifacts they already upload.  The manifest digest therefore binds the build
 # job's inventory, and the COMPLETE graph is required at the boundary from the union of all three.
 BUILD_JOB_INSTANCES = (
     "blst-assembly",
+    "blst-assembly-strip",
     "blst-server",
+    "blst-server-strip",
     "observer-launcher",
     "observer-link",
     "observer-policy",
@@ -478,7 +531,15 @@ BUILD_JOB_INSTANCES = (
 )
 INSTANCE_LOG_SCHEMA = "mt4-s3c-build-instance-log.v1"
 REQUIRED_SYSTEM_LIBRARIES = ("cap",)
+# The approved tool for each governed operation class.  objcopy is the ONLY tool permitted to
+# rewrite an artifact, and gcc the only one permitted to produce one.
 APPROVED_BUILD_TOOL = "gcc"
+APPROVED_TRANSFORM_TOOL = "objcopy"
+APPROVED_TOOL_BY_KIND = {
+    "COMPILE": APPROVED_BUILD_TOOL,
+    "LINK": APPROVED_BUILD_TOOL,
+    "TRANSFORM": APPROVED_TRANSFORM_TOOL,
+}
 
 # =================================================================================================
 # SYSTEM LIBRARY PROVENANCE (repair 11).
@@ -561,7 +622,7 @@ def recompute_compile_instance_digest(payload):
     for instance in instances:
         if not isinstance(instance, dict):
             fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "instance type")
-        if tuple(sorted(instance)) != tuple(sorted(COMPILE_INSTANCE_FIELDS)):
+        if tuple(sorted(instance)) != tuple(sorted(instance_fields_for(instance.get("kind")))):
             fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "instance field set")
         identifier = require_str(instance.get("instance_id"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
         if identifier in seen:
@@ -569,10 +630,11 @@ def recompute_compile_instance_digest(payload):
         seen.add(identifier)
         identifiers.append(identifier)
         kind = require_str(instance.get("kind"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
-        if kind not in ("COMPILE", "LINK"):
+        if kind not in ("COMPILE", "LINK", "TRANSFORM"):
             fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "kind")
         kinds[identifier] = kind
-        if require_str(instance.get("tool"), "COMPILE_INSTANCE_INVENTORY_MISMATCH") != APPROVED_BUILD_TOOL:
+        expected_tool = APPROVED_TOOL_BY_KIND[kind]
+        if require_str(instance.get("tool"), "COMPILE_INSTANCE_INVENTORY_MISMATCH") != expected_tool:
             fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "tool")
         if (
             require_str(instance.get("working_directory_class"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
@@ -580,13 +642,13 @@ def recompute_compile_instance_digest(payload):
         ):
             fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "working directory class")
         argv = instance.get("argv")
-        if not isinstance(argv, list) or not argv or argv[0] != APPROVED_BUILD_TOOL:
+        if not isinstance(argv, list) or not argv or argv[0] != expected_tool:
             fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "argv")
         inputs = instance.get("inputs")
         if not isinstance(inputs, list) or not inputs:
             fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "inputs")
         for item in inputs:
-            if not isinstance(item, dict) or tuple(sorted(item)) != ("class", "path"):
+            if not isinstance(item, dict) or tuple(sorted(item)) != ("class", "graph_identity", "path"):
                 fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "input shape")
             item_class = require_str(item.get("class"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
             item_path = require_str(item.get("path"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
@@ -662,7 +724,8 @@ def require_complete_build_graph(build_payload, observe_log, adjudicate_log):
         kinds[identifier] = require_str(instance.get("kind"), "BUILD_GRAPH_INCOMPLETE")
         identifiers.append(identifier)
 
-    if sorted(identifiers) != sorted(REQUIRED_COMPILE_INSTANCES + REQUIRED_LINK_INSTANCES):
+    governed = REQUIRED_COMPILE_INSTANCES + REQUIRED_LINK_INSTANCES + REQUIRED_TRANSFORM_INSTANCES
+    if sorted(identifiers) != sorted(governed):
         fail("BUILD_GRAPH_INCOMPLETE", "graph is not the governed set")
     for required in REQUIRED_COMPILE_INSTANCES:
         if kinds.get(required) != "COMPILE":
@@ -670,23 +733,58 @@ def require_complete_build_graph(build_payload, observe_log, adjudicate_log):
     for required in REQUIRED_LINK_INSTANCES:
         if kinds.get(required) != "LINK":
             fail("BUILD_GRAPH_INCOMPLETE", required)
+    for required in REQUIRED_TRANSFORM_INSTANCES:
+        if kinds.get(required) != "TRANSFORM":
+            fail("BUILD_GRAPH_INCOMPLETE", required)
     if sum(1 for value in kinds.values() if value == "COMPILE") != EXPECTED_COMPILE_INSTANCE_COUNT:
         fail("BUILD_GRAPH_INCOMPLETE", "compile count")
     if sum(1 for value in kinds.values() if value == "LINK") != EXPECTED_LINK_INSTANCE_COUNT:
         fail("BUILD_GRAPH_INCOMPLETE", "link count")
+    if sum(1 for value in kinds.values() if value == "TRANSFORM") != EXPECTED_TRANSFORM_INSTANCE_COUNT:
+        fail("BUILD_GRAPH_INCOMPLETE", "transform count")
+    if len(identifiers) != EXPECTED_BUILD_OPERATION_COUNT:
+        fail("BUILD_GRAPH_INCOMPLETE", "operation count")
 
-    # Repair 10: PRODUCER -> CONSUMER edges across the WHOLE graph.
-    produced = set()
+    # Repair 5A and 5C: PRODUCER -> CONSUMER edges over the WHOLE graph, by PATH-SCOPED identity.
+    #
+    # A basename is not an identity: three different jobs each produce a policy.o, and reducing the
+    # graph to basenames made every one of them satisfy every consumer.  A transform SUPERSEDES the
+    # producer of the path it rewrites, so the map below records it last for that node.
+    producers = {}
     for instance in instances:
-        if instance["kind"] == "COMPILE":
-            produced.add(instance["output"])
+        output = require_str(instance.get("output"), "BUILD_GRAPH_INCOMPLETE")
+        if instance["kind"] == "TRANSFORM":
+            before = require_str(instance.get("digest_before"), "BUILD_GRAPH_INCOMPLETE")
+            after = require_str(instance.get("digest_after"), "BUILD_GRAPH_INCOMPLETE")
+            if not is_hex64(before) or not is_hex64(after):
+                fail("BUILD_GRAPH_TRANSFORM_DIGEST_INVALID")
+            if before == after:
+                # A transform that changed nothing is either mis-recorded or was not the operation
+                # the graph claims; either way the record does not describe what happened.
+                fail("BUILD_GRAPH_TRANSFORM_INERT")
+            if output not in producers:
+                fail("BUILD_GRAPH_TRANSFORM_INPUT_UNPRODUCED")
+            producers[output] = instance["instance_id"]
+        elif output in producers:
+            fail("BUILD_GRAPH_DUPLICATE_PRODUCER")
+        else:
+            producers[output] = instance["instance_id"]
+
     for instance in instances:
         if instance["kind"] != "LINK":
             continue
+        expected = REQUIRED_LINK_INPUT_PRODUCERS.get(instance["instance_id"])
+        if expected is None:
+            fail("BUILD_GRAPH_INCOMPLETE", "unknown link")
+        observed = []
         for item in instance.get("inputs") or ():
-            consumed = require_str(item.get("path"), "BUILD_GRAPH_INCOMPLETE").rsplit("/", 1)[-1]
-            if consumed.endswith(".o") and consumed not in produced:
+            identity = require_str(item.get("graph_identity"), "BUILD_GRAPH_INCOMPLETE")
+            producer = producers.get(identity)
+            if producer is None:
                 fail("BUILD_GRAPH_LINK_INPUT_UNPRODUCED")
+            observed.append(producer)
+        if tuple(observed) != tuple(expected):
+            fail("BUILD_GRAPH_LINK_INPUTS_MISMATCH")
     return len(identifiers)
 
 
@@ -1435,6 +1533,24 @@ SHN_UNDEF = 0
 BLST_PLATFORM_CAP_SYMBOL = "__blst_platform_cap"
 BLST_PLATFORM_CAP_SIZE_BYTES = 4
 
+# The OUTER governed filter objects.  They live in the same linked image as the internal ones, so
+# Stage C can and does reconstruct them from the candidate bytes rather than trusting an address.
+OUTER_FPROG_SYMBOL = "mt4_s3c_outer_filter_fprog"
+OUTER_PROGRAM_SYMBOL = "mt4_s3c_outer_filter_program"
+OUTER_FPROG_SIZE_BYTES = 16
+OUTER_PROGRAM_SIZE_BYTES = CANONICAL_OUTER_CBPF_INSTRUCTION_COUNT * 8
+
+# REPAIR 1D: the EXACT identity every governed filter symbol must carry.  The previous code read
+# st_info and st_other and then only enforced them for the capability object, so a filter descriptor
+# could have been weak, local, internal or the wrong symbol type and still bind.  All four filter
+# objects are declared with hidden visibility in bundle entry 10 and are non-static, so the frozen
+# contract is the same one the capability object already carries.
+GOVERNED_SYMBOL_IDENTITY = {
+    "binding": STB_GLOBAL,
+    "visibility": STV_HIDDEN,
+    "symbol_type": STT_OBJECT,
+}
+
 
 def _bounded(data, offset, length, marker):
     if offset < 0 or length < 0 or offset + length > len(data):
@@ -1593,6 +1709,17 @@ def _stage_c_parse_worker(data):
     }
 
 
+def _require_governed_symbol_identity(symbol, name):
+    """Repair 1D.  Binding, type and visibility, enforced for EVERY governed filter symbol."""
+    if symbol["info"] >> 4 != GOVERNED_SYMBOL_IDENTITY["binding"]:
+        fail("TRUSTED_ELF_SYMBOL_IDENTITY_INVALID", name + " binding")
+    if symbol["info"] & 0x0F != GOVERNED_SYMBOL_IDENTITY["symbol_type"]:
+        fail("TRUSTED_ELF_SYMBOL_IDENTITY_INVALID", name + " type")
+    if symbol["other"] & 0x03 != GOVERNED_SYMBOL_IDENTITY["visibility"]:
+        fail("TRUSTED_ELF_SYMBOL_IDENTITY_INVALID", name + " visibility")
+    return symbol
+
+
 def _stage_c_locate(parsed, data, name, expected_size):
     """Locate ONE governed object and derive its coordinates two independent ways (repair 13).
 
@@ -1636,6 +1763,7 @@ def _stage_c_locate(parsed, data, name, expected_size):
     if not load["p_flags"] & PF_R:
         fail(marker, "unreadable mapping")
 
+    _require_governed_symbol_identity(symbol, name)
     section_derived = section["sh_offset"] + (symbol["value"] - section["sh_addr"])
     load_derived = load["p_offset"] + (symbol["value"] - load["p_vaddr"])
     if section_derived != load_derived:
@@ -1656,7 +1784,7 @@ def _stage_c_locate(parsed, data, name, expected_size):
     }
 
 
-def stage_c_reconstruct_worker_authority(data, canonical):
+def stage_c_reconstruct_worker_authority(data, canonical, outer_canonical):
     """Rebuild the governed ELF authority from the CANDIDATE BYTES (repair 1B and 1C).
 
     Returns exactly the canonical sub-record A2 must match.  Nothing here reads A2.
@@ -1665,6 +1793,10 @@ def stage_c_reconstruct_worker_authority(data, canonical):
     capability = _stage_c_locate(parsed, data, BLST_PLATFORM_CAP_SYMBOL, BLST_PLATFORM_CAP_SIZE_BYTES)
     fprog = _stage_c_locate(parsed, data, INTERNAL_FPROG_SYMBOL, INTERNAL_FPROG_SIZE_BYTES)
     program = _stage_c_locate(parsed, data, INTERNAL_PROGRAM_SYMBOL, INTERNAL_PROGRAM_SIZE_BYTES)
+    # REPAIR 2C: the OUTER objects are reconstructed too, so the trusted verification path no longer
+    # receives None for the outer object and observed outer addresses are bound to real coordinates.
+    outer_fprog = _stage_c_locate(parsed, data, OUTER_FPROG_SYMBOL, OUTER_FPROG_SIZE_BYTES)
+    outer_program = _stage_c_locate(parsed, data, OUTER_PROGRAM_SYMBOL, OUTER_PROGRAM_SIZE_BYTES)
 
     # The capability object's EXACT identity, checked against the frozen authority.
     cap_symbol = capability["symbol"]
@@ -1748,7 +1880,25 @@ def stage_c_reconstruct_worker_authority(data, canonical):
         "load_flags_u32": capability["load"]["p_flags"],
     }
 
+    if hashlib.sha256(outer_program["bytes"]).hexdigest() != outer_canonical["program_bytes_sha256"]:
+        fail("TRUSTED_ELF_OUTER_PROGRAM_NOT_CANONICAL")
+    expected_outer_fprog = (
+        outer_canonical["cbpf_instruction_count"].to_bytes(2, "little")
+        + bytes(FPROG_POINTER_OFFSET - 2)
+        + outer_program["symbol"]["value"].to_bytes(8, "little")
+    )
+    if outer_fprog["bytes"] != expected_outer_fprog:
+        fail("TRUSTED_ELF_OUTER_FPROG_NOT_CANONICAL")
+
     return {
+        "outer_filter_object": {
+            "fprog_va_u64": outer_fprog["symbol"]["value"],
+            "program_va_u64": outer_program["symbol"]["value"],
+            "fprog_file_offset_u64": outer_fprog["file_offset"],
+            "program_file_offset_u64": outer_program["file_offset"],
+            "program_bytes_sha256": hashlib.sha256(outer_program["bytes"]).hexdigest(),
+            "program_instruction_count": outer_canonical["cbpf_instruction_count"],
+        },
         "entry_va_u64": parsed["entry"],
         "program_header_count": len(parsed["segments"]),
         "section_header_count": len(parsed["sections"]),
@@ -2033,11 +2183,15 @@ def bind_observed_outer_program(case, outer_canonical, outer_object):
         fail("OUTER_FILTER_EQUIVALENCE_FAILED", "captured length")
     if require_int(capture.get("install_return_i32"), "OBSERVATION_MALFORMED") != 0:
         fail("OUTER_FILTER_EQUIVALENCE_FAILED", "install return")
-    if outer_object is not None:
-        if require_int(capture.get("fprog_va_u64"), "OBSERVATION_MALFORMED", 0) != outer_object["fprog_va_u64"]:
-            fail("OUTER_FILTER_EQUIVALENCE_FAILED", "uargs is not the reconstructed fprog address")
-        if require_int(capture.get("filter_va_u64"), "OBSERVATION_MALFORMED", 0) != outer_object["program_va_u64"]:
-            fail("OUTER_FILTER_EQUIVALENCE_FAILED", "filter is not the reconstructed program address")
+    # REPAIR 2C: the object is ALWAYS the reconstructed one now.  The previous `is not None` guard
+    # meant the trusted path silently skipped address binding whenever the caller passed None --
+    # which it did, so the binding never actually ran.
+    if not isinstance(outer_object, dict):
+        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "no reconstructed outer object")
+    if require_int(capture.get("fprog_va_u64"), "OBSERVATION_MALFORMED", 0) != outer_object["fprog_va_u64"]:
+        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "uargs is not the reconstructed fprog address")
+    if require_int(capture.get("filter_va_u64"), "OBSERVATION_MALFORMED", 0) != outer_object["program_va_u64"]:
+        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "filter is not the reconstructed program address")
     return cbpf_digest(program_bytes)
 
 
@@ -3285,8 +3439,15 @@ def run_gate(arguments):
         fail("ELF_QUALIFICATION_DIGEST_MISMATCH", "A4 vs Stage C")
     if not is_hex64(receipt.get("protocol_conformance_digest_sha256")):
         fail("PROTOCOL_CONFORMANCE_DIGEST_MISMATCH")
-    if not is_hex64(receipt.get("sandbox_policy_digest_sha256")):
-        fail("SANDBOX_POLICY_DIGEST_MISMATCH")
+    # REPAIR 2B: the sandbox-policy AGGREGATE leaves the trust chain.
+    #
+    # It is a digest over the whole unprivileged sandbox-policy record, INCLUDING that record's own
+    # mutant matrix, so Stage C cannot reconstruct it from anything it independently knows.  A
+    # shape check on a producer-supplied 64-hex value is not authority, and copying it into the
+    # trusted predicate gave it a standing it never earned.  The properties it was standing in for
+    # ARE independently established elsewhere: both canonical policies, both cBPF programs and both
+    # governed digests are reconstructed by Stage C and required to match A3 and A4 exactly.  The
+    # field is therefore no longer read, no longer compared and no longer emitted.
 
     # --- STAGE_C_SELF_ANCHORED_AUTHORITY_RECONSTRUCTED (repair 1A, 1C, 2A, 2B, 2C) ---
     #
@@ -3296,7 +3457,9 @@ def run_gate(arguments):
     outer_canonical = stage_c_canonical_outer_policy()
     # REPAIR 1B: the worker ELF is parsed from the AUTHENTICATED CANDIDATE BYTES, and A2 is then
     # required to agree with that reconstruction.  A2 no longer supplies any expected coordinate.
-    reconstructed = stage_c_reconstruct_worker_authority(payloads[CANDIDATE_ARTIFACT][WORKER_BINARY_MEMBER], canonical)
+    reconstructed = stage_c_reconstruct_worker_authority(
+        payloads[CANDIDATE_ARTIFACT][WORKER_BINARY_MEMBER], canonical, outer_canonical
+    )
     filter_object = bind_a2_to_reconstruction(elf_record, reconstructed)
     validate_a4_policy_authority(receipt, canonical, outer_canonical)
     case_set_digest = stage_c_case_set_digest()
@@ -3389,7 +3552,7 @@ def run_gate(arguments):
         case_id = require_str(case.get("case_id"), "OBSERVATION_MALFORMED")
         # REPAIR 2: the observed OUTER program is bound to the Stage-C reconstruction too, so a
         # synthetic A3/A4 pair cannot invent its own outer authority.
-        bind_observed_outer_program(case, outer_canonical, None)
+        bind_observed_outer_program(case, outer_canonical, reconstructed["outer_filter_object"])
         digest = stage_c_equivalence_digest(observation, case, receipt_digests[case_id], canonical, filter_object)
         if not is_hex64(digest):
             fail("INTERNAL_FILTER_EQUIVALENCE_DIGEST_MISMATCH", "digest shape")
@@ -3429,7 +3592,6 @@ def run_gate(arguments):
         "build_manifest_sha256": member_digests[CANDIDATE_ARTIFACT][BUILD_MANIFEST_MEMBER],
         "elf_qualification_digest_sha256": elf_digest,
         "protocol_conformance_digest_sha256": receipt.get("protocol_conformance_digest_sha256"),
-        "sandbox_policy_digest_sha256": receipt.get("sandbox_policy_digest_sha256"),
         "outer_containment_policy_digest_sha256": outer_canonical["governed_sha256"],
         "canonical_outer_policy_id": outer_canonical["policy_id"],
         "canonical_outer_cbpf_sha256": outer_canonical["cbpf_sha256"],

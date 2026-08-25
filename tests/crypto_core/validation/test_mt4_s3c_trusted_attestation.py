@@ -1116,7 +1116,7 @@ def _canonical():
 
 def _reconstructed():
     # Stage C's OWN parse of the real image.  Nothing here reads A2.
-    return gate.stage_c_reconstruct_worker_authority(_worker_bytes(), _canonical())
+    return gate.stage_c_reconstruct_worker_authority(_worker_bytes(), _canonical(), gate.stage_c_canonical_outer_policy())
 
 
 def _sealed_elf_record(**overrides):
@@ -1315,17 +1315,32 @@ def a2_truncation_and_relocation():
 def stage_c_outer_program_binding():
     # REPAIR 2.  The OBSERVED outer program is bound to Stage C's reconstruction.
     outer = gate.stage_c_canonical_outer_policy()
+    # The object comes from Stage C's own reconstruction of the worker bytes, which is the whole
+    # point of the repair: passing None here used to disable address binding entirely.
+    reconstructed = gate.stage_c_reconstruct_worker_authority(_worker_bytes(), _canonical(), outer)
+    outer_object = reconstructed["outer_filter_object"]
     honest = {
         "outer_capture": {
             "valid": True,
             "program_bytes_hex": outer["cbpf_program_bytes"].hex(),
             "length": outer["cbpf_instruction_count"],
             "install_return_i32": 0,
-            "fprog_va_u64": 0x401000,
-            "filter_va_u64": 0x401100,
+            "fprog_va_u64": outer_object["fprog_va_u64"],
+            "filter_va_u64": outer_object["program_va_u64"],
         }
     }
-    assert gate.bind_observed_outer_program(honest, outer, None) == outer["cbpf_sha256"]
+    assert gate.bind_observed_outer_program(honest, outer, outer_object) == outer["cbpf_sha256"]
+
+    # A missing reconstructed object is now itself a failure, not a permissive skip.
+    expect("OUTER_FILTER_EQUIVALENCE_FAILED", lambda: gate.bind_observed_outer_program(honest, outer, None))
+    for label, address in (("wrong fprog address", "fprog_va_u64"), ("wrong program address", "filter_va_u64")):
+        moved = json.loads(json.dumps(honest))
+        moved["outer_capture"][address] = 0x7FF000000000
+        expect(
+            "OUTER_FILTER_EQUIVALENCE_FAILED",
+            lambda case=moved: gate.bind_observed_outer_program(case, outer, outer_object),
+        )
+        del label
 
     for label, mutate in (
         ("substituted program", lambda case: case["outer_capture"].update({"program_bytes_hex": bytes(400 * 8).hex()})),
@@ -1582,19 +1597,40 @@ def _canonical_bytes(payload):
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
 
 
-def _instance(instance_id, kind, inputs, libraries=(), flags=(), output="out.o"):
-    return {
+def _instance(instance_id, kind, inputs, libraries=(), flags=(), output="out.o", tool="gcc"):
+    record = {
         "instance_id": instance_id,
         "kind": kind,
-        "tool": "gcc",
-        "argv": ["gcc", "-c", "-o", output] + [item["path"] for item in inputs],
+        "tool": tool,
+        "argv": [tool, "-c", "-o", output] + [item["path"] for item in inputs],
         "flags": sorted(flags),
         "include_roots": [],
-        "inputs": list(inputs),
+        "inputs": [dict(item) for item in inputs],
         "libraries": sorted(libraries),
         "output": output,
+        # The wrapper's frozen execution boundary, recorded as evidence.
+        "resolved_tool_path": "/usr/bin/" + tool,
+        "working_directory": ".",
         "working_directory_class": "GITHUB_WORKSPACE",
     }
+    for item in record["inputs"]:
+        item.setdefault("graph_identity", item["path"])
+    return record
+
+
+def _transform(instance_id, target, before, after):
+    record = _instance(
+        instance_id,
+        "TRANSFORM",
+        [{"path": target, "class": "EXTERNAL_TOOLCHAIN", "graph_identity": target}],
+        output=target,
+        tool="objcopy",
+    )
+    record["argv"] = ["objcopy", "--remove-section=.note.gnu.property", target]
+    record["transform_target"] = target
+    record["digest_before"] = before
+    record["digest_after"] = after
+    return record
 
 
 _BUNDLED_SOURCE = {
@@ -1636,7 +1672,44 @@ _COMPILE_OUTPUT = {
 }
 
 
+# The REAL path-scoped output of every governed operation.  Three different jobs each produce a
+# policy.o, which is exactly the collision a basename-keyed graph could not distinguish; every one
+# of them therefore has its own job-scoped path here.
+_OUTPUT_PATH = {
+    "blst-server": "obj/blst_server.o",
+    "blst-assembly": "obj/blst_assembly.o",
+    "worker-bootstrap": "obj/bootstrap.o",
+    "worker-policy": "obj/policy.o",
+    "worker-capability": "obj/capability.o",
+    "worker-verify": "obj/verify.o",
+    "worker-start": "obj/start.o",
+    "observer-probe": "depobj/probe.o",
+    "observer-launcher": "depobj/launcher.o",
+    "observer-policy": "depobj/policy.o",
+    "observe-probe": "observe/probe.o",
+    "observe-launcher": "observe/launcher.o",
+    "observe-policy": "observe/policy.o",
+    "adjudicate-probe": "adjudicate/probe.o",
+    "adjudicate-policy": "adjudicate/policy.o",
+}
+# A transform REWRITES its target in place, so it produces the SAME path as the compile it
+# supersedes -- which is what makes the post-transform identity the one a link must consume.
+_OUTPUT_PATH["blst-server-strip"] = _OUTPUT_PATH["blst-server"]
+_OUTPUT_PATH["blst-assembly-strip"] = _OUTPUT_PATH["blst-assembly"]
+
+_LINK_OUTPUT = {
+    "worker-link": "mt4_s3c_static_worker",
+    "observer-link": "depobj/mt4_s3c_observer",
+    "observe-observer-link": "observe/mt4_s3c_observer",
+    "observe-probe-link": "observe/mt4_s3c_policy_probe",
+    "adjudicate-probe-link": "adjudicate/mt4_s3c_policy_probe",
+}
+
+
 def _graph_instance(instance_id, kind):
+    if kind == "TRANSFORM":
+        target = _OUTPUT_PATH[instance_id]
+        return _transform(instance_id, target, "a" * 64, "b" * 64)
     if kind == "COMPILE":
         if instance_id in _BUNDLED_SOURCE:
             inputs = [{"path": _BUNDLED_SOURCE[instance_id], "class": "REPO_BUNDLED"}]
@@ -1644,19 +1717,30 @@ def _graph_instance(instance_id, kind):
             inputs = [{"path": "src/server.c", "class": "UPSTREAM_PINNED"}]
         else:
             inputs = [{"path": "build/assembly.S", "class": "UPSTREAM_PINNED"}]
-        output = _COMPILE_OUTPUT.get(instance_id, instance_id + ".o")
-        return _instance(instance_id, kind, inputs, output=output)
-    inputs = [{"path": "/tmp/" + name, "class": "EXTERNAL_TOOLCHAIN"} for name in _LINK_INPUTS[instance_id]]
+        return _instance(instance_id, kind, inputs, output=_OUTPUT_PATH[instance_id])
+    # A link consumes exactly what the governed graph says it consumes, in order, by the producer's
+    # path-scoped identity.  Deriving it this way keeps producer-consumer parity by construction
+    # rather than by a simplified list that could drift from the real command.
+    producers = gate.REQUIRED_LINK_INPUT_PRODUCERS[instance_id]
+    inputs = [
+        {"path": _OUTPUT_PATH[producer], "class": "EXTERNAL_TOOLCHAIN", "graph_identity": _OUTPUT_PATH[producer]}
+        for producer in producers
+    ]
     libraries = ("cap",) if instance_id in ("observer-link", "observe-observer-link") else ()
     flags = gate.REQUIRED_WORKER_LINK_FLAGS if instance_id == "worker-link" else ()
-    return _instance(instance_id, kind, inputs, libraries=libraries, flags=flags, output=instance_id)
+    return _instance(instance_id, kind, inputs, libraries=libraries, flags=flags, output=_LINK_OUTPUT[instance_id])
+
+
+def _instance_kind(name):
+    if name in gate.REQUIRED_TRANSFORM_INSTANCES:
+        return "TRANSFORM"
+    if name in gate.REQUIRED_LINK_INSTANCES:
+        return "LINK"
+    return "COMPILE"
 
 
 def _build_job_instances():
-    instances = [
-        _graph_instance(name, "LINK" if name in gate.REQUIRED_LINK_INSTANCES else "COMPILE")
-        for name in gate.BUILD_JOB_INSTANCES
-    ]
+    instances = [_graph_instance(name, _instance_kind(name)) for name in gate.BUILD_JOB_INSTANCES]
     instances.sort(key=lambda item: item["instance_id"])
     return {
         "schema": gate.COMPILE_INSTANCE_SCHEMA,
@@ -1678,9 +1762,7 @@ def _build_job_instances():
 def _job_log(names):
     return {
         "schema": gate.INSTANCE_LOG_SCHEMA,
-        "instances": [
-            _graph_instance(name, "LINK" if name in gate.REQUIRED_LINK_INSTANCES else "COMPILE") for name in names
-        ],
+        "instances": [_graph_instance(name, _instance_kind(name)) for name in names],
     }
 
 
@@ -1718,8 +1800,9 @@ def _build_world(mutate=None):
     }
 
     cases = []
-    reconstructed = gate.stage_c_reconstruct_worker_authority(worker, canonical)
+    reconstructed = gate.stage_c_reconstruct_worker_authority(worker, canonical, gate.stage_c_canonical_outer_policy())
     objects = reconstructed["canonical_internal_filter_object"]
+    outer_objects = reconstructed["outer_filter_object"]
     for row in gate.TRUSTED_CASE_INVENTORY:
         cases.append(
             {
@@ -1736,8 +1819,8 @@ def _build_world(mutate=None):
                     "program_bytes_hex": outer["cbpf_program_bytes"].hex(),
                     "length": outer["cbpf_instruction_count"],
                     "install_return_i32": 0,
-                    "fprog_va_u64": 1,
-                    "filter_va_u64": 2,
+                    "fprog_va_u64": outer_objects["fprog_va_u64"],
+                    "filter_va_u64": outer_objects["program_va_u64"],
                 },
                 "seccomp_baseline": {
                     "supervisor_seccomp": 0,
@@ -1836,7 +1919,9 @@ def _build_world(mutate=None):
 
     # SEAL: the per-case equivalence digests are computed the way an honest producer would, AFTER
     # any mutation, so a coordinated reseal is genuinely internally consistent.
-    filter_object = gate.stage_c_reconstruct_worker_authority(world["worker"], world["canonical"])[
+    filter_object = gate.stage_c_reconstruct_worker_authority(
+        world["worker"], world["canonical"], gate.stage_c_canonical_outer_policy()
+    )[
         "canonical_internal_filter_object"
     ]
     digests = []
@@ -2145,7 +2230,13 @@ def run_gate_compile_provenance():
     def unbundled_input(world):
         for item in world["instances"]["instances"]:
             if item["instance_id"] == "worker-policy":
-                item["inputs"] = [{"path": "src/crypto_core/__init__.py", "class": "REPO_BUNDLED"}]
+                item["inputs"] = [
+                    {
+                        "path": "src/crypto_core/__init__.py",
+                        "class": "REPO_BUNDLED",
+                        "graph_identity": "src/crypto_core/__init__.py",
+                    }
+                ]
 
     _expect_run_gate("SOURCE_CLOSURE_COMPILE_DEPENDENCY_UNBUNDLED", unbundled_input)
 
