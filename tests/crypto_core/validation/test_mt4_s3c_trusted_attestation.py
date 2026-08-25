@@ -1324,6 +1324,49 @@ def a2_truncation_and_relocation():
     del canonical
 
 
+def a2_phdr_and_resource_authority():
+    # THE P1.  Each image below is a real candidate that violates the frozen segment or resource
+    # policy, and an attacker's A2 can describe any of them PERFECTLY -- every internal digest
+    # agreeing, nothing inconsistent anywhere in the record.  The auditor's demonstration was
+    # exactly that: a coherently resealed A2 carrying a forbidden PT_DYNAMIC and a PT_LOAD whose
+    # p_memsz sat above the ceiling.  Stage C must reconstruct the inventory from the CANDIDATE
+    # BYTES and refuse, instead of adopting the producer's description of them.
+    canonical = _canonical()
+    outer = gate.stage_c_canonical_outer_policy()
+    reconstructed = _reconstructed()
+
+    # The HONEST candidate satisfies every one of these rules, or the rejections mean nothing.
+    inventory = reconstructed["program_headers"]
+    # The reconstruction names segment types; the frozen inventory numbers them.  Normalise the
+    # frozen side rather than the observed side, so the comparison stays anchored on the constants.
+    expected_inventory = tuple(
+        (gate._PT_NAME[phdr_type], flags, align) for phdr_type, flags, align in gate.EXPECTED_PHDR_INVENTORY
+    )
+    observed = tuple((entry["type"], entry["flags_u32"], entry["align_u64"]) for entry in inventory)
+    assert observed == expected_inventory, observed
+    loads = [entry for entry in inventory if entry["type"] == gate._PT_NAME[gate.PT_LOAD]]
+    assert [entry["vaddr_u64"] for entry in loads] == sorted(entry["vaddr_u64"] for entry in loads)
+    for entry in loads:
+        assert entry["filesz_u64"] <= entry["memsz_u64"], entry
+        assert entry["memsz_u64"] <= gate.MAX_PT_LOAD_EFFECTIVE_BYTES, entry["memsz_u64"]
+    assert reconstructed["aggregate_effective_bytes"] <= gate.MAX_AGGREGATE_EFFECTIVE_BYTES
+
+    with open(_work_dir() + "/phdr_mutants.json", "rb") as handle:
+        mutants = json.loads(handle.read().decode("utf-8"))
+    assert len(mutants) >= 8, len(mutants)
+
+    for mutant in mutants:
+        image = bytes.fromhex(mutant["image_hex"])
+        # The image really is different from the honest one, so the case is not vacuous.
+        assert image != _worker_bytes(), mutant["label"]
+        try:
+            gate.stage_c_reconstruct_worker_authority(image, canonical, outer)
+        except gate.TrustedGateError as error:
+            assert "TRUSTED_ELF" in str(error), (mutant["label"], str(error))
+            continue
+        raise AssertionError("Stage C accepted " + mutant["label"])
+
+
 def stage_c_self_anchored_authority():
     # Stage C derives the canonical policy from its OWN constants, never from A3.
     canonical = _canonical()
@@ -2905,6 +2948,7 @@ check("z_constants_are_literal", z_constants_are_literal)
 check("total_count_all_four_conditions", total_count_all_four_conditions)
 check("source_bundle_recomputation", source_bundle_recomputation)
 check("dependency_inventory_recomputation", dependency_inventory_recomputation)
+check("a2_phdr_and_resource_authority", a2_phdr_and_resource_authority)
 check("stage_c_self_anchored_authority", stage_c_self_anchored_authority)
 check("stage_c_worker_reconstruction", stage_c_worker_reconstruction)
 check("a2_truncation_and_relocation", a2_truncation_and_relocation)
@@ -3030,6 +3074,38 @@ def _qualification_module():
     return module
 
 
+def phdr_authority_mutants():
+    """Real candidate images that violate the frozen segment or resource policy.
+
+    These are the ATTACKER's images.  The reviewed qualifier would never emit an A2 for any of
+    them, which is the whole point: the attacker writes A2 by hand, so the only thing standing
+    between the trust boundary and a forbidden candidate is Stage C's own parse of the bytes.
+    """
+    module = _qualification_module()
+    qualifier = module.elf_qualify
+    mutants = [
+        ("PT_DYNAMIC", {"extra_phdrs": ((qualifier.PT_DYNAMIC, 4, 0, 0, 0, 0, 8),)}),
+        ("PT_INTERP", {"extra_phdrs": ((qualifier.PT_INTERP, 4, 0, 0, 0, 0, 8),)}),
+        ("PT_SHLIB", {"extra_phdrs": ((qualifier.PT_SHLIB, 4, 0, 0, 0, 0, 8),)}),
+        ("PT_TLS", {"extra_phdrs": ((qualifier.PT_TLS, 4, 0, 0, 0, 0, 8),)}),
+        # The auditor's exact figure: a PT_LOAD claiming 32 MiB of memory.
+        ("per-segment memory ceiling", {"data_memsz": 32 * 1024 * 1024}),
+        # The per-segment boundary is EXACT: one byte past it is refused.  (The aggregate ceiling
+        # cannot be reached from here -- the frozen inventory permits exactly two PT_LOADs, so the
+        # largest legal total is 16 MiB + 16 MiB = the 32 MiB aggregate bound itself.  It stands as
+        # defence-in-depth against an inventory change, not as a separately reachable rejection.)
+        ("per-segment ceiling boundary", {"data_memsz": 16 * 1024 * 1024 + 1}),
+        # p_filesz above p_memsz: the excess bytes would have nowhere to be mapped.
+        ("filesz above memsz", {"data_memsz": 8}),
+        # vaddr and offset incongruent modulo the page size, so the segment cannot map as described.
+        ("page congruence", {"data_vaddr": module._DATA_VADDR + 1}),
+    ]
+    built = []
+    for label, overrides in mutants:
+        built.append({"label": label, "image_hex": module.build_reference_elf(**overrides).hex()})
+    return built
+
+
 def build_real_receipt_for(image, record):
     """The A4 the REAL producer emits for this candidate, assembled by the real producer chain."""
     module = _qualification_module()
@@ -3076,6 +3152,7 @@ def driver_results(tmp_path_factory):
     (workspace / "governed_operations.json").write_text(
         json.dumps(governed_operations(), sort_keys=True), encoding="utf-8"
     )
+    (workspace / "phdr_mutants.json").write_text(json.dumps(phdr_authority_mutants(), sort_keys=True), encoding="utf-8")
     # REPAIR 7: the REAL A4, from the real producer chain, for the same candidate.
     (workspace / "real_receipt.json").write_text(
         json.dumps(build_real_receipt_for(image, record), sort_keys=True), encoding="utf-8"
@@ -3139,6 +3216,7 @@ def driver_values(driver_results):
         "total_count_all_four_conditions",
         "source_bundle_recomputation",
         "dependency_inventory_recomputation",
+        "a2_phdr_and_resource_authority",
         "stage_c_self_anchored_authority",
         "stage_c_worker_reconstruction",
         "a2_truncation_and_relocation",
