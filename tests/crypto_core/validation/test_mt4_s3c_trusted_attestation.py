@@ -944,6 +944,18 @@ def source_bundle_recomputation():
     expect("SOURCE_BUNDLE_CONTRADICTION", lambda: gate.recompute_source_bundle_digest({"entries": reordered}))
 
 
+CASE_PLAN_SHA256 = "c" * 64
+
+
+def _fixture_digest():
+    # The COMMITTED digest of the governed fixture, read from the same bundle inventory Stage C
+    # recomputes.  Hard-coding a value here would let the fixture and the anchor drift apart.
+    for entry in _bundle_entries():
+        if entry["path"] == gate.GOVERNED_FIXTURE_PATH:
+            return entry["sha256"]
+    raise AssertionError("the governed fixture is not a bundle entry")
+
+
 def _bundle_entries():
     return [
         {"path": path, "mode": "100644", "type": "blob", "sha256": format(index, "064x")}
@@ -1312,48 +1324,6 @@ def a2_truncation_and_relocation():
     del canonical
 
 
-def stage_c_outer_program_binding():
-    # REPAIR 2.  The OBSERVED outer program is bound to Stage C's reconstruction.
-    outer = gate.stage_c_canonical_outer_policy()
-    # The object comes from Stage C's own reconstruction of the worker bytes, which is the whole
-    # point of the repair: passing None here used to disable address binding entirely.
-    reconstructed = gate.stage_c_reconstruct_worker_authority(_worker_bytes(), _canonical(), outer)
-    outer_object = reconstructed["outer_filter_object"]
-    honest = {
-        "outer_capture": {
-            "valid": True,
-            "program_bytes_hex": outer["cbpf_program_bytes"].hex(),
-            "length": outer["cbpf_instruction_count"],
-            "install_return_i32": 0,
-            "fprog_va_u64": outer_object["fprog_va_u64"],
-            "filter_va_u64": outer_object["program_va_u64"],
-        }
-    }
-    assert gate.bind_observed_outer_program(honest, outer, outer_object) == outer["cbpf_sha256"]
-
-    # A missing reconstructed object is now itself a failure, not a permissive skip.
-    expect("OUTER_FILTER_EQUIVALENCE_FAILED", lambda: gate.bind_observed_outer_program(honest, outer, None))
-    for label, address in (("wrong fprog address", "fprog_va_u64"), ("wrong program address", "filter_va_u64")):
-        moved = json.loads(json.dumps(honest))
-        moved["outer_capture"][address] = 0x7FF000000000
-        expect(
-            "OUTER_FILTER_EQUIVALENCE_FAILED",
-            lambda case=moved: gate.bind_observed_outer_program(case, outer, outer_object),
-        )
-        del label
-
-    for label, mutate in (
-        ("substituted program", lambda case: case["outer_capture"].update({"program_bytes_hex": bytes(400 * 8).hex()})),
-        ("wrong length", lambda case: case["outer_capture"].update({"length": 399})),
-        ("failed install", lambda case: case["outer_capture"].update({"install_return_i32": -1})),
-        ("not captured", lambda case: case["outer_capture"].update({"valid": False})),
-    ):
-        case = json.loads(json.dumps(honest))
-        mutate(case)
-        expect("OUTER_FILTER_EQUIVALENCE_FAILED", lambda case=case: gate.bind_observed_outer_program(case, outer, None))
-        del label
-
-
 def stage_c_self_anchored_authority():
     # Stage C derives the canonical policy from its OWN constants, never from A3.
     canonical = _canonical()
@@ -1368,6 +1338,101 @@ def stage_c_self_anchored_authority():
     # And the case-set inventory is reconstructed and digested here too.
     assert gate.stage_c_case_set_digest() == gate.EXPECTED_CASE_SET_DIGEST
     assert len(gate.TRUSTED_CASE_IDS) == 25
+
+
+def stage_c_outer_program_binding():
+    # REPAIR 2.  Outer authority is the V9 13.4 TRUSTED LAUNCHER CAPTURE.  The launcher is a
+    # separately linked binary, so its runtime addresses are its own; comparing them to worker
+    # symbol addresses asserted a cross-link equality V9 never defines.
+    outer = gate.stage_c_canonical_outer_policy()
+    reconstructed = gate.stage_c_reconstruct_worker_authority(_worker_bytes(), _canonical(), outer)
+    worker_outer = reconstructed["outer_filter_object"]
+
+    def honest():
+        return {
+            "outer_capture": {
+                "valid": True,
+                "program_bytes_hex": outer["cbpf_program_bytes"].hex(),
+                "length": outer["cbpf_instruction_count"],
+                "install_return_i32": 0,
+                "operation_u32": 1,
+                "flags_u32": 0,
+                "argument_tail_u64": [0, 0, 0],
+                # LAUNCHER addresses, deliberately nowhere near the worker's own copy.
+                "fprog_va_u64": 0x7F1122330000,
+                "filter_va_u64": 0x7F1122340000,
+            },
+            "seccomp_baseline": {
+                "supervisor_filters": 0,
+                "outer_post_filters": 1,
+                "outer_post_seccomp": 2,
+            },
+        }
+
+    # A correct launcher program at addresses that differ from the worker's symbols is ACCEPTED.
+    assert gate.bind_observed_outer_program(honest(), outer) == outer["cbpf_sha256"]
+    assert honest()["outer_capture"]["filter_va_u64"] != worker_outer["program_va_u64"]
+
+    for label, mutate, marker in (
+        (
+            "substituted program",
+            lambda case: case["outer_capture"].update({"program_bytes_hex": bytes(400 * 8).hex()}),
+            "OUTER_FILTER_EQUIVALENCE_FAILED",
+        ),
+        ("wrong length", lambda case: case["outer_capture"].update({"length": 399}), "OUTER_FILTER_EQUIVALENCE_FAILED"),
+        (
+            "failed install",
+            lambda case: case["outer_capture"].update({"install_return_i32": -1}),
+            "OUTER_FILTER_EQUIVALENCE_FAILED",
+        ),
+        ("not captured", lambda case: case["outer_capture"].update({"valid": False}), "OUTER_FILTER_EQUIVALENCE_FAILED"),
+        (
+            "wrong seccomp operation",
+            lambda case: case["outer_capture"].update({"operation_u32": 2}),
+            "OUTER_FILTER_EQUIVALENCE_FAILED",
+        ),
+        (
+            "nonzero seccomp flags",
+            lambda case: case["outer_capture"].update({"flags_u32": 1}),
+            "OUTER_FILTER_EQUIVALENCE_FAILED",
+        ),
+        (
+            "nonzero argument tail",
+            lambda case: case["outer_capture"].update({"argument_tail_u64": [0, 1, 0]}),
+            "OUTER_FILTER_EQUIVALENCE_FAILED",
+        ),
+        (
+            "descriptor and program collide",
+            lambda case: case["outer_capture"].update({"fprog_va_u64": 0x7F1122340000}),
+            "OUTER_FILTER_EQUIVALENCE_FAILED",
+        ),
+        (
+            "M-3 pre-state not zero",
+            lambda case: case["seccomp_baseline"].update({"supervisor_filters": 1}),
+            "OUTER_FILTER_EQUIVALENCE_FAILED",
+        ),
+        (
+            "M-3 transition missing",
+            lambda case: case["seccomp_baseline"].update({"outer_post_filters": 0}),
+            "OUTER_FILTER_EQUIVALENCE_FAILED",
+        ),
+        (
+            "M-3 seccomp mode wrong",
+            lambda case: case["seccomp_baseline"].update({"outer_post_seccomp": 0}),
+            "OUTER_FILTER_EQUIVALENCE_FAILED",
+        ),
+    ):
+        case = honest()
+        mutate(case)
+        expect(marker, lambda case=case: gate.bind_observed_outer_program(case, outer))
+        del label
+
+    # Substituting the WORKER's outer symbol addresses cannot influence launcher authority: the
+    # capture is accepted on its canonical program, whatever addresses it reports.
+    substituted = honest()
+    substituted["outer_capture"]["fprog_va_u64"] = worker_outer["fprog_va_u64"]
+    substituted["outer_capture"]["filter_va_u64"] = worker_outer["program_va_u64"]
+    assert gate.bind_observed_outer_program(substituted, outer) == outer["cbpf_sha256"]
 
 
 def stage_c_outer_policy_reconstruction():
@@ -1597,10 +1662,11 @@ def _canonical_bytes(payload):
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
 
 
-def _instance(instance_id, kind, inputs, libraries=(), flags=(), output="out.o", tool="gcc"):
+def _instance(instance_id, kind, inputs, libraries=(), flags=(), output="out.o", tool="gcc", job=None):
     record = {
         "instance_id": instance_id,
         "kind": kind,
+        "job_id": job or _INSTANCE_JOB.get(instance_id, "s3c-build-candidate"),
         "tool": tool,
         "argv": [tool, "-c", "-o", output] + [item["path"] for item in inputs],
         "flags": sorted(flags),
@@ -1608,6 +1674,7 @@ def _instance(instance_id, kind, inputs, libraries=(), flags=(), output="out.o",
         "inputs": [dict(item) for item in inputs],
         "libraries": sorted(libraries),
         "output": output,
+        "raw_output": "/tmp/build/" + output.split(":", 1)[-1],
         # The wrapper's frozen execution boundary, recorded as evidence.
         "resolved_tool_path": "/usr/bin/" + tool,
         "working_directory": ".",
@@ -1622,11 +1689,11 @@ def _transform(instance_id, target, before, after):
     record = _instance(
         instance_id,
         "TRANSFORM",
-        [{"path": target, "class": "EXTERNAL_TOOLCHAIN", "graph_identity": target}],
+        [{"path": target.split(":", 1)[-1], "class": "EXTERNAL_TOOLCHAIN", "graph_identity": target}],
         output=target,
         tool="objcopy",
     )
-    record["argv"] = ["objcopy", "--remove-section=.note.gnu.property", target]
+    record["argv"] = ["objcopy", "--remove-section=.note.gnu.property", target.split(":", 1)[-1]]
     record["transform_target"] = target
     record["digest_before"] = before
     record["digest_after"] = after
@@ -1672,43 +1739,34 @@ _COMPILE_OUTPUT = {
 }
 
 
-# The REAL path-scoped output of every governed operation.  Three different jobs each produce a
-# policy.o, which is exactly the collision a basename-keyed graph could not distinguish; every one
-# of them therefore has its own job-scoped path here.
-_OUTPUT_PATH = {
-    "blst-server": "obj/blst_server.o",
-    "blst-assembly": "obj/blst_assembly.o",
-    "worker-bootstrap": "obj/bootstrap.o",
-    "worker-policy": "obj/policy.o",
-    "worker-capability": "obj/capability.o",
-    "worker-verify": "obj/verify.o",
-    "worker-start": "obj/start.o",
-    "observer-probe": "depobj/probe.o",
-    "observer-launcher": "depobj/launcher.o",
-    "observer-policy": "depobj/policy.o",
-    "observe-probe": "observe/probe.o",
-    "observe-launcher": "observe/launcher.o",
-    "observe-policy": "observe/policy.o",
-    "adjudicate-probe": "adjudicate/probe.o",
-    "adjudicate-policy": "adjudicate/policy.o",
-}
-# A transform REWRITES its target in place, so it produces the SAME path as the compile it
-# supersedes -- which is what makes the post-transform identity the one a link must consume.
-_OUTPUT_PATH["blst-server-strip"] = _OUTPUT_PATH["blst-server"]
-_OUTPUT_PATH["blst-assembly-strip"] = _OUTPUT_PATH["blst-assembly"]
+# =================================================================================================
+# THE GRAPH FIXTURE IS DERIVED FROM THE GOVERNED WORKFLOW (repair 5C).
+#
+# The table below is not written here.  It is parsed from the real workflow by the pytest side and
+# handed to this isolated driver as DATA, because a hand-written table drifts silently -- and the
+# previous one invented a private output directory per job, which erased the property under test.
+# The real workflow REUSES pathnames across jobs: obj/policy.o is produced by three separate jobs,
+# obj/probe.o by two and mt4_s3c_policy_probe by two.  Identity has to hold up under that reuse
+# rather than under a layout chosen to avoid it.
+# =================================================================================================
 
-_LINK_OUTPUT = {
-    "worker-link": "mt4_s3c_static_worker",
-    "observer-link": "depobj/mt4_s3c_observer",
-    "observe-observer-link": "observe/mt4_s3c_observer",
-    "observe-probe-link": "observe/mt4_s3c_policy_probe",
-    "adjudicate-probe-link": "adjudicate/mt4_s3c_policy_probe",
-}
+with open(_work_dir() + "/governed_operations.json", "rb") as handle:
+    _GOVERNED_OPERATIONS = json.loads(handle.read().decode("utf-8"))
+
+_INSTANCE_JOB = {row["instance_id"]: row["job_id"] for row in _GOVERNED_OPERATIONS}
+_OUTPUT_PATH = {row["instance_id"]: row["output"] for row in _GOVERNED_OPERATIONS}
+
+
+def _identity(instance_id):
+    # The job-scoped identity of what an instance produces, as the wrapper computes it.
+    return _INSTANCE_JOB[instance_id] + ":" + _OUTPUT_PATH[instance_id]
 
 
 def _graph_instance(instance_id, kind):
     if kind == "TRANSFORM":
-        target = _OUTPUT_PATH[instance_id]
+        # A transform rewrites its target in place, so it carries the identity of the node it
+        # supersedes -- the compile that produced it, in the same job.
+        target = _identity(instance_id.replace("-strip", ""))
         return _transform(instance_id, target, "a" * 64, "b" * 64)
     if kind == "COMPILE":
         if instance_id in _BUNDLED_SOURCE:
@@ -1717,18 +1775,24 @@ def _graph_instance(instance_id, kind):
             inputs = [{"path": "src/server.c", "class": "UPSTREAM_PINNED"}]
         else:
             inputs = [{"path": "build/assembly.S", "class": "UPSTREAM_PINNED"}]
-        return _instance(instance_id, kind, inputs, output=_OUTPUT_PATH[instance_id])
+        return _instance(instance_id, kind, inputs, output=_identity(instance_id))
     # A link consumes exactly what the governed graph says it consumes, in order, by the producer's
     # path-scoped identity.  Deriving it this way keeps producer-consumer parity by construction
     # rather than by a simplified list that could drift from the real command.
     producers = gate.REQUIRED_LINK_INPUT_PRODUCERS[instance_id]
     inputs = [
-        {"path": _OUTPUT_PATH[producer], "class": "EXTERNAL_TOOLCHAIN", "graph_identity": _OUTPUT_PATH[producer]}
+        {
+            "path": _OUTPUT_PATH[producer],
+            "class": "EXTERNAL_TOOLCHAIN",
+            # The consumer names the producer's JOB-scoped identity.  Two jobs both produce a file
+            # called obj/policy.o, and only this distinguishes which one is being consumed.
+            "graph_identity": _identity(producer),
+        }
         for producer in producers
     ]
     libraries = ("cap",) if instance_id in ("observer-link", "observe-observer-link") else ()
     flags = gate.REQUIRED_WORKER_LINK_FLAGS if instance_id == "worker-link" else ()
-    return _instance(instance_id, kind, inputs, libraries=libraries, flags=flags, output=_LINK_OUTPUT[instance_id])
+    return _instance(instance_id, kind, inputs, libraries=libraries, flags=flags, output=_identity(instance_id))
 
 
 def _instance_kind(name):
@@ -1819,8 +1883,11 @@ def _build_world(mutate=None):
                     "program_bytes_hex": outer["cbpf_program_bytes"].hex(),
                     "length": outer["cbpf_instruction_count"],
                     "install_return_i32": 0,
-                    "fprog_va_u64": outer_objects["fprog_va_u64"],
-                    "filter_va_u64": outer_objects["program_va_u64"],
+                    "operation_u32": 1,
+                    "flags_u32": 0,
+                    "argument_tail_u64": [0, 0, 0],
+                    "fprog_va_u64": 0x7F1122330000,
+                    "filter_va_u64": 0x7F1122340000,
                 },
                 "seccomp_baseline": {
                     "supervisor_seccomp": 0,
@@ -1828,6 +1895,7 @@ def _build_world(mutate=None):
                     "child_seccomp": 0,
                     "child_filters": 0,
                     "outer_post_filters": 1,
+                    "outer_post_seccomp": 2,
                     "internal_post_filters": 2,
                     "internal_post_seccomp": 2,
                     "revalidated_filters": 2,
@@ -1848,6 +1916,11 @@ def _build_world(mutate=None):
         "canonical_internal_cbpf_sha256": canonical["cbpf_sha256"],
         "outer_containment_policy_digest_sha256": outer["governed_sha256"],
         "observation_case_set_digest_sha256": case_set,
+        # The governed TEST-ONLY fixture and the case plan derived from it, exactly as the real
+        # observation adjudicator emits them.  The fixture digest is the COMMITTED one, because the
+        # fixture is bundle entry 16 and Stage C recomputes that inventory itself.
+        "fixture_sha256": _fixture_digest(),
+        "case_plan_sha256": CASE_PLAN_SHA256,
         "cases": cases,
     }
 
@@ -1871,6 +1944,8 @@ def _build_world(mutate=None):
         "canonical_outer_policy_sha256": outer["policy_sha256"],
         "canonical_outer_cbpf_instruction_count": outer["cbpf_instruction_count"],
         "canonical_outer_cbpf_sha256": outer["cbpf_sha256"],
+        "fixture_sha256": _fixture_digest(),
+        "case_plan_sha256": CASE_PLAN_SHA256,
         "case_count": 25,
         "all_cases_conform": True,
         "evidence_status": "ADMISSION_EVIDENCE_ONLY",
@@ -2274,6 +2349,219 @@ def run_gate_compile_provenance():
         del label
 
 
+def real_producer_receipt_is_accepted():
+    # REPAIR 7.  The A4 under test here is what receipt_generator.build_receipt ACTUALLY emitted for
+    # a real synthesised candidate, driven through the real policy qualifier, the real protocol
+    # qualifier and the real observation adjudicator.  Until now the positive path fed the boundary
+    # a receipt the test itself had written, which could only ever prove that the test agreed with
+    # the test.  A producer field that the consumer requires and the producer does not emit now
+    # fails here rather than in a real run.
+    work_dir = sys.argv[sys.argv.index("--work-dir") + 1]
+    with open(work_dir + "/real_receipt.json", "rb") as handle:
+        receipt = json.loads(handle.read().decode("utf-8"))
+
+    canonical = gate.stage_c_canonical_internal_policy()
+    outer = gate.stage_c_canonical_outer_policy()
+
+    # The trusted consumer's OWN policy authority check, over the producer's own record.
+    expected = gate.validate_a4_policy_authority(receipt, canonical, outer)
+    assert len(expected) == 9
+
+    # Every value the consumer requires was PRODUCED, and equals what Stage C reconstructs
+    # independently from its frozen constants.
+    assert receipt["canonical_internal_cbpf_instruction_count"] == canonical["cbpf_instruction_count"]
+    assert receipt["canonical_internal_cbpf_sha256"] == canonical["cbpf_sha256"]
+    assert receipt["canonical_outer_cbpf_instruction_count"] == outer["cbpf_instruction_count"]
+    assert receipt["canonical_outer_cbpf_sha256"] == outer["cbpf_sha256"]
+    assert receipt["outer_containment_policy_digest_sha256"] == outer["governed_sha256"]
+
+    # And the non-claims the producer emits are the ones the boundary refuses to promote.
+    assert receipt["evidence_status"] == "ADMISSION_EVIDENCE_ONLY"
+    assert receipt["governed_worker_row_created"] is False
+    assert receipt["authority_non_transition"]["admission"] == "NONE"
+    assert receipt["authority_non_transition"]["readiness_transition"] == "NONE"
+
+    # A resealed copy of the REAL receipt is still rejected: producer authorship is not authority.
+    resealed = json.loads(json.dumps(receipt))
+    resealed["canonical_outer_cbpf_sha256"] = "f" * 64
+    try:
+        gate.validate_a4_policy_authority(resealed, canonical, outer)
+    except gate.TrustedGateError as error:
+        assert "STAGE_C_CANONICAL_POLICY_SUBSTITUTED" in str(error), str(error)
+        return
+    raise AssertionError("the boundary accepted a resealed real receipt")
+
+
+def run_gate_build_graph_identity():
+    # REPAIR 5F.  Identity is JOB + canonical path + state, and every mutant below is a way that
+    # could be false.  These are not hypothetical shapes: the workflow really does produce a file
+    # called obj/policy.o in three different jobs, so the honest world already contains the
+    # collision that a path-only or basename-only key could not survive.
+    work_dir = sys.argv[sys.argv.index("--work-dir") + 1]
+    predicate, world = _run_world(work_dir)
+    assert len(predicate["compile_instance_inventory_digest_sha256"]) == 64
+
+    # The honest world DOES contain the reuse, or none of the rejections below prove anything.
+    produced = {}
+    for source in (world["instances"]["instances"], world["observe_log"]["instances"], world["adjudicate_log"]["instances"]):
+        for item in source:
+            job, _colon, path = item["output"].partition(":")
+            produced.setdefault(path, set()).add(job)
+    assert produced["obj/policy.o"] == {"s3c-build-candidate", "s3c-observe", "s3c-adjudicate"}, produced["obj/policy.o"]
+    assert produced["obj/probe.o"] == {"s3c-observe", "s3c-adjudicate"}, produced["obj/probe.o"]
+
+    def strip_the_job_scope(world):
+        # Path-only identity: the three policy.o producers collapse into one node.
+        for item in world["instances"]["instances"]:
+            item["output"] = item["output"].split(":", 1)[-1]
+
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", strip_the_job_scope)
+
+    def claim_a_foreign_job(world):
+        # The build job's own compile claims to have run in the observation job.  That job already
+        # has a real producer for obj/policy.o, so the impersonation collides with it -- which is
+        # precisely the ambiguity job-scoped identity exists to make visible.
+        for item in world["instances"]["instances"]:
+            if item["instance_id"] == "worker-policy":
+                item["output"] = "s3c-observe:" + item["output"].split(":", 1)[-1]
+                item["job_id"] = "s3c-observe"
+
+    _expect_run_gate("BUILD_GRAPH_DUPLICATE_PRODUCER", claim_a_foreign_job)
+
+    def invent_a_job(world):
+        for item in world["instances"]["instances"]:
+            if item["instance_id"] == "worker-policy":
+                item["job_id"] = "s3c-attacker"
+                item["output"] = "s3c-attacker:" + item["output"].split(":", 1)[-1]
+
+    _expect_run_gate("COMPILE_INSTANCE_INVENTORY_MISMATCH", invent_a_job)
+
+    def duplicate_producer_in_one_job(world):
+        # Two producers of the SAME job-scoped identity is genuinely ambiguous, unlike two
+        # producers of the same pathname in different jobs, which is the normal case.  The governed
+        # instance SET is left intact so that this reaches the graph rule rather than the inventory
+        # rule: it is a second producer of one node, not an extra operation.
+        for item in world["instances"]["instances"]:
+            if item["instance_id"] == "worker-verify":
+                item["output"] = "s3c-build-candidate:obj/policy.o"
+
+    _expect_run_gate("BUILD_GRAPH_DUPLICATE_PRODUCER", duplicate_producer_in_one_job)
+
+    def consume_a_foreign_jobs_object(world):
+        # The observation job's link consumes the BUILD job's policy.o.  The pathname is identical,
+        # so only the job scope can tell these apart -- and the two files are not the same file.
+        for item in world["observe_log"]["instances"]:
+            if item["instance_id"] == "observe-probe-link":
+                for consumed in item["inputs"]:
+                    if consumed["graph_identity"].endswith(":obj/policy.o"):
+                        consumed["graph_identity"] = "s3c-build-candidate:obj/policy.o"
+
+    _expect_run_gate("BUILD_GRAPH_LINK_INPUTS_MISMATCH", consume_a_foreign_jobs_object)
+
+    def consume_a_basename_match(world):
+        # Same basename, different canonical path.  A basename key would accept this.
+        for item in world["instances"]["instances"]:
+            if item["instance_id"] == "observer-link":
+                for consumed in item["inputs"]:
+                    if consumed["graph_identity"].endswith("/policy.o"):
+                        consumed["graph_identity"] = consumed["graph_identity"].rsplit("/", 1)[0] + "/../policy.o"
+
+    _expect_run_gate("BUILD_GRAPH_LINK_INPUT_UNPRODUCED", consume_a_basename_match)
+
+    def consume_the_pre_transform_state(world):
+        # The link names the transform's INPUT digest rather than the node the transform produced,
+        # which would let the stripped section come back at the moment it stops being checked.
+        for item in world["instances"]["instances"]:
+            if item["kind"] == "TRANSFORM":
+                item["digest_after"] = item["digest_before"]
+
+    _expect_run_gate("BUILD_GRAPH_TRANSFORM_INERT", consume_the_pre_transform_state)
+
+    def transform_a_node_it_did_not_consume(world):
+        for item in world["instances"]["instances"]:
+            if item["kind"] == "TRANSFORM":
+                item["transform_target"] = "s3c-build-candidate:obj/verify.o"
+
+    _expect_run_gate("BUILD_GRAPH_TRANSFORM_TARGET_MISMATCH", transform_a_node_it_did_not_consume)
+
+    def transform_two_things_at_once(world):
+        for item in world["instances"]["instances"]:
+            if item["kind"] == "TRANSFORM":
+                item["inputs"] = list(item["inputs"]) + [
+                    {
+                        "path": "obj/verify.o",
+                        "class": "EXTERNAL_TOOLCHAIN",
+                        "graph_identity": "s3c-build-candidate:obj/verify.o",
+                    }
+                ]
+
+    _expect_run_gate("BUILD_GRAPH_TRANSFORM_ARITY", transform_two_things_at_once)
+
+    def unproduced_link_input(world):
+        for item in world["instances"]["instances"]:
+            if item["instance_id"] == "worker-link":
+                item["inputs"][0]["graph_identity"] = "s3c-build-candidate:obj/never_built.o"
+
+    _expect_run_gate("BUILD_GRAPH_LINK_INPUT_UNPRODUCED", unproduced_link_input)
+
+
+def run_gate_build_provenance_boundary():
+    # REPAIR 6C, 6D and 6E.  The tool that ran, the directory it ran in and the system library the
+    # linker actually selected are all bound at the boundary, not assumed from a basename.
+    work_dir = sys.argv[sys.argv.index("--work-dir") + 1]
+
+    def unresolved_tool_root(world):
+        for item in world["instances"]["instances"]:
+            item["resolved_tool_path"] = "/opt/attacker/bin/" + item["tool"]
+
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", unresolved_tool_root)
+
+    def resolved_tool_is_a_different_program(world):
+        for item in world["instances"]["instances"]:
+            if item["kind"] == "COMPILE":
+                item["resolved_tool_path"] = "/usr/bin/attacker-cc"
+
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", resolved_tool_is_a_different_program)
+
+    def foreign_working_directory(world):
+        for item in world["instances"]["instances"]:
+            item["working_directory"] = "/tmp"
+
+    _expect_run_gate("BUILD_CWD_PROVENANCE_INVALID", foreign_working_directory)
+
+    def library_outside_the_approved_roots(world):
+        world["instances"]["system_libraries"][0]["resolved_path"] = "/home/runner/libcap.so.2.44"
+
+    _expect_run_gate("SYSTEM_LIBRARY_PROVENANCE_INVALID", library_outside_the_approved_roots)
+
+    def library_file_does_not_match_its_name(world):
+        # -lcap resolving to libattacker.so.1 is the whole point of binding the resolution.
+        world["instances"]["system_libraries"][0]["resolved_path"] = "/usr/lib/libattacker.so.1"
+        world["instances"]["system_libraries"][0]["soname"] = "libattacker.so.1"
+
+    _expect_run_gate("SYSTEM_LIBRARY_PROVENANCE_INVALID", library_file_does_not_match_its_name)
+
+    def soname_disagrees_with_the_resolved_file(world):
+        world["instances"]["system_libraries"][0]["soname"] = "libcap.so.9.99"
+
+    _expect_run_gate("SYSTEM_LIBRARY_PROVENANCE_INVALID", soname_disagrees_with_the_resolved_file)
+
+    def unrequested_library_resolution(world):
+        world["instances"]["system_libraries"].append(
+            {
+                "name": "ssl",
+                "resolved_path": "/usr/lib/libssl.so.3",
+                "soname": "libssl.so.3",
+                "digest_sha256": "c" * 64,
+                "provenance": gate.PROVENANCE_SYSTEM_LIBRARY,
+            }
+        )
+
+    _expect_run_gate("SYSTEM_LIBRARY_PROVENANCE_INVALID", unrequested_library_resolution)
+
+    del work_dir
+
+
 def run_gate_duplicate_identities():
     # REPAIR 3, at the real entrypoint rather than in a helper.
     def duplicate_case(world):
@@ -2627,6 +2915,9 @@ check("coordinated_reseal_is_rejected", coordinated_reseal_is_rejected)
 check("zip_runtime_consumption_and_reachable_rules", zip_runtime_consumption_and_reachable_rules)
 check("run_gate_reference", run_gate_reference)
 check("run_gate_coordinated_reseal", run_gate_coordinated_reseal)
+check("real_producer_receipt_is_accepted", real_producer_receipt_is_accepted)
+check("run_gate_build_graph_identity", run_gate_build_graph_identity)
+check("run_gate_build_provenance_boundary", run_gate_build_provenance_boundary)
 check("run_gate_duplicate_identities", run_gate_duplicate_identities)
 check("run_gate_compile_provenance", run_gate_compile_provenance)
 check("z_matrix_pre_decompression", z_matrix_pre_decompression)
@@ -2651,6 +2942,72 @@ sys.stdout.write("MT4_S3C_DRIVER_RESULTS=" + json.dumps(results) + chr(10))
 """
 
 
+# =================================================================================================
+# THE GOVERNED BUILD OPERATIONS, PARSED FROM THE REAL WORKFLOW (repair 5C).
+#
+# Parsing is the only way the graph fixture can be wrong in the same direction as the real build.
+# =================================================================================================
+
+_WORKFLOW_FILE = _REPO_ROOT / ".github" / "workflows" / "crypto_core_mt4_s3c_static_worker_qualification.yml"
+_JOB_HEADING = re.compile(r"^  (s3c-[a-z-]+):\s*$")
+_RUN_INVOCATION = re.compile(r'--run-invocation "?([a-z0-9-]+)"?')
+_RUN_KIND = re.compile(r'--invocation-kind "?([A-Z]+)"?')
+_RUN_JOB = re.compile(r'--job-id "?([a-z0-9-]+)"?')
+_RUN_OUTPUT = re.compile(r'-o "?([^" ]+)"?')
+_RUN_TRANSFORM_TARGET = re.compile(r"--remove-section=\S+ \"?([^\" ]+)\"?")
+
+
+def _build_area_relative(raw):
+    """Strip the runner-specific prefix, exactly as the wrapper's canonical path does."""
+    path = raw.replace("$RUNNER_TEMP/", "").replace("${RUNNER_TEMP}/", "")
+    # The candidate name is a workflow-level constant, not a per-run value.
+    return path.replace("$S3C_CANDIDATE_NAME", "mt4_s3c_static_worker")
+
+
+def governed_operations():
+    """Every governed build operation the workflow runs, in workflow order."""
+    operations = []
+    job = None
+    for line in _WORKFLOW_FILE.read_text(encoding="utf-8").splitlines():
+        heading = _JOB_HEADING.match(line)
+        if heading:
+            job = heading.group(1)
+            continue
+        if "--run-invocation" not in line:
+            continue
+        instance_id = _RUN_INVOCATION.search(line).group(1)
+        kind = _RUN_KIND.search(line).group(1)
+        declared = _RUN_JOB.search(line)
+        # The invocation must name the job it actually runs in, or the identity it produces would
+        # be a claim about a different job's build area.
+        assert declared is not None and declared.group(1) == job, instance_id
+        raw = (_RUN_TRANSFORM_TARGET if kind == "TRANSFORM" else _RUN_OUTPUT).search(line).group(1)
+        operations.append(
+            {"job_id": job, "instance_id": instance_id, "kind": kind, "output": _build_area_relative(raw)}
+        )
+    return operations
+
+
+def test_the_governed_workflow_really_reuses_paths_across_jobs():
+    """The premise of job-scoped identity, proven against the workflow rather than assumed."""
+    operations = governed_operations()
+    assert len(operations) == 22, len(operations)
+    by_path = {}
+    for row in operations:
+        by_path.setdefault(row["output"], set()).add(row["job_id"])
+    reused = {path: jobs for path, jobs in by_path.items() if len(jobs) > 1}
+    # These are the real collisions.  If the workflow ever stopped reusing them the fixture would
+    # no longer exercise reuse, and this test says so instead of quietly weakening.
+    assert reused == {
+        "obj/policy.o": {"s3c-build-candidate", "s3c-observe", "s3c-adjudicate"},
+        "obj/probe.o": {"s3c-observe", "s3c-adjudicate"},
+        "mt4_s3c_policy_probe": {"s3c-observe", "s3c-adjudicate"},
+    }, reused
+    # And every job-scoped identity is unique, which is what lets the graph close.
+    identities = [row["job_id"] + ":" + row["output"] for row in operations if row["kind"] != "TRANSFORM"]
+    assert len(identities) == len(set(identities)), sorted(identities)
+
+
 def _sanitised_environment():
     environment = {
         name: value
@@ -2671,6 +3028,16 @@ def _qualification_module():
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)
     return module
+
+
+def build_real_receipt_for(image, record):
+    """The A4 the REAL producer emits for this candidate, assembled by the real producer chain."""
+    module = _qualification_module()
+    worker_digest = hashlib.sha256(image).hexdigest()
+    elf_record = json.loads(json.dumps(record))
+    elf_record["candidate_binary_sha256"] = worker_digest
+    receipt, _adjudication, _identity = module.build_real_receipt(worker_digest, elf_record)
+    return receipt
 
 
 def build_worker_and_record(**overrides):
@@ -2706,6 +3073,13 @@ def driver_results(tmp_path_factory):
     image, record = build_worker_and_record()
     (workspace / "worker.bin").write_bytes(image)
     (workspace / "worker_a2.json").write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+    (workspace / "governed_operations.json").write_text(
+        json.dumps(governed_operations(), sort_keys=True), encoding="utf-8"
+    )
+    # REPAIR 7: the REAL A4, from the real producer chain, for the same candidate.
+    (workspace / "real_receipt.json").write_text(
+        json.dumps(build_real_receipt_for(image, record), sort_keys=True), encoding="utf-8"
+    )
 
     def declaration(path):
         return hashlib.sha256(path.read_bytes()).hexdigest() + ":" + str(path).replace("\\", "/")
@@ -2775,6 +3149,9 @@ def driver_values(driver_results):
         "zip_runtime_consumption_and_reachable_rules",
         "run_gate_reference",
         "run_gate_coordinated_reseal",
+        "real_producer_receipt_is_accepted",
+        "run_gate_build_graph_identity",
+        "run_gate_build_provenance_boundary",
         "run_gate_duplicate_identities",
         "run_gate_compile_provenance",
         "z_matrix_pre_decompression",

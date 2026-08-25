@@ -206,11 +206,12 @@ GOVERNED_BUILD_ENVIRONMENT = {
 }
 
 
-def resolve_governed_tool(kind, name):
-    """Deterministically resolve a tool basename inside the approved toolchain roots.
+def require_governed_tool_name(kind, name):
+    """The frozen half of tool identity: WHICH tool this operation class may run.
 
-    PATH is not consulted: PATH is an uncontrolled lookup, and "the basename was gcc" is not an
-    identity.  Exactly one approved directory must hold an executable regular file of that name.
+    This is a property of the contract, so it holds on every host and is checked before anything
+    else looks at the command.  Where that executable actually lives is a property of the machine
+    and is proven separately, immediately before exec.
     """
     if kind not in APPROVED_TOOLS:
         _fail("BUILD_COMMAND_REJECTED", "operation class")
@@ -218,6 +219,16 @@ def resolve_governed_tool(kind, name):
         _fail("BUILD_COMMAND_REJECTED", "tool is not approved for this operation")
     if os.sep in name or (os.altsep and os.altsep in name):
         _fail("BUILD_COMMAND_REJECTED", "tool must be a bare approved name")
+    return name
+
+
+def resolve_governed_tool(kind, name):
+    """Deterministically resolve a tool basename inside the approved toolchain roots.
+
+    PATH is not consulted: PATH is an uncontrolled lookup, and "the basename was gcc" is not an
+    identity.  Exactly one approved directory must hold an executable regular file of that name.
+    """
+    require_governed_tool_name(kind, name)
     resolved = [
         os.path.join(root, name)
         for root in APPROVED_TOOLCHAIN_ROOTS
@@ -240,7 +251,146 @@ def governed_build_environment():
     return environment
 
 
-def validate_build_command(kind, command, repository_root, upstream_root):
+# =================================================================================================
+# THE EXACT PER-INVOCATION COMMAND CONTRACT (repair 4).
+#
+# "This looks like a gcc compile" is not a contract.  The audit showed an out-of-contract external
+# input, an external output and a plugin flag all reaching the child-execution sentinel, because
+# validation only recognised the SHAPE of a command rather than the exact command each governed
+# instance is allowed to run.
+#
+# The allowlist below is POSITIVE.  A flag that is not named is refused -- which is the only form
+# that stays correct as toolchains grow new options, where an endless denylist does not.
+# =================================================================================================
+
+# Flags that change WHERE a tool looks or WHAT CODE it loads.  None of them is governed, and each
+# would let a caller extend the compiler's behaviour past the reviewed build contract.
+FORBIDDEN_FLAG_PREFIXES = (
+    "-B",
+    "-fplugin",
+    "-specs",
+    "-Xlinker",
+    "-Wl,-plugin",
+    "-Wl,--plugin",
+    "-idirafter",
+    "-isystem",
+    "-iquote",
+    "-iprefix",
+    "-L",
+    "-Wp,",
+    "-Wa,",
+    "@",
+)
+
+# The exact flag set each operation class may carry, beyond the frozen per-instance requirements.
+ALLOWED_COMPILE_FLAGS = frozenset(
+    {
+        "-c",
+        "-O2",
+        "-std=c11",
+        "-ffreestanding",
+        "-fno-pic",
+        "-fno-builtin",
+        "-fno-stack-protector",
+        "-fno-asynchronous-unwind-tables",
+        "-fcf-protection=none",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-MD",
+        "-D__BLST_PORTABLE__",
+        "-D__BLST_NO_CPUID__",
+        "-D_GNU_SOURCE",
+    }
+)
+ALLOWED_LINK_FLAGS = frozenset(
+    {
+        "-O2",
+        "-static",
+        "-no-pie",
+        "-nostdlib",
+        "-nostartfiles",
+        "-Wl,-e,_start",
+        "-Wl,--build-id=none",
+        "-Wl,-z,noexecstack",
+        "-Wl,-z,noseparate-code",
+        "-Wl,-z,max-page-size=0x1000",
+        "-Wl,--no-eh-frame-hdr",
+        "-Wl,-z,defs",
+        "-Wl,--fatal-warnings",
+    }
+)
+ALLOWED_TRANSFORM_FLAGS = frozenset({"--remove-section=.note.gnu.property"})
+
+ALLOWED_FLAGS_BY_KIND = {
+    INSTANCE_KIND_COMPILE: ALLOWED_COMPILE_FLAGS,
+    INSTANCE_KIND_LINK: ALLOWED_LINK_FLAGS,
+    INSTANCE_KIND_TRANSFORM: ALLOWED_TRANSFORM_FLAGS,
+}
+
+# The exact governed primary input of each instance, and the output directory class it may write.
+# An instance may read only what its own contract names, and may write only inside the build area.
+INSTANCE_PRIMARY_INPUT = {
+    "worker-bootstrap": "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_bootstrap.c",
+    "worker-policy": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c",
+    "worker-capability": "scripts/crypto_core/qualification/s3c/mt4_s3c_blst_capability.c",
+    "worker-verify": "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_verify.c",
+    "worker-start": "scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_start.S",
+    "observer-probe": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c",
+    "observer-launcher": "scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c",
+    "observer-policy": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c",
+    "observe-probe": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c",
+    "observe-launcher": "scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c",
+    "observe-policy": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c",
+    "adjudicate-probe": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c",
+    "adjudicate-policy": "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c",
+    "blst-server": "src/server.c",
+    "blst-assembly": "build/assembly.S",
+}
+
+
+def _require_governed_paths(kind, instance_id, record, repository_root, upstream_root):
+    """Repair 4C and 4D.  Every input and the output resolve to a governed location."""
+    declared_build_root = os.environ.get("RUNNER_TEMP")
+    if not declared_build_root:
+        # Fail closed.  Defaulting to the filesystem root would make "inside the build area" true
+        # of every path on the machine, which is the opposite of what the check exists to prove.
+        _fail("BUILD_AREA_UNDECLARED")
+    build_root = os.path.normpath(os.path.abspath(declared_build_root))
+    workspace = os.path.normpath(os.path.abspath(repository_root))
+    upstream = os.path.normpath(os.path.abspath(upstream_root))
+
+    expected_primary = INSTANCE_PRIMARY_INPUT.get(instance_id)
+    if kind == INSTANCE_KIND_COMPILE:
+        if expected_primary is None:
+            _fail("BUILD_COMMAND_REJECTED", "unknown compile instance")
+        sources = [item for item in record["inputs"] if item["class"] in (CLASS_REPO_BUNDLED, CLASS_UPSTREAM_PINNED)]
+        if len(sources) != 1 or sources[0]["path"] != expected_primary:
+            _fail("BUILD_COMMAND_REJECTED", "input is not the governed source for this instance")
+
+    for item in record["inputs"]:
+        absolute = os.path.normpath(os.path.abspath(item["graph_identity"]))
+        if item["class"] == CLASS_REPO_BUNDLED:
+            if item["path"] not in SOURCE_BUNDLE_PATHS:
+                _fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_UNBUNDLED", item["path"])
+            continue
+        if item["class"] == CLASS_UPSTREAM_PINNED:
+            if not absolute.startswith(upstream + os.sep):
+                _fail("BUILD_COMMAND_REJECTED", "upstream input escapes the pinned root")
+            continue
+        # Everything else is an intermediate object, which must live in the build area.
+        if not absolute.startswith(build_root + os.sep):
+            _fail("BUILD_COMMAND_REJECTED", "input escapes the governed build area")
+
+    output = os.path.normpath(os.path.abspath(record["raw_output"]))
+    if output.startswith(workspace + os.sep):
+        _fail("BUILD_COMMAND_REJECTED", "output would write into the repository")
+    if not output.startswith(build_root + os.sep):
+        _fail("BUILD_COMMAND_REJECTED", "output escapes the governed build area")
+    return output
+
+
+def validate_build_command(kind, command, repository_root, upstream_root, instance_id=None, job_id=None):
     """Repair 3C.  COMPLETE validation, BEFORE any child process exists.
 
     An invocation that fails here starts nothing at all; the previous ordering ran the command and
@@ -256,14 +406,44 @@ def validate_build_command(kind, command, repository_root, upstream_root):
         for character in (chr(34), chr(39), "`", "$", ";", "|", "&", "\n"):
             if character in word:
                 _fail("BUILD_COMMAND_REJECTED", "argument carries a shell metacharacter")
-    executable = resolve_governed_tool(kind, command[0])
+    # FIRST: the tool this operation class is allowed to run.  A command whose tool is /bin/sh or
+    # python3 is out of contract no matter what the rest of its argv looks like, and saying so here
+    # means the refusal names the real reason instead of whatever the parser trips over first.
+    require_governed_tool_name(kind, command[0])
 
     # The command must parse into the governed shape for its operation class, and every input must
     # classify.  parse_compile_instance performs that classification and fails closed on an
     # unbundled repository input.
-    record = parse_compile_instance(kind + ":" + "validation" + ":" + " ".join(command), repository_root, upstream_root)
+    record = parse_compile_instance(
+        kind + ":" + (instance_id or "validation") + ":" + " ".join(command), repository_root, upstream_root, job_id
+    )
     if kind == INSTANCE_KIND_TRANSFORM and record["inputs"] and len(record["inputs"]) != 1:
         _fail("BUILD_COMMAND_REJECTED", "a transform takes exactly one artifact")
+
+    # REPAIR 4B: a POSITIVE flag allowlist, plus the forbidden-prefix families that would extend the
+    # tool's search or load behaviour.  Both directions are checked, so a novel flag is refused by
+    # default rather than by having been anticipated.
+    allowed = ALLOWED_FLAGS_BY_KIND[kind]
+    for flag in record["flags"]:
+        for prefix in FORBIDDEN_FLAG_PREFIXES:
+            if flag.startswith(prefix):
+                _fail("BUILD_COMMAND_REJECTED", "forbidden flag family")
+        if flag not in allowed:
+            _fail("BUILD_COMMAND_REJECTED", "flag is not on the governed allowlist")
+    for word in command[1:]:
+        for prefix in FORBIDDEN_FLAG_PREFIXES:
+            if word.startswith(prefix):
+                _fail("BUILD_COMMAND_REJECTED", "forbidden argument family")
+
+    # Include roots are governed: exactly the pinned upstream tree or the S3C script directory.
+    check_include_roots(record["include_roots"], repository_root, upstream_root)
+
+    if instance_id is not None:
+        _require_governed_paths(kind, instance_id, record, repository_root, upstream_root)
+
+    # LAST: resolve the tool.  Everything above is a property of the frozen contract and holds on
+    # any host; this one depends on the machine, so it runs after the contract has been proven.
+    executable = resolve_governed_tool(kind, command[0])
     return executable, record
 
 
@@ -405,6 +585,20 @@ REQUIRED_SYSTEM_LIBRARIES = ("cap",)
 
 WORKING_DIRECTORY_CLASS = "GITHUB_WORKSPACE"
 
+# =================================================================================================
+# GRAPH IDENTITY IS JOB + PATH + STATE (repair 5).
+#
+# The real workflow REUSES pathnames.  $RUNNER_TEMP/obj/policy.o is produced by worker-policy in the
+# build job, by observe-policy in the observation job and by adjudicate-policy in the adjudication
+# job; $RUNNER_TEMP/obj/probe.o and $RUNNER_TEMP/mt4_s3c_policy_probe are reused the same way.  That
+# is legitimate -- each job has its own runner and its own temporary tree -- but it means a
+# path-only identity sees three producers for one node and cannot close, while a basename-only
+# identity is worse still.  Identity therefore carries the job, and an in-place transform is a
+# distinct STATE of the same node rather than a second producer of it.
+# =================================================================================================
+
+GOVERNED_JOB_IDS = ("s3c-build-candidate", "s3c-observe", "s3c-adjudicate")
+
 
 def _shell_split(argv_text):
     """Split one recorded argument vector.  The workflow supplies it already space-separated with
@@ -417,12 +611,16 @@ def _shell_split(argv_text):
     return argv_text.split()
 
 
-def parse_compile_instance(declaration, repository_root, upstream_root):
+def parse_compile_instance(declaration, repository_root, upstream_root, job_id=None):
     """Parse one `<kind>:<instance_id>:<argv>` declaration into a governed instance record."""
     if not isinstance(declaration, str):
         _fail("COMPILE_INSTANCE_MALFORMED", "type")
     kind, _sep, remainder = declaration.partition(":")
     instance_id, _sep2, argv_text = remainder.partition(":")
+    if job_id is None:
+        job_id = GOVERNED_JOB_IDS[0]
+    if job_id not in GOVERNED_JOB_IDS:
+        _fail("COMPILE_INSTANCE_MALFORMED", "job id")
     if kind not in INSTANCE_KINDS:
         _fail("COMPILE_INSTANCE_MALFORMED", "kind")
     if not instance_id:
@@ -480,7 +678,7 @@ def parse_compile_instance(declaration, repository_root, upstream_root):
                 "class": kind_of_input,
                 # The consumer edge names the exact producer node, so a same-basename artifact from
                 # another job can never satisfy it.
-                "graph_identity": _graph_identity(item, repository_root),
+                "graph_identity": _graph_identity(item, repository_root, job_id),
             }
         )
     return {
@@ -494,21 +692,34 @@ def parse_compile_instance(declaration, repository_root, upstream_root):
         "libraries": sorted(libraries),
         # Repair 5A: the graph node identity is the CANONICAL PATH, never the basename.  Two jobs
         # can each produce a policy.o, and a basename cannot say which one a link consumed.
-        "output": _graph_identity(output, repository_root),
+        "job_id": job_id,
+        "output": _graph_identity(output, repository_root, job_id),
+        "raw_output": output,
         "working_directory_class": WORKING_DIRECTORY_CLASS,
     }
 
 
-def _graph_identity(path, repository_root):
-    """One canonical, path-scoped identity for a build artifact node."""
+def _canonical_path(path, repository_root):
     absolute = os.path.normpath(os.path.abspath(path))
     root = os.path.normpath(os.path.abspath(repository_root))
     if absolute == root or absolute.startswith(root + os.sep):
         return os.path.relpath(absolute, root).replace(os.sep, "/")
+    build_root = os.environ.get("RUNNER_TEMP")
+    if build_root:
+        build_root = os.path.normpath(os.path.abspath(build_root))
+        if absolute.startswith(build_root + os.sep):
+            # Relative to the build area, so the identity does not carry a runner-specific prefix
+            # that differs between jobs for reasons unrelated to what the artifact IS.
+            return os.path.relpath(absolute, build_root).replace(os.sep, "/")
     return absolute.replace(os.sep, "/")
 
 
-def record_invocation(log_path, instance_id, kind, argv, repository_root, upstream_root, digest_before=None):
+def _graph_identity(path, repository_root, job_id):
+    """One canonical JOB-scoped identity for a build artifact node."""
+    return job_id + ":" + _canonical_path(path, repository_root)
+
+
+def record_invocation(log_path, instance_id, kind, argv, repository_root, upstream_root, job_id, digest_before=None):
     """Validate, THEN run ONE real native invocation, then append its observed record.
 
     The wrapper is the single point at which a build command becomes evidence: the argv recorded is
@@ -516,7 +727,7 @@ def record_invocation(log_path, instance_id, kind, argv, repository_root, upstre
     PARSE, then COMPLETE VALIDATION, then EXECUTE.  An invalid invocation produces no child process
     at all, which is what makes this a gate rather than an audit trail.
     """
-    executable, _preview = validate_build_command(kind, argv, repository_root, upstream_root)
+    executable, _preview = validate_build_command(kind, argv, repository_root, upstream_root, instance_id, job_id)
     working_directory = os.path.normpath(os.path.abspath(repository_root))
     if not os.path.isdir(working_directory):
         _fail("BUILD_COMMAND_REJECTED", "working directory")
@@ -533,9 +744,11 @@ def record_invocation(log_path, instance_id, kind, argv, repository_root, upstre
     )
     if completed.returncode != 0:
         _fail("BUILD_INVOCATION_FAILED", instance_id)
-    record = parse_compile_instance(kind + ":" + instance_id + ":" + " ".join(argv), repository_root, upstream_root)
+    record = parse_compile_instance(
+        kind + ":" + instance_id + ":" + " ".join(argv), repository_root, upstream_root, job_id
+    )
     record["resolved_tool_path"] = executable
-    record["working_directory"] = _graph_identity(working_directory, repository_root)
+    record["working_directory"] = _canonical_path(working_directory, repository_root)
     if kind == INSTANCE_KIND_TRANSFORM:
         # Repair 5D: an in-place transform has two distinct graph STATES even though the path is
         # unchanged, so both digests are bound and downstream consumers must name the post state.
@@ -1054,6 +1267,7 @@ def main(argv=None):
     parser.add_argument("--invocation-kind")
     parser.add_argument("--instance-log")
     parser.add_argument("--digest-before")
+    parser.add_argument("--job-id")
     parser.add_argument("--system-library", action="append")
     # Repair 3D: this names a TOOL for library resolution, never a path.  An arbitrary
     # executable, a shell, an interpreter or a repository script cannot be selected through it.
@@ -1073,6 +1287,8 @@ def main(argv=None):
     if args.run_invocation:
         if not args.instance_log or not args.invocation_kind or not args.repository_root or not args.upstream_root:
             _fail("BUILD_MANIFEST_ARGUMENT_MISSING", "--run-invocation")
+        if not args.job_id:
+            _fail("BUILD_MANIFEST_ARGUMENT_MISSING", "--job-id")
         if command_argv is None:
             _fail("BUILD_MANIFEST_ARGUMENT_MISSING", "command separator")
         if not command_argv:
@@ -1084,6 +1300,7 @@ def main(argv=None):
             command_argv,
             args.repository_root,
             args.upstream_root,
+            args.job_id,
             args.digest_before,
         )
         sys.stdout.write("MT4_S3C_BUILD_INSTANCE_RECORDED=" + args.run_invocation + "\n")

@@ -357,6 +357,10 @@ SOURCE_BUNDLE_PATHS = (
 )
 SOURCE_BUNDLE_ENTRY_COUNT = 16
 
+# Bundle entry 16.  The governed TEST-ONLY fixture, whose committed digest is the independent
+# anchor for the protocol/case-plan identity chain.
+GOVERNED_FIXTURE_PATH = "tests/crypto_core/fixtures/mt4_s3c_test_only_positive_vector_v1.json"
+
 # =================================================================================================
 # THE COMPILE INVENTORY CONTRACT, INDEPENDENTLY FROZEN ON THE TRUSTED SURFACE (repair 7F and 7G).
 #
@@ -427,6 +431,8 @@ COMPILE_INSTANCE_FIELDS = (
     "kind",
     "libraries",
     "output",
+    "job_id",
+    "raw_output",
     "resolved_tool_path",
     "tool",
     "working_directory",
@@ -535,6 +541,19 @@ REQUIRED_SYSTEM_LIBRARIES = ("cap",)
 # rewrite an artifact, and gcc the only one permitted to produce one.
 APPROVED_BUILD_TOOL = "gcc"
 APPROVED_TRANSFORM_TOOL = "objcopy"
+
+# Repair 6C and 6D: the boundary validates the RESOLVED tool and the working directory, not a
+# basename and an assumption.  Both are recorded by the wrapper's frozen execution boundary.
+APPROVED_TOOLCHAIN_ROOTS = ("/usr/bin/", "/usr/local/bin/", "/bin/")
+APPROVED_WORKING_DIRECTORY = "."
+
+# Repair 5: the real workflow reuses pathnames across jobs, so graph identity carries the job.
+GOVERNED_JOB_IDS = ("s3c-build-candidate", "s3c-observe", "s3c-adjudicate")
+
+# Repair 6E: ONE libcap authority, agreed by producer and consumer.  The logical name is what the
+# link requests; the resolved file is what the linker actually selected; both travel together.
+GOVERNED_SYSTEM_LIBRARY_NAME = "cap"
+APPROVED_SYSTEM_LIBRARY_ROOTS = ("/usr/lib/", "/lib/")
 APPROVED_TOOL_BY_KIND = {
     "COMPILE": APPROVED_BUILD_TOOL,
     "LINK": APPROVED_BUILD_TOOL,
@@ -636,6 +655,19 @@ def recompute_compile_instance_digest(payload):
         expected_tool = APPROVED_TOOL_BY_KIND[kind]
         if require_str(instance.get("tool"), "COMPILE_INSTANCE_INVENTORY_MISMATCH") != expected_tool:
             fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "tool")
+        # Repair 6C: the RESOLVED executable, not the basename, and it must live in an approved root.
+        resolved = require_str(instance.get("resolved_tool_path"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
+        if not any(resolved.startswith(root) for root in APPROVED_TOOLCHAIN_ROOTS):
+            fail("BUILD_TOOL_PROVENANCE_INVALID", "resolved tool is outside the approved roots")
+        if resolved.rsplit("/", 1)[-1] != expected_tool:
+            fail("BUILD_TOOL_PROVENANCE_INVALID", "resolved tool is not the approved tool")
+        # Repair 6D: the working directory is bound end to end.
+        if require_str(instance.get("working_directory"), "COMPILE_INSTANCE_INVENTORY_MISMATCH") != (
+            APPROVED_WORKING_DIRECTORY
+        ):
+            fail("BUILD_CWD_PROVENANCE_INVALID")
+        if require_str(instance.get("job_id"), "COMPILE_INSTANCE_INVENTORY_MISMATCH") not in GOVERNED_JOB_IDS:
+            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "job id")
         if (
             require_str(instance.get("working_directory_class"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
             != WORKING_DIRECTORY_CLASS
@@ -670,6 +702,45 @@ def recompute_compile_instance_digest(payload):
     for required in REQUIRED_SYSTEM_LIBRARIES:
         if required not in libraries:
             fail("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", "system library")
+
+    # Repair 6E: ONE libcap authority.  The link requests a NAME; the producer records the FILE the
+    # linker actually selected.  Both sides are checked here so neither can compare half of it.
+    resolved_libraries = payload.get("system_libraries")
+    if not isinstance(resolved_libraries, list) or not resolved_libraries:
+        fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "missing resolution")
+    resolved_names = []
+    for entry in resolved_libraries:
+        if not isinstance(entry, dict) or tuple(sorted(entry)) != (
+            "digest_sha256",
+            "name",
+            "provenance",
+            "resolved_path",
+            "soname",
+        ):
+            fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "field set")
+        name = require_str(entry.get("name"), "SYSTEM_LIBRARY_PROVENANCE_INVALID")
+        path = require_str(entry.get("resolved_path"), "SYSTEM_LIBRARY_PROVENANCE_INVALID")
+        soname = require_str(entry.get("soname"), "SYSTEM_LIBRARY_PROVENANCE_INVALID")
+        if not is_hex64(require_str(entry.get("digest_sha256"), "SYSTEM_LIBRARY_PROVENANCE_INVALID")):
+            fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "digest")
+        if entry.get("provenance") != PROVENANCE_SYSTEM_LIBRARY:
+            fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "provenance")
+        if not any(path.startswith(root) for root in APPROVED_SYSTEM_LIBRARY_ROOTS):
+            fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "resolved path is outside the approved roots")
+        # The resolved file must actually be the library the NAME requested: -lcap resolves to a
+        # file called libcap.*, and a mapping that lost that link would be provenance for nothing.
+        if soname != path.rsplit("/", 1)[-1]:
+            fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "soname does not name the resolved file")
+        if not soname.startswith("lib" + name + "."):
+            fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "resolved file does not match the requested name")
+        resolved_names.append(name)
+    if sorted(resolved_names) != sorted(REQUIRED_SYSTEM_LIBRARIES):
+        fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "resolution set")
+    if len(set(resolved_names)) != len(resolved_names):
+        fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "duplicate resolution")
+    # Every library a link requested must have been resolved, and nothing extra.
+    if sorted(libraries) != sorted(resolved_names):
+        fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "requested and resolved sets differ")
 
     worker_link = [instance for instance in instances if instance["instance_id"] == "worker-link"][0]
     worker_flags = set(worker_link.get("flags") or ())
@@ -753,6 +824,11 @@ def require_complete_build_graph(build_payload, observe_log, adjudicate_log):
     producers = {}
     for instance in instances:
         output = require_str(instance.get("output"), "BUILD_GRAPH_INCOMPLETE")
+        # Repair 5A and 5B: identity is JOB + canonical path.  Three jobs each produce
+        # obj/policy.o, and only the job distinguishes them; a path-only or basename-only key would
+        # see three producers for one node and could never close.
+        if ":" not in output or output.split(":", 1)[0] not in GOVERNED_JOB_IDS:
+            fail("BUILD_GRAPH_INCOMPLETE", "output identity is not job-scoped")
         if instance["kind"] == "TRANSFORM":
             before = require_str(instance.get("digest_before"), "BUILD_GRAPH_INCOMPLETE")
             after = require_str(instance.get("digest_after"), "BUILD_GRAPH_INCOMPLETE")
@@ -764,6 +840,16 @@ def require_complete_build_graph(build_payload, observe_log, adjudicate_log):
                 fail("BUILD_GRAPH_TRANSFORM_INERT")
             if output not in producers:
                 fail("BUILD_GRAPH_TRANSFORM_INPUT_UNPRODUCED")
+            # Repair 6A and 6B: the transform is ONE atomic state transition, and its own consumed
+            # input must be the node it rewrites -- so the PRE state is the thing that existed and
+            # the POST state is what every later consumer sees.
+            consumed = instance.get("inputs") or ()
+            if len(consumed) != 1:
+                fail("BUILD_GRAPH_TRANSFORM_ARITY")
+            if require_str(consumed[0].get("graph_identity"), "BUILD_GRAPH_INCOMPLETE") != output:
+                fail("BUILD_GRAPH_TRANSFORM_TARGET_MISMATCH")
+            if require_str(instance.get("transform_target"), "BUILD_GRAPH_INCOMPLETE") != output:
+                fail("BUILD_GRAPH_TRANSFORM_TARGET_MISMATCH")
             producers[output] = instance["instance_id"]
         elif output in producers:
             fail("BUILD_GRAPH_DUPLICATE_PRODUCER")
@@ -1525,6 +1611,43 @@ SHT_SYMTAB = 2
 STB_GLOBAL = 1
 STV_HIDDEN = 2
 STT_OBJECT = 1
+# =================================================================================================
+# THE FROZEN PHDR / SECTION / RESOURCE POLICY (repair 1).
+#
+# THE DEFECT THIS CLOSES.  Stage C parsed the candidate's headers but then compared only a handful
+# of A2's claims against them, so a coherently resealed A2 could carry a forbidden PT_DYNAMIC or a
+# PT_LOAD claiming 32 MiB of mapped memory and still be accepted: the fields that would have caught
+# it were simply never compared.  Every decision-bearing header field is now reconstructed from the
+# authenticated bytes and required to match, and the policy below is applied to the RECONSTRUCTION
+# rather than to anything A2 asserts.
+# =================================================================================================
+
+PT_INTERP = 3
+PT_DYNAMIC = 2
+PT_SHLIB = 5
+PT_TLS = 7
+PT_GNU_STACK = 0x6474E551
+PT_PHDR = 6
+PT_NOTE = 4
+
+# A dynamic surface of any kind contradicts the static non-PIE contract outright.
+ALWAYS_FORBIDDEN_PHDR_TYPES = (PT_INTERP, PT_DYNAMIC, PT_SHLIB, PT_TLS)
+
+# The exact expected inventory, identical to the reviewed qualifier's and to the literal pinned in
+# both workflows: type, flags and alignment for every segment the image may carry.
+EXPECTED_PHDR_INVENTORY = (
+    (PT_LOAD, 5, 0x1000),
+    (PT_LOAD, 6, 0x1000),
+    (PT_GNU_STACK, 6, 0x10),
+)
+
+PAGE_SIZE_REQUIRED = 4096
+MAX_PT_LOAD_EFFECTIVE_BYTES = 16 * 1024 * 1024
+MAX_AGGREGATE_EFFECTIVE_BYTES = 32 * 1024 * 1024
+STACK_RESERVE_BYTES = 8 * 1024 * 1024
+GOVERNED_HEADROOM_BYTES = 24 * 1024 * 1024
+RLIMIT_AS_BYTES = MAX_AGGREGATE_EFFECTIVE_BYTES + STACK_RESERVE_BYTES + GOVERNED_HEADROOM_BYTES
+
 MAX_PHNUM = 64
 MAX_SECTION_COUNT = 128
 MAX_SYMBOL_COUNT = 65536
@@ -1655,6 +1778,43 @@ def _stage_c_parse_worker(data):
     for section in sections:
         section["name"] = _cstring(name_blob, section["sh_name"], marker)
 
+    # REPAIR 1B and 1E: the FULL program-header policy, applied to the reconstruction.
+    inventory = []
+    aggregate_effective = 0
+    for segment in segments:
+        if segment["p_type"] in ALWAYS_FORBIDDEN_PHDR_TYPES:
+            fail("TRUSTED_ELF_FORBIDDEN_SEGMENT", str(segment["p_type"]))
+        if segment["p_filesz"] > segment["p_memsz"]:
+            fail(marker, "segment file size exceeds its memory size")
+        if segment["p_offset"] + segment["p_filesz"] > len(data):
+            fail(marker, "segment file range escapes the image")
+        if segment["p_vaddr"] + segment["p_memsz"] >= 2**64:
+            fail(marker, "segment address range overflows")
+        if segment["p_type"] == PT_LOAD:
+            if segment["p_align"] < PAGE_SIZE_REQUIRED or segment["p_align"] & (segment["p_align"] - 1):
+                fail(marker, "PT_LOAD alignment")
+            if (segment["p_vaddr"] - segment["p_offset"]) % segment["p_align"] != 0:
+                fail(marker, "PT_LOAD congruence")
+            # REPAIR 1D: the effective mapped size, recomputed, against the frozen ceiling.  A
+            # producer claiming 32 MiB for one segment cannot pass a 16 MiB bound it never met.
+            low = (segment["p_vaddr"] // PAGE_SIZE_REQUIRED) * PAGE_SIZE_REQUIRED
+            high = (
+                (segment["p_vaddr"] + segment["p_memsz"] + PAGE_SIZE_REQUIRED - 1) // PAGE_SIZE_REQUIRED
+            ) * PAGE_SIZE_REQUIRED
+            effective = high - low
+            if effective > MAX_PT_LOAD_EFFECTIVE_BYTES:
+                fail("TRUSTED_ELF_MEMORY_CEILING_EXCEEDED", "segment")
+            aggregate_effective += effective
+        inventory.append((segment["p_type"], segment["p_flags"], segment["p_align"]))
+    if aggregate_effective > MAX_AGGREGATE_EFFECTIVE_BYTES:
+        fail("TRUSTED_ELF_MEMORY_CEILING_EXCEEDED", "aggregate")
+    # EXACT multiset equality: a missing, extra or duplicated governed segment all fail here.
+    if sorted(inventory) != sorted(EXPECTED_PHDR_INVENTORY):
+        fail("TRUSTED_ELF_PHDR_INVENTORY_MISMATCH")
+    loads = [segment for segment in segments if segment["p_type"] == PT_LOAD]
+    if [segment["p_vaddr"] for segment in loads] != sorted(segment["p_vaddr"] for segment in loads):
+        fail(marker, "PT_LOAD segments are not in ascending address order")
+
     symbol_tables = [section for section in sections if section["sh_type"] == SHT_SYMTAB]
     if len(symbol_tables) != 1:
         fail(marker, "symbol table count")
@@ -1702,6 +1862,7 @@ def _stage_c_parse_worker(data):
 
     return {
         "entry": e_entry,
+        "aggregate_effective": aggregate_effective,
         "segments": segments,
         "sections": sections,
         "symbols": symbols,
@@ -1890,7 +2051,39 @@ def stage_c_reconstruct_worker_authority(data, canonical, outer_canonical):
     if outer_fprog["bytes"] != expected_outer_fprog:
         fail("TRUSTED_ELF_OUTER_FPROG_NOT_CANONICAL")
 
+    phdr_records = [
+        {
+            "index": segment["index"],
+            "type": _PT_NAME.get(segment["p_type"], "PT_" + str(segment["p_type"])),
+            "flags_u32": segment["p_flags"],
+            "offset_u64": segment["p_offset"],
+            "vaddr_u64": segment["p_vaddr"],
+            "filesz_u64": segment["p_filesz"],
+            "memsz_u64": segment["p_memsz"],
+            "align_u64": segment["p_align"],
+        }
+        for segment in parsed["segments"]
+    ]
+    section_records = [
+        {
+            "index": section["index"],
+            "name": section["name"],
+            "type_u32": section["sh_type"],
+            "flags_u64": section["sh_flags"],
+            "addr_u64": section["sh_addr"],
+            "offset_u64": section["sh_offset"],
+            "size_bytes": section["sh_size"],
+        }
+        for section in parsed["sections"]
+    ]
+
     return {
+        "program_headers": phdr_records,
+        "sections": section_records,
+        "candidate_binary_bytes": len(data),
+        "aggregate_effective_bytes": parsed["aggregate_effective"],
+        "rlimit_as_bytes": RLIMIT_AS_BYTES,
+        "page_size": PAGE_SIZE_REQUIRED,
         "outer_filter_object": {
             "fprog_va_u64": outer_fprog["symbol"]["value"],
             "program_va_u64": outer_program["symbol"]["value"],
@@ -2042,8 +2235,43 @@ A2_FILTER_OBJECT_FIELDS = tuple(
 A2_UNDEFINED_CLOSURE_FIELDS = ("approved_inventory", "observed_inventory", "symbol_table_entry_count")
 
 # The A2 fields Stage C RECONSTRUCTS and therefore compares rather than believes.
-A2_RECONSTRUCTED_TOP_LEVEL = ("observed_phdr_inventory",)
+A2_RECONSTRUCTED_TOP_LEVEL = (
+    "observed_phdr_inventory",
+    "candidate_binary_bytes",
+    "page_size",
+)
 A2_RECONSTRUCTED_ELF = ("entry_va_u64", "program_header_count", "section_header_count")
+
+# The EXACT field set of one A2 program-header record and one A2 section record.  A record missing a
+# field, or carrying an extra one, is not a smaller or larger record -- it is a different record
+# than the contract describes, and it is refused in both directions.
+A2_PHDR_RECORD_FIELDS = (
+    "align_u64",
+    "filesz_u64",
+    "flags_u32",
+    "index",
+    "memsz_u64",
+    "offset_u64",
+    "type",
+    "vaddr_u64",
+)
+A2_SECTION_RECORD_FIELDS = (
+    "addr_u64",
+    "flags_u64",
+    "index",
+    "name",
+    "offset_u64",
+    "size_bytes",
+    "type_u32",
+)
+A2_MEMORY_FIELDS = (
+    "aggregate_effective_bytes",
+    "governed_headroom_bytes",
+    "max_aggregate_effective_bytes",
+    "max_pt_load_effective_bytes",
+    "rlimit_as_bytes",
+    "stack_reserve_bytes",
+)
 
 A4_REQUIRED_POLICY_FIELDS = (
     "canonical_internal_cbpf_instruction_count",
@@ -2093,12 +2321,22 @@ def validate_a2_schema(elf_record):
         "ELF_RECORD_SCHEMA_INVALID",
         "undefined symbol closure",
     )
-    sections = elf_record.get("sections")
-    if not isinstance(sections, list) or not sections:
-        fail("ELF_RECORD_SCHEMA_INVALID", "section table")
-    headers = elf_record.get("program_headers")
-    if not isinstance(headers, list) or not headers:
-        fail("ELF_RECORD_SCHEMA_INVALID", "program header table")
+    # REPAIR 1A: "nonempty list" is not a schema.  EVERY entry of both nested tables carries the
+    # exact field set, and the tables are indexed in ascending order with no duplicate index.
+    for key, expected, label in (
+        ("program_headers", A2_PHDR_RECORD_FIELDS, "program header"),
+        ("sections", A2_SECTION_RECORD_FIELDS, "section"),
+    ):
+        table = elf_record.get(key)
+        if not isinstance(table, list) or not table:
+            fail("ELF_RECORD_SCHEMA_INVALID", label + " table")
+        indexes = []
+        for entry in table:
+            _require_exact_fields(entry, expected, "ELF_RECORD_SCHEMA_INVALID", label + " record")
+            indexes.append(require_int(entry.get("index"), "ELF_RECORD_SCHEMA_INVALID", 0))
+        if indexes != sorted(indexes) or len(set(indexes)) != len(indexes):
+            fail("ELF_RECORD_SCHEMA_INVALID", label + " table ordering")
+    _require_exact_fields(elf_record.get("memory"), A2_MEMORY_FIELDS, "ELF_RECORD_SCHEMA_INVALID", "memory block")
     return elf_record
 
 
@@ -2125,6 +2363,33 @@ def bind_a2_to_reconstruction(elf_record, reconstructed):
         fail("ELF_RECORD_CONTRADICTS_CANDIDATE", "symbol table entry count")
     if elf_record["undefined_symbol_closure"].get("observed_inventory") != []:
         fail("ELF_RECORD_CONTRADICTS_CANDIDATE", "undefined symbol inventory")
+
+    # REPAIR 1B and 1C: EVERY nested program-header and section record must equal the record Stage
+    # C derived from the bytes.  Comparing a digest of A2's own dictionaries proved only that A2 was
+    # internally consistent, which is exactly how a resealed PT_DYNAMIC and a 32 MiB memory claim
+    # both survived.
+    for key, label in (("program_headers", "program header"), ("sections", "section")):
+        claimed = elf_record[key]
+        derived = reconstructed[key]
+        if len(claimed) != len(derived):
+            fail("ELF_RECORD_CONTRADICTS_CANDIDATE", label + " count")
+        for position, (entry, expected_entry) in enumerate(zip(claimed, derived)):
+            for field, value in sorted(expected_entry.items()):
+                if entry.get(field) != value:
+                    fail("ELF_RECORD_CONTRADICTS_CANDIDATE", label + " " + str(position) + "." + field)
+
+    # REPAIR 1D: the resource claims are RECOMPUTED, not read.
+    memory = elf_record["memory"]
+    for field, value in (
+        ("aggregate_effective_bytes", reconstructed["aggregate_effective_bytes"]),
+        ("rlimit_as_bytes", reconstructed["rlimit_as_bytes"]),
+        ("max_pt_load_effective_bytes", MAX_PT_LOAD_EFFECTIVE_BYTES),
+        ("max_aggregate_effective_bytes", MAX_AGGREGATE_EFFECTIVE_BYTES),
+        ("stack_reserve_bytes", STACK_RESERVE_BYTES),
+        ("governed_headroom_bytes", GOVERNED_HEADROOM_BYTES),
+    ):
+        if memory.get(field) != value:
+            fail("ELF_RECORD_CONTRADICTS_CANDIDATE", "memory." + field)
 
     for block, expected, label in (
         (elf_record["blst_platform_cap"], reconstructed["blst_platform_cap"], "capability"),
@@ -2162,37 +2427,93 @@ def validate_a4_policy_authority(receipt, canonical, outer_canonical):
     return expected
 
 
-def bind_observed_outer_program(case, outer_canonical, outer_object):
-    """Repair 2.  The OBSERVED outer program is bound to the trusted reconstructed outer object.
+# =================================================================================================
+# THE OUTER FILTER AUTHORITY CLASS (repair 2).
+#
+# THE CATEGORY ERROR THIS CLOSES.  The observed OUTER filter is installed by the LAUNCHER, which is
+# a separately linked binary.  Comparing the launcher's runtime addresses against symbols
+# reconstructed from the WORKER ELF asserted a cross-link virtual-address equality that V9 never
+# defines and that no correct build has to satisfy: two independently linked images place their own
+# copies of the same object wherever their own link decides.
+#
+# V9 SECTION 13.4 states the authority exactly.  The trusted observer S is already the tracer when
+# the launcher installs its own filter, and at the launcher's seccomp syscall-ENTRY stop it:
+#   * confirms the register file carries SECCOMP_SET_MODE_FILTER, flags 0 and a zero argument tail;
+#   * reads the struct sock_fprog at arg2 and the len*8 instruction bytes it points at;
+#   * computes CBPF_DIGEST over those captured bytes -- THAT digest is the authoritative
+#     emitted_cbpf_sha256, not anything the launcher says about itself;
+#   * at the syscall-EXIT stop confirms the return value is 0 AND performs measurement M-3, the
+#     0 -> 1 filter-count transition, because SECTION 11.1 says a zero return is not sufficient;
+#   * requires the captured bytes to equal the canonical outer program that bundle entry 12
+#     derives independently from the reviewed policy source.
+#
+# The captured addresses are evidence of ONE launcher execution.  They are checked for internal
+# coherence -- the descriptor and the program it points at are distinct, non-overlapping, and the
+# descriptor's length field is the captured length -- and they are NOT compared to any worker
+# address, because the two images are not the same image.
+# =================================================================================================
 
-    A synthetic A3/A4 pair cannot create its own outer authority: the captured bytes must hash to
-    Stage C's own canonical outer program, the captured length must be its instruction count, and
-    the captured address must be the address the trusted ELF reconstruction places the object at.
-    """
+OUTER_AUTHORITY_CLASS = "TRUSTED_LAUNCHER_CAPTURE"
+
+# The register-file discipline V9 13.4 requires at the launcher's seccomp entry stop.
+SECCOMP_SET_MODE_FILTER_VALUE = 1
+
+
+def bind_observed_outer_program(case, outer_canonical):
+    """Bind the observed outer filter to the V9 13.4 trusted-capture authority."""
     capture = case.get("outer_capture")
     if not isinstance(capture, dict):
         fail("OUTER_FILTER_EQUIVALENCE_FAILED", "capture block")
     if not capture.get("valid"):
         fail("OUTER_FILTER_EQUIVALENCE_FAILED", "not captured")
+
     program_bytes = decode_hex(
         require_str(capture.get("program_bytes_hex"), "OBSERVATION_MALFORMED"), "OBSERVATION_MALFORMED"
     )
-    if cbpf_digest(program_bytes) != outer_canonical["cbpf_sha256"]:
+    captured_digest = cbpf_digest(program_bytes)
+    # THE AUTHORITATIVE COMPARISON: the captured program must BE the canonical outer program that
+    # Stage C derived for itself from its own frozen constants.
+    if captured_digest != outer_canonical["cbpf_sha256"]:
         fail("OUTER_FILTER_EQUIVALENCE_FAILED", "captured differs from the Stage-C canonical program")
-    if require_int(capture.get("length"), "OBSERVATION_MALFORMED", 0, 512) != outer_canonical["cbpf_instruction_count"]:
+    captured_length = require_int(capture.get("length"), "OBSERVATION_MALFORMED", 1, 512)
+    if captured_length != outer_canonical["cbpf_instruction_count"]:
         fail("OUTER_FILTER_EQUIVALENCE_FAILED", "captured length")
+    if len(program_bytes) != captured_length * 8:
+        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "captured byte count")
     if require_int(capture.get("install_return_i32"), "OBSERVATION_MALFORMED") != 0:
         fail("OUTER_FILTER_EQUIVALENCE_FAILED", "install return")
-    # REPAIR 2C: the object is ALWAYS the reconstructed one now.  The previous `is not None` guard
-    # meant the trusted path silently skipped address binding whenever the caller passed None --
-    # which it did, so the binding never actually ran.
-    if not isinstance(outer_object, dict):
-        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "no reconstructed outer object")
-    if require_int(capture.get("fprog_va_u64"), "OBSERVATION_MALFORMED", 0) != outer_object["fprog_va_u64"]:
-        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "uargs is not the reconstructed fprog address")
-    if require_int(capture.get("filter_va_u64"), "OBSERVATION_MALFORMED", 0) != outer_object["program_va_u64"]:
-        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "filter is not the reconstructed program address")
-    return cbpf_digest(program_bytes)
+
+    # The register file at the entry stop: operation, flags and the zero argument tail.
+    if require_int(capture.get("operation_u32"), "OBSERVATION_MALFORMED", 0) != SECCOMP_SET_MODE_FILTER_VALUE:
+        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "seccomp operation")
+    if require_int(capture.get("flags_u32"), "OBSERVATION_MALFORMED", 0) != 0:
+        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "seccomp flags")
+    tail = capture.get("argument_tail_u64")
+    if not isinstance(tail, list) or len(tail) != 3:
+        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "argument tail shape")
+    for word in tail:
+        if require_int(word, "OBSERVATION_MALFORMED", 0) != 0:
+            fail("OUTER_FILTER_EQUIVALENCE_FAILED", "argument tail is not zero")
+
+    # LAUNCHER-PROCESS addresses.  Coherent with each other, never compared to worker addresses.
+    descriptor = require_int(capture.get("fprog_va_u64"), "OBSERVATION_MALFORMED", 1)
+    program = require_int(capture.get("filter_va_u64"), "OBSERVATION_MALFORMED", 1)
+    if descriptor == program:
+        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "descriptor and program share an address")
+    if descriptor < program + len(program_bytes) and program < descriptor + FPROG_LAYOUT_BYTES:
+        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "descriptor and program overlap")
+
+    # M-3, from the SECCOMP_STACK_BASELINE measurements: the authoritative 0 -> 1 transition.
+    baseline = case.get("seccomp_baseline")
+    if not isinstance(baseline, dict):
+        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "baseline block")
+    if require_int(baseline.get("supervisor_filters"), "OBSERVATION_MALFORMED", 0) != 0:
+        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "M-3 pre-state")
+    if require_int(baseline.get("outer_post_filters"), "OBSERVATION_MALFORMED", 0) != 1:
+        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "M-3 transition")
+    if require_int(baseline.get("outer_post_seccomp"), "OBSERVATION_MALFORMED", 0) != 2:
+        fail("OUTER_FILTER_EQUIVALENCE_FAILED", "M-3 seccomp mode")
+    return captured_digest
 
 
 # =================================================================================================
@@ -3437,8 +3758,31 @@ def run_gate(arguments):
     elf_digest = recompute_elf_record_digest(elf_record)
     if receipt.get("elf_qualification_digest_sha256") != elf_digest:
         fail("ELF_QUALIFICATION_DIGEST_MISMATCH", "A4 vs Stage C")
-    if not is_hex64(receipt.get("protocol_conformance_digest_sha256")):
-        fail("PROTOCOL_CONFORMANCE_DIGEST_MISMATCH")
+    # REPAIR 3: the protocol-conformance AGGREGATE leaves the trusted chain, and a real anchor
+    # takes its place.
+    #
+    # WHY IT CANNOT BE RECOMPUTED.  The protocol record is mostly frozen constants -- the V5 wire
+    # layout, both taxonomies, the validation order, the exit codes, the case-id order -- but its
+    # digest also covers fixture_material_state and the two generator digests, which Stage C never
+    # downloads and has no authority over.  A syntactic hex check on a producer-selected value is
+    # not authority, and copying it into the trusted predicate gave it a standing it never earned.
+    #
+    # WHAT REPLACES IT.  The record's only run-varying anchors that matter are the FIXTURE identity
+    # and the case plan derived from it, and Stage C can prove the first outright: the governed
+    # TEST-ONLY fixture is bundle entry 16, so its committed digest is already in the source-bundle
+    # inventory Stage C recomputes from the git object store at the proven source head.  V9
+    # SECTION 25 requires these to bind to ONE run identity, and that is what the checks below do.
+    fixture_entry = [entry for entry in bundle_entries if entry["path"] == GOVERNED_FIXTURE_PATH]
+    if len(fixture_entry) != 1:
+        fail("FIXTURE_IDENTITY_UNBOUND", "fixture is not a bundle entry")
+    fixture_digest = fixture_entry[0]["sha256"]
+    for record, label in ((observation, "A3"), (receipt, "A4")):
+        if require_str(record.get("fixture_sha256"), "FIXTURE_IDENTITY_UNBOUND") != fixture_digest:
+            fail("FIXTURE_IDENTITY_UNBOUND", label + " fixture digest")
+    if require_str(observation.get("case_plan_sha256"), "CASE_PLAN_IDENTITY_UNBOUND") != require_str(
+        receipt.get("case_plan_sha256"), "CASE_PLAN_IDENTITY_UNBOUND"
+    ):
+        fail("CASE_PLAN_IDENTITY_UNBOUND", "A3 vs A4")
     # REPAIR 2B: the sandbox-policy AGGREGATE leaves the trust chain.
     #
     # It is a digest over the whole unprivileged sandbox-policy record, INCLUDING that record's own
@@ -3552,7 +3896,7 @@ def run_gate(arguments):
         case_id = require_str(case.get("case_id"), "OBSERVATION_MALFORMED")
         # REPAIR 2: the observed OUTER program is bound to the Stage-C reconstruction too, so a
         # synthetic A3/A4 pair cannot invent its own outer authority.
-        bind_observed_outer_program(case, outer_canonical, reconstructed["outer_filter_object"])
+        bind_observed_outer_program(case, outer_canonical)
         digest = stage_c_equivalence_digest(observation, case, receipt_digests[case_id], canonical, filter_object)
         if not is_hex64(digest):
             fail("INTERNAL_FILTER_EQUIVALENCE_DIGEST_MISMATCH", "digest shape")
@@ -3591,7 +3935,8 @@ def run_gate(arguments):
         "receipt_artifact_archive_digest": receipt_archive_digest,
         "build_manifest_sha256": member_digests[CANDIDATE_ARTIFACT][BUILD_MANIFEST_MEMBER],
         "elf_qualification_digest_sha256": elf_digest,
-        "protocol_conformance_digest_sha256": receipt.get("protocol_conformance_digest_sha256"),
+        "governed_fixture_sha256": fixture_digest,
+        "case_plan_sha256": receipt.get("case_plan_sha256"),
         "outer_containment_policy_digest_sha256": outer_canonical["governed_sha256"],
         "canonical_outer_policy_id": outer_canonical["policy_id"],
         "canonical_outer_cbpf_sha256": outer_canonical["cbpf_sha256"],

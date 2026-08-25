@@ -29,6 +29,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -922,11 +923,24 @@ def test_pt_429_a_relabelled_construction_intent_is_rejected(fixture_payload):
         protocol_qualifier.validate_fixture(tampered)
 
 
-def test_the_case_plan_is_deterministic_and_binds_the_fixture_digest(fixture_payload):
+def locally_generated_fixture(fixture_payload):
+    """A TEST-LOCAL fixture in the GENERATED state, so producers downstream of the gate can run.
+
+    The COMMITTED fixture is PENDING_OFFLINE_GENERATION and must stay that way: its material has to
+    be produced offline and one-time by the governed generator against pinned blst, which cannot
+    happen here and is never faked.  This copy exists only so the tests can drive the producers that
+    sit AFTER that gate; it is never qualification evidence, and the committed fixture's fail-closed
+    behaviour is proven separately.
+    """
     generated = json.loads(json.dumps(fixture_payload))
     generated["fixture_material_state"] = protocol_qualifier.FIXTURE_STATE_GENERATED
     generated["generator_source_sha256"] = "1" * 64
     generated["generator_binary_sha256"] = "2" * 64
+    return generated
+
+
+def test_the_case_plan_is_deterministic_and_binds_the_fixture_digest(fixture_payload):
+    generated = locally_generated_fixture(fixture_payload)
     raw = json.dumps(generated, sort_keys=True).encode("utf-8")
     first = protocol_qualifier.build_case_plan(raw, generated)
     second = protocol_qualifier.build_case_plan(raw, generated)
@@ -3592,16 +3606,46 @@ _WRAPPER = _REPO_ROOT / "scripts" / "crypto_core" / "qualification" / "s3c" / "m
 
 
 def _run_wrapper(arguments, tmp_path):
+    # RUNNER_TEMP is the governed build area.  The workflow always sets it, so the tests run the
+    # wrapper the same way rather than exercising a configuration that never occurs.
+    environment = dict(os.environ)
+    environment["RUNNER_TEMP"] = str(tmp_path)
     completed = subprocess.run(  # noqa: S603 - fixed interpreter, fixed argument vector
         [sys.executable, str(_WRAPPER)] + arguments,
         capture_output=True,
         text=True,
         cwd=str(_REPO_ROOT),
+        env=environment,
         timeout=120,
         check=False,
     )
-    del tmp_path
     return completed
+
+
+def test_the_wrapper_refuses_to_build_without_a_governed_build_area(tmp_path):
+    """No RUNNER_TEMP means no governed place to write, so nothing may run."""
+    environment = {key: value for key, value in os.environ.items() if key != "RUNNER_TEMP"}
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter, fixed argument vector
+        [sys.executable, str(_WRAPPER)]
+        + _governed_arguments(tmp_path)
+        + [
+            "--",
+            "gcc",
+            "-c",
+            "-o",
+            str(tmp_path / "policy.o"),
+            "scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(_REPO_ROOT),
+        env=environment,
+        timeout=120,
+        check=False,
+    )
+    combined = completed.stdout + completed.stderr
+    assert completed.returncode != 0, combined
+    assert "BUILD_AREA_UNDECLARED" in combined, combined
 
 
 def _governed_arguments(tmp_path, instance_id="worker-policy", kind="COMPILE"):
@@ -3612,6 +3656,8 @@ def _governed_arguments(tmp_path, instance_id="worker-policy", kind="COMPILE"):
         str(tmp_path / "blst"),
         "--instance-log",
         str(tmp_path / "instances.json"),
+        "--job-id",
+        "s3c-build-candidate",
         "--run-invocation",
         instance_id,
         "--invocation-kind",
@@ -3693,7 +3739,13 @@ def test_the_governed_execution_boundary_is_frozen():
     assert "def governed_build_environment(" in source
     for name in ("CFLAGS", "LD_PRELOAD", "LIBRARY_PATH", "PYTHONPATH", "CPATH"):
         assert name in source, name
-    assert "os.environ" not in source.split("def governed_build_environment(")[1].split("def ")[1]
+    # [0] is the body of governed_build_environment itself; the previous index read the FOLLOWING
+    # function instead, so the assertion was never about the environment builder at all.
+    environment_body = source.split("def governed_build_environment(")[1].split("\ndef ")[0]
+    assert "os.environ" not in environment_body
+    # The governed build area is declared, and its absence is fatal rather than permissive.
+    assert 'os.environ.get("RUNNER_TEMP")' in source
+    assert "BUILD_AREA_UNDECLARED" in source
     # Validation strictly precedes execution.
     body = source[source.index("def record_invocation(") : source.index("def load_observed_instances(")]
     assert body.index("validate_build_command(") < body.index("subprocess.run(")
@@ -3835,6 +3887,95 @@ def _canonical_policy_record():
         "internal_policy": internal_record,
         "sandbox_policy_digest_sha256": "a" * 64,
     }
+
+
+def build_real_receipt(worker_digest, elf_record):
+    """Drive the ACTUAL A4 producer with the ACTUAL upstream producers, for a given candidate.
+
+    Nothing here assembles a receipt field by hand.  Every value is what the reviewed producer for
+    that record emits, which is the only way a positive test can show that an honest run is
+    accepted rather than that a convenient dictionary is.
+    """
+    constants = _X86_64_UAPI_CONSTANTS
+    internal_bytes = policy_qualifier.program_bytes(
+        policy_qualifier.derive_program(constants, policy_qualifier._INTERNAL_INVENTORY)
+    )
+    outer_bytes = policy_qualifier.program_bytes(
+        policy_qualifier.derive_program(constants, policy_qualifier._OUTER_INVENTORY)
+    )
+    policy_record = _canonical_policy_record()
+
+    # The observation, adjudicated by the real adjudicator against the real programs.
+    normalised, identity = _synthetic_observation(internal_bytes, outer_bytes)
+    normalised["candidate_binary_sha256"] = worker_digest
+    identity["candidate_binary_sha256"] = worker_digest
+    reference = _synthetic_policy_reference(internal_bytes, outer_bytes)
+    reference["internal_policy_sha256"] = policy_record["canonical_internal_policy_sha256"]
+    reference["outer_governed_digest_sha256"] = policy_record["outer_policy"]["governed_digest_sha256"]
+    _seal(normalised, reference, identity)
+
+    # The protocol record, from the real qualifier over the governed TEST-ONLY fixture.
+    committed = json.loads(FIXTURE.read_bytes().decode("utf-8"))
+    generated = locally_generated_fixture(committed)
+    fixture_bytes = json.dumps(generated, sort_keys=True).encode("utf-8")
+    plan = protocol_qualifier.build_case_plan(fixture_bytes, generated)
+    protocol_record = protocol_qualifier.build_protocol_record(fixture_bytes, generated, plan)
+
+    # The observation carries the protocol identity, exactly as the real observation parser does.
+    normalised["fixture_sha256"] = protocol_record["fixture_sha256"]
+    normalised["case_plan_sha256"] = protocol_record["case_plan_sha256"]
+    adjudication = adjudicator.adjudicate(normalised, reference, identity)
+
+    manifest = {
+        "worker_binary_name": "mt4_s3c_static_worker",
+        "worker_binary_sha256": worker_digest,
+        "worker_binary_bytes": elf_record["candidate_binary_bytes"],
+        "build_manifest_digest_sha256": "9" * 64,
+        "source_run_id": identity["source_run_id"],
+        "source_run_attempt": identity["source_run_attempt"],
+        "source_head_sha": identity["source_head_sha"],
+        "compile_dependency_inventory_digest_sha256": elf_record["compile_dependency_inventory_digest_sha256"],
+        "compile_dependency_entry_count": 19,
+        "upstream_release": build_manifest.UPSTREAM_RELEASE,
+        "upstream_commit": build_manifest.UPSTREAM_COMMIT,
+        "upstream_source_tree_digest": build_manifest.UPSTREAM_SOURCE_TREE_DIGEST,
+    }
+    receipt_identity = dict(identity)
+    receipt_identity["candidate_artifact_id"] = 90001
+    receipt_identity["candidate_artifact_archive_digest"] = "sha256:" + "a" * 64
+    receipt = receipt_generator.build_receipt(
+        manifest, elf_record, policy_record, protocol_record, adjudication, receipt_identity
+    )
+    return receipt, adjudication, identity
+
+
+def test_the_real_receipt_producer_runs_end_to_end_over_a_real_candidate():
+    """The whole producer chain, with no hand-assembled record anywhere in it."""
+    image = build_reference_elf()
+    worker_digest = hashlib.sha256(image).hexdigest()
+    elf_record = elf_qualify.qualify(
+        image, _PAGE, elf_qualify.canonical_phdr_inventory(elf_qualify.EXPECTED_PHDR_INVENTORY), "e" * 64
+    )
+    elf_record["candidate_binary_sha256"] = worker_digest
+    receipt, adjudication, identity = build_real_receipt(worker_digest, elf_record)
+
+    # The producer bound ONE run identity across every record it consumed.
+    assert receipt["worker_binary_sha256"] == worker_digest
+    assert receipt["source_run_id"] == identity["source_run_id"]
+    assert receipt["case_count"] == 25
+    assert receipt["all_cases_conform"] is True
+    assert len(receipt["internal_filter_equivalence_digests"]) == 25
+    # The policy authority the trusted consumer requires is PRODUCED, not inserted.
+    for field in _CONSUMER_REQUIRED_A4_FIELDS:
+        assert field in receipt, field
+    assert receipt["canonical_internal_cbpf_instruction_count"] == 113
+    assert receipt["canonical_outer_cbpf_instruction_count"] == 400
+    assert receipt["fixture_sha256"] == adjudication["fixture_sha256"]
+    assert receipt["qualification_state"] == receipt_generator.QUALIFIED_NOT_ADMITTED
+    # And it claims nothing beyond evidence.
+    assert receipt["evidence_status"] == "ADMISSION_EVIDENCE_ONLY"
+    assert receipt["governed_worker_row_created"] is False
+    assert receipt["authority_non_transition"]["admission"] == "NONE"
 
 
 def test_the_real_receipt_producer_emits_every_consumer_required_field():

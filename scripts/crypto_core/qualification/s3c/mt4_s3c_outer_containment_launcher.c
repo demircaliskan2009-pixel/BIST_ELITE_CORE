@@ -1927,6 +1927,15 @@ typedef struct {
     unsigned short outer_length;
     unsigned short internal_length;
     unsigned long outer_fprog_address;
+    /*
+     * The L1 REGISTER LEG, recorded as evidence.  The launcher already refuses to continue unless
+     * these are exact, but that refusal is a claim the launcher makes about itself; V9 SECTION 13.4
+     * makes the OBSERVER's capture authoritative, so the observed values travel to the trusted
+     * boundary and are re-checked there.
+     */
+    unsigned long outer_operation;
+    unsigned long outer_flags;
+    unsigned long outer_argument_tail[3];
     unsigned long internal_fprog_address;
     unsigned long outer_filter_address;
     unsigned long internal_filter_address;
@@ -2482,6 +2491,11 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
                     result->outer_fprog_address = (unsigned long)registers.rdx;
                     result->outer_filter_address = filter_address;
                     result->outer_byte_count = byte_count;
+                    result->outer_operation = (unsigned long)registers.rdi;
+                    result->outer_flags = (unsigned long)registers.rsi;
+                    result->outer_argument_tail[0] = (unsigned long)registers.r10;
+                    result->outer_argument_tail[1] = (unsigned long)registers.r8;
+                    result->outer_argument_tail[2] = (unsigned long)registers.r9;
                 }
             }
 
@@ -2831,6 +2845,12 @@ static void mt4_s3c_emit_case(const mt4_s3c_case_t *plan_case, const mt4_s3c_cas
     mt4_s3c_emit(",\"length\":%u", (unsigned int)result->outer_length);
     mt4_s3c_emit(",\"fprog_va_u64\":%llu", (unsigned long long)result->outer_fprog_address);
     mt4_s3c_emit(",\"filter_va_u64\":%llu", (unsigned long long)result->outer_filter_address);
+    mt4_s3c_emit(",\"operation_u32\":%llu", (unsigned long long)result->outer_operation);
+    mt4_s3c_emit(",\"flags_u32\":%llu", (unsigned long long)result->outer_flags);
+    mt4_s3c_emit(",\"argument_tail_u64\":[%llu,%llu,%llu]",
+                 (unsigned long long)result->outer_argument_tail[0],
+                 (unsigned long long)result->outer_argument_tail[1],
+                 (unsigned long long)result->outer_argument_tail[2]);
     mt4_s3c_emit(",\"install_return_i32\":%d", result->outer_install_return);
     mt4_s3c_emit(",\"program_bytes_hex\":\"");
     mt4_s3c_emit_hex(result->outer_bytes, result->outer_byte_count);
