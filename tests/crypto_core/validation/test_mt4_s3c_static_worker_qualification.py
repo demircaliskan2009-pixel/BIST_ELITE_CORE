@@ -4002,6 +4002,102 @@ def test_the_governed_paths_check_uses_the_real_path_not_the_graph_key(governed_
     assert "governed build area" in str(error.value)
 
 
+def test_upstream_input_validation_uses_the_real_path(governed_build_area):
+    """Repair 2B, item 3.  An UPSTREAM_PINNED input is judged by where the file actually is."""
+    tmp_path = governed_build_area
+    upstream = tmp_path / "blst"
+    # A file that is NOT under the pinned upstream root cannot be an upstream input, and only the
+    # raw path can say so -- the graph identity of every input is build-area-relative either way.
+    intruder = tmp_path / "not_blst" / "src" / "server.c"
+    _materialise(intruder)
+    with pytest.raises(build_manifest.BuildManifestError) as error:
+        build_manifest.validate_build_command(
+            "COMPILE",
+            ["gcc", "-c", "-o", str(tmp_path / "obj" / "blst_server.o"), str(intruder)],
+            str(_REPO_ROOT),
+            str(upstream),
+            "blst-server",
+            "s3c-build-candidate",
+        )
+    # It is refused as not being this instance's governed source, before any weaker rule applies.
+    assert "BUILD_COMMAND_REJECTED" in str(error.value)
+
+    # And the honest upstream input, at its real location under the pinned root, is accepted.
+    _materialise(upstream / "src" / "server.c")
+    _executable, record, validated = build_manifest.validate_build_command(
+        "COMPILE",
+        ["gcc", "-c", "-o", str(tmp_path / "obj" / "blst_server.o"), str(upstream / "src" / "server.c")],
+        str(_REPO_ROOT),
+        str(upstream),
+        "blst-server",
+        "s3c-build-candidate",
+    )
+    source = [item for item in record["inputs"] if item["class"] == build_manifest.CLASS_UPSTREAM_PINNED]
+    assert len(source) == 1
+    assert source[0]["path"] == "src/server.c"
+    assert source[0]["raw_path"] == str(upstream / "src" / "server.c")
+    assert validated == os.path.normpath(str(tmp_path / "obj" / "blst_server.o"))
+
+
+def test_the_honest_worker_link_closes_through_the_canonical_graph(governed_build_area):
+    """Item 7.  The real worker-link passes with no basename logic anywhere in the path."""
+    tmp_path = governed_build_area
+    _log, records = _drive_build_job(tmp_path)
+    build_manifest.validate_build_graph(records)
+
+    link = [record for record in records if record["instance_id"] == "worker-link"][0]
+    consumed = [item["graph_identity"] for item in link["inputs"]]
+    produced = {record["output"]: record["instance_id"] for record in records}
+    # All seven real objects, each resolved to the operation that actually produced that state.
+    assert len(consumed) == 7, consumed
+    producers = [produced[identity] for identity in consumed]
+    assert set(producers) == set(build_manifest.REQUIRED_LINK_INPUT_PRODUCERS["worker-link"]), producers
+    # The two BLST objects are consumed in their POST-transform state, so the link sees the bytes
+    # objcopy left behind rather than the ones the compile produced.
+    assert "blst-server-strip" in producers
+    assert "blst-assembly-strip" in producers
+    for identity in consumed:
+        assert identity.startswith("s3c-build-candidate:"), identity
+
+
+def test_a_same_basename_object_from_another_job_is_rejected(governed_build_area):
+    """Item 8.  The canonical graph verifier refuses a foreign job's identically named object."""
+    tmp_path = governed_build_area
+    _log, records = _drive_build_job(tmp_path)
+
+    # The observation job also produces a file called obj/policy.o.  It is a DIFFERENT file, and
+    # only the job scope distinguishes the two -- which is precisely what the removed basename
+    # check could not do.
+    foreign = json.loads(json.dumps(records))
+    for record in foreign:
+        if record["instance_id"] == "worker-link":
+            for item in record["inputs"]:
+                if item["graph_identity"].endswith(":obj/policy.o"):
+                    item["graph_identity"] = "s3c-observe:obj/policy.o"
+    with pytest.raises(build_manifest.BuildManifestError) as error:
+        build_manifest.validate_build_graph(foreign)
+    assert "BUILD_GRAPH_UNPRODUCED_INPUT" in str(error.value)
+
+    # A missing producer fails for its own reason.
+    missing = json.loads(json.dumps(records))
+    for record in missing:
+        if record["instance_id"] == "worker-link":
+            record["inputs"][0]["graph_identity"] = "s3c-build-candidate:obj/never_built.o"
+    with pytest.raises(build_manifest.BuildManifestError) as error:
+        build_manifest.validate_build_graph(missing)
+    assert "BUILD_GRAPH_UNPRODUCED_INPUT" in str(error.value)
+
+    # And consuming the PRE-transform state of a transformed object is refused: those bytes are
+    # gone by the time the link runs.
+    pre_state = json.loads(json.dumps(records))
+    for record in pre_state:
+        if record["kind"] == "TRANSFORM":
+            record["digest_after"] = record["digest_before"]
+    with pytest.raises(build_manifest.BuildManifestError) as error:
+        build_manifest.validate_build_graph(pre_state)
+    assert "BUILD_GRAPH_TRANSFORM_INERT" in str(error.value)
+
+
 def test_no_load_bearing_basename_comparison_remains_in_the_graph():
     """Repair 4.  A basename may label something; it may never identify a graph node."""
     source = _read(_S3C / "mt4_s3c_build_manifest.py")
