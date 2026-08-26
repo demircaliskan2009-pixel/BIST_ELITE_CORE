@@ -422,22 +422,29 @@ COMPILE_INSTANCE_DIGEST_DOMAIN = b"mt4-s3c-compile-instance-inventory.v1\x00"
 # The fields EVERY recorded invocation carries.  resolved_tool_path and working_directory are
 # the wrapper's frozen execution boundary made evidence: the tool that actually ran and the
 # directory it ran in, rather than a basename and an assumption.
+# ONE exact instance schema, identical to the producer's (controller repair 1).  The producer and
+# this consumer previously disagreed about job_id and raw_output, which meant the producer rejected
+# its own honest record before the trust boundary ever saw it.
 COMPILE_INSTANCE_FIELDS = (
     "argv",
     "flags",
     "include_roots",
     "inputs",
     "instance_id",
+    "job_id",
     "kind",
     "libraries",
     "output",
-    "job_id",
+    "output_path",
     "raw_output",
     "resolved_tool_path",
     "tool",
     "working_directory",
     "working_directory_class",
 )
+
+# The exact field set of ONE consumed input: canonical path, raw execution path, graph key, class.
+COMPILE_INPUT_FIELDS = ("class", "graph_identity", "path", "raw_path")
 
 # A TRANSFORM rewrites an artifact in place, so its record carries the two distinct graph
 # STATES of the same path.  Without them the post-transform bytes would be indistinguishable
@@ -680,7 +687,7 @@ def recompute_compile_instance_digest(payload):
         if not isinstance(inputs, list) or not inputs:
             fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "inputs")
         for item in inputs:
-            if not isinstance(item, dict) or tuple(sorted(item)) != ("class", "graph_identity", "path"):
+            if not isinstance(item, dict) or tuple(sorted(item)) != COMPILE_INPUT_FIELDS:
                 fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "input shape")
             item_class = require_str(item.get("class"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
             item_path = require_str(item.get("path"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
@@ -767,7 +774,7 @@ def _instances_from_log(payload, marker):
     for instance in instances:
         if not isinstance(instance, dict):
             fail(marker, "instance type")
-        if tuple(sorted(instance)) != tuple(sorted(COMPILE_INSTANCE_FIELDS)):
+        if tuple(sorted(instance)) != tuple(sorted(instance_fields_for(instance.get("kind")))):
             fail(marker, "instance field set")
         if require_str(instance.get("tool"), marker) != APPROVED_BUILD_TOOL:
             fail(marker, "tool")
@@ -3779,10 +3786,20 @@ def run_gate(arguments):
     for record, label in ((observation, "A3"), (receipt, "A4")):
         if require_str(record.get("fixture_sha256"), "FIXTURE_IDENTITY_UNBOUND") != fixture_digest:
             fail("FIXTURE_IDENTITY_UNBOUND", label + " fixture digest")
-    if require_str(observation.get("case_plan_sha256"), "CASE_PLAN_IDENTITY_UNBOUND") != require_str(
-        receipt.get("case_plan_sha256"), "CASE_PLAN_IDENTITY_UNBOUND"
-    ):
-        fail("CASE_PLAN_IDENTITY_UNBOUND", "A3 vs A4")
+    # CONTROLLER REPAIR 6 (option D): case_plan_sha256 is NOT trusted authority and is no longer
+    # read, compared or emitted.
+    #
+    # V9 SECTION 25 lists seventeen bindings that must agree on one authenticated run identity; a
+    # case-plan digest is not one of them, and the token case_plan does not appear anywhere in V9.
+    # What the gate used to do here was require A3 and A4 to agree -- which is not authority at all,
+    # because both are unprivileged producer records and two of them can agree on any value they
+    # like.  A false digest satisfying that check then entered the trusted predicate.
+    #
+    # Removing it costs nothing that was ever proven.  build_case_plan is a pure function of frozen
+    # constants and the governed fixture bytes, and BOTH are independently anchored here already:
+    # the fixture by its committed bundle-entry-16 digest recomputed from the git object store just
+    # above, and the case set by the frozen 25-case inventory and the reconstructed case-set digest.
+    # The primitive properties remain the authority; the aggregate was only ever a restatement.
     # REPAIR 2B: the sandbox-policy AGGREGATE leaves the trust chain.
     #
     # It is a digest over the whole unprivileged sandbox-policy record, INCLUDING that record's own
@@ -3936,7 +3953,6 @@ def run_gate(arguments):
         "build_manifest_sha256": member_digests[CANDIDATE_ARTIFACT][BUILD_MANIFEST_MEMBER],
         "elf_qualification_digest_sha256": elf_digest,
         "governed_fixture_sha256": fixture_digest,
-        "case_plan_sha256": receipt.get("case_plan_sha256"),
         "outer_containment_policy_digest_sha256": outer_canonical["governed_sha256"],
         "canonical_outer_policy_id": outer_canonical["policy_id"],
         "canonical_outer_cbpf_sha256": outer_canonical["cbpf_sha256"],

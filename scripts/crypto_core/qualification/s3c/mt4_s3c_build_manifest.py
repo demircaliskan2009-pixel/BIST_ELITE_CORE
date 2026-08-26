@@ -369,7 +369,11 @@ def _require_governed_paths(kind, instance_id, record, repository_root, upstream
             _fail("BUILD_COMMAND_REJECTED", "input is not the governed source for this instance")
 
     for item in record["inputs"]:
-        absolute = os.path.normpath(os.path.abspath(item["graph_identity"]))
+        # The RAW execution path is the only value with filesystem meaning.  Resolving the graph
+        # identity here was the defect: "s3c-build-candidate:obj/policy.o" is a key, and abspath
+        # turns it into a path under the working directory that no build ever writes -- so the
+        # containment check was passing or failing for reasons unrelated to where the file is.
+        absolute = os.path.normpath(os.path.abspath(item["raw_path"]))
         if item["class"] == CLASS_REPO_BUNDLED:
             if item["path"] not in SOURCE_BUNDLE_PATHS:
                 _fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_UNBUNDLED", item["path"])
@@ -387,6 +391,9 @@ def _require_governed_paths(kind, instance_id, record, repository_root, upstream
         _fail("BUILD_COMMAND_REJECTED", "output would write into the repository")
     if not output.startswith(build_root + os.sep):
         _fail("BUILD_COMMAND_REJECTED", "output escapes the governed build area")
+    # The VALIDATED absolute path of the artifact this invocation writes.  Repair 3 hashes exactly
+    # this after execution: it is the path the contract just proved governed, so no later step has
+    # to rebuild it from evidence that was never a path.
     return output
 
 
@@ -438,13 +445,16 @@ def validate_build_command(kind, command, repository_root, upstream_root, instan
     # Include roots are governed: exactly the pinned upstream tree or the S3C script directory.
     check_include_roots(record["include_roots"], repository_root, upstream_root)
 
+    # The VALIDATED absolute filesystem path of this invocation's output artifact, captured here
+    # and returned so that no later step has to reconstruct a path from graph evidence.
+    validated_output_path = None
     if instance_id is not None:
-        _require_governed_paths(kind, instance_id, record, repository_root, upstream_root)
+        validated_output_path = _require_governed_paths(kind, instance_id, record, repository_root, upstream_root)
 
     # LAST: resolve the tool.  Everything above is a property of the frozen contract and holds on
     # any host; this one depends on the machine, so it runs after the contract has been proven.
     executable = resolve_governed_tool(kind, command[0])
-    return executable, record
+    return executable, record, validated_output_path
 
 
 CLASS_SYSTEM_LIBRARY = "SYSTEM_LIBRARY"
@@ -500,14 +510,20 @@ COMPILE_INSTANCE_FIELDS = (
     "include_roots",
     "inputs",
     "instance_id",
+    "job_id",
     "kind",
     "libraries",
     "output",
+    "output_path",
+    "raw_output",
     "resolved_tool_path",
     "tool",
     "working_directory",
     "working_directory_class",
 )
+
+# The exact field set of ONE consumed input, carrying the same three path concepts as the record.
+COMPILE_INPUT_FIELDS = ("class", "graph_identity", "path", "raw_path")
 
 # A TRANSFORM rewrites an artifact in place, so its record carries the two distinct graph
 # STATES of the same path.  Without them the post-transform bytes would be indistinguishable
@@ -599,6 +615,24 @@ WORKING_DIRECTORY_CLASS = "GITHUB_WORKSPACE"
 
 GOVERNED_JOB_IDS = ("s3c-build-candidate", "s3c-observe", "s3c-adjudicate")
 
+# =================================================================================================
+# THREE PATH CONCEPTS, DELIBERATELY DISTINCT (controller repair 2).
+#
+# These were conflated, and the conflation was load-bearing: a GRAPH IDENTITY was being handed to
+# os.path.abspath and to os.path.join, which silently produces a path that cannot exist.
+#
+#   RAW_EXECUTION_PATH        exactly what the command line said, e.g.
+#                             /home/runner/work/_temp/obj/policy.o
+#                             The ONLY value that may touch the filesystem.
+#   CANONICAL_FILESYSTEM_PATH the same file named relative to its governed root, e.g. obj/policy.o
+#                             Deterministic across runners.  Evidence, never a filesystem operand.
+#   GRAPH_IDENTITY            the node key, e.g. s3c-build-candidate:obj/policy.o
+#                             A KEY.  Never a pathname, never joined, opened, resolved or hashed.
+#
+# The direction of derivation is one-way: raw -> canonical -> graph identity.  Nothing reverses it,
+# because a graph identity cannot be turned back into a file and must never be asked to be.
+# =================================================================================================
+
 
 def _shell_split(argv_text):
     """Split one recorded argument vector.  The workflow supplies it already space-separated with
@@ -674,10 +708,13 @@ def parse_compile_instance(declaration, repository_root, upstream_root, job_id=N
         kind_of_input, normalised = classify_dependency(item, repository_root, upstream_root)
         classified.append(
             {
+                # CANONICAL: named relative to its governed root, deterministic across runners.
                 "path": normalised,
                 "class": kind_of_input,
-                # The consumer edge names the exact producer node, so a same-basename artifact from
-                # another job can never satisfy it.
+                # RAW: exactly what the command line said.  The only field with filesystem meaning.
+                "raw_path": item,
+                # GRAPH KEY: names the exact producer node, so a same-basename artifact from another
+                # job can never satisfy this edge.  Never resolved, joined, opened or hashed.
                 "graph_identity": _graph_identity(item, repository_root, job_id),
             }
         )
@@ -693,7 +730,11 @@ def parse_compile_instance(declaration, repository_root, upstream_root, job_id=N
         # Repair 5A: the graph node identity is the CANONICAL PATH, never the basename.  Two jobs
         # can each produce a policy.o, and a basename cannot say which one a link consumed.
         "job_id": job_id,
+        # GRAPH KEY / CANONICAL / RAW, in that order.  All three are recorded because all three are
+        # different facts, and the previous single "output" had to serve as whichever one the
+        # reading code happened to want.
         "output": _graph_identity(output, repository_root, job_id),
+        "output_path": _canonical_path(output, repository_root),
         "raw_output": output,
         "working_directory_class": WORKING_DIRECTORY_CLASS,
     }
@@ -727,7 +768,9 @@ def record_invocation(log_path, instance_id, kind, argv, repository_root, upstre
     PARSE, then COMPLETE VALIDATION, then EXECUTE.  An invalid invocation produces no child process
     at all, which is what makes this a gate rather than an audit trail.
     """
-    executable, _preview = validate_build_command(kind, argv, repository_root, upstream_root, instance_id, job_id)
+    executable, _preview, validated_output_path = validate_build_command(
+        kind, argv, repository_root, upstream_root, instance_id, job_id
+    )
     working_directory = os.path.normpath(os.path.abspath(repository_root))
     if not os.path.isdir(working_directory):
         _fail("BUILD_COMMAND_REJECTED", "working directory")
@@ -750,12 +793,16 @@ def record_invocation(log_path, instance_id, kind, argv, repository_root, upstre
     record["resolved_tool_path"] = executable
     record["working_directory"] = _canonical_path(working_directory, repository_root)
     if kind == INSTANCE_KIND_TRANSFORM:
-        # Repair 5D: an in-place transform has two distinct graph STATES even though the path is
-        # unchanged, so both digests are bound and downstream consumers must name the post state.
-        target = record["inputs"][0]["graph_identity"]
-        record["transform_target"] = target
+        # An in-place transform has two distinct graph STATES even though the path is unchanged, so
+        # both digests are bound and downstream consumers must name the post state.
+        #
+        # CONTROLLER REPAIR 3: digest_after hashes VALIDATED_OUTPUT_PATH -- the exact absolute file
+        # the pre-execution contract proved governed.  The previous line joined the working
+        # directory to a GRAPH IDENTITY ("s3c-build-candidate:obj/blst_server.o"), naming a file
+        # that no build ever writes, so the honest objcopy path could not produce evidence at all.
+        record["transform_target"] = record["inputs"][0]["graph_identity"]
         record["digest_before"] = digest_before or ""
-        record["digest_after"] = _sha256_file(os.path.join(working_directory, target))
+        record["digest_after"] = _sha256_file(validated_output_path)
     entries = []
     if os.path.exists(log_path):
         with open(log_path, "rb") as handle:
@@ -826,15 +873,13 @@ def validate_compile_instances(instances):
         if required not in observed_libraries:
             _fail("COMPILE_INSTANCE_INVENTORY_INCOMPLETE", "system library " + required)
 
-    # Repair 10: PRODUCER -> CONSUMER edges.  Every object a link consumes must be the recorded
-    # output of a recorded compile, so a link cannot quietly consume an object nobody observed
-    # being built.
-    produced = {instance["output"] for instance in instances if instance["kind"] == INSTANCE_KIND_COMPILE}
-    for instance in links:
-        for item in instance["inputs"]:
-            consumed = os.path.basename(item["path"])
-            if consumed.endswith(".o") and consumed not in produced:
-                _fail("COMPILE_INSTANCE_LINK_INPUT_UNPRODUCED", consumed)
+    # CONTROLLER REPAIR 4: the legacy basename producer/consumer check is GONE.
+    #
+    # It compared two domains that cannot meet: `produced` held job-scoped graph identities like
+    # "s3c-build-candidate:obj/policy.o" while `consumed` held bare basenames like "policy.o", so
+    # no honest link could ever satisfy it.  validate_build_graph above is the ONE authoritative
+    # producer/consumer model -- job, canonical path, state and producing operation -- and adding a
+    # second partial verifier alongside it is what let this one rot unnoticed.
     return instances
 
 

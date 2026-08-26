@@ -1717,6 +1717,7 @@ def _instance(instance_id, kind, inputs, libraries=(), flags=(), output="out.o",
         "inputs": [dict(item) for item in inputs],
         "libraries": sorted(libraries),
         "output": output,
+        "output_path": output.split(":", 1)[-1],
         "raw_output": "/tmp/build/" + output.split(":", 1)[-1],
         # The wrapper's frozen execution boundary, recorded as evidence.
         "resolved_tool_path": "/usr/bin/" + tool,
@@ -1725,6 +1726,8 @@ def _instance(instance_id, kind, inputs, libraries=(), flags=(), output="out.o",
     }
     for item in record["inputs"]:
         item.setdefault("graph_identity", item["path"])
+        # RAW is what a command line would have said; the graph key is never a path.
+        item.setdefault("raw_path", "/tmp/build/" + item["graph_identity"].split(":", 1)[-1])
     return record
 
 
@@ -2352,6 +2355,7 @@ def run_gate_compile_provenance():
                     {
                         "path": "src/crypto_core/__init__.py",
                         "class": "REPO_BUNDLED",
+                        "raw_path": "src/crypto_core/__init__.py",
                         "graph_identity": "src/crypto_core/__init__.py",
                     }
                 ]
@@ -2433,6 +2437,71 @@ def real_producer_receipt_is_accepted():
         assert "STAGE_C_CANONICAL_POLICY_SUBSTITUTED" in str(error), str(error)
         return
     raise AssertionError("the boundary accepted a resealed real receipt")
+
+
+def case_plan_is_not_trusted_authority():
+    # CONTROLLER REPAIR 6.  Two unprivileged producer records agreeing with each other is not
+    # authority, so the value they agree on no longer reaches the trusted predicate at all.
+    #
+    # V9 SECTION 25 enumerates the seventeen bindings that must agree on one authenticated run
+    # identity, and a case-plan digest is not among them.  What IS independently anchored is the
+    # governed fixture -- bundle entry 16, recomputed here from the git object store -- and the
+    # frozen 25-case set.  The plan is a pure function of those, so nothing is lost.
+    work_dir = sys.argv[sys.argv.index("--work-dir") + 1]
+    predicate, world = _run_world(work_dir)
+
+    # The trusted predicate does not carry the aggregate, in any spelling.
+    assert "case_plan_sha256" not in predicate, sorted(predicate)
+    assert not [name for name in predicate if "case_plan" in name], sorted(predicate)
+
+    # The independent anchors that make it redundant ARE present and ARE reconstructed.
+    fixture_entry = [
+        entry for entry in world["bundle"]["entries"] if entry["path"] == gate.GOVERNED_FIXTURE_PATH
+    ]
+    assert len(fixture_entry) == 1
+    assert predicate["governed_fixture_sha256"] == fixture_entry[0]["sha256"]
+    assert predicate["observation_case_set_digest_sha256"] == gate.stage_c_case_set_digest()
+
+    # THE ATTACK, run in full: A3 and A4 agree on a false case-plan digest, every producer-side
+    # digest resealed around it.  It now changes nothing, because nothing reads it.
+    def coordinated_false_case_plan(world):
+        world["observation"]["case_plan_sha256"] = "9" * 64
+        world["receipt"]["case_plan_sha256"] = "9" * 64
+
+    mutated, _mutated_world = _run_world(work_dir, coordinated_false_case_plan)
+    assert mutated == predicate, "a producer-selected value changed the trusted predicate"
+
+    # And the anchors that DO carry authority still reject when they are wrong.
+    def false_fixture_digest(world):
+        world["observation"]["fixture_sha256"] = "8" * 64
+        world["receipt"]["fixture_sha256"] = "8" * 64
+
+    _expect_run_gate("FIXTURE_IDENTITY_UNBOUND", false_fixture_digest)
+
+    def a3_only_fixture_digest(world):
+        world["observation"]["fixture_sha256"] = "7" * 64
+
+    _expect_run_gate("FIXTURE_IDENTITY_UNBOUND", a3_only_fixture_digest)
+
+    def a4_only_fixture_digest(world):
+        world["receipt"]["fixture_sha256"] = "6" * 64
+
+    _expect_run_gate("FIXTURE_IDENTITY_UNBOUND", a4_only_fixture_digest)
+
+    def fixture_bundle_entry_mutated(world):
+        for entry in world["bundle"]["entries"]:
+            if entry["path"] == gate.GOVERNED_FIXTURE_PATH:
+                entry["sha256"] = "5" * 64
+
+    # The COMMITTED bundle entry is the authority: move it and the producer records no longer
+    # match it, which is the direction of trust this repair depends on.
+    _expect_run_gate("FIXTURE_IDENTITY_UNBOUND", fixture_bundle_entry_mutated)
+
+    def case_ordering_mutated(world):
+        cases = world["observation"]["cases"]
+        cases[3], cases[4] = cases[4], cases[3]
+
+    _expect_run_gate("OBSERVATION_CASE", case_ordering_mutated)
 
 
 def run_gate_build_graph_identity():
@@ -2534,6 +2603,7 @@ def run_gate_build_graph_identity():
                     {
                         "path": "obj/verify.o",
                         "class": "EXTERNAL_TOOLCHAIN",
+                        "raw_path": "/tmp/build/obj/verify.o",
                         "graph_identity": "s3c-build-candidate:obj/verify.o",
                     }
                 ]
@@ -2960,6 +3030,7 @@ check("zip_runtime_consumption_and_reachable_rules", zip_runtime_consumption_and
 check("run_gate_reference", run_gate_reference)
 check("run_gate_coordinated_reseal", run_gate_coordinated_reseal)
 check("real_producer_receipt_is_accepted", real_producer_receipt_is_accepted)
+check("case_plan_is_not_trusted_authority", case_plan_is_not_trusted_authority)
 check("run_gate_build_graph_identity", run_gate_build_graph_identity)
 check("run_gate_build_provenance_boundary", run_gate_build_provenance_boundary)
 check("run_gate_duplicate_identities", run_gate_duplicate_identities)
@@ -3228,6 +3299,7 @@ def driver_values(driver_results):
         "run_gate_reference",
         "run_gate_coordinated_reseal",
         "real_producer_receipt_is_accepted",
+        "case_plan_is_not_trusted_authority",
         "run_gate_build_graph_identity",
         "run_gate_build_provenance_boundary",
         "run_gate_duplicate_identities",

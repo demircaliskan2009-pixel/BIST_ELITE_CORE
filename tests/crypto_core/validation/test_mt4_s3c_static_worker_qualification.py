@@ -31,6 +31,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -3726,6 +3727,289 @@ def test_an_unknown_wrapper_option_is_rejected(tmp_path):
     )
     assert completed.returncode != 0
     assert "unrecognized arguments" in completed.stderr
+
+
+# =================================================================================================
+# THE REAL BUILD PRODUCER, END TO END (controller repair 5).
+# =================================================================================================
+
+
+def _build_job_commands():
+    """The exact s3c-build-candidate invocations, parsed from the governed workflow."""
+    workflow = (_REPO_ROOT / ".github" / "workflows" / "crypto_core_mt4_s3c_static_worker_qualification.yml").read_text(
+        encoding="utf-8"
+    )
+    job = None
+    commands = []
+    for line in workflow.splitlines():
+        heading = re.match(r"^  (s3c-[a-z-]+):\s*$", line)
+        if heading:
+            job = heading.group(1)
+            continue
+        if job != "s3c-build-candidate" or "--run-invocation" not in line:
+            continue
+        instance_id = re.search(r'--run-invocation "?([a-z0-9-]+)"?', line).group(1)
+        kind = re.search(r'--invocation-kind "?([A-Z]+)"?', line).group(1)
+        argv = shlex.split(line.split(" -- ", 1)[1])
+        commands.append((instance_id, kind, argv))
+    return commands
+
+
+def _materialise(path, body=b"placeholder\n"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+    return path
+
+
+@pytest.fixture()
+def governed_build_area(tmp_path, monkeypatch):
+    """A real build area with the real governed sources, and a mocked child-execution boundary."""
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    upstream = tmp_path / "blst"
+    for relative in build_manifest.REQUIRED_UPSTREAM_INPUTS:
+        _materialise(upstream / relative)
+
+    # The child-execution boundary, and ONLY that.  A real compiler writes its output file; the
+    # stand-in writes deterministic bytes derived from the argv so that a transform genuinely
+    # changes them, which is what makes the pre/post digests meaningful rather than decorative.
+    def fake_resolve(kind, name):
+        build_manifest.require_governed_tool_name(kind, name)
+        return "/usr/bin/" + name
+
+    def fake_run(argv, **kwargs):
+        del kwargs
+        target = None
+        if "-o" in argv:
+            target = argv[argv.index("-o") + 1]
+        else:
+            # objcopy rewrites its single positional operand in place.
+            target = argv[-1]
+        path = Path(target)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        previous = path.read_bytes() if path.exists() else b""
+        path.write_bytes(previous + b"|" + " ".join(argv).encode("utf-8"))
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(build_manifest, "resolve_governed_tool", fake_resolve)
+    monkeypatch.setattr(build_manifest.subprocess, "run", fake_run)
+    return tmp_path
+
+
+def _drive_build_job(tmp_path):
+    """Run every governed build-job invocation through the real wrapper, in workflow order."""
+    log = tmp_path / "build_instances.json"
+    upstream = tmp_path / "blst"
+    substitutions = {
+        "$RUNNER_TEMP": str(tmp_path),
+        "${RUNNER_TEMP}": str(tmp_path),
+        "$GITHUB_WORKSPACE": str(_REPO_ROOT),
+        "$S3C_CANDIDATE_NAME": "mt4_s3c_static_worker",
+    }
+    records = []
+    for instance_id, kind, argv in _build_job_commands():
+        resolved = []
+        for word in argv:
+            for name, value in substitutions.items():
+                word = word.replace(name, value)
+            resolved.append(word)
+        digest_before = None
+        if kind == "TRANSFORM":
+            # The PRE state is the artifact as it exists right now, before objcopy touches it.
+            digest_before = hashlib.sha256(Path(resolved[-1]).read_bytes()).hexdigest()
+        records.append(
+            build_manifest.record_invocation(
+                str(log),
+                instance_id,
+                kind,
+                resolved,
+                str(_REPO_ROOT),
+                str(upstream),
+                "s3c-build-candidate",
+                digest_before=digest_before,
+            )
+        )
+    return log, records
+
+
+def test_the_real_build_producer_closes_end_to_end(governed_build_area):
+    """wrapper argv -> validation -> record -> log -> reload -> schema -> graph -> manifest."""
+    tmp_path = governed_build_area
+    log, records = _drive_build_job(tmp_path)
+    assert len(records) == 14, len(records)
+
+    # RELOAD from the log the wrapper itself wrote, and run the producer's own schema and graph
+    # validation over it.  This is the exact step that rejected the producer's honest record.
+    instances = build_manifest.load_observed_instances(str(log))
+    assert len(instances) == 14
+
+    system_libraries = [
+        {
+            "name": "cap",
+            "resolved_path": "/usr/lib/x86_64-linux-gnu/libcap.so.2.44",
+            "soname": "libcap.so.2.44",
+            "digest_sha256": "b" * 64,
+            "provenance": build_manifest.PROVENANCE_SYSTEM_LIBRARY,
+        }
+    ]
+    payload = build_manifest.compile_instance_preimage(instances, system_libraries)
+    assert payload["instance_count"] == 14
+    assert len(build_manifest.compile_instance_digest(instances, system_libraries)) == 64
+    # Serialization is real: the manifest must canonicalise without loss.
+    assert json.loads(build_manifest.canonical_json(payload).decode("utf-8")) == payload
+
+
+def test_the_real_producer_record_satisfies_its_own_schema(governed_build_area):
+    """Repair 1.  The producer's honest record passes the producer's own exact field-set check."""
+    tmp_path = governed_build_area
+    _log, records = _drive_build_job(tmp_path)
+    for record in records:
+        expected = build_manifest.instance_fields_for(record["kind"])
+        assert tuple(sorted(record)) == tuple(sorted(expected)), record["instance_id"]
+        assert record["job_id"] == "s3c-build-candidate"
+        for item in record["inputs"]:
+            assert tuple(sorted(item)) == build_manifest.COMPILE_INPUT_FIELDS, item
+
+
+def _literal_tuple(source, name):
+    """Read one module-level tuple literal without importing the module.
+
+    The trusted gate refuses to import outside its frozen isolated invocation, so its schema is read
+    from its source.  ast.literal_eval keeps this honest: it evaluates a literal, never code.
+    """
+    tree = ast.parse(source)
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == name for target in node.targets
+        ):
+            return tuple(ast.literal_eval(node.value))
+    raise AssertionError(name + " is not a module-level tuple literal")
+
+
+def test_the_producer_and_the_trusted_consumer_share_one_instance_schema():
+    """Repair 1.  Two independent modules, one semantically identical exact schema."""
+    gate_source = _read(TRUSTED_GATE)
+    trusted_instance = _literal_tuple(gate_source, "COMPILE_INSTANCE_FIELDS")
+    trusted_input = _literal_tuple(gate_source, "COMPILE_INPUT_FIELDS")
+    assert tuple(sorted(build_manifest.COMPILE_INSTANCE_FIELDS)) == tuple(sorted(trusted_instance))
+    assert tuple(sorted(build_manifest.COMPILE_INPUT_FIELDS)) == tuple(sorted(trusted_input))
+    # A TRANSFORM extends the base set with exactly its own three fields, on both sides.  The gate
+    # derives its transform tuple from the same base, so proving the base equal proves both.
+    extra = set(build_manifest.TRANSFORM_INSTANCE_FIELDS) - set(build_manifest.COMPILE_INSTANCE_FIELDS)
+    assert extra == {"digest_after", "digest_before", "transform_target"}
+    assert 'sorted(COMPILE_INSTANCE_FIELDS + ("digest_after", "digest_before", "transform_target"))' in gate_source
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    (
+        ("missing job_id", lambda record: record.pop("job_id")),
+        ("missing raw_output", lambda record: record.pop("raw_output")),
+        ("missing output_path", lambda record: record.pop("output_path")),
+        ("extra unknown field", lambda record: record.update({"unreviewed": 1})),
+    ),
+)
+def test_a_record_that_is_not_the_exact_schema_is_rejected(governed_build_area, label, mutate):
+    """Repair 1B negatives, against the producer's own reload path."""
+    tmp_path = governed_build_area
+    log, _records = _drive_build_job(tmp_path)
+    payload = json.loads(log.read_bytes().decode("utf-8"))
+    mutate(payload["instances"][0])
+    log.write_bytes(build_manifest.canonical_json(payload))
+    with pytest.raises(build_manifest.BuildManifestError) as error:
+        build_manifest.load_observed_instances(str(log))
+    assert "COMPILE_INSTANCE" in str(error.value), label
+
+
+def test_a_wrong_job_id_is_rejected(governed_build_area):
+    """Repair 1B.  A job the governed set does not contain cannot produce a record."""
+    tmp_path = governed_build_area
+    with pytest.raises(build_manifest.BuildManifestError) as error:
+        build_manifest.parse_compile_instance(
+            "COMPILE:worker-policy:gcc -c -o " + str(tmp_path / "obj" / "policy.o") + " x.c",
+            str(_REPO_ROOT),
+            str(tmp_path / "blst"),
+            "s3c-attacker",
+        )
+    assert "COMPILE_INSTANCE_MALFORMED" in str(error.value)
+
+
+def test_the_transform_hashes_the_file_it_validated(governed_build_area):
+    """Repair 3.  digest_after is the digest of the ACTUAL transformed artifact."""
+    tmp_path = governed_build_area
+    _log, records = _drive_build_job(tmp_path)
+    transforms = [record for record in records if record["kind"] == "TRANSFORM"]
+    assert len(transforms) == 2
+    for record in transforms:
+        # The bytes really changed, so PRE and POST are two distinct graph states.
+        assert record["digest_before"] != record["digest_after"], record["instance_id"]
+        assert len(record["digest_after"]) == 64
+        # And digest_after is the digest of the real file on disk, at its real path.
+        actual = tmp_path / record["output_path"]
+        assert actual.exists(), actual
+        assert record["digest_after"] == hashlib.sha256(actual.read_bytes()).hexdigest()
+        # The graph key is a key: it names the node, and it is NOT a usable path.
+        assert record["transform_target"].startswith("s3c-build-candidate:")
+        assert not (_REPO_ROOT / record["transform_target"]).exists()
+
+
+def test_a_graph_key_cannot_redirect_filesystem_hashing(governed_build_area):
+    """Repair 3C.  A forged graph identity does not change which file gets hashed."""
+    tmp_path = governed_build_area
+    log = tmp_path / "instances.json"
+    upstream = tmp_path / "blst"
+    target = _materialise(tmp_path / "obj" / "blst_server.o", b"original\n")
+    before = hashlib.sha256(target.read_bytes()).hexdigest()
+
+    # A same-basename artifact somewhere else.  If identity ever collapsed to a basename, or to a
+    # path rebuilt from the graph key, this is the file that would be hashed instead.
+    decoy = _materialise(tmp_path / "decoy" / "blst_server.o", b"decoy\n")
+    record = build_manifest.record_invocation(
+        str(log),
+        "blst-server-strip",
+        "TRANSFORM",
+        ["objcopy", "--remove-section=.note.gnu.property", str(target)],
+        str(_REPO_ROOT),
+        str(upstream),
+        "s3c-build-candidate",
+        digest_before=before,
+    )
+    assert record["digest_after"] == hashlib.sha256(target.read_bytes()).hexdigest()
+    assert record["digest_after"] != hashlib.sha256(decoy.read_bytes()).hexdigest()
+    assert record["digest_after"] != before
+    # The graph key is a KEY.  It is not a path, and on this host it is not even a legal filename --
+    # which is one concrete reason the old join-the-graph-key code could never have run.
+    assert ":" in record["transform_target"]
+
+
+def test_the_governed_paths_check_uses_the_real_path_not_the_graph_key(governed_build_area):
+    """Repair 2B.  Filesystem containment is decided by the RAW path."""
+    tmp_path = governed_build_area
+    upstream = tmp_path / "blst"
+    # An intermediate object OUTSIDE the build area is refused -- which is only decidable from the
+    # raw path, since every graph identity is build-area-relative by construction.
+    outside = tmp_path.parent / "elsewhere" / "policy.o"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_bytes(b"x")
+    with pytest.raises(build_manifest.BuildManifestError) as error:
+        build_manifest.validate_build_command(
+            "LINK",
+            ["gcc", "-static", "-o", str(tmp_path / "worker"), str(outside)],
+            str(_REPO_ROOT),
+            str(upstream),
+            "worker-link",
+            "s3c-build-candidate",
+        )
+    assert "governed build area" in str(error.value)
+
+
+def test_no_load_bearing_basename_comparison_remains_in_the_graph():
+    """Repair 4.  A basename may label something; it may never identify a graph node."""
+    source = _read(_S3C / "mt4_s3c_build_manifest.py")
+    assert "COMPILE_INSTANCE_LINK_INPUT_UNPRODUCED" not in source
+    # The two surviving basename uses are non-authoritative: a library soname and a display name.
+    for line in source.splitlines():
+        if "basename(" in line and not line.strip().startswith(("#", "*")):
+            assert '"soname"' in line or "worker_binary_name" in line, line
 
 
 def test_the_governed_execution_boundary_is_frozen():

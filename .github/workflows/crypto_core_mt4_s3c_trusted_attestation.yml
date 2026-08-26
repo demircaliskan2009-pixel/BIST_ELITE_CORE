@@ -79,8 +79,8 @@ env:
   # gate source or any bundle entry, trusted attestation fails closed until a separately reviewed
   # change to the default branch updates the corresponding constant below.
   APPROVED_S3C_QUALIFICATION_WORKFLOW_SHA256: "2271edf99fc76f683adc10f4d2ad71d956e4521f9629e5949015a89431e8f43d"
-  APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256: "7b00daf55d11e9e885a1c20532e9b31e385b743fe69252b23efb63c077a00bb0"
-  APPROVED_S3C_TRUSTED_GATE_SHA256: "19a8a8e62712e07a787194553e22ca8cb1b10f08a4a7900701681dd757048f35"
+  APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256: "3bcac74af254a231ad5be04ac4ad04f6583f23c02bb1613f3d9b7bda1d10d662"
+  APPROVED_S3C_TRUSTED_GATE_SHA256: "0257d31744d93dc789b1c8668b9508ab1272714559f6d514aaeacdad8d9fd5e1"
 
   # EM-11: the identical literal expected program-header authority the reviewed ELF qualifier and
   # the qualification workflow both carry, now including the frozen p_align of every segment.
