@@ -160,6 +160,15 @@ jobs:
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "worker-start" --invocation-kind COMPILE -- gcc -c -MD -MF "$RUNNER_TEMP/dep/start.d" -o "$RUNNER_TEMP/obj/start.o" scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_start.S
           echo "S3C_WORKER_COMPILE=PASS"
 
+      - name: Install the pinned libcap development headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libcap-dev
+          test -f /usr/include/sys/capability.h
+          echo "S3C_LIBCAP_DEV_AVAILABLE=PASS"
+
       # THE COMPILE INVENTORY MUST COVER EVERY LOAD-BEARING NATIVE INPUT (repair 7E).  The observer
       # and the probe are compiled and RUN in the observation job, but their translation units are
       # every bit as load-bearing for the qualification result as the worker's: the observer
@@ -173,7 +182,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/depobj"
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "observer-probe" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -Wall -Wextra -Werror -MD -MF "$RUNNER_TEMP/dep/probe.d" -o "$RUNNER_TEMP/depobj/probe.o" scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c
-          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "observer-launcher" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror -MD -MF "$RUNNER_TEMP/dep/launcher.d" -o "$RUNNER_TEMP/depobj/launcher.o" scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "observer-launcher" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -Wall -Wextra -Werror -MD -MF "$RUNNER_TEMP/dep/launcher.d" -o "$RUNNER_TEMP/depobj/launcher.o" scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "observer-policy" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/depobj/policy.o" scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "observer-link" --invocation-kind LINK -- gcc -O2 -o "$RUNNER_TEMP/depobj/mt4_s3c_observer" "$RUNNER_TEMP/depobj/launcher.o" "$RUNNER_TEMP/depobj/policy.o" -lcap
           echo "S3C_OBSERVER_PROBE_DEPENDENCY_EVIDENCE=PASS"
@@ -297,6 +306,15 @@ jobs:
           name: mt4-s3c-candidate-linux-x86_64
           path: ${{ runner.temp }}/candidate
 
+      - name: Install the pinned libcap development headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libcap-dev
+          test -f /usr/include/sys/capability.h
+          echo "S3C_LIBCAP_DEV_AVAILABLE=PASS"
+
       - name: Build the canonical policy probe and the trusted observer from reviewed source
         shell: bash
         run: |
@@ -306,7 +324,7 @@ jobs:
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/observation/mt4_s3c_observe_instances.json" --job-id "s3c-observe" --run-invocation "observe-policy" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/obj/policy.o" scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/observation/mt4_s3c_observe_instances.json" --job-id "s3c-observe" --run-invocation "observe-probe" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/obj/probe.o" scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/observation/mt4_s3c_observe_instances.json" --job-id "s3c-observe" --run-invocation "observe-probe-link" --invocation-kind LINK -- gcc -O2 -o "$RUNNER_TEMP/mt4_s3c_policy_probe" "$RUNNER_TEMP/obj/probe.o" "$RUNNER_TEMP/obj/policy.o"
-          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/observation/mt4_s3c_observe_instances.json" --job-id "s3c-observe" --run-invocation "observe-launcher" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror -o "$RUNNER_TEMP/obj/launcher.o" scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/observation/mt4_s3c_observe_instances.json" --job-id "s3c-observe" --run-invocation "observe-launcher" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/obj/launcher.o" scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/observation/mt4_s3c_observe_instances.json" --job-id "s3c-observe" --run-invocation "observe-observer-link" --invocation-kind LINK -- gcc -O2 -o "$RUNNER_TEMP/mt4_s3c_observer" "$RUNNER_TEMP/obj/launcher.o" "$RUNNER_TEMP/obj/policy.o" -lcap
           echo "S3C_OBSERVER_BUILD=PASS"
 

@@ -1870,6 +1870,165 @@ def _run_blocks(workflow):
                 yield step.get("name", "<unnamed>"), step["run"]
 
 
+# =================================================================================================
+# BUILD_TO_PROVE RUN 32993250008 REPAIR.  The first real default-branch qualification run reached
+# and failed on the observer-launcher compile: the source's own #define _GNU_SOURCE collided with a
+# CLI -D_GNU_SOURCE under -Werror, and the ubuntu-22.04 runner did not carry
+# /usr/include/sys/capability.h.  These tests prove both exact failures cannot recur.
+# =================================================================================================
+
+
+def _launcher_compile_commands(workflow):
+    """Every governed command that actually compiles the launcher, across every job."""
+    commands = []
+    for job in workflow["jobs"].values():
+        for step in job.get("steps", []):
+            block = step.get("run", "")
+            for line in block.splitlines():
+                if "mt4_s3c_outer_containment_launcher.c" in line and "--invocation-kind COMPILE" in line:
+                    commands.append(line)
+    return commands
+
+
+def test_the_launcher_source_owns_gnu_source_and_nothing_else_does(qualification_workflow):
+    """The premise: the source defines it, so no OTHER translation unit needs the CLI flag either."""
+    source = _read(_S3C / "mt4_s3c_outer_containment_launcher.c")
+    assert "#define _GNU_SOURCE" in source
+    for job in qualification_workflow["jobs"].values():
+        for step in job.get("steps", []):
+            block = step.get("run", "")
+            assert "-D_GNU_SOURCE" not in block, step.get("name")
+
+
+def test_no_governed_launcher_compile_redefines_gnu_source_on_the_cli(qualification_workflow):
+    """Repair A.  Every real launcher compile command, in every job, omits -D_GNU_SOURCE."""
+    commands = _launcher_compile_commands(qualification_workflow)
+    # Both governed launcher compiles -- s3c-build-candidate's dependency-evidence pass and
+    # s3c-observe's real build -- are covered, not just the first one BUILD_TO_PROVE reached.
+    assert len(commands) == 2, commands
+    for command in commands:
+        assert "-D_GNU_SOURCE" not in command, command
+        assert " -c " in command
+        assert "-Wall" in command and "-Werror" in command
+
+
+def test_the_build_wrapper_accepts_the_repaired_launcher_invocation(governed_build_area):
+    """Repair A.  The honest repaired command clears the exact positive contract."""
+    tmp_path = governed_build_area
+    _executable, record, _validated = build_manifest.validate_build_command(
+        "COMPILE",
+        [
+            "gcc",
+            "-c",
+            "-O2",
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-o",
+            str(tmp_path / "depobj" / "launcher.o"),
+            "scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c",
+        ],
+        str(_REPO_ROOT),
+        str(tmp_path / "blst"),
+        "observer-launcher",
+        "s3c-build-candidate",
+    )
+    assert "-D_GNU_SOURCE" not in record["flags"]
+
+
+def test_the_build_wrapper_rejects_a_reintroduced_gnu_source_definition(governed_build_area):
+    """Repair A negative.  -D_GNU_SOURCE is no longer on the allowlist for ANY instance."""
+    tmp_path = governed_build_area
+    assert "-D_GNU_SOURCE" not in build_manifest.ALLOWED_COMPILE_FLAGS
+    with pytest.raises(build_manifest.BuildManifestError) as error:
+        build_manifest.validate_build_command(
+            "COMPILE",
+            [
+                "gcc",
+                "-c",
+                "-O2",
+                "-std=c11",
+                "-D_GNU_SOURCE",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-o",
+                str(tmp_path / "depobj" / "launcher.o"),
+                "scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c",
+            ],
+            str(_REPO_ROOT),
+            str(tmp_path / "blst"),
+            "observer-launcher",
+            "s3c-build-candidate",
+        )
+    assert "BUILD_COMMAND_REJECTED" in str(error.value)
+
+
+def _steps_in_job(workflow, job_id):
+    return workflow["jobs"][job_id]["steps"]
+
+
+def test_libcap_dev_is_bootstrapped_before_every_launcher_compile(qualification_workflow):
+    """Repair B.  Availability is established, in the same job, before the compile that needs it."""
+    for job_id in ("s3c-build-candidate", "s3c-observe"):
+        steps = _steps_in_job(qualification_workflow, job_id)
+        bootstrap_index = next((index for index, step in enumerate(steps) if "libcap-dev" in step.get("run", "")), None)
+        compile_index = next(
+            (
+                index
+                for index, step in enumerate(steps)
+                if "mt4_s3c_outer_containment_launcher.c" in step.get("run", "")
+                and "--invocation-kind COMPILE" in step.get("run", "")
+            ),
+            None,
+        )
+        assert bootstrap_index is not None, job_id
+        assert compile_index is not None, job_id
+        assert bootstrap_index < compile_index, job_id
+
+
+def test_no_unrelated_job_receives_the_libcap_bootstrap(qualification_workflow):
+    """Repair B, item 5.  Only the two jobs that compile the launcher get it."""
+    with_bootstrap = {
+        job_id
+        for job_id, job in qualification_workflow["jobs"].items()
+        if any("libcap-dev" in step.get("run", "") for step in job.get("steps", []))
+    }
+    assert with_bootstrap == {"s3c-build-candidate", "s3c-observe"}, with_bootstrap
+
+
+def test_the_libcap_bootstrap_is_literal_and_bounded(qualification_workflow):
+    """Repair B, item 6.  Exactly libcap-dev, no upgrade, no dynamic construction, no installer."""
+    for job in qualification_workflow["jobs"].values():
+        for step in job.get("steps", []):
+            block = step.get("run", "")
+            if "libcap-dev" not in block:
+                continue
+            assert "apt-get install" in block
+            assert "-y" in block
+            assert "--no-install-recommends" in block
+            # Exactly the one package, never a broad or dynamic install.
+            single_line = " ".join(block.splitlines())
+            assert re.search(r"apt-get install\s+-y\s+--no-install-recommends\s+libcap-dev", single_line), block
+            assert "upgrade" not in block
+            assert "dist-upgrade" not in block
+            assert "curl" not in block
+            assert "wget" not in block
+            assert "add-apt-repository" not in block
+            assert "ppa:" not in block
+            assert "$(" not in block and "`" not in block
+            # A deterministic availability proof follows the install, not a second build system.
+            assert "test -f /usr/include/sys/capability.h" in block
+
+
+def test_the_elf_qualify_and_adjudicate_jobs_never_bootstrap_libcap(qualification_workflow):
+    """Repair B, item 5.  Jobs that never compile the launcher get no package installation at all."""
+    for job_id in ("s3c-elf-qualify", "s3c-adjudicate"):
+        for step in _steps_in_job(qualification_workflow, job_id):
+            assert "apt-get" not in step.get("run", ""), (job_id, step.get("name"))
+
+
 def test_pt_261_no_forbidden_shell_construct_appears_in_a_qualification_command(qualification_workflow):
     for name, block in _run_blocks(qualification_workflow):
         for forbidden in _FORBIDDEN_SHELL_CONSTRUCTS:

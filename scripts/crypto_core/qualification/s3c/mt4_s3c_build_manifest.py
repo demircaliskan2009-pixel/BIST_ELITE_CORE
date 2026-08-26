@@ -283,6 +283,10 @@ FORBIDDEN_FLAG_PREFIXES = (
 )
 
 # The exact flag set each operation class may carry, beyond the frozen per-instance requirements.
+# BUILD_TO_PROVE run 32993250008 proved the launcher's own #define _GNU_SOURCE collides with a CLI
+# -D_GNU_SOURCE under -Werror ("_GNU_SOURCE" redefined).  No other governed translation unit ever
+# carried this flag, so it is not a generic allowance -- it is removed outright, and reintroducing
+# it on any compile is rejected the same way any other unlisted flag is.
 ALLOWED_COMPILE_FLAGS = frozenset(
     {
         "-c",
@@ -300,7 +304,6 @@ ALLOWED_COMPILE_FLAGS = frozenset(
         "-MD",
         "-D__BLST_PORTABLE__",
         "-D__BLST_NO_CPUID__",
-        "-D_GNU_SOURCE",
     }
 )
 ALLOWED_LINK_FLAGS = frozenset(
