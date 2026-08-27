@@ -460,6 +460,11 @@ def validate_build_command(kind, command, repository_root, upstream_root, instan
     return executable, record, validated_output_path
 
 
+# The governed capability header, named once.  Matched as a path SUFFIX so that a competing
+# header under a different search root is still recognised as answering for sys/capability.h --
+# and then rejected for not being the authorized path.
+_CAPABILITY_HEADER_SUFFIX = os.path.join("sys", "capability.h")
+
 CLASS_SYSTEM_LIBRARY = "SYSTEM_LIBRARY"
 PROVENANCE_SYSTEM_LIBRARY = "UBUNTU_22_04_PINNED_RUNNER_LIBRARY"
 APPROVED_SYSTEM_LIBRARY_ROOTS = ("/usr/lib/", "/lib/")
@@ -951,6 +956,53 @@ def compile_instance_digest(instances, system_libraries=()):
     ).hexdigest()
 
 
+def verify_observed_header(dependency_path, header_path, expected_sha256):
+    """Prove the ACTUAL compile consumed the authorized capability header.
+
+    The evidence is the dependency output the COMPILER emitted for that exact invocation, so this
+    describes what was really included -- not what a separate existence check found afterwards.  A
+    competing header earlier in the include search order shows up here as a different prerequisite
+    path, and a mutated header shows up as a different content digest.
+    """
+    if not os.path.isfile(dependency_path):
+        _fail("OBSERVED_HEADER_DEPENDENCY_MISSING", dependency_path)
+    with open(dependency_path, encoding="utf-8") as handle:
+        prerequisites = parse_dependency_file(handle.read())
+
+    expected = os.path.normpath(header_path)
+    consumed = [item for item in prerequisites if os.path.normpath(item).endswith(_CAPABILITY_HEADER_SUFFIX)]
+    if not consumed:
+        # The translation unit must actually have included it; a compile that never consumed the
+        # capability header is not the compile this evidence claims to describe.
+        _fail("OBSERVED_HEADER_NOT_CONSUMED", _CAPABILITY_HEADER_SUFFIX)
+    for item in consumed:
+        resolved = os.path.realpath(item)
+        if resolved != os.path.realpath(expected):
+            # H1/H2: something earlier in the include search order answered instead.
+            _fail("OBSERVED_HEADER_PATH_UNAUTHORIZED", resolved)
+    if not os.path.isfile(expected):
+        _fail("OBSERVED_HEADER_MISSING", expected)
+    actual = _sha256_file(expected)
+    if actual != expected_sha256:
+        # H3: the bytes actually compiled are not the bytes the verified package carried.
+        _fail("OBSERVED_HEADER_DIGEST_MISMATCH", actual)
+    return {"path": expected, "sha256": actual, "consumed_count": len(consumed)}
+
+
+def verify_system_library(name, compiler, expected_sha256):
+    """Prove the ACTUAL -l<name> resolution selects the authorized library bytes.
+
+    resolve_system_library asks the governed compiler, under the governed build environment, which
+    file it would link -- the same question the real link answers.  This adds the missing half: the
+    answer must equal the authorized package-derived bytes, not merely be recorded.
+    """
+    resolved = resolve_system_library(name, compiler)
+    if resolved["digest_sha256"] != expected_sha256:
+        # L1/L2/L3: a different libcap answered the search, or its bytes changed.
+        _fail("SYSTEM_LIBRARY_DIGEST_UNAUTHORIZED", resolved["digest_sha256"])
+    return resolved
+
+
 class BuildManifestError(RuntimeError):
     """Any failure to prove a required build property.  There is no partial success."""
 
@@ -1317,6 +1369,10 @@ def main(argv=None):
     parser.add_argument("--digest-before")
     parser.add_argument("--job-id")
     parser.add_argument("--system-library", action="append")
+    parser.add_argument("--verify-observed-header")
+    parser.add_argument("--verify-system-library")
+    parser.add_argument("--expected-sha256")
+    parser.add_argument("--header-path")
     # Repair 3D: this names a TOOL for library resolution, never a path.  An arbitrary
     # executable, a shell, an interpreter or a repository script cannot be selected through it.
     parser.add_argument("--compiler", default="gcc")
@@ -1352,6 +1408,21 @@ def main(argv=None):
             args.digest_before,
         )
         sys.stdout.write("MT4_S3C_BUILD_INSTANCE_RECORDED=" + args.run_invocation + "\n")
+        return 0
+
+    if args.verify_observed_header:
+        if not args.header_path or not args.expected_sha256:
+            _fail("BUILD_MANIFEST_ARGUMENT_MISSING", "--verify-observed-header")
+        proven = verify_observed_header(args.verify_observed_header, args.header_path, args.expected_sha256)
+        sys.stdout.write("MT4_S3C_OBSERVED_HEADER_AUTHORIZED=" + proven["sha256"] + "\n")
+        return 0
+
+    if args.verify_system_library:
+        if not args.expected_sha256:
+            _fail("BUILD_MANIFEST_ARGUMENT_MISSING", "--verify-system-library")
+        proven = verify_system_library(args.verify_system_library, args.compiler, args.expected_sha256)
+        sys.stdout.write("MT4_S3C_SYSTEM_LIBRARY_AUTHORIZED=" + proven["resolved_path"] + "\n")
+        sys.stdout.write("MT4_S3C_SYSTEM_LIBRARY_SHA256=" + proven["digest_sha256"] + "\n")
         return 0
 
     if args.emit_env_from_manifest:

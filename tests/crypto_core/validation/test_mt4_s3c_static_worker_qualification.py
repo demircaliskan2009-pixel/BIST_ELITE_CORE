@@ -1982,8 +1982,23 @@ _LIBCAP_CONSTANTS = (
 
 
 def _libcap_bootstrap(workflow, job_id):
-    """The single libcap bootstrap block of one job, or None."""
-    blocks = [step["run"] for step in _steps_in_job(workflow, job_id) if "libcap" in step.get("run", "")]
+    """The single libcap bootstrap block of one job, or None.
+
+    Selected by the one command only the bootstrap runs.  Matching on "libcap" alone would also
+    catch the actual-consumption proof step, which is a different thing entirely.
+    """
+    blocks = [step["run"] for step in _steps_in_job(workflow, job_id) if "apt-get download" in step.get("run", "")]
+    if not blocks:
+        return None
+    assert len(blocks) == 1, (job_id, len(blocks))
+    return blocks[0]
+
+
+def _consumption_proof(workflow, job_id):
+    """The step proving what the real compile/link actually consumed, or None."""
+    blocks = [
+        step["run"] for step in _steps_in_job(workflow, job_id) if "--verify-observed-header" in step.get("run", "")
+    ]
     if not blocks:
         return None
     assert len(blocks) == 1, (job_id, len(blocks))
@@ -2167,6 +2182,181 @@ def _approved_trusted_constant(name):
     match = re.search(name + r':\s*"([0-9a-f]{64})"', _read(TRUSTED_WORKFLOW))
     assert match, name
     return match.group(1)
+
+
+# =================================================================================================
+# ACTUAL OBSERVATION CONSUMPTION (controller P1, second cycle).
+#
+# The pinned bootstrap proves the authorized bytes are INSTALLED.  These prove the real observation
+# compile consumed that header and the real observation link resolved -lcap to that library.
+# =================================================================================================
+
+_AUTHORIZED_HEADER = "/usr/include/sys/capability.h"
+
+
+def _dependency_file(tmp_path, *prerequisites):
+    """A make-style dependency file shaped exactly as the compiler emits one."""
+    body = "launcher.o: " + " ".join(prerequisites) + "\n"
+    path = tmp_path / "launcher.d"
+    path.write_text(body, encoding="utf-8")
+    return str(path)
+
+
+def _header_file(tmp_path, name, body=b"/* capability */\n"):
+    path = tmp_path / name / "sys" / "capability.h"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+    return path
+
+
+def test_the_actual_consumed_header_is_accepted_when_it_is_the_authorized_one(tmp_path):
+    """The honest path: the compile really included the authorized header, unmodified."""
+    header = _header_file(tmp_path, "authorized")
+    digest = hashlib.sha256(header.read_bytes()).hexdigest()
+    dependency = _dependency_file(tmp_path, "launcher.c", str(header))
+    proven = build_manifest.verify_observed_header(dependency, str(header), digest)
+    assert proven["sha256"] == digest
+    assert proven["consumed_count"] == 1
+
+
+def test_h2_a_compile_that_never_consumed_the_capability_header_is_rejected(tmp_path):
+    """H2.  Evidence that does not name the header cannot stand for a compile that included it."""
+    header = _header_file(tmp_path, "authorized")
+    digest = hashlib.sha256(header.read_bytes()).hexdigest()
+    dependency = _dependency_file(tmp_path, "launcher.c", "/usr/include/stdio.h")
+    with pytest.raises(build_manifest.BuildManifestError) as error:
+        build_manifest.verify_observed_header(dependency, str(header), digest)
+    assert "OBSERVED_HEADER_NOT_CONSUMED" in str(error.value)
+
+
+def test_h1_a_competing_header_earlier_in_the_search_order_is_rejected(tmp_path):
+    """H1.  Another sys/capability.h answered the include, so the authorized one was NOT consumed."""
+    authorized = _header_file(tmp_path, "authorized")
+    competing = _header_file(tmp_path, "attacker", b"/* not the governed header */\n")
+    digest = hashlib.sha256(authorized.read_bytes()).hexdigest()
+    dependency = _dependency_file(tmp_path, "launcher.c", str(competing))
+    with pytest.raises(build_manifest.BuildManifestError) as error:
+        build_manifest.verify_observed_header(dependency, str(authorized), digest)
+    assert "OBSERVED_HEADER_PATH_UNAUTHORIZED" in str(error.value)
+
+
+def test_h3_authorized_path_with_unauthorized_bytes_is_rejected(tmp_path):
+    """H3.  The right path, rewritten after the package was verified."""
+    header = _header_file(tmp_path, "authorized")
+    authorized_digest = hashlib.sha256(header.read_bytes()).hexdigest()
+    dependency = _dependency_file(tmp_path, "launcher.c", str(header))
+    header.write_bytes(b"/* tampered */\n")
+    assert hashlib.sha256(header.read_bytes()).hexdigest() != authorized_digest
+    with pytest.raises(build_manifest.BuildManifestError) as error:
+        build_manifest.verify_observed_header(dependency, str(header), authorized_digest)
+    assert "OBSERVED_HEADER_DIGEST_MISMATCH" in str(error.value)
+
+
+def test_missing_or_malformed_dependency_evidence_is_rejected(tmp_path):
+    """Absent evidence is never a pass: the proof cannot be skipped by deleting its input."""
+    header = _header_file(tmp_path, "authorized")
+    digest = hashlib.sha256(header.read_bytes()).hexdigest()
+    with pytest.raises(build_manifest.BuildManifestError) as error:
+        build_manifest.verify_observed_header(str(tmp_path / "absent.d"), str(header), digest)
+    assert "OBSERVED_HEADER_DEPENDENCY_MISSING" in str(error.value)
+
+
+def test_l3_a_resolved_library_with_unauthorized_bytes_is_rejected(monkeypatch):
+    """L1/L2/L3.  Whatever -lcap resolved to, its bytes must be the authorized package bytes."""
+    resolved = {
+        "name": "cap",
+        "resolved_path": "/usr/lib/x86_64-linux-gnu/libcap.so.2.44",
+        "soname": "libcap.so.2.44",
+        "digest_sha256": "a" * 64,
+        "provenance": build_manifest.PROVENANCE_SYSTEM_LIBRARY,
+    }
+    monkeypatch.setattr(build_manifest, "resolve_system_library", lambda name, compiler: resolved)
+    # The authorized digest is the one derived from the verified .deb; the resolver answered
+    # with different bytes, which is exactly the substitution this check exists to catch.
+    with pytest.raises(build_manifest.BuildManifestError) as error:
+        build_manifest.verify_system_library("cap", "gcc", "b" * 64)
+    assert "SYSTEM_LIBRARY_DIGEST_UNAUTHORIZED" in str(error.value)
+    # And the honest answer is accepted.
+    assert build_manifest.verify_system_library("cap", "gcc", "a" * 64)["resolved_path"].endswith("libcap.so.2.44")
+
+
+def test_the_governed_resolver_asks_the_governed_compiler_under_the_governed_environment():
+    """L2.  The resolution question is asked the same way the real link answers it."""
+    source = _read(_S3C / "mt4_s3c_build_manifest.py")
+    resolver = source.split("def resolve_system_library(")[1].split("\ndef ")[0]
+    assert "resolve_governed_tool(INSTANCE_KIND_LINK, compiler)" in resolver
+    assert "governed_build_environment()" in resolver
+    assert "--print-file-name=" in resolver
+    assert "os.path.realpath(resolved)" in resolver
+    assert "SYSTEM_LIBRARY_RESOLUTION_OUT_OF_ROOT" in resolver
+
+
+@pytest.mark.parametrize("job_id", ("s3c-build-candidate", "s3c-observe"))
+def test_both_jobs_prove_actual_consumption_before_the_observer_runs(qualification_workflow, job_id):
+    """L4 / build-observe equivalence, and the ordering that makes it meaningful."""
+    proof = _consumption_proof(qualification_workflow, job_id)
+    assert proof is not None, job_id
+    assert "--verify-observed-header" in proof
+    assert "--header-path /usr/include/sys/capability.h" in proof
+    assert "--verify-system-library cap" in proof
+    # Both expected digests descend from the verified .deb artifacts, never from a producer claim.
+    assert 'read -r S3C_LIBCAP_HEADER_SHA256 < "$RUNNER_TEMP/libcap/authorized_header.sha256"' in proof
+    assert 'read -r S3C_LIBCAP_LIBRARY_SHA256 < "$RUNNER_TEMP/libcap/authorized_library.sha256"' in proof
+
+
+def test_the_observation_launcher_compile_emits_dependency_evidence(qualification_workflow):
+    """A.  The observation side is no longer asymmetric with the build side."""
+    commands = _launcher_compile_commands(qualification_workflow)
+    assert len(commands) == 2, commands
+    for command in commands:
+        assert " -MD " in command, command
+        assert "-MF " in command, command
+    observe = [line for line in commands if "observe-launcher" in line]
+    assert len(observe) == 1
+    assert '-MF "$RUNNER_TEMP/dep/observe_launcher.d"' in observe[0]
+
+
+def test_the_authorized_digests_are_derived_from_the_verified_artifacts(qualification_workflow):
+    """The expected values are package-derived, so nothing validates itself."""
+    for job_id in _LIBCAP_JOBS:
+        block = _libcap_bootstrap(qualification_workflow, job_id)
+        # Unpacked from the exact .deb whose SHA256 the trusted surface pins.
+        assert 'dpkg-deb -x "$S3C_LIBCAP_DEV_DEB" extract_dev' in block
+        assert 'dpkg-deb -x "$S3C_LIBCAP2_DEB" extract_lib' in block
+        assert "sha256sum extract_dev/usr/include/sys/capability.h" in block
+        # R2: the installed bytes must still equal the artifact bytes, so a post-install rewrite
+        # of the header or of the runtime library object is caught here.
+        assert "cmp authorized_header.sha256 installed_header.sha256" in block
+        assert "cmp authorized_library.sha256 installed_library.sha256" in block
+
+
+def test_r3_no_loader_override_is_ever_introduced(qualification_workflow):
+    """R3.  Nothing in the governed workflow can redirect the runtime loader."""
+    for name, block in _run_blocks(qualification_workflow):
+        for forbidden in ("LD_LIBRARY_PATH", "LD_PRELOAD", "LD_AUDIT", "ldconfig"):
+            assert forbidden not in block, (name, forbidden)
+    environment = qualification_workflow.get("env") or {}
+    for key in environment:
+        assert not key.startswith("LD_"), key
+
+
+def test_r1_the_observer_runtime_library_identity_is_the_authorized_object(qualification_workflow):
+    """R1/R2.  The observer links -lcap dynamically, so the object it loads is pinned by digest.
+
+    The link is not static, so a libcap runtime dependency exists.  What closes it is that the
+    resolved link-time object AND the installed runtime object are both required to equal the bytes
+    unpacked from the verified libcap2 artifact, and no loader override may be introduced.
+    """
+    observe_steps = " ".join(step.get("run", "") for step in _steps_in_job(qualification_workflow, "s3c-observe"))
+    assert "observe-observer-link" in observe_steps
+    assert "-lcap" in observe_steps
+    # Honest statement of the dependency: the observer link carries no -static.
+    link = [line for line in observe_steps.splitlines() if "observe-observer-link" in line]
+    assert len(link) == 1
+    assert " -static" not in link[0]
+    for job_id in _LIBCAP_JOBS:
+        block = _libcap_bootstrap(qualification_workflow, job_id)
+        assert "cmp authorized_library.sha256 installed_library.sha256" in block
 
 
 def test_the_approved_qualification_workflow_digest_matches_its_governed_bytes():
