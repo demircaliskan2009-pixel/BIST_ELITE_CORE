@@ -67,7 +67,7 @@ env:
   # name a repository file.  V9 SECTION 28 forbids shell variable references unless they are
   # "explicitly modelled and literally enumerated", and this list is that enumeration: a command may
   # reference a variable only if it appears here, and a permanent test rejects any other name.
-  S3C_ALLOWED_SHELL_VARIABLES: "RUNNER_TEMP GITHUB_WORKSPACE GITHUB_ENV GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA EXPECTED_HEAD BLST_COMMIT BLST_REPOSITORY S3C_EXPECTED_PHDR_INVENTORY S3C_CANDIDATE_NAME S3C_WORKER_SHA256 S3C_WORKER_BYTES S3C_DEPENDENCY_DIGEST S3C_POLICY_INTERNAL_ID S3C_POLICY_INTERNAL_SHA256 S3C_POLICY_INTERNAL_COUNT S3C_POLICY_INTERNAL_CBPF S3C_POLICY_OUTER_DIGEST S3C_CASE_SET_DIGEST CANDIDATE_ARTIFACT_ID CANDIDATE_ARTIFACT_DIGEST BLST_SERVER_BEFORE BLST_ASSEMBLY_BEFORE S3C_LIBCAP_ARCH S3C_LIBCAP2_VERSION S3C_LIBCAP2_DEB S3C_LIBCAP2_DEB_SHA256 S3C_LIBCAP_DEV_VERSION S3C_LIBCAP_DEV_DEB S3C_LIBCAP_DEV_DEB_SHA256 S3C_LIBCAP_HEADER_SHA256 S3C_LIBCAP_LIBRARY_SHA256"
+  S3C_ALLOWED_SHELL_VARIABLES: "RUNNER_TEMP GITHUB_WORKSPACE GITHUB_ENV GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA EXPECTED_HEAD BLST_COMMIT BLST_REPOSITORY S3C_EXPECTED_PHDR_INVENTORY S3C_CANDIDATE_NAME S3C_WORKER_SHA256 S3C_WORKER_BYTES S3C_DEPENDENCY_DIGEST S3C_POLICY_INTERNAL_ID S3C_POLICY_INTERNAL_SHA256 S3C_POLICY_INTERNAL_COUNT S3C_POLICY_INTERNAL_CBPF S3C_POLICY_OUTER_DIGEST S3C_CASE_SET_DIGEST CANDIDATE_ARTIFACT_ID CANDIDATE_ARTIFACT_DIGEST BLST_SERVER_BEFORE BLST_ASSEMBLY_BEFORE S3C_LIBCAP_ARCH S3C_LIBCAP2_VERSION S3C_LIBCAP2_DEB S3C_LIBCAP2_DEB_SHA256 S3C_LIBCAP_DEV_VERSION S3C_LIBCAP_DEV_DEB S3C_LIBCAP_DEV_DEB_SHA256 S3C_LIBCAP_HEADER_SHA256 S3C_LIBCAP_LIBRARY_SHA256 S3C_LIBCAP_RUNTIME_DIR S3C_LIBCAP_RUNTIME_SONAME S3C_LIBCAP_RUNTIME_REAL S3C_LIBCAP_RUNTIME_TARGET"
 
   # THE IMMUTABLE LIBCAP CONTRACT.  BUILD_TO_PROVE run 32993250008 proved ubuntu-22.04 does not
   # ship /usr/include/sys/capability.h, and the launcher genuinely requires it plus -lcap.  Naming
@@ -259,8 +259,34 @@ jobs:
           cut -d " " -f 1 installed_library_raw.txt > installed_library.sha256
           cmp authorized_library.sha256 installed_library.sha256
 
+          # THE PRIVATE RUNTIME OBJECT.  The loader searches for the SONAME entry, not for the
+          # versioned file, so the SONAME-facing path is taken from the package's own file list --
+          # nothing is globbed and no multiarch layout is assumed.
+          dpkg-query -L libcap2 > libcap2_files.txt
+          grep -E "/libcap\.so\.[0-9]+$" libcap2_files.txt > libcap_soname_installed.txt
+          sed -e "s|^/||" libcap_soname_installed.txt > libcap_soname_relative.txt
+          sed -e "s|^|$RUNNER_TEMP/libcap/extract_lib/|" libcap_soname_relative.txt > libcap_runtime_soname.txt
+          sed -e "s|/[^/]*$||" libcap_runtime_soname.txt > libcap_runtime_dir.txt
+          test -e "$RUNNER_TEMP/libcap/extract_lib"
+          xargs test -e < libcap_runtime_soname.txt
+          xargs readlink -f < libcap_runtime_soname.txt > libcap_runtime_real.txt
+
+          # The SONAME entry must resolve INSIDE the verified extract root: a symlink pointing back
+          # out at the system copy would defeat the whole point of a private directory.
+          read -r S3C_LIBCAP_RUNTIME_REAL < libcap_runtime_real.txt
+          case "$S3C_LIBCAP_RUNTIME_REAL" in
+            "$RUNNER_TEMP/libcap/extract_lib/"*) ;;
+            *) exit 1 ;;
+          esac
+
+          # And those private bytes are the package-derived authority, not a second opinion.
+          sha256sum "$S3C_LIBCAP_RUNTIME_REAL" > runtime_private_raw.txt
+          cut -d " " -f 1 runtime_private_raw.txt > runtime_private.sha256
+          cmp authorized_library.sha256 runtime_private.sha256
+
           echo "S3C_LIBCAP_DEV_AVAILABLE=PASS"
           echo "S3C_LIBCAP_AUTHORIZED_BYTES=PASS"
+          echo "S3C_LIBCAP_PRIVATE_RUNTIME=PASS"
 
       # THE COMPILE INVENTORY MUST COVER EVERY LOAD-BEARING NATIVE INPUT (repair 7E).  The observer
       # and the probe are compiled and RUN in the observation job, but their translation units are
@@ -487,8 +513,34 @@ jobs:
           cut -d " " -f 1 installed_library_raw.txt > installed_library.sha256
           cmp authorized_library.sha256 installed_library.sha256
 
+          # THE PRIVATE RUNTIME OBJECT.  The loader searches for the SONAME entry, not for the
+          # versioned file, so the SONAME-facing path is taken from the package's own file list --
+          # nothing is globbed and no multiarch layout is assumed.
+          dpkg-query -L libcap2 > libcap2_files.txt
+          grep -E "/libcap\.so\.[0-9]+$" libcap2_files.txt > libcap_soname_installed.txt
+          sed -e "s|^/||" libcap_soname_installed.txt > libcap_soname_relative.txt
+          sed -e "s|^|$RUNNER_TEMP/libcap/extract_lib/|" libcap_soname_relative.txt > libcap_runtime_soname.txt
+          sed -e "s|/[^/]*$||" libcap_runtime_soname.txt > libcap_runtime_dir.txt
+          test -e "$RUNNER_TEMP/libcap/extract_lib"
+          xargs test -e < libcap_runtime_soname.txt
+          xargs readlink -f < libcap_runtime_soname.txt > libcap_runtime_real.txt
+
+          # The SONAME entry must resolve INSIDE the verified extract root: a symlink pointing back
+          # out at the system copy would defeat the whole point of a private directory.
+          read -r S3C_LIBCAP_RUNTIME_REAL < libcap_runtime_real.txt
+          case "$S3C_LIBCAP_RUNTIME_REAL" in
+            "$RUNNER_TEMP/libcap/extract_lib/"*) ;;
+            *) exit 1 ;;
+          esac
+
+          # And those private bytes are the package-derived authority, not a second opinion.
+          sha256sum "$S3C_LIBCAP_RUNTIME_REAL" > runtime_private_raw.txt
+          cut -d " " -f 1 runtime_private_raw.txt > runtime_private.sha256
+          cmp authorized_library.sha256 runtime_private.sha256
+
           echo "S3C_LIBCAP_DEV_AVAILABLE=PASS"
           echo "S3C_LIBCAP_AUTHORIZED_BYTES=PASS"
+          echo "S3C_LIBCAP_PRIVATE_RUNTIME=PASS"
 
       - name: Build the canonical policy probe and the trusted observer from reviewed source
         shell: bash
@@ -540,7 +592,33 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/observation"
-          "$RUNNER_TEMP/mt4_s3c_observer" --candidate "$RUNNER_TEMP/candidate/$S3C_CANDIDATE_NAME" --candidate-sha256 "$S3C_WORKER_SHA256" --candidate-size "$S3C_WORKER_BYTES" --case-plan "$RUNNER_TEMP/case_plan.bin" --canonical-internal-policy-id "$S3C_POLICY_INTERNAL_ID" --canonical-internal-policy-sha256 "$S3C_POLICY_INTERNAL_SHA256" --canonical-internal-cbpf-count "$S3C_POLICY_INTERNAL_COUNT" --canonical-internal-cbpf-sha256 "$S3C_POLICY_INTERNAL_CBPF" --outer-containment-policy-digest "$S3C_POLICY_OUTER_DIGEST" --observation-case-set-digest "$S3C_CASE_SET_DIGEST" --source-run-id "$GITHUB_RUN_ID" --source-run-attempt "$GITHUB_RUN_ATTEMPT" --source-head-sha "$GITHUB_SHA" --out "$RUNNER_TEMP/observation/mt4_s3c_raw_observation_record.json"
+
+          read -r S3C_LIBCAP_RUNTIME_DIR < "$RUNNER_TEMP/libcap/libcap_runtime_dir.txt"
+          read -r S3C_LIBCAP_RUNTIME_SONAME < "$RUNNER_TEMP/libcap/libcap_runtime_soname.txt"
+          read -r S3C_LIBCAP_RUNTIME_REAL < "$RUNNER_TEMP/libcap/libcap_runtime_real.txt"
+          read -r S3C_LIBCAP_LIBRARY_SHA256 < "$RUNNER_TEMP/libcap/authorized_library.sha256"
+
+          # RE-PROVED IMMEDIATELY BEFORE EXEC.  The bootstrap proof was minutes and several steps
+          # ago; this one is the last thing that happens before the loader runs.
+          test -d "$S3C_LIBCAP_RUNTIME_DIR"
+          test -e "$S3C_LIBCAP_RUNTIME_SONAME"
+          readlink -f "$S3C_LIBCAP_RUNTIME_SONAME" > "$RUNNER_TEMP/libcap/runtime_now_target.txt"
+          read -r S3C_LIBCAP_RUNTIME_TARGET < "$RUNNER_TEMP/libcap/runtime_now_target.txt"
+          test "$S3C_LIBCAP_RUNTIME_TARGET" = "$S3C_LIBCAP_RUNTIME_REAL"
+          sha256sum "$S3C_LIBCAP_RUNTIME_REAL" > "$RUNNER_TEMP/libcap/runtime_now_raw.txt"
+          cut -d " " -f 1 "$RUNNER_TEMP/libcap/runtime_now_raw.txt" > "$RUNNER_TEMP/libcap/runtime_now.sha256"
+          grep -qxF "$S3C_LIBCAP_LIBRARY_SHA256" "$RUNNER_TEMP/libcap/runtime_now.sha256"
+
+          # The system-wide preload surface is read, never written: a non-empty file would inject an
+          # object ahead of every ordinary dependency, so it fails closed here.
+          test ! -s /etc/ld.so.preload
+
+          # ENVIRONMENT BUILT FROM NOTHING.  env -i discards the entire inherited job environment,
+          # so LD_PRELOAD, LD_AUDIT, LD_LIBRARY_PATH, LD_RUN_PATH and anything else the runner
+          # happened to export cannot reach the observer.  The single LD_LIBRARY_PATH set here is
+          # an explicit RUNTIME authority pointing at the verified private directory; it is not part
+          # of the governed BUILD environment, which still rejects that variable outright.
+          /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C LC_ALL=C LD_LIBRARY_PATH="$S3C_LIBCAP_RUNTIME_DIR" "$RUNNER_TEMP/mt4_s3c_observer" --candidate "$RUNNER_TEMP/candidate/$S3C_CANDIDATE_NAME" --candidate-sha256 "$S3C_WORKER_SHA256" --candidate-size "$S3C_WORKER_BYTES" --case-plan "$RUNNER_TEMP/case_plan.bin" --canonical-internal-policy-id "$S3C_POLICY_INTERNAL_ID" --canonical-internal-policy-sha256 "$S3C_POLICY_INTERNAL_SHA256" --canonical-internal-cbpf-count "$S3C_POLICY_INTERNAL_COUNT" --canonical-internal-cbpf-sha256 "$S3C_POLICY_INTERNAL_CBPF" --outer-containment-policy-digest "$S3C_POLICY_OUTER_DIGEST" --observation-case-set-digest "$S3C_CASE_SET_DIGEST" --source-run-id "$GITHUB_RUN_ID" --source-run-attempt "$GITHUB_RUN_ATTEMPT" --source-head-sha "$GITHUB_SHA" --out "$RUNNER_TEMP/observation/mt4_s3c_raw_observation_record.json"
           echo "S3C_OBSERVATION=PASS"
 
       - name: Upload the raw observation record

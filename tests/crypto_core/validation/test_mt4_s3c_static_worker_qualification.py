@@ -2191,8 +2191,6 @@ def _approved_trusted_constant(name):
 # compile consumed that header and the real observation link resolved -lcap to that library.
 # =================================================================================================
 
-_AUTHORIZED_HEADER = "/usr/include/sys/capability.h"
-
 
 def _dependency_file(tmp_path, *prerequisites):
     """A make-style dependency file shaped exactly as the compiler emits one."""
@@ -2330,33 +2328,162 @@ def test_the_authorized_digests_are_derived_from_the_verified_artifacts(qualific
         assert "cmp authorized_library.sha256 installed_library.sha256" in block
 
 
-def test_r3_no_loader_override_is_ever_introduced(qualification_workflow):
-    """R3.  Nothing in the governed workflow can redirect the runtime loader."""
-    for name, block in _run_blocks(qualification_workflow):
-        for forbidden in ("LD_LIBRARY_PATH", "LD_PRELOAD", "LD_AUDIT", "ldconfig"):
-            assert forbidden not in block, (name, forbidden)
-    environment = qualification_workflow.get("env") or {}
-    for key in environment:
-        assert not key.startswith("LD_"), key
+def _observation_exec(workflow):
+    """The step that actually executes the observer."""
+    blocks = [
+        step["run"]
+        for step in _steps_in_job(workflow, "s3c-observe")
+        if 'mt4_s3c_observer" --candidate' in step.get("run", "")
+    ]
+    assert len(blocks) == 1, len(blocks)
+    return blocks[0]
 
 
-def test_r1_the_observer_runtime_library_identity_is_the_authorized_object(qualification_workflow):
-    """R1/R2.  The observer links -lcap dynamically, so the object it loads is pinned by digest.
+def test_r1_the_observer_runs_with_an_environment_built_from_nothing(qualification_workflow):
+    """R1/R2/R11.  env -i discards the inherited job environment before the loader ever runs.
 
-    The link is not static, so a libcap runtime dependency exists.  What closes it is that the
-    resolved link-time object AND the installed runtime object are both required to equal the bytes
-    unpacked from the verified libcap2 artifact, and no loader override may be introduced.
+    This replaces an earlier test that merely asserted LD_LIBRARY_PATH never appeared in the
+    workflow text.  That was never a runtime proof -- absence from YAML says nothing about the
+    inherited process environment -- and it is now actively wrong, because the repair sets one
+    controlled LD_LIBRARY_PATH on purpose.
     """
-    observe_steps = " ".join(step.get("run", "") for step in _steps_in_job(qualification_workflow, "s3c-observe"))
-    assert "observe-observer-link" in observe_steps
-    assert "-lcap" in observe_steps
-    # Honest statement of the dependency: the observer link carries no -static.
-    link = [line for line in observe_steps.splitlines() if "observe-observer-link" in line]
-    assert len(link) == 1
-    assert " -static" not in link[0]
+    block = _observation_exec(qualification_workflow)
+    assert "/usr/bin/env -i " in block
+    # The observer is launched BY env -i, not merely after it.
+    launch = [line for line in block.splitlines() if "mt4_s3c_observer" in line and "--candidate" in line]
+    assert len(launch) == 1, launch
+    assert launch[0].strip().startswith("/usr/bin/env -i "), launch[0]
+    # Absolute env binary: a PATH lookup would be an uncontrolled resolution of the very tool whose
+    # job is to remove uncontrolled inputs.
+    assert "env -i" in launch[0] and launch[0].strip().startswith("/usr/bin/")
+
+
+@pytest.mark.parametrize("variable", ("LD_PRELOAD", "LD_AUDIT", "LD_RUN_PATH", "LIBRARY_PATH", "PYTHONPATH"))
+def test_r9_r10_no_loader_control_variable_is_ever_set_for_the_observer(qualification_workflow, variable):
+    """R9/R10.  The only variable the observer receives beyond PATH/LANG/LC_ALL is the pinned path.
+
+    Matched against the EXACT assignment names, not by substring: "LIBRARY_PATH=" occurs inside
+    "LD_LIBRARY_PATH=", and a substring check would have reported a variable that is not set.
+    """
+    block = _observation_exec(qualification_workflow)
+    launch = [line for line in block.splitlines() if "mt4_s3c_observer" in line and "--candidate" in line][0]
+    prefix = launch.strip().split('"$RUNNER_TEMP/mt4_s3c_observer"')[0]
+    assigned = set(re.findall(r"(?:^|\s)([A-Z_]+)=", prefix))
+    assert variable not in assigned, (variable, sorted(assigned))
+
+
+def test_r11_the_observer_receives_exactly_the_minimum_environment(qualification_workflow):
+    """R11.  The environment is enumerated, so nothing arrives by inheritance."""
+    block = _observation_exec(qualification_workflow)
+    launch = [line for line in block.splitlines() if "mt4_s3c_observer" in line and "--candidate" in line][0]
+    prefix = launch.strip().split('"$RUNNER_TEMP/mt4_s3c_observer"')[0]
+    assigned = sorted(set(re.findall(r"(?:^|\s)([A-Z_]+)=", prefix)))
+    assert assigned == ["LANG", "LC_ALL", "LD_LIBRARY_PATH", "PATH"], assigned
+
+
+def test_r3_r5_r7_the_runtime_object_is_reproven_immediately_before_execution(qualification_workflow):
+    """R3/R5/R7.  Existence, identity and digest are re-established in the exec step itself."""
+    block = _observation_exec(qualification_workflow)
+    # R3: the controlled directory must still be there.
+    assert 'test -d "$S3C_LIBCAP_RUNTIME_DIR"' in block
+    assert 'test -e "$S3C_LIBCAP_RUNTIME_SONAME"' in block
+    # R7: the re-hash exists and is compared to the package-derived authority.
+    assert 'sha256sum "$S3C_LIBCAP_RUNTIME_REAL"' in block
+    assert 'grep -qxF "$S3C_LIBCAP_LIBRARY_SHA256"' in block
+    # R5/R6: the SONAME entry must still resolve to the same verified object.
+    assert 'test "$S3C_LIBCAP_RUNTIME_TARGET" = "$S3C_LIBCAP_RUNTIME_REAL"' in block
+    # TOCTOU: nothing mutable happens between the last proof and the launch.
+    tail = block[block.index("test ! -s /etc/ld.so.preload") :]
+    for mutating in ("sudo ", "dpkg ", "apt-get ", "rm ", "cp ", "mv ", "install "):
+        assert mutating not in tail, mutating
+
+
+def test_r8_the_system_preload_surface_fails_closed(qualification_workflow):
+    """R8.  /etc/ld.so.preload would inject an object ahead of every ordinary dependency."""
+    block = _observation_exec(qualification_workflow)
+    assert "test ! -s /etc/ld.so.preload" in block
+    # Read, never written.
+    assert "> /etc/ld.so.preload" not in block
+    assert ">> /etc/ld.so.preload" not in block
+
+
+def test_r4_r6_the_private_runtime_object_cannot_escape_the_verified_extract_root(qualification_workflow):
+    """R4/R6.  A SONAME symlink pointing back at the system copy defeats the private directory."""
     for job_id in _LIBCAP_JOBS:
         block = _libcap_bootstrap(qualification_workflow, job_id)
-        assert "cmp authorized_library.sha256 installed_library.sha256" in block
+        assert "xargs readlink -f < libcap_runtime_soname.txt > libcap_runtime_real.txt" in block
+        assert '"$RUNNER_TEMP/libcap/extract_lib/"*) ;;' in block
+        assert "*) exit 1 ;;" in block
+
+
+def test_r13_the_runtime_expectation_descends_from_the_verified_artifact(qualification_workflow):
+    """R13.  The expected digest must not be produced by hashing the runtime file itself."""
+    for job_id in _LIBCAP_JOBS:
+        block = _libcap_bootstrap(qualification_workflow, job_id)
+        # authorized_library.sha256 comes from the unpacked .deb; the private runtime object is
+        # compared AGAINST it.  If the expectation were self-derived this comparison would be
+        # between a file and its own digest and could never fail.
+        assert 'cut -d " " -f 1 authorized_library_raw.txt > authorized_library.sha256' in block
+        assert "xargs -I {} sha256sum extract_lib/{} < libcap_relative.txt > authorized_library_raw.txt" in block
+        assert "cmp authorized_library.sha256 runtime_private.sha256" in block
+    exec_block = _observation_exec(qualification_workflow)
+    assert 'read -r S3C_LIBCAP_LIBRARY_SHA256 < "$RUNNER_TEMP/libcap/authorized_library.sha256"' in exec_block
+
+
+@pytest.mark.parametrize(
+    "rpath_flag",
+    ("-Wl,-rpath,/tmp/evil", "-Wl,-rpath-link,/tmp/evil", "-Wl,-R/tmp/evil", "-Xlinker", "-Wl,--enable-new-dtags"),
+)
+def test_r12_an_rpath_or_runpath_flag_is_rejected_by_the_link_contract(governed_build_area, rpath_flag):
+    """R12.  DT_RPATH/DT_RUNPATH cannot be introduced through the governed link command."""
+    tmp_path = governed_build_area
+    with pytest.raises(build_manifest.BuildManifestError) as error:
+        build_manifest.validate_build_command(
+            "LINK",
+            [
+                "gcc",
+                "-O2",
+                rpath_flag,
+                "-o",
+                str(tmp_path / "mt4_s3c_observer"),
+                str(tmp_path / "obj" / "launcher.o"),
+                str(tmp_path / "obj" / "policy.o"),
+                "-lcap",
+            ],
+            str(_REPO_ROOT),
+            str(tmp_path / "blst"),
+            "observer-link",
+            "s3c-build-candidate",
+        )
+    assert "BUILD_COMMAND_REJECTED" in str(error.value)
+
+
+def test_r12_no_rpath_form_is_on_the_positive_link_allowlist():
+    """R12, structurally: the allowlist is positive, so an unnamed rpath form cannot pass."""
+    for flag in build_manifest.ALLOWED_LINK_FLAGS:
+        assert "rpath" not in flag, flag
+        assert "-R" != flag, flag
+        assert "new-dtags" not in flag, flag
+    assert "-Xlinker" in build_manifest.FORBIDDEN_FLAG_PREFIXES
+
+
+def test_r12_the_link_environment_cannot_inject_an_rpath():
+    """R12.  LD_RUN_PATH creates a DT_RPATH at link time, so the build environment forbids it."""
+    assert "LD_RUN_PATH" in build_manifest.FORBIDDEN_BUILD_ENVIRONMENT
+    assert "LD_LIBRARY_PATH" in build_manifest.FORBIDDEN_BUILD_ENVIRONMENT
+    assert "LD_PRELOAD" in build_manifest.FORBIDDEN_BUILD_ENVIRONMENT
+    # Built from nothing: the governed build environment is an exact, closed set.
+    assert set(build_manifest.GOVERNED_BUILD_ENVIRONMENT) == {"PATH", "LANG", "LC_ALL"}
+    # The observer's RUNTIME LD_LIBRARY_PATH is a separate contract and must not have leaked in.
+    for value in build_manifest.GOVERNED_BUILD_ENVIRONMENT.values():
+        assert "extract_lib" not in value
+
+
+def test_the_build_environment_contract_is_not_weakened_by_the_runtime_repair():
+    """The two environments stay separate: build rejects what runtime deliberately sets."""
+    environment = build_manifest.governed_build_environment()
+    for forbidden in build_manifest.FORBIDDEN_BUILD_ENVIRONMENT:
+        assert forbidden not in environment, forbidden
 
 
 def test_the_approved_qualification_workflow_digest_matches_its_governed_bytes():
