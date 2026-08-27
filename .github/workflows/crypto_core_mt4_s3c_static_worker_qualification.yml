@@ -64,8 +64,29 @@ env:
   S3C_EXPECTED_PHDR_INVENTORY: "PT_LOAD:5:0x1000,PT_LOAD:6:0x1000,PT_GNU_STACK:6:0x10"
 
   # The exact enumerated shell variables any qualification command may reference.  None of them can
-  # name a repository file.  Adding one requires an architecture revision, not a workflow edit.
-  S3C_ALLOWED_SHELL_VARIABLES: "RUNNER_TEMP GITHUB_WORKSPACE GITHUB_ENV GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA EXPECTED_HEAD BLST_COMMIT BLST_REPOSITORY S3C_EXPECTED_PHDR_INVENTORY S3C_CANDIDATE_NAME S3C_WORKER_SHA256 S3C_WORKER_BYTES S3C_DEPENDENCY_DIGEST S3C_POLICY_INTERNAL_ID S3C_POLICY_INTERNAL_SHA256 S3C_POLICY_INTERNAL_COUNT S3C_POLICY_INTERNAL_CBPF S3C_POLICY_OUTER_DIGEST S3C_CASE_SET_DIGEST CANDIDATE_ARTIFACT_ID CANDIDATE_ARTIFACT_DIGEST BLST_SERVER_BEFORE BLST_ASSEMBLY_BEFORE"
+  # name a repository file.  V9 SECTION 28 forbids shell variable references unless they are
+  # "explicitly modelled and literally enumerated", and this list is that enumeration: a command may
+  # reference a variable only if it appears here, and a permanent test rejects any other name.
+  S3C_ALLOWED_SHELL_VARIABLES: "RUNNER_TEMP GITHUB_WORKSPACE GITHUB_ENV GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA EXPECTED_HEAD BLST_COMMIT BLST_REPOSITORY S3C_EXPECTED_PHDR_INVENTORY S3C_CANDIDATE_NAME S3C_WORKER_SHA256 S3C_WORKER_BYTES S3C_DEPENDENCY_DIGEST S3C_POLICY_INTERNAL_ID S3C_POLICY_INTERNAL_SHA256 S3C_POLICY_INTERNAL_COUNT S3C_POLICY_INTERNAL_CBPF S3C_POLICY_OUTER_DIGEST S3C_CASE_SET_DIGEST CANDIDATE_ARTIFACT_ID CANDIDATE_ARTIFACT_DIGEST BLST_SERVER_BEFORE BLST_ASSEMBLY_BEFORE S3C_LIBCAP_ARCH S3C_LIBCAP2_VERSION S3C_LIBCAP2_DEB S3C_LIBCAP2_DEB_SHA256 S3C_LIBCAP_DEV_VERSION S3C_LIBCAP_DEV_DEB S3C_LIBCAP_DEV_DEB_SHA256"
+
+  # THE IMMUTABLE LIBCAP CONTRACT.  BUILD_TO_PROVE run 32993250008 proved ubuntu-22.04 does not
+  # ship /usr/include/sys/capability.h, and the launcher genuinely requires it plus -lcap.  Naming
+  # the package was not enough: an apt candidate moves, so the same source SHA could have produced
+  # a different launcher, a different header and a different linked library on two different days,
+  # and the observation job -- which is load-bearing containment code -- resolved its own copy
+  # independently of the build job.
+  #
+  # These seven literals are the ONLY authority for which bytes may be installed.  They are defined
+  # HERE, exactly once, and both s3c-build-candidate and s3c-observe consume the identical step
+  # body, so the two jobs cannot drift apart while the workflow still succeeds.  A superseded
+  # version fails the download outright rather than silently installing its successor.
+  S3C_LIBCAP_ARCH: "amd64"
+  S3C_LIBCAP2_VERSION: "1:2.44-1ubuntu0.22.04.3"
+  S3C_LIBCAP2_DEB: "libcap2_1%3a2.44-1ubuntu0.22.04.3_amd64.deb"
+  S3C_LIBCAP2_DEB_SHA256: "c497efb7fa3cd19a7ff297d95c7c5d678063c80c9fc230c9d034a8ee02ca8446"
+  S3C_LIBCAP_DEV_VERSION: "1:2.44-1ubuntu0.22.04.3"
+  S3C_LIBCAP_DEV_DEB: "libcap-dev_1%3a2.44-1ubuntu0.22.04.3_amd64.deb"
+  S3C_LIBCAP_DEV_DEB_SHA256: "5c733a6f0d9e438763ab123e15b26113efc391ced3a785e20e8723c5b354aefc"
 
   S3C_CANDIDATE_NAME: mt4_s3c_static_worker
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -160,13 +181,60 @@ jobs:
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "worker-start" --invocation-kind COMPILE -- gcc -c -MD -MF "$RUNNER_TEMP/dep/start.d" -o "$RUNNER_TEMP/obj/start.o" scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_start.S
           echo "S3C_WORKER_COMPILE=PASS"
 
-      - name: Install the pinned libcap development headers
+      - name: Install the frozen libcap package bytes
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/libcap"
+          cd "$RUNNER_TEMP/libcap"
+
+          # Repository INDEX preparation only.  It never selects the artifact: the exact version
+          # pins below decide that, and a moved candidate fails rather than substituting itself.
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libcap-dev
+          apt-get download "libcap2=$S3C_LIBCAP2_VERSION" "libcap-dev=$S3C_LIBCAP_DEV_VERSION"
+
+          # BYTES BEFORE INSTALL.  Nothing is unpacked until both artifacts match frozen digests.
+          printf '%s  %s\n' "$S3C_LIBCAP2_DEB_SHA256" "$S3C_LIBCAP2_DEB" > expected.sha256
+          printf '%s  %s\n' "$S3C_LIBCAP_DEV_DEB_SHA256" "$S3C_LIBCAP_DEV_DEB" >> expected.sha256
+          sha256sum -c expected.sha256
+
+          # The artifacts must also DECLARE the identity they were pinned as.
+          dpkg-deb -f "$S3C_LIBCAP2_DEB" Package Version Architecture > libcap2_meta.txt
+          grep -qxF "Package: libcap2" libcap2_meta.txt
+          grep -qxF "Version: $S3C_LIBCAP2_VERSION" libcap2_meta.txt
+          grep -qxF "Architecture: $S3C_LIBCAP_ARCH" libcap2_meta.txt
+          dpkg-deb -f "$S3C_LIBCAP_DEV_DEB" Package Version Architecture > libcap_dev_meta.txt
+          grep -qxF "Package: libcap-dev" libcap_dev_meta.txt
+          grep -qxF "Version: $S3C_LIBCAP_DEV_VERSION" libcap_dev_meta.txt
+          grep -qxF "Architecture: $S3C_LIBCAP_ARCH" libcap_dev_meta.txt
+
+          # Install ONLY those verified local bytes.  No archive resolution happens here.
+          sudo dpkg -i "$S3C_LIBCAP2_DEB" "$S3C_LIBCAP_DEV_DEB"
+
+          # What is actually installed is what was pinned.
+          dpkg -s libcap2 > libcap2_installed.txt
+          grep -qxF "Version: $S3C_LIBCAP2_VERSION" libcap2_installed.txt
+          dpkg -s libcap-dev > libcap_dev_installed.txt
+          grep -qxF "Version: $S3C_LIBCAP_DEV_VERSION" libcap_dev_installed.txt
+
+          # HEADER AUTHORITY: the header exists AND belongs to the exact verified libcap-dev.
           test -f /usr/include/sys/capability.h
+          dpkg-query -S /usr/include/sys/capability.h > header_owner.txt
+          grep -q "^libcap-dev:" header_owner.txt
+
+          # RUNTIME LIBRARY AUTHORITY, proven from package ownership rather than by invoking the
+          # compiler: no bare gcc/objcopy/ld may run outside the build wrapper, and that invariant
+          # is not worth an exception for a query.  The link-time resolution itself is still
+          # exercised by the governed -lcap link command, whose resolver records the resolved path,
+          # soname, digest and provenance as run evidence.
+          dpkg-query -L libcap-dev > libcap_dev_files.txt
+          grep -E '/libcap\.so$' libcap_dev_files.txt > libcap_link.txt
+          grep -qE '^(/usr/lib/|/lib/)' libcap_link.txt
+          xargs readlink -f < libcap_link.txt > libcap_real.txt
+          grep -qE '^(/usr/lib/|/lib/)' libcap_real.txt
+          xargs dpkg-query -S < libcap_real.txt > libcap_owner.txt
+          grep -q "^libcap2:" libcap_owner.txt
+
           echo "S3C_LIBCAP_DEV_AVAILABLE=PASS"
 
       # THE COMPILE INVENTORY MUST COVER EVERY LOAD-BEARING NATIVE INPUT (repair 7E).  The observer
@@ -306,13 +374,60 @@ jobs:
           name: mt4-s3c-candidate-linux-x86_64
           path: ${{ runner.temp }}/candidate
 
-      - name: Install the pinned libcap development headers
+      - name: Install the frozen libcap package bytes
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/libcap"
+          cd "$RUNNER_TEMP/libcap"
+
+          # Repository INDEX preparation only.  It never selects the artifact: the exact version
+          # pins below decide that, and a moved candidate fails rather than substituting itself.
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libcap-dev
+          apt-get download "libcap2=$S3C_LIBCAP2_VERSION" "libcap-dev=$S3C_LIBCAP_DEV_VERSION"
+
+          # BYTES BEFORE INSTALL.  Nothing is unpacked until both artifacts match frozen digests.
+          printf '%s  %s\n' "$S3C_LIBCAP2_DEB_SHA256" "$S3C_LIBCAP2_DEB" > expected.sha256
+          printf '%s  %s\n' "$S3C_LIBCAP_DEV_DEB_SHA256" "$S3C_LIBCAP_DEV_DEB" >> expected.sha256
+          sha256sum -c expected.sha256
+
+          # The artifacts must also DECLARE the identity they were pinned as.
+          dpkg-deb -f "$S3C_LIBCAP2_DEB" Package Version Architecture > libcap2_meta.txt
+          grep -qxF "Package: libcap2" libcap2_meta.txt
+          grep -qxF "Version: $S3C_LIBCAP2_VERSION" libcap2_meta.txt
+          grep -qxF "Architecture: $S3C_LIBCAP_ARCH" libcap2_meta.txt
+          dpkg-deb -f "$S3C_LIBCAP_DEV_DEB" Package Version Architecture > libcap_dev_meta.txt
+          grep -qxF "Package: libcap-dev" libcap_dev_meta.txt
+          grep -qxF "Version: $S3C_LIBCAP_DEV_VERSION" libcap_dev_meta.txt
+          grep -qxF "Architecture: $S3C_LIBCAP_ARCH" libcap_dev_meta.txt
+
+          # Install ONLY those verified local bytes.  No archive resolution happens here.
+          sudo dpkg -i "$S3C_LIBCAP2_DEB" "$S3C_LIBCAP_DEV_DEB"
+
+          # What is actually installed is what was pinned.
+          dpkg -s libcap2 > libcap2_installed.txt
+          grep -qxF "Version: $S3C_LIBCAP2_VERSION" libcap2_installed.txt
+          dpkg -s libcap-dev > libcap_dev_installed.txt
+          grep -qxF "Version: $S3C_LIBCAP_DEV_VERSION" libcap_dev_installed.txt
+
+          # HEADER AUTHORITY: the header exists AND belongs to the exact verified libcap-dev.
           test -f /usr/include/sys/capability.h
+          dpkg-query -S /usr/include/sys/capability.h > header_owner.txt
+          grep -q "^libcap-dev:" header_owner.txt
+
+          # RUNTIME LIBRARY AUTHORITY, proven from package ownership rather than by invoking the
+          # compiler: no bare gcc/objcopy/ld may run outside the build wrapper, and that invariant
+          # is not worth an exception for a query.  The link-time resolution itself is still
+          # exercised by the governed -lcap link command, whose resolver records the resolved path,
+          # soname, digest and provenance as run evidence.
+          dpkg-query -L libcap-dev > libcap_dev_files.txt
+          grep -E '/libcap\.so$' libcap_dev_files.txt > libcap_link.txt
+          grep -qE '^(/usr/lib/|/lib/)' libcap_link.txt
+          xargs readlink -f < libcap_link.txt > libcap_real.txt
+          grep -qE '^(/usr/lib/|/lib/)' libcap_real.txt
+          xargs dpkg-query -S < libcap_real.txt > libcap_owner.txt
+          grep -q "^libcap2:" libcap_owner.txt
+
           echo "S3C_LIBCAP_DEV_AVAILABLE=PASS"
 
       - name: Build the canonical policy probe and the trusted observer from reviewed source

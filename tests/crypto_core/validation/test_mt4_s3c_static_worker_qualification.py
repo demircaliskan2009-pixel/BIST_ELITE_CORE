@@ -1969,64 +1969,356 @@ def _steps_in_job(workflow, job_id):
     return workflow["jobs"][job_id]["steps"]
 
 
-def test_libcap_dev_is_bootstrapped_before_every_launcher_compile(qualification_workflow):
-    """Repair B.  Availability is established, in the same job, before the compile that needs it."""
-    for job_id in ("s3c-build-candidate", "s3c-observe"):
-        steps = _steps_in_job(qualification_workflow, job_id)
-        bootstrap_index = next((index for index, step in enumerate(steps) if "libcap-dev" in step.get("run", "")), None)
-        compile_index = next(
-            (
-                index
-                for index, step in enumerate(steps)
-                if "mt4_s3c_outer_containment_launcher.c" in step.get("run", "")
-                and "--invocation-kind COMPILE" in step.get("run", "")
-            ),
-            None,
-        )
-        assert bootstrap_index is not None, job_id
-        assert compile_index is not None, job_id
-        assert bootstrap_index < compile_index, job_id
+_LIBCAP_JOBS = ("s3c-build-candidate", "s3c-observe")
+_LIBCAP_CONSTANTS = (
+    "S3C_LIBCAP_ARCH",
+    "S3C_LIBCAP2_VERSION",
+    "S3C_LIBCAP2_DEB",
+    "S3C_LIBCAP2_DEB_SHA256",
+    "S3C_LIBCAP_DEV_VERSION",
+    "S3C_LIBCAP_DEV_DEB",
+    "S3C_LIBCAP_DEV_DEB_SHA256",
+)
 
 
-def test_no_unrelated_job_receives_the_libcap_bootstrap(qualification_workflow):
-    """Repair B, item 5.  Only the two jobs that compile the launcher get it."""
-    with_bootstrap = {
+def _libcap_bootstrap(workflow, job_id):
+    """The single libcap bootstrap block of one job, or None."""
+    blocks = [step["run"] for step in _steps_in_job(workflow, job_id) if "libcap" in step.get("run", "")]
+    if not blocks:
+        return None
+    assert len(blocks) == 1, (job_id, len(blocks))
+    return blocks[0]
+
+
+def _ordered_index(block, needle):
+    assert needle in block, needle
+    return block.index(needle)
+
+
+def test_the_libcap_bootstrap_exists_only_where_the_launcher_is_compiled(qualification_workflow):
+    """Item 12.  Exactly the two launcher-compiling jobs, and no other."""
+    present = {
         job_id
-        for job_id, job in qualification_workflow["jobs"].items()
-        if any("libcap-dev" in step.get("run", "") for step in job.get("steps", []))
+        for job_id in qualification_workflow["jobs"]
+        if _libcap_bootstrap(qualification_workflow, job_id) is not None
     }
-    assert with_bootstrap == {"s3c-build-candidate", "s3c-observe"}, with_bootstrap
-
-
-def test_the_libcap_bootstrap_is_literal_and_bounded(qualification_workflow):
-    """Repair B, item 6.  Exactly libcap-dev, no upgrade, no dynamic construction, no installer."""
-    for job in qualification_workflow["jobs"].values():
-        for step in job.get("steps", []):
-            block = step.get("run", "")
-            if "libcap-dev" not in block:
-                continue
-            assert "apt-get install" in block
-            assert "-y" in block
-            assert "--no-install-recommends" in block
-            # Exactly the one package, never a broad or dynamic install.
-            single_line = " ".join(block.splitlines())
-            assert re.search(r"apt-get install\s+-y\s+--no-install-recommends\s+libcap-dev", single_line), block
-            assert "upgrade" not in block
-            assert "dist-upgrade" not in block
-            assert "curl" not in block
-            assert "wget" not in block
-            assert "add-apt-repository" not in block
-            assert "ppa:" not in block
-            assert "$(" not in block and "`" not in block
-            # A deterministic availability proof follows the install, not a second build system.
-            assert "test -f /usr/include/sys/capability.h" in block
-
-
-def test_the_elf_qualify_and_adjudicate_jobs_never_bootstrap_libcap(qualification_workflow):
-    """Repair B, item 5.  Jobs that never compile the launcher get no package installation at all."""
+    assert present == set(_LIBCAP_JOBS), present
     for job_id in ("s3c-elf-qualify", "s3c-adjudicate"):
         for step in _steps_in_job(qualification_workflow, job_id):
             assert "apt-get" not in step.get("run", ""), (job_id, step.get("name"))
+            assert "dpkg" not in step.get("run", ""), (job_id, step.get("name"))
+
+
+def test_both_libcap_jobs_use_byte_identical_bootstrap_from_one_constant_set(qualification_workflow):
+    """Item 6, and the P1 itself.  Build and observe cannot resolve different libcap revisions.
+
+    The two step bodies are byte-identical and reference only workflow-level constants, so there is
+    no second place where a version or a digest could be edited independently.
+    """
+    bodies = [_libcap_bootstrap(qualification_workflow, job_id) for job_id in _LIBCAP_JOBS]
+    assert bodies[0] == bodies[1]
+    environment = qualification_workflow["env"]
+    for constant in _LIBCAP_CONSTANTS:
+        assert constant in environment, constant
+        # The literal is defined exactly once, in env, and referenced by name everywhere else.
+        assert environment[constant] not in bodies[0], constant
+
+
+def test_the_frozen_libcap_artifact_identity_is_complete(qualification_workflow):
+    """Items 2, 3, 4, 5.  Name, exact version, architecture, filename and .deb SHA256, both packages."""
+    environment = qualification_workflow["env"]
+    assert environment["S3C_LIBCAP_ARCH"] == "amd64"
+    for digest_key in ("S3C_LIBCAP2_DEB_SHA256", "S3C_LIBCAP_DEV_DEB_SHA256"):
+        value = environment[digest_key]
+        assert re.fullmatch(r"[0-9a-f]{64}", value), (digest_key, value)
+    for version_key in ("S3C_LIBCAP2_VERSION", "S3C_LIBCAP_DEV_VERSION"):
+        value = environment[version_key]
+        # An exact Debian version, epoch included where the archive carries one.
+        assert re.fullmatch(r"[0-9]+:[0-9][0-9A-Za-z.+~-]*|[0-9][0-9A-Za-z.+~-]*", value), (version_key, value)
+    for package, filename_key, version_key in (
+        ("libcap2", "S3C_LIBCAP2_DEB", "S3C_LIBCAP2_VERSION"),
+        ("libcap-dev", "S3C_LIBCAP_DEV_DEB", "S3C_LIBCAP_DEV_VERSION"),
+    ):
+        filename = environment[filename_key]
+        assert filename.startswith(package + "_"), (filename_key, filename)
+        assert filename.endswith("_amd64.deb"), (filename_key, filename)
+        # The filename must name the SAME version that is pinned, with the epoch colon as apt
+        # encodes it in a filename.  A filename and a version that disagree is a silent swap.
+        encoded = environment[version_key].replace(":", "%3a")
+        assert encoded in filename, (filename_key, filename, encoded)
+
+
+def test_no_floating_package_selection_remains(qualification_workflow):
+    """Item 1.  Nothing may install a package the archive chooses for us."""
+    for name, block in _run_blocks(qualification_workflow):
+        assert "apt-get install" not in block, name
+        assert "apt install" not in block, name
+        for forbidden in ("upgrade", "add-apt-repository", "ppa:", "curl", "wget"):
+            assert forbidden not in block, (name, forbidden)
+    for job_id in _LIBCAP_JOBS:
+        block = _libcap_bootstrap(qualification_workflow, job_id)
+        # apt-get download pins BOTH packages to an exact version.
+        assert 'apt-get download "libcap2=$S3C_LIBCAP2_VERSION" "libcap-dev=$S3C_LIBCAP_DEV_VERSION"' in block
+
+
+def test_artifact_bytes_are_verified_before_installation(qualification_workflow):
+    """Item 7.  The digest check strictly precedes the only install command."""
+    for job_id in _LIBCAP_JOBS:
+        block = _libcap_bootstrap(qualification_workflow, job_id)
+        verify = _ordered_index(block, "sha256sum -c expected.sha256")
+        install = _ordered_index(block, "sudo dpkg -i")
+        assert verify < install, job_id
+        # apt-get update prepares the index, but never decides the artifact.
+        update = _ordered_index(block, "sudo apt-get update")
+        download = _ordered_index(block, "apt-get download")
+        assert update < download < verify, job_id
+        # The installed operands are the two verified files, not an archive name.
+        assert 'sudo dpkg -i "$S3C_LIBCAP2_DEB" "$S3C_LIBCAP_DEV_DEB"' in block
+
+
+def test_a_wrong_artifact_digest_or_version_fails_the_bootstrap(qualification_workflow):
+    """Items 8 and 9, as the contract the runner executes.
+
+    sha256sum -c under `set -euo pipefail` aborts the step on any mismatch, so a substituted .deb
+    can never reach dpkg; and the declared metadata of each artifact must equal the pinned identity.
+    """
+    for job_id in _LIBCAP_JOBS:
+        block = _libcap_bootstrap(qualification_workflow, job_id)
+        assert "set -euo pipefail" in block, job_id
+        assert "sha256sum -c expected.sha256" in block, job_id
+        for package, version_key in (("libcap2", "S3C_LIBCAP2_VERSION"), ("libcap-dev", "S3C_LIBCAP_DEV_VERSION")):
+            assert 'grep -qxF "Package: ' + package + '"' in block, (job_id, package)
+            assert 'grep -qxF "Version: $' + version_key + '"' in block, (job_id, version_key)
+        assert 'grep -qxF "Architecture: $S3C_LIBCAP_ARCH"' in block, job_id
+
+
+def test_installed_versions_are_proven_after_installation(qualification_workflow):
+    """The pinned version is what ends up installed, not merely what was downloaded."""
+    for job_id in _LIBCAP_JOBS:
+        block = _libcap_bootstrap(qualification_workflow, job_id)
+        assert "dpkg -s libcap2 > libcap2_installed.txt" in block
+        assert 'grep -qxF "Version: $S3C_LIBCAP2_VERSION" libcap2_installed.txt' in block
+        assert "dpkg -s libcap-dev > libcap_dev_installed.txt" in block
+        assert 'grep -qxF "Version: $S3C_LIBCAP_DEV_VERSION" libcap_dev_installed.txt' in block
+
+
+def test_the_header_is_owned_by_the_verified_package(qualification_workflow):
+    """Item 10.  Header authority is package ownership, not mere existence."""
+    for job_id in _LIBCAP_JOBS:
+        block = _libcap_bootstrap(qualification_workflow, job_id)
+        assert "test -f /usr/include/sys/capability.h" in block
+        assert "dpkg-query -S /usr/include/sys/capability.h > header_owner.txt" in block
+        assert 'grep -q "^libcap-dev:" header_owner.txt' in block
+
+
+def test_the_resolved_runtime_library_is_owned_by_the_verified_package(qualification_workflow):
+    """Item 11.  What the linker actually resolves belongs to the pinned libcap2."""
+    for job_id in _LIBCAP_JOBS:
+        block = _libcap_bootstrap(qualification_workflow, job_id)
+        # Ownership, not a compiler query: the bare-native-invocation invariant stays intact.
+        assert "dpkg-query -L libcap-dev > libcap_dev_files.txt" in block
+        assert "libcap_dev_files.txt > libcap_link.txt" in block
+        assert "xargs readlink -f < libcap_link.txt > libcap_real.txt" in block
+        # Inside the same approved system-library roots the producer evidence already uses.
+        assert "grep -qE '^(/usr/lib/|/lib/)' libcap_real.txt" in block
+        assert "grep -qE '^(/usr/lib/|/lib/)' libcap_link.txt" in block
+        assert "xargs dpkg-query -S < libcap_real.txt > libcap_owner.txt" in block
+        assert 'grep -q "^libcap2:" libcap_owner.txt' in block
+
+
+def test_the_producer_still_records_system_library_evidence():
+    """Section E.  The existing run evidence is preserved, not replaced by the pin."""
+    source = _read(_S3C / "mt4_s3c_build_manifest.py")
+    for field in ('"name"', '"resolved_path"', '"soname"', '"digest_sha256"', '"provenance"'):
+        assert field in source, field
+    assert "PROVENANCE_SYSTEM_LIBRARY" in source
+    assert build_manifest.APPROVED_SYSTEM_LIBRARY_ROOTS == ("/usr/lib/", "/lib/")
+
+
+def _staged_bytes(path):
+    """The COMMITTED bytes of a governed file, exactly as the production digest freeze reads them.
+
+    Working-tree bytes are NOT usable: a Windows checkout rewrites line endings for seven of the
+    sixteen bundle entries, so a disk-byte digest would be platform-dependent while the frozen
+    constant is not.  Reading the git object store is what the production refreeze does.
+    """
+    listing = subprocess.run(  # noqa: S603 - fixed argument vector
+        ["git", "ls-files", "--stage", "--", path],  # noqa: S607 - test-only object-store read
+        cwd=str(_REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert listing, path
+    meta, _tab, listed = listing.partition("\t")
+    mode, object_id, _stage = meta.split()
+    assert listed == path, (listed, path)
+    body = subprocess.run(  # noqa: S603 - fixed argument vector
+        ["git", "cat-file", "blob", object_id],  # noqa: S607 - test-only object-store read
+        cwd=str(_REPO_ROOT),
+        capture_output=True,
+        check=True,
+    ).stdout
+    return mode, body
+
+
+def _approved_trusted_constant(name):
+    """One digest constant from the TRUSTED workflow -- the surface no pull request can reach."""
+    match = re.search(name + r':\s*"([0-9a-f]{64})"', _read(TRUSTED_WORKFLOW))
+    assert match, name
+    return match.group(1)
+
+
+def test_the_approved_qualification_workflow_digest_matches_its_governed_bytes():
+    """Item 26.  The trusted constant is the digest of the bytes actually committed."""
+    _mode, body = _staged_bytes(".github/workflows/crypto_core_mt4_s3c_static_worker_qualification.yml")
+    approved = _approved_trusted_constant("APPROVED_S3C_QUALIFICATION_WORKFLOW_SHA256")
+    assert hashlib.sha256(body).hexdigest() == approved
+
+
+def test_the_approved_source_bundle_digest_matches_the_recomputed_sixteen_entries():
+    """Item 27, through the PRODUCTION serializer rather than a hand-rolled canonicalisation."""
+    entries = []
+    for path in build_manifest.SOURCE_BUNDLE_PATHS:
+        mode, body = _staged_bytes(path)
+        entries.append({"path": path, "mode": mode, "type": "blob", "sha256": hashlib.sha256(body).hexdigest()})
+    assert len(entries) == 16
+    approved = _approved_trusted_constant("APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256")
+    assert build_manifest.source_bundle_digest(entries) == approved
+
+
+def test_the_approved_trusted_gate_digest_still_matches_its_untouched_bytes():
+    """Item 28.  This repair does not touch the gate, so its constant must not have moved."""
+    _mode, body = _staged_bytes("scripts/crypto_core/qualification/mt4_s3c_trusted_attestation_gate.py")
+    approved = _approved_trusted_constant("APPROVED_S3C_TRUSTED_GATE_SHA256")
+    assert hashlib.sha256(body).hexdigest() == approved
+
+
+def _observe_block_bounds(body):
+    """Byte offsets of the SECOND libcap bootstrap -- the observation job's copy."""
+    marker = b"          apt-get download "
+    first = body.index(marker)
+    second = body.index(marker, first + 1)
+    return second
+
+
+_PACKAGE_CONTRACT_MUTANTS = (
+    # 20: a moved package version.
+    ("package version", b'"1:2.44-1ubuntu0.22.04.3"', b'"1:2.44-1ubuntu0.22.04.4"'),
+    # 21: a substituted artifact digest, either package.
+    (
+        "libcap2 artifact digest",
+        b"c497efb7fa3cd19a7ff297d95c7c5d678063c80c9fc230c9d034a8ee02ca8446",
+        b"0" * 64,
+    ),
+    (
+        "libcap-dev artifact digest",
+        b"5c733a6f0d9e438763ab123e15b26113efc391ced3a785e20e8723c5b354aefc",
+        b"1" * 64,
+    ),
+    # 22: the moving install put back.
+    ("moving install reintroduced", b"apt-get download ", b"apt-get install -y "),
+    # 21/22: the byte check dropped so an unverified artifact could be installed.
+    ("byte verification removed", b"sha256sum -c expected.sha256", b"true"),
+    # 17/18: the ownership proofs dropped.
+    ("header ownership removed", b'grep -q "^libcap-dev:" header_owner.txt', b"true"),
+    ("library ownership removed", b'grep -q "^libcap2:" libcap_owner.txt', b"true"),
+)
+
+
+@pytest.mark.parametrize(("label", "original", "replacement"), _PACKAGE_CONTRACT_MUTANTS)
+def test_any_change_to_the_frozen_package_contract_breaks_the_trusted_digest(label, original, replacement):
+    """Items 20, 21, 22 -- and the mechanism that answers the review finding.
+
+    Stage C requires the qualification workflow to be a bundle entry whose digest equals
+    APPROVED_S3C_QUALIFICATION_WORKFLOW_SHA256, and the whole 16-entry bundle to reconstruct to
+    APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256.  Both constants live on the trusted
+    default-branch surface, which no pull request can reach.  So weakening the pinned bootstrap is
+    not a silent change: it is a digest mismatch, and the run is refused.
+    """
+    _mode, body = _staged_bytes(".github/workflows/crypto_core_mt4_s3c_static_worker_qualification.yml")
+    assert original in body, label
+    mutated = body.replace(original, replacement)
+    assert mutated != body, label
+
+    approved_workflow = _approved_trusted_constant("APPROVED_S3C_QUALIFICATION_WORKFLOW_SHA256")
+    assert hashlib.sha256(body).hexdigest() == approved_workflow
+    assert hashlib.sha256(mutated).hexdigest() != approved_workflow, label
+
+    # And the whole-bundle reconstruction moves too, so neither anchor can be satisfied.
+    entries = []
+    for path in build_manifest.SOURCE_BUNDLE_PATHS:
+        if path.endswith("crypto_core_mt4_s3c_static_worker_qualification.yml"):
+            entries.append(
+                {"path": path, "mode": "100644", "type": "blob", "sha256": hashlib.sha256(mutated).hexdigest()}
+            )
+            continue
+        mode, entry_body = _staged_bytes(path)
+        entries.append({"path": path, "mode": mode, "type": "blob", "sha256": hashlib.sha256(entry_body).hexdigest()})
+    approved_bundle = _approved_trusted_constant("APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256")
+    assert build_manifest.source_bundle_digest(entries) != approved_bundle, label
+
+
+def test_making_the_observation_job_diverge_breaks_the_trusted_digest():
+    """Item 23.  The two jobs cannot be made to disagree without breaking the anchor.
+
+    This mutates ONLY the observation job's copy of the bootstrap, which is precisely the drift the
+    review finding describes: build installs one libcap, observe installs another.
+    """
+    path = ".github/workflows/crypto_core_mt4_s3c_static_worker_qualification.yml"
+    _mode, body = _staged_bytes(path)
+    cut = _observe_block_bounds(body)
+    head, tail = body[:cut], body[cut:]
+    diverged = head + tail.replace(b"$S3C_LIBCAP2_VERSION", b"$S3C_LIBCAP_DEV_VERSION", 1)
+    assert diverged != body
+    # The build job's half is untouched, so this is genuinely a build/observe divergence.
+    assert diverged[:cut] == head
+    approved = _approved_trusted_constant("APPROVED_S3C_QUALIFICATION_WORKFLOW_SHA256")
+    assert hashlib.sha256(diverged).hexdigest() != approved
+
+
+def test_the_trusted_gate_refuses_a_workflow_whose_digest_is_not_approved():
+    """Item 24.  The enforcement above is real: the gate compares and fails closed.
+
+    The gate source is READ here, never modified.  Its runtime behaviour over a full world is
+    exercised by the trusted-attestation driver suite; this pins the specific comparison that makes
+    the observation job's package identity a consequence of the trusted constants.
+    """
+    gate_source = _read(TRUSTED_GATE)
+    assert "QUALIFICATION_WORKFLOW_DIGEST_NOT_APPROVED" in gate_source
+    assert "SOURCE_BUNDLE_DIGEST_NOT_APPROVED" in gate_source
+    assert 'workflow_entry[0]["sha256"] != arguments.approved_qualification_workflow_sha256' in gate_source
+    assert "bundle_digest != arguments.approved_source_bundle_sha256" in gate_source
+    # The qualification workflow really is one of the sixteen measured entries.
+    assert ".github/workflows/crypto_core_mt4_s3c_static_worker_qualification.yml" in build_manifest.SOURCE_BUNDLE_PATHS
+
+
+def test_the_observation_job_library_identity_is_fixed_by_the_governed_contract():
+    """Item 24, stated as the property the review finding asked for.
+
+    resolve_system_library still records only the BUILD job's libcap, and that is left alone: adding
+    an observation-side producer-reported package digest would create another producer-selected
+    value masquerading as expected authority.  Instead the observation job's libcap identity is a
+    CONSEQUENCE of bytes the trusted surface already anchors.
+    """
+    workflow = yaml.safe_load(QUALIFICATION_WORKFLOW.read_text(encoding="utf-8"))
+    build_block = _libcap_bootstrap(workflow, "s3c-build-candidate")
+    observe_block = _libcap_bootstrap(workflow, "s3c-observe")
+    assert build_block == observe_block
+    # Every identity-bearing literal comes from the shared env block, not from either job body.
+    environment = workflow["env"]
+    for constant in _LIBCAP_CONSTANTS:
+        assert environment[constant] not in observe_block, constant
+    # The observation job links -lcap, which is why its library identity has to be pinned at all.
+    observe_steps = " ".join(step.get("run", "") for step in _steps_in_job(workflow, "s3c-observe"))
+    assert "observe-observer-link" in observe_steps
+    assert "-lcap" in observe_steps
+
+
+def test_the_source_bundle_remains_exactly_sixteen_entries():
+    """Item 13.  No path #17 was introduced by any of this."""
+    assert len(build_manifest.SOURCE_BUNDLE_PATHS) == 16
+    assert len(set(build_manifest.SOURCE_BUNDLE_PATHS)) == 16
 
 
 def test_pt_261_no_forbidden_shell_construct_appears_in_a_qualification_command(qualification_workflow):
