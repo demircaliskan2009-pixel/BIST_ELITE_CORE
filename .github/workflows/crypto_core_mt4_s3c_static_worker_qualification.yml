@@ -232,8 +232,12 @@ jobs:
           grep -qE '^(/usr/lib/|/lib/)' libcap_link.txt
           xargs readlink -f < libcap_link.txt > libcap_real.txt
           grep -qE '^(/usr/lib/|/lib/)' libcap_real.txt
-          xargs dpkg-query -S < libcap_real.txt > libcap_owner.txt
-          grep -q "^libcap2:" libcap_owner.txt
+
+          # NOTE: this canonical realpath is NOT asked of dpkg.  Merged-usr aliases /lib to
+          # /usr/lib on the filesystem while dpkg's pathname database can keep the package's own
+          # path family, so a canonicalised path is not a safe ownership key.  Provenance comes
+          # from libcap2's own inventory and payload below; this path is only ever a measured
+          # CONSUMER, compared byte-for-byte against that authority.
 
           # AUTHORIZED BYTES, taken from the verified artifacts rather than from the filesystem.
           # dpkg-deb -x unpacks the exact .deb whose SHA256 was checked above, so these digests
@@ -504,8 +508,12 @@ jobs:
           grep -qE '^(/usr/lib/|/lib/)' libcap_link.txt
           xargs readlink -f < libcap_link.txt > libcap_real.txt
           grep -qE '^(/usr/lib/|/lib/)' libcap_real.txt
-          xargs dpkg-query -S < libcap_real.txt > libcap_owner.txt
-          grep -q "^libcap2:" libcap_owner.txt
+
+          # NOTE: this canonical realpath is NOT asked of dpkg.  Merged-usr aliases /lib to
+          # /usr/lib on the filesystem while dpkg's pathname database can keep the package's own
+          # path family, so a canonicalised path is not a safe ownership key.  Provenance comes
+          # from libcap2's own inventory and payload below; this path is only ever a measured
+          # CONSUMER, compared byte-for-byte against that authority.
 
           # AUTHORIZED BYTES, taken from the verified artifacts rather than from the filesystem.
           # dpkg-deb -x unpacks the exact .deb whose SHA256 was checked above, so these digests

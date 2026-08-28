@@ -2127,18 +2127,52 @@ def test_the_header_is_owned_by_the_verified_package(qualification_workflow):
 
 
 def test_the_resolved_runtime_library_is_owned_by_the_verified_package(qualification_workflow):
-    """Item 11.  What the linker actually resolves belongs to the pinned libcap2."""
+    """Item 11.  What the linker resolves is proven against the pinned libcap2 by BYTES.
+
+    Ownership is no longer asked of dpkg using a filesystem-canonicalised path.  Under merged-usr
+    that path family and dpkg's pathname database can disagree, so the question was not answerable
+    safely.  Provenance instead descends from libcap2's own inventory and its verified payload, and
+    the resolved object is a measured consumer of that authority.
+    """
     for job_id in _LIBCAP_JOBS:
         block = _libcap_bootstrap(qualification_workflow, job_id)
-        # Ownership, not a compiler query: the bare-native-invocation invariant stays intact.
+        # The exact installed package identity is still established.
+        assert "dpkg -s libcap2 > libcap2_installed.txt" in block
+        assert 'grep -qxF "Version: $S3C_LIBCAP2_VERSION" libcap2_installed.txt' in block
+        # Provenance authority: the package's own inventory and its verified payload.
+        assert "dpkg-query -L libcap2 > libcap2_files.txt" in block
+        assert "libcap2_files.txt > libcap_soname_payload.txt" in block
+        assert 'sha256sum "$S3C_LIBCAP_RUNTIME_REAL" > authorized_library_raw.txt' in block
+        # The linker-resolved object is located, bounded, and compared to that authority.
         assert "dpkg-query -L libcap-dev > libcap_dev_files.txt" in block
         assert "libcap_dev_files.txt > libcap_link.txt" in block
         assert "xargs readlink -f < libcap_link.txt > libcap_real.txt" in block
-        # Inside the same approved system-library roots the producer evidence already uses.
         assert "grep -qE '^(/usr/lib/|/lib/)' libcap_real.txt" in block
         assert "grep -qE '^(/usr/lib/|/lib/)' libcap_link.txt" in block
-        assert "xargs dpkg-query -S < libcap_real.txt > libcap_owner.txt" in block
-        assert 'grep -q "^libcap2:" libcap_owner.txt' in block
+        assert "xargs sha256sum < libcap_real.txt > installed_library_raw.txt" in block
+        assert "cmp authorized_library.sha256 installed_library.sha256" in block
+
+
+def test_merged_usr_canonical_path_must_not_be_used_as_a_dpkg_ownership_key(qualification_workflow):
+    """The focused regression: reintroducing the alias-sensitive query fails here.
+
+    Merged-usr makes /lib a filesystem alias of /usr/lib, so readlink -f yields /usr/lib/... while
+    dpkg may key libcap2's files under /lib/... .  Asking dpkg to own a canonicalised path is
+    therefore not a reliable proof, and the repair removed it rather than assuming dpkg reconciles
+    the two.
+    """
+    for job_id in _LIBCAP_JOBS:
+        block = _libcap_bootstrap(qualification_workflow, job_id)
+        assert "dpkg-query -S < libcap_real.txt" not in block, job_id
+        assert "libcap_owner.txt" not in block, job_id
+        # No dpkg query anywhere may be keyed on readlink -f output.
+        for line in block.splitlines():
+            if "dpkg-query -S" in line:
+                assert "libcap_real" not in line, line
+                assert "readlink" not in line, line
+    # And nowhere else in the workflow either.
+    for name, block in _run_blocks(qualification_workflow):
+        assert "dpkg-query -S < libcap_real.txt" not in block, name
 
 
 def test_the_producer_still_records_system_library_evidence():
@@ -2638,9 +2672,9 @@ _PACKAGE_CONTRACT_MUTANTS = (
     ("moving install reintroduced", b"apt-get download ", b"apt-get install -y "),
     # 21/22: the byte check dropped so an unverified artifact could be installed.
     ("byte verification removed", b"sha256sum -c expected.sha256", b"true"),
-    # 17/18: the ownership proofs dropped.
+    # 17/18: the proofs that bind header and library bytes to the verified payload, dropped.
     ("header ownership removed", b'grep -q "^libcap-dev:" header_owner.txt', b"true"),
-    ("library ownership removed", b'grep -q "^libcap2:" libcap_owner.txt', b"true"),
+    ("installed library byte equality removed", b"cmp authorized_library.sha256 installed_library.sha256", b"true"),
 )
 
 
