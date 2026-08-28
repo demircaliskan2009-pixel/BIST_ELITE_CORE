@@ -64,8 +64,29 @@ env:
   S3C_EXPECTED_PHDR_INVENTORY: "PT_LOAD:5:0x1000,PT_LOAD:6:0x1000,PT_GNU_STACK:6:0x10"
 
   # The exact enumerated shell variables any qualification command may reference.  None of them can
-  # name a repository file.  Adding one requires an architecture revision, not a workflow edit.
-  S3C_ALLOWED_SHELL_VARIABLES: "RUNNER_TEMP GITHUB_WORKSPACE GITHUB_ENV GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA EXPECTED_HEAD BLST_COMMIT BLST_REPOSITORY S3C_EXPECTED_PHDR_INVENTORY S3C_CANDIDATE_NAME S3C_WORKER_SHA256 S3C_WORKER_BYTES S3C_DEPENDENCY_DIGEST S3C_POLICY_INTERNAL_ID S3C_POLICY_INTERNAL_SHA256 S3C_POLICY_INTERNAL_COUNT S3C_POLICY_INTERNAL_CBPF S3C_POLICY_OUTER_DIGEST S3C_CASE_SET_DIGEST CANDIDATE_ARTIFACT_ID CANDIDATE_ARTIFACT_DIGEST BLST_SERVER_BEFORE BLST_ASSEMBLY_BEFORE"
+  # name a repository file.  V9 SECTION 28 forbids shell variable references unless they are
+  # "explicitly modelled and literally enumerated", and this list is that enumeration: a command may
+  # reference a variable only if it appears here, and a permanent test rejects any other name.
+  S3C_ALLOWED_SHELL_VARIABLES: "RUNNER_TEMP GITHUB_WORKSPACE GITHUB_ENV GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA EXPECTED_HEAD BLST_COMMIT BLST_REPOSITORY S3C_EXPECTED_PHDR_INVENTORY S3C_CANDIDATE_NAME S3C_WORKER_SHA256 S3C_WORKER_BYTES S3C_DEPENDENCY_DIGEST S3C_POLICY_INTERNAL_ID S3C_POLICY_INTERNAL_SHA256 S3C_POLICY_INTERNAL_COUNT S3C_POLICY_INTERNAL_CBPF S3C_POLICY_OUTER_DIGEST S3C_CASE_SET_DIGEST CANDIDATE_ARTIFACT_ID CANDIDATE_ARTIFACT_DIGEST BLST_SERVER_BEFORE BLST_ASSEMBLY_BEFORE S3C_LIBCAP_ARCH S3C_LIBCAP2_VERSION S3C_LIBCAP2_DEB S3C_LIBCAP2_DEB_SHA256 S3C_LIBCAP_DEV_VERSION S3C_LIBCAP_DEV_DEB S3C_LIBCAP_DEV_DEB_SHA256 S3C_LIBCAP_HEADER_SHA256 S3C_LIBCAP_LIBRARY_SHA256 S3C_LIBCAP_RUNTIME_DIR S3C_LIBCAP_RUNTIME_SONAME S3C_LIBCAP_RUNTIME_REAL S3C_LIBCAP_RUNTIME_TARGET"
+
+  # THE IMMUTABLE LIBCAP CONTRACT.  BUILD_TO_PROVE run 32993250008 proved ubuntu-22.04 does not
+  # ship /usr/include/sys/capability.h, and the launcher genuinely requires it plus -lcap.  Naming
+  # the package was not enough: an apt candidate moves, so the same source SHA could have produced
+  # a different launcher, a different header and a different linked library on two different days,
+  # and the observation job -- which is load-bearing containment code -- resolved its own copy
+  # independently of the build job.
+  #
+  # These seven literals are the ONLY authority for which bytes may be installed.  They are defined
+  # HERE, exactly once, and both s3c-build-candidate and s3c-observe consume the identical step
+  # body, so the two jobs cannot drift apart while the workflow still succeeds.  A superseded
+  # version fails the download outright rather than silently installing its successor.
+  S3C_LIBCAP_ARCH: "amd64"
+  S3C_LIBCAP2_VERSION: "1:2.44-1ubuntu0.22.04.3"
+  S3C_LIBCAP2_DEB: "libcap2_1%3a2.44-1ubuntu0.22.04.3_amd64.deb"
+  S3C_LIBCAP2_DEB_SHA256: "c497efb7fa3cd19a7ff297d95c7c5d678063c80c9fc230c9d034a8ee02ca8446"
+  S3C_LIBCAP_DEV_VERSION: "1:2.44-1ubuntu0.22.04.3"
+  S3C_LIBCAP_DEV_DEB: "libcap-dev_1%3a2.44-1ubuntu0.22.04.3_amd64.deb"
+  S3C_LIBCAP_DEV_DEB_SHA256: "5c733a6f0d9e438763ab123e15b26113efc391ced3a785e20e8723c5b354aefc"
 
   S3C_CANDIDATE_NAME: mt4_s3c_static_worker
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
@@ -160,6 +181,135 @@ jobs:
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "worker-start" --invocation-kind COMPILE -- gcc -c -MD -MF "$RUNNER_TEMP/dep/start.d" -o "$RUNNER_TEMP/obj/start.o" scripts/crypto_core/qualification/s3c/mt4_s3c_static_worker_start.S
           echo "S3C_WORKER_COMPILE=PASS"
 
+      - name: Install the frozen libcap package bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/libcap"
+          cd "$RUNNER_TEMP/libcap"
+
+          # Repository INDEX preparation only.  It never selects the artifact: the exact version
+          # pins below decide that, and a moved candidate fails rather than substituting itself.
+          sudo apt-get update
+          apt-get download "libcap2=$S3C_LIBCAP2_VERSION" "libcap-dev=$S3C_LIBCAP_DEV_VERSION"
+
+          # BYTES BEFORE INSTALL.  Nothing is unpacked until both artifacts match frozen digests.
+          printf '%s  %s\n' "$S3C_LIBCAP2_DEB_SHA256" "$S3C_LIBCAP2_DEB" > expected.sha256
+          printf '%s  %s\n' "$S3C_LIBCAP_DEV_DEB_SHA256" "$S3C_LIBCAP_DEV_DEB" >> expected.sha256
+          sha256sum -c expected.sha256
+
+          # The artifacts must also DECLARE the identity they were pinned as.
+          dpkg-deb -f "$S3C_LIBCAP2_DEB" Package Version Architecture > libcap2_meta.txt
+          grep -qxF "Package: libcap2" libcap2_meta.txt
+          grep -qxF "Version: $S3C_LIBCAP2_VERSION" libcap2_meta.txt
+          grep -qxF "Architecture: $S3C_LIBCAP_ARCH" libcap2_meta.txt
+          dpkg-deb -f "$S3C_LIBCAP_DEV_DEB" Package Version Architecture > libcap_dev_meta.txt
+          grep -qxF "Package: libcap-dev" libcap_dev_meta.txt
+          grep -qxF "Version: $S3C_LIBCAP_DEV_VERSION" libcap_dev_meta.txt
+          grep -qxF "Architecture: $S3C_LIBCAP_ARCH" libcap_dev_meta.txt
+
+          # Install ONLY those verified local bytes.  No archive resolution happens here.
+          sudo dpkg -i "$S3C_LIBCAP2_DEB" "$S3C_LIBCAP_DEV_DEB"
+
+          # What is actually installed is what was pinned.
+          dpkg -s libcap2 > libcap2_installed.txt
+          grep -qxF "Version: $S3C_LIBCAP2_VERSION" libcap2_installed.txt
+          dpkg -s libcap-dev > libcap_dev_installed.txt
+          grep -qxF "Version: $S3C_LIBCAP_DEV_VERSION" libcap_dev_installed.txt
+
+          # HEADER AUTHORITY: the header exists AND belongs to the exact verified libcap-dev.
+          test -f /usr/include/sys/capability.h
+          dpkg-query -S /usr/include/sys/capability.h > header_owner.txt
+          grep -q "^libcap-dev:" header_owner.txt
+
+          # RUNTIME LIBRARY AUTHORITY, proven from package ownership rather than by invoking the
+          # compiler: no bare gcc/objcopy/ld may run outside the build wrapper, and that invariant
+          # is not worth an exception for a query.  The link-time resolution itself is still
+          # exercised by the governed -lcap link command, whose resolver records the resolved path,
+          # soname, digest and provenance as run evidence.
+          dpkg-query -L libcap-dev > libcap_dev_files.txt
+          grep -E '/libcap\.so$' libcap_dev_files.txt > libcap_link.txt
+          grep -qE '^(/usr/lib/|/lib/)' libcap_link.txt
+          xargs readlink -f < libcap_link.txt > libcap_real.txt
+          grep -qE '^(/usr/lib/|/lib/)' libcap_real.txt
+
+          # NOTE: this canonical realpath is NOT asked of dpkg.  Merged-usr aliases /lib to
+          # /usr/lib on the filesystem while dpkg's pathname database can keep the package's own
+          # path family, so a canonicalised path is not a safe ownership key.  Provenance comes
+          # from libcap2's own inventory and payload below; this path is only ever a measured
+          # CONSUMER, compared byte-for-byte against that authority.
+
+          # AUTHORIZED BYTES, taken from the verified artifacts rather than from the filesystem.
+          # dpkg-deb -x unpacks the exact .deb whose SHA256 was checked above, so these digests
+          # descend from the trusted constants and from nothing else.
+          mkdir -p extract_dev extract_lib
+          dpkg-deb -x "$S3C_LIBCAP_DEV_DEB" extract_dev
+          dpkg-deb -x "$S3C_LIBCAP2_DEB" extract_lib
+          sha256sum extract_dev/usr/include/sys/capability.h > authorized_header_raw.txt
+          cut -d " " -f 1 authorized_header_raw.txt > authorized_header.sha256
+
+          # The INSTALLED header must still be those bytes: package ownership alone would not
+          # notice a file rewritten after installation.
+          sha256sum /usr/include/sys/capability.h > installed_header_raw.txt
+          cut -d " " -f 1 installed_header_raw.txt > installed_header.sha256
+          cmp authorized_header.sha256 installed_header.sha256
+
+          # THE RUNTIME LIBRARY AUTHORITY IS THE PACKAGE PAYLOAD, NOT THE INSTALLED REALPATH.
+          #
+          # Ubuntu Jammy is merged-usr: /lib is a compatibility symlink to /usr/lib.  libcap2 ships
+          # its payload under /lib/<multiarch>/ while libcap-dev ships /usr/lib/<multiarch>/libcap.so,
+          # so readlink -f of the installed dev symlink canonicalises to /usr/lib/... .  Treating
+          # that canonical path as a path INSIDE the extracted .deb looks for
+          # extract_lib/usr/lib/... , which the payload does not contain -- and the isolated extract
+          # directory has no /lib -> /usr/lib symlink of its own to paper over the difference.  The
+          # correct payload path comes from libcap2's OWN file list, which records what the package
+          # actually ships.
+          dpkg-query -L libcap2 > libcap2_files.txt
+          grep -E "/libcap\.so\.[0-9]+$" libcap2_files.txt > libcap_soname_payload.txt
+          sed -e "s|^/||" libcap_soname_payload.txt > libcap_soname_relative.txt
+          sed -e "s|^|$RUNNER_TEMP/libcap/extract_lib/|" libcap_soname_relative.txt > libcap_runtime_soname.txt
+          sed -e "s|/[^/]*$||" libcap_runtime_soname.txt > libcap_runtime_dir.txt
+          test -e "$RUNNER_TEMP/libcap/extract_lib"
+
+          # The constructed SONAME path must itself stay under the verified extract root: a payload
+          # entry containing .. would otherwise reach outside it before anything is resolved.
+          read -r S3C_LIBCAP_RUNTIME_SONAME < libcap_runtime_soname.txt
+          case "$S3C_LIBCAP_RUNTIME_SONAME" in
+            "$RUNNER_TEMP/libcap/extract_lib/"*) ;;
+            *) exit 1 ;;
+          esac
+          case "$S3C_LIBCAP_RUNTIME_SONAME" in
+            *..*) exit 1 ;;
+            *) ;;
+          esac
+          test -e "$S3C_LIBCAP_RUNTIME_SONAME"
+          readlink -f "$S3C_LIBCAP_RUNTIME_SONAME" > libcap_runtime_real.txt
+
+          # And its target must resolve INSIDE that root: a symlink pointing back out at the system
+          # copy would defeat the whole point of a private directory.
+          read -r S3C_LIBCAP_RUNTIME_REAL < libcap_runtime_real.txt
+          case "$S3C_LIBCAP_RUNTIME_REAL" in
+            "$RUNNER_TEMP/libcap/extract_lib/"*) ;;
+            *) exit 1 ;;
+          esac
+
+          # THE AUTHORITY.  These bytes come from the exact SHA-verified .deb, reached by the
+          # package's own payload path, inside the verified extract root.  It is not
+          # self-authenticating: every one of those three properties is proven above first.
+          sha256sum "$S3C_LIBCAP_RUNTIME_REAL" > authorized_library_raw.txt
+          cut -d " " -f 1 authorized_library_raw.txt > authorized_library.sha256
+
+          # The INSTALLED object the linker resolves is a measured CONSUMER of that authority.  Its
+          # canonical realpath may legitimately be /usr/lib/... under merged-usr; what must hold is
+          # that its BYTES are the payload bytes.
+          xargs sha256sum < libcap_real.txt > installed_library_raw.txt
+          cut -d " " -f 1 installed_library_raw.txt > installed_library.sha256
+          cmp authorized_library.sha256 installed_library.sha256
+
+          echo "S3C_LIBCAP_DEV_AVAILABLE=PASS"
+          echo "S3C_LIBCAP_AUTHORIZED_BYTES=PASS"
+          echo "S3C_LIBCAP_PRIVATE_RUNTIME=PASS"
+
       # THE COMPILE INVENTORY MUST COVER EVERY LOAD-BEARING NATIVE INPUT (repair 7E).  The observer
       # and the probe are compiled and RUN in the observation job, but their translation units are
       # every bit as load-bearing for the qualification result as the worker's: the observer
@@ -173,10 +323,20 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/depobj"
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "observer-probe" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -Wall -Wextra -Werror -MD -MF "$RUNNER_TEMP/dep/probe.d" -o "$RUNNER_TEMP/depobj/probe.o" scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c
-          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "observer-launcher" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror -MD -MF "$RUNNER_TEMP/dep/launcher.d" -o "$RUNNER_TEMP/depobj/launcher.o" scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "observer-launcher" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -Wall -Wextra -Werror -MD -MF "$RUNNER_TEMP/dep/launcher.d" -o "$RUNNER_TEMP/depobj/launcher.o" scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "observer-policy" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/depobj/policy.o" scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "observer-link" --invocation-kind LINK -- gcc -O2 -o "$RUNNER_TEMP/depobj/mt4_s3c_observer" "$RUNNER_TEMP/depobj/launcher.o" "$RUNNER_TEMP/depobj/policy.o" -lcap
           echo "S3C_OBSERVER_PROBE_DEPENDENCY_EVIDENCE=PASS"
+
+      - name: Prove the dependency-evidence observer consumed the authorized capability bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r S3C_LIBCAP_HEADER_SHA256 < "$RUNNER_TEMP/libcap/authorized_header.sha256"
+          read -r S3C_LIBCAP_LIBRARY_SHA256 < "$RUNNER_TEMP/libcap/authorized_library.sha256"
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --verify-observed-header "$RUNNER_TEMP/dep/launcher.d" --header-path /usr/include/sys/capability.h --expected-sha256 "$S3C_LIBCAP_HEADER_SHA256"
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --verify-system-library cap --compiler gcc --expected-sha256 "$S3C_LIBCAP_LIBRARY_SHA256"
+          echo "S3C_BUILD_ACTUAL_CONSUMPTION=PASS"
 
       # The frozen link policy: static, non-PIE ET_EXEC, no CRT, no dynamic surface, no runtime
       # relocation, no build id, non-executable stack, and a hard failure on any undefined symbol.
@@ -297,18 +457,164 @@ jobs:
           name: mt4-s3c-candidate-linux-x86_64
           path: ${{ runner.temp }}/candidate
 
+      - name: Install the frozen libcap package bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/libcap"
+          cd "$RUNNER_TEMP/libcap"
+
+          # Repository INDEX preparation only.  It never selects the artifact: the exact version
+          # pins below decide that, and a moved candidate fails rather than substituting itself.
+          sudo apt-get update
+          apt-get download "libcap2=$S3C_LIBCAP2_VERSION" "libcap-dev=$S3C_LIBCAP_DEV_VERSION"
+
+          # BYTES BEFORE INSTALL.  Nothing is unpacked until both artifacts match frozen digests.
+          printf '%s  %s\n' "$S3C_LIBCAP2_DEB_SHA256" "$S3C_LIBCAP2_DEB" > expected.sha256
+          printf '%s  %s\n' "$S3C_LIBCAP_DEV_DEB_SHA256" "$S3C_LIBCAP_DEV_DEB" >> expected.sha256
+          sha256sum -c expected.sha256
+
+          # The artifacts must also DECLARE the identity they were pinned as.
+          dpkg-deb -f "$S3C_LIBCAP2_DEB" Package Version Architecture > libcap2_meta.txt
+          grep -qxF "Package: libcap2" libcap2_meta.txt
+          grep -qxF "Version: $S3C_LIBCAP2_VERSION" libcap2_meta.txt
+          grep -qxF "Architecture: $S3C_LIBCAP_ARCH" libcap2_meta.txt
+          dpkg-deb -f "$S3C_LIBCAP_DEV_DEB" Package Version Architecture > libcap_dev_meta.txt
+          grep -qxF "Package: libcap-dev" libcap_dev_meta.txt
+          grep -qxF "Version: $S3C_LIBCAP_DEV_VERSION" libcap_dev_meta.txt
+          grep -qxF "Architecture: $S3C_LIBCAP_ARCH" libcap_dev_meta.txt
+
+          # Install ONLY those verified local bytes.  No archive resolution happens here.
+          sudo dpkg -i "$S3C_LIBCAP2_DEB" "$S3C_LIBCAP_DEV_DEB"
+
+          # What is actually installed is what was pinned.
+          dpkg -s libcap2 > libcap2_installed.txt
+          grep -qxF "Version: $S3C_LIBCAP2_VERSION" libcap2_installed.txt
+          dpkg -s libcap-dev > libcap_dev_installed.txt
+          grep -qxF "Version: $S3C_LIBCAP_DEV_VERSION" libcap_dev_installed.txt
+
+          # HEADER AUTHORITY: the header exists AND belongs to the exact verified libcap-dev.
+          test -f /usr/include/sys/capability.h
+          dpkg-query -S /usr/include/sys/capability.h > header_owner.txt
+          grep -q "^libcap-dev:" header_owner.txt
+
+          # RUNTIME LIBRARY AUTHORITY, proven from package ownership rather than by invoking the
+          # compiler: no bare gcc/objcopy/ld may run outside the build wrapper, and that invariant
+          # is not worth an exception for a query.  The link-time resolution itself is still
+          # exercised by the governed -lcap link command, whose resolver records the resolved path,
+          # soname, digest and provenance as run evidence.
+          dpkg-query -L libcap-dev > libcap_dev_files.txt
+          grep -E '/libcap\.so$' libcap_dev_files.txt > libcap_link.txt
+          grep -qE '^(/usr/lib/|/lib/)' libcap_link.txt
+          xargs readlink -f < libcap_link.txt > libcap_real.txt
+          grep -qE '^(/usr/lib/|/lib/)' libcap_real.txt
+
+          # NOTE: this canonical realpath is NOT asked of dpkg.  Merged-usr aliases /lib to
+          # /usr/lib on the filesystem while dpkg's pathname database can keep the package's own
+          # path family, so a canonicalised path is not a safe ownership key.  Provenance comes
+          # from libcap2's own inventory and payload below; this path is only ever a measured
+          # CONSUMER, compared byte-for-byte against that authority.
+
+          # AUTHORIZED BYTES, taken from the verified artifacts rather than from the filesystem.
+          # dpkg-deb -x unpacks the exact .deb whose SHA256 was checked above, so these digests
+          # descend from the trusted constants and from nothing else.
+          mkdir -p extract_dev extract_lib
+          dpkg-deb -x "$S3C_LIBCAP_DEV_DEB" extract_dev
+          dpkg-deb -x "$S3C_LIBCAP2_DEB" extract_lib
+          sha256sum extract_dev/usr/include/sys/capability.h > authorized_header_raw.txt
+          cut -d " " -f 1 authorized_header_raw.txt > authorized_header.sha256
+
+          # The INSTALLED header must still be those bytes: package ownership alone would not
+          # notice a file rewritten after installation.
+          sha256sum /usr/include/sys/capability.h > installed_header_raw.txt
+          cut -d " " -f 1 installed_header_raw.txt > installed_header.sha256
+          cmp authorized_header.sha256 installed_header.sha256
+
+          # THE RUNTIME LIBRARY AUTHORITY IS THE PACKAGE PAYLOAD, NOT THE INSTALLED REALPATH.
+          #
+          # Ubuntu Jammy is merged-usr: /lib is a compatibility symlink to /usr/lib.  libcap2 ships
+          # its payload under /lib/<multiarch>/ while libcap-dev ships /usr/lib/<multiarch>/libcap.so,
+          # so readlink -f of the installed dev symlink canonicalises to /usr/lib/... .  Treating
+          # that canonical path as a path INSIDE the extracted .deb looks for
+          # extract_lib/usr/lib/... , which the payload does not contain -- and the isolated extract
+          # directory has no /lib -> /usr/lib symlink of its own to paper over the difference.  The
+          # correct payload path comes from libcap2's OWN file list, which records what the package
+          # actually ships.
+          dpkg-query -L libcap2 > libcap2_files.txt
+          grep -E "/libcap\.so\.[0-9]+$" libcap2_files.txt > libcap_soname_payload.txt
+          sed -e "s|^/||" libcap_soname_payload.txt > libcap_soname_relative.txt
+          sed -e "s|^|$RUNNER_TEMP/libcap/extract_lib/|" libcap_soname_relative.txt > libcap_runtime_soname.txt
+          sed -e "s|/[^/]*$||" libcap_runtime_soname.txt > libcap_runtime_dir.txt
+          test -e "$RUNNER_TEMP/libcap/extract_lib"
+
+          # The constructed SONAME path must itself stay under the verified extract root: a payload
+          # entry containing .. would otherwise reach outside it before anything is resolved.
+          read -r S3C_LIBCAP_RUNTIME_SONAME < libcap_runtime_soname.txt
+          case "$S3C_LIBCAP_RUNTIME_SONAME" in
+            "$RUNNER_TEMP/libcap/extract_lib/"*) ;;
+            *) exit 1 ;;
+          esac
+          case "$S3C_LIBCAP_RUNTIME_SONAME" in
+            *..*) exit 1 ;;
+            *) ;;
+          esac
+          test -e "$S3C_LIBCAP_RUNTIME_SONAME"
+          readlink -f "$S3C_LIBCAP_RUNTIME_SONAME" > libcap_runtime_real.txt
+
+          # And its target must resolve INSIDE that root: a symlink pointing back out at the system
+          # copy would defeat the whole point of a private directory.
+          read -r S3C_LIBCAP_RUNTIME_REAL < libcap_runtime_real.txt
+          case "$S3C_LIBCAP_RUNTIME_REAL" in
+            "$RUNNER_TEMP/libcap/extract_lib/"*) ;;
+            *) exit 1 ;;
+          esac
+
+          # THE AUTHORITY.  These bytes come from the exact SHA-verified .deb, reached by the
+          # package's own payload path, inside the verified extract root.  It is not
+          # self-authenticating: every one of those three properties is proven above first.
+          sha256sum "$S3C_LIBCAP_RUNTIME_REAL" > authorized_library_raw.txt
+          cut -d " " -f 1 authorized_library_raw.txt > authorized_library.sha256
+
+          # The INSTALLED object the linker resolves is a measured CONSUMER of that authority.  Its
+          # canonical realpath may legitimately be /usr/lib/... under merged-usr; what must hold is
+          # that its BYTES are the payload bytes.
+          xargs sha256sum < libcap_real.txt > installed_library_raw.txt
+          cut -d " " -f 1 installed_library_raw.txt > installed_library.sha256
+          cmp authorized_library.sha256 installed_library.sha256
+
+          echo "S3C_LIBCAP_DEV_AVAILABLE=PASS"
+          echo "S3C_LIBCAP_AUTHORIZED_BYTES=PASS"
+          echo "S3C_LIBCAP_PRIVATE_RUNTIME=PASS"
+
       - name: Build the canonical policy probe and the trusted observer from reviewed source
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/obj"
+          mkdir -p "$RUNNER_TEMP/dep"
           mkdir -p "$RUNNER_TEMP/observation"
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/observation/mt4_s3c_observe_instances.json" --job-id "s3c-observe" --run-invocation "observe-policy" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/obj/policy.o" scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy.c
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/observation/mt4_s3c_observe_instances.json" --job-id "s3c-observe" --run-invocation "observe-probe" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -Wall -Wextra -Werror -o "$RUNNER_TEMP/obj/probe.o" scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_probe.c
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/observation/mt4_s3c_observe_instances.json" --job-id "s3c-observe" --run-invocation "observe-probe-link" --invocation-kind LINK -- gcc -O2 -o "$RUNNER_TEMP/mt4_s3c_policy_probe" "$RUNNER_TEMP/obj/probe.o" "$RUNNER_TEMP/obj/policy.o"
-          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/observation/mt4_s3c_observe_instances.json" --job-id "s3c-observe" --run-invocation "observe-launcher" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror -o "$RUNNER_TEMP/obj/launcher.o" scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/observation/mt4_s3c_observe_instances.json" --job-id "s3c-observe" --run-invocation "observe-launcher" --invocation-kind COMPILE -- gcc -c -O2 -std=c11 -Wall -Wextra -Werror -MD -MF "$RUNNER_TEMP/dep/observe_launcher.d" -o "$RUNNER_TEMP/obj/launcher.o" scripts/crypto_core/qualification/s3c/mt4_s3c_outer_containment_launcher.c
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/observation/mt4_s3c_observe_instances.json" --job-id "s3c-observe" --run-invocation "observe-observer-link" --invocation-kind LINK -- gcc -O2 -o "$RUNNER_TEMP/mt4_s3c_observer" "$RUNNER_TEMP/obj/launcher.o" "$RUNNER_TEMP/obj/policy.o" -lcap
           echo "S3C_OBSERVER_BUILD=PASS"
+
+      - name: Prove the observer consumed the authorized capability bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r S3C_LIBCAP_HEADER_SHA256 < "$RUNNER_TEMP/libcap/authorized_header.sha256"
+          read -r S3C_LIBCAP_LIBRARY_SHA256 < "$RUNNER_TEMP/libcap/authorized_library.sha256"
+
+          # HEADER: the dependency output the COMPILER emitted for the real observe-launcher
+          # invocation names the header that invocation actually included.
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --verify-observed-header "$RUNNER_TEMP/dep/observe_launcher.d" --header-path /usr/include/sys/capability.h --expected-sha256 "$S3C_LIBCAP_HEADER_SHA256"
+
+          # LIBRARY: the governed resolver asks the governed compiler, under the governed build
+          # environment, which file -lcap selects -- the same question the real link answered.
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --verify-system-library cap --compiler gcc --expected-sha256 "$S3C_LIBCAP_LIBRARY_SHA256"
+          echo "S3C_OBSERVE_ACTUAL_CONSUMPTION=PASS"
 
       - name: Derive the canonical policy record independently of the candidate
         shell: bash
@@ -330,7 +636,33 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/observation"
-          "$RUNNER_TEMP/mt4_s3c_observer" --candidate "$RUNNER_TEMP/candidate/$S3C_CANDIDATE_NAME" --candidate-sha256 "$S3C_WORKER_SHA256" --candidate-size "$S3C_WORKER_BYTES" --case-plan "$RUNNER_TEMP/case_plan.bin" --canonical-internal-policy-id "$S3C_POLICY_INTERNAL_ID" --canonical-internal-policy-sha256 "$S3C_POLICY_INTERNAL_SHA256" --canonical-internal-cbpf-count "$S3C_POLICY_INTERNAL_COUNT" --canonical-internal-cbpf-sha256 "$S3C_POLICY_INTERNAL_CBPF" --outer-containment-policy-digest "$S3C_POLICY_OUTER_DIGEST" --observation-case-set-digest "$S3C_CASE_SET_DIGEST" --source-run-id "$GITHUB_RUN_ID" --source-run-attempt "$GITHUB_RUN_ATTEMPT" --source-head-sha "$GITHUB_SHA" --out "$RUNNER_TEMP/observation/mt4_s3c_raw_observation_record.json"
+
+          read -r S3C_LIBCAP_RUNTIME_DIR < "$RUNNER_TEMP/libcap/libcap_runtime_dir.txt"
+          read -r S3C_LIBCAP_RUNTIME_SONAME < "$RUNNER_TEMP/libcap/libcap_runtime_soname.txt"
+          read -r S3C_LIBCAP_RUNTIME_REAL < "$RUNNER_TEMP/libcap/libcap_runtime_real.txt"
+          read -r S3C_LIBCAP_LIBRARY_SHA256 < "$RUNNER_TEMP/libcap/authorized_library.sha256"
+
+          # RE-PROVED IMMEDIATELY BEFORE EXEC.  The bootstrap proof was minutes and several steps
+          # ago; this one is the last thing that happens before the loader runs.
+          test -d "$S3C_LIBCAP_RUNTIME_DIR"
+          test -e "$S3C_LIBCAP_RUNTIME_SONAME"
+          readlink -f "$S3C_LIBCAP_RUNTIME_SONAME" > "$RUNNER_TEMP/libcap/runtime_now_target.txt"
+          read -r S3C_LIBCAP_RUNTIME_TARGET < "$RUNNER_TEMP/libcap/runtime_now_target.txt"
+          test "$S3C_LIBCAP_RUNTIME_TARGET" = "$S3C_LIBCAP_RUNTIME_REAL"
+          sha256sum "$S3C_LIBCAP_RUNTIME_REAL" > "$RUNNER_TEMP/libcap/runtime_now_raw.txt"
+          cut -d " " -f 1 "$RUNNER_TEMP/libcap/runtime_now_raw.txt" > "$RUNNER_TEMP/libcap/runtime_now.sha256"
+          grep -qxF "$S3C_LIBCAP_LIBRARY_SHA256" "$RUNNER_TEMP/libcap/runtime_now.sha256"
+
+          # The system-wide preload surface is read, never written: a non-empty file would inject an
+          # object ahead of every ordinary dependency, so it fails closed here.
+          test ! -s /etc/ld.so.preload
+
+          # ENVIRONMENT BUILT FROM NOTHING.  env -i discards the entire inherited job environment,
+          # so LD_PRELOAD, LD_AUDIT, LD_LIBRARY_PATH, LD_RUN_PATH and anything else the runner
+          # happened to export cannot reach the observer.  The single LD_LIBRARY_PATH set here is
+          # an explicit RUNTIME authority pointing at the verified private directory; it is not part
+          # of the governed BUILD environment, which still rejects that variable outright.
+          /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C LC_ALL=C LD_LIBRARY_PATH="$S3C_LIBCAP_RUNTIME_DIR" "$RUNNER_TEMP/mt4_s3c_observer" --candidate "$RUNNER_TEMP/candidate/$S3C_CANDIDATE_NAME" --candidate-sha256 "$S3C_WORKER_SHA256" --candidate-size "$S3C_WORKER_BYTES" --case-plan "$RUNNER_TEMP/case_plan.bin" --canonical-internal-policy-id "$S3C_POLICY_INTERNAL_ID" --canonical-internal-policy-sha256 "$S3C_POLICY_INTERNAL_SHA256" --canonical-internal-cbpf-count "$S3C_POLICY_INTERNAL_COUNT" --canonical-internal-cbpf-sha256 "$S3C_POLICY_INTERNAL_CBPF" --outer-containment-policy-digest "$S3C_POLICY_OUTER_DIGEST" --observation-case-set-digest "$S3C_CASE_SET_DIGEST" --source-run-id "$GITHUB_RUN_ID" --source-run-attempt "$GITHUB_RUN_ATTEMPT" --source-head-sha "$GITHUB_SHA" --out "$RUNNER_TEMP/observation/mt4_s3c_raw_observation_record.json"
           echo "S3C_OBSERVATION=PASS"
 
       - name: Upload the raw observation record
