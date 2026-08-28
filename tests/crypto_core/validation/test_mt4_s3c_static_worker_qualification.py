@@ -2407,27 +2407,128 @@ def test_r8_the_system_preload_surface_fails_closed(qualification_workflow):
     assert ">> /etc/ld.so.preload" not in block
 
 
-def test_r4_r6_the_private_runtime_object_cannot_escape_the_verified_extract_root(qualification_workflow):
-    """R4/R6.  A SONAME symlink pointing back at the system copy defeats the private directory."""
+def test_r4_r6_u3_u4_the_private_runtime_object_cannot_escape_the_verified_extract_root(
+    qualification_workflow,
+):
+    """R4/R6 and U3/U4.  Neither the constructed path nor its resolved target may leave the root."""
     for job_id in _LIBCAP_JOBS:
         block = _libcap_bootstrap(qualification_workflow, job_id)
-        assert "xargs readlink -f < libcap_runtime_soname.txt > libcap_runtime_real.txt" in block
-        assert '"$RUNNER_TEMP/libcap/extract_lib/"*) ;;' in block
+        assert 'readlink -f "$S3C_LIBCAP_RUNTIME_SONAME" > libcap_runtime_real.txt' in block
+        # U3: the payload-derived path itself is confined, before anything is resolved.
+        assert block.count('"$RUNNER_TEMP/libcap/extract_lib/"*) ;;') == 2, job_id
+        assert "*..*) exit 1 ;;" in block
+        # U4: and the resolved target is confined too.
+        assert "read -r S3C_LIBCAP_RUNTIME_REAL < libcap_runtime_real.txt" in block
         assert "*) exit 1 ;;" in block
 
 
-def test_r13_the_runtime_expectation_descends_from_the_verified_artifact(qualification_workflow):
-    """R13.  The expected digest must not be produced by hashing the runtime file itself."""
+def test_r13_u8_the_authority_descends_from_the_verified_package_payload(qualification_workflow):
+    """R13/U8.  The expected digest comes from the payload object, reached by the payload path.
+
+    It is not self-authenticating: the object is first proven to sit inside the verified extract
+    root, at the path libcap2's own file list records, having been unpacked from the .deb whose
+    SHA256 the trusted surface pins.
+    """
     for job_id in _LIBCAP_JOBS:
         block = _libcap_bootstrap(qualification_workflow, job_id)
-        # authorized_library.sha256 comes from the unpacked .deb; the private runtime object is
-        # compared AGAINST it.  If the expectation were self-derived this comparison would be
-        # between a file and its own digest and could never fail.
+        assert 'dpkg-deb -x "$S3C_LIBCAP2_DEB" extract_lib' in block
+        # The payload path comes from libcap2's own inventory.
+        assert "dpkg-query -L libcap2 > libcap2_files.txt" in block
+        assert "libcap2_files.txt > libcap_soname_payload.txt" in block
+        # The authority is the payload object's bytes.
+        assert 'sha256sum "$S3C_LIBCAP_RUNTIME_REAL" > authorized_library_raw.txt' in block
         assert 'cut -d " " -f 1 authorized_library_raw.txt > authorized_library.sha256' in block
-        assert "xargs -I {} sha256sum extract_lib/{} < libcap_relative.txt > authorized_library_raw.txt" in block
-        assert "cmp authorized_library.sha256 runtime_private.sha256" in block
+        # U5: the installed link-time object is a CONSUMER measured against that authority.
+        assert "xargs sha256sum < libcap_real.txt > installed_library_raw.txt" in block
+        assert "cmp authorized_library.sha256 installed_library.sha256" in block
     exec_block = _observation_exec(qualification_workflow)
     assert 'read -r S3C_LIBCAP_LIBRARY_SHA256 < "$RUNNER_TEMP/libcap/authorized_library.sha256"' in exec_block
+
+
+def test_u2_u8_no_installed_canonical_path_is_used_as_a_payload_path(qualification_workflow):
+    """U2/U8.  The exact defect: joining an installed realpath onto the extraction root.
+
+    libcap_real.txt holds readlink -f of the INSTALLED libcap-dev symlink, which canonicalises
+    under merged-usr to /usr/lib/... .  Using it as a path inside extract_lib looks for a file the
+    libcap2 payload never contained.
+    """
+    for job_id in _LIBCAP_JOBS:
+        block = _libcap_bootstrap(qualification_workflow, job_id)
+        # The superseded derivation and its intermediate file are gone.
+        assert "libcap_relative.txt" not in block, job_id
+        assert "sha256sum extract_lib/{}" not in block, job_id
+        # libcap_real.txt may only ever be hashed AS AN INSTALLED PATH, never joined to the root.
+        for line in block.splitlines():
+            if "libcap_real.txt" in line:
+                assert "extract_lib/" not in line, line
+
+
+def test_u1_the_payload_and_installed_paths_genuinely_differ_under_merged_usr(tmp_path):
+    """U1.  A real filesystem demonstration that the two path families are not interchangeable.
+
+    Modelled on Jammy: libcap2 ships lib/<multiarch>/, the host canonicalises to /usr/lib/... , and
+    the isolated extraction has no /lib -> /usr/lib symlink to reconcile them.
+    """
+    extract_lib = tmp_path / "extract_lib"
+    payload_dir = extract_lib / "lib" / "x86_64-linux-gnu"
+    payload_dir.mkdir(parents=True)
+    real = payload_dir / "libcap.so.2.44"
+    real.write_bytes(b"libcap payload bytes\n")
+    # The SONAME entry is a symlink on a real runner.  The path-family demonstration below does not
+    # depend on that, so it runs on every host rather than skipping where symlinks need privilege;
+    # the escape case that genuinely requires a symlink is a separate test.
+    soname = payload_dir / "libcap.so.2"
+    try:
+        soname.symlink_to("libcap.so.2.44")
+    except (OSError, NotImplementedError):  # pragma: no cover - unprivileged Windows
+        soname.write_bytes(real.read_bytes())
+
+    # What the host would report for the installed object, canonicalised under merged-usr.
+    installed_canonical = "/usr/lib/x86_64-linux-gnu/libcap.so.2.44"
+    # THE DEFECT: joining that canonical path onto the extraction root finds nothing.
+    broken = extract_lib / installed_canonical.lstrip("/")
+    assert not broken.exists(), broken
+    # THE REPAIR: the payload path from the package's own inventory resolves.
+    payload_entry = "/lib/x86_64-linux-gnu/libcap.so.2"
+    fixed = extract_lib / payload_entry.lstrip("/")
+    assert fixed.exists(), fixed
+    # The authority is the payload object's BYTES, which holds whether the SONAME entry is the
+    # real symlink of a runner or the copy this host falls back to.
+    digest = hashlib.sha256(real.read_bytes()).hexdigest()
+    assert hashlib.sha256(fixed.read_bytes()).hexdigest() == digest
+
+
+def test_u4_a_soname_symlink_escaping_the_extract_root_is_detectable(tmp_path):
+    """U4.  The confinement check has something real to catch."""
+    extract_lib = tmp_path / "extract_lib"
+    payload_dir = extract_lib / "lib" / "x86_64-linux-gnu"
+    payload_dir.mkdir(parents=True)
+    outside = tmp_path / "system" / "libcap.so.2.44"
+    outside.parent.mkdir(parents=True)
+    outside.write_bytes(b"system copy\n")
+    escaping = payload_dir / "libcap.so.2"
+    try:
+        escaping.symlink_to(outside)
+    except (OSError, NotImplementedError):  # pragma: no cover - unprivileged Windows
+        pytest.skip("symlink creation unavailable on this host")
+    resolved = escaping.resolve()
+    # The workflow's confinement test is exactly this prefix relation.
+    assert not str(resolved).startswith(str(extract_lib.resolve())), resolved
+
+
+def test_u6_u7_the_private_runtime_object_is_bound_to_the_authority_twice(qualification_workflow):
+    """U6/U7.  Once where the authority is established, and again immediately before exec."""
+    for job_id in _LIBCAP_JOBS:
+        block = _libcap_bootstrap(qualification_workflow, job_id)
+        # U6: the authority IS the private payload object, so the two cannot disagree by
+        # construction; the installed consumer is what is compared against it.
+        assert 'sha256sum "$S3C_LIBCAP_RUNTIME_REAL" > authorized_library_raw.txt' in block
+        assert "cmp authorized_library.sha256 installed_library.sha256" in block
+    # U7: re-proved at exec time against the same authority file.
+    exec_block = _observation_exec(qualification_workflow)
+    assert 'sha256sum "$S3C_LIBCAP_RUNTIME_REAL"' in exec_block
+    assert 'grep -qxF "$S3C_LIBCAP_LIBRARY_SHA256"' in exec_block
+    assert 'test "$S3C_LIBCAP_RUNTIME_TARGET" = "$S3C_LIBCAP_RUNTIME_REAL"' in exec_block
 
 
 @pytest.mark.parametrize(

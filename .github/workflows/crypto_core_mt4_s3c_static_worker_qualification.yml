@@ -250,39 +250,57 @@ jobs:
           cut -d " " -f 1 installed_header_raw.txt > installed_header.sha256
           cmp authorized_header.sha256 installed_header.sha256
 
-          # Same for the runtime library object the loader will map.  Its path comes from the
-          # package's own file list, so no layout is assumed and nothing is globbed.
-          sed -e "s|^/||" libcap_real.txt > libcap_relative.txt
-          xargs -I {} sha256sum extract_lib/{} < libcap_relative.txt > authorized_library_raw.txt
-          cut -d " " -f 1 authorized_library_raw.txt > authorized_library.sha256
-          xargs sha256sum < libcap_real.txt > installed_library_raw.txt
-          cut -d " " -f 1 installed_library_raw.txt > installed_library.sha256
-          cmp authorized_library.sha256 installed_library.sha256
-
-          # THE PRIVATE RUNTIME OBJECT.  The loader searches for the SONAME entry, not for the
-          # versioned file, so the SONAME-facing path is taken from the package's own file list --
-          # nothing is globbed and no multiarch layout is assumed.
+          # THE RUNTIME LIBRARY AUTHORITY IS THE PACKAGE PAYLOAD, NOT THE INSTALLED REALPATH.
+          #
+          # Ubuntu Jammy is merged-usr: /lib is a compatibility symlink to /usr/lib.  libcap2 ships
+          # its payload under /lib/<multiarch>/ while libcap-dev ships /usr/lib/<multiarch>/libcap.so,
+          # so readlink -f of the installed dev symlink canonicalises to /usr/lib/... .  Treating
+          # that canonical path as a path INSIDE the extracted .deb looks for
+          # extract_lib/usr/lib/... , which the payload does not contain -- and the isolated extract
+          # directory has no /lib -> /usr/lib symlink of its own to paper over the difference.  The
+          # correct payload path comes from libcap2's OWN file list, which records what the package
+          # actually ships.
           dpkg-query -L libcap2 > libcap2_files.txt
-          grep -E "/libcap\.so\.[0-9]+$" libcap2_files.txt > libcap_soname_installed.txt
-          sed -e "s|^/||" libcap_soname_installed.txt > libcap_soname_relative.txt
+          grep -E "/libcap\.so\.[0-9]+$" libcap2_files.txt > libcap_soname_payload.txt
+          sed -e "s|^/||" libcap_soname_payload.txt > libcap_soname_relative.txt
           sed -e "s|^|$RUNNER_TEMP/libcap/extract_lib/|" libcap_soname_relative.txt > libcap_runtime_soname.txt
           sed -e "s|/[^/]*$||" libcap_runtime_soname.txt > libcap_runtime_dir.txt
           test -e "$RUNNER_TEMP/libcap/extract_lib"
-          xargs test -e < libcap_runtime_soname.txt
-          xargs readlink -f < libcap_runtime_soname.txt > libcap_runtime_real.txt
 
-          # The SONAME entry must resolve INSIDE the verified extract root: a symlink pointing back
-          # out at the system copy would defeat the whole point of a private directory.
+          # The constructed SONAME path must itself stay under the verified extract root: a payload
+          # entry containing .. would otherwise reach outside it before anything is resolved.
+          read -r S3C_LIBCAP_RUNTIME_SONAME < libcap_runtime_soname.txt
+          case "$S3C_LIBCAP_RUNTIME_SONAME" in
+            "$RUNNER_TEMP/libcap/extract_lib/"*) ;;
+            *) exit 1 ;;
+          esac
+          case "$S3C_LIBCAP_RUNTIME_SONAME" in
+            *..*) exit 1 ;;
+            *) ;;
+          esac
+          test -e "$S3C_LIBCAP_RUNTIME_SONAME"
+          readlink -f "$S3C_LIBCAP_RUNTIME_SONAME" > libcap_runtime_real.txt
+
+          # And its target must resolve INSIDE that root: a symlink pointing back out at the system
+          # copy would defeat the whole point of a private directory.
           read -r S3C_LIBCAP_RUNTIME_REAL < libcap_runtime_real.txt
           case "$S3C_LIBCAP_RUNTIME_REAL" in
             "$RUNNER_TEMP/libcap/extract_lib/"*) ;;
             *) exit 1 ;;
           esac
 
-          # And those private bytes are the package-derived authority, not a second opinion.
-          sha256sum "$S3C_LIBCAP_RUNTIME_REAL" > runtime_private_raw.txt
-          cut -d " " -f 1 runtime_private_raw.txt > runtime_private.sha256
-          cmp authorized_library.sha256 runtime_private.sha256
+          # THE AUTHORITY.  These bytes come from the exact SHA-verified .deb, reached by the
+          # package's own payload path, inside the verified extract root.  It is not
+          # self-authenticating: every one of those three properties is proven above first.
+          sha256sum "$S3C_LIBCAP_RUNTIME_REAL" > authorized_library_raw.txt
+          cut -d " " -f 1 authorized_library_raw.txt > authorized_library.sha256
+
+          # The INSTALLED object the linker resolves is a measured CONSUMER of that authority.  Its
+          # canonical realpath may legitimately be /usr/lib/... under merged-usr; what must hold is
+          # that its BYTES are the payload bytes.
+          xargs sha256sum < libcap_real.txt > installed_library_raw.txt
+          cut -d " " -f 1 installed_library_raw.txt > installed_library.sha256
+          cmp authorized_library.sha256 installed_library.sha256
 
           echo "S3C_LIBCAP_DEV_AVAILABLE=PASS"
           echo "S3C_LIBCAP_AUTHORIZED_BYTES=PASS"
@@ -504,39 +522,57 @@ jobs:
           cut -d " " -f 1 installed_header_raw.txt > installed_header.sha256
           cmp authorized_header.sha256 installed_header.sha256
 
-          # Same for the runtime library object the loader will map.  Its path comes from the
-          # package's own file list, so no layout is assumed and nothing is globbed.
-          sed -e "s|^/||" libcap_real.txt > libcap_relative.txt
-          xargs -I {} sha256sum extract_lib/{} < libcap_relative.txt > authorized_library_raw.txt
-          cut -d " " -f 1 authorized_library_raw.txt > authorized_library.sha256
-          xargs sha256sum < libcap_real.txt > installed_library_raw.txt
-          cut -d " " -f 1 installed_library_raw.txt > installed_library.sha256
-          cmp authorized_library.sha256 installed_library.sha256
-
-          # THE PRIVATE RUNTIME OBJECT.  The loader searches for the SONAME entry, not for the
-          # versioned file, so the SONAME-facing path is taken from the package's own file list --
-          # nothing is globbed and no multiarch layout is assumed.
+          # THE RUNTIME LIBRARY AUTHORITY IS THE PACKAGE PAYLOAD, NOT THE INSTALLED REALPATH.
+          #
+          # Ubuntu Jammy is merged-usr: /lib is a compatibility symlink to /usr/lib.  libcap2 ships
+          # its payload under /lib/<multiarch>/ while libcap-dev ships /usr/lib/<multiarch>/libcap.so,
+          # so readlink -f of the installed dev symlink canonicalises to /usr/lib/... .  Treating
+          # that canonical path as a path INSIDE the extracted .deb looks for
+          # extract_lib/usr/lib/... , which the payload does not contain -- and the isolated extract
+          # directory has no /lib -> /usr/lib symlink of its own to paper over the difference.  The
+          # correct payload path comes from libcap2's OWN file list, which records what the package
+          # actually ships.
           dpkg-query -L libcap2 > libcap2_files.txt
-          grep -E "/libcap\.so\.[0-9]+$" libcap2_files.txt > libcap_soname_installed.txt
-          sed -e "s|^/||" libcap_soname_installed.txt > libcap_soname_relative.txt
+          grep -E "/libcap\.so\.[0-9]+$" libcap2_files.txt > libcap_soname_payload.txt
+          sed -e "s|^/||" libcap_soname_payload.txt > libcap_soname_relative.txt
           sed -e "s|^|$RUNNER_TEMP/libcap/extract_lib/|" libcap_soname_relative.txt > libcap_runtime_soname.txt
           sed -e "s|/[^/]*$||" libcap_runtime_soname.txt > libcap_runtime_dir.txt
           test -e "$RUNNER_TEMP/libcap/extract_lib"
-          xargs test -e < libcap_runtime_soname.txt
-          xargs readlink -f < libcap_runtime_soname.txt > libcap_runtime_real.txt
 
-          # The SONAME entry must resolve INSIDE the verified extract root: a symlink pointing back
-          # out at the system copy would defeat the whole point of a private directory.
+          # The constructed SONAME path must itself stay under the verified extract root: a payload
+          # entry containing .. would otherwise reach outside it before anything is resolved.
+          read -r S3C_LIBCAP_RUNTIME_SONAME < libcap_runtime_soname.txt
+          case "$S3C_LIBCAP_RUNTIME_SONAME" in
+            "$RUNNER_TEMP/libcap/extract_lib/"*) ;;
+            *) exit 1 ;;
+          esac
+          case "$S3C_LIBCAP_RUNTIME_SONAME" in
+            *..*) exit 1 ;;
+            *) ;;
+          esac
+          test -e "$S3C_LIBCAP_RUNTIME_SONAME"
+          readlink -f "$S3C_LIBCAP_RUNTIME_SONAME" > libcap_runtime_real.txt
+
+          # And its target must resolve INSIDE that root: a symlink pointing back out at the system
+          # copy would defeat the whole point of a private directory.
           read -r S3C_LIBCAP_RUNTIME_REAL < libcap_runtime_real.txt
           case "$S3C_LIBCAP_RUNTIME_REAL" in
             "$RUNNER_TEMP/libcap/extract_lib/"*) ;;
             *) exit 1 ;;
           esac
 
-          # And those private bytes are the package-derived authority, not a second opinion.
-          sha256sum "$S3C_LIBCAP_RUNTIME_REAL" > runtime_private_raw.txt
-          cut -d " " -f 1 runtime_private_raw.txt > runtime_private.sha256
-          cmp authorized_library.sha256 runtime_private.sha256
+          # THE AUTHORITY.  These bytes come from the exact SHA-verified .deb, reached by the
+          # package's own payload path, inside the verified extract root.  It is not
+          # self-authenticating: every one of those three properties is proven above first.
+          sha256sum "$S3C_LIBCAP_RUNTIME_REAL" > authorized_library_raw.txt
+          cut -d " " -f 1 authorized_library_raw.txt > authorized_library.sha256
+
+          # The INSTALLED object the linker resolves is a measured CONSUMER of that authority.  Its
+          # canonical realpath may legitimately be /usr/lib/... under merged-usr; what must hold is
+          # that its BYTES are the payload bytes.
+          xargs sha256sum < libcap_real.txt > installed_library_raw.txt
+          cut -d " " -f 1 installed_library_raw.txt > installed_library.sha256
+          cmp authorized_library.sha256 installed_library.sha256
 
           echo "S3C_LIBCAP_DEV_AVAILABLE=PASS"
           echo "S3C_LIBCAP_AUTHORIZED_BYTES=PASS"
