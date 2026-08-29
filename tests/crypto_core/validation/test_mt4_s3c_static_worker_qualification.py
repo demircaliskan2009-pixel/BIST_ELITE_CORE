@@ -5347,6 +5347,134 @@ def test_the_worker_link_consumes_every_real_object(qualification_workflow):
 
 
 # =================================================================================================
+# BUILD_TO_PROVE RUN 33249869190 REPAIR.  The first governed run to get PAST the observer-launcher
+# compile -- PR #362's launcher repair held under the real toolchain -- failed one step later, at
+# worker-link.  Pinned upstream blst/src/server.c was compiled WITHOUT -fno-stack-protector, so
+# Ubuntu GCC instrumented it and blst_server.o referenced __stack_chk_fail: a libc symbol that
+# cannot exist in a candidate linked -nostdlib -nostartfiles -Wl,-z,defs.  The repair aligns that
+# one upstream C unit with the freestanding posture the repository's own worker C units already
+# carry.  It fixes the INPUT, never the gate that caught it.
+# =================================================================================================
+
+# Every C translation unit whose object is linked into the freestanding candidate.  The two
+# assembly units (worker-start, blst-assembly) are excluded: the stack protector is a C codegen
+# feature and the flag is not meaningful for them.
+_FREESTANDING_LINK_C_COMPILES = (
+    "blst-server",
+    "worker-bootstrap",
+    "worker-policy",
+    "worker-capability",
+    "worker-verify",
+)
+
+
+def _governed_invocation(workflow, invocation_id):
+    """The single governed command line owning one run-invocation identity."""
+    needle = '--run-invocation "' + invocation_id + '"'
+    found = [
+        line.strip()
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        for line in (step.get("run") or "").splitlines()
+        if needle in line
+    ]
+    assert len(found) == 1, (invocation_id, len(found))
+    return found[0]
+
+
+def test_the_blst_server_compile_disables_the_stack_protector(qualification_workflow):
+    """The causal repair: the one upstream C unit in the freestanding link carries the flag."""
+    command = _governed_invocation(qualification_workflow, "blst-server")
+    assert "--invocation-kind COMPILE" in command
+    assert "-fno-stack-protector" in command
+    # Still the same pinned upstream input and the same governed output object.
+    assert command.endswith('"$RUNNER_TEMP/blst/src/server.c"'), command
+    assert '-o "$RUNNER_TEMP/obj/blst_server.o"' in command
+
+
+def test_the_blst_server_compile_keeps_its_pinned_build_orientation(qualification_workflow):
+    """The repair adds ONE flag and changes nothing else about the upstream contract."""
+    command = _governed_invocation(qualification_workflow, "blst-server")
+    for flag in (
+        "-c",
+        "-O2",
+        "-fno-pic",
+        "-fno-builtin",
+        "-fno-asynchronous-unwind-tables",
+        "-fcf-protection=none",
+        "-D__BLST_PORTABLE__",
+        "-D__BLST_NO_CPUID__",
+    ):
+        assert flag in command, flag
+    # Dependency evidence and the three pinned include roots survive unchanged.
+    assert '-MD -MF "$RUNNER_TEMP/dep/blst_server.d"' in command
+    for root in ("src", "build", "bindings"):
+        assert '-I "$RUNNER_TEMP/blst/' + root + '"' in command, root
+    # And the symbol was NOT satisfied by dragging a runtime into the upstream compile instead.
+    for forbidden in ("-lc", "-lssp", "-lgcc", "__stack_chk_fail"):
+        assert forbidden not in command, forbidden
+
+
+def test_every_c_unit_in_the_freestanding_link_disables_the_stack_protector(qualification_workflow):
+    """The invariant behind the repair, not merely the one instance that happened to break.
+
+    A C object entering worker-link may not carry compiler-injected calls into a libc the candidate
+    deliberately does not link.  Stated this way, a future upstream or repository C unit that joins
+    the link without the flag fails here rather than in a governed BUILD_TO_PROVE dispatch.
+    """
+    for invocation in _FREESTANDING_LINK_C_COMPILES:
+        command = _governed_invocation(qualification_workflow, invocation)
+        assert "--invocation-kind COMPILE" in command, invocation
+        assert "-fno-stack-protector" in command, invocation
+
+
+def test_the_worker_link_freestanding_contract_is_not_weakened(qualification_workflow):
+    """The gate that caught the defect stays exactly as strict as it was."""
+    command = _governed_invocation(qualification_workflow, "worker-link")
+    for flag in (
+        "-static",
+        "-no-pie",
+        "-nostdlib",
+        "-nostartfiles",
+        "-Wl,-e,_start",
+        "-Wl,--build-id=none",
+        "-Wl,-z,noexecstack",
+        "-Wl,-z,noseparate-code",
+        "-Wl,-z,max-page-size=0x1000",
+        "-Wl,--no-eh-frame-hdr",
+        "-Wl,-z,defs",
+        "-Wl,--fatal-warnings",
+    ):
+        assert flag in command, flag
+    # None of the forbidden escape hatches were used to make the undefined reference go away.
+    for forbidden in ("-lc", "-lssp", "-lgcc", "--allow-shlib-undefined", "--unresolved-symbols"):
+        assert forbidden not in command, forbidden
+
+
+def test_no_stack_check_stub_was_introduced_anywhere_in_the_slice():
+    """The forbidden alternative repair: SATISFYING __stack_chk_fail instead of not needing it."""
+    sources = sorted(_S3C.glob("*.c")) + sorted(_S3C.glob("*.S")) + sorted(_S3C.glob("*.h"))
+    assert sources, "the slice must have native sources to check"
+    for source in sources:
+        body = _read(source)
+        assert "__stack_chk_fail" not in body, source
+        assert "__stack_chk_guard" not in body, source
+
+
+def test_removing_the_blst_server_stack_protector_flag_fails_the_contract(qualification_workflow):
+    """The mutation.  A predicate that could not fail would prove nothing about the repair."""
+
+    def carries_flag(command):
+        return "-fno-stack-protector" in command
+
+    honest = _governed_invocation(qualification_workflow, "blst-server")
+    assert carries_flag(honest)
+    mutated = honest.replace(" -fno-stack-protector", "", 1)
+    assert mutated != honest, "the mutation must actually change the command"
+    assert not carries_flag(mutated)
+
+
+# =================================================================================================
 # A4 PRODUCER / CONSUMER PARITY (repair 2E).
 #
 # The audited head had a concrete honest-run bug: the trusted consumer required nine policy and
