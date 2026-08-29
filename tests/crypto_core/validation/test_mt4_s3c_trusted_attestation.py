@@ -3106,7 +3106,7 @@ def governed_operations():
 def test_the_governed_workflow_really_reuses_paths_across_jobs():
     """The premise of job-scoped identity, proven against the workflow rather than assumed."""
     operations = governed_operations()
-    assert len(operations) == 22, len(operations)
+    assert len(operations) == 21, len(operations)
     by_path = {}
     for row in operations:
         by_path.setdefault(row["output"], set()).add(row["job_id"])

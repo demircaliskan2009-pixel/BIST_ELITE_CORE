@@ -67,7 +67,7 @@ env:
   # name a repository file.  V9 SECTION 28 forbids shell variable references unless they are
   # "explicitly modelled and literally enumerated", and this list is that enumeration: a command may
   # reference a variable only if it appears here, and a permanent test rejects any other name.
-  S3C_ALLOWED_SHELL_VARIABLES: "RUNNER_TEMP GITHUB_WORKSPACE GITHUB_ENV GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA EXPECTED_HEAD BLST_COMMIT BLST_REPOSITORY S3C_EXPECTED_PHDR_INVENTORY S3C_CANDIDATE_NAME S3C_WORKER_SHA256 S3C_WORKER_BYTES S3C_DEPENDENCY_DIGEST S3C_POLICY_INTERNAL_ID S3C_POLICY_INTERNAL_SHA256 S3C_POLICY_INTERNAL_COUNT S3C_POLICY_INTERNAL_CBPF S3C_POLICY_OUTER_DIGEST S3C_CASE_SET_DIGEST CANDIDATE_ARTIFACT_ID CANDIDATE_ARTIFACT_DIGEST BLST_SERVER_BEFORE BLST_ASSEMBLY_BEFORE S3C_LIBCAP_ARCH S3C_LIBCAP2_VERSION S3C_LIBCAP2_DEB S3C_LIBCAP2_DEB_SHA256 S3C_LIBCAP_DEV_VERSION S3C_LIBCAP_DEV_DEB S3C_LIBCAP_DEV_DEB_SHA256 S3C_LIBCAP_HEADER_SHA256 S3C_LIBCAP_LIBRARY_SHA256 S3C_LIBCAP_RUNTIME_DIR S3C_LIBCAP_RUNTIME_SONAME S3C_LIBCAP_RUNTIME_REAL S3C_LIBCAP_RUNTIME_TARGET"
+  S3C_ALLOWED_SHELL_VARIABLES: "RUNNER_TEMP GITHUB_WORKSPACE GITHUB_ENV GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA EXPECTED_HEAD BLST_COMMIT BLST_REPOSITORY S3C_EXPECTED_PHDR_INVENTORY S3C_CANDIDATE_NAME S3C_WORKER_SHA256 S3C_WORKER_BYTES S3C_DEPENDENCY_DIGEST S3C_POLICY_INTERNAL_ID S3C_POLICY_INTERNAL_SHA256 S3C_POLICY_INTERNAL_COUNT S3C_POLICY_INTERNAL_CBPF S3C_POLICY_OUTER_DIGEST S3C_CASE_SET_DIGEST CANDIDATE_ARTIFACT_ID CANDIDATE_ARTIFACT_DIGEST BLST_ASSEMBLY_BEFORE S3C_LIBCAP_ARCH S3C_LIBCAP2_VERSION S3C_LIBCAP2_DEB S3C_LIBCAP2_DEB_SHA256 S3C_LIBCAP_DEV_VERSION S3C_LIBCAP_DEV_DEB S3C_LIBCAP_DEV_DEB_SHA256 S3C_LIBCAP_HEADER_SHA256 S3C_LIBCAP_LIBRARY_SHA256 S3C_LIBCAP_RUNTIME_DIR S3C_LIBCAP_RUNTIME_SONAME S3C_LIBCAP_RUNTIME_REAL S3C_LIBCAP_RUNTIME_TARGET"
 
   # THE IMMUTABLE LIBCAP CONTRACT.  BUILD_TO_PROVE run 32993250008 proved ubuntu-22.04 does not
   # ship /usr/include/sys/capability.h, and the launcher genuinely requires it plus -lcap.  Naming
@@ -164,10 +164,15 @@ jobs:
           # so it is a governed build operation and goes through the same wrapper as every
           # other one.  --digest-before binds the pre-transform state; the wrapper records the
           # post-transform digest itself, and downstream link edges consume the post state.
-          BLST_SERVER_BEFORE=""
-          sha256sum "$RUNNER_TEMP/obj/blst_server.o" > "$RUNNER_TEMP/dep/blst_server_before.sha"
-          read -r BLST_SERVER_BEFORE _ < "$RUNNER_TEMP/dep/blst_server_before.sha"
-          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "blst-server-strip" --invocation-kind TRANSFORM --digest-before "$BLST_SERVER_BEFORE" -- objcopy --remove-section=.note.gnu.property "$RUNNER_TEMP/obj/blst_server.o"
+          #
+          # ONLY THE ASSEMBLY OBJECT IS STRIPPED.  Governed run 33261309348 proved the server
+          # object carries nothing for this operation to remove: objcopy succeeded and left the
+          # bytes byte-identical, and the graph validator correctly refused the inert TRANSFORM.
+          # A transform node claims a distinct STATE of an artifact, so a no-op is not one -- the
+          # operation was removed rather than excused, and worker-link consumes blst_server.o
+          # directly from blst-server.  Nothing is weakened by this: the final candidate is still
+          # independently required to carry no PT_GNU_PROPERTY segment by the ELF qualifier's
+          # exact program-header inventory, which is a separate authority on the linked artifact.
           BLST_ASSEMBLY_BEFORE=""
           sha256sum "$RUNNER_TEMP/obj/blst_assembly.o" > "$RUNNER_TEMP/dep/blst_assembly_before.sha"
           read -r BLST_ASSEMBLY_BEFORE _ < "$RUNNER_TEMP/dep/blst_assembly_before.sha"

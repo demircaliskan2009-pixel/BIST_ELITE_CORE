@@ -583,9 +583,15 @@ REQUIRED_COMPILE_INSTANCES = (
 )
 REQUIRED_LINK_INSTANCES = ("worker-link", "observer-link")
 
-# Repair 5D: the two objcopy operations REWRITE bytes that are later linked and qualified, so they
-# are governed build operations with their own class rather than invisible side effects.
-REQUIRED_TRANSFORM_INSTANCES = ("blst-assembly-strip", "blst-server-strip")
+# Repair 5D: the objcopy operation REWRITES bytes that are later linked and qualified, so it is a
+# governed build operation with its own class rather than an invisible side effect.
+#
+# There is exactly ONE such operation.  Governed run 33261309348 proved the server-side strip was
+# byte-inert -- objcopy succeeded and changed nothing -- so it was never a state transition and is
+# no longer a graph node.  An inert TRANSFORM remains a hard failure (BUILD_GRAPH_TRANSFORM_INERT);
+# the fix was to stop claiming an operation that does not happen, not to tolerate one that does
+# nothing.
+REQUIRED_TRANSFORM_INSTANCES = ("blst-assembly-strip",)
 
 # Repair 5B: the EXACT objects each real link consumes, derived from the reviewed workflow's actual
 # link commands rather than from a simplified test model.  A link that silently dropped an input
@@ -597,7 +603,8 @@ REQUIRED_LINK_INPUT_PRODUCERS = {
         "worker-verify",
         "worker-policy",
         "worker-capability",
-        "blst-server-strip",
+        # blst_server.o is linked exactly as blst-server compiled it: no transform stands between.
+        "blst-server",
         "blst-assembly-strip",
     ),
     "observer-link": ("observer-launcher", "observer-policy"),
