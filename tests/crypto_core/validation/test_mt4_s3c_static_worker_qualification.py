@@ -5437,6 +5437,11 @@ def test_the_worker_link_freestanding_contract_is_not_weakened(qualification_wor
         "-nostdlib",
         "-nostartfiles",
         "-Wl,-e,_start",
+        "-Wl,--build-id=none",
+        "-Wl,-z,noexecstack",
+        "-Wl,-z,noseparate-code",
+        "-Wl,-z,max-page-size=0x1000",
+        "-Wl,--no-eh-frame-hdr",
         "-Wl,-z,defs",
         "-Wl,--fatal-warnings",
     ):
