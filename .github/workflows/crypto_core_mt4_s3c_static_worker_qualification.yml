@@ -145,13 +145,20 @@ jobs:
       # Both macros are mandatory (V9 SECTION 30 point 1).  __BLST_NO_CPUID__ removes the only
       # upstream definition of __blst_platform_cap while the pinned assembly still reads it, so a
       # missing project definition is a LINK ERROR rather than a silent fallback to runtime CPUID.
+      #
+      # -fno-stack-protector is mandatory for the same reason the repository's own worker C units
+      # carry it: server.c is linked into the freestanding candidate under -nostdlib -nostartfiles
+      # -Wl,-z,defs, where no libc supplies __stack_chk_fail.  Ubuntu GCC enables the protector by
+      # default, so without this flag the upstream object emits calls to a symbol that cannot exist
+      # in this candidate and worker-link fails on undefined references.  The flag removes an
+      # injected libc RUNTIME DEPENDENCY; it changes no blst arithmetic and no pinned identity.
       - name: Build pinned blst without runtime capability discovery
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/obj"
           mkdir -p "$RUNNER_TEMP/dep"
-          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "blst-server" --invocation-kind COMPILE -- gcc -c -O2 -fno-pic -fno-builtin -fno-asynchronous-unwind-tables -fcf-protection=none -D__BLST_PORTABLE__ -D__BLST_NO_CPUID__ -I "$RUNNER_TEMP/blst/src" -I "$RUNNER_TEMP/blst/build" -I "$RUNNER_TEMP/blst/bindings" -MD -MF "$RUNNER_TEMP/dep/blst_server.d" -o "$RUNNER_TEMP/obj/blst_server.o" "$RUNNER_TEMP/blst/src/server.c"
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "blst-server" --invocation-kind COMPILE -- gcc -c -O2 -fno-pic -fno-builtin -fno-stack-protector -fno-asynchronous-unwind-tables -fcf-protection=none -D__BLST_PORTABLE__ -D__BLST_NO_CPUID__ -I "$RUNNER_TEMP/blst/src" -I "$RUNNER_TEMP/blst/build" -I "$RUNNER_TEMP/blst/bindings" -MD -MF "$RUNNER_TEMP/dep/blst_server.d" -o "$RUNNER_TEMP/obj/blst_server.o" "$RUNNER_TEMP/blst/src/server.c"
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --repository-root "$GITHUB_WORKSPACE" --upstream-root "$RUNNER_TEMP/blst" --instance-log "$RUNNER_TEMP/build_instances.json" --job-id "s3c-build-candidate" --run-invocation "blst-assembly" --invocation-kind COMPILE -- gcc -c -O2 -fno-pic -fno-asynchronous-unwind-tables -fcf-protection=none -MD -MF "$RUNNER_TEMP/dep/blst_assembly.d" -o "$RUNNER_TEMP/obj/blst_assembly.o" "$RUNNER_TEMP/blst/build/assembly.S"
           # Repair 5D: objcopy REWRITES the object bytes that are later linked and qualified,
           # so it is a governed build operation and goes through the same wrapper as every
