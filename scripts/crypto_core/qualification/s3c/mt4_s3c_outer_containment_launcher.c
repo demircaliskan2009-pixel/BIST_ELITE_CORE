@@ -241,36 +241,6 @@ typedef enum {
     MT4_S3C_DUMPABILITY_RESTORED
 } mt4_s3c_dumpability_state_t;
 
-/*
- * THE TERMINAL INFRASTRUCTURE FAILURE CHANNEL (repair 2).
- *
- * An infrastructure failure during teardown is NOT a candidate verdict and must never be masked by
- * one.  Three ways that used to happen are closed here:
- *
- *   1. CHILD_REAPED was entered unconditionally after the reap loop, including when the loop broke
- *      on a non-EINTR waitpid failure -- so a child that was never authoritatively reaped looked
- *      reaped, and restoration then ran while it might still exist.
- *   2. A restoration failure only recorded a reason when the case had none.  C25 EXPECTS a timeout,
- *      so its reason was already set and the restoration failure disappeared.
- *   3. The halt flag was only consulted BEFORE the next case, so on the last case there was no next
- *      case to stop and the run completed anyway.
- *
- * The flag below is sticky, is never cleared, and is checked again before ANY final record is
- * written -- so the last case is covered by exactly the same gate as every other one.
- */
-static int mt4_s3c_sequence_halted = 0;
-static mt4_s3c_reason_t mt4_s3c_terminal_reason = MT4_S3C_REASON_NONE;
-static const char *mt4_s3c_terminal_marker = "";
-
-static void mt4_s3c_terminal_failure(mt4_s3c_reason_t reason, const char *marker)
-{
-    mt4_s3c_sequence_halted = 1;
-    if (mt4_s3c_terminal_reason == MT4_S3C_REASON_NONE) {
-        mt4_s3c_terminal_reason = reason;
-        mt4_s3c_terminal_marker = marker;
-    }
-}
-
 /* The bounded EINTR retry budget.  An unbounded retry loop is not a bounded contract. */
 #define MT4_S3C_MAX_REAP_INTERRUPTS 4096
 
@@ -278,20 +248,29 @@ static void mt4_s3c_terminal_failure(mt4_s3c_reason_t reason, const char *marker
  * THE ONE AUTHORITATIVE REAP TRANSITION (repair 3).
  *
  * Reap state was previously encoded in PIECES: some paths that had definitively reaped the child
- * cleared `child` and stopped there, leaving `reaped` false and the lifecycle state behind.  The
- * teardown then saw an unreaped child and declared a terminal infrastructure failure for a case
- * that had in fact completed honestly -- a false accept in the opposite direction.
+ * cleared `child` and stopped there, leaving the lifecycle state behind.  The teardown then saw an
+ * unreaped child and declared a terminal infrastructure failure for a case that had in fact
+ * completed honestly -- a false accept in the opposite direction.
  *
- * There is now exactly ONE way to record a reap, and it records all three facts together.  A path
- * that has not authoritatively reaped the child must not use it; a path that has must use nothing
- * else.  It is a macro rather than a function because the state it owns is per-case local, and
- * splitting it across a pointer-passing helper would reintroduce the possibility of setting one
- * part without the others.
+ * There is now exactly ONE way to record a reap, and it records both facts together: the handle is
+ * cleared, so no later path can signal or wait on a child that is already gone, and the lifecycle
+ * state advances to CHILD_REAPED.  A path that has not authoritatively reaped the child must not
+ * use it; a path that has must use nothing else.  It is a macro rather than a function because the
+ * state it owns is per-case local, and splitting it across a pointer-passing helper would
+ * reintroduce the possibility of setting one part without the other.
+ *
+ * THE LIFECYCLE STATE IS THE REAP RECORD.  An earlier revision also set a separate `reaped` flag,
+ * so the same fact was written in two places and read in neither: every gate below keys on
+ * dumpability_state.  That flag was not a second proof, it was an unread duplicate of the first.
+ * CHILD_REAPED is assigned here and nowhere else, and RESTORED is reachable only out of
+ * CHILD_REAPED in teardown, so dumpability_state in {CHILD_REAPED, RESTORED} already means exactly
+ * "this macro ran".  The duplicate was removed rather than handed an artificial reader: a flag no
+ * gate consults cannot strengthen a gate, and carrying it invited the very split-state bug that
+ * having a single transition exists to prevent.
  */
 #define MT4_S3C_MARK_CHILD_REAPED()                                                                \
     do {                                                                                           \
         child = -1;                                                                                \
-        reaped = 1;                                                                                \
         dumpability_state = MT4_S3C_DUMPABILITY_CHILD_REAPED;                                      \
     } while (0)
 
@@ -482,6 +461,36 @@ static const char *mt4_s3c_reason_name(mt4_s3c_reason_t reason)
         return "CASE_PLAN_MALFORMED";
     default:
         return "QUALIFICATION_INFRASTRUCTURE_FAILURE";
+    }
+}
+
+/*
+ * THE TERMINAL INFRASTRUCTURE FAILURE CHANNEL (repair 2).
+ *
+ * An infrastructure failure during teardown is NOT a candidate verdict and must never be masked by
+ * one.  Three ways that used to happen are closed here:
+ *
+ *   1. CHILD_REAPED was entered unconditionally after the reap loop, including when the loop broke
+ *      on a non-EINTR waitpid failure -- so a child that was never authoritatively reaped looked
+ *      reaped, and restoration then ran while it might still exist.
+ *   2. A restoration failure only recorded a reason when the case had none.  C25 EXPECTS a timeout,
+ *      so its reason was already set and the restoration failure disappeared.
+ *   3. The halt flag was only consulted BEFORE the next case, so on the last case there was no next
+ *      case to stop and the run completed anyway.
+ *
+ * The flag below is sticky, is never cleared, and is checked again before ANY final record is
+ * written -- so the last case is covered by exactly the same gate as every other one.
+ */
+static int mt4_s3c_sequence_halted = 0;
+static mt4_s3c_reason_t mt4_s3c_terminal_reason = MT4_S3C_REASON_NONE;
+static const char *mt4_s3c_terminal_marker = "";
+
+static void mt4_s3c_terminal_failure(mt4_s3c_reason_t reason, const char *marker)
+{
+    mt4_s3c_sequence_halted = 1;
+    if (mt4_s3c_terminal_reason == MT4_S3C_REASON_NONE) {
+        mt4_s3c_terminal_reason = reason;
+        mt4_s3c_terminal_marker = marker;
     }
 }
 
@@ -2100,7 +2109,6 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
     unsigned int namespace_index;
     long clone_result;
     mt4_s3c_dumpability_state_t dumpability_state = MT4_S3C_DUMPABILITY_CASE_START;
-    int reaped = 0;
 
     memset(result, 0, sizeof(*result));
     result->reason = MT4_S3C_REASON_NONE;
@@ -2987,8 +2995,7 @@ int main(int argc, char **argv)
     int output_fd;
 
     if ((argc % 2) != 1) {
-        (void)fprintf(stderr, "MT4_S3C_USAGE=paired --option value arguments only
-");
+        (void)fprintf(stderr, "MT4_S3C_USAGE=paired --option value arguments only\n");
         return MT4_S3C_EXIT_LAUNCHER_FAILED;
     }
 
@@ -3098,8 +3105,7 @@ int main(int argc, char **argv)
         }
         mt4_s3c_emit_case(&plan.cases[index], result, index);
     }
-    mt4_s3c_emit("]}
-");
+    mt4_s3c_emit("]}\n");
 
     if (mt4_s3c_output_overflow) {
         mt4_s3c_fatal(MT4_S3C_REASON_OBSERVATION_EVENT_BUDGET_EXCEEDED, "record_capacity");
@@ -3126,7 +3132,6 @@ int main(int argc, char **argv)
         mt4_s3c_fatal(MT4_S3C_REASON_QUALIFICATION_INFRASTRUCTURE_FAILURE, "write_record");
     }
     (void)close(output_fd);
-    (void)fprintf(stderr, "MT4_S3C_OBSERVATION_RECORD_WRITTEN=%u
-", plan.case_count);
+    (void)fprintf(stderr, "MT4_S3C_OBSERVATION_RECORD_WRITTEN=%u\n", plan.case_count);
     return 0;
 }

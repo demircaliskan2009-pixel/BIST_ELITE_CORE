@@ -32,6 +32,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -2219,6 +2220,232 @@ def _approved_trusted_constant(name):
 
 
 # =================================================================================================
+# BUILD_TO_PROVE RUN 33222072016 REPAIR.  The first governed dispatch on merged main failed in
+# s3c-build-candidate at the observer-launcher dependency-evidence compile, under the workflow's own
+# -Wall -Wextra -Werror contract.  Three independent defect classes caused it; every other error gcc
+# printed cascaded from the second.  Each class is pinned below as a POSITIVE contract on the source
+# -- what it must look like -- never as the absence of some particular compiler message.
+# =================================================================================================
+
+_LAUNCHER_WARNING_CONTRACT = ("-std=c11", "-Wall", "-Wextra", "-Werror")
+
+
+def _strip_c_comments(source):
+    """Comment bodies blanked but NEWLINES PRESERVED, so reported line numbers stay true."""
+    return re.sub(
+        r"/\*.*?\*/",
+        lambda match: re.sub(r"[^\n]", " ", match.group(0)),
+        source,
+        flags=re.DOTALL,
+    )
+
+
+def _unterminated_literal_lines(source):
+    """Lines on which a C string or character literal is still open at end of line.
+
+    That is the exact shape of defect B: an intended escaped newline written as a REAL newline
+    leaves the literal unterminated, and the compiler then misparses everything after it.
+    """
+    backslash = chr(92)
+    index, length, line, state, offenders = 0, len(source), 1, "code", []
+    while index < length:
+        character = source[index]
+        if character == "\n":
+            if state in {"string", "character"}:
+                offenders.append(line)
+                state = "code"
+            elif state == "line":
+                state = "code"
+            line += 1
+            index += 1
+            continue
+        if state == "code":
+            if source.startswith("/*", index):
+                state = "block"
+                index += 2
+                continue
+            if source.startswith("//", index):
+                state = "line"
+                index += 2
+                continue
+            if character == '"':
+                state = "string"
+            elif character == "'":
+                state = "character"
+        elif state == "block":
+            if source.startswith("*/", index):
+                state = "code"
+                index += 2
+                continue
+        elif state in {"string", "character"}:
+            if character == backslash:
+                index += 2
+                continue
+            if (state == "string" and character == '"') or (state == "character" and character == "'"):
+                state = "code"
+        index += 1
+    return offenders
+
+
+def test_defect_a_the_typed_reason_domain_is_declared_before_anything_uses_it():
+    """A translation unit reads top to bottom, so the type must precede every use of it.
+
+    The terminal infrastructure failure channel is written in terms of mt4_s3c_reason_t, so it has
+    to sit BELOW the typed reason domain.  It sat above, and gcc rejected the file at its very first
+    static.  This pins the ordering itself, not the message gcc happened to print.
+    """
+    code = _strip_c_comments(_read(LAUNCHER_SOURCE))
+    typedef = re.search(r"typedef enum \{[^}]*MT4_S3C_REASON_NONE[^}]*\} mt4_s3c_reason_t;", code, flags=re.DOTALL)
+    assert typedef, "the launcher must declare a typed reason domain"
+    uses = [
+        match.start()
+        for match in re.finditer(r"\bmt4_s3c_reason_t\b|\bMT4_S3C_REASON_[A-Z_]+\b", code)
+        if not typedef.start() <= match.start() < typedef.end()
+    ]
+    assert uses, "a reason domain that nothing uses would make this vacuous"
+    assert min(uses) > typedef.end(), (
+        "reason domain used at line "
+        + str(code[: min(uses)].count("\n") + 1)
+        + " but not declared until line "
+        + str(code[: typedef.end()].count("\n") + 1)
+    )
+
+
+def test_defect_a_the_terminal_failure_channel_sits_below_the_type_it_is_written_in():
+    """The specific ordering that broke: every part of the repair-2 channel holds a reason value."""
+    code = _strip_c_comments(_read(LAUNCHER_SOURCE))
+    domain = code.index("} mt4_s3c_reason_t;")
+    for declaration in (
+        "static int mt4_s3c_sequence_halted",
+        "static mt4_s3c_reason_t mt4_s3c_terminal_reason",
+        "static const char *mt4_s3c_terminal_marker",
+        "static void mt4_s3c_terminal_failure(",
+    ):
+        assert code.index(declaration) > domain, declaration
+    # The reap macro is NOT part of that move: it stays with the dumpability enum it advances.
+    assert code.index("MT4_S3C_MARK_CHILD_REAPED()") < domain
+
+
+def test_defect_b_no_launcher_literal_runs_off_the_end_of_its_line():
+    """Every string and character literal terminates on the line that opens it."""
+    assert _unterminated_literal_lines(_read(LAUNCHER_SOURCE)) == []
+
+
+def test_defect_b_the_unterminated_literal_detector_actually_catches_the_defect():
+    """The mutation.  A detector that could not fail would make the test above worthless."""
+    backslash = chr(92)
+    broken = '(void)fprintf(stderr, "MT4_S3C_USAGE=x\n");\n'
+    # Both the opening line and the stray closing line are reported, exactly as gcc reported them.
+    assert _unterminated_literal_lines(broken) == [1, 2]
+    repaired = '(void)fprintf(stderr, "MT4_S3C_USAGE=x' + backslash + 'n");' + chr(10)
+    assert _unterminated_literal_lines(repaired) == []
+
+
+@pytest.mark.parametrize(
+    "literal",
+    [
+        "MT4_S3C_USAGE=paired --option value arguments only",
+        "]}",
+        "MT4_S3C_OBSERVATION_RECORD_WRITTEN=%u",
+    ],
+)
+def test_defect_b_the_three_governed_outputs_keep_their_schema_with_an_escaped_newline(literal):
+    """The repair restored the ESCAPE, not the text: every marker still emits what it always did."""
+    assert '"' + literal + chr(92) + 'n"' in _read(LAUNCHER_SOURCE)
+
+
+def test_defect_c_the_authoritative_reap_transition_writes_only_state_a_gate_reads():
+    """The one reap transition records facts the teardown actually consults.
+
+    A previous revision also set a `reaped` flag that no gate ever read, so the same fact lived in
+    two places and was consulted in one -- the split-state condition the single transition exists to
+    prevent, and what -Werror reported as a set-but-unused variable.  The contract is NOT that no
+    variable may be called reaped; it is that everything this macro writes is load-bearing, which is
+    what makes removing the duplicate correct rather than merely convenient.
+    """
+    code = _strip_c_comments(_read(LAUNCHER_SOURCE))
+    macro = re.search(r"#define MT4_S3C_MARK_CHILD_REAPED\(\)(.*?)while \(0\)", code, flags=re.DOTALL)
+    assert macro, "the single authoritative reap transition must exist"
+    assigned = sorted(set(re.findall(r"(\w+)\s*=(?!=)", macro.group(1))))
+    assert "child" in assigned and "dumpability_state" in assigned, assigned
+    outside = code[: macro.start()] + code[macro.end() :]
+    for name in assigned:
+        reads = [
+            match
+            for match in re.finditer(r"(?<![A-Za-z0-9_])" + name + r"(?![A-Za-z0-9_])", outside)
+            if not re.match(r"\s*=(?!=)", outside[match.end() :])
+        ]
+        assert reads, name + " is written by the reap transition but never read by any gate"
+
+
+def test_defect_c_the_lifecycle_state_is_itself_the_reap_record():
+    """Why dropping the duplicate flag lost no proof: the state already carries the reap fact."""
+    code = _strip_c_comments(_read(LAUNCHER_SOURCE))
+    assignments = re.findall(r"dumpability_state\s*=\s*(MT4_S3C_DUMPABILITY_\w+)", code)
+    # CHILD_REAPED is entered from the single authoritative transition and from nowhere else.
+    assert assignments.count("MT4_S3C_DUMPABILITY_CHILD_REAPED") == 1
+    # RESTORED is entered once, and only inside the branch guarded by CHILD_REAPED -- so
+    # dumpability_state in {CHILD_REAPED, RESTORED} still means precisely that the macro ran.
+    assert assignments.count("MT4_S3C_DUMPABILITY_RESTORED") == 1
+    restore = code.index("dumpability_state = MT4_S3C_DUMPABILITY_RESTORED")
+    guard = code.rindex("dumpability_state == MT4_S3C_DUMPABILITY_CHILD_REAPED", 0, restore)
+    # Restoration is reached only through the reaped guard, never while a child may still be live.
+    assert "mt4_s3c_supervisor_dumpability_restore()" in code[guard:restore]
+
+
+def test_the_local_warning_contract_is_the_governed_one(qualification_workflow):
+    """The compile leg below is only meaningful if it uses the workflow's own flags."""
+    commands = _launcher_compile_commands(qualification_workflow)
+    assert len(commands) == 2, commands
+    for command in commands:
+        for flag in _LAUNCHER_WARNING_CONTRACT:
+            assert flag in command, (flag, command)
+
+
+def test_defect_d_the_launcher_compiles_under_the_governed_warning_contract(tmp_path):
+    """The leg that runs the real compiler -- what would have caught all three classes first.
+
+    Ubuntu CI carries gcc and the launcher Linux and libcap headers, so CI exercises this.  A host
+    without the toolchain or those headers SKIPS: it must never fabricate a pass, and the
+    qualification runner stays the authority either way.
+    """
+    compiler = shutil.which("gcc") or shutil.which("cc")
+    if compiler is None:
+        pytest.skip("no C compiler on this host; the Linux CI leg proves this")
+    prologue = [
+        line
+        for line in _read(LAUNCHER_SOURCE).splitlines()
+        if line.startswith("#include") or line.startswith("#define _GNU_SOURCE")
+    ]
+    probe = tmp_path / "probe.c"
+    probe.write_text(chr(10).join(prologue) + "\nint main(void)\n{\n    return 0;\n}\n", encoding="utf-8")
+    available = subprocess.run(  # noqa: S603 - fixed argument vector, resolved compiler path
+        [compiler, "-c", "-std=c11", "-o", str(tmp_path / "probe.o"), str(probe)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if available.returncode != 0:
+        pytest.skip("the launcher system headers are unavailable on this host")
+    built = subprocess.run(  # noqa: S603 - fixed argument vector, resolved compiler path
+        [
+            compiler,
+            "-c",
+            "-O2",
+            *_LAUNCHER_WARNING_CONTRACT,
+            "-o",
+            str(tmp_path / "launcher.o"),
+            str(LAUNCHER_SOURCE),
+        ],
+        cwd=str(_REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr[-4000:]
+
+
+# =================================================================================================
 # ACTUAL OBSERVATION CONSUMPTION (controller P1, second cycle).
 #
 # The pinned bootstrap proves the authorized bytes are INSTALLED.  These prove the real observation
@@ -3220,8 +3447,8 @@ def test_the_launcher_implements_the_modelled_teardown_guards():
     """The model above is the SOURCE's structure, not a convenient fiction."""
     code = _launcher_code()
     teardown = code[code.index("teardown:") :]
-    # 2A / repair 3: ONE authoritative transition records all three facts together.
-    assert "int reaped = 0;" in code
+    # 2A / repair 3: ONE authoritative transition records both facts together.
+    assert "mt4_s3c_dumpability_state_t dumpability_state = MT4_S3C_DUMPABILITY_CASE_START;" in code
     assert "#define MT4_S3C_MARK_CHILD_REAPED()" in code
     assert "MT4_S3C_MARK_CHILD_REAPED();" in teardown
     # Only EINTR retries, and its budget is bounded.
@@ -3240,23 +3467,25 @@ def test_the_launcher_implements_the_modelled_teardown_guards():
 def test_every_definitive_reap_uses_the_single_authoritative_transition():
     """Repair 3.  Reap state may never be encoded in pieces.
 
-    Three paths used to clear `child` and stop there, leaving `reaped` false and the lifecycle state
-    behind; the teardown then declared a terminal failure for a case that had completed honestly.
-    Every path that has DEFINITIVELY reaped now goes through one macro that sets all three facts.
+    Three paths used to clear `child` and stop there, leaving the lifecycle state behind; the
+    teardown then declared a terminal failure for a case that had completed honestly.  Every path
+    that has DEFINITIVELY reaped now goes through one macro that sets both facts.
+
+    The transition once also set a separate `reaped` flag.  It was removed, not weakened: no gate
+    ever read it, and CHILD_REAPED is reachable only from here, so the lifecycle state already IS
+    the reap record.  What must not regress is the single transition, which is what is pinned here.
     """
     code = _launcher_code()
     run_case = code[code.index("static void mt4_s3c_run_case(") : code.index("static void mt4_s3c_emit_case(")]
 
-    # The macro sets all three facts, in one place.
+    # The macro sets both facts, in one place.
     definition = code[code.index("#define MT4_S3C_MARK_CHILD_REAPED()") :]
     definition = definition[: definition.index("while (0)")]
     assert "child = -1;" in definition
-    assert "reaped = 1;" in definition
     assert "dumpability_state = MT4_S3C_DUMPABILITY_CHILD_REAPED;" in definition
 
-    # No path outside the macro sets any of the three individually.
+    # No path outside the macro sets either of them individually.
     body = run_case.replace("MT4_S3C_MARK_CHILD_REAPED();", "")
-    assert "reaped = 1;" not in body, "a path sets reaped without the authoritative transition"
     assert "dumpability_state = MT4_S3C_DUMPABILITY_CHILD_REAPED;" not in body
 
     # Every definitive reap observation uses it: died-before-trace, stepping exit, stepping signal,
