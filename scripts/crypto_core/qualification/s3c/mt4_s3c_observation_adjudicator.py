@@ -56,8 +56,13 @@ RESULT_CLASS_REQUEST_PROTOCOL_ERROR = 2
 RESULT_CLASS_NONE = 0
 
 VERIFIER_STATUS_CODES = tuple(range(12))
-VERIFIER_STATUS_REACHABLE = (0, 3, 4, 5, 6, 7, 8, 9, 10, 11)
-VERIFIER_STATUS_UNREACHABLE = (1, 2)
+# Statuses 4 (PK_NON_CANONICAL) and 8 (SIG_NON_CANONICAL) remain LEGAL vocabulary but are
+# STRUCTURALLY UNREACHABLE from the pinned worker: pinned blst rejects an X coordinate >= the
+# field modulus inside blst_p2_uncompress / blst_p1_uncompress, so the worker returns
+# PK_BAD_ENCODING / SIG_BAD_ENCODING before it can ever reach its recompress comparison.
+# Derived from pinned blst src/e1.c and src/e2.c, not from observed runtime behaviour.
+VERIFIER_STATUS_REACHABLE = (0, 3, 5, 6, 7, 9, 10, 11)
+VERIFIER_STATUS_UNREACHABLE = (1, 2, 4, 8)
 REQUEST_PROTOCOL_ERROR_CODES = (1, 2, 3, 4, 5, 6)
 
 CANDIDATE_EXIT_CODES = (0, 64, 65)
@@ -101,9 +106,11 @@ def _fail(marker, detail=""):
 # Each rule below is executable.  derive_case_inventory() applies them in order and the result is
 # required to equal FROZEN_CASE_INVENTORY exactly, so the derivation is CHECKED rather than trusted.
 #
-#   DR1  One governed case per REACHABLE VERIFIER_STATUS code (0, 3..11).  The two structurally
-#        unreachable codes, 1 NULL_INPUT and 2 BAD_LENGTH, get NO case and instead get a rejection
-#        rule plus a permanent test.
+#   DR1  Every REACHABLE VERIFIER_STATUS code owns at least one governed case.  The structurally
+#        unreachable codes -- 1 NULL_INPUT, 2 BAD_LENGTH, 4 PK_NON_CANONICAL and 8
+#        SIG_NON_CANONICAL -- get NO case and instead get a rejection rule plus a permanent test.
+#        4 and 8 are unreachable because pinned blst refuses an X coordinate >= the field modulus
+#        during uncompress, so the worker answers BAD_ENCODING before its recompress check runs.
 #   DR1b CONSUMPTION ORTHOGONALITY.  Where one verifier status is reachable through two INDEPENDENT
 #        input-consumption paths, EACH path gets its own governed case, because a single code cannot
 #        prove both.  VERIFY_FAILED (11) is reachable by altering the MESSAGE DIGEST while keeping a
@@ -130,31 +137,35 @@ def _fail(marker, detail=""):
 #        V5 already requires for its winning condition.
 # =================================================================================================
 
-_VERIFIER_CASE_NAMES = {
-    0: "C01_POSITIVE_EXACT_FIXTURE",
-    3: "C03_PK_BAD_ENCODING",
-    4: "C04_PK_NON_CANONICAL",
-    5: "C05_PK_INFINITY",
-    6: "C06_PK_NOT_IN_GROUP",
-    7: "C07_SIG_BAD_ENCODING",
-    8: "C08_SIG_NON_CANONICAL",
-    9: "C09_SIG_INFINITY",
-    10: "C10_SIG_NOT_IN_GROUP",
-    11: "C11_VERIFY_FAILED_WRONG_DIGEST",
-}
+_POSITIVE_CASE_ID = "C01_POSITIVE_EXACT_FIXTURE"
+_POSITIVE_CASE_STIMULUS = "CRYPTO_POSITIVE"
 
-_VERIFIER_CASE_STIMULUS = {
-    0: "CRYPTO_POSITIVE",
-    3: "CRYPTO_NEGATIVE_PUBLIC_KEY",
-    4: "CRYPTO_NEGATIVE_PUBLIC_KEY",
-    5: "CRYPTO_NEGATIVE_PUBLIC_KEY",
-    6: "CRYPTO_NEGATIVE_PUBLIC_KEY",
-    7: "CRYPTO_NEGATIVE_SIGNATURE",
-    8: "CRYPTO_NEGATIVE_SIGNATURE",
-    9: "CRYPTO_NEGATIVE_SIGNATURE",
-    10: "CRYPTO_NEGATIVE_SIGNATURE",
-    11: "CRYPTO_NEGATIVE_VERIFY",
-}
+# DR1/DR1b crypto-negative cases in FROZEN ORDER: (case_id, expected_status, stimulus_class).
+#
+# The list is keyed by CASE, not by status, because a status may be reachable through more than one
+# INDEPENDENT construction and each construction earns its own case (DR1b).  Three statuses are
+# doubled here:
+#
+#   3  PK_BAD_ENCODING  -- a malformed G2 compression flag (C03), and a G2 X coordinate that is
+#                          >= the field modulus (C04).
+#   7  SIG_BAD_ENCODING -- the same two constructions on G1 (C07, C08).
+#   11 VERIFY_FAILED    -- a wrong message digest (C11), and a wrong public key (C12).
+#
+# Statuses 4 and 8 appear NOWHERE in this list.  They are legal vocabulary but structurally
+# unreachable from the pinned worker, so giving them a case would assert a behaviour the pinned
+# implementation cannot produce.  See VERIFIER_STATUS_UNREACHABLE above.
+_CRYPTO_NEGATIVE_CASES = (
+    ("C03_PK_BAD_ENCODING", 3, "CRYPTO_NEGATIVE_PUBLIC_KEY"),
+    ("C04_PK_FIELD_MODULUS_BAD_ENCODING", 3, "CRYPTO_NEGATIVE_PUBLIC_KEY"),
+    ("C05_PK_INFINITY", 5, "CRYPTO_NEGATIVE_PUBLIC_KEY"),
+    ("C06_PK_NOT_IN_GROUP", 6, "CRYPTO_NEGATIVE_PUBLIC_KEY"),
+    ("C07_SIG_BAD_ENCODING", 7, "CRYPTO_NEGATIVE_SIGNATURE"),
+    ("C08_SIG_FIELD_MODULUS_BAD_ENCODING", 7, "CRYPTO_NEGATIVE_SIGNATURE"),
+    ("C09_SIG_INFINITY", 9, "CRYPTO_NEGATIVE_SIGNATURE"),
+    ("C10_SIG_NOT_IN_GROUP", 10, "CRYPTO_NEGATIVE_SIGNATURE"),
+    ("C11_VERIFY_FAILED_WRONG_DIGEST", 11, "CRYPTO_NEGATIVE_VERIFY"),
+    ("C12_VERIFY_FAILED_WRONG_PUBLIC_KEY", 11, "CRYPTO_NEGATIVE_PUBLIC_KEY"),
+)
 
 # DR2 boundary stimuli: (case_id, request-error code).  Codes 5 and 6 each carry the distinct
 # boundary stimuli that the fail-closed enumeration names separately.
@@ -206,8 +217,8 @@ def derive_case_inventory():
     derived.append(
         _case(
             index,
-            _VERIFIER_CASE_NAMES[0],
-            _VERIFIER_CASE_STIMULUS[0],
+            _POSITIVE_CASE_ID,
+            _POSITIVE_CASE_STIMULUS,
             "RT_VERIFIER_STATUS_FRAME",
             RESULT_CLASS_VERIFIER_STATUS,
             0,
@@ -234,15 +245,14 @@ def derive_case_inventory():
     )
     index += 1
 
-    # DR1 continued: one case per remaining reachable verifier status, in ascending code order.
-    for code in VERIFIER_STATUS_REACHABLE:
-        if code == 0:
-            continue
+    # DR1 continued, with DR1b folded in: the frozen crypto-negative case order.  Iterating the CASE
+    # list rather than the status list is what lets one status carry two independent constructions.
+    for case_id, code, stimulus_class in _CRYPTO_NEGATIVE_CASES:
         derived.append(
             _case(
                 index,
-                _VERIFIER_CASE_NAMES[code],
-                _VERIFIER_CASE_STIMULUS[code],
+                case_id,
+                stimulus_class,
                 "RT_VERIFIER_STATUS_FRAME",
                 RESULT_CLASS_VERIFIER_STATUS,
                 code,
@@ -252,22 +262,6 @@ def derive_case_inventory():
             )
         )
         index += 1
-
-    # DR1b: the SECOND orthogonal consumption path for VERIFY_FAILED.
-    derived.append(
-        _case(
-            index,
-            "C12_VERIFY_FAILED_WRONG_PUBLIC_KEY",
-            "CRYPTO_NEGATIVE_PUBLIC_KEY",
-            "RT_VERIFIER_STATUS_FRAME",
-            RESULT_CLASS_VERIFIER_STATUS,
-            11,
-            0,
-            CASE_ORIGIN_V5,
-            STIMULUS_WRITE_ALL_THEN_CLOSE,
-        )
-    )
-    index += 1
 
     # DR2: one case per request-error code plus each distinct boundary stimulus.
     for case_id, code in _REQUEST_CASE_STIMULI:

@@ -101,7 +101,15 @@ int mt4_s3c_verify_quicknet_request(const uint8_t *public_key,
         return MT4_S3C_PK_BAD_ENCODING;
     }
 
-    /* 2. Recompress and byte-compare: proves the caller supplied the canonical wire form. */
+    /* 2. Recompress and byte-compare: proves the caller supplied the canonical wire form.
+     *
+     * STRUCTURALLY UNREACHABLE UNDER PINNED BLST (contract note only -- no behaviour change).
+     * pinned src/e2.c clears the encoding bits and then requires each X component to be strictly
+     * less than the field modulus, returning BLST_BAD_ENCODING otherwise.  Every non-canonical X is
+     * therefore rejected by step 1 above as PK_BAD_ENCODING, and this comparison never observes a
+     * decoded-but-non-canonical key.  MT4_S3C_PK_NON_CANONICAL stays in the legal taxonomy and this
+     * branch stays exactly as written: the ABI is not renumbered, and the check remains correct for
+     * any future library that does decode such a key. */
     blst_p2_affine_compress(public_key_recompressed, &public_key_affine);
     if (memcmp(public_key_recompressed, public_key, MT4_S3C_PUBLIC_KEY_LEN) != 0) {
         return MT4_S3C_PK_NON_CANONICAL;
@@ -138,7 +146,12 @@ int mt4_s3c_verify_quicknet_request(const uint8_t *public_key,
         return MT4_S3C_SIG_BAD_ENCODING;
     }
 
-    /* 6. Recompress and byte-compare. */
+    /* 6. Recompress and byte-compare.
+     *
+     * As with the G2 path above, MT4_S3C_SIG_NON_CANONICAL is structurally unreachable under pinned
+     * blst: src/e1.c requires X < modulus during uncompress, so an out-of-range X is answered as
+     * SIG_BAD_ENCODING before this comparison runs.  The branch and the numeric taxonomy are
+     * deliberately left unchanged. */
     blst_p1_affine_compress(signature_recompressed, &signature_affine);
     if (memcmp(signature_recompressed, signature, MT4_S3C_SIGNATURE_LEN) != 0) {
         return MT4_S3C_SIG_NON_CANONICAL;

@@ -73,8 +73,13 @@ VERIFIER_STATUS_TAXONOMY = (
     (11, "VERIFY_FAILED"),
 )
 VERIFIER_STATUS_CODES = tuple(code for code, _name in VERIFIER_STATUS_TAXONOMY)
-VERIFIER_STATUS_REACHABLE = (0, 3, 4, 5, 6, 7, 8, 9, 10, 11)
-VERIFIER_STATUS_UNREACHABLE = (1, 2)
+# Statuses 4 (PK_NON_CANONICAL) and 8 (SIG_NON_CANONICAL) remain LEGAL vocabulary but are
+# STRUCTURALLY UNREACHABLE from the pinned worker: pinned blst rejects an X coordinate >= the
+# field modulus inside blst_p2_uncompress / blst_p1_uncompress, so the worker returns
+# PK_BAD_ENCODING / SIG_BAD_ENCODING before it can ever reach its recompress comparison.
+# Derived from pinned blst src/e1.c and src/e2.c, not from observed runtime behaviour.
+VERIFIER_STATUS_REACHABLE = (0, 3, 5, 6, 7, 9, 10, 11)
+VERIFIER_STATUS_UNREACHABLE = (1, 2, 4, 8)
 
 # REQUEST_PROTOCOL_ERROR taxonomy (V9 20.5), CLOSED AT SIX.  0 and 7..255 are ILLEGAL.
 REQUEST_PROTOCOL_ERROR_TAXONOMY = (
