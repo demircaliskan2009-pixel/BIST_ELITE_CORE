@@ -4967,12 +4967,12 @@ def test_the_real_build_producer_closes_end_to_end(governed_build_area):
     """wrapper argv -> validation -> record -> log -> reload -> schema -> graph -> manifest."""
     tmp_path = governed_build_area
     log, records = _drive_build_job(tmp_path)
-    assert len(records) == 14, len(records)
+    assert len(records) == 13, len(records)
 
     # RELOAD from the log the wrapper itself wrote, and run the producer's own schema and graph
     # validation over it.  This is the exact step that rejected the producer's honest record.
     instances = build_manifest.load_observed_instances(str(log))
-    assert len(instances) == 14
+    assert len(instances) == 13
 
     system_libraries = [
         {
@@ -4984,7 +4984,7 @@ def test_the_real_build_producer_closes_end_to_end(governed_build_area):
         }
     ]
     payload = build_manifest.compile_instance_preimage(instances, system_libraries)
-    assert payload["instance_count"] == 14
+    assert payload["instance_count"] == 13
     assert len(build_manifest.compile_instance_digest(instances, system_libraries)) == 64
     # Serialization is real: the manifest must canonicalise without loss.
     assert json.loads(build_manifest.canonical_json(payload).decode("utf-8")) == payload
@@ -5070,7 +5070,10 @@ def test_the_transform_hashes_the_file_it_validated(governed_build_area):
     tmp_path = governed_build_area
     _log, records = _drive_build_job(tmp_path)
     transforms = [record for record in records if record["kind"] == "TRANSFORM"]
-    assert len(transforms) == 2
+    # Exactly one: the assembly strip.  The server strip was removed because governed run
+    # 33261309348 proved it changed nothing, and a node that changes nothing is not a state.
+    assert len(transforms) == 1, [record["instance_id"] for record in transforms]
+    assert transforms[0]["instance_id"] == "blst-assembly-strip"
     for record in transforms:
         # The bytes really changed, so PRE and POST are two distinct graph states.
         assert record["digest_before"] != record["digest_after"], record["instance_id"]
@@ -5089,15 +5092,15 @@ def test_a_graph_key_cannot_redirect_filesystem_hashing(governed_build_area):
     tmp_path = governed_build_area
     log = tmp_path / "instances.json"
     upstream = tmp_path / "blst"
-    target = _materialise(tmp_path / "obj" / "blst_server.o", b"original\n")
+    target = _materialise(tmp_path / "obj" / "blst_assembly.o", b"original\n")
     before = hashlib.sha256(target.read_bytes()).hexdigest()
 
     # A same-basename artifact somewhere else.  If identity ever collapsed to a basename, or to a
     # path rebuilt from the graph key, this is the file that would be hashed instead.
-    decoy = _materialise(tmp_path / "decoy" / "blst_server.o", b"decoy\n")
+    decoy = _materialise(tmp_path / "decoy" / "blst_assembly.o", b"decoy\n")
     record = build_manifest.record_invocation(
         str(log),
-        "blst-server-strip",
+        "blst-assembly-strip",
         "TRANSFORM",
         ["objcopy", "--remove-section=.note.gnu.property", str(target)],
         str(_REPO_ROOT),
@@ -5184,9 +5187,11 @@ def test_the_honest_worker_link_closes_through_the_canonical_graph(governed_buil
     assert len(consumed) == 7, consumed
     producers = [produced[identity] for identity in consumed]
     assert set(producers) == set(build_manifest.REQUIRED_LINK_INPUT_PRODUCERS["worker-link"]), producers
-    # The two BLST objects are consumed in their POST-transform state, so the link sees the bytes
-    # objcopy left behind rather than the ones the compile produced.
-    assert "blst-server-strip" in producers
+    # The assembly object is consumed in its POST-transform state, so the link sees the bytes
+    # objcopy left behind rather than the ones the compile produced.  The server object has no
+    # transform between compile and link, so its producer IS the compile.
+    assert "blst-server" in producers
+    assert "blst-server-strip" not in producers
     assert "blst-assembly-strip" in producers
     for identity in consumed:
         assert identity.startswith("s3c-build-candidate:"), identity
@@ -5297,7 +5302,8 @@ def test_the_workflow_routes_every_native_operation_through_the_wrapper(qualific
                         raise AssertionError(("bare native invocation", step.get("name"), stripped))
 
 
-def test_both_objcopy_transformations_are_recorded_as_governed_operations(qualification_workflow):
+def test_the_objcopy_transformation_is_recorded_as_a_governed_operation(qualification_workflow):
+    """The ONE surviving objcopy is governed; the inert one is gone rather than tolerated."""
     recorded = []
     for job in qualification_workflow["jobs"].values():
         for step in job.get("steps", []):
@@ -5305,11 +5311,14 @@ def test_both_objcopy_transformations_are_recorded_as_governed_operations(qualif
             for line in script.splitlines():
                 if "--invocation-kind TRANSFORM" in line:
                     recorded.append(line)
-    assert len(recorded) == 2, recorded
+    assert len(recorded) == 1, recorded
     for line in recorded:
         assert "objcopy" in line
         # The pre-transform state is bound; the wrapper records the post state itself.
         assert "--digest-before" in line
+        # It is the assembly object: the server strip was byte-inert and is no longer claimed.
+        assert "blst_assembly.o" in line, line
+        assert "blst_server.o" not in line, line
 
 
 def test_the_governed_operation_counts_match_the_real_workflow(qualification_workflow):
@@ -5323,8 +5332,8 @@ def test_the_governed_operation_counts_match_the_real_workflow(qualification_wor
                         kinds[kind] += 1
     assert kinds["COMPILE"] == 15, kinds
     assert kinds["LINK"] == 5, kinds
-    assert kinds["TRANSFORM"] == 2, kinds
-    assert sum(kinds.values()) == 22, kinds
+    assert kinds["TRANSFORM"] == 1, kinds
+    assert sum(kinds.values()) == 21, kinds
 
 
 def test_the_worker_link_consumes_every_real_object(qualification_workflow):
@@ -5338,11 +5347,12 @@ def test_the_worker_link_consumes_every_real_object(qualification_workflow):
     assert line, "the worker link command must exist"
     assert line.count(".o") >= 7, line
     assert len(build_manifest.REQUIRED_LINK_INPUT_PRODUCERS["worker-link"]) == 7
-    # The two blst objects are consumed in their POST-transform identity.
+    # The assembly object is consumed in its POST-transform identity; the server object, having no
+    # transform at all, is consumed directly from its compile.
     producers = build_manifest.REQUIRED_LINK_INPUT_PRODUCERS["worker-link"]
-    assert "blst-server-strip" in producers
     assert "blst-assembly-strip" in producers
-    assert "blst-server" not in producers
+    assert "blst-server" in producers
+    assert "blst-server-strip" not in producers
     assert "blst-assembly" not in producers
 
 
@@ -5472,6 +5482,127 @@ def test_removing_the_blst_server_stack_protector_flag_fails_the_contract(qualif
     mutated = honest.replace(" -fno-stack-protector", "", 1)
     assert mutated != honest, "the mutation must actually change the command"
     assert not carries_flag(mutated)
+
+
+# =================================================================================================
+# BUILD_TO_PROVE RUN 33261309348 REPAIR.  The first governed run to get PAST worker-link -- PR #363's
+# stack-protector repair held -- failed at build-manifest emission with
+# BUILD_GRAPH_TRANSFORM_INERT: blst-server-strip.  objcopy --remove-section=.note.gnu.property
+# succeeded on blst_server.o and left the bytes byte-identical, so a graph node claiming a distinct
+# post-transform STATE was claiming something that never happened.  The no-op was removed from the
+# graph.  The inert check itself is untouched: it was right, and these tests keep it load-bearing.
+# =================================================================================================
+
+
+def test_the_required_transform_inventory_is_exactly_the_one_real_transform():
+    """The producer and the trusted gate must agree on the ONE operation that truly rewrites bytes."""
+    assert build_manifest.REQUIRED_TRANSFORM_INSTANCES == ("blst-assembly-strip",)
+    gate_transforms = _literal_tuple(_read(TRUSTED_GATE), "REQUIRED_TRANSFORM_INSTANCES")
+    assert tuple(gate_transforms) == ("blst-assembly-strip",)
+
+
+def test_the_worker_link_takes_the_server_object_straight_from_its_compile():
+    """No transform stands between blst-server and the link, so the compile IS the producer."""
+    for producers in (
+        build_manifest.REQUIRED_LINK_INPUT_PRODUCERS["worker-link"],
+        dict(_literal_dict_link_producers())["worker-link"],
+    ):
+        assert "blst-server" in producers
+        assert "blst-server-strip" not in producers
+        # The assembly object still arrives in its POST-transform state.
+        assert "blst-assembly-strip" in producers
+        assert "blst-assembly" not in producers
+
+
+def _literal_dict_link_producers():
+    """The trusted gate's mirrored producer map, read from source rather than imported."""
+    source = _read(TRUSTED_GATE)
+    start = source.index("REQUIRED_LINK_INPUT_PRODUCERS = {")
+    end = source.index("\n}\n", start) + 3
+    namespace = {}
+    exec(compile(source[start:end], "<gate>", "exec"), namespace)  # noqa: S102 - literal dict only
+    return namespace["REQUIRED_LINK_INPUT_PRODUCERS"].items()
+
+
+def test_no_surface_still_demands_the_byte_inert_server_strip():
+    """The mutation: reintroducing the no-op as mandatory has to fail somewhere, on every surface."""
+    workflow = _read(QUALIFICATION_WORKFLOW)
+    assert '--run-invocation "blst-server-strip"' not in workflow
+    # Its pre-digest machinery is gone too, including from the enumerated shell-variable contract.
+    assert "BLST_SERVER_BEFORE" not in workflow
+    assert "blst_server_before.sha" not in workflow
+    for source in (_read(_S3C / "mt4_s3c_build_manifest.py"), _read(TRUSTED_GATE)):
+        assert "blst-server-strip" not in source
+    # The assembly strip's own machinery is untouched.
+    assert "BLST_ASSEMBLY_BEFORE" in workflow
+    assert '--run-invocation "blst-assembly-strip"' in workflow
+
+
+def test_the_run_33261309348_failure_shape_is_still_refused(governed_build_area):
+    """The honest-run defect as a permanent offline regression.
+
+    A governed TRANSFORM whose command SUCCEEDS but leaves the target bytes unchanged is exactly
+    what run 33261309348 recorded.  The validator refused it then and must refuse it now: removing
+    the inert operation from the graph fixed the graph, it did not soften this gate.
+    """
+    tmp_path = governed_build_area
+    _log, records = _drive_build_job(tmp_path)
+    transforms = [record for record in records if record["kind"] == "TRANSFORM"]
+    assert transforms, "there must be a real transform to mutate"
+
+    inert = json.loads(json.dumps(records))
+    for record in inert:
+        if record["kind"] == "TRANSFORM":
+            # The command succeeded; the bytes simply did not move.
+            record["digest_after"] = record["digest_before"]
+    with pytest.raises(build_manifest.BuildManifestError) as error:
+        build_manifest.validate_build_graph(inert)
+    assert "BUILD_GRAPH_TRANSFORM_INERT" in str(error.value)
+
+    # And the honest records still pass, so the test above is not merely rejecting everything.
+    build_manifest.validate_build_graph(records)
+
+
+def test_the_governed_operation_total_follows_the_real_graph(qualification_workflow):
+    """21 operations, not 22: the count tracks what the workflow actually runs."""
+    kinds = {"COMPILE": 0, "LINK": 0, "TRANSFORM": 0}
+    for job in qualification_workflow["jobs"].values():
+        for step in job.get("steps", []):
+            for line in (step.get("run") or "").splitlines():
+                for kind in kinds:
+                    if "--invocation-kind " + kind in line:
+                        kinds[kind] += 1
+    assert kinds == {"COMPILE": 15, "LINK": 5, "TRANSFORM": 1}, kinds
+    gate = _read(TRUSTED_GATE)
+    assert "EXPECTED_TRANSFORM_INSTANCE_COUNT = 1" in gate
+    assert "EXPECTED_COMPILE_INSTANCE_COUNT = 15" in gate
+    assert "EXPECTED_LINK_INSTANCE_COUNT = 5" in gate
+
+
+def test_the_prior_runtime_proven_repairs_remain_pinned(qualification_workflow):
+    """PR #362 and PR #363 are runtime-proven; this repair must not have disturbed either."""
+    server = _governed_invocation(qualification_workflow, "blst-server")
+    assert "-fno-stack-protector" in server
+    assert "-D__BLST_PORTABLE__" in server and "-D__BLST_NO_CPUID__" in server
+    assert server.endswith('"$RUNNER_TEMP/blst/src/server.c"'), server
+    link = _governed_invocation(qualification_workflow, "worker-link")
+    for flag in (
+        "-static",
+        "-no-pie",
+        "-nostdlib",
+        "-nostartfiles",
+        "-Wl,-e,_start",
+        "-Wl,--build-id=none",
+        "-Wl,-z,noexecstack",
+        "-Wl,-z,noseparate-code",
+        "-Wl,-z,max-page-size=0x1000",
+        "-Wl,--no-eh-frame-hdr",
+        "-Wl,-z,defs",
+        "-Wl,--fatal-warnings",
+    ):
+        assert flag in link, flag
+    # The link still consumes the same seven objects.
+    assert link.count(".o") >= 7, link
 
 
 # =================================================================================================

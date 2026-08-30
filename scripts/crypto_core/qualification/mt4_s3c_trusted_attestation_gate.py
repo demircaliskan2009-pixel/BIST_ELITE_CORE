@@ -489,16 +489,15 @@ REQUIRED_LINK_INSTANCES = (
     "observer-link",
     "worker-link",
 )
-# Repair 5D: the two objcopy operations REWRITE the object bytes that are later linked and
-# qualified.  A graph that called itself complete while omitting a step that changes the artifact
-# was describing an intention, not the build.
-REQUIRED_TRANSFORM_INSTANCES = (
-    "blst-assembly-strip",
-    "blst-server-strip",
-)
+# Repair 5D: the objcopy operation REWRITES the object bytes that are later linked and qualified.
+# A graph that called itself complete while omitting a step that changes the artifact was describing
+# an intention, not the build -- and the converse is equally untrue: governed run 33261309348 proved
+# the server-side strip changed nothing, so claiming it was describing an intention too.  Exactly
+# one transform survives, and an inert TRANSFORM is still refused.
+REQUIRED_TRANSFORM_INSTANCES = ("blst-assembly-strip",)
 EXPECTED_COMPILE_INSTANCE_COUNT = 15
 EXPECTED_LINK_INSTANCE_COUNT = 5
-EXPECTED_TRANSFORM_INSTANCE_COUNT = 2
+EXPECTED_TRANSFORM_INSTANCE_COUNT = 1
 EXPECTED_BUILD_OPERATION_COUNT = (
     EXPECTED_COMPILE_INSTANCE_COUNT + EXPECTED_LINK_INSTANCE_COUNT + EXPECTED_TRANSFORM_INSTANCE_COUNT
 )
@@ -514,7 +513,8 @@ REQUIRED_LINK_INPUT_PRODUCERS = {
         "worker-verify",
         "worker-policy",
         "worker-capability",
-        "blst-server-strip",
+        # blst_server.o is linked exactly as blst-server compiled it: no transform stands between.
+        "blst-server",
         "blst-assembly-strip",
     ),
     "observer-link": ("observer-launcher", "observer-policy"),
@@ -530,7 +530,6 @@ BUILD_JOB_INSTANCES = (
     "blst-assembly",
     "blst-assembly-strip",
     "blst-server",
-    "blst-server-strip",
     "observer-launcher",
     "observer-link",
     "observer-policy",
