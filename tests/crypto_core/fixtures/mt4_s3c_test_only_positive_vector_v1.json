@@ -1,11 +1,10 @@
 {
   "schema": "mt4-s3c-test-only-vector.v1",
   "vector_authority": "PROJECT_GENERATED_DETERMINISTIC_TEST_VECTOR",
-  "fixture_material_state": "PENDING_OFFLINE_GENERATION",
-  "generator_source_sha256": "",
-  "generator_binary_sha256": "",
+  "fixture_material_state": "GENERATED_OFFLINE_ONE_TIME",
+  "generator_source_sha256": "9e01c4ae960305d22dd9a764fe76bc47be9bc85f2143a724971e518bb99218ef",
+  "generator_binary_sha256": "2808a1af432f5ba6f5280eb1ef822a5dc497d58844aa769538af6bf2ec05940d",
   "generation_mode": "OFFLINE_ONE_TIME_OUTSIDE_THE_QUALIFICATION_RUN",
-  "generator_path": "scripts/crypto_core/qualification/s3c/mt4_s3c_test_only_vector_generator.c",
   "wire": {
     "request_frame_bytes": 184,
     "response_frame_bytes": 8
@@ -18,7 +17,7 @@
       "expected_result_class": 1,
       "expected_result_code": 0,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb96a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
       "case_id": "C02_DETERMINISM_EXACT_REPEAT",
@@ -27,7 +26,7 @@
       "expected_result_class": 1,
       "expected_result_code": 0,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb96a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
       "case_id": "C03_PK_BAD_ENCODING",
@@ -36,16 +35,16 @@
       "expected_result_class": 1,
       "expected_result_code": 3,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345701010000197d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb96a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
-      "case_id": "C04_PK_NON_CANONICAL",
+      "case_id": "C04_PK_FIELD_MODULUS_BAD_ENCODING",
       "construction_intent": "G2_X_COORDINATE_GREATER_OR_EQUAL_FIELD_MODULUS",
       "stimulus_kind": 0,
       "expected_result_class": 1,
-      "expected_result_code": 4,
+      "expected_result_code": 3,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d543457010100009a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaab00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000096a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
       "case_id": "C05_PK_INFINITY",
@@ -54,7 +53,7 @@
       "expected_result_class": 1,
       "expected_result_code": 5,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345701010000c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000096a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
       "case_id": "C06_PK_NOT_IN_GROUP",
@@ -63,7 +62,7 @@
       "expected_result_class": 1,
       "expected_result_code": 6,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d5434570101000080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000296a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
       "case_id": "C07_SIG_BAD_ENCODING",
@@ -72,16 +71,16 @@
       "expected_result_class": 1,
       "expected_result_code": 7,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb16a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
-      "case_id": "C08_SIG_NON_CANONICAL",
+      "case_id": "C08_SIG_FIELD_MODULUS_BAD_ENCODING",
       "construction_intent": "G1_X_COORDINATE_GREATER_OR_EQUAL_FIELD_MODULUS",
       "stimulus_kind": 0,
       "expected_result_class": 1,
-      "expected_result_code": 8,
+      "expected_result_code": 7,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb9a0111ea397fe69a4b1ba7b6434bacd764774b84f38512bf6730d2a0f6b0f6241eabfffeb153ffffb9feffffffffaaabcd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
       "case_id": "C09_SIG_INFINITY",
@@ -90,7 +89,7 @@
       "expected_result_class": 1,
       "expected_result_code": 9,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fbc00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
       "case_id": "C10_SIG_NOT_IN_GROUP",
@@ -99,7 +98,7 @@
       "expected_result_class": 1,
       "expected_result_code": 10,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
       "case_id": "C11_VERIFY_FAILED_WRONG_DIGEST",
@@ -108,7 +107,7 @@
       "expected_result_class": 1,
       "expected_result_code": 11,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb96a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd04a4754498e06db5a13c5f371f1f04ff6d2470f24aa9bd886540e5dce77f70"
     },
     {
       "case_id": "C12_VERIFY_FAILED_WRONG_PUBLIC_KEY",
@@ -117,7 +116,7 @@
       "expected_result_class": 1,
       "expected_result_code": 11,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345701010000874f3d129b3797f2c6c1c108304f18cfd56c78ed549a37c46b084b2ca101802c28f4ddf57aa7d0688171c35a0b50d806029c369e01a824ca8683c7a37d69c435b4f1a6f605928b9835e731a7a55524fd68bf8742c59ca5d0e1517caab07ea34f96a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
       "case_id": "C13_WRONG_MAGIC",
@@ -126,7 +125,7 @@
       "expected_result_class": 2,
       "expected_result_code": 1,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "0054345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb96a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
       "case_id": "C14_WRONG_VERSION",
@@ -135,7 +134,7 @@
       "expected_result_class": 2,
       "expected_result_code": 2,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345702010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb96a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
       "case_id": "C15_WRONG_OPCODE",
@@ -144,7 +143,7 @@
       "expected_result_class": 2,
       "expected_result_code": 3,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345701020000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb96a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
       "case_id": "C16_RESERVED_NONZERO",
@@ -153,7 +152,7 @@
       "expected_result_class": 2,
       "expected_result_code": 4,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345701010100997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb96a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
       "case_id": "C17_SHORT_FRAME_EOF_EMPTY",
@@ -171,7 +170,7 @@
       "expected_result_class": 2,
       "expected_result_code": 5,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d543457010100"
     },
     {
       "case_id": "C19_SHORT_FRAME_EOF_ONE_SHORT",
@@ -180,7 +179,7 @@
       "expected_result_class": 2,
       "expected_result_code": 5,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb96a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a"
     },
     {
       "case_id": "C20_TRAILING_INPUT_ONE_BYTE",
@@ -189,7 +188,7 @@
       "expected_result_class": 2,
       "expected_result_code": 6,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb96a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a5000"
     },
     {
       "case_id": "C21_TRAILING_INPUT_SECOND_FRAME",
@@ -198,7 +197,7 @@
       "expected_result_class": 2,
       "expected_result_code": 6,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "4d54345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb96a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a504d54345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb96a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a50"
     },
     {
       "case_id": "C22_ORDER_TRAILING_BEFORE_MAGIC",
@@ -207,7 +206,7 @@
       "expected_result_class": 2,
       "expected_result_code": 6,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "0054345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb96a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a5000"
     },
     {
       "case_id": "C23_ORDER_SHORT_BEFORE_MAGIC",
@@ -216,7 +215,7 @@
       "expected_result_class": 2,
       "expected_result_code": 5,
       "expected_exit_status": 0,
-      "input_hex": ""
+      "input_hex": "0054345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535312b32fb96a3802024bbecd7ecd81c823409ab9662272ab5282dca0249d61ef21cd37580df35fc4530a4a50013c87ba187066e99cd2662154e6d76b2b2b92e70c0cac3ccf534f9b74eb5b89819ec509083d00a"
     },
     {
       "case_id": "C24_CRASH_MID_REQUEST",
@@ -225,7 +224,7 @@
       "expected_result_class": 0,
       "expected_result_code": -1,
       "expected_exit_status": -1,
-      "input_hex": ""
+      "input_hex": "4d54345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535"
     },
     {
       "case_id": "C25_TIMEOUT_WRITER_WITHHOLDS",
@@ -234,7 +233,7 @@
       "expected_result_class": 0,
       "expected_result_code": -1,
       "expected_exit_status": -1,
-      "input_hex": ""
+      "input_hex": "4d54345701010000997d1665c570d8576d54cc20cdb98e023824ee4897b0b4d7a5918d7ac935ddbb49988051089e2ba948f01c74d38fa2a4093fbaa5dcf474bcbda068cab6110d448fd8000c99e60466c5b389bef435ad13b973c7176d04e28968bfc535"
     }
   ],
   "non_claims": {

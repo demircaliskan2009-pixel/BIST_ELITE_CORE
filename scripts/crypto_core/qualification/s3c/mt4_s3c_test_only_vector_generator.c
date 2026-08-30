@@ -283,7 +283,8 @@ int main(int argc, char **argv)
         memcpy(noncanonical, MT4_S3C_FIELD_MODULUS, sizeof(MT4_S3C_FIELD_MODULUS));
         noncanonical[0] = (byte)(noncanonical[0] | 0x80u);
         build_frame(frame, noncanonical, signature, signed_digest);
-        set_case(3, "C04_PK_NON_CANONICAL", "G2_X_COORDINATE_GREATER_OR_EQUAL_FIELD_MODULUS", 0, 1, 4, 0, frame,
+        set_case(3, "C04_PK_FIELD_MODULUS_BAD_ENCODING", "G2_X_COORDINATE_GREATER_OR_EQUAL_FIELD_MODULUS", 0,
+                 1, 3, 0, frame,
                  MT4_S3C_REQUEST_FRAME_BYTES);
     }
 
@@ -326,7 +327,8 @@ int main(int argc, char **argv)
         memcpy(noncanonical, MT4_S3C_FIELD_MODULUS, sizeof(MT4_S3C_FIELD_MODULUS));
         noncanonical[0] = (byte)(noncanonical[0] | 0x80u);
         build_frame(frame, public_key, noncanonical, signed_digest);
-        set_case(7, "C08_SIG_NON_CANONICAL", "G1_X_COORDINATE_GREATER_OR_EQUAL_FIELD_MODULUS", 0, 1, 8, 0, frame,
+        set_case(7, "C08_SIG_FIELD_MODULUS_BAD_ENCODING", "G1_X_COORDINATE_GREATER_OR_EQUAL_FIELD_MODULUS", 0,
+                 1, 7, 0, frame,
                  MT4_S3C_REQUEST_FRAME_BYTES);
     }
     {

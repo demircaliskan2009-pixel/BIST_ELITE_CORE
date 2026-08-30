@@ -887,28 +887,55 @@ def test_pt_430_the_fixture_is_never_labelled_official_normative_or_quicknet(fix
     assert "FX-DRAND-QUICKNET" not in raw
 
 
-def test_the_fixture_material_gate_fails_closed_until_the_offline_generator_has_run(fixture_payload):
-    """The committed fixture carries no vector material yet, and that is a FAIL-CLOSED state.
+def test_the_committed_fixture_is_generated_and_accepted(fixture_payload):
+    """The governed offline generator has now run, and the committed fixture is its exact output.
 
-    Producing the material requires running the governed offline generator on Linux against PINNED
-    blst, because the exact status that library returns for each frozen construction is a property
-    of the library and V9 21.9 forbids guessing it.  Until that has happened the fixture stays in
-    PENDING_OFFLINE_GENERATION, and this test proves the state is ALWAYS rejected before any case
-    material is read.  There is no mode in which a pending fixture yields a qualification result.
+    The material was produced on Linux against PINNED blst, because the exact status that library
+    returns for each frozen construction is a property of the library and V9 21.9 forbids guessing
+    it.  The expectations were frozen from pinned SOURCE first; the generator then acted as an
+    independent verifier and would have refused to emit anything on disagreement.
     """
+    assert fixture_payload["fixture_material_state"] == protocol_qualifier.FIXTURE_STATE_GENERATED
     assert fixture_payload["fixture_material_state"] in protocol_qualifier.FIXTURE_STATES
+    assert fixture_payload["vector_authority"] == "PROJECT_GENERATED_DETERMINISTIC_TEST_VECTOR"
+    assert fixture_payload["generation_mode"] == "OFFLINE_ONE_TIME_OUTSIDE_THE_QUALIFICATION_RUN"
+    # Accepted by the gate, and a real case plan comes out the far side.
+    protocol_qualifier.require_generated_fixture(fixture_payload)
+    plan = protocol_qualifier.build_case_plan(FIXTURE.read_bytes(), fixture_payload)
+    assert plan is not None
+    # Deterministic: the same fixture bytes yield the same plan.
+    assert protocol_qualifier.build_case_plan(FIXTURE.read_bytes(), fixture_payload) == plan
+
+
+def test_the_committed_fixture_carries_exact_generator_provenance(fixture_payload):
+    """Both provenance digests are present, well formed, and the source digest is the exact one."""
+    source = fixture_payload["generator_source_sha256"]
+    binary = fixture_payload["generator_binary_sha256"]
+    assert source == "9e01c4ae960305d22dd9a764fe76bc47be9bc85f2143a724971e518bb99218ef"
+    assert re.fullmatch(r"[0-9a-f]{64}", source), source
+    assert re.fullmatch(r"[0-9a-f]{64}", binary), binary
+    # The recorded source digest is the digest of the generator source actually committed here.
+    _mode, body = _staged_bytes("scripts/crypto_core/qualification/s3c/mt4_s3c_test_only_vector_generator.c")
+    assert hashlib.sha256(body).hexdigest() == source
+
+
+def test_reverting_the_fixture_to_pending_still_fails_closed(fixture_payload):
+    """The gate that blocked the whole slice until generation happened is still armed."""
+    reverted = json.loads(json.dumps(fixture_payload))
+    reverted["fixture_material_state"] = "PENDING_OFFLINE_GENERATION"
     with pytest.raises(protocol_qualifier.ProtocolQualificationError) as error:
-        protocol_qualifier.require_generated_fixture(fixture_payload)
+        protocol_qualifier.require_generated_fixture(reverted)
     assert "FIXTURE_MATERIAL_NOT_GENERATED" in str(error.value)
-    with pytest.raises(protocol_qualifier.ProtocolQualificationError):
-        protocol_qualifier.build_case_plan(FIXTURE.read_bytes(), fixture_payload)
 
 
-def test_a_generated_fixture_without_generator_provenance_is_rejected(fixture_payload):
-    claimed = dict(fixture_payload)
-    claimed["fixture_material_state"] = protocol_qualifier.FIXTURE_STATE_GENERATED
-    with pytest.raises(protocol_qualifier.ProtocolQualificationError):
-        protocol_qualifier.require_generated_fixture(claimed)
+@pytest.mark.parametrize("field", ["generator_source_sha256", "generator_binary_sha256"])
+def test_a_generated_fixture_without_generator_provenance_is_rejected(fixture_payload, field):
+    """Claiming GENERATED while dropping either provenance digest is refused."""
+    for bad in ("", "not-hex", "AB" * 32):
+        claimed = json.loads(json.dumps(fixture_payload))
+        claimed[field] = bad
+        with pytest.raises(protocol_qualifier.ProtocolQualificationError):
+            protocol_qualifier.require_generated_fixture(claimed)
 
 
 def test_pt_428_editing_a_fixture_expected_code_is_rejected(fixture_payload):
@@ -926,10 +953,10 @@ def test_pt_429_a_relabelled_construction_intent_is_rejected(fixture_payload):
 
 
 def locally_generated_fixture(fixture_payload):
-    """A TEST-LOCAL fixture in the GENERATED state, so producers downstream of the gate can run.
+    """A TEST-LOCAL synthetic fixture. NOT EVIDENCE -- it exists only to drive downstream pure logic.
 
-    The COMMITTED fixture is PENDING_OFFLINE_GENERATION and must stay that way: its material has to
-    be produced offline and one-time by the governed generator against pinned blst, which cannot
+    The committed fixture is the real generated authority; this helper must never be mistaken for
+    it.  Historically the committed fixture was PENDING and its material had to
     happen here and is never faked.  This copy exists only so the tests can drive the producers that
     sit AFTER that gate; it is never qualification evidence, and the committed fixture's fail-closed
     behaviour is proven separately.
@@ -5796,3 +5823,161 @@ def test_the_unverifiable_sandbox_aggregate_left_the_trust_chain():
     # The independent authority that replaces it is present.
     assert "def stage_c_canonical_outer_policy(" in gate_source
     assert "def stage_c_canonical_internal_policy(" in gate_source
+
+
+# =================================================================================================
+# OPTION B: STATUSES 4 AND 8 ARE LEGAL BUT STRUCTURALLY UNREACHABLE.
+#
+# Governed generation against pinned blst refused to emit a fixture while C04 expected 4: pinned
+# src/e2.c rejects a G2 X coordinate >= the field modulus inside blst_p2_uncompress, so the worker
+# answers PK_BAD_ENCODING (3) and never reaches its recompress comparison.  src/e1.c does the same
+# for G1, making SIG_NON_CANONICAL (8) unreachable too.  The expectations were corrected from pinned
+# SOURCE and frozen BEFORE the generator was re-run, so the fixture is not a record of whatever the
+# library happened to do.
+# =================================================================================================
+
+_REACHABLE = (0, 3, 5, 6, 7, 9, 10, 11)
+_UNREACHABLE = (1, 2, 4, 8)
+
+
+def test_the_legal_verifier_taxonomy_is_still_exactly_zero_through_eleven():
+    """Option B narrows REACHABILITY only.  The legal ABI vocabulary is untouched."""
+    assert tuple(code for code, _name in protocol_qualifier.VERIFIER_STATUS_TAXONOMY) == tuple(range(12))
+    names = dict(protocol_qualifier.VERIFIER_STATUS_TAXONOMY)
+    # 4 and 8 keep their names and their places: they are unreachable, not deleted.
+    assert names[4] == "PK_NON_CANONICAL"
+    assert names[8] == "SIG_NON_CANONICAL"
+
+
+def test_every_surface_agrees_on_the_reachable_and_unreachable_status_sets():
+    """The producer, the parser and the adjudicator must not drift apart on reachability."""
+    for module in (protocol_qualifier, observation_parser, adjudicator):
+        assert module.VERIFIER_STATUS_REACHABLE == _REACHABLE, module.__name__
+        assert module.VERIFIER_STATUS_UNREACHABLE == _UNREACHABLE, module.__name__
+        # A status is exactly one of the two.
+        assert not set(module.VERIFIER_STATUS_REACHABLE) & set(module.VERIFIER_STATUS_UNREACHABLE)
+        assert set(module.VERIFIER_STATUS_REACHABLE) | set(module.VERIFIER_STATUS_UNREACHABLE) == set(range(12))
+
+
+def test_no_governed_case_expects_a_structurally_unreachable_status():
+    """The whole point: nothing may assert a result the pinned worker cannot produce."""
+    for case_id, result_class, code, _exit, _stimulus in protocol_qualifier.GOVERNED_CASES:
+        if result_class == 1:
+            assert code not in _UNREACHABLE, (case_id, code)
+    for case in adjudicator.FROZEN_CASE_INVENTORY:
+        if case["expected_result_class"] == 1:
+            assert case["expected_result_code"] not in _UNREACHABLE, case["case_id"]
+
+
+def test_every_reachable_status_still_owns_at_least_one_case():
+    """Narrowing reachability must not silently drop coverage of a status that IS reachable."""
+    covered = {
+        case["expected_result_code"] for case in adjudicator.FROZEN_CASE_INVENTORY if case["expected_result_class"] == 1
+    }
+    assert covered == set(_REACHABLE), covered
+
+
+def test_c04_and_c08_are_field_modulus_bad_encoding_cases():
+    """The two repaired cases keep their constructions and take the statuses pinned blst returns."""
+    cases = {case_id: (klass, code) for case_id, klass, code, _e, _s in protocol_qualifier.GOVERNED_CASES}
+    assert cases["C04_PK_FIELD_MODULUS_BAD_ENCODING"] == (1, 3)
+    assert cases["C08_SIG_FIELD_MODULUS_BAD_ENCODING"] == (1, 7)
+    intents = protocol_qualifier.CONSTRUCTION_INTENT
+    assert intents["C04_PK_FIELD_MODULUS_BAD_ENCODING"] == "G2_X_COORDINATE_GREATER_OR_EQUAL_FIELD_MODULUS"
+    assert intents["C08_SIG_FIELD_MODULUS_BAD_ENCODING"] == "G1_X_COORDINATE_GREATER_OR_EQUAL_FIELD_MODULUS"
+    # The misleading identities are gone everywhere.
+    assert "C04_PK_NON_CANONICAL" not in cases
+    assert "C08_SIG_NON_CANONICAL" not in cases
+
+
+def test_the_case_count_and_order_survived_the_repair():
+    """25 cases, same positions: C04 and C08 were corrected, not removed or reordered."""
+    assert protocol_qualifier.EXACT_CASE_COUNT == 25
+    assert len(adjudicator.FROZEN_CASE_INVENTORY) == 25
+    ids = [case["case_id"] for case in adjudicator.FROZEN_CASE_INVENTORY]
+    assert ids[3] == "C04_PK_FIELD_MODULUS_BAD_ENCODING"
+    assert ids[7] == "C08_SIG_FIELD_MODULUS_BAD_ENCODING"
+    assert [case_id for case_id, *_rest in protocol_qualifier.GOVERNED_CASES] == ids
+
+
+def test_a_status_may_carry_two_independent_constructions():
+    """DR1b generalised: 3, 7 and 11 each earn two cases because two constructions reach them."""
+    codes = [
+        case["expected_result_code"] for case in adjudicator.FROZEN_CASE_INVENTORY if case["expected_result_class"] == 1
+    ]
+    for doubled in (3, 7, 11):
+        assert codes.count(doubled) == 2, (doubled, codes)
+
+
+def test_the_trusted_gate_mirrors_the_repaired_case_identities():
+    """The trust boundary must not keep the old, false expectations."""
+    gate = _read(TRUSTED_GATE)
+    assert "C04_PK_FIELD_MODULUS_BAD_ENCODING" in gate
+    assert "C08_SIG_FIELD_MODULUS_BAD_ENCODING" in gate
+    assert "C04_PK_NON_CANONICAL" not in gate
+    assert "C08_SIG_NON_CANONICAL" not in gate
+    # And its frozen case-set digest equals what the adjudicator actually derives.
+    expected = re.search(r'EXPECTED_CASE_SET_DIGEST = "([0-9a-f]{64})"', gate).group(1)
+    assert adjudicator.observation_case_set_digest() == expected
+
+
+def test_the_worker_verify_taxonomy_and_branch_order_are_unchanged():
+    """Option B changed no worker behaviour: the ABI and the decode-before-recompress order stand."""
+    source = _read(_S3C / "mt4_s3c_static_worker_verify.c")
+    for code, name in protocol_qualifier.VERIFIER_STATUS_TAXONOMY:
+        assert "#define MT4_S3C_" + name + " " + str(code) in source, name
+    # Decode failure is still answered BEFORE the recompress comparison, on both curves.
+    code_only = re.sub(r"/\*.*?\*/", " ", source, flags=re.DOTALL)
+    assert code_only.index("MT4_S3C_PK_BAD_ENCODING") < code_only.index("MT4_S3C_PK_NON_CANONICAL")
+    assert code_only.index("MT4_S3C_SIG_BAD_ENCODING") < code_only.index("MT4_S3C_SIG_NON_CANONICAL")
+    # The unreachable branches are retained, not deleted.
+    assert "return MT4_S3C_PK_NON_CANONICAL;" in code_only
+    assert "return MT4_S3C_SIG_NON_CANONICAL;" in code_only
+
+
+def test_a_legal_but_unreachable_status_cannot_become_accepted_evidence():
+    """A worker answering 1, 2, 4 or 8 is a contract break, never a crypto result."""
+    source = _read(_S3C / "mt4_s3c_observation_parser.py")
+    assert "VERIFIER_STATUS_LEGAL_BUT_UNREACHABLE" in source
+    for code in _UNREACHABLE:
+        assert code in observation_parser.VERIFIER_STATUS_UNREACHABLE
+
+
+@pytest.mark.parametrize(
+    ("case_id", "restored_code"),
+    [("C04_PK_FIELD_MODULUS_BAD_ENCODING", 4), ("C08_SIG_FIELD_MODULUS_BAD_ENCODING", 8)],
+)
+def test_restoring_the_false_expectation_is_rejected(fixture_payload, case_id, restored_code):
+    """The mutation this whole repair exists to forbid: asserting an unreachable status again."""
+    tampered = json.loads(json.dumps(fixture_payload))
+    for case in tampered["cases"]:
+        if case["case_id"] == case_id:
+            case["expected_result_code"] = restored_code
+    with pytest.raises(protocol_qualifier.ProtocolQualificationError):
+        protocol_qualifier.validate_fixture(tampered)
+
+
+def test_marking_four_or_eight_reachable_again_contradicts_the_case_set():
+    """If 4/8 were reachable, DR1 coverage would demand cases for them -- and there are none."""
+    covered = {
+        case["expected_result_code"] for case in adjudicator.FROZEN_CASE_INVENTORY if case["expected_result_class"] == 1
+    }
+    for code in (4, 8):
+        assert code not in covered
+        assert set(_REACHABLE) | {code} != covered
+
+
+def test_the_committed_fixture_is_test_only_and_claims_nothing():
+    """TEST-ONLY authority and every non-claim stay false after generation."""
+    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    assert payload["vector_authority"] == "PROJECT_GENERATED_DETERMINISTIC_TEST_VECTOR"
+    assert payload["non_claims"], "there must be non-claims to assert"
+    for name, value in payload["non_claims"].items():
+        assert value is False, name
+    assert len(payload["cases"]) == 25
+    # C01 and C02 are the byte-identical determinism pair.
+    assert payload["cases"][0]["input_hex"] == payload["cases"][1]["input_hex"]
+    assert payload["cases"][0]["input_hex"]
+    for case in payload["cases"]:
+        if case["input_hex"]:
+            assert re.fullmatch(r"(?:[0-9a-f]{2})+", case["input_hex"]), case["case_id"]
