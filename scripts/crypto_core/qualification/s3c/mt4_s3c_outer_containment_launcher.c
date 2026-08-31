@@ -1146,45 +1146,32 @@ static int mt4_s3c_read_namespace_identity(const char *path, mt4_s3c_namespace_i
  * SYSCALL WRAPPERS THE SUPERVISOR AND LAUNCHER NEED.
  * ============================================================================================ */
 
-static long mt4_s3c_sys_clone3(struct clone_args *arguments, size_t size)
-{
-    return syscall(__NR_clone3, arguments, size);
-}
-
-static int mt4_s3c_sys_pivot_root(const char *new_root, const char *put_old)
-{
-    return (int)syscall(__NR_pivot_root, new_root, put_old);
-}
-
-static int mt4_s3c_sys_seccomp(unsigned int operation, unsigned int flags, const void *arguments)
-{
-    return (int)syscall(__NR_seccomp, operation, flags, arguments);
-}
-
-static int mt4_s3c_sys_pidfd_send_signal(int pidfd, int signal_number)
-{
-    return (int)syscall(__NR_pidfd_send_signal, pidfd, signal_number, NULL, 0u);
-}
-
-static int mt4_s3c_sys_close_range(unsigned int first, unsigned int last, unsigned int flags)
-{
-    return (int)syscall(__NR_close_range, first, last, flags);
-}
-
 /*
- * POST-FILTER SYSCALLS ARE PROJECT-OWNED (repair 5D).
+ * THE ONE PROJECT-OWNED SYSCALL MECHANISM (repair 5D, extended by the run 33436944985 repair).
  *
- * WHY A LIBC WRAPPER IS NOT ACCEPTABLE HERE.  The outer filter this launcher installs on itself
- * classifies ALL SIX seccomp_data argument words for every permitted syscall, and requires the
- * unused tail to be exactly zero (UNUSED_ARGUMENT_WORDS_MUST_BE_ZERO).  A libc execve sets only the
- * three registers it needs; %r10, %r8 and %r9 keep whatever the caller left in them.  The filter
- * sees a nonzero tail and kills the process -- and the failure would look like a candidate defect
- * rather than a launcher one.  The two syscalls issued AFTER the filter is installed therefore go
- * through a project-owned wrapper that loads all six argument registers explicitly, zeroing the
- * tail, exactly as the freestanding worker's own wrapper does.
+ * WHY A LIBC WRAPPER IS NOT ACCEPTABLE FOR THE CALLS BELOW THAT USE THIS.  Two independent
+ * contracts require a CANONICAL SIX-REGISTER image, while the kernel itself consumes fewer:
  *
- * This wrapper is used ONLY after the outer filter exists.  Everything before that point is
- * unconstrained by the filter and continues to use ordinary libc calls.
+ *   1. THE OUTER FILTER.  It classifies ALL SIX seccomp_data argument words for every permitted
+ *      syscall and requires the unused tail to be exactly zero
+ *      (UNUSED_ARGUMENT_WORDS_MUST_BE_ZERO).  This governs the syscalls issued AFTER the filter is
+ *      installed -- execve and exit_group.
+ *
+ *   2. THE TRUSTED OBSERVER, at the seccomp syscall-ENTRY stop (V9 13.4, LEG L1).  It reads the
+ *      register file directly and requires rdi == SECCOMP_SET_MODE_FILTER, rsi == 0 and
+ *      r10 == r8 == r9 == 0.  This governs the seccomp INSTALLATION ITSELF, which happens BEFORE
+ *      any filter exists.  Predating the filter is therefore NOT a licence to leave the tail
+ *      dirty: the observer is already tracing, and a non-canonical tail fails the case closed as
+ *      OUTER_FILTER_EQUIVALENCE_FAILED / seccomp_register_leg.
+ *
+ * glibc's variadic syscall() supplies only the argument registers it is handed.  On x86-64 it
+ * unconditionally shifts r8 -> r10, r9 -> r8 and 8(%rsp) -> r9, so a three-argument call leaves
+ * caller residue in exactly the three words both contracts require to be zero.  Governed run
+ * 33436944985 observed precisely that: r10 = 0xFFFFFFFF, r8 = 1, r9 = 0.
+ *
+ * Every call that either contract governs therefore goes through THIS single wrapper, which loads
+ * all six argument registers explicitly, exactly as the freestanding worker's own wrapper does.
+ * Calls governed by neither contract keep using ordinary libc.
  */
 static inline long mt4_s3c_syscall6(long number, long a0, long a1, long a2, long a3, long a4, long a5)
 {
@@ -1198,6 +1185,36 @@ static inline long mt4_s3c_syscall6(long number, long a0, long a1, long a2, long
                      : "a"(number), "D"(a0), "S"(a1), "d"(a2), "r"(r10), "r"(r8), "r"(r9)
                      : "rcx", "r11", "memory");
     return result;
+}
+
+static long mt4_s3c_sys_clone3(struct clone_args *arguments, size_t size)
+{
+    return syscall(__NR_clone3, arguments, size);
+}
+
+static int mt4_s3c_sys_pivot_root(const char *new_root, const char *put_old)
+{
+    return (int)syscall(__NR_pivot_root, new_root, put_old);
+}
+
+/*
+ * The outer filter installation, emitted with an explicitly zeroed argument tail so the observer's
+ * register leg sees the canonical image.  The kernel reads only operation, flags and args; the
+ * trusted observer reads all six words.
+ */
+static int mt4_s3c_sys_seccomp(unsigned int operation, unsigned int flags, const void *arguments)
+{
+    return (int)mt4_s3c_syscall6(__NR_seccomp, (long)operation, (long)flags, (long)arguments, 0, 0, 0);
+}
+
+static int mt4_s3c_sys_pidfd_send_signal(int pidfd, int signal_number)
+{
+    return (int)syscall(__NR_pidfd_send_signal, pidfd, signal_number, NULL, 0u);
+}
+
+static int mt4_s3c_sys_close_range(unsigned int first, unsigned int last, unsigned int flags)
+{
+    return (int)syscall(__NR_close_range, first, last, flags);
 }
 
 /* execve with an explicitly zeroed argument tail.  Returns only on failure, exactly like execve. */
