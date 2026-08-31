@@ -1594,21 +1594,18 @@ static int mt4_s3c_prove_read_only_root(void)
 
 static int mt4_s3c_drop_all_capabilities(void)
 {
-    cap_t empty = cap_init();
+    cap_t empty;
     int index;
 
-    if (empty == NULL) {
-        return -1;
-    }
-    if (cap_set_proc(empty) != 0) {
-        (void)cap_free(empty);
-        return -1;
-    }
-    (void)cap_free(empty);
     /*
-     * Clear the ambient set and drop every capability from the bounding set.  CAP_LAST_CAP is read
-     * from the running kernel through the library rather than assumed, so the loop covers every
-     * capability the kernel reports.
+     * ORDER IS LOAD-BEARING.  PR_CAPBSET_DROP requires CAP_SETPCAP in the current user namespace,
+     * so the bounding set is emptied while that capability is still held; clearing the process sets
+     * first costs the authority the loop needs and every drop then fails EPERM.  Ambient is cleared
+     * first because it must never outlive the bounding entries it can be raised from.
+     *
+     * The END STATE is exactly the one V9 requires and is unchanged by the ordering: ambient,
+     * bounding, effective, permitted and inheritable all empty.  Nothing is retained past this
+     * function, and state 13 still re-proves the result independently rather than trusting it.
      */
     if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) != 0) {
         return -1;
@@ -1621,6 +1618,15 @@ static int mt4_s3c_drop_all_capabilities(void)
             return -1;
         }
     }
+    empty = cap_init();
+    if (empty == NULL) {
+        return -1;
+    }
+    if (cap_set_proc(empty) != 0) {
+        (void)cap_free(empty);
+        return -1;
+    }
+    (void)cap_free(empty);
     return 0;
 }
 
@@ -1733,12 +1739,20 @@ __attribute__((noreturn)) static void mt4_s3c_launcher_child(const mt4_s3c_child
         mt4_s3c_child_fail();
     }
 
-    /* Step 1 CANDIDATE_MATERIALISED: exactly one writable descriptor, owned by the launcher. */
+    /*
+     * Step 1 CANDIDATE_MATERIALISED: exactly one writable descriptor, owned by the launcher.
+     * It is opened O_RDWR rather than O_WRONLY because step 2 digests the copy THROUGH THIS SAME
+     * DESCRIPTOR, before any writer is closed and before the root is finalised.  read() on a
+     * write-only description returns EBADF, so a write-only open makes the ordinary-validation
+     * digest unreachable.  This adds no authority: O_CREAT|O_EXCL still refuses a pre-existing
+     * target, O_CLOEXEC still keeps the descriptor from crossing execve, the on-disk mode is still
+     * MT4_S3C_CANDIDATE_MODE, and step 3 still closes it before pivot_root and RLIMIT_FSIZE 0.
+     */
     source_fd = open(context->candidate_source_path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (source_fd < 0) {
         mt4_s3c_child_fail();
     }
-    destination_fd = open(MT4_S3C_CANDIDATE_NAME, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, MT4_S3C_CANDIDATE_MODE);
+    destination_fd = open(MT4_S3C_CANDIDATE_NAME, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, MT4_S3C_CANDIDATE_MODE);
     if (destination_fd < 0) {
         mt4_s3c_child_fail();
     }

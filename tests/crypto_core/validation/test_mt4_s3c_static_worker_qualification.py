@@ -5981,3 +5981,84 @@ def test_the_committed_fixture_is_test_only_and_claims_nothing():
     for case in payload["cases"]:
         if case["input_hex"]:
             assert re.fullmatch(r"(?:[0-9a-f]{2})+", case["input_hex"]), case["case_id"]
+
+
+# =================================================================================================
+# BUILD_TO_PROVE RUN 33325995514 REPAIR.  The first governed run to reach observation at all:
+# s3c-build-candidate, s3c-elf-qualify and s3c-observe all SUCCEEDED, and then every one of the 25
+# governed cases came back LAUNCH_FAILED / died_before_trace with wait_exit_status 70 and
+# exec_transition_observed false.  The case-set digest matched exactly, so this was never a digest
+# or provenance defect: the child died in its own containment chain before the tracer could attach,
+# and s3c-adjudicate correctly refused with MT4_S3C_ALL_CASES_CONFORM=False.
+#
+# A bounded reproduction of the child chain isolated TWO deterministic pre-trace defects.  Both are
+# ordinary construction defects, both fail CLOSED, and neither could have admitted evidence or
+# granted authority -- the gate refused exactly as designed:
+#
+#   D1  the materialised candidate was opened O_WRONLY and then digested THROUGH THAT SAME
+#       DESCRIPTOR for ordinary validation.  read() on a write-only description returns EBADF, so
+#       the initial digest could never be computed.
+#   D2  mt4_s3c_drop_all_capabilities() cleared the process capability sets BEFORE running the
+#       PR_CAPBSET_DROP loop, but PR_CAPBSET_DROP requires CAP_SETPCAP -- which that clear had just
+#       removed -- so every bounding-set drop failed EPERM.
+#
+# These tests keep both repairs in place.  They read CODE ONLY, so the explanatory comments written
+# alongside the repairs cannot satisfy them.
+# =================================================================================================
+
+
+def test_the_materialised_candidate_descriptor_is_opened_readable():
+    """D1: the one descriptor the launcher creates for the copy must be readable, not write-only."""
+    code = _code_only(LAUNCHER_SOURCE)
+    opens = [line.strip() for line in code.splitlines() if "MT4_S3C_CANDIDATE_NAME" in line and "open(" in line]
+    assert len(opens) == 1, opens
+    assert "O_RDWR" in opens[0], opens[0]
+    assert "O_WRONLY" not in opens[0], opens[0]
+    # Readability is the ONLY thing that changed: every other guarantee on this open still stands.
+    for flag in ("O_CREAT", "O_EXCL", "O_CLOEXEC", "MT4_S3C_CANDIDATE_MODE"):
+        assert flag in opens[0], (flag, opens[0])
+
+
+def test_the_candidate_is_digested_through_that_same_descriptor_before_any_writer_closes():
+    """D1, stated as the REASON: this is why a write-only open made the run unreachable."""
+    code = _code_only(LAUNCHER_SOURCE)
+    digest_at = code.index("mt4_s3c_digest_fd(destination_fd")
+    close_at = code.index("close(destination_fd)")
+    assert digest_at < close_at, "the digest is taken through the still-open writer descriptor"
+    # And the digest helper genuinely CONSUMES the descriptor, so read access is not incidental.
+    start = code.index("static int mt4_s3c_digest_fd(")
+    body = code[start : code.index("\n}", start)]
+    assert "lseek(fd, 0, SEEK_SET)" in body
+    assert "read(fd," in body
+
+
+def test_the_bounding_set_is_emptied_before_the_authority_to_do_it_is_dropped():
+    """D2: PR_CAPBSET_DROP needs CAP_SETPCAP, so it must run before the effective set is cleared."""
+    code = _code_only(LAUNCHER_SOURCE)
+    start = code.index("static int mt4_s3c_drop_all_capabilities(void)")
+    body = code[start : code.index("\n}", start)]
+    ambient = body.index("PR_CAP_AMBIENT_CLEAR_ALL")
+    capbset = body.index("PR_CAPBSET_DROP")
+    set_proc = body.index("cap_set_proc(")
+    assert ambient < capbset < set_proc, (ambient, capbset, set_proc)
+
+
+def test_the_emptied_capability_state_is_still_reproved_after_the_drop():
+    """The reorder changed only ORDER: the end state is still proven, never assumed."""
+    code = _code_only(LAUNCHER_SOURCE)
+    drop_at = code.index("mt4_s3c_drop_all_capabilities()")
+    reprove_at = code.index("mt4_s3c_capability_state_is_empty()")
+    no_new_privs_at = code.index("PR_SET_NO_NEW_PRIVS")
+    assert drop_at < reprove_at < no_new_privs_at, (drop_at, reprove_at, no_new_privs_at)
+
+
+def test_the_run_33325995514_failure_shape_is_impossible_to_reintroduce_silently():
+    """The mutation: either defect restored must break a test, on the source that actually ships."""
+    code = _code_only(LAUNCHER_SOURCE)
+    # D1 restored: a write-only CANDIDATE open.  Scoped to the candidate, because the read-only
+    # root proof legitimately opens its throwaway write probe O_WRONLY and expects EROFS.
+    assert "open(MT4_S3C_CANDIDATE_NAME, O_WRONLY" not in code
+    # D2 restored: the process sets cleared ahead of the bounding-set loop.
+    start = code.index("static int mt4_s3c_drop_all_capabilities(void)")
+    body = code[start : code.index("\n}", start)]
+    assert body.index("cap_init()") > body.index("PR_CAPBSET_DROP"), body
