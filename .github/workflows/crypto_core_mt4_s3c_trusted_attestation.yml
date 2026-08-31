@@ -79,7 +79,7 @@ env:
   # gate source or any bundle entry, trusted attestation fails closed until a separately reviewed
   # change to the default branch updates the corresponding constant below.
   APPROVED_S3C_QUALIFICATION_WORKFLOW_SHA256: "4bee0da7cfd6a2abd736970e5a4430c3af941ef8386dc49e1fb4194dcfdce2bf"
-  APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256: "2ac51c8c822c60674dcc64fe592913bac2cec818c7ad19f4de980a5747b6c1c7"
+  APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256: "7be7edd56fbf160b7f379479ceeada4c5097845b1d88c1efbde4287ed90a9bf5"
   APPROVED_S3C_TRUSTED_GATE_SHA256: "590755dfbe3a03a8569461e8aba206bc11090be1e44ff0ae58c4a3a8212e731a"
 
   # EM-11: the identical literal expected program-header authority the reviewed ELF qualifier and
