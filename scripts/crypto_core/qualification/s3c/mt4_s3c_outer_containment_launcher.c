@@ -2442,7 +2442,26 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
             mt4_s3c_trace_append(&result->trace, &event);
             result->exec_transition_observed = 1;
             candidate_phase = 1;
-            in_syscall_exit_stop = 0;
+            /*
+             * POST-EXEC SYSCALL PARITY (repair for BUILD_TO_PROVE run 33490754461).
+             *
+             * PTRACE_EVENT_EXEC is delivered BEFORE the execve syscall returns, so it is NOT a
+             * syscall stop and it does NOT close the in-flight execve.  Resuming it with
+             * PTRACE_SYSCALL therefore yields that execve's own syscall-EXIT stop as the NEXT
+             * ordinary SIGTRAP|0x80 stop -- the successful exec returning into the new program.
+             *
+             * The parity state must say EXIT, not ENTRY.  Setting it to ENTRY consumes the
+             * trailing execve EXIT as though it were a fresh ENTRY and shifts every subsequent
+             * candidate stop by one, which run 33490754461 recorded exactly: each candidate pair
+             * arrived with identical arguments but reversed labels, the entry-stop -ENOSYS
+             * sentinel was read as a return value, and the worker's internal seccomp ENTRY was
+             * judged as an install returning -38.
+             *
+             * SIGTRAP|0x80 marks a stop as a syscall stop but does not encode its direction, so
+             * this sequencing is the classifier.  The register file is never used to guess
+             * direction: -ENOSYS is an entry sentinel, not evidence.
+             */
+            in_syscall_exit_stop = 1;
             if (mt4_s3c_resume_to_syscall(child) != 0) {
                 mt4_s3c_case_fail(result, MT4_S3C_REASON_WORKER_FILTER_OBSERVATION_UNAVAILABLE, "resume_exec");
                 break;

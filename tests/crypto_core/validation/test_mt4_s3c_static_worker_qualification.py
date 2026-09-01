@@ -6214,3 +6214,175 @@ def test_the_run_33436944985_failure_shape_cannot_be_reintroduced_silently():
     assert "syscall(__NR_seccomp" not in code
     _body, arguments = _launcher_seccomp_arguments()
     assert set(arguments[4:7]) == {"0"}, arguments
+
+
+# =================================================================================================
+# BUILD_TO_PROVE RUN 33490754461 REPAIR.  The first governed run in which the outer filter actually
+# installed: PR #367's canonical register image held (outer_capture.valid=true,
+# install_return_i32=0), the candidate executed, and the exec transition was observed.  All 25 cases
+# then failed WORKER_SANDBOX_FAILED / internal_install with internal_install_return_i32 = -38.
+#
+# That -38 was never a return value.  PTRACE_EVENT_EXEC is delivered BEFORE execve returns, so it is
+# not a syscall stop and does not close the in-flight execve; resuming it with PTRACE_SYSCALL yields
+# that execve's own syscall-EXIT stop as the next SIGTRAP|0x80 stop.  The observer reset its parity
+# to ENTRY there, consumed the trailing execve EXIT as a fresh ENTRY, and shifted every later
+# candidate stop by one.
+#
+# The raw trace proves the shift arithmetically: every candidate stop arrived as a PAIR sharing an
+# identical syscall number AND identical arguments, the first of each pair carrying ret == -38 (the
+# x86 syscall-entry -ENOSYS sentinel) and the second the real return.  Reversed labelling made the
+# observer read each entry sentinel as a return, and the worker's internal seccomp ENTRY was judged
+# as an install returning -38.  The worker's own register image in that same record was already
+# canonical ([1, 0, <fprog>, 0, 0, 0]), so no worker or policy defect was established.
+#
+# The repair is one parity value in the exec-event branch.  These tests read CODE ONLY, and the
+# model below takes that parity FROM THE SOURCE, so reverting it reverses the model's own output.
+# =================================================================================================
+
+# The stop sequence run 33490754461 recorded for C01, as SHAPE only -- no run-specific artifact is
+# committed.  None is a non-syscall stop (the exec event).
+_CAUSAL_STOP_SHAPE = (
+    ("LAUNCHER", "seccomp"),
+    ("LAUNCHER", "seccomp"),
+    ("LAUNCHER", "execve"),
+    ("EXEC_EVENT", None),
+    ("CANDIDATE", "execve"),
+    ("CANDIDATE", "prctl"),
+    ("CANDIDATE", "prctl"),
+    ("CANDIDATE", "prctl"),
+    ("CANDIDATE", "prctl"),
+    ("CANDIDATE", "close"),
+    ("CANDIDATE", "close"),
+    ("CANDIDATE", "close"),
+    ("CANDIDATE", "close"),
+    ("CANDIDATE", "close"),
+    ("CANDIDATE", "close"),
+    ("CANDIDATE", "close_range"),
+    ("CANDIDATE", "close_range"),
+    ("CANDIDATE", "seccomp"),
+)
+
+
+def _exec_event_branch():
+    """The code-only body of the PTRACE_EVENT_EXEC branch, up to its resume."""
+    code = _code_only(LAUNCHER_SOURCE)
+    start = code.index("PTRACE_EVENT_EXEC <<")
+    return code[start : code.index("continue;", start)]
+
+
+def _post_exec_parity_from_source():
+    """The parity the launcher installs at PTRACE_EVENT_EXEC, READ FROM THE SOURCE.
+
+    Taking it from source rather than restating it is what keeps the model test non-vacuous: a
+    revert to the old value reverses the model's own classification and fails the assertions.
+    """
+    match = re.search(r"in_syscall_exit_stop\s*=\s*([01])\s*;", _exec_event_branch())
+    assert match, _exec_event_branch()
+    return int(match.group(1))
+
+
+def _classify(stops, post_exec_parity):
+    """The observer's own state machine: parity classifies, then toggles; exec event re-seeds it."""
+    in_exit, candidate, out = 0, 0, []
+    for phase, name in stops:
+        if name is None:
+            candidate, in_exit = 1, post_exec_parity
+            continue
+        out.append(("CANDIDATE" if candidate else "LAUNCHER", name, "EXIT" if in_exit else "ENTRY"))
+        in_exit = not in_exit
+    return out
+
+
+def test_the_exec_event_branch_still_records_the_transition():
+    """The exec event remains the only proof of a successful exec, and still enters candidate phase."""
+    branch = _exec_event_branch()
+    assert "exec_transition_observed = 1" in branch
+    assert "candidate_phase = 1" in branch
+    assert "EXEC_TRANSITION" in branch
+
+
+def test_the_next_stop_after_the_exec_event_is_expected_to_be_an_exit():
+    """The defect itself: PTRACE_EVENT_EXEC must not re-seed the parity to ENTRY."""
+    assert _post_exec_parity_from_source() == 1
+
+
+def test_the_trailing_execve_exit_is_classified_as_an_exit():
+    """Under the source's own parity, the stop after the exec event is the successful execve EXIT."""
+    classified = _classify(_CAUSAL_STOP_SHAPE, _post_exec_parity_from_source())
+    assert classified[3] == ("CANDIDATE", "execve", "EXIT"), classified[3]
+
+
+def test_the_first_candidate_syscall_after_the_exec_exit_is_an_entry():
+    """Parity must return to ENTRY for the candidate's first real syscall."""
+    classified = _classify(_CAUSAL_STOP_SHAPE, _post_exec_parity_from_source())
+    assert classified[4] == ("CANDIDATE", "prctl", "ENTRY"), classified[4]
+
+
+def test_the_whole_causal_stop_sequence_alternates_correctly():
+    """Every candidate pair recovers ENTRY then EXIT, and the internal seccomp lands on ENTRY."""
+    classified = _classify(_CAUSAL_STOP_SHAPE, _post_exec_parity_from_source())
+    assert classified == [
+        ("LAUNCHER", "seccomp", "ENTRY"),
+        ("LAUNCHER", "seccomp", "EXIT"),
+        ("LAUNCHER", "execve", "ENTRY"),
+        ("CANDIDATE", "execve", "EXIT"),
+        ("CANDIDATE", "prctl", "ENTRY"),
+        ("CANDIDATE", "prctl", "EXIT"),
+        ("CANDIDATE", "prctl", "ENTRY"),
+        ("CANDIDATE", "prctl", "EXIT"),
+        ("CANDIDATE", "close", "ENTRY"),
+        ("CANDIDATE", "close", "EXIT"),
+        ("CANDIDATE", "close", "ENTRY"),
+        ("CANDIDATE", "close", "EXIT"),
+        ("CANDIDATE", "close", "ENTRY"),
+        ("CANDIDATE", "close", "EXIT"),
+        ("CANDIDATE", "close_range", "ENTRY"),
+        ("CANDIDATE", "close_range", "EXIT"),
+        ("CANDIDATE", "seccomp", "ENTRY"),
+    ], classified
+
+
+def test_the_internal_seccomp_install_is_reached_as_an_entry_not_an_exit():
+    """The payoff: the worker's install is CAPTURED, not judged as a -38 return."""
+    classified = _classify(_CAUSAL_STOP_SHAPE, _post_exec_parity_from_source())
+    internal = [row for row in classified if row[0] == "CANDIDATE" and row[1] == "seccomp"]
+    assert internal == [("CANDIDATE", "seccomp", "ENTRY")], internal
+
+
+def test_the_old_post_exec_parity_reverses_the_whole_candidate_sequence():
+    """The model is sensitive: this is the exact misclassification run 33490754461 recorded."""
+    broken = _classify(_CAUSAL_STOP_SHAPE, 0)
+    assert broken[3] == ("CANDIDATE", "execve", "ENTRY"), broken[3]
+    assert broken[4] == ("CANDIDATE", "prctl", "EXIT"), broken[4]
+    # And the worker's install would be judged at an EXIT stop, which is how -38 became a "return".
+    assert ("CANDIDATE", "seccomp", "EXIT") in broken
+    # The repaired source must NOT agree with that reading.
+    assert _classify(_CAUSAL_STOP_SHAPE, _post_exec_parity_from_source()) != broken
+
+
+def test_the_seccomp_capture_and_install_legs_stay_on_opposite_stops():
+    """ENTRY captures the filter; EXIT evaluates the install return.  They must never merge."""
+    code = _code_only(LAUNCHER_SOURCE)
+    assert "registers.orig_rax == (unsigned long long)__NR_seccomp && !in_syscall_exit_stop" in code
+    assert "registers.orig_rax == (unsigned long long)__NR_seccomp && in_syscall_exit_stop" in code
+
+
+def test_the_failed_exec_path_still_requires_an_unproven_transition():
+    """PH6b must keep firing ONLY for an execve EXIT with no exec transition observed."""
+    code = _code_only(LAUNCHER_SOURCE)
+    assert (
+        "registers.orig_rax == (unsigned long long)__NR_execve && in_syscall_exit_stop &&\n"
+        "                !result->exec_transition_observed" in code
+    )
+    assert "execve_returned" in code
+
+
+def test_the_observer_does_not_classify_stops_by_register_heuristics():
+    """-ENOSYS is an entry sentinel, never a classifier: sequencing decides direction."""
+    code = _code_only(LAUNCHER_SOURCE)
+    for heuristic in ("ENOSYS", "-38"):
+        assert heuristic not in code, heuristic
+    # The classification input is the parity state, and the register file is only read, never used
+    # to decide direction.
+    assert "event.is_exit_stop = in_syscall_exit_stop;" in code
+    assert "in_syscall_exit_stop = !in_syscall_exit_stop;" in code
