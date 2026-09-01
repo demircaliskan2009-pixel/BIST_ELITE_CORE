@@ -6062,3 +6062,155 @@ def test_the_run_33325995514_failure_shape_is_impossible_to_reintroduce_silently
     start = code.index("static int mt4_s3c_drop_all_capabilities(void)")
     body = code[start : code.index("\n}", start)]
     assert body.index("cap_init()") > body.index("PR_CAPBSET_DROP"), body
+
+
+# =================================================================================================
+# BUILD_TO_PROVE RUN 33436944985 REPAIR.  The first governed run in which the candidate actually
+# executed under outer containment: PR #366's D1/D2 pre-trace repair held, and all 25 cases reached
+# EXECUTED_CANDIDATE_UNDER_OUTER_CONTAINMENT with a real traced syscall.  They then failed uniformly
+# at the very first traced event -- the launcher's own seccomp installation -- with
+# OUTER_FILTER_EQUIVALENCE_FAILED / seccomp_register_leg.
+#
+# The observed ENTRY register image was
+#     a0=1 (SECCOMP_SET_MODE_FILTER)  a1=0  a2=<fprog>  a3=0xFFFFFFFF  a4=1  a5=0
+# where the trusted observer (V9 13.4 LEG L1) requires a3 == a4 == a5 == 0.
+#
+# CAUSE: the launcher installed its filter through glibc's variadic syscall() with three arguments.
+# The kernel needs only three, but this project deliberately owns a stronger SIX-register canonical
+# contract, and on x86-64 glibc's syscall() unconditionally shifts r8 -> r10, r9 -> r8 and
+# 8(%rsp) -> r9 -- so a three-argument call leaves caller residue in exactly the three words the
+# observer requires to be zero.  The launcher already owned mt4_s3c_syscall6() for its post-filter
+# syscalls; the seccomp INSTALLATION was excluded because it predates the filter.  Predating the
+# FILTER is not the same as escaping the OBSERVER, which is already tracing at that moment.
+#
+# The repair is caller-side.  The observer's check is correct and is deliberately left strict; the
+# trusted gate re-validates the same zero tail independently, so weakening either was never an
+# option.  These tests read CODE ONLY, so the explanatory comments cannot satisfy them.
+# =================================================================================================
+
+
+def _c_function_body(source, signature_prefix):
+    """The brace-balanced body of the first function whose definition starts with the prefix."""
+    start = source.index(signature_prefix)
+    opening = source.index("{", start)
+    depth = 0
+    for offset in range(opening, len(source)):
+        if source[offset] == "{":
+            depth += 1
+        elif source[offset] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opening + 1 : offset]
+    raise AssertionError("unbalanced braces after " + signature_prefix)
+
+
+def _call_arguments(body, callee):
+    """Top-level argument expressions of the first call to `callee`, whitespace-normalised.
+
+    Depth-aware, so a cast like (long)flags does not split an argument, and tolerant of
+    reformatting: these tests assert the SEMANTIC register image, not one exact spelling.
+    """
+    assert callee + "(" in body, callee + " is not called here"
+    cursor = body.index(callee + "(") + len(callee) + 1
+    depth, arguments, current = 1, [], ""
+    for character in body[cursor:]:
+        if character in "([":
+            depth += 1
+            current += character
+        elif character in ")]":
+            depth -= 1
+            if depth == 0:
+                arguments.append(current)
+                break
+            current += character
+        elif character == "," and depth == 1:
+            arguments.append(current)
+            current = ""
+        else:
+            current += character
+    return [" ".join(argument.split()) for argument in arguments]
+
+
+def _launcher_seccomp_arguments():
+    body = _c_function_body(_code_only(LAUNCHER_SOURCE), "static int mt4_s3c_sys_seccomp")
+    return body, _call_arguments(body, "mt4_s3c_syscall6")
+
+
+def test_the_outer_seccomp_installation_uses_the_project_canonical_syscall_mechanism():
+    """The defect itself: the install must not go through an ordinary libc syscall wrapper."""
+    body, arguments = _launcher_seccomp_arguments()
+    assert arguments[0] == "__NR_seccomp", arguments
+    # The libc wrapper is what produced the dirty tail; it must not be how this call is emitted.
+    assert not re.search(r"(?<![_a-zA-Z0-9])syscall\s*\(\s*__NR_seccomp", body), body
+
+
+def test_the_outer_seccomp_installation_zeroes_every_unused_argument_register():
+    """a3/a4/a5 must be structurally, literally zero -- not merely zero by luck at runtime."""
+    _body, arguments = _launcher_seccomp_arguments()
+    assert len(arguments) == 7, arguments
+    assert arguments[4] == "0" and arguments[5] == "0" and arguments[6] == "0", arguments
+
+
+def test_the_outer_seccomp_installation_keeps_operation_flags_and_program_in_place():
+    """The used words must stay where the kernel and the observer both expect them."""
+    _body, arguments = _launcher_seccomp_arguments()
+    assert "operation" in arguments[1], arguments
+    assert "flags" in arguments[2], arguments
+    assert "arguments" in arguments[3], arguments
+
+
+def test_the_launcher_has_exactly_one_low_level_syscall_implementation():
+    """One canonical mechanism: a second inline-asm syscall could drift away from the contract."""
+    assert _code_only(LAUNCHER_SOURCE).count('__asm__ volatile("syscall"') == 1
+
+
+def test_the_canonical_syscall_helper_is_defined_before_every_caller():
+    """The ordering this repair depends on -- a caller above the definition would not compile."""
+    code = _code_only(LAUNCHER_SOURCE)
+    signature = code.index("static inline long mt4_s3c_syscall6(")
+    # The identifier's own offset inside its definition -- every other use must come after it.
+    definition = code.index("mt4_s3c_syscall6(", signature)
+    uses = [match.start() for match in re.finditer(r"mt4_s3c_syscall6\s*\(", code)]
+    assert len(uses) >= 4, uses  # the definition, plus seccomp, execve and exit_group
+    assert min(uses) == definition, "a caller precedes the definition"
+
+
+def test_the_post_filter_syscalls_keep_their_zeroed_tails():
+    """The repair must not disturb the two calls that were already canonical."""
+    code = _code_only(LAUNCHER_SOURCE)
+    for prefix, number in (
+        ("static inline long mt4_s3c_sys_execve", "__NR_execve"),
+        ("mt4_s3c_sys_exit_group(int status)", "__NR_exit_group"),
+    ):
+        arguments = _call_arguments(_c_function_body(code, prefix), "mt4_s3c_syscall6")
+        assert arguments[0] == number, arguments
+        assert arguments[4:7] == ["0", "0", "0"], (prefix, arguments)
+
+
+def test_the_observer_still_refuses_a_nonzero_seccomp_argument_tail():
+    """The strict side of the contract stays strict: the repair was NOT an observer relaxation."""
+    code = _code_only(LAUNCHER_SOURCE)
+    for register in ("registers.r10 != 0ull", "registers.r8 != 0ull", "registers.r9 != 0ull"):
+        assert register in code, register
+    assert "registers.rsi != 0ull" in code
+    assert "seccomp_register_leg" in code
+
+
+def test_the_freestanding_worker_seccomp_installation_is_independently_canonical():
+    """Cross-contract: BOTH emitters the observer watches must produce the same register image.
+
+    The worker was already correct and is deliberately untouched by this repair; this test exists
+    so the two installation sites cannot silently drift apart again.
+    """
+    body = _c_function_body(_code_only(BOOTSTRAP_SOURCE), "static inline long mt4_s3c_sys_seccomp")
+    arguments = _call_arguments(body, "mt4_s3c_syscall6")
+    assert arguments[0] == "__NR_seccomp", arguments
+    assert arguments[4:7] == ["0", "0", "0"], arguments
+
+
+def test_the_run_33436944985_failure_shape_cannot_be_reintroduced_silently():
+    """The mutation: restoring the libc wrapper, or dirtying any tail word, must break a test."""
+    code = _code_only(LAUNCHER_SOURCE)
+    assert "syscall(__NR_seccomp" not in code
+    _body, arguments = _launcher_seccomp_arguments()
+    assert set(arguments[4:7]) == {"0"}, arguments
