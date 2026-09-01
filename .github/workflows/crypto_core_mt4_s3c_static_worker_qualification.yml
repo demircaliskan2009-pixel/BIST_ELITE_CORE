@@ -475,24 +475,6 @@ jobs:
           name: mt4-s3c-candidate-linux-x86_64
           path: ${{ runner.temp }}/candidate
 
-      - name: Fresh-download the ELF qualification record
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
-        with:
-          name: mt4-s3c-elf-qualification-record
-          path: ${{ runner.temp }}/elf
-
-      # THE ADDRESS IS BOUND TO THE EXACT CANDIDATE, OR IT IS NOT USED.  The record may only speak
-      # for the binary this job actually downloaded: its declared candidate digest must be the
-      # governed one, the two symbols must carry the canonical names, and both objects must live in
-      # a NON-WRITABLE load segment.  A writable mapping would let the bytes captured before the
-      # install differ from the bytes submitted to it, which is exactly what must be impossible.
-      - name: Bind the ELF-qualified internal filter address to this candidate
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/crypto_core/qualification/s3c/mt4_s3c_elf_qualify.py --emit-internal-fprog-va "$RUNNER_TEMP/elf/mt4_s3c_elf_qualification_record.json" --expected-candidate-sha256 "$S3C_WORKER_SHA256" --emit-env "$GITHUB_ENV"
-          echo "S3C_ELF_AUTHORITY_BOUND=PASS"
-
       - name: Install the frozen libcap package bytes
         shell: bash
         run: |
@@ -659,6 +641,24 @@ jobs:
           "$RUNNER_TEMP/mt4_s3c_policy_probe" > "$RUNNER_TEMP/policy_probe.json"
           python scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_qualifier.py --probe-json "$RUNNER_TEMP/policy_probe.json" --out "$RUNNER_TEMP/policy_record.json" --emit-env "$GITHUB_ENV"
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --emit-env-from-manifest "$RUNNER_TEMP/candidate/mt4_s3c_build_manifest.json" --emit-env "$GITHUB_ENV"
+
+      - name: Fresh-download the ELF qualification record
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
+        with:
+          name: mt4-s3c-elf-qualification-record
+          path: ${{ runner.temp }}/elf
+
+      # THE ADDRESS IS BOUND TO THE EXACT CANDIDATE, OR IT IS NOT USED.  The record may only speak
+      # for the binary this job actually downloaded: its declared candidate digest must be the
+      # governed one, the two symbols must carry the canonical names, and both objects must live in
+      # a NON-WRITABLE load segment.  A writable mapping would let the bytes captured before the
+      # install differ from the bytes submitted to it, which is exactly what must be impossible.
+      - name: Bind the ELF-qualified internal filter address to this candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_elf_qualify.py --emit-internal-fprog-va "$RUNNER_TEMP/elf/mt4_s3c_elf_qualification_record.json" --expected-candidate-sha256 "$S3C_WORKER_SHA256" --emit-env "$GITHUB_ENV"
+          echo "S3C_ELF_AUTHORITY_BOUND=PASS"
 
       - name: Build the deterministic case plan from the governed TEST-ONLY fixture
         shell: bash

@@ -6580,6 +6580,28 @@ def test_the_observer_invocation_passes_the_bound_address(qualification_workflow
     assert "S3C_INTERNAL_FPROG_VA" in qualification_workflow["env"]["S3C_ALLOWED_SHELL_VARIABLES"]
 
 
+def test_the_observe_job_exports_the_candidate_digest_before_it_binds_the_address(qualification_workflow):
+    """The binding step reads $S3C_WORKER_SHA256, so the manifest export MUST come first.
+
+    Found by Codex review on PR #369: the binding step was originally placed before the export.
+    Under `set -u` that is not a soft failure -- the step aborts and the observation can never run.
+    """
+    steps = qualification_workflow["jobs"]["s3c-observe"]["steps"]
+    export = bind = observe = None
+    for index, step in enumerate(steps):
+        run = step.get("run") or ""
+        if "--emit-env-from-manifest" in run:
+            export = index
+        if "--emit-internal-fprog-va" in run:
+            bind = index
+        if "--internal-fprog-va" in run and "mt4_s3c_observer" in run:
+            observe = index
+    assert export is not None and bind is not None and observe is not None, (export, bind, observe)
+    assert export < bind < observe, (export, bind, observe)
+    # The binding step really does depend on that exported value.
+    assert "$S3C_WORKER_SHA256" in (steps[bind].get("run") or "")
+
+
 def test_the_launcher_requires_the_address_and_refuses_to_run_without_it():
     """No address means no sound observation: the observer must not start."""
     code = _launcher_code()

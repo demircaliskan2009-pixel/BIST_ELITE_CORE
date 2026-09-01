@@ -78,8 +78,8 @@ env:
   # change the measuring constant.  If a later pull request edits the qualification workflow, the
   # gate source or any bundle entry, trusted attestation fails closed until a separately reviewed
   # change to the default branch updates the corresponding constant below.
-  APPROVED_S3C_QUALIFICATION_WORKFLOW_SHA256: "be9ac17bbb793bb3c9f00d00fbdeaacc5e0f2d8f9b64e7416822fe311c8d6075"
-  APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256: "5c3e2901cc082c4a1b5c92a11cae85dc88ef47e73b6cf39cb66b085bfc1c70b3"
+  APPROVED_S3C_QUALIFICATION_WORKFLOW_SHA256: "93e6fee0db033574c25838365cbe42b18e21bab988c10db3b1c2719801d56886"
+  APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256: "6a873371af38cc153f2d2bec8499f46d44ce7e91be8fe97a8493a0d405768709"
   APPROVED_S3C_TRUSTED_GATE_SHA256: "590755dfbe3a03a8569461e8aba206bc11090be1e44ff0ae58c4a3a8212e731a"
 
   # EM-11: the identical literal expected program-header authority the reviewed ELF qualifier and
