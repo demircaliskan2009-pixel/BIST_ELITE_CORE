@@ -6386,3 +6386,243 @@ def test_the_observer_does_not_classify_stops_by_register_heuristics():
     # to decide direction.
     assert "event.is_exit_stop = in_syscall_exit_stop;" in code
     assert "in_syscall_exit_stop = !in_syscall_exit_stop;" in code
+
+
+# =================================================================================================
+# BUILD_TO_PROVE RUN 33513591856 REPAIR.  The furthest any governed run had reached: the outer
+# filter installed, the candidate executed, and the worker bootstrapped all the way to its internal
+# seccomp ENTRY with a canonical register image whose rdx was exactly the ELF-qualified fprog
+# address.  All 25 cases then failed WORKER_FILTER_OBSERVATION_UNAVAILABLE / capture.
+#
+# CAUSE, and it is a contract collision rather than a bug in either party.  The frozen worker sets
+# PR_SET_DUMPABLE 0 BEFORE installing its internal filter, and the launcher establishes
+# PTRACE_TRACEME only AFTER dropping every capability -- so the stored ptracer credential holds no
+# CAP_SYS_PTRACE.  ptrace_access_vm() then refuses every remote read of the tracee: reading the
+# sock_fprog AT the internal seccomp ENTRY can never succeed.  Reproduced natively on 6.8.0-azure:
+# with dumpable=1 PTRACE_PEEKDATA returns the exact bytes; with dumpable=0 and no CAP_SYS_PTRACE it
+# fails with EIO.  Neither side may be weakened -- the worker's non-dumpability is the containment
+# contract, and the tracer's emptied capability set is the privilege contract.
+#
+# REPAIR, observation only: read the SAME tracee memory EARLIER.  At the trailing syscall-EXIT stop
+# of the successful execve the new image is fully mapped, no candidate instruction has run, and
+# dumpability is still the post-exec default.  The address comes from the independently reviewed ELF
+# qualification of the same digest-proven image -- never from the candidate, never a durable
+# constant.  The install's own ENTRY then re-proves the pointer, and immutability (ET_EXEC, both
+# objects in a non-writable file-backed PT_LOAD, single-threaded worker, and an outer filter that
+# admits no mmap/mprotect/munmap) is what makes the earlier read equivalent to the later one.
+#
+# The same reproduction then exposed a second, independent defect on the newly reachable path: the
+# C24 governed SIGKILL stimulus races its own resume.  See the C24 section below.
+# =================================================================================================
+
+
+def _launcher_code():
+    return _code_only(LAUNCHER_SOURCE)
+
+
+def test_the_worker_still_becomes_non_dumpable_before_its_internal_install():
+    """The containment contract this repair had to adapt to, not weaken."""
+    code = _code_only(BOOTSTRAP_SOURCE)
+    dumpable = code.index("PR_SET_DUMPABLE")
+    install = code.index("mt4_s3c_sys_seccomp(SECCOMP_SET_MODE_FILTER")
+    assert dumpable < install, "dumpability must drop before the internal install"
+    assert "PR_SET_DUMPABLE, 0" in code or "PR_SET_DUMPABLE, 0)" in code
+
+
+def test_the_launcher_still_traces_only_after_its_capabilities_are_empty():
+    """The privilege contract: the stored ptracer credential must carry no CAP_SYS_PTRACE."""
+    code = _launcher_code()
+    empty = code.index("mt4_s3c_capability_state_is_empty()")
+    traceme = code.index("(long)PTRACE_TRACEME, 0")
+    assert empty < traceme, "TRACEME must follow the capability-empty re-proof"
+
+
+def test_the_internal_filter_is_captured_before_dumpability_is_lost():
+    """The repair: the mandatory internal capture happens at the post-exec stop, not at the install."""
+    code = _launcher_code()
+    capture_site = code.index("predumpable_capture")
+    entry_leg = code.index("seccomp_register_leg")
+    assert capture_site < entry_leg, "the candidate capture must precede the seccomp ENTRY leg"
+    window = code[:capture_site]
+    # It is gated on the trailing execve EXIT of a PROVEN exec transition, in the candidate phase.
+    assert "candidate_phase && in_syscall_exit_stop" in window
+    assert "result->exec_transition_observed" in window
+
+
+def test_the_candidate_capture_reads_the_elf_qualified_address_not_a_candidate_report():
+    """The address is the ELF-qualified one carried on the candidate identity."""
+    code = _launcher_code()
+    start = code.index("predumpable_capture") - 1200
+    window = code[max(start, 0) : code.index("predumpable_capture")]
+    assert "candidate->internal_fprog_va" in window, window[-400:]
+    assert "internal_fprog_va" in code[: code.index("} mt4_s3c_candidate_t;")]
+
+
+def test_the_internal_install_entry_reproves_the_authenticated_pointer():
+    """rdx at the install must be exactly the address the bytes were read from."""
+    code = _launcher_code()
+    assert "registers.rdx != (unsigned long long)candidate->internal_fprog_va" in code
+    assert "internal_fprog_pointer" in code
+    # And an install with no prior capture is refused rather than silently unverified.
+    assert "!result->internal_capture_valid ||" in code
+
+
+def test_the_observer_no_longer_reads_candidate_memory_at_the_internal_install():
+    """The read that can never succeed must be gone from the candidate path."""
+    code = _launcher_code()
+    leg = code.index("seccomp_register_leg")
+    start = code.index("if (candidate_phase) {", leg)
+    split = code.index("} else {", start)
+    candidate_branch = code[start:split]
+    assert "mt4_s3c_capture_filter" not in candidate_branch, candidate_branch
+    assert "internal_fprog_pointer" in candidate_branch
+    # The OUTER capture, whose tracee is dumpable, still happens exactly where it did.
+    outer_branch = code[split : code.index("outer_argument_tail[2]", split)]
+    assert "mt4_s3c_capture_filter" in outer_branch, outer_branch
+
+
+def test_the_seccomp_register_leg_and_install_return_legs_are_unchanged():
+    """PR #367 and the EXIT-side authority must survive this repair untouched."""
+    code = _launcher_code()
+    for anchor in (
+        "registers.r10 != 0ull",
+        "registers.r8 != 0ull",
+        "registers.r9 != 0ull",
+        "seccomp_register_leg",
+        'MT4_S3C_REASON_WORKER_SANDBOX_FAILED, "internal_install"',
+    ):
+        assert anchor in code, anchor
+
+
+def test_the_elf_authority_emitter_binds_candidate_symbols_and_mapping():
+    """The address may only be emitted for the exact candidate, canonical symbols, read-only map."""
+    source = _read(_S3C / "mt4_s3c_elf_qualify.py")
+    for anchor in (
+        "ELF_RECORD_CANDIDATE_MISMATCH",
+        "ELF_FPROG_SYMBOL_UNEXPECTED",
+        "ELF_PROGRAM_SYMBOL_UNEXPECTED",
+        "ELF_FILTER_MAPPING_IS_WRITABLE",
+        "ELF_FPROG_VA_INVALID",
+        "S3C_INTERNAL_FPROG_VA=",
+    ):
+        assert anchor in source, anchor
+    assert 'INTERNAL_FPROG_SYMBOL = "mt4_s3c_internal_filter_fprog"' in source
+    assert 'INTERNAL_PROGRAM_SYMBOL = "mt4_s3c_internal_filter_program"' in source
+
+
+def test_the_emitter_refuses_a_writable_filter_mapping(tmp_path):
+    """A writable mapping would break the immutability the earlier read depends on."""
+    record = {
+        "schema": "mt4-s3c-elf-qualification-record.v1",
+        "candidate_binary_sha256": "a" * 64,
+        "canonical_internal_filter_object": {
+            "fprog_symbol": "mt4_s3c_internal_filter_fprog",
+            "program_symbol": "mt4_s3c_internal_filter_program",
+            "fprog_load_flags_u32": 0x5,
+            "program_load_flags_u32": 0x7,  # writable -- must be refused
+            "fprog_va_u64": 4322784,
+            "program_va_u64": 4322816,
+        },
+    }
+    record_path = tmp_path / "record.json"
+    env_path = tmp_path / "env.txt"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(elf_qualify.ElfQualificationError) as error:
+        elf_qualify.emit_internal_fprog_va(str(record_path), "a" * 64, str(env_path))
+    assert "WRITABLE" in str(error.value)
+    assert not env_path.exists() or env_path.stat().st_size == 0
+
+
+def test_the_emitter_refuses_a_record_for_a_different_candidate(tmp_path):
+    """The record may only speak for the binary the observer actually downloaded."""
+    record = {
+        "schema": "mt4-s3c-elf-qualification-record.v1",
+        "candidate_binary_sha256": "b" * 64,
+        "canonical_internal_filter_object": {
+            "fprog_symbol": "mt4_s3c_internal_filter_fprog",
+            "program_symbol": "mt4_s3c_internal_filter_program",
+            "fprog_load_flags_u32": 0x5,
+            "program_load_flags_u32": 0x5,
+            "fprog_va_u64": 4322784,
+            "program_va_u64": 4322816,
+        },
+    }
+    record_path = tmp_path / "record.json"
+    env_path = tmp_path / "env.txt"
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(elf_qualify.ElfQualificationError) as error:
+        elf_qualify.emit_internal_fprog_va(str(record_path), "a" * 64, str(env_path))
+    assert "CANDIDATE_MISMATCH" in str(error.value)
+
+
+def test_the_observe_job_consumes_the_elf_qualification_as_a_real_input(qualification_workflow):
+    """Producer/consumer: observe must depend on, download and bind the ELF record."""
+    observe = qualification_workflow["jobs"]["s3c-observe"]
+    assert "s3c-elf-qualify" in observe["needs"], observe["needs"]
+    assert "s3c-build-candidate" in observe["needs"], observe["needs"]
+    downloads = [
+        step for step in observe["steps"] if (step.get("with") or {}).get("name") == "mt4-s3c-elf-qualification-record"
+    ]
+    assert len(downloads) == 1, downloads
+    binding = [step for step in observe["steps"] if "--emit-internal-fprog-va" in (step.get("run") or "")]
+    assert len(binding) == 1, "exactly one binding step"
+    assert "--expected-candidate-sha256" in binding[0]["run"]
+    assert "$S3C_WORKER_SHA256" in binding[0]["run"]
+
+
+def test_the_observer_invocation_passes_the_bound_address(qualification_workflow):
+    """The observer must actually receive the bound address, from the governed variable."""
+    observe = qualification_workflow["jobs"]["s3c-observe"]
+    invocation = [step for step in observe["steps"] if "--internal-fprog-va" in (step.get("run") or "")]
+    assert len(invocation) == 1, [step.get("name") for step in invocation]
+    assert '--internal-fprog-va "$S3C_INTERNAL_FPROG_VA"' in invocation[0]["run"]
+    # The new variable is part of the enumerated governed shell-variable contract.
+    assert "S3C_INTERNAL_FPROG_VA" in qualification_workflow["env"]["S3C_ALLOWED_SHELL_VARIABLES"]
+
+
+def test_the_launcher_requires_the_address_and_refuses_to_run_without_it():
+    """No address means no sound observation: the observer must not start."""
+    code = _launcher_code()
+    assert '"--internal-fprog-va"' in code
+    assert '"internal_fprog_va"' in code  # the fatal marker
+
+
+# ---- The SECOND defect the same bounded reproduction exposed. -------------------------------------
+# C24 delivers a governed SIGKILL at a candidate read ENTRY stop and then immediately resumes the
+# tracee.  The tracee is dying, so PTRACE_SYSCALL can fail with ESRCH -- and the observer classified
+# that as WORKER_FILTER_OBSERVATION_UNAVAILABLE, reporting QUALIFICATION_INFRASTRUCTURE_FAILURE for
+# the one case whose EXPECTED outcome is RT_PROCESS_TERMINATED_BY_SIGNAL.  No governed run had ever
+# reached C24 before, so this had never executed.  The repair records nothing and fabricates nothing:
+# after the governed kill a failed resume simply stops tracing, and the teardown reap records the
+# real wait status, which is what decides the outcome.
+
+
+def test_the_governed_c24_kill_is_remembered_only_when_it_was_delivered():
+    """The tolerance is scoped to a kill that actually happened, for the C24 stimulus only."""
+    code = _launcher_code()
+    assert "int governed_sigkill_delivered = 0;" in code
+    assert "if (mt4_s3c_sys_pidfd_send_signal(pidfd, SIGKILL) == 0) {" in code
+    assert "governed_sigkill_delivered = 1;" in code
+    stimulus = code.index("MT4_S3C_STIMULUS_WRITE_PREFIX_THEN_SIGKILL && pidfd >= 0")
+    assert code.index("governed_sigkill_delivered = 1;") > stimulus
+
+
+def test_a_resume_failure_after_the_governed_kill_is_not_an_infrastructure_failure():
+    """Both resume sites must stop tracing instead of inventing an observation failure."""
+    code = _launcher_code()
+    guarded = code.count("if (governed_sigkill_delivered) {")
+    assert guarded == 2, guarded
+    for marker in ('"resume_syscall"', '"resume_signal"'):
+        site = code.index(marker)
+        window = code[site - 700 : site]
+        assert "if (governed_sigkill_delivered) {" in window, marker
+
+
+def test_resume_failures_without_a_governed_kill_still_fail_closed():
+    """The tolerance must not become a blanket excuse for losing the tracee."""
+    code = _launcher_code()
+    for marker in ("resume_syscall", "resume_signal", "resume_exec"):
+        assert 'MT4_S3C_REASON_WORKER_FILTER_OBSERVATION_UNAVAILABLE, "' + marker + '"' in code, marker
+    # resume_exec is not part of the C24 path and carries no tolerance at all.
+    exec_site = code.index('"resume_exec"')
+    assert "governed_sigkill_delivered" not in code[exec_site - 700 : exec_site]
