@@ -80,7 +80,7 @@ env:
   # change to the default branch updates the corresponding constant below.
   APPROVED_S3C_QUALIFICATION_WORKFLOW_SHA256: "93e6fee0db033574c25838365cbe42b18e21bab988c10db3b1c2719801d56886"
   APPROVED_S3C_QUALIFICATION_SOURCE_BUNDLE_SHA256: "6a873371af38cc153f2d2bec8499f46d44ce7e91be8fe97a8493a0d405768709"
-  APPROVED_S3C_TRUSTED_GATE_SHA256: "590755dfbe3a03a8569461e8aba206bc11090be1e44ff0ae58c4a3a8212e731a"
+  APPROVED_S3C_TRUSTED_GATE_SHA256: "c3205a41b411c98c8727b025d311e12760bbea0bb1bddf242a853c1106ebbaf5"
 
   # EM-11: the identical literal expected program-header authority the reviewed ELF qualifier and
   # the qualification workflow both carry, now including the frozen p_align of every segment.

@@ -1719,8 +1719,12 @@ def _instance(instance_id, kind, inputs, libraries=(), flags=(), output="out.o",
         "output": output,
         "output_path": output.split(":", 1)[-1],
         "raw_output": "/tmp/build/" + output.split(":", 1)[-1],
-        # The wrapper's frozen execution boundary, recorded as evidence.
-        "resolved_tool_path": "/usr/bin/" + tool,
+        # The wrapper's frozen execution boundary, recorded as evidence.  These are the REAL
+        # canonical paths run 33617866272 recorded: /usr/bin/gcc is a symlink chain on the pinned
+        # runner, so the canonical file has a DIFFERENT basename than the logical tool.  The world
+        # models that on purpose -- a fixture using /usr/bin/<tool> made every gate test agree with
+        # a shape the runner never produces, which is why the basename defect reached main.
+        "resolved_tool_path": _CANONICAL_TOOL_PATH[tool],
         "working_directory": ".",
         "working_directory_class": "GITHUB_WORKSPACE",
     }
@@ -1729,6 +1733,14 @@ def _instance(instance_id, kind, inputs, libraries=(), flags=(), output="out.o",
         # RAW is what a command line would have said; the graph key is never a path.
         item.setdefault("raw_path", "/tmp/build/" + item["graph_identity"].split(":", 1)[-1])
     return record
+
+
+# The canonical executables the pinned ubuntu-22.04 runner actually resolves the logical tools to,
+# exactly as recorded by governed qualification run 33617866272.
+_CANONICAL_TOOL_PATH = {
+    "gcc": "/usr/bin/x86_64-linux-gnu-gcc-11",
+    "objcopy": "/usr/bin/x86_64-linux-gnu-objcopy",
+}
 
 
 def _transform(instance_id, target, before, after):
@@ -2618,6 +2630,66 @@ def run_gate_build_graph_identity():
     _expect_run_gate("BUILD_GRAPH_LINK_INPUT_UNPRODUCED", unproduced_link_input)
 
 
+def run_gate_canonical_tool_identity():
+    # TRUSTED RUN 33618023994.  Qualification 33617866272 SUCCEEDED and Stage-C still failed closed
+    # with BUILD_TOOL_PROVENANCE_INVALID, because the gate compared the CANONICAL basename to the
+    # LOGICAL tool.  /usr/bin/gcc is a symlink chain on the pinned runner, so the canonical file is
+    # x86_64-linux-gnu-gcc-11 -- the same approved tool under a different name.  The world's default
+    # instances now carry exactly those real canonical paths, so the reference run already proves
+    # the honest resolution is ACCEPTED.  What follows proves the rule is still an IDENTITY rule.
+    work_dir = sys.argv[sys.argv.index("--work-dir") + 1]
+
+    def compile_tool(path):
+        def mutate(world):
+            for item in world["instances"]["instances"]:
+                if item["kind"] == "COMPILE":
+                    item["resolved_tool_path"] = path
+
+        return mutate
+
+    def every_tool(path):
+        def mutate(world):
+            for item in world["instances"]["instances"]:
+                item["resolved_tool_path"] = path
+
+        return mutate
+
+    # An unrelated program under an approved root, wearing an approved-looking triplet.
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", compile_tool("/usr/bin/x86_64-linux-gnu-clang-11"))
+    # Disguises that a "contains gcc" rule would have accepted.
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", compile_tool("/usr/bin/gcc-evil"))
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", compile_tool("/usr/bin/mygcc"))
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", compile_tool("/usr/bin/gcc-11.2-backdoor"))
+    # A real toolchain name, but for a DIFFERENT architecture than the approved triplet.
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", compile_tool("/usr/bin/aarch64-linux-gnu-gcc-11"))
+    # The approved TRANSFORM tool cannot stand in for a COMPILE.
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", compile_tool("/usr/bin/x86_64-linux-gnu-objcopy"))
+    # Path shape: traversal and relative paths are refused before any name reasoning.
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", every_tool("/usr/bin/../../opt/evil/x86_64-linux-gnu-gcc-11"))
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", every_tool("usr/bin/x86_64-linux-gnu-gcc-11"))
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", every_tool("/usr/bin//x86_64-linux-gnu-gcc-11"))
+    # Outside the approved roots entirely.
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", every_tool("/opt/attacker/bin/x86_64-linux-gnu-gcc-11"))
+
+    # The LOGICAL layer is untouched by the repair: an unapproved logical tool still fails on its
+    # own marker, before any canonical-path reasoning happens.
+    def unapproved_logical_tool(world):
+        for item in world["instances"]["instances"]:
+            if item["kind"] == "COMPILE":
+                item["tool"] = "clang"
+
+    _expect_run_gate("COMPILE_INSTANCE_INVENTORY_MISMATCH", unapproved_logical_tool)
+
+    # No transient version is pinned: a runner image moving gcc-11 -> gcc-12 stays approved, so the
+    # repair cannot decay back into a false negative the next time the image rolls.
+    def a_later_runner_toolchain(world):
+        for item in world["instances"]["instances"]:
+            if item["kind"] in ("COMPILE", "LINK"):
+                item["resolved_tool_path"] = "/usr/bin/x86_64-linux-gnu-gcc-12"
+
+    _run_world(work_dir, a_later_runner_toolchain)
+
+
 def run_gate_build_provenance_boundary():
     # REPAIR 6C, 6D and 6E.  The tool that ran, the directory it ran in and the system library the
     # linker actually selected are all bound at the boundary, not assumed from a basename.
@@ -3033,6 +3105,7 @@ check("real_producer_receipt_is_accepted", real_producer_receipt_is_accepted)
 check("case_plan_is_not_trusted_authority", case_plan_is_not_trusted_authority)
 check("run_gate_build_graph_identity", run_gate_build_graph_identity)
 check("run_gate_build_provenance_boundary", run_gate_build_provenance_boundary)
+check("run_gate_canonical_tool_identity", run_gate_canonical_tool_identity)
 check("run_gate_duplicate_identities", run_gate_duplicate_identities)
 check("run_gate_compile_provenance", run_gate_compile_provenance)
 check("z_matrix_pre_decompression", z_matrix_pre_decompression)
@@ -3302,6 +3375,7 @@ def driver_values(driver_results):
         "case_plan_is_not_trusted_authority",
         "run_gate_build_graph_identity",
         "run_gate_build_provenance_boundary",
+        "run_gate_canonical_tool_identity",
         "run_gate_duplicate_identities",
         "run_gate_compile_provenance",
         "z_matrix_pre_decompression",
@@ -3603,3 +3677,79 @@ def test_stage_c_and_the_build_manifest_agree_on_the_required_inventory(driver_v
     manifest = _load_bundled("mt4_s3c_build_manifest_consistency", "mt4_s3c_build_manifest.py")
     assert driver_values["required_translation_units"] == list(manifest.REQUIRED_TRANSLATION_UNITS)
     assert driver_values["source_bundle_paths"] == list(manifest.SOURCE_BUNDLE_PATHS)
+
+
+# =================================================================================================
+# TRUSTED RUN 33618023994 REPAIR.  Governed qualification 33617866272 was the FIRST run to succeed
+# end to end (all 25 cases conformant), and automatic Stage-C still failed closed with
+# BUILD_TOOL_PROVENANCE_INVALID: "resolved tool is not the approved tool".
+#
+# `tool` and `resolved_tool_path` are deliberately different identity layers -- exactly as `name`
+# and `resolved_path` already are for a system library, where logical `cap` legitimately resolves to
+# libcap.so.2.44.  On the pinned runner /usr/bin/gcc is a symlink chain, so the canonical executable
+# is /usr/bin/x86_64-linux-gnu-gcc-11.  Comparing the canonical basename to the logical tool
+# collapsed those layers and rejected the honest resolution: a FALSE NEGATIVE, not an attack.
+#
+# The replacement is a frozen canonical-form grammar, not a substring test:
+#     [<approved-triplet>-] <approved-logical-tool> [-<numeric-version>]
+# It consults no filesystem and no PATH, so the trusted gate stays self-contained and reproducible.
+# =================================================================================================
+
+# The exact identity pair governed run 33617866272 recorded for its first instance, blst-assembly.
+_RUN_33617866272_COMPILE_TOOL = "gcc"
+_RUN_33617866272_RESOLVED_TOOL_PATH = "/usr/bin/x86_64-linux-gnu-gcc-11"
+
+
+def test_the_gate_no_longer_compares_a_canonical_basename_to_a_logical_tool():
+    """The exact defect: basename equality against the logical tool must be gone."""
+    source = TRUSTED_GATE.read_text(encoding="utf-8")
+    assert 'resolved.rsplit("/", 1)[-1] != expected_tool' not in source
+    assert "canonical_tool_basename_is_approved" in source
+    # Both halves of the boundary survive: logical tool identity AND approved-root containment.
+    assert 'instance.get("tool"), "COMPILE_INSTANCE_INVENTORY_MISMATCH") != expected_tool' in source
+    assert "resolved tool is outside the approved roots" in source
+
+
+def test_the_canonical_tool_grammar_pins_exact_logical_tools_and_triplets():
+    """No broad prefixes, no transient version literal, no 'contains gcc'."""
+    source = TRUSTED_GATE.read_text(encoding="utf-8")
+    assert 'APPROVED_TOOL_TRIPLETS = ("x86_64-linux-gnu",)' in source
+    assert 'TOOL_VERSION_CHARACTERS = "0123456789."' in source
+    # The transient runner version must never be pinned as a literal identity.
+    assert '"gcc-11"' not in source
+    assert '"x86_64-linux-gnu-gcc-11"' not in source
+    # The version is a numeric FIELD, so a later image stays approved.
+    assert 'version[0] not in "0123456789"' in source
+
+
+def test_the_gate_never_consults_the_filesystem_or_path_for_tool_identity():
+    """Tool identity is decided from recorded evidence, so Stage-C stays reproducible."""
+    source = TRUSTED_GATE.read_text(encoding="utf-8")
+    start = source.index("def canonical_tool_basename_is_approved")
+    body = source[start : source.index("\ndef ", start + 10)]
+    for forbidden in ("os.path", "realpath", "isfile", "os.access", "environ", "PATH"):
+        assert forbidden not in body, forbidden
+
+
+def test_the_real_run_33617866272_identity_pair_is_the_shape_the_world_models():
+    """The fixture must model the REAL canonical shape, or the suite is blind to this defect."""
+    # The world is built inside the driver source, so assert against that source directly.
+    assert '"gcc": "' + _RUN_33617866272_RESOLVED_TOOL_PATH + '"' in _DRIVER
+    assert '"objcopy": "/usr/bin/x86_64-linux-gnu-objcopy"' in _DRIVER
+    assert '"resolved_tool_path": _CANONICAL_TOOL_PATH[tool]' in _DRIVER
+    # The modelled canonical basename genuinely DIFFERS from the logical tool -- which is the entire
+    # condition the old basename-equality rule could not express.
+    assert _RUN_33617866272_RESOLVED_TOOL_PATH.rsplit("/", 1)[-1] != _RUN_33617866272_COMPILE_TOOL
+
+
+def test_the_working_directory_and_instance_graph_bindings_are_untouched():
+    """The repair is scoped to tool identity: the neighbouring bindings must still be enforced."""
+    source = TRUSTED_GATE.read_text(encoding="utf-8")
+    for anchor in (
+        "BUILD_CWD_PROVENANCE_INVALID",
+        'APPROVED_WORKING_DIRECTORY = "."',
+        'WORKING_DIRECTORY_CLASS = "GITHUB_WORKSPACE"',
+        "GOVERNED_JOB_IDS",
+        "SYSTEM_LIBRARY_PROVENANCE_INVALID",
+    ):
+        assert anchor in source, anchor

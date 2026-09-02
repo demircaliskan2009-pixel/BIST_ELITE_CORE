@@ -611,6 +611,65 @@ def validate_system_libraries(payload):
     return names
 
 
+# =================================================================================================
+# CANONICAL BUILD-TOOL IDENTITY (repair for trusted run 33618023994).
+#
+# `tool` and `resolved_tool_path` are DELIBERATELY DIFFERENT IDENTITY LAYERS, exactly as `name` and
+# `resolved_path` are for a system library above.  `tool` is the logical operation tool the contract
+# permits; `resolved_tool_path` is the canonical executable the governed wrapper actually ran after
+# os.path.realpath().  On the pinned runner /usr/bin/gcc is a symlink chain, so the canonical file is
+# /usr/bin/x86_64-linux-gnu-gcc-11 -- a DIFFERENT basename for the SAME approved tool.
+#
+# Requiring basename(resolved_tool_path) == tool collapsed those two layers and rejected the honest
+# resolution: run 33617866272 qualified successfully and trusted run 33618023994 still failed closed
+# with BUILD_TOOL_PROVENANCE_INVALID.  That was a false negative, not an attack.
+#
+# The replacement is NOT "any name containing gcc".  A canonical basename must DECOMPOSE exactly as
+#
+#     [<approved-triplet>-] <approved-logical-tool> [-<numeric-version>]
+#
+# so `gcc`, `gcc-11`, `x86_64-linux-gnu-gcc` and `x86_64-linux-gnu-gcc-11` are all the SAME approved
+# tool, while `clang`, `strip`, `attacker-cc`, `mygcc`, `gcc-evil` and `not-gcc` are not.  No
+# transient version is pinned: the version is a numeric FIELD, so a runner image moving from gcc-11
+# to gcc-12 stays approved while an arbitrary executable never becomes approved.  This is a pure
+# structural rule over recorded evidence -- it consults no filesystem and no PATH, so the trusted
+# gate remains self-contained and reproducible.
+# =================================================================================================
+
+APPROVED_TOOL_TRIPLETS = ("x86_64-linux-gnu",)
+TOOL_VERSION_CHARACTERS = "0123456789."
+
+
+def canonical_tool_basename_is_approved(basename, tool):
+    """True when `basename` is a governed canonical resolution of the logical `tool`."""
+    if not basename or "/" in basename:
+        return False
+    core = basename
+    for triplet in APPROVED_TOOL_TRIPLETS:
+        if core.startswith(triplet + "-"):
+            core = core[len(triplet) + 1 :]
+            break
+    if core == tool:
+        return True
+    if not core.startswith(tool + "-"):
+        return False
+    version = core[len(tool) + 1 :]
+    if not version or version[0] not in "0123456789":
+        return False
+    if ".." in version or version.endswith("."):
+        return False
+    return all(character in TOOL_VERSION_CHARACTERS for character in version)
+
+
+def resolved_tool_path_is_canonical(resolved):
+    """A recorded executable path must be absolute and already canonical -- never traversable."""
+    if not resolved.startswith("/") or resolved.endswith("/"):
+        return False
+    if "//" in resolved or "/./" in resolved or "/../" in resolved:
+        return False
+    return not (resolved.endswith("/.") or resolved.endswith("/.."))
+
+
 WORKING_DIRECTORY_CLASS = "GITHUB_WORKSPACE"
 
 # The link flags the frozen build contract requires.  A link that drops one of these produces a
@@ -663,10 +722,12 @@ def recompute_compile_instance_digest(payload):
             fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "tool")
         # Repair 6C: the RESOLVED executable, not the basename, and it must live in an approved root.
         resolved = require_str(instance.get("resolved_tool_path"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
+        if not resolved_tool_path_is_canonical(resolved):
+            fail("BUILD_TOOL_PROVENANCE_INVALID", "resolved tool path is not an absolute canonical path")
         if not any(resolved.startswith(root) for root in APPROVED_TOOLCHAIN_ROOTS):
             fail("BUILD_TOOL_PROVENANCE_INVALID", "resolved tool is outside the approved roots")
-        if resolved.rsplit("/", 1)[-1] != expected_tool:
-            fail("BUILD_TOOL_PROVENANCE_INVALID", "resolved tool is not the approved tool")
+        if not canonical_tool_basename_is_approved(resolved.rsplit("/", 1)[-1], expected_tool):
+            fail("BUILD_TOOL_PROVENANCE_INVALID", "resolved tool is not a canonical resolution of the approved tool")
         # Repair 6D: the working directory is bound end to end.
         if require_str(instance.get("working_directory"), "COMPILE_INSTANCE_INVENTORY_MISMATCH") != (
             APPROVED_WORKING_DIRECTORY
