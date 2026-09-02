@@ -2542,15 +2542,26 @@ def run_gate_build_graph_identity():
     _expect_run_gate("BUILD_GRAPH_INCOMPLETE", strip_the_job_scope)
 
     def claim_a_foreign_job(world):
-        # The build job's own compile claims to have run in the observation job.  That job already
-        # has a real producer for obj/policy.o, so the impersonation collides with it -- which is
-        # precisely the ambiguity job-scoped identity exists to make visible.
+        # The build job's own compile claims to have run in the observation job.  Every record is
+        # now bound to the job whose LOG carried it, so this is refused on its own evidence rather
+        # than only when it happens to collide with a real producer in the impersonated job.
         for item in world["instances"]["instances"]:
             if item["instance_id"] == "worker-policy":
                 item["output"] = "s3c-observe:" + item["output"].split(":", 1)[-1]
                 item["job_id"] = "s3c-observe"
 
-    _expect_run_gate("BUILD_GRAPH_DUPLICATE_PRODUCER", claim_a_foreign_job)
+    _expect_run_gate("BUILD_GRAPH_JOB_IDENTITY_MISMATCH", claim_a_foreign_job)
+
+    def impersonate_a_job_that_has_no_such_producer(world):
+        # THE CASE THE OLD RULE COULD NOT SEE.  worker-verify claims the ADJUDICATE job, which
+        # produces no obj/verify.o at all -- so there is no collision to expose the lie, and a
+        # collision-only rule would have accepted a build-log record describing a foreign job.
+        for item in world["instances"]["instances"]:
+            if item["instance_id"] == "worker-verify":
+                item["output"] = "s3c-adjudicate:" + item["output"].split(":", 1)[-1]
+                item["job_id"] = "s3c-adjudicate"
+
+    _expect_run_gate("BUILD_GRAPH_JOB_IDENTITY_MISMATCH", impersonate_a_job_that_has_no_such_producer)
 
     def invent_a_job(world):
         for item in world["instances"]["instances"]:
@@ -2688,6 +2699,118 @@ def run_gate_canonical_tool_identity():
                 item["resolved_tool_path"] = "/usr/bin/x86_64-linux-gnu-gcc-12"
 
     _run_world(work_dir, a_later_runner_toolchain)
+
+
+def run_gate_execution_instance_contract():
+    # CLASS-C P1 AND P2.  The complete build graph is the UNION of three job logs, and every one of
+    # the 21 governed operations is evidence that a governed wrapper ran it.  The BUILD inventory was
+    # validated field by field while the two DOWNSTREAM logs were checked only for schema, field set
+    # and logical tool -- so eight of twenty-one operations entered the trusted graph without their
+    # resolved executable, working directory, job identity, argv or input shapes ever being looked
+    # at.  One contract now governs all three, and every record is bound to the job whose log
+    # carried it.  P2: nested input members are proven dicts BEFORE the graph dereferences them, so
+    # malformed evidence fails as a governed marker instead of an AttributeError.
+    _run_world(sys.argv[sys.argv.index("--work-dir") + 1])
+
+    def downstream(field, value, log="observe_log"):
+        def mutate(world):
+            world[log]["instances"][0][field] = value
+
+        return mutate
+
+    # --- the executable that actually ran, in a DOWNSTREAM job ---
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", downstream("resolved_tool_path", "/opt/attacker/bin/backdoor"))
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", downstream("resolved_tool_path", "/usr/bin/attacker-cc"))
+    _expect_run_gate(
+        "BUILD_TOOL_PROVENANCE_INVALID",
+        downstream("resolved_tool_path", "/opt/evil/gcc", log="adjudicate_log"),
+    )
+    # --- the directory it ran in, and the class of that directory ---
+    _expect_run_gate("BUILD_CWD_PROVENANCE_INVALID", downstream("working_directory", "/etc"))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("working_directory_class", "ATTACKER"))
+    # --- the job it claims to be ---
+    _expect_run_gate("BUILD_GRAPH_JOB_IDENTITY_MISMATCH", downstream("job_id", "s3c-build-candidate"))
+    _expect_run_gate(
+        "BUILD_GRAPH_JOB_IDENTITY_MISMATCH",
+        downstream("job_id", "s3c-observe", log="adjudicate_log"),
+    )
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("job_id", "s3c-attacker"))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("output", "s3c-build-candidate:obj/stolen.o"))
+    # --- the command, the logical tool, and the recorded flag surfaces ---
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("argv", ["clang", "-c"]))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("tool", "clang"))
+
+    # --- MALFORMED NESTED EVIDENCE: governed rejection, never a raw exception ---
+    for label, value in (
+        ("inputs is a string", "not-a-list"),
+        ("inputs member is a string", ["not-a-dict"]),
+        ("inputs member is null", [None]),
+        ("inputs empty", []),
+    ):
+        assert label
+        _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("inputs", value))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("flags", {}))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("include_roots", [5]))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("libraries", [[]]))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("argv", ["gcc", 3]))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("output", 5))
+
+    def graph_identity_is_an_int(world):
+        world["observe_log"]["instances"][0]["inputs"][0]["graph_identity"] = 7
+
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", graph_identity_is_an_int)
+
+    def instance_is_not_a_mapping(world):
+        world["observe_log"]["instances"][0] = "nope"
+
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", instance_is_not_a_mapping)
+
+    def instances_is_not_a_list(world):
+        world["observe_log"]["instances"] = {}
+
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", instances_is_not_a_list)
+
+    def log_document_gains_a_field(world):
+        world["observe_log"]["extra"] = 1
+
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", log_document_gains_a_field)
+
+    # --- the BUILD log is held to the SAME contract, on the graph rule's own evidence ---
+    def build_input_member_is_a_string(world):
+        world["instances"]["instances"][0]["inputs"] = ["x"]
+
+    _expect_run_gate("COMPILE_INSTANCE_INVENTORY_MISMATCH", build_input_member_is_a_string)
+
+    # SELF-CONTAINMENT, proven directly.  In the full run the build inventory is validated by
+    # recompute_compile_instance_digest() BEFORE the graph rule sees it, so the graph rule's own
+    # guard is invisible end to end.  Call it alone with malformed build evidence: it dereferences
+    # nested input members, so it must reject on its own rather than depend on call order.
+    _predicate, world = _run_world(sys.argv[sys.argv.index("--work-dir") + 1])
+    build = json.loads(json.dumps(world["instances"]))
+    observe = json.loads(json.dumps(world["observe_log"]))
+    adjudicate = json.loads(json.dumps(world["adjudicate_log"]))
+    # The honest three-job graph is accepted by the rule in isolation.
+    assert gate.require_complete_build_graph(build, observe, adjudicate) > 0
+
+    for label, mutate in (
+        ("build input member is a string", lambda payload: payload["instances"][0].__setitem__("inputs", ["x"])),
+        ("build inputs is a string", lambda payload: payload["instances"][0].__setitem__("inputs", "nope")),
+        ("build instance is not a mapping", lambda payload: payload["instances"].__setitem__(0, "nope")),
+        ("build instances is not a list", lambda payload: payload.__setitem__("instances", {})),
+        ("build payload is not a mapping", None),
+    ):
+        broken = json.loads(json.dumps(world["instances"]))
+        if mutate is None:
+            broken = "not-a-mapping"
+        else:
+            mutate(broken)
+        try:
+            gate.require_complete_build_graph(broken, observe, adjudicate)
+        except gate.TrustedGateError:
+            continue
+        except Exception as error:  # noqa: BLE001 - a RAW escape is exactly the P2 defect
+            raise AssertionError("raw exception for " + label + ": " + type(error).__name__) from None
+        raise AssertionError("graph rule accepted " + label)
 
 
 def run_gate_build_provenance_boundary():
@@ -3105,6 +3228,7 @@ check("real_producer_receipt_is_accepted", real_producer_receipt_is_accepted)
 check("case_plan_is_not_trusted_authority", case_plan_is_not_trusted_authority)
 check("run_gate_build_graph_identity", run_gate_build_graph_identity)
 check("run_gate_build_provenance_boundary", run_gate_build_provenance_boundary)
+check("run_gate_execution_instance_contract", run_gate_execution_instance_contract)
 check("run_gate_canonical_tool_identity", run_gate_canonical_tool_identity)
 check("run_gate_duplicate_identities", run_gate_duplicate_identities)
 check("run_gate_compile_provenance", run_gate_compile_provenance)
@@ -3375,6 +3499,7 @@ def driver_values(driver_results):
         "case_plan_is_not_trusted_authority",
         "run_gate_build_graph_identity",
         "run_gate_build_provenance_boundary",
+        "run_gate_execution_instance_contract",
         "run_gate_canonical_tool_identity",
         "run_gate_duplicate_identities",
         "run_gate_compile_provenance",
@@ -3706,7 +3831,9 @@ def test_the_gate_no_longer_compares_a_canonical_basename_to_a_logical_tool():
     assert 'resolved.rsplit("/", 1)[-1] != expected_tool' not in source
     assert "canonical_tool_basename_is_approved" in source
     # Both halves of the boundary survive: logical tool identity AND approved-root containment.
-    assert 'instance.get("tool"), "COMPILE_INSTANCE_INVENTORY_MISMATCH") != expected_tool' in source
+    # They now live in the SHARED execution-instance contract rather than inline in one validator.
+    assert "def validate_execution_instance(" in source
+    assert 'if require_str(instance.get("tool"), marker) != expected_tool:' in source
     assert "resolved tool is outside the approved roots" in source
 
 
