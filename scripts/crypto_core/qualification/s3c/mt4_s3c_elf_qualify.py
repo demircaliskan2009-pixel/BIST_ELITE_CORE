@@ -1124,7 +1124,72 @@ def canonical_json(payload):
     )
 
 
+# =================================================================================================
+# EMIT THE INTERNAL FILTER ADDRESS FOR THE OBSERVER (repair for BUILD_TO_PROVE run 33513591856).
+#
+# The observer has to read the candidate's internal sock_fprog BEFORE the worker makes itself
+# non-dumpable, so it needs that object's link-time address.  The address may only come from THIS
+# qualifier's own record for the SAME digest-proven image -- never from the candidate at runtime and
+# never as a durable constant, because it belongs to exactly one binary.
+#
+# Everything asserted here is a precondition of the observation being sound:
+#   * the record is this qualifier's schema, and speaks for the governed candidate digest;
+#   * both objects carry the canonical symbol names;
+#   * both objects live in a NON-WRITABLE load segment, which is what makes the bytes read before
+#     the install necessarily the bytes submitted to it.
+# Any failure exits non-zero and emits nothing: the observer then has no address and cannot run.
+# =================================================================================================
+
+INTERNAL_FPROG_SYMBOL = "mt4_s3c_internal_filter_fprog"
+INTERNAL_PROGRAM_SYMBOL = "mt4_s3c_internal_filter_program"
+
+
+def emit_internal_fprog_va(record_path, expected_candidate_sha256, env_path):
+    """Bind the ELF-qualified internal fprog address to one exact candidate and emit it."""
+    with open(record_path, "rb") as handle:
+        record = json.loads(handle.read().decode("utf-8"))
+    if record.get("schema") != ELF_RECORD_SCHEMA:
+        _fail("ELF_RECORD_SCHEMA_UNEXPECTED", str(record.get("schema")))
+    if record.get("candidate_binary_sha256") != expected_candidate_sha256:
+        _fail("ELF_RECORD_CANDIDATE_MISMATCH", str(record.get("candidate_binary_sha256")))
+    filter_object = record.get("canonical_internal_filter_object")
+    if not isinstance(filter_object, dict):
+        _fail("ELF_RECORD_FILTER_OBJECT_MISSING")
+    if filter_object.get("fprog_symbol") != INTERNAL_FPROG_SYMBOL:
+        _fail("ELF_FPROG_SYMBOL_UNEXPECTED", str(filter_object.get("fprog_symbol")))
+    if filter_object.get("program_symbol") != INTERNAL_PROGRAM_SYMBOL:
+        _fail("ELF_PROGRAM_SYMBOL_UNEXPECTED", str(filter_object.get("program_symbol")))
+    for key in ("fprog_load_flags_u32", "program_load_flags_u32"):
+        flags = filter_object.get(key)
+        if not isinstance(flags, int) or (flags & PF_W) != 0:
+            _fail("ELF_FILTER_MAPPING_IS_WRITABLE", key + "=" + str(flags))
+    address = filter_object.get("fprog_va_u64")
+    if not isinstance(address, int) or address <= 0:
+        _fail("ELF_FPROG_VA_INVALID", str(address))
+    program_address = filter_object.get("program_va_u64")
+    if not isinstance(program_address, int) or program_address <= 0:
+        _fail("ELF_PROGRAM_VA_INVALID", str(program_address))
+    with open(env_path, "a", encoding="utf-8") as handle:
+        handle.write("S3C_INTERNAL_FPROG_VA=" + str(address) + "\n")
+    sys.stdout.write("MT4_S3C_INTERNAL_FPROG_VA=" + str(address) + "\n")
+    return 0
+
+
 def main(argv=None):
+    # The emit mode consumes an ALREADY-PRODUCED record and qualifies nothing itself, so it does not
+    # take the qualification inputs.  It is handled before the strict parser rather than by making
+    # those inputs conditionally optional.
+    source = sys.argv[1:] if argv is None else list(argv)
+    if "--emit-internal-fprog-va" in source:
+        emitter = argparse.ArgumentParser(description="MT4-S3C internal filter address emitter")
+        emitter.add_argument("--emit-internal-fprog-va", required=True, help="path to the ELF qualification record")
+        emitter.add_argument("--expected-candidate-sha256", required=True, help="the governed candidate digest")
+        emitter.add_argument("--emit-env", required=True, help="path of the environment file to append to")
+        emitted = emitter.parse_args(source)
+        return emit_internal_fprog_va(
+            emitted.emit_internal_fprog_va, emitted.expected_candidate_sha256, emitted.emit_env
+        )
+
     parser = argparse.ArgumentParser(description="MT4-S3C static ELF qualifier (zero execution)")
     parser.add_argument("--candidate", required=True, help="absolute path to the candidate binary")
     parser.add_argument(

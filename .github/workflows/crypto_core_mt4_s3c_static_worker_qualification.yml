@@ -67,7 +67,7 @@ env:
   # name a repository file.  V9 SECTION 28 forbids shell variable references unless they are
   # "explicitly modelled and literally enumerated", and this list is that enumeration: a command may
   # reference a variable only if it appears here, and a permanent test rejects any other name.
-  S3C_ALLOWED_SHELL_VARIABLES: "RUNNER_TEMP GITHUB_WORKSPACE GITHUB_ENV GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA EXPECTED_HEAD BLST_COMMIT BLST_REPOSITORY S3C_EXPECTED_PHDR_INVENTORY S3C_CANDIDATE_NAME S3C_WORKER_SHA256 S3C_WORKER_BYTES S3C_DEPENDENCY_DIGEST S3C_POLICY_INTERNAL_ID S3C_POLICY_INTERNAL_SHA256 S3C_POLICY_INTERNAL_COUNT S3C_POLICY_INTERNAL_CBPF S3C_POLICY_OUTER_DIGEST S3C_CASE_SET_DIGEST CANDIDATE_ARTIFACT_ID CANDIDATE_ARTIFACT_DIGEST BLST_ASSEMBLY_BEFORE S3C_LIBCAP_ARCH S3C_LIBCAP2_VERSION S3C_LIBCAP2_DEB S3C_LIBCAP2_DEB_SHA256 S3C_LIBCAP_DEV_VERSION S3C_LIBCAP_DEV_DEB S3C_LIBCAP_DEV_DEB_SHA256 S3C_LIBCAP_HEADER_SHA256 S3C_LIBCAP_LIBRARY_SHA256 S3C_LIBCAP_RUNTIME_DIR S3C_LIBCAP_RUNTIME_SONAME S3C_LIBCAP_RUNTIME_REAL S3C_LIBCAP_RUNTIME_TARGET"
+  S3C_ALLOWED_SHELL_VARIABLES: "RUNNER_TEMP GITHUB_WORKSPACE GITHUB_ENV GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_SHA EXPECTED_HEAD BLST_COMMIT BLST_REPOSITORY S3C_EXPECTED_PHDR_INVENTORY S3C_CANDIDATE_NAME S3C_WORKER_SHA256 S3C_WORKER_BYTES S3C_DEPENDENCY_DIGEST S3C_POLICY_INTERNAL_ID S3C_POLICY_INTERNAL_SHA256 S3C_POLICY_INTERNAL_COUNT S3C_POLICY_INTERNAL_CBPF S3C_POLICY_OUTER_DIGEST S3C_CASE_SET_DIGEST S3C_INTERNAL_FPROG_VA CANDIDATE_ARTIFACT_ID CANDIDATE_ARTIFACT_DIGEST BLST_ASSEMBLY_BEFORE S3C_LIBCAP_ARCH S3C_LIBCAP2_VERSION S3C_LIBCAP2_DEB S3C_LIBCAP2_DEB_SHA256 S3C_LIBCAP_DEV_VERSION S3C_LIBCAP_DEV_DEB S3C_LIBCAP_DEV_DEB_SHA256 S3C_LIBCAP_HEADER_SHA256 S3C_LIBCAP_LIBRARY_SHA256 S3C_LIBCAP_RUNTIME_DIR S3C_LIBCAP_RUNTIME_SONAME S3C_LIBCAP_RUNTIME_REAL S3C_LIBCAP_RUNTIME_TARGET"
 
   # THE IMMUTABLE LIBCAP CONTRACT.  BUILD_TO_PROVE run 32993250008 proved ubuntu-22.04 does not
   # ship /usr/include/sys/capability.h, and the launcher genuinely requires it plus -lcap.  Naming
@@ -449,7 +449,13 @@ jobs:
     name: s3c-observe
     runs-on: ubuntu-22.04
     timeout-minutes: 40
-    needs: s3c-build-candidate
+    # The ELF qualification is now a real INPUT, not just a parallel record.  The observer must read
+    # the candidate's internal fprog BEFORE the worker makes itself non-dumpable, and the only
+    # non-self-reported authority for that address is the independently reviewed static
+    # qualification of the same digest-proven image.
+    needs:
+      - s3c-build-candidate
+      - s3c-elf-qualify
     permissions: {}
     steps:
       - name: Checkout crypto_core at the exact qualification head
@@ -636,6 +642,24 @@ jobs:
           python scripts/crypto_core/qualification/s3c/mt4_s3c_sandbox_policy_qualifier.py --probe-json "$RUNNER_TEMP/policy_probe.json" --out "$RUNNER_TEMP/policy_record.json" --emit-env "$GITHUB_ENV"
           python scripts/crypto_core/qualification/s3c/mt4_s3c_build_manifest.py --emit-env-from-manifest "$RUNNER_TEMP/candidate/mt4_s3c_build_manifest.json" --emit-env "$GITHUB_ENV"
 
+      - name: Fresh-download the ELF qualification record
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
+        with:
+          name: mt4-s3c-elf-qualification-record
+          path: ${{ runner.temp }}/elf
+
+      # THE ADDRESS IS BOUND TO THE EXACT CANDIDATE, OR IT IS NOT USED.  The record may only speak
+      # for the binary this job actually downloaded: its declared candidate digest must be the
+      # governed one, the two symbols must carry the canonical names, and both objects must live in
+      # a NON-WRITABLE load segment.  A writable mapping would let the bytes captured before the
+      # install differ from the bytes submitted to it, which is exactly what must be impossible.
+      - name: Bind the ELF-qualified internal filter address to this candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/crypto_core/qualification/s3c/mt4_s3c_elf_qualify.py --emit-internal-fprog-va "$RUNNER_TEMP/elf/mt4_s3c_elf_qualification_record.json" --expected-candidate-sha256 "$S3C_WORKER_SHA256" --emit-env "$GITHUB_ENV"
+          echo "S3C_ELF_AUTHORITY_BOUND=PASS"
+
       - name: Build the deterministic case plan from the governed TEST-ONLY fixture
         shell: bash
         run: |
@@ -674,7 +698,7 @@ jobs:
           # happened to export cannot reach the observer.  The single LD_LIBRARY_PATH set here is
           # an explicit RUNTIME authority pointing at the verified private directory; it is not part
           # of the governed BUILD environment, which still rejects that variable outright.
-          /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C LC_ALL=C LD_LIBRARY_PATH="$S3C_LIBCAP_RUNTIME_DIR" "$RUNNER_TEMP/mt4_s3c_observer" --candidate "$RUNNER_TEMP/candidate/$S3C_CANDIDATE_NAME" --candidate-sha256 "$S3C_WORKER_SHA256" --candidate-size "$S3C_WORKER_BYTES" --case-plan "$RUNNER_TEMP/case_plan.bin" --canonical-internal-policy-id "$S3C_POLICY_INTERNAL_ID" --canonical-internal-policy-sha256 "$S3C_POLICY_INTERNAL_SHA256" --canonical-internal-cbpf-count "$S3C_POLICY_INTERNAL_COUNT" --canonical-internal-cbpf-sha256 "$S3C_POLICY_INTERNAL_CBPF" --outer-containment-policy-digest "$S3C_POLICY_OUTER_DIGEST" --observation-case-set-digest "$S3C_CASE_SET_DIGEST" --source-run-id "$GITHUB_RUN_ID" --source-run-attempt "$GITHUB_RUN_ATTEMPT" --source-head-sha "$GITHUB_SHA" --out "$RUNNER_TEMP/observation/mt4_s3c_raw_observation_record.json"
+          /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C LC_ALL=C LD_LIBRARY_PATH="$S3C_LIBCAP_RUNTIME_DIR" "$RUNNER_TEMP/mt4_s3c_observer" --candidate "$RUNNER_TEMP/candidate/$S3C_CANDIDATE_NAME" --candidate-sha256 "$S3C_WORKER_SHA256" --candidate-size "$S3C_WORKER_BYTES" --case-plan "$RUNNER_TEMP/case_plan.bin" --canonical-internal-policy-id "$S3C_POLICY_INTERNAL_ID" --canonical-internal-policy-sha256 "$S3C_POLICY_INTERNAL_SHA256" --canonical-internal-cbpf-count "$S3C_POLICY_INTERNAL_COUNT" --canonical-internal-cbpf-sha256 "$S3C_POLICY_INTERNAL_CBPF" --outer-containment-policy-digest "$S3C_POLICY_OUTER_DIGEST" --observation-case-set-digest "$S3C_CASE_SET_DIGEST" --internal-fprog-va "$S3C_INTERNAL_FPROG_VA" --source-run-id "$GITHUB_RUN_ID" --source-run-attempt "$GITHUB_RUN_ATTEMPT" --source-head-sha "$GITHUB_SHA" --out "$RUNNER_TEMP/observation/mt4_s3c_raw_observation_record.json"
           echo "S3C_OBSERVATION=PASS"
 
       - name: Upload the raw observation record

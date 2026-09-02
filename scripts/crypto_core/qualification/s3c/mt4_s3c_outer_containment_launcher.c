@@ -2114,6 +2114,12 @@ typedef struct {
     const char *candidate_path;
     unsigned char governed_digest[32];
     unsigned long long governed_size;
+    /*
+     * The link-time address of mt4_s3c_internal_filter_fprog in THIS EXACT candidate, supplied by
+     * the independently reviewed ELF qualification of the same digest-proven image.  It is never a
+     * candidate self-report and never a durable constant: it belongs to one binary.
+     */
+    unsigned long long internal_fprog_va;
 } mt4_s3c_candidate_t;
 
 static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
@@ -2136,6 +2142,12 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
     long started;
     int in_syscall_exit_stop = 0;
     int candidate_phase = 0;
+    /*
+     * Set only when THIS case's governed C24 stimulus actually delivered SIGKILL.  After that the
+     * tracee is dying, so a resume may legitimately fail with ESRCH; that is the stimulus working,
+     * not the observation infrastructure breaking.  See the resume sites below.
+     */
+    int governed_sigkill_delivered = 0;
     int internal_capture_done = 0;
     unsigned int namespace_index;
     long clone_result;
@@ -2509,11 +2521,56 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
                 mt4_s3c_case_fail(result, MT4_S3C_REASON_LAUNCH_FAILED, "execve_returned");
             }
 
+            /*
+             * LEG L2 FOR THE CANDIDATE, TAKEN WHILE THE TRACEE IS STILL DUMPABLE (repair for
+             * BUILD_TO_PROVE run 33513591856).
+             *
+             * The frozen worker sets PR_SET_DUMPABLE 0 BEFORE it installs its internal filter, and
+             * the launcher establishes PTRACE_TRACEME only AFTER dropping every capability, so the
+             * stored ptracer credential holds no CAP_SYS_PTRACE.  ptrace_access_vm() then refuses
+             * every remote read: reading the fprog at the internal seccomp ENTRY returns no bytes.
+             * That is the frozen containment contract working, not a defect to be relaxed.
+             *
+             * The only sound answer is to read the SAME tracee memory EARLIER.  This stop is the
+             * trailing syscall-EXIT of the successful execve: the new image is fully mapped, no
+             * candidate instruction has run yet, and dumpability is still the post-exec default.
+             * The bytes read here are the candidate's own memory, not a report about it.
+             *
+             * IMMUTABILITY between here and the install is what makes the earlier read equivalent:
+             * the image is ET_EXEC with fixed link-time addresses, both objects live in a
+             * non-writable file-backed PT_LOAD, the worker is single-threaded, and the only
+             * syscalls it may issue before the install are prctl, close and close_range -- the
+             * outer filter, already installed and verified, admits no mmap, mprotect or munmap.
+             * The install's own ENTRY then re-proves the pointer: rdx must be exactly this address.
+             */
+            if (candidate_phase && in_syscall_exit_stop && !result->internal_capture_valid &&
+                registers.orig_rax == (unsigned long long)__NR_execve && result->exec_transition_observed) {
+                unsigned short captured_length = 0;
+                unsigned long filter_address = 0;
+                size_t byte_count = 0;
+
+                if (mt4_s3c_capture_filter(child,
+                                           (unsigned long)candidate->internal_fprog_va,
+                                           &captured_length,
+                                           &filter_address,
+                                           result->internal_bytes,
+                                           &byte_count) != 0) {
+                    mt4_s3c_case_fail(result, MT4_S3C_REASON_WORKER_FILTER_OBSERVATION_UNAVAILABLE,
+                                      "predumpable_capture");
+                    break;
+                }
+                result->internal_capture_valid = 1;
+                result->internal_length = captured_length;
+                result->internal_fprog_address = (unsigned long)candidate->internal_fprog_va;
+                result->internal_filter_address = filter_address;
+                result->internal_byte_count = byte_count;
+            }
+
             /* LEG L1 and LEG L2: capture at the seccomp syscall-ENTRY stop. */
             if (registers.orig_rax == (unsigned long long)__NR_seccomp && !in_syscall_exit_stop) {
                 unsigned short captured_length = 0;
                 unsigned long filter_address = 0;
-                unsigned char *destination = candidate_phase ? result->internal_bytes : result->outer_bytes;
+                unsigned char *destination = result->outer_bytes;
                 size_t byte_count = 0;
 
                 /*
@@ -2528,22 +2585,29 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
                                       "seccomp_register_leg");
                     break;
                 }
-                if (mt4_s3c_capture_filter(child,
-                                           (unsigned long)registers.rdx,
-                                           &captured_length,
-                                           &filter_address,
-                                           destination,
-                                           &byte_count) != 0) {
-                    mt4_s3c_case_fail(result, MT4_S3C_REASON_WORKER_FILTER_OBSERVATION_UNAVAILABLE, "capture");
-                    break;
-                }
                 if (candidate_phase) {
-                    result->internal_capture_valid = 1;
-                    result->internal_length = captured_length;
-                    result->internal_fprog_address = (unsigned long)registers.rdx;
-                    result->internal_filter_address = filter_address;
-                    result->internal_byte_count = byte_count;
+                    /*
+                     * The candidate is non-dumpable by now, so its memory is unreadable BY DESIGN.
+                     * The install is bound to the bytes already captured above by requiring the
+                     * submitted pointer to be exactly the address they were read from.  A filter
+                     * submitted from anywhere else is refused rather than silently unverified.
+                     */
+                    if (!result->internal_capture_valid ||
+                        registers.rdx != (unsigned long long)candidate->internal_fprog_va) {
+                        mt4_s3c_case_fail(result, MT4_S3C_REASON_WORKER_FILTER_OBSERVATION_UNAVAILABLE,
+                                          "internal_fprog_pointer");
+                        break;
+                    }
                 } else {
+                    if (mt4_s3c_capture_filter(child,
+                                               (unsigned long)registers.rdx,
+                                               &captured_length,
+                                               &filter_address,
+                                               destination,
+                                               &byte_count) != 0) {
+                        mt4_s3c_case_fail(result, MT4_S3C_REASON_WORKER_FILTER_OBSERVATION_UNAVAILABLE, "capture");
+                        break;
+                    }
                     result->outer_capture_valid = 1;
                     result->outer_length = captured_length;
                     result->outer_fprog_address = (unsigned long)registers.rdx;
@@ -2611,12 +2675,25 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
             if (candidate_phase && internal_capture_done && !in_syscall_exit_stop &&
                 registers.orig_rax == (unsigned long long)__NR_read &&
                 plan_case->stimulus_kind == MT4_S3C_STIMULUS_WRITE_PREFIX_THEN_SIGKILL && pidfd >= 0) {
-                (void)mt4_s3c_sys_pidfd_send_signal(pidfd, SIGKILL);
+                if (mt4_s3c_sys_pidfd_send_signal(pidfd, SIGKILL) == 0) {
+                    governed_sigkill_delivered = 1;
+                }
             }
 
             in_syscall_exit_stop = !in_syscall_exit_stop;
 
             if (mt4_s3c_resume_to_syscall(child) != 0) {
+                /*
+                 * C24 ONLY.  The governed stimulus has already killed the tracee, so PTRACE_SYSCALL
+                 * may fail with ESRCH purely because the process is gone.  Treating that as an
+                 * observation failure would report QUALIFICATION_INFRASTRUCTURE_FAILURE for the one
+                 * case whose expected outcome IS termination by signal.  Nothing is fabricated: no
+                 * reason is set, tracing simply stops, and the teardown reap records the actual
+                 * wait status, which is what decides the outcome.
+                 */
+                if (governed_sigkill_delivered) {
+                    break;
+                }
                 mt4_s3c_case_fail(result, MT4_S3C_REASON_WORKER_FILTER_OBSERVATION_UNAVAILABLE, "resume_syscall");
                 break;
             }
@@ -2638,6 +2715,17 @@ static void mt4_s3c_run_case(const mt4_s3c_candidate_t *candidate,
             mt4_s3c_trace_append(&result->trace, &event);
         }
         if (mt4_s3c_resume_to_syscall(child) != 0) {
+            /*
+             * C24 ONLY.  The governed stimulus has already killed the tracee, so PTRACE_SYSCALL
+             * may fail with ESRCH purely because the process is gone.  Treating that as an
+             * observation failure would report QUALIFICATION_INFRASTRUCTURE_FAILURE for the one
+             * case whose expected outcome IS termination by signal.  Nothing is fabricated: no
+             * reason is set, tracing simply stops, and the teardown reap records the actual
+             * wait status, which is what decides the outcome.
+             */
+            if (governed_sigkill_delivered) {
+                break;
+            }
             mt4_s3c_case_fail(result, MT4_S3C_REASON_WORKER_FILTER_OBSERVATION_UNAVAILABLE, "resume_signal");
             break;
         }
@@ -3062,6 +3150,12 @@ int main(int argc, char **argv)
     if (candidate.governed_size == 0ull ||
         candidate.governed_size > (unsigned long long)MT4_S3C_MAX_WORKER_BINARY_BYTES) {
         mt4_s3c_fatal(MT4_S3C_REASON_QUALIFICATION_INFRASTRUCTURE_FAILURE, "candidate_size");
+    }
+
+    value = mt4_s3c_option(argc, argv, "--internal-fprog-va");
+    candidate.internal_fprog_va = (value == NULL) ? 0ull : strtoull(value, NULL, 10);
+    if (candidate.internal_fprog_va == 0ull) {
+        mt4_s3c_fatal(MT4_S3C_REASON_QUALIFICATION_INFRASTRUCTURE_FAILURE, "internal_fprog_va");
     }
 
     identity.canonical_internal_policy_id = mt4_s3c_option(argc, argv, "--canonical-internal-policy-id");
