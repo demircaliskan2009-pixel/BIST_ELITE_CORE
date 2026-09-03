@@ -554,7 +554,10 @@ APPROVED_TOOLCHAIN_ROOTS = ("/usr/bin/", "/usr/local/bin/", "/bin/")
 APPROVED_WORKING_DIRECTORY = "."
 
 # Repair 5: the real workflow reuses pathnames across jobs, so graph identity carries the job.
-GOVERNED_JOB_IDS = ("s3c-build-candidate", "s3c-observe", "s3c-adjudicate")
+BUILD_JOB_ID = "s3c-build-candidate"
+OBSERVE_JOB_ID = "s3c-observe"
+ADJUDICATE_JOB_ID = "s3c-adjudicate"
+GOVERNED_JOB_IDS = (BUILD_JOB_ID, OBSERVE_JOB_ID, ADJUDICATE_JOB_ID)
 
 # Repair 6E: ONE libcap authority, agreed by producer and consumer.  The logical name is what the
 # link requests; the resolved file is what the linker actually selected; both travel together.
@@ -598,6 +601,8 @@ def validate_system_libraries(payload):
             fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "provenance")
         if not is_hex64(digest):
             fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "digest")
+        if not recorded_path_is_canonical(resolved):
+            fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "resolved path is not an absolute canonical path")
         if not any(resolved.startswith(root) for root in APPROVED_SYSTEM_LIBRARY_ROOTS):
             fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "resolved outside the pinned library roots")
         if name in names:
@@ -609,6 +614,76 @@ def validate_system_libraries(payload):
     if sorted(names) != sorted(REQUIRED_SYSTEM_LIBRARIES):
         fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "unexpected library")
     return names
+
+
+# =================================================================================================
+# CANONICAL BUILD-TOOL IDENTITY (repair for trusted run 33618023994).
+#
+# `tool` and `resolved_tool_path` are DELIBERATELY DIFFERENT IDENTITY LAYERS, exactly as `name` and
+# `resolved_path` are for a system library above.  `tool` is the logical operation tool the contract
+# permits; `resolved_tool_path` is the canonical executable the governed wrapper actually ran after
+# os.path.realpath().  On the pinned runner /usr/bin/gcc is a symlink chain, so the canonical file is
+# /usr/bin/x86_64-linux-gnu-gcc-11 -- a DIFFERENT basename for the SAME approved tool.
+#
+# Requiring basename(resolved_tool_path) == tool collapsed those two layers and rejected the honest
+# resolution: run 33617866272 qualified successfully and trusted run 33618023994 still failed closed
+# with BUILD_TOOL_PROVENANCE_INVALID.  That was a false negative, not an attack.
+#
+# The replacement is NOT "any name containing gcc".  A canonical basename must DECOMPOSE exactly as
+#
+#     [<approved-triplet>-] <approved-logical-tool> [-<numeric-version>]
+#
+# so `gcc`, `gcc-11`, `x86_64-linux-gnu-gcc` and `x86_64-linux-gnu-gcc-11` are all the SAME approved
+# tool, while `clang`, `strip`, `attacker-cc`, `mygcc`, `gcc-evil` and `not-gcc` are not.  No
+# transient version is pinned: the version is a numeric FIELD, so a runner image moving from gcc-11
+# to gcc-12 stays approved while an arbitrary executable never becomes approved.  This is a pure
+# structural rule over recorded evidence -- it consults no filesystem and no PATH, so the trusted
+# gate remains self-contained and reproducible.
+# =================================================================================================
+
+APPROVED_TOOL_TRIPLETS = ("x86_64-linux-gnu",)
+TOOL_VERSION_CHARACTERS = "0123456789."
+
+
+def canonical_tool_basename_is_approved(basename, tool):
+    """True when `basename` is a governed canonical resolution of the logical `tool`."""
+    if not basename or "/" in basename:
+        return False
+    core = basename
+    for triplet in APPROVED_TOOL_TRIPLETS:
+        if core.startswith(triplet + "-"):
+            core = core[len(triplet) + 1 :]
+            break
+    if core == tool:
+        return True
+    if not core.startswith(tool + "-"):
+        return False
+    version = core[len(tool) + 1 :]
+    if not version or version[0] not in "0123456789":
+        return False
+    if ".." in version or version.endswith("."):
+        return False
+    return all(character in TOOL_VERSION_CHARACTERS for character in version)
+
+
+def recorded_path_is_canonical(path):
+    """A recorded absolute path must ALREADY be canonical -- never merely prefix-shaped.
+
+    ONE helper for every recorded path the trusted surface judges: governed tool executables and
+    resolved system libraries alike.  A lexical root prefix is not containment: `/usr/lib/` prefixes
+    `/usr/lib/../../tmp/libcap.so.2.44`, which escapes the approved root while satisfying a naive
+    startswith().  Containment may therefore only be asked AFTER canonicality is established.
+
+    This is a pure structural rule over recorded evidence.  It consults no filesystem, no PATH and
+    no environment, so the trusted gate stays self-contained and reproducible offline.
+    """
+    if not isinstance(path, str) or not path:
+        return False
+    if not path.startswith("/") or path.endswith("/"):
+        return False
+    if "//" in path or "/./" in path or "/../" in path:
+        return False
+    return not (path.endswith("/.") or path.endswith("/.."))
 
 
 WORKING_DIRECTORY_CLASS = "GITHUB_WORKSPACE"
@@ -628,6 +703,111 @@ REQUIRED_WORKER_LINK_FLAGS = (
 )
 
 
+# =================================================================================================
+# ONE CANONICAL EXECUTION-INSTANCE CONTRACT (Class-C P1 repair).
+#
+# The complete build graph is the UNION of three job logs -- build, observe and adjudicate -- and
+# every one of the 21 governed operations is trusted evidence that a governed wrapper ran it.  The
+# build inventory was validated field by field, but the two DOWNSTREAM logs were only checked for
+# schema, field set and logical tool.  Eight of the twenty-one operations therefore entered the
+# trusted graph without their resolved executable, working directory, working-directory class,
+# job identity, argv or input shapes ever being examined: an observe-job record naming
+# /opt/attacker/bin/backdoor as the executable that built the OBSERVER would have been accepted.
+#
+# That is one contract enforced in one place, not two dialects.  Every instance from every job now
+# passes through validate_execution_instance(), which additionally binds the instance to the job
+# whose log carried it -- a record cannot claim it ran in a different job than the log it arrived
+# in, and its output identity must be scoped to that same job.
+#
+# It also closes the malformed-evidence escape (Class-C P2): input members are proven to be dicts of
+# the exact field set HERE, before require_complete_build_graph() dereferences them, so malformed
+# downstream evidence fails as a governed TrustedGateError instead of an AttributeError.
+# =================================================================================================
+
+
+def validate_execution_instance(instance, marker, expected_job_id):
+    """The single frozen contract every governed execution record must satisfy, from any job."""
+    if not isinstance(instance, dict):
+        fail(marker, "instance type")
+    if tuple(sorted(instance)) != tuple(sorted(instance_fields_for(instance.get("kind")))):
+        fail(marker, "instance field set")
+    identifier = require_str(instance.get("instance_id"), marker)
+    kind = require_str(instance.get("kind"), marker)
+    if kind not in ("COMPILE", "LINK", "TRANSFORM"):
+        fail(marker, "kind")
+    expected_tool = APPROVED_TOOL_BY_KIND[kind]
+    if require_str(instance.get("tool"), marker) != expected_tool:
+        fail(marker, "tool")
+
+    # The RESOLVED executable, not the basename, and it must be a canonical resolution of the
+    # approved logical tool inside an approved root.
+    resolved = require_str(instance.get("resolved_tool_path"), marker)
+    if not recorded_path_is_canonical(resolved):
+        fail("BUILD_TOOL_PROVENANCE_INVALID", "resolved tool path is not an absolute canonical path")
+    if not any(resolved.startswith(root) for root in APPROVED_TOOLCHAIN_ROOTS):
+        fail("BUILD_TOOL_PROVENANCE_INVALID", "resolved tool is outside the approved roots")
+    if not canonical_tool_basename_is_approved(resolved.rsplit("/", 1)[-1], expected_tool):
+        fail("BUILD_TOOL_PROVENANCE_INVALID", "resolved tool is not a canonical resolution of the approved tool")
+
+    # The working directory is bound end to end, and the record cannot claim a foreign job.
+    if require_str(instance.get("working_directory"), marker) != APPROVED_WORKING_DIRECTORY:
+        fail("BUILD_CWD_PROVENANCE_INVALID")
+    if require_str(instance.get("working_directory_class"), marker) != WORKING_DIRECTORY_CLASS:
+        fail(marker, "working directory class")
+    job = require_str(instance.get("job_id"), marker)
+    if job not in GOVERNED_JOB_IDS:
+        fail(marker, "job id")
+    if job != expected_job_id:
+        fail("BUILD_GRAPH_JOB_IDENTITY_MISMATCH", identifier)
+
+    argv = instance.get("argv")
+    if not isinstance(argv, list) or not argv or argv[0] != expected_tool:
+        fail(marker, "argv")
+    for element in argv:
+        require_str(element, marker)
+    for field in ("flags", "include_roots"):
+        value = instance.get(field)
+        if not isinstance(value, list):
+            fail(marker, field)
+        for element in value:
+            require_str(element, marker)
+
+    inputs = instance.get("inputs")
+    if not isinstance(inputs, list) or not inputs:
+        fail(marker, "inputs")
+    for item in inputs:
+        if not isinstance(item, dict) or tuple(sorted(item)) != COMPILE_INPUT_FIELDS:
+            fail(marker, "input shape")
+        item_class = require_str(item.get("class"), marker)
+        item_path = require_str(item.get("path"), marker)
+        require_str(item.get("graph_identity"), marker)
+        require_str(item.get("raw_path"), marker)
+        if item_class not in DEPENDENCY_CLASSES:
+            fail(marker, "input class")
+        if item_class == CLASS_REPO_BUNDLED and item_path not in SOURCE_BUNDLE_PATHS:
+            fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_UNBUNDLED")
+
+    instance_libraries = instance.get("libraries")
+    if not isinstance(instance_libraries, list):
+        fail(marker, "libraries")
+    for element in instance_libraries:
+        require_str(element, marker)
+
+    # The output identity is job-scoped, and the job it names is the one that recorded it.
+    output = require_str(instance.get("output"), marker)
+    require_str(instance.get("output_path"), marker)
+    require_str(instance.get("raw_output"), marker)
+    if ":" not in output or output.split(":", 1)[0] != expected_job_id:
+        fail("BUILD_GRAPH_INCOMPLETE", "output identity is not scoped to the recording job")
+
+    if kind == "TRANSFORM":
+        require_str(instance.get("transform_target"), marker)
+        for field in ("digest_before", "digest_after"):
+            if not is_hex64(require_str(instance.get(field), marker)):
+                fail("BUILD_GRAPH_TRANSFORM_DIGEST_INVALID")
+    return identifier, kind
+
+
 def recompute_compile_instance_digest(payload):
     """Validate the ACTUAL compile/link inventory and recompute its digest (repair 8A, 8B, 8E)."""
     if not isinstance(payload, dict):
@@ -645,60 +825,17 @@ def recompute_compile_instance_digest(payload):
     kinds = {}
     libraries = set()
     for instance in instances:
-        if not isinstance(instance, dict):
-            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "instance type")
-        if tuple(sorted(instance)) != tuple(sorted(instance_fields_for(instance.get("kind")))):
-            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "instance field set")
-        identifier = require_str(instance.get("instance_id"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
+        # ONE contract, identical to the one the downstream job logs are held to.
+        identifier, kind = validate_execution_instance(instance, "COMPILE_INSTANCE_INVENTORY_MISMATCH", BUILD_JOB_ID)
         if identifier in seen:
             fail("COMPILE_INSTANCE_DUPLICATE")
         seen.add(identifier)
         identifiers.append(identifier)
-        kind = require_str(instance.get("kind"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
-        if kind not in ("COMPILE", "LINK", "TRANSFORM"):
-            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "kind")
         kinds[identifier] = kind
-        expected_tool = APPROVED_TOOL_BY_KIND[kind]
-        if require_str(instance.get("tool"), "COMPILE_INSTANCE_INVENTORY_MISMATCH") != expected_tool:
-            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "tool")
-        # Repair 6C: the RESOLVED executable, not the basename, and it must live in an approved root.
-        resolved = require_str(instance.get("resolved_tool_path"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
-        if not any(resolved.startswith(root) for root in APPROVED_TOOLCHAIN_ROOTS):
-            fail("BUILD_TOOL_PROVENANCE_INVALID", "resolved tool is outside the approved roots")
-        if resolved.rsplit("/", 1)[-1] != expected_tool:
-            fail("BUILD_TOOL_PROVENANCE_INVALID", "resolved tool is not the approved tool")
-        # Repair 6D: the working directory is bound end to end.
-        if require_str(instance.get("working_directory"), "COMPILE_INSTANCE_INVENTORY_MISMATCH") != (
-            APPROVED_WORKING_DIRECTORY
-        ):
-            fail("BUILD_CWD_PROVENANCE_INVALID")
-        if require_str(instance.get("job_id"), "COMPILE_INSTANCE_INVENTORY_MISMATCH") not in GOVERNED_JOB_IDS:
-            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "job id")
-        if (
-            require_str(instance.get("working_directory_class"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
-            != WORKING_DIRECTORY_CLASS
-        ):
-            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "working directory class")
-        argv = instance.get("argv")
-        if not isinstance(argv, list) or not argv or argv[0] != expected_tool:
-            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "argv")
-        inputs = instance.get("inputs")
-        if not isinstance(inputs, list) or not inputs:
-            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "inputs")
-        for item in inputs:
-            if not isinstance(item, dict) or tuple(sorted(item)) != COMPILE_INPUT_FIELDS:
-                fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "input shape")
-            item_class = require_str(item.get("class"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
-            item_path = require_str(item.get("path"), "COMPILE_INSTANCE_INVENTORY_MISMATCH")
-            if item_class not in DEPENDENCY_CLASSES:
-                fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "input class")
-            if item_class == CLASS_REPO_BUNDLED and item_path not in SOURCE_BUNDLE_PATHS:
-                fail("SOURCE_CLOSURE_COMPILE_DEPENDENCY_UNBUNDLED")
-        instance_libraries = instance.get("libraries")
-        if not isinstance(instance_libraries, list):
-            fail("COMPILE_INSTANCE_INVENTORY_MISMATCH", "libraries")
         if kind == "LINK":
-            libraries.update(require_str(item, "COMPILE_INSTANCE_INVENTORY_MISMATCH") for item in instance_libraries)
+            libraries.update(
+                require_str(item, "COMPILE_INSTANCE_INVENTORY_MISMATCH") for item in instance.get("libraries")
+            )
 
     # The BUILD JOB's own inventory must be exactly the invocations that job performs.
     if sorted(seen) != sorted(BUILD_JOB_INSTANCES):
@@ -731,6 +868,8 @@ def recompute_compile_instance_digest(payload):
             fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "digest")
         if entry.get("provenance") != PROVENANCE_SYSTEM_LIBRARY:
             fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "provenance")
+        if not recorded_path_is_canonical(path):
+            fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "resolved path is not an absolute canonical path")
         if not any(path.startswith(root) for root in APPROVED_SYSTEM_LIBRARY_ROOTS):
             fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "resolved path is outside the approved roots")
         # The resolved file must actually be the library the NAME requested: -lcap resolves to a
@@ -763,20 +902,22 @@ def recompute_compile_instance_digest(payload):
     return domain_digest(COMPILE_INSTANCE_DIGEST_DOMAIN, payload)
 
 
-def _instances_from_log(payload, marker):
-    """Decode ONE job's observed invocation log."""
+def _instances_from_log(payload, marker, expected_job_id):
+    """Decode ONE job's observed invocation log under the SHARED execution-instance contract.
+
+    A downstream log used to be trusted after a schema, field-set and logical-tool check only.  It
+    is now held to exactly the contract the build inventory is held to, and every record is bound to
+    the job whose log carried it.
+    """
     if not isinstance(payload, dict) or payload.get("schema") != INSTANCE_LOG_SCHEMA:
         fail(marker, "schema")
+    if tuple(sorted(payload)) != ("instances", "schema"):
+        fail(marker, "document field set")
     instances = payload.get("instances")
     if not isinstance(instances, list) or not instances:
         fail(marker, "instances")
     for instance in instances:
-        if not isinstance(instance, dict):
-            fail(marker, "instance type")
-        if tuple(sorted(instance)) != tuple(sorted(instance_fields_for(instance.get("kind")))):
-            fail(marker, "instance field set")
-        if require_str(instance.get("tool"), marker) != APPROVED_BUILD_TOOL:
-            fail(marker, "tool")
+        validate_execution_instance(instance, marker, expected_job_id)
     return instances
 
 
@@ -788,9 +929,21 @@ def require_complete_build_graph(build_payload, observe_log, adjudicate_log):
     invocation is now recorded by the wrapper that runs it, and the three logs are unioned here, so
     a command that ran without the wrapper is simply absent -- and absence fails.
     """
-    instances = list(build_payload.get("instances") or ())
-    instances += _instances_from_log(observe_log, "BUILD_GRAPH_INCOMPLETE")
-    instances += _instances_from_log(adjudicate_log, "BUILD_GRAPH_INCOMPLETE")
+    # SELF-CONTAINED, deliberately.  The build inventory is also validated by
+    # recompute_compile_instance_digest(), but this function must not DEPEND on that having run
+    # first: it dereferences nested input members below, and an ordering change would otherwise let
+    # malformed build evidence reach those dereferences as a raw exception.  Re-validating here is
+    # pure and cheap, and it makes the graph rule true on its own evidence.
+    if not isinstance(build_payload, dict):
+        fail("BUILD_GRAPH_INCOMPLETE", "build payload type")
+    build_instances = build_payload.get("instances")
+    if not isinstance(build_instances, list) or not build_instances:
+        fail("BUILD_GRAPH_INCOMPLETE", "build instances")
+    for instance in build_instances:
+        validate_execution_instance(instance, "BUILD_GRAPH_INCOMPLETE", BUILD_JOB_ID)
+    instances = list(build_instances)
+    instances += _instances_from_log(observe_log, "BUILD_GRAPH_INCOMPLETE", OBSERVE_JOB_ID)
+    instances += _instances_from_log(adjudicate_log, "BUILD_GRAPH_INCOMPLETE", ADJUDICATE_JOB_ID)
 
     identifiers = []
     kinds = {}

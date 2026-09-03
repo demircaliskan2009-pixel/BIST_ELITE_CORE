@@ -1719,8 +1719,12 @@ def _instance(instance_id, kind, inputs, libraries=(), flags=(), output="out.o",
         "output": output,
         "output_path": output.split(":", 1)[-1],
         "raw_output": "/tmp/build/" + output.split(":", 1)[-1],
-        # The wrapper's frozen execution boundary, recorded as evidence.
-        "resolved_tool_path": "/usr/bin/" + tool,
+        # The wrapper's frozen execution boundary, recorded as evidence.  These are the REAL
+        # canonical paths run 33617866272 recorded: /usr/bin/gcc is a symlink chain on the pinned
+        # runner, so the canonical file has a DIFFERENT basename than the logical tool.  The world
+        # models that on purpose -- a fixture using /usr/bin/<tool> made every gate test agree with
+        # a shape the runner never produces, which is why the basename defect reached main.
+        "resolved_tool_path": _CANONICAL_TOOL_PATH[tool],
         "working_directory": ".",
         "working_directory_class": "GITHUB_WORKSPACE",
     }
@@ -1729,6 +1733,14 @@ def _instance(instance_id, kind, inputs, libraries=(), flags=(), output="out.o",
         # RAW is what a command line would have said; the graph key is never a path.
         item.setdefault("raw_path", "/tmp/build/" + item["graph_identity"].split(":", 1)[-1])
     return record
+
+
+# The canonical executables the pinned ubuntu-22.04 runner actually resolves the logical tools to,
+# exactly as recorded by governed qualification run 33617866272.
+_CANONICAL_TOOL_PATH = {
+    "gcc": "/usr/bin/x86_64-linux-gnu-gcc-11",
+    "objcopy": "/usr/bin/x86_64-linux-gnu-objcopy",
+}
 
 
 def _transform(instance_id, target, before, after):
@@ -2530,15 +2542,26 @@ def run_gate_build_graph_identity():
     _expect_run_gate("BUILD_GRAPH_INCOMPLETE", strip_the_job_scope)
 
     def claim_a_foreign_job(world):
-        # The build job's own compile claims to have run in the observation job.  That job already
-        # has a real producer for obj/policy.o, so the impersonation collides with it -- which is
-        # precisely the ambiguity job-scoped identity exists to make visible.
+        # The build job's own compile claims to have run in the observation job.  Every record is
+        # now bound to the job whose LOG carried it, so this is refused on its own evidence rather
+        # than only when it happens to collide with a real producer in the impersonated job.
         for item in world["instances"]["instances"]:
             if item["instance_id"] == "worker-policy":
                 item["output"] = "s3c-observe:" + item["output"].split(":", 1)[-1]
                 item["job_id"] = "s3c-observe"
 
-    _expect_run_gate("BUILD_GRAPH_DUPLICATE_PRODUCER", claim_a_foreign_job)
+    _expect_run_gate("BUILD_GRAPH_JOB_IDENTITY_MISMATCH", claim_a_foreign_job)
+
+    def impersonate_a_job_that_has_no_such_producer(world):
+        # THE CASE THE OLD RULE COULD NOT SEE.  worker-verify claims the ADJUDICATE job, which
+        # produces no obj/verify.o at all -- so there is no collision to expose the lie, and a
+        # collision-only rule would have accepted a build-log record describing a foreign job.
+        for item in world["instances"]["instances"]:
+            if item["instance_id"] == "worker-verify":
+                item["output"] = "s3c-adjudicate:" + item["output"].split(":", 1)[-1]
+                item["job_id"] = "s3c-adjudicate"
+
+    _expect_run_gate("BUILD_GRAPH_JOB_IDENTITY_MISMATCH", impersonate_a_job_that_has_no_such_producer)
 
     def invent_a_job(world):
         for item in world["instances"]["instances"]:
@@ -2616,6 +2639,289 @@ def run_gate_build_graph_identity():
                 item["inputs"][0]["graph_identity"] = "s3c-build-candidate:obj/never_built.o"
 
     _expect_run_gate("BUILD_GRAPH_LINK_INPUT_UNPRODUCED", unproduced_link_input)
+
+
+def run_gate_canonical_tool_identity():
+    # TRUSTED RUN 33618023994.  Qualification 33617866272 SUCCEEDED and Stage-C still failed closed
+    # with BUILD_TOOL_PROVENANCE_INVALID, because the gate compared the CANONICAL basename to the
+    # LOGICAL tool.  /usr/bin/gcc is a symlink chain on the pinned runner, so the canonical file is
+    # x86_64-linux-gnu-gcc-11 -- the same approved tool under a different name.  The world's default
+    # instances now carry exactly those real canonical paths, so the reference run already proves
+    # the honest resolution is ACCEPTED.  What follows proves the rule is still an IDENTITY rule.
+    work_dir = sys.argv[sys.argv.index("--work-dir") + 1]
+
+    def compile_tool(path):
+        def mutate(world):
+            for item in world["instances"]["instances"]:
+                if item["kind"] == "COMPILE":
+                    item["resolved_tool_path"] = path
+
+        return mutate
+
+    def every_tool(path):
+        def mutate(world):
+            for item in world["instances"]["instances"]:
+                item["resolved_tool_path"] = path
+
+        return mutate
+
+    # An unrelated program under an approved root, wearing an approved-looking triplet.
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", compile_tool("/usr/bin/x86_64-linux-gnu-clang-11"))
+    # Disguises that a "contains gcc" rule would have accepted.
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", compile_tool("/usr/bin/gcc-evil"))
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", compile_tool("/usr/bin/mygcc"))
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", compile_tool("/usr/bin/gcc-11.2-backdoor"))
+    # A real toolchain name, but for a DIFFERENT architecture than the approved triplet.
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", compile_tool("/usr/bin/aarch64-linux-gnu-gcc-11"))
+    # The approved TRANSFORM tool cannot stand in for a COMPILE.
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", compile_tool("/usr/bin/x86_64-linux-gnu-objcopy"))
+    # Path shape: traversal and relative paths are refused before any name reasoning.
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", every_tool("/usr/bin/../../opt/evil/x86_64-linux-gnu-gcc-11"))
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", every_tool("usr/bin/x86_64-linux-gnu-gcc-11"))
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", every_tool("/usr/bin//x86_64-linux-gnu-gcc-11"))
+    # Outside the approved roots entirely.
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", every_tool("/opt/attacker/bin/x86_64-linux-gnu-gcc-11"))
+
+    # The LOGICAL layer is untouched by the repair: an unapproved logical tool still fails on its
+    # own marker, before any canonical-path reasoning happens.
+    def unapproved_logical_tool(world):
+        for item in world["instances"]["instances"]:
+            if item["kind"] == "COMPILE":
+                item["tool"] = "clang"
+
+    _expect_run_gate("COMPILE_INSTANCE_INVENTORY_MISMATCH", unapproved_logical_tool)
+
+    # No transient version is pinned: a runner image moving gcc-11 -> gcc-12 stays approved, so the
+    # repair cannot decay back into a false negative the next time the image rolls.
+    def a_later_runner_toolchain(world):
+        for item in world["instances"]["instances"]:
+            if item["kind"] in ("COMPILE", "LINK"):
+                item["resolved_tool_path"] = "/usr/bin/x86_64-linux-gnu-gcc-12"
+
+    _run_world(work_dir, a_later_runner_toolchain)
+
+
+def run_gate_execution_instance_contract():
+    # CLASS-C P1 AND P2.  The complete build graph is the UNION of three job logs, and every one of
+    # the 21 governed operations is evidence that a governed wrapper ran it.  The BUILD inventory was
+    # validated field by field while the two DOWNSTREAM logs were checked only for schema, field set
+    # and logical tool -- so eight of twenty-one operations entered the trusted graph without their
+    # resolved executable, working directory, job identity, argv or input shapes ever being looked
+    # at.  One contract now governs all three, and every record is bound to the job whose log
+    # carried it.  P2: nested input members are proven dicts BEFORE the graph dereferences them, so
+    # malformed evidence fails as a governed marker instead of an AttributeError.
+    _run_world(sys.argv[sys.argv.index("--work-dir") + 1])
+
+    def downstream(field, value, log="observe_log"):
+        def mutate(world):
+            world[log]["instances"][0][field] = value
+
+        return mutate
+
+    # --- the executable that actually ran, in a DOWNSTREAM job ---
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", downstream("resolved_tool_path", "/opt/attacker/bin/backdoor"))
+    _expect_run_gate("BUILD_TOOL_PROVENANCE_INVALID", downstream("resolved_tool_path", "/usr/bin/attacker-cc"))
+    _expect_run_gate(
+        "BUILD_TOOL_PROVENANCE_INVALID",
+        downstream("resolved_tool_path", "/opt/evil/gcc", log="adjudicate_log"),
+    )
+    # --- the directory it ran in, and the class of that directory ---
+    _expect_run_gate("BUILD_CWD_PROVENANCE_INVALID", downstream("working_directory", "/etc"))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("working_directory_class", "ATTACKER"))
+    # --- the job it claims to be ---
+    _expect_run_gate("BUILD_GRAPH_JOB_IDENTITY_MISMATCH", downstream("job_id", "s3c-build-candidate"))
+    _expect_run_gate(
+        "BUILD_GRAPH_JOB_IDENTITY_MISMATCH",
+        downstream("job_id", "s3c-observe", log="adjudicate_log"),
+    )
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("job_id", "s3c-attacker"))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("output", "s3c-build-candidate:obj/stolen.o"))
+    # --- the command, the logical tool, and the recorded flag surfaces ---
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("argv", ["clang", "-c"]))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("tool", "clang"))
+
+    # --- MALFORMED NESTED EVIDENCE: governed rejection, never a raw exception ---
+    for label, value in (
+        ("inputs is a string", "not-a-list"),
+        ("inputs member is a string", ["not-a-dict"]),
+        ("inputs member is null", [None]),
+        ("inputs empty", []),
+    ):
+        assert label
+        _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("inputs", value))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("flags", {}))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("include_roots", [5]))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("libraries", [[]]))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("argv", ["gcc", 3]))
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", downstream("output", 5))
+
+    def graph_identity_is_an_int(world):
+        world["observe_log"]["instances"][0]["inputs"][0]["graph_identity"] = 7
+
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", graph_identity_is_an_int)
+
+    def instance_is_not_a_mapping(world):
+        world["observe_log"]["instances"][0] = "nope"
+
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", instance_is_not_a_mapping)
+
+    def instances_is_not_a_list(world):
+        world["observe_log"]["instances"] = {}
+
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", instances_is_not_a_list)
+
+    def log_document_gains_a_field(world):
+        world["observe_log"]["extra"] = 1
+
+    _expect_run_gate("BUILD_GRAPH_INCOMPLETE", log_document_gains_a_field)
+
+    # --- the BUILD log is held to the SAME contract, on the graph rule's own evidence ---
+    def build_input_member_is_a_string(world):
+        world["instances"]["instances"][0]["inputs"] = ["x"]
+
+    _expect_run_gate("COMPILE_INSTANCE_INVENTORY_MISMATCH", build_input_member_is_a_string)
+
+    # SELF-CONTAINMENT, proven directly.  In the full run the build inventory is validated by
+    # recompute_compile_instance_digest() BEFORE the graph rule sees it, so the graph rule's own
+    # guard is invisible end to end.  Call it alone with malformed build evidence: it dereferences
+    # nested input members, so it must reject on its own rather than depend on call order.
+    _predicate, world = _run_world(sys.argv[sys.argv.index("--work-dir") + 1])
+    build = json.loads(json.dumps(world["instances"]))
+    observe = json.loads(json.dumps(world["observe_log"]))
+    adjudicate = json.loads(json.dumps(world["adjudicate_log"]))
+    # The honest three-job graph is accepted by the rule in isolation.
+    assert gate.require_complete_build_graph(build, observe, adjudicate) > 0
+
+    for label, mutate in (
+        ("build input member is a string", lambda payload: payload["instances"][0].__setitem__("inputs", ["x"])),
+        ("build inputs is a string", lambda payload: payload["instances"][0].__setitem__("inputs", "nope")),
+        ("build instance is not a mapping", lambda payload: payload["instances"].__setitem__(0, "nope")),
+        ("build instances is not a list", lambda payload: payload.__setitem__("instances", {})),
+        ("build payload is not a mapping", None),
+    ):
+        broken = json.loads(json.dumps(world["instances"]))
+        if mutate is None:
+            broken = "not-a-mapping"
+        else:
+            mutate(broken)
+        try:
+            gate.require_complete_build_graph(broken, observe, adjudicate)
+        except gate.TrustedGateError:
+            continue
+        except Exception as error:  # noqa: BLE001 - a RAW escape is exactly the P2 defect
+            raise AssertionError("raw exception for " + label + ": " + type(error).__name__) from None
+        raise AssertionError("graph rule accepted " + label)
+
+
+def run_gate_system_library_canonical_path():
+    # FINAL CLOSURE BLOCKER PR370-C14.  A lexical root prefix is not containment: "/usr/lib/"
+    # prefixes "/usr/lib/../../tmp/libcap.so.2.44", which escapes the approved root while satisfying
+    # a naive startswith().  Canonicality is now established BEFORE containment is asked, by the same
+    # shared helper the governed tool paths use, at every trusted system-library validation site.
+    _run_world(sys.argv[sys.argv.index("--work-dir") + 1])
+
+    def library(field, value):
+        def mutate(world):
+            for entry in world["instances"]["system_libraries"]:
+                entry[field] = value
+
+        return mutate
+
+    # THE EXACT CLASS-C TRAVERSAL CLASS, permanently protected.
+    _expect_run_gate(
+        "SYSTEM_LIBRARY_PROVENANCE_INVALID",
+        library("resolved_path", "/usr/lib/../../tmp/libcap.so.2.44"),
+    )
+    # Dot segment, duplicate separator, trailing separator, relative, and bare traversal.
+    _expect_run_gate(
+        "SYSTEM_LIBRARY_PROVENANCE_INVALID",
+        library("resolved_path", "/usr/lib/./x86_64-linux-gnu/libcap.so.2.44"),
+    )
+    _expect_run_gate(
+        "SYSTEM_LIBRARY_PROVENANCE_INVALID",
+        library("resolved_path", "/usr/lib//x86_64-linux-gnu/libcap.so.2.44"),
+    )
+    _expect_run_gate("SYSTEM_LIBRARY_PROVENANCE_INVALID", library("resolved_path", "/usr/lib/"))
+    _expect_run_gate(
+        "SYSTEM_LIBRARY_PROVENANCE_INVALID",
+        library("resolved_path", "usr/lib/x86_64-linux-gnu/libcap.so.2.44"),
+    )
+    _expect_run_gate("SYSTEM_LIBRARY_PROVENANCE_INVALID", library("resolved_path", "/usr/lib/.."))
+    # Outside the approved roots entirely, in canonical form -- the containment rule still holds.
+    _expect_run_gate(
+        "SYSTEM_LIBRARY_PROVENANCE_INVALID",
+        library("resolved_path", "/opt/attacker/lib/libcap.so.2.44"),
+    )
+    # The name / SONAME / provenance bindings are untouched by this repair.
+    _expect_run_gate("SYSTEM_LIBRARY_PROVENANCE_INVALID", library("name", "attacker"))
+    _expect_run_gate("SYSTEM_LIBRARY_PROVENANCE_INVALID", library("soname", "libevil.so.1"))
+    _expect_run_gate("SYSTEM_LIBRARY_PROVENANCE_INVALID", library("provenance", "ATTACKER"))
+
+
+def run_gate_programming_error_is_not_laundered():
+    # FINAL CLOSURE BLOCKER PR370-C20 protecting C16.  The shipped executable boundary catches ONLY
+    # TrustedGateError.  This proves that BEHAVIOURALLY, on the shipped bytes: the boundary block is
+    # read from the gate FILE and executed against the gate's own module namespace, so broadening it
+    # to `except Exception` (or any equivalent laundering) makes case B below fail.
+    #
+    # A. malformed untrusted evidence -> governed TrustedGateError -> governed marker, exit 1
+    # B. internal programming-error sentinel -> MUST propagate unchanged, never become a governed
+    #    evidence-invalid result.
+    source = open(sys.argv[sys.argv.index("--gate-module") + 1], "r", encoding="utf-8").read()
+    guard = 'if __name__ == "__main__":'
+    assert guard in source, "shipped entry guard not found"
+    block = source[source.index(guard) :]
+    newline = chr(10)
+    suite = newline.join(line[4:] if line.startswith("    ") else line for line in block.split(newline)[1:])
+    assert "except TrustedGateError" in suite, "shipped boundary no longer catches TrustedGateError"
+    compiled = compile(suite, "<shipped-boundary>", "exec")
+
+    original_main = gate.main
+    captured = []
+    original_stderr_write = sys.stderr.write
+
+    class _ProgrammingErrorSentinel(ValueError):
+        # Deliberately NOT a TrustedGateError: TrustedGateError derives from RuntimeError, so a
+        # RuntimeError-based sentinel would be caught for the wrong reason and prove nothing.
+        pass
+
+    try:
+        # --- A: governed evidence failure is reported as a governed marker and exits 1 ---
+        def raise_governed():
+            raise gate.TrustedGateError("MT4_TEST_GOVERNED_EVIDENCE_MARKER")
+
+        gate.main = raise_governed
+        sys.stderr.write = captured.append
+        try:
+            exec(compiled, gate.__dict__)  # noqa: S102 - executing the SHIPPED boundary bytes
+        except SystemExit as exit_error:
+            assert exit_error.code == 1, exit_error.code
+        else:
+            raise AssertionError("governed failure did not exit")
+        finally:
+            sys.stderr.write = original_stderr_write
+        assert any("MT4_S3C_TRUSTED_GATE_FAILED=" in text for text in captured), captured
+
+        # --- B: a programming error must NOT be laundered into a governed result ---
+        def raise_programming_error():
+            raise _ProgrammingErrorSentinel("MT4_TEST_PROGRAMMING_SENTINEL")
+
+        gate.main = raise_programming_error
+        captured.clear()
+        sys.stderr.write = captured.append
+        try:
+            exec(compiled, gate.__dict__)  # noqa: S102 - executing the SHIPPED boundary bytes
+        except _ProgrammingErrorSentinel:
+            propagated = True
+        except SystemExit:
+            propagated = False
+        finally:
+            sys.stderr.write = original_stderr_write
+        assert propagated, "the boundary laundered a programming error into a governed exit"
+        assert not any("MT4_S3C_TRUSTED_GATE_FAILED=" in text for text in captured), captured
+    finally:
+        gate.main = original_main
+        sys.stderr.write = original_stderr_write
 
 
 def run_gate_build_provenance_boundary():
@@ -3033,6 +3339,10 @@ check("real_producer_receipt_is_accepted", real_producer_receipt_is_accepted)
 check("case_plan_is_not_trusted_authority", case_plan_is_not_trusted_authority)
 check("run_gate_build_graph_identity", run_gate_build_graph_identity)
 check("run_gate_build_provenance_boundary", run_gate_build_provenance_boundary)
+check("run_gate_system_library_canonical_path", run_gate_system_library_canonical_path)
+check("run_gate_programming_error_is_not_laundered", run_gate_programming_error_is_not_laundered)
+check("run_gate_execution_instance_contract", run_gate_execution_instance_contract)
+check("run_gate_canonical_tool_identity", run_gate_canonical_tool_identity)
 check("run_gate_duplicate_identities", run_gate_duplicate_identities)
 check("run_gate_compile_provenance", run_gate_compile_provenance)
 check("z_matrix_pre_decompression", z_matrix_pre_decompression)
@@ -3302,6 +3612,10 @@ def driver_values(driver_results):
         "case_plan_is_not_trusted_authority",
         "run_gate_build_graph_identity",
         "run_gate_build_provenance_boundary",
+        "run_gate_system_library_canonical_path",
+        "run_gate_programming_error_is_not_laundered",
+        "run_gate_execution_instance_contract",
+        "run_gate_canonical_tool_identity",
         "run_gate_duplicate_identities",
         "run_gate_compile_provenance",
         "z_matrix_pre_decompression",
@@ -3603,3 +3917,81 @@ def test_stage_c_and_the_build_manifest_agree_on_the_required_inventory(driver_v
     manifest = _load_bundled("mt4_s3c_build_manifest_consistency", "mt4_s3c_build_manifest.py")
     assert driver_values["required_translation_units"] == list(manifest.REQUIRED_TRANSLATION_UNITS)
     assert driver_values["source_bundle_paths"] == list(manifest.SOURCE_BUNDLE_PATHS)
+
+
+# =================================================================================================
+# TRUSTED RUN 33618023994 REPAIR.  Governed qualification 33617866272 was the FIRST run to succeed
+# end to end (all 25 cases conformant), and automatic Stage-C still failed closed with
+# BUILD_TOOL_PROVENANCE_INVALID: "resolved tool is not the approved tool".
+#
+# `tool` and `resolved_tool_path` are deliberately different identity layers -- exactly as `name`
+# and `resolved_path` already are for a system library, where logical `cap` legitimately resolves to
+# libcap.so.2.44.  On the pinned runner /usr/bin/gcc is a symlink chain, so the canonical executable
+# is /usr/bin/x86_64-linux-gnu-gcc-11.  Comparing the canonical basename to the logical tool
+# collapsed those layers and rejected the honest resolution: a FALSE NEGATIVE, not an attack.
+#
+# The replacement is a frozen canonical-form grammar, not a substring test:
+#     [<approved-triplet>-] <approved-logical-tool> [-<numeric-version>]
+# It consults no filesystem and no PATH, so the trusted gate stays self-contained and reproducible.
+# =================================================================================================
+
+# The exact identity pair governed run 33617866272 recorded for its first instance, blst-assembly.
+_RUN_33617866272_COMPILE_TOOL = "gcc"
+_RUN_33617866272_RESOLVED_TOOL_PATH = "/usr/bin/x86_64-linux-gnu-gcc-11"
+
+
+def test_the_gate_no_longer_compares_a_canonical_basename_to_a_logical_tool():
+    """The exact defect: basename equality against the logical tool must be gone."""
+    source = TRUSTED_GATE.read_text(encoding="utf-8")
+    assert 'resolved.rsplit("/", 1)[-1] != expected_tool' not in source
+    assert "canonical_tool_basename_is_approved" in source
+    # Both halves of the boundary survive: logical tool identity AND approved-root containment.
+    # They now live in the SHARED execution-instance contract rather than inline in one validator.
+    assert "def validate_execution_instance(" in source
+    assert 'if require_str(instance.get("tool"), marker) != expected_tool:' in source
+    assert "resolved tool is outside the approved roots" in source
+
+
+def test_the_canonical_tool_grammar_pins_exact_logical_tools_and_triplets():
+    """No broad prefixes, no transient version literal, no 'contains gcc'."""
+    source = TRUSTED_GATE.read_text(encoding="utf-8")
+    assert 'APPROVED_TOOL_TRIPLETS = ("x86_64-linux-gnu",)' in source
+    assert 'TOOL_VERSION_CHARACTERS = "0123456789."' in source
+    # The transient runner version must never be pinned as a literal identity.
+    assert '"gcc-11"' not in source
+    assert '"x86_64-linux-gnu-gcc-11"' not in source
+    # The version is a numeric FIELD, so a later image stays approved.
+    assert 'version[0] not in "0123456789"' in source
+
+
+def test_the_gate_never_consults_the_filesystem_or_path_for_tool_identity():
+    """Tool identity is decided from recorded evidence, so Stage-C stays reproducible."""
+    source = TRUSTED_GATE.read_text(encoding="utf-8")
+    start = source.index("def canonical_tool_basename_is_approved")
+    body = source[start : source.index("\ndef ", start + 10)]
+    for forbidden in ("os.path", "realpath", "isfile", "os.access", "environ", "PATH"):
+        assert forbidden not in body, forbidden
+
+
+def test_the_real_run_33617866272_identity_pair_is_the_shape_the_world_models():
+    """The fixture must model the REAL canonical shape, or the suite is blind to this defect."""
+    # The world is built inside the driver source, so assert against that source directly.
+    assert '"gcc": "' + _RUN_33617866272_RESOLVED_TOOL_PATH + '"' in _DRIVER
+    assert '"objcopy": "/usr/bin/x86_64-linux-gnu-objcopy"' in _DRIVER
+    assert '"resolved_tool_path": _CANONICAL_TOOL_PATH[tool]' in _DRIVER
+    # The modelled canonical basename genuinely DIFFERS from the logical tool -- which is the entire
+    # condition the old basename-equality rule could not express.
+    assert _RUN_33617866272_RESOLVED_TOOL_PATH.rsplit("/", 1)[-1] != _RUN_33617866272_COMPILE_TOOL
+
+
+def test_the_working_directory_and_instance_graph_bindings_are_untouched():
+    """The repair is scoped to tool identity: the neighbouring bindings must still be enforced."""
+    source = TRUSTED_GATE.read_text(encoding="utf-8")
+    for anchor in (
+        "BUILD_CWD_PROVENANCE_INVALID",
+        'APPROVED_WORKING_DIRECTORY = "."',
+        'WORKING_DIRECTORY_CLASS = "GITHUB_WORKSPACE"',
+        "GOVERNED_JOB_IDS",
+        "SYSTEM_LIBRARY_PROVENANCE_INVALID",
+    ):
+        assert anchor in source, anchor
