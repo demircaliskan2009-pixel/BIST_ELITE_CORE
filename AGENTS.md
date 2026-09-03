@@ -13,14 +13,30 @@
 
 ## Canonical Workflow
 
-Active doctrine is `docs/crypto_core/agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`). This file
-supplies durable rails; prompt lanes in `docs/crypto_core/agent_prompts/token_efficiency_v2.md` compress
-procedure text only; per-model prompt authoring lives in `docs/crypto_core/model_prompting_guide.md`; Claude
-effort selection, prompt templates and the prompt-compiler contract live in
-`docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`; the research protocol lives in
-`docs/crypto_core/deep_research_protocol.md`. If documents conflict, the stricter safety rule wins.
+Active doctrine is `CRYPTO_CORE_AGENT_OS_V2` in `docs/crypto_core/agent_os_v2.md` — the single detailed
+active control-plane authority. Precedence (`AGENT_OS_V2_PRECEDENCE`): this file →
+`docs/crypto_core/agent_os_v2.md` → the environment adapter
+(`.codex/skills/crypto-core-max-safe/SKILL.md` for Codex, or `CLAUDE.md` +
+`.claude/skills/crypto-core-token-efficient-loop/SKILL.md` for Claude) →
+`docs/crypto_core/agent_lessons.md`. `docs/crypto_core/agent_workflow.md` (whose section 24
+`CRYPTO_CORE_AGENT_OS_V1` is superseded for authority and routing) remains the workflow companion and MUST
+NOT fork routing truth — there is exactly one authoritative routing matrix, in `agent_os_v2.md` section 3.
+Continuity for new sessions is `docs/crypto_core/continuity/CONTINUITY_INDEX.md`
+(`CONTEXT_CONTINUITY_PROTOCOL_V1`). This file supplies durable rails; prompt lanes in
+`docs/crypto_core/agent_prompts/token_efficiency_v2.md` compress procedure text only; per-model prompt
+authoring lives in `docs/crypto_core/model_prompting_guide.md`; Claude effort selection, prompt templates
+and the prompt-compiler contract live in `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`; the
+research protocol lives in `docs/crypto_core/deep_research_protocol.md`. If documents conflict, the
+stricter safety rule wins.
 
-### Final durable model set (Agent OS v1)
+Agent OS v2 additionally binds: `MAX_SAFE_PR` sizing by semantic closure (never by file or LOC count),
+`PR_CLOSURE_CONTRACT_V1`, `BLOCKER_ESCAPE_PROTOCOL_V1` (one consolidated repair, one whole-contract
+reaudit, `FIXED_POINT_STOP`, `BLOCKER_ARTIFACT_MULTIPLICATION_PROHIBITED`),
+`CONTEXT_CONTINUITY_PROTOCOL_V1` (`STATE_MANIFEST_V1`, `CURRENT_HANDOFF_V2`), `PROMPT_COMPILER_V2`, and
+`DAILY_BATCH_MANIFEST_V1`. Deterministic enforcement is `scripts/crypto_core/validate_agent_os_v2.py`,
+executed inside the existing required `tests` CI job.
+
+### Final durable model set (Agent OS v2)
 
 - **ChatGPT GPT-5.6 Thinking** — controller / default read-only-first controller-auditor
   (`CONTROLLER_READONLY_FIRST_POLICY`, `agent_workflow.md` section 24.10): sequence owner, live
@@ -33,6 +49,15 @@ effort selection, prompt templates and the prompt-compiler contract live in
   and model selection, and explicit-authority GitHub actions. ChatGPT is `GPT-5.6 Thinking` — never labeled
   Codex `GPT-5.6 Sol`; it never substitutes for local tests, unverified repo state, product implementation, or
   the Class-C Codex audit, and never grants merge/readiness/live/capital authority.
+- **ChatGPT Work (Local / Cloud)** — first-class read-only research/synthesis lane
+  (`CHATGPT_WORK_LANE`, `agent_os_v2.md` section 3): persistent workspace, artifact delivery and Cloud
+  Browser for large repo synthesis, multi-document comparison, long architecture reports, next-PR closure
+  packet preparation, current web research and website interaction. Work Local covers source-bound
+  analysis and artifact work; Work Cloud and Cloud Browser cover external sites, current documentation and
+  current provider information. `WORK_LANE_BOUNDARIES`: Work never treats an uploaded or stale repo
+  snapshot as current GitHub state, never replaces terminal validation or the Class-C Codex audit, never
+  receives implicit blanket writes, never mutates the repository, and never replaces the controller's final
+  evidence judgment. The controller may route read-only research to Work without extra human ceremony.
 - **GitHub connector** — pinned-ref evidence (files, patches, changed files, commits, runs/jobs/logs,
   CodeQL, reviews/threads, open-PR count, merge commits, search). Mutation ONLY after an explicit human
   instruction naming the exact action and target, with immediate state re-proof before, only the named
@@ -96,8 +121,9 @@ connector gate, explicit human merge authorization, or post-merge verification.
   T3C `CODE_REVIEW_AND_BUG_FINDING`; T3D `ARCHITECTURE_AND_NEXT_SLICE`;
   T3E `COMPLEX_PROMPT_ARCHITECTURE`; T4 `CROSS_CONTRACT_DESIGN_OR_AUDIT`;
   XR `DEEP_RESEARCH_EXTERNAL`; `CONTROLLER_CONNECTOR_GATE`. Unsuffixed "T3" means T3A. The single
-  authoritative class → lane → model id → effort matrix is `agent_workflow.md` section 24.3; no other file
-  restates it as authority.
+  canonical `ROLE_ROUTING_MATRIX` (lane → role → use → never) is `docs/crypto_core/agent_os_v2.md`
+  section 3; `agent_workflow.md` sections 24.3 and 24.12 remain the inherited class → model id → effort
+  detail companions and never fork routing truth. No other file restates routing as authority.
 - **Class A (controller-sufficient):** docs/setup/prompt/skill/workflow-doc/low-risk-CI/helper-script PRs —
   ChatGPT + connector may satisfy the independent audit with fresh pinned-head reread, full patch, exact
   files, terminal CI, thread state, and P1/P2/P3 classification; final gate + human merge stay separate.
@@ -165,6 +191,19 @@ earlier handoff → memory. Unresolved load-bearing disputes stay `UNKNOWN` and 
 
 ## Low-Prompt / Maximum-Work Policy
 
+- `MAX_SAFE_PR` (`agent_os_v2.md` section 4) sizes a PR by **semantic closure** — one coherent contract
+  plus its dependency closure, negative cases, permanent tests, validation and rollback — never by file
+  count, LOC count, one artifact per PR, one module per PR, or one phase per PR. Split only on the five
+  named split conditions.
+- Default loop: `PR_CLOSURE_CONTRACT` → one heavy implementation → complete independent audit → one
+  consolidated repair if required → one final reaudit → final gate → human merge authorization → standard
+  merge → postverify → next `MAX_SAFE_PR`. `TARGET_PROMPTS_PER_PR` median 3, repair path max target 5 —
+  a throughput target, never a correctness ceiling.
+- `BLOCKER_ESCAPE_PROTOCOL_V1` (`agent_os_v2.md` section 5) governs blocker closure: the audit collects
+  the complete P1/P2 set for the whole frozen contract, one consolidated repair closes them, one
+  whole-contract reaudit follows, then `FIXED_POINT_STOP`. Genuinely new P1/P2 after that reaudit is
+  `FIXED_POINT_NOT_REACHED` and returns to the controller — never an automatic new micro phase, artifact
+  or PR.
 - Class A: one executor prompt end-to-end (precheck → reads → patch → validation → commit → push → PR → CI
   snapshot → handoff), then controller audit → human merge authorization → mechanical merge/postverify.
 - Class B: one implementation prompt + one controller audit/triage; Terra audit only when required; at most
@@ -197,6 +236,11 @@ earlier handoff → memory. Unresolved load-bearing disputes stay `UNKNOWN` and 
 
 ## Current Workflow State
 
+- Durable continuity for a new session is `docs/crypto_core/continuity/CONTINUITY_INDEX.md`
+  (`CONTEXT_CONTINUITY_PROTOCOL_V1`): authority pointers, scope, stable architecture/capability maps,
+  invariant IDs, retired-surface classification and the read-only bootstrap. Volatile task state is an
+  ephemeral `STATE_MANIFEST_V1` (`docs/crypto_core/continuity/state_manifest.schema.json`) and
+  `CURRENT_HANDOFF_V2`, never a committed dashboard.
 - `LIVE_STATE_POLICY` (workflow section 24.11): this durable file pins NO current `main` SHA,
   latest-merged-PR number, or open-PR count. Re-prove current `main` head, merged-PR history, open-PR count,
   the active blocker, and the next gated slice from live `git`/`gh`/connector evidence at the start of every

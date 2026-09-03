@@ -1,45 +1,73 @@
-# Crypto Core Current State
+# crypto_core — Durable Scope and Capability Pointer
 
-This note is a compact continuity aid for Codex setup and future crypto_core phases. It is not a PRD and does not replace `docs/PRDV4_MULTI_MARKET_CRYPTO.md`.
+This file is a **durable pointer**, not a live-state dashboard. It pins no current SHA, branch, PR, CI
+result, review state, blocker run, or readiness/connector transition. Under `LIVE_STATE_POLICY`
+(`docs/crypto_core/agent_workflow.md` section 24.11) all volatile state is re-proven from `git` / `gh` /
+the GitHub connector at the start of every task.
 
-## Active Stream
+It is not a PRD and does not replace `docs/PRDV4_MULTI_MARKET_CRYPTO.md`.
 
-- Active implementation scope is `src/crypto_core/**` and `tests/crypto_core/**`.
-- Legacy BIST code is out of scope unless the user explicitly requests it.
-- Future work should continue from the latest committed crypto_core state after checking `git status` and recent crypto_core commits.
-- All future phases remain paper-only unless explicitly instructed otherwise.
+## Control plane
 
-## Verified Surfaces Present
+Active authority is `CRYPTO_CORE_AGENT_OS_V2` in `docs/crypto_core/agent_os_v2.md`. Precedence
+(`AGENT_OS_V2_PRECEDENCE`): `AGENTS.md` → `docs/crypto_core/agent_os_v2.md` → the environment adapter
+(`.codex/skills/crypto-core-max-safe/SKILL.md`, or `CLAUDE.md` +
+`.claude/skills/crypto-core-token-efficient-loop/SKILL.md`) → `docs/crypto_core/agent_lessons.md`.
+`docs/crypto_core/agent_workflow.md` is the workflow companion and never forks routing truth.
 
-The current tree contains crypto_core surfaces for:
+## Continuity
 
-- pipeline and service orchestration
-- campaign, review, and readiness flows
-- external-regime governance
-- decision-pack and escalation workflow
-- crypto sleeve portfolio state
-- sleeve qualification and recommendation
-- sleeve campaign evidence
-- sleeve decision pack
-- sleeve candidate workflow
-- sleeve promotion review and admission flow
+Durable continuity for a new session is `docs/crypto_core/continuity/CONTINUITY_INDEX.md`
+(`CONTEXT_CONTINUITY_PROTOCOL_V1`): authority pointers, scope, stable architecture and capability maps,
+stable design/frontier categories, invariant IDs, retired-surface classification, and the read-only
+bootstrap procedure. Ephemeral task state is a `STATE_MANIFEST_V1`
+(`docs/crypto_core/continuity/state_manifest.schema.json`) plus a `CURRENT_HANDOFF_V2` packet — compiled
+per task, never committed as durable doctrine.
 
-## Operating Reminder
+## Stable project boundary
 
-Preserve deterministic replay, fail-closed behavior, explicit auditability, scoped git hygiene, and evidence-before-promotion. Do not add fake data, live trading enablement, credentials, or provider/network expansion unless the task explicitly asks for it.
+- Active implementation scope: `src/crypto_core/**`, `tests/crypto_core/**`, `scripts/crypto_core/**`,
+  and explicitly authorized `docs/crypto_core/**`.
+- Legacy BIST code is historical context only and is never implemented here.
+- All work is paper-only. No live or private API, credentials, real orders, order routing, scheduler,
+  auto-loop, shadow or live execution, capital mutation, or readiness/connector transition occurs without
+  separate authorization and design.
+- Preserve deterministic replay, fail-closed behavior, explicit auditability, digest and provenance
+  boundaries, scoped git hygiene, and evidence-before-promotion. Never add fabricated data.
 
-## Known Blockers
+## Durable capability categories
 
-### Blocker 1 — ServiceOrchestrator missing `_sleeve_candidate_workflow_controller` — RESOLVED
+Durable historical/capability state, **not** mutable current state. Prove the exact current contents of
+any category from the repository before relying on it.
 
-- **Commit:** `d2d8b893c85e16cb94b25dd6d5b6d4c800002b5a`
-- `_sleeve_candidate_workflow_controller` added to `__init__` after `_sleeve_admission_controller = None`.
-- Dead-code block (12 lines after `return` in `get_sleeve_admission_portfolio_summary`) removed.
-- Full suite: all tests green.
+- Deterministic canonical serialization and digest recomputation surfaces.
+- Digest-bound paper evidence chain: session, PnL, daily return series, methodology, Sharpe, edge identity
+  and Stage-4 baseline evidence (review-only, non-overclaiming).
+- Pipeline and service orchestration; campaign, review and readiness flows; external-regime governance;
+  decision-pack and escalation workflow.
+- Crypto sleeve portfolio state; sleeve qualification, recommendation, campaign evidence, decision pack,
+  candidate workflow, promotion review and admission flow.
+- Deribit public market-data harness with provenance origin gating — public data only, no private API.
+- MT4 machine-time work closed under governed qualification and trusted-attestation workflows. This is a
+  durable historical/capability statement, not a claim about current CI, current readiness, or any current
+  branch.
 
-### Phase 16L Status
+## Re-prove before acting
 
-- **Status:** Implemented by Codex (GPT-5.5). Targeted tests pass (`test_phase10a.py` + `test_phase10b.py` clean).
-- **Files:** `src/crypto_core/service/promotion_review.py` and `tests/crypto_core/service/test_phase10a.py`.
-- **Full suite:** Previously BLOCKED by Blocker 1 above — now UNBLOCKED (Blocker 1 resolved).
-- **Next step:** Rerun `pytest -x -q tests/crypto_core` on the Phase 16L branch to confirm full suite green, then commit Phase 16L as an atomic commit.
+```text
+git status --short
+git rev-parse HEAD
+git rev-parse HEAD^{tree}
+git fetch origin
+git rev-parse origin/main
+gh pr list --state open
+```
+
+Full-suite proof runs only through `scripts/crypto_core/run_full_tests_logged.ps1`; targeted commands run
+through `scripts/crypto_core/run_logged_command.ps1`. Control-plane changes must keep
+`python scripts/crypto_core/validate_agent_os_v2.py` at exit 0.
+
+## Non-claims
+
+Nothing in this file proves repository, PR or CI state; grants merge, readiness, connector, live or
+capital authority; or satisfies an independent audit.

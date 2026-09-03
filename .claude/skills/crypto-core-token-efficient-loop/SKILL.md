@@ -5,12 +5,19 @@ description: Compact execution checklist for crypto_core implementation/audit lo
 
 # Crypto Core Token-Efficient Loop
 
-Full doctrine: `docs/crypto_core/token_efficiency_playbook.md` and `agent_workflow.md` section 24
-(`CRYPTO_CORE_AGENT_OS_V1`). Token saving is subordinate to correctness; no gate may be skipped to save
-tokens. Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2).
+Full doctrine: `docs/crypto_core/agent_os_v2.md` (`CRYPTO_CORE_AGENT_OS_V2`, the single detailed active
+control-plane authority and the canonical `ROLE_ROUTING_MATRIX` in its section 3) plus
+`docs/crypto_core/token_efficiency_playbook.md`; `agent_workflow.md` section 24
+(`CRYPTO_CORE_AGENT_OS_V1`) is the superseded workflow companion for class/effort detail only and never
+forks routing truth. Token saving is subordinate to correctness; no gate may be skipped to save tokens.
+Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (workflow section 24.2).
 
 ## Loop
 
+0. New session with no packet: bootstrap read-only from `AGENTS.md`, `docs/crypto_core/agent_os_v2.md`
+   and `docs/crypto_core/continuity/CONTINUITY_INDEX.md` (`CONTEXT_CONTINUITY_PROTOCOL_V1`), re-prove
+   repo/branch/base/head/tree/worktree/open-PR state, and compile an ephemeral `STATE_MANIFEST_V1`
+   (`docs/crypto_core/continuity/state_manifest.schema.json`). Never trust cached volatile state.
 1. Intake the controller packet first (CONTROLLER_TO_IMPLEMENTER: pinned state, exact read set, allowed
    files, invariants, protected-risk class, validation ladder, stops). Do NOT repeat broad GitHub discovery
    the controller already proved.
@@ -57,6 +64,16 @@ tokens. Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2).
 - External/current facts route to controller-orchestrated Deep Research (read-only, advisory) — never local
   web research, never a gate waiver.
 - Codex Pursue Goal is a bounded terminal preflight/sync/CI/status/closeout/authorized-postverify loop only.
+- `MAX_SAFE_PR` is sized by semantic closure — one coherent contract plus its dependency closure,
+  negative cases, permanent tests, validation and rollback — never by file or LOC count. Blocker closure
+  follows `BLOCKER_ESCAPE_PROTOCOL_V1`: complete whole-contract audit → ONE consolidated same-branch
+  repair → ONE whole-contract reaudit → `FIXED_POINT_STOP`; genuinely new P1/P2 after that is
+  `FIXED_POINT_NOT_REACHED` and returns to the controller. `BLOCKER_ARTIFACT_MULTIPLICATION_PROHIBITED`:
+  never create a module, test, artifact, phase, workflow or PR solely to restate an unchanged blocker.
+- Serious prompts are compiled per `PROMPT_COMPILER_V2` (`agent_os_v2.md` section 8); stable doctrine is
+  loaded from the repo, not pasted, and no prompt carries restart-until-success or blanket authority.
+- Control-plane edits keep `python scripts/crypto_core/validate_agent_os_v2.py` at exit 0 — it runs in
+  the required `tests` CI job.
 - One repository writer at a time; one open PR; maximum safe work per prompt, then stop at the gate.
 - No BIST, live/order/capital/readiness surface, direct main push, non-standard merge, or unproven claim.
 - ChatGPT is the read-only-first controller-auditor (`CONTROLLER_READONLY_FIRST_POLICY`) for non-Class-C

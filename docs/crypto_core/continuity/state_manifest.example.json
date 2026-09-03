@@ -1,0 +1,71 @@
+{
+  "schema_version": "STATE_MANIFEST_V1",
+  "example_only": true,
+  "generated_at": "EXAMPLE_ONLY-not-a-real-timestamp",
+  "repo": "demircaliskan2009-pixel/BIST_ELITE_CORE",
+  "branch": "EXAMPLE_ONLY-chore/crypto-core-example-slice-pr1",
+  "base_sha": "EXAMPLE_ONLY-not-a-real-sha",
+  "head_sha": "EXAMPLE_ONLY-not-a-real-sha",
+  "tree_sha": "EXAMPLE_ONLY-not-a-real-sha",
+  "worktree_state": "CLEAN",
+  "changed_files": [
+    "EXAMPLE_ONLY-docs/crypto_core/example_slice.md",
+    "EXAMPLE_ONLY-tests/crypto_core/test_example_slice.py"
+  ],
+  "pr_number": null,
+  "pr_state": "NONE",
+  "open_pr_count": 0,
+  "ci_runs": [
+    {
+      "context": "tests",
+      "status": "EXAMPLE_ONLY-completed",
+      "conclusion": "EXAMPLE_ONLY-success",
+      "run_id": null
+    },
+    {
+      "context": "codeql",
+      "status": "EXAMPLE_ONLY-completed",
+      "conclusion": "EXAMPLE_ONLY-success",
+      "run_id": null
+    }
+  ],
+  "reviews": [
+    {
+      "author": "EXAMPLE_ONLY-reviewer",
+      "state": "EXAMPLE_ONLY-COMMENTED"
+    }
+  ],
+  "threads": [
+    {
+      "thread_id": "EXAMPLE_ONLY-thread-1",
+      "state": "EXAMPLE_ONLY-RESOLVED",
+      "severity": "P3"
+    }
+  ],
+  "readiness_fingerprint": "EXAMPLE_ONLY-readiness-fingerprint",
+  "connector_fingerprint": "EXAMPLE_ONLY-connector-fingerprint",
+  "model_runtime_proof": {
+    "model_requested": "claude-opus-5",
+    "model_actual": "claude-opus-5",
+    "effort_requested": "xhigh",
+    "effort_actual": "xhigh",
+    "thinking": "enabled",
+    "fallback": null,
+    "evidence_class": "CONFIGURATION_EVIDENCE_ONLY"
+  },
+  "task_intent": "IMPLEMENTATION",
+  "semantic_boundary": "EXAMPLE_ONLY-one coherent semantic contract closed by this task",
+  "freshness_deadline": "EXAMPLE_ONLY-not-a-real-timestamp",
+  "invalidation_reasons": [
+    "HEAD_MOVED",
+    "BASE_MOVED",
+    "TREE_CHANGED",
+    "PR_STATE_CHANGED",
+    "CI_RUN_NEW_OR_RERUN",
+    "REVIEWS_OR_THREADS_CHANGED",
+    "READINESS_FINGERPRINT_CHANGED",
+    "CONNECTOR_FINGERPRINT_CHANGED",
+    "TASK_BOUNDARY_CHANGED",
+    "FRESHNESS_DEADLINE_PASSED"
+  ]
+}

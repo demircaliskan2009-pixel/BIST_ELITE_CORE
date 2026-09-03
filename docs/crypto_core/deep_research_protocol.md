@@ -1,7 +1,14 @@
 # crypto_core Deep Research Protocol (Agent OS edition, 2026-07-10)
 
-> Canonical, complete usage protocol for **Deep Research** in `crypto_core` under `CRYPTO_CORE_AGENT_OS_V1`
-> (`docs/crypto_core/agent_workflow.md` section 24; section 24.9 points here). Deep Research is
+> Canonical, complete usage protocol for **Deep Research** in `crypto_core` under `CRYPTO_CORE_AGENT_OS_V2`
+> (`docs/crypto_core/agent_os_v2.md`, the canonical control plane; `agent_workflow.md` section 24.9 is the
+> workflow companion summary). Deep Research is used ONLY for current load-bearing external facts —
+> exchange/provider APIs, deployed versions, fees and funding, rate limits, security, regulation,
+> machine-time provider facts, current readiness assumptions, and current credible architecture
+> benchmarks — never because repo work is merely difficult and never for repo-local facts. Where a
+> persistent workspace, artifact delivery or browser interaction is the better fit for read-only synthesis,
+> the controller routes to `CHATGPT_WORK_LANE` instead (`agent_os_v2.md` section 3); Work carries the same
+> read-only boundary and never mutates repo or GitHub state. Deep Research is
 > **controller-orchestrated**: ChatGPT GPT-5.6 Thinking decides whether research runs, frames the exact
 > question, binds it to pinned GitHub-connector evidence, and verifies the result before anything is acted
 > on. Deep Research is **strictly read-only / advisory** — it never mutates repo or GitHub state (even when

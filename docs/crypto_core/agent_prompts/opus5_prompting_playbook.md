@@ -1,10 +1,17 @@
 # Claude Opus 5 Prompting Playbook (crypto_core)
 
-Durable authority for HOW to prompt the Claude lanes in `CRYPTO_CORE_AGENT_OS_V1`. The routing authority is
-`docs/crypto_core/agent_workflow.md` section 24.3 (`AUTHORITATIVE_ROUTING_MATRIX`); the effort/thinking
-architecture is section 24.12 (`CLAUDE_MODEL_EFFORT_ARCHITECTURE_V1`). This playbook never overrides either
-— it teaches prompt construction and supplies reusable templates. On any conflict, section 24 and the
-stricter safety rule win.
+Durable authority for HOW to prompt the Claude lanes in `CRYPTO_CORE_AGENT_OS_V2`. The routing authority is
+the canonical `ROLE_ROUTING_MATRIX` in `docs/crypto_core/agent_os_v2.md` section 3; the inherited
+class → model id → effort detail is `docs/crypto_core/agent_workflow.md` section 24.3 and the
+effort/thinking architecture is section 24.12 (`CLAUDE_MODEL_EFFORT_ARCHITECTURE_V1`). The canonical
+prompt-compiler policy is `PROMPT_COMPILER_V2` (`agent_os_v2.md` section 8); the templates and
+`PROMPT_COMPILER_CONTRACT_V1` below are its Claude-lane implementation and must stay compatible with it —
+one role, one semantic outcome, one writer or one read-only reviewer, one report contract, one next safe
+action, stable doctrine loaded from the repo rather than pasted, and no `PROMPT_LANGUAGE_PROHIBITED`
+wording (restart-until-success, blanket GitHub or merge authority, hidden loops, unbounded discovery during
+repair, hidden chain-of-thought requests). This playbook never overrides the control plane — it teaches
+prompt construction and supplies reusable templates. On any conflict, `agent_os_v2.md`, then section 24,
+then the stricter safety rule win.
 
 Active Claude lanes: **Claude Opus 5** (`claude-opus-5`, default heavy local executor) and **Claude
 Sonnet 5** (`claude-sonnet-5`, runtime-proven, default for T0/T1/T2). Claude Opus 4.8 is

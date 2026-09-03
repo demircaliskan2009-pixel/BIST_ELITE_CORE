@@ -1,7 +1,10 @@
 # Token Efficiency V2 - Agent OS named lanes and compact prompts
 
-Active doctrine is `agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`). Lanes compress procedure, not
-safety. Every serious prompt includes `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`,
+Active doctrine is `docs/crypto_core/agent_os_v2.md` (`CRYPTO_CORE_AGENT_OS_V2`), with `agent_workflow.md`
+section 24 as the inherited class/effort companion. Compiled prompts follow `PROMPT_COMPILER_V2`
+(`agent_os_v2.md` section 8) and `PROMPT_LANGUAGE_PROHIBITED`: no restart-until-success, no blanket GitHub
+or merge authority, no hidden loops, no unbounded discovery during repair, no hidden chain-of-thought
+requests. Lanes compress procedure, not safety. Every serious prompt includes `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`,
 `REASONING_ACTUAL`, `EXACT_MODEL_REQUIRED`, declared fallback, the `SETUP_*` block, exact scope, forbidden
 actions, validation, stops, and the `AGENT_OS_HANDOFF_V1` report. An exact-model mismatch is
 `STOP_WITH_PROOF`; otherwise actual runtime is reported without overclaim. Every serious prompt inherits

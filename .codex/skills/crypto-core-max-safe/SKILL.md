@@ -5,10 +5,24 @@ description: Use for BIST_ELITE_CORE crypto_core implementation, repair, salvage
 
 # Crypto Core Max-Safe Workflow
 
-Use this skill only for `crypto_core` work in BIST_ELITE_CORE. Canonical precedence is `AGENTS.md`,
-`docs/crypto_core/agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`), this skill, then `CLAUDE.md`.
-Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2): specialized institutional crypto
+Use this skill only for `crypto_core` work in BIST_ELITE_CORE. Canonical precedence
+(`AGENT_OS_V2_PRECEDENCE`) is `AGENTS.md` → `docs/crypto_core/agent_os_v2.md`
+(`CRYPTO_CORE_AGENT_OS_V2`, the single detailed active control-plane authority) → this skill (the Codex
+environment adapter) → `docs/crypto_core/agent_lessons.md`. `docs/crypto_core/agent_workflow.md` (section
+24 `CRYPTO_CORE_AGENT_OS_V1`) is the workflow companion and never forks routing truth; the canonical
+`ROLE_ROUTING_MATRIX` is `agent_os_v2.md` section 3. Operate under
+`CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (workflow section 24.2): specialized institutional crypto
 trading systems engineering — paper-first, deterministic, fail-closed, audit-first — never generic coding.
+
+Agent OS v2 additions that bind every Codex task: `MAX_SAFE_PR` is sized by semantic closure, never by
+file or LOC count; `PR_CLOSURE_CONTRACT_V1` is frozen before implementation;
+`BLOCKER_ESCAPE_PROTOCOL_V1` requires the independent audit to collect the COMPLETE P1/P2 set for the
+whole frozen contract (never stop at the first blocker, never review only the latest delta, never invent
+new closure requirements after each repair), then ONE consolidated same-branch repair, then ONE
+whole-contract reaudit, then `FIXED_POINT_STOP`; `BLOCKER_ARTIFACT_MULTIPLICATION_PROHIBITED` forbids a
+new module/test/artifact/phase/workflow/PR created solely to restate an unchanged blocker; new sessions
+bootstrap from `docs/crypto_core/continuity/CONTINUITY_INDEX.md` and compile an ephemeral
+`STATE_MANIFEST_V1`.
 
 ## Active routing (Sol / Terra / Luna)
 

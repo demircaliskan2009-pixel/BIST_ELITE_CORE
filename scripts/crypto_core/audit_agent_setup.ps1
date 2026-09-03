@@ -6,9 +6,15 @@
 
 .DESCRIPTION
   Prints tracked setup files, validates .vscode/*.json with a JSON parser, reports .vscode/mcp.json server
-  state, reports the .cursor BIST alwaysApply rule state, and (best-effort) the open-PR count. Exit code is
-  always 0 (advisory). Canonical doctrine: AGENTS.md + docs/crypto_core/agent_workflow.md +
-  .codex/skills/crypto-core-max-safe/SKILL.md + docs/crypto_core/agent_lessons.md.
+  state, reports the .cursor BIST alwaysApply rule state, and (best-effort) the open-PR count. Those
+  sections stay advisory, and the network/GitHub open-PR probe is informational only.
+
+  Exit code is NOT always 0: the script fails closed (exit 1) when deterministic Agent OS v2 validation
+  fails - scripts/crypto_core/validate_agent_os_v2.py reporting a violation, that validator being
+  unrunnable, or the Agent OS routing-lane audit below reporting an issue. Canonical doctrine:
+  AGENTS.md + docs/crypto_core/agent_os_v2.md (CRYPTO_CORE_AGENT_OS_V2) +
+  .codex/skills/crypto-core-max-safe/SKILL.md + docs/crypto_core/agent_lessons.md, with
+  docs/crypto_core/agent_workflow.md as the workflow companion.
   ASCII-only by design (PowerShell 5.1 reads .ps1 as ANSI without a BOM).
 #>
 
@@ -76,9 +82,10 @@ if ($gh) {
   Write-Output 'OPEN_PR_COUNT=UNKNOWN (gh not installed)'
 }
 
-Write-Section 'AGENT OS v5.2 ROUTING (CRYPTO_CORE_AGENT_OS_V1)'
-# Deterministic verification that Fable is retired and the eight-lane read-only-first controller doctrine is
-# in force. Advisory (this script always exits 0); it never mutates and never weakens the checks above.
+Write-Section 'AGENT OS ROUTING LANES (CRYPTO_CORE_AGENT_OS_V2)'
+# Deterministic verification that Fable is retired and the nine-lane read-only-first controller doctrine is
+# in force. Enforcing: issues found here make this script exit non-zero (see RESULT below). It never
+# mutates and never weakens the checks above.
 
 $os52 = New-Object System.Collections.Generic.List[string]
 
@@ -119,7 +126,7 @@ function Get-AgentOsActiveLaneIssues([string]$agentsText) {
   }
 
   $ordinal = [System.StringComparison]::Ordinal
-  $sectionStart = '### Final durable model set (Agent OS v1)'
+  $sectionStart = '### Final durable model set (Agent OS v2)'
   $sectionEnd = '**Copilot status:'
   $startIndex = $agentsText.IndexOf($sectionStart, $ordinal)
   if ($startIndex -lt 0) {
@@ -142,6 +149,7 @@ function Get-AgentOsActiveLaneIssues([string]$agentsText) {
   $retiredFableTitle = 'Claude Fable 5 ' + $dash + ' `INACTIVE_EXPIRED_RETIRED`'
   $expectedActiveTitles = @(
     'ChatGPT GPT-5.6 Thinking',
+    'ChatGPT Work (Local / Cloud)',
     'GitHub connector',
     'Deep Research + GitHub connector',
     'Claude Opus 5',
@@ -201,7 +209,7 @@ function Get-AgentOsActiveLaneIssues([string]$agentsText) {
       $issues.Add("duplicate active lane: $title")
     }
   }
-  if ($activeTitles.Count -ne 8) { $issues.Add("active lane count mismatch: $($activeTitles.Count); expected 8") }
+  if ($activeTitles.Count -ne 9) { $issues.Add("active lane count mismatch: $($activeTitles.Count); expected 9") }
 
   return $issues.ToArray()
 }
@@ -209,6 +217,7 @@ function Get-AgentOsActiveLaneIssues([string]$agentsText) {
 $activeDoctrineFiles = @(
   'AGENTS.md',
   'CLAUDE.md',
+  'docs/crypto_core/agent_os_v2.md',
   'docs/crypto_core/agent_workflow.md',
   'docs/crypto_core/model_prompting_guide.md',
   'docs/crypto_core/token_efficiency_playbook.md',
@@ -313,16 +322,48 @@ if (Test-Path 'CLAUDE.local.md') {
 }
 
 if ($os52.Count -eq 0) {
-  Write-Output 'AGENT_OS_V52_ROUTING_AUDIT: PASS (8 active lanes; Fable INACTIVE_EXPIRED_RETIRED; controller read-only-first; no active state pins)'
+  Write-Output 'AGENT_OS_ROUTING_AUDIT: PASS (9 active lanes; Fable INACTIVE_EXPIRED_RETIRED; controller read-only-first; no active state pins)'
 } else {
-  Write-Output "AGENT_OS_V52_ROUTING_AUDIT: FAIL ($($os52.Count) issue(s))"
+  Write-Output "AGENT_OS_ROUTING_AUDIT: FAIL ($($os52.Count) issue(s))"
   foreach ($i in $os52) { Write-Output "  - $i" }
 }
 
+Write-Section 'AGENT OS V2 CONTROL PLANE (deterministic, enforcing)'
+# Deterministic enforcement of CRYPTO_CORE_AGENT_OS_V2 (docs/crypto_core/agent_os_v2.md). This is the same
+# validator the required CI `tests` job runs. It is read-only and offline; failure here fails this script.
+$v2Failed = $false
+$validator = 'scripts/crypto_core/validate_agent_os_v2.py'
+if (-not (Test-Path -LiteralPath $validator)) {
+  Write-Output "AGENT_OS_V2_VALIDATION: FAIL (validator missing: $validator)"
+  $v2Failed = $true
+} elseif ($null -eq $python) {
+  # Fail closed: an unrunnable deterministic gate is never treated as a pass.
+  Write-Output 'AGENT_OS_V2_VALIDATION: FAIL (python interpreter not found; cannot run deterministic validation)'
+  $v2Failed = $true
+} else {
+  $v2Output = & $python $validator 2>&1
+  $v2Exit = $LASTEXITCODE
+  foreach ($line in $v2Output) { Write-Output $line }
+  Write-Output "AGENT_OS_V2_VALIDATOR_EXIT=$v2Exit"
+  if ($v2Exit -ne 0) { $v2Failed = $true }
+}
+
 Write-Section 'CANONICAL DOCTRINE'
-Write-Output 'AGENTS.md + docs/crypto_core/agent_workflow.md + .codex/skills/crypto-core-max-safe/SKILL.md + docs/crypto_core/agent_lessons.md'
+Write-Output 'AGENTS.md + docs/crypto_core/agent_os_v2.md (CRYPTO_CORE_AGENT_OS_V2) + .codex/skills/crypto-core-max-safe/SKILL.md + docs/crypto_core/agent_lessons.md'
+Write-Output 'docs/crypto_core/agent_workflow.md is the workflow companion; it never forks routing truth.'
 Write-Output 'Terminal/git/gh/pytest/ruff are the source of truth; extensions are helpers only.'
 
+Write-Section 'RESULT'
+$auditExit = 0
+if ($v2Failed) { $auditExit = 1 }
+if ($os52.Count -ne 0) { $auditExit = 1 }
+if ($auditExit -eq 0) {
+  Write-Output 'AGENT_OS_V2_SETUP_AUDIT: PASS'
+} else {
+  Write-Output 'AGENT_OS_V2_SETUP_AUDIT: FAIL (deterministic Agent OS v2 validation failed)'
+}
+Write-Output "SETUP_AUDIT_EXIT=$auditExit"
+
 if ($MyInvocation.InvocationName -ne '.') {
-  exit 0
+  exit $auditExit
 }

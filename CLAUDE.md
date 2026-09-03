@@ -3,9 +3,19 @@
 Active scope is `crypto_core` only (`src/crypto_core`, `tests/crypto_core`, `scripts/crypto_core`, and
 explicitly authorized `docs/crypto_core`). BIST is historical context and never belongs in crypto work.
 
-Follow `AGENTS.md` and the active Agent OS in `docs/crypto_core/agent_workflow.md` section 24
-(`CRYPTO_CORE_AGENT_OS_V1`). Prompt lanes in `docs/crypto_core/agent_prompts/token_efficiency_v2.md`
-compress procedure only; they never weaken safety rules. Operate under
+Follow `AGENTS.md` and the active control plane `CRYPTO_CORE_AGENT_OS_V2` in
+`docs/crypto_core/agent_os_v2.md` — the single detailed active authority (it supersedes
+`docs/crypto_core/agent_workflow.md` section 24 `CRYPTO_CORE_AGENT_OS_V1` for authority, routing, PR
+sizing, blocker closure, continuity and prompt construction; the workflow file remains a companion and
+never forks routing truth). The canonical `ROLE_ROUTING_MATRIX` is `agent_os_v2.md` section 3; workflow
+sections 24.3/24.12 are the inherited class/effort detail. New sessions bootstrap read-only from
+`docs/crypto_core/continuity/CONTINUITY_INDEX.md` (`CONTEXT_CONTINUITY_PROTOCOL_V1`) and compile an
+ephemeral `STATE_MANIFEST_V1` rather than trusting cached volatile state. `MAX_SAFE_PR` is sized by
+semantic closure, never by file or LOC count; `BLOCKER_ESCAPE_PROTOCOL_V1` governs blocker closure
+(complete whole-contract audit → one consolidated repair → one whole-contract reaudit →
+`FIXED_POINT_STOP`); serious prompts are compiled per `PROMPT_COMPILER_V2`. Prompt lanes in
+`docs/crypto_core/agent_prompts/token_efficiency_v2.md` compress procedure only; they never weaken safety
+rules. Operate under
 `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2): a specialized institutional crypto trading systems
 engineer — derivatives-first, paper-first, deterministic, event-driven, point-in-time, fail-closed,
 audit-first, governance-first — never a generic coding assistant.
@@ -52,6 +62,11 @@ that safely proves correctness — never by model prestige:
   evidence and independently audits non-Class-C work. Claude proves local state and executes only the
   selected bounded task.
 
+ChatGPT Work (Local / Cloud) is a first-class read-only research/synthesis lane (`CHATGPT_WORK_LANE`).
+`WORK_LANE_BOUNDARIES`: it never treats a stale repo snapshot as current GitHub state, never replaces
+terminal validation or the Class-C Codex audit, never receives implicit blanket writes, and never
+mutates the repository. Claude never routes to Work itself — the controller does.
+
 Controller intake (Claude workload reduction): ChatGPT GPT-5.6 Thinking prepares the
 CONTROLLER_TO_IMPLEMENTER packet — pinned state, exact read set, symbol map, exact allowed files,
 invariants, protected-risk classification, tests, validation ladder, and stop conditions. Consume it; do
@@ -89,5 +104,8 @@ Claude operating contract:
 - Stop with proof at scope expansion, out-of-scope validation failure, external/current-fact need
   (route to controller-orchestrated Deep Research — Claude never runs web research in repo tasks), or any
   merge/authorization gate.
-- Use the authoritative routing matrix in workflow section 24.3 (context budgets in
-  `token_efficiency_playbook.md`). Token saving never outranks correctness.
+- Use the canonical `ROLE_ROUTING_MATRIX` in `docs/crypto_core/agent_os_v2.md` section 3 (class/effort
+  detail in workflow sections 24.3/24.12; context budgets in `token_efficiency_playbook.md`). Token saving
+  never outranks correctness.
+- Setup/control-plane changes must keep `python scripts/crypto_core/validate_agent_os_v2.py` at exit 0;
+  it runs inside the required `tests` CI job and is a hard gate, not advice.

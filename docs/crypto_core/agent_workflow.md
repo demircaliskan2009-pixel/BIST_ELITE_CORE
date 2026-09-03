@@ -5,7 +5,12 @@
 > `.codex/skills/crypto-core-max-safe/SKILL.md`, `CLAUDE.md` / `CLAUDE.local.md`,
 > `docs/crypto_core/agent_lessons.md` (evidence-backed lessons), and
 > `docs/crypto_core/agent_prompts/token_efficiency_v2.md` (prompt lanes). **Canonical doctrine precedence**
-> for active work: `AGENTS.md` + this file + `.codex/skills/crypto-core-max-safe/SKILL.md` (then `CLAUDE.md`).
+> for active work (`AGENT_OS_V2_PRECEDENCE`): `AGENTS.md` → `docs/crypto_core/agent_os_v2.md`
+> (`CRYPTO_CORE_AGENT_OS_V2`, the single detailed active control-plane authority) → the environment
+> adapter (`.codex/skills/crypto-core-max-safe/SKILL.md`, or `CLAUDE.md` +
+> `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`) → `docs/crypto_core/agent_lessons.md`.
+> **This file is the workflow companion and must not fork routing truth** — the one authoritative routing
+> matrix is `agent_os_v2.md` section 3; see section 25.
 > Anything under `.github/prompts`, `.github/skills`, `.github/instructions`, `.cursor/rules`, or other legacy
 > surfaces is **overridden by this canonical doctrine** wherever they conflict (see §18). On any apparent
 > conflict the **stricter safety rule wins**. This document contains **no secrets, credentials, API keys,
@@ -21,8 +26,12 @@ context — never implemented here.
 
 ## 2. Model / Tool Roles (active GPT-5.6 routing)
 
-Role summary only. The single `AUTHORITATIVE_ROUTING_MATRIX` (class → lane → model id → effort) is section
-24.3; effort/thinking selection is section 24.12. On any conflict, section 24 wins.
+Role summary only. The single canonical `ROLE_ROUTING_MATRIX` is `docs/crypto_core/agent_os_v2.md`
+section 3 (`CRYPTO_CORE_AGENT_OS_V2`); the inherited class → model id → effort detail is section 24.3 and
+effort/thinking selection is section 24.12. On any conflict, `agent_os_v2.md` wins, then section 24, then
+the stricter safety rule. ChatGPT Work (Local / Cloud) is an additional first-class read-only
+research/synthesis lane defined there (`CHATGPT_WORK_LANE` / `WORK_LANE_BOUNDARIES`); it never mutates the
+repository and never replaces terminal validation or the Class-C Codex Sol audit.
 
 | Role | Responsibility |
 |---|---|
@@ -1184,6 +1193,60 @@ default and is never persisted. Use it only when runtime-proven in the active lo
 controller-authorized, and justified by genuinely independent substantial parallel work with isolated
 ownership, no overlapping mutations, and primary-agent verification of every result. Otherwise use normal
 single-agent `xhigh`/`max` execution.
+
+## 25. Agent OS v2 supersession (workflow companion status)
+
+`CRYPTO_CORE_AGENT_OS_V2` in `docs/crypto_core/agent_os_v2.md` is the single detailed active
+control-plane authority. It supersedes section 24 (`CRYPTO_CORE_AGENT_OS_V1`) for **authority, routing,
+PR sizing, blocker closure, context continuity and prompt construction**.
+
+From this point on, this document is a **workflow companion**: PR lifecycle (§4-§7), hard rules (§3),
+command-level loops, validation ladders, Deep Research protocol summary (§19), the inherited class/effort
+detail (§24.3, §24.12), and the historical record (§20-§23). It **MUST NOT independently fork routing
+truth**. There is exactly one authoritative routing matrix — `ROLE_ROUTING_MATRIX` in `agent_os_v2.md`
+section 3 — and §24.3/§24.12 are read as its inherited class → model id → effort detail, never as a
+competing authority. Where this file and `agent_os_v2.md` disagree on a lane's authority,
+`agent_os_v2.md` wins; on any safety question the stricter rule wins.
+
+Precedence under `AGENT_OS_V2_PRECEDENCE`: `AGENTS.md` → `docs/crypto_core/agent_os_v2.md` →
+environment adapter (`.codex/skills/crypto-core-max-safe/SKILL.md`, or `CLAUDE.md` +
+`.claude/skills/crypto-core-token-efficient-loop/SKILL.md`) → `docs/crypto_core/agent_lessons.md`. This
+file sits alongside as the workflow companion (§18 legacy-surface precedence is unchanged and every
+§3 hard rule binds unaltered).
+
+New in v2 and binding on every task:
+
+- `MAX_SAFE_PR` — PR size is decided by **semantic closure**, never by file count, LOC count,
+  one-artifact-per-PR, one-module-per-PR, one-test-per-PR or one-phase-per-PR. Split only on the five
+  named conditions in `agent_os_v2.md` section 4. Historical blueprint sizing wording such as "each
+  artifact is one PR" is `NON_AUTHORITATIVE_SIZING_HISTORY`.
+- `PR_CLOSURE_CONTRACT_V1` — the outcome, semantic boundary, dependency closure, invariants, allowlists,
+  protected surfaces, negative-test matrix, known blocker inventory, validation matrix, rollback and
+  acceptance matrix are frozen before implementation.
+- `BLOCKER_ESCAPE_PROTOCOL_V1` — `UPFRONT_CLOSURE` → `EXHAUSTIVE_WHOLE_CONTRACT_AUDIT` →
+  `ONE_CONSOLIDATED_REPAIR` → `ONE_WHOLE_CONTRACT_REAUDIT` → `FIXED_POINT_STOP`, with
+  `BLOCKER_ARTIFACT_MULTIPLICATION_PROHIBITED` and at most one explicitly authorized
+  infrastructure-only CI rerun. The micro-PR-per-blocker loop is deprecated as default behavior.
+- `CONTEXT_CONTINUITY_PROTOCOL_V1` — durable `docs/crypto_core/continuity/CONTINUITY_INDEX.md` plus the
+  ephemeral `STATE_MANIFEST_V1` (`continuity/state_manifest.schema.json`) and `CURRENT_HANDOFF_V2`.
+  Durable surfaces never carry volatile SHA/PR/CI/readiness state (§24.11 `LIVE_STATE_POLICY` unchanged).
+- `PROMPT_COMPILER_V2` — serious prompts are compiled from task-specific delta over repo-loaded stable
+  policy, with prohibited restart-until-success and blanket-authority language.
+- `CHATGPT_WORK_LANE` — ChatGPT Work (Local / Cloud) is a first-class read-only research/synthesis lane
+  with explicit `WORK_LANE_BOUNDARIES`; it never mutates the repository, never replaces terminal
+  validation or the Class-C Codex Sol audit, and never receives blanket writes.
+- Deterministic enforcement — `scripts/crypto_core/validate_agent_os_v2.py` runs inside the existing
+  required `tests` CI job and in `scripts/crypto_core/audit_agent_setup.ps1`; the permanent adversarial
+  contract test is `tests/crypto_core/test_agent_os_v2_contract.py`.
+- Legacy control-plane retirement — `.github/instructions/**`, Copilot `.github/agents/crypto-*`,
+  `.github/prompts/crypto-*.prompt.md`, `.github/skills/crypto-*`, the shared contract-schema reference,
+  `.github/hooks/**` and the Copilot/Claude-era throughput documents are removed;
+  `.github/copilot-instructions.md` is a thin compatibility shim only. Reintroduction is a validator
+  violation.
+
+Unchanged by v2: every §3 hard rule, Class-C mandatory independent Codex Sol audit, T4, XR, the
+controller connector gate, explicit per-PR human merge authorization, post-merge verification, and every
+paper-only / fail-closed / no-live-or-capital boundary.
 
 ---
 

@@ -1,12 +1,24 @@
 # crypto_core Model Prompting Guide (v2, 2026-07-10 — Agent OS edition)
 
-Durable authoring guide for every active model/tool lane in `CRYPTO_CORE_AGENT_OS_V1`
-(`docs/crypto_core/agent_workflow.md` section 24 — the routing authority; this guide teaches how to WRITE
-prompts for it and never overrides it). Companion lanes: `token_efficiency_v2.md`; budgets:
-`token_efficiency_playbook.md`; research: `deep_research_protocol.md`. On any apparent conflict, section 24
-and the stricter safety rule win.
+Durable authoring guide for every active model/tool lane in `CRYPTO_CORE_AGENT_OS_V2`
+(`docs/crypto_core/agent_os_v2.md` — the canonical control plane and the single `ROLE_ROUTING_MATRIX` in
+its section 3; `agent_workflow.md` sections 24.3/24.12 remain the inherited class/effort detail). This
+guide teaches how to WRITE prompts and never overrides either. The canonical prompt-compiler policy is
+`PROMPT_COMPILER_V2` (`agent_os_v2.md` section 8): serious prompts carry `TASK_INTENT`,
+`SEMANTIC_BOUNDARY`, `STATE_PIN`, `MODEL_RUNTIME_PROOF`, `ALLOWED_FILES`, `INVARIANTS`,
+`BLOCKER_INVENTORY`, `VALIDATION_MATRIX`, `GITHUB_AUTHORIZATION`, `FORBIDDEN`, `STOP_CONDITIONS` and
+`HANDOFF`, load stable doctrine from the repository instead of pasting it, and never use
+restart-until-success or blanket-authority language. Companion lanes: `token_efficiency_v2.md`; budgets:
+`token_efficiency_playbook.md`; research: `deep_research_protocol.md`. On any apparent conflict,
+`agent_os_v2.md` and the stricter safety rule win.
 
-Active lanes covered (eight): ChatGPT GPT-5.6 Thinking (read-only-first controller-auditor,
+ChatGPT Work (Local / Cloud) is a ninth first-class lane (`CHATGPT_WORK_LANE`): prompt it with an explicit
+deliverable, the exact source scope, a current-versus-stale distinction, and an evidence taxonomy.
+`WORK_LANE_BOUNDARIES` — Work never treats a stale repo snapshot as current GitHub state, never replaces
+terminal validation or the Class-C Codex audit, never receives implicit blanket writes, and never mutates
+the repository.
+
+Active model lanes covered (eight): ChatGPT GPT-5.6 Thinking (read-only-first controller-auditor,
 `CONTROLLER_READONLY_FIRST_POLICY`), GitHub connector, Deep Research, Claude Opus 5 (`claude-opus-5`,
 default heavy executor), Claude Sonnet 5 (`claude-sonnet-5`, runtime-proven only), Codex GPT-5.6 Sol,
 Codex GPT-5.6 Terra, Codex GPT-5.6 Luna. Claude Opus 4.8 is `SUPERSEDED_BY_OPUS_5` — historical only.

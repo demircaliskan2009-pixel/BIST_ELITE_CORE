@@ -1,8 +1,10 @@
 # crypto_core Agent Lessons Ledger
 
 > Durable, evidence-backed lessons distilled from real `crypto_core` PR failures and repairs. Canonical
-> doctrine is `AGENTS.md` + `docs/crypto_core/agent_workflow.md` + `.codex/skills/crypto-core-max-safe/SKILL.md`;
-> this file is the **lessons companion** they reference. Every lesson cites the PR / commit / failure mode
+> doctrine is `AGENTS.md` → `docs/crypto_core/agent_os_v2.md` (`CRYPTO_CORE_AGENT_OS_V2`) → the
+> environment adapter (`.codex/skills/crypto-core-max-safe/SKILL.md`, or `CLAUDE.md` +
+> `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`), with `docs/crypto_core/agent_workflow.md`
+> as the workflow companion; this file is the **lessons companion** they reference. Every lesson cites the PR / commit / failure mode
 > that proves it. No secrets, credentials, API keys, or live-trading instructions. crypto_core only — BIST is
 > historical context.
 
@@ -70,6 +72,43 @@ commit `1890d2b`; repair commits `1cd2799` scope-binding, `ec95c4e` lossy-contai
 - **TOCTOU / manual adversarial tests are required for digest-bound consumers.** Beyond happy-path: a
   tampered field, a resealed-but-inconsistent artifact, a stateful/mutable source, and a `str`-subclass hash
   bypass. (PR #287/#288 adversarial test suites.)
+
+## Control-plane / PR-sizing lessons (Agent OS v2 migration)
+
+- **A fragmented control plane produces contradictory instructions, not redundancy.** Before the Agent OS
+  v2 migration the repository carried four `.github/instructions/*` files (one of them 489 lines with
+  `applyTo: "**"`), three Copilot agent specs, twelve `crypto-*` prompt files, nineteen legacy
+  `.github/skills/crypto-*` skills naming scheduler/deployment/live surfaces that crypto_core forbids, a
+  hook engine, and two Copilot throughput protocol documents — all while Copilot was
+  `INACTIVE_UNAVAILABLE` and the canonical doctrine lived elsewhere. Durable repair: one canonical control
+  plane (`docs/crypto_core/agent_os_v2.md`), exact-path retirement of the legacy surfaces, and a thin
+  `.github/copilot-instructions.md` compatibility shim. (Agent OS v2 migration PR: 6 create / 15 modify /
+  45 delete.)
+- **A setup audit that always exits 0 cannot enforce anything.** `scripts/crypto_core/audit_agent_setup.ps1`
+  printed `AGENT_OS_V52_ROUTING_AUDIT: FAIL` and still returned success, so no gate ever blocked on it.
+  Durable repair: deterministic enforcement in `scripts/crypto_core/validate_agent_os_v2.py`, executed
+  inside the existing required `tests` CI job and by the audit script, which now returns non-zero on
+  failure. Advisory checks (network/GitHub) stay informational. (Agent OS v2 migration, blocker P2-2.)
+- **A "current state" document with no owner goes stale and then lies.** `docs/crypto_core_current_state.md`
+  still described a Phase 16L handoff, a superseded model result, a resolved blocker's commit sha, and a
+  rerun instruction long after all of them were obsolete. Durable repair: it became a durable
+  capability/continuity pointer, mutable state moved to the ephemeral `STATE_MANIFEST_V1`, and the
+  validator forbids re-pinning a live commit sha in any durable surface. (Agent OS v2 migration, blocker
+  P2-3; `LIVE_STATE_POLICY`, `agent_workflow.md` §24.11.)
+- **PR size is a semantic question, not a file-count question.** Sizing PRs by artifact/module/file count
+  produced micro-PR chains where each blocker spawned a new artifact and a new PR without closing the
+  contract. Durable repair: `MAX_SAFE_PR` (semantic closure plus dependency closure, negative cases,
+  permanent tests, validation and rollback) with five named split conditions, and
+  `BLOCKER_ESCAPE_PROTOCOL_V1` (complete whole-contract audit → one consolidated repair → one
+  whole-contract reaudit → `FIXED_POINT_STOP`). `BLOCKER_ARTIFACT_MULTIPLICATION_PROHIBITED`: an unchanged
+  blocker with unchanged evidence never justifies a new module, test, artifact, phase, workflow or PR
+  created solely to restate that the blocker still exists. Before any new persistent artifact, answer
+  "what new load-bearing fact does this prove?" (Agent OS v2 migration, blockers P2-4 and P2-5.)
+- **New-chat context loss is solved by a small durable index plus an ephemeral packet, not by pasting a
+  transcript.** Durable: `docs/crypto_core/continuity/CONTINUITY_INDEX.md` (authority pointers, scope,
+  stable architecture/capability maps, invariant IDs, retired surfaces, bootstrap). Ephemeral:
+  `STATE_MANIFEST_V1` and `CURRENT_HANDOFF_V2`, recompiled from fresh evidence and never committed as
+  doctrine. (Agent OS v2 migration, `CONTEXT_CONTINUITY_PROTOCOL_V1`.)
 
 ## Process / workflow lessons
 

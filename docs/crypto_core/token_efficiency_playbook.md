@@ -2,7 +2,16 @@
 
 Purpose: use the lowest capable lane without weakening proof, audit depth, deterministic behavior, or merge
 discipline. Token savings are never evidence; research economy never outranks factual accuracy. Active
-doctrine: `agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`).
+doctrine: `docs/crypto_core/agent_os_v2.md` (`CRYPTO_CORE_AGENT_OS_V2`; token and context efficiency rules
+in its section 10), with `agent_workflow.md` section 24 as the inherited class/effort companion.
+
+Agent OS v2 token rules that bind here: do not re-paste stable doctrine into every prompt (load it from the
+repository and send only the task delta); do not make downstream lanes redo controller GitHub discovery
+unless it is locally required; reuse one closure packet across implementation and audit while still giving
+the audit fresh exact-head state; show failure tails, never whole logs; use `CHATGPT_WORK_LANE` when a
+persistent workspace, browser or artifact capability materially reduces repeated context reconstruction;
+never add a Sonnet, Terra or Luna prompt merely to satisfy a council ceremony; and never sacrifice
+correctness to save tokens.
 
 ## 1. Context budgets per task class
 
