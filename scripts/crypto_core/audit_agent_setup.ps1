@@ -227,7 +227,7 @@ $activeDoctrineFiles = @(
   '.codex/skills/crypto-core-max-safe/SKILL.md'
 )
 
-# 1) The canonical model-set section must contain exactly the eight active lanes and one retired Fable bullet.
+# 1) The canonical model-set section must contain exactly the nine active lanes and one retired Fable bullet.
 $agentsRaw = Get-RawText 'AGENTS.md'
 foreach ($issue in @(Get-AgentOsActiveLaneIssues $agentsRaw)) { $os52.Add($issue) }
 

@@ -18,7 +18,8 @@ deliverable, the exact source scope, a current-versus-stale distinction, and an 
 terminal validation or the Class-C Codex audit, never receives implicit blanket writes, and never mutates
 the repository.
 
-Active model lanes covered (eight): ChatGPT GPT-5.6 Thinking (read-only-first controller-auditor,
+The active lane set is exactly nine. The eight model/tool lanes covered in detail below, plus the ChatGPT
+Work lane described above: ChatGPT GPT-5.6 Thinking (read-only-first controller-auditor,
 `CONTROLLER_READONLY_FIRST_POLICY`), GitHub connector, Deep Research, Claude Opus 5 (`claude-opus-5`,
 default heavy executor), Claude Sonnet 5 (`claude-sonnet-5`, runtime-proven only), Codex GPT-5.6 Sol,
 Codex GPT-5.6 Terra, Codex GPT-5.6 Luna. Claude Opus 4.8 is `SUPERSEDED_BY_OPUS_5` — historical only.

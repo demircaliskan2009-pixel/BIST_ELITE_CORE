@@ -665,8 +665,12 @@ conditions, and report fields. The durable per-model authoring guide is
 
 ### 24.1 Final durable model/tool set and identity rules
 
-Active set (exactly eight lanes): **ChatGPT GPT-5.6 Thinking** (controller / read-only-first controller-auditor,
-`CONTROLLER_READONLY_FIRST_POLICY`, section 24.10); **GitHub connector** (evidence + explicitly authorized
+Active set (exactly nine lanes under `CRYPTO_CORE_AGENT_OS_V2`; the canonical `ROLE_ROUTING_MATRIX` is
+`docs/crypto_core/agent_os_v2.md` section 3 and this list never forks it): **ChatGPT GPT-5.6 Thinking**
+(controller / read-only-first controller-auditor, `CONTROLLER_READONLY_FIRST_POLICY`, section 24.10);
+**ChatGPT Work (Local / Cloud)** (`CHATGPT_WORK_LANE`, read-only research/synthesis with explicit
+`WORK_LANE_BOUNDARIES` — no repository mutation, no blanket writes, never a substitute for terminal
+validation or the Class-C Codex audit); **GitHub connector** (evidence + explicitly authorized
 actions); **Deep Research + GitHub connector** (external/current facts, advisory); **Claude Opus 5**
 (`claude-opus-5`, default heavy local executor); **Claude Sonnet 5** (`claude-sonnet-5`, runtime-proven
 only); **Codex GPT-5.6 Sol / Terra / Luna**. Claude Code local sessions are the primary local execution
