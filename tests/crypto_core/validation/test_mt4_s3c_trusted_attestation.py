@@ -2813,6 +2813,117 @@ def run_gate_execution_instance_contract():
         raise AssertionError("graph rule accepted " + label)
 
 
+def run_gate_system_library_canonical_path():
+    # FINAL CLOSURE BLOCKER PR370-C14.  A lexical root prefix is not containment: "/usr/lib/"
+    # prefixes "/usr/lib/../../tmp/libcap.so.2.44", which escapes the approved root while satisfying
+    # a naive startswith().  Canonicality is now established BEFORE containment is asked, by the same
+    # shared helper the governed tool paths use, at every trusted system-library validation site.
+    _run_world(sys.argv[sys.argv.index("--work-dir") + 1])
+
+    def library(field, value):
+        def mutate(world):
+            for entry in world["instances"]["system_libraries"]:
+                entry[field] = value
+
+        return mutate
+
+    # THE EXACT CLASS-C TRAVERSAL CLASS, permanently protected.
+    _expect_run_gate(
+        "SYSTEM_LIBRARY_PROVENANCE_INVALID",
+        library("resolved_path", "/usr/lib/../../tmp/libcap.so.2.44"),
+    )
+    # Dot segment, duplicate separator, trailing separator, relative, and bare traversal.
+    _expect_run_gate(
+        "SYSTEM_LIBRARY_PROVENANCE_INVALID",
+        library("resolved_path", "/usr/lib/./x86_64-linux-gnu/libcap.so.2.44"),
+    )
+    _expect_run_gate(
+        "SYSTEM_LIBRARY_PROVENANCE_INVALID",
+        library("resolved_path", "/usr/lib//x86_64-linux-gnu/libcap.so.2.44"),
+    )
+    _expect_run_gate("SYSTEM_LIBRARY_PROVENANCE_INVALID", library("resolved_path", "/usr/lib/"))
+    _expect_run_gate(
+        "SYSTEM_LIBRARY_PROVENANCE_INVALID",
+        library("resolved_path", "usr/lib/x86_64-linux-gnu/libcap.so.2.44"),
+    )
+    _expect_run_gate("SYSTEM_LIBRARY_PROVENANCE_INVALID", library("resolved_path", "/usr/lib/.."))
+    # Outside the approved roots entirely, in canonical form -- the containment rule still holds.
+    _expect_run_gate(
+        "SYSTEM_LIBRARY_PROVENANCE_INVALID",
+        library("resolved_path", "/opt/attacker/lib/libcap.so.2.44"),
+    )
+    # The name / SONAME / provenance bindings are untouched by this repair.
+    _expect_run_gate("SYSTEM_LIBRARY_PROVENANCE_INVALID", library("name", "attacker"))
+    _expect_run_gate("SYSTEM_LIBRARY_PROVENANCE_INVALID", library("soname", "libevil.so.1"))
+    _expect_run_gate("SYSTEM_LIBRARY_PROVENANCE_INVALID", library("provenance", "ATTACKER"))
+
+
+def run_gate_programming_error_is_not_laundered():
+    # FINAL CLOSURE BLOCKER PR370-C20 protecting C16.  The shipped executable boundary catches ONLY
+    # TrustedGateError.  This proves that BEHAVIOURALLY, on the shipped bytes: the boundary block is
+    # read from the gate FILE and executed against the gate's own module namespace, so broadening it
+    # to `except Exception` (or any equivalent laundering) makes case B below fail.
+    #
+    # A. malformed untrusted evidence -> governed TrustedGateError -> governed marker, exit 1
+    # B. internal programming-error sentinel -> MUST propagate unchanged, never become a governed
+    #    evidence-invalid result.
+    source = open(sys.argv[sys.argv.index("--gate-module") + 1], "r", encoding="utf-8").read()
+    guard = 'if __name__ == "__main__":'
+    assert guard in source, "shipped entry guard not found"
+    block = source[source.index(guard) :]
+    newline = chr(10)
+    suite = newline.join(line[4:] if line.startswith("    ") else line for line in block.split(newline)[1:])
+    assert "except TrustedGateError" in suite, "shipped boundary no longer catches TrustedGateError"
+    compiled = compile(suite, "<shipped-boundary>", "exec")
+
+    original_main = gate.main
+    captured = []
+    original_stderr_write = sys.stderr.write
+
+    class _ProgrammingErrorSentinel(ValueError):
+        # Deliberately NOT a TrustedGateError: TrustedGateError derives from RuntimeError, so a
+        # RuntimeError-based sentinel would be caught for the wrong reason and prove nothing.
+        pass
+
+    try:
+        # --- A: governed evidence failure is reported as a governed marker and exits 1 ---
+        def raise_governed():
+            raise gate.TrustedGateError("MT4_TEST_GOVERNED_EVIDENCE_MARKER")
+
+        gate.main = raise_governed
+        sys.stderr.write = captured.append
+        try:
+            exec(compiled, gate.__dict__)  # noqa: S102 - executing the SHIPPED boundary bytes
+        except SystemExit as exit_error:
+            assert exit_error.code == 1, exit_error.code
+        else:
+            raise AssertionError("governed failure did not exit")
+        finally:
+            sys.stderr.write = original_stderr_write
+        assert any("MT4_S3C_TRUSTED_GATE_FAILED=" in text for text in captured), captured
+
+        # --- B: a programming error must NOT be laundered into a governed result ---
+        def raise_programming_error():
+            raise _ProgrammingErrorSentinel("MT4_TEST_PROGRAMMING_SENTINEL")
+
+        gate.main = raise_programming_error
+        captured.clear()
+        sys.stderr.write = captured.append
+        try:
+            exec(compiled, gate.__dict__)  # noqa: S102 - executing the SHIPPED boundary bytes
+        except _ProgrammingErrorSentinel:
+            propagated = True
+        except SystemExit:
+            propagated = False
+        finally:
+            sys.stderr.write = original_stderr_write
+        assert propagated, "the boundary laundered a programming error into a governed exit"
+        assert not any("MT4_S3C_TRUSTED_GATE_FAILED=" in text for text in captured), captured
+    finally:
+        gate.main = original_main
+        sys.stderr.write = original_stderr_write
+
+
 def run_gate_build_provenance_boundary():
     # REPAIR 6C, 6D and 6E.  The tool that ran, the directory it ran in and the system library the
     # linker actually selected are all bound at the boundary, not assumed from a basename.
@@ -3228,6 +3339,8 @@ check("real_producer_receipt_is_accepted", real_producer_receipt_is_accepted)
 check("case_plan_is_not_trusted_authority", case_plan_is_not_trusted_authority)
 check("run_gate_build_graph_identity", run_gate_build_graph_identity)
 check("run_gate_build_provenance_boundary", run_gate_build_provenance_boundary)
+check("run_gate_system_library_canonical_path", run_gate_system_library_canonical_path)
+check("run_gate_programming_error_is_not_laundered", run_gate_programming_error_is_not_laundered)
 check("run_gate_execution_instance_contract", run_gate_execution_instance_contract)
 check("run_gate_canonical_tool_identity", run_gate_canonical_tool_identity)
 check("run_gate_duplicate_identities", run_gate_duplicate_identities)
@@ -3499,6 +3612,8 @@ def driver_values(driver_results):
         "case_plan_is_not_trusted_authority",
         "run_gate_build_graph_identity",
         "run_gate_build_provenance_boundary",
+        "run_gate_system_library_canonical_path",
+        "run_gate_programming_error_is_not_laundered",
         "run_gate_execution_instance_contract",
         "run_gate_canonical_tool_identity",
         "run_gate_duplicate_identities",

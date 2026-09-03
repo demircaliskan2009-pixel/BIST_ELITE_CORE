@@ -601,6 +601,8 @@ def validate_system_libraries(payload):
             fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "provenance")
         if not is_hex64(digest):
             fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "digest")
+        if not recorded_path_is_canonical(resolved):
+            fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "resolved path is not an absolute canonical path")
         if not any(resolved.startswith(root) for root in APPROVED_SYSTEM_LIBRARY_ROOTS):
             fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "resolved outside the pinned library roots")
         if name in names:
@@ -664,13 +666,24 @@ def canonical_tool_basename_is_approved(basename, tool):
     return all(character in TOOL_VERSION_CHARACTERS for character in version)
 
 
-def resolved_tool_path_is_canonical(resolved):
-    """A recorded executable path must be absolute and already canonical -- never traversable."""
-    if not resolved.startswith("/") or resolved.endswith("/"):
+def recorded_path_is_canonical(path):
+    """A recorded absolute path must ALREADY be canonical -- never merely prefix-shaped.
+
+    ONE helper for every recorded path the trusted surface judges: governed tool executables and
+    resolved system libraries alike.  A lexical root prefix is not containment: `/usr/lib/` prefixes
+    `/usr/lib/../../tmp/libcap.so.2.44`, which escapes the approved root while satisfying a naive
+    startswith().  Containment may therefore only be asked AFTER canonicality is established.
+
+    This is a pure structural rule over recorded evidence.  It consults no filesystem, no PATH and
+    no environment, so the trusted gate stays self-contained and reproducible offline.
+    """
+    if not isinstance(path, str) or not path:
         return False
-    if "//" in resolved or "/./" in resolved or "/../" in resolved:
+    if not path.startswith("/") or path.endswith("/"):
         return False
-    return not (resolved.endswith("/.") or resolved.endswith("/.."))
+    if "//" in path or "/./" in path or "/../" in path:
+        return False
+    return not (path.endswith("/.") or path.endswith("/.."))
 
 
 WORKING_DIRECTORY_CLASS = "GITHUB_WORKSPACE"
@@ -729,7 +742,7 @@ def validate_execution_instance(instance, marker, expected_job_id):
     # The RESOLVED executable, not the basename, and it must be a canonical resolution of the
     # approved logical tool inside an approved root.
     resolved = require_str(instance.get("resolved_tool_path"), marker)
-    if not resolved_tool_path_is_canonical(resolved):
+    if not recorded_path_is_canonical(resolved):
         fail("BUILD_TOOL_PROVENANCE_INVALID", "resolved tool path is not an absolute canonical path")
     if not any(resolved.startswith(root) for root in APPROVED_TOOLCHAIN_ROOTS):
         fail("BUILD_TOOL_PROVENANCE_INVALID", "resolved tool is outside the approved roots")
@@ -855,6 +868,8 @@ def recompute_compile_instance_digest(payload):
             fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "digest")
         if entry.get("provenance") != PROVENANCE_SYSTEM_LIBRARY:
             fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "provenance")
+        if not recorded_path_is_canonical(path):
+            fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "resolved path is not an absolute canonical path")
         if not any(path.startswith(root) for root in APPROVED_SYSTEM_LIBRARY_ROOTS):
             fail("SYSTEM_LIBRARY_PROVENANCE_INVALID", "resolved path is outside the approved roots")
         # The resolved file must actually be the library the NAME requested: -lcap resolves to a
