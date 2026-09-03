@@ -15,6 +15,7 @@
   "pr_number": null,
   "pr_state": "NONE",
   "open_pr_count": 0,
+  "open_pr_count_evidence": "PROVEN",
   "ci_runs": [
     {
       "context": "tests",

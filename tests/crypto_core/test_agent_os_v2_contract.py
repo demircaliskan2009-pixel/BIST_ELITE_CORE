@@ -384,3 +384,92 @@ def test_main_returns_nonzero_on_violation(clone: Path, capsys: pytest.CaptureFi
     (clone / validator.AGENT_OS_V2_DOC).unlink()
     assert validator.main(["--repo-root", str(clone)]) == 1
     assert "AGENT_OS_V2_VALIDATION: FAIL" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Regressions for the PR #371 independent-review findings
+# ---------------------------------------------------------------------------
+
+BIST_RUNTIME_HOOK_FILES = (
+    ".github/hooks/pre-response.json",
+    ".github/hooks/post-response.json",
+)
+
+
+@pytest.mark.parametrize("runtime_file", BIST_RUNTIME_HOOK_FILES)
+def test_bist_runtime_hook_files_are_not_retired(runtime_file: str) -> None:
+    """P1 regression: these are loaded by src/bist_core/hooks/hook_engine.py, not control-plane docs.
+
+    Retiring them would make every run_pre_hooks / run_post_hooks call fail closed, so the validator must
+    never demand their absence and they must still exist in the tree.
+    """
+    assert runtime_file not in validator.RETIRED_PATHS
+    assert (REPO_ROOT / runtime_file).is_file()
+
+
+def test_bist_hook_engine_still_reads_the_preserved_files() -> None:
+    """The retirement decision stays bound to the actual runtime reader, not to a directory name."""
+    engine = (REPO_ROOT / "src" / "bist_core" / "hooks" / "hook_engine.py").read_text(encoding="utf-8")
+    for runtime_file in BIST_RUNTIME_HOOK_FILES:
+        name = runtime_file.rsplit("/", 1)[-1]
+        assert name in engine
+
+
+def test_retired_hook_surface_is_documentation_only() -> None:
+    retired_hooks = [path for path in validator.RETIRED_PATHS if path.startswith(".github/hooks/")]
+    assert retired_hooks == [".github/hooks/hook-engine.md"]
+
+
+def test_unrelated_negation_in_the_same_block_does_not_mask_a_reactivation(clone: Path) -> None:
+    """P2 regression: the negation binds to the assertion, not to the blank-line block around it."""
+    _append_paragraph(
+        clone,
+        validator.AGENT_OS_V2_DOC,
+        "Claude Fable 5 is an active default executor. Copilot is never active.",
+    )
+    violations = validator.validate(clone)
+    assert "D" in _codes(violations)
+    assert any("active default executor" in violation for violation in violations)
+
+
+def test_unrelated_negation_does_not_mask_blanket_authority(clone: Path) -> None:
+    _append_paragraph(
+        clone,
+        validator.AGENT_OS_V2_DOC,
+        "The implementer holds blanket GitHub authority. Deep Research is never an executor lane.",
+    )
+    assert "U" in _codes(validator.validate(clone))
+
+
+def test_inventory_fence_is_rejected_outside_the_allowed_files(clone: Path) -> None:
+    """The fence must not become a general escape hatch for reactivating a retired lane."""
+    _append_paragraph(
+        clone,
+        validator.CONTINUITY_INDEX,
+        f"{validator.INVENTORY_FENCE_BEGIN}\n\nanything at all\n\n{validator.INVENTORY_FENCE_END}",
+    )
+    violations = validator.validate(clone)
+    assert any("inventory fence is not allowed" in violation for violation in violations)
+
+
+def test_fenced_inventory_still_permits_the_prohibited_wording_list(clone: Path) -> None:
+    """The honest repository keeps its prohibited-wording inventory and still passes."""
+    doc = _read(clone, validator.AGENT_OS_V2_DOC)
+    assert validator.INVENTORY_FENCE_BEGIN in doc
+    assert "keep fixing until green" in doc
+    assert validator.validate(clone) == []
+
+
+def test_state_manifest_allows_an_explicit_unknown_open_pr_count(clone: Path) -> None:
+    """P2 regression: the fail-closed OPEN_PR_COUNT=UNKNOWN case must be representable, not fabricated."""
+    schema = json.loads(_read(clone, validator.MANIFEST_SCHEMA))
+    open_pr_count = schema["properties"]["open_pr_count"]
+    assert "null" in open_pr_count["type"]
+    assert "UNKNOWN" in open_pr_count["description"]
+    evidence = schema["properties"]["open_pr_count_evidence"]
+    assert set(evidence["enum"]) == {"PROVEN", "UNKNOWN"}
+
+
+def test_example_manifest_declares_its_open_pr_count_evidence(clone: Path) -> None:
+    example = json.loads(_read(clone, validator.MANIFEST_EXAMPLE))
+    assert example["open_pr_count_evidence"] in {"PROVEN", "UNKNOWN"}

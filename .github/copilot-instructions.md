@@ -20,8 +20,8 @@ control-plane authority. Precedence (`AGENT_OS_V2_PRECEDENCE`): `AGENTS.md` →
 ## What this shim explicitly does not authorize
 
 - No autonomous execution. No agent daemon, scheduler, auto-loop or self-directed run.
-- No blanket mutation, blanket GitHub authority, or blanket merge authority. Every mutation needs an
-  explicit human instruction naming the exact action and target.
+- Never grants blanket mutation, blanket GitHub authority, or blanket merge authority. Every mutation
+  needs an explicit human instruction naming the exact action and target.
 - No active Claude Fable 5 lane — Fable is `INACTIVE_EXPIRED_RETIRED`. Claude Opus 4.8 is
   `SUPERSEDED_BY_OPUS_5`.
 - No PR sizing by file count or LOC count. `MAX_SAFE_PR` is decided by semantic closure
@@ -36,6 +36,9 @@ control-plane authority. Precedence (`AGENT_OS_V2_PRECEDENCE`): `AGENTS.md` →
 The Copilot-era control plane has been removed and must not be reintroduced: `.github/instructions/**`,
 `.github/agents/crypto-core-engineer.agent.md`, `.github/agents/crypto-product-auditor.agent.md`,
 `.github/agents/crypto-throughput-commander.agent.md`, `.github/prompts/crypto-*.prompt.md`,
-`.github/skills/crypto-*`, `.github/skills/_shared/references/contract-schema.md`, `.github/hooks/**`,
-and the Copilot-era throughput protocol documents under `docs/crypto_core/`. Absence is enforced by
+`.github/skills/crypto-*`, `.github/skills/_shared/references/contract-schema.md`,
+`.github/hooks/hook-engine.md`, and the Copilot-era throughput protocol documents under
+`docs/crypto_core/`. The hook JSON rule files `.github/hooks/pre-response.json` and
+`.github/hooks/post-response.json` are NOT retired: they are loaded at runtime by
+`src/bist_core/hooks/hook_engine.py`. Absence is enforced by
 `scripts/crypto_core/validate_agent_os_v2.py` inside the required `tests` CI job.

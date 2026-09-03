@@ -93,8 +93,6 @@ RETIRED_PATHS = (
     ".github/skills/crypto-walk-forward-shadow/SKILL.md",
     ".github/skills/_shared/references/contract-schema.md",
     ".github/hooks/hook-engine.md",
-    ".github/hooks/pre-response.json",
-    ".github/hooks/post-response.json",
     "docs/crypto_core/COPILOT_HIGH_THROUGHPUT_OPERATING_PROTOCOL.md",
     "docs/crypto_core/COPILOT_CUSTOM_AGENT_CRYPTO_THROUGHPUT_COMMANDER.md",
     "docs/crypto_core/CLAUDE_COLLABORATION_AND_PROJECT_GUIDE.md",
@@ -162,8 +160,12 @@ EXPECTED_ROUTING_LANES = (
 ROUTING_MATRIX_BEGIN = "<!-- ROLE_ROUTING_MATRIX_V2:BEGIN -->"
 ROUTING_MATRIX_END = "<!-- ROLE_ROUTING_MATRIX_V2:END -->"
 
-# Checks D/E/R/S/U - forbidden active wording. A paragraph containing one of these must also carry a
-# retirement/prohibition marker, otherwise the wording reads as active authority.
+# Checks D/E/R/S/U - forbidden active wording. The negation is bound to the ASSERTION that carries the
+# forbidden phrase - the sentence or table cell it appears in - never to the surrounding block. A
+# block-scoped check is unsound: an unrelated "never ..." sentence elsewhere in the same paragraph would
+# mask a reactivation such as "Claude Fable 5 is an active default executor." and let the CI gate stay
+# green. The only exemption is an explicitly fenced prohibited-wording inventory (see
+# INVENTORY_FENCE_BEGIN), which may exist only in the files listed in INVENTORY_FENCE_ALLOWED_FILES.
 RETIREMENT_MARKERS = (
     "never",
     "not an active",
@@ -210,6 +212,14 @@ BLANKET_AUTHORITY_PHRASES = (
     "blanket authority",
 )
 SUPERSEDED_MODEL_PHRASES = ("opus 4.8", "claude-opus-4-8", "claude-fable-5")
+
+# An explicitly fenced inventory of prohibited wording. Text inside the fence is a list of phrases that
+# must NOT be used, so the phrases themselves are expected there and are exempt from the assertion scan.
+# The fence is not a general escape hatch: it is honoured only in these files, and its presence anywhere
+# else is itself a violation.
+INVENTORY_FENCE_BEGIN = "<!-- PROHIBITED_WORDING_INVENTORY:BEGIN -->"
+INVENTORY_FENCE_END = "<!-- PROHIBITED_WORDING_INVENTORY:END -->"
+INVENTORY_FENCE_ALLOWED_FILES = (AGENT_OS_V2_DOC, COPILOT_SHIM)
 
 # Surfaces scanned for forbidden active wording.
 V2_CONTROL_SURFACES = (
@@ -287,13 +297,45 @@ def _read_text(repo_root: Path, rel: str) -> str | None:
         return None
 
 
-def _paragraphs(text: str) -> list[str]:
-    """Split into blank-line separated blocks. Wording is judged per block, not per wrapped line."""
-    return [block for block in re.split(r"\n\s*\n", text) if block.strip()]
+def _strip_inventory_fences(text: str) -> str:
+    """Remove explicitly fenced prohibited-wording inventories; keep everything else intact."""
+    pattern = re.escape(INVENTORY_FENCE_BEGIN) + r".*?" + re.escape(INVENTORY_FENCE_END)
+    return re.sub(pattern, "", text, flags=re.DOTALL)
 
 
-def _has_marker(block: str) -> bool:
-    lowered = block.lower()
+def _assertions(text: str) -> list[str]:
+    """Split into individual assertions.
+
+    An assertion is the unit a reader would judge true or false on its own: one table cell, or one
+    sentence/clause of prose. Wrapped lines are rejoined first so rewrapping never changes the result.
+    Splitting happens only on sentence terminators and semicolons - never on a dash or colon, which
+    usually separate a subject from the predicate that retires it ("Claude Fable 5 - INACTIVE...").
+    """
+    units: list[str] = []
+    paragraph_lines: list[str] = []
+
+    def flush() -> None:
+        if paragraph_lines:
+            joined = " ".join(paragraph_lines)
+            units.extend(re.split(r"(?<=[.!?;])\s+", joined))
+            paragraph_lines.clear()
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            flush()
+            continue
+        if line.startswith("|"):
+            flush()
+            units.extend(cell for cell in line.strip("|").split("|"))
+            continue
+        paragraph_lines.append(line)
+    flush()
+    return [unit for unit in units if unit.strip()]
+
+
+def _has_marker(assertion: str) -> bool:
+    lowered = assertion.lower()
     return any(marker in lowered for marker in RETIREMENT_MARKERS)
 
 
@@ -301,13 +343,27 @@ def _forbidden_wording(repo_root: Path, rel: str, phrases: tuple[str, ...], labe
     text = _read_text(repo_root, rel)
     if text is None:
         return []
+    if rel in INVENTORY_FENCE_ALLOWED_FILES:
+        text = _strip_inventory_fences(text)
     violations = []
-    for block in _paragraphs(text):
-        lowered = block.lower()
+    for assertion in _assertions(text):
+        lowered = assertion.lower()
         for phrase in phrases:
-            if phrase in lowered and not _has_marker(block):
-                snippet = " ".join(block.split())[:120]
+            if phrase in lowered and not _has_marker(assertion):
+                snippet = " ".join(assertion.split())[:120]
                 violations.append(f"{label}: '{phrase}' stated as active authority in {rel}: {snippet}")
+    return violations
+
+
+def _check_inventory_fence_placement(repo_root: Path) -> list[str]:
+    """The inventory fence must never appear outside the files allowed to carry it."""
+    violations = []
+    for rel in V2_CONTROL_SURFACES:
+        if rel in INVENTORY_FENCE_ALLOWED_FILES:
+            continue
+        text = _read_text(repo_root, rel)
+        if text is not None and INVENTORY_FENCE_BEGIN in text:
+            violations.append(f"S: prohibited-wording inventory fence is not allowed in {rel}")
     return violations
 
 
@@ -366,6 +422,7 @@ def _check_forbidden_active_wording(repo_root: Path) -> list[str]:
         violations.extend(_forbidden_wording(repo_root, rel, RESTART_UNTIL_SUCCESS_PHRASES, "S"))
         violations.extend(_forbidden_wording(repo_root, rel, BLANKET_AUTHORITY_PHRASES, "U"))
         violations.extend(_forbidden_wording(repo_root, rel, SUPERSEDED_MODEL_PHRASES, "R"))
+    violations.extend(_check_inventory_fence_placement(repo_root))
     shim = _read_text(repo_root, COPILOT_SHIM)
     if shim is None:
         violations.append(f"E: cannot read {COPILOT_SHIM}")

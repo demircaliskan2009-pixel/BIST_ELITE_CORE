@@ -79,11 +79,35 @@ commit `1890d2b`; repair commits `1cd2799` scope-binding, `ec95c4e` lossy-contai
   v2 migration the repository carried four `.github/instructions/*` files (one of them 489 lines with
   `applyTo: "**"`), three Copilot agent specs, twelve `crypto-*` prompt files, nineteen legacy
   `.github/skills/crypto-*` skills naming scheduler/deployment/live surfaces that crypto_core forbids, a
-  hook engine, and two Copilot throughput protocol documents — all while Copilot was
+  Copilot hook-engine contract document, and two Copilot throughput protocol documents — all while Copilot was
   `INACTIVE_UNAVAILABLE` and the canonical doctrine lived elsewhere. Durable repair: one canonical control
   plane (`docs/crypto_core/agent_os_v2.md`), exact-path retirement of the legacy surfaces, and a thin
   `.github/copilot-instructions.md` compatibility shim. (Agent OS v2 migration PR: 6 create / 15 modify /
-  45 delete.)
+  43 delete.)
+- **A wildcard retirement path can silently own runtime data.** The migration's frozen delete list retired
+  all of `.github/hooks/**`, but `.github/hooks/pre-response.json` and `.github/hooks/post-response.json`
+  are loaded at import time by `src/bist_core/hooks/hook_engine.py:17-18`; deleting them made every
+  `run_pre_hooks` / `run_post_hooks` call fail closed with `hook_load_failure` and broke four
+  `tests/services/test_hook_engine.py` tests, none of which run in the crypto_core CI job or the
+  `run_full_tests_logged.ps1` wrapper. A directory named like documentation is not proof that it only
+  contains documentation. Durable rule: before retiring any path, grep the product tree for readers of
+  that exact path; retire by exact file, never by `**`, when a directory mixes documentation with
+  runtime-owned data; and treat a protected-surface rule ("no BIST mutation") as outranking a frozen
+  file-count target when the two collide. Repair: both JSON files restored byte-identical to `main`, only
+  the Copilot-era `hook-engine.md` retired. (Agent OS v2 migration, Codex P1 on PR #371.)
+- **A green required gate is only as strong as the scope it evaluates.** The control-plane validator bound
+  its "is this wording retired?" test to the blank-line block, so an unrelated `... is never active.`
+  sentence in the same paragraph masked a reactivation sentence beside it, and a prohibited lane could be
+  re-enabled with the new required CI check still green. Durable rule: bind a negation to the assertion it
+  qualifies - the sentence or table cell - never to the surrounding block, and keep legitimate inventories
+  of forbidden wording inside an explicit fence that is honoured only in named files. (Agent OS v2
+  migration, Codex P2 on PR #371.)
+- **A fail-closed audit output needs a schema that can represent it.** The setup audit reports
+  `OPEN_PR_COUNT=UNKNOWN` when `gh` is unauthenticated, but `STATE_MANIFEST_V1` first required
+  `open_pr_count` to be an integer, so the only schema-valid manifest in that exact scenario contained a
+  fabricated count. Durable rule: every field that a proof step can legitimately fail to establish must
+  have an explicit UNKNOWN representation that stays blocking. (Agent OS v2 migration, Codex P2 on
+  PR #371.)
 - **A setup audit that always exits 0 cannot enforce anything.** `scripts/crypto_core/audit_agent_setup.ps1`
   printed `AGENT_OS_V52_ROUTING_AUDIT: FAIL` and still returned success, so no gate ever blocked on it.
   Durable repair: deterministic enforcement in `scripts/crypto_core/validate_agent_os_v2.py`, executed

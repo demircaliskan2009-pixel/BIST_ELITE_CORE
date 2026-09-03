@@ -1244,7 +1244,8 @@ New in v2 and binding on every task:
   contract test is `tests/crypto_core/test_agent_os_v2_contract.py`.
 - Legacy control-plane retirement — `.github/instructions/**`, Copilot `.github/agents/crypto-*`,
   `.github/prompts/crypto-*.prompt.md`, `.github/skills/crypto-*`, the shared contract-schema reference,
-  `.github/hooks/**` and the Copilot/Claude-era throughput documents are removed;
+  `.github/hooks/hook-engine.md` and the Copilot/Claude-era throughput documents are removed (the hook
+  JSON rule files are runtime-owned by `src/bist_core/hooks/hook_engine.py` and are preserved);
   `.github/copilot-instructions.md` is a thin compatibility shim only. Reintroduction is a validator
   violation.
 

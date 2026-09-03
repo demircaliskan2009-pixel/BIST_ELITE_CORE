@@ -81,9 +81,14 @@
       "enum": ["NONE", "OPEN", "CLOSED", "MERGED", "UNKNOWN"]
     },
     "open_pr_count": {
-      "description": "Open PR count proven with gh or the GitHub connector. ONE_OPEN_PR is the default invariant.",
-      "type": "integer",
+      "description": "Open PR count proven with gh or the GitHub connector. ONE_OPEN_PR is the default invariant. null means UNKNOWN - gh or the connector was unauthenticated or unavailable, matching the setup audit's OPEN_PR_COUNT=UNKNOWN. UNKNOWN is fail-closed: it stays blocking until proven, and a count is never fabricated to satisfy this field.",
+      "type": ["integer", "null"],
       "minimum": 0
+    },
+    "open_pr_count_evidence": {
+      "description": "How open_pr_count was established. PROVEN requires fresh gh or connector output; UNKNOWN accompanies a null count and blocks any merge-readiness judgement.",
+      "type": "string",
+      "enum": ["PROVEN", "UNKNOWN"]
     },
     "ci_runs": {
       "description": "Required check contexts and their terminal or pending conclusions. Pending is NOT_READY.",

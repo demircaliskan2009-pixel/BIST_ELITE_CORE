@@ -80,8 +80,8 @@ This is the only authoritative routing matrix in the repository.
 | Lane | Role | Use for | Never |
 |---|---|---|---|
 | ChatGPT GPT-5.6 Thinking (controller) | Controller, brain, router, architecture synthesizer, state-proof owner, prompt compiler, handoff verifier, risk classifier, merge-readiness judge, GitHub connector coordinator | STATUS, CLOSEOUT, BOUNDED_READ, ARCHITECTURE, PROMPT_ARCHITECTURE, review triage, routing, live GitHub evidence verification | Default product-code writer; merge authority; readiness authority; live or capital authority; replacement for tests; replacement for mandatory Class-C |
-| ChatGPT Work (Local / Cloud) | First-class read-only research and synthesis lane with a persistent workspace, artifact delivery, and Cloud Browser | Large repo synthesis, multi-document comparison, long architecture reports, next-PR closure packet preparation, current web research, website interaction, persistent project workspace, large read-only analysis, artifact-oriented delivery | Treating an uploaded or stale repo snapshot as current GitHub state; replacing terminal validation; replacing Class-C; implicit blanket writes; replacing controller final evidence judgment |
-| GitHub connector | Pinned-ref evidence and explicitly authorized exact writes | Repo reads, file reads, branch state, PR state, diffs, checks, runs, review and thread evidence, supported exact authorized writes | Inventing an unsupported connector capability; treating connector availability as blanket write authority |
+| ChatGPT Work (Local / Cloud) | First-class read-only research and synthesis lane with a persistent workspace, artifact delivery, and Cloud Browser | Large repo synthesis, multi-document comparison, long architecture reports, next-PR closure packet preparation, current web research, website interaction, persistent project workspace, large read-only analysis, artifact-oriented delivery | Never treats an uploaded or stale repo snapshot as current GitHub state; never replaces terminal validation; never replaces Class-C; never receives implicit blanket writes; never replaces controller final evidence judgment |
+| GitHub connector | Pinned-ref evidence and explicitly authorized exact writes | Repo reads, file reads, branch state, PR state, diffs, checks, runs, review and thread evidence, supported exact authorized writes | Never invents an unsupported connector capability; never treats connector availability as blanket write authority |
 | Deep Research | Controller-orchestrated external and current-fact research, read-only and advisory | Exchange or provider APIs, deployed versions, fees and funding, rate limits, security, regulation, machine-time provider facts, current readiness assumptions, current credible architecture benchmarks | Being used because repo work is merely difficult; repo-local facts; executor lane; merge authority; safety-gate waiver |
 | Claude Opus 5 | Heavy implementation and repair lane (`claude-opus-5`), default effort `xhigh` | Cross-module implementation, interacting invariants, fail-closed semantics, complex consolidated repair, large bounded migrations | Automatic higher effort; metadata; CI polling; ordinary docs; work a lighter lane safely closes |
 | Claude Sonnet 5 | Optional bounded lane (`claude-sonnet-5`), runtime-proven only | Docs, config and tests; mechanical implementation; small deterministic repair; T0-T2 work | Being added merely to increase agent count; protected trust-boundary, digest, SM-5/SM-6, Stage-4, readiness or capital work; T4; a mandatory Class-C audit |
@@ -269,11 +269,29 @@ Model-specific prompt behavior:
 | Work | Explicit deliverable, source scope, current-vs-stale distinction, evidence taxonomy |
 | Deep Research | One current external question, source requirements, retrieval date, repo relevance |
 
-`PROMPT_LANGUAGE_PROHIBITED` — a compiled prompt must never contain: "continue until done"; "keep fixing
-until green"; "do everything automatically"; "approve your own work"; "merge when you think ready";
-"ignore scope if needed"; hidden loops; blanket GitHub authority; blanket merge authority; unbounded
-discovery during repair; or any request for hidden chain-of-thought. No prompt, lane or packet grants
-restart-until-success authority.
+`PROMPT_LANGUAGE_PROHIBITED` — a compiled prompt must never contain any of the wording inventoried below.
+No prompt, lane or packet grants restart-until-success authority, blanket GitHub authority or blanket
+merge authority.
+
+<!-- PROHIBITED_WORDING_INVENTORY:BEGIN -->
+
+The following are the exact forms that must never appear in a compiled prompt. This block is an inventory
+of forbidden wording, so the phrases are quoted here on purpose and are exempt from the control-plane
+wording scan; the fence is honoured only in this file and in `.github/copilot-instructions.md`.
+
+- "continue until done"
+- "keep fixing until green"
+- "do everything automatically"
+- "approve your own work"
+- "merge when you think ready"
+- "ignore scope if needed"
+- hidden loops
+- blanket GitHub authority
+- blanket merge authority
+- unbounded discovery during repair
+- any request for hidden chain-of-thought
+
+<!-- PROHIBITED_WORDING_INVENTORY:END -->
 
 ## 9. DAILY_BATCH_MANIFEST_V1
 
@@ -329,8 +347,13 @@ fails. The tests never mutate repository files.
 
 The fragmented Copilot-era control plane is retired. `.github/instructions/**`, the Copilot
 `.github/agents/crypto-*` specs, `.github/prompts/crypto-*.prompt.md`, `.github/skills/crypto-*`,
-`.github/skills/_shared/references/contract-schema.md`, `.github/hooks/**`, and the Copilot-era and
-Claude-era throughput protocol documents under `docs/crypto_core/` are removed as active surfaces.
+`.github/skills/_shared/references/contract-schema.md`, the Copilot-era hook contract
+`.github/hooks/hook-engine.md`, and the Copilot-era and Claude-era throughput protocol documents under
+`docs/crypto_core/` are removed as active surfaces. `.github/hooks/pre-response.json` and
+`.github/hooks/post-response.json` are **deliberately preserved**: they are runtime-owned data loaded by
+`src/bist_core/hooks/hook_engine.py`, so retiring them would change BIST runtime behavior, which this
+crypto-only control-plane migration must never do. Any future relocation is a separately authorized BIST
+change.
 `.github/copilot-instructions.md` survives only as a thin compatibility shim stating that Copilot is
 inactive unless separately reactivated through an audited workflow change.
 
