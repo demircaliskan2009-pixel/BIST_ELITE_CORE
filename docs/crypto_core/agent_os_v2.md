@@ -110,11 +110,36 @@ fallback, or dependency; **Claude Opus 4.8 is `SUPERSEDED_BY_OPUS_5`**; **Copilo
 and holds no blanket mutation authority. Material naming these lanes survives only as HISTORICAL,
 SUPERSEDED or ARCHIVAL evidence and never re-enters active routing.
 
-Task classes (`T0` `LUNA_MECHANICAL`, `T1` `READONLY_OR_FAST_BOUNDED`, `T2` `BOUNDED_IMPLEMENTATION`,
-`T3A`-`T3E`, `T4` `CROSS_CONTRACT_DESIGN_OR_AUDIT`, `XR` `DEEP_RESEARCH_EXTERNAL`,
-`CONTROLLER_CONNECTOR_GATE`) and the Claude effort ladder are inherited unchanged from
-`agent_workflow.md` sections 24.3 and 24.12, which remain the class and effort detail companions to this
-matrix. Where the workflow companion and this file disagree on a lane's authority, this file wins.
+### 3.1 Canonical task-family semantics
+
+These family rules are owned here. `agent_workflow.md` sections 24.3 and 24.12 are **subordinate detail
+tables** that may add granularity but may never add, remove, rename or re-scope a family or lane; on any
+conflict this file wins.
+
+| Class | Canonical lane rule |
+|---|---|
+| `T0` `LUNA_MECHANICAL` | Mechanics, status and polling. **Codex Luna is the preferred mechanical lane.** Claude Sonnet 5 `low` is an environment-specific bounded fallback only when explicitly routed — never an automatic substitution. |
+| `T1` `READONLY_OR_FAST_BOUNDED` | Bounded reads, proof, docs, direct-dependency read-only audit, and governed mechanical closeout. **Luna preferred; Sonnet 5 optional bounded local fallback.** Closeout still requires exact per-action authorization; it is never implied by the class. |
+| `T2` `BOUNDED_IMPLEMENTATION` | Sonnet 5 or Terra, chosen by bounded environment and task need. |
+| `T3A` `COMPLEX_IMPLEMENTATION` | Claude Opus 5 `xhigh` — the default heavy lane. |
+| `T3B` `CAPABILITY_CRITICAL_IMPLEMENTATION_OR_REPAIR` | `IMPLEMENTATION` or `REPAIR` intent **only**, on an explicitly named capability-critical trigger. It never absorbs `REVIEW`, `ARCHITECTURE` or `PROMPT_ARCHITECTURE` work, whatever risk flags are set. |
+| `T3C` `CODE_REVIEW_AND_BUG_FINDING` | Review, read-only. Subject-matter risk raises the effort inside T3C; it never reclassifies the work as T3B. |
+| `T3D` `ARCHITECTURE_AND_NEXT_SLICE` | Architecture, read-only — produces a decision, not a diff. Risk raises effort inside T3D, never the class. |
+| `T3E` `COMPLEX_PROMPT_ARCHITECTURE` | Prompt architecture. Capability-criticality raises effort inside T3E, never the class. |
+| `T4` `CROSS_CONTRACT_DESIGN_OR_AUDIT` | Codex GPT-5.6 Sol protected independent design/audit (Class-C). No Claude lane and no self-review satisfies it. |
+| `XR` `DEEP_RESEARCH_EXTERNAL` | Controller-orchestrated Deep Research, read-only and advisory. |
+| `CONTROLLER_CONNECTOR_GATE` | Controller plus connector evidence comparison, then explicit human merge authorization. |
+
+`TASK_INTENT` selects the family before any risk or complexity flag is read. Risk and complexity choose the
+effort inside that family — they never overwrite it.
+
+### 3.2 Canonical merge rule
+
+Standard merge commit plus `EXPLICIT_HUMAN_MERGE_AUTHORIZATION` naming the exact PR is the canonical merge
+rule, without exception. Auto-merge is **not a default, not an implicit authority and not a routing
+outcome**: where a platform auto-merge capability is mentioned anywhere in this repository it is a
+non-authoritative platform note only, it never substitutes for per-PR human authorization, and it never
+widens any lane's authority. No lane self-approves.
 
 ## 4. MAX_SAFE_PR policy
 
@@ -268,6 +293,27 @@ Model-specific prompt behavior:
 | Luna | Mechanical command and state task, minimal semantic prose |
 | Work | Explicit deliverable, source scope, current-vs-stale distinction, evidence taxonomy |
 | Deep Research | One current external question, source requirements, retrieval date, repo relevance |
+
+<!-- PROMPT_COMPILER_V2_FIELDS:BEGIN -->
+
+`PROMPT_COMPILER_V2_TASK_DELTA` — every serious prompt built from this document instantiates exactly this
+canonical delta packet. A template may be terse, but all twelve fields must be representable and none may
+be omitted or replaced by prose such as "follow PROMPT_COMPILER_V2".
+
+- `TASK_INTENT`
+- `SEMANTIC_BOUNDARY`
+- `STATE_PIN`
+- `MODEL_RUNTIME_PROOF`
+- `ALLOWED_FILES`
+- `INVARIANTS`
+- `BLOCKER_INVENTORY`
+- `VALIDATION_MATRIX`
+- `GITHUB_AUTHORIZATION`
+- `FORBIDDEN`
+- `STOP_CONDITIONS`
+- `HANDOFF`
+
+<!-- PROMPT_COMPILER_V2_FIELDS:END -->
 
 `PROMPT_LANGUAGE_PROHIBITED` — a compiled prompt must never contain any of the wording inventoried below.
 No prompt, lane or packet grants restart-until-success authority, blanket GitHub authority or blanket

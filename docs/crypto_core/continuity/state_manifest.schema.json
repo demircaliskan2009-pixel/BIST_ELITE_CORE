@@ -18,6 +18,7 @@
     "pr_number",
     "pr_state",
     "open_pr_count",
+    "open_pr_count_evidence",
     "ci_runs",
     "reviews",
     "threads",
@@ -64,31 +65,52 @@
     "worktree_state": {
       "description": "Proven worktree cleanliness.",
       "type": "string",
-      "enum": ["CLEAN", "DIRTY", "UNKNOWN"]
+      "enum": [
+        "CLEAN",
+        "DIRTY",
+        "UNKNOWN"
+      ]
     },
     "changed_files": {
       "description": "Exact changed paths relative to base, proven with git.",
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "pr_number": {
       "description": "Open PR number for this task, or null when no PR exists.",
-      "type": ["integer", "null"]
+      "type": [
+        "integer",
+        "null"
+      ]
     },
     "pr_state": {
       "description": "Proven PR state.",
       "type": "string",
-      "enum": ["NONE", "OPEN", "CLOSED", "MERGED", "UNKNOWN"]
+      "enum": [
+        "NONE",
+        "OPEN",
+        "CLOSED",
+        "MERGED",
+        "UNKNOWN"
+      ]
     },
     "open_pr_count": {
-      "description": "Open PR count proven with gh or the GitHub connector. ONE_OPEN_PR is the default invariant. null means UNKNOWN - gh or the connector was unauthenticated or unavailable, matching the setup audit's OPEN_PR_COUNT=UNKNOWN. UNKNOWN is fail-closed: it stays blocking until proven, and a count is never fabricated to satisfy this field.",
-      "type": ["integer", "null"],
+      "description": "Open PR count proven with gh or the GitHub connector. ONE_OPEN_PR is the default invariant. null means UNKNOWN and MUST be paired with open_pr_count_evidence=UNKNOWN; an integer MUST be paired with PROVEN. The pairing is enforced structurally by the top-level oneOf, not by this description.",
+      "type": [
+        "integer",
+        "null"
+      ],
       "minimum": 0
     },
     "open_pr_count_evidence": {
-      "description": "How open_pr_count was established. PROVEN requires fresh gh or connector output; UNKNOWN accompanies a null count and blocks any merge-readiness judgement.",
+      "description": "How open_pr_count was established. PROVEN requires fresh gh or connector output and an integer count; UNKNOWN requires a null count, is fail-closed, and blocks any merge-readiness judgement or any action requiring proven one-open-PR state. A count is never fabricated to satisfy this field.",
       "type": "string",
-      "enum": ["PROVEN", "UNKNOWN"]
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
     },
     "ci_runs": {
       "description": "Required check contexts and their terminal or pending conclusions. Pending is NOT_READY.",
@@ -96,12 +118,31 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["context", "status", "conclusion"],
+        "required": [
+          "context",
+          "status",
+          "conclusion"
+        ],
         "properties": {
-          "context": { "type": "string" },
-          "status": { "type": "string" },
-          "conclusion": { "type": ["string", "null"] },
-          "run_id": { "type": ["string", "integer", "null"] }
+          "context": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "conclusion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "integer",
+              "null"
+            ]
+          }
         }
       }
     },
@@ -111,10 +152,17 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["author", "state"],
+        "required": [
+          "author",
+          "state"
+        ],
         "properties": {
-          "author": { "type": "string" },
-          "state": { "type": "string" }
+          "author": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
         }
       }
     },
@@ -124,37 +172,84 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["thread_id", "state", "severity"],
+        "required": [
+          "thread_id",
+          "state",
+          "severity"
+        ],
         "properties": {
-          "thread_id": { "type": "string" },
-          "state": { "type": "string" },
-          "severity": { "type": "string", "enum": ["P1", "P2", "P3", "NONE"] }
+          "thread_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "P1",
+              "P2",
+              "P3",
+              "NONE"
+            ]
+          }
         }
       }
     },
     "readiness_fingerprint": {
       "description": "Opaque fingerprint of the readiness surface. Change invalidates the manifest. Never an authority to transition readiness.",
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "connector_fingerprint": {
       "description": "Opaque fingerprint of the connector surface. Change invalidates the manifest. Never an authority to transition the connector.",
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "model_runtime_proof": {
       "description": "Runtime model and effort evidence for the executing lane. Configuration evidence is labelled as such and never restated as runtime proof.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["model_requested", "model_actual", "effort_requested", "effort_actual", "evidence_class"],
+      "required": [
+        "model_requested",
+        "model_actual",
+        "effort_requested",
+        "effort_actual",
+        "evidence_class"
+      ],
       "properties": {
-        "model_requested": { "type": "string" },
-        "model_actual": { "type": "string" },
-        "effort_requested": { "type": "string" },
-        "effort_actual": { "type": "string" },
-        "thinking": { "type": "string" },
-        "fallback": { "type": ["string", "null"] },
+        "model_requested": {
+          "type": "string"
+        },
+        "model_actual": {
+          "type": "string"
+        },
+        "effort_requested": {
+          "type": "string"
+        },
+        "effort_actual": {
+          "type": "string"
+        },
+        "thinking": {
+          "type": "string"
+        },
+        "fallback": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "evidence_class": {
           "type": "string",
-          "enum": ["RUNTIME_EVIDENCE", "CONFIGURATION_EVIDENCE_ONLY", "UNKNOWN"]
+          "enum": [
+            "RUNTIME_EVIDENCE",
+            "CONFIGURATION_EVIDENCE_ONLY",
+            "UNKNOWN"
+          ]
         }
       }
     },
@@ -180,7 +275,10 @@
     },
     "freshness_deadline": {
       "description": "UTC timestamp after which the manifest must be recompiled even if nothing else changed.",
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "invalidation_reasons": {
       "description": "Conditions that invalidate this manifest and force recompilation from fresh evidence.",
@@ -201,5 +299,40 @@
         ]
       }
     }
-  }
+  },
+  "oneOf": [
+    {
+      "title": "OPEN_PR_COUNT_PROVEN",
+      "description": "A proven count: gh or the GitHub connector returned a value in this task.",
+      "properties": {
+        "open_pr_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "open_pr_count_evidence": {
+          "const": "PROVEN"
+        }
+      },
+      "required": [
+        "open_pr_count",
+        "open_pr_count_evidence"
+      ]
+    },
+    {
+      "title": "OPEN_PR_COUNT_UNKNOWN",
+      "description": "Fail-closed unknown: gh or the connector was unauthenticated or unavailable. The count MUST be null - never a fabricated integer - and UNKNOWN blocks any action requiring proven one-open-PR state.",
+      "properties": {
+        "open_pr_count": {
+          "type": "null"
+        },
+        "open_pr_count_evidence": {
+          "const": "UNKNOWN"
+        }
+      },
+      "required": [
+        "open_pr_count",
+        "open_pr_count_evidence"
+      ]
+    }
+  ]
 }

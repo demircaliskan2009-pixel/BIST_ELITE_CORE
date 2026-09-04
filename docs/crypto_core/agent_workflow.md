@@ -729,10 +729,11 @@ real orders, scheduler, auto-loop, or capital mutation unless separately authori
 
 ### 24.3 Common taxonomy and optimal routing matrix
 
-**`AUTHORITATIVE_ROUTING_MATRIX` — this table is the single active routing authority for crypto_core.** No
-other file may restate it as authority; every other active surface (`AGENTS.md`, `CLAUDE.md`,
-`model_prompting_guide.md`, `token_efficiency_playbook.md`, `token_efficiency_v2.md`, the Claude and Codex
-skills) references this section instead of duplicating it. Effort/thinking selection, the deterministic
+**SUBORDINATE DETAIL TABLE — not a routing authority.** The canonical `ROLE_ROUTING_MATRIX` for
+crypto_core lives only in `docs/crypto_core/agent_os_v2.md` section 3. This table is the inherited
+class -> model id -> effort detail beneath it: it may add granularity, it may never add, remove, rename or
+re-scope a lane, and on any conflict `agent_os_v2.md` wins. No file other than `agent_os_v2.md` declares a
+routing authority. Effort/thinking selection, the deterministic
 routing function, and Claude behavior calibration live in section 24.12; Claude prompt construction and
 reusable templates live in `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`. Pick the LOWEST
 lane that safely proves correctness — model prestige is never a selection reason.
@@ -740,7 +741,7 @@ lane that safely proves correctness — model prestige is never a selection reas
 | Class | Label | Primary lane(s) | Model id | Default effort | Use |
 |---|---|---|---|---|---|
 | T0 | `LUNA_MECHANICAL` | Luna `none`/`low` — or Claude Sonnet 5 low in a Claude Code session | `claude-sonnet-5` (Claude lane) | low | **STATUS family only**: git/gh state, bounded CI polling, PR metadata, review/thread status, open-PR counts, branch and clean-tree checks, deterministic status reporting. T0 owns no merge or postverify scope — see T1 |
-| T1 | `READONLY_OR_FAST_BOUNDED` | Luna low / Terra high / Sonnet 5 (runtime-proven) | `claude-sonnet-5` (Claude lane) | low | bounded reads, proof, docs, direct-dependency read-only audit, and the sole governed CLOSEOUT family — authorized standard merge, branch-protection-required auto-merge only when separately authorized by doctrine, post-merge commands, parent/digest verification, clean-main proof, and postverify. **A merge is a mutation and stays T1** when it is fully authorized, mechanically bounded, free of semantic anomaly and free of any readiness/connector transition |
+| T1 | `READONLY_OR_FAST_BOUNDED` | Luna low / Terra high / Sonnet 5 (runtime-proven) | `claude-sonnet-5` (Claude lane) | low | bounded reads, proof, docs, direct-dependency read-only audit, and the sole governed CLOSEOUT family — authorized standard merge, post-merge commands, parent/digest verification, clean-main proof, and postverify. **A merge is a mutation and stays T1** when it is fully authorized, mechanically bounded, free of semantic anomaly and free of any readiness/connector transition |
 | T2 | `BOUNDED_IMPLEMENTATION` | Terra high / Sonnet 5 (runtime-proven) | `claude-sonnet-5` (Claude lane) | medium (high when moderately complex) | exact-file deterministic slices, narrow docs, config-only changes, mechanical fixtures/tests, obvious localized repair, PR-body corrections, bounded governance closeout |
 | T3A | `COMPLEX_IMPLEMENTATION` | Claude Opus 5 (default) / Terra xhigh | `claude-opus-5` | xhigh | complex production implementation, multi-file semantic features, protocol semantics, deterministic state machines, fail-closed artifacts, provenance logic, complex cross-module repair, long-horizon agentic coding. Complexity is proven by evidence (interacting invariants, novel semantic contract, fail-closed artifact design, cross-module behavior, substantial validation loop, in-scope architectural choice, complex repair) — **never by file count**; a two-file production+test protocol-semantic slice is correctly T3A |
 | T3B | `CAPABILITY_CRITICAL_IMPLEMENTATION_OR_REPAIR` | Claude Opus 5 | `claude-opus-5` | max | **IMPLEMENTATION or REPAIR intent + mutation only** — T3B never accepts REVIEW, ARCHITECTURE or PROMPT_ARCHITECTURE work, whatever risk flags are set. Requires an explicitly NAMED trigger: cryptographic verification boundary implementation; readiness/provenance promotion implementation; protocol ambiguity with safety consequences inside an implementation; complex trust-boundary repair; **complex semantic** controller P1/P2 repair after a failed audit; unexpected cross-layer implementation failure; controller-designated capability-critical implementation/repair. A bare risk flag and a bare audit origin are both insufficient — a mechanical or obvious post-audit repair stays T2 |

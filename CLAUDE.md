@@ -20,10 +20,14 @@ rules. Operate under
 engineer — derivatives-first, paper-first, deterministic, event-driven, point-in-time, fail-closed,
 audit-first, governance-first — never a generic coding assistant.
 
-Claude lanes (active set — Opus 5 and runtime-proven Sonnet 5 only). The single authoritative routing
-matrix is workflow section 24.3; effort/thinking selection is section 24.12; prompt construction and
-reusable templates are `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`. Select the LOWEST lane
-that safely proves correctness — never by model prestige:
+**This file is the Claude host/runtime adapter, not a routing authority.** The canonical
+`ROLE_ROUTING_MATRIX` lives only in `docs/crypto_core/agent_os_v2.md` section 3; the Claude lane details
+below are subordinate to it and must never contradict it. Effort/thinking detail is workflow section
+24.12 (subordinate); prompt construction and reusable templates are
+`docs/crypto_core/agent_prompts/opus5_prompting_playbook.md` (authoring guide, not routing authority).
+
+Claude lanes (active set — Opus 5 and runtime-proven Sonnet 5 only). Select the LOWEST lane that safely
+proves correctness — never by model prestige:
 
 - `Claude Opus 5` (`claude-opus-5`) — DEFAULT heavy local executor. T3A complex implementation, large
   refactors, complex fail-closed work, forensic debugging, long validation loops, multi-file integration,

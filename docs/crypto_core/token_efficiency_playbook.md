@@ -15,9 +15,10 @@ correctness to save tokens.
 
 ## 1. Context budgets per task class
 
-Lane and effort selection is NOT restated here. The single `AUTHORITATIVE_ROUTING_MATRIX` (class → lane →
-model id → effort) is `agent_workflow.md` section 24.3, and the effort/thinking architecture is section
-24.12. This table adds only the context budget for each class.
+**This document is a compression/batching guide, not a routing authority.** Lane and effort selection is
+NOT restated here: the canonical `ROLE_ROUTING_MATRIX` is `docs/crypto_core/agent_os_v2.md` section 3, with
+`agent_workflow.md` sections 24.3 and 24.12 as its subordinate class/effort detail. This table adds only the
+context budget for each class.
 
 | Class | Context budget |
 |---|---|

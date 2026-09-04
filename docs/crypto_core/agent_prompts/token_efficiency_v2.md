@@ -1,5 +1,8 @@
 # Token Efficiency V2 - Agent OS named lanes and compact prompts
 
+**This document is a prompt-compression guide, not a routing authority.** The only canonical
+`ROLE_ROUTING_MATRIX` is `docs/crypto_core/agent_os_v2.md` section 3.
+
 Active doctrine is `docs/crypto_core/agent_os_v2.md` (`CRYPTO_CORE_AGENT_OS_V2`), with `agent_workflow.md`
 section 24 as the inherited class/effort companion. Compiled prompts follow `PROMPT_COMPILER_V2`
 (`agent_os_v2.md` section 8) and `PROMPT_LANGUAGE_PROHIBITED`: no restart-until-success, no blanket GitHub
@@ -19,6 +22,27 @@ mutation lanes require the exact model id (`claude-opus-5` / `claude-sonnet-5`) 
 the actual effort — an unresolved alias is not proof. Claude Opus 4.8 is `SUPERSEDED_BY_OPUS_5` and Claude
 Fable 5 is `INACTIVE_EXPIRED_RETIRED` (section 24.10) — neither is an active lane, fallback, or dependency;
 pre-v5.2 Fable prompts are archived in `fable_exit_contract_index.md` and are never active.
+
+<!-- PROMPT_COMPILER_V2_FIELDS:BEGIN -->
+
+`PROMPT_COMPILER_V2_TASK_DELTA` — every serious prompt built from this document instantiates exactly this
+canonical delta packet. A template may be terse, but all twelve fields must be representable and none may
+be omitted or replaced by prose such as "follow PROMPT_COMPILER_V2".
+
+- `TASK_INTENT`
+- `SEMANTIC_BOUNDARY`
+- `STATE_PIN`
+- `MODEL_RUNTIME_PROOF`
+- `ALLOWED_FILES`
+- `INVARIANTS`
+- `BLOCKER_INVENTORY`
+- `VALIDATION_MATRIX`
+- `GITHUB_AUTHORIZATION`
+- `FORBIDDEN`
+- `STOP_CONDITIONS`
+- `HANDOFF`
+
+<!-- PROMPT_COMPILER_V2_FIELDS:END -->
 
 ## 1. Shared lanes
 

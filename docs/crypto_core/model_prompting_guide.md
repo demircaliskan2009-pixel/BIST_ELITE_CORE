@@ -1,5 +1,9 @@
 # crypto_core Model Prompting Guide (v2, 2026-07-10 — Agent OS edition)
 
+**This document is a prompt-authoring guide, not a routing authority.** The only canonical
+`ROLE_ROUTING_MATRIX` is `docs/crypto_core/agent_os_v2.md` section 3; everything here is subordinate to it
+and must never contradict it.
+
 Durable authoring guide for every active model/tool lane in `CRYPTO_CORE_AGENT_OS_V2`
 (`docs/crypto_core/agent_os_v2.md` — the canonical control plane and the single `ROLE_ROUTING_MATRIX` in
 its section 3; `agent_workflow.md` sections 24.3/24.12 remain the inherited class/effort detail). This

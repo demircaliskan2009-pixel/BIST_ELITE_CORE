@@ -5,6 +5,10 @@ description: Use for BIST_ELITE_CORE crypto_core implementation, repair, salvage
 
 # Crypto Core Max-Safe Workflow
 
+**This skill is the Codex host/runtime adapter, not a routing authority.** The only canonical
+`ROLE_ROUTING_MATRIX` is `docs/crypto_core/agent_os_v2.md` section 3; the Codex lane detail below is
+subordinate to it and must never contradict it.
+
 Use this skill only for `crypto_core` work in BIST_ELITE_CORE. Canonical precedence
 (`AGENT_OS_V2_PRECEDENCE`) is `AGENTS.md` → `docs/crypto_core/agent_os_v2.md`
 (`CRYPTO_CORE_AGENT_OS_V2`, the single detailed active control-plane authority) → this skill (the Codex

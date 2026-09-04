@@ -21,6 +21,10 @@
 > Fable 5 is `INACTIVE_EXPIRED_RETIRED` and is neither a research lane nor a routable executor; external
 > model-capability comparisons remain Deep Research territory.
 
+**This document is the research adapter, not a global routing authority.** The only canonical
+`ROLE_ROUTING_MATRIX` is `docs/crypto_core/agent_os_v2.md` section 3; this protocol governs the Deep
+Research lane's own use and is subordinate to that matrix.
+
 ## 1. Why Deep Research exists here
 
 The build is broad and mature; the dominant risks are **artifact proliferation vs end-to-end wiring**,

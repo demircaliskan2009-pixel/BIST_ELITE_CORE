@@ -473,3 +473,218 @@ def test_state_manifest_allows_an_explicit_unknown_open_pr_count(clone: Path) ->
 def test_example_manifest_declares_its_open_pr_count_evidence(clone: Path) -> None:
     example = json.loads(_read(clone, validator.MANIFEST_EXAMPLE))
     assert example["open_pr_count_evidence"] in {"PROVEN", "UNKNOWN"}
+
+
+# ---------------------------------------------------------------------------
+# Regressions for the six-P2 fixed-point set (PR #371 reaudit)
+# ---------------------------------------------------------------------------
+
+# --- P2-1: exactly one active routing authority -----------------------------
+
+
+def test_canonical_routing_matrix_lives_only_in_agent_os_v2(clone: Path) -> None:
+    holders = [rel for rel in validator.ACTIVE_SURFACES if validator.ROUTING_MATRIX_BEGIN in _read(clone, rel)]
+    assert holders == [validator.AGENT_OS_V2_DOC]
+
+
+@pytest.mark.parametrize(
+    "surface",
+    ["CLAUDE.md", "AGENTS.md", validator.WORKFLOW_DOC, validator.CLAUDE_SKILL],
+)
+def test_second_routing_authority_declaration_fails(clone: Path, surface: str) -> None:
+    _append_paragraph(clone, surface, "The single authoritative routing matrix is agent_workflow.md section 24.3.")
+    violations = validator.validate(clone)
+    assert "W" in _codes(violations)
+    assert any(surface in violation for violation in violations)
+
+
+def test_duplicated_routing_matrix_block_fails(clone: Path) -> None:
+    _append_paragraph(
+        clone,
+        validator.WORKFLOW_DOC,
+        f"{validator.ROUTING_MATRIX_BEGIN}\n\n| Lane |\n|---|\n\n{validator.ROUTING_MATRIX_END}",
+    )
+    assert any("second ROLE_ROUTING_MATRIX_V2" in violation for violation in validator.validate(clone))
+
+
+def test_pointing_at_the_canonical_authority_is_allowed(clone: Path) -> None:
+    _append_paragraph(
+        clone,
+        "CLAUDE.md",
+        "The canonical routing authority is `docs/crypto_core/agent_os_v2.md` section 3.",
+    )
+    assert validator.validate(clone) == []
+
+
+def test_disclaiming_authority_is_allowed(clone: Path) -> None:
+    _append_paragraph(clone, "AGENTS.md", "This companion is never a routing authority.")
+    assert validator.validate(clone) == []
+
+
+# --- P2-2: relational open-PR evidence --------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("manifest", "valid"),
+    [
+        ({"open_pr_count": 0, "open_pr_count_evidence": "PROVEN"}, True),
+        ({"open_pr_count": 3, "open_pr_count_evidence": "PROVEN"}, True),
+        ({"open_pr_count": None, "open_pr_count_evidence": "UNKNOWN"}, True),
+        ({"open_pr_count": 1, "open_pr_count_evidence": "UNKNOWN"}, False),
+        ({"open_pr_count": None, "open_pr_count_evidence": "PROVEN"}, False),
+        ({"open_pr_count": 1}, False),
+        ({"open_pr_count_evidence": "PROVEN"}, False),
+        ({"open_pr_count": 1, "open_pr_count_evidence": "MAYBE"}, False),
+    ],
+)
+def test_open_pr_evidence_relation(manifest: dict, valid: bool) -> None:
+    violations = validator.validate_state_manifest(manifest)
+    assert (violations == []) is valid
+
+
+def test_schema_requires_the_evidence_field(clone: Path) -> None:
+    schema = json.loads(_read(clone, validator.MANIFEST_SCHEMA))
+    assert "open_pr_count_evidence" in schema["required"]
+
+
+def test_schema_binds_the_relation_structurally_not_in_prose(clone: Path) -> None:
+    schema = json.loads(_read(clone, validator.MANIFEST_SCHEMA))
+    branches = {
+        branch["properties"]["open_pr_count_evidence"]["const"]: branch["properties"]["open_pr_count"]["type"]
+        for branch in schema["oneOf"]
+    }
+    assert branches == {"PROVEN": "integer", "UNKNOWN": "null"}
+
+
+def test_integer_only_open_pr_count_schema_regression_fails(clone: Path) -> None:
+    """The pre-repair schema shape - integer-only, no relation - must not validate."""
+    schema = json.loads(_read(clone, validator.MANIFEST_SCHEMA))
+    schema["properties"]["open_pr_count"]["type"] = "integer"
+    schema.pop("oneOf", None)
+    schema["required"] = [name for name in schema["required"] if name != "open_pr_count_evidence"]
+    _write(clone, validator.MANIFEST_SCHEMA, json.dumps(schema, indent=2))
+    assert "N" in _codes(validator.validate(clone))
+
+
+def test_removed_oneof_branch_fails(clone: Path) -> None:
+    schema = json.loads(_read(clone, validator.MANIFEST_SCHEMA))
+    schema["oneOf"] = schema["oneOf"][:1]
+    _write(clone, validator.MANIFEST_SCHEMA, json.dumps(schema, indent=2))
+    assert "N" in _codes(validator.validate(clone))
+
+
+def test_example_manifest_with_fabricated_count_fails(clone: Path) -> None:
+    example = json.loads(_read(clone, validator.MANIFEST_EXAMPLE))
+    example["open_pr_count"] = 0
+    example["open_pr_count_evidence"] = "UNKNOWN"
+    _write(clone, validator.MANIFEST_EXAMPLE, json.dumps(example, indent=2))
+    assert "O" in _codes(validator.validate(clone))
+
+
+# --- P2-3: validator coverage and bypass resistance -------------------------
+
+
+def test_every_active_surface_is_enforced(clone: Path) -> None:
+    """Coverage is the complete active set, not a subset: each surface rejects an activation."""
+    for surface in validator.ACTIVE_SURFACES:
+        original = _read(clone, surface)
+        _write(clone, surface, original + "\n\nClaude Fable 5 is the default executor.\n")
+        violations = validator.validate(clone)
+        _write(clone, surface, original)
+        assert any(surface in violation for violation in violations), surface
+
+
+@pytest.mark.parametrize(
+    ("name", "addition"),
+    [
+        ("multi_space", "Claude    Fable    5    is   the   default   executor."),
+        ("line_wrapped", "Claude Fable\n5 is the default executor for heavy implementation."),
+        ("colon", "Claude Fable 5: the active default executor for heavy work."),
+        ("dash", "Claude Fable 5 - the active heavy implementation lane."),
+        (
+            "adjacent_retired",
+            "Claude Fable 5 is the default executor. Claude Fable 5 is INACTIVE_EXPIRED_RETIRED.",
+        ),
+    ],
+)
+def test_textual_variation_cannot_evade_detection(clone: Path, name: str, addition: str) -> None:
+    _append_paragraph(clone, validator.AGENT_OS_V2_DOC, addition)
+    assert "D" in _codes(validator.validate(clone)), name
+
+
+@pytest.mark.parametrize("position", ["before", "after"])
+def test_active_assertion_around_the_permitted_fence_is_caught(clone: Path, position: str) -> None:
+    fence = f'{validator.INVENTORY_FENCE_BEGIN}\n\n- "keep fixing until green"\n\n{validator.INVENTORY_FENCE_END}'
+    active = "Claude Fable 5 is the default executor."
+    block = f"{active}\n\n{fence}" if position == "before" else f"{fence}\n\n{active}"
+    _append_paragraph(clone, validator.AGENT_OS_V2_DOC, block)
+    assert "D" in _codes(validator.validate(clone))
+
+
+@pytest.mark.parametrize(
+    "surface",
+    [rel for rel in validator.ACTIVE_SURFACES if rel not in validator.INVENTORY_FENCE_ALLOWED_FILES],
+)
+def test_fence_is_rejected_in_every_non_permitted_active_surface(clone: Path, surface: str) -> None:
+    _append_paragraph(
+        clone, surface, f"{validator.INVENTORY_FENCE_BEGIN}\n\nanything\n\n{validator.INVENTORY_FENCE_END}"
+    )
+    assert any("inventory fence is not allowed" in violation for violation in validator.validate(clone))
+
+
+def test_historical_workflow_sections_stay_readable_as_history(clone: Path) -> None:
+    """Sections 20-23 record superseded eras verbatim; enforcement must not treat them as active."""
+    workflow = _read(clone, validator.WORKFLOW_DOC)
+    assert "## 20. HISTORICAL" in workflow
+    assert "Fable 5" in workflow
+    assert validator.validate(clone) == []
+
+
+# --- P2-4: PROMPT_COMPILER_V2 template completeness -------------------------
+
+
+@pytest.mark.parametrize("surface", sorted(validator.PROMPT_TEMPLATE_SURFACES))
+def test_active_template_surface_enumerates_all_twelve_fields(clone: Path, surface: str) -> None:
+    text = _read(clone, surface)
+    start = text.index(validator.PROMPT_FIELDS_FENCE_BEGIN)
+    end = text.index(validator.PROMPT_FIELDS_FENCE_END)
+    block = text[start:end]
+    assert len(validator.PROMPT_COMPILER_FIELDS) == 12
+    for field in validator.PROMPT_COMPILER_FIELDS:
+        assert field in block, (surface, field)
+
+
+@pytest.mark.parametrize("surface", sorted(validator.PROMPT_TEMPLATE_SURFACES))
+def test_removed_prompt_compiler_field_fails(clone: Path, surface: str) -> None:
+    text = _read(clone, surface)
+    start = text.index(validator.PROMPT_FIELDS_FENCE_BEGIN)
+    end = text.index(validator.PROMPT_FIELDS_FENCE_END)
+    block = text[start:end].replace("`BLOCKER_INVENTORY`", "(removed)")
+    _write(clone, surface, text[:start] + block + text[end:])
+    violations = validator.validate(clone)
+    assert "Y" in _codes(violations)
+    assert any("BLOCKER_INVENTORY" in violation for violation in violations)
+
+
+@pytest.mark.parametrize("surface", sorted(validator.PROMPT_TEMPLATE_SURFACES))
+def test_removed_prompt_compiler_field_block_fails(clone: Path, surface: str) -> None:
+    _write(clone, surface, _read(clone, surface).replace(validator.PROMPT_FIELDS_FENCE_BEGIN, "(removed)"))
+    assert "Y" in _codes(validator.validate(clone))
+
+
+# --- P2-5: semantic-only MAX_SAFE_PR sizing ---------------------------------
+
+
+def test_no_active_max_changed_files_cap(clone: Path) -> None:
+    for surface in validator.ACTIVE_SURFACES:
+        for line in _read(clone, surface).splitlines():
+            if "MAX_CHANGED_FILES" in line:
+                assert validator._has_marker(line), (surface, line)
+
+
+@pytest.mark.parametrize("surface", sorted(validator.PROMPT_TEMPLATE_SURFACES))
+def test_reintroduced_max_changed_files_cap_fails(clone: Path, surface: str) -> None:
+    _append_paragraph(clone, surface, "AUTHORIZED SCOPE: <exact files>; MAX_CHANGED_FILES: 5")
+    violations = validator.validate(clone)
+    assert "X" in _codes(violations)
+    assert any(surface in violation for violation in violations)

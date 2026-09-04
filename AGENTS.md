@@ -95,9 +95,9 @@ executed inside the existing required `tests` CI job.
 **Copilot status: `INACTIVE_UNAVAILABLE`.** Copilot is currently unavailable and is not an active execution
 lane. Do not route tasks or generate Copilot prompts unless a future explicit human decision reactivates it
 through a separately audited workflow change. Local execution occurs directly through Claude Code (Opus 5,
-Sonnet 5) or Codex (Sol/Terra/Luna) sessions according to the single authoritative routing matrix in
-`agent_workflow.md` section 24.3 — neither is an execution host for the other; each Claude/Codex session is
-its own trusted model identity. **Claude Opus 4.8 status: `SUPERSEDED_BY_OPUS_5`** — not an active lane,
+Sonnet 5) or Codex (Sol/Terra/Luna) sessions according to the canonical `ROLE_ROUTING_MATRIX` in
+`docs/crypto_core/agent_os_v2.md` section 3 — neither is an execution host for the other; each
+Claude/Codex session is its own trusted model identity. **Claude Opus 4.8 status: `SUPERSEDED_BY_OPUS_5`** — not an active lane,
 fallback, or dependency; dated Opus 4.8 execution records remain HISTORICAL evidence only.
 
 Model selection follows `MODEL_EXPECTED_VALUE_PER_TOKEN_POLICY` (workflow section 24.10): expected value

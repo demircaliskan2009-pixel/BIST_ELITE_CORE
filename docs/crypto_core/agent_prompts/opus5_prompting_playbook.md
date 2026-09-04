@@ -1,5 +1,8 @@
 # Claude Opus 5 Prompting Playbook (crypto_core)
 
+**This playbook is a prompt-authoring guide, not a routing authority.** The only canonical
+`ROLE_ROUTING_MATRIX` is `docs/crypto_core/agent_os_v2.md` section 3.
+
 Durable authority for HOW to prompt the Claude lanes in `CRYPTO_CORE_AGENT_OS_V2`. The routing authority is
 the canonical `ROLE_ROUTING_MATRIX` in `docs/crypto_core/agent_os_v2.md` section 3; the inherited
 class → model id → effort detail is `docs/crypto_core/agent_workflow.md` section 24.3 and the
@@ -75,7 +78,7 @@ If two families are implied and no explicit `TASK_INTENT` is given, the task is 
 until the controller classifies it — never a silent T3B.
 
 **An authorized merge is T1 even though it mutates.** Governed mechanical closeout — standard merge,
-branch-protection-required auto-merge when separately authorized by doctrine, post-merge commands,
+post-merge commands,
 parent/digest verification, clean-main proof — stays **T1 / Sonnet 5 / low** when it is fully authorized,
 mechanically bounded, free of semantic anomaly and free of any readiness/connector transition. Mutation
 alone does not push it into T2. If any of those conditions fails, it leaves T1 and escalates.
@@ -170,6 +173,27 @@ GOOD PROMPT =
 
 ---
 
+<!-- PROMPT_COMPILER_V2_FIELDS:BEGIN -->
+
+`PROMPT_COMPILER_V2_TASK_DELTA` — every serious prompt built from this document instantiates exactly this
+canonical delta packet. A template may be terse, but all twelve fields must be representable and none may
+be omitted or replaced by prose such as "follow PROMPT_COMPILER_V2".
+
+- `TASK_INTENT`
+- `SEMANTIC_BOUNDARY`
+- `STATE_PIN`
+- `MODEL_RUNTIME_PROOF`
+- `ALLOWED_FILES`
+- `INVARIANTS`
+- `BLOCKER_INVENTORY`
+- `VALIDATION_MATRIX`
+- `GITHUB_AUTHORIZATION`
+- `FORBIDDEN`
+- `STOP_CONDITIONS`
+- `HANDOFF`
+
+<!-- PROMPT_COMPILER_V2_FIELDS:END -->
+
 ## 3. Reusable prompt templates
 
 Placeholders are `<angle-bracketed>`. Use the smallest template that fits; every template lists when NOT to
@@ -195,7 +219,8 @@ MISSION: <complete bounded outcome, including what "done" means>
 CURRENT STATE TO VERIFY: main @ <sha>; clean worktree; <n> open PRs; <branch absent>; <baseline flags>
 PRECHECK: git fetch origin --prune; git switch main; git pull --ff-only; git rev-parse HEAD;
   git status --short --branch; gh pr list --state open --json number,headRefName,url
-AUTHORIZED SCOPE: <exact files>; MAX_CHANGED_FILES: <n>; FORBIDDEN SURFACES: <exact>
+SEMANTIC_BOUNDARY: <the one contract this closes>; ALLOWED_FILES: <exact files>;
+  DEPENDENCY_CLOSURE: <direct dependencies included>; PROTECTED_SURFACES: <exact, must not change>
 INVARIANTS: <fail-closed / digest / paper-only / determinism properties that must remain true>
 TEST: python -m ruff check <paths>; python -m ruff format --check <paths>;
   python -m pytest -x -q <targeted>; powershell -File scripts/crypto_core/run_full_tests_logged.ps1;
@@ -228,7 +253,8 @@ T3B_TRIGGER: <the exact trigger that justifies max>
 MISSION: <complete bounded outcome>
 CURRENT STATE TO VERIFY: <pins> + readiness/connector baseline captured BEFORE and AFTER
 PRECHECK: <as 3.1> + readiness and connector probes
-AUTHORIZED SCOPE: <exact files>; MAX_CHANGED_FILES: <n>
+SEMANTIC_BOUNDARY: <the one contract this closes>; ALLOWED_FILES: <exact files>;
+  DEPENDENCY_CLOSURE: <direct dependencies included>; PROTECTED_SURFACES: <exact, must not change>
 INVARIANTS: fail-closed on malformed/missing/stale input; digest recomputed via the public serializer and
   mismatch rejected before READY/ADMITTED/ACCEPTED; no float in finance paths; no readiness/connector
   transition; all non-overclaim flags remain digest-bound False.
@@ -257,7 +283,8 @@ MODE: T3B_CONTROLLER_REPAIR
 FINDING (verbatim from the auditor): <exact text + exact file:line evidence>
 MISSION: fix the proven defect and prove the failure mode is now asserted. No opportunistic cleanup.
 CURRENT STATE TO VERIFY: PR <n> OPEN, head <sha> == local == origin; base <sha>; CI <state>.
-AUTHORIZED SCOPE: <exact files already in the PR>; MAX_CHANGED_FILES: <n>; no new files unless named.
+SEMANTIC_BOUNDARY: <the frozen contract being repaired>; ALLOWED_FILES: <exact files already in the PR>;
+  DEPENDENCY_CLOSURE: <direct dependencies>; PROTECTED_SURFACES: <exact>; no new files unless named.
 INVARIANTS: the original slice contract is unchanged except for the defect; no scope widening;
   no thread resolution; no re-litigating accepted design.
 TEST: regression test that FAILS before and PASSES after; then the full ladder; PYTEST_EXIT=0, WRAPPER_EXIT=0.
@@ -425,6 +452,13 @@ BLOCKING RULE: the dependent task stays STOPPED with RESULT DEEP_RESEARCH_REQUIR
 
 ## 4. `PROMPT_COMPILER_CONTRACT_V1`
 
+**Semantic sizing only.** `MAX_SAFE_PR` is decided by semantic closure (`agent_os_v2.md` section 4). No
+serious prompt carries a numeric changed-file cap: `MAX_CHANGED_FILES` is retired as an active field and
+must not be reintroduced. Exact `ALLOWED_FILES` remain mandatory for any scoped mutation, together with
+`SEMANTIC_BOUNDARY`, `DEPENDENCY_CLOSURE`, `PROTECTED_SURFACES` and the `SPLIT_CONDITIONS` from
+`agent_os_v2.md` section 4.
+
+
 A deterministic contract a ChatGPT or Claude controller uses to generate ONE best prompt.
 
 **Input fields**
@@ -433,7 +467,7 @@ A deterministic contract a ChatGPT or Claude controller uses to generate ONE bes
 TASK_INTENT               TASK_OBJECTIVE            CURRENT_REPO_STATE
 TASK_ARCHETYPE            RISK_CLASS                TRUST_BOUNDARY_EFFECT
 PROTOCOL_OR_CRYPTO_EFFECT READINESS_EFFECT          EXTERNAL_FACT_REQUIREMENT
-AUTHORIZED_FILES          MAX_CHANGED_FILES         TEST_SURFACE
+ALLOWED_FILES             DEPENDENCY_CLOSURE        TEST_SURFACE
 PR_STATE                  MERGE_AUTHORITY
 ```
 

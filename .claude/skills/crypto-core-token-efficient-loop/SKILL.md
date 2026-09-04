@@ -21,11 +21,15 @@ Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (workflow section 24.2).
 1. Intake the controller packet first (CONTROLLER_TO_IMPLEMENTER: pinned state, exact read set, allowed
    files, invariants, protected-risk class, validation ladder, stops). Do NOT repeat broad GitHub discovery
    the controller already proved.
-2. Classify against the single authoritative routing matrix (`agent_workflow.md` §24.3): T0 mechanical
-   (Sonnet 5 low / Luna); T1 read-only, fast-bounded and governed closeout (Sonnet 5 low / Luna / Terra);
-   T2 bounded implementation (Sonnet 5 medium / Terra); T3A complex implementation (Opus 5 xhigh, default
-   heavy local) ; T3B capability-critical (Opus 5 max, explicit trigger only); T3C review (Opus 5
-   medium/high/xhigh by breadth); T3D architecture and T3E prompt architecture (Opus 5 high/xhigh); T4 Sol
+2. Classify against the canonical `ROLE_ROUTING_MATRIX` (`docs/crypto_core/agent_os_v2.md` section 3;
+   this skill is the Claude host adapter and never a routing authority): T0 mechanical (Luna preferred;
+   Sonnet 5 low only as an explicitly routed bounded local fallback); T1 read-only, fast-bounded and
+   governed closeout (Luna preferred; Sonnet 5 low optional bounded local fallback; Terra) — closeout
+   still requires exact authorization; T2 bounded implementation (Sonnet 5 medium / Terra); T3A complex
+   implementation (Opus 5 xhigh, default heavy local); T3B capability-critical IMPLEMENTATION or REPAIR
+   only, on a named trigger (Opus 5 max) — it never absorbs REVIEW, ARCHITECTURE or PROMPT_ARCHITECTURE;
+   T3C review (Opus 5 medium/high/xhigh by breadth); T3D architecture and T3E prompt architecture (Opus 5
+   high/xhigh); T4 Sol
    cross-contract; XR controller-orchestrated Deep Research; controller/connector final evidence gate.
    Effort selection: §24.12. Prove `MODEL_ACTUAL` and `MODEL_EFFORT_ACTUAL` from session runtime evidence
    before mutating — an unresolved alias is not proof; mismatch or fallback is `STOP_WITH_PROOF`.

@@ -184,6 +184,8 @@ RETIREMENT_MARKERS = (
     "removed",
     "no lane",
     "no prompt",
+    "former",
+    "retirement",
 )
 
 FABLE_TOKENS = ("fable",)
@@ -221,16 +223,93 @@ INVENTORY_FENCE_BEGIN = "<!-- PROHIBITED_WORDING_INVENTORY:BEGIN -->"
 INVENTORY_FENCE_END = "<!-- PROHIBITED_WORDING_INVENTORY:END -->"
 INVENTORY_FENCE_ALLOWED_FILES = (AGENT_OS_V2_DOC, COPILOT_SHIM)
 
-# Surfaces scanned for forbidden active wording.
-V2_CONTROL_SURFACES = (
+MODEL_PROMPTING_GUIDE = "docs/crypto_core/model_prompting_guide.md"
+EFFICIENCY_PLAYBOOK_DOC = "docs/crypto_core/token_efficiency_playbook.md"
+EFFICIENCY_LANES_DOC = "docs/crypto_core/agent_prompts/token_efficiency_v2.md"
+OPUS5_PLAYBOOK = "docs/crypto_core/agent_prompts/opus5_prompting_playbook.md"
+DEEP_RESEARCH_PROTOCOL = "docs/crypto_core/deep_research_protocol.md"
+
+# THE complete active control-plane text surface set. Every text enforcement check below runs over this
+# exact tuple - never a subset - so a surface cannot escape enforcement by not being listed twice.
+ACTIVE_SURFACES = (
     "AGENTS.md",
     "CLAUDE.md",
     AGENT_OS_V2_DOC,
+    WORKFLOW_DOC,
+    MODEL_PROMPTING_GUIDE,
+    EFFICIENCY_PLAYBOOK_DOC,
+    EFFICIENCY_LANES_DOC,
+    OPUS5_PLAYBOOK,
+    DEEP_RESEARCH_PROTOCOL,
     CONTINUITY_INDEX,
+    CURRENT_STATE_DOC,
     CODEX_SKILL,
     CLAUDE_SKILL,
-    CURRENT_STATE_DOC,
     COPILOT_SHIM,
+)
+
+# Retained name for the narrower "V2 control plane" subset used by nothing but back-compat readers.
+# Back-compat alias: the scanned-file set is exactly the complete active surface set.
+V2_CONTROL_SURFACES = ACTIVE_SURFACES
+
+# agent_workflow.md carries a dated changelog of superseded eras. Enforcement stops at the changelog so
+# historical entries stay readable as history without being read as active doctrine.
+CHANGELOG_ENTRY_RE = re.compile(r"^\*(?:v[0-9]|Last updated)")
+HISTORICAL_SECTION_START_RE = re.compile(r"^## 20\. HISTORICAL")
+ACTIVE_SECTION_RESUME_RE = re.compile(r"^## 24\. Active")
+
+# The single canonical routing authority. Any other active surface that talks about routing authority must
+# point AT this file rather than declare one of its own.
+ROUTING_AUTHORITY_FILE = AGENT_OS_V2_DOC
+ROUTING_AUTHORITY_PHRASES = (
+    "authoritative routing matrix",
+    "routing authority",
+    "single active routing authority",
+    "routing matrix is",
+)
+
+# Sizing by changed-file count is retired: MAX_SAFE_PR is semantic (agent_os_v2.md section 4).
+RETIRED_SIZING_TOKENS = ("max_changed_files",)
+
+# The twelve canonical PROMPT_COMPILER_V2 delta fields, and the surfaces that must enumerate all of them
+# inside an explicit fenced block.
+PROMPT_COMPILER_FIELDS = (
+    "TASK_INTENT",
+    "SEMANTIC_BOUNDARY",
+    "STATE_PIN",
+    "MODEL_RUNTIME_PROOF",
+    "ALLOWED_FILES",
+    "INVARIANTS",
+    "BLOCKER_INVENTORY",
+    "VALIDATION_MATRIX",
+    "GITHUB_AUTHORIZATION",
+    "FORBIDDEN",
+    "STOP_CONDITIONS",
+    "HANDOFF",
+)
+PROMPT_FIELDS_FENCE_BEGIN = "<!-- PROMPT_COMPILER_V2_FIELDS:BEGIN -->"
+PROMPT_FIELDS_FENCE_END = "<!-- PROMPT_COMPILER_V2_FIELDS:END -->"
+PROMPT_TEMPLATE_SURFACES = (AGENT_OS_V2_DOC, EFFICIENCY_LANES_DOC, OPUS5_PLAYBOOK)
+
+# An assertion that ACTIVATES a retired or prohibited subject. These forms cannot occur inside a negation,
+# so a nearby "never"/"retired" cannot launder them. This is what stops an active claim from hiding beside
+# a genuinely retired one.
+ACTIVATION_MARKERS = (
+    "is the active",
+    "is an active",
+    "as the active",
+    "becomes the active",
+    "remains the active",
+    "is the default",
+    "default executor",
+    "default heavy lane for",
+    "may be selected",
+    "may be routed",
+    "is routable",
+    "is available as a lane",
+    "active surge lane",
+    "active premium",
+    "is hereby active",
 )
 
 # Check P - durable surfaces that must never pin a live commit sha.
@@ -334,36 +413,185 @@ def _assertions(text: str) -> list[str]:
     return [unit for unit in units if unit.strip()]
 
 
+def _normalize(text: str) -> str:
+    """Collapse every whitespace run to one space. Multi-space and line-wrap cannot evade matching."""
+    return " ".join(text.split())
+
+
 def _has_marker(assertion: str) -> bool:
-    lowered = assertion.lower()
+    lowered = _normalize(assertion).lower()
     return any(marker in lowered for marker in RETIREMENT_MARKERS)
 
 
-def _forbidden_wording(repo_root: Path, rel: str, phrases: tuple[str, ...], label: str) -> list[str]:
+NEGATOR_RE = re.compile(r"\b(?:not|never|neither|nor|no|non|without|retired|superseded|inactive)\b")
+
+
+def _has_activation(assertion: str) -> bool:
+    """True when the assertion ACTIVATES its subject rather than merely naming it.
+
+    A negated form ("neither is an active lane", "is not the default") is not an activation, so each
+    marker hit is rejected when a negator appears shortly before it in the same assertion.
+    """
+    lowered = _normalize(assertion).lower()
+    for marker in ACTIVATION_MARKERS:
+        start = 0
+        while True:
+            index = lowered.find(marker, start)
+            if index < 0:
+                break
+            window = lowered[max(0, index - 40) : index]
+            if not NEGATOR_RE.search(window):
+                return True
+            start = index + 1
+    return False
+
+
+def _active_text(repo_root: Path, rel: str) -> str | None:
+    """The enforceable text of an active surface: fences stripped where allowed, changelog dropped."""
     text = _read_text(repo_root, rel)
     if text is None:
-        return []
+        return None
     if rel in INVENTORY_FENCE_ALLOWED_FILES:
         text = _strip_inventory_fences(text)
+    if rel == WORKFLOW_DOC:
+        text = _drop_changelog_entries(text)
+        text = _drop_historical_sections(text)
+    return text
+
+
+def _drop_changelog_entries(text: str) -> str:
+    """Drop only the dated changelog PARAGRAPHS, never everything after the first one.
+
+    Dated entries legitimately quote superseded eras verbatim, so they are history rather than active
+    doctrine. Truncating to end-of-file instead would leave a hole: anything appended below the changelog
+    would escape every check. Only a paragraph that itself begins a dated entry is exempt; every other
+    paragraph, wherever it sits in the file, stays enforced.
+    """
+    blocks = re.split(r"\n\s*\n", text)
+    kept = [block for block in blocks if not CHANGELOG_ENTRY_RE.match(block.strip())]
+    return "\n\n".join(kept)
+
+
+def _drop_historical_sections(text: str) -> str:
+    """Remove the explicitly HISTORICAL / SUPERSEDED era sections from the workflow companion.
+
+    ``agent_workflow.md`` sections 20-23 record superseded routing eras verbatim. They are history, not
+    active doctrine, so enforcement skips them - the same boundary the PowerShell setup audit uses.
+    """
+    kept = []
+    historical = False
+    for line in text.splitlines():
+        if HISTORICAL_SECTION_START_RE.match(line):
+            historical = True
+            continue
+        if ACTIVE_SECTION_RESUME_RE.match(line):
+            historical = False
+        if not historical:
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def _forbidden_wording(repo_root: Path, rel: str, phrases: tuple[str, ...], label: str) -> list[str]:
+    """Flag a forbidden phrase unless the SAME assertion retires it and does not activate it."""
+    text = _active_text(repo_root, rel)
+    if text is None:
+        return []
     violations = []
     for assertion in _assertions(text):
-        lowered = assertion.lower()
+        lowered = _normalize(assertion).lower()
         for phrase in phrases:
-            if phrase in lowered and not _has_marker(assertion):
-                snippet = " ".join(assertion.split())[:120]
+            if _normalize(phrase).lower() not in lowered:
+                continue
+            if _has_activation(assertion):
+                snippet = _normalize(assertion)[:120]
+                violations.append(f"{label}: '{phrase}' ACTIVATED in {rel}: {snippet}")
+            elif not _has_marker(assertion):
+                snippet = _normalize(assertion)[:120]
                 violations.append(f"{label}: '{phrase}' stated as active authority in {rel}: {snippet}")
     return violations
 
 
 def _check_inventory_fence_placement(repo_root: Path) -> list[str]:
-    """The inventory fence must never appear outside the files allowed to carry it."""
+    """The inventory fence is honoured in two named files and rejected in every other active surface."""
     violations = []
-    for rel in V2_CONTROL_SURFACES:
+    for rel in ACTIVE_SURFACES:
         if rel in INVENTORY_FENCE_ALLOWED_FILES:
             continue
         text = _read_text(repo_root, rel)
         if text is not None and INVENTORY_FENCE_BEGIN in text:
             violations.append(f"S: prohibited-wording inventory fence is not allowed in {rel}")
+    return violations
+
+
+AUTHORITY_DISCLAIMER_RE = re.compile(
+    r"\b(?:not|never|no)\b[^.;]{0,40}?(?:authoritative routing matrix|routing authority)"
+)
+
+
+def _disclaims_authority(lowered_assertion: str) -> bool:
+    """True for "never a routing authority" - a denial is the opposite of a declaration."""
+    return bool(AUTHORITY_DISCLAIMER_RE.search(lowered_assertion))
+
+
+def _check_single_routing_authority(repo_root: Path) -> list[str]:
+    """W: exactly one canonical routing matrix, and no second authority declaration anywhere else."""
+    violations = []
+    canonical = _read_text(repo_root, ROUTING_AUTHORITY_FILE)
+    if canonical is None:
+        return [f"W: cannot read the canonical routing authority {ROUTING_AUTHORITY_FILE}"]
+    if ROUTING_MATRIX_BEGIN not in canonical:
+        violations.append(f"W: canonical ROLE_ROUTING_MATRIX_V2 block missing in {ROUTING_AUTHORITY_FILE}")
+
+    for rel in ACTIVE_SURFACES:
+        text = _active_text(repo_root, rel)
+        if text is None:
+            continue
+        if rel != ROUTING_AUTHORITY_FILE and ROUTING_MATRIX_BEGIN in text:
+            violations.append(f"W: a second ROLE_ROUTING_MATRIX_V2 block is declared in {rel}")
+        if rel == ROUTING_AUTHORITY_FILE:
+            continue
+        for assertion in _assertions(text):
+            lowered = _normalize(assertion).lower()
+            if not any(phrase in lowered for phrase in ROUTING_AUTHORITY_PHRASES):
+                continue
+            if _disclaims_authority(lowered):
+                continue
+            # An adapter/companion may only POINT AT the canonical file, never declare its own authority.
+            if ROUTING_AUTHORITY_FILE not in _normalize(assertion) and "agent_os_v2" not in lowered:
+                violations.append(
+                    f"W: {rel} declares a routing authority without pointing at "
+                    f"{ROUTING_AUTHORITY_FILE}: {_normalize(assertion)[:120]}"
+                )
+    return violations
+
+
+def _check_retired_sizing_field(repo_root: Path) -> list[str]:
+    """X: MAX_SAFE_PR is semantic - an active numeric changed-file cap is a violation."""
+    violations = []
+    for rel in ACTIVE_SURFACES:
+        violations.extend(_forbidden_wording(repo_root, rel, RETIRED_SIZING_TOKENS, "X"))
+    return violations
+
+
+def _check_prompt_compiler_templates(repo_root: Path) -> list[str]:
+    """Y: every active serious-template surface enumerates all twelve PROMPT_COMPILER_V2 delta fields."""
+    violations = []
+    for rel in PROMPT_TEMPLATE_SURFACES:
+        text = _read_text(repo_root, rel)
+        if text is None:
+            violations.append(f"Y: cannot read prompt-template surface {rel}")
+            continue
+        start = text.find(PROMPT_FIELDS_FENCE_BEGIN)
+        end = text.find(PROMPT_FIELDS_FENCE_END)
+        if start < 0 or end < 0 or end < start:
+            violations.append(f"Y: PROMPT_COMPILER_V2 field block missing in {rel}")
+            continue
+        block = text[start + len(PROMPT_FIELDS_FENCE_BEGIN) : end]
+        violations.extend(
+            f"Y: PROMPT_COMPILER_V2 field '{field}' missing from the field block in {rel}"
+            for field in PROMPT_COMPILER_FIELDS
+            if field not in block
+        )
     return violations
 
 
@@ -416,7 +644,7 @@ def _check_canonical_markers(repo_root: Path) -> list[str]:
 
 def _check_forbidden_active_wording(repo_root: Path) -> list[str]:
     violations = []
-    for rel in V2_CONTROL_SURFACES:
+    for rel in ACTIVE_SURFACES:
         violations.extend(_forbidden_wording(repo_root, rel, FABLE_TOKENS, "D"))
         violations.extend(_forbidden_wording(repo_root, rel, COPILOT_AUTONOMY_PHRASES, "E"))
         violations.extend(_forbidden_wording(repo_root, rel, RESTART_UNTIL_SUCCESS_PHRASES, "S"))
@@ -511,6 +739,60 @@ def _check_manifest_schema(repo_root: Path) -> list[str]:
             violations.append(f"N: state manifest schema property missing: {field}")
         if field not in required:
             violations.append(f"N: state manifest schema required field missing: {field}")
+
+    # The open-PR evidence relation is enforced STRUCTURALLY (draft-2020-12 oneOf), never by prose:
+    # PROVEN <-> integer count, UNKNOWN <-> null count. A description cannot reject a fabricated count.
+    if "open_pr_count_evidence" not in required:
+        violations.append("N: state manifest schema must REQUIRE open_pr_count_evidence")
+    branches = schema.get("oneOf")
+    if not isinstance(branches, list) or len(branches) != 2:
+        violations.append("N: state manifest schema must declare a two-branch oneOf for the open-PR relation")
+        return violations
+    seen = {}
+    for branch in branches:
+        if not isinstance(branch, dict):
+            continue
+        branch_props = branch.get("properties")
+        if not isinstance(branch_props, dict):
+            continue
+        evidence = (branch_props.get("open_pr_count_evidence") or {}).get("const")
+        count_type = (branch_props.get("open_pr_count") or {}).get("type")
+        branch_required = branch.get("required") or []
+        if "open_pr_count" not in branch_required or "open_pr_count_evidence" not in branch_required:
+            violations.append(f"N: oneOf branch for '{evidence}' must require both open-PR fields")
+        seen[evidence] = count_type
+    if seen.get("PROVEN") != "integer":
+        violations.append("N: oneOf must bind open_pr_count_evidence=PROVEN to an integer open_pr_count")
+    if seen.get("UNKNOWN") != "null":
+        violations.append("N: oneOf must bind open_pr_count_evidence=UNKNOWN to a null open_pr_count")
+    return violations
+
+
+def validate_state_manifest(manifest: dict) -> list[str]:
+    """Relational validation of one STATE_MANIFEST_V1 instance (the open-PR evidence contract).
+
+    Public so tests and controllers can check a compiled manifest without a JSON Schema dependency.
+    Fail-closed: UNKNOWN evidence requires a null count and blocks any proven-one-open-PR action; a
+    fabricated integer beside UNKNOWN, or a null beside PROVEN, is rejected.
+    """
+    violations: list[str] = []
+    if "open_pr_count" not in manifest:
+        violations.append("open_pr_count is required")
+    if "open_pr_count_evidence" not in manifest:
+        violations.append("open_pr_count_evidence is required")
+    if violations:
+        return violations
+
+    count = manifest["open_pr_count"]
+    evidence = manifest["open_pr_count_evidence"]
+    if evidence == "PROVEN":
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            violations.append("open_pr_count_evidence=PROVEN requires a non-negative integer open_pr_count")
+    elif evidence == "UNKNOWN":
+        if count is not None:
+            violations.append("open_pr_count_evidence=UNKNOWN requires open_pr_count=null - never a fabricated count")
+    else:
+        violations.append(f"open_pr_count_evidence must be PROVEN or UNKNOWN, got {evidence!r}")
     return violations
 
 
@@ -533,6 +815,9 @@ def _check_manifest_example(repo_root: Path) -> list[str]:
         violations.append(f"O: {MANIFEST_EXAMPLE} schema_version must be 'STATE_MANIFEST_V1'")
     violations.extend(
         f"O: example manifest missing required field: {f}" for f in REQUIRED_MANIFEST_FIELDS if f not in example
+    )
+    violations.extend(
+        f"O: example manifest violates the open-PR evidence relation: {v}" for v in validate_state_manifest(example)
     )
     return violations
 
@@ -579,6 +864,9 @@ CHECKS = (
     _check_manifest_example,
     _check_durable_state_pins,
     _check_current_state_doc,
+    _check_single_routing_authority,
+    _check_retired_sizing_field,
+    _check_prompt_compiler_templates,
 )
 
 
@@ -604,7 +892,9 @@ def main(argv: list[str] | None = None) -> int:
     if violations:
         print(f"AGENT_OS_V2_VALIDATION: FAIL ({len(violations)} violation(s))")
         for violation in violations:
-            print(f"  - {violation}")
+            # Repository text contains non-ASCII punctuation; some consoles are not UTF-8. Report
+            # deterministically rather than dying on an encoding error mid-report.
+            print("  - " + violation.encode("ascii", "replace").decode("ascii"))
         return 1
     print("AGENT_OS_V2_VALIDATION: PASS")
     return 0
