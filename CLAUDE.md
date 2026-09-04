@@ -1,5 +1,9 @@
 # BIST_ELITE_CORE - Claude Instructions
 
+<!-- CONTROL_PLANE_ROLE: CLAUDE_ADAPTER -->
+
+Authority derives from the canonical control plane `docs/crypto_core/agent_os_v2.md`. This file defines no routing, model-selection, PR-sizing or merge authority of its own.
+
 Active scope is `crypto_core` only (`src/crypto_core`, `tests/crypto_core`, `scripts/crypto_core`, and
 explicitly authorized `docs/crypto_core`). BIST is historical context and never belongs in crypto work.
 

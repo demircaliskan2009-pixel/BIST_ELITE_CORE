@@ -1,5 +1,9 @@
 # BIST_ELITE_CORE Agent Operating Model
 
+<!-- CONTROL_PLANE_ROLE: DURABLE_RAILS -->
+
+Authority derives from the canonical control plane `docs/crypto_core/agent_os_v2.md`. This file defines no routing, model-selection, PR-sizing or merge authority of its own.
+
 ## Project Identity
 
 - Active implementation scope is crypto-only: `src/crypto_core`, `tests/crypto_core`,

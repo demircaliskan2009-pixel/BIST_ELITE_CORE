@@ -1,5 +1,9 @@
 # Claude Opus 5 Prompting Playbook (crypto_core)
 
+<!-- CONTROL_PLANE_ROLE: AUTHORING_GUIDE -->
+
+Authority derives from the canonical control plane `docs/crypto_core/agent_os_v2.md`. This file defines no routing, model-selection, PR-sizing or merge authority of its own.
+
 **This playbook is a prompt-authoring guide, not a routing authority.** The only canonical
 `ROLE_ROUTING_MATRIX` is `docs/crypto_core/agent_os_v2.md` section 3.
 
@@ -115,7 +119,8 @@ the loop. It specifies, in order:
 3. **MODEL / EFFORT** — exact model id and the chosen effort.
 4. **MISSION** — the complete bounded outcome, not a vague ambition.
 5. **CURRENT STATE TO VERIFY** — the fresh facts that must be proven before mutation.
-6. **AUTHORIZED SCOPE** — exact files, maximum changed files, prohibited surfaces.
+6. **AUTHORIZED SCOPE** — exact `ALLOWED_FILES`, dependency closure, prohibited surfaces. PR size is
+   semantic (`agent_os_v2.md` section 4); never a numeric file count.
 7. **INVARIANTS** — the properties that must remain true.
 8. **TESTS** — targeted, full, wrapper and CI requirements.
 9. **PERMISSIONS** — commit, push, PR and merge stated separately.
@@ -444,7 +449,7 @@ EXACT QUESTION: <one answerable question>
 WHY IT IS LOAD-BEARING: <what decision changes if the answer differs>
 REQUIRED OUTPUT: primary/official sources first, with citations and dates; REPO_EVIDENCE vs
   EXTERNAL_EVIDENCE vs INFERENCE vs UNKNOWN kept separate; advisory only.
-FORBIDDEN: implementation; GitHub mutation; merge authority; treating research as a gate waiver.
+FORBIDDEN: implementation; GitHub mutation; never merge authority; treating research as a gate waiver.
 BLOCKING RULE: the dependent task stays STOPPED with RESULT DEEP_RESEARCH_REQUIRED until answered.
 ```
 
@@ -453,8 +458,8 @@ BLOCKING RULE: the dependent task stays STOPPED with RESULT DEEP_RESEARCH_REQUIR
 ## 4. `PROMPT_COMPILER_CONTRACT_V1`
 
 **Semantic sizing only.** `MAX_SAFE_PR` is decided by semantic closure (`agent_os_v2.md` section 4). No
-serious prompt carries a numeric changed-file cap: `MAX_CHANGED_FILES` is retired as an active field and
-must not be reintroduced. Exact `ALLOWED_FILES` remain mandatory for any scoped mutation, together with
+serious prompt carries a numeric changed-file ceiling; that field is retired and must not be reintroduced
+(the exact retired token is inventoried in `agent_os_v2.md` section 8). Exact `ALLOWED_FILES` remain mandatory for any scoped mutation, together with
 `SEMANTIC_BOUNDARY`, `DEPENDENCY_CLOSURE`, `PROTECTED_SURFACES` and the `SPLIT_CONDITIONS` from
 `agent_os_v2.md` section 4.
 
@@ -468,7 +473,7 @@ TASK_INTENT               TASK_OBJECTIVE            CURRENT_REPO_STATE
 TASK_ARCHETYPE            RISK_CLASS                TRUST_BOUNDARY_EFFECT
 PROTOCOL_OR_CRYPTO_EFFECT READINESS_EFFECT          EXTERNAL_FACT_REQUIREMENT
 ALLOWED_FILES             DEPENDENCY_CLOSURE        TEST_SURFACE
-PR_STATE                  MERGE_AUTHORITY
+PR_STATE                  HUMAN_MERGE_AUTHORIZATION
 ```
 
 `TASK_INTENT` is one of `STATUS | CLOSEOUT | BOUNDED_READ | IMPLEMENTATION | REPAIR | REVIEW |
@@ -518,7 +523,7 @@ CONTEXT_BUDGET_CLASS      SUBAGENT_POLICY           ONE_COMPLETE_PROMPT
 5. Do not ask the user to choose an effort level when the classification is provable from the inputs.
 6. `EXTERNAL_FACT_REQUIREMENT` present and load-bearing → emit template 3.11, not an implementation prompt.
 7. Unresolved risk → emit a READ-ONLY analysis prompt (Opus 5 `high`/`xhigh`) before any mutation prompt.
-8. `MERGE_AUTHORITY` absent or ambiguous → the emitted prompt states merge NOT AUTHORIZED.
+8. `HUMAN_MERGE_AUTHORIZATION` absent or ambiguous → the emitted prompt states merge NOT AUTHORIZED.
 9. Apply the routing function in workflow section 24.12 in order; the first matching rule wins.
 10. Carry every guardrail through compression: shortening a prompt never drops a stop condition, an
     invariant, a permission boundary, or a validation gate.

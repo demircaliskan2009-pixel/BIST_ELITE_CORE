@@ -1,5 +1,9 @@
 # Copilot compatibility shim — INACTIVE
 
+<!-- CONTROL_PLANE_ROLE: COPILOT_INACTIVE_SHIM -->
+
+Authority derives from the canonical control plane `docs/crypto_core/agent_os_v2.md`. This file defines no routing, model-selection, PR-sizing or merge authority of its own.
+
 **Copilot status: `INACTIVE_UNAVAILABLE`.** GitHub Copilot is not an active execution lane, not an
 execution host for another model, and holds no mutation, merge, readiness, connector, live or capital
 authority in this repository. It is inactive unless it is separately reactivated through an audited

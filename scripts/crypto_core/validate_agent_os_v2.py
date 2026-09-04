@@ -34,19 +34,13 @@ WORKFLOW_DOC = "docs/crypto_core/agent_workflow.md"
 CODEX_SKILL = ".codex/skills/crypto-core-max-safe/SKILL.md"
 CLAUDE_SKILL = ".claude/skills/crypto-core-token-efficient-loop/SKILL.md"
 
-# Check A - every file the v2 control plane requires to exist.
-REQUIRED_FILES = (
-    "AGENTS.md",
-    "CLAUDE.md",
-    AGENT_OS_V2_DOC,
-    WORKFLOW_DOC,
-    CONTINUITY_INDEX,
+# Non-text artifacts the control plane requires. The ACTIVE TEXT surfaces are NOT listed again here:
+# REQUIRED_FILES is derived from ACTIVE_SURFACES below, so there is exactly ONE registry of active
+# doctrine. Two parallel registries were the previous defect - a surface could be dropped from one and
+# still look required by the other.
+REQUIRED_ARTIFACTS = (
     MANIFEST_SCHEMA,
     MANIFEST_EXAMPLE,
-    CODEX_SKILL,
-    CLAUDE_SKILL,
-    CURRENT_STATE_DOC,
-    COPILOT_SHIM,
     "scripts/crypto_core/validate_agent_os_v2.py",
     "tests/crypto_core/test_agent_os_v2_contract.py",
 )
@@ -252,11 +246,91 @@ ACTIVE_SURFACES = (
 # Back-compat alias: the scanned-file set is exactly the complete active surface set.
 V2_CONTROL_SURFACES = ACTIVE_SURFACES
 
+# Check A is derived from the single registry: every active text surface, plus the non-text artifacts.
+REQUIRED_FILES = ACTIVE_SURFACES + REQUIRED_ARTIFACTS
+
+# Structural authority evidence. Each active surface declares exactly one machine-checkable role in an
+# HTML comment. Only the canonical control plane may declare CANONICAL_AUTHORITY; every other surface must
+# declare the subordinate role it actually plays. This replaces guessing at English synonyms of
+# "authority" with a fact a reader and a validator can both check in one line.
+CONTROL_PLANE_ROLE_RE = re.compile(r"<!--\s*CONTROL_PLANE_ROLE:\s*([A-Z_]+)\s*-->")
+CANONICAL_ROLE = "CANONICAL_AUTHORITY"
+EXPECTED_CONTROL_PLANE_ROLES = {
+    AGENT_OS_V2_DOC: CANONICAL_ROLE,
+    "AGENTS.md": "DURABLE_RAILS",
+    WORKFLOW_DOC: "WORKFLOW_COMPANION",
+    "CLAUDE.md": "CLAUDE_ADAPTER",
+    CLAUDE_SKILL: "CLAUDE_ADAPTER",
+    CODEX_SKILL: "CODEX_ADAPTER",
+    MODEL_PROMPTING_GUIDE: "AUTHORING_GUIDE",
+    OPUS5_PLAYBOOK: "AUTHORING_GUIDE",
+    EFFICIENCY_PLAYBOOK_DOC: "COMPRESSION_GUIDE",
+    EFFICIENCY_LANES_DOC: "COMPRESSION_GUIDE",
+    DEEP_RESEARCH_PROTOCOL: "RESEARCH_ADAPTER",
+    CONTINUITY_INDEX: "CONTINUITY_INDEX",
+    COPILOT_SHIM: "COPILOT_INACTIVE_SHIM",
+}
+# docs/crypto_core_current_state.md is an active surface but is outside this repair's authorized file set,
+# so it carries no role comment. Its subordination is enforced instead by the durable-pointer check, which
+# requires it to name CRYPTO_CORE_AGENT_OS_V2 and the continuity index. This exemption is explicit and
+# enumerated rather than silent.
+ROLE_MARKER_EXEMPT = (CURRENT_STATE_DOC,)
+
+# P1 - merge authority. Only the human holds it, per PR, every time.
+MERGE_AUTHORITY_MARKER = "MERGE_AUTHORITY: HUMAN_ONLY_PER_PR"
+# 'authority' and 'authoriz/authoris-ation' do not share a prefix past 'authori', so both are listed.
+MERGE_AUTHORITY_LEX = ("merge authority", "merge authoriz", "merge authoris")
+MERGE_AUTHORITY_SAFE_LEX = (
+    "human",
+    "never",
+    "no ",
+    "not ",
+    "nothing",
+    "without",
+    "forbidden",
+    "prohibit",
+    "anti pattern",
+    "separate",
+)
+
+# Numeric PR-size ceilings, matched after lexical normalisation so that MAX_CHANGED_FILES,
+# max-changed-files and "maximum changed files" are one and the same fact.
+NUMERIC_PR_CAP_LEX = (
+    "max changed files",
+    "maximum changed files",
+    "changed file cap",
+    "changed files cap",
+    "file count cap",
+    "file cap of",
+)
+NUMERIC_PR_CAP_RE = re.compile(r"no more than \d+ (?:changed |modified )?files")
+
+# The v1 control plane is a superseded record. Naming it is fine; calling it active is not.
+V1_NAME_LEX = "agent os v1"
+V1_SUPERSESSION_LEX = (
+    "supersede",
+    "companion",
+    "superseded",
+    "historical",
+    "record",
+    "not active",
+    "never active",
+    "retired",
+    "archiv",
+    "subordinate",
+)
+FORBIDDEN_ACTIVE_V1_LEX = (
+    "active crypto core agent os v1",
+    "the active durable controller mediated operating protocol",
+    "active agent os",
+    "canonical agent os v1",
+)
+
 # agent_workflow.md carries a dated changelog of superseded eras. Enforcement stops at the changelog so
 # historical entries stay readable as history without being read as active doctrine.
 CHANGELOG_ENTRY_RE = re.compile(r"^\*(?:v[0-9]|Last updated)")
 HISTORICAL_SECTION_START_RE = re.compile(r"^## 20\. HISTORICAL")
-ACTIVE_SECTION_RESUME_RE = re.compile(r"^## 24\. Active")
+ACTIVE_SECTION_RESUME_RE = re.compile(r"^## 24\. Agent OS v1 record")
 
 # The single canonical routing authority. Any other active surface that talks about routing authority must
 # point AT this file rather than declare one of its own.
@@ -266,6 +340,8 @@ ROUTING_AUTHORITY_PHRASES = (
     "routing authority",
     "single active routing authority",
     "routing matrix is",
+    "routing truth lives",
+    "routing truth is",
 )
 
 # Sizing by changed-file count is retired: MAX_SAFE_PR is semantic (agent_os_v2.md section 4).
@@ -418,6 +494,17 @@ def _normalize(text: str) -> str:
     return " ".join(text.split())
 
 
+def _lex(text: str) -> str:
+    """Lexical normal form: lower case, one space between words, separators unified.
+
+    MAX_CHANGED_FILES, max-changed-files and "Maximum  Changed   Files" all reduce to the same string, so
+    a separator swap is not a bypass. Used only for bounded token checks - it is not a language model and
+    the validator never claims to prove arbitrary natural-language consistency.
+    """
+    lowered = text.lower().replace("-", " ").replace("_", " ").replace("`", " ")
+    return " ".join(lowered.split())
+
+
 def _has_marker(assertion: str) -> bool:
     lowered = _normalize(assertion).lower()
     return any(marker in lowered for marker in RETIREMENT_MARKERS)
@@ -508,6 +595,61 @@ def _forbidden_wording(repo_root: Path, rel: str, phrases: tuple[str, ...], labe
             elif not _has_marker(assertion):
                 snippet = _normalize(assertion)[:120]
                 violations.append(f"{label}: '{phrase}' stated as active authority in {rel}: {snippet}")
+    return violations
+
+
+DIRECTIVE_NEGATOR_RE = re.compile(
+    r"\b(?:not|never|neither|nor|no|non|without|prohibit|prohibited|forbidden|banned|reject|rejects|rejected|retired|superseded|inactive)\b"
+)
+DIRECTIVE_NEGATION_WINDOW = 90
+DIRECTIVE_LEAD_WINDOW = 40
+
+
+def _directive_is_negated(assertion: str, phrase: str) -> bool:
+    """True only when a negator PRECEDES the directive closely enough to qualify it.
+
+    Assertion-wide marker matching is unsound for directives: appending 'never stop' to
+    'keep fixing until green' would otherwise launder an active instruction. Every occurrence of the
+    phrase must be individually qualified.
+    """
+    lexed = _lex(assertion)
+    target = _lex(phrase)
+    # A negator in the opening words scopes the whole enumeration that follows ("Never: a, b, c"), which
+    # is how prohibition lists are legitimately written. It cannot launder a trailing directive, because
+    # laundering appends the negator AFTER the instruction rather than leading with it.
+    if DIRECTIVE_NEGATOR_RE.search(lexed[:DIRECTIVE_LEAD_WINDOW]):
+        return True
+    start = 0
+    found = False
+    while True:
+        index = lexed.find(target, start)
+        if index < 0:
+            break
+        found = True
+        window = lexed[max(0, index - DIRECTIVE_NEGATION_WINDOW) : index]
+        if not DIRECTIVE_NEGATOR_RE.search(window):
+            return False
+        start = index + 1
+    return found
+
+
+def _forbidden_directive(repo_root: Path, rel: str, phrases: tuple, label: str) -> list:
+    """Directive families: every occurrence must be individually negated, or it is active."""
+    text = _active_text(repo_root, rel)
+    if text is None:
+        return []
+    if rel in INVENTORY_FENCE_ALLOWED_FILES:
+        text = _strip_inventory_fences(text)
+    violations = []
+    for assertion in _assertions(text):
+        lexed = _lex(assertion)
+        for phrase in phrases:
+            if _lex(phrase) not in lexed:
+                continue
+            if _directive_is_negated(assertion, phrase):
+                continue
+            snippet = _normalize(assertion)[:120]
+            violations.append(f"{label}: directive '{phrase}' is active in {rel}: {snippet}")
     return violations
 
 
@@ -621,6 +763,100 @@ def _routing_lanes(text: str) -> list[str] | None:
 # ---------------------------------------------------------------------------
 
 
+def _check_control_plane_roles(repo_root: Path) -> list[str]:
+    """Z: exactly one canonical authority, and every other active surface declares its subordinate role."""
+    violations = []
+    declared: dict[str, list[str]] = {}
+    for rel in ACTIVE_SURFACES:
+        text = _read_text(repo_root, rel)
+        if text is None:
+            violations.append(f"Z: cannot read active surface {rel}")
+            continue
+        roles = CONTROL_PLANE_ROLE_RE.findall(text)
+        declared[rel] = roles
+        expected = EXPECTED_CONTROL_PLANE_ROLES.get(rel)
+        if expected is None:
+            if rel not in ROLE_MARKER_EXEMPT:
+                violations.append(f"Z: active surface {rel} has no expected CONTROL_PLANE_ROLE")
+            continue
+        if len(roles) != 1:
+            violations.append(f"Z: {rel} must declare exactly one CONTROL_PLANE_ROLE, found {len(roles)}")
+            continue
+        if roles[0] != expected:
+            violations.append(f"Z: {rel} declares CONTROL_PLANE_ROLE {roles[0]}, expected {expected}")
+
+    canonical = [rel for rel, roles in declared.items() if CANONICAL_ROLE in roles]
+    if canonical != [AGENT_OS_V2_DOC]:
+        violations.append(f"Z: CANONICAL_AUTHORITY must be declared by {AGENT_OS_V2_DOC} alone, got {canonical}")
+    return violations
+
+
+def _check_merge_authority(repo_root: Path) -> list[str]:
+    """P1: merge authority is human-only, per PR. No lane originates or grants it."""
+    violations = []
+    canonical = _read_text(repo_root, AGENT_OS_V2_DOC)
+    if canonical is None or MERGE_AUTHORITY_MARKER not in canonical:
+        violations.append(f"P1: canonical marker '{MERGE_AUTHORITY_MARKER}' missing in {AGENT_OS_V2_DOC}")
+
+    for rel in ACTIVE_SURFACES:
+        text = _active_text(repo_root, rel)
+        if text is None:
+            continue
+        for assertion in _assertions(text):
+            lexed = _lex(assertion)
+            if not any(token in lexed for token in MERGE_AUTHORITY_LEX):
+                continue
+            if any(safe in lexed for safe in MERGE_AUTHORITY_SAFE_LEX):
+                continue
+            violations.append(
+                f"P1: merge authority stated without the human gate in {rel}: {_normalize(assertion)[:120]}"
+            )
+    return violations
+
+
+def _check_numeric_pr_size_cap(repo_root: Path) -> list[str]:
+    """X: PR size is semantic. No numeric changed-file ceiling may be an active directive."""
+    violations = []
+    for rel in ACTIVE_SURFACES:
+        text = _active_text(repo_root, rel)
+        if text is None:
+            continue
+        for assertion in _assertions(text):
+            lexed = _lex(assertion)
+            hits = [phrase for phrase in NUMERIC_PR_CAP_LEX if phrase in lexed]
+            if NUMERIC_PR_CAP_RE.search(lexed):
+                hits.append("no more than N files")
+            for hit in hits:
+                if _has_marker(assertion):
+                    continue
+                violations.append(
+                    f"X: numeric PR-size ceiling '{hit}' is active in {rel}: {_normalize(assertion)[:120]}"
+                )
+    return violations
+
+
+def _check_v1_is_superseded(repo_root: Path) -> list[str]:
+    """V1: the Agent OS v1 record may be named, never presented as active or canonical."""
+    violations = []
+    for rel in ACTIVE_SURFACES:
+        text = _active_text(repo_root, rel)
+        if text is None:
+            continue
+        for assertion in _assertions(text):
+            lexed = _lex(assertion)
+            for phrase in FORBIDDEN_ACTIVE_V1_LEX:
+                if phrase in lexed:
+                    violations.append(
+                        f"V1: '{phrase}' presents the superseded v1 control plane as active in {rel}: "
+                        f"{_normalize(assertion)[:120]}"
+                    )
+            if V1_NAME_LEX in lexed and not any(mark in lexed for mark in V1_SUPERSESSION_LEX):
+                violations.append(
+                    f"V1: {rel} names Agent OS v1 without a supersession marker: {_normalize(assertion)[:120]}"
+                )
+    return violations
+
+
 def _check_required_files(repo_root: Path) -> list[str]:
     return [f"A: required Agent OS v2 file missing: {rel}" for rel in REQUIRED_FILES if not (repo_root / rel).is_file()]
 
@@ -647,8 +883,8 @@ def _check_forbidden_active_wording(repo_root: Path) -> list[str]:
     for rel in ACTIVE_SURFACES:
         violations.extend(_forbidden_wording(repo_root, rel, FABLE_TOKENS, "D"))
         violations.extend(_forbidden_wording(repo_root, rel, COPILOT_AUTONOMY_PHRASES, "E"))
-        violations.extend(_forbidden_wording(repo_root, rel, RESTART_UNTIL_SUCCESS_PHRASES, "S"))
-        violations.extend(_forbidden_wording(repo_root, rel, BLANKET_AUTHORITY_PHRASES, "U"))
+        violations.extend(_forbidden_directive(repo_root, rel, RESTART_UNTIL_SUCCESS_PHRASES, "S"))
+        violations.extend(_forbidden_directive(repo_root, rel, BLANKET_AUTHORITY_PHRASES, "U"))
         violations.extend(_forbidden_wording(repo_root, rel, SUPERSEDED_MODEL_PHRASES, "R"))
     violations.extend(_check_inventory_fence_placement(repo_root))
     shim = _read_text(repo_root, COPILOT_SHIM)
@@ -867,6 +1103,10 @@ CHECKS = (
     _check_single_routing_authority,
     _check_retired_sizing_field,
     _check_prompt_compiler_templates,
+    _check_control_plane_roles,
+    _check_merge_authority,
+    _check_numeric_pr_size_cap,
+    _check_v1_is_superseded,
 )
 
 

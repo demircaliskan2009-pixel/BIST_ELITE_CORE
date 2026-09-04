@@ -1,5 +1,9 @@
 # crypto_core Deep Research Protocol (Agent OS edition, 2026-07-10)
 
+<!-- CONTROL_PLANE_ROLE: RESEARCH_ADAPTER -->
+
+Authority derives from the canonical control plane `docs/crypto_core/agent_os_v2.md`. This file defines no routing, model-selection, PR-sizing or merge authority of its own.
+
 > Canonical, complete usage protocol for **Deep Research** in `crypto_core` under `CRYPTO_CORE_AGENT_OS_V2`
 > (`docs/crypto_core/agent_os_v2.md`, the canonical control plane; `agent_workflow.md` section 24.9 is the
 > workflow companion summary). Deep Research is used ONLY for current load-bearing external facts —
@@ -13,8 +17,9 @@
 > question, binds it to pinned GitHub-connector evidence, and verifies the result before anything is acted
 > on. Deep Research is **strictly read-only / advisory** — it never mutates repo or GitHub state (even when
 > the underlying work is authorized), never authorizes a merge, a live/order/scheduler surface, or a
-> weakening of any fail-closed gate. Canonical doctrine precedence is unchanged: `AGENTS.md` →
-> `agent_workflow.md` → `.codex/skills/crypto-core-max-safe/SKILL.md` → `CLAUDE.md`; on conflict the
+> weakening of any fail-closed gate. Canonical doctrine precedence is `AGENTS.md` →
+> `docs/crypto_core/agent_os_v2.md` → the environment adapter → `docs/crypto_core/agent_lessons.md`;
+> `agent_workflow.md` is a workflow companion and not in that chain. On conflict the
 > **stricter safety rule wins**. This document contains **no secrets, credentials, API keys, or
 > live-trading instructions**. Deep Research is orchestrated by the ChatGPT read-only-first controller
 > (`CONTROLLER_READONLY_FIRST_POLICY`, `agent_workflow.md` section 24.10) and is advisory only. Claude
@@ -212,7 +217,7 @@ Deep Research must never: mutate repo or GitHub state (no branch/file/commit/pus
 review/thread-resolve/workflow-rerun/merge/auto-merge — even when the underlying work is authorized);
 justify skipping tests/CI/audit; replace the connector final gate, Class-C Codex audit, tests/CI, or local
 post-merge verification; authorize live/private API/order routing or any forbidden surface; weaken a
-fail-closed gate; replace explicit per-PR merge authorization; produce broad PRD rewrites unless the
+fail-closed gate; replace explicit per-PR human merge authorization; produce broad PRD rewrites unless the
 controller explicitly asks; or claim readiness/live/order/capital authority. It may recommend a mutation
 task; the controller routes any authorized mutation to the correct executor lane. On any conflict the
 stricter safety rule wins.

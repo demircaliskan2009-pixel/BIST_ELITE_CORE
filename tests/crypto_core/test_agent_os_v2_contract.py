@@ -676,10 +676,12 @@ def test_removed_prompt_compiler_field_block_fails(clone: Path, surface: str) ->
 
 
 def test_no_active_max_changed_files_cap(clone: Path) -> None:
+    """Outside the single permitted inventory fence the retired token must not appear at all."""
     for surface in validator.ACTIVE_SURFACES:
-        for line in _read(clone, surface).splitlines():
-            if "MAX_CHANGED_FILES" in line:
-                assert validator._has_marker(line), (surface, line)
+        text = _read(clone, surface)
+        if surface in validator.INVENTORY_FENCE_ALLOWED_FILES:
+            text = validator._strip_inventory_fences(text)
+        assert "MAX_CHANGED_FILES" not in text, surface
 
 
 @pytest.mark.parametrize("surface", sorted(validator.PROMPT_TEMPLATE_SURFACES))
@@ -688,3 +690,305 @@ def test_reintroduced_max_changed_files_cap_fails(clone: Path, surface: str) -> 
     violations = validator.validate(clone)
     assert "X" in _codes(violations)
     assert any(surface in violation for violation in violations)
+
+
+# ---------------------------------------------------------------------------
+# Structural authority collapse (PR #371 final rescope)
+# ---------------------------------------------------------------------------
+
+# The contractual active-surface set, written out INDEPENDENTLY of the validator's own registry.
+# Deriving this from validator.ACTIVE_SURFACES would reproduce the exact bug it is meant to catch:
+# dropping a tuple member and deleting its file would then pass every test.
+CONTRACTUAL_ACTIVE_SURFACES = (
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/crypto_core/agent_os_v2.md",
+    "docs/crypto_core/agent_workflow.md",
+    "docs/crypto_core/model_prompting_guide.md",
+    "docs/crypto_core/token_efficiency_playbook.md",
+    "docs/crypto_core/agent_prompts/token_efficiency_v2.md",
+    "docs/crypto_core/agent_prompts/opus5_prompting_playbook.md",
+    "docs/crypto_core/deep_research_protocol.md",
+    "docs/crypto_core/continuity/CONTINUITY_INDEX.md",
+    "docs/crypto_core_current_state.md",
+    ".codex/skills/crypto-core-max-safe/SKILL.md",
+    ".claude/skills/crypto-core-token-efficient-loop/SKILL.md",
+    ".github/copilot-instructions.md",
+)
+
+CONTRACTUAL_CANONICAL_AUTHORITY = "docs/crypto_core/agent_os_v2.md"
+
+
+@pytest.mark.parametrize("surface", CONTRACTUAL_ACTIVE_SURFACES)
+def test_contractual_active_surface_exists(surface: str) -> None:
+    """1. Every contractual active surface exists, checked without consulting the validator."""
+    assert (REPO_ROOT / surface).is_file(), surface
+
+
+def test_registry_matches_the_independent_contract() -> None:
+    """The validator's single registry must equal the independent contract, in both directions."""
+    assert set(validator.ACTIVE_SURFACES) == set(CONTRACTUAL_ACTIVE_SURFACES)
+    assert len(validator.ACTIVE_SURFACES) == len(CONTRACTUAL_ACTIVE_SURFACES)
+
+
+def test_required_files_are_derived_from_the_single_registry() -> None:
+    """There is ONE registry of active doctrine; REQUIRED_FILES derives from it."""
+    for surface in validator.ACTIVE_SURFACES:
+        assert surface in validator.REQUIRED_FILES, surface
+    assert validator.REQUIRED_FILES == validator.ACTIVE_SURFACES + validator.REQUIRED_ARTIFACTS
+
+
+@pytest.mark.parametrize(
+    "surface",
+    [
+        "docs/crypto_core/model_prompting_guide.md",
+        "docs/crypto_core/token_efficiency_playbook.md",
+        "docs/crypto_core/deep_research_protocol.md",
+    ],
+)
+def test_removing_an_active_guide_fails(clone: Path, surface: str) -> None:
+    """2/3/4. Deleting an active guide is caught."""
+    (clone / surface).unlink()
+    assert any(violation.startswith("A:") and surface in violation for violation in validator.validate(clone))
+
+
+def test_dropping_a_registry_entry_and_its_file_still_fails_independently(
+    clone: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """5. Registry drift plus a deleted file must not slip past every check.
+
+    The validator is deliberately blinded here (its registry loses the entry), and the independent
+    contractual expectation must still catch the missing file.
+    """
+    dropped = "docs/crypto_core/model_prompting_guide.md"
+    monkeypatch.setattr(validator, "ACTIVE_SURFACES", tuple(s for s in validator.ACTIVE_SURFACES if s != dropped))
+    monkeypatch.setattr(validator, "REQUIRED_FILES", tuple(s for s in validator.REQUIRED_FILES if s != dropped))
+    (clone / dropped).unlink()
+
+    assert validator.validate(clone) == [], "precondition: the blinded validator no longer notices"
+    assert dropped in CONTRACTUAL_ACTIVE_SURFACES
+    missing = [rel for rel in CONTRACTUAL_ACTIVE_SURFACES if not (clone / rel).is_file()]
+    assert missing == [dropped]
+
+
+# --- CONTROL_PLANE_ROLE structural evidence ---------------------------------
+
+
+def test_exactly_one_canonical_authority_declaration() -> None:
+    """10. Only Agent OS v2 declares canonical authority."""
+    declaring = [
+        rel
+        for rel in CONTRACTUAL_ACTIVE_SURFACES
+        if "CANONICAL_AUTHORITY"
+        in validator.CONTROL_PLANE_ROLE_RE.findall((REPO_ROOT / rel).read_text(encoding="utf-8"))
+    ]
+    assert declaring == [CONTRACTUAL_CANONICAL_AUTHORITY]
+
+
+@pytest.mark.parametrize(
+    "surface",
+    [rel for rel in CONTRACTUAL_ACTIVE_SURFACES if rel != "docs/crypto_core_current_state.md"],
+)
+def test_every_active_surface_declares_its_role(surface: str) -> None:
+    roles = validator.CONTROL_PLANE_ROLE_RE.findall((REPO_ROOT / surface).read_text(encoding="utf-8"))
+    assert len(roles) == 1, (surface, roles)
+    assert roles[0] == validator.EXPECTED_CONTROL_PLANE_ROLES[surface]
+
+
+def test_missing_role_marker_fails(clone: Path) -> None:
+    """11. A noncanonical active surface without its role marker fails."""
+    text = _read(clone, "CLAUDE.md").replace("<!-- CONTROL_PLANE_ROLE: CLAUDE_ADAPTER -->", "")
+    _write(clone, "CLAUDE.md", text)
+    assert "Z" in _codes(validator.validate(clone))
+
+
+def test_second_canonical_role_marker_fails(clone: Path) -> None:
+    """12. A second canonical declaration fails."""
+    text = _read(clone, validator.WORKFLOW_DOC).replace(
+        "<!-- CONTROL_PLANE_ROLE: WORKFLOW_COMPANION -->",
+        "<!-- CONTROL_PLANE_ROLE: CANONICAL_AUTHORITY -->",
+    )
+    _write(clone, validator.WORKFLOW_DOC, text)
+    assert "Z" in _codes(validator.validate(clone))
+
+
+def test_wrong_role_marker_fails(clone: Path) -> None:
+    text = _read(clone, validator.CODEX_SKILL).replace(
+        "<!-- CONTROL_PLANE_ROLE: CODEX_ADAPTER -->",
+        "<!-- CONTROL_PLANE_ROLE: DURABLE_RAILS -->",
+    )
+    _write(clone, validator.CODEX_SKILL, text)
+    assert "Z" in _codes(validator.validate(clone))
+
+
+# --- V1 supersession --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "This file is the active Agent OS for crypto_core.",
+        "CRYPTO_CORE_AGENT_OS_V1 is the active, durable, controller-mediated operating protocol.",
+        "Section 24 is the canonical Agent OS v1 routing source.",
+    ],
+)
+def test_workflow_declaring_itself_active_agent_os_fails(clone: Path, claim: str) -> None:
+    """6. The workflow companion may not present the v1 control plane as active or canonical."""
+    _append_paragraph(clone, validator.WORKFLOW_DOC, claim)
+    assert "V1" in _codes(validator.validate(clone))
+
+
+def test_naming_agent_os_v1_without_supersession_fails(clone: Path) -> None:
+    _append_paragraph(clone, validator.WORKFLOW_DOC, "Agent OS v1 governs routing for crypto_core.")
+    assert "V1" in _codes(validator.validate(clone))
+
+
+def test_agent_workflow_is_not_in_the_authority_chain() -> None:
+    """The workflow companion declares itself a companion, not an authority link."""
+    workflow = (REPO_ROOT / validator.WORKFLOW_DOC).read_text(encoding="utf-8")
+    assert "WORKFLOW_COMPANION" in workflow
+    assert "SUPERSEDED" in workflow
+    assert validator.ROUTING_MATRIX_BEGIN not in workflow
+
+
+# --- Deep Research adapter --------------------------------------------------
+
+
+def test_deep_research_v1_precedence_fails(clone: Path) -> None:
+    """7. The research adapter may not restate the old precedence chain."""
+    _append_paragraph(
+        clone,
+        validator.DEEP_RESEARCH_PROTOCOL,
+        "Canonical doctrine precedence: AGENTS.md then the routing authority in agent_workflow.md.",
+    )
+    assert "W" in _codes(validator.validate(clone))
+
+
+# --- P1: human-only merge authority -----------------------------------------
+
+
+def test_canonical_merge_authority_marker_present() -> None:
+    canonical = (REPO_ROOT / validator.AGENT_OS_V2_DOC).read_text(encoding="utf-8")
+    assert validator.MERGE_AUTHORITY_MARKER in canonical
+
+
+def test_missing_merge_authority_marker_fails(clone: Path) -> None:
+    text = _read(clone, validator.AGENT_OS_V2_DOC).replace(validator.MERGE_AUTHORITY_MARKER, "MERGE: TBD")
+    _write(clone, validator.AGENT_OS_V2_DOC, text)
+    assert "P1" in _codes(validator.validate(clone))
+
+
+@pytest.mark.parametrize(
+    ("surface", "claim"),
+    [
+        (".codex/skills/crypto-core-max-safe/SKILL.md", "The controller holds merge authority for this repository."),
+        ("docs/crypto_core/agent_workflow.md", "ChatGPT controller grants exact per-PR merge authorization."),
+        ("CLAUDE.md", "The connector gate carries merge authority once checks are green."),
+        ("docs/crypto_core/agent_os_v2.md", "Standing approval converts into per-PR merge authorization."),
+    ],
+)
+def test_merge_authority_without_the_human_gate_fails(clone: Path, surface: str, claim: str) -> None:
+    """8/9. No lane may state, grant or inherit merge authority without the human gate."""
+    _append_paragraph(clone, surface, claim)
+    violations = validator.validate(clone)
+    assert "P1" in _codes(violations)
+    assert any(surface in violation for violation in violations)
+
+
+def test_human_gated_merge_language_is_allowed(clone: Path) -> None:
+    _append_paragraph(
+        clone,
+        validator.WORKFLOW_DOC,
+        "The controller verifies explicit per-PR human merge authorization before any merge command runs.",
+    )
+    assert validator.validate(clone) == []
+
+
+# --- Routing-authority bypass -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "Routing truth lives here, not elsewhere.",
+        "The routing authority is section 24 of this file.",
+        "Routing truth is defined by this document.",
+    ],
+)
+def test_subordinate_surface_claiming_routing_truth_fails(clone: Path, claim: str) -> None:
+    """13. The proven "routing truth lives here" bypass is closed."""
+    _append_paragraph(clone, validator.EFFICIENCY_LANES_DOC, claim)
+    assert "W" in _codes(validator.validate(clone))
+
+
+# --- Numeric PR-size ceilings ------------------------------------------------
+
+
+def test_no_numeric_pr_cap_outside_the_permitted_inventory(clone: Path) -> None:
+    """14-17 (positive side). Outside the one permitted inventory, the token appears nowhere."""
+    for surface in validator.ACTIVE_SURFACES:
+        text = _read(clone, surface)
+        if surface in validator.INVENTORY_FENCE_ALLOWED_FILES:
+            text = validator._strip_inventory_fences(text)
+        assert "MAX_CHANGED_FILES" not in text, surface
+        assert "maximum changed files" not in text.lower(), surface
+
+
+@pytest.mark.parametrize(
+    "directive",
+    [
+        "AUTHORIZED SCOPE: MAX_CHANGED_FILES: 5",
+        "AUTHORIZED SCOPE: max-changed-files: 5",
+        "AUTHORIZED SCOPE: Maximum changed files: 5",
+        "AUTHORIZED SCOPE: max changed files 5",
+        "Split the PR at no more than 8 changed files.",
+    ],
+)
+def test_numeric_pr_cap_reintroduction_fails(clone: Path, directive: str) -> None:
+    """14/15/16/17. Every separator and phrasing of a numeric ceiling is one and the same fact."""
+    _append_paragraph(clone, validator.OPUS5_PLAYBOOK, directive)
+    assert _codes(validator.validate(clone)) & {"X"}
+
+
+def test_allowed_files_remains_valid(clone: Path) -> None:
+    """18. Exact ALLOWED_FILES is mandatory and must never be confused with a numeric cap."""
+    _append_paragraph(clone, validator.OPUS5_PLAYBOOK, "ALLOWED_FILES: exactly these three paths, and no others.")
+    assert validator.validate(clone) == []
+
+
+# --- Negation laundering ----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "Executor authority: blanket GitHub authority - never abused.",
+        "Repair policy - keep fixing until green, never stopping early.",
+        "Policy: do everything automatically. Nothing is ever forbidden.",
+        "Merge policy: blanket merge authority, never questioned.",
+    ],
+)
+def test_trailing_negation_cannot_launder_a_directive(clone: Path, claim: str) -> None:
+    """19/20. A negation after the directive does not qualify it; only a leading one scopes a list."""
+    _append_paragraph(clone, validator.AGENT_OS_V2_DOC, claim)
+    assert _codes(validator.validate(clone)) & {"S", "U", "P1"}
+
+
+def test_leading_negation_scopes_an_enumeration(clone: Path) -> None:
+    """A genuine prohibition list stays legitimate."""
+    _append_paragraph(
+        clone,
+        validator.AGENT_OS_V2_DOC,
+        "Never: direct main push, force push, self-approval, blanket mutation, blanket merge authority.",
+    )
+    assert validator.validate(clone) == []
+
+
+def test_legitimate_historical_text_still_passes(clone: Path) -> None:
+    """21. Explicitly historical wording is not a violation."""
+    _append_paragraph(
+        clone,
+        validator.WORKFLOW_DOC,
+        "HISTORICAL record: Agent OS v1 was superseded; Claude Fable 5 is INACTIVE_EXPIRED_RETIRED.",
+    )
+    assert validator.validate(clone) == []

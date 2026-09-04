@@ -1,5 +1,9 @@
 # crypto_core Model Prompting Guide (v2, 2026-07-10 — Agent OS edition)
 
+<!-- CONTROL_PLANE_ROLE: AUTHORING_GUIDE -->
+
+Authority derives from the canonical control plane `docs/crypto_core/agent_os_v2.md`. This file defines no routing, model-selection, PR-sizing or merge authority of its own.
+
 **This document is a prompt-authoring guide, not a routing authority.** The only canonical
 `ROLE_ROUTING_MATRIX` is `docs/crypto_core/agent_os_v2.md` section 3; everything here is subordinate to it
 and must never contradict it.

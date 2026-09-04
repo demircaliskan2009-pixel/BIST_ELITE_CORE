@@ -1,5 +1,9 @@
 # crypto_core Continuity Index (durable)
 
+<!-- CONTROL_PLANE_ROLE: CONTINUITY_INDEX -->
+
+Authority derives from the canonical control plane `docs/crypto_core/agent_os_v2.md`. This file defines no routing, model-selection, PR-sizing or merge authority of its own.
+
 `CONTEXT_CONTINUITY_PROTOCOL_V1` durable surface for `CRYPTO_CORE_AGENT_OS_V2`. This file exists so a new
 chat can reach working competence without a giant pasted transcript.
 

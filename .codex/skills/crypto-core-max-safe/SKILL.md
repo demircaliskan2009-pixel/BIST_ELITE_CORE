@@ -5,6 +5,10 @@ description: Use for BIST_ELITE_CORE crypto_core implementation, repair, salvage
 
 # Crypto Core Max-Safe Workflow
 
+<!-- CONTROL_PLANE_ROLE: CODEX_ADAPTER -->
+
+Authority derives from the canonical control plane `docs/crypto_core/agent_os_v2.md`. This file defines no routing, model-selection, PR-sizing or merge authority of its own.
+
 **This skill is the Codex host/runtime adapter, not a routing authority.** The only canonical
 `ROLE_ROUTING_MATRIX` is `docs/crypto_core/agent_os_v2.md` section 3; the Codex lane detail below is
 subordinate to it and must never contradict it.
@@ -28,27 +32,29 @@ new module/test/artifact/phase/workflow/PR created solely to restate an unchange
 bootstrap from `docs/crypto_core/continuity/CONTINUITY_INDEX.md` and compile an ephemeral
 `STATE_MANIFEST_V1`.
 
-## Active routing (Sol / Terra / Luna)
+## Codex lane mechanics (subordinate to Agent OS v2)
 
-- T0 `LUNA_MECHANICAL` — Luna: git/gh status, bounded CI polling, PR metadata, review-thread state,
-  authorized merge mechanics, and postverify running. No design or product-code judgment.
-- T1 `READONLY_OR_FAST_BOUNDED` — Luna low or Terra high: bounded proof, docs, direct-dependency audit.
-- T2 `BOUNDED_IMPLEMENTATION` — Terra high: exact-file deterministic implementation, tests/docs, small
-  same-branch repairs. (Runtime-proven Claude Sonnet 5 may also hold this class per section 24.3.)
-- T3 `COMPLEX_IMPLEMENTATION_OR_REPAIR` — Terra xhigh for bounded repair; Claude Opus 5 xhigh when broad
-  reads or long local validation loops are needed. (The Claude side of T3 is subdivided T3A-T3E in section
-  24.3; Codex classes are unchanged.)
-- T4 `CROSS_CONTRACT_DESIGN_OR_AUDIT` — Sol xhigh (`max` only controller-gated): protected trust-boundary,
-  digest/provenance, governance/safety, SM-5/SM-6 design/audit, Stage-4 semantics, readiness/Deribit,
-  complex security/CodeQL. Sol runs ONLY on a controller-prepared narrow evidence packet — never broad
-  discovery, polling, merge mechanics, or routine docs.
-- XR — Deep Research, controller-orchestrated, external/current facts, advisory only.
-- `CONTROLLER_CONNECTOR_GATE` — ChatGPT GPT-5.6 Thinking + connector/`gh`: read-only-first controller-auditor
-  (`CONTROLLER_READONLY_FIRST_POLICY`, workflow §24.10), final evidence comparison, and merge authority.
-  ChatGPT now performs most non-Class-C read-only mapping/audit (Class A closeout; Class B first-pass with
-  Terra ordinary audit only when evidence requires) — treat its output as advisory/controller input, NEVER
-  as an audit premise and never as a substitute for the fresh Sol Class-C audit this skill owns. ChatGPT is
-  not a Codex runtime. Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED` — no active upstream Fable input exists.
+**Task families and lane selection are defined only in `docs/crypto_core/agent_os_v2.md` section 3
+(`ROLE_ROUTING_MATRIX_V2`) and section 3.1.** This adapter does not redefine them and never assigns a lane
+to a family; it describes only how the Codex runtimes execute the family the canonical matrix already
+selected.
+
+- **Sol** — protected independent design/audit (Class-C / `T4`). Runs ONLY on a controller-prepared narrow
+  evidence packet: never broad discovery, never polling, never merge mechanics, never routine docs.
+- **Terra** — bounded implementation, exact-file tests, bounded repair, and fresh-context ordinary
+  independent audit when Class C is not triggered.
+- **Luna** — mechanics only: git/gh state, bounded CI polling, PR metadata, review-thread state, execution
+  of an already human-authorized standard merge, and postverify running. No design or product-code
+  judgment.
+
+- **ChatGPT GPT-5.6 Thinking + connector/`gh`** — the read-only-first controller-auditor
+  (`CONTROLLER_READONLY_FIRST_POLICY`, workflow section 24.10). It performs most non-Class-C read-only
+  mapping and audit; treat its output as controller input, never as an audit premise, and never as a
+  substitute for the fresh Sol Class-C audit this skill owns. It is not a Codex runtime.
+
+Codex holds no routing authority, no model-selection authority, no PR-sizing authority and no merge
+authority. `MERGE_AUTHORITY: HUMAN_ONLY_PER_PR` — Luna may execute a merge command only after explicit
+per-PR human authorization already exists; executing it never creates it.
 
 Every serious prompt/report contains `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`,
 `REASONING_ACTUAL`, `EXACT_MODEL_REQUIRED`, declared fallback, and the `SETUP_REQUESTED` / `SETUP_ACTUAL` /

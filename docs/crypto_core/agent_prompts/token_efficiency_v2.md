@@ -1,5 +1,9 @@
 # Token Efficiency V2 - Agent OS named lanes and compact prompts
 
+<!-- CONTROL_PLANE_ROLE: COMPRESSION_GUIDE -->
+
+Authority derives from the canonical control plane `docs/crypto_core/agent_os_v2.md`. This file defines no routing, model-selection, PR-sizing or merge authority of its own.
+
 **This document is a prompt-compression guide, not a routing authority.** The only canonical
 `ROLE_ROUTING_MATRIX` is `docs/crypto_core/agent_os_v2.md` section 3.
 

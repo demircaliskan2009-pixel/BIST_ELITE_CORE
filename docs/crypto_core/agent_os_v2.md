@@ -1,5 +1,7 @@
 # CRYPTO_CORE_AGENT_OS_V2 — canonical control plane
 
+<!-- CONTROL_PLANE_ROLE: CANONICAL_AUTHORITY -->
+
 `CRYPTO_CORE_AGENT_OS_V2` is the single detailed active control-plane authority for `crypto_core` in
 `demircaliskan2009-pixel/BIST_ELITE_CORE`. It supersedes `CRYPTO_CORE_AGENT_OS_V1`
 (`docs/crypto_core/agent_workflow.md` section 24) for authority, routing, PR sizing, blocker closure,
@@ -79,10 +81,10 @@ This is the only authoritative routing matrix in the repository.
 
 | Lane | Role | Use for | Never |
 |---|---|---|---|
-| ChatGPT GPT-5.6 Thinking (controller) | Controller, brain, router, architecture synthesizer, state-proof owner, prompt compiler, handoff verifier, risk classifier, merge-readiness judge, GitHub connector coordinator | STATUS, CLOSEOUT, BOUNDED_READ, ARCHITECTURE, PROMPT_ARCHITECTURE, review triage, routing, live GitHub evidence verification | Default product-code writer; merge authority; readiness authority; live or capital authority; replacement for tests; replacement for mandatory Class-C |
+| ChatGPT GPT-5.6 Thinking (controller) | Controller, brain, router, architecture synthesizer, state-proof owner, prompt compiler, handoff verifier, risk classifier, merge-readiness judge, GitHub connector coordinator | STATUS, CLOSEOUT, BOUNDED_READ, ARCHITECTURE, PROMPT_ARCHITECTURE, review triage, routing, live GitHub evidence verification | Never the default product-code writer; never merge authority; never readiness authority; never live or capital authority; never a replacement for tests; never a replacement for mandatory Class-C |
 | ChatGPT Work (Local / Cloud) | First-class read-only research and synthesis lane with a persistent workspace, artifact delivery, and Cloud Browser | Large repo synthesis, multi-document comparison, long architecture reports, next-PR closure packet preparation, current web research, website interaction, persistent project workspace, large read-only analysis, artifact-oriented delivery | Never treats an uploaded or stale repo snapshot as current GitHub state; never replaces terminal validation; never replaces Class-C; never receives implicit blanket writes; never replaces controller final evidence judgment |
 | GitHub connector | Pinned-ref evidence and explicitly authorized exact writes | Repo reads, file reads, branch state, PR state, diffs, checks, runs, review and thread evidence, supported exact authorized writes | Never invents an unsupported connector capability; never treats connector availability as blanket write authority |
-| Deep Research | Controller-orchestrated external and current-fact research, read-only and advisory | Exchange or provider APIs, deployed versions, fees and funding, rate limits, security, regulation, machine-time provider facts, current readiness assumptions, current credible architecture benchmarks | Being used because repo work is merely difficult; repo-local facts; executor lane; merge authority; safety-gate waiver |
+| Deep Research | Controller-orchestrated external and current-fact research, read-only and advisory | Exchange or provider APIs, deployed versions, fees and funding, rate limits, security, regulation, machine-time provider facts, current readiness assumptions, current credible architecture benchmarks | Never used because repo work is merely difficult; never for repo-local facts; never an executor lane; never merge authority; never a safety-gate waiver |
 | Claude Opus 5 | Heavy implementation and repair lane (`claude-opus-5`), default effort `xhigh` | Cross-module implementation, interacting invariants, fail-closed semantics, complex consolidated repair, large bounded migrations | Automatic higher effort; metadata; CI polling; ordinary docs; work a lighter lane safely closes |
 | Claude Sonnet 5 | Optional bounded lane (`claude-sonnet-5`), runtime-proven only | Docs, config and tests; mechanical implementation; small deterministic repair; T0-T2 work | Being added merely to increase agent count; protected trust-boundary, digest, SM-5/SM-6, Stage-4, readiness or capital work; T4; a mandatory Class-C audit |
 | Codex GPT-5.6 Sol | Primary protected independent audit lane, default protected reasoning `xhigh` | Class-C, trust boundaries, cryptography, digest and provenance, SM-5/SM-6, Stage-4, machine-time protected work, readiness and Deribit promotion, security and CodeQL, critical cross-contract audit | Ultra or max as a permanent default for trivial work; broad discovery; mechanics |
@@ -135,11 +137,33 @@ effort inside that family — they never overwrite it.
 
 ### 3.2 Canonical merge rule
 
+`MERGE_AUTHORITY: HUMAN_ONLY_PER_PR`
+
 Standard merge commit plus `EXPLICIT_HUMAN_MERGE_AUTHORIZATION` naming the exact PR is the canonical merge
-rule, without exception. Auto-merge is **not a default, not an implicit authority and not a routing
-outcome**: where a platform auto-merge capability is mentioned anywhere in this repository it is a
-non-authoritative platform note only, it never substitutes for per-PR human authorization, and it never
-widens any lane's authority. No lane self-approves.
+rule, without exception. Merge authority originates with the human, per PR, every time.
+
+The ChatGPT controller MAY: verify merge readiness; relay or request explicit human authorization; compile
+an authorized merge command; execute an exact, already human-authorized connector action where supported;
+verify the result afterwards.
+
+The ChatGPT controller MAY NOT: it never grants merge authorization; it never originates merge
+authority; it never self-authorizes a merge; and it never converts any general, standing or blanket
+authorization into per-PR merge permission. The same
+boundary binds every other lane: Codex Luna executing a merge command does not create the authority for it.
+
+Auto-merge is **not a default, not an implicit authority and not a routing outcome**: where a platform
+auto-merge capability is mentioned anywhere in this repository it is a non-authoritative platform note
+only, it never substitutes for per-PR human authorization, and it never widens any lane's authority. No
+lane self-approves.
+
+### 3.3 Canonical effort ladder
+
+The routing matrix selects the CLASS and the MODEL; this ladder is the canonical EFFORT source. The API
+effort levels are exactly `low`, `medium`, `high`, `xhigh`, `max`. `xhigh` is the normal Opus 5 coding
+default. `max` is capability-critical only, on a named trigger inside its own family, and is never
+justified by a task merely feeling important. Adaptive thinking stays enabled: never `thinking: disabled`
+on a T3 lane and never alongside `xhigh` or `max`. `agent_workflow.md` section 24.12 carries the
+subordinate per-class detail and may not contradict this ladder.
 
 ## 4. MAX_SAFE_PR policy
 
@@ -336,6 +360,8 @@ wording scan; the fence is honoured only in this file and in `.github/copilot-in
 - blanket merge authority
 - unbounded discovery during repair
 - any request for hidden chain-of-thought
+- MAX_CHANGED_FILES (and every equivalent numeric changed-file ceiling: "max changed files",
+  "maximum changed files", "changed-file cap", "file-count cap", "no more than N changed files")
 
 <!-- PROHIBITED_WORDING_INVENTORY:END -->
 
@@ -383,11 +409,11 @@ introduced and branch protection is not changed.
 `scripts/crypto_core/audit_agent_setup.ps1` stays read-only, and its network and GitHub sections stay
 informational, but the script returns nonzero when deterministic Agent OS V2 validation fails.
 
-`tests/crypto_core/test_agent_os_v2_contract.py` is the permanent adversarial contract test: it proves
-that the honest migrated repository passes and that each removed rail, reintroduced legacy surface,
-reintroduced active-Fable wording, blanket autonomous or restart-until-success wording, missing
-state-manifest field, forbidden durable SHA, stale current-state wording, or converted Work boundary
-fails. The tests never mutate repository files.
+`tests/crypto_core/test_agent_os_v2_contract.py` is the permanent adversarial contract test. It proves the
+honest migrated repository passes. The validator rejects each of these: a removed rail, a reintroduced
+legacy surface, reintroduced active-Fable wording, blanket autonomous or restart-until-success wording, a
+missing state-manifest field, a forbidden durable SHA, stale current-state wording, and a converted Work
+boundary. The tests never mutate repository files.
 
 ## 12. Legacy control-plane retirement
 

@@ -5,6 +5,10 @@ description: Compact execution checklist for crypto_core implementation/audit lo
 
 # Crypto Core Token-Efficient Loop
 
+<!-- CONTROL_PLANE_ROLE: CLAUDE_ADAPTER -->
+
+Authority derives from the canonical control plane `docs/crypto_core/agent_os_v2.md`. This file defines no routing, model-selection, PR-sizing or merge authority of its own.
+
 Full doctrine: `docs/crypto_core/agent_os_v2.md` (`CRYPTO_CORE_AGENT_OS_V2`, the single detailed active
 control-plane authority and the canonical `ROLE_ROUTING_MATRIX` in its section 3) plus
 `docs/crypto_core/token_efficiency_playbook.md`; `agent_workflow.md` section 24
@@ -21,18 +25,11 @@ Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (workflow section 24.2).
 1. Intake the controller packet first (CONTROLLER_TO_IMPLEMENTER: pinned state, exact read set, allowed
    files, invariants, protected-risk class, validation ladder, stops). Do NOT repeat broad GitHub discovery
    the controller already proved.
-2. Classify against the canonical `ROLE_ROUTING_MATRIX` (`docs/crypto_core/agent_os_v2.md` section 3;
-   this skill is the Claude host adapter and never a routing authority): T0 mechanical (Luna preferred;
-   Sonnet 5 low only as an explicitly routed bounded local fallback); T1 read-only, fast-bounded and
-   governed closeout (Luna preferred; Sonnet 5 low optional bounded local fallback; Terra) — closeout
-   still requires exact authorization; T2 bounded implementation (Sonnet 5 medium / Terra); T3A complex
-   implementation (Opus 5 xhigh, default heavy local); T3B capability-critical IMPLEMENTATION or REPAIR
-   only, on a named trigger (Opus 5 max) — it never absorbs REVIEW, ARCHITECTURE or PROMPT_ARCHITECTURE;
-   T3C review (Opus 5 medium/high/xhigh by breadth); T3D architecture and T3E prompt architecture (Opus 5
-   high/xhigh); T4 Sol
-   cross-contract; XR controller-orchestrated Deep Research; controller/connector final evidence gate.
-   Effort selection: §24.12. Prove `MODEL_ACTUAL` and `MODEL_EFFORT_ACTUAL` from session runtime evidence
-   before mutating — an unresolved alias is not proof; mismatch or fallback is `STOP_WITH_PROOF`.
+2. Classify against the canonical `ROLE_ROUTING_MATRIX` and the canonical task-family semantics in
+   `docs/crypto_core/agent_os_v2.md` sections 3 and 3.1. This skill is the Claude host adapter: it does not
+   restate or redefine any family, lane or effort. Effort detail is `agent_workflow.md` section 24.12,
+   itself subordinate to section 3. Prove `MODEL_ACTUAL` and `MODEL_EFFORT_ACTUAL` from session runtime
+   evidence before mutating - an unresolved alias is not proof; mismatch or fallback is `STOP_WITH_PROOF`.
 3. Prove LOCAL state once with `git`/`gh`: HEAD, clean tree, open PRs, and checks when relevant — local
    proof stays Claude's own responsibility even with a controller packet.
 4. Read the named set; use symbol search before full files; build one source surface map.

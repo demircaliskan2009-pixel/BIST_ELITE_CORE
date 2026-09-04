@@ -1,5 +1,9 @@
 # crypto_core Agent Workflow v5.3
 
+<!-- CONTROL_PLANE_ROLE: WORKFLOW_COMPANION -->
+
+Authority derives from the canonical control plane `docs/crypto_core/agent_os_v2.md`. This file defines no routing, model-selection, PR-sizing or merge authority of its own.
+
 > Canonical, executable operating protocol for `crypto_core` inside `demircaliskan2009-pixel/BIST_ELITE_CORE`.
 > Companions (durable rails, not re-pasted into prompts): `AGENTS.md`,
 > `.codex/skills/crypto-core-max-safe/SKILL.md`, `CLAUDE.md` / `CLAUDE.local.md`,
@@ -35,7 +39,7 @@ repository and never replaces terminal validation or the Class-C Codex Sol audit
 
 | Role | Responsibility |
 |---|---|
-| **ChatGPT controller** | Sequence owner, final evidence comparison, verdict, next prompt, and exact per-PR merge authorization. |
+| **ChatGPT controller** | Sequence owner, final evidence comparison, verdict, next prompt, and verification of exact per-PR HUMAN merge authorization. The controller never originates, grants or self-authorizes a merge (`MERGE_AUTHORITY: HUMAN_ONLY_PER_PR`). |
 | **GPT-5.6 Luna** | T0 mechanical git/gh state, CI polling, metadata, thread status, and postverify runner. No broad design or feature implementation. |
 | **GPT-5.6 Terra** | T1/T2 bounded Codex docs/code work, small P1/P2 repair, and fresh-context pinned-head audit. |
 | **GPT-5.6 Sol** | Scarce T4 cross-artifact trust, governance/safety, SM-5/SM-6, readiness/Deribit provenance design/audit. `xhigh` default; `max` only controller-gated. |
@@ -87,7 +91,7 @@ do not block code, but any resolution needs explicit guarded closeout; human thr
 - Normal dependency version updates are admitted only through a dedicated controller-selected maintenance
   slice.
 - Dependency maintenance requires zero pre-existing open PRs and follows normal topic-branch, validation,
-  audit and explicit merge-authorization gates.
+  audit and explicit human merge-authorization gates.
 - Scheduled version updates must not be temporarily re-enabled while an active crypto_core PR exists.
 - An automatically generated security-update PR is treated as an externally generated urgent input requiring
   controller triage.
@@ -129,7 +133,7 @@ git status --short --branch                # confirm: on the topic branch, clean
 - The PR is opened **from the topic branch into `main`** (`gh pr create --base main --head <topic-branch>`).
 
 Then (all on the **topic branch**): bounded read (named files only, no broad scan) → design → smallest
-additive patch (enforce allowed-files + max-changed-files) → self-audit (scope / digest re-proof /
+additive patch (enforce the exact ALLOWED_FILES set) → self-audit (scope / digest re-proof /
 provenance / strict-Decimal / fail-closed / no hidden IO / paper-safety triple) → targeted tests →
 relevant suite → **full helper after meaningful changes** → `git diff --check` → scoped `git add <paths>` →
 commit (on the topic branch) → push (the topic branch) → `gh pr create --base main --head <topic-branch>` →
@@ -166,7 +170,7 @@ Run **only** from an explicit closeout prompt that names the PR and the exact au
 ## 9. ChatGPT Controller Gate
 
 ChatGPT independently re-verifies live GitHub state (head SHA, files, checks `name=conclusion`, threads,
-open-PR rule) before any verdict, and issues exactly one next prompt. Merge authorization must name the PR
+open-PR rule) before any verdict, and issues exactly one next prompt. Explicit human merge authorization must name the PR
 and the exact standard-merge command. ChatGPT emits the verdict format in §10.
 
 ## 10. Required Report Formats
@@ -272,9 +276,11 @@ Lessons are persisted, not improvised. Full procedure + the running ledger live 
 
 ## 18. Doctrine Precedence & Legacy Surfaces
 
-Active-work doctrine precedence: **`AGENTS.md` → this file → `.codex/skills/crypto-core-max-safe/SKILL.md`
-→ `CLAUDE.md`** (+ untracked local `CLAUDE.local.md`), with `docs/crypto_core/agent_lessons.md` as the
-lessons companion. On conflict the **stricter safety rule wins**.
+Active-work doctrine precedence: **`AGENTS.md` → `docs/crypto_core/agent_os_v2.md` → the environment
+adapter (`.codex/skills/crypto-core-max-safe/SKILL.md`, or `CLAUDE.md` +
+`.claude/skills/crypto-core-token-efficient-loop/SKILL.md`) → `docs/crypto_core/agent_lessons.md`**
+(+ untracked local `CLAUDE.local.md`). **This file is not in that authority chain**: it is the workflow /
+lifecycle / command-mechanics companion. On conflict the **stricter safety rule wins**.
 
 Legacy / secondary surfaces — `.github/prompts/*`, `.github/skills/*`, `.github/instructions/*`,
 `.github/agents/*`, `.cursor/rules/*`, and any BIST/PRDV3 material — are **historical or assistant-specific
@@ -658,12 +664,25 @@ fallback. Each carries model requested/actual/reasoning/exactness fields, exact 
 conditions, and report fields. The durable per-model authoring guide is
 `docs/crypto_core/model_prompting_guide.md` (active lanes per section 24).
 
-## 24. Active Crypto Core Agent OS v1 (2026-07-10)
+## 24. Agent OS v1 record — SUPERSEDED; subordinate mechanics only
 
-`CRYPTO_CORE_AGENT_OS_V1` — the active, durable, controller-mediated operating protocol. Supersedes section
-23 for routing/taxonomy/orchestration; every section-3 hard rule and section-23.4 non-claim binds unchanged.
+`CRYPTO_CORE_AGENT_OS_V1` is **SUPERSEDED** by `CRYPTO_CORE_AGENT_OS_V2`
+(`docs/crypto_core/agent_os_v2.md`) for authority, role/task-family routing, model selection, PR sizing,
+blocker closure, context continuity, prompt construction and merge gating. It is **not** active, **not**
+canonical and **not** a durable authority.
 
-### 24.1 Final durable model/tool set and identity rules
+What remains here is subordinate mechanics that derive their authority from Agent OS v2: the domain
+operating profile (24.2), audit classes (24.4), the controller protocol and accepted-state rules (24.5),
+handoff packets (24.6), the setup-load contract (24.7), the low-prompt policy (24.8), the Deep Research
+operating system (24.9), the controller read-only-first policy and retirement record (24.10), the
+live-state policy (24.11) and the effort/thinking detail (24.12). Where any of it appears to conflict with
+`agent_os_v2.md`, `agent_os_v2.md` wins; every section-3 hard rule binds unchanged.
+
+### 24.1 Model identity rules (subordinate mechanics)
+
+**The active lane set is defined only by `ROLE_ROUTING_MATRIX_V2` in `docs/crypto_core/agent_os_v2.md`
+section 3.** This subsection contributes identity and runtime-proof mechanics only; the historical lane
+narrative below is retained as a record and never as a lane definition.
 
 Active set (exactly nine lanes under `CRYPTO_CORE_AGENT_OS_V2`; the canonical `ROLE_ROUTING_MATRIX` is
 `docs/crypto_core/agent_os_v2.md` section 3 and this list never forks it): **ChatGPT GPT-5.6 Thinking**
@@ -727,61 +746,19 @@ provenance; replay/OOS/stress expectations; human-owned governance thresholds; n
 edge/profitability claim; no unsupported paper/shadow/live/readiness claim; no private API, credentials,
 real orders, scheduler, auto-loop, or capital mutation unless separately authorized.
 
-### 24.3 Common taxonomy and optimal routing matrix
+### 24.3 Routing — moved to Agent OS v2 (no table here)
 
-**SUBORDINATE DETAIL TABLE — not a routing authority.** The canonical `ROLE_ROUTING_MATRIX` for
-crypto_core lives only in `docs/crypto_core/agent_os_v2.md` section 3. This table is the inherited
-class -> model id -> effort detail beneath it: it may add granularity, it may never add, remove, rename or
-re-scope a lane, and on any conflict `agent_os_v2.md` wins. No file other than `agent_os_v2.md` declares a
-routing authority. Effort/thinking selection, the deterministic
-routing function, and Claude behavior calibration live in section 24.12; Claude prompt construction and
-reusable templates live in `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`. Pick the LOWEST
-lane that safely proves correctness — model prestige is never a selection reason.
+**The canonical class -> lane -> model id -> effort routing lives only in
+`docs/crypto_core/agent_os_v2.md` section 3 (`ROLE_ROUTING_MATRIX_V2`) and section 3.1 (canonical
+task-family semantics).** The duplicated v1 routing table that used to sit here has been removed rather
+than reconciled: two routing tables cannot both be true, and a reader must never have to decide which one
+wins. Task-family names (`T0`, `T1`, `T2`, `T3A`-`T3E`, `T4`, `XR`, `CONTROLLER_CONNECTOR_GATE`) are
+defined there; this file only references them. Effort detail is 24.12, itself subordinate to section 3.
 
-| Class | Label | Primary lane(s) | Model id | Default effort | Use |
-|---|---|---|---|---|---|
-| T0 | `LUNA_MECHANICAL` | Luna `none`/`low` — or Claude Sonnet 5 low in a Claude Code session | `claude-sonnet-5` (Claude lane) | low | **STATUS family only**: git/gh state, bounded CI polling, PR metadata, review/thread status, open-PR counts, branch and clean-tree checks, deterministic status reporting. T0 owns no merge or postverify scope — see T1 |
-| T1 | `READONLY_OR_FAST_BOUNDED` | Luna low / Terra high / Sonnet 5 (runtime-proven) | `claude-sonnet-5` (Claude lane) | low | bounded reads, proof, docs, direct-dependency read-only audit, and the sole governed CLOSEOUT family — authorized standard merge, post-merge commands, parent/digest verification, clean-main proof, and postverify. **A merge is a mutation and stays T1** when it is fully authorized, mechanically bounded, free of semantic anomaly and free of any readiness/connector transition |
-| T2 | `BOUNDED_IMPLEMENTATION` | Terra high / Sonnet 5 (runtime-proven) | `claude-sonnet-5` (Claude lane) | medium (high when moderately complex) | exact-file deterministic slices, narrow docs, config-only changes, mechanical fixtures/tests, obvious localized repair, PR-body corrections, bounded governance closeout |
-| T3A | `COMPLEX_IMPLEMENTATION` | Claude Opus 5 (default) / Terra xhigh | `claude-opus-5` | xhigh | complex production implementation, multi-file semantic features, protocol semantics, deterministic state machines, fail-closed artifacts, provenance logic, complex cross-module repair, long-horizon agentic coding. Complexity is proven by evidence (interacting invariants, novel semantic contract, fail-closed artifact design, cross-module behavior, substantial validation loop, in-scope architectural choice, complex repair) — **never by file count**; a two-file production+test protocol-semantic slice is correctly T3A |
-| T3B | `CAPABILITY_CRITICAL_IMPLEMENTATION_OR_REPAIR` | Claude Opus 5 | `claude-opus-5` | max | **IMPLEMENTATION or REPAIR intent + mutation only** — T3B never accepts REVIEW, ARCHITECTURE or PROMPT_ARCHITECTURE work, whatever risk flags are set. Requires an explicitly NAMED trigger: cryptographic verification boundary implementation; readiness/provenance promotion implementation; protocol ambiguity with safety consequences inside an implementation; complex trust-boundary repair; **complex semantic** controller P1/P2 repair after a failed audit; unexpected cross-layer implementation failure; controller-designated capability-critical implementation/repair. A bare risk flag and a bare audit origin are both insufficient — a mechanical or obvious post-audit repair stays T2 |
-| T3C | `CODE_REVIEW_AND_BUG_FINDING` | Claude Opus 5 | `claude-opus-5` | medium (focused) / high (broad) / xhigh (protocol-crypto or multi-trust-boundary) | **REVIEW intent, read-only.** Focused one- or two-file review and first-pass bug discovery at medium; broad multi-module, subtle-semantic, security-sensitive or post-failure review at high; protocol/crypto, multi-trust-boundary, conflicting-findings or cross-layer reconstruction at xhigh. Protocol or cryptographic subject matter raises the EFFORT to xhigh — it never changes the class to T3B. Any resulting fix is a separate, explicitly created task |
-| T3D | `ARCHITECTURE_AND_NEXT_SLICE` | Claude Opus 5 | `claude-opus-5` | high / xhigh (interacting or multi-module) / max (readiness, crypto, irreversible) | **ARCHITECTURE intent, read-only — produces a decision, not a diff.** Next-slice selection, architecture comparison, sequencing. `max` when the decision controls readiness/provenance, involves cryptographic boundaries, a wrong sequence creates irreversible or high-cost work, or the controller designates it critical. Readiness or cryptographic subject matter raises the EFFORT to max inside T3D — it never changes the class to T3B |
-| T3E | `COMPLEX_PROMPT_ARCHITECTURE` | Claude Opus 5 | `claude-opus-5` | high / xhigh (synthesis) / max (capability-critical) | **PROMPT_ARCHITECTURE intent.** Converting a new complex objective into one complete execution contract; prompts needing repository archaeology; many interacting gates. `max` for Agent OS or model-routing prompts, prompts governing readiness/provenance promotion, prompts governing cryptographic verification, capability-critical controller repair prompts, and controller-designated critical prompts — capability-criticality raises the EFFORT to max inside T3E and the work stays T3E. Known bounded mechanical prompt generation stays Sonnet 5 medium |
-| T4 | `CROSS_CONTRACT_DESIGN_OR_AUDIT` | Sol xhigh (`max` controller-gated) | — (Codex) | xhigh | protected cross-contract design, digest/provenance/trust boundaries, SM-5/SM-6, Stage-4 semantics, readiness/Deribit design, complex security/CodeQL. Class C is never satisfied by a Claude lane |
-| XR | `DEEP_RESEARCH_EXTERNAL` | Deep Research + connector | — | — | cited external/current facts, benchmarks, phase gates (submodes in 24.9). Claude execution alone is insufficient; no Claude lane may infer load-bearing current external facts from memory |
-| — | `CONTROLLER_CONNECTOR_GATE` | ChatGPT + connector/gh, then the human | — | — | final evidence comparison, merge-readiness judgement, and explicit per-PR human merge authorization. No Claude or Codex lane replaces either authority |
+Label reconciliation (durable): an unsuffixed "T3" means T3A; "T4 = current external facts" means `XR`;
+"T5 = controller and human authority" means `CONTROLLER_CONNECTOR_GATE`. The numbered class `T4` in this
+repository is and stays `CROSS_CONTRACT_DESIGN_OR_AUDIT` (Codex Sol).
 
-Label reconciliation (durable): a request phrased as "T3" without a suffix means T3A. A request phrased as
-"T4 = current external facts" means `XR`; a request phrased as "T5 = controller and human authority" means
-`CONTROLLER_CONNECTOR_GATE`. The numbered class `T4` in this repository is and stays
-`CROSS_CONTRACT_DESIGN_OR_AUDIT` (Codex Sol) — Codex doctrine is not renumbered.
-
-ChatGPT GPT-5.6 Thinking additionally owns, read-only-first (`CONTROLLER_READONLY_FIRST_POLICY`, section
-24.10): sequence control, live GitHub evidence comparison, repository surface and dependency mapping, design
-synthesis, prompt/implementation-contract construction, full PR patch and exact-scope audit,
-setup/workflow/model-routing consistency audits, Class-A independent audit, Class-B first-pass and
-controller-only closeout when every no-Codex criterion is proven, pre-Codex risk triage, fail-closed and
-negative-test coverage analysis, architecture-drift and stale-state detection, executor-report verification,
-connector final gate, Deep Research orchestration and verification, next-slice and model selection, and
-explicit-authority GitHub actions. ChatGPT is never an unverified substitute for local tests or repo state,
-never a Class-C Codex audit substitute, never a product-implementation or direct-main lane, and never grants
-merge/readiness/live/capital authority. GitHub connector mutation happens only after an explicit human
-instruction naming the exact action and target, with state re-proof immediately before, only the named
-action, and result re-read after. Do not route to Sonnet 5: protected trust-boundary work, digest/provenance,
-SM-5/SM-6, Stage-4 completion, readiness/live/order/capital, broad forensic refactors, T4 design, or mandatory
-Class-C audits; Sonnet 5 fallback when unavailable: Terra (bounded) / Opus 5 (broad). Do not spend Opus 5 on
-metadata, CI polling, ordinary docs, generic planning, external research, or work Sonnet/Terra can safely
-complete. Sol runs only on a controller-prepared narrow evidence packet, never broad discovery or mechanics.
-
-Sonnet 5 is the DEFAULT Claude lane for T0/T1/T2 and is not weakened by the existence of Opus 5: stronger
-reasoning does not materially improve a `gh pr view`, an authorized standard merge, a config edit, or a
-mechanical fixture, and spending Opus there costs latency, tokens and premium requests for no correctness
-gain. Escalate T0/T1 out of Sonnet when evidence conflicts, ancestry is unexpected, state cannot be
-reconciled, merge parents or merged scope differ, post-merge validation fails, branch protection behaves
-unexpectedly, a readiness/connector transition appears, or the task turns semantic. Escalate T2 first to
-Sonnet 5 high; move to Opus 5 high/xhigh only when semantic invariants interact, the trust boundary changes,
-full-suite failures are unexpected, architecture is required, or the repair cannot be proven locally.
 
 ### 24.4 Audit class matrix
 
@@ -964,11 +941,12 @@ PR, no direct main push, standard merge only, explicit per-PR human merge author
 before next work, digest-boundary rule, no BIST/live/private-API/order/scheduler/readiness/shadow/capital
 surface without separate authorization.
 
-### 24.12 CLAUDE_MODEL_EFFORT_ARCHITECTURE_V1
+### 24.12 CLAUDE_MODEL_EFFORT_ARCHITECTURE_V1 (subordinate detail)
 
-Effort/thinking architecture for the Claude lanes. The routing matrix (24.3) selects the CLASS and MODEL;
-this section selects the EFFORT, the context budget, the subagent and verification policy, and the
-escalation/de-escalation rules. Prompt construction and reusable templates live in
+Effort/thinking detail for the Claude lanes, **subordinate to `docs/crypto_core/agent_os_v2.md` section 3**.
+The canonical routing matrix there selects the CLASS and MODEL; this section adds only the EFFORT, the
+context budget, the subagent and verification policy, and the escalation/de-escalation rules. It defines no
+lane and no task family. Prompt construction and reusable templates live in
 `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md` — the durable Claude prompting authority.
 
 **Effort ladder.** The user-facing phrase "thinking level" maps operationally to Claude's `effort` setting
@@ -1128,7 +1106,7 @@ inputs: TASK_INTENT; read_only|mutation; mechanical|semantic; known|novel; bound
 Fail-closed behavior. `UNRESOLVED` classification → perform read-only Opus 5 `high`/`xhigh` analysis and do
 NOT mutate until the controller selects the lane. Conflicting task families without an explicit
 `TASK_INTENT` → `UNRESOLVED`, never a silent T3B. Current external facts required → route to Deep Research.
-Merge authorization required and absent or ambiguous → stop. Actual model or effort mismatched against the
+Explicit human merge authorization required and absent or ambiguous → stop. Actual model or effort mismatched against the
 requirement → stop before mutation (a human may waive an effort mismatch for a specific task; record the
 waiver and the true actual). Fallback occurred → stop before mutation. Active PR collision → stop.
 Readiness or connector transition detected → stop and escalate — and note that rule 5 is void whenever such

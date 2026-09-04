@@ -1,5 +1,9 @@
 # Token Efficiency Playbook (crypto_core agents)
 
+<!-- CONTROL_PLANE_ROLE: COMPRESSION_GUIDE -->
+
+Authority derives from the canonical control plane `docs/crypto_core/agent_os_v2.md`. This file defines no routing, model-selection, PR-sizing or merge authority of its own.
+
 Purpose: use the lowest capable lane without weakening proof, audit depth, deterministic behavior, or merge
 discipline. Token savings are never evidence; research economy never outranks factual accuracy. Active
 doctrine: `docs/crypto_core/agent_os_v2.md` (`CRYPTO_CORE_AGENT_OS_V2`; token and context efficiency rules
